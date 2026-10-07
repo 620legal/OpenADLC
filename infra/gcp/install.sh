@@ -256,9 +256,12 @@ build_images() {
   if ! gcloud storage buckets describe "gs://$source_bucket" >/dev/null 2>&1; then
     run gcloud storage buckets create "gs://$source_bucket" --project "$project" --location "$region" \
       --uniform-bucket-level-access --public-access-prevention
-    # The uploaded source is only needed while a build runs.
-    run gcloud storage buckets update "gs://$source_bucket" --lifecycle-file=<(printf '{"rule":[{"action":{"type":"Delete"},"condition":{"age":7}}]}')
   fi
+  # The uploaded source is only needed while a build runs. The rule is a file in
+  # the checkout: gcloud storage resolves a <(…) pipe to /proc/<pid>/fd/pipe:[N]
+  # and cannot open it, which stopped a fresh install here with the bucket made
+  # and nothing built. It is set on every run, so a bucket left by that run gets it.
+  run gcloud storage buckets update "gs://$source_bucket" --lifecycle-file="$dir/infra/gcp/build-bucket-lifecycle.json"
   run gcloud artifacts repositories add-iam-policy-binding fleetadlc --location "$region" --project "$project" \
     --member "serviceAccount:$builder_email" --role roles/artifactregistry.writer >/dev/null
   run gcloud storage buckets add-iam-policy-binding "gs://$source_bucket" \
