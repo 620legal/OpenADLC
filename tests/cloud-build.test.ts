@@ -111,6 +111,17 @@ exit 0`,
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
+  it('gives the build bucket its delete rule from a file in the checkout, a bucket that is there already too', () => {
+    // gcloud storage cannot open a <(…) pipe: a fresh install stopped there,
+    // with the bucket made and no rule on it (issue #1).
+    const { status, out } = install(['--project', 'acme-openadlc']);
+    expect(status, out).toBe(0);
+    const update = out.split('\n').find((line) => line.includes('gcloud storage buckets update gs://acme-openadlc-openadlc-build')) ?? '';
+    const file = /--lifecycle-file=(\S+)/.exec(update)?.[1] ?? '';
+    expect(file, out).toBe(join(ROOT, 'infra', 'gcp', 'build-bucket-lifecycle.json'));
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ rule: [{ action: { type: 'Delete' }, condition: { age: 7 } }] });
+  });
+
   it('builds nothing with --skip-images, and stops at the plan with --plan-only', () => {
     const { status, out } = install(['--project', 'acme-openadlc', '--skip-images', '--plan-only']);
     expect(status, out).toBe(0);
