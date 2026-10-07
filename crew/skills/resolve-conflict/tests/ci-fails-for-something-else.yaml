@@ -1,0 +1,15 @@
+name: stops when the checks fail for something the resolution did not cause
+covers: ci-fails-for-something-else
+given:
+  declaredPaths: ["Makefile"]
+script:
+  say:
+    - "The Makefile resolves cleanly, but fleetadlc-ci fails in src/clock.test.js, a file neither side changed."
+  touch:
+    - "Makefile"
+  ask:
+    question: "make ci fails in src/clock.test.js, which the conflict did not touch. Leave it to a person?"
+    options: ["leave it to a person", "look at the resolution again"]
+expect:
+  stops: true
+  reason: question

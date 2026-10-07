@@ -1,0 +1,170 @@
+# The bot image: each task's container runs it, with tmux inside.
+#
+# A bot with only a shell is still a working bot, so the image carries tools and
+# nothing else: no credentials, no skills baked in (they are mounted read-only at
+# the version the host is on), and no production access of any kind.
+
+# The gh a candidate keeps. hostd's update names the image the bots run now
+# as GH_FROM when gh is not the tool it is moving, and its gh is copied across
+# rather than fetched again: a Claude Code-only update downloads no gh at all.
+# Anywhere else this is the base image, which has no gh, so nothing is kept
+# and the gh step below installs it from the apt repository.
+ARG GH_FROM=debian:12-slim
+FROM ${GH_FROM} AS kept-gh
+USER root
+RUN mkdir -p /kept && if command -v gh >/dev/null 2>&1; then cp "$(command -v gh)" /kept/gh; fi
+
+FROM debian:12-slim
+
+ARG NODE_MAJOR=22
+ARG PNPM_VERSION=10.33.3
+# Set only by a build through a proxy (build-bot-image.sh's BUILD_PROXY):
+# Node's own fetch — which corepack downloads pnpm with — ignores the proxy
+# variables unless told to use them, and a build step on the cloud host has
+# no other way out. Empty everywhere else, and never in the image itself.
+ARG NODE_USE_ENV_PROXY=
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    PNPM_HOME=/home/bot/.local/share/pnpm \
+    PATH=/home/bot/.local/share/pnpm:/home/bot/.local/bin:/usr/local/bin:$PATH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl git gnupg jq make openssh-client ripgrep tmux tini \
+      build-essential python3 python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Empty on a fresh install, which takes the Node major below. An update sets
+# the patch: rebuilding from the major's repository would move Node inside a
+# candidate that was only asked to move something else. Declared here, not at
+# the top, so a new version rebuilds this layer and the ones after it and not
+# the apt layer above.
+ARG NODE_VERSION=
+# Node and pnpm. A named NODE_VERSION is the tarball from nodejs.org, so a
+# candidate carries that patch and not whatever the major's repository published
+# today. The tarball is checked against the release's SHASUMS256.txt before it
+# is unpacked: apt checked nodesource's packages, and a tarball nobody checked
+# was the one thing in the image that nothing verified. Only bin, include, lib
+# and share are unpacked, so the release's README and CHANGELOG do not land in
+# /usr/local; its LICENSE, which carries the notices for V8, OpenSSL, ICU and
+# the rest built into the binary, goes to /usr/local/share/doc/node.
+#
+# Without a version, the nodesource major is what a fresh install has always
+# had, from nodesource's apt repository under its signing key. That key is
+# checked against the fingerprint below before apt is told to trust it: the
+# build used to pipe nodesource's setup script to bash as root, unchecked, and
+# without pipefail a failed download ran nothing and went on to install
+# Debian's own Node 18.
+RUN if [ -n "$NODE_VERSION" ]; then \
+      arch="$(dpkg --print-architecture)"; \
+      case "$arch" in amd64) node_arch=x64 ;; arm64) node_arch=arm64 ;; *) echo "no Node build for $arch" >&2; exit 1 ;; esac; \
+      tarball="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz"; \
+      mkdir -p /tmp/node \
+      && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${tarball}" -o "/tmp/node/${tarball}" \
+      && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" -o /tmp/node/SHASUMS256.txt \
+      && (cd /tmp/node && grep "  ${tarball}\$" SHASUMS256.txt | sha256sum -c -) \
+      && tar -xJf "/tmp/node/${tarball}" -C /usr/local --strip-components=1 \
+           "node-v${NODE_VERSION}-linux-${node_arch}/bin" \
+           "node-v${NODE_VERSION}-linux-${node_arch}/include" \
+           "node-v${NODE_VERSION}-linux-${node_arch}/lib" \
+           "node-v${NODE_VERSION}-linux-${node_arch}/share" \
+      && tar -xJf "/tmp/node/${tarball}" -C /tmp/node "node-v${NODE_VERSION}-linux-${node_arch}/LICENSE" \
+      && mkdir -p /usr/local/share/doc/node \
+      && mv "/tmp/node/node-v${NODE_VERSION}-linux-${node_arch}/LICENSE" /usr/local/share/doc/node/LICENSE \
+      && rm -rf /tmp/node \
+      && corepack enable \
+      && corepack prepare "pnpm@${PNPM_VERSION}" --activate; \
+    else \
+      nodesource_key=6F71F525282841EEDAF851B42F59B5F99B1BE0B4; \
+      export GNUPGHOME="$(mktemp -d)"; \
+      curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource.asc \
+      && fingerprint="$(gpg --show-keys --with-colons /tmp/nodesource.asc | awk -F: '$1 == "pub" { keys++ } $1 == "fpr" && !first { first = $10 } END { if (keys == 1) print first }')" \
+      && if [ "$fingerprint" != "$nodesource_key" ]; then echo "nodesource's key is ${fingerprint:-not one key}, not $nodesource_key" >&2; exit 1; fi \
+      && gpg --dearmor -o /usr/share/keyrings/nodesource.gpg /tmp/nodesource.asc \
+      && chmod go+r /usr/share/keyrings/nodesource.gpg \
+      && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list \
+      && rm -rf /tmp/nodesource.asc "$GNUPGHOME" \
+      && apt-get update \
+      && apt-get install -y --no-install-recommends nodejs \
+      && rm -rf /var/lib/apt/lists/* \
+      && corepack enable \
+      && corepack prepare "pnpm@${PNPM_VERSION}" --activate; \
+    fi
+
+# The GitHub CLI. Bots act as their own accounts through a short-lived token that
+# hostd puts in the session environment; nothing is stored in the image.
+#
+# It comes from GitHub's signed apt repository, cli.github.com, which the cloud
+# host's egress proxy allows. A release tarball from github.com redirects to
+# release-assets.githubusercontent.com, which it does not, and every cloud
+# update died at that curl. The repository lists only its newest package, so a
+# named GH_VERSION is that one (hostd reads the newest from the same index);
+# a gh this build is not moving was copied from the running image above, and
+# nothing is installed. The build script checks the version either way.
+COPY --from=kept-gh /kept/ /usr/local/bin/
+ARG GH_VERSION=
+RUN if [ -x /usr/local/bin/gh ]; then \
+      echo "gh kept from the running image: $(/usr/local/bin/gh --version | head -n 1)"; \
+    else \
+      curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+      && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+      && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+      && apt-get update \
+      && apt-get install -y --no-install-recommends "gh${GH_VERSION:+=${GH_VERSION}}" \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# Every login shell gets OpenADLC's gh, git and fleetadlc-ci first again.
+# Debian's /etc/profile sets PATH outright, and Codex and grok run their
+# commands in login shells: their `gh pr review` was the real gh, unsigned,
+# and on an account seats share, nobody could tell which seat had reviewed —
+# the lead's approval counted for no one and the pull request never merged.
+# /etc/profile reads profile.d after it sets PATH, so this comes after.
+RUN printf '%s\n' \
+      '# OpenADLC: its wrappers first, and the paths ENV set that /etc/profile drops.' \
+      'PATH="/opt/fleetadlc/bin:/home/bot/.local/share/pnpm:/home/bot/.local/bin:/usr/local/bin:$PATH"' \
+      'export PATH' > /etc/profile.d/00-fleetadlc.sh
+
+RUN useradd -m -s /bin/bash bot && mkdir -p /work && chown bot:bot /work
+USER bot
+WORKDIR /work
+
+# Engine CLIs are installed at build time through this argument, so an install
+# pins the versions it has tested. `infra/local/build-bot-image.sh` holds the
+# pins, and is what both a laptop and the cloud host build from.
+#
+# The prefix is the bot's own. Node from nodesource puts the global prefix at
+# `/usr`, which root owns — so this `npm install -g`, which runs after `USER
+# bot`, failed with EACCES for anybody who ever passed the argument. It was
+# never noticed because the default is empty and an empty argument skips the
+# whole step: the mechanism looked present and had never once run.
+ENV NPM_CONFIG_PREFIX=/home/bot/.local
+# Grok Build and Claude Code update themselves unless told not to, and a bot
+# whose engine changed under it is a change nobody made. The pin is the
+# version; a new one is a rebuild. The engine adapters set both for a session
+# too, which is where they have to hold.
+ENV GROK_DISABLE_AUTOUPDATER=1 \
+    DISABLE_AUTOUPDATER=1
+ARG ENGINE_CLI_PACKAGES=""
+# Grok's postinstall writes its 138 MB binary a second time, into ~/.grok/bin,
+# for the self-updater that is off here; the `grok` on the PATH runs the copy
+# inside the npm package. Removing the second copy in the same layer keeps it
+# out of the image, and `grok --version` proves the command works without it.
+RUN if [ -n "$ENGINE_CLI_PACKAGES" ]; then \
+      npm install -g $ENGINE_CLI_PACKAGES \
+      && if [ -d /home/bot/.grok/bin ]; then rm -rf /home/bot/.grok/bin && grok --version; fi; \
+    fi
+
+COPY --chown=bot:bot bot-init /usr/local/bin/bot-init
+# Wraps a package install with a registry credential fetched from hostd at the
+# moment of the install, rather than one minted when the task started.
+COPY --chown=bot:bot fleetadlc-install /usr/local/bin/fleetadlc-install
+
+# /skills and /roles are mounted read-only at run time at the version the host is
+# on; /work is the bot's own volume and holds mirrors, worktrees and caches.
+VOLUME ["/work"]
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/bot-init"]

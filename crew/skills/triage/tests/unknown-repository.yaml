@@ -1,0 +1,13 @@
+name: stops when it cannot tell which repository owns the change
+covers: unknown-repository
+given:
+  declaredPaths: []
+script:
+  say:
+    - "The request says 'the login is slow' and names no service."
+  ask:
+    question: "Which repository owns the login path? The request names none."
+    options: ["web", "identity"]
+expect:
+  stops: true
+  reason: question

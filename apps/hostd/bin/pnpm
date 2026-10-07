@@ -1,0 +1,140 @@
+#!/bin/sh
+# OpenADLC's `pnpm`, first on a task session's PATH beside OpenADLC's `gh` and
+# `git` (see `gh` for where the folder is mounted).
+#
+# A task's computer reads its repository's pnpm store read-only
+# (FLEETADLC_PNPM_STORE): pnpm trusts its own index for a package it already
+# holds, so a store one task could write was one it could plant code in for the
+# next. hostd alone fills it, from the task's lockfile (apps/hostd/src/pnpm-store.ts).
+# A command that changes what the task depends on — `add`, `update`, `remove`,
+# or an `install` the store does not hold everything for — would write to it,
+# so this works the change out first, asks hostd to fill the store from the
+# lockfile as it is now, then runs the command. When any of that fails, the
+# command runs against a store of the task's own, in its home, and says so on
+# stderr: a builder is never left unable to install. Every other command runs
+# untouched.
+
+self_dir=$(dirname "$0")
+
+real=
+saved_ifs=$IFS
+IFS=:
+for dir in $PATH; do
+  if [ -n "$dir" ] && [ "$dir" != "$self_dir" ] && [ -x "$dir/pnpm" ] && ! [ "$dir/pnpm" -ef "$0" ]; then
+    real="$dir/pnpm"
+    break
+  fi
+done
+IFS=$saved_ifs
+
+if [ -z "$real" ]; then
+  echo "pnpm: pnpm is not installed here" >&2
+  exit 127
+fi
+
+# Once a task has gone to its own store it stays there: `make setup`, the
+# session and local CI all have to use one store, or pnpm stops on a
+# node_modules another store built.
+own_mark="${HOME:-/tmp}/.fleetadlc-own-pnpm-store"
+own_store() {
+  : >"$own_mark" 2>/dev/null
+  PNPM_STORE_DIR="${HOME:-/tmp}/.pnpm-store"
+  npm_config_store_dir="$PNPM_STORE_DIR"
+  # The node_modules the shared store built is rebuilt from this one, with
+  # no terminal to confirm it on.
+  npm_config_confirm_modules_purge=false
+  export PNPM_STORE_DIR npm_config_store_dir npm_config_confirm_modules_purge
+}
+
+if [ -z "${FLEETADLC_PNPM_STORE:-}" ] || [ "${PNPM_STORE_DIR:-}" != "$FLEETADLC_PNPM_STORE" ]; then
+  exec "$real" "$@"
+fi
+if [ -e "$own_mark" ]; then
+  own_store
+  exec "$real" "$@"
+fi
+
+# The command, past any options before it.
+command=
+skip=
+for arg in "$@"; do
+  if [ -n "$skip" ]; then
+    skip=
+    continue
+  fi
+  case "$arg" in
+    -C | --dir | -F | --filter | --filter-prod | --reporter | --loglevel) skip=1 ;;
+    -*) ;;
+    *)
+      command=$arg
+      break
+      ;;
+  esac
+done
+case "$command" in
+  add | update | up | upgrade | remove | rm | uninstall | un | install | i) ;;
+  *) exec "$real" "$@" ;;
+esac
+
+out=$(mktemp)
+
+fall_back() {
+  rm -f "$out" "$out.modules"
+  echo "pnpm: $1; running it against this task's own store ($HOME/.pnpm-store) instead, for the rest of the task" >&2
+  own_store
+  shift
+  exec "$real" "$@"
+}
+
+# A store that already holds everything: an install, mostly, after the fill
+# hostd ran when the task started.
+if [ "$command" = install ] || [ "$command" = i ]; then
+  if "$real" "$@" --offline >"$out" 2>&1; then
+    cat "$out"
+    rm -f "$out"
+    exit 0
+  fi
+else
+  # The new set of dependencies worked out without writing to the shared
+  # store: pnpm fetches what it resolves, so into a store of the task's own
+  # for this alone, and the record of which store built node_modules is put
+  # back after, since this writes it too.
+  root=$(pwd)
+  while [ "$root" != / ] && [ ! -e "$root/pnpm-lock.yaml" ] && [ ! -e "$root/pnpm-workspace.yaml" ]; do
+    root=$(dirname "$root")
+  done
+  [ -f "$root/node_modules/.modules.yaml" ] && cp "$root/node_modules/.modules.yaml" "$out.modules"
+  PNPM_STORE_DIR="${HOME:-/tmp}/.pnpm-resolve-store" npm_config_store_dir="${HOME:-/tmp}/.pnpm-resolve-store" \
+    "$real" "$@" --lockfile-only >"$out" 2>&1
+  resolved=$?
+  [ -f "$out.modules" ] && cp "$out.modules" "$root/node_modules/.modules.yaml"
+  if [ "$resolved" -ne 0 ]; then
+    fall_back "the change could not be worked out without writing to the repository's shared store" "$@"
+  fi
+fi
+
+# hostd fills the shared store from this worktree's lockfile as it is now.
+if [ -z "${FLEETADLC_HOSTD_URL:-}" ] || [ -z "${FLEETADLC_TASK_ID:-}" ] || [ -z "${FLEETADLC_TASK_TOKEN:-}" ]; then
+  fall_back "there is no hostd to ask to add it to the repository's shared store" "$@"
+fi
+# The token goes to curl on stdin (`--header @-`): as an argument it was in
+# the process list of everything in the task's computer. printf is the
+# shell's own, so it runs as no process of its own.
+status=$(
+  printf 'x-fleetadlc-task-token: %s\n' "$FLEETADLC_TASK_TOKEN" |
+    curl --silent --max-time 900 --output /dev/null --write-out '%{http_code}' --request POST \
+      --header @- \
+      "${FLEETADLC_HOSTD_URL}/tasks/${FLEETADLC_TASK_ID}/pnpm-store" 2>/dev/null || true
+)
+if [ "$status" != 200 ]; then
+  fall_back "hostd could not add what it needs to the repository's shared store (${status:-no answer})" "$@"
+fi
+
+rm -f "$out" "$out.modules"
+# Nothing left to fetch; a store that still lacks something fails at once
+# rather than after pnpm's retries.
+if npm_config_fetch_retries=0 "$real" "$@"; then
+  exit 0
+fi
+out=$(mktemp)
+fall_back "it failed against the repository's shared store" "$@"

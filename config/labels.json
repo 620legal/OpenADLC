@@ -1,0 +1,197 @@
+[
+  {
+    "name": "adlc:intake",
+    "color": "5a5a5a",
+    "description": "An issue exists but is not yet routable"
+  },
+  {
+    "name": "adlc:spec",
+    "color": "6f42c1",
+    "description": "A design comment is owed before implementation"
+  },
+  {
+    "name": "adlc:build",
+    "color": "0e8a16",
+    "description": "Routable; the dispatcher may lease it"
+  },
+  {
+    "name": "adlc:review",
+    "color": "1d76db",
+    "description": "A pull request exists and reviews are owed"
+  },
+  {
+    "name": "adlc:merged",
+    "color": "0052cc",
+    "description": "Merged; deploying to testing, promote pending"
+  },
+  {
+    "name": "adlc:done",
+    "color": "0b5345",
+    "description": "Live"
+  },
+  {
+    "name": "adlc:ci",
+    "color": "bfd4f2",
+    "description": "GitHub's CI may run: the lead approved and the pull request is at the front of the merge line"
+  },
+  {
+    "name": "priority:p0",
+    "color": "b60205",
+    "description": "Drop everything"
+  },
+  {
+    "name": "priority:p1",
+    "color": "d93f0b",
+    "description": "This week"
+  },
+  {
+    "name": "priority:p2",
+    "color": "fbca04",
+    "description": "Soon"
+  },
+  {
+    "name": "priority:p3",
+    "color": "c2e0c6",
+    "description": "Someday"
+  },
+  {
+    "name": "start:now",
+    "color": "0e8a16",
+    "description": "Nothing blocks this; the dispatcher may lease it"
+  },
+  {
+    "name": "blocked",
+    "color": "5a5a5a",
+    "description": "Waiting on a dependency named in the issue"
+  },
+  {
+    "name": "needs-human",
+    "color": "d4a017",
+    "description": "A person has this: a question is open or it is held; not leased or merged"
+  },
+  {
+    "name": "needs-triage",
+    "color": "ededed",
+    "description": "Intake has not shaped this yet"
+  },
+  {
+    "name": "fleetadlc:ignore",
+    "color": "5a5a5a",
+    "description": "An issue the crew does not touch"
+  },
+  {
+    "name": "fleetadlc:paused",
+    "color": "b08800",
+    "description": "Held by a person: the step running finishes, nothing new starts"
+  },
+  {
+    "name": "fleetadlc:next",
+    "color": "1f6feb",
+    "description": "Built next in its repository, ahead of priority"
+  },
+  {
+    "name": "review:human",
+    "color": "d4a017",
+    "description": "Retired; has no effect. Use needs-human to hold a pull request"
+  },
+  {
+    "name": "do:ai",
+    "color": "1d76db",
+    "description": "A bot may do this end to end"
+  },
+  {
+    "name": "do:human",
+    "color": "d4a017",
+    "description": "A person does this"
+  },
+  {
+    "name": "do:product",
+    "color": "6f42c1",
+    "description": "Needs a product decision"
+  },
+  {
+    "name": "do:legal",
+    "color": "6f42c1",
+    "description": "Needs a legal decision"
+  },
+  {
+    "name": "touches:schema",
+    "color": "e99695",
+    "description": "Changes a database schema"
+  },
+  {
+    "name": "touches:contract",
+    "color": "e99695",
+    "description": "Changes a published contract"
+  },
+  {
+    "name": "touches:migration",
+    "color": "e99695",
+    "description": "Includes a migration"
+  },
+  {
+    "name": "touches:security",
+    "color": "b60205",
+    "description": "Touches authentication, authorization or secrets"
+  },
+  {
+    "name": "touches:gate",
+    "color": "b60205",
+    "description": "Changes a gate or a policy value"
+  },
+  {
+    "name": "safety",
+    "color": "b60205",
+    "description": "Safety-relevant; the security lens is required"
+  },
+  {
+    "name": "deps",
+    "color": "0366d6",
+    "description": "A dependency change"
+  },
+  {
+    "name": "revert",
+    "color": "b60205",
+    "description": "Reverts a merged change"
+  },
+  {
+    "name": "size:large",
+    "color": "5319e7",
+    "description": "Large enough to need a design first"
+  },
+  {
+    "name": "breaking",
+    "color": "b60205",
+    "description": "Breaks a consumer"
+  },
+  {
+    "name": "scope:cross-cutting",
+    "color": "5319e7",
+    "description": "Leaves the issue's declared paths on purpose; CI's scope check accepts the diff"
+  },
+  {
+    "name": "area:general",
+    "color": "bfd4f2",
+    "description": "No narrower area of this repository fits"
+  },
+  {
+    "name": "deployed:testing",
+    "color": "c2e0c6",
+    "description": "Live on testing"
+  },
+  {
+    "name": "deployed:prod",
+    "color": "0e8a16",
+    "description": "Live in production"
+  },
+  {
+    "name": "incident",
+    "color": "b60205",
+    "description": "An incident record"
+  },
+  {
+    "name": "alert",
+    "color": "d93f0b",
+    "description": "Filed from a monitoring alert"
+  }
+]

@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Runs a package install with a registry credential fetched fresh from hostd.
+#
+#   fleetadlc-install pnpm install --frozen-lockfile
+#   fleetadlc-install npm ci
+#
+# Why a wrapper rather than an environment variable: a credential minted when the
+# task started is the one a task still holds an hour later, and the reason to
+# rotate a registry credential is that the old one has to stop working. This asks
+# hostd on every install, so a rotation takes effect at the next one.
+#
+# The token is never written to disk. hostd's answer is held in a variable, and
+# the npmrc pointed at by npm_config_userconfig names the token as
+# ${FLEETADLC_REGISTRY_TOKEN}, which npm and pnpm expand from the environment of
+# the one command that gets it. Written into that file, in the container's
+# /tmp, it outlived a command killed or a container stopped mid-install, which
+# never ran the cleanup.
+#
+# An install with no private registry is the normal case: hostd answers 501 and
+# this runs the command unchanged.
+set -euo pipefail
+
+if [ "$#" -eq 0 ]; then
+  echo "usage: fleetadlc-install <command> [args...]" >&2
+  exit 64
+fi
+
+# Outside an OpenADLC session there is nothing to ask, and the command should still
+# work — a person debugging in `tmux attach` is not a failure case. hostd sets
+# FLEETADLC_REGISTRY_CONFIGURED when it names a private registry; then a missing
+# variable means the credential cannot be asked for, and installing without it
+# would resolve private names on the public registry.
+missing=""
+for name in FLEETADLC_HOSTD_URL FLEETADLC_TASK_ID FLEETADLC_TASK_TOKEN; do
+  [ -z "${!name:-}" ] && missing="$missing $name"
+done
+if [ -n "$missing" ]; then
+  if [ "${FLEETADLC_REGISTRY_CONFIGURED:-}" = "1" ]; then
+    echo "[fleetadlc-install] a private registry is configured but this has no${missing}; not installing without its credential" >&2
+    exit 78
+  fi
+  exec "$@"
+fi
+
+npmrc=""
+cleanup() {
+  [ -n "$npmrc" ] && rm -f "$npmrc"
+  return 0
+}
+trap cleanup EXIT
+
+# curl writes the body and then, on a line of its own, the status via
+# --write-out: `000` when it never got one. `|| true` is for its exit code,
+# which `set -e` would otherwise take as fatal before the case below can say
+# anything useful. The token goes to curl on stdin (`--header @-`): as an
+# argument it was in the process list of everything in the task's computer.
+answer="$(
+  printf 'x-fleetadlc-task-token: %s\n' "$FLEETADLC_TASK_TOKEN" |
+    curl --silent --show-error --max-time 10 \
+      --write-out '\n%{http_code}' \
+      --header @- \
+      "${FLEETADLC_HOSTD_URL}/tasks/${FLEETADLC_TASK_ID}/registry-token" 2>/dev/null || true
+)"
+status="${answer##*$'\n'}"
+response="${answer%$'\n'*}"
+case "$answer" in *$'\n'*) ;; *) response="" ;; esac
+status="${status:-000}"
+
+case "$status" in
+  200) ;;
+  501)
+    # No private registry on this install. Nothing is wrong.
+    exec "$@"
+    ;;
+  000)
+    echo "[fleetadlc-install] hostd is unreachable at ${FLEETADLC_HOSTD_URL}; not installing with a guess" >&2
+    exit 69
+    ;;
+  *)
+    echo "[fleetadlc-install] hostd refused a registry token (${status}): ${response:0:200}" >&2
+    exit 77
+    ;;
+esac
+
+# printf into a pipe: bash may back a here-string with a temporary file.
+host="$(printf '%s' "$response" | jq -r '.host')"
+token="$(printf '%s' "$response" | jq -r '.token')"
+if [ -z "$host" ] || [ "$host" = "null" ] || [ -z "$token" ] || [ "$token" = "null" ]; then
+  echo "[fleetadlc-install] hostd returned no usable credential" >&2
+  exit 77
+fi
+
+npmrc="$(mktemp)"
+chmod 600 "$npmrc"
+# Scoped to the one registry hostd named. A bare _authToken would be sent to
+# whatever registry a dependency's resolution happened to point at. The
+# variable is written as its name, not its value.
+{
+  echo "//${host}/:_authToken=\${FLEETADLC_REGISTRY_TOKEN}"
+  echo "registry=https://${host}/"
+} > "$npmrc"
+
+# npm, pnpm and yarn all read this.
+export npm_config_userconfig="$npmrc"
+export NPM_CONFIG_USERCONFIG="$npmrc"
+
+FLEETADLC_REGISTRY_TOKEN="$token" "$@"

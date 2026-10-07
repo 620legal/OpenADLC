@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: Apache-2.0 OR 0BSD
+
+# The bug form.
+#
+# Same rule as the task form: Outcome, Acceptance criteria, Expected paths and
+# Verification are headings OpenADLC parses. A bug still has to be routable,
+# so it carries those four sections under the names OpenADLC expects — the
+# wording of the prompts differs, the headings do not. Area sets no label;
+# intake sets the `area:` label from the answer.
+name: Bug
+description: Something does not work
+labels: ['adlc:intake', 'priority:p1']
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: What should happen instead. One paragraph.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Acceptance criteria
+      description: >
+        The exact steps, and then what has to be true afterwards. A bot cannot
+        reproduce "sometimes it fails".
+      placeholder: |
+        Steps: open the settings page, change the display name, click Save.
+        - The new name is still there after a reload.
+        - Clicking Save twice does not save two copies.
+    validations:
+      required: true
+
+  - type: textarea
+    id: paths
+    attributes:
+      label: Expected paths
+      description: Where you believe the fix goes. A guess is fine; say it is one.
+      placeholder: |
+        - src/settings/save.ts
+        - src/settings/save.test.ts
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: The command and the output line that will show it fixed.
+    validations:
+      required: true
+
+  - type: input
+    id: area
+    attributes:
+      label: Area
+      description: Intake sets the `area:` label from it.
+    validations:
+      required: true

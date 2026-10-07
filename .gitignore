@@ -1,0 +1,47 @@
+node_modules/
+dist/
+.next/
+out/
+*.tsbuildinfo
+
+# Local install state: secrets, keys, generated config
+.env
+.env.*
+.fleetadlc/
+secrets/
+*.pem
+*.key
+!infra/**/*.example.pem
+
+# Runtime
+logs/
+*.log
+.pids/
+work/
+coverage/
+.DS_Store
+
+# Terraform: provider cache, state, and the generated variables file. The
+# lock file (.terraform.lock.hcl) is committed: it pins the providers and their
+# checksums, so every operator applies infra/gcp with the same ones. Move them
+# on purpose with `terraform init -upgrade`, and commit the new lock file.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+
+# CI scratch space
+.ci/
+
+# Subagent worktrees, created by the tooling and never part of a change, and
+# a contributor's own agent settings and notes.
+.claude/worktrees/
+.claude/settings.local.json
+CLAUDE.local.md
+
+# A scratch install (tests/scratch.sh)
+.scratch/
+
+# An install's own model prices; config/models.example.yaml is the template.
+config/models.yaml

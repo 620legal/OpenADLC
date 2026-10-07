@@ -1,0 +1,67 @@
+# Who reviews what, and in which order.
+#
+# Every seat asked reviews the diff on its own, without CI, and posts its
+# review. One seat is the lead: it reviews last, once every other seat asked
+# has posted on this diff, reads them all, and decides — approve, or one
+# request for changes that sends the work back to build. The others are
+# advisory: they comment, with their verdict in their marker, unless a seat is
+# marked `blocking`, when its approval is needed to merge as well.
+#
+# Each reviewer is named by its seat in config/bots.yaml. A bot goes by the handle
+# of the GitHub account connected to it, which changes when an account does; the
+# seat does not, so this file never needs editing for it.
+#
+# A trigger is `always`, or any of `labels`, `paths` (prefixes) and
+# `samplePercent`, each of which asks the seat. The lead is asked on every
+# pull request whatever its trigger. Only the SRE's revert of a red smoke
+# (`revert`, on its `system/revert-*` branch) takes the fast path, and it skips
+# only the seats there by default, `always` or sampled: a seat its own label or
+# path asks for, a `blocking` seat, and the security seat for a change to how
+# CI runs still review it. A dependency change gets the seats its labels ask
+# for, the security seat included.
+#
+# `paths` are prefixes matched against the changed files of every repository
+# this install manages, not of one repository. `packages/github/` and `infra/`
+# below are OpenADLC's own repository's sensitive paths; a self-hoster
+# replaces them with the sensitive paths of their own repositories.
+
+reviewers:
+  - seat: lead-reviewer
+    lens: lead
+    lead: true
+
+  # A second model, so two reviewers never share a blind spot.
+  - seat: second-reviewer
+    lens: second
+
+  - seat: security-reviewer
+    lens: security
+    trigger:
+      labels:
+        - touches:security
+        - touches:gate
+        - safety
+        - deps
+      paths:
+        - .github/workflows/
+        - packages/github/
+      # A share of ordinary pull requests also gets the security lens.
+      samplePercent: 10
+
+  - seat: sre
+    lens: workflows
+    trigger:
+      paths:
+        - .github/workflows/
+        - docs/runbooks/
+        - infra/
+
+# Review rounds back to build before the loop stops and asks a person.
+maxRounds: 3
+
+# Send-backs on the edges other than review (design to intake, build to design,
+# ship to build): at most maxPerEdge on each edge and maxPerIssue per issue in
+# all, after which a person decides.
+sendBack:
+  maxPerEdge: 2
+  maxPerIssue: 6

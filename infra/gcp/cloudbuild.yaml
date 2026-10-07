@@ -1,0 +1,44 @@
+# The four images a Google Cloud install runs, built on Cloud Build and pushed
+# to the install's own Artifact Registry. infra/gcp/install.sh submits it:
+#
+#   gcloud builds submit --config infra/gcp/cloudbuild.yaml \
+#     --ignore-file infra/gcp/.gcloudignore \
+#     --substitutions _REGISTRY=<region>-docker.pkg.dev/<project>/fleetadlc .
+#
+# Built here rather than on the machine that installs: Cloud Run and the host
+# run linux/amd64 only, and an Apple-silicon Mac builds arm64 unless told
+# otherwise, after which the host's pull finds nothing it can run. Cloud
+# Build's machines are amd64, and nothing has to be installed to use them.
+#
+# The same Dockerfiles and the same bot script as a laptop, from the
+# repository's root, so the two installs cannot run different builds.
+steps:
+  - id: service
+    name: gcr.io/cloud-builders/docker
+    waitFor: ['-']
+    args: ['build', '-f', 'infra/local/Dockerfile.service', '-t', '${_REGISTRY}/bridge:${_TAG}', '-t', '${_REGISTRY}/hostd:${_TAG}', '.']
+  - id: console
+    name: gcr.io/cloud-builders/docker
+    waitFor: ['-']
+    args: ['build', '-f', 'infra/local/Dockerfile.console', '-t', '${_REGISTRY}/console:${_TAG}', '.']
+  - id: bot
+    name: gcr.io/cloud-builders/docker
+    waitFor: ['-']
+    entrypoint: bash
+    # It builds with Docker's own builder and then runs the image to check the
+    # pinned engine CLIs are in it, as it does on a laptop.
+    args: ['infra/local/build-bot-image.sh']
+    env: ['IMAGE=${_REGISTRY}/bot:${_TAG}']
+images:
+  - '${_REGISTRY}/bridge:${_TAG}'
+  - '${_REGISTRY}/hostd:${_TAG}'
+  - '${_REGISTRY}/console:${_TAG}'
+  - '${_REGISTRY}/bot:${_TAG}'
+substitutions:
+  _TAG: latest
+options:
+  machineType: E2_HIGHCPU_8
+  # The build runs as a service account of the install's own (install.sh makes
+  # it), and Cloud Build then needs to be told where its logs go.
+  logging: CLOUD_LOGGING_ONLY
+timeout: 3600s

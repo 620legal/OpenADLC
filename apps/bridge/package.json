@@ -1,0 +1,29 @@
+{
+  "name": "@fleetadlc/bridge",
+  "version": "0.1.0",
+  "description": "OpenADLC’s event loop: GitHub webhooks, the console’s API, gates, reviews, the merge line, scheduled jobs and health checks.",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@fleetadlc/backup": "workspace:*",
+    "@fleetadlc/db": "workspace:*",
+    "@fleetadlc/dispatcher": "workspace:*",
+    "@fleetadlc/engines": "workspace:*",
+    "@fleetadlc/github": "workspace:*",
+    "@fleetadlc/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.11"
+  }
+}

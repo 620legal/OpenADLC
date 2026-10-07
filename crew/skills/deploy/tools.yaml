@@ -1,0 +1,32 @@
+allow:
+  # `fleetadlc-ci` runs the repository's checks on HEAD through hostd and
+  # records the result: a deploy workflow's fix is reviewed on top of it. Not
+  # `local_ci` below: a revert is pushed without one.
+  shell: [git, gh, jq, rg, cat, ls, make, fleetadlc-ci]
+  git:
+    push_branch_prefix: "system/"
+    force_push: false
+  files:
+    write_within:
+      - "docs/runbooks/**"
+      - "docs/incidents/**"
+      # A deploy workflow that broke a testing deploy is the SRE's to fix, by
+      # a pull request the security reviewer approves like any change to CI.
+      # The rest of `.github/workflows/` is not: ci.yml, the promote and the
+      # rollback are not named deploy-*.
+      - ".github/workflows/deploy-*.yml"
+      # What it posts to GitHub, written to a file and given with `--body-file`.
+      - ".fleetadlc-scratch/**"
+
+deny:
+  shell: [curl, wget, ssh, sudo]
+  # A promote is OpenADLC's to dispatch, after the soak or a person's release
+  # from Needs you: on a plan where GitHub holds no reviewer, a session that
+  # started one would ship to production with nobody approving. So the session
+  # never starts deploy-testing or promote-production: OpenADLC's gh refuses
+  # them by name, by file name, by path or by number, a re-run of any run, and
+  # `gh api`. `gh workflow run rollback-production` still works. A revert is
+  # landed by the merge line, as every pull request is; a merge, auto-merge
+  # included, is never a session's. These are guards, not a boundary
+  # (docs/security.md).
+  github: ["pr merge", "pr review", "workflow run deploy-testing", "workflow run deploy-testing.yml", "workflow run promote-production", "workflow run promote-production.yml", "run rerun", "api"]

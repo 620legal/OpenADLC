@@ -1,0 +1,47 @@
+name: ci
+
+# Written by `fleetadlc github apply` because the repository had no workflow.
+#
+# The merge line lands a pull request only once a check named `ci` has passed
+# on its head, so this job keeps that name. What it runs is the repository's
+# own: the Makefile's `setup` and `ci` targets, which AGENTS.md says a pull
+# request has to pass. Change the steps freely; keep the job called `ci`.
+#
+# On a crew pull request (an `agent/` branch) it runs only once the pull
+# request carries `adlc:ci`, which FleetADLC's merge line puts on after the lead
+# reviewer approved, when it is at the front of the line: the builder ran
+# `make ci` on its head already, and the runner minutes go to the head that
+# lands. A person's pull request and a push to main run as they always did.
+# Skipped, a job named `ci` would still report a `ci` check that branch rules
+# count as passing, so the job is named `ci` only when it runs.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+  merge_group:
+
+# It reads the code and writes nothing.
+permissions:
+  contents: read
+
+# A label event that runs nothing is in a group of its own, so it never
+# cancels a run that is testing the head.
+concurrency:
+  group: ci-${{ github.ref }}-${{ (github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event.label.name == 'adlc:ci' || github.event.label.name == 'scope:cross-cutting') && (!startsWith(github.head_ref, 'agent/') || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) && 'run' || 'deferred' }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: ${{ (github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event.label.name == 'adlc:ci' || github.event.label.name == 'scope:cross-cutting') && (!startsWith(github.head_ref, 'agent/') || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) && 'ci' || 'ci (after approval)' }}
+    if: ${{ github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event.label.name == 'adlc:ci' || github.event.label.name == 'scope:cross-cutting') && (!startsWith(github.head_ref, 'agent/') || contains(github.event.pull_request.labels.*.name, 'adlc:ci')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: make setup
+        run: make setup
+
+      - name: make ci
+        run: make ci

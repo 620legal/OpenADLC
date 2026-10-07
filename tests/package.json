@@ -1,0 +1,34 @@
+{
+  "name": "@fleetadlc/tests",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Integration checks that need a real database or a real GitHub repository.",
+  "scripts": {
+    "all": "node all.mjs",
+    "integration": "node pipeline.mjs",
+    "terminal": "node terminal.mjs",
+    "kill-restart": "node kill-and-restart.mjs",
+    "concurrency": "node concurrency.mjs",
+    "docker-computers": "node docker-computers.mjs",
+    "github-live": "node github-live.mjs",
+    "github-live-pr": "node github-live-pr.mjs",
+    "onboarding": "node onboarding.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fleetadlc/db": "workspace:*",
+    "@fleetadlc/engines": "workspace:*",
+    "@fleetadlc/github": "workspace:*",
+    "@fleetadlc/shared": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.11"
+  }
+}

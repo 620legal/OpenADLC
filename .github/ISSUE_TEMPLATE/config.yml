@@ -1,0 +1,7 @@
+# Blank issues stay on, deliberately.
+#
+# A form that cannot be escaped becomes a form people work around, and an issue
+# filed outside it is not lost: it arrives without the sections OpenADLC
+# requires, so intake is asked to shape it rather than a builder being sent at
+# something underspecified.
+blank_issues_enabled: true

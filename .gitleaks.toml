@@ -1,0 +1,70 @@
+# gitleaks reads this, and CI runs it over each pull request's commits
+# (.github/workflows/ci.yml, `secrets`).
+#
+# What it allows is named by value, never by path alone: a path rule for test
+# files would also hide a real token committed in one.
+
+[extend]
+useDefault = true
+
+# Two commits from before the fixtures were rewritten still carry the old ones:
+# a fake private key too short to parse, a JWT of `{"sub":"1234567890"}`,
+# base64 of `{"tokens":"zzz"}` and RFC 6455's sample nonce.
+[[allowlists]]
+description = "Fake credential-shaped test fixtures in commits made before they were rewritten"
+commits = [
+  "a8ae258365201bad6245d426207c432dfccfdaf6",
+  "ab036ac444b0ac9cc2593caff44de8843e5a561d",
+]
+
+# The tests of the redaction, the attachment check and the key handling need
+# something shaped like a credential to work on. Each fake below is allowed by
+# its own value, so a real credential beside it, in the same file, is still a
+# finding. (Not by path as well: gitleaks then skips the test files whole.)
+[[allowlists]]
+description = "Fake credentials in the tests that check credentials are caught"
+regexes = [
+  # PEM blocks whose body is a placeholder or a few bytes of `openssh-key-v1`.
+  '''zzz-(?:old|test)-zzz''',
+  '''b3BlbnNzaC1rZXktdjEAAAAABG5vbmU=''',
+  '''^MIIEowIBAAKCAQEA0Z3VS5JJcds3xfn$''',
+  # A header checked on its own, and a block already masked.
+  '''pair\.privateKey\.endsWith\(''',
+  '''PRIVATE KEY-----\*\*\*''',
+  # Tokens and secrets spelled out as obviously made up.
+  '''^ghs_0123456789abcdefghijABCDEFGHIJ$''',
+  '''^ghu_for_gadgets_2$''',
+  '''^0123456789abcdef$''',
+  # The credentials-argv test's values: SECRET, what it stands for, a number.
+  '''SECRET[a-zA-Z]+000[0-9]''',
+  # The sign-in link the made-up secret above signs.
+  '''^1800003600\.55e64a713ef5fed11eac66d38c157758eb45f2473d58705e088827f7e12b4835$''',
+  # A repository name the generic rule reads as a key because it follows `api,`.
+  '''^janedoe/FleetADLC$''',
+]
+
+# The redaction's own tests write a key the ways it arrives, and gitleaks
+# reads the whole block as the finding: a JSON `\n` or a Proc-Type header
+# around the placeholder body, a block built in source from BEGIN, a template
+# and END, or a header with no END that the next header in the file makes
+# look like a block. These values are allowed only in that file, so the same
+# block anywhere else is still a finding.
+[[allowlists]]
+description = "Fake private keys in the redaction's tests"
+condition = "AND"
+paths = ['''^packages/shared/src/redact\.test\.ts$''']
+regexes = [
+  '''MIIEowIBAAKCAQEA0Z3VS5JJcds3xfn''',
+  '''\$\{body\}''',
+  '''\$\{dashed\}''',
+  '''-----BEGIN CERTIFICATE-----',\n\s*'AAAA',\n\s*'-----END CERTIFICATE-----',\n\s*'------END PRIVATE KEY-----''',
+  '''BEGIN RSA PRIVATE KEY-----'\)\)\.toBe\(''',
+  '''BEGIN RSA PRIVATE KEY-----\\n-----END ''',
+  '''BEGIN RSA PRIVATE KEY-----'\]\.join''',
+]
+
+# NodeSource's public signing key, which the bot image checks its packages
+# against: a fingerprint, published so that anyone can.
+[[allowlists]]
+description = "Public key fingerprints"
+regexes = ['''^6F71F525282841EEDAF851B42F59B5F99B1BE0B4$''']

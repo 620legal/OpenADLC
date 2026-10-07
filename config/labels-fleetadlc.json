@@ -1,0 +1,57 @@
+[
+  {
+    "name": "area:console",
+    "color": "bfd4f2",
+    "description": "The console"
+  },
+  {
+    "name": "area:bridge",
+    "color": "bfd4f2",
+    "description": "The event loop and the console API"
+  },
+  {
+    "name": "area:hostd",
+    "color": "bfd4f2",
+    "description": "The runner: containers, worktrees, sessions"
+  },
+  {
+    "name": "area:dispatcher",
+    "color": "bfd4f2",
+    "description": "Leasing and routability"
+  },
+  {
+    "name": "area:engines",
+    "color": "bfd4f2",
+    "description": "Engine adapters"
+  },
+  {
+    "name": "area:auth",
+    "color": "bfd4f2",
+    "description": "Device flow, tokens, secrets"
+  },
+  {
+    "name": "area:db",
+    "color": "bfd4f2",
+    "description": "Schema and migrations"
+  },
+  {
+    "name": "area:cli",
+    "color": "bfd4f2",
+    "description": "The fleetadlc command"
+  },
+  {
+    "name": "area:skills",
+    "color": "bfd4f2",
+    "description": "What a bot does, in what order"
+  },
+  {
+    "name": "area:infra",
+    "color": "bfd4f2",
+    "description": "Images, compose, cloud modules"
+  },
+  {
+    "name": "area:docs",
+    "color": "bfd4f2",
+    "description": "Documentation"
+  }
+]

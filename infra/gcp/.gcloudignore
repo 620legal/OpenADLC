@@ -1,0 +1,29 @@
+# What `gcloud builds submit` leaves out of the source it uploads for
+# cloudbuild.yaml: the same as .dockerignore (which the image builds then apply
+# again), so a scratch install's install.json and secrets, an .env, a key, and
+# a cloud install's tfvars and state never reach the build's source bucket.
+# tests/cloud-build.test.ts holds the two lists equal.
+.gcloudignore
+.claude
+**/node_modules
+**/dist
+**/.next
+**/*.tsbuildinfo
+**/coverage
+.scratch
+.ci
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/secrets
+**/work
+**/logs
+**/*.log
+.git
+**/.terraform
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+**/*.tfvars.json
+config/models.yaml

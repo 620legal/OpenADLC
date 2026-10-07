@@ -1,0 +1,17 @@
+name: stops at the task's spend cap instead of running on
+# Not a bullet under "Stop and ask when" but the paragraph after them: the
+# runner stops a task at its cap and asks a person itself, so the model never
+# asks about it.
+covers: spend-cap
+given:
+  declaredPaths: ["src/**"]
+  costHeadroomUsd: 0.05
+script:
+  say:
+    - "This is a large refactor and is going to take a while."
+  touch:
+    - "src/big.ts"
+  costUsd: 0.5
+expect:
+  stops: true
+  reason: cap

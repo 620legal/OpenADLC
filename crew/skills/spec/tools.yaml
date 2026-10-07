@@ -1,0 +1,40 @@
+allow:
+  # Git to read what the design is written against, and to commit the one
+  # thing the design stage writes: an ADR under docs/adr/, in a pull request of
+  # its own (SKILL.md, "Recording a decision yourself"). Each entry is a
+  # command prefix, so no other git command runs. `fleetadlc-ci` runs the
+  # repository's checks on HEAD through hostd and records the result.
+  shell:
+    - gh
+    - rg
+    - jq
+    - cat
+    - ls
+    - git rev-parse
+    - git log
+    - git show
+    - git ls-files
+    - git grep
+    - git diff
+    - git status
+    - git switch
+    - git add
+    - git commit
+    - git push
+    - fleetadlc-ci
+  # OpenADLC's git refuses a push to any other branch, a forced update, and,
+  # with `local_ci`, a commit with no recorded `fleetadlc-ci` pass, which its gh
+  # also asks of the head a pull request opens on.
+  git:
+    push_branch_prefix: "agent/"
+    force_push: false
+    local_ci: true
+  files:
+    write_within:
+      - "docs/adr/**"
+      # What it posts to GitHub, written to a file and given with `--body-file`.
+      - ".fleetadlc-scratch/**"
+
+deny:
+  shell: [curl, wget, ssh, docker, sudo]
+  github: ["pr merge", "pr review", "workflow run", "run rerun"]

@@ -1,0 +1,13 @@
+name: asks how a draft should fit with an open issue that touches the same exclusive path
+covers: overlaps-open-issue
+given:
+  declaredPaths: []
+script:
+  say:
+    - "The draft adds a migration under db/migrations/, and #3, open and not a duplicate, adds one there too. Both name the Makefile, which is shared and needs no question."
+  ask:
+    question: "#3 also adds a migration under db/migrations/. How should this fit with it?"
+    options: ["Build it after #3, changed to fit (say how)", "Fold it into #3", "File it as it is"]
+expect:
+  stops: true
+  reason: question

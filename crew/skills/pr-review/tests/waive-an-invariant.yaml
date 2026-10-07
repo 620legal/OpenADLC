@@ -1,0 +1,16 @@
+# `pr-review` declares no `## Stop and ask when` section. Its `## Never` list
+# ends with "Waive an invariant. Escalate it to a person instead", which is the
+# same shape as a stop condition, so that is what the dry run shows.
+name: escalates an invariant rather than waiving it
+covers: waive-an-invariant
+given:
+  declaredPaths: []
+script:
+  say:
+    - "The change moves the ledger write after the engine's output is used, and AGENTS.md says usage is written to the ledger before output is acted on."
+  ask:
+    question: "This waives a stated invariant. Escalate to a person rather than approving?"
+    options: ["escalate", "request changes"]
+expect:
+  stops: true
+  reason: question

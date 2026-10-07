@@ -1,0 +1,256 @@
+# Production, which belongs to a person.
+#
+# Build, migrate, deploy at zero traffic, smoke the new revision by its tag and
+# shift traffic are steps of **one job**, deliberately. An environment approval
+# is granted to a job, not to a workflow, so five jobs would be five approvals —
+# and a person asked to approve the same change five times stops reading. One
+# job means one approval covers the whole promote, and the approval happens
+# before any of it runs.
+#
+# The `production` environment's required reviewer is a person, which is what
+# makes "a bot cannot approve its own production deploy" hold in GitHub rather
+# than only in the deploy skill. See docs/self-hosting.md.
+name: promote-production
+# The run is named after the candidate, because that is the only place the
+# bridge can read it. The deployment GitHub creates for the job below is at the
+# workflow's commit — the default branch's tip when this was dispatched — and a
+# `deployment_status` delivery carries no inputs, so without this the bridge
+# would label and finish the pull requests at the tip, promoted or not. It reads
+# `promote-production <candidate>` (`promotedCandidate` in
+# apps/bridge/src/webhooks.ts); keep the two in step.
+run-name: promote-production ${{ inputs.candidate }}${{ inputs.emergency_override != '' && ' (emergency override)' || '' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: The commit to promote, by its full 40-character id (`git rev-parse <short>` gives it). Must be on the default branch and already live on testing.
+        required: true
+        type: string
+      emergency_override:
+        description: Leave empty. For an emergency only, by a person with admin or maintain on the repository - why this commit goes to production without being live and smoked on testing. The run is named as an override and the reason is recorded; a bot is refused.
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  # As in deploy-testing: GitHub creates the deployment because the job names an
+  # environment, and `deployment_status` is what the bridge acts on.
+  deployments: write
+  # The testing check reads the smoke's runs.
+  actions: read
+
+concurrency:
+  # A promote and a rollback share this group: traffic has one shape at a time,
+  # and two workflows deciding it at once is the worst minute of an incident.
+  group: production-traffic
+  cancel-in-progress: false
+
+jobs:
+  promote-production:
+    name: promote-production
+    runs-on: ubuntu-latest
+
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.revision-url }}
+
+    steps:
+      # A branch or tag name would promote whatever it points at when the job
+      # runs, and could not be read back out of the run's name as a commit. A
+      # short id is refused too: checkout takes only a full one as a commit, and
+      # looked a short one up as a branch, failing after the approval.
+      - name: the candidate is a commit id
+        env:
+          CANDIDATE: ${{ inputs.candidate }}
+        run: |
+          if ! printf '%s' "$CANDIDATE" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+            echo "candidate must be a full 40-character commit id, not \"$CANDIDATE\"; pass the whole id (git rev-parse <short> prints it). Refusing to promote it"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.candidate }}
+          fetch-depth: 0
+
+      - name: the candidate is on the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          if ! git merge-base --is-ancestor HEAD "origin/$DEFAULT_BRANCH"; then
+            echo "$(git rev-parse HEAD) is not on $DEFAULT_BRANCH; refusing to promote it"
+            exit 1
+          fi
+
+      # Live and smoked on testing, whoever dispatched this. The bridge
+      # dispatches only a smoked commit, but anyone with write access can
+      # dispatch this by hand, crew tokens included, and under `approval: auto`
+      # nothing else stands between that and production. The proof is the
+      # bridge's own, by the runs' names: GitHub records the deployment and a
+      # `workflow_run` smoke at the default branch's tip when they were
+      # created, which is another merge's once two land close together.
+      #
+      # An emergency override skips it, for a person with admin or maintain
+      # who gives a reason; never for a bot. OpenADLC never sets it.
+      - name: the candidate is live and smoked on testing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.triggering_actor }}
+          REASON: ${{ inputs.emergency_override }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # The smoke's workflow file, without `.yml`: keep it equal to
+          # `testing.smoke` in .github/fleetadlc.yml.
+          SMOKE_WORKFLOW: smoke-testing
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          if [ -n "$REASON" ]; then
+            case "$ACTOR" in
+              *'[bot]')
+                echo "$ACTOR is a bot; only a person with admin or maintain on $GITHUB_REPOSITORY may pass emergency_override. Refusing to promote $sha"
+                exit 1 ;;
+            esac
+            role="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" --jq '.role_name')"
+            case "$role" in
+              admin | maintain) ;;
+              *)
+                echo "$ACTOR has $role on $GITHUB_REPOSITORY; emergency_override takes admin or maintain. Refusing to promote $sha"
+                exit 1 ;;
+            esac
+            {
+              echo "### emergency override"
+              echo
+              echo "- candidate \`$sha\`, promoted without the testing check"
+              echo "- by $ACTOR ($role)"
+              echo "- reason: $REASON"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "emergency override by $ACTOR: $sha is promoted without the testing check"
+            exit 0
+          fi
+          branch="${DEFAULT_BRANCH:-}"
+          if [ -z "$branch" ]; then
+            echo "the default branch was not given; refusing to promote $sha"
+            exit 1
+          fi
+          # The deploy the bridge dispatched for this commit, on this repository's
+          # default branch. A run titled for the commit but dispatched on another
+          # branch, or from a fork, is not it.
+          deploy_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/deploy-testing.yml/runs?event=workflow_dispatch&status=success&per_page=100" \
+            --jq "[.workflow_runs[] | select(.display_title == \"deploy-testing $sha\" and .head_branch == \"$branch\" and .event == \"workflow_dispatch\" and ((.head_repository.full_name // \"$GITHUB_REPOSITORY\") == \"$GITHUB_REPOSITORY\"))][0].id // empty")"
+          if [ -z "$deploy_id" ]; then
+            echo "$sha has no successful deploy-testing run on $branch titled \"deploy-testing $sha\"; promote a commit the bridge deployed, or a person with admin passes emergency_override with a reason"
+            exit 1
+          fi
+          # The smoke workflow_run names itself from that deploy's title. A smoke
+          # dispatched by hand, whatever commit it points at, has another name and
+          # another event, so it does not count. Skipped and cancelled runs smoked
+          # nothing. GitHub lists newest first.
+          smoke="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$SMOKE_WORKFLOW.yml/runs?event=workflow_run&status=completed&per_page=100" \
+            --jq "[.workflow_runs[] | select(.display_title == \"$SMOKE_WORKFLOW of deploy-testing $sha\" and .event == \"workflow_run\" and .conclusion != \"skipped\" and .conclusion != \"cancelled\")][0].conclusion // empty")"
+          if [ "$smoke" != success ]; then
+            echo "$sha has no green $SMOKE_WORKFLOW run titled \"$SMOKE_WORKFLOW of deploy-testing $sha\" (its latest is ${smoke:-none}); wait for it, or a person with admin passes emergency_override with a reason"
+            exit 1
+          fi
+          # The testing deployment is the one that deploy run recorded. Its commit
+          # is the branch tip at dispatch, so it is found from the run, not by
+          # sha. A newer deploy of the same environment marks the earlier success
+          # inactive; that still counts.
+          deployment=""
+          state=""
+          ids="$(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=testing&per_page=20" --jq '.[].id')"
+          for id in $ids; do
+            verdict="$(gh api "repos/$GITHUB_REPOSITORY/deployments/$id/statuses?per_page=20" --jq \
+              'if any(.[]; (.log_url // "") | test("/runs/'"$deploy_id"'(/|$)")) then
+                 if .[0].state == "success" then "live"
+                 elif .[0].state == "inactive" and any(.[]; .state == "success") then "replaced"
+                 else (.[0].state // "none") end
+               else "" end')"
+            if [ -n "$verdict" ]; then
+              deployment="$id"
+              state="$verdict"
+              break
+            fi
+          done
+          if [ -z "$deployment" ]; then
+            echo "$sha's deploy-testing run $deploy_id has no testing deployment; promote a commit that is live there, or a person with admin passes emergency_override with a reason"
+            exit 1
+          fi
+          case "$state" in
+            live)
+              echo "$sha is live on testing (deployment $deployment, deploy-testing run $deploy_id) and its smoke is green" ;;
+            replaced)
+              # Not live any more: what is proven is that it was, and smoked green.
+              echo "$sha reached testing (deployment $deployment, deploy-testing run $deploy_id), a newer deploy has since replaced it there, and its smoke is green" ;;
+            *)
+              echo "$sha's testing deployment is ${state:-without a status}, not success; wait for it, or a person with admin passes emergency_override with a reason"
+              exit 1 ;;
+          esac
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.33.3
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: build the release artifact
+        run: make build
+
+      # Forward-only and before the new code serves anything, so the running
+      # revision and the new one both work against the migrated schema.
+      - name: migrate
+        run: make migrate
+
+      - name: deploy at zero traffic
+        id: deploy
+        run: |
+          set -euo pipefail
+          # Two lines, in this order: the revision's tag, then its URL. The tag
+          # is what the smoke addresses so it tests the new revision
+          # specifically, rather than whatever is currently serving.
+          make deploy-production | tee /tmp/deploy-production.log
+          tag="$(tail -n 2 /tmp/deploy-production.log | head -n 1)"
+          url="$(tail -n 1 /tmp/deploy-production.log)"
+          if [ -z "$tag" ] || [ -z "$url" ]; then
+            echo "make deploy-production must print the revision tag then its URL on its last two lines"
+            exit 1
+          fi
+          echo "revision-tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "revision-url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: smoke the new revision by its tag
+        env:
+          FLEETADLC_REVISION_TAG: ${{ steps.deploy.outputs.revision-tag }}
+        run: make smoke-production
+
+      # Last, and only after the smoke: until this step the new revision is
+      # deployed and serving nobody, so everything above is undoable by doing
+      # nothing at all.
+      - name: shift traffic to it
+        env:
+          FLEETADLC_REVISION_TAG: ${{ steps.deploy.outputs.revision-tag }}
+        run: make shift-traffic
+
+      - name: what was promoted
+        if: always()
+        # The deploy's output is whatever `make` printed last, so it reaches the
+        # script through the environment rather than pasted into it.
+        env:
+          TAG: ${{ steps.deploy.outputs.revision-tag }}
+          URL: ${{ steps.deploy.outputs.revision-url }}
+        run: |
+          {
+            echo "### production"
+            echo
+            echo "- commit \`$(git rev-parse HEAD)\`"
+            echo "- revision \`$TAG\` $URL"
+            echo "- rolling back: run \`rollback-production\`, which needs no approval"
+          } >> "$GITHUB_STEP_SUMMARY"

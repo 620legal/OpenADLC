@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: Apache-2.0 OR 0BSD
+
+# How this repository ships. OpenADLC reads this file on the default branch and
+# does what it says. A change to it is a pull request, and because it is under
+# `.github/` it merges only once the security reviewer approves that diff, or by
+# a person where the install's `ciMergeByPerson` lists this repository.
+#
+# A merge dispatches the testing deploy. A green smoke on testing dispatches the
+# promote, and production waits only on what GitHub's `production` environment
+# holds it for: its wait timer as the soak (`approval: auto`, the default), or
+# its required reviewers (`approval: reviewers`), the only case where a person
+# approves. A bot never approves a deploy; the
+# repository's GitHub rules do. `fleetadlc github apply` writes the environment
+# these rules call for. Where GitHub's plan cannot hold a reviewer (a private
+# repository on Free, Pro or Team), OpenADLC holds each `reviewers` promote in
+# Needs you until a person releases it or switches to automatic delivery.
+#
+# A red smoke on testing reverts the change and sends it back to build. A failed
+# promote is handled by where it stopped: a red production smoke sends the change
+# back and leaves production as it is; a failed traffic shift dispatches the
+# rollback, whose empty target is what served before the last shift, and files
+# an issue; any other failure files an issue for a person and rolls nothing back.
+#
+# Copy this file and the four workflows beside it (deploy-testing,
+# smoke-testing, promote-production, rollback-production) into a repository to
+# turn deploys on; see OpenADLC's docs/configuration.md. Without the file, the
+# repository ships as Settings → Repositories → Testing deploy says.
+#
+# Write the Makefile's `smoke-testing` target together with `deploy-testing`.
+# Each of the two workflows skips until the repository's Actions variable for
+# it is `true`: FLEETADLC_DEPLOY_TESTING for the deploy, FLEETADLC_SMOKE_TESTING
+# for the smoke. A skipped smoke neither promotes nor reverts, so a merged
+# change waits on testing until the smoke is turned on.
+version: 1
+
+testing:
+  # `merge`: each merge dispatches the testing deploy. `none`: merging is
+  # shipping — no testing deploy, nothing to promote.
+  on: merge
+  # Where testing is served, for the QA bot's journeys.
+  # url: https://testing.example.com
+  workflow: deploy-testing
+  smoke: smoke-testing
+
+production:
+  # `after-testing`: a green smoke on testing dispatches the promote. `none`:
+  # testing is as far as this repository goes.
+  on: after-testing
+  # `auto`: nobody is asked; the promote waits `soakMinutes` on testing first,
+  # then the smoke runs, and a failed production deploy is rolled back.
+  # `reviewers`: a person approves each promote: in GitHub, or in OpenADLC's
+  # Needs you where the plan cannot hold a reviewer on the environment. Who
+  # approves is chosen in repository setup (the walkthrough's Protect step).
+  # Left out here, both take what was chosen for the repository there.
+  approval: auto
+  soakMinutes: 30
+  workflow: promote-production
+  rollback: rollback-production
+
+# Which changes the crew may build side by side when their files overlap. A
+# pattern without a `/` names a file at any depth; with one, a path from the
+# root, `*` and `**` as wildcards. These are the defaults, written out:
+#
+# - shared: overlap here never holds a build back. Two changes to a Makefile or
+#   a README rarely truly conflict, and the merge line catches it if they do.
+# - exclusive: overlap here holds the next change back until the one in flight
+#   has merged — files where two changes break each other however they merge.
+# - anything else holds the next change back only while the other is being
+#   built, not while it waits in review.
+#
+# paths:
+#   shared: [Makefile, makefile, GNUmakefile, "README*", "CHANGELOG*", "docs/**/index*", package.json, .gitignore, AGENTS.md]
+#   exclusive: ["**/migrations/**", "*lock*.json", pnpm-lock.yaml, yarn.lock, Cargo.lock, go.sum, "**/generated/**", "*.schema.*"]
+#
+# A change that depends on one still in review starts from that one's branch
+# instead of waiting for it to merge, and joins the merge line after it. A
+# conflict at merge on shared files only is resolved by the builder and
+# re-checked by the lead alone. Turn stacking off to make dependent work wait:
+#
+# stacking: false

@@ -1,0 +1,13 @@
+name: stops on wording that is a product decision rather than engineering
+covers: legal-or-product-wording
+given:
+  declaredPaths: ["docs/**"]
+script:
+  say:
+    - "The design needs the text shown to someone whose account is suspended."
+  ask:
+    question: "What should the suspension notice say? That is product and legal wording, not a design choice."
+    options: ["draft it for review", "leave a placeholder"]
+expect:
+  stops: true
+  reason: question

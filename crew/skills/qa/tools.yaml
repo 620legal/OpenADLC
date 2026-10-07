@@ -1,0 +1,22 @@
+allow:
+  # `fleetadlc-ci` runs the repository's checks on HEAD through hostd and
+  # records the result: a suite's pull request is reviewed on top of it.
+  # `fleetadlc-install` runs an install with the private registry's credential.
+  shell: [make, pnpm, npm, npx, node, python3, git, gh, jq, rg, cat, ls, fleetadlc-ci, fleetadlc-install]
+  # OpenADLC's git refuses a push to any other branch, a forced update, and,
+  # with `local_ci`, a commit with no recorded `fleetadlc-ci` pass, which its gh
+  # also asks of the head a pull request opens or is readied on.
+  git:
+    push_branch_prefix: "agent/"
+    force_push: false
+    local_ci: true
+  files:
+    write_within:
+      # The test paths the bridge declares for every QA task (`tests/**`).
+      - "<declared_paths>"
+      # What it posts to GitHub, written to a file and given with `--body-file`.
+      - ".fleetadlc-scratch/**"
+
+deny:
+  shell: [curl, wget, ssh, docker, sudo]
+  github: ["pr merge", "pr review", "workflow run", "run rerun"]

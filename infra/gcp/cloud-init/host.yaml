@@ -1,0 +1,387 @@
+#cloud-config
+#
+# The host, on Container-Optimized OS.
+#
+# Three things run here: the platform's log agent (turned on by metadata), so
+# the host is visible; a forward proxy holding the egress allowlist; and hostd,
+# which owns the task containers. Before this file the module had no default
+# cloud-init at all, so a default cloud install started none of them — no
+# hostd, no logging, and an egress allowlist written to a metadata key that
+# nothing read.
+#
+# Docker is already on COS, so nothing installs it. The allowlist is enforced
+# twice on purpose: the proxy refuses a destination by name, and the firewall
+# below stops a container going round the proxy to an address it resolved
+# itself.
+
+write_files:
+  - path: /etc/fleet/squid.conf
+    permissions: '0644'
+    content: |
+      # The egress allowlist, by name.
+      #
+      # HTTPS is not decrypted: a CONNECT names its host, and that name is what
+      # is matched. A bot cannot reach an allowed name and then be redirected
+      # somewhere else, because the redirect would be its own CONNECT.
+      #
+      # A leading dot matches subdomains, which is how `objects.githubusercontent.com`
+      # and the rest of a CDN stay reachable without opening the parent domain.
+      #
+      # `-n` matches only the name the request gives. Without it, a request to a
+      # bare IP address was matched by that address's reverse-DNS name, which
+      # whoever holds the address sets: an address named `x.github.com` passed
+      # as `.github.com`. A bare address, IPv4 or bracketed IPv6 (or anything
+      # with a colon, which no name has), is refused outright below as well, so
+      # the refusal is plain in the log.
+      acl allowed_domains dstdomain -n ${allowed_domains}
+      acl to_ip_literal dstdom_regex -n ^[0-9.]+$ ^\[ :
+      acl SSL_ports port 443
+      acl Safe_ports port 80 443
+      acl CONNECT method CONNECT
+
+      http_access deny !Safe_ports
+      http_access deny CONNECT !SSL_ports
+
+      # The refusal, and the line that becomes a metric.
+      http_access deny to_ip_literal
+      http_access allow allowed_domains
+      http_access deny all
+
+      http_port 3128
+
+      # No caching: a package a bot installs must be the one the registry has.
+      cache deny all
+
+      # One line per request, to the host's syslog socket, so journald has it
+      # and the platform's log agent ships it; a denial becomes searchable, and
+      # TCP_DENIED is what the metric counts. Not stdout: squid opens its logs
+      # after dropping to the `proxy` user, which cannot open the container's
+      # stdout, and the proxy died at boot with every unit behind it.
+      logfile_rotate 0
+      access_log syslog:local4.info squid
+      cache_log /var/log/squid/cache.log
+
+  - path: /etc/systemd/system/fleet-egress-proxy.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=The egress allowlist
+      After=docker.service
+      Requires=docker.service
+
+      [Service]
+      Restart=always
+      ExecStartPre=-/usr/bin/docker rm -f fleet-egress
+      ExecStart=/usr/bin/docker run --rm --name fleet-egress \
+        --network host \
+        -v /etc/fleet/squid.conf:/etc/squid/squid.conf:ro \
+        -v /dev/log:/dev/log \
+        ${proxy_image}
+      ExecStop=/usr/bin/docker stop fleet-egress
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/fleet-egress-firewall.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Force container egress through the proxy
+      After=fleet-egress-proxy.service docker.service
+      Requires=fleet-egress-proxy.service docker.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=true
+      # A bot container that sets its own HTTP_PROXY to nothing, or speaks to an
+      # address it resolved itself, would otherwise leave the host directly. The
+      # proxy is an allowlist; this is what makes it the only way out.
+      #
+      # FORWARD is the chain container traffic crosses, and DOCKER-USER is the
+      # one place in it Docker neither reorders nor flushes. Hooked straight into
+      # FORWARD, the rule landed behind Docker's own ACCEPTs when the daemon
+      # (re)built its chains, and a bot on the first cloud host reached
+      # example.com directly and read the host's token from the metadata server.
+      # Anything from a docker bridge heading off-host is dropped unless it is
+      # DNS, or between containers on the docker ranges. The proxy is on the
+      # host itself, so it is INPUT, not FORWARD, that a bot reaches it through.
+      #
+      # The metadata server answers DNS and nothing else. It also hands out the
+      # host's service-account token, and that account reads every secret the
+      # install holds — a bot that could fetch it would have every other bot's
+      # GitHub credential. The VPC is closed for the same reason: Cloud SQL and
+      # hostd's own port are there, and a bot has no business with either
+      # except through host.docker.internal.
+      #
+      # INPUT, because Container-Optimized OS drops by default: hostd's port has
+      # to admit the load balancer, the bridge (both already narrowed by the VPC
+      # firewall) and the bots on their docker bridges, and the proxy has to
+      # admit the bots. So does the task database server, which hostd publishes
+      # on the bridge's gateway only (47433): a task's container reaches it as
+      # host.docker.internal from the fleetadlc-tasks bridge, and nothing off
+      # the host can, since nothing else is admitted on that port.
+      #
+      # OUTPUT, for hostd: it runs on the host's network as uid 1000, so its
+      # traffic never crosses FORWARD, and the VPC lets 443 out to anywhere.
+      # Something in hostd that ignores the proxy variables, holding every
+      # bot's credential, would otherwise reach any address on 443. A new
+      # connection from that uid may go to the proxy and anything else on the
+      # host, the metadata server, the docker bridges (task containers and the
+      # task database) and the VPC (Cloud SQL), and nowhere else. Uid 1000 is
+      # also `bot` inside the containers, but their traffic crosses FORWARD.
+      ExecStart=/bin/sh -c '\
+        iptables -C INPUT -p tcp --dport ${hostd_port} -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport ${hostd_port} -j ACCEPT; \
+        iptables -C INPUT -i br+ -p tcp --dport 3128 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -i br+ -p tcp --dport 3128 -j ACCEPT; \
+        iptables -C INPUT -i br+ -p tcp --dport 47433 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -i br+ -p tcp --dport 47433 -j ACCEPT; \
+        iptables -C INPUT -i docker0 -p tcp --dport 3128 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -i docker0 -p tcp --dport 3128 -j ACCEPT; \
+        iptables -N FLEETADLC_EGRESS 2>/dev/null || true; \
+        iptables -F FLEETADLC_EGRESS; \
+        iptables -A FLEETADLC_EGRESS -d 169.254.169.254/32 -p udp --dport 53 -j RETURN; \
+        iptables -A FLEETADLC_EGRESS -d 169.254.169.254/32 -p tcp --dport 53 -j RETURN; \
+        iptables -A FLEETADLC_EGRESS -d 172.16.0.0/12 -j RETURN; \
+        iptables -A FLEETADLC_EGRESS -d 192.168.0.0/16 -j RETURN; \
+        iptables -A FLEETADLC_EGRESS -j LOG --log-prefix "fleetadlc-egress-denied " --log-level 4; \
+        iptables -A FLEETADLC_EGRESS -j REJECT --reject-with icmp-port-unreachable; \
+        iptables -N DOCKER-USER 2>/dev/null || true; \
+        iptables -C DOCKER-USER -i br+ -j FLEETADLC_EGRESS 2>/dev/null || iptables -I DOCKER-USER 1 -i br+ -j FLEETADLC_EGRESS; \
+        iptables -C DOCKER-USER -i docker0 -j FLEETADLC_EGRESS 2>/dev/null || iptables -I DOCKER-USER 1 -i docker0 -j FLEETADLC_EGRESS; \
+        iptables -N FLEETADLC_HOSTD 2>/dev/null || true; \
+        iptables -F FLEETADLC_HOSTD; \
+        iptables -A FLEETADLC_HOSTD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; \
+        iptables -A FLEETADLC_HOSTD -d 127.0.0.0/8 -j ACCEPT; \
+        iptables -A FLEETADLC_HOSTD -d 169.254.169.254/32 -j ACCEPT; \
+        iptables -A FLEETADLC_HOSTD -d 172.16.0.0/12 -j ACCEPT; \
+        iptables -A FLEETADLC_HOSTD -d 192.168.0.0/16 -j ACCEPT; \
+        iptables -A FLEETADLC_HOSTD -d 10.0.0.0/8 -j ACCEPT; \
+        iptables -A FLEETADLC_HOSTD -j LOG --log-prefix "fleetadlc-egress-denied " --log-level 4; \
+        iptables -A FLEETADLC_HOSTD -j REJECT --reject-with icmp-port-unreachable; \
+        iptables -C OUTPUT -m owner --uid-owner 1000 -j FLEETADLC_HOSTD 2>/dev/null || iptables -I OUTPUT 1 -m owner --uid-owner 1000 -j FLEETADLC_HOSTD'
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # What hostd needs that cannot be written here: the database URL carries a
+  # generated password, so it is read from Secret Manager at each start rather
+  # than baked into metadata anyone with compute.instances.get can read.
+  #
+  # And the app itself, copied out of the image onto the host at the same path
+  # it runs from. hostd hands the Docker daemon bind-mount sources — the skills,
+  # the roles, the skill runner beside its own main.js, every bot's work
+  # directory — and the daemon reads those as paths on the host. Run from /app
+  # inside its container, hostd named paths that did not exist out here, and
+  # every bot came up with empty mounts.
+  - path: /etc/fleet/prepare-hostd.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      root=/var/lib/fleet
+      mkdir -p "$root/home" "$root/work" "$root/logins"
+      # hostd runs as the bots' uid (see the unit), so what it makes — worktrees,
+      # sign-in folders — is theirs inside the containers too. Created by root,
+      # the first cloud host's bots could not open their own sign-in folder.
+      chown -R 1000:1000 "$root/home" "$root/work" "$root/logins"
+
+      # /var is noexec on Container-Optimized OS, and a bind mount inherits it:
+      # a bot could not run a script in its own worktree. The same remount the
+      # platform's GPU driver install uses.
+      if ! mountpoint -q "$root"; then mount --bind "$root" "$root"; fi
+      mount -o remount,bind,exec "$root"
+
+      md=http://metadata.google.internal/computeMetadata/v1
+      token=$(curl -sf -H 'Metadata-Flavor: Google' "$md/instance/service-accounts/default/token" \
+        | sed -E 's/.*"access_token":"([^"]+)".*/\1/')
+      database_url=$(curl -sf -H "Authorization: Bearer $token" \
+        "https://secretmanager.googleapis.com/v1/projects/${project_id}/secrets/${database_secret}/versions/latest:access" \
+        | grep -o '"data": *"[^"]*"' | sed -E 's/.*"([^"]*)"$/\1/' | base64 -d)
+
+      # The database's certificate authority, where the URL's `sslrootcert`
+      # looks for it (main.tf, database_ca_dir): the instance refuses a
+      # connection that is not encrypted, and the URL checks the server against
+      # this file. Before the umask below, so hostd and the migrate container,
+      # both uid 1000, can read it; it is not a secret.
+      ca_dir="$root/database-ca"
+      mkdir -p "$ca_dir"
+      chmod 0755 "$ca_dir"
+      curl -sf -H "Authorization: Bearer $token" \
+        "https://secretmanager.googleapis.com/v1/projects/${project_id}/secrets/${database_ca_secret}/versions/latest:access" \
+        | grep -o '"data": *"[^"]*"' | sed -E 's/.*"([^"]*)"$/\1/' | base64 -d > "$ca_dir/server-ca.pem.next"
+      chmod 0644 "$ca_dir/server-ca.pem.next"
+      mv "$ca_dir/server-ca.pem.next" "$ca_dir/server-ca.pem"
+
+      umask 077
+      cat > "$root/hostd.env" <<ENV
+      DATABASE_URL=$database_url
+      FLEETADLC_SECRET_STORE=gcp
+      FLEETADLC_GCP_PROJECT=${project_id}
+      FLEETADLC_HOSTD_DRIVER=docker
+      FLEETADLC_HOSTD_PORT=${hostd_port}
+      FLEETADLC_HOST_NAME=${host_name}
+      FLEETADLC_HOST_ZONE=${zone}
+      FLEETADLC_BRIDGE_URL=${bridge_url}
+      FLEETADLC_CONSOLE_URL=https://${console_domain}
+      FLEETADLC_BOT_IMAGE=${bot_image}
+      FLEETADLC_BOT_EGRESS_PROXY=http://host.docker.internal:3128
+      FLEETADLC_HOME=$root/home
+      FLEETADLC_WORK_ROOT=$root/work
+      FLEETADLC_LOGIN_ROOT=$root/logins
+      FLEETADLC_SKILLS_ROOT=$root/assets/skills
+      FLEETADLC_ROLES_ROOT=$root/assets/roles
+      FLEETADLC_RUNNER_BUNDLE=$root/assets/skill-runner.bundle.mjs
+      FLEETADLC_GH_SHIM_DIR=$root/assets/gh-shim
+      FLEETADLC_GITHUB_ORG=${github_org}
+      FLEETADLC_GITHUB_CLIENT_ID=${github_client}
+      FLEETADLC_HUMANS=${humans}
+      FLEETADLC_AUTOMATION_BOT=${automation_bot}
+      FLEETADLC_REGISTRY_HOST=${registry_host}
+      HTTP_PROXY=http://127.0.0.1:3128
+      HTTPS_PROXY=http://127.0.0.1:3128
+      NO_PROXY=127.0.0.1,localhost,169.254.169.254,metadata.google.internal
+      NODE_USE_ENV_PROXY=1
+      ENV
+
+      # What follows is read by hostd and by the task computers, as uid 1000.
+      umask 022
+
+      # Empties a directory and fills it again from another, rather than
+      # replacing it: a task computer's bind mount holds the directory it was
+      # made with, and a computer that outlives hostd's restart keeps it.
+      refill() {
+        mkdir -p "$2"
+        find "$2" -mindepth 1 -delete
+        cp -R "$1/." "$2/"
+      }
+
+      # Only when the image changed. Task computers mount the skills, the
+      # roles, the gh and git wrappers and the skill runner from this tree.
+      # When it was swapped for a fresh copy, a computer that outlived hostd's
+      # restart read an empty /skills and /roles, had no fleetadlc-ci, and
+      # found the real gh and git first on its PATH. So the tree is refreshed
+      # where it is: those directories are refilled, the runner is written
+      # over, and the rest, which no computer mounts, is replaced. Nothing is
+      # restarted: restarting a computer ends the session in it.
+      image_id=$(docker image inspect -f '{{.Id}}' ${hostd_image})
+      if [ ! -d "$root/app" ] || [ "$(cat "$root/app.image" 2>/dev/null)" != "$image_id" ]; then
+        rm -rf "$root/app.next"
+        docker rm -f fleet-app-source >/dev/null 2>&1 || true
+        docker create --name fleet-app-source ${hostd_image} >/dev/null
+        docker cp fleet-app-source:/app "$root/app.next"
+        docker rm fleet-app-source >/dev/null
+        if [ ! -d "$root/app" ]; then
+          mv "$root/app.next" "$root/app"
+        else
+          for dir in crew/skills crew/roles apps/hostd/bin; do
+            refill "$root/app.next/$dir" "$root/app/$dir"
+          done
+          mkdir -p "$root/app/apps/hostd/dist"
+          cp "$root/app.next/apps/hostd/dist/skill-runner.bundle.mjs" "$root/app/apps/hostd/dist/skill-runner.bundle.mjs"
+          # Everything else goes, except the directories on the way to those
+          # four, and the new image's copy is laid over what is left.
+          find "$root/app" -mindepth 1 \
+            \( -path "$root/app/crew/skills" -o -path "$root/app/crew/roles" -o -path "$root/app/apps/hostd/bin" \
+              -o -path "$root/app/apps/hostd/dist/skill-runner.bundle.mjs" \) -prune \
+            -o \( -path "$root/app/crew" -o -path "$root/app/apps" -o -path "$root/app/apps/hostd" -o -path "$root/app/apps/hostd/dist" \) \
+            -o -prune -exec rm -rf {} +
+          cp -R "$root/app.next/." "$root/app/"
+          rm -rf "$root/app.next"
+        fi
+        echo "$image_id" > "$root/app.image"
+      fi
+
+      # What a task computer mounts, in directories of their own outside the
+      # app tree (hostd.env names them, as the compose stack does), refilled
+      # on every start so the image's own copy is what runs. Computers made
+      # before these existed mount the app tree, which is why that is
+      # refreshed in place as well.
+      refill "$root/app/crew/skills" "$root/assets/skills"
+      refill "$root/app/crew/roles" "$root/assets/roles"
+      refill "$root/app/apps/hostd/bin" "$root/assets/gh-shim"
+      # Written over in place, so a mount of the file keeps seeing it.
+      cp "$root/app/apps/hostd/dist/skill-runner.bundle.mjs" "$root/assets/skill-runner.bundle.mjs"
+      chown -R 1000:1000 "$root/assets"
+
+      # The schema, then the crew from config/bots.yaml placed on this host —
+      # what `fleetadlc up` does on a laptop. A failed migration stops hostd: it
+      # must not run on a schema it does not know. A seat the seed refuses is a
+      # warning, as under `fleetadlc up`: the refusal comes from the database
+      # and never clears, and as a failure it held the only host in a restart
+      # loop with no hostd at all.
+      docker run --rm --network host --env-file "$root/hostd.env" \
+        -v "$root:$root" -w "$root/app" ${hostd_image} \
+        sh -c 'node packages/db/dist/cli/migrate.js && { node packages/db/dist/cli/seed.js || echo "[prepare-hostd] the seed reported a problem; hostd starts anyway" >&2; }'
+
+  - path: /etc/systemd/system/fleet-hostd.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=hostd
+      After=fleet-egress-firewall.service
+      Requires=fleet-egress-firewall.service
+
+      [Service]
+      Restart=always
+      RestartSec=10
+      # Where docker-credential-gcr writes the registry login. Root's home is
+      # read-only on Container-Optimized OS.
+      Environment=HOME=/var/lib/fleet/home
+      ExecStartPre=/bin/mkdir -p /var/lib/fleet/home
+      ExecStartPre=/usr/bin/docker-credential-gcr configure-docker --registries=${region}-docker.pkg.dev
+      # The bot image, before hostd needs it. Without this the host came up
+      # healthy and every task failed to start, because the docker driver had no
+      # image to run a bot from and nothing had ever pulled one.
+      #
+      # Only when the host has none. From then on the tag is the host's own:
+      # the weekly engine update rebuilds it here and moves it, and pulled on
+      # every start, the registry's copy would put the old engines back under
+      # the bots at the next restart, with nothing recorded. To seed a host
+      # with a newer registry image, `docker pull` it by hand.
+      ExecStartPre=/bin/sh -c '/usr/bin/docker image inspect ${bot_image} >/dev/null 2>&1 || exec /usr/bin/docker pull ${bot_image}'
+      ExecStartPre=/usr/bin/docker pull ${hostd_image}
+      ExecStartPre=/bin/bash /etc/fleet/prepare-hostd.sh
+      ExecStartPre=-/usr/bin/docker rm -f fleet-hostd
+      # hostd itself goes through the proxy too. It is the thing that talks to
+      # GitHub on a task's behalf, and an allowlist that exempts the component
+      # with the credentials is not an allowlist. Two things hold it: the proxy
+      # variables in hostd.env, with NODE_USE_ENV_PROXY, without which Node's
+      # own fetch ignores the rest and went straight out; and the OUTPUT rule
+      # in fleet-egress-firewall, which refuses a new connection from hostd's
+      # uid to anything but the host itself (the proxy), the metadata server,
+      # the docker bridges and the VPC.
+      #
+      # The browser opens /terminal from the console's domain, and the gateway
+      # admits only the console it is told about.
+      #
+      # As uid 1000, the `bot` user in the bot image, with the socket's group so
+      # it can still drive Docker. Docker Desktop hides ownership from a Mac;
+      # Linux does not, and everything hostd made as root was unwritable to the
+      # bot that had to use it. `%%g` because systemd reads `%g` as its own
+      # specifier (the manager's group) and hostd got root's group, not docker's.
+      ExecStart=/bin/sh -c 'exec /usr/bin/docker run --rm --name fleet-hostd \
+        --network host \
+        --user 1000:1000 \
+        --group-add $$(stat -c %%g /var/run/docker.sock) \
+        -e HOME=/var/lib/fleet/home \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -v /var/lib/fleet:/var/lib/fleet \
+        -w /var/lib/fleet/app \
+        --env-file /var/lib/fleet/hostd.env \
+        ${hostd_image} node apps/hostd/dist/main.js'
+
+      # hostd ends each running task on SIGTERM: a few docker execs, a git
+      # harvest and a docker rm for every one, which docker stop's default 10
+      # seconds cut off with tasks still open. systemd waits a little longer
+      # than docker does, so it never kills the stop itself.
+      ExecStop=/usr/bin/docker stop -t 300 fleet-hostd
+      TimeoutStopSec=330
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # Logging is the platform's own agent on Container-Optimized OS, turned on by
+  # the instance's `google-logging-enabled` metadata. The Ops Agent this used to
+  # install has no package for COS, and the line failed on every boot.
+  - systemctl daemon-reload
+  - systemctl enable --now fleet-egress-proxy.service
+  - systemctl enable --now fleet-egress-firewall.service
+  - systemctl enable --now fleet-hostd.service

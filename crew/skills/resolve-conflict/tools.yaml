@@ -1,0 +1,19 @@
+# What the engine may do while resolving a conflict the merge line found. Only
+# the conflicted files are written: the round resolves, it does not rework.
+# The merge itself brings the base's other files in; that is not this task
+# writing them. docs/security.md says, engine by engine, what holds.
+
+allow:
+  shell: [make, pnpm, npm, uv, python, python3, node, git, gh, rg, jq, cat, ls, sed, fleetadlc-ci, fleetadlc-install]
+  git:
+    push_branch_prefix: "agent/"
+    force_push: false
+    local_ci: true
+  files:
+    write_within:
+      - "<declared_paths>"
+      - ".fleetadlc-scratch/**"
+
+deny:
+  shell: [curl, wget, ssh, docker, sudo, kubectl, terraform]
+  github: ["pr merge", "pr review", "workflow run", "run rerun", "api"]

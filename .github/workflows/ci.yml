@@ -1,0 +1,485 @@
+name: ci
+
+on:
+  # `labeled` and `unlabeled` are here because scope-check reads the labels: a
+  # pull request that answers it by taking `scope:cross-cutting` has to be
+  # re-checked, and by default labelling fires nothing. They are also how CI
+  # starts on a crew pull request: see `adlc:ci` below. `ready_for_review`
+  # runs the integration suites a draft skipped. `edited` is here because
+  # scope-check reads the issues the body closes: an edited body left its
+  # verdict stale. Only an edit to the body runs anything, not one to the title.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
+  push:
+    branches: [main]
+  merge_group:
+
+# CI on a crew pull request (an `agent/` branch of this repository; a fork's
+# branch of that name is a person's) runs only once it carries
+# `adlc:ci`, which OpenADLC's merge line puts on as its app after the lead
+# reviewer approved and the pull request is at the front of the line and up
+# to date: the builder ran `make ci` on its head already (`fleetadlc-ci`), and
+# the runner minutes go to the one head that lands. A branch update re-runs it
+# while the label stays. A person's pull request, a push to main and the merge
+# queue run as they always did, and of the label events only `adlc:ci` and
+# `scope:cross-cutting` count, and of the edits only one to the body.
+#
+# The expression is written out in each place it is needed: a job's `if` and
+# `concurrency` cannot read `env`. Skipped, a job named `ci` would still report
+# a `ci` check that rulesets count as passing; so the last job is named `ci`
+# only when the checks ran in full, and a deferred run has no `ci` check at all
+# (docs/unverified.md says how that is confirmed). Nor does a draft's, which
+# skips the integration suites: its last job is `ci (draft)`. Marking it ready
+# runs them, and that run's `ci` appears only once its other jobs finish; had
+# the draft's pass been named `ci`, it would stand on the head until then, and
+# the merge line could land what the suites never saw.
+#
+# What a run costs. Runner minutes are billed per job, rounded up, and a run
+# used to cost about twelve: the build twice (unit and integration jobs), a
+# typecheck the build had already done, the cloud module on every change, and
+# all of it again on main for the commit its pull request had just passed.
+# Now `changes` decides what the change needs:
+# - a change to docs alone runs the checks that read docs, not the build;
+# - the commits are scanned for secrets in a short job of their own, docs
+#   too;
+# - the cloud module runs when `infra/gcp` changed;
+# - the build runs once, and the integration suites follow the unit tests in
+#   the same job (not on a draft);
+# - a push to main whose tree a pull request already passed in full runs
+#   nothing more: the merge line and a squash of an up-to-date pull request
+#   land exactly the tree that was tested.
+
+# Workflows hold no secrets and can write nothing: everything the platform does to
+# GitHub is done by a bot's own account through the bridge, not from here.
+permissions:
+  contents: read
+  # scope-check reads the issues a pull request says it closes. Nothing writes.
+  issues: read
+  pull-requests: read
+  # `changes` asks whether a pull request's run already passed this tree.
+  actions: read
+
+# A label event that runs nothing is in a group of its own, so it never
+# cancels a run that is testing the head.
+concurrency:
+  group: ci-${{ github.ref }}-${{ (github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled' && (github.event.action != 'edited' || github.event.changes.body)) || github.event.label.name == 'adlc:ci' || github.event.label.name == 'scope:cross-cutting') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) && 'run' || 'deferred' }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: changes
+    if: ${{ github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled' && (github.event.action != 'edited' || github.event.changes.body)) || github.event.label.name == 'adlc:ci' || github.event.label.name == 'scope:cross-cutting') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.paths.outputs.code }}
+      infra: ${{ steps.paths.outputs.infra }}
+      tree: ${{ steps.paths.outputs.tree }}
+      tested: ${{ steps.tested.outputs.tested }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: what changed
+        id: paths
+        env:
+          EVENT: ${{ github.event_name }}
+          GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          # A pull request's checkout is its merge commit, whose first parent
+          # is the base it is tested against.
+          case "$EVENT" in
+            pull_request) base="HEAD^1" ;;
+            merge_group) base="$GROUP_BASE" ;;
+            *) base="$PUSH_BEFORE" ;;
+          esac
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then base="HEAD~1"; fi
+          # --no-renames lists both sides of a rename: a source file moved
+          # into docs/ took code out of the build, and is not docs alone.
+          files=$(git diff --name-only --no-renames "$base" HEAD)
+          while IFS= read -r file; do echo "  $file"; done <<< "$files"
+          # Docs are what no build reads: docs/, the Markdown at the root and
+          # directly under .github/, the issue forms, the licence files. Two
+          # unit tests do read some of them (origin-cors.test.ts reads
+          # docs/security.md; repo-templates.test.ts the forms and the pull
+          # request template), so the docs job runs those two as well. A skill's
+          # Markdown is not docs: the crew runs it, and its tests read it.
+          outside=$(printf '%s\n' "$files" | grep -Ev '^(docs/|LICENSE$|NOTICE$|[^/]+\.md$|\.github/[^/]+\.md$|\.github/ISSUE_TEMPLATE/)' | grep -v '^$' || true)
+          if [ -z "$files" ] || [ -n "$outside" ]; then echo "code=true" >> "$GITHUB_OUTPUT"; else echo "code=false" >> "$GITHUB_OUTPUT"; fi
+          if printf '%s\n' "$files" | grep -q '^infra/gcp/'; then echo "infra=true" >> "$GITHUB_OUTPUT"; else echo "infra=false" >> "$GITHUB_OUTPUT"; fi
+          echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+
+      # The verdict of a pull request's full run leaves an artifact named
+      # after the tree it passed. Only this repository's own runs count: a
+      # fork's run is the fork's workflow, and could name any tree. Nor is the
+      # name enough on its own: any run from a branch here can upload one, a
+      # branch with an edited ci.yml among them. So the run has to be a pull
+      # request's run of this workflow that passed, and the tree has to be its
+      # own head's — a run vouches only for the tree it was given, and that tree
+      # reaches main only through review. (An up-to-date pull request's merge
+      # commit has its head's tree, and only an up-to-date one lands.)
+      - name: already passed on its pull request
+        id: tested
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REPO_ID: ${{ github.repository_id }}
+          TREE: ${{ steps.paths.outputs.tree }}
+        run: |
+          tested=false
+          runs=$(gh api "repos/$REPO/actions/artifacts?name=tested-tree-$TREE" \
+            --jq ".artifacts[] | select(.expired == false and .workflow_run.head_repository_id == $REPO_ID) | \"\(.workflow_run.id) \(.workflow_run.head_sha)\"" 2>/dev/null || true)
+          while read -r run head; do
+            [ -n "$run" ] || continue
+            verdict=$(gh api "repos/$REPO/actions/runs/$run" --jq '"\(.event) \(.conclusion) \(.path)"' 2>/dev/null || true)
+            [ "$verdict" = "pull_request success .github/workflows/ci.yml" ] || continue
+            if [ "$(gh api "repos/$REPO/git/commits/$head" --jq .tree.sha 2>/dev/null || true)" = "$TREE" ]; then
+              tested=true
+              break
+            fi
+          done <<< "$runs"
+          if [ "$tested" = true ]; then echo "tree $TREE passed in full on its pull request; nothing to run again"; fi
+          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+
+  # No credential lands in the history: gitleaks reads each commit the pull
+  # request adds (or the push or merge group brings), with this repository's
+  # .gitleaks.toml, on every change, docs alone included. Fetched at a fixed
+  # release and checked against its checksum, as actionlint is below.
+  secrets:
+    name: secrets
+    needs: changes
+    if: ${{ needs.changes.outputs.tested != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: no secrets in the commits
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+          GROUP_HEAD: ${{ github.event.merge_group.head_sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          curl -fsSL -o /tmp/gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          # The pull request's own commits, not its merge commit: a finding
+          # names the commit that brought it.
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" head="$PR_HEAD" ;;
+            merge_group) base="$GROUP_BASE" head="$GROUP_HEAD" ;;
+            *) base="$PUSH_BEFORE" head="$GITHUB_SHA" ;;
+          esac
+          # With no base to start from (a force push whose old head is gone),
+          # all of the history up to the head.
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then range="$base..$head"; else range="$head"; fi
+          echo "scanning $range"
+          /tmp/gitleaks git --no-banner --redact --config .gitleaks.toml --log-opts="$range" .
+
+  # The build once, the unit tests, then a real install driven by the
+  # integration suites. One job, because the second build was the costliest
+  # thing two jobs did.
+  check:
+    name: check
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && needs.changes.outputs.tested != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
+        env:
+          POSTGRES_USER: fleetadlc
+          POSTGRES_PASSWORD: fleetadlc
+          POSTGRES_DB: fleetadlc_db
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U fleetadlc -d fleetadlc_db"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://fleetadlc:fleetadlc@127.0.0.1:5432/fleetadlc_db
+      FLEETADLC_CONFIG_ROOT: ${{ github.workspace }}/config
+
+    steps:
+      # The checks below compare against the base branch, which needs its history.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.33.3
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: the workflows themselves are valid
+        run: |
+          # A workflow with an expression in the wrong place is rejected whole,
+          # with no jobs and no explanation, so it is worth catching here.
+          curl -fsSL -o /tmp/actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz
+          echo "fc0a6886bbb9a23a39eeec4b176193cadb54ddbe77cdbb19b637933919545395  /tmp/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          /tmp/actionlint
+          # And the ones every managed repository gets. Named paths replace
+          # actionlint's own search, so this is a second call, not more
+          # arguments to the first: a template that does not load publishes no
+          # `ci` anywhere, and the merge line waits in every repository at once.
+          /tmp/actionlint crew/templates/repo/.github/workflows/*.yml
+
+      # `tsc` for every package and app, and `next build` for the console:
+      # each compiles its tests too, so this is the typecheck as well.
+      - name: build
+        run: pnpm build
+
+      # The root tests/ are not a package `pnpm build` compiles, so their
+      # types are checked here, against the packages just built.
+      - name: typecheck the root tests
+        run: pnpm --filter @fleetadlc/tests typecheck
+
+      # A change that quietly grows past what its issues declared is caught
+      # here, with the workflow's own read-only token and no secrets. Whether a
+      # reviewer, intake or automation account authored a commit is not: those
+      # accounts are each install's own, so the bridge checks it as part of
+      # `review-gate`.
+      - name: the diff stays inside what the issues declared
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || 'HEAD~1' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || 'HEAD' }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          # Its own number is never the issue that declares its scope, and its
+          # author's own scope:cross-cutting waives nothing.
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/scope-check.mjs
+
+      - name: test
+        run: pnpm test
+
+      - name: migrations apply to an empty database
+        run: pnpm db:migrate
+
+      - name: config loads and the crew seeds
+        run: pnpm db:seed
+
+      # The pieces only misbehave once they are wired together, so CI starts a
+      # real install and drives it. The live GitHub suites are deliberately
+      # absent: a workflow holds no credentials, and everything the platform
+      # does to GitHub is done by a bot's own account through the bridge.
+      # A draft runs the unit tests only; marking it ready runs these.
+      - name: a repository for the crew to work in
+        if: ${{ !github.event.pull_request.draft }}
+        run: |
+          # From here on the job is an install: the names the code reads. An
+          # unread variable fails silently — `FLEETADLC_DEMO_REPO_PATH` once
+          # sent the suite to clone a private repository with no credentials.
+          {
+            echo "FLEETADLC_SKILLS_ROOT=$GITHUB_WORKSPACE/crew/skills"
+            echo "FLEETADLC_BRIDGE_URL=http://127.0.0.1:47311"
+            echo "FLEETADLC_HOSTD_URL=http://127.0.0.1:47312"
+            echo "FLEETADLC_HOSTD_DRIVER=local"
+            echo "FLEETADLC_HOST_NAME=ci"
+            echo "FLEETADLC_SCRIPTED_ENGINES=1"
+            echo "FLEETADLC_SCRIPTED_REPO_PATH=$GITHUB_WORKSPACE/.ci/demo-repo"
+            echo "FLEETADLC_HOME=$GITHUB_WORKSPACE/.ci/fleetadlc-home"
+          } >> "$GITHUB_ENV"
+          mkdir -p .ci/demo-repo .ci/fleetadlc-home
+          cd .ci/demo-repo
+          git init -q -b main
+          git config user.email ci@fleetadlc.local
+          git config user.name "OpenADLC CI"
+          printf 'ci: ; @echo "ci ok"\n' > Makefile
+          printf '# Agent notes\n\nRun make ci before opening a pull request.\n' > AGENTS.md
+          git add -A
+          git commit -q -m "Initialize the repository the checks work in"
+
+      - name: bring the install up
+        if: ${{ !github.event.pull_request.draft }}
+        run: |
+          node packages/db/dist/cli/seed.js --scripted-board
+          # The console secret, made as `fleetadlc up` makes it, before anything
+          # starts: the bridge serves /v1 only beside it, and the console is
+          # started with it. Read from the file, never echoed.
+          (umask 077 && mkdir -p "$FLEETADLC_HOME/secrets" \
+            && node -e 'require("fs").writeFileSync(process.argv[1], require("crypto").randomBytes(32).toString("hex") + "\n", {mode:0o600})' \
+              "$FLEETADLC_HOME/secrets/console-api-secret.secret")
+          node apps/hostd/dist/main.js > "$RUNNER_TEMP/hostd.log" 2>&1 &
+          node apps/bridge/dist/main.js > "$RUNNER_TEMP/bridge.log" 2>&1 &
+          (cd apps/console \
+            && FLEETADLC_CONSOLE_SECRET="$(tr -d '\n' < "$FLEETADLC_HOME/secrets/console-api-secret.secret")" \
+              pnpm start > "$RUNNER_TEMP/console.log" 2>&1 &)
+          # /signin, because the console's / refuses a browser that has not signed in.
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:47312/healthz > /dev/null \
+              && curl -fsS http://127.0.0.1:47311/healthz > /dev/null \
+              && curl -fsS http://127.0.0.1:47300/signin > /dev/null; then
+              echo "the install is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "the install did not come up"
+          tail -n 40 -- "$RUNNER_TEMP/hostd.log" "$RUNNER_TEMP/bridge.log" "$RUNNER_TEMP/console.log"
+          exit 1
+
+      - name: lease to task, caps, budget stop, audit trail
+        if: ${{ !github.event.pull_request.draft }}
+        run: node tests/pipeline.mjs
+
+      - name: take over a session and hand it back
+        if: ${{ !github.event.pull_request.draft }}
+        run: node tests/terminal.mjs
+
+      - name: interrupting a task leaves the branch alone
+        if: ${{ !github.event.pull_request.draft }}
+        run: node tests/kill-and-restart.mjs
+
+      - name: two builders, one task each
+        if: ${{ !github.event.pull_request.draft }}
+        run: node tests/concurrency.mjs
+
+      - name: the onboarding walkthrough tells the truth
+        if: ${{ !github.event.pull_request.draft }}
+        run: node tests/onboarding.mjs
+
+      - name: service logs
+        if: ${{ failure() && !github.event.pull_request.draft }}
+        # The install may never have started: a failure before it leaves no logs.
+        run: tail -n 60 -- "$RUNNER_TEMP/hostd.log" "$RUNNER_TEMP/bridge.log" "$RUNNER_TEMP/console.log" 2>/dev/null || true
+
+  # A change to docs alone: what reads docs, and the scope check, without the
+  # build of the apps.
+  docs:
+    name: docs
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.33.3
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # scope-check reads the declared paths through the shared package, and
+      # origin-cors.test.ts reaches the database package through hostd's source.
+      - run: pnpm --filter @fleetadlc/shared --filter @fleetadlc/db build
+
+      - name: the diff stays inside what the issues declared
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || 'HEAD~1' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || 'HEAD' }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          # Its own number is never the issue that declares its scope, and its
+          # author's own scope:cross-cutting waives nothing.
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/scope-check.mjs
+
+      - name: links resolve, and the docs say what is true
+        run: pnpm --filter @fleetadlc/tests exec vitest run links.test.ts claims.test.ts images.test.ts origin-cors.test.ts repo-templates.test.ts
+
+  cloud-module:
+    name: cloud module
+    needs: changes
+    if: ${{ needs.changes.outputs.infra == 'true' && needs.changes.outputs.tested != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.9.8
+      - name: the module is valid and formatted
+        working-directory: infra/gcp
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+          terraform fmt -check -diff
+
+  # The aggregate job branch protection requires, so adding a check above never
+  # means editing the ruleset.
+  #
+  # `!cancelled()` rather than `always()`: a run superseded by the next push has
+  # its jobs cancelled, and reporting that as red says the commit failed when
+  # nothing about it was ever tested. A cancelled run should report nothing.
+  #
+  # Named `ci` only when the checks ran: see the top of this file. A job
+  # skipped because the change did not need it is a pass; one the change
+  # needed and that did not succeed is not.
+  ci:
+    name: ${{ (github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled' && (github.event.action != 'edited' || github.event.changes.body)) || github.event.label.name == 'adlc:ci' || github.event.label.name == 'scope:cross-cutting') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) && (github.event.pull_request.draft && 'ci (draft)' || 'ci') || 'ci (after approval)' }}
+    needs: [changes, secrets, check, docs, cloud-module]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled' && (github.event.action != 'edited' || github.event.changes.body)) || github.event.label.name == 'adlc:ci' || github.event.label.name == 'scope:cross-cutting') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: verdict
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          SECRETS: ${{ needs.secrets.result }}
+          CHECK: ${{ needs.check.result }}
+          DOCS: ${{ needs.docs.result }}
+          CLOUD: ${{ needs.cloud-module.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          INFRA: ${{ needs.changes.outputs.infra }}
+          TESTED: ${{ needs.changes.outputs.tested }}
+        run: |
+          echo "changes=$CHANGES secrets=$SECRETS check=$CHECK docs=$DOCS cloud=$CLOUD (code=$CODE infra=$INFRA already-passed=$TESTED)"
+          failed=0
+          [ "$CHANGES" = success ] || failed=1
+          if [ "$TESTED" = true ]; then
+            echo "this tree passed in full on its pull request"
+          else
+            [ "$SECRETS" = success ] || failed=1
+            if [ "$CODE" = true ] && [ "$CHECK" != success ]; then failed=1; fi
+            if [ "$CODE" = false ] && [ "$DOCS" != success ]; then failed=1; fi
+            if [ "$INFRA" = true ] && [ "$CLOUD" != success ]; then failed=1; fi
+          fi
+          if [ "$failed" = 1 ]; then
+            echo "checks did not pass"
+            exit 1
+          fi
+          echo "green"
+
+      # So the push to main that lands this exact tree runs nothing again.
+      - name: remember the tree that passed
+        if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft && needs.changes.outputs.code == 'true' }}
+        run: echo "${{ needs.changes.outputs.tree }}" > tested-tree.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft && needs.changes.outputs.code == 'true' }}
+        with:
+          name: tested-tree-${{ needs.changes.outputs.tree }}
+          path: tested-tree.txt
+          retention-days: 14

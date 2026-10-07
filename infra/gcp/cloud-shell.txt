@@ -1,0 +1,10 @@
+
+  OpenADLC is cloned here. To install it in a new Google Cloud project:
+
+    infra/gcp/install.sh --project <new-project-id>
+
+  It asks before it creates the project (add --billing-account <id>), builds
+  the images on Cloud Build, or applies. It asks for the console's domain;
+  the rest has defaults. At the end: one DNS record, then the console's
+  walkthrough. infra/gcp/install.sh --help lists its options.
+

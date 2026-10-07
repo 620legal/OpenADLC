@@ -1,0 +1,13 @@
+name: stops when resolving needs a file outside the conflict
+covers: outside-the-conflict
+given:
+  declaredPaths: ["Makefile"]
+script:
+  say:
+    - "Both sides changed the Makefile's test target, and the base's line calls a script this branch renamed in src/app.js."
+  ask:
+    question: "Keeping both test lines needs src/app.js, outside the conflict. Leave it to a person?"
+    options: ["leave it to a person", "resolve within the conflicted files only"]
+expect:
+  stops: true
+  reason: question

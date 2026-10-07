@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: Apache-2.0 OR 0BSD
+
+name: smoke-testing
+# OpenADLC reads the commit under test from the run's name, which is the
+# deploy run's own (`deploy-testing <commit>`): an expression cannot cut the
+# commit out of it. Keep it.
+run-name: ${{ github.event.workflow_run && format('smoke-testing of {0}', github.event.workflow_run.display_title) || 'smoke-testing' }}
+
+# Whether what was just deployed to testing works. It runs after each
+# deploy-testing that succeeded. Green, OpenADLC dispatches the promote, as
+# `.github/fleetadlc.yml` says; red, it reverts the change and sends it back to
+# build. Keep the job's name the workflow's name, which is what OpenADLC
+# matches on.
+#
+# What it runs is the Makefile's `smoke-testing` target.
+
+on:
+  workflow_run:
+    workflows: [deploy-testing]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Two smoke runs against one environment report on each other's traffic.
+  # GitHub holds one run waiting, and a newer one replaces it rather than
+  # queueing: the smoke that runs is of the newer deploy, which testing serves.
+  group: smoke-testing
+  cancel-in-progress: false
+
+jobs:
+  smoke-testing:
+    name: smoke-testing
+    # Skipped until the repository says its smoke is written, with the Actions
+    # variable FLEETADLC_SMOKE_TESTING set to `true`. A red smoke reverts the
+    # change, so the Makefile's stub, which refuses, would revert every merge
+    # once only the deploy was filled in. Its own variable, because the deploy
+    # is often turned on first. Skipped neither promotes nor reverts.
+    #
+    # A deploy that failed deployed nothing to smoke; its own failure is said.
+    #
+    # `workflow_run` matches deploy-testing by name only, so a fork's pull
+    # request or another branch can add a workflow of that name and have this
+    # job run its commit's Makefile here, with the result read as the default
+    # branch's smoke. The smoke runs only for the deploy-testing OpenADLC
+    # dispatched: from this repository, on its default branch. The repository
+    # check is the one that matters, since a fork can call its branch `main`.
+    # Anything else leaves the job skipped, which OpenADLC reads as neither
+    # red nor green. Do not add secrets, `environment:` or `id-token: write`
+    # to this job without this guard.
+    if: >-
+      vars.FLEETADLC_SMOKE_TESTING == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'workflow_dispatch' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.head_branch == github.event.repository.default_branch))
+    runs-on: ubuntu-latest
+    steps:
+      # The commit deploy-testing deployed, from its run's name. Its run is at
+      # the default branch's tip when it was dispatched, which is another
+      # merge's once two land close together. A deploy run of an older
+      # template names none, and a smoke started by hand has none: those
+      # smoke the commit their run is at.
+      - name: the commit that was deployed
+        id: deployed
+        env:
+          TITLE: ${{ github.event.workflow_run.display_title }}
+          AT: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          sha="${TITLE#deploy-testing }"
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+            sha="$AT"
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      # A `workflow_run` workflow runs the default branch's copy of itself, so
+      # the commit under test is checked out by name. The token is not kept in
+      # .git/config, where the Makefile could read it.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ steps.deployed.outputs.sha }}
+          persist-credentials: false
+
+      - name: smoke the testing environment
+        run: make smoke-testing

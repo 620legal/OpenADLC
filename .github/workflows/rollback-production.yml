@@ -1,0 +1,96 @@
+# Getting back to the revision that worked.
+#
+# This job runs in the **`production-rollback`** environment, which `fleetadlc
+# github apply` makes with no reviewer and no wait timer: a rollback that waits
+# for an approval is not a rollback. The environment is there for its branch
+# policy, which admits the default branch alone, and its secrets: the credential
+# that shifts production's traffic belongs there (or in an OIDC trust pinned to
+# it), never in a repository secret, which any workflow on any branch can read.
+# It undoes a traffic shift, which is the one production action that is always
+# safe to take and always safe to take quickly. It deploys nothing and migrates
+# nothing — a migration is forward-only, so a rollback is a traffic decision.
+#
+# Its deployment is to `production-rollback`, which the bridge does not act on,
+# so it moves no card and changes no label. Whoever ran it says what happened,
+# on the incident.
+name: rollback-production
+
+on:
+  workflow_dispatch:
+    inputs:
+      to:
+        description: The revision tag to send traffic back to. Defaults to the one serving before the last shift.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Shared with promote-production: traffic has one shape at a time.
+  group: production-traffic
+  cancel-in-progress: false
+
+jobs:
+  rollback-production:
+    name: rollback-production
+    # The environment's branch policy is what holds: a dispatch runs the
+    # dispatched branch's copy of this file, which can drop this line.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    environment:
+      name: production-rollback
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: check the revision
+        # Read through the environment, never `${{ }}` in the script: `to` is
+        # free text, and an expression is pasted in before bash reads it.
+        env:
+          TO: ${{ inputs.to }}
+        run: |
+          if [[ -n "$TO" && ! "$TO" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then
+            echo "'to' must be a revision tag: letters, digits, '.', '_' and '-', at most 128 of them, or empty for the previous revision." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.33.3
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: shift traffic back
+        env:
+          # Empty means "whatever was serving before the last shift", which the
+          # repository's own target resolves. A rollback should not need someone
+          # to remember a tag under pressure.
+          FLEETADLC_REVISION_TAG: ${{ inputs.to }}
+        # pipefail, or the step's status is tee's, and a failed rollback reads
+        # as a success.
+        run: |
+          set -euo pipefail
+          make rollback-production | tee /tmp/rollback.log
+
+      - name: what is serving now
+        if: always()
+        # Through the environment, never `${{ }}` in the script: `to` is free
+        # text, and an expression is pasted into the script before bash reads it.
+        env:
+          TO: ${{ inputs.to }}
+        run: |
+          {
+            echo "### rollback"
+            echo
+            echo "- asked for: \`${TO:-the previous revision}\`"
+            echo
+            echo '```'
+            tail -n 20 /tmp/rollback.log 2>/dev/null || echo "the rollback produced no output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

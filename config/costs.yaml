@@ -1,0 +1,14 @@
+# Bounded spend. A task that reaches its cap stops and asks; a month that reaches
+# its cap stops new leasing rather than continuing quietly.
+#
+# perTaskCapUsd and monthlyCapUsd are copied into Settings the first time OpenADLC
+# starts. After that, Settings → Spending limits is where they are changed; a
+# later start does not copy this file back over them. warningAt and onCap stay
+# here.
+
+perTaskCapUsd: 15
+monthlyCapUsd: 1500
+warningAt: 0.9
+
+onCap:
+  stopLeasing: true

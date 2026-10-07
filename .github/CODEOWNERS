@@ -1,0 +1,19 @@
+# Who owns what in OpenADLC itself. This mirrors AGENTS.md's `## Human
+# review` section, path for path, so GitHub's code-owner rule and the bridge ask
+# for the same approval: the files that define how the crew is held in check.
+# Every other path has no code owner and is left to the crew's review. Change
+# the two together. (An organization alone is not an owner GitHub accepts; it
+# takes a user or an `@org/team`.)
+/config/                              @orzelig
+/infra/                               @orzelig
+/.github/workflows/                   @orzelig
+/.github/scripts/scope-check.mjs      @orzelig
+/docs/platform-plan.md                @orzelig
+/apps/bridge/src/automation.ts        @orzelig
+/apps/bridge/src/merge-line.ts        @orzelig
+/apps/bridge/src/gates.ts             @orzelig
+/packages/shared/src/access.ts        @orzelig
+/packages/shared/src/authorship.ts    @orzelig
+/packages/shared/src/human-review.ts  @orzelig
+/packages/shared/src/checks.ts        @orzelig
+/crew/skills/*/tools.yaml             @orzelig

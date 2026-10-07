@@ -1,0 +1,354 @@
+# The local install: Postgres, the three services and the console.
+#
+# Task containers are not declared here. hostd creates one per task, on one
+# network that keeps them from reaching each other, with a database of its own on
+# hostd's task database server, so one task cannot reach another's data.
+# It runs the bridge, hostd and the console on the same ports `fleetadlc up`
+# uses, so run one or the other; the database is not published on the host.
+# `setup` applies the migrations and loads config/, then hostd and the bridge
+# start, and hostd runs the bots.
+#
+# Everything the install keeps but the database and the bridge's first webhook
+# secret (the `db` and `webhook-secret` volumes, which `down -v` deletes) is in
+# one directory on the host, FLEETADLC_COMPOSE_HOME (`~/.fleetadlc-compose` by
+# default; an absolute path), mounted into hostd and the bridge **at the same
+# absolute path**. That is what lets bot tasks run: hostd
+# drives the host's Docker daemon through its socket, and every bind mount it
+# gives a bot's container — the bot's work folder, a subscription's login, the
+# skills, the roles, the skill runner and OpenADLC's `gh` — is resolved by that
+# daemon on the host. A path that exists only inside hostd's container is an
+# empty directory, or nothing, on the host, and a task there ran with no
+# repository. So hostd copies its own assets out of the image into that
+# directory when it starts, and names them there. Inside it:
+#
+#   home/     FLEETADLC_HOME: the secret store (`home/secrets`) — the secret hostd
+#             and the bridge authenticate each other with, the console secret
+#             the bridge serves `/v1` for, the crew's GitHub sign-ins and the
+#             model-account keys — and subscription logins
+#   work/     mirrors and worktrees, one folder per bot
+#   assets/   the skills, roles, skill runner and `gh` hostd hands the bots
+#
+# home/ and work/ are uid 1000's, which the bridge, the console and hostd run
+# as; assets/ is root's, so only hostd's root prelude writes it. `setup` hands
+# an older install's files over on start.
+#
+# It holds the install's sign-ins and keys. `docker compose down -v` keeps it (it
+# is not a volume); deleting the directory loses every sign-in. The webhook
+# signing secret is in its secret store too, once the console has set up the app
+# or the webhook; before that it is in the `webhook-secret` volume. `down -v`
+# deletes both volumes, `db` and `webhook-secret`, and with them the database
+# and that first secret.
+
+name: fleetadlc
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: fleetadlc
+      # Required, and no default: the old one, `fleetadlc`, is printed in this
+      # repository. The services reach the database as db:5432 on the compose
+      # network, so its port is not published on the host at all.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD to this install's own database password, e.g. openssl rand -hex 32, see docs/self-hosting.md}
+      POSTGRES_DB: fleetadlc_db
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U fleetadlc -d fleetadlc_db']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # What `fleetadlc up` does before it starts anything: the migrations, then the
+  # crew from config/bots.yaml. Without it hostd and the bridge exit at once on
+  # an empty database ("relation hosts does not exist"). As under `fleetadlc up`,
+  # only the migrations stop the services: a seat the seed refused, or a
+  # repos.yaml it could not read, is reported in this service's log and the
+  # rest starts anyway.
+  #
+  # It also makes the console secret, as `fleetadlc up` does, when the store has
+  # none: the bridge serves `/v1` only to a caller presenting it, and the
+  # console is started with it. Written to a file, never echoed.
+  #
+  # And it hands the install to uid 1000, which the bridge, the console and
+  # hostd run as. An install the root images made has root's files in home/
+  # and work/ and in the `webhook-secret` volume, which the services could no
+  # longer write. Only what is not already 1000's is changed, so a second start
+  # does nothing; `-h` changes a link itself, never what it points at. assets/
+  # is left to hostd, which writes it as root so the bridge cannot rewrite what
+  # every bot runs.
+  setup:
+    image: fleetadlc-service:local
+    build:
+      context: ../..
+      dockerfile: infra/local/Dockerfile.service
+    user: '0:0'
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        secret="$$FLEETADLC_HOME/secrets/console-api-secret.secret"
+        if [ ! -s "$$secret" ]; then
+          (
+            umask 077
+            mkdir -p "$$FLEETADLC_HOME/secrets"
+            node -e 'require("fs").writeFileSync(process.argv[1], require("crypto").randomBytes(32).toString("hex") + "\n", {mode:0o600})' "$$secret"
+          )
+        fi
+        own() {
+          find "$$1" ! -uid 1000 -exec chown -h 1000:1000 {} + || {
+            echo "[setup] could not give $$1 to uid 1000, which the bridge and hostd run as; they are not started on files they cannot write" >&2
+            exit 1
+          }
+        }
+        mkdir -p "$$FLEETADLC_HOME" "$$FLEETADLC_COMPOSE_HOME/work"
+        own /var/lib/fleetadlc
+        # Docker Desktop and OrbStack map a bind mount's ownership: a chown
+        # there succeeds and changes nothing, and uid 1000 writes anyway.
+        # Walked regardless, work/ would be gone through on every start.
+        probe="$$FLEETADLC_HOME/.owner-probe"
+        touch "$$probe"
+        mapped=no
+        if chown 1000:1000 "$$probe" 2>/dev/null && [ "$$(stat -c %u "$$probe")" != 1000 ]; then mapped=yes; fi
+        rm -f "$$probe"
+        if [ "$$mapped" = no ]; then
+          own "$$FLEETADLC_HOME"
+          own "$$FLEETADLC_COMPOSE_HOME/work"
+        fi
+        node packages/db/dist/cli/migrate.js
+        node packages/db/dist/cli/seed.js || echo "[setup] the seed reported a problem; the services start anyway" >&2
+    environment:
+      DATABASE_URL: postgres://fleetadlc:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD to this install's own database password, e.g. openssl rand -hex 32, see docs/self-hosting.md}@db:5432/fleetadlc_db
+      FLEETADLC_CONFIG_ROOT: /app/config
+      # The name and driver hostd registers under, so the crew is put on it.
+      FLEETADLC_HOST_NAME: compose
+      FLEETADLC_HOSTD_DRIVER: docker
+      FLEETADLC_COMPOSE_HOME: ${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}
+      FLEETADLC_HOME: ${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}/home
+    volumes:
+      - ${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}:${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}
+      - webhook-secret:/var/lib/fleetadlc
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # hostd, the bridge and the console restart when they exit: a lost
+  # database connection could end a process, and nothing here started it
+  # again, as `fleetadlc up`'s keeper does.
+  hostd:
+    image: fleetadlc-service:local
+    build:
+      context: ../..
+      dockerfile: infra/local/Dockerfile.service
+    restart: unless-stopped
+    # Before hostd starts:
+    #
+    # - FLEETADLC_COMPOSE_HOME has to be absolute: it is mounted at the same path on
+    #   both sides, and a relative one names a different place in each.
+    # - The bridge and hostd ports move together. A bridge left on 47311 while
+    #   hostd moves means another install's bridge is on 47311, and this
+    #   install's tasks would be sent to it.
+    # - The assets the bots are given are copied to where the host's daemon can
+    #   see them, fresh on every start so a rebuilt image's skills are what runs.
+    #   Into the directories that are there, not swapped for new ones: a bot's
+    #   container keeps its bind mounts across a hostd restart, and on Linux a
+    #   mount holds the directory it was given, so a replaced directory left
+    #   every existing bot with deleted, empty ones.
+    # - The bot image is built, when this project has none yet, with the same
+    #   script and pins as `infra/local/build-bot-image.sh` on the host.
+    #
+    # All of that as root, so the assets stay root's and the bridge cannot
+    # rewrite the skills, the runner or the `gh` every bot runs. hostd itself
+    # then runs as uid 1000, as on the cloud host and as the bridge does, with
+    # the Docker socket's group, read at start because it differs between
+    # hosts, so it can still drive the bots' containers.
+    user: '0:0'
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        case "$$FLEETADLC_COMPOSE_HOME" in
+          /*) ;;
+          *) echo "FLEETADLC_COMPOSE_HOME must be an absolute path; it is $$FLEETADLC_COMPOSE_HOME" >&2; exit 1 ;;
+        esac
+        case "$$FLEETADLC_HOSTD_TASK_BRIDGE_URL|$$FLEETADLC_HOSTD_TASK_HOSTD_URL" in
+          *:47311\|*:47312 ) ;;
+          *:47311\|* | *\|*:47312 )
+            echo "FLEETADLC_BRIDGE_PORT and FLEETADLC_HOSTD_PORT must move together: one is still the default install's port" >&2
+            exit 1 ;;
+        esac
+        assets="$$FLEETADLC_COMPOSE_HOME/assets"
+        mkdir -p "$$FLEETADLC_HOME" "$$FLEETADLC_WORK_ROOT"
+        for part in skills:/app/crew/skills roles:/app/crew/roles gh-shim:/app/apps/hostd/bin; do
+          name="$${part%%:*}"; from="$${part#*:}"
+          mkdir -p "$$assets/$$name"
+          find "$$assets/$$name" -mindepth 1 -delete
+          cp -R "$$from/." "$$assets/$$name/"
+        done
+        # Written over in place, so a mount of the file keeps seeing it.
+        cp /app/apps/hostd/dist/skill-runner.bundle.mjs "$$assets/skill-runner.bundle.mjs"
+        if ! docker image inspect "$$FLEETADLC_BOT_IMAGE" >/dev/null 2>&1; then
+          echo "[hostd] building $$FLEETADLC_BOT_IMAGE, the image this project's bots run; the first start takes a few minutes" >&2
+          # Without hostd's own pins: this image is FROM node:*, which exports
+          # NODE_VERSION, and the script would pin the bots' Node to hostd's.
+          IMAGE="$$FLEETADLC_BOT_IMAGE" env -u NODE_VERSION -u GH_VERSION -u GH_FROM infra/local/build-bot-image.sh >&2 \
+            || echo "[hostd] could not build $$FLEETADLC_BOT_IMAGE; no bot task can start until it is built" >&2
+        fi
+        # A home uid 1000 can write, for the docker CLI's own files when hostd
+        # builds an engine update; root's is not.
+        export HOME=/home/node
+        exec setpriv --reuid=1000 --regid=1000 --groups="$$(stat -c %g /var/run/docker.sock)" node apps/hostd/dist/main.js
+    environment:
+      DATABASE_URL: postgres://fleetadlc:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD to this install's own database password, e.g. openssl rand -hex 32, see docs/self-hosting.md}@db:5432/fleetadlc_db
+      FLEETADLC_HOSTD_PORT: '47312'
+      FLEETADLC_HOSTD_DRIVER: docker
+      FLEETADLC_BRIDGE_URL: http://bridge:47311
+      # A bot's container, on a network of its own, cannot resolve `bridge`; it
+      # reaches the bridge's port as published on the host.
+      FLEETADLC_HOSTD_TASK_BRIDGE_URL: http://host.docker.internal:${FLEETADLC_BRIDGE_PORT:-47311}
+      # And hostd itself, which listens on 47312 in here but is published on
+      # FLEETADLC_HOSTD_PORT; 47312 on the host may be another install's.
+      FLEETADLC_HOSTD_TASK_HOSTD_URL: http://host.docker.internal:${FLEETADLC_HOSTD_PORT:-47312}
+      FLEETADLC_HOST_NAME: compose
+      # This install's task containers, network and task database are named
+      # after the compose project and labelled with it, so they are never
+      # another install's: a hostd refuses to reuse or remove a container
+      # another install made.
+      FLEETADLC_BOT_PREFIX: ${COMPOSE_PROJECT_NAME}-bot-
+      FLEETADLC_INSTALL_ID: compose-${COMPOSE_PROJECT_NAME}
+      # And they run an image of this project's own. The weekly engine update
+      # builds its candidate beside it (`:candidate`) and keeps the image it
+      # replaced as `:previous` for a rollback, so neither ever retags the
+      # `fleetadlc-bot:latest` that `fleetadlc up`'s bots run.
+      FLEETADLC_BOT_IMAGE: compose-${COMPOSE_PROJECT_NAME}-bot:latest
+      FLEETADLC_COMPOSE_HOME: ${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}
+      FLEETADLC_HOME: ${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}/home
+      FLEETADLC_WORK_ROOT: ${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}/work
+      FLEETADLC_SKILLS_ROOT: ${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}/assets/skills
+      FLEETADLC_ROLES_ROOT: ${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}/assets/roles
+      FLEETADLC_RUNNER_BUNDLE: ${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}/assets/skill-runner.bundle.mjs
+      FLEETADLC_GH_SHIM_DIR: ${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}/assets/gh-shim
+      FLEETADLC_GITHUB_CLIENT_ID: ${FLEETADLC_GITHUB_CLIENT_ID:-}
+      # A private package registry's bare host name, from the shell as under
+      # `fleetadlc up`; its token is `home/secrets/registry-token.secret`.
+      FLEETADLC_REGISTRY_HOST: ${FLEETADLC_REGISTRY_HOST:-}
+      # Only the integration suites set these; see FLEETADLC_SCRIPTED_ENGINES in the CLI.
+      FLEETADLC_SCRIPTED_ENGINES: ${FLEETADLC_SCRIPTED_ENGINES:-}
+      FLEETADLC_SCRIPTED_REPO_PATH: ${FLEETADLC_SCRIPTED_REPO_PATH:-}
+    volumes:
+      # hostd drives the bot containers through the Docker socket rather than
+      # reaching into their networks.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # At the same path as on the host: see the top of this file.
+      - ${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}:${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}
+    ports:
+      - '${FLEETADLC_HOSTD_PORT:-47312}:47312'
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      # Its own bridge, so a bridge that could not bind its port stops hostd
+      # rather than leaving it to hand tasks another install's.
+      bridge:
+        condition: service_started
+
+  bridge:
+    image: fleetadlc-service:local
+    build:
+      context: ../..
+      dockerfile: infra/local/Dockerfile.service
+    restart: unless-stopped
+    # The image's `node`; setup has handed it the install home and the volume.
+    user: '1000:1000'
+    # An empty FLEETADLC_WEBHOOK_SECRET used to mean the bridge skipped signature
+    # verification. It now refuses every delivery instead, so this generates a
+    # secret on first start and reuses it. The value is written to a file the
+    # process reads; it is not echoed.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        if [ -z "$${FLEETADLC_WEBHOOK_SECRET:-}" ]; then
+          mkdir -p /var/lib/fleetadlc
+          if [ ! -s /var/lib/fleetadlc/webhook-secret ]; then
+            umask 077
+            node -e 'require("fs").writeFileSync("/var/lib/fleetadlc/webhook-secret", require("crypto").randomBytes(32).toString("hex"), {mode:0o600})'
+          fi
+          FLEETADLC_WEBHOOK_SECRET="$$(tr -d "\n" < /var/lib/fleetadlc/webhook-secret)"
+          export FLEETADLC_WEBHOOK_SECRET
+        fi
+        exec node apps/bridge/dist/main.js
+    environment:
+      DATABASE_URL: postgres://fleetadlc:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD to this install's own database password, e.g. openssl rand -hex 32, see docs/self-hosting.md}@db:5432/fleetadlc_db
+      FLEETADLC_BRIDGE_PORT: '47311'
+      FLEETADLC_HOSTD_URL: http://hostd:47312
+      FLEETADLC_CONFIG_ROOT: /app/config
+      FLEETADLC_GITHUB_ORG: ${FLEETADLC_GITHUB_ORG:-}
+      FLEETADLC_GITHUB_CLIENT_ID: ${FLEETADLC_GITHUB_CLIENT_ID:-}
+      FLEETADLC_WEBHOOK_SECRET: ${FLEETADLC_WEBHOOK_SECRET:-}
+      FLEETADLC_HUMANS: ${FLEETADLC_HUMANS:-}
+      # The dispatcher runs in the bridge, as `fleetadlc up` runs it: shortly after
+      # anything changes that could let work start, and every five minutes.
+      FLEETADLC_DISPATCH_IN_BRIDGE: '1'
+      # The name the console and hostd call the bridge by. The bridge answers a
+      # person's request only under a name it is served under, and this one is
+      # the compose network's, which nothing in the bridge's own settings says.
+      FLEETADLC_BRIDGE_URL: http://bridge:47311
+      # Any other name people open OpenADLC under: a LAN hostname, a tunnel.
+      FLEETADLC_ALLOWED_HOSTS: ${FLEETADLC_ALLOWED_HOSTS:-}
+      FLEETADLC_HOME: ${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}/home
+      FLEETADLC_SCRIPTED_ENGINES: ${FLEETADLC_SCRIPTED_ENGINES:-}
+    volumes:
+      - ${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}:${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}
+      - webhook-secret:/var/lib/fleetadlc
+    ports:
+      - '${FLEETADLC_BRIDGE_PORT:-47311}:47311'
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+
+  # The console holds the console secret, so it is given that one file and not
+  # the install home: the other secrets are none of its business. It signs a
+  # browser in with a link (`fleetadlc console-link`), and is published on
+  # 127.0.0.1 unless FLEETADLC_CONSOLE_HOST says otherwise.
+  console:
+    build:
+      context: ../..
+      dockerfile: infra/local/Dockerfile.console
+    restart: unless-stopped
+    # The image's `node`, which owns the console secret once setup has run.
+    user: '1000:1000'
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        FLEETADLC_CONSOLE_SECRET="$$(tr -d "\n" < /run/fleetadlc/console-api-secret.secret)"
+        export FLEETADLC_CONSOLE_SECRET
+        exec pnpm start
+    environment:
+      FLEETADLC_BRIDGE_URL: http://bridge:47311
+      FLEETADLC_CONSOLE_PORT: '47300'
+      # Every interface inside the container, so the published port reaches it;
+      # which of the host's interfaces that is, is the `ports` line below.
+      FLEETADLC_CONSOLE_HOST: '0.0.0.0'
+      FLEETADLC_ALLOWED_HOSTS: ${FLEETADLC_ALLOWED_HOSTS:-}
+    volumes:
+      # Long syntax, which refuses a missing file rather than making a directory there.
+      - type: bind
+        source: ${FLEETADLC_COMPOSE_HOME:-${HOME}/.fleetadlc-compose}/home/secrets/console-api-secret.secret
+        target: /run/fleetadlc/console-api-secret.secret
+        read_only: true
+    ports:
+      - '${FLEETADLC_CONSOLE_HOST:-127.0.0.1}:${FLEETADLC_CONSOLE_PORT:-47300}:47300'
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      bridge:
+        condition: service_started
+
+volumes:
+  db:
+  webhook-secret:

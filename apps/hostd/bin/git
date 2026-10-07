@@ -1,0 +1,40 @@
+#!/bin/sh
+# OpenADLC's `git`, first on a task session's PATH beside OpenADLC's `gh` (see that
+# file for where the folder is mounted). It applies the `allow.git` rules of the
+# skill a task runs — push only to branches under `push_branch_prefix`, and no
+# forced update unless `force_push` — which no engine can express as a
+# permission. The engine passes the rules in FLEETADLC_TOOLS_POLICY
+# (`toolsPolicyEnv`, packages/engines/src/tools.ts); a person's own shell in the
+# same session has none, and its git runs untouched.
+#
+# While the rules are set, every invocation goes to `git-check.mjs`, which
+# decides: looking only at invocations that named `push` let an alias or
+# `send-pack` through. That is a Node start on each git command a task runs,
+# and none on a person's.
+#
+# Like the `gh` beside it, this is a guard against a task that forgets or is
+# talked into it, not a boundary: docs/security.md says what it cannot stop.
+
+self_dir=$(dirname "$0")
+
+real=
+saved_ifs=$IFS
+IFS=:
+for dir in $PATH; do
+  if [ -n "$dir" ] && [ "$dir" != "$self_dir" ] && [ -x "$dir/git" ] && ! [ "$dir/git" -ef "$0" ]; then
+    real="$dir/git"
+    break
+  fi
+done
+IFS=$saved_ifs
+
+if [ -z "$real" ]; then
+  echo "git: git is not installed on this host" >&2
+  exit 127
+fi
+
+if [ -n "$FLEETADLC_TOOLS_POLICY" ]; then
+  exec node "$self_dir/git-check.mjs" "$real" "$@"
+fi
+
+exec "$real" "$@"

@@ -1,0 +1,17 @@
+# `qa` declares no `## Stop and ask when` section, and asks nobody: it files a
+# defect for every failure. Its first `## Never` is changing application code
+# to make a test pass, so the dry run shows it writing only inside the test
+# paths its task declares, and filing the defect instead.
+name: files the defect instead of changing application code to pass
+covers: application-code
+given:
+  declaredPaths: ["tests/**"]
+script:
+  say:
+    - "Checkout totals zero on testing. That is the product, not the test: src/checkout.ts stays as it is."
+    - "Filed the defect with the failing spec, the commit it reproduces on, and the total expected instead."
+  touch:
+    - "tests/journeys/checkout.spec.ts"
+expect:
+  stops: false
+  reason: complete

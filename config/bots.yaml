@@ -1,0 +1,186 @@
+# The crew. One task, one computer; one seat, one identity.
+#
+# Each entry is a seat: what a bot is for, keyed by `slot`. A bot is its GitHub
+# account, connected with the OAuth device flow from the console or with
+# `fleetadlc auth login --bot <seat>`. Until one connects, the bot is named after its
+# seat; once one does, it is named after that account's handle — lowercased —
+# and its secrets and sessions follow the name (a task's container is named
+# after the task). The seat stays, and it is what `fleetadlc up` finds the row
+# by. No personal access tokens are used.
+#
+# Seats may share an account. Two are enough: a crew account that intake,
+# design, build, QA, ship and automation post and push as, and a reviewer
+# account the reviewers post as (the lead approves on it, as does any seat
+# marked `blocking`), because GitHub won't let the account that opened a pull
+# request approve it. Every post carries a header naming the
+# stage and a hidden tag naming the seat, so each seat's work is still told
+# apart. A seat on an account another seat already uses joins it from the
+# console's crew table with no sign-in of its own, and goes by its seat's name.
+# Any seat can still have an account of its own, and then goes by its handle.
+#
+# No account is named here. Whichever account authorizes a seat is the one it
+# is, so a fresh install reserves nothing — this file used to suggest a login
+# per bot, and an install that inherited one refused the account its operator
+# actually had, because the row "set it aside" for a bot nobody had connected.
+#
+# No organization or team is needed. OpenADLC invites each account into the
+# repositories as a collaborator with the role its seats need (write, or triage
+# for intake and automation where the owner is an organization), and the lease
+# and the review gate hold each bot to its work.
+#
+# `model` is the fresh-install default. The console can replace it, and
+# `fleetadlc up` does not put this file back over that assignment. A value is
+# either a pinned id (`claude-sonnet-5`) or a floating family (`newest:opus`).
+# A family is resolved against the bot's account when a task starts, and the
+# ledger records the id that was called — never the alias. A pinned id the
+# account cannot call fails the task rather than running a different one.
+#
+# What each model costs is a default in `packages/engines/src/pricing.ts` and
+# will go stale. Override it by copying `config/models.example.yaml` to
+# `config/models.yaml`, which git ignores, so an install's prices stay its own:
+#
+#     models:
+#       claude-opus-5:
+#         inPerMtok: 5
+#         outPerMtok: 25
+#
+# Those numbers decide how fast the cap in `config/costs.yaml` is reached, which
+# is the thing that actually stops spend.
+#
+# `cpus` and `memoryGb` are what each of the seat's task computers is given
+# under the docker driver, written to the row at every `fleetadlc up`. They were
+# read and dropped, so every container ran on two CPUs and 4 GB whatever this
+# said.
+#
+# `maxTasks` is how many tasks the seat runs at once, 1 to 16, each in a
+# computer of its own and all as the seat's one GitHub account. Left out, the
+# row keeps what it has — 1 for a new seat, or what a person set in Crew →
+# "tasks at once" — so a console change survives `fleetadlc up`; written here,
+# the file wins at every start. Keep it at 1 on a seat whose account is an
+# OpenAI or xAI subscription: that CLI keeps one sign-in and refreshes it as it
+# works, and two tasks refreshing one sign-in at once is not known to be safe.
+#
+# The defaults split the crew across providers: Anthropic plans and builds,
+# OpenAI leads the review and checks security, and xAI gives the second
+# opinion — so the lead reviewer and the second reviewer never share a
+# provider's blind spot. The security reviewer does share the lead's: a pull
+# request that changes how CI runs needs both their approvals, and by default
+# those come from one provider. For a second model there, put
+# security-reviewer on another provider (newest:grok, say), or list the
+# repository in the install's ciMergeByPerson so a person merges them. Each is
+# a `newest:` family, so a seat follows its family as the provider ships new
+# models. A seat whose provider you have no account for is proposed on one you
+# do, in the Crew step.
+
+bots:
+  # Intake clarifies everything an issue needs with the person who asked —
+  # scope, acceptance criteria and edge cases, what a screenshot or a mockup
+  # shows, data, verification — and decides which question is most decisive
+  # before it asks. Haiku was enough to make an issue routable; clarifying
+  # everything, and reading the images and PDFs given with a request, needs a
+  # stronger model, and a question it asks badly costs a person a round trip.
+  - slot: intake
+    displayName: Intake
+    role: intake
+    engine: claude
+    model: newest:sonnet
+    cpus: 1
+    memoryGb: 2
+    sidecarDb: false
+
+  - slot: system-engineer
+    displayName: System engineer
+    role: spec
+    engine: claude
+    model: newest:opus
+    cpus: 2
+    memoryGb: 6
+    sidecarDb: true
+
+  - slot: builder
+    displayName: Builder
+    role: implement
+    engine: claude
+    model: newest:opus
+    cpus: 2
+    memoryGb: 6
+    sidecarDb: true
+
+  # Raising a repository's `concurrency` needs room for one more task, not one
+  # more builder: each task has a computer of its own, and a seat runs up to
+  # its `maxTasks` (Crew → "tasks at once") at once. What keeps two pieces of
+  # work from touching the same file is the lease and the dispatcher's overlap
+  # check on declared paths. The dispatcher staffs a repository from the owner
+  # first, then every other bot with its role. A second builder seat is still
+  # how a repository gets a second account — Settings → Crew → "Add a builder"
+  # adds `builder-2`, then `builder-3`, to a running install, and `fleetadlc up`
+  # keeps a seat added that way — or it can be declared here, as below.
+  #
+  # - slot: builder-2
+  #   displayName: Builder
+  #   role: implement
+  #   engine: claude
+  #   model: claude-sonnet-5
+  #   cpus: 2
+  #   memoryGb: 6
+  #   sidecarDb: true
+
+  - slot: lead-reviewer
+    displayName: Lead reviewer
+    role: review_lead
+    engine: codex
+    model: newest:codex
+    cpus: 2
+    memoryGb: 6
+    sidecarDb: true
+
+  - slot: second-reviewer
+    displayName: Second reviewer
+    role: review_second
+    engine: grok
+    model: newest:grok
+    cpus: 2
+    memoryGb: 6
+    sidecarDb: true
+
+  - slot: security-reviewer
+    displayName: Security reviewer
+    role: review_security
+    engine: codex
+    model: newest:codex
+    cpus: 2
+    memoryGb: 6
+    sidecarDb: true
+
+  - slot: sre
+    displayName: SRE
+    role: deploy
+    engine: claude
+    model: newest:opus
+    cpus: 1
+    memoryGb: 2
+    sidecarDb: true
+
+  - slot: qa
+    displayName: QA
+    role: qa
+    engine: claude
+    model: newest:opus
+    cpus: 2
+    memoryGb: 6
+    sidecarDb: true
+
+  # Labels, assignments and reviewer requests are written by this account;
+  # review-gate is published by the App where it holds Checks: write, and by
+  # this account otherwise. It never authors commits. On an account of its own in an
+  # organization's repository it is invited with triage and cannot push; on the
+  # shared crew account, or on a repository a person owns, it has write access
+  # (docs/security.md, "The account").
+  - slot: automation
+    displayName: Automation
+    role: automation
+    engine: none
+    model: none
+    cpus: 1
+    memoryGb: 2
+    sidecarDb: false

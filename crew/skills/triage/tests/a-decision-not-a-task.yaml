@@ -1,0 +1,13 @@
+name: stops when the request is a decision rather than a task
+covers: a-decision-not-a-task
+given:
+  declaredPaths: []
+script:
+  say:
+    - "The request asks whether the product should support a second currency at all."
+  ask:
+    question: "This is a product decision, not work. Should it go to a person rather than the board?"
+    options: ["send it to a person", "file it anyway"]
+expect:
+  stops: true
+  reason: question

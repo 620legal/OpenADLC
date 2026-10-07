@@ -1,0 +1,131 @@
+# SPDX-License-Identifier: Apache-2.0 OR 0BSD
+
+# The task form.
+#
+# Five field labels here are headings the platform parses. GitHub renders a form
+# response as `### <label>` followed by the value, so those labels are not
+# captions — they are an interface. OpenADLC requires Outcome, Acceptance
+# criteria, Expected paths and Verification before an issue can be leased; it
+# reads Expected paths to hold a lease to what it declared, and Dependencies to
+# hold the issue until they ship. Renaming one of them silently stops the thing
+# that reads it.
+#
+# Priority, Who does this and Area set no label. A form applies only its
+# `labels:` key below; an answer is text in the body, and intake sets the
+# `priority:`, `do:` and `area:` labels from it.
+#
+# OpenADLC's own tests render this form the way GitHub does and ask its real
+# parsers, so the two cannot drift apart.
+name: Task
+description: Work for the crew to pick up
+labels: ['adlc:intake']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Fill this in as if the person reading it has never seen the codebase,
+        because the bot that picks it up has not. An issue that needs a question
+        asked before it can be started goes back to intake.
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: What is different afterwards, in one paragraph. Not how.
+      placeholder: A person opening the board sees which pull requests are waiting on them.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: One bullet per thing that has to be true. Each one checkable by looking at something.
+      placeholder: |
+        - The board shows a "waiting on you" column.
+        - It is empty when nothing is waiting, rather than hidden.
+    validations:
+      required: true
+
+  - type: textarea
+    id: paths
+    attributes:
+      label: Expected paths
+      description: >
+        One path per line. This is what the lease claims, and the merge line
+        holds the pull request to the lease — a guess here becomes a pull
+        request sent back later. It is also how two builds are kept off the
+        same file: another issue whose paths overlap waits while this one is
+        built, by the repository's path policy. A scope check compares
+        against it too, where the repository's CI runs one. Name files, with
+        the test beside each one. A directory claims everything under it, so
+        name a directory only where the change adds new files inside it.
+      placeholder: |
+        - src/settings/save.ts
+        - src/settings/save.test.ts
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: The exact command, and the exact line of output that shows it worked.
+      placeholder: |
+        `make ci` prints `ci: green`, and the board shows the column.
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: >
+        One `#N` per line, for work that has to have shipped first. The platform
+        holds this issue until each one is merged and deployed to testing.
+      placeholder: |
+        - #42
+    validations:
+      required: false
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How urgent you think it is. Intake sets the `priority:` label from it, which is how the board orders work.
+      options:
+        - p0 — drop everything
+        - p1 — this week
+        - p2 — soon
+        - p3 — someday
+    validations:
+      required: true
+
+  - type: dropdown
+    id: who
+    attributes:
+      label: Who does this
+      description: >
+        Intake sets exactly one `do:` label from it: `do:ai` for a bot,
+        `do:human` for a person, and `do:product` or `do:legal` for a product
+        or legal decision a person has to take first. Two is a disagreement
+        nothing downstream resolves.
+      options:
+        - a bot
+        - a person
+        - a product decision
+        - a legal decision
+    validations:
+      required: true
+
+  - type: input
+    id: area
+    attributes:
+      label: Area
+      description: >
+        Intake sets the `area:` label from it. Use one that already exists in
+        the repository's labels; `general` is in every one. An issue needs an
+        `area:` label before its work can be leased.
+      placeholder: general
+    validations:
+      required: true

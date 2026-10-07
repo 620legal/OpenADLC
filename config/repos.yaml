@@ -1,0 +1,58 @@
+# Which repositories the crew works in, who owns each one, and how much the bots
+# may do without asking.
+#
+#   autonomous  the staffing bot acts unless a stop rule fires
+#   untouched   (intake and spec only) no bot staffs the stage; refused for
+#               the rest: stop a repository's bots with Pause work instead
+#   conditional (spec only) run the spec stage when a spec-required label is present
+#
+# `assist` is no longer a mode: it did what `autonomous` does, and is read as
+# that. Production waits for a person through the `production` environment's
+# required reviewers.
+
+organization: your-org   # read, not used: it may be left out
+
+repos:
+  # Empty on purpose. The walkthrough asks which repository this install is for
+  # and writes the equivalent of this list to the database, so a clone of OpenADLC does not
+  # arrive pointed at somebody else's repository.
+  #
+  # This file shipped naming a private testbed for a while, which meant anybody
+  # following the self-hosting guide was told to install their GitHub App on a
+  # repository belonging to whoever wrote that line. It also broke CI, which
+  # tried to clone it without credentials.
+  #
+  # Add one here to configure it in review rather than in a browser. Everything
+  # but `name`, `fullName` and `owner` has a default. `owner` names a seat from
+  # config/bots.yaml, which stays put when the seat's account connects and the
+  # bot takes that account's handle; every bot with the owner's role builds here.
+  #
+  #   - name: your-repo
+  #     fullName: your-org/your-repo
+  #     owner: builder
+  #     concurrency: 1
+  #     defaultBranch: main
+  #     stageModes:
+  #       intake: autonomous
+  #       spec: conditional
+  #       build: autonomous
+  #       review: autonomous
+  #       merged: autonomous
+  #       done: autonomous
+  []
+
+    # Paths a person must review are no longer declared here. They live in the
+    # repository's own `AGENTS.md`, under a `## Human review` heading, and name
+    # who has to approve:
+    #
+    #   ## Human review
+    #
+    #   - `config/`             @janedoe
+    #   - `infra/`              @janedoe
+    #   - `.github/workflows/`  @janedoe
+    #
+    # The bridge reads that file from the base branch — never from the pull
+    # request's copy, or a pull request could edit its way out of the review it
+    # is subject to — and holds `review-gate` until each named person has
+    # approved the head that would land. A list that cannot be read holds the
+    # gate rather than releasing it.

@@ -1,0 +1,13 @@
+name: asks to update the existing issue it was told to use, when that issue is not ready to build
+covers: use-the-existing-issue
+given:
+  declaredPaths: []
+script:
+  say:
+    - "You chose to use #5. It has no stage label and no Expected paths, so nothing would build it as it is. Here is what #5 will say, keeping its own words and adding what was missing and the request line."
+  ask:
+    question: "Here's what #5 will say. OK?"
+    options: ["OK, update #5", "Change something"]
+expect:
+  stops: true
+  reason: question

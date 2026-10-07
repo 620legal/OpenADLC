@@ -1,0 +1,13 @@
+name: stops when the request conflicts with a stated invariant
+covers: conflicts-with-an-invariant
+given:
+  declaredPaths: []
+script:
+  say:
+    - "The request asks for the deploy bot to approve its own production release."
+  ask:
+    question: "That conflicts with a stated invariant. Refuse it, or take it to a person?"
+    options: ["refuse it", "take it to a person"]
+expect:
+  stops: true
+  reason: question

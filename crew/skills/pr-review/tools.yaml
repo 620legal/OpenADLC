@@ -1,0 +1,24 @@
+allow:
+  # Reading tools only. A review session holds the account whose approval
+  # lands the pull request, so it never runs the code under review: make,
+  # package managers and interpreters are denied below. Claude Code and Grok
+  # Build enforce that; Codex runs with full access in a container and does
+  # not, which is why the merge also counts a required seat's approval only
+  # when its signature checks (docs/security.md).
+  shell: [git, gh, rg, jq, cat, ls]
+  # No `git:` rules, and `push` denied below: OpenADLC's git refuses every push
+  # from this skill. Nothing on GitHub does; see docs/security.md.
+  files:
+    # The review, written to a file and posted with `--body-file`. Never committed.
+    write_within: [".fleetadlc-scratch/**"]
+
+deny:
+  shell: [curl, wget, ssh, docker, sudo, make, pnpm, npm, uv, python, python3, node]
+  # `push` is refused by OpenADLC's git, the rest by OpenADLC's gh. Dismissing a
+  # review is not a gh command; OpenADLC's gh refuses it through `gh api` too.
+  # A bot that dismisses one with its token anyway does not lift a person's
+  # request for changes: the merge rule reads it from the timeline and still
+  # holds, and the bridge re-requests the review, labels the pull request
+  # `needs-human` and tells a person. None of this is a boundary against a
+  # raw token.
+  github: ["pr merge", "workflow run", "run rerun", "push"]

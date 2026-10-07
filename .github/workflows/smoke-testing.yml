@@ -1,0 +1,116 @@
+# The check that the thing which was just deployed actually works.
+#
+# It is a workflow of its own rather than a job inside `deploy-testing` so that
+# it can be repeated against a live environment without deploying again — and so
+# that "the deploy worked" and "the deployed thing works" are two answers rather
+# than one. A red run here is what starts the revert. A failed `deploy-testing`
+# reverts nothing: that revision never reached testing, which still serves the
+# previous one, so the bridge files an issue for a person instead.
+name: smoke-testing
+# The bridge reads the commit under test from the run's name, which is the
+# deploy run's own (`deploy-testing <commit>`): an expression cannot cut the
+# commit out of it. Keep it.
+run-name: ${{ github.event.workflow_run && format('smoke-testing of {0}', github.event.workflow_run.display_title) || 'smoke-testing' }}
+
+on:
+  workflow_run:
+    workflows: [deploy-testing]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Two smoke runs against one environment report on each other's traffic.
+  # GitHub holds one run waiting, and a newer one replaces it rather than
+  # queueing: the smoke that runs is of the newer deploy, which testing serves.
+  group: smoke-testing
+  cancel-in-progress: false
+
+jobs:
+  # Same string as the workflow's name, for the same reason as in
+  # `deploy-testing.yml`: the bridge matches on it.
+  smoke-testing:
+    name: smoke-testing
+    # A deploy that was skipped for want of a target deployed nothing, so there
+    # is nothing to smoke and nothing to report. `conclusion` is `skipped` in
+    # that case, which this guard excludes without treating it as a failure.
+    #
+    # `workflow_run` matches deploy-testing by name, so a fork's pull request
+    # or another branch could add a workflow of that name and have this job
+    # run its commit here, read as main's smoke. It runs only for this
+    # repository's own deploy-testing on main, from a push or a dispatch; the
+    # repository check is the one that matters, since a fork can call its
+    # branch `main`. Do not add secrets, `environment:` or `id-token: write`
+    # to this job without this guard.
+    if: >-
+      vars.FLEETADLC_DEPLOY_TESTING == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch') &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.head_branch == github.event.repository.default_branch))
+    runs-on: ubuntu-latest
+
+    steps:
+      # The commit deploy-testing deployed, from its run's name. Its run is at
+      # the default branch's tip when it was dispatched, which is another
+      # merge's once two land close together. A run named for no commit, or a
+      # smoke started by hand, smokes the commit its run is at.
+      - name: the commit that was deployed
+        id: deployed
+        env:
+          TITLE: ${{ github.event.workflow_run.display_title }}
+          AT: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          sha="${TITLE#deploy-testing }"
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+            sha="$AT"
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      # A `workflow_run` workflow always runs the default branch's copy of
+      # itself, so the commit under test has to be checked out explicitly. The
+      # token is not kept in .git/config, where the smoke could read it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.deployed.outputs.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.33.3
+
+      # No pnpm cache: deploy-testing and promote-production restore it, and
+      # this job runs a commit's own install.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - run: pnpm install --frozen-lockfile
+
+      # pipefail, or the step's status is tee's, and a failed smoke reads as
+      # the green that promotes it.
+      - name: smoke the testing environment
+        run: |
+          set -euo pipefail
+          make smoke-testing | tee /tmp/smoke-testing.log
+
+      # `if: always()` so the report exists for the run that failed, which is
+      # the one somebody reads.
+      - name: what the smoke found
+        if: always()
+        env:
+          SHA: ${{ steps.deployed.outputs.sha }}
+        run: |
+          {
+            echo "### smoke-testing"
+            echo
+            echo "- commit \`$SHA\`"
+            echo
+            echo '```'
+            tail -n 40 /tmp/smoke-testing.log 2>/dev/null || echo "the smoke produced no output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

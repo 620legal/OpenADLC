@@ -1,0 +1,834 @@
+#!/usr/bin/env node
+// OpenADLC's `gh`, first on a task session's PATH (hostd mounts this folder into
+// each bot's container at /opt/fleetadlc/bin, and puts it first for the local
+// driver too). It puts the session's header — FLEETADLC_POST_HEADER, e.g.
+// `**OpenADLC_exampleco · design agent**` — first on every body the session posts
+// with `gh issue|pr create|comment|edit|review`, then runs the real `gh`.
+//
+// A crew on one GitHub account posts as one user, so GitHub cannot say which
+// stage wrote a comment; this line does, for people. Then the bridge signs the
+// body as this task's seat (`/internal/tasks/:id/stamp`), and the signature is
+// what OpenADLC trusts. This is a convenience, not a boundary: the session holds a
+// GitHub token and can post without `gh` — and what it posts that way carries
+// no signature, which the bridge notices.
+//
+// It also refuses, before anything reaches GitHub, a merge a session may not
+// make (`mergeRefusal`) and a command the task's skill denies in its
+// tools.yaml (`githubRefusal`). The `git` beside it does the same for pushes.
+//
+// Plain Node with no dependencies: it runs inside the bot's image, beside the
+// engines, and is read from hostd's own checkout at whatever version hostd is.
+import { spawnSync } from 'node:child_process';
+import { accessSync, constants, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { delimiter, dirname, join } from 'node:path';
+
+const HEADER_TAG = '<!-- fleetadlc-header -->';
+const LEADING_HEADER = /^\*\*[^\n]*\*\*<!-- fleet(?:adlc)?-header -->/;
+const POSTS = { issue: ['create', 'comment', 'edit'], pr: ['create', 'comment', 'edit', 'review'] };
+
+/** The real gh: the first on PATH that is not this file. */
+export function realGh(path = process.env.PATH ?? '', self = process.argv[1] ?? '') {
+  let selfReal = '';
+  try {
+    selfReal = realpathSync(self);
+  } catch {}
+  for (const dir of path.split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, 'gh');
+    try {
+      accessSync(candidate, constants.X_OK);
+      if (realpathSync(candidate) === selfReal || dirname(candidate) === dirname(self)) continue;
+      return candidate;
+    } catch {}
+  }
+  return null;
+}
+
+// At the end of the body only, as `seatOf` in @fleetadlc/shared reads it: a body
+// that quotes another seat's tag is still tagged as its own: a lead reviewer's review that quoted the
+// intake seat's tag once went out with no tag of its own.
+const SEAT_TAG = /<!-- fleet(?:adlc)?-seat:([a-z0-9][a-z0-9._-]*) -->\s*(?:<!-- fleet(?:adlc)?-sig:[^>]*-->\s*)?$/i;
+
+/**
+ * Which seat wrote it, tagged at the end as the bridge's own posts are
+ * (`withSeat`). An end naming another seat is replaced, not kept: a session
+ * on an account the reviewers share could otherwise post as the lead.
+ */
+export function withSeat(body, seat) {
+  if (!seat) return body;
+  const own = seat.toLowerCase();
+  const tagged = SEAT_TAG.exec(body)?.[1]?.toLowerCase();
+  if (tagged === own) return body;
+  const bare = tagged ? body.replace(SEAT_TAG, '') : body;
+  return `${bare.replace(/\s+$/, '')}\n\n<!-- fleetadlc-seat:${own} -->`;
+}
+
+export function withHeader(body, header) {
+  if (LEADING_HEADER.test(body)) return body;
+  return body.trim().length > 0 ? `${header}\n\n${body}` : header;
+}
+
+/**
+ * The arguments with the body headed: every --body/-b/--body-file/-F becomes
+ * one --body-file of the headed text. Anything that posts no body passes
+ * through untouched.
+ */
+export function rewrite(args, header, io, seat = '') {
+  const [group, verb] = args;
+  if ((!header && !seat) || !POSTS[group]?.includes(verb)) return args;
+
+  let body = null;
+  const rest = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const eq = arg.indexOf('=');
+    const name = arg.startsWith('--') && eq > 0 ? arg.slice(0, eq) : arg;
+    const inline = arg.startsWith('--') && eq > 0 ? arg.slice(eq + 1) : undefined;
+    const value = () => (inline !== undefined ? inline : args[++i]);
+    if (name === '--body' || name === '-b') {
+      body = value() ?? '';
+    } else if (name === '--body-file' || name === '-F') {
+      const file = value() ?? '';
+      body = file === '-' ? io.stdin() : io.read(file);
+    } else {
+      rest.push(arg);
+    }
+  }
+  if (body === null) return args;
+  const headed = header ? withHeader(body, header) : body;
+  return [...rest, '--body-file', io.write(withSeat(headed, seat))];
+}
+
+/** What kind of post the arguments make, as the signature names it. */
+export function postKind(args) {
+  const [group, verb] = args;
+  if (verb === 'create') return group === 'pr' ? 'pr' : 'issue';
+  if (verb === 'review') return 'review';
+  if (verb === 'edit') return 'edit';
+  return 'comment';
+}
+
+/** The issue or pull request number the arguments name, when they name one: `7`, `#7` or its URL. */
+export function postNumber(args) {
+  const target = args[2];
+  if (!target || target.startsWith('-')) return null;
+  const found = /^(?:#)?(\d+)$/.exec(target) ?? /\/(?:issues|pull)\/(\d+)(?:[/?#].*)?$/.exec(target);
+  return found ? Number(found[1]) : null;
+}
+
+/**
+ * The number the signature names: `postNumber`'s, or, for `pr comment`, `pr
+ * review` and `pr edit` that name none, the pull request gh would act on —
+ * the current branch's, or the branch or URL given — asked of the real gh
+ * (`ask`). A review signed with no number verified on any pull request, and
+ * the merge never counted a lead's `gh pr review --approve` on its own branch,
+ * since it counts only an approval signed for that pull request. Asked only
+ * when the post will be stamped (`env` names a bridge and a task), so an
+ * ordinary command makes no extra call. A new issue or pull request has no
+ * number yet, and `issue comment|edit` must name one. Null when the lookup
+ * fails or answers anything but a number: the post goes out as before.
+ */
+export function targetNumber(args, ask, env = process.env) {
+  const named = postNumber(args);
+  if (named !== null) return named;
+  const [group, verb] = args;
+  if (group !== 'pr' || !['comment', 'review', 'edit'].includes(verb)) return null;
+  if (!env.FLEETADLC_BRIDGE_URL || !env.FLEETADLC_TASK_ID) return null;
+  // `args[2]` as `postNumber` reads it: `commandWords` would take a flag's
+  // value (`--body LGTM`) for the target.
+  const target = args[2] && !args[2].startsWith('-') ? [args[2]] : [];
+  const repo = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '-R' || args[i] === '--repo') {
+      if (args[i + 1] !== undefined) repo.push(args[i], args[i + 1]);
+      i++;
+    } else if (args[i].startsWith('--repo=')) {
+      repo.push(args[i]);
+    }
+  }
+  const answer = ask(['pr', 'view', ...target, ...repo, '--json', 'number', '--jq', '.number']);
+  const found = /^\s*([1-9]\d*)\s*$/.exec(answer ?? '');
+  return found ? Number(found[1]) : null;
+}
+
+/**
+ * The body signed by the bridge as this task's seat, or null when it could not
+ * be: no task to sign for, or a bridge that did not answer. The post then goes
+ * out unsigned, and says so on stderr — the bridge records it as unattributed,
+ * and an install that enforces signatures does not count it.
+ */
+export async function stamp(text, kind, number, env = process.env, fetchImpl = globalThis.fetch) {
+  const bridge = env.FLEETADLC_BRIDGE_URL;
+  const task = env.FLEETADLC_TASK_ID;
+  if (!bridge || !task || !fetchImpl) return null;
+  try {
+    const response = await fetchImpl(`${bridge}/internal/tasks/${encodeURIComponent(task)}/stamp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(env.FLEETADLC_TASK_TOKEN ? { 'x-fleetadlc-task-token': env.FLEETADLC_TASK_TOKEN } : {}),
+      },
+      body: JSON.stringify({ body: text, kind, number }),
+    });
+    if (!response.ok) {
+      process.stderr.write(`gh: OpenADLC could not sign this post (${response.status}); it goes out unsigned\n`);
+      return null;
+    }
+    const answer = await response.json();
+    return typeof answer?.body === 'string' ? answer.body : null;
+  } catch (error) {
+    process.stderr.write(`gh: OpenADLC could not sign this post (${error instanceof Error ? error.message : error}); it goes out unsigned\n`);
+    return null;
+  }
+}
+
+/**
+ * Whether a merge the session asks for may go to GitHub, and why not: never.
+ *
+ * A session never merges: landing is the merge line's, behind the review
+ * gate. `gh pr merge --auto` was let through where the base branch required
+ * an approving review — on a branch with no rules at all GitHub lands it at
+ * once, as a free organization's private repository did fifty seconds after
+ * the builder opened it, unreviewed. Now GitHub's CI on a crew pull request
+ * runs only once the lead has approved and the pull request is at the front
+ * of the merge line, and auto-merge would race that, so it is refused too.
+ *
+ * `ask` is kept for the callers that pass it; nothing is asked of GitHub.
+ */
+export function mergeRefusal(args, ask, read = readText) {
+  void ask;
+  const [group, verb] = commandWords(args);
+  if (group === 'api') return apiMergeRefusal(args, read) ?? apiDismissalRefusal(args, read);
+  if (group !== 'pr' || verb !== 'merge') return null;
+  return args.includes('--auto')
+    ? 'a session does not turn auto-merge on: the merge line lands a pull request once the lead approved and CI passed on its head'
+    : 'a session does not merge: the merge line lands a pull request once its reviews are in';
+}
+
+/** The REST endpoints that merge: a pull request's, and the one that merges a branch into another. */
+const MERGE_ENDPOINT = /(^|\/)(pulls\/\d+\/merge|repos\/[^/]+\/[^/]+\/merges)\/?(\?.*)?$/;
+
+/** The GraphQL mutations that merge, or turn auto-merge on. */
+const MERGING_MUTATION = /\b(mergePullRequest|enablePullRequestAutoMerge|mergeBranch)\b/;
+
+function readText(file) {
+  return readFileSync(file === '-' ? 0 : file, 'utf8');
+}
+
+/**
+ * What a `gh api` call sends, to read for what it does: its arguments, the
+ * file `--input <file>` names, and each `-F name=@file`. Null when part of it
+ * is on stdin, which a check cannot read without taking it from the command.
+ */
+export function apiBody(args, read = readText) {
+  let text = args.join('\n');
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const file =
+      arg === '--input' ? args[i + 1] : arg.startsWith('--input=') ? arg.slice('--input='.length) : /^[^=\s]+=@(.+)$/.exec(arg)?.[1];
+    if (file === undefined || file === null) continue;
+    if (file === '-') return null;
+    try {
+      text += `\n${read(file)}`;
+    } catch {
+      // A file that is not there sends nothing; gh says so itself.
+    }
+  }
+  return text;
+}
+
+/**
+ * `gh pr merge` was the only merge refused, and `gh api` reached the same
+ * merge: `PUT …/pulls/7/merge`, `POST …/merges`, or GraphQL's
+ * `mergePullRequest` and `enablePullRequestAutoMerge`. None of those is
+ * refused by GitHub to an account with write access. This is still a guard and
+ * not a boundary (docs/security.md): a session holds its token.
+ */
+function apiMergeRefusal(args, read) {
+  if (args.some((arg) => MERGE_ENDPOINT.test(arg.replace(/^\//, '')))) {
+    return 'a session does not merge, through the API either: the merge line lands a pull request once its reviews are in';
+  }
+  const body = apiBody(args, read);
+  if (body === null) {
+    return args.includes('graphql')
+      ? 'a GraphQL request whose query is on stdin cannot be checked; pass it with -f query=…'
+      : null;
+  }
+  return MERGING_MUTATION.test(body)
+    ? 'a session does not merge or turn auto-merge on, through GraphQL either: the merge line lands a pull request once the lead approved and CI passed on its head'
+    : null;
+}
+
+/** The REST endpoint that dismisses a review, and the GraphQL mutation that does. */
+const DISMISSAL_ENDPOINT = /(^|\/)pulls\/\d+\/reviews\/\d+\/dismissals\/?(\?.*)?$/;
+const DISMISSING_MUTATION = /\bdismissPullRequestReview\b/;
+
+/**
+ * A session never dismisses a review. A builder that dismissed a person's
+ * request for changes through `gh api` let the merge line land the pull
+ * request on the lead's approval alone. The bridge now holds the merge on
+ * such a dismissal whoever makes it (`dismissalsThatHold`), and this refuses
+ * the call before it is made. A guard, not a boundary (docs/security.md): a
+ * session holds its token, and `node` with GH_TOKEN reaches the same endpoint.
+ */
+function apiDismissalRefusal(args, read) {
+  if (args.some((arg) => DISMISSAL_ENDPOINT.test(arg.replace(/^\//, '')))) {
+    return 'a session does not dismiss a review: a request for changes is lifted by the person who made it, or another person who can write';
+  }
+  const body = apiBody(args, read);
+  return body !== null && DISMISSING_MUTATION.test(body)
+    ? 'a session does not dismiss a review, through GraphQL either: a request for changes is lifted by the person who made it, or another person who can write'
+    : null;
+}
+
+/**
+ * Whether the task's skill denies this command: an entry of its tools.yaml's
+ * `deny.github` (`pr review`, `workflow run`, `api`) that the command's leading
+ * words start with. The engine passes the list in FLEETADLC_TOOLS_POLICY.
+ *
+ * No engine could apply it. Claude Code and Grok Build allow `gh` as one
+ * command, and Codex allows whatever its sandbox does, so a builder whose skill
+ * denied `gh pr review` could post one. A person's own shell in the session has
+ * no FLEETADLC_TOOLS_POLICY and is not held to a skill's list.
+ */
+export function githubRefusal(args, policyJson = process.env.FLEETADLC_TOOLS_POLICY, ask = () => null) {
+  if (!policyJson) return null;
+  let denied = [];
+  try {
+    denied = JSON.parse(policyJson)?.denyGithub ?? [];
+  } catch {
+    return 'could not read this task’s rules (FLEETADLC_TOOLS_POLICY), so nothing is posted';
+  }
+  if (denied.length === 0) return null;
+
+  let argv = args;
+  let words = commandWords(argv);
+  // An alias is how a denied command gets a name the list does not have:
+  // `gh alias set rv 'pr review'`, then `gh rv`. So a task sets none, and one
+  // already defined is expanded before the list is read.
+  if (words[0] === 'alias' && ['set', 'import'].includes(words[1])) {
+    return 'a task does not define gh aliases while its skill denies commands';
+  }
+  if (words[0] && !GH_COMMANDS.has(words[0])) {
+    const expansion = aliasExpansion(words[0], ask);
+    if (expansion?.startsWith('!')) return `alias ${words[0]} runs a shell command, which OpenADLC's gh cannot read, so it is not run`;
+    if (expansion) {
+      argv = [...expansion.split(/\s+/).filter(Boolean), ...argv.slice(argv.indexOf(words[0]) + 1)];
+      words = commandWords(argv);
+    }
+  }
+
+  // `gh workflow run` takes a workflow by name, by file name, by path or by
+  // number, after flags that take values (`-f candidate=…`), so the deploy
+  // skill's `workflow run promote-production` let through
+  // `promote-production.yml`, `-f candidate=… promote-production` and the
+  // workflow's id. The workflow is read past those flags and named as the
+  // list names it; a number cannot be named without asking GitHub, so where
+  // the list denies a workflow by name, one given by number is not run.
+  if (words[0] === 'workflow' && words[1] === 'run') {
+    const named = workflowRunTarget(argv);
+    const byName = denied.some((entry) => {
+      const wanted = String(entry).split(/\s+/).filter(Boolean);
+      return wanted.length > 2 && wanted[0] === 'workflow' && wanted[1] === 'run';
+    });
+    if (byName && (named === null || /^\d+$/.test(named))) {
+      return 'this task’s skill does not run some workflows (deny.github in its tools.yaml), so a workflow given by number, or not named, is not run: name it, as in `gh workflow run rollback-production`';
+    }
+    if (named !== null) words = ['workflow', 'run', workflowName(named)];
+  }
+
+  // `gh api` to a workflow's dispatches endpoint is `gh workflow run` by
+  // another name. A skill that denies `workflow run` (QA, spec, triage, a
+  // review) still posted the promote that way: the list names the command,
+  // not the URL. Read as the workflow run it is, and refused by the same
+  // entries. The command is still `api` for a skill that denies that.
+  let dispatched = null;
+  if (words[0] === 'api') {
+    try {
+      dispatched = workflowDispatchName(argv);
+    } catch (cause) {
+      // `%E0` is not a workflow name. decodeURIComponent throws, and the
+      // command used to die there instead of saying why it was not run.
+      if (cause instanceof URIError) return 'the workflow name in that URL is not a valid encoding, so it is not run';
+      throw cause;
+    }
+  }
+  if (dispatched !== null) {
+    const asRun = ['workflow', 'run', workflowName(dispatched)];
+    const byName = denied.some((entry) => {
+      const wanted = String(entry).split(/\s+/).filter(Boolean);
+      return wanted.length > 2 && wanted[0] === 'workflow' && wanted[1] === 'run';
+    });
+    if (byName && /^\d+$/.test(asRun[2])) {
+      return 'this task’s skill does not run some workflows (deny.github in its tools.yaml), so a workflow given by number, or not named, is not run: name it, as in `gh workflow run rollback-production`';
+    }
+    const runHit = denied.find((entry) => {
+      const wanted = String(entry).split(/\s+/).filter(Boolean);
+      return wanted.length > 0 && wanted.every((word, i) => asRun[i] === word);
+    });
+    if (runHit) return `this task’s skill does not run \`gh ${runHit}\` (deny.github in its tools.yaml)`;
+  }
+
+  // `gh api` to `actions/runs/<id>/rerun` is `gh run rerun`. A skill that
+  // denies the command still re-ran a promote this way.
+  if (words[0] === 'api' && workflowRerun(argv)) {
+    const rerunHit = denied.find((entry) => String(entry) === 'run rerun' || String(entry).startsWith('run rerun '));
+    if (rerunHit) return `this task’s skill does not run \`gh ${rerunHit}\` (deny.github in its tools.yaml)`;
+  }
+
+  // `gh pr review --approve` is denied to a builder, to QA, to spec and to
+  // intake. The same verdict through `gh api` (`event=APPROVE`, or GraphQL's
+  // `addPullRequestReview`) was not: the words are `api`, and a skill that
+  // does not deny `api` posted it. Judged as `pr review` first, so a skill
+  // that allows the lead's review and denies `api` is unchanged.
+  if (words[0] === 'api' && apiSubmitsVerdict(argv)) {
+    const asReview = ['pr', 'review'];
+    const reviewHit = denied.find((entry) => {
+      const wanted = String(entry).split(/\s+/).filter(Boolean);
+      return wanted.length > 0 && wanted.every((word, i) => asReview[i] === word);
+    });
+    if (reviewHit) return `this task’s skill does not run \`gh ${reviewHit}\` (deny.github in its tools.yaml)`;
+  }
+
+  const hit = denied.find((entry) => {
+    const wanted = String(entry).split(/\s+/).filter(Boolean);
+    return wanted.length > 0 && wanted.every((word, i) => words[i] === word);
+  });
+  return hit ? `this task’s skill does not run \`gh ${hit}\` (deny.github in its tools.yaml)` : null;
+}
+
+/**
+ * Whether opening or readying a pull request has to wait for local CI.
+ *
+ * GitHub's CI on a crew pull request runs only after the lead approves, so the
+ * builder's own run of the checks is what reviewers review on top of. It is
+ * not taken on the builder's word: `fleetadlc-ci` has hostd run them and the
+ * bridge record a pass for the commit, and this asks the bridge for one on
+ * HEAD before `gh pr create` or `gh pr ready` goes to GitHub. A pull request
+ * opens ready, so `--draft` is refused too. Only where the skill's tools.yaml
+ * says `local_ci` (`localCi` in FLEETADLC_TOOLS_POLICY); a person's own shell
+ * has no policy. `head` reads HEAD; `passed` asks the bridge, and answers null
+ * when it could not.
+ */
+export async function localCiRefusal(args, { policyJson = process.env.FLEETADLC_TOOLS_POLICY, head, passed }) {
+  let policy = null;
+  try {
+    policy = policyJson ? JSON.parse(policyJson) : null;
+  } catch {
+    return null;
+  }
+  if (!policy?.localCi) return null;
+  const [group, verb] = commandWords(args);
+  if (group !== 'pr' || (verb !== 'create' && verb !== 'ready')) return null;
+  if (verb === 'create' && args.some((arg) => arg === '--draft' || arg === '-d' || arg.startsWith('--draft='))) {
+    return 'a pull request opens ready, not as a draft: run fleetadlc-ci, then gh pr create without --draft';
+  }
+  const sha = head();
+  if (!sha) return 'could not read HEAD to check that it passed local CI; run it from the worktree';
+  const answer = await passed(sha);
+  if (answer === null) return 'could not ask the bridge whether HEAD passed local CI; run fleetadlc-ci and try again';
+  return answer
+    ? null
+    : `HEAD ${sha.slice(0, 7)} has no recorded local CI pass: run fleetadlc-ci on it, then ${verb === 'create' ? 'open' : 'ready'} the pull request`;
+}
+
+/** Whether the bridge has a local CI pass recorded for a commit in this task's repository, or null when it could not be asked. */
+export async function bridgePassed(sha, env = process.env, fetchImpl = globalThis.fetch) {
+  const bridge = env.FLEETADLC_BRIDGE_URL;
+  const task = env.FLEETADLC_TASK_ID;
+  if (!bridge || !task || !fetchImpl) return null;
+  try {
+    const response = await fetchImpl(`${bridge}/internal/tasks/${encodeURIComponent(task)}/local-ci/pass`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(env.FLEETADLC_TASK_TOKEN ? { 'x-fleetadlc-task-token': env.FLEETADLC_TASK_TOKEN } : {}) },
+      body: JSON.stringify({ sha }),
+    });
+    if (!response.ok) return null;
+    const answer = await response.json();
+    return answer?.passed === true;
+  } catch {
+    return null;
+  }
+}
+
+/** Flags that name labels on `gh issue|pr create|edit`, each taking a comma-separated list. */
+const LABEL_FLAGS = new Set(['--add-label', '--remove-label', '--label', '-l']);
+
+/** A stage label, by its current or its old prefix. */
+const STAGE_LABEL = /^(adlc|sdlc):(intake|spec|build|review|merged|done)$/i;
+
+/** The REST paths that set an issue's or a pull request's labels, or take one off. */
+const LABELS_ENDPOINT = /(^|\/)repos\/[^/]+\/[^/]+\/issues\/\d+\/labels(\/([^/?]+))?\/?(\?|$)/;
+
+/**
+ * The labels a `gh api` call to an issue's labels names: the one its path
+ * takes off, and those its fields or `--input` body give. Null when it is no
+ * such call, and `unread` when the body cannot be read (`--input -`).
+ */
+function apiLabels(args, read) {
+  const path = args.map((arg) => arg.replace(/^\//, '')).find((arg) => !arg.startsWith('-') && LABELS_ENDPOINT.test(arg));
+  if (!path) return null;
+  const labels = [];
+  const removed = LABELS_ENDPOINT.exec(path)?.[3];
+  if (removed) labels.push(decodeURIComponent(removed));
+  const body = apiBody(args, read);
+  if (body === null) return 'unread';
+  // `-f labels[]=adlc:done`, `-f labels=adlc:done`, a JSON array in `--input`.
+  for (const match of body.matchAll(/(?:adlc|sdlc):[a-z]+|scope:cross-cutting|(?<![\w:-])(?:revert|deps)(?![\w:-])/gi)) labels.push(match[0]);
+  return labels;
+}
+
+/** Labels no session sets on its own say, and who applies each instead. */
+const REVIEW_LABELS = new Map([
+  ['revert', 'only the deploy skill opens a revert with it, and a person applies it otherwise'],
+  ['deps', 'the bridge files dependency updates with it, and a person applies it otherwise'],
+  ['scope:cross-cutting', 'a person applies it, or the lead in its signed approval accepts a genuine widening; ask for the paths with a plan_change marker'],
+]);
+
+/**
+ * Whether the arguments put a stage label on, or take one off, and this
+ * session's skill may not.
+ *
+ * A card moves on when its stage's work ends, and back only by a send-back
+ * the bridge checks — where to, and how often (`send-back.ts`). The bridge
+ * owns every move: a stage label a crew account sets, forward or back, is put
+ * back (`Webhooks.learnIssue`), except intake's own first move out of intake,
+ * which the bridge routes by the repository's spec rule. This stops a label
+ * before it reaches GitHub, through `gh api` as well as `gh issue|pr
+ * create|edit`: through the API, any skill set `adlc:done` and the issues
+ * that depended on it went ahead. Intake files an issue into Design or Build,
+ * and is the one skill that writes a stage label, and only those two. A
+ * person's own shell in the session names no skill.
+ */
+export function stageLabelRefusal(args, skill = process.env.FLEETADLC_SKILL ?? '', read = readText) {
+  if (!skill) return null;
+  const [group, verb] = commandWords(args);
+  let labels = [];
+  /** Of `labels`, those taken off with `--remove-label`. */
+  const removed = new Set();
+  let viaApi = false;
+  if (group === 'api') {
+    const named = apiLabels(args, read);
+    if (named === null) return null;
+    if (named === 'unread') return 'a session gives labels to `gh api` as fields (`-f labels[]=…`), not from standard input, so they can be checked';
+    labels = named;
+    viaApi = true;
+  } else {
+    if (!['issue', 'pr'].includes(group) || !['create', 'edit'].includes(verb)) return null;
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      const eq = arg.indexOf('=');
+      const name = arg.startsWith('--') && eq > 0 ? arg.slice(0, eq) : arg;
+      if (!LABEL_FLAGS.has(name)) continue;
+      const value = arg.startsWith('--') && eq > 0 ? arg.slice(eq + 1) : args[++i];
+      for (const label of String(value ?? '').split(',').map((one) => one.trim())) {
+        labels.push(label);
+        if (name === '--remove-label') removed.add(label);
+      }
+    }
+  }
+  // `adlc:ci` lets GitHub's CI run; the merge line adds it once the lead has
+  // approved, and no session, intake's included, may.
+  if (labels.some((label) => label.toLowerCase() === 'adlc:ci')) {
+    return 'a session does not add or remove adlc:ci: the merge line adds it once the lead has approved, and GitHub\'s CI runs then';
+  }
+  if (viaApi) {
+    const review = labels.find((label) => REVIEW_LABELS.has(label.toLowerCase()));
+    if (review) {
+      return `a ${skill} task does not put on or take off ${review.toLowerCase()}, through the API either: it decides who reviews the change and what CI holds it to, so ${REVIEW_LABELS.get(review.toLowerCase())}`;
+    }
+  } else {
+    // Labels that decide who reviews a pull request and what CI holds it to:
+    // `revert` takes the lead-only fast path, `deps` asks the security seat and
+    // `scope:cross-cutting` lets the scope check pass a change beyond its
+    // lease. A session that put them on its own pull request chose its own
+    // review. Two exceptions, each for the one skill whose work it is: deploy
+    // opens a revert's pull request with `revert`, and triage may file an issue
+    // as `deps`, which now only adds a reviewer. Nothing removes one.
+    const removing = (index) => /^--remove-label(=|$)/.test(args[index] ?? '');
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      const eq = arg.indexOf('=');
+      const name = arg.startsWith('--') && eq > 0 ? arg.slice(0, eq) : arg;
+      if (!LABEL_FLAGS.has(name)) continue;
+      const flagAt = i;
+      const value = arg.startsWith('--') && eq > 0 ? arg.slice(eq + 1) : args[++i];
+      for (const label of String(value ?? '').split(',').map((one) => one.trim().toLowerCase())) {
+        if (!REVIEW_LABELS.has(label)) continue;
+        const allowed =
+          !removing(flagAt) &&
+          ((label === 'revert' && skill === 'deploy' && group === 'pr' && verb === 'create') ||
+            (label === 'deps' && skill === 'triage' && group === 'issue'));
+        if (!allowed) {
+          return `a ${skill} task does not ${removing(flagAt) ? 'take off' : 'put on'} ${label}: it decides who reviews the change and what CI holds it to, so ${REVIEW_LABELS.get(label)}`;
+        }
+      }
+    }
+  }
+  const stage = labels.find((label) => STAGE_LABEL.test(label));
+  if (!stage) return null;
+  if (skill === 'triage' && !viaApi) {
+    // Into Design or Build, out of Intake or the other of the two.
+    const wrong = labels.find(
+      (label) => STAGE_LABEL.test(label) && !(removed.has(label) ? /^(adlc|sdlc):(intake|spec|build)$/i : /^(adlc|sdlc):(spec|build)$/i).test(label),
+    );
+    if (!wrong) return null;
+    return `intake files an issue into Design or Build (adlc:spec or adlc:build) with \`gh issue create\` or \`gh issue edit\`, and nothing else (${wrong}): the bridge moves it on from there`;
+  }
+  if (skill === 'triage') {
+    return `intake files an issue into Design or Build (adlc:spec or adlc:build) with \`gh issue create\` or \`gh issue edit\`, and nothing else (${stage}): the bridge moves it on from there`;
+  }
+  return `a ${skill} task does not move a card by its label (${stage}): the bridge moves it when your work ends, and back when you send it back with a send_back marker`;
+}
+
+/** The skills that read an issue's or a pull request's conversation from the bridge's documents. */
+const READS_FILTERED = new Set(['pr-review', 'implement']);
+
+/** The REST endpoints that list comments or reviews, anybody's. */
+const CONVERSATION_ENDPOINT = /(^|\/)repos\/[^/]+\/[^/]+\/(issues\/\d+\/comments|pulls\/\d+\/(comments|reviews)|issues\/comments|pulls\/comments)(\/|\?|$)/;
+
+/** `gh api` flags that send something, which makes the call a POST unless it names another method. */
+const API_SENDS = new Set(['-f', '-F', '--field', '--raw-field', '--input']);
+
+/**
+ * Whether a review or build session is about to read comments or reviews
+ * straight from GitHub, where anybody can write them.
+ *
+ * The bridge writes issue.md and pull-request.md with only what people with
+ * access and the crew wrote; a comment in a bot's prompt is an instruction in
+ * all but name. The skills sent reviewers to `gh issue view --comments` for
+ * the builder's plan anyway, around that filter. A post still goes: `gh issue
+ * comment`, `gh pr review`, and a `gh api` call that sends. A person's own
+ * shell names no skill.
+ */
+export function unfilteredReadRefusal(args, skill = process.env.FLEETADLC_SKILL ?? '') {
+  if (!READS_FILTERED.has(skill)) return null;
+  const [group, verb] = commandWords(args);
+  const said = `a ${skill} task reads the conversation in issue.md and pull-request.md, which the bridge wrote with only what people with access and the crew said; comments and reviews are not read from GitHub directly, where anybody's are`;
+  const valueOf = (flag) => {
+    const values = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === flag) values.push(args[i + 1] ?? '');
+      else if (args[i].startsWith(`${flag}=`)) values.push(args[i].slice(flag.length + 1));
+    }
+    return values.join(',');
+  };
+  if ((group === 'issue' || group === 'pr') && verb === 'view') {
+    if (args.some((arg) => arg === '--comments' || arg === '-c')) return said;
+    const fields = valueOf('--json').split(',').map((field) => field.trim());
+    const unfiltered = group === 'issue' ? ['comments'] : ['comments', 'reviews'];
+    return fields.some((field) => unfiltered.includes(field)) ? said : null;
+  }
+  if (group !== 'api') return null;
+  const method = (valueOf('-X') || valueOf('--method') || args.find((arg) => /^-X[A-Za-z]+$/.test(arg))?.slice(2) || '').toUpperCase();
+  const sends = args.some((arg) => API_SENDS.has(arg) || /^--(field|raw-field|input)=/.test(arg) || /^-[fF][^-]/.test(arg));
+  if ((method && method !== 'GET') || (!method && sends)) return null;
+  return args.some((arg) => !arg.startsWith('-') && CONVERSATION_ENDPOINT.test(arg)) ? said : null;
+}
+
+/**
+ * Whether a `gh api` call submits a verdict: APPROVE or REQUEST_CHANGES.
+ *
+ * A comment is not one. A body that cannot be read — the query on stdin — is
+ * treated as one when the call is GraphQL or names a reviews endpoint, because
+ * that is where a verdict would be and there is nothing to check.
+ */
+export function apiSubmitsVerdict(args, read = readText) {
+  if (commandWords(args)[0] !== 'api') return false;
+  const body = apiBody(args, read);
+  if (body === null) return args.includes('graphql') || args.some((arg) => /\/reviews\b/.test(arg));
+  return (
+    (args.some((arg) => /\/reviews\b/.test(arg)) && /event["']?\s*[=:]\s*["']?(APPROVE|REQUEST_CHANGES)\b/i.test(body)) ||
+    (/\b(addPullRequestReview|submitPullRequestReview)\b/.test(body) && /\b(APPROVE|REQUEST_CHANGES)\b/.test(body))
+  );
+}
+
+/**
+ * Whether an advisory reviewer is about to decide, which is the lead's.
+ *
+ * Every seat but the lead posts its review as a comment, with its verdict in
+ * the `review_posted` marker, and the lead reads them all and approves or asks
+ * for changes. A second seat's request for changes on GitHub would hold the
+ * branch's rules against the lead's decision, and on an account the seats
+ * share, the account's latest state would be whichever seat spoke last. The
+ * bridge sets FLEETADLC_REVIEW_MODE on the seat's task; the merge counts only the
+ * lead's approval and a blocking seat's either way.
+ */
+export function reviewModeRefusal(args, mode = process.env.FLEETADLC_REVIEW_MODE ?? '', read = readText) {
+  if (mode !== 'advisory') return null;
+  const words = commandWords(args);
+  const names = args.map((arg) => (arg.startsWith('--') && arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg));
+  const deciding =
+    (words[0] === 'pr' && words[1] === 'review' && names.some((name) => ['--approve', '-a', '--request-changes', '-r'].includes(name))) ||
+    apiSubmitsVerdict(args, read);
+  return deciding
+    ? 'an advisory reviewer comments (`gh pr review --comment`), with its verdict in its review_posted marker; the lead approves or asks for changes'
+    : null;
+}
+
+/** gh's own top-level commands: a first word that is none of these may be an alias. */
+const GH_COMMANDS = new Set([
+  'agent-task', 'alias', 'api', 'attestation', 'auth', 'browse', 'cache', 'co', 'codespace', 'completion', 'config',
+  'copilot', 'extension', 'gist', 'gpg-key', 'help', 'issue', 'label', 'org', 'pr', 'preview', 'project', 'release',
+  'repo', 'ruleset', 'run', 'search', 'secret', 'ssh-key', 'status', 'variable', 'version', 'workflow',
+]);
+
+/** Flags that take their value as the next argument wherever they stand, before the subcommand included. */
+const GH_VALUED = new Set(['-R', '--repo', '--hostname']);
+
+/**
+ * The command's words: `pr review 7` out of `pr -R exampleco/api review 7
+ * --approve`. It stopped at the first flag, and cobra takes a flag before the
+ * subcommand, so `gh pr -R o/r review` read as `gh pr` and went through.
+ */
+export function commandWords(args) {
+  const words = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (GH_VALUED.has(arg)) {
+      i++;
+      continue;
+    }
+    if (arg.startsWith('-')) continue;
+    words.push(arg);
+  }
+  return words;
+}
+
+/** `gh workflow run`'s flags that take their value as the next argument. */
+const WORKFLOW_RUN_VALUED = new Set(['-r', '--ref', '-f', '--raw-field', '-F', '--field']);
+
+/** The workflow `gh workflow run` is given: its first argument past the flags, or null when there is none. */
+export function workflowRunTarget(args) {
+  let seen = 0;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (GH_VALUED.has(arg) || (seen >= 2 && WORKFLOW_RUN_VALUED.has(arg))) {
+      i++;
+      continue;
+    }
+    if (arg.startsWith('-')) continue;
+    if (seen >= 2) return arg;
+    if ((seen === 0 && arg === 'workflow') || (seen === 1 && arg === 'run')) seen++;
+  }
+  return null;
+}
+
+/**
+ * The workflow a `gh api` call dispatches, from `actions/workflows/<name>/dispatches`, or null.
+ *
+ * Any prefix: `repos/<owner>/<repo>` and `repositories/<id>` are the same
+ * endpoint, and a trailing `#` is still a dispatch. Anchoring on
+ * `repos/<owner>/<repo>` and requiring the path to end let both through.
+ */
+export function workflowDispatchName(args) {
+  const endpoint = /\/actions\/workflows\/([^/?#]+)\/dispatches\/?(?:[?#]|$)/i;
+  for (const arg of args) {
+    const match = endpoint.exec(String(arg));
+    if (match) return decodeURIComponent(match[1]);
+  }
+  return null;
+}
+
+/** Whether a `gh api` call re-runs a workflow run: `actions/runs/<id>/rerun`. */
+export function workflowRerun(args) {
+  const endpoint = /\/actions\/runs\/[^/?#]+\/rerun(?:-failed-jobs)?\/?(?:[?#]|$)/i;
+  return args.some((arg) => endpoint.test(String(arg)));
+}
+
+/** A workflow as a deny list names it: `.github/workflows/promote-production.yml` is `promote-production`. */
+export function workflowName(given) {
+  return given
+    .toLowerCase()
+    .replace(/^\.?\//, '')
+    .replace(/^\.github\/workflows\//, '')
+    .replace(/\.ya?ml$/, '');
+}
+
+/** What `gh <name>` expands to, from `gh alias list`, or null when it is no alias. */
+function aliasExpansion(name, ask) {
+  const listed = ask(['alias', 'list']) ?? '';
+  for (const line of listed.split('\n')) {
+    const match = /^\s*([^:\s]+):\s*(.*?)\s*$/.exec(line);
+    if (match && match[1] === name) return match[2].replace(/^(['"])(.*)\1$/, '$2');
+  }
+  return null;
+}
+
+async function main() {
+  const gh = realGh();
+  if (!gh) {
+    process.stderr.write('gh: the GitHub CLI is not installed on this host\n');
+    process.exit(127);
+  }
+  const header = process.env.FLEETADLC_POST_HEADER ?? '';
+  const denied = githubRefusal(process.argv.slice(2), process.env.FLEETADLC_TOOLS_POLICY, (args) => {
+    const asked = spawnSync(gh, args, { encoding: 'utf8' });
+    return asked.status === 0 ? asked.stdout : null;
+  });
+  if (denied) {
+    process.stderr.write(`gh: not running — ${denied}\n`);
+    process.exit(1);
+  }
+  const advisory = reviewModeRefusal(process.argv.slice(2));
+  if (advisory) {
+    process.stderr.write(`gh: not running — ${advisory}\n`);
+    process.exit(1);
+  }
+  const unchecked = await localCiRefusal(process.argv.slice(2), {
+    head: () => {
+      const read = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });
+      return read.status === 0 ? read.stdout.trim() : null;
+    },
+    passed: (sha) => bridgePassed(sha),
+  });
+  if (unchecked) {
+    process.stderr.write(`gh: not running — ${unchecked}\n`);
+    process.exit(1);
+  }
+  const relabel = stageLabelRefusal(process.argv.slice(2));
+  if (relabel) {
+    process.stderr.write(`gh: not running — ${relabel}\n`);
+    process.exit(1);
+  }
+  const unfiltered = unfilteredReadRefusal(process.argv.slice(2));
+  if (unfiltered) {
+    process.stderr.write(`gh: not running — ${unfiltered}\n`);
+    process.exit(1);
+  }
+  const refusal = mergeRefusal(process.argv.slice(2), (args) => {
+    const asked = spawnSync(gh, args, { encoding: 'utf8' });
+    return asked.status === 0 ? asked.stdout : null;
+  });
+  if (refusal) {
+    process.stderr.write(`gh: not merging — ${refusal}\n`);
+    process.exit(1);
+  }
+  let dir = null;
+  let written = null;
+  const argv = process.argv.slice(2);
+  const args = rewrite(argv, header, {
+    read: (file) => readFileSync(file, 'utf8'),
+    stdin: () => readFileSync(0, 'utf8'),
+    write: (text) => {
+      dir ??= mkdtempSync(join(tmpdir(), 'fleetadlc-gh-'));
+      const file = join(dir, 'body.md');
+      writeFileSync(file, text);
+      written = { file, text };
+      return file;
+    },
+  }, process.env.FLEETADLC_BOT ?? '');
+  if (written) {
+    const number = targetNumber(argv, (lookup) => {
+      const asked = spawnSync(gh, lookup, { encoding: 'utf8' });
+      return asked.status === 0 ? asked.stdout : null;
+    });
+    const signed = await stamp(written.text, postKind(argv), number);
+    if (signed) writeFileSync(written.file, signed);
+  }
+  const run = spawnSync(gh, args, { stdio: 'inherit' });
+  process.exit(run.status ?? 1);
+}
+
+if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('/gh')) await main();

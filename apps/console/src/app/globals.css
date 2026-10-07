@@ -1,0 +1,371 @@
+@import 'tailwindcss';
+
+/*
+ * Colours are named for what they do, not for how light they are.
+ *
+ * They used to be an `ink` ramp used positionally — `ink-950` was the darkest
+ * and served as the page background, `ink-100` was the lightest and served as
+ * body text. That works exactly until there is a second mode, at which point
+ * every name is a lie in one of them: `ink-950` as the *lightest* colour is the
+ * kind of thing that survives one refactor and misleads everybody after.
+ *
+ * So the ramp is named by role, from furthest back to most forward:
+ *
+ *   surface      the page
+ *   panel        a raised card or column
+ *   well         an inset, a hover, a pressed state
+ *   edge         a hairline border
+ *   edge-strong  a border that is meant to be seen
+ *   dim          the faintest text that is still text
+ *   muted        secondary text
+ *   soft         text that is not primary but is being read
+ *   body         primary text
+ *
+ * A component never knows which mode it is in. The two blocks below are the
+ * only place that knows, and adding a third mode means adding one block.
+ */
+@theme {
+  --color-surface: oklch(0.16 0.012 260);
+  --color-panel: oklch(0.2 0.014 260);
+  --color-well: oklch(0.24 0.014 260);
+  --color-edge: oklch(0.24 0.014 260);
+  --color-edge-strong: oklch(0.28 0.014 260);
+  /*
+   * `dim` and `muted` are lighter than the ramp they replaced. The old values —
+   * 0.36 and 0.58 — gave 1.67:1 and 4.23:1 against a panel, and both are used
+   * as text: 45 call sites at `dim` alone. The dark theme has never met WCAG AA
+   * for its two quietest text colours. Meeting it makes them visibly brighter,
+   * which is a change to how the console looks and is the point.
+   */
+  --color-dim: oklch(0.63 0.014 260);
+  --color-muted: oklch(0.68 0.012 260);
+  --color-soft: oklch(0.8 0.008 260);
+  --color-body: oklch(0.94 0.004 260);
+
+  /*
+   * The accents are not the ramp inverted. Each is tuned for the background it
+   * sits on: 0.72 lightness reads well on a near-black page and washes out on a
+   * near-white one, so the light mode below darkens every one of them rather
+   * than reusing the same value. Chroma rises a little as lightness falls, to
+   * keep them recognisably the same colour.
+   */
+  --color-signal: oklch(0.72 0.17 160);
+  --color-attention: oklch(0.76 0.16 65);
+  --color-alarm: oklch(0.65 0.2 25);
+  --color-link: oklch(0.74 0.13 240);
+
+  /*
+   * What covers the page behind a panel that slides over it, such as a bot's
+   * thread: dark enough to say the page is not the thing in front, and in
+   * light mode the page's own ink rather than black, as the design draws it.
+   */
+  --color-scrim: oklch(0.08 0.01 260 / 0.55);
+
+  /*
+   * A bot's avatar, one quiet tint per role so a crew of nine can be told
+   * apart at a glance. They carry no meaning — a status is the dot on the
+   * avatar, in the accents above — so they sit close to the panel in lightness
+   * and differ only in hue.
+   *
+   * Named for the hue, because a person can give a bot one of them in
+   * Settings → Appearance and the name is what the bridge stores
+   * (packages/shared/src/crew-colors.ts). The initials on each keep AA in
+   * both modes, which `contrast.test.ts` measures.
+   */
+  --color-tint-sand: oklch(0.33 0.035 70);
+  --color-tint-blue: oklch(0.33 0.035 250);
+  --color-tint-mint: oklch(0.33 0.035 165);
+  --color-tint-violet: oklch(0.33 0.035 300);
+  --color-tint-rose: oklch(0.33 0.035 10);
+  --color-tint-sky: oklch(0.33 0.035 220);
+  --color-tint-olive: oklch(0.33 0.035 95);
+  --color-tint-green: oklch(0.33 0.035 135);
+
+  /*
+   * A repository's colour, where the console shows more than one at once: the
+   * edge of its cards and the dot beside its name. Named, never numbered — the
+   * name is what the bridge stores (packages/shared/src/repo-colors.ts) — and
+   * never shown without the repository's name beside it.
+   *
+   * Unlike the tints they are meant to be seen, so each keeps 3:1 against
+   * every background it sits on, as a graphic must. And no two share a
+   * lightness: each is a step on its own rung, in the same order in both
+   * modes, which is what still tells them apart without colour vision. Six,
+   * because the light mode has only so much room above white.
+   */
+  --color-repo-blue: oklch(0.68 0.15 254);
+  --color-repo-amber: oklch(0.88 0.14 88);
+  --color-repo-pink: oklch(0.64 0.2 355);
+  --color-repo-teal: oklch(0.81 0.12 190);
+  --color-repo-violet: oklch(0.57 0.2 296);
+  --color-repo-orange: oklch(0.76 0.14 45);
+
+  /*
+   * The terminal's own palette, and it stays dark in both modes on purpose.
+   *
+   * The pane renders ANSI output from real programs — `gh`, `make`, a test
+   * runner — whose colours are chosen for a dark terminal. Flipping the
+   * background to white without remapping all sixteen ANSI colours makes that
+   * output unreadable, which is a worse outcome than a dark rectangle. Most
+   * terminals in light-themed applications do the same.
+   *
+   * These were four hex literals inside `terminal.tsx`, the only hardcoded
+   * colours in the console. They are here so that "the terminal stays dark" is
+   * a decision written in the place decisions about colour are made, rather than
+   * something a reader has to infer from a component not having been updated.
+   */
+  --color-term-bg: oklch(0.14 0.012 260);
+  --color-term-fg: oklch(0.92 0.004 260);
+  --color-term-cursor: oklch(0.78 0.14 160);
+  --color-term-selection: oklch(0.3 0.02 260);
+}
+
+/*
+ * `data-theme` is set on <html> before first paint by the script in layout.tsx.
+ * `light` and `dark` are explicit choices; the media query is what "system"
+ * resolves to, and it is deliberately scoped so an explicit choice wins over the
+ * operating system rather than fighting it.
+ */
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --color-surface: oklch(0.985 0.002 260);
+  --color-panel: oklch(1 0 0);
+  --color-well: oklch(0.955 0.004 260);
+  --color-edge: oklch(0.9 0.006 260);
+  --color-edge-strong: oklch(0.84 0.008 260);
+  --color-dim: oklch(0.51 0.012 260);
+  --color-muted: oklch(0.5 0.014 260);
+  --color-soft: oklch(0.37 0.014 260);
+  --color-body: oklch(0.21 0.014 260);
+
+  /* Darkened to carry on white. Same hues, so a status keeps its meaning. */
+  --color-signal: oklch(0.5 0.15 160);
+  --color-attention: oklch(0.52 0.14 65);
+  --color-alarm: oklch(0.52 0.21 25);
+  --color-link: oklch(0.5 0.16 240);
+  --color-scrim: oklch(0.21 0.014 260 / 0.3);
+
+  --color-tint-sand: oklch(0.945 0.015 70);
+  --color-tint-blue: oklch(0.945 0.015 250);
+  --color-tint-mint: oklch(0.945 0.015 165);
+  --color-tint-violet: oklch(0.945 0.015 300);
+  --color-tint-rose: oklch(0.945 0.015 10);
+  --color-tint-sky: oklch(0.945 0.012 220);
+  --color-tint-olive: oklch(0.95 0.017 95);
+  --color-tint-green: oklch(0.945 0.015 135);
+
+  /* Darkened to hold 3:1 on white, each on the rung it has in the dark mode. */
+  --color-repo-blue: oklch(0.5 0.15 260);
+  --color-repo-amber: oklch(0.63 0.12 82);
+  --color-repo-pink: oklch(0.45 0.16 355);
+  --color-repo-teal: oklch(0.585 0.1 188);
+  --color-repo-violet: oklch(0.37 0.17 296);
+  --color-repo-orange: oklch(0.545 0.15 45);
+}
+
+@media (prefers-color-scheme: light) {
+  /* "System", resolved. An explicit `data-theme` above overrides it. */
+  :root:not([data-theme='dark']):not([data-theme='light']) {
+    color-scheme: light;
+
+    --color-surface: oklch(0.985 0.002 260);
+    --color-panel: oklch(1 0 0);
+    --color-well: oklch(0.955 0.004 260);
+    --color-edge: oklch(0.9 0.006 260);
+    --color-edge-strong: oklch(0.84 0.008 260);
+    --color-dim: oklch(0.51 0.012 260);
+    --color-muted: oklch(0.5 0.014 260);
+    --color-soft: oklch(0.37 0.014 260);
+    --color-body: oklch(0.21 0.014 260);
+
+    --color-signal: oklch(0.5 0.15 160);
+    --color-attention: oklch(0.52 0.14 65);
+    --color-alarm: oklch(0.52 0.21 25);
+    --color-link: oklch(0.5 0.16 240);
+    --color-scrim: oklch(0.21 0.014 260 / 0.3);
+
+    --color-tint-sand: oklch(0.945 0.015 70);
+    --color-tint-blue: oklch(0.945 0.015 250);
+    --color-tint-mint: oklch(0.945 0.015 165);
+    --color-tint-violet: oklch(0.945 0.015 300);
+    --color-tint-rose: oklch(0.945 0.015 10);
+    --color-tint-sky: oklch(0.945 0.012 220);
+    --color-tint-olive: oklch(0.95 0.017 95);
+    --color-tint-green: oklch(0.945 0.015 135);
+
+    --color-repo-blue: oklch(0.5 0.15 260);
+    --color-repo-amber: oklch(0.63 0.12 82);
+    --color-repo-pink: oklch(0.45 0.16 355);
+    --color-repo-teal: oklch(0.585 0.1 188);
+    --color-repo-violet: oklch(0.37 0.17 296);
+    --color-repo-orange: oklch(0.545 0.15 45);
+  }
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-surface);
+  color: var(--color-body);
+  font-feature-settings: 'cv02', 'cv03', 'cv04';
+  -webkit-font-smoothing: antialiased;
+}
+
+/* A working bot has a pulse; an idle one does not. */
+@keyframes working-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+}
+
+.working-dot {
+  animation: working-pulse 1.6s ease-in-out infinite;
+}
+
+/*
+ * A crew member's mark while it works (`engine-avatars.tsx`). Slow and small:
+ * it says the bot is busy, which the dot already says, so it must never pull
+ * the eye the way a status would. The classes are only there while the bot is
+ * working at a large size and on screen; this media query stops them in the
+ * frame before the page has read the person's setting, and for good after.
+ */
+.avatar-breathe,
+.avatar-orbit,
+.avatar-tick {
+  transform-box: view-box;
+  transform-origin: 12px 12px;
+}
+.avatar-breathe {
+  animation: avatar-breathe 4.2s ease-in-out infinite;
+}
+.avatar-ripple {
+  animation: avatar-ripple 1.8s ease-in-out infinite;
+}
+.avatar-orbit {
+  animation: avatar-orbit 6s linear infinite;
+}
+.avatar-tick {
+  animation: avatar-tick 4s cubic-bezier(0.5, 0, 0.3, 1.4) infinite;
+}
+@keyframes avatar-breathe {
+  0%,
+  100% {
+    /* Times the petals' own 0.72, this stays above the marks' 0.6 floor. */
+    opacity: 0.85;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+@keyframes avatar-ripple {
+  /* MARK_FLOOR in engine-avatars.tsx: the faintest a dot may be and keep 3:1. */
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+@keyframes avatar-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* One tooth, 45 degrees, in the last tenth; the wheel looks the same after it, so it loops without a jump. */
+@keyframes avatar-tick {
+  0%,
+  88% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(45deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .avatar-moving,
+  .avatar-moving * {
+    animation: none !important;
+  }
+}
+
+/*
+ * A control a card reveals on hover or focus, such as the move list. On a
+ * device with no hover it is simply shown: there is no pointer to reveal it
+ * with, and a control that only a hover can find is one a thumb never will.
+ */
+.reveal {
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+.group:hover .reveal,
+.group:focus-within .reveal,
+.reveal:focus-within {
+  opacity: 1;
+}
+@media (hover: none) {
+  .reveal {
+    opacity: 1;
+  }
+}
+
+/*
+ * A revealed control in a row with no room to spare for it: a card's move list
+ * on the board that shows every repository, where the repository's name needs
+ * the room. Where there is hover it sits over the end of its row while it
+ * shows, instead of holding a place there the rest of the time. Where there is
+ * none it is always shown, and keeps its place in the row.
+ */
+@media (hover: hover) {
+  .reveal-over {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    transform: translateY(-50%);
+    padding-left: 0.5rem;
+    background: var(--color-panel);
+  }
+}
+
+/* A row that scrolls sideways on a phone and shows no bar doing it. */
+.scroll-row {
+  scrollbar-width: none;
+}
+.scroll-row::-webkit-scrollbar {
+  display: none;
+}
+
+.pane {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-edge-strong);
+  border-radius: 999px;
+}

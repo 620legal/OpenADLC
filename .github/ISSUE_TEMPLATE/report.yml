@@ -1,0 +1,77 @@
+# The form for someone running OpenADLC who found something wrong.
+#
+# Not the bug form. That one is the crew's, shipped to every managed repository
+# and kept identical to it (`tests/repo-templates.test.ts`): it asks where the
+# fix goes and the command that proves it, which someone reporting a crash
+# cannot know, and it puts every report in intake at p1. This one asks for what
+# it takes to reproduce the problem and sets no label: a maintainer reads it,
+# and turns it into an issue the crew can route, or labels it `adlc:intake` for
+# intake to.
+name: Report a problem
+description: Something in OpenADLC does not work as its documentation says
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A security problem does not go here. Report it privately, as the
+        repository's security policy says: **Security → Report a vulnerability**.
+
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: What you saw, including any error exactly as it was printed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: From a running install, the steps that make it happen again.
+      placeholder: |
+        1. fleetadlc up
+        2. Open the console and ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: OpenADLC commit or version
+      description: "`git rev-parse --short HEAD` in your checkout."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: driver
+    attributes:
+      label: Driver
+      options:
+        - docker
+        - local
+        - docker, on a cloud install (infra/gcp)
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 15, Ubuntu 24.04, ...
+
+  - type: textarea
+    id: output
+    attributes:
+      label: fleetadlc doctor and logs
+      description: >
+        The output of `fleetadlc doctor`, and the service log lines around the
+        failure. Take out any token, key or webhook secret first.
+      render: text

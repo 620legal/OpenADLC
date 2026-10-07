@@ -1,0 +1,32 @@
+{
+  "name": "@fleetadlc/hostd",
+  "version": "0.1.0",
+  "description": "The runner: gives each task a computer (a container or tmux sessions), a worktree and a session, and runs the skill in it.",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node build-runner.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@fleetadlc/backup": "workspace:*",
+    "@fleetadlc/db": "workspace:*",
+    "@fleetadlc/engines": "workspace:*",
+    "@fleetadlc/github": "workspace:*",
+    "@fleetadlc/shared": "workspace:*",
+    "ws": "^8.18.0",
+    "node-pty": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.11"
+  }
+}

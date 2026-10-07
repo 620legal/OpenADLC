@@ -1,0 +1,39 @@
+packages:
+  - packages/*
+  - apps/*
+  - tests
+
+# sharp arrives as Next's optional dependency, for next/image, which the console
+# does not use; skipping it keeps its LGPL libvips out of the console image.
+ignoredOptionalDependencies:
+  - sharp
+
+# Supply-chain limits for when the lockfile is resolved again, by a person
+# adding a dependency or the weekly dependency update. A version must have been
+# published for three days (the value is in minutes): an account takeover is
+# usually caught and unpublished within that. An urgent security fix goes in
+# minimumReleaseAgeExclude for as long as it is younger. trustPolicy refuses a
+# version published with weaker provenance than an earlier one, and
+# blockExoticSubdeps a dependency of a dependency fetched from git or a URL
+# rather than the registry.
+minimumReleaseAge: 4320
+trustPolicy: no-downgrade
+# Releases on an older line, published without the provenance the newer line
+# has. Named by exact version, so a later one is checked again.
+trustPolicyExclude:
+  - tailwind-merge@2.6.1
+  - undici-types@6.21.0
+blockExoticSubdeps: true
+
+onlyBuiltDependencies:
+  - esbuild
+  - node-pty
+  - '@tailwindcss/oxide'
+  - sharp
+
+# next 15 pins postcss 8.4.31, which has advisories fixed only in 8.5. next
+# runs postcss over the console's own CSS at build time, so none is reachable,
+# but pnpm audit reports them; the console builds with 8.5. Drop this once
+# next's own pin moves past them.
+overrides:
+  next>postcss: ^8.5.28

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Starts tmux and waits: hostd runs the task's sessions in this container, and
+# this process keeps it alive and leaves a shell to take over.
+set -euo pipefail
+
+BOT_NAME="${BOT_NAME:-unnamed}"
+
+git config --global init.defaultBranch main
+git config --global advice.detachedHead false
+# Signing is configured per task, from the key hostd loads into an ssh-agent.
+git config --global gpg.format ssh
+
+tmux start-server
+tmux new-session -d -s shell -c /work "bash -l"
+
+echo "[bot-init] ${BOT_NAME} ready; tmux is up, waiting for work"
+
+# Keep the container alive without burning a core.
+while true; do
+  sleep 3600
+done

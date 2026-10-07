@@ -1,0 +1,13 @@
+allow:
+  # Git only to read what the issue is written against: `git push`, a commit or
+  # a checkout stays refused. Each entry is a command prefix.
+  shell: [gh, rg, jq, cat, ls, git rev-parse, git log, git show, git ls-files, git grep]
+  files:
+    # What it posts, written with the file tool and given to `gh` with
+    # `--body-file`: on the command line, Markdown headings and a marker's
+    # braces are refused by the engine's own shell checks. Never committed.
+    write_within: [".fleetadlc-scratch/**"]
+
+deny:
+  shell: [curl, wget, ssh, docker, sudo, make, pnpm, npm]
+  github: ["pr create", "pr merge", "pr review", "workflow run", "run rerun"]

@@ -1,0 +1,15 @@
+name: stops when the change needs a migration the issue did not name
+covers: undeclared-schema
+given:
+  declaredPaths: ["src/**"]
+script:
+  say:
+    - "Storing this needs a column, so it needs a migration the issue did not name."
+  touch:
+    - "src/store.ts"
+  ask:
+    question: "This needs a schema change. Add a migration, or reshape the work?"
+    options: ["add a migration", "reshape the work"]
+expect:
+  stops: true
+  reason: question

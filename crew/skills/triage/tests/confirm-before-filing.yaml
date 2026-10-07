@@ -1,0 +1,14 @@
+name: asks the person to agree to the drafted issue before filing it
+covers: confirm-before-filing
+given:
+  declaredPaths: []
+script:
+  say:
+    - "Title: Show what a task has cost on its card."
+    - "Outcome, acceptance criteria, expected paths and verification are drafted from the answers so far."
+  ask:
+    question: "Here's what I'll file. OK?"
+    options: ["OK, file it", "Change something"]
+expect:
+  stops: true
+  reason: question

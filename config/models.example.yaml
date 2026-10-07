@@ -1,0 +1,21 @@
+# What each model costs, per million tokens, where the defaults in
+# `packages/engines/src/pricing.ts` are wrong for this install: a vendor changed
+# its price, or the install has a negotiated rate.
+#
+# Copy this file to `config/models.yaml` and keep only the models you need to
+# correct. `config/models.yaml` is ignored by git, so an install's own prices
+# never end up in a pull request. A model not listed here keeps its default.
+#
+# The cap in `config/costs.yaml` is what stops spend; these numbers decide how
+# quickly it is reached. A malformed file stops the bridge rather than being
+# ignored, because a price that was written and not used is learned from the
+# bill.
+
+models:
+  claude-opus-5:
+    inPerMtok: 5
+    outPerMtok: 25
+  # gpt-5-codex:
+  #   inPerMtok: 1.25
+  #   cachedInPerMtok: 0.125   # input served from the cache; as inPerMtok when unset
+  #   outPerMtok: 10

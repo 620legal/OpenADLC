@@ -1,0 +1,13 @@
+name: stops when the issue's premise is already false on HEAD
+covers: false-premise
+given:
+  declaredPaths: ["src/**"]
+script:
+  say:
+    - "The issue says removeFoo() needs changing. It does not exist on HEAD."
+  ask:
+    question: "The premise is false on HEAD: removeFoo() is gone. Close the issue, or restate it?"
+    options: ["close it", "restate it"]
+expect:
+  stops: true
+  reason: question

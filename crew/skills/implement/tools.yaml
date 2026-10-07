@@ -1,0 +1,38 @@
+# What the engine may do while running this skill. Each engine applies what it
+# can express: the shell lists and whether files may be written are its own
+# permissions on Claude Code and Grok Build, and the git and GitHub rules are
+# applied by OpenADLC's `git` and `gh`, which every engine runs. docs/security.md
+# says, engine by engine, what holds and what does not.
+
+allow:
+  # `fleetadlc-ci` runs the repository's checks on HEAD through hostd and
+  # records the result; nothing else does. `fleetadlc-install` runs an install
+  # with the private registry's credential, when the install has one.
+  shell: [make, pnpm, npm, uv, python, python3, node, git, gh, rg, jq, cat, ls, sed, mkdir, cp, mv, fleetadlc-ci, fleetadlc-install]
+  # OpenADLC's git refuses a push to any other branch, and a forced update; and,
+  # with `local_ci`, a commit with no recorded `fleetadlc-ci` pass, which its gh
+  # also asks of the head a pull request opens or is readied on.
+  git:
+    push_branch_prefix: "agent/"
+    force_push: false
+    local_ci: true
+  files:
+    write_within:
+      - "<declared_paths>"
+      - "tests/**"
+      # Every change to behaviour changes its docs, so a build or patch task is
+      # not asked for them. Any other path outside the lease is asked for with a
+      # plan change: see "Asking to widen your paths" in SKILL.md.
+      - "docs/**"
+      - "AGENTS.md"
+      # What it posts to GitHub, written to a file and given with `--body-file`.
+      - ".fleetadlc-scratch/**"
+
+deny:
+  shell: [curl, wget, ssh, docker, sudo, kubectl, terraform]
+  # Each entry is a `gh` command that OpenADLC's gh refuses to run for this skill.
+  # A merge, auto-merge included, is the merge line's, after the lead approved
+  # and CI passed. Dismissing a review is an API call, and `api` is denied.
+  # `issue edit` could widen the issue's own Expected paths; a widening is
+  # asked for with a plan change, and comments (`issue comment`) stay allowed.
+  github: ["pr merge", "pr review", "workflow run", "run rerun", "api", "issue edit"]

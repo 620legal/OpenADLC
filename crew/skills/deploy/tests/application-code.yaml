@@ -1,0 +1,18 @@
+# `deploy` declares no `## Stop and ask when` section, and has no part in a
+# promote: the environment's rules release production. Its `## Never` keeps it
+# off application code: the only files it fixes are the deploy workflows. So
+# the dry run diagnoses a failed testing deploy that a workflow file broke and
+# writes only that file.
+name: fixes a deploy workflow, and only a deploy workflow, when one broke the testing deploy
+covers: application-code
+given:
+  declaredPaths: [".github/workflows/deploy-*.yml"]
+script:
+  say:
+    - "The testing deploy failed at its release step: deploy-testing.yml runs `make release-test`, and the Makefile's target is `release-testing`."
+    - "A deploy workflow file broke it, not the change. Fixing the target in .github/workflows/deploy-testing.yml by pull request; the application code stays as it is."
+  touch:
+    - ".github/workflows/deploy-testing.yml"
+expect:
+  stops: false
+  reason: complete

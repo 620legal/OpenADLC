@@ -1,0 +1,12 @@
+-- What an open pull request actually touches, so the dispatcher can check a new
+-- issue against it.
+--
+-- Overlap was checked only against other leases' *declared* paths. A pull
+-- request that is open but whose implement task has ended claimed nothing, so a
+-- second issue touching the same files could be leased while the first change
+-- was still in review — and the two would meet as a merge conflict a bot cannot
+-- resolve.
+--
+-- Recorded by the bridge when a pull request opens or is pushed to, because that
+-- is where GitHub is already being asked what changed.
+alter table issues add column if not exists pr_changed_paths text[] not null default '{}';

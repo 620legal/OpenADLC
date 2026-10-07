@@ -1,0 +1,30 @@
+# The service and console images build from the repository root
+# (infra/local/docker-compose.yml), so the whole checkout is the build context.
+# Without this, the daemon was sent node_modules, a scratch install's
+# install.json and secrets (.scratch/), and the work directories; and `COPY
+# packages`, `COPY apps/<x>` and `COPY config` copied whatever untracked file sat
+# inside them (apps/console/.env.local, an install's config/models.yaml) into
+# an image that is then pushed to a registry. Each image builds what it needs
+# inside itself.
+**/node_modules
+**/dist
+**/.next
+**/*.tsbuildinfo
+**/coverage
+.scratch
+.ci
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/secrets
+**/work
+**/logs
+**/*.log
+.git
+**/.terraform
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+**/*.tfvars.json
+config/models.yaml

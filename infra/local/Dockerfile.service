@@ -1,0 +1,79 @@
+# hostd and the bridge share one image: the same build, a different command.
+# The dispatcher is built into it as the library the bridge runs in-process
+# (`FLEETADLC_DISPATCH_IN_BRIDGE=1`); no service runs it on its own.
+
+FROM node:22-bookworm-slim AS build
+WORKDIR /app
+# `pnpm prune` asks before it purges node_modules, and with no terminal to ask
+# it fails the build. CI=true is how pnpm is told nobody is there to answer.
+ENV CI=true
+# node-pty, which hostd's terminal gateway loads, ships prebuilt binaries only
+# for macOS and Windows; on Linux it is compiled, with these. Only this stage
+# has them: the runtime stage below gets the compiled module and no compiler.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages ./packages
+COPY apps/hostd ./apps/hostd
+COPY apps/bridge ./apps/bridge
+COPY apps/dispatcher ./apps/dispatcher
+COPY apps/cli ./apps/cli
+RUN pnpm install --frozen-lockfile --ignore-scripts \
+    && pnpm --filter "./packages/**" build \
+    && pnpm --filter @fleetadlc/hostd --filter @fleetadlc/bridge --filter @fleetadlc/dispatcher --filter @fleetadlc/cli build \
+    && rm -rf node_modules packages/*/node_modules apps/*/node_modules \
+    && pnpm install --prod --frozen-lockfile --ignore-scripts \
+    && node apps/hostd/scripts/node-pty-exec-bit.mjs \
+    && pnpm --filter @fleetadlc/hostd rebuild node-pty \
+    && (cd apps/hostd && node -e "require('node-pty')")
+# Not `pnpm prune --prod`: in this workspace it left every package's own
+# node_modules empty, so the image carried `pg` in the store with nothing
+# linking to it and the bridge died on its first import. A fresh production
+# install links what each package declares. Scripts stay off as in the install
+# above, so the exec-bit fix the root postinstall would run is run by hand.
+#
+# With scripts off, node-pty was never compiled, and every take-over from the
+# console's Terminal tab answered "could not attach: Failed to load native
+# module". It is built on its own, after the production install (which starts
+# from an empty node_modules, so a build before it is thrown away), and loaded
+# once: a node-pty that does not load fails the build, not an attach.
+
+FROM node:22-bookworm-slim
+WORKDIR /app
+# git and tmux are what hostd uses to hold worktrees and sessions; docker-cli lets
+# it drive the bot containers through the mounted socket, and build the bot
+# image for an engine update.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates git tini tmux docker.io openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /app /app
+# What the image is licensed under travels with it.
+COPY LICENSE NOTICE ./
+COPY config ./config
+COPY crew ./crew
+# The bridge reads OpenADLC's labels and what a managed repository gets from
+# these; without them its repository-rules check could not run at all.
+# hostd's weekly engine update builds the bot image with the script a person
+# runs, from the same directory: the script, Dockerfile.bot and what it copies.
+# Without them the cloud host, which runs hostd from this image, could only
+# answer "this hostd cannot build the bot image". The docker CLI above does
+# the building, against the host's daemon through the mounted socket.
+COPY infra/local/build-bot-image.sh infra/local/Dockerfile.bot infra/local/bot-init infra/local/fleetadlc-install ./infra/local/
+
+# Where the compose bridge keeps the webhook secret it generates, owned by
+# `node` so a new `webhook-secret` volume, which takes the ownership of what it
+# is mounted over, is writable by it.
+RUN mkdir -p /var/lib/fleetadlc && chown node:node /var/lib/fleetadlc
+
+ENV NODE_ENV=production
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["node", "apps/bridge/dist/main.js"]
+# Not root: the bridge parses webhooks from the internet and holds the install's
+# secret store. uid 1000, the image's own `node`, which is also the uid hostd
+# runs as on the cloud host (`--user 1000:1000`) and, after its root prelude,
+# under compose, so the two share the store. Compose's setup and hostd's
+# prelude ask for root themselves.
+USER node

@@ -1,0 +1,34 @@
+FROM node:22-bookworm-slim AS build
+WORKDIR /app
+# Next.js reports anonymous usage to its makers from `next build` and `next
+# start` unless told not to. An install reports nothing it does not say.
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages ./packages
+COPY apps/console ./apps/console
+RUN pnpm install --frozen-lockfile --ignore-scripts \
+    && pnpm --filter "./packages/**" build \
+    && pnpm --filter @fleetadlc/console build
+
+FROM node:22-bookworm-slim
+WORKDIR /app/apps/console
+RUN corepack enable && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tini \
+    && rm -rf /var/lib/apt/lists/*
+# Owned by `node`, which the console runs as: Next.js writes `.next/cache` at
+# runtime, and a root-owned copy would refuse it.
+COPY --from=build --chown=node:node /app /app
+# What the image is licensed under travels with it, and the licences of the
+# third-party icons the console draws.
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES /app/
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1
+EXPOSE 47300
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["pnpm", "start"]
+# Not root. Under compose it listens on a published port and on Cloud Run it is
+# behind the internet's load balancer; as root, a hole in it was root in its
+# container. uid 1000, the image's own `node`.
+USER node

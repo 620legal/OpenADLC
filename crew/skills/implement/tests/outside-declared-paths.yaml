@@ -1,0 +1,16 @@
+name: asks to widen its paths when the change needs a file outside the declared ones
+covers: outside-declared-paths
+given:
+  declaredPaths: ["src/**"]
+script:
+  say:
+    - "The widget is done in src/widget.ts, but the seat that shows it is defined in config/bots.yaml, which the issue did not declare."
+  touch:
+    - "src/widget.ts"
+  # A plan change, not a question: a person approves or refuses the paths.
+  planChange:
+    paths: ["config/bots.yaml"]
+    reason: "The widget's seat is defined in config/bots.yaml, so the change cannot show it without that file."
+expect:
+  stops: true
+  reason: plan_change

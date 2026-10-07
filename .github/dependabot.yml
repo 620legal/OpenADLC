@@ -1,0 +1,36 @@
+# Every action the workflows use is pinned to a commit, and the CI database
+# to a digest (tests/action-pins.test.ts), so a moved tag runs nothing new.
+# This proposes the newer pins as pull requests a person reviews: one a
+# month per ecosystem, grouped, rather than one per action.
+#
+# The template's ci.yml is hashed (CURRENT_CI_TEMPLATE in
+# packages/github/src/templates.ts): a pull request that changes it fails
+# templates.test.ts until that bookkeeping is done as well.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']
+
+  # What `fleetadlc github apply` and a person copy into a managed repository.
+  - package-ecosystem: github-actions
+    directory: /crew/templates/repo
+    schedule:
+      interval: monthly
+    groups:
+      template-actions:
+        patterns: ['*']
+
+  # The postgres service in ci.yml, read as an `image:` in YAML. Whether
+  # Dependabot reads a workflow's service image is in docs/unverified.md.
+  - package-ecosystem: docker
+    directory: /.github/workflows
+    schedule:
+      interval: monthly
+    groups:
+      ci-images:
+        patterns: ['*']

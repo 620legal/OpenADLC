@@ -1,0 +1,13 @@
+name: stops when the decision is a person's, such as replacing one the repository recorded
+covers: a-persons-decision
+given:
+  declaredPaths: ["docs/**"]
+script:
+  say:
+    - "design-memory.md records that jobs go through the Postgres queue; this change would need a different queue."
+  ask:
+    question: "This replaces the recorded decision to keep jobs on the Postgres queue. Replace it?"
+    options: ["keep the Postgres queue", "replace it, with a new ADR"]
+expect:
+  stops: true
+  reason: question

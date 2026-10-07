@@ -1,0 +1,34 @@
+name: ci
+
+# Written by `fleet github apply` because the repository had no workflow.
+#
+# The merge line lands a pull request only once a check named `ci` has passed
+# on its head, so this job keeps that name. What it runs is the repository's
+# own: the Makefile's `setup` and `ci` targets, which AGENTS.md says a pull
+# request has to pass. Change the steps freely; keep the job called `ci`.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# It reads the code and writes nothing.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: make setup
+        run: make setup
+
+      - name: make ci
+        run: make ci

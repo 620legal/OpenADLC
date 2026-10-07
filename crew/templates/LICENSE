@@ -1,0 +1,23 @@
+The files under crew/templates/ are what OpenADLC adds to a repository it
+manages. They are licensed under the Apache License, Version 2.0, like the
+rest of OpenADLC, and, at your choice, under the Zero-Clause BSD licence
+below. Under 0BSD you may use them, and anything you change them into, in your
+own repositories with no attribution, notice or licence file. Each file a
+repository receives says so in its first line, where its format allows a
+comment: SPDX-License-Identifier: Apache-2.0 OR 0BSD.
+
+Copyright 2026 620 Legal
+
+Zero-Clause BSD
+===============
+
+Permission to use, copy, modify, and/or distribute this software for
+any purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL
+WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE
+FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY
+DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
+OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.

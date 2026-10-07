@@ -1,0 +1,30 @@
+{
+  "name": "@fleetadlc/cli",
+  "version": "0.1.0",
+  "description": "The fleetadlc command: set an install up, start and stop it, connect the crew to GitHub, check it, back it up and restore it.",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": {
+    "fleetadlc": "./bin/fleetadlc.mjs"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@fleetadlc/backup": "workspace:*",
+    "@fleetadlc/db": "workspace:*",
+    "@fleetadlc/github": "workspace:*",
+    "@fleetadlc/shared": "workspace:*",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.11",
+    "@types/pg": "^8.11.10"
+  }
+}
