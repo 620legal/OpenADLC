@@ -373,6 +373,36 @@ function writePrivate(path: string, text: string): void {
   chmodSync(path, 0o600);
 }
 
+/**
+ * What is wrong with the `terraform` on PATH, from what `terraform version
+ * -json` answered; null when it is Terraform 1.6 or later. Cloud Shell's
+ * /google/bin/terraform is a placeholder that prints install instructions and
+ * exits 0, so a plan and an apply run through it "passed" with nothing created.
+ */
+export function terraformProblem(answer: GcloudResult): string | null {
+  const install = 'install Terraform 1.6 or later (https://developer.hashicorp.com/terraform/install), or run infra/gcp/install.sh, which installs it';
+  if (answer.code === 127) return `terraform is not installed: ${install}`;
+  let version: unknown;
+  try {
+    version = (JSON.parse(answer.stdout) as { terraform_version?: unknown }).terraform_version;
+  } catch {
+    version = undefined;
+  }
+  if (answer.code !== 0 || typeof version !== 'string') {
+    return `the terraform on this machine is not Terraform (Cloud Shell's is only a placeholder): ${install}`;
+  }
+  const [major = 0, minor = 0] = version.split('.').map((part) => Number.parseInt(part, 10));
+  if (major < 1 || (major === 1 && minor < 6)) return `this is Terraform ${version}; ${install}`;
+  return null;
+}
+
+async function terraformReady(): Promise<boolean> {
+  const problem = terraformProblem(await capture('terraform', ['version', '-json']));
+  if (!problem) return true;
+  ui.fail(problem);
+  return false;
+}
+
 async function run(command: string, args: string[], cwd?: string): Promise<number> {
   return new Promise((resolve) => {
     const child = spawn(command, args, { cwd, stdio: 'inherit' });
@@ -788,6 +818,10 @@ export async function cloud(
       }
 
       ui.heading(`terraform ${action} (${provider}, state in gs://${backend.bucket}/${backend.prefix})`);
+      if (!(await terraformReady())) {
+        process.exitCode = 1;
+        return;
+      }
       const init = await run('terraform', ['init', '-input=false', ...backendArgs(backend)], dir);
       if (init !== 0) {
         process.exitCode = init;
@@ -834,6 +868,10 @@ export async function cloud(
     }
 
     case 'validate': {
+      if (!(await terraformReady())) {
+        process.exitCode = 1;
+        return;
+      }
       const init = await run('terraform', ['init', '-backend=false', '-input=false'], dir);
       if (init !== 0) {
         process.exitCode = init;

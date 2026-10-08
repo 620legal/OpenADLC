@@ -96,6 +96,77 @@ confirm() {
 
 node_major() { if have node; then node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0; else echo 0; fi; }
 
+# --- Terraform ----------------------------------------------------------------
+
+min_terraform=1.6
+
+# Whether `terraform` is Terraform, and new enough. Being on PATH is not enough:
+# Cloud Shell's /google/bin/terraform is a placeholder that prints how to
+# install Terraform and exits 0, so a plan and an apply "passed" there with
+# nothing created, and the install printed its last steps as if it were done.
+terraform_ok() {
+  have terraform || return 1
+  local first major minor
+  first="$(terraform version 2>/dev/null | head -n 1 || true)"
+  case "$first" in "Terraform v"[0-9]*) ;; *) return 1 ;; esac
+  major="${first#Terraform v}"; major="${major%%.*}"
+  minor="${first#Terraform v*.}"; minor="${minor%%.*}"
+  [ "$major" -gt "${min_terraform%%.*}" ] || { [ "$major" = "${min_terraform%%.*}" ] && [ "$minor" -ge "${min_terraform#*.}" ]; }
+}
+
+# HashiCorp's release of Terraform into ~/.local/bin, which a Cloud Shell keeps
+# across sessions (only the home directory survives there). The version is the
+# one HashiCorp's checkpoint service calls current, unless
+# OPENADLC_TERRAFORM_VERSION names one; the zip is checked against the release's
+# SHA256SUMS before anything is unpacked.
+download_terraform() {
+  local os arch version base zip work bin="$HOME/.local/bin"
+  case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) die "install Terraform $min_terraform or later: https://developer.hashicorp.com/terraform/install" ;; esac
+  case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) die "install Terraform $min_terraform or later for $(uname -m): https://developer.hashicorp.com/terraform/install" ;; esac
+  for tool in curl unzip; do have "$tool" || die "installing Terraform needs $tool. Install it, or Terraform $min_terraform or later yourself: https://developer.hashicorp.com/terraform/install"; done
+  version="${OPENADLC_TERRAFORM_VERSION:-}"
+  if [ -z "$version" ] && [ "$dry_run" = 0 ]; then
+    version="$(curl -fsSL https://checkpoint-api.hashicorp.com/v1/check/terraform | sed -n 's/.*"current_version":"\([0-9][0-9.]*\)".*/\1/p')" || true
+    [ -n "$version" ] || die "could not ask HashiCorp which Terraform is current. Name one with OPENADLC_TERRAFORM_VERSION=<version> and run this again"
+  fi
+  version="${version:-<current>}"
+  base="https://releases.hashicorp.com/terraform/$version"
+  zip="terraform_${version}_${os}_${arch}.zip"
+  confirm "Install Terraform $version from releases.hashicorp.com into $bin?" || die "install Terraform $min_terraform or later: https://developer.hashicorp.com/terraform/install"
+  if [ "$dry_run" = 1 ]; then
+    note "would download $base/$zip, check it against SHA256SUMS, and unpack terraform into $bin"
+  else
+    work="$(mktemp -d)"
+    curl -fsSL -o "$work/$zip" "$base/$zip" || die "could not download $base/$zip"
+    curl -fsSL -o "$work/SHA256SUMS" "$base/terraform_${version}_SHA256SUMS" || die "could not download the checksums for Terraform $version"
+    grep " $zip\$" "$work/SHA256SUMS" > "$work/expected" || die "Terraform $version's checksums do not list $zip"
+    if have sha256sum; then (cd "$work" && sha256sum -c --status expected) || die "the Terraform download does not match its checksum; nothing was installed"
+    else (cd "$work" && shasum -a 256 -c -s expected) || die "the Terraform download does not match its checksum; nothing was installed"; fi
+    mkdir -p "$bin"
+    unzip -o -q "$work/$zip" terraform -d "$bin"
+    chmod 755 "$bin/terraform"
+    rm -rf "$work"
+  fi
+  export PATH="$bin:$PATH"
+  hash -r
+}
+
+ensure_terraform() {
+  # One this script installed on an earlier run, ahead of Cloud Shell's placeholder.
+  if [ -x "$HOME/.local/bin/terraform" ]; then export PATH="$HOME/.local/bin:$PATH"; hash -r; fi
+  terraform_ok && return 0
+  if have terraform; then
+    note "the terraform here ($(command -v terraform)) is not Terraform $min_terraform or later; Cloud Shell's is only a placeholder"
+  fi
+  if [ "$(uname -s)" = Darwin ] && have brew; then
+    confirm "Terraform $min_terraform or later is missing. Install it with Homebrew?" || die "install Terraform $min_terraform or later: https://developer.hashicorp.com/terraform/install"
+    run brew install hashicorp/tap/terraform
+  else
+    download_terraform
+  fi
+  [ "$dry_run" = 1 ] || terraform_ok || die "Terraform was installed but $(command -v terraform || echo terraform) still is not Terraform $min_terraform or later. Put $HOME/.local/bin first on PATH and run this again"
+}
+
 # --- Tools ------------------------------------------------------------------
 
 ensure_tools() {
@@ -108,14 +179,7 @@ ensure_tools() {
       die "this needs the gcloud CLI: https://cloud.google.com/sdk/docs/install (or run it in Cloud Shell, which has it: https://shell.cloud.google.com)"
     fi
   fi
-  if ! have terraform; then
-    if [ "$(uname -s)" = Darwin ] && have brew; then
-      confirm "Terraform is missing. Install it with Homebrew?" || die "install Terraform 1.5 or later: https://developer.hashicorp.com/terraform/install"
-      run brew install hashicorp/tap/terraform
-    else
-      die "this needs Terraform 1.5 or later: https://developer.hashicorp.com/terraform/install (Cloud Shell has it)"
-    fi
-  fi
+  ensure_terraform
   if [ "$(node_major)" -lt "$min_node" ]; then
     # Cloud Shell has nvm, and a Node older than the CLI needs.
     if [ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]; then

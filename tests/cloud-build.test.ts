@@ -72,7 +72,7 @@ describe('infra/gcp/install.sh', () => {
 esac
 exit 0`,
     );
-    stub('terraform');
+    stub('terraform', 'echo "Terraform v1.9.8"');
     stub('pnpm');
     // Its version, and the real Node for the one-liners the script runs.
     stub('node', `case "$1" in -p) echo 22 ;; *) exec "${process.execPath}" "$@" ;; esac`);
@@ -120,6 +120,52 @@ exit 0`,
     const file = /--lifecycle-file=(\S+)/.exec(update)?.[1] ?? '';
     expect(file, out).toBe(join(ROOT, 'infra', 'gcp', 'build-bucket-lifecycle.json'));
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ rule: [{ action: { type: 'Delete' }, condition: { age: 7 } }] });
+  });
+
+  describe('Terraform', () => {
+    // Cloud Shell's /google/bin/terraform prints how to install Terraform and
+    // exits 0: a plan and an apply "passed" through it with nothing created.
+    const placeholder = 'echo; echo "  Follow the instructions at https://developer.hashicorp.com/terraform/install to install terraform"';
+
+    it('installs nothing when the terraform here is Terraform 1.6 or later', () => {
+      const { status, out } = install(['--project', 'acme-openadlc', '--plan-only']);
+      expect(status, out).toBe(0);
+      expect(out).not.toContain('releases.hashicorp.com');
+    });
+
+    it("downloads HashiCorp's release into ~/.local/bin, checked against its sums, over Cloud Shell's placeholder", () => {
+      stub('terraform', placeholder);
+      stub('curl');
+      stub('unzip');
+      const run = spawnSync(join(bin, 'bash'), [join(GCP, 'install.sh'), '--dry-run', '--project', 'acme-openadlc', '--plan-only'], {
+        env: { PATH: bin, HOME: work, TERM: 'dumb', OPENADLC_TERRAFORM_VERSION: '1.9.8' },
+        encoding: 'utf8',
+      });
+      const out = `${run.stdout}${run.stderr}`;
+      expect(run.status, out).toBe(0);
+      expect(out).toContain('is not Terraform 1.6 or later');
+      expect(out).toContain(`Install Terraform 1.9.8 from releases.hashicorp.com into ${join(work, '.local', 'bin')}?`);
+      expect(out).toContain('https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_');
+      expect(out).toContain('check it against SHA256SUMS');
+    });
+
+    it('uses the Terraform an earlier run put in ~/.local/bin, ahead of the placeholder', () => {
+      stub('terraform', placeholder);
+      mkdirSync(join(work, '.local', 'bin'), { recursive: true });
+      writeFileSync(join(work, '.local', 'bin', 'terraform'), '#!/bin/sh\necho "Terraform v1.9.8"\n');
+      chmodSync(join(work, '.local', 'bin', 'terraform'), 0o755);
+      const { status, out } = install(['--project', 'acme-openadlc', '--plan-only']);
+      expect(status, out).toBe(0);
+      expect(out).not.toContain('releases.hashicorp.com');
+    });
+
+    it('stops rather than plan with a Terraform older than the module needs, when it cannot install one', () => {
+      stub('terraform', 'echo "Terraform v1.5.7"');
+      const { status, out } = install(['--project', 'acme-openadlc', '--plan-only']);
+      expect(status, out).not.toBe(0);
+      expect(out).toContain('installing Terraform needs curl');
+      expect(out).not.toContain('cloud plan');
+    });
   });
 
   it('builds nothing with --skip-images, and stops at the plan with --plan-only', () => {
