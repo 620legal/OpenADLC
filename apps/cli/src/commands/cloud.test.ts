@@ -21,6 +21,7 @@ import {
   pinNamePrefix,
   postApplySteps,
   remoteTfVars,
+  terraformProblem,
   tfVars,
   writeCloudFiles,
   type CloudConfig,
@@ -384,5 +385,24 @@ describe('what configure offers a new install', () => {
       region: undefined,
       consoleMembers: undefined,
     });
+  });
+});
+
+describe('the terraform a plan or an apply runs', () => {
+  const answer = (code: number, stdout: string) => ({ code, stdout, stderr: '' });
+
+  it('takes Terraform 1.6 or later', () => {
+    expect(terraformProblem(answer(0, '{"terraform_version":"1.6.0","platform":"linux_amd64"}'))).toBeNull();
+    expect(terraformProblem(answer(0, '{"terraform_version":"1.12.2"}'))).toBeNull();
+  });
+
+  it("refuses Cloud Shell's placeholder, which prints how to install Terraform and exits 0", () => {
+    const placeholder = '\n  Follow the instructions at https://developer.hashicorp.com/terraform/install to install terraform, or run the commands below:\n';
+    expect(terraformProblem(answer(0, placeholder))).toMatch(/not Terraform.*infra\/gcp\/install\.sh/);
+  });
+
+  it('refuses a Terraform older than the module needs, and says when there is none', () => {
+    expect(terraformProblem(answer(0, '{"terraform_version":"1.5.7"}'))).toMatch(/Terraform 1\.5\.7/);
+    expect(terraformProblem(answer(127, ''))).toMatch(/not installed/);
   });
 });

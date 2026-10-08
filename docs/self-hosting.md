@@ -2028,7 +2028,12 @@ egress allowlist, and IAP in front of the console.
 
 **In one command:** [`infra/gcp/install.sh`](../infra/gcp/install.sh), from
 Cloud Shell or any machine with gcloud, does everything below up to and
-including the apply: it checks gcloud's and Terraform's sign-ins, creates the
+including the apply: it checks gcloud's and Terraform's sign-ins, installs
+Terraform 1.6 or later into `~/.local/bin` from releases.hashicorp.com when
+there is none (checked against the release's SHA256SUMS; Cloud Shell's own
+`terraform` is only a placeholder that prints install instructions, and
+`fleetadlc cloud plan` and `apply` refuse it; set `OPENADLC_TERRAFORM_VERSION`
+to choose the version, or Homebrew installs it on a Mac), creates the
 project on a billing account if asked (`--billing-account`), builds the four
 images on Cloud Build ([`cloudbuild.yaml`](../infra/gcp/cloudbuild.yaml)), as a
 service account of the install's own that may push to the `fleetadlc`
