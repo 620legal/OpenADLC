@@ -144,10 +144,23 @@ ensure_tools() {
 
 # --- Google Cloud account and project ----------------------------------------
 
+# Cloud Shell sets CLOUD_SHELL=true in its sessions.
+in_cloud_shell() { [ "${CLOUD_SHELL:-}" = true ]; }
+
 ensure_signed_in() {
   step "Signing in to Google Cloud"
   account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -n 1 || true)"
-  if [ -z "$account" ]; then
+  if [ -z "$account" ] && in_cloud_shell; then
+    # A new Cloud Shell session has no account until the person clicks
+    # Authorize on the browser's prompt, which the first call that needs a
+    # credential raises and waits on. `gcloud auth login` there only asks
+    # whether to sign in again although "already authenticated", and a no
+    # stopped the install.
+    note "Cloud Shell asks for your permission in the browser: click Authorize there"
+    gcloud auth print-access-token >/dev/null 2>&1 || true
+    account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -n 1 || true)"
+    [ -n "$account" ] || [ "$dry_run" = 1 ] || die "Cloud Shell has no Google account to act as. Click Authorize on its prompt (reload the page if there is none), then run this again"
+  elif [ -z "$account" ]; then
     interactive gcloud auth login
     account="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -n 1 || true)"
   fi
@@ -156,6 +169,7 @@ ensure_signed_in() {
   # Terraform signs in with Application Default Credentials, which are not
   # gcloud's own. Cloud Shell has them; a laptop gets them once, in a browser.
   if ! gcloud auth application-default print-access-token >/dev/null 2>&1; then
+    in_cloud_shell && die "Cloud Shell has no credentials for Terraform. Click Authorize on its prompt (reload the page if there is none), then run this again"
     note "Terraform needs Application Default Credentials; a browser opens to sign in"
     interactive gcloud auth application-default login
   fi
