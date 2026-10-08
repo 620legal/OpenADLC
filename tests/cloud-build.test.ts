@@ -196,6 +196,49 @@ exit 0`,
     expect(out).not.toContain('cloud configure');
   });
 
+  describe('in a new Cloud Shell session, before Authorize was clicked', () => {
+    // gcloud has no account until the person clicks Authorize on the prompt
+    // the first credentialed call raises; `gcloud auth login` there only asks
+    // whether to sign in again, and a no stopped the install.
+    function cloudShell(authorizes: boolean): { status: number | null; out: string } {
+      const marker = join(work, 'authorized');
+      stub(
+        'gcloud',
+        `echo "gcloud $*" >> "${join(work, 'gcloud.log')}"
+case "$*" in
+  *"auth print-access-token"*) ${authorizes ? `: > "${marker}"` : 'exit 1'} ;;
+  *"auth list"*) [ -e "${marker}" ] && echo alex@example.com ;;
+  *"auth application-default"*) [ -e "${marker}" ] || exit 1 ;;
+  *"config get-value project"*) echo acme-openadlc ;;
+  *billingEnabled*) echo True ;;
+esac
+exit 0`,
+      );
+      const run = spawnSync(join(bin, 'bash'), [join(GCP, 'install.sh'), '--project', 'acme-openadlc', '--plan-only'], {
+        env: { PATH: bin, HOME: work, TERM: 'dumb', CLOUD_SHELL: 'true' },
+        encoding: 'utf8',
+      });
+      return { status: run.status, out: `${run.stdout}${run.stderr}` };
+    }
+
+    it("waits on Cloud Shell's Authorize prompt instead of asking to sign in again", () => {
+      const { out } = cloudShell(true);
+      expect(out).toContain('click Authorize there');
+      expect(out).toContain('gcloud as alex@example.com');
+      expect(out).toContain("Terraform's credentials");
+      const calls = readFileSync(join(work, 'gcloud.log'), 'utf8');
+      expect(calls).toContain('auth print-access-token');
+      expect(calls).not.toMatch(/auth (application-default )?login/);
+    });
+
+    it('stops with what to do when Authorize is not clicked', () => {
+      const { status, out } = cloudShell(false);
+      expect(status).not.toBe(0);
+      expect(out).toContain('Click Authorize on its prompt');
+      expect(readFileSync(join(work, 'gcloud.log'), 'utf8')).not.toContain('auth login');
+    });
+  });
+
   it('will not create a project without knowing whose bill it goes on', () => {
     stub(
       'gcloud',

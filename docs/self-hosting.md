@@ -2035,7 +2035,8 @@ service account of the install's own that may push to the `fleetadlc`
 repository and read its own source bucket and nothing else, then runs
 `fleetadlc cloud configure`, `plan` and, when you say so, `apply`. It asks
 before anything that costs money or cannot be undone, and it is safe to run
-again. `--skip-images` leaves out the build, `--plan-only` stops before the
+again. In a new Cloud Shell session it waits for you to click Authorize on
+Cloud Shell's prompt rather than sign you in again. `--skip-images` leaves out the build, `--plan-only` stops before the
 apply. By hand, it is:
 
 Build and push the images first. `configure` offers
