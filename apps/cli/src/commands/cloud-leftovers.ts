@@ -213,6 +213,14 @@ export function leftoversMessage(projectId: string, found: readonly Leftover[]):
  * on yet: Google can take minutes after it says it is enabled.
  */
 export function explainTerraformFailure(output: string): string | null {
+  // These two the module cannot turn on for itself: Terraform reads the project
+  // through one and turns APIs on through the other, so a plan stops on them
+  // before anything is applied, every time. Applying again does not help.
+  const bootstrap = /(cloudresourcemanager|serviceusage)\.googleapis\.com/i.exec(output);
+  if (bootstrap && /SERVICE_DISABLED|accessNotConfigured|has not been used in project/i.test(output)) {
+    const project = /in project ([a-z][a-z0-9-]{4,28}[a-z0-9])\b/i.exec(output)?.[1] ?? '<project>';
+    return `Terraform stopped because ${bootstrap[0]} is off in the project, and Terraform needs it before it can turn on the module's APIs. Run: gcloud services enable cloudresourcemanager.googleapis.com serviceusage.googleapis.com --project ${project}, then run this again (infra/gcp/install.sh does both).`;
+  }
   if (/SERVICE_DISABLED|accessNotConfigured|has not been used in project/i.test(output)) {
     return 'Terraform stopped because a Google API it needs was still being turned on: the module turns it on in the same apply, and Google can take a few minutes to finish. Run `fleetadlc cloud apply` again.';
   }

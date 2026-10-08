@@ -268,6 +268,13 @@ ensure_project() {
   fi
   ok "billing is on"
   run gcloud config set project "$project" >/dev/null 2>&1
+  # The two APIs Terraform needs before it can turn on the module's own: its
+  # plan reads the project (data "google_project") through Cloud Resource
+  # Manager, and google_project_service goes through Service Usage. A new
+  # project may have neither, and the first plan stopped with SERVICE_DISABLED,
+  # which no apply could get past, since the apply reads the project first too.
+  run gcloud services enable cloudresourcemanager.googleapis.com serviceusage.googleapis.com --project "$project"
+  ok "the APIs Terraform needs are on"
 }
 
 # --- The checkout and the CLI ------------------------------------------------

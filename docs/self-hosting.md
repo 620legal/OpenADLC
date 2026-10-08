@@ -2034,7 +2034,9 @@ there is none (checked against the release's SHA256SUMS; Cloud Shell's own
 `terraform` is only a placeholder that prints install instructions, and
 `fleetadlc cloud plan` and `apply` refuse it; set `OPENADLC_TERRAFORM_VERSION`
 to choose the version, or Homebrew installs it on a Mac), creates the
-project on a billing account if asked (`--billing-account`), builds the four
+project on a billing account if asked (`--billing-account`), turns on the two
+APIs Terraform needs before it can turn on the module's own (Cloud Resource
+Manager and Service Usage), builds the four
 images on Cloud Build ([`cloudbuild.yaml`](../infra/gcp/cloudbuild.yaml)), as a
 service account of the install's own that may push to the `fleetadlc`
 repository and read its own source bucket and nothing else, then runs
