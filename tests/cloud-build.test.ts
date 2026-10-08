@@ -285,6 +285,18 @@ exit 0`,
     });
   });
 
+  it('turns on the APIs Terraform needs before the plan, also with --skip-images', () => {
+    // A new project's first plan stopped on data "google_project" with
+    // Cloud Resource Manager off, and no apply could get past it.
+    for (const args of [[], ['--skip-images']]) {
+      const { status, out } = install(['--project', 'acme-openadlc', '--plan-only', ...args]);
+      expect(status, out).toBe(0);
+      const enable = out.indexOf('gcloud services enable cloudresourcemanager.googleapis.com serviceusage.googleapis.com --project acme-openadlc');
+      expect(enable, out).toBeGreaterThanOrEqual(0);
+      expect(enable).toBeLessThan(out.indexOf('cloud plan'));
+    }
+  });
+
   it('will not create a project without knowing whose bill it goes on', () => {
     stub(
       'gcloud',

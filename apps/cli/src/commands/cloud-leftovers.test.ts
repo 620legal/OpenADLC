@@ -144,6 +144,15 @@ describe('a Terraform failure on a name that is taken', () => {
     expect(explainTerraformFailure(output)).not.toMatch(/new Google Cloud project/);
   });
 
+  it('says how to turn on an API the module cannot turn on for itself, rather than to apply again', () => {
+    // What a plan on a new project printed, from data "google_project" "this".
+    const output =
+      'Error: Error when reading or editing Project "openadlc": googleapi: Error 403: Cloud Resource Manager API has not been used in project openadlc before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/cloudresourcemanager.googleapis.com/overview?project=openadlc then retry.\n"reason": "SERVICE_DISABLED"\n, accessNotConfigured';
+    const explained = explainTerraformFailure(output);
+    expect(explained).toContain('gcloud services enable cloudresourcemanager.googleapis.com serviceusage.googleapis.com --project openadlc');
+    expect(explained).not.toMatch(/apply` again/);
+  });
+
   it('leaves any other failure to Terraform’s own words', () => {
     expect(explainTerraformFailure('Error: Invalid value for variable "region"')).toBeNull();
   });
