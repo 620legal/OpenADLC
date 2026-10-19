@@ -2044,11 +2044,38 @@ repository and read its own source bucket and nothing else, then runs
 before anything that costs money or cannot be undone, and it is safe to run
 again. In a new Cloud Shell session it waits for you to click Authorize on
 Cloud Shell's prompt rather than sign you in again. `--skip-images` leaves out the build, `--plan-only` stops before the
-apply. By hand, it is:
+apply.
 
-Build and push the images first. `configure` offers
+`configure` asks one question: who may open the console to set the install up,
+offered as the signed-in gcloud account — Enter confirms. Everything else is
+answered before it is asked: the project and region from the script's flags or
+gcloud's own configuration, the zone from the region, the images from the
+registry the script just pushed to, the first admins and operators from that
+one IAP user, and the state bucket from the project id. The GitHub organization
+and App are deliberately not asked at all: the console's walkthrough collects
+the organization and creates the App once the install is up, and the bridge
+prefers what the walkthrough stored over any install-time seed. Flags answer
+anything you want differently (`fleetadlc cloud configure --help` lists them).
+
+The console's domain defaults to the install's own address: the module reserves
+the load balancer's IP and, when `console_domain` is empty, serves the console
+on `<console_ip>.nip.io` — a public wildcard DNS that resolves any
+`<ip>.nip.io` name to `<ip>` — so the managed certificate is issued and IAP
+works right after the first apply, with no DNS record of yours. nip.io is
+resolution only: traffic goes to the install's own address, and TLS is Google's
+managed certificate for that name; but it is a third party, and if it is down
+the name stops resolving, so give a production install a domain of its own —
+`--domain` at install time, or set `console_domain` in
+`$FLEETADLC_HOME/cloud.tfvars.json` later and `fleetadlc cloud apply`, then
+point an A record for it at `console_ip`. Changing the domain replaces the
+managed certificate, which takes a while to issue (minutes to an hour); the
+console is unreachable on the new name until it is.
+
+By hand, it is:
+
+Build and push the images first. `configure` uses
 `<region>-docker.pkg.dev/<project>/fleetadlc/{bridge,hostd,console,bot}:latest`
-as their names, and nothing creates that Artifact Registry repository for you:
+as their names unless the settings already name others, and nothing creates that Artifact Registry repository for you:
 the module enables the API only during its apply, and Cloud Run needs the
 images before then. Cloud Run and the host run `linux/amd64` only, so build for
 it even on an Apple-silicon Mac. The bridge and hostd are one image,
@@ -2070,7 +2097,7 @@ docker push "$REGISTRY/bot:latest"
 Then:
 
 ```bash
-fleetadlc cloud configure     # project, domain, organization, images, who may open the console, its first admins, the state bucket
+fleetadlc cloud configure     # asks who may open the console; the rest defaults, or comes from flags (--project, --region, --domain, …)
 fleetadlc cloud plan          # read it before you apply it
 fleetadlc cloud apply
 fleetadlc cloud output        # the console IP and URL, and the exact webhook URL
@@ -2111,8 +2138,9 @@ and the answers `configure` collected (`cloud.tfvars.json`, which holds the
 webhook secret) live in a bucket in the install's own project. On another
 machine, `fleetadlc cloud pull --bucket <name>` takes the install over from there;
 after a change made by hand, `fleetadlc cloud push` saves it back. Running
-`configure` again offers the install's settings as its answers, and keeps the
-webhook secret and any setting it does not ask about.
+`configure` again keeps the install's settings: its one question offers what
+the install has, a flag changes exactly the setting it names, and the webhook
+secret and everything else carry over.
 
 Bucket names are global, and the default one can be guessed from the project
 id, so `configure` and `pull` use a bucket that already exists only when it is
@@ -2124,9 +2152,9 @@ buckets update` command that makes it so. `configure` turns versioning on for
 a bucket that lacks it. `pull` checks the bucket against the project its
 settings name before it replaces this machine's.
 
-`configure` also asks where the module's alerts go: Cloud Monitoring
+Name where the module's alerts go with `configure --channels`: Cloud Monitoring
 notification channels, as `projects/<project>/notificationChannels/<id>`
-(`notification_channels`). Leave it empty and an alert notifies nobody: it only
+(`notification_channels`). Without any, an alert notifies nobody: it only
 opens an incident in the Cloud Monitoring console. Make a channel under
 Monitoring → Alerting → Edit notification channels first. The egress alert
 fires on the first minute in which the refusals, the proxy's and the
@@ -2202,10 +2230,13 @@ and deploying again makes those admins on the next request. The first visitor
 is never made admin on a cloud install: that would hand it to whoever loaded a
 page first.
 
-`fleetadlc cloud configure` asks for the first admins, offering the `user:`
-console members as the default, and warns when the answer names nobody. To
+`fleetadlc cloud configure` derives the first admins from the `user:` console
+members — on a fresh install, the one person it asked about — and warns when
+that names nobody (console access granted only to a `group:` or `domain:`). To
 change them later, edit `admin_emails` in `$FLEETADLC_HOME/cloud.tfvars.json`
 and run `fleetadlc cloud apply`, which also saves the settings to the bucket.
+The operators admitted to the terminal gateway default the same way, to the
+`user:` console members, and are edited there too (`operators`).
 
 A local install (`FLEETADLC_IDENTITY_MODE=local`) makes its first visitor the admin
 when neither list names anyone. Its identity is a header the bridge believes
@@ -2273,8 +2304,8 @@ both values and applying puts Google's managed client back.
 
 ### Deploying from GitHub Actions
 
-Set `deployer_repository` (asked by `fleetadlc cloud configure`, or added to the
-settings and saved with `fleetadlc cloud push`) to the `owner/name` of the
+Set `deployer_repository` (`fleetadlc cloud configure --deployer <owner/name>`,
+or added to the settings and saved with `fleetadlc cloud push`) to the
 repository whose workflow should roll out new images, and apply. The module
 creates a Workload Identity Federation provider and a service account that can
 push images, update the two Cloud Run services and restart hostd over IAP. No
@@ -2285,10 +2316,11 @@ The provider admits one workflow file, `deployer_workflow` (default
 the repository whose numeric id is `deployer_repository_id` and whose owner's is
 `deployer_repository_owner_id`. Another workflow in the same repository, a run
 from another branch, or a repository that took the name after a rename or a
-transfer is refused before it reaches IAM. `configure` asks for the workflow's
-path and looks the two ids up; for a private repository, which GitHub does not
-show without a sign-in, it asks for them, and
-`gh api repos/<owner>/<name> --jq '.id, .owner.id'` prints them. The module
+transfer is refused before it reaches IAM. `--deployer` takes GitHub's spelling
+of the name and looks the two ids up; for a private repository, which GitHub
+does not show without a sign-in, pass `--deployer-id` and `--deployer-owner-id`
+(`gh api repos/<owner>/<name> --jq '.id, .owner.id'` prints them), and
+`--deployer-workflow` for a workflow other than the default. The module
 refuses to plan a `deployer_repository` without its ids.
 
 **Whoever can run that workflow on that branch controls the install.** The
@@ -2360,8 +2392,10 @@ answers for any public name, and the proxy does not see them
 
 Three things stay manual, by design:
 
-- **DNS.** Point an A record for `console_domain` at `console_ip` (`fleetadlc
-  cloud output`). The managed certificate, and with it IAP and the webhook URL,
+- **DNS, only for a domain of your own.** The default install is served on
+  `<console_ip>.nip.io`, which resolves with no record of yours. Once you set
+  `console_domain`, point an A record for it at `console_ip` (`fleetadlc
+  cloud output`): the managed certificate, and with it IAP and the webhook URL,
   waits until the record resolves.
 - **Connecting the accounts.** In the console's walkthrough, at its GitHub
   accounts step, connect each bot's account; seats on a shared account join it,

@@ -4,7 +4,9 @@
     infra/gcp/install.sh --project <new-project-id>
 
   It asks before it creates the project (add --billing-account <id>), builds
-  the images on Cloud Build, or applies. It asks for the console's domain;
-  the rest has defaults. At the end: one DNS record, then the console's
-  walkthrough. infra/gcp/install.sh --help lists its options.
+  the images on Cloud Build, or applies. One question: who may open the
+  console (you, by default); the rest has defaults, and the console comes up
+  on the install's own address under nip.io (--domain for a name of yours).
+  At the end: the console's walkthrough, which sets up GitHub too.
+  infra/gcp/install.sh --help lists its options.
 

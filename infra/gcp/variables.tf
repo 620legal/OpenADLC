@@ -130,13 +130,15 @@ variable "console_image" {
 # ---------------------------------------------------------------- github
 
 variable "github_organization" {
-  description = "The organization this install serves. One install serves one organization."
+  description = "The organization this install serves. One install serves one organization. Empty on a fresh install: the console's walkthrough collects it, and the bridge prefers what the walkthrough stored over this seed."
   type        = string
+  default     = ""
 }
 
 variable "github_app_client_id" {
-  description = "Client id of the GitHub App used as the device-flow client. Not a secret, and not a credential: the refresh tokens live in Secret Manager, one per bot."
+  description = "Client id of the GitHub App used as the device-flow client. Not a secret, and not a credential: the refresh tokens live in Secret Manager, one per bot. Empty on a fresh install: the console's walkthrough creates the app and stores the id, which wins over this seed."
   type        = string
+  default     = ""
 }
 
 # ---------------------------------------------------------------- people
@@ -160,8 +162,9 @@ variable "webhook_secret" {
 }
 
 variable "console_domain" {
-  description = "The domain the console is served on, for the load balancer's managed certificate. Required: IAP needs an HTTPS load balancer, and a managed certificate needs a name to be issued for. Point an A record for it at the `console_ip` output (`fleetadlc cloud output`) once the module has applied."
+  description = "The domain the console is served on, for the load balancer's managed certificate: IAP needs an HTTPS load balancer, and a managed certificate needs a name to be issued for. Empty, the console is served on the install's own address under nip.io — a public wildcard DNS that resolves <console_ip>.nip.io to console_ip — so the certificate is issued and IAP works with no DNS record on day one. For a domain of your own, set it here and apply, then point an A record for it at the `console_ip` output (`fleetadlc cloud output`); changing it replaces the managed certificate, which takes time to issue."
   type        = string
+  default     = ""
 }
 
 variable "console_members" {
@@ -225,7 +228,7 @@ variable "notification_channels" {
 # ---------------------------------------------------------------- deploying
 
 variable "deployer_repository" {
-  description = "A GitHub repository (owner/name) whose workflow may roll new images out to this install, through Workload Identity Federation. Spelled exactly as GitHub spells it, capitals included: the token's claim is compared as a string, and `fleetadlc cloud configure` asks GitHub for the spelling. Empty: none may."
+  description = "A GitHub repository (owner/name) whose workflow may roll new images out to this install, through Workload Identity Federation. Spelled exactly as GitHub spells it, capitals included: the token's claim is compared as a string, and `fleetadlc cloud configure --deployer` asks GitHub for the spelling. Empty: none may."
   type        = string
   default     = ""
 

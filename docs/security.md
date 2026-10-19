@@ -1535,7 +1535,7 @@ first minute in which the refusals, the proxy's and the firewall's added
 together, exceed `egress_denial_rate_threshold` (an `infra/gcp` variable,
 default 5). A rise is worth looking at, because a bot has no legitimate reason
 to develop new destinations. The alert goes to the module's
-`notification_channels`, which `fleetadlc cloud configure` asks for; with none,
+`notification_channels` (`fleetadlc cloud configure --channels`); with none,
 it notifies nobody and only opens an incident in the Cloud Monitoring console.
 
 Some refusals are the allowlist working, and are never a reason to widen it:

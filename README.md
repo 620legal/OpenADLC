@@ -139,8 +139,10 @@ curl -fsSL https://raw.githubusercontent.com/620legal/OpenADLC/main/infra/gcp/in
 ```
 
 It asks before it creates the project (`--billing-account`), builds or
-applies, and asks you only for the console's domain. Then point one DNS record
-at the address it prints, and the console's walkthrough does the rest. See
+applies, and asks you only to confirm who may open the console — you. The
+console comes up on the install's own address (under nip.io, so no DNS record
+is needed; `--domain` serves it on a name of yours instead), and its
+walkthrough does the rest, GitHub included. See
 [Installing on a cloud](docs/self-hosting.md#installing-on-a-cloud).
 
 ## The crew

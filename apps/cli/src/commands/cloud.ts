@@ -186,13 +186,93 @@ export function configureDefaults(env: Readonly<Record<string, string | undefine
   projectId?: string;
   region?: string;
   consoleMembers?: string;
+  domain?: string;
 } {
   const value = (name: string): string | undefined => env[name]?.trim() || undefined;
   return {
     projectId: value('FLEETADLC_CLOUD_PROJECT'),
     region: value('FLEETADLC_CLOUD_REGION'),
     consoleMembers: value('FLEETADLC_CLOUD_CONSOLE_MEMBERS'),
+    domain: value('FLEETADLC_CLOUD_DOMAIN'),
   };
+}
+
+/** The flags `configure` takes in place of the questions it used to ask. */
+export interface ConfigureFlags {
+  project?: string;
+  region?: string;
+  zone?: string;
+  domain?: string;
+  organization?: string;
+  clientId?: string;
+  members?: string;
+  deployer?: string;
+  deployerWorkflow?: string;
+  deployerId?: string;
+  deployerOwnerId?: string;
+  channels?: string;
+}
+
+/**
+ * Every answer `configure` no longer asks for. A flag wins, then the install's
+ * own settings, then what infra/gcp/install.sh found (`configureDefaults`),
+ * then gcloud's own configuration; what none of them name is the module's to
+ * default. `configure` used to ask about ten questions, and for a first-time
+ * install every one of them already had its answer somewhere on this list —
+ * the GitHub pair is deliberately empty, because the console's walkthrough
+ * collects the organization and creates the app, and the bridge prefers what
+ * the walkthrough stored over these seeds.
+ */
+export function settledAnswers(
+  flags: ConfigureFlags,
+  existing: Record<string, unknown> | undefined,
+  offered: ReturnType<typeof configureDefaults>,
+  gcloud: { project?: string; account?: string },
+): {
+  projectId: string | null;
+  region: string;
+  zone: string;
+  organization: string;
+  githubClientId: string;
+  humans: string[];
+  consoleDomain: string;
+  /** `--members`, which answers the one question without asking it. */
+  membersGiven: string | null;
+  membersDefault?: string;
+  notificationChannels: string[];
+} {
+  const region = flags.region ?? shown(existing, 'region') ?? offered.region ?? 'us-central1';
+  // A kept zone has to be in the settled region: `--region` on an install
+  // whose settings name a zone elsewhere would otherwise plan a host in a
+  // zone the region does not have.
+  const keptZone = shown(existing, 'zone');
+  const membersDefault =
+    shown(existing, 'console_members') ?? offered.consoleMembers ?? (gcloud.account ? `user:${gcloud.account}` : undefined);
+  return {
+    projectId: flags.project ?? shown(existing, 'project_id') ?? offered.projectId ?? gcloud.project ?? null,
+    region,
+    zone: flags.zone ?? (keptZone?.startsWith(`${region}-`) ? keptZone : `${region}-a`),
+    organization: flags.organization ?? shown(existing, 'github_organization') ?? '',
+    githubClientId: flags.clientId ?? shown(existing, 'github_app_client_id') ?? '',
+    humans: list(shown(existing, 'humans') ?? ''),
+    // Empty is not "no console": the module serves it on the install's own
+    // address under nip.io until a domain of the operator's own is set.
+    consoleDomain: flags.domain ?? shown(existing, 'console_domain') ?? offered.domain ?? '',
+    membersGiven: flags.members ?? null,
+    ...(membersDefault ? { membersDefault } : {}),
+    notificationChannels: list(flags.channels ?? shown(existing, 'notification_channels') ?? ''),
+  };
+}
+
+/**
+ * Who may take over a terminal when nobody is named: the console members that
+ * are people. On a fresh install that is the one person setting it up, which
+ * is who a take-over is for; a `group:` or `domain:` member is not carried
+ * over, because take-over is a shell inside a bot's computer and a group is
+ * wider than the list that may merely read the board should ever be.
+ */
+export function defaultOperators(members: string[]): string[] {
+  return members.filter((member) => member.startsWith('user:'));
 }
 
 function shown(existing: Record<string, unknown> | undefined, key: string): string | undefined {
@@ -262,9 +342,11 @@ export function remoteTfVars(backend: CloudBackend): string {
  * to the wrong secret store and probed the wrong install. The console does
  * all three.
  */
-export function postApplySteps(settingsPath: string): string[] {
+export function postApplySteps(settingsPath: string, consoleDomain = ''): string[] {
   return [
-    'point DNS for the console domain at console_ip (fleetadlc cloud output)',
+    consoleDomain
+      ? 'point DNS for the console domain at console_ip (fleetadlc cloud output)'
+      : `open the console at console_url (fleetadlc cloud output): it is served on the install’s own address under nip.io, so no DNS record is needed. For a domain of your own, set "console_domain" in ${settingsPath}, run fleetadlc cloud apply, then point an A record for it at console_ip`,
     'connect the bots’ GitHub accounts in the console’s walkthrough, at its GitHub accounts step (GitHub needs a person at a browser), or restore a backup in its first step, taking over the sign-ins',
     `an app created from the console already delivers here, with the secret it stored: leave its webhook alone. After a restore, or for an app made by hand, use the console’s webhook step, which sets one secret on both sides. Only for an app made by hand on a fresh install, point the GitHub App’s webhook (on the app’s settings page) at webhook_url (fleetadlc cloud output), with the webhook_secret in ${settingsPath} as its secret. The console’s webhook card shows whether a delivery arrived`,
     'check the install on the console’s health cards and its walkthrough',
@@ -433,6 +515,17 @@ async function capture(command: string, args: string[], cwd?: string): Promise<G
 }
 
 /**
+ * One of gcloud's configured values — the project, the signed-in account — or
+ * undefined when gcloud is missing, not signed in, or has none set. gcloud
+ * prints `(unset)` for a property with no value, which is not an answer.
+ */
+async function gcloudConfigValue(name: string): Promise<string | undefined> {
+  const asked = await capture('gcloud', ['config', 'get-value', name]);
+  const value = asked.stdout.trim();
+  return asked.code === 0 && value && value !== '(unset)' ? value : undefined;
+}
+
+/**
  * Runs a command with its output shown as it comes, and keeps the end of it,
  * so a Terraform failure can be said in words after Terraform has said it.
  */
@@ -598,7 +691,7 @@ export async function afterTerraform(
   }
 
   if (code === 0 && action === 'apply') {
-    const steps = postApplySteps(tfVarsPath());
+    const steps = postApplySteps(tfVarsPath(), typeof settled.console_domain === 'string' ? settled.console_domain : '');
     if (resetMissed) steps.unshift(resetMissed);
     ui.plain();
     ui.heading('Still to do by hand');
@@ -611,7 +704,7 @@ export async function afterTerraform(
 export async function cloud(
   config: InstallConfig,
   action: string | undefined,
-  options: { provider?: string; bucket?: string; prefix?: string },
+  options: { provider?: string; bucket?: string; prefix?: string } & ConfigureFlags,
 ): Promise<void> {
   const provider = (options.provider ?? 'gcp') as Provider;
   if (!PROVIDERS.includes(provider)) {
@@ -632,86 +725,101 @@ export async function cloud(
     case 'configure': {
       ui.heading(`Configure the ${provider} install`);
       ensureHome();
-      // What the install already has is each question's default, so a run to
-      // change one setting changes only that one.
+      // What the install already has carries over, so a run to change one
+      // setting changes only that one.
       const existing = await existingSettings();
       const saved = readBackend();
-      if (existing) ui.note('this install’s settings are the defaults; the webhook secret and anything not asked here are kept');
+      if (existing) ui.note('this install’s settings are kept; the one question offers what it has now');
       const offered = configureDefaults(process.env);
-      const projectId = await askRequired(prompt, 'project id, a new project for this install only', shown(existing, 'project_id') ?? offered.projectId);
-      const region = await prompt('region', shown(existing, 'region') ?? offered.region ?? 'us-central1');
-      const zone = await prompt('zone', shown(existing, 'zone') ?? `${region}-a`);
-      const organization = await prompt(
-        'GitHub organization (or user) this install serves',
-        shown(existing, 'github_organization') ?? config.organization,
+      // gcloud is asked only for what nothing else answered: on a laptop
+      // without it, a flag or install.sh's seeds are still a complete answer.
+      const gcloudProject =
+        (options.project ?? shown(existing, 'project_id') ?? offered.projectId) === undefined ? await gcloudConfigValue('project') : undefined;
+      const gcloudAccount =
+        (options.members ?? shown(existing, 'console_members') ?? offered.consoleMembers) === undefined
+          ? await gcloudConfigValue('account')
+          : undefined;
+      const answers = settledAnswers(options, existing, offered, {
+        ...(gcloudProject ? { project: gcloudProject } : {}),
+        ...(gcloudAccount ? { account: gcloudAccount } : {}),
+      });
+      const projectId = answers.projectId;
+      if (!projectId) {
+        ui.fail('name the project: fleetadlc cloud configure --project <id>. Use a new one, for this install only (docs/self-hosting.md#one-install-per-project)');
+        process.exitCode = 1;
+        return;
+      }
+      const { region, zone, consoleDomain } = answers;
+
+      // The one question a first-time install is asked. Everything else has an
+      // answer already: the flags, the install's settings, install.sh's seeds,
+      // gcloud, or the module's defaults.
+      const consoleMembers = list(
+        answers.membersGiven ??
+          (await askRequired(
+            prompt,
+            'who may open the console to set this install up, e.g. user:you@example.com',
+            answers.membersDefault,
+          )),
       );
-      const githubClientId = await prompt('GitHub App client id', shown(existing, 'github_app_client_id') ?? config.githubClientId);
-      const humans = await prompt(
-        'GitHub logins that may answer gates, comma-separated',
-        shown(existing, 'humans') ?? config.humans.join(','),
-      );
-      const consoleDomain = await askRequired(prompt, 'the console’s domain, e.g. fleetadlc.example.com', shown(existing, 'console_domain'));
+      // Derived for a new install; an install that has them keeps them, since
+      // nothing here asks about them any more. Both are edited in the settings
+      // file (and the console's Settings → Users, once it is up).
+      const adminEmails = existing ? list(shown(existing, 'admin_emails') ?? '') : consoleUsers(consoleMembers);
+      const operators = existing ? list(shown(existing, 'operators') ?? '') : defaultOperators(consoleMembers);
+
       const registry = `${region}-docker.pkg.dev/${projectId}/fleetadlc`;
-      const bridgeImage = await prompt('bridge image', shown(existing, 'bridge_image') ?? `${registry}/bridge:latest`);
-      const consoleImage = await prompt('console image', shown(existing, 'console_image') ?? `${registry}/console:latest`);
-      const hostdImage = await prompt('hostd image', shown(existing, 'hostd_image') ?? `${registry}/hostd:latest`);
-      // Built by infra/local/build-bot-image.sh, which is also what a laptop
+      // The registry infra/gcp/install.sh just pushed to. The bot image is
+      // built by infra/local/build-bot-image.sh, which is also what a laptop
       // builds from — the pinned engine CLIs live there, in one place, so the
       // two installs cannot end up running different bots.
-      const botImage = await prompt('bot image', shown(existing, 'bot_image') ?? `${registry}/bot:latest`);
-      const consoleMembers = await askRequired(
-        prompt,
-        'who may open the console, e.g. user:alice@example.com,group:eng@example.com',
-        shown(existing, 'console_members') ?? offered.consoleMembers,
-      );
-      const adminEmails = list(
-        await prompt(
-          'the console’s first admins, as emails, comma-separated',
-          shown(existing, 'admin_emails') ?? consoleUsers(list(consoleMembers)).join(','),
-        ),
-      );
-      const operators = await prompt('who may take over a terminal, a shorter list than the last', shown(existing, 'operators'));
-      const typedDeployer = await prompt(
-        'a GitHub repository whose workflow may deploy here, as owner/name; empty for none',
-        shown(existing, 'deployer_repository'),
-      );
-      let deployerRepository = typedDeployer;
-      let deployerRepositoryId: string | undefined;
-      let deployerRepositoryOwnerId: string | undefined;
-      let deployerWorkflow: string | undefined;
-      if (typedDeployer) {
-        const canonical = await canonicalRepository(typedDeployer);
+      const bridgeImage = shown(existing, 'bridge_image') ?? `${registry}/bridge:latest`;
+      const consoleImage = shown(existing, 'console_image') ?? `${registry}/console:latest`;
+      const hostdImage = shown(existing, 'hostd_image') ?? `${registry}/hostd:latest`;
+      const botImage = shown(existing, 'bot_image') ?? `${registry}/bot:latest`;
+
+      // Only `--deployer` touches the deployer settings; without it an
+      // install's existing ones carry over untouched through configuredVars.
+      let deployerRepository = shown(existing, 'deployer_repository');
+      let deployerRepositoryId = shown(existing, 'deployer_repository_id');
+      let deployerRepositoryOwnerId = shown(existing, 'deployer_repository_owner_id');
+      let deployerWorkflow = shown(existing, 'deployer_workflow');
+      if (options.deployer) {
+        const canonical = await canonicalRepository(options.deployer);
         deployerRepository = canonical.name;
         if (!canonical.checked) {
           ui.warn(
-            `GitHub did not show ${typedDeployer} without a sign-in, so it is kept as typed. Its spelling has to match GitHub's exactly, capitals included, or every deploy is refused.`,
+            `GitHub did not show ${options.deployer} without a sign-in, so it is kept as typed. Its spelling has to match GitHub's exactly, capitals included, or every deploy is refused.`,
           );
-        } else if (canonical.name !== typedDeployer) {
+        } else if (canonical.name !== options.deployer) {
           ui.ok(`GitHub spells it ${canonical.name}; using that`);
         }
         // Whoever can run this one workflow on the deployer branch controls
         // the install; no other workflow in the repository is admitted.
-        deployerWorkflow = await prompt(
-          'the workflow file that may deploy, in that repository',
-          shown(existing, 'deployer_workflow') ?? DEFAULT_DEPLOYER_WORKFLOW,
-        );
-        deployerRepositoryId = canonical.id;
-        deployerRepositoryOwnerId = canonical.ownerId;
+        deployerWorkflow = options.deployerWorkflow ?? deployerWorkflow ?? DEFAULT_DEPLOYER_WORKFLOW;
+        deployerRepositoryId = canonical.id ?? options.deployerId ?? deployerRepositoryId;
+        deployerRepositoryOwnerId = canonical.ownerId ?? options.deployerOwnerId ?? deployerRepositoryOwnerId;
         if (!deployerRepositoryId || !deployerRepositoryOwnerId) {
           // A private repository is a 404 without a sign-in.
-          ui.note(`its ids, which the deploy is admitted by: gh api repos/${deployerRepository} --jq '.id, .owner.id'`);
-          deployerRepositoryId = await prompt('the repository’s numeric id', shown(existing, 'deployer_repository_id'));
-          deployerRepositoryOwnerId = await prompt('its owner’s numeric id', shown(existing, 'deployer_repository_owner_id'));
+          ui.fail(
+            `GitHub did not show ${deployerRepository}'s ids, which the deploy is admitted by. Pass --deployer-id and --deployer-owner-id; they are printed by: gh api repos/${deployerRepository} --jq '.id, .owner.id'`,
+          );
+          process.exitCode = 1;
+          return;
         }
+      } else if (options.deployerWorkflow && deployerRepository) {
+        deployerWorkflow = options.deployerWorkflow;
       }
-      // Without one, an alert opens an incident in the Cloud Monitoring
-      // console and tells nobody.
-      const notificationChannels = await prompt(
-        'Cloud Monitoring notification channels for the alerts, as projects/<project>/notificationChannels/<id>,…; empty for none',
-        shown(existing, 'notification_channels'),
-      );
-      const bucket = await prompt('bucket for the state and these settings', saved?.bucket ?? `${projectId}-fleetadlc-tfstate`);
 
+      ui.step(`project ${projectId}, region ${region}, zone ${zone}`);
+      ui.step(
+        consoleDomain
+          ? `console domain ${consoleDomain}`
+          : 'console domain: the install’s own address under nip.io — set one of your own with --domain, or later in the settings',
+      );
+      ui.step('GitHub organization and app: the console’s walkthrough sets them up once the install is running');
+
+      const bucket = options.bucket ?? saved?.bucket ?? `${projectId}-fleetadlc-tfstate`;
       // An install pulled from before the rename keeps its state under `fleet`.
       const backend = { bucket, prefix: saved?.prefix ?? 'fleetadlc' };
       if (!(await ensureBucket(backend, projectId, region))) {
@@ -727,22 +835,26 @@ export async function cloud(
           projectId,
           region,
           zone,
-          organization,
-          githubClientId,
-          humans: list(humans),
+          organization: answers.organization,
+          githubClientId: answers.githubClientId,
+          humans: answers.humans,
           consoleDomain,
           bridgeImage,
           consoleImage,
           hostdImage,
           botImage,
-          consoleMembers: list(consoleMembers),
+          consoleMembers,
           adminEmails,
-          operators: list(operators),
-          deployerRepository,
-          deployerRepositoryId,
-          deployerRepositoryOwnerId,
-          deployerWorkflow,
-          notificationChannels: list(notificationChannels),
+          operators,
+          ...(deployerRepository
+            ? {
+                deployerRepository,
+                ...(deployerRepositoryId ? { deployerRepositoryId } : {}),
+                ...(deployerRepositoryOwnerId ? { deployerRepositoryOwnerId } : {}),
+                ...(deployerWorkflow ? { deployerWorkflow } : {}),
+              }
+            : {}),
+          notificationChannels: answers.notificationChannels,
         },
         config.ports.hostd,
         () => randomBytes(32).toString('hex'),

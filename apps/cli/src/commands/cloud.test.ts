@@ -13,6 +13,7 @@ import {
   configuredVars,
   consoleUsers,
   DEFAULT_DEPLOYER_WORKFLOW,
+  defaultOperators,
   hostNeedsReset,
   hostResetArgs,
   LEGACY_NAME_PREFIX,
@@ -21,6 +22,7 @@ import {
   pinNamePrefix,
   postApplySteps,
   remoteTfVars,
+  settledAnswers,
   terraformProblem,
   tfVars,
   writeCloudFiles,
@@ -73,7 +75,7 @@ describe('what is left by hand after an apply', () => {
     // It pointed at `bridge_url`, the internal Cloud Run address, which GitHub
     // cannot reach: a webhook set there delivered nothing, and the board
     // stayed empty.
-    const steps = postApplySteps('/home/ada/.fleetadlc/cloud.tfvars.json').join('\n');
+    const steps = postApplySteps('/home/ada/.fleetadlc/cloud.tfvars.json', 'fleetadlc.example.com').join('\n');
     expect(steps).toContain('webhook_url');
     expect(steps).toContain('GitHub App’s webhook');
     expect(steps).toContain('webhook_secret in /home/ada/.fleetadlc/cloud.tfvars.json');
@@ -82,15 +84,30 @@ describe('what is left by hand after an apply', () => {
   });
 
   it('tells the operator to run nothing on the host, which has no fleetadlc', () => {
-    const steps = postApplySteps('/home/ada/.fleetadlc/cloud.tfvars.json');
-    for (const step of steps) {
-      expect(step).not.toMatch(/fleetadlc (auth|doctor|github|restore)/);
-      expect(step).not.toMatch(/on the host/i);
+    for (const domain of ['fleetadlc.example.com', '']) {
+      const steps = postApplySteps('/home/ada/.fleetadlc/cloud.tfvars.json', domain);
+      for (const step of steps) {
+        expect(step).not.toMatch(/fleetadlc (auth|doctor|github|restore)/);
+        expect(step).not.toMatch(/on the host/i);
+      }
+      const text = steps.join('\n');
+      expect(text).toContain('GitHub accounts step');
+      expect(text).toContain('health cards');
+      expect(text).toContain('webhook card');
     }
-    const text = steps.join('\n');
-    expect(text).toContain('GitHub accounts step');
-    expect(text).toContain('health cards');
-    expect(text).toContain('webhook card');
+  });
+
+  it('asks for a DNS record only when the operator named a domain', () => {
+    // With no domain the console is on the install's own address under nip.io,
+    // which resolves with no record of theirs: a DNS step would be a lie.
+    const named = postApplySteps('/home/ada/.fleetadlc/cloud.tfvars.json', 'fleetadlc.example.com')[0];
+    expect(named).toContain('point DNS');
+    expect(named).toContain('console_ip');
+    const defaulted = postApplySteps('/home/ada/.fleetadlc/cloud.tfvars.json')[0];
+    expect(defaulted).toContain('nip.io');
+    expect(defaulted).toContain('console_url');
+    expect(defaulted).toContain('"console_domain" in /home/ada/.fleetadlc/cloud.tfvars.json');
+    expect(defaulted).not.toMatch(/^point DNS/);
   });
 });
 
@@ -283,17 +300,17 @@ describe('what configure writes on a machine with no install', () => {
 
 describe('a cloud configure question that needs an answer', () => {
   // The example sat in parentheses, where prompt() shows a default, and Enter
-  // wrote an empty console domain into the settings.
+  // wrote an empty answer into the settings.
   it('is asked again until it has one, and takes a default when there is one', async () => {
-    const answers = ['', '  ', 'fleetadlc.example.com'];
+    const answers = ['', '  ', 'user:ada@example.com'];
     const asked: string[] = [];
     const ask = async (question: string, fallback?: string) => {
       asked.push(question);
       return answers.shift() || fallback || '';
     };
-    expect(await askRequired(ask, 'the console’s domain, e.g. fleetadlc.example.com')).toBe('fleetadlc.example.com');
+    expect(await askRequired(ask, 'who may open the console, e.g. user:you@example.com')).toBe('user:ada@example.com');
     expect(asked).toHaveLength(3);
-    expect(await askRequired(async (_question, fallback) => fallback ?? '', 'project id', 'exampleco-fleetadlc')).toBe('exampleco-fleetadlc');
+    expect(await askRequired(async (_question, fallback) => fallback ?? '', 'who may open the console', 'user:ada@example.com')).toBe('user:ada@example.com');
   });
 });
 
@@ -369,14 +386,20 @@ describe('the host after an apply', () => {
 });
 
 describe('what configure offers a new install', () => {
-  it('takes the project, region and console members infra/gcp/install.sh found', () => {
+  it('takes the project, region, console members and domain infra/gcp/install.sh found', () => {
     expect(
       configureDefaults({
         FLEETADLC_CLOUD_PROJECT: 'acme-openadlc',
         FLEETADLC_CLOUD_REGION: 'europe-west1',
         FLEETADLC_CLOUD_CONSOLE_MEMBERS: 'user:alex@example.com',
+        FLEETADLC_CLOUD_DOMAIN: 'openadlc.example.com',
       }),
-    ).toEqual({ projectId: 'acme-openadlc', region: 'europe-west1', consoleMembers: 'user:alex@example.com' });
+    ).toEqual({
+      projectId: 'acme-openadlc',
+      region: 'europe-west1',
+      consoleMembers: 'user:alex@example.com',
+      domain: 'openadlc.example.com',
+    });
   });
 
   it('offers nothing it was not given, so a blank does not become an answer', () => {
@@ -384,7 +407,96 @@ describe('what configure offers a new install', () => {
       projectId: undefined,
       region: undefined,
       consoleMembers: undefined,
+      domain: undefined,
     });
+  });
+});
+
+describe('the answers configure no longer asks for', () => {
+  const existing = {
+    project_id: 'held-project',
+    region: 'europe-west1',
+    zone: 'europe-west1-b',
+    github_organization: 'held-org',
+    github_app_client_id: 'Iv1.held',
+    humans: ['ada', 'grace'],
+    console_domain: 'held.example.com',
+    console_members: ['user:held@example.com'],
+    notification_channels: ['projects/p/notificationChannels/1'],
+  };
+
+  it('leaves a fresh install with one question, whose default is the signed-in gcloud account', () => {
+    const answers = settledAnswers({}, undefined, {}, { project: 'gcloud-project', account: 'ada@example.com' });
+    expect(answers).toEqual({
+      projectId: 'gcloud-project',
+      region: 'us-central1',
+      zone: 'us-central1-a',
+      organization: '',
+      githubClientId: '',
+      humans: [],
+      consoleDomain: '',
+      membersGiven: null,
+      membersDefault: 'user:ada@example.com',
+      notificationChannels: [],
+    });
+  });
+
+  it('refuses nothing itself: a project nobody named is null, for configure to say so', () => {
+    expect(settledAnswers({}, undefined, {}, {}).projectId).toBeNull();
+    expect(settledAnswers({}, undefined, {}, {}).membersDefault).toBeUndefined();
+  });
+
+  it('takes a flag over the install’s settings, and the settings over install.sh’s seeds', () => {
+    const offered = { projectId: 'seeded', region: 'us-east1', consoleMembers: 'user:seed@example.com', domain: 'seed.example.com' };
+    const kept = settledAnswers({}, existing, offered, { project: 'gcloud-project', account: 'g@example.com' });
+    expect(kept.projectId).toBe('held-project');
+    expect(kept.region).toBe('europe-west1');
+    expect(kept.zone).toBe('europe-west1-b');
+    expect(kept.organization).toBe('held-org');
+    expect(kept.consoleDomain).toBe('held.example.com');
+    expect(kept.membersDefault).toBe('user:held@example.com');
+    expect(kept.humans).toEqual(['ada', 'grace']);
+    expect(kept.notificationChannels).toEqual(['projects/p/notificationChannels/1']);
+
+    const flagged = settledAnswers(
+      { project: 'flagged', region: 'asia-east1', domain: 'flag.example.com', members: 'user:flag@example.com', organization: 'flag-org' },
+      existing,
+      offered,
+      {},
+    );
+    expect(flagged.projectId).toBe('flagged');
+    expect(flagged.region).toBe('asia-east1');
+    // The zone follows the flagged region rather than keeping the old one's.
+    expect(flagged.zone).toBe('asia-east1-a');
+    expect(flagged.consoleDomain).toBe('flag.example.com');
+    expect(flagged.organization).toBe('flag-org');
+    expect(flagged.membersGiven).toBe('user:flag@example.com');
+  });
+
+  it('writes the GitHub pair and the domain empty on a fresh install, for onboarding and nip.io to fill', () => {
+    const answers = settledAnswers({}, undefined, { projectId: 'p', region: 'us-central1' }, {});
+    const vars = tfVars(
+      {
+        ...cloud,
+        organization: answers.organization,
+        githubClientId: answers.githubClientId,
+        consoleDomain: answers.consoleDomain,
+        humans: answers.humans,
+      },
+      47312,
+    );
+    expect(vars).toMatchObject({ github_organization: '', github_app_client_id: '', console_domain: '', humans: [] });
+  });
+
+  it('clears the domain back to the nip.io default with an empty --domain, over kept settings', () => {
+    expect(settledAnswers({ domain: '' }, existing, {}, {}).consoleDomain).toBe('');
+  });
+});
+
+describe('who may take over a terminal when nobody is named', () => {
+  it('is the console members that are people, never a group or a domain', () => {
+    expect(defaultOperators(['user:ada@example.com', 'group:eng@example.com', 'domain:example.com'])).toEqual(['user:ada@example.com']);
+    expect(defaultOperators(['group:eng@example.com'])).toEqual([]);
   });
 });
 

@@ -13,10 +13,14 @@
 #   3. builds the four images on Cloud Build, as a service account of the
 #      install's own, into the project's Artifact Registry. Nothing is built on
 #      this machine and Docker is not needed;
-#   4. runs `fleetadlc cloud configure` with the project, region and you as its
-#      answers' defaults; it asks for the console's domain;
+#   4. runs `fleetadlc cloud configure`, which asks one thing: who may open the
+#      console to set the install up (you, by default — Enter confirms). The
+#      console is served on the install's own address under nip.io unless you
+#      name a domain (--domain, or later in the install's settings), and GitHub
+#      is set up afterwards in the console's walkthrough;
 #   5. runs `fleetadlc cloud plan`, then, once you say so, `apply`;
-#   6. prints what is left: one DNS record, then the console's walkthrough.
+#   6. prints what is left: the console's walkthrough (and one DNS record, only
+#      if you named a domain of your own).
 #
 # Run it again at any time, from this machine or another: the install's settings
 # are taken from its bucket first, so configure offers them as the answers, and
@@ -25,6 +29,8 @@
 # Options (piped, after `bash -s --`):
 #   --project <id>           the project, a new one for this install only (default: gcloud's)
 #   --region <region>        default us-central1
+#   --domain <name>          serve the console on this domain of yours
+#                            (default: the install's own address under nip.io)
 #   --billing-account <id>   create the project if it does not exist, on this billing account
 #   --dir <path>             where the checkout goes (default ~/OpenADLC, or the checkout this script is in)
 #   --ref <branch>           the branch or tag to check out (default main)
@@ -45,6 +51,7 @@ HELP='Installs OpenADLC on Google Cloud.
 
   --project <id>           the project, a new one for this install only (default: gcloud'"'"'s)
   --region <region>        default us-central1
+  --domain <name>          serve the console on this domain of yours (default: the install'"'"'s own address under nip.io)
   --billing-account <id>   create the project if it does not exist, on this billing account
   --dir <path>             where the checkout goes (default ~/OpenADLC, or the checkout this script is in)
   --ref <branch>           the branch or tag to check out (default main)
@@ -435,13 +442,14 @@ main() {
   repo_url="${OPENADLC_REPO:-https://github.com/620legal/OpenADLC.git}"
   ref="${OPENADLC_REF:-main}"
   dir="${OPENADLC_DIR:-}"
-  project='' region=us-central1 billing_account='' account='' existing=0
+  project='' region=us-central1 domain='' billing_account='' account='' existing=0
   assume_yes=0 dry_run=0 skip_images=0 plan_only=0
 
   while [ $# -gt 0 ]; do
     case "$1" in
       --project) project="${2:?--project needs an id}"; shift 2 ;;
       --region) region="${2:?--region needs a region}"; shift 2 ;;
+      --domain) domain="${2:?--domain needs a name}"; shift 2 ;;
       --billing-account) billing_account="${2:?--billing-account needs an id}"; shift 2 ;;
       --dir) dir="${2:?--dir needs a path}"; shift 2 ;;
       --ref) ref="${2:?--ref needs a branch or tag}"; shift 2 ;;
@@ -464,13 +472,16 @@ main() {
   settle_settings
   step "Configuring the install"
   if [ "$existing" = 1 ]; then
-    say "  Each question offers what the install has now; Enter keeps it."
+    say "  One question: who may open the console. Enter keeps what the install has; everything else is kept as it is."
   else
-    say "  The questions have defaults; Enter keeps one. Two need you:"
-    say "    the console's domain   a name you control, e.g. openadlc.example.com (one DNS record, at the end)"
-    say "    the GitHub App client id   leave it empty: the console's walkthrough makes the app"
+    say "  One question: who may open the console to set the install up. Enter takes you (${account:-your gcloud account})."
+    say "  GitHub comes later: the console's walkthrough connects the organization and makes the app."
+    if [ -z "$domain" ]; then
+      say "  The console is served on the install's own address under nip.io; name a domain of yours with --domain, or set one later."
+    fi
   fi
   export FLEETADLC_CLOUD_PROJECT="$project" FLEETADLC_CLOUD_REGION="$region"
+  [ -z "$domain" ] || export FLEETADLC_CLOUD_DOMAIN="$domain"
   [ -z "$account" ] || export FLEETADLC_CLOUD_CONSOLE_MEMBERS="user:$account"
   interactive node apps/cli/bin/fleetadlc.mjs cloud configure
 
