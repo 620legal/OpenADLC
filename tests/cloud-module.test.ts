@@ -267,7 +267,7 @@ describe('what the operator is told to do', () => {
   it('points them at the load balancer, not at the Cloud Run URL', () => {
     // The Cloud Run URL stopped answering when its ingress was restricted, so
     // an output naming it would send an operator somewhere that refuses them.
-    expect(outputsTf).toContain('https://${var.console_domain}');
+    expect(outputsTf).toContain('https://${local.console_domain}');
     expect(outputsTf).toContain('google_compute_global_address.console.address');
   });
 
@@ -281,6 +281,44 @@ describe('what the operator is told to do', () => {
     expect(words).toContain('GitHub accounts step');
     expect(words).toContain('health cards');
     expect(words).toContain('webhook card shows whether a delivery arrived');
+  });
+});
+
+describe('an install configured with nothing but who may open the console', () => {
+  it('serves the console on the install’s own address under nip.io until a domain is set', () => {
+    // console_domain was required, so a first-time install blocked on a DNS
+    // decision twice: once at configure, and again after the apply, with the
+    // certificate unissued and IAP in front of nothing until a record resolved.
+    expect(variablesTf).toMatch(/variable "console_domain" \{[^}]*default\s*=\s*""/);
+    expect(mainTf).toContain(
+      'console_domain = var.console_domain != "" ? var.console_domain : "${google_compute_global_address.console.address}.nip.io"',
+    );
+  });
+
+  it('reads the settled name everywhere, so the default reaches the certificate, the URL map and every service', () => {
+    // One resource reading var.console_domain directly would get "" and, for
+    // the certificate, fail the apply the default exists for.
+    const direct = withoutComments(mainTf)
+      .split('\n')
+      .filter((line) => line.includes('var.console_domain') && !line.trimStart().startsWith('console_domain = var.console_domain != ""'));
+    expect(direct).toEqual([]);
+    expect(resourceBlock('google_compute_managed_ssl_certificate', 'console')).toContain('local.console_domain');
+    expect(resourceBlock('google_compute_url_map', 'console')).toContain('local.console_domain');
+  });
+
+  it('tells the operator to make a DNS record only when the domain is theirs', () => {
+    // The next_steps output decides by the variable: the nip.io default needs
+    // no record of the operator's.
+    expect(outputsTf).toMatch(/%\{~?\s*if var\.console_domain != ""\s*~?\}/);
+    expect(outputsTf).toContain('nip.io');
+  });
+
+  it('leaves the GitHub organization and app to the console’s walkthrough', () => {
+    // Both were required at configure time, yet onboarding collects the
+    // organization and creates the app, and the bridge prefers what it stored
+    // (apps/bridge/src/effective-config.ts) over these seeds.
+    expect(variablesTf).toMatch(/variable "github_organization" \{[^}]*default\s*=\s*""/);
+    expect(variablesTf).toMatch(/variable "github_app_client_id" \{[^}]*default\s*=\s*""/);
   });
 });
 
@@ -347,7 +385,7 @@ describe('how GitHub reaches the bridge', () => {
   it('tells the operator a URL that works', () => {
     // The old output named the internal Cloud Run URL, so an operator following
     // it configured a webhook that could never be delivered.
-    expect(outputsTf).toContain('https://${var.console_domain}/webhooks/github');
+    expect(outputsTf).toContain('https://${local.console_domain}/webhooks/github');
   });
 });
 
@@ -833,7 +871,7 @@ describe('the terminal a person reaches through the load balancer', () => {
     // which is also what a name rebound to the host looks like. Without this a
     // cloud console's socket is refused.
     expect(cloudInit).toContain('FLEETADLC_CONSOLE_URL=https://${console_domain}');
-    expect(mainTf).toMatch(/console_domain\s+=\s+var\.console_domain/);
+    expect(mainTf).toMatch(/console_domain\s+=\s+local\.console_domain/);
   });
 });
 

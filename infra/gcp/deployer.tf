@@ -48,8 +48,8 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   # owner's. Matched by name alone, the provider admitted any workflow on the default branch, started by any
   # trigger that runs there (schedule, issue_comment, workflow_run, pull_request_target), and a name freed by
   # a rename or a transfer could be registered by someone else. `workflow_ref` is
-  # `<owner>/<name>/<path>@<ref>`, spelled as GitHub spells the repository: `fleetadlc cloud configure` asks
-  # GitHub for the spelling and the ids. The ids and the path are checked by their variables' validation
+  # `<owner>/<name>/<path>@<ref>`, spelled as GitHub spells the repository: `fleetadlc cloud configure
+  # --deployer` asks GitHub for the spelling and the ids. The ids and the path are checked by their variables' validation
   # before they are put into this expression.
   attribute_condition = join(" && ", [
     "assertion.repository_id == '${var.deployer_repository_id}'",

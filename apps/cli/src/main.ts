@@ -92,7 +92,17 @@ fleetadlc — a crew of agents that takes a request to a reviewed, deployed chan
                                     asks how production ships where nothing says:
                                     --production auto [--soak MINUTES] or
                                     --production reviewers --reviewer LOGIN[,LOGIN]
-  fleetadlc cloud configure         set up a cloud install (gcp)
+  fleetadlc cloud configure         set up a cloud install (gcp). One question: who
+                                    may open the console (Enter takes the signed-in
+                                    gcloud account). The rest defaults, or comes from
+                                    --project, --region, --zone, --domain, --members,
+                                    --organization, --client-id, --bucket, --channels,
+                                    --deployer (with --deployer-workflow, and for a
+                                    private repository --deployer-id and
+                                    --deployer-owner-id). Without --domain the console
+                                    is served on the install's own address under
+                                    nip.io; GitHub is set up later, in the console's
+                                    walkthrough
   fleetadlc cloud pull --bucket B [--prefix P]
                                     take over a cloud install's settings on this machine
   fleetadlc cloud push              save this machine's cloud settings back to the bucket
@@ -266,10 +276,35 @@ async function main(): Promise<void> {
       const provider = flag('provider');
       const bucket = flag('bucket');
       const prefix = flag('prefix');
+      const project = flag('project');
+      const region = flag('region');
+      const zone = flag('zone');
+      const domain = flag('domain');
+      const organization = flag('organization');
+      const clientId = flag('client-id');
+      const members = flag('members');
+      const deployer = flag('deployer');
+      const deployerWorkflow = flag('deployer-workflow');
+      const deployerId = flag('deployer-id');
+      const deployerOwnerId = flag('deployer-owner-id');
+      const channels = flag('channels');
       return cloud(config, subcommand, {
         ...(provider ? { provider } : {}),
         ...(bucket ? { bucket } : {}),
         ...(prefix ? { prefix } : {}),
+        ...(project ? { project } : {}),
+        ...(region ? { region } : {}),
+        ...(zone ? { zone } : {}),
+        // `--domain ''` is an answer (the nip.io default), not an omission.
+        ...(domain !== undefined ? { domain } : {}),
+        ...(organization !== undefined ? { organization } : {}),
+        ...(clientId !== undefined ? { clientId } : {}),
+        ...(members ? { members } : {}),
+        ...(deployer ? { deployer } : {}),
+        ...(deployerWorkflow ? { deployerWorkflow } : {}),
+        ...(deployerId ? { deployerId } : {}),
+        ...(deployerOwnerId ? { deployerOwnerId } : {}),
+        ...(channels !== undefined ? { channels } : {}),
       });
     }
 

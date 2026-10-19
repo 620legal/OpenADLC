@@ -1,10 +1,10 @@
 output "console_url" {
   description = "Where a person opens the board. Not the Cloud Run URL: that answers only the load balancer now, and IAP is on the load balancer."
-  value       = "https://${var.console_domain}"
+  value       = "https://${local.console_domain}"
 }
 
 output "console_ip" {
-  description = "Point an A record for console_domain here. The managed certificate is not issued until that record resolves, and IAP is not in front of anything until the certificate is issued."
+  description = "The console's own address. With a console_domain of your own, point an A record for it here: the managed certificate is not issued until that record resolves, and IAP is not in front of anything until the certificate is issued. The default <console_ip>.nip.io name resolves here already, with no record of yours."
   value       = google_compute_global_address.console.address
 }
 
@@ -15,7 +15,7 @@ output "bridge_url" {
 
 output "webhook_url" {
   description = "The exact URL for the OpenADLC GitHub App's webhook. Through the load balancer, because the bridge's own Cloud Run URL admits nothing from the internet and GitHub is on the internet."
-  value       = "https://${var.console_domain}/webhooks/github"
+  value       = "https://${local.console_domain}/webhooks/github"
 }
 
 output "host_internal_ip" {
@@ -54,19 +54,29 @@ output "host_service_account" {
 output "next_steps" {
   description = "What is left to do by hand, because GitHub needs a person at a browser."
   value       = <<-EOT
-    1. Point an A record for ${var.console_domain} at:
+    %{if var.console_domain != ""~}
+    1. Point an A record for ${local.console_domain} at:
          ${google_compute_global_address.console.address}
        Nothing else works until this resolves: the managed certificate is issued
        against that record, and until it is, IAP is in front of nothing.
+    %{else~}
+    1. Open the console:
+         https://${local.console_domain}
+       It is served on the install's own address under nip.io; no DNS record is
+       needed. For a domain of your own, set console_domain in
+       ~/.fleetadlc/cloud.tfvars.json, run `fleetadlc cloud apply` (the managed
+       certificate is reissued for the new name, which takes a while), and point
+       an A record for it at ${google_compute_global_address.console.address}.
+    %{endif~}
     2. Connect the bots' GitHub accounts in the console's walkthrough, at its
        GitHub accounts step:
-         https://${var.console_domain}
+         https://${local.console_domain}
        GitHub needs a person at a browser for each sign-in, and the refresh
        tokens belong in this install's Secret Manager, not in Terraform state.
        Moving an install here? Restore its backup in the walkthrough's first
        step instead, taking over its sign-ins.
     3. An app created from the console already delivers to
-         https://${var.console_domain}/webhooks/github
+         https://${local.console_domain}/webhooks/github
        with the secret the console stored: leave its webhook alone. After a
        restore, or for an app made by hand, use the console's webhook step,
        which sets one secret on both sides. Only for an app made by hand on a
@@ -76,7 +86,7 @@ output "next_steps" {
        delivery arrived.
     4. Check the install on the console's health cards and its walkthrough,
        which say what is left and where it is done:
-         https://${var.console_domain}
+         https://${local.console_domain}
     The host runs no fleetadlc command: everything above is in the console.
   EOT
 }

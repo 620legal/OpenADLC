@@ -56,6 +56,14 @@ locals {
   bridge_host = "${var.name_prefix}-bridge-${data.google_project.this.number}.${var.region}.run.app"
   bridge_url  = "https://${local.bridge_host}"
 
+  # The name the console is served on. An operator with no domain (yet) leaves
+  # the variable empty and gets the load balancer's own address under nip.io, a
+  # public wildcard DNS that resolves <ip>.nip.io to <ip>: the managed
+  # certificate is issued against it with no DNS record, so IAP works right
+  # after the first apply. nip.io is resolution only — traffic goes to this
+  # install's address, and TLS is the managed certificate.
+  console_domain = var.console_domain != "" ? var.console_domain : "${google_compute_global_address.console.address}.nip.io"
+
   # The egress a bot needs and nothing more: GitHub, package registries, the
   # engine APIs, and the Google APIs the platform itself calls.
   allowed_egress_domains = concat(
@@ -129,12 +137,14 @@ locals {
       hostd_image     = var.hostd_image
       hostd_port      = var.hostd_port
       bot_image       = var.bot_image
-      console_domain  = var.console_domain
+      console_domain  = local.console_domain
       project_id      = var.project_id
       region          = var.region
       zone            = var.zone
       host_name       = "${var.name_prefix}-host-1"
       bridge_url      = local.bridge_url
+      # Both may be empty on a fresh install: hostd reads neither, and the
+      # bridge, which does, prefers what the console's walkthrough stored.
       github_org      = var.github_organization
       github_client   = var.github_app_client_id
       humans          = join(",", var.humans)
@@ -696,12 +706,12 @@ resource "google_cloud_run_v2_service" "bridge" {
 
       env {
         name  = "FLEETADLC_PUBLIC_URL"
-        value = "https://${var.console_domain}"
+        value = "https://${local.console_domain}"
       }
 
       env {
         name  = "FLEETADLC_CONSOLE_URL"
-        value = "https://${var.console_domain}"
+        value = "https://${local.console_domain}"
       }
 
       # Only when one is named; without it the bridge takes the bot whose role
@@ -731,6 +741,8 @@ resource "google_cloud_run_v2_service" "bridge" {
         value = "http://${google_compute_instance.host.network_interface[0].network_ip}:${var.hostd_port}"
       }
 
+      # May be empty on a fresh install: the organization the console's
+      # walkthrough stores wins over this seed (apps/bridge/src/effective-config.ts).
       env {
         name  = "FLEETADLC_GITHUB_ORG"
         value = var.github_organization
@@ -872,7 +884,7 @@ resource "google_cloud_run_v2_service" "console" {
       # served under, so a page on a name rebound to it learns nothing.
       env {
         name  = "FLEETADLC_CONSOLE_URL"
-        value = "https://${var.console_domain}"
+        value = "https://${local.console_domain}"
       }
 
       # Only turns on the console's report of a request that arrived without
@@ -887,7 +899,7 @@ resource "google_cloud_run_v2_service" "console" {
       # where `/terminal` is a backend of its own admitted to the operators.
       env {
         name  = "NEXT_PUBLIC_FLEETADLC_TERMINAL_URL"
-        value = "wss://${var.console_domain}"
+        value = "wss://${local.console_domain}"
       }
 
       resources {
@@ -1072,7 +1084,7 @@ resource "google_compute_url_map" "console" {
   default_service = google_compute_backend_service.console.id
 
   host_rule {
-    hosts        = [var.console_domain]
+    hosts        = [local.console_domain]
     path_matcher = "fleet"
   }
 
@@ -1099,7 +1111,7 @@ resource "google_compute_managed_ssl_certificate" "console" {
   name = "${var.name_prefix}-console-cert"
 
   managed {
-    domains = [var.console_domain]
+    domains = [local.console_domain]
   }
 
   depends_on = [google_project_service.enabled]

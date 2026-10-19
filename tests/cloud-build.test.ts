@@ -183,11 +183,11 @@ exit 0`,
     const pull = out.indexOf('cloud pull --bucket acme-openadlc-fleetadlc-tfstate');
     expect(pull, out).toBeGreaterThan(-1);
     expect(pull).toBeLessThan(out.indexOf('cloud configure'));
-    expect(out).toContain('Enter keeps it');
-    expect(out).not.toContain('leave it empty');
+    expect(out).toContain('Enter keeps what the install has');
+    expect(out).not.toContain('a new install');
   });
 
-  it('asks a new install for its domain, and to leave the client id to the walkthrough', () => {
+  it('asks a new install one question, leaving GitHub to the walkthrough and the domain to nip.io', () => {
     stub(
       'gcloud',
       `case "$*" in
@@ -201,7 +201,13 @@ exit 0`,
     expect(status, out).toBe(0);
     expect(out).not.toContain('cloud pull');
     expect(out).toContain('a new install');
-    expect(out).toContain('leave it empty');
+    expect(out).toContain('One question: who may open the console');
+    expect(out).toContain('Enter takes you (alex@example.com)');
+    expect(out).toContain("the console's walkthrough connects the organization");
+    expect(out).toContain('nip.io');
+    // The old flow asked for the domain and the client id here.
+    expect(out).not.toContain('leave it empty');
+    expect(out).not.toMatch(/Two need you/);
   });
 
   it('configures nothing when it cannot tell whether the bucket holds settings', () => {
