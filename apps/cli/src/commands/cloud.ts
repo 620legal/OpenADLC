@@ -275,6 +275,18 @@ export function defaultOperators(members: string[]): string[] {
   return members.filter((member) => member.startsWith('user:'));
 }
 
+/**
+ * The console members as IAM spells them, from however a person answers the
+ * one question. The natural answer is a bare email, and taken as typed it was
+ * no IAM member at all: IAP would admit nobody, and `consoleUsers` saw no
+ * `user:` either, so the install also had no admin and said so. A bare answer
+ * is a person, `user:<email>`; one with a type (`user:`, `group:`, `domain:`,
+ * `serviceAccount:`) is kept as typed.
+ */
+export function normalizedMembers(members: string[]): string[] {
+  return members.map((member) => (member.includes(':') ? member : `user:${member}`));
+}
+
 function shown(existing: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = existing?.[key];
   if (typeof value === 'string' && value) return value;
@@ -754,13 +766,15 @@ export async function cloud(
       // The one question a first-time install is asked. Everything else has an
       // answer already: the flags, the install's settings, install.sh's seeds,
       // gcloud, or the module's defaults.
-      const consoleMembers = list(
-        answers.membersGiven ??
-          (await askRequired(
-            prompt,
-            'who may open the console to set this install up, e.g. user:you@example.com',
-            answers.membersDefault,
-          )),
+      const consoleMembers = normalizedMembers(
+        list(
+          answers.membersGiven ??
+            (await askRequired(
+              prompt,
+              'who may open the console to set this install up, e.g. you@example.com',
+              answers.membersDefault,
+            )),
+        ),
       );
       // Derived for a new install; an install that has them keeps them, since
       // nothing here asks about them any more. Both are edited in the settings

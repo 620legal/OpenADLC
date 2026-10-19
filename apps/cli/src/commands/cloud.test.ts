@@ -19,6 +19,7 @@ import {
   LEGACY_NAME_PREFIX,
   NAME_PREFIX,
   noAdminWarning,
+  normalizedMembers,
   pinNamePrefix,
   postApplySteps,
   remoteTfVars,
@@ -497,6 +498,60 @@ describe('who may take over a terminal when nobody is named', () => {
   it('is the console members that are people, never a group or a domain', () => {
     expect(defaultOperators(['user:ada@example.com', 'group:eng@example.com', 'domain:example.com'])).toEqual(['user:ada@example.com']);
     expect(defaultOperators(['group:eng@example.com'])).toEqual([]);
+  });
+});
+
+describe('the one answer a fresh install gives', () => {
+  // The natural answer is a bare email. Taken as typed it was no IAM member at
+  // all — IAP admitted nobody — and consoleUsers saw no `user:` either, so the
+  // install also had no admin and configure warned about it right after
+  // accepting the answer that should have named one.
+  const derived = (answer: string) => {
+    const members = normalizedMembers(answer.split(',').map((entry) => entry.trim()).filter(Boolean));
+    return { members, admins: consoleUsers(members), operators: defaultOperators(members) };
+  };
+
+  it('makes a bare email the console member, the first admin and the operator', () => {
+    expect(derived('zelig@620legal.com')).toEqual({
+      members: ['user:zelig@620legal.com'],
+      admins: ['zelig@620legal.com'],
+      operators: ['user:zelig@620legal.com'],
+    });
+  });
+
+  it('takes a user:-prefixed answer as typed, with the admin unprefixed', () => {
+    expect(derived('user:ada@example.com')).toEqual({
+      members: ['user:ada@example.com'],
+      admins: ['ada@example.com'],
+      operators: ['user:ada@example.com'],
+    });
+  });
+
+  it('makes Enter on the offered default a working admin too', () => {
+    // install.sh seeds the default as `user:<account>`, and a bare gcloud
+    // account becomes one: either way Enter must leave an admin behind.
+    const offered = settledAnswers({}, undefined, {}, { account: 'ada@example.com' }).membersDefault;
+    expect(offered).toBe('user:ada@example.com');
+    expect(derived(offered ?? '')).toEqual({
+      members: ['user:ada@example.com'],
+      admins: ['ada@example.com'],
+      operators: ['user:ada@example.com'],
+    });
+  });
+
+  it('still leaves a group or a domain without an admin, which noAdminWarning says', () => {
+    const { members, admins } = derived('group:eng@example.com,domain:example.com');
+    expect(members).toEqual(['group:eng@example.com', 'domain:example.com']);
+    expect(admins).toEqual([]);
+    expect(noAdminWarning(admins, '/home/ada/.fleetadlc/cloud.tfvars.json')).toContain('no admin');
+  });
+
+  it('mixes types without touching the typed ones', () => {
+    expect(normalizedMembers(['ada@example.com', 'group:eng@example.com', 'serviceAccount:x@p.iam.gserviceaccount.com'])).toEqual([
+      'user:ada@example.com',
+      'group:eng@example.com',
+      'serviceAccount:x@p.iam.gserviceaccount.com',
+    ]);
   });
 });
 
