@@ -735,7 +735,16 @@ at all. What does hold, whatever a session runs:
   session's token carries the app's "SSH signing keys" permission, so a
   session could add a key, which verifies for the whole account, or remove a
   seat's key. The `signing-key` check warns of any key on a crew account that
-  is no seat's, and registers a seat's own key again when it is gone.
+  is no seat's, and registers a seat's own key again when it is gone. The
+  card lets an admin revoke such a key with the bot's own sign-in (offered
+  only where its token may delete: the app's "SSH signing keys" for a
+  device-flow sign-in, `admin:ssh_signing_key` on a static token) or dismiss
+  it as used elsewhere, recorded with who said so and undoable; both are
+  audited (`signing_key.revoked`, `signing_key.dismissed`). A key under a
+  seat's own `openadlc-<seat>` title that is not its current key is
+  OpenADLC's leftover from a retried or raced registration, and both a
+  connect and the check remove it, whether or not the current key was
+  already registered.
 - **The bridge's watch on merges.** A crew account merging a pull request
   whose `review-gate` was not green, or could not be read, is audited
   (`merge.unreviewed`), commented on, and labelled `needs-human`

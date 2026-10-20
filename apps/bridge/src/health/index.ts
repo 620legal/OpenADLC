@@ -2,8 +2,9 @@ import { theApp } from '../people.js';
 import { movedHumans } from '../human-ids.js';
 import { readAccounts } from '../github-identities.js';
 import { signInKind } from '../sign-in.js';
+import { revokeGate, settledSigningKey } from '../signing-keys.js';
 import { createHash } from 'node:crypto';
-import { attributions, audit, bots, credentials, deployRuns, identities, issues, lastAudit, lastGithubDelivery, leases, modelAccounts, repos, tasks } from '@openadlc/db';
+import { attributions, audit, bots, credentials, deployRuns, externalSigningKeys, identities, issues, lastAudit, lastGithubDelivery, leases, modelAccounts, repos, tasks } from '@openadlc/db';
 import {
   GitHubClient,
   accountExists,
@@ -18,8 +19,6 @@ import {
   readConfigFiles,
   requestDeviceCode,
   reviewerStandingOf,
-  signingKeyRef,
-  generateSigningKey,
   type AppCredentials,
 } from '@openadlc/github';
 import type { Actors } from '../actors.js';
@@ -182,18 +181,23 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
     // the check then registers it: a seat put on a shared account while its
     // sign-in could not act had none made, and "reconnect" is no fix for a
     // seat whose account is working.
-    signingKey: async (bot) => {
-      const store = getSecretStore();
-      const stored = await store.get(signingKeyRef(bot.name));
-      if (stored) return stored;
-      const pair = generateSigningKey(bot.name);
-      await store.set(signingKeyRef(bot.name), pair.privateKey);
-      return pair.privateKey;
-    },
+    // A connect can be generating a key for the same bot at this moment
+    // (`ensureSigningKeyRegistered`); the store keeps one, and the check must
+    // register that one, whoever wrote it, or the account grows a second key
+    // under the same title.
+    signingKey: async (bot) => (await settledSigningKey(bot.name, getSecretStore())).privateKey,
     publicKeyOf: cachedPublicKeyOf,
     requiresSignatures,
     appLacksSigningPermission: async () => app.lacks('git_signing_ssh_public_keys'),
     recordKeyId: (bot, keyId) => credentials.setSigningKeyId(bot.id, keyId),
+    knownExternalKeys: async (login) =>
+      (await externalSigningKeys.listExternal(login)).map((key) => ({ keyId: key.keyId, title: key.title, by: key.dismissedBy, at: key.dismissedAt })),
+    revokeBlockedBy: async (bot) =>
+      revokeGate(
+        await signInKind(bot).catch(() => null),
+        (await credentials.getCredential(bot.id).catch(() => null))?.scopes ?? [],
+        await app.lacks('git_signing_ssh_public_keys').catch(() => false),
+      ),
   });
 
   const modelDeps = defaultModelAccountDeps(hostd);

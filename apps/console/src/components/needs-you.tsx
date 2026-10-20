@@ -9,14 +9,17 @@ import {
   answerGate,
   decideUnowned,
   dismissNotice,
+  dismissSigningKey,
   dismissTasks,
   recheckHealth,
   releasePromote,
   retryTask,
   retryTriage,
+  revokeSigningKey,
   stopTask,
   stopTasks,
   switchToAutomatic,
+  undismissSigningKey,
 } from '@/app/actions';
 import { Copyable } from '@/components/copyable';
 import { CheckIcon, ExternalIcon, QuestionIcon, ShipIcon, WarningIcon } from '@/components/icons';
@@ -718,6 +721,8 @@ const SECONDARY = `${BUTTON} border border-edge-strong text-soft transition-colo
 /** What only an admin may press on a card: a health check's actions, and a link into Settings or the walkthrough. */
 export function adminOnly(action: AttentionAction): boolean {
   if (action.kind === 'recheck' || action.kind === 'acknowledge' || action.kind === 'dismiss') return true;
+  // A bot account's keys decide who can sign as the crew: an admin's, as the bridge enforces.
+  if (action.kind === 'signing_key_revoke' || action.kind === 'signing_key_dismiss' || action.kind === 'signing_key_undo') return true;
   // What happens to issues OpenADLC will not take on its own: an admin's, as the bridge enforces.
   if (action.kind === 'unowned_intake' || action.kind === 'unowned_ignore' || action.kind === 'unowned_close') return true;
   // Releasing a held promote to production, or switching how a repository ships: an admin's, as the bridge enforces.
@@ -736,6 +741,7 @@ export function keyOf(action: AttentionAction): string {
   if (action.kind === 'stop_task' && action.taskIds && action.taskIds.length > 1) return `${action.kind}:${action.taskIds.join(',')}`;
   if ('numbers' in action) return `${action.kind}:${action.repo}`;
   if ('sha' in action) return `${action.kind}:${action.repo}@${action.sha}`;
+  if ('keyId' in action) return `${action.kind}:${action.login}:${action.keyId}`;
   if (action.kind === 'abandon_request') return `${action.kind}:${action.requestId}`;
   return 'taskId' in action ? `${action.kind}:${action.taskId}` : action.kind;
 }
@@ -842,6 +848,34 @@ function ActionButton({
       return (
         <button type="button" className={style} disabled={pending} onClick={() => press(() => acknowledgeNotice(action.checkId, action.occurrence))}>
           {busy ? 'Dismissing…' : action.label}
+        </button>
+      );
+    case 'signing_key_revoke':
+      // Deleting a key is for keeps, and commits it signed go back to Unverified.
+      return (
+        <button
+          type="button"
+          className={style}
+          disabled={pending}
+          onClick={() => {
+            const named = action.title ? `“${action.title}” (id ${action.keyId})` : `key ${action.keyId}`;
+            if (!window.confirm(`Revoke ${named} from ${action.login} on GitHub? Commits signed with it read Unverified from then on.`)) return;
+            press(() => revokeSigningKey(action.login, action.keyId));
+          }}
+        >
+          {busy ? 'Revoking…' : action.label}
+        </button>
+      );
+    case 'signing_key_dismiss':
+      return (
+        <button type="button" className={style} disabled={pending} onClick={() => press(() => dismissSigningKey(action.login, action.keyId, action.title))}>
+          {busy ? 'Dismissing…' : action.label}
+        </button>
+      );
+    case 'signing_key_undo':
+      return (
+        <button type="button" className={style} disabled={pending} onClick={() => press(() => undismissSigningKey(action.login, action.keyId))}>
+          {busy ? 'Undoing…' : action.label}
         </button>
       );
     case 'unowned_intake':

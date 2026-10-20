@@ -16,6 +16,7 @@ import {
   spendingLimits,
   credentials,
   deployRuns,
+  externalSigningKeys,
   issues,
   leases,
   listAudit,
@@ -105,6 +106,7 @@ import { DeployKnowledge, isTestingDeployChoice, testingDeployChoice, testingDep
 import { startBuild } from './build-start.js';
 import type { HealthRegistry } from './health/registry.js';
 import { registerHealthRoutes } from './health/routes.js';
+import { registerSigningKeyRoutes } from './signing-key-routes.js';
 import { SubjectTitles } from './subject-titles.js';
 import { retryTask } from './task-retry.js';
 import { readBoardWork } from './board-work.js';
@@ -571,6 +573,18 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     },
   });
   if (deps.health) registerHealthRoutes(router, deps.health);
+  // What the signing-key card's buttons press: dismissing a key as used
+  // elsewhere, its undo, and revoking one from the bot's account.
+  registerSigningKeyRoutes(router, {
+    crew: () => bots.listBots(),
+    asBot: (name) => deps.actors.asBot(name),
+    signInKind: (bot) => signInKind(bot),
+    scopesOf: async (bot) => (await credentials.getCredential(bot.id).catch(() => null))?.scopes ?? [],
+    markExternal: (login, keyId, by, title) => externalSigningKeys.markExternal(login, keyId, by, title),
+    unmarkExternal: (login, keyId) => externalSigningKeys.unmarkExternal(login, keyId),
+    audit,
+    recheck: () => deps.health?.runSoon(['signing-key']),
+  });
 
   router.get('/v1/board', async ({ query }) => {
     const repoFilter = query.get('repo');

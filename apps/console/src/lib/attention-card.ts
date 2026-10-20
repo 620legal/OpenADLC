@@ -48,6 +48,12 @@ export function faceActions(item: AttentionItem): AttentionAction[] {
   if (item.kind === 'unowned_issues') return item.actions;
   // Release it, or stop holding promotes for a person at all: both on the card.
   if (item.kind === 'promote_held') return item.actions;
+  // A signing key OpenADLC did not register: revoke it, or say it is used
+  // elsewhere — both on the card for the first key; more keys and the undos
+  // are in the sheet.
+  const revoke = item.actions.find((action) => action.kind === 'signing_key_revoke');
+  const dismissKey = item.actions.find((action) => action.kind === 'signing_key_dismiss');
+  if (revoke || dismissKey) return [revoke, dismissKey].filter((action): action is AttentionAction => Boolean(action));
   const dismiss = item.actions.find((action) => action.kind === 'acknowledge');
   const incident = item.actions.find((action) => action.kind === 'incident');
   const question = item.kind === 'question' && (item.question?.options.length ?? 0) > 0;

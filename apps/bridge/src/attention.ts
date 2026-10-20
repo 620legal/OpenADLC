@@ -124,6 +124,13 @@ export type AttentionAction =
   | { kind: 'dismiss_task'; label: string; tasks: { taskId: string; occurrence: string }[] }
   /** Dismisses a notice with nothing to fix until a newer occurrence arrives. */
   | { kind: 'acknowledge'; label: string; checkId: string; occurrence: string }
+  /**
+   * The signing-key card's buttons about a key OpenADLC did not register
+   * (`signing-key-routes.ts`): delete it from the bot's GitHub account with
+   * the bot's own sign-in, say it is somebody's on purpose so the check stops
+   * counting it, or take that back.
+   */
+  | { kind: 'signing_key_revoke' | 'signing_key_dismiss' | 'signing_key_undo'; label: string; login: string; keyId: number; title: string | null }
   /** Opens the steps for an incident the item carries (`incident`): what to do about a post OpenADLC did not sign. */
   | { kind: 'incident'; label: string }
   | { kind: 'recheck'; label: string; checkId: string }
@@ -1437,6 +1444,7 @@ export function healthItems(
             ...(occurrence
               ? [{ kind: 'acknowledge' as const, label: typeof row.facts.dismissLabel === 'string' ? row.facts.dismissLabel : 'Dismiss', checkId: row.id, occurrence }]
               : []),
+            ...signingKeyActions(row.facts),
             ...(row.action ? [attentionAction(row.action)] : []),
             ...more.map(attentionAction),
             ...(row.facts.incident ? [{ kind: 'incident' as const, label: 'What to do' }] : []),
@@ -1467,6 +1475,41 @@ export function healthItems(
     incidents.has(item.id) ? { ...item, incident: incidents.get(item.id)! } : item,
   );
   return [...cards, ...notices];
+}
+
+/**
+ * The buttons of the signing-key check's foreign-keys card, from the facts it
+ * put there (`SigningKeyCardFacts` in `health/checks/crew.ts`): Revoke and
+ * Dismiss for each key it counts — Revoke only where the check said the bot's
+ * sign-in may delete, so the card says why instead of a button failing — and
+ * an undo for each key a person already dismissed.
+ */
+function signingKeyActions(facts: Record<string, unknown>): AttentionAction[] {
+  const told = facts.signingKeys;
+  if (!told || typeof told !== 'object') return [];
+  const { login, foreign, acknowledged, revokeBlockedBy } = told as Record<string, unknown>;
+  if (typeof login !== 'string') return [];
+  const keysOf = (value: unknown): { id: number; title: string | null }[] =>
+    Array.isArray(value)
+      ? value.flatMap((one) => {
+          const key = one as Record<string, unknown> | null;
+          return key && typeof key === 'object' && typeof key.id === 'number'
+            ? [{ id: key.id, title: typeof key.title === 'string' ? key.title : null }]
+            : [];
+        })
+      : [];
+  const counted = keysOf(foreign);
+  // One key needs no id on its buttons; two or more say which each acts on.
+  const which = (id: number) => (counted.length === 1 ? '' : ` ${id}`);
+  const actions: AttentionAction[] = [];
+  for (const key of counted) {
+    if (revokeBlockedBy === null) actions.push({ kind: 'signing_key_revoke', label: `Revoke key${which(key.id)}`, login, keyId: key.id, title: key.title });
+    actions.push({ kind: 'signing_key_dismiss', label: `Key${which(key.id)} is used elsewhere`, login, keyId: key.id, title: key.title });
+  }
+  for (const key of keysOf(acknowledged)) {
+    actions.push({ kind: 'signing_key_undo', label: `Count key ${key.id} again`, login, keyId: key.id, title: key.title });
+  }
+  return actions;
 }
 
 /** Whether something a check put in its facts is a button a card can draw. */

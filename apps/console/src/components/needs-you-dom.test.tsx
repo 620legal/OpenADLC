@@ -23,6 +23,9 @@ const pressed = vi.hoisted(() => ({
   acknowledged: [] as string[],
   held: [] as string[],
   enforced: 0,
+  keysRevoked: [] as string[],
+  keysDismissed: [] as string[],
+  keysUndone: [] as string[],
 }));
 vi.mock('@/app/actions', () => ({
   answerGate: vi.fn(async () => ({ ok: true })),
@@ -41,6 +44,9 @@ vi.mock('@/app/actions', () => ({
   holdPull: vi.fn(async (repo: string, number: number) => (pressed.held.push(`${repo}#${number}`), { ok: true, autoMergeOff: true })),
   countOnlySignedPosts: vi.fn(async () => (pressed.enforced++, { ok: true })),
   recheckHealth: vi.fn(async (checkId: string) => (pressed.rechecked.push(checkId), { ok: true })),
+  revokeSigningKey: vi.fn(async (login: string, keyId: number) => (pressed.keysRevoked.push(`${login}:${keyId}`), { ok: true })),
+  dismissSigningKey: vi.fn(async (login: string, keyId: number) => (pressed.keysDismissed.push(`${login}:${keyId}`), { ok: true })),
+  undismissSigningKey: vi.fn(async (login: string, keyId: number) => (pressed.keysUndone.push(`${login}:${keyId}`), { ok: true })),
 }));
 const navigated = vi.hoisted(() => [] as string[]);
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => undefined, replace: (to: string) => void navigated.push(to) }) }));
@@ -126,6 +132,9 @@ beforeEach(() => {
   pressed.acknowledged.length = 0;
   pressed.held.length = 0;
   pressed.enforced = 0;
+  pressed.keysRevoked.length = 0;
+  pressed.keysDismissed.length = 0;
+  pressed.keysUndone.length = 0;
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -262,6 +271,54 @@ describe('a failed triage’s Dismiss and Abandon', () => {
     } finally {
       window.confirm = before;
     }
+  });
+});
+
+describe('a signing key OpenADLC did not register', () => {
+  const KEYS: AttentionItem = {
+    id: 'check:signing-key:account:abner620legal',
+    kind: 'check_failed',
+    severity: 'warning',
+    headline: 'abner620legal has a signing key OpenADLC did not register',
+    subject: { repo: null, number: null, title: null, ref: null, url: null },
+    bot: null,
+    since: '2026-09-24T11:59:00.000Z',
+    detail:
+      'GitHub lists a key on abner620legal that is no seat’s (laptop, id 6).\n\nDismissed as used elsewhere: openadlc-old, id 4 (by or@example.com, 2026-10-19).',
+    actions: [
+      { kind: 'signing_key_revoke', label: 'Revoke key', login: 'abner620legal', keyId: 6, title: 'laptop' },
+      { kind: 'signing_key_dismiss', label: 'Key is used elsewhere', login: 'abner620legal', keyId: 6, title: 'laptop' },
+      { kind: 'signing_key_undo', label: 'Count key 4 again', login: 'abner620legal', keyId: 4, title: null },
+      { kind: 'open_url', label: 'Open the account’s keys', url: 'https://github.com/settings/keys' },
+      { kind: 'recheck', label: 'Check again', checkId: 'signing-key' },
+    ],
+  };
+
+  it('revokes the key only once it is confirmed, naming the key by its title', async () => {
+    await render([KEYS]);
+    const confirm = vi.fn((_message?: string) => false);
+    const before = window.confirm;
+    window.confirm = confirm;
+    try {
+      await click(button('Revoke key', container));
+      expect(confirm.mock.calls[0]?.[0]).toContain('“laptop” (id 6)');
+      expect(pressed.keysRevoked).toEqual([]);
+      confirm.mockReturnValue(true);
+      await click(button('Revoke key', container));
+      expect(pressed.keysRevoked).toEqual(['abner620legal:6']);
+    } finally {
+      window.confirm = before;
+    }
+  });
+
+  it('dismisses the key from its face, and takes a dismissal back from the undo in its sheet', async () => {
+    await render([KEYS]);
+    await click(button('Key is used elsewhere', container));
+    expect(pressed.keysDismissed).toEqual(['abner620legal:6']);
+
+    await click(button('Show more', container));
+    await click(button('Count key 4 again', sheet()!));
+    expect(pressed.keysUndone).toEqual(['abner620legal:4']);
   });
 });
 

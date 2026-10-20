@@ -1287,4 +1287,9 @@ export class GitHubClient {
   async listSshSigningKeys(): Promise<{ id: number; title: string; key: string }[]> {
     return this.request<{ id: number; title: string; key: string }[]>('GET', '/user/ssh_signing_keys');
   }
+
+  /** Removes a signing key from the account; commits it signed go back to Unverified. */
+  async deleteSshSigningKey(id: number): Promise<void> {
+    await this.request<void>('DELETE', `/user/ssh_signing_keys/${id}`);
+  }
 }
