@@ -10,7 +10,7 @@ import { registerBackupRoutes, type BackupRouteDeps } from './backup.js';
 import { DispatchGate } from './dispatch-gate.js';
 import { registerInternalApi } from './internal-api.js';
 import { registerPauseRoutes } from './pause-work.js';
-import { authorize, firstAdmins, memberEmail, ROUTE_ROLES, roleFor, routeKey, Roles, type RoleLookup, type UsersStore } from './roles.js';
+import { authorize, firstAdmins, iapAccess, memberEmail, ROUTE_ROLES, roleFor, routeKey, Roles, type RoleLookup, type UsersStore } from './roles.js';
 import { HttpFailure, Router } from './router.js';
 import { registerUsersRoutes } from './users-routes.js';
 
@@ -247,6 +247,23 @@ describe('the first admin', () => {
     await Promise.all([roles.roleOf('jane'), roles.roleOf('bob')]);
     expect(store.rows.map((row) => row.email)).toEqual(['jane']);
     expect(store.bootstraps).toBe(1);
+  });
+});
+
+describe('whether IAP admits an address', () => {
+  it('is judged from console_members, however either side spells the address', () => {
+    expect(iapAccess('Jane@Example.com', ['user:jane@example.com'])).toBe('member');
+    expect(iapAccess('jane@example.com', ['Jane@Example.com'])).toBe('member');
+    expect(iapAccess('accounts.google.com:jane@example.com', ['user:jane@example.com'])).toBe('member');
+  });
+
+  it('says absent only when every member names a person, so the warning is never wrong', () => {
+    expect(iapAccess('bob@example.com', ['user:jane@example.com'])).toBe('absent');
+    // A group or a domain may admit them; the bridge cannot know who is in it.
+    expect(iapAccess('bob@example.com', ['user:jane@example.com', 'group:crew@example.com'])).toBe('unknown');
+    expect(iapAccess('bob@example.com', ['user:jane@example.com', 'domain:example.com'])).toBe('unknown');
+    // An install whose Terraform predates OPENADLC_CONSOLE_MEMBERS passes nothing.
+    expect(iapAccess('bob@example.com', [])).toBe('unknown');
   });
 });
 

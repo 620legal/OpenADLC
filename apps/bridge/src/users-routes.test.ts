@@ -20,7 +20,7 @@ afterEach(async () => {
 });
 
 /** The users routes in this mode over a store of two admins, and what each change did to it. */
-async function serve(identityMode: IdentityMode) {
+async function serve(identityMode: IdentityMode, access?: (email: string) => 'member' | 'absent' | 'unknown') {
   const roles = new Map<string, Role>([
     ['console', 'admin'],
     ['me@example.com', 'admin'],
@@ -33,6 +33,7 @@ async function serve(identityMode: IdentityMode) {
     setRole: async (email, role) => (roles.set(email, role), user(email, role)),
     remove: async (email) => void (roles.delete(email), removed.push(email)),
     identityMode,
+    ...(access ? { access } : {}),
   });
   server = createServer((request, response) => void router.handle(request, response));
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
@@ -77,5 +78,33 @@ describe('the console’s own identity', () => {
     const { roles, setRole } = await serve('iap');
     expect((await setRole('Me@Example.com', 'me@example.com', 'user')).status).toBe(200);
     expect(roles.get('me@example.com')).toBe('user');
+  });
+});
+
+describe('whether IAP admits each user', () => {
+  it('rides along behind IAP, so Settings → Users can warn about an address IAP turns away', async () => {
+    const { url, as } = await serve('iap', (email) => (email === 'me@example.com' ? 'member' : 'absent'));
+    const listed = (await (await fetch(`${url}/v1/users`, { headers: as('me@example.com') })).json()) as {
+      users: { email: string; iapAccess?: string }[];
+    };
+    expect(listed.users.map((one) => [one.email, one.iapAccess])).toEqual([
+      ['console', 'absent'],
+      ['me@example.com', 'member'],
+    ]);
+
+    // The answer to an add carries it too, so the warning shows the moment they are added.
+    const added = await fetch(`${url}/v1/users`, {
+      method: 'POST',
+      headers: as('me@example.com'),
+      body: JSON.stringify({ email: 'bob@example.com', role: 'user' }),
+    });
+    expect(await added.json()).toMatchObject({ user: { email: 'bob@example.com', iapAccess: 'absent' } });
+  });
+
+  it('is not said on a local install, where there is no IAP', async () => {
+    const { url, as } = await serve('local');
+    const listed = (await (await fetch(`${url}/v1/users`, { headers: as('console') })).json()) as { users: Record<string, unknown>[] };
+    expect(listed.users.length).toBeGreaterThan(0);
+    for (const one of listed.users) expect('iapAccess' in one).toBe(false);
   });
 });

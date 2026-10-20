@@ -8,7 +8,7 @@ import { headerData } from '@/lib/header';
 import { AppShell, RoleProvider } from './app-header';
 import { adminOnly } from './needs-you';
 import { AdminsOnly, NoAdmin, NotAUser } from './not-a-user';
-import { UsersSection } from './users-section';
+import { iapLine, UsersSection } from './users-section';
 
 /** Settings → Users, and what a user is not shown elsewhere. */
 
@@ -85,6 +85,22 @@ describe('Settings → Users', () => {
     expect((row('janedoe@example.com').querySelector('select') as HTMLSelectElement).value).toBe('admin');
     expect((row('bob@example.com').querySelector('select') as HTMLSelectElement).value).toBe('user');
     expect(row('bob@example.com').textContent).toContain('Added by janedoe@example.com');
+  });
+
+  it('warns about an address IAP does not admit, and names the one command that fixes it', async () => {
+    const outside: ConsoleUser = { ...USERS[1]!, iapAccess: 'absent' };
+    await act(async () => root.render(<UsersSection initial={[{ ...USERS[0]!, iapAccess: 'member' }, outside]} me="janedoe@example.com" identityMode="iap" />));
+    expect(row('bob@example.com').textContent).toContain('IAP does not admit this address');
+    expect(row('bob@example.com').textContent).toContain('openadlc cloud members add bob@example.com');
+    // The fix that looks quicker is the one that does not last.
+    expect(row('bob@example.com').textContent).toContain('A grant added by hand with gcloud does not last');
+    expect(row('janedoe@example.com').textContent).not.toContain('IAP does not admit');
+
+    // A group: or domain: member may admit them (unknown), and a local install
+    // or an older bridge says nothing at all: only a sure absence warns.
+    expect(iapLine({ email: 'bob@example.com', iapAccess: 'member' })).toBeNull();
+    expect(iapLine({ email: 'bob@example.com', iapAccess: 'unknown' })).toBeNull();
+    expect(iapLine({ email: 'bob@example.com' })).toBeNull();
   });
 
   it('says behind IAP who may use the console, and on a local install that roles are advisory there', async () => {

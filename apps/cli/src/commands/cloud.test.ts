@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   configureDefaults,
   afterTerraform,
@@ -16,7 +16,11 @@ import {
   defaultOperators,
   hostNeedsReset,
   hostResetArgs,
+  invalidMember,
   LEGACY_NAME_PREFIX,
+  memberArguments,
+  membersCommand,
+  type MembersRunners,
   NAME_PREFIX,
   noAdminWarning,
   normalizedMembers,
@@ -26,6 +30,7 @@ import {
   settledAnswers,
   terraformProblem,
   tfVars,
+  withAddedMembers,
   writeCloudFiles,
   type CloudConfig,
 } from './cloud.js';
@@ -498,6 +503,118 @@ describe('who may take over a terminal when nobody is named', () => {
   it('is the console members that are people, never a group or a domain', () => {
     expect(defaultOperators(['user:ada@example.com', 'group:eng@example.com', 'domain:example.com'])).toEqual(['user:ada@example.com']);
     expect(defaultOperators(['group:eng@example.com'])).toEqual([]);
+  });
+});
+
+describe('letting someone into the console with cloud members add', () => {
+  it('reads what follows the subcommand, passing flags and their values over', () => {
+    expect(memberArguments(['add', 'a@b.com', '--provider', 'gcp'])).toEqual(['add', 'a@b.com']);
+    expect(memberArguments(['add', '--provider=gcp', 'a@b.com', '--no-apply'])).toEqual(['add', 'a@b.com']);
+    expect(memberArguments([])).toEqual([]);
+  });
+
+  it('refuses a word that is no IAM member, so a typo cannot become user:typo', () => {
+    expect(invalidMember('a@b.com')).toBeNull();
+    expect(invalidMember('user:a@b.com')).toBeNull();
+    expect(invalidMember('group:crew@example.com')).toBeNull();
+    expect(invalidMember('serviceAccount:ci@p.iam.gserviceaccount.com')).toBeNull();
+    expect(invalidMember('domain:example.com')).toBeNull();
+    expect(invalidMember('gcp')).toContain('not an email address');
+    expect(invalidMember('user:')).toContain('not an email address');
+    expect(invalidMember('domain:a b')).toContain('does not name a domain');
+    expect(invalidMember('domain:a@b.com')).toContain('does not name a domain');
+    expect(invalidMember('role:admin')).toContain('is not an IAM member');
+  });
+
+  it('admits each address once, however either side capitalises it', () => {
+    expect(withAddedMembers(['user:jane@example.com'], ['bob@example.com', 'Jane@Example.com'])).toEqual({
+      members: ['user:jane@example.com', 'user:bob@example.com'],
+      added: ['user:bob@example.com'],
+      already: ['user:Jane@Example.com'],
+    });
+    // A group kept as typed, and a list that already has everyone changes nothing.
+    expect(withAddedMembers([], ['group:crew@example.com']).members).toEqual(['group:crew@example.com']);
+    expect(withAddedMembers(['user:a@b.com'], ['a@b.com']).added).toEqual([]);
+  });
+
+  it('knows a bare address settings from before the user: prefix still hold, so it is not added beside itself', () => {
+    expect(withAddedMembers(['jane@example.com'], ['jane@example.com', 'user:JANE@example.com'])).toEqual({
+      members: ['jane@example.com'],
+      added: [],
+      already: ['user:jane@example.com', 'user:JANE@example.com'],
+    });
+  });
+});
+
+describe('the cloud members add command', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const backend = { bucket: 'openadlc-state', prefix: 'openadlc' };
+
+  /** Runners that record what the command did, and what it printed. */
+  function runners(settings: Record<string, unknown> | undefined, codes: { push?: number; apply?: number } = {}) {
+    const did: string[] = [];
+    const written: Record<string, unknown>[] = [];
+    const printed: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line: string) => void printed.push(line));
+    const given: MembersRunners = {
+      backend: () => (settings === undefined ? null : backend),
+      settings: async () => settings,
+      write: (vars) => {
+        did.push('write');
+        written.push(vars);
+      },
+      push: async () => {
+        did.push('push');
+        return codes.push ?? 0;
+      },
+      apply: async () => {
+        did.push('apply');
+        return codes.apply ?? 0;
+      },
+    };
+    return { given, did, written, printed };
+  }
+
+  it('appends the person, keeps every other setting, then saves and applies as cloud apply does', async () => {
+    const { given, did, written } = runners({ project_id: 'example-project', console_members: ['user:ada@example.com'] }, { apply: 3 });
+    expect(await membersCommand(['add', 'bob@example.com'], false, given)).toBe(3);
+    expect(did).toEqual(['write', 'push', 'apply']);
+    expect(written).toEqual([{ project_id: 'example-project', console_members: ['user:ada@example.com', 'user:bob@example.com'] }]);
+  });
+
+  it('changes nothing for an address already listed, exits 0 and points to cloud apply in case it never went out', async () => {
+    const { given, did, printed } = runners({ console_members: ['jane@example.com'] });
+    expect(await membersCommand(['add', 'Jane@example.com'], false, given)).toBe(0);
+    expect(did).toEqual([]);
+    expect(printed.join('\n')).toContain('openadlc cloud apply');
+  });
+
+  it('fails with what to do, and writes nothing, on a machine with no cloud configuration', async () => {
+    const { given, did, printed } = runners(undefined);
+    expect(await membersCommand(['add', 'bob@example.com'], false, given)).toBe(1);
+    expect(did).toEqual([]);
+    expect(printed.join('\n')).toContain('openadlc cloud configure');
+  });
+
+  it('refuses an address that is not one, and writes nothing', async () => {
+    const { given, did } = runners({ console_members: [] });
+    expect(await membersCommand(['add', 'gcp'], false, given)).toBe(2);
+    expect(await membersCommand(['add'], false, given)).toBe(2);
+    expect(did).toEqual([]);
+  });
+
+  it('saves without applying under --no-apply, and stops at a push that failed', async () => {
+    const saved = runners({ console_members: [] });
+    expect(await membersCommand(['add', 'bob@example.com'], true, saved.given)).toBe(0);
+    expect(saved.did).toEqual(['write', 'push']);
+    vi.restoreAllMocks();
+
+    const failed = runners({ console_members: [] }, { push: 1 });
+    expect(await membersCommand(['add', 'bob@example.com'], false, failed.given)).toBe(1);
+    expect(failed.did).toEqual(['write', 'push']);
   });
 });
 

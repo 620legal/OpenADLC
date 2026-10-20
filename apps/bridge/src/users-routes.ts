@@ -1,6 +1,6 @@
 import { users as usersStore, UserChangeRefused, type Role, type User } from '@openadlc/db';
 import type { IdentityMode } from './identity.js';
-import type { Roles } from './roles.js';
+import { iapAccess, type IapAccess, type Roles } from './roles.js';
 import { HttpFailure, type Router } from './router.js';
 
 /** The store's changes, injected so the routes can be tested without a database. */
@@ -11,15 +11,22 @@ export interface UsersRouteDeps {
   remove: (email: string, by: string) => Promise<void>;
   /** On a local install every console request is one identity, so demoting it locks Settings for good. */
   identityMode: IdentityMode;
+  /**
+   * Whether IAP admits an address (`roles.ts`), so Settings → Users can say a
+   * person it names will be turned away before the console loads. Undefined on
+   * a local install, where there is no IAP and nothing to say.
+   */
+  access?: (email: string) => IapAccess;
 }
 
-export function liveUsersDeps(roles: UsersRouteDeps['roles'], identityMode: IdentityMode): UsersRouteDeps {
+export function liveUsersDeps(roles: UsersRouteDeps['roles'], identityMode: IdentityMode, consoleMembers: readonly string[]): UsersRouteDeps {
   return {
     roles,
     identityMode,
     add: (email, role, by) => usersStore.addUser(email, role, by),
     setRole: (email, role, by) => usersStore.setRole(email, role, by),
     remove: (email, by) => usersStore.removeUser(email, by),
+    ...(identityMode === 'iap' ? { access: (email: string) => iapAccess(email, consoleMembers) } : {}),
   };
 }
 
@@ -51,20 +58,27 @@ function roleIn(value: unknown): Role {
  * draws its "ask an admin" page from.
  */
 export function registerUsersRoutes(router: Router, deps: UsersRouteDeps): void {
+  // Each user as the console sees them: behind IAP, with whether IAP admits
+  // them at all, so the page can warn about an address it will turn away.
+  const said = (user: User): User & { iapAccess?: IapAccess } => {
+    const access = deps.access?.(user.email);
+    return access ? { ...user, iapAccess: access } : user;
+  };
+
   router.get('/v1/me', async ({ identity, role }) => ({
     email: usersStore.normalizeEmail(identity),
     role,
     identityMode: deps.identityMode,
   }));
 
-  router.get('/v1/users', async () => ({ users: await deps.roles.list() }));
+  router.get('/v1/users', async () => ({ users: (await deps.roles.list()).map(said) }));
 
   router.post('/v1/users', async ({ body, identity }) => {
     const input = await body<{ email?: unknown; role?: unknown }>();
     const role = roleIn(input.role ?? 'user');
     if (typeof input.email !== 'string') throw new HttpFailure(400, 'email is required');
     const email = input.email;
-    return { user: await change(deps, () => deps.add(email, role, identity)) };
+    return { user: said(await change(deps, () => deps.add(email, role, identity))) };
   });
 
   router.patch('/v1/users/:email', async ({ params, body, identity }) => {
@@ -82,7 +96,7 @@ export function registerUsersRoutes(router: Router, deps: UsersRouteDeps): void 
         { code: 'self-demote' },
       );
     }
-    return { user: await change(deps, () => deps.setRole(params.email ?? '', role, identity)) };
+    return { user: said(await change(deps, () => deps.setRole(params.email ?? '', role, identity))) };
   });
 
   router.post('/v1/users/:email/remove', async ({ params, identity }) => {

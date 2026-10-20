@@ -42,6 +42,7 @@ export const FLAGS: Readonly<Record<string, readonly string[]>> = {
   'cloud apply': ['provider'],
   'cloud output': ['provider'],
   'cloud validate': ['provider'],
+  'cloud members': ['provider', 'no-apply'],
   'github sync-labels': ['repo', 'file'],
   'github check': [],
   'github apply': ['production', 'reviewer', 'soak'],

@@ -21,6 +21,23 @@ export function howLine(user: Pick<ConsoleUser, 'addedHow' | 'addedBy'>): string
   }
 }
 
+/**
+ * The warning under a person IAP will not let in. A role here is only half of
+ * access: IAP admits exactly the `console_members` Terraform applied, and an
+ * address they do not name gets Google's block page, which says nothing about
+ * this install. Only `absent` warns — with a `group:` or `domain:` member the
+ * bridge cannot know, and a warning that may be wrong teaches people to
+ * ignore it.
+ */
+export function iapLine(user: Pick<ConsoleUser, 'email' | 'iapAccess'>): string | null {
+  if (user.iapAccess !== 'absent') return null;
+  return (
+    `IAP does not admit this address, so they cannot open the console. Run: openadlc cloud members add ${user.email} — ` +
+    `or add "user:${user.email}" to console_members in $OPENADLC_HOME/cloud.tfvars.json and run openadlc cloud apply. ` +
+    'A grant added by hand with gcloud does not last: console_members is the whole list, and the next apply removes anything else.'
+  );
+}
+
 const ROLE_WORDS: Record<Role, string> = { admin: 'Admin', user: 'User' };
 
 const ROLES_LINE =
@@ -96,6 +113,11 @@ export function UsersSection({
                 <span className="font-mono text-body">{user.email}</span>
                 {user.email === me && <span className="ml-1.5 text-muted">(you)</span>}
                 <span className="block text-[11.5px] text-muted">{howLine(user)}</span>
+                {iapLine(user) && (
+                  <span role="alert" className="block text-[11.5px] text-alarm">
+                    {iapLine(user)}
+                  </span>
+                )}
               </span>
               <select
                 value={user.role}
