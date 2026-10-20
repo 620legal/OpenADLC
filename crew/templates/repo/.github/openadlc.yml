@@ -10,7 +10,7 @@
 # holds it for: its wait timer as the soak (`approval: auto`, the default), or
 # its required reviewers (`approval: reviewers`), the only case where a person
 # approves. A bot never approves a deploy; the
-# repository's GitHub rules do. `fleetadlc github apply` writes the environment
+# repository's GitHub rules do. `openadlc github apply` writes the environment
 # these rules call for. Where GitHub's plan cannot hold a reviewer (a private
 # repository on Free, Pro or Team), OpenADLC holds each `reviewers` promote in
 # Needs you until a person releases it or switches to automatic delivery.
@@ -28,7 +28,7 @@
 #
 # Write the Makefile's `smoke-testing` target together with `deploy-testing`.
 # Each of the two workflows skips until the repository's Actions variable for
-# it is `true`: FLEETADLC_DEPLOY_TESTING for the deploy, FLEETADLC_SMOKE_TESTING
+# it is `true`: OPENADLC_DEPLOY_TESTING for the deploy, OPENADLC_SMOKE_TESTING
 # for the smoke. A skipped smoke neither promotes nor reverts, so a merged
 # change waits on testing until the smoke is turned on.
 version: 1

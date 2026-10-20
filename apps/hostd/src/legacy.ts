@@ -3,11 +3,11 @@ import type { DockerResult } from './drivers/docker.js';
 /** What `retireSeatContainers` needs: how this install named its seats' containers and networks, and its seats. */
 export interface RetireInput {
   docker: (args: string[]) => Promise<DockerResult>;
-  /** This install's id (`fleetadlc.install`); the default install's is `default`. */
+  /** This install's id (`openadlc.install`); the default install's is `default`. */
   install: string;
-  /** What seat containers were named after: `bot-`, or `FLEETADLC_BOT_PREFIX`. */
+  /** What seat containers were named after: `bot-`, or `OPENADLC_BOT_PREFIX`. */
   botPrefix: string;
-  /** What seat networks were named after: `fleetadlc-bot`, or the prefix's `net`. */
+  /** What seat networks were named after: `openadlc-bot`, or the prefix's `net`. */
   networkPrefix: string;
   seats: readonly { name: string; busy: boolean }[];
   log?: (line: string) => void;
@@ -41,11 +41,11 @@ interface Inspected {
 function fingerprinted(entry: Inspected, sidecar: boolean, seat: string, networkPrefix: string): boolean {
   if (sidecar) {
     const networks = Object.keys(entry.NetworkSettings?.Networks ?? {});
-    return networks.includes(`${networkPrefix}-${seat}`) || networks.includes(`fleet-bot-${seat}`);
+    return networks.includes(`${networkPrefix}-${seat}`) || networks.includes(`fleetadlc-bot-${seat}`) || networks.includes(`fleet-bot-${seat}`);
   }
   const labels = entry.Config?.Labels ?? {};
-  if (['fleet.login', 'fleetadlc.login', 'fleet.image', 'fleetadlc.image'].some((key) => key in labels)) return true;
-  return entry.Config?.Image === 'fleet-bot:latest' || entry.Config?.Image === 'fleetadlc-bot:latest';
+  if (['fleet.login', 'fleetadlc.login', 'openadlc.login', 'fleet.image', 'fleetadlc.image', 'openadlc.image'].some((key) => key in labels)) return true;
+  return ['fleet-bot:latest', 'fleetadlc-bot:latest', 'openadlc-bot:latest'].includes(entry.Config?.Image ?? '');
 }
 
 /**
@@ -58,7 +58,7 @@ async function ownerOf(input: RetireInput, name: string, seat: string, sidecar: 
   if (found.code !== 0) return null;
   try {
     const [entry] = JSON.parse(found.stdout) as Inspected[];
-    const label = entry?.Config?.Labels?.['fleetadlc.install'];
+    const label = entry?.Config?.Labels?.['openadlc.install'] ?? entry?.Config?.Labels?.['fleetadlc.install'];
     if (label) return label;
     return entry && fingerprinted(entry, sidecar, seat, input.networkPrefix) ? 'default' : UNMARKED;
   } catch {
@@ -69,7 +69,7 @@ async function ownerOf(input: RetireInput, name: string, seat: string, sidecar: 
 /**
  * Takes down what a seat had when each bot had one long-lived container: its
  * container `bot-<name>`, its database sidecar `bot-<name>-db`, and the network
- * the two shared (`fleetadlc-bot-<name>`, or `fleet-bot-<name>` from before
+ * the two shared (`openadlc-bot-<name>`, or `fleet-bot-<name>` from before
  * the rename). A task's computer is its own container now, so these do
  * nothing but hold memory, and a seat renamed later would leave them behind
  * under a name nothing looks for.
@@ -80,7 +80,7 @@ async function ownerOf(input: RetireInput, name: string, seat: string, sidecar: 
  * on the old model is still in its seat's container, and removing it would end
  * that task's session. Such a seat is retired at a later start. Its folder —
  * `homes/`, `repos/` — is left for a release, since a paused task's commits may
- * still be in its mirror; `fleetadlc doctor` says when it can go.
+ * still be in its mirror; `openadlc doctor` says when it can go.
  */
 export async function retireSeatContainers(input: RetireInput): Promise<Retired> {
   const result: Retired = { retired: [], kept: [] };
@@ -115,7 +115,10 @@ export async function retireSeatContainers(input: RetireInput): Promise<Retired>
     // A network something is still attached to is refused by Docker, which is
     // what should happen; one already gone is not a failure.
     await input.docker(['network', 'rm', `${input.networkPrefix}-${seat.name}`]);
-    if (input.install === 'default') await input.docker(['network', 'rm', `fleet-bot-${seat.name}`]);
+    if (input.install === 'default') {
+      await input.docker(['network', 'rm', `fleetadlc-bot-${seat.name}`]);
+      await input.docker(['network', 'rm', `fleet-bot-${seat.name}`]);
+    }
     result.retired.push(seat.name);
   }
   for (const seat of result.retired) input.log?.(`[hostd] retired ${input.botPrefix}${seat}: a task's computer is its own container now`);

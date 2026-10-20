@@ -1,11 +1,11 @@
-import type { EngineName } from '@fleetadlc/shared';
+import type { EngineName } from '@openadlc/shared';
 
 export interface ToolsPolicy {
   allow: {
     shell: string[];
     /**
      * `localCi`: a pushed commit, and the head a pull request opens or is
-     * readied on, needs a local CI pass recorded for it (`fleetadlc-ci`).
+     * readied on, needs a local CI pass recorded for it (`openadlc-ci`).
      */
     git?: { pushBranchPrefix?: string; forcePush?: boolean; localCi?: boolean };
     files?: { writeWithin?: string[] };
@@ -29,7 +29,7 @@ export interface ToolsPolicy {
 export interface EngineRunInput {
   contextFiles: string[];
   /**
-   * Images and PDFs given with the work, by path, from `FLEETADLC_ATTACHMENTS`.
+   * Images and PDFs given with the work, by path, from `OPENADLC_ATTACHMENTS`.
    * Not text, so never read into the prompt; each engine is given them the
    * way it takes a file (Claude a directory it may read, Codex an image flag),
    * and every engine has them listed in `attachments.md` besides.

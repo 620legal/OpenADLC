@@ -1,4 +1,4 @@
-import { settings } from '@fleetadlc/db';
+import { settings } from '@openadlc/db';
 
 /**
  * Open issues OpenADLC will not take on its own, by repository.

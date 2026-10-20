@@ -1,4 +1,4 @@
-import { actsFor } from '@fleetadlc/shared';
+import { actsFor } from '@openadlc/shared';
 import { isPinnedHuman } from './human-ids.js';
 
 /**

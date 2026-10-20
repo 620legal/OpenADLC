@@ -7,7 +7,7 @@
 --
 -- `not valid`, as in 0008: rows written from here on are checked, and the rows
 -- already there are not, so an install holding a bad one still migrates
--- inside `fleetadlc up`. Ledger rows are never updated. A task row is, when
+-- inside `openadlc up`. Ledger rows are never updated. A task row is, when
 -- usage is added to it, and a bad one then fails that update until a person
 -- puts its cost right.
 

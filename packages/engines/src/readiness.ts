@@ -1,4 +1,4 @@
-import type { EngineName } from '@fleetadlc/shared';
+import type { EngineName } from '@openadlc/shared';
 import { ClaudeEngine } from './claude.js';
 import { CodexEngine } from './codex.js';
 import { GrokEngine } from './grok.js';

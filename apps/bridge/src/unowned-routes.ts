@@ -1,4 +1,4 @@
-import { IGNORE_LABEL, hasIgnoreLabel, inertMarkup, stageFromLabels } from '@fleetadlc/shared';
+import { IGNORE_LABEL, hasIgnoreLabel, inertMarkup, stageFromLabels } from '@openadlc/shared';
 import { HttpFailure, type Router } from './router.js';
 import { publicNameOf } from './thread-view.js';
 import { forgetUnowned as forgetStored } from './unowned-issues.js';
@@ -17,7 +17,7 @@ export interface UnownedRouteDeps {
   repo(name: string): Promise<{ id: string; name: string; fullName: string } | null>;
   /** The automation account's client for the repository; null when it cannot act. */
   github(repoFullName: string): Promise<UnownedGitHub | null>;
-  /** The automation account's seat name, which `fleetadlc auth login --bot` takes, for the refusal when it is not connected. */
+  /** The automation account's seat name, which `openadlc auth login --bot` takes, for the refusal when it is not connected. */
   automationName(): Promise<string>;
   /** Sends an issue to intake as an opened one goes. */
   learn(
@@ -54,7 +54,7 @@ function numbersOf(input: unknown): number[] {
 /**
  * The issue as GitHub has it now, if it is still one a person decides here.
  * Any number was acted on: a pull request's was sent to intake through the
- * issues API, or closed, and one that a stage label or `fleetadlc:ignore` had
+ * issues API, or closed, and one that a stage label or `openadlc:ignore` had
  * reached since the list was read was "sent to intake" all the same.
  */
 async function stillUnowned(client: UnownedGitHub, repo: { fullName: string }, number: number) {
@@ -82,7 +82,7 @@ export function registerUnownedRoutes(router: Router, deps: UnownedRouteDeps): v
     const client = await deps.github(repo.fullName);
     if (!client) {
       const name = await deps.automationName();
-      throw new HttpFailure(503, `${name} is not connected to GitHub, so GitHub cannot be asked. Run: fleetadlc auth login --bot ${name}`);
+      throw new HttpFailure(503, `${name} is not connected to GitHub, so GitHub cannot be asked. Run: openadlc auth login --bot ${name}`);
     }
 
     const outcomes: UnownedOutcome[] = [];

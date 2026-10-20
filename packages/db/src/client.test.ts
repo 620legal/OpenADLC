@@ -264,14 +264,14 @@ describe('a held connection that dies', () => {
 
 describe('where a database URL points, as a log line says it', () => {
   it('names the database, host and port, and nothing of the sign-in', () => {
-    expect(db.describeDatabase('postgres://fleetadlc:s3cret@db:5432/fleetadlc_db')).toBe('fleetadlc_db on db:5432');
+    expect(db.describeDatabase('postgres://openadlc:s3cret@db:5432/openadlc_db')).toBe('openadlc_db on db:5432');
   });
 
   it('keeps a password with an @ in it, or given as a parameter, out of the line', () => {
-    const one = db.describeDatabase('postgres://fleet:p@ss@db.example.com/fleetadlc_db');
-    const two = db.describeDatabase('postgres://fleet@db.example.com:6543/fleetadlc_db?password=s3cret&sslpassword=k3y');
-    expect(one).toBe('fleetadlc_db on db.example.com:5432');
-    expect(two).toBe('fleetadlc_db on db.example.com:6543');
+    const one = db.describeDatabase('postgres://fleet:p@ss@db.example.com/openadlc_db');
+    const two = db.describeDatabase('postgres://fleet@db.example.com:6543/openadlc_db?password=s3cret&sslpassword=k3y');
+    expect(one).toBe('openadlc_db on db.example.com:5432');
+    expect(two).toBe('openadlc_db on db.example.com:6543');
     for (const line of [one, two]) {
       expect(line).not.toMatch(/ss|s3cret|k3y|fleet@/);
     }

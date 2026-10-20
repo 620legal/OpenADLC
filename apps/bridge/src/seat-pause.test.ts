@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Router } from './router.js';
 import { heldBySeatPause, pauseSeat, registerSeatPauseRoutes, resumeSeat, seatPausedReason, seatPausesFrom, type SeatPauseStore } from './seat-pause.js';
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   settings: { getSetting: vi.fn(async () => null), setSetting: vi.fn(async () => undefined) },
   withAdvisoryLock: vi.fn(async (_key: string, fn: () => Promise<unknown>) => fn()),
 }));
@@ -102,18 +102,18 @@ describe('a seat paused from Crew', () => {
       store,
       audit,
       resumed,
-      botNamed: async (name) => (name === 'builder' || name === 'fleetadlc-atlas-janedoe' ? { id: 'bot-1', name: 'fleetadlc-atlas-janedoe' } : null),
+      botNamed: async (name) => (name === 'builder' || name === 'openadlc-atlas-janedoe' ? { id: 'bot-1', name: 'openadlc-atlas-janedoe' } : null),
     });
 
     const paused = await call(router, 'POST', '/v1/crew/builder/pause', { reason: 'changing its model' });
     expect(paused.status).toBe(200);
-    expect(paused.body).toMatchObject({ seat: 'fleetadlc-atlas-janedoe', seatPaused: { why: 'changing its model' } });
-    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: 'seat.paused', target: 'fleetadlc-atlas-janedoe' }));
+    expect(paused.body).toMatchObject({ seat: 'openadlc-atlas-janedoe', seatPaused: { why: 'changing its model' } });
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: 'seat.paused', target: 'openadlc-atlas-janedoe' }));
 
-    const back = await call(router, 'POST', '/v1/crew/fleetadlc-atlas-janedoe/resume');
+    const back = await call(router, 'POST', '/v1/crew/openadlc-atlas-janedoe/resume');
     expect(back.body).toMatchObject({ seatPaused: null, wasPaused: true });
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: 'seat.resumed' }));
-    expect(resumed).toHaveBeenCalledWith('fleetadlc-atlas-janedoe');
+    expect(resumed).toHaveBeenCalledWith('openadlc-atlas-janedoe');
 
     expect((await call(router, 'POST', '/v1/crew/nobody/pause')).status).toBe(404);
   });

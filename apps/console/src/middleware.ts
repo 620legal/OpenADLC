@@ -14,7 +14,7 @@ import { SESSION_COOKIE, cookieFrom, sessionRefusal } from './lib/sign-in';
  * The rule is the bridge's (`apps/bridge/src/router.ts`). What counts as the
  * console is not: here it is the host the request was sent to, which is the
  * comparison Next makes for a server action. A console opened under a LAN
- * address, or under a name `FLEETADLC_ALLOWED_HOSTS` lists, works here exactly when
+ * address, or under a name `OPENADLC_ALLOWED_HOSTS` lists, works here exactly when
  * its server actions do. Like Next's check, this does not stop a name
  * rebound to this machine; to the browser, that page and this host are one
  * origin.
@@ -82,7 +82,7 @@ function sayRefusedHost(host: string): void {
   }
   console.warn(
     `[console] refusing requests for Host ${JSON.stringify(name)}: not a name this install is served under. ` +
-      'If people do open the console under it, add it to "allowedHosts" in install.json (FLEETADLC_ALLOWED_HOSTS) and restart.',
+      'If people do open the console under it, add it to "allowedHosts" in install.json (OPENADLC_ALLOWED_HOSTS) and restart.',
   );
 }
 
@@ -139,20 +139,20 @@ const FIXED_HOSTS = ['localhost', 'host.docker.internal', 'host.containers.inter
 
 /**
  * The hosts the console is served under, from the same settings the bridge
- * reads, and the host of `NEXT_PUBLIC_FLEETADLC_TERMINAL_URL`, which a cloud
+ * reads, and the host of `NEXT_PUBLIC_OPENADLC_TERMINAL_URL`, which a cloud
  * install points at the console's own domain. On Cloud Run (`K_SERVICE`) a
- * run.app name is taken too, as the bridge takes it. `FLEETADLC_ALLOWED_HOSTS=*`
+ * run.app name is taken too, as the bridge takes it. `OPENADLC_ALLOWED_HOSTS=*`
  * takes any name.
  */
 export function configuredHosts(env: Record<string, string | undefined> = process.env): HostRule {
-  const extra = (env.FLEETADLC_ALLOWED_HOSTS ?? '').split(',').map((entry) => entry.trim()).filter(Boolean);
+  const extra = (env.OPENADLC_ALLOWED_HOSTS ?? '').split(',').map((entry) => entry.trim()).filter(Boolean);
   const names = new Set<string>(FIXED_HOSTS);
   // The terminal URL is read here at run time, through `env`, and must stay
-  // that way. Written as `process.env.NEXT_PUBLIC_FLEETADLC_TERMINAL_URL`, Next
+  // that way. Written as `process.env.NEXT_PUBLIC_OPENADLC_TERMINAL_URL`, Next
   // inlines the value the image was built with, and a cloud console is built
   // without it (it is set on the service): its own domain would then get 421
-  // until `FLEETADLC_CONSOLE_URL` reached the service too.
-  for (const value of [env.FLEETADLC_CONSOLE_URL, env.FLEETADLC_PUBLIC_URL, env['NEXT_PUBLIC_FLEETADLC_TERMINAL_URL']]) {
+  // until `OPENADLC_CONSOLE_URL` reached the service too.
+  for (const value of [env.OPENADLC_CONSOLE_URL, env.OPENADLC_PUBLIC_URL, env['NEXT_PUBLIC_OPENADLC_TERMINAL_URL']]) {
     if (!value) continue;
     try {
       names.add(new URL(value).hostname.toLowerCase().replace(/\.$/, ''));
@@ -168,7 +168,7 @@ export function configuredHosts(env: Record<string, string | undefined> = proces
 }
 
 /**
- * An entry of `FLEETADLC_ALLOWED_HOSTS` as a name: `mybox.lan`, `mybox.lan:47300`,
+ * An entry of `OPENADLC_ALLOWED_HOSTS` as a name: `mybox.lan`, `mybox.lan:47300`,
  * or the URL the console is opened at, `http://mybox.lan:47300`.
  */
 function allowedEntry(entry: string): string | null {

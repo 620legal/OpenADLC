@@ -84,7 +84,7 @@ export const SETTING_KEYS = [
   // bridge's `unowned-issues.ts`.
   'unownedIssues',
   // Each work item a person held, as JSON keyed by its subject (`repo#n`): who,
-  // when, why. The `fleetadlc:paused` label is what holds it; this says who did.
+  // when, why. The `openadlc:paused` label is what holds it; this says who did.
   // See the bridge's `item-hold.ts`.
   'heldItems',
   // Whether each repository has a testing deploy, as JSON keyed by name: `has` or `none`.

@@ -2,9 +2,9 @@ import { execFile } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { bots, closePool, costs, credentials, describeDatabase, hosts, lastGithubDelivery, settings, waitForDatabase } from '@fleetadlc/db';
-import { credentialKind, fleetHome, getSecretStore, webhookSecretRef, type SecretStore } from '@fleetadlc/github';
-import { actionTarget, stepNamed, type HealthView } from '@fleetadlc/shared';
+import { bots, closePool, costs, credentials, describeDatabase, hosts, lastGithubDelivery, settings, waitForDatabase } from '@openadlc/db';
+import { credentialKind, openadlcHome, getSecretStore, webhookSecretRef, type SecretStore } from '@openadlc/github';
+import { actionTarget, stepNamed, type HealthView } from '@openadlc/shared';
 import { githubClientId } from '../client-id.js';
 import { bridgeHeaders } from '../console-link.js';
 import { healthUrl } from './up.js';
@@ -20,7 +20,7 @@ const run = promisify(execFile);
  * configured in any of the places the bridge reads.
  *
  * The messages are fixed strings. A secret is a signing key, so it must not be
- * interpolated into what `fleetadlc doctor` prints.
+ * interpolated into what `openadlc doctor` prints.
  */
 export function webhookTrustGap(input: {
   installSecret: string;
@@ -34,7 +34,7 @@ export function webhookTrustGap(input: {
   return {
     message: 'this install has no webhook secret, so every GitHub delivery is refused',
     remedy:
-      'generate one with `openssl rand -hex 32` and store it — `fleetadlc init` does, and so does the onboarding walkthrough. ' +
+      'generate one with `openssl rand -hex 32` and store it — `openadlc init` does, and so does the onboarding walkthrough. ' +
       'Put the same value on the GitHub webhook. The bridge does not accept an unsigned delivery in any configuration.',
   };
 }
@@ -43,7 +43,7 @@ export function webhookTrustGap(input: {
  * Which places holding a webhook secret disagree with the one the bridge uses,
  * or null when none do. It names places and never includes a value.
  *
- * The bridge prefers the secret store's to its environment, and `fleetadlc up` starts
+ * The bridge prefers the secret store's to its environment, and `openadlc up` starts
  * it with the install file's secret over an exported one. A secret anywhere
  * else is not what a delivery is verified against, so an operator who gave
  * GitHub that one had every delivery refused while doctor said a secret was
@@ -57,7 +57,7 @@ export function webhookSecretMismatch(input: {
   const places = [
     { name: 'the secret store', value: input.storedSecret ?? '' },
     { name: 'install.json', value: input.installSecret },
-    { name: 'FLEETADLC_WEBHOOK_SECRET', value: input.environmentSecret ?? '' },
+    { name: 'OPENADLC_WEBHOOK_SECRET', value: input.environmentSecret ?? '' },
   ].filter((place) => place.value.length > 0);
   const [used, ...rest] = places;
   const ignored = rest.filter((place) => place.value !== used?.value);
@@ -75,7 +75,7 @@ export function webhookSecretMismatch(input: {
  * A database that takes it takes a superuser login from anything that reaches
  * its port — a task's computer through `host.docker.internal` among them — and
  * a superuser can rewrite the webhook secret, the humans, the ledger and the
- * audit trail. The fix depends on who runs the server: `fleetadlc up` changes
+ * audit trail. The fix depends on who runs the server: `openadlc up` changes
  * the password of the container it keeps, and of no other. Never includes a
  * password.
  */
@@ -84,7 +84,7 @@ export function databasePasswordGap(databaseUrl: string, managed: boolean): { me
   return {
     message: 'the platform database takes the password published with OpenADLC, so anything that reaches its port can log in as its superuser',
     remedy: managed
-      ? 'run `fleetadlc up`: it gives this install a password of its own and keeps it in install.json'
+      ? 'run `openadlc up`: it gives this install a password of its own and keeps it in install.json'
       : 'OpenADLC does not manage this server: change the role’s password on it (ALTER ROLE … PASSWORD), then put the new one in databaseUrl in install.json (POSTGRES_PASSWORD under the compose stack)',
   };
 }
@@ -93,7 +93,7 @@ export function databasePasswordGap(databaseUrl: string, managed: boolean): { me
  * Why the install's database container is reachable from beyond this machine,
  * or null when it is published on loopback only, or not at all.
  *
- * An older `fleetadlc up` published it on every address, where Docker's rules
+ * An older `openadlc up` published it on every address, where Docker's rules
  * go around a host firewall. `up` does not recreate it, since its data is in
  * an anonymous volume `docker rm` would orphan; this says how to move it.
  */
@@ -108,18 +108,18 @@ export function databaseBindingGap(
   return {
     message: `${name} publishes postgres on ${where}, not on 127.0.0.1 only`,
     remedy:
-      `recreate it on loopback, keeping its data: fleetadlc down; docker stop ${name}; docker rename ${name} ${name}-old; ` +
-      `docker run -d --name ${name} --volumes-from ${name}-old -p 127.0.0.1:${port}:5432 pgvector/pgvector:pg16; fleetadlc up. ` +
+      `recreate it on loopback, keeping its data: openadlc down; docker stop ${name}; docker rename ${name} ${name}-old; ` +
+      `docker run -d --name ${name} --volumes-from ${name}-old -p 127.0.0.1:${port}:5432 pgvector/pgvector:pg16; openadlc up. ` +
       `Then docker rm ${name}-old, without -v (docs/self-hosting.md)`,
   };
 }
 
 /**
  * What doctor says about the install's database container: its password, and
- * whether it is published beyond loopback. The container is `fleet-db` on an
- * install from before the rename, not only `fleetadlc-db`. Looking at the new
- * name alone missed a container published on every address, and the password
- * check then had nothing to attach a binding to.
+ * whether it is published beyond loopback. The container is `fleetadlc-db` or
+ * `fleet-db` on an install from before the renames, not only `openadlc-db`.
+ * Looking at the new name alone missed a container published on every address,
+ * and the password check then had nothing to attach a binding to.
  */
 export async function databaseContainerGaps(
   config: { ports: Pick<InstallConfig['ports'], 'postgres'> },
@@ -251,7 +251,7 @@ export async function bridgeProblems(
   if (blocking !== null) return blocking;
   fail(
     `the bridge is not answering on :${config.ports.bridge}, so its health checks could not run`,
-    'fleetadlc up, then see fleetadlc logs bridge',
+    'openadlc up, then see openadlc logs bridge',
   );
   return 0;
 }
@@ -292,7 +292,7 @@ async function checkHostdAuthenticates(
   } else if (response.status === 503) {
     fail(
       'hostd has no internal secret, so it is refusing the bridge too',
-      'the bridge generates it: `fleetadlc up`, or start the bridge',
+      'the bridge generates it: `openadlc up`, or start the bridge',
     );
   } else {
     fail(
@@ -347,9 +347,9 @@ export function unreachableDatabaseHint(url: string): string {
 }
 
 function installHeading(config: InstallConfig): void {
-  // State lives under FLEETADLC_HOME, so say which one this is: a stale value in the
+  // State lives under OPENADLC_HOME, so say which one this is: a stale value in the
   // environment is otherwise an invisible way to be looking at another install.
-  ui.heading(`Install at ${fleetHome()}`);
+  ui.heading(`Install at ${openadlcHome()}`);
   ui.note(databaseLine(databaseInUse(config)));
 }
 
@@ -372,7 +372,7 @@ export async function status(config: InstallConfig, store: SecretStore = getSecr
     }
 
     // A service that answers but has no live pid file was started by something
-    // else — another shell, or an install with a different FLEETADLC_HOME.
+    // else — another shell, or an install with a different OPENADLC_HOME.
     const port =
       name === 'console' ? config.ports.console : name === 'bridge' ? config.ports.bridge : config.ports.hostd;
     const answering = await fetch(healthUrl(name, port), { signal: AbortSignal.timeout(2000) })
@@ -514,9 +514,9 @@ export async function doctor(config: InstallConfig): Promise<void> {
   ui.heading('Containment');
   await checkHostdAuthenticates(config, fail);
   if (homeIsOpen()) {
-    fail(`${fleetHome()} can be read by others on this machine`, `It holds install.json and the logs: chmod 700 ${shellQuote(fleetHome())}, or run fleetadlc up, which does.`);
+    fail(`${openadlcHome()} can be read by others on this machine`, `It holds install.json and the logs: chmod 700 ${shellQuote(openadlcHome())}, or run openadlc up, which does.`);
   }
-  const leftovers = oldSeatFolders(process.env.FLEETADLC_WORK_ROOT ?? join(fleetHome(), 'work'));
+  const leftovers = oldSeatFolders(process.env.OPENADLC_WORK_ROOT ?? join(openadlcHome(), 'work'));
   if (leftovers.length > 0) {
     ui.note(
       `${leftovers.length === 1 ? 'One folder' : `${leftovers.length} folders`} of the bots' own mirrors and homes ${leftovers.length === 1 ? 'is' : 'are'} from before each task had its own computer. ` +
@@ -563,8 +563,8 @@ export async function doctor(config: InstallConfig): Promise<void> {
           else ui.note(line.text);
         }
     } catch {
-      // The expected state before the first `fleetadlc up`, so it is not a failure.
-      ui.warn('the schema is not applied yet; `fleetadlc up` applies the migrations');
+      // The expected state before the first `openadlc up`, so it is not a failure.
+      ui.warn('the schema is not applied yet; `openadlc up` applies the migrations');
     }
   }
 
@@ -594,9 +594,9 @@ export async function doctor(config: InstallConfig): Promise<void> {
   );
 
   if (usable.length > 0) ui.ok(`${usable.length} of ${crew.length} accounts can act: ${usable.join(', ')}`);
-  for (const name of missing) ui.warn(`${name} is not connected — fleetadlc auth login --bot ${name}`);
+  for (const name of missing) ui.warn(`${name} is not connected — openadlc auth login --bot ${name}`);
   if (crew.length > 0 && usable.length === 0) {
-    fail('no bot can act as a GitHub account', 'fleetadlc auth login --all');
+    fail('no bot can act as a GitHub account', 'openadlc auth login --all');
   }
 
   // A missing secret used to be silent, and on a reachable bridge that meant an
@@ -612,10 +612,10 @@ export async function doctor(config: InstallConfig): Promise<void> {
     .catch(() => null);
   const read = inStore ?? (reachable ? await settings.getSetting('webhookSecret').catch(() => undefined) : undefined);
   const storedSecret = read ?? null;
-  say(webhookSecretLine({ installSecret: config.webhookSecret, environmentSecret: process.env.FLEETADLC_WEBHOOK_SECRET, storedSecret: read }), fail);
+  say(webhookSecretLine({ installSecret: config.webhookSecret, environmentSecret: process.env.OPENADLC_WEBHOOK_SECRET, storedSecret: read }), fail);
   const mismatch = webhookSecretMismatch({
     installSecret: config.webhookSecret,
-    environmentSecret: process.env.FLEETADLC_WEBHOOK_SECRET,
+    environmentSecret: process.env.OPENADLC_WEBHOOK_SECRET,
     storedSecret,
   });
   if (mismatch) {
@@ -632,7 +632,7 @@ export async function doctor(config: InstallConfig): Promise<void> {
     if (!delivery) {
       fail(
         'GitHub has never delivered anything to this install',
-        'check the OpenADLC app’s webhook, on the app’s settings page: its URL is this bridge’s `/webhooks/github` (on a cloud install `fleetadlc cloud output` prints it), and the app’s Advanced tab shows each delivery and its response',
+        'check the OpenADLC app’s webhook, on the app’s settings page: its URL is this bridge’s `/webhooks/github` (on a cloud install `openadlc cloud output` prints it), and the app’s Advanced tab shows each delivery and its response',
       );
     } else {
       const age = Date.now() - Date.parse(delivery.at);
@@ -703,7 +703,7 @@ export function clientIdLine(input: { clientId: string | null; storedRead: boole
     return {
       kind: 'warn',
       text: 'no device-flow client id, so a bot whose token is revoked cannot be reconnected',
-      hint: 'create the app in the console walkthrough, then fleetadlc auth login --bot <name>',
+      hint: 'create the app in the console walkthrough, then openadlc auth login --bot <name>',
     };
   }
   return { kind: 'fail', text: 'no GitHub App client id', hint: `Create the app on ${stepNamed('app')} of the console walkthrough. The app needs device flow enabled.` };

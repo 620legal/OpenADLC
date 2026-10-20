@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { setSecretStore, webhookSecretRef, type SecretStore } from '@fleetadlc/github';
+import { setSecretStore, webhookSecretRef, type SecretStore } from '@openadlc/github';
 import type { BridgeConfig } from './config.js';
-import { settings } from '@fleetadlc/db';
+import { settings } from '@openadlc/db';
 import { effectiveConfig, moveWebhookSecretToStore, storeWebhookSecret } from './effective-config.js';
 
 /** The settings table, as rows by key. */
 const table = vi.hoisted(() => ({ rows: {} as Record<string, string> }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   settings: {
     allSettings: vi.fn(async () => ({ ...table.rows })),
     getSetting: vi.fn(async (key: string) => table.rows[key] ?? null),

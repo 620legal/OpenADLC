@@ -11,14 +11,14 @@ let scratch = '';
 let before: string | undefined;
 
 beforeEach(() => {
-  scratch = mkdtempSync(join(tmpdir(), 'fleetadlc-processes-'));
-  before = process.env.FLEETADLC_HOME;
-  process.env.FLEETADLC_HOME = scratch;
+  scratch = mkdtempSync(join(tmpdir(), 'openadlc-processes-'));
+  before = process.env.OPENADLC_HOME;
+  process.env.OPENADLC_HOME = scratch;
 });
 
 afterEach(() => {
-  if (before === undefined) delete process.env.FLEETADLC_HOME;
-  else process.env.FLEETADLC_HOME = before;
+  if (before === undefined) delete process.env.OPENADLC_HOME;
+  else process.env.OPENADLC_HOME = before;
   rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -95,9 +95,9 @@ describe('stopping a service by its pid file', () => {
   });
 
   it('knows a keeper by its command line, and says when it cannot tell', () => {
-    expect(isKeeperOf('bridge', 1, () => 'node /opt/fleetadlc/apps/cli/dist/keep.js bridge --log /x/run/bridge.log -- node dist/main.js')).toBe(true);
-    expect(isKeeperOf('bridge', 1, () => 'node /opt/fleetadlc/apps/cli/dist/keep.js bridge -- node dist/main.js')).toBe(true);
-    expect(isKeeperOf('bridge', 1, () => 'node /opt/fleetadlc/apps/cli/dist/keep.js console -- pnpm start')).toBe(false);
+    expect(isKeeperOf('bridge', 1, () => 'node /opt/openadlc/apps/cli/dist/keep.js bridge --log /x/run/bridge.log -- node dist/main.js')).toBe(true);
+    expect(isKeeperOf('bridge', 1, () => 'node /opt/openadlc/apps/cli/dist/keep.js bridge -- node dist/main.js')).toBe(true);
+    expect(isKeeperOf('bridge', 1, () => 'node /opt/openadlc/apps/cli/dist/keep.js console -- pnpm start')).toBe(false);
     expect(isKeeperOf('bridge', 1, () => null)).toBeNull();
   });
 });

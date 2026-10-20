@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { STAGE_KEYS } from '@fleetadlc/shared';
+import { STAGE_KEYS } from '@openadlc/shared';
 import { renderStatusMarkdown, statusDrift, statusIssueTarget, type StatusReport } from './status.js';
 
 const api = { fullName: 'org/api' };
 const web = { fullName: 'org/web' };
 
-describe('which issue FLEETADLC_STATUS_ISSUE names', () => {
+describe('which issue OPENADLC_STATUS_ISSUE names', () => {
   it('is nothing when unset, as before', () => {
     expect(statusIssueTarget(undefined, [api, web])).toBeNull();
     expect(statusIssueTarget('', [api, web])).toBeNull();

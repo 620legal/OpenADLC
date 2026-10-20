@@ -2,7 +2,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppApi } from '@fleetadlc/github';
+import type { AppApi } from '@openadlc/github';
 import type { Spawner, TunnelProcess } from './tunnel.js';
 
 /**
@@ -10,7 +10,7 @@ import type { Spawner, TunnelProcess } from './tunnel.js';
  * cloudflared, no database. What is being tested is the order things happen in and what is
  * reported when one of them does not.
  */
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -43,8 +43,8 @@ vi.mock('@fleetadlc/db', () => ({
   lastGithubDelivery: vi.fn(async () => HEARD),
 }));
 
-vi.mock('@fleetadlc/github', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@fleetadlc/github')>()),
+vi.mock('@openadlc/github', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@openadlc/github')>()),
   getSecretStore: () => ({
     get: async (ref: string) => SECRETS[ref] ?? null,
     set: async (ref: string, value: string) => {
@@ -93,7 +93,7 @@ function fakeGitHub(options: { refuse?: boolean } = {}): AppApi {
         if (DELIVERIES_FAIL) throw new Error('/app/hook/deliveries → 502');
         return DELIVERIES as T;
       }
-      if (path === '/app') return { slug: 'fleetadlc-janedoe', id: 7, owner: OWNER } as T;
+      if (path === '/app') return { slug: 'openadlc-janedoe', id: 7, owner: OWNER } as T;
       if (options.refuse) throw new Error('/app/hook/config → 422: url is invalid');
       if (method === 'PATCH') {
         const sent = body as { url?: string; secret?: string };
@@ -159,7 +159,7 @@ beforeEach(async () => {
   HEARD = null;
   OWNER = { login: 'janedoe', type: 'User' };
   HOOK = { url: 'https://example.invalid/webhooks/github' };
-  const { appPrivateKeyRef } = await import('@fleetadlc/github');
+  const { appPrivateKeyRef } = await import('@openadlc/github');
   SECRETS[appPrivateKeyRef()] = PRIVATE_KEY;
 });
 
@@ -197,7 +197,7 @@ describe('a laptop, with a tunnel OpenADLC raises itself', () => {
   });
 
   it('points the tunnel at the gateway, never at the bridge', async () => {
-    // The bridge believes `x-fleetadlc-identity`. A tunnel onto its port would let a
+    // The bridge believes `x-openadlc-identity`. A tunnel onto its port would let a
     // stranger answer a gate as the operator.
     const ports: number[] = [];
     const setup = await subject({
@@ -248,9 +248,9 @@ describe('an install that already has an address', () => {
   it('takes the address and points GitHub at it', async () => {
     const setup = await subject();
 
-    const status = await setup.configure({ mode: 'address', url: 'https://fleetadlc.example.com' });
+    const status = await setup.configure({ mode: 'address', url: 'https://openadlc.example.com' });
 
-    expect(status.webhookUrl).toBe('https://fleetadlc.example.com/webhooks/github');
+    expect(status.webhookUrl).toBe('https://openadlc.example.com/webhooks/github');
     expect(status.configured).toBe(true);
     expect(status.tunnel.running).toBe(false);
   });
@@ -270,7 +270,7 @@ describe('an install that already has an address', () => {
     const setup = await subject({ spawner: cloudflared.spawner });
 
     await setup.configure({ mode: 'tunnel' });
-    await setup.configure({ mode: 'address', url: 'https://fleetadlc.example.com' });
+    await setup.configure({ mode: 'address', url: 'https://openadlc.example.com' });
 
     expect(cloudflared.killed()).toBeGreaterThan(0);
   });
@@ -293,7 +293,7 @@ describe('when something will not work', () => {
     // reports itself as configured.
     const setup = await subject({ api: fakeGitHub({ refuse: true }) });
 
-    await expect(setup.configure({ mode: 'address', url: 'https://fleetadlc.example.com' })).rejects.toThrow(
+    await expect(setup.configure({ mode: 'address', url: 'https://openadlc.example.com' })).rejects.toThrow(
       /422/,
     );
     expect(STORED.publicUrl).toBeUndefined();
@@ -306,10 +306,10 @@ describe('when something will not work', () => {
     SECRETS = {};
     const setup = await subject();
 
-    const status = await setup.configure({ mode: 'address', url: 'https://fleetadlc.example.com' });
+    const status = await setup.configure({ mode: 'address', url: 'https://openadlc.example.com' });
 
     expect(status.canAutomate).toBe(false);
-    expect(STORED.publicUrl).toBe('https://fleetadlc.example.com');
+    expect(STORED.publicUrl).toBe('https://openadlc.example.com');
     expect(SECRETS[HOOK_SECRET]).toBe('generated-secret');
     expect(status.ready).toBe(false);
     expect(status.detail).toMatch(/could not be asked/);
@@ -340,8 +340,8 @@ describe('after the bridge restarts', () => {
   });
 
   it('does not call a real address stale, since nothing about it expired', async () => {
-    STORED = { publicUrl: 'https://fleetadlc.example.com', webhookSecret: 'generated-secret' };
-    HOOK = { url: 'https://fleetadlc.example.com/webhooks/github', secret: 'generated-secret' };
+    STORED = { publicUrl: 'https://openadlc.example.com', webhookSecret: 'generated-secret' };
+    HOOK = { url: 'https://openadlc.example.com/webhooks/github', secret: 'generated-secret' };
     DELIVERIES = [{ event: 'issues', action: 'labeled', status_code: 200, delivered_at: '2026-09-24T17:58:00Z', redelivery: false }];
 
     const status = await (await subject()).status();
@@ -351,7 +351,7 @@ describe('after the bridge restarts', () => {
   });
 
   it('reports a hook somebody repointed from GitHub instead of trusting what it stored', async () => {
-    STORED = { publicUrl: 'https://fleetadlc.example.com', webhookSecret: 'generated-secret' };
+    STORED = { publicUrl: 'https://openadlc.example.com', webhookSecret: 'generated-secret' };
     HOOK = { url: 'https://somewhere-else.example/webhooks/github', secret: 'generated-secret' };
 
     const status = await (await subject()).status();
@@ -390,13 +390,13 @@ describe('the tick in the step list', () => {
   });
 
   it('is given to a fixed address, which nothing about expires', async () => {
-    STORED = { publicUrl: 'https://fleetadlc.example.com', webhookSecret: 'generated-secret' };
+    STORED = { publicUrl: 'https://openadlc.example.com', webhookSecret: 'generated-secret' };
 
     expect(await (await subject()).localReadiness()).toEqual({ ready: true, stale: false });
   });
 
   it('costs no call to GitHub, since the page renders on every load', async () => {
-    STORED = { publicUrl: 'https://fleetadlc.example.com', webhookSecret: 'generated-secret' };
+    STORED = { publicUrl: 'https://openadlc.example.com', webhookSecret: 'generated-secret' };
     await (await subject()).localReadiness();
 
     expect(CALLS).toEqual([]);
@@ -414,7 +414,7 @@ describe('what GitHub last delivered', () => {
   });
 
   it('asks nothing about deliveries when OpenADLC cannot speak as the app', async () => {
-    const { appPrivateKeyRef } = await import('@fleetadlc/github');
+    const { appPrivateKeyRef } = await import('@openadlc/github');
     delete SECRETS[appPrivateKeyRef()];
     const setup = await subject();
 
@@ -444,11 +444,11 @@ describe('a restart', () => {
   });
 
   it('leaves a fixed address, and an install whose app key it lacks, alone', async () => {
-    STORED = { publicUrl: 'https://fleetadlc.example.com', webhookSecret: 'kept-secret' };
+    STORED = { publicUrl: 'https://openadlc.example.com', webhookSecret: 'kept-secret' };
     expect(await (await subject()).resume()).toBeNull();
 
     STORED = { publicUrl: 'https://old-dead-name.trycloudflare.com', webhookSecret: 'kept-secret' };
-    const { appPrivateKeyRef } = await import('@fleetadlc/github');
+    const { appPrivateKeyRef } = await import('@openadlc/github');
     delete SECRETS[appPrivateKeyRef()];
     expect(await (await subject()).resume()).toBeNull();
     expect(CALLS.some((call) => call.method === 'PATCH')).toBe(false);
@@ -503,9 +503,9 @@ describe('a restart', () => {
   });
 
   it('keeps a fixed address when taking down', async () => {
-    STORED = { publicUrl: 'https://fleetadlc.example.com', webhookSecret: 'kept-secret' };
+    STORED = { publicUrl: 'https://openadlc.example.com', webhookSecret: 'kept-secret' };
     await (await subject()).takeDown();
-    expect(STORED.publicUrl).toBe('https://fleetadlc.example.com');
+    expect(STORED.publicUrl).toBe('https://openadlc.example.com');
   });
 
   it('does not raise a second tunnel over one already running', async () => {
@@ -532,7 +532,7 @@ function unheardEvent(found: { subject: string; happenedAt: string; foundAt: str
       subject: found.subject,
       what: found.what ?? 'imported',
       title: 'Document the webhook step',
-      url: 'https://github.com/janedoe/fleetadlc-testbed/issues/1',
+      url: 'https://github.com/janedoe/openadlc-testbed/issues/1',
       happenedAt: found.happenedAt,
     },
   };
@@ -540,8 +540,8 @@ function unheardEvent(found: { subject: string; happenedAt: string; foundAt: str
 
 /** Everything OpenADLC can set, set: the hook points here and both halves hold the secret. */
 function configuredHere(): void {
-  STORED = { publicUrl: 'https://fleetadlc.example.com', webhookSecret: 'generated-secret' };
-  HOOK = { url: 'https://fleetadlc.example.com/webhooks/github', secret: 'generated-secret' };
+  STORED = { publicUrl: 'https://openadlc.example.com', webhookSecret: 'generated-secret' };
+  HOOK = { url: 'https://openadlc.example.com/webhooks/github', secret: 'generated-secret' };
 }
 
 /**
@@ -568,7 +568,7 @@ describe('whether GitHub sends at all', () => {
 
   it('says GitHub is not sending once reconcile has found what it never delivered', async () => {
     configuredHere();
-    UNHEARD_EVENTS = [unheardEvent({ subject: 'fleetadlc-testbed#1', happenedAt: minutesAgo(40), foundAt: minutesAgo(30) })];
+    UNHEARD_EVENTS = [unheardEvent({ subject: 'openadlc-testbed#1', happenedAt: minutesAgo(40), foundAt: minutesAgo(30) })];
 
     const status = await (await subject()).status();
 
@@ -577,9 +577,9 @@ describe('whether GitHub sends at all', () => {
     expect(status.ready).toBe(false);
     expect(status.detail).toBe(NOT_SENDING);
     expect(NOT_SENDING).toBe('GitHub is not sending events to OpenADLC. Open the app’s settings and turn on Active under Webhook');
-    expect(status.unheard.map((entry) => entry.subject)).toEqual(['fleetadlc-testbed#1']);
+    expect(status.unheard.map((entry) => entry.subject)).toEqual(['openadlc-testbed#1']);
     // The one page where Active can be switched on.
-    expect(status.settingsUrl).toBe('https://github.com/settings/apps/fleetadlc-janedoe');
+    expect(status.settingsUrl).toBe('https://github.com/settings/apps/openadlc-janedoe');
   });
 
   it('links an organization’s app under the organization’s settings', async () => {
@@ -587,7 +587,7 @@ describe('whether GitHub sends at all', () => {
     OWNER = { login: 'acme', type: 'Organization' };
 
     expect((await (await subject()).status()).settingsUrl).toBe(
-      'https://github.com/organizations/acme/settings/apps/fleetadlc-janedoe',
+      'https://github.com/organizations/acme/settings/apps/openadlc-janedoe',
     );
   });
 
@@ -595,7 +595,7 @@ describe('whether GitHub sends at all', () => {
     // A delivery on record means GitHub sends. What reconcile found was a
     // delivery that failed — a tunnel down, a laptop asleep — not a switch off.
     configuredHere();
-    UNHEARD_EVENTS = [unheardEvent({ subject: 'fleetadlc-testbed#1', happenedAt: minutesAgo(40), foundAt: minutesAgo(30) })];
+    UNHEARD_EVENTS = [unheardEvent({ subject: 'openadlc-testbed#1', happenedAt: minutesAgo(40), foundAt: minutesAgo(30) })];
     DELIVERIES = [{ event: 'issues', action: 'opened', status_code: 0, delivered_at: minutesAgo(40), redelivery: false }];
 
     const status = await (await subject()).status();
@@ -608,7 +608,7 @@ describe('whether GitHub sends at all', () => {
     // "Could not ask" said as "GitHub sends nothing" would send somebody to a
     // switch that is already on.
     configuredHere();
-    UNHEARD_EVENTS = [unheardEvent({ subject: 'fleetadlc-testbed#1', happenedAt: minutesAgo(40), foundAt: minutesAgo(30) })];
+    UNHEARD_EVENTS = [unheardEvent({ subject: 'openadlc-testbed#1', happenedAt: minutesAgo(40), foundAt: minutesAgo(30) })];
     DELIVERIES_FAIL = true;
 
     const status = await (await subject()).status();
@@ -621,13 +621,13 @@ describe('whether GitHub sends at all', () => {
     // GitHub keeps three days of deliveries. An issue from four days ago may
     // have been delivered and aged out; it says nothing about the switch.
     configuredHere();
-    UNHEARD_EVENTS = [unheardEvent({ subject: 'fleetadlc-testbed#1', happenedAt: minutesAgo(4 * 24 * 60), foundAt: minutesAgo(30) })];
+    UNHEARD_EVENTS = [unheardEvent({ subject: 'openadlc-testbed#1', happenedAt: minutesAgo(4 * 24 * 60), foundAt: minutesAgo(30) })];
 
     expect((await (await subject()).status()).hearing).toBe('never');
   });
 
   it('asks GitHub what it delivered after writing the hook, rather than calling it done', async () => {
-    const status = await (await subject()).configure({ mode: 'address', url: 'https://fleetadlc.example.com' });
+    const status = await (await subject()).configure({ mode: 'address', url: 'https://openadlc.example.com' });
 
     expect(CALLS.some((call) => call.path.startsWith('/app/hook/deliveries'))).toBe(true);
     expect(status.ready).toBe(false);
@@ -670,11 +670,11 @@ describe('an address for the app about to be created', () => {
   });
 
   it('uses the address the install already answers on, raising nothing', async () => {
-    STORED = { publicUrl: 'https://fleetadlc.example.com' };
+    STORED = { publicUrl: 'https://openadlc.example.com' };
     const setup = await subject({ spawner: (() => { throw new Error('no tunnel was asked for'); }) as Spawner });
 
     expect(await setup.newAppAddress()).toBe('have');
-    expect(await setup.addressForNewApp()).toBe('https://fleetadlc.example.com');
+    expect(await setup.addressForNewApp()).toBe('https://openadlc.example.com');
   });
 
   it('does not create the app at a tunnel address that died with the last bridge', async () => {
@@ -705,7 +705,7 @@ describe('an app created before there was an address', () => {
     const setup = await subject();
     expect((await setup.status()).placeholderHook).toBe(true);
 
-    const configured = await setup.configure({ mode: 'address', url: 'https://fleetadlc.example.com' });
+    const configured = await setup.configure({ mode: 'address', url: 'https://openadlc.example.com' });
     expect(configured.placeholderHook).toBe(false);
     // Still switched off, which is what the step goes on to say.
     expect(configured.hearing).toBe('never');

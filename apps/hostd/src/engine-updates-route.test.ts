@@ -1,8 +1,8 @@
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { EngineUpdateResult, EngineUpdateStart, EngineUpdateStatus } from '@fleetadlc/shared';
+import type { EngineUpdateResult, EngineUpdateStart, EngineUpdateStatus } from '@openadlc/shared';
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async () => undefined),
   bots: { listBots: vi.fn(async () => []), getBotByName: vi.fn(async () => null) },
   modelAccounts: { get: vi.fn(async () => null) },
@@ -11,7 +11,7 @@ vi.mock('@fleetadlc/db', () => ({
   tasks: { getTask: vi.fn(async () => null) },
 }));
 
-import { audit } from '@fleetadlc/db';
+import { audit } from '@openadlc/db';
 import { EngineUpdateRefused } from './engine-updates.js';
 
 /**
@@ -21,13 +21,13 @@ import { EngineUpdateRefused } from './engine-updates.js';
  */
 
 const INSTALL_SECRET = 'install-secret-for-the-test';
-const PLATFORM = { 'x-fleetadlc-internal-secret': INSTALL_SECRET, 'x-fleetadlc-on-behalf-of': 'ada', 'content-type': 'application/json' };
+const PLATFORM = { 'x-openadlc-internal-secret': INSTALL_SECRET, 'x-openadlc-on-behalf-of': 'ada', 'content-type': 'application/json' };
 
 const STATUS: EngineUpdateStatus = {
   driver: 'docker',
   applicable: true,
   reason: '',
-  image: 'fleetadlc-bot:latest',
+  image: 'openadlc-bot:latest',
   inUse: { '@anthropic-ai/claude-code': '2.1.282', '@openai/codex': '0.155.1', '@xai-official/grok': '1.0.41' },
   inUseSource: 'label',
   previous: null,

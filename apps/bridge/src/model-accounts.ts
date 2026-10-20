@@ -1,4 +1,4 @@
-import { audit, modelAccounts, type ModelAccount } from '@fleetadlc/db';
+import { audit, modelAccounts, type ModelAccount } from '@openadlc/db';
 import {
   ProviderKeyRejected,
   aliasFamily,
@@ -12,9 +12,9 @@ import {
   type AvailableModel,
   type ModelListCache,
   type ModelProvider,
-} from '@fleetadlc/engines';
-import { getSecretStore, modelAccountRef, type SecretStore } from '@fleetadlc/github';
-import type { AccountCheck, SubscriptionLogin } from '@fleetadlc/shared';
+} from '@openadlc/engines';
+import { getSecretStore, modelAccountRef, type SecretStore } from '@openadlc/github';
+import type { AccountCheck, SubscriptionLogin } from '@openadlc/shared';
 import type { CliModel } from './hostd-client.js';
 import type { Router } from './router.js';
 

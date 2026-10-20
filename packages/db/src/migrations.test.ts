@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { PERSONA_SEATS, REPO_COLORS, seatForPersona } from '@fleetadlc/shared';
+import { PERSONA_SEATS, REPO_COLORS, seatForPersona } from '@openadlc/shared';
 
 const migrations = join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations');
 
@@ -30,7 +30,7 @@ describe('0008, on an install that already has rows', () => {
   const sql = statements('0008_model_assignment.sql');
 
   it('checks new ledger rows for an alias without validating old ones', () => {
-    // `migrate` runs inside `fleetadlc up`. A row that recorded `newest:` before the
+    // `migrate` runs inside `openadlc up`. A row that recorded `newest:` before the
     // check existed would otherwise fail the migration, and the install with it.
     const check = sql.find((statement) => statement.includes('add constraint ledger_model_resolved'));
     expect(check).toBeDefined();
@@ -60,7 +60,7 @@ describe('0035, a computer per task and tasks at once per seat', () => {
   });
 
   it('settles a seat running one subject twice before it builds the index that forbids it', () => {
-    // An index that cannot be built fails the migration, and `fleetadlc up`.
+    // An index that cannot be built fails the migration, and `openadlc up`.
     const settle = sql.findIndex((statement) => statement.startsWith('update tasks set state = \'stopped\''));
     const index = sql.findIndex((statement) => statement.startsWith('create unique index if not exists tasks_one_live_per_bot_subject'));
     expect(settle).toBeGreaterThan(-1);
@@ -87,7 +87,7 @@ describe('0010, which gives every bot a seat', () => {
   it('keeps every name it does not know as a seat of its own, and lets no two rows share one', () => {
     expect(text).toContain('else name end as slot');
     // Two rows wanting one seat keep their own names instead of failing the
-    // unique index, and `fleetadlc up` with it.
+    // unique index, and `openadlc up` with it.
     expect(text).toContain('having count(*) > 1');
     expect(text).toContain('set slot = case when wanted.slot in (select slot from contested) then bots.name else wanted.slot end');
   });
@@ -202,7 +202,7 @@ describe('0040, which checks what the ledger and a task are charged', () => {
 
   it('refuses a negative or NaN cost, and negative tokens, on new rows without validating old ones', () => {
     // A session reported -1000 and "NaN" and the ledger took both. An install
-    // that already holds such a row still has to migrate inside `fleetadlc up`.
+    // that already holds such a row still has to migrate inside `openadlc up`.
     for (const name of ['ledger_cost_counted', 'ledger_tokens_counted', 'tasks_cost_counted']) {
       const check = sql.find((statement) => statement.includes(`add constraint ${name}`));
       expect(check, name).toBeDefined();
@@ -295,7 +295,7 @@ describe('0144, which keeps each request’s eight-character subject its own', (
   const sql = statements('0144_request_id8_unique.sql');
 
   it('marks the requests already sharing a prefix before it builds the index that forbids one, and leaves them out of it', () => {
-    // An index that cannot be built fails the migration, and `fleetadlc up`.
+    // An index that cannot be built fails the migration, and `openadlc up`.
     expect(sql).toContain('alter table requests add column if not exists id8_shared boolean not null default false');
     const mark = sql.findIndex((statement) => statement.startsWith('update requests set id8_shared = true'));
     const index = sql.findIndex((statement) => statement.startsWith('create unique index if not exists requests_id8'));

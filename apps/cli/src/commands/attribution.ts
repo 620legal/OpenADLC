@@ -1,4 +1,4 @@
-import { getSecretStore, type SecretStore } from '@fleetadlc/github';
+import { getSecretStore, type SecretStore } from '@openadlc/github';
 import { bridgeHeaders } from '../console-link.js';
 import type { InstallConfig } from '../install.js';
 import { ui } from '../ui.js';
@@ -10,7 +10,7 @@ interface Rotated {
 }
 
 /**
- * `fleetadlc attribution rotate [--drop-old]`: a new key for signing the
+ * `openadlc attribution rotate [--drop-old]`: a new key for signing the
  * crew's posts, made by the running bridge (`POST /v1/attribution/rotate`).
  *
  * Through the bridge rather than the secret store: the bridge keeps the key
@@ -35,7 +35,7 @@ export async function rotateAttribution(
   } catch (error) {
     // No console secret yet says to start the install too; anything else is a bridge that is not up.
     const missing = error instanceof Error && error.message.includes('no console secret');
-    ui.fail(missing ? error.message : `the bridge is not answering on ${where}; start the install with fleetadlc up and run this again`);
+    ui.fail(missing ? error.message : `the bridge is not answering on ${where}; start the install with openadlc up and run this again`);
     process.exitCode = 1;
     return false;
   }
@@ -57,6 +57,6 @@ export async function rotateAttribution(
         'open pull requests wait for a fresh lead review. In audit mode nothing is held',
     );
   }
-  ui.note('take a new backup now (fleetadlc backup): an older one restores the old key');
+  ui.note('take a new backup now (openadlc backup): an older one restores the old key');
   return true;
 }

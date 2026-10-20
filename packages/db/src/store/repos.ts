@@ -1,4 +1,4 @@
-import { REPO_DEFAULTS, nextRepoColor, normaliseStageModes, type Repo, type RepoColor, type StageKey, type StageMode } from '@fleetadlc/shared';
+import { REPO_DEFAULTS, nextRepoColor, normaliseStageModes, type Repo, type RepoColor, type StageKey, type StageMode } from '@openadlc/shared';
 import { query, queryOne } from '../client.js';
 import { audit } from './audit.js';
 
@@ -100,7 +100,7 @@ interface RepoInput {
 }
 
 /** Who the audit log says changed a repository from `config/repos.yaml`. */
-export const SEED_ACTOR = 'fleetadlc seed';
+export const SEED_ACTOR = 'openadlc seed';
 
 /**
  * A repository as `config/repos.yaml` lists it. `name`, `fullName` and the
@@ -127,7 +127,7 @@ function canonical(value: unknown): string {
 }
 
 /**
- * A repository as `config/repos.yaml` describes it, at every `fleetadlc up`.
+ * A repository as `config/repos.yaml` describes it, at every `openadlc up`.
  *
  * A setting the file writes wins; one it leaves out keeps the row's value — a
  * person's choice on the console's repository page, or the default the row
@@ -419,7 +419,7 @@ export async function clearPlanLimits(repoFullName: string): Promise<boolean> {
 
 /**
  * How a repository ships when it says so here rather than in its own
- * `.github/fleetadlc.yml`, and where its testing environment is served; see
+ * `.github/openadlc.yml`, and where its testing environment is served; see
  * `migrations/0033_repo_delivery.sql`. Null is "not said here".
  */
 export interface RepoDelivery {

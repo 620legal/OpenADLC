@@ -1,6 +1,6 @@
-import { settings, type SettingKey } from '@fleetadlc/db';
-import { accessTokenRef, engineKeyRef, internalSecretRef, refreshTokenRef, signingKeyRef } from '@fleetadlc/github';
-import { ENGINES, isAvatar, isCrewColor, nameForLogin, sameLogin, seatForPersona } from '@fleetadlc/shared';
+import { settings, type SettingKey } from '@openadlc/db';
+import { accessTokenRef, engineKeyRef, internalSecretRef, refreshTokenRef, signingKeyRef } from '@openadlc/github';
+import { ENGINES, isAvatar, isCrewColor, nameForLogin, sameLogin, seatForPersona } from '@openadlc/shared';
 import { BackupError, type ArchivedBot, type BackupContents, type BackupManifest } from './archive.js';
 import {
   RESTORED_REQUEST_STATES,
@@ -267,12 +267,12 @@ function restorable(ref: string, contents: Pick<BackupContents, 'manifest'>): 'w
 
 /**
  * How to make a seat the archive has and this install does not. Not just
- * `fleetadlc up`: on an install that is set up, it has already seeded every
+ * `openadlc up`: on an install that is set up, it has already seeded every
  * seat its config/bots.yaml names, so a seat missing here is one that file
  * does not, and running it again changed nothing.
  */
 export const ADD_THE_SEAT =
-  'add it — an extra builder with Add a builder in Settings → GitHub accounts, any other as an entry in config/bots.yaml and then `fleetadlc up` — then restore again';
+  'add it — an extra builder with Add a builder in Settings → GitHub accounts, any other as an entry in config/bots.yaml and then `openadlc up` — then restore again';
 
 export interface HistoryPlan {
   threads: number;
@@ -362,7 +362,7 @@ export interface RestorePlan {
  * this install has it as.
  *
  * Compared without case, the way onboarding compares them: GitHub answers with
- * the canonical casing, so `FleetADLC-Atlas` and `fleetadlc-atlas` are one account, and
+ * the canonical casing, so `OpenADLC-Atlas` and `openadlc-atlas` are one account, and
  * telling them apart here would delete a working token over a capital letter.
  */
 function changesAccount(live: string | null | undefined, archived: string): boolean {
@@ -475,7 +475,7 @@ function assignmentFor(
   // A seat that thinks with no model here and did there has nothing to be given.
   if (bot.engine === 'none' && live.engine === 'none') return null;
   // Nobody chose it: it came from config/bots.yaml, which this install reads
-  // for itself — and puts back over anything unchosen at the next `fleetadlc up`.
+  // for itself — and puts back over anything unchosen at the next `openadlc up`.
   if (!bot.modelSetAt && !bot.modelAccountId) return null;
   // An engine a newer OpenADLC added is one this install cannot run.
   if (!(ENGINES as readonly string[]).includes(bot.engine)) {

@@ -16,7 +16,7 @@ import { SESSION_COOKIE, sessionRefusal } from './sign-in';
  * reaching the console; behind IAP nothing the browser sends can reach here as
  * one, because IAP strips and re-signs them. Without IAP in front, they are
  * whatever the browser sent, so a local console never forwards them.
- * `x-fleetadlc-identity` is the local path and the bridge ignores it when the
+ * `x-openadlc-identity` is the local path and the bridge ignores it when the
  * install verifies; locally the bridge believes it only beside the console
  * secret, which this server holds and a browser never sees.
  */
@@ -24,10 +24,10 @@ import { SESSION_COOKIE, sessionRefusal } from './sign-in';
 const ASSERTION = 'x-goog-iap-jwt-assertion';
 // What the bridge reads it as: Google strips `x-goog-*` on the way into a
 // run.app service, so the original name does not survive the hop.
-const FORWARDED_ASSERTION = 'x-fleetadlc-iap-assertion';
+const FORWARDED_ASSERTION = 'x-openadlc-iap-assertion';
 const EMAIL = 'x-goog-authenticated-user-email';
-const LOCAL = 'x-fleetadlc-identity';
-const CONSOLE_SECRET = 'x-fleetadlc-console-secret';
+const LOCAL = 'x-openadlc-identity';
+const CONSOLE_SECRET = 'x-openadlc-console-secret';
 
 /** Whether the missing assertion has been reported in this process yet. */
 let reportedMissing = false;
@@ -38,7 +38,7 @@ let reportedMissing = false;
  * nothing said which headers had arrived in its place.
  */
 function reportMissing(incoming: Headers): void {
-  if (reportedMissing || process.env.FLEETADLC_IDENTITY_MODE_EXPECTED !== 'iap') return;
+  if (reportedMissing || process.env.OPENADLC_IDENTITY_MODE_EXPECTED !== 'iap') return;
   reportedMissing = true;
   const names = [...incoming.keys()].filter((name) => name.startsWith('x-')).sort();
   console.warn(`[console] no ${ASSERTION} on a request; x- headers present: ${names.join(', ') || '(none)'}`);
@@ -46,11 +46,11 @@ function reportMissing(incoming: Headers): void {
 
 function build(incoming: Headers): Record<string, string> {
   const forwarded: Record<string, string> = {};
-  const secret = process.env.FLEETADLC_CONSOLE_SECRET;
+  const secret = process.env.OPENADLC_CONSOLE_SECRET;
   if (secret) forwarded[CONSOLE_SECRET] = secret;
 
-  if (process.env.FLEETADLC_IDENTITY_MODE_EXPECTED !== 'iap') {
-    forwarded[LOCAL] = process.env.FLEETADLC_IDENTITY ?? 'console';
+  if (process.env.OPENADLC_IDENTITY_MODE_EXPECTED !== 'iap') {
+    forwarded[LOCAL] = process.env.OPENADLC_IDENTITY ?? 'console';
     return forwarded;
   }
 
@@ -63,14 +63,14 @@ function build(incoming: Headers): Record<string, string> {
   }
   else reportMissing(incoming);
 
-  const email = process.env.FLEETADLC_IDENTITY_MODE_EXPECTED === 'iap' ? get(EMAIL) : null;
+  const email = process.env.OPENADLC_IDENTITY_MODE_EXPECTED === 'iap' ? get(EMAIL) : null;
   if (email) forwarded[EMAIL] = email;
 
   // Only a fallback: an install that verifies does not accept this, which is the
   // point. Naming the console rather than a person is honest about what it is.
   // `||`, not `??`: a blank email from a proxy named nobody, and the bridge
   // then took the caller for its own "local operator".
-  forwarded[LOCAL] = email?.replace(/^accounts\.google\.com:/, '') || process.env.FLEETADLC_IDENTITY || 'console';
+  forwarded[LOCAL] = email?.replace(/^accounts\.google\.com:/, '') || process.env.OPENADLC_IDENTITY || 'console';
 
   return forwarded;
 }

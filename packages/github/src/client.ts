@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { withHeader, withSeat } from '@fleetadlc/shared';
+import { withHeader, withSeat } from '@openadlc/shared';
 const API = 'https://api.github.com';
 
 export interface GitHubClientOptions {
@@ -8,7 +8,7 @@ export interface GitHubClientOptions {
   actingAs: string;
   /**
    * The line every body this client writes starts with — which install and
-   * which stage wrote it (`headerFor`, in @fleetadlc/shared). A crew on one GitHub
+   * which stage wrote it (`headerFor`, in @openadlc/shared). A crew on one GitHub
    * account posts as one user, so GitHub's own attribution cannot say. Absent
    * for a client that writes no prose, such as the app's own.
    */
@@ -21,7 +21,7 @@ export interface GitHubClientOptions {
   seat?: string;
   /**
    * Signs a body as its seat's, last, after the header and the seat tag; see
-   * `signBody` in @fleetadlc/shared. Absent for a client that has no key to sign
+   * `signBody` in @openadlc/shared. Absent for a client that has no key to sign
    * with, whose posts then carry none.
    */
   sign?: (body: string, post: { repo: string; kind: string; n?: number | null }) => string;
@@ -159,7 +159,7 @@ export class GitHubClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
 
-  /** Who this client acts as (`actingAs`): the app's `fleetadlc-app`, or an account's login. */
+  /** Who this client acts as (`actingAs`): the app's `openadlc-app`, or an account's login. */
   get actingAs(): string {
     return this.options.actingAs;
   }
@@ -191,7 +191,7 @@ export class GitHubClient {
         accept: options.accept ?? 'application/vnd.github+json',
         authorization: `Bearer ${this.options.token}`,
         'x-github-api-version': '2022-11-28',
-        'user-agent': `fleetadlc (acting as ${this.options.actingAs})`,
+        'user-agent': `openadlc (acting as ${this.options.actingAs})`,
         ...(body ? { 'content-type': 'application/json' } : {}),
       },
       ...(body ? { body: JSON.stringify(body) } : {}),

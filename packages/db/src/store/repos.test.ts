@@ -12,8 +12,8 @@ import { RepoNameTaken, addRepo, getProductionChoice, getRepoByName, listRepos, 
 function row(extra: Record<string, unknown> = {}) {
   return {
     id: 'repo-1',
-    name: 'fleetadlc-testbed',
-    full_name: 'janedoe/fleetadlc-testbed',
+    name: 'openadlc-testbed',
+    full_name: 'janedoe/openadlc-testbed',
     owner_bot_id: 'id-builder',
     concurrency: 1,
     stage_modes: { merged: 'assist' },
@@ -73,14 +73,14 @@ describe('reading repositories', () => {
 
   it('reads untouched on a stage other than intake or spec as autonomous, which is what the dispatcher did with it', async () => {
     vi.mocked(queryOne).mockResolvedValue(row({ stage_modes: { build: 'untouched', spec: 'untouched' } }));
-    const repo = await getRepoByName('fleetadlc-testbed');
+    const repo = await getRepoByName('openadlc-testbed');
     expect(repo!.stageModes).toEqual({ build: 'autonomous', spec: 'untouched' });
   });
 
   it('by name, the same way', async () => {
     vi.mocked(queryOne).mockResolvedValue(null);
-    await getRepoByName('fleetadlc-testbed');
-    await getRepoByName('fleetadlc-testbed', { includeRemoved: true });
+    await getRepoByName('openadlc-testbed');
+    await getRepoByName('openadlc-testbed', { includeRemoved: true });
     const [active, all] = sent();
     expect(active!.sql).toContain('and removed_at is null');
     expect(all!.sql).not.toContain('removed_at is null');
@@ -117,7 +117,7 @@ describe('adding a repository', () => {
       .mockResolvedValueOnce(row({ color: 'violet', concurrency: 2 }));
     vi.mocked(query).mockResolvedValueOnce([{ color: 'blue' }, { color: 'amber' }]);
 
-    const { repo, outcome } = await addRepo({ ...INPUT, name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' });
+    const { repo, outcome } = await addRepo({ ...INPUT, name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' });
 
     expect(outcome).toBe('restored');
     expect(repo).toMatchObject({ color: 'violet', concurrency: 2, removedAt: null });
@@ -136,14 +136,14 @@ describe('adding a repository', () => {
       .mockResolvedValueOnce(row({ color: 'pink' }));
     vi.mocked(query).mockResolvedValueOnce([{ color: 'blue' }, { color: 'amber' }]);
 
-    await addRepo({ ...INPUT, name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' });
+    await addRepo({ ...INPUT, name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' });
 
     expect(sent().find((one) => one.sql.startsWith('update repos'))!.params).toEqual(['repo-1', 'id-builder', 'pink', 'main']);
   });
 
   it('leaves one already here as it is, rather than resetting its settings', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce(row({ concurrency: 3 })).mockResolvedValueOnce(row({ concurrency: 3 }));
-    const { outcome } = await addRepo({ ...INPUT, fullName: 'Janedoe/FleetADLC-Testbed' });
+    const { outcome } = await addRepo({ ...INPUT, fullName: 'Janedoe/OpenADLC-Testbed' });
     expect(outcome).toBe('already');
     // GitHub's names are not case-sensitive, and neither is this.
     expect(sent()[0]!.sql).toContain('where lower(full_name) = lower($1)');
@@ -152,7 +152,7 @@ describe('adding a repository', () => {
 
   it('takes GitHub’s default branch for one already here, or keeps its own when GitHub was not asked', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce(row({ concurrency: 3 })).mockResolvedValueOnce(row({ concurrency: 3, default_branch: 'master' }));
-    const { repo } = await addRepo({ ...INPUT, fullName: 'janedoe/fleetadlc-testbed', defaultBranch: 'master' });
+    const { repo } = await addRepo({ ...INPUT, fullName: 'janedoe/openadlc-testbed', defaultBranch: 'master' });
     const update = sent().find((one) => one.sql.startsWith('update repos'))!;
     expect(update.sql).toContain('default_branch = coalesce($4, default_branch)');
     expect(update.params.at(-1)).toBe('master');
@@ -161,7 +161,7 @@ describe('adding a repository', () => {
 
     vi.mocked(queryOne).mockReset();
     vi.mocked(queryOne).mockResolvedValueOnce(row()).mockResolvedValueOnce(row());
-    await addRepo({ ...INPUT, fullName: 'janedoe/fleetadlc-testbed', defaultBranch: null });
+    await addRepo({ ...INPUT, fullName: 'janedoe/openadlc-testbed', defaultBranch: null });
     expect(sent().find((one) => one.sql.startsWith('update repos'))!.params.at(-1)).toBeNull();
   });
 
@@ -252,7 +252,7 @@ describe('seeding a repository from config/repos.yaml', () => {
     await upsertRepo({ ...FILE, concurrency: 2, stageModes: { intake: 'autonomous' } });
     const [line] = audited();
     expect(audited()).toHaveLength(1);
-    expect(line!.params.slice(0, 3)).toEqual(['fleetadlc seed', 'repo.seeded', 'acme/api']);
+    expect(line!.params.slice(0, 3)).toEqual(['openadlc seed', 'repo.seeded', 'acme/api']);
     const payload = JSON.parse(String(line!.params[3]));
     expect(payload.fields).toEqual(['concurrency', 'stageModes']);
     expect(payload.from.concurrency).toBe(1);
@@ -290,7 +290,7 @@ describe('seeding a repository from config/repos.yaml', () => {
 describe('removing a repository', () => {
   it('marks when it stopped and deletes nothing', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce(row({ removed_at: new Date('2026-09-24T10:00:00Z') }));
-    const removed = await removeRepo('fleetadlc-testbed');
+    const removed = await removeRepo('openadlc-testbed');
     expect(removed?.removedAt).toBe('2026-09-24T10:00:00.000Z');
     const [statement] = sent();
     expect(statement!.sql).toContain('removed_at = coalesce(removed_at, now())');
@@ -306,30 +306,30 @@ describe('removing a repository', () => {
 describe('a repository’s settings', () => {
   it('change its colour, and only while OpenADLC works in it', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce(row({ color: 'teal' }));
-    const updated = await updateRepoSettings('fleetadlc-testbed', { color: 'teal' });
+    const updated = await updateRepoSettings('openadlc-testbed', { color: 'teal' });
     expect(updated?.color).toBe('teal');
     const [statement] = sent();
     expect(statement!.sql).toContain('color = coalesce($4, color)');
     expect(statement!.sql).toContain('where name = $1 and removed_at is null');
-    expect(statement!.params).toEqual(['fleetadlc-testbed', null, null, 'teal', null]);
+    expect(statement!.params).toEqual(['openadlc-testbed', null, null, 'teal', null]);
   });
 
   it('change its default branch', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce(row({ default_branch: 'develop' }));
-    const updated = await updateRepoSettings('fleetadlc-testbed', { defaultBranch: 'develop' });
+    const updated = await updateRepoSettings('openadlc-testbed', { defaultBranch: 'develop' });
     expect(updated?.defaultBranch).toBe('develop');
     const [statement] = sent();
     expect(statement!.sql).toContain('default_branch = coalesce($5, default_branch)');
-    expect(statement!.params).toEqual(['fleetadlc-testbed', null, null, null, 'develop']);
+    expect(statement!.params).toEqual(['openadlc-testbed', null, null, null, 'develop']);
   });
 
   it('take the default branch GitHub reports, by full name, only while OpenADLC works in it', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce(row({ default_branch: 'master' }));
-    expect((await setDefaultBranch('Janedoe/FleetADLC-Testbed', 'master'))?.defaultBranch).toBe('master');
+    expect((await setDefaultBranch('Janedoe/OpenADLC-Testbed', 'master'))?.defaultBranch).toBe('master');
     const [statement] = sent();
     expect(statement!.sql).toContain('default_branch = $2');
     expect(statement!.sql).toContain('where lower(full_name) = lower($1) and removed_at is null');
-    expect(statement!.params).toEqual(['Janedoe/FleetADLC-Testbed', 'master']);
+    expect(statement!.params).toEqual(['Janedoe/OpenADLC-Testbed', 'master']);
 
     vi.mocked(queryOne).mockResolvedValueOnce(null);
     expect(await setDefaultBranch('acme/gone', 'main')).toBeNull();
@@ -339,10 +339,10 @@ describe('a repository’s settings', () => {
     // The console sends the one stage a person changed; replacing the map
     // with it would drop every other stage's mode.
     vi.mocked(queryOne).mockResolvedValueOnce(row({ stage_modes: { merged: 'autonomous', spec: 'conditional' } }));
-    await updateRepoSettings('fleetadlc-testbed', { stageModes: { spec: 'conditional' } });
+    await updateRepoSettings('openadlc-testbed', { stageModes: { spec: 'conditional' } });
     const [statement] = sent();
     expect(statement!.sql).toContain("stage_modes = coalesce(stage_modes, '{}'::jsonb) || coalesce($3::jsonb, '{}'::jsonb)");
-    expect(statement!.params).toEqual(['fleetadlc-testbed', null, JSON.stringify({ spec: 'conditional' }), null, null]);
+    expect(statement!.params).toEqual(['openadlc-testbed', null, JSON.stringify({ spec: 'conditional' }), null, null]);
   });
 });
 

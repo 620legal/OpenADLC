@@ -195,7 +195,7 @@ describe('where the engine command is looked for', () => {
   it('asks the image once per command, not once per bot', async () => {
     // Nine bots on one engine is one `docker run`, not nine.
     let runs = 0;
-    const probe = commandInImage('fleetadlc-bot:latest', async () => {
+    const probe = commandInImage('openadlc-bot:latest', async () => {
       runs += 1;
       return true;
     });
@@ -215,21 +215,21 @@ describe('where the engine command is looked for', () => {
 
   it('asks the named image, as the bot user would find it', async () => {
     let seen: string[] = [];
-    const probe = commandInImage('registry.example/fleetadlc/bot:pinned', async (_cmd, args) => {
+    const probe = commandInImage('registry.example/openadlc/bot:pinned', async (_cmd, args) => {
       seen = args;
       return true;
     });
 
     await probe('codex');
 
-    expect(seen).toContain('registry.example/fleetadlc/bot:pinned');
+    expect(seen).toContain('registry.example/openadlc/bot:pinned');
     expect(seen.join(' ')).toContain('command -v codex');
   });
 
   it('treats a probe that throws as "not there" rather than failing the report', async () => {
     // Docker not running is not the same as an engine being broken, but a
     // readiness call that throws takes the whole page with it.
-    const probe = commandInImage('fleetadlc-bot:latest', async () => {
+    const probe = commandInImage('openadlc-bot:latest', async () => {
       throw new Error('Cannot connect to the Docker daemon');
     });
 

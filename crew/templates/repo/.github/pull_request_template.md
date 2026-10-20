@@ -23,7 +23,7 @@ takes off one a crew account puts on.
 
 <!--
 What you ran, and the exact line of output that shows it working: what
-`fleetadlc-ci` or `make ci` printed, and any command you ran besides. Reviewers
+`openadlc-ci` or `make ci` printed, and any command you ran besides. Reviewers
 read the code and do not run it, so say what you saw.
 
     make ci

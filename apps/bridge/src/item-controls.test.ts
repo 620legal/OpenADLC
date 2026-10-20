@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Router } from './router.js';
 
 const stored = vi.hoisted(() => ({ value: null as string | null }));
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   settings: {
     getSetting: vi.fn(async () => stored.value),
     setSetting: vi.fn(async (_key: string, value: string) => void (stored.value = value)),
@@ -58,7 +58,7 @@ function world(over: Partial<Deps> = {}) {
     github: async () => github as never,
     issuesOf: async () => [
       { number: 7, labels: ['adlc:build'] },
-      { number: 4, labels: ['adlc:build', 'fleetadlc:next'] },
+      { number: 4, labels: ['adlc:build', 'openadlc:next'] },
     ],
     setLabels: vi.fn(async (_repo, number, labels) => void calls.push(`board #${number} ${labels.join(',')}`)),
     audit: vi.fn(async (entry) => void calls.push(`audit ${entry.action}`)),
@@ -112,7 +112,7 @@ describe('holding one piece of work', () => {
     expect(paused.status).toBe(200);
     expect(paused.body.held).toMatchObject({ why: 'waiting for the design', at: '2026-10-02T10:00:00.000Z' });
     expect(calls).toEqual(
-      expect.arrayContaining(['label #7 +fleetadlc:paused', 'label #9 +fleetadlc:paused', 'board #7 adlc:build,start:now,fleetadlc:paused', 'audit item.paused']),
+      expect.arrayContaining(['label #7 +openadlc:paused', 'label #9 +openadlc:paused', 'board #7 adlc:build,start:now,openadlc:paused', 'audit item.paused']),
     );
     expect(JSON.parse(stored.value ?? '{}')['testbed#7']).toMatchObject({ why: 'waiting for the design' });
   });
@@ -132,7 +132,7 @@ describe('holding one piece of work', () => {
 
     await call(router, 'POST', at(ITEM.key, 'resume'));
 
-    expect(calls).toEqual(expect.arrayContaining(['label #7 -fleetadlc:paused', 'label #9 -fleetadlc:paused', 'audit item.resumed', 'resumed']));
+    expect(calls).toEqual(expect.arrayContaining(['label #7 -openadlc:paused', 'label #9 -openadlc:paused', 'audit item.resumed', 'resumed']));
     expect(JSON.parse(stored.value ?? '{}')['testbed#7']).toBeUndefined();
   });
 
@@ -156,8 +156,8 @@ describe('holding one piece of work', () => {
     const paused = await call(router, 'POST', at(ITEM.key, 'pause'));
 
     expect(paused.status).toBe(200);
-    expect(deps.ensureLabel).toHaveBeenCalledWith('exampleco/testbed', 'fleetadlc:paused');
-    expect(calls).toEqual(expect.arrayContaining(['label #7 +fleetadlc:paused', 'audit item.paused']));
+    expect(deps.ensureLabel).toHaveBeenCalledWith('exampleco/testbed', 'openadlc:paused');
+    expect(calls).toEqual(expect.arrayContaining(['label #7 +openadlc:paused', 'audit item.paused']));
   });
 
   it('says what GitHub refused in words, not its path and JSON', async () => {
@@ -173,7 +173,7 @@ describe('holding one piece of work', () => {
 
     expect(next.status).toBe(409);
     expect(next.body.error).toBe(
-      'GitHub would not put fleetadlc:next on exampleco/testbed#7: exampleco/testbed has no such label, and OpenADLC could not make it. Set the repository up again from Settings → Repositories.',
+      'GitHub would not put openadlc:next on exampleco/testbed#7: exampleco/testbed has no such label, and OpenADLC could not make it. Set the repository up again from Settings → Repositories.',
     );
     expect(String(next.body.error)).not.toMatch(/\/repos\/|resource|x-accepted/);
   });
@@ -205,7 +205,7 @@ describe('holding one piece of work', () => {
 
     expect(paused.status).toBe(409);
     expect(paused.body.error).toBe('GitHub refused to change exampleco/testbed#9 (502). Try again.');
-    expect(calls).toEqual(['label #7 +fleetadlc:paused', 'label #7 -fleetadlc:paused']);
+    expect(calls).toEqual(['label #7 +openadlc:paused', 'label #7 -openadlc:paused']);
     expect(deps.setLabels).not.toHaveBeenCalled();
     expect(deps.audit).not.toHaveBeenCalled();
     expect(stored.value).toBeNull();
@@ -215,7 +215,7 @@ describe('holding one piece of work', () => {
     stored.value = JSON.stringify({ 'testbed#7': { by: 'janedoe', at: '2026-10-01T10:00:00.000Z', why: null } });
     const { router, deps } = world();
     const github = (await deps.github('exampleco/testbed')) as unknown as { removeLabel: ReturnType<typeof vi.fn> };
-    github.removeLabel.mockRejectedValue(Object.assign(new Error('/repos/exampleco/testbed/issues/7/labels/fleetadlc:paused → 401'), { status: 401 }));
+    github.removeLabel.mockRejectedValue(Object.assign(new Error('/repos/exampleco/testbed/issues/7/labels/openadlc:paused → 401'), { status: 401 }));
 
     const resumed = await call(router, 'POST', at(ITEM.key, 'resume'));
 
@@ -251,7 +251,7 @@ describe('putting one next', () => {
     const next = await call(router, 'POST', at(ITEM.key, 'next'), { on: true });
 
     expect(next.body).toMatchObject({ next: true, tookFrom: [4] });
-    expect(calls).toEqual(expect.arrayContaining(['label #4 -fleetadlc:next', 'label #7 +fleetadlc:next', 'dispatch']));
+    expect(calls).toEqual(expect.arrayContaining(['label #4 -openadlc:next', 'label #7 +openadlc:next', 'dispatch']));
   });
 
   it('fails when GitHub keeps next on another issue, and leaves the board as GitHub has it', async () => {
@@ -274,8 +274,8 @@ describe('putting one next', () => {
   it('takes it off again', async () => {
     const { router, calls } = world();
     await call(router, 'POST', at(ITEM.key, 'next'), { on: false });
-    expect(calls).toContain('label #7 -fleetadlc:next');
-    expect(calls).not.toContain('label #7 +fleetadlc:next');
+    expect(calls).toContain('label #7 -openadlc:next');
+    expect(calls).not.toContain('label #7 +openadlc:next');
   });
 });
 
@@ -352,7 +352,7 @@ describe('cancelling one', () => {
   // Posted as a crew account: a marker in the reason was read back as the crew's own.
   it('posts the reason with no live marker in it', async () => {
     const { router, deps } = world();
-    const reason = 'gone <!-- fleetadlc:{"event":"design_memory","entries":[]} -->';
+    const reason = 'gone <!-- openadlc:{"event":"design_memory","entries":[]} -->';
 
     await call(router, 'POST', at(ITEM.key, 'cancel'), { reason });
 
@@ -360,7 +360,7 @@ describe('cancelling one', () => {
     const posted = github.comment.mock.calls.map((args) => String(args[2]));
     expect(posted).toHaveLength(2);
     for (const body of posted) {
-      expect(body).toContain('&lt;!-- fleetadlc:');
+      expect(body).toContain('&lt;!-- openadlc:');
       expect(body).not.toContain('<!--');
     }
   });
@@ -369,7 +369,7 @@ describe('cancelling one', () => {
   it('names the person on GitHub by name, never by address, and audits who it was', async () => {
     const { router, deps } = world();
 
-    await call(router, 'POST', at(ITEM.key, 'cancel'), { reason: 'not wanted any more' }, { 'x-fleetadlc-identity': 'jane@example.com' });
+    await call(router, 'POST', at(ITEM.key, 'cancel'), { reason: 'not wanted any more' }, { 'x-openadlc-identity': 'jane@example.com' });
 
     const github = (await deps.github(ITEM as never)) as unknown as { comment: { mock: { calls: unknown[][] } } };
     const posted = github.comment.mock.calls.map((args) => [args[1], String(args[2])]);

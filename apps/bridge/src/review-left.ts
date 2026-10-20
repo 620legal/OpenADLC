@@ -1,4 +1,4 @@
-import { parseMarker, postedBySeat, withoutMarker, type Task } from '@fleetadlc/shared';
+import { parseMarker, postedBySeat, withoutMarker, type Task } from '@openadlc/shared';
 
 /**
  * Whether a review task left the review it was for.

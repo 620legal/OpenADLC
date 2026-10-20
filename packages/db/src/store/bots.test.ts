@@ -28,15 +28,15 @@ const ACCOUNT_ID = '550e8400-e29b-41d4-a716-446655440000';
 function botRow(extra: Record<string, unknown> = {}) {
   return {
     id: 'bot-1',
-    name: 'fleetadlc-atlas-janedoe',
+    name: 'openadlc-atlas-janedoe',
     slot: 'builder',
     display_name: 'Builder',
     role: 'implement',
     engine: 'claude',
     model: 'claude-sonnet-5',
-    github_login: 'fleetadlc-atlas-janedoe',
+    github_login: 'openadlc-atlas-janedoe',
     host_id: null,
-    container: 'bot-fleetadlc-atlas-janedoe',
+    container: 'bot-openadlc-atlas-janedoe',
     status: 'stopped',
     skills: ['implement'],
     sidecar_db: true,
@@ -135,7 +135,7 @@ describe('reseeding the crew', () => {
     });
 
     const sql = String(vi.mocked(queryOne).mock.calls[0]?.[0]).replace(/\s+/g, ' ');
-    // A connected builder is `fleetadlc-atlas-janedoe`. Upserting by name found no
+    // A connected builder is `openadlc-atlas-janedoe`. Upserting by name found no
     // `builder` and would have added a second one.
     expect(sql).toContain('on conflict (slot) do update set');
     // A new seat is named after itself, with a container to match.
@@ -152,7 +152,7 @@ describe('reseeding the crew', () => {
       'model_set_at = case when bots.model = excluded.model and bots.engine = excluded.engine then bots.model_set_at end',
     );
     expect(sql).toContain('model_account_id = case when bots.engine = excluded.engine then bots.model_account_id end');
-    expect(bot).toMatchObject({ name: 'fleetadlc-atlas-janedoe', slot: 'builder', modelAccountId: ACCOUNT_ID });
+    expect(bot).toMatchObject({ name: 'openadlc-atlas-janedoe', slot: 'builder', modelAccountId: ACCOUNT_ID });
   });
 
   it('stores the file’s CPUs and memory, and its tasks at once only when it names a number', async () => {
@@ -221,12 +221,12 @@ describe('the row’s half of a rename', () => {
   const input = {
     id: 'bot-1',
     from: 'atlas',
-    to: 'fleetadlc-atlas-janedoe',
+    to: 'openadlc-atlas-janedoe',
     actor: 'bridge',
-    reason: 'connected as FleetADLC-Atlas-Janedoe',
+    reason: 'connected as OpenADLC-Atlas-Janedoe',
     secretRefs: [
-      { from: 'github-refresh-atlas', to: 'github-refresh-fleetadlc-atlas-janedoe' },
-      { from: 'github-token-atlas', to: 'github-token-fleetadlc-atlas-janedoe' },
+      { from: 'github-refresh-atlas', to: 'github-refresh-openadlc-atlas-janedoe' },
+      { from: 'github-token-atlas', to: 'github-token-openadlc-atlas-janedoe' },
     ],
   };
 
@@ -235,7 +235,7 @@ describe('the row’s half of a rename', () => {
 
     const bot = await renameBotRow(input);
 
-    expect(bot?.name).toBe('fleetadlc-atlas-janedoe');
+    expect(bot?.name).toBe('openadlc-atlas-janedoe');
     const [rename, ...rest] = calls;
     expect(rename?.sql).toContain('update bots set name = $3,');
     expect(rename?.sql).toContain('renamed_from = $2, updated_at = now() where id = $1 and name = $2');
@@ -243,20 +243,20 @@ describe('the row’s half of a rename', () => {
     expect(rename?.sql).toContain(
       "container = case when right(container, length($2)) = $2 then left(container, length(container) - length($2)) || $3 else 'bot-' || $3 end",
     );
-    expect(rename?.params).toEqual(['bot-1', 'atlas', 'fleetadlc-atlas-janedoe']);
+    expect(rename?.params).toEqual(['bot-1', 'atlas', 'openadlc-atlas-janedoe']);
     expect(rest.map((call) => call.params)).toEqual([
-      ['bot-1', 'github-refresh-atlas', 'github-refresh-fleetadlc-atlas-janedoe'],
-      ['bot-1', 'github-token-atlas', 'github-token-fleetadlc-atlas-janedoe'],
+      ['bot-1', 'github-refresh-atlas', 'github-refresh-openadlc-atlas-janedoe'],
+      ['bot-1', 'github-token-atlas', 'github-token-openadlc-atlas-janedoe'],
       // The account's secrets are filed under the bot's name, and move with it.
-      ['bot-1', 'atlas', 'fleetadlc-atlas-janedoe'],
+      ['bot-1', 'atlas', 'openadlc-atlas-janedoe'],
       ['bot-1'],
       // No seat is paused: the pauses are read, and left alone.
       ['workPausedSeats'],
       [
         'bridge',
         'bot.renamed',
-        'fleetadlc-atlas-janedoe',
-        JSON.stringify({ from: 'atlas', to: 'fleetadlc-atlas-janedoe', reason: 'connected as FleetADLC-Atlas-Janedoe' }),
+        'openadlc-atlas-janedoe',
+        JSON.stringify({ from: 'atlas', to: 'openadlc-atlas-janedoe', reason: 'connected as OpenADLC-Atlas-Janedoe' }),
       ],
     ]);
     expect(rest[3]?.sql).toBe('delete from sessions where bot_id = $1');
@@ -273,12 +273,12 @@ describe('the row’s half of a rename', () => {
     const pause = { by: 'janedoe', at: '2026-10-01T09:00:00.000Z', why: 'checking its account' };
     const other = { by: 'janedoe', at: '2026-10-01T09:05:00.000Z', why: null };
     // A stale entry under the new name gives way to the moved one.
-    const { settings } = transaction([botRow()], JSON.stringify({ atlas: pause, reviewer: other, 'fleetadlc-atlas-janedoe': other }));
+    const { settings } = transaction([botRow()], JSON.stringify({ atlas: pause, reviewer: other, 'openadlc-atlas-janedoe': other }));
 
     await renameBotRow(input);
 
     const after = JSON.parse(settings.workPausedSeats ?? '{}');
-    expect(after).toEqual({ reviewer: other, 'fleetadlc-atlas-janedoe': pause });
+    expect(after).toEqual({ reviewer: other, 'openadlc-atlas-janedoe': pause });
     expect(after.atlas).toBeUndefined();
   });
 
@@ -286,7 +286,7 @@ describe('the row’s half of a rename', () => {
     for (const stored of [null, '', 'not json', '[]', JSON.stringify({ reviewer: { by: 'janedoe', at: 'x', why: null } })]) {
       const { calls, settings } = transaction([botRow()], stored);
 
-      expect((await renameBotRow(input))?.name).toBe('fleetadlc-atlas-janedoe');
+      expect((await renameBotRow(input))?.name).toBe('openadlc-atlas-janedoe');
       expect(settings.workPausedSeats).toBe(stored);
       expect(calls.some((call) => call.sql.includes('update settings'))).toBe(false);
     }
@@ -314,7 +314,7 @@ describe('setting an assignment', () => {
 
     const update = vi.mocked(queryOne).mock.calls.find((call) => String(call[0]).includes('update bots'));
     expect(update?.[1]).toEqual(['bot-1', 'claude', 'newest:opus', ACCOUNT_ID]);
-    // What tells the next `fleetadlc up` this model is the console's.
+    // What tells the next `openadlc up` this model is the console's.
     expect(String(update?.[0])).toMatch(/model_set_at = now\(\)/);
     expect(bot.model).toBe('newest:opus');
     expect(bot.modelAccountId).toBe(ACCOUNT_ID);
@@ -404,10 +404,10 @@ describe('an account connecting', () => {
   it('files a new account as an identity under the bot’s own name, where its secrets already are', async () => {
     const calls = transaction({ 'select name from bots': [{ name: 'builder' }], 'insert into github_identities': [{ id: 'id-1' }] });
 
-    await setGithubLogin('bot-1', 'FleetADLC-Builder');
+    await setGithubLogin('bot-1', 'OpenADLC-Builder');
 
     const insert = calls.find((call) => call.sql.startsWith('insert into github_identities'));
-    expect(insert?.params).toEqual(['FleetADLC-Builder', 'builder']);
+    expect(insert?.params).toEqual(['OpenADLC-Builder', 'builder']);
     expect(calls.at(-1)).toEqual({ sql: 'update bots set identity_id = $2 where id = $1', params: ['bot-1', 'id-1'] });
   });
 
@@ -417,7 +417,7 @@ describe('an account connecting', () => {
       'from github_identities i where lower(i.login)': [{ id: 'shared', sharers: '2' }],
     });
 
-    await setGithubLogin('bot-qa', 'fleetadlc-example');
+    await setGithubLogin('bot-qa', 'openadlc-example');
 
     expect(calls.some((call) => call.sql.startsWith('insert into github_identities'))).toBe(false);
     expect(calls.some((call) => call.sql.startsWith('update github_identities set login'))).toBe(false);
@@ -465,7 +465,7 @@ describe('adding and removing a seat while the install runs', () => {
     // connected bot — so the new seat is `builder-4`.
     const calls = transaction({
       'select slot, name from bots': [
-        { slot: 'builder', name: 'fleetadlc-atlas-janedoe' },
+        { slot: 'builder', name: 'openadlc-atlas-janedoe' },
         { slot: 'builder-2', name: 'builder-2' },
         { slot: 'qa', name: 'builder-3' },
       ],

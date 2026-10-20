@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { GitHubApiError, type AppApi } from '@fleetadlc/github';
+import { GitHubApiError, type AppApi } from '@openadlc/github';
 
 /**
  * The last setup step, with no GitHub behind it.
@@ -10,7 +10,7 @@ import { GitHubApiError, type AppApi } from '@fleetadlc/github';
  * written, and that reading the plan never writes anything — the whole point of
  * moving this out of a terminal is that you see it before it happens.
  */
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -43,8 +43,8 @@ vi.mock('@fleetadlc/db', () => ({
 /** `repo_plan_limits`, by repository. */
 const PLAN_LIMITS = new Map<string, Record<string, unknown>>();
 
-vi.mock('@fleetadlc/github', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@fleetadlc/github')>()),
+vi.mock('@openadlc/github', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@openadlc/github')>()),
   getSecretStore: () => ({
     get: async (ref: string) => SECRETS[ref] ?? null,
     set: async () => undefined,
@@ -121,12 +121,12 @@ async function subject(overrides: Record<string, unknown> = {}) {
 beforeEach(async () => {
   STORED = {};
   CALLS = [];
-  REPOS = [{ name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed', defaultBranch: 'main' }];
+  REPOS = [{ name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', defaultBranch: 'main' }];
   CREW = [{ name: 'sydney', role: 'review_lead', githubLogin: 'ottoexampleco' }];
   REMOTE_LABELS = [];
   REFUSES = new Set();
   PLAN_LIMITS.clear();
-  const { appPrivateKeyRef } = await import('@fleetadlc/github');
+  const { appPrivateKeyRef } = await import('@openadlc/github');
   SECRETS = { [appPrivateKeyRef()]: PRIVATE_KEY };
 });
 
@@ -176,7 +176,7 @@ describe('showing what a click would change', () => {
     expect(plan?.canApply).toBe(false);
     expect(plan?.labelChanges).toBe(0);
     expect(plan?.detail).toMatch(/labels could not be read .*502/);
-    await expect(setup.applyLabels('janedoe/fleetadlc-testbed')).rejects.toThrow(/502/);
+    await expect(setup.applyLabels('janedoe/openadlc-testbed')).rejects.toThrow(/502/);
     expect(CALLS.filter((call) => call.method === 'POST' && call.path.endsWith('/labels'))).toEqual([]);
   });
 
@@ -229,7 +229,7 @@ describe('showing what a click would change', () => {
 
     expect(plan?.canApply).toBe(false);
     expect(plan?.detail).toBe(
-      'the OpenADLC app is not installed on janedoe/fleetadlc-testbed: install it on this repository, or add janedoe/fleetadlc-testbed to the repositories its installation can reach',
+      'the OpenADLC app is not installed on janedoe/openadlc-testbed: install it on this repository, or add janedoe/openadlc-testbed to the repositories its installation can reach',
     );
   });
 
@@ -241,7 +241,7 @@ describe('showing what a click would change', () => {
 
     expect(plan?.canApply).toBe(false);
     expect(plan?.detail).toBe('OpenADLC has no GitHub App yet, so it can only report. Create it on the Create the app step');
-    await expect(setup.applyLabels('janedoe/fleetadlc-testbed')).rejects.toThrow(/has no GitHub App yet.*Create it on the Create the app step/);
+    await expect(setup.applyLabels('janedoe/openadlc-testbed')).rejects.toThrow(/has no GitHub App yet.*Create it on the Create the app step/);
   });
 
   it('says so plainly when there is nothing left to do', async () => {
@@ -260,7 +260,7 @@ describe('showing what a click would change', () => {
 
 describe('writing the board’s columns', () => {
   it('creates the ones that are missing', async () => {
-    await (await subject()).applyLabels('janedoe/fleetadlc-testbed');
+    await (await subject()).applyLabels('janedoe/openadlc-testbed');
 
     const created = CALLS.filter((call) => call.method === 'POST' && call.path.endsWith('/labels'));
     expect(created.map((call) => (call.body as { name: string }).name)).toEqual([
@@ -272,7 +272,7 @@ describe('writing the board’s columns', () => {
 
   it('leaves a matching label alone rather than rewriting it', async () => {
     REMOTE_LABELS = [LABELS[0]!];
-    await (await subject()).applyLabels('janedoe/fleetadlc-testbed');
+    await (await subject()).applyLabels('janedoe/openadlc-testbed');
 
     const touched = CALLS.filter(
       (call) => ['POST', 'PATCH'].includes(call.method) && call.path.includes('/labels'),
@@ -282,7 +282,7 @@ describe('writing the board’s columns', () => {
 
   it('updates a drifted one in place instead of creating a duplicate', async () => {
     REMOTE_LABELS = [{ ...LABELS[0]!, color: 'ff0000' }];
-    await (await subject()).applyLabels('janedoe/fleetadlc-testbed');
+    await (await subject()).applyLabels('janedoe/openadlc-testbed');
 
     const patched = CALLS.filter((call) => call.method === 'PATCH');
     expect(patched).toHaveLength(1);
@@ -292,7 +292,7 @@ describe('writing the board’s columns', () => {
   it('never deletes a label somebody else added', async () => {
     // The repository is not OpenADLC's to tidy. Additive, always.
     REMOTE_LABELS = [{ name: 'good first issue', color: 'aaaaaa', description: 'theirs' }];
-    await (await subject()).applyLabels('janedoe/fleetadlc-testbed');
+    await (await subject()).applyLabels('janedoe/openadlc-testbed');
 
     expect(CALLS.filter((call) => call.method === 'DELETE')).toEqual([]);
   });
@@ -310,7 +310,7 @@ describe('writing the board’s columns', () => {
           },
         }),
       })
-    ).applyLabels('janedoe/fleetadlc-testbed');
+    ).applyLabels('janedoe/openadlc-testbed');
 
     expect(done.filter((one) => one.detail.startsWith('failed:'))).toHaveLength(1);
     // The other two still went in.
@@ -339,7 +339,7 @@ describe('writing the board’s columns', () => {
           },
         }),
       })
-    ).applyLabels('janedoe/fleetadlc-testbed');
+    ).applyLabels('janedoe/openadlc-testbed');
 
     // stage:intake was on the second page, so it is not created again.
     expect(CALLS.filter((call) => call.method === 'POST' && call.path.endsWith('/labels')).map((call) => (call.body as { name: string }).name)).toEqual(['stage:spec', 'stage:build']);
@@ -348,7 +348,7 @@ describe('writing the board’s columns', () => {
 
   it('refuses to write at all without the app key', async () => {
     SECRETS = {};
-    await expect((await subject()).applyLabels('janedoe/fleetadlc-testbed')).rejects.toThrow(/no app key/);
+    await expect((await subject()).applyLabels('janedoe/openadlc-testbed')).rejects.toThrow(/no app key/);
   });
 });
 
@@ -360,7 +360,7 @@ describe('acting as the app rather than as a bot', () => {
     await (await subject()).plan();
 
     const minted = CALLS.find((call) => call.path.includes('access_tokens'));
-    expect(minted?.body).toMatchObject({ repositories: ['fleetadlc-testbed'] });
+    expect(minted?.body).toMatchObject({ repositories: ['openadlc-testbed'] });
   });
 
   it('names whoever actually holds the lead reviewer role', async () => {
@@ -370,20 +370,20 @@ describe('acting as the app rather than as a bot', () => {
     // Reached through the rules input, which is what CODEOWNERS is built from.
     const input = await (setup as unknown as {
       rulesInput: (repo: unknown) => Promise<{ leadReviewer: string }>;
-    }).rulesInput({ fullName: 'janedoe/fleetadlc-testbed', defaultBranch: 'main' });
+    }).rulesInput({ fullName: 'janedoe/openadlc-testbed', defaultBranch: 'main' });
 
     expect(input.leadReviewer).toBe('a-different-login');
   });
 
   it('names the person, not a guessed account, when no lead reviewer is connected', async () => {
     // A seat with no account has no login to put in CODEOWNERS. The fallback
-    // was `fleetadlc-sydney`, which is somebody's account or will be.
+    // was `openadlc-sydney`, which is somebody's account or will be.
     CREW = [{ name: 'lead-reviewer', role: 'review_lead', githubLogin: null }];
     const setup = await subject();
 
     const input = await (setup as unknown as {
       rulesInput: (repo: unknown) => Promise<{ leadReviewer: string }>;
-    }).rulesInput({ fullName: 'janedoe/fleetadlc-testbed', defaultBranch: 'main' });
+    }).rulesInput({ fullName: 'janedoe/openadlc-testbed', defaultBranch: 'main' });
 
     expect(input.leadReviewer).toBe('janedoe');
   });
@@ -435,7 +435,7 @@ describe('one apply leaves a repository able to land', () => {
     const client = {
       request: async <T,>(method: string, path: string, body?: unknown): Promise<T> => {
         CALLS.push({ method, path, body });
-        if (method === 'GET' && path === '/repos/janedoe/fleetadlc-testbed') return { owner: { type: 'User' }, private: false } as T;
+        if (method === 'GET' && path === '/repos/janedoe/openadlc-testbed') return { owner: { type: 'User' }, private: false } as T;
         if (method === 'GET' && path.endsWith('/contents/.github/workflows')) {
           if (workflows.length === 0) throw Object.assign(new Error('404'), { status: 404 });
           return workflows.map((name) => ({ name })) as T;
@@ -465,11 +465,11 @@ describe('one apply leaves a repository able to land', () => {
       config: { repoRoot: ROOT, organization: 'janedoe', gitHubClientId: 'Iv23liTEST', humans: ['janedoe'], automationBot: 'flow', publicUrl: '', webhookSecret: '' },
     });
 
-    const outcomes = await setup.applyRules('janedoe/fleetadlc-testbed');
+    const outcomes = await setup.applyRules('janedoe/openadlc-testbed');
 
     expect(outcomes.find((one) => one.name === '.github/workflows/ci.yml')).toMatchObject({ action: 'created' });
     expect(outcomes.find((one) => one.name === 'required status checks')).toMatchObject({ action: 'created' });
-    const main = rulesets.find((ruleset) => ruleset.name === 'fleetadlc: main');
+    const main = rulesets.find((ruleset) => ruleset.name === 'openadlc: main');
     expect(main?.rules.some((rule) => rule.type === 'required_status_checks')).toBe(true);
   });
 });
@@ -503,7 +503,7 @@ describe('the app changing on a running bridge', () => {
     const client = {
       request: async <T,>(method: string, path: string, body?: unknown): Promise<T> => {
         if (method === 'GET' && path.includes('/labels?')) return [] as T;
-        if (method === 'GET' && path === '/repos/janedoe/fleetadlc-testbed') return { owner: { type: 'User' }, private: false } as T;
+        if (method === 'GET' && path === '/repos/janedoe/openadlc-testbed') return { owner: { type: 'User' }, private: false } as T;
         if (method === 'GET' && path.endsWith('/contents/.github/workflows')) {
           if (workflows.length === 0) throw Object.assign(new Error('404'), { status: 404 });
           return workflows.map((name) => ({ name })) as T;
@@ -547,22 +547,22 @@ describe('the app changing on a running bridge', () => {
     await setup.plan();
     // The same app twice: asked once.
     expect(asked()).toBe(1);
-    await setup.applyRules('janedoe/fleetadlc-testbed');
+    await setup.applyRules('janedoe/openadlc-testbed');
     expect(rulesets.flatMap((ruleset) => ruleset.bypass_actors?.map((actor) => actor.actor_id) ?? [])).toEqual([111, 111]);
-    expect(reviewGate(rulesets.find((ruleset) => ruleset.name === 'fleetadlc: main')!)?.integration_id).toBe(111);
+    expect(reviewGate(rulesets.find((ruleset) => ruleset.name === 'openadlc: main')!)?.integration_id).toBe(111);
 
     // Another app: its client id and its key, as the manifest exchange stores them.
     STORED = { githubClientId: 'Iv23liAPPTWO' };
-    const { appPrivateKeyRef } = await import('@fleetadlc/github');
+    const { appPrivateKeyRef } = await import('@openadlc/github');
     SECRETS = { [appPrivateKeyRef()]: OTHER_KEY };
 
     const [plan] = await setup.plan();
-    expect(plan?.rules.filter((one) => one.name.startsWith('fleetadlc: ')).map((one) => one.state)).toEqual(['drifted', 'drifted']);
+    expect(plan?.rules.filter((one) => one.name.startsWith('openadlc: ')).map((one) => one.state)).toEqual(['drifted', 'drifted']);
 
-    await setup.applyRules('janedoe/fleetadlc-testbed');
+    await setup.applyRules('janedoe/openadlc-testbed');
     expect(rulesets).toHaveLength(2);
     for (const ruleset of rulesets) expect(ruleset.bypass_actors?.map((actor) => actor.actor_id)).toEqual([222]);
-    const main = rulesets.find((ruleset) => ruleset.name === 'fleetadlc: main');
+    const main = rulesets.find((ruleset) => ruleset.name === 'openadlc: main');
     expect(main && reviewGate(main)?.integration_id).toBe(222);
   });
 
@@ -571,7 +571,7 @@ describe('the app changing on a running bridge', () => {
     const setup = await subject({ api: apps, clientFor: () => client });
 
     await setup.plan();
-    const { appPrivateKeyRef } = await import('@fleetadlc/github');
+    const { appPrivateKeyRef } = await import('@openadlc/github');
     SECRETS = { [appPrivateKeyRef()]: OTHER_KEY };
     await setup.plan();
 
@@ -581,18 +581,18 @@ describe('the app changing on a running bridge', () => {
 
 describe('whether GitHub enforces rules anywhere this install works', () => {
   it('is false only when every repository is on a plan that refuses rulesets', async () => {
-    REFUSES = new Set(['janedoe/fleetadlc-testbed']);
+    REFUSES = new Set(['janedoe/openadlc-testbed']);
     expect(await (await subject()).enforcesRules()).toBe(false);
   });
 
   it('is true when one repository enforces them', async () => {
     REPOS = [...REPOS, { name: 'site', fullName: 'janedoe/site', defaultBranch: 'main' }];
-    REFUSES = new Set(['janedoe/fleetadlc-testbed']);
+    REFUSES = new Set(['janedoe/openadlc-testbed']);
     expect(await (await subject()).enforcesRules()).toBe(true);
   });
 
   it('reads the last plan rather than asking GitHub again', async () => {
-    REFUSES = new Set(['janedoe/fleetadlc-testbed']);
+    REFUSES = new Set(['janedoe/openadlc-testbed']);
     const setup = await subject();
     await setup.plan();
     const asked = CALLS.length;
@@ -639,7 +639,7 @@ describe('an environment the plan refused, remembered from the apply', () => {
         CALLS.push({ method, path, body });
         if (method === 'GET' && path.includes('/labels?')) return [] as T;
         if (method === 'GET' && path.startsWith('/users/')) return { id: 583231 } as T;
-        if (method === 'GET' && path === '/repos/janedoe/fleetadlc-testbed') return { owner: { type: 'User' }, private: state.private } as T;
+        if (method === 'GET' && path === '/repos/janedoe/openadlc-testbed') return { owner: { type: 'User' }, private: state.private } as T;
         if (method === 'GET' && path.endsWith('/rulesets')) return [] as T;
         // Production's reviewer is sent by GitHub user id, looked up from the login.
         if (method === 'GET' && path === '/users/janedoe') return { login: 'janedoe', id: 1001, type: 'User' } as T;
@@ -674,13 +674,13 @@ describe('an environment the plan refused, remembered from the apply', () => {
     const { client } = refusingEnvironments();
     const setup = await subject({ clientFor: () => client });
 
-    const outcomes = await setup.applyRules('janedoe/fleetadlc-testbed');
+    const outcomes = await setup.applyRules('janedoe/openadlc-testbed');
     expect(outcomes.filter((one) => one.name.startsWith('environment')).map((one) => one.action)).toEqual([
       'unsupported',
       'unsupported',
       'unsupported',
     ]);
-    expect(PLAN_LIMITS.get('janedoe/fleetadlc-testbed')).toMatchObject({ private: true, rulesetsRefused: false });
+    expect(PLAN_LIMITS.get('janedoe/openadlc-testbed')).toMatchObject({ private: true, rulesetsRefused: false });
 
     // A fresh bridge — a restart — reads the database, not a memory of its own.
     const [plan] = await (await subject({ clientFor: () => client })).plan();
@@ -693,7 +693,7 @@ describe('an environment the plan refused, remembered from the apply', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const { state, client } = refusingEnvironments();
     const setup = await subject({ clientFor: () => client });
-    await setup.applyRules('janedoe/fleetadlc-testbed');
+    await setup.applyRules('janedoe/openadlc-testbed');
 
     state.private = false;
     const [plan] = await setup.plan();
@@ -705,26 +705,26 @@ describe('an environment the plan refused, remembered from the apply', () => {
       detail: expect.stringContaining('no branch policy'),
     });
     expect(plan?.ruleChanges).toBeGreaterThan(0);
-    expect(PLAN_LIMITS.has('janedoe/fleetadlc-testbed')).toBe(false);
+    expect(PLAN_LIMITS.has('janedoe/openadlc-testbed')).toBe(false);
     log.mockRestore();
   });
 
   it('is forgotten by Apply again, which asks GitHub and records what it says now', async () => {
     const { state, client, environments } = refusingEnvironments();
     const setup = await subject({ clientFor: () => client });
-    await setup.applyRules('janedoe/fleetadlc-testbed');
+    await setup.applyRules('janedoe/openadlc-testbed');
 
     // The plan now holds them: the same state as far as OpenADLC can read it.
     state.holds = true;
-    const outcomes = await setup.applyRules('janedoe/fleetadlc-testbed', { force: true });
+    const outcomes = await setup.applyRules('janedoe/openadlc-testbed', { force: true });
 
     expect(outcomes.filter((one) => one.name.startsWith('environment')).map((one) => one.action)).toEqual(['created', 'created', 'created']);
-    expect(PLAN_LIMITS.has('janedoe/fleetadlc-testbed')).toBe(false);
+    expect(PLAN_LIMITS.has('janedoe/openadlc-testbed')).toBe(false);
     expect(environments.get('production')?.protection_rules).toEqual([expect.objectContaining({ type: 'required_reviewers' })]);
   });
 
   it('keeps the production limit when GitHub does not say whether the plan changed', async () => {
-    PLAN_LIMITS.set('janedoe/fleetadlc-testbed', {
+    PLAN_LIMITS.set('janedoe/openadlc-testbed', {
       limits: [{ name: 'environment production', detail: 'the plan refused a reviewer' }],
       private: true,
       rulesetsRefused: false,
@@ -742,7 +742,7 @@ describe('an environment the plan refused, remembered from the apply', () => {
     const [plan] = await (await subject({ clientFor: failing })).plan();
 
     expect(plan?.rules.find((one) => one.name === 'environment production')?.state).toBe('unsupported');
-    expect(PLAN_LIMITS.has('janedoe/fleetadlc-testbed')).toBe(true);
+    expect(PLAN_LIMITS.has('janedoe/openadlc-testbed')).toBe(true);
   });
 
   it('keeps the production limit when an apply skips production instead of proving the plan holds a reviewer', async () => {
@@ -767,7 +767,7 @@ describe('an environment the plan refused, remembered from the apply', () => {
       [
         { name: 'environment testing', state: 'missing', detail: 'the environment does not exist' },
         { name: 'environment production', state: 'drifted', detail: 'no branch policy' },
-        { name: 'fleetadlc: main', state: 'missing', detail: 'no ruleset by this name' },
+        { name: 'openadlc: main', state: 'missing', detail: 'no ruleset by this name' },
       ],
       limits,
     );
@@ -780,7 +780,7 @@ describe('an environment the plan refused, remembered from the apply', () => {
 describe('the labels setting up a repository writes', () => {
   // config/labels.json is written into every repository an install manages.
   // OpenADLC's own component areas there filed someone else's issues under
-  // `area:bridge` and `area:hostd`; those live in config/labels-fleetadlc.json.
+  // `area:bridge` and `area:hostd`; those live in config/labels-openadlc.json.
   const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
   it('have one area, area:general, and OpenADLC’s own areas are in a file of their own', async () => {
@@ -788,7 +788,7 @@ describe('the labels setting up a repository writes', () => {
     const read = (file: string) => (JSON.parse(readFileSync(`${ROOT}config/${file}`, 'utf8')) as { name: string }[]).map((label) => label.name);
 
     expect(read('labels.json').filter((name) => name.startsWith('area:'))).toEqual(['area:general']);
-    expect(read('labels-fleetadlc.json')).toEqual([
+    expect(read('labels-openadlc.json')).toEqual([
       'area:console',
       'area:bridge',
       'area:hostd',
@@ -831,7 +831,7 @@ describe('who approves production', () => {
     expect(plan?.production).toMatchObject({ approval: 'reviewers', reviewers: ['alex-maintainer'] });
     expect(plan?.needsProductionReviewer).toBe(false);
 
-    await setup.applyRules('janedoe/fleetadlc-testbed');
+    await setup.applyRules('janedoe/openadlc-testbed');
     const production = CALLS.filter((call) => call.method === 'PUT' && call.path.endsWith('/environments/production'));
     expect(production.map((call) => (call.body as { reviewers?: unknown }).reviewers)).toEqual([[{ type: 'User', id: 77120 }]]);
   });

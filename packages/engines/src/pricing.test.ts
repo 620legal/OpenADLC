@@ -14,9 +14,9 @@ import { costOf, loadModelPrices, MODEL_PRICES_ENV, modelPricesEnv, readModelPri
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'fleetadlc-pricing-'));
+  dir = mkdtempSync(join(tmpdir(), 'openadlc-pricing-'));
   delete process.env[MODEL_PRICES_ENV];
-  delete process.env.FLEETADLC_CONFIG_ROOT;
+  delete process.env.OPENADLC_CONFIG_ROOT;
   resetModelPrices();
 });
 

@@ -6,7 +6,7 @@ const read = (path: string): string => readFileSync(new URL(path, import.meta.ur
 
 describe('the colors a crew member can have', () => {
   it('are the ones the bridge stores, in the same order', () => {
-    // Two copies of one list: the console does not depend on @fleetadlc/shared, so
+    // Two copies of one list: the console does not depend on @openadlc/shared, so
     // this is where the two are held together.
     const shared = /CREW_COLORS = \[([^\]]+)\]/.exec(read('../../../../packages/shared/src/crew-colors.ts'))?.[1];
     expect(shared?.split(',').map((entry) => entry.trim().replace(/'/g, ''))).toEqual([...CREW_COLORS]);

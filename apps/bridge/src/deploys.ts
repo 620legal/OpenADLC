@@ -17,7 +17,7 @@ const DEPLOY_WORKFLOW = 'deploy-testing';
  *
  * Automatic is the default and is not written: a missing key is the same
  * answer. The other two are explicit, so a workflow file that skips at run
- * time — `FLEETADLC_DEPLOY_TESTING` unset — is not what OpenADLC asks GitHub about.
+ * time — `OPENADLC_DEPLOY_TESTING` unset — is not what OpenADLC asks GitHub about.
  * OpenADLC does not read that variable.
  */
 export const TESTING_DEPLOY_CHOICES = ['automatic', 'has', 'none'] as const;

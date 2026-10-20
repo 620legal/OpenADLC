@@ -1,10 +1,10 @@
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
-import { envOr } from '@fleetadlc/shared';
+import { envOr } from '@openadlc/shared';
 
 let pool: Pool | undefined;
 
 export function databaseUrl(): string {
-  return envOr('DATABASE_URL', 'postgres://fleetadlc:fleetadlc@127.0.0.1:47432/fleetadlc_db');
+  return envOr('DATABASE_URL', 'postgres://openadlc:openadlc@127.0.0.1:47432/openadlc_db');
 }
 
 /**

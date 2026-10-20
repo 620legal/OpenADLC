@@ -39,13 +39,13 @@ const COMPARISON: Comparison = {
           group: 'crew',
           label: 'Lead reviewer’s GitHub account',
           state: 'different',
-          differences: ['fleetadlc-other here, fleetadlc-sydney-janedoe in the backup'],
+          differences: ['openadlc-other here, openadlc-sydney-janedoe in the backup'],
           takeable: true,
           take: false,
-          note: 'Taking the backup’s makes Lead reviewer fleetadlc-sydney-janedoe; this install’s sign-in for fleetadlc-other is let go.',
+          note: 'Taking the backup’s makes Lead reviewer openadlc-sydney-janedoe; this install’s sign-in for openadlc-other is let go.',
           dependsOn: null,
           seat: 'lead-reviewer',
-          accounts: { here: 'fleetadlc-other', backup: 'fleetadlc-sydney-janedoe' },
+          accounts: { here: 'openadlc-other', backup: 'openadlc-sydney-janedoe' },
         },
       ],
     },
@@ -55,7 +55,7 @@ const COMPARISON: Comparison = {
         {
           key: 'signin:bot:lead-reviewer',
           group: 'sign-ins',
-          label: 'Lead reviewer as fleetadlc-sydney-janedoe',
+          label: 'Lead reviewer as openadlc-sydney-janedoe',
           state: 'different',
           differences: [],
           takeable: true,
@@ -135,7 +135,7 @@ function render(
     <RestoreIntoPanel
       {...inFlight}
       phase={phase}
-      fileName={phase.at === 'read' ? 'fleetadlc-backup-2026-09-24.fleetbak' : null}
+      fileName={phase.at === 'read' ? 'openadlc-backup-2026-09-24.fleetbak' : null}
       sealed
       passphrase=""
       choices={choices}
@@ -189,8 +189,8 @@ describe('restoring a backup into an install that is set up', () => {
 
     expect(control(html, 'Weekly engine updates: add it')).toContain('checked=""');
     expect(control(html, 'The operator’s email: take the backup’s')).not.toContain('checked=""');
-    expect(html).toMatch(/<input type="radio"[^>]*name="seat:lead-reviewer:account"[^>]*checked=""[^>]*\/>this install’s — fleetadlc-other/);
-    expect(html).toMatch(/<input type="radio"(?![^>]*checked)[^>]*name="seat:lead-reviewer:account"[^>]*\/>the backup’s — fleetadlc-sydney-janedoe/);
+    expect(html).toMatch(/<input type="radio"[^>]*name="seat:lead-reviewer:account"[^>]*checked=""[^>]*\/>this install’s — openadlc-other/);
+    expect(html).toMatch(/<input type="radio"(?![^>]*checked)[^>]*name="seat:lead-reviewer:account"[^>]*\/>the backup’s — openadlc-sydney-janedoe/);
   });
 
   it('never lets an expired or refused sign-in be ticked, and says what taking a rotating one over means', () => {
@@ -203,10 +203,10 @@ describe('restoring a backup into an install that is set up', () => {
     expect(control(html, 'ChatGPT Pro: add it')).not.toContain('disabled=""');
     expect(said).toContain('Checking a subscription’s sign-in uses it — if it works, this install takes it over from wherever else it is in use.');
     // The reviewer's sign-in is for the backup's account: it goes with that choice.
-    expect(control(html, 'Lead reviewer as fleetadlc-sydney-janedoe: take the backup’s')).toContain('disabled=""');
+    expect(control(html, 'Lead reviewer as openadlc-sydney-janedoe: take the backup’s')).toContain('disabled=""');
     expect(said).toContain('Goes with lead reviewer’s GitHub account, which is not taken.');
     const switched = render({ at: 'read', preview: PREVIEW, ...ARCHIVE }, { ...COMPARISON.choices, 'seat:lead-reviewer:account': true });
-    expect(control(switched, 'Lead reviewer as fleetadlc-sydney-janedoe: take the backup’s')).not.toContain('disabled=""');
+    expect(control(switched, 'Lead reviewer as openadlc-sydney-janedoe: take the backup’s')).not.toContain('disabled=""');
   });
 
   it('says what Restore will do first, and counts what is chosen', () => {
@@ -230,7 +230,7 @@ const JOB: RestoreJob = {
   state: 'waiting',
   startedAt: '2026-09-25T10:00:00.000Z',
   finishedAt: null,
-  waitingFor: ['fleetadlc-other'],
+  waitingFor: ['openadlc-other'],
   error: null,
   result: null,
 };
@@ -238,19 +238,19 @@ const JOB: RestoreJob = {
 const SUMMARY: RestoreSummary = {
   settings: ['engineUpdates'],
   app: [],
-  repositories: ['janedoe/fleetadlc-testbed'],
+  repositories: ['janedoe/openadlc-testbed'],
   accounts: [],
   bots: [],
   signIns: [],
   history: null,
   skipped: [],
-  next: ['Connect fleetadlc-sydney-janedoe to GitHub again: GitHub did not accept it: The refresh token passed is incorrect or expired.'],
+  next: ['Connect openadlc-sydney-janedoe to GitHub again: GitHub did not accept it: The refresh token passed is incorrect or expired.'],
 };
 
 describe('a restore into this install, running and done', () => {
   it('says whom it is waiting for, and that nothing has changed yet', () => {
     expect(text(render({ at: 'running', job: JOB, preview: null }))).toContain(
-      'Waiting for fleetadlc-other to finish its work — nothing has been changed yet.',
+      'Waiting for openadlc-other to finish its work — nothing has been changed yet.',
     );
     expect(text(render({ at: 'running', job: { ...JOB, state: 'applying', waitingFor: [] }, preview: null }))).toContain(
       'this install has been backed up first',
@@ -271,7 +271,7 @@ describe('a restore into this install, running and done', () => {
             provider: 'github',
             seat: 'lead-reviewer',
             accountId: null,
-            who: 'fleetadlc-sydney-janedoe',
+            who: 'openadlc-sydney-janedoe',
             rotates: true,
             replaces: true,
             verdict: { state: 'check-by-use' },
@@ -286,9 +286,9 @@ describe('a restore into this install, running and done', () => {
     const said = text(render({ at: 'running', job: done, preview: null }, {}, UNDO));
 
     expect(said).toContain('Restored.');
-    expect(said).toContain('The repository janedoe/fleetadlc-testbed');
-    expect(said).toContain('Lead reviewer as fleetadlc-sydney-janedoe: not restored — GitHub did not accept it');
-    expect(said).toContain('Still to do Connect fleetadlc-sydney-janedoe to GitHub again');
+    expect(said).toContain('The repository janedoe/openadlc-testbed');
+    expect(said).toContain('Lead reviewer as openadlc-sydney-janedoe: not restored — GitHub did not accept it');
+    expect(said).toContain('Still to do Connect openadlc-sydney-janedoe to GitHub again');
     expect(said).toContain('Anything else that needs a person is on the board, in Needs you.');
     expect(said).toContain('Undo the restore');
   });
@@ -308,20 +308,20 @@ describe('a restore into this install, running and done', () => {
       state: 'done',
       result: {
         signIns: [
-          { key: 'bot:lead-reviewer', who: 'fleetadlc-other', state: 'taken-over' },
+          { key: 'bot:lead-reviewer', who: 'openadlc-other', state: 'taken-over' },
           { key: 'account:k', who: 'Anthropic API', state: 'kept', reason: 'Anthropic did not accept it: invalid x-api-key' },
         ],
         keptAccounts: [{ id: 'x', usedBy: ['builder'] }],
-        keptSeats: [{ seat: 'lead-reviewer', login: 'fleetadlc-sydney-janedoe', reason: 'GitHub did not accept it: The refresh token passed is incorrect or expired.' }],
+        keptSeats: [{ seat: 'lead-reviewer', login: 'openadlc-sydney-janedoe', reason: 'GitHub did not accept it: The refresh token passed is incorrect or expired.' }],
       },
     };
     const said = text(render({ at: 'running', job: undone, preview: null }));
     expect(said).toContain(
-      'Lead reviewer stays fleetadlc-sydney-janedoe: the sign-in it had before was not accepted (GitHub did not accept it: The refresh token passed is incorrect or expired), and the one it has works',
+      'Lead reviewer stays openadlc-sydney-janedoe: the sign-in it had before was not accepted (GitHub did not accept it: The refresh token passed is incorrect or expired), and the one it has works',
     );
 
     expect(said).toContain('Undone: what the restore changed is as it was before.');
-    expect(said).toContain('fleetadlc-other: taken back by using it');
+    expect(said).toContain('openadlc-other: taken back by using it');
     expect(said).toContain('Anthropic API: this install’s is kept — the one it had before was not accepted: Anthropic did not accept it: invalid x-api-key');
     expect(said).toContain('still used by builder, so it stays');
   });
@@ -369,7 +369,7 @@ describe('Restore on the section, and in its modal', () => {
           <RestoreDialogBody>
             <RestoreIntoPanel
               phase={{ at: 'read', preview: PREVIEW, ...ARCHIVE }}
-              fileName="fleetadlc-backup-2026-09-24.fleetbak"
+              fileName="openadlc-backup-2026-09-24.fleetbak"
               sealed
               passphrase=""
               choices={COMPARISON.choices}
@@ -515,6 +515,6 @@ describe('Restore on the section, and in its modal', () => {
     );
     const said = text(html);
     expect(said).toContain('A restore is running…');
-    expect(said).toContain('Waiting for fleetadlc-other to finish its work — nothing has been changed yet.');
+    expect(said).toContain('Waiting for openadlc-other to finish its work — nothing has been changed yet.');
   });
 });

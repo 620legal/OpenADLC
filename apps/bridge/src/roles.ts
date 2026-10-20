@@ -1,8 +1,8 @@
-import { audit, users as usersStore, type AddedHow, type Role, type User } from '@fleetadlc/db';
+import { audit, users as usersStore, type AddedHow, type Role, type User } from '@openadlc/db';
 import type { IdentityMode } from './identity.js';
 import { HttpFailure } from './router.js';
 
-export type { Role } from '@fleetadlc/db';
+export type { Role } from '@openadlc/db';
 
 /**
  * The role each `/v1` route needs, by method and the path it was registered
@@ -155,7 +155,7 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'POST /v1/app-manifest/exchange': 'admin',
   'POST /v1/webhook/configure': 'admin',
   'POST /v1/webhook/stop-tunnel': 'admin',
-  // A new key for signing the crew's posts, as after a leaked backup (`fleetadlc attribution rotate`).
+  // A new key for signing the crew's posts, as after a leaked backup (`openadlc attribution rotate`).
   'POST /v1/attribution/rotate': 'admin',
   'POST /v1/onboarding/repository': 'admin',
   // Lets the app's installation on another account count; see `app-reach.ts`.
@@ -213,7 +213,7 @@ export interface RoleLookup {
 
 /** What a cloud install with no admin, and no list to make one from, says to everyone. */
 export const NO_ADMIN_WORDS =
-  'no admin is configured for this install. Set admin_emails (FLEETADLC_ADMIN_EMAILS on the bridge) to the first admins\' emails and deploy again';
+  'no admin is configured for this install. Set admin_emails (OPENADLC_ADMIN_EMAILS on the bridge) to the first admins\' emails and deploy again';
 
 /**
  * Refuses a request its person may not make, or says their role.
@@ -250,9 +250,9 @@ export interface UsersStore {
 
 export interface RolesDeps {
   mode: IdentityMode;
-  /** `FLEETADLC_ADMIN_EMAILS`: the first admins, when it says any. */
+  /** `OPENADLC_ADMIN_EMAILS`: the first admins, when it says any. */
   adminEmails: readonly string[];
-  /** The console's IAP members, `FLEETADLC_CONSOLE_MEMBERS`: the first admins when there is no list of them. */
+  /** The console's IAP members, `OPENADLC_CONSOLE_MEMBERS`: the first admins when there is no list of them. */
   consoleMembers: readonly string[];
   store?: UsersStore;
   audit?: (entry: { actor: string; action: string; target: string; payload?: Record<string, unknown> }) => Promise<void>;
@@ -261,7 +261,7 @@ export interface RolesDeps {
   now?: () => Date;
 }
 
-/** Read when a `Roles` is built, not when this module loads: a test that mocks `@fleetadlc/db` whole still imports it. */
+/** Read when a `Roles` is built, not when this module loads: a test that mocks `@openadlc/db` whole still imports it. */
 function liveStore(): UsersStore {
   return { listUsers: () => usersStore.listUsers(), bootstrapAdmins: (emails, how, actor) => usersStore.bootstrapAdmins(emails, how, actor) };
 }
@@ -278,7 +278,7 @@ const REFUSALS_KEPT = 1000;
  * `cacheMs`.
  *
  * While `users` is empty the install has no admin, and the first request makes
- * them: every address in `FLEETADLC_ADMIN_EMAILS`; failing that, every `user:` in
+ * them: every address in `OPENADLC_ADMIN_EMAILS`; failing that, every `user:` in
  * the console's IAP members. Nobody else is added implicitly, and the store
  * adds nothing once someone has been.
  *
@@ -292,7 +292,7 @@ const REFUSALS_KEPT = 1000;
  *
  * In `local` mode the identity is a header, and only a caller holding the
  * install's console secret gets this far (`identity.ts`): the console's server
- * and the `fleetadlc` CLI, both of which the operator runs. A name this install
+ * and the `openadlc` CLI, both of which the operator runs. A name this install
  * does not know is not refused, because that would only refuse the CLI, which
  * names itself `$USER`. A known name still has its role, which is what lets a
  * person try the console as a user. The cloud, where the identity is IAP's
@@ -398,7 +398,7 @@ export class Roles implements RoleLookup {
 }
 
 const BOOTSTRAP_WORDS: Record<Exclude<AddedHow, 'added'>, string> = {
-  'admin-emails': 'named in FLEETADLC_ADMIN_EMAILS',
+  'admin-emails': 'named in OPENADLC_ADMIN_EMAILS',
   'console-members': "one of the console's IAP members",
   first: 'the first to reach this local install',
 };

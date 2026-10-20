@@ -23,9 +23,9 @@ beforeEach(async () => {
   hostd = createServer((request, response) => {
     const seen: (typeof asked)[number] = {
       url: request.url ?? '',
-      secret: request.headers['x-fleetadlc-internal-secret'] as string | undefined,
+      secret: request.headers['x-openadlc-internal-secret'] as string | undefined,
       method: request.method,
-      onBehalfOf: request.headers['x-fleetadlc-on-behalf-of'] as string | undefined,
+      onBehalfOf: request.headers['x-openadlc-on-behalf-of'] as string | undefined,
       body: '',
     };
     asked.push(seen);

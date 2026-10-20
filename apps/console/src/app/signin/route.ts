@@ -1,7 +1,7 @@
 import { SESSION_COOKIE, SESSION_LIFETIME_SECONDS, SIGN_IN_ADVICE, sessionValue, validSignInToken } from '@/lib/sign-in';
 
 /**
- * Where the link `fleetadlc up` and `fleetadlc console-link` print lands. A
+ * Where the link `openadlc up` and `openadlc console-link` print lands. A
  * valid token becomes a session cookie and the board; anything else is a page
  * saying how to get a link, answered 200 because the CLI's health probe asks
  * for this path and `/` now refuses a caller that has not signed in.
@@ -14,7 +14,7 @@ import { SESSION_COOKIE, SESSION_LIFETIME_SECONDS, SIGN_IN_ADVICE, sessionValue,
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
-  const secret = process.env.FLEETADLC_CONSOLE_SECRET ?? '';
+  const secret = process.env.OPENADLC_CONSOLE_SECRET ?? '';
   const url = new URL(request.url);
   const token = url.searchParams.get('token') ?? '';
 

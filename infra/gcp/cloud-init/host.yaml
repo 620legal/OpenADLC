@@ -118,7 +118,7 @@ write_files:
       # firewall) and the bots on their docker bridges, and the proxy has to
       # admit the bots. So does the task database server, which hostd publishes
       # on the bridge's gateway only (47433): a task's container reaches it as
-      # host.docker.internal from the fleetadlc-tasks bridge, and nothing off
+      # host.docker.internal from the openadlc-tasks bridge, and nothing off
       # the host can, since nothing else is admitted on that port.
       #
       # OUTPUT, for hostd: it runs on the host's network as uid 1000, so its
@@ -134,28 +134,28 @@ write_files:
         iptables -C INPUT -i br+ -p tcp --dport 3128 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -i br+ -p tcp --dport 3128 -j ACCEPT; \
         iptables -C INPUT -i br+ -p tcp --dport 47433 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -i br+ -p tcp --dport 47433 -j ACCEPT; \
         iptables -C INPUT -i docker0 -p tcp --dport 3128 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -i docker0 -p tcp --dport 3128 -j ACCEPT; \
-        iptables -N FLEETADLC_EGRESS 2>/dev/null || true; \
-        iptables -F FLEETADLC_EGRESS; \
-        iptables -A FLEETADLC_EGRESS -d 169.254.169.254/32 -p udp --dport 53 -j RETURN; \
-        iptables -A FLEETADLC_EGRESS -d 169.254.169.254/32 -p tcp --dport 53 -j RETURN; \
-        iptables -A FLEETADLC_EGRESS -d 172.16.0.0/12 -j RETURN; \
-        iptables -A FLEETADLC_EGRESS -d 192.168.0.0/16 -j RETURN; \
-        iptables -A FLEETADLC_EGRESS -j LOG --log-prefix "fleetadlc-egress-denied " --log-level 4; \
-        iptables -A FLEETADLC_EGRESS -j REJECT --reject-with icmp-port-unreachable; \
+        iptables -N OPENADLC_EGRESS 2>/dev/null || true; \
+        iptables -F OPENADLC_EGRESS; \
+        iptables -A OPENADLC_EGRESS -d 169.254.169.254/32 -p udp --dport 53 -j RETURN; \
+        iptables -A OPENADLC_EGRESS -d 169.254.169.254/32 -p tcp --dport 53 -j RETURN; \
+        iptables -A OPENADLC_EGRESS -d 172.16.0.0/12 -j RETURN; \
+        iptables -A OPENADLC_EGRESS -d 192.168.0.0/16 -j RETURN; \
+        iptables -A OPENADLC_EGRESS -j LOG --log-prefix "openadlc-egress-denied " --log-level 4; \
+        iptables -A OPENADLC_EGRESS -j REJECT --reject-with icmp-port-unreachable; \
         iptables -N DOCKER-USER 2>/dev/null || true; \
-        iptables -C DOCKER-USER -i br+ -j FLEETADLC_EGRESS 2>/dev/null || iptables -I DOCKER-USER 1 -i br+ -j FLEETADLC_EGRESS; \
-        iptables -C DOCKER-USER -i docker0 -j FLEETADLC_EGRESS 2>/dev/null || iptables -I DOCKER-USER 1 -i docker0 -j FLEETADLC_EGRESS; \
-        iptables -N FLEETADLC_HOSTD 2>/dev/null || true; \
-        iptables -F FLEETADLC_HOSTD; \
-        iptables -A FLEETADLC_HOSTD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; \
-        iptables -A FLEETADLC_HOSTD -d 127.0.0.0/8 -j ACCEPT; \
-        iptables -A FLEETADLC_HOSTD -d 169.254.169.254/32 -j ACCEPT; \
-        iptables -A FLEETADLC_HOSTD -d 172.16.0.0/12 -j ACCEPT; \
-        iptables -A FLEETADLC_HOSTD -d 192.168.0.0/16 -j ACCEPT; \
-        iptables -A FLEETADLC_HOSTD -d 10.0.0.0/8 -j ACCEPT; \
-        iptables -A FLEETADLC_HOSTD -j LOG --log-prefix "fleetadlc-egress-denied " --log-level 4; \
-        iptables -A FLEETADLC_HOSTD -j REJECT --reject-with icmp-port-unreachable; \
-        iptables -C OUTPUT -m owner --uid-owner 1000 -j FLEETADLC_HOSTD 2>/dev/null || iptables -I OUTPUT 1 -m owner --uid-owner 1000 -j FLEETADLC_HOSTD'
+        iptables -C DOCKER-USER -i br+ -j OPENADLC_EGRESS 2>/dev/null || iptables -I DOCKER-USER 1 -i br+ -j OPENADLC_EGRESS; \
+        iptables -C DOCKER-USER -i docker0 -j OPENADLC_EGRESS 2>/dev/null || iptables -I DOCKER-USER 1 -i docker0 -j OPENADLC_EGRESS; \
+        iptables -N OPENADLC_HOSTD 2>/dev/null || true; \
+        iptables -F OPENADLC_HOSTD; \
+        iptables -A OPENADLC_HOSTD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; \
+        iptables -A OPENADLC_HOSTD -d 127.0.0.0/8 -j ACCEPT; \
+        iptables -A OPENADLC_HOSTD -d 169.254.169.254/32 -j ACCEPT; \
+        iptables -A OPENADLC_HOSTD -d 172.16.0.0/12 -j ACCEPT; \
+        iptables -A OPENADLC_HOSTD -d 192.168.0.0/16 -j ACCEPT; \
+        iptables -A OPENADLC_HOSTD -d 10.0.0.0/8 -j ACCEPT; \
+        iptables -A OPENADLC_HOSTD -j LOG --log-prefix "openadlc-egress-denied " --log-level 4; \
+        iptables -A OPENADLC_HOSTD -j REJECT --reject-with icmp-port-unreachable; \
+        iptables -C OUTPUT -m owner --uid-owner 1000 -j OPENADLC_HOSTD 2>/dev/null || iptables -I OUTPUT 1 -m owner --uid-owner 1000 -j OPENADLC_HOSTD'
 
       [Install]
       WantedBy=multi-user.target
@@ -212,28 +212,28 @@ write_files:
       umask 077
       cat > "$root/hostd.env" <<ENV
       DATABASE_URL=$database_url
-      FLEETADLC_SECRET_STORE=gcp
-      FLEETADLC_GCP_PROJECT=${project_id}
-      FLEETADLC_HOSTD_DRIVER=docker
-      FLEETADLC_HOSTD_PORT=${hostd_port}
-      FLEETADLC_HOST_NAME=${host_name}
-      FLEETADLC_HOST_ZONE=${zone}
-      FLEETADLC_BRIDGE_URL=${bridge_url}
-      FLEETADLC_CONSOLE_URL=https://${console_domain}
-      FLEETADLC_BOT_IMAGE=${bot_image}
-      FLEETADLC_BOT_EGRESS_PROXY=http://host.docker.internal:3128
-      FLEETADLC_HOME=$root/home
-      FLEETADLC_WORK_ROOT=$root/work
-      FLEETADLC_LOGIN_ROOT=$root/logins
-      FLEETADLC_SKILLS_ROOT=$root/assets/skills
-      FLEETADLC_ROLES_ROOT=$root/assets/roles
-      FLEETADLC_RUNNER_BUNDLE=$root/assets/skill-runner.bundle.mjs
-      FLEETADLC_GH_SHIM_DIR=$root/assets/gh-shim
-      FLEETADLC_GITHUB_ORG=${github_org}
-      FLEETADLC_GITHUB_CLIENT_ID=${github_client}
-      FLEETADLC_HUMANS=${humans}
-      FLEETADLC_AUTOMATION_BOT=${automation_bot}
-      FLEETADLC_REGISTRY_HOST=${registry_host}
+      OPENADLC_SECRET_STORE=gcp
+      OPENADLC_GCP_PROJECT=${project_id}
+      OPENADLC_HOSTD_DRIVER=docker
+      OPENADLC_HOSTD_PORT=${hostd_port}
+      OPENADLC_HOST_NAME=${host_name}
+      OPENADLC_HOST_ZONE=${zone}
+      OPENADLC_BRIDGE_URL=${bridge_url}
+      OPENADLC_CONSOLE_URL=https://${console_domain}
+      OPENADLC_BOT_IMAGE=${bot_image}
+      OPENADLC_BOT_EGRESS_PROXY=http://host.docker.internal:3128
+      OPENADLC_HOME=$root/home
+      OPENADLC_WORK_ROOT=$root/work
+      OPENADLC_LOGIN_ROOT=$root/logins
+      OPENADLC_SKILLS_ROOT=$root/assets/skills
+      OPENADLC_ROLES_ROOT=$root/assets/roles
+      OPENADLC_RUNNER_BUNDLE=$root/assets/skill-runner.bundle.mjs
+      OPENADLC_GH_SHIM_DIR=$root/assets/gh-shim
+      OPENADLC_GITHUB_ORG=${github_org}
+      OPENADLC_GITHUB_CLIENT_ID=${github_client}
+      OPENADLC_HUMANS=${humans}
+      OPENADLC_AUTOMATION_BOT=${automation_bot}
+      OPENADLC_REGISTRY_HOST=${registry_host}
       HTTP_PROXY=http://127.0.0.1:3128
       HTTPS_PROXY=http://127.0.0.1:3128
       NO_PROXY=127.0.0.1,localhost,169.254.169.254,metadata.google.internal
@@ -255,7 +255,7 @@ write_files:
       # Only when the image changed. Task computers mount the skills, the
       # roles, the gh and git wrappers and the skill runner from this tree.
       # When it was swapped for a fresh copy, a computer that outlived hostd's
-      # restart read an empty /skills and /roles, had no fleetadlc-ci, and
+      # restart read an empty /skills and /roles, had no openadlc-ci, and
       # found the real gh and git first on its PATH. So the tree is refreshed
       # where it is: those directories are refilled, the runner is written
       # over, and the rest, which no computer mounts, is replaced. Nothing is
@@ -301,9 +301,9 @@ write_files:
       chown -R 1000:1000 "$root/assets"
 
       # The schema, then the crew from config/bots.yaml placed on this host —
-      # what `fleetadlc up` does on a laptop. A failed migration stops hostd: it
+      # what `openadlc up` does on a laptop. A failed migration stops hostd: it
       # must not run on a schema it does not know. A seat the seed refuses is a
-      # warning, as under `fleetadlc up`: the refusal comes from the database
+      # warning, as under `openadlc up`: the refusal comes from the database
       # and never clears, and as a failure it held the only host in a restart
       # loop with no hostd at all.
       docker run --rm --network host --env-file "$root/hostd.env" \

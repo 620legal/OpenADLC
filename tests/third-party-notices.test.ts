@@ -21,7 +21,7 @@ function notices(args: string[], env: NodeJS.ProcessEnv = process.env) {
 
 describe('third-party-notices.sh, asked wrongly', () => {
   it('says how it is used, and exits 64, when given no image, too much or a flag', () => {
-    for (const args of [[], ['a', 'b', 'c'], ['--image'], [''], ['fleetadlc-bot:latest', '']]) {
+    for (const args of [[], ['a', 'b', 'c'], ['--image'], [''], ['openadlc-bot:latest', '']]) {
       const run = notices(args);
       expect(run.status, JSON.stringify(args)).toBe(64);
       expect(run.stderr).toContain('usage: infra/local/third-party-notices.sh IMAGE [OUTPUT]');
@@ -35,9 +35,9 @@ describe('third-party-notices.sh, asked wrongly', () => {
   });
 
   it('says docker is missing, and exits 69, where there is none', () => {
-    const empty = mkdtempSync(join(tmpdir(), 'fleetadlc-no-docker-'));
+    const empty = mkdtempSync(join(tmpdir(), 'openadlc-no-docker-'));
     try {
-      const run = notices(['fleetadlc-bot:latest'], { PATH: empty });
+      const run = notices(['openadlc-bot:latest'], { PATH: empty });
       expect(run.status).toBe(69);
       expect(run.stderr).toContain('docker is not installed');
     } finally {
@@ -56,7 +56,7 @@ const base = localBase();
 
 describe.skipIf(!base)('third-party-notices.sh, against an image', () => {
   it('lists its Debian packages, what is under /usr/local/share/doc and its npm packages, and changes nothing in it', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-notices-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-notices-'));
     const tag = `third-party-notices-test:${randomBytes(4).toString('hex')}`;
     try {
       writeFileSync(

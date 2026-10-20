@@ -1,10 +1,10 @@
-import { audit, bots, issues, listEventsOfType, recordEvent, repos, stageMoves, tasks, withAdvisoryLock } from '@fleetadlc/db';
+import { audit, bots, issues, listEventsOfType, recordEvent, repos, stageMoves, tasks, withAdvisoryLock } from '@openadlc/db';
 import { acceptOnStage } from './design-memory.js';
-import { leadReviewer, type StageKey, type StageMode } from '@fleetadlc/shared';
+import { leadReviewer, type StageKey, type StageMode } from '@openadlc/shared';
 import type { Automation } from './automation.js';
 import type { DispatchGate } from './dispatch-gate.js';
 import type { TaskService } from './task-service.js';
-import { dependencyIsSatisfied, hasIgnoreLabel, parseDependencies } from '@fleetadlc/shared';
+import { dependencyIsSatisfied, hasIgnoreLabel, parseDependencies } from '@openadlc/shared';
 import { isActive, issueNumberFromBranch, REVIEW_STALLED } from './work.js';
 import { INTAKE_STALLED } from './intake-events.js';
 
@@ -35,7 +35,7 @@ export function stageAfterTask(kind: string): StageKey | null {
  * Held while a sweep starts stages. Two bridges on one install sweeping at
  * once each saw the intake bot free and could each start an intake on it.
  */
-const STAGE_SWEEP_LOCK = 'fleetadlc:stage-sweep';
+const STAGE_SWEEP_LOCK = 'openadlc:stage-sweep';
 
 /** Which role staffs a stage, and with which skill. */
 const STAFFING: Partial<Record<StageKey, { role: string; skill: string; kind: 'intake' | 'spec' }>> = {
@@ -135,7 +135,7 @@ export class StageHandoff {
     const repo = await repos.getRepoByName(input.repoName);
     if (!repo) return false;
 
-    // `fleetadlc:ignore` is one issue, not the install. The pause still stops
+    // `openadlc:ignore` is one issue, not the install. The pause still stops
     // every repository; this returns before that check, so a resume does not
     // staff it either. Taking the label off is what lets the next sweep in.
     // It reads the stored labels, so a label whose delivery has not been
@@ -217,7 +217,7 @@ export class StageHandoff {
     if (!repo) return null;
 
     // An intake or spec task already running when a person labelled the issue
-    // `fleetadlc:ignore` still finishes; it does not move the stage of an issue
+    // `openadlc:ignore` still finishes; it does not move the stage of an issue
     // the crew was told to leave alone.
     const known = await issues.getIssue(repo.id, issueNumber);
     if (hasIgnoreLabel(known?.labels)) return null;

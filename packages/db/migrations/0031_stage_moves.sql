@@ -20,7 +20,7 @@ create table if not exists stage_moves (
   from_stage text check (from_stage in ('intake','spec','build','review','merged','done')),
   to_stage text not null check (to_stage in ('intake','spec','build','review','merged','done')),
   kind text not null check (kind in ('forward', 'send_back', 'person')),
-  -- A bot's name, a person's login or email, or `fleetadlc` for the bridge.
+  -- A bot's name, a person's login or email, or `openadlc` for the bridge.
   actor text not null,
   task_id uuid references tasks(id) on delete set null,
   reason text,

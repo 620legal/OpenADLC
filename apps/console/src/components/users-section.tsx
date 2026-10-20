@@ -13,7 +13,7 @@ export function howLine(user: Pick<ConsoleUser, 'addedHow' | 'addedBy'>): string
     case 'first':
       return 'Admin by being the first to open the console';
     case 'admin-emails':
-      return 'Admin from FLEETADLC_ADMIN_EMAILS';
+      return 'Admin from OPENADLC_ADMIN_EMAILS';
     case 'console-members':
       return "Admin as one of the console's IAP members";
     default:

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { bots, repos } from '@fleetadlc/db';
+import { bots, repos } from '@openadlc/db';
 import {
   CI_WORKFLOW,
   GitHubClient,
@@ -23,8 +23,8 @@ import {
   type RepoRulesInput,
   type RuleApi,
   type RuleReport,
-} from '@fleetadlc/github';
-import { REQUIRED_CHECK, REVIEW_GATE_CHECK, labelStep } from '@fleetadlc/shared';
+} from '@openadlc/github';
+import { REQUIRED_CHECK, REVIEW_GATE_CHECK, labelStep } from '@openadlc/shared';
 import type { BridgeConfig } from './config.js';
 import { effectiveConfig } from './effective-config.js';
 import { APP_API } from './invitation-service.js';
@@ -78,7 +78,7 @@ export interface RepoPlan {
   /**
    * How production ships: the approval and soak the repository's rules come
    * to (its recorded choice where they say nothing), who would be named as
-   * production's reviewers, and whether `.github/fleetadlc.yml` sets the
+   * production's reviewers, and whether `.github/openadlc.yml` sets the
    * approval itself, which only an edit of that file changes.
    */
   production?: ProductionPlan;
@@ -108,7 +108,7 @@ export interface RepoSetupDeps {
   readLabels?: () => LabelSpec[];
   /**
    * What holds a repository's production, by its delivery rules
-   * (`delivery-rules.ts`), and whether its `.github/fleetadlc.yml` sets the
+   * (`delivery-rules.ts`), and whether its `.github/openadlc.yml` sets the
    * approval itself; absent or null, a person approves it.
    */
   production?: (repoFullName: string) => Promise<(NonNullable<RepoRulesInput['production']> & { governedByFile?: boolean }) | null>;
@@ -199,7 +199,7 @@ export class RepoSetup {
     );
     return this.deps.clientFor
       ? this.deps.clientFor(token)
-      : (new GitHubClient({ token, actingAs: 'fleetadlc-app' }) as unknown as RuleApi);
+      : (new GitHubClient({ token, actingAs: 'openadlc-app' }) as unknown as RuleApi);
   }
 
   /**
@@ -533,8 +533,8 @@ export class RepoSetup {
 
   /**
    * Creates one of OpenADLC's own labels on a repository that lacks it, as the
-   * app. A label added since the repository was set up — `fleetadlc:paused`,
-   * `fleetadlc:next` — is not there until somebody sets it up again, and the
+   * app. A label added since the repository was set up — `openadlc:paused`,
+   * `openadlc:next` — is not there until somebody sets it up again, and the
    * automation account, with triage, may put a label on an issue but not make
    * one: GitHub refuses that with a 422.
    * True when the label is there now; false when it is not one of ours or no

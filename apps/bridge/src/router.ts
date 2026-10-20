@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Identity } from './identity.js';
-import type { Role } from '@fleetadlc/db';
+import type { Role } from '@openadlc/db';
 
 /**
  * Whether the person behind a `/v1` request may make it, and as what: their
@@ -50,7 +50,7 @@ interface Route {
  */
 function parseTarget(target: string | undefined): URL | null {
   try {
-    return new URL(target ?? '/', 'http://fleetadlc.invalid');
+    return new URL(target ?? '/', 'http://openadlc.invalid');
   } catch {
     return null;
   }
@@ -249,7 +249,7 @@ export class Router {
     }
     console.warn(
       `[bridge] refusing requests for Host ${JSON.stringify(name)}: not a name this install is served under. ` +
-        'If people do reach OpenADLC under it, add it to FLEETADLC_ALLOWED_HOSTS and restart.',
+        'If people do reach OpenADLC under it, add it to OPENADLC_ALLOWED_HOSTS and restart.',
     );
   }
 }
@@ -400,7 +400,7 @@ function callerOf(pathname: string): string {
 function identityOf(request: IncomingMessage): string {
   const iap = request.headers['x-goog-authenticated-user-email'];
   if (typeof iap === 'string' && iap.length > 0) return iap.replace(/^accounts\.google\.com:/, '');
-  const local = request.headers['x-fleetadlc-identity'];
+  const local = request.headers['x-openadlc-identity'];
   if (typeof local === 'string' && local.length > 0) return local;
   return 'local operator';
 }
@@ -412,7 +412,7 @@ function identityOf(request: IncomingMessage): string {
  * `127.0.0.1`, `localhost` or `::1` interchangeably, so those three names of
  * the same port are one console. Any other host — a LAN address, another port
  * — is a different origin and is not added. A cloud console is whatever
- * `FLEETADLC_CONSOLE_URL` says, and nothing else.
+ * `OPENADLC_CONSOLE_URL` says, and nothing else.
  */
 export function consoleOrigins(consoleUrl: string): string[] {
   let url: URL;
@@ -436,8 +436,8 @@ export function consoleOrigins(consoleUrl: string): string[] {
 
 /** The console this process was configured with. An unparseable URL allows no browser. */
 export function configuredConsoleOrigins(env: NodeJS.ProcessEnv = process.env): readonly string[] {
-  const configured = env.FLEETADLC_CONSOLE_URL;
-  const port = env.FLEETADLC_CONSOLE_PORT && env.FLEETADLC_CONSOLE_PORT.length > 0 ? env.FLEETADLC_CONSOLE_PORT : '47300';
+  const configured = env.OPENADLC_CONSOLE_URL;
+  const port = env.OPENADLC_CONSOLE_PORT && env.OPENADLC_CONSOLE_PORT.length > 0 ? env.OPENADLC_CONSOLE_PORT : '47300';
   const url = configured && configured.length > 0 ? configured : `http://127.0.0.1:${port}`;
   return consoleOrigins(url);
 }
@@ -445,7 +445,7 @@ export function configuredConsoleOrigins(env: NodeJS.ProcessEnv = process.env): 
 /**
  * The names the bridge and the console answer a person's request under.
  *
- * `any` is the operator's `FLEETADLC_ALLOWED_HOSTS=*`. `suffixes` is `.run.app` on
+ * `any` is the operator's `OPENADLC_ALLOWED_HOSTS=*`. `suffixes` is `.run.app` on
  * Cloud Run (`K_SERVICE` is set there): a service does not know its own run.app
  * address to list it, and the console's server and hostd call the bridge by
  * exactly that address. Nobody but Google can point a run.app name anywhere,
@@ -465,14 +465,14 @@ const FIXED_HOSTS = ['localhost', 'host.docker.internal', 'host.containers.inter
 
 /**
  * The hosts this process was configured with: the fixed names above, the hosts
- * of `FLEETADLC_CONSOLE_URL`, `FLEETADLC_PUBLIC_URL` and `FLEETADLC_BRIDGE_URL`, and
- * `FLEETADLC_ALLOWED_HOSTS`, comma-separated, for a name none of those says — a
- * LAN hostname, a tunnel to the console. `FLEETADLC_ALLOWED_HOSTS=*` takes any.
+ * of `OPENADLC_CONSOLE_URL`, `OPENADLC_PUBLIC_URL` and `OPENADLC_BRIDGE_URL`, and
+ * `OPENADLC_ALLOWED_HOSTS`, comma-separated, for a name none of those says — a
+ * LAN hostname, a tunnel to the console. `OPENADLC_ALLOWED_HOSTS=*` takes any.
  */
 export function configuredHosts(env: NodeJS.ProcessEnv = process.env): HostRule {
-  const extra = (env.FLEETADLC_ALLOWED_HOSTS ?? '').split(',').map((entry) => entry.trim()).filter(Boolean);
+  const extra = (env.OPENADLC_ALLOWED_HOSTS ?? '').split(',').map((entry) => entry.trim()).filter(Boolean);
   const names = new Set<string>(FIXED_HOSTS);
-  for (const value of [env.FLEETADLC_CONSOLE_URL, env.FLEETADLC_PUBLIC_URL, env.FLEETADLC_BRIDGE_URL]) {
+  for (const value of [env.OPENADLC_CONSOLE_URL, env.OPENADLC_PUBLIC_URL, env.OPENADLC_BRIDGE_URL]) {
     if (!value) continue;
     try {
       names.add(new URL(value).hostname.toLowerCase().replace(/\.$/, ''));
@@ -483,13 +483,13 @@ export function configuredHosts(env: NodeJS.ProcessEnv = process.env): HostRule 
   for (const entry of extra) {
     const name = allowedEntry(entry);
     if (name) names.add(name);
-    else if (entry !== '*') console.warn(`[bridge] FLEETADLC_ALLOWED_HOSTS: ${JSON.stringify(entry)} is not a host name or a URL, so it admits nothing`);
+    else if (entry !== '*') console.warn(`[bridge] OPENADLC_ALLOWED_HOSTS: ${JSON.stringify(entry)} is not a host name or a URL, so it admits nothing`);
   }
   return { any: extra.includes('*'), names, suffixes: env.K_SERVICE ? ['.run.app'] : [] };
 }
 
 /**
- * An entry of `FLEETADLC_ALLOWED_HOSTS` as a name: `mybox.lan`, `mybox.lan:47300`,
+ * An entry of `OPENADLC_ALLOWED_HOSTS` as a name: `mybox.lan`, `mybox.lan:47300`,
  * or the URL the console is opened at, `http://mybox.lan:47300`.
  */
 function allowedEntry(entry: string): string | null {

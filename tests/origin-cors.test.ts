@@ -31,7 +31,7 @@ import {
 import { SESSION_COOKIE, sessionValue } from '../apps/console/src/lib/sign-in.ts';
 
 // The gateway writes an audit row once a socket is up. Nothing here has a database.
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async () => undefined),
 }));
 
@@ -133,7 +133,7 @@ describe('another origin cannot read an attach token or answer a gate', () => {
   it('accepts the console under either loopback name', async () => {
     const bridge = await startBridge();
     for (const origin of ['http://127.0.0.1:47300', 'http://localhost:47300', 'http://[::1]:47300']) {
-      const response = await call(bridge.url, '/v1/repos/fleetadlc', 'PATCH', {
+      const response = await call(bridge.url, '/v1/repos/openadlc', 'PATCH', {
         origin,
         'sec-fetch-site': 'same-site',
         'content-type': 'application/json',
@@ -178,8 +178,8 @@ describe('another origin cannot read an attach token or answer a gate', () => {
 const CONSOLE_SECRET = 'e'.repeat(64);
 
 async function signedIn(): Promise<string> {
-  vi.stubEnv('FLEETADLC_CONSOLE_SECRET', CONSOLE_SECRET);
-  vi.stubEnv('FLEETADLC_IDENTITY_MODE_EXPECTED', '');
+  vi.stubEnv('OPENADLC_CONSOLE_SECRET', CONSOLE_SECRET);
+  vi.stubEnv('OPENADLC_IDENTITY_MODE_EXPECTED', '');
   return `${SESSION_COOKIE}=${await sessionValue(CONSOLE_SECRET)}`;
 }
 
@@ -209,10 +209,10 @@ describe('another origin cannot post through the console', () => {
     ).toBeUndefined();
     // Behind a proxy, the name the browser used arrives as X-Forwarded-Host.
     // A cloud console's domain is its configured one.
-    vi.stubEnv('K_SERVICE', 'fleetadlc-console');
-    vi.stubEnv('NEXT_PUBLIC_FLEETADLC_TERMINAL_URL', 'wss://fleetadlc.example');
+    vi.stubEnv('K_SERVICE', 'openadlc-console');
+    vi.stubEnv('NEXT_PUBLIC_OPENADLC_TERMINAL_URL', 'wss://openadlc.example');
     expect(
-      await post({ host: 'fleetadlc-console.run.app', 'x-forwarded-host': 'fleetadlc.example', origin: 'https://fleetadlc.example' }),
+      await post({ host: 'openadlc-console.run.app', 'x-forwarded-host': 'openadlc.example', origin: 'https://openadlc.example' }),
     ).toBeUndefined();
     vi.unstubAllEnvs();
     expect(await post({})).toBeUndefined();
@@ -254,7 +254,7 @@ describe('a name rebound to this machine', () => {
   // DNS rebinding: evil.example resolves to the attacker, serves a page, then
   // resolves to 127.0.0.1. To the browser the page and the bridge or console
   // are then one origin, so the origin checks let it read; its Host does not.
-  const LOCAL: NodeJS.ProcessEnv = { FLEETADLC_BRIDGE_URL: 'http://127.0.0.1:47311' };
+  const LOCAL: NodeJS.ProcessEnv = { OPENADLC_BRIDGE_URL: 'http://127.0.0.1:47311' };
 
   async function startGuarded(env: NodeJS.ProcessEnv): Promise<{ port: number; seen: string[] }> {
     const seen: string[] = [];
@@ -322,22 +322,22 @@ describe('a name rebound to this machine', () => {
   });
 
   it('serves a cloud install under its console domain, and on Cloud Run under a run.app name', async () => {
-    const cloud = bridgeHosts({ FLEETADLC_CONSOLE_URL: 'https://fleetadlc.example', FLEETADLC_PUBLIC_URL: 'https://fleetadlc.example' });
-    expect(bridgeHostAllowed('fleetadlc.example', cloud)).toBe(true);
+    const cloud = bridgeHosts({ OPENADLC_CONSOLE_URL: 'https://openadlc.example', OPENADLC_PUBLIC_URL: 'https://openadlc.example' });
+    expect(bridgeHostAllowed('openadlc.example', cloud)).toBe(true);
     expect(bridgeHostAllowed('attacker.example', cloud)).toBe(false);
-    expect(bridgeHostAllowed('fleetadlc-bridge-123456789.us-central1.run.app', cloud)).toBe(false);
+    expect(bridgeHostAllowed('openadlc-bridge-123456789.us-central1.run.app', cloud)).toBe(false);
 
-    const onCloudRun = bridgeHosts({ K_SERVICE: 'fleetadlc-bridge', FLEETADLC_CONSOLE_URL: 'https://fleetadlc.example' });
-    expect(bridgeHostAllowed('fleetadlc-bridge-123456789.us-central1.run.app', onCloudRun)).toBe(true);
-    expect(bridgeHostAllowed('fleetadlc.example', onCloudRun)).toBe(true);
+    const onCloudRun = bridgeHosts({ K_SERVICE: 'openadlc-bridge', OPENADLC_CONSOLE_URL: 'https://openadlc.example' });
+    expect(bridgeHostAllowed('openadlc-bridge-123456789.us-central1.run.app', onCloudRun)).toBe(true);
+    expect(bridgeHostAllowed('openadlc.example', onCloudRun)).toBe(true);
     expect(bridgeHostAllowed('attacker.example', onCloudRun)).toBe(false);
     expect(bridgeHostAllowed('run.app.attacker.example', onCloudRun)).toBe(false);
 
     // A cloud console is behind IAP, which signs people in.
-    vi.stubEnv('FLEETADLC_IDENTITY_MODE_EXPECTED', 'iap');
-    vi.stubEnv('K_SERVICE', 'fleetadlc-console');
-    vi.stubEnv('NEXT_PUBLIC_FLEETADLC_TERMINAL_URL', 'wss://fleetadlc.example');
-    expect(await consoleMiddleware(new Request('https://fleetadlc.example/', { headers: { host: 'fleetadlc.example' } }))).toBeUndefined();
+    vi.stubEnv('OPENADLC_IDENTITY_MODE_EXPECTED', 'iap');
+    vi.stubEnv('K_SERVICE', 'openadlc-console');
+    vi.stubEnv('NEXT_PUBLIC_OPENADLC_TERMINAL_URL', 'wss://openadlc.example');
+    expect(await consoleMiddleware(new Request('https://openadlc.example/', { headers: { host: 'openadlc.example' } }))).toBeUndefined();
     expect((await consoleMiddleware(new Request('https://attacker.example/', { headers: { host: 'attacker.example' } })))?.status).toBe(421);
   });
 
@@ -351,27 +351,27 @@ describe('a name rebound to this machine', () => {
         [...environment.matchAll(/^      (\w+): '?([^'\n]*)'?$/gm)].map((match) => [match[1], match[2]]),
       );
     };
-    const consoleCalls = new URL(environmentOf('console').FLEETADLC_BRIDGE_URL ?? '').host;
+    const consoleCalls = new URL(environmentOf('console').OPENADLC_BRIDGE_URL ?? '').host;
     expect(consoleCalls).toBe('bridge:47311');
 
     const bridge = await startGuarded(environmentOf('bridge'));
     expect((await asHost(bridge.port, consoleCalls, '/v1/sessions/builder/main/pane')).status).toBe(200);
   });
 
-  it('takes the names FLEETADLC_ALLOWED_HOSTS adds, or every name for `*`', () => {
-    const listed = bridgeHosts({ FLEETADLC_ALLOWED_HOSTS: 'mybox.lan, fleetadlc.tailnet.ts.net:47300, http://studio.lan:47300/' });
+  it('takes the names OPENADLC_ALLOWED_HOSTS adds, or every name for `*`', () => {
+    const listed = bridgeHosts({ OPENADLC_ALLOWED_HOSTS: 'mybox.lan, openadlc.tailnet.ts.net:47300, http://studio.lan:47300/' });
     expect(bridgeHostAllowed('studio.lan:47300', listed)).toBe(true);
-    expect(consoleHostAllowed('studio.lan', consoleHosts({ FLEETADLC_ALLOWED_HOSTS: 'http://studio.lan:47300/' }))).toBe(true);
+    expect(consoleHostAllowed('studio.lan', consoleHosts({ OPENADLC_ALLOWED_HOSTS: 'http://studio.lan:47300/' }))).toBe(true);
     expect(bridgeHostAllowed('mybox.lan:47300', listed)).toBe(true);
-    expect(bridgeHostAllowed('fleetadlc.tailnet.ts.net', listed)).toBe(true);
+    expect(bridgeHostAllowed('openadlc.tailnet.ts.net', listed)).toBe(true);
     expect(bridgeHostAllowed('attacker.example', listed)).toBe(false);
-    expect(bridgeHostAllowed('attacker.example', bridgeHosts({ FLEETADLC_ALLOWED_HOSTS: '*' }))).toBe(true);
+    expect(bridgeHostAllowed('attacker.example', bridgeHosts({ OPENADLC_ALLOWED_HOSTS: '*' }))).toBe(true);
   });
 
   it('cannot use the console: any path, under a name it is not served under, gets 421 and no body', async () => {
     vi.stubEnv('K_SERVICE', '');
-    vi.stubEnv('FLEETADLC_ALLOWED_HOSTS', '');
-    vi.stubEnv('NEXT_PUBLIC_FLEETADLC_TERMINAL_URL', '');
+    vi.stubEnv('OPENADLC_ALLOWED_HOSTS', '');
+    vi.stubEnv('NEXT_PUBLIC_OPENADLC_TERMINAL_URL', '');
     for (const request of [
       new Request('http://attacker.example:47300/', { headers: { host: 'attacker.example:47300' } }),
       new Request('http://attacker.example:47300/board', { method: 'POST', headers: { host: 'attacker.example:47300' }, body: '{}' }),
@@ -390,17 +390,17 @@ describe('a name rebound to this machine', () => {
   it('is decided the same way by the bridge and the console', () => {
     const envs: NodeJS.ProcessEnv[] = [
       {},
-      { FLEETADLC_CONSOLE_URL: 'https://fleetadlc.example' },
-      { FLEETADLC_PUBLIC_URL: 'https://hooks.example/' },
-      { FLEETADLC_ALLOWED_HOSTS: 'mybox.lan' },
-      { FLEETADLC_ALLOWED_HOSTS: 'http://mybox.lan:47300, not a host' },
-      { FLEETADLC_ALLOWED_HOSTS: '*' },
-      { K_SERVICE: 'fleetadlc-console' },
+      { OPENADLC_CONSOLE_URL: 'https://openadlc.example' },
+      { OPENADLC_PUBLIC_URL: 'https://hooks.example/' },
+      { OPENADLC_ALLOWED_HOSTS: 'mybox.lan' },
+      { OPENADLC_ALLOWED_HOSTS: 'http://mybox.lan:47300, not a host' },
+      { OPENADLC_ALLOWED_HOSTS: '*' },
+      { K_SERVICE: 'openadlc-console' },
     ];
     const hosts = [
-      '127.0.0.1:47300', 'localhost', 'LOCALHOST.', 'fleetadlc.localhost:47300', '[::1]:47300', '10.0.0.4',
-      'fleetadlc.example', 'hooks.example', 'mybox.lan:47300', 'attacker.example', '127.0.0.1.attacker.example',
-      '', 'a b', 'fleetadlc.example:99999999', 'fleetadlc-1.us-central1.run.app', 'run.app.attacker.example',
+      '127.0.0.1:47300', 'localhost', 'LOCALHOST.', 'openadlc.localhost:47300', '[::1]:47300', '10.0.0.4',
+      'openadlc.example', 'hooks.example', 'mybox.lan:47300', 'attacker.example', '127.0.0.1.attacker.example',
+      '', 'a b', 'openadlc.example:99999999', 'openadlc-1.us-central1.run.app', 'run.app.attacker.example',
     ];
     for (const env of envs) {
       for (const host of hosts) {
@@ -417,8 +417,8 @@ describe('the console origins the bridge and the gateway agree on', () => {
     const expected = ['http://127.0.0.1:47300', 'http://localhost:47300', 'http://[::1]:47300'].sort();
     expect(bridgeOrigins(CONSOLE).sort()).toEqual(expected);
     expect(gatewayOrigins(CONSOLE).sort()).toEqual(expected);
-    expect(bridgeOrigins('https://fleetadlc.example')).toEqual(['https://fleetadlc.example']);
-    expect(gatewayOrigins('https://fleetadlc.example')).toEqual(['https://fleetadlc.example']);
+    expect(bridgeOrigins('https://openadlc.example')).toEqual(['https://openadlc.example']);
+    expect(gatewayOrigins('https://openadlc.example')).toEqual(['https://openadlc.example']);
     expect(bridgeOrigins('http://192.168.1.20:47300')).toEqual(['http://192.168.1.20:47300']);
     expect(bridgeOrigins('not a url')).toEqual([]);
   });
@@ -426,9 +426,9 @@ describe('the console origins the bridge and the gateway agree on', () => {
   it('reads the configured console, and defaults to the local one', () => {
     expect(bridgeConsoleOrigins({})).toEqual(gatewayConsoleOrigins({}));
     expect(bridgeConsoleOrigins({})).toContain('http://127.0.0.1:47300');
-    expect(bridgeConsoleOrigins({ FLEETADLC_CONSOLE_PORT: '48000' })).toContain('http://127.0.0.1:48000');
-    expect(bridgeConsoleOrigins({ FLEETADLC_CONSOLE_URL: 'https://fleetadlc.example' })).toEqual(['https://fleetadlc.example']);
-    expect(gatewayConsoleOrigins({ FLEETADLC_CONSOLE_URL: 'https://fleetadlc.example/' })).toEqual(['https://fleetadlc.example']);
+    expect(bridgeConsoleOrigins({ OPENADLC_CONSOLE_PORT: '48000' })).toContain('http://127.0.0.1:48000');
+    expect(bridgeConsoleOrigins({ OPENADLC_CONSOLE_URL: 'https://openadlc.example' })).toEqual(['https://openadlc.example']);
+    expect(gatewayConsoleOrigins({ OPENADLC_CONSOLE_URL: 'https://openadlc.example/' })).toEqual(['https://openadlc.example']);
   });
 });
 
@@ -557,10 +557,10 @@ describe('the terminal upgrade', () => {
   });
 
   it('admits a cloud console by configuration, and nothing else by its name', () => {
-    const cloud = gatewayConsoleOrigins({ FLEETADLC_CONSOLE_URL: 'https://fleetadlc.example' });
-    expect(upgradeOriginAllowed('https://fleetadlc.example', cloud)).toBe(true);
+    const cloud = gatewayConsoleOrigins({ OPENADLC_CONSOLE_URL: 'https://openadlc.example' });
+    expect(upgradeOriginAllowed('https://openadlc.example', cloud)).toBe(true);
     expect(upgradeOriginAllowed('https://evil.example', cloud)).toBe(false);
-    expect(upgradeOriginAllowed('https://fleetadlc.example', gatewayConsoleOrigins({}))).toBe(false);
+    expect(upgradeOriginAllowed('https://openadlc.example', gatewayConsoleOrigins({}))).toBe(false);
     expect(upgradeOriginAllowed(undefined, cloud)).toBe(true);
     expect(upgradeOriginAllowed('null', cloud)).toBe(false);
   });
@@ -644,8 +644,8 @@ describe('what is stated for an operator', () => {
   it('names the setting when the console is opened under a name the gateway refuses', () => {
     // The browser hides the handshake's status, so the page has to say it.
     // Worded in lib/terminal-url.ts, beside the address the socket tried.
-    expect(terminalUrlSource).toMatch(/FLEETADLC_CONSOLE_URL names; if that is not \$\{origin\}/);
+    expect(terminalUrlSource).toMatch(/OPENADLC_CONSOLE_URL names; if that is not \$\{origin\}/);
     expect(consoleSource).toContain('socketFailure(address, window.location.origin)');
-    expect(security).toMatch(/cannot open the terminal until\s+`FLEETADLC_CONSOLE_URL` names it for hostd/);
+    expect(security).toMatch(/cannot open the terminal until\s+`OPENADLC_CONSOLE_URL` names it for hostd/);
   });
 });

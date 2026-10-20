@@ -10,8 +10,8 @@ import { isGitHubLogin } from '../../../../packages/shared/src/seats';
 /**
  * The last step, as a list of what will change rather than two commands.
  *
- * It ended the walkthrough by asking somebody to paste `fleetadlc github sync-labels`
- * and `fleetadlc github apply` into a shell, because both act on the repository and
+ * It ended the walkthrough by asking somebody to paste `openadlc github sync-labels`
+ * and `openadlc github apply` into a shell, because both act on the repository and
  * should not happen without being asked for. The first half of that is right and
  * is kept — nothing here runs on its own, and each half is agreed to separately.
  * The second half was a mistake: a terminal is not what consent requires. Seeing
@@ -71,7 +71,7 @@ export interface ProductionPlan {
   soakMinutes: number;
   /** Who would be named as production's reviewers, by GitHub login. */
   reviewers: string[];
-  /** `.github/fleetadlc.yml` sets the approval itself, so only an edit of the file changes it. */
+  /** `.github/openadlc.yml` sets the approval itself, so only an edit of the file changes it. */
   governedByFile: boolean;
 }
 
@@ -240,7 +240,7 @@ export function loginsIn(text: string): string[] {
  * chosen unless the repository already ships another way, or after a named
  * person approves. That choice cannot be saved without a login: production
  * written for nobody is a promote that runs unseen. Where the repository's
- * own `.github/fleetadlc.yml` says it, the file governs, and this says so.
+ * own `.github/openadlc.yml` says it, the file governs, and this says so.
  */
 export function ProductionShips({
   plan,
@@ -267,7 +267,7 @@ export function ProductionShips({
         {production.approval === 'auto'
           ? `automatically after testing, after ${production.soakMinutes} minutes on testing`
           : `after ${production.reviewers.length > 0 ? production.reviewers.map((one) => `@${one}`).join(', ') : 'a person'} approves`}
-        . Its <code className="font-mono text-[11.5px]">.github/fleetadlc.yml</code> sets this, and the file governs it: change
+        . Its <code className="font-mono text-[11.5px]">.github/openadlc.yml</code> sets this, and the file governs it: change
         it there.
       </p>
     );

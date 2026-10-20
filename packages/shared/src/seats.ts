@@ -28,7 +28,7 @@ import type { BotRole } from './types.js';
  * A seat is held to the same shape, because it is a bot's name until an
  * account connects. That is also what keeps a name safe everywhere it is used:
  * a Docker container and network, a secret file, a directory, a tmux session
- * (which cannot hold `:` or `.`), and the local driver's `fleetadlc__<bot>__`
+ * (which cannot hold `:` or `.`), and the local driver's `openadlc__<bot>__`
  * prefix, whose double underscore no name can contain.
  */
 export const BOT_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,38}$/;
@@ -49,7 +49,7 @@ export function isGitHubLogin(value: string): boolean {
 /**
  * The name a bot takes once an account connects: that account's login, as
  * GitHub would match it. GitHub answers with the canonical casing
- * (`FleetADLC-Atlas`), and treats every casing as the same account, so the name is
+ * (`OpenADLC-Atlas`), and treats every casing as the same account, so the name is
  * the one spelling that does not depend on which answer came back.
  */
 export function nameForLogin(login: string): string {
@@ -65,7 +65,7 @@ export function nameForLogin(login: string): string {
  * which falls back to a persona for any reference unless told not to — a
  * `config/review.yaml` seat, `--bot`, and `automationBotName: flow`, which
  * every `install.json` written by `fleet init` holds and which reaches the
- * bridge as `FLEETADLC_AUTOMATION_BOT`; and the console's account-name hints
+ * bridge as `OPENADLC_AUTOMATION_BOT`; and the console's account-name hints
  * (`github-accounts-step.tsx`).
  */
 export const PERSONA_SEATS: Readonly<Record<string, string>> = {
@@ -131,7 +131,7 @@ export function resolveBotRef<T extends NamedSeat>(
  * review-gate status.
  *
  * The one whose role is `automation`. An install may name another — a seat or
- * a name, in the console's settings or `FLEETADLC_AUTOMATION_BOT` — and that wins
+ * a name, in the console's settings or `OPENADLC_AUTOMATION_BOT` — and that wins
  * when it names a bot this install has. One that names nobody is ignored
  * rather than obeyed: `flow` was the default written into every install, and
  * an override pointing at a bot that no longer exists would silence every

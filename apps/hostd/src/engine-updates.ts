@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { ENGINE_PROVIDER, type AvailableModel } from '@fleetadlc/engines';
-import type { SecretStore } from '@fleetadlc/github';
+import { ENGINE_PROVIDER, type AvailableModel } from '@openadlc/engines';
+import type { SecretStore } from '@openadlc/github';
 import {
   DEFAULT_MIN_RELEASE_AGE_DAYS,
   ENGINE_PACKAGES,
@@ -14,7 +14,7 @@ import {
   type EngineUpdateStart,
   type EngineUpdateStatus,
   type EngineVersions,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 import { containerBaseEnv, CONTAINER_TOOL_DIRS } from './drivers/base-env.js';
 import { probeNetworkArgs } from './drivers/docker.js';
 import type { ObservedSession } from './drivers/types.js';
@@ -37,7 +37,7 @@ import { taskModelChooser } from './task-runner.js';
  * So the update is automatic and still a change somebody can see: recorded,
  * proved before it takes effect, and reversible.
  *
- * 1. Which versions the image carries now: its `fleetadlc.engines` label, which
+ * 1. Which versions the image carries now: its `openadlc.engines` label, which
  *    the build script stamps, or — for an image built before the label — each
  *    CLI's own `--version`, asked in a throwaway container.
  * 2. Which versions npm calls newest, and of those the newest that has been
@@ -59,7 +59,7 @@ import { taskModelChooser } from './task-runner.js';
  */
 
 /** The label `build-bot-image.sh` stamps: package → version, as JSON. */
-export const ENGINES_LABEL = 'fleetadlc.engines';
+export const ENGINES_LABEL = 'openadlc.engines';
 
 const CLIS = Object.keys(ENGINE_PACKAGES) as EngineCli[];
 const PACKAGES: string[] = CLIS.map((cli) => ENGINE_PACKAGES[cli]);
@@ -556,7 +556,7 @@ export class EngineUpdateRefused extends Error {
 
 export interface EngineUpdaterOptions {
   driver: 'docker' | 'local';
-  /** The image every bot runs, `fleetadlc-bot:latest`. Its repository names the candidate and the previous image. */
+  /** The image every bot runs, `openadlc-bot:latest`. Its repository names the candidate and the previous image. */
   image: string;
   /** `infra/local/build-bot-image.sh`, which builds the candidate exactly as a person would. */
   buildScript: string;
@@ -625,7 +625,7 @@ export class EngineUpdater {
   constructor(private readonly options: EngineUpdaterOptions) {
     this.run = options.run ?? runCommand;
     this.now = options.now ?? (() => new Date());
-    this.prefix = options.containerPrefix ?? 'fleetadlc-engines';
+    this.prefix = options.containerPrefix ?? 'openadlc-engines';
     this.log = options.log ?? ((line) => console.log(line));
   }
 

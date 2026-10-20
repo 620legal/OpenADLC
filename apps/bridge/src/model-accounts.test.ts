@@ -1,9 +1,9 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AccountInUse, type ModelAccount } from '@fleetadlc/db';
-import { modelAccountRef, type SecretStore } from '@fleetadlc/github';
-import { ProviderKeyRejected, modelListCache } from '@fleetadlc/engines';
+import { AccountInUse, type ModelAccount } from '@openadlc/db';
+import { modelAccountRef, type SecretStore } from '@openadlc/github';
+import { ProviderKeyRejected, modelListCache } from '@openadlc/engines';
 import {
   addModelAccount,
   listAccountModels,
@@ -564,7 +564,7 @@ describe('signing in and checking, over HTTP', () => {
 
     const response = await fetch(`${base}/v1/model-accounts/${ACCOUNT_ID}/login`, {
       method: 'POST',
-      headers: { 'x-fleetadlc-identity': 'ada' },
+      headers: { 'x-openadlc-identity': 'ada' },
     });
 
     expect(response.status).toBe(200);

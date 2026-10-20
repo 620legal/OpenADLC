@@ -2,20 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { crewCheck, reviewGateCheck, webhookCheck } from './readiness';
 
 const PLAN = (rules: { name: string; state: string }[], canApply = true) => [
-  { repository: 'janedoe/fleetadlc-testbed', rules, canApply },
+  { repository: 'janedoe/openadlc-testbed', rules, canApply },
 ];
 
 describe('what the first run can say is ready', () => {
   it('says the repository merges only what passed review when OpenADLC’s ruleset is there as declared', () => {
-    expect(reviewGateCheck(PLAN([{ name: 'fleetadlc: main', state: 'present' }]), 'janedoe/fleetadlc-testbed')).toEqual({
+    expect(reviewGateCheck(PLAN([{ name: 'openadlc: main', state: 'present' }]), 'janedoe/openadlc-testbed')).toEqual({
       ok: true,
-      text: 'fleetadlc-testbed merges only what passed review',
+      text: 'openadlc-testbed merges only what passed review',
     });
   });
 
   it('says it does not yet, with where to fix it, when the ruleset is missing or has drifted', () => {
     for (const state of ['missing', 'drifted']) {
-      expect(reviewGateCheck(PLAN([{ name: 'fleetadlc: main', state }]), 'janedoe/fleetadlc-testbed')).toMatchObject({
+      expect(reviewGateCheck(PLAN([{ name: 'openadlc: main', state }]), 'janedoe/openadlc-testbed')).toMatchObject({
         ok: false,
         fix: { href: '/onboarding?step=protect' },
       });
@@ -28,18 +28,18 @@ describe('what the first run can say is ready', () => {
       reviewGateCheck(
         PLAN([
           { name: 'required status checks', state: 'missing' },
-          { name: 'fleetadlc: main', state: 'present' },
+          { name: 'openadlc: main', state: 'present' },
         ]),
-        'janedoe/fleetadlc-testbed',
+        'janedoe/openadlc-testbed',
       ),
     ).toMatchObject({ ok: false, fix: { href: '/onboarding?step=protect' } });
   });
 
   it('says nothing it could not check, rather than a tick', () => {
     // No app key: OpenADLC can only report, and reported nothing.
-    expect(reviewGateCheck(PLAN([], false), 'janedoe/fleetadlc-testbed')).toBeNull();
-    expect(reviewGateCheck(PLAN([{ name: 'fleetadlc: main', state: 'present' }]), 'janedoe/other')).toBeNull();
-    expect(reviewGateCheck(null, 'janedoe/fleetadlc-testbed')).toBeNull();
+    expect(reviewGateCheck(PLAN([], false), 'janedoe/openadlc-testbed')).toBeNull();
+    expect(reviewGateCheck(PLAN([{ name: 'openadlc: main', state: 'present' }]), 'janedoe/other')).toBeNull();
+    expect(reviewGateCheck(null, 'janedoe/openadlc-testbed')).toBeNull();
     expect(webhookCheck(null)).toBeNull();
     expect(webhookCheck({})).toBeNull();
   });

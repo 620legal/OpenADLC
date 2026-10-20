@@ -1,5 +1,5 @@
-import { issues, settings, withAdvisoryLock } from '@fleetadlc/db';
-import { hasPausedLabel } from '@fleetadlc/shared';
+import { issues, settings, withAdvisoryLock } from '@openadlc/db';
+import { hasPausedLabel } from '@openadlc/shared';
 import { issueForSubject, parseRef } from './work.js';
 
 /**
@@ -7,7 +7,7 @@ import { issueForSubject, parseRef } from './work.js';
  * and nothing new starts on it — no task, no review, no merge — until it is
  * resumed.
  *
- * What holds it is the `fleetadlc:paused` label, on the issue and on its pull
+ * What holds it is the `openadlc:paused` label, on the issue and on its pull
  * request, so the hold is on GitHub where a person sees it and survives the
  * install. Who held it and why are kept beside it (`heldItems`), keyed by the
  * issue's subject, for the card to say.
@@ -63,5 +63,5 @@ export async function heldWords(subjectRef: string): Promise<string | null> {
   if (!issue || !hasPausedLabel(issue.labels)) return null;
   const key = `${issue.repoName}#${issue.number}`;
   const hold = (await readHolds())[key];
-  return `${key} is held${hold ? ` by ${hold.by}${hold.why ? `: ${hold.why}` : ''}` : ' (fleetadlc:paused)'}; resume it on its card`;
+  return `${key} is held${hold ? ` by ${hold.by}${hold.why ? `: ${hold.why}` : ''}` : ' (openadlc:paused)'}; resume it on its card`;
 }

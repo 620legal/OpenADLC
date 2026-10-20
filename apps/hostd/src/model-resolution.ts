@@ -8,8 +8,8 @@ import {
   type AvailableModel,
   type ModelListCache,
   type ModelProvider,
-} from '@fleetadlc/engines';
-import type { EngineName } from '@fleetadlc/shared';
+} from '@openadlc/engines';
+import type { EngineName } from '@openadlc/shared';
 
 /**
  * Which model a task will call, decided when the task starts.
@@ -67,7 +67,7 @@ export interface ResolveTaskModelDeps {
   subscriptionModels?: (account: TaskModelAccount, bot: TaskModelBot) => Promise<AvailableModel[]>;
   cache: ModelListCache;
   /**
-   * The integration suites' scripted engines (`FLEETADLC_SCRIPTED_ENGINES`),
+   * The integration suites' scripted engines (`OPENADLC_SCRIPTED_ENGINES`),
    * which call no model whatever the seat's engine (`engine-choice.ts`). A seat
    * there has no account, and `config/bots.yaml` sets `newest:` families, so
    * every task was refused before it started — the whole suite red.

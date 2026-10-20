@@ -151,7 +151,7 @@ describe('what a push would change, as git says it', () => {
     expect(await check.localCiPushRefusal(refs, LOCAL_CI, () => sha, passed(true))).toBeNull();
     // Only the commit the push would add: one already there, or a deletion, asks nothing.
     expect(asked).toEqual([sha]);
-    expect(await check.localCiPushRefusal(refs, LOCAL_CI, () => sha, passed(false))).toMatch(/bbbbbbb \(refs\/heads\/agent\/12\) has no recorded local CI pass: run fleetadlc-ci/);
+    expect(await check.localCiPushRefusal(refs, LOCAL_CI, () => sha, passed(false))).toMatch(/bbbbbbb \(refs\/heads\/agent\/12\) has no recorded local CI pass: run openadlc-ci/);
     expect(await check.localCiPushRefusal(refs, LOCAL_CI, () => sha, passed(null))).toMatch(/could not ask the bridge/);
     expect(await check.localCiPushRefusal(refs, BUILDER, () => sha, passed(false))).toBeNull();
   });
@@ -184,7 +184,7 @@ describe('OpenADLC’s git, pushing to a real remote', () => {
     GIT_AUTHOR_EMAIL: 'janedoe@example.com',
     GIT_COMMITTER_NAME: 'Jane Doe',
     GIT_COMMITTER_EMAIL: 'janedoe@example.com',
-    ...(policy ? { FLEETADLC_TOOLS_POLICY: JSON.stringify(policy) } : { FLEETADLC_TOOLS_POLICY: '' }),
+    ...(policy ? { OPENADLC_TOOLS_POLICY: JSON.stringify(policy) } : { OPENADLC_TOOLS_POLICY: '' }),
   });
   const git = (args: string[], policy: unknown = null) =>
     spawnSync(SHIM, args, { cwd: work, env: env(policy), encoding: 'utf8' });
@@ -197,7 +197,7 @@ describe('OpenADLC’s git, pushing to a real remote', () => {
   };
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'fleetadlc-git-shim-'));
+    dir = mkdtempSync(join(tmpdir(), 'openadlc-git-shim-'));
     remote = join(dir, 'remote.git');
     work = join(dir, 'work');
     execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
@@ -426,7 +426,7 @@ describe('OpenADLC’s git, pushing to a real remote', () => {
 });
 
 describe('OpenADLC’s git, pushing a commit local CI has not passed', () => {
-  // A builder that skipped `fleetadlc-ci` pushed and opened its pull request,
+  // A builder that skipped `openadlc-ci` pushed and opened its pull request,
   // and GitHub's CI — which now runs only after the lead approves — was the
   // first thing to run the checks.
   let dir: string;
@@ -454,7 +454,7 @@ describe('OpenADLC’s git, pushing a commit local CI has not passed', () => {
       });
     });
     await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
-    dir = mkdtempSync(join(tmpdir(), 'fleetadlc-git-ci-'));
+    dir = mkdtempSync(join(tmpdir(), 'openadlc-git-ci-'));
     const remote = join(dir, 'remote.git');
     work = join(dir, 'work');
     execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
@@ -470,15 +470,15 @@ describe('OpenADLC’s git, pushing a commit local CI has not passed', () => {
 
   it('is refused until the bridge has a pass recorded for that commit', async () => {
     const env = {
-      FLEETADLC_TOOLS_POLICY: JSON.stringify({ ...BUILDER, localCi: true }),
-      FLEETADLC_BRIDGE_URL: `http://127.0.0.1:${(bridge.address() as AddressInfo).port}`,
-      FLEETADLC_TASK_ID: 'task-1',
+      OPENADLC_TOOLS_POLICY: JSON.stringify({ ...BUILDER, localCi: true }),
+      OPENADLC_BRIDGE_URL: `http://127.0.0.1:${(bridge.address() as AddressInfo).port}`,
+      OPENADLC_TASK_ID: 'task-1',
     };
     const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: work, encoding: 'utf8' }).trim();
 
     const refused = await run(['push', '-q', 'origin', 'agent/12'], env);
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toMatch(/has no recorded local CI pass: run fleetadlc-ci/);
+    expect(refused.stderr).toMatch(/has no recorded local CI pass: run openadlc-ci/);
 
     const unread = await run(['push', '--no-porcelain', 'origin', 'HEAD:refs/heads/agent/x'], env);
     expect(unread.status).toBe(1);

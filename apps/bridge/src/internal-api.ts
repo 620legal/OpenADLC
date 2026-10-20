@@ -1,15 +1,15 @@
 import { timingSafeEqual } from 'node:crypto';
 import { registerInternalAttachmentRoutes } from './attachment-routes.js';
 import type { IncomingMessage } from 'node:http';
-import { audit, bots, costs, issues, leases, localCiRuns, recordEvent, repos, spendingLimits, stageMoves, tasks, threads } from '@fleetadlc/db';
+import { audit, bots, costs, issues, leases, localCiRuns, recordEvent, repos, spendingLimits, stageMoves, tasks, threads } from '@openadlc/db';
 import {
   TASK_TOKEN_HEADER,
   TASK_TOKEN_MIN_LIFETIME_MS,
   taskTokenMatches,
   verifyWebhookSignature,
-} from '@fleetadlc/github';
+} from '@openadlc/github';
 import {
-  FLEETADLC_EVENTS,
+  OPENADLC_EVENTS,
   botAtStart,
   headlineFor,
   messageKindFor,
@@ -24,7 +24,7 @@ import {
   SIGNED_BODY_MAX,
   stepNamed,
   unreadablePathLines,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 import type { ApiDeps } from './api.js';
 import { asAutomation, automationBotName, automationLogin, findOwnOpenIssue } from './automation-bot.js';
 import { subjectClosed } from './gates.js';
@@ -43,13 +43,13 @@ import { sentBackReason } from './send-back.js';
 import { issueNumberFromBranch, parseRef } from './work.js';
 import type { Webhooks } from './webhooks.js';
 
-export const INTERNAL_SECRET_HEADER = 'x-fleetadlc-internal-secret';
+export const INTERNAL_SECRET_HEADER = 'x-openadlc-internal-secret';
 /** What a task's own session presents, in place of the install's secret. */
 export { TASK_TOKEN_HEADER };
 
 /**
  * The kinds of task whose session runs the repository's checks
- * (`fleetadlc-ci`): each opens pull requests, and the lead approves a crew
+ * (`openadlc-ci`): each opens pull requests, and the lead approves a crew
  * pull request only on a pass recorded for its head. A QA task changing a
  * suite, a design task recording an ADR, or the SRE fixing a broken deploy
  * workflow was refused one, so its pull request could never be approved.
@@ -72,7 +72,7 @@ export function requireInternalSecret(request: IncomingMessage, expected: string
 }
 
 /** What an outside monitor presents to `/internal/alerts`; see `alertsSecretRef`. */
-export const ALERTS_SECRET_HEADER = 'x-fleetadlc-alerts-secret';
+export const ALERTS_SECRET_HEADER = 'x-openadlc-alerts-secret';
 
 /**
  * Refuses a caller of `/internal/alerts` that holds neither the alerts secret
@@ -95,11 +95,11 @@ function presents(request: IncomingMessage, header: string, expected: string): b
 /**
  * What /healthz and the bridge's start-up log say when the install has no
  * GitHub App client id, in the environment or stored by the console. Not
- * `fleetadlc init` or `fleetadlc auth login`, which these used to name: init
+ * `openadlc init` or `openadlc auth login`, which these used to name: init
  * sets only the driver and the database url, and auth login refuses without
- * one. The same remedy `fleetadlc doctor` and `auth login` give.
+ * one. The same remedy `openadlc doctor` and `auth login` give.
  */
-export const NO_CLIENT_ID = `no GitHub App client id: create the app on ${stepNamed('app')} of the console walkthrough, or set FLEETADLC_GITHUB_CLIENT_ID`;
+export const NO_CLIENT_ID = `no GitHub App client id: create the app on ${stepNamed('app')} of the console walkthrough, or set OPENADLC_GITHUB_CLIENT_ID`;
 
 /**
  * The surfaces only the platform itself calls: the skill runner reporting what it
@@ -226,7 +226,7 @@ export function registerInternalApi(
         saidNoSecret = true;
         console.warn(
           '[bridge] refusing every GitHub delivery: this install has no webhook secret. ' +
-            'Run `fleetadlc init` or set FLEETADLC_WEBHOOK_SECRET, and give the GitHub webhook the same value.',
+            'Run `openadlc init` or set OPENADLC_WEBHOOK_SECRET, and give the GitHub webhook the same value.',
         );
       }
       raw.resume();
@@ -481,7 +481,7 @@ export function registerInternalApi(
   });
 
   /**
-   * The repository's checks on a task's head (`fleetadlc-ci` in the session).
+   * The repository's checks on a task's head (`openadlc-ci` in the session).
    *
    * A builder told to run `make ci` before it opened its pull request was
    * taken at its word, and GitHub's CI ran on every push to find out. Now the
@@ -587,7 +587,7 @@ export function registerInternalApi(
     if (!bot) throw new HttpFailure(404, 'task has no bot');
     const tagged = seatTagOf(input.body);
     if (tagged && tagged !== bot.name.toLowerCase()) {
-      throw new HttpFailure(400, `this body is tagged as ${tagged}, and this task is ${bot.name}'s; a task signs only as its own seat, so end it with <!-- fleetadlc-seat:${bot.name.toLowerCase()} --> or no tag`);
+      throw new HttpFailure(400, `this body is tagged as ${tagged}, and this task is ${bot.name}'s; a task signs only as its own seat, so end it with <!-- openadlc-seat:${bot.name.toLowerCase()} --> or no tag`);
     }
     const repo = task.repoId ? (await repos.listRepos({ includeRemoved: true })).find((entry) => entry.id === task.repoId) : null;
     const kind = typeof input.kind === 'string' ? input.kind.slice(0, 20) : 'post';
@@ -639,7 +639,7 @@ export function registerInternalApi(
       kind?: 'bot' | 'sys';
       text: string;
       note?: string;
-      /** A `fleetadlc:` event the skill declared, which decides how this reads. */
+      /** A `openadlc:` event the skill declared, which decides how this reads. */
       event?: FleetEventType;
     }>();
     // A person's words, a question and the bridge's own rows are the bridge's
@@ -661,7 +661,7 @@ export function registerInternalApi(
 
     // An event decides the kind; without one the caller's choice stands, so a
     // plain narration line still arrives as narration.
-    const event = input.event && FLEETADLC_EVENTS.includes(input.event) ? input.event : null;
+    const event = input.event && OPENADLC_EVENTS.includes(input.event) ? input.event : null;
     const message = await threads.addMessage({
       threadId: thread.id,
       kind: event ? messageKindFor(event) : (input.kind ?? 'bot'),
@@ -803,13 +803,13 @@ export function registerInternalApi(
 
   /**
    * Brings every bot's name in line with its account, now rather than at the
-   * next start: what `fleetadlc auth login` asks for once it has stored a
+   * next start: what `openadlc auth login` asks for once it has stored a
    * credential, so the bot it connected takes its handle without a restart.
    */
   post('/internal/bots/reconcile', async ({ body }) => {
     const input = await body<{ actor?: string }>();
     if (!deps.names) throw new HttpFailure(503, 'this bridge renames nothing');
-    const outcomes = await deps.names.reconcile(input.actor?.trim() || 'fleetadlc');
+    const outcomes = await deps.names.reconcile(input.actor?.trim() || 'openadlc');
     const crew = await bots.listBots();
     return {
       outcomes,
@@ -818,7 +818,7 @@ export function registerInternalApi(
   });
 
   /**
-   * Connects a seat with a sign-in `fleetadlc auth login` got from GitHub's
+   * Connects a seat with a sign-in `openadlc auth login` got from GitHub's
    * device flow, exactly as the console's connect does (`Onboarding.connect`):
    * joining an account the seat's group already holds, refusing one the other
    * group holds, leaving the seat's old account first. The CLI used to do this
@@ -839,7 +839,7 @@ export function registerInternalApi(
     const at = (value: string | null | undefined): Date | null => (value ? new Date(value) : null);
     return deps.onboarding.connect({
       botId: bot.id,
-      actor: input.actor?.trim() || 'fleetadlc auth login',
+      actor: input.actor?.trim() || 'openadlc auth login',
       token: {
         accessToken: token.accessToken,
         refreshToken: token.refreshToken ?? null,
@@ -866,7 +866,7 @@ export function registerInternalApi(
    * answer rather than a new one.
    *
    * An outside monitor holds the alerts secret (`alertsSecretRef`), sent as
-   * `x-fleetadlc-alerts-secret`, never the internal secret: that one mints
+   * `x-openadlc-alerts-secret`, never the internal secret: that one mints
    * every bot's GitHub token and starts work. The internal secret is accepted
    * too, for the platform's own callers.
    */
@@ -961,7 +961,7 @@ export function registerInternalApi(
     if (!issue.labels.includes('blocked')) return { changed: false, reason: 'it was not blocked' };
     // Unblocking adds `start:now`. The dispatcher's list leaves ignored issues
     // out, and this refuses them too, whoever asks.
-    if (hasIgnoreLabel(issue.labels)) return { changed: false, reason: 'it is labelled fleetadlc:ignore' };
+    if (hasIgnoreLabel(issue.labels)) return { changed: false, reason: 'it is labelled openadlc:ignore' };
 
     await deps.automation.setBlocked(repo.fullName, number, false);
     // And on the board, so it does not keep showing as blocked until the
@@ -1075,7 +1075,7 @@ export function registerInternalApi(
       ok: true,
       // Whether the engines are scripted: the integration suites run only
       // against an install that says so, since they write into its board.
-      scripted: process.env.FLEETADLC_SCRIPTED_ENGINES === '1',
+      scripted: process.env.OPENADLC_SCRIPTED_ENGINES === '1',
       hostd: await deps.hostd.health(),
       // Decided on the client id, the console's stored one included. It was
       // `Actors.configured`, which is true on every install, so a missing
@@ -1083,7 +1083,7 @@ export function registerInternalApi(
       github: acting
         ? `acting as ${automation}`
         : (await effectiveConfig(deps.config)).gitHubClientId
-          ? `no credential for ${automation}: run fleetadlc auth login --bot ${automation}`
+          ? `no credential for ${automation}: run openadlc auth login --bot ${automation}`
           : NO_CLIENT_ID,
     };
   });
@@ -1120,7 +1120,7 @@ async function sayTaskEnded(task: Task, state: 'failed' | 'stopped', reason: str
   await threads.addMessage({
     threadId: thread.id,
     kind: 'sys',
-    author: 'fleetadlc',
+    author: 'openadlc',
     text: state === 'failed' ? `${who} could not finish ${task.subjectRef}` : `${who} stopped work on ${task.subjectRef}`,
     note: reason ?? state,
     payload: { taskId: task.id, state },

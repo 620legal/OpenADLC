@@ -4,16 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The internal routes a rename reaches: a lease the dispatcher asked for under
- * the name it read, and the reconcile `fleetadlc auth login` asks for once it has
+ * the name it read, and the reconcile `openadlc auth login` asks for once it has
  * stored a credential. The store is a fake and the HTTP is real, like the
  * other route tests.
  */
 
 const crew = vi.hoisted(() => [
-  { id: 'bot-builder', name: 'fleetadlc-atlas-janedoe', slot: 'builder', githubLogin: 'fleetadlc-atlas-janedoe' },
+  { id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', githubLogin: 'openadlc-atlas-janedoe' },
 ]);
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async () => undefined),
   bots: {
     listBots: vi.fn(async () => crew),
@@ -88,7 +88,7 @@ beforeEach(async () => {
       settled: () => startup,
       reconcile: async (actor: string) => {
         reconciled.push(actor);
-        return [{ botId: 'bot-builder', from: 'builder', to: 'fleetadlc-atlas-janedoe', state: 'renamed' }];
+        return [{ botId: 'bot-builder', from: 'builder', to: 'openadlc-atlas-janedoe', state: 'renamed' }];
       },
     } as never,
     dispatchGate: gate,
@@ -106,7 +106,7 @@ afterEach(async () => {
 function post(path: string, body: unknown, secret = SECRET) {
   return fetch(`${bridgeUrl}${path}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': secret },
+    headers: { 'content-type': 'application/json', 'x-openadlc-internal-secret': secret },
     body: JSON.stringify(body),
   });
 }
@@ -114,7 +114,7 @@ function post(path: string, body: unknown, secret = SECRET) {
 describe('a lease for a bot renamed since the dispatcher read it', () => {
   it('waits for the start-up renames, then works under the name the bot has now', async () => {
     // The dispatcher read `builder`; the bot has since connected and is
-    // `fleetadlc-atlas-janedoe`. Its id is what finds it.
+    // `openadlc-atlas-janedoe`. Its id is what finds it.
     const leased = post('/internal/dispatch/lease', {
       leaseId: 'lease-1',
       repo: 'testbed',
@@ -133,13 +133,13 @@ describe('a lease for a bot renamed since the dispatcher read it', () => {
     expect(response.status).toBe(200);
     expect(opened).toEqual([
       expect.objectContaining({
-        bot: 'fleetadlc-atlas-janedoe',
+        bot: 'openadlc-atlas-janedoe',
         botId: 'bot-builder',
-        branch: 'agent/fleetadlc-atlas-janedoe/12-issue-12',
+        branch: 'agent/openadlc-atlas-janedoe/12-issue-12',
       }),
     ]);
-    expect(assigned).toEqual(['fleetadlc-atlas-janedoe']);
-    expect(comments[0]).toContain('Leased to `fleetadlc-atlas-janedoe`');
+    expect(assigned).toEqual(['openadlc-atlas-janedoe']);
+    expect(comments[0]).toContain('Leased to `openadlc-atlas-janedoe`');
   });
 });
 
@@ -151,7 +151,7 @@ describe('a lease while a backup is restored into the install', () => {
       leaseId: 'lease-2',
       repo: 'testbed',
       issue: 13,
-      bot: 'fleetadlc-atlas-janedoe',
+      bot: 'openadlc-atlas-janedoe',
       botId: 'bot-builder',
       declaredPaths: ['src/**'],
       expiresAt: null,
@@ -174,7 +174,7 @@ describe('a lease while a person has paused work', () => {
   it('is refused in the pause’s words, starting nothing, and taken again once work is resumed', async () => {
     gate.pauseWork('work is paused, by janedoe since 2026-09-29T10:00:00.000Z; resume it in Settings → Pause work');
     finishStartup();
-    const lease = { leaseId: 'lease-3', repo: 'testbed', issue: 14, bot: 'fleetadlc-atlas-janedoe', botId: 'bot-builder', declaredPaths: ['src/**'], expiresAt: null };
+    const lease = { leaseId: 'lease-3', repo: 'testbed', issue: 14, bot: 'openadlc-atlas-janedoe', botId: 'bot-builder', declaredPaths: ['src/**'], expiresAt: null };
 
     const refused = await post('/internal/dispatch/lease', lease);
     expect(refused.status).toBe(409);
@@ -191,14 +191,14 @@ describe('a lease in a repository a person paused', () => {
     const words = 'work is paused in testbed, by janedoe since 2026-09-29T10:00:00.000Z (a migration is running); resume it in Settings → Pause work';
     gate.pauseRepo('testbed', words);
     finishStartup();
-    const lease = { leaseId: 'lease-4', repo: 'testbed', issue: 15, bot: 'fleetadlc-atlas-janedoe', botId: 'bot-builder', declaredPaths: ['src/**'], expiresAt: null };
+    const lease = { leaseId: 'lease-4', repo: 'testbed', issue: 15, bot: 'openadlc-atlas-janedoe', botId: 'bot-builder', declaredPaths: ['src/**'], expiresAt: null };
 
     const refused = await post('/internal/dispatch/lease', lease);
     expect(refused.status).toBe(409);
     expect(((await refused.json()) as { error: string }).error).toBe(words);
     expect(opened).toEqual([]);
 
-    const { repos } = await import('@fleetadlc/db');
+    const { repos } = await import('@openadlc/db');
     vi.mocked(repos.getRepoByName).mockResolvedValueOnce({ id: 'repo-2', name: 'other', fullName: 'janedoe/other' } as never);
     expect((await post('/internal/dispatch/lease', { ...lease, leaseId: 'lease-5', repo: 'other' })).status).toBe(200);
     expect(opened).toHaveLength(1);
@@ -208,13 +208,13 @@ describe('a lease in a repository a person paused', () => {
 
 describe('asking the bridge to bring the crew’s names up to date', () => {
   it('reconciles as whoever asked, and answers with each bot’s name and seat', async () => {
-    const response = await post('/internal/bots/reconcile', { actor: 'fleetadlc auth login' });
+    const response = await post('/internal/bots/reconcile', { actor: 'openadlc auth login' });
 
     expect(response.status).toBe(200);
-    expect(reconciled).toEqual(['fleetadlc auth login']);
+    expect(reconciled).toEqual(['openadlc auth login']);
     expect(await response.json()).toEqual({
-      outcomes: [{ botId: 'bot-builder', from: 'builder', to: 'fleetadlc-atlas-janedoe', state: 'renamed' }],
-      bots: [{ bot: 'fleetadlc-atlas-janedoe', slot: 'builder', githubLogin: 'fleetadlc-atlas-janedoe' }],
+      outcomes: [{ botId: 'bot-builder', from: 'builder', to: 'openadlc-atlas-janedoe', state: 'renamed' }],
+      bots: [{ bot: 'openadlc-atlas-janedoe', slot: 'builder', githubLogin: 'openadlc-atlas-janedoe' }],
     });
   });
 

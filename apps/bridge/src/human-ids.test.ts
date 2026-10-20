@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 /** The settings row `humanIds`, as the store keeps it. */
 const stored = vi.hoisted(() => ({ humanIds: null as string | null }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   settings: {
     getSetting: vi.fn(async (key: string) => (key === 'humanIds' ? stored.humanIds : null)),
     mergeSettingJson: vi.fn(async (_key: string, fields: Record<string, unknown>) => {

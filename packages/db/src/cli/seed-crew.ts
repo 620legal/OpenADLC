@@ -1,15 +1,15 @@
-import type { BotConfig } from '@fleetadlc/shared';
+import type { BotConfig } from '@openadlc/shared';
 import * as bots from '../store/bots.js';
 
 /**
- * Writes config/bots.yaml into the bots table, which is what `fleetadlc up` does
+ * Writes config/bots.yaml into the bots table, which is what `openadlc up` does
  * on every start.
  *
  * Each entry is a seat, and the row is found by it. It used to be found by
  * the bot's name, which was fine while a name never changed; now a bot takes
  * its account's handle when one connects, and a seed keyed by the name would
  * find nothing under `builder` and add a second builder beside
- * `fleetadlc-atlas-janedoe`.
+ * `openadlc-atlas-janedoe`.
  *
  * Its own module so a test can run the loop the seed runs, rather than only
  * the rule it calls: the rule was right once and the seed still wrote the

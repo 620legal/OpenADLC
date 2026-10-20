@@ -3,7 +3,7 @@
 -- it holds before one), what production said, and a rollback or a send-back.
 --
 -- A merge's delivery used to be a task for the deploy bot, and a person
--- approved production. The repository's rules (`.github/fleetadlc.yml`) decide
+-- approved production. The repository's rules (`.github/openadlc.yml`) decide
 -- it now, and the bridge dispatches each workflow as the app. Every step is
 -- asked again on a redelivered event or the sweep, so each one is recorded
 -- once here and never done twice for a commit.

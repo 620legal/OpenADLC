@@ -20,7 +20,7 @@ afterEach(() => {
 
 /** A tree shaped like the one pnpm builds, with the helper's mode as given. */
 function fakeInstall(mode: number, layout: 'pnpm' | 'plain' = 'pnpm'): string {
-  const root = mkdtempSync(join(tmpdir(), 'fleetadlc-nodepty-'));
+  const root = mkdtempSync(join(tmpdir(), 'openadlc-nodepty-'));
   made.push(root);
 
   const prebuilds =
@@ -71,7 +71,7 @@ describe('putting the execute bit back', () => {
 
   it('does nothing, quietly, when node-pty is not installed', () => {
     // A filtered install has no node-pty, and that is not a fault to report.
-    const root = mkdtempSync(join(tmpdir(), 'fleetadlc-nodepty-'));
+    const root = mkdtempSync(join(tmpdir(), 'openadlc-nodepty-'));
     made.push(root);
 
     expect(() => restoreExecBits(root)).not.toThrow();

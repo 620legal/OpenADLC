@@ -3,8 +3,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isShellAllowed, loadToolsPolicy } from '@fleetadlc/engines';
-import { parseYamlFile, policyPathMatches } from '@fleetadlc/shared';
+import { isShellAllowed, loadToolsPolicy } from '@openadlc/engines';
+import { parseYamlFile, policyPathMatches } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
 import { SHIFT_STEP, SMOKE_STEP } from '../apps/bridge/src/deploy-pipeline.ts';
 
@@ -125,7 +125,7 @@ describe('a merge reaches testing once, by the bridge’s dispatch', () => {
     // A green deploy of nothing would put `deployed:testing` on a pull request
     // that is live nowhere, and `dependencyIsSatisfied` reads that label to
     // release other work. Skipped is not failed, so it starts no revert either.
-    expect(onlyJob('deploy-testing').if).toContain('FLEETADLC_DEPLOY_TESTING');
+    expect(onlyJob('deploy-testing').if).toContain('OPENADLC_DEPLOY_TESTING');
   });
 
   it('refuses a commit that is not on the default branch', () => {
@@ -187,7 +187,7 @@ describe('the smoke is a separate run against what was deployed', () => {
     const A = '0123456789abcdef0123456789abcdef01234567';
     const B = 'fedcba9876543210fedcba9876543210fedcba98';
     const smoked = (title: string): string => {
-      const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-smoke-'));
+      const dir = mkdtempSync(join(tmpdir(), 'openadlc-smoke-'));
       try {
         const output = join(dir, 'output');
         writeFileSync(output, '');
@@ -222,7 +222,7 @@ describe('the smoke is a separate run against what was deployed', () => {
     const on = workflow('smoke-testing').on as { workflow_run?: { branches?: string[] } };
     expect(on.workflow_run?.branches).toEqual(['main']);
     const guard = onlyJob('smoke-testing').if ?? '';
-    expect(guard).toContain("vars.FLEETADLC_DEPLOY_TESTING == 'true'");
+    expect(guard).toContain("vars.OPENADLC_DEPLOY_TESTING == 'true'");
     expect(guard).toContain("github.event_name == 'workflow_dispatch'");
     expect(guard).toContain("github.event.workflow_run.event == 'push'");
     expect(guard).toContain("github.event.workflow_run.event == 'workflow_dispatch'");
@@ -302,7 +302,7 @@ describe('production is one approval over the whole promote', () => {
 
   it('smokes the new revision by its tag rather than whatever is serving', () => {
     const smoke = (onlyJob('promote-production').steps ?? []).find((step) => step.run?.includes('smoke-production'));
-    expect(JSON.stringify(smoke)).toContain('FLEETADLC_REVISION_TAG');
+    expect(JSON.stringify(smoke)).toContain('OPENADLC_REVISION_TAG');
   });
 });
 
@@ -377,7 +377,7 @@ jq -r "$filter" "$FAKE/$fixture.json"
     dispatch: { actor?: string; reason?: string } = {},
   ): { ok: boolean; out: string; summary: string; calls: string[] } {
     const step = steps(file).find((candidate) => candidate.name === CHECK);
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-promote-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-promote-'));
     try {
       mkdirSync(join(dir, 'bin'));
       writeFileSync(join(dir, 'bin', 'gh'), FAKE_GH);
@@ -525,7 +525,7 @@ exit 2
 
     it('refuses the override from a bot', () => {
       // The app dispatches as `<name>[bot]`; it is refused before GitHub is asked.
-      const result = promote(file, { role: 'admin' }, { actor: 'fleetadlc-exampleco[bot]', reason: 'urgent' });
+      const result = promote(file, { role: 'admin' }, { actor: 'openadlc-exampleco[bot]', reason: 'urgent' });
       expect(result.ok).toBe(false);
       expect(result.out).toContain('is a bot');
       expect(result.calls).toEqual([]);
@@ -730,7 +730,7 @@ describe('a failed testing deploy is the SRE’s to diagnose, and a broken deplo
 
   it('fixes a deploy workflow by a ready pull request with a recorded local CI pass, closing the bridge’s issue', () => {
     const failed = section('When a deploy failed');
-    const steps = ['git commit -am', 'fleetadlc-ci', 'git push origin system/deploy-path-<sha>', 'gh pr create'];
+    const steps = ['git commit -am', 'openadlc-ci', 'git push origin system/deploy-path-<sha>', 'gh pr create'];
     for (const step of steps) expect(failed, step).toContain(step);
     const at = steps.map((step) => failed.indexOf(step));
     expect(at).toEqual([...at].sort((a, b) => a - b));
@@ -739,14 +739,14 @@ describe('a failed testing deploy is the SRE’s to diagnose, and a broken deplo
     expect(failed).toContain('security reviewer');
   });
 
-  it('may write the deploy workflows and no other, run fleetadlc-ci, and push its system/ branch', () => {
+  it('may write the deploy workflows and no other, run openadlc-ci, and push its system/ branch', () => {
     const scope = policy.allow.files?.writeWithin ?? [];
     const writable = (path: string) => scope.some((pattern) => policyPathMatches(path, pattern));
     expect(writable('.github/workflows/deploy-testing.yml')).toBe(true);
     expect(writable('.github/workflows/ci.yml')).toBe(false);
     expect(writable('.github/workflows/promote-production.yml')).toBe(false);
     expect(writable('.github/workflows/rollback-production.yml')).toBe(false);
-    expect(isShellAllowed(policy, 'fleetadlc-ci')).toBe(true);
+    expect(isShellAllowed(policy, 'openadlc-ci')).toBe(true);
     expect('system/deploy-path-a1b2c3d4'.startsWith(policy.allow.git?.pushBranchPrefix ?? '-')).toBe(true);
     // A revert is pushed from a branch hostd's local CI does not run on.
     expect(policy.allow.git?.localCi).toBeFalsy();

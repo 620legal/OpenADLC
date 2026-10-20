@@ -117,8 +117,8 @@ export function Terminal({
     //
     // The address is the one the console runs with, which came with the token;
     // the one inlined at build time is only a fallback (lib/terminal-url.ts).
-    const address = `${terminalBase(grant.url, process.env.NEXT_PUBLIC_FLEETADLC_TERMINAL_URL, window.location)}/terminal`;
-    const ws = new WebSocket(address, [`fleetadlc-attach.${grant.token}`]);
+    const address = `${terminalBase(grant.url, process.env.NEXT_PUBLIC_OPENADLC_TERMINAL_URL, window.location)}/terminal`;
+    const ws = new WebSocket(address, [`openadlc-attach.${grant.token}`]);
     socket.current = ws;
 
     let opened = false;

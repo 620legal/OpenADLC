@@ -7,7 +7,7 @@ import type { DockerResult } from './drivers/docker.js';
  * Each bot had a Postgres container of its own, on a network of its own, and
  * a task emptied it as it started. A computer per task would have meant a
  * Postgres per task — a second container to start, and to wait for, on every
- * task — so the host runs one server instead (`fleetadlc-taskdb`) and each
+ * task — so the host runs one server instead (`openadlc-taskdb`) and each
  * task gets a role and a database of its own on it: `t_<id>`, owned by that
  * role, made from a template that already has the extensions a repository's
  * migrations ask for, closed to every other role, and dropped with the
@@ -30,16 +30,39 @@ import type { DockerResult } from './drivers/docker.js';
  */
 
 /** The template every task's database is made from. */
-export const TASK_TEMPLATE = 'fleetadlc_task_template';
+export const TASK_TEMPLATE = 'openadlc_task_template';
 /** What the template holds: what pgvector's image offers and repositories most often ask for. */
 export const TEMPLATE_EXTENSIONS = ['vector', 'pgcrypto', 'citext', 'uuid-ossp'] as const;
 export const TASKDB_PORT = 47433;
-const SUPERUSER = 'fleetadlc';
+const SUPERUSER = 'openadlc';
+
+/**
+ * The default install's server under its FleetADLC name, with the superuser
+ * that release created it with. It restarts `unless-stopped`, so after the
+ * upgrade it would hold the bind port against a new `openadlc-taskdb` — and it
+ * holds the databases of the tasks that waited out the upgrade. It is used as
+ * it is, under its own superuser; docs/upgrading-from-fleet.md.
+ */
+export const LEGACY_TASKDB = { container: 'fleetadlc-taskdb', superuser: 'fleetadlc' } as const;
+
+/** The server to run task databases in: the configured one, except the default install's `fleetadlc-taskdb` where no `openadlc-taskdb` exists. */
+export async function existingTaskdbServer(
+  docker: (args: string[]) => Promise<DockerResult>,
+  container: string,
+): Promise<{ container: string; superuser: string }> {
+  const current = { container, superuser: SUPERUSER };
+  if (container !== 'openadlc-taskdb') return current;
+  if ((await docker(['inspect', '-f', '{{.State.Status}}', container])).code === 0) return current;
+  if ((await docker(['inspect', '-f', '{{.State.Status}}', LEGACY_TASKDB.container])).code === 0) return LEGACY_TASKDB;
+  return current;
+}
 
 export interface TaskDatabasesOptions {
   docker: (args: string[], input?: string, secrets?: Record<string, string>) => Promise<DockerResult>;
-  /** `fleetadlc-taskdb` for the default install; another install's has its own name. */
+  /** `openadlc-taskdb` for the default install; another install's has its own name. */
   container: string;
+  /** The server's superuser: `openadlc` unless an adopted FleetADLC server says otherwise (`existingTaskdbServer`). */
+  superuser?: string;
   image: string;
   installLabel: string;
   /**
@@ -99,7 +122,7 @@ export async function taskdbBindAddress(
     // Every address the host has, the network's included: the cloud host's
     // firewall is not what should keep a database off the network.
     if (['0.0.0.0', '::', '[::]'].includes(configured.trim())) {
-      throw new Error(`FLEETADLC_TASKDB_BIND is ${configured}, which publishes the task database server on every address the host has. Unset it, or give the host's gateway or loopback address (172.17.0.1 or 127.0.0.1)`);
+      throw new Error(`OPENADLC_TASKDB_BIND is ${configured}, which publishes the task database server on every address the host has. Unset it, or give the host's gateway or loopback address (172.17.0.1 or 127.0.0.1)`);
     }
     return configured;
   }
@@ -119,6 +142,10 @@ export class TaskDatabases {
     return this.options.port ?? TASKDB_PORT;
   }
 
+  private get superuser(): string {
+    return this.options.superuser ?? SUPERUSER;
+  }
+
   /**
    * One statement, as the superuser, in the server's own container. Each its
    * own `psql -c`: `create database` refuses a transaction. No password: psql
@@ -129,7 +156,7 @@ export class TaskDatabases {
    * process list.
    */
   private async psql(sql: string, database = 'postgres', onStdin = false): Promise<DockerResult> {
-    const args = ['exec', ...(onStdin ? ['-i'] : []), this.options.container, 'psql', '-U', SUPERUSER, '-d', database, '-v', 'ON_ERROR_STOP=1'];
+    const args = ['exec', ...(onStdin ? ['-i'] : []), this.options.container, 'psql', '-U', this.superuser, '-d', database, '-v', 'ON_ERROR_STOP=1'];
     return onStdin ? this.options.docker([...args, '-tA', '-f', '-'], sql) : this.options.docker([...args, '-tAc', sql]);
   }
 
@@ -164,11 +191,11 @@ export class TaskDatabases {
         '--label',
         this.options.installLabel,
         '--label',
-        'fleetadlc.kind=taskdb',
+        'openadlc.kind=taskdb',
         '-p',
         `${this.options.bindAddress}:${this.port}:5432`,
         '-e',
-        `POSTGRES_USER=${SUPERUSER}`,
+        `POSTGRES_USER=${this.superuser}`,
         // The image will not make a server without one. Random, kept
         // nowhere, and removed below once the server is up. Named here,
         // valued in the docker client's own environment: not in the host's
@@ -186,7 +213,7 @@ export class TaskDatabases {
 
     // It takes a moment to take connections after it starts.
     for (let attempt = 0; ; attempt += 1) {
-      const ready = await this.options.docker(['exec', this.options.container, 'pg_isready', '-U', SUPERUSER, '-q']);
+      const ready = await this.options.docker(['exec', this.options.container, 'pg_isready', '-U', this.superuser, '-q']);
       if (ready.code === 0) break;
       if (attempt >= 30) throw new Error(`${this.options.container} did not take connections within a minute`);
       await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -196,7 +223,7 @@ export class TaskDatabases {
     // made when that password was derived from a public default: anybody
     // could have logged in and changed the template every task's database is
     // copied from, so it is made again before the password goes.
-    const hasPassword = await this.must(`select rolpassword is not null from pg_authid where rolname = '${SUPERUSER}'`);
+    const hasPassword = await this.must(`select rolpassword is not null from pg_authid where rolname = '${this.superuser}'`);
     if (hasPassword === 't') {
       await this.must(`update pg_database set datistemplate = false where datname = '${TASK_TEMPLATE}'`);
       await this.must(`drop database if exists ${TASK_TEMPLATE} with (force)`);
@@ -214,7 +241,7 @@ export class TaskDatabases {
     // No password, no login over the network: the image's `host all all all
     // scram-sha-256` rule then admits nobody as the superuser, whatever the
     // server was made with. Every start, so an older server is repaired too.
-    await this.must(`alter role ${SUPERUSER} password null`);
+    await this.must(`alter role ${this.superuser} password null`);
   }
 
   /**

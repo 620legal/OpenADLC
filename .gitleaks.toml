@@ -37,10 +37,12 @@ regexes = [
   '''^0123456789abcdef$''',
   # The credentials-argv test's values: SECRET, what it stands for, a number.
   '''SECRET[a-zA-Z]+000[0-9]''',
-  # The sign-in link the made-up secret above signs.
+  # The sign-in link the made-up secret above signs — under the openadlc
+  # label, and under the fleetadlc one, which the history keeps.
+  '''^1800003600\.29a206be4ca0fa7f0bc78cd5fbe96ca5cec9bea9cf0f6cfa73744e12de5ee014$''',
   '''^1800003600\.55e64a713ef5fed11eac66d38c157758eb45f2473d58705e088827f7e12b4835$''',
   # A repository name the generic rule reads as a key because it follows `api,`.
-  '''^janedoe/FleetADLC$''',
+  '''^janedoe/OpenADLC$''',
 ]
 
 # The redaction's own tests write a key the ways it arrives, and gitleaks

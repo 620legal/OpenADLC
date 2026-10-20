@@ -5,8 +5,8 @@
  * server holds the secret that makes the bridge believe it. Without a sign-in
  * of its own the console was that secret's proxy for anybody who reached port
  * 47300: a host on the LAN, or code in a task's container, was an admin
- * through it. So a browser signs in once, with a link `fleetadlc up` and
- * `fleetadlc console-link` print, and the console serves nothing else to a
+ * through it. So a browser signs in once, with a link `openadlc up` and
+ * `openadlc console-link` print, and the console serves nothing else to a
  * browser that has not.
  *
  * Both the link's token and the session cookie are `<exp>.<hex HMAC-SHA256>`
@@ -20,9 +20,9 @@
  * runs in Next's edge runtime.
  */
 
-export const SESSION_COOKIE = 'fleetadlc_session';
-export const SIGN_IN_LABEL = 'fleetadlc-console-sign-in:';
-export const SESSION_LABEL = 'fleetadlc-console-session:';
+export const SESSION_COOKIE = 'openadlc_session';
+export const SIGN_IN_LABEL = 'openadlc-console-sign-in:';
+export const SESSION_LABEL = 'openadlc-console-session:';
 export const SIGN_IN_LIFETIME_SECONDS = 60 * 60;
 export const SESSION_LIFETIME_SECONDS = 30 * 24 * 60 * 60;
 
@@ -83,11 +83,11 @@ export function cookieFrom(header: string | null, name: string): string {
 
 /** What the console tells a browser that has not signed in, as words for a page or a JSON error. */
 export const SIGN_IN_ADVICE =
-  'Sign in to this console first: on the machine OpenADLC runs on, run `fleetadlc console-link` and open the link it prints.';
+  'Sign in to this console first: on the machine OpenADLC runs on, run `openadlc console-link` and open the link it prints.';
 
 /** What the console says on every path when it was started without its secret. */
 export const NO_SECRET_ADVICE =
-  'This console was started without its secret (FLEETADLC_CONSOLE_SECRET). Start it with `fleetadlc up`.';
+  'This console was started without its secret (OPENADLC_CONSOLE_SECRET). Start it with `openadlc up`.';
 
 /**
  * Why a request may not speak for the operator, or undefined when it may: the
@@ -99,8 +99,8 @@ export const NO_SECRET_ADVICE =
 export async function sessionRefusal(
   readCookie: () => string | undefined | Promise<string | undefined>,
 ): Promise<{ status: 401 | 503; message: string } | undefined> {
-  if (process.env.FLEETADLC_IDENTITY_MODE_EXPECTED === 'iap') return undefined;
-  const secret = process.env.FLEETADLC_CONSOLE_SECRET ?? '';
+  if (process.env.OPENADLC_IDENTITY_MODE_EXPECTED === 'iap') return undefined;
+  const secret = process.env.OPENADLC_CONSOLE_SECRET ?? '';
   if (!secret) return { status: 503, message: NO_SECRET_ADVICE };
   if (await validSession(secret, (await readCookie()) ?? '')) return undefined;
   return { status: 401, message: SIGN_IN_ADVICE };

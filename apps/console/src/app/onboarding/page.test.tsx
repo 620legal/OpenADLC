@@ -38,6 +38,6 @@ describe('the walkthrough when its first read fails', () => {
     );
     const html = await page();
     expect(html).toContain('The console cannot reach the bridge');
-    expect(html).toContain('fleetadlc up');
+    expect(html).toContain('openadlc up');
   });
 });

@@ -6,7 +6,7 @@ import { addSecondBuilder, retireBuilder } from './second-builder.mjs';
 /**
  * The concurrency suite adds a second builder, then deletes the row. The idle
  * shell is not the task session, so cancelling the task leaves
- * `fleetadlc__builder-2__shell` with no bot behind it.
+ * `openadlc__builder-2__shell` with no bot behind it.
  */
 
 interface BotRow {
@@ -20,13 +20,13 @@ interface SessionRow {
 function install(options: { hostdListsShell: boolean }) {
   // builder-3 is a real builder somebody configured, in the middle of a task.
   // The owner is connected, so it goes by its handle.
-  const bots: BotRow[] = [{ name: 'fleetadlc-atlas-janedoe' }, { name: 'builder-2' }, { name: 'builder-3' }];
+  const bots: BotRow[] = [{ name: 'openadlc-atlas-janedoe' }, { name: 'builder-2' }, { name: 'builder-3' }];
   const tmux = [
-    'fleetadlc__fleetadlc-atlas-janedoe__shell',
-    'fleetadlc__builder-2__shell',
-    'fleetadlc__builder-3__shell',
-    'fleetadlc__builder-3__implement',
-    'fleetadlc__intake__shell',
+    'openadlc__openadlc-atlas-janedoe__shell',
+    'openadlc__builder-2__shell',
+    'openadlc__builder-3__shell',
+    'openadlc__builder-3__implement',
+    'openadlc__intake__shell',
   ];
   const host = new Map<string, SessionRow[]>([['builder-3', [{ name: 'shell' }, { name: 'implement' }]]]);
   if (options.hostdListsShell) host.set('builder-2', [{ name: 'shell' }]);
@@ -66,16 +66,16 @@ function install(options: { hostdListsShell: boolean }) {
 }
 
 describe('retiring the extra builder', () => {
-  it('kills fleetadlc__builder-2__shell and leaves the owner’s shell', async () => {
+  it('kills openadlc__builder-2__shell and leaves the owner’s shell', async () => {
     const fixture = install({ hostdListsShell: true });
 
     const orphans = await fixture.retire('builder-2');
 
     expect(orphans).toEqual([]);
     expect(fixture.killedHost).toEqual(['builder-2/shell']);
-    expect(fixture.killedTmux).toEqual(['fleetadlc__builder-2__shell']);
-    expect(fixture.tmux).not.toContain('fleetadlc__builder-2__shell');
-    expect(fixture.tmux).toContain('fleetadlc__fleetadlc-atlas-janedoe__shell');
+    expect(fixture.killedTmux).toEqual(['openadlc__builder-2__shell']);
+    expect(fixture.tmux).not.toContain('openadlc__builder-2__shell');
+    expect(fixture.tmux).toContain('openadlc__openadlc-atlas-janedoe__shell');
     expect(fixture.bots.map((bot) => bot.name)).not.toContain('builder-2');
   });
 
@@ -87,8 +87,8 @@ describe('retiring the extra builder', () => {
     const orphans = await fixture.retire('builder-2');
 
     expect(orphans).toEqual([]);
-    expect(fixture.killedTmux).toEqual(['fleetadlc__builder-2__shell']);
-    expect(fixture.tmux).not.toContain('fleetadlc__builder-2__shell');
+    expect(fixture.killedTmux).toEqual(['openadlc__builder-2__shell']);
+    expect(fixture.tmux).not.toContain('openadlc__builder-2__shell');
   });
 
   it('leaves every other builder, and what it is running, alone', async () => {
@@ -98,12 +98,12 @@ describe('retiring the extra builder', () => {
 
     await fixture.retire('builder-2');
 
-    expect(fixture.bots.map((bot) => bot.name)).toEqual(['fleetadlc-atlas-janedoe', 'builder-3']);
+    expect(fixture.bots.map((bot) => bot.name)).toEqual(['openadlc-atlas-janedoe', 'builder-3']);
     expect(fixture.tmux).toEqual([
-      'fleetadlc__fleetadlc-atlas-janedoe__shell',
-      'fleetadlc__builder-3__shell',
-      'fleetadlc__builder-3__implement',
-      'fleetadlc__intake__shell',
+      'openadlc__openadlc-atlas-janedoe__shell',
+      'openadlc__builder-3__shell',
+      'openadlc__builder-3__implement',
+      'openadlc__intake__shell',
     ]);
     expect(fixture.killedHost.filter((session) => session.startsWith('builder-3/'))).toEqual([]);
   });
@@ -113,20 +113,20 @@ describe('adding the second builder', () => {
   // Connected, so it goes by its handle; its seat is what the second one is
   // numbered from.
   const owner = {
-    name: 'fleetadlc-atlas-janedoe',
+    name: 'openadlc-atlas-janedoe',
     slot: 'builder',
     displayName: 'Builder',
     role: 'implement',
     engine: 'claude',
     model: 'claude-sonnet-5',
-    githubLogin: 'fleetadlc-atlas-janedoe',
+    githubLogin: 'openadlc-atlas-janedoe',
     hostId: 'host-1',
     skills: [],
     sidecarDb: null,
   };
 
   it('seeds the builder-2 seat when there is none, and says it did', async () => {
-    // Named for the owner's handle it would be `fleetadlc-atlas-janedoe-2`: a
+    // Named for the owner's handle it would be `openadlc-atlas-janedoe-2`: a
     // name nobody chose, for an account nobody has.
     const written: { slot: string }[] = [];
     const added = await addSecondBuilder(owner, {

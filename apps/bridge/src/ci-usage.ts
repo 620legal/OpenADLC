@@ -1,4 +1,4 @@
-import type { CiUsageRow } from '@fleetadlc/db';
+import type { CiUsageRow } from '@openadlc/db';
 
 /**
  * The GitHub Actions minutes the crew's work costs a repository, counted as

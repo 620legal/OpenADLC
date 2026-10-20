@@ -1,4 +1,4 @@
-import { recordEvent } from '@fleetadlc/db';
+import { recordEvent } from '@openadlc/db';
 import type { BridgeConfig } from './config.js';
 
 /**

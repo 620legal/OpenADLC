@@ -188,7 +188,7 @@ describe('the last check of an account', () => {
   });
 
   it('has somewhere to live on an install that already has accounts', () => {
-    // Both nullable and added with `if not exists`: `fleetadlc up` migrates an
+    // Both nullable and added with `if not exists`: `openadlc up` migrates an
     // install with rows in it, and a not-null column would stop it there.
     const sql = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'migrations', '0009_model_account_verification.sql'),

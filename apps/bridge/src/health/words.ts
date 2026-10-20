@@ -1,4 +1,4 @@
-import { stepNamed, type OnboardingStep } from '@fleetadlc/shared';
+import { stepNamed, type OnboardingStep } from '@openadlc/shared';
 
 /**
  * Where in the console a person does what a check or a failed task asks, and
@@ -18,7 +18,7 @@ export function stepHref(step: OnboardingStep): string {
 /** Where a model account is signed in again, or given a key: the walkthrough's model accounts step. */
 export const ACCOUNTS_STEP = stepHref('models');
 
-/** A step as a card or a failed task names it; one helper for every package (`@fleetadlc/shared`). */
+/** A step as a card or a failed task names it; one helper for every package (`@openadlc/shared`). */
 export { stepNamed };
 
 /** Where the crew is let into a repository: the walkthrough's access step. */

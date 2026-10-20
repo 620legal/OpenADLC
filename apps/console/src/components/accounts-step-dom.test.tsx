@@ -61,7 +61,7 @@ describe('the step when hostd does not answer', () => {
     const root = createRoot(host);
     await act(async () => root.render(<AccountsStep accounts={[]} crew={[]} onAccounts={() => undefined} onCrew={() => undefined} />));
     expect(host.textContent).toContain('OpenADLC’s host service (hostd), which runs the bots, is not answering');
-    expect(host.textContent).toContain('Run fleetadlc up on the machine OpenADLC runs on (fleetadlc doctor says why it stopped), then reload this page.');
+    expect(host.textContent).toContain('Run openadlc up on the machine OpenADLC runs on (openadlc doctor says why it stopped), then reload this page.');
     act(() => root.unmount());
   });
 });

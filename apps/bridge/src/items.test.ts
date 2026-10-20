@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Gate, Message } from '@fleetadlc/shared';
+import type { Gate, Message } from '@openadlc/shared';
 import { itemOf, itemView, messageRoutes, routeItemMessage, type ItemBot, type ItemTaskRow } from './items.js';
 
 /**
@@ -199,7 +199,7 @@ describe('where the item’s box says a message goes, before it is sent', () => 
   it('is kept in OpenADLC for a deploy of a commit, which GitHub has no page for', () => {
     const commit = itemOf('api@3f2c1a9', FACTS)!;
     const routes = messageRoutes({ timeline: [], tasks: [], stage: 'merged', openGates: [], roles: [] }, commit, [...BOTS, { id: 'b-deploy', name: 'deployer', slot: 'deployer', role: 'deploy', githubLogin: 'acme-crew' }]);
-    expect(routes['']).toEqual({ kind: 'post', bot: 'deployer', role: 'deploy', handle: 'acme-crew', subject: 'api@3f2c1a9', on: 'fleetadlc', number: null });
+    expect(routes['']).toEqual({ kind: 'post', bot: 'deployer', role: 'deploy', handle: 'acme-crew', subject: 'api@3f2c1a9', on: 'openadlc', number: null });
   });
 
   it('is the request’s thread before the issue exists', () => {

@@ -31,7 +31,7 @@ describe('clearing worktrees left by tasks that ended', () => {
   };
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'fleetadlc-wt-'));
+    root = mkdtempSync(join(tmpdir(), 'openadlc-wt-'));
     worktrees = new Worktrees(root);
   });
 
@@ -119,7 +119,7 @@ describe('two tasks in one repository at once', () => {
   });
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'fleetadlc-wt-git-'));
+    root = mkdtempSync(join(tmpdir(), 'openadlc-wt-git-'));
     origin = join(root, 'origin');
     mkdirSync(origin, { recursive: true });
     sh(origin, 'init', '-q', '-b', 'main');
@@ -208,7 +208,7 @@ describe('two tasks in one repository at once', () => {
     expect(removed).toBe(1);
     expect(worktrees.listWorktreeTaskIds('atlas')).toEqual(['task-live']);
     // What a paused task's resume after a restart reads back.
-    expect(sh(dead.mirror, 'rev-parse', 'refs/fleetadlc/tasks/task-dead/head')).toBe(work);
+    expect(sh(dead.mirror, 'rev-parse', 'refs/openadlc/tasks/task-dead/head')).toBe(work);
   }, 30_000);
 
   it('drops the kept branch of a task once it has ended for good, and keeps a paused one’s', async () => {
@@ -218,13 +218,13 @@ describe('two tasks in one repository at once', () => {
     }
 
     const mirror = worktrees.mirrorPath('example/repo');
-    const done = sh(mirror, 'rev-parse', 'refs/fleetadlc/tasks/task-done/head');
+    const done = sh(mirror, 'rev-parse', 'refs/openadlc/tasks/task-done/head');
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     expect(await worktrees.dropTaskRefs(async (taskId) => taskId === 'task-done')).toBe(1);
 
-    expect(sh(mirror, 'for-each-ref', '--format=%(refname)', 'refs/fleetadlc/tasks/')).toBe(
-      'refs/fleetadlc/tasks/task-paused/head',
+    expect(sh(mirror, 'for-each-ref', '--format=%(refname)', 'refs/openadlc/tasks/')).toBe(
+      'refs/openadlc/tasks/task-paused/head',
     );
     // What an operator needs to put it back with `git update-ref`.
     const dropped = log.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('dropped the kept branch'));
@@ -238,8 +238,8 @@ describe('two tasks in one repository at once', () => {
 
     expect(await worktrees.dropTaskRefs(async () => Promise.reject(new Error('connect ECONNREFUSED')))).toBe(0);
 
-    expect(sh(worktrees.mirrorPath('example/repo'), 'for-each-ref', '--format=%(refname)', 'refs/fleetadlc/tasks/')).toBe(
-      'refs/fleetadlc/tasks/task-paused/head',
+    expect(sh(worktrees.mirrorPath('example/repo'), 'for-each-ref', '--format=%(refname)', 'refs/openadlc/tasks/')).toBe(
+      'refs/openadlc/tasks/task-paused/head',
     );
   }, 30_000);
 });
@@ -261,7 +261,7 @@ describe('a leftover task directory, harvested', () => {
   const later = () => Date.now() + 3 * 60_000;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'fleetadlc-wt-slots-'));
+    root = mkdtempSync(join(tmpdir(), 'openadlc-wt-slots-'));
     origin = join(root, 'origin');
     mkdirSync(origin, { recursive: true });
     sh(origin, 'init', '-q', '-b', 'main');
@@ -318,9 +318,9 @@ describe('a leftover task directory, harvested', () => {
     const { mirror, path, work } = await slotWithWork('task-a', dir);
     writeSlotTask(dir, { taskId: 'task-a', bot: 'atlas' });
     // Written by the task: another repository and another task's branch.
-    sh(path, 'config', 'fleetadlc.repo', 'example/other');
-    sh(path, 'config', 'fleetadlc.branch', 'agent/atlas/99-victim');
-    sh(path, 'config', 'fleetadlc.keep', 'true');
+    sh(path, 'config', 'openadlc.repo', 'example/other');
+    sh(path, 'config', 'openadlc.branch', 'agent/atlas/99-victim');
+    sh(path, 'config', 'openadlc.keep', 'true');
     const asked: string[] = [];
     const keptBranchOf = async (taskId: string) => {
       asked.push(taskId);
@@ -330,7 +330,7 @@ describe('a leftover task directory, harvested', () => {
     expect(await worktrees.pruneSlots(join(root, 'work', 'slots'), () => false, { now: later(), keptBranchOf })).toBe(1);
 
     expect(asked).toEqual(['task-a']);
-    expect(sh(mirror, 'rev-parse', 'refs/fleetadlc/tasks/task-a/head')).toBe(work);
+    expect(sh(mirror, 'rev-parse', 'refs/openadlc/tasks/task-a/head')).toBe(work);
     expect(existsSync(dir)).toBe(false);
     expect(existsSync(slotRecordPath(dir))).toBe(false);
   }, 30_000);
@@ -344,7 +344,7 @@ describe('a leftover task directory, harvested', () => {
     expect(await worktrees.pruneSlots(join(root, 'work', 'slots'), () => false, { now: later(), keptBranchOf })).toBe(1);
 
     expect(keptBranchOf).not.toHaveBeenCalledWith('task-victim');
-    expect(sh(mirror, 'for-each-ref', '--format=%(refname)', 'refs/fleetadlc/tasks/')).toBe('');
+    expect(sh(mirror, 'for-each-ref', '--format=%(refname)', 'refs/openadlc/tasks/')).toBe('');
     expect(vi.mocked(console.log).mock.calls.map((call) => String(call[0]))).toContain(
       `[hostd] ${dir} says it is task task-victim only from inside itself; its clone is kept for no task but task-attacker-1's, if that is one`,
     );
@@ -367,7 +367,7 @@ describe('a leftover task directory, harvested', () => {
 
 /**
  * A paused builder whose computer was given back keeps its unpushed commits
- * only under `refs/fleetadlc/tasks/<id>/head`. When its resume failed, or a
+ * only under `refs/openadlc/tasks/<id>/head`. When its resume failed, or a
  * person stopped it, the reaper deleted those refs within a minute, and Try
  * again starts a new task id that could not reach them: the work was
  * garbage-collected later, and nobody was told it had existed.
@@ -397,10 +397,10 @@ describe('the unpushed commits of a task that ended for good', () => {
     keepUnpushed: true,
   });
   const ended = async (taskId: string) => (taskId === 'task-failed' ? { branch: BRANCH } : false);
-  const unpushedRefs = (mirror: string) => sh(mirror, 'for-each-ref', '--format=%(refname)', 'refs/fleetadlc/unpushed/');
+  const unpushedRefs = (mirror: string) => sh(mirror, 'for-each-ref', '--format=%(refname)', 'refs/openadlc/unpushed/');
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'fleetadlc-wt-ended-'));
+    root = mkdtempSync(join(tmpdir(), 'openadlc-wt-ended-'));
     origin = join(root, 'origin');
     mkdirSync(origin, { recursive: true });
     sh(origin, 'init', '-q', '-b', 'main');
@@ -433,12 +433,12 @@ describe('the unpushed commits of a task that ended for good', () => {
 
     expect(await worktrees.dropTaskRefs(ended)).toBe(1);
 
-    expect(sh(mirror, 'for-each-ref', '--format=%(refname)', 'refs/fleetadlc/tasks/')).toBe('');
-    expect(sh(mirror, 'rev-parse', `refs/fleetadlc/unpushed/${BRANCH}`)).toBe(work);
-    expect(Object.keys(JSON.parse(readFileSync(join(mirror, SET_ASIDE_LOG), 'utf8')))).toEqual([`refs/fleetadlc/unpushed/${BRANCH}`]);
+    expect(sh(mirror, 'for-each-ref', '--format=%(refname)', 'refs/openadlc/tasks/')).toBe('');
+    expect(sh(mirror, 'rev-parse', `refs/openadlc/unpushed/${BRANCH}`)).toBe(work);
+    expect(Object.keys(JSON.parse(readFileSync(join(mirror, SET_ASIDE_LOG), 'utf8')))).toEqual([`refs/openadlc/unpushed/${BRANCH}`]);
     const said = vi.mocked(console.log).mock.calls.map((call) => String(call[0]));
     expect(said).toContain(
-      `[hostd] task task-failed ended with 1 commit(s) on ${BRANCH} never pushed; they are kept at refs/fleetadlc/unpushed/${BRANCH} in ${mirror} for ${SET_ASIDE_DAYS} days`,
+      `[hostd] task task-failed ended with 1 commit(s) on ${BRANCH} never pushed; they are kept at refs/openadlc/unpushed/${BRANCH} in ${mirror} for ${SET_ASIDE_DAYS} days`,
     );
   }, 30_000);
 
@@ -447,7 +447,7 @@ describe('the unpushed commits of a task that ended for good', () => {
 
     expect(await worktrees.dropTaskRefs(async (taskId) => taskId === 'task-failed')).toBe(1);
 
-    expect(sh(mirror, 'rev-parse', 'refs/fleetadlc/unpushed/task-task-failed')).toBe(work);
+    expect(sh(mirror, 'rev-parse', 'refs/openadlc/unpushed/task-task-failed')).toBe(work);
   }, 30_000);
 
   it('writes no set-aside for a task that had pushed everything, and drops its refs as before', async () => {
@@ -459,18 +459,18 @@ describe('the unpushed commits of a task that ended for good', () => {
     expect(await worktrees.dropTaskRefs(ended)).toBe(1);
 
     expect(unpushedRefs(made.mirror)).toBe('');
-    expect(sh(made.mirror, 'for-each-ref', '--format=%(refname)', 'refs/fleetadlc/tasks/')).toBe('');
+    expect(sh(made.mirror, 'for-each-ref', '--format=%(refname)', 'refs/openadlc/tasks/')).toBe('');
   }, 30_000);
 
   it('does not overwrite an earlier set-aside on the branch', async () => {
     const { mirror, work } = await failedWith(false);
     const base = sh(mirror, 'rev-parse', 'refs/heads/main');
-    sh(mirror, 'update-ref', `refs/fleetadlc/unpushed/${BRANCH}`, base);
+    sh(mirror, 'update-ref', `refs/openadlc/unpushed/${BRANCH}`, base);
 
     await worktrees.dropTaskRefs(ended);
 
-    expect(sh(mirror, 'rev-parse', `refs/fleetadlc/unpushed/${BRANCH}`)).toBe(work);
-    expect(sh(mirror, 'rev-parse', `refs/fleetadlc/unpushed/${BRANCH}-${base.slice(0, 12)}`)).toBe(base);
+    expect(sh(mirror, 'rev-parse', `refs/openadlc/unpushed/${BRANCH}`)).toBe(work);
+    expect(sh(mirror, 'rev-parse', `refs/openadlc/unpushed/${BRANCH}-${base.slice(0, 12)}`)).toBe(base);
   }, 30_000);
 
   it('tells the next task that builds the branch, from the base, which commits were left', async () => {
@@ -479,9 +479,9 @@ describe('the unpushed commits of a task that ended for good', () => {
 
     const next = await worktrees.create(request('task-again'));
 
-    expect(next.setAside).toEqual({ ref: `refs/fleetadlc/unpushed/${BRANCH}`, tip: work, commits: [work], reason: 'ended' });
+    expect(next.setAside).toEqual({ ref: `refs/openadlc/unpushed/${BRANCH}`, tip: work, commits: [work], reason: 'ended' });
     // Reachable from its clone, as the brief says.
-    expect(sh(next.path, 'rev-parse', `refs/fleetadlc/unpushed/${BRANCH}`)).toBe(work);
+    expect(sh(next.path, 'rev-parse', `refs/openadlc/unpushed/${BRANCH}`)).toBe(work);
     const brief = setAsideBrief(BRANCH, next.setAside!);
     expect(brief).toContain('An earlier task');
     expect(brief).toContain(`git cherry-pick ${work}`);
@@ -496,7 +496,7 @@ describe('the unpushed commits of a task that ended for good', () => {
     const next = await worktrees.checkoutExisting({ ...request('task-again'), branch: BRANCH });
 
     expect(sh(next.path, 'rev-parse', 'HEAD')).toBe(pushed);
-    expect(next.setAside).toEqual({ ref: `refs/fleetadlc/unpushed/${BRANCH}`, tip: work, commits: [work], reason: 'ended' });
+    expect(next.setAside).toEqual({ ref: `refs/openadlc/unpushed/${BRANCH}`, tip: work, commits: [work], reason: 'ended' });
   }, 30_000);
 
   it('ages them out with every other set-aside', async () => {
@@ -524,7 +524,7 @@ describe('a paused task from before mirrors were one per repository', () => {
     execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { cwd, encoding: 'utf8' }).trim();
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'fleetadlc-wt-legacy-'));
+    root = mkdtempSync(join(tmpdir(), 'openadlc-wt-legacy-'));
     origin = join(root, 'origin');
     mkdirSync(origin, { recursive: true });
     sh(origin, 'init', '-q', '-b', 'main');
@@ -552,8 +552,8 @@ describe('a paused task from before mirrors were one per repository', () => {
     sh(old, 'add', 'work.ts');
     sh(old, 'commit', '-qm', 'the work');
     const tip = sh(old, 'rev-parse', 'HEAD');
-    sh(legacy, 'update-ref', `refs/fleetadlc/unpushed/${branch}`, tip);
-    writeFileSync(join(legacy, SET_ASIDE_LOG), JSON.stringify({ [`refs/fleetadlc/unpushed/${branch}`]: 1_700_000_000_000 }));
+    sh(legacy, 'update-ref', `refs/openadlc/unpushed/${branch}`, tip);
+    writeFileSync(join(legacy, SET_ASIDE_LOG), JSON.stringify({ [`refs/openadlc/unpushed/${branch}`]: 1_700_000_000_000 }));
 
     const worktrees = new Worktrees(work);
     const imported = await worktrees.importLegacyMirrors([{ taskId: 'task-12', bot: 'builder', repoFullName: 'acme/widgets', branch }]);
@@ -562,8 +562,8 @@ describe('a paused task from before mirrors were one per repository', () => {
     expect(await worktrees.importLegacyMirrors([{ taskId: 'task-12', bot: 'builder', repoFullName: 'acme/widgets', branch }])).toEqual({ tasks: 0, mirrors: 0 });
 
     const mirror = worktrees.mirrorPath('acme/widgets');
-    expect(sh(mirror, 'rev-parse', `refs/fleetadlc/unpushed/${branch}`)).toBe(tip);
-    expect(JSON.parse(readFileSync(join(mirror, SET_ASIDE_LOG), 'utf8'))).toMatchObject({ [`refs/fleetadlc/unpushed/${branch}`]: 1_700_000_000_000 });
+    expect(sh(mirror, 'rev-parse', `refs/openadlc/unpushed/${branch}`)).toBe(tip);
+    expect(JSON.parse(readFileSync(join(mirror, SET_ASIDE_LOG), 'utf8'))).toMatchObject({ [`refs/openadlc/unpushed/${branch}`]: 1_700_000_000_000 });
 
     const resumed = await worktrees.checkoutExisting({
       bot: 'builder',
@@ -616,7 +616,7 @@ describe('one bot working in two repositories', () => {
   };
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'fleetadlc-wt-two-'));
+    root = mkdtempSync(join(tmpdir(), 'openadlc-wt-two-'));
     worktrees = new Worktrees(join(root, 'work'));
   });
 
@@ -674,7 +674,7 @@ describe('resuming a task that paused before it pushed', () => {
   it('starts from the base when its branch was never pushed, rather than failing "invalid reference"', async () => {
     // A builder asked its question before its first commit, and was resumed
     // with the answer: its branch name was recorded, the branch was not.
-    root = mkdtempSync(join(tmpdir(), 'fleetadlc-wt-resume-'));
+    root = mkdtempSync(join(tmpdir(), 'openadlc-wt-resume-'));
     const origin = join(root, 'origin');
     mkdirSync(origin, { recursive: true });
     const git = (...args: string[]) => execFileSync('git', args, { cwd: origin, stdio: 'ignore' });
@@ -687,7 +687,7 @@ describe('resuming a task that paused before it pushed', () => {
     const resumed = await worktrees.checkoutExisting({
       bot: 'builder',
       taskId: 'task-66',
-      repoFullName: 'exampleco/fleetadlc',
+      repoFullName: 'exampleco/openadlc',
       remote: origin,
       baseRef: 'refs/heads/main',
       branch: 'agent/builder/66-issue-66',
@@ -704,7 +704,7 @@ describe('resuming a task that paused before it pushed', () => {
   it('refuses a missing branch for anything but that resume, rather than handing over the base under its name', async () => {
     // A review of a pull request from a fork, or of a branch deleted since, would
     // otherwise get a worktree of main and review an empty change.
-    root = mkdtempSync(join(tmpdir(), 'fleetadlc-wt-missing-'));
+    root = mkdtempSync(join(tmpdir(), 'openadlc-wt-missing-'));
     const origin = join(root, 'origin');
     mkdirSync(origin, { recursive: true });
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: origin, stdio: 'ignore' });
@@ -717,20 +717,20 @@ describe('resuming a task that paused before it pushed', () => {
       worktrees.checkoutExisting({
         bot: 'second-reviewer',
         taskId: 'review-7',
-        repoFullName: 'exampleco/fleetadlc',
+        repoFullName: 'exampleco/openadlc',
         remote: origin,
         baseRef: 'refs/heads/main',
         branch: 'from-a-fork',
         token: null,
       }),
-    ).rejects.toThrow(/is not a branch of exampleco\/fleetadlc.*Push the branch to the repository itself, or start the work again from the issue/);
+    ).rejects.toThrow(/is not a branch of exampleco\/openadlc.*Push the branch to the repository itself, or start the work again from the issue/);
   }, 30_000);
 
   it('resumes over its own worktree from before a restart, which holds its branch', async () => {
     // hostd restarted while the task was paused, so it no longer knew the
     // worktree was the task's; the fetch then refused to update the branch the
     // worktree had checked out.
-    root = mkdtempSync(join(tmpdir(), 'fleetadlc-wt-restart-'));
+    root = mkdtempSync(join(tmpdir(), 'openadlc-wt-restart-'));
     const origin = join(root, 'origin');
     mkdirSync(origin, { recursive: true });
     const git = (...args: string[]) => execFileSync('git', args, { cwd: origin, stdio: 'ignore' });
@@ -750,7 +750,7 @@ describe('resuming a task that paused before it pushed', () => {
     const request = {
       bot: 'builder',
       taskId: 'task-70',
-      repoFullName: 'exampleco/fleetadlc',
+      repoFullName: 'exampleco/openadlc',
       remote: origin,
       baseRef: 'refs/heads/main',
       branch: 'agent/builder/70-issue-66',
@@ -769,7 +769,7 @@ describe('resuming a task that paused before it pushed', () => {
   }, 30_000);
 
   it('fetches past a worktree an ended task left registered, its folder already gone', async () => {
-    root = mkdtempSync(join(tmpdir(), 'fleetadlc-wt-stale-'));
+    root = mkdtempSync(join(tmpdir(), 'openadlc-wt-stale-'));
     const origin = join(root, 'origin');
     mkdirSync(origin, { recursive: true });
     const git = (...args: string[]) => execFileSync('git', args, { cwd: origin, stdio: 'ignore' });
@@ -789,7 +789,7 @@ describe('resuming a task that paused before it pushed', () => {
     const task = (taskId: string) => ({
       bot: 'builder',
       taskId,
-      repoFullName: 'exampleco/fleetadlc',
+      repoFullName: 'exampleco/openadlc',
       remote: origin,
       baseRef: 'refs/heads/main',
       branch: 'agent/builder/70-issue-66',
@@ -831,7 +831,7 @@ describe('resuming a task whose commits are not all on the remote', () => {
     worktrees.checkoutExisting({
       bot: 'builder',
       taskId: 'task-92',
-      repoFullName: 'exampleco/fleetadlc',
+      repoFullName: 'exampleco/openadlc',
       remote: origin,
       baseRef: 'refs/heads/main',
       branch: BRANCH,
@@ -841,7 +841,7 @@ describe('resuming a task whose commits are not all on the remote', () => {
     });
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'fleetadlc-wt-keep-'));
+    root = mkdtempSync(join(tmpdir(), 'openadlc-wt-keep-'));
     origin = join(root, 'origin');
     mkdirSync(origin, { recursive: true });
     sh(origin, 'init', '-q', '-b', 'main');
@@ -867,7 +867,7 @@ describe('resuming a task whose commits are not all on the remote', () => {
     expect(readFileSync(join(again.path, 'change.ts'), 'utf8')).toBe('the work\n');
     expect(sh(again.mirror, 'for-each-ref', '--format=%(refname)', 'refs/heads/agent/builder/7-merged')).toBe('');
     // Only the task's own kept branch, which no fetch prunes.
-    expect(sh(again.mirror, 'for-each-ref', '--format=%(refname)', 'refs/fleetadlc')).toBe('refs/fleetadlc/tasks/task-92/head');
+    expect(sh(again.mirror, 'for-each-ref', '--format=%(refname)', 'refs/openadlc')).toBe('refs/openadlc/tasks/task-92/head');
   }, 30_000);
 
   it('keeps the commits made after its last push', async () => {
@@ -896,7 +896,7 @@ describe('resuming a task whose commits are not all on the remote', () => {
     expect(readFileSync(join(again.path, 'change.ts'), 'utf8')).toBe('the person’s\n');
     // What it had pushed was replaced on purpose: nothing to apply again.
     expect(again.setAside).toBeUndefined();
-    expect(sh(again.mirror, 'for-each-ref', '--format=%(refname)', 'refs/fleetadlc/unpushed')).toBe('');
+    expect(sh(again.mirror, 'for-each-ref', '--format=%(refname)', 'refs/openadlc/unpushed')).toBe('');
   }, 30_000);
 
   it('keeps what the remote moved on to, and sets its own later commits aside to apply again', async () => {
@@ -916,8 +916,8 @@ describe('resuming a task whose commits are not all on the remote', () => {
     const again = await resume();
 
     expect(sh(again.path, 'rev-parse', 'HEAD')).toBe(c);
-    expect(again.setAside).toEqual({ ref: `refs/fleetadlc/unpushed/${BRANCH}`, tip: b, commits: [b], reason: 'moved' });
-    expect(sh(again.path, 'rev-parse', `refs/fleetadlc/unpushed/${BRANCH}`)).toBe(b);
+    expect(again.setAside).toEqual({ ref: `refs/openadlc/unpushed/${BRANCH}`, tip: b, commits: [b], reason: 'moved' });
+    expect(sh(again.path, 'rev-parse', `refs/openadlc/unpushed/${BRANCH}`)).toBe(b);
     const brief = setAsideBrief(BRANCH, again.setAside!);
     expect(brief).toContain(`git cherry-pick ${b}`);
     expect(brief).toContain('Never force-push');
@@ -940,9 +940,9 @@ describe('resuming a task whose commits are not all on the remote', () => {
     // Started again from the base under the same name, the builder redid the
     // issue and opened a second pull request for work that had landed.
     await expect(resume()).rejects.toThrow(
-      new RegExp(`${BRANCH} was deleted .* merged or closed, so the task is not started again\\. .*kept at refs/fleetadlc/unpushed/${BRANCH}`),
+      new RegExp(`${BRANCH} was deleted .* merged or closed, so the task is not started again\\. .*kept at refs/openadlc/unpushed/${BRANCH}`),
     );
-    expect(sh(first.mirror, 'rev-parse', `refs/fleetadlc/unpushed/${BRANCH}`)).toBe(b);
+    expect(sh(first.mirror, 'rev-parse', `refs/openadlc/unpushed/${BRANCH}`)).toBe(b);
     expect(sh(first.mirror, 'for-each-ref', '--format=%(refname)', `refs/heads/${BRANCH}`)).toBe('');
   }, 30_000);
 
@@ -953,7 +953,7 @@ describe('resuming a task whose commits are not all on the remote', () => {
     sh(origin, 'branch', '-D', BRANCH);
 
     await expect(resume()).rejects.toThrow(/merged or closed, so the task is not started again\. Everything it had committed had been pushed/);
-    expect(sh(first.mirror, 'for-each-ref', '--format=%(refname)', 'refs/fleetadlc/unpushed')).toBe('');
+    expect(sh(first.mirror, 'for-each-ref', '--format=%(refname)', 'refs/openadlc/unpushed')).toBe('');
   }, 30_000);
 
   it('drops commits set aside more than a few days ago, in every mirror, by when they were set aside', async () => {
@@ -970,10 +970,10 @@ describe('resuming a task whose commits are not all on the remote', () => {
     const head = sh(first.path, 'rev-parse', 'HEAD');
     const old = Date.now() - (SET_ASIDE_DAYS + 1) * 24 * 3600 * 1000;
     for (const mirror of [first.mirror, other.mirror]) {
-      for (const name of ['old', 'new', 'unlogged']) sh(mirror, 'update-ref', `refs/fleetadlc/unpushed/agent/${name}`, head);
+      for (const name of ['old', 'new', 'unlogged']) sh(mirror, 'update-ref', `refs/openadlc/unpushed/agent/${name}`, head);
       writeFileSync(
         join(mirror, SET_ASIDE_LOG),
-        JSON.stringify({ 'refs/fleetadlc/unpushed/agent/old': old, 'refs/fleetadlc/unpushed/agent/new': Date.now() }),
+        JSON.stringify({ 'refs/openadlc/unpushed/agent/old': old, 'refs/openadlc/unpushed/agent/new': Date.now() }),
       );
       // Packed, as `gc` would: no ref file is left to date them by, and the
       // commit they name is as old as the task that made it.
@@ -985,9 +985,9 @@ describe('resuming a task whose commits are not all on the remote', () => {
     await worktrees.pruneAbandoned('builder', () => false);
 
     for (const mirror of [first.mirror, other.mirror]) {
-      expect(sh(mirror, 'for-each-ref', '--format=%(refname)', 'refs/fleetadlc/unpushed').split('\n')).toEqual([
-        'refs/fleetadlc/unpushed/agent/new',
-        'refs/fleetadlc/unpushed/agent/unlogged',
+      expect(sh(mirror, 'for-each-ref', '--format=%(refname)', 'refs/openadlc/unpushed').split('\n')).toEqual([
+        'refs/openadlc/unpushed/agent/new',
+        'refs/openadlc/unpushed/agent/unlogged',
       ]);
     }
     expect(worktrees.listWorktreeTaskIds('builder')).toEqual([]);
@@ -1003,7 +1003,7 @@ describe('resuming a task whose commits are not all on the remote', () => {
 
     // Its old clone was harvested before it was cleared, so the next resume
     // that can reach the remote starts from the work.
-    expect(sh(first.mirror, 'rev-parse', 'refs/fleetadlc/tasks/task-92/head')).toBe(work);
+    expect(sh(first.mirror, 'rev-parse', 'refs/openadlc/tasks/task-92/head')).toBe(work);
   }, 30_000);
 });
 
@@ -1015,7 +1015,7 @@ describe('what a task writes to post on GitHub', () => {
   let origin: string;
 
   beforeEach(async () => {
-    root = mkdtempSync(join(tmpdir(), 'fleetadlc-wt-scratch-'));
+    root = mkdtempSync(join(tmpdir(), 'openadlc-wt-scratch-'));
     origin = join(root, 'origin');
     mkdirSync(origin);
     const git = (args: string[]) => run('git', args, { cwd: origin });
@@ -1029,13 +1029,13 @@ describe('what a task writes to post on GitHub', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('goes under .fleetadlc-scratch/, which no commit takes, however the change is staged', async () => {
+  it('goes under .openadlc-scratch/, which no commit takes, however the change is staged', async () => {
     const worktrees = new Worktrees(join(root, 'work'));
     const request = { bot: 'builder', repoFullName: 'acme/widgets', remote: origin, baseRef: 'main', branch: 'agent/builder/7-issue-7', token: null };
     const { path } = await worktrees.create({ ...request, taskId: 'task-1' });
 
     mkdirSync(join(path, SCRATCH_DIR));
-    writeFileSync(join(path, SCRATCH_DIR, 'pr.md'), '## What changed\n\n<!-- fleetadlc:{"event":"pr_opened"} -->\n');
+    writeFileSync(join(path, SCRATCH_DIR, 'pr.md'), '## What changed\n\n<!-- openadlc:{"event":"pr_opened"} -->\n');
     writeFileSync(join(path, 'page.html'), '<h1>Hello</h1>\n');
     await run('git', ['add', '-A'], { cwd: path });
 
@@ -1051,7 +1051,7 @@ describe('what a task writes to post on GitHub', () => {
 describe('the sweep of task folders nobody holds', () => {
   let root: string;
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'fleetadlc-slots-'));
+    root = mkdtempSync(join(tmpdir(), 'openadlc-slots-'));
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
@@ -1111,7 +1111,7 @@ describe('the bot’s token and the mirror', () => {
   });
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'fleetadlc-wt-token-'));
+    root = mkdtempSync(join(tmpdir(), 'openadlc-wt-token-'));
     origin = join(root, 'origin');
     mkdirSync(origin, { recursive: true });
     sh(origin, 'init', '-q', '-b', 'main');
@@ -1220,7 +1220,7 @@ describe('git locks a killed hostd left in a mirror', () => {
   });
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'fleetadlc-wt-locks-'));
+    root = mkdtempSync(join(tmpdir(), 'openadlc-wt-locks-'));
     origin = join(root, 'origin');
     mkdirSync(origin, { recursive: true });
     sh(origin, 'init', '-q', '-b', 'main');

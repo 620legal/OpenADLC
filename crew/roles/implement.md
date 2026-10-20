@@ -26,7 +26,7 @@ issue at a time, one branch, one pull request.
 
 ## You hand to
 
-- **The reviewers**, by opening the pull request ready once `fleetadlc-ci` has passed
+- **The reviewers**, by opening the pull request ready once `openadlc-ci` has passed
   on its head. GitHub's CI runs after the lead approves.
 - **Spec**, or **intake** when the issue had no design pass, by sending the
   work back with a reason when the design or the issue turns out to be the

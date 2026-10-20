@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * Where a repository's delivery rules come from: its `.github/fleetadlc.yml`,
+ * Where a repository's delivery rules come from: its `.github/openadlc.yml`,
  * else its row, else Settings' testing-deploy choice; and where its testing is
- * served, with the install's FLEETADLC_TESTING_URL only as the last word.
+ * served, with the install's OPENADLC_TESTING_URL only as the last word.
  */
 
 const world = {
@@ -12,7 +12,7 @@ const world = {
   choice: { approval: null as 'reviewers' | 'auto' | null, soakMinutes: null as number | null, reviewers: [] as string[] },
 };
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   repos: { getDelivery: vi.fn(async () => world.stored), getProductionChoice: vi.fn(async () => world.choice) },
   settings: { getSetting: vi.fn(async () => world.setting) },
 }));
@@ -35,7 +35,7 @@ beforeEach(() => {
 });
 
 describe('the rules a repository ships by', () => {
-  it('are its .github/fleetadlc.yml when it has one', async () => {
+  it('are its .github/openadlc.yml when it has one', async () => {
     const file = 'version: 1\nproduction:\n  approval: auto\n  soakMinutes: 15\n';
     const found = await effectiveDelivery({ repo: REPO, client: client(file) });
     expect(found.source).toBe('file');
@@ -97,7 +97,7 @@ describe('rules that could not be read', () => {
     const found = await effectiveDelivery({ repo: REPO, client: failing() });
     // The fallback, for the board and Settings to show, but marked.
     expect(found.source).toBe('setting');
-    expect(found.readError).toBe('.github/fleetadlc.yml could not be read: GitHub answered 502: Bad Gateway');
+    expect(found.readError).toBe('.github/openadlc.yml could not be read: GitHub answered 502: Bad Gateway');
 
     const read = await effectiveDelivery({ repo: REPO, client: client(soaks) });
     expect(read.readError).toBeNull();
@@ -106,7 +106,7 @@ describe('rules that could not be read', () => {
   });
 
   it('a stored row that could not be read is not taken for no stored rules', async () => {
-    const { repos } = await import('@fleetadlc/db');
+    const { repos } = await import('@openadlc/db');
     vi.mocked(repos.getDelivery).mockRejectedValueOnce(new Error('the database went away'));
     const found = await effectiveDelivery({ repo: REPO, client: client(null) });
     expect(found.readError).toBe("the repository's stored rules could not be read: the database went away");
@@ -118,7 +118,7 @@ describe('rules that could not be read', () => {
 
   it('a production choice that could not be read is not taken for no choice, unless the file sets the approval', async () => {
     // The default it falls to ships automatically; the choice may have been a person.
-    const { repos } = await import('@fleetadlc/db');
+    const { repos } = await import('@openadlc/db');
     vi.mocked(repos.getProductionChoice).mockRejectedValueOnce(new Error('the database went away'));
     expect((await effectiveDelivery({ repo: REPO, client: client(null) })).readError).toBe(
       "the repository's production choice could not be read: the database went away",

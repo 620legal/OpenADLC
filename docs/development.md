@@ -14,9 +14,9 @@ short form of it.
 | git | 2.41 or later | worktrees; `apps/hostd/src/git-shim.test.ts` runs `git --attr-source`, which older versions refuse |
 | tmux | any recent | the local driver's sessions |
 | make | any | `make ci` |
-| jq | any | `apps/hostd/src/fleetadlc-install.test.ts` runs `infra/local/fleetadlc-install`, which reads hostd's answer with it; macOS 15 and later ship it |
+| jq | any | `apps/hostd/src/openadlc-install.test.ts` runs `infra/local/openadlc-install`, which reads hostd's answer with it; macOS 15 and later ship it |
 | Docker | any recent | a scratch install's database, and the docker driver |
-| jq | any recent | the `fleetadlc-install` wrapper and its tests |
+| jq | any recent | the `openadlc-install` wrapper and its tests |
 | curl | any | `tests/scratch.sh`, which switches engine updates off on a scratch install with it |
 | terraform | 1.6 or later, optional | the `infra/gcp` module's check |
 | python3, make, g++ (`build-essential`) | Linux only | `pnpm install` compiles node-pty, which has prebuilt binaries only for macOS and Windows |
@@ -25,28 +25,28 @@ short form of it.
 
 ```bash
 pnpm install          # also restores node-pty's execute bit (apps/hostd/scripts/node-pty-exec-bit.mjs); on Linux, compiles it
-pnpm build            # packages first, then apps: apps import @fleetadlc/* from their dist/
+pnpm build            # packages first, then apps: apps import @openadlc/* from their dist/
 make ci               # typecheck and unit tests, what must be green before a pull request
 ```
 
 Two things trip everybody once:
 
-- **Apps read the packages' builds.** `apps/*` import `@fleetadlc/shared`,
-  `@fleetadlc/db` and the rest from each package's `dist/`, in tests too. After
+- **Apps read the packages' builds.** `apps/*` import `@openadlc/shared`,
+  `@openadlc/db` and the rest from each package's `dist/`, in tests too. After
   changing `packages/*`, run `pnpm build` before testing an app, or the app's
   tests run against the old package.
 - **vitest does not typecheck.** A test file can pass under vitest and fail
   `tsc`, which CI runs. Run `pnpm build` after the last edit, test files
   included. The root `tests/` are not a package `pnpm build` compiles: `pnpm
-  typecheck` (`make ci`) checks them, or `pnpm --filter @fleetadlc/tests
+  typecheck` (`make ci`) checks them, or `pnpm --filter @openadlc/tests
   typecheck` alone.
 
 One package, or one test:
 
 ```bash
-pnpm --filter @fleetadlc/bridge test                                        # a package's unit tests
-pnpm --filter @fleetadlc/bridge exec vitest run src/webhooks.test.ts        # one file
-pnpm --filter @fleetadlc/bridge exec vitest run src/webhooks.test.ts -t 'a gate answered'   # one test
+pnpm --filter @openadlc/bridge test                                        # a package's unit tests
+pnpm --filter @openadlc/bridge exec vitest run src/webhooks.test.ts        # one file
+pnpm --filter @openadlc/bridge exec vitest run src/webhooks.test.ts -t 'a gate answered'   # one test
 ```
 
 Unit tests live beside the code they test, as `*.test.ts`. The suites in
@@ -66,7 +66,7 @@ again.
 
 ## A scratch install
 
-`fleetadlc up` starts the install `FLEETADLC_HOME` points at, `~/.fleetadlc` by default.
+`openadlc up` starts the install `OPENADLC_HOME` points at, `~/.openadlc` by default.
 On a machine that runs OpenADLC that is the real one, with its crew, its
 database and its board. To see a change work end to end, start a scratch
 install of your checkout beside it.
@@ -86,21 +86,21 @@ It shares nothing with another install:
 
 | | A real install | The scratch install |
 |---|---|---|
-| State | `~/.fleetadlc` | `.scratch/home` in the checkout (gitignored) |
-| Database | the `fleetadlc-db` container on :47432 | a `fleetadlc-scratch-db` container on :57432 |
+| State | `~/.openadlc` | `.scratch/home` in the checkout (gitignored) |
+| Database | the `openadlc-db` container on :47432 | a `openadlc-scratch-db` container on :57432 |
 | Ports | 47300, 47311, 47312 | 57300, 57311, 57312 |
-| Bots | containers, or tmux sessions on the default server | tmux sessions on a server of its own (`tmux -L fleetadlc-scratch`) |
+| Bots | containers, or tmux sessions on the default server | tmux sessions on a server of its own (`tmux -L openadlc-scratch`) |
 | Engines | real models | scripted: no model is called |
 | GitHub | the crew's accounts | none of the crew's accounts, and nothing is written to GitHub; the walkthrough still asks GitHub's public API, unauthenticated, whether the logins it suggests for the bots exist, and the account type of an owner typed in |
-| Engine updates | weekly, rebuilding `fleetadlc-bot:latest` | off, because that image is every install's |
+| Engine updates | weekly, rebuilding `openadlc-bot:latest` | off, because that image is every install's |
 | Dispatching | the bridge, after every change and every five minutes | none in the bridge: the suites run their own passes |
 
 The ports, the directory and the container's name can be changed with
-`FLEETADLC_SCRATCH_CONSOLE_PORT`, `FLEETADLC_SCRATCH_BRIDGE_PORT`,
-`FLEETADLC_SCRATCH_HOSTD_PORT`, `FLEETADLC_SCRATCH_POSTGRES_PORT`, `FLEETADLC_SCRATCH_DIR`,
-`FLEETADLC_SCRATCH_DB_CONTAINER` and `FLEETADLC_SCRATCH_TMUX_SOCKET` (the tmux server
-its bots' sessions run on, `fleetadlc-scratch` by default).
-`FLEETADLC_SCRATCH_DRIVER=docker` runs it on the docker driver instead, a
+`OPENADLC_SCRATCH_CONSOLE_PORT`, `OPENADLC_SCRATCH_BRIDGE_PORT`,
+`OPENADLC_SCRATCH_HOSTD_PORT`, `OPENADLC_SCRATCH_POSTGRES_PORT`, `OPENADLC_SCRATCH_DIR`,
+`OPENADLC_SCRATCH_DB_CONTAINER` and `OPENADLC_SCRATCH_TMUX_SOCKET` (the tmux server
+its bots' sessions run on, `openadlc-scratch` by default).
+`OPENADLC_SCRATCH_DRIVER=docker` runs it on the docker driver instead, a
 container per task as a real install has them, under names and an install
 label of its own (`scratch-task-…`, `scratch-tasks`, `scratch-taskdb`) that
 `down` removes; `tests/docker-computers.mjs` is the suite for it. `up` refuses a port that is taken rather
@@ -108,35 +108,35 @@ than sharing it.
 
 The scratch console at http://127.0.0.1:57300 opens on onboarding, as a new
 install does, once you have signed in with the link `up` prints (or
-`eval "$(tests/scratch.sh env)" && pnpm fleetadlc console-link`). The console reads the bridge's address when it starts, so a
+`eval "$(tests/scratch.sh env)" && pnpm openadlc console-link`). The console reads the bridge's address when it starts, so a
 console built in this checkout talks to the bridge it was started with.
 
 ### Working on the console
 
 `next dev` reloads as you edit. Next.js reports anonymous usage to its makers
 from `next build`, `next dev` and `next start` by default; set
-`NEXT_TELEMETRY_DISABLED=1`, or run `pnpm --filter @fleetadlc/console exec next
+`NEXT_TELEMETRY_DISABLED=1`, or run `pnpm --filter @openadlc/console exec next
 telemetry disable` once, to turn it off. Point it at the scratch bridge, on a
 port of its own:
 
 ```bash
-FLEETADLC_BRIDGE_URL=http://127.0.0.1:57311 FLEETADLC_CONSOLE_PORT=57301 \
-  FLEETADLC_CONSOLE_SECRET="$(tr -d '\n' < .scratch/home/secrets/console-api-secret.secret)" \
-  pnpm --filter @fleetadlc/console dev
+OPENADLC_BRIDGE_URL=http://127.0.0.1:57311 OPENADLC_CONSOLE_PORT=57301 \
+  OPENADLC_CONSOLE_SECRET="$(tr -d '\n' < .scratch/home/secrets/console-api-secret.secret)" \
+  pnpm --filter @openadlc/console dev
 ```
 
 The secret is what the scratch bridge serves `/v1` for, and what the dev
 console signs you in with. Sign in with
-`eval "$(tests/scratch.sh env)" && FLEETADLC_CONSOLE_URL=http://127.0.0.1:57301 pnpm fleetadlc console-link`.
+`eval "$(tests/scratch.sh env)" && OPENADLC_CONSOLE_URL=http://127.0.0.1:57301 pnpm openadlc console-link`.
 
 Take-over (the Terminal tab) connects the browser straight to hostd's
-terminal gateway, at the address in `NEXT_PUBLIC_FLEETADLC_TERMINAL_URL` or, when
+terminal gateway, at the address in `NEXT_PUBLIC_OPENADLC_TERMINAL_URL` or, when
 that is empty, port 47312 on the console's host. The console reads it when it
 starts and hands it to the browser with each terminal token, so changing it
 takes a restart, not a rebuild. `tests/scratch.sh` sets none, so take-over on
 the scratch console dials :47312, a real install's hostd, which refuses it, and
 never the scratch hostd. To use take-over there, export
-`NEXT_PUBLIC_FLEETADLC_TERMINAL_URL=ws://127.0.0.1:57312` before
+`NEXT_PUBLIC_OPENADLC_TERMINAL_URL=ws://127.0.0.1:57312` before
 `tests/scratch.sh up`; hostd admits only the origin of the console it was
 started with, so the `next dev` console on :57301 cannot use it.
 
@@ -145,22 +145,22 @@ started with, so the `next dev` console on :57301 cannot use it.
 The suites in `tests/*.mjs` write to the install they run against: leases,
 tasks, budgets, deliveries signed with its secret. They also decide what is
 leased, a dispatcher pass at a time, so an install whose engines are scripted
-starts its bridge without the dispatcher (`fleetadlc up` leaves
-`FLEETADLC_DISPATCH_IN_BRIDGE` off and says so): two dispatchers deciding at once
+starts its bridge without the dispatcher (`openadlc up` leaves
+`OPENADLC_DISPATCH_IN_BRIDGE` off and says so): two dispatchers deciding at once
 would make the suites flaky. On the scratch console, work is leased by a suite
 or not at all.
 
 The suites run only against an install whose engines are scripted, which the
 bridge says in `/healthz`. Before anything is read, `tests/scratch-only.mjs`
 stops a suite, with exit code 2, when the bridge does not answer or does not
-say it is scripted, when any of `FLEETADLC_BRIDGE_URL`, `FLEETADLC_HOSTD_URL`,
-`DATABASE_URL` and `FLEETADLC_HOME` is not exported, and when `FLEETADLC_HOME`
-is `~/.fleetadlc`: `fleetadlc down` leaves a real install's database running,
+say it is scripted, when any of `OPENADLC_BRIDGE_URL`, `OPENADLC_HOSTD_URL`,
+`DATABASE_URL` and `OPENADLC_HOME` is not exported, and when `OPENADLC_HOME`
+is `~/.openadlc`: `openadlc down` leaves a real install's database running,
 and the defaults point at it.
 
 ```bash
 tests/scratch.sh up
-eval "$(tests/scratch.sh env)"       # FLEETADLC_HOME, DATABASE_URL, the three URLs, scripted engines
+eval "$(tests/scratch.sh env)"       # OPENADLC_HOME, DATABASE_URL, the three URLs, scripted engines
 node tests/all.mjs                     # every suite this machine can run, one verdict
 node tests/pipeline.mjs                # or one of them
 ```
@@ -232,7 +232,7 @@ the skill. Whether a model reading the skill stops takes a live run
 - **A test that would fail without the change.** A green suite on its own
   proves nothing about the change.
 - **`make ci` green after the last edit**, and `pnpm build` too. A builder runs
-  it through `fleetadlc-ci`, which has hostd run it on the exact commit and
+  it through `openadlc-ci`, which has hostd run it on the exact commit and
   records the pass; its `git` and `gh` will not push or open a pull request on
   a commit without one. hostd runs it in the worktree when it can prove the
   worktree is that commit's tree, and in a clean checkout of the commit when
@@ -256,7 +256,7 @@ A task that needs to write outside its lease's paths ends a message with a
 (`crew/skills/implement/SKILL.md`, "Asking to widen your paths"):
 
 ```
-<!-- fleetadlc:{"event":"plan_change","paths":["apps/hostd/src/skill-runner.ts"],"reason":"the runner drops the field"} -->
+<!-- openadlc:{"event":"plan_change","paths":["apps/hostd/src/skill-runner.ts"],"reason":"the runner drops the field"} -->
 ```
 
 - **It is a gate with two choices**, `Approve` and `Refuse`, so it shows as a
@@ -312,7 +312,7 @@ A task that needs to write outside its lease's paths ends a message with a
 ## Expected paths decide what runs together
 
 The dispatcher holds an issue back when its Expected paths overlap work in
-flight, by the repository's path policy (`paths:` in `.github/fleetadlc.yml`;
+flight, by the repository's path policy (`paths:` in `.github/openadlc.yml`;
 `packages/shared/src/path-overlap.ts` and `blockingOverlaps` in
 `apps/dispatcher/src/dispatcher.ts`). Overlap on a shared path (the Makefile,
 `README*`, `package.json`, `AGENTS.md` and the like) never holds it; an
@@ -347,12 +347,12 @@ exclusive path being built or in review).
 
 ## Never, on a machine that runs OpenADLC
 
-- `fleetadlc up`, `fleetadlc down` or `fleetadlc restore` without knowing which
-  `FLEETADLC_HOME` they act on. Every `fleetadlc` command reads `~/.fleetadlc` unless told
+- `openadlc up`, `openadlc down` or `openadlc restore` without knowing which
+  `OPENADLC_HOME` they act on. Every `openadlc` command reads `~/.openadlc` unless told
   otherwise.
-- `docker rm` or `docker stop` of `fleetadlc-db`, `fleetadlc-taskdb`, a `task-*` or a
-  `bot-<name>` container, or the `fleetadlc-tasks` network: those names belong to
+- `docker rm` or `docker stop` of `openadlc-db`, `openadlc-taskdb`, a `task-*` or a
+  `bot-<name>` container, or the `openadlc-tasks` network: those names belong to
   the real install, and a `task-*` container is a running task's computer.
 - `pnpm build` in the directory a real install runs from, without restarting it
-  (`fleetadlc down && fleetadlc up`): the running console serves the old build and
+  (`openadlc down && openadlc up`): the running console serves the old build and
   fails with `ChunkLoadError`.

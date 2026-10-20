@@ -9,16 +9,16 @@
 #
 #   1. checks gcloud is signed in (and Terraform's credentials), and that the
 #      project exists with billing on; offers to create it (--billing-account);
-#   2. clones the repository and builds the `fleetadlc` CLI;
+#   2. clones the repository and builds the `openadlc` CLI;
 #   3. builds the four images on Cloud Build, as a service account of the
 #      install's own, into the project's Artifact Registry. Nothing is built on
 #      this machine and Docker is not needed;
-#   4. runs `fleetadlc cloud configure`, which asks one thing: who may open the
+#   4. runs `openadlc cloud configure`, which asks one thing: who may open the
 #      console to set the install up (you, by default — Enter confirms). The
 #      console is served on the install's own address under nip.io unless you
 #      name a domain (--domain, or later in the install's settings), and GitHub
 #      is set up afterwards in the console's walkthrough;
-#   5. runs `fleetadlc cloud plan`, then, once you say so, `apply`;
+#   5. runs `openadlc cloud plan`, then, once you say so, `apply`;
 #   6. prints what is left: the console's walkthrough (and one DNS record, only
 #      if you named a domain of your own).
 #
@@ -289,7 +289,7 @@ ensure_project() {
 ensure_checkout() {
   local here=''
   if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; fi
-  if [ -z "$dir" ] && [ -n "$here" ] && grep -qs '"name": "fleetadlc"' "$here/../../package.json"; then
+  if [ -z "$dir" ] && [ -n "$here" ] && grep -qs '"name": "openadlc"' "$here/../../package.json"; then
     dir="$(cd "$here/../.." && pwd)"
     step "Using the checkout at $dir"
   else
@@ -310,17 +310,17 @@ ensure_checkout() {
       run git clone --quiet --branch "$ref" "$repo_url" "$dir"
     fi
   fi
-  step "Building the fleetadlc CLI"
+  step "Building the openadlc CLI"
   in_checkout pnpm install --frozen-lockfile
   # The CLI and the packages it uses: the console and the services are built
   # into their images on Cloud Build, not here.
-  in_checkout pnpm --filter '@fleetadlc/cli...' build
+  in_checkout pnpm --filter '@openadlc/cli...' build
 }
 
 # --- Images -------------------------------------------------------------------
 
 build_images() {
-  local registry="$region-docker.pkg.dev/$project/fleetadlc"
+  local registry="$region-docker.pkg.dev/$project/openadlc"
   local builder="openadlc-image-builder"
   local builder_email="$builder@$project.iam.gserviceaccount.com"
   local source_bucket="$project-openadlc-build"
@@ -331,8 +331,8 @@ build_images() {
 
   run gcloud services enable artifactregistry.googleapis.com cloudbuild.googleapis.com iam.googleapis.com --project "$project"
 
-  if ! gcloud artifacts repositories describe fleetadlc --location "$region" --project "$project" >/dev/null 2>&1; then
-    run gcloud artifacts repositories create fleetadlc --repository-format=docker --location "$region" --project "$project" \
+  if ! gcloud artifacts repositories describe openadlc --location "$region" --project "$project" >/dev/null 2>&1; then
+    run gcloud artifacts repositories create openadlc --repository-format=docker --location "$region" --project "$project" \
       --description "OpenADLC's images: bridge, hostd, console, bot"
   fi
 
@@ -354,7 +354,7 @@ build_images() {
   # and cannot open it, which stopped a fresh install here with the bucket made
   # and nothing built. It is set on every run, so a bucket left by that run gets it.
   run gcloud storage buckets update "gs://$source_bucket" --lifecycle-file="$dir/infra/gcp/build-bucket-lifecycle.json"
-  run gcloud artifacts repositories add-iam-policy-binding fleetadlc --location "$region" --project "$project" \
+  run gcloud artifacts repositories add-iam-policy-binding openadlc --location "$region" --project "$project" \
     --member "serviceAccount:$builder_email" --role roles/artifactregistry.writer >/dev/null
   run gcloud storage buckets add-iam-policy-binding "gs://$source_bucket" \
     --member "serviceAccount:$builder_email" --role roles/storage.objectViewer >/dev/null
@@ -393,7 +393,15 @@ settings_project() {
 }
 
 settle_settings() {
-  local home="${FLEETADLC_HOME:-$HOME/.fleetadlc}"
+  # The same order the CLI resolves its home in: either variable, then an
+  # existing directory under the new name, then one under the old.
+  local home
+  if [ -n "${OPENADLC_HOME:-}" ]; then home="$OPENADLC_HOME"
+  elif [ -n "${FLEETADLC_HOME:-}" ]; then home="$FLEETADLC_HOME"
+  elif [ -d "$HOME/.openadlc" ]; then home="$HOME/.openadlc"
+  elif [ -d "$HOME/.fleetadlc" ]; then home="$HOME/.fleetadlc"
+  else home="$HOME/.openadlc"
+  fi
   local here="$home/cloud.tfvars.json"
   existing=0
   if [ -f "$here" ]; then
@@ -401,18 +409,18 @@ settle_settings() {
     # Configure would refuse a file it cannot read and start the settings again.
     theirs="$(settings_project "$here")" || die "$here is there but is not an install's settings (not JSON, or no project_id). Fix it or move it aside, then run this again"
     if [ "$theirs" != "$project" ]; then
-      die "this machine holds the settings of the install in $theirs ($here), not $project. Run with --project $theirs, or use another FLEETADLC_HOME for this one: FLEETADLC_HOME=~/.fleetadlc-$project"
+      die "this machine holds the settings of the install in $theirs ($here), not $project. Run with --project $theirs, or use another OPENADLC_HOME for this one: OPENADLC_HOME=~/.openadlc-$project"
     fi
     existing=1
     ok "this machine has $project's settings"
     return 0
   fi
 
-  local bucket="$project-fleetadlc-tfstate"
+  local bucket="$project-openadlc-tfstate"
   local said
-  if said="$(gcloud storage objects describe "gs://$bucket/fleetadlc/cloud.tfvars.json" 2>&1 >/dev/null)"; then
+  if said="$(gcloud storage objects describe "gs://$bucket/openadlc/cloud.tfvars.json" 2>&1 >/dev/null)"; then
     step "Taking over the settings in gs://$bucket"
-    interactive node apps/cli/bin/fleetadlc.mjs cloud pull --bucket "$bucket"
+    interactive node apps/cli/bin/openadlc.mjs cloud pull --bucket "$bucket"
     if [ "$dry_run" = 0 ]; then
       # pull checks the bucket against the project its settings name, not
       # against this run's: bucket names are global, and this one could be
@@ -425,16 +433,39 @@ settle_settings() {
     ok "this machine has $project's settings, from gs://$bucket"
     return 0
   fi
-  # A new install only when gcloud says there is nothing there. Anything else —
-  # no permission, an API not enabled, the network — is not knowing, and
-  # configure would then make a new webhook secret and push it over the
-  # settings it could not see (the same reading as notFound in
-  # apps/cli/src/commands/cloud-leftovers.ts).
+  # Nothing under the new name: an install made before the rename keeps its
+  # settings in the bucket and prefix FleetADLC named, so look there before
+  # deciding this is a new install.
   local lower
   lower="$(printf '%s' "$said" | tr '[:upper:]' '[:lower:]')"
   case "$lower" in
-    *not_found*|*"not found"*|*"does not exist"*) note "no settings in gs://$bucket yet: a new install" ;;
+    *not_found*|*"not found"*|*"does not exist"*) ;;
     *) die "could not tell whether gs://$bucket holds this install's settings, so nothing was configured. gcloud said: $said" ;;
+  esac
+
+  local legacy_bucket="$project-fleetadlc-tfstate"
+  if said="$(gcloud storage objects describe "gs://$legacy_bucket/fleetadlc/cloud.tfvars.json" 2>&1 >/dev/null)"; then
+    step "Taking over the settings in gs://$legacy_bucket, this install's bucket from before the rename"
+    interactive node apps/cli/bin/openadlc.mjs cloud pull --bucket "$legacy_bucket" --prefix fleetadlc
+    if [ "$dry_run" = 0 ]; then
+      local pulled
+      pulled="$(settings_project "$here")" || die "the settings pulled into $here could not be read. Move it aside, then run this again"
+      [ "$pulled" = "$project" ] || die "gs://$legacy_bucket holds the settings of the install in $pulled, not $project; they are now in $here. Move that file aside, then run this again with --project $pulled, or name this install's own bucket"
+    fi
+    existing=1
+    ok "this machine has $project's settings, from gs://$legacy_bucket"
+    return 0
+  fi
+
+  # A new install only when gcloud says there is nothing there under either
+  # name. Anything else — no permission, an API not enabled, the network — is
+  # not knowing, and configure would then make a new webhook secret and push it
+  # over the settings it could not see (the same reading as notFound in
+  # apps/cli/src/commands/cloud-leftovers.ts).
+  lower="$(printf '%s' "$said" | tr '[:upper:]' '[:lower:]')"
+  case "$lower" in
+    *not_found*|*"not found"*|*"does not exist"*) note "no settings in gs://$bucket or gs://$legacy_bucket yet: a new install" ;;
+    *) die "could not tell whether gs://$legacy_bucket holds this install's settings, so nothing was configured. gcloud said: $said" ;;
   esac
 }
 
@@ -480,24 +511,24 @@ main() {
       say "  The console is served on the install's own address under nip.io; name a domain of yours with --domain, or set one later."
     fi
   fi
-  export FLEETADLC_CLOUD_PROJECT="$project" FLEETADLC_CLOUD_REGION="$region"
-  [ -z "$domain" ] || export FLEETADLC_CLOUD_DOMAIN="$domain"
-  [ -z "$account" ] || export FLEETADLC_CLOUD_CONSOLE_MEMBERS="user:$account"
-  interactive node apps/cli/bin/fleetadlc.mjs cloud configure
+  export OPENADLC_CLOUD_PROJECT="$project" OPENADLC_CLOUD_REGION="$region"
+  [ -z "$domain" ] || export OPENADLC_CLOUD_DOMAIN="$domain"
+  [ -z "$account" ] || export OPENADLC_CLOUD_CONSOLE_MEMBERS="user:$account"
+  interactive node apps/cli/bin/openadlc.mjs cloud configure
 
   step "Planning"
-  interactive node apps/cli/bin/fleetadlc.mjs cloud plan
+  interactive node apps/cli/bin/openadlc.mjs cloud plan
   if [ "$plan_only" = 1 ]; then
-    say "  Stopped after the plan. Apply it with: cd $dir && pnpm fleetadlc cloud apply"
+    say "  Stopped after the plan. Apply it with: cd $dir && pnpm openadlc cloud apply"
     return 0
   fi
 
   step "Applying"
   note "Terraform shows the plan again and asks for yes; the first apply takes 15 to 25 minutes (Cloud SQL is most of it)"
-  interactive node apps/cli/bin/fleetadlc.mjs cloud apply
+  interactive node apps/cli/bin/openadlc.mjs cloud apply
 
   step "What is left"
-  in_checkout terraform -chdir=infra/gcp output -raw next_steps || in_checkout node apps/cli/bin/fleetadlc.mjs cloud output
+  in_checkout terraform -chdir=infra/gcp output -raw next_steps || in_checkout node apps/cli/bin/openadlc.mjs cloud output
 }
 
 main "$@"

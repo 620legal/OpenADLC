@@ -13,12 +13,12 @@ const PASSED_THROUGH = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TERM', 'SHELL', 'USER
 
 /**
  * Where OpenADLC's own `gh` is (`bin/gh` in this package): in hostd's checkout,
- * and at `/opt/fleetadlc/bin` inside a bot's container, where the docker driver
+ * and at `/opt/openadlc/bin` inside a bot's container, where the docker driver
  * mounts it. First on a session's PATH, so what the session posts to GitHub
- * carries its header (FLEETADLC_POST_HEADER); it runs the real `gh` after.
+ * carries its header (OPENADLC_POST_HEADER); it runs the real `gh` after.
  */
 export const GH_SHIM_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin');
-export const CONTAINER_GH_SHIM_DIR = '/opt/fleetadlc/bin';
+export const CONTAINER_GH_SHIM_DIR = '/opt/openadlc/bin';
 
 /**
  * The engine vendors' switches for telemetry, error reporting and other
@@ -44,12 +44,12 @@ export const TELEMETRY_OPT_OUTS: Readonly<Record<string, string>> = Object.freez
 });
 
 /**
- * The opt-outs, unless hostd's `FLEETADLC_ENGINE_TELEMETRY` is `on`: then
+ * The opt-outs, unless hostd's `OPENADLC_ENGINE_TELEMETRY` is `on`: then
  * none of them, and the setting itself, so `CodexEngine` leaves Codex's own
  * switches alone too. Read the way `egressProxyEnv` reads its proxy.
  */
-export function telemetryEnv(setting: string | undefined = process.env.FLEETADLC_ENGINE_TELEMETRY): Record<string, string> {
-  return setting === 'on' ? { FLEETADLC_ENGINE_TELEMETRY: 'on' } : { ...TELEMETRY_OPT_OUTS };
+export function telemetryEnv(setting: string | undefined = process.env.OPENADLC_ENGINE_TELEMETRY): Record<string, string> {
+  return setting === 'on' ? { OPENADLC_ENGINE_TELEMETRY: 'on' } : { ...TELEMETRY_OPT_OUTS };
 }
 
 /** The host's own values, for the development driver that runs beside hostd. */
@@ -86,7 +86,7 @@ export const CONTAINER_TOOL_DIRS = ['/home/bot/.local/share/pnpm', '/home/bot/.l
  * itself bypassed — and `NODE_USE_ENV_PROXY`, without which Node's own fetch
  * ignores all of it. Empty where there is no proxy.
  */
-export function egressProxyEnv(proxy: string | undefined = process.env.FLEETADLC_BOT_EGRESS_PROXY || undefined): Record<string, string> {
+export function egressProxyEnv(proxy: string | undefined = process.env.OPENADLC_BOT_EGRESS_PROXY || undefined): Record<string, string> {
   if (!proxy) return {};
   const bypass = 'host.docker.internal,localhost,127.0.0.1';
   return {
@@ -121,7 +121,7 @@ export function containerBaseEnv(): Record<string, string> {
     // The container is the session's sandbox. An engine that would sandbox
     // each command itself cannot in here — Codex's bubblewrap needs a user
     // namespace an unprivileged container cannot make — and need not.
-    FLEETADLC_CONTAINED: '1',
+    OPENADLC_CONTAINED: '1',
     ...telemetryEnv(),
   };
 }
@@ -150,9 +150,9 @@ export function repoKeyOf(repoFullName: string | null | undefined): string | nul
 
 /**
  * A session's environment with the task's own home in place of the bot's,
- * when `FLEETADLC_REPO_HOME` names one, its repository's npm cache when
- * `FLEETADLC_CACHE_DIR` names one, and its repository's pnpm store when
- * `FLEETADLC_PNPM_STORE` names one.
+ * when `OPENADLC_REPO_HOME` names one, its repository's npm cache when
+ * `OPENADLC_CACHE_DIR` names one, and its repository's pnpm store when
+ * `OPENADLC_PNPM_STORE` names one.
  *
  * A bot's home held everything a tool keeps between runs — package caches,
  * globally installed CLIs, whatever a tool writes under `~` — so what one task
@@ -176,23 +176,23 @@ export function repoKeyOf(repoFullName: string | null | undefined): string | nul
  */
 export function withRepoHome(base: Record<string, string>, env: Record<string, string>): Record<string, string> {
   const merged: Record<string, string> = { ...base, ...env };
-  const home = env.FLEETADLC_REPO_HOME;
+  const home = env.OPENADLC_REPO_HOME;
   if (!home) return merged;
 
   if (base.HOME && !env.GIT_CONFIG_GLOBAL) merged.GIT_CONFIG_GLOBAL = `${base.HOME}/.gitconfig`;
   merged.HOME = home;
   merged.NPM_CONFIG_PREFIX = `${home}/.local`;
   merged.PNPM_HOME = `${home}/.local/share/pnpm`;
-  const cache = env.FLEETADLC_CACHE_DIR;
+  const cache = env.OPENADLC_CACHE_DIR;
   if (cache) merged.npm_config_cache = `${cache}/npm`;
   // pnpm reads the first; the second is what its documentation names. The
   // same for `make setup`, the session and local CI, or pnpm stops on a
   // node_modules another store built.
-  const store = env.FLEETADLC_PNPM_STORE || `${home}/.pnpm-store`;
+  const store = env.OPENADLC_PNPM_STORE || `${home}/.pnpm-store`;
   merged.npm_config_store_dir = store;
   merged.PNPM_STORE_DIR = store;
   // A read-only store takes no build's side effects.
-  if (env.FLEETADLC_PNPM_STORE) merged.npm_config_side_effects_cache = 'false';
+  if (env.OPENADLC_PNPM_STORE) merged.npm_config_side_effects_cache = 'false';
   const own = [`${home}/.local/bin`, `${home}/.local/share/pnpm`];
   const path = (base.PATH ?? '').split(':').filter(Boolean);
   const shimFirst = path[0] === CONTAINER_GH_SHIM_DIR || path[0] === GH_SHIM_DIR;

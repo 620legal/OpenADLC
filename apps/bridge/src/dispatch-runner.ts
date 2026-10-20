@@ -1,4 +1,4 @@
-import type { DispatchDecision } from '@fleetadlc/dispatcher';
+import type { DispatchDecision } from '@openadlc/dispatcher';
 
 /**
  * Runs the dispatcher when something changes that could let work start, and

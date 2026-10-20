@@ -13,7 +13,7 @@ const store = vi.hoisted(() => ({
   audit: [] as Record<string, unknown>[],
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async (entry: Record<string, unknown>) => void store.audit.push(entry)),
   attachments: {
     createUnclaimed: vi.fn(async (input: { name: string; mediaType: string; sha256: string; content: Buffer; uploadedBy: string }) => {
@@ -56,7 +56,7 @@ beforeEach(async () => {
   const router = new Router();
   registerAttachmentRoutes(router);
   registerInternalAttachmentRoutes(router, (raw) => {
-    if (raw.headers['x-fleetadlc-internal-secret'] !== 'sekrit') throw new HttpFailure(401, "this route needs the install's internal secret");
+    if (raw.headers['x-openadlc-internal-secret'] !== 'sekrit') throw new HttpFailure(401, "this route needs the install's internal secret");
   });
   server = createServer((request, response) => void router.handle(request, response));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -70,7 +70,7 @@ afterEach(async () => {
 function upload(name: string, body: Buffer | string, type = 'application/octet-stream') {
   return fetch(`${url}/v1/attachments`, {
     method: 'POST',
-    headers: { 'content-type': type, 'x-file-name': encodeURIComponent(name), 'x-fleetadlc-identity': 'jane@acme.test' },
+    headers: { 'content-type': type, 'x-file-name': encodeURIComponent(name), 'x-openadlc-identity': 'jane@acme.test' },
     body,
   });
 }
@@ -120,7 +120,7 @@ describe('looking at a file', () => {
 describe('removing a file', () => {
   it('is audited with what it was', async () => {
     await upload('mockup.png', PNG);
-    const response = await fetch(`${url}/v1/attachments/a-1`, { method: 'DELETE', headers: { 'x-fleetadlc-identity': 'admin@acme.test' } });
+    const response = await fetch(`${url}/v1/attachments/a-1`, { method: 'DELETE', headers: { 'x-openadlc-identity': 'admin@acme.test' } });
     expect(response.status).toBe(200);
     expect(store.audit).toEqual([expect.objectContaining({ actor: 'admin@acme.test', action: 'attachment.deleted', payload: expect.objectContaining({ name: 'mockup.png' }) })]);
   });
@@ -138,9 +138,9 @@ describe('the files a task is given', () => {
   it('are fetched by hostd with the install secret and the hash beside the bytes, and by nobody else', async () => {
     await upload('mockup.png', PNG);
     expect((await fetch(`${url}/internal/attachments/a-1`)).status).toBe(401);
-    const response = await fetch(`${url}/internal/attachments/a-1`, { headers: { 'x-fleetadlc-internal-secret': 'sekrit' } });
+    const response = await fetch(`${url}/internal/attachments/a-1`, { headers: { 'x-openadlc-internal-secret': 'sekrit' } });
     expect(response.status).toBe(200);
-    expect(response.headers.get('x-fleetadlc-sha256')).toMatch(/^[0-9a-f]{64}$/);
+    expect(response.headers.get('x-openadlc-sha256')).toMatch(/^[0-9a-f]{64}$/);
     expect(Buffer.from(await response.arrayBuffer()).equals(PNG)).toBe(true);
   });
 });

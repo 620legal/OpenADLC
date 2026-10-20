@@ -29,7 +29,7 @@ function bubbleText(text: string): string | undefined {
 
 describe('what a seat said on an item, as a person reads it', () => {
   it('leaves out the marker the bridge reads', () => {
-    expect(bubbleText('The change is ready.\n<!-- fleetadlc:{"event":"done"} -->')).toBe('The change is ready.');
+    expect(bubbleText('The change is ready.\n<!-- openadlc:{"event":"done"} -->')).toBe('The change is ready.');
   });
 
   it('reads a message of forty thousand unclosed comments at once, and keeps it', () => {

@@ -7,7 +7,7 @@ const managed = vi.hoisted(() => ({
   ],
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -28,7 +28,7 @@ vi.mock('@fleetadlc/db', () => ({
   repos: { listRepos: vi.fn(async () => managed.repos) },
 }));
 
-import { audit } from '@fleetadlc/db';
+import { audit } from '@openadlc/db';
 import type { Reach, ReachFix } from './app-reach.js';
 import { acrossRepositories, CrewAccessKeeper } from './crew-access.js';
 import type { CrewAccess } from './invitation-service.js';
@@ -212,11 +212,11 @@ describe('a repository the app cannot reach', () => {
     need: 'install',
     title: 'The OpenADLC app is not installed on acme',
     detail: 'An owner of acme installs it and chooses api: only the repositories the crew works in, not all of acme’s.',
-    action: { label: 'Install on acme', url: 'https://github.com/apps/fleetadlc-janedoe/installations/new' },
+    action: { label: 'Install on acme', url: 'https://github.com/apps/openadlc-janedoe/installations/new' },
     steps: [
       {
         text: 'Install it on acme and choose api',
-        action: { label: 'Install on acme', url: 'https://github.com/apps/fleetadlc-janedoe/installations/new' },
+        action: { label: 'Install on acme', url: 'https://github.com/apps/openadlc-janedoe/installations/new' },
       },
     ],
   };

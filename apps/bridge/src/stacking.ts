@@ -1,8 +1,9 @@
-import { bots, issues, leases, listEventsOfType, recordEvent, repos, stacks, tasks, type Stack } from '@fleetadlc/db';
-import { blockingOverlaps } from '@fleetadlc/dispatcher';
-import type { GitHubClient } from '@fleetadlc/github';
+import { bots, issues, leases, listEventsOfType, recordEvent, repos, stacks, tasks, type Stack } from '@openadlc/db';
+import { blockingOverlaps } from '@openadlc/dispatcher';
+import type { GitHubClient } from '@openadlc/github';
 import {
   DELIVERY_RULES_PATH,
+  readDeliveryRulesFile,
   dependencyIsSatisfied,
   hasIgnoreLabel,
   hasPausedLabel,
@@ -13,7 +14,7 @@ import {
   resolutionPolicy,
   tooManyAttempts,
   type ContextDocument,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 import type { Started } from './build-start.js';
 import { recordHold } from './item-hold.js';
 
@@ -42,7 +43,7 @@ import { recordHold } from './item-hold.js';
  * stack": `waitingOn` throws, and the merge line keeps B out.
  *
  * One level only: B stacks on A only when A is not itself stacked on work
- * still unmerged. Off with `stacking: false` in `.github/fleetadlc.yml`.
+ * still unmerged. Off with `stacking: false` in `.github/openadlc.yml`.
  */
 export const STACK_STARTED = 'stack.started';
 export const STACK_UPDATING = 'stack.updating';
@@ -210,7 +211,7 @@ export class Stacking {
       // A file that could not be read is not a file that is not there: taken
       // for one, a 502 turned stacking on for a repository that had it off.
       // Null only for a 404; the repository is skipped this pass otherwise.
-      const file = await client.readFileIfPresent(repo.fullName, DELIVERY_RULES_PATH, repo.defaultBranch).then(
+      const file = await readDeliveryRulesFile((path) => client.readFileIfPresent(repo.fullName, path, repo.defaultBranch)).then(
         (text) => ({ text }),
         (error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }),
       );
@@ -369,7 +370,7 @@ export class Stacking {
       await client.addLabels(repo.fullName, issue.number, [PAUSED_LABEL]).catch(() => undefined);
       if (issue.prNumber) await client.addLabels(repo.fullName, issue.prNumber, [PAUSED_LABEL]).catch(() => undefined);
       await issues.setIssueLabels(repo.id, issue.number, [...new Set([...issue.labels, PAUSED_LABEL])]).catch(() => undefined);
-      await recordHold(`${repo.name}#${issue.number}`, { by: 'fleetadlc', at: this.at(), why }, 'fleetadlc').catch(() => undefined);
+      await recordHold(`${repo.name}#${issue.number}`, { by: 'openadlc', at: this.at(), why }, 'openadlc').catch(() => undefined);
       await client.comment(repo.fullName, issue.number, note).catch(() => undefined);
       await stacks.markPaused(repo.id, issue.number).catch(() => undefined);
       await this.record(STACK_PAUSED, { repo: repo.name, issue: issue.number, on, at: this.at() });

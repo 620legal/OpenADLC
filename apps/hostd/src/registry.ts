@@ -1,5 +1,5 @@
-import { getSecretStore, registryTokenRef, type SecretStore } from '@fleetadlc/github';
-import { envOr } from '@fleetadlc/shared';
+import { getSecretStore, registryTokenRef, type SecretStore } from '@openadlc/github';
+import { envOr } from '@openadlc/shared';
 
 export interface RegistryGrant {
   /**
@@ -58,7 +58,7 @@ export class RegistryCredentials {
     if (!this.host) {
       return {
         error: 'this install has no private package registry',
-        remedy: 'set FLEETADLC_REGISTRY_HOST if you have one; otherwise nothing needs this endpoint',
+        remedy: 'set OPENADLC_REGISTRY_HOST if you have one; otherwise nothing needs this endpoint',
         configured: false,
       };
     }
@@ -67,7 +67,7 @@ export class RegistryCredentials {
     if (!token) {
       return {
         error: `a registry is configured (${this.host}) but no token is stored for it`,
-        remedy: missingTokenRemedy(envOr('FLEETADLC_SECRET_STORE', 'file')),
+        remedy: missingTokenRemedy(envOr('OPENADLC_SECRET_STORE', 'file')),
         configured: true,
       };
     }
@@ -77,7 +77,7 @@ export class RegistryCredentials {
 }
 
 /**
- * Where to put the token, for the store hostd reads. There is no `fleetadlc
+ * Where to put the token, for the store hostd reads. There is no `openadlc
  * secret` command, which this used to name. On the cloud host the store is
  * Secret Manager, and the file this named does not exist there; its secrets
  * are `fleet-<ref>` with the label the store lists by (gcp-secrets.ts).
@@ -89,7 +89,7 @@ export function missingTokenRemedy(store: string): string {
   // The umask is inside the command: a mode written after it as prose was
   // pasted with it, and wrote the token, then `mode0600`, to `….secret,`, a
   // file nothing reads, readable by everyone.
-  return `store one: (umask 077; printf '%s' "$REGISTRY_TOKEN" > "\${FLEETADLC_HOME:-$HOME/.fleetadlc}/secrets/${registryTokenRef()}.secret")`;
+  return `store one: (umask 077; printf '%s' "$REGISTRY_TOKEN" > "\${OPENADLC_HOME:-$HOME/.openadlc}/secrets/${registryTokenRef()}.secret")`;
 }
 
 export function isRefusal(result: RegistryGrant | RegistryRefusal): result is RegistryRefusal {

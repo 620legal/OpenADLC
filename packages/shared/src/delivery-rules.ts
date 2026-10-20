@@ -8,7 +8,22 @@ import { z } from 'zod';
  * security reviewer approves that diff, or leaves it to a person where
  * `ciMergeByPerson` lists the repository or no security seat is set up.
  */
-export const DELIVERY_RULES_PATH = '.github/fleetadlc.yml';
+export const DELIVERY_RULES_PATH = '.github/openadlc.yml';
+
+/**
+ * Where a repository set up before the rename keeps them. That file is in the
+ * repository, not in this install, so an upgrade cannot move it: it is read
+ * wherever the new path has no file, and only the new path is ever written or
+ * linked to.
+ */
+export const LEGACY_DELIVERY_RULES_PATH = '.github/fleetadlc.yml';
+
+/** The rules file as the repository has it: `DELIVERY_RULES_PATH`, else the path from before the rename. */
+export async function readDeliveryRulesFile(read: (path: string) => Promise<string | null>): Promise<string | null> {
+  const current = await read(DELIVERY_RULES_PATH);
+  if (current !== null) return current;
+  return read(LEGACY_DELIVERY_RULES_PATH);
+}
 
 /**
  * Files nearly every change adds a line to. Two changes to one of them rarely
@@ -44,7 +59,7 @@ export const DEFAULT_EXCLUSIVE_PATHS: readonly string[] = [
 ];
 
 /**
- * Which overlap holds a build back (`paths:` in `.github/fleetadlc.yml`). A
+ * Which overlap holds a build back (`paths:` in `.github/openadlc.yml`). A
  * pattern without a `/` names a file by its name at any depth; one with a `/`
  * is a path from the repository's root, `*` and `**` as wildcards.
  *
@@ -63,7 +78,7 @@ export type PathPolicy = z.output<typeof pathPolicySchema>;
 export const DEFAULT_PATH_POLICY: PathPolicy = pathPolicySchema.parse({});
 
 /**
- * How a repository ships, as `.github/fleetadlc.yml` says.
+ * How a repository ships, as `.github/openadlc.yml` says.
  *
  * Shipping used to be a person's step: the deploy bot opened a task, and a
  * person approved production in GitHub. These rules make it the repository's:
@@ -144,7 +159,7 @@ export const DEFAULT_DELIVERY_RULES: DeliveryRules = deliveryRulesSchema.parse({
 export const MERGE_IS_SHIPPING: DeliveryRules = deliveryRulesSchema.parse({ version: 1, testing: { on: 'none' }, production: { on: 'none' } });
 
 /**
- * The rules a `.github/fleetadlc.yml` holds, or why it holds none.
+ * The rules a `.github/openadlc.yml` holds, or why it holds none.
  *
  * A file that does not parse is said, not guessed around: a typo that turned
  * `approval: reviewers` into nothing must not read as the default, and the
@@ -186,7 +201,7 @@ function withChoice(raw: unknown, choice: ProductionChoice): unknown {
 }
 
 /**
- * Whether a `.github/fleetadlc.yml` says how production is approved itself
+ * Whether a `.github/openadlc.yml` says how production is approved itself
  * (`production.approval`). Where it does, repository setup shows that rule
  * as the file's and asks nothing: the file wins over a recorded choice.
  */
@@ -208,7 +223,7 @@ export function defaultDeliveryRules(choice: ProductionChoice = {}): DeliveryRul
 /**
  * The rules from what there is: the file's text when it is there and parses,
  * else the repository's stored rules when they parse, else the default. For a
- * caller with no settings choice to fall back on — `fleetadlc github apply`,
+ * caller with no settings choice to fall back on — `openadlc github apply`,
  * which writes the production environment the rules call for.
  */
 export function deliveryRulesFrom(fileText: string | null, stored: unknown | null, choice: ProductionChoice = {}): DeliveryRules {

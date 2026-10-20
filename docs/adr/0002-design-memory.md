@@ -15,7 +15,7 @@ the contradiction is with a comment on a closed issue.
 Design is the one stage with memory and context, and runs on the most capable
 model the crew has. The memory has to be:
 
-- a record that outlives FleetADLC and is read where the code is;
+- a record that outlives OpenADLC and is read where the code is;
 - small enough to give every design task without crowding out the issue;
 - correctable by a person, because a wrong summary is repeated on every issue.
 
@@ -57,8 +57,8 @@ mark superseded; every change is audited.
 - **Only the ADRs.** Giving a design task every ADR is unbounded and grows
   with the repository; giving it none means it does not know what is there.
   The summary is the index the design stage reads first.
-- **Only the database.** A decision kept only in FleetADLC is lost to anyone
-  reading the repository, and to the repository if it ever leaves FleetADLC.
+- **Only the database.** A decision kept only in OpenADLC is lost to anyone
+  reading the repository, and to the repository if it ever leaves OpenADLC.
 - **A memory every stage reads.** Builders and reviewers work from the issue
   and the design, which already carry what applies to the change. Memory in
   their context is tokens spent on decisions that do not bear on it, and a

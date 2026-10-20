@@ -1,6 +1,7 @@
+import './legacy-env.js';
 import { join } from 'node:path';
-import { bots, closePool, hosts, modelAccounts, repos, tasks, waitForDatabase } from '@fleetadlc/db';
-import { getSecretStore, internalSecretRef } from '@fleetadlc/github';
+import { bots, closePool, hosts, modelAccounts, repos, tasks, waitForDatabase } from '@openadlc/db';
+import { getSecretStore, internalSecretRef } from '@openadlc/github';
 import { AttachTokens } from './attach-tokens.js';
 import { DEFAULT_LOCAL_CI_TIMEOUT_MINUTES, loadHostdConfig } from './config.js';
 import { TerminalGateway } from './terminal-gateway.js';
@@ -12,7 +13,7 @@ import { LoginService, moveSignInsIntoPlace, removeAdoptCopies } from './logins.
 import { SessionObserver } from './observer.js';
 import { isRefusal, RegistryCredentials } from './registry.js';
 import { createHostdServer } from './server.js';
-import { TaskDatabases, taskdbBindAddress } from './task-db.js';
+import { TaskDatabases, existingTaskdbServer, taskdbBindAddress } from './task-db.js';
 import { WarmPool } from './warm-pool.js';
 import { repoKeyOf } from './drivers/base-env.js';
 import { TaskRunner } from './task-runner.js';
@@ -23,16 +24,23 @@ async function main(): Promise<void> {
   const config = loadHostdConfig();
   await waitForDatabase();
 
-  const botImage = process.env.FLEETADLC_BOT_IMAGE ?? 'fleetadlc-bot:latest';
+  const botImage = process.env.OPENADLC_BOT_IMAGE ?? 'openadlc-bot:latest';
   // One Postgres per host, a database per task; see `TaskDatabases`. The
-  // default install's is `fleetadlc-taskdb`; another install's is its own.
-  const databases =
+  // default install's is `openadlc-taskdb` — or its `fleetadlc-taskdb` as it
+  // is, which restarts unless stopped and so would hold the bind port against
+  // a new server, with the waiting tasks' databases in it.
+  const taskdbServer =
     config.driver === 'docker'
+      ? await existingTaskdbServer(docker, config.botPrefix ? `${config.botPrefix}taskdb` : 'openadlc-taskdb')
+      : null;
+  const databases =
+    config.driver === 'docker' && taskdbServer
       ? new TaskDatabases({
           docker,
-          container: config.botPrefix ? `${config.botPrefix}taskdb` : 'fleetadlc-taskdb',
-          image: process.env.FLEETADLC_TASKDB_IMAGE ?? process.env.FLEETADLC_SIDECAR_IMAGE ?? 'pgvector/pgvector:pg16',
-          installLabel: `fleetadlc.install=${config.installId ?? 'default'}`,
+          container: taskdbServer.container,
+          superuser: taskdbServer.superuser,
+          image: process.env.OPENADLC_TASKDB_IMAGE ?? process.env.OPENADLC_SIDECAR_IMAGE ?? 'pgvector/pgvector:pg16',
+          installLabel: `openadlc.install=${config.installId ?? 'default'}`,
           bindAddress: await taskdbBindAddress(docker, config.taskdbBind ?? null),
           // What a task role's password is derived from, so an adopted
           // computer's URL can be rebuilt; read when asked, since the bridge
@@ -46,7 +54,7 @@ async function main(): Promise<void> {
           image: botImage,
           // Where each seat's network was, before a task had its own computer:
           // only to retire them. The default install's kept the old names.
-          networkPrefix: config.botPrefix ? `${config.botPrefix}net` : 'fleetadlc-bot',
+          networkPrefix: config.botPrefix ? `${config.botPrefix}net` : 'openadlc-bot',
           ...(config.botPrefix ? { botPrefix: config.botPrefix } : {}),
           ...(config.installId ? { installId: config.installId } : {}),
           workRoot: config.workRoot,
@@ -56,7 +64,7 @@ async function main(): Promise<void> {
           rolesRoot: config.rolesRoot,
           hostdUrl: config.taskHostdUrl ?? `http://host.docker.internal:${config.port}`,
           loginRoot: config.loginRoot,
-          egressProxy: process.env.FLEETADLC_BOT_EGRESS_PROXY || undefined,
+          egressProxy: process.env.OPENADLC_BOT_EGRESS_PROXY || undefined,
           ...(databases ? { databases } : {}),
           // Read when a pnpm store is filled, so a rotation takes at the next fill.
           registry: async () => {
@@ -196,7 +204,7 @@ async function main(): Promise<void> {
   observer.start();
 
   // hostd does not own this secret and does not create it: the bridge does,
-  // because the bridge owns the token service it admits. `fleetadlc up` starts hostd
+  // because the bridge owns the token service it admits. `openadlc up` starts hostd
   // first, so it may not exist yet — read it on demand and keep it once found,
   // rather than caching a miss for the life of the process and refusing the
   // bridge forever.
@@ -209,19 +217,19 @@ async function main(): Promise<void> {
 
   // The weekly engine update: this is the process that owns Docker and the
   // bot image, and the one that knows what a task on each bot would present.
-  // `fleetadlc up` runs hostd from the repository, which is where the build
+  // `openadlc up` runs hostd from the repository, which is where the build
   // script is; the bridge decides when.
   const engineUpdates = new EngineUpdater({
     driver: driver.kind,
     image: botImage,
-    buildScript: process.env.FLEETADLC_BOT_IMAGE_SCRIPT ?? join(process.cwd(), 'infra/local/build-bot-image.sh'),
-    buildProxy: process.env.FLEETADLC_BOT_EGRESS_PROXY || undefined,
+    buildScript: process.env.OPENADLC_BOT_IMAGE_SCRIPT ?? join(process.cwd(), 'infra/local/build-bot-image.sh'),
+    buildProxy: process.env.OPENADLC_BOT_EGRESS_PROXY || undefined,
     crew: () => bots.listBots(),
     account: async (id) => {
       const account = await modelAccounts.get(id);
       return account ? { id: account.id, provider: account.provider, kind: account.kind, label: account.label } : null;
     },
-    chooseModelFor: candidateModels((accountId, image, name) => logins.modelsIn(accountId, image, name), 'fleetadlc-engines'),
+    chooseModelFor: candidateModels((accountId, image, name) => logins.modelsIn(accountId, image, name), 'openadlc-engines'),
     credential: candidateCredential({
       store: secretStore,
       loginRoot: config.loginRoot,
@@ -250,7 +258,7 @@ async function main(): Promise<void> {
     runner,
     attachTokens,
     registry: new RegistryCredentials(config.registryHost, secretStore),
-    perTaskCapUsd: Number(process.env.FLEETADLC_PER_TASK_CAP_USD ?? '15'),
+    perTaskCapUsd: Number(process.env.OPENADLC_PER_TASK_CAP_USD ?? '15'),
     secret,
     logins,
     engineUpdates,

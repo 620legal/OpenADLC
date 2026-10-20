@@ -48,8 +48,8 @@ const REVIEWER = crewMember({
   task: {
     kind: 'review',
     state: 'running',
-    subjectRef: 'fleetadlc-testbed#31',
-    issue: { repo: 'fleetadlc-testbed', number: 12, title: 'Record which model each review used' },
+    subjectRef: 'openadlc-testbed#31',
+    issue: { repo: 'openadlc-testbed', number: 12, title: 'Record which model each review used' },
     startedAt: '2026-09-24T10:47:00.000Z',
     endedAt: null,
     round: 2,
@@ -121,7 +121,7 @@ describe('a bot’s thread panel', () => {
       'Its computer',
       'Terminal',
     ]);
-    expect(html).toMatch(/<option value="fleetadlc-testbed#31" selected="">#12 Record which model each…<\/option><option value="\*">Everything<\/option>/);
+    expect(html).toMatch(/<option value="openadlc-testbed#31" selected="">#12 Record which model each…<\/option><option value="\*">Everything<\/option>/);
     // Never the address, `request:a4b02784` or otherwise, as a chip to press.
     expect(html).not.toContain('aria-pressed');
   });
@@ -156,15 +156,15 @@ describe('a bot’s thread panel', () => {
 });
 
 describe('a bot’s thread when OpenADLC works in several repositories', () => {
-  const COLORS = { 'fleetadlc-testbed': 'blue', api: 'teal' };
+  const COLORS = { 'openadlc-testbed': 'blue', api: 'teal' };
 
   it('says which repository the task pinned at the top is in', () => {
     const html = renderToStaticMarkup(
       <RepoColorsProvider colors={COLORS}>
-        <ThreadPanel bot={REVIEWER.name} member={{ ...REVIEWER, task: { ...REVIEWER.task!, repo: 'fleetadlc-testbed' } }} onClose={() => undefined} now={NOW} />
+        <ThreadPanel bot={REVIEWER.name} member={{ ...REVIEWER, task: { ...REVIEWER.task!, repo: 'openadlc-testbed' } }} onClose={() => undefined} now={NOW} />
       </RepoColorsProvider>,
     ).replace(/<!-- -->/g, '');
-    expect(html).toMatch(/round 2 of 3<\/span><span title="fleetadlc-testbed"[^>]*><span aria-hidden="true" class="[^"]*bg-repo-blue[^"]*"><\/span><span class="truncate">fleetadlc-testbed<\/span>/);
+    expect(html).toMatch(/round 2 of 3<\/span><span title="openadlc-testbed"[^>]*><span aria-hidden="true" class="[^"]*bg-repo-blue[^"]*"><\/span><span class="truncate">openadlc-testbed<\/span>/);
   });
 
   it('says nothing of it with one repository, where every task is in it', () => {
@@ -180,7 +180,7 @@ describe('a bot’s thread when OpenADLC works in several repositories', () => {
       pullRequest: null,
       request: null,
     });
-    const shown = [topic('api#15', 15, 'Page the runs'), topic('fleetadlc-testbed#12', 12, 'Record the model'), topic('api#9', 9, 'Say the cost')];
+    const shown = [topic('api#15', 15, 'Page the runs'), topic('openadlc-testbed#12', 12, 'Record the model'), topic('api#9', 9, 'Say the cost')];
     const html = renderToStaticMarkup(<ShowList shown={shown} selected="api#15" title="#15 Page the runs" onChoose={() => undefined} />);
     const groups = [...html.matchAll(/<optgroup label="([^"]+)">([\s\S]*?)<\/optgroup>/g)].map((match) => [
       match[1],
@@ -188,7 +188,7 @@ describe('a bot’s thread when OpenADLC works in several repositories', () => {
     ]);
     expect(groups).toEqual([
       ['api', ['api#15', 'api#9']],
-      ['fleetadlc-testbed', ['fleetadlc-testbed#12']],
+      ['openadlc-testbed', ['openadlc-testbed#12']],
     ]);
     expect(html).toMatch(/<\/optgroup><option value="\*">Everything<\/option><\/select>/);
   });
@@ -298,12 +298,12 @@ describe('the question a bot is waiting on', () => {
       <QuestionCard
         question={QUESTION}
         options={CHOICES}
-        githubUrl="https://github.com/janedoe/fleetadlc-testbed/issues/15#issuecomment-1"
+        githubUrl="https://github.com/janedoe/openadlc-testbed/issues/15#issuecomment-1"
         pending={false}
         onAnswer={() => undefined}
         onOwnWords={() => undefined}
       />,
     );
-    expect(html).toMatch(/<a href="https:\/\/github.com\/janedoe\/fleetadlc-testbed\/issues\/15#issuecomment-1"[^>]*>Also asked on GitHub/);
+    expect(html).toMatch(/<a href="https:\/\/github.com\/janedoe\/openadlc-testbed\/issues\/15#issuecomment-1"[^>]*>Also asked on GitHub/);
   });
 });

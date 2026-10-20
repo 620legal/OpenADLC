@@ -1,7 +1,7 @@
 /**
  * The bridge answered, and with an error: a running bridge, which is not the
  * same as one that does not answer. Every page said "cannot reach the bridge
- * … run fleetadlc up" for both, over a bridge that was up and had said why in
+ * … run openadlc up" for both, over a bridge that was up and had said why in
  * its `{ error }`, which was thrown away for `bridge /v1/board → 500`.
  */
 export class BridgeAnswered extends Error {

@@ -10,7 +10,7 @@ const GROK_SEAT = '9f1c2a3b-4d5e-4f60-8a7b-1c2d3e4f5a6b';
 /** The crew every test but the seat ones reads: an automation bot and an intake bot. */
 const { DEFAULT_CREW } = vi.hoisted(() => ({
   DEFAULT_CREW: [
-    { id: 'bot-flow', name: 'janedoe-fleetadlc-flow', role: 'automation' },
+    { id: 'bot-flow', name: 'janedoe-openadlc-flow', role: 'automation' },
     { id: 'bot-intake', name: 'ottoexampleco', role: 'intake' },
   ],
 }));
@@ -34,7 +34,7 @@ vi.mock('./build-start.js', () => ({
   }),
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -101,7 +101,7 @@ vi.mock('@fleetadlc/db', () => ({
   recordEvent: vi.fn(),
   repos: {
     addRepo: vi.fn(async (input: Record<string, unknown>) => ({ repo: { ...input, color: 'blue' }, outcome: 'added' })),
-    listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'fleetadlc-testbed' }]),
+    listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'openadlc-testbed' }]),
     getRepoByName: vi.fn(async (name: string) => ({ id: 'repo-1', name })),
     setProductionChoice: vi.fn(async () => undefined),
     updateRepoSettings: vi.fn(async (name: string) => ({ name, fullName: `janedoe/${name}` })),
@@ -160,7 +160,7 @@ vi.mock('@fleetadlc/db', () => ({
   threads: { listOpenGates: vi.fn(async () => []), expireGatesOfTask: vi.fn(async () => []) },
 }));
 
-import { acknowledgements, audit, bots, costs, credentials, leases, modelAccounts, repos, requests, sessions, settings, tasks, threads, withAdvisoryLock } from '@fleetadlc/db';
+import { acknowledgements, audit, bots, costs, credentials, leases, modelAccounts, repos, requests, sessions, settings, tasks, threads, withAdvisoryLock } from '@openadlc/db';
 
 let hostd: Server;
 let bridge: Server;
@@ -211,7 +211,7 @@ beforeEach(async () => {
     asked.push({
       method: request.method ?? '',
       url: request.url ?? '',
-      secret: request.headers['x-fleetadlc-internal-secret'] as string | undefined,
+      secret: request.headers['x-openadlc-internal-secret'] as string | undefined,
     });
     response.writeHead(hostdStatus, { 'content-type': 'application/json' });
     if (hostdStatus !== 200) {
@@ -285,8 +285,8 @@ describe('a repository the app cannot reach', () => {
     need: 'make-public',
     title: 'The OpenADLC app is private to janedoe',
     detail: 'GitHub installs a private app only on the account that owns it, so it cannot go on exampleco yet.',
-    action: { label: 'Make the app public', url: 'https://github.com/settings/apps/fleetadlc-janedoe/advanced' },
-    steps: [{ text: 'Make the app public — only janedoe can', action: { label: 'Make the app public', url: 'https://github.com/settings/apps/fleetadlc-janedoe/advanced' } }],
+    action: { label: 'Make the app public', url: 'https://github.com/settings/apps/openadlc-janedoe/advanced' },
+    steps: [{ text: 'Make the app public — only janedoe can', action: { label: 'Make the app public', url: 'https://github.com/settings/apps/openadlc-janedoe/advanced' } }],
   };
   let server: Server;
   let url: string;
@@ -398,7 +398,7 @@ describe('a repository the app cannot reach', () => {
   });
 });
 
-function ask(repo = 'fleetadlc-testbed') {
+function ask(repo = 'openadlc-testbed') {
   return fetch(`${bridgeUrl}/v1/requests`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -454,7 +454,7 @@ describe('a request for a bot that cannot start yet', () => {
     const response = await ask();
 
     expect(response.status).toBe(200);
-    expect(assertReady).toHaveBeenCalledWith(expect.objectContaining({ name: 'ottoexampleco' }), 'fleetadlc-testbed');
+    expect(assertReady).toHaveBeenCalledWith(expect.objectContaining({ name: 'ottoexampleco' }), 'openadlc-testbed');
     expect(requests.createRequest).toHaveBeenCalledTimes(1);
     expect(open).toHaveBeenCalledWith(expect.objectContaining({ bot: 'ottoexampleco', kind: 'intake' }));
   });
@@ -494,50 +494,50 @@ describe('a request for a bot that cannot start yet', () => {
   });
 
   it('waits in line while its repository is paused, saying whose pause, and one for another repository is triaged meanwhile', async () => {
-    pauseGate.pauseRepo('fleetadlc-testbed', 'work is paused in fleetadlc-testbed, by janedoe since 2026-09-29T10:00:00.000Z; resume it in Settings → Pause work');
+    pauseGate.pauseRepo('openadlc-testbed', 'work is paused in openadlc-testbed, by janedoe since 2026-09-29T10:00:00.000Z; resume it in Settings → Pause work');
     const both = async () => [
-      { id: 'repo-1', name: 'fleetadlc-testbed' },
-      { id: 'repo-2', name: 'fleetadlc-other' },
+      { id: 'repo-1', name: 'openadlc-testbed' },
+      { id: 'repo-2', name: 'openadlc-other' },
     ];
     vi.mocked(repos.listRepos).mockImplementation(both as never);
-    vi.mocked(repos.getRepoByName).mockImplementation((async (name: string) => (name === 'fleetadlc-other' ? { id: 'repo-2', name } : { id: 'repo-1', name })) as never);
+    vi.mocked(repos.getRepoByName).mockImplementation((async (name: string) => (name === 'openadlc-other' ? { id: 'repo-2', name } : { id: 'repo-1', name })) as never);
     try {
       const held = await ask();
       expect(held.status).toBe(202);
       expect(await held.json()).toMatchObject({
         request: { id: 'req-1', state: 'queued' },
         queued: true,
-        paused: expect.stringMatching(/^work is paused in fleetadlc-testbed, by janedoe/),
+        paused: expect.stringMatching(/^work is paused in openadlc-testbed, by janedoe/),
       });
       expect(open).not.toHaveBeenCalled();
 
       // Behind it in line, and started all the same: the paused one keeps its place.
-      const other = await ask('fleetadlc-other');
+      const other = await ask('openadlc-other');
       expect(other.status).toBe(200);
       expect(open).toHaveBeenCalledTimes(1);
-      expect(open.mock.calls[0]?.[0]).toMatchObject({ repo: 'fleetadlc-other', subjectRef: 'request:req-2' });
+      expect(open.mock.calls[0]?.[0]).toMatchObject({ repo: 'openadlc-other', subjectRef: 'request:req-2' });
       expect(stored.requests.find((one) => one.id === 'req-1')?.state).toBe('queued');
     } finally {
-      vi.mocked(repos.listRepos).mockImplementation((async () => [{ id: 'repo-1', name: 'fleetadlc-testbed' }]) as never);
+      vi.mocked(repos.listRepos).mockImplementation((async () => [{ id: 'repo-1', name: 'openadlc-testbed' }]) as never);
       vi.mocked(repos.getRepoByName).mockImplementation((async (name: string) => ({ id: 'repo-1', name })) as never);
     }
   });
 
   it('is not triaged again while its repository is paused', async () => {
     stored.requests.push({ id: 'req-9', state: 'draft', createdAt: new Date(0).toISOString(), repoId: 'repo-1', issueNumber: null });
-    pauseGate.pauseRepo('fleetadlc-testbed', 'work is paused in fleetadlc-testbed, by janedoe since 2026-09-29T10:00:00.000Z; resume it in Settings → Pause work');
+    pauseGate.pauseRepo('openadlc-testbed', 'work is paused in openadlc-testbed, by janedoe since 2026-09-29T10:00:00.000Z; resume it in Settings → Pause work');
 
     const response = await fetch(`${bridgeUrl}/v1/requests/req-9/triage`, { method: 'POST' });
 
     expect(response.status).toBe(409);
-    expect(((await response.json()) as { error: string }).error).toMatch(/^nothing new starts: work is paused in fleetadlc-testbed/);
+    expect(((await response.json()) as { error: string }).error).toMatch(/^nothing new starts: work is paused in openadlc-testbed/);
     expect(open).not.toHaveBeenCalled();
   });
 
   it('is saved and waits for the sweep when starting the queue fails, rather than answering 500', async () => {
     // A 500 after the row was written told the person it was not filed, and
     // the one they sent again was a second request.
-    const { withAdvisoryLock } = await import('@fleetadlc/db');
+    const { withAdvisoryLock } = await import('@openadlc/db');
     vi.mocked(withAdvisoryLock).mockRejectedValueOnce(new Error('the database blinked'));
     const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
@@ -615,18 +615,18 @@ describe('a build a retry could not start', () => {
 describe('adding a seat to a running install', () => {
   const BUILDER = {
     id: 'bot-1',
-    name: 'fleetadlc-atlas-janedoe',
+    name: 'openadlc-atlas-janedoe',
     slot: 'builder',
     displayName: 'Builder',
     role: 'implement',
     engine: 'grok',
     model: 'grok-4.7',
-    githubLogin: 'fleetadlc-atlas-janedoe',
+    githubLogin: 'openadlc-atlas-janedoe',
     hostId: 'host-1',
     skills: ['implement'],
     sidecarDb: true,
   };
-  const SECOND = { ...BUILDER, id: 'bot-2', name: 'builder-2', slot: 'builder-2', githubLogin: 'fleetadlc-crew-janedoe' };
+  const SECOND = { ...BUILDER, id: 'bot-2', name: 'builder-2', slot: 'builder-2', githubLogin: 'openadlc-crew-janedoe' };
   let server: Server;
   let url: string;
   let configRoot: string;
@@ -636,7 +636,7 @@ describe('adding a seat to a running install', () => {
     const { mkdtempSync, writeFileSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
-    configRoot = mkdtempSync(join(tmpdir(), 'fleetadlc-seats-'));
+    configRoot = mkdtempSync(join(tmpdir(), 'openadlc-seats-'));
     writeFileSync(
       join(configRoot, 'bots.yaml'),
       [
@@ -740,8 +740,8 @@ describe('adding a seat to a running install', () => {
     expect(vi.mocked(bots.removeSeat)).not.toHaveBeenCalled();
   });
 
-  it('refuses a seat config/bots.yaml names, which fleetadlc up would seed again', async () => {
-    const response = await post('/v1/crew/seats/fleetadlc-atlas-janedoe/remove');
+  it('refuses a seat config/bots.yaml names, which openadlc up would seed again', async () => {
+    const response = await post('/v1/crew/seats/openadlc-atlas-janedoe/remove');
 
     expect(response.status).toBe(409);
     expect(((await response.json()) as { error: string }).error).toContain('config/bots.yaml');
@@ -751,7 +751,7 @@ describe('adding a seat to a running install', () => {
 
 describe('a repository’s stage modes, as settings sends them', () => {
   const patch = (stageModes: Record<string, string>) =>
-    fetch(`${bridgeUrl}/v1/repos/fleetadlc-testbed`, {
+    fetch(`${bridgeUrl}/v1/repos/openadlc-testbed`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ stageModes }),
@@ -763,7 +763,7 @@ describe('a repository’s stage modes, as settings sends them', () => {
   it('stores an older console’s assist as autonomous, which is all it ever did', async () => {
     const response = await patch({ merged: 'assist', spec: 'conditional' });
     expect(response.status).toBe(200);
-    expect(vi.mocked(repos.updateRepoSettings)).toHaveBeenCalledWith('fleetadlc-testbed', { stageModes: { merged: 'autonomous', spec: 'conditional' } });
+    expect(vi.mocked(repos.updateRepoSettings)).toHaveBeenCalledWith('openadlc-testbed', { stageModes: { merged: 'autonomous', spec: 'conditional' } });
   });
 
   it('refuses a mode that is not one', async () => {
@@ -785,7 +785,7 @@ describe('a repository’s stage modes, as settings sends them', () => {
   it('stores untouched for intake and spec', async () => {
     const response = await patch({ intake: 'untouched', spec: 'untouched' });
     expect(response.status).toBe(200);
-    expect(vi.mocked(repos.updateRepoSettings)).toHaveBeenCalledWith('fleetadlc-testbed', { stageModes: { intake: 'untouched', spec: 'untouched' } });
+    expect(vi.mocked(repos.updateRepoSettings)).toHaveBeenCalledWith('openadlc-testbed', { stageModes: { intake: 'untouched', spec: 'untouched' } });
   });
 
   it('refuses a mode that is not a string, and a stage that is not one, rather than wiping every stage', async () => {
@@ -802,7 +802,7 @@ describe('a repository’s testing deploy', () => {
     vi.mocked(settings.setSetting).mockClear();
   });
 
-  const patch = (body: Record<string, unknown>, name = 'fleetadlc-testbed') =>
+  const patch = (body: Record<string, unknown>, name = 'openadlc-testbed') =>
     fetch(`${bridgeUrl}/v1/repos/${name}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
@@ -812,13 +812,13 @@ describe('a repository’s testing deploy', () => {
   it('stores has and none, lists them, and forgets automatic', async () => {
     const accepted = await patch({ testingDeploy: 'none' });
     expect(accepted.status).toBe(200);
-    expect(JSON.parse(stored.settings.testingDeploy ?? '')).toEqual({ 'fleetadlc-testbed': 'none' });
+    expect(JSON.parse(stored.settings.testingDeploy ?? '')).toEqual({ 'openadlc-testbed': 'none' });
     expect(vi.mocked(repos.updateRepoSettings)).not.toHaveBeenCalled();
 
     const listed = (await (await fetch(`${bridgeUrl}/v1/repos`)).json()) as {
       repos: { name: string; testingDeploy: string; shipsByMerging: boolean | null }[];
     };
-    expect(listed.repos[0]).toMatchObject({ name: 'fleetadlc-testbed', testingDeploy: 'none', shipsByMerging: true });
+    expect(listed.repos[0]).toMatchObject({ name: 'openadlc-testbed', testingDeploy: 'none', shipsByMerging: true });
 
     expect((await patch({ testingDeploy: 'has' })).status).toBe(200);
     const again = (await (await fetch(`${bridgeUrl}/v1/repos`)).json()) as {
@@ -874,7 +874,7 @@ describe('a repository’s testing deploy', () => {
       return value;
     });
     try {
-      const one = patch({ testingDeploy: 'none' }, 'fleetadlc');
+      const one = patch({ testingDeploy: 'none' }, 'openadlc');
       const two = patch({ testingDeploy: 'has' }, 'other');
       await vi.waitFor(() => expect(reads).toBe(1));
       await new Promise((resolve) => setTimeout(resolve, 30));
@@ -887,7 +887,7 @@ describe('a repository’s testing deploy', () => {
       expect(second.status).toBe(200);
       expect(await first.json()).toMatchObject({ testingDeploy: 'none', shipsByMerging: true });
       expect(await second.json()).toMatchObject({ testingDeploy: 'has', shipsByMerging: false });
-      expect(JSON.parse(stored.settings.testingDeploy ?? '')).toEqual({ fleetadlc: 'none', other: 'has' });
+      expect(JSON.parse(stored.settings.testingDeploy ?? '')).toEqual({ openadlc: 'none', other: 'has' });
     } finally {
       vi.mocked(settings.getSetting).mockImplementation(async (key: string) => stored.settings[key] ?? null);
       vi.mocked(withAdvisoryLock).mockImplementation(async (_key: string, fn: () => Promise<unknown>) => fn());
@@ -908,8 +908,8 @@ describe('stopping a task that could not finish', () => {
     botId: 'bot-intake',
     kind: 'intake',
     state: 'failed',
-    subjectRef: 'fleetadlc#81',
-    repoId: 'repo-fleetadlc',
+    subjectRef: 'openadlc#81',
+    repoId: 'repo-openadlc',
     leaseId: 'lease-81',
     exitReason: 'engine exited 1',
   };
@@ -955,7 +955,7 @@ describe('stopping a task that could not finish', () => {
     expect(vi.mocked(audit)).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'task.stopped',
-        target: 'fleetadlc#81',
+        target: 'openadlc#81',
         payload: expect.objectContaining({ task: 'task-81', bot: 'intake', was: 'failed', lease: 'lease-81' }),
       }),
     );
@@ -964,7 +964,7 @@ describe('stopping a task that could not finish', () => {
     const { STOPPED_BY_A_PERSON } = await import('./attention.js');
     expect(reason.startsWith(STOPPED_BY_A_PERSON)).toBe(true);
     // And what the task store calls a person's stop, so the deploy sweep leaves it stopped.
-    const { tasks: store } = await vi.importActual<typeof import('@fleetadlc/db')>('@fleetadlc/db');
+    const { tasks: store } = await vi.importActual<typeof import('@openadlc/db')>('@openadlc/db');
     expect(store.stoppedByPerson({ state: 'stopped', exitReason: reason })).toBe(true);
     expect(reason).toContain('the operator takes over');
   });
@@ -1019,7 +1019,7 @@ describe('stopping a task that could not finish', () => {
   });
 
   it('releases the lease its bot holds on the issue, for a build that recorded none', async () => {
-    task = { ...FAILED, kind: 'implement', subjectRef: 'fleetadlc#81', leaseId: null };
+    task = { ...FAILED, kind: 'implement', subjectRef: 'openadlc#81', leaseId: null };
     lease = null;
     active = { id: 'lease-build', state: 'in_task', botId: 'bot-intake' };
     const response = await stop();
@@ -1040,7 +1040,7 @@ describe('stopping a task that could not finish', () => {
   });
 
   it('leaves a lease a task on another subject works under, such as a patch on the pull request', async () => {
-    elsewhere = [{ ...FAILED, id: 'task-patch', kind: 'patch', subjectRef: 'fleetadlc#95', state: 'running', botId: 'bot-builder', leaseId: 'lease-81' }];
+    elsewhere = [{ ...FAILED, id: 'task-patch', kind: 'patch', subjectRef: 'openadlc#95', state: 'running', botId: 'bot-builder', leaseId: 'lease-81' }];
     const response = await stop();
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ releasedLease: null });
@@ -1080,7 +1080,7 @@ describe('stopping a task that could not finish', () => {
       expect(vi.mocked(audit)).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'task.stopped',
-          target: 'fleetadlc#81',
+          target: 'openadlc#81',
           payload: expect.objectContaining({ was: 'paused', questionsClosed: 1, reason: expect.stringContaining('repository removed from OpenADLC by janedoe') }),
         }),
       );
@@ -1139,7 +1139,7 @@ describe('dismissing a failed task’s card', () => {
   let task: Record<string, unknown> | null;
 
   beforeEach(() => {
-    task = { id: 'task-81', botId: 'bot-intake', kind: 'review', state: 'failed', subjectRef: 'fleetadlc#81', endedAt: '2026-09-30T00:44:00.000Z' };
+    task = { id: 'task-81', botId: 'bot-intake', kind: 'review', state: 'failed', subjectRef: 'openadlc#81', endedAt: '2026-09-30T00:44:00.000Z' };
     vi.mocked(tasks.getTask).mockImplementation(async () => task as never);
     vi.mocked(audit).mockClear();
     vi.mocked(acknowledgements.acknowledge).mockClear();
@@ -1155,7 +1155,7 @@ describe('dismissing a failed task’s card', () => {
     expect(await response.json()).toEqual({ task: 'task-81', dismissed: '2026-09-30T00:44:00.000Z' });
     expect(acknowledgements.acknowledge).toHaveBeenCalledWith('task:task-81', '2026-09-30T00:44:00.000Z', expect.any(String));
     expect(audit).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'task.dismissed', target: 'fleetadlc#81', payload: expect.objectContaining({ task: 'task-81', occurrence: '2026-09-30T00:44:00.000Z' }) }),
+      expect.objectContaining({ action: 'task.dismissed', target: 'openadlc#81', payload: expect.objectContaining({ task: 'task-81', occurrence: '2026-09-30T00:44:00.000Z' }) }),
     );
     // Not hostd's: nothing is cancelled or run again.
     expect(asked).toEqual([]);
@@ -1221,7 +1221,7 @@ describe('the appPrivateKey, written through PATCH /v1/install', () => {
   let secrets: Map<string, string>;
 
   beforeEach(async () => {
-    const { setSecretStore } = await import('@fleetadlc/github');
+    const { setSecretStore } = await import('@openadlc/github');
     secrets = new Map([['github-app-private-key', KEY]]);
     setSecretStore({
       get: async (ref) => secrets.get(ref) ?? null,
@@ -1412,11 +1412,11 @@ describe('holding a pull request an unsigned post was on', () => {
     const { HostdClient } = await import('./hostd-client.js');
     labelled.length = 0;
     vi.mocked(audit).mockClear();
-    vi.mocked(repos.getRepoByName).mockImplementation((async (name: string) => (name === 'fleetadlc-testbed' ? { id: 'repo-1', name, fullName: 'janedoe/fleetadlc-testbed' } : null)) as never);
-    vi.mocked(repos.listRepos).mockImplementation((async () => [{ id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' }]) as never);
+    vi.mocked(repos.getRepoByName).mockImplementation((async (name: string) => (name === 'openadlc-testbed' ? { id: 'repo-1', name, fullName: 'janedoe/openadlc-testbed' } : null)) as never);
+    vi.mocked(repos.listRepos).mockImplementation((async () => [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }]) as never);
     const router = new Router();
     registerConsoleApi(router, {
-      config: { automationBot: 'janedoe-fleetadlc-flow' } as never,
+      config: { automationBot: 'janedoe-openadlc-flow' } as never,
       hostd: new HostdClient('http://127.0.0.1:1', 'secret'),
       actors: {} as never,
       invitations: {} as never,
@@ -1440,24 +1440,24 @@ describe('holding a pull request an unsigned post was on', () => {
   });
 
   it('labels it needs-human, which holds the merge line, and audits who held it', async () => {
-    const response = await fetch(`${url}/v1/repos/fleetadlc-testbed/pulls/31/hold`, { method: 'POST' });
+    const response = await fetch(`${url}/v1/repos/openadlc-testbed/pulls/31/hold`, { method: 'POST' });
     expect(response.status).toBe(200);
-    expect(labelled).toEqual([['janedoe/fleetadlc-testbed', 31]]);
-    expect(await response.json()).toEqual({ held: 'janedoe/fleetadlc-testbed#31', autoMergeOff: true, gate: 'pending' });
+    expect(labelled).toEqual([['janedoe/openadlc-testbed', 31]]);
+    expect(await response.json()).toEqual({ held: 'janedoe/openadlc-testbed#31', autoMergeOff: true, gate: 'pending' });
     expect(vi.mocked(audit)).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'pull.held', target: 'janedoe/fleetadlc-testbed#31', payload: expect.objectContaining({ autoMergeOff: true, gate: 'pending' }) }),
+      expect.objectContaining({ action: 'pull.held', target: 'janedoe/openadlc-testbed#31', payload: expect.objectContaining({ autoMergeOff: true, gate: 'pending' }) }),
     );
   });
 
   it('finds the repository by its full name, as the card sends it', async () => {
-    const response = await fetch(`${url}/v1/repos/${encodeURIComponent('janedoe/fleetadlc-testbed')}/pulls/31/hold`, { method: 'POST' });
+    const response = await fetch(`${url}/v1/repos/${encodeURIComponent('janedoe/openadlc-testbed')}/pulls/31/hold`, { method: 'POST' });
     expect(response.status).toBe(200);
-    expect(labelled).toEqual([['janedoe/fleetadlc-testbed', 31]]);
+    expect(labelled).toEqual([['janedoe/openadlc-testbed', 31]]);
   });
 
   it('refuses a repository OpenADLC does not work in, and a number that is not one', async () => {
     expect((await fetch(`${url}/v1/repos/elsewhere/pulls/31/hold`, { method: 'POST' })).status).toBe(404);
-    expect((await fetch(`${url}/v1/repos/fleetadlc-testbed/pulls/abc/hold`, { method: 'POST' })).status).toBe(400);
+    expect((await fetch(`${url}/v1/repos/openadlc-testbed/pulls/abc/hold`, { method: 'POST' })).status).toBe(400);
     expect(labelled).toEqual([]);
   });
 });
@@ -1475,7 +1475,7 @@ describe('accepting invitations a person pasted', () => {
     vi.mocked(audit).mockClear();
     const router = new Router();
     registerConsoleApi(router, {
-      config: { automationBot: 'janedoe-fleetadlc-flow' } as never,
+      config: { automationBot: 'janedoe-openadlc-flow' } as never,
       hostd: new HostdClient('http://127.0.0.1:1', 'secret'),
       actors: {} as never,
       invitations: {
@@ -1502,8 +1502,8 @@ describe('accepting invitations a person pasted', () => {
   });
 
   it('takes one gh output per repository pasted together, and audits each invitation’s own repository', async () => {
-    const one = JSON.stringify([{ id: 1, invitee: { login: 'fleetadlc-atlas' }, repository: { full_name: 'janedoe/api' } }]);
-    const two = JSON.stringify([{ id: 2, invitee: { login: 'fleetadlc-vega' }, repository: { full_name: 'janedoe/site' } }]);
+    const one = JSON.stringify([{ id: 1, invitee: { login: 'openadlc-atlas' }, repository: { full_name: 'janedoe/api' } }]);
+    const two = JSON.stringify([{ id: 2, invitee: { login: 'openadlc-vega' }, repository: { full_name: 'janedoe/site' } }]);
     const response = await fetch(`${url}/v1/invitations/accept`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1517,8 +1517,8 @@ describe('accepting invitations a person pasted', () => {
         action: 'invitations.accepted',
         payload: {
           results: [
-            { bot: 'fleetadlc-atlas', action: 'accepted', repository: 'janedoe/api' },
-            { bot: 'fleetadlc-vega', action: 'accepted', repository: 'janedoe/site' },
+            { bot: 'openadlc-atlas', action: 'accepted', repository: 'janedoe/api' },
+            { bot: 'openadlc-vega', action: 'accepted', repository: 'janedoe/site' },
           ],
         },
       }),
@@ -1602,7 +1602,7 @@ describe('choosing how a repository’s production ships', () => {
     vi.mocked(audit).mockClear();
     vi.mocked(repos.setProductionChoice).mockClear();
     vi.mocked(repos.listRepos).mockResolvedValue([{ id: 'repo-1', name: 'app', fullName: 'exampleco/app' }] as never);
-    vi.mocked(bots.listBots).mockResolvedValue([...DEFAULT_CREW, { id: 'bot-lead', name: 'sydney', role: 'review_lead', githubLogin: 'fleetadlc-sydney' }] as never);
+    vi.mocked(bots.listBots).mockResolvedValue([...DEFAULT_CREW, { id: 'bot-lead', name: 'sydney', role: 'review_lead', githubLogin: 'openadlc-sydney' }] as never);
     const router = new Router();
     registerConsoleApi(router, {
       config: { organization: 'exampleco', gitHubClientId: '', webhookSecret: '', humans: [] } as never,
@@ -1624,7 +1624,7 @@ describe('choosing how a repository’s production ships', () => {
   });
 
   afterEach(async () => {
-    vi.mocked(repos.listRepos).mockResolvedValue([{ id: 'repo-1', name: 'fleetadlc-testbed' }] as never);
+    vi.mocked(repos.listRepos).mockResolvedValue([{ id: 'repo-1', name: 'openadlc-testbed' }] as never);
     vi.mocked(bots.listBots).mockResolvedValue(DEFAULT_CREW as never);
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
@@ -1651,7 +1651,7 @@ describe('choosing how a repository’s production ships', () => {
     expect(nobody.status).toBe(400);
     expect(await said(nobody)).toContain('name at least one person');
 
-    const bot = await post({ repo: 'exampleco/app', approval: 'reviewers', reviewers: ['fleetadlc-sydney'] });
+    const bot = await post({ repo: 'exampleco/app', approval: 'reviewers', reviewers: ['openadlc-sydney'] });
     expect(bot.status).toBe(400);
     expect(await said(bot)).toContain('a bot never approves a deploy');
 
@@ -1670,8 +1670,8 @@ describe('choosing how a repository’s production ships', () => {
 });
 
 describe('a crew member’s color, from Settings → Appearance', () => {
-  const BUILDER = { id: 'bot-1', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', color: null };
-  const patch = (body: unknown, bot = 'fleetadlc-atlas-janedoe') =>
+  const BUILDER = { id: 'bot-1', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', color: null };
+  const patch = (body: unknown, bot = 'openadlc-atlas-janedoe') =>
     fetch(`${bridgeUrl}/v1/crew/${bot}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
@@ -1694,7 +1694,7 @@ describe('a crew member’s color, from Settings → Appearance', () => {
     expect(((await response.json()) as { bot: { color: string } }).bot.color).toBe('rose');
     expect(vi.mocked(bots.setAppearance)).toHaveBeenCalledWith('bot-1', { color: 'rose' });
     expect(vi.mocked(audit)).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'bot.color_changed', target: 'fleetadlc-atlas-janedoe', payload: { color: 'rose', previous: null } }),
+      expect.objectContaining({ action: 'bot.color_changed', target: 'openadlc-atlas-janedoe', payload: { color: 'rose', previous: null } }),
     );
   });
 
@@ -1723,8 +1723,8 @@ describe('a crew member’s color, from Settings → Appearance', () => {
 });
 
 describe('how many tasks a seat runs at once, from Crew', () => {
-  const BUILDER = { id: 'bot-1', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', maxTasks: 1 };
-  const patch = (body: unknown, bot = 'fleetadlc-atlas-janedoe') =>
+  const BUILDER = { id: 'bot-1', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', maxTasks: 1 };
+  const patch = (body: unknown, bot = 'openadlc-atlas-janedoe') =>
     fetch(`${bridgeUrl}/v1/crew/${bot}/tasks-at-once`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
   beforeEach(() => {
@@ -1744,7 +1744,7 @@ describe('how many tasks a seat runs at once, from Crew', () => {
     expect(((await response.json()) as { bot: { maxTasks: number } }).bot.maxTasks).toBe(3);
     expect(vi.mocked(bots.setMaxTasks)).toHaveBeenCalledWith('bot-1', 3);
     expect(vi.mocked(audit)).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'bot.max_tasks_changed', target: 'fleetadlc-atlas-janedoe', payload: { maxTasks: 3, previous: 1 } }),
+      expect.objectContaining({ action: 'bot.max_tasks_changed', target: 'openadlc-atlas-janedoe', payload: { maxTasks: 3, previous: 1 } }),
     );
   });
 
@@ -1763,9 +1763,9 @@ describe('how many tasks a seat runs at once, from Crew', () => {
 });
 
 describe('a crew member’s avatar, from /crew or Settings → Appearance', () => {
-  const BUILDER = { id: 'bot-1', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', engine: 'claude', avatar: null };
+  const BUILDER = { id: 'bot-1', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', engine: 'claude', avatar: null };
   const patch = (body: unknown) =>
-    fetch(`${bridgeUrl}/v1/crew/fleetadlc-atlas-janedoe`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    fetch(`${bridgeUrl}/v1/crew/openadlc-atlas-janedoe`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
   beforeEach(() => {
     vi.mocked(bots.getBotByName).mockImplementation(async (name: string) => (name === BUILDER.name ? (BUILDER as never) : null));
@@ -1784,7 +1784,7 @@ describe('a crew member’s avatar, from /crew or Settings → Appearance', () =
       expect(vi.mocked(bots.setAppearance)).toHaveBeenLastCalledWith('bot-1', { avatar });
     }
     expect(vi.mocked(audit)).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'bot.avatar_changed', target: 'fleetadlc-atlas-janedoe', payload: { avatar: 'initials', previous: null } }),
+      expect.objectContaining({ action: 'bot.avatar_changed', target: 'openadlc-atlas-janedoe', payload: { avatar: 'initials', previous: null } }),
     );
   });
 
@@ -1809,7 +1809,7 @@ describe('a crew member’s avatar, from /crew or Settings → Appearance', () =
 });
 
 describe('a bot’s sessions, as the screen routes reach hostd', () => {
-  const BUILDER = { id: 'bot-1', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement' };
+  const BUILDER = { id: 'bot-1', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement' };
 
   beforeEach(() => {
     vi.mocked(bots.getBotByName).mockImplementation(async (name: string) => (name === BUILDER.name ? (BUILDER as never) : null));
@@ -1844,7 +1844,7 @@ describe('a bot’s sessions, as the screen routes reach hostd', () => {
       body: '{}',
     });
     expect(kill.status).toBe(200);
-    expect(asked.map((one) => one.url)).toEqual(['/bots/fleetadlc-atlas-janedoe/sessions/main/kill']);
+    expect(asked.map((one) => one.url)).toEqual(['/bots/openadlc-atlas-janedoe/sessions/main/kill']);
   });
 });
 
@@ -1908,7 +1908,7 @@ describe('the month’s costs, as the console reads them', () => {
 });
 
 describe('a bot’s sessions on the crew page', () => {
-  const BUILDER = { id: 'bot-1', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement' };
+  const BUILDER = { id: 'bot-1', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement' };
   const SESSION = { id: 's-1', name: 'implement-1', cmd: 'claude', state: 'working', pid: 7, lastLine: 'export GH_TOKEN=ghp_secret', observedAt: '2026-10-04T10:00:00Z' };
 
   async function asRole(role: 'admin' | 'user') {
@@ -2016,7 +2016,7 @@ describe('rotating the key the crew’s posts are signed with', () => {
   const call = (url: string, identity: string, body?: unknown) =>
     fetch(`${url}/v1/attribution/rotate`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-fleetadlc-identity': identity },
+      headers: { 'content-type': 'application/json', 'x-openadlc-identity': identity },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
 
@@ -2139,9 +2139,9 @@ describe('the console role reaching a gate answer', () => {
   it("passes it from a bot panel's message that answers the open question", async () => {
     vi.mocked(bots.getBotByName).mockResolvedValue({ id: 'bot-intake', name: 'ottoexampleco' } as never);
     vi.mocked(threads.listOpenGates).mockResolvedValue([{ id: 'gate-1', taskId: 'task-1' }] as never);
-    vi.mocked(tasks.getTask).mockResolvedValue({ id: 'task-1', botId: 'bot-intake', subjectRef: 'fleetadlc-testbed#5' } as never);
+    vi.mocked(tasks.getTask).mockResolvedValue({ id: 'task-1', botId: 'bot-intake', subjectRef: 'openadlc-testbed#5' } as never);
     try {
-      expect(await answerAs('user', '/v1/threads/ottoexampleco/messages', { text: '1', subject: 'fleetadlc-testbed#5' })).toEqual([
+      expect(await answerAs('user', '/v1/threads/ottoexampleco/messages', { text: '1', subject: 'openadlc-testbed#5' })).toEqual([
         expect.objectContaining({ gateId: 'gate-1', role: 'user', via: 'thread' }),
       ]);
     } finally {
@@ -2162,7 +2162,7 @@ describe('a refusal says what to do', () => {
     });
     expect(response.status).toBe(409);
     expect(((await response.json()) as { error: string }).error).toBe(
-      'no intake bot is configured; add an intake seat to config/bots.yaml and run fleetadlc up',
+      'no intake bot is configured; add an intake seat to config/bots.yaml and run openadlc up',
     );
   });
 

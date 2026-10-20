@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GitHubApiError, appPrivateKeyRef, appRuleFields, mainRuleset, type AppApi, type ApplyOutcome, type RepoRulesInput } from '@fleetadlc/github';
-import { REQUIRED_CHECK, REVIEW_GATE_CHECK } from '@fleetadlc/shared';
+import { GitHubApiError, appPrivateKeyRef, appRuleFields, mainRuleset, type AppApi, type ApplyOutcome, type RepoRulesInput } from '@openadlc/github';
+import { REQUIRED_CHECK, REVIEW_GATE_CHECK } from '@openadlc/shared';
 import { defaultConfig, type InstallConfig } from '../install.js';
 import { credentialFailure, githubApply, productionFromFlags, repositoryAccessLine, rulesHumans, rulesInputFor, syncLabels, templateProblem } from './github.js';
 
@@ -28,7 +28,7 @@ const world = vi.hoisted(() => ({
   identities: new Map<string, string>(),
   settings: {} as Record<string, string>,
   secrets: new Map<string, string>(),
-  /** Every request, with who it was made as: `fleetadlc-app`, or the account's login. */
+  /** Every request, with who it was made as: `openadlc-app`, or the account's login. */
   requests: [] as { method: string; path: string; body?: unknown; as?: string }[],
   respond: (_method: string, _path: string): unknown => [],
   templates: [] as { fullName: string; root: string; approvers?: readonly string[] }[],
@@ -53,7 +53,7 @@ const world = vi.hoisted(() => ({
   cleared: [] as string[],
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: async () => undefined,
   bots: { listBots: async () => world.crew },
   identities: {
@@ -91,8 +91,8 @@ vi.mock('@fleetadlc/db', () => ({
   },
 }));
 
-vi.mock('@fleetadlc/github', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@fleetadlc/github')>();
+vi.mock('@openadlc/github', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@openadlc/github')>();
   class FakeClient {
     constructor(readonly options: { token: string; actingAs: string }) {}
     async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -141,7 +141,7 @@ const printed: string[] = [];
 const exitCodeBefore = process.exitCode;
 
 beforeEach(async () => {
-  checkout = mkdtempSync(join(tmpdir(), 'fleetadlc-github-'));
+  checkout = mkdtempSync(join(tmpdir(), 'openadlc-github-'));
   mkdirSync(join(checkout, 'config'));
   writeFileSync(join(checkout, 'config', 'labels.json'), JSON.stringify([{ name: 'adlc:build', color: '0e8a16', description: 'Being built' }]));
   config = { ...defaultConfig(checkout), humans: [] };
@@ -150,7 +150,7 @@ beforeEach(async () => {
   world.settings = {};
   world.secrets = new Map();
   world.identities = new Map();
-  const { accessTokenRef } = await import('@fleetadlc/github');
+  const { accessTokenRef } = await import('@openadlc/github');
   world.secrets.set(accessTokenRef('automation'), 'a-static-token');
   world.requests = [];
   world.respond = () => [];
@@ -183,7 +183,7 @@ afterEach(() => {
   process.exitCode = exitCodeBefore;
 });
 
-describe('fleetadlc github sync-labels', () => {
+describe('openadlc github sync-labels', () => {
   const created = () => world.requests.filter((one) => one.method === 'POST').map((one) => (one.body as { name: string }).name);
 
   it('writes config/labels.json when no file is named', async () => {
@@ -194,13 +194,13 @@ describe('fleetadlc github sync-labels', () => {
 
   it('writes the file --file names, read from the checkout, to the one repository --repo names', async () => {
     // OpenADLC's own component areas, which only OpenADLC's repository gets.
-    writeFileSync(join(checkout, 'config', 'labels-fleetadlc.json'), JSON.stringify([{ name: 'area:bridge', color: '1d76db', description: 'The bridge' }]));
-    world.repos = [...world.repos, { name: 'fleetadlc', fullName: 'alice/fleetadlc', defaultBranch: 'main' }];
+    writeFileSync(join(checkout, 'config', 'labels-openadlc.json'), JSON.stringify([{ name: 'area:bridge', color: '1d76db', description: 'The bridge' }]));
+    world.repos = [...world.repos, { name: 'openadlc', fullName: 'alice/openadlc', defaultBranch: 'main' }];
 
-    await syncLabels(config, { repo: 'fleetadlc', file: 'config/labels-fleetadlc.json' });
+    await syncLabels(config, { repo: 'openadlc', file: 'config/labels-openadlc.json' });
 
     expect(created()).toEqual(['area:bridge']);
-    expect(world.requests.filter((one) => one.method === 'POST').map((one) => one.path)).toEqual(['/repos/alice/fleetadlc/labels']);
+    expect(world.requests.filter((one) => one.method === 'POST').map((one) => one.path)).toEqual(['/repos/alice/openadlc/labels']);
   });
 
   it('changes nothing on a repository whose labels could not be read, and says so', async () => {
@@ -245,7 +245,7 @@ describe('the automation account’s token', () => {
   it('is not refreshed here when the bridge answers with an error, and the error is said', async () => {
     // A refusal was read as "not answering", and the token was refreshed here
     // beside the bridge: a replay, and GitHub revokes the sign-in.
-    const { refreshTokenRef } = await import('@fleetadlc/github');
+    const { refreshTokenRef } = await import('@openadlc/github');
     world.secrets.set(refreshTokenRef('automation'), 'a-refresh-token');
     world.settings = { githubClientId: 'Iv1.zzz-stored-zzz' };
     world.bridge = (bot) => ({ status: 409, body: { error: `${bot}'s GitHub authorization is no longer valid (bad_refresh_token)` } });
@@ -258,7 +258,7 @@ describe('the automation account’s token', () => {
   });
 
   it('is not refreshed here when the bridge has no sign-in for it, and says to sign in', async () => {
-    const { refreshTokenRef } = await import('@fleetadlc/github');
+    const { refreshTokenRef } = await import('@openadlc/github');
     world.secrets.set(refreshTokenRef('automation'), 'a-refresh-token');
     world.settings = { githubClientId: 'Iv1.zzz-stored-zzz' };
     world.bridge = (bot) => ({ status: 404, body: { error: `${bot} has no GitHub login` } });
@@ -267,7 +267,7 @@ describe('the automation account’s token', () => {
     expect(world.refreshed).toEqual([]);
     expect(world.lockKeys).toEqual([]);
     expect(printed.join('\n')).toContain('the bridge refused: automation has no GitHub login');
-    expect(printed.join('\n')).toContain('fleetadlc auth login --bot automation');
+    expect(printed.join('\n')).toContain('openadlc auth login --bot automation');
     expect(printed.join('\n')).not.toContain('not answering');
     expect(process.exitCode).toBe(1);
   });
@@ -275,7 +275,7 @@ describe('the automation account’s token', () => {
   it('is refreshed here only when the bridge is down, under the bridge’s lock, with the client id the console stored', async () => {
     // install.json has none on an install set up from the console, and the
     // command used to say the account was not connected.
-    const { refreshTokenRef } = await import('@fleetadlc/github');
+    const { refreshTokenRef } = await import('@openadlc/github');
     world.secrets.set(refreshTokenRef('automation'), 'a-refresh-token');
     world.settings = { githubClientId: 'Iv1.zzz-stored-zzz' };
     await syncLabels({ ...config, githubClientId: '' }, {});
@@ -286,13 +286,13 @@ describe('the automation account’s token', () => {
   });
 
   it('says to start the install, not to sign in again, when the bridge is down and there is no client id', async () => {
-    const { refreshTokenRef } = await import('@fleetadlc/github');
+    const { refreshTokenRef } = await import('@openadlc/github');
     world.secrets.set(refreshTokenRef('automation'), 'a-refresh-token');
     await syncLabels({ ...config, githubClientId: '' }, {});
 
     expect(world.refreshed).toEqual([]);
     expect(printed.join('\n')).toContain('the bridge is not answering, and this install has no GitHub App client id to refresh the token with');
-    expect(printed.join('\n')).toContain('start the bridge: fleetadlc up');
+    expect(printed.join('\n')).toContain('start the bridge: openadlc up');
     expect(printed.join('\n')).not.toContain('auth login');
     expect(process.exitCode).toBe(1);
   });
@@ -301,7 +301,7 @@ describe('the automation account’s token', () => {
 describe('the automation account’s token on an account the crew shares', () => {
   // The sign-in is filed under the account's namespace, not each seat's name:
   // looked up under the seat's, every command said "not connected", and
-  // `fleetadlc auth login` did not fix it.
+  // `openadlc auth login` did not fix it.
   beforeEach(() => {
     world.crew = [{ id: 'seat-automation', name: 'automation', slot: 'automation', role: 'automation', githubLogin: 'alice-crew' }];
     world.identities.set('seat-automation', 'crew-account');
@@ -310,7 +310,7 @@ describe('the automation account’s token on an account the crew shares', () =>
 
   it('asks the bridge first, by the seat’s name, before anything is refreshed here', async () => {
     const asked: string[] = [];
-    const { refreshTokenRef } = await import('@fleetadlc/github');
+    const { refreshTokenRef } = await import('@openadlc/github');
     world.secrets.set(refreshTokenRef('crew-account'), 'a-refresh-token');
     world.bridge = (bot) => {
       asked.push(bot);
@@ -324,7 +324,7 @@ describe('the automation account’s token on an account the crew shares', () =>
   });
 
   it('finds the shared refresh token with the bridge down, and refreshes it under the account’s name', async () => {
-    const { refreshTokenRef } = await import('@fleetadlc/github');
+    const { refreshTokenRef } = await import('@openadlc/github');
     world.secrets.set(refreshTokenRef('crew-account'), 'a-refresh-token');
     world.settings = { githubClientId: 'Iv1.zzz-stored-zzz' };
     await syncLabels(config, {});
@@ -336,7 +336,7 @@ describe('the automation account’s token on an account the crew shares', () =>
   });
 
   it('finds a shared static token with the bridge down', async () => {
-    const { accessTokenRef } = await import('@fleetadlc/github');
+    const { accessTokenRef } = await import('@openadlc/github');
     world.secrets.set(accessTokenRef('crew-account'), 'a-static-token');
     await syncLabels(config, {});
 
@@ -352,7 +352,7 @@ describe('the automation account’s token on an account the crew shares', () =>
   });
 });
 
-describe('fleetadlc github apply', () => {
+describe('openadlc github apply', () => {
   it('names a personal repository’s owner in AGENTS.md, and reads the templates from the checkout', async () => {
     // The owner filter meant for an organization's name dropped the person who
     // owns a personal repository, and AGENTS.md kept the template's @owner.
@@ -376,7 +376,7 @@ describe('fleetadlc github apply', () => {
   });
 });
 
-describe('how production ships, from fleetadlc github apply', () => {
+describe('how production ships, from openadlc github apply', () => {
   beforeEach(() => {
     world.repos = [{ id: 'repo-1', name: 'app', fullName: 'acme/app', defaultBranch: 'main' }];
     world.settings = { organization: 'acme' };
@@ -461,9 +461,9 @@ describe('the person the repository rules name', () => {
     const nobody = { stored: {}, environment: undefined, organization: '' };
 
     expect(() => rulesHumans(nobody)).toThrow(/"humans" in .*install\.json/);
-    expect(() => rulesHumans(nobody)).toThrow(/FLEETADLC_HUMANS=/);
+    expect(() => rulesHumans(nobody)).toThrow(/OPENADLC_HUMANS=/);
     // Blank is not a name either.
-    expect(() => rulesHumans({ stored: { humans: '' }, environment: ' , ', organization: '  ' })).toThrow(/FLEETADLC_HUMANS/);
+    expect(() => rulesHumans({ stored: { humans: '' }, environment: ' , ', organization: '  ' })).toThrow(/OPENADLC_HUMANS/);
   });
 
   it('is the first of the install’s humans, and every one of them may approve production', () => {
@@ -511,8 +511,8 @@ describe('the rules `github check` and `github apply` build', () => {
       { name: 'reviewer', slot: 'reviewer', role: 'review_lead', githubLogin: 'alice-reviews' },
     ];
     const withClient = { ...config, githubClientId: 'Iv23liTEST', humans: ['alice'] };
-    const humansBefore = process.env.FLEETADLC_HUMANS;
-    process.env.FLEETADLC_HUMANS = 'alice';
+    const humansBefore = process.env.OPENADLC_HUMANS;
+    process.env.OPENADLC_HUMANS = 'alice';
     try {
       const { input: cli } = await rulesInputFor(withClient, repo, null, app);
       // As `RepoSetup.rulesInput` in the bridge builds it, for the same app and crew.
@@ -534,8 +534,8 @@ describe('the rules `github check` and `github apply` build', () => {
       const checks = ruleset.rules.find((rule) => rule.type === 'required_status_checks')?.parameters?.required_status_checks;
       expect(checks).toContainEqual({ context: REVIEW_GATE_CHECK, integration_id: 4242 });
     } finally {
-      if (humansBefore === undefined) delete process.env.FLEETADLC_HUMANS;
-      else process.env.FLEETADLC_HUMANS = humansBefore;
+      if (humansBefore === undefined) delete process.env.OPENADLC_HUMANS;
+      else process.env.OPENADLC_HUMANS = humansBefore;
     }
   });
 
@@ -577,7 +577,7 @@ describe('who writes labels and rules from the terminal', () => {
     world.respond = installed(['alice/app']);
     await syncLabels({ ...config, githubClientId: 'Iv1.old-install-json' }, {});
 
-    expect(labelWrites().map((one) => one.as)).toEqual(['fleetadlc-app']);
+    expect(labelWrites().map((one) => one.as)).toEqual(['openadlc-app']);
     const minted = world.requests.find((one) => one.path === '/app/installations/7/access_tokens');
     expect(minted?.body).toEqual({ repositories: ['app'] });
     const said = printed.join('\n');
@@ -614,7 +614,7 @@ describe('who writes labels and rules from the terminal', () => {
     world.settings = { ...world.settings, humans: 'alice' };
     await githubApply(config, { production: 'auto' });
 
-    expect(world.appliedAs).toEqual(['fleetadlc-app']);
+    expect(world.appliedAs).toEqual(['openadlc-app']);
     expect(world.applied[0]).toMatchObject({ appId: 4242, pinnedChecks: [REVIEW_GATE_CHECK] });
     expect(printed.join('\n')).toContain('alice/app, as the OpenADLC app');
   });
@@ -656,7 +656,7 @@ describe('when GitHub will not say who the automation account is', () => {
   it('says to sign in again when GitHub refused the credential', () => {
     expect(credentialFailure(new GitHubApiError(401, '/user', '{"message":"Bad credentials"}'), 'janedoe-crew')).toEqual({
       reason: 'GitHub refused janedoe-crew’s stored credential',
-      hint: 'fleetadlc auth login --bot janedoe-crew',
+      hint: 'openadlc auth login --bot janedoe-crew',
     });
   });
 

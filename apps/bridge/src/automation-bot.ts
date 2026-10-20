@@ -1,6 +1,6 @@
-import { bots } from '@fleetadlc/db';
-import type { GitHubClient } from '@fleetadlc/github';
-import { automationBotOf, carriesDedupeMarker, type Bot } from '@fleetadlc/shared';
+import { bots } from '@openadlc/db';
+import type { GitHubClient } from '@openadlc/github';
+import { automationBotOf, carriesDedupeMarker, type Bot } from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import type { BridgeConfig } from './config.js';
 import { effectiveConfig } from './effective-config.js';
@@ -13,8 +13,8 @@ import { effectiveConfig } from './effective-config.js';
  * It is the bot whose role is `automation`, whatever it is called this
  * minute — its name is its account's handle once one connects. An install can
  * name another, as a seat or a name, in the console's settings or with
- * `FLEETADLC_AUTOMATION_BOT`, and that wins when it names a bot this install has.
- * An `install.json` from an older `fleetadlc init` may still say `flow`, which
+ * `OPENADLC_AUTOMATION_BOT`, and that wins when it names a bot this install has.
+ * An `install.json` from an older `openadlc init` may still say `flow`, which
  * is read as the seat that persona was; an override that names nobody is
  * ignored.
  *

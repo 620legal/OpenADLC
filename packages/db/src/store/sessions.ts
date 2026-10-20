@@ -1,5 +1,5 @@
-import { redactSecrets } from '@fleetadlc/shared';
-import type { Session, SessionState } from '@fleetadlc/shared';
+import { redactSecrets } from '@openadlc/shared';
+import type { Session, SessionState } from '@openadlc/shared';
 import { query, queryOne } from '../client.js';
 
 interface SessionRow {

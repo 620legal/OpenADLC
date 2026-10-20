@@ -9,8 +9,8 @@ const FIX: ReachFix = {
   need: 'install',
   title: 'Install the app on exampleco',
   detail: 'The app is not installed on exampleco.',
-  action: { label: 'Install it', url: 'https://github.com/apps/fleetadlc/installations/new' },
-  steps: [{ text: 'Install the app on exampleco', action: { label: 'Install it', url: 'https://github.com/apps/fleetadlc/installations/new' } }],
+  action: { label: 'Install it', url: 'https://github.com/apps/openadlc/installations/new' },
+  steps: [{ text: 'Install the app on exampleco', action: { label: 'Install it', url: 'https://github.com/apps/openadlc/installations/new' } }],
 };
 
 afterEach(() => {

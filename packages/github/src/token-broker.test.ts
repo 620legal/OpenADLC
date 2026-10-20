@@ -109,7 +109,7 @@ describe('token broker', () => {
     mockGitHub();
     const broker = new TokenBroker({ clientId: 'Iv1.client', store: memoryStore() });
 
-    await expect(broker.tokenFor('atlas')).rejects.toThrow(/fleetadlc auth login --bot atlas/);
+    await expect(broker.tokenFor('atlas')).rejects.toThrow(/openadlc auth login --bot atlas/);
   });
 });
 
@@ -198,7 +198,7 @@ describe('a rotated refresh token the store fails to save', () => {
     const broker = new TokenBroker({ clientId: 'Iv1.client', store, saveRetryMs: [1] });
     await broker.tokenFor('atlas');
 
-    const moved = await broker.exclusive(['atlas', 'fleetadlc-atlas'], async () => store.get(refreshTokenRef('atlas')));
+    const moved = await broker.exclusive(['atlas', 'openadlc-atlas'], async () => store.get(refreshTokenRef('atlas')));
     expect(moved).toBe('r2');
   });
 });
@@ -225,11 +225,11 @@ describe('an install configured after the process started', () => {
     });
 
     // Before it is configured: a fault in the install, not in the credential.
-    await expect(broker.tokenFor('atlas', 'fleetadlc-atlas')).rejects.toThrow(/no GitHub App client id/);
+    await expect(broker.tokenFor('atlas', 'openadlc-atlas')).rejects.toThrow(/no GitHub App client id/);
 
     configured = 'Iv23liLATER';
     mockGitHub();
-    await broker.tokenFor('atlas', 'fleetadlc-atlas').catch(() => undefined);
+    await broker.tokenFor('atlas', 'openadlc-atlas').catch(() => undefined);
 
     // The second attempt used the value set after construction.
     expect(asked.at(-1)).toBe('Iv23liLATER');
@@ -247,7 +247,7 @@ describe('an install configured after the process started', () => {
       },
     });
 
-    await expect(broker.tokenFor('atlas', 'fleetadlc-atlas')).rejects.toThrow(/no GitHub App client id/);
+    await expect(broker.tokenFor('atlas', 'openadlc-atlas')).rejects.toThrow(/no GitHub App client id/);
     expect(revoked).toEqual([]);
   });
 });
@@ -276,14 +276,14 @@ describe('a rename moving a bot’s refresh token', () => {
     const inflight = broker.tokenFor('atlas');
     await vi.waitFor(() => expect(github).toHaveBeenCalledTimes(1));
 
-    const moved = broker.exclusive(['atlas', 'fleetadlc-atlas-janedoe'], async () => {
+    const moved = broker.exclusive(['atlas', 'openadlc-atlas-janedoe'], async () => {
       const value = await store.get(refreshTokenRef('atlas'));
-      await store.set(refreshTokenRef('fleetadlc-atlas-janedoe'), value ?? '');
+      await store.set(refreshTokenRef('openadlc-atlas-janedoe'), value ?? '');
       await store.delete(refreshTokenRef('atlas'));
       return value;
     });
     // Asked for while the move is waiting: it must not read the old name.
-    const during = broker.tokenFor('fleetadlc-atlas-janedoe');
+    const during = broker.tokenFor('openadlc-atlas-janedoe');
 
     answer(refreshed('ghr_rotated', 'ghu_1'));
     await inflight;
@@ -296,7 +296,7 @@ describe('a rename moving a bot’s refresh token', () => {
     expect((await during).token).toBe('ghu_2');
     expect(github).toHaveBeenCalledTimes(2);
     expect(String(github.mock.calls[1]?.[1]?.body)).toContain('refresh_token=ghr_rotated');
-    expect(await store.get(refreshTokenRef('fleetadlc-atlas-janedoe'))).toBe('ghr_after');
+    expect(await store.get(refreshTokenRef('openadlc-atlas-janedoe'))).toBe('ghr_after');
   });
 
   it('forgets a token cached under either name', async () => {
@@ -305,7 +305,7 @@ describe('a rename moving a bot’s refresh token', () => {
     const broker = new TokenBroker({ clientId: 'Iv1.client', store });
     await broker.tokenFor('atlas');
 
-    await broker.exclusive(['atlas', 'fleetadlc-atlas-janedoe'], async () => {
+    await broker.exclusive(['atlas', 'openadlc-atlas-janedoe'], async () => {
       await store.delete(refreshTokenRef('atlas'));
     });
 
@@ -435,8 +435,8 @@ describe('marking a sign-in revoked', () => {
     const revoked: string[] = [];
 
     // Says what to do, by the account's login, which `--bot` resolves whichever seat it is.
-    await expect(broker(revoked).tokenFor('atlas', 'fleetadlc-atlas')).rejects.toThrow(
-      /atlas's GitHub authorization is no longer valid \(expired\)\. Reconnect it: fleetadlc auth login --bot fleetadlc-atlas$/,
+    await expect(broker(revoked).tokenFor('atlas', 'openadlc-atlas')).rejects.toThrow(
+      /atlas's GitHub authorization is no longer valid \(expired\)\. Reconnect it: openadlc auth login --bot openadlc-atlas$/,
     );
     expect(revoked).toEqual(['atlas']);
   });
@@ -456,9 +456,9 @@ describe('marking a sign-in revoked', () => {
     const revoked: string[] = [];
     const one = broker(revoked);
 
-    await expect(one.tokenFor('atlas', 'fleetadlc-atlas')).rejects.not.toThrow(/no longer valid/);
-    await expect(one.tokenFor('atlas', 'fleetadlc-atlas')).rejects.not.toThrow(/no longer valid/);
-    await expect(one.tokenFor('atlas', 'fleetadlc-atlas')).resolves.toMatchObject({ token: 'ghu_ok' });
+    await expect(one.tokenFor('atlas', 'openadlc-atlas')).rejects.not.toThrow(/no longer valid/);
+    await expect(one.tokenFor('atlas', 'openadlc-atlas')).rejects.not.toThrow(/no longer valid/);
+    await expect(one.tokenFor('atlas', 'openadlc-atlas')).resolves.toMatchObject({ token: 'ghu_ok' });
 
     expect(revoked).toEqual([]);
     expect(calls).toBe(3);

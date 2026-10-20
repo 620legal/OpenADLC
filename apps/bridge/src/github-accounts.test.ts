@@ -105,7 +105,7 @@ describe('whether a login is free to register', () => {
 
   it('says free when GitHub has never heard of it', async () => {
     const { loginAvailable } = await import('./github-accounts.js');
-    expect(await loginAvailable('fleetadlc-atlas-janedoe', { fetchImpl: respondStatus(404) })).toBe(true);
+    expect(await loginAvailable('openadlc-atlas-janedoe', { fetchImpl: respondStatus(404) })).toBe(true);
   });
 
   it('says taken when somebody holds it', async () => {
@@ -113,7 +113,7 @@ describe('whether a login is free to register', () => {
     // pointed a bot at: a real account registered years earlier by a stranger.
     const { loginAvailable } = await import('./github-accounts.js');
     expect(
-      await loginAvailable('fleetadlc-flow', { fetchImpl: respondStatus(200, { login: 'FleetADLC-Flow', type: 'User' }) }),
+      await loginAvailable('openadlc-flow', { fetchImpl: respondStatus(200, { login: 'OpenADLC-Flow', type: 'User' }) }),
     ).toBe(false);
   });
 
@@ -121,10 +121,10 @@ describe('whether a login is free to register', () => {
     // `login:octocat` is a qualifier GitHub's search takes, and its empty
     // answer was cached where this looks, so a taken name read as free.
     const { loginAvailable } = await import('./github-accounts.js');
-    await lookUpAccount('login:fleetadlc-flow', { fetchImpl: respond(200, { items: [] }) });
+    await lookUpAccount('login:openadlc-flow', { fetchImpl: respond(200, { items: [] }) });
 
-    const asked = respondStatus(200, { login: 'FleetADLC-Flow', type: 'User' });
-    expect(await loginAvailable('fleetadlc-flow', { fetchImpl: asked })).toBe(false);
+    const asked = respondStatus(200, { login: 'OpenADLC-Flow', type: 'User' });
+    expect(await loginAvailable('openadlc-flow', { fetchImpl: asked })).toBe(false);
     expect(asked).toHaveBeenCalledTimes(1);
   });
 
@@ -136,16 +136,16 @@ describe('whether a login is free to register', () => {
       throw new Error('ENOTFOUND');
     }) as unknown as typeof fetch;
 
-    expect(await loginAvailable('fleetadlc-atlas', { fetchImpl: broken })).toBeNull();
-    expect(await loginAvailable('fleetadlc-atlas', { fetchImpl: respondStatus(403) })).toBeNull();
+    expect(await loginAvailable('openadlc-atlas', { fetchImpl: broken })).toBeNull();
+    expect(await loginAvailable('openadlc-atlas', { fetchImpl: respondStatus(403) })).toBeNull();
   });
 
   it('sends one request for a login several seats ask about at once', async () => {
     // The cache fills only once an answer arrives, so nine seats on two
     // accounts sent nine requests, against an anonymous limit of sixty an hour.
     const { loginAvailable } = await import('./github-accounts.js');
-    const asked = respondStatus(200, { login: 'fleetadlc-atlas', type: 'User' });
-    const logins = ['fleetadlc-atlas', 'Fleetadlc-Atlas', 'fleetadlc-atlas', 'noraexampleco', 'noraexampleco'];
+    const asked = respondStatus(200, { login: 'openadlc-atlas', type: 'User' });
+    const logins = ['openadlc-atlas', 'Openadlc-Atlas', 'openadlc-atlas', 'noraexampleco', 'noraexampleco'];
 
     const answers = await Promise.all(logins.map((login) => loginAvailable(login, { fetchImpl: asked })));
 
@@ -155,8 +155,8 @@ describe('whether a login is free to register', () => {
 
   it('asks again after a lookup that failed, rather than sharing its failure', async () => {
     const { loginAvailable } = await import('./github-accounts.js');
-    expect(await loginAvailable('fleetadlc-atlas', { fetchImpl: respondStatus(403) })).toBeNull();
-    expect(await loginAvailable('fleetadlc-atlas', { fetchImpl: respondStatus(404) })).toBe(true);
+    expect(await loginAvailable('openadlc-atlas', { fetchImpl: respondStatus(403) })).toBeNull();
+    expect(await loginAvailable('openadlc-atlas', { fetchImpl: respondStatus(404) })).toBe(true);
   });
 });
 

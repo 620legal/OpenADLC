@@ -1,4 +1,4 @@
-import { resolveBotRef, type RepoConfig } from '@fleetadlc/shared';
+import { resolveBotRef, type RepoConfig } from '@openadlc/shared';
 import * as bots from '../store/bots.js';
 import * as repos from '../store/repos.js';
 

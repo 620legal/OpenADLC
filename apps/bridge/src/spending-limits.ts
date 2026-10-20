@@ -1,5 +1,5 @@
-import { bots, costs, repos, spendingLimits } from '@fleetadlc/db';
-import type { CostsConfig } from '@fleetadlc/shared';
+import { bots, costs, repos, spendingLimits } from '@openadlc/db';
+import type { CostsConfig } from '@openadlc/shared';
 
 /**
  * Spending limits, read and written from Settings.

@@ -1,4 +1,4 @@
-import { DEFAULT_DELIVERY_RULES, MERGE_IS_SHIPPING, deliveryRulesSchema, type DeliveryRules } from '@fleetadlc/shared';
+import { DEFAULT_DELIVERY_RULES, MERGE_IS_SHIPPING, deliveryRulesSchema, type DeliveryRules } from '@openadlc/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -17,7 +17,7 @@ const world = {
   audits: [] as Record<string, unknown>[],
 };
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async (entry: Record<string, unknown>) => {
     world.audits.push(entry);
   }),
@@ -258,10 +258,10 @@ describe('a merge', () => {
   });
 
   it('records the dispatch as the account that made it: the app, or the automation account it fell back to', async () => {
-    await pipeline(DEFAULT_DELIVERY_RULES, { actingAs: 'fleetadlc-app' }).line.onMerged(REPO, 40, 'abc1234def');
+    await pipeline(DEFAULT_DELIVERY_RULES, { actingAs: 'openadlc-app' }).line.onMerged(REPO, 40, 'abc1234def');
     world.runs.clear();
     await pipeline(DEFAULT_DELIVERY_RULES, { actingAs: 'janedoe-bot' }).line.onMerged(REPO, 41, 'def5678abc');
-    expect(world.audits.map((entry) => entry.actor)).toEqual(['fleetadlc-app', 'janedoe-bot']);
+    expect(world.audits.map((entry) => entry.actor)).toEqual(['openadlc-app', 'janedoe-bot']);
   });
 
   it('dispatches it once, however often the merge is heard', async () => {
@@ -329,11 +329,11 @@ describe('the smoke on testing', () => {
     // The file says soak for an hour; the 502 left Settings' default, which
     // promotes at once.
     world.limits = { limits: [{ name: 'environment production', detail: 'plan' }] };
-    let readError: string | null = '.github/fleetadlc.yml could not be read: GitHub answered 502: Bad Gateway';
+    let readError: string | null = '.github/openadlc.yml could not be read: GitHub answered 502: Bad Gateway';
     const { line, dispatched } = pipeline(DEFAULT_DELIVERY_RULES, { readError: () => readError });
 
     expect(await line.onTestingSmoke(REPO, 'abc1234def', 'success', null)).toBe(
-      'app@abc1234: its delivery rules could not be read (.github/fleetadlc.yml could not be read: GitHub answered 502: Bad Gateway); nothing dispatched',
+      'app@abc1234: its delivery rules could not be read (.github/openadlc.yml could not be read: GitHub answered 502: Bad Gateway); nothing dispatched',
     );
     expect(await line.onMerged(REPO, 41, 'def5678abc')).toContain('its delivery rules could not be read');
     expect(dispatched).toEqual([]);
@@ -522,11 +522,11 @@ describe('the smoke on testing', () => {
     await busy.line.onTestingSmoke(REPO, 'abc1234def', 'failure', null, {
       opened: false,
       reason: 'busy',
-      why: 'fleetadlc-deploy-janedoe was busy, and nothing asks for this revert again',
+      why: 'openadlc-deploy-janedoe was busy, and nothing asks for this revert again',
     });
     expect(busy.sentBack).toEqual([
       expect.objectContaining({
-        reason: 'The smoke failed on testing at `abc1234`. No revert is running: fleetadlc-deploy-janedoe was busy, and nothing asks for this revert again.',
+        reason: 'The smoke failed on testing at `abc1234`. No revert is running: openadlc-deploy-janedoe was busy, and nothing asks for this revert again.',
       }),
     ]);
   });
@@ -601,7 +601,7 @@ describe('a commit whose smoke went red', () => {
 
 /** A commit's row, as a merge makes it. */
 async function deployRunsEnsure(sha: string): Promise<void> {
-  const { deployRuns } = await import('@fleetadlc/db');
+  const { deployRuns } = await import('@openadlc/db');
   await deployRuns.ensure(REPO.id, sha, 40);
 }
 

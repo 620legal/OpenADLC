@@ -33,8 +33,8 @@ function member(partial: Partial<CrewMember> & Pick<CrewMember, 'name'>): CrewMe
 
 function task(partial: Partial<TaskSummary> & Pick<TaskSummary, 'kind' | 'state'>): TaskSummary {
   return {
-    subjectRef: 'fleetadlc#16',
-    issue: { repo: 'fleetadlc', number: 16, title: 'Let the board filter by label' },
+    subjectRef: 'openadlc#16',
+    issue: { repo: 'openadlc', number: 16, title: 'Let the board filter by label' },
     startedAt: null,
     endedAt: null,
     round: null,
@@ -44,7 +44,7 @@ function task(partial: Partial<TaskSummary> & Pick<TaskSummary, 'kind' | 'state'
 }
 
 const CREW = [
-  member({ name: 'janedoe-fleetadlc-flow', slot: 'automation', role: 'automation', engine: 'none', model: 'none', modelAccountId: null }),
+  member({ name: 'janedoe-openadlc-flow', slot: 'automation', role: 'automation', engine: 'none', model: 'none', modelAccountId: null }),
   member({
     name: 'irisexampleco',
     slot: 'second-reviewer',
@@ -52,21 +52,21 @@ const CREW = [
     engine: 'grok',
     model: 'newest:grok',
     modelAccountId: 'xai',
-    task: task({ kind: 'review', state: 'running', subjectRef: 'fleetadlc#31', issue: { repo: 'fleetadlc', number: 12, title: 'x' }, round: 2 }),
+    task: task({ kind: 'review', state: 'running', subjectRef: 'openadlc#31', issue: { repo: 'openadlc', number: 12, title: 'x' }, round: 2 }),
   }),
-  member({ name: 'fleetadlc-atlas-janedoe', task: task({ kind: 'implement', state: 'running', startedAt: minutesAgo(12) }) }),
+  member({ name: 'openadlc-atlas-janedoe', task: task({ kind: 'implement', state: 'running', startedAt: minutesAgo(12) }) }),
   member({
     name: 'ottoexampleco',
     slot: 'intake',
     role: 'intake',
-    task: task({ kind: 'intake', state: 'paused', subjectRef: 'fleetadlc#15', issue: { repo: 'fleetadlc', number: 15, title: 'x' }, waitingOnYou: true }),
+    task: task({ kind: 'intake', state: 'paused', subjectRef: 'openadlc#15', issue: { repo: 'openadlc', number: 15, title: 'x' }, waitingOnYou: true }),
   }),
   member({ name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: null, authorization: 'unauthorized' }),
   member({
-    name: 'fleetadlc-cipher-janedoe',
+    name: 'openadlc-cipher-janedoe',
     slot: 'security-reviewer',
     role: 'review_security',
-    lastTask: task({ kind: 'review', state: 'done', issue: { repo: 'fleetadlc', number: 12, title: 'x' }, endedAt: minutesAgo(120) }),
+    lastTask: task({ kind: 'review', state: 'done', issue: { repo: 'openadlc', number: 12, title: 'x' }, endedAt: minutesAgo(120) }),
   }),
 ];
 
@@ -75,16 +75,16 @@ const ACCOUNTS = [
   { id: 'xai', provider: 'xai', kind: 'subscription', label: 'xAI — subscription' },
 ];
 
-function page(crew: CrewMember[] = CREW, repos: string[] = ['fleetadlc']): string {
+function page(crew: CrewMember[] = CREW, repos: string[] = ['openadlc']): string {
   return renderToStaticMarkup(
     <CrewView
       crew={crew}
       accounts={ACCOUNTS}
       byBot={[
-        { bot: 'fleetadlc-atlas-janedoe', costUsd: 3.12 },
+        { bot: 'openadlc-atlas-janedoe', costUsd: 3.12 },
         { bot: 'irisexampleco', costUsd: 0.38 },
       ]}
-      header={headerData({ repos, repoColors: { fleetadlc: 'blue', api: 'teal' }, crew, budget: null, needsYou: 1 })}
+      header={headerData({ repos, repoColors: { openadlc: 'blue', api: 'teal' }, crew, budget: null, needsYou: 1 })}
       now={NOW}
     />,
   ).replace(/<!-- -->/g, '');
@@ -100,26 +100,26 @@ function cardOf(html: string, name: string): string {
 
 describe('how many tasks each seat runs at once', () => {
   it('is a choice from 1 to 16 on each seat that thinks, showing what it is now', () => {
-    const html = page([member({ name: 'fleetadlc-atlas-janedoe', maxTasks: 3 }), member({ name: 'janedoe-fleetadlc-flow', slot: 'automation', role: 'automation', engine: 'none', model: 'none' })]);
+    const html = page([member({ name: 'openadlc-atlas-janedoe', maxTasks: 3 }), member({ name: 'janedoe-openadlc-flow', slot: 'automation', role: 'automation', engine: 'none', model: 'none' })]);
 
-    const card = cardOf(html, 'fleetadlc-atlas-janedoe');
+    const card = cardOf(html, 'openadlc-atlas-janedoe');
     expect(card).toContain('>Tasks at once<');
-    expect(card).toContain('aria-label="fleetadlc-atlas-janedoe tasks at once"');
+    expect(card).toContain('aria-label="openadlc-atlas-janedoe tasks at once"');
     expect(card).toContain('<option value="3" selected="">3</option>');
     expect(card).toContain('<option value="16">16</option>');
     // The automation account thinks with nothing, and runs no tasks of its own.
-    expect(cardOf(html, 'janedoe-fleetadlc-flow')).not.toContain('Tasks at once');
+    expect(cardOf(html, 'janedoe-openadlc-flow')).not.toContain('Tasks at once');
   });
 
   it('reads as one from a bridge that does not say', () => {
-    expect(cardOf(page([member({ name: 'fleetadlc-atlas-janedoe' })]), 'fleetadlc-atlas-janedoe')).toContain('<option value="1" selected="">1</option>');
+    expect(cardOf(page([member({ name: 'openadlc-atlas-janedoe' })]), 'openadlc-atlas-janedoe')).toContain('<option value="1" selected="">1</option>');
   });
 
   it('says to keep a seat on an OpenAI or xAI subscription at one, and only above one', () => {
     // Its CLI refreshes one sign-in for every task on it; two at once may race.
     const above = page([member({ name: 'irisexampleco', engine: 'grok', modelAccountId: 'xai', maxTasks: 2 })]);
     const atOne = page([member({ name: 'irisexampleco', engine: 'grok', modelAccountId: 'xai', maxTasks: 1 })]);
-    const claude = page([member({ name: 'fleetadlc-atlas-janedoe', modelAccountId: 'max', maxTasks: 2 })]);
+    const claude = page([member({ name: 'openadlc-atlas-janedoe', modelAccountId: 'max', maxTasks: 2 })]);
 
     expect(above).toContain('Keep this at 1');
     expect(atOne).not.toContain('Keep this at 1');
@@ -131,7 +131,7 @@ describe('the crew page', () => {
   it('lists the bots in the order a request meets them', () => {
     const html = page();
     const names = [...html.matchAll(/<span class="block truncate text-sm font-semibold text-body"[^>]*>([^<]+)<\/span>/g)].map((m) => m[1]);
-    expect(names).toEqual(['ottoexampleco', 'fleetadlc-atlas-janedoe', 'Lead reviewer', 'irisexampleco', 'fleetadlc-cipher-janedoe', 'janedoe-fleetadlc-flow']);
+    expect(names).toEqual(['ottoexampleco', 'openadlc-atlas-janedoe', 'Lead reviewer', 'irisexampleco', 'openadlc-cipher-janedoe', 'janedoe-openadlc-flow']);
     expect(html).toContain(
       'Six bots, one per seat. They pick up work by role, and several can share one GitHub account: each keeps its own work and conversations. Each works across your repositories, with a separate copy of each. One is not connected yet.',
     );
@@ -139,24 +139,24 @@ describe('the crew page', () => {
 
   it('says what each is doing from its tasks, never from the status column', () => {
     const html = page();
-    expect(cardOf(html, 'fleetadlc-atlas-janedoe')).toContain('>Working<');
-    expect(cardOf(html, 'fleetadlc-atlas-janedoe')).toContain('Writing #16 · 12 min');
+    expect(cardOf(html, 'openadlc-atlas-janedoe')).toContain('>Working<');
+    expect(cardOf(html, 'openadlc-atlas-janedoe')).toContain('Writing #16 · 12 min');
     expect(cardOf(html, 'irisexampleco')).toContain('Reviewing #12 · round 2');
     expect(cardOf(html, 'ottoexampleco')).toContain('>Waiting for you<');
     expect(cardOf(html, 'ottoexampleco')).toContain('Asked you about #15');
-    expect(cardOf(html, 'fleetadlc-cipher-janedoe')).toContain('>Idle<');
-    expect(cardOf(html, 'fleetadlc-cipher-janedoe')).toContain('Reviewed #12 2 hours ago');
+    expect(cardOf(html, 'openadlc-cipher-janedoe')).toContain('>Idle<');
+    expect(cardOf(html, 'openadlc-cipher-janedoe')).toContain('Reviewed #12 2 hours ago');
     expect(html).not.toContain('stopped');
   });
 
   it('says what each thinks with and what it cost this month', () => {
     const html = page();
-    expect(cardOf(html, 'fleetadlc-atlas-janedoe')).toContain('Newest Opus · Anthropic — Max');
-    expect(cardOf(html, 'fleetadlc-atlas-janedoe')).toContain('$3.12');
+    expect(cardOf(html, 'openadlc-atlas-janedoe')).toContain('Newest Opus · Anthropic — Max');
+    expect(cardOf(html, 'openadlc-atlas-janedoe')).toContain('$3.12');
     expect(cardOf(html, 'irisexampleco')).toContain('Newest Grok · xAI — subscription');
-    expect(cardOf(html, 'janedoe-fleetadlc-flow')).toContain('No model, by design');
-    expect(cardOf(html, 'janedoe-fleetadlc-flow')).toContain('Free');
-    expect(cardOf(html, 'janedoe-fleetadlc-flow')).toContain('>On duty<');
+    expect(cardOf(html, 'janedoe-openadlc-flow')).toContain('No model, by design');
+    expect(cardOf(html, 'janedoe-openadlc-flow')).toContain('Free');
+    expect(cardOf(html, 'janedoe-openadlc-flow')).toContain('>On duty<');
   });
 
   it('names a bot with no account by its role, and offers to connect it', () => {
@@ -169,12 +169,12 @@ describe('the crew page', () => {
 
   it('offers each bot’s thread, and the model change, but no model for the automation bot', () => {
     const html = page();
-    expect(cardOf(html, 'fleetadlc-atlas-janedoe')).toMatch(/<button[^>]*>Watch it work<\/button>/);
-    expect(cardOf(html, 'fleetadlc-cipher-janedoe')).toMatch(/<button[^>]*>Open thread<\/button>/);
+    expect(cardOf(html, 'openadlc-atlas-janedoe')).toMatch(/<button[^>]*>Watch it work<\/button>/);
+    expect(cardOf(html, 'openadlc-cipher-janedoe')).toMatch(/<button[^>]*>Open thread<\/button>/);
     // Changing the model opens the seat's own settings, not the walkthrough.
-    expect(cardOf(html, 'fleetadlc-cipher-janedoe')).toMatch(/<button[^>]*>Change model<\/button>/);
-    expect(cardOf(html, 'janedoe-fleetadlc-flow')).toMatch(/<button[^>]*>See what it did<\/button>/);
-    expect(cardOf(html, 'janedoe-fleetadlc-flow')).not.toContain('Change model');
+    expect(cardOf(html, 'openadlc-cipher-janedoe')).toMatch(/<button[^>]*>Change model<\/button>/);
+    expect(cardOf(html, 'janedoe-openadlc-flow')).toMatch(/<button[^>]*>See what it did<\/button>/);
+    expect(cardOf(html, 'janedoe-openadlc-flow')).not.toContain('Change model');
   });
 
   it('is under the same header as the board, with Crew marked', () => {
@@ -228,17 +228,17 @@ describe('the crew across several repositories', () => {
 
   it('names the repository each bot is working in, beside what it is doing', () => {
     const crew = CREW.map((bot) =>
-      bot.name === 'fleetadlc-atlas-janedoe'
+      bot.name === 'openadlc-atlas-janedoe'
         ? { ...bot, task: task({ kind: 'implement', state: 'running', startedAt: minutesAgo(12), subjectRef: 'api#16', repo: 'api', issue: { repo: 'api', number: 16, title: 'x' } }) }
         : bot,
     );
-    const html = page(crew, ['api', 'fleetadlc']);
-    expect(now(html, 'fleetadlc-atlas-janedoe')).toBe('[api teal] Writing #16 · 12 min');
-    expect(now(html, 'irisexampleco')).toBe('[fleetadlc blue] Reviewing #12 · round 2');
+    const html = page(crew, ['api', 'openadlc']);
+    expect(now(html, 'openadlc-atlas-janedoe')).toBe('[api teal] Writing #16 · 12 min');
+    expect(now(html, 'irisexampleco')).toBe('[openadlc blue] Reviewing #12 · round 2');
     // What it last did, when nothing is going, and where.
-    expect(now(html, 'fleetadlc-cipher-janedoe')).toBe('[fleetadlc blue] Reviewed #12 2 hours ago');
+    expect(now(html, 'openadlc-cipher-janedoe')).toBe('[openadlc blue] Reviewed #12 2 hours ago');
     // A line about no task names no repository.
-    expect(now(html, 'janedoe-fleetadlc-flow')).toBe('Labels issues and sets the review gate');
+    expect(now(html, 'janedoe-openadlc-flow')).toBe('Labels issues and sets the review gate');
   });
 
   it('names none with only one repository, where every task is in it', () => {
@@ -248,37 +248,37 @@ describe('the crew across several repositories', () => {
 
 describe('what a card says beyond what it is doing', () => {
   const BUSY = member({
-    name: 'fleetadlc-atlas-janedoe',
+    name: 'openadlc-atlas-janedoe',
     task: task({ kind: 'implement', state: 'running', startedAt: minutesAgo(12) }),
-    queue: { running: 1, waiting: 1, queued: 2, next: { ref: 'fleetadlc#20', title: 'Retry the webhook' } },
+    queue: { running: 1, waiting: 1, queued: 2, next: { ref: 'openadlc#20', title: 'Retry the webhook' } },
     recent: [
-      { ref: 'fleetadlc#9', title: 'Add a snake game', kind: 'implement', outcome: 'done', at: minutesAgo(30), item: 'fleetadlc#9' },
-      { ref: 'fleetadlc#8', title: 'A banner', kind: 'patch', outcome: 'sent_back', at: minutesAgo(90), item: 'fleetadlc#8' },
-      { ref: 'fleetadlc#7', title: 'A page', kind: 'implement', outcome: 'failed', at: minutesAgo(200), item: 'fleetadlc#7' },
-      { ref: 'fleetadlc#6', title: 'Fourth', kind: 'implement', outcome: 'stopped', at: minutesAgo(300), item: 'fleetadlc#6' },
+      { ref: 'openadlc#9', title: 'Add a snake game', kind: 'implement', outcome: 'done', at: minutesAgo(30), item: 'openadlc#9' },
+      { ref: 'openadlc#8', title: 'A banner', kind: 'patch', outcome: 'sent_back', at: minutesAgo(90), item: 'openadlc#8' },
+      { ref: 'openadlc#7', title: 'A page', kind: 'implement', outcome: 'failed', at: minutesAgo(200), item: 'openadlc#7' },
+      { ref: 'openadlc#6', title: 'Fourth', kind: 'implement', outcome: 'stopped', at: minutesAgo(300), item: 'openadlc#6' },
     ],
     health: { state: 'ok', reasons: [] },
   });
 
   it('says what it has on and the next thing it will take', () => {
-    expect(cardOf(page([BUSY]), 'fleetadlc-atlas-janedoe')).toContain('1 running · 1 waiting for you · 2 queued · next: #20 Retry the webhook');
+    expect(cardOf(page([BUSY]), 'openadlc-atlas-janedoe')).toContain('1 running · 1 waiting for you · 2 queued · next: #20 Retry the webhook');
   });
 
   it('lists the last three it finished, each marked and opening its item on the seat’s role', () => {
-    const card = cardOf(page([BUSY]), 'fleetadlc-atlas-janedoe');
+    const card = cardOf(page([BUSY]), 'openadlc-atlas-janedoe');
     expect(card).toContain('aria-label="done"');
     expect(card).toContain('aria-label="sent back"');
     expect(card).toContain('aria-label="failed"');
     expect(card).not.toContain('Fourth');
-    expect(card).toContain(`href="/?item=${encodeURIComponent('fleetadlc#9')}&amp;role=implement"`);
+    expect(card).toContain(`href="/?item=${encodeURIComponent('openadlc#9')}&amp;role=implement"`);
   });
 
   it('marks a seat that cannot work, says why, and offers the fix', () => {
     const failing = member({
-      name: 'fleetadlc-atlas-janedoe',
+      name: 'openadlc-atlas-janedoe',
       health: { state: 'failing', reasons: [{ title: 'It cannot sign in to GitHub', action: { label: 'Reconnect', href: '/onboarding?step=github-accounts' } }] },
     });
-    const card = cardOf(page([failing]), 'fleetadlc-atlas-janedoe');
+    const card = cardOf(page([failing]), 'openadlc-atlas-janedoe');
     expect(card).toContain('data-health="failing"');
     expect(card).toContain('It cannot sign in to GitHub');
     expect(card).toMatch(/<a[^>]*href="\/onboarding\?step=github-accounts"[^>]*>Reconnect<\/a>/);
@@ -286,26 +286,26 @@ describe('what a card says beyond what it is doing', () => {
 
   it('names the fix the way its check does, not as reconnecting an account that works', () => {
     const outside = member({
-      name: 'fleetadlc-atlas-janedoe',
+      name: 'openadlc-atlas-janedoe',
       health: { state: 'failing', reasons: [{ title: 'It cannot push to exampleco/api', action: { label: 'Let the crew in', href: '/onboarding?step=access' } }] },
     });
-    const card = cardOf(page([outside]), 'fleetadlc-atlas-janedoe');
+    const card = cardOf(page([outside]), 'openadlc-atlas-janedoe');
     expect(card).toMatch(/<a[^>]*href="\/onboarding\?step=access"[^>]*>Let the crew in<\/a>/);
     expect(card).not.toContain('Reconnect account');
   });
 
   it('works its health out from its checks on a bridge that does not say', () => {
-    const checked = member({ name: 'fleetadlc-atlas-janedoe', checks: [{ id: 'bot-sign-in', title: 'The builder cannot sign in', severity: 'blocking' }] });
-    expect(cardOf(page([checked]), 'fleetadlc-atlas-janedoe')).toContain('data-health="failing"');
-    expect(cardOf(page([member({ name: 'fleetadlc-atlas-janedoe' })]), 'fleetadlc-atlas-janedoe')).toContain('data-health="ok"');
+    const checked = member({ name: 'openadlc-atlas-janedoe', checks: [{ id: 'bot-sign-in', title: 'The builder cannot sign in', severity: 'blocking' }] });
+    expect(cardOf(page([checked]), 'openadlc-atlas-janedoe')).toContain('data-health="failing"');
+    expect(cardOf(page([member({ name: 'openadlc-atlas-janedoe' })]), 'openadlc-atlas-janedoe')).toContain('data-health="ok"');
   });
 
   it('says a paused seat is paused, by whom and why, dims it, and offers Resume', () => {
-    const paused = member({ name: 'fleetadlc-atlas-janedoe', seatPaused: { by: 'janedoe', at: minutesAgo(5), why: 'changing its model' } });
+    const paused = member({ name: 'openadlc-atlas-janedoe', seatPaused: { by: 'janedoe', at: minutesAgo(5), why: 'changing its model' } });
     const html = page([paused]);
-    expect(html).toMatch(/data-seat-card="fleetadlc-atlas-janedoe"[^>]*class="[^"]*opacity-70/);
-    expect(cardOf(html, 'fleetadlc-atlas-janedoe')).toContain('title="Paused by janedoe 5 min ago: changing its model"');
-    expect(cardOf(html, 'fleetadlc-atlas-janedoe')).toMatch(/<button[^>]*>Resume<\/button>/);
+    expect(html).toMatch(/data-seat-card="openadlc-atlas-janedoe"[^>]*class="[^"]*opacity-70/);
+    expect(cardOf(html, 'openadlc-atlas-janedoe')).toContain('title="Paused by janedoe 5 min ago: changing its model"');
+    expect(cardOf(html, 'openadlc-atlas-janedoe')).toMatch(/<button[^>]*>Resume<\/button>/);
   });
 
   it('keeps the avatar choice off the card: it is in the seat’s settings', () => {
@@ -314,7 +314,7 @@ describe('what a card says beyond what it is doing', () => {
   });
 
   it('draws from a bridge that sends none of it', () => {
-    const card = cardOf(page([member({ name: 'fleetadlc-atlas-janedoe' })]), 'fleetadlc-atlas-janedoe');
+    const card = cardOf(page([member({ name: 'openadlc-atlas-janedoe' })]), 'openadlc-atlas-janedoe');
     expect(card).not.toContain('Has on');
     expect(card).toMatch(/<button[^>]*>Pause this seat<\/button>/);
   });
@@ -323,7 +323,7 @@ describe('what a card says beyond what it is doing', () => {
 describe('the crew as a table', () => {
   function table(crew: CrewMember[] = CREW): string {
     return renderToStaticMarkup(
-      <SeatTable crew={crew} accounts={ACCOUNTS} listings={null} byBot={[{ bot: 'fleetadlc-atlas-janedoe', costUsd: 3.12 }]} now={NOW} showRepo={false} onOpen={() => undefined} />,
+      <SeatTable crew={crew} accounts={ACCOUNTS} listings={null} byBot={[{ bot: 'openadlc-atlas-janedoe', costUsd: 3.12 }]} now={NOW} showRepo={false} onOpen={() => undefined} />,
     ).replace(/<!-- -->/g, '');
   }
 
@@ -342,20 +342,20 @@ describe('the crew as a table', () => {
     ]);
     expect([...html.matchAll(/data-seat-row="([^"]+)"/g)].map((match) => match[1])).toEqual([
       'ottoexampleco',
-      'fleetadlc-atlas-janedoe',
+      'openadlc-atlas-janedoe',
       'lead-reviewer',
       'irisexampleco',
-      'fleetadlc-cipher-janedoe',
-      'janedoe-fleetadlc-flow',
+      'openadlc-cipher-janedoe',
+      'janedoe-openadlc-flow',
     ]);
   });
 
   it('changes the model and the tasks at once in the row, and says what it thinks with before the accounts are read', () => {
-    const row = rowOf(table(), 'fleetadlc-atlas-janedoe');
-    expect(row).toContain('aria-label="fleetadlc-atlas-janedoe model"');
+    const row = rowOf(table(), 'openadlc-atlas-janedoe');
+    expect(row).toContain('aria-label="openadlc-atlas-janedoe model"');
     expect(row).toContain('<option value="max|newest:opus" selected="">Newest Opus · Anthropic — Max</option>');
-    expect(row).toContain('aria-label="fleetadlc-atlas-janedoe tasks at once"');
-    expect(rowOf(table(), 'janedoe-fleetadlc-flow')).toContain('No model, by design');
+    expect(row).toContain('aria-label="openadlc-atlas-janedoe tasks at once"');
+    expect(rowOf(table(), 'janedoe-openadlc-flow')).toContain('No model, by design');
   });
 
   it('says the account it acts as, and how many seats share it', () => {

@@ -1,5 +1,5 @@
-import type { GitHubClient } from '@fleetadlc/github';
-import { STAGE_KEYS, type TaskKind, type TaskState } from '@fleetadlc/shared';
+import type { GitHubClient } from '@openadlc/github';
+import { STAGE_KEYS, type TaskKind, type TaskState } from '@openadlc/shared';
 import { endedBySendingBack, stageOfTask, type IssueFacts } from './work.js';
 
 /**

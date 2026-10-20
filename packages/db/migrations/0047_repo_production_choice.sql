@@ -1,6 +1,6 @@
 -- How production ships, recorded per repository when it is set up: after a
 -- named person approves (`reviewers`, with who), or automatically after a
--- soak on testing (`auto`). It fills what `.github/fleetadlc.yml`, or the
+-- soak on testing (`auto`). It fills what `.github/openadlc.yml`, or the
 -- stored rules, leave out (`production.approval`, `production.soakMinutes`),
 -- before the schema's default does.
 --

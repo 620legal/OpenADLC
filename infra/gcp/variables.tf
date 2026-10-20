@@ -16,9 +16,9 @@ variable "zone" {
 }
 
 variable "name_prefix" {
-  description = "Prefix for the names of the resources this module makes. One install per project: the runtime secrets are named `fleet-<ref>` whatever this prefix is, and both service accounts, the host's and the bridge's, read and write every secret in the project, so two installs in one project would overwrite and read each other's credentials. Installs made before the rename to FleetADLC keep `fleet`, which `fleetadlc cloud plan` pins for them."
+  description = "Prefix for the names of the resources this module makes. One install per project: the runtime secrets are named `fleet-<ref>` whatever this prefix is, and both service accounts, the host's and the bridge's, read and write every secret in the project, so two installs in one project would overwrite and read each other's credentials. An install made under FleetADLC keeps `fleetadlc`, pinned in its settings; one from before that keeps `fleet`, which `openadlc cloud plan` pins for it."
   type        = string
-  default     = "fleetadlc"
+  default     = "openadlc"
 }
 
 variable "subnet_cidr" {
@@ -29,7 +29,7 @@ variable "subnet_cidr" {
 # ---------------------------------------------------------------- the host
 
 variable "host_machine_type" {
-  description = "Sized for the tasks the host runs at once (FLEETADLC_HOST_CAPACITY_TASKS, 4 by default), each a container with its seat's CPUs and memory: e2-standard-8 holds about four with 6 GB builders; e2-standard-16 for six to eight. Limits are caps rather than reservations, so size for the working set, not their sum."
+  description = "Sized for the tasks the host runs at once (OPENADLC_HOST_CAPACITY_TASKS, 4 by default), each a container with its seat's CPUs and memory: e2-standard-8 holds about four with 6 GB builders; e2-standard-16 for six to eight. Limits are caps rather than reservations, so size for the working set, not their sum."
   type        = string
   default     = "e2-standard-8"
 }
@@ -65,7 +65,7 @@ variable "bot_image" {
     docker driver and no bot image was ever pulled or named, so every task on a
     fresh host failed to start. The same script builds it for a laptop, so the two cannot drift.
 
-    No default, like hostd_image: the local tag `fleetadlc-bot:latest` is not
+    No default, like hostd_image: the local tag `openadlc-bot:latest` is not
     pullable from a registry, and defaulting to it would put a `docker pull` that
     can only fail into the host's boot.
   EOT
@@ -156,13 +156,13 @@ variable "humans" {
 }
 
 variable "webhook_secret" {
-  description = "The secret GitHub signs the GitHub App's webhook deliveries with. Required: `/webhooks/github` is the one path this install exposes to the internet, and the signature is the only thing that authenticates a delivery. `fleetadlc cloud configure` generates it into ~/.fleetadlc/cloud.tfvars.json; put the same value on the GitHub App's webhook. A secret the console's walkthrough stored wins over this one."
+  description = "The secret GitHub signs the GitHub App's webhook deliveries with. Required: `/webhooks/github` is the one path this install exposes to the internet, and the signature is the only thing that authenticates a delivery. `openadlc cloud configure` generates it into ~/.openadlc/cloud.tfvars.json; put the same value on the GitHub App's webhook. A secret the console's walkthrough stored wins over this one."
   type        = string
   sensitive   = true
 }
 
 variable "console_domain" {
-  description = "The domain the console is served on, for the load balancer's managed certificate: IAP needs an HTTPS load balancer, and a managed certificate needs a name to be issued for. Empty, the console is served on the install's own address under nip.io — a public wildcard DNS that resolves <console_ip>.nip.io to console_ip — so the certificate is issued and IAP works with no DNS record on day one. For a domain of your own, set it here and apply, then point an A record for it at the `console_ip` output (`fleetadlc cloud output`); changing it replaces the managed certificate, which takes time to issue."
+  description = "The domain the console is served on, for the load balancer's managed certificate: IAP needs an HTTPS load balancer, and a managed certificate needs a name to be issued for. Empty, the console is served on the install's own address under nip.io — a public wildcard DNS that resolves <console_ip>.nip.io to console_ip — so the certificate is issued and IAP works with no DNS record on day one. For a domain of your own, set it here and apply, then point an A record for it at the `console_ip` output (`openadlc cloud output`); changing it replaces the managed certificate, which takes time to issue."
   type        = string
   default     = ""
 }
@@ -207,11 +207,11 @@ variable "extra_allowed_domains" {
 }
 
 variable "registry_host" {
-  description = "The bare host name of a private npm registry the repositories install from, such as npm.internal.example: no scheme, path or port. It is added to the egress allowlist and handed to hostd as FLEETADLC_REGISTRY_HOST. The token is not a variable, so it stays out of the state: store it in Secret Manager as `fleet-registry-token` after the first apply (docs/self-hosting.md). Empty: none."
+  description = "The bare host name of a private npm registry the repositories install from, such as npm.internal.example: no scheme, path or port. It is added to the egress allowlist and handed to hostd as OPENADLC_REGISTRY_HOST. The token is not a variable, so it stays out of the state: store it in Secret Manager as `fleet-registry-token` after the first apply (docs/self-hosting.md). Empty: none."
   type        = string
   default     = ""
 
-  # fleetadlc-install writes `//<host>/:_authToken` and `registry=https://<host>/`,
+  # openadlc-install writes `//<host>/:_authToken` and `registry=https://<host>/`,
   # and the proxy matches `.<host>`: a scheme, a path or a port in it breaks all three.
   validation {
     condition     = var.registry_host == "" || can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.registry_host))
@@ -228,7 +228,7 @@ variable "notification_channels" {
 # ---------------------------------------------------------------- deploying
 
 variable "deployer_repository" {
-  description = "A GitHub repository (owner/name) whose workflow may roll new images out to this install, through Workload Identity Federation. Spelled exactly as GitHub spells it, capitals included: the token's claim is compared as a string, and `fleetadlc cloud configure --deployer` asks GitHub for the spelling. Empty: none may."
+  description = "A GitHub repository (owner/name) whose workflow may roll new images out to this install, through Workload Identity Federation. Spelled exactly as GitHub spells it, capitals included: the token's claim is compared as a string, and `openadlc cloud configure --deployer` asks GitHub for the spelling. Empty: none may."
   type        = string
   default     = ""
 
@@ -239,7 +239,7 @@ variable "deployer_repository" {
 }
 
 variable "deployer_repository_id" {
-  description = "deployer_repository's numeric id, which the provider admits it by: a name is freed by a rename or a transfer, and someone else can take it. `fleetadlc cloud configure` looks it up; by hand, `gh api repos/<owner>/<name> --jq .id`. Required when deployer_repository is set."
+  description = "deployer_repository's numeric id, which the provider admits it by: a name is freed by a rename or a transfer, and someone else can take it. `openadlc cloud configure` looks it up; by hand, `gh api repos/<owner>/<name> --jq .id`. Required when deployer_repository is set."
   type        = string
   default     = ""
 
@@ -250,7 +250,7 @@ variable "deployer_repository_id" {
 }
 
 variable "deployer_repository_owner_id" {
-  description = "The numeric id of deployer_repository's owner, user or organization. `fleetadlc cloud configure` looks it up; by hand, `gh api repos/<owner>/<name> --jq .owner.id`. Required when deployer_repository is set."
+  description = "The numeric id of deployer_repository's owner, user or organization. `openadlc cloud configure` looks it up; by hand, `gh api repos/<owner>/<name> --jq .owner.id`. Required when deployer_repository is set."
   type        = string
   default     = ""
 

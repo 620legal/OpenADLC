@@ -28,7 +28,7 @@ describe('stopping hostd', () => {
   });
 
   it('stops them all at once, so two slow stops take about the time of one', async () => {
-    // One after another they ran past the time `fleetadlc down` gives hostd.
+    // One after another they ran past the time `openadlc down` gives hostd.
     const slow = () => new Promise<void>((resolve) => setTimeout(resolve, 300));
     const started = Date.now();
     const result = await drainTasks({ active: ['one', 'two'], stateOf: async () => 'running', cancel: slow, perTaskMs: 5000 });

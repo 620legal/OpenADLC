@@ -1,4 +1,4 @@
-import { getSecretStore, internalSecretRef, type SecretStore } from '@fleetadlc/github';
+import { getSecretStore, internalSecretRef, type SecretStore } from '@openadlc/github';
 
 export interface TaskToken {
   token: string;
@@ -40,7 +40,7 @@ export class TokenClient {
   private async request(bot: string, secret: string, repository: string | null): Promise<Response> {
     return fetch(`${this.bridgeUrl}/internal/tokens/${encodeURIComponent(bot)}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': secret },
+      headers: { 'content-type': 'application/json', 'x-openadlc-internal-secret': secret },
       body: JSON.stringify({ purpose: 'task', ...(repository ? { repository } : {}) }),
     });
   }

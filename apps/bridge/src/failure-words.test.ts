@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GitHubClient } from '@fleetadlc/github';
+import { GitHubClient } from '@openadlc/github';
 import { explainFailure, withoutTransport } from './failure-words.js';
 
 /**
@@ -100,13 +100,13 @@ describe('the other causes a person can fix', () => {
   it('names the permission GitHub asked for, as the app’s page names it, with the permissions page when known', () => {
     const words = explainFailure(
       '/user/ssh_signing_keys → 403: {"message":"Resource not accessible by integration"} x-accepted-github-permissions: git_signing_ssh_public_keys=write',
-      { bot: 'fleetadlc-atlas-janedoe', permissionsUrl: 'https://github.com/settings/apps/fleetadlc-janedoe/permissions' },
+      { bot: 'openadlc-atlas-janedoe', permissionsUrl: 'https://github.com/settings/apps/openadlc-janedoe/permissions' },
     );
     expect(words.sentence).toContain('the OpenADLC app lacks “SSH signing keys”');
     expect(words.action).toEqual({
       kind: 'open_url',
       label: 'Open the app’s permissions',
-      url: 'https://github.com/settings/apps/fleetadlc-janedoe/permissions',
+      url: 'https://github.com/settings/apps/openadlc-janedoe/permissions',
     });
   });
 
@@ -116,10 +116,10 @@ describe('the other causes a person can fix', () => {
         status: 403,
         headers: { 'x-accepted-github-permissions': 'pull_requests=write' },
       })) as typeof fetch;
-    const client = new GitHubClient({ token: 'token', actingAs: 'fleetadlc-atlas-janedoe', fetchImpl });
-    const thrown = await client.requestReviewers('janedoe/fleetadlc-testbed', 4, ['janedoe']).catch((error: Error) => error);
+    const client = new GitHubClient({ token: 'token', actingAs: 'openadlc-atlas-janedoe', fetchImpl });
+    const thrown = await client.requestReviewers('janedoe/openadlc-testbed', 4, ['janedoe']).catch((error: Error) => error);
 
-    expect(explainFailure((thrown as Error).message, { bot: 'fleetadlc-atlas-janedoe' }).sentence).toContain(
+    expect(explainFailure((thrown as Error).message, { bot: 'openadlc-atlas-janedoe' }).sentence).toContain(
       'the OpenADLC app lacks “Pull requests”',
     );
   });
@@ -130,10 +130,10 @@ describe('the other causes a person can fix', () => {
         status: 404,
         headers: { 'x-accepted-github-permissions': 'contents=read' },
       })) as typeof fetch;
-    const client = new GitHubClient({ token: 'token', actingAs: 'fleetadlc-atlas-janedoe', fetchImpl });
+    const client = new GitHubClient({ token: 'token', actingAs: 'openadlc-atlas-janedoe', fetchImpl });
     const thrown = await client.viewer().catch((error: Error) => error);
 
-    expect(explainFailure((thrown as Error).message, { bot: 'fleetadlc-atlas-janedoe' }).sentence).not.toContain('lacks');
+    expect(explainFailure((thrown as Error).message, { bot: 'openadlc-atlas-janedoe' }).sentence).not.toContain('lacks');
   });
 
   it('names the permission from a 403 the app itself was refused', async () => {
@@ -145,10 +145,10 @@ describe('the other causes a person can fix', () => {
       }),
     );
     try {
-      const thrown = await APP_API.request('PUT', '/repos/janedoe/fleetadlc-testbed/collaborators/janedoe', 'token').catch(
+      const thrown = await APP_API.request('PUT', '/repos/janedoe/openadlc-testbed/collaborators/janedoe', 'token').catch(
         (error: Error) => error,
       );
-      expect(explainFailure((thrown as Error).message, { bot: 'fleetadlc-atlas-janedoe' }).sentence).toContain(
+      expect(explainFailure((thrown as Error).message, { bot: 'openadlc-atlas-janedoe' }).sentence).toContain(
         'the OpenADLC app lacks “Administration”',
       );
     } finally {
@@ -158,18 +158,18 @@ describe('the other causes a person can fix', () => {
 
   it('says a commit GitHub refused for its signature is a signing key to register, by reconnecting the bot', () => {
     const words = explainFailure('remote: error: GH006: Protected branch update failed for refs/heads/main. Commits must have verified signatures.', {
-      bot: 'fleetadlc-atlas-janedoe',
+      bot: 'openadlc-atlas-janedoe',
     });
     expect(words.sentence).toBe(
-      'GitHub refused a commit by fleetadlc-atlas-janedoe: it was not signed with a key its account has. Reconnect fleetadlc-atlas-janedoe so GitHub learns its signing key, then try again.',
+      'GitHub refused a commit by openadlc-atlas-janedoe: it was not signed with a key its account has. Reconnect openadlc-atlas-janedoe so GitHub learns its signing key, then try again.',
     );
-    expect(words.action).toEqual({ kind: 'open_page', label: 'Reconnect fleetadlc-atlas-janedoe', href: '/settings#github-accounts' });
+    expect(words.action).toEqual({ kind: 'open_page', label: 'Reconnect openadlc-atlas-janedoe', href: '/settings#github-accounts' });
   });
 
   it('says hostd not answering, with the command that starts OpenADLC again', () => {
     const words = explainFailure('hostd refused: fetch failed: connect ECONNREFUSED 127.0.0.1:47312', { bot: 'The builder' });
     expect(words.sentence).toContain('OpenADLC’s host service did not answer');
-    expect(words.action).toEqual({ kind: 'run_command', label: 'Run fleetadlc up', command: 'fleetadlc up' });
+    expect(words.action).toEqual({ kind: 'run_command', label: 'Run openadlc up', command: 'openadlc up' });
   });
 
   it('says a task OpenADLC stopped under a bot was stopped by OpenADLC, and that trying again picks it up', () => {
@@ -184,10 +184,10 @@ describe('the other causes a person can fix', () => {
 
   it('says a sign-in GitHub no longer accepts, with reconnecting as the fix', () => {
     const words = explainFailure(
-      "fleetadlc-atlas-janedoe's GitHub authorization is no longer valid (The refresh token passed is incorrect or expired.)",
-      { bot: 'fleetadlc-atlas-janedoe' },
+      "openadlc-atlas-janedoe's GitHub authorization is no longer valid (The refresh token passed is incorrect or expired.)",
+      { bot: 'openadlc-atlas-janedoe' },
     );
-    expect(words.sentence).toBe('GitHub no longer accepts the sign-in of fleetadlc-atlas-janedoe. Reconnect it, then try again.');
+    expect(words.sentence).toBe('GitHub no longer accepts the sign-in of openadlc-atlas-janedoe. Reconnect it, then try again.');
   });
 });
 

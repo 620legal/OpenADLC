@@ -38,7 +38,7 @@ const cloud: CloudConfig = {
   organization: 'example-org',
   githubClientId: 'Iv1.example',
   humans: ['ada'],
-  consoleDomain: 'fleetadlc.example.com',
+  consoleDomain: 'openadlc.example.com',
   bridgeImage: 'r/bridge:latest',
   consoleImage: 'r/console:latest',
   hostdImage: 'r/hostd:latest',
@@ -76,19 +76,19 @@ describe('what is left by hand after an apply', () => {
     // It pointed at `bridge_url`, the internal Cloud Run address, which GitHub
     // cannot reach: a webhook set there delivered nothing, and the board
     // stayed empty.
-    const steps = postApplySteps('/home/ada/.fleetadlc/cloud.tfvars.json', 'fleetadlc.example.com').join('\n');
+    const steps = postApplySteps('/home/ada/.openadlc/cloud.tfvars.json', 'openadlc.example.com').join('\n');
     expect(steps).toContain('webhook_url');
     expect(steps).toContain('GitHub App’s webhook');
-    expect(steps).toContain('webhook_secret in /home/ada/.fleetadlc/cloud.tfvars.json');
+    expect(steps).toContain('webhook_secret in /home/ada/.openadlc/cloud.tfvars.json');
     expect(steps).toContain('console’s webhook step');
     expect(steps).not.toMatch(/bridge_url|bridge URL|organization/i);
   });
 
-  it('tells the operator to run nothing on the host, which has no fleetadlc', () => {
-    for (const domain of ['fleetadlc.example.com', '']) {
-      const steps = postApplySteps('/home/ada/.fleetadlc/cloud.tfvars.json', domain);
+  it('tells the operator to run nothing on the host, which has no openadlc', () => {
+    for (const domain of ['openadlc.example.com', '']) {
+      const steps = postApplySteps('/home/ada/.openadlc/cloud.tfvars.json', domain);
       for (const step of steps) {
-        expect(step).not.toMatch(/fleetadlc (auth|doctor|github|restore)/);
+        expect(step).not.toMatch(/openadlc (auth|doctor|github|restore)/);
         expect(step).not.toMatch(/on the host/i);
       }
       const text = steps.join('\n');
@@ -101,13 +101,13 @@ describe('what is left by hand after an apply', () => {
   it('asks for a DNS record only when the operator named a domain', () => {
     // With no domain the console is on the install's own address under nip.io,
     // which resolves with no record of theirs: a DNS step would be a lie.
-    const named = postApplySteps('/home/ada/.fleetadlc/cloud.tfvars.json', 'fleetadlc.example.com')[0];
+    const named = postApplySteps('/home/ada/.openadlc/cloud.tfvars.json', 'openadlc.example.com')[0];
     expect(named).toContain('point DNS');
     expect(named).toContain('console_ip');
-    const defaulted = postApplySteps('/home/ada/.fleetadlc/cloud.tfvars.json')[0];
+    const defaulted = postApplySteps('/home/ada/.openadlc/cloud.tfvars.json')[0];
     expect(defaulted).toContain('nip.io');
     expect(defaulted).toContain('console_url');
-    expect(defaulted).toContain('"console_domain" in /home/ada/.fleetadlc/cloud.tfvars.json');
+    expect(defaulted).toContain('"console_domain" in /home/ada/.openadlc/cloud.tfvars.json');
     expect(defaulted).not.toMatch(/^point DNS/);
   });
 });
@@ -140,17 +140,17 @@ describe('a repository allowed to deploy', () => {
 
 describe('where an install keeps its state and settings', () => {
   it('is the install’s own bucket, passed at init rather than written in the module', () => {
-    expect(backendArgs({ bucket: 'b', prefix: 'fleetadlc' })).toEqual([
+    expect(backendArgs({ bucket: 'b', prefix: 'openadlc' })).toEqual([
       '-reconfigure',
       '-backend-config=bucket=b',
-      '-backend-config=prefix=fleetadlc',
+      '-backend-config=prefix=openadlc',
     ]);
     const backendTf = readFileSync(join(import.meta.dirname, '../../../../infra/gcp/backend.tf'), 'utf8');
     expect(backendTf).toMatch(/backend "gcs" \{\}/);
   });
 
   it('keeps the settings beside the state', () => {
-    expect(remoteTfVars({ bucket: 'b', prefix: 'fleetadlc' })).toBe('gs://b/fleetadlc/cloud.tfvars.json');
+    expect(remoteTfVars({ bucket: 'b', prefix: 'openadlc' })).toBe('gs://b/openadlc/cloud.tfvars.json');
   });
 
   it('names a new install OpenADLC, and says so in its settings', () => {
@@ -214,12 +214,12 @@ describe('the repository the deployer admits', () => {
 describe('configure run again on an install that has settings', () => {
   // Every run made a new webhook secret and wrote the answers alone: re-run to
   // set the deployer, it rotated the secret GitHub signs with, dropped
-  // admin_emails, and reset a pre-rename install's prefix to fleetadlc.
+  // admin_emails, and reset a pre-rename install's prefix to openadlc.
   const { webhookSecret: _secret, ...answers } = cloud;
   const fresh = () => 'f'.repeat(64);
   const existing = {
     ...tfVars({ ...cloud, webhookSecret: 'kept-secret' }, 47312),
-    name_prefix: 'fleetadlc',
+    name_prefix: 'openadlc',
     admin_emails: ['ada@example.com'],
     host_machine_type: 'e2-standard-8',
   };
@@ -268,32 +268,32 @@ describe('the console’s first admins', () => {
   });
 
   it('are warned about, with the fix, when they name nobody', () => {
-    const warning = noAdminWarning([], '/home/ada/.fleetadlc/cloud.tfvars.json');
+    const warning = noAdminWarning([], '/home/ada/.openadlc/cloud.tfvars.json');
     expect(warning).toContain('no admin');
     expect(warning).toContain('"admin_emails": ["you@example.com"]');
-    expect(warning).toContain('/home/ada/.fleetadlc/cloud.tfvars.json');
-    expect(warning).toContain('fleetadlc cloud apply');
-    expect(noAdminWarning(['ada@example.com'], '/home/ada/.fleetadlc/cloud.tfvars.json')).toBeNull();
+    expect(warning).toContain('/home/ada/.openadlc/cloud.tfvars.json');
+    expect(warning).toContain('openadlc cloud apply');
+    expect(noAdminWarning(['ada@example.com'], '/home/ada/.openadlc/cloud.tfvars.json')).toBeNull();
   });
 });
 
 describe('what configure writes on a machine with no install', () => {
-  it('makes $FLEETADLC_HOME and writes the settings and the backend there, private', () => {
+  it('makes $OPENADLC_HOME and writes the settings and the backend there, private', () => {
     // On a laptop that never ran a local install, the write failed with ENOENT
     // after every question was answered, and the answers were lost.
-    const scratch = mkdtempSync(join(tmpdir(), 'fleetadlc-cloud-'));
+    const scratch = mkdtempSync(join(tmpdir(), 'openadlc-cloud-'));
     const home = join(scratch, 'not', 'yet');
-    const before = process.env.FLEETADLC_HOME;
-    process.env.FLEETADLC_HOME = home;
+    const before = process.env.OPENADLC_HOME;
+    process.env.OPENADLC_HOME = home;
     try {
-      writeCloudFiles(tfVars(cloud, 47312), { bucket: 'b', prefix: 'fleetadlc' });
+      writeCloudFiles(tfVars(cloud, 47312), { bucket: 'b', prefix: 'openadlc' });
       expect(JSON.parse(readFileSync(join(home, 'cloud.tfvars.json'), 'utf8'))).toMatchObject({ project_id: 'example-project' });
       expect(statSync(join(home, 'cloud.tfvars.json')).mode & 0o777).toBe(0o600);
-      expect(JSON.parse(readFileSync(join(home, 'cloud.backend.json'), 'utf8'))).toEqual({ bucket: 'b', prefix: 'fleetadlc' });
+      expect(JSON.parse(readFileSync(join(home, 'cloud.backend.json'), 'utf8'))).toEqual({ bucket: 'b', prefix: 'openadlc' });
       expect(statSync(home).mode & 0o777).toBe(0o700);
     } finally {
-      if (before === undefined) delete process.env.FLEETADLC_HOME;
-      else process.env.FLEETADLC_HOME = before;
+      if (before === undefined) delete process.env.OPENADLC_HOME;
+      else process.env.OPENADLC_HOME = before;
       rmSync(scratch, { recursive: true, force: true });
     }
   });
@@ -317,15 +317,15 @@ describe('a cloud configure question that needs an answer', () => {
 
 describe('the host after an apply', () => {
   it('is reset when its cloud-init or database settings changed, since a restart runs the old prepare script', () => {
-    expect(hostNeedsReset({ host: 'fleetadlc-host-1', rollout: 'a' }, 'b')).toBe(true);
+    expect(hostNeedsReset({ host: 'openadlc-host-1', rollout: 'a' }, 'b')).toBe(true);
   });
 
   it('is reset once when its state predates the value, which is the apply that turns TLS on', () => {
-    expect(hostNeedsReset({ host: 'fleetadlc-host-1', rollout: null }, 'b')).toBe(true);
+    expect(hostNeedsReset({ host: 'openadlc-host-1', rollout: null }, 'b')).toBe(true);
   });
 
   it('is left alone when nothing it runs on changed', () => {
-    expect(hostNeedsReset({ host: 'fleetadlc-host-1', rollout: 'a' }, 'a')).toBe(false);
+    expect(hostNeedsReset({ host: 'openadlc-host-1', rollout: 'a' }, 'a')).toBe(false);
   });
 
   it('is left alone when this apply made it, because it booted on the new settings', () => {
@@ -335,16 +335,16 @@ describe('the host after an apply', () => {
   it('is reset when the apply failed after the rollout changed, not only when it exited 0', () => {
     // Terraform committed the new database URL and then failed on a later
     // resource. The host kept the old prepare script and lost the database.
-    const before = { host: 'fleetadlc-host-1', rollout: 'a' };
+    const before = { host: 'openadlc-host-1', rollout: 'a' };
     expect(applyShouldResetHost('apply', before, 'b')).toBe(true);
   });
 
   it('is left alone when a failed apply did not change what the host runs on', () => {
-    expect(applyShouldResetHost('apply', { host: 'fleetadlc-host-1', rollout: 'a' }, 'a')).toBe(false);
+    expect(applyShouldResetHost('apply', { host: 'openadlc-host-1', rollout: 'a' }, 'a')).toBe(false);
   });
 
   it('is left alone by a plan, which does not change the host', () => {
-    expect(applyShouldResetHost('plan', { host: 'fleetadlc-host-1', rollout: 'a' }, 'b')).toBe(false);
+    expect(applyShouldResetHost('plan', { host: 'openadlc-host-1', rollout: 'a' }, 'b')).toBe(false);
   });
 
   it('is reset by the apply command when Terraform exited 1 after the rollout had changed', async () => {
@@ -353,7 +353,7 @@ describe('the host after an apply', () => {
     await afterTerraform(
       'apply',
       1,
-      { host: 'fleetadlc-host-1', rollout: 'a' },
+      { host: 'openadlc-host-1', rollout: 'a' },
       { zone: 'us-central1-b', project_id: 'example-project' },
       {
         run: async (command, args) => {
@@ -367,17 +367,17 @@ describe('the host after an apply', () => {
         },
       },
     );
-    expect(ran).toEqual([['gcloud', ...hostResetArgs('fleetadlc-host-1', 'us-central1-b', 'example-project')]]);
+    expect(ran).toEqual([['gcloud', ...hostResetArgs('openadlc-host-1', 'us-central1-b', 'example-project')]]);
     // A failed apply's settings are not the ones the next operator should find.
     expect(pushed).toEqual([]);
   });
 
   it('is reset by name, in its zone and project', () => {
-    expect(hostResetArgs('fleetadlc-host-1', 'us-central1-a', 'example-project')).toEqual([
+    expect(hostResetArgs('openadlc-host-1', 'us-central1-a', 'example-project')).toEqual([
       'compute',
       'instances',
       'reset',
-      'fleetadlc-host-1',
+      'openadlc-host-1',
       '--zone',
       'us-central1-a',
       '--project',
@@ -390,10 +390,10 @@ describe('what configure offers a new install', () => {
   it('takes the project, region, console members and domain infra/gcp/install.sh found', () => {
     expect(
       configureDefaults({
-        FLEETADLC_CLOUD_PROJECT: 'acme-openadlc',
-        FLEETADLC_CLOUD_REGION: 'europe-west1',
-        FLEETADLC_CLOUD_CONSOLE_MEMBERS: 'user:alex@example.com',
-        FLEETADLC_CLOUD_DOMAIN: 'openadlc.example.com',
+        OPENADLC_CLOUD_PROJECT: 'acme-openadlc',
+        OPENADLC_CLOUD_REGION: 'europe-west1',
+        OPENADLC_CLOUD_CONSOLE_MEMBERS: 'user:alex@example.com',
+        OPENADLC_CLOUD_DOMAIN: 'openadlc.example.com',
       }),
     ).toEqual({
       projectId: 'acme-openadlc',
@@ -404,7 +404,7 @@ describe('what configure offers a new install', () => {
   });
 
   it('offers nothing it was not given, so a blank does not become an answer', () => {
-    expect(configureDefaults({ FLEETADLC_CLOUD_PROJECT: '  ', FLEETADLC_CLOUD_REGION: '' })).toEqual({
+    expect(configureDefaults({ OPENADLC_CLOUD_PROJECT: '  ', OPENADLC_CLOUD_REGION: '' })).toEqual({
       projectId: undefined,
       region: undefined,
       consoleMembers: undefined,
@@ -543,7 +543,7 @@ describe('the one answer a fresh install gives', () => {
     const { members, admins } = derived('group:eng@example.com,domain:example.com');
     expect(members).toEqual(['group:eng@example.com', 'domain:example.com']);
     expect(admins).toEqual([]);
-    expect(noAdminWarning(admins, '/home/ada/.fleetadlc/cloud.tfvars.json')).toContain('no admin');
+    expect(noAdminWarning(admins, '/home/ada/.openadlc/cloud.tfvars.json')).toContain('no admin');
   });
 
   it('mixes types without touching the typed ones', () => {

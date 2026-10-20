@@ -9,7 +9,7 @@ import { Tmux } from './tmux.js';
  * These go through the real tmux on purpose. The bug they pin was not in the
  * parsing — splitting `name\tattached` on a tab is correct — it was that tmux
  * never emits the tab: it rewrites control characters in `-F` output to '_', so
- * `#{session_name}\t#{session_attached}` arrives as `fleetadlc__atlas__shell_0`.
+ * `#{session_name}\t#{session_attached}` arrives as `openadlc__atlas__shell_0`.
  * A fixture asserting `name|attached` parses would have passed throughout, while
  * every attach in the console failed with "can't find session". Only asking the
  * tmux on this machine what it actually prints can catch that, so the round trip
@@ -25,7 +25,7 @@ const available = ((): boolean => {
 })();
 
 // A name no install would collide with, so a stray run cannot kill real work.
-const SESSION = `fleetadlc__tmuxtest__${process.pid}`;
+const SESSION = `openadlc__tmuxtest__${process.pid}`;
 const tmux = new Tmux('tmux');
 
 afterAll(async () => {
@@ -103,7 +103,7 @@ describe('a listing tmux could not give', () => {
 
 describe('a tmux that does not answer', () => {
   it('is killed after its timeout, and the listing fails rather than hanging', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-tmux-hung-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-tmux-hung-'));
     try {
       const hung = join(dir, 'tmux');
       writeFileSync(hung, '#!/bin/sh\nexec sleep 30\n');

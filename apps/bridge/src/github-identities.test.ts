@@ -25,7 +25,7 @@ const world = vi.hoisted(() => ({
   audits: [] as { action: string; target: string; payload?: Record<string, unknown> }[],
 }));
 
-vi.mock('@fleetadlc/db', () => {
+vi.mock('@openadlc/db', () => {
   const identityOf = (id: string) => {
     const bot = world.crew.find((entry) => entry.id === id);
     return world.identities.find((identity) => identity.id === bot?.identityId) ?? null;
@@ -128,8 +128,8 @@ vi.mock('@fleetadlc/db', () => {
   };
 });
 
-vi.mock('@fleetadlc/github', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@fleetadlc/github')>();
+vi.mock('@openadlc/github', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@openadlc/github')>();
   return {
     ...actual,
     requestDeviceCode: vi.fn(async () => ({
@@ -167,8 +167,8 @@ vi.mock('./github-accounts.js', () => ({
   lookUpAccount: vi.fn(async () => ({ exact: null })),
 }));
 
-import { bots, identities, repos } from '@fleetadlc/db';
-import { refreshTokenRef, setSecretStore, type SecretStore } from '@fleetadlc/github';
+import { bots, identities, repos } from '@openadlc/db';
+import { refreshTokenRef, setSecretStore, type SecretStore } from '@openadlc/github';
 import type { BotNames } from './bot-names.js';
 import { assignmentRefusal, groupOfAccount, signInStateOf } from './github-identities.js';
 import { Onboarding } from './onboarding.js';
@@ -254,7 +254,7 @@ describe('the rules for which account a seat may use', () => {
 
   it('keeps every seat off a person’s account, with a reason short enough to show beside the choice', () => {
     const people = [
-      { login: 'Exampleco-Crew', why: 'one of this install’s people (FLEETADLC_HUMANS)', short: 'one of this install’s people' },
+      { login: 'Exampleco-Crew', why: 'one of this install’s people (OPENADLC_HUMANS)', short: 'one of this install’s people' },
     ];
     expect(assignmentRefusal({ id: 'x', role: 'qa' }, crewAccount, crew, people)).toBe('one of this install’s people — bots need their own account');
     expect(assignmentRefusal({ id: 'x', role: 'review_security' }, reviewAccount, crew, people)).toBeNull();
@@ -605,7 +605,7 @@ describe('connecting an account for no bot', () => {
 
     expect(answer).toMatchObject({
       state: 'failed',
-      error: expect.stringContaining('exampleco-new is one of this install’s people (FLEETADLC_HUMANS), so no bot can sign in as it'),
+      error: expect.stringContaining('exampleco-new is one of this install’s people (OPENADLC_HUMANS), so no bot can sign in as it'),
     });
     expect(world.identities.some((identity) => identity.login === 'exampleco-new')).toBe(false);
     expect([...secrets.keys()].some((ref) => ref.includes('exampleco-new'))).toBe(false);

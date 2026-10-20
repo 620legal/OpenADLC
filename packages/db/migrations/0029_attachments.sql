@@ -2,7 +2,7 @@
 -- what the page should look like, a PDF of the requirements — and images
 -- written into an issue on GitHub, read by intake and design.
 --
--- Kept in the database, not under FLEETADLC_HOME: a cloud bridge runs on Cloud
+-- Kept in the database, not under OPENADLC_HOME: a cloud bridge runs on Cloud
 -- Run, which has no disk that outlives a revision, and Cloud SQL is the one
 -- store both installs share, already covered by backups. The store reads them
 -- through `store/attachments.ts`, so a bucket can stand behind it later

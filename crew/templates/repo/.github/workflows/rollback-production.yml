@@ -7,7 +7,7 @@ name: rollback-production
 # at its traffic shift; a promote that failed before the shift left production
 # as it was, and is not rolled back. Anyone may run it by hand.
 #
-# It runs in the `production-rollback` environment, which `fleetadlc github
+# It runs in the `production-rollback` environment, which `openadlc github
 # apply` makes with no reviewer and no wait timer, so a rollback never waits,
 # and holds to the default branch alone. Keep the credential that shifts
 # production's traffic in that environment's secrets (or an OIDC trust pinned to

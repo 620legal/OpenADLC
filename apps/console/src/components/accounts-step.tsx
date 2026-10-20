@@ -203,8 +203,8 @@ export function AccountsStep({
         {reachable === false && (
           <p className="text-[12px] leading-relaxed text-attention">
             OpenADLC’s host service (hostd), which runs the bots, is not answering, so nothing can be signed in or checked. Run{' '}
-            <code className="font-mono">fleetadlc up</code> on the machine OpenADLC runs on (
-            <code className="font-mono">fleetadlc doctor</code> says why it stopped), then reload this page.
+            <code className="font-mono">openadlc up</code> on the machine OpenADLC runs on (
+            <code className="font-mono">openadlc doctor</code> says why it stopped), then reload this page.
           </p>
         )}
 

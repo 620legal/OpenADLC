@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { answerOf, attachFailure } from './attach.js';
 
-describe('what fleetadlc attach says when it cannot attach', () => {
+describe('what openadlc attach says when it cannot attach', () => {
   // It said `fetch failed`, `bridge returned 401` or `the attach token was
   // refused`, and nothing about what to do.
   it('says the stack is down when nothing answers', () => {
     expect(attachFailure('bridge', 'unreachable', 47311)).toEqual({
       reason: 'the bridge is not answering on port 47311',
-      hint: 'start the stack: fleetadlc up',
+      hint: 'start the stack: openadlc up',
     });
     expect(attachFailure('hostd', 'unreachable', 47312).reason).toBe('hostd is not answering on port 47312');
   });
@@ -21,7 +21,7 @@ describe('what fleetadlc attach says when it cannot attach', () => {
   it('says a refused token ran out, so trying again is the remedy', () => {
     const said = attachFailure('hostd', { status: 401, error: 'attach token is expired or unknown' }, 47312);
     expect(said.reason).toBe('hostd refused the attach token: attach token is expired or unknown');
-    expect(said.hint).toContain('run fleetadlc attach again');
+    expect(said.hint).toContain('run openadlc attach again');
   });
 
   it('reads the error a JSON refusal carries, and does without one', async () => {

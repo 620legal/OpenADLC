@@ -8,9 +8,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const session = vi.hoisted(() => ({ value: undefined as string | undefined }));
 
 vi.mock('next/headers', () => ({
-  headers: async () => new Headers(session.value ? { cookie: `fleetadlc_session=${session.value}` } : {}),
+  headers: async () => new Headers(session.value ? { cookie: `openadlc_session=${session.value}` } : {}),
   cookies: async () => ({
-    get: (name: string) => (name === 'fleetadlc_session' && session.value ? { name, value: session.value } : undefined),
+    get: (name: string) => (name === 'openadlc_session' && session.value ? { name, value: session.value } : undefined),
   }),
 }));
 
@@ -26,23 +26,23 @@ afterEach(() => {
 
 describe('a server action with no session', () => {
   it('refuses before the console secret can be attached, on any path the matcher skips', async () => {
-    vi.stubEnv('FLEETADLC_IDENTITY_MODE_EXPECTED', '');
-    vi.stubEnv('FLEETADLC_CONSOLE_SECRET', SECRET);
+    vi.stubEnv('OPENADLC_IDENTITY_MODE_EXPECTED', '');
+    vi.stubEnv('OPENADLC_CONSOLE_SECRET', SECRET);
     await expect(requireLocalSession()).rejects.toThrow(/console-link/);
     await expect(identityHeaders()).rejects.toThrow(/console-link/);
   });
 
   it('attaches the secret once the session cookie checks', async () => {
-    vi.stubEnv('FLEETADLC_IDENTITY_MODE_EXPECTED', '');
-    vi.stubEnv('FLEETADLC_CONSOLE_SECRET', SECRET);
+    vi.stubEnv('OPENADLC_IDENTITY_MODE_EXPECTED', '');
+    vi.stubEnv('OPENADLC_CONSOLE_SECRET', SECRET);
     session.value = await sessionValue(SECRET);
     const sent = await identityHeaders();
-    expect(sent['x-fleetadlc-console-secret']).toBe(SECRET);
+    expect(sent['x-openadlc-console-secret']).toBe(SECRET);
   });
 
   it('leaves the check to IAP when that is how people sign in', async () => {
-    vi.stubEnv('FLEETADLC_IDENTITY_MODE_EXPECTED', 'iap');
-    vi.stubEnv('FLEETADLC_CONSOLE_SECRET', SECRET);
+    vi.stubEnv('OPENADLC_IDENTITY_MODE_EXPECTED', 'iap');
+    vi.stubEnv('OPENADLC_CONSOLE_SECRET', SECRET);
     await expect(requireLocalSession()).resolves.toBeUndefined();
   });
 });

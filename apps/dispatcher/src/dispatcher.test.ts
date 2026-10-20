@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const BODY = ['### Outcome', 'x', '### Acceptance criteria', '- x', '### Expected paths', '- src/x.ts', '### Verification', 'x'].join('\n\n');
 const LABELS = ['adlc:build', 'start:now', 'priority:p1', 'area:console', 'do:builder'];
 
-const builder = { id: 'id-builder', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', engine: 'claude' };
+const builder = { id: 'id-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', engine: 'claude' };
 const ACTIVE = { id: 'repo-api', name: 'api', fullName: 'acme/api', ownerBotId: builder.id, concurrency: 1, removedAt: null };
 const REMOVED = { id: 'repo-web', name: 'web', fullName: 'acme/web', ownerBotId: builder.id, concurrency: 1, removedAt: '2026-09-24T09:00:00.000Z' };
 
@@ -27,7 +27,7 @@ const store = vi.hoisted(() => ({
   triagedAt: new Map<number, number>(),
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async () => undefined),
   bots: { getBotById: vi.fn(async () => builder), listBots: vi.fn(async () => [builder]) },
   costs: {
@@ -76,7 +76,7 @@ vi.mock('@fleetadlc/db', () => ({
   hosts: { taskRoom: vi.fn(async () => null) },
 }));
 
-import { costs, health, issues, leases, repos, settings, spendingLimits } from '@fleetadlc/db';
+import { costs, health, issues, leases, repos, settings, spendingLimits } from '@openadlc/db';
 import { blockingOverlaps, Dispatcher, INSTALL_PAUSE_UNREAD, overlapReason, PAUSES_UNREAD, pausedRepoNames } from './dispatcher.js';
 
 function dispatcher(paused?: (repo?: string) => string | null, stopLeasing = true, dryRun = true): Dispatcher {
@@ -210,7 +210,7 @@ describe('an issue held back by work in flight', () => {
 describe('a blocked issue whose dependencies have shipped', () => {
   const WAITING = `${BODY}\n\n### Dependencies\n\n- #11`;
 
-  it('is unblocked, unless it is labelled fleetadlc:ignore', async () => {
+  it('is unblocked, unless it is labelled openadlc:ignore', async () => {
     // Unblocking swaps blocked for start:now: on an ignored issue, the crew
     // changing what it was told to leave alone.
     const asked: string[] = [];
@@ -223,7 +223,7 @@ describe('a blocked issue whose dependencies have shipped', () => {
       repoId === 'repo-api'
         ? ([
             { repoId, number: 12, labels: ['blocked', 'adlc:build'], body: WAITING, declaredPaths: [] },
-            { repoId, number: 13, labels: ['blocked', 'adlc:build', 'fleetadlc:ignore'], body: WAITING, declaredPaths: [] },
+            { repoId, number: 13, labels: ['blocked', 'adlc:build', 'openadlc:ignore'], body: WAITING, declaredPaths: [] },
           ] as never)
         : [],
     );
@@ -331,7 +331,7 @@ describe('a lease the bridge refuses', () => {
         const triaged = /^\/internal\/issues\/[^/]+\/(\d+)\/triage$/.exec(path);
         if (triaged) store.triagedAt.set(Number(triaged[1]), (store.clock += 1));
         if (path === '/internal/dispatch/lease' && answer !== 200) {
-          return new Response('{"error":"fleetadlc-atlas-janedoe is not in acme/api yet"}', { status: answer });
+          return new Response('{"error":"openadlc-atlas-janedoe is not in acme/api yet"}', { status: answer });
         }
         return new Response('{"changed":true}', { status: 200, headers: { 'content-type': 'application/json' } });
       }),
@@ -409,7 +409,7 @@ describe('a builder the bridge would refuse', () => {
   });
   beforeEach(() => {
     // `node tests/all.mjs` runs these with a scratch install's exports, scripted engines among them.
-    vi.stubEnv('FLEETADLC_SCRIPTED_ENGINES', '');
+    vi.stubEnv('OPENADLC_SCRIPTED_ENGINES', '');
   });
 
   it('is not leased to in a repository it is not in, and the decision names it and the repository', async () => {
@@ -424,7 +424,7 @@ describe('a builder the bridge would refuse', () => {
         repo: 'api',
         bot: builder.name,
         action: 'skipped',
-        reason: expect.stringMatching(/^fleetadlc-atlas-janedoe cannot work in api, so the bridge would refuse its build/),
+        reason: expect.stringMatching(/^openadlc-atlas-janedoe cannot work in api, so the bridge would refuse its build/),
       }),
     );
     expect(decisions.some((decision) => decision.action === 'leased')).toBe(false);

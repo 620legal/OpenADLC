@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import type { AppApi } from '@fleetadlc/github';
+import type { AppApi } from '@openadlc/github';
 import { AppGate } from './app-gate.js';
 
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -11,7 +11,7 @@ function fakeGitHub(permissions: Record<string, string>) {
   const api: AppApi = {
     async request<T>(method: string, path: string, _token: string, body?: unknown): Promise<T> {
       calls.push({ method, path, body });
-      if (path === '/app') return { id: 42, slug: 'fleetadlc-exampleco', permissions } as T;
+      if (path === '/app') return { id: 42, slug: 'openadlc-exampleco', permissions } as T;
       if (path.endsWith('/installation')) return { id: 7 } as T;
       if (path.endsWith('/access_tokens')) return { token: 'ghs_installation' } as T;
       if (path.includes('/check-runs?')) {
@@ -63,10 +63,10 @@ describe('the app’s own login', () => {
     // this login; the merge line reads it by that name.
     const lacking = new AppGate({ credentials: async () => credentials, api: fakeGitHub({ statuses: 'write' }).api });
     expect(await lacking.appId()).toBeNull();
-    expect(await lacking.botLogin()).toBe('fleetadlc-exampleco[bot]');
+    expect(await lacking.botLogin()).toBe('openadlc-exampleco[bot]');
 
     const holding = new AppGate({ credentials: async () => credentials, api: fakeGitHub({ checks: 'write' }).api });
-    expect(await holding.botLogin()).toBe('fleetadlc-exampleco[bot]');
+    expect(await holding.botLogin()).toBe('openadlc-exampleco[bot]');
   });
 
   it('asks GitHub once for both, while what it said is believed', async () => {

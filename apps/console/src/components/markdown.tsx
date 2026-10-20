@@ -14,7 +14,7 @@ import { withoutComments } from '@/lib/comments';
  * and inline code, bold, italics and links. It builds React elements and never
  * HTML, so nothing a bot writes can become markup, and a link is kept only when
  * it goes to http or https. Anything it does not recognise stays as the text
- * it was. The fleetadlc markers (`<!-- fleetadlc:{…} -->`) are for the bridge, not for
+ * it was. The openadlc markers (`<!-- openadlc:{…} -->`) are for the bridge, not for
  * a person, and are dropped.
  */
 
@@ -25,12 +25,12 @@ export type Block =
   | { kind: 'code'; text: string };
 
 /**
- * OpenADLC's header, as `headerFor` in @fleetadlc/shared writes it: a bold first line
+ * OpenADLC's header, as `headerFor` in @openadlc/shared writes it: a bold first line
  * followed by its invisible tag. The console reads the bridge and not the
  * packages, so the shape is repeated here; the tag is what keeps a bold first
  * line somebody wrote from being taken for it.
  */
-const FLEETADLC_HEADER = /^\*\*[^\n]*\*\*<!-- fleet(?:adlc)?-header -->[ \t]*\n*/;
+const OPENADLC_HEADER = /^\*\*[^\n]*\*\*<!-- (?:openadlc|fleetadlc|fleet)-header -->[ \t]*\n*/;
 
 const LIST_ITEM = /^\s*(?:([-*+])|(\d+)[.)])\s+(.*)$/;
 /**
@@ -56,12 +56,12 @@ function headingText(rest: string): string {
 }
 
 /**
- * The text as blocks, with HTML comments — the fleetadlc markers — taken out, and
+ * The text as blocks, with HTML comments — the openadlc markers — taken out, and
  * the header OpenADLC puts first on what it posts to GitHub (`**OpenADLC_x · design
  * agent**`): the console already shows which bot said it.
  */
 export function parseMarkdown(text: string): Block[] {
-  const lines = withoutComments(text.replace(FLEETADLC_HEADER, '')).replace(/\r\n?/g, '\n').split('\n');
+  const lines = withoutComments(text.replace(OPENADLC_HEADER, '')).replace(/\r\n?/g, '\n').split('\n');
   const blocks: Block[] = [];
   let paragraph: string[] = [];
   let list: Extract<Block, { kind: 'list' }> | null = null;

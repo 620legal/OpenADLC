@@ -12,7 +12,7 @@ const ISSUES = [
   {
     id: 'issue-16',
     repoId: 'repo-1',
-    repoName: 'fleetadlc-testbed',
+    repoName: 'openadlc-testbed',
     number: 16,
     title: 'Let the board filter by label',
     stage: 'build',
@@ -20,7 +20,7 @@ const ISSUES = [
     declaredPaths: [],
     prChangedPaths: [],
     body: '',
-    url: 'https://github.com/janedoe/fleetadlc-testbed/issues/16',
+    url: 'https://github.com/janedoe/openadlc-testbed/issues/16',
     prNumber: null,
     updatedAt: '2026-09-24T11:00:00.000Z',
     createdAt: '2026-09-24T10:00:00.000Z',
@@ -28,7 +28,7 @@ const ISSUES = [
   {
     id: 'issue-12',
     repoId: 'repo-1',
-    repoName: 'fleetadlc-testbed',
+    repoName: 'openadlc-testbed',
     number: 12,
     title: 'Record which model each review used',
     stage: 'review',
@@ -36,7 +36,7 @@ const ISSUES = [
     declaredPaths: [],
     prChangedPaths: [],
     body: '',
-    url: 'https://github.com/janedoe/fleetadlc-testbed/issues/12',
+    url: 'https://github.com/janedoe/openadlc-testbed/issues/12',
     prNumber: 31,
     updatedAt: '2026-09-24T11:00:00.000Z',
     createdAt: '2026-09-23T10:00:00.000Z',
@@ -70,7 +70,7 @@ const TASKS: {
     repoId: 'repo-1',
     kind: 'implement',
     subjectType: 'issue',
-    subjectRef: 'fleetadlc-testbed#16',
+    subjectRef: 'openadlc-testbed#16',
     state: 'running',
     round: 0,
     costUsd: 0.84,
@@ -85,7 +85,7 @@ const TASKS: {
     repoId: 'repo-1',
     kind: 'review',
     subjectType: 'pr',
-    subjectRef: 'fleetadlc-testbed#31',
+    subjectRef: 'openadlc-testbed#31',
     state: 'running',
     round: 0,
     costUsd: 0.38,
@@ -100,7 +100,7 @@ const TASKS: {
     repoId: 'repo-1',
     kind: 'patch',
     subjectType: 'pr',
-    subjectRef: 'fleetadlc-testbed#31',
+    subjectRef: 'openadlc-testbed#31',
     state: 'done',
     round: 1,
     costUsd: 0.98,
@@ -112,12 +112,12 @@ const TASKS: {
 ];
 
 const CREW = [
-  { id: 'bot-builder', name: 'fleetadlc-atlas-janedoe', slot: 'builder', displayName: 'builder', role: 'implement', status: 'stopped' },
+  { id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', displayName: 'builder', role: 'implement', status: 'stopped' },
   { id: 'bot-second', name: 'irisexampleco', slot: 'second-reviewer', displayName: 'second reviewer', role: 'review_second', status: 'stopped' },
   { id: 'bot-intake', name: 'ottoexampleco', slot: 'intake', displayName: 'intake', role: 'intake', status: 'stopped' },
 ];
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -146,7 +146,7 @@ vi.mock('@fleetadlc/db', () => ({
         ref: `${issue.repoName}#${issue.number}`,
         title: issue.title,
         stage: issue.stage,
-        assignees: issue.number === 16 ? ['fleetadlc-atlas-janedoe'] : [],
+        assignees: issue.number === 16 ? ['openadlc-atlas-janedoe'] : [],
         gateOpen: false,
         url: issue.url,
         labels: issue.labels,
@@ -163,7 +163,7 @@ vi.mock('@fleetadlc/db', () => ({
   recordEvent: vi.fn(),
   repos: {
     listRepos: vi.fn(async () => [
-      { id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed', stageModes: { merged: 'autonomous' }, color: 'teal' },
+      { id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', stageModes: { merged: 'autonomous' }, color: 'teal' },
       { id: 'repo-2', name: 'website', fullName: 'janedoe/website', stageModes: {}, color: 'amber' },
     ]),
   },
@@ -173,7 +173,7 @@ vi.mock('@fleetadlc/db', () => ({
     allSettings: vi.fn(async () => ({})),
     // The builder paused from Crew.
     getSetting: vi.fn(async (key: string) =>
-      key === 'workPausedSeats' ? JSON.stringify({ 'fleetadlc-atlas-janedoe': { by: 'janedoe', at: '2026-10-02T10:00:00.000Z', why: 'changing its model' } }) : null,
+      key === 'workPausedSeats' ? JSON.stringify({ 'openadlc-atlas-janedoe': { by: 'janedoe', at: '2026-10-02T10:00:00.000Z', why: 'changing its model' } }) : null,
     ),
   },
   stageMoves: { sendBackOfTask: vi.fn(async (taskId: string) => (taskId === SENT_BACK ? { kind: 'send_back' } : null)) },
@@ -234,18 +234,18 @@ describe('GET /v1/board', () => {
 
     const build = board.columns.find((column) => column.stage === 'build');
     expect(build?.cards[0]).toMatchObject({
-      ref: 'fleetadlc-testbed#16',
+      ref: 'openadlc-testbed#16',
       number: 16,
       costUsd: 0.84,
-      assignees: ['fleetadlc-atlas-janedoe'],
-      active: [{ bot: 'fleetadlc-atlas-janedoe', kind: 'implement', state: 'running', startedAt: '2026-09-24T11:48:00.000Z' }],
+      assignees: ['openadlc-atlas-janedoe'],
+      active: [{ bot: 'openadlc-atlas-janedoe', kind: 'implement', state: 'running', startedAt: '2026-09-24T11:48:00.000Z' }],
     });
 
     // The reviewer is on the pull request, and the card is the issue's: the
     // store's own assignees missed it.
     const review = board.columns.find((column) => column.stage === 'review');
     expect(review?.cards[0]).toMatchObject({
-      ref: 'fleetadlc-testbed#12',
+      ref: 'openadlc-testbed#12',
       prNumber: 31,
       costUsd: 1.36,
       assignees: ['irisexampleco'],
@@ -256,9 +256,9 @@ describe('GET /v1/board', () => {
 
   it('names each repository with the colour it is told apart by', async () => {
     const board = (await (await fetch(`${bridgeUrl}/v1/board`)).json()) as { repos: string[]; repositories: unknown[] };
-    expect(board.repos).toEqual(['fleetadlc-testbed', 'website']);
+    expect(board.repos).toEqual(['openadlc-testbed', 'website']);
     expect(board.repositories).toEqual([
-      { name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed', color: 'teal' },
+      { name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', color: 'teal' },
       { name: 'website', fullName: 'janedoe/website', color: 'amber' },
     ]);
   });
@@ -266,13 +266,13 @@ describe('GET /v1/board', () => {
   it('leaves off the cards of a repository removed from OpenADLC, which are history now', async () => {
     const board = (await (await fetch(`${bridgeUrl}/v1/board`)).json()) as { columns: Column[] };
     const refs = board.columns.flatMap((column) => column.cards.map((card) => card.ref));
-    expect(refs).toContain('fleetadlc-testbed#16');
+    expect(refs).toContain('openadlc-testbed#16');
     expect(refs).not.toContain('retired#3');
   });
 
-  it('leaves off an issue labelled fleetadlc:ignore and its pull request in the merge line, and brings them back without it', async () => {
-    const { issues, mergeLines } = await import('@fleetadlc/db');
-    const entry = (prNumber: number) => ({ repoName: 'fleetadlc-testbed', prNumber, position: prNumber === 31 ? 1 : 2, state: 'queued', detail: null, enteredAt: '2026-09-24T11:00:00.000Z' });
+  it('leaves off an issue labelled openadlc:ignore and its pull request in the merge line, and brings them back without it', async () => {
+    const { issues, mergeLines } = await import('@openadlc/db');
+    const entry = (prNumber: number) => ({ repoName: 'openadlc-testbed', prNumber, position: prNumber === 31 ? 1 : 2, state: 'queued', detail: null, enteredAt: '2026-09-24T11:00:00.000Z' });
     const read = async (labels: string[]) => {
       const labelled = ISSUES.map((one) => (one.number === 12 ? { ...one, labels } : one));
       vi.mocked(issues.listIssues).mockResolvedValueOnce(labelled as never);
@@ -281,18 +281,18 @@ describe('GET /v1/board', () => {
       return { cards: board.columns.flatMap((column) => column.cards.map((card) => card.ref)), line: board.mergeLine.map((one) => one.ref) };
     };
 
-    const ignored = await read(['adlc:review', 'fleetadlc:ignore']);
-    expect(ignored.cards).toContain('fleetadlc-testbed#16');
-    expect(ignored.cards).not.toContain('fleetadlc-testbed#12');
-    expect(ignored.line).toEqual(['fleetadlc-testbed#40']);
+    const ignored = await read(['adlc:review', 'openadlc:ignore']);
+    expect(ignored.cards).toContain('openadlc-testbed#16');
+    expect(ignored.cards).not.toContain('openadlc-testbed#12');
+    expect(ignored.line).toEqual(['openadlc-testbed#40']);
 
     const back = await read(['adlc:review']);
-    expect(back.cards).toContain('fleetadlc-testbed#12');
-    expect(back.line).toEqual(['fleetadlc-testbed#31', 'fleetadlc-testbed#40']);
+    expect(back.cards).toContain('openadlc-testbed#12');
+    expect(back.line).toEqual(['openadlc-testbed#31', 'openadlc-testbed#40']);
   });
 
   it('puts a request intake is asking about in Intake, on its repository’s board and not another’s', async () => {
-    const { requests, threads } = await import('@fleetadlc/db');
+    const { requests, threads } = await import('@openadlc/db');
     const asking = {
       ...TASKS[0]!,
       id: 'task-intake',
@@ -326,14 +326,14 @@ describe('GET /v1/board', () => {
       expect(await intakeOf('')).toEqual([
         expect.objectContaining({
           ref: 'request:57796b82',
-          repo: 'fleetadlc-testbed',
+          repo: 'openadlc-testbed',
           title: 'Add a keyboard-controlled snake game at snake.html',
           request: true,
           gateOpen: true,
           costUsd: 0.41,
         }),
       ]);
-      expect(await intakeOf('?repo=fleetadlc-testbed')).toHaveLength(1);
+      expect(await intakeOf('?repo=openadlc-testbed')).toHaveLength(1);
       expect(await intakeOf('?repo=website')).toEqual([]);
     } finally {
       TASKS.pop();
@@ -360,8 +360,8 @@ describe('GET /v1/bots', () => {
       kind: 'review',
       state: 'running',
       // Which repository, since a bot works in any of them.
-      repo: 'fleetadlc-testbed',
-      issue: { repo: 'fleetadlc-testbed', number: 12, title: 'Record which model each review used' },
+      repo: 'openadlc-testbed',
+      issue: { repo: 'openadlc-testbed', number: 12, title: 'Record which model each review used' },
       round: 2,
       // Round two of the three config/review.yaml allows, and this review's own cost.
       maxRounds: 3,
@@ -369,14 +369,14 @@ describe('GET /v1/bots', () => {
       waitingOnYou: false,
     });
 
-    const builder = body.bots.find((bot) => bot.name === 'fleetadlc-atlas-janedoe');
+    const builder = body.bots.find((bot) => bot.name === 'openadlc-atlas-janedoe');
     expect(builder?.task).toMatchObject({ kind: 'implement', issue: { number: 16 }, costUsd: 0.84 });
     expect(builder?.lastTask).toMatchObject({ kind: 'patch', state: 'done', issue: { number: 12 } });
   });
 
   it('says each seat’s pause, its work in hand, what it last finished and how, and its health, for the Crew page', async () => {
     const body = (await (await fetch(`${bridgeUrl}/v1/bots`)).json()) as { bots: Record<string, unknown>[] };
-    const builder = body.bots.find((bot) => bot.name === 'fleetadlc-atlas-janedoe');
+    const builder = body.bots.find((bot) => bot.name === 'openadlc-atlas-janedoe');
     const reviewer = body.bots.find((bot) => bot.name === 'irisexampleco');
 
     expect(builder?.seatPaused).toEqual({ by: 'janedoe', at: '2026-10-02T10:00:00.000Z', why: 'changing its model' });
@@ -384,7 +384,7 @@ describe('GET /v1/bots', () => {
     expect(builder?.queue).toMatchObject({ running: 1, waiting: 0, queued: 0, next: null });
     expect(builder?.recent).toEqual([
       // With what it cost: the seat panel's History says so beside each.
-      expect.objectContaining({ ref: 'fleetadlc-testbed#31', kind: 'patch', outcome: 'done', title: 'Record which model each review used', item: 'fleetadlc-testbed#12', costUsd: 0.98 }),
+      expect.objectContaining({ ref: 'openadlc-testbed#31', kind: 'patch', outcome: 'done', title: 'Record which model each review used', item: 'openadlc-testbed#12', costUsd: 0.98 }),
     ]);
     expect(builder?.health).toEqual({ state: 'ok', reasons: [] });
   });
@@ -396,7 +396,7 @@ describe('GET /v1/bots', () => {
       healthOf([
         { title: 'Its key expires soon', checkId: 'token-expiry', severity: 'warning', action: null },
         { title: 'It cannot sign in', checkId: 'bot-sign-in', severity: 'blocking', action: { label: 'Reconnect it', href: '/settings#github' } },
-        { title: 'Run a command', checkId: 'x', severity: 'warning', action: { label: 'Copy', command: 'fleetadlc up' } },
+        { title: 'Run a command', checkId: 'x', severity: 'warning', action: { label: 'Copy', command: 'openadlc up' } },
       ]),
     ).toEqual({
       state: 'failing',

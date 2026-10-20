@@ -254,7 +254,7 @@ export async function seedScriptedBoard(): Promise<void> {
     await threads.addMessage({
       threadId: thread.id,
       kind: 'sys',
-      author: 'fleetadlc',
+      author: 'openadlc',
       text: `${builder.displayName} started implement on ${subjects.implement}`,
       note: `engine ${builder.engine} · model ${builder.model} · cap $15`,
       payload: mark,

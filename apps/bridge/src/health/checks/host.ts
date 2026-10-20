@@ -24,7 +24,7 @@ export function hostCheck(hostd: { health(): Promise<{ ok: boolean }> }): Health
           detail:
             'hostd starts every bot’s work, so nothing new can start and nothing running can report back. ' +
             'Start OpenADLC again on the machine it runs on.',
-          action: { label: 'Run fleetadlc up', command: 'fleetadlc up' },
+          action: { label: 'Run openadlc up', command: 'openadlc up' },
         },
       ];
     },
@@ -66,8 +66,8 @@ export function hostDriverCheck(hostd: { health(): Promise<{ ok: boolean; driver
             'It can read the GitHub App’s private key, every bot’s sign-in, the model keys and the database password, ' +
             'and can run anything here. Use the local driver only with a throwaway App, accounts and repositories. ' +
             'To give each task its own container, build the bot image with `infra/local/build-bot-image.sh`, ' +
-            'then run `fleetadlc init --driver docker` and `fleetadlc down && fleetadlc up`.',
-          action: { label: 'Switch to the docker driver', command: 'infra/local/build-bot-image.sh && fleetadlc init --driver docker' },
+            'then run `openadlc init --driver docker` and `openadlc down && openadlc up`.',
+          action: { label: 'Switch to the docker driver', command: 'infra/local/build-bot-image.sh && openadlc init --driver docker' },
         },
       ];
     },

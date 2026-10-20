@@ -10,7 +10,7 @@ allow:
   # from this skill. Nothing on GitHub does; see docs/security.md.
   files:
     # The review, written to a file and posted with `--body-file`. Never committed.
-    write_within: [".fleetadlc-scratch/**"]
+    write_within: [".openadlc-scratch/**"]
 
 deny:
   shell: [curl, wget, ssh, docker, sudo, make, pnpm, npm, uv, python, python3, node]

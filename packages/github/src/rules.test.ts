@@ -1,4 +1,4 @@
-import { REQUIRED_CHECK, REVIEW_GATE_CHECK } from '@fleetadlc/shared';
+import { REQUIRED_CHECK, REVIEW_GATE_CHECK } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
 import { GitHubApiError } from './client.js';
 import { codeownersRepair,
@@ -32,11 +32,11 @@ import { codeownersRepair,
 } from './rules.js';
 
 const INPUT: RepoRulesInput = {
-  fullName: 'exampleco/FleetADLC',
+  fullName: 'exampleco/OpenADLC',
   defaultBranch: 'main',
   // The names GitHub actually publishes; `checks.ts` is where they are stated.
   requiredChecks: [REQUIRED_CHECK, REVIEW_GATE_CHECK],
-  leadReviewer: 'fleetadlc-sydney',
+  leadReviewer: 'openadlc-sydney',
   humans: ['janedoe'],
   productionReviewers: ['janedoe'],
   appId: 4242,
@@ -401,7 +401,7 @@ describe('apply then check reports everything present', () => {
 });
 
 describe('an apply that does not know the app’s id', () => {
-  // `fleetadlc github apply` built its rules without the app and wrote the
+  // `openadlc github apply` built its rules without the app and wrote the
   // console's ruleset back with no bypass and an unpinned review gate, which
   // any crew account could then set.
   it('leaves a ruleset that names the app as a bypass actor and pins the gate, and says where to apply from', async () => {
@@ -796,7 +796,7 @@ describe('repairing a CODEOWNERS that names nobody who can review', () => {
 
 /**
  * What a private repository on a plan without environment protection rules
- * actually does — measured against `janedoe/fleetadlc-testbed`, where clicking
+ * actually does — measured against `janedoe/openadlc-testbed`, where clicking
  * apply returned a 422 and left nine things unwritten.
  */
 describe('a plan that will not hold an environment protection rule', () => {
@@ -1837,7 +1837,7 @@ describe('repairing an OpenADLC ruleset keeps what a person added', () => {
     await settles(github, MAIN_RULESET);
   });
 
-  it('keeps a person’s rule when it renames a ruleset from before FleetADLC', async () => {
+  it('keeps a person’s rule when it renames a ruleset from before OpenADLC', async () => {
     const github = await applied();
     const main = named(github, MAIN_RULESET);
     main.name = 'fleet: main';
@@ -1868,7 +1868,7 @@ describe('repairing an OpenADLC ruleset keeps what a person added', () => {
     const { ruleset, removed } = repairedRuleset(desired, {
       ...desired,
       id: 3,
-      source: 'exampleco/FleetADLC',
+      source: 'exampleco/OpenADLC',
       _links: {},
       conditions: { ref_name: { include: [], exclude: ['~DEFAULT_BRANCH'] } },
     } as never);
@@ -1877,16 +1877,16 @@ describe('repairing an OpenADLC ruleset keeps what a person added', () => {
   });
 });
 
-describe('a ruleset named before the rename to FleetADLC', () => {
-  it('is the same ruleset: reported as drifted, renamed by the next apply, never written twice', async () => {
+describe('a ruleset named before the renames to FleetADLC and OpenADLC', () => {
+  it.each(['fleetadlc: ', 'fleet: '])('named "%smain" is the same ruleset: reported as drifted, renamed by the next apply, never written twice', async (prefix) => {
     const github = new FakeGitHub();
     github.workflows = ['ci.yml'];
     await applyRepoRules(github, INPUT);
-    for (const ruleset of github.rulesets) ruleset.name = ruleset.name.replace('fleetadlc: ', 'fleet: ');
+    for (const ruleset of github.rulesets) ruleset.name = ruleset.name.replace('openadlc: ', prefix);
 
     const reports = await checkRepoRules(github, INPUT);
     expect(stateOf(reports, MAIN_RULESET)).toBe('drifted');
-    expect(reports.find((report) => report.name === MAIN_RULESET)?.detail).toContain('named "fleet: main"');
+    expect(reports.find((report) => report.name === MAIN_RULESET)?.detail).toContain(`named "${prefix}main"`);
 
     const outcomes = await applyRepoRules(github, INPUT);
     expect(outcomes.find((outcome) => outcome.name === MAIN_RULESET)?.action).toBe('updated');
@@ -1978,7 +1978,7 @@ describe('the production environment follows the delivery rules', () => {
 
       const production = outcomes.find((one) => one.name === 'environment production');
       expect(production).toMatchObject({ action: 'skipped', detail: NO_PRODUCTION_REVIEWER });
-      expect(production?.detail).toContain('fleetadlc github apply --production reviewers --reviewer <login>');
+      expect(production?.detail).toContain('openadlc github apply --production reviewers --reviewer <login>');
       expect(productionPuts(github)).toHaveLength(1);
       expect(productionPuts(github).some((call) => Array.isArray((call.body as { reviewers?: unknown }).reviewers))).toBe(false);
     });

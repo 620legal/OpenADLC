@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { modelAccountRef, setSecretStore, TASK_TOKEN_HEADER, taskTokenFor, type SecretStore } from '@fleetadlc/github';
-import type { AccountCheck, SubscriptionLogin } from '@fleetadlc/shared';
+import { modelAccountRef, setSecretStore, TASK_TOKEN_HEADER, taskTokenFor, type SecretStore } from '@openadlc/github';
+import type { AccountCheck, SubscriptionLogin } from '@openadlc/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const SEAT = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 const CLAUDE_SEAT = '550e8400-e29b-41d4-a716-446655440000';
 const INSTALL_SECRET = 'install-secret-for-the-test';
-const PLATFORM = { 'x-fleetadlc-internal-secret': INSTALL_SECRET, 'x-fleetadlc-on-behalf-of': 'ada' };
+const PLATFORM = { 'x-openadlc-internal-secret': INSTALL_SECRET, 'x-openadlc-on-behalf-of': 'ada' };
 /** A sign-in folder's auth.json, encoded here rather than written out for a secret scanner to raise. */
 const SIGN_IN_FILE = Buffer.from('{"tokens":"zzz"}').toString('base64');
 
@@ -28,7 +28,7 @@ const ACCOUNTS: Record<string, { id: string; provider: string; kind: string }> =
   [CLAUDE_SEAT]: { id: CLAUDE_SEAT, provider: 'anthropic', kind: 'subscription' },
 };
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async () => undefined),
   bots: {
     setBotStatus: vi.fn(),
@@ -41,7 +41,7 @@ vi.mock('@fleetadlc/db', () => ({
   tasks: { getTask: vi.fn(async () => null) },
 }));
 
-import { audit } from '@fleetadlc/db';
+import { audit } from '@openadlc/db';
 
 function memory(initial: Record<string, string> = {}): SecretStore {
   const data = new Map(Object.entries(initial));
@@ -123,7 +123,7 @@ async function start(
 }
 
 beforeEach(() => {
-  loginRoot = mkdtempSync(join(tmpdir(), 'fleetadlc-server-logins-'));
+  loginRoot = mkdtempSync(join(tmpdir(), 'openadlc-server-logins-'));
   vi.mocked(audit).mockClear();
   // Readiness counts a key in hostd's own environment too; none here.
   delete process.env.ANTHROPIC_API_KEY;
@@ -358,7 +358,7 @@ describe('a take-over token asked for by task', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.websocketPath).toBe('/terminal');
-    expect(response.body.subprotocol).toBe(`fleetadlc-attach.${String(response.body.token)}`);
+    expect(response.body.subprotocol).toBe(`openadlc-attach.${String(response.body.token)}`);
     expect(JSON.stringify(response.body)).not.toContain('?token=');
   });
 

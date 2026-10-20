@@ -13,7 +13,7 @@ import { afterAll, describe, expect, it } from 'vitest';
  */
 
 const SHIM = join(import.meta.dirname, '..', 'bin', 'gh');
-const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-gh-run-'));
+const dir = mkdtempSync(join(tmpdir(), 'openadlc-gh-run-'));
 const reached = join(dir, 'reached.log');
 const fakeBin = join(dir, 'bin');
 
@@ -50,10 +50,10 @@ function file(name: string, text: string): string {
 describe('signing a review that names no pull request, end to end', () => {
   it('asks the real gh for the current branch’s pull request before it posts', () => {
     const run = gh(['pr', 'review', '--approve', '--body', 'ok'], {
-      FLEETADLC_BOT: 'lead',
-      FLEETADLC_TASK_ID: 'task-1',
+      OPENADLC_BOT: 'lead',
+      OPENADLC_TASK_ID: 'task-1',
       // Nothing answers here: the post goes out unsigned, as before.
-      FLEETADLC_BRIDGE_URL: 'http://127.0.0.1:1',
+      OPENADLC_BRIDGE_URL: 'http://127.0.0.1:1',
     });
     expect(run.status).toBe(0);
     const calls = (run.reachedGh ?? '').split('\n');
@@ -62,7 +62,7 @@ describe('signing a review that names no pull request, end to end', () => {
   });
 
   it('asks nothing outside a task', () => {
-    const run = gh(['pr', 'review', '--approve', '--body', 'ok'], { FLEETADLC_BOT: 'lead', FLEETADLC_BRIDGE_URL: 'http://127.0.0.1:1' });
+    const run = gh(['pr', 'review', '--approve', '--body', 'ok'], { OPENADLC_BOT: 'lead', OPENADLC_BRIDGE_URL: 'http://127.0.0.1:1' });
     expect(run.status).toBe(0);
     expect(run.reachedGh).not.toContain('pr view');
     expect(run.reachedGh).toMatch(/^pr review --approve --body-file /);
@@ -110,7 +110,7 @@ describe('the gh a session runs, end to end', () => {
   });
 
   describe('an advisory reviewer', () => {
-    const advisory = { FLEETADLC_REVIEW_MODE: 'advisory' };
+    const advisory = { OPENADLC_REVIEW_MODE: 'advisory' };
 
     it('cannot approve through the API, as a field or in a JSON body', () => {
       expect(gh(['api', 'repos/exampleco/api/pulls/7/reviews', '-f', 'event=APPROVE'], advisory).reachedGh).toBeNull();

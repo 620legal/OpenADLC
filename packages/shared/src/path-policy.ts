@@ -4,7 +4,7 @@ import { pathMatches } from './path-overlap.js';
 
 /**
  * What a conflict resolution and a stacked build read of a repository's
- * `.github/fleetadlc.yml`:
+ * `.github/openadlc.yml`:
  *
  * ```yaml
  * paths:

@@ -1,4 +1,4 @@
-import { audit, repos } from '@fleetadlc/db';
+import { audit, repos } from '@openadlc/db';
 import type { Reach, ReachFix } from './app-reach.js';
 import type { CrewAccess, InvitationService } from './invitation-service.js';
 
@@ -189,7 +189,7 @@ export class CrewAccessKeeper {
     const changes = error ? [] : bots.filter((bot) => isNews(previous.get(bot.bot), bot));
     if (changes.length > 0 || (error && error !== before?.error)) {
       await audit({
-        actor: options.actor ?? 'fleetadlc',
+        actor: options.actor ?? 'openadlc',
         action: 'repo.crew_access',
         target: repository,
         payload: {

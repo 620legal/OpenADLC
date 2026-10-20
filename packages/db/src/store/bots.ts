@@ -1,4 +1,4 @@
-import { isAvatar, isCrewColor, MAX_TASKS_PER_SEAT, nextSeat, type Avatar, type Bot, type BotRole, type CrewColor, type EngineName } from '@fleetadlc/shared';
+import { isAvatar, isCrewColor, MAX_TASKS_PER_SEAT, nextSeat, type Avatar, type Bot, type BotRole, type CrewColor, type EngineName } from '@openadlc/shared';
 import { query, queryOne, withTransaction } from '../client.js';
 import { ModelAccountNotFound, get as getModelAccount } from './modelAccounts.js';
 
@@ -13,7 +13,7 @@ export class AssignmentRefused extends Error {
 }
 
 /**
- * What `fleetadlc up` writes back for the fields a person can change from the
+ * What `openadlc up` writes back for the fields a person can change from the
  * console.
  *
  * The configuration is the fresh-install default. An assignment made in the
@@ -146,7 +146,7 @@ const CONTAINER_PREFIX_ON_HOST = (hostParam: string) =>
               order by (b.container <> 'bot-' || b.name) desc, b.updated_at desc limit 1), 'bot-')`;
 
 /**
- * Seeds a seat from configuration: what `fleetadlc up` writes for each entry in
+ * Seeds a seat from configuration: what `openadlc up` writes for each entry in
  * config/bots.yaml.
  *
  * Found by the seat, never by the name. A new seat's row is named after the
@@ -155,13 +155,13 @@ const CONTAINER_PREFIX_ON_HOST = (hostParam: string) =>
  * handle, and the file has no say in that — and takes everything else the
  * file describes.
  *
- * `engine` and `model` are updated to whatever the caller passes. `fleetadlc up`
+ * `engine` and `model` are updated to whatever the caller passes. `openadlc up`
  * passes `keptOnReseed`, so a console assignment's engine and model are what
  * come back in, and the YAML does not replace them. `model_set_at` stays only
  * while the model and the engine are the ones the console chose; anything else
  * means the model now came from here. `model_account_id` stays while the
  * engine does, which is how a console assignment keeps its account through
- * `fleetadlc up`: the seed writes that assignment's engine back, and the account
+ * `openadlc up`: the seed writes that assignment's engine back, and the account
  * is the one that engine was chosen for. A new engine is a new provider, and
  * an account for the old one would hand the engine a key it cannot use.
  *
@@ -243,7 +243,7 @@ export class SeatRefused extends Error {
  * Nothing else is made here. hostd makes a computer for each task as it
  * starts (`tasks.container`), and the account is chosen on the crew table like
  * any other seat's.
- * `fleetadlc up` only ever adds and updates the seats the file names, so a seat
+ * `openadlc up` only ever adds and updates the seats the file names, so a seat
  * added here stays.
  *
  * The next free seat is worked out under a lock on the table, so two clicks
@@ -615,7 +615,7 @@ export async function setBotStatus(name: string, status: Bot['status']): Promise
  * question, asked by the route before it gets here.
  *
  * `model_set_at` is what marks the assignment as the console's, so the next
- * `fleetadlc up` leaves its engine, model and account alone.
+ * `openadlc up` leaves its engine, model and account alone.
  */
 export async function setAssignment(
   botId: string,

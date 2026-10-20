@@ -25,8 +25,8 @@ rebuilt and hostd restarted).
 1. **`crew/skills/<name>/SKILL.md`**, the instructions. Copy the shape of
    `crew/skills/implement/SKILL.md`: `## Do this, in order`, `## Asking a person`,
    `## Stop and ask when`, `## Never`, `## Markers`. A marker is the last line of
-   a comment, `<!-- fleetadlc:{"event":"pr_opened"} -->`, and its event is one of
-   `FLEETADLC_EVENTS` in `packages/shared/src/markers.ts`: the bridge learns what a
+   a comment, `<!-- openadlc:{"event":"pr_opened"} -->`, and its event is one of
+   `OPENADLC_EVENTS` in `packages/shared/src/markers.ts`: the bridge learns what a
    bot did from it, and reads a comment without one as narration.
 2. **`crew/skills/<name>/tools.yaml`**, what the engine may do: `allow.shell` (command
    prefixes, `git rev-parse` as well as `git`), `deny.shell`,
@@ -109,8 +109,8 @@ it says is still open in `docs/unverified.md`.
 `apps/hostd/src/skill-runner.test.ts` covers the brief.
 
 ```bash
-pnpm --filter @fleetadlc/tests exec vitest run skills.test.ts
-pnpm --filter @fleetadlc/hostd exec vitest run src/skill-runner.test.ts
+pnpm --filter @openadlc/tests exec vitest run skills.test.ts
+pnpm --filter @openadlc/hostd exec vitest run src/skill-runner.test.ts
 ```
 
 ## A role playbook
@@ -218,7 +218,7 @@ the write scope with `<declared_paths>` left out, so a skill whose only entry is
 | `allow.shell` | `--allowedTools Bash(<command>:*)`, one rule each | `--allow Bash(<command>:*)`, under a run home that refuses what no rule allows; its own read-only commands run regardless | Any entry: a sandbox that runs commands, with the network; none: `read-only` |
 | `deny.shell` | `--disallowedTools Bash(<command>:*)` | `--deny Bash(<command>:*)`, `kubectl` unless allowed, and `Bash` outright when nothing is allowed | Not translated |
 | `allow.files.write_within` | Non-empty: `Edit` and `Write` allowed; every run is in `acceptEdits` mode, so empty: `Edit`, `Write`, `MultiEdit` and `NotebookEdit` in `--disallowedTools` | Non-empty: `Edit(./**)` and `Write(./**)`; empty: both denied, a shell `>` included | Not translated |
-| `allow.git`, `deny.github` | `FLEETADLC_TOOLS_POLICY`, applied by OpenADLC's `git` and `gh` | The same | The same |
+| `allow.git`, `deny.github` | `OPENADLC_TOOLS_POLICY`, applied by OpenADLC's `git` and `gh` | The same | The same |
 
 Claude Code rules were once a single `Bash(make,pnpm,git,…)`, which it reads as
 one literal command, so every shell call needed an approval nobody could give.
@@ -258,12 +258,12 @@ reason.
 | The stage | `STAGE_KEYS` (the board's order), `STAGE_LABELS`, `STAGE_COLUMN_TITLES`, the forward moves, and the stages a send-back may go to (`BACKWARD`, and `stageBefore` when there is more than one) in `packages/shared/src/stages.ts` |
 | Its mode | The `stageModes` default in `packages/shared/src/config.ts`, and `config/repos.yaml` |
 | The database | A migration widening the `stage` check on `issues` (`0001_init.sql`) and the `from_stage` and `to_stage` checks on `stage_moves` (`0031_stage_moves.sql`), and setting the `stage_modes` default on `repos` (last set in `0018_assist_is_autonomous.sql`: copy that value, not 0001's), all in `packages/db/migrations/` |
-| The label | `config/labels.json`; `fleetadlc github sync-labels` writes it to each repository |
+| The label | `config/labels.json`; `openadlc github sync-labels` writes it to each repository |
 | Who works it | `STAFFING`, `stageAfterIntake` and `stageAfterTask` in `apps/bridge/src/stage-handoff.ts`; `stageOfTask` in `apps/bridge/src/work.ts`; `stageOfSender` in `apps/bridge/src/send-back.ts` if its tasks may send work back; `PAST_DESIGN` in `apps/bridge/src/design-memory.ts` if it comes after Design |
 | The board | `STAGES` in `apps/console/src/lib/stages.ts`, a copy with a subtitle each; the empty-column words in `apps/console/src/components/board-view.tsx`; the status line in `apps/console/src/lib/card-status.ts` |
 
 The console keeps its own copy of the stages because it does not depend on
-`@fleetadlc/shared`, whose barrel carries the config loader and `node:fs`. A stage
+`@openadlc/shared`, whose barrel carries the config loader and `node:fs`. A stage
 worked by a new kind of task also needs `TASK_KINDS` in
 `packages/shared/src/types.ts`, a migration widening the `kind` check on
 `tasks`, and the words for its work in `apps/bridge/src/attention.ts` and
@@ -287,7 +287,7 @@ reaches, an account only a person can create, a sign-in approved in a browser, a
 permission added on the app's page — comes with a check that proves it was done,
 by its effect rather than by a setting that says so. The same check is the card
 while it fails, the notification when it lasts, the tick on the walkthrough's
-step and a line in `fleetadlc doctor`.
+step and a line in `openadlc doctor`.
 
 1. **The check**, in `apps/bridge/src/health/checks/`, beside the others. It is a
    `HealthCheck` (`apps/bridge/src/health/types.ts`): a stable `id`, a sentence
@@ -330,7 +330,7 @@ step and a line in `fleetadlc doctor`.
 
 No migration: every row is kept in `health_checks` by its id.
 
-**Tests.** A block in `apps/bridge/src/health/checks/fleetadlc-checks.test.ts` or
+**Tests.** A block in `apps/bridge/src/health/checks/openadlc-checks.test.ts` or
 `github-checks.test.ts` with fake readers: failing, passing after failing, and
 unknown. `apps/bridge/src/health/registry.test.ts` fails for a `MANUAL_STEPS`
 entry no registered check answers — a step the system would never tell anybody
@@ -339,7 +339,7 @@ proves and how.
 
 ## A database migration
 
-Migrations are forward-only, numbered, and never edited once merged. `fleetadlc up`
+Migrations are forward-only, numbered, and never edited once merged. `openadlc up`
 applies every file in `packages/db/migrations/` it has not applied yet, in name
 order, each in a transaction, and records the file's name in
 `schema_migrations` (`packages/db/src/migrate.ts`). An edited file never runs
@@ -348,7 +348,7 @@ A rollback is a traffic decision, never a schema one.
 
 1. **`packages/db/migrations/<NNNN>_<what>.sql`**, numbered after the highest.
    Open with a comment saying why, as every one does. It runs on installs that
-   already have rows, inside `fleetadlc up`, and a failure stops the install:
+   already have rows, inside `openadlc up`, and a failure stops the install:
    - `create table if not exists` and `add column if not exists`;
    - a check added to a table with rows is `not valid`, so old rows cannot fail
      it (`0008_model_assignment.sql`);
@@ -373,6 +373,6 @@ The command never creates the database, and waits half a minute before saying
 one it names does not exist, so make an empty one first:
 
 ```bash
-createdb -h 127.0.0.1 -p <port> -U fleetadlc scratch
-DATABASE_URL=postgres://fleetadlc:fleetadlc@127.0.0.1:<port>/scratch pnpm db:migrate
+createdb -h 127.0.0.1 -p <port> -U openadlc scratch
+DATABASE_URL=postgres://openadlc:openadlc@127.0.0.1:<port>/scratch pnpm db:migrate
 ```

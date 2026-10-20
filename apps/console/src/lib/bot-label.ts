@@ -5,7 +5,7 @@
  * what is on its commits, its reviews and its comments, and the role is what
  * it does here, so a sentence names both — "the second reviewer
  * (irisexampleco)" — as the bridge's own sentences do (`botInWords` in
- * `@fleetadlc/shared`; `bot-label.test.ts` fails if the two disagree). A handle
+ * `@openadlc/shared`; `bot-label.test.ts` fails if the two disagree). A handle
  * alone said which account but not which bot. Where there is room for one
  * word, a connected bot is its handle.
  *
@@ -24,7 +24,7 @@
 /**
  * Each role, the seat a bot in it fills, and what the role is called.
  *
- * The words are `roleLabel` in `@fleetadlc/shared`, which the bridge sends with the
+ * The words are `roleLabel` in `@openadlc/shared`, which the bridge sends with the
  * onboarding and engines views. The crew and thread views carry only the role,
  * so the words are copied here — the console does not depend on that package,
  * for the reason `stages.ts` gives — and `bot-label.test.ts` fails if the two

@@ -88,7 +88,7 @@ function renderNotHeard(status: WebhookStatus): string {
  * switching it on is a numbered step with the link.
  */
 describe('the webhook step when GitHub has sent nothing', () => {
-  const SETTINGS = 'https://github.com/settings/apps/fleetadlc-janedoe';
+  const SETTINGS = 'https://github.com/settings/apps/openadlc-janedoe';
   const unheard = ready({
     ready: false,
     configured: true,
@@ -97,10 +97,10 @@ describe('the webhook step when GitHub has sent nothing', () => {
     lastDelivery: null,
     unheard: [
       {
-        subject: 'fleetadlc-testbed#1',
+        subject: 'openadlc-testbed#1',
         what: 'imported',
         title: 'Document the webhook step',
-        url: 'https://github.com/janedoe/fleetadlc-testbed/issues/1',
+        url: 'https://github.com/janedoe/openadlc-testbed/issues/1',
         happenedAt: '2026-09-24T17:10:00Z',
         foundAt: '2026-09-24T17:15:00Z',
       },
@@ -111,13 +111,13 @@ describe('the webhook step when GitHub has sent nothing', () => {
     const html = renderNotHeard(unheard);
     expect(html).toContain('GitHub is not sending events to OpenADLC.');
     expect(html).toContain('Open the app’s settings and turn on Active under Webhook.');
-    expect(html).toContain('OpenADLC found fleetadlc-testbed#1 by reading the repository; GitHub never delivered it.');
+    expect(html).toContain('OpenADLC found openadlc-testbed#1 by reading the repository; GitHub never delivered it.');
     expect(html).not.toContain('GitHub delivers to this bridge');
   });
 
   it('makes switching it on a numbered step, with the link, checked by the first delivery', () => {
     const html = renderNotHeard(unheard);
-    expect(html).toMatch(/<ol[^>]*><li><a href="https:\/\/github\.com\/settings\/apps\/fleetadlc-janedoe" target="_blank"/);
+    expect(html).toMatch(/<ol[^>]*><li><a href="https:\/\/github\.com\/settings\/apps\/openadlc-janedoe" target="_blank"/);
     expect(html).toContain('Under <span class="font-medium">Webhook</span>, tick <span class="font-medium">Active</span>.');
     expect(html).toContain('Save changes');
     expect(html).toContain('when GitHub’s first delivery arrives');

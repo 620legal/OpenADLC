@@ -12,8 +12,8 @@ export interface ReadinessCheck {
   fix?: { href: string; label: string };
 }
 
-/** The ruleset OpenADLC puts on a repository's default branch; `MAIN_RULESET` in `@fleetadlc/github`. */
-const MAIN_RULESET = 'fleetadlc: main';
+/** The ruleset OpenADLC puts on a repository's default branch; `MAIN_RULESET` in `@openadlc/github`. */
+const MAIN_RULESET = 'openadlc: main';
 
 interface PlanReport {
   name: string;

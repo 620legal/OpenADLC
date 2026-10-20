@@ -1,4 +1,4 @@
-import { settings as settingKeys } from '@fleetadlc/db';
+import { settings as settingKeys } from '@openadlc/db';
 import { describe, expect, it } from 'vitest';
 import type { BackupContents } from './archive.js';
 import { chosenArchive, compareInstall, itemsOf, refusedComparisonChoice, taken, type Comparison } from './compare.js';
@@ -51,44 +51,44 @@ function installB(): Partial<MemoryState> {
     secrets: {
       'internal-api-secret': 'zzz-b-internal-zzz',
       'github-app-private-key': 'zzz-b-app-key-zzz',
-      'ssh-signing-fleetadlc-atlas-janedoe': VALUES.builderSigning,
-      'github-refresh-fleetadlc-atlas-janedoe': VALUES.builderRefresh,
-      'ssh-signing-fleetadlc-other': 'zzz-other-signing-zzz',
-      'github-refresh-fleetadlc-other': OTHER_REFRESH,
+      'ssh-signing-openadlc-atlas-janedoe': VALUES.builderSigning,
+      'github-refresh-openadlc-atlas-janedoe': VALUES.builderRefresh,
+      'ssh-signing-openadlc-other': 'zzz-other-signing-zzz',
+      'github-refresh-openadlc-other': OTHER_REFRESH,
       [`model-account-${KEY_ACCOUNT}`]: B_KEY,
       [`model-account-${GROK_ACCOUNT}`]: 'xai-zzz-grok-key-zzz',
     },
     bots: [
       {
-        name: 'fleetadlc-atlas-janedoe',
+        name: 'openadlc-atlas-janedoe',
         slot: 'builder',
-        githubLogin: 'fleetadlc-atlas-janedoe',
+        githubLogin: 'openadlc-atlas-janedoe',
         engine: 'claude',
         model: 'newest:sonnet',
         modelAccountId: KEY_ACCOUNT,
         modelSetAt: '2026-09-10T00:00:00.000Z',
-        identity: 'fleetadlc-atlas-janedoe',
+        identity: 'openadlc-atlas-janedoe',
       },
       {
-        name: 'fleetadlc-other',
+        name: 'openadlc-other',
         slot: 'lead-reviewer',
-        githubLogin: 'fleetadlc-other',
+        githubLogin: 'openadlc-other',
         engine: 'claude',
         model: 'newest:opus',
         modelAccountId: KEY_ACCOUNT,
         modelSetAt: '2026-09-10T00:00:00.000Z',
-        identity: 'fleetadlc-other',
+        identity: 'openadlc-other',
       },
       { name: 'automation', slot: 'automation', githubLogin: null, engine: 'none', model: 'none', modelAccountId: null, modelSetAt: null },
     ],
     // Each seat on an account of its own, filed under its own name, as migration 0014 left every install.
     identities: [
-      { login: 'fleetadlc-atlas-janedoe', githubUserId: 101, secretNs: 'fleetadlc-atlas-janedoe' },
-      { login: 'fleetadlc-other', githubUserId: 555, secretNs: 'fleetadlc-other' },
+      { login: 'openadlc-atlas-janedoe', githubUserId: 101, secretNs: 'openadlc-atlas-janedoe' },
+      { login: 'openadlc-other', githubUserId: 555, secretNs: 'openadlc-other' },
     ],
     credentials: {
-      'fleetadlc-atlas-janedoe': {
-        githubLogin: 'fleetadlc-atlas-janedoe',
+      'openadlc-atlas-janedoe': {
+        githubLogin: 'openadlc-atlas-janedoe',
         githubUserId: 101,
         scopes: [],
         tokenExpiresAt: '2026-09-24T18:00:00.000Z',
@@ -97,8 +97,8 @@ function installB(): Partial<MemoryState> {
         authorizedAt: '2026-09-01T11:00:00.000Z',
         status: 'active',
       },
-      'fleetadlc-other': {
-        githubLogin: 'fleetadlc-other',
+      'openadlc-other': {
+        githubLogin: 'openadlc-other',
         githubUserId: 555,
         scopes: [],
         tokenExpiresAt: null,
@@ -110,8 +110,8 @@ function installB(): Partial<MemoryState> {
     },
     repositories: [
       {
-        name: 'fleetadlc-testbed',
-        fullName: 'janedoe/fleetadlc-testbed',
+        name: 'openadlc-testbed',
+        fullName: 'janedoe/openadlc-testbed',
         ownerSeat: 'builder',
         concurrency: 1,
         stageModes: { merged: 'autonomous' },
@@ -171,7 +171,7 @@ describe('an archive laid beside an install that is set up', () => {
     expect(state('setting:operatorEmail')).toBe('different');
     expect(state('setting:engineUpdates')).toBe('new');
     expect(state('setting:publicUrl')).toBe('only-here');
-    expect(state('repo:janedoe/fleetadlc-testbed')).toBe('different');
+    expect(state('repo:janedoe/openadlc-testbed')).toBe('different');
     expect(state('repo:janedoe/widgets')).toBe('only-here');
     expect(state('seat:builder:account')).toBe('same');
     expect(state('seat:builder:model')).toBe('different');
@@ -239,7 +239,7 @@ describe('an archive laid beside an install that is set up', () => {
     expect(comparison.choices['setting:engineUpdates']).toBe(true);
     expect(comparison.choices[`account:${CLAUDE_SEAT}`]).toBe(true);
     expect(comparison.choices.history).toBe(true);
-    for (const key of ['app', 'setting:operatorEmail', 'repo:janedoe/fleetadlc-testbed', 'seat:lead-reviewer:account', 'seat:builder:model']) {
+    for (const key of ['app', 'setting:operatorEmail', 'repo:janedoe/openadlc-testbed', 'seat:lead-reviewer:account', 'seat:builder:model']) {
       expect(comparison.choices[key]).toBe(false);
     }
     for (const key of ['setting:organization', 'setting:publicUrl', 'repo:janedoe/widgets', 'seat:builder:account']) {
@@ -252,10 +252,10 @@ describe('an archive laid beside an install that is set up', () => {
 
     expect(find(comparison, 'app').differences).toEqual(['its private key differs']);
     expect(find(comparison, 'setting:operatorEmail').differences).toEqual(['ops@b.example.test here, alex@example.test in the backup']);
-    expect(find(comparison, 'repo:janedoe/fleetadlc-testbed').differences).toEqual(['builds at once: 1 here, 2 in the backup']);
+    expect(find(comparison, 'repo:janedoe/openadlc-testbed').differences).toEqual(['builds at once: 1 here, 2 in the backup']);
     expect(find(comparison, 'seat:lead-reviewer:account')).toMatchObject({
-      accounts: { here: 'fleetadlc-other', backup: 'fleetadlc-sydney-janedoe' },
-      differences: ['fleetadlc-other here, fleetadlc-sydney-janedoe in the backup'],
+      accounts: { here: 'openadlc-other', backup: 'openadlc-sydney-janedoe' },
+      differences: ['openadlc-other here, openadlc-sydney-janedoe in the backup'],
     });
     expect(find(comparison, 'seat:builder:model').differences).toEqual([
       'model: newest:sonnet here, newest:opus in the backup',
@@ -344,8 +344,8 @@ describe('an archive laid beside an install that is set up', () => {
       choices: { ...comparison.choices, 'seat:lead-reviewer:account': true, 'signin:bot:lead-reviewer': true },
     });
     const switchedPlan = previewRestore({ contents: switched.contents, shape: install.shape(), signIns, choices: switched.signIns }).plan;
-    expect(switchedPlan.bots.replace).toEqual([{ name: 'fleetadlc-other', from: 'fleetadlc-other', to: 'fleetadlc-sydney-janedoe' }]);
-    expect(switchedPlan.secrets.remove).toEqual(['github-refresh-fleetadlc-other']);
+    expect(switchedPlan.bots.replace).toEqual([{ name: 'openadlc-other', from: 'openadlc-other', to: 'openadlc-sydney-janedoe' }]);
+    expect(switchedPlan.secrets.remove).toEqual(['github-refresh-openadlc-other']);
     expect(switched.signIns['bot:lead-reviewer']).toBe(true);
   });
 
@@ -356,10 +356,10 @@ describe('an archive laid beside an install that is set up', () => {
       contents,
       here: install.view(),
       comparison,
-      choices: { ...comparison.choices, 'repo:janedoe/fleetadlc-testbed': true, history: false },
+      choices: { ...comparison.choices, 'repo:janedoe/openadlc-testbed': true, history: false },
     });
 
-    expect(chosen.contents.repositories?.map((repo) => repo.name)).toEqual(['fleetadlc-testbed']);
+    expect(chosen.contents.repositories?.map((repo) => repo.name)).toEqual(['openadlc-testbed']);
     expect(chosen.contents.history).toBeNull();
     expect(Object.keys(chosen.contents.settings)).toEqual(['engineUpdates']);
     expect(chosen.contents.secrets).not.toHaveProperty('github-app-private-key');
@@ -384,10 +384,10 @@ describe('a seat made the backup’s account', () => {
     });
 
     expect(report.signIns.find((line) => line.key === 'bot:lead-reviewer')?.state).toBe('refused');
-    expect(install.state().bots.find((bot) => bot.slot === 'lead-reviewer')?.githubLogin).toBe('fleetadlc-sydney-janedoe');
+    expect(install.state().bots.find((bot) => bot.slot === 'lead-reviewer')?.githubLogin).toBe('openadlc-sydney-janedoe');
     // No token, and no record claiming one: the bot is to be connected, not counted as connected.
-    expect(install.state().secrets).not.toHaveProperty('github-refresh-fleetadlc-other');
-    expect(install.state().credentials).not.toHaveProperty('fleetadlc-other');
+    expect(install.state().secrets).not.toHaveProperty('github-refresh-openadlc-other');
+    expect(install.state().credentials).not.toHaveProperty('openadlc-other');
   });
 });
 
@@ -395,8 +395,8 @@ describe('undoing a seat whose sign-in had already been refused', () => {
   it('puts back the record of it, which counts nobody as connected, and no token', async () => {
     const setUp = installB();
     setUp.secrets = { ...setUp.secrets };
-    delete setUp.secrets['github-refresh-fleetadlc-other'];
-    setUp.credentials = { ...setUp.credentials, 'fleetadlc-other': { ...setUp.credentials!['fleetadlc-other']!, status: 'revoked' } };
+    delete setUp.secrets['github-refresh-openadlc-other'];
+    setUp.credentials = { ...setUp.credentials, 'openadlc-other': { ...setUp.credentials!['openadlc-other']!, status: 'revoked' } };
     const install = memoryInstall(setUp);
     const before = install.state();
     const snapshot = buildBackup(install.view(), { ...EVERYTHING, history: true }, NOW).contents;
@@ -413,7 +413,7 @@ describe('undoing a seat whose sign-in had already been refused', () => {
       takeOver: fakeTakeOver({ refuse: [VALUES.reviewerRefresh] }).ports,
       actor: 'alex@example.test',
     });
-    expect(install.state().credentials).not.toHaveProperty('fleetadlc-other');
+    expect(install.state().credentials).not.toHaveProperty('openadlc-other');
 
     const plan = planUndo(snapshot, journal, install.shape());
     expect(plan.drop.credentials).toEqual([]);
@@ -428,7 +428,7 @@ describe('undoing a seat whose sign-in had already been refused', () => {
     });
 
     expect(install.state().credentials).toEqual(before.credentials);
-    expect(install.state().secrets).not.toHaveProperty('github-refresh-fleetadlc-other');
+    expect(install.state().secrets).not.toHaveProperty('github-refresh-openadlc-other');
   });
 });
 
@@ -475,7 +475,7 @@ describe('a restore into a set-up install, and its undo', () => {
 
     const choices = {
       ...comparison.choices,
-      'repo:janedoe/fleetadlc-testbed': true,
+      'repo:janedoe/openadlc-testbed': true,
       'seat:lead-reviewer:account': true,
       'signin:bot:lead-reviewer': true,
       [`signin:account:${CODEX_SEAT}`]: true,
@@ -483,7 +483,7 @@ describe('a restore into a set-up install, and its undo', () => {
     expect(refusedComparisonChoice(comparison, choices)).toBeNull();
     const chosen = chosenArchive({ contents, here: install.view(), comparison, choices });
     const journal = journalOf({ id: 'r1', now: NOW, actor: 'alex@example.test', contents, chosen: chosen.contents, comparison, choices });
-    const takeOver = fakeTakeOver({ logins: { ...REFRESH_LOGINS, [OTHER_REFRESH]: 'fleetadlc-other' } });
+    const takeOver = fakeTakeOver({ logins: { ...REFRESH_LOGINS, [OTHER_REFRESH]: 'openadlc-other' } });
     const ports = { ...takeOver.ports, adoptLogin: async (id: string, files: typeof CODEX_LOGIN) => (install.adopt(files, id), { ok: true, message: 'answered: OK' }) };
 
     const report = await runRestore({
@@ -503,7 +503,7 @@ describe('a restore into a set-up install, and its undo', () => {
     expect(after.settings.operatorEmail).toBe('ops@b.example.test');
     expect(after.settings.publicUrl).toBe('https://b.example.test');
     expect(after.secrets['github-app-private-key']).toBe('zzz-b-app-key-zzz');
-    expect(after.repositories.find((repo) => repo.name === 'fleetadlc-testbed')?.concurrency).toBe(2);
+    expect(after.repositories.find((repo) => repo.name === 'openadlc-testbed')?.concurrency).toBe(2);
     expect(after.repositories.find((repo) => repo.name === 'widgets')?.removed).toBeFalsy();
     expect(after.bots.find((bot) => bot.slot === 'builder')?.model).toBe('newest:sonnet');
     expect(after.accounts.map((account) => account.id).sort()).toEqual([KEY_ACCOUNT, CLAUDE_SEAT, CODEX_SEAT, GROK_ACCOUNT].sort());
@@ -512,10 +512,10 @@ describe('a restore into a set-up install, and its undo', () => {
     expect(after.secrets).not.toHaveProperty(`model-account-${CLAUDE_SEAT}`);
     expect(after.secrets[`model-account-${KEY_ACCOUNT}`]).toBe(B_KEY);
     // The reviewer is the backup's account now, holding the token GitHub gave for its sign-in.
-    expect(after.bots.find((bot) => bot.slot === 'lead-reviewer')?.githubLogin).toBe('fleetadlc-sydney-janedoe');
+    expect(after.bots.find((bot) => bot.slot === 'lead-reviewer')?.githubLogin).toBe('openadlc-sydney-janedoe');
     expect(takeOver.refreshed).toEqual([VALUES.reviewerRefresh]);
-    expect(after.secrets['github-refresh-fleetadlc-other']).toBe('ghr_zzz-fresh-refresh-1-zzz');
-    expect(after.secrets['ssh-signing-fleetadlc-other']).toBe(VALUES.reviewerSigning);
+    expect(after.secrets['github-refresh-openadlc-other']).toBe('ghr_zzz-fresh-refresh-1-zzz');
+    expect(after.secrets['ssh-signing-openadlc-other']).toBe(VALUES.reviewerSigning);
     expect(after.logins[CODEX_SEAT]).toEqual(CODEX_LOGIN);
     expect(after.history.threads.map((thread) => thread.id)).toContain(HISTORY.threads[0]?.id);
     expect(report.signIns.find((line) => line.key === `account:${CLAUDE_SEAT}`)?.state).toBe('blocked');
@@ -526,7 +526,7 @@ describe('a restore into a set-up install, and its undo', () => {
       settings: ['engineUpdates'],
       install: ['registry-token'],
       seats: [{ seat: 'lead-reviewer', account: true, model: false, signIn: true }],
-      repositories: ['janedoe/fleetadlc-testbed'],
+      repositories: ['janedoe/openadlc-testbed'],
       accounts: [CLAUDE_SEAT, CODEX_SEAT],
       accountCredentials: [CODEX_SEAT],
     });
@@ -543,7 +543,7 @@ describe('a restore into a set-up install, and its undo', () => {
       now: NOW,
       clientId: { after: VALUES.clientId, archive: VALUES.clientId },
     });
-    const back = fakeTakeOver({ logins: { [OTHER_REFRESH]: 'fleetadlc-other' } });
+    const back = fakeTakeOver({ logins: { [OTHER_REFRESH]: 'openadlc-other' } });
     const outcome = await applyUndo({
       plan,
       signIns: undoSignIns,
@@ -558,10 +558,10 @@ describe('a restore into a set-up install, and its undo', () => {
     // The reviewer's own sign-in was taken back by using it; nothing else of the
     // install is anything but what it was.
     expect(back.refreshed).toEqual([OTHER_REFRESH]);
-    expect(outcome.signIns).toEqual([{ key: 'bot:lead-reviewer', who: 'fleetadlc-other', state: 'taken-over' }]);
-    expect(undone.secrets['github-refresh-fleetadlc-other']).toBe('ghr_zzz-fresh-refresh-1-zzz');
-    const { 'github-refresh-fleetadlc-other': _taken, ...secretsNow } = undone.secrets;
-    const { 'github-refresh-fleetadlc-other': _had, ...secretsBefore } = before.secrets;
+    expect(outcome.signIns).toEqual([{ key: 'bot:lead-reviewer', who: 'openadlc-other', state: 'taken-over' }]);
+    expect(undone.secrets['github-refresh-openadlc-other']).toBe('ghr_zzz-fresh-refresh-1-zzz');
+    const { 'github-refresh-openadlc-other': _taken, ...secretsNow } = undone.secrets;
+    const { 'github-refresh-openadlc-other': _had, ...secretsBefore } = before.secrets;
     expect(secretsNow).toEqual(secretsBefore);
     expect(undone.settings).toEqual(before.settings);
     expect(undone.bots).toEqual(before.bots);
@@ -570,7 +570,7 @@ describe('a restore into a set-up install, and its undo', () => {
     expect(undone.repositories.filter((repo) => !repo.removed).map(({ removed: _removed, ...repo }) => repo)).toEqual(before.repositories);
     expect(undone.logins).toEqual(before.logins);
     expect(undone.history).toEqual(before.history);
-    expect(undone.credentials['fleetadlc-other']).toMatchObject({ githubLogin: 'fleetadlc-other', githubUserId: 7, status: 'active' });
+    expect(undone.credentials['openadlc-other']).toMatchObject({ githubLogin: 'openadlc-other', githubUserId: 7, status: 'active' });
   });
 
   it('does not put a seat back on an account whose sign-in no longer works over the one that does, and says so', async () => {
@@ -589,7 +589,7 @@ describe('a restore into a set-up install, and its undo', () => {
       takeOver: fakeTakeOver({ logins: REFRESH_LOGINS }).ports,
       actor: 'alex@example.test',
     });
-    const working = install.state().secrets['github-refresh-fleetadlc-other'];
+    const working = install.state().secrets['github-refresh-openadlc-other'];
 
     const plan = planUndo(snapshot, journal, install.shape());
     const undoSignIns = await judgeSignIns({
@@ -613,7 +613,7 @@ describe('a restore into a set-up install, and its undo', () => {
     expect(outcome.signIns).toEqual([
       {
         key: 'bot:lead-reviewer',
-        who: 'fleetadlc-other',
+        who: 'openadlc-other',
         state: 'kept',
         reason: 'GitHub did not accept it: The refresh token passed is incorrect or expired.',
       },
@@ -622,13 +622,13 @@ describe('a restore into a set-up install, and its undo', () => {
     expect(outcome.keptSeats).toEqual([
       {
         seat: 'lead-reviewer',
-        login: 'fleetadlc-sydney-janedoe',
+        login: 'openadlc-sydney-janedoe',
         reason: 'GitHub did not accept it: The refresh token passed is incorrect or expired.',
       },
     ]);
-    expect(install.state().bots.find((bot) => bot.slot === 'lead-reviewer')?.githubLogin).toBe('fleetadlc-sydney-janedoe');
-    expect(install.state().secrets['github-refresh-fleetadlc-other']).toBe(working);
-    expect(install.state().credentials['fleetadlc-other']?.githubLogin).toBe('fleetadlc-sydney-janedoe');
+    expect(install.state().bots.find((bot) => bot.slot === 'lead-reviewer')?.githubLogin).toBe('openadlc-sydney-janedoe');
+    expect(install.state().secrets['github-refresh-openadlc-other']).toBe(working);
+    expect(install.state().credentials['openadlc-other']?.githubLogin).toBe('openadlc-sydney-janedoe');
     // Everything else the restore touched went back.
     expect(install.state().settings.engineUpdates).toBeUndefined();
   });
@@ -640,11 +640,11 @@ describe('undoing a seat whose old account had a token that does not expire', ()
   /** Install B, with the lead reviewer's account (A) signed in by a token that does not expire. */
   function staticInstall() {
     const b = installB();
-    const { 'github-refresh-fleetadlc-other': _refresh, ...secrets } = b.secrets ?? {};
+    const { 'github-refresh-openadlc-other': _refresh, ...secrets } = b.secrets ?? {};
     return memoryInstall({
       ...b,
-      secrets: { ...secrets, 'github-token-fleetadlc-other': OTHER_TOKEN },
-      credentials: { ...b.credentials, 'fleetadlc-other': { ...b.credentials!['fleetadlc-other']!, refreshExpiresAt: null } },
+      secrets: { ...secrets, 'github-token-openadlc-other': OTHER_TOKEN },
+      credentials: { ...b.credentials, 'openadlc-other': { ...b.credentials!['openadlc-other']!, refreshExpiresAt: null } },
     });
   }
 
@@ -667,8 +667,8 @@ describe('undoing a seat whose old account had a token that does not expire', ()
     });
     const restored = install.state();
     // B's sign-in, filed under the name A's was.
-    expect(restored.bots.find((bot) => bot.slot === 'lead-reviewer')?.githubLogin).toBe('fleetadlc-sydney-janedoe');
-    expect(restored.secrets['github-refresh-fleetadlc-other']).toBe('ghr_zzz-fresh-refresh-1-zzz');
+    expect(restored.bots.find((bot) => bot.slot === 'lead-reviewer')?.githubLogin).toBe('openadlc-sydney-janedoe');
+    expect(restored.secrets['github-refresh-openadlc-other']).toBe('ghr_zzz-fresh-refresh-1-zzz');
 
     const plan = planUndo(snapshot, journal, install.shape());
     const undoSignIns = await judgeSignIns({
@@ -694,28 +694,28 @@ describe('undoing a seat whose old account had a token that does not expire', ()
   it('puts back A’s token and takes away B’s sign-in under that name, so the seat acts as the account it is recorded as', async () => {
     // Left there, B's refresh token is what the broker reads first: the seat
     // went on acting as B while OpenADLC recorded it as A.
-    const { install, outcome } = await restoreThenUndo(fakeChecks({ users: { [OTHER_TOKEN]: 'fleetadlc-other' } }).checks);
+    const { install, outcome } = await restoreThenUndo(fakeChecks({ users: { [OTHER_TOKEN]: 'openadlc-other' } }).checks);
 
-    expect(outcome.signIns).toEqual([{ key: 'bot:lead-reviewer', who: 'fleetadlc-other', state: 'restored' }]);
+    expect(outcome.signIns).toEqual([{ key: 'bot:lead-reviewer', who: 'openadlc-other', state: 'restored' }]);
     const after = install.state();
-    expect(after.secrets['github-token-fleetadlc-other']).toBe(OTHER_TOKEN);
-    expect(after.secrets).not.toHaveProperty('github-refresh-fleetadlc-other');
-    expect(after.bots.find((bot) => bot.slot === 'lead-reviewer')?.githubLogin).toBe('fleetadlc-other');
+    expect(after.secrets['github-token-openadlc-other']).toBe(OTHER_TOKEN);
+    expect(after.secrets).not.toHaveProperty('github-refresh-openadlc-other');
+    expect(after.bots.find((bot) => bot.slot === 'lead-reviewer')?.githubLogin).toBe('openadlc-other');
   });
 
   it('leaves the seat on B, with its record and sign-in, when A’s token is refused, and says so', async () => {
     const { install, restored, outcome } = await restoreThenUndo(fakeChecks({ refuse: [OTHER_TOKEN] }).checks);
 
     const reason = 'GitHub did not accept it: Bad credentials (401)';
-    expect(outcome.signIns).toEqual([{ key: 'bot:lead-reviewer', who: 'fleetadlc-other', state: 'kept', reason }]);
-    expect(outcome.keptSeats).toEqual([{ seat: 'lead-reviewer', login: 'fleetadlc-sydney-janedoe', reason }]);
+    expect(outcome.signIns).toEqual([{ key: 'bot:lead-reviewer', who: 'openadlc-other', state: 'kept', reason }]);
+    expect(outcome.keptSeats).toEqual([{ seat: 'lead-reviewer', login: 'openadlc-sydney-janedoe', reason }]);
     const after = install.state();
-    expect(after.bots.find((bot) => bot.slot === 'lead-reviewer')?.githubLogin).toBe('fleetadlc-sydney-janedoe');
+    expect(after.bots.find((bot) => bot.slot === 'lead-reviewer')?.githubLogin).toBe('openadlc-sydney-janedoe');
     expect(after.bots.find((bot) => bot.slot === 'lead-reviewer')?.identity).toBe(restored.bots.find((bot) => bot.slot === 'lead-reviewer')?.identity);
-    expect(after.credentials['fleetadlc-other']).toEqual(restored.credentials['fleetadlc-other']);
-    expect(after.secrets['github-refresh-fleetadlc-other']).toBe('ghr_zzz-fresh-refresh-1-zzz');
-    expect(after.secrets['ssh-signing-fleetadlc-other']).toBe(restored.secrets['ssh-signing-fleetadlc-other']);
-    expect(after.secrets).not.toHaveProperty('github-token-fleetadlc-other');
+    expect(after.credentials['openadlc-other']).toEqual(restored.credentials['openadlc-other']);
+    expect(after.secrets['github-refresh-openadlc-other']).toBe('ghr_zzz-fresh-refresh-1-zzz');
+    expect(after.secrets['ssh-signing-openadlc-other']).toBe(restored.secrets['ssh-signing-openadlc-other']);
+    expect(after.secrets).not.toHaveProperty('github-token-openadlc-other');
     // Everything else the restore touched went back.
     expect(after.settings.engineUpdates).toBeUndefined();
   });
@@ -727,9 +727,9 @@ describe('a bot’s own engine key in a restore into a set-up install', () => {
 
   it('never puts a refused key over this install’s working one, even with what the bot thinks with taken', async () => {
     const b = installB();
-    const install = memoryInstall({ ...b, secrets: { ...b.secrets, 'engine-key-fleetadlc-atlas-janedoe': HERE_KEY } });
+    const install = memoryInstall({ ...b, secrets: { ...b.secrets, 'engine-key-openadlc-atlas-janedoe': HERE_KEY } });
     const built = archive();
-    const contents = { ...built, secrets: { ...built.secrets, 'engine-key-fleetadlc-atlas-janedoe': ARCHIVED_KEY } };
+    const contents = { ...built, secrets: { ...built.secrets, 'engine-key-openadlc-atlas-janedoe': ARCHIVED_KEY } };
     const signIns = await judgeSignIns({
       contents,
       shape: install.shape(),
@@ -759,14 +759,14 @@ describe('a bot’s own engine key in a restore into a set-up install', () => {
 
     const after = install.state();
     expect(after.bots.find((bot) => bot.slot === 'builder')?.model).toBe('newest:opus');
-    expect(after.secrets['engine-key-fleetadlc-atlas-janedoe']).toBe(HERE_KEY);
+    expect(after.secrets['engine-key-openadlc-atlas-janedoe']).toBe(HERE_KEY);
   });
 
   it('comes back with what the bot thinks with when the provider accepts it', async () => {
     const b = installB();
-    const install = memoryInstall({ ...b, secrets: { ...b.secrets, 'engine-key-fleetadlc-atlas-janedoe': HERE_KEY } });
+    const install = memoryInstall({ ...b, secrets: { ...b.secrets, 'engine-key-openadlc-atlas-janedoe': HERE_KEY } });
     const built = archive();
-    const contents = { ...built, secrets: { ...built.secrets, 'engine-key-fleetadlc-atlas-janedoe': ARCHIVED_KEY } };
+    const contents = { ...built, secrets: { ...built.secrets, 'engine-key-openadlc-atlas-janedoe': ARCHIVED_KEY } };
     const signIns = await judgeSignIns({
       contents,
       shape: install.shape(),
@@ -791,7 +791,7 @@ describe('a bot’s own engine key in a restore into a set-up install', () => {
       actor: 'alex@example.test',
     });
 
-    expect(install.state().secrets['engine-key-fleetadlc-atlas-janedoe']).toBe(ARCHIVED_KEY);
+    expect(install.state().secrets['engine-key-openadlc-atlas-janedoe']).toBe(ARCHIVED_KEY);
   });
 });
 
@@ -846,7 +846,7 @@ describe('undoing a restore that took the crew’s signing key and a seat’s lo
       signIns,
       choices: chosen.signIns,
       target: install.target,
-      takeOver: fakeTakeOver({ logins: { ...REFRESH_LOGINS, [OTHER_REFRESH]: 'fleetadlc-other' } }).ports,
+      takeOver: fakeTakeOver({ logins: { ...REFRESH_LOGINS, [OTHER_REFRESH]: 'openadlc-other' } }).ports,
       actor: 'alex@example.test',
     });
     const keyringOf = () =>
@@ -862,7 +862,7 @@ describe('undoing a restore that took the crew’s signing key and a seat’s lo
       signIns: undoSignIns,
       shape: install.shape(),
       target: install.target,
-      takeOver: fakeTakeOver({ logins: { [OTHER_REFRESH]: 'fleetadlc-other' } }).ports,
+      takeOver: fakeTakeOver({ logins: { [OTHER_REFRESH]: 'openadlc-other' } }).ports,
       actor: 'alex@example.test',
       journal,
     });
@@ -983,7 +983,7 @@ describe('a repository whose name another repository here has', () => {
 
     const plan = planUndo(snapshot, journal, overwritten.shape());
     expect(plan.repositories).toEqual({
-      put: [{ repo: expect.objectContaining({ fullName: 'acme/widgets' }), owner: 'fleetadlc-atlas-janedoe', over: 'other/widgets' }],
+      put: [{ repo: expect.objectContaining({ fullName: 'acme/widgets' }), owner: 'openadlc-atlas-janedoe', over: 'other/widgets' }],
       remove: [],
     });
     await applyUndo({ plan, signIns: [], shape: overwritten.shape(), target: overwritten.target, takeOver: fakeTakeOver({}).ports, actor: 'alex@example.test', journal });
@@ -1099,13 +1099,13 @@ describe('what a restore into a set-up install leaves to do', () => {
   /** Install B with a newer sign-in for the builder's account: refreshed since, or, `reauthorized`, another authorization. */
   const setUp = (reauthorized = false) => {
     const b = installB();
-    const builder = b.credentials!['fleetadlc-atlas-janedoe']!;
+    const builder = b.credentials!['openadlc-atlas-janedoe']!;
     return memoryInstall({
       ...b,
-      secrets: { ...b.secrets, 'github-refresh-fleetadlc-atlas-janedoe': NEWER },
+      secrets: { ...b.secrets, 'github-refresh-openadlc-atlas-janedoe': NEWER },
       credentials: {
         ...b.credentials,
-        'fleetadlc-atlas-janedoe': reauthorized ? { ...builder, authorizedAt: '2026-09-20T08:00:00.000Z' } : builder,
+        'openadlc-atlas-janedoe': reauthorized ? { ...builder, authorizedAt: '2026-09-20T08:00:00.000Z' } : builder,
       },
     });
   };
@@ -1128,19 +1128,19 @@ describe('what a restore into a set-up install leaves to do', () => {
   it('does not ask to connect a seat again when its archived sign-in is blocked but its own is kept', async () => {
     const { builder, next: todo } = await next(setUp(), 'Iv1.zzz-another-app-zzz', false);
     expect(builder?.state).toBe('blocked');
-    expect(todo.join('\n')).not.toContain('Connect fleetadlc-atlas-janedoe');
+    expect(todo.join('\n')).not.toContain('Connect openadlc-atlas-janedoe');
   });
 
   it('does not ask to connect a seat again when its archived sign-in is left out but its own is kept', async () => {
     const { builder, next: todo } = await next(setUp(true), VALUES.clientId, true);
     expect(builder?.state).toBe('left-out');
-    expect(todo.join('\n')).not.toContain('Connect fleetadlc-atlas-janedoe');
+    expect(todo.join('\n')).not.toContain('Connect openadlc-atlas-janedoe');
   });
 });
 
 describe('a seat the archive has and this install does not', () => {
-  it('says how to add it, not to run fleetadlc up, which already seeded every seat it knows', async () => {
-    // Told "`fleetadlc up` seeds it from config/bots.yaml", a person ran it,
+  it('says how to add it, not to run openadlc up, which already seeded every seat it knows', async () => {
+    // Told "`openadlc up` seeds it from config/bots.yaml", a person ran it,
     // nothing changed, and they were told the same again.
     const b = installB();
     const install = memoryInstall({ ...b, bots: b.bots!.filter((bot) => bot.slot !== 'lead-reviewer') });

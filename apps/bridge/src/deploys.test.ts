@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DeployKnowledge, hasDeployWorkflow, shipsByMerging, type WorkflowLister } from './deploys.js';
 
 /**
- * Whether merging is shipping: fleetadlc-testbed deploys nothing, and its board's
+ * Whether merging is shipping: openadlc-testbed deploys nothing, and its board's
  * Ship column said "Deploys what was approved · waits for you" over a stage
  * that never happens there.
  */
@@ -18,8 +18,8 @@ function lister(workflows: { name?: string; path?: string }[] | Error): Workflow
 
 describe('whether a repository ships by merging', () => {
   it('does when nothing deploys, and does not once a deploy workflow is there', async () => {
-    expect(await shipsByMerging(lister([{ name: 'ci', path: '.github/workflows/ci.yml' }]), 'janedoe/fleetadlc-testbed')).toBe(true);
-    expect(await shipsByMerging(lister([{ name: 'Deploy', path: '.github/workflows/deploy-testing.yml' }]), 'janedoe/fleetadlc-testbed')).toBe(false);
+    expect(await shipsByMerging(lister([{ name: 'ci', path: '.github/workflows/ci.yml' }]), 'janedoe/openadlc-testbed')).toBe(true);
+    expect(await shipsByMerging(lister([{ name: 'Deploy', path: '.github/workflows/deploy-testing.yml' }]), 'janedoe/openadlc-testbed')).toBe(false);
     expect(hasDeployWorkflow([{ name: 'deploy-testing' }])).toBe(true);
   });
 
@@ -32,14 +32,14 @@ describe('whether a repository ships by merging', () => {
         return { workflows: second };
       }) as WorkflowLister['request'],
     });
-    expect(await shipsByMerging(paged([{ name: 'Deploy', path: '.github/workflows/deploy-testing.yml' }]), 'janedoe/fleetadlc-testbed')).toBe(false);
-    expect(await shipsByMerging(paged([{ name: 'lint', path: '.github/workflows/lint.yml' }]), 'janedoe/fleetadlc-testbed')).toBe(true);
-    expect(await shipsByMerging(paged(new Error('502')), 'janedoe/fleetadlc-testbed')).toBeNull();
+    expect(await shipsByMerging(paged([{ name: 'Deploy', path: '.github/workflows/deploy-testing.yml' }]), 'janedoe/openadlc-testbed')).toBe(false);
+    expect(await shipsByMerging(paged([{ name: 'lint', path: '.github/workflows/lint.yml' }]), 'janedoe/openadlc-testbed')).toBe(true);
+    expect(await shipsByMerging(paged(new Error('502')), 'janedoe/openadlc-testbed')).toBeNull();
   });
 
   it('is not guessed when GitHub cannot be asked', async () => {
-    expect(await shipsByMerging(null, 'janedoe/fleetadlc-testbed')).toBeNull();
-    expect(await shipsByMerging(lister(new Error('502')), 'janedoe/fleetadlc-testbed')).toBeNull();
+    expect(await shipsByMerging(null, 'janedoe/openadlc-testbed')).toBeNull();
+    expect(await shipsByMerging(lister(new Error('502')), 'janedoe/openadlc-testbed')).toBeNull();
   });
 
   it('answers from the choice, with or without a workflow, and does not ask GitHub for an explicit one', async () => {
@@ -49,15 +49,15 @@ describe('whether a repository ships by merging', () => {
     // The choice "No testing deploy" ('none') ships by merging even when the
     // workflow file is there and skips; "Has a testing deploy" ('has') does
     // not, even when the file is absent.
-    expect(await shipsByMerging(withWorkflow, 'janedoe/fleetadlc', 'none')).toBe(true);
-    expect(await shipsByMerging(without, 'janedoe/fleetadlc', 'none')).toBe(true);
-    expect(await shipsByMerging(withWorkflow, 'janedoe/fleetadlc', 'has')).toBe(false);
-    expect(await shipsByMerging(without, 'janedoe/fleetadlc', 'has')).toBe(false);
+    expect(await shipsByMerging(withWorkflow, 'janedoe/openadlc', 'none')).toBe(true);
+    expect(await shipsByMerging(without, 'janedoe/openadlc', 'none')).toBe(true);
+    expect(await shipsByMerging(withWorkflow, 'janedoe/openadlc', 'has')).toBe(false);
+    expect(await shipsByMerging(without, 'janedoe/openadlc', 'has')).toBe(false);
     expect(withWorkflow.asked()).toBe(0);
     expect(without.asked()).toBe(0);
 
-    expect(await shipsByMerging(without, 'janedoe/fleetadlc', 'automatic')).toBe(true);
-    expect(await shipsByMerging(withWorkflow, 'janedoe/fleetadlc', 'automatic')).toBe(false);
+    expect(await shipsByMerging(without, 'janedoe/openadlc', 'automatic')).toBe(true);
+    expect(await shipsByMerging(withWorkflow, 'janedoe/openadlc', 'automatic')).toBe(false);
     expect(without.asked()).toBe(1);
     expect(withWorkflow.asked()).toBe(1);
   });
@@ -66,11 +66,11 @@ describe('whether a repository ships by merging', () => {
     const client = lister([{ name: 'deploy-testing', path: '.github/workflows/deploy-testing.yml' }]);
     const known = new DeployKnowledge(async () => client);
 
-    expect(await known.shipsByMerging('janedoe/fleetadlc', 'none')).toBe(true);
-    expect(await known.shipsByMerging('janedoe/fleetadlc', 'has')).toBe(false);
+    expect(await known.shipsByMerging('janedoe/openadlc', 'none')).toBe(true);
+    expect(await known.shipsByMerging('janedoe/openadlc', 'has')).toBe(false);
     expect(client.asked()).toBe(0);
     // Automatic still asks: the explicit answers were not stored under the name.
-    expect(await known.shipsByMerging('janedoe/fleetadlc', 'automatic')).toBe(false);
+    expect(await known.shipsByMerging('janedoe/openadlc', 'automatic')).toBe(false);
     expect(client.asked()).toBe(1);
   });
 
@@ -79,12 +79,12 @@ describe('whether a repository ships by merging', () => {
     const client = lister([]);
     const known = new DeployKnowledge(async () => client, 60_000, () => now);
 
-    expect(await known.shipsByMerging('janedoe/fleetadlc-testbed')).toBe(true);
+    expect(await known.shipsByMerging('janedoe/openadlc-testbed')).toBe(true);
     now = 30_000;
-    expect(await known.shipsByMerging('janedoe/fleetadlc-testbed')).toBe(true);
+    expect(await known.shipsByMerging('janedoe/openadlc-testbed')).toBe(true);
     expect(client.asked()).toBe(1);
     now = 61_000;
-    await known.shipsByMerging('janedoe/fleetadlc-testbed');
+    await known.shipsByMerging('janedoe/openadlc-testbed');
     expect(client.asked()).toBe(2);
   });
 });

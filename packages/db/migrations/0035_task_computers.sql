@@ -36,7 +36,7 @@ alter table bots add column if not exists memory_gb numeric not null default 4;
 -- one task per seat it could not happen, and with several it is the same
 -- review or build started by two events. Anything already like that (there
 -- should be nothing, since a seat could hold one live task) keeps its newest,
--- so building the index cannot fail `fleetadlc up`.
+-- so building the index cannot fail `openadlc up`.
 update tasks set
   state = 'stopped',
   exit_reason = 'stopped when tasks became one computer each: the same seat had this subject running twice',

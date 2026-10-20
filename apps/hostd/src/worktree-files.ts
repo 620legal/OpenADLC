@@ -17,8 +17,8 @@ export const MAX_ENTRIES = 500;
  * Names never served, wherever they appear in a path.
  *
  * `.git` is the clone's plumbing rather than the bot's work: its config names
- * the remote and what hostd recorded about the task (`fleetadlc.repo`,
- * `fleetadlc.keep`, `fleetadlc.branch`), and is where a credential helper
+ * the remote and what hostd recorded about the task (`openadlc.repo`,
+ * `openadlc.keep`, `openadlc.branch`), and is where a credential helper
  * would be. The rest are the
  * conventional places a session puts what it was handed — a task that runs
  * `printenv > .env` should not thereby publish its GitHub token to a browser.

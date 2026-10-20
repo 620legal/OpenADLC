@@ -146,7 +146,7 @@ describe('where the item’s box sends a message', () => {
   it('says a message on a deploy of a commit is kept in OpenADLC, not posted on GitHub', () => {
     const commit = {
       openGates: [],
-      routes: { '': { kind: 'post' as const, bot: 'sre', role: 'deploy', handle: 'acme-crew', subject: 'api@3f2c1a9', on: 'fleetadlc' as const, number: null } },
+      routes: { '': { kind: 'post' as const, bot: 'sre', role: 'deploy', handle: 'acme-crew', subject: 'api@3f2c1a9', on: 'openadlc' as const, number: null } },
     };
     expect(itemComposer(commit, {}).helper).toBe('To the SRE (acme-crew), kept in OpenADLC, not posted on GitHub');
   });

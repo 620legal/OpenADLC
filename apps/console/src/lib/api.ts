@@ -6,7 +6,7 @@ import type { RepoAccess } from './crew-access';
 import { cache } from 'react';
 import { bridgeAnswered } from './bridge-answered';
 import { identityHeaders } from './identity';
-export const BRIDGE_URL = process.env.FLEETADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
+export const BRIDGE_URL = process.env.OPENADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
 
 /** A task as a card carries it: who, doing what, since when. */
 export interface CardTask {
@@ -460,7 +460,7 @@ export type ItemRoute =
       role: string;
       handle: string | null;
       subject: string;
-      on: 'issue' | 'pull_request' | 'request' | 'fleetadlc';
+      on: 'issue' | 'pull_request' | 'request' | 'openadlc';
       number: number | null;
     }
   | { kind: 'refused'; error: string };
@@ -678,7 +678,7 @@ export type Role = 'admin' | 'user';
 
 /**
  * How the bridge knows who is asking: `local` takes the one identity the
- * console sends (FLEETADLC_IDENTITY, or `console`), `iap` the person IAP signed in.
+ * console sends (OPENADLC_IDENTITY, or `console`), `iap` the person IAP signed in.
  */
 export type IdentityMode = 'local' | 'iap';
 
@@ -808,7 +808,7 @@ export const api = {
     }>('/v1/repos'),
 };
 
-/** How a repository ships, as the bridge read its rules (`.github/fleetadlc.yml`). */
+/** How a repository ships, as the bridge read its rules (`.github/openadlc.yml`). */
 export interface RepoDelivery {
   source: 'file' | 'repository' | 'setting';
   rules: {

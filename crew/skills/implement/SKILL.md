@@ -22,8 +22,8 @@ its comments, the repository's `AGENTS.md` and the code in front of you.
 4. Implement inside the declared paths, `tests/` and `docs/`. A file anywhere
    else is asked for first, as "Asking to widen your paths" says. Tests are the
    evidence the change works; a change with no test is not finished. Add and
-   install packages through `fleetadlc-install` (`fleetadlc-install pnpm add
-   <name>`, `fleetadlc-install pnpm install`), or a Makefile target that uses
+   install packages through `openadlc-install` (`openadlc-install pnpm add
+   <name>`, `openadlc-install pnpm install`), or a Makefile target that uses
    it: on an install with a private registry it fetches the registry's
    credential for that one command, and it refuses rather than installing
    from the public registry without it.
@@ -36,11 +36,11 @@ its comments, the repository's `AGENTS.md` and the code in front of you.
    template, not the repository's record. It is the
    record the design stage reads the next time. Then commit everything: the
    checks run on a commit, not on your working tree.
-6. Run `fleetadlc-ci`, in the foreground, and wait for it. It has hostd run the
+6. Run `openadlc-ci`, in the foreground, and wait for it. It has hostd run the
    repository's checks (`make ci`) on your exact HEAD and records the result;
    it prints the end of the log and exits 0 only when they passed. Give the
    command the longest timeout your shell tool allows. If the tool gives up
-   first, run `fleetadlc-ci` again: it joins the run still going, and answers
+   first, run `openadlc-ci` again: it joins the run still going, and answers
    at once for a HEAD that has already passed. Fix what failed, commit, and
    run it again until it passes. Nothing else counts:
    OpenADLC's `git` refuses to push a commit with no recorded pass, and its `gh`
@@ -59,25 +59,25 @@ its comments, the repository's `AGENTS.md` and the code in front of you.
    it lands when CI is green. A red CI after the lead approved comes back to
    you as a patch round.
 9. On a review round, address every finding with a commit or a stated reason,
-   run `fleetadlc-ci` on the new head, and push. The review loop stops after
+   run `openadlc-ci` on the new head, and push. The review loop stops after
    the install's limit (`maxRounds`) and asks a person itself; you do not
    count rounds.
 
 ## Posting to GitHub
 
 Anything longer than a line — the plan, the pull request's body, a reply to a
-review — is written to a file under `.fleetadlc-scratch/` with your file-writing
+review — is written to a file under `.openadlc-scratch/` with your file-writing
 tool and given to `gh` with `--body-file`:
 
 ```bash
-gh issue comment <issue> --body-file .fleetadlc-scratch/plan.md
-gh pr create --title '<title>' --body-file .fleetadlc-scratch/pr.md
+gh issue comment <issue> --body-file .openadlc-scratch/plan.md
+gh pr create --title '<title>' --body-file .openadlc-scratch/pr.md
 ```
 
 Never put a body on the command line, in `--body`, a heredoc or a pipe: the
 engine's own shell checks refuse a line starting with `#`, which every heading
 is, and braces beside quotes, which every marker has. Nothing under
-`.fleetadlc-scratch/` is ever committed, however you stage your change.
+`.openadlc-scratch/` is ever committed, however you stage your change.
 
 ## Asking a person
 
@@ -88,7 +88,7 @@ next question is written after it, not before.
   marker, one line of JSON that carries the question itself and its choices:
 
   ```
-  <!-- fleetadlc:{"event":"question","question":"What should the warning threshold be?","options":["80 percent","90 percent"]} -->
+  <!-- openadlc:{"event":"question","question":"What should the warning threshold be?","options":["80 percent","90 percent"]} -->
   ```
 
   What you write before the marker is the context: what you found, and why you
@@ -100,7 +100,7 @@ next question is written after it, not before.
   and say so in the marker instead of giving choices:
 
   ```
-  <!-- fleetadlc:{"event":"question","question":"What should the error message say?","open":true} -->
+  <!-- openadlc:{"event":"question","question":"What should the error message say?","open":true} -->
   ```
 
 - Never number several questions in one message, and never put a second
@@ -122,7 +122,7 @@ change: before you touch the file, end a message with one marker that names
 every path you need and why.
 
 ```
-<!-- fleetadlc:{"event":"plan_change","paths":["apps/hostd/src/skill-runner.ts"],"reason":"The runner drops the field this change adds, so it never reaches the bridge."} -->
+<!-- openadlc:{"event":"plan_change","paths":["apps/hostd/src/skill-runner.ts"],"reason":"The runner drops the field this change adds, so it never reaches the bridge."} -->
 ```
 
 - Name a path per file, or a directory when you need several under it, and no
@@ -158,7 +158,7 @@ draft. The issue's last "Leased to" comment says which. Do not start again.
 Read what the branch already changes (`git log origin/HEAD..HEAD`,
 `git diff origin/HEAD...HEAD`; on a stacked build, `origin/<branch>` for the
 branch `stacked-on.md` names in place of `origin/HEAD`), and `sent-back.md`
-when you were given it, finish what the plan still needs, run `fleetadlc-ci`,
+when you were given it, finish what the plan still needs, run `openadlc-ci`,
 and open the pull request, or mark the open one ready (steps 5 to 8).
 
 ## Sending back
@@ -170,7 +170,7 @@ building around it or guessing. End your message with one marker that says
 where it goes and why:
 
 ```
-<!-- fleetadlc:{"event":"send_back","to":"spec","reason":"The design stores the price per call, but the cache it adds is per list; one of them has to change."} -->
+<!-- openadlc:{"event":"send_back","to":"spec","reason":"The design stores the price per call, but the cache it adds is per list; one of them has to change."} -->
 ```
 
 - `to` is the stage before yours in this issue's history: `spec` when it had a
@@ -219,7 +219,7 @@ the choices that raise it; do not ask about the cap yourself.
 - Disable, skip or weaken a check to get to green.
 - End your turn while a job you are waiting on is still running, or before the
   pull request is open.
-- Push, or open a pull request, on a commit `fleetadlc-ci` has not passed.
+- Push, or open a pull request, on a commit `openadlc-ci` has not passed.
 - Open a pull request as a draft, merge one, or turn auto-merge on.
 
 ## Markers
@@ -228,14 +228,14 @@ Every comment below carries one marker, as the last line, so the bridge
 learns what you did rather than inferring it from GitHub. A comment with no
 marker is read as narration, which is what an operator's own comment is.
 
-- `<!-- fleetadlc:{"event":"plan_posted"} -->` on the plan comment in step 3.
-- `<!-- fleetadlc:{"event":"pr_opened"} -->` on the pull request in step 7.
-- `<!-- fleetadlc:{"event":"pr_ready"} -->` ending your own message, once you
+- `<!-- openadlc:{"event":"plan_posted"} -->` on the plan comment in step 3.
+- `<!-- openadlc:{"event":"pr_opened"} -->` on the pull request in step 7.
+- `<!-- openadlc:{"event":"pr_ready"} -->` ending your own message, once you
   have marked an open one ready in step 7.
 - The question marker, ending your own message rather than a comment, on any
   stop under "Stop and ask when" (see "Asking a person").
-- `<!-- fleetadlc:{"event":"plan_change","paths":[...],"reason":"..."} -->` ending
+- `<!-- openadlc:{"event":"plan_change","paths":[...],"reason":"..."} -->` ending
   your own message, when you need a path outside your lease (see "Asking to
   widen your paths").
-- `<!-- fleetadlc:{"event":"send_back","to":"...","reason":"..."} -->` ending your
+- `<!-- openadlc:{"event":"send_back","to":"...","reason":"..."} -->` ending your
   own message, when the issue cannot be built as it stands (see "Sending back").

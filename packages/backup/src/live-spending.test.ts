@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   bots: { listBots: vi.fn(async () => []) },
   credentials: { listCredentials: vi.fn(async () => []) },
   identities: { listIdentities: vi.fn(async () => []) },
@@ -17,7 +17,7 @@ vi.mock('@fleetadlc/db', () => ({
   withTransaction: vi.fn(),
 }));
 
-import type { SecretStore } from '@fleetadlc/github';
+import type { SecretStore } from '@openadlc/github';
 import { BackupError } from './archive.js';
 import { readInstall, restoreDb } from './live.js';
 import { EVERYTHING } from './selection.js';

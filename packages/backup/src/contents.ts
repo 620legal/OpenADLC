@@ -9,7 +9,7 @@ import {
   registryTokenRef,
   signingKeyRef,
   webhookSecretRef,
-} from '@fleetadlc/github';
+} from '@openadlc/github';
 import {
   FORMAT_VERSION,
   type ArchivedAccount,

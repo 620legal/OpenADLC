@@ -29,9 +29,9 @@ import {
   type RestoreDb,
   type RestoreTarget,
   type TakeOverPorts,
-} from '@fleetadlc/backup';
-import { DeviceAuthError } from '@fleetadlc/github';
-import { buildBackup } from '@fleetadlc/backup';
+} from '@openadlc/backup';
+import { DeviceAuthError } from '@openadlc/github';
+import { buildBackup } from '@openadlc/backup';
 import {
   asMissingSchema,
   CONFIRM_WORD,
@@ -53,7 +53,7 @@ import {
 } from './backup.js';
 
 /**
- * Nothing here touches `~/.fleetadlc`, a database, or a terminal: the install is a
+ * Nothing here touches `~/.openadlc`, a database, or a terminal: the install is a
  * fake and every path is under `os.tmpdir()`. For the one command in the CLI
  * that rewrites every credential in an install, that is the difference between
  * a unit test and an incident.
@@ -64,7 +64,7 @@ import {
  *
  * Deliberately gibberish, and deliberately sharing no substring with any ref,
  * key, bot name or login below — a fixture where the organization was `janedoe`
- * and a bot was `fleetadlc-atlas-janedoe` fails the leak assertion without anything
+ * and a bot was `openadlc-atlas-janedoe` fails the leak assertion without anything
  * having leaked, which is the sort of test that gets deleted rather than fixed.
  */
 const VALUES = {
@@ -111,7 +111,7 @@ function buildContents(found: InstallContents, now: Date, selection: BackupSelec
 }
 
 /**
- * An archive as `fleetadlc backup` wrote it before a backup could be chosen:
+ * An archive as `openadlc backup` wrote it before a backup could be chosen:
  * version 1, the crew by persona, and no refresh token — they were left out.
  * Most of the restore tests below are about archives like this one, which a
  * restore still has to read the way it always did.
@@ -121,7 +121,7 @@ function oldArchive(parts: Partial<InstallContents> = {}): BackupContents {
     secrets: { 'github-app-private-key': VALUES.appKey, 'github-refresh-atlas': VALUES.refresh },
     settings: { organization: VALUES.org, webhookSecret: VALUES.hook },
     bots: [
-      { name: 'atlas', githubLogin: 'fleetadlc-atlas-janedoe', engine: 'claude', model: 'opus-4' },
+      { name: 'atlas', githubLogin: 'openadlc-atlas-janedoe', engine: 'claude', model: 'opus-4' },
       { name: 'flow', githubLogin: null, engine: 'claude', model: 'opus-4' },
     ],
     ...parts,
@@ -141,7 +141,7 @@ function oldArchive(parts: Partial<InstallContents> = {}): BackupContents {
 
 const archiveOf = oldArchive;
 
-/** The whole install without the sign-ins: `fleetadlc backup --no-sign-ins`. */
+/** The whole install without the sign-ins: `openadlc backup --no-sign-ins`. */
 const NO_SIGN_INS: BackupSelection = { ...EVERYTHING, botSignIns: false, accountSignIns: false };
 
 function snapshotOf(found: InstallContents | undefined): InstallSnapshot {
@@ -264,9 +264,9 @@ function fakeInstall(
  */
 function fakeProviders(options: { spent?: string[]; refuse?: string[]; logins?: Record<string, string> } = {}) {
   const logins: Record<string, string> = {
-    [VALUES.refresh]: 'fleetadlc-atlas-janedoe',
-    'ghr_zzz-nova-refresh-zzz': 'fleetadlc-nova-janedoe',
-    'ghu_zzz-static-zzz': 'fleetadlc-atlas-janedoe',
+    [VALUES.refresh]: 'openadlc-atlas-janedoe',
+    'ghr_zzz-nova-refresh-zzz': 'openadlc-nova-janedoe',
+    'ghu_zzz-static-zzz': 'openadlc-atlas-janedoe',
     ...options.logins,
   };
   const refreshed: string[] = [];
@@ -371,7 +371,7 @@ function fakeArchive(
 /** A temporary directory, removed after the test that made it. */
 const made: string[] = [];
 const scratch = (): string => {
-  const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-backup-'));
+  const dir = mkdtempSync(join(tmpdir(), 'openadlc-backup-'));
   made.push(dir);
   return dir;
 };
@@ -411,7 +411,7 @@ describe('where a backup is allowed to land', () => {
 
   it('allows a path outside the repository', () => {
     const repo = scratch();
-    expect(outputRefusal(join(scratch(), 'fleetadlc.fleetbak'), repo)).toBeNull();
+    expect(outputRefusal(join(scratch(), 'openadlc.fleetbak'), repo)).toBeNull();
   });
 
   it('sees through a symlink that leads back into the repository', () => {
@@ -455,7 +455,7 @@ describe('where a backup is allowed to land', () => {
   });
 
   it('defaults to a dated file in the home directory, not the working directory', () => {
-    expect(defaultBackupPath(MADE_AT, '/home/op')).toBe('/home/op/fleetadlc-backup-2026-09-21.fleetbak');
+    expect(defaultBackupPath(MADE_AT, '/home/op')).toBe('/home/op/openadlc-backup-2026-09-21.fleetbak');
   });
 });
 
@@ -581,7 +581,7 @@ const archiveInstall: InstallContents = {
   secrets: { 'github-app-private-key': VALUES.appKey, 'github-refresh-atlas': VALUES.refresh },
   settings: { organization: VALUES.org, webhookSecret: VALUES.hook },
   bots: [
-    { name: 'atlas', githubLogin: 'fleetadlc-atlas-janedoe', engine: 'claude', model: 'opus-4' },
+    { name: 'atlas', githubLogin: 'openadlc-atlas-janedoe', engine: 'claude', model: 'opus-4' },
     { name: 'flow', githubLogin: null, engine: 'claude', model: 'opus-4' },
   ],
 };
@@ -637,9 +637,9 @@ describe('what a restore would change', () => {
     const plan = planRestore(
       archiveOf({
         bots: [
-          { name: 'atlas', githubLogin: 'fleetadlc-atlas-janedoe', engine: 'claude', model: 'opus-4' },
-          { name: 'nova', githubLogin: 'fleetadlc-nova-janedoe', engine: 'claude', model: 'opus-4' },
-          { name: 'ghost', githubLogin: 'fleetadlc-ghost', engine: 'claude', model: 'opus-4' },
+          { name: 'atlas', githubLogin: 'openadlc-atlas-janedoe', engine: 'claude', model: 'opus-4' },
+          { name: 'nova', githubLogin: 'openadlc-nova-janedoe', engine: 'claude', model: 'opus-4' },
+          { name: 'ghost', githubLogin: 'openadlc-ghost', engine: 'claude', model: 'opus-4' },
         ],
       }),
       {
@@ -647,15 +647,15 @@ describe('what a restore would change', () => {
         settingKeys: [],
         bots: [
           { name: 'atlas', slot: 'builder', githubLogin: null },
-          { name: 'nova', slot: 'system-engineer', githubLogin: 'fleetadlc-nova' },
+          { name: 'nova', slot: 'system-engineer', githubLogin: 'openadlc-nova' },
         ],
       },
     );
 
-    expect(plan.bots.connect).toEqual([{ name: 'atlas', login: 'fleetadlc-atlas-janedoe' }]);
-    expect(plan.bots.replace).toEqual([{ name: 'nova', from: 'fleetadlc-nova', to: 'fleetadlc-nova-janedoe' }]);
+    expect(plan.bots.connect).toEqual([{ name: 'atlas', login: 'openadlc-atlas-janedoe' }]);
+    expect(plan.bots.replace).toEqual([{ name: 'nova', from: 'openadlc-nova', to: 'openadlc-nova-janedoe' }]);
     // Nothing in this install to hang a login on: the archive has no role, teams
-    // or container for it, so `fleetadlc up` has to make the row first.
+    // or container for it, so `openadlc up` has to make the row first.
     expect(plan.bots.absent).toEqual(['ghost']);
   });
 
@@ -663,7 +663,7 @@ describe('what a restore would change', () => {
     const plan = planRestore(archiveOf(), {
       secretRefs: ['github-app-private-key', 'github-refresh-atlas'],
       settingKeys: ['organization', 'webhookSecret'],
-      bots: [{ name: 'atlas', slot: 'builder', githubLogin: 'fleetadlc-atlas-janedoe' }],
+      bots: [{ name: 'atlas', slot: 'builder', githubLogin: 'openadlc-atlas-janedoe' }],
     });
 
     expect(plan.bots.unchanged).toEqual(['atlas']);
@@ -676,7 +676,7 @@ describe('what a restore would change', () => {
     expect(changeCount(planRestore(archiveOf({ secrets: {}, settings: {} }), {
       secretRefs: [],
       settingKeys: [],
-      bots: [{ name: 'atlas', slot: 'builder', githubLogin: 'fleetadlc-atlas-janedoe' }],
+      bots: [{ name: 'atlas', slot: 'builder', githubLogin: 'openadlc-atlas-janedoe' }],
     }))).toBe(0);
   });
 });
@@ -703,8 +703,8 @@ describe('GitHub sign-ins are a choice', () => {
       operatorEmail: 'op@example.test',
     },
     bots: [
-      { name: 'atlas', githubLogin: 'fleetadlc-atlas-janedoe', engine: 'claude', model: 'opus-4' },
-      { name: 'nova', githubLogin: 'fleetadlc-nova-janedoe', engine: 'claude', model: 'opus-4' },
+      { name: 'atlas', githubLogin: 'openadlc-atlas-janedoe', engine: 'claude', model: 'opus-4' },
+      { name: 'nova', githubLogin: 'openadlc-nova-janedoe', engine: 'claude', model: 'opus-4' },
       { name: 'flow', githubLogin: null, engine: 'claude', model: null },
     ],
   };
@@ -727,7 +727,7 @@ describe('GitHub sign-ins are a choice', () => {
     });
     expect(JSON.stringify(contents)).not.toContain(VALUES.refresh);
     expect(contents.settings).toEqual(found.settings);
-    expect(contents.bots.map((bot) => bot.githubLogin)).toEqual(['fleetadlc-atlas-janedoe', 'fleetadlc-nova-janedoe', null]);
+    expect(contents.bots.map((bot) => bot.githubLogin)).toEqual(['openadlc-atlas-janedoe', 'openadlc-nova-janedoe', null]);
   });
 
   it('are said to move with the archive when they are taken', async () => {
@@ -800,8 +800,8 @@ describe('GitHub sign-ins are a choice', () => {
     expect(io.text()).toContain(
       'Checking a GitHub sign-in uses it — if it works, this install takes it over from wherever else it is in use.',
     );
-    expect(io.text()).toContain('builder as fleetadlc-atlas-janedoe: can only be checked by using it — this restore checks it and takes it over');
-    expect(io.text()).toContain('ok builder as fleetadlc-atlas-janedoe: checked by using it, and taken over');
+    expect(io.text()).toContain('builder as openadlc-atlas-janedoe: can only be checked by using it — this restore checks it and takes it over');
+    expect(io.text()).toContain('ok builder as openadlc-atlas-janedoe: checked by using it, and taken over');
     expect(io.text()).not.toContain(VALUES.refresh);
   });
 
@@ -822,8 +822,8 @@ describe('GitHub sign-ins are a choice', () => {
     expect(plan.secrets.create).toEqual(['registry-token', 'ssh-signing-atlas']);
     expect(JSON.stringify(plan)).not.toContain(VALUES.refresh);
     expect(plan.bots.deviceFlow).toEqual([
-      { name: 'atlas', login: 'fleetadlc-atlas-janedoe' },
-      { name: 'nova', login: 'fleetadlc-nova-janedoe' },
+      { name: 'atlas', login: 'openadlc-atlas-janedoe' },
+      { name: 'nova', login: 'openadlc-nova-janedoe' },
     ]);
   });
 
@@ -861,7 +861,7 @@ describe('GitHub sign-ins are a choice', () => {
         settingKeys: [],
         bots: [
           { name: 'atlas', slot: 'builder', githubLogin: null },
-          { name: 'nova', slot: 'system-engineer', githubLogin: 'fleetadlc-nova-janedoe' },
+          { name: 'nova', slot: 'system-engineer', githubLogin: 'openadlc-nova-janedoe' },
         ],
       },
     });
@@ -879,8 +879,8 @@ describe('GitHub sign-ins are a choice', () => {
     expect(install.wrote.secrets).toContain('github-app-private-key');
     expect(install.wrote.secrets).toContain('ssh-signing-atlas');
     expect(io.text()).toContain('bots that will need to connect to GitHub again');
-    expect(io.text()).toContain('atlas as fleetadlc-atlas-janedoe');
-    expect(io.text()).toContain('nova as fleetadlc-nova-janedoe');
+    expect(io.text()).toContain('atlas as openadlc-atlas-janedoe');
+    expect(io.text()).toContain('nova as openadlc-nova-janedoe');
     expect(io.text()).toMatch(/will need to connect again/);
     expect(io.text()).not.toContain(VALUES.refresh);
     expect(io.text()).not.toContain('ghr_zzz-nova-refresh-zzz');
@@ -894,13 +894,13 @@ describe('GitHub sign-ins are a choice', () => {
       secretRefs: ['github-refresh-atlas'],
       settingKeys: [],
       bots: [
-        { name: 'atlas', slot: 'builder', githubLogin: 'fleetadlc-atlas-janedoe' },
-        { name: 'nova', slot: 'system-engineer', githubLogin: 'fleetadlc-nova-janedoe' },
+        { name: 'atlas', slot: 'builder', githubLogin: 'openadlc-atlas-janedoe' },
+        { name: 'nova', slot: 'system-engineer', githubLogin: 'openadlc-nova-janedoe' },
       ],
     };
 
-    expect(botsNeedingDeviceFlow(contents, current)).toEqual([{ name: 'nova', login: 'fleetadlc-nova-janedoe' }]);
-    expect(planRestore(contents, current).bots.deviceFlow).toEqual([{ name: 'nova', login: 'fleetadlc-nova-janedoe' }]);
+    expect(botsNeedingDeviceFlow(contents, current)).toEqual([{ name: 'nova', login: 'openadlc-nova-janedoe' }]);
+    expect(planRestore(contents, current).bots.deviceFlow).toEqual([{ name: 'nova', login: 'openadlc-nova-janedoe' }]);
   });
 
   it('asks again when the archive would connect the bot to a different account than the token on disk', () => {
@@ -909,20 +909,20 @@ describe('GitHub sign-ins are a choice', () => {
       settingKeys: [],
       bots: [
         { name: 'atlas', slot: 'builder', githubLogin: 'someone-else' },
-        { name: 'nova', slot: 'system-engineer', githubLogin: 'fleetadlc-nova-janedoe' },
+        { name: 'nova', slot: 'system-engineer', githubLogin: 'openadlc-nova-janedoe' },
       ],
     });
 
     expect(again).toEqual([
-      { name: 'atlas', login: 'fleetadlc-atlas-janedoe' },
-      { name: 'nova', login: 'fleetadlc-nova-janedoe' },
+      { name: 'atlas', login: 'openadlc-atlas-janedoe' },
+      { name: 'nova', login: 'openadlc-nova-janedoe' },
     ]);
   });
 
   it('names a bot this install does not have once, with the remedy, and not as one to connect', () => {
     // There is no row to put a login on, so connecting is not the next step —
     // adding the seat is. Saying both sends the operator to the wrong one, and
-    // `fleetadlc up` alone adds only a seat config/bots.yaml names.
+    // `openadlc up` alone adds only a seat config/bots.yaml names.
     const plan = planRestore(oldArchive(found), {
       secretRefs: [],
       settingKeys: [],
@@ -931,7 +931,7 @@ describe('GitHub sign-ins are a choice', () => {
     const text = describePlan(plan).join('\n');
 
     expect(plan.bots.absent).toEqual(['nova']);
-    expect(plan.bots.deviceFlow).toEqual([{ name: 'atlas', login: 'fleetadlc-atlas-janedoe' }]);
+    expect(plan.bots.deviceFlow).toEqual([{ name: 'atlas', login: 'openadlc-atlas-janedoe' }]);
     expect(text.match(/\bnova\b/g)).toHaveLength(1);
     expect(text).toMatch(/does not have, skipped — for each one’s seat, add it[^\n]*Add a builder[^\n]*\n {2}nova$/m);
   });
@@ -943,7 +943,7 @@ describe('GitHub sign-ins are a choice', () => {
         'github-refresh-atlas': VALUES.refresh,
       },
       settings: { organization: VALUES.org },
-      bots: [{ name: 'atlas', githubLogin: 'fleetadlc-atlas-janedoe', engine: 'claude', model: null }],
+      bots: [{ name: 'atlas', githubLogin: 'openadlc-atlas-janedoe', engine: 'claude', model: null }],
     });
 
     expect(contents.secrets).toEqual({ 'github-token-atlas': 'ghu_zzz-static-zzz' });
@@ -1018,7 +1018,7 @@ describe('a restore that changes which account a bot is', () => {
     {
       secrets: { 'ssh-signing-atlas': 'zzz-signing-key-zzz' },
       settings: {},
-      bots: [{ name: 'atlas', githubLogin: 'fleetadlc-atlas-janedoe', engine: 'claude', model: 'opus-4' }],
+      bots: [{ name: 'atlas', githubLogin: 'openadlc-atlas-janedoe', engine: 'claude', model: 'opus-4' }],
     },
     MADE_AT,
   );
@@ -1040,16 +1040,16 @@ describe('a restore that changes which account a bot is', () => {
     });
 
     expect(install.wrote.deleted).toEqual(['github-refresh-atlas']);
-    expect(install.wrote.bots).toEqual(['atlas=fleetadlc-atlas-janedoe']);
+    expect(install.wrote.bots).toEqual(['atlas=openadlc-atlas-janedoe']);
     expect(install.wrote.secrets).toEqual(['ssh-signing-atlas']);
     // Nor is the old account's record of its sign-in kept, which would count the bot as connected.
     expect(install.order).toContain('forget credential atlas');
     expect(io.text()).toContain('GitHub credentials of an account this replaces, which this would delete (1):');
     expect(io.text()).toContain('deleted secret github-refresh-atlas');
-    expect(io.text()).toContain('atlas: someone-else becomes fleetadlc-atlas-janedoe');
+    expect(io.text()).toContain('atlas: someone-else becomes openadlc-atlas-janedoe');
     // Nothing of the new account's is left to act with, so it has to connect.
     expect(io.text()).toContain('bots that will need to connect to GitHub again (1):');
-    expect(io.text()).toContain('atlas as fleetadlc-atlas-janedoe');
+    expect(io.text()).toContain('atlas as openadlc-atlas-janedoe');
   });
 
   it('never leaves the new login over the old account\'s token: one that cannot be deleted undoes the login', async () => {
@@ -1105,7 +1105,7 @@ describe('a restore that changes which account a bot is', () => {
 
     expect(credentialsForReplacedAccounts(archived, current)).toEqual(['github-token-atlas']);
     expect(planRestore(archived, current).bots.deviceFlow).toEqual([
-      { name: 'atlas', login: 'fleetadlc-atlas-janedoe' },
+      { name: 'atlas', login: 'openadlc-atlas-janedoe' },
     ]);
   });
 
@@ -1116,7 +1116,7 @@ describe('a restore that changes which account a bot is', () => {
       {
         secrets: { 'github-token-atlas': 'ghu_zzz-static-zzz' },
         settings: {},
-        bots: [{ name: 'atlas', githubLogin: 'fleetadlc-atlas-janedoe', engine: 'claude', model: null }],
+        bots: [{ name: 'atlas', githubLogin: 'openadlc-atlas-janedoe', engine: 'claude', model: null }],
       },
       MADE_AT,
     );
@@ -1137,7 +1137,7 @@ describe('a restore that changes which account a bot is', () => {
     const current: InstallShape = {
       secretRefs: ['github-refresh-atlas'],
       settingKeys: [],
-      bots: [{ name: 'atlas', slot: 'builder', githubLogin: 'FleetADLC-Atlas-Janedoe' }],
+      bots: [{ name: 'atlas', slot: 'builder', githubLogin: 'OpenADLC-Atlas-Janedoe' }],
     };
 
     expect(credentialsForReplacedAccounts(archived, current)).toEqual([]);
@@ -1164,7 +1164,7 @@ describe('a dry run', () => {
     // Still says what it would have done, by name — including who has to sign
     // in again, because this install has no refresh token to leave in place.
     expect(io.text()).toContain('bots that will need to connect to GitHub again');
-    expect(io.text()).toContain('atlas as fleetadlc-atlas-janedoe');
+    expect(io.text()).toContain('atlas as openadlc-atlas-janedoe');
     expect(io.text()).not.toContain(VALUES.refresh);
   });
 
@@ -1235,14 +1235,14 @@ describe('a restore that writes', () => {
     expect(install.wrote.settings).toEqual(['organization']);
     // The login is what maps a bot to its GitHub account, and the one thing here
     // no device flow can hand back without a person.
-    expect(install.wrote.bots).toEqual(['atlas=fleetadlc-atlas-janedoe']);
-    expect(io.text()).toContain('atlas as fleetadlc-atlas-janedoe');
+    expect(install.wrote.bots).toEqual(['atlas=openadlc-atlas-janedoe']);
+    expect(io.text()).toContain('atlas as openadlc-atlas-janedoe');
     expect(io.text()).not.toContain('secret github-refresh-atlas');
     expect(io.text()).not.toContain(VALUES.refresh);
   });
 
   it('leaves a bot alone when the archive has no account for it', async () => {
-    const install = fakeInstall({ shape: { bots: [{ name: 'flow', slot: 'automation', githubLogin: 'fleetadlc-flow' }] } });
+    const install = fakeInstall({ shape: { bots: [{ name: 'flow', slot: 'automation', githubLogin: 'openadlc-flow' }] } });
     const io = fakeIo(['a passphrase', CONFIRM_WORD]);
 
     await restore('/tmp/x.fleetbak', {}, {
@@ -1409,7 +1409,7 @@ describe('--unencrypted', () => {
     // What a leak actually costs. The file has no refresh token, so the
     // device flow is not the remedy; revoking and rotating what it holds is.
     expect(io.text()).toContain('revoking any non-expiring bot token, rotating every API key');
-    expect(io.text()).toContain('a new key for signing posts (fleetadlc attribution rotate --drop-old)');
+    expect(io.text()).toContain('a new key for signing posts (openadlc attribution rotate --drop-old)');
     expect(io.text()).not.toMatch(/device flow/);
   });
 
@@ -1531,7 +1531,7 @@ describe('restoring into an install that was never migrated', () => {
 
     expect(thrown).toBeInstanceOf(BackupError);
     expect(safeMessage(thrown)).toMatch(/no database schema/);
-    expect(safeMessage(thrown)).toMatch(/fleetadlc up/);
+    expect(safeMessage(thrown)).toMatch(/openadlc up/);
   });
 
   it('stays narrow, so anything else is still reported by kind alone', () => {
@@ -1567,29 +1567,29 @@ describe('restoring onto an install whose bots are named differently', () => {
     const plan = planRestore(
       archiveOf({
         secrets: { 'ssh-signing-atlas': 'zzz-signing-key-zzz' },
-        bots: [{ name: 'atlas', githubLogin: 'fleetadlc-atlas-janedoe', engine: 'claude', model: 'opus-4' }],
+        bots: [{ name: 'atlas', githubLogin: 'openadlc-atlas-janedoe', engine: 'claude', model: 'opus-4' }],
       }),
       freshInstall,
     );
 
-    expect(plan.bots.connect).toEqual([{ name: 'builder', login: 'fleetadlc-atlas-janedoe' }]);
+    expect(plan.bots.connect).toEqual([{ name: 'builder', login: 'openadlc-atlas-janedoe' }]);
     expect(plan.bots.absent).toEqual([]);
     // The bot's own secret goes where this install will look for it.
     expect(plan.secrets.create).toEqual(['ssh-signing-builder']);
     expect(plan.secrets.from).toEqual({ 'ssh-signing-builder': 'ssh-signing-atlas' });
-    expect(plan.bots.deviceFlow).toEqual([{ name: 'builder', login: 'fleetadlc-atlas-janedoe' }]);
+    expect(plan.bots.deviceFlow).toEqual([{ name: 'builder', login: 'openadlc-atlas-janedoe' }]);
   });
 
   it('finds the row for an archive with seats by the seat it recorded, whatever the bot was called there', () => {
     const archived = buildContents(
       {
-        secrets: { 'github-token-fleetadlc-atlas-janedoe': 'zzz-static-token-zzz' },
+        secrets: { 'github-token-openadlc-atlas-janedoe': 'zzz-static-token-zzz' },
         settings: {},
         bots: [
           {
-            name: 'fleetadlc-atlas-janedoe',
+            name: 'openadlc-atlas-janedoe',
             slot: 'builder',
-            githubLogin: 'fleetadlc-atlas-janedoe',
+            githubLogin: 'openadlc-atlas-janedoe',
             engine: 'claude',
             model: 'opus-4',
           },
@@ -1600,7 +1600,7 @@ describe('restoring onto an install whose bots are named differently', () => {
 
     const plan = planRestore(archived, freshInstall);
 
-    expect(plan.bots.connect).toEqual([{ name: 'builder', login: 'fleetadlc-atlas-janedoe' }]);
+    expect(plan.bots.connect).toEqual([{ name: 'builder', login: 'openadlc-atlas-janedoe' }]);
     expect(plan.secrets.create).toEqual(['github-token-builder']);
     // A non-expiring token comes back with it, so there is nothing to sign in
     // again for; the bridge names the bot after its account when it starts.
@@ -1620,13 +1620,13 @@ describe('restoring onto an install whose bots are named differently', () => {
           archiveOf({
             secrets: { 'ssh-signing-atlas': 'zzz-signing-key-zzz' },
             settings: {},
-            bots: [{ name: 'atlas', githubLogin: 'fleetadlc-atlas-janedoe', engine: 'claude', model: 'opus-4' }],
+            bots: [{ name: 'atlas', githubLogin: 'openadlc-atlas-janedoe', engine: 'claude', model: 'opus-4' }],
           }),
         ),
     });
 
     expect(install.values).toEqual({ 'ssh-signing-builder': 'zzz-signing-key-zzz' });
-    expect(install.wrote.bots).toEqual(['builder=fleetadlc-atlas-janedoe']);
+    expect(install.wrote.bots).toEqual(['builder=openadlc-atlas-janedoe']);
     expect(io.text()).toContain('secret ssh-signing-builder (ssh-signing-atlas in the archive)');
     expect(io.text()).not.toContain('zzz-signing-key-zzz');
   });
@@ -1637,7 +1637,7 @@ describe('restoring onto an install whose bots are named differently', () => {
         secrets: {},
         settings: {},
         bots: [
-          { name: 'fleetadlc-atlas-janedoe', slot: 'builder', githubLogin: 'fleetadlc-atlas-janedoe', engine: 'claude', model: null },
+          { name: 'openadlc-atlas-janedoe', slot: 'builder', githubLogin: 'openadlc-atlas-janedoe', engine: 'claude', model: null },
           { name: 'qa', slot: 'qa', githubLogin: null, engine: 'claude', model: null },
         ],
       },
@@ -1646,7 +1646,7 @@ describe('restoring onto an install whose bots are named differently', () => {
 
     expect(contents.bots.map((bot) => bot.slot)).toEqual(['builder', 'qa']);
     const said = describeContents(contents).join('\n');
-    expect(said).toContain('builder (fleetadlc-atlas-janedoe) as fleetadlc-atlas-janedoe');
+    expect(said).toContain('builder (openadlc-atlas-janedoe) as openadlc-atlas-janedoe');
     expect(said).toContain('qa (no account connected)');
   });
 });
@@ -1663,16 +1663,16 @@ describe('the sign-ins a restore finds in an archive', () => {
       {
         secrets: {
           'github-app-private-key': VALUES.appKey,
-          'github-refresh-fleetadlc-atlas-janedoe': VALUES.refresh,
+          'github-refresh-openadlc-atlas-janedoe': VALUES.refresh,
           [`model-account-${KEY_ACCOUNT}`]: REFUSED_KEY,
           [`model-account-${TOKEN_ACCOUNT}`]: WORKING_TOKEN,
         },
         settings: { organization: VALUES.org, githubClientId: 'Iv1.zzz-client-zzz' },
         bots: [
           {
-            name: 'fleetadlc-atlas-janedoe',
+            name: 'openadlc-atlas-janedoe',
             slot: 'builder',
-            githubLogin: 'fleetadlc-atlas-janedoe',
+            githubLogin: 'openadlc-atlas-janedoe',
             engine: 'claude',
             model: 'opus-4',
             modelAccountId: null,
@@ -1708,7 +1708,7 @@ describe('the sign-ins a restore finds in an archive', () => {
 
     const text = io.text();
     expect(text).toContain('Sign-ins in this archive (3)');
-    expect(text).toContain('builder as fleetadlc-atlas-janedoe: can only be checked by using it — this restore checks it and takes it over');
+    expect(text).toContain('builder as openadlc-atlas-janedoe: can only be checked by using it — this restore checks it and takes it over');
     expect(text).toContain('Anthropic API (API key): cannot be restored: Anthropic did not accept it: invalid x-api-key — not restored');
     expect(text).toContain('Claude Max (subscription token): works (Anthropic lists 1 model for it) — restored');
     // A dry run uses nothing: judging a rotating sign-in never does.
@@ -1719,7 +1719,7 @@ describe('the sign-ins a restore finds in an archive', () => {
 
   it('names a bot’s own engine key by the bot, and never writes one its provider refuses', async () => {
     const contents = archived();
-    contents.secrets['engine-key-fleetadlc-atlas-janedoe'] = 'sk-ant-api-zzz-engine-zzz';
+    contents.secrets['engine-key-openadlc-atlas-janedoe'] = 'sk-ant-api-zzz-engine-zzz';
     const install = fakeInstall({ shape: clean });
     const io = fakeIo(['a passphrase', CONFIRM_WORD]);
 
@@ -1763,9 +1763,9 @@ describe('the sign-ins a restore finds in an archive', () => {
 
     expect(install.values).not.toHaveProperty('github-refresh-builder');
     expect(io.text()).toContain(
-      'warn builder as fleetadlc-atlas-janedoe was not restored — nothing was stored for it: GitHub did not accept it: The refresh token passed is incorrect or expired',
+      'warn builder as openadlc-atlas-janedoe was not restored — nothing was stored for it: GitHub did not accept it: The refresh token passed is incorrect or expired',
     );
-    expect(io.text()).toContain('Connect fleetadlc-atlas-janedoe to GitHub again: GitHub did not accept it: The refresh token passed is incorrect or expired.');
+    expect(io.text()).toContain('Connect openadlc-atlas-janedoe to GitHub again: GitHub did not accept it: The refresh token passed is incorrect or expired.');
     // The rest of the restore stood.
     expect(install.values['github-app-private-key']).toBe(VALUES.appKey);
   });
@@ -1774,7 +1774,7 @@ describe('the sign-ins a restore finds in an archive', () => {
     const setUp: Partial<InstallShape> = {
       secretRefs: ['github-refresh-builder', 'github-app-private-key'],
       settingKeys: [],
-      bots: [{ name: 'builder', slot: 'builder', githubLogin: 'fleetadlc-atlas-janedoe' }],
+      bots: [{ name: 'builder', slot: 'builder', githubLogin: 'openadlc-atlas-janedoe' }],
     };
     const left = fakeProviders();
     const leftIo = fakeIo(['a passphrase', CONFIRM_WORD]);
@@ -1814,7 +1814,7 @@ describe('a restore with the database down', () => {
     });
 
     expect(io.text()).toContain('cannot reach the database');
-    expect(io.text()).toContain('start the stack with fleetadlc up');
+    expect(io.text()).toContain('start the stack with openadlc up');
     expect(io.text()).not.toContain('ask-secret');
     expect(process.exitCode).toBe(1);
   });

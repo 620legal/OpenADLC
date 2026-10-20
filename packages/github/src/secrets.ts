@@ -2,12 +2,12 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { envOr } from '@fleetadlc/shared';
+import { envOr } from '@openadlc/shared';
 import { GcpSecretStore } from './gcp-secrets.js';
 
 /**
  * Where a self-hosted install keeps secret material. Local installs use files
- * with 0600 permissions under $FLEETADLC_HOME; cloud installs swap in the provider's
+ * with 0600 permissions under $OPENADLC_HOME; cloud installs swap in the provider's
  * secret manager behind the same interface. Nothing secret is ever written to a
  * bot container's disk: hostd reads from here and injects into the session env.
  */
@@ -18,12 +18,26 @@ export interface SecretStore {
   list(prefix?: string): Promise<string[]>;
 }
 
-export function fleetHome(): string {
-  return envOr('FLEETADLC_HOME', join(homedir(), '.fleetadlc'));
+export function openadlcHome(): string {
+  // Either name wins over any default: entry points adopt FLEETADLC_HOME into
+  // OPENADLC_HOME, and reading both here covers a process that has no entry
+  // point of its own, a test above all.
+  const named = process.env.OPENADLC_HOME || process.env.FLEETADLC_HOME;
+  if (named) return named;
+  // The rename to FleetADLC did not look for `~/.fleet`: every command on an
+  // upgraded install acted on an empty `~/.fleetadlc` until FLEETADLC_HOME was
+  // exported by hand, and `down` found nothing to stop. So an existing
+  // `~/.fleetadlc` is found on its own — only when nothing was made under the
+  // new name, so a new install is never pointed at an old one beside it.
+  const renamed = join(homedir(), '.openadlc');
+  if (existsSync(renamed)) return renamed;
+  const legacy = join(homedir(), '.fleetadlc');
+  if (existsSync(legacy)) return legacy;
+  return renamed;
 }
 
 export class FileSecretStore implements SecretStore {
-  constructor(private readonly root = join(fleetHome(), 'secrets')) {}
+  constructor(private readonly root = join(openadlcHome(), 'secrets')) {}
 
   private path(ref: string): string {
     if (!/^[a-zA-Z0-9._:-]+$/.test(ref)) throw new Error(`invalid secret ref: ${ref}`);
@@ -191,7 +205,7 @@ export function internalSecretRef(): string {
 
 /**
  * Generates the shared secret on first use so an operator has nothing to set.
- * `fleetadlc up` calls it before it starts hostd and the bridge, and the bridge
+ * `openadlc up` calls it before it starts hostd and the bridge, and the bridge
  * calls it again at start; everything else only reads it, and retries once if
  * it is not there yet.
  */
@@ -205,7 +219,7 @@ export async function ensureInternalSecret(store: SecretStore = getSecretStore()
 
 /**
  * What an outside monitoring system presents to the bridge's `/internal/alerts`,
- * as `x-fleetadlc-alerts-secret`, and to nothing else. Its own secret because
+ * as `x-openadlc-alerts-secret`, and to nothing else. Its own secret because
  * the internal one mints every bot's GitHub token and starts work, and a
  * monitor wired to file alerts held the install's master key to do it.
  */
@@ -223,7 +237,7 @@ export async function ensureAlertsSecret(store: SecretStore = getSecretStore()):
 }
 
 /**
- * What the console's server and the `fleetadlc` CLI present to the bridge's
+ * What the console's server and the `openadlc` CLI present to the bridge's
  * `/v1` API on a local install. That install takes the person's name from a
  * header, and the bridge listens on every interface, so without this anything
  * that reached the port — a host on the LAN, a task's container — was an admin:
@@ -239,7 +253,7 @@ export function consoleSecretRef(): string {
 
 /**
  * Generates the console secret on first use, like the internal secret: the
- * bridge and `fleetadlc up` both call this, and whichever runs first writes it.
+ * bridge and `openadlc up` both call this, and whichever runs first writes it.
  */
 export async function ensureConsoleSecret(store: SecretStore = getSecretStore()): Promise<string> {
   const existing = await store.get(consoleSecretRef());
@@ -266,14 +280,14 @@ export async function credentialKind(
 let defaultStore: SecretStore | undefined;
 
 /**
- * `FLEETADLC_SECRET_STORE=gcp` is what the cloud module sets on the bridge and the
+ * `OPENADLC_SECRET_STORE=gcp` is what the cloud module sets on the bridge and the
  * host. Anything else is the file store, which is what every local install has.
  */
 export function getSecretStore(): SecretStore {
   if (!defaultStore) {
     defaultStore =
-      envOr('FLEETADLC_SECRET_STORE', 'file') === 'gcp'
-        ? new GcpSecretStore({ project: envOr('FLEETADLC_GCP_PROJECT', '') || undefined })
+      envOr('OPENADLC_SECRET_STORE', 'file') === 'gcp'
+        ? new GcpSecretStore({ project: envOr('OPENADLC_GCP_PROJECT', '') || undefined })
         : new FileSecretStore();
   }
   return defaultStore;
@@ -288,7 +302,7 @@ export function setSecretStore(store: SecretStore): void {
  * the verifier, because three components have to agree on the string: hostd
  * mints and now also verifies, the bridge verifies, and the skill runner sends.
  */
-export const TASK_TOKEN_HEADER = 'x-fleetadlc-task-token';
+export const TASK_TOKEN_HEADER = 'x-openadlc-task-token';
 
 /**
  * The credential a task's own session presents to the bridge.

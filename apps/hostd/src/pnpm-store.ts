@@ -42,7 +42,7 @@ export const CONTAINER_PNPM_STORE = '/pnpm-store';
 
 /** A repository's store volume on this install: a new name, so a store a task could write is never read again. */
 export function pnpmStoreVolume(install: string, repoKey: string): string {
-  return `fleetadlc-pnpm-${install}-${repoKey}`;
+  return `openadlc-pnpm-${install}-${repoKey}`;
 }
 
 export type PnpmFill =
@@ -188,10 +188,10 @@ export class PnpmStore {
       writeFileSync(join(copy, 'package.json'), `${JSON.stringify(pnpm ? { packageManager: pnpm } : {})}\n`);
 
       const registry = await this.options.registry?.().catch(() => null);
-      if (registry) writeFileSync(join(copy, '.npmrc'), `//${registry.host}/:_authToken=\${FLEETADLC_REGISTRY_TOKEN}\n`);
+      if (registry) writeFileSync(join(copy, '.npmrc'), `//${registry.host}/:_authToken=\${OPENADLC_REGISTRY_TOKEN}\n`);
       const clear = !this.cleared.has(input.repoKey);
       const args = fillArgs({
-        name: `fleetadlc-pnpm-fill-${randomBytes(4).toString('hex')}`,
+        name: `openadlc-pnpm-fill-${randomBytes(4).toString('hex')}`,
         image: this.options.image,
         storeVolume: pnpmStoreVolume(this.options.install, input.repoKey),
         cacheVolume: clear ? this.options.cacheVolume(input.repoKey) : null,
@@ -203,7 +203,7 @@ export class PnpmStore {
       });
       const deadline = { timeoutMs: (FILL_TIMEOUT_S + 30) * 1000 };
       const result = registry
-        ? await this.options.docker(args, undefined, { FLEETADLC_REGISTRY_TOKEN: registry.token }, deadline)
+        ? await this.options.docker(args, undefined, { OPENADLC_REGISTRY_TOKEN: registry.token }, deadline)
         : await this.options.docker(args, undefined, undefined, deadline);
       if (result.code !== 0) {
         const why = pnpmFailure(`${result.stderr}\n${result.stdout}`);
@@ -259,7 +259,7 @@ export function fillArgs(input: {
     input.worktree,
     '-e',
     'COREPACK_ENABLE_DOWNLOAD_PROMPT=0',
-    ...(input.registry ? ['-e', 'FLEETADLC_REGISTRY_TOKEN'] : []),
+    ...(input.registry ? ['-e', 'OPENADLC_REGISTRY_TOKEN'] : []),
     '--entrypoint',
     '/bin/sh',
     input.image,

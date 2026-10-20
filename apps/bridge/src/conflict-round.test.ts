@@ -10,7 +10,7 @@ const world = vi.hoisted(() => ({
   lease: { id: 'lease-7', botId: 'bot-1' } as { id: string; botId: string } | null,
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   bots: { getBotById: vi.fn(async (id: string) => ({ id, name: 'atlas' })) },
   leases: { getActiveLease: vi.fn(async () => world.lease) },
   repos: { getRepoByName: vi.fn(async () => REPO) },
@@ -36,7 +36,7 @@ function rounds(
     listPullFilesAsNamed: vi.fn(async () => options.prFiles ?? ['README.md', 'src/cart.ts']),
     filesChangedOnBaseSince: vi.fn(async () => (options.onBase === undefined ? ['README.md', 'src/other.ts'] : options.onBase)),
     readFileIfPresent: vi.fn(async (_repo: string, path: string, ref: string) => {
-      if (path === '.github/fleetadlc.yml') {
+      if (path === '.github/openadlc.yml') {
         if (options.rules instanceof Error) throw options.rules;
         return options.rules ?? null;
       }
@@ -103,13 +103,13 @@ describe('a branch that conflicts at the front of the merge line', () => {
 
   it('tells the builder to commit the merge before it runs the checks', async () => {
     // Local CI runs only on a committed HEAD, and an unfinished merge has every
-    // file the base brought in staged: "run fleetadlc-ci and push" was refused.
+    // file the base brought in staged: "run openadlc-ci and push" was refused.
     const { subject, open } = rounds();
     await subject.start({ repoName: 'shop', prNumber: 31, baseRef: 'main' });
     const brief = (open.mock.calls[0] as unknown as [{ extraContext: { name: string; content: string }[] }])[0].extraContext.find(
       (doc) => doc.name === 'resolve-conflict.md',
     );
-    expect(brief?.content).toMatch(/Commit the merge, then run `fleetadlc-ci` on it and push\./);
+    expect(brief?.content).toMatch(/Commit the merge, then run `openadlc-ci` on it and push\./);
   });
 
   it('is re-checked by the lead alone when every conflicted file is shared, and the approvals carry to the new head', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   bots: { listBots: vi.fn(async () => []) },
   credentials: { listCredentials: vi.fn(async () => []) },
   identities: { listIdentities: vi.fn(async () => []) },

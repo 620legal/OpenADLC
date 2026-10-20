@@ -1,7 +1,7 @@
 /**
  * Computers made before their task, so a task start claims one rather than
  * waiting for a container to be made: the cold start a container per task
- * would otherwise add to every task. Off unless `FLEETADLC_WARM_POOL` is set.
+ * would otherwise add to every task. Off unless `OPENADLC_WARM_POOL` is set.
  *
  * A warm computer is keyed by what cannot be changed once a container exists:
  * the image it runs, the repository whose cache volume it mounts, and the
@@ -13,7 +13,7 @@
  *
  * How many are kept: one with no repository (intake's work, which has none
  * yet), one for each repository with a task in the last two hours, never more
- * than `FLEETADLC_WARM_POOL_MAX` (three by default), and never more than the
+ * than `OPENADLC_WARM_POOL_MAX` (three by default), and never more than the
  * host has room for beside what it runs. One made from an image the engine
  * update has since replaced, or made more than a day ago, is drained; so is
  * every warm one found when hostd starts: hostd reads none of the labels a
@@ -45,7 +45,7 @@ export interface WarmHost {
 export interface WarmPoolOptions {
   host: WarmHost;
   enabled: boolean;
-  /** `FLEETADLC_WARM_POOL_MAX`. */
+  /** `OPENADLC_WARM_POOL_MAX`. */
   max: number;
   /** How many more computers the host has room for now, beside what it runs. */
   room: () => number;

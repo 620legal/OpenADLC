@@ -459,8 +459,8 @@ export function EngineUpdatesPanel({
 
       {!view.hostd.reachable && (
         <p className="text-[12px] text-attention">
-          hostd is not answering, so the versions in use are not known. Run <code className="font-mono">fleetadlc doctor</code>, or{' '}
-          <code className="font-mono">fleetadlc up</code> if it has stopped.
+          hostd is not answering, so the versions in use are not known. Run <code className="font-mono">openadlc doctor</code>, or{' '}
+          <code className="font-mono">openadlc up</code> if it has stopped.
           {view.hostd.detail && <span className="mt-0.5 block text-muted">{view.hostd.detail}</span>}
         </p>
       )}

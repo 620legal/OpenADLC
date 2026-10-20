@@ -25,7 +25,7 @@ export interface GcloudResult {
 export type Gcloud = (args: string[]) => Promise<GcloudResult>;
 
 export interface Leftover {
-  /** What it is, as a person names it: "workload identity pool fleetadlc-github". */
+  /** What it is, as a person names it: "workload identity pool openadlc-github". */
   what: string;
   /** Its state, and how long Google keeps it, when that is known. */
   detail: string;
@@ -202,7 +202,7 @@ export function leftoversMessage(projectId: string, found: readonly Leftover[]):
     `Project ${projectId} still holds an earlier OpenADLC install:`,
     ...found.map((one) => `  - ${one.what}: ${one.detail}`),
     'Setting up again in the same project is not supported.',
-    'Create a new Google Cloud project and run `fleetadlc cloud configure` with it.',
+    'Create a new Google Cloud project and run `openadlc cloud configure` with it.',
   ];
 }
 
@@ -222,10 +222,10 @@ export function explainTerraformFailure(output: string): string | null {
     return `Terraform stopped because ${bootstrap[0]} is off in the project, and Terraform needs it before it can turn on the module's APIs. Run: gcloud services enable cloudresourcemanager.googleapis.com serviceusage.googleapis.com --project ${project}, then run this again (infra/gcp/install.sh does both).`;
   }
   if (/SERVICE_DISABLED|accessNotConfigured|has not been used in project/i.test(output)) {
-    return 'Terraform stopped because a Google API it needs was still being turned on: the module turns it on in the same apply, and Google can take a few minutes to finish. Run `fleetadlc cloud apply` again.';
+    return 'Terraform stopped because a Google API it needs was still being turned on: the module turns it on in the same apply, and Google can take a few minutes to finish. Run `openadlc cloud apply` again.';
   }
   if (/alreadyExists|already exists|Error 409|name is reserved|instance name .* (?:recently|reserved)|was recently used/i.test(output)) {
-    return 'Terraform stopped because something with the name it needs is already in the project, or Google still holds that name after an earlier install was deleted. Setting up again in the same project is not supported: create a new Google Cloud project and run `fleetadlc cloud configure` with it.';
+    return 'Terraform stopped because something with the name it needs is already in the project, or Google still holds that name after an earlier install was deleted. Setting up again in the same project is not supported: create a new Google Cloud project and run `openadlc cloud configure` with it.';
   }
   return null;
 }

@@ -1,8 +1,9 @@
+import './legacy-env.js';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getSecretStore, internalSecretRef } from '@fleetadlc/github';
+import { getSecretStore, internalSecretRef } from '@openadlc/github';
 import { answerOf, attachFailure } from './attach.js';
 import { rotateAttribution } from './commands/attribution.js';
 import { authLogin, authStatus } from './commands/auth.js';
@@ -38,28 +39,28 @@ function has(name: string): boolean {
 const DATABASE_COMMANDS = new Set(['doctor', 'status', 'auth', 'backup', 'restore', 'seed', 'github']);
 
 const USAGE = `
-fleetadlc — a crew of agents that takes a request to a reviewed, deployed change
+openadlc — a crew of agents that takes a request to a reviewed, deployed change
 
-  fleetadlc COMMAND --help          what that command does, and nothing else
-  fleetadlc init [--driver local|docker] [--database-url URL]
+  openadlc COMMAND --help          what that command does, and nothing else
+  openadlc init [--driver local|docker] [--database-url URL]
                                     where to set this install up (the console does it)
-  fleetadlc up [--no-seed]          start the stack, and print a link that signs you in to the console;
+  openadlc up [--no-seed]          start the stack, and print a link that signs you in to the console;
                                     --no-seed skips reloading config/bots.yaml and config/repos.yaml
-  fleetadlc console-link            a fresh sign-in link for the console (each one works for an hour)
-  fleetadlc down                    stop the stack
-  fleetadlc status                  what is running, what the board looks like, what it has cost
-  fleetadlc doctor                  check the things that break an install
-  fleetadlc auth login --bot NAME   connect one bot's GitHub account with the device flow
-  fleetadlc auth login --all        connect every bot in turn; run fleetadlc up first,
+  openadlc console-link            a fresh sign-in link for the console (each one works for an hour)
+  openadlc down                    stop the stack
+  openadlc status                  what is running, what the board looks like, what it has cost
+  openadlc doctor                  check the things that break an install
+  openadlc auth login --bot NAME   connect one bot's GitHub account with the device flow
+  openadlc auth login --all        connect every bot in turn; run openadlc up first,
                                     since the bridge connects each seat
-  fleetadlc auth status             which accounts are connected
-  fleetadlc attribution rotate [--drop-old]
+  openadlc auth status             which accounts are connected
+  openadlc attribution rotate [--drop-old]
                                     a new key for signing the crew's posts, made by
                                     the running bridge (POST /v1/attribution/rotate).
                                     The old key keeps checking posts for 30 days;
                                     after a leak, --drop-old stops it and every
                                     earlier key checking at once
-  fleetadlc backup [--out PATH] [--unencrypted]
+  openadlc backup [--out PATH] [--unencrypted]
                                     encrypted copy of the whole install: settings and
                                     the App's key, repositories, the crew and their
                                     GitHub sign-ins, model accounts. Narrow it with
@@ -70,7 +71,7 @@ fleetadlc — a crew of agents that takes a request to a reviewed, deployed chan
                                     not for part of it (--sign-ins, --no-sign-ins):
                                     GitHub rotates them, so a restored one moves to
                                     the new install
-  fleetadlc restore PATH            put one of those archives back (--dry-run first).
+  openadlc restore PATH            put one of those archives back (--dry-run first).
                                     Every sign-in in it is checked first, and one
                                     that is expired or refused is never restored; a
                                     GitHub or subscription sign-in can only be
@@ -78,21 +79,21 @@ fleetadlc — a crew of agents that takes a request to a reviewed, deployed chan
                                     clean install that is done; on one that is set
                                     up, only with --take-over-sign-ins. It names the
                                     bots that need to connect again
-  fleetadlc attach BOT SESSION      take over a running session in the terminal
-  fleetadlc logs [SERVICE]          where a service writes its log (the bridge's when none is named)
-  fleetadlc seed                    reload config/bots.yaml and config/repos.yaml
-  fleetadlc config                  print the path of this install's install.json
-  fleetadlc github sync-labels [--repo NAME] [--file PATH]
+  openadlc attach BOT SESSION      take over a running session in the terminal
+  openadlc logs [SERVICE]          where a service writes its log (the bridge's when none is named)
+  openadlc seed                    reload config/bots.yaml and config/repos.yaml
+  openadlc config                  print the path of this install's install.json
+  openadlc github sync-labels [--repo NAME] [--file PATH]
                                     write config/labels.json to every repository
                                     (--repo NAME for one, --file PATH for another
-                                    label file, such as config/labels-fleetadlc.json)
-  fleetadlc github check            can the automation account reach the repositories,
+                                    label file, such as config/labels-openadlc.json)
+  openadlc github check            can the automation account reach the repositories,
                                     and are the repository rules in place
-  fleetadlc github apply            create the rulesets, environments and CODEOWNERS;
+  openadlc github apply            create the rulesets, environments and CODEOWNERS;
                                     asks how production ships where nothing says:
                                     --production auto [--soak MINUTES] or
                                     --production reviewers --reviewer LOGIN[,LOGIN]
-  fleetadlc cloud configure         set up a cloud install (gcp). One question: who
+  openadlc cloud configure         set up a cloud install (gcp). One question: who
                                     may open the console (Enter takes the signed-in
                                     gcloud account). The rest defaults, or comes from
                                     --project, --region, --zone, --domain, --members,
@@ -103,12 +104,12 @@ fleetadlc — a crew of agents that takes a request to a reviewed, deployed chan
                                     is served on the install's own address under
                                     nip.io; GitHub is set up later, in the console's
                                     walkthrough
-  fleetadlc cloud pull --bucket B [--prefix P]
+  openadlc cloud pull --bucket B [--prefix P]
                                     take over a cloud install's settings on this machine
-  fleetadlc cloud push              save this machine's cloud settings back to the bucket
-  fleetadlc cloud plan | apply      stand the install up on that cloud
-  fleetadlc cloud output            the console and webhook URLs
-  fleetadlc cloud validate          check the cloud module without touching the install
+  openadlc cloud push              save this machine's cloud settings back to the bucket
+  openadlc cloud plan | apply      stand the install up on that cloud
+  openadlc cloud output            the console and webhook URLs
+  openadlc cloud validate          check the cloud module without touching the install
                                     Every cloud command takes --provider (gcp, the default)
 
 The crew works on GitHub as the accounts you connect. Seats in a group may share one
@@ -119,17 +120,17 @@ user tokens.
 `;
 
 /**
- * The usage, or with a command the lines about it alone: `fleetadlc down -h`
+ * The usage, or with a command the lines about it alone: `openadlc down -h`
  * says what down does and stops nothing.
  */
 function usage(command?: string): void {
   if (command) {
     const entries: string[][] = [];
     for (const line of USAGE.split('\n')) {
-      if (line.startsWith('  fleetadlc ')) entries.push([line]);
+      if (line.startsWith('  openadlc ')) entries.push([line]);
       else if (line.startsWith('    ') && entries.length > 0) entries[entries.length - 1]?.push(line);
     }
-    const about = entries.filter(([first]) => (first as string).slice('  fleetadlc '.length).split(/\s/)[0] === command);
+    const about = entries.filter(([first]) => (first as string).slice('  openadlc '.length).split(/\s/)[0] === command);
     if (about.length > 0) {
       ui.plain(about.flat().join('\n'));
       return;
@@ -159,11 +160,11 @@ async function attach(root: string, bot: string, session: string): Promise<void>
     // as the operator, so it reads it from the same secret store the bridge
     // wrote it to rather than being given one.
     const secret = await getSecretStore().get(internalSecretRef());
-    if (!secret) throw new Error('this install has no internal secret yet; start it with `fleetadlc up`');
+    if (!secret) throw new Error('this install has no internal secret yet; start it with `openadlc up`');
 
     const redeem = await fetch(`http://127.0.0.1:${config.ports.hostd}/terminal/redeem`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': secret },
+      headers: { 'content-type': 'application/json', 'x-openadlc-internal-secret': secret },
       body: JSON.stringify({ token }),
     }).catch(() => null);
     if (!redeem) return failed(attachFailure('hostd', 'unreachable', config.ports.hostd));
@@ -186,7 +187,7 @@ async function main(): Promise<void> {
 
   // Before install.json is read, so a mistake in it cannot hide the help or
   // the path of the file to fix; and before anything runs, so
-  // `fleetadlc down -h` says what down does instead of stopping the stack.
+  // `openadlc down -h` says what down does instead of stopping the stack.
   if (command === undefined || command === 'help' || command === '--help' || command === '-h') return usage(command === 'help' ? subcommand : undefined);
   if (wantsHelp(args)) return usage(command);
 
@@ -201,8 +202,8 @@ async function main(): Promise<void> {
   }
   const stray = strayArgument(command, args);
   if (stray) {
-    ui.fail(`fleetadlc ${command} takes no arguments, and was given ${stray}`);
-    ui.note(`see: fleetadlc ${command} --help`);
+    ui.fail(`openadlc ${command} takes no arguments, and was given ${stray}`);
+    ui.note(`see: openadlc ${command} --help`);
     process.exitCode = 2;
     return;
   }
@@ -257,8 +258,8 @@ async function main(): Promise<void> {
       }
       if (subcommand === 'status' || subcommand === undefined) return authStatus();
       ui.fail(`unknown auth command: ${subcommand}`);
-      ui.note('try: fleetadlc auth login --bot SEAT | --all, or fleetadlc auth status');
-      // 2, as for an unknown flag: `fleetadlc github chek && deploy` went on.
+      ui.note('try: openadlc auth login --bot SEAT | --all, or openadlc auth status');
+      // 2, as for an unknown flag: `openadlc github chek && deploy` went on.
       process.exitCode = 2;
       return;
 
@@ -268,7 +269,7 @@ async function main(): Promise<void> {
         return;
       }
       ui.fail(`unknown attribution command: ${subcommand ?? '(none)'}`);
-      ui.note('try: fleetadlc attribution rotate [--drop-old]');
+      ui.note('try: openadlc attribution rotate [--drop-old]');
       process.exitCode = 2;
       return;
 
@@ -327,7 +328,7 @@ async function main(): Promise<void> {
         });
       }
       ui.fail(`unknown github command: ${subcommand ?? '(none)'}`);
-      ui.note('try: fleetadlc github sync-labels | fleetadlc github check | fleetadlc github apply');
+      ui.note('try: openadlc github sync-labels | openadlc github check | openadlc github apply');
       process.exitCode = 2;
       return;
 
@@ -355,7 +356,7 @@ async function main(): Promise<void> {
       // The path is whichever argument is not a flag, so `--dry-run` may come first.
       const target = process.argv.slice(3).find((argument) => !argument.startsWith('--'));
       if (!target) {
-        ui.fail('usage: fleetadlc restore PATH [--dry-run] [--take-over-sign-ins]');
+        ui.fail('usage: openadlc restore PATH [--dry-run] [--take-over-sign-ins]');
         process.exitCode = 1;
         return;
       }
@@ -365,7 +366,7 @@ async function main(): Promise<void> {
     case 'attach': {
       const [, bot, session] = process.argv.slice(2);
       if (!bot || !session) {
-        ui.fail('usage: fleetadlc attach BOT SESSION');
+        ui.fail('usage: openadlc attach BOT SESSION');
         process.exitCode = 2;
         return;
       }

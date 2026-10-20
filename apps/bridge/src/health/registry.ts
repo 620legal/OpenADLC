@@ -1,5 +1,5 @@
-import { health as rows, type HealthRow } from '@fleetadlc/db';
-import type { HealthView } from '@fleetadlc/shared';
+import { health as rows, type HealthRow } from '@openadlc/db';
+import type { HealthView } from '@openadlc/shared';
 import { failingIds, forgotten, isWaiting, nextRow, notificationsDue, rowId, type Transition } from './state.js';
 import type { CheckResult, HealthCheck } from './types.js';
 
@@ -305,7 +305,7 @@ export class HealthRegistry {
     return `${this.deps.consoleUrl.replace(/\/+$/, '')}${action.href}`;
   }
 
-  /** Every row, as the console and `fleetadlc doctor` read it. */
+  /** Every row, as the console and `openadlc doctor` read it. */
   async views(current?: readonly HealthRow[]): Promise<HealthView[]> {
     const all = (current ?? (await this.store.list())).filter((row) => this.knows(row.checkId));
     const names = this.deps.botNames ? await this.deps.botNames().catch(() => new Map<string, string>()) : new Map<string, string>();

@@ -47,9 +47,9 @@ describe('accepting one invitation by id', () => {
   // invitations, so nothing can be found by searching.
   it('accepts exactly the id it was given', async () => {
     const { api, accepted } = fake({});
-    const outcome = await acceptInvitation(api, 1000001, 'janedoe/FleetADLC');
+    const outcome = await acceptInvitation(api, 1000001, 'janedoe/OpenADLC');
 
-    expect(outcome).toEqual({ action: 'accepted', repository: 'janedoe/FleetADLC', id: 1000001 });
+    expect(outcome).toEqual({ action: 'accepted', repository: 'janedoe/OpenADLC', id: 1000001 });
     expect(accepted).toEqual([1000001]);
   });
 
@@ -61,7 +61,7 @@ describe('accepting one invitation by id', () => {
     const { api } = fake({
       failAccept: new Error('PATCH …: 403: {"message":"Resource not accessible by integration"}'),
     });
-    const outcome = await acceptInvitation(api, 1, 'janedoe/FleetADLC');
+    const outcome = await acceptInvitation(api, 1, 'janedoe/OpenADLC');
 
     expect(outcome.action).toBe('refused');
     expect(outcome).toMatchObject({ detail: expect.stringContaining('Administration: read and write') });
@@ -70,10 +70,10 @@ describe('accepting one invitation by id', () => {
 
 describe('sweeping whatever is pending for a repository', () => {
   it('accepts the one for the repository it was asked about', async () => {
-    const { api, accepted } = fake({ pending: [{ id: 7, full_name: 'janedoe/FleetADLC' }] });
-    const outcome = await acceptPendingInvitations(api, 'janedoe/FleetADLC');
+    const { api, accepted } = fake({ pending: [{ id: 7, full_name: 'janedoe/OpenADLC' }] });
+    const outcome = await acceptPendingInvitations(api, 'janedoe/OpenADLC');
 
-    expect(outcome).toEqual({ action: 'accepted', repository: 'janedoe/FleetADLC', id: 7 });
+    expect(outcome).toEqual({ action: 'accepted', repository: 'janedoe/OpenADLC', id: 7 });
     expect(accepted).toEqual([7]);
   });
 
@@ -84,11 +84,11 @@ describe('sweeping whatever is pending for a repository', () => {
     const { api, accepted } = fake({
       pending: [
         { id: 1, full_name: 'someone-else/private-thing', inviter: 'a-stranger' },
-        { id: 2, full_name: 'janedoe/FleetADLC' },
+        { id: 2, full_name: 'janedoe/OpenADLC' },
         { id: 3, full_name: 'another/repo' },
       ],
     });
-    await acceptPendingInvitations(api, 'janedoe/FleetADLC');
+    await acceptPendingInvitations(api, 'janedoe/OpenADLC');
 
     expect(accepted).toEqual([2]);
   });
@@ -96,8 +96,8 @@ describe('sweeping whatever is pending for a repository', () => {
   it('matches the repository without caring about case', async () => {
     // GitHub is case-insensitive about owner and repository names, and an
     // operator's configuration is written by hand.
-    const { api, accepted } = fake({ pending: [{ id: 9, full_name: 'Janedoe/FleetADLC' }] });
-    await acceptPendingInvitations(api, 'janedoe/fleetadlc');
+    const { api, accepted } = fake({ pending: [{ id: 9, full_name: 'Janedoe/OpenADLC' }] });
+    await acceptPendingInvitations(api, 'janedoe/openadlc');
     expect(accepted).toEqual([9]);
   });
 
@@ -106,7 +106,7 @@ describe('sweeping whatever is pending for a repository', () => {
     // are actually waiting. Reporting that as "nothing pending" is how a bot
     // ends up connected, tokenful and unable to push with no stated reason.
     const { api } = fake({ pending: [] });
-    const outcome = await acceptPendingInvitations(api, 'janedoe/FleetADLC');
+    const outcome = await acceptPendingInvitations(api, 'janedoe/OpenADLC');
 
     expect(outcome.action).toBe('none');
     expect(outcome).toMatchObject({ detail: expect.stringContaining('app token never sees one') });
@@ -114,7 +114,7 @@ describe('sweeping whatever is pending for a repository', () => {
 
   it('reports a failure to even look, rather than calling it nothing-to-do', async () => {
     const { api } = fake({ failList: new Error('connect ECONNREFUSED') });
-    const outcome = await acceptPendingInvitations(api, 'janedoe/FleetADLC');
+    const outcome = await acceptPendingInvitations(api, 'janedoe/OpenADLC');
 
     expect(outcome.action).toBe('refused');
     expect(outcome).toMatchObject({ detail: expect.stringContaining('ECONNREFUSED') });
@@ -122,10 +122,10 @@ describe('sweeping whatever is pending for a repository', () => {
 
   it('reads what is waiting, for a page that wants to show it', async () => {
     const { api } = fake({
-      pending: [{ id: 5, full_name: 'janedoe/FleetADLC', inviter: 'janedoe' }],
+      pending: [{ id: 5, full_name: 'janedoe/OpenADLC', inviter: 'janedoe' }],
     });
     expect(await listInvitations(api)).toEqual([
-      { id: 5, repository: 'janedoe/FleetADLC', inviter: 'janedoe' },
+      { id: 5, repository: 'janedoe/OpenADLC', inviter: 'janedoe' },
     ]);
   });
 });
@@ -186,8 +186,8 @@ describe('an account’s access to a repository', () => {
 
   it('is asked of the repository, which counts a team and an organization as well as an invitation', async () => {
     const { api, asked } = asking({ permission: 'write', role_name: 'write' });
-    expect(await repositoryAccess(api, 'acme/api', 'fleetadlc-atlas-janedoe')).toBe('write');
-    expect(asked).toEqual(['GET /repos/acme/api/collaborators/fleetadlc-atlas-janedoe/permission']);
+    expect(await repositoryAccess(api, 'acme/api', 'openadlc-atlas-janedoe')).toBe('write');
+    expect(asked).toEqual(['GET /repos/acme/api/collaborators/openadlc-atlas-janedoe/permission']);
   });
 
   it('reads the role before the permission, which folds triage into read', async () => {

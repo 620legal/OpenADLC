@@ -1,5 +1,5 @@
-import { bots, issues, localCiRuns, repos, settings, stageMoves, type StageMove } from '@fleetadlc/db';
-import type { GitHubClient } from '@fleetadlc/github';
+import { bots, issues, localCiRuns, repos, settings, stageMoves, type StageMove } from '@openadlc/db';
+import type { GitHubClient } from '@openadlc/github';
 import {
   STAGE_COLUMN_TITLES,
   actsFor,
@@ -12,7 +12,7 @@ import {
   whoWrote,
   type ContextDocument,
   type TaskKind,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 import { attributionModeOf, type Attribution } from './attribution.js';
 import { reviewRulesOf } from './automation.js';
 import { collectIssueAssets } from './issue-assets.js';
@@ -116,7 +116,7 @@ export class Context {
   /**
    * Where a QA task tests: `testing.md`, naming the testing URL its
    * repository's rules resolve to (`testing.url`, else the console's setting,
-   * else `FLEETADLC_TESTING_URL`), and the commit when the subject names one.
+   * else `OPENADLC_TESTING_URL`), and the commit when the subject names one.
    *
    * The skill said to run the suites "against the testing environment", and
    * no task was told where that was: it tested nothing, or ran unit tests,
@@ -307,7 +307,7 @@ export class Context {
       const tag = (review: Review & { seat?: string | null }) => {
         const named = review.seat ?? (() => {
           const wrote = whoWrote(review.user, crew, { bot: seatOf(review.body) });
-          return wrote.kind === 'fleetadlc' ? (wrote.bot?.name ?? null) : null;
+          return wrote.kind === 'openadlc' ? (wrote.bot?.name ?? null) : null;
         })();
         return named && blocking.has(named.toLowerCase()) ? ' (blocking)' : '';
       };
@@ -605,7 +605,7 @@ export async function localCiDocument(repoFullName: string, headSha: string, hea
       content: [
         `# No local CI applies to ${short}`,
         '',
-        `\`${headRef}\` is not a crew branch (\`agent/…\`), so no crew author runs \`fleetadlc-ci\` on it. GitHub's \`ci\` runs on a branch like this at once, and the merge waits for it to pass on this head: GitHub's \`ci\` check on the head is the check this pull request is merged on.`,
+        `\`${headRef}\` is not a crew branch (\`agent/…\`), so no crew author runs \`openadlc-ci\` on it. GitHub's \`ci\` runs on a branch like this at once, and the merge waits for it to pass on this head: GitHub's \`ci\` check on the head is the check this pull request is merged on.`,
         '',
         'Do not request changes for a missing local run. Review the change itself.',
       ].join('\n'),
@@ -615,7 +615,7 @@ export async function localCiDocument(repoFullName: string, headSha: string, hea
     return {
       name: 'local-ci.md',
       title: `Local CI on ${short}: none recorded`,
-      content: `# No local CI run is recorded for ${short}\n\nIts author has not run \`fleetadlc-ci\` on this head, or it did not finish. Do not approve it: request changes saying so.`,
+      content: `# No local CI run is recorded for ${short}\n\nIts author has not run \`openadlc-ci\` on this head, or it did not finish. Do not approve it: request changes saying so.`,
     };
   }
   const tail = (run.logTail ?? '').slice(-LOG_SHOWN);

@@ -73,7 +73,7 @@ export const TRADEOFFS = [
   'Posting by hand as a bot account doesn’t count.',
   'Keep the signing key in backups. A restore needs the attribution-key secret, or earlier posts stop checking.',
   'The key is in this install’s secret store and its backups: anyone who can read either can sign as the crew.',
-  'A rotated key keeps checking old posts for 30 days, unless it was dropped after a leak (fleetadlc attribution rotate --drop-old).',
+  'A rotated key keeps checking old posts for 30 days, unless it was dropped after a leak (openadlc attribution rotate --drop-old).',
 ] as const;
 
 export const WHEN_TO_TURN_ON_TITLE = 'When to turn it on';

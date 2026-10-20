@@ -1,6 +1,6 @@
 import { signInKind } from './sign-in.js';
-import { bots, costs, credentials, hosts, issues, lastJobRuns, leases, listEvents, sessions, tasks, threads } from '@fleetadlc/db';
-import { STAGE_COLUMN_TITLES, STAGE_KEYS, type StageKey } from '@fleetadlc/shared';
+import { bots, costs, credentials, hosts, issues, lastJobRuns, leases, listEvents, sessions, tasks, threads } from '@openadlc/db';
+import { STAGE_COLUMN_TITLES, STAGE_KEYS, type StageKey } from '@openadlc/shared';
 import type { BridgeConfig } from './config.js';
 import type { HostdClient } from './hostd-client.js';
 import { describeIdentity } from './identity.js';
@@ -61,8 +61,8 @@ export interface StatusReport {
 
 /**
  * The report the status job writes into the issue named by
- * FLEETADLC_STATUS_ISSUE, when one is set, and that `GET /v1/status` returns
- * and `fleetadlc status` prints. Everything here is derived, never authored: what hostd sees, what GitHub said,
+ * OPENADLC_STATUS_ISSUE, when one is set, and that `GET /v1/status` returns
+ * and `openadlc status` prints. Everything here is derived, never authored: what hostd sees, what GitHub said,
  * what the ledger recorded.
  */
 export async function buildStatus(config: BridgeConfig, hostd: HostdClient): Promise<StatusReport> {
@@ -82,7 +82,7 @@ export async function buildStatus(config: BridgeConfig, hostd: HostdClient): Pro
     (await costs.ensureBudget(period, config.costs.monthlyCapUsd, config.costs.warningAt));
 
   const board = Object.fromEntries(STAGE_KEYS.map((stage) => [stage, 0])) as Record<StageKey, number>;
-  // As the board counts them: not an issue labelled `fleetadlc:ignore`.
+  // As the board counts them: not an issue labelled `openadlc:ignore`.
   for (const issue of shownIssues(allIssues)) board[issue.stage] += 1;
 
   const openGates = (await threads.listOpenGates()).length;
@@ -194,7 +194,7 @@ export function statusDrift(drift: readonly Drift[], target: { repo: string }): 
 }
 
 /**
- * Which issue `FLEETADLC_STATUS_ISSUE` names: `owner/name#N`, in one of the
+ * Which issue `OPENADLC_STATUS_ISSUE` names: `owner/name#N`, in one of the
  * install's repositories. A bare number used to go to whichever repository
  * sorted first by name, so adding one moved it, and the status job then
  * rewrote an unrelated issue or pull request with the install's spend and
@@ -210,8 +210,8 @@ export function statusIssueTarget(
   if (!raw) return null;
   const must = "it must be <owner>/<name>#<number>, naming one of this install's repositories; nothing was written";
   const named = /^([\w.-]+\/[\w.-]+)#([1-9]\d*)$/.exec(value!);
-  if (!named) return { refusal: `FLEETADLC_STATUS_ISSUE is ${JSON.stringify(value)}; ${must}` };
+  if (!named) return { refusal: `OPENADLC_STATUS_ISSUE is ${JSON.stringify(value)}; ${must}` };
   const repo = managedRepos.find((one) => one.fullName.toLowerCase() === named[1]!.toLowerCase());
-  if (!repo) return { refusal: `FLEETADLC_STATUS_ISSUE names ${named[1]}, which this install does not manage; ${must}` };
+  if (!repo) return { refusal: `OPENADLC_STATUS_ISSUE names ${named[1]}, which this install does not manage; ${must}` };
   return { repo: repo.fullName, number: Number(named[2]) };
 }

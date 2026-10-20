@@ -1,5 +1,5 @@
 {
-  "name": "@fleetadlc/bridge",
+  "name": "@openadlc/bridge",
   "version": "0.1.0",
   "description": "OpenADLC’s event loop: GitHub webhooks, the console’s API, gates, reviews, the merge line, scheduled jobs and health checks.",
   "private": true,
@@ -13,12 +13,12 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@fleetadlc/backup": "workspace:*",
-    "@fleetadlc/db": "workspace:*",
-    "@fleetadlc/dispatcher": "workspace:*",
-    "@fleetadlc/engines": "workspace:*",
-    "@fleetadlc/github": "workspace:*",
-    "@fleetadlc/shared": "workspace:*"
+    "@openadlc/backup": "workspace:*",
+    "@openadlc/db": "workspace:*",
+    "@openadlc/dispatcher": "workspace:*",
+    "@openadlc/engines": "workspace:*",
+    "@openadlc/github": "workspace:*",
+    "@openadlc/shared": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

@@ -1,5 +1,5 @@
-import { audit, bots, hosts, leases, repos, sessions as sessionStore, tasks } from '@fleetadlc/db';
-import { redactSecrets, type TaskKind } from '@fleetadlc/shared';
+import { audit, bots, hosts, leases, repos, sessions as sessionStore, tasks } from '@openadlc/db';
+import { redactSecrets, type TaskKind } from '@openadlc/shared';
 import { dirname, join, resolve } from 'node:path';
 import type { ExecDriver, FoundComputer, TaskComputer } from './drivers/types.js';
 
@@ -150,7 +150,7 @@ export class SessionObserver {
    * before it reported, the reconciler failing a task whose host went silent,
    * the observer above stopping one whose session disappeared — left the entry
    * behind for the life of the process. Each entry counts in `computersHeld()`
-   * against the host's `FLEETADLC_HOST_CAPACITY_TASKS`: a leaked one held a
+   * against the host's `OPENADLC_HOST_CAPACITY_TASKS`: a leaked one held a
    * place no task used, and once enough leaked, the host refused every start as
    * full until hostd restarted. The dispatcher counts the database's rows and
    * did not notice.

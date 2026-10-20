@@ -1,4 +1,4 @@
-import { acknowledgements, audit } from '@fleetadlc/db';
+import { acknowledgements, audit } from '@openadlc/db';
 import { HttpFailure, type Router } from '../router.js';
 import type { HealthRegistry } from './registry.js';
 
@@ -11,10 +11,10 @@ export interface AcknowledgeDeps {
 const LIVE: AcknowledgeDeps = { acknowledge: (id, occurrence, by, covers) => acknowledgements.acknowledge(id, occurrence, by, new Date(), covers), audit };
 
 /**
- * The checks, for the console and for `fleetadlc doctor`.
+ * The checks, for the console and for `openadlc doctor`.
  *
  * `GET` is what the checks last said, which is what the board shows. `POST
- * /run` asks every check now and answers with that — what `fleetadlc doctor` wants,
+ * /run` asks every check now and answers with that — what `openadlc doctor` wants,
  * since a person at a terminal is asking about this moment, not about five
  * minutes ago.
  */

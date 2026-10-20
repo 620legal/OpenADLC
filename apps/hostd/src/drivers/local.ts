@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
-import { signInDir } from '@fleetadlc/backup';
+import { signInDir } from '@openadlc/backup';
 import { loginDir } from '../logins.js';
 import { readSlotTask, removeSlot, writeSlotTask } from '../worktree.js';
 import { hostBaseEnv, withRepoHome } from './base-env.js';
@@ -15,14 +15,14 @@ import type { ExecDriver, ExecOptions, ExecResult, FoundComputer, ObservedSessio
 
 const run = promisify(execFile);
 
-const SESSION_PREFIX = 'fleetadlc__';
+const SESSION_PREFIX = 'openadlc__';
 const SESSION_SEPARATOR = '__';
-/** What sessions were named after before the rename; see `retireLegacySessions`. */
-const LEGACY_SESSION_PREFIX = 'fleet__';
+/** What sessions were named after before the renames, newest first; see `retireLegacySessions`. */
+const LEGACY_SESSION_PREFIXES = ['fleetadlc__', 'fleet__'] as const;
 
 /**
  * The development driver: the same tmux sessions, on the host, with a per-bot
- * session-name prefix instead of a container boundary. It exists so `fleetadlc up`
+ * session-name prefix instead of a container boundary. It exists so `openadlc up`
  * works on a laptop with no Docker; it gives no isolation, which is why a
  * production install uses the docker driver.
  */
@@ -69,7 +69,7 @@ export class LocalDriver implements ExecDriver {
   /**
    * A task's computer here is its directory and nothing else: there is no
    * container to make, and no database either. A task gets no `DATABASE_URL`
-   * at all rather than the platform's — a bot that could reach `fleetadlc_db`
+   * at all rather than the platform's — a bot that could reach `openadlc_db`
    * could rewrite its own ledger.
    */
   async acquire(spec: TaskComputerSpec): Promise<TaskComputer> {
@@ -157,7 +157,7 @@ export class LocalDriver implements ExecDriver {
           name: shell,
           cwd: home,
           command: ['bash', '-l'],
-          env: { ...hostBaseEnv(), FLEETADLC_BOT: bot },
+          env: { ...hostBaseEnv(), OPENADLC_BOT: bot },
         })
         .catch(() => undefined);
     }
@@ -179,8 +179,9 @@ export class LocalDriver implements ExecDriver {
   }
 
   /**
-   * Sessions from before the rename, `fleet__<bot>__<name>`, at hostd's start.
-   * Every list, kill and attach here looks for `fleetadlc__`, and `fleetadlc
+   * Sessions from before the renames, `fleetadlc__<bot>__<name>` and
+   * `fleet__<bot>__<name>`, at hostd's start.
+   * Every list, kill and attach here looks for `openadlc__`, and `openadlc
    * down` leaves tmux running, so a task in flight through the upgrade went on
    * spending and pushing where Stop, the session list and the Terminal could
    * not see it. An idle shell is killed; one still running something is left
@@ -189,7 +190,7 @@ export class LocalDriver implements ExecDriver {
   async retireLegacySessions(): Promise<{ retired: string[]; kept: string[] }> {
     const result = { retired: [] as string[], kept: [] as string[] };
     for (const session of await this.sessionsOrNone()) {
-      if (!session.name.startsWith(LEGACY_SESSION_PREFIX)) continue;
+      if (!LEGACY_SESSION_PREFIXES.some((prefix) => session.name.startsWith(prefix))) continue;
       const info = await this.tmux.paneInfo(session.name);
       const lastLine = (await this.tmux.capturePane(session.name, 50)).filter((line) => line.trim().length > 0).at(-1) ?? null;
       const state = stateFromPane(info?.cmd ?? '', lastLine, info?.dead ?? false);
@@ -229,7 +230,7 @@ export class LocalDriver implements ExecDriver {
     // host's process list, so they go into a file only hostd's user can read,
     // which the session's shell reads, removes, and then runs the command
     // with nothing else, as the docker driver's does.
-    const envFile = join(tmpdir(), `fleetadlc-env-${randomBytes(8).toString('hex')}`);
+    const envFile = join(tmpdir(), `openadlc-env-${randomBytes(8).toString('hex')}`);
     writeFileSync(envFile, sessionEnvFile(withRepoHome(hostBaseEnv(), input.env)), { mode: 0o600, flag: 'wx' });
     try {
       await this.tmux.newSession({

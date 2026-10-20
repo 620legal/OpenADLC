@@ -14,7 +14,7 @@ import type { BotRole } from './types.js';
  * twice, or stripping it from what the console shows, cannot mistake a bold
  * first line somebody wrote for OpenADLC's.
  */
-export const HEADER_TAG = '<!-- fleetadlc-header -->';
+export const HEADER_TAG = '<!-- openadlc-header -->';
 
 /** What each stage is called in the header. The automation bot speaks as the platform, with no stage. */
 export const STAGE_LABEL: Readonly<Record<BotRole, string | null>> = {
@@ -42,8 +42,9 @@ export function headerFor(installName: string, role: BotRole | null): string {
   return `**${stage ? `${name} · ${stage}` : name}**${HEADER_TAG}`;
 }
 
-// `fleet-header` is the tag posts carried before the rename; theirs is read too.
-const LEADING_HEADER = /^\*\*[^\n]*\*\*<!-- fleet(?:adlc)?-header -->[ \t]*\n*/;
+// `fleetadlc-header` and `fleet-header` are the tags posts carried before the
+// renames; theirs are read too.
+const LEADING_HEADER = /^\*\*[^\n]*\*\*<!-- (?:openadlc|fleetadlc|fleet)-header -->[ \t]*\n*/;
 
 /** Whether a body already starts with an OpenADLC header. */
 export function hasHeader(body: string): boolean {
@@ -61,17 +62,17 @@ export function withHeader(body: string, header: string): string {
 }
 
 /** A seat tag at the end of a post, with nothing after it but the signature `signBody` puts there. */
-const SEAT_TAG = /<!-- fleet(?:adlc)?-seat:([a-z0-9][a-z0-9._-]*) -->\s*(?:<!-- fleet(?:adlc)?-sig:[^>]*-->\s*)?$/i;
+const SEAT_TAG = /<!-- (?:openadlc|fleetadlc|fleet)-seat:([a-z0-9][a-z0-9._-]*) -->\s*(?:<!-- (?:openadlc|fleetadlc|fleet)-sig:[^>]*-->\s*)?$/i;
 
 /** The signature at the end of a post, whose payload names the seat it was signed for. */
-const SIGNED_SEAT = /<!-- fleet(?:adlc)?-sig:v1\.[a-z0-9]+\.([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]+ -->\s*$/;
+const SIGNED_SEAT = /<!-- (?:openadlc|fleetadlc|fleet)-sig:v1\.[a-z0-9]+\.([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]+ -->\s*$/;
 
 function tagOf(body: string): string | null {
   return SEAT_TAG.exec(body)?.[1]?.toLowerCase() ?? null;
 }
 
 /**
- * Which seat wrote a post: the tag at its end, `<!-- fleetadlc-seat:builder -->`,
+ * Which seat wrote a post: the tag at its end, `<!-- openadlc-seat:builder -->`,
  * or, on a post that has none, the seat its signature was made for.
  *
  * Seats that share a GitHub account post as one user, so the account says
@@ -84,7 +85,7 @@ function tagOf(body: string): string | null {
  *
  * Only the end counts. This read the first tag anywhere in the body, and a
  * review that quoted one was taken for another seat's: on a real install the lead
- * reviewer explained a bug by quoting `<!-- fleetadlc-seat:intake -->`, so its own
+ * reviewer explained a bug by quoting `<!-- openadlc-seat:intake -->`, so its own
  * tag was never added (a tag was "already there"), the review read as the
  * intake seat's, and its task was failed as having "ended without posting its
  * review" eleven seconds after posting it. That review, and any other posted
@@ -117,7 +118,7 @@ export function withSeat(body: string, seat: string): string {
   const tagged = tagOf(body);
   if (tagged === own) return body;
   const bare = tagged ? body.replace(SEAT_TAG, '') : body;
-  return `${bare.trimEnd()}\n\n<!-- fleetadlc-seat:${own} -->`;
+  return `${bare.trimEnd()}\n\n<!-- openadlc-seat:${own} -->`;
 }
 
 /** The seat the tag at the end of a post names, without falling back to its signature as `seatOf` does. */

@@ -12,7 +12,7 @@ you. [docs/development.md](docs/development.md) is the long form.
 | `apps/hostd` | The runner: bots' containers or tmux sessions, worktrees, the skill runner a task's session executes |
 | `apps/dispatcher` | A library: what may start next. The bridge runs it |
 | `apps/console` | The board and the rest of the UI (Next.js); it reads everything from the bridge |
-| `apps/cli` | `fleetadlc init / up / down / doctor / …`, and the keeper that each service runs under |
+| `apps/cli` | `openadlc init / up / down / doctor / …`, and the keeper that each service runs under |
 | `packages/shared` | Types, stages and labels, markers, the access rule, config schemas |
 | `packages/db` | The platform database: migrations and the store |
 | `packages/github` | Device flow, token broker, secret store, REST client, repository rules |
@@ -30,7 +30,7 @@ Each package has a README with its entry point and its tests.
 pnpm install
 pnpm build       # packages first, then apps
 make ci          # typecheck and unit tests: green before a pull request opens
-                 # (a builder runs it as `fleetadlc-ci`, which records the pass)
+                 # (a builder runs it as `openadlc-ci`, which records the pass)
 ```
 
 - **Apps read the packages' builds.** After changing `packages/*`, run
@@ -38,16 +38,16 @@ make ci          # typecheck and unit tests: green before a pull request opens
 - **vitest does not typecheck.** CI runs `tsc`. Run `pnpm build` after the last
   edit, test files included; the root `tests/` are not a package it builds, so
   `make ci` (`pnpm typecheck`) is what checks theirs.
-- One package: `pnpm --filter @fleetadlc/<name> test`; one test:
-  `pnpm --filter @fleetadlc/<name> exec vitest run <file> -t '<name>'`.
+- One package: `pnpm --filter @openadlc/<name> test`; one test:
+  `pnpm --filter @openadlc/<name> exec vitest run <file> -t '<name>'`.
 
 The integration suites (`tests/*.mjs`) write to the install they run against.
 All but the live ones refuse to run unless the environment names a scratch
 one: the bridge says it is scripted (started with
-`FLEETADLC_SCRIPTED_ENGINES=1`, so its engines replay fabricated runs instead
-of calling a model; see tests/README.md), all four of `FLEETADLC_BRIDGE_URL`,
-`FLEETADLC_HOSTD_URL`, `DATABASE_URL` and `FLEETADLC_HOME` are exported, and
-`FLEETADLC_HOME` is not `~/.fleetadlc`. The live ones (`github-live*.mjs`)
+`OPENADLC_SCRIPTED_ENGINES=1`, so its engines replay fabricated runs instead
+of calling a model; see tests/README.md), all four of `OPENADLC_BRIDGE_URL`,
+`OPENADLC_HOSTD_URL`, `DATABASE_URL` and `OPENADLC_HOME` are exported, and
+`OPENADLC_HOME` is not `~/.openadlc`. The live ones (`github-live*.mjs`)
 need a real, connected install and write to the first repository it manages
 on GitHub; `all.mjs` runs them only with `--live`, so run them only on
 purpose. Run the others against a scratch install:
@@ -58,9 +58,9 @@ node tests/all.mjs --no-live
 tests/scratch.sh down
 ```
 
-Never run `fleetadlc up`, `fleetadlc down` or `fleetadlc restore` without knowing which
-`FLEETADLC_HOME` they act on: `~/.fleetadlc` is a real install on a machine that runs
-OpenADLC. Never stop or remove the `fleetadlc-db`, `fleetadlc-taskdb`, `task-*` or
+Never run `openadlc up`, `openadlc down` or `openadlc restore` without knowing which
+`OPENADLC_HOME` they act on: `~/.openadlc` is a real install on a machine that runs
+OpenADLC. Never stop or remove the `openadlc-db`, `openadlc-taskdb`, `task-*` or
 `bot-<name>` containers: a `task-*` container is a task's computer, with its
 work in it.
 
@@ -93,7 +93,7 @@ work in it.
 
 - Comments explain the constraint and the failure that made it one — what went
   wrong, and where — not what the next line does.
-- An error says what to do: `builder is not connected to GitHub. Run: fleetadlc auth
+- An error says what to do: `builder is not connected to GitHub. Run: openadlc auth
   login --bot builder`, not `unauthorized`.
 - Commit titles are a sentence saying the outcome ("Refuse a flag a command does
   not read"), and the body tells what happened and why this is the fix.
@@ -123,7 +123,7 @@ A change that makes one of these possible is wrong even when its tests pass:
 - A credential is kept only in the secret store, apart from the exceptions
   [docs/security.md](docs/security.md#secrets) lists on purpose: the webhook
   secret and the database password in `install.json` (0600), OpenAI and xAI
-  subscription logins under `~/.fleetadlc/logins/<account>` (0700), and
+  subscription logins under `~/.openadlc/logins/<account>` (0700), and
   backups, in plain text when written with `--unencrypted`. A credential never
   reaches a log or GitHub.
 
@@ -136,7 +136,7 @@ than by a setting that says so. Register it in the bridge's health registry
 (`apps/bridge/src/health/`). The check runs at start and every few minutes; while
 it fails it is a card on the board with the exact thing to do and a button to
 where it is done, and it clears itself when it passes. It is also what marks the
-walkthrough's step done and what `fleetadlc doctor` prints.
+walkthrough's step done and what `openadlc doctor` prints.
 
 A walkthrough step a person does is listed in `MANUAL_STEPS`
 (`packages/shared/src/onboarding.ts`), and `apps/bridge/src/health/registry.test.ts`

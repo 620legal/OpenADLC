@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * lists when a step could not be done.
  */
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async () => undefined),
   bots: { listBots: vi.fn() },
   leases: { listActiveLeases: vi.fn(), releaseForRepo: vi.fn() },
@@ -16,8 +16,8 @@ vi.mock('@fleetadlc/db', () => ({
   threads: { listOpenGatesInRepo: vi.fn(), expireEndedGatesInRepo: vi.fn() },
 }));
 
-import { audit, bots, leases, repos, tasks, threads } from '@fleetadlc/db';
-import { GitHubApiError } from '@fleetadlc/github';
+import { audit, bots, leases, repos, tasks, threads } from '@openadlc/db';
+import { GitHubApiError } from '@openadlc/github';
 import {
   DEFAULT_REMOVAL,
   LEFT_ALONE,
@@ -38,9 +38,9 @@ const REMOVED = { ...REPO, removedAt: '2026-09-30T10:00:00.000Z' };
 
 const CREW = [
   { id: 'bot-intake', name: 'ottoexampleco', githubLogin: 'ottoexampleco' },
-  { id: 'bot-builder', name: 'fleetadlc-atlas-janedoe', githubLogin: 'fleetadlc-atlas-janedoe' },
+  { id: 'bot-builder', name: 'openadlc-atlas-janedoe', githubLogin: 'openadlc-atlas-janedoe' },
   // A second seat on the builder's account: one account, one removal.
-  { id: 'bot-builder-2', name: 'builder-2', githubLogin: 'FleetADLC-Atlas-Janedoe' },
+  { id: 'bot-builder-2', name: 'builder-2', githubLogin: 'OpenADLC-Atlas-Janedoe' },
   { id: 'bot-reviewer', name: 'irisexampleco', githubLogin: 'irisexampleco' },
   { id: 'bot-new', name: 'second-reviewer', githubLogin: null },
 ];
@@ -56,10 +56,10 @@ const LEASE = { id: 'lease-14', repoId: 'repo-app', issueNumber: 14, botId: 'bot
 function fakeGitHub(overrides: Partial<RemovalGitHub> = {}) {
   const calls: string[] = [];
   const github: RemovalGitHub = {
-    collaborators: vi.fn(async () => ['janedoe', 'fleetadlc-atlas-janedoe', 'irisexampleco']),
+    collaborators: vi.fn(async () => ['janedoe', 'openadlc-atlas-janedoe', 'irisexampleco']),
     removeCollaborator: vi.fn(async (login: string) => void calls.push(`remove ${login}`)),
     cancelInvitation: vi.fn(async (id: number) => void calls.push(`cancel ${id}`)),
-    labels: vi.fn(async () => ['adlc:build', 'priority:p1', 'bug', 'area:general', 'fleetadlc:ignore', 'Size:large', 'priority:high', 'blocked', 'sdlc:build']),
+    labels: vi.fn(async () => ['adlc:build', 'priority:p1', 'bug', 'area:general', 'openadlc:ignore', 'Size:large', 'priority:high', 'blocked', 'sdlc:build']),
     deleteLabel: vi.fn(async (name: string) => void calls.push(`delete ${name}`)),
     ...overrides,
   };
@@ -108,15 +108,15 @@ describe('the review step, before anything happens', () => {
       removedAt: null,
       tasks: [
         { id: 'task-paused', subject: 'app#12', kind: 'intake', state: 'paused', bot: 'ottoexampleco', question: 'Which database?' },
-        { id: 'task-running', subject: 'app#14', kind: 'implement', state: 'running', bot: 'fleetadlc-atlas-janedoe', question: null },
+        { id: 'task-running', subject: 'app#14', kind: 'implement', state: 'running', bot: 'openadlc-atlas-janedoe', question: null },
       ],
       questions: [{ id: 'gate-1', subject: 'app#12', question: 'Which database?' }],
-      leases: [{ id: 'lease-14', issue: 14, bot: 'fleetadlc-atlas-janedoe', state: 'in_task' }],
+      leases: [{ id: 'lease-14', issue: 14, bot: 'openadlc-atlas-janedoe', state: 'in_task' }],
       crew: {
         known: true,
         reason: null,
         accounts: [
-          { bots: ['fleetadlc-atlas-janedoe', 'builder-2'], login: 'fleetadlc-atlas-janedoe', state: 'collaborator' },
+          { bots: ['openadlc-atlas-janedoe', 'builder-2'], login: 'openadlc-atlas-janedoe', state: 'collaborator' },
           { bots: ['irisexampleco'], login: 'irisexampleco', state: 'collaborator' },
           { bots: ['ottoexampleco'], login: 'ottoexampleco', state: 'invited' },
         ],
@@ -124,7 +124,7 @@ describe('the review step, before anything happens', () => {
       labels: {
         known: true,
         reason: null,
-        names: ['adlc:build', 'priority:p1', 'area:general', 'fleetadlc:ignore', 'Size:large', 'sdlc:build'],
+        names: ['adlc:build', 'priority:p1', 'area:general', 'openadlc:ignore', 'Size:large', 'sdlc:build'],
         maybeTheirs: ['priority:high', 'blocked'],
       },
       app: { allRepositories: true, settingsUrl: 'https://github.com/settings/installations/7', reason: null },
@@ -233,15 +233,15 @@ describe('removing a repository', () => {
     const report = await flow.remove('app', 'janedoe', DEFAULT_REMOVAL);
 
     // janedoe is a person, not the crew: left alone. The builder's account is removed once for its two seats.
-    expect(calls).toEqual(['remove fleetadlc-atlas-janedoe', 'remove irisexampleco', 'cancel 41']);
-    expect(report?.collaboratorsRemoved).toEqual(['fleetadlc-atlas-janedoe', 'irisexampleco']);
+    expect(calls).toEqual(['remove openadlc-atlas-janedoe', 'remove irisexampleco', 'cancel 41']);
+    expect(report?.collaboratorsRemoved).toEqual(['openadlc-atlas-janedoe', 'irisexampleco']);
     expect(report?.invitationsCancelled).toEqual(['ottoexampleco']);
     expect(crewAccess.forget).toHaveBeenCalledWith('janedoe/app');
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'repo.crew_removed',
         target: 'janedoe/app',
-        payload: { collaborators: ['fleetadlc-atlas-janedoe', 'irisexampleco'], invitations: ['ottoexampleco'], failed: [] },
+        payload: { collaborators: ['openadlc-atlas-janedoe', 'irisexampleco'], invitations: ['ottoexampleco'], failed: [] },
       }),
     );
   });
@@ -254,7 +254,7 @@ describe('removing a repository', () => {
 
     const report = await removal(github).flow.remove('app', 'janedoe', { crewAccess: false, labels: true });
     // Not `priority:high` or `blocked`, which may be the repository's own.
-    expect(report?.labelsRemoved).toEqual(['adlc:build', 'priority:p1', 'area:general', 'fleetadlc:ignore', 'Size:large', 'sdlc:build']);
+    expect(report?.labelsRemoved).toEqual(['adlc:build', 'priority:p1', 'area:general', 'openadlc:ignore', 'Size:large', 'sdlc:build']);
     expect(calls).toEqual(report?.labelsRemoved.map((name) => `delete ${name}`));
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'repo.labels_removed', payload: { removed: report?.labelsRemoved, failed: [] } }),
@@ -338,7 +338,7 @@ describe('a removal that could not do everything', () => {
 
     expect(report?.repo.removedAt).toBe('2026-09-30T10:00:00.000Z');
     expect(report?.stopped.map((one) => one.task)).toEqual(['task-paused']);
-    expect(calls).toEqual(['remove fleetadlc-atlas-janedoe', 'cancel 41']);
+    expect(calls).toEqual(['remove openadlc-atlas-janedoe', 'cancel 41']);
     expect(report?.notDone).toEqual([
       {
         step: 'task',
@@ -438,7 +438,7 @@ describe('a removal that could not do everything', () => {
 
     const report = await flow.remove('app', 'janedoe', { crewAccess: false, labels: true });
 
-    expect(report?.labelsRemoved).toEqual(['adlc:build', 'area:general', 'fleetadlc:ignore', 'Size:large', 'sdlc:build']);
+    expect(report?.labelsRemoved).toEqual(['adlc:build', 'area:general', 'openadlc:ignore', 'Size:large', 'sdlc:build']);
     expect(report?.notDone).toEqual([
       expect.objectContaining({ step: 'label', what: '1 of OpenADLC’s labels is still there: priority:p1', action: { label: 'Labels on GitHub', url: 'https://github.com/janedoe/app/labels' } }),
     ]);
@@ -458,7 +458,7 @@ describe('a removal that could not do everything', () => {
 
 describe('OpenADLC’s labels', () => {
   it('are the ones config/labels.json names, and their older names, in any letter case', () => {
-    const ours = ['adlc:review', 'priority:p0', 'do:human', 'start:now', 'review:human', 'touches:schema', 'size:large', 'area:general', 'scope:cross-cutting', 'ADLC:done', 'fleetadlc:ignore', 'fleetadlc:paused', 'fleetadlc:next', 'deployed:prod', 'sdlc:build', 'fleet:ignore'];
+    const ours = ['adlc:review', 'priority:p0', 'do:human', 'start:now', 'review:human', 'touches:schema', 'size:large', 'area:general', 'scope:cross-cutting', 'ADLC:done', 'openadlc:ignore', 'openadlc:paused', 'openadlc:next', 'deployed:prod', 'sdlc:build', 'fleet:ignore'];
     expect(sortLabels(ours, CONFIGURED)).toEqual({ ours, maybeTheirs: [] });
   });
 
@@ -515,7 +515,7 @@ describe('GitHub, as the flow asks it', () => {
 describe('where the app stands', () => {
   const view = (selection: 'all' | 'selected' | null) => ({
     installationsView: async () => ({
-      app: { slug: 'fleetadlc' } as never,
+      app: { slug: 'openadlc' } as never,
       reason: '',
       accounts: [
         {

@@ -27,8 +27,8 @@ const FRESH: OnboardingData = {
       displayName: 'Builder',
       role: 'implement',
       roleLabel: 'builder',
-      login: 'fleetadlc-builder',
-      suggestedLogin: 'fleetadlc-builder',
+      login: 'openadlc-builder',
+      suggestedLogin: 'openadlc-builder',
       suggestedEmail: null,
       emailNote: '',
       repositoryRole: 'write',
@@ -126,7 +126,7 @@ const SIGN_INS: SignInLine[] = [
     provider: 'github',
     seat: 'builder',
     accountId: null,
-    who: 'fleetadlc-atlas-acme',
+    who: 'openadlc-atlas-acme',
     rotates: true,
     replaces: false,
     verdict: { state: 'check-by-use' },
@@ -140,7 +140,7 @@ const SIGN_INS: SignInLine[] = [
     provider: 'github',
     seat: 'qa',
     accountId: null,
-    who: 'fleetadlc-quinn-acme',
+    who: 'openadlc-quinn-acme',
     rotates: true,
     replaces: false,
     verdict: { state: 'blocked', reason: 'it expired on 1 March 2027' },
@@ -190,8 +190,8 @@ const RESTORES: RestoreSummary = {
     {
       seat: 'builder',
       name: 'builder',
-      login: 'fleetadlc-atlas-acme',
-      becomes: 'fleetadlc-atlas-acme',
+      login: 'openadlc-atlas-acme',
+      becomes: 'openadlc-atlas-acme',
       signIn: false,
       signingKey: true,
       model: 'newest:opus',
@@ -202,7 +202,7 @@ const RESTORES: RestoreSummary = {
     {
       seat: 'lead-reviewer',
       name: 'lead-reviewer',
-      login: 'fleetadlc-sydney-acme',
+      login: 'openadlc-sydney-acme',
       becomes: null,
       signIn: false,
       signingKey: true,
@@ -215,7 +215,7 @@ const RESTORES: RestoreSummary = {
   signIns: SIGN_INS,
   history: null,
   skipped: ['the setting quantumMode, which this version of OpenADLC does not know'],
-  next: ['Connect 1 bot to GitHub — fleetadlc-sydney-acme — because its sign-in was not in the backup.'],
+  next: ['Connect 1 bot to GitHub — openadlc-sydney-acme — because its sign-in was not in the backup.'],
 };
 
 /** The archive a `read` phase was read from, which Restore sends. */
@@ -229,8 +229,8 @@ const PREVIEW: RestorePreview = {
     install: { settings: ['operatorEmail', 'organization'], app: ['private key', 'client id', 'webhook secret'], other: [] },
     repositories: ['acme/widgets'],
     bots: [
-      { seat: 'builder', name: 'fleetadlc-atlas-acme', login: 'fleetadlc-atlas-acme', signingKey: true, signIn: true, model: 'newest:opus' },
-      { seat: 'lead-reviewer', name: 'fleetadlc-sydney-acme', login: 'fleetadlc-sydney-acme', signingKey: true, signIn: false, model: null },
+      { seat: 'builder', name: 'openadlc-atlas-acme', login: 'openadlc-atlas-acme', signingKey: true, signIn: true, model: 'newest:opus' },
+      { seat: 'lead-reviewer', name: 'openadlc-sydney-acme', login: 'openadlc-sydney-acme', signingKey: true, signIn: false, model: null },
     ],
     botSignIns: true,
     accounts: [{ id: 'a', label: 'Anthropic — Max', provider: 'anthropic', kind: 'subscription', credential: 'token' }],
@@ -243,7 +243,7 @@ const PREVIEW: RestorePreview = {
 
 function choice(
   phase: RestorePhase,
-  fileName: string | null = 'fleetadlc-backup-2026-09-24.fleetbak',
+  fileName: string | null = 'openadlc-backup-2026-09-24.fleetbak',
   sealed = true,
   choices: Record<string, boolean> = { 'bot:builder': true, 'account:a': true },
 ): string {
@@ -289,10 +289,10 @@ describe('restoring from the first step', () => {
     expect(said).toContain('Restoring it sets up');
     expect(said).toContain('The install’s two settings, and the app’s private key, client id and webhook secret');
     expect(said).toContain('The model account ChatGPT Pro, to sign in to again');
-    expect(said).toContain('Builder: fleetadlc-atlas-acme, if its sign-in still works');
-    expect(said).toContain('Lead reviewer: fleetadlc-sydney-acme, to connect again');
+    expect(said).toContain('Builder: openadlc-atlas-acme, if its sign-in still works');
+    expect(said).toContain('Lead reviewer: openadlc-sydney-acme, to connect again');
     expect(said).toContain('It leaves out the setting quantumMode');
-    expect(said).toContain('Then still to do Connect 1 bot to GitHub — fleetadlc-sydney-acme');
+    expect(said).toContain('Then still to do Connect 1 bot to GitHub — openadlc-sydney-acme');
     expect(choice({ at: 'read', preview: PREVIEW, ...ARCHIVE })).toMatch(/<button[^>]*>Restore<\/button>/);
   });
 
@@ -301,17 +301,17 @@ describe('restoring from the first step', () => {
     const said = text(html);
 
     expect(said).toContain('Sign-ins');
-    expect(said).toContain('Builder as fleetadlc-atlas-acme Can only be checked by using it');
+    expect(said).toContain('Builder as openadlc-atlas-acme Can only be checked by using it');
     expect(said).toContain('Anthropic — Max Works — Anthropic lists 9 models for it');
-    expect(said).toContain('QA as fleetadlc-quinn-acme Cannot be restored — it expired on 1 March 2027');
+    expect(said).toContain('QA as openadlc-quinn-acme Cannot be restored — it expired on 1 March 2027');
     expect(said).toContain('OpenAI API Cannot be restored — OpenAI did not accept it: Incorrect API key provided');
     // What checking a rotating one does, said plainly.
     expect(said).toContain(
       'Checking a GitHub sign-in uses it — if it works, this install takes it over from wherever else it is in use.',
     );
-    expect(box(html, 'Builder as fleetadlc-atlas-acme')).toContain('checked=""');
+    expect(box(html, 'Builder as openadlc-atlas-acme')).toContain('checked=""');
     expect(box(html, 'Anthropic — Max')).toContain('checked=""');
-    for (const blocked of ['QA as fleetadlc-quinn-acme', 'OpenAI API']) {
+    for (const blocked of ['QA as openadlc-quinn-acme', 'OpenAI API']) {
       expect(box(html, blocked)).toContain('disabled=""');
       expect(box(html, blocked)).not.toContain('checked=""');
     }
@@ -337,7 +337,7 @@ describe('restoring from the first step', () => {
       <RestoreChoice
         restore={CLEAN}
         phase={{ at: 'read', preview: { ...PREVIEW, signIns: [...SIGN_INS, engineKey] }, ...ARCHIVE }}
-        fileName="fleetadlc-backup-2026-09-24.fleetbak"
+        fileName="openadlc-backup-2026-09-24.fleetbak"
         sealed
         passphrase=""
         error={null}
@@ -358,14 +358,14 @@ describe('restoring from the first step', () => {
   it('keeps a blocked sign-in unticked even when a choice says otherwise, and shows a working one unticked when a person unticked it', () => {
     const html = choice({ at: 'read', preview: PREVIEW, ...ARCHIVE }, undefined, true, { 'bot:qa': true, 'bot:builder': false, 'account:a': true });
 
-    expect(box(html, 'QA as fleetadlc-quinn-acme')).not.toContain('checked=""');
-    expect(box(html, 'Builder as fleetadlc-atlas-acme')).not.toContain('checked=""');
+    expect(box(html, 'QA as openadlc-quinn-acme')).not.toContain('checked=""');
+    expect(box(html, 'Builder as openadlc-atlas-acme')).not.toContain('checked=""');
   });
 
   it('says what was set up and what is left once it has restored', () => {
     const result: RestoreResult = {
       restored: RESTORES,
-      renames: [{ name: 'builder', to: 'fleetadlc-atlas-acme', state: 'renamed' }],
+      renames: [{ name: 'builder', to: 'openadlc-atlas-acme', state: 'renamed' }],
       signIns: [
         { ...SIGN_INS[0]!, state: 'taken-over' },
         { ...SIGN_INS[1]! },
@@ -374,7 +374,7 @@ describe('restoring from the first step', () => {
           ...SIGN_INS[0]!,
           key: 'bot:lead-reviewer',
           seat: 'lead-reviewer',
-          who: 'fleetadlc-sydney-acme',
+          who: 'openadlc-sydney-acme',
           state: 'refused',
           reason: 'GitHub did not accept it: The refresh token passed is incorrect or expired.',
         },
@@ -401,13 +401,13 @@ describe('restoring from the first step', () => {
     // The install is set up now, and what the restore did is still what the step says.
     expect(said).toContain('Restored. The steps it set up are ticked');
     expect(said).not.toContain('already set up');
-    expect(said).toContain('builder is now fleetadlc-atlas-acme');
+    expect(said).toContain('builder is now openadlc-atlas-acme');
     expect(said).toContain('Still to do Connect 1 bot to GitHub');
-    expect(said).toContain('Builder as fleetadlc-atlas-acme: checked by using it, and taken over');
-    expect(said).toContain('QA as fleetadlc-quinn-acme: not restored — it expired on 1 March 2027');
+    expect(said).toContain('Builder as openadlc-atlas-acme: checked by using it, and taken over');
+    expect(said).toContain('QA as openadlc-quinn-acme: not restored — it expired on 1 March 2027');
     expect(said).toContain('Anthropic — Max: restored, and it works');
     expect(said).toContain(
-      'Lead reviewer as fleetadlc-sydney-acme: not restored — GitHub did not accept it: The refresh token passed is incorrect or expired.',
+      'Lead reviewer as openadlc-sydney-acme: not restored — GitHub did not accept it: The refresh token passed is incorrect or expired.',
     );
     expect(html).toMatch(/<button[^>]*>Go on to create and connect the crew<\/button>/);
   });
@@ -427,9 +427,9 @@ describe('restoring from the first step', () => {
   });
 
   it('lists the crew seat by seat, by role and account', () => {
-    expect(setsUpLines(RESTORES)).toContain('Builder: fleetadlc-atlas-acme, if its sign-in still works');
+    expect(setsUpLines(RESTORES)).toContain('Builder: openadlc-atlas-acme, if its sign-in still works');
     const restored = { ...RESTORES.bots[0]!, signIn: true, signInState: 'taken-over' as const };
-    expect(setsUpLines({ ...RESTORES, bots: [restored] })).toContain('Builder: fleetadlc-atlas-acme, connected');
+    expect(setsUpLines({ ...RESTORES, bots: [restored] })).toContain('Builder: openadlc-atlas-acme, connected');
     expect(setsUpLines({ ...RESTORES, app: [], settings: [] })[0]).toBe('The repository acme/widgets');
     // A seat with no account is as a fresh install has it, and is not listed.
     expect(setsUpLines({ ...RESTORES, bots: [...RESTORES.bots, { ...RESTORES.bots[0]!, seat: 'qa', name: 'qa', login: null, becomes: null }] })).not.toContain('QA: no account');

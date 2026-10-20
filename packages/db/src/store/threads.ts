@@ -1,5 +1,5 @@
-import { redactSecrets } from '@fleetadlc/shared';
-import type { Gate, Message, MessageKind } from '@fleetadlc/shared';
+import { redactSecrets } from '@openadlc/shared';
+import type { Gate, Message, MessageKind } from '@openadlc/shared';
 import { query, queryOne } from '../client.js';
 
 export interface ThreadRow {

@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * holding may have been let go.
  */
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -44,7 +44,7 @@ vi.mock('@fleetadlc/db', () => ({
   recordEvent: vi.fn(),
   repos: {
     getRepoByName: vi.fn(async () => null),
-    listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'fleetadlc', fullName: 'exampleco/fleetadlc' }]),
+    listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'openadlc', fullName: 'exampleco/openadlc' }]),
   },
   requests: { findRequestByPrefix: vi.fn(async () => null) },
   sessions: {},
@@ -58,14 +58,14 @@ vi.mock('@fleetadlc/db', () => ({
     sendBackOfTask: vi.fn(async (taskId: string) => (taskId === 'task-sent' ? { repoId: 'repo-1', issueNumber: 78, from: 'build', to: 'spec', kind: 'send_back' } : null)),
   },
   tasks: {
-    getTask: vi.fn(async (id: string) => (id === 'task-gone' ? null : { id, state: id === 'task-done' ? 'done' : id === 'task-paused' ? 'paused' : 'running', kind: id === 'task-review' ? 'review' : id === 'task-qa' ? 'qa' : id === 'task-spec' ? 'spec' : id === 'task-deploy' ? 'deploy' : 'implement', repoId: 'repo-1', branch: 'agent/builder/78-issue-78', subjectRef: 'fleetadlc#78' })),
+    getTask: vi.fn(async (id: string) => (id === 'task-gone' ? null : { id, state: id === 'task-done' ? 'done' : id === 'task-paused' ? 'paused' : 'running', kind: id === 'task-review' ? 'review' : id === 'task-qa' ? 'qa' : id === 'task-spec' ? 'spec' : id === 'task-deploy' ? 'deploy' : 'implement', repoId: 'repo-1', branch: 'agent/builder/78-issue-78', subjectRef: 'openadlc#78' })),
     updateTaskState: vi.fn(async (id: string, state: string, extra: { exitReason: string | null }) => ({
       id,
       botId: 'bot-builder',
       repoId: 'repo-1',
       kind: 'implement',
       subjectType: 'issue',
-      subjectRef: 'fleetadlc#78',
+      subjectRef: 'openadlc#78',
       leaseId: 'lease-78',
       state,
       exitReason: extra.exitReason,
@@ -158,7 +158,7 @@ afterEach(async () => {
 function post(path: string, body: unknown) {
   return fetch(`${bridgeUrl}${path}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': SECRET },
+    headers: { 'content-type': 'application/json', 'x-openadlc-internal-secret': SECRET },
     body: JSON.stringify(body),
   });
 }
@@ -233,7 +233,7 @@ describe('a task ending, which may let go of paths a plan change was waiting for
 
 describe('a state the task may not move to', () => {
   it('answers 409 with the task’s state when the store refuses the move, and 404 for a task there is not', async () => {
-    const { tasks } = await import('@fleetadlc/db');
+    const { tasks } = await import('@openadlc/db');
     vi.mocked(tasks.updateTaskState).mockResolvedValueOnce(null);
 
     const refused = await post('/internal/tasks/task-done/state', { state: 'running' });
@@ -246,8 +246,8 @@ describe('a state the task may not move to', () => {
   });
 
   it('writes a review that left no review failed in one write, since a done task is not changed again', async () => {
-    const { tasks, repos, bots } = await import('@fleetadlc/db');
-    vi.mocked(repos.getRepoByName).mockResolvedValueOnce({ id: 'repo-1', name: 'fleetadlc', fullName: 'exampleco/fleetadlc' } as never);
+    const { tasks, repos, bots } = await import('@openadlc/db');
+    vi.mocked(repos.getRepoByName).mockResolvedValueOnce({ id: 'repo-1', name: 'openadlc', fullName: 'exampleco/openadlc' } as never);
     vi.mocked(bots.getBotById).mockResolvedValueOnce({ id: 'bot-lead', name: 'lead-reviewer', githubLogin: 'lead-exampleco' } as never);
     automationGithub = { listReviews: async () => [] };
 
@@ -274,7 +274,7 @@ describe('a task ending, which settles the lease a question paused', () => {
     ['failed', 'failed'],
     ['stopped', 'stopped'],
   ])('settles its lease once it is %s', async (state, said) => {
-    const { leases } = await import('@fleetadlc/db');
+    const { leases } = await import('@openadlc/db');
 
     const response = await post('/internal/tasks/task-1/state', { state, reason: 'why' });
 
@@ -282,13 +282,13 @@ describe('a task ending, which settles the lease a question paused', () => {
     expect(vi.mocked(leases.settlePausedLeases)).toHaveBeenCalledWith({
       leaseId: 'lease-78',
       actor: 'bridge',
-      reason: `its task on fleetadlc#78 ${said}`,
+      reason: `its task on openadlc#78 ${said}`,
       holdUntil: expect.any(Date),
     });
   });
 
   it('leaves it while the task is only running, or paused on a person', async () => {
-    const { leases } = await import('@fleetadlc/db');
+    const { leases } = await import('@openadlc/db');
 
     await post('/internal/tasks/task-1/state', { state: 'running' });
     await post('/internal/tasks/task-1/state', { state: 'paused', reason: 'waiting on a person' });
@@ -299,7 +299,7 @@ describe('a task ending, which settles the lease a question paused', () => {
 
 describe('a lease the month cap refuses', () => {
   it('answers 409 and starts nothing', async () => {
-    const { repos, bots, spendingLimits } = await import('@fleetadlc/db');
+    const { repos, bots, spendingLimits } = await import('@openadlc/db');
     vi.mocked(repos.getRepoByName).mockResolvedValueOnce({ id: 'repo-api', name: 'api', fullName: 'exampleco/api' } as never);
     vi.mocked(bots.getBotByName).mockResolvedValueOnce({ id: 'bot-builder', name: 'builder', engine: 'codex' } as never);
     vi.mocked(spendingLimits.refusal).mockResolvedValueOnce('exampleco/api has spent $200 of its $200 this month');
@@ -332,7 +332,7 @@ describe('a lease on an issue closed on GitHub', () => {
   const lease = { leaseId: 'lease-7', repo: 'testbed', issue: 7, bot: 'builder', declaredPaths: ['rub.html'], expiresAt: null };
 
   beforeEach(async () => {
-    const { repos, bots } = await import('@fleetadlc/db');
+    const { repos, bots } = await import('@openadlc/db');
     vi.mocked(repos.getRepoByName).mockResolvedValueOnce({ id: 'repo-testbed', name: 'testbed', fullName: 'exampleco/testbed' } as never);
     vi.mocked(bots.getBotByName).mockResolvedValueOnce({ id: 'bot-builder', name: 'builder', engine: 'codex' } as never);
   });
@@ -353,7 +353,7 @@ describe('a lease on an issue closed on GitHub', () => {
     automationGithub = { getIssue: vi.fn(async () => ({ state: 'open' })), getPullRequest: vi.fn(async () => null) };
     expect((await post('/internal/dispatch/lease', lease)).status).toBe(200);
 
-    const { repos, bots } = await import('@fleetadlc/db');
+    const { repos, bots } = await import('@openadlc/db');
     vi.mocked(repos.getRepoByName).mockResolvedValueOnce({ id: 'repo-testbed', name: 'testbed', fullName: 'exampleco/testbed' } as never);
     vi.mocked(bots.getBotByName).mockResolvedValueOnce({ id: 'bot-builder', name: 'builder', engine: 'codex' } as never);
     automationGithub = { getIssue: vi.fn(async () => Promise.reject(new Error('GitHub is down'))) };
@@ -364,7 +364,7 @@ describe('a lease on an issue closed on GitHub', () => {
 
 describe('an intake task that frees intake', () => {
   it('starts the next request in line when it ends or waits on a person, and no other task does', async () => {
-    const { tasks } = await import('@fleetadlc/db');
+    const { tasks } = await import('@openadlc/db');
     const intakeTask = (state: string) => ({ id: 'task-9', botId: 'bot-intake', repoId: null, kind: 'intake', subjectType: 'request', subjectRef: 'request:aaaaaaaa', state, exitReason: null, startedAt: null });
 
     for (const state of ['done', 'failed', 'stopped', 'paused']) {
@@ -384,21 +384,21 @@ describe('an intake task that frees intake', () => {
 
 describe('the end of a console request’s triage', () => {
   it('hands the issue it filed to Design or Build by the spec rule, whichever delivery linked it', async () => {
-    const { requests, tasks } = await import('@fleetadlc/db');
+    const { requests, tasks } = await import('@openadlc/db');
     // Linked already by the issue's own `opened` delivery, so `triageEnded` answers nothing.
     vi.mocked(requests.findRequestByPrefix).mockResolvedValue({ id: 'aaaaaaaa-1', state: 'filed', repoId: 'repo-1', issueNumber: 12 } as never);
     vi.mocked(tasks.updateTaskState).mockResolvedValueOnce({ id: 'task-9', botId: 'bot-intake', repoId: null, kind: 'intake', subjectType: 'request', subjectRef: 'request:aaaaaaaa', state: 'done', exitReason: null } as never);
     try {
       expect((await post('/internal/tasks/task-9/state', { state: 'done' })).status).toBe(200);
 
-      expect(afterIntake).toHaveBeenCalledWith({ repoName: 'fleetadlc', issueNumber: 12 });
+      expect(afterIntake).toHaveBeenCalledWith({ repoName: 'openadlc', issueNumber: 12 });
     } finally {
       vi.mocked(requests.findRequestByPrefix).mockResolvedValue(null);
     }
   });
 
   it('hands nothing on when the triage filed no issue', async () => {
-    const { tasks } = await import('@fleetadlc/db');
+    const { tasks } = await import('@openadlc/db');
     vi.mocked(tasks.updateTaskState).mockResolvedValueOnce({ id: 'task-9', botId: 'bot-intake', repoId: null, kind: 'intake', subjectType: 'request', subjectRef: 'request:aaaaaaaa', state: 'done', exitReason: null } as never);
 
     await post('/internal/tasks/task-9/state', { state: 'done' });
@@ -409,8 +409,8 @@ describe('the end of a console request’s triage', () => {
 
 describe('unblocking an issue whose dependencies shipped', () => {
   async function stored(labels: string[]) {
-    const db = await import('@fleetadlc/db');
-    vi.mocked(db.repos.getRepoByName).mockResolvedValue({ id: 'repo-1', name: 'fleetadlc', fullName: 'janedoe/fleetadlc' } as never);
+    const db = await import('@openadlc/db');
+    vi.mocked(db.repos.getRepoByName).mockResolvedValue({ id: 'repo-1', name: 'openadlc', fullName: 'janedoe/openadlc' } as never);
     const setBlockedLabel = vi.fn(async () => undefined);
     Object.assign(db.issues, { getIssue: vi.fn(async () => ({ number: 12, labels })), setBlockedLabel });
     return setBlockedLabel;
@@ -419,18 +419,18 @@ describe('unblocking an issue whose dependencies shipped', () => {
   it('swaps blocked for start:now on an issue the crew works on', async () => {
     const setBlockedLabel = await stored(['blocked', 'adlc:build']);
 
-    const response = await post('/internal/issues/fleetadlc/12/unblock', { dependencies: [11] });
+    const response = await post('/internal/issues/openadlc/12/unblock', { dependencies: [11] });
 
     expect(await response.json()).toMatchObject({ changed: true });
-    expect(setBlocked).toHaveBeenCalledWith('janedoe/fleetadlc', 12, false);
+    expect(setBlocked).toHaveBeenCalledWith('janedoe/openadlc', 12, false);
     expect(setBlockedLabel).toHaveBeenCalledWith('repo-1', 12, false);
   });
 
-  it('leaves an issue labelled fleetadlc:ignore blocked, and adds no start:now', async () => {
+  it('leaves an issue labelled openadlc:ignore blocked, and adds no start:now', async () => {
     // Unblocking adds start:now: the crew changing an issue it was told to leave alone.
-    const setBlockedLabel = await stored(['blocked', 'adlc:build', 'fleetadlc:ignore']);
+    const setBlockedLabel = await stored(['blocked', 'adlc:build', 'openadlc:ignore']);
 
-    const response = await post('/internal/issues/fleetadlc/12/unblock', { dependencies: [11] });
+    const response = await post('/internal/issues/openadlc/12/unblock', { dependencies: [11] });
 
     expect(await response.json()).toMatchObject({ changed: false });
     expect(setBlocked).not.toHaveBeenCalled();
@@ -442,13 +442,13 @@ describe('an issue whose Expected paths have a line that is not a path', () => {
   const BODY = '## Expected paths\n\n- packages/db/migrations/0037_x.sql and its test\n- docs/\n';
 
   async function stored() {
-    const db = await import('@fleetadlc/db');
-    vi.mocked(db.repos.getRepoByName).mockResolvedValue({ id: 'repo-1', name: 'fleetadlc', fullName: 'exampleco/fleetadlc' } as never);
+    const db = await import('@openadlc/db');
+    vi.mocked(db.repos.getRepoByName).mockResolvedValue({ id: 'repo-1', name: 'openadlc', fullName: 'exampleco/openadlc' } as never);
     const setTriageLabel = vi.fn(async () => undefined);
     Object.assign(db.issues, { getIssue: vi.fn(async () => ({ number: 12, stage: 'build', labels: ['adlc:build', 'start:now'], body: BODY })), setTriageLabel });
     return { setTriageLabel, audit: vi.mocked(db.audit) };
   }
-  const ask = () => post('/internal/issues/fleetadlc/12/expected-paths', { reason: 'not ready to be worked on: an Expected paths line that is not a path: …' });
+  const ask = () => post('/internal/issues/openadlc/12/expected-paths', { reason: 'not ready to be worked on: an Expected paths line that is not a path: …' });
 
   it('is sent back to the stage that wrote them, the line quoted, and not to triage', async () => {
     // needs-triage waits for a person, and nothing in the crew picks it up.
@@ -456,12 +456,12 @@ describe('an issue whose Expected paths have a line that is not a path', () => {
 
     expect(await (await ask()).json()).toMatchObject({ changed: true, outcome: 'sent', reason: 'sent back to intake to rewrite its Expected paths' });
     expect(fromBridge).toHaveBeenCalledWith(
-      expect.objectContaining({ repoName: 'fleetadlc', issueNumber: 12, from: 'build', reason: expect.stringContaining('- packages/db/migrations/0037_x.sql and its test') }),
+      expect.objectContaining({ repoName: 'openadlc', issueNumber: 12, from: 'build', reason: expect.stringContaining('- packages/db/migrations/0037_x.sql and its test') }),
     );
     expect((fromBridge.mock.calls[0]?.[0] as { reason: string }).reason).toMatch(/one file per line/);
     expect(sendToTriage).not.toHaveBeenCalled();
     expect(setTriageLabel).not.toHaveBeenCalled();
-    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: 'issue.paths_sent_back', target: 'fleetadlc#12' }));
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ action: 'issue.paths_sent_back', target: 'openadlc#12' }));
   });
 
   it('goes to triage only when the send-back is refused, and says why', async () => {
@@ -469,16 +469,16 @@ describe('an issue whose Expected paths have a line that is not a path', () => {
     fromBridge.mockResolvedValueOnce({ sent: false, reason: 'Build has no stage before it to send work back to' });
 
     expect(await (await ask()).json()).toMatchObject({ changed: true, outcome: 'triaged', reason: expect.stringMatching(/not sent back: Build has no stage before it/) });
-    expect(sendToTriage).toHaveBeenCalledWith('exampleco/fleetadlc', 12, expect.stringMatching(/^not ready to be worked on/));
+    expect(sendToTriage).toHaveBeenCalledWith('exampleco/openadlc', 12, expect.stringMatching(/^not ready to be worked on/));
     expect(setTriageLabel).toHaveBeenCalledWith('repo-1', 12);
     expect(audit).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'issue.triaged', target: 'fleetadlc#12', payload: expect.objectContaining({ sendBackRefused: 'Build has no stage before it to send work back to' }) }),
+      expect.objectContaining({ action: 'issue.triaged', target: 'openadlc#12', payload: expect.objectContaining({ sendBackRefused: 'Build has no stage before it to send work back to' }) }),
     );
   });
 
   it('stops at needs-human, as the send-back does past its limits, and is not triaged as well', async () => {
     const { setTriageLabel } = await stored();
-    fromBridge.mockResolvedValueOnce({ sent: false, stalled: true, reason: 'fleetadlc#12 has gone back 3 times in all already; a person decides now' });
+    fromBridge.mockResolvedValueOnce({ sent: false, stalled: true, reason: 'openadlc#12 has gone back 3 times in all already; a person decides now' });
 
     expect(await (await ask()).json()).toMatchObject({ changed: true, outcome: 'stalled', reason: expect.stringMatching(/a person decides now$/) });
     expect(sendToTriage).not.toHaveBeenCalled();
@@ -495,11 +495,11 @@ describe('a task sending its work back', () => {
   });
 
   it('takes the task’s own token, and no other task’s', async () => {
-    const { taskTokenFor } = await import('@fleetadlc/github');
+    const { taskTokenFor } = await import('@openadlc/github');
     const as = (task: string) =>
       fetch(`${bridgeUrl}/internal/tasks/task-1/send-back`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-fleetadlc-task-token': taskTokenFor(task, SECRET) },
+        headers: { 'content-type': 'application/json', 'x-openadlc-task-token': taskTokenFor(task, SECRET) },
         body: JSON.stringify({ to: 'spec', reason: 'x' }),
       });
 
@@ -509,7 +509,7 @@ describe('a task sending its work back', () => {
   });
 
   it('ends a task that sent its work back with where it went, and tells the handoff which task it was', async () => {
-    const { tasks } = await import('@fleetadlc/db');
+    const { tasks } = await import('@openadlc/db');
 
     await post('/internal/tasks/task-sent/state', { state: 'done', reason: 'complete' });
 
@@ -520,10 +520,10 @@ describe('a task sending its work back', () => {
 
 describe('a task token for an ended task', () => {
   const asTask = (task: string, route: string, body: unknown) =>
-    import('@fleetadlc/github').then(({ taskTokenFor }) =>
+    import('@openadlc/github').then(({ taskTokenFor }) =>
       fetch(`${bridgeUrl}/internal/tasks/${task}/${route}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-fleetadlc-task-token': taskTokenFor(task, SECRET) },
+        headers: { 'content-type': 'application/json', 'x-openadlc-task-token': taskTokenFor(task, SECRET) },
         body: JSON.stringify(body),
       }),
     );
@@ -549,14 +549,14 @@ describe('a task token for an ended task', () => {
   });
 
   it('posts no message', async () => {
-    const { threads } = await import('@fleetadlc/db');
+    const { threads } = await import('@openadlc/db');
 
     expect((await asTask('task-done', 'message', { text: 'still here' })).status).toBe(409);
     expect(threads.addMessage).not.toHaveBeenCalled();
   });
 
   it('changes no state, and hands nothing on', async () => {
-    const { tasks } = await import('@fleetadlc/db');
+    const { tasks } = await import('@openadlc/db');
 
     expect((await asTask('task-done', 'state', { state: 'done', reason: 'complete' })).status).toBe(409);
     expect(tasks.updateTaskState).not.toHaveBeenCalled();
@@ -569,14 +569,14 @@ describe('a task token for an ended task', () => {
   });
 
   it('holds hostd, with the install’s secret, to none of it', async () => {
-    const { tasks } = await import('@fleetadlc/db');
+    const { tasks } = await import('@openadlc/db');
 
     expect((await post('/internal/tasks/task-done/state', { state: 'failed', reason: 'gone' })).status).toBe(200);
     expect(tasks.updateTaskState).toHaveBeenCalledWith('task-done', 'failed', { exitReason: 'gone' });
   });
 
   it('still works for a task that is running, or paused on a person’s question', async () => {
-    const { threads } = await import('@fleetadlc/db');
+    const { threads } = await import('@openadlc/db');
 
     expect((await asTask('task-1', 'gate', GATE)).status).toBe(200);
     expect(open).toHaveBeenCalledTimes(1);
@@ -591,10 +591,10 @@ describe('a task token for an ended task', () => {
 
 describe('the repository’s checks on a task’s head', () => {
   const asTask = (task: string, path: string, body: unknown) =>
-    import('@fleetadlc/github').then(({ taskTokenFor }) =>
+    import('@openadlc/github').then(({ taskTokenFor }) =>
       fetch(`${bridgeUrl}${path}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-fleetadlc-task-token': taskTokenFor(task, SECRET) },
+        headers: { 'content-type': 'application/json', 'x-openadlc-task-token': taskTokenFor(task, SECRET) },
         body: JSON.stringify(body),
       }),
     );
@@ -639,7 +639,7 @@ describe('the repository’s checks on a task’s head', () => {
   });
 
   it('are recorded from what hostd reports with the install’s secret, never from a session', async () => {
-    const { localCiRuns } = await import('@fleetadlc/db');
+    const { localCiRuns } = await import('@openadlc/db');
     const result = { runId: 'run-1', taskId: 'task-1', headSha: 'a'.repeat(40), branch: 'something-else', ok: true, exitCode: 0, durationMs: 1200, logTail: 'ci: green' };
 
     // The task's own token opens nothing here.
@@ -653,7 +653,7 @@ describe('the repository’s checks on a task’s head', () => {
   });
 
   it('are stored with a credential the run printed masked', async () => {
-    const { localCiRuns } = await import('@fleetadlc/db');
+    const { localCiRuns } = await import('@openadlc/db');
     const logTail = 'fetching https://x-access-token:ghs_0123456789abcdefghijABCDEFGHIJ@github.com/exampleco/app.git\nci: red';
     await post('/internal/local-ci', { runId: 'run-2', taskId: 'task-1', headSha: 'a'.repeat(40), ok: false, logTail });
 
@@ -665,10 +665,10 @@ describe('the repository’s checks on a task’s head', () => {
 
 describe('signing what a task’s session posts', () => {
   const asTask = (task: string, body: unknown) =>
-    import('@fleetadlc/github').then(({ taskTokenFor }) =>
+    import('@openadlc/github').then(({ taskTokenFor }) =>
       fetch(`${bridgeUrl}/internal/tasks/${task}/stamp`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-fleetadlc-task-token': taskTokenFor(task, SECRET) },
+        headers: { 'content-type': 'application/json', 'x-openadlc-task-token': taskTokenFor(task, SECRET) },
         body: JSON.stringify(body),
       }),
     );
@@ -676,7 +676,7 @@ describe('signing what a task’s session posts', () => {
   it('refuses a body whose end names another seat, rather than signing it as the task’s', async () => {
     // A seat on an account the reviewers share, ending its approval in the
     // lead's tag: signed, the tag would have been the word on whose it was.
-    const response = await asTask('task-1', { body: 'Approved.\n\n<!-- fleetadlc-seat:lead-reviewer -->', kind: 'review', number: 78 });
+    const response = await asTask('task-1', { body: 'Approved.\n\n<!-- openadlc-seat:lead-reviewer -->', kind: 'review', number: 78 });
     expect(response.status).toBe(400);
     const text = await response.text();
     expect(text).toContain('lead-reviewer');
@@ -685,12 +685,12 @@ describe('signing what a task’s session posts', () => {
   });
 
   it('signs a body with no tag, or with the task’s own, as the task’s seat', async () => {
-    for (const body of ['Done.', 'Done.\n\n<!-- fleetadlc-seat:builder -->', 'It keeps `<!-- fleetadlc-seat:lead-reviewer -->` as it was.']) {
+    for (const body of ['Done.', 'Done.\n\n<!-- openadlc-seat:builder -->', 'It keeps `<!-- openadlc-seat:lead-reviewer -->` as it was.']) {
       const response = await asTask('task-1', { body, kind: 'comment', number: 78 });
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ body: `${body}\n\n<!-- signed as builder -->` });
     }
-    expect(sign).toHaveBeenCalledWith('Done.', expect.objectContaining({ seat: 'builder', task: 'task-1', repo: 'exampleco/fleetadlc', kind: 'comment', n: 78 }));
+    expect(sign).toHaveBeenCalledWith('Done.', expect.objectContaining({ seat: 'builder', task: 'task-1', repo: 'exampleco/openadlc', kind: 'comment', n: 78 }));
   });
 
   it('refuses to stamp a body longer than GitHub holds, naming the limit', async () => {
@@ -705,10 +705,10 @@ describe('signing what a task’s session posts', () => {
 
 describe('a task signing what it posts', () => {
   it('signs a review only of the pull request its review task is on', async () => {
-    // task-review reviews fleetadlc#78.
+    // task-review reviews openadlc#78.
     const own = await post('/internal/tasks/task-review/stamp', { body: 'Approved.', kind: 'review', number: 78 });
     expect(own.status).toBe(200);
-    expect(sign).toHaveBeenCalledWith('Approved.', expect.objectContaining({ kind: 'review', n: 78, repo: 'exampleco/fleetadlc' }));
+    expect(sign).toHaveBeenCalledWith('Approved.', expect.objectContaining({ kind: 'review', n: 78, repo: 'exampleco/openadlc' }));
 
     sign.mockClear();
     const another = await post('/internal/tasks/task-review/stamp', { body: 'Approved.', kind: 'review', number: 5 });
@@ -723,8 +723,8 @@ describe('a task signing what it posts', () => {
   });
 
   it('signs a post on the task’s issue or its pull request, and on nothing else', async () => {
-    // task-1 builds fleetadlc#78, whose pull request is #90.
-    const db = await import('@fleetadlc/db');
+    // task-1 builds openadlc#78, whose pull request is #90.
+    const db = await import('@openadlc/db');
     Object.assign(db.issues, {
       getIssue: vi.fn(async (_repoId: string, number: number) => (number === 78 ? { number: 78, prNumber: 90 } : null)),
       listIssues: vi.fn(async () => [{ number: 78, prNumber: 90 }]),
@@ -741,7 +741,7 @@ describe('a task signing what it posts', () => {
 
 describe('a task posting to its thread', () => {
   it('posts a bot or sys line, and nothing a person or the bridge writes', async () => {
-    const { threads } = await import('@fleetadlc/db');
+    const { threads } = await import('@openadlc/db');
 
     expect((await post('/internal/tasks/task-1/message', { kind: 'bot', text: 'Working on it.' })).status).toBe(200);
     expect((await post('/internal/tasks/task-1/message', { kind: 'sys', text: 'Tests pass.' })).status).toBe(200);
@@ -757,8 +757,8 @@ describe('an alert that is already open', () => {
   // marker is public text that does not render, and a stranger's issue
   // carrying it kept every later firing from being filed.
   async function firing(open: { number: number; body: string; user: { login: string } }[]) {
-    const { bots } = await import('@fleetadlc/db');
-    const { dedupeMarker } = await import('@fleetadlc/shared');
+    const { bots } = await import('@openadlc/db');
+    const { dedupeMarker } = await import('@openadlc/shared');
     vi.mocked(bots.listBots).mockResolvedValue([
       { id: 'bot-flow', name: 'flowexampleco', slot: 'automation', role: 'automation', githubLogin: 'flowexampleco' },
     ] as never);
@@ -783,7 +783,7 @@ describe('an alert that is already open', () => {
     const { answer, asked } = await firing([{ number: 12, body: 'disk-full', user: { login: 'flowexampleco' } }]);
 
     expect(answer).toMatchObject({ filed: false, reason: 'already open', issue: 12 });
-    expect(asked[0]).toBe('/repos/exampleco/fleetadlc/issues?state=open&creator=flowexampleco&labels=alert&per_page=100&page=1');
+    expect(asked[0]).toBe('/repos/exampleco/openadlc/issues?state=open&creator=flowexampleco&labels=alert&per_page=100&page=1');
   });
 
   it('is not a stranger’s carrying the same marker: the alert is filed', async () => {
@@ -811,7 +811,7 @@ describe('an alert filed as an automation account with triage', () => {
     const response = await post('/internal/alerts', { title: 'Disk full', fingerprint: 'disk-full' });
 
     expect(response.status).toBe(200);
-    expect(ensureLabel).toHaveBeenCalledWith('exampleco/fleetadlc', 'alert');
+    expect(ensureLabel).toHaveBeenCalledWith('exampleco/openadlc', 'alert');
     expect(added).toEqual([{ number: 31, labels: ['alert', 'adlc:intake', 'do:ai'] }]);
   });
 
@@ -862,7 +862,7 @@ describe('a GitHub delivery', () => {
   }
 
   it('refuses one with no signature before reading its body', async () => {
-    const { settings } = await import('@fleetadlc/db');
+    const { settings } = await import('@openadlc/db');
     vi.mocked(settings.allSettings).mockResolvedValue({ webhookSecret: HOOK_SECRET });
     expect(await sendWithoutEnding({ 'x-github-event': 'issues' }, 64)).toBe(401);
     expect(receive).not.toHaveBeenCalled();
@@ -878,7 +878,7 @@ describe('a GitHub delivery', () => {
   });
 
   it('answers 413 to a signed one larger than GitHub sends', async () => {
-    const { settings } = await import('@fleetadlc/db');
+    const { settings } = await import('@openadlc/db');
     vi.mocked(settings.allSettings).mockResolvedValue({ webhookSecret: HOOK_SECRET });
     expect(await sendWithoutEnding({ 'x-github-event': 'issues', 'x-hub-signature-256': 'sha256=00' }, 26)).toBe(413);
     expect(receive).not.toHaveBeenCalled();
@@ -886,7 +886,7 @@ describe('a GitHub delivery', () => {
   });
 
   it('still takes a signed one of normal size', async () => {
-    const { settings } = await import('@fleetadlc/db');
+    const { settings } = await import('@openadlc/db');
     vi.mocked(settings.allSettings).mockResolvedValue({ webhookSecret: HOOK_SECRET });
     const body = JSON.stringify({ action: 'opened' });
     const signature = `sha256=${createHmac('sha256', HOOK_SECRET).update(body).digest('hex')}`;
@@ -901,13 +901,13 @@ describe('a GitHub delivery', () => {
   });
 });
 
-describe('`fleetadlc auth login` handing the bridge a sign-in', () => {
+describe('`openadlc auth login` handing the bridge a sign-in', () => {
   // The CLI connected seats on its own and refused every seat after the first
   // on a shared account; the bridge connects them as the console does.
   const token = { accessToken: 'ghu_x', refreshToken: 'ghr_x', expiresAt: '2026-10-04T20:00:00.000Z', refreshExpiresAt: null, scopes: [], tokenType: 'bearer' };
 
   it('connects the seat it names through the console’s connect, and never answers with the token', async () => {
-    const response = await post('/internal/bots/connect', { bot: 'builder', token, actor: 'fleetadlc auth login' });
+    const response = await post('/internal/bots/connect', { bot: 'builder', token, actor: 'openadlc auth login' });
 
     expect(response.status).toBe(200);
     const answer = await response.text();
@@ -915,7 +915,7 @@ describe('`fleetadlc auth login` handing the bridge a sign-in', () => {
     expect(answer).not.toContain('ghr_x');
     expect(connect).toHaveBeenCalledWith({
       botId: 'bot-builder',
-      actor: 'fleetadlc auth login',
+      actor: 'openadlc auth login',
       token: expect.objectContaining({ accessToken: 'ghu_x', refreshToken: 'ghr_x', expiresAt: new Date('2026-10-04T20:00:00.000Z'), refreshExpiresAt: null }),
     });
   });
@@ -940,11 +940,11 @@ describe('`fleetadlc auth login` handing the bridge a sign-in', () => {
 
 describe('a task’s GitHub token', () => {
   it('is asked for the task’s repository, as OpenADLC names it', async () => {
-    const response = await post('/internal/tokens/builder', { purpose: 'task', repository: 'ExampleCo/FleetADLC' });
+    const response = await post('/internal/tokens/builder', { purpose: 'task', repository: 'ExampleCo/OpenADLC' });
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ token: 'ghu_for_exampleco/fleetadlc', scoped: true });
-    expect(tokenFor).toHaveBeenCalledWith('builder', expect.objectContaining({ repository: 'exampleco/fleetadlc' }));
+    expect(await response.json()).toMatchObject({ token: 'ghu_for_exampleco/openadlc', scoped: true });
+    expect(tokenFor).toHaveBeenCalledWith('builder', expect.objectContaining({ repository: 'exampleco/openadlc' }));
   });
 
   it('is refused for a repository OpenADLC does not manage, naming it, and nothing is minted', async () => {
@@ -997,7 +997,7 @@ describe('a task’s session reporting its usage', () => {
     // JSON has no Infinity: a number past a double's range parses as one.
     const infinite = await fetch(`${bridgeUrl}/internal/tasks/task-mine/usage`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': SECRET },
+      headers: { 'content-type': 'application/json', 'x-openadlc-internal-secret': SECRET },
       body: JSON.stringify(report).replace('"costUsd":0.5', '"costUsd":1e999'),
     });
     expect(infinite.status).toBe(400);
@@ -1008,16 +1008,16 @@ describe('a task’s session reporting its usage', () => {
 describe('/healthz', () => {
   it('says how to get a client id when neither the environment nor the console has one', async () => {
     const body = (await (await fetch(`${bridgeUrl}/healthz`)).json()) as { github: string };
-    expect(body.github).toBe('no GitHub App client id: create the app on the “Create the app” step of the console walkthrough, or set FLEETADLC_GITHUB_CLIENT_ID');
-    expect(body.github).not.toContain('fleetadlc init');
+    expect(body.github).toBe('no GitHub App client id: create the app on the “Create the app” step of the console walkthrough, or set OPENADLC_GITHUB_CLIENT_ID');
+    expect(body.github).not.toContain('openadlc init');
   });
 
   it('says to connect the automation bot when there is a client id, the console’s stored one too, and no credential', async () => {
-    const { settings } = await import('@fleetadlc/db');
+    const { settings } = await import('@openadlc/db');
     vi.mocked(settings.allSettings).mockResolvedValue({ githubClientId: 'Iv1.stored' });
     try {
       const body = (await (await fetch(`${bridgeUrl}/healthz`)).json()) as { github: string };
-      expect(body.github).toMatch(/^no credential for (\S+): run fleetadlc auth login --bot \1$/);
+      expect(body.github).toMatch(/^no credential for (\S+): run openadlc auth login --bot \1$/);
     } finally {
       vi.mocked(settings.allSettings).mockResolvedValue({});
     }
@@ -1025,7 +1025,7 @@ describe('/healthz', () => {
 });
 
 describe('the alerts secret', () => {
-  const alert = { fingerprint: 'disk-full', title: 'Disk full', repo: 'fleetadlc' };
+  const alert = { fingerprint: 'disk-full', title: 'Disk full', repo: 'openadlc' };
   const send = (path: string, headers: Record<string, string>, body: unknown = alert) =>
     fetch(`${bridgeUrl}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
 
@@ -1038,29 +1038,29 @@ describe('the alerts secret', () => {
   });
 
   it('files an alert with only the alerts secret, in its own header', async () => {
-    const response = await send('/internal/alerts', { 'x-fleetadlc-alerts-secret': ALERTS_SECRET });
+    const response = await send('/internal/alerts', { 'x-openadlc-alerts-secret': ALERTS_SECRET });
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ filed: true, issue: 41, repo: 'exampleco/fleetadlc' });
+    expect(await response.json()).toMatchObject({ filed: true, issue: 41, repo: 'exampleco/openadlc' });
   });
 
   it('still files one with the internal secret, for the platform’s own callers', async () => {
-    const response = await send('/internal/alerts', { 'x-fleetadlc-internal-secret': SECRET });
+    const response = await send('/internal/alerts', { 'x-openadlc-internal-secret': SECRET });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ filed: true });
   });
 
   it('refuses an alert with no secret or a wrong one, naming both headers', async () => {
-    const refused: Record<string, string>[] = [{}, { 'x-fleetadlc-alerts-secret': 'guess' }, { 'x-fleetadlc-alerts-secret': SECRET }];
+    const refused: Record<string, string>[] = [{}, { 'x-openadlc-alerts-secret': 'guess' }, { 'x-openadlc-alerts-secret': SECRET }];
     for (const headers of refused) {
       const response = await send('/internal/alerts', headers);
       expect(response.status).toBe(401);
-      expect(await response.text()).toMatch(/x-fleetadlc-alerts-secret.*x-fleetadlc-internal-secret/);
+      expect(await response.text()).toMatch(/x-openadlc-alerts-secret.*x-openadlc-internal-secret/);
     }
   });
 
   it('opens no other route, in either header', async () => {
     for (const path of ['/internal/tokens/builder', '/internal/dispatch/lease', '/internal/schedule/reconcile']) {
-      for (const header of ['x-fleetadlc-alerts-secret', 'x-fleetadlc-internal-secret']) {
+      for (const header of ['x-openadlc-alerts-secret', 'x-openadlc-internal-secret']) {
         expect((await send(path, { [header]: ALERTS_SECRET }, {})).status).toBe(401);
       }
     }
@@ -1072,8 +1072,8 @@ describe('an alerts secret that is not set', () => {
   it('matches nothing, an empty header included', async () => {
     const { requireAlertsSecret } = await import('./internal-api.js');
     const request = (headers: Record<string, string>) => ({ headers }) as never;
-    expect(() => requireAlertsSecret(request({ 'x-fleetadlc-alerts-secret': '' }), '', SECRET)).toThrow(/alerts secret/);
+    expect(() => requireAlertsSecret(request({ 'x-openadlc-alerts-secret': '' }), '', SECRET)).toThrow(/alerts secret/);
     expect(() => requireAlertsSecret(request({}), '', SECRET)).toThrow(/alerts secret/);
-    expect(() => requireAlertsSecret(request({ 'x-fleetadlc-internal-secret': SECRET }), '', SECRET)).not.toThrow();
+    expect(() => requireAlertsSecret(request({ 'x-openadlc-internal-secret': SECRET }), '', SECRET)).not.toThrow();
   });
 });

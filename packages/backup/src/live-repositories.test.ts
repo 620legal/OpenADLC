@@ -72,7 +72,7 @@ describe('restoring a repository', () => {
       { id: 'r1', name: 'api', full_name: 'acme/api', color: 'blue', removed_at: '2026-09-20T00:00:00.000Z' },
       { id: 'r2', name: 'web', full_name: 'acme/web', color: 'teal', removed_at: null },
     ]);
-    await restoreDb(sql).putRepository(ARCHIVED, 'fleetadlc-atlas-janedoe');
+    await restoreDb(sql).putRepository(ARCHIVED, 'openadlc-atlas-janedoe');
 
     expect(rows[0]).toMatchObject({ id: 'r1', full_name: 'acme/api', color: 'teal', removed_at: null });
   });

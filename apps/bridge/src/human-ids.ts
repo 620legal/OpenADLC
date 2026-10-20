@@ -1,5 +1,5 @@
-import { settings } from '@fleetadlc/db';
-import { sameLogin } from '@fleetadlc/shared';
+import { settings } from '@openadlc/db';
+import { sameLogin } from '@openadlc/shared';
 
 /**
  * The install's people (`humans`) pinned to their GitHub accounts.
@@ -41,7 +41,7 @@ export async function pinnedHumanIds(): Promise<Record<string, number>> {
 
 /**
  * The account id a `humans` login is pinned to, pinning it now when it was
- * not yet: a login from FLEETADLC_HUMANS, or saved before pins were kept.
+ * not yet: a login from OPENADLC_HUMANS, or saved before pins were kept.
  * Null when GitHub cannot be asked, or says there is no such account, which
  * admits nobody as that login.
  */

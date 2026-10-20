@@ -14,7 +14,7 @@ describe('the steps to make a crew account', () => {
         seat: 'builder',
         label: 'builder',
         suggestedLogin: 'exampleco-builder',
-        suggestedEmail: 'janedoe+fleetadlc-builder@example.com',
+        suggestedEmail: 'janedoe+openadlc-builder@example.com',
         connectedLogin: null,
       }}
       signupUrl="https://github.com/signup"

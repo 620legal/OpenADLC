@@ -1,4 +1,4 @@
-import { maxTasksOf, nextSeat, type BotRole } from '@fleetadlc/shared';
+import { maxTasksOf, nextSeat, type BotRole } from '@openadlc/shared';
 
 interface Seated {
   id: string;
@@ -28,7 +28,7 @@ function waitingForAccount(bot: Seated, owner: Seated, options: PoolOptions): bo
 }
 
 export interface PoolOptions {
-  /** `FLEETADLC_SCRIPTED_ENGINES`: nothing reaches GitHub, so an account decides nothing. */
+  /** `OPENADLC_SCRIPTED_ENGINES`: nothing reaches GitHub, so an account decides nothing. */
   scripted?: boolean;
 }
 
@@ -50,7 +50,7 @@ function sameRoleOthers<T extends Seated>(owner: T, crew: readonly T[], options:
  *
  * They used to be found by name — the owner's, with `-2`, `-3` after it —
  * which stopped meaning anything when a bot started going by its account's
- * handle: nobody's second builder is called `fleetadlc-atlas-janedoe-2`. The
+ * handle: nobody's second builder is called `openadlc-atlas-janedoe-2`. The
  * role is what makes a bot a builder, and the seats keep a stable order for
  * the ones after the owner.
  *
@@ -129,7 +129,7 @@ export function ownerCannotBuild(owner: { name: string; engine: string }, repo: 
   if (owner.engine !== 'none') return null;
   return (
     `${owner.name} owns ${repo} but thinks with no model, so nothing is leased to it; ` +
-    `set \`owner: builder\` for ${repo} in config/repos.yaml and run \`fleetadlc seed\` ` +
+    `set \`owner: builder\` for ${repo} in config/repos.yaml and run \`openadlc seed\` ` +
     '(settings the entry leaves out keep what the console set)'
   );
 }

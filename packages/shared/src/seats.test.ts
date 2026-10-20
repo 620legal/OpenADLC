@@ -70,12 +70,12 @@ describe('a crew file', () => {
 
   it('reads a file written before seats as the seats its personas were', () => {
     // An operator's edited copy still says `name: atlas-2`. Refusing it would
-    // stop `fleetadlc up` seeding anything; guessing wrong would seed a second crew.
+    // stop `openadlc up` seeding anything; guessing wrong would seed a second crew.
     const parsed = botsFileSchema.parse({
       bots: [
         { ...one, name: 'atlas' },
         { ...one, name: 'atlas-2' },
-        { ...one, name: 'lens', githubLogin: 'fleetadlc-lens' },
+        { ...one, name: 'lens', githubLogin: 'openadlc-lens' },
       ],
     });
     expect(parsed.bots.map((entry) => entry.slot)).toEqual(['builder', 'builder-2', 'lens']);
@@ -92,40 +92,40 @@ describe('a crew file', () => {
 
 describe('a bot name', () => {
   it('is a GitHub login, lowercased', () => {
-    expect(isBotName('fleetadlc-atlas-janedoe')).toBe(true);
+    expect(isBotName('openadlc-atlas-janedoe')).toBe(true);
     expect(isGitHubLogin('JaneDoe')).toBe(true);
     for (const typed of ['jane doe', 'jane,bob', '@jane', 'jane-', 'a'.repeat(40)]) expect(isGitHubLogin(typed), typed).toBe(false);
     expect(isBotName('irisexampleco')).toBe(true);
     expect(isBotName('lead-reviewer')).toBe(true);
-    expect(isBotName('FleetADLC-Atlas')).toBe(false);
-    expect(isBotName('-fleetadlc')).toBe(false);
-    expect(isBotName('fleetadlc-')).toBe(false);
-    expect(isBotName('fleetadlc--atlas')).toBe(false);
-    expect(isBotName('fleetadlc__atlas')).toBe(false);
+    expect(isBotName('OpenADLC-Atlas')).toBe(false);
+    expect(isBotName('-openadlc')).toBe(false);
+    expect(isBotName('openadlc-')).toBe(false);
+    expect(isBotName('openadlc--atlas')).toBe(false);
+    expect(isBotName('openadlc__atlas')).toBe(false);
     expect(isBotName('a'.repeat(39))).toBe(true);
     expect(isBotName('a'.repeat(40))).toBe(false);
   });
 
   it('is taken from the login GitHub answered with, whatever its casing', () => {
-    expect(nameForLogin('FleetADLC-Atlas-Janedoe')).toBe('fleetadlc-atlas-janedoe');
+    expect(nameForLogin('OpenADLC-Atlas-Janedoe')).toBe('openadlc-atlas-janedoe');
   });
 });
 
 describe('which bot a reference means', () => {
   const crew = [
-    bot('fleetadlc-atlas-janedoe', 'builder', 'implement'),
+    bot('openadlc-atlas-janedoe', 'builder', 'implement'),
     bot('lead-reviewer', 'lead-reviewer', 'review_lead'),
-    bot('janedoe-fleetadlc-flow', 'automation', 'automation'),
+    bot('janedoe-openadlc-flow', 'automation', 'automation'),
   ];
 
   it('is the bot of that name, then the bot in that seat', () => {
-    expect(resolveBotRef(crew, 'fleetadlc-atlas-janedoe')?.slot).toBe('builder');
-    expect(resolveBotRef(crew, 'builder')?.name).toBe('fleetadlc-atlas-janedoe');
+    expect(resolveBotRef(crew, 'openadlc-atlas-janedoe')?.slot).toBe('builder');
+    expect(resolveBotRef(crew, 'builder')?.name).toBe('openadlc-atlas-janedoe');
     expect(resolveBotRef(crew, 'lead-reviewer')?.name).toBe('lead-reviewer');
   });
 
   it('reads a persona from older configuration as the seat it was', () => {
-    expect(resolveBotRef(crew, 'atlas')?.name).toBe('fleetadlc-atlas-janedoe');
+    expect(resolveBotRef(crew, 'atlas')?.name).toBe('openadlc-atlas-janedoe');
     expect(resolveBotRef(crew, 'sydney')?.name).toBe('lead-reviewer');
     expect(resolveBotRef(crew, 'atlas', { persona: false })).toBeNull();
     expect(resolveBotRef(crew, 'nobody')).toBeNull();
@@ -155,37 +155,37 @@ describe('which bot a reference means', () => {
 
 describe('the automation bot', () => {
   const crew = [
-    bot('fleetadlc-atlas-janedoe', 'builder', 'implement'),
-    bot('janedoe-fleetadlc-flow', 'automation', 'automation'),
+    bot('openadlc-atlas-janedoe', 'builder', 'implement'),
+    bot('janedoe-openadlc-flow', 'automation', 'automation'),
   ];
 
   it('is the bot whose role is automation, whatever it is called', () => {
-    expect(automationBotOf(crew)?.name).toBe('janedoe-fleetadlc-flow');
-    expect(automationBotOf(crew, null)?.name).toBe('janedoe-fleetadlc-flow');
+    expect(automationBotOf(crew)?.name).toBe('janedoe-openadlc-flow');
+    expect(automationBotOf(crew, null)?.name).toBe('janedoe-openadlc-flow');
   });
 
   it('is the one an override names, by seat or by name', () => {
-    expect(automationBotOf(crew, 'builder')?.name).toBe('fleetadlc-atlas-janedoe');
-    expect(automationBotOf(crew, 'fleetadlc-atlas-janedoe')?.name).toBe('fleetadlc-atlas-janedoe');
+    expect(automationBotOf(crew, 'builder')?.name).toBe('openadlc-atlas-janedoe');
+    expect(automationBotOf(crew, 'openadlc-atlas-janedoe')?.name).toBe('openadlc-atlas-janedoe');
   });
 
   it('survives the `flow` every install.json was written with', () => {
-    // FLEETADLC_AUTOMATION_BOT=flow is in the environment of every existing
+    // OPENADLC_AUTOMATION_BOT=flow is in the environment of every existing
     // install. Obeyed literally after the rename, no label would be written.
-    expect(automationBotOf(crew, 'flow')?.name).toBe('janedoe-fleetadlc-flow');
-    expect(automationBotOf(crew, 'nobody-here')?.name).toBe('janedoe-fleetadlc-flow');
+    expect(automationBotOf(crew, 'flow')?.name).toBe('janedoe-openadlc-flow');
+    expect(automationBotOf(crew, 'nobody-here')?.name).toBe('janedoe-openadlc-flow');
   });
 });
 
 describe('the builder a repository belongs to', () => {
   it('is the bot in the builder seat, never the automation account', () => {
     const crew = [
-      bot('janedoe-fleetadlc-flow', 'automation', 'automation'),
+      bot('janedoe-openadlc-flow', 'automation', 'automation'),
       bot('tessexampleco', 'builder-2', 'implement'),
-      bot('fleetadlc-atlas-janedoe', 'builder', 'implement'),
+      bot('openadlc-atlas-janedoe', 'builder', 'implement'),
     ];
 
-    expect(builderOf(crew)?.name).toBe('fleetadlc-atlas-janedoe');
+    expect(builderOf(crew)?.name).toBe('openadlc-atlas-janedoe');
   });
 
   it('is the first other builder when the builder seat is gone, and nobody when there is no builder', () => {
@@ -193,10 +193,10 @@ describe('the builder a repository belongs to', () => {
       builderOf([
         bot('builder-10', 'builder-10', 'implement'),
         bot('tessexampleco', 'builder-2', 'implement'),
-        bot('janedoe-fleetadlc-flow', 'automation', 'automation'),
+        bot('janedoe-openadlc-flow', 'automation', 'automation'),
       ])?.name,
     ).toBe('tessexampleco');
-    expect(builderOf([bot('janedoe-fleetadlc-flow', 'automation', 'automation')])).toBeNull();
+    expect(builderOf([bot('janedoe-openadlc-flow', 'automation', 'automation')])).toBeNull();
   });
 });
 
@@ -211,14 +211,14 @@ describe('the seat after this one', () => {
 
 describe('whose account an authorization is', () => {
   const crew = [
-    { id: 'b-builder', name: 'fleetadlc-atlas-janedoe', role: 'implement' as const, githubLogin: 'fleetadlc-atlas-janedoe', connected: true },
+    { id: 'b-builder', name: 'openadlc-atlas-janedoe', role: 'implement' as const, githubLogin: 'openadlc-atlas-janedoe', connected: true },
     // An earlier install's row: it names an account and holds nothing.
     { id: 'b-lead', name: 'sydney', role: 'review_lead' as const, githubLogin: 'noraexampleco', connected: false },
     { id: 'b-se', name: 'nova', role: 'spec' as const, githubLogin: null, connected: false },
   ];
 
   it('is another bot only when that bot is connected as it', () => {
-    expect(accountHolder('FleetADLC-Atlas-Janedoe', 'b-se', crew)?.id).toBe('b-builder');
+    expect(accountHolder('OpenADLC-Atlas-Janedoe', 'b-se', crew)?.id).toBe('b-builder');
   });
 
   it('is nobody when the account is only named on an unconnected row', () => {
@@ -228,7 +228,7 @@ describe('whose account an authorization is', () => {
   });
 
   it('does not count the bot being connected, or an account nobody has', () => {
-    expect(accountHolder('fleetadlc-atlas-janedoe', 'b-builder', crew)).toBeNull();
+    expect(accountHolder('openadlc-atlas-janedoe', 'b-builder', crew)).toBeNull();
     expect(accountHolder('someone-new', 'b-se', crew)).toBeNull();
   });
 });

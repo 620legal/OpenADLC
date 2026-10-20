@@ -8,7 +8,7 @@ import { seatOf } from './stamp.js';
  * The header and the seat tag say which stage wrote a post, and on an account
  * several seats share they are the only thing that does — but anything that can
  * post as the account can write them. So each post also carries
- * `<!-- fleetadlc-sig:v1.<kid>.<payload>.<mac> -->`: an HMAC, under a key only the
+ * `<!-- openadlc-sig:v1.<kid>.<payload>.<mac> -->`: an HMAC, under a key only the
  * bridge holds, of the seat, the task, the repository, what kind of post it is
  * and a hash of the body. The bridge signs its own posts, and a session's `gh`
  * asks the bridge to sign its (`/internal/tasks/:id/stamp`), which signs only
@@ -20,8 +20,8 @@ export const SIGNATURE_VERSION = 'v1';
 
 // No leading `\n*`: unanchored, it was tried from every newline of a long run
 // of them, and a crafted post took seconds to verify on every webhook.
-const SIG_TAG = /<!-- fleet(?:adlc)?-sig:(v1)\.([a-z0-9]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+) -->\s*$/;
-const ANY_SIG_TAG = /<!-- fleet(?:adlc)?-sig:[^>]*-->/g;
+const SIG_TAG = /<!-- (?:openadlc|fleetadlc|fleet)-sig:(v1)\.([a-z0-9]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+) -->\s*$/;
+const ANY_SIG_TAG = /<!-- (?:openadlc|fleetadlc|fleet)-sig:[^>]*-->/g;
 
 /** What a signature says: who, for what, and a hash of the body it was made for. */
 export interface SignedFields {
@@ -119,7 +119,7 @@ export function signBody(
     nonce,
   };
   const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  return `${bare}\n\n<!-- fleetadlc-sig:${SIGNATURE_VERSION}.${key.kid}.${encoded}.${mac(key, encoded)} -->`;
+  return `${bare}\n\n<!-- openadlc-sig:${SIGNATURE_VERSION}.${key.kid}.${encoded}.${mac(key, encoded)} -->`;
 }
 
 export type Verdict =

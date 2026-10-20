@@ -1,4 +1,4 @@
-import { closingKeywords, hasIgnoreLabel, isFleetLogin, parseDependencies, sameLogin, type StageKey, type StageMode, type TaskKind, type TaskState } from '@fleetadlc/shared';
+import { closingKeywords, hasIgnoreLabel, isFleetLogin, parseDependencies, sameLogin, type StageKey, type StageMode, type TaskKind, type TaskState } from '@openadlc/shared';
 
 /**
  * What the crew is doing to each piece of work, read from the rows the bridge
@@ -156,7 +156,7 @@ export function subjectsOf(issue: Pick<IssueFacts, 'repoName' | 'number' | 'prNu
 }
 
 /**
- * What the console leaves out: every issue labelled `fleetadlc:ignore`, and
+ * What the console leaves out: every issue labelled `openadlc:ignore`, and
  * the pull request recorded on it, as the subjects their work is filed under
  * (`repo#12`, `repo#40`). The console is for the work the crew does; an
  * ignored issue is a person's, and so is its pull request. The board, Needs

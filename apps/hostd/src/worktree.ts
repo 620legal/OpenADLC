@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { redactSecrets } from '@fleetadlc/shared';
+import { redactSecrets } from '@openadlc/shared';
 
 const run = promisify(execFile);
 
@@ -42,7 +42,7 @@ async function git(args: string[], cwd?: string, env: Record<string, string> = {
  * write nothing. So it writes here, in the worktree, and the clone's own
  * excludes list the directory: nothing in it is ever committed.
  */
-export const SCRATCH_DIR = '.fleetadlc-scratch';
+export const SCRATCH_DIR = '.openadlc-scratch';
 
 /** Adds the scratch directory to a repository's excludes (`<git dir>/info/exclude`). */
 function excludeScratch(gitDir: string): void {
@@ -130,7 +130,7 @@ export function stoppedForGoneBranch(task: { exitReason: string | null }): boole
 }
 
 /** When each set-aside ref was written, in the mirror: see `Worktrees.dropOldSetAsides`. */
-export const SET_ASIDE_LOG = 'fleetadlc-set-asides.json';
+export const SET_ASIDE_LOG = 'openadlc-set-asides.json';
 
 /**
  * Where a task's own branch is kept in its repository's mirror between its
@@ -141,7 +141,7 @@ export const SET_ASIDE_LOG = 'fleetadlc-set-asides.json';
  * namespace, so `--prune` never touches it.
  */
 export function taskRefs(taskId: string): { head: string; pushed: string; prefix: string } {
-  const prefix = `refs/fleetadlc/tasks/${taskId}`;
+  const prefix = `refs/openadlc/tasks/${taskId}`;
   return { head: `${prefix}/head`, pushed: `${prefix}/pushed`, prefix };
 }
 
@@ -163,7 +163,7 @@ function writeSetAsideLog(mirror: string, log: Record<string, number>): void {
  * (`Worktrees.endedSetAside`). A set-aside a resumed task was already told of
  * is not listed, so it is not told again as somebody else's.
  */
-const ENDED_LOG = 'fleetadlc-ended-set-asides.json';
+const ENDED_LOG = 'openadlc-ended-set-asides.json';
 
 function readEndedLog(mirror: string): Record<string, string> {
   try {
@@ -322,7 +322,7 @@ export interface LegacyTask {
  * into the other task's kept branch. `SLOT_FILE` is where it was before; one
  * is read only as a claim (`inDirectory`), never as proof.
  */
-export const SLOT_FILE = '.fleetadlc-task.json';
+export const SLOT_FILE = '.openadlc-task.json';
 
 export interface SlotRecord {
   taskId: string;
@@ -377,7 +377,7 @@ export function removeSlot(dir: string): void {
 export type KeptBranchOf = (taskId: string) => Promise<{ repoFullName: string; branch: string } | null>;
 
 /** Marks a bot's old mirror whose set-asides have been copied into its repository's mirror. */
-const IMPORTED_MARK = 'fleetadlc-imported';
+const IMPORTED_MARK = 'openadlc-imported';
 
 /** A path segment a bot or task id may be, and nothing that walks out of a directory. */
 const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -460,7 +460,7 @@ export class Worktrees {
    * - neither — the remote moved on while the task had commits of its own, a
    *   person's rebase or the merge line bringing the branch up to date: the
    *   remote's, because the task may not force-push over it, with the task's
-   *   tip set aside under `refs/fleetadlc/unpushed/` and returned, so the task is
+   *   tip set aside under `refs/openadlc/unpushed/` and returned, so the task is
    *   told to apply those commits again.
    *
    * `tip` is null when neither the remote nor the task has the branch.
@@ -542,7 +542,7 @@ export class Worktrees {
   }
 
   /**
-   * The task's own commits, kept under `refs/fleetadlc/unpushed/<branch>` in the
+   * The task's own commits, kept under `refs/openadlc/unpushed/<branch>` in the
    * mirror, and fetched into the task's clone so its brief names a ref it can
    * reach. One set aside before and not applied again keeps its commits under a
    * name of its own rather than being overwritten. Null when the task had
@@ -564,7 +564,7 @@ export class Worktrees {
     const commits = listed.split('\n').filter(Boolean);
     if (commits.length === 0) return null;
 
-    const ref = `refs/fleetadlc/unpushed/${branch}`;
+    const ref = `refs/openadlc/unpushed/${branch}`;
     const earlier = await this.commitOf(mirror, ref);
     const log = readSetAsideLog(mirror);
     if (earlier && earlier !== local) {
@@ -590,7 +590,7 @@ export class Worktrees {
    * of the remote's branches. Called under the mirror's lock.
    */
   private async endedSetAside(mirror: string, branch: string, tip: string | null): Promise<SetAside | null> {
-    const ref = `refs/fleetadlc/unpushed/${branch}`;
+    const ref = `refs/openadlc/unpushed/${branch}`;
     if (!readEndedLog(mirror)[ref]) return null;
     const kept = await this.commitOf(mirror, ref);
     if (!kept) return null;
@@ -602,7 +602,7 @@ export class Worktrees {
 
   /**
    * What a task that is over had committed and never pushed, set aside under
-   * `refs/fleetadlc/unpushed/<branch>` before its kept refs go: a failed resume
+   * `refs/openadlc/unpushed/<branch>` before its kept refs go: a failed resume
    * or a stop deleted them, and with them the only name for that work. Only
    * what the remote's branch lacks in substance, and what the task had not
    * pushed. Called under the mirror's lock.
@@ -894,7 +894,7 @@ export class Worktrees {
   /**
    * The bare mirrors bots kept under `<bot>/repos/` before there was one per
    * repository. Left in place for a release, so a person can still reach
-   * anything in them; `fleetadlc doctor` says when they can go.
+   * anything in them; `openadlc doctor` says when they can go.
    */
   legacyMirrors(): { bot: string; repoFullName: string; path: string }[] {
     if (!existsSync(this.workRoot)) return [];
@@ -923,7 +923,7 @@ export class Worktrees {
    * pushed. Its resume now reads `taskRefs` in its repository's mirror, so
    * without this it started from its last push and its later commits were as
    * good as gone. Each one is copied there, and every set-aside
-   * (`refs/fleetadlc/unpushed/*`, and `refs/fleet/*` from before the rename)
+   * (`refs/openadlc/unpushed/*`, and `refs/fleet/*` from before the rename)
    * with when it was set aside, so `dropOldSetAsides` ages it out as before.
    * A repository's mirror that does not exist yet is made from the old one,
    * which saves the first task there a full clone.
@@ -948,7 +948,7 @@ export class Worktrees {
           }
           if (!marked) {
             await git(
-              ['fetch', '--quiet', '--no-tags', legacy.path, '+refs/fleetadlc/unpushed/*:refs/fleetadlc/unpushed/*', '+refs/fleet/*:refs/fleet/*'],
+              ['fetch', '--quiet', '--no-tags', legacy.path, '+refs/openadlc/unpushed/*:refs/openadlc/unpushed/*', '+refs/fleet/*:refs/fleet/*'],
               mirror,
             );
             const log = { ...readSetAsideLog(legacy.path), ...readSetAsideLog(mirror) };
@@ -995,7 +995,7 @@ export class Worktrees {
   async dropTaskRefs(isOver: (taskId: string) => Promise<boolean | { branch: string | null }>): Promise<number> {
     let dropped = 0;
     for (const mirror of this.mirrors()) {
-      const listed = await git(['for-each-ref', '--format=%(refname)', 'refs/fleetadlc/tasks/'], mirror).catch(() => '');
+      const listed = await git(['for-each-ref', '--format=%(refname)', 'refs/openadlc/tasks/'], mirror).catch(() => '');
       const ids = new Set(
         listed
           .split('\n')
@@ -1031,7 +1031,7 @@ export class Worktrees {
   }
 
   /**
-   * Deletes commits set aside (`refs/fleetadlc/unpushed/*`) more than
+   * Deletes commits set aside (`refs/openadlc/unpushed/*`) more than
    * `SET_ASIDE_DAYS` ago. Nothing else ever removed them, so each one kept its
    * commits from being collected for as long as the mirror lived.
    *
@@ -1047,7 +1047,7 @@ export class Worktrees {
       // `refs/fleet/unpushed/` is where commits were set aside before the rename;
       // they age out the same way rather than staying in the mirror for ever.
       const listed = await git(
-        ['for-each-ref', '--format=%(refname)', 'refs/fleetadlc/unpushed/', 'refs/fleet/unpushed/'],
+        ['for-each-ref', '--format=%(refname)', 'refs/openadlc/unpushed/', 'refs/fleet/unpushed/'],
         mirror,
       );
       const written = readSetAsideLog(mirror);

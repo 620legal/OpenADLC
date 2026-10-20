@@ -16,7 +16,7 @@ export const CI_WORKFLOW = '.github/workflows/ci.yml';
 
 /** What bringing one earlier CI workflow up to date changes, in the words each place says it. */
 export interface CiTemplateUpdate {
-  /** Why it is offered: the protect step, `fleetadlc github check`, and the commit's body. */
+  /** Why it is offered: the protect step, `openadlc github check`, and the commit's body. */
   reason: string;
   /** What the commit does, after "Bring <file> up to date: ". */
   title: string;
@@ -38,6 +38,13 @@ const ADDS_THE_SPDX_LINE: CiTemplateUpdate = {
   outcome: 'the current template, which adds the SPDX line saying the file is also 0BSD',
 };
 
+const RENAMES_THE_PLATFORM: CiTemplateUpdate = {
+  reason:
+    'the workflow from before the platform was renamed to OpenADLC, unchanged since it was written; the current one runs the same, and its comments name the platform and its command as they are spelled now',
+  title: 'say the platform is called OpenADLC now',
+  outcome: 'the current template, the same workflow; its comments name the platform and its command as they are spelled now',
+};
+
 /**
  * The CI workflow OpenADLC wrote in earlier versions, by the SHA-256 of the
  * file exactly as written. A repository holding one of these has not touched
@@ -56,20 +63,23 @@ const ADDS_THE_SPDX_LINE: CiTemplateUpdate = {
  * set up from it that its CI would change when only a comment line would.
  */
 export const EARLIER_CI_TEMPLATES: ReadonlyMap<string, CiTemplateUpdate> = new Map<string, CiTemplateUpdate>([
-  // Fleet, before the rename: on every push and pull request.
+  // Fleet, before the renames: on every push and pull request.
   ['e7a4ed6f4754cc5081bac918e8f678533fc8f37ab6028c88e8ca04b24f9813aa', RUNS_ONLY_WHAT_A_CHANGE_NEEDS],
-  // OpenADLC's first: CI after the lead's approval, everything every time.
+  // FleetADLC's first: CI after the lead's approval, everything every time.
   ['8c7a55c9e17144d51f57c28a96a35f5b63ecb1cc4e0caa5b9248749c574f0a90', RUNS_ONLY_WHAT_A_CHANGE_NEEDS],
-  // OpenADLC's second: ran only what a change needed, but skipped the push for
+  // FleetADLC's second: ran only what a change needed, but skipped the push for
   // a tree any branch's run had named, and deferred a fork's `agent/` branch.
   ['2bea320fe688268f1a47b70860557a8dc7a79eebc7870f7669f0d5ab1a6f9899', RUNS_ONLY_WHAT_A_CHANGE_NEEDS],
-  // OpenADLC's third: the same workflow without the SPDX line that says the
+  // FleetADLC's third: the same workflow without the SPDX line that says the
   // file is also 0BSD, which a repository needs to use it with no notice.
   ['651acce5a0081df7cd1f65b693b911d4cdb6a4a7a1e152009b28c077e63127c3', ADDS_THE_SPDX_LINE],
+  // FleetADLC's fourth: the same workflow from before the rename to OpenADLC,
+  // its comments still saying `fleetadlc github apply`.
+  ['d188418766bed6373c2c46725cc92c2c7cef55040013d148de1b326bd28b1d15', RENAMES_THE_PLATFORM],
 ]);
 
 /** The SHA-256 of the CI template as it ships now. */
-export const CURRENT_CI_TEMPLATE = 'd188418766bed6373c2c46725cc92c2c7cef55040013d148de1b326bd28b1d15';
+export const CURRENT_CI_TEMPLATE = '133faab3f26feb56293c136a5594df51a8ae9242b5a13dfd80a156a0a57539d7';
 
 export function templateHash(body: string): string {
   return createHash('sha256').update(body).digest('hex');
@@ -122,7 +132,7 @@ export type TemplateFile = (typeof TEMPLATE_FILES)[number];
 /** Why each one matters, so a report says more than "missing". */
 const WHY: Record<TemplateFile, string> = {
   'AGENTS.md': 'the bridge reads human-review paths from it, and a task is given it before it starts',
-  Makefile: 'hostd runs `make setup` at task start, and `make ci` when the builder runs `fleetadlc-ci` before opening a pull request',
+  Makefile: 'hostd runs `make setup` at task start, and `make ci` when the builder runs `openadlc-ci` before opening a pull request',
   [CI_WORKFLOW]: 'the merge line lands a pull request only once a check named `ci` has passed on it, and nothing else publishes one',
   '.github/ISSUE_TEMPLATE/task.yml': 'its field labels are the headings the platform parses; without it no issue is routable',
   '.github/ISSUE_TEMPLATE/bug.yml': 'a bug filed without the four sections goes back to intake instead of to a builder',
@@ -320,7 +330,7 @@ export async function applyRepoTemplates(
         }
         try {
           await api.request('PUT', `/repos/${input.fullName}/contents/${file}`, {
-            message: `Bring ${file} up to date: ${update.title}\n\nThe workflow OpenADLC wrote earlier, unchanged since, replaced by \`fleetadlc github apply\` with the current template: ${update.reason}.`,
+            message: `Bring ${file} up to date: ${update.title}\n\nThe workflow OpenADLC wrote earlier, unchanged since, replaced by \`openadlc github apply\` with the current template: ${update.reason}.`,
             content: Buffer.from(templateBody(file, input.root), 'utf8').toString('base64'),
             sha: earlier.sha,
           });
@@ -339,7 +349,7 @@ export async function applyRepoTemplates(
         }
         try {
           await api.request('PUT', `/repos/${input.fullName}/contents/${file}`, {
-            message: `Name who approves human-review paths in ${file}\n\nThe template's @${TEMPLATE_REVIEWER_PLACEHOLDER} placeholder, replaced by \`fleetadlc github apply\`.`,
+            message: `Name who approves human-review paths in ${file}\n\nThe template's @${TEMPLATE_REVIEWER_PLACEHOLDER} placeholder, replaced by \`openadlc github apply\`.`,
             content: Buffer.from(withApprovers(placeholder.body, approvers), 'utf8').toString('base64'),
             sha: placeholder.sha,
           });
@@ -380,7 +390,7 @@ export async function applyRepoTemplates(
      */
     try {
       await api.request('PUT', `/repos/${input.fullName}/contents/${file}`, {
-        message: `Add ${file}\n\nWritten by \`fleetadlc github apply\` because it was absent.`,
+        message: `Add ${file}\n\nWritten by \`openadlc github apply\` because it was absent.`,
         content: Buffer.from(
           file === 'AGENTS.md' ? withApprovers(templateBody(file, input.root), approvers) : templateBody(file as TemplateFile, input.root),
           'utf8',

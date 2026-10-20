@@ -185,9 +185,9 @@ describe('what IAP is actually in front of', () => {
       expect(resourceBlock('google_iap_web_backend_service_iam_binding', name), name).not.toContain('count');
     }
     const bridge = resourceBlock('google_cloud_run_v2_service', 'bridge') ?? '';
-    expect(/name\s*=\s*"FLEETADLC_IDENTITY_MODE"\s*\n\s*value\s*=\s*(.+)/.exec(bridge)?.[1]?.trim()).toBe('"iap"');
+    expect(/name\s*=\s*"OPENADLC_IDENTITY_MODE"\s*\n\s*value\s*=\s*(.+)/.exec(bridge)?.[1]?.trim()).toBe('"iap"');
     const console = resourceBlock('google_cloud_run_v2_service', 'console') ?? '';
-    expect(/name\s*=\s*"FLEETADLC_IDENTITY_MODE_EXPECTED"\s*\n\s*value\s*=\s*(.+)/.exec(console)?.[1]?.trim()).toBe('"iap"');
+    expect(/name\s*=\s*"OPENADLC_IDENTITY_MODE_EXPECTED"\s*\n\s*value\s*=\s*(.+)/.exec(console)?.[1]?.trim()).toBe('"iap"');
   });
 
   it('takes an OAuth client of the operator’s own on both backends, for people outside the organization', () => {
@@ -257,8 +257,8 @@ describe('who may invoke the services', () => {
 
   it('reads who is asking from IAP’s signature on the bridge, not from a header', () => {
     const bridge = resourceBlock('google_cloud_run_v2_service', 'bridge');
-    expect(bridge).toContain('FLEETADLC_IDENTITY_MODE');
-    expect(bridge).toContain('FLEETADLC_IAP_AUDIENCE');
+    expect(bridge).toContain('OPENADLC_IDENTITY_MODE');
+    expect(bridge).toContain('OPENADLC_IAP_AUDIENCE');
     expect(bridge).toContain('google_compute_backend_service.console.generated_id');
   });
 });
@@ -271,12 +271,12 @@ describe('what the operator is told to do', () => {
     expect(outputsTf).toContain('google_compute_global_address.console.address');
   });
 
-  it('sends them to the console, not to a fleetadlc the host does not have', () => {
-    // The host runs Container-Optimized OS: no Node, no fleetadlc. Run from a
+  it('sends them to the console, not to a openadlc the host does not have', () => {
+    // The host runs Container-Optimized OS: no Node, no openadlc. Run from a
     // laptop instead, auth login cannot write the install's secret store and
     // doctor probes 127.0.0.1.
     const steps = /output "next_steps" \{[\s\S]*?<<-EOT([\s\S]*?)EOT/.exec(outputsTf)?.[1] ?? '';
-    expect(steps).not.toMatch(/fleetadlc (auth login|doctor|github check|restore)/);
+    expect(steps).not.toMatch(/openadlc (auth login|doctor|github check|restore)/);
     const words = steps.replace(/\s+/g, ' ');
     expect(words).toContain('GitHub accounts step');
     expect(words).toContain('health cards');
@@ -355,11 +355,11 @@ describe('how GitHub reaches the bridge', () => {
     expect(bridge).toContain('invoker_iam_disabled = true');
     expect(bridge).toContain('INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER');
     expect(urlMap).toContain('/webhooks/github');
-    expect(bridge).toContain('FLEETADLC_WEBHOOK_SECRET');
+    expect(bridge).toContain('OPENADLC_WEBHOOK_SECRET');
   });
 
   it('wires the webhook secret, rather than leaving verification off', () => {
-    // An unset FLEETADLC_WEBHOOK_SECRET makes the bridge refuse every delivery.
+    // An unset OPENADLC_WEBHOOK_SECRET makes the bridge refuse every delivery.
     // On a public path that means GitHub cannot reach a working install. It
     // used to mean the bridge ran whatever was posted to it.
     expect(declared.has('google_secret_manager_secret.webhook')).toBe(true);
@@ -429,7 +429,7 @@ describe('the egress allowlist the security model promises', () => {
   it('admits a task to the task database server on the host’s gateway, and nothing else on that port', () => {
     // Container-Optimized OS drops INPUT by default; hostd publishes the
     // server on the docker bridge's gateway only, so a task on the
-    // fleetadlc-tasks bridge has to be let in from a docker bridge, and from
+    // openadlc-tasks bridge has to be let in from a docker bridge, and from
     // nowhere else.
     expect(cloudInit).toContain('iptables -I INPUT 1 -i br+ -p tcp --dport 47433 -j ACCEPT');
     expect(cloudInit).not.toMatch(/iptables -I INPUT 1 -p tcp --dport 47433/);
@@ -438,15 +438,15 @@ describe('the egress allowlist the security model promises', () => {
   it('hooks the egress chain where Docker cannot put its own rules ahead of it', () => {
     // Inserted at the top of FORWARD, it ended up behind Docker's ACCEPTs once
     // the daemon built its chains, and a bot went straight out.
-    expect(cloudInit).toContain('iptables -I DOCKER-USER 1 -i br+ -j FLEETADLC_EGRESS');
-    expect(cloudInit).not.toMatch(/iptables -I FORWARD 1 -i br\+ -j FLEETADLC_EGRESS/);
+    expect(cloudInit).toContain('iptables -I DOCKER-USER 1 -i br+ -j OPENADLC_EGRESS');
+    expect(cloudInit).not.toMatch(/iptables -I FORWARD 1 -i br\+ -j OPENADLC_EGRESS/);
   });
 
   it('runs hostd from a path the Docker daemon can see', () => {
     // Every bind mount hostd asks for is read by the daemon as a host path.
     expect(cloudInit).toContain('-v /var/lib/fleet:/var/lib/fleet');
-    expect(cloudInit).toContain('FLEETADLC_WORK_ROOT=$root/work');
-    expect(cloudInit).toContain('FLEETADLC_BOT_EGRESS_PROXY=http://host.docker.internal:3128');
+    expect(cloudInit).toContain('OPENADLC_WORK_ROOT=$root/work');
+    expect(cloudInit).toContain('OPENADLC_BOT_EGRESS_PROXY=http://host.docker.internal:3128');
     // And as the bots' own uid: on Linux, what hostd made as root the bot
     // could not write.
     expect(cloudInit).toContain('--user 1000:1000');
@@ -486,9 +486,9 @@ describe('the egress allowlist the security model promises', () => {
   it('stops a container going round the proxy to an address it resolved itself', () => {
     // The proxy is an allowlist; this is what makes it the only way out. A bot
     // that unsets HTTP_PROXY would otherwise just leave.
-    expect(cloudInit).toContain('FLEETADLC_EGRESS');
+    expect(cloudInit).toContain('OPENADLC_EGRESS');
     expect(cloudInit).toContain('REJECT');
-    expect(cloudInit).toContain('fleetadlc-egress-denied');
+    expect(cloudInit).toContain('openadlc-egress-denied');
   });
 
   it('sends hostd through the proxy too', () => {
@@ -517,8 +517,8 @@ describe('the egress allowlist the security model promises', () => {
     // The variables bind only a client that reads them; hostd runs on the
     // host's network as uid 1000, which FORWARD never sees.
     const firewall = withoutComments(cloudInit);
-    expect(firewall).toContain('iptables -C OUTPUT -m owner --uid-owner 1000 -j FLEETADLC_HOSTD 2>/dev/null || iptables -I OUTPUT 1 -m owner --uid-owner 1000 -j FLEETADLC_HOSTD');
-    const rules = [...firewall.matchAll(/iptables -A FLEETADLC_HOSTD (.*?) *;? *\\?$/gm)].map((match) => match[1]);
+    expect(firewall).toContain('iptables -C OUTPUT -m owner --uid-owner 1000 -j OPENADLC_HOSTD 2>/dev/null || iptables -I OUTPUT 1 -m owner --uid-owner 1000 -j OPENADLC_HOSTD');
+    const rules = [...firewall.matchAll(/iptables -A OPENADLC_HOSTD (.*?) *;? *\\?$/gm)].map((match) => match[1]);
     expect(rules).toEqual([
       '-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT',
       '-d 127.0.0.0/8 -j ACCEPT',
@@ -526,12 +526,12 @@ describe('the egress allowlist the security model promises', () => {
       '-d 172.16.0.0/12 -j ACCEPT',
       '-d 192.168.0.0/16 -j ACCEPT',
       '-d 10.0.0.0/8 -j ACCEPT',
-      '-j LOG --log-prefix "fleetadlc-egress-denied " --log-level 4',
+      '-j LOG --log-prefix "openadlc-egress-denied " --log-level 4',
       '-j REJECT --reject-with icmp-port-unreachable',
     ]);
     // Flushed before it is filled, so a restart of the unit does not add the
     // rules twice behind their own REJECT.
-    expect(firewall.indexOf('iptables -F FLEETADLC_HOSTD')).toBeLessThan(firewall.indexOf('iptables -A FLEETADLC_HOSTD'));
+    expect(firewall.indexOf('iptables -F OPENADLC_HOSTD')).toBeLessThan(firewall.indexOf('iptables -A OPENADLC_HOSTD'));
   });
 
   it('closes the ports the proxy does not use', () => {
@@ -600,7 +600,7 @@ describe('the egress allowlist the security model promises', () => {
     expect(list).toContain('var.registry_host != "" ? [var.registry_host] : []');
     expect(mainTf).toMatch(/registry_host\s*=\s*var\.registry_host/);
     const env = cloudInit.slice(cloudInit.indexOf('cat > "$root/hostd.env" <<ENV'), cloudInit.indexOf('\n      ENV\n'));
-    expect(env).toContain('FLEETADLC_REGISTRY_HOST=${registry_host}');
+    expect(env).toContain('OPENADLC_REGISTRY_HOST=${registry_host}');
     const variable = /variable "registry_host" \{[\s\S]*?\n\}/.exec(variablesTf)?.[0] ?? '';
     expect(variable).toContain('default     = ""');
     expect(variable).toContain('fleet-registry-token');
@@ -866,11 +866,11 @@ describe('the weekly engine update on the host', () => {
 
 describe('the terminal a person reaches through the load balancer', () => {
   it('tells hostd which console may open it', () => {
-    // The gateway admits a loopback console and the one FLEETADLC_CONSOLE_URL
+    // The gateway admits a loopback console and the one OPENADLC_CONSOLE_URL
     // names. It used to admit any Origin matching the Host it was reached on,
     // which is also what a name rebound to the host looks like. Without this a
     // cloud console's socket is refused.
-    expect(cloudInit).toContain('FLEETADLC_CONSOLE_URL=https://${console_domain}');
+    expect(cloudInit).toContain('OPENADLC_CONSOLE_URL=https://${console_domain}');
     expect(mainTf).toMatch(/console_domain\s+=\s+local\.console_domain/);
   });
 });
@@ -885,7 +885,7 @@ describe('a new hostd image on the host', () => {
   it('refreshes the app tree in place, rather than swapping it under the computers that mount it', () => {
     // The bug: `rm -rf app && mv app.next app`. A task computer that outlived
     // hostd's restart kept the deleted directories: an empty /skills and
-    // /roles, no fleetadlc-ci, and the real gh and git first on its PATH.
+    // /roles, no openadlc-ci, and the real gh and git first on its PATH.
     expect(prepare).not.toContain('rm -rf "$root/app" && mv');
     expect(prepare).toMatch(/refill\(\) \{\s*mkdir -p "\$2"\s*find "\$2" -mindepth 1 -delete\s*cp -R "\$1\/\." "\$2\/"/);
     expect(prepare).toContain('for dir in crew/skills crew/roles apps/hostd/bin; do\n            refill "$root/app.next/$dir" "$root/app/$dir"');
@@ -900,14 +900,14 @@ describe('a new hostd image on the host', () => {
     // The compose stack's arrangement: the four paths hostd hands the daemon
     // as mount sources sit outside the tree an image change rewrites.
     for (const [name, path] of [
-      ['FLEETADLC_SKILLS_ROOT', '$root/assets/skills'],
-      ['FLEETADLC_ROLES_ROOT', '$root/assets/roles'],
-      ['FLEETADLC_RUNNER_BUNDLE', '$root/assets/skill-runner.bundle.mjs'],
-      ['FLEETADLC_GH_SHIM_DIR', '$root/assets/gh-shim'],
+      ['OPENADLC_SKILLS_ROOT', '$root/assets/skills'],
+      ['OPENADLC_ROLES_ROOT', '$root/assets/roles'],
+      ['OPENADLC_RUNNER_BUNDLE', '$root/assets/skill-runner.bundle.mjs'],
+      ['OPENADLC_GH_SHIM_DIR', '$root/assets/gh-shim'],
     ]) {
       expect(prepare).toContain(`\n      ${name}=${path}\n`);
     }
-    expect(prepare).not.toMatch(/FLEETADLC_(SKILLS_ROOT|ROLES_ROOT|RUNNER_BUNDLE|GH_SHIM_DIR)=\$root\/app/);
+    expect(prepare).not.toMatch(/OPENADLC_(SKILLS_ROOT|ROLES_ROOT|RUNNER_BUNDLE|GH_SHIM_DIR)=\$root\/app/);
     expect(prepare).toContain('refill "$root/app/crew/skills" "$root/assets/skills"');
     expect(prepare).toContain('refill "$root/app/crew/roles" "$root/assets/roles"');
     expect(prepare).toContain('refill "$root/app/apps/hostd/bin" "$root/assets/gh-shim"');

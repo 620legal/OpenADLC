@@ -7,7 +7,7 @@ type Bot = Parameters<typeof Invitations>[0]['bots'][number];
 function bot(partial: Partial<Bot> & Pick<Bot, 'bot'>): Bot {
   return {
     displayName: partial.bot,
-    login: `fleetadlc-${partial.bot}-acme`,
+    login: `openadlc-${partial.bot}-acme`,
     connected: false,
     inRepository: null,
     repositoryRole: 'write',
@@ -46,7 +46,7 @@ describe('letting the crew into the repository', () => {
   it('says which are not connected yet by their roles, not by a username nobody holds', () => {
     expect(html).toContain('The lead reviewer is not connected yet.');
     expect(html).toContain('The QA bot has no GitHub account yet.');
-    expect(html).not.toContain('fleetadlc-lead-reviewer-acme');
+    expect(html).not.toContain('openadlc-lead-reviewer-acme');
     expect(html).not.toContain('lead-reviewer');
   });
 });
@@ -67,9 +67,9 @@ describe('letting the crew into every repository', () => {
       ],
     }),
     bot({
-      bot: 'fleetadlc-atlas-janedoe',
+      bot: 'openadlc-atlas-janedoe',
       roleLabel: 'builder',
-      login: 'fleetadlc-atlas-janedoe',
+      login: 'openadlc-atlas-janedoe',
       connected: true,
       accountExists: true,
       inRepository: true,
@@ -97,7 +97,7 @@ describe('letting the crew into every repository', () => {
     ]);
     expect(where).toEqual([
       ['the second reviewer (irisexampleco)', ['acme/widgets: in', 'acme/api: not yet']],
-      ['the builder (fleetadlc-atlas-janedoe)', ['acme/widgets: in', 'acme/api: in']],
+      ['the builder (openadlc-atlas-janedoe)', ['acme/widgets: in', 'acme/api: in']],
     ]);
     expect(several()).toContain('That is done for each repository OpenADLC works in.');
   });

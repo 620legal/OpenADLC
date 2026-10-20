@@ -1,8 +1,8 @@
 allow:
-  # `fleetadlc-ci` runs the repository's checks on HEAD through hostd and
+  # `openadlc-ci` runs the repository's checks on HEAD through hostd and
   # records the result: a deploy workflow's fix is reviewed on top of it. Not
   # `local_ci` below: a revert is pushed without one.
-  shell: [git, gh, jq, rg, cat, ls, make, fleetadlc-ci]
+  shell: [git, gh, jq, rg, cat, ls, make, openadlc-ci]
   git:
     push_branch_prefix: "system/"
     force_push: false
@@ -16,7 +16,7 @@ allow:
       # rollback are not named deploy-*.
       - ".github/workflows/deploy-*.yml"
       # What it posts to GitHub, written to a file and given with `--body-file`.
-      - ".fleetadlc-scratch/**"
+      - ".openadlc-scratch/**"
 
 deny:
   shell: [curl, wget, ssh, sudo]

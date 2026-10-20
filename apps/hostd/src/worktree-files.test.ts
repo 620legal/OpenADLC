@@ -24,7 +24,7 @@ let root: string;
 let outside: string;
 
 beforeEach(() => {
-  const base = mkdtempSync(join(tmpdir(), 'fleetadlc-worktree-'));
+  const base = mkdtempSync(join(tmpdir(), 'openadlc-worktree-'));
   root = join(base, 'wt', 'task-live');
   outside = join(base, 'outside');
 

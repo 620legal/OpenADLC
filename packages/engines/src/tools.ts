@@ -58,7 +58,7 @@ export function resolveWriteScope(policy: ToolsPolicy, declaredPaths: readonly s
  * commands themselves, which every engine runs the same way, and each engine
  * puts this variable in the environment of what it starts.
  */
-export const TOOLS_POLICY_ENV = 'FLEETADLC_TOOLS_POLICY';
+export const TOOLS_POLICY_ENV = 'OPENADLC_TOOLS_POLICY';
 
 /** What OpenADLC's `git` and `gh` read, as the environment an engine runs under. */
 export function toolsPolicyEnv(policy: ToolsPolicy): Record<string, string> {

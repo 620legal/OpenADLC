@@ -31,7 +31,7 @@ describe('which warm computers the pool keeps', () => {
     expect(warmTargets(['acme__api'], 0)).toEqual([]);
   });
 
-  it('makes what is missing, never more than FLEETADLC_WARM_POOL_MAX', async () => {
+  it('makes what is missing, never more than OPENADLC_WARM_POOL_MAX', async () => {
     const { fake } = host();
     const warm = pool({ host: fake, max: 2, activeRepos: async () => ['acme__api', 'acme__web'] });
 

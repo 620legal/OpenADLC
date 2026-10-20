@@ -153,7 +153,7 @@ export interface EngineUpdateStatus {
   /** Whether this hostd can update the bot image at all, and why not when it cannot. */
   applicable: boolean;
   reason: string;
-  /** The image every bot runs: `fleetadlc-bot:latest`. */
+  /** The image every bot runs: `openadlc-bot:latest`. */
   image: string;
   inUse: EngineVersions;
   /** Where `inUse` came from: the image's label, the CLIs themselves, or nowhere. */

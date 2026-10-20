@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto';
-import { DeviceAuthError, GitHubApiError, type AppApi } from '@fleetadlc/github';
-import type { Bot } from '@fleetadlc/shared';
+import { DeviceAuthError, GitHubApiError, type AppApi } from '@openadlc/github';
+import type { Bot } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
 import type { Unheard } from '../../unheard.js';
 import type { WebhookStatus } from '../../webhook-setup.js';
@@ -20,12 +20,12 @@ const minutesAgo = (minutes: number): string => new Date(NOW.getTime() - minutes
 const PRIVATE_KEY = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs1', format: 'pem' }).toString();
 
 describe('OpenADLC’s host service', () => {
-  it('passes while hostd answers, and asks for `fleetadlc up` when it does not', async () => {
+  it('passes while hostd answers, and asks for `openadlc up` when it does not', async () => {
     expect(await hostCheck({ health: async () => ({ ok: true }) }).run(NOW)).toEqual([
       { ok: true, fixed: 'OpenADLC’s host service is answering again' },
     ]);
     const [down] = await hostCheck({ health: async () => ({ ok: false }) }).run(NOW);
-    expect(down).toMatchObject({ ok: false, severity: 'blocking', action: { label: 'Run fleetadlc up', command: 'fleetadlc up' } });
+    expect(down).toMatchObject({ ok: false, severity: 'blocking', action: { label: 'Run openadlc up', command: 'openadlc up' } });
   });
 });
 
@@ -33,10 +33,10 @@ describe('OpenADLC’s host service', () => {
 
 function unheard(partial: Partial<Unheard> = {}): Unheard {
   return {
-    subject: 'fleetadlc-testbed#1',
+    subject: 'openadlc-testbed#1',
     what: 'imported',
     title: 'Document the webhook step',
-    url: 'https://github.com/janedoe/fleetadlc-testbed/issues/1',
+    url: 'https://github.com/janedoe/openadlc-testbed/issues/1',
     happenedAt: minutesAgo(40),
     foundAt: minutesAgo(30),
     ...partial,
@@ -49,13 +49,13 @@ function webhookStatus(partial: Partial<WebhookStatus> = {}): WebhookStatus {
     configured: true,
     hearing: 'never',
     unheard: [],
-    settingsUrl: 'https://github.com/settings/apps/fleetadlc-janedoe',
+    settingsUrl: 'https://github.com/settings/apps/openadlc-janedoe',
     placeholderHook: false,
-    publicUrl: 'https://fleetadlc.example.com',
-    webhookUrl: 'https://fleetadlc.example.com/webhooks/github',
+    publicUrl: 'https://openadlc.example.com',
+    webhookUrl: 'https://openadlc.example.com/webhooks/github',
     secretStored: true,
     tunnel: { running: false } as never,
-    github: { url: 'https://fleetadlc.example.com/webhooks/github', secretSet: true },
+    github: { url: 'https://openadlc.example.com/webhooks/github', secretSet: true },
     lastDelivery: null,
     stale: false,
     resuming: false,
@@ -77,8 +77,8 @@ describe('GitHub delivering to the bridge', () => {
       ok: false,
       severity: 'blocking',
       title: 'GitHub is not sending events to OpenADLC',
-      action: { label: 'Open the app’s settings', url: 'https://github.com/settings/apps/fleetadlc-janedoe' },
-      facts: { subject: { repo: 'fleetadlc-testbed', number: 1, title: 'Document the webhook step', ref: 'fleetadlc-testbed#1' } },
+      action: { label: 'Open the app’s settings', url: 'https://github.com/settings/apps/openadlc-janedoe' },
+      facts: { subject: { repo: 'openadlc-testbed', number: 1, title: 'Document the webhook step', ref: 'openadlc-testbed#1' } },
     });
     expect(answer && 'detail' in answer ? answer.detail : '').toContain('turn on **Active** under Webhook');
   });
@@ -189,7 +189,7 @@ function appReader(options: {
       if (options.unanswered === 'installation' && path.endsWith('/installation')) throw new Error('fetch failed');
       if (path === '/app') {
         return {
-          slug: 'fleetadlc-janedoe',
+          slug: 'openadlc-janedoe',
           id: 7,
           owner: { login: 'janedoe', type: 'User' },
           permissions: options.permissions ?? FULL_PERMISSIONS,
@@ -207,9 +207,9 @@ function appReader(options: {
     clientId: async () => 'Iv23client',
     credentials: async () => (options.key === false ? null : { clientId: 'Iv23client', privateKey: PRIVATE_KEY }),
     api,
-    repositories: async () => [{ name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' }],
+    repositories: async () => [{ name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }],
     requestDeviceCode: options.deviceCode ?? (async () => ({})),
-    tokenKinds: async () => options.kinds ?? [{ who: 'fleetadlc-atlas-janedoe', kind: 'refresh' }],
+    tokenKinds: async () => options.kinds ?? [{ who: 'openadlc-atlas-janedoe', kind: 'refresh' }],
   };
 }
 
@@ -223,7 +223,7 @@ describe('the app’s permissions, compared with what this OpenADLC asks for', (
       ok: false,
       severity: 'blocking',
       title: 'The OpenADLC app does not have “SSH signing keys”',
-      action: { label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/fleetadlc-janedoe/permissions' },
+      action: { label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/openadlc-janedoe/permissions' },
     });
     const detail = missing && 'detail' in missing ? missing.detail : '';
     expect(detail).toContain('under Account permissions, as Read and write');
@@ -272,7 +272,7 @@ describe('the app’s permissions, compared with what this OpenADLC asks for', (
       ok: false,
       severity: 'blocking',
       title: 'The OpenADLC app is not subscribed to “Deployment status”',
-      action: { label: 'Open the app’s permissions and events', url: 'https://github.com/settings/apps/fleetadlc-janedoe/permissions' },
+      action: { label: 'Open the app’s permissions and events', url: 'https://github.com/settings/apps/openadlc-janedoe/permissions' },
     });
     const detail = event && 'detail' in event ? event.detail : '';
     expect(detail).toContain('under Subscribe to events, tick “Deployment status” and save');
@@ -302,13 +302,13 @@ describe('the app’s permissions when GitHub does not answer', () => {
 
 describe('where the app is installed', () => {
   it('passes for a repository the app is installed on, and offers the install page for one it is not', async () => {
-    expect(await appChecks(appReader({})).installed.run(NOW)).toMatchObject([{ subject: 'fleetadlc-testbed', ok: true }]);
+    expect(await appChecks(appReader({})).installed.run(NOW)).toMatchObject([{ subject: 'openadlc-testbed', ok: true }]);
     expect(await appChecks(appReader({ installation: 'missing' })).installed.run(NOW)).toMatchObject([
       {
-        subject: 'fleetadlc-testbed',
+        subject: 'openadlc-testbed',
         ok: false,
-        title: 'The OpenADLC app is not installed on janedoe/fleetadlc-testbed',
-        action: { label: 'Install the app', url: 'https://github.com/apps/fleetadlc-janedoe/installations/new' },
+        title: 'The OpenADLC app is not installed on janedoe/openadlc-testbed',
+        action: { label: 'Install the app', url: 'https://github.com/apps/openadlc-janedoe/installations/new' },
       },
     ]);
   });
@@ -324,7 +324,7 @@ describe('where the app is installed', () => {
     expect(await appChecks({ ...reader, api }).installed.run(NOW)).toMatchObject([
       {
         ok: false,
-        title: 'The OpenADLC app is not installed on janedoe/fleetadlc-testbed',
+        title: 'The OpenADLC app is not installed on janedoe/openadlc-testbed',
         // Creating the app and installing it are two steps; `?step=app` only creates it.
         action: { label: 'Open the “Install the app” step', href: '/onboarding?step=install' },
       },
@@ -350,7 +350,7 @@ describe('where the app is installed', () => {
       need: 'make-public',
       title: 'The OpenADLC app is private to janedoe',
       detail: 'GitHub installs a private app only on the account that owns it, so it cannot go on exampleco yet.',
-      action: { label: 'Make the app public', url: 'https://github.com/settings/apps/fleetadlc-janedoe/advanced' },
+      action: { label: 'Make the app public', url: 'https://github.com/settings/apps/openadlc-janedoe/advanced' },
       steps: [],
     }));
 
@@ -361,7 +361,7 @@ describe('where the app is installed', () => {
       ok: false,
       severity: 'blocking',
       title: 'The OpenADLC app is private, so it cannot be installed on exampleco/infra',
-      action: { label: 'Make the app public', url: 'https://github.com/settings/apps/fleetadlc-janedoe/advanced' },
+      action: { label: 'Make the app public', url: 'https://github.com/settings/apps/openadlc-janedoe/advanced' },
       facts: { need: 'make-public', subject: { repo: 'infra' } },
     });
     expect(row && 'detail' in row ? row.detail : '').toMatch(/^The OpenADLC app is private to janedoe\. GitHub installs a private app/);
@@ -384,7 +384,7 @@ describe('device flow and expiring tokens', () => {
       },
     });
     expect(await appChecks(off).deviceFlow.run(NOW)).toMatchObject([
-      { ok: false, title: 'Device Flow is off in the OpenADLC app', action: { url: 'https://github.com/settings/apps/fleetadlc-janedoe' } },
+      { ok: false, title: 'Device Flow is off in the OpenADLC app', action: { url: 'https://github.com/settings/apps/openadlc-janedoe' } },
     ]);
   });
 
@@ -441,7 +441,7 @@ function bot(partial: Partial<Bot> & Pick<Bot, 'id' | 'name' | 'role'>): Bot {
   };
 }
 
-const BUILDER = bot({ id: 'bot-builder', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement' });
+const BUILDER = bot({ id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement' });
 const REVIEWER = bot({ id: 'bot-lead', name: 'noraexampleco', slot: 'lead-reviewer', role: 'review_lead' });
 const UNCONNECTED = bot({ id: 'bot-sre', name: 'sre', slot: 'sre', role: 'deploy', githubLogin: null });
 
@@ -468,7 +468,7 @@ function crewReader(options: {
   const calls = options.calls ?? [];
   return {
     crew: async () => options.crew ?? [BUILDER, REVIEWER],
-    repositories: async () => options.repositories ?? [{ name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed', defaultBranch: 'main' }],
+    repositories: async () => options.repositories ?? [{ name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', defaultBranch: 'main' }],
     credential: async (one) => (one.githubLogin ? { kind: 'refresh', status: 'active' } : { kind: null, status: null }),
     token: async (one) => {
       if (options.refused?.includes(one.name)) {
@@ -488,7 +488,7 @@ function crewReader(options: {
       },
     }),
     signingKey: async () => (options.stored === undefined ? 'PRIVATE KEY' : options.stored),
-    publicKeyOf: () => 'ssh-ed25519 AAAAC3Nza-builder fleetadlc-fleetadlc-atlas-janedoe',
+    publicKeyOf: () => 'ssh-ed25519 AAAAC3Nza-builder openadlc-openadlc-atlas-janedoe',
     requiresSignatures: async () => (options.requires === undefined ? true : options.requires),
     appLacksSigningPermission: async () => options.lacksPermission ?? false,
     recordKeyId: async () => undefined,
@@ -520,12 +520,12 @@ describe('each bot’s sign-in', () => {
   });
 
   it('asks to reconnect a bot whose sign-in is another account’s, naming both, and passes whatever the case', async () => {
-    const [other] = await crewChecks(crewReader({ crew: [REVIEWER], user: async () => ({ login: 'fleetadlc-lead-reviewer' }) })).signIn.run(NOW);
+    const [other] = await crewChecks(crewReader({ crew: [REVIEWER], user: async () => ({ login: 'openadlc-lead-reviewer' }) })).signIn.run(NOW);
     expect(other).toMatchObject({
       subject: 'bot-lead',
       ok: false,
       severity: 'blocking',
-      title: 'The lead reviewer (noraexampleco) signs in to GitHub as fleetadlc-lead-reviewer, not noraexampleco',
+      title: 'The lead reviewer (noraexampleco) signs in to GitHub as openadlc-lead-reviewer, not noraexampleco',
       detail: expect.stringContaining('in a browser signed in as noraexampleco'),
       action: { label: 'Reconnect the lead reviewer (noraexampleco)', href: '/settings#github-accounts' },
     });
@@ -542,8 +542,8 @@ describe('each bot’s sign-in', () => {
       expect(result).toMatchObject({
         ok: false,
         severity: 'blocking',
-        title: 'The builder (fleetadlc-atlas-janedoe) signs in to GitHub as lead-reviewer-acct, not fleetadlc-atlas-janedoe',
-        action: { label: 'Reconnect the builder (fleetadlc-atlas-janedoe)' },
+        title: 'The builder (openadlc-atlas-janedoe) signs in to GitHub as lead-reviewer-acct, not openadlc-atlas-janedoe',
+        action: { label: 'Reconnect the builder (openadlc-atlas-janedoe)' },
       });
     }
   });
@@ -555,9 +555,9 @@ describe('each bot’s sign-in', () => {
     expect(result).toMatchObject({
       ok: false,
       severity: 'blocking',
-      title: 'The builder (fleetadlc-atlas-janedoe) has been renamed on GitHub to atlas-renamed',
-      detail: expect.stringContaining('records as fleetadlc-atlas-janedoe is called atlas-renamed on GitHub now'),
-      action: { label: 'Reconnect the builder (fleetadlc-atlas-janedoe)' },
+      title: 'The builder (openadlc-atlas-janedoe) has been renamed on GitHub to atlas-renamed',
+      detail: expect.stringContaining('records as openadlc-atlas-janedoe is called atlas-renamed on GitHub now'),
+      action: { label: 'Reconnect the builder (openadlc-atlas-janedoe)' },
       facts: { renamedTo: 'atlas-renamed' },
     });
   });
@@ -580,17 +580,17 @@ describe('each bot in each repository', () => {
     const results = await crewChecks(
       crewReader({
         repo: async (login) => {
-          if (login === 'noraexampleco') throw new GitHubApiError(404, '/repos/janedoe/fleetadlc-testbed', 'Not Found');
+          if (login === 'noraexampleco') throw new GitHubApiError(404, '/repos/janedoe/openadlc-testbed', 'Not Found');
           return { permissions: { push: true }, owner: { type: 'User' } };
         },
       }),
     ).access.run(NOW);
     expect(results).toMatchObject([
-      { subject: 'bot-builder:fleetadlc-testbed', ok: true },
+      { subject: 'bot-builder:openadlc-testbed', ok: true },
       {
-        subject: 'bot-lead:fleetadlc-testbed',
+        subject: 'bot-lead:openadlc-testbed',
         ok: false,
-        title: 'The lead reviewer (noraexampleco) is not in janedoe/fleetadlc-testbed yet',
+        title: 'The lead reviewer (noraexampleco) is not in janedoe/openadlc-testbed yet',
         action: { label: 'Let the crew in', href: '/onboarding?step=access' },
       },
     ]);
@@ -623,7 +623,7 @@ describe('each bot in each repository', () => {
     const reader = crewReader({ crew: [BUILDER, UNCONNECTED] });
     reader.credential = async () => ({ kind: null, status: null });
     const results = await crewChecks(reader).access.run(NOW);
-    expect(results).toEqual([{ subject: 'bot-builder:fleetadlc-testbed', ok: null, reason: 'it holds no working sign-in to ask with' }]);
+    expect(results).toEqual([{ subject: 'bot-builder:openadlc-testbed', ok: null, reason: 'it holds no working sign-in to ask with' }]);
   });
 
   it('has no answer while GitHub is rate limiting the bot’s account, rather than saying it is not in', async () => {
@@ -632,11 +632,11 @@ describe('each bot in each repository', () => {
         crewReader({
           crew: [BUILDER],
           repo: async () => {
-            throw new GitHubApiError(403, '/repos/janedoe/fleetadlc-testbed', body);
+            throw new GitHubApiError(403, '/repos/janedoe/openadlc-testbed', body);
           },
         }),
       ).access.run(NOW);
-      expect(result).toMatchObject({ ok: null, reason: expect.stringContaining('GitHub is rate limiting fleetadlc-atlas-janedoe') });
+      expect(result).toMatchObject({ ok: null, reason: expect.stringContaining('GitHub is rate limiting openadlc-atlas-janedoe') });
     }
   });
 
@@ -646,7 +646,7 @@ describe('each bot in each repository', () => {
         crewReader({
           crew: [BUILDER],
           repo: async () => {
-            throw new GitHubApiError(403, '/repos/janedoe/fleetadlc-testbed', body);
+            throw new GitHubApiError(403, '/repos/janedoe/openadlc-testbed', body);
           },
         }),
       ).access.run(NOW);
@@ -655,7 +655,7 @@ describe('each bot in each repository', () => {
     expect(sso).toMatchObject({
       ok: false,
       severity: 'blocking',
-      title: 'The builder (fleetadlc-atlas-janedoe) is not signed in to janedoe’s single sign-on',
+      title: 'The builder (openadlc-atlas-janedoe) is not signed in to janedoe’s single sign-on',
       detail: expect.stringContaining('authorize it on janedoe’s single sign-on page'),
       action: { url: 'https://github.com/orgs/janedoe/sso' },
     });
@@ -664,7 +664,7 @@ describe('each bot in each repository', () => {
     expect(allowList).toMatchObject({
       ok: false,
       severity: 'blocking',
-      title: 'janedoe’s IP allow list refuses the builder (fleetadlc-atlas-janedoe)',
+      title: 'janedoe’s IP allow list refuses the builder (openadlc-atlas-janedoe)',
       detail: expect.stringContaining('Add the address OpenADLC runs from'),
     });
 
@@ -678,13 +678,13 @@ describe('each bot in each repository', () => {
       crewReader({
         crew: [BUILDER],
         repo: async () => {
-          throw new GitHubApiError(403, '/repos/janedoe/fleetadlc-testbed', 'Resource not accessible by integration');
+          throw new GitHubApiError(403, '/repos/janedoe/openadlc-testbed', 'Resource not accessible by integration');
         },
       }),
     ).access.run(NOW);
     expect(result).toMatchObject({
       ok: false,
-      title: 'GitHub refused the builder (fleetadlc-atlas-janedoe) in janedoe/fleetadlc-testbed',
+      title: 'GitHub refused the builder (openadlc-atlas-janedoe) in janedoe/openadlc-testbed',
       detail: expect.stringContaining('Resource not accessible by integration'),
     });
     expect(result && 'detail' in result ? result.detail : '').not.toContain('invitation');
@@ -694,7 +694,7 @@ describe('each bot in each repository', () => {
     const [result] = await crewChecks(
       crewReader({ crew: [BUILDER], repo: async () => ({ permissions: { pull: true, push: false }, owner: { type: 'User' } }) }),
     ).access.run(NOW);
-    expect(result).toMatchObject({ ok: false, title: 'The builder (fleetadlc-atlas-janedoe) cannot push to janedoe/fleetadlc-testbed' });
+    expect(result).toMatchObject({ ok: false, title: 'The builder (openadlc-atlas-janedoe) cannot push to janedoe/openadlc-testbed' });
   });
 
   it.each(['admin', 'maintain'])('fails, blocking, a bot whose account has %s: it can change the rules that keep a bot from merging', async (role) => {
@@ -707,9 +707,9 @@ describe('each bot in each repository', () => {
     expect(result).toMatchObject({
       ok: false,
       severity: 'blocking',
-      title: `The builder (fleetadlc-atlas-janedoe) has ${role} on janedoe/fleetadlc-testbed`,
+      title: `The builder (openadlc-atlas-janedoe) has ${role} on janedoe/openadlc-testbed`,
       detail: expect.stringContaining('rulesets and branch protection'),
-      action: { url: 'https://github.com/janedoe/fleetadlc-testbed/settings/access' },
+      action: { url: 'https://github.com/janedoe/openadlc-testbed/settings/access' },
     });
   });
 
@@ -737,7 +737,7 @@ describe('each committing bot’s signing key', () => {
 
     // Only the builder commits; a reviewer's key proves nothing.
     expect(results).toMatchObject([{ subject: 'bot-builder', ok: true, facts: { registered: true, keyId: 5 } }]);
-    expect(calls.find((call) => call.method === 'GET')?.path).toBe('/users/fleetadlc-atlas-janedoe/ssh_signing_keys');
+    expect(calls.find((call) => call.method === 'GET')?.path).toBe('/users/openadlc-atlas-janedoe/ssh_signing_keys');
     expect(calls.some((call) => call.method === 'POST')).toBe(false);
   });
 
@@ -747,7 +747,7 @@ describe('each committing bot’s signing key', () => {
     const results = await crewChecks(
       crewReader({
         listed: [
-          { id: 5, key: 'ssh-ed25519 AAAAC3Nza-builder fleetadlc-fleetadlc-atlas-janedoe' },
+          { id: 5, key: 'ssh-ed25519 AAAAC3Nza-builder openadlc-openadlc-atlas-janedoe' },
           { id: 6, key: 'ssh-ed25519 AAAAC3Nza-somebody-else' },
         ],
       }),
@@ -755,10 +755,10 @@ describe('each committing bot’s signing key', () => {
     expect(results).toMatchObject([
       { subject: 'bot-builder', ok: true },
       {
-        subject: 'account:fleetadlc-atlas-janedoe',
+        subject: 'account:openadlc-atlas-janedoe',
         ok: false,
         severity: 'warning',
-        title: 'fleetadlc-atlas-janedoe has a signing key OpenADLC did not register',
+        title: 'openadlc-atlas-janedoe has a signing key OpenADLC did not register',
         facts: { keyIds: [6] },
       },
     ]);
@@ -766,13 +766,13 @@ describe('each committing bot’s signing key', () => {
 
   it('says nothing of other keys on an account while a seat’s own key could not be read', async () => {
     const results = await crewChecks(crewReader({ stored: null, listed: [{ id: 6, key: 'ssh-ed25519 AAAAC3Nza-somebody-else' }] })).signingKey.run(NOW);
-    expect(results.some((result) => result.subject === 'account:fleetadlc-atlas-janedoe')).toBe(false);
+    expect(results.some((result) => result.subject === 'account:openadlc-atlas-janedoe')).toBe(false);
   });
 
   it('registers a key the account lacks itself when the bot’s sign-in can, and says so once', async () => {
     const results = await crewChecks(crewReader({ listed: [] })).signingKey.run(NOW);
     expect(results).toMatchObject([
-      { subject: 'bot-builder', ok: true, note: 'Registered the signing key of the builder (fleetadlc-atlas-janedoe) on its GitHub account' },
+      { subject: 'bot-builder', ok: true, note: 'Registered the signing key of the builder (openadlc-atlas-janedoe) on its GitHub account' },
     ]);
   });
 
@@ -788,12 +788,12 @@ describe('each committing bot’s signing key', () => {
       subject: 'bot-builder',
       ok: false,
       severity: 'blocking',
-      title: 'The builder (fleetadlc-atlas-janedoe) has no signing key on its GitHub account',
-      action: { label: 'Reconnect the builder (fleetadlc-atlas-janedoe)', href: '/settings#github-accounts' },
+      title: 'The builder (openadlc-atlas-janedoe) has no signing key on its GitHub account',
+      action: { label: 'Reconnect the builder (openadlc-atlas-janedoe)', href: '/settings#github-accounts' },
       waitingFor: [],
-      facts: { botId: 'bot-builder', registered: false, requiresSignatures: { 'fleetadlc-testbed': true } },
+      facts: { botId: 'bot-builder', registered: false, requiresSignatures: { 'openadlc-testbed': true } },
     });
-    expect(result && 'detail' in result ? result.detail : '').toContain('Reconnect the builder (fleetadlc-atlas-janedoe) so GitHub learns its signing key');
+    expect(result && 'detail' in result ? result.detail : '').toContain('Reconnect the builder (openadlc-atlas-janedoe) so GitHub learns its signing key');
   });
 
   it('says GitHub was rate limiting when that is why it could not register the key', async () => {
@@ -839,7 +839,7 @@ describe('each committing bot’s signing key', () => {
 
   it('asks to reconnect a bot that has no key at all', async () => {
     const [result] = await crewChecks(crewReader({ stored: null })).signingKey.run(NOW);
-    expect(result).toMatchObject({ ok: false, title: 'The builder (fleetadlc-atlas-janedoe) has no signing key on its GitHub account' });
+    expect(result).toMatchObject({ ok: false, title: 'The builder (openadlc-atlas-janedoe) has no signing key on its GitHub account' });
   });
 
   it('says the secret store failed, and sends nobody to reconnect, when the key cannot be read or kept', async () => {

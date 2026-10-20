@@ -48,10 +48,10 @@ function namesWords(login: string, wanted: readonly string[]): boolean {
 }
 
 /**
- * Whether a login names a seat: `fleetadlc-lead-reviewer-acme` names
+ * Whether a login names a seat: `openadlc-lead-reviewer-acme` names
  * `lead-reviewer`, by whole dash-separated words, and so does an account made
  * when the crew had persona names — `fleet-atlas-acme` is the builder's. A
- * number after it is another seat's: `fleetadlc-builder-2-acme` is the second
+ * number after it is another seat's: `openadlc-builder-2-acme` is the second
  * builder's, not the builder's.
  */
 export function loginNamesSeat(login: string, seat: string): boolean {
@@ -188,7 +188,7 @@ export function nextSeatToCreate(seats: readonly SeatAccount[], connected: reado
     ...seats.filter((one) => !first.includes(one.seat)),
   ];
   // By the seat a login names, not the bare suggestion: the page suggests
-  // `acme-fleetadlc-builder` when `fleetadlc-builder-acme` is taken, and an
+  // `acme-openadlc-builder` when `openadlc-builder-acme` is taken, and an
   // account made under it was asked for again.
   return (
     ordered.find(
@@ -432,7 +432,7 @@ export function GitHubAccountsStep({
                 settingKey="operatorEmail"
                 label="your email"
                 placeholder="you@gmail.com"
-                hint="Each account gets an address like you+fleetadlc-<seat>@yourdomain, which most providers deliver to your inbox."
+                hint="Each account gets an address like you+openadlc-<seat>@yourdomain, which most providers deliver to your inbox."
                 settings={settings}
                 save={async (key, value) => {
                   await save(key, value);

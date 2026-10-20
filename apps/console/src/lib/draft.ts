@@ -9,7 +9,7 @@ import { useCallback, useEffect, useState } from 'react';
  * Kept here, it is put back when the page is drawn again, and dropped once it
  * is sent.
  */
-const PREFIX = 'fleetadlc:draft:';
+const PREFIX = 'openadlc:draft:';
 
 export function readDraft(key: string): string {
   try {

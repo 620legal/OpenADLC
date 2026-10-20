@@ -17,7 +17,7 @@ const WRAPPER = join(
   '..',
   'infra',
   'local',
-  'fleetadlc-install',
+  'openadlc-install',
 );
 
 /**
@@ -40,7 +40,7 @@ function recorder(): string {
     `#!/usr/bin/env bash\nprintf '%s\\n' "\${npm_config_userconfig:-none}" > ${path}\n` +
       `if [ -f "\${npm_config_userconfig:-/nonexistent}" ]; then cat "\${npm_config_userconfig}" >> ${path}; fi\n` +
       `printf 'args:%s\\n' "$*" >> ${path}\n` +
-      `printf 'token:%s\\n' "\${FLEETADLC_REGISTRY_TOKEN:-none}" >> ${path}\n`,
+      `printf 'token:%s\\n' "\${OPENADLC_REGISTRY_TOKEN:-none}" >> ${path}\n`,
     { mode: 0o755 },
   );
   return script;
@@ -50,9 +50,9 @@ async function install(extraEnv: Record<string, string> = {}) {
   const script = recorder();
   const env = {
     PATH: process.env.PATH ?? '',
-    FLEETADLC_HOSTD_URL: url,
-    FLEETADLC_TASK_ID: 'task-live',
-    FLEETADLC_TASK_TOKEN: 'the-task-token',
+    OPENADLC_HOSTD_URL: url,
+    OPENADLC_TASK_ID: 'task-live',
+    OPENADLC_TASK_TOKEN: 'the-task-token',
     ...extraEnv,
   };
   try {
@@ -65,12 +65,12 @@ async function install(extraEnv: Record<string, string> = {}) {
 }
 
 beforeEach(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'fleetadlc-install-test-'));
+  dir = mkdtempSync(join(tmpdir(), 'openadlc-install-test-'));
   requests = [];
   answer = { status: 200, body: { host: 'npm.internal.example', token: 'npm_secret', maxAgeSeconds: 300 } };
 
   hostd = createServer((request, response) => {
-    requests.push({ path: request.url ?? '', token: request.headers['x-fleetadlc-task-token'] as string | undefined });
+    requests.push({ path: request.url ?? '', token: request.headers['x-openadlc-task-token'] as string | undefined });
     response.writeHead(answer.status, { 'content-type': 'application/json' });
     response.end(JSON.stringify(answer.body));
   });
@@ -95,12 +95,12 @@ describe('installing with a credential from hostd', () => {
     // A bare `_authToken=` is sent to whatever registry a dependency resolves
     // to. Scoping it to one host is what stops the credential leaving.
     const result = await install();
-    expect(result.record).toContain('//npm.internal.example/:_authToken=${FLEETADLC_REGISTRY_TOKEN}');
+    expect(result.record).toContain('//npm.internal.example/:_authToken=${OPENADLC_REGISTRY_TOKEN}');
     expect(result.record).toContain('registry=https://npm.internal.example/');
   });
 
   it('keeps the token out of the npmrc, and gives it to the one command in its environment', async () => {
-    // npm and pnpm expand `${FLEETADLC_REGISTRY_TOKEN}` in an npmrc. Written
+    // npm and pnpm expand `${OPENADLC_REGISTRY_TOKEN}` in an npmrc. Written
     // into the file, in the container's /tmp, the token outlived an install
     // killed before the cleanup ran.
     const result = await install();
@@ -139,9 +139,9 @@ describe('installing with a credential from hostd', () => {
     await run(WRAPPER, [script], {
       env: {
         PATH: process.env.PATH ?? '',
-        FLEETADLC_HOSTD_URL: url,
-        FLEETADLC_TASK_ID: 'task-live',
-        FLEETADLC_TASK_TOKEN: 'the-task-token',
+        OPENADLC_HOSTD_URL: url,
+        OPENADLC_TASK_ID: 'task-live',
+        OPENADLC_TASK_TOKEN: 'the-task-token',
       },
     }).catch(() => undefined);
 
@@ -162,7 +162,7 @@ describe('installing when there is nothing to install with', () => {
 
   it('runs the command unchanged outside an OpenADLC session', async () => {
     // `tmux attach` and a person typing it by hand.
-    const result = await install({ FLEETADLC_TASK_TOKEN: '' });
+    const result = await install({ OPENADLC_TASK_TOKEN: '' });
     expect(result.code).toBe(0);
     expect(requests).toHaveLength(0);
   });
@@ -170,10 +170,10 @@ describe('installing when there is nothing to install with', () => {
   it('refuses when hostd names a registry but the task’s variables are missing', async () => {
     // hostd's own `make setup` and local CI used to run with none of them, and
     // the wrapper took that for a person in `tmux attach`.
-    const result = await install({ FLEETADLC_REGISTRY_CONFIGURED: '1', FLEETADLC_TASK_TOKEN: '', FLEETADLC_TASK_ID: '' });
+    const result = await install({ OPENADLC_REGISTRY_CONFIGURED: '1', OPENADLC_TASK_TOKEN: '', OPENADLC_TASK_ID: '' });
 
     expect(result.code).toBe(78);
-    expect(result.stderr).toContain('FLEETADLC_TASK_ID FLEETADLC_TASK_TOKEN');
+    expect(result.stderr).toContain('OPENADLC_TASK_ID OPENADLC_TASK_TOKEN');
     expect(requests).toHaveLength(0);
     expect(() => readFileSync(join(dir, 'record'), 'utf8')).toThrow();
   });
@@ -202,7 +202,7 @@ describe('installing when there is nothing to install with', () => {
   });
 
   it('refuses when hostd cannot be reached', async () => {
-    const result = await install({ FLEETADLC_HOSTD_URL: 'http://127.0.0.1:1' });
+    const result = await install({ OPENADLC_HOSTD_URL: 'http://127.0.0.1:1' });
     expect(result.code).toBe(69);
     expect(result.stderr).toContain('unreachable');
   });

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_DELIVERY_RULES, declaredPathsFrom, missingForRouting, parseDeliveryRules, parseDependencies, parseYamlFile, REQUIRED_CHECK } from '@fleetadlc/shared';
+import { DEFAULT_DELIVERY_RULES, declaredPathsFrom, missingForRouting, parseDeliveryRules, parseDependencies, parseYamlFile, REQUIRED_CHECK } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -257,7 +257,7 @@ describe('what the template tree carries', () => {
         start?: Record<string, string>;
       },
     ) {
-      const repo = mkdtempSync(join(tmpdir(), 'fleetadlc-ci-needs-'));
+      const repo = mkdtempSync(join(tmpdir(), 'openadlc-ci-needs-'));
       const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' } }).trim();
       try {
         git('init', '-q', '-b', 'main');
@@ -398,7 +398,7 @@ describe('what the template tree carries', () => {
     const script = own.jobs.changes?.steps?.find((step) => step.id === 'tested')?.run ?? '';
 
     function tested(artifact?: { headTree: 'this' | 'other'; verdict?: string }) {
-      const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-ci-tested-'));
+      const dir = mkdtempSync(join(tmpdir(), 'openadlc-ci-tested-'));
       try {
         const tree = 'a'.repeat(40);
         const answers = fakeGh(dir, artifact && { headTree: artifact.headTree === 'this' ? tree : 'f'.repeat(40), verdict: artifact.verdict });
@@ -407,7 +407,7 @@ describe('what the template tree carries', () => {
         execFileSync('bash', ['-e', '-c', script], {
           cwd: dir,
           stdio: 'ignore',
-          env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_OUTPUT: output, REPO: 'exampleco/fleetadlc', REPO_ID: '42', TREE: tree, ...answers },
+          env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_OUTPUT: output, REPO: 'exampleco/openadlc', REPO_ID: '42', TREE: tree, ...answers },
         });
         return /^tested=(.*)$/m.exec(readFileSync(output, 'utf8'))?.[1];
       } finally {
@@ -436,7 +436,7 @@ describe('what the template tree carries', () => {
 
       /** What gitleaks is given, with the download left out and gitleaks a stub that prints its arguments. */
       function scanned(event: string, env: (rev: (ref: string) => string) => Record<string, string>) {
-        const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-ci-secrets-'));
+        const dir = mkdtempSync(join(tmpdir(), 'openadlc-ci-secrets-'));
         try {
           const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
           const rev = (ref: string) => git('rev-parse', ref);
@@ -501,7 +501,7 @@ describe('what the template tree carries', () => {
     // Passing always is green on day one and stays green while nothing runs;
     // refusing always meant no first pull request could merge, a README
     // change included. Run against a repository with and without code.
-    const repo = mkdtempSync(join(tmpdir(), 'fleetadlc-makefile-'));
+    const repo = mkdtempSync(join(tmpdir(), 'openadlc-makefile-'));
     try {
       const git = (...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'pipe' });
       git('init', '-q');
@@ -562,12 +562,12 @@ describe('this repository uses the templates itself', () => {
     // account whose approval lands it.
     const template = readFileSync(join(TEMPLATE, '.github', 'pull_request_template.md'), 'utf8');
     expect(template).not.toContain('should be able to paste');
-    expect(template).toContain('`fleetadlc-ci`');
+    expect(template).toContain('`openadlc-ci`');
   });
 });
 
 /**
- * The delivery templates: `.github/fleetadlc.yml` and the four workflows the
+ * The delivery templates: `.github/openadlc.yml` and the four workflows the
  * bridge dispatches by name (`apps/bridge/src/deploy-pipeline.ts`). A rules file
  * that does not parse is refused and the repository ships some other way; a
  * workflow with a push trigger deploys twice, once on the push and once on the
@@ -579,7 +579,7 @@ describe('the delivery templates', () => {
   const WORKFLOWS = ['deploy-testing', 'smoke-testing', 'promote-production', 'rollback-production'];
 
   it('ship rules that parse, and say what a repository with no rules gets', () => {
-    const text = readFileSync(join(TEMPLATE, '.github', 'fleetadlc.yml'), 'utf8');
+    const text = readFileSync(join(TEMPLATE, '.github', 'openadlc.yml'), 'utf8');
     const parsed = parseDeliveryRules(text);
     expect(parsed).toEqual({ rules: DEFAULT_DELIVERY_RULES });
     // Automatic, after a soak: a person approves only where `reviewers` is chosen.
@@ -592,7 +592,7 @@ describe('the delivery templates', () => {
     // The header said so, and by default the bridge merges one once the
     // security reviewer approves it (`mergeDecision`): an operator reading it
     // believed a person gated their deploy rules when two models did.
-    const header = readFileSync(join(TEMPLATE, '.github', 'fleetadlc.yml'), 'utf8')
+    const header = readFileSync(join(TEMPLATE, '.github', 'openadlc.yml'), 'utf8')
       .split('\n')
       .filter((line) => line.startsWith('#'))
       .join(' ')
@@ -642,14 +642,16 @@ describe('the delivery templates', () => {
     // nor reverts.
     const guard = (name: string) =>
       Object.values((parseYamlFile(join(TEMPLATE, '.github', 'workflows', `${name}.yml`)) as { jobs: Record<string, { if?: string }> }).jobs)[0]?.if ?? '';
-    expect(guard('deploy-testing')).toBe("vars.FLEETADLC_DEPLOY_TESTING == 'true'");
-    expect(guard('smoke-testing')).toMatch(/^vars\.FLEETADLC_SMOKE_TESTING == 'true' && \(/);
+    // The variable's old name still counts: it is set on the repository, which
+    // a new template cannot rename.
+    expect(guard('deploy-testing')).toBe("vars.OPENADLC_DEPLOY_TESTING == 'true' || vars.FLEETADLC_DEPLOY_TESTING == 'true'");
+    expect(guard('smoke-testing')).toMatch(/^vars\.OPENADLC_SMOKE_TESTING == 'true' && \(/);
     // The stub still refuses: a green one would dispatch an untested promote.
     expect(readFileSync(join(TEMPLATE, 'Makefile'), 'utf8')).toMatch(/^smoke-testing:\n\t.*exit 1$/m);
-    for (const file of ['Makefile', '.github/fleetadlc.yml']) {
+    for (const file of ['Makefile', '.github/openadlc.yml']) {
       const text = readFileSync(join(TEMPLATE, file), 'utf8');
-      expect(text, file).toContain('FLEETADLC_DEPLOY_TESTING');
-      expect(text, file).toContain('FLEETADLC_SMOKE_TESTING');
+      expect(text, file).toContain('OPENADLC_DEPLOY_TESTING');
+      expect(text, file).toContain('OPENADLC_SMOKE_TESTING');
     }
   });
 
@@ -700,7 +702,7 @@ describe('the delivery templates', () => {
     const deployed = smokeSteps.find((step) => step.name === 'the commit that was deployed')?.run ?? '';
     expect(smokeSteps.find((step) => step.uses?.startsWith('actions/checkout'))?.with?.ref).toBe('${{ steps.deployed.outputs.sha }}');
     const smoked = (title: string): string => {
-      const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-smoke-'));
+      const dir = mkdtempSync(join(tmpdir(), 'openadlc-smoke-'));
       try {
         const output = join(dir, 'output');
         writeFileSync(output, '');
@@ -743,7 +745,7 @@ describe('the delivery templates', () => {
       expect(step?.run, name).toContain('set -euo pipefail');
       expect(step?.run, name).toContain(`make ${target} ${input}="$${input}" | tee`);
 
-      const work = mkdtempSync(join(tmpdir(), 'fleetadlc-deploy-step-'));
+      const work = mkdtempSync(join(tmpdir(), 'openadlc-deploy-step-'));
       try {
         // A `make` that prints what the test says, and fails when told to.
         writeFileSync(join(work, 'make'), '#!/bin/sh\nprintf "%b" "$PRINTS"\nexit "${FAILS:-0}"\n', { mode: 0o755 });

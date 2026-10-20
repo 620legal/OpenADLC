@@ -5,11 +5,11 @@ import { describe, expect, it, vi } from 'vitest';
 const fetchMock = vi.fn(async (url: string) =>
   url.endsWith('/v1/onboarding')
     ? new Response(JSON.stringify({ links: { yourApps: 'https://github.com/organizations/exampleco/settings/apps' } }), { status: 200 })
-    : new Response(JSON.stringify({ slug: 'fleetadlc-example' }), { status: 200 }),
+    : new Response(JSON.stringify({ slug: 'openadlc-example' }), { status: 200 }),
 );
 vi.stubGlobal('fetch', fetchMock);
 // Behind IAP, where the console reads IAP's email at all.
-vi.stubEnv('FLEETADLC_IDENTITY_MODE_EXPECTED', 'iap');
+vi.stubEnv('OPENADLC_IDENTITY_MODE_EXPECTED', 'iap');
 vi.mock('next/navigation', () => ({
   redirect: (url: string) => {
     throw new Error(`redirect:${url}`);
@@ -32,16 +32,16 @@ async function comeBack(params: { code?: string; state?: string }): Promise<stri
 describe('coming back from GitHub with a new app', () => {
   it('exchanges the code as the person, so a bridge that verifies IAP accepts it', async () => {
     // Behind IAP: a local console never forwards x-goog-* a browser could have sent.
-    vi.stubEnv('FLEETADLC_IDENTITY_MODE_EXPECTED', 'iap');
-    await expect(comeBack({ code: 'one-time', state: STATE })).rejects.toThrow('redirect:/onboarding?app=created&slug=fleetadlc-example');
+    vi.stubEnv('OPENADLC_IDENTITY_MODE_EXPECTED', 'iap');
+    await expect(comeBack({ code: 'one-time', state: STATE })).rejects.toThrow('redirect:/onboarding?app=created&slug=openadlc-example');
 
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('http://bridge.test/v1/app-manifest/exchange');
     expect(JSON.parse(String(init.body))).toEqual({ code: 'one-time', state: STATE });
     const sent = new Headers(init.headers);
     // The assertion under both names: Google strips x-goog-* on the way into run.app.
-    expect(sent.get('x-fleetadlc-iap-assertion')).toBe('signed.by.iap');
-    expect(sent.get('x-fleetadlc-identity')).toBe('ada@example.com');
+    expect(sent.get('x-openadlc-iap-assertion')).toBe('signed.by.iap');
+    expect(sent.get('x-openadlc-identity')).toBe('ada@example.com');
   });
 
   it('says that the bridge did not answer, rather than failing the page', async () => {

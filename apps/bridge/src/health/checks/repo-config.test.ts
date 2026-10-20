@@ -1,4 +1,4 @@
-import type { ConfigFiles, ReviewerStanding } from '@fleetadlc/github';
+import type { ConfigFiles, ReviewerStanding } from '@openadlc/github';
 import { describe, expect, it } from 'vitest';
 import { HUMANS_SUBJECT, HUMAN_IDS_SUBJECT, humanReviewLinesInspection, namedLoginsInspection, repoConfigCheck, type RepoConfigReader } from './repo-config.js';
 

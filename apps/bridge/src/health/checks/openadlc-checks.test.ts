@@ -1,5 +1,5 @@
-import type { RuleReport } from '@fleetadlc/github';
-import type { Bot, Lease, ModelAccount, SubscriptionLogin, TaskState } from '@fleetadlc/shared';
+import type { RuleReport } from '@openadlc/github';
+import type { Bot, Lease, ModelAccount, SubscriptionLogin, TaskState } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
 import { leaseCheck, type LeaseReader } from './leases.js';
 import { modelAccountCheck } from './models.js';
@@ -141,39 +141,39 @@ describe('the repository’s protection', () => {
     const [result] = await rulesCheck({
       plan: async () => [
         {
-          repository: 'janedoe/fleetadlc-testbed',
+          repository: 'janedoe/openadlc-testbed',
           canApply: true,
-          rules: [report('fleetadlc: main', 'drifted', 'missing rule required_signatures'), report('CODEOWNERS', 'present')],
+          rules: [report('openadlc: main', 'drifted', 'missing rule required_signatures'), report('CODEOWNERS', 'present')],
         },
       ],
       refused: async () => new Set(),
     }).run(NOW);
     expect(result).toMatchObject({
-      subject: 'janedoe/fleetadlc-testbed',
+      subject: 'janedoe/openadlc-testbed',
       ok: false,
       severity: 'warning',
-      title: 'janedoe/fleetadlc-testbed is not protected the way OpenADLC sets it',
+      title: 'janedoe/openadlc-testbed is not protected the way OpenADLC sets it',
       action: { href: '/onboarding?step=protect' },
     });
-    expect(result && 'detail' in result ? result.detail : '').toContain('- **fleetadlc: main:** missing rule required_signatures');
+    expect(result && 'detail' in result ? result.detail : '').toContain('- **openadlc: main:** missing rule required_signatures');
   });
 
   it('reads only what the last apply skipped, so a plan limit that no longer holds is asked for again', async () => {
-    const refused = skippedByLastApply(['skipped fleetadlc: main', 'unsupported environment production', 'set up CODEOWNERS', 42]);
-    expect([...refused]).toEqual(['fleetadlc: main']);
+    const refused = skippedByLastApply(['skipped openadlc: main', 'unsupported environment production', 'set up CODEOWNERS', 42]);
+    expect([...refused]).toEqual(['openadlc: main']);
     // The repository went public: the plan dropped the stored limit, so production's reviewer is missing again.
     const [result] = await rulesCheck({
-      plan: async () => [{ repository: 'janedoe/fleetadlc-testbed', canApply: true, rules: [report('environment production', 'missing')] }],
+      plan: async () => [{ repository: 'janedoe/openadlc-testbed', canApply: true, rules: [report('environment production', 'missing')] }],
       refused: async () => refused,
     }).run(NOW);
-    expect(result).toMatchObject({ ok: false, title: 'janedoe/fleetadlc-testbed is not protected the way OpenADLC sets it' });
+    expect(result).toMatchObject({ ok: false, title: 'janedoe/openadlc-testbed is not protected the way OpenADLC sets it' });
   });
 
   it('does not take a ruleset the plan refused as refused for good: once the plan can hold it, it is missing', async () => {
-    const refused = skippedByLastApply(['skipped fleetadlc: main', 'skipped required status checks'], ['fleetadlc: main']);
+    const refused = skippedByLastApply(['skipped openadlc: main', 'skipped required status checks'], ['openadlc: main']);
     expect([...refused]).toEqual(['required status checks']);
     const [result] = await rulesCheck({
-      plan: async () => [{ repository: 'janedoe/fleetadlc-testbed', canApply: true, rules: [report('fleetadlc: main', 'missing')] }],
+      plan: async () => [{ repository: 'janedoe/openadlc-testbed', canApply: true, rules: [report('openadlc: main', 'missing')] }],
       refused: async () => refused,
     }).run(NOW);
     expect(result).toMatchObject({ ok: false });
@@ -183,12 +183,12 @@ describe('the repository’s protection', () => {
     const [result] = await rulesCheck({
       plan: async () => [
         {
-          repository: 'janedoe/fleetadlc-testbed',
+          repository: 'janedoe/openadlc-testbed',
           canApply: true,
-          rules: [report('fleetadlc: main', 'missing'), report('environment production', 'unsupported', 'a private repository…')],
+          rules: [report('openadlc: main', 'missing'), report('environment production', 'unsupported', 'a private repository…')],
         },
       ],
-      refused: async () => new Set(['fleetadlc: main']),
+      refused: async () => new Set(['openadlc: main']),
     }).run(NOW);
     expect(result).toMatchObject({ ok: true });
   });
@@ -200,11 +200,11 @@ describe('the repository’s protection', () => {
     const [result] = await rulesCheck({
       plan: async () => [
         {
-          repository: 'janedoe/fleetadlc-testbed',
+          repository: 'janedoe/openadlc-testbed',
           canApply: true,
           rules: [
             report('CODEOWNERS', 'drifted', 'it makes @ottoexampleco the code owner of everything, but the lead reviewer is @noraexampleco'),
-            report('required status checks', 'missing', 'nothing in janedoe/fleetadlc-testbed publishes ci or review-gate'),
+            report('required status checks', 'missing', 'nothing in janedoe/openadlc-testbed publishes ci or review-gate'),
             report('auto-merge', 'missing', 'every pull request waits for a person to press merge'),
           ],
         },
@@ -217,12 +217,12 @@ describe('the repository’s protection', () => {
     expect(result).toMatchObject({
       ok: false,
       severity: 'blocking',
-      title: 'Nothing the crew builds can land in janedoe/fleetadlc-testbed',
+      title: 'Nothing the crew builds can land in janedoe/openadlc-testbed',
       action: { label: 'Fix the repository', href: '/onboarding?step=protect' },
     });
     const detail = result && 'detail' in result ? result.detail : '';
     expect(detail).toContain('@ottoexampleco');
-    expect(detail).toContain('- **required status checks:** nothing in janedoe/fleetadlc-testbed publishes ci');
+    expect(detail).toContain('- **required status checks:** nothing in janedoe/openadlc-testbed publishes ci');
     expect(detail).toContain('auto-merge');
     // One line a reason: run together with semicolons, three reasons were a paragraph nobody could scan.
     expect(detail.split('\n').filter((line) => line.startsWith('- **'))).toHaveLength(3);
@@ -232,29 +232,29 @@ describe('the repository’s protection', () => {
     const [result] = await rulesCheck({
       plan: async () => [
         {
-          repository: 'janedoe/fleetadlc-testbed',
+          repository: 'janedoe/openadlc-testbed',
           canApply: true,
-          rules: [report('fleetadlc: main', 'drifted', 'pull_request.require_last_push_approval is true, not false')],
+          rules: [report('openadlc: main', 'drifted', 'pull_request.require_last_push_approval is true, not false')],
         },
       ],
       refused: async () => new Set(),
     }).run(NOW);
 
-    expect(result).toMatchObject({ ok: false, severity: 'blocking', title: 'Nothing the crew builds can land in janedoe/fleetadlc-testbed' });
+    expect(result).toMatchObject({ ok: false, severity: 'blocking', title: 'Nothing the crew builds can land in janedoe/openadlc-testbed' });
   });
 
   it('has no answer without the app’s key', async () => {
     const [result] = await rulesCheck({
-      plan: async () => [{ repository: 'janedoe/fleetadlc-testbed', canApply: false, rules: [] }],
+      plan: async () => [{ repository: 'janedoe/openadlc-testbed', canApply: false, rules: [] }],
       refused: async () => new Set(),
     }).run(NOW);
     expect(result).toMatchObject({ ok: null });
   });
 
   it('says why the app could not read them, as the plan does, rather than that no key is held', async () => {
-    const detail = 'the OpenADLC app is not installed on janedoe/fleetadlc-testbed: install it on this repository';
+    const detail = 'the OpenADLC app is not installed on janedoe/openadlc-testbed: install it on this repository';
     const [result] = await rulesCheck({
-      plan: async () => [{ repository: 'janedoe/fleetadlc-testbed', canApply: false, rules: [], detail }],
+      plan: async () => [{ repository: 'janedoe/openadlc-testbed', canApply: false, rules: [], detail }],
       refused: async () => new Set(),
     }).run(NOW);
     expect(result).toMatchObject({ ok: null, reason: `the repository’s rules could not be read as the app: ${detail}` });
@@ -284,10 +284,10 @@ describe('a lease with nothing working under it', () => {
     };
     return {
       leases: async () => [lease],
-      repos: async () => [{ id: 'repo-1', name: 'fleetadlc-testbed' }],
+      repos: async () => [{ id: 'repo-1', name: 'openadlc-testbed' }],
       tasksOn: async () => options.tasks ?? [],
       issue: async () => ({ title: 'Add a health endpoint', prNumber: options.prNumber ?? null }),
-      botName: async () => 'fleetadlc-atlas-janedoe',
+      botName: async () => 'openadlc-atlas-janedoe',
       release: async (one) => {
         if (options.stillIdle === false) return false;
         options.released?.push(one.id);
@@ -307,7 +307,7 @@ describe('a lease with nothing working under it', () => {
       {
         subject: 'lease-1',
         ok: true,
-        note: 'Released #12 “Add a health endpoint” in fleetadlc-testbed, which fleetadlc-atlas-janedoe held with nothing working on it',
+        note: 'Released #12 “Add a health endpoint” in openadlc-testbed, which openadlc-atlas-janedoe held with nothing working on it',
       },
     ]);
   });

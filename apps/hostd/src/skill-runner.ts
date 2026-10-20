@@ -16,11 +16,11 @@ import {
   type Engine,
   type EngineEvent,
   type ToolsPolicy,
-} from '@fleetadlc/engines';
-import { TASK_TOKEN_HEADER } from '@fleetadlc/github';
-import type { EngineName } from '@fleetadlc/shared';
+} from '@openadlc/engines';
+import { TASK_TOKEN_HEADER } from '@openadlc/github';
+import type { EngineName } from '@openadlc/shared';
 import { chooseEngine } from './engine-choice.js';
-import { costCapGate, parseMarker, parseQuestion, parseSendBack, withoutMarker } from '@fleetadlc/shared';
+import { costCapGate, parseMarker, parseQuestion, parseSendBack, withoutMarker } from '@openadlc/shared';
 
 interface RunnerEnv {
   taskId: string;
@@ -55,31 +55,31 @@ function readEnv(): RunnerEnv {
   };
 
   return {
-    taskId: required('FLEETADLC_TASK_ID'),
-    bot: required('FLEETADLC_BOT'),
-    skill: required('FLEETADLC_SKILL'),
-    engine: (process.env.FLEETADLC_ENGINE ?? 'none') as EngineName,
-    model: process.env.FLEETADLC_MODEL ?? 'mock',
-    modelAlias: process.env.FLEETADLC_MODEL_ALIAS ?? null,
-    bridgeUrl: required('FLEETADLC_BRIDGE_URL'),
-    workdir: process.env.FLEETADLC_WORKDIR ?? process.cwd(),
-    subjectRef: process.env.FLEETADLC_SUBJECT_REF ?? '',
-    repo: process.env.FLEETADLC_REPO ?? null,
-    contextFiles: (process.env.FLEETADLC_CONTEXT_FILES ?? '').split(',').filter(Boolean),
-    attachments: (process.env.FLEETADLC_ATTACHMENTS ?? '').split(',').filter(Boolean),
-    declaredPaths: (process.env.FLEETADLC_DECLARED_PATHS ?? '').split(',').filter(Boolean),
-    reviewMode: process.env.FLEETADLC_REVIEW_MODE || null,
+    taskId: required('OPENADLC_TASK_ID'),
+    bot: required('OPENADLC_BOT'),
+    skill: required('OPENADLC_SKILL'),
+    engine: (process.env.OPENADLC_ENGINE ?? 'none') as EngineName,
+    model: process.env.OPENADLC_MODEL ?? 'mock',
+    modelAlias: process.env.OPENADLC_MODEL_ALIAS ?? null,
+    bridgeUrl: required('OPENADLC_BRIDGE_URL'),
+    workdir: process.env.OPENADLC_WORKDIR ?? process.cwd(),
+    subjectRef: process.env.OPENADLC_SUBJECT_REF ?? '',
+    repo: process.env.OPENADLC_REPO ?? null,
+    contextFiles: (process.env.OPENADLC_CONTEXT_FILES ?? '').split(',').filter(Boolean),
+    attachments: (process.env.OPENADLC_ATTACHMENTS ?? '').split(',').filter(Boolean),
+    declaredPaths: (process.env.OPENADLC_DECLARED_PATHS ?? '').split(',').filter(Boolean),
+    reviewMode: process.env.OPENADLC_REVIEW_MODE || null,
     // One line of the brief: hostd checks it, and a newline would start another.
-    reviewLens: process.env.FLEETADLC_REVIEW_LENS && !/[\r\n]/.test(process.env.FLEETADLC_REVIEW_LENS) ? process.env.FLEETADLC_REVIEW_LENS : null,
-    costCap: Number(process.env.FLEETADLC_TASK_COST_CAP_USD ?? '15'),
-    skillsRoot: process.env.FLEETADLC_SKILLS_ROOT ?? '/skills',
-    scripted: process.env.FLEETADLC_SCRIPTED_ENGINES === '1',
+    reviewLens: process.env.OPENADLC_REVIEW_LENS && !/[\r\n]/.test(process.env.OPENADLC_REVIEW_LENS) ? process.env.OPENADLC_REVIEW_LENS : null,
+    costCap: Number(process.env.OPENADLC_TASK_COST_CAP_USD ?? '15'),
+    skillsRoot: process.env.OPENADLC_SKILLS_ROOT ?? '/skills',
+    scripted: process.env.OPENADLC_SCRIPTED_ENGINES === '1',
     // A minute unless a test says otherwise.
-    ledgerRetryMs: Math.max(0, Number(process.env.FLEETADLC_LEDGER_RETRY_MS ?? '') || 60_000),
+    ledgerRetryMs: Math.max(0, Number(process.env.OPENADLC_LEDGER_RETRY_MS ?? '') || 60_000),
   };
 }
 
-const taskToken = process.env.FLEETADLC_TASK_TOKEN ?? '';
+const taskToken = process.env.OPENADLC_TASK_TOKEN ?? '';
 
 type Posted = { ok: true; body: Record<string, unknown> } | { ok: false; error: string };
 
@@ -193,7 +193,7 @@ function buildPrompt(env: RunnerEnv, skillDir: string, policy: ToolsPolicy): str
   const skillDoc = join(skillDir, 'SKILL.md');
   if (existsSync(skillDoc)) parts.push(readFileSync(skillDoc, 'utf8'));
 
-  const fence = `fleetadlc-document-${randomBytes(12).toString('hex')}`;
+  const fence = `openadlc-document-${randomBytes(12).toString('hex')}`;
   const missing: string[] = [];
   const documents: string[] = [];
   for (const file of env.contextFiles) {
@@ -244,7 +244,7 @@ function buildPrompt(env: RunnerEnv, skillDir: string, policy: ToolsPolicy): str
       writeScopeLine(policy, env.declaredPaths),
       // A body on the command line is refused whenever a line starts with `#`:
       // a builder dropped its plan's heading to get one through.
-      'anything longer than a line that you post to GitHub — a comment, a pull request, a review, an issue — you write to a file under .fleetadlc-scratch/ and give with --body-file; nothing there is committed',
+      'anything longer than a line that you post to GitHub — a comment, a pull request, a review, an issue — you write to a file under .openadlc-scratch/ and give with --body-file; nothing there is committed',
       DATA_NOT_INSTRUCTIONS,
       `stop and ask rather than guessing; your spend cap for this task is $${env.costCap}`,
     ]
@@ -294,7 +294,7 @@ function loadPolicy(skillDir: string): ToolsPolicy {
 async function main(): Promise<void> {
   const env = readEnv();
   // Resolved before the engine is asked, and before the task is marked running.
-  // An alias in `FLEETADLC_MODEL` would be called and then written to the ledger,
+  // An alias in `OPENADLC_MODEL` would be called and then written to the ledger,
   // and a month of spend would stop being attributable the moment the alias moved.
   const recorded = ledgerModel(env.model, env.modelAlias);
   const skillDir = join(env.skillsRoot, env.skill);
@@ -456,7 +456,7 @@ async function main(): Promise<void> {
           break;
         }
 
-        // A skill declares what a comment *is* by carrying a `fleetadlc:` marker in
+        // A skill declares what a comment *is* by carrying a `openadlc:` marker in
         // it. Without one this is narration, which is what it was before — an
         // operator's own words are never reinterpreted.
         const marker = parseMarker(event.text);
@@ -621,8 +621,8 @@ async function reportState(env: RunnerEnv, state: string, reason: string): Promi
 
 main().catch(async (error) => {
   console.error('[skill] crashed:', error instanceof Error ? error.message : error);
-  const taskId = process.env.FLEETADLC_TASK_ID;
-  const bridgeUrl = process.env.FLEETADLC_BRIDGE_URL;
+  const taskId = process.env.OPENADLC_TASK_ID;
+  const bridgeUrl = process.env.OPENADLC_BRIDGE_URL;
   if (taskId && bridgeUrl) {
     await post(bridgeUrl, `/internal/tasks/${taskId}/state`, {
       state: 'failed',

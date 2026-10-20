@@ -1,4 +1,4 @@
-# @fleetadlc/backup
+# @openadlc/backup
 
 Backing an install up and putting it back. Nothing else can reconstruct an
 install's durable credentials — the App's private key is shown once by GitHub,
@@ -6,7 +6,7 @@ the signing keys were made here, and the webhook secret, the settings and which
 account each bot is live only in this install — so this package decides what an
 archive holds, seals it, and decides and carries out a restore: onto a clean
 install, or into one that is already set up, with an undo. It decides for all
-three places a person can do it — `fleetadlc backup` and `fleetadlc restore`
+three places a person can do it — `openadlc backup` and `openadlc restore`
 (`apps/cli/src/commands/backup.ts`), the console's Settings → Backup card and the
 walkthrough's first step (`apps/bridge/src/backup.ts`, `restore-into.ts`) — so
 the three cannot drift. hostd uses it too, to read and write a subscription's
@@ -67,7 +67,7 @@ the comparison, unticked when they differ; taken, each cap the archive names
 is set over this install's of the same name, any cap only this install has is
 kept, the writes take the lock saving from Settings takes and leave a
 `spending.limit_changed` audit row each, and caps that would put a
-repository's above the global one are refused. `fleetadlc restore` lists the
+repository's above the global one are refused. `openadlc restore` lists the
 caps it would set before it asks, and merges them the same way into an
 install in use.
 
@@ -75,7 +75,7 @@ A repository is matched by its full name. OpenADLC names each repository by
 its name alone, so an archived repository whose name another repository here
 has — `other/widgets` beside `acme/widgets`, or a removed one that still holds
 the name — cannot be taken: the comparison says why, and a restore that is
-handed it anyway (`fleetadlc restore` included) stops with an error before it
+handed it anyway (`openadlc restore` included) stops with an error before it
 writes over the other's row.
 
 ## Source map
@@ -86,7 +86,7 @@ writes over the other's row.
 - `src/live.ts` — the install as Postgres and the secret store hold it, read for a backup and written by a restore.
 - `src/signins.ts`, `src/restore.ts` — the verdicts and the take-over; a restore start to finish.
 - `src/plan.ts`, `src/apply.ts`, `src/clean.ts` — deciding, carrying out, and whether the target is clean.
-- `src/compare.ts`, `src/undo.ts`, `src/undo-store.ts` — restoring into an install in use, and its undo, kept under `$FLEETADLC_HOME/restore-undo`.
+- `src/compare.ts`, `src/undo.ts`, `src/undo-store.ts` — restoring into an install in use, and its undo, kept under `$OPENADLC_HOME/restore-undo`.
 - `src/summary.ts` — what an archive holds and what a restore would do, by name, never by value.
 - `src/login-files.ts` — a subscription's sign-in folder as files: the sign-in (`sign-in/auth.json`) and the sealed files, nothing else.
 - `src/test-fixtures.ts` — invented installs for the tests, whose values no name contains.
@@ -94,9 +94,9 @@ writes over the other's row.
 ## Testing
 
 ```bash
-pnpm --filter @fleetadlc/backup test                                    # every src/*.test.ts
-pnpm --filter @fleetadlc/backup exec vitest run src/restore.test.ts     # one file
-pnpm --filter @fleetadlc/backup build                                   # tsc; the CLI, bridge and hostd import dist/
+pnpm --filter @openadlc/backup test                                    # every src/*.test.ts
+pnpm --filter @openadlc/backup exec vitest run src/restore.test.ts     # one file
+pnpm --filter @openadlc/backup build                                   # tsc; the CLI, bridge and hostd import dist/
 ```
 
 - **Decisions are pure.** The tests run them against `memoryInstall()` and the
@@ -106,6 +106,6 @@ pnpm --filter @fleetadlc/backup build                                   # tsc; t
   anything printed, audited or planned for them; keep new fixtures that way.
 - **Consumers read `dist/`, and vitest does not type-check.** Build after a
   change, and after the last edit, before the CLI's or the bridge's tests see it.
-- **`live.ts` is the real install.** Its reads and writes use `@fleetadlc/db` and
+- **`live.ts` is the real install.** Its reads and writes use `@openadlc/db` and
   `getSecretStore()`, whose defaults are the installed OpenADLC's database and
-  `~/.fleetadlc`: [docs/development.md](../../docs/development.md).
+  `~/.openadlc`: [docs/development.md](../../docs/development.md).

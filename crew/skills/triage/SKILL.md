@@ -4,9 +4,9 @@ You turn a request into an issue that can be built from without anybody
 having to ask again, and you clarify everything the issue needs with the
 person who asked, one question at a time. You never touch code.
 
-## An issue labelled fleetadlc:ignore
+## An issue labelled openadlc:ignore
 
-If the issue has `fleetadlc:ignore`, stop. Do not lease it, retitle it, or add
+If the issue has `openadlc:ignore`, stop. Do not lease it, retitle it, or add
 `start:now`. It stays as the person wrote it. Taking the label off is what
 makes it ordinary again. The bridge checks the label before it starts you,
 and that check is what holds if this skill is skipped.
@@ -19,7 +19,7 @@ again:
 gh issue view <number> --repo <owner/name> --json labels --jq '.labels[].name'
 ```
 
-If `fleetadlc:ignore` is there, stop without writing anything more to the issue,
+If `openadlc:ignore` is there, stop without writing anything more to the issue,
 and say in your last message that you stopped because of it.
 
 ## Do this, in order
@@ -95,7 +95,7 @@ and say in your last message that you stopped because of it.
    exclusive path, ask the person once, naming the issue and the files:
 
    ```
-   <!-- fleetadlc:{"event":"question","question":"#3 also adds a migration under db/migrations/. How should this fit with it?","options":["Build it after #3, changed to fit (say how)","Fold it into #3","File it as it is"]} -->
+   <!-- openadlc:{"event":"question","question":"#3 also adds a migration under db/migrations/. How should this fit with it?","options":["Build it after #3, changed to fit (say how)","Fold it into #3","File it as it is"]} -->
    ```
 
    Change the draft to the answer — another file, a dependency on #3 under
@@ -106,7 +106,7 @@ and say in your last message that you stopped because of it.
    first choice is to file it as written:
 
    ```
-   <!-- fleetadlc:{"event":"question","question":"Here's what I'll file. OK?","options":["OK, file it","Change something"]} -->
+   <!-- openadlc:{"event":"question","question":"Here's what I'll file. OK?","options":["OK, file it","Change something"]} -->
    ```
 
    An answer that changes something changes the draft, and you ask again with
@@ -181,7 +181,7 @@ An issue sent back more times than the repository allows stays with a person
 
 A scheduled job files some issues into intake itself: the weekly dependency
 update, for one. Its body carries a job marker, a line that starts
-`<!-- fleetadlc:job:` (`<!-- fleetadlc:job:dependency-update -->`). No person
+`<!-- openadlc:job:` (`<!-- openadlc:job:dependency-update -->`). No person
 asked for it, so nobody is waiting to confirm it. "Do this, in order" holds,
 with these differences.
 
@@ -208,7 +208,7 @@ next question is written after it, not before.
   marker, one line of JSON that carries the question itself and its choices:
 
   ```
-  <!-- fleetadlc:{"event":"question","question":"Where should the page go?","options":["index.html at the repository root","A different path"]} -->
+  <!-- openadlc:{"event":"question","question":"Where should the page go?","options":["index.html at the repository root","A different path"]} -->
   ```
 
   What you write before the marker is the context: what you found, and why you
@@ -220,7 +220,7 @@ next question is written after it, not before.
   and say so in the marker instead of giving choices:
 
   ```
-  <!-- fleetadlc:{"event":"question","question":"What should the page say?","open":true} -->
+  <!-- openadlc:{"event":"question","question":"What should the page say?","open":true} -->
   ```
 
 - Never number several questions in one message, and never put a second
@@ -301,27 +301,27 @@ forwarded to.
 ## Filing the issue
 
 Anything longer than a line goes to GitHub from a file. Write the body to
-`.fleetadlc-scratch/issue.md` with your file-writing tool, then name the file:
+`.openadlc-scratch/issue.md` with your file-writing tool, then name the file:
 
 ```bash
-gh issue create --repo <owner/name> --title '<title>' --body-file .fleetadlc-scratch/issue.md --label <label> --label <label>
+gh issue create --repo <owner/name> --title '<title>' --body-file .openadlc-scratch/issue.md --label <label> --label <label>
 ```
 
 with one `--label` for each label step 6 applies. On an issue that already
 exists, rewrite it in place instead:
 
 ```bash
-gh issue edit <number> --repo <owner/name> --body-file .fleetadlc-scratch/issue.md --add-label <label> --add-label <label>
+gh issue edit <number> --repo <owner/name> --body-file .openadlc-scratch/issue.md --add-label <label> --add-label <label>
 ```
 
-Post the receipt (step 7) the same way: overwrite `.fleetadlc-scratch/issue.md`
+Post the receipt (step 7) the same way: overwrite `.openadlc-scratch/issue.md`
 with it, then
-`gh issue comment <number> --repo <owner/name> --body-file .fleetadlc-scratch/issue.md`.
+`gh issue comment <number> --repo <owner/name> --body-file .openadlc-scratch/issue.md`.
 
 Never put a body on the command line, in `--body`, a heredoc, `$'…'` or a
 pipe. The engine's own shell checks refuse a quoted argument with a line that
 starts with `#`, which every heading does, and braces beside quotes, which every
-marker has. `.fleetadlc-scratch/` is the only place you may write, and nothing
+marker has. `.openadlc-scratch/` is the only place you may write, and nothing
 written there is committed.
 
 The commit the issue was written against is `git rev-parse HEAD`. Git is yours
@@ -362,7 +362,7 @@ Every comment below carries one marker, as the last line, so the bridge
 learns what you did rather than inferring it from GitHub. A comment with no
 marker is read as narration, which is what an operator's own comment is.
 
-- `<!-- fleetadlc:{"event":"plan_posted"} -->` on the receipt comment you post
+- `<!-- openadlc:{"event":"plan_posted"} -->` on the receipt comment you post
   on the issue you filed (step 7), never in the issue's body; for a console
   request, ending your last message.
 - The question marker, ending your own message rather than a comment, whenever

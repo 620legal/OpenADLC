@@ -10,7 +10,7 @@ const store = {
   list: async () => [],
 };
 
-describe('fleetadlc attribution rotate', () => {
+describe('openadlc attribution rotate', () => {
   let printed: string[];
 
   beforeEach(() => {
@@ -31,7 +31,7 @@ describe('fleetadlc attribution rotate', () => {
         url: String(input),
         method: init?.method,
         body: JSON.parse(String(init?.body)),
-        secret: (init?.headers as Record<string, string>)['x-fleetadlc-console-secret'],
+        secret: (init?.headers as Record<string, string>)['x-openadlc-console-secret'],
       });
       return new Response(JSON.stringify(body), { status });
     });
@@ -71,7 +71,7 @@ describe('fleetadlc attribution rotate', () => {
     expect(await rotateAttribution({ ports }, { dropOld: false }, { fetch: call, store })).toBe(false);
 
     expect(process.exitCode).toBe(1);
-    expect(printed.join('\n')).toContain('the bridge is not answering on 127.0.0.1:47311; start the install with fleetadlc up and run this again');
+    expect(printed.join('\n')).toContain('the bridge is not answering on 127.0.0.1:47311; start the install with openadlc up and run this again');
   });
 
   it('exits 1 with the bridge’s own words when it refuses', async () => {

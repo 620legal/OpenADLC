@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // OpenADLC's `gh`, first on a task session's PATH (hostd mounts this folder into
-// each bot's container at /opt/fleetadlc/bin, and puts it first for the local
-// driver too). It puts the session's header — FLEETADLC_POST_HEADER, e.g.
+// each bot's container at /opt/openadlc/bin, and puts it first for the local
+// driver too). It puts the session's header — OPENADLC_POST_HEADER, e.g.
 // `**OpenADLC_exampleco · design agent**` — first on every body the session posts
 // with `gh issue|pr create|comment|edit|review`, then runs the real `gh`.
 //
@@ -23,8 +23,8 @@ import { accessSync, constants, mkdtempSync, readFileSync, realpathSync, writeFi
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 
-const HEADER_TAG = '<!-- fleetadlc-header -->';
-const LEADING_HEADER = /^\*\*[^\n]*\*\*<!-- fleet(?:adlc)?-header -->/;
+const HEADER_TAG = '<!-- openadlc-header -->';
+const LEADING_HEADER = /^\*\*[^\n]*\*\*<!-- (?:openadlc|fleetadlc|fleet)-header -->/;
 const POSTS = { issue: ['create', 'comment', 'edit'], pr: ['create', 'comment', 'edit', 'review'] };
 
 /** The real gh: the first on PATH that is not this file. */
@@ -45,10 +45,10 @@ export function realGh(path = process.env.PATH ?? '', self = process.argv[1] ?? 
   return null;
 }
 
-// At the end of the body only, as `seatOf` in @fleetadlc/shared reads it: a body
+// At the end of the body only, as `seatOf` in @openadlc/shared reads it: a body
 // that quotes another seat's tag is still tagged as its own: a lead reviewer's review that quoted the
 // intake seat's tag once went out with no tag of its own.
-const SEAT_TAG = /<!-- fleet(?:adlc)?-seat:([a-z0-9][a-z0-9._-]*) -->\s*(?:<!-- fleet(?:adlc)?-sig:[^>]*-->\s*)?$/i;
+const SEAT_TAG = /<!-- (?:openadlc|fleetadlc|fleet)-seat:([a-z0-9][a-z0-9._-]*) -->\s*(?:<!-- (?:openadlc|fleetadlc|fleet)-sig:[^>]*-->\s*)?$/i;
 
 /**
  * Which seat wrote it, tagged at the end as the bridge's own posts are
@@ -61,7 +61,7 @@ export function withSeat(body, seat) {
   const tagged = SEAT_TAG.exec(body)?.[1]?.toLowerCase();
   if (tagged === own) return body;
   const bare = tagged ? body.replace(SEAT_TAG, '') : body;
-  return `${bare.replace(/\s+$/, '')}\n\n<!-- fleetadlc-seat:${own} -->`;
+  return `${bare.replace(/\s+$/, '')}\n\n<!-- openadlc-seat:${own} -->`;
 }
 
 export function withHeader(body, header) {
@@ -134,7 +134,7 @@ export function targetNumber(args, ask, env = process.env) {
   if (named !== null) return named;
   const [group, verb] = args;
   if (group !== 'pr' || !['comment', 'review', 'edit'].includes(verb)) return null;
-  if (!env.FLEETADLC_BRIDGE_URL || !env.FLEETADLC_TASK_ID) return null;
+  if (!env.OPENADLC_BRIDGE_URL || !env.OPENADLC_TASK_ID) return null;
   // `args[2]` as `postNumber` reads it: `commandWords` would take a flag's
   // value (`--body LGTM`) for the target.
   const target = args[2] && !args[2].startsWith('-') ? [args[2]] : [];
@@ -159,15 +159,15 @@ export function targetNumber(args, ask, env = process.env) {
  * and an install that enforces signatures does not count it.
  */
 export async function stamp(text, kind, number, env = process.env, fetchImpl = globalThis.fetch) {
-  const bridge = env.FLEETADLC_BRIDGE_URL;
-  const task = env.FLEETADLC_TASK_ID;
+  const bridge = env.OPENADLC_BRIDGE_URL;
+  const task = env.OPENADLC_TASK_ID;
   if (!bridge || !task || !fetchImpl) return null;
   try {
     const response = await fetchImpl(`${bridge}/internal/tasks/${encodeURIComponent(task)}/stamp`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        ...(env.FLEETADLC_TASK_TOKEN ? { 'x-fleetadlc-task-token': env.FLEETADLC_TASK_TOKEN } : {}),
+        ...(env.OPENADLC_TASK_TOKEN ? { 'x-openadlc-task-token': env.OPENADLC_TASK_TOKEN } : {}),
       },
       body: JSON.stringify({ body: text, kind, number }),
     });
@@ -285,20 +285,20 @@ function apiDismissalRefusal(args, read) {
 /**
  * Whether the task's skill denies this command: an entry of its tools.yaml's
  * `deny.github` (`pr review`, `workflow run`, `api`) that the command's leading
- * words start with. The engine passes the list in FLEETADLC_TOOLS_POLICY.
+ * words start with. The engine passes the list in OPENADLC_TOOLS_POLICY.
  *
  * No engine could apply it. Claude Code and Grok Build allow `gh` as one
  * command, and Codex allows whatever its sandbox does, so a builder whose skill
  * denied `gh pr review` could post one. A person's own shell in the session has
- * no FLEETADLC_TOOLS_POLICY and is not held to a skill's list.
+ * no OPENADLC_TOOLS_POLICY and is not held to a skill's list.
  */
-export function githubRefusal(args, policyJson = process.env.FLEETADLC_TOOLS_POLICY, ask = () => null) {
+export function githubRefusal(args, policyJson = process.env.OPENADLC_TOOLS_POLICY, ask = () => null) {
   if (!policyJson) return null;
   let denied = [];
   try {
     denied = JSON.parse(policyJson)?.denyGithub ?? [];
   } catch {
-    return 'could not read this task’s rules (FLEETADLC_TOOLS_POLICY), so nothing is posted';
+    return 'could not read this task’s rules (OPENADLC_TOOLS_POLICY), so nothing is posted';
   }
   if (denied.length === 0) return null;
 
@@ -403,15 +403,15 @@ export function githubRefusal(args, policyJson = process.env.FLEETADLC_TOOLS_POL
  *
  * GitHub's CI on a crew pull request runs only after the lead approves, so the
  * builder's own run of the checks is what reviewers review on top of. It is
- * not taken on the builder's word: `fleetadlc-ci` has hostd run them and the
+ * not taken on the builder's word: `openadlc-ci` has hostd run them and the
  * bridge record a pass for the commit, and this asks the bridge for one on
  * HEAD before `gh pr create` or `gh pr ready` goes to GitHub. A pull request
  * opens ready, so `--draft` is refused too. Only where the skill's tools.yaml
- * says `local_ci` (`localCi` in FLEETADLC_TOOLS_POLICY); a person's own shell
+ * says `local_ci` (`localCi` in OPENADLC_TOOLS_POLICY); a person's own shell
  * has no policy. `head` reads HEAD; `passed` asks the bridge, and answers null
  * when it could not.
  */
-export async function localCiRefusal(args, { policyJson = process.env.FLEETADLC_TOOLS_POLICY, head, passed }) {
+export async function localCiRefusal(args, { policyJson = process.env.OPENADLC_TOOLS_POLICY, head, passed }) {
   let policy = null;
   try {
     policy = policyJson ? JSON.parse(policyJson) : null;
@@ -422,26 +422,26 @@ export async function localCiRefusal(args, { policyJson = process.env.FLEETADLC_
   const [group, verb] = commandWords(args);
   if (group !== 'pr' || (verb !== 'create' && verb !== 'ready')) return null;
   if (verb === 'create' && args.some((arg) => arg === '--draft' || arg === '-d' || arg.startsWith('--draft='))) {
-    return 'a pull request opens ready, not as a draft: run fleetadlc-ci, then gh pr create without --draft';
+    return 'a pull request opens ready, not as a draft: run openadlc-ci, then gh pr create without --draft';
   }
   const sha = head();
   if (!sha) return 'could not read HEAD to check that it passed local CI; run it from the worktree';
   const answer = await passed(sha);
-  if (answer === null) return 'could not ask the bridge whether HEAD passed local CI; run fleetadlc-ci and try again';
+  if (answer === null) return 'could not ask the bridge whether HEAD passed local CI; run openadlc-ci and try again';
   return answer
     ? null
-    : `HEAD ${sha.slice(0, 7)} has no recorded local CI pass: run fleetadlc-ci on it, then ${verb === 'create' ? 'open' : 'ready'} the pull request`;
+    : `HEAD ${sha.slice(0, 7)} has no recorded local CI pass: run openadlc-ci on it, then ${verb === 'create' ? 'open' : 'ready'} the pull request`;
 }
 
 /** Whether the bridge has a local CI pass recorded for a commit in this task's repository, or null when it could not be asked. */
 export async function bridgePassed(sha, env = process.env, fetchImpl = globalThis.fetch) {
-  const bridge = env.FLEETADLC_BRIDGE_URL;
-  const task = env.FLEETADLC_TASK_ID;
+  const bridge = env.OPENADLC_BRIDGE_URL;
+  const task = env.OPENADLC_TASK_ID;
   if (!bridge || !task || !fetchImpl) return null;
   try {
     const response = await fetchImpl(`${bridge}/internal/tasks/${encodeURIComponent(task)}/local-ci/pass`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...(env.FLEETADLC_TASK_TOKEN ? { 'x-fleetadlc-task-token': env.FLEETADLC_TASK_TOKEN } : {}) },
+      headers: { 'content-type': 'application/json', ...(env.OPENADLC_TASK_TOKEN ? { 'x-openadlc-task-token': env.OPENADLC_TASK_TOKEN } : {}) },
       body: JSON.stringify({ sha }),
     });
     if (!response.ok) return null;
@@ -501,7 +501,7 @@ const REVIEW_LABELS = new Map([
  * and is the one skill that writes a stage label, and only those two. A
  * person's own shell in the session names no skill.
  */
-export function stageLabelRefusal(args, skill = process.env.FLEETADLC_SKILL ?? '', read = readText) {
+export function stageLabelRefusal(args, skill = process.env.OPENADLC_SKILL ?? '', read = readText) {
   if (!skill) return null;
   const [group, verb] = commandWords(args);
   let labels = [];
@@ -602,7 +602,7 @@ const API_SENDS = new Set(['-f', '-F', '--field', '--raw-field', '--input']);
  * comment`, `gh pr review`, and a `gh api` call that sends. A person's own
  * shell names no skill.
  */
-export function unfilteredReadRefusal(args, skill = process.env.FLEETADLC_SKILL ?? '') {
+export function unfilteredReadRefusal(args, skill = process.env.OPENADLC_SKILL ?? '') {
   if (!READS_FILTERED.has(skill)) return null;
   const [group, verb] = commandWords(args);
   const said = `a ${skill} task reads the conversation in issue.md and pull-request.md, which the bridge wrote with only what people with access and the crew said; comments and reviews are not read from GitHub directly, where anybody's are`;
@@ -652,10 +652,10 @@ export function apiSubmitsVerdict(args, read = readText) {
  * for changes. A second seat's request for changes on GitHub would hold the
  * branch's rules against the lead's decision, and on an account the seats
  * share, the account's latest state would be whichever seat spoke last. The
- * bridge sets FLEETADLC_REVIEW_MODE on the seat's task; the merge counts only the
+ * bridge sets OPENADLC_REVIEW_MODE on the seat's task; the merge counts only the
  * lead's approval and a blocking seat's either way.
  */
-export function reviewModeRefusal(args, mode = process.env.FLEETADLC_REVIEW_MODE ?? '', read = readText) {
+export function reviewModeRefusal(args, mode = process.env.OPENADLC_REVIEW_MODE ?? '', read = readText) {
   if (mode !== 'advisory') return null;
   const words = commandWords(args);
   const names = args.map((arg) => (arg.startsWith('--') && arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg));
@@ -762,8 +762,8 @@ async function main() {
     process.stderr.write('gh: the GitHub CLI is not installed on this host\n');
     process.exit(127);
   }
-  const header = process.env.FLEETADLC_POST_HEADER ?? '';
-  const denied = githubRefusal(process.argv.slice(2), process.env.FLEETADLC_TOOLS_POLICY, (args) => {
+  const header = process.env.OPENADLC_POST_HEADER ?? '';
+  const denied = githubRefusal(process.argv.slice(2), process.env.OPENADLC_TOOLS_POLICY, (args) => {
     const asked = spawnSync(gh, args, { encoding: 'utf8' });
     return asked.status === 0 ? asked.stdout : null;
   });
@@ -812,13 +812,13 @@ async function main() {
     read: (file) => readFileSync(file, 'utf8'),
     stdin: () => readFileSync(0, 'utf8'),
     write: (text) => {
-      dir ??= mkdtempSync(join(tmpdir(), 'fleetadlc-gh-'));
+      dir ??= mkdtempSync(join(tmpdir(), 'openadlc-gh-'));
       const file = join(dir, 'body.md');
       writeFileSync(file, text);
       written = { file, text };
       return file;
     },
-  }, process.env.FLEETADLC_BOT ?? '');
+  }, process.env.OPENADLC_BOT ?? '');
   if (written) {
     const number = targetNumber(argv, (lookup) => {
       const asked = spawnSync(gh, lookup, { encoding: 'utf8' });

@@ -7,7 +7,7 @@ import type { Gcloud } from './cloud-leftovers.js';
  * Whether a bucket that already exists may hold an install's Terraform state
  * and settings.
  *
- * Bucket names are global and the default one, `<project>-fleetadlc-tfstate`,
+ * Bucket names are global and the default one, `<project>-openadlc-tfstate`,
  * can be guessed from the project id. `configure` used a bucket as soon as
  * `gcloud storage buckets describe` found it, so whoever made that name first,
  * and opened it to everyone, was sent the webhook secret, and at every apply
@@ -56,7 +56,7 @@ export async function checkBucket(bucket: string, projectId: string, gcloud: Gcl
       state: 'refused',
       lines: [
         `${url} belongs to another project, not ${projectId}`,
-        'Its owner could read the webhook secret and the Terraform state. Run fleetadlc cloud configure again and name a different bucket.',
+        'Its owner could read the webhook secret and the Terraform state. Run openadlc cloud configure again and name a different bucket.',
       ],
     };
   }
@@ -97,7 +97,7 @@ export async function pullSettings(
   input: { bucket: string; remote: string },
   gcloud: Gcloud,
 ): Promise<{ ok: true; text: string; versioned: boolean } | { ok: false; lines: string[] }> {
-  const scratch = mkdtempSync(join(tmpdir(), 'fleetadlc-pull-'));
+  const scratch = mkdtempSync(join(tmpdir(), 'openadlc-pull-'));
   try {
     const local = join(scratch, 'cloud.tfvars.json');
     const copied = await gcloud(['storage', 'cp', input.remote, local]);

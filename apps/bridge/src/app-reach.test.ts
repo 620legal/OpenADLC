@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import type { AppApi } from '@fleetadlc/github';
+import type { AppApi } from '@openadlc/github';
 import { AppReach, onAccountsWorkedIn, repositoryFrom, type AppReachDeps } from './app-reach.js';
 
 const { privateKey } = generateKeyPairSync('rsa', {
@@ -21,14 +21,14 @@ interface Installed {
 }
 
 /**
- * GitHub as the app sees it: the app `fleetadlc-janedoe`, owned by `janedoe`, and
+ * GitHub as the app sees it: the app `openadlc-janedoe`, owned by `janedoe`, and
  * the installations given. A repository's installation is found the way
  * GitHub finds it — by the account and the repositories chosen — and anything
  * else is the 404 `APP_API` throws, in its words.
  */
 function github(installations: Installed[], options: { existing?: string[] } = {}): { api: AppApi; paths: string[] } {
   const paths: string[] = [];
-  const existing = new Set(options.existing ?? ['janedoe/fleetadlc-testbed', 'exampleco/infra', 'exampleco/website']);
+  const existing = new Set(options.existing ?? ['janedoe/openadlc-testbed', 'exampleco/infra', 'exampleco/website']);
   const notFound = (path: string) => new Error(`${path} → 404: {"message":"Not Found"}`);
   const describe = (one: Installed) => ({
     id: one.id,
@@ -42,7 +42,7 @@ function github(installations: Installed[], options: { existing?: string[] } = {
     api: {
       async request<T>(_method: string, path: string): Promise<T> {
         paths.push(path);
-        if (path === '/app') return { slug: 'fleetadlc-janedoe', name: 'OpenADLC (janedoe)', owner: { login: 'janedoe', type: 'User' } } as T;
+        if (path === '/app') return { slug: 'openadlc-janedoe', name: 'OpenADLC (janedoe)', owner: { login: 'janedoe', type: 'User' } } as T;
         if (path === '/app/installations?per_page=100') return installations.map(describe) as T;
         const asked = /^\/repos\/([^/]+)\/([^/]+)\/installation$/.exec(path);
         if (asked) {
@@ -73,7 +73,7 @@ function reachWith(
     api,
     visibility,
     accountType: async (login) => (login === 'exampleco' ? 'Organization' : 'User'),
-    repositories: async () => [{ fullName: 'janedoe/fleetadlc-testbed' }, { fullName: 'exampleco/infra' }],
+    repositories: async () => [{ fullName: 'janedoe/openadlc-testbed' }, { fullName: 'exampleco/infra' }],
     ...overrides,
   });
   return { reach, paths, visibility: (overrides.visibility as ReturnType<typeof vi.fn>) ?? visibility };
@@ -84,9 +84,9 @@ const ON_JANEDOE: Installed = { id: 7, login: 'janedoe' };
 describe('whether the app can reach a repository', () => {
   it('can, where an installation covers it', async () => {
     const { reach } = reachWith([ON_JANEDOE]);
-    expect(await reach.reach('janedoe/fleetadlc-testbed')).toEqual({
+    expect(await reach.reach('janedoe/openadlc-testbed')).toEqual({
       state: 'reachable',
-      repository: 'janedoe/fleetadlc-testbed',
+      repository: 'janedoe/openadlc-testbed',
       account: 'janedoe',
       installationId: 7,
     });
@@ -102,7 +102,7 @@ describe('whether the app can reach a repository', () => {
       account: 'exampleco',
       need: 'transfer',
       title: 'The OpenADLC app belongs to janedoe, so it cannot be installed on exampleco',
-      action: { label: 'Transfer the app to exampleco', url: 'https://github.com/settings/apps/fleetadlc-janedoe/advanced' },
+      action: { label: 'Transfer the app to exampleco', url: 'https://github.com/settings/apps/openadlc-janedoe/advanced' },
     });
     if (answer.state !== 'blocked') throw new Error('not blocked');
     expect(answer.detail).toContain('GitHub installs a private app only on the account that owns it');
@@ -110,8 +110,8 @@ describe('whether the app can reach a repository', () => {
     // The other way out is named, with what it costs.
     expect(answer.detail).toContain('lets anyone on GitHub install it');
     expect(answer.steps.map((step) => step.action)).toEqual([
-      { label: 'Transfer the app to exampleco', url: 'https://github.com/settings/apps/fleetadlc-janedoe/advanced' },
-      { label: 'Install on exampleco', url: 'https://github.com/apps/fleetadlc-janedoe/installations/new' },
+      { label: 'Transfer the app to exampleco', url: 'https://github.com/settings/apps/openadlc-janedoe/advanced' },
+      { label: 'Install on exampleco', url: 'https://github.com/apps/openadlc-janedoe/installations/new' },
     ]);
     // Never the raw answer GitHub gave, which is what settings used to show.
     expect(JSON.stringify(answer)).not.toContain('404');
@@ -125,7 +125,7 @@ describe('whether the app can reach a repository', () => {
       state: 'blocked',
       need: 'make-public',
       title: 'The OpenADLC app is private to janedoe',
-      action: { label: 'Make the app public', url: 'https://github.com/settings/apps/fleetadlc-janedoe/advanced' },
+      action: { label: 'Make the app public', url: 'https://github.com/settings/apps/openadlc-janedoe/advanced' },
     });
     if (answer.state !== 'blocked') throw new Error('not blocked');
     // What making it public lets happen, and what OpenADLC does about it.
@@ -164,7 +164,7 @@ describe('whether the app can reach a repository', () => {
       state: 'blocked',
       need: 'install',
       title: 'The OpenADLC app is not installed on exampleco',
-      action: { label: 'Install on exampleco', url: 'https://github.com/apps/fleetadlc-janedoe/installations/new' },
+      action: { label: 'Install on exampleco', url: 'https://github.com/apps/openadlc-janedoe/installations/new' },
     });
     if (answer.state !== 'blocked') throw new Error('not blocked');
     expect(answer.detail).toBe(
@@ -181,7 +181,7 @@ describe('whether the app can reach a repository', () => {
     });
     expect(await reach.reach('exampleco/infra')).toMatchObject({
       need: 'install',
-      action: { label: 'Install on exampleco', url: 'https://github.com/apps/fleetadlc-janedoe/installations/new/permissions?target_id=4242' },
+      action: { label: 'Install on exampleco', url: 'https://github.com/apps/openadlc-janedoe/installations/new/permissions?target_id=4242' },
     });
   });
 
@@ -202,11 +202,11 @@ describe('whether the app can reach a repository', () => {
   });
 
   it('says to install it on the app’s own account, which a private app allows', async () => {
-    const { reach, visibility } = reachWith([], { existing: ['janedoe/fleetadlc-testbed'] });
-    expect(await reach.reach('janedoe/fleetadlc-testbed')).toMatchObject({
+    const { reach, visibility } = reachWith([], { existing: ['janedoe/openadlc-testbed'] });
+    expect(await reach.reach('janedoe/openadlc-testbed')).toMatchObject({
       need: 'install',
       title: 'The OpenADLC app is not installed on janedoe',
-      detail: 'janedoe installs it and chooses fleetadlc-testbed: only the repositories the crew works in, not all of janedoe’s.',
+      detail: 'janedoe installs it and chooses openadlc-testbed: only the repositories the crew works in, not all of janedoe’s.',
     });
     expect(visibility).not.toHaveBeenCalled();
   });
@@ -286,16 +286,16 @@ describe('where the app is installed, as settings shows it', () => {
     const view = await reach.installationsView();
 
     expect(view.app).toEqual({
-      slug: 'fleetadlc-janedoe',
+      slug: 'openadlc-janedoe',
       name: 'OpenADLC (janedoe)',
       owner: { login: 'janedoe', type: 'User' },
       visibility: 'private',
-      settingsUrl: 'https://github.com/settings/apps/fleetadlc-janedoe',
-      advancedUrl: 'https://github.com/settings/apps/fleetadlc-janedoe/advanced',
-      installUrl: 'https://github.com/apps/fleetadlc-janedoe/installations/new',
+      settingsUrl: 'https://github.com/settings/apps/openadlc-janedoe',
+      advancedUrl: 'https://github.com/settings/apps/openadlc-janedoe/advanced',
+      installUrl: 'https://github.com/apps/openadlc-janedoe/installations/new',
     });
     expect(view.accounts.map((account) => [account.login, account.installation?.selection ?? null, account.repositories])).toEqual([
-      ['janedoe', 'all', ['fleetadlc-testbed']],
+      ['janedoe', 'all', ['openadlc-testbed']],
       ['exampleco', null, ['infra']],
     ]);
     expect(view.accounts[0]?.fix).toBeNull();
@@ -307,10 +307,10 @@ describe('where the app is installed, as settings shows it', () => {
     const view = await reach.installationsView();
     expect(view.accounts.map((account) => [account.login, account.id, account.installUrl])).toEqual([
       ['janedoe', 700, 'https://github.com/settings/installations/7'],
-      ['exampleco', 4242, 'https://github.com/apps/fleetadlc-janedoe/installations/new/permissions?target_id=4242'],
+      ['exampleco', 4242, 'https://github.com/apps/openadlc-janedoe/installations/new/permissions?target_id=4242'],
     ]);
     // The transfer's second step installs on exampleco, not wherever the picker lands.
-    expect(view.accounts[1]?.fix?.steps[1]?.action.url).toBe('https://github.com/apps/fleetadlc-janedoe/installations/new/permissions?target_id=4242');
+    expect(view.accounts[1]?.fix?.steps[1]?.action.url).toBe('https://github.com/apps/openadlc-janedoe/installations/new/permissions?target_id=4242');
   });
 
   it('says why there is nothing to show before OpenADLC holds the key', async () => {
@@ -346,9 +346,9 @@ describe('a repository from what somebody typed', () => {
 
 describe('the repositories offered to pick from', () => {
   it('are only those on accounts the install works in, the others named for an admin to allow', () => {
-    const found = [{ fullName: 'janedoe/fleetadlc-testbed' }, { fullName: 'ExampleCo/infra' }, { fullName: 'examp1eco/infra' }, { fullName: 'examp1eco/website' }];
+    const found = [{ fullName: 'janedoe/openadlc-testbed' }, { fullName: 'ExampleCo/infra' }, { fullName: 'examp1eco/infra' }, { fullName: 'examp1eco/website' }];
     expect(onAccountsWorkedIn(found, new Set(['janedoe', 'exampleco']))).toEqual({
-      offered: [{ fullName: 'janedoe/fleetadlc-testbed' }, { fullName: 'ExampleCo/infra' }],
+      offered: [{ fullName: 'janedoe/openadlc-testbed' }, { fullName: 'ExampleCo/infra' }],
       unknownAccounts: ['examp1eco'],
     });
   });

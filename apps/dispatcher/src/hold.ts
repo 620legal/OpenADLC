@@ -16,7 +16,7 @@
  * repository; so those hold a builder back here too.
  */
 
-/** Just the columns of a health row this reads; `HealthRow` from `@fleetadlc/db` has them. */
+/** Just the columns of a health row this reads; `HealthRow` from `@openadlc/db` has them. */
 export interface HealthFacts {
   id: string;
   state: string;

@@ -1,4 +1,4 @@
-import { GITHUB_EMAIL_SETTINGS_URL, type Bot } from '@fleetadlc/shared';
+import { GITHUB_EMAIL_SETTINGS_URL, type Bot } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
 import { commitEmailCheck } from './commit-email.js';
 import type { RepoRef } from './crew.js';
@@ -9,7 +9,7 @@ import type { RepoRef } from './crew.js';
  * pull request.
  */
 
-const LEAKED = 'janedoe+fleetadlc-builder@example.com';
+const LEAKED = 'janedoe+openadlc-builder@example.com';
 const PRIVATE = '12345+exampleco-crew@users.noreply.github.com';
 
 const bot = (id: string, githubLogin: string | null): Bot => ({ id, name: id, githubLogin }) as Bot;

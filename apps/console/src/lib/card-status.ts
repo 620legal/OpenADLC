@@ -190,7 +190,7 @@ export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
 /**
  * Whether a Build card is one the builder could take: labelled to start, and
  * nothing holding it. The dispatcher never leases one a person holds
- * (`fleetadlc:paused`), one for a person (`do:human`) or one it ignores, and
+ * (`openadlc:paused`), one for a person (`do:human`) or one it ignores, and
  * "Next up" sat on a held card while the one it would lease said "Waiting
  * its turn".
  */
@@ -201,9 +201,9 @@ export function routable(card: BoardCard): boolean {
     !card.labels.includes('needs-human') &&
     !card.labels.includes('needs-triage') &&
     !card.held &&
-    !card.labels.includes('fleetadlc:paused') &&
+    !card.labels.includes('openadlc:paused') &&
     !card.labels.includes('do:human') &&
-    !card.labels.some((label) => label === 'fleetadlc:ignore' || label === 'fleet:ignore')
+    !card.labels.some((label) => label === 'openadlc:ignore' || label === 'fleet:ignore')
   );
 }
 

@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { deliveryRulesSchema, type DeliveryRules } from '@fleetadlc/shared';
+import { deliveryRulesSchema, type DeliveryRules } from '@openadlc/shared';
 import { describe, expect, it, vi } from 'vitest';
 import type { DeliverySource } from './delivery-rules.js';
 import { registerDeployRoutes, type DeployRouteDeps } from './deploy-routes.js';
@@ -40,7 +40,7 @@ async function post(router: Router, path: string) {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = (server.address() as { port: number }).port;
   try {
-    const response = await fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', headers: { 'x-fleetadlc-identity': 'janedoe' } });
+    const response = await fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', headers: { 'x-openadlc-identity': 'janedoe' } });
     return { status: response.status, body: (await response.json()) as Record<string, unknown> };
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -101,12 +101,12 @@ describe('switching a repository to automatic delivery', () => {
     expect(rows[0]?.rules.production.soakMinutes).toBe(90);
   });
 
-  it('answers 409 where .github/fleetadlc.yml sets the rules, and names the file to edit', async () => {
+  it('answers 409 where .github/openadlc.yml sets the rules, and names the file to edit', async () => {
     const { router, rows, soaked } = world({ source: 'file' });
     const answer = await post(router, '/v1/repos/app/delivery/automatic');
 
     expect(answer.status).toBe(409);
-    expect(String(answer.body.error)).toContain('https://github.com/exampleco/app/edit/main/.github/fleetadlc.yml');
+    expect(String(answer.body.error)).toContain('https://github.com/exampleco/app/edit/main/.github/openadlc.yml');
     expect(rows).toEqual([]);
     expect(soaked).toEqual([]);
   });

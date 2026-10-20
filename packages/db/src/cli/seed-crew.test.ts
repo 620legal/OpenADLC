@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BotConfig } from '@fleetadlc/shared';
+import type { BotConfig } from '@openadlc/shared';
 
 vi.mock('../client.js', () => ({
   query: vi.fn(),
@@ -78,11 +78,11 @@ beforeEach(() => {
   vi.mocked(queryOne).mockReset();
 });
 
-describe('what `fleetadlc up` writes for each configured bot', () => {
+describe('what `openadlc up` writes for each configured bot', () => {
   it('finds a connected bot by its seat, not by the handle it now goes by', async () => {
-    // The builder connected as fleetadlc-atlas-janedoe and took that name. A seed
+    // The builder connected as openadlc-atlas-janedoe and took that name. A seed
     // that looked for `builder` by name found nothing and added a second one.
-    const written = database({ name: 'fleetadlc-atlas-janedoe', slot: 'builder', github_login: 'fleetadlc-atlas-janedoe' });
+    const written = database({ name: 'openadlc-atlas-janedoe', slot: 'builder', github_login: 'openadlc-atlas-janedoe' });
 
     await writeCrew([configured({ slot: 'builder', role: 'implement' })], 'host-1');
 
@@ -153,7 +153,7 @@ describe('what `fleetadlc up` writes for each configured bot', () => {
   });
 
   it('moves a bot nobody assigned to the engine and model the file names, beside one that was assigned', async () => {
-    // One `fleetadlc up`, two bots: the console's choice stays on one, the file's
+    // One `openadlc up`, two bots: the console's choice stays on one, the file's
     // edit reaches the other.
     const rows: Record<string, Record<string, unknown>> = {
       'lead-reviewer': {

@@ -26,7 +26,7 @@ let refills: { path: string; token: string | undefined }[];
 let refillStatus: number;
 
 beforeEach(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'fleetadlc-pnpm-shim-'));
+  dir = mkdtempSync(join(tmpdir(), 'openadlc-pnpm-shim-'));
   home = join(dir, 'home');
   mkdirSync(home);
   mkdirSync(join(dir, 'wt', 'node_modules'), { recursive: true });
@@ -53,7 +53,7 @@ beforeEach(async () => {
   refills = [];
   refillStatus = 200;
   hostd = createServer((request, response) => {
-    refills.push({ path: request.url ?? '', token: request.headers['x-fleetadlc-task-token'] as string | undefined });
+    refills.push({ path: request.url ?? '', token: request.headers['x-openadlc-task-token'] as string | undefined });
     response.writeHead(refillStatus, { 'content-type': 'application/json' });
     response.end(JSON.stringify(refillStatus === 200 ? { filled: true } : { error: 'the registry did not answer' }));
   });
@@ -73,12 +73,12 @@ function pnpm(args: string[], extra: Record<string, string> = {}): Promise<{ cod
       env: {
         PATH: [join(import.meta.dirname, '..', 'bin'), join(dir, 'real'), '/usr/bin', '/bin'].join(':'),
         HOME: home,
-        FLEETADLC_PNPM_STORE: STORE,
+        OPENADLC_PNPM_STORE: STORE,
         PNPM_STORE_DIR: STORE,
         npm_config_store_dir: STORE,
-        FLEETADLC_HOSTD_URL: hostdUrl,
-        FLEETADLC_TASK_ID: 'task-1',
-        FLEETADLC_TASK_TOKEN: 'task-1-token',
+        OPENADLC_HOSTD_URL: hostdUrl,
+        OPENADLC_TASK_ID: 'task-1',
+        OPENADLC_TASK_TOKEN: 'task-1-token',
         ...extra,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -144,7 +144,7 @@ describe('an install on the shared store', () => {
 describe('everything else', () => {
   it('runs untouched, and so does a session with no shared store', async () => {
     await pnpm(['-C', 'packages/a', 'test']);
-    await pnpm(['add', 'left-pad'], { FLEETADLC_PNPM_STORE: '', PNPM_STORE_DIR: `${home}/.pnpm-store` });
+    await pnpm(['add', 'left-pad'], { OPENADLC_PNPM_STORE: '', PNPM_STORE_DIR: `${home}/.pnpm-store` });
 
     expect(calls()).toEqual([`-C packages/a test | store=${STORE} | retries=`, `add left-pad | store=${home}/.pnpm-store | retries=`]);
     expect(refills).toEqual([]);

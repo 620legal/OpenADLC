@@ -1,10 +1,10 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SettingKey } from '@fleetadlc/db';
-import type { EngineUpdateResult, EngineUpdateStart, EngineUpdateStatus, EngineVersions } from '@fleetadlc/shared';
+import type { SettingKey } from '@openadlc/db';
+import type { EngineUpdateResult, EngineUpdateStart, EngineUpdateStatus, EngineVersions } from '@openadlc/shared';
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -161,14 +161,14 @@ function result(partial: Partial<EngineUpdateResult> = {}): EngineUpdateResult {
         model: 'claude-opus-5-5',
         configured: ['newest:opus'],
         account: { id: 'a', label: 'Anthropic Max', provider: 'anthropic', kind: 'subscription' },
-        bots: ['fleetadlc-atlas-janedoe'],
+        bots: ['openadlc-atlas-janedoe'],
         detail: 'claude-opus-5-5 (newest:opus) on Anthropic Max: answered: OK',
       },
     ],
     reason: 'codex 0.155.1 → 0.156.1',
     startedAt: '2026-09-27T15:02:00.000Z',
     finishedAt: '2026-09-27T15:09:00.000Z',
-    refreshed: ['fleetadlc-atlas-janedoe'],
+    refreshed: ['openadlc-atlas-janedoe'],
     deferred: [],
     ...partial,
   };
@@ -179,7 +179,7 @@ class FakeHostd {
     driver: 'docker',
     applicable: true,
     reason: '',
-    image: 'fleetadlc-bot:latest',
+    image: 'openadlc-bot:latest',
     inUse: PINS,
     inUseSource: 'label',
     previous: null,
@@ -320,7 +320,7 @@ describe('the engines job', () => {
           from: PINS,
           to: { ...PINS, [CODEX]: '0.156.1' },
           changes: 'codex 0.155.1 → 0.156.1',
-          refreshed: ['fleetadlc-atlas-janedoe'],
+          refreshed: ['openadlc-atlas-janedoe'],
         }),
       },
     ]);
@@ -509,7 +509,7 @@ describe('a run a person starts', () => {
     const { service, data } = updates();
     await service.record(
       result({ state: 'failed', from: {}, to: null, latest: null, checks: [], reason: 'hostd no longer knows the run' }),
-      'fleetadlc',
+      'openadlc',
     );
     expect(JSON.parse(data.systemToolLast ?? '{}')).toEqual({});
     expect(JSON.parse(data.engineUpdateLast ?? '{}')).toMatchObject({ state: 'failed' });
@@ -978,7 +978,7 @@ describe('the console’s routes', () => {
     return async (method, path, body) => {
       const response = await fetch(`${base}${path}`, {
         method,
-        headers: { 'content-type': 'application/json', 'x-fleetadlc-identity': 'ada' },
+        headers: { 'content-type': 'application/json', 'x-openadlc-identity': 'ada' },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       return { status: response.status, body: (await response.json()) as Record<string, unknown> };

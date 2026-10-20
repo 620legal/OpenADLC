@@ -1,0 +1,136 @@
+# SPDX-License-Identifier: Apache-2.0 OR 0BSD
+
+name: ci
+
+# Written by `fleetadlc github apply` because the repository had no
+# `.github/workflows/ci.yml`.
+#
+# The merge line lands a pull request only once a check named `ci` has passed
+# on its head, so this job keeps that name. What it runs is the repository's
+# own: the Makefile's `setup` and `ci` targets, which AGENTS.md says a pull
+# request has to pass. Change the steps freely; keep the job called `ci`.
+#
+# On a crew pull request (an `agent/` branch of this repository; a fork's
+# branch of that name is a person's) it runs only once the pull
+# request carries `adlc:ci`, which FleetADLC's merge line puts on after the lead
+# reviewer approved, when it is at the front of the line: the builder ran
+# `make ci` on its head already, and the runner minutes go to the head that
+# lands. A person's pull request and a push to the default branch run as they
+# always did. What a crew pull request may change is not checked here: the
+# merge line holds it to its lease's paths, and sends it back when it strays.
+# Skipped, a job named `ci` would still report a `ci` check that branch rules
+# count as passing, so the job is named `ci` only when it runs.
+#
+# Runner minutes are this repository's bill, so it runs only what a change needs:
+# - a change to docs alone (docs/, Markdown at the root or directly under
+#   .github/, the licence files) passes without `make setup` or `make ci`. Set
+#   DOCS_ALONE_SKIPS to 'false' below if your tests read your docs;
+# - the push to the default branch that lands a tree a pull request already
+#   passed runs nothing again. The merge line lands a pull request only once it is up to
+#   date and green, so the merge is the tree that was tested;
+# - a run that hangs stops after 30 minutes, not GitHub's six hours.
+# To make each run cheaper still, cache your dependencies in `make setup`'s
+# step (actions/cache, or setup-node's `cache:`, keyed on your lockfile).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  # The usual names for a default branch: a workflow's branch filter cannot
+  # read the repository's own. Add yours if it is called something else.
+  push:
+    branches: [main, master, trunk]
+  merge_group:
+
+# It reads the code and writes nothing. `actions: read` is to ask whether a
+# pull request's run already passed the tree a push lands.
+permissions:
+  contents: read
+  actions: read
+
+env:
+  DOCS_ALONE_SKIPS: 'true'
+
+# A label event that runs nothing is in a group of its own, so it never
+# cancels a run that is testing the head.
+concurrency:
+  group: ci-${{ github.ref }}-${{ (github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event.label.name == 'adlc:ci') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) && 'run' || 'deferred' }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: ${{ (github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event.label.name == 'adlc:ci') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) && 'ci' || 'ci (after approval)' }}
+    if: ${{ github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event.label.name == 'adlc:ci') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # Two commits: a pull request's merge commit and the base it is tested
+      # against, or a push and the commit before it.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 2
+
+      - name: what this change needs
+        id: needs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          REPO: ${{ github.repository }}
+          REPO_ID: ${{ github.repository_id }}
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          run=true
+          # A pull request's own runs only: a fork's run is the fork's
+          # workflow, and could name any tree. And only a passing pull request
+          # run of this workflow whose head is this tree: any branch here can
+          # upload an artifact by this name, so the name proves nothing until
+          # it is tied to the tree its own run was given.
+          if [ "$EVENT" = push ]; then
+            runs=$(gh api "repos/$REPO/actions/artifacts?name=tested-tree-$tree" \
+              --jq ".artifacts[] | select(.expired == false and .workflow_run.head_repository_id == $REPO_ID) | \"\(.workflow_run.id) \(.workflow_run.head_sha)\"" 2>/dev/null || true)
+            while read -r passed head; do
+              [ -n "$passed" ] || continue
+              verdict=$(gh api "repos/$REPO/actions/runs/$passed" --jq '"\(.event) \(.conclusion) \(.path)"' 2>/dev/null || true)
+              [ "$verdict" = "pull_request success .github/workflows/ci.yml" ] || continue
+              if [ "$(gh api "repos/$REPO/git/commits/$head" --jq .tree.sha 2>/dev/null || true)" = "$tree" ]; then
+                echo "this tree passed on its pull request; nothing to run again"
+                run=false
+                break
+              fi
+            done <<< "$runs"
+          fi
+          # More than one commit pushed at once: the diff below would not see
+          # them all, so it runs. The diff lists both sides of a rename: a
+          # file moved into docs/ from elsewhere takes code out of the build,
+          # so it is not docs alone.
+          if [ "$run" = true ] && [ "$DOCS_ALONE_SKIPS" = true ] && { [ "$EVENT" != push ] || [ "$BEFORE" = "$(git rev-parse HEAD~1 2>/dev/null)" ]; }; then
+            files=$(git diff --name-only --no-renames HEAD~1 HEAD 2>/dev/null || true)
+            outside=$(printf '%s\n' "$files" | grep -Ev '^(docs/|LICENSE$|NOTICE$|[^/]+\.md$|\.github/[^/]+\.md$|\.github/ISSUE_TEMPLATE/)' | grep -v '^$' || true)
+            if [ -n "$files" ] && [ -z "$outside" ]; then
+              echo "docs alone changed; nothing to build or test"
+              run=false
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+      - name: make setup
+        if: steps.needs.outputs.run == 'true'
+        run: make setup
+
+      - name: make ci
+        if: steps.needs.outputs.run == 'true'
+        run: make ci
+
+      # So the push to the default branch that lands this exact tree runs
+      # nothing again.
+      - name: remember the tree that passed
+        if: github.event_name == 'pull_request' && steps.needs.outputs.run == 'true'
+        run: echo "${{ steps.needs.outputs.tree }}" > tested-tree.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: github.event_name == 'pull_request' && steps.needs.outputs.run == 'true'
+        with:
+          name: tested-tree-${{ steps.needs.outputs.tree }}
+          path: tested-tree.txt
+          retention-days: 14

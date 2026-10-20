@@ -10,7 +10,7 @@ export interface ServiceSpec {
   command: string[];
   cwd: string;
   env: Record<string, string>;
-  /** Polled until it answers, so `fleetadlc up` only reports what is really running. */
+  /** Polled until it answers, so `openadlc up` only reports what is really running. */
   health?: string;
 }
 
@@ -75,8 +75,8 @@ export function startService(spec: ServiceSpec): number {
  * Signals the whole process group. `startService` spawns detached, which makes
  * the child a group leader, so the negative pid reaches what it started too.
  * That matters for the console: it runs Next through a shell, and killing only
- * the shell leaves the server holding the port — after which `fleetadlc up` refuses
- * to start, correctly, and `fleetadlc down` has lied about stopping it.
+ * the shell leaves the server holding the port — after which `openadlc up` refuses
+ * to start, correctly, and `openadlc down` has lied about stopping it.
  */
 function signalGroup(pid: number, signal: NodeJS.Signals): void {
   try {
@@ -183,7 +183,7 @@ export async function stopService(
 /**
  * Polls until the service answers. Each attempt has a timeout and the whole a
  * deadline: a service that took the connection and never answered used to hold
- * `fleetadlc up` for undici's five minutes an attempt, hours in all. Ten seconds,
+ * `openadlc up` for undici's five minutes an attempt, hours in all. Ten seconds,
  * not two, because the console's `/` renders the whole board and a slow first
  * render is not a service that is down.
  */

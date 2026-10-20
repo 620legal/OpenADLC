@@ -9,7 +9,7 @@ the file is the reasoning available at the time.
 
 The template is `0000-template.md`.
 
-The decisions FleetADLC was built on so far are the D-table in
+The decisions OpenADLC was built on so far are the D-table in
 [platform-plan.md](../platform-plan.md#12-decisions), one row each. A decision
 taken from here on is a record in this folder; the plan's table links to one
 only where it changed a decision the table already had (0003, from D5 and D12).

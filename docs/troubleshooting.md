@@ -1,18 +1,18 @@
 # Troubleshooting
 
-Organized by what a person sees: a card on the board, a line from `fleetadlc doctor`,
+Organized by what a person sees: a card on the board, a line from `openadlc doctor`,
 a task that stopped, a page that will not load. Each entry says what it means and
-what to do, and names the code that decides it. `fleetadlc` below is
-`node apps/cli/bin/fleetadlc.mjs`, run from the checkout the install runs from.
+what to do, and names the code that decides it. `openadlc` below is
+`node apps/cli/bin/openadlc.mjs`, run from the checkout the install runs from.
 
 ## Start with two commands
 
 ```bash
-fleetadlc status    # which install, what is running, the board, spend, the crew
-fleetadlc doctor    # what would break, with the health checks run now
+openadlc status    # which install, what is running, the board, spend, the crew
+openadlc doctor    # what would break, with the health checks run now
 ```
 
-`fleetadlc status` opens with `Install at <path>`, the `FLEETADLC_HOME` it read, and
+`openadlc status` opens with `Install at <path>`, the `OPENADLC_HOME` it read, and
 everything after that line is about that install. It says whether each service
 is running, answering on its port but started by something else, or not running,
 and when each scheduled job last ran. `never run` means no run of that job is
@@ -21,20 +21,20 @@ recorded yet. Each job first runs one interval after the bridge starts
 stages within the hour, credentials 12 hours, qa and events a day, deps a
 week), and every restart starts that wait again: a young install, or one
 restarted more often than a job's interval, shows the long ones as `never
-run`. A job set to 0 with `FLEETADLC_JOB_<NAME>_MINUTES` never runs.
+run`. A job set to 0 with `OPENADLC_JOB_<NAME>_MINUTES` never runs.
 
-`fleetadlc doctor` checks the tools, hostd's authentication, the database, the GitHub
+`openadlc doctor` checks the tools, hostd's authentication, the database, the GitHub
 accounts, the webhook secret and the last delivery, then has the bridge run every
 health check now and prints each failure with what to do and where. It exits
 non-zero on any blocking failure (`apps/cli/src/commands/doctor.ts`).
 
 | What | Where |
 |---|---|
-| A service's log, and how it last ended | `~/.fleetadlc/run/<service>.log`; `fleetadlc logs bridge` prints the path |
-| The driver, the ports, the database, the checkout that runs | `~/.fleetadlc/install.json` |
-| Sign-ins, keys and the internal secret | `~/.fleetadlc/secrets/*.secret`, mode 0600 |
-| OpenAI and xAI subscription sign-ins | `~/.fleetadlc/logins/<account id>` |
-| A task as it runs | `fleetadlc attach <bot name> <session>`, where the session is the one the console shows after `<bot>/` (`<skill>-<first 8 characters of the task id>`, e.g. `fleetadlc attach builder implement-3f2a9c1e`), or the console's Terminal tab; ctrl-b d hands it back |
+| A service's log, and how it last ended | `~/.openadlc/run/<service>.log`; `openadlc logs bridge` prints the path |
+| The driver, the ports, the database, the checkout that runs | `~/.openadlc/install.json` |
+| Sign-ins, keys and the internal secret | `~/.openadlc/secrets/*.secret`, mode 0600 |
+| OpenAI and xAI subscription sign-ins | `~/.openadlc/logins/<account id>` |
+| A task as it runs | `openadlc attach <bot name> <session>`, where the session is the one the console shows after `<bot>/` (`<skill>-<first 8 characters of the task id>`, e.g. `openadlc attach builder implement-3f2a9c1e`), or the console's Terminal tab; ctrl-b d hands it back |
 
 ## How a problem reaches you
 
@@ -45,7 +45,7 @@ that says it was done. It runs when the bridge starts, on its own interval, and
 soon after something it is about happens. A failing check is a card in the
 board's **Needs you** row with the thing to do and a button to where it is done,
 and it clears itself when the check passes. A blocking failure that lasts five
-minutes is also sent to `FLEETADLC_NOTIFY_WEBHOOK` (or the bridge's log without one),
+minutes is also sent to `OPENADLC_NOTIFY_WEBHOOK` (or the bridge's log without one),
 and again a day later. A check that cannot get an answer neither raises a card
 nor clears one.
 
@@ -82,8 +82,8 @@ role alone before it has one (`botInWords`, `packages/shared/src/bot-words.ts`).
 
 | Check | Every | Its card says | What fixes it |
 |---|---|---|---|
-| `hostd` | 2 min | OpenADLC’s host service is not answering | `fleetadlc up` on the machine OpenADLC runs on |
-| `hostd-driver` | 10 min | Tasks run on this machine as your user, not in containers (a warning) | `infra/local/build-bot-image.sh`, then `fleetadlc init --driver docker` and `fleetadlc down && fleetadlc up` |
+| `hostd` | 2 min | OpenADLC’s host service is not answering | `openadlc up` on the machine OpenADLC runs on |
+| `hostd-driver` | 10 min | Tasks run on this machine as your user, not in containers (a warning) | `infra/local/build-bot-image.sh`, then `openadlc init --driver docker` and `openadlc down && openadlc up` |
 | `webhook` | 5 min | GitHub is not sending events to OpenADLC, and five others | [Webhooks do not arrive](#webhooks-do-not-arrive) |
 | `app-installed` | 15 min | The OpenADLC app is not installed on `<repo>` — or is private, so it cannot be; is suspended there; or is not given `<repo>` | The step on the card: install it on the account, make it public first ([more than one account](self-hosting.md#repositories-under-more-than-one-account)), unsuspend it, or add the repository on the installation's page |
 | `app-selection` | 60 min | The OpenADLC app is given all of `<organization>`’s repositories (a warning) | Choose **Only select repositories** on the installation's page and pick the ones the crew works in; set the organization's base permission to No permission and keep the bots out of teams ([more than one account](self-hosting.md#repositories-under-more-than-one-account)) |
@@ -96,14 +96,14 @@ role alone before it has one (`botInWords`, `packages/shared/src/bot-words.ts`).
 | `signing-key` | 15 min | `<bot>` has no signing key on its GitHub account · `<login>` has a signing key OpenADLC did not register (a warning) | Reconnect the bot once the app has “SSH signing keys”; blocking only where a branch requires signed commits · remove the key on the account's SSH and GPG keys page if nobody here added it |
 | `commit-email` | 60 min | `<login>`’s email address is public on its commits in `<repo>` (a warning, naming the commit) | Signed in as that account, tick Keep my email addresses private and Block command line pushes that expose my email at github.com/settings/emails. Commits already written keep their address, so **Dismiss** the card; it comes back only for a newer commit that still carries it |
 | `model-account` | 30 min | The xAI subscription is signed out | [A model account is signed out](#a-model-account-is-signed-out-or-refused) |
-| `repo-rules` | 60 min | Nothing the crew builds can land in `<repo>` | Apply the rules on the walkthrough's last step, or `fleetadlc github apply` |
-| `repo-config` | 30 min, and when a pull request merged into a default branch changes one of the files it reads | `<owner/repo>`’s AGENTS.md doesn’t say who approves its human-review paths yet — line N still has the template’s `@owner` · `<login>` is named as a reviewer in `<repo>`’s AGENTS.md, but there is no such GitHub account · … but `<login>` is an organization, not a person · … but cannot review: `<login>` is not a collaborator on `<repo>` (or has triage or read there) · `<login>` is one of this install’s people (FLEETADLC_HUMANS), but there is no such GitHub account (a warning) | [A named reviewer does not exist or cannot review](#a-named-reviewer-does-not-exist-or-cannot-review) |
-| `repo-owner` | 15 min | Nothing builds in `<repo>`: no bot owns it | Set its `owner` in config/repos.yaml to a seat (`builder`) and run `fleetadlc seed`; a repository not listed there gets the builder when it is added again in Settings → Repositories |
+| `repo-rules` | 60 min | Nothing the crew builds can land in `<repo>` | Apply the rules on the walkthrough's last step, or `openadlc github apply` |
+| `repo-config` | 30 min, and when a pull request merged into a default branch changes one of the files it reads | `<owner/repo>`’s AGENTS.md doesn’t say who approves its human-review paths yet — line N still has the template’s `@owner` · `<login>` is named as a reviewer in `<repo>`’s AGENTS.md, but there is no such GitHub account · … but `<login>` is an organization, not a person · … but cannot review: `<login>` is not a collaborator on `<repo>` (or has triage or read there) · `<login>` is one of this install’s people (OPENADLC_HUMANS), but there is no such GitHub account (a warning) | [A named reviewer does not exist or cannot review](#a-named-reviewer-does-not-exist-or-cannot-review) |
+| `repo-owner` | 15 min | Nothing builds in `<repo>`: no bot owns it | Set its `owner` in config/repos.yaml to a seat (`builder`) and run `openadlc seed`; a repository not listed there gets the builder when it is added again in Settings → Repositories |
 | `deploy-dispatch` | 5 min | `<repo>`: `<workflow>` of `<sha>` has not been dispatched (a warning for a promote, blocking for a rollback) | Fix what GitHub said, shown on the card; the deploy sweep dispatches it again, or run the workflow from the repository's Actions. See [A merge did not deploy](#a-merge-did-not-deploy-or-production-did-not-wait) |
 | `idle-lease` | 5 min | Never fails: lets go of a lease held 15 minutes with nothing working under it and no pull request | Nothing |
-| `dispatcher` | 5 min | The dispatcher isn’t running: nothing will start building | `fleetadlc down && fleetadlc up` (on Cloud Run, `fleetadlc cloud apply`); see [Stopping new work while you look](#stopping-new-work-while-you-look) |
+| `dispatcher` | 5 min | The dispatcher isn’t running: nothing will start building | `openadlc down && openadlc up` (on Cloud Run, `openadlc cloud apply`); see [Stopping new work while you look](#stopping-new-work-while-you-look) |
 | `github-accounts` | 10 min | The GitHub sign-in for `<login>` stopped working · Only one GitHub account is connected · No GitHub account is connected | Connect or reconnect an account on the walkthrough's GitHub accounts step; it needs two that still sign in |
-| `production-rules` | 60 min | A crew account can approve `<repo>`’s production deploy · `<repo>`’s production deploys wait for nobody · … wait for a person its rules do not ask for · … can come from more than `<branch>` (the last three warnings) | Remove the crew from the production environment's reviewers on the repository's Settings → Environments; for the others, choose how production ships on the walkthrough's Protect step, or `fleetadlc github apply` |
+| `production-rules` | 60 min | A crew account can approve `<repo>`’s production deploy · `<repo>`’s production deploys wait for nobody · … wait for a person its rules do not ask for · … can come from more than `<branch>` (the last three warnings) | Remove the crew from the production environment's reviewers on the repository's Settings → Environments; for the others, choose how production ships on the walkthrough's Protect step, or `openadlc github apply` |
 | `unattributed-post` | 5 min | A review on `<repo>#<n>` by `<login>` is not signed by OpenADLC | [runbooks/unsigned-post.md](runbooks/unsigned-post.md). **This was me** dismisses it until a newer post fails the signature check; each run reads the posts again and clears those that verify now |
 
 A task that fails gets a **Needs you** card — its own, or a line on the card of
@@ -143,10 +143,10 @@ since a failure that old is no longer a card.
   closed pull request does not clear it by itself. A deploy goes once a later
   deploy of the same repository finished. A QA task does not: a later deploy
   does not check again what QA failed on. Either goes when its pull request is
-  closed and its repository has no testing deploy: `.github/fleetadlc.yml` or
+  closed and its repository has no testing deploy: `.github/openadlc.yml` or
   Settings says none, or Automatic finds no `deploy-testing` workflow. A
   repository that deploys to testing, or whose setting could not be read,
-  keeps the card with Try again. `FLEETADLC_TESTING_URL` decides only for a
+  keeps the card with Try again. `OPENADLC_TESTING_URL` decides only for a
   task with no repository.
 - **A person ended it.** A Stop from the card, and a Stop in the bot's thread
   that kills its session (`stopped by a person (<who>): its session was
@@ -177,7 +177,7 @@ except to Merged or Done, which is how a merge records itself.
 
 | The card says | What to do |
 |---|---|
-| OpenADLC’s host service did not answer, so the work could not run | `fleetadlc up`, then **Try again** |
+| OpenADLC’s host service did not answer, so the work could not run | `openadlc up`, then **Try again** |
 | OpenADLC stopped while `<bot>` was working · The computer `<bot>` was working on restarted | **Try again**: nothing starts the work again on its own |
 | GitHub refused a commit by `<bot>`: it was not signed with a key its account has | Reconnect the bot, so GitHub learns its signing key |
 | GitHub no longer accepts the sign-in of `<bot>` | Reconnect the bot |
@@ -207,13 +207,13 @@ its branch (`continueBuildsWithoutPullRequest`, `apps/bridge/src/scheduler.ts`;
   commit or opening a pull request`, and its card has **Try again**.
 
 A build is left alone when a later build of the issue has started, the issue
-is no longer in Build or is closed on GitHub, it carries `fleetadlc:ignore`, or
+is no longer in Build or is closed on GitHub, it carries `openadlc:ignore`, or
 GitHub cannot be asked. A continuation also waits for what the dispatcher
 checks before it starts a build: the issue carries none of `needs-human`,
 `needs-triage` or a `do:` label other than `do:ai`, the repository has room
 under its concurrency, and no build in flight declares the same files. Passed
 over, it is not claimed, and a later sweep continues it once nothing holds it. Only builds that ended since the bridge started, and
-within a lease's length (`FLEETADLC_LEASE_HOURS`), are looked at, so restarting or
+within a lease's length (`OPENADLC_LEASE_HOURS`), are looked at, so restarting or
 upgrading the bridge does not revive older ones. Nothing is looked at while nothing dispatches (the
 `dispatcher` card): a continued build is work the dispatcher would hand out.
 Until the sweep has looked, the bot's thread offers **Try again** on such a
@@ -235,7 +235,7 @@ and repository (`PREREQUISITE_CHECKS`, `apps/bridge/src/health/checks/crew.ts`).
   with **Try again** and is run again below. A review gate that waits on such a seat
   reads `waiting on the reviewer account: <name> cannot sign in to GitHub` (or
   `waiting on the host service`), and the review starts when the check passes (the
-  bridge settles the gates then, and the scheduler's sweep does again if it missed). An install run with `FLEETADLC_SCRIPTED_ENGINES=1` has no GitHub
+  bridge settles the gates then, and the scheduler's sweep does again if it missed). An install run with `OPENADLC_SCRIPTED_ENGINES=1` has no GitHub
   account behind its bots and is not held. `<name>` here is the bot's name: its
   GitHub login once its account is connected, its seat (`lead-reviewer`) until
   then.
@@ -314,20 +314,20 @@ restarts is still paused. A bridge that cannot read the setting as it starts
 stays paused, says so in its log, and reads it again every 15 seconds. A
 backup carries the pause. Restored from the console, a pause in the archive
 takes effect as soon as the restore (or its undo) ends; restored with
-`fleetadlc restore`, when the bridge next starts. Each pause and
+`openadlc restore`, when the bridge next starts. Each pause and
 resume is audited (`work.paused`, `work.resumed`; one a restore made names it
 as the `source`), and while it lasts the board says who paused it and why.
 
 Settings → Pause work is the way to pause. Don't restart the bridge with
-`FLEETADLC_DISPATCH_IN_BRIDGE=0` to stop work: that is only for the integration
+`OPENADLC_DISPATCH_IN_BRIDGE=0` to stop work: that is only for the integration
 suites and scripted engines. A bridge without the dispatcher leases nothing,
 but intake, reviews and deploys still start from GitHub's events, and Pause and
 Resume don't change it. So that it is not missed, the board shows a blocking
 card, "The dispatcher isn’t running: nothing will start building", Settings →
 Pause work says the dispatcher isn't running, and a Build card ready to start says "Waiting: the
-dispatcher isn’t running". To clear it, set `FLEETADLC_DISPATCH_IN_BRIDGE=1` and
-restart the bridge (`fleetadlc down`, then `fleetadlc up`, which sets it). In the cloud
-install, Terraform sets it (`infra/gcp/main.tf`), so run `fleetadlc cloud apply`
+dispatcher isn’t running". To clear it, set `OPENADLC_DISPATCH_IN_BRIDGE=1` and
+restart the bridge (`openadlc down`, then `openadlc up`, which sets it). In the cloud
+install, Terraform sets it (`infra/gcp/main.tf`), so run `openadlc cloud apply`
 again. The card clears itself at the next check after the restart.
 
 ### Pausing some repositories and not others
@@ -408,7 +408,7 @@ says each seat's pause as `seatPaused`.
 A work item's page has its own controls, each an admin's and audited.
 
 - **Pause work** (`POST /v1/items/:subject/pause { reason? }`, `item.paused`) puts
-  `fleetadlc:paused` on the issue and its pull request. What is running
+  `openadlc:paused` on the issue and its pull request. What is running
   finishes. Nothing new starts on it: the dispatcher skips it ("held by a
   person"), the bridge refuses a new task on it in words naming who held it,
   and the merge line leaves its pull request alone. Who held it and why are
@@ -416,14 +416,14 @@ A work item's page has its own controls, each an admin's and audited.
   say so as `held: {by, at, why}`. A label a person puts on by hand on GitHub
   holds only what reads it. On the issue, it stops the dispatcher and new
   tasks, and the board shows the item as held; on the pull request, it stops
-  the merge line. Put `fleetadlc:paused` on both, or use **Pause work** here, which
+  the merge line. Put `openadlc:paused` on both, or use **Pause work** here, which
   does. To stop only a merge, put `needs-human` on the pull request.
 - **Resume work** (`POST /v1/items/:subject/resume`, `item.resumed`) takes the label
   off both and starts what the hold kept back: a dispatcher pass, the stage
   sweep, and the merge line.
 - **Do next** (on a card, the icon titled *Do #N next*; **Next up · undo** once
   set; `POST /v1/items/:subject/next { on }`, `item.next`) puts
-  `fleetadlc:next` on the issue. The dispatcher looks at it first in its
+  `openadlc:next` on the issue. The dispatcher looks at it first in its
   repository, ahead of priority, but it still waits for work it overlaps, and
   its reason says so ("next, but declared paths overlap…"). There is one per
   repository: putting another next takes the label off the first. Cards say
@@ -470,21 +470,21 @@ goes the same way as soon as it is opened. Only issues by an author OpenADLC
 acts for are taken; pull requests are not. The job's log says each one it
 sent ("sent testbed#3 to intake: it has no stage label…").
 
-To keep an issue out, label it `fleetadlc:ignore`. An issue intake cannot shape
+To keep an issue out, label it `openadlc:ignore`. An issue intake cannot shape
 — two intake runs in a week that each left it in intake — is not tried again:
 the bridge records `intake.stalled` once, and Needs you shows **Intake could
 not shape …**. Answer what intake asked on the issue, move it on the board
-yourself, or label it `fleetadlc:ignore`.
+yourself, or label it `openadlc:ignore`.
 
 An unlabeled issue whose author OpenADLC does not act for — a stranger, or an
 old crew account with no access left — is not sent on its own. Each pass writes
 them down (`unownedIssues`), Needs you shows one card per repository, **`<repo>`:
 n issues OpenADLC won't take on its own**, and an admin chooses: **Send to
 intake** (their say-so stands in for the author's access), **Ignore** (labels
-them `fleetadlc:ignore`) or **Close** (closed as not planned, with a comment
+them `openadlc:ignore`) or **Close** (closed as not planned, with a comment
 saying who closed it, by name and never by address, and the reason they gave).
 Until then intake's overlap check leaves them out, as it does any issue labelled
-`fleetadlc:ignore`.
+`openadlc:ignore`.
 
 ## A named reviewer does not exist or cannot review
 
@@ -509,7 +509,7 @@ The card names the file and line, and its buttons go where the fix is done:
 | … but there is no such GitHub account | **Open `<file>` on GitHub**, at the line, and change or remove the name on the default branch. A typo is the usual cause |
 | … but `<login>` is an organization, not a person | **Open `<file>` on GitHub** and name the people who must approve instead. An organization cannot be invited or review; in `CODEOWNERS`, a team is written `@<org>/<team>` |
 | … but cannot review: `<login>` is not a collaborator on `<repo>` · … has triage (or read) on `<repo>`, and an approval counts only from write or more | **Give `<login>` write access** opens the repository's Collaborators and teams page: invite them with write and have them accept, or, for someone who already has access, raise their role to Write, Maintain or Admin. Or change the name, as above |
-| `<login>` is one of this install’s people (FLEETADLC_HUMANS) … | Correct the list where it is kept. A list saved in the console (the Protect the repositories step's approvers) wins over `FLEETADLC_HUMANS`, and Settings has no field for it yet: as an admin, send `PATCH /v1/install {"humans": "<login>,…"}`; an empty value clears it, and `FLEETADLC_HUMANS` applies again. Without a saved list, fix `humans` in `install.json` or `FLEETADLC_HUMANS` and restart the bridge. Then fix any `AGENTS.md` or `CODEOWNERS` that names the old login |
+| `<login>` is one of this install’s people (OPENADLC_HUMANS) … | Correct the list where it is kept. A list saved in the console (the Protect the repositories step's approvers) wins over `OPENADLC_HUMANS`, and Settings has no field for it yet: as an admin, send `PATCH /v1/install {"humans": "<login>,…"}`; an empty value clears it, and `OPENADLC_HUMANS` applies again. Without a saved list, fix `humans` in `install.json` or `OPENADLC_HUMANS` and restart the bridge. Then fix any `AGENTS.md` or `CODEOWNERS` that names the old login |
 
 A pull request needing such a reviewer does not wait in silence: its
 `review-gate` fails with `<login> cannot be asked for a review: <reason>`
@@ -593,7 +593,7 @@ permission (`packages/github/src/client.ts`, `apps/bridge/src/failure-words.ts`)
 A card that says the app lacks “a permission this needs” without naming one
 came from a refusal whose text had no header, such as a `gh` command in a bot's
 session or a GraphQL error. Repeat that call and read the header. Run it in a
-session of the bot that was refused (the console's Terminal tab, or `fleetadlc
+session of the bot that was refused (the console's Terminal tab, or `openadlc
 attach <bot name> <session>`), where `$GH_TOKEN` is that bot's token:
 
 ```bash
@@ -630,7 +630,7 @@ account says which models it offers.
   (`apps/hostd/src/session-env.ts`).
 - **Codex or Grok: the sign-in expired.** **Sign in** runs the CLI's own
   `login --device-auth` — under the `docker` driver in a throwaway
-  `fleetadlc-login-<account id>` container from the bot image — and shows the link
+  `openadlc-login-<account id>` container from the bot image — and shows the link
   and the code. The code lasts fifteen minutes, and hostd stops an unfinished
   sign-in then: “the sign-in was not finished within 15 minutes, so its code has
   expired”. **Sign in again** gets a new code. “the CLI printed no sign-in link”
@@ -653,19 +653,19 @@ user namespace an unprivileged container cannot make, so every command a Codex
 reviewer runs fails and it gives up without reviewing. In a bot's container the
 container is the sandbox: Codex runs there with `--sandbox danger-full-access`,
 and keeps its own sandbox beside hostd. It tells the two apart by
-`FLEETADLC_CONTAINED`, which the base environment of every container session sets to
+`OPENADLC_CONTAINED`, which the base environment of every container session sets to
 `1` (`packages/engines/src/codex.ts`, `apps/hostd/src/drivers/base-env.ts`).
 
-**What to do.** Under the `docker` driver, a session without `FLEETADLC_CONTAINED=1`
+**What to do.** Under the `docker` driver, a session without `OPENADLC_CONTAINED=1`
 runs an old build: `git pull && pnpm install && pnpm build`,
-then `fleetadlc down && fleetadlc up`. The `local` driver never sets it: Codex keeps its
+then `openadlc down && openadlc up`. The `local` driver never sets it: Codex keeps its
 own sandbox there, and on a Linux host that cannot make a user namespace it
 fails the same way.
 
 ## Webhooks do not arrive
 
 **What you see.** The board lags GitHub by up to a quarter of an hour — how often
-the reconcile job reads it — and bots start late or not at all. `fleetadlc doctor`
+the reconcile job reads it — and bots start late or not at all. `openadlc doctor`
 may say “GitHub has never delivered anything to this install”, or how many hours
 ago the last delivery was.
 
@@ -698,45 +698,45 @@ right while GitHub sends nothing. Without `cloudflared` the step says
 `cloudflared is not installed`; on a Mac, `brew install cloudflared`, and on Linux,
 Cloudflare's `cloudflared` package for your distribution. Or give the bridge a
 public address instead.
-`fleetadlc doctor` also says when no webhook secret is configured, so every delivery
-is refused, and when the database, `install.json` and `FLEETADLC_WEBHOOK_SECRET`
+`openadlc doctor` also says when no webhook secret is configured, so every delivery
+is refused, and when the database, `install.json` and `OPENADLC_WEBHOOK_SECRET`
 differ.
 
 ## A service stopped, or keeps stopping
 
 **What it means.** The console once went offline overnight with nothing in its
-log, because a service that died stayed dead. `fleetadlc up` now runs hostd, the
+log, because a service that died stayed dead. `openadlc up` now runs hostd, the
 bridge and the console each under a keeper (`apps/cli/src/keep-running.ts`) that
 writes how the service ended to its log and starts it again, waiting a second,
 then twice as long each time, up to thirty. Five exits in a row, each within ten
 seconds of starting, will not be fixed by a sixth start, so the keeper stops:
 
 ```
-[fleetadlc] bridge exited with code 1 after 3m; starting it again in 1s
-[fleetadlc] bridge exited with code 1 5 times in a row, each within 10s of starting; not starting it again. Run `fleetadlc up` once whatever stops it is fixed.
+[openadlc] bridge exited with code 1 after 3m; starting it again in 1s
+[openadlc] bridge exited with code 1 5 times in a row, each within 10s of starting; not starting it again. Run `openadlc up` once whatever stops it is fixed.
 ```
 
 **What to do.**
 
 ```bash
-tail -n 50 "$(fleetadlc logs bridge)"   # how it ended, and what it said before
-fleetadlc down && fleetadlc up          # restart everything; `up` alone starts only what is not running
+tail -n 50 "$(openadlc logs bridge)"   # how it ended, and what it said before
+openadlc down && openadlc up          # restart everything; `up` alone starts only what is not running
 ```
 
 **Rebuilding restarts nothing.** `pnpm build` rewrites the code on disk; each
-running service keeps what it loaded, and `fleetadlc up` leaves a running service
+running service keeps what it loaded, and `openadlc up` leaves a running service
 alone (`already running (pid …)`). The console shows it plainly: `next start`
 goes on serving the build it started with, the rebuild has replaced the files
 that build refers to, and pages fail with `ChunkLoadError` until it restarts.
-After a build, `fleetadlc down && fleetadlc up`.
+After a build, `openadlc down && openadlc up`.
 
-**`bridge was not running (stale pid file removed)`.** `fleetadlc up` writes each
-keeper's pid to `run/<service>.pid` under `FLEETADLC_HOME`, and the keeper removes
+**`bridge was not running (stale pid file removed)`.** `openadlc up` writes each
+keeper's pid to `run/<service>.pid` under `OPENADLC_HOME`, and the keeper removes
 it when it exits. A reboot or a killed keeper leaves the file behind, and by
 then its number may be some other program's. OpenADLC takes a pid for a service
 only while its command line is that service's keeper (`keep.js bridge …`); any
-other pid file is removed, never signalled, and `fleetadlc down` says so with
-this line. Nothing needs doing: `fleetadlc up` starts the service as usual.
+other pid file is removed, never signalled, and `openadlc down` says so with
+this line. Nothing needs doing: `openadlc up` starts the service as usual.
 
 ## The console is a blank page under a LAN name or a tunnel
 
@@ -748,18 +748,18 @@ on a name rebound to this machine learns nothing. Opened as
 once per name:
 
 ```
-[console] refusing requests for Host "mybox.lan:47300": not a name this install is served under. If people do open the console under it, add it to "allowedHosts" in install.json (FLEETADLC_ALLOWED_HOSTS) and restart.
+[console] refusing requests for Host "mybox.lan:47300": not a name this install is served under. If people do open the console under it, add it to "allowedHosts" in install.json (OPENADLC_ALLOWED_HOSTS) and restart.
 ```
 
 **What to do.** If people do open OpenADLC under that name, add it to
-`allowedHosts` in `~/.fleetadlc/install.json` and run
-`fleetadlc down && fleetadlc up`. Otherwise open the console at the address
-`fleetadlc status` gives. See [security.md](security.md#a-page-on-another-origin).
+`allowedHosts` in `~/.openadlc/install.json` and run
+`openadlc down && openadlc up`. Otherwise open the console at the address
+`openadlc status` gives. See [security.md](security.md#a-page-on-another-origin).
 
 ## A port is already in use
 
-**What you see.** `fleetadlc up` ends with `OpenADLC is partly up` after one of these,
-and `fleetadlc status` says the service is answering but not started by this install:
+**What you see.** `openadlc up` ends with `OpenADLC is partly up` after one of these,
+and `openadlc status` says the service is answering but not started by this install:
 
 ```
 ✗ bridge: something is already serving http://127.0.0.1:47311/healthz that this install did not start
@@ -768,44 +768,44 @@ and `fleetadlc status` says the service is answering but not started by this ins
 
 **What it means.** A new service beside an old one dies of `EADDRINUSE` while the
 old one passes its health check, and the install would report itself up having
-started nothing. So `fleetadlc up` asks 47300 (console), 47311 (bridge) and
+started nothing. So `openadlc up` asks 47300 (console), 47311 (bridge) and
 47312 (hostd) before starting each service, and confirms afterwards that the
 process it started is the one answering (`apps/cli/src/commands/up.ts`).
 Postgres is not asked: it is reached at `install.json`'s `databaseUrl` (47432
-by default), and a server there that is not this install's ends `fleetadlc up`
+by default), and a server there that is not this install's ends `openadlc up`
 with `cannot reach postgres`. Under the docker driver hostd also publishes its
-task database server (`fleetadlc-taskdb`) on 47433, which no setting moves; a
+task database server (`openadlc-taskdb`) on 47433, which no setting moves; a
 conflict there shows in hostd's log as `task … gets no database`.
 
 **What to do.** Find what holds the port. It is usually the same services,
-started under another `FLEETADLC_HOME`, and `fleetadlc down` there stops them:
+started under another `OPENADLC_HOME`, and `openadlc down` there stops them:
 
 ```bash
 lsof -nP -iTCP:47311 -sTCP:LISTEN               # what is listening
-FLEETADLC_HOME=/path/to/other fleetadlc down    # stop the install that owns it
+OPENADLC_HOME=/path/to/other openadlc down    # stop the install that owns it
 ```
 
-To move instead, change `ports` in `install.json` and run `fleetadlc down && fleetadlc up`:
+To move instead, change `ports` in `install.json` and run `openadlc down && openadlc up`:
 every service, the console included, reads its addresses when it starts, and
 links in notifications follow the console's port. One thing does not follow
 on its own: take-over connects the browser to hostd at
-`NEXT_PUBLIC_FLEETADLC_TERMINAL_URL`, or port 47312 when that is empty. The
+`NEXT_PUBLIC_OPENADLC_TERMINAL_URL`, or port 47312 when that is empty. The
 console reads it when it starts, so when hostd moves, start the console with
 it set:
 
 ```bash
-export NEXT_PUBLIC_FLEETADLC_TERMINAL_URL=ws://127.0.0.1:<hostd port>
-fleetadlc down && fleetadlc up
+export NEXT_PUBLIC_OPENADLC_TERMINAL_URL=ws://127.0.0.1:<hostd port>
+openadlc down && openadlc up
 ```
 
-It is not kept in `install.json`, and neither is `FLEETADLC_CONSOLE_URL`:
-export them in every shell that runs `fleetadlc up`.
+It is not kept in `install.json`, and neither is `OPENADLC_CONSOLE_URL`:
+export them in every shell that runs `openadlc up`.
 
 When take-over cannot connect, the Computer tab names the address it tried.
 
 Moving Postgres means changing the port in `databaseUrl` as well as
 `ports.postgres`: `install.json` keeps the two apart. The database's data does
-not follow either. The container `fleetadlc up` made (`fleetadlc-db`) still
+not follow either. The container `openadlc up` made (`openadlc-db`) still
 publishes the old port, and `up` stops and says so; to keep using it, set both
 back to the port it publishes. Removing it makes the next `up` start a new,
 empty database.
@@ -815,21 +815,21 @@ empty database.
 **What you see.** Services that answer but were not started by this install, or
 an exported setting that changes nothing.
 
-**What it means.** An install is everything under `FLEETADLC_HOME`, `~/.fleetadlc` by
+**What it means.** An install is everything under `OPENADLC_HOME`, `~/.openadlc` by
 default: `install.json`, `secrets/`, the pid files and logs in `run/`, the bots'
-`work/` and the subscriptions' `logins/`. A stale `FLEETADLC_HOME` in the environment
-is an invisible way to talk to another install, which is why `fleetadlc status` names
-the one it read first, and `fleetadlc up` and `fleetadlc down` say `state under <path>`.
+`work/` and the subscriptions' `logins/`. A stale `OPENADLC_HOME` in the environment
+is an invisible way to talk to another install, which is why `openadlc status` names
+the one it read first, and `openadlc up` and `openadlc down` say `state under <path>`.
 `install.json` also decides two things a shell cannot:
 
-- **The services' settings.** `fleetadlc up` lays the file's values over the
+- **The services' settings.** `openadlc up` lays the file's values over the
   environment for what `serviceEnv` writes (`apps/cli/src/install.ts`: the
   database, the ports and URLs, the driver and the like), so an exported
-  `FLEETADLC_HOSTD_DRIVER`, `DATABASE_URL` or port never reaches a service.
-  Change the file, or run `fleetadlc init --driver docker`. Any other
-  `FLEETADLC_*` you export — `FLEETADLC_CONSOLE_URL`, `FLEETADLC_BOT_PREFIX`,
-  `FLEETADLC_BOT_IMAGE`, `FLEETADLC_JOB_<NAME>_MINUTES` — still reaches them, so
-  check `env | grep -E '^(FLEETADLC_|DATABASE_URL)'` first and unset what
+  `OPENADLC_HOSTD_DRIVER`, `DATABASE_URL` or port never reaches a service.
+  Change the file, or run `openadlc init --driver docker`. Any other
+  `OPENADLC_*` you export — `OPENADLC_CONSOLE_URL`, `OPENADLC_BOT_PREFIX`,
+  `OPENADLC_BOT_IMAGE`, `OPENADLC_JOB_<NAME>_MINUTES` — still reaches them, so
+  check `env | grep -E '^(OPENADLC_|DATABASE_URL)'` first and unset what
   belongs to another install.
 - **The database the CLI's own commands open.** `doctor`, `status`, `auth`,
   `backup`, `restore`, `seed` and `github` connect from the CLI's process. An
@@ -840,12 +840,12 @@ the one it read first, and `fleetadlc up` and `fleetadlc down` say `state under 
   again. Without an `install.json` (the compose stack, the cloud host) the
   exported one is used, as those set it.
 - **The checkout that runs.** Services start from the file's `repoRoot`,
-  no matter which checkout `fleetadlc` was run from, so building another checkout changes
+  no matter which checkout `openadlc` was run from, so building another checkout changes
   nothing that runs.
 
 ```bash
-fleetadlc status                                                       # Install at <path>, then the database it opens
-grep '"repoRoot"' "${FLEETADLC_HOME:-$HOME/.fleetadlc}/install.json"   # the checkout that runs
+openadlc status                                                       # Install at <path>, then the database it opens
+grep '"repoRoot"' "${OPENADLC_HOME:-$HOME/.openadlc}/install.json"   # the checkout that runs
 ```
 
 ## A task stops on "This command requires approval"
@@ -868,10 +868,10 @@ for its shape:
 
 - **A body on the command line.** Claude Code's own shell checks refuse a quoted
   argument with a line starting `#`, which every Markdown heading is, and braces
-  beside quotes, which every `fleetadlc:` marker has. So a skill writes the body to a
+  beside quotes, which every `openadlc:` marker has. So a skill writes the body to a
   file with its file tool and passes the file,
-  `gh issue create --body-file .fleetadlc-scratch/issue.md`. Triage's
-  `write_within` names `.fleetadlc-scratch/**`, which is what gives it a file
+  `gh issue create --body-file .openadlc-scratch/issue.md`. Triage's
+  `write_within` names `.openadlc-scratch/**`, which is what gives it a file
   tool (`crew/skills/triage/tools.yaml`).
 - **A chain.** Grok runs `a && b` only when every part is allowed, and refuses
   `$(…)`, subshells, loops and `bash -c` whole.
@@ -892,7 +892,7 @@ question open on it, its place in the line to merge — never from a setting
 | Waiting for triage | Sent back: it lacks a priority, an area, one `do:` label, one of its four sections or an expected path, or three builds ran and produced no pull request. Only builds that started and ended on their own count: a lease the bridge refused, one whose task never started, and a build that was stopped (by a person, or by its host going away) do not. Once the issue says what it wants, take `needs-triage` off and put `start:now` back: it gets three fresh attempts | The issue, and its "Not routable yet" comment |
 | Waiting on #N | A dependency named in the issue has not shipped | That issue |
 | Next up · Waiting its turn | Routable, and no builder has taken it | The bridge log's dispatch lines |
-| Waiting: the dispatcher isn’t running | Routable, but the bridge was started without `FLEETADLC_DISPATCH_IN_BRIDGE=1`, so nothing leases it | The `dispatcher` card on the board; see [Stopping new work while you look](#stopping-new-work-while-you-look) |
+| Waiting: the dispatcher isn’t running | Routable, but the bridge was started without `OPENADLC_DISPATCH_IN_BRIDGE=1`, so nothing leases it | The `dispatcher` card on the board; see [Stopping new work while you look](#stopping-new-work-while-you-look) |
 | Approved · 2nd in line to merge · Catching up with main… | The merge line | A `repo-rules` card, if nothing lands |
 | Approved · waiting for you to merge it | Only a person can land it | Its **Needs you** card says why |
 | Checks running before it merges | CI on its head, or the merge line held at the GitHub Actions minutes cap | The pull request's checks; Costs, and [the cap](#a-pull-request-waits-on-github-actions-minutes-this-month-reached-the-cap) |
@@ -902,13 +902,13 @@ question open on it, its place in the line to merge — never from a setting
 | Merged · waiting to deploy | No `deployed:testing` yet, in a repository that has a testing deploy | Settings → Repositories: how it ships, and where the rules came from; the bridge log's `dispatched deploy-testing` or `not dispatched` line |
 
 A repository whose delivery rules say `testing: on: none` does not sit on that
-line. That is set in its `.github/fleetadlc.yml` or, without that file, by
+line. That is set in its `.github/openadlc.yml` or, without that file, by
 Settings → Repositories → Testing deploy (**No testing deploy**, or
 **Automatic** with no `deploy-testing` workflow). The deploy sweep moves its
 `adlc:merged` issues to Done and starts no SRE task. With the file present,
 the Settings choice is not read: change the file by a pull request. Settings →
 Repositories shows which source the rules came from. OpenADLC does not read
-the `FLEETADLC_DEPLOY_TESTING` Actions variable.
+the `OPENADLC_DEPLOY_TESTING` Actions variable.
 In a repository that does have a testing deploy, a closed issue stays in Ship:
 GitHub closes the issue at `Closes #N` before the deploy has run.
 
@@ -916,7 +916,7 @@ A merge moves every issue the pull request finishes: the one its branch was cut
 for (`agent/<bot>/<issue>-…`) and each one it closes, as GitHub lists them — a
 `Closes`, `Fixes` or `Resolves #N` in its body, or an issue linked in its
 sidebar. So a pull request from any branch moves its issue. An issue is moved
-only when OpenADLC already tracks it and it is not labelled `fleetadlc:ignore`,
+only when OpenADLC already tracks it and it is not labelled `openadlc:ignore`,
 the branch's own included; the bridge log says `closes …, which OpenADLC does
 not track`, `not moved: …` or `was not moved to …` for the rest. The pull request is recorded on each one
 moved, which is how the deploys after the merge label it and production moves
@@ -931,12 +931,12 @@ commits (`apps/dispatcher/src/hold.ts`), paths that overlap work in flight, or
 the month's spend at its cap. An overlap says whether it holds because the
 other change is being built (`, being built`) or because the path is exclusive
 (`, an exclusive path in review`); a shared path never holds anything, and the
-repository's `paths:` in `.github/fleetadlc.yml` says which are which (see
+repository's `paths:` in `.github/openadlc.yml` says which are which (see
 [configuration](configuration.md)). A stage whose bot could not be started says why:
 
 ```bash
-grep 'dispatch, for' "$(fleetadlc logs bridge)" | tail -n 20    # leased or skipped, and why
-grep 'not staffed for' "$(fleetadlc logs bridge)" | tail -n 5   # why a stage's bot did not start
+grep 'dispatch, for' "$(openadlc logs bridge)" | tail -n 20    # leased or skipped, and why
+grep 'not staffed for' "$(openadlc logs bridge)" | tail -n 5   # why a stage's bot did not start
 ```
 
 Every staffed stage is swept hourly, and a builder that failed before opening a
@@ -947,8 +947,8 @@ still going under it. A question still open on a task that has already ended is
 closed then, since answering it would resume nothing. To sweep now:
 
 ```bash
-SECRET="$(cat "${FLEETADLC_HOME:-$HOME/.fleetadlc}/secrets/internal-api-secret.secret")"
-curl -X POST -H "x-fleetadlc-internal-secret: $SECRET" \
+SECRET="$(cat "${OPENADLC_HOME:-$HOME/.openadlc}/secrets/internal-api-secret.secret")"
+curl -X POST -H "x-openadlc-internal-secret: $SECRET" \
   http://127.0.0.1:47311/internal/schedule/stages   # or reconcile, merge, deploy
 ```
 
@@ -985,7 +985,7 @@ conflict, and the builder resolves only those (`resolve-conflict`). It does not
 go back to Build.
 
 - **Only the lead reviewed it again.** Every conflicted file was shared:
-  `paths.shared` in `.github/fleetadlc.yml`, or the defaults (`README*`,
+  `paths.shared` in `.github/openadlc.yml`, or the defaults (`README*`,
   `CHANGELOG*`, `docs/**/index*`, `.gitignore`, and others). The other
   approvals stand for the new head, but the lead's does not: the pull request
   waits in review, with `review-gate` pending, until the lead approves the
@@ -995,7 +995,7 @@ go back to Build.
   is one that can decide how CI runs (the Makefile, a `package.json`, a
   `tsconfig*.json`, anything under `.github/`) or `AGENTS.md`, which are
   always reviewed in full whatever `paths.shared` says; or
-  `.github/fleetadlc.yml` could not be read or does not parse; or the
+  `.github/openadlc.yml` could not be read or does not parse; or the
   resolution changed something beyond the conflicted files and what the base
   brought, as the base has it, such as a file the pull request already
   changed; or GitHub could not compare the two heads. The
@@ -1019,7 +1019,7 @@ behaves like this:
   of the base conflicted, so it made nothing and the pull request got a
   resolution round like any other. The builder's resolution is reviewed as
   that round says (above): by the lead alone, or by every reviewer again.
-- **It is held (`fleetadlc:paused`) with a note.** The dependency was sent back
+- **It is held (`openadlc:paused`) with a note.** The dependency was sent back
   to build, so what it was built on is changing. Resume it from its card once
   the dependency is settled, or cancel it and let it be built again from main.
   The note says instead that the dependency **was closed without merging**
@@ -1028,11 +1028,11 @@ behaves like this:
   resume it once that work lands another way. A dependency that merged is
   never a reason to hold it.
 - **Turning it off.** Set `stacking: false` in the repository's
-  `.github/fleetadlc.yml`; the issue then waits for its dependency to ship, as
+  `.github/openadlc.yml`; the issue then waits for its dependency to ship, as
   before.
 
 ```bash
-grep -E 'resolution round|waits for #|stacked on' "$(fleetadlc logs bridge)" | tail -n 20
+grep -E 'resolution round|waits for #|stacked on' "$(openadlc logs bridge)" | tail -n 20
 ```
 
 ## A pull request waits on "GitHub Actions minutes this month reached the cap"
@@ -1058,7 +1058,7 @@ disconnected) is not counted, and the bridge log says which.
 
 The bridge dispatches each deploy workflow as the app, or as the automation
 account where the app cannot act on the repository, by the repository's
-`.github/fleetadlc.yml`, and says what it did in the log: `dispatched
+`.github/openadlc.yml`, and says what it did in the log: `dispatched
 deploy-testing`, or `not dispatched (…); the deploy sweep tries again`.
 Settings → Repositories shows the rules it read and where they came from — a
 file that did not parse is said there, with its error, and the fallback is
@@ -1083,7 +1083,7 @@ it was; otherwise it says why not, and that the sweep tries again.
 - **`neither the app nor the automation account can act here`** — install the
   app on the repository, or connect the automation account.
 - **`its delivery rules could not be read (…); nothing dispatched`** — GitHub
-  did not answer for `.github/fleetadlc.yml` (a 5xx, a rate limit, the network),
+  did not answer for `.github/openadlc.yml` (a 5xx, a rate limit, the network),
   or the repository's stored rules could not be read. The bridge waits rather
   than act on the fallback, which may promote a repository that soaks, or deploy
   one that ships by merging: it keeps the last rules it read where it has them,
@@ -1093,7 +1093,7 @@ it was; otherwise it says why not, and that the sweep tries again.
   no required reviewer though the rules say `approval: reviewers`. The
   `production-rules` card says so and opens the walkthrough's Protect step:
   choose how production ships there, naming who approves it, or ship
-  automatically after testing (`fleetadlc github apply --production reviewers
+  automatically after testing (`openadlc github apply --production reviewers
   --reviewer <login>` from a terminal). Running the apply again without
   naming anybody changes nothing: it never writes an empty reviewer list. If
   apply says it `could not resolve <login> to a GitHub user`, that login is
@@ -1108,7 +1108,7 @@ it was; otherwise it says why not, and that the sweep tries again.
   looked at testing (the QA run's readiness report, if there is one). If you
   want production to follow testing on its own, switch the repository to
   automatic: a soak of at least 30 minutes on testing, the smoke, and an
-  automatic rollback. Where `.github/fleetadlc.yml` sets the rules, set
+  automatic rollback. Where `.github/openadlc.yml` sets the rules, set
   `production.approval: auto` there; the card opens the file.
 - **A crew account can approve a production deploy** — the `production-rules`
   card, blocking. Take the crew out of the environment's required reviewers in

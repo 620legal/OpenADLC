@@ -1,5 +1,5 @@
-import { audit } from '@fleetadlc/db';
-import { sameLogin } from '@fleetadlc/shared';
+import { audit } from '@openadlc/db';
+import { sameLogin } from '@openadlc/shared';
 
 /**
  * Which title and body of a stranger's issue the crew reads.

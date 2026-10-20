@@ -1,5 +1,5 @@
-import { attachments as attachmentStore, designMemory as designMemoryStore, bots as botStore, issues as issueStore, repos as repoStore, requests as requestStore, tasks as taskStore, threads as threadStore } from '@fleetadlc/db';
-import { BOT_ROLES, hasNextLabel, hasPausedLabel, roleLabel, type BotRole, type Gate, type Message, type StageKey, type TaskKind, type TaskState } from '@fleetadlc/shared';
+import { attachments as attachmentStore, designMemory as designMemoryStore, bots as botStore, issues as issueStore, repos as repoStore, requests as requestStore, tasks as taskStore, threads as threadStore } from '@openadlc/db';
+import { BOT_ROLES, hasNextLabel, hasPausedLabel, roleLabel, type BotRole, type Gate, type Message, type StageKey, type TaskKind, type TaskState } from '@openadlc/shared';
 import { requestPrefixOf } from './request-context.js';
 import { readHolds } from './item-hold.js';
 import { isActive, issueForSubject, parseRef, subjectsOf, type IssueFacts } from './work.js';
@@ -231,7 +231,7 @@ export interface ItemView {
   designMemory: unknown[];
   /** Who holds it from the board, and why (`item-hold.ts`); null when nobody does. Absent before it was read. */
   held?: { by: string; at: string; why: string | null } | null;
-  /** Whether it is the one its repository builds next (`fleetadlc:next`). */
+  /** Whether it is the one its repository builds next (`openadlc:next`). */
   next?: boolean;
   /**
    * Where a message written on it would go, by tab: `''` for the
@@ -448,7 +448,7 @@ export type ItemRoutePreview =
       role: string;
       handle: string | null;
       subject: string;
-      on: 'issue' | 'pull_request' | 'request' | 'fleetadlc';
+      on: 'issue' | 'pull_request' | 'request' | 'openadlc';
       number: number | null;
     }
   | { kind: 'refused'; error: string };
@@ -550,7 +550,7 @@ export function messageRoutes(
             : 'issue'
           : route.subject.startsWith('request:')
             ? 'request'
-            : 'fleetadlc',
+            : 'openadlc',
         number: onGitHub?.number ?? null,
       };
     }

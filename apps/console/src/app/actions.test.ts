@@ -54,10 +54,10 @@ describe('where take-over connects', () => {
     // A cloud console is built without the variable and started with it: read
     // when the token is minted, not inlined when the module was built.
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ token: 't', expiresInSeconds: 60 })));
-    vi.stubEnv('NEXT_PUBLIC_FLEETADLC_TERMINAL_URL', '');
+    vi.stubEnv('NEXT_PUBLIC_OPENADLC_TERMINAL_URL', '');
     expect(await requestAttachToken('builder', 'shell')).toEqual({ ok: true, token: 't', expiresInSeconds: 60 });
 
-    vi.stubEnv('NEXT_PUBLIC_FLEETADLC_TERMINAL_URL', 'wss://console.example.com');
+    vi.stubEnv('NEXT_PUBLIC_OPENADLC_TERMINAL_URL', 'wss://console.example.com');
     expect(await requestAttachToken('builder', 'shell')).toEqual({ ok: true, token: 't', expiresInSeconds: 60, url: 'wss://console.example.com' });
     vi.unstubAllEnvs();
   });
@@ -141,8 +141,8 @@ describe('the repositories OpenADLC works in, from settings', () => {
 
   it('removes one through the bridge’s own route, and says why when the bridge will not', async () => {
     const calls = recording(200, { notDone: [] });
-    expect(await removeRepository('fleetadlc-testbed')).toEqual({ ok: true, report: { notDone: [] } });
-    expect(calls).toEqual([{ url: expect.stringMatching(/\/v1\/repos\/fleetadlc-testbed\/remove$/), method: 'POST', body: undefined }]);
+    expect(await removeRepository('openadlc-testbed')).toEqual({ ok: true, report: { notDone: [] } });
+    expect(calls).toEqual([{ url: expect.stringMatching(/\/v1\/repos\/openadlc-testbed\/remove$/), method: 'POST', body: undefined }]);
 
     recording(404, { error: 'unknown repository' });
     expect(await removeRepository('nothing')).toEqual({ ok: false, error: 'unknown repository' });
@@ -171,8 +171,8 @@ describe('the repositories OpenADLC works in, from settings', () => {
 
   it('changes one’s colour as it changes the rest of its settings', async () => {
     const calls = recording();
-    expect(await updateRepoSettings('fleetadlc-testbed', { color: 'teal' })).toEqual({ ok: true });
-    expect(calls).toEqual([{ url: expect.stringMatching(/\/v1\/repos\/fleetadlc-testbed$/), method: 'PATCH', body: { color: 'teal' } }]);
+    expect(await updateRepoSettings('openadlc-testbed', { color: 'teal' })).toEqual({ ok: true });
+    expect(calls).toEqual([{ url: expect.stringMatching(/\/v1\/repos\/openadlc-testbed$/), method: 'PATCH', body: { color: 'teal' } }]);
   });
 
   it('reverts a design memory supersede through the bridge’s route, and passes on its refusal', async () => {

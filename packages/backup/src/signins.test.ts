@@ -45,8 +45,8 @@ function archive(): BackupContents {
 
 /** A bot connected with a token that does not expire, as an app with expiry off leaves one. */
 function withStaticToken(contents: BackupContents, token: string): BackupContents {
-  const secrets: Record<string, string> = { ...contents.secrets, 'github-token-fleetadlc-atlas-janedoe': token };
-  delete secrets['github-refresh-fleetadlc-atlas-janedoe'];
+  const secrets: Record<string, string> = { ...contents.secrets, 'github-token-openadlc-atlas-janedoe': token };
+  delete secrets['github-refresh-openadlc-atlas-janedoe'];
   return { ...contents, secrets };
 }
 
@@ -88,8 +88,8 @@ describe('every sign-in an archive carries', () => {
     const { signIns } = await judge(archive());
 
     expect(signIns.map((signIn) => [signIn.key, signIn.kind, signIn.who])).toEqual([
-      ['bot:builder', 'github-refresh', 'fleetadlc-atlas-janedoe'],
-      ['bot:lead-reviewer', 'github-refresh', 'fleetadlc-sydney-janedoe'],
+      ['bot:builder', 'github-refresh', 'openadlc-atlas-janedoe'],
+      ['bot:lead-reviewer', 'github-refresh', 'openadlc-sydney-janedoe'],
       [`account:${KEY_ACCOUNT}`, 'api-key', 'Anthropic API'],
       [`account:${CLAUDE_SEAT}`, 'claude-token', 'Claude Max'],
       [`account:${CODEX_SEAT}`, 'subscription', 'ChatGPT Pro'],
@@ -105,7 +105,7 @@ describe('every sign-in an archive carries', () => {
   it('never carries a value in what it says, whatever the verdict', async () => {
     const refused = await judge(archive(), { refuse: [VALUES.apiKey, VALUES.seatToken] });
     const working = await judge(withStaticToken(archive(), 'ghu_zzz-static-zzz'), {
-      users: { 'ghu_zzz-static-zzz': 'fleetadlc-atlas-janedoe' },
+      users: { 'ghu_zzz-static-zzz': 'openadlc-atlas-janedoe' },
     });
 
     const said = JSON.stringify([refused.signIns, working.signIns]);
@@ -134,7 +134,7 @@ describe('the same as this install’s', () => {
   });
 
   it('is not a value that merely sits under another name: an archive’s token is compared with the one its seat holds here', async () => {
-    const facts = holding({ 'github-refresh-fleetadlc-atlas-janedoe': VALUES.builderRefresh });
+    const facts = holding({ 'github-refresh-openadlc-atlas-janedoe': VALUES.builderRefresh });
 
     const { by } = await judge(archive(), { facts });
 
@@ -160,13 +160,13 @@ describe('a sign-in that works', () => {
 
   it('is a non-expiring GitHub token that says it is the account the archive names', async () => {
     const { by } = await judge(withStaticToken(archive(), 'ghu_zzz-static-zzz'), {
-      users: { 'ghu_zzz-static-zzz': 'FleetADLC-Atlas-Janedoe' },
+      users: { 'ghu_zzz-static-zzz': 'OpenADLC-Atlas-Janedoe' },
     });
 
     expect(by('bot:builder')).toMatchObject({
       kind: 'github-token',
       rotates: false,
-      verdict: { state: 'works', said: 'GitHub says it is FleetADLC-Atlas-Janedoe' },
+      verdict: { state: 'works', said: 'GitHub says it is OpenADLC-Atlas-Janedoe' },
     });
   });
 });
@@ -182,13 +182,13 @@ describe('a sign-in that is expired or refused', () => {
   it('is a GitHub token GitHub refuses, or one that signs in as somebody else', async () => {
     const refused = await judge(withStaticToken(archive(), 'ghu_zzz-static-zzz'), { refuse: ['ghu_zzz-static-zzz'] });
     const someoneElse = await judge(withStaticToken(archive(), 'ghu_zzz-static-zzz'), {
-      users: { 'ghu_zzz-static-zzz': 'fleetadlc-mallory' },
+      users: { 'ghu_zzz-static-zzz': 'openadlc-mallory' },
     });
 
     expect(refused.by('bot:builder').verdict).toEqual({ state: 'blocked', reason: 'GitHub did not accept it: Bad credentials (401)' });
     expect(someoneElse.by('bot:builder').verdict).toEqual({
       state: 'blocked',
-      reason: 'it signs in as fleetadlc-mallory, not fleetadlc-atlas-janedoe',
+      reason: 'it signs in as openadlc-mallory, not openadlc-atlas-janedoe',
     });
   });
 
@@ -229,20 +229,20 @@ describe('a sign-in that is expired or refused', () => {
   it('is a refresh token this install has used since the backup: the same authorization, and another token for it here', async () => {
     const shape: InstallShape = {
       ...cleanShape(),
-      bots: [{ name: 'fleetadlc-atlas-janedoe', slot: 'builder', githubLogin: 'fleetadlc-atlas-janedoe', engine: 'claude' }, ...cleanShape().bots.slice(1)],
+      bots: [{ name: 'openadlc-atlas-janedoe', slot: 'builder', githubLogin: 'openadlc-atlas-janedoe', engine: 'claude' }, ...cleanShape().bots.slice(1)],
     };
     const sameAuthorization = holding(
-      { 'github-refresh-fleetadlc-atlas-janedoe': 'ghr_zzz-rotated-since-zzz' },
+      { 'github-refresh-openadlc-atlas-janedoe': 'ghr_zzz-rotated-since-zzz' },
       {
         credential: async (seat) =>
-          seat === 'builder' ? { githubLogin: 'fleetadlc-atlas-janedoe', githubUserId: 101, authorizedAt: '2026-09-01T11:00:00.000Z' } : null,
+          seat === 'builder' ? { githubLogin: 'openadlc-atlas-janedoe', githubUserId: 101, authorizedAt: '2026-09-01T11:00:00.000Z' } : null,
       },
     );
     const anotherAuthorization = holding(
-      { 'github-refresh-fleetadlc-atlas-janedoe': 'ghr_zzz-connected-again-zzz' },
+      { 'github-refresh-openadlc-atlas-janedoe': 'ghr_zzz-connected-again-zzz' },
       {
         credential: async (seat) =>
-          seat === 'builder' ? { githubLogin: 'fleetadlc-atlas-janedoe', githubUserId: 101, authorizedAt: '2026-09-20T09:00:00.000Z' } : null,
+          seat === 'builder' ? { githubLogin: 'openadlc-atlas-janedoe', githubUserId: 101, authorizedAt: '2026-09-20T09:00:00.000Z' } : null,
       },
     );
 
@@ -318,12 +318,12 @@ describe('what is ticked, and what can be', () => {
     expect(selection.write.map((signIn) => signIn.key)).toEqual([`account:${CLAUDE_SEAT}`]);
     expect(selection.takeOver.map((signIn) => signIn.key)).toEqual(['bot:builder', 'bot:lead-reviewer', `account:${CODEX_SEAT}`]);
     expect(kept.secrets).not.toHaveProperty(`model-account-${KEY_ACCOUNT}`);
-    expect(kept.secrets).not.toHaveProperty('github-refresh-fleetadlc-atlas-janedoe');
+    expect(kept.secrets).not.toHaveProperty('github-refresh-openadlc-atlas-janedoe');
     expect(kept.secrets[`model-account-${CLAUDE_SEAT}`]).toBe(VALUES.seatToken);
     expect(kept.logins).toEqual({});
     expect(kept.bots.every((bot) => bot.credential === undefined)).toBe(true);
     // What is not a sign-in stays.
-    expect(kept.secrets['ssh-signing-fleetadlc-atlas-janedoe']).toBe(VALUES.builderSigning);
+    expect(kept.secrets['ssh-signing-openadlc-atlas-janedoe']).toBe(VALUES.builderSigning);
   });
 });
 
@@ -427,9 +427,9 @@ describe('checking a rotating sign-in by using it', () => {
   });
 
   it('keeps nothing when the token turns out to be another account’s', async () => {
-    const { results, recorded } = await takeOver({ logins: { [VALUES.builderRefresh]: 'fleetadlc-mallory' } });
+    const { results, recorded } = await takeOver({ logins: { [VALUES.builderRefresh]: 'openadlc-mallory' } });
 
-    expect(results.find((result) => result.key === 'bot:builder')?.reason).toBe('it signs in as fleetadlc-mallory, not fleetadlc-atlas-janedoe');
+    expect(results.find((result) => result.key === 'bot:builder')?.reason).toBe('it signs in as openadlc-mallory, not openadlc-atlas-janedoe');
     expect(recorded.secrets.has('github-refresh-builder')).toBe(false);
   });
 
@@ -493,7 +493,7 @@ describe('what a restore says before and after', () => {
 
     const before = previewRestore({ contents, shape, signIns, choices });
     const builder = before.summary.bots.find((bot) => bot.seat === 'builder');
-    expect(builder).toMatchObject({ signInState: 'take-over', needsConnecting: false, becomes: 'fleetadlc-atlas-janedoe' });
+    expect(builder).toMatchObject({ signInState: 'take-over', needsConnecting: false, becomes: 'openadlc-atlas-janedoe' });
     expect(before.summary.next).toEqual([]);
 
     const { target } = fakeTarget();
@@ -512,10 +512,10 @@ describe('what a restore says before and after', () => {
       signInState: 'refused',
     });
     expect(after.summary.next).toContain(
-      'Connect fleetadlc-sydney-janedoe to GitHub again: GitHub did not accept it: The refresh token passed is incorrect or expired.',
+      'Connect openadlc-sydney-janedoe to GitHub again: GitHub did not accept it: The refresh token passed is incorrect or expired.',
     );
     // Only a bot that holds a sign-in now takes its handle.
-    expect(after.renames.map((rename) => rename.to)).toEqual(['fleetadlc-atlas-janedoe']);
+    expect(after.renames.map((rename) => rename.to)).toEqual(['openadlc-atlas-janedoe']);
   });
 
   it('leaves a sign-in a person unticked where it was, and says so', async () => {
@@ -536,7 +536,7 @@ describe('what a restore says before and after', () => {
 
     expect(ports.refreshed).toEqual([VALUES.reviewerRefresh]);
     expect(recorded.secrets.has('github-refresh-builder')).toBe(false);
-    expect(report.summary.next).toContain('Connect fleetadlc-atlas-janedoe to GitHub again: it was left out of the restore.');
+    expect(report.summary.next).toContain('Connect openadlc-atlas-janedoe to GitHub again: it was left out of the restore.');
   });
 });
 
@@ -552,8 +552,8 @@ describe('a bot’s own engine key', () => {
       ...contents,
       secrets: {
         ...contents.secrets,
-        'engine-key-fleetadlc-atlas-janedoe': BUILDER_KEY,
-        'engine-key-fleetadlc-sydney-janedoe': REVIEWER_KEY,
+        'engine-key-openadlc-atlas-janedoe': BUILDER_KEY,
+        'engine-key-openadlc-sydney-janedoe': REVIEWER_KEY,
         'engine-key-automation': AUTOMATION_KEY,
       },
     };
@@ -598,9 +598,9 @@ describe('a bot’s own engine key', () => {
     const { write } = selectSignIns(signIns, defaultSignInChoices(signIns, 'clean'));
 
     const kept = keepOnlySignIns(contents, write).secrets;
-    expect(kept).not.toHaveProperty('engine-key-fleetadlc-atlas-janedoe');
+    expect(kept).not.toHaveProperty('engine-key-openadlc-atlas-janedoe');
     expect(kept).not.toHaveProperty('engine-key-automation');
-    expect(kept['engine-key-fleetadlc-sydney-janedoe']).toBe(REVIEWER_KEY);
+    expect(kept['engine-key-openadlc-sydney-janedoe']).toBe(REVIEWER_KEY);
     // Nor does it bring back an unjudged GitHub record for its seat.
     expect(keepOnlySignIns(contents, write.filter((one) => one.kind === 'engine-key')).bots.every((bot) => !bot.credential)).toBe(true);
 

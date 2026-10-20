@@ -3,7 +3,7 @@
 # `git` (see `gh` for where the folder is mounted).
 #
 # A task's computer reads its repository's pnpm store read-only
-# (FLEETADLC_PNPM_STORE): pnpm trusts its own index for a package it already
+# (OPENADLC_PNPM_STORE): pnpm trusts its own index for a package it already
 # holds, so a store one task could write was one it could plant code in for the
 # next. hostd alone fills it, from the task's lockfile (apps/hostd/src/pnpm-store.ts).
 # A command that changes what the task depends on — `add`, `update`, `remove`,
@@ -35,7 +35,7 @@ fi
 # Once a task has gone to its own store it stays there: `make setup`, the
 # session and local CI all have to use one store, or pnpm stops on a
 # node_modules another store built.
-own_mark="${HOME:-/tmp}/.fleetadlc-own-pnpm-store"
+own_mark="${HOME:-/tmp}/.openadlc-own-pnpm-store"
 own_store() {
   : >"$own_mark" 2>/dev/null
   PNPM_STORE_DIR="${HOME:-/tmp}/.pnpm-store"
@@ -46,7 +46,7 @@ own_store() {
   export PNPM_STORE_DIR npm_config_store_dir npm_config_confirm_modules_purge
 }
 
-if [ -z "${FLEETADLC_PNPM_STORE:-}" ] || [ "${PNPM_STORE_DIR:-}" != "$FLEETADLC_PNPM_STORE" ]; then
+if [ -z "${OPENADLC_PNPM_STORE:-}" ] || [ "${PNPM_STORE_DIR:-}" != "$OPENADLC_PNPM_STORE" ]; then
   exec "$real" "$@"
 fi
 if [ -e "$own_mark" ]; then
@@ -114,17 +114,17 @@ else
 fi
 
 # hostd fills the shared store from this worktree's lockfile as it is now.
-if [ -z "${FLEETADLC_HOSTD_URL:-}" ] || [ -z "${FLEETADLC_TASK_ID:-}" ] || [ -z "${FLEETADLC_TASK_TOKEN:-}" ]; then
+if [ -z "${OPENADLC_HOSTD_URL:-}" ] || [ -z "${OPENADLC_TASK_ID:-}" ] || [ -z "${OPENADLC_TASK_TOKEN:-}" ]; then
   fall_back "there is no hostd to ask to add it to the repository's shared store" "$@"
 fi
 # The token goes to curl on stdin (`--header @-`): as an argument it was in
 # the process list of everything in the task's computer. printf is the
 # shell's own, so it runs as no process of its own.
 status=$(
-  printf 'x-fleetadlc-task-token: %s\n' "$FLEETADLC_TASK_TOKEN" |
+  printf 'x-openadlc-task-token: %s\n' "$OPENADLC_TASK_TOKEN" |
     curl --silent --max-time 900 --output /dev/null --write-out '%{http_code}' --request POST \
       --header @- \
-      "${FLEETADLC_HOSTD_URL}/tasks/${FLEETADLC_TASK_ID}/pnpm-store" 2>/dev/null || true
+      "${OPENADLC_HOSTD_URL}/tasks/${OPENADLC_TASK_ID}/pnpm-store" 2>/dev/null || true
 )
 if [ "$status" != 200 ]; then
   fall_back "hostd could not add what it needs to the repository's shared store (${status:-no answer})" "$@"

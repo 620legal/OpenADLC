@@ -1,8 +1,8 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MockEngine, isShellAllowed, loadToolsPolicy, resolveWriteScope } from '@fleetadlc/engines';
-import { designMemoryProposals, parseMarkers, parseQuestion, parseYamlFile, policyPathMatches } from '@fleetadlc/shared';
+import { MockEngine, isShellAllowed, loadToolsPolicy, resolveWriteScope } from '@openadlc/engines';
+import { designMemoryProposals, parseMarkers, parseQuestion, parseYamlFile, policyPathMatches } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -317,7 +317,7 @@ describe('a skill that can ask a person asks one question at a time', () => {
     expect(questions.some((marker) => marker.open === true)).toBe(true);
     for (const marker of questions) {
       // Read the way the runner reads it: the question is the marker's own.
-      const asked = parseQuestion(`What I found.\n<!-- fleetadlc:${JSON.stringify(marker)} -->`);
+      const asked = parseQuestion(`What I found.\n<!-- openadlc:${JSON.stringify(marker)} -->`);
       expect(typeof marker.question, JSON.stringify(marker)).toBe('string');
       expect(asked?.question).toBe(marker.question);
       expect(asked?.context).toBe('What I found.');
@@ -481,9 +481,9 @@ describe('a reviewer reviews the diff, and the lead decides last', () => {
     expect(tools.deny.shell).toEqual(expect.arrayContaining(runners));
   });
 
-  it('does not install either: fleetadlc-install runs whatever it is given', () => {
+  it('does not install either: openadlc-install runs whatever it is given', () => {
     const tools = parseYamlFile(join(SKILLS_ROOT, 'pr-review', 'tools.yaml')) as { allow: { shell: string[] } };
-    expect(tools.allow.shell).not.toContain('fleetadlc-install');
+    expect(tools.allow.shell).not.toContain('openadlc-install');
   });
 
   it('leaves the sandbox as it was', () => {
@@ -504,20 +504,20 @@ describe('the design stage remembers what it decides', () => {
     // The bridge reads only a comment's last marker, so the example line is
     // read as the end of a design comment, which is where the skill puts it.
     const line = spec.split('\n').find((one) => one.includes('"event":"design_memory"')) ?? '';
-    const entries = designMemoryProposals(`The design.\n\n<!-- fleetadlc:{"event":"plan_posted"} -->\n${line}`);
+    const entries = designMemoryProposals(`The design.\n\n<!-- openadlc:{"event":"plan_posted"} -->\n${line}`);
     expect(entries.length).toBeGreaterThan(0);
     expect(entries.map((entry) => entry.kind)).toContain('decision');
   });
 
   it('commits only ADRs, on a pull request with a recorded local CI pass', () => {
     // The maintainer kept the design stage's ADR pull requests, limited to
-    // docs/adr/. Without fleetadlc-ci the lead could never approve one.
+    // docs/adr/. Without openadlc-ci the lead could never approve one.
     const policy = loadToolsPolicy(join(SKILLS_ROOT, 'spec', 'tools.yaml'));
-    expect(policy.allow.files?.writeWithin).toEqual(['docs/adr/**', '.fleetadlc-scratch/**']);
+    expect(policy.allow.files?.writeWithin).toEqual(['docs/adr/**', '.openadlc-scratch/**']);
     expect(policy.allow.git?.pushBranchPrefix).toBe('agent/');
     expect(policy.allow.git?.forcePush).toBe(false);
     expect(policy.allow.git?.localCi).toBe(true);
-    expect(isShellAllowed(policy, 'fleetadlc-ci')).toBe(true);
+    expect(isShellAllowed(policy, 'openadlc-ci')).toBe(true);
     // Each entry is a command prefix to the engine (`Bash(git log:*)`), so a
     // bare `git` would allow every git command, a checkout or a reset included.
     const git = policy.allow.shell.filter((entry) => entry.split(/\s+/)[0] === 'git');
@@ -531,7 +531,7 @@ describe('the design stage remembers what it decides', () => {
     const flat = spec.replace(/\s+/g, ' ');
     expect(flat).toContain('Write code, or any file outside `docs/adr/`, in any repository.');
     expect(flat).toContain('`Refs #<issue>`, never `Closes`');
-    expect(spec).toContain('agent/$FLEETADLC_BOT/adr-NNNN-short-title');
+    expect(spec).toContain('agent/$OPENADLC_BOT/adr-NNNN-short-title');
   });
 
   it('names the ADR a decision is recorded in, and the builder writes it', () => {
@@ -543,42 +543,42 @@ describe('the design stage remembers what it decides', () => {
 
 /**
  * QA was told to maintain its suites through pull requests, and could not get
- * one reviewed: it could not run `fleetadlc-ci`, so no pass was ever recorded
+ * one reviewed: it could not run `openadlc-ci`, so no pass was ever recorded
  * for its head, and its write scope named paths the bridge never declares.
  */
 describe('QA changes its suites the way a builder changes code', () => {
   const policy = loadToolsPolicy(join(SKILLS_ROOT, 'qa', 'tools.yaml'));
 
-  it('runs fleetadlc-ci, and its git and gh ask for the recorded pass', () => {
-    expect(isShellAllowed(policy, 'fleetadlc-ci')).toBe(true);
+  it('runs openadlc-ci, and its git and gh ask for the recorded pass', () => {
+    expect(isShellAllowed(policy, 'openadlc-ci')).toBe(true);
     expect(policy.allow.git?.localCi).toBe(true);
   });
 
   it('writes only the test paths its task declares, and its scratch directory', () => {
-    expect(resolveWriteScope(policy, ['tests/**'])).toEqual(['tests/**', '.fleetadlc-scratch/**']);
+    expect(resolveWriteScope(policy, ['tests/**'])).toEqual(['tests/**', '.openadlc-scratch/**']);
   });
 
-  it('says how: a suite branch, fleetadlc-ci, then a ready pull request', () => {
+  it('says how: a suite branch, openadlc-ci, then a ready pull request', () => {
     const qa = readFileSync(join(SKILLS_ROOT, 'qa', 'SKILL.md'), 'utf8');
-    expect(qa).toContain('agent/$FLEETADLC_BOT/suite-<short-name>');
+    expect(qa).toContain('agent/$OPENADLC_BOT/suite-<short-name>');
     expect(qa).toContain('--body-file');
-    expect(qa.replace(/\s+/g, ' ')).toContain('Push, or open a pull request, on a commit `fleetadlc-ci` has not passed.');
+    expect(qa.replace(/\s+/g, ' ')).toContain('Push, or open a pull request, on a commit `openadlc-ci` has not passed.');
   });
 });
 
 /**
- * `fleetadlc-install` gives one install the private registry's credential.
+ * `openadlc-install` gives one install the private registry's credential.
  * No skill allowed it, so on Claude Code and Grok a builder could not run it
  * and installed without the credential. The reviewer is left out on purpose:
  * it never runs the code under review, and an install runs its scripts.
  */
 describe('the skills that install can install with the registry’s credential', () => {
-  it.each(['implement', 'resolve-conflict', 'qa'])('%s allows fleetadlc-install', (skill) => {
-    expect(isShellAllowed(loadToolsPolicy(join(SKILLS_ROOT, skill, 'tools.yaml')), 'fleetadlc-install pnpm install')).toBe(true);
+  it.each(['implement', 'resolve-conflict', 'qa'])('%s allows openadlc-install', (skill) => {
+    expect(isShellAllowed(loadToolsPolicy(join(SKILLS_ROOT, skill, 'tools.yaml')), 'openadlc-install pnpm install')).toBe(true);
   });
 
   it('the builder is told to install through it', () => {
     const implement = readFileSync(join(SKILLS_ROOT, 'implement', 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
-    expect(implement).toContain('Add and install packages through `fleetadlc-install`');
+    expect(implement).toContain('Add and install packages through `openadlc-install`');
   });
 });

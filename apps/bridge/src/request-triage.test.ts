@@ -29,7 +29,7 @@ const stored = vi.hoisted(() => ({
   onSubject: [] as { subjectRef: string; state: string }[],
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -50,7 +50,7 @@ vi.mock('@fleetadlc/db', () => ({
   AccountInUse: class AccountInUse extends Error {},
   bots: {
     listBots: vi.fn(async () => [
-      { id: 'bot-flow', name: 'janedoe-fleetadlc-flow', role: 'automation' },
+      { id: 'bot-flow', name: 'janedoe-openadlc-flow', role: 'automation' },
       { id: 'bot-intake', name: 'ottoexampleco', role: 'intake' },
     ]),
   },
@@ -62,7 +62,7 @@ vi.mock('@fleetadlc/db', () => ({
   mergeLines: {},
   modelAccounts: {},
   recordEvent: vi.fn(),
-  repos: { listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'fleetadlc-testbed' }]) },
+  repos: { listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'openadlc-testbed' }]) },
   requests: {
     listDraftsSince: vi.fn(async () => []),
     getRequest: vi.fn(async (id: string) => (id === stored.request.id ? { ...stored.request } : null)),
@@ -152,7 +152,7 @@ describe('triaging a request again', () => {
       {
         bot: 'ottoexampleco',
         botId: 'bot-intake',
-        repo: 'fleetadlc-testbed',
+        repo: 'openadlc-testbed',
         kind: 'intake',
         subjectType: 'request',
         subjectRef: 'request:a4b02784',

@@ -9,7 +9,7 @@ import { DispatchRunner } from './dispatch-runner.js';
  * must still be one run at a time, and a burst of changes one run.
  */
 
-const DECISION = { repo: 'fleetadlc-testbed', issue: 3, bot: 'fleetadlc-atlas-janedoe', action: 'leased' as const, reason: 'leased' };
+const DECISION = { repo: 'openadlc-testbed', issue: 3, bot: 'openadlc-atlas-janedoe', action: 'leased' as const, reason: 'leased' };
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -31,7 +31,7 @@ describe('asking for a dispatch', () => {
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(run).toHaveBeenCalledTimes(1);
-    expect(lines).toEqual(['[bridge] dispatch, for issues.labeled, issues.unlabeled: leased fleetadlc-testbed#3 → fleetadlc-atlas-janedoe: leased']);
+    expect(lines).toEqual(['[bridge] dispatch, for issues.labeled, issues.unlabeled: leased openadlc-testbed#3 → openadlc-atlas-janedoe: leased']);
   });
 
   it('runs once more after a run that an ask arrived during, and never two at once', async () => {

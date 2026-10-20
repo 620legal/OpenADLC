@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { designMemory as store } from '@fleetadlc/db';
+import type { designMemory as store } from '@openadlc/db';
 
 /**
  * What the design stage remembers about a repository: proposed only by the
@@ -20,7 +20,7 @@ const world = vi.hoisted(() => ({
   events: [] as { type: string; payload: Record<string, unknown> }[],
 }));
 
-vi.mock('@fleetadlc/db', () => {
+vi.mock('@openadlc/db', () => {
   let next = 1;
   const make = (repoId: string, entry: Record<string, unknown>, source: { subject: string; url: string | null; by: string | null; task: string }) => ({
     id: `00000000-0000-4000-8000-${String(next++).padStart(12, '0')}`,
@@ -101,7 +101,7 @@ vi.mock('@fleetadlc/db', () => {
   };
 });
 
-const DESIGN = (entries: unknown) => `The design.\n<!-- fleetadlc:{"event":"plan_posted"} -->\n<!-- fleetadlc:${JSON.stringify({ event: 'design_memory', entries })} -->`;
+const DESIGN = (entries: unknown) => `The design.\n<!-- openadlc:{"event":"plan_posted"} -->\n<!-- openadlc:${JSON.stringify({ event: 'design_memory', entries })} -->`;
 
 /** The design task on api#12, its seat, and a builder on the same issue. */
 const SPEC = { id: 'task-spec', kind: 'spec', repoId: 'repo-1', subjectRef: 'api#12', botId: 'bot-se' };
@@ -312,7 +312,7 @@ describe('correcting it in Settings', () => {
   });
 
   const patch = (body: Record<string, unknown>, repo = 'api') =>
-    fetch(`${url}/v1/repos/${repo}/design-memory`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-fleetadlc-identity': 'admin@acme.test' }, body: JSON.stringify(body) });
+    fetch(`${url}/v1/repos/${repo}/design-memory`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-openadlc-identity': 'admin@acme.test' }, body: JSON.stringify(body) });
 
   it('lists the entries, and retires one with an audit line saying what it was', async () => {
     const { recordDesignMemory } = await import('./design-memory.js');
@@ -347,7 +347,7 @@ describe('correcting it in Settings', () => {
     const [replacer] = await recordDesignMemory(design([{ kind: 'constraint', title: 'Log what helps', body: 'b', supersedes: '00000000-0000-4000-8000-000000000996' }]));
     await acceptOnStage('api', 12, 'build');
     const revert = (id: string) =>
-      fetch(`${url}/v1/repos/api/design-memory/${id}/revert`, { method: 'POST', headers: { 'x-fleetadlc-identity': 'admin@acme.test' } });
+      fetch(`${url}/v1/repos/api/design-memory/${id}/revert`, { method: 'POST', headers: { 'x-openadlc-identity': 'admin@acme.test' } });
 
     const response = await revert(replacer!.id);
 

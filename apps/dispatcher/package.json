@@ -1,5 +1,5 @@
 {
-  "name": "@fleetadlc/dispatcher",
+  "name": "@openadlc/dispatcher",
   "version": "0.1.0",
   "description": "Decides which issues may start and leases each to a free builder, without letting two changes touch the same files.",
   "private": true,
@@ -13,14 +13,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "dev": "FLEETADLC_DISPATCH_INTERVAL_SECONDS=60 tsx src/main.ts --dry-run",
+    "dev": "OPENADLC_DISPATCH_INTERVAL_SECONDS=60 tsx src/main.ts --dry-run",
     "start": "node dist/main.js",
     "test": "vitest run"
   },
   "dependencies": {
-    "@fleetadlc/db": "workspace:*",
-    "@fleetadlc/github": "workspace:*",
-    "@fleetadlc/shared": "workspace:*"
+    "@openadlc/db": "workspace:*",
+    "@openadlc/github": "workspace:*",
+    "@openadlc/shared": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

@@ -4,7 +4,7 @@ import { closeSync, fstatSync, openSync, readFileSync, renameSync, rmSync, write
 /**
  * Keeps one of OpenADLC's services running.
  *
- * `fleetadlc up` started each service and walked away, so a service that died
+ * `openadlc up` started each service and walked away, so a service that died
  * stayed dead. The console went offline overnight with nothing in its log —
  * the process had simply gone — and the first anybody knew was a page that
  * would not load. Each service now runs under a keeper: when it ends without
@@ -12,10 +12,10 @@ import { closeSync, fstatSync, openSync, readFileSync, renameSync, rmSync, write
  * that stopped it, and starts it again, waiting longer each time.
  *
  * A service that dies straight away, again and again, will not be fixed by
- * starting it: the keeper gives up and exits, so `fleetadlc up` and `fleetadlc doctor`
+ * starting it: the keeper gives up and exits, so `openadlc up` and `openadlc doctor`
  * see it down rather than a loop that looks alive.
  *
- * `fleetadlc down` signals the whole process group, the service included. The
+ * `openadlc down` signals the whole process group, the service included. The
  * keeper hears it too and stops starting anything; it passes the signal on
  * only if the service is still there a while later, which is the case where
  * somebody signalled the keeper alone. Passing it on at once would have given
@@ -73,7 +73,7 @@ export const LOG_LIMIT_BYTES = 20 * 1024 * 1024;
  * becomes `<path>.1`, replacing the one before, and a new one is started.
  *
  * Every service appended to `run/<name>.log` for as long as it ran, and a
- * service can run for months between restarts, so rotating at `fleetadlc up`
+ * service can run for months between restarts, so rotating at `openadlc up`
  * would not have been enough; a long-running install filled its disk. Writes
  * are synchronous, so nothing is lost when the keeper exits straight after.
  */
@@ -152,13 +152,13 @@ export function keepRunning(options: KeepOptions): Keeper {
       }
       if (quick >= quickLimit) {
         log(
-          `[fleetadlc] ${options.name} ${how} ${quick} times in a row, each within ${seconds(quickMs)} of starting; ` +
-            'not starting it again. Run `fleetadlc up` once whatever stops it is fixed.',
+          `[openadlc] ${options.name} ${how} ${quick} times in a row, each within ${seconds(quickMs)} of starting; ` +
+            'not starting it again. Run `openadlc up` once whatever stops it is fixed.',
         );
         finish(1);
         return;
       }
-      log(`[fleetadlc] ${options.name} ${how} after ${seconds(ran)}; starting it again in ${seconds(wait)}`);
+      log(`[openadlc] ${options.name} ${how} after ${seconds(ran)}; starting it again in ${seconds(wait)}`);
       restart = setTimeout(start, wait);
       wait = Math.min(wait * 2, maxDelayMs);
     };
@@ -195,7 +195,7 @@ export function keepRunning(options: KeepOptions): Keeper {
 }
 
 /** Where `startService` tells the keeper its pid file is. */
-export const KEEPER_PID_FILE = 'FLEETADLC_KEEPER_PID_FILE';
+export const KEEPER_PID_FILE = 'OPENADLC_KEEPER_PID_FILE';
 
 /**
  * Removes the keeper's pid file when it still names this keeper. A keeper that

@@ -1,4 +1,4 @@
-import type { CiUsageRow } from '@fleetadlc/db';
+import type { CiUsageRow } from '@openadlc/db';
 import { describe, expect, it, vi } from 'vitest';
 import { billedMinutes, capReason, everyJob, monthStart, parseCap, recordRun, runnerRate, summarize, type RunJob } from './ci-usage.js';
 

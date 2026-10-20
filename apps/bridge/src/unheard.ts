@@ -1,4 +1,4 @@
-import { listEventsOfType, recordEvent } from '@fleetadlc/db';
+import { listEventsOfType, recordEvent } from '@openadlc/db';
 
 /**
  * What happened on GitHub that GitHub never told OpenADLC about.
@@ -37,7 +37,7 @@ export const UNHEARD_WINDOW_MS = 48 * 60 * 60 * 1000;
 const CLOCK_SLACK_MS = 5 * 60 * 1000;
 
 export interface Unheard {
-  /** `fleetadlc-testbed#1`. */
+  /** `openadlc-testbed#1`. */
   subject: string;
   /**
    * `imported`: in a stage, and not on the board until reconcile put it there.

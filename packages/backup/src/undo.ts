@@ -1,4 +1,4 @@
-import { accessTokenRef, appPrivateKeyRef, engineKeyRef, modelAccountRef, refreshTokenRef, registryTokenRef, signingKeyRef, webhookSecretRef } from '@fleetadlc/github';
+import { accessTokenRef, appPrivateKeyRef, engineKeyRef, modelAccountRef, refreshTokenRef, registryTokenRef, signingKeyRef, webhookSecretRef } from '@openadlc/github';
 import type { ArchivedAccount, ArchivedBot, ArchivedCredential, ArchivedRepository, ArchivedSpendingLimit, BackupContents } from './archive.js';
 import type { HistoryIds, RestoreDb } from './apply.js';
 import type { Comparison } from './compare.js';

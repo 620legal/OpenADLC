@@ -1,6 +1,6 @@
-import { identities } from '@fleetadlc/db';
-import { credentialKind, getSecretStore, type SecretStore } from '@fleetadlc/github';
-import type { Bot } from '@fleetadlc/shared';
+import { identities } from '@openadlc/db';
+import { credentialKind, getSecretStore, type SecretStore } from '@openadlc/github';
+import type { Bot } from '@openadlc/shared';
 
 /**
  * Where a seat's GitHub sign-in is filed, and whether other seats share it.

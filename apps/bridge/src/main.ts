@@ -1,9 +1,10 @@
+import './legacy-env.js';
 import { heldBySeatPause, registerSeatPauseRoutes, seatPausedReason } from './seat-pause.js';
 import { createServer } from 'node:http';
-import { audit as auditEntry, bots, ciUsage, closePool, costs, deployRuns, issues as issueStore, leases as leaseStore, repos, settings, tasks, threads as threadStore, waitForDatabase } from '@fleetadlc/db';
+import { audit as auditEntry, bots, ciUsage, closePool, costs, deployRuns, issues as issueStore, leases as leaseStore, repos, settings, tasks, threads as threadStore, waitForDatabase } from '@openadlc/db';
 import { registerPauseRoutes, restorePause } from './pause-work.js';
-import { accountOf, appPrivateKeyRef, appVisibility, ensureAlertsSecret, ensureConsoleSecret, ensureInternalSecret, getSecretStore, installationTokenFor, redeliverFailedSince } from '@fleetadlc/github';
-import { sameLogin } from '@fleetadlc/shared';
+import { accountOf, appPrivateKeyRef, appVisibility, ensureAlertsSecret, ensureConsoleSecret, ensureInternalSecret, getSecretStore, installationTokenFor, redeliverFailedSince } from '@openadlc/github';
+import { sameLogin } from '@openadlc/shared';
 import { Actors } from './actors.js';
 import { registerConsoleApi, retryDepsFor, stopTask } from './api.js';
 import { SendBack } from './send-back.js';
@@ -62,7 +63,7 @@ import { resolveItem } from './items.js';
 import { botNames, defaultChecks, settingUp } from './health/index.js';
 import { anythingDispatches, dispatchModeOf } from './health/checks/dispatcher.js';
 import { HealthRegistry } from './health/registry.js';
-import { Dispatcher } from '@fleetadlc/dispatcher';
+import { Dispatcher } from '@openadlc/dispatcher';
 import { DispatchRunner } from './dispatch-runner.js';
 import { abandonRequest, RequestFiling } from './request-lifecycle.js';
 import { authorize, listFromEnv, Roles } from './roles.js';
@@ -154,21 +155,21 @@ async function main(): Promise<void> {
   const mergeLine = new MergeLine(config, actors, taskService, automation);
   // The dispatcher, run here — where an issue changing or a task ending
   // arrives — as soon as either could let work start, and every five minutes
-  // besides. `fleetadlc up` turns it on, except with scripted engines. The
+  // besides. `openadlc up` turns it on, except with scripted engines. The
   // integration suites drive the dispatcher a pass at a time, so a bridge they
   // run against — CI's, or a scratch install's — leaves it off.
   const dispatcher =
-    process.env.FLEETADLC_DISPATCH_IN_BRIDGE === '1'
+    process.env.OPENADLC_DISPATCH_IN_BRIDGE === '1'
       ? new Dispatcher({
           bridgeUrl: `http://127.0.0.1:${config.port}`,
           internalSecret,
           costs: config.costs,
-          leaseHours: Number(process.env.FLEETADLC_LEASE_HOURS ?? '12') || 12,
+          leaseHours: Number(process.env.OPENADLC_LEASE_HOURS ?? '12') || 12,
           // The gate itself, so a paused install or repository is passed over
           // before a lease is taken, rather than taken and refused.
           paused: (repo) => dispatchGate.paused(repo),
           // Which overlapping changes build side by side: the repository's own
-          // `paths:` in .github/fleetadlc.yml, as the rest of its rules are read.
+          // `paths:` in .github/openadlc.yml, as the rest of its rules are read.
           pathPolicy: async (repo) => (await delivery.get(repo)).rules.paths,
         })
       : null;
@@ -238,8 +239,8 @@ async function main(): Promise<void> {
     return carried;
   });
   automation.useResolutions((repoName, prNumber, head) => conflictRounds.resolvedAt(repoName, prNumber, head));
-  // How each repository ships, by its own rules (`.github/fleetadlc.yml`), and
-  // the pipeline that dispatches its deploys as the app. FLEETADLC_TESTING_URL is
+  // How each repository ships, by its own rules (`.github/openadlc.yml`), and
+  // the pipeline that dispatches its deploys as the app. OPENADLC_TESTING_URL is
   // read only as the deprecated fallback for a repository whose rules name no URL.
   const delivery = new DeliveryKnowledge(() => asAutomation(actors, config), config.testingUrl);
   const pipeline = new DeployPipeline({
@@ -433,8 +434,8 @@ async function main(): Promise<void> {
   // what creating and running work takes. See `roles.ts`.
   const roles = new Roles({
     mode: config.identityMode,
-    adminEmails: listFromEnv(process.env.FLEETADLC_ADMIN_EMAILS),
-    consoleMembers: listFromEnv(process.env.FLEETADLC_CONSOLE_MEMBERS),
+    adminEmails: listFromEnv(process.env.OPENADLC_ADMIN_EMAILS),
+    consoleMembers: listFromEnv(process.env.OPENADLC_CONSOLE_MEMBERS),
   });
   const router = new Router(identity, undefined, undefined, (method, path, person) => authorize(roles, method, path, person));
   // Owns the tunnel it raises, so the tunnel dies with the bridge rather than
@@ -719,7 +720,7 @@ async function main(): Promise<void> {
     // with none goes back to its seat. This is what moves an install that
     // still has persona names, and what finishes a rename a stopped bridge
     // left half done. After listening, because it is seconds per bot and
-    // `fleetadlc up` waits on /healthz; a lease that arrives meanwhile waits for it.
+    // `openadlc up` waits on /healthz; a lease that arrives meanwhile waits for it.
     void names
       .begin('bridge')
       .then((outcomes) => {

@@ -1,4 +1,4 @@
-import { accessTokenRef, modelAccountRef, refreshTokenRef, webhookSecretRef } from '@fleetadlc/github';
+import { accessTokenRef, modelAccountRef, refreshTokenRef, webhookSecretRef } from '@openadlc/github';
 import type { ArchivedAccount, ArchivedCredential, ArchivedHistory, ArchivedRepository, ArchivedSpendingLimit, BackupContents } from './archive.js';
 import { ATTRIBUTION_KEY_REF, mergedAttributionKeys, signsInByFolder } from './contents.js';
 import { archivedSeat, type RestorePlan } from './plan.js';
@@ -132,7 +132,7 @@ export async function applyRestore(
      * that is set up.
      */
     spending?: 'replace' | 'merge';
-  } = { actor: 'fleetadlc restore' },
+  } = { actor: 'openadlc restore' },
 ): Promise<RestoreOutcome> {
   const writes = new Map<string, string>();
   for (const ref of [...plan.secrets.overwrite, ...plan.secrets.create]) {

@@ -3,7 +3,7 @@
  *
  * One account is one credential. The assignment step points bots at it. The
  * families and the "newest first" ordering match `model-choice.ts`; this file
- * does not import `@fleetadlc/engines`, because that barrel pulls the CLIs into
+ * does not import `@openadlc/engines`, because that barrel pulls the CLIs into
  * the client bundle.
  */
 

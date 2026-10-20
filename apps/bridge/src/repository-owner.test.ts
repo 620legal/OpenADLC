@@ -13,15 +13,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const crew = [
-  { id: 'id-automation', name: 'janedoe-fleetadlc-flow', slot: 'automation', role: 'automation', engine: 'none' },
+  { id: 'id-automation', name: 'janedoe-openadlc-flow', slot: 'automation', role: 'automation', engine: 'none' },
   { id: 'id-intake', name: 'ottoexampleco', slot: 'intake', role: 'intake', engine: 'claude' },
-  { id: 'id-builder', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', engine: 'claude' },
+  { id: 'id-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', engine: 'claude' },
 ];
 
 const store = vi.hoisted(() => {
   class RepoNameTaken extends Error {}
   const managed = [
-    { id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed', color: 'blue', ownerBotId: 'id-builder' },
+    { id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', color: 'blue', ownerBotId: 'id-builder' },
     { id: 'repo-2', name: 'api', fullName: 'janedoe/api', color: 'amber', ownerBotId: 'id-builder' },
   ];
   return { RepoNameTaken, managed };
@@ -36,7 +36,7 @@ const keeper = {
     checkedAt: '2026-09-25T09:00:00.000Z',
     error: null,
     bots: [
-      { bot: 'fleetadlc-atlas-janedoe', login: 'fleetadlc-atlas-janedoe', state: 'in', changed: true, detail: 'invited and accepted just now' },
+      { bot: 'openadlc-atlas-janedoe', login: 'openadlc-atlas-janedoe', state: 'in', changed: true, detail: 'invited and accepted just now' },
       {
         bot: 'ottoexampleco',
         login: 'ottoexampleco',
@@ -58,7 +58,7 @@ const invitations = {
   })),
 };
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -95,12 +95,12 @@ vi.mock('@fleetadlc/db', () => ({
       outcome: 'added',
     })),
     removeRepo: vi.fn(async (name: string) =>
-      name === 'fleetadlc-testbed'
-        ? { id: 'repo-1', name, fullName: 'janedoe/fleetadlc-testbed', color: 'blue', removedAt: '2026-09-24T12:00:00.000Z' }
+      name === 'openadlc-testbed'
+        ? { id: 'repo-1', name, fullName: 'janedoe/openadlc-testbed', color: 'blue', removedAt: '2026-09-24T12:00:00.000Z' }
         : null,
     ),
     updateRepoSettings: vi.fn(async (name: string, patch: Record<string, unknown>) =>
-      name === 'fleetadlc-testbed' ? { id: 'repo-1', name, fullName: 'janedoe/fleetadlc-testbed', color: 'blue', ...patch } : null,
+      name === 'openadlc-testbed' ? { id: 'repo-1', name, fullName: 'janedoe/openadlc-testbed', color: 'blue', ...patch } : null,
     ),
   },
   requests: {},
@@ -110,7 +110,7 @@ vi.mock('@fleetadlc/db', () => ({
   threads: { expireEndedGatesInRepo: vi.fn(async () => []), listOpenGatesInRepo: vi.fn(async () => []) },
 }));
 
-import { audit, repos } from '@fleetadlc/db';
+import { audit, repos } from '@openadlc/db';
 
 let bridge: Server;
 let bridgeUrl: string;
@@ -172,21 +172,21 @@ function send(method: string, path: string, body?: unknown): Promise<Response> {
 
 describe('the repository the walkthrough adds', () => {
   it('is owned by the builder, not by the automation account', async () => {
-    const response = await send('POST', '/v1/onboarding/repository', { fullName: 'janedoe/fleetadlc-testbed' });
+    const response = await send('POST', '/v1/onboarding/repository', { fullName: 'janedoe/openadlc-testbed' });
 
     expect(response.status).toBe(200);
     expect(vi.mocked(repos.addRepo)).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed', ownerBotId: 'id-builder' }),
+      expect.objectContaining({ name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', ownerBotId: 'id-builder' }),
     );
   });
 
   it('is one of several: each is added beside the others, and says the colour it was given', async () => {
-    for (const fullName of ['janedoe/fleetadlc-testbed', 'https://github.com/janedoe/api.git']) {
+    for (const fullName of ['janedoe/openadlc-testbed', 'https://github.com/janedoe/api.git']) {
       const response = await send('POST', '/v1/onboarding/repository', { fullName });
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ outcome: 'added', repo: { color: 'amber' } });
     }
-    expect(vi.mocked(repos.addRepo).mock.calls.map(([input]) => input.fullName)).toEqual(['janedoe/fleetadlc-testbed', 'janedoe/api']);
+    expect(vi.mocked(repos.addRepo).mock.calls.map(([input]) => input.fullName)).toEqual(['janedoe/openadlc-testbed', 'janedoe/api']);
   });
 
   it('is refused, in words, when another repository already goes by its name', async () => {
@@ -236,13 +236,13 @@ describe('the repository the walkthrough adds', () => {
 
 describe('removing a repository from OpenADLC', () => {
   it('marks it removed, and is audited under the person who did it', async () => {
-    const response = await send('POST', '/v1/repos/fleetadlc-testbed/remove');
+    const response = await send('POST', '/v1/repos/openadlc-testbed/remove');
 
     expect(response.status).toBe(200);
-    expect(vi.mocked(repos.removeRepo)).toHaveBeenCalledWith('fleetadlc-testbed');
+    expect(vi.mocked(repos.removeRepo)).toHaveBeenCalledWith('openadlc-testbed');
     expect(await response.json()).toMatchObject({ repo: { removedAt: '2026-09-24T12:00:00.000Z' } });
     expect(vi.mocked(audit)).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'repo.removed', target: 'janedoe/fleetadlc-testbed' }),
+      expect.objectContaining({ action: 'repo.removed', target: 'janedoe/openadlc-testbed' }),
     );
   });
 
@@ -252,7 +252,7 @@ describe('removing a repository from OpenADLC', () => {
   });
 
   it('takes the crew’s access by default and leaves the labels, and says what it could not do', async () => {
-    const response = await send('POST', '/v1/repos/fleetadlc-testbed/remove');
+    const response = await send('POST', '/v1/repos/openadlc-testbed/remove');
 
     const report = (await response.json()) as { options: unknown; notDone: { step: string; why: string }[] };
     expect(report.options).toEqual({ crewAccess: true, labels: false, maybeTheirs: false });
@@ -260,7 +260,7 @@ describe('removing a repository from OpenADLC', () => {
   });
 
   it('does as the review step chose', async () => {
-    const response = await send('POST', '/v1/repos/fleetadlc-testbed/remove', { crewAccess: false, labels: true });
+    const response = await send('POST', '/v1/repos/openadlc-testbed/remove', { crewAccess: false, labels: true });
 
     const report = (await response.json()) as { options: unknown; notDone: { step: string }[] };
     expect(report.options).toEqual({ crewAccess: false, labels: true, maybeTheirs: false });
@@ -268,17 +268,17 @@ describe('removing a repository from OpenADLC', () => {
   });
 
   it('refuses a choice that is not true or false', async () => {
-    const response = await send('POST', '/v1/repos/fleetadlc-testbed/remove', { labels: 'yes' });
+    const response = await send('POST', '/v1/repos/openadlc-testbed/remove', { labels: 'yes' });
     expect(response.status).toBe(400);
     expect(vi.mocked(repos.removeRepo)).not.toHaveBeenCalled();
   });
 
   it('shows what it would do first, without removing anything', async () => {
-    const response = await send('GET', '/v1/repos/fleetadlc-testbed/removal');
+    const response = await send('GET', '/v1/repos/openadlc-testbed/removal');
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      removal: { repository: 'janedoe/fleetadlc-testbed', tasks: [], questions: [], leases: [], crew: { known: false, reason: 'no GitHub in a test' } },
+      removal: { repository: 'janedoe/openadlc-testbed', tasks: [], questions: [], leases: [], crew: { known: false, reason: 'no GitHub in a test' } },
     });
     expect(vi.mocked(repos.removeRepo)).not.toHaveBeenCalled();
   });
@@ -286,15 +286,15 @@ describe('removing a repository from OpenADLC', () => {
 
 describe('a repository’s colour', () => {
   it('is changed from settings, through the same audited route as the rest of them', async () => {
-    const response = await send('PATCH', '/v1/repos/fleetadlc-testbed', { color: 'teal' });
+    const response = await send('PATCH', '/v1/repos/openadlc-testbed', { color: 'teal' });
     expect(response.status).toBe(200);
-    expect(vi.mocked(repos.updateRepoSettings)).toHaveBeenCalledWith('fleetadlc-testbed', { color: 'teal' });
+    expect(vi.mocked(repos.updateRepoSettings)).toHaveBeenCalledWith('openadlc-testbed', { color: 'teal' });
     expect(vi.mocked(audit)).toHaveBeenCalledWith(expect.objectContaining({ action: 'repo.settings', payload: { color: 'teal' } }));
   });
 
   it('is a name from the palette, never a value', async () => {
     for (const color of ['#ff0000', 'var(--color-alarm)', 'chartreuse', 3]) {
-      const response = await send('PATCH', '/v1/repos/fleetadlc-testbed', { color });
+      const response = await send('PATCH', '/v1/repos/openadlc-testbed', { color });
       expect(response.status).toBe(400);
     }
     expect(vi.mocked(repos.updateRepoSettings)).not.toHaveBeenCalled();
@@ -303,15 +303,15 @@ describe('a repository’s colour', () => {
 
 describe('a repository’s default branch', () => {
   it('is set from settings, through the same audited route', async () => {
-    const response = await send('PATCH', '/v1/repos/fleetadlc-testbed', { defaultBranch: 'master' });
+    const response = await send('PATCH', '/v1/repos/openadlc-testbed', { defaultBranch: 'master' });
     expect(response.status).toBe(200);
-    expect(vi.mocked(repos.updateRepoSettings)).toHaveBeenCalledWith('fleetadlc-testbed', { defaultBranch: 'master' });
+    expect(vi.mocked(repos.updateRepoSettings)).toHaveBeenCalledWith('openadlc-testbed', { defaultBranch: 'master' });
     expect(await response.json()).toMatchObject({ repo: { defaultBranch: 'master' } });
   });
 
   it('is a branch name, never empty or anything else', async () => {
     for (const defaultBranch of ['', ' ', 'two words', 5, null]) {
-      const response = await send('PATCH', '/v1/repos/fleetadlc-testbed', { defaultBranch });
+      const response = await send('PATCH', '/v1/repos/openadlc-testbed', { defaultBranch });
       expect(response.status, JSON.stringify(defaultBranch)).toBe(400);
     }
     expect(vi.mocked(repos.updateRepoSettings)).not.toHaveBeenCalled();
@@ -338,7 +338,7 @@ describe('the crew in every repository OpenADLC works in', () => {
   it('is said for each repository settings lists', async () => {
     const body = (await (await send('GET', '/v1/repos')).json()) as { repos: { name: string; access: unknown }[] };
     expect(body.repos.map((repo) => [repo.name, repo.access])).toEqual([
-      ['fleetadlc-testbed', null],
+      ['openadlc-testbed', null],
       ['api', { repository: 'janedoe/api', running: true, trigger: 'added', checkedAt: null, error: null, bots: [] }],
     ]);
   });
@@ -347,11 +347,11 @@ describe('the crew in every repository OpenADLC works in', () => {
     const response = await send('POST', '/v1/invitations/invite', {});
     expect(response.status).toBe(200);
     expect(keeper.ensure.mock.calls.map(([repository, trigger]) => `${repository} ${trigger}`)).toEqual([
-      'janedoe/fleetadlc-testbed invite',
+      'janedoe/openadlc-testbed invite',
       'janedoe/api invite',
     ]);
     const body = (await response.json()) as { results: { bot: string; state: string; detail: string }[]; repositories: { repository: string }[] };
-    expect(body.repositories.map((one) => one.repository)).toEqual(['janedoe/fleetadlc-testbed', 'janedoe/api']);
+    expect(body.repositories.map((one) => one.repository)).toEqual(['janedoe/openadlc-testbed', 'janedoe/api']);
     // One line a bot, the worst of them, naming where.
     expect(body.results.find((one) => one.bot === 'ottoexampleco')).toMatchObject({
       state: 'invited',
@@ -360,8 +360,8 @@ describe('the crew in every repository OpenADLC works in', () => {
   });
 
   it('still invites into just the one a caller names', async () => {
-    await send('POST', '/v1/invitations/invite', { repo: 'janedoe/fleetadlc-testbed' });
-    expect(keeper.ensure.mock.calls.map(([repository]) => repository)).toEqual(['janedoe/fleetadlc-testbed']);
+    await send('POST', '/v1/invitations/invite', { repo: 'janedoe/openadlc-testbed' });
+    expect(keeper.ensure.mock.calls.map(([repository]) => repository)).toEqual(['janedoe/openadlc-testbed']);
   });
 
   it('has what is waiting looked for in every repository', async () => {
@@ -370,14 +370,14 @@ describe('the crew in every repository OpenADLC works in', () => {
       pending: unknown[];
     };
     expect(body.repositories.map((one) => [one.repository, one.pending.length])).toEqual([
-      ['janedoe/fleetadlc-testbed', 0],
+      ['janedoe/openadlc-testbed', 0],
       ['janedoe/api', 1],
     ]);
     expect(body.pending).toHaveLength(1);
   });
 
   it('is forgotten for a repository removed from OpenADLC', async () => {
-    await send('POST', '/v1/repos/fleetadlc-testbed/remove');
-    expect(keeper.forget).toHaveBeenCalledWith('janedoe/fleetadlc-testbed');
+    await send('POST', '/v1/repos/openadlc-testbed/remove');
+    expect(keeper.forget).toHaveBeenCalledWith('janedoe/openadlc-testbed');
   });
 });

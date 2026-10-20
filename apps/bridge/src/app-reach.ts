@@ -1,5 +1,5 @@
-import { appInstallations, appJwt, type AppApi, type AppCredentials, type AppInstallation } from '@fleetadlc/github';
-import { appAdvancedUrl, appInstallUrl, appSettingsUrl, installationSettingsUrl, sameLogin } from '@fleetadlc/shared';
+import { appInstallations, appJwt, type AppApi, type AppCredentials, type AppInstallation } from '@openadlc/github';
+import { appAdvancedUrl, appInstallUrl, appSettingsUrl, installationSettingsUrl, sameLogin } from '@openadlc/shared';
 import { statusOf } from './health/checks/app.js';
 import { HttpFailure, type Router } from './router.js';
 

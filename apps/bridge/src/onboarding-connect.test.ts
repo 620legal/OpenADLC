@@ -25,7 +25,7 @@ const world = vi.hoisted(() => ({
   movedNs: new Map<string, string>(),
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -108,8 +108,8 @@ vi.mock('@fleetadlc/db', () => ({
   settings: { allSettings: vi.fn(async () => ({ githubClientId: 'Iv1.test' })) },
 }));
 
-vi.mock('@fleetadlc/github', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@fleetadlc/github')>();
+vi.mock('@openadlc/github', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@openadlc/github')>();
   return {
     ...actual,
     requestDeviceCode: vi.fn(async () => ({
@@ -149,8 +149,8 @@ vi.mock('./github-accounts.js', () => ({
   lookUpAccount: vi.fn(async () => ({ exact: null })),
 }));
 
-import { accessTokenRef, GitHubApiError, pollForUserToken, refreshTokenRef, setSecretStore, signingKeyRef, type SecretStore, type UserToken } from '@fleetadlc/github';
-import { otherGroupRefusal } from '@fleetadlc/shared';
+import { accessTokenRef, GitHubApiError, pollForUserToken, refreshTokenRef, setSecretStore, signingKeyRef, type SecretStore, type UserToken } from '@openadlc/github';
+import { otherGroupRefusal } from '@openadlc/shared';
 import type { BotNames } from './bot-names.js';
 import { inEvery, Onboarding } from './onboarding.js';
 import { askAsTheApp, forgetRepoAccess } from './people.js';
@@ -228,15 +228,15 @@ beforeEach(() => {
     { id: 'b-se', name: 'system-engineer', slot: 'system-engineer', role: 'spec', githubLogin: null, displayName: 'System engineer' },
     // An earlier install's row: it names an account and holds nothing for it.
     { id: 'b-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'noraexampleco', displayName: 'Lead reviewer' },
-    { id: 'b-builder', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'fleetadlc-atlas-janedoe', displayName: 'Builder' },
+    { id: 'b-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'openadlc-atlas-janedoe', displayName: 'Builder' },
   ];
-  world.credentials.set('b-builder', { githubLogin: 'fleetadlc-atlas-janedoe', status: 'active' });
+  world.credentials.set('b-builder', { githubLogin: 'openadlc-atlas-janedoe', status: 'active' });
 });
 
 describe('connecting a bot under its seat', () => {
   it('refuses a bot nobody has as not found, and the app not made yet as a step still to do, not as the bridge failing', async () => {
     await expect(onboarding().startAuthorization('nobody', 'ada')).rejects.toMatchObject({ status: 404, message: 'unknown bot nobody' });
-    const { settings } = await import('@fleetadlc/db');
+    const { settings } = await import('@openadlc/db');
     vi.mocked(settings.allSettings).mockResolvedValueOnce({});
     await expect(onboarding().startAuthorization('system-engineer', 'ada')).rejects.toMatchObject({
       status: 400,
@@ -292,18 +292,18 @@ describe('connecting a bot under its seat', () => {
 
   it('joins a seat to an account another seat is connected as, rather than refusing it', async () => {
     // One GitHub account for several seats is a crew on a shared account.
-    world.approvedAs = 'FleetADLC-Atlas-Janedoe';
+    world.approvedAs = 'OpenADLC-Atlas-Janedoe';
     const flow = onboarding();
 
     await flow.startAuthorization('system-engineer', 'ada');
     const state = await finished(flow, 'system-engineer');
 
-    expect(state).toMatchObject({ state: 'connected', login: 'FleetADLC-Atlas-Janedoe' });
+    expect(state).toMatchObject({ state: 'connected', login: 'OpenADLC-Atlas-Janedoe' });
     // The newer sign-in is the account's, filed once, under the account's name.
-    expect(secrets.get(refreshTokenRef('fleetadlc-atlas-janedoe'))).toBe('ghr_new');
+    expect(secrets.get(refreshTokenRef('openadlc-atlas-janedoe'))).toBe('ghr_new');
     expect(secrets.has(refreshTokenRef('system-engineer'))).toBe(false);
     // The seat is on the account, recorded as connected, and not renamed after it.
-    expect(world.crew.find((bot) => bot.id === 'b-se')?.githubLogin?.toLowerCase()).toBe('fleetadlc-atlas-janedoe');
+    expect(world.crew.find((bot) => bot.id === 'b-se')?.githubLogin?.toLowerCase()).toBe('openadlc-atlas-janedoe');
     expect(world.credentials.get('b-se')?.status).toBe('active');
     expect(names.rename).not.toHaveBeenCalled();
     expect(world.audits).toContainEqual(expect.objectContaining({ action: 'bot.account_shared', target: 'system-engineer' }));
@@ -312,40 +312,40 @@ describe('connecting a bot under its seat', () => {
   it('writes the shared account’s new sign-in under the broker’s lock, and records the seats already on it', async () => {
     // Written straight to the store, the broker went on serving the dead
     // sign-in's cached token to every seat on the account.
-    world.approvedAs = 'FleetADLC-Atlas-Janedoe';
-    const { credentials } = await import('@fleetadlc/db');
+    world.approvedAs = 'OpenADLC-Atlas-Janedoe';
+    const { credentials } = await import('@openadlc/db');
     vi.mocked(credentials.recordAuthorization).mockClear();
     const flow = onboarding();
 
     await flow.startAuthorization('system-engineer', 'ada');
     await finished(flow, 'system-engineer');
 
-    expect(held).toContainEqual({ names: ['fleetadlc-atlas-janedoe'], wrote: [refreshTokenRef('fleetadlc-atlas-janedoe')] });
-    expect(vi.mocked(credentials.recordAuthorization)).toHaveBeenCalledWith(expect.objectContaining({ botId: 'b-builder', githubLogin: 'FleetADLC-Atlas-Janedoe' }));
+    expect(held).toContainEqual({ names: ['openadlc-atlas-janedoe'], wrote: [refreshTokenRef('openadlc-atlas-janedoe')] });
+    expect(vi.mocked(credentials.recordAuthorization)).toHaveBeenCalledWith(expect.objectContaining({ botId: 'b-builder', githubLogin: 'OpenADLC-Atlas-Janedoe' }));
   });
 
   it('drops a stale refresh token when the new sign-in is a token that does not expire', async () => {
     // The broker prefers a refresh token, so the account stayed broken however often it was reconnected.
-    world.approvedAs = 'FleetADLC-Atlas-Janedoe';
-    secrets.set(refreshTokenRef('fleetadlc-atlas-janedoe'), 'ghr_revoked');
+    world.approvedAs = 'OpenADLC-Atlas-Janedoe';
+    secrets.set(refreshTokenRef('openadlc-atlas-janedoe'), 'ghr_revoked');
     vi.mocked(pollForUserToken).mockResolvedValueOnce({ accessToken: 'ghu_static', refreshToken: null, expiresAt: null, refreshExpiresAt: null, scopes: [], tokenType: 'bearer' } as never);
     const flow = onboarding();
 
     await flow.startAuthorization('system-engineer', 'ada');
     await finished(flow, 'system-engineer');
 
-    expect(secrets.has(refreshTokenRef('fleetadlc-atlas-janedoe'))).toBe(false);
-    expect(secrets.get(accessTokenRef('fleetadlc-atlas-janedoe'))).toBe('ghu_static');
+    expect(secrets.has(refreshTokenRef('openadlc-atlas-janedoe'))).toBe(false);
+    expect(secrets.get(accessTokenRef('openadlc-atlas-janedoe'))).toBe('ghu_static');
   });
 
   it('puts the other seats of its group on one seat’s account when asked to, and never a reviewer on the crew’s', async () => {
-    secrets.set(refreshTokenRef('fleetadlc-atlas-janedoe'), 'ghr_builder');
+    secrets.set(refreshTokenRef('openadlc-atlas-janedoe'), 'ghr_builder');
     const flow = onboarding();
     const result = await flow.shareAccount({ from: 'builder', actor: 'ada' });
 
-    expect(result.login).toBe('fleetadlc-atlas-janedoe');
+    expect(result.login).toBe('openadlc-atlas-janedoe');
     expect(result.shared).toEqual(['system-engineer']);
-    expect(world.crew.find((bot) => bot.id === 'b-se')?.githubLogin).toBe('fleetadlc-atlas-janedoe');
+    expect(world.crew.find((bot) => bot.id === 'b-se')?.githubLogin).toBe('openadlc-atlas-janedoe');
     expect(world.credentials.get('b-se')?.status).toBe('active');
     // GitHub won't let the account that opened a pull request approve it.
     expect(world.crew.find((bot) => bot.id === 'b-lead')?.githubLogin).toBe('noraexampleco');
@@ -354,7 +354,7 @@ describe('connecting a bot under its seat', () => {
   });
 
   it('refuses when asked to put a reviewer on the crew’s account', async () => {
-    secrets.set(refreshTokenRef('fleetadlc-atlas-janedoe'), 'ghr_builder');
+    secrets.set(refreshTokenRef('openadlc-atlas-janedoe'), 'ghr_builder');
     await expect(onboarding().shareAccount({ from: 'builder', to: ['lead-reviewer'], actor: 'ada' })).rejects.toThrow(
       /reviewers need an account of their own/,
     );
@@ -394,12 +394,12 @@ describe('connecting a bot under its seat', () => {
 
 describe('a connect GitHub does not say the account of', () => {
   it('stores nothing, records nothing, invites nobody, and says to connect again', async () => {
-    // Filed under the guessed `fleetadlc-<slot>`, which anyone can register,
+    // Filed under the guessed `openadlc-<slot>`, which anyone can register,
     // the token skipped the reviewer check and that account was invited in.
     world.approvedAs = new Error('GitHub answered 502');
     world.repos = [{ name: 'api', fullName: 'janedoe/api' }];
     const ensure = vi.fn();
-    const { bots, credentials } = await import('@fleetadlc/db');
+    const { bots, credentials } = await import('@openadlc/db');
     vi.mocked(bots.setGithubLogin).mockClear();
     vi.mocked(credentials.recordAuthorization).mockClear();
     const flow = onboarding();
@@ -417,7 +417,7 @@ describe('a connect GitHub does not say the account of', () => {
   });
 
   it('still refuses a reviewer seat GitHub says approved as the crew’s account', async () => {
-    world.approvedAs = 'fleetadlc-atlas-janedoe';
+    world.approvedAs = 'openadlc-atlas-janedoe';
     const flow = onboarding();
 
     await flow.startAuthorization('lead-reviewer', 'ada');
@@ -448,7 +448,7 @@ describe('connecting a seat as a person, or as an account that administers a rep
   }
 
   async function refused(flow: Onboarding) {
-    const { bots, credentials } = await import('@fleetadlc/db');
+    const { bots, credentials } = await import('@openadlc/db');
     vi.mocked(bots.setGithubLogin).mockClear();
     vi.mocked(credentials.recordAuthorization).mockClear();
     await flow.startAuthorization('system-engineer', 'ada');
@@ -471,7 +471,7 @@ describe('connecting a seat as a person, or as an account that administers a rep
     expect(await refused(onboarding(['janedoe']))).toMatchObject({
       state: 'failed',
       error:
-        'JaneDoe is one of this install’s people (FLEETADLC_HUMANS), so no bot can sign in as it. ' +
+        'JaneDoe is one of this install’s people (OPENADLC_HUMANS), so no bot can sign in as it. ' +
         'Sign in to GitHub as the bot’s own account (a private window helps) and enter a new code.',
     });
   });
@@ -507,20 +507,20 @@ describe('the crew as the walkthrough lists it', () => {
     expect(view.bots.map(({ bot, slot, roleLabel, connected }) => ({ bot, slot, roleLabel, connected }))).toEqual([
       { bot: 'system-engineer', slot: 'system-engineer', roleLabel: 'system engineer', connected: false },
       { bot: 'lead-reviewer', slot: 'lead-reviewer', roleLabel: 'lead reviewer', connected: false },
-      { bot: 'fleetadlc-atlas-janedoe', slot: 'builder', roleLabel: 'builder', connected: true },
+      { bot: 'openadlc-atlas-janedoe', slot: 'builder', roleLabel: 'builder', connected: true },
     ]);
-    // Built from the bot's current login instead of its seat, it would be `fleetadlc-fleetadlc-atlas-janedoe`.
+    // Built from the bot's current login instead of its seat, it would be `openadlc-openadlc-atlas-janedoe`.
     const builder = view.bots.find((entry) => entry.slot === 'builder');
-    expect(builder?.suggestedLogin).toBe('fleetadlc-builder');
-    expect(builder?.suggestedEmail).toBe('owner+fleetadlc-builder@example.test');
-    expect(builder?.login).toBe('fleetadlc-atlas-janedoe');
+    expect(builder?.suggestedLogin).toBe('openadlc-builder');
+    expect(builder?.suggestedEmail).toBe('owner+openadlc-builder@example.test');
+    expect(builder?.login).toBe('openadlc-atlas-janedoe');
   });
 });
 
 describe('a bot that connects', () => {
   it('is let into every repository OpenADLC works in, not only the first, under the name it now has', async () => {
     world.repos = [
-      { name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' },
+      { name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' },
       { name: 'api', fullName: 'janedoe/api' },
     ];
     const ensure = vi.fn(async (repository: string, _trigger: string, options: { onlyBot?: string }) => ({
@@ -539,12 +539,12 @@ describe('a bot that connects', () => {
     await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(2));
 
     expect(ensure.mock.calls.map(([repository, trigger, options]) => `${repository} ${trigger} ${options.onlyBot}`)).toEqual([
-      'janedoe/fleetadlc-testbed connected noraexampleco',
+      'janedoe/openadlc-testbed connected noraexampleco',
       'janedoe/api connected noraexampleco',
     ]);
     await vi.waitFor(() =>
       expect(world.audits.filter((entry) => entry.action === 'onboarding.access_in').map((entry) => entry.payload?.repository)).toEqual([
-        'janedoe/fleetadlc-testbed',
+        'janedoe/openadlc-testbed',
         'janedoe/api',
       ]),
     );
@@ -554,11 +554,11 @@ describe('a bot that connects', () => {
 describe('whether a bot is in the repositories', () => {
   it('is said for each one, and is yes only when it is in all of them', async () => {
     world.repos = [
-      { name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' },
+      { name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' },
       { name: 'api', fullName: 'janedoe/api' },
     ];
     const view = await onboarding().view('owner@example.test');
-    expect(view.bots[0]?.access.map((one) => one.repository)).toEqual(['janedoe/fleetadlc-testbed', 'janedoe/api']);
+    expect(view.bots[0]?.access.map((one) => one.repository)).toEqual(['janedoe/openadlc-testbed', 'janedoe/api']);
 
     expect(inEvery([{ inRepository: true }, { inRepository: true }])).toBe(true);
     expect(inEvery([{ inRepository: true }, { inRepository: false }])).toBe(false);
@@ -607,7 +607,7 @@ describe('a working install while GitHub refuses anonymous lookups', () => {
     world.crew = [
       { id: 'b-auto', name: 'automation', slot: 'automation', role: 'automation', githubLogin: 'automationexampleco', displayName: 'Automation' },
       { id: 'b-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'noraexampleco', displayName: 'Lead reviewer' },
-      { id: 'b-builder', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'fleetadlc-atlas-janedoe', displayName: 'Builder' },
+      { id: 'b-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'openadlc-atlas-janedoe', displayName: 'Builder' },
     ];
     for (const bot of world.crew) world.credentials.set(bot.id, { githubLogin: bot.githubLogin!, status: 'active' });
   });
@@ -659,7 +659,7 @@ describe('a working install while GitHub refuses anonymous lookups', () => {
     expect(view.bots.map((bot) => `${bot.bot} ${bot.inRepository}`)).toEqual([
       'automation false',
       'lead-reviewer null',
-      'fleetadlc-atlas-janedoe null',
+      'openadlc-atlas-janedoe null',
     ]);
   });
 });
@@ -673,7 +673,7 @@ describe('the walkthrough’s steps, from the health checks', () => {
     severity: 'blocking',
     title: 'The OpenADLC app does not have “SSH signing keys”',
     detail: 'Add it on the app’s permissions page.',
-    action: { label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/fleetadlc-janedoe/permissions' },
+    action: { label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/openadlc-janedoe/permissions' },
     facts: {},
     waitingFor: [],
     failingSince: '2026-09-25T11:00:00.000Z',
@@ -710,7 +710,7 @@ describe('the walkthrough’s steps, from the health checks', () => {
           title: 'The OpenADLC app does not have “SSH signing keys”',
           detail: 'Add it on the app’s permissions page.',
           severity: 'blocking',
-          action: { label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/fleetadlc-janedoe/permissions' },
+          action: { label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/openadlc-janedoe/permissions' },
           waiting: false,
         },
       ],
@@ -739,7 +739,7 @@ describe('the walkthrough’s steps, from the health checks', () => {
 });
 
 describe('connecting a seat with a sign-in the CLI got', () => {
-  // `fleetadlc auth login` did this itself and refused any account another
+  // `openadlc auth login` did this itself and refused any account another
   // seat held, so the two-account crew the docs recommend could not connect
   // from it; it hands the token to `connect` now, which the console uses too.
   const token = (refresh: string): UserToken => ({
@@ -752,26 +752,26 @@ describe('connecting a seat with a sign-in the CLI got', () => {
   });
 
   it('puts a second crew seat on the account the first holds, and files the sign-in once under that account', async () => {
-    world.approvedAs = 'fleetadlc-atlas-janedoe';
-    const outcome = await onboarding().connect({ botId: 'b-se', token: token('ghr_cli'), actor: 'fleetadlc auth login' });
+    world.approvedAs = 'openadlc-atlas-janedoe';
+    const outcome = await onboarding().connect({ botId: 'b-se', token: token('ghr_cli'), actor: 'openadlc auth login' });
 
-    expect(outcome).toMatchObject({ login: 'fleetadlc-atlas-janedoe', bot: 'system-engineer', joined: 'fleetadlc-atlas-janedoe' });
-    const { identities } = await import('@fleetadlc/db');
+    expect(outcome).toMatchObject({ login: 'openadlc-atlas-janedoe', bot: 'system-engineer', joined: 'openadlc-atlas-janedoe' });
+    const { identities } = await import('@openadlc/db');
     const builder = await identities.identityOfBot('b-builder');
     const engineer = await identities.identityOfBot('b-se');
     expect(engineer?.id).toBe(builder?.id);
-    expect(engineer?.secretNs).toBe('fleetadlc-atlas-janedoe');
-    expect([...secrets].filter(([, value]) => value === 'ghr_cli').map(([ref]) => ref)).toEqual([refreshTokenRef('fleetadlc-atlas-janedoe')]);
+    expect(engineer?.secretNs).toBe('openadlc-atlas-janedoe');
+    expect([...secrets].filter(([, value]) => value === 'ghr_cli').map(([ref]) => ref)).toEqual([refreshTokenRef('openadlc-atlas-janedoe')]);
   });
 
   it('refuses a reviewer seat on the crew’s account with the console’s words, and stores nothing', async () => {
-    world.approvedAs = 'fleetadlc-atlas-janedoe';
+    world.approvedAs = 'openadlc-atlas-janedoe';
     const lead = world.crew.find((bot) => bot.id === 'b-lead')!;
     const builder = world.crew.find((bot) => bot.id === 'b-builder')!;
 
-    await expect(onboarding().connect({ botId: 'b-lead', token: token('ghr_cli'), actor: 'fleetadlc auth login' })).rejects.toMatchObject({
+    await expect(onboarding().connect({ botId: 'b-lead', token: token('ghr_cli'), actor: 'openadlc auth login' })).rejects.toMatchObject({
       status: 409,
-      message: otherGroupRefusal('fleetadlc-atlas-janedoe', lead as never, builder as never),
+      message: otherGroupRefusal('openadlc-atlas-janedoe', lead as never, builder as never),
     });
     expect(secrets.size).toBe(0);
   });
@@ -779,18 +779,18 @@ describe('connecting a seat with a sign-in the CLI got', () => {
   it('moves a shared account’s sign-in out from under a seat that leaves it, so the seats still on it keep it', async () => {
     // The builder connected first, so the account's sign-in is filed under its
     // name. Reconnected as another account, it used to write over that.
-    secrets.set(refreshTokenRef('fleetadlc-atlas-janedoe'), 'ghr_shared');
-    world.crew.find((bot) => bot.id === 'b-se')!.githubLogin = 'fleetadlc-atlas-janedoe';
-    world.credentials.set('b-se', { githubLogin: 'fleetadlc-atlas-janedoe', status: 'active' });
+    secrets.set(refreshTokenRef('openadlc-atlas-janedoe'), 'ghr_shared');
+    world.crew.find((bot) => bot.id === 'b-se')!.githubLogin = 'openadlc-atlas-janedoe';
+    world.credentials.set('b-se', { githubLogin: 'openadlc-atlas-janedoe', status: 'active' });
     world.approvedAs = 'janedoe-builds';
 
-    const outcome = await onboarding().connect({ botId: 'b-builder', token: token('ghr_new_account'), actor: 'fleetadlc auth login' });
+    const outcome = await onboarding().connect({ botId: 'b-builder', token: token('ghr_new_account'), actor: 'openadlc auth login' });
 
     expect(outcome).toMatchObject({ login: 'janedoe-builds', bot: 'janedoe-builds' });
-    expect(secrets.get(refreshTokenRef('account_fleetadlc-atlas-janedoe'))).toBe('ghr_shared');
-    const { identities } = await import('@fleetadlc/db');
+    expect(secrets.get(refreshTokenRef('account_openadlc-atlas-janedoe'))).toBe('ghr_shared');
+    const { identities } = await import('@openadlc/db');
     const engineer = await identities.identityOfBot('b-se');
-    expect(engineer?.secretNs).toBe('account_fleetadlc-atlas-janedoe');
+    expect(engineer?.secretNs).toBe('account_openadlc-atlas-janedoe');
     expect(secrets.get(refreshTokenRef(engineer!.secretNs))).toBe('ghr_shared');
     expect(secrets.get(refreshTokenRef('janedoe-builds'))).toBe('ghr_new_account');
   });

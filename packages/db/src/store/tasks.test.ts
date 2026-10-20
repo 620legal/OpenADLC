@@ -39,7 +39,7 @@ const ROW = {
   repo_id: 'repo-1',
   kind: 'review',
   subject_type: 'pr',
-  subject_ref: 'fleetadlc#31',
+  subject_ref: 'openadlc#31',
   lease_id: null,
   state: 'running',
   skill: 'pr-review',
@@ -201,12 +201,12 @@ describe('the tasks on a card', () => {
   it('are every kind on any of its subjects, with when each was opened', async () => {
     vi.mocked(query).mockResolvedValueOnce([ROW]);
 
-    const [task] = await listTasksOnSubjects(['fleetadlc#12', 'fleetadlc#31']);
+    const [task] = await listTasksOnSubjects(['openadlc#12', 'openadlc#31']);
 
     const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
     expect(String(sql)).toMatch(/subject_ref = any\(\$1\)/);
     expect(String(sql)).not.toMatch(/kind =/);
-    expect(params).toEqual([['fleetadlc#12', 'fleetadlc#31']]);
+    expect(params).toEqual([['openadlc#12', 'openadlc#31']]);
     expect(task).toMatchObject({ id: 'task-1', costUsd: 0.38, createdAt: '2026-09-24T11:53:00.000Z' });
   });
 
@@ -230,13 +230,13 @@ describe('the tasks "needs you" reads', () => {
 
   it('read a stopped review loop from its event, with what it carried', async () => {
     vi.mocked(query).mockResolvedValueOnce([
-      { id: '7', at: new Date('2026-09-24T11:20:00.000Z'), payload: { repo: 'fleetadlc', pr: 31 } },
+      { id: '7', at: new Date('2026-09-24T11:20:00.000Z'), payload: { repo: 'openadlc', pr: 31 } },
     ]);
 
     const events = await listEventsOfType('review.stalled', new Date('2026-09-17T00:00:00.000Z'));
 
     expect(vi.mocked(query).mock.calls[0]?.[1]).toEqual(['review.stalled', new Date('2026-09-17T00:00:00.000Z')]);
-    expect(events).toEqual([{ id: 7, at: '2026-09-24T11:20:00.000Z', payload: { repo: 'fleetadlc', pr: 31 } }]);
+    expect(events).toEqual([{ id: 7, at: '2026-09-24T11:20:00.000Z', payload: { repo: 'openadlc', pr: 31 } }]);
   });
 });
 
@@ -308,7 +308,7 @@ describe('the one automatic retry a task gets', () => {
   it('is read with the task, so a caller can tell a retried one', async () => {
     vi.mocked(query).mockResolvedValueOnce([{ ...ROW, auto_retried_at: new Date('2026-09-25T00:00:00.000Z') }]);
 
-    const [task] = await listTasksOnSubjects(['fleetadlc#31']);
+    const [task] = await listTasksOnSubjects(['openadlc#31']);
 
     expect(task?.autoRetriedAt).toBe('2026-09-25T00:00:00.000Z');
   });

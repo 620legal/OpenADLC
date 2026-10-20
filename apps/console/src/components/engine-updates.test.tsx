@@ -39,7 +39,7 @@ function updated(partial: Partial<EngineUpdateResult> = {}): EngineUpdateResult 
         model: 'claude-opus-5-5',
         configured: ['newest:opus'],
         account: { id: 'a', label: 'Anthropic Max', provider: 'anthropic', kind: 'subscription' },
-        bots: ['fleetadlc-atlas-janedoe'],
+        bots: ['openadlc-atlas-janedoe'],
         detail: 'claude-opus-5-5 (newest:opus) on Anthropic Max: answered: OK',
       },
       {
@@ -49,7 +49,7 @@ function updated(partial: Partial<EngineUpdateResult> = {}): EngineUpdateResult 
         model: 'gpt-5.5-codex',
         configured: ['newest:codex'],
         account: { id: 'b', label: 'OpenAI API key', provider: 'openai', kind: 'key' },
-        bots: ['fleetadlc-cipher-janedoe'],
+        bots: ['openadlc-cipher-janedoe'],
         detail: 'gpt-5.5-codex (newest:codex) on OpenAI API key: answered: OK',
       },
     ],
@@ -57,8 +57,8 @@ function updated(partial: Partial<EngineUpdateResult> = {}): EngineUpdateResult 
     // 18:02 on Sunday in Jerusalem.
     startedAt: '2026-09-27T15:00:30.000Z',
     finishedAt: '2026-09-27T15:02:00.000Z',
-    refreshed: ['fleetadlc-atlas-janedoe'],
-    deferred: ['fleetadlc-cipher-janedoe'],
+    refreshed: ['openadlc-atlas-janedoe'],
+    deferred: ['openadlc-cipher-janedoe'],
     ...partial,
   };
 }
@@ -71,7 +71,7 @@ function view(partial: Partial<EngineUpdatesView> = {}): EngineUpdatesView {
     hostd: { reachable: true, detail: '' },
     applicable: true,
     reason: '',
-    image: 'fleetadlc-bot:latest',
+    image: 'openadlc-bot:latest',
     inUse: { ...PINS, [CLAUDE]: '2.1.290' },
     inUseSource: 'label',
     previous: PINS,
@@ -339,8 +339,8 @@ describe('the engine updates panel', () => {
 describe('the panel when hostd does not answer', () => {
   it('says what to run, and hostd’s own reason when there is one', () => {
     const html = render(view({ hostd: { reachable: false, detail: 'connect ECONNREFUSED 127.0.0.1:47302' } })).replace(/<!-- -->/g, '');
-    expect(html).toContain('the versions in use are not known. Run <code class="font-mono">fleetadlc doctor</code>, or');
-    expect(html).toContain('<code class="font-mono">fleetadlc up</code> if it has stopped.');
+    expect(html).toContain('the versions in use are not known. Run <code class="font-mono">openadlc doctor</code>, or');
+    expect(html).toContain('<code class="font-mono">openadlc up</code> if it has stopped.');
     expect(html).toContain('connect ECONNREFUSED 127.0.0.1:47302');
   });
 });

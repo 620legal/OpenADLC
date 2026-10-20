@@ -7,7 +7,7 @@
  * a card on the board with the exact thing to do and a button to where it is
  * done; it clears itself when the check passes; a lasting blocking one is sent
  * through the notifications; the walkthrough marks a step done from the same
- * check; and `fleetadlc doctor` prints the same checks in a terminal.
+ * check; and `openadlc doctor` prints the same checks in a terminal.
  *
  * These are the shapes all of those read. The checks themselves are the
  * bridge's, in `apps/bridge/src/health/`.

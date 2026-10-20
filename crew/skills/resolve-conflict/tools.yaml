@@ -4,7 +4,7 @@
 # writing them. docs/security.md says, engine by engine, what holds.
 
 allow:
-  shell: [make, pnpm, npm, uv, python, python3, node, git, gh, rg, jq, cat, ls, sed, fleetadlc-ci, fleetadlc-install]
+  shell: [make, pnpm, npm, uv, python, python3, node, git, gh, rg, jq, cat, ls, sed, openadlc-ci, openadlc-install]
   git:
     push_branch_prefix: "agent/"
     force_push: false
@@ -12,7 +12,7 @@ allow:
   files:
     write_within:
       - "<declared_paths>"
-      - ".fleetadlc-scratch/**"
+      - ".openadlc-scratch/**"
 
 deny:
   shell: [curl, wget, ssh, docker, sudo, kubectl, terraform]

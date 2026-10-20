@@ -43,7 +43,7 @@ describe('the logins a configuration file names', () => {
   it('reads only comments in a workflow or a Makefile, whose code is full of @', () => {
     const makefile = 'setup:\n\t@echo setting up # ask @janedoe\n\tnpx foo@latest "$$@"\n';
     expect(loginsNamedIn('Makefile', makefile)).toEqual([{ login: 'janedoe', file: 'Makefile', line: 2, as: 'mention' }]);
-    const workflow = 'steps:\n  - uses: actions/checkout@v4\n  - run: pnpm add @fleetadlc/shared\n';
+    const workflow = 'steps:\n  - uses: actions/checkout@v4\n  - run: pnpm add @openadlc/shared\n';
     expect(loginsNamedIn('.github/workflows/ci.yml', workflow)).toEqual([]);
   });
 

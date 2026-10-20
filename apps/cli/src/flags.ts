@@ -1,9 +1,9 @@
 /**
  * The flags each command reads. Anything else is refused rather than ignored.
  *
- * A flag the CLI did not read did nothing and said nothing. `fleetadlc up --demo`,
+ * A flag the CLI did not read did nothing and said nothing. `openadlc up --demo`,
  * still in the contributing guide after demo mode went, started whatever real
- * install `~/.fleetadlc` pointed at, and `--skip-seed` for `--no-seed` ran the seed
+ * install `~/.openadlc` pointed at, and `--skip-seed` for `--no-seed` ran the seed
  * it was meant to skip.
  */
 export const FLAGS: Readonly<Record<string, readonly string[]>> = {
@@ -53,7 +53,7 @@ export const FLAGS: Readonly<Record<string, readonly string[]>> = {
   config: [],
 };
 
-/** What a command runs given no subcommand: `fleetadlc auth` is `auth status`. */
+/** What a command runs given no subcommand: `openadlc auth` is `auth status`. */
 const DEFAULT_SUBCOMMAND: Readonly<Record<string, string>> = { auth: 'status' };
 
 /**
@@ -73,7 +73,7 @@ function entry(command: string, first: string | undefined): string | undefined {
  * does not know is left to say so itself, and so is help.
  *
  * A single dash is a flag too: no command takes one, and `-x` passed over as
- * if it were a path or a name let `fleetadlc config -x` print and succeed.
+ * if it were a path or a name let `openadlc config -x` print and succeed.
  */
 export function unknownFlag(command: string | undefined, args: readonly string[]): string | null {
   const name = command ? entry(command, args[0]) : undefined;
@@ -95,7 +95,7 @@ export function wantsHelp(args: readonly string[]): boolean {
 
 /**
  * Commands that take no argument but their flags, none of which takes a value.
- * One given anything else was run all the same: `fleetadlc down stop-nothing`
+ * One given anything else was run all the same: `openadlc down stop-nothing`
  * stopped the stack.
  */
 const NO_ARGUMENTS = new Set(['up', 'down', 'status', 'console-link', 'doctor', 'seed', 'config']);
@@ -114,7 +114,7 @@ export function refusal(command: string, argument: string, subcommand?: string):
   const name = entry(command, subcommand) ?? command;
   const known = FLAGS[name] ?? [];
   const takes = known.length > 0 ? `it takes ${known.map((flag) => `--${flag}`).join(', ')}` : 'it takes no flags';
-  return `fleetadlc ${name} does not take ${argument}; ${takes}`;
+  return `openadlc ${name} does not take ${argument}; ${takes}`;
 }
 
 /**

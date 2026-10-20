@@ -8,7 +8,7 @@
 -- A pair that is already here keeps its ids: tasks, threads, gates and
 -- attachments name a request by its subject, so a new id would orphan them.
 -- Every row but the oldest of each pair is marked instead and left out of the
--- index, so building it cannot fail `fleetadlc up`. The oldest stays in, so a
+-- index, so building it cannot fail `openadlc up`. The oldest stays in, so a
 -- new request that collides with either is still refused.
 alter table requests add column if not exists id8_shared boolean not null default false;
 

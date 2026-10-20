@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { GitHubApiError } from '@fleetadlc/github';
+import { GitHubApiError } from '@openadlc/github';
 
 /**
  * What reconcile writes to the read model.
@@ -17,7 +17,7 @@ import { GitHubApiError } from '@fleetadlc/github';
 
 const upserts: Record<string, unknown>[] = [];
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -37,7 +37,7 @@ vi.mock('@fleetadlc/db', () => ({
   audit: vi.fn(async () => undefined),
   bots: {
     listBots: vi.fn(async () => []),
-    getBotById: vi.fn(async (id: string) => (id === 'bot-builder' ? { id, name: 'fleetadlc-atlas-janedoe' } : null)),
+    getBotById: vi.fn(async (id: string) => (id === 'bot-builder' ? { id, name: 'openadlc-atlas-janedoe' } : null)),
   },
   issues: {
     listIssues: vi.fn(async () => CACHED),
@@ -59,7 +59,7 @@ vi.mock('@fleetadlc/db', () => ({
     getLease: vi.fn(async (id: string) => LEASES_BY_ID.get(id) ?? null),
   },
   hosts: { listHosts: vi.fn(async () => HOSTS) },
-  repos: { listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'fleetadlc', fullName: 'janedoe/FleetADLC' }]) },
+  repos: { listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'openadlc', fullName: 'janedoe/OpenADLC' }]) },
   tasks: {
     listTasks: vi.fn(async () => RUNNING),
     // Fails a running task, and finds nothing to fail once it has ended.
@@ -69,8 +69,8 @@ vi.mock('@fleetadlc/db', () => ({
     failUnstarted: vi.fn(async (id: string) => UNSTARTED.find((task) => task.id === id) ?? null),
     // The builder's build of issue #11, finished.
     listTasksForSubjects: vi.fn(async (kind: string, refs: readonly string[]) =>
-      kind === 'implement' && refs.includes('fleetadlc#11')
-        ? [{ id: 'task-build', botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc#11', state: 'done', createdAt: '2026-09-28T23:00:00Z' }]
+      kind === 'implement' && refs.includes('openadlc#11')
+        ? [{ id: 'task-build', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc#11', state: 'done', createdAt: '2026-09-28T23:00:00Z' }]
         : [],
     ),
   },
@@ -160,7 +160,7 @@ function issue(over: Partial<(typeof LIVE)[number]> = {}): (typeof LIVE)[number]
     title: 'Let a task write the test beside the code it changed',
     body: BODY,
     labels: ['adlc:build', 'priority:p2', 'area:infra', 'do:ai', 'start:now'],
-    htmlUrl: 'https://github.com/janedoe/FleetADLC/issues/145',
+    htmlUrl: 'https://github.com/janedoe/OpenADLC/issues/145',
     pullRequest: false,
     state: 'open',
     createdAt: '2026-09-24T21:10:00Z',
@@ -201,7 +201,7 @@ async function getIssue(_repo: string, number: number) {
   LOOKED_UP.push(number);
   if (LOOKUP_FAILS) throw LOOKUP_FAILS;
   const found = LIVE.find((one) => one.number === number);
-  if (!found) throw new GitHubApiError(404, `/repos/janedoe/FleetADLC/issues/${number}`, '{"message":"Not Found"}');
+  if (!found) throw new GitHubApiError(404, `/repos/janedoe/OpenADLC/issues/${number}`, '{"message":"Not Found"}');
   return found;
 }
 
@@ -210,7 +210,7 @@ const pullLookups = {
   async getPullRequest(_repo: string, number: number) {
     if (PULLS_FAIL) throw PULLS_FAIL;
     const pull = PULLS.get(number);
-    if (!pull) throw new GitHubApiError(404, `/repos/janedoe/FleetADLC/pulls/${number}`, '{"message":"Not Found"}');
+    if (!pull) throw new GitHubApiError(404, `/repos/janedoe/OpenADLC/pulls/${number}`, '{"message":"Not Found"}');
     return { number, merged: pull.merged, headRef: pull.headRef };
   },
   async request(_method: string, path: string) {
@@ -295,7 +295,7 @@ beforeEach(() => {
 /**
  * An issue GitHub has and the board does not.
  *
- * Measured on a real install: the intake bot filed fleetadlc-testbed#1 with
+ * Measured on a real install: the intake bot filed openadlc-testbed#1 with
  * `adlc:build`, GitHub never delivered a thing — the app's webhook had been
  * created switched off — and the board stayed empty while every reconcile said
  * nothing had drifted. Reconcile exists for a delivery that never came, so this
@@ -310,12 +310,12 @@ describe('an issue whose webhook never arrived', () => {
     // which the old import skipped the second half of.
     expect(upserts).toHaveLength(1);
     expect(upserts[0]).toMatchObject({ number: 1, stage: 'intake', body: BODY });
-    expect(staffed).toEqual([{ repoName: 'fleetadlc', issueNumber: 1, stage: 'intake' }]);
+    expect(staffed).toEqual([{ repoName: 'openadlc', issueNumber: 1, stage: 'intake' }]);
 
     const { driftLine } = await import('./reconciler.js');
     const entry = drift.find((one) => one.kind === 'unknown_issue');
-    expect(entry).toMatchObject({ subject: 'fleetadlc#1', repaired: true });
-    expect(driftLine(entry!)).toBe('imported fleetadlc#1 from GitHub: its webhook never arrived');
+    expect(entry).toMatchObject({ subject: 'openadlc#1', repaired: true });
+    expect(driftLine(entry!)).toBe('imported openadlc#1 from GitHub: its webhook never arrived');
   });
 
   it('is not imported when a stranger filed it, even with a stage label from the issue form', async () => {
@@ -373,12 +373,12 @@ describe('an issue whose webhook never arrived', () => {
     const drift = await reconcileOnce();
 
     expect(upserts.map((row) => row.number)).toEqual([41, 39]);
-    const failed = drift.find((one) => one.subject === 'fleetadlc#40');
+    const failed = drift.find((one) => one.subject === 'openadlc#40');
     expect(failed).toMatchObject({ kind: 'unknown_issue', repaired: false });
     expect(failed?.detail).toContain('the store refused #40');
     expect(drift.filter((one) => one.kind === 'unknown_issue' && one.repaired).map((one) => one.subject)).toEqual([
-      'fleetadlc#41',
-      'fleetadlc#39',
+      'openadlc#41',
+      'openadlc#39',
     ]);
   });
 });
@@ -651,7 +651,7 @@ describe('repairing labels that no longer match GitHub', () => {
     LIVE = [issue({ labels: ['adlc:spec', 'do:ai'] })];
     CACHED = cached('build');
     await reconcile();
-    expect(movedBack).toHaveBeenCalledWith(expect.objectContaining({ name: 'fleetadlc' }), 145, 'build', 'spec');
+    expect(movedBack).toHaveBeenCalledWith(expect.objectContaining({ name: 'openadlc' }), 145, 'build', 'spec');
 
     movedBack.mockClear();
     LIVE = [issue({ labels: ['adlc:review', 'do:ai'] })];
@@ -676,7 +676,7 @@ function minutesAgo(minutes: number): string {
  */
 describe('what reconcile records of what GitHub never delivered', () => {
   it('records an import as something whose webhook never came', async () => {
-    LIVE = [issue({ number: 1, updatedAt: minutesAgo(20), htmlUrl: 'https://github.com/janedoe/fleetadlc-testbed/issues/1' })];
+    LIVE = [issue({ number: 1, updatedAt: minutesAgo(20), htmlUrl: 'https://github.com/janedoe/openadlc-testbed/issues/1' })];
     await reconcileOnce();
 
     expect(RECORDED).toEqual([
@@ -684,9 +684,9 @@ describe('what reconcile records of what GitHub never delivered', () => {
         source: 'platform',
         type: 'webhook.unheard',
         payload: expect.objectContaining({
-          subject: 'fleetadlc#1',
+          subject: 'openadlc#1',
           what: 'imported',
-          url: 'https://github.com/janedoe/fleetadlc-testbed/issues/1',
+          url: 'https://github.com/janedoe/openadlc-testbed/issues/1',
           happenedAt: LIVE[0]!.updatedAt,
         }),
       },
@@ -703,8 +703,8 @@ describe('what reconcile records of what GitHub never delivered', () => {
     await reconcileOnce();
 
     expect(RECORDED.map((event) => (event.payload as { subject: string; what: string }))).toEqual([
-      expect.objectContaining({ subject: 'fleetadlc#31', what: 'opened' }),
-      expect.objectContaining({ subject: 'fleetadlc#30', what: 'opened' }),
+      expect.objectContaining({ subject: 'openadlc#31', what: 'opened' }),
+      expect.objectContaining({ subject: 'openadlc#30', what: 'opened' }),
     ]);
   });
 
@@ -720,7 +720,7 @@ describe('what reconcile records of what GitHub never delivered', () => {
   });
 
   it('records a finding once, not every quarter hour', async () => {
-    ALREADY_RECORDED = [{ id: 9, at: minutesAgo(15), payload: { subject: 'fleetadlc#31', what: 'opened', happenedAt: minutesAgo(25) } }];
+    ALREADY_RECORDED = [{ id: 9, at: minutesAgo(15), payload: { subject: 'openadlc#31', what: 'opened', happenedAt: minutesAgo(25) } }];
     LIVE = [issue({ number: 31, labels: ['bug'], createdAt: minutesAgo(25) })];
     await reconcileOnce();
 
@@ -729,11 +729,11 @@ describe('what reconcile records of what GitHub never delivered', () => {
 });
 
 describe('a closed issue', () => {
-  // fleetadlc-testbed#1 merged and GitHub closed it with its card in Ship.
+  // openadlc-testbed#1 merged and GitHub closed it with its card in Ship.
   // Reconcile dropped it as finished business; #3, waiting on it, could never
   // be unblocked, and the lease on its files was never let go.
   it('is kept when its change merged: GitHub closes it at the merge', async () => {
-    const { issues } = await import('@fleetadlc/db');
+    const { issues } = await import('@openadlc/db');
     vi.mocked(issues.forget).mockClear();
     CACHED = [{ number: 1, stage: 'merged', declaredPaths: [], prNumber: 2, body: BODY, labels: ['adlc:merged'] }];
     LIVE = [issue({ number: 1, state: 'closed', labels: ['adlc:merged'] })];
@@ -744,7 +744,7 @@ describe('a closed issue', () => {
   });
 
   it('still leaves the board when its work never merged', async () => {
-    const { issues } = await import('@fleetadlc/db');
+    const { issues } = await import('@openadlc/db');
     vi.mocked(issues.forget).mockClear();
     CACHED = [{ number: 9, stage: 'build', declaredPaths: [], prNumber: null, body: BODY, labels: ['adlc:build'] }];
     LIVE = [issue({ number: 9, state: 'closed', labels: ['adlc:build'] })];
@@ -760,7 +760,7 @@ describe('a closed issue', () => {
   // builder has verified the change on testing. A reconcile between
   // the merge and the deploy let it go, and the verification never started.
   it('keeps the lease of a merged change while its verification on testing is owed', async () => {
-    const { leases } = await import('@fleetadlc/db');
+    const { leases } = await import('@openadlc/db');
     vi.mocked(leases.setLeaseState).mockClear();
     ACTIVE_LEASES = [{ id: 'lease-1', issueNumber: 1, prNumber: 2, updatedAt: hoursAgo(1) }];
     CACHED = [{ number: 1, stage: 'merged', declaredPaths: [], prNumber: 2, body: BODY, labels: ['adlc:merged'] }];
@@ -769,11 +769,11 @@ describe('a closed issue', () => {
     const drift = await reconcileOnce();
 
     expect(vi.mocked(leases.setLeaseState)).not.toHaveBeenCalled();
-    expect(drift.filter((entry) => entry.subject === 'fleetadlc#1')).toEqual([]);
+    expect(drift.filter((entry) => entry.subject === 'openadlc#1')).toEqual([]);
   });
 
   it('lets go of the lease that still held it a day after the merge, saying the verification never came', async () => {
-    const { audit, leases } = await import('@fleetadlc/db');
+    const { audit, leases } = await import('@openadlc/db');
     vi.mocked(leases.setLeaseState).mockClear();
     vi.mocked(audit).mockClear();
     ACTIVE_LEASES = [{ id: 'lease-1', issueNumber: 1, prNumber: 2, updatedAt: hoursAgo(25) }];
@@ -784,12 +784,12 @@ describe('a closed issue', () => {
 
     expect(vi.mocked(leases.setLeaseState)).toHaveBeenCalledWith('lease-1', 'released');
     expect(vi.mocked(audit)).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'lease.released', target: 'fleetadlc#1', payload: { reason: expect.stringContaining('verification on testing never started') } }),
+      expect.objectContaining({ action: 'lease.released', target: 'openadlc#1', payload: { reason: expect.stringContaining('verification on testing never started') } }),
     );
   });
 
   it('lets go at once of a lease on a closed issue that did not merge, or whose lease has no pull request', async () => {
-    const { leases } = await import('@fleetadlc/db');
+    const { leases } = await import('@openadlc/db');
     vi.mocked(leases.setLeaseState).mockClear();
     ACTIVE_LEASES = [
       { id: 'lease-5', issueNumber: 5, prNumber: 6, updatedAt: hoursAgo(1) },
@@ -827,33 +827,33 @@ describe('a closed issue', () => {
     it('is moved to merged rather than deleted, when the pull request recorded on it merged', async () => {
       // GitHub closed it through `Closes #11` at the merge; the delivery that
       // moves the card on never came, and reconcile forgot it as closed unmerged.
-      const { issues } = await import('@fleetadlc/db');
+      const { issues } = await import('@openadlc/db');
       vi.mocked(issues.forget).mockClear();
       CACHED = [{ number: 11, stage: 'review', declaredPaths: [], prNumber: 31, body: BODY, labels: ['adlc:review'] }];
       LIVE = [issue({ number: 11, state: 'closed', labels: ['adlc:review'] })];
-      PULLS.set(31, { merged: true, headRef: 'agent/fleetadlc-atlas-janedoe/11-issue-11' });
+      PULLS.set(31, { merged: true, headRef: 'agent/openadlc-atlas-janedoe/11-issue-11' });
       const { run, mergeUnheard } = await withIntake();
 
       const drift = await run();
 
       expect(vi.mocked(issues.forget)).not.toHaveBeenCalled();
       expect(mergeUnheard).toHaveBeenCalledWith(expect.objectContaining({ id: 'repo-1' }), 11, 31);
-      expect(drift.find((one) => one.subject === 'fleetadlc#11')).toEqual({
+      expect(drift.find((one) => one.subject === 'openadlc#11')).toEqual({
         kind: 'issue_closed',
-        subject: 'fleetadlc#11',
+        subject: 'openadlc#11',
         detail: '#31 merged and its webhook never arrived; moved from review to merged',
         repaired: true,
       });
     });
 
-    it('is left where it is when it is labelled fleetadlc:ignore: neither moved on nor forgotten', async () => {
+    it('is left where it is when it is labelled openadlc:ignore: neither moved on nor forgotten', async () => {
       // The merge does not move an ignored issue (`moveStage`), and nor does
       // the pass that stands in for its delivery.
-      const { issues } = await import('@fleetadlc/db');
+      const { issues } = await import('@openadlc/db');
       vi.mocked(issues.forget).mockClear();
       CACHED = [{ number: 11, stage: 'review', declaredPaths: [], prNumber: 31, body: BODY, labels: ['adlc:review'] }];
-      LIVE = [issue({ number: 11, state: 'closed', labels: ['adlc:review', 'fleetadlc:ignore'] })];
-      PULLS.set(31, { merged: true, headRef: 'agent/fleetadlc-atlas-janedoe/11-issue-11' });
+      LIVE = [issue({ number: 11, state: 'closed', labels: ['adlc:review', 'openadlc:ignore'] })];
+      PULLS.set(31, { merged: true, headRef: 'agent/openadlc-atlas-janedoe/11-issue-11' });
       const { run, mergeUnheard, movedBack } = await withIntake();
 
       const drift = await run();
@@ -861,19 +861,19 @@ describe('a closed issue', () => {
       expect(mergeUnheard).not.toHaveBeenCalled();
       expect(movedBack).not.toHaveBeenCalled();
       expect(vi.mocked(issues.forget)).not.toHaveBeenCalled();
-      expect(drift.find((one) => one.subject === 'fleetadlc#11')).toBeUndefined();
+      expect(drift.find((one) => one.subject === 'openadlc#11')).toBeUndefined();
       // Its labels are kept as GitHub has them, so the label coming off is seen.
-      expect(vi.mocked(issues.setIssueLabels)).toHaveBeenCalledWith('repo-1', 11, ['adlc:review', 'fleetadlc:ignore']);
+      expect(vi.mocked(issues.setIssueLabels)).toHaveBeenCalledWith('repo-1', 11, ['adlc:review', 'openadlc:ignore']);
     });
 
     it('finds the pull request by the branch cut for the issue when none was recorded', async () => {
-      const { issues } = await import('@fleetadlc/db');
+      const { issues } = await import('@openadlc/db');
       vi.mocked(issues.forget).mockClear();
       CACHED = [{ number: 11, stage: 'review', declaredPaths: [], prNumber: null, body: BODY, labels: ['adlc:review'] }];
       LIVE = [issue({ number: 11, state: 'closed', labels: ['adlc:review'] })];
-      PULLS.set(30, { merged: false, headRef: 'agent/fleetadlc-atlas-janedoe/11-issue-11' });
-      PULLS.set(32, { merged: true, headRef: 'agent/fleetadlc-atlas-janedoe/11-issue-11-again' });
-      PULLS.set(33, { merged: true, headRef: 'agent/fleetadlc-atlas-janedoe/12-issue-12' });
+      PULLS.set(30, { merged: false, headRef: 'agent/openadlc-atlas-janedoe/11-issue-11' });
+      PULLS.set(32, { merged: true, headRef: 'agent/openadlc-atlas-janedoe/11-issue-11-again' });
+      PULLS.set(33, { merged: true, headRef: 'agent/openadlc-atlas-janedoe/12-issue-12' });
       const { run, mergeUnheard } = await withIntake();
 
       await run();
@@ -883,11 +883,11 @@ describe('a closed issue', () => {
     });
 
     it('is still forgotten when its pull request closed unmerged', async () => {
-      const { issues } = await import('@fleetadlc/db');
+      const { issues } = await import('@openadlc/db');
       vi.mocked(issues.forget).mockClear();
       CACHED = [{ number: 11, stage: 'review', declaredPaths: [], prNumber: 31, body: BODY, labels: ['adlc:review'] }];
       LIVE = [issue({ number: 11, state: 'closed', labels: ['adlc:review'] })];
-      PULLS.set(31, { merged: false, headRef: 'agent/fleetadlc-atlas-janedoe/11-issue-11' });
+      PULLS.set(31, { merged: false, headRef: 'agent/openadlc-atlas-janedoe/11-issue-11' });
       const { run, mergeUnheard } = await withIntake();
 
       await run();
@@ -897,18 +897,18 @@ describe('a closed issue', () => {
     });
 
     it('is kept for the next pass when GitHub cannot say whether it merged', async () => {
-      const { issues } = await import('@fleetadlc/db');
+      const { issues } = await import('@openadlc/db');
       vi.mocked(issues.forget).mockClear();
       CACHED = [{ number: 11, stage: 'review', declaredPaths: [], prNumber: 31, body: BODY, labels: ['adlc:review'] }];
       LIVE = [issue({ number: 11, state: 'closed', labels: ['adlc:review'] })];
-      PULLS_FAIL = new GitHubApiError(502, '/repos/janedoe/FleetADLC/pulls/31', 'Bad Gateway');
+      PULLS_FAIL = new GitHubApiError(502, '/repos/janedoe/OpenADLC/pulls/31', 'Bad Gateway');
       const { run, mergeUnheard } = await withIntake();
 
       const drift = await run();
 
       expect(vi.mocked(issues.forget)).not.toHaveBeenCalled();
       expect(mergeUnheard).not.toHaveBeenCalled();
-      expect(drift.find((one) => one.subject === 'fleetadlc#11')).toMatchObject({ kind: 'issue_closed', repaired: false });
+      expect(drift.find((one) => one.subject === 'openadlc#11')).toMatchObject({ kind: 'issue_closed', repaired: false });
     });
 
     it('writes the label again when the bridge’s own move to merged never reached it, rather than moving the card back', async () => {
@@ -931,7 +931,7 @@ describe('a closed issue', () => {
       expect(movedBack).not.toHaveBeenCalled();
       expect(LABELS_SET).toEqual([{ number: 11, labels: ['do:ai', 'adlc:merged'] }]);
       expect(upserts).toEqual([]);
-      expect(drift.find((one) => one.subject === 'fleetadlc#11')?.kind).toBe('stage_mismatch');
+      expect(drift.find((one) => one.subject === 'openadlc#11')?.kind).toBe('stage_mismatch');
     });
 
     it('still takes a label moved back as a person’s move when the last move was not the bridge’s', async () => {
@@ -943,7 +943,7 @@ describe('a closed issue', () => {
       await run();
 
       expect(LABELS_SET).toEqual([]);
-      expect(movedBack).toHaveBeenCalledWith(expect.objectContaining({ name: 'fleetadlc' }), 145, 'review', 'build');
+      expect(movedBack).toHaveBeenCalledWith(expect.objectContaining({ name: 'openadlc' }), 145, 'review', 'build');
     });
   });
 });
@@ -969,14 +969,14 @@ describe('a repository with a long history', () => {
 
     expect(drift).toContainEqual(
       expect.objectContaining({
-        subject: 'janedoe/FleetADLC',
+        subject: 'janedoe/OpenADLC',
         detail: expect.stringContaining('which is more than reconcile reads, so reconcile skips it and its board follows GitHub’s webhooks only'),
       }),
     );
   });
 
   it('asks the next time for the closed issues changed since it last read', async () => {
-    const { issues } = await import('@fleetadlc/db');
+    const { issues } = await import('@openadlc/db');
     vi.mocked(issues.forget).mockClear();
     const subject = await reconciler();
     await subject.run({ repair: true });
@@ -997,7 +997,7 @@ describe('a repository with a long history', () => {
   });
 
   it('lets go of a lease on an issue GitHub no longer has', async () => {
-    const { leases } = await import('@fleetadlc/db');
+    const { leases } = await import('@openadlc/db');
     vi.mocked(leases.setLeaseState).mockClear();
     ACTIVE_LEASES = [{ id: 'lease-2', issueNumber: 77 }];
 
@@ -1005,20 +1005,20 @@ describe('a repository with a long history', () => {
 
     expect(LOOKED_UP).toEqual([77]);
     expect(vi.mocked(leases.setLeaseState)).toHaveBeenCalledWith('lease-2', 'released');
-    expect(drift).toContainEqual(expect.objectContaining({ kind: 'lease_without_issue', subject: 'fleetadlc#77' }));
+    expect(drift).toContainEqual(expect.objectContaining({ kind: 'lease_without_issue', subject: 'openadlc#77' }));
   });
 
   it('keeps the lease when GitHub could not be asked, and says the repository was not read', async () => {
-    const { leases } = await import('@fleetadlc/db');
+    const { leases } = await import('@openadlc/db');
     vi.mocked(leases.setLeaseState).mockClear();
     ACTIVE_LEASES = [{ id: 'lease-2', issueNumber: 77 }];
-    LOOKUP_FAILS = new GitHubApiError(502, '/repos/janedoe/FleetADLC/issues/77', 'Bad Gateway');
+    LOOKUP_FAILS = new GitHubApiError(502, '/repos/janedoe/OpenADLC/issues/77', 'Bad Gateway');
 
     const drift = await reconcileOnce();
 
     expect(vi.mocked(leases.setLeaseState)).not.toHaveBeenCalled();
     expect(drift).toContainEqual(
-      expect.objectContaining({ kind: 'github_unreadable', subject: 'janedoe/FleetADLC', detail: expect.stringContaining('could not be read') }),
+      expect.objectContaining({ kind: 'github_unreadable', subject: 'janedoe/OpenADLC', detail: expect.stringContaining('could not be read') }),
     );
   });
 });
@@ -1027,14 +1027,14 @@ describe('a task recorded and never handed to a host', () => {
   const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
   it('is failed with why, its lease let go if nothing else works under it, and reported; a young one is left starting', async () => {
-    const { leases, tasks } = await import('@fleetadlc/db');
+    const { leases, tasks } = await import('@openadlc/db');
     const { NEVER_STARTED } = await import('./reconciler.js');
     vi.mocked(tasks.failUnstarted).mockClear();
     vi.mocked(leases.releaseIfIdle).mockClear();
     UNSTARTED = [
-      { id: 'task-stale', subjectRef: 'fleetadlc#40', leaseId: 'lease-40', createdAt: minutesAgo(45) },
+      { id: 'task-stale', subjectRef: 'openadlc#40', leaseId: 'lease-40', createdAt: minutesAgo(45) },
       // A slow start, still under way: an image pull, a large worktree.
-      { id: 'task-fresh', subjectRef: 'fleetadlc#41', leaseId: 'lease-41', createdAt: minutesAgo(5) },
+      { id: 'task-fresh', subjectRef: 'openadlc#41', leaseId: 'lease-41', createdAt: minutesAgo(5) },
     ];
 
     const drift = await reconcileOnce();
@@ -1042,19 +1042,19 @@ describe('a task recorded and never handed to a host', () => {
     expect(vi.mocked(tasks.failUnstarted).mock.calls).toEqual([['task-stale', NEVER_STARTED]]);
     expect(vi.mocked(leases.releaseIfIdle).mock.calls).toEqual([['lease-40']]);
     expect(drift.filter((entry) => entry.kind === 'orphaned_task')).toEqual([
-      { kind: 'orphaned_task', subject: 'fleetadlc#40', detail: 'the task was recorded but never handed to a host', repaired: true },
+      { kind: 'orphaned_task', subject: 'openadlc#40', detail: 'the task was recorded but never handed to a host', repaired: true },
     ]);
   });
 
   it('is only reported when reconcile does not repair', async () => {
-    const { tasks } = await import('@fleetadlc/db');
+    const { tasks } = await import('@openadlc/db');
     vi.mocked(tasks.failUnstarted).mockClear();
-    UNSTARTED = [{ id: 'task-stale', subjectRef: 'fleetadlc#40', leaseId: null, createdAt: minutesAgo(45) }];
+    UNSTARTED = [{ id: 'task-stale', subjectRef: 'openadlc#40', leaseId: null, createdAt: minutesAgo(45) }];
 
     const drift = await (await reconciler()).run({ repair: false });
 
     expect(vi.mocked(tasks.failUnstarted)).not.toHaveBeenCalled();
-    expect(drift).toContainEqual(expect.objectContaining({ kind: 'orphaned_task', subject: 'fleetadlc#40', repaired: false }));
+    expect(drift).toContainEqual(expect.objectContaining({ kind: 'orphaned_task', subject: 'openadlc#40', repaired: false }));
   });
 });
 
@@ -1068,16 +1068,16 @@ describe('a running task whose host may have stopped', () => {
   const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
   beforeEach(async () => {
-    const { leases, tasks } = await import('@fleetadlc/db');
+    const { leases, tasks } = await import('@openadlc/db');
     vi.mocked(tasks.failIfRunning).mockClear();
     vi.mocked(leases.setLeaseState).mockClear();
     vi.mocked(leases.getLease).mockClear();
   });
 
   it('is left running when the health probe fails but its host has reported lately, and the probe is still reported', async () => {
-    const { leases, tasks } = await import('@fleetadlc/db');
+    const { leases, tasks } = await import('@openadlc/db');
     HOSTS = [{ id: 'host-1', name: 'local', lastSeenAt: minutesAgo(1) }];
-    RUNNING = [{ id: 'task-1', subjectRef: 'fleetadlc#50', leaseId: 'lease-50', hostId: 'host-1' }];
+    RUNNING = [{ id: 'task-1', subjectRef: 'openadlc#50', leaseId: 'lease-50', hostId: 'host-1' }];
 
     const drift = await (await reconciler({ ok: false })).run({ repair: true });
 
@@ -1088,15 +1088,15 @@ describe('a running task whose host may have stopped', () => {
   });
 
   it('is failed, and its lease let go, once its host has been silent past the window', async () => {
-    const { leases, tasks } = await import('@fleetadlc/db');
+    const { leases, tasks } = await import('@openadlc/db');
     const { HOST_STOPPED_REPORTING } = await import('./reconciler.js');
     HOSTS = [
       { id: 'host-1', name: 'gone', lastSeenAt: minutesAgo(30) },
       { id: 'host-2', name: 'here', lastSeenAt: minutesAgo(1) },
     ];
     RUNNING = [
-      { id: 'task-1', subjectRef: 'fleetadlc#50', leaseId: 'lease-50', hostId: 'host-1' },
-      { id: 'task-2', subjectRef: 'fleetadlc#51', leaseId: 'lease-51', hostId: 'host-2' },
+      { id: 'task-1', subjectRef: 'openadlc#50', leaseId: 'lease-50', hostId: 'host-1' },
+      { id: 'task-2', subjectRef: 'openadlc#51', leaseId: 'lease-51', hostId: 'host-2' },
     ];
     LEASES_BY_ID = new Map([['lease-50', { id: 'lease-50', prNumber: null }]]);
 
@@ -1106,13 +1106,13 @@ describe('a running task whose host may have stopped', () => {
     expect(vi.mocked(tasks.failIfRunning).mock.calls).toEqual([['task-1', 'the host stopped reporting']]);
     expect(vi.mocked(leases.setLeaseState).mock.calls).toEqual([['lease-50', 'released']]);
     expect(drift.filter((entry) => entry.kind === 'orphaned_task')).toEqual([
-      expect.objectContaining({ subject: 'fleetadlc#50', repaired: true }),
+      expect.objectContaining({ subject: 'openadlc#50', repaired: true }),
     ]);
   });
 
   it('with no host recorded is judged by whether any host still reports', async () => {
-    const { tasks } = await import('@fleetadlc/db');
-    RUNNING = [{ id: 'task-1', subjectRef: 'fleetadlc#50', leaseId: null, hostId: null }];
+    const { tasks } = await import('@openadlc/db');
+    RUNNING = [{ id: 'task-1', subjectRef: 'openadlc#50', leaseId: null, hostId: null }];
 
     HOSTS = [{ id: 'host-1', name: 'local', lastSeenAt: minutesAgo(1) }];
     await (await reconciler({ ok: false })).run({ repair: true });
@@ -1124,22 +1124,22 @@ describe('a running task whose host may have stopped', () => {
   });
 
   it('keeps the verdict it reported since it was read, and its lease', async () => {
-    const { leases } = await import('@fleetadlc/db');
+    const { leases } = await import('@openadlc/db');
     HOSTS = [{ id: 'host-1', name: 'gone', lastSeenAt: minutesAgo(30) }];
-    RUNNING = [{ id: 'task-1', subjectRef: 'fleetadlc#50', leaseId: 'lease-50', hostId: 'host-1' }];
+    RUNNING = [{ id: 'task-1', subjectRef: 'openadlc#50', leaseId: 'lease-50', hostId: 'host-1' }];
     ENDED = new Set(['task-1']);
     LEASES_BY_ID = new Map([['lease-50', { id: 'lease-50', prNumber: null }]]);
 
     const drift = await (await reconciler({ ok: false })).run({ repair: true });
 
     expect(vi.mocked(leases.setLeaseState)).not.toHaveBeenCalled();
-    expect(drift).toContainEqual(expect.objectContaining({ kind: 'orphaned_task', subject: 'fleetadlc#50', repaired: false }));
+    expect(drift).toContainEqual(expect.objectContaining({ kind: 'orphaned_task', subject: 'openadlc#50', repaired: false }));
   });
 
   it('keeps a lease that has a pull request when it is failed', async () => {
-    const { leases, tasks } = await import('@fleetadlc/db');
+    const { leases, tasks } = await import('@openadlc/db');
     HOSTS = [{ id: 'host-1', name: 'gone', lastSeenAt: minutesAgo(30) }];
-    RUNNING = [{ id: 'task-1', subjectRef: 'fleetadlc#50', leaseId: 'lease-50', hostId: 'host-1' }];
+    RUNNING = [{ id: 'task-1', subjectRef: 'openadlc#50', leaseId: 'lease-50', hostId: 'host-1' }];
     LEASES_BY_ID = new Map([['lease-50', { id: 'lease-50', prNumber: 88 }]]);
 
     await (await reconciler({ ok: false })).run({ repair: true });
@@ -1153,7 +1153,7 @@ describe('a paused lease whose work has ended', () => {
   const lease = (issueNumber: number, state: string) => ({ id: `lease-${issueNumber}`, repoId: 'repo-1', issueNumber, state });
 
   it('is let go by the sweep, audited as the reconciler, and reported', async () => {
-    const { leases } = await import('@fleetadlc/db');
+    const { leases } = await import('@openadlc/db');
     vi.mocked(leases.settlePausedLeases).mockClear();
     SETTLED = { released: [lease(78, 'released')], held: [lease(79, 'in_task')] };
 
@@ -1165,10 +1165,10 @@ describe('a paused lease whose work has ended', () => {
       holdUntil: expect.any(Date),
     });
     expect(drift.filter((entry) => entry.kind === 'paused_lease')).toEqual([
-      { kind: 'paused_lease', subject: 'fleetadlc#78', detail: 'the lease was paused after its task had ended', repaired: true },
+      { kind: 'paused_lease', subject: 'openadlc#78', detail: 'the lease was paused after its task had ended', repaired: true },
       {
         kind: 'paused_lease',
-        subject: 'fleetadlc#79',
+        subject: 'openadlc#79',
         detail: 'the lease was paused after its task had ended; it waits for its pull request again',
         repaired: true,
       },
@@ -1177,7 +1177,7 @@ describe('a paused lease whose work has ended', () => {
   });
 
   it('is only looked for when reconcile repairs, since finding one lets it go', async () => {
-    const { leases } = await import('@fleetadlc/db');
+    const { leases } = await import('@openadlc/db');
     const { Reconciler } = await import('./reconciler.js');
     vi.mocked(leases.settlePausedLeases).mockClear();
     const reconciler = new Reconciler(
@@ -1194,15 +1194,15 @@ describe('a paused lease whose work has ended', () => {
 });
 
 /**
- * An issue a person labelled `fleetadlc:ignore`.
+ * An issue a person labelled `openadlc:ignore`.
  *
  * Importing it would store the stage and start the bot that staffs it, and a
  * missing stage label would be reported as something to replace with one.
  * The label stays, and taking it off is what makes the next pass ordinary.
  */
-describe('an issue labelled fleetadlc:ignore', () => {
+describe('an issue labelled openadlc:ignore', () => {
   it('is not imported onto a stage', async () => {
-    LIVE = [issue({ number: 4, labels: ['fleetadlc:ignore', 'adlc:intake'] })];
+    LIVE = [issue({ number: 4, labels: ['openadlc:ignore', 'adlc:intake'] })];
     const drift = await reconcileOnce();
 
     expect(upserts).toEqual([]);
@@ -1212,14 +1212,14 @@ describe('an issue labelled fleetadlc:ignore', () => {
 
   it('keeps the label, and does not ask for a stage label to replace it', async () => {
     CACHED = [{ number: 4, stage: 'build', declaredPaths: [], prNumber: null, body: BODY, labels: ['adlc:build', 'start:now'] }];
-    LIVE = [issue({ number: 4, labels: ['fleetadlc:ignore'] })];
-    const { issues } = await import('@fleetadlc/db');
+    LIVE = [issue({ number: 4, labels: ['openadlc:ignore'] })];
+    const { issues } = await import('@openadlc/db');
     vi.mocked(issues.setIssueLabels).mockClear();
     const drift = await reconcileOnce();
 
     // The labels alone, as GitHub has them; the row keeps its stage.
     expect(upserts).toEqual([]);
-    expect(vi.mocked(issues.setIssueLabels)).toHaveBeenCalledWith('repo-1', 4, ['fleetadlc:ignore']);
+    expect(vi.mocked(issues.setIssueLabels)).toHaveBeenCalledWith('repo-1', 4, ['openadlc:ignore']);
     expect(drift.map((one) => one.kind)).not.toContain('label_missing');
   });
 });
@@ -1233,22 +1233,22 @@ describe('an install that cannot read GitHub', () => {
 
     expect(drift).toContainEqual(
       expect.objectContaining({
-        subject: 'fleetadlc',
+        subject: 'openadlc',
         detail: expect.stringMatching(
-          /^\S+ is not connected to GitHub, so GitHub could not be read\. Connect it in Settings → GitHub → Connected accounts, or run: fleetadlc auth login --bot \S+$/,
+          /^\S+ is not connected to GitHub, so GitHub could not be read\. Connect it in Settings → GitHub → Connected accounts, or run: openadlc auth login --bot \S+$/,
         ),
       }),
     );
   });
 
   it('says how to connect a bot that has no GitHub account', async () => {
-    const { bots } = await import('@fleetadlc/db');
+    const { bots } = await import('@openadlc/db');
     vi.mocked(bots.listBots).mockResolvedValue([{ id: 'bot-qa', name: 'qa', role: 'qa', githubLogin: null }] as never);
 
     const drift = await reconcileOnce().finally(() => vi.mocked(bots.listBots).mockResolvedValue([]));
 
     expect(drift).toContainEqual(
-      expect.objectContaining({ subject: 'qa', detail: 'no GitHub account is connected for this bot. Run: fleetadlc auth login --bot qa' }),
+      expect.objectContaining({ subject: 'qa', detail: 'no GitHub account is connected for this bot. Run: openadlc auth login --bot qa' }),
     );
   });
 });

@@ -1,5 +1,5 @@
 {
-  "name": "@fleetadlc/engines",
+  "name": "@openadlc/engines",
   "version": "0.1.0",
   "description": "Claude, Codex and Grok behind one engine interface, with the tools policy each enforces and what each call costs.",
   "private": true,
@@ -16,7 +16,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@fleetadlc/shared": "workspace:*",
+    "@openadlc/shared": "workspace:*",
     "yaml": "^2.6.1"
   },
   "devDependencies": {

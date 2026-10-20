@@ -5,8 +5,8 @@ import {
   loginsNamed,
   type ConfigFiles,
   type ReviewerStanding,
-} from '@fleetadlc/github';
-import { unreadableHumanReviewLines, type HealthAction, type HealthSeverity } from '@fleetadlc/shared';
+} from '@openadlc/github';
+import { unreadableHumanReviewLines, type HealthAction, type HealthSeverity } from '@openadlc/shared';
 import { GITHUB_CALLS_AT_ONCE, SLOW_CHECK_MS, mapLimited } from '../limited.js';
 import type { CheckResult, HealthCheck } from '../types.js';
 import type { RepoRef } from './crew.js';
@@ -233,7 +233,7 @@ export interface RepoConfigReader {
   repositories(): Promise<RepoRef[]>;
   /** The configuration files on the default branch; null when GitHub cannot be asked at all. */
   files(repo: RepoRef): Promise<ConfigFiles | null>;
-  /** The install's own people (`FLEETADLC_HUMANS`), whose logins are checked too. */
+  /** The install's own people (`OPENADLC_HUMANS`), whose logins are checked too. */
   humans(): Promise<string[]>;
   /** Whether a GitHub account by this login exists; null when GitHub did not say. */
   exists(login: string): Promise<boolean | null>;
@@ -246,10 +246,10 @@ export interface RepoConfigReader {
 }
 
 /** The subject of the install's own people, beside one per repository. */
-export const HUMANS_SUBJECT = 'FLEETADLC_HUMANS';
+export const HUMANS_SUBJECT = 'OPENADLC_HUMANS';
 
 /** The subject of the install's people's pinned accounts. */
-export const HUMAN_IDS_SUBJECT = 'FLEETADLC_HUMANS accounts';
+export const HUMAN_IDS_SUBJECT = 'OPENADLC_HUMANS accounts';
 
 /** A finding's line on the card: where, what, and the fix. */
 function findingLine(finding: ConfigFinding): string {
@@ -352,13 +352,13 @@ export function repoConfigCheck(reader: RepoConfigReader, inspections: readonly 
             subject: HUMANS_SUBJECT,
             ok: false,
             severity: 'warning',
-            title: `\`${missing[0]}\` is one of this install’s people (FLEETADLC_HUMANS), but there is no such GitHub account`,
+            title: `\`${missing[0]}\` is one of this install’s people (OPENADLC_HUMANS), but there is no such GitHub account`,
             detail:
               `${missing.map((login) => `- \`${login}\``).join('\n')}\n\n` +
               'Nobody by that name can answer a question from GitHub or be asked for a review. ' +
-              'A list saved in the console (the Protect the repositories step’s approvers) wins over FLEETADLC_HUMANS, and Settings has no field for it: ' +
-              'as an admin, send PATCH /v1/install {"humans": "<login>,…"}, or an empty value to go back to FLEETADLC_HUMANS. ' +
-              'Without a saved list, correct FLEETADLC_HUMANS, or humans in install.json, and restart the bridge.',
+              'A list saved in the console (the Protect the repositories step’s approvers) wins over OPENADLC_HUMANS, and Settings has no field for it: ' +
+              'as an admin, send PATCH /v1/install {"humans": "<login>,…"}, or an empty value to go back to OPENADLC_HUMANS. ' +
+              'Without a saved list, correct OPENADLC_HUMANS, or humans in install.json, and restart the bridge.',
             action: { label: 'Open settings', href: '/settings' },
             facts: { missing },
           });

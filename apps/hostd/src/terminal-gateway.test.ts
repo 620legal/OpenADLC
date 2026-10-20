@@ -2,11 +2,11 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
-import { audit } from '@fleetadlc/db';
+import { audit } from '@openadlc/db';
 import { ATTACH_SUBPROTOCOL_PREFIX, DEFAULT_TERMINAL_SIZE, TerminalGateway } from './terminal-gateway.js';
 
 // The gateway writes an audit row once the pty is open. Nothing here has a database.
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async () => undefined),
 }));
 

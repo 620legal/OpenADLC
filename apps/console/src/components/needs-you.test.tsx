@@ -98,14 +98,14 @@ const ITEM: AttentionItem = {
   id: 'gate:gate-3',
   kind: 'approval',
   headline: 'Ready to ship, waiting for your OK',
-  subject: { repo: 'fleetadlc', number: 14, title: 'Add a health endpoint to the API', ref: 'fleetadlc#14', url: null },
+  subject: { repo: 'openadlc', number: 14, title: 'Add a health endpoint to the API', ref: 'openadlc#14', url: null },
   bot: { name: 'tessexampleco', slot: 'sre', role: 'deploy', roleLabel: 'SRE', githubLogin: 'tessexampleco' },
   since: '2026-09-24T11:46:00.000Z',
   detail: 'Promote 3f2a1b0c to production?',
   actions: [
     { kind: 'approve', label: 'Ship it', gateId: 'gate-3', answer: 'ship it' },
     { kind: 'open_thread', label: 'Review', bot: 'tessexampleco' },
-    { kind: 'open_url', label: 'Pull request', url: 'https://github.com/janedoe/fleetadlc/pull/31' },
+    { kind: 'open_url', label: 'Pull request', url: 'https://github.com/janedoe/openadlc/pull/31' },
   ],
 };
 
@@ -236,7 +236,7 @@ describe('a question that needs you', () => {
     id: 'gate:gate-7',
     kind: 'question',
     headline: 'ottoexampleco has a question',
-    subject: { repo: 'fleetadlc-testbed', number: null, title: 'Create html hello world and a readme file.', ref: null, url: null },
+    subject: { repo: 'openadlc-testbed', number: null, title: 'Create html hello world and a readme file.', ref: null, url: null },
     bot: { name: 'ottoexampleco', slot: 'intake', role: 'intake', roleLabel: 'intake', githubLogin: 'ottoexampleco' },
     since: '2026-09-24T11:58:00.000Z',
     detail: 'Where should the page go?',
@@ -321,7 +321,7 @@ describe('a failed task and the health checks, on the board', () => {
     id: 'task:task-iris',
     kind: 'task_failed',
     headline: 'irisexampleco could not finish its review',
-    subject: { repo: 'fleetadlc-testbed', number: 2, title: 'Add a health endpoint', ref: 'fleetadlc-testbed#2', url: 'https://github.com/janedoe/fleetadlc-testbed/pull/2' },
+    subject: { repo: 'openadlc-testbed', number: 2, title: 'Add a health endpoint', ref: 'openadlc-testbed#2', url: 'https://github.com/janedoe/openadlc-testbed/pull/2' },
     bot: { name: 'irisexampleco', slot: 'second-reviewer', role: 'review_second', roleLabel: 'second reviewer', githubLogin: 'irisexampleco' },
     since: '2026-09-24T11:48:00.000Z',
     detail: 'Grok — SuperGrok, the xAI subscription irisexampleco thinks with, is signed out. Sign it in again on the accounts step, then try again.',
@@ -355,7 +355,7 @@ describe('a failed task and the health checks, on the board', () => {
       bot: null,
       since: '2026-09-24T11:30:00.000Z',
       detail: 'Add “SSH signing keys” on the app’s permissions page, under Account permissions, as Read and write.',
-      actions: [{ kind: 'open_url', label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/fleetadlc-janedoe/permissions' }],
+      actions: [{ kind: 'open_url', label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/openadlc-janedoe/permissions' }],
     };
     const warning: AttentionItem = { ...blocking, id: 'check:token-expiry', severity: 'warning', headline: 'The OpenADLC app’s user tokens never expire' };
 
@@ -363,7 +363,7 @@ describe('a failed task and the health checks, on the board', () => {
     const cards = html.split('<article').slice(1);
     expect(cards[0]).toMatch(/^[^>]* class="[^"]*border-alarm/);
     expect(cards[1]).toMatch(/^[^>]* class="[^"]*border-attention/);
-    expect(cards[0]).toMatch(/<a href="https:\/\/github.com\/settings\/apps\/fleetadlc-janedoe\/permissions" target="_blank"[^>]*>Open the app’s permissions/);
+    expect(cards[0]).toMatch(/<a href="https:\/\/github.com\/settings\/apps\/openadlc-janedoe\/permissions" target="_blank"[^>]*>Open the app’s permissions/);
   });
 
   it('hands over the command for what only a shell can do', () => {
@@ -376,9 +376,9 @@ describe('a failed task and the health checks, on the board', () => {
       bot: null,
       since: '2026-09-24T11:55:00.000Z',
       detail: 'Start OpenADLC again on the machine it runs on.',
-      actions: [{ kind: 'run_command', label: 'Run fleetadlc up', command: 'fleetadlc up' }],
+      actions: [{ kind: 'run_command', label: 'Run openadlc up', command: 'openadlc up' }],
     };
-    expect(needs([hostd])).toMatch(/<button type="button" title="click to copy"[^>]*><span[^>]*>fleetadlc up<\/span>/);
+    expect(needs([hostd])).toMatch(/<button type="button" title="click to copy"[^>]*><span[^>]*>openadlc up<\/span>/);
   });
 
   it('offers its fix on the card, and Check again in its sheet', () => {
@@ -392,7 +392,7 @@ describe('a failed task and the health checks, on the board', () => {
       since: '2026-09-24T11:55:00.000Z',
       detail: 'Add “Deployments” on the app’s permissions page.',
       actions: [
-        { kind: 'open_url', label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/fleetadlc-janedoe/permissions' },
+        { kind: 'open_url', label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/openadlc-janedoe/permissions' },
         { kind: 'recheck', label: 'Check again', checkId: 'app-permissions' },
       ],
     };
@@ -432,9 +432,9 @@ describe('a failed task and the health checks, on the board', () => {
     const forBuilder: AttentionItem = {
       id: 'fixed:bot-sign-in:bot-builder',
       kind: 'check_fixed',
-      headline: 'fleetadlc-atlas-janedoe can sign in again',
+      headline: 'openadlc-atlas-janedoe can sign in again',
       subject: { repo: null, number: null, title: null, ref: null, url: null },
-      bot: { name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', roleLabel: 'Builder', githubLogin: 'fleetadlc-atlas-janedoe' },
+      bot: { name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', roleLabel: 'Builder', githubLogin: 'openadlc-atlas-janedoe' },
       since: '2026-09-24T11:00:00.000Z',
       detail: '',
       actions: [{ kind: 'dismiss', label: 'Dismiss', checkId: 'bot-sign-in:bot-builder' }],
@@ -442,7 +442,7 @@ describe('a failed task and the health checks, on the board', () => {
     const alsoForBuilder: AttentionItem = {
       ...forBuilder,
       id: 'fixed:bot-access:bot-builder',
-      headline: 'fleetadlc-atlas-janedoe is in janedoe/fleetadlc-testbed',
+      headline: 'openadlc-atlas-janedoe is in janedoe/openadlc-testbed',
       actions: [{ kind: 'dismiss', label: 'Dismiss', checkId: 'bot-access:bot-builder' }],
     };
     const noBot: AttentionItem = {
@@ -458,7 +458,7 @@ describe('a failed task and the health checks, on the board', () => {
 
     const groups = groupRecoveries([forBuilder, alsoForBuilder, noBot]);
     expect(groups).toEqual([
-      { name: 'fleetadlc-atlas-janedoe', items: [forBuilder, alsoForBuilder] },
+      { name: 'openadlc-atlas-janedoe', items: [forBuilder, alsoForBuilder] },
       { name: 'OpenADLC', items: [noBot] },
     ]);
     expect(recoveryCheckIds([forBuilder, alsoForBuilder, noBot])).toEqual(['bot-sign-in:bot-builder', 'bot-access:bot-builder', 'webhook']);
@@ -469,8 +469,8 @@ describe('a failed task and the health checks, on the board', () => {
     const landed: AttentionItem = {
       id: 'landed:task-rev',
       kind: 'check_fixed',
-      headline: 'fleetadlc#193 landed or was closed, so the second reviewer no longer has to finish its review',
-      subject: { repo: 'fleetadlc', number: 193, title: null, ref: 'fleetadlc#193', url: null },
+      headline: 'openadlc#193 landed or was closed, so the second reviewer no longer has to finish its review',
+      subject: { repo: 'openadlc', number: 193, title: null, ref: 'openadlc#193', url: null },
       bot: null,
       since: '2026-09-24T11:00:00.000Z',
       detail: '',
@@ -484,9 +484,9 @@ describe('a failed task and the health checks, on the board', () => {
     const forBuilder: AttentionItem = {
       id: 'fixed:bot-sign-in:bot-builder',
       kind: 'check_fixed',
-      headline: 'fleetadlc-atlas-janedoe can sign in again',
+      headline: 'openadlc-atlas-janedoe can sign in again',
       subject: { repo: null, number: null, title: null, ref: null, url: null },
-      bot: { name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', roleLabel: 'Builder', githubLogin: 'fleetadlc-atlas-janedoe' },
+      bot: { name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', roleLabel: 'Builder', githubLogin: 'openadlc-atlas-janedoe' },
       since: '2026-09-24T11:00:00.000Z',
       detail: '',
       actions: [{ kind: 'dismiss', label: 'Dismiss', checkId: 'bot-sign-in:bot-builder' }],

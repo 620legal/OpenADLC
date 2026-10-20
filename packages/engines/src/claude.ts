@@ -1,5 +1,5 @@
 import { dirname } from 'node:path';
-import type { EngineName } from '@fleetadlc/shared';
+import type { EngineName } from '@openadlc/shared';
 import { commandExists } from './process-engine.js';
 import { addUsage, runStreamJson } from './stream-json.js';
 import { resolveWriteScope, toolsPolicyEnv } from './tools.js';

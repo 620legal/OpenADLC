@@ -60,7 +60,7 @@ describe('whether a dependency has shipped far enough', () => {
   });
 
   it('is satisfied by Done with no deploy label, which is how a repository that deploys nothing ships', () => {
-    // fleetadlc-testbed deploys nothing, so a merge moves its card straight to
+    // openadlc-testbed deploys nothing, so a merge moves its card straight to
     // Done and no deploy ever labels it: #3 would have waited on #1 for good.
     expect(dependencyIsSatisfied(dep('done', []))).toBe(true);
   });

@@ -3,12 +3,12 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * `fleetadlc-ci`, the session's way to run the repository's checks: it asks the
+ * `openadlc-ci`, the session's way to run the repository's checks: it asks the
  * bridge, waits, and says what happened. It never reports a result — hostd
  * does — so all it can do is start a run and read one.
  */
 
-const BIN = join(import.meta.dirname, '..', 'bin', 'fleetadlc-ci');
+const BIN = join(import.meta.dirname, '..', 'bin', 'openadlc-ci');
 const cli = (await import(BIN)) as {
   runLocalCi: (options: {
     env: Record<string, string>;
@@ -20,7 +20,7 @@ const cli = (await import(BIN)) as {
   }) => Promise<number>;
 };
 
-const ENV = { FLEETADLC_BRIDGE_URL: 'http://bridge', FLEETADLC_TASK_ID: 'task-1', FLEETADLC_TASK_TOKEN: 'token' };
+const ENV = { OPENADLC_BRIDGE_URL: 'http://bridge', OPENADLC_TASK_ID: 'task-1', OPENADLC_TASK_TOKEN: 'token' };
 const run = (state: string, extra: Record<string, unknown> = {}) => ({ id: 'run-1', taskId: 'task-1', state, headSha: 'abc1234def', exitCode: null, logTail: 'ci: green', reason: null, ...extra });
 
 const SHA = 'abc1234def0123456789abc1234def0123456789';
@@ -53,7 +53,7 @@ async function cli_(statuses: Record<string, unknown>[], options: { head?: strin
   return { code, lines, calls };
 }
 
-describe('fleetadlc-ci', () => {
+describe('openadlc-ci', () => {
   it('is executable, so a session can run it by name', () => {
     expect(statSync(BIN).mode & 0o111).not.toBe(0);
   });
@@ -80,7 +80,7 @@ describe('fleetadlc-ci', () => {
     const statuses = [...Array.from({ length: 61 * 12 }, () => ({ run: run('running') })), { run: run('failed', { exitCode: 124, reason }) }];
     const { code, lines } = await cli_(statuses);
     expect(code).toBe(1);
-    expect(lines.at(-1)).toBe(`fleetadlc-ci: ${reason}`);
+    expect(lines.at(-1)).toBe(`openadlc-ci: ${reason}`);
   });
 
   it('exits 2 and says what to do when the run was refused', async () => {

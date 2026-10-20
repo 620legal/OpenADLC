@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SecretStore } from '@fleetadlc/github';
+import type { SecretStore } from '@openadlc/github';
 import { TokenClient } from './token-client.js';
 
 /**

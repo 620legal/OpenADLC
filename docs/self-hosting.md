@@ -12,7 +12,7 @@ runs on infrastructure you control.
 | git | Bots clone, branch and push |
 | python3, make, g++ (`build-essential`), on Linux | `pnpm install` compiles node-pty, which has prebuilt binaries only for macOS and Windows |
 | tmux | Sessions are tmux sessions; take-over is `tmux attach` |
-| PostgreSQL 16 | `fleetadlc_db`. `fleetadlc up` starts one in a container if Docker is present |
+| PostgreSQL 16 | `openadlc_db`. `openadlc up` starts one in a container if Docker is present |
 | Docker (recommended) | The `docker` driver gives each task a container of its own, and a database of its own on the host's task database server |
 | The bot image | Each task's container runs it. Build with `infra/local/build-bot-image.sh` |
 | cloudflared, on a laptop | The console's webhook step runs a quick tunnel with it, so GitHub's webhooks reach this machine. An install with a public URL of its own does not need it |
@@ -22,10 +22,10 @@ your user. A session there can read the App's private key, every bot's sign-in,
 the model keys and the database password, and can run anything on the machine.
 It is fine for development with a throwaway App, accounts and repositories; use
 Docker for anything that matters. A new install takes `docker` when Docker
-answers and the bot image is built, and `local` otherwise; `fleetadlc init`
-writes the choice to `install.json`, and `fleetadlc up` warns at every start
+answers and the bot image is built, and `local` otherwise; `openadlc init`
+writes the choice to `install.json`, and `openadlc up` warns at every start
 while the driver is `local`. To switch: `infra/local/build-bot-image.sh`, then
-`fleetadlc init --driver docker` and `fleetadlc down && fleetadlc up`.
+`openadlc init --driver docker` and `openadlc down && openadlc up`.
 
 The `docker` driver's suites have run on macOS, under Docker Desktop and
 OrbStack, and not yet on a Linux host ([unverified](unverified.md#open),
@@ -44,12 +44,12 @@ The `docker` driver runs every bot from one image, and it is not published
 anywhere — you build it:
 
 ```bash
-infra/local/build-bot-image.sh            # tags fleetadlc-bot:latest
+infra/local/build-bot-image.sh            # tags openadlc-bot:latest
 
 # For a cloud install, build the same thing for the host's architecture,
 # under the registry's name, and push (Installing on a cloud sets the registry up):
-DOCKER_DEFAULT_PLATFORM=linux/amd64 IMAGE=us-central1-docker.pkg.dev/<project>/fleetadlc/bot:latest infra/local/build-bot-image.sh
-docker push us-central1-docker.pkg.dev/<project>/fleetadlc/bot:latest
+DOCKER_DEFAULT_PLATFORM=linux/amd64 IMAGE=us-central1-docker.pkg.dev/<project>/openadlc/bot:latest infra/local/build-bot-image.sh
+docker push us-central1-docker.pkg.dev/<project>/openadlc/bot:latest
 ```
 
 The cloud host runs `linux/amd64` only. Without `DOCKER_DEFAULT_PLATFORM`, an
@@ -63,7 +63,7 @@ keeps them current after that, along with the GitHub CLI and Node once an
 update has recorded those versions. One script for both
 installs, so a laptop and a cloud host cannot end up running different bots.
 
-`fleetadlc up` refuses to start under the `docker` driver when the image is absent,
+`openadlc up` refuses to start under the `docker` driver when the image is absent,
 rather than coming up healthy and failing every task.
 
 ### Third-party notices for an image you publish
@@ -113,8 +113,8 @@ runs it. It is safe to run again. By hand, it is:
 pnpm install
 pnpm build
 infra/local/build-bot-image.sh                     # the image each bot runs
-node apps/cli/bin/fleetadlc.mjs init --driver docker   # writes ~/.fleetadlc/install.json
-node apps/cli/bin/fleetadlc.mjs up
+node apps/cli/bin/openadlc.mjs init --driver docker   # writes ~/.openadlc/install.json
+node apps/cli/bin/openadlc.mjs up
 ```
 
 This applies migrations, loads `config/`, and starts hostd, the bridge and the
@@ -123,9 +123,9 @@ issue changes, a task ends or a pull request closes, and every five minutes
 besides. Open the console link it prints, which signs your browser in and
 redirects to the walkthrough until the install is finished.
 
-`fleetadlc` in the rest of this document is `node apps/cli/bin/fleetadlc.mjs`, run from
-the checkout, or `pnpm fleetadlc` ([cli.md](cli.md)). Every command acts on the
-install `FLEETADLC_HOME` points at, `~/.fleetadlc` by default, and the ports and paths
+`openadlc` in the rest of this document is `node apps/cli/bin/openadlc.mjs`, run from
+the checkout, or `pnpm openadlc` ([cli.md](cli.md)). Every command acts on the
+install `OPENADLC_HOME` points at, `~/.openadlc` by default, and the ports and paths
 below are that default install's.
 
 There is no demo mode ([why](#7-give-the-bots-engines)): an install is either
@@ -135,51 +135,51 @@ pretending.
 
 Ports default to 47300 (console), 47311 (bridge), 47312 (hostd) and 47432
 (postgres) — deliberately uncommon, so they are unlikely to collide with anything
-(and `fleetadlc up` refuses to start a service whose port something else already
+(and `openadlc up` refuses to start a service whose port something else already
 answers on). Under the
-docker driver, the task database server (`fleetadlc-taskdb`) also uses 47433,
+docker driver, the task database server (`openadlc-taskdb`) also uses 47433,
 published on loopback (Docker Desktop, OrbStack) or on the Docker bridge's
 gateway (Linux).
 
-The database container `fleetadlc up` makes, `fleetadlc-db`, is published on
+The database container `openadlc up` makes, `openadlc-db`, is published on
 127.0.0.1 only, and its password is generated for the install and kept in
-`databaseUrl` in `install.json`. An install from before that had `fleetadlc`
+`databaseUrl` in `install.json`. An install from before that had `openadlc`
 as its password, which is printed in this repository, and its container
 published on every address. An install from before the rename still has the
 older superuser, user and password both `fleet`, on `fleet-db`. The next
-`fleetadlc up` changes either password in place. `fleetadlc doctor` looks at
+`openadlc up` changes either password in place. `openadlc doctor` looks at
 whichever of those containers is the one in use, so it reports both the
 password and a publish on every address. The address needs the container made
 again, which `up` does not do, since the data is in the container's own
-volume; `fleetadlc doctor` warns until it is done. To keep the data, start a
-new container on the old one's volume (use `fleet-db` in place of `fleetadlc-db`
+volume; `openadlc doctor` warns until it is done. To keep the data, start a
+new container on the old one's volume (use `fleet-db` in place of `openadlc-db`
 when that is still the container's name):
 
 ```bash
-fleetadlc down
-docker stop fleetadlc-db && docker rename fleetadlc-db fleetadlc-db-old
-docker run -d --name fleetadlc-db --volumes-from fleetadlc-db-old \
+openadlc down
+docker stop openadlc-db && docker rename openadlc-db openadlc-db-old
+docker run -d --name openadlc-db --volumes-from openadlc-db-old \
   -p 127.0.0.1:47432:5432 pgvector/pgvector:pg16
-fleetadlc up
-docker rm fleetadlc-db-old     # once the install is back; not -v, which would delete the data
+openadlc up
+docker rm openadlc-db-old     # once the install is back; not -v, which would delete the data
 ```
 
-`fleetadlc up` prints the console as a sign-in link,
+`openadlc up` prints the console as a sign-in link,
 `http://127.0.0.1:47300/signin?token=…`. Open it: the console serves nothing to
 a browser that has not signed in, because its server holds the console secret
 the bridge serves `/v1` for (`console-api-secret` in the secret store, made on
-the first `fleetadlc up`). The link works for an hour and the browser then
-stays signed in for thirty days; `fleetadlc console-link` prints a fresh link
+the first `openadlc up`). The link works for an hour and the browser then
+stays signed in for thirty days; `openadlc console-link` prints a fresh link
 whenever you need one. The console listens on 127.0.0.1. To open it from
-another machine, start it with `FLEETADLC_CONSOLE_HOST=0.0.0.0` (and add the
-name you use to `FLEETADLC_ALLOWED_HOSTS`), then open a link from
-`fleetadlc console-link` with that machine's name in place of `127.0.0.1`.
+another machine, start it with `OPENADLC_CONSOLE_HOST=0.0.0.0` (and add the
+name you use to `OPENADLC_ALLOWED_HOSTS`), then open a link from
+`openadlc console-link` with that machine's name in place of `127.0.0.1`.
 
 ### Or with Docker Compose
 
 [`infra/local/docker-compose.yml`](../infra/local/docker-compose.yml) runs the
 database, the bridge, hostd and the console in containers. The bridge, hostd and
-the console are on the same ports as `fleetadlc up`, so run one or the other; the
+the console are on the same ports as `openadlc up`, so run one or the other; the
 database is not published on the host, since the services reach it on the
 compose network. hostd runs the bots with the docker driver, through the host's
 Docker socket.
@@ -189,9 +189,9 @@ without it. Generate it once, keep it, and export it in every shell that runs
 `docker compose` against this file:
 
 ```bash
-mkdir -p ~/.fleetadlc-compose          # or FLEETADLC_COMPOSE_HOME=/some/absolute/path
-(umask 077; openssl rand -hex 32 > ~/.fleetadlc-compose/postgres-password)
-export POSTGRES_PASSWORD="$(cat ~/.fleetadlc-compose/postgres-password)"
+mkdir -p ~/.openadlc-compose          # or OPENADLC_COMPOSE_HOME=/some/absolute/path
+(umask 077; openssl rand -hex 32 > ~/.openadlc-compose/postgres-password)
+export POSTGRES_PASSWORD="$(cat ~/.openadlc-compose/postgres-password)"
 docker compose -f infra/local/docker-compose.yml up -d --build
 ```
 
@@ -199,27 +199,27 @@ Use hex, as above: the value is also put into the services' `DATABASE_URL`,
 where other characters would have to be escaped.
 
 **A compose stack from before `POSTGRES_PASSWORD` was required** had the
-password `fleetadlc`, printed in this repository, and published the database on
+password `openadlc`, printed in this repository, and published the database on
 every address. The password is kept in the database itself, so a new
 `POSTGRES_PASSWORD` alone changes only the services' URL, and they could no
 longer connect. Change it in the database first, then restart with the new
 value:
 
 ```bash
-(umask 077; openssl rand -hex 32 > ~/.fleetadlc-compose/postgres-password)
-export POSTGRES_PASSWORD="$(cat ~/.fleetadlc-compose/postgres-password)"
+(umask 077; openssl rand -hex 32 > ~/.openadlc-compose/postgres-password)
+export POSTGRES_PASSWORD="$(cat ~/.openadlc-compose/postgres-password)"
 # if the stack is stopped, start only the database: docker compose -f infra/local/docker-compose.yml up -d db
-docker compose -f infra/local/docker-compose.yml exec db psql -U fleetadlc -d fleetadlc_db -c "ALTER ROLE fleetadlc PASSWORD '$POSTGRES_PASSWORD'"
+docker compose -f infra/local/docker-compose.yml exec db psql -U openadlc -d openadlc_db -c "ALTER ROLE openadlc PASSWORD '$POSTGRES_PASSWORD'"
 docker compose -f infra/local/docker-compose.yml up -d
 ```
 
 The console image turns Next.js's anonymous usage telemetry off
 (`NEXT_TELEMETRY_DISABLED=1`). A console built or started from a checkout, as
-`fleetadlc up` does, has it on unless that is set in the environment, or
-`pnpm --filter @fleetadlc/console exec next telemetry disable` was run once.
+`openadlc up` does, has it on unless that is set in the environment, or
+`pnpm --filter @openadlc/console exec next telemetry disable` was run once.
 
 A one-shot `setup` service applies the migrations and loads `config/` first, as
-`fleetadlc up` does; as there, only a failed migration keeps the services from
+`openadlc up` does; as there, only a failed migration keeps the services from
 starting, and a problem loading `config/` is in `setup`'s log.
 
 The bridge and the console run as uid 1000, the images' `node` user, not as
@@ -236,12 +236,12 @@ mount maps ownership for you, and `setup` leaves the directory as it is.
 
 Everything the install keeps but the database and the bridge's first webhook
 secret (two named volumes, `db` and `webhook-secret`) is in one directory on the
-host, `FLEETADLC_COMPOSE_HOME` (`~/.fleetadlc-compose` unless you set it), mounted
+host, `OPENADLC_COMPOSE_HOME` (`~/.openadlc-compose` unless you set it), mounted
 into hostd and the bridge **at the same absolute path**:
 
 | Inside it | What it is |
 |---|---|
-| `home/` | `FLEETADLC_HOME`: the secret store (`home/secrets`) — the secret hostd and the bridge authenticate each other with, the console secret, the crew's GitHub sign-ins and the model-account keys — and subscription logins |
+| `home/` | `OPENADLC_HOME`: the secret store (`home/secrets`) — the secret hostd and the bridge authenticate each other with, the console secret, the crew's GitHub sign-ins and the model-account keys — and subscription logins |
 | `work/` | One mirror per repository, and each task's clone under its bot's folder |
 | `assets/` | The skills, roles, skill runner and `gh` the bots are given, copied out of the image each time hostd starts |
 
@@ -250,31 +250,31 @@ gives a bot's container is resolved by the host's Docker daemon, so each has to
 be a path that exists on the host; one that exists only inside hostd's container
 gave the bot an empty directory, and a task there had no repository. A bot's
 container reaches the bridge and hostd on the ports published on the host
-(`FLEETADLC_HOSTD_TASK_BRIDGE_URL`, `FLEETADLC_HOSTD_TASK_HOSTD_URL`), since it cannot resolve their
+(`OPENADLC_HOSTD_TASK_BRIDGE_URL`, `OPENADLC_HOSTD_TASK_HOSTD_URL`), since it cannot resolve their
 compose names.
 
 `setup` also makes the console secret, `home/secrets/console-api-secret.secret`,
 when it is missing. The console is given that one file, read-only, and not the
 rest of the home, and is published on 127.0.0.1 unless you set
-`FLEETADLC_CONSOLE_HOST`. Print a sign-in link for it with
+`OPENADLC_CONSOLE_HOST`. Print a sign-in link for it with
 
 ```bash
-FLEETADLC_HOME=~/.fleetadlc-compose/home pnpm fleetadlc console-link
+OPENADLC_HOME=~/.openadlc-compose/home pnpm openadlc console-link
 ```
 
-`FLEETADLC_COMPOSE_HOME` must be an absolute path, and `FLEETADLC_BRIDGE_PORT` and
-`FLEETADLC_HOSTD_PORT` move together; hostd refuses to start otherwise, since either
+`OPENADLC_COMPOSE_HOME` must be an absolute path, and `OPENADLC_BRIDGE_PORT` and
+`OPENADLC_HOSTD_PORT` move together; hostd refuses to start otherwise, since either
 would send this install's tasks somewhere else. Its task containers, task network
 and task database server are named after the compose project
 (`<project>-bot-task-<id8>`, `<project>-bot-tasks`, `<project>-bot-taskdb`) and
-labelled with it (`fleetadlc.install=compose-<project>`), so they are never the
-containers of an install `fleetadlc up` runs on the same machine, and a hostd never
+labelled with it (`openadlc.install=compose-<project>`), so they are never the
+containers of an install `openadlc up` runs on the same machine, and a hostd never
 reuses or removes a container another install made. They run an image of the project's own,
 `compose-<project>-bot:latest`, which hostd builds with
 `infra/local/build-bot-image.sh` on its first start (a few minutes) and which the
-weekly engine update replaces and rolls back without touching `fleetadlc-bot:latest`.
+weekly engine update replaces and rolls back without touching `openadlc-bot:latest`.
 
-`FLEETADLC_COMPOSE_HOME` is not `~/.fleetadlc`, so `fleetadlc` commands run on the
+`OPENADLC_COMPOSE_HOME` is not `~/.openadlc`, so `openadlc` commands run on the
 machine do not see this install; run them in the bridge's container instead, which runs as
 uid 1000, so anything a command writes stays readable by the services. The CLI asks the bridge at
 127.0.0.1, which is that container's own; in hostd's container nothing answers
@@ -296,13 +296,13 @@ once the console has set up the app or the webhook; before that it is in the
 `webhook-secret` volume. `down -v` deletes both volumes, `db` and
 `webhook-secret`: the board, the settings (the app's client id among them),
 the crew's account assignments, the model accounts and that first secret. Take
-a `fleetadlc backup` first, and expect to go through the walkthrough again
+a `openadlc backup` first, and expect to go through the walkthrough again
 afterwards.
 
 ## 2. Create the GitHub accounts
 
 **Open http://127.0.0.1:47300/onboarding and work down it** (signed in with the
-link `fleetadlc up` printed, or one from `fleetadlc console-link`). The GitHub accounts
+link `openadlc up` printed, or one from `openadlc console-link`). The GitHub accounts
 step asks for two accounts — one that does the work and one that approves it —
 with a suggested address and username, and a connect button that runs the device
 flow for the account, not for a seat. The Crew step is where each bot is put on
@@ -369,7 +369,7 @@ email**. The bots' own commits use the account's noreply address, but the commit
 GitHub writes for the crew — the squash merge of each pull request, and the
 merges that bring a branch up to date — use the account's default commit email.
 Without the setting, every crew pull request merged in a public repository
-publishes your address, and its `+fleetadlc-<seat>` tag says what it is for. The
+publishes your address, and its `+openadlc-<seat>` tag says what it is for. The
 `commit-email` check reads the newest commit GitHub wrote for each account and
 raises a warning card when it carries the account's own address.
 
@@ -396,8 +396,8 @@ Worth knowing before you create the accounts:
   current terms before you create them; this paragraph summarises them and is
   not legal advice.
 - GitHub needs a distinct address per account, and most providers deliver
-  `you+anything@` to the same inbox — so `you+fleetadlc-builder@` and
-  `you+fleetadlc-lead-reviewer@` put the crew's mail in one mailbox. Onboarding
+  `you+anything@` to the same inbox — so `you+openadlc-builder@` and
+  `you+openadlc-lead-reviewer@` put the crew's mail in one mailbox. Onboarding
   suggests these from your own address. A distinct address does not change
   how many free accounts GitHub allows you.
 - **Who owns the repository does not change how OpenADLC works.** A person and an
@@ -416,11 +416,11 @@ console shows it by that handle, with its role beside it where there is room —
 seats' names, since bots all called by one login could not be told apart.
 
 Everything the bot has is kept under that name — its folder under
-`~/.fleetadlc/work`, its secret files under `~/.fleetadlc/secrets`, and its sessions
+`~/.openadlc/work`, its secret files under `~/.openadlc/secrets`, and its sessions
 (`<bot>/<skill>-<task>`) — so all of it moves when the bot is renamed. Its tasks'
 computers — the container each task runs in — are named after the tasks, not the bot. A bot is never renamed in the middle of a task: one that is
 working is renamed once it has finished. The seat does not move. It is what
-`fleetadlc up` finds the bot by and what a repository's `owner` names, so connecting
+`openadlc up` finds the bot by and what a repository's `owner` names, so connecting
 an account never changes the configuration.
 
 Nothing is reserved in advance. `config/bots.yaml` names no account, so none can
@@ -428,7 +428,7 @@ be set aside for a bot nobody has connected — which is how an install once ref
 the account its operator actually had, because the configuration had promised it
 to another bot. The username the walkthrough offers is a suggestion, made from the
 role and the name of the account that owns the repositories (such as
-`acme-fleetadlc-builder`) and checked against GitHub before it is offered. An account
+`acme-openadlc-builder`) and checked against GitHub before it is offered. An account
 you already have works as well.
 
 ### How a bot looks
@@ -438,7 +438,7 @@ a glance. Two seats of one role, such as two builders, share a tint until
 one of them is given a color of its own. Choose it in **Settings → Appearance →
 Crew colors and avatars**, from eight named tints or *By role*. It is stored per bot, audited
 as `bot.color_changed`, and used wherever the bot's avatar appears: the board,
-its thread, /crew and Settings. `config/bots.yaml` names no color, and `fleetadlc up`
+its thread, /crew and Settings. `config/bots.yaml` names no color, and `openadlc up`
 leaves a chosen one alone.
 
 On the tint is a small mark for the engine the bot thinks with: petals for
@@ -476,7 +476,7 @@ person's repository.
 
 GitHub sends each bot that is not in yet an invitation, and a bot does nothing
 at all until it is accepted. This is the step that strands an install
-quietly: the account is connected, its token is valid, `fleetadlc auth status` says
+quietly: the account is connected, its token is valid, `openadlc auth status` says
 so — and every call 404s, because an invitation is sitting unread in a mailbox.
 
 OpenADLC accepts them with the bot's own credential, the one the device flow
@@ -558,14 +558,14 @@ Settings → Developer settings → GitHub Apps → New GitHub App.
 
 - **Name:** one no other app on GitHub has; GitHub app names are unique across
   all of GitHub.
-- **Device flow:** enabled. Without it, `fleetadlc auth login` cannot work.
+- **Device flow:** enabled. Without it, `openadlc auth login` cannot work.
 - **Expire user authorization tokens:** on. This is what makes user tokens last
   eight hours and issue a refresh token.
 - **Webhook URL:** your bridge's `/webhooks/github`, with any secret for now:
   the walkthrough's Webhook step replaces it with the install's own once
   OpenADLC holds the app's private key, writing one secret to both sides.
-  Exporting `FLEETADLC_WEBHOOK_SECRET` does not set it: that variable is read
-  only before `fleetadlc init` has generated a secret, and afterwards the one in
+  Exporting `OPENADLC_WEBHOOK_SECRET` does not set it: that variable is read
+  only before `openadlc init` has generated a secret, and afterwards the one in
   the secret store wins.
 - **Permissions:** under Repository permissions, read and write on contents,
   issues, pull requests, commit statuses, checks, workflows, actions and
@@ -616,7 +616,7 @@ keeps the app's id and key, not its name.
 nor the event, because a manifest decides them only for the app it creates. Until
 both are added, GitHub sends no `deployment_status`, so no change is labelled
 `deployed:testing` or `deployed:prod` and no promote moves a card to Done. The
-`app-permissions` check says so on the board and in `fleetadlc doctor`, with a link to
+`app-permissions` check says so on the board and in `openadlc doctor`, with a link to
 the page. On GitHub: **Settings → Developer settings → GitHub Apps → your app →
 Permissions & events** (under the organization's settings for an app an
 organization owns), then:
@@ -682,7 +682,7 @@ organization OpenADLC works in has one.
 
 ## 4. Configure and connect
 
-An install brought up in step 1 is already configured here: `fleetadlc init`
+An install brought up in step 1 is already configured here: `openadlc init`
 there set the driver and the database url, and generated a webhook secret, as
 it does whenever the install has none. The account the repositories belong to,
 the app client id, the operator's address, the webhook and who may answer gates
@@ -693,19 +693,19 @@ anything.
 The walkthrough's GitHub accounts and Crew steps (step 2) also connect the
 accounts and put each seat on one: its connect button runs the device flow
 for an account. The terminal does the same, for a seat at a time or for all of
-them, once `fleetadlc up` is running:
+them, once `openadlc up` is running:
 
 ```bash
-fleetadlc init --driver docker   # only for an install step 1 did not set up; also takes --database-url
-fleetadlc up                     # the bridge is what connects each seat
-fleetadlc auth login --all       # or --bot <seat>
+openadlc init --driver docker   # only for an install step 1 did not set up; also takes --database-url
+openadlc up                     # the bridge is what connects each seat
+openadlc auth login --all       # or --bot <seat>
 ```
 
 For each seat the CLI prints a code, and whichever account approves it becomes
 the seat's account:
 
 ```
-  › Sign in to GitHub as acme-fleetadlc-lead-reviewer (not as yourself) and approve the OpenADLC app.
+  › Sign in to GitHub as acme-openadlc-lead-reviewer (not as yourself) and approve the OpenADLC app.
     open https://github.com/login/device and enter this code:
 
     WDJB-MJHT
@@ -714,13 +714,13 @@ the seat's account:
 Sign in **as the account for that seat** — the crew account for a crew seat,
 the reviewer account for a reviewer — not as yourself, enter the code, approve. The CLI hands the
 sign-in to the bridge, which connects the seat exactly as the console's
-walkthrough does: it stores the refresh token under `~/.fleetadlc/secrets` with
+walkthrough does: it stores the refresh token under `~/.openadlc/secrets` with
 `0600` permissions, generates an SSH signing key, uploads the public half to
 the account, and records the refresh token's expiry: the scheduler's
 credential job opens an issue three weeks before it runs out. The bot then takes the account's handle as its name,
 unless other seats share the account.
-`fleetadlc auth login --bot lead-reviewer` connects one seat. With the bridge
-not running, the CLI stores nothing and says to run `fleetadlc up` first.
+`openadlc auth login --bot lead-reviewer` connects one seat. With the bridge
+not running, the CLI stores nothing and says to run `openadlc up` first.
 
 Seats can share an account, as in the two-account crew above. A seat that
 signs in as an account another seat of its group is already on joins that
@@ -738,8 +738,8 @@ console's connect button, or the code the CLI prints. After it, nothing needs
 rotating on a schedule.
 
 ```bash
-fleetadlc auth status     # which accounts are connected
-fleetadlc doctor          # tools, database, host heartbeat, accounts, spend
+openadlc auth status     # which accounts are connected
+openadlc doctor          # tools, database, host heartbeat, accounts, spend
 ```
 
 ## 5. Point it at repositories
@@ -765,9 +765,9 @@ Which paths need a person's review is not set here. It is the `## Human review`
 section of the repository's own `AGENTS.md`, read from its base branch
 ([§6](#6-protect-the-repositories)).
 
-Run `fleetadlc seed` to load changes, or change the same values from the console's
+Run `openadlc seed` to load changes, or change the same values from the console's
 repositories page (those changes are audited). A setting written in this file
-wins at every `fleetadlc up` and `fleetadlc seed`, so a change to it in the console
+wins at every `openadlc up` and `openadlc seed`, so a change to it in the console
 lasts only until then; a setting the file leaves out keeps the console's value,
 or the default a new repository starts with. Each change the seed makes to a
 repository already there is audited as `repo.seeded`. Leave out what you want
@@ -786,7 +786,7 @@ in **Settings → Appearance → Repository colors**. Either way it is audited a
 
 ### The files a repository needs to be legible
 
-A repository OpenADLC manages needs more than labels and a webhook, and `fleetadlc
+A repository OpenADLC manages needs more than labels and a webhook, and `openadlc
 github check` says which of these are missing:
 
 | File | Why a bot needs it |
@@ -798,12 +798,12 @@ github check` says which of these are missing:
 | `.github/pull_request_template.md` | `Closes #N` says which issue a pull request answers. The merge line holds a crew pull request to that issue's lease's paths, and holds one that closes no issue for a person. |
 | `AGENTS.md` | How to build and check, and the `## Human review` section the bridge reads reviewer paths from. |
 | `.github/CODEOWNERS` (written by the rules, [step 6](#6-protect-the-repositories), not by this check) | Without it, "review from a code owner" on the default branch cannot be satisfied by anyone. |
-| `Makefile` | hostd runs `make setup` at task start, and `make ci` when the builder runs `fleetadlc-ci`. |
+| `Makefile` | hostd runs `make setup` at task start, and `make ci` when the builder runs `openadlc-ci`. |
 | `docs/runbooks/README.md`, `docs/adr/README.md`, `docs/adr/0000-template.md` | Reviewed by the workflows lens, and where decisions stop being re-argued. |
 
 ```bash
-fleetadlc github check     # names the missing ones and why each matters
-fleetadlc github apply     # writes only the ones that are absent
+openadlc github check     # names the missing ones and why each matters
+openadlc github apply     # writes only the ones that are absent
 ```
 
 `apply` never overwrites what a repository wrote. What a repository says about
@@ -861,7 +861,7 @@ repository. On a private repository, rulesets hold on GitHub Pro (a person's
 account), Team and Enterprise; CODEOWNERS on Pro and above; and a required
 environment reviewer only on GitHub Enterprise. Where GitHub will hold
 nothing, OpenADLC's own gates still do — the review gate, the merge line with
-the lease it holds a crew pull request to, and the author check — and `fleetadlc github check` reports which of the two is
+the lease it holds a crew pull request to, and the author check — and `openadlc github check` reports which of the two is
 carrying the weight.
 
 The console's **Protect the repositories** step in the walkthrough is the
@@ -869,9 +869,9 @@ default way to apply them: the bridge writes them as the app, whose key it
 holds. The CLI does the same:
 
 ```bash
-fleetadlc github check     # what is missing, drifted, or cannot be expressed here
-fleetadlc github apply     # create it
-fleetadlc github check     # confirm it from the outside
+openadlc github check     # what is missing, drifted, or cannot be expressed here
+openadlc github apply     # create it
+openadlc github check     # confirm it from the outside
 ```
 
 `github apply` and `github sync-labels` act as the OpenADLC app, with an
@@ -887,11 +887,11 @@ pin off; use the console's Protect step then.
 `check` is read-only and exits non-zero when anything is missing or has drifted,
 so it belongs in whatever watches this install. What the two of them cover:
 
-- the **`fleetadlc: main`** ruleset — linear history, no force push, no deletion,
+- the **`openadlc: main`** ruleset — linear history, no force push, no deletion,
   signed commits, squash-only, one approving review **from a code owner**,
   conversation resolution, and required checks (`ci`, `review-gate`) with
   **branches up to date before merging**;
-- the **`fleetadlc: agent and system branches`** ruleset, which stops one bot
+- the **`openadlc: agent and system branches`** ruleset, which stops one bot
   rewriting or deleting another's work branch under `agent/**` and `system/**`
   while leaving each free to create its own. Repairing either one changes only
   what OpenADLC declares there: a rule, a branch or a required check you
@@ -926,7 +926,7 @@ in `.github/workflows/ci.yml` is `ci`, so the context GitHub publishes is `ci` �
 not `workflow / job`, which is what a reusable-workflow call produces. A ruleset that requires a context no job
 publishes never goes green and nothing says why, so the name lives in one place,
 `REQUIRED_CHECK` in `packages/shared/src/checks.ts`, which the merge line and
-`fleetadlc github apply` both read, and a test fails if the workflow's job name drifts
+`openadlc github apply` both read, and a test fails if the workflow's job name drifts
 from it.
 
 Two things `check` will tell you that `apply` cannot fix, and reports as
@@ -999,7 +999,7 @@ label goes without it, and the gate still waits on the person. Anyone a change d
 automatic CODEOWNERS review request withdrawn, so a person's review queue is the
 pull requests that genuinely wait on them.
 
-Everything else `apply` touches is namespaced `fleetadlc:`, and a ruleset it does not
+Everything else `apply` touches is namespaced `openadlc:`, and a ruleset it does not
 own is left alone.
 
 **The crew never signs off its commits.** OpenADLC asks for no DCO, and a
@@ -1049,9 +1049,9 @@ The key lives in the secret store under the account. To put it there by hand
 instead, once you know the account's id:
 
 ```bash
-# ~/.fleetadlc/secrets/model-account-<id>.secret, mode 0600
-printf '%s' "$ANTHROPIC_API_KEY" > ~/.fleetadlc/secrets/model-account-"$ACCOUNT_ID".secret
-chmod 600 ~/.fleetadlc/secrets/model-account-"$ACCOUNT_ID".secret
+# ~/.openadlc/secrets/model-account-<id>.secret, mode 0600
+printf '%s' "$ANTHROPIC_API_KEY" > ~/.openadlc/secrets/model-account-"$ACCOUNT_ID".secret
+chmod 600 ~/.openadlc/secrets/model-account-"$ACCOUNT_ID".secret
 ```
 
 ### Subscriptions
@@ -1088,19 +1088,19 @@ sign-in. Nothing needs a terminal except, for Claude, one command.
   its code has expired anyway.
 
 Each OpenAI or xAI subscription has one login directory,
-`~/.fleetadlc/logins/<account-id>` (`FLEETADLC_LOGIN_ROOT` moves the root), 0700 and
+`~/.openadlc/logins/<account-id>` (`OPENADLC_LOGIN_ROOT` moves the root), 0700 and
 made by hostd. A task does not get it as its home, and neither do a sign-in,
 a model list, a check or an engine-update call. Under the `docker` driver
-each of those gets a directory of its own, mounted at `/fleetadlc/login`. A
+each of those gets a directory of its own, mounted at `/openadlc/login`. A
 task's is `logins/.homes/<slot>`, outside the slot, and it goes when the
 computer ends. The sign-in is the account's `auth.json`, shared, in a
-directory of its own: `~/.fleetadlc/logins/<account-id>/sign-in/auth.json`.
+directory of its own: `~/.openadlc/logins/<account-id>/sign-in/auth.json`.
 Codex 0.155.1 writes that file in place, so it is bind-mounted at
-`/fleetadlc/login/auth.json`. A Codex task gets no directory of the
+`/openadlc/login/auth.json`. A Codex task gets no directory of the
 account's. Grok renames a new file over it, and a file mount would fail that
 rename with EBUSY and keep the old inode, so a Grok task has the `sign-in`
-directory, and nothing else of the account's, at `/fleetadlc/auth`, and
-`GROK_AUTH_PATH` is `/fleetadlc/auth/auth.json`. A refresh is the account's
+directory, and nothing else of the account's, at `/openadlc/auth`, and
+`GROK_AUTH_PATH` is `/openadlc/auth/auth.json`. A refresh is the account's
 file at once. A copy
 per task is not used: OpenAI refresh tokens are single-use, and a hostd
 crash before the copy was put back lost the refresh. Under the `docker`
@@ -1112,7 +1112,7 @@ from the sign-in mount and the sealed files. A plugin, a hook, an LSP server,
 a trusted-folder list or an instructions file one task writes is not in the
 next task's home. `config.toml`, `managed_config.toml`, `requirements.toml`,
 `AGENTS.md`, `AGENTS.override.md` and `.env` are bind-mounted read-only from
-`~/.fleetadlc/logins/.published/<account-id>/`. A rename onto one of those
+`~/.openadlc/logins/.published/<account-id>/`. A rename onto one of those
 bind-mounted files fails with EBUSY, so the CLI cannot replace the mount, and
 a read-only mount cannot be written in place. A writable copy is not mounted:
 the task could still change that copy in place, and this task's CLI would
@@ -1135,11 +1135,11 @@ there, included, and an empty file when the login has none. A link is not
 followed. Read them before the next task runs:
 
 ```bash
-cat ~/.fleetadlc/logins/.published/<account-id>/config.toml
-cat ~/.fleetadlc/logins/.published/<account-id>/managed_config.toml
-cat ~/.fleetadlc/logins/.published/<account-id>/requirements.toml
-cat ~/.fleetadlc/logins/.published/<account-id>/AGENTS.md
-cat ~/.fleetadlc/logins/.published/<account-id>/.env
+cat ~/.openadlc/logins/.published/<account-id>/config.toml
+cat ~/.openadlc/logins/.published/<account-id>/managed_config.toml
+cat ~/.openadlc/logins/.published/<account-id>/requirements.toml
+cat ~/.openadlc/logins/.published/<account-id>/AGENTS.md
+cat ~/.openadlc/logins/.published/<account-id>/.env
 ```
 
 Replace a published file and the next computer mounts the replacement. A
@@ -1231,7 +1231,7 @@ Codex can still think on an install with no OpenAI account.
   substitution is said. The proposal does not follow what you saved: a seat
   with nothing saved starts on the recommendation, never on an earlier
   choice.
-- **A console choice survives `fleetadlc up`.** The file is the fresh-install
+- **A console choice survives `openadlc up`.** The file is the fresh-install
   default. A bot assigned in the console keeps its engine, model and account
   through every restart; a bot nobody assigned takes the file's engine and
   model, so an edit to the file still reaches it.
@@ -1257,7 +1257,7 @@ difference up.
 ## 8. What a task runs against
 
 A task whose seat is marked `sidecarDb: true` in `config/bots.yaml` gets a
-database of its own on the host's task database server (`fleetadlc-taskdb`, one
+database of its own on the host's task database server (`openadlc-taskdb`, one
 Postgres per host, published on the host's gateway only): a role and a database
 named after the task, made from a template that already has `vector`,
 `pgcrypto`, `citext` and `uuid-ossp`, closed to every other role, and dropped
@@ -1295,11 +1295,11 @@ token, and tasks will use it:
 
 ```bash
 # The host is read when hostd starts, so export it in the shell that runs
-# `fleetadlc up`, and restart (`fleetadlc down && fleetadlc up`) after changing it.
-export FLEETADLC_REGISTRY_HOST=npm.internal.example
+# `openadlc up`, and restart (`openadlc down && openadlc up`) after changing it.
+export OPENADLC_REGISTRY_HOST=npm.internal.example
 # The token is read on every request, so a rotation takes effect at the next install.
-printf '%s' "$REGISTRY_TOKEN" > ~/.fleetadlc/secrets/registry-token.secret
-chmod 600 ~/.fleetadlc/secrets/registry-token.secret
+printf '%s' "$REGISTRY_TOKEN" > ~/.openadlc/secrets/registry-token.secret
+chmod 600 ~/.openadlc/secrets/registry-token.secret
 ```
 
 Store a **read-only** token, scoped to the packages your repositories install: a
@@ -1315,19 +1315,19 @@ in its Makefile's `setup` and `ci` targets as well as anywhere else it
 installs:
 
 ```bash
-fleetadlc-install pnpm install --frozen-lockfile
+openadlc-install pnpm install --frozen-lockfile
 ```
 
 The `make setup` hostd runs when a task starts and the `make ci` behind
-`fleetadlc-ci` get the task's id, its token and hostd's address, as the
+`openadlc-ci` get the task's id, its token and hostd's address, as the
 session does, so the wrapper fetches the credential there too. The builder,
 conflict resolver and QA may run it; the reviewer never installs. A review
 that checks out a pull request does not get that `make setup` either: the
 Makefile would be the pull request's, run with the task token before the
 session's tools apply.
 
-`fleetadlc-install` asks hostd for the credential and gives it to the one
-command it runs, in that command's environment as `FLEETADLC_REGISTRY_TOKEN`.
+`openadlc-install` asks hostd for the credential and gives it to the one
+command it runs, in that command's environment as `OPENADLC_REGISTRY_TOKEN`.
 The npmrc it points npm and pnpm at, a private file outside the worktree
 removed afterwards (including when the install fails), names that variable
 rather than holding the token, so the token is never written to disk. No
@@ -1340,7 +1340,7 @@ Three behaviours are worth knowing before you rely on it:
 - On an install with no registry configured, hostd answers `501` and the wrapper
   runs the command unchanged. Outside an OpenADLC session — a person in
   `tmux attach` — it also runs the command unchanged.
-- With a registry configured, hostd also sets `FLEETADLC_REGISTRY_CONFIGURED=1`
+- With a registry configured, hostd also sets `OPENADLC_REGISTRY_CONFIGURED=1`
   in the session, in `make setup` and in local CI. The flag comes from hostd's
   configuration, never the repository's. Where it is set, a wrapper missing the
   task's id, token or hostd's address **fails** and names what is missing,
@@ -1351,13 +1351,13 @@ Three behaviours are worth knowing before you rely on it:
   token stored, or an empty token file: hostd answers `503` with how to store
   one, and the install fails until you do.
 
-Under Docker Compose, export `FLEETADLC_REGISTRY_HOST` in the shell that runs
+Under Docker Compose, export `OPENADLC_REGISTRY_HOST` in the shell that runs
 `docker compose up`, which passes it to hostd, and put the token in the compose
-install's own home rather than `~/.fleetadlc`:
+install's own home rather than `~/.openadlc`:
 
 ```bash
-export FLEETADLC_REGISTRY_HOST=npm.internal.example
-home="${FLEETADLC_COMPOSE_HOME:-$HOME/.fleetadlc-compose}/home"
+export OPENADLC_REGISTRY_HOST=npm.internal.example
+home="${OPENADLC_COMPOSE_HOME:-$HOME/.openadlc-compose}/home"
 printf '%s' "$REGISTRY_TOKEN" > "$home/secrets/registry-token.secret"
 chmod 600 "$home/secrets/registry-token.secret"
 docker compose -f infra/local/docker-compose.yml up -d
@@ -1369,9 +1369,9 @@ Add the bare host name to `cloud.tfvars.json`, save it and apply; the module
 adds it to the egress allowlist and hands it to hostd:
 
 ```bash
-# in ~/.fleetadlc/cloud.tfvars.json: "registry_host": "npm.internal.example"
-fleetadlc cloud push
-fleetadlc cloud apply
+# in ~/.openadlc/cloud.tfvars.json: "registry_host": "npm.internal.example"
+openadlc cloud push
+openadlc cloud apply
 ```
 
 Then store the token once as the Secret Manager secret `fleet-registry-token`,
@@ -1471,7 +1471,7 @@ it `inactive`), and its latest `smoke-testing of deploy-testing <sha>` run that
 ran (skipped and cancelled runs are passed over) must be green. Otherwise the
 job stops and says what is missing. `SMOKE_WORKFLOW` in that step names the
 smoke's workflow file; keep it equal to `testing.smoke` in
-`.github/fleetadlc.yml`.
+`.github/openadlc.yml`.
 
 For an emergency fix that cannot wait for testing, a person with `admin` or
 `maintain` on the repository dispatches it with `emergency_override` set to the
@@ -1498,8 +1498,8 @@ testing URL — on the subject `<repo>#testing@<sha>`, and a `promote_waiting`
 notification to the install's owner saying the readiness report will appear in
 that thread. Read it before you approve.
 
-The testing URL is `testing.url` in the repository's `.github/fleetadlc.yml`,
-else the repository's setting in the console, else `FLEETADLC_TESTING_URL`
+The testing URL is `testing.url` in the repository's `.github/openadlc.yml`,
+else the repository's setting in the console, else `OPENADLC_TESTING_URL`
 (deprecated). The QA task is given it in a `testing.md` document, with the
 commit, at its start and again whenever it resumes; the nightly run and the
 builder's verification after a merge reaches testing are given it the same
@@ -1552,14 +1552,14 @@ The notification then says the promote is running, not that it waits.
 
 ### The environments
 
-All three are created by `fleetadlc github apply` (step 6), which is the only thing that
+All three are created by `openadlc github apply` (step 6), which is the only thing that
 should create them — an environment made by hand is one nobody checks. What it
 makes, so you can confirm it from the GitHub UI:
 
 - **`testing`** — a custom deployment branch policy naming the default branch
   and nothing else, no reviewers, no wait timer.
 - **`production`** — the same branch policy, and what the repository's delivery
-  rules (`.github/fleetadlc.yml`, see [configuration.md](configuration.md#githubfleetadlcyml--how-a-repository-ships))
+  rules (`.github/openadlc.yml`, see [configuration.md](configuration.md#githubopenadlcyml--how-a-repository-ships))
   say holds it: with `approval: auto` (the default), no reviewer and a wait
   timer of `soakMinutes` (30 unless chosen otherwise); with `approval:
   reviewers`, `prevent_self_review` on and required reviewers who are people:
@@ -1583,7 +1583,7 @@ workflow to its own branch that reads those. An environment's secrets reach
 only a job its branch policy admits.
 
 GitHub creates an environment a job names if it does not exist, with no
-protection at all. Run `fleetadlc github apply` after copying the workflows in,
+protection at all. Run `openadlc github apply` after copying the workflows in,
 so each one exists with its branch policy before anything runs in it.
 
 The branch policy is what stops a deploy of anything that never went through the
@@ -1597,7 +1597,7 @@ the check names the team (`@<org>/<slug>`) and asks that no crew account be a
 member rather than passing. On a
 **private repository** GitHub holds an environment reviewer only on GitHub
 Enterprise, whoever owns the repository: on Free, Pro and Team a required
-reviewer holds only on a public repository. `fleetadlc github check` reports that as
+reviewer holds only on a public repository. `openadlc github check` reports that as
 *cannot be expressed* rather than passing over it. Until the repository is
 public or on that plan, the bridge holds production itself: each promote of a
 repository set to `approval: reviewers` waits in Needs you until a person
@@ -1614,12 +1614,12 @@ policy to it.
 
 ### Turning it on
 
-A repository says how it ships in `.github/fleetadlc.yml` on its default branch
-([configuration.md](configuration.md#githubfleetadlcyml--how-a-repository-ships)).
+A repository says how it ships in `.github/openadlc.yml` on its default branch
+([configuration.md](configuration.md#githubopenadlcyml--how-a-repository-ships)).
 `crew/templates/repo/` has that file and four dispatch-only workflows
 (`deploy-testing`, `smoke-testing`, `promote-production`, `rollback-production`)
 that run the repository's Makefile targets; copy them in, fill in the targets,
-and run `fleetadlc github apply` so the `production` environment matches the
+and run `openadlc github apply` so the `production` environment matches the
 rules. `apply` does not write them itself: on Automatic, a `deploy-testing`
 workflow appearing would turn deploys on in a repository nobody set up for them.
 A repository that copied `smoke-testing.yml` before it checked where its
@@ -1649,8 +1649,8 @@ written:
 
 ```
 Settings → Secrets and variables → Actions → Variables
-  FLEETADLC_DEPLOY_TESTING = true
-  FLEETADLC_SMOKE_TESTING = true
+  OPENADLC_DEPLOY_TESTING = true
+  OPENADLC_SMOKE_TESTING = true
 ```
 
 Until the first is set, `deploy-testing` skips. That is deliberate: a green
@@ -1661,9 +1661,9 @@ never happened. Skipped is not failed, so it starts no revert either.
 Write the `smoke-testing` target together with `deploy-testing`. A red smoke
 reverts the change and sends it back to build, so the Makefile's stub smoke,
 which refuses, would revert every merge once only the deploy was filled in.
-Until `FLEETADLC_SMOKE_TESTING` is set, the template's `smoke-testing` skips,
+Until `OPENADLC_SMOKE_TESTING` is set, the template's `smoke-testing` skips,
 and a skipped smoke neither promotes nor reverts: a merged change waits on
-testing. OpenADLC's own `smoke-testing` reads `FLEETADLC_DEPLOY_TESTING`
+testing. OpenADLC's own `smoke-testing` reads `OPENADLC_DEPLOY_TESTING`
 instead, since its deploy and smoke are written together.
 
 ### What a repository has to provide
@@ -1683,8 +1683,8 @@ put there.
 OpenADLC's own repository is not on the template: its `promote-production`
 workflow splits the promote into `deploy-production` (deploy serving no
 traffic; last two lines, the revision's tag then its URL), `smoke-production`
-and `shift-traffic` (both on `FLEETADLC_REVISION_TAG`), and its
-`rollback-production` reads `FLEETADLC_REVISION_TAG` rather than `TO`. Those
+and `shift-traffic` (both on `OPENADLC_REVISION_TAG`), and its
+`rollback-production` reads `OPENADLC_REVISION_TAG` rather than `TO`. Those
 targets are stubbed there too, because it has no hosted environment of its own
 yet.
 
@@ -1735,14 +1735,14 @@ dispatcher's overlap check on the paths each issue declares.
    refreshes it as it works, for every task on it.
 2. **Raise Tasks at once** on the repository's settings page. It offers as many
    as its builders' tasks at once add up to.
-3. **Give the host room.** A host runs `FLEETADLC_HOST_CAPACITY_TASKS` tasks at
+3. **Give the host room.** A host runs `OPENADLC_HOST_CAPACITY_TASKS` tasks at
    once (four by default), each with its seat's CPUs and memory; past that a
    task waits for one to end.
 
 A second builder seat is still how a repository gets a second GitHub account:
 **Settings → Crew → Add a builder** adds the next free seat — `builder-2`, then
 `builder-3` — with the engine and model `config/bots.yaml` gives the builder,
-while the install runs, and `fleetadlc up` keeps it. Put it on an account on its
+while the install runs, and `openadlc up` keeps it. Put it on an account on its
 row: the crew account the builder already uses is offered, and joining it needs
 no sign-in. A seat can also be declared in `config/bots.yaml` beside `builder`,
 with the builder's role, so a fresh install starts with it.
@@ -1760,43 +1760,43 @@ rather than quietly running fewer.
 ## 11. Operate it
 
 ```bash
-fleetadlc status                   # processes, board, spend, crew
-fleetadlc logs bridge              # where a service writes its log
-fleetadlc attach <name> <session>  # take over a running session; ctrl-b d to hand it back
-fleetadlc github sync-labels       # after editing config/labels.json; as the app, like the console's repository setup
-fleetadlc github check             # can the automation account reach the repositories
-fleetadlc down                     # stop the stack
+openadlc status                   # processes, board, spend, crew
+openadlc logs bridge              # where a service writes its log
+openadlc attach <name> <session>  # take over a running session; ctrl-b d to hand it back
+openadlc github sync-labels       # after editing config/labels.json; as the app, like the console's repository setup
+openadlc github check             # can the automation account reach the repositories
+openadlc down                     # stop the stack
 ```
 
 Under the `docker` driver a bot has no computer between tasks, so there is
-something to take over only while a task runs (`fleetadlc status` says which
+something to take over only while a task runs (`openadlc status` says which
 bots are running one): `<session>` is that task's session, as the bot's
 Terminal tab in the console names it. Only under the `local`
-driver does every bot keep an idle `shell` session (`fleetadlc attach <name>
+driver does every bot keep an idle `shell` session (`openadlc attach <name>
 shell`) as well. A bot's name is its account's handle, or its seat until one
-connects; `fleetadlc status` lists the crew by it. Take-over also works in the console's
+connects; `openadlc status` lists the crew by it. Take-over also works in the console's
 Terminal tab, which attaches in the browser; detaching leaves the session and the
 task running.
 
-Jobs on the bridge. The timer fires them, each every `FLEETADLC_JOB_<NAME>_MINUTES`
+Jobs on the bridge. The timer fires them, each every `OPENADLC_JOB_<NAME>_MINUTES`
 (0 turns one off); these curls run one now, on the default bridge port. The
 `/internal` routes answer only a caller with the install's internal secret:
 
 ```bash
-SECRET="$(cat "${FLEETADLC_HOME:-$HOME/.fleetadlc}/secrets/internal-api-secret.secret")"
-curl -X POST -H "x-fleetadlc-internal-secret: $SECRET" http://127.0.0.1:47311/internal/schedule/reconcile   # every 15 minutes
-curl -X POST -H "x-fleetadlc-internal-secret: $SECRET" http://127.0.0.1:47311/internal/schedule/status      # every 15 minutes
-curl -X POST -H "x-fleetadlc-internal-secret: $SECRET" http://127.0.0.1:47311/internal/schedule/stages      # hourly
-curl -X POST -H "x-fleetadlc-internal-secret: $SECRET" http://127.0.0.1:47311/internal/schedule/merge       # every 10 minutes
-curl -X POST -H "x-fleetadlc-internal-secret: $SECRET" http://127.0.0.1:47311/internal/schedule/deploy      # every 30 minutes
-curl -X POST -H "x-fleetadlc-internal-secret: $SECRET" http://127.0.0.1:47311/internal/schedule/events      # daily: GitHub deliveries past FLEETADLC_EVENT_RETENTION_DAYS
+SECRET="$(cat "${OPENADLC_HOME:-$HOME/.openadlc}/secrets/internal-api-secret.secret")"
+curl -X POST -H "x-openadlc-internal-secret: $SECRET" http://127.0.0.1:47311/internal/schedule/reconcile   # every 15 minutes
+curl -X POST -H "x-openadlc-internal-secret: $SECRET" http://127.0.0.1:47311/internal/schedule/status      # every 15 minutes
+curl -X POST -H "x-openadlc-internal-secret: $SECRET" http://127.0.0.1:47311/internal/schedule/stages      # hourly
+curl -X POST -H "x-openadlc-internal-secret: $SECRET" http://127.0.0.1:47311/internal/schedule/merge       # every 10 minutes
+curl -X POST -H "x-openadlc-internal-secret: $SECRET" http://127.0.0.1:47311/internal/schedule/deploy      # every 30 minutes
+curl -X POST -H "x-openadlc-internal-secret: $SECRET" http://127.0.0.1:47311/internal/schedule/events      # daily: GitHub deliveries past OPENADLC_EVENT_RETENTION_DAYS
 ```
 
 The `deps` job, weekly, files one "Weekly dependency update" issue in each
 repository the install manages, into intake, unless the last one is still
 open. Triage shapes it for Build without asking anyone, naming the
 repository's manifests and lockfiles, and the crew builds, reviews and lands it
-like any other issue, within the spending caps. `FLEETADLC_JOB_DEPS_MINUTES=0`
+like any other issue, within the spending caps. `OPENADLC_JOB_DEPS_MINUTES=0`
 turns it off.
 
 The internal secret mints every bot's GitHub token and starts work: it never
@@ -1805,8 +1805,8 @@ leaves the install. A monitoring system that files alerts as issues
 instead, which opens that route and nothing else:
 
 ```bash
-ALERTS="$(cat "${FLEETADLC_HOME:-$HOME/.fleetadlc}/secrets/alerts-secret.secret")"
-curl -X POST -H "x-fleetadlc-alerts-secret: $ALERTS" -H 'content-type: application/json' \
+ALERTS="$(cat "${OPENADLC_HOME:-$HOME/.openadlc}/secrets/alerts-secret.secret")"
+curl -X POST -H "x-openadlc-alerts-secret: $ALERTS" -H 'content-type: application/json' \
   -d '{"fingerprint":"disk-full","title":"Disk full on web-1","repo":"site","severity":"page"}' \
   http://127.0.0.1:47311/internal/alerts
 ```
@@ -1837,7 +1837,7 @@ while the bridge was down all look the same from here, so an issue sitting in
 Intake or Spec costs an hour rather than waiting for someone to notice.
 
 The deploy sweep looks for merged work that never received `deployed:testing`.
-Every repository has delivery rules: its `.github/fleetadlc.yml`, else its
+Every repository has delivery rules: its `.github/openadlc.yml`, else its
 stored rules, else the Settings → Repositories choice. For each repository
 whose rules deploy to testing, the sweep dispatches `deploy-testing` as the app
 (as the automation account where the app cannot act), and only for the newest
@@ -1855,7 +1855,7 @@ a quarter of an hour after it was due is a `deploy-dispatch` card. It also reads
 how each dispatched rollback's run ended, first, and holds promotes behind one
 that has not succeeded (see the rollback above). The `deploy-testing`
 workflow remains the deploy. OpenADLC does not read
-`FLEETADLC_DEPLOY_TESTING`; whether a repository has a testing deploy is the choice
+`OPENADLC_DEPLOY_TESTING`; whether a repository has a testing deploy is the choice
 on Settings → Repositories. No testing deploy — and Automatic when no
 `deploy-testing` workflow exists — means the sweep moves `adlc:merged` issues
 to Done and starts no SRE task. The workflow still skips until that Actions
@@ -1870,14 +1870,14 @@ alike ([ADR 0001](adr/0001-attachments-in-the-database.md)), and grow it. The
 limits bound that: **10 MB a file, 20 files and 25 MB a work item** (a request,
 its issue and its pull request together). An upload is kept for a day for the
 person who sent it, until it is sent with something, and the hourly
-`attachments` job (`FLEETADLC_JOB_ATTACHMENTS_MINUTES`) removes what nobody
+`attachments` job (`OPENADLC_JOB_ATTACHMENTS_MINUTES`) removes what nobody
 sent. A backup that includes history carries every sent attachment, as base64,
 so an archive is about a third larger than the attachments' total size. An admin
 removes one with `DELETE /v1/attachments/:id`; nothing removes them by age.
 
 GitHub's webhook deliveries are rows in the `events` table too. The daily
-`events` job (`FLEETADLC_JOB_EVENTS_MINUTES`) removes processed ones older than
-`FLEETADLC_EVENT_RETENTION_DAYS`, 30 by default, keeping the newest; 0 keeps
+`events` job (`OPENADLC_JOB_EVENTS_MINUTES`) removes processed ones older than
+`OPENADLC_EVENT_RETENTION_DAYS`, 30 by default, keeping the newest; 0 keeps
 them for good. A delivery for a repository the install does not manage keeps
 only its type, delivery id and repository name ([security](security.md)).
 
@@ -1946,13 +1946,13 @@ image in use is untouched.
 
 What a run does, on hostd:
 
-1. Reads the versions in use from the `fleetadlc.engines` label the script stamps
+1. Reads the versions in use from the `openadlc.engines` label the script stamps
    on the image (an image built before the label, or before it named Node and
    gh, is asked with each command's `--version`), asks `npm view` for each
    engine's `dist-tags` and publish times, nodejs.org for Node and the GitHub
    CLI's apt repository for `gh`.
 2. Nothing newer that is old enough: the run is `current`, and that is all.
-3. Otherwise builds one `fleetadlc-bot:candidate` for every tool that is due, with
+3. Otherwise builds one `openadlc-bot:candidate` for every tool that is due, with
    the same script, pinned to the newer versions of those tools and to the
    versions in use of the rest, and proves it the way a task will use it: each CLI is found
    on the PATH a session gets (`env -i`) and reports the version it was built
@@ -1962,15 +1962,15 @@ What a run does, on hostd:
    (`newest:opus` is whatever it names that day). A subscription is called
    with its login mounted, as its bots have it. A bot with no credential at
    all is skipped; any other failure — a CLI missing, a refused key, a model
-   the new CLI will not call — discards the candidate, and `fleetadlc-bot:latest`
+   the new CLI will not call — discards the candidate, and `openadlc-bot:latest`
    is untouched.
-4. A candidate that passes becomes `fleetadlc-bot:latest`; the image it replaces
-   becomes `fleetadlc-bot:previous`. The next task of every bot starts on it,
+4. A candidate that passes becomes `openadlc-bot:latest`; the image it replaces
+   becomes `openadlc-bot:previous`. The next task of every bot starts on it,
    since each task starts in a new container; a running task finishes on the
    image it started with, and warm computers on the old image
-   (`FLEETADLC_WARM_POOL`) are drained.
+   (`OPENADLC_WARM_POOL`) are drained.
 
-These are the names for `FLEETADLC_BOT_IMAGE=fleetadlc-bot:latest`, `fleetadlc up`'s
+These are the names for `OPENADLC_BOT_IMAGE=openadlc-bot:latest`, `openadlc up`'s
 default. The run names the candidate and the previous image after whatever
 `:latest` image hostd's bots run, so a compose project's are
 `compose-<project>-bot:candidate` and `compose-<project>-bot:previous`, and its
@@ -2011,7 +2011,7 @@ installed; the next run brings them forward again.
 
 On the cloud host the update builds on the host itself, from the script the
 service image carries, and the build's steps leave through the egress proxy
-like a bot's traffic does (`FLEETADLC_BOT_EGRESS_PROXY`, passed to the script as
+like a bot's traffic does (`OPENADLC_BOT_EGRESS_PROXY`, passed to the script as
 `BUILD_PROXY`); the allowlist carries the package repositories the bot image
 installs from: `cli.github.com` for gh and `nodejs.org` for Node, not
 GitHub's release downloads, whose `release-assets.githubusercontent.com` it
@@ -2032,15 +2032,15 @@ including the apply: it checks gcloud's and Terraform's sign-ins, installs
 Terraform 1.6 or later into `~/.local/bin` from releases.hashicorp.com when
 there is none (checked against the release's SHA256SUMS; Cloud Shell's own
 `terraform` is only a placeholder that prints install instructions, and
-`fleetadlc cloud plan` and `apply` refuse it; set `OPENADLC_TERRAFORM_VERSION`
+`openadlc cloud plan` and `apply` refuse it; set `OPENADLC_TERRAFORM_VERSION`
 to choose the version, or Homebrew installs it on a Mac), creates the
 project on a billing account if asked (`--billing-account`), turns on the two
 APIs Terraform needs before it can turn on the module's own (Cloud Resource
 Manager and Service Usage), builds the four
 images on Cloud Build ([`cloudbuild.yaml`](../infra/gcp/cloudbuild.yaml)), as a
-service account of the install's own that may push to the `fleetadlc`
+service account of the install's own that may push to the `openadlc`
 repository and read its own source bucket and nothing else, then runs
-`fleetadlc cloud configure`, `plan` and, when you say so, `apply`. It asks
+`openadlc cloud configure`, `plan` and, when you say so, `apply`. It asks
 before anything that costs money or cannot be undone, and it is safe to run
 again. In a new Cloud Shell session it waits for you to click Authorize on
 Cloud Shell's prompt rather than sign you in again. `--skip-images` leaves out the build, `--plan-only` stops before the
@@ -2055,7 +2055,7 @@ one IAP user, and the state bucket from the project id. The GitHub organization
 and App are deliberately not asked at all: the console's walkthrough collects
 the organization and creates the App once the install is up, and the bridge
 prefers what the walkthrough stored over any install-time seed. Flags answer
-anything you want differently (`fleetadlc cloud configure --help` lists them).
+anything you want differently (`openadlc cloud configure --help` lists them).
 
 The console's domain defaults to the install's own address: the module reserves
 the load balancer's IP and, when `console_domain` is empty, serves the console
@@ -2066,7 +2066,7 @@ resolution only: traffic goes to the install's own address, and TLS is Google's
 managed certificate for that name; but it is a third party, and if it is down
 the name stops resolving, so give a production install a domain of its own —
 `--domain` at install time, or set `console_domain` in
-`$FLEETADLC_HOME/cloud.tfvars.json` later and `fleetadlc cloud apply`, then
+`$OPENADLC_HOME/cloud.tfvars.json` later and `openadlc cloud apply`, then
 point an A record for it at `console_ip`. Changing the domain replaces the
 managed certificate, which takes a while to issue (minutes to an hour); the
 console is unreachable on the new name until it is.
@@ -2074,7 +2074,7 @@ console is unreachable on the new name until it is.
 By hand, it is:
 
 Build and push the images first. `configure` uses
-`<region>-docker.pkg.dev/<project>/fleetadlc/{bridge,hostd,console,bot}:latest`
+`<region>-docker.pkg.dev/<project>/openadlc/{bridge,hostd,console,bot}:latest`
 as their names unless the settings already name others, and nothing creates that Artifact Registry repository for you:
 the module enables the API only during its apply, and Cloud Run needs the
 images before then. Cloud Run and the host run `linux/amd64` only, so build for
@@ -2084,9 +2084,9 @@ context is the repository's root.
 
 ```bash
 gcloud services enable artifactregistry.googleapis.com --project <project>
-gcloud artifacts repositories create fleetadlc --repository-format=docker --location=<region> --project <project>
+gcloud artifacts repositories create openadlc --repository-format=docker --location=<region> --project <project>
 gcloud auth configure-docker <region>-docker.pkg.dev
-REGISTRY=<region>-docker.pkg.dev/<project>/fleetadlc
+REGISTRY=<region>-docker.pkg.dev/<project>/openadlc
 docker buildx build --platform linux/amd64 -f infra/local/Dockerfile.service \
   -t "$REGISTRY/bridge:latest" -t "$REGISTRY/hostd:latest" --push .
 docker buildx build --platform linux/amd64 -f infra/local/Dockerfile.console -t "$REGISTRY/console:latest" --push .
@@ -2097,10 +2097,10 @@ docker push "$REGISTRY/bot:latest"
 Then:
 
 ```bash
-fleetadlc cloud configure     # asks who may open the console; the rest defaults, or comes from flags (--project, --region, --domain, …)
-fleetadlc cloud plan          # read it before you apply it
-fleetadlc cloud apply
-fleetadlc cloud output        # the console IP and URL, and the exact webhook URL
+openadlc cloud configure     # asks who may open the console; the rest defaults, or comes from flags (--project, --region, --domain, …)
+openadlc cloud plan          # read it before you apply it
+openadlc cloud apply
+openadlc cloud output        # the console IP and URL, and the exact webhook URL
 ```
 
 The account that applies the module needs permission to create a custom role
@@ -2136,8 +2136,8 @@ the new settings; they reconnect by themselves.
 Nothing about your install is written into this repository. The Terraform state
 and the answers `configure` collected (`cloud.tfvars.json`, which holds the
 webhook secret) live in a bucket in the install's own project. On another
-machine, `fleetadlc cloud pull --bucket <name>` takes the install over from there;
-after a change made by hand, `fleetadlc cloud push` saves it back. Running
+machine, `openadlc cloud pull --bucket <name>` takes the install over from there;
+after a change made by hand, `openadlc cloud push` saves it back. Running
 `configure` again keeps the install's settings: its one question offers what
 the install has, a flag changes exactly the setting it names, and the webhook
 secret and everything else carry over.
@@ -2181,10 +2181,10 @@ or the secrets an install keeps (`fleet-*`, and `<prefix>-*`), and this install'
 own state does not hold them, they stop with what they found:
 
 ```text
-✗ Project acme-fleetadlc still holds an earlier OpenADLC install:
-  - workload identity pool fleetadlc-github: deleted; Google keeps it until 2026-10-31
+✗ Project acme-openadlc still holds an earlier OpenADLC install:
+  - workload identity pool openadlc-github: deleted; Google keeps it until 2026-10-31
 Setting up again in the same project is not supported.
-Create a new Google Cloud project and run `fleetadlc cloud configure` with it.
+Create a new Google Cloud project and run `openadlc cloud configure` with it.
 ```
 
 A live install is never refused: what is in its own state is its own. What
@@ -2215,8 +2215,8 @@ trust them with every repository the install manages.
 
 While Users is empty, the first request makes the first admins:
 
-1. every address in `FLEETADLC_ADMIN_EMAILS` (the module's `admin_emails`; `user:` in front is allowed), if it names any;
-2. otherwise every `user:` in the console's IAP members (`console_members`, passed as `FLEETADLC_CONSOLE_MEMBERS`).
+1. every address in `OPENADLC_ADMIN_EMAILS` (the module's `admin_emails`; `user:` in front is allowed), if it names any;
+2. otherwise every `user:` in the console's IAP members (`console_members`, passed as `OPENADLC_CONSOLE_MEMBERS`).
 
 Each is audited as `user.bootstrap_admin`, and Settings → Users says how they
 became admin. After that only an admin adds, removes or changes anyone, and the
@@ -2230,34 +2230,34 @@ and deploying again makes those admins on the next request. The first visitor
 is never made admin on a cloud install: that would hand it to whoever loaded a
 page first.
 
-`fleetadlc cloud configure` derives the first admins from the `user:` console
+`openadlc cloud configure` derives the first admins from the `user:` console
 members — on a fresh install, the one person it asked about — and warns when
 that names nobody (console access granted only to a `group:` or `domain:`). To
-change them later, edit `admin_emails` in `$FLEETADLC_HOME/cloud.tfvars.json`
-and run `fleetadlc cloud apply`, which also saves the settings to the bucket.
+change them later, edit `admin_emails` in `$OPENADLC_HOME/cloud.tfvars.json`
+and run `openadlc cloud apply`, which also saves the settings to the bucket.
 The operators admitted to the terminal gateway default the same way, to the
 `user:` console members, and are edited there too (`operators`).
 
-A local install (`FLEETADLC_IDENTITY_MODE=local`) makes its first visitor the admin
+A local install (`OPENADLC_IDENTITY_MODE=local`) makes its first visitor the admin
 when neither list names anyone. Its identity is a header the bridge believes
 only beside the console secret, which only the console's server and the CLI
 hold, so a name it does not know is treated as an admin rather than refused:
 refusing it would only lock out the CLI, which names itself `$USER`.
 
 On a local install roles are advisory. Every console request carries one
-identity, `FLEETADLC_IDENTITY` or `console` when that is unset, so anyone who
+identity, `OPENADLC_IDENTITY` or `console` when that is unset, so anyone who
 reaches the console acts as an admin, and Settings → Users says so.
 Demoted to a user, that identity could never open Settings again, so the bridge
 refuses the change (`409 self-demote`) and says why. Removing it is allowed: a
 name the install does not know is an admin. An install that is locked out
 already (Settings say they need an admin) gets back in by setting
-`FLEETADLC_IDENTITY` to an admin's address and running `fleetadlc up` again.
+`OPENADLC_IDENTITY` to an admin's address and running `openadlc up` again.
 Behind IAP the bridge allows demoting yourself, since another admin can undo
 it, and the last-admin rule still holds.
 
 **A cloud install is always behind IAP.** The module puts IAP in front of the
 console and the terminal gateway and runs the bridge with
-`FLEETADLC_IDENTITY_MODE=iap`, and there is no setting to turn that off. It
+`OPENADLC_IDENTITY_MODE=iap`, and there is no setting to turn that off. It
 used to have one: with IAP off, the load balancer answered anyone on the
 internet and the bridge ran in local mode, so anyone, and every task session,
 was an admin, `/terminal` included. A bridge started on Cloud Run in local
@@ -2288,14 +2288,14 @@ own:
    with the new client's id in place of `<CLIENT_ID>` (save once to get the
    id, then add the URI). If the consent screen is not set up yet, set its
    audience to **External** so outside accounts can use it.
-2. Add the client's id and secret to `$FLEETADLC_HOME/cloud.tfvars.json`:
+2. Add the client's id and secret to `$OPENADLC_HOME/cloud.tfvars.json`:
 
    ```json
    "iap_oauth2_client_id": "<id>.apps.googleusercontent.com",
    "iap_oauth2_client_secret": "<secret>"
    ```
 
-3. `fleetadlc cloud push`, then `fleetadlc cloud apply`.
+3. `openadlc cloud push`, then `openadlc cloud apply`.
 
 Both backends, the console's and the terminal's, then use that client. Set both
 values or neither: `plan` refuses one alone. The secret is then kept where
@@ -2304,8 +2304,8 @@ both values and applying puts Google's managed client back.
 
 ### Deploying from GitHub Actions
 
-Set `deployer_repository` (`fleetadlc cloud configure --deployer <owner/name>`,
-or added to the settings and saved with `fleetadlc cloud push`) to the
+Set `deployer_repository` (`openadlc cloud configure --deployer <owner/name>`,
+or added to the settings and saved with `openadlc cloud push`) to the
 repository whose workflow should roll out new images, and apply. The module
 creates a Workload Identity Federation provider and a service account that can
 push images, update the two Cloud Run services and restart hostd over IAP. No
@@ -2342,7 +2342,7 @@ reviewer on the deploy job, and narrowing the project-wide `run.developer` and
 `compute.osAdminLogin` roles to the two services and the one instance.
 
 The workflow is yours and can live in a private repository;
-`fleetadlc cloud output` gives the two values its auth step needs:
+`openadlc cloud output` gives the two values its auth step needs:
 
 ```yaml
 # .github/workflows/deploy.yml, or whatever deployer_workflow names
@@ -2353,36 +2353,36 @@ steps:
       workload_identity_provider: <deployer_workload_identity_provider>
       service_account: <deployer_service_account>
   # then: build infra/local/Dockerfile.service and .console for linux/amd64, push both to
-  # <region>-docker.pkg.dev/<project>/fleetadlc, the service image under both the bridge_image and the
+  # <region>-docker.pkg.dev/<project>/openadlc, the service image under both the bridge_image and the
   # hostd_image tag (the host pulls hostd_image as hostd starts, so a tag left behind keeps it on the old
-  # release), `gcloud run services update` fleetadlc-bridge and fleetadlc-console onto them, and
+  # release), `gcloud run services update` openadlc-bridge and openadlc-console onto them, and
   # `gcloud compute ssh <host> --tunnel-through-iap -- sudo systemctl restart fleet-hostd`.
   # Both the bridge and the host migrate as they start: see Upgrading before a release that drops anything.
 ```
 
 Moving an existing local install onto the cloud: stop the laptop's services,
-`fleetadlc backup` on the laptop, then restore the archive in the cloud
+`openadlc backup` on the laptop, then restore the archive in the cloud
 console's walkthrough (its first step, "Start fresh or restore a backup"),
 taking over the sign-ins. GitHub rotates a sign-in each time it is used, so two
 installs cannot share the crew's accounts. The host runs Container-Optimized
-OS and has no `fleetadlc` command; should the console be out of reach, the
+OS and has no `openadlc` command; should the console be out of reach, the
 restore can run inside hostd's container, with the archive copied under
 `/var/lib/fleet` first:
 
 ```bash
 gcloud compute ssh <host> --tunnel-through-iap -- \
-  sudo docker exec -it fleet-hostd node apps/cli/bin/fleetadlc.mjs restore /var/lib/fleet/<archive> --take-over-sign-ins
+  sudo docker exec -it fleet-hostd node apps/cli/bin/openadlc.mjs restore /var/lib/fleet/<archive> --take-over-sign-ins
 ```
 
 On the cloud the secret store is Secret Manager, not files: the module sets
-`FLEETADLC_SECRET_STORE=gcp` on the bridge and the host, and each ref is a secret
-named `fleet-<ref>` (labelled `fleet=secret`; both names predate FleetADLC and are kept). A write adds a version and
+`OPENADLC_SECRET_STORE=gcp` on the bridge and the host, and each ref is a secret
+named `fleet-<ref>` (labelled `fleet=secret`; both names predate OpenADLC and are kept). A write adds a version and
 destroys the ones before it, so a rotated refresh token is not left readable.
 The database password is generated by the module and kept in the
-`fleetadlc-database-url` secret; nothing puts it in instance metadata.
+`openadlc-database-url` secret; nothing puts it in instance metadata.
 
 Bot containers on the host reach the internet only through the egress proxy
-(`FLEETADLC_BOT_EGRESS_PROXY`, passed to each container as `HTTPS_PROXY`). They
+(`OPENADLC_BOT_EGRESS_PROXY`, passed to each container as `HTTPS_PROXY`). They
 cannot reach the metadata server's token endpoint, which would hand them the
 host's service account and with it every bot's credential, or anything in the
 VPC; hostd and the proxy are reachable at `host.docker.internal`. The one
@@ -2394,14 +2394,14 @@ Three things stay manual, by design:
 
 - **DNS, only for a domain of your own.** The default install is served on
   `<console_ip>.nip.io`, which resolves with no record of yours. Once you set
-  `console_domain`, point an A record for it at `console_ip` (`fleetadlc
+  `console_domain`, point an A record for it at `console_ip` (`openadlc
   cloud output`): the managed certificate, and with it IAP and the webhook URL,
   waits until the record resolves.
 - **Connecting the accounts.** In the console's walkthrough, at its GitHub
   accounts step, connect each bot's account; seats on a shared account join it,
   as in step 4. GitHub requires a person at a browser, and the refresh tokens
   belong in that install's secret store rather than in Terraform state. Not
-  `fleetadlc auth login` from a laptop: the cloud's secret store answers only
+  `openadlc auth login` from a laptop: the cloud's secret store answers only
   the install's own service accounts.
 - **The app's webhook.** An app created from the console already delivers to
   `https://<console_domain>/webhooks/github` with a secret GitHub generated and
@@ -2411,17 +2411,17 @@ Three things stay manual, by design:
   hand, use the console's webhook step, which writes one secret to both sides,
   instead of pasting a value. Only for an app made by hand on a fresh install,
   with nothing stored yet: on the app's settings page set its webhook URL to
-  the `webhook_url` the module outputs (`fleetadlc cloud output`), never to
+  the `webhook_url` the module outputs (`openadlc cloud output`), never to
   `bridge_url`, which GitHub cannot reach, and its secret to `webhook_secret`
-  in `~/.fleetadlc/cloud.tfvars.json`. The console's webhook card shows whether
+  in `~/.openadlc/cloud.tfvars.json`. The console's webhook card shows whether
   a delivery arrived.
 
 Then check the install on the console's health cards and its walkthrough, not
-with `fleetadlc doctor`: the bridge and the console run on Cloud Run, so
+with `openadlc doctor`: the bridge and the console run on Cloud Run, so
 nothing answers doctor's probes on the host or on a laptop.
 
 Sizing: the default host is an `e2-standard-8` with 100 GB of SSD, which holds
-about four tasks at once with 6 GB builders — `FLEETADLC_HOST_CAPACITY_TASKS`,
+about four tasks at once with 6 GB builders — `OPENADLC_HOST_CAPACITY_TASKS`,
 four by default. Each task is a container with its seat's CPUs and memory, made
 when it starts and removed when it ends, so the host is sized for the tasks it
 runs at once, not for the crew; an `e2-standard-16` runs six to eight. The disk
@@ -2429,8 +2429,8 @@ holds one mirror per repository, each running task's clone (a full copy of the
 mirror's objects, so no task can change the mirror: allow the repository's size
 per task at once), each repository's package cache and the task database server. An
 install runs one `hostd`: the bridge sends every task to the one at
-`FLEETADLC_HOSTD_URL`. When sustained CPU passes 60 percent or tasks regularly
-wait for room, raise `FLEETADLC_HOST_CAPACITY_TASKS` if the machine has room
+`OPENADLC_HOSTD_URL`. When sustained CPU passes 60 percent or tasks regularly
+wait for room, raise `OPENADLC_HOST_CAPACITY_TASKS` if the machine has room
 for more, or move to a larger machine.
 
 Steady-state cost, excluding what the engines charge: the VM is the largest line,
@@ -2440,14 +2440,14 @@ seeds the two global amounts the first time OpenADLC starts).
 
 ## Upgrading
 
-An install made before the rename to FleetADLC (its state in `~/.fleet`, its
+An install made before the rename to OpenADLC (its state in `~/.fleet`, its
 command `fleet`): follow [upgrading-from-fleet.md](upgrading-from-fleet.md)
-first. Without `FLEETADLC_HOME=~/.fleet`, `fleetadlc up` starts a new, empty
-install in `~/.fleetadlc`.
+first. Without `OPENADLC_HOME=~/.fleet`, `openadlc up` starts a new, empty
+install in `~/.openadlc`.
 
 ```bash
 git pull && pnpm install && pnpm build
-fleetadlc down && fleetadlc up
+openadlc down && openadlc up
 ```
 
 An install made from OpenADLC's sources before it was published under this
@@ -2462,14 +2462,14 @@ Each task starts in a new container, so the next task of every bot runs the
 rebuilt image, and warm computers on the old one are drained; nothing has to
 be removed by hand.
 
-Migrations are applied by `fleetadlc up` and are forward-only. Take a database backup
-first; the platform database (`fleetadlc_db` locally, `fleet_db` on Cloud SQL)
+Migrations are applied by `openadlc up` and are forward-only. Take a database backup
+first; the platform database (`openadlc_db` locally, `fleet_db` on Cloud SQL)
 holds the leases, ledger and audit trail, and nothing else reconstructs them.
-Locally it lives in the Docker volume `fleetadlc-db-data` (`<install>-db-data`
-for an install with an id of its own), which outlives the `fleetadlc-db`
+Locally it lives in the Docker volume `openadlc-db-data` (`<install>-db-data`
+for an install with an id of its own), which outlives the `openadlc-db`
 container; a container made before that volume keeps its data in an anonymous
 one, which removing the container orphans. Back it up before removing the
-container: `docker exec fleetadlc-db pg_dump -U fleetadlc fleetadlc_db > fleetadlc_db.sql`.
+container: `docker exec openadlc-db pg_dump -U openadlc openadlc_db > openadlc_db.sql`.
 
 **Upgrade a cloud install one release at a time.** Its bridge and its host each
 apply migrations as they start — the bridge's revision before it serves, the host
@@ -2478,5 +2478,5 @@ the other while it still runs the previous release. A migration that drops
 something is safe only when no release still running reads it. The first is
 `0019_drop_bot_teams.sql`, which drops `bots.teams`: take it only once a release
 that no longer reads or writes that column runs on both the bridge and the host. Skipping straight to it from an older release leaves one side
-failing every query that names the column until it is replaced. `fleetadlc up` on one
+failing every query that names the column until it is replaced. `openadlc up` on one
 machine restarts everything together and needs nothing extra.

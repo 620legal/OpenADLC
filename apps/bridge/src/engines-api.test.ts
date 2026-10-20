@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // HTTP is real, the same shape as the worktree route's tests.
 const ACCOUNT = '550e8400-e29b-41d4-a716-446655440000';
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -33,7 +33,7 @@ vi.mock('@fleetadlc/db', () => ({
       // Connected, so it goes by its account's handle.
       {
         id: 'bot-builder',
-        name: 'fleetadlc-atlas-janedoe',
+        name: 'openadlc-atlas-janedoe',
         slot: 'builder',
         role: 'implement',
         engine: 'claude',
@@ -86,7 +86,7 @@ beforeEach(async () => {
   hostd = createServer((request, response) => {
     if (!answering) return; // Holds the request open, as a stuck probe does.
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ host: 'local', bots: [{ bot: 'fleetadlc-atlas-janedoe', readiness: READY }] }));
+    response.end(JSON.stringify({ host: 'local', bots: [{ bot: 'openadlc-atlas-janedoe', readiness: READY }] }));
   });
   await new Promise<void>((resolve) => hostd.listen(0, '127.0.0.1', resolve));
   const hostdPort = (hostd.address() as AddressInfo).port;
@@ -144,7 +144,7 @@ describe('what the assignment step reads about the crew', () => {
 
     expect(status).toBe(200);
     expect(body.reachable).toBe(true);
-    expect(body.bots.find((one) => one.bot === 'fleetadlc-atlas-janedoe')).toMatchObject({
+    expect(body.bots.find((one) => one.bot === 'openadlc-atlas-janedoe')).toMatchObject({
       model: 'newest:opus',
       modelAccountId: ACCOUNT,
       readiness: { ready: true, confidence: 'certain' },
@@ -158,7 +158,7 @@ describe('what the assignment step reads about the crew', () => {
     const { body } = await engines();
 
     expect(body.bots.map(({ bot, slot, connected }) => ({ bot, slot, connected }))).toEqual([
-      { bot: 'fleetadlc-atlas-janedoe', slot: 'builder', connected: true },
+      { bot: 'openadlc-atlas-janedoe', slot: 'builder', connected: true },
       { bot: 'automation', slot: 'automation', connected: false },
     ]);
   });
@@ -172,12 +172,12 @@ describe('what the assignment step reads about the crew', () => {
     expect(status).toBe(200);
     expect(body.reachable).toBe(false);
     expect(Date.now() - started).toBeLessThan(5_000);
-    expect(body.bots.map((one) => one.bot)).toEqual(['fleetadlc-atlas-janedoe', 'automation']);
+    expect(body.bots.map((one) => one.bot)).toEqual(['openadlc-atlas-janedoe', 'automation']);
   });
 
   it('proposes for a seat added from settings what the file gives its role’s first seat', async () => {
     // builder-2 has no entry in config/bots.yaml, and the step proposed nothing for it.
-    const { bots } = await import('@fleetadlc/db');
+    const { bots } = await import('@openadlc/db');
     vi.mocked(bots.listBots).mockResolvedValueOnce([
       { id: 'bot-b2', name: 'builder-2', slot: 'builder-2', role: 'implement', engine: 'claude', model: 'm', modelAccountId: null },
     ] as never);
@@ -200,7 +200,7 @@ describe('a model key for one bot', () => {
     const response = await fetch(`${bridgeUrl}/v1/engines/key`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ bot: 'fleetadlc-atlas-janedoe', key: 'sk-test' }),
+      body: JSON.stringify({ bot: 'openadlc-atlas-janedoe', key: 'sk-test' }),
     });
 
     expect(response.status).toBe(404);

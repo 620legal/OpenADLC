@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { DockerResult } from './drivers/docker.js';
-import { TASK_TEMPLATE, TaskDatabases, taskDatabaseName, taskdbBindAddress } from './task-db.js';
+import { LEGACY_TASKDB, TASK_TEMPLATE, TaskDatabases, existingTaskdbServer, taskDatabaseName, taskdbBindAddress } from './task-db.js';
 
 /**
  * A database per task on one server per host, with Docker answering from a
@@ -37,14 +37,14 @@ function server(state: { running?: boolean; template?: boolean; superuserPasswor
       // A server just made has the password it was made with.
       return { code: 0, stdout: (state.superuserPassword ?? state.running === undefined) ? 't\n' : 'f\n', stderr: '' };
     }
-    if (args.includes('psql') && String(args.at(-1)).startsWith('drop database if exists fleetadlc_task_template')) state.template = false;
+    if (args.includes('psql') && String(args.at(-1)).startsWith('drop database if exists openadlc_task_template')) state.template = false;
     return { code: 0, stdout: '', stderr: '' };
   };
   const databases = new TaskDatabases({
     docker,
-    container: 'fleetadlc-taskdb',
+    container: 'openadlc-taskdb',
     image: 'pgvector/pgvector:pg16',
-    installLabel: 'fleetadlc.install=default',
+    installLabel: 'openadlc.install=default',
     bindAddress: '172.17.0.1',
     ...(state.key === undefined ? { password: () => 'a-random-password' } : { key: async () => state.key ?? null }),
     ...(state.bootPassword ? { bootPassword: state.bootPassword } : {}),
@@ -70,7 +70,7 @@ describe('the name a task’s database and role get', () => {
   });
 
   it('is never anything an id could smuggle SQL into, nor longer than Postgres takes', () => {
-    expect(taskDatabaseName("x'; drop database fleetadlc_db; --12345678")).toBe('t_xdropdatabasefleetadlcdb12345678');
+    expect(taskDatabaseName("x'; drop database openadlc_db; --12345678")).toBe('t_xdropdatabaseopenadlcdb12345678');
     expect(() => taskDatabaseName('short')).toThrow(/not a task id/);
     expect(taskDatabaseName('a'.repeat(100))).toHaveLength(63);
   });
@@ -89,7 +89,7 @@ describe('a task’s database', () => {
     expect(run[0]).toEqual(expect.arrayContaining(['-p', '172.17.0.1:47433:5432', '--restart', 'unless-stopped', 'pgvector/pgvector:pg16']));
     const statements = sql();
     expect(statements.slice(0, 13)).toEqual([
-      "postgres: select rolpassword is not null from pg_authid where rolname = 'fleetadlc'",
+      "postgres: select rolpassword is not null from pg_authid where rolname = 'openadlc'",
       `postgres: update pg_database set datistemplate = false where datname = '${TASK_TEMPLATE}'`,
       `postgres: drop database if exists ${TASK_TEMPLATE} with (force)`,
       `postgres: select 1 from pg_database where datname = '${TASK_TEMPLATE}'`,
@@ -102,9 +102,9 @@ describe('a task’s database', () => {
       'postgres: revoke connect on database postgres from public',
       `postgres: revoke connect on database ${TASK_TEMPLATE} from public`,
       // Nobody logs in as the superuser over the network.
-      'postgres: alter role fleetadlc password null',
+      'postgres: alter role openadlc password null',
     ]);
-    expect(statements.filter((statement) => statement.includes('create database fleetadlc_task_template'))).toHaveLength(1);
+    expect(statements.filter((statement) => statement.includes('create database openadlc_task_template'))).toHaveLength(1);
   });
 
   it('makes the template again, then takes the superuser’s password away, on a server made when that password could be worked out', async () => {
@@ -114,14 +114,14 @@ describe('a task’s database', () => {
 
     const statements = sql();
     expect(statements.slice(0, 5)).toEqual([
-      "postgres: select rolpassword is not null from pg_authid where rolname = 'fleetadlc'",
+      "postgres: select rolpassword is not null from pg_authid where rolname = 'openadlc'",
       `postgres: update pg_database set datistemplate = false where datname = '${TASK_TEMPLATE}'`,
       `postgres: drop database if exists ${TASK_TEMPLATE} with (force)`,
       `postgres: select 1 from pg_database where datname = '${TASK_TEMPLATE}'`,
       `postgres: create database ${TASK_TEMPLATE}`,
     ]);
-    expect(statements.at(-1)).toBe('postgres: alter role fleetadlc password null');
-    expect(statements.indexOf('postgres: alter role fleetadlc password null')).toBeGreaterThan(
+    expect(statements.at(-1)).toBe('postgres: alter role openadlc password null');
+    expect(statements.indexOf('postgres: alter role openadlc password null')).toBeGreaterThan(
       statements.indexOf(`postgres: update pg_database set datistemplate = true where datname = '${TASK_TEMPLATE}'`),
     );
   });
@@ -132,11 +132,11 @@ describe('a task’s database', () => {
     await databases.ensure();
 
     expect(sql()).toEqual([
-      "postgres: select rolpassword is not null from pg_authid where rolname = 'fleetadlc'",
+      "postgres: select rolpassword is not null from pg_authid where rolname = 'openadlc'",
       `postgres: select 1 from pg_database where datname = '${TASK_TEMPLATE}'`,
       'postgres: revoke connect on database postgres from public',
       `postgres: revoke connect on database ${TASK_TEMPLATE} from public`,
-      'postgres: alter role fleetadlc password null',
+      'postgres: alter role openadlc password null',
     ]);
   });
 
@@ -198,7 +198,7 @@ describe('a task’s database', () => {
     const other = '9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a';
     const otherUrl = await databases.create(other);
     expect(otherUrl.split('@')[0]!.split(':').at(-1)).not.toBe(url.split('@')[0]!.split(':').at(-1));
-    const { taskTokenFor } = await import('@fleetadlc/github');
+    const { taskTokenFor } = await import('@openadlc/github');
     expect(url).not.toContain(taskTokenFor(TASK, 'the-install-secret').slice(0, 40));
     // Looked up, never reset: the session's connections use the original.
     expect(sql().filter((line) => line.includes('alter role t_'))).toEqual([]);
@@ -248,7 +248,57 @@ describe('where the server is published', () => {
 
   it('is never every address the host has, whatever the install says', async () => {
     for (const wildcard of ['0.0.0.0', '::', '[::]']) {
-      await expect(taskdbBindAddress(answering('OrbStack'), wildcard)).rejects.toThrow(/FLEETADLC_TASKDB_BIND.*Unset it, or give the host's gateway or loopback address/);
+      await expect(taskdbBindAddress(answering('OrbStack'), wildcard)).rejects.toThrow(/OPENADLC_TASKDB_BIND.*Unset it, or give the host's gateway or loopback address/);
     }
+  });
+});
+
+describe('the server an upgraded install already has', () => {
+  const daemon = (containers: string[]) => async (args: string[]): Promise<DockerResult> => {
+    const found = containers.includes(args.at(-1) ?? '');
+    return { code: found ? 0 : 1, stdout: found ? 'running\n' : '', stderr: found ? '' : 'No such object' };
+  };
+
+  it('uses fleetadlc-taskdb as it is when there is no openadlc-taskdb', async () => {
+    // It restarts unless stopped, so it would hold the bind port against a new
+    // server — and the tasks that waited out the upgrade keep their databases.
+    expect(await existingTaskdbServer(daemon(['fleetadlc-taskdb']), 'openadlc-taskdb')).toEqual(LEGACY_TASKDB);
+    expect(LEGACY_TASKDB.superuser).toBe('fleetadlc');
+  });
+
+  it('prefers openadlc-taskdb once it exists, and never adopts for a named install', async () => {
+    const current = { container: 'openadlc-taskdb', superuser: 'openadlc' };
+    expect(await existingTaskdbServer(daemon(['openadlc-taskdb', 'fleetadlc-taskdb']), 'openadlc-taskdb')).toEqual(current);
+    expect(await existingTaskdbServer(daemon([]), 'openadlc-taskdb')).toEqual(current);
+    expect(await existingTaskdbServer(daemon(['fleetadlc-taskdb']), 'scratch-taskdb')).toEqual({ container: 'scratch-taskdb', superuser: 'openadlc' });
+  });
+
+  it('speaks to an adopted server as its own superuser, never the new name', async () => {
+    // FleetADLC created the server with role `fleetadlc`; psql as `openadlc`
+    // would be refused and every task database with it.
+    const calls: string[][] = [];
+    const docker = async (args: string[]): Promise<DockerResult> => {
+      calls.push(args);
+      if (args[0] === 'inspect') return { code: 0, stdout: 'running\n', stderr: '' };
+      const statement = String(args.at(-1));
+      if (args.includes('psql') && statement.includes('from pg_authid')) return { code: 0, stdout: 'f\n', stderr: '' };
+      if (args.includes('psql') && statement.startsWith('select 1 from pg_database')) return { code: 0, stdout: '1\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const databases = new TaskDatabases({
+      docker,
+      container: LEGACY_TASKDB.container,
+      superuser: LEGACY_TASKDB.superuser,
+      image: 'pgvector/pgvector:pg16',
+      installLabel: 'openadlc.install=default',
+      bindAddress: '172.17.0.1',
+      password: () => 'a-random-password',
+    });
+    await databases.create(TASK);
+    const psql = calls.filter((args) => args.includes('psql'));
+    expect(psql.length).toBeGreaterThan(0);
+    for (const args of psql) expect(args[args.indexOf('-U') + 1]).toBe('fleetadlc');
+    expect(calls.filter((args) => args[0] === 'run')).toEqual([]);
+    expect(calls.some((args) => String(args.at(-1)).includes("rolname = 'fleetadlc'"))).toBe(true);
   });
 });

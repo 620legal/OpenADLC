@@ -43,7 +43,7 @@ describe('issues nobody labelled, sent to intake', () => {
     const { intake, learned } = sweep({}, {
       'exampleco/testbed': [
         issue(1, { pullRequest: true }),
-        issue(2, { labels: ['fleetadlc:ignore'] }),
+        issue(2, { labels: ['openadlc:ignore'] }),
         issue(3, { labels: ['sdlc:intake'] }),
         issue(4, { author: 'stranger', association: 'NONE' }),
         issue(5),
@@ -89,7 +89,7 @@ describe('issues it will not take on its own', () => {
           issue(7, { author: 'outside-author', association: 'NONE' }),
           issue(3, { author: 'outside-author', association: 'NONE' }),
           issue(5),
-          issue(8, { labels: ['fleetadlc:ignore'], author: 'stranger', association: 'NONE' }),
+          issue(8, { labels: ['openadlc:ignore'], author: 'stranger', association: 'NONE' }),
         ],
       },
     );

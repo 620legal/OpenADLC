@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { bots, repos } from '@fleetadlc/db';
+import { bots, repos } from '@openadlc/db';
 import {
   GitHubApiError,
   GitHubClient,
@@ -16,8 +16,8 @@ import {
   type AppApi,
   type InvitationOutcome,
   type PendingInvitation,
-} from '@fleetadlc/github';
-import { botAtStart, repositoryRoleFor, sameLogin } from '@fleetadlc/shared';
+} from '@openadlc/github';
+import { botAtStart, repositoryRoleFor, sameLogin } from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import { loginAvailable } from './github-accounts.js';
 import type { BridgeConfig } from './config.js';
@@ -196,7 +196,7 @@ export class InvitationService {
 
     // As the app: wide enough to administer this one repository, and never
     // handed to a task.
-    const asApp = new GitHubClient({ token, actingAs: 'fleetadlc-app' });
+    const asApp = new GitHubClient({ token, actingAs: 'openadlc-app' });
     const crew = await bots.listBots();
     const ownerIsOrganization = await this.ownerIsOrganization(asApp, repoFullName);
 

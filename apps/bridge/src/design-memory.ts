@@ -1,5 +1,5 @@
-import { audit, bots, designMemory, issues, recordEvent, repos, tasks, threads } from '@fleetadlc/db';
-import { designMemoryProposals, inertMarkup, type ContextDocument, type StageKey } from '@fleetadlc/shared';
+import { audit, bots, designMemory, issues, recordEvent, repos, tasks, threads } from '@openadlc/db';
+import { designMemoryProposals, inertMarkup, type ContextDocument, type StageKey } from '@openadlc/shared';
 import { HttpFailure, type Router } from './router.js';
 import { parseRef } from './work.js';
 

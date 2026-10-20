@@ -23,7 +23,7 @@ import type { Spawner, TunnelProcess } from './tunnel.js';
 let STORED: Record<string, string> = {};
 const SECRETS: Record<string, string> = {};
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -67,8 +67,8 @@ vi.mock('@fleetadlc/db', () => ({
   threads: {},
 }));
 
-vi.mock('@fleetadlc/github', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@fleetadlc/github')>()),
+vi.mock('@openadlc/github', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@openadlc/github')>()),
   getSecretStore: () => ({
     get: async (ref: string) => SECRETS[ref] ?? null,
     set: async (ref: string, value: string) => {
@@ -223,13 +223,13 @@ describe('the app the walkthrough creates', () => {
   });
 
   it('uses an address the install already has, with no tunnel', async () => {
-    STORED = { publicUrl: 'https://fleetadlc.example.com' };
+    STORED = { publicUrl: 'https://openadlc.example.com' };
     await start();
 
     const looked = (await (await fetch(`${bridgeUrl}/v1/app-manifest`)).json()) as Prepared;
 
     expect(looked.address).toBe('have');
-    expect(looked.manifest.hook_attributes).toEqual({ url: 'https://fleetadlc.example.com/webhooks/github', active: true });
+    expect(looked.manifest.hook_attributes).toEqual({ url: 'https://openadlc.example.com/webhooks/github', active: true });
     expect(raised).toBe(0);
   });
 
@@ -261,7 +261,7 @@ describe('the code GitHub sends back', () => {
       const path = url.slice('https://api.github.com'.length);
       calls.push({ method: init?.method ?? 'GET', path });
       const answer = path.startsWith('/app-manifests/')
-        ? { client_id: 'Iv23liNEW', pem, webhook_secret: 'secret-from-github', slug: 'fleetadlc-janedoe', owner: { login: owner } }
+        ? { client_id: 'Iv23liNEW', pem, webhook_secret: 'secret-from-github', slug: 'openadlc-janedoe', owner: { login: owner } }
         : path.startsWith('/app/hook/deliveries?')
           ? [{ id: 4242, event: 'ping', status_code: 401, delivered_at: '2026-09-25T02:00:00Z' }]
           : path.startsWith('/search/users')
@@ -357,7 +357,7 @@ describe('the code GitHub sends back', () => {
 describe('the app’s client secret', () => {
   it('is kept from the code GitHub sends back, in the secret store only, and named, never shown', async () => {
     // It used to be dropped, and without it no task's token can be narrowed to its repository.
-    const { audit } = await import('@fleetadlc/db');
+    const { audit } = await import('@openadlc/db');
     const { privateKey: pem } = generateKeyPairSync('rsa', {
       modulusLength: 2048,
       publicKeyEncoding: { type: 'spki', format: 'pem' },
@@ -368,7 +368,7 @@ describe('the app’s client secret', () => {
       const url = String(input);
       if (!url.startsWith('https://api.github.com/')) return realFetch(input, init);
       const answer = url.includes('/app-manifests/')
-        ? { client_id: 'Iv23liNEW', client_secret: 'zzz-client-secret-zzz', pem, slug: 'fleetadlc-janedoe' }
+        ? { client_id: 'Iv23liNEW', client_secret: 'zzz-client-secret-zzz', pem, slug: 'openadlc-janedoe' }
         : {};
       return new Response(JSON.stringify(answer), { status: 200, headers: { 'content-type': 'application/json' } });
     });

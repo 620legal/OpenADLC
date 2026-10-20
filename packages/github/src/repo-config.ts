@@ -1,4 +1,4 @@
-import { humanReviewLogins } from '@fleetadlc/shared';
+import { humanReviewLogins } from '@openadlc/shared';
 import { GitHubApiError } from './client.js';
 import type { RuleApi } from './rules.js';
 import { CI_WORKFLOW, TEMPLATE_REVIEWER_PLACEHOLDER } from './templates.js';

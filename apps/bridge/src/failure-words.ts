@@ -1,4 +1,4 @@
-import { PERMISSION_NAMES } from '@fleetadlc/shared';
+import { PERMISSION_NAMES } from '@openadlc/shared';
 import { ACCOUNTS_STEP, RECONNECT, accountInWords, accountTrouble, atStart, stepHref, stepNamed } from './health/words.js';
 import { NO_PULL_REQUEST, NOTHING_PUSHED } from './build-left.js';
 import { NO_REVIEW, NOT_POSTED } from './review-left.js';
@@ -145,8 +145,8 @@ export function explainFailure(reason: string | null | undefined, context: Failu
   }
   if (/host stopped reporting|hostd (?:is not answering|did not answer)|ECONNREFUSED 127\.0\.0\.1:47312|connect ECONNREFUSED/i.test(raw)) {
     return {
-      sentence: 'OpenADLC’s host service did not answer, so the work could not run. Start OpenADLC with `fleetadlc up` if it has stopped, then try again.',
-      action: { kind: 'run_command', label: 'Run fleetadlc up', command: 'fleetadlc up' },
+      sentence: 'OpenADLC’s host service did not answer, so the work could not run. Start OpenADLC with `openadlc up` if it has stopped, then try again.',
+      action: { kind: 'run_command', label: 'Run openadlc up', command: 'openadlc up' },
       raw,
     };
   }

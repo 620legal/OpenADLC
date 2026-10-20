@@ -2,12 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TASK_TOKEN_HEADER, taskTokenFor } from '@fleetadlc/github';
+import { TASK_TOKEN_HEADER, taskTokenFor } from '@openadlc/github';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The route reads the task to tell one that never existed from one that is over,
 // which is the same reason `registry-route.test.ts` mocks the store.
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async () => undefined),
   bots: { setBotStatus: vi.fn(), getBotByName: vi.fn(), listBots: vi.fn(async () => []) },
   costs: { taskSpend: vi.fn(async () => 0) },
@@ -63,10 +63,10 @@ async function start() {
   };
 }
 
-const PLATFORM = { 'x-fleetadlc-internal-secret': INSTALL_SECRET };
+const PLATFORM = { 'x-openadlc-internal-secret': INSTALL_SECRET };
 
 beforeEach(async () => {
-  base = mkdtempSync(join(tmpdir(), 'fleetadlc-worktree-route-'));
+  base = mkdtempSync(join(tmpdir(), 'openadlc-worktree-route-'));
   root = join(base, 'wt', 'task-live');
   mkdirSync(join(root, 'src'), { recursive: true });
   writeFileSync(join(root, 'src', 'server.ts'), 'export const port = 47312;\n');

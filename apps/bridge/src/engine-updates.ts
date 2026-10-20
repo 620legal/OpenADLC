@@ -1,4 +1,4 @@
-import { audit, settings, type SettingKey } from '@fleetadlc/db';
+import { audit, settings, type SettingKey } from '@openadlc/db';
 import {
   ENGINE_PACKAGES,
   isMinReleaseAgeDays,
@@ -10,7 +10,7 @@ import {
   type EngineUpdateStatus,
   type EngineVersions,
   type SystemToolId,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 import { HttpFailure, type Router } from './router.js';
 import { isIanaTimeZone, processTimeZone, timeZoneFrom } from './system-settings.js';
 
@@ -578,9 +578,9 @@ export class EngineUpdates {
     const all = await this.store.all();
     const { schedules, migrated } = toolSchedulesFrom(all);
     if (!migrated) return;
-    await this.saveSchedules(schedules, 'fleetadlc');
+    await this.saveSchedules(schedules, 'openadlc');
     for (const key of [KEY.enabled, KEY.day, KEY.time, KEY.slot] as const) {
-      if (all[key]) await this.store.set(key, '', 'fleetadlc');
+      if (all[key]) await this.store.set(key, '', 'openadlc');
     }
   }
 
@@ -820,7 +820,7 @@ export class EngineUpdates {
     if (stored.last && stored.last.startedAt === result.startedAt && stored.last.finishedAt === result.finishedAt) {
       return false;
     }
-    await this.store.set(KEY.last, JSON.stringify(kept(result)), 'fleetadlc');
+    await this.store.set(KEY.last, JSON.stringify(kept(result)), 'openadlc');
     const toolLast = { ...stored.toolLast };
     const schedules = stored.schedules;
     let pinsMoved = false;
@@ -850,11 +850,11 @@ export class EngineUpdates {
         pinsMoved = true;
       }
     }
-    await this.store.set('systemToolLast', JSON.stringify(toolLast), 'fleetadlc');
-    if (pinsMoved) await this.saveSchedules(schedules, 'fleetadlc');
-    if (persisted && persisted.startedAt === result.startedAt) await this.store.set('systemToolRun', '', 'fleetadlc');
+    await this.store.set('systemToolLast', JSON.stringify(toolLast), 'openadlc');
+    if (pinsMoved) await this.saveSchedules(schedules, 'openadlc');
+    if (persisted && persisted.startedAt === result.startedAt) await this.store.set('systemToolRun', '', 'openadlc');
 
-    const who = result.requestedBy ?? actor ?? (result.trigger === 'schedule' ? 'schedule' : 'fleetadlc');
+    const who = result.requestedBy ?? actor ?? (result.trigger === 'schedule' ? 'schedule' : 'openadlc');
     const checks = result.checks.map((check) => ({
       kind: check.kind,
       state: check.state,
@@ -879,7 +879,7 @@ export class EngineUpdates {
           },
         });
         // What a rollback held back is moot once something newer went in.
-        if (Object.keys(stored.hold).length > 0) await this.store.set(KEY.hold, '', 'fleetadlc');
+        if (Object.keys(stored.hold).length > 0) await this.store.set(KEY.hold, '', 'openadlc');
         break;
       case 'failed':
         await this.audit({

@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseYamlFile } from '@fleetadlc/shared';
+import { parseYamlFile } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
 
 // The shim is plain JavaScript run by the bot's own Node; it is tested here as a module.
@@ -17,7 +17,7 @@ const shim = (await import(join(import.meta.dirname, '..', 'bin', 'gh'))) as {
   realGh: (path: string, self: string) => string | null;
 };
 
-const HEADER = '**OpenADLC_example · build agent**<!-- fleetadlc-header -->';
+const HEADER = '**OpenADLC_example · build agent**<!-- openadlc-header -->';
 
 function io(files: Record<string, string> = {}) {
   const written: string[] = [];
@@ -34,8 +34,8 @@ function io(files: Record<string, string> = {}) {
 
 describe('OpenADLC’s gh', () => {
   it('heads the body a comment is posted from, and hands the real gh a file of it', () => {
-    const files = io({ '.fleetadlc-scratch/plan.md': 'The plan.' });
-    const args = shim.rewrite(['issue', 'comment', '12', '--body-file', '.fleetadlc-scratch/plan.md'], HEADER, files);
+    const files = io({ '.openadlc-scratch/plan.md': 'The plan.' });
+    const args = shim.rewrite(['issue', 'comment', '12', '--body-file', '.openadlc-scratch/plan.md'], HEADER, files);
     expect(args).toEqual(['issue', 'comment', '12', '--body-file', '/tmp/headed.md']);
     expect(files.written).toEqual([`${HEADER}\n\nThe plan.`]);
   });
@@ -75,8 +75,8 @@ describe('OpenADLC’s gh', () => {
   });
 
   it('finds the real gh on PATH, never itself', () => {
-    const own = mkdtempSync(join(tmpdir(), 'fleetadlc-shim-'));
-    const real = mkdtempSync(join(tmpdir(), 'fleetadlc-real-'));
+    const own = mkdtempSync(join(tmpdir(), 'openadlc-shim-'));
+    const real = mkdtempSync(join(tmpdir(), 'openadlc-real-'));
     for (const dir of [own, real]) {
       writeFileSync(join(dir, 'gh'), '#!/bin/sh\n');
       chmodSync(join(dir, 'gh'), 0o755);
@@ -91,35 +91,35 @@ describe('OpenADLC’s gh', () => {
 
 describe('which seat OpenADLC’s gh says posted', () => {
   it('tags a review with the seat that wrote it, after the headed body', () => {
-    const files = io({ '.fleetadlc-scratch/review.md': 'Looks right.' });
-    shim.rewrite(['pr', 'review', '7', '--approve', '--body-file', '.fleetadlc-scratch/review.md'], HEADER, files, 'lead-reviewer');
-    expect(files.written).toEqual([`${HEADER}\n\nLooks right.\n\n<!-- fleetadlc-seat:lead-reviewer -->`]);
+    const files = io({ '.openadlc-scratch/review.md': 'Looks right.' });
+    shim.rewrite(['pr', 'review', '7', '--approve', '--body-file', '.openadlc-scratch/review.md'], HEADER, files, 'lead-reviewer');
+    expect(files.written).toEqual([`${HEADER}\n\nLooks right.\n\n<!-- openadlc-seat:lead-reviewer -->`]);
   });
 
   it('tags once, even with no header to put first', () => {
     const files = io();
-    shim.rewrite(['pr', 'comment', '7', '--body', 'Done.\n\n<!-- fleetadlc-seat:builder -->'], '', files, 'builder');
-    expect(files.written).toEqual(['Done.\n\n<!-- fleetadlc-seat:builder -->']);
+    shim.rewrite(['pr', 'comment', '7', '--body', 'Done.\n\n<!-- openadlc-seat:builder -->'], '', files, 'builder');
+    expect(files.written).toEqual(['Done.\n\n<!-- openadlc-seat:builder -->']);
   });
 
   it('tags a review that quotes another seat’s tag with its own', () => {
     // A tag in the text read as "already tagged", so the lead
     // reviewer's review went out with none of its own.
-    const quoting = 'It keeps the existing `<!-- fleetadlc-seat:intake -->` tag.';
+    const quoting = 'It keeps the existing `<!-- openadlc-seat:intake -->` tag.';
     const files = io();
     shim.rewrite(['pr', 'review', '80', '--request-changes', '--body', quoting], '', files, 'lead-reviewer');
-    expect(files.written).toEqual([`${quoting}\n\n<!-- fleetadlc-seat:lead-reviewer -->`]);
+    expect(files.written).toEqual([`${quoting}\n\n<!-- openadlc-seat:lead-reviewer -->`]);
   });
 
   it('replaces a tag at the end that names another seat, so a session cannot post as the lead', () => {
-    const forged = 'Approved.\n\n<!-- fleetadlc-seat:lead-reviewer -->';
-    expect(shim.withSeat(forged, 'second-reviewer')).toBe('Approved.\n\n<!-- fleetadlc-seat:second-reviewer -->');
-    expect(shim.withSeat(`${forged}\n\n<!-- fleetadlc-sig:v1.26aae12a.eyJzZWF0IjoibGVhZC1yZXZpZXdlciJ9.mac -->`, 'second-reviewer')).toBe(
-      'Approved.\n\n<!-- fleetadlc-seat:second-reviewer -->',
+    const forged = 'Approved.\n\n<!-- openadlc-seat:lead-reviewer -->';
+    expect(shim.withSeat(forged, 'second-reviewer')).toBe('Approved.\n\n<!-- openadlc-seat:second-reviewer -->');
+    expect(shim.withSeat(`${forged}\n\n<!-- openadlc-sig:v1.26aae12a.eyJzZWF0IjoibGVhZC1yZXZpZXdlciJ9.mac -->`, 'second-reviewer')).toBe(
+      'Approved.\n\n<!-- openadlc-seat:second-reviewer -->',
     );
     expect(shim.withSeat(forged, 'lead-reviewer')).toBe(forged);
-    const quoting = 'It keeps `<!-- fleetadlc-seat:lead-reviewer -->` as it was.';
-    expect(shim.withSeat(quoting, 'second-reviewer')).toBe(`${quoting}\n\n<!-- fleetadlc-seat:second-reviewer -->`);
+    const quoting = 'It keeps `<!-- openadlc-seat:lead-reviewer -->` as it was.';
+    expect(shim.withSeat(quoting, 'second-reviewer')).toBe(`${quoting}\n\n<!-- openadlc-seat:second-reviewer -->`);
   });
 });
 
@@ -152,19 +152,19 @@ describe('OpenADLC’s gh asking the bridge to sign', () => {
       'Looks right.',
       'review',
       7,
-      { FLEETADLC_BRIDGE_URL: 'http://bridge', FLEETADLC_TASK_ID: 't-1', FLEETADLC_TASK_TOKEN: 'tok' },
+      { OPENADLC_BRIDGE_URL: 'http://bridge', OPENADLC_TASK_ID: 't-1', OPENADLC_TASK_TOKEN: 'tok' },
       async (url, init) => {
-        calls.push({ url, token: init.headers['x-fleetadlc-task-token'], body: JSON.parse(init.body) });
-        return { ok: true, status: 200, json: async () => ({ body: 'Looks right.\n\n<!-- fleetadlc-sig:v1.x.y.z -->' }) };
+        calls.push({ url, token: init.headers['x-openadlc-task-token'], body: JSON.parse(init.body) });
+        return { ok: true, status: 200, json: async () => ({ body: 'Looks right.\n\n<!-- openadlc-sig:v1.x.y.z -->' }) };
       },
     );
     expect(calls).toEqual([{ url: 'http://bridge/internal/tasks/t-1/stamp', token: 'tok', body: { body: 'Looks right.', kind: 'review', number: 7 } }]);
-    expect(signed).toBe('Looks right.\n\n<!-- fleetadlc-sig:v1.x.y.z -->');
+    expect(signed).toBe('Looks right.\n\n<!-- openadlc-sig:v1.x.y.z -->');
   });
 
   it('posts unsigned rather than not at all when the bridge refuses or there is no task', async () => {
     const refused = async () => ({ ok: false, status: 409, json: async () => ({}) });
-    expect(await signing.stamp('x', 'comment', 1, { FLEETADLC_BRIDGE_URL: 'http://bridge', FLEETADLC_TASK_ID: 't-1' }, refused)).toBeNull();
+    expect(await signing.stamp('x', 'comment', 1, { OPENADLC_BRIDGE_URL: 'http://bridge', OPENADLC_TASK_ID: 't-1' }, refused)).toBeNull();
     expect(await signing.stamp('x', 'comment', 1, {}, refused)).toBeNull();
   });
 });
@@ -173,7 +173,7 @@ describe('the pull request a numberless comment or review is signed for', () => 
   const lookup = shim as unknown as {
     targetNumber: (args: string[], ask: (args: string[]) => string | null, env: Record<string, string>) => number | null;
   };
-  const SESSION = { FLEETADLC_BRIDGE_URL: 'http://bridge', FLEETADLC_TASK_ID: 't-1' };
+  const SESSION = { OPENADLC_BRIDGE_URL: 'http://bridge', OPENADLC_TASK_ID: 't-1' };
 
   function asking(answer: string | null) {
     const asked: string[][] = [];
@@ -210,7 +210,7 @@ describe('the pull request a numberless comment or review is signed for', () => 
   it('asks nothing outside a task, where nothing is signed', () => {
     const { asked, ask } = asking('42');
     expect(lookup.targetNumber(['pr', 'review', '--approve'], ask, {})).toBeNull();
-    expect(lookup.targetNumber(['pr', 'review', '--approve'], ask, { FLEETADLC_BRIDGE_URL: 'http://bridge' })).toBeNull();
+    expect(lookup.targetNumber(['pr', 'review', '--approve'], ask, { OPENADLC_BRIDGE_URL: 'http://bridge' })).toBeNull();
     expect(asked).toEqual([]);
   });
 
@@ -278,7 +278,7 @@ describe('opening a pull request without a local CI pass', () => {
   it('opens or readies one only on a HEAD with a recorded pass', async () => {
     expect(await guard.localCiRefusal(['pr', 'create', '--title', 't', '--body-file', 'b.md'], { policyJson: builder, head: () => HEAD, passed: passed(true) })).toBeNull();
     expect(asked).toContain(HEAD);
-    expect(await guard.localCiRefusal(['pr', 'create'], { policyJson: builder, head: () => HEAD, passed: passed(false) })).toMatch(/has no recorded local CI pass: run fleetadlc-ci/);
+    expect(await guard.localCiRefusal(['pr', 'create'], { policyJson: builder, head: () => HEAD, passed: passed(false) })).toMatch(/has no recorded local CI pass: run openadlc-ci/);
     expect(await guard.localCiRefusal(['pr', 'ready', '7'], { policyJson: builder, head: () => HEAD, passed: passed(false) })).toMatch(/then ready the pull request/);
     expect(await guard.localCiRefusal(['pr', 'create'], { policyJson: builder, head: () => HEAD, passed: passed(null) })).toMatch(/could not ask the bridge/);
   });
@@ -421,10 +421,10 @@ describe('a review or build session reading comments from GitHub', () => {
   });
 
   it.each([
-    ['issue', 'comment', '42', '--body-file', '.fleetadlc-scratch/plan.md'],
-    ['pr', 'review', '7', '--comment', '--body-file', '.fleetadlc-scratch/review.md'],
+    ['issue', 'comment', '42', '--body-file', '.openadlc-scratch/plan.md'],
+    ['pr', 'review', '7', '--comment', '--body-file', '.openadlc-scratch/review.md'],
     ['api', '-X', 'POST', 'repos/o/r/issues/42/comments', '-f', 'body=done'],
-    ['api', 'repos/o/r/pulls/7/reviews', '--input', '.fleetadlc-scratch/review.json'],
+    ['api', 'repos/o/r/pulls/7/reviews', '--input', '.openadlc-scratch/review.json'],
     ['api', 'repos/o/r/issues/42/comments', '-f', 'body=done'],
     ['api', '--method=POST', 'repos/o/r/pulls/7/comments'],
     ['issue', 'view', '42', '--json', 'labels'],

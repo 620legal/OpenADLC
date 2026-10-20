@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Bot } from '@fleetadlc/shared';
+import type { Bot } from '@openadlc/shared';
 import { blockersOf, causeOfFailure, crewChecks, isPrerequisiteRow, waitingOnBlocked, type HealthAnswer, type SigningReader } from './crew.js';
 
 /**
@@ -7,13 +7,13 @@ import { blockersOf, causeOfFailure, crewChecks, isPrerequisiteRow, waitingOnBlo
  * and which failed tasks a passing check explains.
  */
 
-const SEAT = { id: 'bot-security', name: 'fleetadlc-cipher-janedoe' };
+const SEAT = { id: 'bot-security', name: 'openadlc-cipher-janedoe' };
 const failing = (id: string, detail = 'Do the thing.'): HealthAnswer => ({ id, state: 'failing', title: 'Title', detail });
 
 describe('which rows decide whether a bot can work', () => {
   it('are the sign-in, the access to a repository and the host service, whoever they are about', () => {
     expect(isPrerequisiteRow('bot-sign-in:bot-security')).toBe(true);
-    expect(isPrerequisiteRow('bot-access:bot-security:fleetadlc')).toBe(true);
+    expect(isPrerequisiteRow('bot-access:bot-security:openadlc')).toBe(true);
     expect(isPrerequisiteRow('hostd')).toBe(true);
   });
 
@@ -29,28 +29,28 @@ describe('what keeps a seat from working', () => {
     const rows: HealthAnswer[] = [
       { id: 'bot-sign-in:bot-security', state: 'ok', title: null, detail: null },
       failing('bot-sign-in:bot-lead'),
-      failing('bot-access:bot-lead:fleetadlc'),
+      failing('bot-access:bot-lead:openadlc'),
       failing('bot-access:bot-security:other-repo'),
     ];
-    expect(blockersOf(rows, SEAT, 'fleetadlc')).toEqual([]);
+    expect(blockersOf(rows, SEAT, 'openadlc')).toEqual([]);
   });
 
   it('is its own sign-in, with what the card tells a person to do', () => {
-    expect(blockersOf([failing('bot-sign-in:bot-security', 'Reconnect it.')], SEAT, 'fleetadlc')).toEqual([
-      { row: 'bot-sign-in:bot-security', kind: 'sign-in', why: 'fleetadlc-cipher-janedoe cannot sign in to GitHub', instruction: 'Reconnect it.' },
+    expect(blockersOf([failing('bot-sign-in:bot-security', 'Reconnect it.')], SEAT, 'openadlc')).toEqual([
+      { row: 'bot-sign-in:bot-security', kind: 'sign-in', why: 'openadlc-cipher-janedoe cannot sign in to GitHub', instruction: 'Reconnect it.' },
     ]);
   });
 
   it('is its access to the repository the task is in, and only that one', () => {
-    const rows = [failing('bot-access:bot-security:fleetadlc', 'Invite it.')];
-    expect(blockersOf(rows, SEAT, 'fleetadlc').map((blocker) => blocker.why)).toEqual(['fleetadlc-cipher-janedoe cannot work in fleetadlc']);
+    const rows = [failing('bot-access:bot-security:openadlc', 'Invite it.')];
+    expect(blockersOf(rows, SEAT, 'openadlc').map((blocker) => blocker.why)).toEqual(['openadlc-cipher-janedoe cannot work in openadlc']);
     expect(blockersOf(rows, SEAT, 'other')).toEqual([]);
     expect(blockersOf(rows, SEAT, null)).toEqual([]);
   });
 
   it('is the host service for every seat, listed after the seat’s own', () => {
     const rows = [failing('hostd'), failing('bot-sign-in:bot-security')];
-    expect(blockersOf(rows, SEAT, 'fleetadlc').map((blocker) => blocker.kind)).toEqual(['sign-in', 'host']);
+    expect(blockersOf(rows, SEAT, 'openadlc').map((blocker) => blocker.kind)).toEqual(['sign-in', 'host']);
   });
 
   it('falls back to the title when a row has no detail', () => {
@@ -61,56 +61,56 @@ describe('what keeps a seat from working', () => {
 
 describe('a gate that waits on seats that cannot work', () => {
   const blocked = new Map([
-    ['fleetadlc-cipher-janedoe', blockersOf([failing('bot-sign-in:bot-security')], SEAT, 'fleetadlc')],
-    ['fleetadlc-atlas-janedoe', blockersOf([failing('hostd')], { id: 'bot-atlas', name: 'fleetadlc-atlas-janedoe' }, 'fleetadlc')],
+    ['openadlc-cipher-janedoe', blockersOf([failing('bot-sign-in:bot-security')], SEAT, 'openadlc')],
+    ['openadlc-atlas-janedoe', blockersOf([failing('hostd')], { id: 'bot-atlas', name: 'openadlc-atlas-janedoe' }, 'openadlc')],
   ]);
 
   it('names the reviewer account and what is wrong with it', () => {
-    expect(waitingOnBlocked('waiting on fleetadlc-sydney-janedoe, fleetadlc-cipher-janedoe', blocked)).toBe(
-      'waiting on the reviewer account: fleetadlc-cipher-janedoe cannot sign in to GitHub',
+    expect(waitingOnBlocked('waiting on openadlc-sydney-janedoe, openadlc-cipher-janedoe', blocked)).toBe(
+      'waiting on the reviewer account: openadlc-cipher-janedoe cannot sign in to GitHub',
     );
   });
 
   it('names the host service when that is all that is wrong', () => {
-    expect(waitingOnBlocked('waiting on fleetadlc-atlas-janedoe', blocked)).toBe('waiting on the host service: OpenADLC’s host service is not answering');
+    expect(waitingOnBlocked('waiting on openadlc-atlas-janedoe', blocked)).toBe('waiting on the host service: OpenADLC’s host service is not answering');
   });
 
   it('says a paused seat as one a person paused, not as the host or an account', () => {
     const paused = new Map([
-      ['fleetadlc-vega-janedoe', [{ row: 'seat-paused:fleetadlc-vega-janedoe', kind: 'paused' as const, why: 'fleetadlc-vega-janedoe is paused by janedoe: changing its model', instruction: 'Resume it on the Crew page.' }]],
+      ['openadlc-vega-janedoe', [{ row: 'seat-paused:openadlc-vega-janedoe', kind: 'paused' as const, why: 'openadlc-vega-janedoe is paused by janedoe: changing its model', instruction: 'Resume it on the Crew page.' }]],
     ]);
-    expect(waitingOnBlocked('waiting on fleetadlc-vega-janedoe', paused)).toBe('waiting on a paused seat: fleetadlc-vega-janedoe is paused by janedoe: changing its model');
+    expect(waitingOnBlocked('waiting on openadlc-vega-janedoe', paused)).toBe('waiting on a paused seat: openadlc-vega-janedoe is paused by janedoe: changing its model');
   });
 
   it('leads with the account when both are wrong, and leaves the host out until the account is fixed', () => {
-    expect(waitingOnBlocked('waiting on fleetadlc-atlas-janedoe, fleetadlc-cipher-janedoe', blocked)).toBe(
-      'waiting on the reviewer account: fleetadlc-cipher-janedoe cannot sign in to GitHub',
+    expect(waitingOnBlocked('waiting on openadlc-atlas-janedoe, openadlc-cipher-janedoe', blocked)).toBe(
+      'waiting on the reviewer account: openadlc-cipher-janedoe cannot sign in to GitHub',
     );
   });
 
   it('is null for a gate that waits on nobody blocked, on people, or on something else', () => {
-    expect(waitingOnBlocked('waiting on fleetadlc-sydney-janedoe', blocked)).toBeNull();
+    expect(waitingOnBlocked('waiting on openadlc-sydney-janedoe', blocked)).toBeNull();
     expect(waitingOnBlocked('waiting on @janedoe', blocked)).toBeNull();
     expect(waitingOnBlocked('changes requested', blocked)).toBeNull();
   });
 });
 
 describe('the check a failed task’s words point at', () => {
-  const task = { botId: 'bot-security', repoName: 'fleetadlc' };
+  const task = { botId: 'bot-security', repoName: 'openadlc' };
 
   it.each([
     ['fetch failed: Bad credentials', 'bot-sign-in:bot-security'],
-    ['fleetadlc-cipher-janedoe is not connected to GitHub. Run: fleetadlc auth login --bot fleetadlc-cipher-janedoe', 'bot-sign-in:bot-security'],
-    ['remote: Permission to exampleco/fleetadlc denied to fleetadlc-cipher-janedoe.', 'bot-access:bot-security:fleetadlc'],
-    ['fatal: repository not found', 'bot-access:bot-security:fleetadlc'],
+    ['openadlc-cipher-janedoe is not connected to GitHub. Run: openadlc auth login --bot openadlc-cipher-janedoe', 'bot-sign-in:bot-security'],
+    ['remote: Permission to exampleco/openadlc denied to openadlc-cipher-janedoe.', 'bot-access:bot-security:openadlc'],
+    ['fatal: repository not found', 'bot-access:bot-security:openadlc'],
     ['the host stopped reporting', 'hostd'],
     ['hostd did not answer', 'hostd'],
     ['hostd refused: fetch failed', 'hostd'],
-    ['fleetadlc-cipher-janedoe was not started: fleetadlc-cipher-janedoe cannot sign in to GitHub. Reconnect it.', 'bot-sign-in:bot-security'],
-    ['fleetadlc-cipher-janedoe was not started: fleetadlc-cipher-janedoe cannot work in fleetadlc. Invite it.', 'bot-access:bot-security:fleetadlc'],
-    ['fleetadlc-cipher-janedoe was not started: OpenADLC’s host service is not answering. Run fleetadlc up.', 'hostd'],
+    ['openadlc-cipher-janedoe was not started: openadlc-cipher-janedoe cannot sign in to GitHub. Reconnect it.', 'bot-sign-in:bot-security'],
+    ['openadlc-cipher-janedoe was not started: openadlc-cipher-janedoe cannot work in openadlc. Invite it.', 'bot-access:bot-security:openadlc'],
+    ['openadlc-cipher-janedoe was not started: OpenADLC’s host service is not answering. Run openadlc up.', 'hostd'],
     [
-      'fleetadlc-cipher-janedoe was not started: fleetadlc-cipher-janedoe cannot sign in to GitHub and OpenADLC’s host service is not answering. Reconnect it.',
+      'openadlc-cipher-janedoe was not started: openadlc-cipher-janedoe cannot sign in to GitHub and OpenADLC’s host service is not answering. Reconnect it.',
       'bot-sign-in:bot-security',
     ],
   ])('%s is %s', (reason, row) => {
@@ -135,7 +135,7 @@ describe('the check a failed task’s words point at', () => {
 });
 
 describe('a crew account with more than its role needs', () => {
-  const builder = { id: 'bot-builder', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'fleetadlc-atlas-janedoe' } as Bot;
+  const builder = { id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'openadlc-atlas-janedoe' } as Bot;
 
   /** Only what the access check reads: the crew, a repository, and what GitHub says the account may do there. */
   const reader = (permissions: Record<string, boolean>) =>
@@ -155,7 +155,7 @@ describe('a crew account with more than its role needs', () => {
     expect(result).toMatchObject({
       ok: false,
       severity: 'blocking',
-      title: `The builder (fleetadlc-atlas-janedoe) has ${role} on exampleco/app`,
+      title: `The builder (openadlc-atlas-janedoe) has ${role} on exampleco/app`,
       detail: expect.stringContaining('could ship to production past the testing check'),
       action: { url: 'https://github.com/exampleco/app/settings/access' },
     });

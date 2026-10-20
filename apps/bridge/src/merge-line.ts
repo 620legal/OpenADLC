@@ -1,11 +1,11 @@
-import { audit, bots, issues, mergeLines, repos } from '@fleetadlc/db';
+import { audit, bots, issues, mergeLines, repos } from '@openadlc/db';
 import type { Actors } from './actors.js';
 import { mergeDecision, type Automation, type LandedApproval } from './automation.js';
 import { asAutomation, automationBotName } from './automation-bot.js';
 import type { BridgeConfig } from './config.js';
 import { effectiveConfig } from './effective-config.js';
-import type { GitHubClient } from '@fleetadlc/github';
-import { CI_LABEL, REQUIRED_CHECK, REVIEW_GATE_CHECK } from '@fleetadlc/shared';
+import type { GitHubClient } from '@openadlc/github';
+import { CI_LABEL, REQUIRED_CHECK, REVIEW_GATE_CHECK } from '@openadlc/shared';
 import type { ConflictRounds } from './conflict-round.js';
 import type { Stacking } from './stacking.js';
 import { issueNumberFromBranch } from './work.js';
@@ -584,7 +584,7 @@ export class MergeLine {
       const detail = 'changes files outside its lease; sent back to build';
       await mergeLines.setState(entry.id, 'failed', { detail });
       await this.leaveFor(repo.name, entry.prNumber, decision.reason, true, {
-        reason: `The branch left the merge line: ${decision.reason}, run fleetadlc-ci, and push.`,
+        reason: `The branch left the merge line: ${decision.reason}, run openadlc-ci, and push.`,
         leasePathsOnly: true,
       });
       return { step: { repo: repo.name, prNumber: entry.prNumber, state: 'failed', detail }, held: null };
@@ -609,13 +609,13 @@ export class MergeLine {
     // repository with nothing to act on. No "because " in it: `heldForPerson`
     // splits on the first.
     if (!merged) {
-      return { step: null, held: `the OpenADLC app could not get a token for ${repo.fullName} (the app’s card on the board, or fleetadlc doctor, says why)` };
+      return { step: null, held: `the OpenADLC app could not get a token for ${repo.fullName} (the app’s card on the board, or openadlc doctor, says why)` };
     }
 
     await mergeLines.setState(entry.id, 'merged', { headSha: pull.headSha, detail: `merged by OpenADLC as ${merged.sha.slice(0, 7)}` });
     try {
       await audit({
-        actor: 'fleetadlc-app',
+        actor: 'openadlc-app',
         action: 'merge.landed',
         target: `${repo.name}#${entry.prNumber}`,
         payload: { head: pull.headSha, merged: merged.sha, method: 'squash', approvals: decision.approvals, checks: REQUIRED_CHECKS },
@@ -678,7 +678,7 @@ export class MergeLine {
       if (again) await this.automation.setCiLabel(repo.fullName, entry.prNumber, false);
       const as = await this.automation.setCiLabel(repo.fullName, entry.prNumber, true);
       await audit({
-        actor: as === 'app' ? 'fleetadlc-app' : 'bridge',
+        actor: as === 'app' ? 'openadlc-app' : 'bridge',
         action: 'ci.requested',
         target: `${repo.name}#${entry.prNumber}`,
         payload: { head: pull.headSha, again },
@@ -714,7 +714,7 @@ export class MergeLine {
         .catch(() => undefined);
     }
     if (backToBuild && this.backToBuild) {
-      const told = sentBack ?? { reason: `The branch left the merge line: ${reason}. Bring it up to date and resolve it, run fleetadlc-ci, and push.` };
+      const told = sentBack ?? { reason: `The branch left the merge line: ${reason}. Bring it up to date and resolve it, run openadlc-ci, and push.` };
       await this.backToBuild({ repoName, prNumber, ...told }).catch(
         (error: unknown) => console.warn(`[bridge] ${repoName}#${prNumber} was not sent back to build: ${error instanceof Error ? error.message : error}`),
       );

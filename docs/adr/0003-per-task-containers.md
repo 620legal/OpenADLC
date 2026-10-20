@@ -45,18 +45,18 @@ never a machine; and how many tasks run at once is a number.
   account's login only when its account needs one. Its credentials are injected
   per task, as before; its signing agent runs inside it and dies with it.
 - **One network, closed between its members.** Every task's container is on
-  one network per install, `fleetadlc-tasks`, made with inter-container
+  one network per install, `openadlc-tasks`, made with inter-container
   traffic off. Tasks reach hostd, the bridge, the proxy and the task database
   through the host gateway.
-- **A database per task on one server.** `fleetadlc-taskdb`, one per host,
+- **A database per task on one server.** `openadlc-taskdb`, one per host,
   published only on the host's gateway; each task a login role and a database
   of its own, from a template with the common extensions, closed to every other
   role, limited in connections, dropped with the task.
 - **A clone per task from one mirror per repository.** The mirror is only
   hostd's, under a lock, and its branches are only the remote's. A task's
-  branch is kept between its computers under `refs/fleetadlc/tasks/<task>`.
+  branch is kept between its computers under `refs/openadlc/tasks/<task>`.
 - **Paused tasks give their computer back** after
-  `FLEETADLC_PAUSED_KEEP_MINUTES` (D12), so take-over and a quick answer still
+  `OPENADLC_PAUSED_KEEP_MINUTES` (D12), so take-over and a quick answer still
   find it, and a question open for a day does not hold a container.
 - **Concurrency is a number.** A seat runs up to `bots.max_tasks` tasks at once
   (Crew → "tasks at once"), all as its one identity; a host runs up to
@@ -64,7 +64,7 @@ never a machine; and how many tasks run at once is a number.
   dispatcher's overlap check on declared paths, which it always was in fact:
   two containers on two accounts never stopped two builds from editing the same
   file.
-- **A warm pool hides a cold start**, off by default (`FLEETADLC_WARM_POOL`):
+- **A warm pool hides a cold start**, off by default (`OPENADLC_WARM_POOL`):
   containers made ahead, keyed by image, repository and login, claimed by
   renaming and resizing one rather than making it.
 - **The local driver keeps working**, with a task's folder and tmux sessions on

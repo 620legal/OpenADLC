@@ -1,5 +1,5 @@
-import { audit, bots, costs, issues, leases, repos, requests, spendingLimits, tasks, threads, type Role } from '@fleetadlc/db';
-import type { GitHubClient } from '@fleetadlc/github';
+import { audit, bots, costs, issues, leases, repos, requests, spendingLimits, tasks, threads, type Role } from '@openadlc/db';
+import type { GitHubClient } from '@openadlc/github';
 import {
   COST_CAP_ABANDON,
   PLAN_CHANGE_APPROVE,
@@ -21,7 +21,7 @@ import {
   type PlanChangeRequest,
   type TaskKind,
   hasIgnoreLabel,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import { itemLink, type Notifier } from './notify.js';
 import { acceptOnAnswer } from './design-memory.js';
@@ -182,7 +182,7 @@ export class Gates {
   private leaseReleased: ((reason: string) => void) | null = null;
 
   /**
-   * Whether the issue is labelled `fleetadlc:ignore`, as stored or as GitHub has
+   * Whether the issue is labelled `openadlc:ignore`, as stored or as GitHub has
    * it now. The stored row can be behind: the label's delivery may still be
    * in flight while the task asks. A read GitHub does not answer counts as
    * not labelled, and the stored row is what decides.
@@ -299,7 +299,7 @@ export class Gates {
     let addedNeedsHuman = false;
     if (repo && issueNumber) {
       const client = await this.actors.asBot(bot.name);
-      // A person can add `fleetadlc:ignore` while a task is already working on
+      // A person can add `openadlc:ignore` while a task is already working on
       // the issue. The task is not stopped, but it writes nothing more to
       // the issue: intake once asked its question and added `needs-human`
       // after the issue was labelled to be left alone. The question stays in
@@ -378,8 +378,8 @@ export class Gates {
       await threads.addMessage({
         threadId: thread.id,
         kind: 'sys',
-        author: 'fleetadlc',
-        text: `The question was not posted on ${task.subjectRef}: the issue is labelled fleetadlc:ignore, which the crew leaves alone`,
+        author: 'openadlc',
+        text: `The question was not posted on ${task.subjectRef}: the issue is labelled openadlc:ignore, which the crew leaves alone`,
         note: 'answer it here, or stop the task',
         payload: { gateId: gate.id },
       });
@@ -488,7 +488,7 @@ export class Gates {
           await threads.addMessage({
             threadId: gate.threadId,
             kind: 'sys',
-            author: 'fleetadlc',
+            author: 'openadlc',
             text: capHeldText(input.answeredBy, overCap),
             payload: { gateId: gate.id },
           });
@@ -544,7 +544,7 @@ export class Gates {
       await threads.addMessage({
         threadId: gate.threadId,
         kind: 'sys',
-        author: 'fleetadlc',
+        author: 'openadlc',
         text: `${admin} answered continue, and the task went on past a spending cap: ${refusal}`,
         payload: { gateId: gate.id },
       });
@@ -614,7 +614,7 @@ export class Gates {
    * Writes on the gate's issue as the task's bot. Nothing when the gate is not
    * on an issue, or its bot is not connected.
    *
-   * An issue labelled `fleetadlc:ignore` gets nothing either. `open` keeps the
+   * An issue labelled `openadlc:ignore` gets nothing either. `open` keeps the
    * question off such an issue, and the answer that followed still posted
    * "answered … Resuming." and took `needs-human` off; a stop posted its own
    * comment. The label is checked again at each write, since it can be added
@@ -637,8 +637,8 @@ export class Gates {
         await threads.addMessage({
           threadId: gate.threadId,
           kind: 'sys',
-          author: 'fleetadlc',
-          text: `Nothing was written on ${task.subjectRef}: the issue is labelled fleetadlc:ignore, which the crew leaves alone`,
+          author: 'openadlc',
+          text: `Nothing was written on ${task.subjectRef}: the issue is labelled openadlc:ignore, which the crew leaves alone`,
           note: `left off: ${what}`,
           payload: { gateId: gate.id },
         });
@@ -664,7 +664,7 @@ export class Gates {
       .addMessage({
         threadId: gate.threadId,
         kind: 'sys',
-        author: 'fleetadlc',
+        author: 'openadlc',
         text:
           `${answeredBy} answered "${answer}", but carrying it out failed and the question could not be reopened, so nothing it asked for was applied. ` +
           'Stop the task and start it again, or make the change by hand.',
@@ -852,7 +852,7 @@ export class Gates {
         await threads.addMessage({
           threadId: gate.threadId,
           kind: 'sys',
-          author: 'fleetadlc',
+          author: 'openadlc',
           text: `${approvedBy} approved the plan change; waiting for ${waiting} to let go of overlapping paths`,
           payload: { gateId: gate.id },
         });
@@ -889,7 +889,7 @@ export class Gates {
     const reader = await this.actors.asBot(bot.name);
     if (!reader) {
       throw new Error(
-        `${botAtStart(bot)} is not connected to GitHub, so the Expected paths of ${subjectRef} cannot be updated. Run: fleetadlc auth login --bot ${bot.name}`,
+        `${botAtStart(bot)} is not connected to GitHub, so the Expected paths of ${subjectRef} cannot be updated. Run: openadlc auth login --bot ${bot.name}`,
       );
     }
     // GitHub first: the reconciler rewrites the issue's paths from its body, so
@@ -910,7 +910,7 @@ export class Gates {
       const editor = seat && seat !== bot.name ? await this.actors.asBot(seat) : reader;
       if (!editor) {
         throw new Error(
-          `${seat} wrote ${subjectRef}, and only ${seat} can edit it without breaking its signature, but ${seat} is not connected to GitHub. Run: fleetadlc auth login --bot ${seat}`,
+          `${seat} wrote ${subjectRef}, and only ${seat} can edit it without breaking its signature, but ${seat} is not connected to GitHub. Run: openadlc auth login --bot ${seat}`,
         );
       }
       await editor.updateIssueBody(repoFullName, issueNumber, body);
@@ -1011,7 +1011,7 @@ export class Gates {
     console.error(`[bridge] gate ${gate.id}: ${text} (${why})`);
     if (!gate.threadId) return;
     await threads
-      .addMessage({ threadId: gate.threadId, kind: 'sys', author: 'fleetadlc', text, note: why, payload: { gateId: gate.id } })
+      .addMessage({ threadId: gate.threadId, kind: 'sys', author: 'openadlc', text, note: why, payload: { gateId: gate.id } })
       .catch((failure: unknown) =>
         console.error(`[bridge] could not say so in the thread either: ${failure instanceof Error ? failure.message : failure}`),
       );

@@ -1,4 +1,4 @@
-import { DELIVERY_RULES_PATH, type DeliveryRules } from '@fleetadlc/shared';
+import { DELIVERY_RULES_PATH, type DeliveryRules } from '@openadlc/shared';
 import type { DeployPipeline } from './deploy-pipeline.js';
 import type { EffectiveDelivery } from './delivery-rules.js';
 import { HttpFailure, type Router } from './router.js';
@@ -25,7 +25,7 @@ export interface DeployRouteDeps {
   repo(name: string): Promise<Repo | null>;
   pipeline: Pick<DeployPipeline, 'releaseHeld'>;
   delivery: { get(repo: Repo): Promise<EffectiveDelivery>; forget(repoFullName: string): void };
-  /** Writes the repository's own rules (`repos.delivery_rules`), which apply where it has no `.github/fleetadlc.yml`. */
+  /** Writes the repository's own rules (`repos.delivery_rules`), which apply where it has no `.github/openadlc.yml`. */
   setRules(repoId: string, rules: DeliveryRules): Promise<void>;
   /** Records how the repository's production ships (`repos.setProductionChoice`), as repository setup does. */
   recordChoice(repoId: string, choice: { approval: 'auto'; soakMinutes: number; reviewers: string[] }): Promise<void>;

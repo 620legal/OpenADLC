@@ -46,7 +46,7 @@ export default async function OnboardingPage({
   const [initial, checks, accountsBody, enginesBody, settings] = await Promise.all([
     // An answer with an error is kept, not read as no answer: a 401 from a
     // bridge behind IAP, or a 500 with the database down, said "cannot reach
-    // the bridge … run fleetadlc up" over a bridge that was up.
+    // the bridge … run openadlc up" over a bridge that was up.
     fetch(`${BRIDGE_URL}/v1/onboarding?email=${encodeURIComponent(email)}`, {
       cache: 'no-store',
       headers,

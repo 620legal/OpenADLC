@@ -15,7 +15,7 @@ import { clearTaskDebris, moveBotHome, RenameRefused, renameBotComputer, type He
 let workRoot: string;
 
 beforeEach(() => {
-  workRoot = mkdtempSync(join(tmpdir(), 'fleetadlc-rename-'));
+  workRoot = mkdtempSync(join(tmpdir(), 'openadlc-rename-'));
 });
 
 afterEach(() => {
@@ -85,37 +85,37 @@ describe('moving a bot’s folder', () => {
   it('carries everything in it to the new name', () => {
     const { mirror } = botWithWork('atlas');
 
-    expect(moveBotHome(workRoot, 'atlas', 'fleetadlc-atlas-janedoe')).toBe('moved');
+    expect(moveBotHome(workRoot, 'atlas', 'openadlc-atlas-janedoe')).toBe('moved');
 
     expect(existsSync(join(workRoot, 'atlas'))).toBe(false);
-    expect(existsSync(mirror.replace('/atlas/', '/fleetadlc-atlas-janedoe/'))).toBe(true);
+    expect(existsSync(mirror.replace('/atlas/', '/openadlc-atlas-janedoe/'))).toBe(true);
   });
 
   it('refuses to put one bot’s work over another’s, and touches neither', () => {
     botWithWork('atlas');
-    mkdirSync(join(workRoot, 'fleetadlc-atlas-janedoe', 'repos'), { recursive: true });
+    mkdirSync(join(workRoot, 'openadlc-atlas-janedoe', 'repos'), { recursive: true });
 
-    expect(() => moveBotHome(workRoot, 'atlas', 'fleetadlc-atlas-janedoe')).toThrow(RenameRefused);
+    expect(() => moveBotHome(workRoot, 'atlas', 'openadlc-atlas-janedoe')).toThrow(RenameRefused);
     expect(existsSync(join(workRoot, 'atlas', 'repos'))).toBe(true);
-    expect(existsSync(join(workRoot, 'fleetadlc-atlas-janedoe', 'repos'))).toBe(true);
+    expect(existsSync(join(workRoot, 'openadlc-atlas-janedoe', 'repos'))).toBe(true);
   });
 
   it('finishes a move that already happened, dropping the empty folder a restart made', () => {
     // hostd's start makes a folder for every bot the database names. If the
     // bridge stopped before it renamed the row, that is an empty `atlas` next
     // to the moved one — and the move has to be repeatable over it.
-    botWithWork('fleetadlc-atlas-janedoe');
+    botWithWork('openadlc-atlas-janedoe');
     mkdirSync(join(workRoot, 'atlas'));
 
-    expect(moveBotHome(workRoot, 'atlas', 'fleetadlc-atlas-janedoe')).toBe('already moved');
+    expect(moveBotHome(workRoot, 'atlas', 'openadlc-atlas-janedoe')).toBe('already moved');
     expect(existsSync(join(workRoot, 'atlas'))).toBe(false);
-    expect(existsSync(join(workRoot, 'fleetadlc-atlas-janedoe', 'repos'))).toBe(true);
+    expect(existsSync(join(workRoot, 'openadlc-atlas-janedoe', 'repos'))).toBe(true);
   });
 
   it('replaces an empty folder under the new name, and has nothing to do for a bot that never worked', () => {
     botWithWork('atlas');
-    mkdirSync(join(workRoot, 'fleetadlc-atlas-janedoe'));
-    expect(moveBotHome(workRoot, 'atlas', 'fleetadlc-atlas-janedoe')).toBe('moved');
+    mkdirSync(join(workRoot, 'openadlc-atlas-janedoe'));
+    expect(moveBotHome(workRoot, 'atlas', 'openadlc-atlas-janedoe')).toBe('moved');
 
     expect(moveBotHome(workRoot, 'nova', 'system-engineer')).toBe('nothing to move');
   });
@@ -124,8 +124,8 @@ describe('moving a bot’s folder', () => {
 describe('what the moved folder’s tasks left behind', () => {
   it('goes, and the mirror forgets it, so the branch can be checked out again', async () => {
     const { branch } = botWithWork('atlas');
-    moveBotHome(workRoot, 'atlas', 'fleetadlc-atlas-janedoe');
-    const home = join(workRoot, 'fleetadlc-atlas-janedoe');
+    moveBotHome(workRoot, 'atlas', 'openadlc-atlas-janedoe');
+    const home = join(workRoot, 'openadlc-atlas-janedoe');
     const mirror = join(home, 'repos', 'janedoe__testbed.git');
 
     // Moved as it is, the worktree still claims its branch from a path that
@@ -151,17 +151,17 @@ describe('renaming a bot’s computer', () => {
 
     const renamed = await renameBotComputer({
       from: 'atlas',
-      to: 'fleetadlc-atlas-janedoe',
+      to: 'openadlc-atlas-janedoe',
       driver,
       runner: holding({}),
       workRoot,
       taskState: async () => null,
     });
 
-    expect(renamed).toEqual({ from: 'atlas', to: 'fleetadlc-atlas-janedoe', folder: 'moved' });
-    expect(calls).toEqual(['remove atlas', 'ensure fleetadlc-atlas-janedoe']);
-    expect(existsSync(join(workRoot, 'fleetadlc-atlas-janedoe', 'repos', 'janedoe__testbed.git'))).toBe(true);
-    expect(existsSync(join(workRoot, 'fleetadlc-atlas-janedoe', 'wt'))).toBe(false);
+    expect(renamed).toEqual({ from: 'atlas', to: 'openadlc-atlas-janedoe', folder: 'moved' });
+    expect(calls).toEqual(['remove atlas', 'ensure openadlc-atlas-janedoe']);
+    expect(existsSync(join(workRoot, 'openadlc-atlas-janedoe', 'repos', 'janedoe__testbed.git'))).toBe(true);
+    expect(existsSync(join(workRoot, 'openadlc-atlas-janedoe', 'wt'))).toBe(false);
   });
 
   it('refuses while the bot is working, and leaves everything as it was', async () => {
@@ -171,7 +171,7 @@ describe('renaming a bot’s computer', () => {
     await expect(
       renameBotComputer({
         from: 'atlas',
-        to: 'fleetadlc-atlas-janedoe',
+        to: 'openadlc-atlas-janedoe',
         driver,
         runner: holding({ 'task-9': 'atlas' }),
         workRoot,
@@ -188,7 +188,7 @@ describe('renaming a bot’s computer', () => {
 
     await renameBotComputer({
       from: 'atlas',
-      to: 'fleetadlc-atlas-janedoe',
+      to: 'openadlc-atlas-janedoe',
       driver,
       runner,
       workRoot,
@@ -200,13 +200,13 @@ describe('renaming a bot’s computer', () => {
 
   it('refuses a folder conflict before it takes anything down', async () => {
     botWithWork('atlas');
-    botWithWork('fleetadlc-atlas-janedoe');
+    botWithWork('openadlc-atlas-janedoe');
     const { driver, calls } = fakeDriver();
 
     await expect(
       renameBotComputer({
         from: 'atlas',
-        to: 'fleetadlc-atlas-janedoe',
+        to: 'openadlc-atlas-janedoe',
         driver,
         runner: holding({}),
         workRoot,
@@ -221,7 +221,7 @@ describe('renaming a bot’s computer', () => {
     const { driver, calls } = fakeDriver();
     const input = {
       from: 'atlas',
-      to: 'fleetadlc-atlas-janedoe',
+      to: 'openadlc-atlas-janedoe',
       driver,
       runner: holding({}),
       workRoot,
@@ -234,15 +234,15 @@ describe('renaming a bot’s computer', () => {
     const again = await renameBotComputer(input);
 
     expect(again.folder).toBe('already moved');
-    expect(calls.filter((call) => call.startsWith('ensure fleetadlc-atlas-janedoe'))).toHaveLength(2);
-    expect(existsSync(join(workRoot, 'fleetadlc-atlas-janedoe', 'repos', 'janedoe__testbed.git'))).toBe(true);
+    expect(calls.filter((call) => call.startsWith('ensure openadlc-atlas-janedoe'))).toHaveLength(2);
+    expect(existsSync(join(workRoot, 'openadlc-atlas-janedoe', 'repos', 'janedoe__testbed.git'))).toBe(true);
   });
 
   it('refuses a new name no bot could have, and an old one that is not a path segment', async () => {
     const { driver, calls } = fakeDriver();
     const base = { driver, runner: holding({}), workRoot, taskState: async () => null };
 
-    await expect(renameBotComputer({ ...base, from: 'atlas', to: 'FleetADLC-Atlas' })).rejects.toMatchObject({ status: 400 });
+    await expect(renameBotComputer({ ...base, from: 'atlas', to: 'OpenADLC-Atlas' })).rejects.toMatchObject({ status: 400 });
     await expect(renameBotComputer({ ...base, from: 'atlas', to: 'a__b' })).rejects.toMatchObject({ status: 400 });
     await expect(renameBotComputer({ ...base, from: '../etc', to: 'builder' })).rejects.toMatchObject({ status: 400 });
     expect(calls).toEqual([]);

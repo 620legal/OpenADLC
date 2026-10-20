@@ -1,14 +1,14 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 
-export const INTERNAL_SECRET_HEADER = 'x-fleetadlc-internal-secret';
-export const ON_BEHALF_OF_HEADER = 'x-fleetadlc-on-behalf-of';
+export const INTERNAL_SECRET_HEADER = 'x-openadlc-internal-secret';
+export const ON_BEHALF_OF_HEADER = 'x-openadlc-on-behalf-of';
 
 /**
  * What a shared secret can prove. The plan asks for mTLS with the bridge's own
  * service identity; a secret read from the install's secret store is the local
  * equivalent, and it proves less: that the caller is a component of this
- * install, not *which* component. The bridge and `fleetadlc attach` both hold it,
+ * install, not *which* component. The bridge and `openadlc attach` both hold it,
  * so hostd cannot tell them apart and does not pretend to.
  */
 export const PRINCIPAL = 'platform';

@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { parseMarkers, type EngineName } from '@fleetadlc/shared';
+import { parseMarkers, type EngineName } from '@openadlc/shared';
 import { costOf } from './pricing.js';
 import { commandExists, spawnJsonLines } from './process-engine.js';
 import { toolsPolicyEnv } from './tools.js';
@@ -75,7 +75,7 @@ export interface CodexOptions {
    * make. Every command a reviewer ran there failed with "bwrap: No permissions
    * to create a new namespace", and it gave up without reviewing. In a
    * container Codex runs without a sandbox of its own; beside hostd it keeps
-   * it. Read from `FLEETADLC_CONTAINED`, which the container's session sets.
+   * it. Read from `OPENADLC_CONTAINED`, which the container's session sets.
    */
   contained?: boolean;
 }
@@ -84,7 +84,7 @@ const EFFORT = ['-c', `model_reasoning_effort="${REASONING_EFFORT}"`];
 
 /**
  * Codex's usage analytics and its feedback upload, off unless the operator
- * opted back in: hostd sets `FLEETADLC_ENGINE_TELEMETRY=on` in the session
+ * opted back in: hostd sets `OPENADLC_ENGINE_TELEMETRY=on` in the session
  * then, and the vendors' environment opt-outs otherwise
  * (`TELEMETRY_OPT_OUTS` in hostd's base-env.ts). Codex reads none of those
  * variables; these are its own config keys. Measured in the bot image, codex
@@ -93,7 +93,7 @@ const EFFORT = ['-c', `model_reasoning_effort="${REASONING_EFFORT}"`];
  * the opt-out its own help text names.
  */
 export function telemetryOverrides(env: Record<string, string | undefined> = {}): string[] {
-  const setting = env.FLEETADLC_ENGINE_TELEMETRY ?? process.env.FLEETADLC_ENGINE_TELEMETRY;
+  const setting = env.OPENADLC_ENGINE_TELEMETRY ?? process.env.OPENADLC_ENGINE_TELEMETRY;
   return setting === 'on' ? [] : ['-c', 'analytics.enabled=false', '-c', 'feedback.enabled=false'];
 }
 
@@ -149,7 +149,7 @@ export class CodexEngine implements Engine {
     private readonly binary = 'codex',
     options: CodexOptions = {},
   ) {
-    this.contained = options.contained ?? process.env.FLEETADLC_CONTAINED === '1';
+    this.contained = options.contained ?? process.env.OPENADLC_CONTAINED === '1';
   }
 
   async available(): Promise<boolean> {

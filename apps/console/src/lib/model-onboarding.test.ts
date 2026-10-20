@@ -806,7 +806,7 @@ describe('the model picker', () => {
   });
 
   it('matches the engines allowlist on the same ids', () => {
-    // The console cannot import @fleetadlc/engines: that barrel pulls the CLIs into
+    // The console cannot import @openadlc/engines: that barrel pulls the CLIs into
     // the client bundle, so this rule is copied. A model the engines copy drops
     // then stays unlabelled in the picker. One list through both copies fails
     // when only one of them changes.
@@ -1167,7 +1167,7 @@ describe('which side of the accounts step an account is on', () => {
 
   it('tags a verified account with the bots on it, by handle or by role, and what OpenADLC holds for it', () => {
     const crew = [
-      bot({ bot: 'janedoe-fleetadlc-builder', slot: 'builder', modelAccountId: 'acct-claude' }),
+      bot({ bot: 'janedoe-openadlc-builder', slot: 'builder', modelAccountId: 'acct-claude' }),
       bot({ bot: 'system-engineer', modelAccountId: 'acct-claude' }),
       bot({ bot: 'intake', modelAccountId: 'acct-key' }),
     ];
@@ -1176,7 +1176,7 @@ describe('which side of the accounts step an account is on', () => {
       {
         label: '2 bots on it',
         tone: 'signal',
-        names: 'builder (janedoe-fleetadlc-builder), system engineer — not connected yet',
+        names: 'builder (janedoe-openadlc-builder), system engineer — not connected yet',
       },
       { label: 'token stored', tone: 'neutral' },
     ]);

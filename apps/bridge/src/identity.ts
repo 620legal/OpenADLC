@@ -21,10 +21,10 @@ export const IAP_EMAIL_HEADER = 'x-goog-authenticated-user-email';
  * bridge never saw it. The name confers nothing: what is accepted is still only
  * a signature that verifies for this install's audience.
  */
-export const FORWARDED_ASSERTION_HEADER = 'x-fleetadlc-iap-assertion';
-export const LOCAL_IDENTITY_HEADER = 'x-fleetadlc-identity';
+export const FORWARDED_ASSERTION_HEADER = 'x-openadlc-iap-assertion';
+export const LOCAL_IDENTITY_HEADER = 'x-openadlc-identity';
 /** What the console's server and the CLI present on a local install; see `consoleSecretRef`. */
-export const CONSOLE_SECRET_HEADER = 'x-fleetadlc-console-secret';
+export const CONSOLE_SECRET_HEADER = 'x-openadlc-console-secret';
 
 export type IdentityMode = 'local' | 'iap';
 
@@ -51,12 +51,12 @@ function parseJson<T>(segment: string, what: string): T {
 
 /**
  * Which path is in force, in one sentence: the bridge logs it at start and
- * `fleetadlc status` prints it (`/v1/status`), so nobody has to guess. One
+ * `openadlc status` prints it (`/v1/status`), so nobody has to guess. One
  * function, so the two cannot say different things.
  */
 export function describeIdentity(mode: IdentityMode, audience: string): string {
   if (mode === 'local') {
-    return 'local header, believed only from the console and the fleetadlc CLI, which hold the console secret';
+    return 'local header, believed only from the console and the openadlc CLI, which hold the console secret';
   }
   return `verified IAP assertion for audience ${audience}`;
 }
@@ -71,13 +71,13 @@ export interface Jwks {
  * In `iap` mode the only thing trusted is the signature: the identity comes from
  * the verified claim, and a request whose assertion does not verify is refused
  * rather than falling back to the headers beside it. `x-goog-authenticated-user-email`
- * and `x-fleetadlc-identity` are just headers — anything that reaches the bridge can
+ * and `x-openadlc-identity` are just headers — anything that reaches the bridge can
  * set them, and the identity decides who may answer a gate, move a card and
  * satisfy `review:human`.
  *
- * In `local` mode the person is named by `x-fleetadlc-identity`, and that is
+ * In `local` mode the person is named by `x-openadlc-identity`, and that is
  * believed only from a caller holding the install's console secret: the
- * console's server and the `fleetadlc` CLI. The bridge listens on every
+ * console's server and the `openadlc` CLI. The bridge listens on every
  * interface, because a task's container reaches `/internal/tasks/*` through the
  * Docker gateway, so "only this machine can reach it" was never true. Without
  * the secret, a host on the LAN or code in a task's container named itself and
@@ -128,7 +128,7 @@ export class Identity {
       // Says what to use, and nothing about what was sent.
       throw new HttpFailure(
         401,
-        'this bridge serves /v1 only to its console and the fleetadlc CLI. In a browser, sign in to the console with the link `fleetadlc console-link` prints',
+        'this bridge serves /v1 only to its console and the openadlc CLI. In a browser, sign in to the console with the link `openadlc console-link` prints',
       );
     }
     const local = this.header(request, LOCAL_IDENTITY_HEADER);
@@ -273,12 +273,12 @@ async function defaultFetchJwks(): Promise<Jwks> {
 export function identityFromConfig(mode: IdentityMode, audience: string, consoleSecret = ''): Identity {
   if (mode === 'iap' && audience.length === 0) {
     throw new Error(
-      'FLEETADLC_IDENTITY_MODE=iap needs FLEETADLC_IAP_AUDIENCE, the backend service the assertion is issued for',
+      'OPENADLC_IDENTITY_MODE=iap needs OPENADLC_IAP_AUDIENCE, the backend service the assertion is issued for',
     );
   }
   if (mode === 'local' && consoleSecret.length === 0) {
     throw new Error(
-      'a local install needs its console secret, which `fleetadlc up` makes. Start the install with `fleetadlc up`',
+      'a local install needs its console secret, which `openadlc up` makes. Start the install with `openadlc up`',
     );
   }
   return new Identity(mode, audience, consoleSecret);

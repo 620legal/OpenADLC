@@ -155,14 +155,14 @@ describe('settling a paused lease whose work has ended', () => {
   it('looks, closes, writes and audits in one statement', async () => {
     vi.mocked(query).mockResolvedValueOnce([]);
 
-    await settlePausedLeases({ leaseId: 'lease-1', actor: 'bridge', reason: 'its task on fleetadlc#78 failed', holdUntil: HOLD });
+    await settlePausedLeases({ leaseId: 'lease-1', actor: 'bridge', reason: 'its task on openadlc#78 failed', holdUntil: HOLD });
 
     expect(query).toHaveBeenCalledTimes(1);
     const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
     const text = String(sql).replace(/\s+/g, ' ');
     expect(text).toMatch(/update leases l set/);
     expect(text).toMatch(/insert into audit/);
-    expect(params).toEqual(['lease-1', HOLD, 'bridge', 'its task on fleetadlc#78 failed']);
+    expect(params).toEqual(['lease-1', HOLD, 'bridge', 'its task on openadlc#78 failed']);
   });
 
   it('takes only a paused lease with no unfinished task, the sweep taking every one', async () => {

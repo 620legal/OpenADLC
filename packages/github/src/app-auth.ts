@@ -1,5 +1,5 @@
 import { createSign } from 'node:crypto';
-import { REVIEW_GATE_CHECK } from '@fleetadlc/shared';
+import { REVIEW_GATE_CHECK } from '@openadlc/shared';
 
 /**
  * Acting as the GitHub App itself, rather than as one of its users.

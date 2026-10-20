@@ -26,7 +26,7 @@ beforeAll(async () => {
     setTimeout(() => response.end(JSON.stringify({ email: 'bob@exampleco.com', role: 'user', ...mode })), 2_000);
   });
   await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
-  process.env.FLEETADLC_BRIDGE_URL = `http://127.0.0.1:${(bridge.address() as AddressInfo).port}`;
+  process.env.OPENADLC_BRIDGE_URL = `http://127.0.0.1:${(bridge.address() as AddressInfo).port}`;
 });
 
 afterAll(async () => {

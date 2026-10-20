@@ -2,20 +2,20 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseYamlFile, reviewRulesSchema } from '@fleetadlc/shared';
+import { parseYamlFile, reviewRulesSchema } from '@openadlc/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_REVIEW, eventRetentionDaysFrom, identityModeFrom, loadBridgeConfig } from './config.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const saved = process.env.FLEETADLC_IDENTITY_MODE;
-const savedConfigRoot = process.env.FLEETADLC_CONFIG_ROOT;
+const saved = process.env.OPENADLC_IDENTITY_MODE;
+const savedConfigRoot = process.env.OPENADLC_CONFIG_ROOT;
 const savedService = process.env.K_SERVICE;
 
 afterEach(() => {
-  if (saved === undefined) delete process.env.FLEETADLC_IDENTITY_MODE;
-  else process.env.FLEETADLC_IDENTITY_MODE = saved;
-  if (savedConfigRoot === undefined) delete process.env.FLEETADLC_CONFIG_ROOT;
-  else process.env.FLEETADLC_CONFIG_ROOT = savedConfigRoot;
+  if (saved === undefined) delete process.env.OPENADLC_IDENTITY_MODE;
+  else process.env.OPENADLC_IDENTITY_MODE = saved;
+  if (savedConfigRoot === undefined) delete process.env.OPENADLC_CONFIG_ROOT;
+  else process.env.OPENADLC_CONFIG_ROOT = savedConfigRoot;
   if (savedService === undefined) delete process.env.K_SERVICE;
   else process.env.K_SERVICE = savedService;
 });
@@ -31,9 +31,9 @@ describe('the review rules with no config/review.yaml', () => {
   });
 
   it('are what loadBridgeConfig reads when the config directory has no review.yaml', () => {
-    const empty = mkdtempSync(join(tmpdir(), 'fleetadlc-config-'));
+    const empty = mkdtempSync(join(tmpdir(), 'openadlc-config-'));
     try {
-      process.env.FLEETADLC_CONFIG_ROOT = empty;
+      process.env.OPENADLC_CONFIG_ROOT = empty;
       const review = loadBridgeConfig().review;
       expect(review).toEqual(shipped());
       const sre = review.reviewers.find((entry) => entry.seat === 'sre');
@@ -44,7 +44,7 @@ describe('the review rules with no config/review.yaml', () => {
   });
 });
 
-describe('FLEETADLC_IDENTITY_MODE', () => {
+describe('OPENADLC_IDENTITY_MODE', () => {
   it('is iap or local, and local when unset', () => {
     expect(identityModeFrom('iap')).toBe('iap');
     expect(identityModeFrom('local')).toBe('local');
@@ -54,46 +54,46 @@ describe('FLEETADLC_IDENTITY_MODE', () => {
 
   it('stops the bridge at start for anything else, rather than reading it as local and trusting a header', () => {
     for (const value of ['IAP', 'iap ', 'Local', 'google', 'true']) {
-      expect(() => identityModeFrom(value), value).toThrow(/FLEETADLC_IDENTITY_MODE is .* it must be iap/);
+      expect(() => identityModeFrom(value), value).toThrow(/OPENADLC_IDENTITY_MODE is .* it must be iap/);
     }
     // Through the config the bridge starts from: main() reports the error and exits 1.
-    process.env.FLEETADLC_IDENTITY_MODE = 'IAP';
+    process.env.OPENADLC_IDENTITY_MODE = 'IAP';
     expect(() => loadBridgeConfig()).toThrow(/must be iap/);
   });
 
   it('refuses local on Cloud Run, set or unset, where anyone reaching the bridge would be an admin', () => {
-    process.env.K_SERVICE = 'fleetadlc-bridge';
+    process.env.K_SERVICE = 'openadlc-bridge';
     for (const value of ['local', undefined]) {
-      if (value === undefined) delete process.env.FLEETADLC_IDENTITY_MODE;
-      else process.env.FLEETADLC_IDENTITY_MODE = value;
-      expect(() => loadBridgeConfig(), String(value)).toThrow(/FLEETADLC_IDENTITY_MODE=iap and FLEETADLC_IAP_AUDIENCE/);
+      if (value === undefined) delete process.env.OPENADLC_IDENTITY_MODE;
+      else process.env.OPENADLC_IDENTITY_MODE = value;
+      expect(() => loadBridgeConfig(), String(value)).toThrow(/OPENADLC_IDENTITY_MODE=iap and OPENADLC_IAP_AUDIENCE/);
     }
-    process.env.FLEETADLC_IDENTITY_MODE = 'iap';
+    process.env.OPENADLC_IDENTITY_MODE = 'iap';
     expect(loadBridgeConfig().identityMode).toBe('iap');
   });
 
   it('starts local, set or unset, off Cloud Run', () => {
     delete process.env.K_SERVICE;
     for (const value of ['local', undefined]) {
-      if (value === undefined) delete process.env.FLEETADLC_IDENTITY_MODE;
-      else process.env.FLEETADLC_IDENTITY_MODE = value;
+      if (value === undefined) delete process.env.OPENADLC_IDENTITY_MODE;
+      else process.env.OPENADLC_IDENTITY_MODE = value;
       expect(loadBridgeConfig().identityMode, String(value)).toBe('local');
     }
   });
 
   it('is set only to a value the bridge accepts, by the cloud module and the local stack', () => {
     const tf = readFileSync(join(ROOT, 'infra', 'gcp', 'main.tf'), 'utf8');
-    const set = /name\s*=\s*"FLEETADLC_IDENTITY_MODE"\s*\n\s*value\s*=\s*(.+)/.exec(tf)?.[1]?.trim();
+    const set = /name\s*=\s*"OPENADLC_IDENTITY_MODE"\s*\n\s*value\s*=\s*(.+)/.exec(tf)?.[1]?.trim();
     expect(set).toBe('"iap"');
     // The local stack leaves it unset, which is `local`.
     const compose = readFileSync(join(ROOT, 'infra', 'local', 'docker-compose.yml'), 'utf8');
-    for (const match of compose.matchAll(/FLEETADLC_IDENTITY_MODE\s*[:=]\s*["']?([^"'\s]*)/g)) {
+    for (const match of compose.matchAll(/OPENADLC_IDENTITY_MODE\s*[:=]\s*["']?([^"'\s]*)/g)) {
       expect(() => identityModeFrom(match[1])).not.toThrow();
     }
   });
 });
 
-describe('FLEETADLC_EVENT_RETENTION_DAYS', () => {
+describe('OPENADLC_EVENT_RETENTION_DAYS', () => {
   it('is 30 days when unset, and 0 keeps GitHub deliveries for good', () => {
     expect(eventRetentionDaysFrom(undefined)).toBe(30);
     expect(eventRetentionDaysFrom('')).toBe(30);
@@ -103,11 +103,11 @@ describe('FLEETADLC_EVENT_RETENTION_DAYS', () => {
 
   it('stops the bridge at start for a value that is not a whole number of days, naming the variable and the value', () => {
     for (const value of ['-1', '30d', '1.5', 'thirty']) {
-      expect(() => eventRetentionDaysFrom(value), value).toThrow(`FLEETADLC_EVENT_RETENTION_DAYS is ${JSON.stringify(value)}`);
+      expect(() => eventRetentionDaysFrom(value), value).toThrow(`OPENADLC_EVENT_RETENTION_DAYS is ${JSON.stringify(value)}`);
     }
-    vi.stubEnv('FLEETADLC_EVENT_RETENTION_DAYS', '-1');
+    vi.stubEnv('OPENADLC_EVENT_RETENTION_DAYS', '-1');
     try {
-      expect(() => loadBridgeConfig()).toThrow(/FLEETADLC_EVENT_RETENTION_DAYS is "-1"; it must be a whole number of days/);
+      expect(() => loadBridgeConfig()).toThrow(/OPENADLC_EVENT_RETENTION_DAYS is "-1"; it must be a whole number of days/);
     } finally {
       vi.unstubAllEnvs();
     }
@@ -116,12 +116,12 @@ describe('FLEETADLC_EVENT_RETENTION_DAYS', () => {
 
 describe('the console address links are made from', () => {
   it('follows the console’s port when no address is set, and an address set wins', () => {
-    vi.stubEnv('FLEETADLC_CONSOLE_URL', '');
-    vi.stubEnv('FLEETADLC_CONSOLE_PORT', '47400');
+    vi.stubEnv('OPENADLC_CONSOLE_URL', '');
+    vi.stubEnv('OPENADLC_CONSOLE_PORT', '47400');
     try {
       expect(loadBridgeConfig().consoleUrl).toBe('http://127.0.0.1:47400');
-      vi.stubEnv('FLEETADLC_CONSOLE_URL', 'https://fleetadlc.example.com');
-      expect(loadBridgeConfig().consoleUrl).toBe('https://fleetadlc.example.com');
+      vi.stubEnv('OPENADLC_CONSOLE_URL', 'https://openadlc.example.com');
+      expect(loadBridgeConfig().consoleUrl).toBe('https://openadlc.example.com');
     } finally {
       vi.unstubAllEnvs();
     }
@@ -132,10 +132,10 @@ describe('the install’s models.yaml', () => {
   it('stops the bridge at start when a price is negative, naming the file and the model', () => {
     // config/models.example.yaml says a malformed file stops the bridge, and
     // nothing in the bridge read it.
-    const root = mkdtempSync(join(tmpdir(), 'fleetadlc-bridge-config-'));
+    const root = mkdtempSync(join(tmpdir(), 'openadlc-bridge-config-'));
     try {
       writeFileSync(join(root, 'models.yaml'), 'models:\n  gpt-5-codex:\n    inPerMtok: -400000\n    outPerMtok: 10\n');
-      vi.stubEnv('FLEETADLC_CONFIG_ROOT', root);
+      vi.stubEnv('OPENADLC_CONFIG_ROOT', root);
       expect(() => loadBridgeConfig()).toThrow(join(root, 'models.yaml'));
       expect(() => loadBridgeConfig()).toThrow(/gpt-5-codex's inPerMtok/);
 
@@ -152,9 +152,9 @@ describe('a key config/ does not read', () => {
   it('stops the bridge at start, naming the file and the key', () => {
     // A misspelt cap fell back to the default $1500, and a reviewer's
     // `blocked: true` left it advisory, with nothing said either time.
-    const root = mkdtempSync(join(tmpdir(), 'fleetadlc-bridge-config-'));
+    const root = mkdtempSync(join(tmpdir(), 'openadlc-bridge-config-'));
     try {
-      vi.stubEnv('FLEETADLC_CONFIG_ROOT', root);
+      vi.stubEnv('OPENADLC_CONFIG_ROOT', root);
       writeFileSync(join(root, 'costs.yaml'), 'monthlyCapUSD: 100\n');
       expect(() => loadBridgeConfig()).toThrow(`${join(root, 'costs.yaml')}: monthlyCapUSD is not a setting OpenADLC reads`);
 

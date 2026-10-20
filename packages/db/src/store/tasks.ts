@@ -1,5 +1,5 @@
-import { redactSecrets } from '@fleetadlc/shared';
-import type { ContextDocument, Task, TaskKind, TaskState } from '@fleetadlc/shared';
+import { redactSecrets } from '@openadlc/shared';
+import type { ContextDocument, Task, TaskKind, TaskState } from '@openadlc/shared';
 import { query, queryOne } from '../client.js';
 
 interface TaskRow {

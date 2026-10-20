@@ -1,6 +1,6 @@
-import { settings, type SettingKey } from '@fleetadlc/db';
-import { GcpSecretStore, getSecretStore, webhookSecretRef, type SecretStore } from '@fleetadlc/github';
-import { defaultInstallName } from '@fleetadlc/shared';
+import { settings, type SettingKey } from '@openadlc/db';
+import { GcpSecretStore, getSecretStore, webhookSecretRef, type SecretStore } from '@openadlc/github';
+import { defaultInstallName } from '@openadlc/shared';
 import type { BridgeConfig } from './config.js';
 
 /**
@@ -9,12 +9,12 @@ import type { BridgeConfig } from './config.js';
  *
  * `BridgeConfig` is read from the environment once, at start-up, which is
  * correct for ports and paths and wrong for everything an operator configures.
- * Setting a GitHub App client id used to mean editing `~/.fleetadlc/install.json`
+ * Setting a GitHub App client id used to mean editing `~/.openadlc/install.json`
  * in a terminal and restarting the stack — so the console could report that the
  * client id was missing and offer no way to supply it.
  *
  * A stored setting wins over the environment. Absent, the environment still
- * does, so an install configured by `fleetadlc init` or by a deployment's env is
+ * does, so an install configured by `openadlc init` or by a deployment's env is
  * untouched by this.
  */
 export interface EffectiveConfig {
@@ -118,7 +118,7 @@ let remembered: { store: SecretStore; at: number; value: string | null } | null 
 
 /**
  * The webhook secret as the secret store has it, read on every call so a
- * secret `fleetadlc init` or the console just wrote is the one the next
+ * secret `openadlc init` or the console just wrote is the one the next
  * delivery is checked against, with no restart. A file is cheap to read;
  * Secret Manager is a request, so its answer is kept for a moment, and a
  * write through `storeWebhookSecret` replaces it at once.
@@ -154,7 +154,7 @@ export async function storeWebhookSecret(secret: string, by: string): Promise<vo
  * when the bridge starts: into the secret store when that has none, and the
  * row deleted either way. Says what it did, never the value.
  */
-export async function moveWebhookSecretToStore(by = 'fleetadlc'): Promise<'moved' | 'dropped' | 'none'> {
+export async function moveWebhookSecretToStore(by = 'openadlc'): Promise<'moved' | 'dropped' | 'none'> {
   const row = (await settings.getSetting('webhookSecret'))?.trim();
   if (!row) return 'none';
   const store = getSecretStore();

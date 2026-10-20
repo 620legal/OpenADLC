@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BOT_ROLES, parseYamlFile } from '@fleetadlc/shared';
+import { BOT_ROLES, parseYamlFile } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
 import { ROLES_IN_CONTAINER } from './drivers/docker.js';
 import { playbookPaths } from './task-runner.js';
@@ -52,13 +52,13 @@ describe('where a session finds its playbook', () => {
   // runner was handed /Users/…/roles/intake.md, which exists on the host and
   // not in the container, where the playbooks are mounted at /roles.
   it('is the mount in a container, and the file itself on the host', () => {
-    expect(playbookPaths('intake', { rolesRoot: '/Users/someone/fleetadlc/roles', driver: 'docker' })).toEqual({
-      onHost: '/Users/someone/fleetadlc/roles/intake.md',
+    expect(playbookPaths('intake', { rolesRoot: '/Users/someone/openadlc/roles', driver: 'docker' })).toEqual({
+      onHost: '/Users/someone/openadlc/roles/intake.md',
       inSession: '/roles/intake.md',
     });
-    expect(playbookPaths('intake', { rolesRoot: '/Users/someone/fleetadlc/roles', driver: 'local' })).toEqual({
-      onHost: '/Users/someone/fleetadlc/roles/intake.md',
-      inSession: '/Users/someone/fleetadlc/roles/intake.md',
+    expect(playbookPaths('intake', { rolesRoot: '/Users/someone/openadlc/roles', driver: 'local' })).toEqual({
+      onHost: '/Users/someone/openadlc/roles/intake.md',
+      inSession: '/Users/someone/openadlc/roles/intake.md',
     });
   });
 

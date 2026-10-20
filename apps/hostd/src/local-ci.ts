@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { internalSecretRef, getSecretStore, type SecretStore } from '@fleetadlc/github';
+import { internalSecretRef, getSecretStore, type SecretStore } from '@openadlc/github';
 import { KILL_AFTER_MS, type ExecDriver, type TaskComputer } from './drivers/types.js';
 import { DEFAULT_LOCAL_CI_TIMEOUT_MINUTES } from './config.js';
 
@@ -9,7 +9,7 @@ import { DEFAULT_LOCAL_CI_TIMEOUT_MINUTES } from './config.js';
  *
  * GitHub's CI ran on every push of every crew pull request, reviewed or not,
  * and was paid for by the minute; the builder was told to run `make ci` first
- * and nothing knew whether it had. Now `fleetadlc-ci` in the session asks the
+ * and nothing knew whether it had. Now `openadlc-ci` in the session asks the
  * bridge, the bridge asks hostd, and hostd runs `make ci` in the worktree
  * itself — with the task's own database and its repository's home, as `make
  * setup` was run — and reports what happened. The session can start a run and
@@ -123,7 +123,7 @@ export class LocalCi {
     private readonly now: () => number = Date.now,
     /**
      * How long `make ci` may run. With no limit a hung suite stayed "running"
-     * for the life of the task, every later `fleetadlc-ci` joined it, and the
+     * for the life of the task, every later `openadlc-ci` joined it, and the
      * builder could never record a pass.
      */
     private readonly timeoutMs: number = DEFAULT_LOCAL_CI_TIMEOUT_MINUTES * 60_000,
@@ -189,7 +189,7 @@ export class LocalCi {
     if (before.changed.length > 0) {
       this.finish(run, 'refused', {
         reason:
-          `the worktree has changes that are not committed (${shown(before.changed)}): commit them, then run fleetadlc-ci again. ` +
+          `the worktree has changes that are not committed (${shown(before.changed)}): commit them, then run openadlc-ci again. ` +
           'A pass is recorded for a commit, and these are not one.',
       });
       return;
@@ -226,7 +226,7 @@ export class LocalCi {
         exitCode: result.code,
         durationMs,
         logTail,
-        reason: `make ci did not finish within ${minutes} minute${minutes === 1 ? '' : 's'}, so it was stopped: find what keeps it running (an open handle, a watcher, a test waiting on a port), fix it, commit, and run fleetadlc-ci again`,
+        reason: `make ci did not finish within ${minutes} minute${minutes === 1 ? '' : 's'}, so it was stopped: find what keeps it running (an open handle, a watcher, a test waiting on a port), fix it, commit, and run openadlc-ci again`,
       });
       await this.report(view(run)).catch((error: unknown) =>
         console.warn(`[hostd] local CI ${run.id} for ${run.taskId} timed out but the bridge was not told: ${error instanceof Error ? error.message : error}`),
@@ -239,7 +239,7 @@ export class LocalCi {
       this.finish(run, 'refused', {
         durationMs,
         logTail,
-        reason: `HEAD moved from ${head.slice(0, 7)} to ${(after.head ?? 'nothing').slice(0, 7)} while make ci ran: run fleetadlc-ci again on the commit you mean to push.`,
+        reason: `HEAD moved from ${head.slice(0, 7)} to ${(after.head ?? 'nothing').slice(0, 7)} while make ci ran: run openadlc-ci again on the commit you mean to push.`,
       });
       return;
     }
@@ -249,7 +249,7 @@ export class LocalCi {
         logTail,
         reason:
           `make ci changed the worktree (${shown(after.changed)}), so what passed is not the commit: ` +
-          'commit what it generates, or have the repository ignore it, then run fleetadlc-ci again.',
+          'commit what it generates, or have the repository ignore it, then run openadlc-ci again.',
       });
       return;
     }
@@ -358,11 +358,11 @@ export function bridgeReporter(bridgeUrl: string, store: SecretStore = getSecret
   return async (run) => {
     const secret = await store.get(internalSecretRef());
     if (!secret) {
-      throw new Error('hostd has no internal secret yet, so it cannot report the run. Start the bridge, which generates it, then retry: fleetadlc up');
+      throw new Error('hostd has no internal secret yet, so it cannot report the run. Start the bridge, which generates it, then retry: openadlc up');
     }
     const response = await fetch(`${bridgeUrl}/internal/local-ci`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': secret },
+      headers: { 'content-type': 'application/json', 'x-openadlc-internal-secret': secret },
       body: JSON.stringify({
         runId: run.id,
         taskId: run.taskId,

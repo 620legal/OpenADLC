@@ -32,13 +32,13 @@ function uint32(value: number): Buffer {
  * into a directory under the temp directory and read back, so a crash, an OOM
  * kill or a container stop between the write and the clean-up left a working
  * signing key in /tmp. The result is what `ssh-keygen -t ed25519 -N ''` makes:
- * an unencrypted openssh-key-v1 ed25519 key with the comment `fleetadlc-<bot>`.
+ * an unencrypted openssh-key-v1 ed25519 key with the comment `openadlc-<bot>`.
  */
 export function generateSigningKey(bot: string): SigningKeyPair {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   const seed = Buffer.from(privateKey.export({ format: 'jwk' }).d as string, 'base64url');
   const pub = Buffer.from(publicKey.export({ format: 'jwk' }).x as string, 'base64url');
-  const comment = `fleetadlc-${bot}`;
+  const comment = `openadlc-${bot}`;
   const blob = Buffer.concat([sshString('ssh-ed25519'), sshString(pub)]);
 
   const check = randomBytes(4);

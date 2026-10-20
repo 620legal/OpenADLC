@@ -1,5 +1,5 @@
-import type { GitHubClient } from '@fleetadlc/github';
-import { hasIgnoreLabel, stageFromLabels } from '@fleetadlc/shared';
+import type { GitHubClient } from '@openadlc/github';
+import { hasIgnoreLabel, stageFromLabels } from '@openadlc/shared';
 import { everyIssue } from './reconciler.js';
 
 /**
@@ -16,7 +16,7 @@ import { everyIssue } from './reconciler.js';
  * only while no intake is running on an issue there, so a backlog is worked
  * through rather than triaged all at once. Intake shapes it as it does any
  * issue a person filed — their words kept, "Here's what #N will say. OK?",
- * then labels. Only issues whose author OpenADLC acts for; `fleetadlc:ignore`
+ * then labels. Only issues whose author OpenADLC acts for; `openadlc:ignore`
  * keeps one out. An issue intake cannot shape stops after two tries
  * (`StageHandoff.intakeGaveUp`) and waits in Needs you.
  */

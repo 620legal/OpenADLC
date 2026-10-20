@@ -97,7 +97,7 @@ describe('the sections of settings', () => {
 
 describe('where a repository’s settings are', () => {
   it('is a page of its own, named after it', () => {
-    expect(repoSettingsPath('fleetadlc-testbed')).toBe('/settings/repositories/fleetadlc-testbed');
+    expect(repoSettingsPath('openadlc-testbed')).toBe('/settings/repositories/openadlc-testbed');
     expect(repoSettingsPath('a b')).toBe('/settings/repositories/a%20b');
   });
 });
@@ -121,7 +121,7 @@ describe('the section being read', () => {
 describe('a seat on a shared account', () => {
   it('is connected by its account, though it keeps its seat’s name', () => {
     expect(
-      accountState({ name: 'builder', slot: 'builder', githubLogin: 'fleetadlc-example', authorization: 'active' }).text,
+      accountState({ name: 'builder', slot: 'builder', githubLogin: 'openadlc-example', authorization: 'active' }).text,
     ).toBe('Connected');
   });
 });

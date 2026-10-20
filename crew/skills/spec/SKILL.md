@@ -44,8 +44,8 @@ says so and supersedes it.
    list decides what the dispatcher lets run beside this issue and what the
    builder may write, so a folder left from intake holds back other work and a
    file left off costs the builder a question to a person. Write the whole body
-   to `.fleetadlc-scratch/issue.md`, change only that section, and give it with
-   `gh issue edit <number> --body-file .fleetadlc-scratch/issue.md`.
+   to `.openadlc-scratch/issue.md`, change only that section, and give it with
+   `gh issue edit <number> --body-file .openadlc-scratch/issue.md`.
 6. If a contract change is needed first, file that issue, add it to this one's
    `## Dependencies` section as a line `- #<number>`, and label this one
    `blocked`, not `start:now`. The section decides whether the issue may start:
@@ -67,7 +67,7 @@ next question is written after it, not before.
   marker, one line of JSON that carries the question itself and its choices:
 
   ```
-  <!-- fleetadlc:{"event":"question","question":"Store the model per review round, or per call?","options":["per review round","per call"]} -->
+  <!-- openadlc:{"event":"question","question":"Store the model per review round, or per call?","options":["per review round","per call"]} -->
   ```
 
   What you write before the marker is the context: what you found, and why you
@@ -79,7 +79,7 @@ next question is written after it, not before.
   and say so in the marker instead of giving choices:
 
   ```
-  <!-- fleetadlc:{"event":"question","question":"What should the suspension notice say?","open":true} -->
+  <!-- openadlc:{"event":"question","question":"What should the suspension notice say?","open":true} -->
   ```
 
 - Never number several questions in one message, and never put a second
@@ -98,7 +98,7 @@ marker, with one more line: a `design_memory` marker listing what the
 repository should remember, each entry short enough to read in a list.
 
 ```
-<!-- fleetadlc:{"event":"design_memory","entries":[{"kind":"decision","title":"Costs are stored per review round","body":"One row per round, naming the model; a task's cost is the sum. Recorded in docs/adr/0004-costs-per-round.md."},{"kind":"glossary","title":"Round","body":"One review of one head."}]} -->
+<!-- openadlc:{"event":"design_memory","entries":[{"kind":"decision","title":"Costs are stored per review round","body":"One row per round, naming the model; a task's cost is the sum. Recorded in docs/adr/0004-costs-per-round.md."},{"kind":"glossary","title":"Round","body":"One review of one head."}]} -->
 ```
 
 - `kind` is `decision` (a choice a later design must stay consistent with),
@@ -124,7 +124,7 @@ intake, which takes it up with the person who asked, rather than designing
 around a guess. End your message with one marker:
 
 ```
-<!-- fleetadlc:{"event":"send_back","to":"intake","reason":"The issue asks for prices per region, and its acceptance criteria test one global price."} -->
+<!-- openadlc:{"event":"send_back","to":"intake","reason":"The issue asks for prices per region, and its acceptance criteria test one global price."} -->
 ```
 
 - The reason is what intake asks the person about, so write it for them: what
@@ -158,11 +158,11 @@ a policy that changes no code yet. Then:
    first line, the `SPDX-License-Identifier` comment: that line licenses
    OpenADLC's template, and the record is the repository's own. Change
    nothing else.
-2. Commit it on a branch of its own, `agent/$FLEETADLC_BOT/adr-NNNN-short-title`.
+2. Commit it on a branch of its own, `agent/$OPENADLC_BOT/adr-NNNN-short-title`.
    Never `agent/<bot>/<number>-…`: that form names the issue a branch was cut
    for, and its merge would count as finishing an issue that still has to be
    built.
-3. Run `fleetadlc-ci` in the foreground and wait for it, with the longest
+3. Run `openadlc-ci` in the foreground and wait for it, with the longest
    timeout your shell tool allows; if the tool gives up first, run it again.
    It has hostd run the repository's checks on your exact HEAD and records the
    result. OpenADLC's `git` refuses to push, and its `gh` to open a pull
@@ -172,12 +172,12 @@ a policy that changes no code yet. Then:
    `Closes`: the issue still goes on to build.
 
 ```bash
-git switch -c "agent/$FLEETADLC_BOT/adr-NNNN-short-title"
+git switch -c "agent/$OPENADLC_BOT/adr-NNNN-short-title"
 git add docs/adr/NNNN-short-title.md
 git commit -m "Record the decision: <short title>"
-fleetadlc-ci
+openadlc-ci
 git push origin HEAD
-gh pr create --title "ADR NNNN: <short title>" --body-file .fleetadlc-scratch/adr-pr.md
+gh pr create --title "ADR NNNN: <short title>" --body-file .openadlc-scratch/adr-pr.md
 ```
 
 The review gate and the merge line take it from there, as they do any pull
@@ -209,12 +209,12 @@ ends with two; see "Remembering"), so the bridge learns what you did rather
 than inferring it from GitHub. A comment with no marker is read as narration,
 which is what an operator's own comment is.
 
-- `<!-- fleetadlc:{"event":"plan_posted"} -->` on the design comment, followed
+- `<!-- openadlc:{"event":"plan_posted"} -->` on the design comment, followed
   by its `design_memory` line when it has one (see "Remembering"), which is
   then the last.
 - The question marker, ending your own message rather than a comment, on the
   choice in step 3 and on any stop under "Stop and ask when" (see "Asking a
   person").
-- `<!-- fleetadlc:{"event":"send_back","to":"intake","reason":"..."} -->` ending
+- `<!-- openadlc:{"event":"send_back","to":"intake","reason":"..."} -->` ending
   your own message, when the issue cannot be designed as it stands (see
   "Sending back").

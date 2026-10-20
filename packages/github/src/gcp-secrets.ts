@@ -5,7 +5,7 @@ const API = 'https://secretmanager.googleapis.com/v1';
 
 /**
  * Every secret's id starts with this, and carries the label `fleet: secret`.
- * Both predate the rename to FleetADLC and stay as they are: an install's
+ * Both predate the rename to OpenADLC and stay as they are: an install's
  * refresh tokens and keys already live under them, and the deployer's access
  * is granted to `fleet-github-app-private-key` by name (`infra/gcp/deployer.tf`).
  */

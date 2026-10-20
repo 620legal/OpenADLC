@@ -99,15 +99,15 @@ describe('getting a token that can administer one repository', () => {
     // intersected with any account's access. It should not also reach every
     // other repository the app happens to be installed on.
     const { impl, calls } = api();
-    await installationTokenFor(impl, CREDENTIALS, 'janedoe/fleetadlc-testbed', NOW);
+    await installationTokenFor(impl, CREDENTIALS, 'janedoe/openadlc-testbed', NOW);
 
     expect(calls[1]?.path).toBe('/app/installations/42/access_tokens');
-    expect(calls[1]?.body).toEqual({ repositories: ['fleetadlc-testbed'] });
+    expect(calls[1]?.body).toEqual({ repositories: ['openadlc-testbed'] });
   });
 
   it('returns the token and when it dies', async () => {
     const { impl } = api();
-    const minted = await installationTokenFor(impl, CREDENTIALS, 'janedoe/fleetadlc-testbed', NOW);
+    const minted = await installationTokenFor(impl, CREDENTIALS, 'janedoe/openadlc-testbed', NOW);
 
     expect(minted).toEqual({ token: 'ghs_abc', expiresAt: '2026-09-20T13:00:00Z' });
   });
@@ -118,8 +118,8 @@ describe('getting a token that can administer one repository', () => {
     const { impl } = api({ installation: {} });
 
     await expect(
-      installationTokenFor(impl, CREDENTIALS, 'janedoe/fleetadlc-testbed', NOW),
-    ).rejects.toThrow(/not installed on janedoe\/fleetadlc-testbed/);
+      installationTokenFor(impl, CREDENTIALS, 'janedoe/openadlc-testbed', NOW),
+    ).rejects.toThrow(/not installed on janedoe\/openadlc-testbed/);
   });
 });
 
@@ -163,11 +163,11 @@ describe('the repositories an app was installed on', () => {
   }
 
   it('lists what the app can actually act on', async () => {
-    const { api } = fakeGitHub({ 42: ['janedoe/fleetadlc-testbed', 'janedoe/private-thing'] });
+    const { api } = fakeGitHub({ 42: ['janedoe/openadlc-testbed', 'janedoe/private-thing'] });
 
     const found = await installedRepositories(api, CREDENTIALS, NOW);
 
-    expect(found.map((one) => one.fullName)).toEqual(['janedoe/fleetadlc-testbed', 'janedoe/private-thing']);
+    expect(found.map((one) => one.fullName)).toEqual(['janedoe/openadlc-testbed', 'janedoe/private-thing']);
     expect(found.find((one) => one.fullName.includes('private'))?.private).toBe(true);
   });
 
@@ -294,23 +294,23 @@ describe('whether another account can install the app', () => {
   const answering = (status: number) => vi.fn(async () => new Response('{}', { status })) as unknown as typeof fetch;
 
   it('is public when GitHub shows the app to somebody with no credential, and private when it does not', async () => {
-    expect(await appVisibility('fleetadlc-janedoe', answering(200))).toBe('public');
-    expect(await appVisibility('fleetadlc-janedoe', answering(404))).toBe('private');
+    expect(await appVisibility('openadlc-janedoe', answering(200))).toBe('public');
+    expect(await appVisibility('openadlc-janedoe', answering(404))).toBe('private');
   });
 
   it('asks without a credential, since the owner’s own token sees a private app too', async () => {
     const fetchImpl = answering(200);
-    await appVisibility('fleetadlc janedoe', fetchImpl);
+    await appVisibility('openadlc janedoe', fetchImpl);
     const [url, init] = (fetchImpl as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0]!;
-    expect(url).toBe('https://api.github.com/apps/fleetadlc%20janedoe');
+    expect(url).toBe('https://api.github.com/apps/openadlc%20janedoe');
     expect(new Headers(init.headers).has('authorization')).toBe(false);
   });
 
   it('does not know when GitHub refuses or cannot be reached, rather than calling it private', async () => {
-    expect(await appVisibility('fleetadlc-janedoe', answering(403))).toBe('unknown');
+    expect(await appVisibility('openadlc-janedoe', answering(403))).toBe('unknown');
     const unreachable = vi.fn(async () => {
       throw new Error('ENOTFOUND');
     }) as unknown as typeof fetch;
-    expect(await appVisibility('fleetadlc-janedoe', unreachable)).toBe('unknown');
+    expect(await appVisibility('openadlc-janedoe', unreachable)).toBe('unknown');
   });
 });

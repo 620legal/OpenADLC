@@ -1,4 +1,4 @@
-import { GITHUB_EMAIL_SETTINGS_URL, type Bot } from '@fleetadlc/shared';
+import { GITHUB_EMAIL_SETTINGS_URL, type Bot } from '@openadlc/shared';
 import type { CheckResult, HealthCheck } from '../types.js';
 import { GITHUB_CALLS_AT_ONCE, SLOW_CHECK_MS, mapLimited } from '../limited.js';
 import type { GitHubLike, RepoRef } from './crew.js';

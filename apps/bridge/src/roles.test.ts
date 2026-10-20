@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AddedHow, Role, User } from '@fleetadlc/db';
+import type { AddedHow, Role, User } from '@openadlc/db';
 import { registerConsoleApi, type ApiDeps } from './api.js';
 import { registerBackupRoutes, type BackupRouteDeps } from './backup.js';
 import { DispatchGate } from './dispatch-gate.js';
@@ -133,7 +133,7 @@ describe('the bridge enforces the role on every route', () => {
     const [method, path] = key.split(' ') as [string, string];
     return fetch(`${url}${concrete(path)}`, {
       method,
-      headers: { 'x-fleetadlc-identity': identity, 'content-type': 'application/json' },
+      headers: { 'x-openadlc-identity': identity, 'content-type': 'application/json' },
       ...(method === 'GET' ? {} : { body: '{}' }),
     });
   };
@@ -218,7 +218,7 @@ describe('the first admin', () => {
     expect(store.bootstraps).toBe(1);
   });
 
-  it('is everyone in FLEETADLC_ADMIN_EMAILS when it names anyone, written with user: or not, and not whoever arrives first', async () => {
+  it('is everyone in OPENADLC_ADMIN_EMAILS when it names anyone, written with user: or not, and not whoever arrives first', async () => {
     const store = memoryStore();
     const roles = new Roles({ mode: 'iap', adminEmails: ['user:Jane@Example.com', 'carol@example.com'], consoleMembers: ['user:bob@example.com'], store, audit: async () => undefined });
     expect(await roles.roleOf('bob@example.com')).toBeNull();
@@ -309,7 +309,7 @@ describe('Settings → Users', () => {
   });
 
   it('says who is asking, and says a refused change as a status, clearing what roles read either way', async () => {
-    const { UserChangeRefused } = await import('@fleetadlc/db');
+    const { UserChangeRefused } = await import('@openadlc/db');
     let cleared = 0;
     const router = new Router(undefined, undefined, undefined, async () => 'admin');
     registerUsersRoutes(router, {
@@ -324,7 +324,7 @@ describe('Settings → Users', () => {
     server = createServer((request, response) => void router.handle(request, response));
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const as = { 'x-fleetadlc-identity': 'Jane@Example.com', 'content-type': 'application/json' };
+    const as = { 'x-openadlc-identity': 'Jane@Example.com', 'content-type': 'application/json' };
 
     expect(await (await fetch(`${url}/v1/me`, { headers: as })).json()).toEqual({ email: 'jane@example.com', role: 'admin', identityMode: 'iap' });
 

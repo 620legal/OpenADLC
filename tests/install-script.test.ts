@@ -79,8 +79,8 @@ describe('the one-command install', () => {
     expect(out).toContain('pnpm install --frozen-lockfile');
     expect(out).toContain('infra/local/build-bot-image.sh');
     // No --driver: init keeps a driver the install already has.
-    expect(out).toMatch(/fleetadlc\.mjs init$/m);
-    expect(out).toContain('fleetadlc.mjs up');
+    expect(out).toMatch(/openadlc\.mjs init$/m);
+    expect(out).toContain('openadlc.mjs up');
   });
 
   it('on a Mac, installs what is missing with Homebrew, Docker as OrbStack', () => {
@@ -122,7 +122,7 @@ describe('the one-command install', () => {
 
     expect(status, out).toBe(0);
     expect(out).toContain('Installed, not started');
-    expect(out).not.toContain('fleetadlc.mjs up');
+    expect(out).not.toContain('openadlc.mjs up');
   });
 
   it('with --yes, stops rather than settle for the local driver when Docker does not answer', () => {
@@ -130,13 +130,13 @@ describe('the one-command install', () => {
     const stopped = install(['--dry-run', '--yes']);
     expect(stopped.status).not.toBe(0);
     expect(stopped.out).toContain('pass --local-driver to use the local driver');
-    expect(stopped.out).not.toContain('fleetadlc.mjs init');
+    expect(stopped.out).not.toContain('openadlc.mjs init');
 
     const local = install(['--dry-run', '--yes', '--local-driver']);
     expect(local.status, local.out).toBe(0);
     expect(local.out).toContain('this install will use the local driver, as --local-driver says');
     // Written as local, so a stored docker driver does not stay behind the words.
-    expect(local.out).toMatch(/fleetadlc\.mjs init --driver local$/m);
+    expect(local.out).toMatch(/openadlc\.mjs init --driver local$/m);
     expect(local.out).not.toContain('build-bot-image.sh');
   });
 
@@ -188,7 +188,7 @@ esac`,
       expect(status).not.toBe(0);
       expect(out).toContain('would run: sudo usermod -aG docker tester');
       expect(out).toContain('takes effect at your next login');
-      expect(out).not.toContain('fleetadlc.mjs init');
+      expect(out).not.toContain('openadlc.mjs init');
     });
 
     it('asks only for a new login when the account is in the group and this shell is not', async () => {

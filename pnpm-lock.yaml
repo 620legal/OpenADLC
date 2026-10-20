@@ -26,22 +26,22 @@ importers:
 
   apps/bridge:
     dependencies:
-      '@fleetadlc/backup':
+      '@openadlc/backup':
         specifier: workspace:*
         version: link:../../packages/backup
-      '@fleetadlc/db':
+      '@openadlc/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@fleetadlc/dispatcher':
+      '@openadlc/dispatcher':
         specifier: workspace:*
         version: link:../dispatcher
-      '@fleetadlc/engines':
+      '@openadlc/engines':
         specifier: workspace:*
         version: link:../../packages/engines
-      '@fleetadlc/github':
+      '@openadlc/github':
         specifier: workspace:*
         version: link:../../packages/github
-      '@fleetadlc/shared':
+      '@openadlc/shared':
         specifier: workspace:*
         version: link:../../packages/shared
     devDependencies:
@@ -60,16 +60,16 @@ importers:
 
   apps/cli:
     dependencies:
-      '@fleetadlc/backup':
+      '@openadlc/backup':
         specifier: workspace:*
         version: link:../../packages/backup
-      '@fleetadlc/db':
+      '@openadlc/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@fleetadlc/github':
+      '@openadlc/github':
         specifier: workspace:*
         version: link:../../packages/github
-      '@fleetadlc/shared':
+      '@openadlc/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       pg:
@@ -149,13 +149,13 @@ importers:
 
   apps/dispatcher:
     dependencies:
-      '@fleetadlc/db':
+      '@openadlc/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@fleetadlc/github':
+      '@openadlc/github':
         specifier: workspace:*
         version: link:../../packages/github
-      '@fleetadlc/shared':
+      '@openadlc/shared':
         specifier: workspace:*
         version: link:../../packages/shared
     devDependencies:
@@ -174,19 +174,19 @@ importers:
 
   apps/hostd:
     dependencies:
-      '@fleetadlc/backup':
+      '@openadlc/backup':
         specifier: workspace:*
         version: link:../../packages/backup
-      '@fleetadlc/db':
+      '@openadlc/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@fleetadlc/engines':
+      '@openadlc/engines':
         specifier: workspace:*
         version: link:../../packages/engines
-      '@fleetadlc/github':
+      '@openadlc/github':
         specifier: workspace:*
         version: link:../../packages/github
-      '@fleetadlc/shared':
+      '@openadlc/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       node-pty:
@@ -217,16 +217,16 @@ importers:
 
   packages/backup:
     dependencies:
-      '@fleetadlc/db':
+      '@openadlc/db':
         specifier: workspace:*
         version: link:../db
-      '@fleetadlc/engines':
+      '@openadlc/engines':
         specifier: workspace:*
         version: link:../engines
-      '@fleetadlc/github':
+      '@openadlc/github':
         specifier: workspace:*
         version: link:../github
-      '@fleetadlc/shared':
+      '@openadlc/shared':
         specifier: workspace:*
         version: link:../shared
     devDependencies:
@@ -242,7 +242,7 @@ importers:
 
   packages/db:
     dependencies:
-      '@fleetadlc/shared':
+      '@openadlc/shared':
         specifier: workspace:*
         version: link:../shared
       pg:
@@ -267,7 +267,7 @@ importers:
 
   packages/engines:
     dependencies:
-      '@fleetadlc/shared':
+      '@openadlc/shared':
         specifier: workspace:*
         version: link:../shared
       yaml:
@@ -286,7 +286,7 @@ importers:
 
   packages/github:
     dependencies:
-      '@fleetadlc/shared':
+      '@openadlc/shared':
         specifier: workspace:*
         version: link:../shared
     devDependencies:
@@ -321,16 +321,16 @@ importers:
 
   tests:
     dependencies:
-      '@fleetadlc/db':
+      '@openadlc/db':
         specifier: workspace:*
         version: link:../packages/db
-      '@fleetadlc/engines':
+      '@openadlc/engines':
         specifier: workspace:*
         version: link:../packages/engines
-      '@fleetadlc/github':
+      '@openadlc/github':
         specifier: workspace:*
         version: link:../packages/github
-      '@fleetadlc/shared':
+      '@openadlc/shared':
         specifier: workspace:*
         version: link:../packages/shared
       ws:

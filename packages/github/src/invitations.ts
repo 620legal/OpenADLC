@@ -6,7 +6,7 @@ import { GitHubApiError } from './client.js';
  * This was the last step of onboarding a crew that a person had to do by hand,
  * once per bot and once per repository, by signing in as each account in turn.
  * It is also the step that stranded an install silently: the account connects,
- * its token is valid, `fleetadlc auth status` says so, and every push still fails,
+ * its token is valid, `openadlc auth status` says so, and every push still fails,
  * because an invitation is sitting unread in a mailbox.
  *
  * A bot's ordinary credential can do it. That is worth stating plainly, because

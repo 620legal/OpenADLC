@@ -194,12 +194,12 @@ describe('the kept answers', () => {
 
   it('forgets a login in every repository, or everything', async () => {
     const standings = new ReviewerStandings();
-    standings.record('exampleco/api', 'fleetadlc-builder-janedoe', missing);
-    standings.record('exampleco/web', 'FleetADLC-Builder-JaneDoe', missing);
+    standings.record('exampleco/api', 'openadlc-builder-janedoe', missing);
+    standings.record('exampleco/web', 'OpenADLC-Builder-JaneDoe', missing);
     standings.record('exampleco/api', 'janedoe', missing);
-    standings.forget('FLEETADLC-BUILDER-JANEDOE');
-    expect(standings.known('exampleco/api', 'fleetadlc-builder-janedoe')).toBeNull();
-    expect(standings.known('exampleco/web', 'fleetadlc-builder-janedoe')).toBeNull();
+    standings.forget('OPENADLC-BUILDER-JANEDOE');
+    expect(standings.known('exampleco/api', 'openadlc-builder-janedoe')).toBeNull();
+    expect(standings.known('exampleco/web', 'openadlc-builder-janedoe')).toBeNull();
     expect(standings.known('exampleco/api', 'janedoe')).toEqual(missing);
     standings.clear();
     expect(standings.known('exampleco/api', 'janedoe')).toBeNull();

@@ -10,21 +10,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const INSTALL_SECRET = 'install-secret-for-the-test';
-const PLATFORM = { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': INSTALL_SECRET };
+const PLATFORM = { 'content-type': 'application/json', 'x-openadlc-internal-secret': INSTALL_SECRET };
 const SEAT = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 
 const rows: Record<string, { name: string; sidecarDb: boolean; modelAccountId: string | null }> = {
   atlas: { name: 'atlas', sidecarDb: true, modelAccountId: SEAT },
 };
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async () => undefined),
   bots: { getBotByName: vi.fn(async (name: string) => rows[name] ?? null) },
   sessions: {},
   tasks: { getTask: vi.fn(async (id: string) => (id === 'task-9' ? { id, state: 'running' } : null)) },
 }));
 
-import { audit } from '@fleetadlc/db';
+import { audit } from '@openadlc/db';
 
 let workRoot: string;
 let server: { close: () => Promise<void>; post: (path: string, body: unknown, headers?: Record<string, string>) => Promise<{ status: number; body: Record<string, unknown> }> };
@@ -70,7 +70,7 @@ async function start() {
 }
 
 beforeEach(async () => {
-  workRoot = mkdtempSync(join(tmpdir(), 'fleetadlc-rename-route-'));
+  workRoot = mkdtempSync(join(tmpdir(), 'openadlc-rename-route-'));
   calls.length = 0;
   held = {};
   vi.mocked(audit).mockClear();
@@ -87,26 +87,26 @@ describe('renaming a bot’s computer over the wire', () => {
     mkdirSync(join(workRoot, 'atlas', 'repos'), { recursive: true });
     writeFileSync(join(workRoot, 'atlas', 'repos', 'marker'), 'mine');
 
-    const answer = await server.post('/bots/atlas/rename', { to: 'fleetadlc-atlas-janedoe' });
+    const answer = await server.post('/bots/atlas/rename', { to: 'openadlc-atlas-janedoe' });
 
     expect(answer).toEqual({
       status: 200,
-      body: { from: 'atlas', to: 'fleetadlc-atlas-janedoe', folder: 'moved' },
+      body: { from: 'atlas', to: 'openadlc-atlas-janedoe', folder: 'moved' },
     });
     expect(calls).toEqual([
       'remove atlas',
-      'ensure fleetadlc-atlas-janedoe',
+      'ensure openadlc-atlas-janedoe',
     ]);
-    expect(existsSync(join(workRoot, 'fleetadlc-atlas-janedoe', 'repos', 'marker'))).toBe(true);
+    expect(existsSync(join(workRoot, 'openadlc-atlas-janedoe', 'repos', 'marker'))).toBe(true);
     expect(vi.mocked(audit)).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'bot.computer_renamed', target: 'fleetadlc-atlas-janedoe' }),
+      expect.objectContaining({ action: 'bot.computer_renamed', target: 'openadlc-atlas-janedoe' }),
     );
   });
 
   it('answers 409 with the reason while the bot is working', async () => {
     held = { 'task-9': 'atlas' };
 
-    const answer = await server.post('/bots/atlas/rename', { to: 'fleetadlc-atlas-janedoe' });
+    const answer = await server.post('/bots/atlas/rename', { to: 'openadlc-atlas-janedoe' });
 
     expect(answer.status).toBe(409);
     expect(String(answer.body.error)).toContain('running task task-9');
@@ -120,7 +120,7 @@ describe('renaming a bot’s computer over the wire', () => {
   });
 
   it('is refused without the install’s secret', async () => {
-    const answer = await server.post('/bots/atlas/rename', { to: 'fleetadlc-atlas-janedoe' }, { 'content-type': 'application/json' });
+    const answer = await server.post('/bots/atlas/rename', { to: 'openadlc-atlas-janedoe' }, { 'content-type': 'application/json' });
     expect(answer.status).toBe(401);
     expect(calls).toEqual([]);
   });

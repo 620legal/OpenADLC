@@ -1,4 +1,4 @@
-import type { HealthAction, HealthSeverity, HealthState } from '@fleetadlc/shared';
+import type { HealthAction, HealthSeverity, HealthState } from '@openadlc/shared';
 import { query } from '../client.js';
 
 /**

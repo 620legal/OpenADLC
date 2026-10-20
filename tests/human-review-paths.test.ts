@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { humanReviewersFor, parseHumanReviewPaths } from '@fleetadlc/shared';
+import { humanReviewersFor, parseHumanReviewPaths } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
 
 /**

@@ -17,7 +17,7 @@ const TARGET: LocalCiTarget = {
   computer: { taskId: 'task-1', bot: 'builder', container: 'task-task1', databaseUrl: null, slotDir: '/work/slots/task-1', cacheDir: null } as never,
   worktree: '/work/builder/wt/task-1',
   branch: 'agent/builder/7-issue-7',
-  env: { DATABASE_URL: 'postgres://bot/repo_api', FLEETADLC_REPO_HOME: '/work/builder/homes/api' },
+  env: { DATABASE_URL: 'postgres://bot/repo_api', OPENADLC_REPO_HOME: '/work/builder/homes/api' },
 };
 
 /**
@@ -127,7 +127,7 @@ describe('local CI on a task’s head', () => {
 
 /**
  * `make ci` had no limit. A suite that hung stayed "running" until the task's
- * computer went away, every later `fleetadlc-ci` joined it, and the builder
+ * computer went away, every later `openadlc-ci` joined it, and the builder
  * could never record a pass.
  */
 describe('a make ci that does not finish', () => {
@@ -208,7 +208,7 @@ describe('a worktree whose .git is not the commit’s own', () => {
   });
 
   function repository(committed: 'good' | 'bad', init: (slot: string) => string[] = () => []): void {
-    slot = mkdtempSync(join(tmpdir(), 'fleetadlc-local-ci-'));
+    slot = mkdtempSync(join(tmpdir(), 'openadlc-local-ci-'));
     worktree = join(slot, 'wt');
     mkdirSync(worktree);
     sh(worktree, 'init', '-q', '-b', 'main', ...init(slot));
@@ -310,7 +310,7 @@ describe('a worktree whose .git is not the commit’s own', () => {
     repository('good');
     writeFileSync(join(worktree, 'value'), 'changed\n');
     const { finished, ranIn } = await ciRun();
-    expect(finished?.reason).toMatch(/not committed \(value\): commit them, then run fleetadlc-ci again/);
+    expect(finished?.reason).toMatch(/not committed \(value\): commit them, then run openadlc-ci again/);
     expect(ranIn).toEqual([]);
   });
 });
@@ -319,7 +319,7 @@ describe('reporting a run before the bridge has written the install’s secret',
   it('says to start the bridge, not only that the secret is missing', async () => {
     const empty = { get: async () => null, set: async () => undefined, delete: async () => undefined, list: async () => [] };
     await expect(bridgeReporter('http://127.0.0.1:9', empty)({} as LocalCiRun)).rejects.toThrow(
-      /no internal secret yet.*Start the bridge, which generates it, then retry: fleetadlc up/,
+      /no internal secret yet.*Start the bridge, which generates it, then retry: openadlc up/,
     );
   });
 });

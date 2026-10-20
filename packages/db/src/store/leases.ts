@@ -1,4 +1,4 @@
-import type { Lease, LeaseState } from '@fleetadlc/shared';
+import type { Lease, LeaseState } from '@openadlc/shared';
 import { query, queryOne } from '../client.js';
 
 interface LeaseRow {

@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { modelAccountRef, type SecretStore } from '@fleetadlc/github';
+import { modelAccountRef, type SecretStore } from '@openadlc/github';
 import {
   LoginRefused,
   LoginService,
@@ -34,7 +34,7 @@ const OPT_OUTS = Object.entries(TELEMETRY_OPT_OUTS).flatMap(([variable, value]) 
 
 /** The fresh home a sign-in, check or model list mounts, with that mount taken out of `args`. */
 function withoutFreshHome(args: string[]): string[] {
-  const home = args.findIndex((arg) => arg.endsWith(':/fleetadlc/login'));
+  const home = args.findIndex((arg) => arg.endsWith(':/openadlc/login'));
   return home < 1 ? args : args.filter((_, index) => index !== home && index !== home - 1);
 }
 
@@ -60,9 +60,9 @@ function besideAccounts(): string[] {
 }
 
 function expectOwnHome(args: string[]): void {
-  const home = args.find((arg) => arg.endsWith(':/fleetadlc/login'));
+  const home = args.find((arg) => arg.endsWith(':/openadlc/login'));
   expect(home?.startsWith(`${join(loginRoot, '.homes')}/once-`)).toBe(true);
-  expect(args).not.toContain(`${join(loginRoot, SEAT)}:/fleetadlc/login`);
+  expect(args).not.toContain(`${join(loginRoot, SEAT)}:/openadlc/login`);
 }
 
 // ------------------------------------------------------------ what the CLIs print
@@ -232,7 +232,7 @@ function memory(initial: Record<string, string> = {}): SecretStore {
 let loginRoot: string;
 
 beforeEach(() => {
-  loginRoot = join(mkdtempSync(join(tmpdir(), 'fleetadlc-logins-')), 'logins');
+  loginRoot = join(mkdtempSync(join(tmpdir(), 'openadlc-logins-')), 'logins');
 });
 
 afterEach(() => {
@@ -255,7 +255,7 @@ function service(
   return new LoginService({
     driver: options.driver ?? 'docker',
     loginRoot,
-    image: 'fleetadlc-bot:latest',
+    image: 'openadlc-bot:latest',
     store: options.store ?? memory(),
     account: async (id) => (account && account.id === id ? account : null),
     spawn,
@@ -485,12 +485,12 @@ describe('an account’s login directory', () => {
     const second = loginConfigVolume(dir);
 
     expect(first).toEqual(second);
-    expect(first).toContain(`${join(loginRoot, '.published', SEAT, 'config.toml')}:/fleetadlc/login/config.toml:ro`);
-    expect(first).toContain(`${join(loginRoot, '.published', SEAT, 'AGENTS.md')}:/fleetadlc/login/AGENTS.md:ro`);
-    expect(first).toContain(`${join(loginRoot, '.published', SEAT, 'AGENTS.override.md')}:/fleetadlc/login/AGENTS.override.md:ro`);
-    expect(first).toContain(`${join(loginRoot, '.published', SEAT, 'managed_config.toml')}:/fleetadlc/login/managed_config.toml:ro`);
-    expect(first).toContain(`${join(loginRoot, '.published', SEAT, 'requirements.toml')}:/fleetadlc/login/requirements.toml:ro`);
-    expect(first).toContain(`${join(loginRoot, '.published', SEAT, '.env')}:/fleetadlc/login/.env:ro`);
+    expect(first).toContain(`${join(loginRoot, '.published', SEAT, 'config.toml')}:/openadlc/login/config.toml:ro`);
+    expect(first).toContain(`${join(loginRoot, '.published', SEAT, 'AGENTS.md')}:/openadlc/login/AGENTS.md:ro`);
+    expect(first).toContain(`${join(loginRoot, '.published', SEAT, 'AGENTS.override.md')}:/openadlc/login/AGENTS.override.md:ro`);
+    expect(first).toContain(`${join(loginRoot, '.published', SEAT, 'managed_config.toml')}:/openadlc/login/managed_config.toml:ro`);
+    expect(first).toContain(`${join(loginRoot, '.published', SEAT, 'requirements.toml')}:/openadlc/login/requirements.toml:ro`);
+    expect(first).toContain(`${join(loginRoot, '.published', SEAT, '.env')}:/openadlc/login/.env:ro`);
     expect(readFileSync(join(loginRoot, '.published', SEAT, 'config.toml'), 'utf8')).toBe('model = "gpt-5"\n');
     expect(readFileSync(join(dir, 'config.toml'), 'utf8')).toBe('model = "gpt-5"\n');
     expect(readFileSync(join(loginRoot, '.published', SEAT, 'AGENTS.md'), 'utf8')).toBe('');
@@ -518,7 +518,7 @@ describe('signing a subscription in, under the docker driver', () => {
       startedAt: '2026-09-24T08:00:00.000Z',
     });
     // A container left by a sign-in hostd no longer knows about goes first.
-    expect(removals()).toEqual([['rm', '-f', `fleetadlc-login-${SEAT}`]]);
+    expect(removals()).toEqual([['rm', '-f', `openadlc-login-${SEAT}`]]);
     const signIn = runs()[0]?.args ?? [];
     expectOwnHome(signIn);
     expect(withoutFreshHome(signIn)).toEqual([
@@ -527,25 +527,25 @@ describe('signing a subscription in, under the docker driver', () => {
       '-i',
       '--init',
       '--name',
-      `fleetadlc-login-${SEAT}`,
+      `openadlc-login-${SEAT}`,
       '-v',
-      `${join(loginRoot, '.published', SEAT, 'config.toml')}:/fleetadlc/login/config.toml:ro`,
+      `${join(loginRoot, '.published', SEAT, 'config.toml')}:/openadlc/login/config.toml:ro`,
       '-v',
-      `${join(loginRoot, '.published', SEAT, 'AGENTS.md')}:/fleetadlc/login/AGENTS.md:ro`,
+      `${join(loginRoot, '.published', SEAT, 'AGENTS.md')}:/openadlc/login/AGENTS.md:ro`,
       '-v',
-      `${join(loginRoot, '.published', SEAT, 'AGENTS.override.md')}:/fleetadlc/login/AGENTS.override.md:ro`,
+      `${join(loginRoot, '.published', SEAT, 'AGENTS.override.md')}:/openadlc/login/AGENTS.override.md:ro`,
       '-v',
-      `${join(loginRoot, '.published', SEAT, 'managed_config.toml')}:/fleetadlc/login/managed_config.toml:ro`,
+      `${join(loginRoot, '.published', SEAT, 'managed_config.toml')}:/openadlc/login/managed_config.toml:ro`,
       '-v',
-      `${join(loginRoot, '.published', SEAT, 'requirements.toml')}:/fleetadlc/login/requirements.toml:ro`,
+      `${join(loginRoot, '.published', SEAT, 'requirements.toml')}:/openadlc/login/requirements.toml:ro`,
       '-v',
-      `${join(loginRoot, '.published', SEAT, '.env')}:/fleetadlc/login/.env:ro`,
+      `${join(loginRoot, '.published', SEAT, '.env')}:/openadlc/login/.env:ro`,
       '-e',
-      'CODEX_HOME=/fleetadlc/login',
+      'CODEX_HOME=/openadlc/login',
       ...OPT_OUTS,
       '--entrypoint',
       'codex',
-      'fleetadlc-bot:latest',
+      'openadlc-bot:latest',
       'login',
       '--device-auth',
     ]);
@@ -560,13 +560,13 @@ describe('signing a subscription in, under the docker driver', () => {
     expect(state).toMatchObject({ state: 'waiting', code: 'NAEV-43ZB' });
     const args = runs()[0]?.args ?? [];
     expect(args).toEqual(
-      expect.arrayContaining(['-e', 'GROK_HOME=/fleetadlc/login', '-e', 'GROK_DISABLE_AUTOUPDATER=1', '--entrypoint', 'grok']),
+      expect.arrayContaining(['-e', 'GROK_HOME=/openadlc/login', '-e', 'GROK_DISABLE_AUTOUPDATER=1', '--entrypoint', 'grok']),
     );
-    expect(args.slice(-3)).toEqual(['fleetadlc-bot:latest', 'login', '--device-auth']);
+    expect(args.slice(-3)).toEqual(['openadlc-bot:latest', 'login', '--device-auth']);
   });
 
   it('runs it with the vendors’ telemetry left on when the operator opted in, and its self-update still off', async () => {
-    vi.stubEnv('FLEETADLC_ENGINE_TELEMETRY', 'on');
+    vi.stubEnv('OPENADLC_ENGINE_TELEMETRY', 'on');
     try {
       const { spawn, runs } = spawner((cli) => cli.say(GROK_DEVICE));
       await service(xai, spawn).start(SEAT);
@@ -597,7 +597,7 @@ describe('signing a subscription in, under the docker driver', () => {
     await logins.start(SEAT);
 
     expect(await logins.status(SEAT)).toMatchObject({ state: 'waiting', code: 'URPK-DI1GG' });
-    const home = mountAt(runs()[0]?.args ?? [], '/fleetadlc/login');
+    const home = mountAt(runs()[0]?.args ?? [], '/openadlc/login');
     writeFileSync(join(home, 'auth.json'), '{"tokens":"new"}');
     runs()[0]?.cli.exit(0);
     await runs()[0]?.cli.exited;
@@ -632,8 +632,8 @@ describe('signing a subscription in, under the docker driver', () => {
 
     // No sign-in to share, so grok gets no sign-in directory and writes into its home.
     const args = runs()[0]?.args ?? [];
-    expect(args.some((arg) => arg.endsWith(':/fleetadlc/auth'))).toBe(false);
-    writeFileSync(join(mountAt(args, '/fleetadlc/login'), 'auth.json'), '{"tokens":"new"}');
+    expect(args.some((arg) => arg.endsWith(':/openadlc/auth'))).toBe(false);
+    writeFileSync(join(mountAt(args, '/openadlc/login'), 'auth.json'), '{"tokens":"new"}');
     runs()[0]?.cli.exit(0);
     await runs()[0]?.cli.exited;
 
@@ -688,7 +688,7 @@ describe('signing a subscription in, under the docker driver', () => {
     const state = await logins.status(SEAT);
 
     expect(runs()[0]?.cli.killed).toBe(true);
-    expect(removals()).toContainEqual(['rm', '-f', `fleetadlc-login-${SEAT}`]);
+    expect(removals()).toContainEqual(['rm', '-f', `openadlc-login-${SEAT}`]);
     expect(state).toMatchObject({ state: 'failed', message: expect.stringMatching(/not finished within 15 minutes/) });
   });
 
@@ -745,7 +745,7 @@ describe('forgetting a login', () => {
     await after.forget(SEAT);
 
     expect(runs()[0]?.cli.killed).toBe(true);
-    expect(removals().filter((args) => args[2] === `fleetadlc-login-${SEAT}`).length).toBeGreaterThanOrEqual(2);
+    expect(removals().filter((args) => args[2] === `openadlc-login-${SEAT}`).length).toBeGreaterThanOrEqual(2);
     expect(existsSync(join(loginRoot, SEAT))).toBe(false);
   });
 
@@ -765,7 +765,7 @@ describe('forgetting a login', () => {
     const logins = new LoginService({
       driver: 'docker',
       loginRoot,
-      image: 'fleetadlc-bot:latest',
+      image: 'openadlc-bot:latest',
       store: memory(),
       account: async (id) => (present && present.id === id ? present : null),
       spawn,
@@ -823,7 +823,7 @@ describe('a sign-in folder, into a backup and back', () => {
     writeFileSync(join(dir, 'history.jsonl'), '{"prompt":"kept"}');
     const { spawn, runs } = spawner((cli, call) => {
       // The CLI refreshes its sign-in in place, through the file it was given.
-      writeFileSync(mountAt(call.args, '/fleetadlc/login/auth.json'), '{"tokens":"zzz-refreshed-zzz"}');
+      writeFileSync(mountAt(call.args, '/openadlc/login/auth.json'), '{"tokens":"zzz-refreshed-zzz"}');
       cli.say(CODEX_ANSWERED);
       cli.exit(0);
     });
@@ -835,10 +835,10 @@ describe('a sign-in folder, into a backup and back', () => {
     // A home of its own, as every other sign-in container gets, and the
     // copy's sign-in file mounted into it: never the copy as the home.
     expectOwnHome(run?.args ?? []);
-    const mounted = mountAt(run?.args ?? [], '/fleetadlc/login/auth.json');
+    const mounted = mountAt(run?.args ?? [], '/openadlc/login/auth.json');
     expect(mounted.startsWith(join(loginRoot, `.adopt-${SEAT}-`))).toBe(true);
     expect(mounted.endsWith(join('sign-in', 'auth.json'))).toBe(true);
-    expect(run?.args).toContain(`fleetadlc-adopt-${SEAT}`);
+    expect(run?.args).toContain(`openadlc-adopt-${SEAT}`);
     expect(readFileSync(signInFile(), 'utf8')).toBe('{"tokens":"zzz-refreshed-zzz"}');
     expect(readFileSync(join(dir, 'history.jsonl'), 'utf8')).toBe('{"prompt":"kept"}');
     expect(statSync(signInFile()).mode & 0o777).toBe(0o600);
@@ -854,8 +854,8 @@ describe('a sign-in folder, into a backup and back', () => {
     const dir = ensureLoginDir(loginRoot, SEAT);
     let seen: { home: string[]; auth: string[]; env: string[] } | null = null;
     const { spawn } = spawner((cli, call) => {
-      const home = mountAt(call.args, '/fleetadlc/login');
-      const auth = mountAt(call.args, '/fleetadlc/auth');
+      const home = mountAt(call.args, '/openadlc/login');
+      const auth = mountAt(call.args, '/openadlc/auth');
       seen = {
         home: readdirSync(home),
         auth: readdirSync(auth),
@@ -877,7 +877,7 @@ describe('a sign-in folder, into a backup and back', () => {
     });
 
     expect(check.ok).toBe(true);
-    expect(seen).toEqual({ home: ['auth.json'], auth: ['auth.json'], env: ['GROK_HOME=/fleetadlc/login', 'GROK_AUTH_PATH=/fleetadlc/auth/auth.json'] });
+    expect(seen).toEqual({ home: ['auth.json'], auth: ['auth.json'], env: ['GROK_HOME=/openadlc/login', 'GROK_AUTH_PATH=/openadlc/auth/auth.json'] });
     expect(readFileSync(signInFile(), 'utf8')).toBe('{"tokens":"grok-refreshed"}');
     expect(readdirSync(join(dir, 'sign-in'))).toEqual(['auth.json']);
     expect(readdirSync(dir).sort()).toEqual(['sign-in']);
@@ -958,14 +958,14 @@ describe('verifying an account, under the docker driver', () => {
     const check = await service(claude, spawn, { store }).verify(SEAT);
 
     expect(check).toEqual({ ok: true, message: 'answered: OK', checkedAt: '2026-09-24T08:00:00.000Z' });
-    expect(removals()).toEqual([['rm', '-f', `fleetadlc-verify-${SEAT}`]]);
+    expect(removals()).toEqual([['rm', '-f', `openadlc-verify-${SEAT}`]]);
     const run = runs()[0];
     expect(run?.args).toEqual([
       'run',
       '--rm',
       '--init',
       '--name',
-      `fleetadlc-verify-${SEAT}`,
+      `openadlc-verify-${SEAT}`,
       '-w',
       '/tmp',
       ...OPT_OUTS,
@@ -973,7 +973,7 @@ describe('verifying an account, under the docker driver', () => {
       'CLAUDE_CODE_OAUTH_TOKEN',
       '--entrypoint',
       'claude',
-      'fleetadlc-bot:latest',
+      'openadlc-bot:latest',
       '-p',
       'Reply with exactly: OK',
       '--output-format',
@@ -998,9 +998,9 @@ describe('verifying an account, under the docker driver', () => {
     expect(check.ok).toBe(true);
     const args = runs()[0]?.args ?? [];
     expectOwnHome(args);
-    expect(args).toEqual(expect.arrayContaining(['-e', 'CODEX_HOME=/fleetadlc/login']));
-    expect(args.slice(args.indexOf('fleetadlc-bot:latest'))).toEqual([
-      'fleetadlc-bot:latest',
+    expect(args).toEqual(expect.arrayContaining(['-e', 'CODEX_HOME=/openadlc/login']));
+    expect(args.slice(args.indexOf('openadlc-bot:latest'))).toEqual([
+      'openadlc-bot:latest',
       'exec',
       '--json',
       '--skip-git-repo-check',
@@ -1021,9 +1021,9 @@ describe('verifying an account, under the docker driver', () => {
     expect(check).toMatchObject({ ok: false, message: expect.stringMatching(/^Not signed in\./) });
     const args = runs()[0]?.args ?? [];
     expect(args).toEqual(
-      expect.arrayContaining(['-e', 'GROK_HOME=/fleetadlc/login', '-e', 'GROK_DISABLE_AUTOUPDATER=1', '--entrypoint', 'grok']),
+      expect.arrayContaining(['-e', 'GROK_HOME=/openadlc/login', '-e', 'GROK_DISABLE_AUTOUPDATER=1', '--entrypoint', 'grok']),
     );
-    expect(args.slice(args.indexOf('fleetadlc-bot:latest') + 1)).toEqual([
+    expect(args.slice(args.indexOf('openadlc-bot:latest') + 1)).toEqual([
       '-p',
       'Reply with exactly: OK',
       '--output-format',
@@ -1046,7 +1046,7 @@ describe('verifying an account, under the docker driver', () => {
 
     const run = runs()[0];
     expect(run?.args).toEqual(expect.arrayContaining(['-e', 'OPENAI_API_KEY']));
-    expect(run?.args.some((arg) => arg.includes('/fleetadlc/login'))).toBe(false);
+    expect(run?.args.some((arg) => arg.includes('/openadlc/login'))).toBe(false);
     expect(run?.env.OPENAI_API_KEY).toBe(KEY);
     // By name on the command line, valued only in the docker client's environment.
     expect(run?.args).toEqual(expect.arrayContaining(['-e', 'CODEX_API_KEY']));
@@ -1071,7 +1071,7 @@ describe('verifying an account, under the docker driver', () => {
     expect(check).toMatchObject({ ok: false, message: 'codex did not answer within 0 s' });
     expect(runs()[0]?.cli.killed).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(removals().filter((args) => args[2] === `fleetadlc-verify-${SEAT}`)).toHaveLength(2);
+    expect(removals().filter((args) => args[2] === `openadlc-verify-${SEAT}`)).toHaveLength(2);
   });
 
   it('reports a refusal in the CLI’s words, without the token', async () => {
@@ -1152,38 +1152,38 @@ describe('listing an xAI seat’s models, under the docker driver', () => {
       ['grok-4.6', false],
       ['grok-4.5', false],
     ]);
-    expect(removals()).toEqual([['rm', '-f', `fleetadlc-models-${SEAT}`]]);
+    expect(removals()).toEqual([['rm', '-f', `openadlc-models-${SEAT}`]]);
     const listed = runs()[0]?.args ?? [];
     expectOwnHome(listed);
-    expect(listed.some((arg) => arg.endsWith(':/fleetadlc/auth'))).toBe(false);
+    expect(listed.some((arg) => arg.endsWith(':/openadlc/auth'))).toBe(false);
     expect(withoutFreshHome(listed)).toEqual([
       'run',
       '--rm',
       '--init',
       '--name',
-      `fleetadlc-models-${SEAT}`,
+      `openadlc-models-${SEAT}`,
       '-w',
       '/tmp',
       '-v',
-      `${join(loginRoot, '.published', SEAT, 'config.toml')}:/fleetadlc/login/config.toml:ro`,
+      `${join(loginRoot, '.published', SEAT, 'config.toml')}:/openadlc/login/config.toml:ro`,
       '-v',
-      `${join(loginRoot, '.published', SEAT, 'AGENTS.md')}:/fleetadlc/login/AGENTS.md:ro`,
+      `${join(loginRoot, '.published', SEAT, 'AGENTS.md')}:/openadlc/login/AGENTS.md:ro`,
       '-v',
-      `${join(loginRoot, '.published', SEAT, 'AGENTS.override.md')}:/fleetadlc/login/AGENTS.override.md:ro`,
+      `${join(loginRoot, '.published', SEAT, 'AGENTS.override.md')}:/openadlc/login/AGENTS.override.md:ro`,
       '-v',
-      `${join(loginRoot, '.published', SEAT, 'managed_config.toml')}:/fleetadlc/login/managed_config.toml:ro`,
+      `${join(loginRoot, '.published', SEAT, 'managed_config.toml')}:/openadlc/login/managed_config.toml:ro`,
       '-v',
-      `${join(loginRoot, '.published', SEAT, 'requirements.toml')}:/fleetadlc/login/requirements.toml:ro`,
+      `${join(loginRoot, '.published', SEAT, 'requirements.toml')}:/openadlc/login/requirements.toml:ro`,
       '-v',
-      `${join(loginRoot, '.published', SEAT, '.env')}:/fleetadlc/login/.env:ro`,
+      `${join(loginRoot, '.published', SEAT, '.env')}:/openadlc/login/.env:ro`,
       ...OPT_OUTS,
       '-e',
       'GROK_DISABLE_AUTOUPDATER=1',
       '-e',
-      'GROK_HOME=/fleetadlc/login',
+      'GROK_HOME=/openadlc/login',
       '--entrypoint',
       'grok',
-      'fleetadlc-bot:latest',
+      'openadlc-bot:latest',
       'models',
       '--leader-socket',
       '/tmp/grok-leader-models.sock',
@@ -1260,7 +1260,7 @@ describe('listing an xAI seat’s models, under the docker driver', () => {
     });
     expect(runs()[0]?.cli.killed).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(removals().filter((args) => args[2] === `fleetadlc-models-${SEAT}`)).toHaveLength(2);
+    expect(removals().filter((args) => args[2] === `openadlc-models-${SEAT}`)).toHaveLength(2);
   });
 
   it('lists only for an xAI seat, deciding from the account row', async () => {
@@ -1284,10 +1284,10 @@ describe('under the local driver, the host’s own CLI', () => {
   const savedDatabase = process.env.DATABASE_URL;
 
   beforeEach(() => {
-    bin = mkdtempSync(join(tmpdir(), 'fleetadlc-fake-cli-'));
+    bin = mkdtempSync(join(tmpdir(), 'openadlc-fake-cli-'));
     process.env.PATH = `${bin}:${savedPath ?? ''}`;
     // hostd holds the platform's database URL; a sign-in must not inherit it.
-    process.env.DATABASE_URL = 'postgres://fleetadlc:fleetadlc@127.0.0.1:47432/fleetadlc_db';
+    process.env.DATABASE_URL = 'postgres://openadlc:openadlc@127.0.0.1:47432/openadlc_db';
   });
 
   afterEach(() => {
@@ -1332,7 +1332,7 @@ describe('under the local driver, the host’s own CLI', () => {
 
     const args = readFileSync(join(bin, 'args'), 'utf8').trim().split('\n');
     const socket = args[args.indexOf('--leader-socket') + 1] ?? '';
-    expect(socket).toMatch(/fleetadlc-verify-[^/]+\/grok-leader\.sock$/);
+    expect(socket).toMatch(/openadlc-verify-[^/]+\/grok-leader\.sock$/);
     expect(socket).not.toBe('/tmp/grok-leader-verify.sock');
   });
 
@@ -1346,7 +1346,7 @@ describe('under the local driver, the host’s own CLI', () => {
     expect(models.find((model) => model.isDefault)?.id).toBe('grok-4.7');
     const args = readFileSync(join(bin, 'args'), 'utf8').trim().split('\n');
     expect(args.slice(0, 2)).toEqual(['models', '--leader-socket']);
-    expect(args[2]).toMatch(/fleetadlc-models-[^/]+\/grok-leader\.sock$/);
+    expect(args[2]).toMatch(/openadlc-models-[^/]+\/grok-leader\.sock$/);
     const env = readFileSync(join(bin, 'env'), 'utf8');
     expect(env).toContain(`GROK_HOME=${join(loginRoot, SEAT, 'sign-in')}\n`);
     expect(env).toContain('GROK_DISABLE_AUTOUPDATER=1');
@@ -1389,21 +1389,21 @@ describe('calling a model from a candidate image, for the engine update', () => 
     const check = await service(claude, spawn).callModel({
       provider: 'anthropic',
       model: 'claude-opus-5-5',
-      image: 'fleetadlc-bot:candidate',
-      name: 'fleetadlc-engines-call-1',
+      image: 'openadlc-bot:candidate',
+      name: 'openadlc-engines-call-1',
       credential: candidate,
       env: { HOME: '/home/bot', PATH: '/home/bot/.local/bin:/usr/bin:/bin' },
     });
 
     expect(check).toEqual({ ok: true, message: 'answered: OK', checkedAt: '2026-09-24T08:00:00.000Z' });
-    expect(removals()).toEqual([['rm', '-f', 'fleetadlc-engines-call-1']]);
+    expect(removals()).toEqual([['rm', '-f', 'openadlc-engines-call-1']]);
     const run = runs()[0];
     expect(run?.args).toEqual([
       'run',
       '--rm',
       '--init',
       '--name',
-      'fleetadlc-engines-call-1',
+      'openadlc-engines-call-1',
       '-w',
       '/tmp',
       '-e',
@@ -1415,7 +1415,7 @@ describe('calling a model from a candidate image, for the engine update', () => 
       'CLAUDE_CODE_OAUTH_TOKEN',
       '--entrypoint',
       'claude',
-      'fleetadlc-bot:candidate',
+      'openadlc-bot:candidate',
       '-p',
       'Reply with exactly: OK',
       '--output-format',
@@ -1438,22 +1438,22 @@ describe('calling a model from a candidate image, for the engine update', () => 
     });
     writeSignIn('{"tokens":"start"}');
     const logins = service(openai, spawn);
-    const login = { env: { CODEX_HOME: '/fleetadlc/login' }, mount: join(loginRoot, SEAT), secret: null };
+    const login = { env: { CODEX_HOME: '/openadlc/login' }, mount: join(loginRoot, SEAT), secret: null };
 
-    await logins.callModel({ provider: 'openai', model: 'gpt-5.5-codex', image: 'fleetadlc-bot:candidate', name: 'c-1', credential: login });
+    await logins.callModel({ provider: 'openai', model: 'gpt-5.5-codex', image: 'openadlc-bot:candidate', name: 'c-1', credential: login });
     await logins.callModel({
       provider: 'xai',
       model: 'grok-4.7',
-      image: 'fleetadlc-bot:candidate',
+      image: 'openadlc-bot:candidate',
       name: 'c-2',
-      credential: { env: { GROK_HOME: '/fleetadlc/login' }, mount: join(loginRoot, SEAT), secret: null },
+      credential: { env: { GROK_HOME: '/openadlc/login' }, mount: join(loginRoot, SEAT), secret: null },
     });
 
     const codex = runs()[0]?.args ?? [];
     expectOwnHome(codex);
-    expect(codex).toEqual(expect.arrayContaining(['-e', 'CODEX_HOME=/fleetadlc/login']));
-    expect(codex.some((arg) => arg.endsWith(':/fleetadlc/auth'))).toBe(false);
-    expect(codex.slice(codex.indexOf('fleetadlc-bot:candidate') + 1)).toEqual([
+    expect(codex).toEqual(expect.arrayContaining(['-e', 'CODEX_HOME=/openadlc/login']));
+    expect(codex.some((arg) => arg.endsWith(':/openadlc/auth'))).toBe(false);
+    expect(codex.slice(codex.indexOf('openadlc-bot:candidate') + 1)).toEqual([
       'exec',
       '--json',
       '--skip-git-repo-check',
@@ -1465,9 +1465,9 @@ describe('calling a model from a candidate image, for the engine update', () => 
     ]);
     const grok = runs()[1]?.args ?? [];
     expectOwnHome(grok);
-    expect(grok).toEqual(expect.arrayContaining([`${join(loginRoot, SEAT, 'sign-in')}:/fleetadlc/auth`, '-e', 'GROK_AUTH_PATH=/fleetadlc/auth/auth.json']));
+    expect(grok).toEqual(expect.arrayContaining([`${join(loginRoot, SEAT, 'sign-in')}:/openadlc/auth`, '-e', 'GROK_AUTH_PATH=/openadlc/auth/auth.json']));
     expect(grok.some((arg) => arg.startsWith(`${join(loginRoot, SEAT)}:`))).toBe(false);
-    expect(grok.slice(grok.indexOf('fleetadlc-bot:candidate') + 1)).toEqual([
+    expect(grok.slice(grok.indexOf('openadlc-bot:candidate') + 1)).toEqual([
       '-p',
       'Reply with exactly: OK',
       '--output-format',
@@ -1490,8 +1490,8 @@ describe('calling a model from a candidate image, for the engine update', () => 
     const check = await service(claude, spawn).callModel({
       provider: 'anthropic',
       model: 'claude-opus-5-5',
-      image: 'fleetadlc-bot:candidate',
-      name: 'fleetadlc-engines-call-1',
+      image: 'openadlc-bot:candidate',
+      name: 'openadlc-engines-call-1',
       credential: candidate,
     });
 
@@ -1544,8 +1544,8 @@ describe('a credential a CLI retries being refused', () => {
     const check = await service(claude, spawn).callModel({
       provider: 'anthropic',
       model: 'claude-haiku-4-5',
-      image: 'fleetadlc-bot:candidate',
-      name: 'fleetadlc-engines-call-1',
+      image: 'openadlc-bot:candidate',
+      name: 'openadlc-engines-call-1',
       credential: { env: { ANTHROPIC_API_KEY: KEY }, mount: null, secret: KEY },
     });
 
@@ -1556,8 +1556,8 @@ describe('a credential a CLI retries being refused', () => {
     });
     expect(runs()[0]?.cli.killed).toBe(true);
     expect(removals()).toEqual([
-      ['rm', '-f', 'fleetadlc-engines-call-1'],
-      ['rm', '-f', 'fleetadlc-engines-call-1'],
+      ['rm', '-f', 'openadlc-engines-call-1'],
+      ['rm', '-f', 'openadlc-engines-call-1'],
     ]);
   });
 });
@@ -1570,13 +1570,13 @@ describe('listing an xAI seat’s models in a candidate image', () => {
     });
     const logins = service(xai, spawn);
 
-    await logins.modelsIn(SEAT, 'fleetadlc-bot:candidate', 'fleetadlc-engines-models');
-    await logins.modelsIn(SEAT, 'fleetadlc-bot:candidate', 'fleetadlc-engines-models');
+    await logins.modelsIn(SEAT, 'openadlc-bot:candidate', 'openadlc-engines-models');
+    await logins.modelsIn(SEAT, 'openadlc-bot:candidate', 'openadlc-engines-models');
     // What a task reads is still the image in use, and still remembered.
     await logins.models(SEAT);
 
     expect(runs()).toHaveLength(3);
-    expect(runs()[0]?.args).toEqual(expect.arrayContaining(['--name', 'fleetadlc-engines-models', 'fleetadlc-bot:candidate']));
-    expect(runs()[2]?.args).toEqual(expect.arrayContaining([`fleetadlc-models-${SEAT}`, 'fleetadlc-bot:latest']));
+    expect(runs()[0]?.args).toEqual(expect.arrayContaining(['--name', 'openadlc-engines-models', 'openadlc-bot:candidate']));
+    expect(runs()[2]?.args).toEqual(expect.arrayContaining([`openadlc-models-${SEAT}`, 'openadlc-bot:latest']));
   });
 });

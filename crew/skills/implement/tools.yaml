@@ -5,12 +5,12 @@
 # says, engine by engine, what holds and what does not.
 
 allow:
-  # `fleetadlc-ci` runs the repository's checks on HEAD through hostd and
-  # records the result; nothing else does. `fleetadlc-install` runs an install
+  # `openadlc-ci` runs the repository's checks on HEAD through hostd and
+  # records the result; nothing else does. `openadlc-install` runs an install
   # with the private registry's credential, when the install has one.
-  shell: [make, pnpm, npm, uv, python, python3, node, git, gh, rg, jq, cat, ls, sed, mkdir, cp, mv, fleetadlc-ci, fleetadlc-install]
+  shell: [make, pnpm, npm, uv, python, python3, node, git, gh, rg, jq, cat, ls, sed, mkdir, cp, mv, openadlc-ci, openadlc-install]
   # OpenADLC's git refuses a push to any other branch, and a forced update; and,
-  # with `local_ci`, a commit with no recorded `fleetadlc-ci` pass, which its gh
+  # with `local_ci`, a commit with no recorded `openadlc-ci` pass, which its gh
   # also asks of the head a pull request opens or is readied on.
   git:
     push_branch_prefix: "agent/"
@@ -26,7 +26,7 @@ allow:
       - "docs/**"
       - "AGENTS.md"
       # What it posts to GitHub, written to a file and given with `--body-file`.
-      - ".fleetadlc-scratch/**"
+      - ".openadlc-scratch/**"
 
 deny:
   shell: [curl, wget, ssh, docker, sudo, kubectl, terraform]

@@ -1,11 +1,12 @@
 {
-  "name": "@fleetadlc/cli",
+  "name": "@openadlc/cli",
   "version": "0.1.0",
-  "description": "The fleetadlc command: set an install up, start and stop it, connect the crew to GitHub, check it, back it up and restore it.",
+  "description": "The openadlc command: set an install up, start and stop it, connect the crew to GitHub, check it, back it up and restore it.",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
   "bin": {
+    "openadlc": "./bin/openadlc.mjs",
     "fleetadlc": "./bin/fleetadlc.mjs"
   },
   "scripts": {
@@ -14,10 +15,10 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@fleetadlc/backup": "workspace:*",
-    "@fleetadlc/db": "workspace:*",
-    "@fleetadlc/github": "workspace:*",
-    "@fleetadlc/shared": "workspace:*",
+    "@openadlc/backup": "workspace:*",
+    "@openadlc/db": "workspace:*",
+    "@openadlc/github": "workspace:*",
+    "@openadlc/shared": "workspace:*",
     "pg": "^8.13.1"
   },
   "devDependencies": {

@@ -27,7 +27,7 @@ const ROW = {
   task_id: 'task-1',
   thread_id: 'thread-1',
   question: 'Which repository?',
-  options: ['fleetadlc', 'infra'],
+  options: ['openadlc', 'infra'],
   state: 'open',
   answer: null,
   answered_by: null,
@@ -88,12 +88,12 @@ describe('whether a gate put needs-human on its subject', () => {
   it('is read with the gates still open on the subject, by any of its tasks', async () => {
     vi.mocked(query).mockResolvedValueOnce([{ ...ROW, added_needs_human: true }]);
 
-    const open = await listOpenGatesOnSubject('fleetadlc#31');
+    const open = await listOpenGatesOnSubject('openadlc#31');
 
     expect(open).toEqual([expect.objectContaining({ id: 'gate-1', addedNeedsHuman: true })]);
     const [sql, params] = vi.mocked(query).mock.calls.at(-1) ?? [];
     expect(String(sql)).toMatch(/t\.subject_ref = \$1 and g\.state = 'open'/);
-    expect(params).toEqual(['fleetadlc#31']);
+    expect(params).toEqual(['openadlc#31']);
   });
 });
 

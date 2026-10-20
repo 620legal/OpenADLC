@@ -2,7 +2,7 @@
 
 name: ci
 
-# Written by `fleetadlc github apply` because the repository had no
+# Written by `openadlc github apply` because the repository had no
 # `.github/workflows/ci.yml`.
 #
 # The merge line lands a pull request only once a check named `ci` has passed
@@ -12,7 +12,7 @@ name: ci
 #
 # On a crew pull request (an `agent/` branch of this repository; a fork's
 # branch of that name is a person's) it runs only once the pull
-# request carries `adlc:ci`, which FleetADLC's merge line puts on after the lead
+# request carries `adlc:ci`, which OpenADLC's merge line puts on after the lead
 # reviewer approved, when it is at the front of the line: the builder ran
 # `make ci` on its head already, and the runner minutes go to the head that
 # lands. A person's pull request and a push to the default branch run as they

@@ -1,4 +1,4 @@
-import type { Lease, TaskState } from '@fleetadlc/shared';
+import type { Lease, TaskState } from '@openadlc/shared';
 import type { CheckResult, HealthCheck } from '../types.js';
 
 export interface LeaseReader {

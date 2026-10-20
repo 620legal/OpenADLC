@@ -32,8 +32,8 @@ describe('what Cloud Build is sent', () => {
 describe('what Cloud Build builds', () => {
   const build = readFileSync(join(GCP, 'cloudbuild.yaml'), 'utf8');
 
-  it('pushes the four images `fleetadlc cloud configure` offers, under the registry it is given', () => {
-    // configure offers `<region>-docker.pkg.dev/<project>/fleetadlc/<name>:latest`.
+  it('pushes the four images `openadlc cloud configure` offers, under the registry it is given', () => {
+    // configure offers `<region>-docker.pkg.dev/<project>/openadlc/<name>:latest`.
     const cli = readFileSync(join(ROOT, 'apps', 'cli', 'src', 'commands', 'cloud.ts'), 'utf8');
     for (const name of ['bridge', 'hostd', 'console', 'bot']) {
       expect(cli).toContain(`\${registry}/${name}:latest`);
@@ -102,7 +102,7 @@ exit 0`,
     const submit = out.split('\n').find((line) => line.includes('gcloud builds submit')) ?? '';
     expect(submit).toContain('--config infra/gcp/cloudbuild.yaml');
     expect(submit).toContain('--ignore-file infra/gcp/.gcloudignore');
-    expect(submit).toContain('_REGISTRY=us-central1-docker.pkg.dev/acme-openadlc/fleetadlc');
+    expect(submit).toContain('_REGISTRY=us-central1-docker.pkg.dev/acme-openadlc/openadlc');
     expect(submit).toContain('--service-account projects/acme-openadlc/serviceAccounts/openadlc-image-builder@acme-openadlc.iam.gserviceaccount.com');
     expect(submit).toContain('--gcs-source-staging-dir gs://acme-openadlc-openadlc-build/source');
 
@@ -172,15 +172,15 @@ exit 0`,
     const { status, out } = install(['--project', 'acme-openadlc', '--skip-images', '--plan-only']);
     expect(status, out).toBe(0);
     expect(out).not.toContain('gcloud builds submit');
-    expect(out).toContain('fleetadlc.mjs cloud plan');
-    expect(out).not.toContain('fleetadlc.mjs cloud apply');
+    expect(out).toContain('openadlc.mjs cloud plan');
+    expect(out).not.toContain('openadlc.mjs cloud apply');
     expect(out).toContain('Stopped after the plan');
   });
 
   it('takes over the settings in the project\'s bucket before configure, rather than start them again', () => {
     const { status, out } = install(['--project', 'acme-openadlc', '--skip-images']);
     expect(status, out).toBe(0);
-    const pull = out.indexOf('cloud pull --bucket acme-openadlc-fleetadlc-tfstate');
+    const pull = out.indexOf('cloud pull --bucket acme-openadlc-openadlc-tfstate');
     expect(pull, out).toBeGreaterThan(-1);
     expect(pull).toBeLessThan(out.indexOf('cloud configure'));
     expect(out).toContain('Enter keeps what the install has');
@@ -193,7 +193,7 @@ exit 0`,
       `case "$*" in
   *"auth list"*) echo alex@example.com ;;
   *billingEnabled*) echo True ;;
-  *"storage objects describe"*) echo "ERROR: (gcloud.storage.objects.describe) gs://acme-openadlc-fleetadlc-tfstate/fleetadlc/cloud.tfvars.json not found: 404." >&2; exit 1 ;;
+  *"storage objects describe"*) echo "ERROR: (gcloud.storage.objects.describe) gs://acme-openadlc-openadlc-tfstate/openadlc/cloud.tfvars.json not found: 404." >&2; exit 1 ;;
 esac
 exit 0`,
     );
@@ -222,7 +222,7 @@ exit 0`,
     );
     const { status, out } = install(['--project', 'acme-openadlc', '--skip-images']);
     expect(status).not.toBe(0);
-    expect(out).toContain('could not tell whether gs://acme-openadlc-fleetadlc-tfstate holds');
+    expect(out).toContain('could not tell whether gs://acme-openadlc-openadlc-tfstate holds');
     expect(out).toContain('HTTPError 403');
     expect(out).not.toContain('cloud configure');
   });
@@ -231,8 +231,8 @@ exit 0`,
     ['is not JSON', '{ project_id: acme'],
     ['names no project', JSON.stringify({ region: 'us-central1' })],
   ])('stops when this machine\'s settings file %s, rather than start the settings again', (_, body) => {
-    mkdirSync(join(work, '.fleetadlc'));
-    writeFileSync(join(work, '.fleetadlc', 'cloud.tfvars.json'), body);
+    mkdirSync(join(work, '.openadlc'));
+    writeFileSync(join(work, '.openadlc', 'cloud.tfvars.json'), body);
     const { status, out } = install(['--project', 'acme-openadlc', '--skip-images']);
     expect(status).not.toBe(0);
     expect(out).toContain("is not an install's settings");
@@ -240,8 +240,8 @@ exit 0`,
   });
 
   it('stops when this machine holds another install\'s settings, rather than offer them for this one', () => {
-    mkdirSync(join(work, '.fleetadlc'));
-    writeFileSync(join(work, '.fleetadlc', 'cloud.tfvars.json'), JSON.stringify({ project_id: 'other-install' }));
+    mkdirSync(join(work, '.openadlc'));
+    writeFileSync(join(work, '.openadlc', 'cloud.tfvars.json'), JSON.stringify({ project_id: 'other-install' }));
     const { status, out } = install(['--project', 'acme-openadlc', '--skip-images']);
     expect(status).not.toBe(0);
     expect(out).toContain('holds the settings of the install in other-install');

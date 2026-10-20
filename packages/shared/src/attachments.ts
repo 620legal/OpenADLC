@@ -208,4 +208,4 @@ export interface TaskAttachment {
 }
 
 /** The variable a task's session lists its attachments' paths in, comma-separated. */
-export const ATTACHMENTS_ENV = 'FLEETADLC_ATTACHMENTS';
+export const ATTACHMENTS_ENV = 'OPENADLC_ATTACHMENTS';

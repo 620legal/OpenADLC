@@ -12,7 +12,7 @@ const world = vi.hoisted(() => ({
   settings: {} as Record<string, string>,
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -33,7 +33,7 @@ vi.mock('@fleetadlc/db', () => ({
   settings: { allSettings: vi.fn(async () => world.settings) },
 }));
 
-import { bots } from '@fleetadlc/db';
+import { bots } from '@openadlc/db';
 import { asAutomation, automationBot, automationBotName, findOwnOpenIssue } from './automation-bot.js';
 
 const config = (automationBot: string | null) =>
@@ -42,24 +42,24 @@ const config = (automationBot: string | null) =>
 beforeEach(() => {
   world.settings = {};
   world.crew = [
-    { name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement' },
-    { name: 'janedoe-fleetadlc-flow', slot: 'automation', role: 'automation' },
+    { name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement' },
+    { name: 'janedoe-openadlc-flow', slot: 'automation', role: 'automation' },
   ];
 });
 
 describe('the automation account', () => {
   it('is the bot whose role is automation, by the handle it goes by now', async () => {
-    expect(await automationBotName(config(null))).toBe('janedoe-fleetadlc-flow');
+    expect(await automationBotName(config(null))).toBe('janedoe-openadlc-flow');
   });
 
   it('is still that bot for the `flow` every install.json was written with', async () => {
-    expect(await automationBotName(config('flow'))).toBe('janedoe-fleetadlc-flow');
+    expect(await automationBotName(config('flow'))).toBe('janedoe-openadlc-flow');
   });
 
   it('is the bot an override names by seat, and the console’s setting wins over the environment', async () => {
-    expect(await automationBotName(config('builder'))).toBe('fleetadlc-atlas-janedoe');
+    expect(await automationBotName(config('builder'))).toBe('openadlc-atlas-janedoe');
     world.settings = { automationBot: 'automation' };
-    expect(await automationBotName(config('builder'))).toBe('janedoe-fleetadlc-flow');
+    expect(await automationBotName(config('builder'))).toBe('janedoe-openadlc-flow');
   });
 
   it('is the seat named, not an empty string, when the crew cannot be read', async () => {
@@ -78,7 +78,7 @@ describe('the automation account', () => {
   it('is who the bridge acts as', async () => {
     const asBot = vi.fn(async (name: string) => ({ actingAs: name }) as never);
     await asAutomation({ asBot }, config('flow'));
-    expect(asBot).toHaveBeenCalledWith('janedoe-fleetadlc-flow');
+    expect(asBot).toHaveBeenCalledWith('janedoe-openadlc-flow');
   });
 });
 
@@ -90,7 +90,7 @@ describe('the automation account', () => {
  * own past the first hundred.
  */
 describe('the open issue OpenADLC already filed', () => {
-  const MARKER = '<!-- fleetadlc:job:credential-health -->';
+  const MARKER = '<!-- openadlc:job:credential-health -->';
 
   function github(pages: { number: number; body: string; user: { login: string } }[][]) {
     const asked: string[] = [];

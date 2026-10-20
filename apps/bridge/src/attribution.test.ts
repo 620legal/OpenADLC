@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SecretStore } from '@fleetadlc/github';
-import { withSeat } from '@fleetadlc/shared';
+import type { SecretStore } from '@openadlc/github';
+import { withSeat } from '@openadlc/shared';
 
 const bound = new Map<string, string>();
 const recorded: { reason: string; seat: string | null; bodySha256?: string | null; login?: string; url?: string | null }[] = [];
@@ -9,8 +9,8 @@ const auditedPayloads: Record<string, unknown>[] = [];
 // What the database is told to refuse, as Postgres refuses a NUL in text and jsonb.
 const failWrites = { record: false, audit: false };
 
-vi.mock('@fleetadlc/db', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@fleetadlc/db')>();
+vi.mock('@openadlc/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@openadlc/db')>();
   return {
     ...actual,
     attributions: {
@@ -44,9 +44,9 @@ function memoryStore(): SecretStore {
 }
 
 const crew = [
-  { name: 'builder', githubLogin: 'fleetadlc-crew' },
-  { name: 'lead-reviewer', githubLogin: 'fleetadlc-review' },
-  { name: 'second-reviewer', githubLogin: 'fleetadlc-review' },
+  { name: 'builder', githubLogin: 'openadlc-crew' },
+  { name: 'lead-reviewer', githubLogin: 'openadlc-review' },
+  { name: 'second-reviewer', githubLogin: 'openadlc-review' },
 ];
 
 const review = (body: string, id = 1, number = 7) => ({
@@ -54,7 +54,7 @@ const review = (body: string, id = 1, number = 7) => ({
   kind: 'review',
   id,
   number,
-  login: 'fleetadlc-review',
+  login: 'openadlc-review',
   body,
   url: 'https://github.com/exampleco/api/pull/7#pullrequestreview-1',
 });
@@ -124,8 +124,8 @@ describe('checking what the crew posts', () => {
     const signed = await attribution.sign('Fine.', { seat: 'lead-reviewer\u0000', task: 't-1', repo: 'exampleco/api', kind: 'review', n: 7 });
     const post = { ...review(signed, 4, 8), url: 'https://github.com/exampleco/api/pull/8\u0000\u001b[2J' };
     await attribution.check(post, crew, 'audit');
-    expect(recorded).toEqual([expect.objectContaining({ reason: 'wrong-target', seat: null, login: 'fleetadlc-review', url: 'https://github.com/exampleco/api/pull/8[2J' })]);
-    expect(auditedPayloads).toEqual([expect.objectContaining({ actor: 'fleetadlc-review', seat: null })]);
+    expect(recorded).toEqual([expect.objectContaining({ reason: 'wrong-target', seat: null, login: 'openadlc-review', url: 'https://github.com/exampleco/api/pull/8[2J' })]);
+    expect(auditedPayloads).toEqual([expect.objectContaining({ actor: 'openadlc-review', seat: null })]);
     expect(audited).toEqual(['attribution.unverified']);
   });
 
@@ -185,12 +185,12 @@ describe('checking what the crew posts', () => {
     const attribution = new Attribution(memoryStore());
     const signed = await attribution.sign('Fine.', { seat: 'second-reviewer', task: 't-2', repo: 'exampleco/api', kind: 'review', n: 7 });
     const reviews = [
-      { user: 'fleetadlc-review', body: signed },
-      { user: 'fleetadlc-review', body: 'Fine, posted with curl.' },
+      { user: 'openadlc-review', body: signed },
+      { user: 'openadlc-review', body: 'Fine, posted with curl.' },
       { user: 'janedoe', body: 'LGTM' },
     ];
     expect(await attribution.countable(reviews, crew, 'audit')).toHaveLength(3);
-    expect((await attribution.countable(reviews, crew, 'enforce')).map((one) => one.user)).toEqual(['fleetadlc-review', 'janedoe']);
+    expect((await attribution.countable(reviews, crew, 'enforce')).map((one) => one.user)).toEqual(['openadlc-review', 'janedoe']);
   });
 });
 
@@ -199,7 +199,7 @@ describe('the reviews a merge may count', () => {
     bound.clear();
   });
 
-  const approval = (id: number, body: string) => ({ id, user: 'fleetadlc-review', body, state: 'APPROVED' });
+  const approval = (id: number, body: string) => ({ id, user: 'openadlc-review', body, state: 'APPROVED' });
 
   it('keeps a review signed for a review on this pull request, and a person’s', async () => {
     const attribution = new Attribution(memoryStore());

@@ -23,15 +23,15 @@ import {
 } from './checks.js';
 
 const forbidden = [
-  { login: 'fleetadlc-sydney', why: 'a reviewer must never author what it reviews' },
-  { login: 'fleetadlc-flow', why: 'the automation account never authors commits' },
+  { login: 'openadlc-sydney', why: 'a reviewer must never author what it reviews' },
+  { login: 'openadlc-flow', why: 'the automation account never authors commits' },
 ];
 
 describe('who may author a commit', () => {
   it('passes a commit written by the builder it belongs to', () => {
     expect(
       findForbiddenAuthors(
-        [{ sha: 'abc1234', authorEmail: 'fleetadlc-atlas@users.noreply.github.com', authorName: 'Atlas' }],
+        [{ sha: 'abc1234', authorEmail: 'openadlc-atlas@users.noreply.github.com', authorName: 'Atlas' }],
         forbidden,
       ),
     ).toEqual([]);
@@ -39,7 +39,7 @@ describe('who may author a commit', () => {
 
   it('catches a reviewer that authored code, and says why it matters', () => {
     const findings = findForbiddenAuthors(
-      [{ sha: 'abc1234', authorEmail: '1234+fleetadlc-sydney@users.noreply.github.com', authorName: 'Sydney' }],
+      [{ sha: 'abc1234', authorEmail: '1234+openadlc-sydney@users.noreply.github.com', authorName: 'Sydney' }],
       forbidden,
     );
     expect(findings).toHaveLength(1);
@@ -49,17 +49,17 @@ describe('who may author a commit', () => {
   it('catches the automation account by login as well as by address', () => {
     expect(
       findForbiddenAuthors(
-        [{ sha: 'def5678', authorEmail: 'someone@example.com', authorName: 'Flow', authorLogin: 'fleetadlc-flow' }],
+        [{ sha: 'def5678', authorEmail: 'someone@example.com', authorName: 'Flow', authorLogin: 'openadlc-flow' }],
         forbidden,
       ),
     ).toHaveLength(1);
   });
 
   it('does not catch an account whose name merely starts the same way', () => {
-    // `fleetadlc-sydney-2` is a different account from `fleetadlc-sydney`.
+    // `openadlc-sydney-2` is a different account from `openadlc-sydney`.
     expect(
       findForbiddenAuthors(
-        [{ sha: 'abc1234', authorEmail: 'fleetadlc-sydney-2@users.noreply.github.com', authorName: 'Sydney 2' }],
+        [{ sha: 'abc1234', authorEmail: 'openadlc-sydney-2@users.noreply.github.com', authorName: 'Sydney 2' }],
         forbidden,
       ),
     ).toEqual([]);
@@ -69,14 +69,14 @@ describe('who may author a commit', () => {
     // The gate's description names the account, and an address is not one.
     expect(
       findForbiddenAuthors(
-        [{ sha: 'abc1234', authorEmail: '1234+FleetADLC-Sydney@users.noreply.github.com', authorName: 'Sydney' }],
+        [{ sha: 'abc1234', authorEmail: '1234+OpenADLC-Sydney@users.noreply.github.com', authorName: 'Sydney' }],
         forbidden,
       ),
     ).toEqual([
       {
         sha: 'abc1234',
-        author: '1234+FleetADLC-Sydney@users.noreply.github.com',
-        login: 'fleetadlc-sydney',
+        author: '1234+OpenADLC-Sydney@users.noreply.github.com',
+        login: 'openadlc-sydney',
         reason: 'a reviewer must never author what it reviews',
       },
     ]);
@@ -86,43 +86,43 @@ describe('who may author a commit', () => {
     // A bot's session commits under its own name, which is its handle. With an
     // address GitHub cannot tie to anyone, the name is all that is left.
     const findings = findForbiddenAuthors(
-      [{ sha: 'abc1234', authorEmail: 'bot@container.local', authorName: 'FleetADLC-Flow', authorLogin: null }],
+      [{ sha: 'abc1234', authorEmail: 'bot@container.local', authorName: 'OpenADLC-Flow', authorLogin: null }],
       forbidden,
     );
-    expect(findings.map((finding) => finding.login)).toEqual(['fleetadlc-flow']);
+    expect(findings.map((finding) => finding.login)).toEqual(['openadlc-flow']);
   });
 
   it('lets the account GitHub matched decide first, with one finding per commit', () => {
     // Named like the reviewer, matched by GitHub to the automation account: it
     // is the automation account's commit, and it is one commit.
     const findings = findForbiddenAuthors(
-      [{ sha: 'abc1234', authorEmail: 'someone@example.com', authorName: 'fleetadlc-sydney', authorLogin: 'FleetADLC-Flow' }],
+      [{ sha: 'abc1234', authorEmail: 'someone@example.com', authorName: 'openadlc-sydney', authorLogin: 'OpenADLC-Flow' }],
       forbidden,
     );
     expect(findings).toHaveLength(1);
-    expect(findings[0]?.login).toBe('fleetadlc-flow');
+    expect(findings[0]?.login).toBe('openadlc-flow');
   });
 });
 
 describe('which accounts may never author', () => {
   it('is every reviewer, intake and the automation account the crew has a login for', () => {
     const crew = [
-      { role: 'implement', githubLogin: 'fleetadlc-atlas-janedoe' },
-      { role: 'review_lead', githubLogin: 'fleetadlc-sydney-janedoe' },
-      { role: 'review_second', githubLogin: 'fleetadlc-grok-janedoe' },
-      { role: 'review_security', githubLogin: 'fleetadlc-cipher-janedoe' },
-      { role: 'intake', githubLogin: 'fleetadlc-mira-janedoe' },
-      { role: 'automation', githubLogin: 'janedoe-fleetadlc-flow' },
-      { role: 'deploy', githubLogin: 'fleetadlc-harbor-janedoe' },
-      { role: 'qa', githubLogin: 'fleetadlc-vega-janedoe' },
+      { role: 'implement', githubLogin: 'openadlc-atlas-janedoe' },
+      { role: 'review_lead', githubLogin: 'openadlc-sydney-janedoe' },
+      { role: 'review_second', githubLogin: 'openadlc-grok-janedoe' },
+      { role: 'review_security', githubLogin: 'openadlc-cipher-janedoe' },
+      { role: 'intake', githubLogin: 'openadlc-mira-janedoe' },
+      { role: 'automation', githubLogin: 'janedoe-openadlc-flow' },
+      { role: 'deploy', githubLogin: 'openadlc-harbor-janedoe' },
+      { role: 'qa', githubLogin: 'openadlc-vega-janedoe' },
     ] as const;
 
     expect(accountsThatNeverAuthor(crew)).toEqual([
-      { login: 'fleetadlc-sydney-janedoe', why: 'a reviewer must never author what it reviews' },
-      { login: 'fleetadlc-grok-janedoe', why: 'a reviewer must never author what it reviews' },
-      { login: 'fleetadlc-cipher-janedoe', why: 'a reviewer must never author what it reviews' },
-      { login: 'fleetadlc-mira-janedoe', why: 'intake shapes issues; it does not write code' },
-      { login: 'janedoe-fleetadlc-flow', why: 'the automation account sets labels and statuses; it never authors commits' },
+      { login: 'openadlc-sydney-janedoe', why: 'a reviewer must never author what it reviews' },
+      { login: 'openadlc-grok-janedoe', why: 'a reviewer must never author what it reviews' },
+      { login: 'openadlc-cipher-janedoe', why: 'a reviewer must never author what it reviews' },
+      { login: 'openadlc-mira-janedoe', why: 'intake shapes issues; it does not write code' },
+      { login: 'janedoe-openadlc-flow', why: 'the automation account sets labels and statuses; it never authors commits' },
     ]);
     expect(Object.keys(NEVER_AUTHORS).sort()).toEqual([
       'automation',
@@ -145,13 +145,13 @@ describe('which accounts may never author', () => {
 
   it('bars the reviewer account but not the crew account the builder shares with intake and automation', () => {
     const crew = [
-      { role: 'intake', githubLogin: 'fleetadlc-crew' },
-      { role: 'implement', githubLogin: 'FleetADLC-Crew' },
-      { role: 'automation', githubLogin: 'fleetadlc-crew' },
-      { role: 'review_lead', githubLogin: 'fleetadlc-review' },
-      { role: 'review_second', githubLogin: 'fleetadlc-review' },
+      { role: 'intake', githubLogin: 'openadlc-crew' },
+      { role: 'implement', githubLogin: 'OpenADLC-Crew' },
+      { role: 'automation', githubLogin: 'openadlc-crew' },
+      { role: 'review_lead', githubLogin: 'openadlc-review' },
+      { role: 'review_second', githubLogin: 'openadlc-review' },
     ] as const;
-    expect(accountsThatNeverAuthor(crew).map((account) => account.login)).toEqual(['fleetadlc-review', 'fleetadlc-review']);
+    expect(accountsThatNeverAuthor(crew).map((account) => account.login)).toEqual(['openadlc-review', 'openadlc-review']);
   });
 });
 
@@ -291,10 +291,10 @@ describe('whether a diff stayed in scope', () => {
           'packages/shared/src/checks.test.ts',
           'apps/console/src/app/page.tsx',
           'apps/console/src/app/page.test.tsx',
-          'apps/cli/bin/fleetadlc.mjs',
-          'apps/cli/bin/fleetadlc.test.mjs',
+          'apps/cli/bin/openadlc.mjs',
+          'apps/cli/bin/openadlc.test.mjs',
         ],
-        ['packages/shared/src/checks.ts', 'apps/console/src/app/page.tsx', './apps/cli/bin/fleetadlc.mjs'],
+        ['packages/shared/src/checks.ts', 'apps/console/src/app/page.tsx', './apps/cli/bin/openadlc.mjs'],
       ),
     ).toEqual({ outside: [], inScope: true });
   });
@@ -445,18 +445,18 @@ describe('the required check is named once', () => {
 
 describe('whether two logins name the same account', () => {
   it('ignores case, because GitHub does', () => {
-    // Say `config/bots.yaml` names `fleetadlc-flow` and the account was
-    // registered as `FleetADLC-Flow`, which is what GitHub's API answers with:
+    // Say `config/bots.yaml` names `openadlc-flow` and the account was
+    // registered as `OpenADLC-Flow`, which is what GitHub's API answers with:
     // the same account.
-    expect(sameLogin('fleetadlc-flow', 'FleetADLC-Flow')).toBe(true);
-    expect(sameLogin('FLEETADLC-ATLAS', 'fleetadlc-atlas')).toBe(true);
+    expect(sameLogin('openadlc-flow', 'OpenADLC-Flow')).toBe(true);
+    expect(sameLogin('OPENADLC-ATLAS', 'openadlc-atlas')).toBe(true);
   });
 
   it('still tells two different accounts apart', () => {
     // The check exists to recognise a bot, so loosening it must not make every
     // account look like every other one.
-    expect(sameLogin('fleetadlc-atlas', 'fleetadlc-atlas-2')).toBe(false);
-    expect(sameLogin('fleetadlc-sydney', 'janedoe')).toBe(false);
+    expect(sameLogin('openadlc-atlas', 'openadlc-atlas-2')).toBe(false);
+    expect(sameLogin('openadlc-sydney', 'janedoe')).toBe(false);
   });
 
   it('is false when either side is missing', () => {
@@ -464,8 +464,8 @@ describe('whether two logins name the same account', () => {
     // them as one would make every unconfigured bot the author of everything.
     expect(sameLogin(null, null)).toBe(false);
     expect(sameLogin('', '')).toBe(false);
-    expect(sameLogin('fleetadlc-atlas', undefined)).toBe(false);
-    expect(sameLogin(undefined, 'fleetadlc-atlas')).toBe(false);
+    expect(sameLogin('openadlc-atlas', undefined)).toBe(false);
+    expect(sameLogin(undefined, 'openadlc-atlas')).toBe(false);
   });
 });
 

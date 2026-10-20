@@ -16,8 +16,8 @@ those files and nothing else: this is not a new round of the work.
 3. Change no file other than the conflicted ones, and no line in them the
    conflict does not involve.
 4. Commit the merge (`git commit --no-edit`). The checks run on a commit, not
-   on your working tree: `fleetadlc-ci` refuses a merge that is not committed yet.
-5. Run `fleetadlc-ci`. If it fails because of the resolution, fix it, commit,
+   on your working tree: `openadlc-ci` refuses a merge that is not committed yet.
+5. Run `openadlc-ci`. If it fails because of the resolution, fix it, commit,
    and run it again. If it fails for anything else, stop and ask (below).
 6. Push. Say in your last message which files you resolved and how, one line
    each.
@@ -34,7 +34,7 @@ base brought makes it a full review again.
   cannot widen its files or start a new round of the work: ask whether to
   leave it to a person.
   <!-- scenario: outside-the-conflict -->
-- `fleetadlc-ci` fails for something your resolution did not cause.
+- `openadlc-ci` fails for something your resolution did not cause.
   <!-- scenario: ci-fails-for-something-else -->
 
 ## Asking a person
@@ -46,7 +46,7 @@ next question is written after it, not before.
   marker, one line of JSON that carries the question itself and its choices:
 
   ```
-  <!-- fleetadlc:{"event":"question","question":"Keeping both sides needs src/app.js, outside the conflict. Leave it to a person?","options":["leave it to a person","resolve within the conflicted files only"]} -->
+  <!-- openadlc:{"event":"question","question":"Keeping both sides needs src/app.js, outside the conflict. Leave it to a person?","options":["leave it to a person","resolve within the conflicted files only"]} -->
   ```
 
   What you write before the marker is the context: which files conflict, and
@@ -57,7 +57,7 @@ next question is written after it, not before.
   and say so in the marker instead of giving choices:
 
   ```
-  <!-- fleetadlc:{"event":"question","question":"Which of the two test targets should stay?","open":true} -->
+  <!-- openadlc:{"event":"question","question":"Which of the two test targets should stay?","open":true} -->
   ```
 
 - Never number several questions in one message, and never put a second

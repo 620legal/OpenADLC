@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseQuestion, parseYamlFile } from '@fleetadlc/shared';
+import { parseQuestion, parseYamlFile } from '@openadlc/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClaudeEngine } from './claude.js';
 import { CodexEngine, GET_ON_WITH_IT } from './codex.js';
@@ -236,7 +236,7 @@ describe('config/models.yaml', () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'fleetadlc-models-'));
+    dir = mkdtempSync(join(tmpdir(), 'openadlc-models-'));
     resetModelPrices();
   });
 
@@ -364,7 +364,7 @@ describe('why an engine failed', () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'fleetadlc-engine-fail-'));
+    dir = mkdtempSync(join(tmpdir(), 'openadlc-engine-fail-'));
   });
 
   afterEach(() => {
@@ -551,7 +551,7 @@ describe('what a Claude run cost', () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'fleetadlc-engine-usage-'));
+    dir = mkdtempSync(join(tmpdir(), 'openadlc-engine-usage-'));
   });
 
   afterEach(() => {
@@ -702,7 +702,7 @@ describe('an engine killed by a signal', () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'fleetadlc-engine-killed-'));
+    dir = mkdtempSync(join(tmpdir(), 'openadlc-engine-killed-'));
   });
 
   afterEach(() => {
@@ -799,7 +799,7 @@ describe('the codex engine', () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'fleetadlc-codex-test-'));
+    dir = mkdtempSync(join(tmpdir(), 'openadlc-codex-test-'));
   });
 
   afterEach(() => {
@@ -868,7 +868,7 @@ describe('the codex engine', () => {
   });
 
   it('knows it is in the container from the session the container starts', async () => {
-    vi.stubEnv('FLEETADLC_CONTAINED', '1');
+    vi.stubEnv('OPENADLC_CONTAINED', '1');
     expect(flagValue(await argsOf(new CodexEngine(fakeCodex(dir, []))), '--sandbox')).toBe('danger-full-access');
   });
 
@@ -896,7 +896,7 @@ describe('the codex engine', () => {
     const off = await argsOf(new CodexEngine(fakeCodex(dir, []), { contained: true }));
     expect(off.join(' ')).toContain('-c analytics.enabled=false -c feedback.enabled=false');
 
-    vi.stubEnv('FLEETADLC_ENGINE_TELEMETRY', 'on');
+    vi.stubEnv('OPENADLC_ENGINE_TELEMETRY', 'on');
     const on = await argsOf(new CodexEngine(fakeCodex(dir, []), { contained: true }));
     expect(on).not.toContain('analytics.enabled=false');
     expect(on).not.toContain('feedback.enabled=false');
@@ -1016,7 +1016,7 @@ describe('a Codex turn that ends on its plan', () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'fleetadlc-codex-session-'));
+    dir = mkdtempSync(join(tmpdir(), 'openadlc-codex-session-'));
   });
 
   afterEach(() => {
@@ -1090,7 +1090,7 @@ describe('a Codex turn that ends on its plan', () => {
       item: {
         id: 'item_0',
         type: 'agent_message',
-        text: 'The issue does not say which page.\n<!-- fleetadlc:{"event":"question","question":"Which page?","options":["index.html","a new page"]} -->',
+        text: 'The issue does not say which page.\n<!-- openadlc:{"event":"question","question":"Which page?","options":["index.html","a new page"]} -->',
       },
     };
     const { made } = await run([PLAN[0], asked, PLAN[3]]);
@@ -1106,7 +1106,7 @@ describe('a Codex turn that ends on its plan', () => {
       item: {
         id: 'item_0',
         type: 'agent_message',
-        text: 'The design names no migration.\n<!-- fleetadlc:{"event":"send_back","to":"spec","reason":"no migration for the new column"} -->',
+        text: 'The design names no migration.\n<!-- openadlc:{"event":"send_back","to":"spec","reason":"no migration for the new column"} -->',
       },
     };
     const after = { type: 'item.completed', item: { id: 'item_1', type: 'agent_message', text: 'Handed back to spec.' } };
@@ -1119,7 +1119,7 @@ describe('what Claude may run', () => {
   it('gives each allowed and each denied command a rule of its own', async () => {
     // One rule for the whole list read as one literal command, so Claude asked
     // for approval on every shell call and a headless run refused them all.
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-claude-rules-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-claude-rules-'));
     try {
       const record = join(dir, 'call.json');
       const result = { type: 'result', subtype: 'success', is_error: false, result: 'ok', usage: {}, total_cost_usd: 0 };
@@ -1157,7 +1157,7 @@ describe('what Claude may run', () => {
   });
 
   it('refuses the file tools to a skill with no write scope, since every run accepts edits', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-claude-nowrite-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-claude-nowrite-'));
     try {
       const record = join(dir, 'call.json');
       const result = { type: 'result', subtype: 'success', is_error: false, result: 'ok', usage: {}, total_cost_usd: 0 };
@@ -1188,7 +1188,7 @@ describe('what Claude may run', () => {
     // A worktree's `.claude/settings.json` hooks ran with the session's
     // GitHub token, its `.mcp.json` servers were spawned, and its CLAUDE.md
     // was sent as instructions.
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-claude-sources-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-claude-sources-'));
     try {
       const record = join(dir, 'call.json');
       const result = { type: 'result', subtype: 'success', is_error: false, result: 'ok', usage: {}, total_cost_usd: 0 };
@@ -1211,7 +1211,7 @@ describe('what Claude may run', () => {
     // Never with real credentials: a home of its own, a dummy key, and an API
     // address nothing answers. A SessionStart hook runs before any call, so
     // the call failing is expected; only the marker says what ran.
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-claude-hooks-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-claude-hooks-'));
     try {
       const home = join(dir, 'home');
       const worktree = join(dir, 'repo');
@@ -1256,7 +1256,7 @@ describe('what Claude may run', () => {
   it('turns its self-updater off, whatever the session was handed', async () => {
     // It updated itself inside a task's computer, into a prefix the bot can
     // write: the pin is the version, and a new one is a rebuild.
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-claude-updater-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-claude-updater-'));
     try {
       const record = join(dir, 'call.json');
       const result = { type: 'result', subtype: 'success', is_error: false, result: 'ok', usage: {}, total_cost_usd: 0 };
@@ -1275,7 +1275,7 @@ describe('the files given with the work', () => {
   const PATHS = ['/work/builder/context/task-1/attachments/mockup.png', '/work/builder/context/task-1/attachments/spec.pdf'];
 
   it('are a folder Claude may read, once, since they sit outside the worktree its Read is held to', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-claude-files-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-claude-files-'));
     try {
       const record = join(dir, 'call.json');
       const result = { type: 'result', subtype: 'success', is_error: false, result: 'ok', usage: {}, total_cost_usd: 0 };
@@ -1288,7 +1288,7 @@ describe('the files given with the work', () => {
   });
 
   it('give Codex the images on its first turn, as one token the prompt cannot be taken into', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-codex-files-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-codex-files-'));
     try {
       const record = join(dir, 'args.json');
       await runAll(new CodexEngine(fakeCodex(dir, []), { contained: true }), { workdir: dir, model: 'gpt-5.5', attachments: PATHS, env: { FAKE_CODEX_RECORD: record } });
@@ -1304,7 +1304,7 @@ describe('the files given with the work', () => {
   });
 
   it('change nothing on Grok’s command line, which reads them from the list in its context', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-grok-files-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-grok-files-'));
     try {
       vi.stubEnv('HOME', dir);
       const record = join(dir, 'call.json');
@@ -1620,7 +1620,7 @@ describe('the grok engine', () => {
   let realHome: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'fleetadlc-grok-test-'));
+    dir = mkdtempSync(join(tmpdir(), 'openadlc-grok-test-'));
     realHome = join(dir, 'real-home');
     mkdirSync(realHome);
     vi.stubEnv('HOME', realHome);
@@ -1766,7 +1766,7 @@ describe('the grok engine', () => {
     await runAll(new GrokEngine({ binary: fakeGrok(dir, GROK_RUN) }), {
       workdir: dir,
       model: 'grok-4',
-      env: { FAKE_GROK_RECORD: record, FAKE_GROK_SHIMS: '1', HOME: home, PATH: `/opt/fleetadlc/bin:${process.env.PATH}` },
+      env: { FAKE_GROK_RECORD: record, FAKE_GROK_SHIMS: '1', HOME: home, PATH: `/opt/openadlc/bin:${process.env.PATH}` },
     });
 
     const call = readCall(record);
@@ -1775,7 +1775,7 @@ describe('the grok engine', () => {
     // the run's back in front, OpenADLC's gh and git first. Without it a grok
     // reviewer's `gh pr review` went to the real gh, unsigned.
     for (const after of Object.values((call as unknown as { paths: Record<string, string> }).paths)) {
-      expect(after.startsWith('/opt/fleetadlc/bin:')).toBe(true);
+      expect(after.startsWith('/opt/openadlc/bin:')).toBe(true);
     }
     expect(call.env.HOME).toBe(join(runDir, 'home'));
     expect(call.homeMode).toBe(0o700);
@@ -1988,7 +1988,7 @@ describe('the git and GitHub rules every engine carries', () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'fleetadlc-tools-env-'));
+    dir = mkdtempSync(join(tmpdir(), 'openadlc-tools-env-'));
   });
 
   afterEach(() => {
@@ -2003,7 +2003,7 @@ describe('the git and GitHub rules every engine carries', () => {
       path,
       [
         '#!/usr/bin/env node',
-        'require("node:fs").writeFileSync(process.env.FAKE_RECORD, process.env.FLEETADLC_TOOLS_POLICY ?? "");',
+        'require("node:fs").writeFileSync(process.env.FAKE_RECORD, process.env.OPENADLC_TOOLS_POLICY ?? "");',
         'process.stdin.resume();',
         'process.stdin.on("end", () => process.exit(0));',
         'setTimeout(() => process.exit(0), 200);',
@@ -2025,7 +2025,7 @@ describe('the git and GitHub rules every engine carries', () => {
       vi.stubEnv('HOME', dir);
       const record = join(dir, `${name}.policy`);
       // A task's own environment cannot lift them.
-      await runAll(make(), { workdir: dir, env: { FAKE_RECORD: record, FLEETADLC_TOOLS_POLICY: '{}' } });
+      await runAll(make(), { workdir: dir, env: { FAKE_RECORD: record, OPENADLC_TOOLS_POLICY: '{}' } });
 
       expect(JSON.parse(readFileSync(record, 'utf8'))).toEqual({
         pushBranchPrefix: 'agent/',
@@ -2049,7 +2049,7 @@ describe('the git and GitHub rules every engine carries', () => {
   it('carries the build skill’s local CI rule to what it runs', () => {
     const build = loadToolsPolicy(join(import.meta.dirname, '..', '..', '..', 'crew', 'skills', 'implement', 'tools.yaml'));
     expect(JSON.parse(toolsPolicyEnv(build)[TOOLS_POLICY_ENV] ?? '')).toMatchObject({ pushBranchPrefix: 'agent/', localCi: true });
-    expect(build.allow.shell).toContain('fleetadlc-ci');
+    expect(build.allow.shell).toContain('openadlc-ci');
     expect(build.deny.github).toContain('pr merge');
   });
 });

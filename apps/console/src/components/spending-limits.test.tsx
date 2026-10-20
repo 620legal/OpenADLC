@@ -102,7 +102,7 @@ describe('the settings summary', () => {
 describe('limits that could not be read', () => {
   it('says what happened and what to do, on the summary and on the page', () => {
     for (const html of [renderToStaticMarkup(<SpendingSummary initial={null} />), renderToStaticMarkup(<SpendingLimits initial={null} />)]) {
-      expect(html).toContain('OpenADLC could not read the spending limits from the bridge. Reload the page; if it keeps happening, run fleetadlc doctor.');
+      expect(html).toContain('OpenADLC could not read the spending limits from the bridge. Reload the page; if it keeps happening, run openadlc doctor.');
     }
   });
 });

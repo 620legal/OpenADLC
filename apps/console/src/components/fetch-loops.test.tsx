@@ -27,11 +27,11 @@ const ACCOUNT: AccountRef = { id: 'acct-max', provider: 'anthropic', kind: 'key'
 
 const WEBHOOK: WebhookStatus = {
   ready: true,
-  publicUrl: 'https://fleetadlc.example.com',
-  webhookUrl: 'https://fleetadlc.example.com/webhooks/github',
+  publicUrl: 'https://openadlc.example.com',
+  webhookUrl: 'https://openadlc.example.com/webhooks/github',
   secretStored: true,
   tunnel: { running: false, url: '', since: null, detail: '' },
-  github: { url: 'https://github.com/settings/apps/fleetadlc-exampleco', secretSet: true },
+  github: { url: 'https://github.com/settings/apps/openadlc-exampleco', secretSet: true },
   stale: false,
   canAutomate: false,
   tunnelAvailable: false,

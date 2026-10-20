@@ -1,5 +1,5 @@
 {
-  "name": "@fleetadlc/hostd",
+  "name": "@openadlc/hostd",
   "version": "0.1.0",
   "description": "The runner: gives each task a computer (a container or tmux sessions), a worktree and a session, and runs the skill in it.",
   "private": true,
@@ -13,11 +13,11 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@fleetadlc/backup": "workspace:*",
-    "@fleetadlc/db": "workspace:*",
-    "@fleetadlc/engines": "workspace:*",
-    "@fleetadlc/github": "workspace:*",
-    "@fleetadlc/shared": "workspace:*",
+    "@openadlc/backup": "workspace:*",
+    "@openadlc/db": "workspace:*",
+    "@openadlc/engines": "workspace:*",
+    "@openadlc/github": "workspace:*",
+    "@openadlc/shared": "workspace:*",
     "ws": "^8.18.0",
     "node-pty": "^1.0.0"
   },

@@ -6,7 +6,7 @@ name: promote-production
 run-name: promote-production ${{ inputs.candidate }}${{ inputs.emergency_override != '' && ' (emergency override)' || '' }}
 
 # Promotes a commit that is live and smoked on testing. OpenADLC dispatches it,
-# as its app, once the smoke is green and `.github/fleetadlc.yml` says
+# as its app, once the smoke is green and `.github/openadlc.yml` says
 # `production: on: after-testing`. The `production` environment holds it as the
 # repository's GitHub rules say: until a required reviewer approves it, or for
 # its wait timer. A bot never approves a deploy; the repository's GitHub rules
@@ -91,7 +91,7 @@ jobs:
           REASON: ${{ inputs.emergency_override }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           # The smoke's workflow file, without `.yml`: keep it equal to
-          # `testing.smoke` in .github/fleetadlc.yml.
+          # `testing.smoke` in .github/openadlc.yml.
           SMOKE_WORKFLOW: smoke-testing
         run: |
           set -euo pipefail

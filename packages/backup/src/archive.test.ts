@@ -30,7 +30,7 @@ import {
  * Or it fails as protection: a wrong passphrase hands back half a payload, or the
  * cleartext manifest can be edited to describe a file it is not attached to.
  *
- * Nothing here reads or writes `~/.fleetadlc`. Every secret below is invented, and
+ * Nothing here reads or writes `~/.openadlc`. Every secret below is invented, and
  * the one case that needs a real file uses a temporary directory it removes
  * afterwards. The suite is deliberately slow — each encrypt and each decrypt pays
  * the full scrypt cost on purpose, because that cost is the protection.
@@ -66,11 +66,11 @@ const install: BackupContents = {
     organization: 'janedoe',
     githubClientId: 'Iv23liABCDEFGHIJKLMN',
     humans: HUMANS,
-    publicUrl: 'https://fleetadlc.example.test',
+    publicUrl: 'https://openadlc.example.test',
   },
   bots: [
-    { name: 'nova', githubLogin: 'fleetadlc-nova', engine: 'claude', model: 'claude-opus-4-20250514' },
-    { name: 'pilot', githubLogin: 'fleetadlc-pilot', engine: 'codex', model: null },
+    { name: 'nova', githubLogin: 'openadlc-nova', engine: 'claude', model: 'claude-opus-4-20250514' },
+    { name: 'pilot', githubLogin: 'openadlc-pilot', engine: 'codex', model: null },
     // Not authorized yet: no login at all. The state a fresh install spends most
     // of its setup in, and the one a lossy round trip is likeliest to corrupt.
     { name: 'scout', githubLogin: null, engine: 'grok', model: 'grok-4' },
@@ -181,7 +181,7 @@ describe('a file can say what it is without the passphrase', () => {
     for (const ref of Object.keys(install.secrets)) expect(serialized).not.toContain(ref);
     for (const value of SENSITIVE) expect(serialized).not.toContain(value);
     expect(serialized).not.toContain('janedoe');
-    expect(serialized).not.toContain('fleetadlc-nova');
+    expect(serialized).not.toContain('openadlc-nova');
     expect(serialized).not.toContain('claude');
   });
 
@@ -192,7 +192,7 @@ describe('a file can say what it is without the passphrase', () => {
     for (const value of SENSITIVE) {
       expect(archive.includes(Buffer.from(value, 'utf8'))).toBe(false);
     }
-    expect(archive.includes(Buffer.from('fleetadlc-nova', 'utf8'))).toBe(false);
+    expect(archive.includes(Buffer.from('openadlc-nova', 'utf8'))).toBe(false);
   });
 });
 
@@ -377,10 +377,10 @@ describe('a file that is not an OpenADLC backup fails as a file, not as a cipher
     expect(error.message).toContain('Upgrade OpenADLC, then restore again');
   });
 
-  it('reads a plain file written before the rename from Fleet', () => {
-    // It said `fleet-backup-plain`, and was refused as not a backup at all.
+  it.each(['fleetadlc-backup-plain', 'fleet-backup-plain'])('reads a plain file that says %s, from before the renames', (format) => {
+    // Each was the name written in its day, and was refused as not a backup at all.
     const document = JSON.parse(writePlain(install).toString('utf8')) as { format: string };
-    document.format = 'fleet-backup-plain';
+    document.format = format;
     const old = Buffer.from(JSON.stringify(document), 'utf8');
 
     expect(formatOf(old)).toBe('plain');
@@ -469,8 +469,8 @@ describe('an archive survives the trip through a file', () => {
   let path: string;
 
   beforeAll(() => {
-    dir = mkdtempSync(join(tmpdir(), 'fleetadlc-backup-'));
-    path = join(dir, 'fleetadlc-backup-2026-09-21.fleetbak');
+    dir = mkdtempSync(join(tmpdir(), 'openadlc-backup-'));
+    path = join(dir, 'openadlc-backup-2026-09-21.fleetbak');
     writeFileSync(path, archive);
   });
 
@@ -586,7 +586,7 @@ describe('a bot’s seat', () => {
     const seated: BackupContents = {
       ...install,
       bots: [
-        { name: 'fleetadlc-atlas-janedoe', slot: 'builder', githubLogin: 'fleetadlc-atlas-janedoe', engine: 'claude', model: null },
+        { name: 'openadlc-atlas-janedoe', slot: 'builder', githubLogin: 'openadlc-atlas-janedoe', engine: 'claude', model: null },
         { name: 'nova', githubLogin: null, engine: 'claude', model: null },
       ],
       manifest: { ...install.manifest, counts: { ...install.manifest.counts, bots: 2 } },

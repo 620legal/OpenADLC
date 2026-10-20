@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CI_REQUEST_WAIT_MS, MergeLine, REQUIRED_CHECKS, UPDATE_WAIT_MS, askedForCi, heldForPerson, verdictFor } from './merge-line.js';
-import { REQUIRED_CHECK, REVIEW_GATE_CHECK } from '@fleetadlc/shared';
+import { REQUIRED_CHECK, REVIEW_GATE_CHECK } from '@openadlc/shared';
 
 const green = (name: string) => ({ name, status: 'completed', conclusion: 'success' });
 const red = (name: string) => ({ name, status: 'completed', conclusion: 'failure' });
@@ -86,7 +86,7 @@ vi.mock('./effective-config.js', () => ({
   }),
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -121,7 +121,7 @@ vi.mock('@fleetadlc/db', () => ({
     listIssues: vi.fn(async () => [{ number: 11, prNumber: 31 }]),
     getIssue: vi.fn(async () => ({ number: 11, prNumber: 31, stage: store.issueStage })),
   },
-  repos: { getRepoByName: vi.fn(async () => ({ id: 'repo-1', name: 'fleetadlc', fullName: 'janedoe/fleetadlc', ownerBotId: null, defaultBranch: 'main' })) },
+  repos: { getRepoByName: vi.fn(async () => ({ id: 'repo-1', name: 'openadlc', fullName: 'janedoe/openadlc', ownerBotId: null, defaultBranch: 'main' })) },
   settings: { allSettings: vi.fn(async () => store.settings) },
   tasks: { listTasks: vi.fn(async () => []) },
 }));
@@ -129,7 +129,7 @@ vi.mock('@fleetadlc/db', () => ({
 describe('the front of the line, green and up to date', () => {
   const HEAD = 'c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00';
   const MADE = 'feed0000feed0000feed0000feed0000feed0000';
-  const APPROVALS = [{ reviewer: 'fleetadlc-sydney-janedoe', person: false, commitId: HEAD, ofHead: true }];
+  const APPROVALS = [{ reviewer: 'openadlc-sydney-janedoe', person: false, commitId: HEAD, ofHead: true }];
 
   function line(options: { land?: boolean; reason?: string; app?: boolean; pull?: Record<string, unknown> } = {}) {
     const pull = {
@@ -137,13 +137,13 @@ describe('the front of the line, green and up to date', () => {
       draft: false,
       merged: false,
       state: 'open',
-      headRef: 'agent/fleetadlc-atlas-janedoe/11-issue-11',
+      headRef: 'agent/openadlc-atlas-janedoe/11-issue-11',
       headSha: HEAD,
       baseRef: 'main',
       labels: [],
       mergeableState: 'clean',
       autoMerge: false,
-      headRepoFullName: 'janedoe/fleetadlc',
+      headRepoFullName: 'janedoe/openadlc',
       requestedReviewers: [],
       requestedTeams: [],
       ...options.pull,
@@ -180,10 +180,10 @@ describe('the front of the line, green and up to date', () => {
     const { line: merge, github, automation, clock } = line();
     github.checksFor.mockResolvedValue([green(REVIEW_GATE_CHECK)]);
 
-    expect(await merge.advance('fleetadlc')).toMatchObject({ state: 'testing', detail: 'asked GitHub’s CI to run on c0ffee0'.replace('’', "'") });
-    expect(automation.setCiLabel).toHaveBeenCalledWith('janedoe/fleetadlc', 31, true);
-    expect(store.audits).toEqual([{ actor: 'fleetadlc-app', action: 'ci.requested', target: 'fleetadlc#31', payload: { head: HEAD, again: false } }]);
-    expect(askedForCi('janedoe/fleetadlc', 31, clock.now)).toBe(true);
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'testing', detail: 'asked GitHub’s CI to run on c0ffee0'.replace('’', "'") });
+    expect(automation.setCiLabel).toHaveBeenCalledWith('janedoe/openadlc', 31, true);
+    expect(store.audits).toEqual([{ actor: 'openadlc-app', action: 'ci.requested', target: 'openadlc#31', payload: { head: HEAD, again: false } }]);
+    expect(askedForCi('janedoe/openadlc', 31, clock.now)).toBe(true);
     expect(automation.mergeAsApp).not.toHaveBeenCalled();
   });
 
@@ -191,16 +191,16 @@ describe('the front of the line, green and up to date', () => {
     const { line: merge, github, automation, clock } = line({ pull: { labels: ['adlc:ci'] } });
     github.checksFor.mockResolvedValue([green(REVIEW_GATE_CHECK)]);
 
-    await merge.advance('fleetadlc');
+    await merge.advance('openadlc');
     clock.now += CI_REQUEST_WAIT_MS - 1;
-    await merge.advance('fleetadlc');
+    await merge.advance('openadlc');
     expect(automation.setCiLabel).not.toHaveBeenCalled();
 
     clock.now += 2;
-    await merge.advance('fleetadlc');
+    await merge.advance('openadlc');
     expect(automation.setCiLabel.mock.calls).toEqual([
-      ['janedoe/fleetadlc', 31, false],
-      ['janedoe/fleetadlc', 31, true],
+      ['janedoe/openadlc', 31, false],
+      ['janedoe/openadlc', 31, true],
     ]);
     expect(store.audits.at(-1)).toMatchObject({ action: 'ci.requested', payload: { again: true } });
   });
@@ -211,19 +211,19 @@ describe('the front of the line, green and up to date', () => {
     github.checksFor.mockResolvedValue([green(REVIEW_GATE_CHECK)]);
     merge.useCiCap(async () => cap);
 
-    expect(await merge.advance('fleetadlc')).toMatchObject({ state: 'testing', detail: cap });
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'testing', detail: cap });
     expect(automation.setCiLabel).not.toHaveBeenCalled();
 
     // One already asked for, its label on: the line waits for it, cap or not.
     const asked = line({ pull: { labels: ['adlc:ci'] } });
     asked.github.checksFor.mockResolvedValue([green(REVIEW_GATE_CHECK)]);
     asked.line.useCiCap(async () => cap);
-    expect(await asked.line.advance('fleetadlc')).toMatchObject({ detail: expect.stringContaining('waiting for GitHub') });
+    expect(await asked.line.advance('openadlc')).toMatchObject({ detail: expect.stringContaining('waiting for GitHub') });
 
     // Raised, or a new month: the next pass asks.
     merge.useCiCap(async () => null);
-    await merge.advance('fleetadlc');
-    expect(automation.setCiLabel).toHaveBeenCalledWith('janedoe/fleetadlc', 31, true);
+    await merge.advance('openadlc');
+    expect(automation.setCiLabel).toHaveBeenCalledWith('janedoe/openadlc', 31, true);
   });
 
   it('asks nothing for a person’s pull request, whose CI runs as it always did', async () => {
@@ -231,7 +231,7 @@ describe('the front of the line, green and up to date', () => {
     const { line: merge, github, automation } = line({ pull: { headRef: 'janedoe/fix-typo' } });
     github.checksFor.mockResolvedValue([green(REVIEW_GATE_CHECK)]);
 
-    expect(await merge.advance('fleetadlc')).toMatchObject({ state: 'testing', detail: 'waiting for checks' });
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'testing', detail: 'waiting for checks' });
     expect(automation.setCiLabel).not.toHaveBeenCalled();
   });
 
@@ -252,15 +252,15 @@ describe('the front of the line, green and up to date', () => {
     // that turned the gate green and the pull request was let back in.
     store.issueStage = 'build';
     decide.mockReturnValue({ land: true, reason: 'every requested reviewer approved', approvals: APPROVALS });
-    const { mergeLines } = await import('@fleetadlc/db');
+    const { mergeLines } = await import('@openadlc/db');
     const { line: merge, github, automation } = line();
 
-    expect(await merge.advance('fleetadlc')).toMatchObject({ state: 'left', detail: 'left the line: its issue #11 is in build, not review' });
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'left', detail: 'left the line: its issue #11 is in build, not review' });
 
     expect(mergeLines.leave).toHaveBeenCalledWith('repo-1', 31);
     expect(automation.mergeAsApp).not.toHaveBeenCalled();
     expect(github.updateBranch).not.toHaveBeenCalled();
-    expect(github.comment).toHaveBeenCalledWith('janedoe/fleetadlc', 31, 'Leaving the merge line: its issue #11 is in build, not review.');
+    expect(github.comment).toHaveBeenCalledWith('janedoe/openadlc', 31, 'Leaving the merge line: its issue #11 is in build, not review.');
   });
 
   it('opens a resolution round for a branch that conflicts, not the whole round back in build', async () => {
@@ -272,11 +272,11 @@ describe('the front of the line, green and up to date', () => {
     merge.useSendBack(backToBuild);
     merge.useConflictRounds({ start, unstarted: vi.fn(async () => null) });
 
-    expect(await merge.advance('fleetadlc')).toMatchObject({ state: 'failed' });
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'failed' });
 
-    expect(start).toHaveBeenCalledWith({ repoName: 'fleetadlc', prNumber: 31, baseRef: 'main' });
+    expect(start).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 31, baseRef: 'main' });
     expect(backToBuild).not.toHaveBeenCalled();
-    expect(github.comment).toHaveBeenCalledWith('janedoe/fleetadlc', 31, 'Leaving the merge line: the branch conflicts with main.');
+    expect(github.comment).toHaveBeenCalledWith('janedoe/openadlc', 31, 'Leaving the merge line: the branch conflicts with main.');
   });
 
   it('waits, and opens no conflict round, when the head moved before GitHub made the update', async () => {
@@ -288,7 +288,7 @@ describe('the front of the line, green and up to date', () => {
     merge.useSendBack(backToBuild);
     merge.useConflictRounds({ start, unstarted: vi.fn(async () => null) });
 
-    expect(await merge.advance('fleetadlc')).toMatchObject({ state: 'waiting', detail: 'the head moved to 0ther00 since it was read' });
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'waiting', detail: 'the head moved to 0ther00 since it was read' });
 
     expect(store.states.at(-1)).toMatchObject({ state: 'waiting' });
     expect(start).not.toHaveBeenCalled();
@@ -300,15 +300,15 @@ describe('the front of the line, green and up to date', () => {
     const { line: merge, github, clock } = line();
     github.behindBy.mockResolvedValue(2);
 
-    expect(await merge.advance('fleetadlc')).toMatchObject({ state: 'updating' });
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'updating' });
     expect(store.entry).toMatchObject({ state: 'updating', headSha: HEAD });
-    expect(await merge.advance('fleetadlc')).toMatchObject({ state: 'updating', detail: 'still updating from main' });
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'updating', detail: 'still updating from main' });
     clock.now += UPDATE_WAIT_MS - 1;
-    await merge.advance('fleetadlc');
+    await merge.advance('openadlc');
     expect(github.updateBranch).toHaveBeenCalledTimes(1);
 
     clock.now += 2;
-    await merge.advance('fleetadlc');
+    await merge.advance('openadlc');
     expect(github.updateBranch).toHaveBeenCalledTimes(2);
   });
 
@@ -317,9 +317,9 @@ describe('the front of the line, green and up to date', () => {
     github.behindBy.mockResolvedValue(2);
     store.entry = { ...store.entry, state: 'updating', headSha: 'earlier0' };
 
-    await merge.advance('fleetadlc');
+    await merge.advance('openadlc');
 
-    expect(github.updateBranch).toHaveBeenCalledWith('janedoe/fleetadlc', 31, HEAD);
+    expect(github.updateBranch).toHaveBeenCalledWith('janedoe/openadlc', 31, HEAD);
   });
 
   it('sends a crew pull request that strayed outside its lease back to its builder, not to a person', async () => {
@@ -330,14 +330,14 @@ describe('the front of the line, green and up to date', () => {
     const backToBuild = vi.fn(async (_input: unknown) => undefined);
     merge.useSendBack(backToBuild);
 
-    expect(await merge.advance('fleetadlc')).toMatchObject({ state: 'failed', detail: 'changes files outside its lease; sent back to build' });
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'failed', detail: 'changes files outside its lease; sent back to build' });
 
     expect(automation.mergeAsApp).not.toHaveBeenCalled();
-    expect(github.comment).toHaveBeenCalledWith('janedoe/fleetadlc', 31, `Leaving the merge line: ${reason}.`);
+    expect(github.comment).toHaveBeenCalledWith('janedoe/openadlc', 31, `Leaving the merge line: ${reason}.`);
     expect(backToBuild).toHaveBeenCalledWith({
-      repoName: 'fleetadlc',
+      repoName: 'openadlc',
       prNumber: 31,
-      reason: `The branch left the merge line: ${reason}, run fleetadlc-ci, and push.`,
+      reason: `The branch left the merge line: ${reason}, run openadlc-ci, and push.`,
       leasePathsOnly: true,
     });
     // Nothing here is a person's: no needs-human, no "waiting to be merged".
@@ -352,7 +352,7 @@ describe('the front of the line, green and up to date', () => {
     const { line: merge, github } = line();
     github.behindBy.mockRejectedValue(new Error('502 Bad Gateway'));
 
-    const step = await merge.advance('fleetadlc');
+    const step = await merge.advance('openadlc');
 
     expect(step).toMatchObject({ state: 'waiting', detail: expect.stringContaining('could not compare it with main') });
     expect(github.updateBranch).not.toHaveBeenCalled();
@@ -375,13 +375,13 @@ describe('the front of the line, green and up to date', () => {
     const made = vi.fn(async () => undefined);
     merge.useStacking({ waitingOn: vi.fn(async () => null), updating, made });
 
-    expect(await merge.advance('fleetadlc')).toMatchObject({ state: 'updating' });
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'updating' });
 
-    expect(updating).toHaveBeenCalledWith({ repoName: 'fleetadlc', repoFullName: 'janedoe/fleetadlc', prNumber: 31, issue: 11, baseRef: 'main', headSha: HEAD });
+    expect(updating).toHaveBeenCalledWith({ repoName: 'openadlc', repoFullName: 'janedoe/openadlc', prNumber: 31, issue: 11, baseRef: 'main', headSha: HEAD });
     expect(order).toEqual(['noted', 'merged']);
-    expect(github.mergeIntoBranch).toHaveBeenCalledWith('janedoe/fleetadlc', 'agent/fleetadlc-atlas-janedoe/11-issue-11', 'main');
+    expect(github.mergeIntoBranch).toHaveBeenCalledWith('janedoe/openadlc', 'agent/openadlc-atlas-janedoe/11-issue-11', 'main');
     expect(github.updateBranch).not.toHaveBeenCalled();
-    expect(made).toHaveBeenCalledWith({ repoName: 'fleetadlc', prNumber: 31, from: HEAD, to: MADE });
+    expect(made).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 31, from: HEAD, to: MADE });
   });
 
   it('records a stacked update that conflicted as making nothing, and opens the resolution round', async () => {
@@ -394,10 +394,10 @@ describe('the front of the line, green and up to date', () => {
     merge.useConflictRounds({ start, unstarted: vi.fn(async () => null) });
     merge.useStacking({ waitingOn: vi.fn(async () => null), updating: vi.fn(async () => true), made });
 
-    expect(await merge.advance('fleetadlc')).toMatchObject({ state: 'failed' });
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'failed' });
 
-    expect(made).toHaveBeenCalledWith({ repoName: 'fleetadlc', prNumber: 31, from: HEAD, to: null });
-    expect(start).toHaveBeenCalledWith({ repoName: 'fleetadlc', prNumber: 31, baseRef: 'main' });
+    expect(made).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 31, from: HEAD, to: null });
+    expect(start).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 31, baseRef: 'main' });
   });
 
   it('vouches for no commit a stacked update made onto a head that had moved', async () => {
@@ -407,9 +407,9 @@ describe('the front of the line, green and up to date', () => {
     const made = vi.fn(async () => undefined);
     merge.useStacking({ waitingOn: vi.fn(async () => null), updating: vi.fn(async () => true), made });
 
-    await merge.advance('fleetadlc');
+    await merge.advance('openadlc');
 
-    expect(made).toHaveBeenCalledWith({ repoName: 'fleetadlc', prNumber: 31, from: HEAD, to: null });
+    expect(made).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 31, from: HEAD, to: null });
   });
 
   it('updates a branch that is not stacked as before', async () => {
@@ -418,9 +418,9 @@ describe('the front of the line, green and up to date', () => {
     const made = vi.fn(async () => undefined);
     merge.useStacking({ waitingOn: vi.fn(async () => null), updating: vi.fn(async () => false), made });
 
-    expect(await merge.advance('fleetadlc')).toMatchObject({ state: 'updating' });
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'updating' });
 
-    expect(github.updateBranch).toHaveBeenCalledWith('janedoe/fleetadlc', 31, HEAD);
+    expect(github.updateBranch).toHaveBeenCalledWith('janedoe/openadlc', 31, HEAD);
     expect(github.mergeIntoBranch).not.toHaveBeenCalled();
     expect(made).not.toHaveBeenCalled();
   });
@@ -429,33 +429,33 @@ describe('the front of the line, green and up to date', () => {
     decide.mockReturnValue({ land: true, reason: 'ok', approvals: APPROVALS });
     const { line: merge, github, automation } = line();
 
-    const step = await merge.advance('fleetadlc');
+    const step = await merge.advance('openadlc');
 
-    expect(automation.mergeAsApp).toHaveBeenCalledWith('janedoe/fleetadlc', 31, HEAD);
+    expect(automation.mergeAsApp).toHaveBeenCalledWith('janedoe/openadlc', 31, HEAD);
     // Never with the automation account's token: that is a bot's.
     expect(github.mergePullRequest).not.toHaveBeenCalled();
     expect(step).toMatchObject({ state: 'merged' });
     expect(store.audits).toEqual([
       {
-        actor: 'fleetadlc-app',
+        actor: 'openadlc-app',
         action: 'merge.landed',
-        target: 'fleetadlc#31',
+        target: 'openadlc#31',
         payload: { head: HEAD, merged: 'merged00merged00', method: 'squash', approvals: APPROVALS, checks: REQUIRED_CHECKS },
       },
     ]);
-    expect(github.comment).toHaveBeenCalledWith('janedoe/fleetadlc', 31, expect.stringContaining('- fleetadlc-sydney-janedoe approved `c0ffee0`'));
+    expect(github.comment).toHaveBeenCalledWith('janedoe/openadlc', 31, expect.stringContaining('- openadlc-sydney-janedoe approved `c0ffee0`'));
   });
 
   it('is not merged when a rule does not hold, and says which', async () => {
-    decide.mockReturnValue({ land: false, reason: 'fleetadlc-vega-janedoe has not reviewed it', approvals: [] });
+    decide.mockReturnValue({ land: false, reason: 'openadlc-vega-janedoe has not reviewed it', approvals: [] });
     const { line: merge, github, automation } = line();
 
-    const step = await merge.advance('fleetadlc');
+    const step = await merge.advance('openadlc');
 
     expect(automation.mergeAsApp).not.toHaveBeenCalled();
     expect(step).toMatchObject({ state: 'merging' });
-    expect(store.states.at(-1)?.detail).toBe('green and up to date; waiting for a person to merge it: OpenADLC did not, because fleetadlc-vega-janedoe has not reviewed it');
-    expect(github.comment).toHaveBeenCalledWith('janedoe/fleetadlc', 31, expect.stringContaining('OpenADLC did not merge it, because fleetadlc-vega-janedoe has not reviewed it'));
+    expect(store.states.at(-1)?.detail).toBe('green and up to date; waiting for a person to merge it: OpenADLC did not, because openadlc-vega-janedoe has not reviewed it');
+    expect(github.comment).toHaveBeenCalledWith('janedoe/openadlc', 31, expect.stringContaining('OpenADLC did not merge it, because openadlc-vega-janedoe has not reviewed it'));
     expect(store.audits).toEqual([]);
   });
 
@@ -463,17 +463,17 @@ describe('the front of the line, green and up to date', () => {
     decide.mockReturnValue({ land: true, reason: 'ok', approvals: APPROVALS });
     const { line: merge, github } = line({ app: false });
 
-    const step = await merge.advance('fleetadlc');
+    const step = await merge.advance('openadlc');
 
     expect(step).toMatchObject({ state: 'merging' });
     expect(github.mergePullRequest).not.toHaveBeenCalled();
     expect(store.audits).toEqual([]);
     // And says where to find out why, on the pull request.
     expect(github.comment).toHaveBeenCalledWith(
-      'janedoe/fleetadlc',
+      'janedoe/openadlc',
       31,
       expect.stringContaining(
-        'OpenADLC did not merge it, because the OpenADLC app could not get a token for janedoe/fleetadlc (the app’s card on the board, or fleetadlc doctor, says why)',
+        'OpenADLC did not merge it, because the OpenADLC app could not get a token for janedoe/openadlc (the app’s card on the board, or openadlc doctor, says why)',
       ),
     );
   });
@@ -483,7 +483,7 @@ describe('the front of the line, green and up to date', () => {
     store.configFails = true;
     const { line: merge, automation } = line();
 
-    await merge.advance('fleetadlc');
+    await merge.advance('openadlc');
 
     expect(automation.mergeAsApp).not.toHaveBeenCalled();
   });
@@ -495,41 +495,41 @@ describe('the front of the line, green and up to date', () => {
     store.settingsRead = false;
     const { line: merge, automation } = line();
 
-    await merge.advance('fleetadlc');
+    await merge.advance('openadlc');
 
     expect(automation.mergeAsApp).not.toHaveBeenCalled();
   });
 
   it('says why it waits once for each reason, not on every advance', async () => {
-    decide.mockReturnValue({ land: false, reason: 'fleetadlc-vega-janedoe has not reviewed it', approvals: [] });
+    decide.mockReturnValue({ land: false, reason: 'openadlc-vega-janedoe has not reviewed it', approvals: [] });
     const { line: merge, github } = line();
 
-    await merge.advance('fleetadlc');
-    await merge.advance('fleetadlc');
+    await merge.advance('openadlc');
+    await merge.advance('openadlc');
     expect(github.comment).toHaveBeenCalledTimes(1);
 
     decide.mockReturnValue({ land: false, reason: '@janedoe still asks for changes', approvals: [] });
-    await merge.advance('fleetadlc');
+    await merge.advance('openadlc');
     expect(github.comment).toHaveBeenCalledTimes(2);
   });
 
   it('is left for a person in a repository the install turned it off for', async () => {
-    store.settings = { bridgeMergeOff: 'other-repo, FleetADLC' };
+    store.settings = { bridgeMergeOff: 'other-repo, OpenADLC' };
     const { line: merge, automation } = line();
 
-    await merge.advance('fleetadlc');
+    await merge.advance('openadlc');
 
     expect(automation.mergeFacts).not.toHaveBeenCalled();
     expect(automation.mergeAsApp).not.toHaveBeenCalled();
   });
 
   it('takes nothing from a fork, or onto a branch but the default one, out of the line, and updates nothing', async () => {
-    for (const pull of [{ headRepoFullName: 'mallory/fleetadlc' }, { baseRef: 'release' }]) {
+    for (const pull of [{ headRepoFullName: 'mallory/openadlc' }, { baseRef: 'release' }]) {
       store.states = [];
       decide.mockReturnValue({ land: true, reason: 'ok', approvals: APPROVALS });
       const { line: merge, github, automation } = line({ pull });
 
-      const step = await merge.advance('fleetadlc');
+      const step = await merge.advance('openadlc');
 
       expect(step).toMatchObject({ state: 'failed' });
       expect(store.states.at(-1)?.state).toBe('failed');
@@ -552,7 +552,7 @@ describe('the front of the line, green and up to date', () => {
     const read = github.getPullRequest.getMockImplementation()!;
     github.getPullRequest.mockImplementation(async () => ({ ...(await read()), merged, state: merged ? 'closed' : 'open' }));
 
-    await Promise.all([merge.advance('fleetadlc'), merge.advance('fleetadlc')]);
+    await Promise.all([merge.advance('openadlc'), merge.advance('openadlc')]);
 
     expect(automation.mergeAsApp).toHaveBeenCalledTimes(1);
     expect(store.audits).toHaveLength(1);
@@ -567,7 +567,7 @@ describe('the front of the line, green and up to date', () => {
     github.getPullRequest.mockResolvedValueOnce({ ...(await github.getPullRequest()), merged: false });
     github.getPullRequest.mockResolvedValue({ ...(await github.getPullRequest()), merged: true });
 
-    const step = await merge.advance('fleetadlc');
+    const step = await merge.advance('openadlc');
 
     expect(step).toMatchObject({ state: 'merged' });
     expect(github.comment).not.toHaveBeenCalled();
@@ -580,11 +580,11 @@ describe('the front of the line, green and up to date', () => {
     const { line: merge, github } = line();
 
     try {
-      const step = await merge.advance('fleetadlc');
+      const step = await merge.advance('openadlc');
 
       expect(step).toMatchObject({ state: 'merged' });
-      expect(loud).toHaveBeenCalledWith(expect.stringContaining('AUDIT NOT WRITTEN: fleetadlc#31 was merged by OpenADLC as merged00merged00'));
-      expect(github.comment).toHaveBeenCalledWith('janedoe/fleetadlc', 31, expect.stringContaining('The approvals it landed on'));
+      expect(loud).toHaveBeenCalledWith(expect.stringContaining('AUDIT NOT WRITTEN: openadlc#31 was merged by OpenADLC as merged00merged00'));
+      expect(github.comment).toHaveBeenCalledWith('janedoe/openadlc', 31, expect.stringContaining('The approvals it landed on'));
     } finally {
       loud.mockRestore();
     }
@@ -604,11 +604,11 @@ describe('a pull request only a person can land', () => {
 
 describe('a stacked pull request joining the line', () => {
   async function enter(waitingOn: () => Promise<number | null>) {
-    const { mergeLines } = await import('@fleetadlc/db');
+    const { mergeLines } = await import('@openadlc/db');
     vi.mocked(mergeLines.enter).mockClear();
     const merge = new MergeLine({ automationBot: null } as never, {} as never, {} as never, {} as never);
     merge.useStacking({ waitingOn: vi.fn(waitingOn), updating: vi.fn(async () => false), made: vi.fn(async () => undefined) });
-    await merge.enter({ repoName: 'fleetadlc', prNumber: 31, headSha: 'c0ffee0' });
+    await merge.enter({ repoName: 'openadlc', prNumber: 31, headSha: 'c0ffee0' });
     return vi.mocked(mergeLines.enter);
   }
 
@@ -645,10 +645,10 @@ describe('a pull request whose resolution round has not started', () => {
     const start = vi.fn(async () => 'pending' as const);
     merge.useConflictRounds({ start, unstarted: vi.fn(async () => ({ base: 'main', pending: 'busy' as const })) });
 
-    await merge.enter({ repoName: 'fleetadlc', prNumber: 31, headSha: 'abc' });
+    await merge.enter({ repoName: 'openadlc', prNumber: 31, headSha: 'abc' });
 
     expect(store.entered).toEqual([]);
-    expect(start).toHaveBeenCalledWith({ repoName: 'fleetadlc', prNumber: 31, baseRef: 'main' });
+    expect(start).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 31, baseRef: 'main' });
   });
 
   it('is left to Try again or the recovery when its start was recorded as a failed task', async () => {
@@ -656,7 +656,7 @@ describe('a pull request whose resolution round has not started', () => {
     const start = vi.fn(async () => 'pending' as const);
     merge.useConflictRounds({ start, unstarted: vi.fn(async () => ({ base: 'main', pending: 'blocked' as const })) });
 
-    await merge.enter({ repoName: 'fleetadlc', prNumber: 31, headSha: 'abc' });
+    await merge.enter({ repoName: 'openadlc', prNumber: 31, headSha: 'abc' });
 
     expect(store.entered).toEqual([]);
     expect(start).not.toHaveBeenCalled();
@@ -666,7 +666,7 @@ describe('a pull request whose resolution round has not started', () => {
     const merge = make();
     merge.useConflictRounds({ start: vi.fn(), unstarted: vi.fn(async () => null) });
 
-    await merge.enter({ repoName: 'fleetadlc', prNumber: 31, headSha: 'abc' });
+    await merge.enter({ repoName: 'openadlc', prNumber: 31, headSha: 'abc' });
 
     expect(store.entered).toEqual([31]);
   });

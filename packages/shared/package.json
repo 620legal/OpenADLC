@@ -1,5 +1,5 @@
 {
-  "name": "@fleetadlc/shared",
+  "name": "@openadlc/shared",
   "version": "0.1.0",
   "description": "Types, stages and labels, markers, the access rule and config schemas shared by every OpenADLC package.",
   "private": true,

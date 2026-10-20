@@ -1,4 +1,4 @@
-import type { BudgetState, EngineName, LedgerEntry } from '@fleetadlc/shared';
+import type { BudgetState, EngineName, LedgerEntry } from '@openadlc/shared';
 import { query, queryOne } from '../client.js';
 
 interface LedgerRow {
