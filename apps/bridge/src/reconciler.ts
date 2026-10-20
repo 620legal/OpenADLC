@@ -1,7 +1,7 @@
-import { audit, bots, hosts, issues, lastGithubDelivery, leases, repos, stageMoves, tasks } from '@fleetadlc/db';
+import { audit, bots, hosts, issues, lastGithubDelivery, leases, repos, stageMoves, tasks } from '@openadlc/db';
 import { actsForOn } from './people.js';
-import { GitHubApiError, type GitHubClient } from '@fleetadlc/github';
-import { actsFor, declaredPathsFrom, isBackwardMove, isStageLabel, STAGE_LABELS, stageFromLabels, hasIgnoreLabel, type StageKey } from '@fleetadlc/shared';
+import { GitHubApiError, type GitHubClient } from '@openadlc/github';
+import { actsFor, declaredPathsFrom, isBackwardMove, isStageLabel, STAGE_LABELS, stageFromLabels, hasIgnoreLabel, type StageKey } from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import { asAutomation, automationBotName } from './automation-bot.js';
 import type { BridgeConfig } from './config.js';
@@ -218,7 +218,7 @@ export class Reconciler {
           subject: repo.name,
           detail:
             `${automation} is not connected to GitHub, so GitHub could not be read. ` +
-            `Connect it in Settings → GitHub → Connected accounts, or run: fleetadlc auth login --bot ${automation}`,
+            `Connect it in Settings → GitHub → Connected accounts, or run: openadlc auth login --bot ${automation}`,
           repaired: false,
         });
         continue;
@@ -424,7 +424,7 @@ export class Reconciler {
         drift.push({
           kind: 'bot_unconnected',
           subject: bot.name,
-          detail: `no GitHub account is connected for this bot. Run: fleetadlc auth login --bot ${bot.name}`,
+          detail: `no GitHub account is connected for this bot. Run: openadlc auth login --bot ${bot.name}`,
           repaired: false,
         });
       }
@@ -456,7 +456,7 @@ export class Reconciler {
   ): Promise<void> {
     const liveStage = stageFromLabels(issue.labels);
 
-    // An issue labelled `fleetadlc:ignore` is a person's, and off the board:
+    // An issue labelled `openadlc:ignore` is a person's, and off the board:
     // nothing here moves it, settles its merge or forgets it. Only its labels
     // are kept as GitHub has them, so the label coming off is seen even when
     // that delivery never came, and the next pass takes it up as any issue.
@@ -469,7 +469,7 @@ export class Reconciler {
     // abandoned, or closed by hand: it leaves the board rather than sitting in
     // a column nobody is working. One whose change merged is not. GitHub
     // closes an issue at the merge that says it closes it, with the card in
-    // Ship; dropping it there lost fleetadlc-testbed#1, and #3, which waits on it,
+    // Ship; dropping it there lost openadlc-testbed#1, and #3, which waits on it,
     // could never be unblocked.
     const merged = (stage: string | null | undefined): boolean => stage === 'merged' || stage === 'done';
     if (issue.state === 'closed' && !merged(liveStage) && !merged(known?.stage)) {
@@ -521,7 +521,7 @@ export class Reconciler {
       // Nothing else is imported. An issue with no stage label is not OpenADLC's
       // until somebody gives it one, and reading every such issue in the
       // repository onto the board, and into triage, is not what anybody filed
-      // them for. A closed one is finished business. `fleetadlc:ignore` is the
+      // them for. A closed one is finished business. `openadlc:ignore` is the
       // same refusal with a stage label present: importing would store that
       // stage and start whoever staffs it, which replaces the label with work.
       // Taking it off is what lets the next pass import the issue.
@@ -680,7 +680,7 @@ export class Reconciler {
     }
 
     // No stage label is normally drift: the card sits on no column, and the
-    // report asks for one. `fleetadlc:ignore` is why there is no stage, and
+    // report asks for one. `openadlc:ignore` is why there is no stage, and
     // asking would be a stage label replacing it.
     if (!liveStage && issue.state === 'open' && !hasIgnoreLabel(issue.labels)) {
       drift.push({
@@ -701,7 +701,7 @@ function imported(entry: Drift): boolean {
 /**
  * One entry as the reconcile job's log says it.
  *
- * An import says what it did in so many words — "imported fleetadlc-testbed#1 from
+ * An import says what it did in so many words — "imported openadlc-testbed#1 from
  * GitHub: its webhook never arrived" — because it is the one repair that means
  * something upstream is wrong: GitHub knew about the issue and OpenADLC did not.
  */

@@ -9,7 +9,7 @@ import {
   type RestoreJournal,
   type UndoDb,
   type UndoStore,
-} from '@fleetadlc/backup';
+} from '@openadlc/backup';
 import { DispatchGate } from './dispatch-gate.js';
 import { resyncPause } from './pause-work.js';
 import { RestoreInto, affectedSeats, sweepExpiredUndo, type RestoreIntoDeps, type RestoreJobView } from './restore-into.js';
@@ -18,7 +18,7 @@ import { RestoreInto, affectedSeats, sweepExpiredUndo, type RestoreIntoDeps, typ
  * Restoring into an install that is in use, as the bridge runs it: after the
  * bots it changes are idle, holding them and the dispatcher, with a backup
  * taken first — and undoing it. What is compared and written is
- * `@fleetadlc/backup`'s and tested there; this is the order things happen in.
+ * `@openadlc/backup`'s and tested there; this is the order things happen in.
  */
 
 const NOW = new Date('2026-09-25T10:00:00.000Z');
@@ -29,14 +29,14 @@ const KEY_ACCOUNT = '11111111-1111-4111-8111-111111111111';
 /** The install being restored into: a builder, and a reviewer connected as another account. */
 function here(): InstallSnapshot {
   return {
-    secrets: { 'github-refresh-fleetadlc-other': 'ghr_zzz-here-zzz', 'internal-api-secret': 'zzz-internal-zzz' },
+    secrets: { 'github-refresh-openadlc-other': 'ghr_zzz-here-zzz', 'internal-api-secret': 'zzz-internal-zzz' },
     settings: { organization: 'janedoe', operatorEmail: 'ops@b.example.test' },
     bots: [
       { name: 'builder', slot: 'builder', githubLogin: null, engine: 'claude', model: 'newest:opus', modelAccountId: null, modelSetAt: null },
       {
-        name: 'fleetadlc-other',
+        name: 'openadlc-other',
         slot: 'lead-reviewer',
-        githubLogin: 'fleetadlc-other',
+        githubLogin: 'openadlc-other',
         engine: 'claude',
         model: 'newest:opus',
         modelAccountId: null,
@@ -55,13 +55,13 @@ function here(): InstallSnapshot {
 function archive(extraSettings: Record<string, string> = {}): BackupContents {
   return buildBackup(
     {
-      secrets: { 'github-refresh-fleetadlc-sydney': REVIEWER_REFRESH, [`model-account-${KEY_ACCOUNT}`]: KEY },
+      secrets: { 'github-refresh-openadlc-sydney': REVIEWER_REFRESH, [`model-account-${KEY_ACCOUNT}`]: KEY },
       settings: { organization: 'janedoe', operatorEmail: 'alex@example.test', engineUpdates: 'on', ...extraSettings },
       bots: [
         {
-          name: 'fleetadlc-sydney',
+          name: 'openadlc-sydney',
           slot: 'lead-reviewer',
-          githubLogin: 'fleetadlc-sydney',
+          githubLogin: 'openadlc-sydney',
           engine: 'claude',
           model: 'newest:opus',
           modelAccountId: null,
@@ -150,7 +150,7 @@ function world(options: { busyFor?: number; startMeanwhile?: boolean; snapshotFa
         if (secret === KEY) throw new Error('invalid x-api-key');
         return [{ id: 'model' }];
       },
-      gitHubUser: async () => ({ login: 'fleetadlc-sydney', id: 1 }),
+      gitHubUser: async () => ({ login: 'openadlc-sydney', id: 1 }),
     },
     clientId: async () => 'Iv1.zzz-client-zzz',
     snapshot: async () => {
@@ -179,15 +179,15 @@ function world(options: { busyFor?: number; startMeanwhile?: boolean; snapshotFa
         const who = token === REVIEWER_REFRESH ? 'sydney' : 'other';
         return { accessToken: `ghu_zzz-${who}-zzz`, refreshToken: 'ghr_zzz-new-zzz', expiresAt: null, refreshExpiresAt: null, scopes: [], tokenType: 'bearer' };
       },
-      gitHubUser: async (token) => ({ login: token.includes('sydney') ? 'fleetadlc-sydney' : 'fleetadlc-other', id: 1 }),
+      gitHubUser: async (token) => ({ login: token.includes('sydney') ? 'openadlc-sydney' : 'openadlc-other', id: 1 }),
       adoptLogin: async () => ({ ok: true, message: 'answered: OK' }),
     }),
     undo: undo.store,
     busy: async (seats) => {
       busyCalls += 1;
       events.push(`asked who is busy in ${seats.join(', ')}`);
-      if (busyCalls <= (options.busyFor ?? 0)) return [{ seat: 'lead-reviewer', name: 'fleetadlc-other' }];
-      if (options.startMeanwhile && busyCalls === (options.busyFor ?? 0) + 2) return [{ seat: 'lead-reviewer', name: 'fleetadlc-other' }];
+      if (busyCalls <= (options.busyFor ?? 0)) return [{ seat: 'lead-reviewer', name: 'openadlc-other' }];
+      if (options.startMeanwhile && busyCalls === (options.busyFor ?? 0) + 2) return [{ seat: 'lead-reviewer', name: 'openadlc-other' }];
       return [];
     },
     hold: async (seats, fn) => {
@@ -267,7 +267,7 @@ describe('restoring into an install that is in use', () => {
     expect(order).toContain(`used ${REVIEWER_REFRESH}`);
     expect(order.indexOf('let go')).toBeLessThan(order.indexOf('names reconciled'));
     expect(order.slice(-2)).toEqual(['names reconciled', 'health checked']);
-    expect(secrets.get('github-refresh-fleetadlc-other')).toBe('ghr_zzz-new-zzz');
+    expect(secrets.get('github-refresh-openadlc-other')).toBe('ghr_zzz-new-zzz');
     expect(undo.stored()?.journal).toMatchObject({ seats: [{ seat: 'lead-reviewer', account: true, signIn: true }], until: '2026-09-26T10:00:06.000Z' });
     expect(job.result && 'undoUntil' in job.result ? job.result.undoUntil : null).toBe('2026-09-26T10:00:06.000Z');
   });
@@ -288,10 +288,10 @@ describe('restoring into an install that is in use', () => {
     const job = await settled(into);
 
     expect(seen.length).toBeGreaterThan(0);
-    for (const view of seen) expect(view).toMatchObject({ state: 'waiting', waitingFor: ['fleetadlc-other'] });
+    for (const view of seen) expect(view).toMatchObject({ state: 'waiting', waitingFor: ['openadlc-other'] });
     // Gave up after the limit, having changed nothing.
     expect(job.state).toBe('failed');
-    expect(job.error).toBe('fleetadlc-other did not finish its work within 1 minutes, so nothing was changed — try again once it is idle');
+    expect(job.error).toBe('openadlc-other did not finish its work within 1 minutes, so nothing was changed — try again once it is idle');
   });
 
   it('waits again for a task that started in the moment before the bots were held', async () => {
@@ -341,7 +341,7 @@ describe('restoring into an install that is in use', () => {
     expect(undone.kind).toBe('undo');
     expect(undone.state).toBe('done');
     expect(rows).toContain('audit install.restore_undone');
-    expect(rows).toContain('login fleetadlc-other=fleetadlc-other');
+    expect(rows).toContain('login openadlc-other=openadlc-other');
     expect(undo.stored()).toBeNull();
     await expect(into.startUndo('alex@example.test')).rejects.toMatchObject({ status: 409, name: 'NothingToUndo' });
 

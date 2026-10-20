@@ -1,7 +1,7 @@
 /**
  * What a person may attach, as the console says it before anything is sent.
  *
- * The rule is the bridge's (`checkAttachment` in `@fleetadlc/shared`), which
+ * The rule is the bridge's (`checkAttachment` in `@openadlc/shared`), which
  * reads the bytes and has the last word; the console does not depend on that
  * package (see `stages.ts`), so the limits are copied here and
  * `attachments.test.ts` fails when the two differ. What is checked here is only

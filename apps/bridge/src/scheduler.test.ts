@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TaskState } from '@fleetadlc/shared';
+import type { TaskState } from '@openadlc/shared';
 import { DEFAULT_INTERVALS } from './job-timer.js';
 import {
   attentionIn,
@@ -64,7 +64,7 @@ vi.mock('./status.js', async (importOriginal) => ({
   })),
 }));
 
-vi.mock('@fleetadlc/db', async () => ({
+vi.mock('@openadlc/db', async () => ({
   // When the bridge last took a delivery: where the first redelivery pass reads back to.
   lastGithubDelivery: vi.fn(async () => ({ at: '2026-10-04T11:00:00.000Z', type: 'issue_comment' })),
   attachments: { sweepUnclaimed: vi.fn(async (before: Date) => (store.swept.push(before), 2)) },
@@ -94,7 +94,7 @@ vi.mock('@fleetadlc/db', async () => ({
   health: { listHealth: vi.fn(async () => store.health) },
   bots: {
     listBots: vi.fn(async () => store.bots),
-    getBotById: vi.fn(async (id: string) => ({ id, name: 'fleetadlc-cipher-janedoe', engine: 'claude' })),
+    getBotById: vi.fn(async (id: string) => ({ id, name: 'openadlc-cipher-janedoe', engine: 'claude' })),
   },
   costs: { currentPeriod: vi.fn(() => '2026-09') },
   credentials: {},
@@ -127,7 +127,7 @@ vi.mock('@fleetadlc/db', async () => ({
     pausedWithAnswer: vi.fn(async () => store.answered),
     getTask: vi.fn(async (id: string) => store.tasks.find((task) => task.id === id) ?? null),
     // The real rule, so the sweep is tested against what the store writes.
-    stoppedByPerson: (await vi.importActual<typeof import('@fleetadlc/db')>('@fleetadlc/db')).tasks.stoppedByPerson,
+    stoppedByPerson: (await vi.importActual<typeof import('@openadlc/db')>('@openadlc/db')).tasks.stoppedByPerson,
     listTasksForSubjects: vi.fn(async (_kind: string, refs: readonly string[]) =>
       [...store.deployTasks, ...store.reviewTasks].filter((task) => refs.includes(task.subjectRef)),
     ),
@@ -232,7 +232,7 @@ describe('what is worth telling a person about', () => {
     expect(locked).toContain('sydney');
     expect(locked).not.toContain('atlas');
     // The command names the bot: without --bot it connects nothing.
-    expect(locked).toBe('sydney cannot act on GitHub any more. Run: `fleetadlc auth login --bot sydney`.');
+    expect(locked).toBe('sydney cannot act on GitHub any more. Run: `openadlc auth login --bot sydney`.');
   });
 
   it('does not report an account that was never connected', () => {
@@ -264,17 +264,17 @@ describe('what is worth telling a person about', () => {
 });
 
 const merged = {
-  repoName: 'fleetadlc',
+  repoName: 'openadlc',
   number: 45,
   prNumber: 145,
   labels: ['adlc:merged', 'priority:p1'],
   stage: 'merged',
 };
 
-const waiting: AwaitingDeploy = { repo: 'fleetadlc', number: 45, prNumber: 145 };
+const waiting: AwaitingDeploy = { repo: 'openadlc', number: 45, prNumber: 145 };
 
 describe('which merged work is waiting on a testing deploy', () => {
-  it('is a scheduled job, so fleetadlc status can list it', () => {
+  it('is a scheduled job, so openadlc status can list it', () => {
     expect(SCHEDULED_JOBS).toContain('deploy');
   });
 
@@ -301,7 +301,7 @@ describe('which merged work is waiting on a testing deploy', () => {
 const ready = {
   testingUrl: 'https://testing.example',
   deployBot: 'harbor',
-  newest: { fleetadlc: 145 } as Record<string, number | null>,
+  newest: { openadlc: 145 } as Record<string, number | null>,
   priorDeploys: [] as { subjectRef: string; state: TaskState; exitReason?: string | null }[],
 };
 
@@ -318,24 +318,24 @@ describe('the deploy sweep decides before it acts', () => {
     expect(first).toEqual(second);
     expect(first.kind).toBe('no-target');
     const line = deploySweepRefusal(first);
-    expect(line).toContain('FLEETADLC_TESTING_URL');
-    expect(line).toContain('fleetadlc#45');
+    expect(line).toContain('OPENADLC_TESTING_URL');
+    expect(line).toContain('openadlc#45');
     expect(line).not.toContain('started a testing deploy');
   });
 
   it('starts a deploy once per pull request, and the second look finds that task', () => {
     const first = planDeploySweep({ ...ready, waiting: [waiting] });
-    expect(first).toEqual({ kind: 'work', start: { subjectRef: 'fleetadlc#145', repo: 'fleetadlc' }, hold: [] });
+    expect(first).toEqual({ kind: 'work', start: { subjectRef: 'openadlc#145', repo: 'openadlc' }, hold: [] });
 
     const second = planDeploySweep({
       ...ready,
       waiting: [waiting],
-      priorDeploys: [{ subjectRef: 'fleetadlc#145', state: 'running' }],
+      priorDeploys: [{ subjectRef: 'openadlc#145', state: 'running' }],
     });
     expect(second.kind).toBe('work');
     if (second.kind !== 'work') return;
     expect(second.start).toBeNull();
-    expect(second.hold).toEqual(['fleetadlc#145: a testing deploy was already started (running)']);
+    expect(second.hold).toEqual(['openadlc#145: a testing deploy was already started (running)']);
   });
 
   it('tries again after a deploy that never ran', () => {
@@ -346,15 +346,15 @@ describe('the deploy sweep decides before it acts', () => {
       ...ready,
       waiting: [waiting],
       priorDeploys: [
-        { subjectRef: 'fleetadlc#145', state: 'failed', exitReason: 'hostd refused: harbor is busy' },
-        { subjectRef: 'fleetadlc#145', state: 'stopped' },
+        { subjectRef: 'openadlc#145', state: 'failed', exitReason: 'hostd refused: harbor is busy' },
+        { subjectRef: 'openadlc#145', state: 'stopped' },
       ],
     });
     expect(plan).toEqual({
       kind: 'work',
       start: {
-        subjectRef: 'fleetadlc#145',
-        repo: 'fleetadlc',
+        subjectRef: 'openadlc#145',
+        repo: 'openadlc',
         retry: `its last testing deploy failed: hostd refused: harbor is busy; attempt 3 of ${MAX_DEPLOY_ATTEMPTS}`,
       },
       hold: [],
@@ -366,12 +366,12 @@ describe('the deploy sweep decides before it acts', () => {
       ...ready,
       waiting: [waiting],
       priorDeploys: [
-        { subjectRef: 'fleetadlc#145', state: 'stopped', exitReason: 'the session was killed; the branch and the issue are untouched' },
+        { subjectRef: 'openadlc#145', state: 'stopped', exitReason: 'the session was killed; the branch and the issue are untouched' },
       ],
     });
     expect(plan.kind === 'work' && plan.start).toEqual({
-      subjectRef: 'fleetadlc#145',
-      repo: 'fleetadlc',
+      subjectRef: 'openadlc#145',
+      repo: 'openadlc',
       retry: `its last testing deploy was interrupted: the session was killed; the branch and the issue are untouched; attempt 2 of ${MAX_DEPLOY_ATTEMPTS}`,
     });
   });
@@ -383,15 +383,15 @@ describe('the deploy sweep decides before it acts', () => {
       ...ready,
       waiting: [waiting],
       priorDeploys: [
-        { subjectRef: 'fleetadlc#145', state: 'stopped', exitReason: 'stopped by a person (janedoe): its session was killed' },
-        { subjectRef: 'fleetadlc#145', state: 'failed' },
+        { subjectRef: 'openadlc#145', state: 'stopped', exitReason: 'stopped by a person (janedoe): its session was killed' },
+        { subjectRef: 'openadlc#145', state: 'failed' },
       ],
     });
     expect(plan.kind).toBe('work');
     if (plan.kind !== 'work') return;
     expect(plan.start).toBeNull();
     expect(plan.hold).toEqual([
-      'fleetadlc#145: its last testing deploy was stopped on purpose (stopped by a person (janedoe): its session was killed); not starting another until a person does',
+      'openadlc#145: its last testing deploy was stopped on purpose (stopped by a person (janedoe): its session was killed); not starting another until a person does',
     ]);
   });
 
@@ -399,7 +399,7 @@ describe('the deploy sweep decides before it acts', () => {
     const plan = planDeploySweep({
       ...ready,
       waiting: [waiting],
-      priorDeploys: [{ subjectRef: 'fleetadlc#145', state: 'stopped', exitReason: 'plan change refused by janedoe' }],
+      priorDeploys: [{ subjectRef: 'openadlc#145', state: 'stopped', exitReason: 'plan change refused by janedoe' }],
     });
     expect(plan.kind === 'work' && plan.start).toBeNull();
   });
@@ -409,11 +409,11 @@ describe('the deploy sweep decides before it acts', () => {
       ...ready,
       waiting: [waiting],
       priorDeploys: [
-        { subjectRef: 'fleetadlc#145', state: 'failed', exitReason: 'the workflow failed' },
-        { subjectRef: 'fleetadlc#145', state: 'stopped', exitReason: 'stopped by a person (janedoe): its session was killed' },
+        { subjectRef: 'openadlc#145', state: 'failed', exitReason: 'the workflow failed' },
+        { subjectRef: 'openadlc#145', state: 'stopped', exitReason: 'stopped by a person (janedoe): its session was killed' },
       ],
     });
-    expect(plan.kind === 'work' && plan.start && plan.start.subjectRef).toBe('fleetadlc#145');
+    expect(plan.kind === 'work' && plan.start && plan.start.subjectRef).toBe('openadlc#145');
   });
 
   it('does not repeat a deploy that finished, even though testing never labelled it', () => {
@@ -423,8 +423,8 @@ describe('the deploy sweep decides before it acts', () => {
       ...ready,
       waiting: [waiting],
       priorDeploys: [
-        { subjectRef: 'fleetadlc#145', state: 'failed' },
-        { subjectRef: 'fleetadlc#145', state: 'done' },
+        { subjectRef: 'openadlc#145', state: 'failed' },
+        { subjectRef: 'openadlc#145', state: 'done' },
       ],
     });
     expect(plan.kind === 'work' && plan.start).toBeNull();
@@ -436,7 +436,7 @@ describe('the deploy sweep decides before it acts', () => {
       ...ready,
       waiting: [waiting],
       priorDeploys: Array.from({ length: MAX_DEPLOY_ATTEMPTS }, () => ({
-        subjectRef: 'fleetadlc#145',
+        subjectRef: 'openadlc#145',
         state: 'failed' as const,
       })),
     });
@@ -444,12 +444,12 @@ describe('the deploy sweep decides before it acts', () => {
     if (plan.kind !== 'work') return;
     expect(plan.start).toBeNull();
     expect(plan.hold).toEqual([
-      `fleetadlc#145: ${MAX_DEPLOY_ATTEMPTS} testing deploys failed or were interrupted; not trying again until a person looks`,
+      `openadlc#145: ${MAX_DEPLOY_ATTEMPTS} testing deploys failed or were interrupted; not trying again until a person looks`,
     ]);
   });
 
   it('does not invent a pull request for an issue that has none recorded', () => {
-    const plan = planDeploySweep({ ...ready, waiting: [{ repo: 'fleetadlc', number: 45, prNumber: null }] });
+    const plan = planDeploySweep({ ...ready, waiting: [{ repo: 'openadlc', number: 45, prNumber: null }] });
     expect(plan.kind).toBe('work');
     if (plan.kind !== 'work') return;
     expect(plan.start).toBeNull();
@@ -465,21 +465,21 @@ describe('the deploy sweep decides before it acts', () => {
 describe('the deploy sweep only moves testing forward', () => {
   /** Seventeen merges that never got the label, the newest of them at the tip of main. */
   const backlog: AwaitingDeploy[] = Array.from({ length: 17 }, (_, index) => ({
-    repo: 'fleetadlc',
+    repo: 'openadlc',
     number: 29 + index,
     prNumber: 129 + index,
   }));
 
   it('deploys the newest merge once, not every merge that is waiting', () => {
-    // Setting FLEETADLC_TESTING_URL used to start one deploy per historic merge,
+    // Setting OPENADLC_TESTING_URL used to start one deploy per historic merge,
     // one a firing, each spending up to the per-task cap.
     const plan = planDeploySweep({ ...ready, waiting: backlog });
     expect(plan.kind).toBe('work');
     if (plan.kind !== 'work') return;
-    expect(plan.start).toEqual({ subjectRef: 'fleetadlc#145', repo: 'fleetadlc' });
+    expect(plan.start).toEqual({ subjectRef: 'openadlc#145', repo: 'openadlc' });
     expect(plan.hold).toHaveLength(1);
-    expect(plan.hold[0]).toContain('fleetadlc#129');
-    expect(plan.hold[0]).toContain('older than fleetadlc#145, the newest merge');
+    expect(plan.hold[0]).toContain('openadlc#129');
+    expect(plan.hold[0]).toContain('older than openadlc#145, the newest merge');
   });
 
   it('does not deploy an older merge once the newest is on testing', () => {
@@ -491,7 +491,7 @@ describe('the deploy sweep only moves testing forward', () => {
     expect(plan.kind).toBe('work');
     if (plan.kind !== 'work') return;
     expect(plan.start).toBeNull();
-    expect(plan.hold).toEqual([expect.stringContaining('older than fleetadlc#145, the newest merge')]);
+    expect(plan.hold).toEqual([expect.stringContaining('older than openadlc#145, the newest merge')]);
   });
 
   it('deploys nothing when it cannot tell which merge is newest', () => {
@@ -499,7 +499,7 @@ describe('the deploy sweep only moves testing forward', () => {
     // guess, and a wrong guess moves testing backwards.
     const plan = planDeploySweep({ ...ready, waiting: backlog, newest: {} });
     expect(plan.kind === 'work' && plan.start).toBeNull();
-    expect(plan.kind === 'work' && plan.hold[0]).toContain('cannot tell which merge is newest on fleetadlc');
+    expect(plan.kind === 'work' && plan.hold[0]).toContain('cannot tell which merge is newest on openadlc');
   });
 
   it('starts one deploy a firing, however many repositories have one waiting', () => {
@@ -507,11 +507,11 @@ describe('the deploy sweep only moves testing forward', () => {
     const plan = planDeploySweep({
       ...ready,
       waiting: [waiting, { repo: 'console', number: 7, prNumber: 12 }],
-      newest: { fleetadlc: 145, console: 12 },
+      newest: { openadlc: 145, console: 12 },
     });
     expect(plan.kind).toBe('work');
     if (plan.kind !== 'work') return;
-    expect(plan.start).toEqual({ subjectRef: 'fleetadlc#145', repo: 'fleetadlc' });
+    expect(plan.start).toEqual({ subjectRef: 'openadlc#145', repo: 'openadlc' });
     expect(plan.hold).toEqual(['console#12: next, after the deploy this firing started']);
   });
 });
@@ -568,26 +568,26 @@ describe('a whole deploy sweep', () => {
     // deployed before those looked as if it never had been.
     store.recentTasks = Array.from({ length: 1000 }, (_, index) => ({
       kind: 'qa',
-      subjectRef: `fleetadlc#${index}`,
+      subjectRef: `openadlc#${index}`,
       state: 'done',
     }));
-    store.deployTasks = [{ subjectRef: 'fleetadlc#145', state: 'done' }];
+    store.deployTasks = [{ subjectRef: 'openadlc#145', state: 'done' }];
     const { scheduler, open } = sweeper();
 
     const result = await scheduler.run('deploy');
     expect(open).not.toHaveBeenCalled();
-    expect(result.actions).toEqual(['fleetadlc#145: a testing deploy was already started (done)']);
+    expect(result.actions).toEqual(['openadlc#145: a testing deploy was already started (done)']);
   });
 
   it('leaves a deploy a person stopped, and starts one whose session went away again, saying which', async () => {
-    store.deployTasks = [{ subjectRef: 'fleetadlc#145', state: 'stopped', exitReason: 'stopped by a person (janedoe): its session was killed' }];
+    store.deployTasks = [{ subjectRef: 'openadlc#145', state: 'stopped', exitReason: 'stopped by a person (janedoe): its session was killed' }];
     const stopped = sweeper();
     expect((await stopped.scheduler.run('deploy')).actions).toEqual([
-      'fleetadlc#145: its last testing deploy was stopped on purpose (stopped by a person (janedoe): its session was killed); not starting another until a person does',
+      'openadlc#145: its last testing deploy was stopped on purpose (stopped by a person (janedoe): its session was killed); not starting another until a person does',
     ]);
     expect(stopped.open).not.toHaveBeenCalled();
 
-    store.deployTasks = [{ subjectRef: 'fleetadlc#145', state: 'stopped', exitReason: 'hostd shutting down' }];
+    store.deployTasks = [{ subjectRef: 'openadlc#145', state: 'stopped', exitReason: 'hostd shutting down' }];
     const interrupted = sweeper();
     const result = await interrupted.scheduler.run('deploy');
     expect(interrupted.open).toHaveBeenCalledTimes(1);
@@ -600,9 +600,9 @@ describe('a whole deploy sweep', () => {
 
     const result = await scheduler.run('deploy');
     expect(open).toHaveBeenCalledTimes(1);
-    expect(open.mock.calls[0]?.[0]).toMatchObject({ kind: 'deploy', subjectRef: 'fleetadlc#145' });
+    expect(open.mock.calls[0]?.[0]).toMatchObject({ kind: 'deploy', subjectRef: 'openadlc#145' });
     expect(result.actions[0]).toBe(
-      'fleetadlc#143, fleetadlc#144: older than fleetadlc#145, the newest merge, whose deploy carries them',
+      'openadlc#143, openadlc#144: older than openadlc#145, the newest merge, whose deploy carries them',
     );
   });
 
@@ -632,7 +632,7 @@ describe('a whole deploy sweep', () => {
 
     // Once it has finished, the next firing is a run of its own, and finds the task.
     const third = await scheduler.run('deploy');
-    expect(third.actions).toEqual(['fleetadlc#145: a testing deploy was already started (running)']);
+    expect(third.actions).toEqual(['openadlc#145: a testing deploy was already started (running)']);
     expect(open).toHaveBeenCalledTimes(1);
   });
 
@@ -640,15 +640,15 @@ describe('a whole deploy sweep', () => {
     // Set, not inferred: the workflow file is still there. A closed issue sits
     // in Ship the same way — the sweep reads the stage, which stays merged
     // until this move.
-    store.testingDeploy = JSON.stringify({ fleetadlc: 'none' });
+    store.testingDeploy = JSON.stringify({ openadlc: 'none' });
     const { scheduler, open, moves } = sweeper();
 
     const result = await scheduler.run('deploy');
 
     expect(open).not.toHaveBeenCalled();
-    expect(moves).toEqual([{ repoName: 'fleetadlc', issueNumber: 45, to: 'done', actor: 'bridge' }]);
+    expect(moves).toEqual([{ repoName: 'openadlc', issueNumber: 45, to: 'done', actor: 'bridge' }]);
     expect(result.actions).toEqual([
-      'fleetadlc#45 moved to Done: no testing deploy for this repository',
+      'openadlc#45 moved to Done: no testing deploy for this repository',
       'nothing merged is waiting on a testing deploy',
     ]);
     expect(github.asked.some((path) => path.includes('/actions/workflows'))).toBe(false);
@@ -656,19 +656,19 @@ describe('a whole deploy sweep', () => {
 
   it('moves an issue that already reached testing to Done once the repository has no testing deploy', async () => {
     // No promote is coming for it either.
-    store.testingDeploy = JSON.stringify({ fleetadlc: 'none' });
+    store.testingDeploy = JSON.stringify({ openadlc: 'none' });
     store.issues = [{ ...merged, labels: [...merged.labels, 'deployed:testing'] }];
     const { scheduler, open, moves } = sweeper();
 
     const result = await scheduler.run('deploy');
 
     expect(open).not.toHaveBeenCalled();
-    expect(moves).toEqual([{ repoName: 'fleetadlc', issueNumber: 45, to: 'done', actor: 'bridge' }]);
-    expect(result.actions[0]).toBe('fleetadlc#45 moved to Done: no testing deploy for this repository');
+    expect(moves).toEqual([{ repoName: 'openadlc', issueNumber: 45, to: 'done', actor: 'bridge' }]);
+    expect(result.actions[0]).toBe('openadlc#45 moved to Done: no testing deploy for this repository');
   });
 
   it('still deploys when settings say there is a testing deploy, without asking which workflows exist', async () => {
-    store.testingDeploy = JSON.stringify({ fleetadlc: 'has' });
+    store.testingDeploy = JSON.stringify({ openadlc: 'has' });
     github.workflows = [];
     const { scheduler, open } = sweeper();
 
@@ -683,7 +683,7 @@ describe('a whole deploy sweep', () => {
     const moved = sweeper();
     const result = await moved.scheduler.run('deploy');
     expect(moved.open).not.toHaveBeenCalled();
-    expect(result.actions[0]).toBe('fleetadlc#45 moved to Done: no testing deploy for this repository');
+    expect(result.actions[0]).toBe('openadlc#45 moved to Done: no testing deploy for this repository');
     expect(github.asked.some((path) => path.includes('/actions/workflows'))).toBe(true);
 
     github.workflows = null;
@@ -691,7 +691,7 @@ describe('a whole deploy sweep', () => {
     const unknown = sweeper();
     const again = await unknown.scheduler.run('deploy');
     expect(unknown.open).toHaveBeenCalledTimes(1);
-    expect(again.actions.some((line) => line.startsWith('fleetadlc#45 moved to Done'))).toBe(false);
+    expect(again.actions.some((line) => line.startsWith('openadlc#45 moved to Done'))).toBe(false);
   });
 
   it('dispatches again a promote or rollback whose dispatch failed', async () => {
@@ -703,14 +703,14 @@ describe('a whole deploy sweep', () => {
       checkRollbacks: vi.fn(async () => []),
       promoteDue: vi.fn(async () => []),
       sendBackDue: vi.fn(async () => []),
-      retryUndispatched: vi.fn(async () => ['fleetadlc@abc1234: dispatched promote-production']),
+      retryUndispatched: vi.fn(async () => ['openadlc@abc1234: dispatched promote-production']),
     };
     scheduler.useDelivery(pipeline as never, { get: vi.fn() } as never);
 
     const result = await scheduler.run('deploy');
 
     expect(pipeline.retryUndispatched).toHaveBeenCalledTimes(1);
-    expect(result.actions).toContain('fleetadlc@abc1234: dispatched promote-production');
+    expect(result.actions).toContain('openadlc@abc1234: dispatched promote-production');
   });
 
   it('looks at each dispatched rollback’s run before it promotes or dispatches again', async () => {
@@ -720,7 +720,7 @@ describe('a whole deploy sweep', () => {
     const { scheduler } = sweeper();
     const order: string[] = [];
     const pipeline = {
-      checkRollbacks: vi.fn(async () => (order.push('check'), ['fleetadlc@abc1234: production was rolled back (rollback-production run 91)'])),
+      checkRollbacks: vi.fn(async () => (order.push('check'), ['openadlc@abc1234: production was rolled back (rollback-production run 91)'])),
       promoteDue: vi.fn(async () => (order.push('promote'), [])),
       sendBackDue: vi.fn(async () => []),
       retryUndispatched: vi.fn(async () => (order.push('retry'), [])),
@@ -730,7 +730,7 @@ describe('a whole deploy sweep', () => {
     const result = await scheduler.run('deploy');
 
     expect(order).toEqual(['check', 'promote', 'retry']);
-    expect(result.actions).toContain('fleetadlc@abc1234: production was rolled back (rollback-production run 91)');
+    expect(result.actions).toContain('openadlc@abc1234: production was rolled back (rollback-production run 91)');
   });
 });
 
@@ -747,12 +747,12 @@ describe('a testing deploy the sweep could not dispatch', () => {
     );
     scheduler.useDelivery({} as never, { get: vi.fn() } as never);
     const dispatch = (subjectRef: string) =>
-      (scheduler as unknown as { dispatchTesting(repo: string, subjectRef: string): Promise<string> }).dispatchTesting('fleetadlc', subjectRef);
+      (scheduler as unknown as { dispatchTesting(repo: string, subjectRef: string): Promise<string> }).dispatchTesting('openadlc', subjectRef);
 
-    expect(await dispatch('fleetadlc#145')).toMatch(
-      /^fleetadlc#145: no testing deploy was dispatched, because \S+ is not connected to GitHub\. Run: fleetadlc auth login --bot \S+$/,
+    expect(await dispatch('openadlc#145')).toMatch(
+      /^openadlc#145: no testing deploy was dispatched, because \S+ is not connected to GitHub\. Run: openadlc auth login --bot \S+$/,
     );
-    expect(await dispatch('fleetadlc')).toBe('fleetadlc: no testing deploy was dispatched, because it names no pull request');
+    expect(await dispatch('openadlc')).toBe('openadlc: no testing deploy was dispatched, because it names no pull request');
   });
 });
 
@@ -760,7 +760,7 @@ describe('what a job run leaves in the event log', () => {
   it('records how many lines a job said, not the lines themselves', async () => {
     // Most jobs say the same few lines on every firing, reconcile every quarter
     // hour. The event says the job ran; what it said is in the bridge's log.
-    const lines = Array.from({ length: 50 }, (_, index) => `fleetadlc#${index} is sitting in Spec with nobody on it`);
+    const lines = Array.from({ length: 50 }, (_, index) => `openadlc#${index} is sitting in Spec with nobody on it`);
     const scheduler = new Scheduler(
       {} as never,
       {} as never,
@@ -789,12 +789,12 @@ describe('what a job run leaves in the event log', () => {
 });
 
 describe('an issue a job files once', () => {
-  const MARKER = '<!-- fleetadlc:job:dependency-update -->';
+  const MARKER = '<!-- openadlc:job:dependency-update -->';
   function filer(pages: (page: number) => { number: number; body: string; user: { login: string } }[] | Error) {
     const requests: string[] = [];
     const posted: { title: string; body: string; labels: string[] }[] = [];
     const github = {
-      viewer: async () => ({ login: 'fleetadlc-flow-janedoe', id: 1 }),
+      viewer: async () => ({ login: 'openadlc-flow-janedoe', id: 1 }),
       request: vi.fn(async (method: string, path: string, body?: { title: string; body: string; labels: string[] }) => {
         requests.push(`${method} ${path}`);
         if (body) posted.push(body);
@@ -833,7 +833,7 @@ describe('an issue a job files once', () => {
   });
 
   it('files the dependency update once while it is open', async () => {
-    const { scheduler, posted } = filer(() => [issue(41, 'fleetadlc-flow-janedoe', `shaped by triage\n\n${MARKER}`)]);
+    const { scheduler, posted } = filer(() => [issue(41, 'openadlc-flow-janedoe', `shaped by triage\n\n${MARKER}`)]);
 
     expect((await scheduler.run('deps')).actions).toEqual(['Weekly dependency update: already open as #41']);
     expect(posted).toEqual([]);
@@ -841,13 +841,13 @@ describe('an issue a job files once', () => {
 
   it('finds its own issue past the first page, and lists only what the automation account opened', async () => {
     const { scheduler, requests } = filer((page) =>
-      page === 1 ? Array.from({ length: 100 }, (_, index) => issue(index + 1, 'fleetadlc-flow-janedoe')) : [issue(150, 'fleetadlc-flow-janedoe', `update\n\n${MARKER}`)],
+      page === 1 ? Array.from({ length: 100 }, (_, index) => issue(index + 1, 'openadlc-flow-janedoe')) : [issue(150, 'openadlc-flow-janedoe', `update\n\n${MARKER}`)],
     );
 
     const result = await scheduler.run('deps');
 
     expect(result.actions).toEqual(['Weekly dependency update: already open as #150']);
-    expect(requests[0]).toContain('creator=fleetadlc-flow-janedoe');
+    expect(requests[0]).toContain('creator=openadlc-flow-janedoe');
     expect(requests.some((one) => one.startsWith('POST'))).toBe(false);
   });
 
@@ -858,14 +858,14 @@ describe('an issue a job files once', () => {
   });
 
   it('says what GitHub said when it refuses the issue', async () => {
-    const { GitHubApiError } = await import('@fleetadlc/github');
+    const { GitHubApiError } = await import('@openadlc/github');
     const refusing = new Scheduler(
       { automationBot: 'flow' } as never,
       {} as never,
       {
         actors: {
           asBot: async () => ({
-            viewer: async () => ({ login: 'fleetadlc-flow-janedoe', id: 1 }),
+            viewer: async () => ({ login: 'openadlc-flow-janedoe', id: 1 }),
             request: vi.fn(async (method: string, path: string) => {
               if (method === 'POST') throw new GitHubApiError(422, path, '{"message":"Validation Failed"}');
               return [];
@@ -898,7 +898,7 @@ describe('an issue a job files once', () => {
     store.repos = [{ name: 'testbed', fullName: 'janedoe/testbed' }];
 
     const [line] = (await scheduler.run('deps')).actions;
-    expect(line).toMatch(/^would file "Weekly dependency update" \(\S+ is not connected to GitHub\. Run: fleetadlc auth login --bot \S+\)$/);
+    expect(line).toMatch(/^would file "Weekly dependency update" \(\S+ is not connected to GitHub\. Run: openadlc auth login --bot \S+\)$/);
   });
 
   it('files nothing when the open issues could not be read', async () => {
@@ -939,15 +939,15 @@ function nightly(
 describe('the nightly QA job', () => {
   beforeEach(() => {
     store.bots = [{ id: 'bot-vega', name: 'vega', role: 'qa' }];
-    store.repos = [{ name: 'fleetadlc', fullName: 'janedoe/fleetadlc' }];
+    store.repos = [{ name: 'openadlc', fullName: 'janedoe/openadlc' }];
   });
 
   it('opens a QA run per repository on its testing thread', async () => {
     const { scheduler, open } = nightly('https://testing.example');
 
     const result = await scheduler.run('qa');
-    expect(open.mock.calls[0]?.[0]).toMatchObject({ bot: 'vega', kind: 'qa', skill: 'qa', subjectRef: 'fleetadlc#testing' });
-    expect(result.actions).toEqual(['opened a QA run on fleetadlc#testing against https://testing.example (task task-qa)']);
+    expect(open.mock.calls[0]?.[0]).toMatchObject({ bot: 'vega', kind: 'qa', skill: 'qa', subjectRef: 'openadlc#testing' });
+    expect(result.actions).toEqual(['opened a QA run on openadlc#testing against https://testing.example (task task-qa)']);
   });
 
   it('refuses without a testing environment, in the words a promote repeats', async () => {
@@ -955,7 +955,7 @@ describe('the nightly QA job', () => {
 
     const result = await scheduler.run('qa');
     expect(open).not.toHaveBeenCalled();
-    expect(result.actions).toEqual(["no testing environment is configured: set testing.url in the repository's .github/fleetadlc.yml (FLEETADLC_TESTING_URL is the deprecated fallback); not opening a QA task"]);
+    expect(result.actions).toEqual(["no testing environment is configured: set testing.url in the repository's .github/openadlc.yml (OPENADLC_TESTING_URL is the deprecated fallback); not opening a QA task"]);
   });
 
   it('does not say it opened a QA run that hostd refused', async () => {
@@ -967,7 +967,7 @@ describe('the nightly QA job', () => {
     );
 
     const result = await scheduler.run('qa');
-    expect(result.actions).toEqual(['fleetadlc#testing: hostd refused: no image for vega']);
+    expect(result.actions).toEqual(['openadlc#testing: hostd refused: no image for vega']);
   });
 });
 
@@ -1037,14 +1037,14 @@ describe('old GitHub deliveries', () => {
     store.pruned = [];
     const scheduler = new Scheduler({ eventRetentionDays: 0 } as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, null);
     const result = await scheduler.run('events');
-    expect(result.actions).toEqual(['GitHub deliveries are kept for good (FLEETADLC_EVENT_RETENTION_DAYS=0)']);
+    expect(result.actions).toEqual(['GitHub deliveries are kept for good (OPENADLC_EVENT_RETENTION_DAYS=0)']);
     expect(store.pruned).toEqual([]);
   });
 });
 
 describe('reconciling', () => {
   it('lets the crew into every repository as well, and says what changed', async () => {
-    const ensureAll = vi.fn(async () => ['fleetadlc-atlas-janedoe can work in acme/web']);
+    const ensureAll = vi.fn(async () => ['openadlc-atlas-janedoe can work in acme/web']);
     const scheduler = new Scheduler(
       {} as never,
       {} as never,
@@ -1061,11 +1061,11 @@ describe('reconciling', () => {
     const result = await scheduler.run('reconcile');
 
     expect(ensureAll).toHaveBeenCalledWith('reconcile');
-    expect(result.actions).toEqual(['nothing has drifted: the board matches GitHub', 'fleetadlc-atlas-janedoe can work in acme/web']);
+    expect(result.actions).toEqual(['nothing has drifted: the board matches GitHub', 'openadlc-atlas-janedoe can work in acme/web']);
   });
 
   it('says which repository’s lease it expired, and that it expired rather than was released', async () => {
-    const { leases } = await import('@fleetadlc/db');
+    const { leases } = await import('@openadlc/db');
     vi.mocked(leases.expireStaleLeases).mockResolvedValueOnce([{ repoId: 'repo-9', issueNumber: 12 }] as never);
     store.repos = [{ id: 'repo-9', name: 'widgets' }];
     const scheduler = new Scheduler({} as never, {} as never, {} as never, { run: async () => [] } as never, {} as never, {} as never, {} as never, null);
@@ -1177,8 +1177,8 @@ describe('the status issue', () => {
     store.repos = active;
   });
 
-  it('is the issue in the repository FLEETADLC_STATUS_ISSUE names, whatever sorts first', async () => {
-    vi.stubEnv('FLEETADLC_STATUS_ISSUE', 'org/web#12');
+  it('is the issue in the repository OPENADLC_STATUS_ISSUE names, whatever sorts first', async () => {
+    vi.stubEnv('OPENADLC_STATUS_ISSUE', 'org/web#12');
     try {
       const updateStatusIssue = vi.fn(async () => true);
       const comment = vi.fn(async () => undefined);
@@ -1196,7 +1196,7 @@ describe('the status issue', () => {
   });
 
   it('is not written for a bare number, even on an install with one repository, and says what to set', async () => {
-    vi.stubEnv('FLEETADLC_STATUS_ISSUE', '7');
+    vi.stubEnv('OPENADLC_STATUS_ISSUE', '7');
     try {
       for (const managed of [active, [active[1]!]]) {
         store.repos = managed;
@@ -1210,7 +1210,7 @@ describe('the status issue', () => {
 
         const reconciled = await schedulerWith(automation, drifted).run('reconcile');
         expect(comment).not.toHaveBeenCalled();
-        expect(reconciled.actions.join('\n')).toContain('did not post the drift to the status issue: FLEETADLC_STATUS_ISSUE is "7"; it must be');
+        expect(reconciled.actions.join('\n')).toContain('did not post the drift to the status issue: OPENADLC_STATUS_ISSUE is "7"; it must be');
       }
     } finally {
       vi.unstubAllEnvs();
@@ -1218,7 +1218,7 @@ describe('the status issue', () => {
   });
 
   it('gets only its own repository’s drift, and a count of the rest', async () => {
-    vi.stubEnv('FLEETADLC_STATUS_ISSUE', 'org/web#12');
+    vi.stubEnv('OPENADLC_STATUS_ISSUE', 'org/web#12');
     try {
       const comment = vi.fn(async (_repo: string, _number: number, _body: string) => undefined);
       const reconciler = {
@@ -1240,17 +1240,17 @@ describe('the status issue', () => {
 });
 
 describe('the gates of pull requests in review, worked out again', () => {
-  // fleetadlc-testbed#2 had both reviews in and a gate held on a security review
+  // openadlc-testbed#2 had both reviews in and a gate held on a security review
   // a later decision no longer asked for. The gate is only worked out when
   // something happens to the pull request, and nothing more was coming.
-  const BUILT = { user: { login: 'fleetadlc-atlas-janedoe' }, author_association: 'COLLABORATOR' };
+  const BUILT = { user: { login: 'openadlc-atlas-janedoe' }, author_association: 'COLLABORATOR' };
 
   function sweep(options: { standing: { state: string; description: string } | null; gate: { state: 'pending' | 'success'; description: string } }) {
-    store.repos = [{ id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' }];
+    store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
     store.issues = [
       // As the live install had it: nothing had ever recorded the pull request.
-      { repoName: 'fleetadlc-testbed', number: 1, prNumber: null, stage: 'review', labels: ['adlc:review'] },
-      { repoName: 'fleetadlc-testbed', number: 3, prNumber: null, stage: 'build', labels: ['adlc:build'] },
+      { repoName: 'openadlc-testbed', number: 1, prNumber: null, stage: 'review', labels: ['adlc:review'] },
+      { repoName: 'openadlc-testbed', number: 3, prNumber: null, stage: 'build', labels: ['adlc:build'] },
     ];
     const published: { state: string; description: string }[] = [];
     const entered: { repoName: string; prNumber: number; headSha: string }[] = [];
@@ -1260,7 +1260,7 @@ describe('the gates of pull requests in review, worked out again', () => {
         draft: false,
         merged: false,
         state: 'open',
-        headRef: 'agent/fleetadlc-atlas-janedoe/1-issue-1',
+        headRef: 'agent/openadlc-atlas-janedoe/1-issue-1',
         headSha: 'abc123',
         baseRef: 'main',
         labels: [],
@@ -1268,12 +1268,12 @@ describe('the gates of pull requests in review, worked out again', () => {
       request: async (_method: string, path: string) =>
         path.includes('/pulls?state=open')
           ? [
-              { number: 2, draft: false, head: { ref: 'agent/fleetadlc-atlas-janedoe/1-issue-1', sha: 'abc123', repo: { full_name: 'janedoe/fleetadlc-testbed' } }, base: { ref: 'main' }, labels: [], ...BUILT },
+              { number: 2, draft: false, head: { ref: 'agent/openadlc-atlas-janedoe/1-issue-1', sha: 'abc123', repo: { full_name: 'janedoe/openadlc-testbed' } }, base: { ref: 'main' }, labels: [], ...BUILT },
               // Not an issue's branch, or not an issue in review: left alone.
-              { number: 9, draft: false, head: { ref: 'dependabot/npm/x', sha: 'def456', repo: { full_name: 'janedoe/fleetadlc-testbed' } }, base: { ref: 'main' }, labels: [], ...BUILT },
-              { number: 10, draft: false, head: { ref: 'agent/fleetadlc-atlas-janedoe/3-issue-3', sha: 'fed789', repo: { full_name: 'janedoe/fleetadlc-testbed' } }, base: { ref: 'main' }, labels: [], ...BUILT },
+              { number: 9, draft: false, head: { ref: 'dependabot/npm/x', sha: 'def456', repo: { full_name: 'janedoe/openadlc-testbed' } }, base: { ref: 'main' }, labels: [], ...BUILT },
+              { number: 10, draft: false, head: { ref: 'agent/openadlc-atlas-janedoe/3-issue-3', sha: 'fed789', repo: { full_name: 'janedoe/openadlc-testbed' } }, base: { ref: 'main' }, labels: [], ...BUILT },
               // A stranger's fork, its branch named like the builder's: not the issue's.
-              { number: 11, draft: false, head: { ref: 'agent/fleetadlc-atlas-janedoe/1-issue-1', sha: 'bad000', repo: { full_name: 'stranger/fleetadlc-testbed' } }, base: { ref: 'main' }, labels: [], user: { login: 'stranger' }, author_association: 'NONE' },
+              { number: 11, draft: false, head: { ref: 'agent/openadlc-atlas-janedoe/1-issue-1', sha: 'bad000', repo: { full_name: 'stranger/openadlc-testbed' } }, base: { ref: 'main' }, labels: [], user: { login: 'stranger' }, author_association: 'NONE' },
             ]
           : { statuses: options.standing ? [{ context: 'review-gate', ...options.standing }] : [] },
     };
@@ -1282,7 +1282,7 @@ describe('the gates of pull requests in review, worked out again', () => {
       {} as never,
       {
         actors: { asBot: async () => github },
-        reviewStanding: async () => ({ gate: options.gate, decision: { lead: 'fleetadlc-sydney-janedoe', reviewers: [], approvers: [] }, posted: [], approved: [], leadDue: null }),
+        reviewStanding: async () => ({ gate: options.gate, decision: { lead: 'openadlc-sydney-janedoe', reviewers: [], approvers: [] }, posted: [], approved: [], leadDue: null }),
         setReviewGate: async (input: { state: string; description: string }) => {
           published.push({ state: input.state, description: input.description });
           return { state: input.state, description: input.description };
@@ -1302,13 +1302,13 @@ describe('the gates of pull requests in review, worked out again', () => {
 
   it('publishes a gate that passes now, and puts the pull request in the merge line', async () => {
     const { scheduler, published, entered } = sweep({
-      standing: { state: 'pending', description: 'waiting on fleetadlc-cipher-janedoe' },
+      standing: { state: 'pending', description: 'waiting on openadlc-cipher-janedoe' },
       gate: { state: 'success', description: 'all required reviews are in' },
     });
 
-    expect(await scheduler.settleGates()).toEqual(['fleetadlc-testbed#2: review gate is success (all required reviews are in)']);
+    expect(await scheduler.settleGates()).toEqual(['openadlc-testbed#2: review gate is success (all required reviews are in)']);
     expect(published).toEqual([{ state: 'success', description: 'all required reviews are in' }]);
-    expect(entered).toEqual([{ repoName: 'fleetadlc-testbed', prNumber: 2, headSha: 'abc123' }]);
+    expect(entered).toEqual([{ repoName: 'openadlc-testbed', prNumber: 2, headSha: 'abc123' }]);
   });
 
   it('finds the pull request from GitHub, and records it on the issue that had none', async () => {
@@ -1316,7 +1316,7 @@ describe('the gates of pull requests in review, worked out again', () => {
       standing: { state: 'pending', description: 'waiting on irisexampleco' },
       gate: { state: 'pending', description: 'waiting on irisexampleco' },
     });
-    const { issues } = await import('@fleetadlc/db');
+    const { issues } = await import('@openadlc/db');
     vi.mocked(issues.setPullRequestNumber).mockClear();
 
     await scheduler.settleGates();
@@ -1340,22 +1340,22 @@ describe('the gates of pull requests in review, worked out again', () => {
     // refuses the fallback too, and that stopped the sweep for every
     // repository after it.
     store.repos = [
-      { id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' },
+      { id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' },
       { id: 'repo-2', name: 'api', fullName: 'exampleco/api' },
     ];
-    store.issues = [{ repoName: 'fleetadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
+    store.issues = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
     const pullOf = (fullName: string, number: number) => ({
       number,
       draft: false,
-      head: { ref: 'agent/fleetadlc-atlas-janedoe/1-issue-1', sha: `sha-${number}`, repo: { full_name: fullName } },
+      head: { ref: 'agent/openadlc-atlas-janedoe/1-issue-1', sha: `sha-${number}`, repo: { full_name: fullName } },
       base: { ref: 'main' },
       labels: [],
       ...BUILT,
     });
     const github = {
       request: async (_method: string, path: string) =>
-        path.includes('janedoe/fleetadlc-testbed/pulls?state=open')
-          ? [pullOf('janedoe/fleetadlc-testbed', 2)]
+        path.includes('janedoe/openadlc-testbed/pulls?state=open')
+          ? [pullOf('janedoe/openadlc-testbed', 2)]
           : path.includes('exampleco/api/pulls?state=open')
             ? [pullOf('exampleco/api', 5)]
             : { statuses: [] },
@@ -1367,15 +1367,15 @@ describe('the gates of pull requests in review, worked out again', () => {
       {
         actors: { asBot: async () => github },
         reviewStanding: async () => ({
-          gate: { state: 'pending', description: 'waiting on fleetadlc-sydney-janedoe' },
-          decision: { lead: 'fleetadlc-sydney-janedoe', reviewers: [], approvers: [] },
+          gate: { state: 'pending', description: 'waiting on openadlc-sydney-janedoe' },
+          decision: { lead: 'openadlc-sydney-janedoe', reviewers: [], approvers: [] },
           posted: [],
           approved: [],
           leadDue: null,
         }),
         setReviewGate: async (input: { repoFullName: string; state: string; description: string }) => {
           asked.push(input.repoFullName);
-          if (input.repoFullName === 'janedoe/fleetadlc-testbed') throw new Error('Resource not accessible by integration');
+          if (input.repoFullName === 'janedoe/openadlc-testbed') throw new Error('Resource not accessible by integration');
           return { state: input.state, description: input.description };
         },
       } as never,
@@ -1387,28 +1387,28 @@ describe('the gates of pull requests in review, worked out again', () => {
 
     const actions = await scheduler.settleGates();
 
-    expect(actions).toContain('fleetadlc-testbed#2: could not settle the review gate: Resource not accessible by integration');
-    expect(asked).toEqual(['janedoe/fleetadlc-testbed', 'exampleco/api']);
+    expect(actions).toContain('openadlc-testbed#2: could not settle the review gate: Resource not accessible by integration');
+    expect(asked).toEqual(['janedoe/openadlc-testbed', 'exampleco/api']);
   });
 });
 
 describe('a gate waiting on a reviewer that cannot sign in', () => {
-  const BRANCH = 'agent/fleetadlc-atlas-janedoe/1-issue-1';
-  const CIPHER = { id: 'bot-cipher', name: 'fleetadlc-cipher-janedoe', githubLogin: 'fleetadlc-cipher-janedoe' };
+  const BRANCH = 'agent/openadlc-atlas-janedoe/1-issue-1';
+  const CIPHER = { id: 'bot-cipher', name: 'openadlc-cipher-janedoe', githubLogin: 'openadlc-cipher-janedoe' };
   const SIGNED_OUT = {
     id: 'bot-sign-in:bot-cipher',
     state: 'failing',
-    title: 'fleetadlc-cipher-janedoe is signed out of GitHub',
-    detail: 'Reconnect fleetadlc-cipher-janedoe from Settings → GitHub → Connected accounts.',
+    title: 'openadlc-cipher-janedoe is signed out of GitHub',
+    detail: 'Reconnect openadlc-cipher-janedoe from Settings → GitHub → Connected accounts.',
   };
-  const WAITING = { state: 'pending' as const, description: 'waiting on fleetadlc-cipher-janedoe' };
+  const WAITING = { state: 'pending' as const, description: 'waiting on openadlc-cipher-janedoe' };
 
   type Opened = { bot: string; kind: string; subjectRef: string; branch?: string | null; issueNumber?: number | null };
 
-  // Pull request #2 of fleetadlc-testbed is issue #1's, and is in review.
+  // Pull request #2 of openadlc-testbed is issue #1's, and is in review.
   function sweeping(gate: { state: 'pending' | 'success'; description: string }, standing: { state: string; description: string } | null) {
-    store.repos = [{ id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' }];
-    store.issues = [{ repoName: 'fleetadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
+    store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
+    store.issues = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
     store.bots = [CIPHER];
     const published: { state: string; description: string }[] = [];
     const opened: Opened[] = [];
@@ -1424,10 +1424,10 @@ describe('a gate waiting on a reviewer that cannot sign in', () => {
               {
                 number: 2,
                 draft: false,
-                head: { ref: BRANCH, sha: 'abc123', repo: { full_name: 'janedoe/fleetadlc-testbed' } },
+                head: { ref: BRANCH, sha: 'abc123', repo: { full_name: 'janedoe/openadlc-testbed' } },
                 base: { ref: 'main' },
                 labels: [],
-                user: { login: 'fleetadlc-atlas-janedoe' },
+                user: { login: 'openadlc-atlas-janedoe' },
                 author_association: 'COLLABORATOR',
               },
             ]
@@ -1438,7 +1438,7 @@ describe('a gate waiting on a reviewer that cannot sign in', () => {
       {} as never,
       {
         actors: { asBot: async () => github },
-        reviewStanding: async () => ({ gate, decision: { lead: 'fleetadlc-sydney-janedoe', reviewers: [], approvers: [] }, posted: [], approved: [], leadDue: null }),
+        reviewStanding: async () => ({ gate, decision: { lead: 'openadlc-sydney-janedoe', reviewers: [], approvers: [] }, posted: [], approved: [], leadDue: null }),
         setReviewGate: async (input: { state: string; description: string }) => {
           published.push({ state: input.state, description: input.description });
           return { state: input.state, description: input.description };
@@ -1459,23 +1459,23 @@ describe('a gate waiting on a reviewer that cannot sign in', () => {
     await scheduler.settleGates();
 
     expect(published).toEqual([
-      { state: 'pending', description: 'waiting on the reviewer account: fleetadlc-cipher-janedoe cannot sign in to GitHub' },
+      { state: 'pending', description: 'waiting on the reviewer account: openadlc-cipher-janedoe cannot sign in to GitHub' },
     ]);
     expect(opened).toEqual([]);
   });
 
   it('starts the review by itself, and names the seat in the gate again, once the sign-in works', async () => {
     store.health = [{ ...SIGNED_OUT, state: 'passing' }];
-    const standing = { state: 'pending', description: 'waiting on the reviewer account: fleetadlc-cipher-janedoe cannot sign in to GitHub' };
+    const standing = { state: 'pending', description: 'waiting on the reviewer account: openadlc-cipher-janedoe cannot sign in to GitHub' };
     const { scheduler, published, opened } = sweeping(WAITING, standing);
 
     const actions = await scheduler.settleGates();
 
-    expect(published).toEqual([{ state: 'pending', description: 'waiting on fleetadlc-cipher-janedoe' }]);
+    expect(published).toEqual([{ state: 'pending', description: 'waiting on openadlc-cipher-janedoe' }]);
     expect(opened).toEqual([
-      expect.objectContaining({ bot: 'fleetadlc-cipher-janedoe', kind: 'review', subjectRef: 'fleetadlc-testbed#2', branch: BRANCH, issueNumber: 1 }),
+      expect.objectContaining({ bot: 'openadlc-cipher-janedoe', kind: 'review', subjectRef: 'openadlc-testbed#2', branch: BRANCH, issueNumber: 1 }),
     ]);
-    expect(actions).toContainEqual(expect.stringContaining('fleetadlc-testbed#2: started fleetadlc-cipher-janedoe’s review'));
+    expect(actions).toContainEqual(expect.stringContaining('openadlc-testbed#2: started openadlc-cipher-janedoe’s review'));
   });
 
   it('starts the review of a seat that could always sign in, though no event is coming for it', async () => {
@@ -1488,7 +1488,7 @@ describe('a gate waiting on a reviewer that cannot sign in', () => {
 
   it('leaves a seat that has a review under way, or one that ran and failed, alone', async () => {
     for (const state of ['running', 'failed']) {
-      store.reviewTasks = [{ subjectRef: 'fleetadlc-testbed#2', state, botId: 'bot-cipher' }];
+      store.reviewTasks = [{ subjectRef: 'openadlc-testbed#2', state, botId: 'bot-cipher' }];
       const { scheduler, opened } = sweeping(WAITING, WAITING);
       await scheduler.settleGates();
       expect(opened).toEqual([]);
@@ -1498,23 +1498,23 @@ describe('a gate waiting on a reviewer that cannot sign in', () => {
   it('starts a seat on round two whose review could not start at the push, though it reviewed round one', async () => {
     // Round one's review is done; round two's open found the seat busy and
     // recorded nothing. The seat now has room.
-    store.reviewTasks = [{ subjectRef: 'fleetadlc-testbed#2', state: 'done', botId: 'bot-cipher', createdAt: '2026-10-01T09:00:00.000Z' }];
+    store.reviewTasks = [{ subjectRef: 'openadlc-testbed#2', state: 'done', botId: 'bot-cipher', createdAt: '2026-10-01T09:00:00.000Z' }];
     store.roundAt = '2026-10-01T10:00:00.000Z';
     const { scheduler, opened } = sweeping(WAITING, WAITING);
 
     const actions = await scheduler.settleGates();
 
-    expect(opened).toEqual([expect.objectContaining({ bot: 'fleetadlc-cipher-janedoe', kind: 'review', subjectRef: 'fleetadlc-testbed#2' })]);
-    expect(actions).toContainEqual(expect.stringContaining('started fleetadlc-cipher-janedoe’s review'));
+    expect(opened).toEqual([expect.objectContaining({ bot: 'openadlc-cipher-janedoe', kind: 'review', subjectRef: 'openadlc-testbed#2' })]);
+    expect(actions).toContainEqual(expect.stringContaining('started openadlc-cipher-janedoe’s review'));
   });
 
   it('waits on a seat that is missing from its repository, saying so', async () => {
-    store.health = [{ id: 'bot-access:bot-cipher:fleetadlc-testbed', state: 'failing', title: 'not in the repository', detail: 'Invite it.' }];
+    store.health = [{ id: 'bot-access:bot-cipher:openadlc-testbed', state: 'failing', title: 'not in the repository', detail: 'Invite it.' }];
     const { scheduler, published, opened } = sweeping(WAITING, WAITING);
 
     await scheduler.settleGates();
 
-    expect(published[0]?.description).toBe('waiting on the reviewer account: fleetadlc-cipher-janedoe cannot work in fleetadlc-testbed');
+    expect(published[0]?.description).toBe('waiting on the reviewer account: openadlc-cipher-janedoe cannot work in openadlc-testbed');
     expect(opened).toEqual([]);
   });
 
@@ -1538,7 +1538,7 @@ describe('a gate waiting on a reviewer that cannot sign in', () => {
 
   it('does not hold a scripted install back for accounts it does not use', async () => {
     store.health = [SIGNED_OUT];
-    vi.stubEnv('FLEETADLC_SCRIPTED_ENGINES', '1');
+    vi.stubEnv('OPENADLC_SCRIPTED_ENGINES', '1');
     try {
       const { scheduler, opened } = sweeping(WAITING, WAITING);
       await scheduler.settleGates();
@@ -1550,18 +1550,18 @@ describe('a gate waiting on a reviewer that cannot sign in', () => {
 });
 
 describe('the lead’s review, asked again by the sweep', () => {
-  const BRANCH = 'agent/fleetadlc-atlas-janedoe/1-issue-1';
-  const LEAD = { id: 'bot-lead', name: 'fleetadlc-sydney-janedoe', githubLogin: 'fleetadlc-sydney-janedoe' };
+  const BRANCH = 'agent/openadlc-atlas-janedoe/1-issue-1';
+  const LEAD = { id: 'bot-lead', name: 'openadlc-sydney-janedoe', githubLogin: 'openadlc-sydney-janedoe' };
   const HEAD = 'c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2';
-  const WAITING = { state: 'pending' as const, description: 'waiting on fleetadlc-sydney-janedoe' };
+  const WAITING = { state: 'pending' as const, description: 'waiting on openadlc-sydney-janedoe' };
 
   type Opened = { bot: string; subjectRef: string; extraContext?: { name: string }[] };
 
-  // Pull request #2 of fleetadlc-testbed is issue #1's, in review, and only the
+  // Pull request #2 of openadlc-testbed is issue #1's, in review, and only the
   // lead reviews it (a revert).
   function sweeping(leadDue: { seat: string; since: string | null } | null) {
-    store.repos = [{ id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' }];
-    store.issues = [{ repoName: 'fleetadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
+    store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
+    store.issues = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
     store.bots = [LEAD];
     const opened: Opened[] = [];
     const taskService = new TaskService({} as never, {} as never, {} as never);
@@ -1576,10 +1576,10 @@ describe('the lead’s review, asked again by the sweep', () => {
               {
                 number: 2,
                 draft: false,
-                head: { ref: BRANCH, sha: HEAD, repo: { full_name: 'janedoe/fleetadlc-testbed' } },
+                head: { ref: BRANCH, sha: HEAD, repo: { full_name: 'janedoe/openadlc-testbed' } },
                 base: { ref: 'main' },
                 labels: [{ name: 'deps' }],
-                user: { login: 'fleetadlc-atlas-janedoe' },
+                user: { login: 'openadlc-atlas-janedoe' },
                 author_association: 'COLLABORATOR',
               },
             ]
@@ -1610,17 +1610,17 @@ describe('the lead’s review, asked again by the sweep', () => {
   it('a lead-only pull request in round 2 is asked again by the sweep', async () => {
     // Round two began at 10:00 and the lead was busy then, so no task was
     // recorded; its round-one review is done. That review was taken for this one.
-    store.reviewTasks = [{ subjectRef: 'fleetadlc-testbed#2', state: 'done', botId: LEAD.id, createdAt: '2026-10-01T09:00:00.000Z' }];
+    store.reviewTasks = [{ subjectRef: 'openadlc-testbed#2', state: 'done', botId: LEAD.id, createdAt: '2026-10-01T09:00:00.000Z' }];
     const { scheduler, opened } = sweeping({ seat: LEAD.name, since: '2026-10-01T10:00:00.000Z' });
 
     const actions = await scheduler.settleGates();
 
-    expect(opened).toEqual([expect.objectContaining({ bot: LEAD.name, subjectRef: 'fleetadlc-testbed#2' })]);
+    expect(opened).toEqual([expect.objectContaining({ bot: LEAD.name, subjectRef: 'openadlc-testbed#2' })]);
     expect(actions).toContainEqual(expect.stringContaining('the lead’s, last'));
   });
 
   it('does not ask the lead twice for one diff', async () => {
-    store.reviewTasks = [{ subjectRef: 'fleetadlc-testbed#2', state: 'done', botId: LEAD.id, createdAt: '2026-10-01T10:00:05.000Z' }];
+    store.reviewTasks = [{ subjectRef: 'openadlc-testbed#2', state: 'done', botId: LEAD.id, createdAt: '2026-10-01T10:00:05.000Z' }];
     const { scheduler, opened } = sweeping({ seat: LEAD.name, since: '2026-10-01T10:00:00.000Z' });
 
     await scheduler.settleGates();
@@ -1629,11 +1629,11 @@ describe('the lead’s review, asked again by the sweep', () => {
   });
 
   it('opens the re-check of a lead-only resolution the lead was busy for at the push, with its brief', async () => {
-    store.reviewTasks = [{ subjectRef: 'fleetadlc-testbed#2', state: 'done', botId: LEAD.id, createdAt: '2026-10-01T09:00:00.000Z' }];
+    store.reviewTasks = [{ subjectRef: 'openadlc-testbed#2', state: 'done', botId: LEAD.id, createdAt: '2026-10-01T09:00:00.000Z' }];
     store.events = [
       {
         type: 'conflict.resolved',
-        payload: { repo: 'fleetadlc-testbed', pr: 2, issue: 1, files: ['Makefile'], review: 'lead-only', from: 'b0'.repeat(20), to: HEAD, at: '2026-10-01T10:00:00.000Z' },
+        payload: { repo: 'openadlc-testbed', pr: 2, issue: 1, files: ['Makefile'], review: 'lead-only', from: 'b0'.repeat(20), to: HEAD, at: '2026-10-01T10:00:00.000Z' },
         at: '2026-10-01T10:00:00.000Z',
       },
     ];
@@ -1643,11 +1643,11 @@ describe('the lead’s review, asked again by the sweep', () => {
 
     await scheduler.settleGates();
     expect(opened).toEqual([
-      expect.objectContaining({ bot: LEAD.name, subjectRef: 'fleetadlc-testbed#2', extraContext: [expect.objectContaining({ name: 'resolution-check.md' })] }),
+      expect.objectContaining({ bot: LEAD.name, subjectRef: 'openadlc-testbed#2', extraContext: [expect.objectContaining({ name: 'resolution-check.md' })] }),
     ]);
 
     // Opened once: the next sweep finds it under way.
-    store.reviewTasks.push({ subjectRef: 'fleetadlc-testbed#2', state: 'running', botId: LEAD.id, createdAt: '2026-10-01T10:05:00.000Z' });
+    store.reviewTasks.push({ subjectRef: 'openadlc-testbed#2', state: 'running', botId: LEAD.id, createdAt: '2026-10-01T10:05:00.000Z' });
     await scheduler.settleGates();
     expect(opened).toHaveLength(1);
   });
@@ -1664,7 +1664,7 @@ describe('a task that failed for something a health check proves, once that chec
       repoId: 'repo-1',
       kind: 'review',
       subjectType: 'pr',
-      subjectRef: 'fleetadlc-testbed#2',
+      subjectRef: 'openadlc-testbed#2',
       state: 'failed',
       startedAt: '2026-09-29T10:00:00.000Z',
       endedAt: '2026-09-29T10:05:00.000Z',
@@ -1676,11 +1676,11 @@ describe('a task that failed for something a health check proves, once that chec
   }
 
   function recovering() {
-    store.repos = [{ id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' }];
-    store.issues = [{ repoName: 'fleetadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
+    store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
+    store.issues = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
     const retry = vi.fn(async (_id: string, _actor: string) => {
       store.tasks.push(failed({ id: 't2', state: 'running', endedAt: null, exitReason: null, createdAt: '2026-09-29T12:00:01.000Z' }));
-      return { task: { taskId: 't2' }, bot: 'fleetadlc-cipher-janedoe' };
+      return { task: { taskId: 't2' }, bot: 'openadlc-cipher-janedoe' };
     });
     return { retry, run: (fixed: string[]) => retryAfterRecovery(fixed, { retry, now: () => NOW }) };
   }
@@ -1693,13 +1693,13 @@ describe('a task that failed for something a health check proves, once that chec
 
     expect(retry).toHaveBeenCalledTimes(1);
     expect(retry).toHaveBeenCalledWith('t1', RECOVERY_ACTOR);
-    expect(actions).toEqual(['fleetadlc-testbed#2: fleetadlc-cipher-janedoe’s review run again, now that bot-sign-in:bot-cipher passes']);
+    expect(actions).toEqual(['openadlc-testbed#2: openadlc-cipher-janedoe’s review run again, now that bot-sign-in:bot-cipher passes']);
     expect(store.audits).toEqual([
       {
         actor: RECOVERY_ACTOR,
         action: 'task.auto_retried',
-        target: 'fleetadlc-testbed#2',
-        payload: { retried: 't1', task: 't2', bot: 'fleetadlc-cipher-janedoe', kind: 'review', cause: 'bot-sign-in:bot-cipher' },
+        target: 'openadlc-testbed#2',
+        payload: { retried: 't1', task: 't2', bot: 'openadlc-cipher-janedoe', kind: 'review', cause: 'bot-sign-in:bot-cipher' },
       },
     ]);
   });
@@ -1742,10 +1742,10 @@ describe('a task that failed for something a health check proves, once that chec
   it('gives the claim back when the retry is refused, so the next recovery may try', async () => {
     store.tasks = [failed()];
     const { retry, run } = recovering();
-    retry.mockRejectedValueOnce(new Error('fleetadlc-cipher-janedoe is busy with another task'));
+    retry.mockRejectedValueOnce(new Error('openadlc-cipher-janedoe is busy with another task'));
 
     const first = await run(['bot-sign-in:bot-cipher']);
-    expect(first).toEqual(['fleetadlc-testbed#2: not run again (fleetadlc-cipher-janedoe is busy with another task)']);
+    expect(first).toEqual(['openadlc-testbed#2: not run again (openadlc-cipher-janedoe is busy with another task)']);
     expect(store.tasks[0]?.autoRetriedAt).toBeNull();
     expect(store.audits).toEqual([]);
 
@@ -1762,18 +1762,18 @@ describe('a task that failed for something a health check proves, once that chec
     expect(retry).not.toHaveBeenCalled();
   });
 
-  it('is left alone while its issue is labelled fleetadlc:ignore, and run again once the label is off', async () => {
+  it('is left alone while its issue is labelled openadlc:ignore, and run again once the label is off', async () => {
     // A person told the crew to leave the issue alone; the recovery started
     // its failed review again anyway.
     store.tasks = [failed()];
     const { retry, run } = recovering();
-    store.issues = [{ repoName: 'fleetadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: ['fleetadlc:ignore'] }];
+    store.issues = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: ['openadlc:ignore'] }];
 
     expect(await run(['bot-sign-in:bot-cipher'])).toEqual([]);
     expect(retry).not.toHaveBeenCalled();
     expect(store.tasks[0]?.autoRetriedAt).toBeNull();
 
-    store.issues = [{ repoName: 'fleetadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
+    store.issues = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
     await run(['bot-sign-in:bot-cipher']);
     expect(retry).toHaveBeenCalledWith('t1', RECOVERY_ACTOR);
   });
@@ -1806,10 +1806,10 @@ describe('a task that failed for something a health check proves, once that chec
   });
 
   it('is run again when the seat is let into the repository', async () => {
-    store.tasks = [failed({ exitReason: 'remote: Permission to janedoe/fleetadlc-testbed.git denied to fleetadlc-cipher-janedoe.' })];
+    store.tasks = [failed({ exitReason: 'remote: Permission to janedoe/openadlc-testbed.git denied to openadlc-cipher-janedoe.' })];
     const { retry, run } = recovering();
 
-    await run(['bot-access:bot-cipher:fleetadlc-testbed']);
+    await run(['bot-access:bot-cipher:openadlc-testbed']);
 
     expect(retry).toHaveBeenCalledTimes(1);
   });
@@ -1817,7 +1817,7 @@ describe('a task that failed for something a health check proves, once that chec
   it('is run again, stopped or failed, when the host comes back', async () => {
     store.tasks = [
       failed({ id: 't-stopped', state: 'stopped', exitReason: 'host stopped reporting' }),
-      failed({ id: 't-other', botId: 'bot-lead', subjectRef: 'fleetadlc-testbed#5', exitReason: 'hostd did not answer' }),
+      failed({ id: 't-other', botId: 'bot-lead', subjectRef: 'openadlc-testbed#5', exitReason: 'hostd did not answer' }),
     ];
     const { retry, run } = recovering();
 
@@ -1838,7 +1838,7 @@ describe('a task that failed for something a health check proves, once that chec
   it('is left alone when its card has moved on past the stage it was for', async () => {
     store.tasks = [failed()];
     const { retry, run } = recovering();
-    store.issues = [{ repoName: 'fleetadlc-testbed', number: 1, prNumber: 2, stage: 'merged', labels: [] }];
+    store.issues = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2, stage: 'merged', labels: [] }];
 
     await run(['bot-sign-in:bot-cipher']);
 
@@ -1887,21 +1887,21 @@ describe('the sweep that comes back for a failed task the recovery could not run
 
   // Each retry starts a running task on the same subject, as `retryTask` does.
   function recovering() {
-    store.repos = [{ id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' }];
+    store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
     store.issues = [];
     let n = 0;
     const retry = vi.fn(async (id: string, _actor: string) => {
       const original = store.tasks.find((task) => task.id === id);
       const started = `retry-${++n}`;
       store.tasks.push({ ...original, id: started, state: 'running', endedAt: null, exitReason: null, createdAt: `2026-09-29T12:00:0${n}.000Z` });
-      return { task: { taskId: started }, bot: 'fleetadlc-cipher-janedoe' };
+      return { task: { taskId: started }, bot: 'openadlc-cipher-janedoe' };
     });
     const deps = { retry, now: () => NOW };
     return { retry, fixed: (ids: string[]) => retryAfterRecovery(ids, deps), sweep: () => retryAfterRecovery(null, deps) };
   }
 
   it('runs both of one seat’s failures from an outage, one at a time, each once', async () => {
-    store.tasks = [failed('t-a', 'fleetadlc-testbed#2'), failed('t-b', 'fleetadlc-testbed#3')];
+    store.tasks = [failed('t-a', 'openadlc-testbed#2'), failed('t-b', 'openadlc-testbed#3')];
     store.health = [SIGN_IN_FIXED];
     const { retry, fixed, sweep } = recovering();
 
@@ -1927,10 +1927,10 @@ describe('the sweep that comes back for a failed task the recovery could not run
   });
 
   it('runs a claim given back again on a later sweep', async () => {
-    store.tasks = [failed('t-a', 'fleetadlc-testbed#2')];
+    store.tasks = [failed('t-a', 'openadlc-testbed#2')];
     store.health = [SIGN_IN_FIXED];
     const { retry, fixed, sweep } = recovering();
-    retry.mockRejectedValueOnce(new Error('fleetadlc-cipher-janedoe was not started: OpenADLC’s host service is not answering.'));
+    retry.mockRejectedValueOnce(new Error('openadlc-cipher-janedoe was not started: OpenADLC’s host service is not answering.'));
 
     await fixed(['bot-sign-in:bot-cipher']);
     await sweep();
@@ -1940,7 +1940,7 @@ describe('the sweep that comes back for a failed task the recovery could not run
   });
 
   it('runs nothing whose check has not been put right since it failed', async () => {
-    store.tasks = [failed('t-a', 'fleetadlc-testbed#2')];
+    store.tasks = [failed('t-a', 'openadlc-testbed#2')];
     const { retry, sweep } = recovering();
 
     // Never failing, the check proves nothing was put right.
@@ -1958,11 +1958,11 @@ describe('the sweep that comes back for a failed task the recovery could not run
 
   it('runs a patch round that was recorded, not started, while the builder could not sign in', async () => {
     store.tasks = [
-      failed('t-patch', 'fleetadlc-testbed#2', {
+      failed('t-patch', 'openadlc-testbed#2', {
         kind: 'patch',
         startedAt: null,
         exitReason:
-          'fleetadlc-cipher-janedoe was not started: fleetadlc-cipher-janedoe cannot sign in to GitHub. Reconnect fleetadlc-cipher-janedoe from Settings → GitHub → Connected accounts.',
+          'openadlc-cipher-janedoe was not started: openadlc-cipher-janedoe cannot sign in to GitHub. Reconnect openadlc-cipher-janedoe from Settings → GitHub → Connected accounts.',
       }),
     ];
     store.health = [SIGN_IN_FIXED];
@@ -1971,7 +1971,7 @@ describe('the sweep that comes back for a failed task the recovery could not run
     const actions = await sweep();
 
     expect(retry.mock.calls.map(([id]) => id)).toEqual(['t-patch']);
-    expect(actions).toEqual(['fleetadlc-testbed#2: fleetadlc-cipher-janedoe’s patch run again, now that bot-sign-in:bot-cipher passes']);
+    expect(actions).toEqual(['openadlc-testbed#2: openadlc-cipher-janedoe’s patch run again, now that bot-sign-in:bot-cipher passes']);
   });
 
   it('runs once more a revert that was recorded but never started, and never the task its retry records', async () => {
@@ -1980,9 +1980,9 @@ describe('the sweep that comes back for a failed task the recovery could not run
     // task as it starts it, so it would never come back to spend the
     // authorisation.
     const NOT_SIGNED_IN =
-      'fleetadlc-cipher-janedoe was not started: fleetadlc-cipher-janedoe cannot sign in to GitHub. Reconnect fleetadlc-cipher-janedoe from Settings → GitHub → Connected accounts.';
+      'openadlc-cipher-janedoe was not started: openadlc-cipher-janedoe cannot sign in to GitHub. Reconnect openadlc-cipher-janedoe from Settings → GitHub → Connected accounts.';
     store.tasks = [
-      failed('t-revert', 'fleetadlc-testbed@deadbeef', {
+      failed('t-revert', 'openadlc-testbed@deadbeef', {
         kind: 'deploy',
         subjectType: 'merge',
         branch: 'system/revert-deadbeef',
@@ -1997,7 +1997,7 @@ describe('the sweep that comes back for a failed task the recovery could not run
     retry.mockImplementationOnce(async (id: string) => {
       const original = store.tasks.find((task) => task.id === id);
       store.tasks.push({ ...original, id: 'retry-recorded', state: 'failed', autoRetriedAt: null, endedAt: '2026-09-29T11:30:00.000Z' });
-      return { task: { taskId: 'retry-recorded' }, bot: 'fleetadlc-cipher-janedoe' };
+      return { task: { taskId: 'retry-recorded' }, bot: 'openadlc-cipher-janedoe' };
     });
 
     await sweep();
@@ -2011,27 +2011,27 @@ describe('the sweep that comes back for a failed task the recovery could not run
 
   describe('work a spending cap held', () => {
     const HELD =
-      'fleetadlc-cipher-janedoe was held at a spending cap: janedoe/fleetadlc-testbed has spent $200 of its $200 this month. ' +
+      'openadlc-cipher-janedoe was held at a spending cap: janedoe/openadlc-testbed has spent $200 of its $200 this month. ' +
       'It starts on its own once the cap allows it: raise the cap in Settings → Spending limits, or wait for the month to roll over.';
     const caps = { monthlyCapUsd: 1500, onCap: { stopLeasing: true } };
 
     function heldPatch() {
-      store.tasks = [failed('t-patch', 'fleetadlc-testbed#2', { kind: 'patch', startedAt: null, exitReason: HELD })];
+      store.tasks = [failed('t-patch', 'openadlc-testbed#2', { kind: 'patch', startedAt: null, exitReason: HELD })];
       store.health = [];
     }
 
     it('starts a patch round once the cap allows it, asking the cap for its own bot and repository', async () => {
       heldPatch();
       const { retry } = recovering();
-      const { spendingLimits } = await import('@fleetadlc/db');
+      const { spendingLimits } = await import('@openadlc/db');
       vi.mocked(spendingLimits.refusal).mockClear();
 
       const actions = await retryAfterRecovery(null, { retry, now: () => NOW, costs: caps });
 
       expect(retry.mock.calls.map(([id]) => id)).toEqual(['t-patch']);
-      expect(actions).toEqual(['fleetadlc-testbed#2: fleetadlc-cipher-janedoe’s patch started, now that the spending cap allows it']);
+      expect(actions).toEqual(['openadlc-testbed#2: openadlc-cipher-janedoe’s patch started, now that the spending cap allows it']);
       expect(spendingLimits.refusal).toHaveBeenCalledWith(
-        expect.objectContaining({ repoId: 'repo-1', repoLabel: 'janedoe/fleetadlc-testbed', botId: 'bot-cipher', onCap: caps.onCap }),
+        expect.objectContaining({ repoId: 'repo-1', repoLabel: 'janedoe/openadlc-testbed', botId: 'bot-cipher', onCap: caps.onCap }),
       );
       expect(store.audits).toContainEqual(
         expect.objectContaining({ action: 'task.auto_retried', payload: expect.objectContaining({ retried: 't-patch', cause: 'spending-cap' }) }),
@@ -2041,8 +2041,8 @@ describe('the sweep that comes back for a failed task the recovery could not run
     it('leaves it while the cap still refuses, and starts it on the sweep after the cap is raised', async () => {
       heldPatch();
       const { retry } = recovering();
-      const { spendingLimits } = await import('@fleetadlc/db');
-      vi.mocked(spendingLimits.refusal).mockResolvedValueOnce('janedoe/fleetadlc-testbed has spent $200 of its $200 this month');
+      const { spendingLimits } = await import('@openadlc/db');
+      vi.mocked(spendingLimits.refusal).mockResolvedValueOnce('janedoe/openadlc-testbed has spent $200 of its $200 this month');
 
       await retryAfterRecovery(null, { retry, now: () => NOW, costs: caps });
       expect(retry).not.toHaveBeenCalled();
@@ -2063,7 +2063,7 @@ describe('the sweep that comes back for a failed task the recovery could not run
   });
 
   it('is run by the merge job, before the gates are worked out', async () => {
-    store.tasks = [failed('t-a', 'fleetadlc-testbed#2')];
+    store.tasks = [failed('t-a', 'openadlc-testbed#2')];
     store.health = [SIGN_IN_FIXED];
     const { retry } = recovering();
     const order: string[] = [];
@@ -2094,7 +2094,7 @@ describe('the sweep that comes back for a failed task the recovery could not run
     const result = await scheduler.run('merge');
 
     expect(order).toEqual(['retry', 'gates']);
-    expect(result.actions).toContain('fleetadlc-testbed#2: fleetadlc-cipher-janedoe’s review run again, now that bot-sign-in:bot-cipher passes');
+    expect(result.actions).toContain('openadlc-testbed#2: openadlc-cipher-janedoe’s review run again, now that bot-sign-in:bot-cipher passes');
   });
 });
 
@@ -2110,7 +2110,7 @@ describe('a failed build run again on its own, only where the dispatcher would s
       repoId: 'repo-1',
       kind: 'implement',
       subjectType: 'issue',
-      subjectRef: 'fleetadlc-testbed#7',
+      subjectRef: 'openadlc-testbed#7',
       state: 'failed',
       startedAt: '2026-09-29T10:00:00.000Z',
       endedAt: '2026-09-29T10:05:00.000Z',
@@ -2122,10 +2122,10 @@ describe('a failed build run again on its own, only where the dispatcher would s
   }
 
   function recovering(issue: Record<string, unknown> = {}, concurrency = 2) {
-    store.repos = [{ id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed', defaultBranch: 'main', concurrency }];
-    store.issues = [{ repoId: 'repo-1', repoName: 'fleetadlc-testbed', number: 7, stage: 'build', prNumber: null, labels: ['start:now'], declaredPaths: ['src/app.ts'], ...issue }];
+    store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', defaultBranch: 'main', concurrency }];
+    store.issues = [{ repoId: 'repo-1', repoName: 'openadlc-testbed', number: 7, stage: 'build', prNumber: null, labels: ['start:now'], declaredPaths: ['src/app.ts'], ...issue }];
     store.health = [SIGN_IN_FIXED];
-    const retry = vi.fn(async (_id: string, _actor: string) => ({ task: null, bot: 'fleetadlc-cipher-janedoe' }));
+    const retry = vi.fn(async (_id: string, _actor: string) => ({ task: null, bot: 'openadlc-cipher-janedoe' }));
     const deps = { retry, now: () => NOW };
     return { retry, fixed: () => retryAfterRecovery(['bot-sign-in:bot-cipher'], deps), sweep: () => retryAfterRecovery(null, deps) };
   }
@@ -2166,7 +2166,7 @@ describe('a failed build run again on its own, only where the dispatcher would s
   });
 
   it('waits while the repository is building as many things as its concurrency allows', async () => {
-    store.tasks = [failedBuild(), { id: 't-other', botId: 'bot-builder', repoId: 'repo-1', kind: 'implement', subjectRef: 'fleetadlc-testbed#8', state: 'running', createdAt: '2026-09-29T11:00:00.000Z' }];
+    store.tasks = [failedBuild(), { id: 't-other', botId: 'bot-builder', repoId: 'repo-1', kind: 'implement', subjectRef: 'openadlc-testbed#8', state: 'running', createdAt: '2026-09-29T11:00:00.000Z' }];
     const { retry, fixed } = recovering({}, 1);
 
     await fixed();
@@ -2198,12 +2198,12 @@ describe('a failed build run again on its own, only where the dispatcher would s
 
   describe('a build continued without its pull request', () => {
     const LATER = new Date('2026-09-30T20:30:00.000Z');
-    const BRANCH = 'agent/fleetadlc-atlas-janedoe/7-issue-7';
+    const BRANCH = 'agent/openadlc-atlas-janedoe/7-issue-7';
     const ended = () => failedBuild({ state: 'done', exitReason: 'complete', branch: BRANCH, startedAt: '2026-09-30T19:00:00.000Z', endedAt: '2026-09-30T19:56:30.000Z', createdAt: '2026-09-30T19:00:00.000Z' });
 
     function continuing(issue: Record<string, unknown> = {}, concurrency = 2) {
       recovering(issue, concurrency);
-      const retry = vi.fn(async (_id: string, _actor: string) => ({ task: null, bot: 'fleetadlc-cipher-janedoe' }));
+      const retry = vi.fn(async (_id: string, _actor: string) => ({ task: null, bot: 'openadlc-cipher-janedoe' }));
       const branch = vi.fn(async () => ({ pullRequest: null, ahead: 3 }));
       return { retry, branch, sweep: () => continueBuildsWithoutPullRequest({ retry, branch, now: () => LATER }) };
     }
@@ -2220,7 +2220,7 @@ describe('a failed build run again on its own, only where the dispatcher would s
     });
 
     it('waits, unclaimed, while the repository has no room for another build', async () => {
-      store.tasks = [ended(), { id: 't-other', botId: 'bot-builder', repoId: 'repo-1', kind: 'implement', subjectRef: 'fleetadlc-testbed#8', state: 'running', createdAt: '2026-09-30T20:00:00.000Z' }];
+      store.tasks = [ended(), { id: 't-other', botId: 'bot-builder', repoId: 'repo-1', kind: 'implement', subjectRef: 'openadlc-testbed#8', state: 'running', createdAt: '2026-09-30T20:00:00.000Z' }];
       const { retry, sweep } = continuing({}, 1);
 
       await sweep();
@@ -2233,7 +2233,7 @@ describe('a failed build run again on its own, only where the dispatcher would s
 
 describe('a paused task whose question was answered', () => {
   it('is resumed by the merge job, though no retry of it is held in memory', async () => {
-    store.tasks = [{ id: 't-answered', botId: 'bot-builder', repoId: null, kind: 'implement', skill: 'implement', subjectRef: 'fleetadlc-testbed#9', state: 'paused' }];
+    store.tasks = [{ id: 't-answered', botId: 'bot-builder', repoId: null, kind: 'implement', skill: 'implement', subjectRef: 'openadlc-testbed#9', state: 'paused' }];
     store.answered = [{ ...store.tasks[0], answeredAt: '2026-10-01T09:00:00.000Z' }];
     const taskService = new TaskService({} as never, {} as never, {} as never);
     taskService.seatPauses = async () => ({});
@@ -2248,13 +2248,13 @@ describe('a paused task whose question was answered', () => {
     const result = await scheduler.run('merge');
 
     expect(resume).toHaveBeenCalledWith('t-answered');
-    expect(result.actions).toContain('resumed implement on fleetadlc-testbed#9, answered 2026-10-01T09:00:00.000Z');
+    expect(result.actions).toContain('resumed implement on openadlc-testbed#9, answered 2026-10-01T09:00:00.000Z');
   });
 });
 
 describe('a build that ended without its pull request', () => {
   const NOW = new Date('2026-09-30T20:30:00.000Z');
-  const BRANCH = 'agent/fleetadlc-atlas-janedoe/216-issue-216';
+  const BRANCH = 'agent/openadlc-atlas-janedoe/216-issue-216';
 
   function build(id: string, overrides: Record<string, unknown> = {}) {
     return {
@@ -2263,7 +2263,7 @@ describe('a build that ended without its pull request', () => {
       repoId: 'repo-1',
       kind: 'implement',
       subjectType: 'issue',
-      subjectRef: 'fleetadlc-testbed#216',
+      subjectRef: 'openadlc-testbed#216',
       branch: BRANCH,
       state: 'done',
       startedAt: '2026-09-30T19:00:00.000Z',
@@ -2277,12 +2277,12 @@ describe('a build that ended without its pull request', () => {
 
   /** The sweep, with GitHub saying `facts` of the branch and each retry starting a running build, claimed as `retryTask` claims it. */
   function sweeping(facts: { pullRequest: number | null; ahead: number } | null) {
-    store.repos = [{ id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed', defaultBranch: 'main' }];
-    store.issues = [{ repoId: 'repo-1', repoName: 'fleetadlc-testbed', number: 216, stage: 'build', prNumber: null, labels: [] }];
+    store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', defaultBranch: 'main' }];
+    store.issues = [{ repoId: 'repo-1', repoName: 'openadlc-testbed', number: 216, stage: 'build', prNumber: null, labels: [] }];
     const retry = vi.fn(async (id: string, _actor: string) => {
       const original = store.tasks.find((task) => task.id === id);
       store.tasks.push({ ...original, id: 'continued', state: 'running', endedAt: null, createdAt: '2026-09-30T20:30:01.000Z', autoRetriedAt: NOW.toISOString() });
-      return { task: { taskId: 'continued' }, bot: 'fleetadlc-atlas-janedoe' };
+      return { task: { taskId: 'continued' }, bot: 'openadlc-atlas-janedoe' };
     });
     const branch = vi.fn(async () => facts);
     return { retry, branch, sweep: () => continueBuildsWithoutPullRequest({ retry, branch, now: () => NOW }) };
@@ -2293,11 +2293,11 @@ describe('a build that ended without its pull request', () => {
     const { retry, branch, sweep } = sweeping({ pullRequest: null, ahead: 3 });
 
     const actions = await sweep();
-    expect(branch).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', BRANCH, 'main');
+    expect(branch).toHaveBeenCalledWith('janedoe/openadlc-testbed', BRANCH, 'main');
     expect(retry.mock.calls).toEqual([['t-216', 'bridge']]);
     expect(store.tasks.find((task) => task.id === 't-216')?.autoRetriedAt).not.toBeNull();
     expect(store.audits).toContainEqual(expect.objectContaining({ action: 'task.continued', payload: expect.objectContaining({ continued: 't-216', task: 'continued' }) }));
-    expect(actions).toEqual([`fleetadlc-testbed#216: fleetadlc-atlas-janedoe’s build ended without its pull request, so it goes on from ${BRANCH}`]);
+    expect(actions).toEqual([`openadlc-testbed#216: openadlc-atlas-janedoe’s build ended without its pull request, so it goes on from ${BRANCH}`]);
 
     // The second try ends done, again with no pull request: it is failed,
     // with the reason the card knows, and not continued a third time.
@@ -2306,7 +2306,7 @@ describe('a build that ended without its pull request', () => {
     expect(retry).toHaveBeenCalledTimes(1);
     const second = store.tasks.find((task) => task.id === 'continued');
     expect(second).toMatchObject({ state: 'failed', exitReason: expect.stringMatching(/^finished without opening a pull request: its commits are on /) });
-    expect(store.said).toEqual([expect.stringMatching(/^the build on fleetadlc-testbed#216 finished without opening a pull request/)]);
+    expect(store.said).toEqual([expect.stringMatching(/^the build on openadlc-testbed#216 finished without opening a pull request/)]);
     // The first is left as it was: a later build took over from it.
     expect(store.tasks.find((task) => task.id === 't-216')?.state).toBe('done');
   });
@@ -2345,7 +2345,7 @@ describe('a build that ended without its pull request', () => {
     expect(linked.branch).not.toHaveBeenCalled();
   });
 
-  it('leaves a build that a later build took over from, one marked fleetadlc:ignore, or one whose issue has moved on', async () => {
+  it('leaves a build that a later build took over from, one marked openadlc:ignore, or one whose issue has moved on', async () => {
     store.tasks = [build('t-216'), build('t-later', { state: 'running', createdAt: '2026-09-30T20:00:00.000Z', endedAt: null })];
     const later = sweeping({ pullRequest: null, ahead: 3 });
     await later.sweep();
@@ -2353,7 +2353,7 @@ describe('a build that ended without its pull request', () => {
 
     store.tasks = [build('t-216')];
     const ignored = sweeping({ pullRequest: null, ahead: 3 });
-    store.issues[0]!.labels = ['fleetadlc:ignore'];
+    store.issues[0]!.labels = ['openadlc:ignore'];
     await ignored.sweep();
     expect(ignored.branch).not.toHaveBeenCalled();
 
@@ -2381,7 +2381,7 @@ describe('a build that ended without its pull request', () => {
       const { retry, branch } = sweeping({ pullRequest: null, ahead });
       const closed = vi.fn(async () => true);
       await continueBuildsWithoutPullRequest({ retry, branch, closed, now: () => NOW });
-      expect(closed).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 216);
+      expect(closed).toHaveBeenCalledWith('janedoe/openadlc-testbed', 216);
       expect(retry).not.toHaveBeenCalled();
       expect(store.tasks[0]).toMatchObject({ state: 'done' });
     }
@@ -2427,7 +2427,7 @@ describe('a build that ended without its pull request', () => {
       branch: async () => ({ pullRequest: null, ahead: 3 }),
       now: () => NOW,
     });
-    expect(await refusing).toEqual(['fleetadlc-testbed#216: the build without its pull request was not continued (nothing new starts: work is paused)']);
+    expect(await refusing).toEqual(['openadlc-testbed#216: the build without its pull request was not continued (nothing new starts: work is paused)']);
     expect(store.tasks[0]?.autoRetriedAt).toBeNull();
     await sweep();
     expect(store.tasks.find((task) => task.id === 'continued')).toBeDefined();

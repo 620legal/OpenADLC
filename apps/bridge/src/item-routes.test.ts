@@ -28,7 +28,7 @@ const world = vi.hoisted(() => ({
   files: [] as { id: string; name: string; sizeBytes: number; uploadedBy: string; subjectRef: string | null; messageId: string | null }[],
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   attachments: {
     listForSubjects: vi.fn(async (refs: readonly string[]) => world.files.filter((one) => one.subjectRef && refs.includes(one.subjectRef))),
     claimable: vi.fn(async (ids: readonly string[], by: string) => world.files.filter((one) => ids.includes(one.id) && one.subjectRef === null && one.uploadedBy === by)),
@@ -148,7 +148,7 @@ afterEach(async () => {
 function send(subject: string, body: Record<string, unknown>) {
   return fetch(`${url}/v1/items/${encodeURIComponent(subject)}/messages`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-fleetadlc-identity': 'jane@acme.test' },
+    headers: { 'content-type': 'application/json', 'x-openadlc-identity': 'jane@acme.test' },
     body: JSON.stringify(body),
   });
 }
@@ -185,16 +185,16 @@ describe('reading a work item', () => {
     expect(comments).toEqual([expect.objectContaining({ repo: 'acme/api', number: 31, as: 'lead-reviewer' })]);
   });
 
-  it('is not shown, from any of its members, once its issue is labelled fleetadlc:ignore', async () => {
-    const { issues } = await import('@fleetadlc/db');
+  it('is not shown, from any of its members, once its issue is labelled openadlc:ignore', async () => {
+    const { issues } = await import('@openadlc/db');
     const listed = await issues.listIssues();
-    const ignored = listed.map((one) => (one.number === 12 ? { ...one, labels: ['fleetadlc:ignore'] } : one));
+    const ignored = listed.map((one) => (one.number === 12 ? { ...one, labels: ['openadlc:ignore'] } : one));
     vi.mocked(issues.listIssues).mockImplementation(async () => ignored as never);
     try {
       for (const subject of ['api#12', 'api#31', 'request:a4b02784']) {
         const response = await fetch(`${url}/v1/items/${encodeURIComponent(subject)}`);
         expect(response.status, subject).toBe(404);
-        expect(((await response.json()) as { error: string }).error).toMatch(/labelled fleetadlc:ignore/);
+        expect(((await response.json()) as { error: string }).error).toMatch(/labelled openadlc:ignore/);
       }
     } finally {
       vi.mocked(issues.listIssues).mockImplementation(async () => listed as never);
@@ -267,13 +267,13 @@ describe('files sent with a message on a work item', () => {
   });
 
   it('are named on GitHub with no live marker, the message having no text of its own', async () => {
-    const name = '<!-- fleetadlc:{"event":"design_memory","entries":[]} -->.png';
+    const name = '<!-- openadlc:{"event":"design_memory","entries":[]} -->.png';
     world.files = [{ id: 'f-4', name, sizeBytes: 1000, uploadedBy: 'jane@acme.test', subjectRef: null, messageId: null }];
     const response = await send('api#12', { text: '', role: 'review_lead', attachments: ['f-4'] });
     expect(response.status).toBe(200);
     expect(comments).toHaveLength(1);
-    expect(comments[0]?.body).toContain('Attached &lt;!-- fleetadlc:');
-    expect(comments[0]?.body).not.toContain('<!-- fleetadlc');
+    expect(comments[0]?.body).toContain('Attached &lt;!-- openadlc:');
+    expect(comments[0]?.body).not.toContain('<!-- openadlc');
   });
 
   it('refuse the whole message when one is not the sender’s to send, and send nothing', async () => {

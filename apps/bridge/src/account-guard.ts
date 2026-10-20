@@ -1,6 +1,6 @@
-import { repos } from '@fleetadlc/db';
-import { collaboratorsUrl, isTemplatePlaceholder } from '@fleetadlc/github';
-import { humanReviewLogins, sameLogin } from '@fleetadlc/shared';
+import { repos } from '@openadlc/db';
+import { collaboratorsUrl, isTemplatePlaceholder } from '@openadlc/github';
+import { humanReviewLogins, sameLogin } from '@openadlc/shared';
 import type { BridgeConfig } from './config.js';
 import { effectiveConfig } from './effective-config.js';
 import { theApp, type PermissionAsker } from './people.js';
@@ -23,7 +23,7 @@ import { theApp, type PermissionAsker } from './people.js';
 /** A person no bot may sign in as, with the words for why. */
 export interface Person {
   login: string;
-  /** "one of this install's people (FLEETADLC_HUMANS)", "named in exampleco/app's AGENTS.md Human review". */
+  /** "one of this install's people (OPENADLC_HUMANS)", "named in exampleco/app's AGENTS.md Human review". */
   why: string;
   /** The same, short, for beside a choice. */
   short: string;
@@ -70,7 +70,7 @@ export async function peopleOf(deps: AccountGuardDeps): Promise<Person[]> {
     if (!isTemplatePlaceholder(person.login) && !people.some((one) => sameLogin(one.login, person.login))) people.push(person);
   };
   for (const login of await deps.humans().catch(() => [] as string[])) {
-    add({ login, why: 'one of this install’s people (FLEETADLC_HUMANS)', short: 'one of this install’s people' });
+    add({ login, why: 'one of this install’s people (OPENADLC_HUMANS)', short: 'one of this install’s people' });
   }
   for (const repo of await deps.repositories().catch(() => [])) {
     const asker = await deps.asker(repo.fullName).catch(() => null);

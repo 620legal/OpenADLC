@@ -1,4 +1,4 @@
-import type { RepoConfig } from '@fleetadlc/shared';
+import type { RepoConfig } from '@openadlc/shared';
 
 /** The stand-in's full name. The scripted board is written here and nowhere else. */
 export const SCRIPTED_REPO_FULL_NAME = 'local/scripted';

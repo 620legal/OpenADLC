@@ -21,18 +21,18 @@ const NOW = '2026-09-24T10:53:00.000Z';
 const minutesAgo = (minutes: number): string => new Date(Date.parse(NOW) - minutes * 60_000).toISOString();
 
 const PULL: ThreadTopic = {
-  ref: 'fleetadlc-testbed#31',
+  ref: 'openadlc-testbed#31',
   kind: 'pull_request',
   title: 'Record which model each review used',
-  issue: { number: 12, url: 'https://github.com/janedoe/fleetadlc-testbed/issues/12' },
-  pullRequest: { number: 31, url: 'https://github.com/janedoe/fleetadlc-testbed/pull/31' },
+  issue: { number: 12, url: 'https://github.com/janedoe/openadlc-testbed/issues/12' },
+  pullRequest: { number: 31, url: 'https://github.com/janedoe/openadlc-testbed/pull/31' },
   request: null,
 };
 const ISSUE: ThreadTopic = {
-  ref: 'fleetadlc-testbed#15',
+  ref: 'openadlc-testbed#15',
   kind: 'issue',
   title: 'Show what a task has cost on its card',
-  issue: { number: 15, url: 'https://github.com/janedoe/fleetadlc-testbed/issues/15' },
+  issue: { number: 15, url: 'https://github.com/janedoe/openadlc-testbed/issues/15' },
   pullRequest: null,
   request: null,
 };
@@ -48,8 +48,8 @@ const REQUEST: ThreadTopic = {
 const REVIEWING: TaskSummary = {
   kind: 'review',
   state: 'running',
-  subjectRef: 'fleetadlc-testbed#31',
-  issue: { repo: 'fleetadlc-testbed', number: 12, title: 'Record which model each review used' },
+  subjectRef: 'openadlc-testbed#31',
+  issue: { repo: 'openadlc-testbed', number: 12, title: 'Record which model each review used' },
   startedAt: minutesAgo(6),
   endedAt: null,
   round: 2,
@@ -75,15 +75,15 @@ describe('a thread’s subjects', () => {
     expect(topicLabel(ISSUE)).toBe('#15 Show what a task has cost on its card');
     // A pull request by its issue, as the board numbers it — but beside the issue itself, as the one it is.
     expect(topicLabel(PULL)).toBe('#12 Record which model each review used');
-    expect(topicLabel(PULL, [PULL, { ...ISSUE, ref: 'fleetadlc-testbed#12', issue: { number: 12, url: null } }])).toBe(
+    expect(topicLabel(PULL, [PULL, { ...ISSUE, ref: 'openadlc-testbed#12', issue: { number: 12, url: null } }])).toBe(
       'Pull request #31 · Record which model each review used',
     );
     expect(topicLabel(REQUEST)).toBe('request: Create html hello world and a…');
-    expect(topicLabel({ ...REQUEST, ref: 'fleetadlc-testbed@3f2a1b0c9d', kind: 'other', request: null })).toBe('commit 3f2a1b0');
+    expect(topicLabel({ ...REQUEST, ref: 'openadlc-testbed@3f2a1b0c9d', kind: 'other', request: null })).toBe('commit 3f2a1b0');
   });
 
   it('are still named from an older bridge that sends only the addresses', () => {
-    expect(topicsOf({ subjects: ['fleetadlc-testbed#15', 'fleetadlc-testbed#15', 'request:a4b02784'] }).map((topic) => topicLabel(topic))).toEqual([
+    expect(topicsOf({ subjects: ['openadlc-testbed#15', 'openadlc-testbed#15', 'request:a4b02784'] }).map((topic) => topicLabel(topic))).toEqual([
       '#15',
       'a console request',
     ]);
@@ -130,16 +130,16 @@ describe('the status line', () => {
 describe('the task pinned at the top', () => {
   it('is the issue the task is about, with its links and what the task has cost', () => {
     expect(pinnedTask({ task: REVIEWING }, [PULL], NOW)).toEqual({
-      ref: 'fleetadlc-testbed#31',
+      ref: 'openadlc-testbed#31',
       current: true,
       did: null,
       when: null,
       number: '#12',
-      repo: 'fleetadlc-testbed',
+      repo: 'openadlc-testbed',
       title: 'Record which model each review used',
       links: [
-        { label: 'Pull request #31', url: 'https://github.com/janedoe/fleetadlc-testbed/pull/31' },
-        { label: 'Issue #12', url: 'https://github.com/janedoe/fleetadlc-testbed/issues/12' },
+        { label: 'Pull request #31', url: 'https://github.com/janedoe/openadlc-testbed/pull/31' },
+        { label: 'Issue #12', url: 'https://github.com/janedoe/openadlc-testbed/issues/12' },
       ],
       cost: '$0.38 on this task',
     });
@@ -168,7 +168,7 @@ describe('where a message goes', () => {
   const said = 'irisexampleco';
 
   it('answers the question the thread is waiting on', () => {
-    expect(composerTarget({ openGate: { id: 'gate-1' }, selected: 'fleetadlc-testbed#31', task: REVIEWING, topics: [PULL], said })).toEqual({
+    expect(composerTarget({ openGate: { id: 'gate-1' }, selected: 'openadlc-testbed#31', task: REVIEWING, topics: [PULL], said })).toEqual({
       mode: 'answer',
       subject: null,
       helper: 'Answers irisexampleco’s question',
@@ -176,12 +176,12 @@ describe('where a message goes', () => {
   });
 
   it('is posted on the issue or pull request it is about', () => {
-    expect(composerTarget({ openGate: null, selected: 'fleetadlc-testbed#15', task: null, topics: [ISSUE], said })).toEqual({
+    expect(composerTarget({ openGate: null, selected: 'openadlc-testbed#15', task: null, topics: [ISSUE], said })).toEqual({
       mode: 'send',
-      subject: 'fleetadlc-testbed#15',
+      subject: 'openadlc-testbed#15',
       helper: 'Posted on #15 as a comment',
     });
-    expect(composerTarget({ openGate: null, selected: 'fleetadlc-testbed#31', task: REVIEWING, topics: [PULL], said }).helper).toBe(
+    expect(composerTarget({ openGate: null, selected: 'openadlc-testbed#31', task: REVIEWING, topics: [PULL], said }).helper).toBe(
       'Posted on pull request #31 as a comment',
     );
   });
@@ -202,24 +202,24 @@ describe('where a message goes', () => {
     // No topics yet: the task says its subject is the pull request of #12.
     expect(composerTarget({ openGate: null, selected: null, task: REVIEWING, topics: [], said })).toEqual({
       mode: 'send',
-      subject: 'fleetadlc-testbed#31',
+      subject: 'openadlc-testbed#31',
       helper: 'Posted on pull request #31 as a comment',
     });
     // No task: the subject it talked about last.
-    expect(composerTarget({ openGate: null, selected: null, task: null, topics: [ISSUE, PULL], said }).subject).toBe('fleetadlc-testbed#15');
+    expect(composerTarget({ openGate: null, selected: null, task: null, topics: [ISSUE, PULL], said }).subject).toBe('openadlc-testbed#15');
   });
 
   it('with no thread to go by, is about the last thing the bot did', () => {
     const done = { ...REVIEWING, state: 'done' };
-    expect(composerTarget({ openGate: null, selected: null, task: null, lastTask: done, topics: [], said }).subject).toBe('fleetadlc-testbed#31');
+    expect(composerTarget({ openGate: null, selected: null, task: null, lastTask: done, topics: [], said }).subject).toBe('openadlc-testbed#31');
   });
 
   it('is not promised to GitHub for a bot with no account to post it with', () => {
     expect(
-      composerTarget({ openGate: null, selected: 'fleetadlc-testbed#31', task: null, topics: [PULL], said: 'the lead reviewer', connected: false }),
+      composerTarget({ openGate: null, selected: 'openadlc-testbed#31', task: null, topics: [PULL], said: 'the lead reviewer', connected: false }),
     ).toEqual({
       mode: 'none',
-      subject: 'fleetadlc-testbed#31',
+      subject: 'openadlc-testbed#31',
       helper: 'Nothing can be posted for the lead reviewer until its GitHub account is connected.',
     });
     // A console request's thread needs no account.
@@ -236,7 +236,7 @@ describe('where a message goes', () => {
 
 describe('the bridge’s lines, as sentences', () => {
   const say = (ref: string) =>
-    ({ 'request:a4b02784': 'the request “Create html hello world and…”', 'fleetadlc-testbed#31': 'pull request #31' })[ref] ?? ref;
+    ({ 'request:a4b02784': 'the request “Create html hello world and…”', 'openadlc-testbed#31': 'pull request #31' })[ref] ?? ref;
 
   it('reads a task that could not finish as a failure, with its reason', () => {
     expect(
@@ -258,12 +258,12 @@ describe('the bridge’s lines, as sentences', () => {
 
   it('says a start in words, without the bot’s own name or the engine’s', () => {
     expect(
-      sentenceFor({ text: 'irisexampleco started pr-review on fleetadlc-testbed#31', note: 'engine grok · model grok-4.7 · cap $15', payload: null }, say),
+      sentenceFor({ text: 'irisexampleco started pr-review on openadlc-testbed#31', note: 'engine grok · model grok-4.7 · cap $15', payload: null }, say),
     ).toEqual({ text: 'Started reviewing pull request #31', note: 'Thinking with Grok 4.7; stops at $15', tone: 'plain' });
   });
 
   it('says a merge conflict round, and a skill waiting for room, in words rather than slugs', () => {
-    expect(sentenceFor({ text: 'irisexampleco started resolve-conflict on fleetadlc-testbed#31', note: null, payload: null }, say).text).toBe(
+    expect(sentenceFor({ text: 'irisexampleco started resolve-conflict on openadlc-testbed#31', note: null, payload: null }, say).text).toBe(
       'Started resolving the merge conflict on pull request #31',
     );
     expect(sentenceFor({ text: 'could not start resolve-conflict: the bot is busy', note: null, payload: null }, say).text).toBe(
@@ -277,7 +277,7 @@ describe('the bridge’s lines, as sentences', () => {
   });
 
   it('says what a filed request became', () => {
-    expect(sentenceFor({ text: 'Filed as fleetadlc-testbed#16', note: 'Hello world page', payload: null }, say)).toEqual({
+    expect(sentenceFor({ text: 'Filed as openadlc-testbed#16', note: 'Hello world page', payload: null }, say)).toEqual({
       text: 'Filed it as #16',
       note: 'Hello world page',
       tone: 'done',
@@ -287,11 +287,11 @@ describe('the bridge’s lines, as sentences', () => {
 
 describe('the conversation', () => {
   const message = (partial: Partial<ThreadMessage> & Pick<ThreadMessage, 'id' | 'kind' | 'text' | 'at'>): ThreadMessage => ({
-    author: 'fleetadlc',
+    author: 'openadlc',
     note: null,
     payload: null,
     githubUrl: null,
-    subjectRef: 'fleetadlc-testbed#31',
+    subjectRef: 'openadlc-testbed#31',
     ...partial,
   });
   const gate: Gate = { id: 'gate-1', question: 'Store the model per round or per call?', options: ['per round', 'per call'], addressedTo: null, githubCommentUrl: null };
@@ -299,7 +299,7 @@ describe('the conversation', () => {
   it('heads each day, times each line, and keeps a question it is waiting on answerable', () => {
     const entries = timeline(
       [
-        message({ id: 'm1', kind: 'sys', text: 'irisexampleco started pr-review on fleetadlc-testbed#31', at: '2026-09-23T16:00:00.000Z' }),
+        message({ id: 'm1', kind: 'sys', text: 'irisexampleco started pr-review on openadlc-testbed#31', at: '2026-09-23T16:00:00.000Z' }),
         message({ id: 'm2', kind: 'bot', author: 'irisexampleco', text: 'The review record keeps only the last model.', note: 'requested changes', at: '2026-09-24T10:47:00.000Z' }),
         message({ id: 'm3', kind: 'you', author: 'janedoe@example.test', text: 'Agreed.', at: '2026-09-24T10:49:00.000Z' }),
         message({ id: 'm4', kind: 'gate', author: 'irisexampleco', text: gate.question, payload: { gateId: 'gate-1', options: gate.options }, at: '2026-09-24T10:52:00.000Z' }),
@@ -329,7 +329,7 @@ describe('the conversation', () => {
     const entries = timeline(
       [
         message({ id: 'm1', kind: 'bot', text: 'On the review.', at: minutesAgo(10) }),
-        message({ id: 'm2', kind: 'bot', text: 'On the card.', at: minutesAgo(5), subjectRef: 'fleetadlc-testbed#15' }),
+        message({ id: 'm2', kind: 'bot', text: 'On the card.', at: minutesAgo(5), subjectRef: 'openadlc-testbed#15' }),
       ],
       { now: NOW, openGate: null, topics: [PULL, ISSUE], botName: 'irisexampleco', showSubjects: true, timeZone: 'UTC' },
     );
@@ -350,14 +350,14 @@ describe('the conversation', () => {
       {
         now: NOW,
         openGate: null,
-        topics: [{ ...PULL, item: 'fleetadlc-testbed#12' }, { ref: '', kind: 'other', title: null, issue: null, pullRequest: null, request: null, item: null }],
+        topics: [{ ...PULL, item: 'openadlc-testbed#12' }, { ref: '', kind: 'other', title: null, issue: null, pullRequest: null, request: null, item: null }],
         botName: 'irisexampleco',
         showSubjects: true,
         timeZone: 'UTC',
       },
     );
     expect(entries.filter((entry) => entry.kind === 'subject').map((entry) => entry.kind === 'subject' && [entry.label, entry.item])).toEqual([
-      ['#12 Record which model each review used', 'fleetadlc-testbed#12'],
+      ['#12 Record which model each review used', 'openadlc-testbed#12'],
       ['Not about any item', null],
     ]);
   });
@@ -386,7 +386,7 @@ describe('the Show list, when a bot’s subjects are in several repositories', (
   it('groups them by repository, each where its newest subject puts it, and the ones in none last', () => {
     const groups = topicGroups([PULL, REQUEST, inApi, ISSUE, inWebsite]);
     expect(groups?.map((group) => [group.repo, group.topics.map((topic) => topic.ref)])).toEqual([
-      ['fleetadlc-testbed', ['fleetadlc-testbed#31', 'fleetadlc-testbed#15']],
+      ['openadlc-testbed', ['openadlc-testbed#31', 'openadlc-testbed#15']],
       ['api', ['api#15']],
       // Named from its address when the bridge said nothing: a deploy of a commit.
       ['website', ['website@3f2c1a9']],

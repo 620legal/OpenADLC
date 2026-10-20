@@ -9,11 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const ISSUE = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
 
-vi.mock('@fleetadlc/db', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@fleetadlc/db')>()),
+vi.mock('@openadlc/db', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@openadlc/db')>()),
   audit: vi.fn(async () => undefined),
   issues: { getIssue: vi.fn(async () => ISSUE) },
-  repos: { getRepoByName: vi.fn(async () => ({ id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' })) },
+  repos: { getRepoByName: vi.fn(async () => ({ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' })) },
 }));
 
 const moveStage = vi.fn(async (_input: Record<string, unknown>) => ({ moved: true }));
@@ -51,7 +51,7 @@ afterEach(async () => {
 });
 
 const move = (body: Record<string, unknown>) =>
-  fetch(`${bridgeUrl}/v1/board/move`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ repo: 'fleetadlc-testbed', issue: 7, ...body }) });
+  fetch(`${bridgeUrl}/v1/board/move`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ repo: 'openadlc-testbed', issue: 7, ...body }) });
 
 describe('a person moving a card', () => {
   it('refuses a move back with no reason, and says why one is needed', async () => {
@@ -64,7 +64,7 @@ describe('a person moving a card', () => {
   it('sends the work back with the person’s reason', async () => {
     const response = await move({ to: 'build', reason: ' the cache key is wrong ' });
     expect(response.status).toBe(200);
-    expect(fromPerson).toHaveBeenCalledWith(expect.objectContaining({ repoName: 'fleetadlc-testbed', issueNumber: 7, to: 'build', reason: 'the cache key is wrong' }));
+    expect(fromPerson).toHaveBeenCalledWith(expect.objectContaining({ repoName: 'openadlc-testbed', issueNumber: 7, to: 'build', reason: 'the cache key is wrong' }));
     expect(moveStage).not.toHaveBeenCalled();
   });
 

@@ -1,4 +1,4 @@
-import type { DeliveryRules } from '@fleetadlc/shared';
+import type { DeliveryRules } from '@openadlc/shared';
 import type { CheckResult, HealthCheck } from '../types.js';
 import { stepHref } from '../words.js';
 
@@ -46,20 +46,20 @@ export interface DeliveryReader {
  * that holds for nobody though the rules say a person approves, which ships
  * to production unseen. Both are what this looks for, and a branch policy
  * that admits anything but the default branch: the crew's own branches are
- * protected, so a workflow pushed to one could deploy. `fleetadlc github
+ * protected, so a workflow pushed to one could deploy. `openadlc github
  * apply` writes the environment the rules call for.
  *
  * Where GitHub's plan refused the reviewer (a private repository on Free, Pro
  * or Team), the bridge holds each promote for a person itself, in Needs you
  * (`DeployPipeline`), so production is still held: it passes, and says what
- * holds it (`heldBy: 'fleetadlc'`). It used to pass in silence while the
+ * holds it (`heldBy: 'openadlc'`). It used to pass in silence while the
  * promote ran with nobody approving.
  */
 export function deliveryCheck(reader: DeliveryReader): HealthCheck {
   return {
     id: 'production-rules',
     proves: 'Each repository’s production environment holds deploys the way its delivery rules say, and no crew account can approve one',
-    how: 'reads each repository’s production environment on GitHub and compares its reviewers and wait timer with .github/fleetadlc.yml, and its branch policy with the default branch',
+    how: 'reads each repository’s production environment on GitHub and compares its reviewers and wait timer with .github/openadlc.yml, and its branch policy with the default branch',
     everyMinutes: 60,
     steps: [],
     async run() {
@@ -108,7 +108,7 @@ export function deliveryCheck(reader: DeliveryReader): HealthCheck {
 
         const refused = await reader.planRefused(repo.fullName).catch(() => false);
         if (rules.production.approval === 'reviewers' && environment.reviewers.length === 0 && refused) {
-          results.push({ subject, ok: true, facts: { approval: 'reviewers', heldBy: 'fleetadlc' } });
+          results.push({ subject, ok: true, facts: { approval: 'reviewers', heldBy: 'openadlc' } });
           continue;
         }
         if (rules.production.approval === 'reviewers' && environment.reviewers.length === 0) {
@@ -120,7 +120,7 @@ export function deliveryCheck(reader: DeliveryReader): HealthCheck {
             detail:
               'Its delivery rules say a person approves production, and its production environment has no required reviewer, so a promote ' +
               'runs as soon as it is dispatched. Choose how production ships in the walkthrough’s Protect step: name who approves it, or ' +
-              'ship automatically after a soak on testing. From a terminal: `fleetadlc github apply --production reviewers --reviewer <login>`.',
+              'ship automatically after a soak on testing. From a terminal: `openadlc github apply --production reviewers --reviewer <login>`.',
             action: { label: 'Choose how production ships', href: stepHref('protect') },
           });
           continue;
@@ -133,9 +133,9 @@ export function deliveryCheck(reader: DeliveryReader): HealthCheck {
             title: `${repo.fullName}’s production deploys wait for a person its rules do not ask for`,
             detail:
               'Its delivery rules say production needs no approval, and its production environment still requires a reviewer, so every ' +
-              'promote waits for one. Run `fleetadlc github apply` to write the environment the rules call for, or set ' +
-              '`approval: reviewers` in .github/fleetadlc.yml.',
-            action: { label: 'Apply the repository rules', command: 'fleetadlc github apply' },
+              'promote waits for one. Run `openadlc github apply` to write the environment the rules call for, or set ' +
+              '`approval: reviewers` in .github/openadlc.yml.',
+            action: { label: 'Apply the repository rules', command: 'openadlc github apply' },
           });
           continue;
         }
@@ -157,8 +157,8 @@ export function deliveryCheck(reader: DeliveryReader): HealthCheck {
             title: `${repo.fullName}’s production deploys can come from more than ${repo.defaultBranch}`,
             detail:
               `Its production environment’s branch policy admits ${admits}, not ${repo.defaultBranch} alone, so a workflow on another ` +
-              `branch could deploy to production or read its secrets. Run \`fleetadlc github apply\` to hold it to ${repo.defaultBranch}.`,
-            action: { label: 'Apply the repository rules', command: 'fleetadlc github apply' },
+              `branch could deploy to production or read its secrets. Run \`openadlc github apply\` to hold it to ${repo.defaultBranch}.`,
+            action: { label: 'Apply the repository rules', command: 'openadlc github apply' },
             facts: { branches },
           });
           continue;

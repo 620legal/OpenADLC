@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ledgerModel, modelListCache, MODEL_LIST_TTL_MS } from '@fleetadlc/engines';
-import type { AvailableModel } from '@fleetadlc/engines';
-import { ModelUnavailable } from '@fleetadlc/engines';
+import { ledgerModel, modelListCache, MODEL_LIST_TTL_MS } from '@openadlc/engines';
+import type { AvailableModel } from '@openadlc/engines';
+import { ModelUnavailable } from '@openadlc/engines';
 import {
   resolveTaskModel,
   subscriptionModels,

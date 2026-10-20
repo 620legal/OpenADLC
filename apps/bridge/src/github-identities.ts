@@ -1,7 +1,7 @@
-import { bots, credentials, identities } from '@fleetadlc/db';
+import { bots, credentials, identities } from '@openadlc/db';
 import { personChoiceRefusal, type Person } from './account-guard.js';
-import { credentialKind, getSecretStore, type SecretStore } from '@fleetadlc/github';
-import { accountGroupOf, holdsCredential, otherGroupHolder, roleLabel, type AccountGroup, type Bot, type BotRole } from '@fleetadlc/shared';
+import { credentialKind, getSecretStore, type SecretStore } from '@openadlc/github';
+import { accountGroupOf, holdsCredential, otherGroupHolder, roleLabel, type AccountGroup, type Bot, type BotRole } from '@openadlc/shared';
 import { signInKind } from './sign-in.js';
 
 /**

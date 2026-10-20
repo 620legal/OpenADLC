@@ -1,4 +1,4 @@
-import { hasIgnoreLabel, type BoardCard, type StageKey } from '@fleetadlc/shared';
+import { hasIgnoreLabel, type BoardCard, type StageKey } from '@openadlc/shared';
 import { query, queryOne } from '../client.js';
 
 interface IssueRow {
@@ -197,7 +197,7 @@ export async function listIssues(repoName?: string): Promise<IssueRecord[]> {
  * with no question to a person outstanding, not waiting on triage, with no
  * do: label but `do:ai` (`do:human`, `do:product` and `do:legal` each wait on
  * a person, and a builder leased a product or legal decision and shipped it
- * with nobody making it), and not labelled `fleetadlc:ignore`. The dispatcher
+ * with nobody making it), and not labelled `openadlc:ignore`. The dispatcher
  * decides among these in `byNextFirst` order — the order the board shows them
  * in — and what they wait on is read from their dependencies there, not from
  * a `blocked` label.
@@ -211,7 +211,7 @@ export async function listRoutableIssues(repoId: string): Promise<IssueRecord[]>
        and not ('needs-human' = any(i.labels))
        and not ('needs-triage' = any(i.labels))
        and not exists (select 1 from unnest(i.labels) as l where l like 'do:%' and l <> 'do:ai')
-       and not (i.labels && array['fleetadlc:ignore', 'fleet:ignore']::text[])`,
+       and not (i.labels && array['openadlc:ignore', 'fleet:ignore']::text[])`,
     [repoId],
   );
   return rows.map(toIssue).sort(byNextFirst);
@@ -220,7 +220,7 @@ export async function listRoutableIssues(repoId: string): Promise<IssueRecord[]>
 /**
  * The labels GitHub has, on a row that is already on the board.
  *
- * An insert has to name a stage. An issue labelled `fleetadlc:ignore` with no
+ * An insert has to name a stage. An issue labelled `openadlc:ignore` with no
  * stage of its own is not intake's, and inserting it as one is what the
  * sweep then staffs — the label replaced by a stage. Updating nothing, when
  * the issue was never stored, is the point.
@@ -298,7 +298,7 @@ export async function forget(repoId: string, number: number): Promise<void> {
 }
 
 /**
- * The board's cards. Not an issue labelled `fleetadlc:ignore`: the board is
+ * The board's cards. Not an issue labelled `openadlc:ignore`: the board is
  * for the work the crew does, and a person said the crew leaves that one
  * alone. Its row is kept, so taking the label off brings the card back where
  * it was; the bridge leaves its pull request off the board as well
@@ -365,13 +365,13 @@ export async function setPullRequestNumber(repoId: string, issueNumber: number, 
 
 /**
  * Issues held by the `blocked` label, which is what this list is for. One
- * labelled `fleetadlc:ignore` is left out: the dispatcher unblocks what this
+ * labelled `openadlc:ignore` is left out: the dispatcher unblocks what this
  * returns, and unblocking adds `start:now`, a change the crew makes to an
  * issue it was told to leave alone.
  */
 export async function listBlockedIssues(repoId: string): Promise<IssueRecord[]> {
   const rows = await query<IssueRow>(
-    `${SELECT} where i.repo_id = $1 and 'blocked' = any(i.labels) and not (i.labels && array['fleetadlc:ignore', 'fleet:ignore']::text[])`,
+    `${SELECT} where i.repo_id = $1 and 'blocked' = any(i.labels) and not (i.labels && array['openadlc:ignore', 'fleet:ignore']::text[])`,
     [repoId],
   );
   return rows.map(toIssue);

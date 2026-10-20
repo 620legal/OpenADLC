@@ -61,7 +61,7 @@ describe('firing the recurring jobs', () => {
 
   it('keeps firing after a job throws', async () => {
     // A job that stops silently is worse than one that fails loudly: nothing in
-    // `fleetadlc status` tells "never ran" from "stopped running" except a
+    // `openadlc status` tells "never ran" from "stopped running" except a
     // timestamp nobody is looking at.
     let calls = 0;
     const failing = {
@@ -150,15 +150,15 @@ describe('how often each job runs', () => {
   });
 
   it('is overridden from the environment', () => {
-    expect(intervalsFromEnv({ FLEETADLC_JOB_QA_MINUTES: '30' } as never).qa).toBe(30);
+    expect(intervalsFromEnv({ OPENADLC_JOB_QA_MINUTES: '30' } as never).qa).toBe(30);
     expect(intervalsFromEnv({} as never).events).toBe(24 * 60);
-    expect(intervalsFromEnv({ FLEETADLC_JOB_EVENTS_MINUTES: '0' } as never).events).toBe(0);
+    expect(intervalsFromEnv({ OPENADLC_JOB_EVENTS_MINUTES: '0' } as never).events).toBe(0);
   });
 
   it('turns a job off at zero rather than treating it as unset', () => {
     // An install that does not want the dependency sweep should not have to
     // patch the source.
-    const intervals = intervalsFromEnv({ FLEETADLC_JOB_DEPS_MINUTES: '0' } as never);
+    const intervals = intervalsFromEnv({ OPENADLC_JOB_DEPS_MINUTES: '0' } as never);
     expect(intervals.deps).toBe(0);
 
     const timer = new JobTimer(scheduler as never, intervals);
@@ -168,19 +168,19 @@ describe('how often each job runs', () => {
   it('refuses a value that is not a number of minutes', () => {
     // Keeping the default silently is how somebody believes they turned a job
     // off and did not.
-    expect(() => intervalsFromEnv({ FLEETADLC_JOB_QA_MINUTES: 'nightly' } as never)).toThrow(/not a number/);
-    expect(() => intervalsFromEnv({ FLEETADLC_JOB_QA_MINUTES: '-5' } as never)).toThrow(/not a number/);
+    expect(() => intervalsFromEnv({ OPENADLC_JOB_QA_MINUTES: 'nightly' } as never)).toThrow(/not a number/);
+    expect(() => intervalsFromEnv({ OPENADLC_JOB_QA_MINUTES: '-5' } as never)).toThrow(/not a number/);
     // And what to do about it.
-    expect(() => intervalsFromEnv({ FLEETADLC_JOB_QA_MINUTES: 'nightly' } as never)).toThrow(
+    expect(() => intervalsFromEnv({ OPENADLC_JOB_QA_MINUTES: 'nightly' } as never)).toThrow(
       'set it to a number of minutes (0 turns the job off), or remove it for the default of 1440',
     );
   });
 
   it('refuses a blank value rather than reading it as zero', () => {
-    // Number('') is 0, so an env file that wrote `FLEETADLC_JOB_RECONCILE_MINUTES=`
+    // Number('') is 0, so an env file that wrote `OPENADLC_JOB_RECONCILE_MINUTES=`
     // turned the backstop for missed webhooks off without a message.
-    expect(() => intervalsFromEnv({ FLEETADLC_JOB_RECONCILE_MINUTES: '' } as never)).toThrow(/not a number/);
-    expect(() => intervalsFromEnv({ FLEETADLC_JOB_RECONCILE_MINUTES: '  ' } as never)).toThrow(/not a number/);
-    expect(intervalsFromEnv({ FLEETADLC_JOB_QA_MINUTES: ' 2.5 ' } as never).qa).toBe(2.5);
+    expect(() => intervalsFromEnv({ OPENADLC_JOB_RECONCILE_MINUTES: '' } as never)).toThrow(/not a number/);
+    expect(() => intervalsFromEnv({ OPENADLC_JOB_RECONCILE_MINUTES: '  ' } as never)).toThrow(/not a number/);
+    expect(intervalsFromEnv({ OPENADLC_JOB_QA_MINUTES: ' 2.5 ' } as never).qa).toBe(2.5);
   });
 });

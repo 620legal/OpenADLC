@@ -3,8 +3,8 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { DEFAULT_PORTS } from '@fleetadlc/shared';
-import { fleetHome } from '@fleetadlc/github';
+import { DEFAULT_PORTS } from '@openadlc/shared';
+import { openadlcHome } from '@openadlc/github';
 
 const run = promisify(execFile);
 
@@ -24,11 +24,11 @@ export interface InstallConfig {
    * The secret GitHub signs webhook deliveries with.
    *
    * It lives here because it has to survive a restart. The bridge reads
-   * `FLEETADLC_WEBHOOK_SECRET` from its environment and refuses every delivery when
+   * `OPENADLC_WEBHOOK_SECRET` from its environment and refuses every delivery when
    * that value is empty — it does not skip the check. An operator who exported
    * the secret in one shell and later restarted from another would otherwise
    * have an install that accepts nothing from GitHub until this file supplies
-   * it again. `fleetadlc init` generates one rather than leaving it empty.
+   * it again. `openadlc init` generates one rather than leaving it empty.
    */
   webhookSecret: string;
   /**
@@ -43,7 +43,7 @@ export interface InstallConfig {
    * Names people open OpenADLC under beyond loopback, an address, and the
    * configured URLs: a LAN hostname, a tunnel to the console. The bridge and
    * the console refuse any other `Host` (docs/security.md). Kept here, not
-   * only exported, so a `fleetadlc up` from another shell keeps them.
+   * only exported, so a `openadlc up` from another shell keeps them.
    */
   allowedHosts?: string[];
 }
@@ -52,7 +52,7 @@ export interface InstallConfig {
  * `allowedHosts` as the services read it. The file is written by hand, and
  * `"allowedHosts": "mybox.lan"` is as clear as a list, so a string is taken
  * as one; anything else is refused with what to write, rather than crashing
- * `fleetadlc up` on a `.join` it does not have.
+ * `openadlc up` on a `.join` it does not have.
  */
 export function allowedHostsOf(config: Pick<InstallConfig, 'allowedHosts'>): string {
   const value: unknown = config.allowedHosts;
@@ -65,11 +65,11 @@ export function allowedHostsOf(config: Pick<InstallConfig, 'allowedHosts'>): str
 }
 
 export function configPath(): string {
-  return join(fleetHome(), 'install.json');
+  return join(openadlcHome(), 'install.json');
 }
 
 function defaultDatabaseUrl(port: number): string {
-  return `postgres://fleetadlc:fleetadlc@127.0.0.1:${port}/fleetadlc_db`;
+  return `postgres://openadlc:openadlc@127.0.0.1:${port}/openadlc_db`;
 }
 
 export function defaultConfig(repoRoot: string): InstallConfig {
@@ -118,7 +118,7 @@ export function storedDriver(): InstallConfig['driver'] | undefined {
 
 /** The image each bot's container runs; hostd reads the same variable. */
 export function botImage(): string {
-  return process.env.FLEETADLC_BOT_IMAGE ?? 'fleetadlc-bot:latest';
+  return process.env.OPENADLC_BOT_IMAGE ?? 'openadlc-bot:latest';
 }
 
 /** What choosing a driver asks of this machine; the tests answer without Docker. */
@@ -169,7 +169,7 @@ export const LOCAL_DRIVER_WARNING =
 /** How to stop being on the local driver, as notes under that warning. */
 export const LOCAL_DRIVER_NOTES = [
   'use the local driver only with a throwaway App, accounts and repositories',
-  'to give each task a container of its own: infra/local/build-bot-image.sh, then fleetadlc init --driver docker',
+  'to give each task a container of its own: infra/local/build-bot-image.sh, then openadlc init --driver docker',
 ] as const;
 
 export function loadConfig(repoRoot: string): InstallConfig {
@@ -209,7 +209,7 @@ function badKey(key: string, value: unknown, write: string): Error {
  */
 function storedConfig(stored: unknown, defaults: InstallConfig): InstallConfig {
   if (!stored || typeof stored !== 'object' || Array.isArray(stored)) {
-    throw new Error(`${configPath()} is not a JSON object; write {"driver": "local"} or delete it and run fleetadlc init`);
+    throw new Error(`${configPath()} is not a JSON object; write {"driver": "local"} or delete it and run openadlc init`);
   }
   const file = stored as Record<string, unknown>;
 
@@ -282,13 +282,16 @@ export function ensureWebhookSecret(config: InstallConfig): { config: InstallCon
  * takes it takes a superuser login from anything that reaches its port, a
  * task's computer through `host.docker.internal` included.
  */
-export const PUBLISHED_DATABASE_PASSWORD = 'fleetadlc';
+export const PUBLISHED_DATABASE_PASSWORD = 'openadlc';
+
+/** What FleetADLC shipped with: the same word, under its old name. An install made then still has it until `up` rotates it. */
+export const FLEETADLC_PUBLISHED_DATABASE_PASSWORD = 'fleetadlc';
 
 /**
- * The superuser an install from before the rename was created with. The
+ * The superuser an install from before the renames was created with. The
  * password is the same word as the user, and it is printed in the old
- * release's docs. Rotation used to recognise only `fleetadlc`, so `up` left
- * this one in place and `doctor` reported the url as fine.
+ * release's docs. Rotation used to recognise only the current word, so `up`
+ * left this one in place and `doctor` reported the url as fine.
  */
 export const LEGACY_DATABASE_USER = 'fleet';
 export const LEGACY_DATABASE_PASSWORD = 'fleet';
@@ -311,6 +314,7 @@ export function hasPublishedDatabasePassword(databaseUrl: string): boolean {
   const credentials = databaseCredentials(databaseUrl);
   if (!credentials) return false;
   if (credentials.password === PUBLISHED_DATABASE_PASSWORD) return true;
+  if (credentials.password === FLEETADLC_PUBLISHED_DATABASE_PASSWORD) return true;
   return credentials.user === LEGACY_DATABASE_USER && credentials.password === LEGACY_DATABASE_PASSWORD;
 }
 
@@ -337,11 +341,11 @@ export type WebhookSecretSource = 'install' | 'stored' | 'environment' | 'genera
  *
  * "Already has" is any place a running bridge could be verifying against: this
  * file, the secret store (or an older install's settings table), or
- * `FLEETADLC_WEBHOOK_SECRET`, which is where the self-hosting guide has an
+ * `OPENADLC_WEBHOOK_SECRET`, which is where the self-hosting guide has an
  * operator put the value they gave GitHub. The store is looked at before the
  * environment because the bridge prefers it. Generating a secret over any of
  * them made GitHub and the bridge disagree, and storing it beat the
- * environment's — so every real delivery was refused while `fleetadlc doctor`
+ * environment's — so every real delivery was refused while `openadlc doctor`
  * said a secret existed.
  *
  * Only a generated secret is stored. The one settled on is returned in the
@@ -365,7 +369,7 @@ export async function settleWebhookSecret(
 
   const ensured = ensureWebhookSecret(config);
   // A failure means the database is not up; the install file still carries the
-  // secret into the bridge's environment on the next `fleetadlc up`. The error is
+  // secret into the bridge's environment on the next `openadlc up`. The error is
   // discarded rather than shown, because a driver might quote the value.
   await from.store(ensured.config.webhookSecret).catch(() => undefined);
   return { config: ensured.config, source: 'generated' };
@@ -373,7 +377,7 @@ export async function settleWebhookSecret(
 
 export function saveConfig(config: InstallConfig): string {
   const path = configPath();
-  mkdirSync(fleetHome(), { recursive: true, mode: 0o700 });
+  mkdirSync(openadlcHome(), { recursive: true, mode: 0o700 });
   writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   return path;
 }
@@ -413,7 +417,7 @@ export function databaseUrlConflict(
   return { shell: maskDatabaseUrl(exported), install: maskDatabaseUrl(config.databaseUrl) };
 }
 
-export function databaseConflictMessage(conflict: { shell: string; install: string }, home = fleetHome()): string {
+export function databaseConflictMessage(conflict: { shell: string; install: string }, home = openadlcHome()): string {
   return `DATABASE_URL in this shell is ${conflict.shell}, but the install at ${home} uses ${conflict.install}. Run: unset DATABASE_URL`;
 }
 
@@ -421,46 +425,46 @@ export function databaseConflictMessage(conflict: { shell: string; install: stri
 export function serviceEnv(config: InstallConfig): Record<string, string> {
   return {
     DATABASE_URL: config.databaseUrl,
-    FLEETADLC_CONFIG_ROOT: join(config.repoRoot, 'config'),
-    FLEETADLC_SKILLS_ROOT: join(config.repoRoot, 'crew', 'skills'),
-    FLEETADLC_ROLES_ROOT: join(config.repoRoot, 'crew', 'roles'),
-    FLEETADLC_BRIDGE_PORT: String(config.ports.bridge),
-    FLEETADLC_BRIDGE_URL: `http://127.0.0.1:${config.ports.bridge}`,
-    FLEETADLC_HOSTD_PORT: String(config.ports.hostd),
-    FLEETADLC_HOSTD_URL: `http://127.0.0.1:${config.ports.hostd}`,
-    FLEETADLC_CONSOLE_PORT: String(config.ports.console),
-    FLEETADLC_HOSTD_DRIVER: config.driver,
+    OPENADLC_CONFIG_ROOT: join(config.repoRoot, 'config'),
+    OPENADLC_SKILLS_ROOT: join(config.repoRoot, 'crew', 'skills'),
+    OPENADLC_ROLES_ROOT: join(config.repoRoot, 'crew', 'roles'),
+    OPENADLC_BRIDGE_PORT: String(config.ports.bridge),
+    OPENADLC_BRIDGE_URL: `http://127.0.0.1:${config.ports.bridge}`,
+    OPENADLC_HOSTD_PORT: String(config.ports.hostd),
+    OPENADLC_HOSTD_URL: `http://127.0.0.1:${config.ports.hostd}`,
+    OPENADLC_CONSOLE_PORT: String(config.ports.console),
+    OPENADLC_HOSTD_DRIVER: config.driver,
     // These four only when install.json has them, as the webhook secret below:
-    // `fleetadlc github` tells an operator to export FLEETADLC_HUMANS, and an
+    // `openadlc github` tells an operator to export OPENADLC_HUMANS, and an
     // empty value here replaced it, so the bridge started seeing nobody.
-    ...(config.organization ? { FLEETADLC_GITHUB_ORG: config.organization } : {}),
-    ...(config.githubClientId ? { FLEETADLC_GITHUB_CLIENT_ID: config.githubClientId } : {}),
+    ...(config.organization ? { OPENADLC_GITHUB_ORG: config.organization } : {}),
+    ...(config.githubClientId ? { OPENADLC_GITHUB_CLIENT_ID: config.githubClientId } : {}),
     // Only when an install names one; the bridge finds the automation bot by
     // its role otherwise.
-    ...(config.automationBotName ? { FLEETADLC_AUTOMATION_BOT: config.automationBotName } : {}),
-    ...(config.publicUrl ? { FLEETADLC_PUBLIC_URL: config.publicUrl } : {}),
+    ...(config.automationBotName ? { OPENADLC_AUTOMATION_BOT: config.automationBotName } : {}),
+    ...(config.publicUrl ? { OPENADLC_PUBLIC_URL: config.publicUrl } : {}),
     // Only when set. This is merged over `process.env`, so an empty value here
     // would overwrite a secret the operator exported by hand. The bridge refuses
     // deliveries when no secret is configured; it does not skip the check.
-    ...(config.webhookSecret ? { FLEETADLC_WEBHOOK_SECRET: config.webhookSecret } : {}),
-    ...(config.humans.length > 0 ? { FLEETADLC_HUMANS: config.humans.join(',') } : {}),
+    ...(config.webhookSecret ? { OPENADLC_WEBHOOK_SECRET: config.webhookSecret } : {}),
+    ...(config.humans.length > 0 ? { OPENADLC_HUMANS: config.humans.join(',') } : {}),
     // Only when set, so a value exported by hand is not overwritten with nothing.
-    ...(allowedHostsOf(config) ? { FLEETADLC_ALLOWED_HOSTS: allowedHostsOf(config) } : {}),
-    // Integration suites only. `FLEETADLC_SCRIPTED_ENGINES` is never written by
-    // `fleetadlc init` or stored in install.json — it has to be exported by hand,
+    ...(allowedHostsOf(config) ? { OPENADLC_ALLOWED_HOSTS: allowedHostsOf(config) } : {}),
+    // Integration suites only. `OPENADLC_SCRIPTED_ENGINES` is never written by
+    // `openadlc init` or stored in install.json — it has to be exported by hand,
     // which is the point: an operator cannot arrive at a fabricating install by
     // following any documented path.
-    ...(process.env.FLEETADLC_SCRIPTED_ENGINES === '1'
+    ...(process.env.OPENADLC_SCRIPTED_ENGINES === '1'
       ? {
-          FLEETADLC_SCRIPTED_ENGINES: '1',
-          FLEETADLC_SCRIPTED_REPO_PATH: join(fleetHome(), 'scripted', 'testbed'),
+          OPENADLC_SCRIPTED_ENGINES: '1',
+          OPENADLC_SCRIPTED_REPO_PATH: join(openadlcHome(), 'scripted', 'testbed'),
         }
       : {}),
   };
 }
 
 /** Whether the home is open to anyone but its owner; null when there is none yet. */
-export function homeIsOpen(home = fleetHome()): boolean | null {
+export function homeIsOpen(home = openadlcHome()): boolean | null {
   if (!existsSync(home)) return null;
   return (statSync(home).mode & 0o077) !== 0;
 }
@@ -470,7 +474,7 @@ export function homeIsOpen(home = fleetHome()): boolean | null {
  * says whether it had to. `mkdirSync`'s mode does nothing to a folder that is
  * already there, so a home an older CLI made 0755 stayed that way.
  */
-export function makeHomePrivate(home = fleetHome()): boolean {
+export function makeHomePrivate(home = openadlcHome()): boolean {
   mkdirSync(home, { recursive: true, mode: 0o700 });
   if (!homeIsOpen(home)) return false;
   chmodSync(home, 0o700);
@@ -481,8 +485,8 @@ export function runtimeDir(): string {
   // The home holds install.json and the file secret store, and run/ the
   // services' logs: neither is for anyone else on the machine. `status`, `logs`
   // or `down` before `init` used to make the home 0755.
-  mkdirSync(fleetHome(), { recursive: true, mode: 0o700 });
-  const dir = join(fleetHome(), 'run');
+  mkdirSync(openadlcHome(), { recursive: true, mode: 0o700 });
+  const dir = join(openadlcHome(), 'run');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
 }

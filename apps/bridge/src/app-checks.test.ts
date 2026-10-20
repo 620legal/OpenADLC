@@ -37,7 +37,7 @@ describe('the account named in the first step', () => {
       vi.fn(async (input: string | URL) => {
         const url = String(input);
         if (url.includes('/login/device/code')) return new Response(JSON.stringify({ device_code: 'd', user_code: 'U', verification_uri: 'https://github.com/login/device' }));
-        if (url.endsWith('/app')) return new Response(JSON.stringify({ slug: 'fleetadlc-example', id: 9, installations_count: 1, owner: { login: 'example-org', type: 'Organization' } }));
+        if (url.endsWith('/app')) return new Response(JSON.stringify({ slug: 'openadlc-example', id: 9, installations_count: 1, owner: { login: 'example-org', type: 'Organization' } }));
         if (url.endsWith('/orgs/example-org/installation')) return new Response('{}', { status: 404 });
         if (url.endsWith('/users/example-org/installation')) return new Response('{}', { status: 404 });
         if (url.endsWith('/users/example-org')) return new Response(JSON.stringify({ id: 42 }));
@@ -56,7 +56,7 @@ describe('the account named in the first step', () => {
 
     expect(checks.account).toBe('example-org');
     expect(checks.installedOnAccount).toBe('no');
-    expect(checks.installUrl).toBe('https://github.com/apps/fleetadlc-example/installations/new/permissions?target_id=42');
+    expect(checks.installUrl).toBe('https://github.com/apps/openadlc-example/installations/new/permissions?target_id=42');
   });
 
   it('links to the installation’s own page once the app is installed there, where more repositories are chosen', async () => {
@@ -67,7 +67,7 @@ describe('the account named in the first step', () => {
       vi.fn(async (input: string | URL) => {
         const url = String(input);
         if (url.includes('/login/device/code')) return new Response(JSON.stringify({ device_code: 'd', user_code: 'U', verification_uri: 'https://github.com/login/device' }));
-        if (url.endsWith('/app')) return new Response(JSON.stringify({ slug: 'fleetadlc-exampleco', id: 9, installations_count: 1, owner: { login: 'exampleco', type: 'Organization' } }));
+        if (url.endsWith('/app')) return new Response(JSON.stringify({ slug: 'openadlc-exampleco', id: 9, installations_count: 1, owner: { login: 'exampleco', type: 'Organization' } }));
         if (url.endsWith('/orgs/exampleco/installation')) return new Response(JSON.stringify({ id: 88 }));
         if (url.endsWith('/users/exampleco')) return new Response(JSON.stringify({ id: 42 }));
         return new Response('{}', { status: 404 });
@@ -97,7 +97,7 @@ describe('a repository the app is installed on', () => {
       vi.fn(async (input: string | URL) => {
         const url = String(input);
         if (url.includes('/login/device/code')) return new Response(JSON.stringify({ device_code: 'd', user_code: 'U', verification_uri: 'https://github.com/login/device' }));
-        if (url.endsWith('/app')) return new Response(JSON.stringify({ slug: 'fleetadlc-exampleco', id: 9, installations_count: 1, owner: { login: 'exampleco', type: 'Organization' } }));
+        if (url.endsWith('/app')) return new Response(JSON.stringify({ slug: 'openadlc-exampleco', id: 9, installations_count: 1, owner: { login: 'exampleco', type: 'Organization' } }));
         if (url.endsWith('/repos/exampleco/api/installation')) return new Response(JSON.stringify(installation));
         return new Response('{}', { status: 404 });
       }),

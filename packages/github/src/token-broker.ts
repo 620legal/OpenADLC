@@ -29,7 +29,7 @@ export interface TokenBrokerOptions {
    */
   clientId: string | (() => string | Promise<string>);
   store?: SecretStore;
-  /** Called after a refresh so the console and `fleetadlc doctor` show real expiry. */
+  /** Called after a refresh so the console and `openadlc doctor` show real expiry. */
   onRefreshed?: (bot: string, token: UserToken) => Promise<void> | void;
   onRevoked?: (bot: string, reason: string) => Promise<void> | void;
   /**
@@ -278,7 +278,7 @@ export class TokenBroker {
         return entry;
       }
       throw new Error(
-        `${bot} is not connected to GitHub. Run: fleetadlc auth login --bot ${bot}`,
+        `${bot} is not connected to GitHub. Run: openadlc auth login --bot ${bot}`,
       );
     }
 
@@ -303,7 +303,7 @@ export class TokenBroker {
       await this.options.onRevoked?.(bot, message);
       // `--bot` takes the account's login, which every seat on it shares; the
       // name here is where the sign-in is filed, which a seat may not go by.
-      throw new Error(`${bot}'s GitHub authorization is no longer valid (${message}). Reconnect it: fleetadlc auth login --bot ${login || bot}`, {
+      throw new Error(`${bot}'s GitHub authorization is no longer valid (${message}). Reconnect it: openadlc auth login --bot ${login || bot}`, {
         cause: error,
       });
     }

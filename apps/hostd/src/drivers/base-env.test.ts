@@ -13,15 +13,15 @@ describe('what a session starts with', () => {
   it('does not carry the platform database into a bot session', () => {
     // hostd runs with this set; a bot that inherited it could rewrite the
     // ledger and the audit trail that hold it to account.
-    process.env.DATABASE_URL = 'postgres://fleetadlc:fleetadlc@127.0.0.1:47432/fleetadlc_db';
+    process.env.DATABASE_URL = 'postgres://openadlc:openadlc@127.0.0.1:47432/openadlc_db';
     expect(hostBaseEnv()).not.toHaveProperty('DATABASE_URL');
   });
 
   it('leaves the rest of hostd behind too', () => {
-    process.env.FLEETADLC_WEBHOOK_SECRET = 'shhh';
+    process.env.OPENADLC_WEBHOOK_SECRET = 'shhh';
     process.env.ANTHROPIC_API_KEY = 'sk-not-this-one';
     const base = hostBaseEnv();
-    expect(base).not.toHaveProperty('FLEETADLC_WEBHOOK_SECRET');
+    expect(base).not.toHaveProperty('OPENADLC_WEBHOOK_SECRET');
     expect(base).not.toHaveProperty('ANTHROPIC_API_KEY');
   });
 
@@ -41,8 +41,8 @@ describe('what a session starts with', () => {
   it('tells the engines a container session is in its sandbox already, and a host session is not', () => {
     // Codex sandboxes each command with bubblewrap, which cannot start in the
     // bot's container: every command a reviewer ran there failed.
-    expect(containerBaseEnv().FLEETADLC_CONTAINED).toBe('1');
-    expect(hostBaseEnv()).not.toHaveProperty('FLEETADLC_CONTAINED');
+    expect(containerBaseEnv().OPENADLC_CONTAINED).toBe('1');
+    expect(hostBaseEnv()).not.toHaveProperty('OPENADLC_CONTAINED');
   });
 });
 
@@ -75,14 +75,14 @@ describe('the PATH a bot’s session gets', () => {
     // PATH outright, so their `gh pr review` was the real gh, unsigned, and a
     // review on an account seats share counted for no seat.
     const dockerfile = readFileSync(fileURLToPath(new URL('../../../../infra/local/Dockerfile.bot', import.meta.url)), 'utf8');
-    expect(dockerfile).toMatch(/\/etc\/profile\.d\/[^\s']*fleetadlc[^\s']*\.sh/);
+    expect(dockerfile).toMatch(/\/etc\/profile\.d\/[^\s']*openadlc[^\s']*\.sh/);
     expect(dockerfile).toContain(`PATH="${CONTAINER_GH_SHIM_DIR}:`);
   });
 
   it('puts OpenADLC’s own gh first, then the image’s directories, as the image does', () => {
     const session = containerBaseEnv().PATH!.split(':');
     // OpenADLC's gh heads what the session posts to GitHub, so it comes before the real one.
-    expect(session[0]).toBe('/opt/fleetadlc/bin');
+    expect(session[0]).toBe('/opt/openadlc/bin');
     expect(session.slice(1, imagePath().length + 1)).toEqual(imagePath());
   });
 });
@@ -101,27 +101,27 @@ describe('the engine vendors’ telemetry in a session', () => {
       NEXT_TELEMETRY_DISABLED: '1',
     });
     for (const setting of [undefined, 'off', 'yes']) {
-      if (setting === undefined) delete process.env.FLEETADLC_ENGINE_TELEMETRY;
-      else process.env.FLEETADLC_ENGINE_TELEMETRY = setting;
+      if (setting === undefined) delete process.env.OPENADLC_ENGINE_TELEMETRY;
+      else process.env.OPENADLC_ENGINE_TELEMETRY = setting;
       for (const env of [hostBaseEnv(), containerBaseEnv()]) {
         expect(env, String(setting)).toMatchObject(TELEMETRY_OPT_OUTS);
-        expect(env).not.toHaveProperty('FLEETADLC_ENGINE_TELEMETRY');
+        expect(env).not.toHaveProperty('OPENADLC_ENGINE_TELEMETRY');
       }
     }
   });
 
-  it('is left at the vendors’ defaults when hostd has FLEETADLC_ENGINE_TELEMETRY=on', () => {
-    process.env.FLEETADLC_ENGINE_TELEMETRY = 'on';
+  it('is left at the vendors’ defaults when hostd has OPENADLC_ENGINE_TELEMETRY=on', () => {
+    process.env.OPENADLC_ENGINE_TELEMETRY = 'on';
     for (const env of [hostBaseEnv(), containerBaseEnv()]) {
       for (const key of Object.keys(TELEMETRY_OPT_OUTS)) expect(env).not.toHaveProperty(key);
       // What tells the codex engine to leave its own switches alone.
-      expect(env.FLEETADLC_ENGINE_TELEMETRY).toBe('on');
+      expect(env.OPENADLC_ENGINE_TELEMETRY).toBe('on');
     }
   });
 
   it('reaches a session built the way hostd builds one', () => {
-    delete process.env.FLEETADLC_ENGINE_TELEMETRY;
-    const minted = { FLEETADLC_TASK_ID: 'task-1', FLEETADLC_REPO_HOME: '/work/slot/home' };
+    delete process.env.OPENADLC_ENGINE_TELEMETRY;
+    const minted = { OPENADLC_TASK_ID: 'task-1', OPENADLC_REPO_HOME: '/work/slot/home' };
     for (const base of [hostBaseEnv(), containerBaseEnv()]) {
       expect(withRepoHome(base, minted)).toMatchObject(TELEMETRY_OPT_OUTS);
     }
@@ -131,27 +131,27 @@ describe('the engine vendors’ telemetry in a session', () => {
 describe('a session on a host behind the egress proxy', () => {
   it('gets the proxy, because it starts under env -i and inherits nothing', async () => {
     const { containerBaseEnv } = await import('./base-env.js');
-    const before = process.env.FLEETADLC_BOT_EGRESS_PROXY;
-    process.env.FLEETADLC_BOT_EGRESS_PROXY = 'http://host.docker.internal:3128';
+    const before = process.env.OPENADLC_BOT_EGRESS_PROXY;
+    process.env.OPENADLC_BOT_EGRESS_PROXY = 'http://host.docker.internal:3128';
     try {
       const env = containerBaseEnv();
       expect(env.HTTPS_PROXY).toBe('http://host.docker.internal:3128');
       expect(env.NODE_USE_ENV_PROXY).toBe('1');
       expect(env.NO_PROXY).toContain('host.docker.internal');
     } finally {
-      if (before === undefined) delete process.env.FLEETADLC_BOT_EGRESS_PROXY;
-      else process.env.FLEETADLC_BOT_EGRESS_PROXY = before;
+      if (before === undefined) delete process.env.OPENADLC_BOT_EGRESS_PROXY;
+      else process.env.OPENADLC_BOT_EGRESS_PROXY = before;
     }
   });
 
   it('gets none of it where there is no proxy', async () => {
     const { containerBaseEnv } = await import('./base-env.js');
-    const before = process.env.FLEETADLC_BOT_EGRESS_PROXY;
-    delete process.env.FLEETADLC_BOT_EGRESS_PROXY;
+    const before = process.env.OPENADLC_BOT_EGRESS_PROXY;
+    delete process.env.OPENADLC_BOT_EGRESS_PROXY;
     try {
       expect(Object.keys(containerBaseEnv()).some((name) => /proxy/i.test(name))).toBe(false);
     } finally {
-      if (before !== undefined) process.env.FLEETADLC_BOT_EGRESS_PROXY = before;
+      if (before !== undefined) process.env.OPENADLC_BOT_EGRESS_PROXY = before;
     }
   });
 });
@@ -159,31 +159,31 @@ describe('a session on a host behind the egress proxy', () => {
 describe('a repository’s own environment inside a bot', () => {
   it('gives the session its repository’s home, global installs and tools, with OpenADLC’s gh still first', async () => {
     const { containerBaseEnv, withRepoHome } = await import('./base-env.js');
-    const env = withRepoHome(containerBaseEnv(), { FLEETADLC_REPO_HOME: '/work/builder/homes/core', FLEETADLC_BOT: 'builder' });
+    const env = withRepoHome(containerBaseEnv(), { OPENADLC_REPO_HOME: '/work/builder/homes/core', OPENADLC_BOT: 'builder' });
 
     expect(env.HOME).toBe('/work/builder/homes/core');
     expect(env.NPM_CONFIG_PREFIX).toBe('/work/builder/homes/core/.local');
     expect(env.PNPM_HOME).toBe('/work/builder/homes/core/.local/share/pnpm');
     const path = env.PATH!.split(':');
-    expect(path.slice(0, 3)).toEqual(['/opt/fleetadlc/bin', '/work/builder/homes/core/.local/bin', '/work/builder/homes/core/.local/share/pnpm']);
+    expect(path.slice(0, 3)).toEqual(['/opt/openadlc/bin', '/work/builder/homes/core/.local/bin', '/work/builder/homes/core/.local/share/pnpm']);
     // The image's engines are still found after them.
     expect(path).toContain('/home/bot/.local/bin');
     // Git keeps the image's settings, which live in the bot's own home.
     expect(env.GIT_CONFIG_GLOBAL).toBe('/home/bot/.gitconfig');
-    expect(env.FLEETADLC_BOT).toBe('builder');
+    expect(env.OPENADLC_BOT).toBe('builder');
   });
 
   it('keeps two repositories of one bot apart', async () => {
     const { containerBaseEnv, withRepoHome } = await import('./base-env.js');
-    const core = withRepoHome(containerBaseEnv(), { FLEETADLC_REPO_HOME: '/work/builder/homes/core' });
-    const web = withRepoHome(containerBaseEnv(), { FLEETADLC_REPO_HOME: '/work/builder/homes/web' });
+    const core = withRepoHome(containerBaseEnv(), { OPENADLC_REPO_HOME: '/work/builder/homes/core' });
+    const web = withRepoHome(containerBaseEnv(), { OPENADLC_REPO_HOME: '/work/builder/homes/web' });
     expect(core.HOME).not.toBe(web.HOME);
     expect(core.NPM_CONFIG_PREFIX).not.toBe(web.NPM_CONFIG_PREFIX);
   });
 
   it('changes nothing where no repository home is named', async () => {
     const { containerBaseEnv, withRepoHome } = await import('./base-env.js');
-    expect(withRepoHome(containerBaseEnv(), { FLEETADLC_BOT: 'qa' })).toEqual({ ...containerBaseEnv(), FLEETADLC_BOT: 'qa' });
+    expect(withRepoHome(containerBaseEnv(), { OPENADLC_BOT: 'qa' })).toEqual({ ...containerBaseEnv(), OPENADLC_BOT: 'qa' });
   });
 
   it('shares npm’s cache, and reads pnpm’s store only from the read-only one hostd filled, never from the cache', async () => {
@@ -191,9 +191,9 @@ describe('a repository’s own environment inside a bot', () => {
     // the repository could write was one it could plant code in for the next.
     const { containerBaseEnv, withRepoHome } = await import('./base-env.js');
     const env = withRepoHome(containerBaseEnv(), {
-      FLEETADLC_REPO_HOME: '/srv/work/slots/t1/home',
-      FLEETADLC_CACHE_DIR: '/cache',
-      FLEETADLC_PNPM_STORE: '/pnpm-store',
+      OPENADLC_REPO_HOME: '/srv/work/slots/t1/home',
+      OPENADLC_CACHE_DIR: '/cache',
+      OPENADLC_PNPM_STORE: '/pnpm-store',
     });
 
     expect(env.npm_config_cache).toBe('/cache/npm');
@@ -206,7 +206,7 @@ describe('a repository’s own environment inside a bot', () => {
 
   it('gives a task a pnpm store of its own, in its home, when hostd filled none for it', async () => {
     const { containerBaseEnv, withRepoHome } = await import('./base-env.js');
-    const env = withRepoHome(containerBaseEnv(), { FLEETADLC_REPO_HOME: '/srv/work/slots/t1/home', FLEETADLC_CACHE_DIR: '/cache' });
+    const env = withRepoHome(containerBaseEnv(), { OPENADLC_REPO_HOME: '/srv/work/slots/t1/home', OPENADLC_CACHE_DIR: '/cache' });
 
     expect(env.npm_config_cache).toBe('/cache/npm');
     expect(env.PNPM_STORE_DIR).toBe('/srv/work/slots/t1/home/.pnpm-store');
@@ -217,7 +217,7 @@ describe('a repository’s own environment inside a bot', () => {
 
   it('names each repository’s folder safely, and a task on none its own', async () => {
     const { repoHomeKey } = await import('./base-env.js');
-    expect(repoHomeKey('FleetADLC-Testbed')).toBe('fleetadlc-testbed');
+    expect(repoHomeKey('OpenADLC-Testbed')).toBe('openadlc-testbed');
     expect(repoHomeKey('../../etc')).toBe('etc');
     expect(repoHomeKey(null)).toBe('_no-repository');
   });

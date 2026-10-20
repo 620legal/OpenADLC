@@ -1,5 +1,5 @@
-import type { HealthRow } from '@fleetadlc/db';
-import type { ManualStep } from '@fleetadlc/shared';
+import type { HealthRow } from '@openadlc/db';
+import type { ManualStep } from '@openadlc/shared';
 import type { CheckResult, HealthCheck } from './types.js';
 
 /**

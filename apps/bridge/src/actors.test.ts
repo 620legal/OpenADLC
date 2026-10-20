@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { setSecretStore, type SecretStore } from '@fleetadlc/github';
+import { setSecretStore, type SecretStore } from '@openadlc/github';
 
 const setTokenExpiry = vi.fn(async () => undefined);
 
-vi.mock('@fleetadlc/db', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@fleetadlc/db')>();
+vi.mock('@openadlc/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@openadlc/db')>();
   return {
     ...actual,
     // The broker refreshes under a Postgres advisory lock; there is no database
@@ -13,21 +13,21 @@ vi.mock('@fleetadlc/db', async (importOriginal) => {
     bots: {
       getBotByName: vi.fn(async (name: string) =>
         name === 'builder'
-          ? { id: 'b1', name: 'builder', githubLogin: 'fleetadlc-atlas-janedoe' }
+          ? { id: 'b1', name: 'builder', githubLogin: 'openadlc-atlas-janedoe' }
           : name === 'intake' || name === 'lead-reviewer'
-            ? { id: `id-${name}`, name, githubLogin: 'fleetadlc-example' }
+            ? { id: `id-${name}`, name, githubLogin: 'openadlc-example' }
             : null,
       ),
     },
     // `builder` has an account of its own and no identity recorded; `intake`
-    // and `lead-reviewer` share one, filed under `fleetadlc-example`.
+    // and `lead-reviewer` share one, filed under `openadlc-example`.
     identities: {
       identityOfBot: vi.fn(async (botId: string) =>
         botId === 'id-intake' || botId === 'id-lead-reviewer'
-          ? { id: 'shared', login: 'fleetadlc-example', githubUserId: null, secretNs: 'fleetadlc-example' }
+          ? { id: 'shared', login: 'openadlc-example', githubUserId: null, secretNs: 'openadlc-example' }
           : null,
       ),
-      botsOnSecretNs: vi.fn(async (ns: string) => (ns === 'fleetadlc-example' ? ['intake', 'lead-reviewer'] : [])),
+      botsOnSecretNs: vi.fn(async (ns: string) => (ns === 'openadlc-example' ? ['intake', 'lead-reviewer'] : [])),
     },
     credentials: { setTokenExpiry, setCredentialStatus: vi.fn(async () => undefined) },
   };
@@ -89,7 +89,7 @@ describe('a refresh', () => {
 
 describe('seats that share one account', () => {
   it('refresh it once between them, so neither is left holding a token GitHub has rotated away', async () => {
-    setSecretStore(memoryStore({ 'github-refresh-fleetadlc-example': 'ghr_zzz-old-zzz' }));
+    setSecretStore(memoryStore({ 'github-refresh-openadlc-example': 'ghr_zzz-old-zzz' }));
     const fetchMock = vi.fn(async () =>
       new Response(
         JSON.stringify({

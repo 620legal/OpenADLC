@@ -120,17 +120,17 @@ describe('a restore of everything onto a clean install', () => {
     expect(recorded.secrets.get('github-refresh-builder')).toBe('ghr_zzz-fresh-refresh-1-zzz');
     expect(recorded.secrets.get('github-refresh-lead-reviewer')).toBe('ghr_zzz-fresh-refresh-2-zzz');
     expect([...recorded.secrets.values()]).not.toContain(VALUES.builderRefresh);
-    expect(recorded.secrets.has('github-refresh-fleetadlc-atlas-janedoe')).toBe(false);
+    expect(recorded.secrets.has('github-refresh-openadlc-atlas-janedoe')).toBe(false);
   });
 
   it('binds each bot to its account, records the sign-in it took over, and renames it to the archived handle', async () => {
     const { recorded, report } = await restoreOnto(archive());
 
-    expect(recorded.logins).toEqual({ builder: 'fleetadlc-atlas-janedoe', 'lead-reviewer': 'fleetadlc-sydney-janedoe' });
+    expect(recorded.logins).toEqual({ builder: 'openadlc-atlas-janedoe', 'lead-reviewer': 'openadlc-sydney-janedoe' });
     expect(recorded.credentials).toEqual({ builder: 'github-refresh-builder', 'lead-reviewer': 'github-refresh-lead-reviewer' });
     expect(recorded.renamed).toEqual([
-      { name: 'builder', to: 'fleetadlc-atlas-janedoe' },
-      { name: 'lead-reviewer', to: 'fleetadlc-sydney-janedoe' },
+      { name: 'builder', to: 'openadlc-atlas-janedoe' },
+      { name: 'lead-reviewer', to: 'openadlc-sydney-janedoe' },
     ]);
     expect(report.renames.every((rename) => rename.state === 'renamed')).toBe(true);
     expect(report.signIns.filter((line) => line.provider === 'github').map((line) => line.state)).toEqual(['taken-over', 'taken-over']);
@@ -148,7 +148,7 @@ describe('a restore of everything onto a clean install', () => {
   it('adds the repository with its owner found by seat, and the model accounts before the bots that use them', async () => {
     const { recorded } = await restoreOnto(archive());
 
-    expect(recorded.repositories).toEqual([{ name: 'fleetadlc-testbed', owner: 'builder' }]);
+    expect(recorded.repositories).toEqual([{ name: 'openadlc-testbed', owner: 'builder' }]);
     expect(recorded.accounts.map((account) => account.id)).toEqual([KEY_ACCOUNT, CLAUDE_SEAT, CODEX_SEAT]);
     expect(recorded.secrets.get(`model-account-${CLAUDE_SEAT}`)).toBe(VALUES.seatToken);
   });
@@ -172,7 +172,7 @@ describe('a restore of everything onto a clean install', () => {
     expect(takeOver.adopted[CODEX_SEAT]).toEqual(CODEX_LOGIN);
     expect(report.signIns.find((line) => line.accountId === CODEX_SEAT)?.state).toBe('taken-over');
     // After the rows it depends on.
-    expect(recorded.order.indexOf(`check ${CODEX_SEAT}`)).toBeGreaterThan(recorded.order.indexOf('login builder=fleetadlc-atlas-janedoe'));
+    expect(recorded.order.indexOf(`check ${CODEX_SEAT}`)).toBeGreaterThan(recorded.order.indexOf('login builder=openadlc-atlas-janedoe'));
   });
 
   it('adds the history of the seats it has, and says what it left out', async () => {
@@ -215,13 +215,13 @@ describe('a restore without the GitHub sign-ins', () => {
   it('binds each seat to its account but leaves it at its seat, to be connected', async () => {
     const { recorded, plan } = await restoreOnto(contents());
 
-    expect(recorded.logins).toEqual({ builder: 'fleetadlc-atlas-janedoe', 'lead-reviewer': 'fleetadlc-sydney-janedoe' });
+    expect(recorded.logins).toEqual({ builder: 'openadlc-atlas-janedoe', 'lead-reviewer': 'openadlc-sydney-janedoe' });
     expect(recorded.credentials).toEqual({});
     expect(recorded.renamed).toEqual([]);
     expect(recorded.secrets.get('ssh-signing-builder')).toBe(VALUES.builderSigning);
     expect(plan.bots.deviceFlow).toEqual([
-      { name: 'builder', login: 'fleetadlc-atlas-janedoe' },
-      { name: 'lead-reviewer', login: 'fleetadlc-sydney-janedoe' },
+      { name: 'builder', login: 'openadlc-atlas-janedoe' },
+      { name: 'lead-reviewer', login: 'openadlc-sydney-janedoe' },
     ]);
   });
 
@@ -229,7 +229,7 @@ describe('a restore without the GitHub sign-ins', () => {
     const plan = planRestore(contents(), cleanShape());
     const summary = summarizeRestore(contents(), plan, cleanShape().bots);
 
-    expect(summary.next[0]).toMatch(/^Connect 2 bots to GitHub — fleetadlc-atlas-janedoe, fleetadlc-sydney-janedoe — because their sign-ins were not in the backup/);
+    expect(summary.next[0]).toMatch(/^Connect 2 bots to GitHub — openadlc-atlas-janedoe, openadlc-sydney-janedoe — because their sign-ins were not in the backup/);
     expect(summary.bots.find((bot) => bot.seat === 'builder')).toMatchObject({ needsConnecting: true, becomes: null, signIn: false });
   });
 });
@@ -240,7 +240,7 @@ describe('a bot already on the archive’s account, written in other capitals', 
     // bot's credential row over a capital letter.
     const contents = archive({ ...EVERYTHING, botSignIns: false });
     const shape = cleanShape();
-    shape.bots = shape.bots.map((bot) => (bot.slot === 'builder' ? { ...bot, githubLogin: 'FleetADLC-Atlas-Janedoe' } : bot));
+    shape.bots = shape.bots.map((bot) => (bot.slot === 'builder' ? { ...bot, githubLogin: 'OpenADLC-Atlas-Janedoe' } : bot));
     const plan = planRestore(contents, shape);
 
     expect(plan.bots.unchanged).toContain('builder');
@@ -253,7 +253,7 @@ describe('a bot already on the archive’s account, written in other capitals', 
 });
 
 describe('an archive written before a backup could be chosen', () => {
-  /** What `fleetadlc backup` wrote then: version 1, persona names, and once in a while a refresh token. */
+  /** What `openadlc backup` wrote then: version 1, persona names, and once in a while a refresh token. */
   const old: BackupContents = {
     manifest: { version: 1, createdAt: '2026-06-01T00:00:00.000Z', counts: { secrets: 4, settings: 2, bots: 2 } },
     secrets: {
@@ -264,8 +264,8 @@ describe('an archive written before a backup could be chosen', () => {
     },
     settings: { organization: 'janedoe', githubClientId: VALUES.clientId },
     bots: [
-      { name: 'atlas', githubLogin: 'fleetadlc-atlas-janedoe', engine: 'claude', model: 'claude-opus-4' },
-      { name: 'sydney', githubLogin: 'fleetadlc-sydney-janedoe', engine: 'codex', model: null },
+      { name: 'atlas', githubLogin: 'openadlc-atlas-janedoe', engine: 'claude', model: 'claude-opus-4' },
+      { name: 'sydney', githubLogin: 'openadlc-sydney-janedoe', engine: 'codex', model: null },
     ],
   };
 
@@ -275,7 +275,7 @@ describe('an archive written before a backup could be chosen', () => {
     expect(recorded.settings).toEqual({ organization: 'janedoe', githubClientId: VALUES.clientId });
     expect(recorded.secrets.get('github-app-private-key')).toBe(VALUES.appKey);
     expect(recorded.secrets.get('ssh-signing-builder')).toBe(VALUES.builderSigning);
-    expect(recorded.logins).toEqual({ builder: 'fleetadlc-atlas-janedoe', 'lead-reviewer': 'fleetadlc-sydney-janedoe' });
+    expect(recorded.logins).toEqual({ builder: 'openadlc-atlas-janedoe', 'lead-reviewer': 'openadlc-sydney-janedoe' });
     // Nothing an old archive never promised: no assignment, no sign-in.
     expect(recorded.assignments).toEqual({});
     expect(recorded.renamed).toEqual([]);
@@ -297,7 +297,7 @@ describe('an archive written before a backup could be chosen', () => {
     expect(recorded.secrets.get('internal-api-secret')).toBe('zzz-this-install-internal-zzz');
     expect(recorded.order).not.toContain('secret internal-api-secret');
     expect(report.summary.next).toContain(
-      'Connect fleetadlc-atlas-janedoe to GitHub again: it is from a backup made before sign-ins could be chosen, and the old install has replaced it since.',
+      'Connect openadlc-atlas-janedoe to GitHub again: it is from a backup made before sign-ins could be chosen, and the old install has replaced it since.',
     );
   });
 
@@ -388,7 +388,7 @@ describe('a restore that fails part way', () => {
 describe('a bot’s own engine key the provider refuses', () => {
   it('is not written, and the summary says to give the bot a model account, with the reason', async () => {
     const built = archive();
-    const contents = { ...built, secrets: { ...built.secrets, 'engine-key-fleetadlc-atlas-janedoe': 'sk-ant-api-zzz-revoked-zzz' } };
+    const contents = { ...built, secrets: { ...built.secrets, 'engine-key-openadlc-atlas-janedoe': 'sk-ant-api-zzz-revoked-zzz' } };
 
     const { report, recorded } = await restoreOnto(contents, { refuse: ['sk-ant-api-zzz-revoked-zzz'] });
 
@@ -405,8 +405,8 @@ describe('what an archive holds, as a page shows it', () => {
     const summary = summarizeArchive(archive());
 
     expect(summary.install.app).toEqual(['private key', 'client id', 'webhook secret']);
-    expect(summary.repositories).toEqual(['janedoe/fleetadlc-testbed']);
-    expect(summary.bots[0]).toMatchObject({ seat: 'builder', login: 'fleetadlc-atlas-janedoe', signingKey: true, signIn: true });
+    expect(summary.repositories).toEqual(['janedoe/openadlc-testbed']);
+    expect(summary.bots[0]).toMatchObject({ seat: 'builder', login: 'openadlc-atlas-janedoe', signingKey: true, signIn: true });
     expect(summary.accounts.map((account) => account.credential)).toEqual(['key', 'token', 'sign-in']);
     expect(summary.history).toMatchObject({ threads: 2 });
     const said = JSON.stringify(summary);
@@ -415,28 +415,28 @@ describe('what an archive holds, as a page shows it', () => {
 });
 
 describe('the repositories a restore would write', () => {
-  const testbed = (fullName: string, name = 'fleetadlc-testbed') => ({ name, fullName });
+  const testbed = (fullName: string, name = 'openadlc-testbed') => ({ name, fullName });
 
   it('are matched by full name, and said by full name', () => {
-    const shape = { ...cleanShape(), repositories: ['fleetadlc-testbed'], repositoryNames: [testbed('janedoe/fleetadlc-testbed')] };
+    const shape = { ...cleanShape(), repositories: ['openadlc-testbed'], repositoryNames: [testbed('janedoe/openadlc-testbed')] };
     const plan = planRestore(archive(), shape);
 
-    expect(plan.repositories).toMatchObject({ overwrite: ['janedoe/fleetadlc-testbed'], create: [] });
-    expect(describePlan(plan).join('\n')).toContain('repositories this would overwrite (1):\n  janedoe/fleetadlc-testbed');
+    expect(plan.repositories).toMatchObject({ overwrite: ['janedoe/openadlc-testbed'], create: [] });
+    expect(describePlan(plan).join('\n')).toContain('repositories this would overwrite (1):\n  janedoe/openadlc-testbed');
   });
 
   it('count one removed here as added again, not overwritten', () => {
-    const shape = { ...cleanShape(), repositoryNames: [{ ...testbed('janedoe/fleetadlc-testbed'), removed: true }] };
-    expect(planRestore(archive(), shape).repositories).toMatchObject({ overwrite: [], create: ['janedoe/fleetadlc-testbed'] });
+    const shape = { ...cleanShape(), repositoryNames: [{ ...testbed('janedoe/openadlc-testbed'), removed: true }] };
+    expect(planRestore(archive(), shape).repositories).toMatchObject({ overwrite: [], create: ['janedoe/openadlc-testbed'] });
   });
 
   it('refuse one whose name another repository here has, rather than calling it an overwrite', () => {
-    // `fleetadlc restore` listed it as "repositories this would overwrite:
-    // fleetadlc-testbed" and then wrote it over acme's row.
-    const shape = { ...cleanShape(), repositories: ['fleetadlc-testbed'], repositoryNames: [testbed('acme/fleetadlc-testbed')] };
+    // `openadlc restore` listed it as "repositories this would overwrite:
+    // openadlc-testbed" and then wrote it over acme's row.
+    const shape = { ...cleanShape(), repositories: ['openadlc-testbed'], repositoryNames: [testbed('acme/openadlc-testbed')] };
     expect(() => planRestore(archive(), shape)).toThrow(BackupError);
     expect(() => planRestore(archive(), shape)).toThrow(
-      'this install already has a repository called fleetadlc-testbed (acme/fleetadlc-testbed), and OpenADLC names each repository by its name alone, so janedoe/fleetadlc-testbed cannot be restored beside it',
+      'this install already has a repository called openadlc-testbed (acme/openadlc-testbed), and OpenADLC names each repository by its name alone, so janedoe/openadlc-testbed cannot be restored beside it',
     );
   });
 });
@@ -446,16 +446,16 @@ describe('the spending caps a restore would set', () => {
     ...archive(),
     spendingLimits: [
       { scope: 'global', kind: 'month_total', amountUsd: 5000 },
-      { scope: 'repo', repository: 'janedoe/fleetadlc-testbed', kind: 'month_total', amountUsd: 40 },
+      { scope: 'repo', repository: 'janedoe/openadlc-testbed', kind: 'month_total', amountUsd: 40 },
     ],
   });
 
-  it('are listed by `fleetadlc restore` before it asks, and counted as changes', () => {
+  it('are listed by `openadlc restore` before it asks, and counted as changes', () => {
     const plan = planRestore(contents(), cleanShape());
 
-    expect(plan.spendingLimits).toEqual(['all repositories, a month: $5000', 'janedoe/fleetadlc-testbed, a month: $40']);
+    expect(plan.spendingLimits).toEqual(['all repositories, a month: $5000', 'janedoe/openadlc-testbed, a month: $40']);
     expect(describePlan(plan).join('\n')).toContain(
-      'spending caps this would set (2):\n  all repositories, a month: $5000\n  janedoe/fleetadlc-testbed, a month: $40',
+      'spending caps this would set (2):\n  all repositories, a month: $5000\n  janedoe/openadlc-testbed, a month: $40',
     );
     expect(changeCount(plan)).toBe(changeCount(planRestore(archive(), cleanShape())) + 2);
   });
@@ -483,16 +483,16 @@ describe('a clean install', () => {
   it('is not one with any of those, and says which', () => {
     const facts = cleanliness({
       appConfigured: true,
-      repositories: ['janedoe/fleetadlc-testbed'],
-      connectedBots: ['fleetadlc-atlas-janedoe'],
+      repositories: ['janedoe/openadlc-testbed'],
+      connectedBots: ['openadlc-atlas-janedoe'],
       modelAccounts: ['Claude Max'],
     });
 
     expect(facts.clean).toBe(false);
     expect(facts.setUp).toEqual([
       'the GitHub App',
-      'the repository janedoe/fleetadlc-testbed',
-      'fleetadlc-atlas-janedoe, connected to GitHub',
+      'the repository janedoe/openadlc-testbed',
+      'openadlc-atlas-janedoe, connected to GitHub',
       'the model account Claude Max',
     ]);
     // Several of a kind are counted, so the sentence stays one a person reads.
@@ -551,7 +551,7 @@ describe('a history backup restored into the install it came from', () => {
     // spend doubled.
     const install = memoryInstall({
       bots: [
-        { name: 'fleetadlc-atlas-janedoe', slot: 'builder', githubLogin: null, engine: 'claude', model: 'newest:sonnet', modelAccountId: null, modelSetAt: null },
+        { name: 'openadlc-atlas-janedoe', slot: 'builder', githubLogin: null, engine: 'claude', model: 'newest:sonnet', modelAccountId: null, modelSetAt: null },
       ],
       history: HISTORY,
     });

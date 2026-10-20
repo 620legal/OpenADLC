@@ -1,4 +1,4 @@
-import { settings, withAdvisoryLock } from '@fleetadlc/db';
+import { settings, withAdvisoryLock } from '@openadlc/db';
 import { HttpFailure, type Router } from './router.js';
 
 /**

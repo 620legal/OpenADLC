@@ -8,9 +8,9 @@
  *   tests/scratch.sh up && eval "$(tests/scratch.sh env)" && node tests/onboarding.mjs
  */
 import { createHmac } from 'node:crypto';
-import { bots, closePool, credentials, query, waitForDatabase } from '@fleetadlc/db';
-import { consoleSecretRef, getSecretStore } from '@fleetadlc/github';
-import { ONBOARDING_STEPS, STEP_TITLES as SHARED_STEP_TITLES } from '@fleetadlc/shared';
+import { bots, closePool, credentials, query, waitForDatabase } from '@openadlc/db';
+import { consoleSecretRef, getSecretStore } from '@openadlc/github';
+import { ONBOARDING_STEPS, STEP_TITLES as SHARED_STEP_TITLES } from '@openadlc/shared';
 import { refuseARealInstall } from './scratch-only.mjs';
 
 // Before anything else is read or written: see scratch-only.mjs.
@@ -23,19 +23,19 @@ await refuseARealInstall();
  */
 const STEP_TITLES = ONBOARDING_STEPS.map((step) => SHARED_STEP_TITLES[step]);
 
-const BRIDGE = process.env.FLEETADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
-const CONSOLE = process.env.FLEETADLC_CONSOLE_URL ?? 'http://127.0.0.1:47300';
+const BRIDGE = process.env.OPENADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
+const CONSOLE = process.env.OPENADLC_CONSOLE_URL ?? 'http://127.0.0.1:47300';
 // `/v1` is served only to the console and the CLI, which hold this; the suite reads it as they do.
 const CONSOLE_SECRET = (await getSecretStore().get(consoleSecretRef())) ?? '';
-const AS_CONSOLE = { 'x-fleetadlc-console-secret': CONSOLE_SECRET };
+const AS_CONSOLE = { 'x-openadlc-console-secret': CONSOLE_SECRET };
 
 /**
  * Signs in to the console the way a person does, with the link
- * `fleetadlc console-link` prints, and returns the cookie it sets.
+ * `openadlc console-link` prints, and returns the cookie it sets.
  */
 async function signIn() {
   const exp = Math.floor(Date.now() / 1000) + 3600;
-  const token = `${exp}.${createHmac('sha256', CONSOLE_SECRET).update(`fleetadlc-console-sign-in:${exp}`).digest('hex')}`;
+  const token = `${exp}.${createHmac('sha256', CONSOLE_SECRET).update(`openadlc-console-sign-in:${exp}`).digest('hex')}`;
   const response = await fetch(`${CONSOLE}/signin?token=${token}`, { redirect: 'manual' });
   return { status: response.status, cookie: (response.headers.get('set-cookie') ?? '').split(';')[0] };
 }
@@ -133,7 +133,7 @@ async function main() {
   // ------------------------------------------------------------- the emails
   check(
     'suggests one address per bot, tagged on the operator’s mailbox',
-    data.bots.every((bot) => bot.suggestedEmail?.endsWith('@example.test') && bot.suggestedEmail.includes('+fleetadlc-')),
+    data.bots.every((bot) => bot.suggestedEmail?.endsWith('@example.test') && bot.suggestedEmail.includes('+openadlc-')),
     data.bots[0]?.suggestedEmail,
   );
   check(
@@ -251,7 +251,7 @@ async function main() {
   // right after the bot takes its account's handle.
   const started = await fetch(`${BRIDGE}/v1/onboarding/bots/intake/connect`, {
     method: 'POST',
-    headers: { 'x-fleetadlc-identity': 'onboarding test', ...AS_CONSOLE },
+    headers: { 'x-openadlc-identity': 'onboarding test', ...AS_CONSOLE },
   });
   const body = await started.json();
 
@@ -279,12 +279,12 @@ async function main() {
   );
 
   // ------------------------------------------------------ who the API serves
-  const unsigned = await fetch(`${BRIDGE}/v1/onboarding`, { headers: { 'x-fleetadlc-identity': 'onboarding test' } });
+  const unsigned = await fetch(`${BRIDGE}/v1/onboarding`, { headers: { 'x-openadlc-identity': 'onboarding test' } });
   check('the bridge refuses /v1 to a caller without the console secret', unsigned.status === 401, `${unsigned.status}`);
   const signedOut = await fetch(`${CONSOLE}/onboarding`, { redirect: 'manual' });
   check('the console refuses a browser that has not signed in', signedOut.status === 401, `${signedOut.status}`);
   const signedIn = await signIn();
-  check('the sign-in link sets a session', signedIn.status === 303 && signedIn.cookie.startsWith('fleetadlc_session='), `${signedIn.status}`);
+  check('the sign-in link sets a session', signedIn.status === 303 && signedIn.cookie.startsWith('openadlc_session='), `${signedIn.status}`);
   const session = { cookie: signedIn.cookie };
 
   // --------------------------------------------------------- the console page
@@ -298,7 +298,7 @@ async function main() {
   // Suggested from the seat, since a connected bot's name is already a handle.
   check(
     'the page carries the copyable values',
-    page.includes('fleetadlc-builder') && page.includes('owner+fleetadlc-builder@example.test'),
+    page.includes('openadlc-builder') && page.includes('owner+openadlc-builder@example.test'),
   );
   // Narrower than the assertion it replaces, which looked for one sentence about
   // work only a person can do — copy that belonged to a step this no longer

@@ -1,6 +1,6 @@
-import { WEBHOOK_EVENTS } from '@fleetadlc/shared';
+import { WEBHOOK_EVENTS } from '@openadlc/shared';
 import { generateKeyPairSync } from 'node:crypto';
-import { GitHubApiError, type AppApi } from '@fleetadlc/github';
+import { GitHubApiError, type AppApi } from '@openadlc/github';
 import { describe, expect, it } from 'vitest';
 import { appChecks, forbiddenBecause, type AppReader } from './app.js';
 
@@ -40,7 +40,7 @@ function reader(options: {
     async request<T>(_method: string, path: string): Promise<T> {
       if (path === '/app') {
         return {
-          slug: 'fleetadlc-exampleco',
+          slug: 'openadlc-exampleco',
           id: 7,
           owner: { login: 'exampleco', type: 'Organization' },
           permissions: options.permissions ?? FULL,
@@ -91,10 +91,10 @@ describe('the Checks permission', () => {
       ok: false,
       severity: 'warning',
       title: 'Optional: give the OpenADLC app “Checks”',
-      action: { url: 'https://github.com/organizations/exampleco/settings/apps/fleetadlc-exampleco/permissions' },
+      action: { url: 'https://github.com/organizations/exampleco/settings/apps/openadlc-exampleco/permissions' },
     });
     const detail = checks && 'detail' in checks ? checks.detail : '';
-    expect(detail).toContain('[Permissions & events](https://github.com/organizations/exampleco/settings/apps/fleetadlc-exampleco/permissions)');
+    expect(detail).toContain('[Permissions & events](https://github.com/organizations/exampleco/settings/apps/openadlc-exampleco/permissions)');
     expect(detail).toContain('Repository permissions → Checks');
     expect(detail).toContain('**Read and write**');
     expect(detail).toContain('Organization settings → GitHub Apps → the OpenADLC app → [Review request](https://github.com/organizations/exampleco/settings/installations/42)');
@@ -141,7 +141,7 @@ describe('the Checks permission', () => {
 });
 
 describe('the app’s client secret', () => {
-  const settingsLink = { label: 'Open the app’s settings', url: expect.stringContaining('fleetadlc-exampleco') };
+  const settingsLink = { label: 'Open the app’s settings', url: expect.stringContaining('openadlc-exampleco') };
 
   it('warns, with the steps and a link to the app’s page, when the install holds none', async () => {
     const [result] = await appChecks({ ...reader({}), clientSecret: async () => null }).clientSecret.run(NOW);
@@ -219,7 +219,7 @@ describe('an organization that gave the app all of its repositories', () => {
     repositories,
     fix: null,
   });
-  const checking = (accounts: ReturnType<typeof account>[], app: unknown = { slug: 'fleetadlc-exampleco' }) =>
+  const checking = (accounts: ReturnType<typeof account>[], app: unknown = { slug: 'openadlc-exampleco' }) =>
     appChecks({
       ...reader({}),
       installations: async () => ({ app: app as never, accounts, reason: app ? '' : 'OpenADLC does not hold the app’s private key yet' }),

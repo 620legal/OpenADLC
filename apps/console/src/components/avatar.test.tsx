@@ -18,7 +18,7 @@ import { AVATARS, avatarOf, EngineMarkSvg, MARK_FLOOR, type EngineMark } from '.
 
 const read = (path: string): string => readFileSync(new URL(path, import.meta.url), 'utf8');
 
-const BUILDER = { name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', authorization: 'active', githubLogin: 'fleetadlc-atlas-janedoe', engine: 'claude' };
+const BUILDER = { name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', authorization: 'active', githubLogin: 'openadlc-atlas-janedoe', engine: 'claude' };
 
 /** Whether the person's system asks for less motion, as `matchMedia` answers it. */
 let reduced = false;
@@ -54,7 +54,7 @@ describe('a crew member’s avatar', () => {
 
 describe('the avatars a crew member can show', () => {
   it('are the ones the bridge stores, in the same order', () => {
-    // Two copies of one list: the console does not depend on @fleetadlc/shared.
+    // Two copies of one list: the console does not depend on @openadlc/shared.
     const shared = /AVATARS = \[([^\]]+)\]/.exec(read('../../../../packages/shared/src/avatars.ts'))?.[1];
     expect(shared?.split(',').map((entry) => entry.trim().replace(/'/g, ''))).toEqual([...AVATARS]);
   });
@@ -219,7 +219,7 @@ describe('choosing an avatar', () => {
     const { RoleProvider } = await import('./app-header');
     const { headerData } = await import('@/lib/header');
     const member = { ...BUILDER, displayName: 'Builder', model: 'claude-sonnet-5', status: 'stopped', container: 'bot-x', tokenExpiresAt: null, now: '', paused: false, sessions: [], avatar: null } as unknown as CrewMember;
-    const header = headerData({ repos: ['fleetadlc'], crew: [member], budget: null, needsYou: 0 });
+    const header = headerData({ repos: ['openadlc'], crew: [member], budget: null, needsYou: 0 });
     await act(async () =>
       root.render(
         <RoleProvider role="user">
@@ -240,10 +240,10 @@ describe('choosing an avatar', () => {
     await act(async () => root.render(<>{settings.content}</>));
     expect(options()).toContain('By engine (Petals) *');
     await act(async () => {
-      container.querySelector<HTMLButtonElement>('[role="radiogroup"][aria-label="fleetadlc-atlas-janedoe avatar"] [aria-label="Initials"]')!.click();
+      container.querySelector<HTMLButtonElement>('[role="radiogroup"][aria-label="openadlc-atlas-janedoe avatar"] [aria-label="Initials"]')!.click();
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    expect(saved).toEqual([['fleetadlc-atlas-janedoe', 'initials']]);
+    expect(saved).toEqual([['openadlc-atlas-janedoe', 'initials']]);
     expect(options()).toContain('Initials *');
     expect(container.textContent).toContain('Saved');
   });

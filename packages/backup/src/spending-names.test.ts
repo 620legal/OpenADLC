@@ -34,7 +34,7 @@ describe('a spending cap in an archive', () => {
     const archived = archiveSpendingLimit(
       { scope: 'global', kind: 'month_bot:bot-old', amountUsd: 10 },
       REPOS,
-      [{ id: 'bot-old', name: 'fleetadlc-atlas-janedoe', slot: 'builder' }],
+      [{ id: 'bot-old', name: 'openadlc-atlas-janedoe', slot: 'builder' }],
     );
 
     expect(archived.bot).toBe('builder');

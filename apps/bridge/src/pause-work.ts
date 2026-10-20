@@ -1,4 +1,4 @@
-import { audit as auditEntry, repos, settings, withAdvisoryLock } from '@fleetadlc/db';
+import { audit as auditEntry, repos, settings, withAdvisoryLock } from '@openadlc/db';
 import type { DispatchGate } from './dispatch-gate.js';
 import { HttpFailure, type Router } from './router.js';
 
@@ -21,7 +21,7 @@ import { HttpFailure, type Router } from './router.js';
  * routes, so a bridge that restarts is still paused, and each pause and
  * resume is audited. A bridge that cannot read the setting as it starts stays
  * paused until it can. Without it, the only way to stop new work was to
- * restart the bridge with `FLEETADLC_DISPATCH_IN_BRIDGE=0`, by hand.
+ * restart the bridge with `OPENADLC_DISPATCH_IN_BRIDGE=0`, by hand.
  *
  * A pause can also be of some repositories and not the rest: stored
  * beside it as `workPausedRepos`, by repository name, and held on the gate per

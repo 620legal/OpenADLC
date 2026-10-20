@@ -1,6 +1,6 @@
-import { bots, leases, listEventsOfTypeWith, recordEvent, repos } from '@fleetadlc/db';
-import type { GitHubClient } from '@fleetadlc/github';
-import { allShared, DELIVERY_RULES_PATH, resolutionPolicyStrict, type ContextDocument } from '@fleetadlc/shared';
+import { bots, leases, listEventsOfTypeWith, recordEvent, repos } from '@openadlc/db';
+import type { GitHubClient } from '@openadlc/github';
+import { allShared, readDeliveryRulesFile, resolutionPolicyStrict, type ContextDocument } from '@openadlc/shared';
 import { mayDefineCi } from './automation.js';
 import { issueNumberFromBranch } from './work.js';
 import { BotBusyError, type TaskService } from './task-service.js';
@@ -15,7 +15,7 @@ import { BotBusyError, type TaskService } from './task-service.js';
  * base into its branch and resolves only the files the two sides both
  * changed, commits the merge, runs `make ci` on it and pushes. When every one
  * of those files is one the repository calls shared (`paths.shared` in
- * `.github/fleetadlc.yml`, read by `resolutionPolicyStrict` and `allShared`),
+ * `.github/openadlc.yml`, read by `resolutionPolicyStrict` and `allShared`),
  * the lead re-checks the resolution alone, and the other seats' approvals stand while
  * the lead's own has to be of the new head; otherwise the reviews run again in
  * full, as before. A file that can decide how CI runs, and AGENTS.md, are
@@ -139,7 +139,7 @@ export class ConflictRounds {
       await this.deps.backToBuild({
         repoName: input.repoName,
         prNumber: input.prNumber,
-        reason: `The branch left the merge line: it conflicts with ${input.baseRef}. Bring it up to date and resolve it, run fleetadlc-ci, and push.`,
+        reason: `The branch left the merge line: it conflicts with ${input.baseRef}. Bring it up to date and resolve it, run openadlc-ci, and push.`,
       });
       return 'sent_back';
     };
@@ -159,8 +159,7 @@ export class ConflictRounds {
     // Read strictly: a file that could not be read (anything but a 404) or
     // does not parse gives a full review, not the broad defaults. A 502 used
     // to read as "no file", and the defaults call the Makefile shared.
-    const rules = await client
-      .readFileIfPresent(repo.fullName, DELIVERY_RULES_PATH, repo.defaultBranch)
+    const rules = await readDeliveryRulesFile((path) => client.readFileIfPresent(repo.fullName, path, repo.defaultBranch))
       .then((text) => ({ text }))
       .catch(() => null);
     const policy = rules ? resolutionPolicyStrict(rules.text) : null;
@@ -457,7 +456,7 @@ function resolutionBrief(input: { base: string; files: string[]; review: Resolut
       '',
       ...input.files.map((file) => `- \`${file}\``),
       '',
-      `Merge \`${input.base}\` into your branch and resolve only these files, keeping what both sides meant: usually both sides' additions, in a sensible order. Change nothing else. Commit the merge, then run \`fleetadlc-ci\` on it and push.`,
+      `Merge \`${input.base}\` into your branch and resolve only these files, keeping what both sides meant: usually both sides' additions, in a sensible order. Change nothing else. Commit the merge, then run \`openadlc-ci\` on it and push.`,
       '',
       input.review === 'lead-only'
         ? 'These are files many changes add to: the lead re-checks your resolution, and the other approvals stand if you change nothing but these files and what the base brought. Anything else you change makes it a full review again.'

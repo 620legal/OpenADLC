@@ -17,7 +17,7 @@ vi.mock('@/app/actions', () => ({ addSeat: seats.add, removeSeat: vi.fn() }));
 const { CrewTable } = await import('./github-accounts');
 
 const BUILDER: CrewMember = {
-  name: 'fleetadlc-atlas-janedoe',
+  name: 'openadlc-atlas-janedoe',
   slot: 'builder',
   displayName: 'Builder',
   role: 'implement',

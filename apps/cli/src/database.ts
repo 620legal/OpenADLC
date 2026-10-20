@@ -1,4 +1,4 @@
-import { describeDatabase, waitForDatabase } from '@fleetadlc/db';
+import { describeDatabase, waitForDatabase } from '@openadlc/db';
 
 /** Errors that mean nothing is there to answer, as Node and pg give them. */
 const UNREACHABLE = new Set(['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EHOSTUNREACH', 'ECONNRESET']);
@@ -7,15 +7,15 @@ const UNREACHABLE = new Set(['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EHOSTUNR
  * What to say about a database error that means the database cannot be used
  * at all, or null for any other.
  *
- * With the stack stopped, `fleetadlc auth status` printed `connect
- * ECONNREFUSED 127.0.0.1:47432` and `fleetadlc backup` printed "unexpected
+ * With the stack stopped, `openadlc auth status` printed `connect
+ * ECONNREFUSED 127.0.0.1:47432` and `openadlc backup` printed "unexpected
  * Error, reported without its message", neither of which says to start it.
  */
 export function databaseUnreachable(error: unknown, url: string = process.env.DATABASE_URL ?? ''): string | null {
   const code = (error as { code?: unknown } | null | undefined)?.code;
   const where = describeDatabase(url);
   const at = where ? ` (${where})` : '';
-  if (typeof code === 'string' && UNREACHABLE.has(code)) return `cannot reach the database${at}: start the stack with fleetadlc up`;
+  if (typeof code === 'string' && UNREACHABLE.has(code)) return `cannot reach the database${at}: start the stack with openadlc up`;
   // invalid_password and invalid_authorization_specification.
   if (code === '28P01' || code === '28000') return `the database${at} refused this install’s user or password: check databaseUrl in install.json`;
   return null;

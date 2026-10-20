@@ -40,7 +40,7 @@ regexes = [
   # The sign-in link the made-up secret above signs.
   '''^1800003600\.55e64a713ef5fed11eac66d38c157758eb45f2473d58705e088827f7e12b4835$''',
   # A repository name the generic rule reads as a key because it follows `api,`.
-  '''^janedoe/FleetADLC$''',
+  '''^janedoe/OpenADLC$''',
 ]
 
 # The redaction's own tests write a key the ways it arrives, and gitleaks

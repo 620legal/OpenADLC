@@ -140,7 +140,7 @@ describe('one file GitHub will not take', () => {
     const refused = TEMPLATE_FILES[1] as string;
     const { api, writes } = fake([], refused);
 
-    const outcomes = await applyRepoTemplates(api, { fullName: 'janedoe/fleetadlc-testbed', root: ROOT });
+    const outcomes = await applyRepoTemplates(api, { fullName: 'janedoe/openadlc-testbed', root: ROOT });
 
     expect(outcomes).toHaveLength(TEMPLATE_FILES.length);
     expect(writes).toHaveLength(TEMPLATE_FILES.length - 1);
@@ -150,7 +150,7 @@ describe('one file GitHub will not take', () => {
     const refused = TEMPLATE_FILES[1] as string;
     const { api } = fake([], refused);
 
-    const outcomes = await applyRepoTemplates(api, { fullName: 'janedoe/fleetadlc-testbed', root: ROOT });
+    const outcomes = await applyRepoTemplates(api, { fullName: 'janedoe/openadlc-testbed', root: ROOT });
     const skipped = outcomes.filter((one) => one.action === 'skipped');
 
     expect(skipped).toHaveLength(1);
@@ -321,16 +321,19 @@ describe('a CI workflow OpenADLC wrote earlier', () => {
   }
 
   // The ones that shipped before this one, exactly as they were written into
-  // repositories: Fleet's, and OpenADLC's first, second and third. Each is
+  // repositories: Fleet's, and FleetADLC's first through fourth. Each is
   // offered with what bringing it up to date changes for it: the third already
-  // ran only what a change needs, and differs only by the SPDX line.
+  // ran only what a change needs and differs only by the SPDX line, and the
+  // fourth differs only by what the platform is called in its comments.
   const RUNS_LESS = { says: 'runs only what a change needs', title: 'run only what a change needs' };
   const SPDX = { says: 'adds the SPDX line saying the file is also 0BSD', title: 'add the SPDX line saying it is also 0BSD' };
+  const RENAMED = { says: 'name the platform and its command as they are spelled now', title: 'say the platform is called OpenADLC now' };
   const versions = [
     { name: 'Fleet’s', file: 'ci-template-fleet.yml', ...RUNS_LESS },
-    { name: 'OpenADLC’s first', file: 'ci-template-fleetadlc-1.yml', ...RUNS_LESS },
-    { name: 'OpenADLC’s second', file: 'ci-template-fleetadlc-2.yml', ...RUNS_LESS },
-    { name: 'OpenADLC’s third', file: 'ci-template-fleetadlc-3.yml', ...SPDX },
+    { name: 'FleetADLC’s first', file: 'ci-template-fleetadlc-1.yml', ...RUNS_LESS },
+    { name: 'FleetADLC’s second', file: 'ci-template-fleetadlc-2.yml', ...RUNS_LESS },
+    { name: 'FleetADLC’s third', file: 'ci-template-fleetadlc-3.yml', ...SPDX },
+    { name: 'FleetADLC’s fourth', file: 'ci-template-fleetadlc-4.yml', ...RENAMED },
   ].map((version) => ({ ...version, body: readFileSync(join(import.meta.dirname, 'fixtures', version.file), 'utf8') }));
   const shipped = versions.map((version) => version.body);
 
@@ -374,16 +377,19 @@ describe('a CI workflow OpenADLC wrote earlier', () => {
     },
   );
 
-  it('does not tell a repository on the third template that its CI will run differently', async () => {
-    const third = versions.find((version) => version.file === 'ci-template-fleetadlc-3.yml')!;
-    const { api, writes } = withWorkflow(third.body);
-    const detail = (await checkRepoTemplates(api, 'owner/repo')).find((report) => report.name === CI_WORKFLOW)?.detail;
-    expect(detail).not.toContain('runs only what a change needs');
-    expect(detail).not.toContain('stops a hung run');
+  it.each(['ci-template-fleetadlc-3.yml', 'ci-template-fleetadlc-4.yml'])(
+    'does not tell a repository on %s that its CI will run differently',
+    async (file) => {
+      const version = versions.find((candidate) => candidate.file === file)!;
+      const { api, writes } = withWorkflow(version.body);
+      const detail = (await checkRepoTemplates(api, 'owner/repo')).find((report) => report.name === CI_WORKFLOW)?.detail;
+      expect(detail).not.toContain('runs only what a change needs');
+      expect(detail).not.toContain('stops a hung run');
 
-    await applyRepoTemplates(api, { fullName: 'owner/repo', root: ROOT });
-    expect(writes[0]!.body.message).not.toContain('run only what a change needs');
-  });
+      await applyRepoTemplates(api, { fullName: 'owner/repo', root: ROOT });
+      expect(writes[0]!.body.message).not.toContain('run only what a change needs');
+    },
+  );
 
   it('leaves a workflow somebody changed alone, by a single byte, and the current one too', async () => {
     for (const body of [`${shipped[1]}# ours\n`, templateBody(CI_WORKFLOW, ROOT)]) {

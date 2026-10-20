@@ -13,7 +13,7 @@ const BLOCKED =
 
 function input(reviews: PostedReview[] | Error, overrides: Partial<ReviewLeftInput> = {}): ReviewLeftInput {
   return {
-    task: { kind: 'review', subjectRef: 'fleetadlc-testbed#2', startedAt: STARTED },
+    task: { kind: 'review', subjectRef: 'openadlc-testbed#2', startedAt: STARTED },
     login: 'noraexampleco',
     reviews: async () => {
       if (reviews instanceof Error) throw reviews;
@@ -37,7 +37,7 @@ describe('a finished review task', () => {
     const comment = {
       user: 'irisexampleco',
       state: 'COMMENTED',
-      body: 'Findings.\n\n<!-- fleetadlc:{"event":"review_posted","verdict":"request_changes","lens":"second"} -->',
+      body: 'Findings.\n\n<!-- openadlc:{"event":"review_posted","verdict":"request_changes","lens":"second"} -->',
       submittedAt: '2026-09-25T07:40:00Z',
     };
     expect(await missingReview(input([comment], { login: 'irisexampleco', seat: 'irisexampleco' }))).toBeNull();
@@ -55,7 +55,7 @@ describe('a finished review task', () => {
   it('names a review the bot wrote in its answer and never posted, quoting it without its marker', async () => {
     // A Codex reviewer ran the checks, wrote "Verdict: approve" with the marker
     // saying it had posted it, and stopped. GitHub had no review from it.
-    const written = '**Verdict: approve**\n\nNo blocking findings.\n<!-- fleetadlc:{"event":"review_posted"} -->';
+    const written = '**Verdict: approve**\n\nNo blocking findings.\n<!-- openadlc:{"event":"review_posted"} -->';
     const reason = await missingReview(input([], { lastSaid: async () => written }));
     expect(reason).toBe(`${NOT_POSTED}. It said: “**Verdict: approve**\n\nNo blocking findings.”`);
   });
@@ -63,21 +63,21 @@ describe('a finished review task', () => {
   it('is done when its review quotes another seat’s tag', async () => {
     // Found live: the lead reviewer's task posted its review at 00:11:30 and ended
     // at 00:11:41, and was failed as having posted nothing: a finding quoted
-    // `<!-- fleetadlc-seat:intake -->`, which was read as the review's own tag, so
+    // `<!-- openadlc-seat:intake -->`, which was read as the review's own tag, so
     // on the account the reviewers share it looked like the intake seat's.
     const body =
-      '**OpenADLC_exampleco · lead review agent**<!-- fleetadlc-header -->\n\n' +
-      '- `withSeat` keeps the existing `<!-- fleetadlc-seat:intake -->` tag, because a seat tag is already there.\n\n' +
-      '<!-- fleetadlc:{"event":"review_posted"} -->\n\n' +
-      '<!-- fleetadlc-sig:v1.26aae12a.eyJzZWF0IjoibGVhZC1yZXZpZXdlciJ9.mac -->';
-    const lead = { task: { kind: 'review' as const, subjectRef: 'fleetadlc#80', startedAt: '2026-09-29T00:04:02.000Z' }, seat: 'lead-reviewer' };
+      '**OpenADLC_exampleco · lead review agent**<!-- openadlc-header -->\n\n' +
+      '- `withSeat` keeps the existing `<!-- openadlc-seat:intake -->` tag, because a seat tag is already there.\n\n' +
+      '<!-- openadlc:{"event":"review_posted"} -->\n\n' +
+      '<!-- openadlc-sig:v1.26aae12a.eyJzZWF0IjoibGVhZC1yZXZpZXdlciJ9.mac -->';
+    const lead = { task: { kind: 'review' as const, subjectRef: 'openadlc#80', startedAt: '2026-09-29T00:04:02.000Z' }, seat: 'lead-reviewer' };
 
     expect(await missingReview(input([{ user: 'noraexampleco', body, submittedAt: '2026-09-29T00:11:30Z' }], lead))).toBeNull();
     // Posted as it is now, with its own tag after the one it quotes.
-    const tagged = body.replace('\n\n<!-- fleetadlc-sig', '\n\n<!-- fleetadlc-seat:lead-reviewer -->\n\n<!-- fleetadlc-sig');
+    const tagged = body.replace('\n\n<!-- openadlc-sig', '\n\n<!-- openadlc-seat:lead-reviewer -->\n\n<!-- openadlc-sig');
     expect(await missingReview(input([{ user: 'noraexampleco', body: tagged, submittedAt: '2026-09-29T00:11:30Z' }], lead))).toBeNull();
     // The second reviewer's review, on the same account, is still not the lead's.
-    const second = `${body.split('\n\n<!-- fleetadlc-sig')[0]}\n\n<!-- fleetadlc-seat:second-reviewer -->`;
+    const second = `${body.split('\n\n<!-- openadlc-sig')[0]}\n\n<!-- openadlc-seat:second-reviewer -->`;
     expect(await missingReview(input([{ user: 'noraexampleco', body: second, submittedAt: '2026-09-29T00:11:59Z' }], lead))).toMatch(
       new RegExp(`^${NO_REVIEW}`),
     );
@@ -99,7 +99,7 @@ describe('a finished review task', () => {
   });
 
   it('asks only about review tasks on a pull request', async () => {
-    expect(await missingReview(input([], { task: { kind: 'implement', subjectRef: 'fleetadlc-testbed#2', startedAt: STARTED } }))).toBeNull();
+    expect(await missingReview(input([], { task: { kind: 'implement', subjectRef: 'openadlc-testbed#2', startedAt: STARTED } }))).toBeNull();
     expect(await missingReview(input([], { task: { kind: 'review', subjectRef: 'request:a4b02784', startedAt: STARTED } }))).toBeNull();
   });
 });

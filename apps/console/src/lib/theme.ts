@@ -1,4 +1,4 @@
-export const THEME_KEY = 'fleetadlc.theme';
+export const THEME_KEY = 'openadlc.theme';
 export const THEMES = ['system', 'light', 'dark'] as const;
 export type Theme = (typeof THEMES)[number];
 

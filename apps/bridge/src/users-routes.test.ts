@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Role, User } from '@fleetadlc/db';
+import type { Role, User } from '@openadlc/db';
 import type { IdentityMode } from './identity.js';
 import { Router } from './router.js';
 import { registerUsersRoutes } from './users-routes.js';
@@ -37,7 +37,7 @@ async function serve(identityMode: IdentityMode) {
   server = createServer((request, response) => void router.handle(request, response));
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const as = (identity: string) => ({ 'x-fleetadlc-identity': identity, 'content-type': 'application/json' });
+  const as = (identity: string) => ({ 'x-openadlc-identity': identity, 'content-type': 'application/json' });
   const setRole = (identity: string, email: string, role: Role) =>
     fetch(`${url}/v1/users/${encodeURIComponent(email)}`, { method: 'PATCH', headers: as(identity), body: JSON.stringify({ role }) });
   return { url, as, roles, removed, setRole };
@@ -53,11 +53,11 @@ describe('the console’s own identity', () => {
     });
   });
 
-  it('is not demoted on a local install, and the refusal says FLEETADLC_IDENTITY is the way round', async () => {
+  it('is not demoted on a local install, and the refusal says OPENADLC_IDENTITY is the way round', async () => {
     const { roles, setRole } = await serve('local');
     const refused = await setRole('Console', 'console', 'user');
     expect(refused.status).toBe(409);
-    expect(await refused.json()).toMatchObject({ code: 'self-demote', error: expect.stringContaining('FLEETADLC_IDENTITY') });
+    expect(await refused.json()).toMatchObject({ code: 'self-demote', error: expect.stringContaining('OPENADLC_IDENTITY') });
     expect(roles.get('console')).toBe('admin');
 
     // Someone else, promoting itself, and removing itself all go through.

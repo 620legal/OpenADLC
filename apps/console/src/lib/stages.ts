@@ -2,7 +2,7 @@
  * The stages, named as the board names them.
  *
  * The board's column titles come from the bridge, which reads them from
- * `STAGE_COLUMN_TITLES` in `@fleetadlc/shared`. The console does not depend on
+ * `STAGE_COLUMN_TITLES` in `@openadlc/shared`. The console does not depend on
  * that package — its barrel carries the config loader and `node:fs` — so the
  * titles are copied here, and `stages.test.ts` fails if the two disagree. Settings
  * showed the keys instead (BUILD, MERGED) while the board said Implement and

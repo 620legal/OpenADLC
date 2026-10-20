@@ -1,12 +1,12 @@
-import { MERGE_IS_SHIPPING } from '@fleetadlc/shared';
+import { MERGE_IS_SHIPPING } from '@openadlc/shared';
 import { describe, expect, it, vi } from 'vitest';
 
 const db = vi.hoisted(() => ({
   listBots: vi.fn(async (): Promise<unknown[]> => []),
 }));
 
-vi.mock('@fleetadlc/db', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@fleetadlc/db')>();
+vi.mock('@openadlc/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@openadlc/db')>();
   return {
     ...actual,
     bots: { ...actual.bots, listBots: db.listBots },

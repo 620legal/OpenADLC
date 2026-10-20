@@ -1,4 +1,4 @@
-import type { StageKey } from '@fleetadlc/shared';
+import type { StageKey } from '@openadlc/shared';
 import { query, queryOne } from '../client.js';
 
 /**

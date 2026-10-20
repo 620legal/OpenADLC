@@ -10,11 +10,11 @@ mockup, or the PDF of the requirements, and intake has to see them to ask the
 right questions. Those files have to be kept somewhere both kinds of install
 reach:
 
-- A **local** install has a disk under `FLEETADLC_HOME`, a Postgres in a
+- A **local** install has a disk under `OPENADLC_HOME`, a Postgres in a
   container, and backups that archive the database's history.
 - A **cloud** install runs the bridge on Cloud Run, which has no disk that
   outlives a revision, and Cloud SQL, which every component already uses. A
-  file written under `FLEETADLC_HOME` by one revision is gone for the next.
+  file written under `OPENADLC_HOME` by one revision is gone for the next.
 
 The files are small by design (10 MB each, 20 files and 25 MB per work item),
 and they are read rarely: when a person looks at them, and when a task that
@@ -31,11 +31,11 @@ by a backup's history group as base64 with a count of their own.
 
 They are never posted to GitHub: a private repository's screenshot on an
 issue is one link away from anyone it is forwarded to, and the crew reads the
-file from FleetADLC, not from the issue.
+file from OpenADLC, not from the issue.
 
 ## What this rules out
 
-- **Files under `FLEETADLC_HOME`.** Lost on every Cloud Run revision, not in a
+- **Files under `OPENADLC_HOME`.** Lost on every Cloud Run revision, not in a
   backup's history, and a second store to keep in step with the rows that name
   them.
 - **A bucket (GCS, S3) now.** A new dependency, a credential per install, and
@@ -43,8 +43,8 @@ file from FleetADLC, not from the issue.
   comfortably in the database at these limits. The module boundary is where a
   bucket driver goes if the limits ever grow.
 - **Uploading them to GitHub** (as an issue's user-attachments). Public to
-  anyone with the link, out of FleetADLC's control once posted, and not
-  deletable by FleetADLC.
+  anyone with the link, out of OpenADLC's control once posted, and not
+  deletable by OpenADLC.
 
 ## What would make this worth revisiting
 

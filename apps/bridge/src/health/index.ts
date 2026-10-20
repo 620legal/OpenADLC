@@ -3,7 +3,7 @@ import { movedHumans } from '../human-ids.js';
 import { readAccounts } from '../github-identities.js';
 import { signInKind } from '../sign-in.js';
 import { createHash } from 'node:crypto';
-import { attributions, audit, bots, credentials, deployRuns, identities, issues, lastAudit, lastGithubDelivery, leases, modelAccounts, repos, tasks } from '@fleetadlc/db';
+import { attributions, audit, bots, credentials, deployRuns, identities, issues, lastAudit, lastGithubDelivery, leases, modelAccounts, repos, tasks } from '@openadlc/db';
 import {
   GitHubClient,
   accountExists,
@@ -21,7 +21,7 @@ import {
   signingKeyRef,
   generateSigningKey,
   type AppCredentials,
-} from '@fleetadlc/github';
+} from '@openadlc/github';
 import type { Actors } from '../actors.js';
 import type { AppReach } from '../app-reach.js';
 import type { BridgeConfig } from '../config.js';
@@ -144,7 +144,7 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
     const credentials = await appCredentials();
     if (!credentials) return null;
     const { token } = await installationTokenFor(APP_API, credentials, repo.fullName);
-    const github = new GitHubClient({ token, actingAs: 'fleetadlc-app' });
+    const github = new GitHubClient({ token, actingAs: 'openadlc-app' });
     const branch = encodeURIComponent(repo.defaultBranch);
     const rules = await github
       .request<{ type?: string }[]>('GET', `/repos/${repo.fullName}/rules/branches/${branch}`)
@@ -247,7 +247,7 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
   return [
     hostCheck(hostd),
     hostDriverCheck(hostd),
-    dispatcherCheck(wiring.dispatch ?? dispatchModeOf(process.env.FLEETADLC_DISPATCH_IN_BRIDGE === '1')),
+    dispatcherCheck(wiring.dispatch ?? dispatchModeOf(process.env.OPENADLC_DISPATCH_IN_BRIDGE === '1')),
     webhookCheck({
       status: () => wiring.webhookSetup.status(),
       lastHeard: async () => (await lastGithubDelivery())?.at ?? null,
@@ -347,7 +347,7 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
       release: async (lease, why) => {
         if (!(await leases.releaseIfIdle(lease.id))) return false;
         await audit({
-          actor: 'fleetadlc',
+          actor: 'openadlc',
           action: 'lease.released_idle',
           target: `issue #${lease.issueNumber}`,
           payload: { leaseId: lease.id, botId: lease.botId, why },
@@ -393,7 +393,7 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
       resolve: async (post) => {
         if (post.id === undefined || !(await attributions.resolveUnattributed(post.id))) return;
         await audit({
-          actor: 'fleetadlc',
+          actor: 'openadlc',
           action: 'attribution.resolved',
           target: `${post.repo} post:${post.id}`,
           payload: { postId: post.id, kind: post.kind, repo: post.repo, login: post.login, url: post.url, reason: post.reason },

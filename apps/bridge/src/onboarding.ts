@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { HttpFailure } from './router.js';
 import { signInKind, signInOf } from './sign-in.js';
-import { audit, bots, credentials, identities, repos, type HealthRow } from '@fleetadlc/db';
+import { audit, bots, credentials, identities, repos, type HealthRow } from '@openadlc/db';
 import {
   GitHubApiError,
   GitHubClient,
@@ -15,7 +15,7 @@ import {
   requestDeviceCode,
   signingKeyRef,
   type UserToken,
-} from '@fleetadlc/github';
+} from '@openadlc/github';
 import {
   GITHUB_DEVICE_URL,
   GITHUB_EMAIL_SETTINGS_URL,
@@ -47,7 +47,7 @@ import {
   type HealthSeverity,
   type ManualStep,
   type OnboardingStep,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import { ensureSigningKeyRegistered } from './signing-keys.js';
 import { accountSecretNs, accountsView, assignmentRefusal, groupOfAccount, readAccounts, type GitHubAccountsView } from './github-identities.js';
@@ -187,7 +187,7 @@ export interface StepCheck {
   }[];
 }
 
-/** What connecting a seat did: the console's answer, and what `fleetadlc auth login` prints. */
+/** What connecting a seat did: the console's answer, and what `openadlc auth login` prints. */
 export interface ConnectOutcome {
   /** The account that approved, as GitHub spells it. */
   login: string;
@@ -274,7 +274,7 @@ export function accessStepDetail(organizationIsOrg: boolean | null, organization
  * console asks the app checks and the model accounts on top of it. `install`,
  * `models`, `crew`, `protect` and `done` are not settled from this view alone —
  * installing is GitHub's page, the model steps are hostd's, and protection is
- * `fleetadlc github check` — so they are not what `complete` is made of.
+ * `openadlc github check` — so they are not what `complete` is made of.
  */
 export interface WalkthroughFacts {
   organization: string | null;
@@ -335,7 +335,7 @@ export function walkthroughSteps(facts: WalkthroughFacts): OnboardingView['steps
     crew: 'which seat thinks with which model account, once the GitHub accounts and the model accounts exist',
     access: `${facts.inRepository} of ${facts.crewCount} seats can work in ${where}; OpenADLC accepts an invitation when a bot connects, given \`Administration\` on the app. ${accessStepDetail(facts.organizationIsOrg, facts.organization)}`,
     protect:
-      'run `fleetadlc github apply`, then `fleetadlc github check`. What it can set depends on the plan, not on who owns the repository: on a private repository, rulesets and CODEOWNERS need GitHub Pro (a person’s account), GitHub Team or GitHub Enterprise, and a required environment reviewer needs Enterprise. `check` reports what this one supports',
+      'run `openadlc github apply`, then `openadlc github check`. What it can set depends on the plan, not on who owns the repository: on a private repository, rulesets and CODEOWNERS need GitHub Pro (a person’s account), GitHub Team or GitHub Enterprise, and a required environment reviewer needs Enterprise. `check` reports what this one supports',
     done: 'the crew is connected and the repositories are protected',
   };
   const done: Record<OnboardingStep, boolean> = {
@@ -642,7 +642,7 @@ export class Onboarding {
         lookupToken,
       );
       // Suggested from the seat: a connected bot's name is already a handle,
-      // and a suggestion built on it would be `fleetadlc-fleetadlc-atlas-janedoe`.
+      // and a suggestion built on it would be `openadlc-openadlc-atlas-janedoe`.
       const suggestion = suggestBotEmail(operatorEmail, bot.slot);
 
       return {
@@ -853,7 +853,7 @@ export class Onboarding {
 
   /**
    * Puts a seat on the GitHub account a fresh sign-in is for: the one way a
-   * seat connects, from the console's device flow and from `fleetadlc auth
+   * seat connects, from the console's device flow and from `openadlc auth
    * login`, which hands its token to the bridge for this. The CLI used to
    * connect on its own: it refused any account another seat held, so the
    * two-account crew the docs recommend could not be connected from it, and

@@ -6,7 +6,7 @@ allow:
     # What it posts, written with the file tool and given to `gh` with
     # `--body-file`: on the command line, Markdown headings and a marker's
     # braces are refused by the engine's own shell checks. Never committed.
-    write_within: [".fleetadlc-scratch/**"]
+    write_within: [".openadlc-scratch/**"]
 
 deny:
   shell: [curl, wget, ssh, docker, sudo, make, pnpm, npm]

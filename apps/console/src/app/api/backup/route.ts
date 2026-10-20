@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     status: 200,
     headers: {
       'content-type': 'application/octet-stream',
-      'content-disposition': response.headers.get('content-disposition') ?? 'attachment; filename="fleetadlc-backup.fleetbak"',
+      'content-disposition': response.headers.get('content-disposition') ?? 'attachment; filename="openadlc-backup.fleetbak"',
       'cache-control': 'no-store',
     },
   });

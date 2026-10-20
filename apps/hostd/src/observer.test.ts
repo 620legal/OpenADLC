@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExecDriver, ObservedSession } from './drivers/types.js';
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async () => undefined),
   bots: { listBots: vi.fn(async () => [{ id: 'bot-1', name: 'atlas' }]) },
   hosts: { heartbeat: vi.fn(async () => undefined) },
@@ -20,7 +20,7 @@ vi.mock('@fleetadlc/db', () => ({
   },
 }));
 
-const db = await import('@fleetadlc/db');
+const db = await import('@openadlc/db');
 const { stateFromPane } = await import('./drivers/local.js');
 const { newPaneLines, SessionObserver } = await import('./observer.js');
 

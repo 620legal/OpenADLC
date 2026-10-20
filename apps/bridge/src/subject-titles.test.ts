@@ -17,7 +17,7 @@ describe('the title of a subject the board does not know', () => {
           return answer(repo, number);
         },
       }),
-      fullName: async (name) => (name === 'fleetadlc-testbed' ? 'janedoe/fleetadlc-testbed' : null),
+      fullName: async (name) => (name === 'openadlc-testbed' ? 'janedoe/openadlc-testbed' : null),
       now: () => now,
     });
     return { subject, asked, advance: (ms: number) => (now += ms) };
@@ -26,25 +26,25 @@ describe('the title of a subject the board does not know', () => {
   it('is read from GitHub, says whether it is a pull request, and is not read again for hours', async () => {
     const { subject, asked, advance } = titles(async (_repo, number) => ({
       title: 'Add a health endpoint',
-      htmlUrl: `https://github.com/janedoe/fleetadlc-testbed/pull/${number}`,
+      htmlUrl: `https://github.com/janedoe/openadlc-testbed/pull/${number}`,
     }));
 
-    expect(await subject.lookup(['fleetadlc-testbed#2'])).toEqual(
-      new Map([['fleetadlc-testbed#2', { title: 'Add a health endpoint', url: 'https://github.com/janedoe/fleetadlc-testbed/pull/2', pullRequest: true }]]),
+    expect(await subject.lookup(['openadlc-testbed#2'])).toEqual(
+      new Map([['openadlc-testbed#2', { title: 'Add a health endpoint', url: 'https://github.com/janedoe/openadlc-testbed/pull/2', pullRequest: true }]]),
     );
-    await subject.lookup(['fleetadlc-testbed#2']);
+    await subject.lookup(['openadlc-testbed#2']);
     advance(60 * 60 * 1000);
-    await subject.lookup(['fleetadlc-testbed#2']);
-    expect(asked).toEqual(['janedoe/fleetadlc-testbed#2']);
+    await subject.lookup(['openadlc-testbed#2']);
+    expect(asked).toEqual(['janedoe/openadlc-testbed#2']);
   });
 
   it('asks again soon after GitHub could not say, and never about a repository it does not manage', async () => {
     const { subject, asked, advance } = titles(async () => {
       throw new Error('fetch failed');
     });
-    expect(await subject.lookup(['fleetadlc-testbed#2', 'elsewhere#4', 'request:a4b02784'])).toEqual(new Map());
+    expect(await subject.lookup(['openadlc-testbed#2', 'elsewhere#4', 'request:a4b02784'])).toEqual(new Map());
     advance(11 * 60 * 1000);
-    await subject.lookup(['fleetadlc-testbed#2']);
-    expect(asked).toEqual(['janedoe/fleetadlc-testbed#2', 'janedoe/fleetadlc-testbed#2']);
+    await subject.lookup(['openadlc-testbed#2']);
+    expect(asked).toEqual(['janedoe/openadlc-testbed#2', 'janedoe/openadlc-testbed#2']);
   });
 });

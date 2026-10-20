@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * What the dispatcher starts, decided from what is true now.
  *
- * On the live install fleetadlc-testbed#3 waited twenty minutes behind a lease its
+ * On the live install openadlc-testbed#3 waited twenty minutes behind a lease its
  * dependency had left behind after merging: a record, not work, held README.md.
  * These drive whole passes against a store that says what is in flight, and
  * look at what was started, sent to triage, or left alone.
@@ -52,19 +52,19 @@ const world = vi.hoisted(() => ({
   events: [] as { type: string; payload: Record<string, unknown>; at: string }[],
 }));
 
-vi.mock('@fleetadlc/shared', async (original) => ({
-  ...(await original<typeof import('@fleetadlc/shared')>()),
+vi.mock('@openadlc/shared', async (original) => ({
+  ...(await original<typeof import('@openadlc/shared')>()),
   fetchJson: vi.fn(async (url: string) => {
     world.posted.push(url.replace(/^https?:\/\/[^/]+/, ''));
     return {};
   }),
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async () => undefined),
   bots: {
-    getBotById: vi.fn(async () => ({ id: 'bot-builder', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', engine: 'claude', maxTasks: world.maxTasks })),
-    listBots: vi.fn(async () => [{ id: 'bot-builder', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', engine: 'claude', maxTasks: world.maxTasks }]),
+    getBotById: vi.fn(async () => ({ id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', engine: 'claude', maxTasks: world.maxTasks })),
+    listBots: vi.fn(async () => [{ id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', engine: 'claude', maxTasks: world.maxTasks }]),
   },
   costs: {
     currentPeriod: vi.fn(() => '2026-09'),
@@ -85,7 +85,7 @@ vi.mock('@fleetadlc/db', () => ({
     createLease: vi.fn(async () => ({ id: 'lease-1', expiresAt: null })),
     setLeaseState: vi.fn(async () => null),
   },
-  repos: { listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'fleetadlc-testbed', ownerBotId: 'bot-builder', concurrency: world.concurrency }]) },
+  repos: { listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'openadlc-testbed', ownerBotId: 'bot-builder', concurrency: world.concurrency }]) },
   recordEvent: vi.fn(async (input: { type: string; payload: Record<string, unknown> }) => {
     world.events.push({ type: input.type, payload: input.payload, at: new Date().toISOString() });
     return 'event';
@@ -203,7 +203,7 @@ describe('what is in flight', () => {
     expect(world.events).toContainEqual(
       expect.objectContaining({
         type: 'overlap.waited',
-        payload: expect.objectContaining({ repo: 'fleetadlc-testbed', issue: 3, on: [5], paths: ['hello-world2.html'], kind: 'building' }),
+        payload: expect.objectContaining({ repo: 'openadlc-testbed', issue: 3, on: [5], paths: ['hello-world2.html'], kind: 'building' }),
       }),
     );
     // Asked again with nothing changed, it is not said twice.
@@ -213,7 +213,7 @@ describe('what is in flight', () => {
     world.inFlight = [];
     await pass();
     expect(world.events).toContainEqual(
-      expect.objectContaining({ type: 'overlap.cleared', payload: expect.objectContaining({ repo: 'fleetadlc-testbed', issue: 3, waitedMs: expect.any(Number) }) }),
+      expect.objectContaining({ type: 'overlap.cleared', payload: expect.objectContaining({ repo: 'openadlc-testbed', issue: 3, waitedMs: expect.any(Number) }) }),
     );
   });
 
@@ -227,16 +227,16 @@ describe('what is in flight', () => {
 
 describe('a seat a person paused', () => {
   it('is leased nothing, and the pass says who paused it and why', async () => {
-    world.pausedSeats = JSON.stringify({ 'fleetadlc-atlas-janedoe': { by: 'janedoe', at: '2026-10-02T00:00:00Z', why: 'changing its model' } });
+    world.pausedSeats = JSON.stringify({ 'openadlc-atlas-janedoe': { by: 'janedoe', at: '2026-10-02T00:00:00Z', why: 'changing its model' } });
 
     const decisions = await pass();
 
     expect(started(decisions)).toEqual([]);
     expect(decisions).toContainEqual(
       expect.objectContaining({
-        bot: 'fleetadlc-atlas-janedoe',
+        bot: 'openadlc-atlas-janedoe',
         action: 'skipped',
-        reason: 'fleetadlc-atlas-janedoe is paused by janedoe: changing its model; nothing is leased to it until it is resumed on the Crew page',
+        reason: 'openadlc-atlas-janedoe is paused by janedoe: changing its model; nothing is leased to it until it is resumed on the Crew page',
       }),
     );
   });
@@ -249,25 +249,25 @@ describe('a seat a person paused', () => {
 
 describe('an issue a person held or put next', () => {
   it('starts nothing on one held, and says why', async () => {
-    world.candidates = [candidate({ labels: ['adlc:build', 'start:now', 'priority:p1', 'fleetadlc:paused'] })];
+    world.candidates = [candidate({ labels: ['adlc:build', 'start:now', 'priority:p1', 'openadlc:paused'] })];
 
     const decisions = await pass();
 
     expect(started(decisions)).toEqual([]);
-    expect(decisions).toContainEqual(expect.objectContaining({ issue: 3, action: 'skipped', reason: 'held by a person (fleetadlc:paused)' }));
+    expect(decisions).toContainEqual(expect.objectContaining({ issue: 3, action: 'skipped', reason: 'held by a person (openadlc:paused)' }));
   });
 
   it('builds the one put next first, ahead of the order it was listed in', async () => {
     world.candidates = [
       candidate({ number: 3, declaredPaths: ['a.html'] }),
-      candidate({ number: 9, labels: ['adlc:build', 'start:now', 'priority:p3', 'area:docs', 'do:ai', 'fleetadlc:next'], declaredPaths: ['b.html'] }),
+      candidate({ number: 9, labels: ['adlc:build', 'start:now', 'priority:p3', 'area:docs', 'do:ai', 'openadlc:next'], declaredPaths: ['b.html'] }),
     ];
 
     expect(started(await pass())).toEqual([9]);
   });
 
   it('still waits when the one put next overlaps work in flight, and says so', async () => {
-    world.candidates = [candidate({ number: 9, labels: ['adlc:build', 'start:now', 'priority:p1', 'area:docs', 'do:ai', 'fleetadlc:next'], declaredPaths: ['b.html'] })];
+    world.candidates = [candidate({ number: 9, labels: ['adlc:build', 'start:now', 'priority:p1', 'area:docs', 'do:ai', 'openadlc:next'], declaredPaths: ['b.html'] })];
     world.inFlight = [{ number: 5, paths: ['b.html'], building: true }];
 
     const decisions = await pass();
@@ -339,8 +339,8 @@ describe('which builders are free', () => {
 
     expect(started(decisions)).toEqual([3, 4]);
     expect(decisions.filter((decision) => decision.action === 'leased').map((decision) => decision.bot)).toEqual([
-      'fleetadlc-atlas-janedoe',
-      'fleetadlc-atlas-janedoe',
+      'openadlc-atlas-janedoe',
+      'openadlc-atlas-janedoe',
     ]);
   });
 
@@ -376,6 +376,6 @@ describe('which builders are free', () => {
 
     await pass();
 
-    expect(world.posted).toEqual(['/internal/issues/fleetadlc-testbed/3/triage']);
+    expect(world.posted).toEqual(['/internal/issues/openadlc-testbed/3/triage']);
   });
 });

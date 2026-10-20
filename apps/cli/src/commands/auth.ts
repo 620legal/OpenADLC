@@ -1,4 +1,4 @@
-import { bots, closePool, credentials } from '@fleetadlc/db';
+import { bots, closePool, credentials } from '@openadlc/db';
 import {
   GitHubClient,
   credentialKind,
@@ -7,15 +7,15 @@ import {
   pollForUserToken,
   requestDeviceCode,
   type UserToken,
-} from '@fleetadlc/github';
-import { resolveBotRef, roleLabel, sameLogin, stepNamed } from '@fleetadlc/shared';
+} from '@openadlc/github';
+import { resolveBotRef, roleLabel, sameLogin, stepNamed } from '@openadlc/shared';
 import { githubClientId } from '../client-id.js';
 import { reachDatabase } from '../database.js';
 import type { InstallConfig } from '../install.js';
 import { confirm, ui } from '../ui.js';
 
 /**
- * Which bots `fleetadlc auth login` connects: every one with `--all`, or the one
+ * Which bots `openadlc auth login` connects: every one with `--all`, or the one
  * `--bot` names — by its seat (`builder`), by the name it goes by now, or by
  * the persona an older guide called it. A bot is renamed when its account
  * connects, so the seat is the name that is still right afterwards.
@@ -58,7 +58,7 @@ export async function connectThroughBridge(
   try {
     response = await send(`http://127.0.0.1:${port}/internal/bots/connect`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': secret },
+      headers: { 'content-type': 'application/json', 'x-openadlc-internal-secret': secret },
       body: JSON.stringify(input),
       // Joining an account lets the seat into every repository, which takes a while.
       signal: AbortSignal.timeout(180_000),
@@ -85,7 +85,7 @@ async function bridgeAnswers(port: number, send: typeof fetch = fetch): Promise<
 }
 
 function bridgeDown(again: string): void {
-  ui.fail(`the bridge is not running. Run: fleetadlc up, then ${again}`);
+  ui.fail(`the bridge is not running. Run: openadlc up, then ${again}`);
   ui.note('the bridge connects each seat, so nothing was stored');
 }
 
@@ -106,10 +106,10 @@ export async function authLogin(config: InstallConfig, options: { bot?: string; 
   const clientId = await githubClientId(config);
   if (!clientId) {
     ui.fail('no GitHub App client id is configured');
-    // Not `fleetadlc init`, which this used to name: it sets only the driver and
+    // Not `openadlc init`, which this used to name: it sets only the driver and
     // the database url, and the client id is the console's.
-    ui.note(`Create the app on ${stepNamed('app')} of the console walkthrough, or set FLEETADLC_GITHUB_CLIENT_ID.`);
-    ui.note('The CLI, like the bridge, uses the client id the console stored, then FLEETADLC_GITHUB_CLIENT_ID, then install.json.');
+    ui.note(`Create the app on ${stepNamed('app')} of the console walkthrough, or set OPENADLC_GITHUB_CLIENT_ID.`);
+    ui.note('The CLI, like the bridge, uses the client id the console stored, then OPENADLC_GITHUB_CLIENT_ID, then install.json.');
     ui.note('The app needs "Device flow" enabled and "Expire user authorization tokens" on.');
     await closePool();
     process.exitCode = 1;
@@ -118,17 +118,17 @@ export async function authLogin(config: InstallConfig, options: { bot?: string; 
 
   const crew = await bots.listBots();
   if (crew.length === 0) {
-    ui.fail('no bots are configured; run `fleetadlc up` once so config/bots.yaml is loaded');
+    ui.fail('no bots are configured; run `openadlc up` once so config/bots.yaml is loaded');
     await closePool();
     process.exitCode = 1;
     return;
   }
 
   const seats = `seats: ${crew.map((bot) => (bot.name === bot.slot ? bot.slot : `${bot.slot} (${bot.name})`)).join(', ')}`;
-  // `fleetadlc auth login` alone, the likeliest first try, said "no bot named
+  // `openadlc auth login` alone, the likeliest first try, said "no bot named
   // (none given)" and not what to type instead.
   if (!options.bot?.trim() && !options.all) {
-    ui.fail('name a bot: fleetadlc auth login --bot SEAT, or --all for every bot');
+    ui.fail('name a bot: openadlc auth login --bot SEAT, or --all for every bot');
     ui.note(seats);
     await closePool();
     process.exitCode = 2;
@@ -147,7 +147,7 @@ export async function authLogin(config: InstallConfig, options: { bot?: string; 
 
   const secret = await getSecretStore().get(internalSecretRef());
   if (!secret || !(await bridgeAnswers(config.ports.bridge))) {
-    bridgeDown(options.all ? 'fleetadlc auth login --all' : `fleetadlc auth login --bot ${targets[0]?.slot ?? '<seat>'}`);
+    bridgeDown(options.all ? 'openadlc auth login --all' : `openadlc auth login --bot ${targets[0]?.slot ?? '<seat>'}`);
     await closePool();
     process.exitCode = 1;
     return;
@@ -206,9 +206,9 @@ export async function authLogin(config: InstallConfig, options: { bot?: string; 
       }
     }
 
-    const answer = await connectThroughBridge(config.ports.bridge, secret, { bot: bot.slot, token, actor: 'fleetadlc auth login' });
+    const answer = await connectThroughBridge(config.ports.bridge, secret, { bot: bot.slot, token, actor: 'openadlc auth login' });
     if (answer.state === 'unreachable') {
-      bridgeDown(`fleetadlc auth login --bot ${bot.slot}`);
+      bridgeDown(`openadlc auth login --bot ${bot.slot}`);
       process.exitCode = 1;
       break;
     }
@@ -255,11 +255,11 @@ export async function authStatus(): Promise<void> {
         ui.ok(`${label} connected with a stored token (no expiry, so nothing refreshes)`);
         continue;
       }
-      ui.warn(`${label} not connected — fleetadlc auth login --bot ${bot.slot}`);
+      ui.warn(`${label} not connected — openadlc auth login --bot ${bot.slot}`);
       continue;
     }
     if (record.status !== 'active') {
-      ui.fail(`${label} ${record.status} — fleetadlc auth login --bot ${bot.slot}`);
+      ui.fail(`${label} ${record.status} — openadlc auth login --bot ${bot.slot}`);
       continue;
     }
 
@@ -274,7 +274,7 @@ export async function authStatus(): Promise<void> {
   // otherwise under the line that said so.
   if (anyStatic) {
     ui.warn('the app issues non-expiring user tokens, so OpenADLC stores that token itself');
-    ui.note('turn on "Expire user authorization tokens" on the app’s settings page, then run fleetadlc auth login again for those seats');
+    ui.note('turn on "Expire user authorization tokens" on the app’s settings page, then run openadlc auth login again for those seats');
   } else {
     ui.note('OpenADLC stores a refresh token per account; user tokens are minted per task and expire in 8 hours.');
   }

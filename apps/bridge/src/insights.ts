@@ -1,5 +1,5 @@
-import type { insights } from '@fleetadlc/db';
-import { hasIgnoreLabel } from '@fleetadlc/shared';
+import type { insights } from '@openadlc/db';
+import { hasIgnoreLabel } from '@openadlc/shared';
 import { FULL_REVIEW_WHY } from './conflict-round.js';
 
 type InsightData = insights.InsightData;
@@ -253,7 +253,7 @@ export function parallelBuilds(builds: readonly { startedAt: string | null; ende
 }
 
 /**
- * The data without the issues labelled `fleetadlc:ignore` and their pull
+ * The data without the issues labelled `openadlc:ignore` and their pull
  * requests: a person's work, which no count on the console includes
  * (`ignoredSubjects`). The builds carry no issue, and stay.
  */

@@ -1,6 +1,7 @@
-import { repos as repoStore, settings } from '@fleetadlc/db';
+import { repos as repoStore, settings } from '@openadlc/db';
 import {
   DELIVERY_RULES_PATH,
+  readDeliveryRulesFile,
   MERGE_IS_SHIPPING,
   defaultDeliveryRules,
   parseDeliveryRules,
@@ -8,7 +9,7 @@ import {
   storedDeliveryRules,
   type DeliveryRules,
   type ProductionChoice,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 import { shipsByMerging, testingDeployChoice, type WorkflowLister } from './deploys.js';
 
 /**
@@ -16,7 +17,7 @@ import { shipsByMerging, testingDeployChoice, type WorkflowLister } from './depl
  *
  * Shipping was a choice on Settings → Repositories and a deploy task for the
  * deploy bot, and production waited on a person. A repository now says how it
- * ships in `.github/fleetadlc.yml` on its default branch — a change to it is a
+ * ships in `.github/openadlc.yml` on its default branch — a change to it is a
  * pull request that, since it touches `.github/`, merges only once the security
  * reviewer approves that diff, or by a person (`mergeDecision`) — and the
  * bridge follows it: deploy to testing on merge, promote once the smoke passes, and
@@ -44,11 +45,11 @@ export interface EffectiveDelivery {
   /**
    * Where testing is served, for the QA bot and the readiness report: the
    * rules' own URL, else the repository's (`repos.testing_url`), else the
-   * install's `FLEETADLC_TESTING_URL`, which is deprecated and read only so an
+   * install's `OPENADLC_TESTING_URL`, which is deprecated and read only so an
    * install that set it keeps working. Null when none says.
    */
   testingUrl: string | null;
-  /** Why `.github/fleetadlc.yml` was not used, when it was there and did not parse. */
+  /** Why `.github/openadlc.yml` was not used, when it was there and did not parse. */
   fileError: string | null;
   /** Whether the file sets `production.approval` itself, so no recorded choice changes it. Absent is no. */
   approvalInFile?: boolean;
@@ -69,7 +70,7 @@ export interface DeliveryClient extends WorkflowLister {
 export async function effectiveDelivery(input: {
   repo: { id: string; name: string; fullName: string; defaultBranch: string };
   client: DeliveryClient | null;
-  /** The install's `FLEETADLC_TESTING_URL`; deprecated. */
+  /** The install's `OPENADLC_TESTING_URL`; deprecated. */
   legacyTestingUrl?: string | null;
 }): Promise<EffectiveDelivery> {
   const { repo, client } = input;
@@ -94,7 +95,7 @@ export async function effectiveDelivery(input: {
   let fileError: string | null = null;
   // Null only for a file that is not there (a 404); anything else throws.
   const text = client
-    ? await client.readFileIfPresent(repo.fullName, DELIVERY_RULES_PATH, repo.defaultBranch).catch((error: unknown) => {
+    ? await readDeliveryRulesFile((path) => client.readFileIfPresent(repo.fullName, path, repo.defaultBranch)).catch((error: unknown) => {
         unread.unshift(`${DELIVERY_RULES_PATH} could not be read: ${reason(error)}`);
         return null;
       })

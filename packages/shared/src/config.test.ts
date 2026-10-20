@@ -28,7 +28,7 @@ describe('review rules', () => {
     maxRounds: 4,
   };
 
-  it('reads an older review.yaml as the reviewers it meant, so fleetadlc up does not fail on it', () => {
+  it('reads an older review.yaml as the reviewers it meant, so openadlc up does not fail on it', () => {
     const rules = reviewRulesSchema.parse(older);
     expect(rules.reviewers).toEqual([
       { seat: 'lead-reviewer', lens: 'lead', lead: true, blocking: false, trigger: 'always' },
@@ -124,9 +124,9 @@ describe('a bots.yaml written before teams were removed', () => {
   it('still loads, and the key is dropped', () => {
     // Every install's config/bots.yaml had `teams:` on each seat. Refusing it,
     // as the schema refuses any other key it does not read, would stop
-    // `fleetadlc up` on all of them.
+    // `openadlc up` on all of them.
     const parsed = botsFileSchema.parse({
-      bots: [{ slot: 'builder', displayName: 'Builder', role: 'implement', engine: 'claude', model: 'claude-sonnet-5', teams: ['owners-fleetadlc'] }],
+      bots: [{ slot: 'builder', displayName: 'Builder', role: 'implement', engine: 'claude', model: 'claude-sonnet-5', teams: ['owners-openadlc'] }],
     });
 
     expect(parsed.bots[0]).toMatchObject({ slot: 'builder', role: 'implement' });
@@ -207,7 +207,7 @@ describe('a key no schema reads', () => {
   });
 
   it('is named, with its file, when a file is loaded', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-config-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-config-'));
     try {
       const costs = join(dir, 'costs.yaml');
       writeFileSync(costs, 'monthlyCapUSD: 100\nonCap:\n  stopLeasng: false\n');
@@ -223,7 +223,7 @@ describe('a key no schema reads', () => {
   });
 
   it('is not what an older file’s retired keys are: they are taken off first', () => {
-    const parsed = botsFileSchema.parse({ bots: [{ ...bot, slot: undefined, name: 'atlas', teams: ['flow'], githubLogin: 'fleetadlc-atlas' }] });
+    const parsed = botsFileSchema.parse({ bots: [{ ...bot, slot: undefined, name: 'atlas', teams: ['flow'], githubLogin: 'openadlc-atlas' }] });
     expect(parsed.bots[0]).toMatchObject({ slot: 'builder' });
     expect(parsed.bots[0]).not.toHaveProperty('name');
   });

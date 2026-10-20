@@ -1,4 +1,4 @@
-import { internalSecretRef } from '@fleetadlc/github';
+import { internalSecretRef } from '@openadlc/github';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { authLogin, authStatus, botsToConnect, connectThroughBridge } from './auth.js';
 import { defaultConfig } from '../install.js';
@@ -12,7 +12,7 @@ const world = vi.hoisted(() => ({
   kinds: new Map<string, 'refresh' | 'static'>(),
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   bots: {
     listBots: async () => world.crew,
     getBotById: async (id: string) => world.crew.find((bot) => bot.id === id) ?? null,
@@ -23,8 +23,8 @@ vi.mock('@fleetadlc/db', () => ({
   settings: { getSetting: async () => null },
 }));
 
-vi.mock('@fleetadlc/github', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@fleetadlc/github')>();
+vi.mock('@openadlc/github', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@openadlc/github')>();
   return {
     ...actual,
     requestDeviceCode: async () => ({ deviceCode: 'd', userCode: 'ABCD-1234', verificationUri: 'https://github.com/login/device', interval: 1, expiresIn: 900 }),
@@ -53,11 +53,11 @@ vi.mock('@fleetadlc/github', async (importOriginal) => {
 const crew = [
   { name: 'intake', slot: 'intake', githubLogin: null },
   // Connected, so it goes by its account's handle.
-  { name: 'fleetadlc-atlas-janedoe', slot: 'builder', githubLogin: 'fleetadlc-atlas-janedoe' },
+  { name: 'openadlc-atlas-janedoe', slot: 'builder', githubLogin: 'openadlc-atlas-janedoe' },
   { name: 'lead-reviewer', slot: 'lead-reviewer', githubLogin: null },
 ];
 
-describe('which bot `fleetadlc auth login --bot` means', () => {
+describe('which bot `openadlc auth login --bot` means', () => {
   it('is the bot in that seat, whatever it goes by now', () => {
     // `--bot builder` is what the walkthrough says, and it is still right
     // after the builder has taken its account's handle.
@@ -65,8 +65,8 @@ describe('which bot `fleetadlc auth login --bot` means', () => {
   });
 
   it('is the bot of that name, or of that account', () => {
-    expect(botsToConnect(crew, { bot: 'fleetadlc-atlas-janedoe' })).toEqual([crew[1]]);
-    expect(botsToConnect(crew, { bot: 'FleetADLC-Atlas-Janedoe' })).toEqual([crew[1]]);
+    expect(botsToConnect(crew, { bot: 'openadlc-atlas-janedoe' })).toEqual([crew[1]]);
+    expect(botsToConnect(crew, { bot: 'OpenADLC-Atlas-Janedoe' })).toEqual([crew[1]]);
     expect(botsToConnect(crew, { bot: 'intake' })).toEqual([crew[0]]);
   });
 
@@ -89,12 +89,12 @@ describe('handing a seat’s sign-in to the bridge', () => {
       Response.json({ login: 'janedoe-crew', bot: 'system-engineer', joined: 'janedoe-crew' }),
     );
 
-    const answer = await connectThroughBridge(47311, 'install-secret', { bot: 'system-engineer', token: TOKEN, actor: 'fleetadlc auth login' }, send as unknown as typeof fetch);
+    const answer = await connectThroughBridge(47311, 'install-secret', { bot: 'system-engineer', token: TOKEN, actor: 'openadlc auth login' }, send as unknown as typeof fetch);
 
     expect(answer).toEqual({ state: 'connected', login: 'janedoe-crew', bot: 'system-engineer', joined: 'janedoe-crew' });
     const [url, init] = send.mock.calls[0] ?? [];
     expect(url).toBe('http://127.0.0.1:47311/internal/bots/connect');
-    expect((init?.headers as Record<string, string>)['x-fleetadlc-internal-secret']).toBe('install-secret');
+    expect((init?.headers as Record<string, string>)['x-openadlc-internal-secret']).toBe('install-secret');
     expect(JSON.parse(String(init?.body))).toMatchObject({ bot: 'system-engineer', token: { refreshToken: 'ghr_cli' } });
   });
 
@@ -113,7 +113,7 @@ describe('handing a seat’s sign-in to the bridge', () => {
   });
 });
 
-describe('fleetadlc auth login', () => {
+describe('openadlc auth login', () => {
   // It stored the sign-in itself, under the seat's name, and refused any
   // account another seat held: a crew on a shared account could not connect.
   const printed: string[] = [];
@@ -169,7 +169,7 @@ describe('fleetadlc auth login', () => {
   it('says to name a bot, or --all, when given neither', async () => {
     // It said "no bot named (none given)" and not what to type.
     await authLogin(config, {});
-    expect(printed.join('\n')).toContain('name a bot: fleetadlc auth login --bot SEAT, or --all for every bot');
+    expect(printed.join('\n')).toContain('name a bot: openadlc auth login --bot SEAT, or --all for every bot');
     expect(printed.join('\n')).toContain('seats: builder (janedoe-crew), system-engineer');
     expect(process.exitCode).toBe(2);
 
@@ -183,13 +183,13 @@ describe('fleetadlc auth login', () => {
 
     await authLogin(config, { bot: 'builder' });
 
-    expect(printed.join('\n')).toContain('the bridge is not running. Run: fleetadlc up, then fleetadlc auth login --bot builder');
+    expect(printed.join('\n')).toContain('the bridge is not running. Run: openadlc up, then openadlc auth login --bot builder');
     expect(world.writes).toEqual([]);
     expect(process.exitCode).toBe(1);
   });
 });
 
-describe('fleetadlc auth status', () => {
+describe('openadlc auth status', () => {
   const printed: string[] = [];
 
   beforeEach(() => {

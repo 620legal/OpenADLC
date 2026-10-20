@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { HealthRow } from '@fleetadlc/db';
+import type { HealthRow } from '@openadlc/db';
 import type { TaskFacts } from './work.js';
 
 /**
@@ -15,7 +15,7 @@ const daysAgo = (days: number): string => new Date(NOW.getTime() - days * 24 * 6
 
 const BOTS = [
   { id: 'bot-intake', name: 'ottoexampleco', slot: 'intake', role: 'intake', githubLogin: 'ottoexampleco' },
-  { id: 'bot-builder', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'fleetadlc-atlas-janedoe' },
+  { id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'openadlc-atlas-janedoe' },
   { id: 'bot-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: null },
   { id: 'bot-second', name: 'irisexampleco', slot: 'second-reviewer', role: 'review_second', githubLogin: 'irisexampleco' },
   { id: 'bot-sre', name: 'tessexampleco', slot: 'sre', role: 'deploy', githubLogin: 'tessexampleco' },
@@ -24,8 +24,8 @@ const BOTS = [
 const REPOS = [
   {
     id: 'repo-1',
-    name: 'fleetadlc-testbed',
-    fullName: 'janedoe/fleetadlc-testbed',
+    name: 'openadlc-testbed',
+    fullName: 'janedoe/openadlc-testbed',
     stageModes: { intake: 'autonomous', spec: 'conditional', build: 'autonomous', review: 'autonomous', merged: 'autonomous', done: 'autonomous' },
   },
 ];
@@ -33,11 +33,11 @@ const REPOS = [
 function issue(number: number, title: string, stage: string, prNumber: number | null = null) {
   return {
     repoId: 'repo-1',
-    repoName: 'fleetadlc-testbed',
+    repoName: 'openadlc-testbed',
     number,
     title,
     stage: stage as never,
-    url: `https://github.com/janedoe/fleetadlc-testbed/issues/${number}`,
+    url: `https://github.com/janedoe/openadlc-testbed/issues/${number}`,
     prNumber,
     labels: [],
     updatedAt: minutesAgo(5),
@@ -94,7 +94,7 @@ async function load() {
 describe('what needs a person', () => {
   it('says a bot’s question, offers its choices to answer it with, and something else in its thread', async () => {
     const { attentionItems } = await load();
-    const asking = task({ id: 'task-q', botId: 'bot-intake', kind: 'intake', subjectRef: 'fleetadlc-testbed#15', state: 'paused' });
+    const asking = task({ id: 'task-q', botId: 'bot-intake', kind: 'intake', subjectRef: 'openadlc-testbed#15', state: 'paused' });
 
     const [item] = attentionItems({
       now: NOW,
@@ -104,7 +104,7 @@ describe('what needs a person', () => {
           taskId: 'task-q',
           question: 'Should the cost include review rounds, or only the build?',
           options: ['include reviews', 'only the build'],
-          githubCommentUrl: 'https://github.com/janedoe/fleetadlc-testbed/issues/15#issuecomment-1',
+          githubCommentUrl: 'https://github.com/janedoe/openadlc-testbed/issues/15#issuecomment-1',
           createdAt: minutesAgo(2),
         },
       ],
@@ -120,7 +120,7 @@ describe('what needs a person', () => {
       id: 'gate:gate-1',
       kind: 'question',
       headline: 'The intake bot (ottoexampleco) has a question',
-      subject: { repo: 'fleetadlc-testbed', number: 15, title: 'Show what a task has cost on its card', ref: 'fleetadlc-testbed#15', item: 'fleetadlc-testbed#15' },
+      subject: { repo: 'openadlc-testbed', number: 15, title: 'Show what a task has cost on its card', ref: 'openadlc-testbed#15', item: 'openadlc-testbed#15' },
       bot: { name: 'ottoexampleco', role: 'intake', roleLabel: 'intake' },
       since: minutesAgo(2),
       detail: 'Should the cost include review rounds, or only the build?',
@@ -128,7 +128,7 @@ describe('what needs a person', () => {
     expect(item?.question).toEqual({ gateId: 'gate-1', options: ['include reviews', 'only the build'] });
     expect(item?.actions).toEqual([
       { kind: 'answer', label: 'Something else…', bot: 'ottoexampleco' },
-      { kind: 'open_url', label: 'On GitHub', url: 'https://github.com/janedoe/fleetadlc-testbed/issues/15#issuecomment-1' },
+      { kind: 'open_url', label: 'On GitHub', url: 'https://github.com/janedoe/openadlc-testbed/issues/15#issuecomment-1' },
     ]);
   });
 
@@ -144,15 +144,15 @@ describe('what needs a person', () => {
       requests: [],
       stallEvents: [],
       intakeStalls: [
-        { at: minutesAgo(5), payload: { subjectRef: 'fleetadlc-testbed#15', tries: 2 } },
-        { at: minutesAgo(9), payload: { subjectRef: 'fleetadlc-testbed#16', tries: 2 } },
+        { at: minutesAgo(5), payload: { subjectRef: 'openadlc-testbed#15', tries: 2 } },
+        { at: minutesAgo(9), payload: { subjectRef: 'openadlc-testbed#16', tries: 2 } },
       ],
     };
     const stalled = attentionItems(input).filter((item) => item.id.startsWith('intake-stalled:'));
 
     // #16 has been moved on to build since; only #15, still in intake, waits.
-    expect(stalled.map((item) => item.id)).toEqual(['intake-stalled:fleetadlc-testbed#15']);
-    expect(stalled[0]).toMatchObject({ kind: 'triage_failed', group: 'work', headline: 'Intake could not shape fleetadlc-testbed#15' });
+    expect(stalled.map((item) => item.id)).toEqual(['intake-stalled:openadlc-testbed#15']);
+    expect(stalled[0]).toMatchObject({ kind: 'triage_failed', group: 'work', headline: 'Intake could not shape openadlc-testbed#15' });
   });
 
   it('puts a pull request only a person can land in Needs you, with why and the way to merge it', async () => {
@@ -166,7 +166,7 @@ describe('what needs a person', () => {
       issues: ISSUES,
       requests: [],
       stallEvents: [],
-      heldMerges: [{ repo: 'fleetadlc-testbed', prNumber: 5, reason: 'it changes how CI runs (Makefile)', since: minutesAgo(2) }],
+      heldMerges: [{ repo: 'openadlc-testbed', prNumber: 5, reason: 'it changes how CI runs (Makefile)', since: minutesAgo(2) }],
     });
     const item = items.find((one) => one.kind === 'merge_waiting');
     expect(item).toMatchObject({
@@ -190,7 +190,7 @@ describe('what needs a person', () => {
       requests: [],
       stallEvents: [],
       unowned: {
-        'fleetadlc-testbed': [
+        'openadlc-testbed': [
           { number: 3, title: 'Add hello.mjs', url: 'u3', author: 'outside-author' },
           { number: 7, title: 'Add rub.html', url: 'u7', author: 'outside-author' },
         ],
@@ -201,11 +201,11 @@ describe('what needs a person', () => {
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
       group: 'work',
-      headline: 'fleetadlc-testbed: 2 issues OpenADLC won’t take on its own',
+      headline: 'openadlc-testbed: 2 issues OpenADLC won’t take on its own',
       actions: [
-        { kind: 'unowned_intake', label: 'Send to intake', repo: 'fleetadlc-testbed', numbers: [3, 7] },
-        { kind: 'unowned_ignore', label: 'Ignore', repo: 'fleetadlc-testbed', numbers: [3, 7] },
-        { kind: 'unowned_close', label: 'Close', repo: 'fleetadlc-testbed', numbers: [3, 7] },
+        { kind: 'unowned_intake', label: 'Send to intake', repo: 'openadlc-testbed', numbers: [3, 7] },
+        { kind: 'unowned_ignore', label: 'Ignore', repo: 'openadlc-testbed', numbers: [3, 7] },
+        { kind: 'unowned_close', label: 'Close', repo: 'openadlc-testbed', numbers: [3, 7] },
       ],
     });
     expect(cards[0]?.detail).toContain('#3 Add hello.mjs; #7 Add rub.html');
@@ -221,7 +221,7 @@ describe('what needs a person', () => {
       issues: ISSUES,
       requests: [],
       stallEvents: [],
-      unowned: { 'fleetadlc-testbed': [{ number: 3, title: 'Add hello.mjs', url: 'u3', author: 'outside-author' }] },
+      unowned: { 'openadlc-testbed': [{ number: 3, title: 'Add hello.mjs', url: 'u3', author: 'outside-author' }] },
     }).filter((item) => item.kind === 'unowned_issues');
     expect(one?.detail).toContain('does not send it to intake on its own, and leaves it out of the overlap check');
   });
@@ -232,43 +232,43 @@ describe('what needs a person', () => {
     const base = { now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] };
 
     const unread = 'The production environment could not be read, so it is not known to be holding a reviewer.';
-    const [held] = attentionItems({ ...base, heldPromotes: [{ repo: 'fleetadlc-testbed', sha, since: minutesAgo(5), fileGoverned: false, reason: unread }] }).filter(
+    const [held] = attentionItems({ ...base, heldPromotes: [{ repo: 'openadlc-testbed', sha, since: minutesAgo(5), fileGoverned: false, reason: unread }] }).filter(
       (one) => one.kind === 'promote_held',
     );
     expect(held).toMatchObject({
       group: 'work',
-      headline: 'fleetadlc-testbed@abc1234 waits for you to release it to production',
+      headline: 'openadlc-testbed@abc1234 waits for you to release it to production',
       actions: [
-        { kind: 'promote_release', label: 'Release to production', repo: 'fleetadlc-testbed', sha },
-        { kind: 'promote_automatic', label: 'Switch to automatic delivery', repo: 'fleetadlc-testbed', sha },
+        { kind: 'promote_release', label: 'Release to production', repo: 'openadlc-testbed', sha },
+        { kind: 'promote_automatic', label: 'Switch to automatic delivery', repo: 'openadlc-testbed', sha },
       ],
     });
     // The reason reads as a sentence between two others, as the card shows it.
     expect(held?.detail).toBe(
-      "Its smoke passed on testing. fleetadlc-testbed's delivery rules say a person approves each production deploy. " +
+      "Its smoke passed on testing. openadlc-testbed's delivery rules say a person approves each production deploy. " +
         'The production environment could not be read, so it is not known to be holding a reviewer. ' +
         'OpenADLC holds the promote until you release it. Or switch the repository to automatic ' +
         'delivery: a soak on testing, the smoke, and an automatic rollback if production fails.',
     );
 
     // A hold with no recorded reason still reads as sentences.
-    const [unrecorded] = attentionItems({ ...base, heldPromotes: [{ repo: 'fleetadlc-testbed', sha, since: minutesAgo(5), fileGoverned: false, reason: '' }] }).filter(
+    const [unrecorded] = attentionItems({ ...base, heldPromotes: [{ repo: 'openadlc-testbed', sha, since: minutesAgo(5), fileGoverned: false, reason: '' }] }).filter(
       (one) => one.kind === 'promote_held',
     );
     expect(unrecorded?.detail).toContain('approves each production deploy. Why this one is held was not recorded. OpenADLC holds the promote');
 
     // The file sets the rules, and wins over anything the console stores: the card opens it instead.
     const plan = 'GitHub’s plan cannot hold a production reviewer here.';
-    const [governed] = attentionItems({ ...base, heldPromotes: [{ repo: 'fleetadlc-testbed', sha, since: minutesAgo(5), fileGoverned: true, reason: plan }] }).filter(
+    const [governed] = attentionItems({ ...base, heldPromotes: [{ repo: 'openadlc-testbed', sha, since: minutesAgo(5), fileGoverned: true, reason: plan }] }).filter(
       (one) => one.kind === 'promote_held',
     );
-    expect(governed?.actions[1]).toMatchObject({ kind: 'open_url', url: expect.stringMatching(/github\.com\/janedoe\/fleetadlc-testbed\/edit\/.+\/\.github\/fleetadlc\.yml$/) });
+    expect(governed?.actions[1]).toMatchObject({ kind: 'open_url', url: expect.stringMatching(/github\.com\/janedoe\/openadlc-testbed\/edit\/.+\/\.github\/openadlc\.yml$/) });
     expect(governed?.detail).toContain('approves each production deploy. GitHub’s plan cannot hold a production reviewer here. OpenADLC holds the promote');
   });
 
   it('names a bot with no account by its role, never by its seat', async () => {
     const { attentionItems } = await load();
-    const asking = task({ id: 'task-lead', botId: 'bot-lead', kind: 'review', subjectRef: 'fleetadlc-testbed#29', state: 'paused' });
+    const asking = task({ id: 'task-lead', botId: 'bot-lead', kind: 'review', subjectRef: 'openadlc-testbed#29', state: 'paused' });
 
     const [item] = attentionItems({
       now: NOW,
@@ -288,7 +288,7 @@ describe('what needs a person', () => {
 
   it('carries what a question is about: the draft before "Here’s what I’ll file. OK?"', async () => {
     const { attentionItems } = await load();
-    const asking = task({ id: 'task-lead', botId: 'bot-lead', kind: 'review', subjectRef: 'fleetadlc-testbed#29', state: 'paused' });
+    const asking = task({ id: 'task-lead', botId: 'bot-lead', kind: 'review', subjectRef: 'openadlc-testbed#29', state: 'paused' });
     const draft = 'Here is the issue I would file.\n\n**Title:** Add an ASCII banner';
     const [item] = attentionItems({
       now: NOW,
@@ -307,7 +307,7 @@ describe('what needs a person', () => {
     // `assist` promised a person in the loop that nothing put there, and is
     // gone; a gate is a bot asking, whatever stage it is in.
     const { attentionItems } = await load();
-    const deploying = task({ id: 'task-ship', botId: 'bot-sre', kind: 'deploy', subjectRef: 'fleetadlc-testbed#31', state: 'paused' });
+    const deploying = task({ id: 'task-ship', botId: 'bot-sre', kind: 'deploy', subjectRef: 'openadlc-testbed#31', state: 'paused' });
 
     const [item] = attentionItems({
       now: NOW,
@@ -339,7 +339,7 @@ describe('what needs a person', () => {
       id: 'task-failed',
       botId: 'bot-builder',
       kind: 'implement',
-      subjectRef: 'fleetadlc-testbed#16',
+      subjectRef: 'openadlc-testbed#16',
       state: 'failed',
       createdAt: minutesAgo(50),
       endedAt: minutesAgo(40),
@@ -349,13 +349,13 @@ describe('what needs a person', () => {
       id: 'task-failed-earlier',
       botId: 'bot-builder',
       kind: 'implement',
-      subjectRef: 'fleetadlc-testbed#15',
+      subjectRef: 'openadlc-testbed#15',
       state: 'failed',
       createdAt: minutesAgo(200),
       endedAt: minutesAgo(190),
       exitReason: 'model gone',
     });
-    const retry = task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#15', state: 'running', createdAt: minutesAgo(100) });
+    const retry = task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#15', state: 'running', createdAt: minutesAgo(100) });
 
     const items = attentionItems({
       now: NOW,
@@ -372,7 +372,7 @@ describe('what needs a person', () => {
     expect(items[0]).toMatchObject({
       id: 'task:task-failed',
       kind: 'task_failed',
-      headline: 'The builder (fleetadlc-atlas-janedoe) could not finish the change',
+      headline: 'The builder (openadlc-atlas-janedoe) could not finish the change',
       detail: 'Engine claude is not available on this host, so implement cannot run.',
       since: minutesAgo(40),
       subject: { number: 16, title: 'Let the board filter by label' },
@@ -382,20 +382,20 @@ describe('what needs a person', () => {
       { kind: 'retry_task', label: 'Try again', taskId: 'task-failed' },
       { kind: 'stop_task', label: 'Stop', taskId: 'task-failed' },
       { kind: 'dismiss_task', label: 'Dismiss', tasks: [{ taskId: 'task-failed', occurrence: minutesAgo(40) }] },
-      { kind: 'open_thread', label: 'Open thread', bot: 'fleetadlc-atlas-janedoe' },
-      { kind: 'open_url', label: 'On GitHub', url: 'https://github.com/janedoe/fleetadlc-testbed/issues/16' },
+      { kind: 'open_thread', label: 'Open thread', bot: 'openadlc-atlas-janedoe' },
+      { kind: 'open_url', label: 'On GitHub', url: 'https://github.com/janedoe/openadlc-testbed/issues/16' },
     ]);
   });
 
   it('says a build finished without opening its pull request, and offers to open it from the branch', async () => {
     const { attentionItems } = await load();
-    const branch = 'agent/fleetadlc-atlas-janedoe/16-issue-16';
+    const branch = 'agent/openadlc-atlas-janedoe/16-issue-16';
     const failed = {
       ...task({
         id: 'task-no-pr',
         botId: 'bot-builder',
         kind: 'implement',
-        subjectRef: 'fleetadlc-testbed#16',
+        subjectRef: 'openadlc-testbed#16',
         state: 'failed',
         endedAt: minutesAgo(10),
         exitReason: `finished without opening a pull request: its commits are on ${branch}, and a second try on that branch did not open one either`,
@@ -417,11 +417,11 @@ describe('what needs a person', () => {
     expect(rest).toEqual([]);
     expect(item).toMatchObject({
       kind: 'task_failed',
-      headline: 'The builder (fleetadlc-atlas-janedoe) finished without opening a pull request',
-      detail: `The builder (fleetadlc-atlas-janedoe) pushed its work to ${branch} and ended twice without opening the pull request. Open it from the branch, or try again.`,
+      headline: 'The builder (openadlc-atlas-janedoe) finished without opening a pull request',
+      detail: `The builder (openadlc-atlas-janedoe) pushed its work to ${branch} and ended twice without opening the pull request. Open it from the branch, or try again.`,
     });
     expect(item?.actions.slice(0, 2)).toEqual([
-      { kind: 'open_url', label: 'Open pull request', url: `https://github.com/janedoe/fleetadlc-testbed/compare/main...${branch}?expand=1` },
+      { kind: 'open_url', label: 'Open pull request', url: `https://github.com/janedoe/openadlc-testbed/compare/main...${branch}?expand=1` },
       { kind: 'retry_task', label: 'Try again', taskId: 'task-no-pr' },
     ]);
   });
@@ -432,16 +432,16 @@ describe('what needs a person', () => {
       id: 'task-nothing',
       botId: 'bot-builder',
       kind: 'implement',
-      subjectRef: 'fleetadlc-testbed#16',
+      subjectRef: 'openadlc-testbed#16',
       state: 'failed',
       endedAt: minutesAgo(10),
-      exitReason: 'finished without pushing a commit or opening a pull request: agent/fleetadlc-atlas-janedoe/16-issue-16 has no commits beyond the base',
+      exitReason: 'finished without pushing a commit or opening a pull request: agent/openadlc-atlas-janedoe/16-issue-16 has no commits beyond the base',
     });
 
     const [item] = attentionItems({ now: NOW, gates: [], tasks: [failed], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] });
     expect(item).toMatchObject({
-      headline: 'The builder (fleetadlc-atlas-janedoe) could not finish the change',
-      detail: 'The builder (fleetadlc-atlas-janedoe) finished without pushing a commit or opening a pull request. Open its thread to see why, then try again.',
+      headline: 'The builder (openadlc-atlas-janedoe) could not finish the change',
+      detail: 'The builder (openadlc-atlas-janedoe) finished without pushing a commit or opening a pull request. Open its thread to see why, then try again.',
     });
     expect(item?.actions.map((action) => action.label)).not.toContain('Open pull request');
     expect(item?.actions[0]).toEqual({ kind: 'retry_task', label: 'Try again', taskId: 'task-nothing' });
@@ -449,9 +449,9 @@ describe('what needs a person', () => {
 
   it('forgets a failure after a week, and one whose card has moved past it', async () => {
     const { attentionItems } = await load();
-    const old = task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#16', state: 'failed', createdAt: daysAgo(9), endedAt: daysAgo(8) });
+    const old = task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'failed', createdAt: daysAgo(9), endedAt: daysAgo(8) });
     // The review failed, and the change shipped anyway.
-    const movedOn = task({ botId: 'bot-second', kind: 'review', subjectRef: 'fleetadlc-testbed#31', state: 'failed', endedAt: minutesAgo(30) });
+    const movedOn = task({ botId: 'bot-second', kind: 'review', subjectRef: 'openadlc-testbed#31', state: 'failed', endedAt: minutesAgo(30) });
 
     expect(
       attentionItems({ now: NOW, gates: [], tasks: [old, movedOn], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] }),
@@ -460,8 +460,8 @@ describe('what needs a person', () => {
 
   it('does not take another reviewer’s later review for a second attempt at this one', async () => {
     const { attentionItems, triedAgain } = await load();
-    const failed = task({ botId: 'bot-lead', kind: 'review', subjectRef: 'fleetadlc-testbed#29', state: 'failed', createdAt: minutesAgo(30), endedAt: minutesAgo(29) });
-    const another = task({ botId: 'bot-second', kind: 'review', subjectRef: 'fleetadlc-testbed#29', state: 'done', createdAt: minutesAgo(29) });
+    const failed = task({ botId: 'bot-lead', kind: 'review', subjectRef: 'openadlc-testbed#29', state: 'failed', createdAt: minutesAgo(30), endedAt: minutesAgo(29) });
+    const another = task({ botId: 'bot-second', kind: 'review', subjectRef: 'openadlc-testbed#29', state: 'done', createdAt: minutesAgo(29) });
 
     expect(triedAgain(failed, [failed, another])).toBe(false);
     const items = attentionItems({ now: NOW, gates: [], tasks: [failed, another], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] });
@@ -490,7 +490,7 @@ describe('what needs a person', () => {
       id: `request:${REQUEST}`,
       kind: 'triage_failed',
       headline: 'The intake bot (ottoexampleco) could not triage your request',
-      subject: { repo: 'fleetadlc-testbed', number: null, title: 'Create html hello world and a readme file.', ref: null, item: 'request:a4b02784' },
+      subject: { repo: 'openadlc-testbed', number: null, title: 'Create html hello world and a readme file.', ref: null, item: 'request:a4b02784' },
       detail: 'Engine claude is not available on this host, so triage cannot run.',
     });
     expect(item?.actions[0]).toEqual({ kind: 'retry_triage', label: 'Try again', requestId: REQUEST });
@@ -552,7 +552,7 @@ describe('what needs a person', () => {
         kind: 'triage_failed',
         headline: 'Your request could not start its triage',
         detail: 'The queue tried 5 times and stopped: intake is not ready: its GitHub account is not connected. Put that right, then Try again.',
-        subject: expect.objectContaining({ repo: 'fleetadlc-testbed', title: 'Add a footer.', item: 'request:b5c13895' }),
+        subject: expect.objectContaining({ repo: 'openadlc-testbed', title: 'Add a footer.', item: 'request:b5c13895' }),
         since: minutesAgo(12),
         actions: [{ kind: 'retry_triage', label: 'Try again', requestId: REQUEST }],
       }),
@@ -617,25 +617,25 @@ describe('what needs a person', () => {
     const { attentionItems } = await load();
     const stalled = {
       at: minutesAgo(40),
-      payload: { repo: 'fleetadlc-testbed', pr: 29, issue: 11, rounds: 3, bot: 'fleetadlc-atlas-janedoe', botId: 'bot-builder' },
+      payload: { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 3, bot: 'openadlc-atlas-janedoe', botId: 'bot-builder' },
     };
 
     const [item] = attentionItems({ now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [stalled] });
     expect(item).toMatchObject({
-      id: 'stall:fleetadlc-testbed#29',
+      id: 'stall:openadlc-testbed#29',
       kind: 'review_stalled',
       headline: 'Review stopped after 3 rounds',
       subject: { number: 11, title: 'Rate-limit the webhook route' },
-      bot: { name: 'fleetadlc-atlas-janedoe' },
+      bot: { name: 'openadlc-atlas-janedoe' },
       since: minutesAgo(40),
     });
     expect(item?.actions).toEqual([
-      { kind: 'open_url', label: 'Decide on GitHub', url: 'https://github.com/janedoe/fleetadlc-testbed/pull/29' },
-      { kind: 'open_thread', label: 'Open thread', bot: 'fleetadlc-atlas-janedoe' },
+      { kind: 'open_url', label: 'Decide on GitHub', url: 'https://github.com/janedoe/openadlc-testbed/pull/29' },
+      { kind: 'open_thread', label: 'Open thread', bot: 'openadlc-atlas-janedoe' },
     ]);
 
     // A push started another review: it is moving again.
-    const reviewAgain = task({ botId: 'bot-second', kind: 'review', subjectRef: 'fleetadlc-testbed#29', state: 'running', createdAt: minutesAgo(5) });
+    const reviewAgain = task({ botId: 'bot-second', kind: 'review', subjectRef: 'openadlc-testbed#29', state: 'running', createdAt: minutesAgo(5) });
     expect(
       attentionItems({ now: NOW, gates: [], tasks: [reviewAgain], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [stalled] }),
     ).toEqual([]);
@@ -649,7 +649,7 @@ describe('what needs a person', () => {
 
   it('says one round, not one rounds, when review is allowed only one', async () => {
     const { attentionItems } = await load();
-    const once = { at: minutesAgo(40), payload: { repo: 'fleetadlc-testbed', pr: 29, issue: 11, rounds: 1, bot: 'fleetadlc-atlas-janedoe', botId: 'bot-builder' } };
+    const once = { at: minutesAgo(40), payload: { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 1, bot: 'openadlc-atlas-janedoe', botId: 'bot-builder' } };
     const [item] = attentionItems({ now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [once] });
     expect(item?.headline).toBe('Review stopped after 1 round');
   });
@@ -660,12 +660,12 @@ describe('what needs a person', () => {
     const { attentionItems } = await load();
     const held = {
       at: minutesAgo(10),
-      payload: { repo: 'fleetadlc-testbed', pr: 29, issue: 11, rounds: 0, heldBy: ['security-reviewer'], bot: 'security-reviewer', botId: null },
+      payload: { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 0, heldBy: ['security-reviewer'], bot: 'security-reviewer', botId: null },
     };
 
     const [item] = attentionItems({ now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [held] });
     expect(item).toMatchObject({
-      id: 'stall:fleetadlc-testbed#29',
+      id: 'stall:openadlc-testbed#29',
       kind: 'review_stalled',
       group: 'work',
       headline: 'Review stopped: security-reviewer still asks for changes',
@@ -673,10 +673,10 @@ describe('what needs a person', () => {
     });
     expect(item?.detail).toContain('security-reviewer is blocking and still asks for changes; the lead approved.');
     expect(item?.detail).toContain('dismiss its review on GitHub');
-    expect(item?.actions?.[0]).toEqual({ kind: 'open_url', label: 'Decide on GitHub', url: 'https://github.com/janedoe/fleetadlc-testbed/pull/29' });
+    expect(item?.actions?.[0]).toEqual({ kind: 'open_url', label: 'Decide on GitHub', url: 'https://github.com/janedoe/openadlc-testbed/pull/29' });
 
     // Asked to review again: it is moving.
-    const again = task({ botId: 'bot-second', kind: 'review', subjectRef: 'fleetadlc-testbed#29', state: 'running', createdAt: minutesAgo(2) });
+    const again = task({ botId: 'bot-second', kind: 'review', subjectRef: 'openadlc-testbed#29', state: 'running', createdAt: minutesAgo(2) });
     expect(attentionItems({ now: NOW, gates: [], tasks: [again], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [held] })).toEqual([]);
     const merged = ISSUES.map((one) => (one.number === 11 ? { ...one, stage: 'merged' as never } : one));
     expect(
@@ -690,12 +690,12 @@ describe('what needs a person', () => {
     const { attentionItems } = await load();
     const stopped = {
       at: minutesAgo(10),
-      payload: { repo: 'fleetadlc-testbed', pr: 29, issue: 11, rounds: 0, bot: null, botId: null, reason: 'the builder that held #11 is no longer in the crew' },
+      payload: { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 0, bot: null, botId: null, reason: 'the builder that held #11 is no longer in the crew' },
     };
 
     const [item] = attentionItems({ now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [stopped] });
 
-    expect(item).toMatchObject({ id: 'stall:fleetadlc-testbed#29', kind: 'review_stalled', subject: { number: 11 } });
+    expect(item).toMatchObject({ id: 'stall:openadlc-testbed#29', kind: 'review_stalled', subject: { number: 11 } });
     expect(item?.detail).toContain('the builder that held #11 is no longer in the crew');
     expect(item?.detail).not.toContain('The reviewers still ask for changes');
   });
@@ -722,7 +722,7 @@ describe('what needs a person', () => {
       kind: 'question',
       headline: 'The intake bot (ottoexampleco) has a question',
       // No ref, since it is no issue yet: its item is how the card opens the request's own conversation.
-      subject: { repo: 'fleetadlc-testbed', number: null, title: 'Create html hello world and a readme file.', ref: null, item: 'request:a4b02784' },
+      subject: { repo: 'openadlc-testbed', number: null, title: 'Create html hello world and a readme file.', ref: null, item: 'request:a4b02784' },
       detail: 'Which page should link to it?',
       actions: [{ kind: 'answer', label: 'Answer', bot: 'ottoexampleco' }],
       // An open question: nothing to press but Answer.
@@ -778,7 +778,7 @@ describe('what needs a person', () => {
     // the board stayed empty while GitHub sent nothing at all. The only fix is
     // a switch on the app's settings page, so the card is the link to it — and
     // it is the webhook's health check that says so now, the same answer the
-    // walkthrough's step and `fleetadlc doctor` read.
+    // walkthrough's step and `openadlc doctor` read.
     const { attentionItems } = await load();
     const [item] = attentionItems({
       now: NOW,
@@ -797,15 +797,15 @@ describe('what needs a person', () => {
           severity: 'blocking',
           title: 'GitHub is not sending events to OpenADLC',
           detail: 'Open the app’s settings and turn on **Active** under Webhook. OpenADLC found this by reading the repository; GitHub never delivered it.',
-          action: { label: 'Open the app’s settings', url: 'https://github.com/settings/apps/fleetadlc-janedoe' },
+          action: { label: 'Open the app’s settings', url: 'https://github.com/settings/apps/openadlc-janedoe' },
           failingSince: minutesAgo(30),
           facts: {
             subject: {
-              repo: 'fleetadlc-testbed',
+              repo: 'openadlc-testbed',
               number: 1,
               title: 'Document the webhook step',
-              ref: 'fleetadlc-testbed#1',
-              url: 'https://github.com/janedoe/fleetadlc-testbed/issues/1',
+              ref: 'openadlc-testbed#1',
+              url: 'https://github.com/janedoe/openadlc-testbed/issues/1',
             },
           },
         }),
@@ -816,12 +816,12 @@ describe('what needs a person', () => {
       id: 'check:webhook',
       kind: 'check_failed',
       headline: 'GitHub is not sending events to OpenADLC',
-      subject: { repo: 'fleetadlc-testbed', number: 1, title: 'Document the webhook step', ref: 'fleetadlc-testbed#1' },
+      subject: { repo: 'openadlc-testbed', number: 1, title: 'Document the webhook step', ref: 'openadlc-testbed#1' },
       bot: null,
       since: minutesAgo(30),
       severity: 'blocking',
       actions: [
-        { kind: 'open_url', label: 'Open the app’s settings', url: 'https://github.com/settings/apps/fleetadlc-janedoe' },
+        { kind: 'open_url', label: 'Open the app’s settings', url: 'https://github.com/settings/apps/openadlc-janedoe' },
         { kind: 'recheck', label: 'Check again', checkId: 'webhook' },
       ],
     });
@@ -909,8 +909,8 @@ describe('what needs a person', () => {
 
   it('puts the newest first', async () => {
     const { attentionItems } = await load();
-    const asking = task({ id: 'task-q2', botId: 'bot-intake', kind: 'intake', subjectRef: 'fleetadlc-testbed#15', state: 'paused' });
-    const failed = task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#16', state: 'failed', endedAt: minutesAgo(1) });
+    const asking = task({ id: 'task-q2', botId: 'bot-intake', kind: 'intake', subjectRef: 'openadlc-testbed#15', state: 'paused' });
+    const failed = task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'failed', endedAt: minutesAgo(1) });
 
     const items = attentionItems({
       now: NOW,
@@ -920,7 +920,7 @@ describe('what needs a person', () => {
       repos: REPOS,
       issues: ISSUES,
       requests: [],
-      stallEvents: [{ at: minutesAgo(10), payload: { repo: 'fleetadlc-testbed', pr: 29, issue: 11, rounds: 3 } }],
+      stallEvents: [{ at: minutesAgo(10), payload: { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 3 } }],
     });
 
     expect(items.map((item) => item.kind)).toEqual(['task_failed', 'review_stalled', 'question']);
@@ -930,12 +930,12 @@ describe('what needs a person', () => {
 describe('a repository removed from OpenADLC', () => {
   it('has no question, failure, stall or failed triage in what needs you', async () => {
     const { attentionItems } = await load();
-    const asking = task({ id: 'task-q', botId: 'bot-intake', kind: 'intake', subjectRef: 'fleetadlc-testbed#15', state: 'paused' });
+    const asking = task({ id: 'task-q', botId: 'bot-intake', kind: 'intake', subjectRef: 'openadlc-testbed#15', state: 'paused' });
     // Stopped by the removal: without this it would be a "was stopped before finishing" card.
     const stopped = task({
       botId: 'bot-builder',
       kind: 'implement',
-      subjectRef: 'fleetadlc-testbed#16',
+      subjectRef: 'openadlc-testbed#16',
       state: 'stopped',
       endedAt: minutesAgo(1),
       exitReason: 'hostd restarted',
@@ -949,7 +949,7 @@ describe('a repository removed from OpenADLC', () => {
       bots: BOTS,
       issues: ISSUES,
       requests: [request],
-      stallEvents: [{ at: minutesAgo(10), payload: { repo: 'fleetadlc-testbed', pr: 29, issue: 11, rounds: 3 } }],
+      stallEvents: [{ at: minutesAgo(10), payload: { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 3 } }],
     };
 
     // While it is OpenADLC's, each is an item.
@@ -957,13 +957,13 @@ describe('a repository removed from OpenADLC', () => {
       ['question', 'review_stalled', 'task_failed', 'triage_failed'].sort(),
     );
     // Removed, none is.
-    expect(attentionItems({ ...input, repos: [], removed: [{ id: 'repo-1', name: 'fleetadlc-testbed' }] })).toEqual([]);
+    expect(attentionItems({ ...input, repos: [], removed: [{ id: 'repo-1', name: 'openadlc-testbed' }] })).toEqual([]);
   });
 
   it('leaves the other repositories’ items as they are', async () => {
     const { attentionItems } = await load();
     const there = task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'old-api#3', repoId: 'repo-old', state: 'failed', endedAt: minutesAgo(1) });
-    const here = task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#16', state: 'failed', endedAt: minutesAgo(1) });
+    const here = task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'failed', endedAt: minutesAgo(1) });
 
     const items = attentionItems({
       now: NOW,
@@ -977,7 +977,7 @@ describe('a repository removed from OpenADLC', () => {
       removed: [{ id: 'repo-old', name: 'old-api' }],
     });
 
-    expect(items.map((item) => item.subject.ref)).toEqual(['fleetadlc-testbed#16']);
+    expect(items.map((item) => item.subject.ref)).toEqual(['openadlc-testbed#16']);
   });
 
   it('leaves out a pull request the merge line held for a person in a removed repository', async () => {
@@ -993,26 +993,26 @@ describe('a repository removed from OpenADLC', () => {
       stallEvents: [],
       heldMerges: [
         { repo: 'old-api', prNumber: 5, reason: 'it changes how CI runs (Makefile)', since: minutesAgo(2) },
-        { repo: 'fleetadlc-testbed', prNumber: 29, reason: 'it changes how CI runs (Makefile)', since: minutesAgo(2) },
+        { repo: 'openadlc-testbed', prNumber: 29, reason: 'it changes how CI runs (Makefile)', since: minutesAgo(2) },
       ],
       removed: [{ id: 'repo-old', name: 'old-api' }],
     });
 
-    expect(items.filter((item) => item.kind === 'merge_waiting').map((item) => item.id)).toEqual(['merge:fleetadlc-testbed#29']);
+    expect(items.filter((item) => item.kind === 'merge_waiting').map((item) => item.id)).toEqual(['merge:openadlc-testbed#29']);
   });
 });
 
-describe('an issue labelled fleetadlc:ignore', () => {
+describe('an issue labelled openadlc:ignore', () => {
   // The console is for the work the crew does. #11 and its pull request #29
   // are a person's once the label is on, and none of their work needs you.
   const labelled = (labels: string[]) => ISSUES.map((one) => (one.number === 11 ? { ...one, labels: [...labels] } : one));
 
   it('has no question, failure, stall or held merge of its own or its pull request’s in what needs you', async () => {
     const { attentionItems } = await load();
-    const asking = task({ id: 'task-q', botId: 'bot-lead', kind: 'review', subjectRef: 'fleetadlc-testbed#29', state: 'paused' });
-    const failed = task({ botId: 'bot-second', kind: 'review', subjectRef: 'fleetadlc-testbed#29', state: 'failed', endedAt: minutesAgo(1), exitReason: 'boom' });
+    const asking = task({ id: 'task-q', botId: 'bot-lead', kind: 'review', subjectRef: 'openadlc-testbed#29', state: 'paused' });
+    const failed = task({ botId: 'bot-second', kind: 'review', subjectRef: 'openadlc-testbed#29', state: 'failed', endedAt: minutesAgo(1), exitReason: 'boom' });
     // Another issue's work stays.
-    const other = task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#16', state: 'failed', endedAt: minutesAgo(1), exitReason: 'boom' });
+    const other = task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'failed', endedAt: minutesAgo(1), exitReason: 'boom' });
     const input = {
       now: NOW,
       gates: [{ id: 'gate-5', taskId: 'task-q', question: 'Which?', options: [], githubCommentUrl: null, createdAt: minutesAgo(20) }],
@@ -1020,39 +1020,39 @@ describe('an issue labelled fleetadlc:ignore', () => {
       bots: BOTS,
       repos: REPOS,
       requests: [],
-      stallEvents: [{ at: minutesAgo(10), payload: { repo: 'fleetadlc-testbed', pr: 29, issue: 11, rounds: 3 } }],
-      heldMerges: [{ repo: 'fleetadlc-testbed', prNumber: 29, reason: 'it changes how CI runs (Makefile)', since: minutesAgo(2) }],
+      stallEvents: [{ at: minutesAgo(10), payload: { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 3 } }],
+      heldMerges: [{ repo: 'openadlc-testbed', prNumber: 29, reason: 'it changes how CI runs (Makefile)', since: minutesAgo(2) }],
     };
 
     // Without the label, each is an item.
     const before = attentionItems({ ...input, issues: labelled([]) });
-    expect(before.filter((item) => item.subject.item === 'fleetadlc-testbed#11').map((item) => item.kind).sort()).toEqual(
+    expect(before.filter((item) => item.subject.item === 'openadlc-testbed#11').map((item) => item.kind).sort()).toEqual(
       ['merge_waiting', 'question', 'review_stalled', 'task_failed'].sort(),
     );
 
-    const after = attentionItems({ ...input, issues: labelled(['fleetadlc:ignore']) });
-    expect(after.map((item) => item.subject.ref)).toEqual(['fleetadlc-testbed#16']);
+    const after = attentionItems({ ...input, issues: labelled(['openadlc:ignore']) });
+    expect(after.map((item) => item.subject.ref)).toEqual(['openadlc-testbed#16']);
   });
 
   it('has no send-back held for a person either', async () => {
     const { attentionItems } = await load();
-    const refused = { at: daysAgo(3), type: 'send_back.stalled', payload: { repo: 'fleetadlc-testbed', issue: 11, from: 'review', to: 'build', by: 'lead-reviewer', reason: 'Still wrong' } };
+    const refused = { at: daysAgo(3), type: 'send_back.stalled', payload: { repo: 'openadlc-testbed', issue: 11, from: 'review', to: 'build', by: 'lead-reviewer', reason: 'Still wrong' } };
     const input = { now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, requests: [], stallEvents: [], sendBackEvents: [refused] };
 
-    expect(attentionItems({ ...input, issues: labelled(['needs-human']) }).map((item) => item.id)).toEqual(['sendback:fleetadlc-testbed#11']);
-    expect(attentionItems({ ...input, issues: labelled(['needs-human', 'fleetadlc:ignore']) })).toEqual([]);
+    expect(attentionItems({ ...input, issues: labelled(['needs-human']) }).map((item) => item.id)).toEqual(['sendback:openadlc-testbed#11']);
+    expect(attentionItems({ ...input, issues: labelled(['needs-human', 'openadlc:ignore']) })).toEqual([]);
   });
 });
 
 describe('work sent back to a person', () => {
-  const refused = { at: daysAgo(3), type: 'send_back.stalled', payload: { repo: 'fleetadlc-testbed', issue: 11, from: 'review', to: 'build', by: 'lead-reviewer', reason: 'Still wrong' } };
+  const refused = { at: daysAgo(3), type: 'send_back.stalled', payload: { repo: 'openadlc-testbed', issue: 11, from: 'review', to: 'build', by: 'lead-reviewer', reason: 'Still wrong' } };
   const held = { ...issue(11, 'Rate-limit the webhook route', 'review', 29), labels: ['needs-human'] };
   const base = { now: NOW, tasks: [], bots: BOTS, repos: REPOS, requests: [], stallEvents: [], sendBackEvents: [refused] };
 
   it('is a card while the issue waits where the send-back left it', async () => {
     const { attentionItems } = await load();
     const items = attentionItems({ ...base, gates: [], issues: [held] });
-    expect(items.map((item) => item.id)).toEqual(['sendback:fleetadlc-testbed#11']);
+    expect(items.map((item) => item.id)).toEqual(['sendback:openadlc-testbed#11']);
   });
 
   it('gives the bot’s reason one full stop, though the bot wrote its own', async () => {
@@ -1064,7 +1064,7 @@ describe('work sent back to a person', () => {
 
   it('does not come back when a later question puts needs-human on the issue', async () => {
     const { attentionItems } = await load();
-    const asking = task({ id: 'task-ask', botId: 'bot-builder', kind: 'patch', subjectRef: 'fleetadlc-testbed#29', state: 'paused' });
+    const asking = task({ id: 'task-ask', botId: 'bot-builder', kind: 'patch', subjectRef: 'openadlc-testbed#29', state: 'paused' });
     const items = attentionItems({
       ...base,
       tasks: [asking],
@@ -1091,7 +1091,7 @@ describe('a failed task, in words a person acts on', () => {
       id: 'task-iris',
       botId: 'bot-second',
       kind: 'review',
-      subjectRef: 'fleetadlc-testbed#2',
+      subjectRef: 'openadlc-testbed#2',
       state: 'failed',
       endedAt: minutesAgo(12),
       exitReason: GROK_SIGNED_OUT,
@@ -1108,14 +1108,14 @@ describe('a failed task, in words a person acts on', () => {
       stallEvents: [],
       accounts: [{ id: 'acct-grok', label: 'Grok — SuperGrok', provider: 'xai', kind: 'subscription' }],
       // The board has no row whose pull request is #2; GitHub says what it is.
-      titles: new Map([['fleetadlc-testbed#2', { title: 'Add a health endpoint', url: 'https://github.com/janedoe/fleetadlc-testbed/pull/2', pullRequest: true }]]),
+      titles: new Map([['openadlc-testbed#2', { title: 'Add a health endpoint', url: 'https://github.com/janedoe/openadlc-testbed/pull/2', pullRequest: true }]]),
     });
 
     expect(item).toMatchObject({
       id: 'task:task-iris',
       kind: 'task_failed',
       headline: 'The second reviewer (irisexampleco) could not finish its review',
-      subject: { number: 2, title: 'Add a health endpoint', url: 'https://github.com/janedoe/fleetadlc-testbed/pull/2' },
+      subject: { number: 2, title: 'Add a health endpoint', url: 'https://github.com/janedoe/openadlc-testbed/pull/2' },
       detail:
         'The xAI subscription “Grok — SuperGrok” the second reviewer (irisexampleco) thinks with is signed out. Sign it in again on the “Foundation model accounts / API keys” step, then try again.',
       raw: GROK_SIGNED_OUT,
@@ -1126,7 +1126,7 @@ describe('a failed task, in words a person acts on', () => {
       { kind: 'stop_task', label: 'Stop', taskId: 'task-iris' },
       { kind: 'dismiss_task', label: 'Dismiss', tasks: [{ taskId: 'task-iris', occurrence: minutesAgo(12) }] },
       { kind: 'open_thread', label: 'Open thread', bot: 'irisexampleco' },
-      { kind: 'open_url', label: 'On GitHub', url: 'https://github.com/janedoe/fleetadlc-testbed/pull/2' },
+      { kind: 'open_url', label: 'On GitHub', url: 'https://github.com/janedoe/openadlc-testbed/pull/2' },
     ]);
   });
 
@@ -1136,7 +1136,7 @@ describe('a failed task, in words a person acts on', () => {
       id: 'task-stopped',
       botId: 'bot-builder',
       kind: 'implement',
-      subjectRef: 'fleetadlc-testbed#16',
+      subjectRef: 'openadlc-testbed#16',
       state: 'stopped',
       endedAt: minutesAgo(3),
       exitReason: 'hostd shutting down',
@@ -1144,8 +1144,8 @@ describe('a failed task, in words a person acts on', () => {
 
     const [item] = attentionItems({ now: NOW, gates: [], tasks: [stopped], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] });
     expect(item).toMatchObject({
-      headline: 'The builder (fleetadlc-atlas-janedoe) was stopped before finishing the change',
-      detail: 'OpenADLC stopped while the builder (fleetadlc-atlas-janedoe) was working, and nothing started the work again. Try again to pick it up.',
+      headline: 'The builder (openadlc-atlas-janedoe) was stopped before finishing the change',
+      detail: 'OpenADLC stopped while the builder (openadlc-atlas-janedoe) was working, and nothing started the work again. Try again to pick it up.',
     });
     expect(item?.actions[0]).toEqual({ kind: 'retry_task', label: 'Try again', taskId: 'task-stopped' });
   });
@@ -1156,7 +1156,7 @@ describe('a failed task, in words a person acts on', () => {
       id: 'task-stopped',
       botId: 'bot-builder',
       kind: 'implement',
-      subjectRef: 'fleetadlc-testbed#16',
+      subjectRef: 'openadlc-testbed#16',
       state: 'stopped',
       endedAt: minutesAgo(3),
       exitReason: `${STOPPED_BY_A_PERSON} janedoe: taking it over`,
@@ -1173,7 +1173,7 @@ describe('a failed task, in words a person acts on', () => {
       id: 'task-lead',
       botId: 'bot-lead',
       kind: 'review',
-      subjectRef: 'fleetadlc-testbed#11',
+      subjectRef: 'openadlc-testbed#11',
       state: 'failed',
       endedAt: minutesAgo(20),
       exitReason: 'GitHub said: Bad credentials',
@@ -1182,7 +1182,7 @@ describe('a failed task, in words a person acts on', () => {
       id: 'task-second',
       botId: 'bot-second',
       kind: 'review',
-      subjectRef: 'fleetadlc-testbed#20',
+      subjectRef: 'openadlc-testbed#20',
       state: 'failed',
       endedAt: minutesAgo(5),
       exitReason: 'GitHub said: Bad credentials',
@@ -1227,7 +1227,7 @@ describe('a failed task, in words a person acts on', () => {
     const signedOut = task({
       botId: 'bot-lead',
       kind: 'review',
-      subjectRef: 'fleetadlc-testbed#29',
+      subjectRef: 'openadlc-testbed#29',
       state: 'failed',
       endedAt: minutesAgo(20),
       exitReason: 'GitHub said: Bad credentials',
@@ -1235,7 +1235,7 @@ describe('a failed task, in words a person acts on', () => {
     const differentReason = task({
       botId: 'bot-second',
       kind: 'review',
-      subjectRef: 'fleetadlc-testbed#11',
+      subjectRef: 'openadlc-testbed#11',
       state: 'failed',
       endedAt: minutesAgo(5),
       exitReason: 'hostd shutting down',
@@ -1243,7 +1243,7 @@ describe('a failed task, in words a person acts on', () => {
     const differentWork = task({
       botId: 'bot-builder',
       kind: 'implement',
-      subjectRef: 'fleetadlc-testbed#16',
+      subjectRef: 'openadlc-testbed#16',
       state: 'failed',
       endedAt: minutesAgo(2),
       exitReason: 'GitHub said: Bad credentials',
@@ -1268,7 +1268,7 @@ describe('a failed task, in words a person acts on', () => {
     const first = task({
       botId: 'bot-lead',
       kind: 'review',
-      subjectRef: 'fleetadlc-testbed#29',
+      subjectRef: 'openadlc-testbed#29',
       state: 'failed',
       endedAt: minutesAgo(20),
       exitReason: null,
@@ -1276,7 +1276,7 @@ describe('a failed task, in words a person acts on', () => {
     const second = task({
       botId: 'bot-second',
       kind: 'review',
-      subjectRef: 'fleetadlc-testbed#11',
+      subjectRef: 'openadlc-testbed#11',
       state: 'failed',
       endedAt: minutesAgo(5),
       exitReason: '',
@@ -1307,13 +1307,13 @@ describe('what the health checks say', () => {
           checkId: 'app-permissions',
           state: 'failing',
           title: 'The OpenADLC app does not have “SSH signing keys”',
-          action: { label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/fleetadlc-janedoe/permissions' },
+          action: { label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/openadlc-janedoe/permissions' },
         }),
         healthRow({
           id: 'signing-key:bot-builder',
           checkId: 'signing-key',
           state: 'failing',
-          title: 'fleetadlc-atlas-janedoe’s signing key is not on its GitHub account',
+          title: 'openadlc-atlas-janedoe’s signing key is not on its GitHub account',
           waitingFor: ['app-permissions:git_signing_ssh_public_keys'],
           facts: { botId: 'bot-builder' },
         }),
@@ -1443,8 +1443,8 @@ describe('what the health checks say', () => {
           id: 'signing-key:bot-builder',
           checkId: 'signing-key',
           state: 'failing',
-          title: 'fleetadlc-atlas-janedoe’s signing key is not on its GitHub account',
-          action: { label: 'Reconnect fleetadlc-atlas-janedoe', href: '/settings#github-accounts' },
+          title: 'openadlc-atlas-janedoe’s signing key is not on its GitHub account',
+          action: { label: 'Reconnect openadlc-atlas-janedoe', href: '/settings#github-accounts' },
           waitingFor: ['app-permissions:git_signing_ssh_public_keys'],
           facts: { botId: 'bot-builder' },
         }),
@@ -1452,9 +1452,9 @@ describe('what the health checks say', () => {
     });
     expect(item).toMatchObject({
       kind: 'check_failed',
-      bot: { name: 'fleetadlc-atlas-janedoe' },
+      bot: { name: 'openadlc-atlas-janedoe' },
       actions: [
-        { kind: 'open_page', label: 'Reconnect fleetadlc-atlas-janedoe', href: '/settings#github-accounts' },
+        { kind: 'open_page', label: 'Reconnect openadlc-atlas-janedoe', href: '/settings#github-accounts' },
         { kind: 'recheck', label: 'Check again', checkId: 'signing-key' },
       ],
     });
@@ -1494,9 +1494,9 @@ describe('what the health checks say', () => {
         checkId: 'unattributed-post',
         state: 'failing',
         severity: 'warning',
-        title: 'A post by irisexampleco in janedoe/fleetadlc-testbed is not signed by OpenADLC',
+        title: 'A post by irisexampleco in janedoe/openadlc-testbed is not signed by OpenADLC',
         detail: 'The latest, a comment: it has no signature.',
-        action: { label: 'Open the post', url: 'https://github.com/janedoe/fleetadlc-testbed/issues/3#issuecomment-1' },
+        action: { label: 'Open the post', url: 'https://github.com/janedoe/openadlc-testbed/issues/3#issuecomment-1' },
         facts: { occurrence },
       });
     const read = (occurrence: string, acknowledged?: Map<string, Set<string>>) =>
@@ -1573,7 +1573,7 @@ const store = vi.hoisted(() => ({
   settings: {} as Record<string, string>,
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -1603,7 +1603,7 @@ vi.mock('@fleetadlc/db', () => ({
     store.since = since;
     // A stopped review loop's shape; a supersede's is another, and none is recorded here.
     if (type === 'design_memory.superseded') return [];
-    return [{ at: '2026-09-24T11:20:00.000Z', payload: { repo: 'fleetadlc-testbed', pr: 29, issue: 11, rounds: 3 } }];
+    return [{ at: '2026-09-24T11:20:00.000Z', payload: { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 3 } }];
   }),
   mergeLines: {},
   modelAccounts: { list: vi.fn(async () => []) },
@@ -1622,7 +1622,7 @@ vi.mock('@fleetadlc/db', () => ({
             botId: 'bot-intake',
             repoId: 'repo-1',
             kind: 'intake',
-            subjectRef: 'fleetadlc-testbed#15',
+            subjectRef: 'openadlc-testbed#15',
             state: 'stopped',
             round: 0,
             costUsd: 0,
@@ -1694,7 +1694,7 @@ describe('GET /v1/attention', () => {
     // trying, and the design memory a design superseded, which this store has
     // none of.
     expect(store.eventTypes).toEqual(['review.stalled', 'send_back.stalled', 'send_back.to_person', 'intake.stalled', 'design_memory.superseded']);
-    expect(body.items.map((item) => item.id)).toEqual(['stall:fleetadlc-testbed#29', 'gate:gate-old']);
+    expect(body.items.map((item) => item.id)).toEqual(['stall:openadlc-testbed#29', 'gate:gate-old']);
     // A gate older than the week is still a gate: its task is read on its own.
     expect(body.items[1]).toMatchObject({ kind: 'question', bot: { name: 'ottoexampleco' } });
   });
@@ -1709,10 +1709,10 @@ describe('a design that superseded what a repository had decided', () => {
         {
           at: minutesAgo(5),
           payload: {
-            repo: 'fleetadlc-testbed',
+            repo: 'openadlc-testbed',
             issue: 11,
             by: 'system-engineer, unopposed at the move to build',
-            commentUrl: 'https://github.com/janedoe/fleetadlc-testbed/issues/11#issuecomment-9',
+            commentUrl: 'https://github.com/janedoe/openadlc-testbed/issues/11#issuecomment-9',
             replaced: [{ id: 'a', title: 'Never log credentials', byId: 'b', byTitle: 'Log what helps' }],
           },
         },
@@ -1721,14 +1721,14 @@ describe('a design that superseded what a repository had decided', () => {
     expect(item).toMatchObject({
       kind: 'design_memory_superseded',
       group: 'work',
-      headline: 'The design memory of fleetadlc-testbed changed',
+      headline: 'The design memory of openadlc-testbed changed',
       subject: { number: 11 },
       bot: null,
     });
     expect(item?.detail).toContain('“Log what helps” replaces “Never log credentials”');
     expect(item?.actions).toEqual([
-      { kind: 'open_url', label: 'On GitHub', url: 'https://github.com/janedoe/fleetadlc-testbed/issues/11#issuecomment-9' },
-      { kind: 'open_page', label: 'Design memory', href: '/settings/repositories/fleetadlc-testbed#fleetadlc-testbed-memory' },
+      { kind: 'open_url', label: 'On GitHub', url: 'https://github.com/janedoe/openadlc-testbed/issues/11#issuecomment-9' },
+      { kind: 'open_page', label: 'Design memory', href: '/settings/repositories/openadlc-testbed#openadlc-testbed-memory' },
     ]);
   });
 });
@@ -1744,22 +1744,22 @@ describe('a card about history', () => {
           checkId: 'unattributed-post',
           state: 'failing',
           severity: 'warning',
-          title: 'A review on janedoe/fleetadlc-testbed#31 by irisexampleco is not signed by OpenADLC',
+          title: 'A review on janedoe/openadlc-testbed#31 by irisexampleco is not signed by OpenADLC',
           detail: 'It counted.',
-          action: { label: 'Open the post', url: 'https://github.com/janedoe/fleetadlc-testbed/pull/31#pullrequestreview-7' },
+          action: { label: 'Open the post', url: 'https://github.com/janedoe/openadlc-testbed/pull/31#pullrequestreview-7' },
           facts: {
             history: true,
             occurrence: 'post:41',
             dismissLabel: 'This was me',
             actions: [{ label: 'Reconnect the account', href: '/settings#github-accounts' }, { nonsense: true }],
-            incident: { repo: 'janedoe/fleetadlc-testbed', did: 'review', counted: true },
+            incident: { repo: 'janedoe/openadlc-testbed', did: 'review', counted: true },
           },
         }),
       ],
     });
     expect(card?.actions).toEqual([
       { kind: 'acknowledge', label: 'This was me', checkId: 'unattributed-post', occurrence: 'post:41' },
-      { kind: 'open_url', label: 'Open the post', url: 'https://github.com/janedoe/fleetadlc-testbed/pull/31#pullrequestreview-7' },
+      { kind: 'open_url', label: 'Open the post', url: 'https://github.com/janedoe/openadlc-testbed/pull/31#pullrequestreview-7' },
       { kind: 'open_page', label: 'Reconnect the account', href: '/settings#github-accounts' },
       { kind: 'incident', label: 'What to do' },
     ]);
@@ -1780,7 +1780,7 @@ describe('which group an item is in', () => {
     expect(['question', 'review_stalled', 'task_failed', 'triage_failed'].map((kind) => groupOf(kind as never))).toEqual(['work', 'work', 'work', 'work']);
     expect(['check_failed', 'check_fixed', 'engine_update_failed'].map((kind) => groupOf(kind as never))).toEqual(['system', 'system', 'system']);
 
-    const failed = task({ id: 'task-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#16', state: 'failed', endedAt: minutesAgo(40), exitReason: 'engine exited 1' });
+    const failed = task({ id: 'task-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'failed', endedAt: minutesAgo(40), exitReason: 'engine exited 1' });
     const items = attentionItems({
       now: NOW, gates: [], tasks: [failed], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [],
       health: [healthRow({ id: 'hostd', checkId: 'hostd', state: 'failing', title: 'OpenADLC’s host service is not answering' })],
@@ -1807,7 +1807,7 @@ describe('a card on work that is over', () => {
     const stopped = task({
       botId: 'bot-sre',
       kind: 'deploy',
-      subjectRef: 'fleetadlc-testbed#31',
+      subjectRef: 'openadlc-testbed#31',
       state: 'stopped',
       endedAt: minutesAgo(3),
       exitReason: 'stopped by a person (janedoe@example.com): its session was killed',
@@ -1819,8 +1819,8 @@ describe('a card on work that is over', () => {
     const ended = [
       'plan change refused by alexsmith',
       'stopped at the cost cap: abandon (alexsmith)',
-      'already landed: fleetadlc-testbed#15 is closed, so the work it was for is finished',
-    ].map((exitReason) => task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#16', state: 'stopped', endedAt: minutesAgo(3), exitReason }));
+      'already landed: openadlc-testbed#15 is closed, so the work it was for is finished',
+    ].map((exitReason) => task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'stopped', endedAt: minutesAgo(3), exitReason }));
     expect(await run(ended)).toEqual([]);
   });
 
@@ -1829,39 +1829,39 @@ describe('a card on work that is over', () => {
       id: 'task-merged',
       botId: 'bot-second',
       kind: 'review',
-      subjectRef: 'fleetadlc-testbed#184',
+      subjectRef: 'openadlc-testbed#184',
       state: 'failed',
       endedAt: minutesAgo(30),
       exitReason: 'GitHub said: Bad credentials',
     });
 
-    const items = await run([failed], { closed: new Set(['fleetadlc-testbed#184']) });
+    const items = await run([failed], { closed: new Set(['openadlc-testbed#184']) });
 
     expect(items).toEqual([
       expect.objectContaining({
         id: 'landed:task-merged',
         kind: 'check_fixed',
         group: 'system',
-        headline: 'fleetadlc-testbed#184 landed or was closed, so the second reviewer (irisexampleco) no longer has to finish its review',
+        headline: 'openadlc-testbed#184 landed or was closed, so the second reviewer (irisexampleco) no longer has to finish its review',
         actions: [{ kind: 'dismiss_task', label: 'Dismiss', tasks: [{ taskId: 'task-merged', occurrence: minutesAgo(30) }] }],
       }),
     ]);
   });
 
   it('is gone altogether when the work landed and the failure is more than a day old', async () => {
-    const failed = task({ botId: 'bot-intake', kind: 'intake', subjectRef: 'fleetadlc-testbed#176', state: 'failed', endedAt: daysAgo(2), exitReason: 'model gone' });
-    expect(await run([failed], { closed: new Set(['fleetadlc-testbed#176']) })).toEqual([]);
+    const failed = task({ botId: 'bot-intake', kind: 'intake', subjectRef: 'openadlc-testbed#176', state: 'failed', endedAt: daysAgo(2), exitReason: 'model gone' });
+    expect(await run([failed], { closed: new Set(['openadlc-testbed#176']) })).toEqual([]);
   });
 
   it('is still a card while the subject is open, and for a deploy of a merged pull request', async () => {
-    const review = task({ botId: 'bot-second', kind: 'review', subjectRef: 'fleetadlc-testbed#185', state: 'failed', endedAt: minutesAgo(30), exitReason: 'model gone' });
-    const deploy = task({ botId: 'bot-sre', kind: 'deploy', subjectRef: 'fleetadlc-testbed#186', state: 'failed', endedAt: minutesAgo(20), exitReason: 'the deploy workflow failed' });
+    const review = task({ botId: 'bot-second', kind: 'review', subjectRef: 'openadlc-testbed#185', state: 'failed', endedAt: minutesAgo(30), exitReason: 'model gone' });
+    const deploy = task({ botId: 'bot-sre', kind: 'deploy', subjectRef: 'openadlc-testbed#186', state: 'failed', endedAt: minutesAgo(20), exitReason: 'the deploy workflow failed' });
 
-    const items = await run([review, deploy], { closed: new Set(['fleetadlc-testbed#186']) });
+    const items = await run([review, deploy], { closed: new Set(['openadlc-testbed#186']) });
 
     expect(items.map((item) => [item.kind, item.subject.ref])).toEqual([
-      ['task_failed', 'fleetadlc-testbed#186'],
-      ['task_failed', 'fleetadlc-testbed#185'],
+      ['task_failed', 'openadlc-testbed#186'],
+      ['task_failed', 'openadlc-testbed#185'],
     ]);
   });
 });
@@ -1874,7 +1874,7 @@ describe('a failure on a spend limit', () => {
     return attentionItems({ now: NOW, gates: [], tasks, bots: onAccount, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] });
   };
   const hit = () =>
-    task({ botId: 'bot-second', kind: 'review', subjectRef: 'fleetadlc-testbed#29', state: 'failed', startedAt: minutesAgo(600), endedAt: minutesAgo(590), exitReason: LIMIT });
+    task({ botId: 'bot-second', kind: 'review', subjectRef: 'openadlc-testbed#29', state: 'failed', startedAt: minutesAgo(600), endedAt: minutesAgo(590), exitReason: LIMIT });
 
   it('is a card while nothing on the account has run since', async () => {
     expect((await run([hit()])).map((item) => item.kind)).toEqual(['task_failed']);
@@ -1883,31 +1883,31 @@ describe('a failure on a spend limit', () => {
   it('stays, saying it can be tried again, when another task on the account ran since but the work did not', async () => {
     // Nothing runs a model-account failure again by itself: the review of #29
     // would stall with nothing on the board.
-    const later = task({ botId: 'bot-lead', kind: 'review', subjectRef: 'fleetadlc-testbed#31', state: 'done', startedAt: minutesAgo(60), endedAt: minutesAgo(30) });
+    const later = task({ botId: 'bot-lead', kind: 'review', subjectRef: 'openadlc-testbed#31', state: 'done', startedAt: minutesAgo(60), endedAt: minutesAgo(30) });
     const items = await run([hit(), later]);
-    expect(items.map((item) => [item.kind, item.subject.ref])).toEqual([['task_failed', 'fleetadlc-testbed#11']]);
+    expect(items.map((item) => [item.kind, item.subject.ref])).toEqual([['task_failed', 'openadlc-testbed#11']]);
     expect(items[0]?.headline).toBe('The second reviewer (irisexampleco) could not finish its review; its model account has worked since, so it can be tried again');
   });
 
   it('clears once the account worked again and a later task on the same subject started', async () => {
-    const later = task({ botId: 'bot-lead', kind: 'review', subjectRef: 'fleetadlc-testbed#31', state: 'done', startedAt: minutesAgo(60), endedAt: minutesAgo(30) });
-    const again = task({ botId: 'bot-builder', kind: 'patch', subjectRef: 'fleetadlc-testbed#29', state: 'running', startedAt: minutesAgo(20) });
+    const later = task({ botId: 'bot-lead', kind: 'review', subjectRef: 'openadlc-testbed#31', state: 'done', startedAt: minutesAgo(60), endedAt: minutesAgo(30) });
+    const again = task({ botId: 'bot-builder', kind: 'patch', subjectRef: 'openadlc-testbed#29', state: 'running', startedAt: minutesAgo(20) });
     expect((await run([hit(), later, again])).filter((item) => item.kind === 'task_failed')).toEqual([]);
   });
 
   it('clears once the account worked again and its subject closed', async () => {
     const { attentionItems } = await load();
-    const later = task({ botId: 'bot-lead', kind: 'review', subjectRef: 'fleetadlc-testbed#31', state: 'done', startedAt: minutesAgo(60), endedAt: minutesAgo(30) });
-    const deploy = task({ botId: 'bot-sre', kind: 'deploy', subjectRef: 'fleetadlc-testbed#29', state: 'failed', startedAt: minutesAgo(600), endedAt: minutesAgo(590), exitReason: LIMIT });
+    const later = task({ botId: 'bot-lead', kind: 'review', subjectRef: 'openadlc-testbed#31', state: 'done', startedAt: minutesAgo(60), endedAt: minutesAgo(30) });
+    const deploy = task({ botId: 'bot-sre', kind: 'deploy', subjectRef: 'openadlc-testbed#29', state: 'failed', startedAt: minutesAgo(600), endedAt: minutesAgo(590), exitReason: LIMIT });
     const onSre = onAccount.map((bot) => (bot.id === 'bot-sre' ? { ...bot, modelAccountId: 'acct-1' } : bot));
     const input = { now: NOW, gates: [], bots: onSre, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [], testingDeploy: true };
     // Open: still a card. Closed: its work is over.
     expect((await attentionItems({ ...input, tasks: [deploy, later] })).map((item) => item.kind)).toEqual(['task_failed']);
-    expect(attentionItems({ ...input, tasks: [deploy, later], closed: new Set(['fleetadlc-testbed#29']) })).toEqual([]);
+    expect(attentionItems({ ...input, tasks: [deploy, later], closed: new Set(['openadlc-testbed#29']) })).toEqual([]);
   });
 
   it('keeps a later task on the subject from clearing it while the account still fails', async () => {
-    const again = task({ botId: 'bot-builder', kind: 'patch', subjectRef: 'fleetadlc-testbed#29', state: 'running', startedAt: minutesAgo(20) });
+    const again = task({ botId: 'bot-builder', kind: 'patch', subjectRef: 'openadlc-testbed#29', state: 'running', startedAt: minutesAgo(20) });
     expect((await run([hit(), again])).map((item) => item.kind)).toEqual(['task_failed']);
   });
 
@@ -1915,13 +1915,13 @@ describe('a failure on a spend limit', () => {
     const again = task({
       botId: 'bot-lead',
       kind: 'review',
-      subjectRef: 'fleetadlc-testbed#40',
+      subjectRef: 'openadlc-testbed#40',
       state: 'failed',
       startedAt: minutesAgo(60),
       endedAt: minutesAgo(59),
       exitReason: LIMIT,
     });
-    const elsewhere = task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#16', state: 'running', startedAt: minutesAgo(60) });
+    const elsewhere = task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'running', startedAt: minutesAgo(60) });
     const items = await run([hit(), again, elsewhere]);
     expect(items.flatMap((item) => [item.id, ...(item.members ?? []).map((member) => member.id)]).filter((id) => id.startsWith('task:'))).toHaveLength(2);
   });
@@ -1929,7 +1929,7 @@ describe('a failure on a spend limit', () => {
 
 describe('dismissing a failed task’s card', () => {
   const failed = () =>
-    task({ id: 'task-dismissed', botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#16', state: 'failed', endedAt: minutesAgo(30), exitReason: 'model gone' });
+    task({ id: 'task-dismissed', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'failed', endedAt: minutesAgo(30), exitReason: 'model gone' });
   const run = async (acknowledged: Map<string, Set<string>>) => {
     const { attentionItems } = await load();
     return attentionItems({ now: NOW, gates: [], tasks: [failed()], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [], acknowledged });
@@ -1959,18 +1959,18 @@ describe('which subjects have closed', () => {
       now: () => now,
     });
 
-    expect([...(await closed.lookup(['fleetadlc-testbed#1', 'fleetadlc-testbed#2', 'fleetadlc-testbed#3']))]).toEqual(['fleetadlc-testbed#1']);
-    expect(getIssue).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 1);
+    expect([...(await closed.lookup(['openadlc-testbed#1', 'openadlc-testbed#2', 'openadlc-testbed#3']))]).toEqual(['openadlc-testbed#1']);
+    expect(getIssue).toHaveBeenCalledWith('janedoe/openadlc-testbed', 1);
     expect(getIssue).toHaveBeenCalledTimes(3);
 
     now = 5 * 60 * 1000;
-    await closed.lookup(['fleetadlc-testbed#1', 'fleetadlc-testbed#2']);
+    await closed.lookup(['openadlc-testbed#1', 'openadlc-testbed#2']);
     // Both are kept: an open one asked about every two minutes, for every
     // card, spent the automation account's hourly limit.
     expect(getIssue).toHaveBeenCalledTimes(3);
 
     now = 11 * 60 * 1000;
-    await closed.lookup(['fleetadlc-testbed#1', 'fleetadlc-testbed#2']);
+    await closed.lookup(['openadlc-testbed#1', 'openadlc-testbed#2']);
     // Kept for about ten minutes, then asked again, so a reopen can show the card.
     expect(getIssue).toHaveBeenCalledTimes(5);
   });
@@ -1986,7 +1986,7 @@ describe('a deploy or QA card on work that shipped', () => {
       id: 'task-deploy',
       botId: 'bot-sre',
       kind: 'deploy',
-      subjectRef: 'fleetadlc-testbed#193',
+      subjectRef: 'openadlc-testbed#193',
       state: 'failed',
       createdAt: minutesAgo(120),
       endedAt: minutesAgo(100),
@@ -1995,22 +1995,22 @@ describe('a deploy or QA card on work that shipped', () => {
     });
 
   it('is said under recovered once a later deploy of the repository finished', async () => {
-    const later = task({ botId: 'bot-sre', kind: 'deploy', subjectRef: 'fleetadlc-testbed#199', state: 'done', createdAt: minutesAgo(50), endedAt: minutesAgo(40) });
+    const later = task({ botId: 'bot-sre', kind: 'deploy', subjectRef: 'openadlc-testbed#199', state: 'done', createdAt: minutesAgo(50), endedAt: minutesAgo(40) });
     const items = await run([deploy(), later]);
     expect(items).toEqual([expect.objectContaining({ id: 'landed:task-deploy', kind: 'check_fixed' })]);
-    expect(items[0]?.headline).toBe('A later deploy finished, so fleetadlc-testbed#193 no longer waits on the deploy that stopped');
+    expect(items[0]?.headline).toBe('A later deploy finished, so openadlc-testbed#193 no longer waits on the deploy that stopped');
   });
 
   it('leaves a QA card when a later deploy finished: that deploy did not check what QA failed on', async () => {
     const qa = deploy({ id: 'task-qa', kind: 'qa', exitReason: 'the checkout page did not load' });
-    const later = task({ botId: 'bot-sre', kind: 'deploy', subjectRef: 'fleetadlc-testbed#199', state: 'done', createdAt: minutesAgo(50), endedAt: minutesAgo(40) });
+    const later = task({ botId: 'bot-sre', kind: 'deploy', subjectRef: 'openadlc-testbed#199', state: 'done', createdAt: minutesAgo(50), endedAt: minutesAgo(40) });
     expect((await run([qa, later])).map((item) => item.id)).toEqual(['task:task-qa']);
     // It still goes when its pull request is closed and its repository ships
     // by merging. The install's testing URL no longer says so for a task on a
     // repository: that variable is empty where repositories declare their own.
-    const landed = await run([qa], { closed: new Set(['fleetadlc-testbed#193']), testingDeploy: false, shipsByMerging: new Set(['repo-1']) });
+    const landed = await run([qa], { closed: new Set(['openadlc-testbed#193']), testingDeploy: false, shipsByMerging: new Set(['repo-1']) });
     expect(landed.map((item) => item.id)).toEqual(['landed:task-qa']);
-    expect(landed[0]?.headline).toBe('fleetadlc-testbed#193 is closed and nothing deploys it to testing, so there is no need for the checks');
+    expect(landed[0]?.headline).toBe('openadlc-testbed#193 is closed and nothing deploys it to testing, so there is no need for the checks');
   });
 
   it('stays a card when QA on a merged pull request failed and its repository deploys to testing', async () => {
@@ -2018,7 +2018,7 @@ describe('a deploy or QA card on work that shipped', () => {
     // The install has no testing URL, as one whose repositories declare their
     // own testing deploy has none; this repository is not shipping by merging.
     const qa = deploy({ id: 'task-qa', kind: 'qa', exitReason: 'the checkout page did not load' });
-    const closed = new Set(['fleetadlc-testbed#193']);
+    const closed = new Set(['openadlc-testbed#193']);
     const items = await run([qa], { closed, testingDeploy: false, shipsByMerging: new Set<string>() });
     expect(items.map((item) => item.id)).toEqual(['task:task-qa']);
     // The same task where merging is shipping is said under recovered.
@@ -2026,14 +2026,14 @@ describe('a deploy or QA card on work that shipped', () => {
   });
 
   it('stays when the later deploy failed too, or the finished one came before it', async () => {
-    const failedToo = task({ botId: 'bot-sre', kind: 'deploy', subjectRef: 'fleetadlc-testbed#199', state: 'failed', createdAt: minutesAgo(50), endedAt: minutesAgo(40), exitReason: 'no' });
-    const earlier = task({ botId: 'bot-sre', kind: 'deploy', subjectRef: 'fleetadlc-testbed#150', state: 'done', createdAt: minutesAgo(500), endedAt: minutesAgo(490) });
+    const failedToo = task({ botId: 'bot-sre', kind: 'deploy', subjectRef: 'openadlc-testbed#199', state: 'failed', createdAt: minutesAgo(50), endedAt: minutesAgo(40), exitReason: 'no' });
+    const earlier = task({ botId: 'bot-sre', kind: 'deploy', subjectRef: 'openadlc-testbed#150', state: 'done', createdAt: minutesAgo(500), endedAt: minutesAgo(490) });
     const items = await run([deploy(), failedToo, earlier]);
     expect(items.flatMap((item) => [item.id, ...(item.members ?? []).map((member) => member.id)])).toContain('task:task-deploy');
   });
 
   it('is said under recovered when nothing deploys to testing and its pull request is closed', async () => {
-    const closed = new Set(['fleetadlc-testbed#193']);
+    const closed = new Set(['openadlc-testbed#193']);
     // The install's testing URL decides only for a task with no repository.
     const orphan = deploy({ repoId: null });
     expect((await run([orphan], { closed, testingDeploy: false })).map((item) => item.id)).toEqual(['landed:task-deploy']);
@@ -2046,7 +2046,7 @@ describe('a deploy or QA card on work that shipped', () => {
   });
 
   it('is said under recovered when its repository ships by merging, though the install deploys to testing', async () => {
-    const closed = new Set(['fleetadlc-testbed#193']);
+    const closed = new Set(['openadlc-testbed#193']);
     const none = new Set(['repo-1']);
     expect((await run([deploy()], { closed, testingDeploy: true, shipsByMerging: none })).map((item) => item.id)).toEqual(['landed:task-deploy']);
     // Another repository shipping by merging says nothing about this one.
@@ -2063,7 +2063,7 @@ describe('an end a person’s answer asked for', () => {
   };
   // The SRE told to stop on #193 ended as "the session was killed".
   const killed = () =>
-    task({ id: 'task-sre', botId: 'bot-sre', kind: 'deploy', subjectRef: 'fleetadlc-testbed#193', state: 'stopped', endedAt: minutesAgo(10), exitReason: 'the session was killed' });
+    task({ id: 'task-sre', botId: 'bot-sre', kind: 'deploy', subjectRef: 'openadlc-testbed#193', state: 'stopped', endedAt: minutesAgo(10), exitReason: 'the session was killed' });
   const gate = (answer: string | null, answeredAt: string | null, createdAt = minutesAgo(30), taskId = 'task-sre') => ({ id: `gate-${createdAt}`, taskId, answer, answeredAt, createdAt });
 
   it('is no card when the task’s last question was answered with a stop just before it ended', async () => {
@@ -2117,7 +2117,7 @@ describe('an end a person’s answer asked for', () => {
       id: 'task-sre',
       botId: 'bot-sre',
       kind: 'deploy',
-      subjectRef: 'fleetadlc-testbed#193',
+      subjectRef: 'openadlc-testbed#193',
       state: 'failed',
       endedAt: minutesAgo(10),
       exitReason: 'hostd refused: POST http://hostd/tasks/task-sre/resume → 500',
@@ -2131,7 +2131,7 @@ describe('an end a person’s answer asked for', () => {
       id: 'task-sre',
       botId: 'bot-intake',
       kind: 'intake',
-      subjectRef: 'fleetadlc-testbed#15',
+      subjectRef: 'openadlc-testbed#15',
       state: 'failed',
       endedAt: minutesAgo(10),
       exitReason: 'engine exited 1: You’ve hit your org’s monthly spend limit · ask your admin to raise it',
@@ -2140,7 +2140,7 @@ describe('an end a person’s answer asked for', () => {
   });
 
   it('is a card when the task was stopped some other way than its session going', async () => {
-    const shutdown = task({ id: 'task-sre', botId: 'bot-sre', kind: 'deploy', subjectRef: 'fleetadlc-testbed#193', state: 'stopped', endedAt: minutesAgo(10), exitReason: 'hostd shutting down' });
+    const shutdown = task({ id: 'task-sre', botId: 'bot-sre', kind: 'deploy', subjectRef: 'openadlc-testbed#193', state: 'stopped', endedAt: minutesAgo(10), exitReason: 'hostd shutting down' });
     expect((await run([shutdown], [gate('stop', minutesAgo(12))])).map((item) => item.id)).toEqual(['task:task-sre']);
   });
 });
@@ -2160,20 +2160,20 @@ describe('which subjects have closed, over time', () => {
     const fullName = vi.fn(async (name: string) => `janedoe/${name}`);
     const closed = new ClosedSubjects({ client: async () => ({ getIssue }) as never, fullName, now: () => 0 });
 
-    const refs = Array.from({ length: 20 }, (_, index) => `fleetadlc-testbed#${index + 1}`);
+    const refs = Array.from({ length: 20 }, (_, index) => `openadlc-testbed#${index + 1}`);
     expect((await closed.lookup(refs)).size).toBe(20);
     expect(most).toBeGreaterThan(1);
     // One repository's name is read once for the batch.
     expect(fullName).toHaveBeenCalledTimes(1);
 
     for (let start = 21; start <= 1020; start += 20) {
-      await closed.lookup(Array.from({ length: 20 }, (_, index) => `fleetadlc-testbed#${start + index}`));
+      await closed.lookup(Array.from({ length: 20 }, (_, index) => `openadlc-testbed#${start + index}`));
     }
     getIssue.mockClear();
-    await closed.lookup(['fleetadlc-testbed#1', 'fleetadlc-testbed#1020']);
+    await closed.lookup(['openadlc-testbed#1', 'openadlc-testbed#1020']);
     // The first was forgotten; the last is still kept.
     expect(getIssue).toHaveBeenCalledTimes(1);
-    expect(getIssue).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 1);
+    expect(getIssue).toHaveBeenCalledWith('janedoe/openadlc-testbed', 1);
   });
 });
 
@@ -2182,9 +2182,9 @@ describe('reading what the stopped tasks asked', () => {
     const { readAttention } = await load();
     store.gates = [];
     store.tasks = [
-      task({ id: 'task-killed-1', botId: 'bot-sre', kind: 'deploy', subjectRef: 'fleetadlc-testbed#193', state: 'stopped', endedAt: minutesAgo(10), exitReason: 'the session was killed; the branch and the issue are untouched' }),
-      task({ id: 'task-killed-2', botId: 'bot-sre', kind: 'deploy', subjectRef: 'fleetadlc-testbed#201', state: 'stopped', endedAt: minutesAgo(10), exitReason: 'the session was killed; the branch and the issue are untouched' }),
-      task({ id: 'task-failed', botId: 'bot-second', kind: 'review', subjectRef: 'fleetadlc-testbed#202', state: 'failed', endedAt: minutesAgo(10), exitReason: 'hostd refused' }),
+      task({ id: 'task-killed-1', botId: 'bot-sre', kind: 'deploy', subjectRef: 'openadlc-testbed#193', state: 'stopped', endedAt: minutesAgo(10), exitReason: 'the session was killed; the branch and the issue are untouched' }),
+      task({ id: 'task-killed-2', botId: 'bot-sre', kind: 'deploy', subjectRef: 'openadlc-testbed#201', state: 'stopped', endedAt: minutesAgo(10), exitReason: 'the session was killed; the branch and the issue are untouched' }),
+      task({ id: 'task-failed', botId: 'bot-second', kind: 'review', subjectRef: 'openadlc-testbed#202', state: 'failed', endedAt: minutesAgo(10), exitReason: 'hostd refused' }),
     ].map((one) => ({ ...one }));
     const gatesFor = vi.fn(async () => [{ id: 'gate-1', taskId: 'task-killed-1', answer: 'no, stop here', answeredAt: minutesAgo(11), createdAt: minutesAgo(20) }]);
 
@@ -2198,7 +2198,7 @@ describe('reading what the stopped tasks asked', () => {
   it('shows the cards when that read fails', async () => {
     const { readAttention } = await load();
     store.gates = [];
-    store.tasks = [task({ id: 'task-killed-1', botId: 'bot-sre', kind: 'deploy', subjectRef: 'fleetadlc-testbed#193', state: 'stopped', endedAt: minutesAgo(10), exitReason: 'the session was killed' })].map((one) => ({ ...one }));
+    store.tasks = [task({ id: 'task-killed-1', botId: 'bot-sre', kind: 'deploy', subjectRef: 'openadlc-testbed#193', state: 'stopped', endedAt: minutesAgo(10), exitReason: 'the session was killed' })].map((one) => ({ ...one }));
     const input = await readAttention(NOW, { gatesFor: async () => Promise.reject(new Error('database gone')) });
     expect(input.asked).toEqual([]);
   });
@@ -2209,17 +2209,17 @@ describe('reading which subjects have closed', () => {
     const { readAttention, STOPPED_BY_A_PERSON } = await load();
     store.gates = [];
     store.tasks = [
-      task({ id: 'task-failed', botId: 'bot-second', kind: 'review', subjectRef: 'fleetadlc-testbed#202', state: 'failed', endedAt: minutesAgo(10), exitReason: 'hostd refused' }),
+      task({ id: 'task-failed', botId: 'bot-second', kind: 'review', subjectRef: 'openadlc-testbed#202', state: 'failed', endedAt: minutesAgo(10), exitReason: 'hostd refused' }),
       // Stopped by a person: never a card, whether its pull request closed or not.
-      task({ id: 'task-stopped', botId: 'bot-second', kind: 'review', subjectRef: 'fleetadlc-testbed#203', state: 'stopped', endedAt: minutesAgo(10), exitReason: `${STOPPED_BY_A_PERSON} janedoe: a new push` }),
+      task({ id: 'task-stopped', botId: 'bot-second', kind: 'review', subjectRef: 'openadlc-testbed#203', state: 'stopped', endedAt: minutesAgo(10), exitReason: `${STOPPED_BY_A_PERSON} janedoe: a new push` }),
     ].map((one) => ({ ...one }));
-    const closed = vi.fn(async () => new Set(['fleetadlc-testbed#202']));
+    const closed = vi.fn(async () => new Set(['openadlc-testbed#202']));
 
     const input = await readAttention(NOW, { closed });
 
     expect(closed).toHaveBeenCalledTimes(1);
-    expect(closed).toHaveBeenCalledWith(['fleetadlc-testbed#202']);
-    expect([...(input.closed ?? [])]).toEqual(['fleetadlc-testbed#202']);
+    expect(closed).toHaveBeenCalledWith(['openadlc-testbed#202']);
+    expect([...(input.closed ?? [])]).toEqual(['openadlc-testbed#202']);
   });
 });
 
@@ -2228,7 +2228,7 @@ describe('reading which repositories ship by merging', () => {
     const { readAttention } = await load();
     store.gates = [];
     store.tasks = [
-      task({ id: 'task-deploy', botId: 'bot-sre', kind: 'deploy', subjectRef: 'fleetadlc-testbed#193', state: 'failed', endedAt: minutesAgo(10), exitReason: 'the deploy workflow failed' }),
+      task({ id: 'task-deploy', botId: 'bot-sre', kind: 'deploy', subjectRef: 'openadlc-testbed#193', state: 'failed', endedAt: minutesAgo(10), exitReason: 'the deploy workflow failed' }),
     ].map((one) => ({ ...one }));
     const shipsByMerging = vi.fn(async () => true);
 
@@ -2243,7 +2243,7 @@ describe('reading which repositories ship by merging', () => {
     const { readAttention } = await load();
     store.gates = [];
     store.tasks = [
-      task({ id: 'task-deploy', botId: 'bot-sre', kind: 'deploy', subjectRef: 'fleetadlc-testbed#193', state: 'failed', endedAt: minutesAgo(10), exitReason: 'the deploy workflow failed' }),
+      task({ id: 'task-deploy', botId: 'bot-sre', kind: 'deploy', subjectRef: 'openadlc-testbed#193', state: 'failed', endedAt: minutesAgo(10), exitReason: 'the deploy workflow failed' }),
     ].map((one) => ({ ...one }));
     const input = await readAttention(NOW, { shipsByMerging: async () => Promise.reject(new Error('GitHub down')) });
     expect([...(input.shipsByMerging ?? [])]).toEqual([]);

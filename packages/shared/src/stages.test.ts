@@ -3,6 +3,8 @@ import { REPO_DEFAULTS, repoConfigSchema } from './config.js';
 import {
   UNTOUCHABLE_STAGES,
   hasIgnoreLabel,
+  hasNextLabel,
+  hasPausedLabel,
   IGNORE_LABEL,
   BACKWARD,
   isBackwardMove,
@@ -84,7 +86,7 @@ describe('assist, which is no longer a stage mode', () => {
   });
 });
 
-describe('labels named before the rename to FleetADLC', () => {
+describe('labels named before the rename to OpenADLC', () => {
   it('reads a stage from the sdlc: label an issue still carries', () => {
     expect(stageFromLabels(['priority:p2', 'sdlc:review'])).toBe('review');
     expect(stageFromLabels(['sdlc:build', 'adlc:review'])).toBe('review');
@@ -98,8 +100,17 @@ describe('labels named before the rename to FleetADLC', () => {
   it('leaves an issue labelled with the old ignore label alone', () => {
     expect(hasIgnoreLabel(['fleet:ignore'])).toBe(true);
     expect(hasIgnoreLabel(['fleetadlc:ignore'])).toBe(true);
+    expect(hasIgnoreLabel(['openadlc:ignore'])).toBe(true);
     expect(hasIgnoreLabel(['fleet:ignored', 'adlc:build'])).toBe(false);
     expect(hasIgnoreLabel(undefined)).toBe(false);
+  });
+
+  it('holds work paused or next under the labels from before the rename too', () => {
+    expect(hasPausedLabel(['fleetadlc:paused'])).toBe(true);
+    expect(hasPausedLabel(['openadlc:paused'])).toBe(true);
+    expect(hasPausedLabel(['fleet:paused'])).toBe(false);
+    expect(hasNextLabel(['fleetadlc:next'])).toBe(true);
+    expect(hasNextLabel(['openadlc:next'])).toBe(true);
   });
 
   it('renames an old label in place rather than creating the new one beside it', () => {
@@ -112,6 +123,10 @@ describe('labels named before the rename to FleetADLC', () => {
     expect(labelStep({ ...wanted, name: IGNORE_LABEL }, [{ name: 'fleet:ignore' }])).toMatchObject({
       action: 'update',
       from: 'fleet:ignore',
+    });
+    expect(labelStep({ ...wanted, name: IGNORE_LABEL }, [{ name: 'fleetadlc:ignore' }])).toMatchObject({
+      action: 'update',
+      from: 'fleetadlc:ignore',
     });
   });
 

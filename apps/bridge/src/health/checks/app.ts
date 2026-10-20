@@ -1,4 +1,4 @@
-import { DeviceAuthError, GitHubApiError, appJwt, type AppApi, type AppCredentials, type ScopedOutcome } from '@fleetadlc/github';
+import { DeviceAuthError, GitHubApiError, appJwt, type AppApi, type AppCredentials, type ScopedOutcome } from '@openadlc/github';
 import {
   MANIFEST_PERMISSIONS,
   PERMISSION_NAMES,
@@ -12,7 +12,7 @@ import {
   missingPermissions,
   yourAppsUrl,
   type HealthAction,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 import type { InstallationsView, Reach } from '../../app-reach.js';
 import type { CheckResult, HealthCheck } from '../types.js';
 import { RECONNECT, stepHref, stepNamed } from '../words.js';
@@ -640,7 +640,7 @@ function fromReach(repo: { name: string; fullName: string }, reached: Reach): Ch
   };
 }
 
-/** The card's first line names the repository: the board has one per repository, and `fleetadlc doctor` prints no more. */
+/** The card's first line names the repository: the board has one per repository, and `openadlc doctor` prints no more. */
 function cardTitle(fullName: string, reached: Extract<Reach, { state: 'blocked' }>): string {
   switch (reached.need) {
     case 'install':

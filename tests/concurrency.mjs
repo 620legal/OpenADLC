@@ -11,8 +11,8 @@
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { bots, closePool, issues, leases, query, repos, tasks, waitForDatabase } from '@fleetadlc/db';
-import { getSecretStore, internalSecretRef } from '@fleetadlc/github';
+import { bots, closePool, issues, leases, query, repos, tasks, waitForDatabase } from '@openadlc/db';
+import { getSecretStore, internalSecretRef } from '@openadlc/github';
 import { addSecondBuilder, retireBuilder } from './second-builder.mjs';
 import { refuseARealInstall } from './scratch-only.mjs';
 
@@ -20,11 +20,11 @@ import { refuseARealInstall } from './scratch-only.mjs';
 await refuseARealInstall();
 
 const run = promisify(execFile);
-const HOSTD = process.env.FLEETADLC_HOSTD_URL ?? 'http://127.0.0.1:47312';
+const HOSTD = process.env.OPENADLC_HOSTD_URL ?? 'http://127.0.0.1:47312';
 const SECRET = await getSecretStore().get(internalSecretRef());
 
 function hostdHeaders() {
-  return { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': SECRET ?? '' };
+  return { 'content-type': 'application/json', 'x-openadlc-internal-secret': SECRET ?? '' };
 }
 
 const results = [];
@@ -125,7 +125,7 @@ async function reset(repoId) {
   await query(`update issues set labels = array_remove(labels, 'start:now') where repo_id = $1`, [repoId]);
 }
 
-const tmuxBin = process.env.FLEETADLC_TMUX_BIN ?? 'tmux';
+const tmuxBin = process.env.OPENADLC_TMUX_BIN ?? 'tmux';
 
 async function listTmuxSessions() {
   try {

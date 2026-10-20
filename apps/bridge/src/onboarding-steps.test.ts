@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ONBOARDING_STEP_ALIASES, ONBOARDING_STEPS, STEP_TITLES } from '@fleetadlc/shared';
+import { ONBOARDING_STEP_ALIASES, ONBOARDING_STEPS, STEP_TITLES } from '@openadlc/shared';
 import { isOrganization, setupComplete, walkthroughSteps, type WalkthroughFacts } from './onboarding.js';
 
 /**

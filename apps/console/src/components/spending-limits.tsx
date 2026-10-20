@@ -116,7 +116,7 @@ export function notAnAmount(label: string, text: string): string {
 
 /** When the limits could not be read: what happened, and what to do about it. */
 export const LIMITS_UNREAD =
-  'OpenADLC could not read the spending limits from the bridge. Reload the page; if it keeps happening, run fleetadlc doctor.';
+  'OpenADLC could not read the spending limits from the bridge. Reload the page; if it keeps happening, run openadlc doctor.';
 
 function dollars(amount: number | null): string {
   return amount == null ? 'no cap' : money(amount, { whole: Number.isInteger(amount) });

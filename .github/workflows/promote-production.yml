@@ -103,7 +103,7 @@ jobs:
           REASON: ${{ inputs.emergency_override }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           # The smoke's workflow file, without `.yml`: keep it equal to
-          # `testing.smoke` in .github/fleetadlc.yml.
+          # `testing.smoke` in .github/openadlc.yml.
           SMOKE_WORKFLOW: smoke-testing
         run: |
           set -euo pipefail
@@ -228,7 +228,7 @@ jobs:
 
       - name: smoke the new revision by its tag
         env:
-          FLEETADLC_REVISION_TAG: ${{ steps.deploy.outputs.revision-tag }}
+          OPENADLC_REVISION_TAG: ${{ steps.deploy.outputs.revision-tag }}
         run: make smoke-production
 
       # Last, and only after the smoke: until this step the new revision is
@@ -236,7 +236,7 @@ jobs:
       # nothing at all.
       - name: shift traffic to it
         env:
-          FLEETADLC_REVISION_TAG: ${{ steps.deploy.outputs.revision-tag }}
+          OPENADLC_REVISION_TAG: ${{ steps.deploy.outputs.revision-tag }}
         run: make shift-traffic
 
       - name: what was promoted

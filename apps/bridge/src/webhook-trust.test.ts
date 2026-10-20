@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * configured. Same shape as the other route tests: the store is a fake, the HTTP
  * is real, and the signature is a real HMAC.
  */
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -201,8 +201,8 @@ describe('an install with no secret at all', () => {
     const lines = warn.mock.calls.map((call) => String(call[0])).filter((line) => /webhook secret/.test(line));
     warn.mockRestore();
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(/fleetadlc init/);
-    expect(lines[0]).toMatch(/FLEETADLC_WEBHOOK_SECRET/);
+    expect(lines[0]).toMatch(/openadlc init/);
+    expect(lines[0]).toMatch(/OPENADLC_WEBHOOK_SECRET/);
   });
 
   it('refuses a delivery signed with the empty string', async () => {

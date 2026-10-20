@@ -1,8 +1,8 @@
 import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
-import { DEFAULT_PORTS, envBool, envInt, envOr, hostdDriverFromEnv } from '@fleetadlc/shared';
-import { readModelPrices, type ModelPrice } from '@fleetadlc/engines';
-import { fleetHome } from '@fleetadlc/github';
+import { DEFAULT_PORTS, envBool, envInt, envOr, hostdDriverFromEnv } from '@openadlc/shared';
+import { readModelPrices, type ModelPrice } from '@openadlc/engines';
+import { openadlcHome } from '@openadlc/github';
 
 /** `make ci`'s limit for local CI, and `make setup`'s for a task start, when nothing says. */
 export const DEFAULT_LOCAL_CI_TIMEOUT_MINUTES = 60;
@@ -30,43 +30,43 @@ export interface HostdConfig {
   /**
    * How many tasks this host runs at once, whoever's: each is a computer with
    * its seat's CPUs and memory. A start past it is refused (`HostFull`) and
-   * tried again by the bridge. `FLEETADLC_HOST_CAPACITY_TASKS`, default 4.
+   * tried again by the bridge. `OPENADLC_HOST_CAPACITY_TASKS`, default 4.
    */
   capacityTasks: number;
   /**
    * How long a task paused on a person keeps its computer before it is given
    * back, its branch kept: long enough to take over and for a quick answer to
-   * resume it cheaply. `FLEETADLC_PAUSED_KEEP_MINUTES`, default 15.
+   * resume it cheaply. `OPENADLC_PAUSED_KEEP_MINUTES`, default 15.
    */
   pausedKeepMinutes: number;
   /**
    * How long `make ci` may run for local CI before it is killed and the run
    * fails, so a hung suite does not hold every later run for the task.
-   * `FLEETADLC_LOCAL_CI_TIMEOUT_MINUTES`, default 60.
+   * `OPENADLC_LOCAL_CI_TIMEOUT_MINUTES`, default 60.
    */
   localCiTimeoutMinutes?: number;
   /**
    * How long a task's `make setup` may run before it is killed and the start
    * goes on without it, so a hung one does not hold a place on the host.
-   * `FLEETADLC_SETUP_TIMEOUT_MINUTES`, default 30.
+   * `OPENADLC_SETUP_TIMEOUT_MINUTES`, default 30.
    */
   setupTimeoutMinutes?: number;
   /**
    * Where the host's task database server is published: the Docker bridge's
    * gateway on Linux, loopback on Docker Desktop and OrbStack (see
-   * `TaskDatabasesOptions.bindAddress`). `FLEETADLC_TASKDB_BIND`; null to
+   * `TaskDatabasesOptions.bindAddress`). `OPENADLC_TASKDB_BIND`; null to
    * work it out. A wildcard address is refused when hostd starts
    * (`taskdbBindAddress`).
    */
   taskdbBind?: string | null;
   /**
    * Computers made ahead of their task, so a start claims one rather than
-   * making one (`WarmPool`): `FLEETADLC_WARM_POOL=1`, off by default, and at
-   * most `FLEETADLC_WARM_POOL_MAX` of them (three). Docker driver only.
+   * making one (`WarmPool`): `OPENADLC_WARM_POOL=1`, off by default, and at
+   * most `OPENADLC_WARM_POOL_MAX` of them (three). Docker driver only.
    */
   warmPool?: boolean;
   warmPoolMax?: number;
-  /** The tmux the local driver and take-over run (`FLEETADLC_TMUX_BIN`, default `tmux`). */
+  /** The tmux the local driver and take-over run (`OPENADLC_TMUX_BIN`, default `tmux`). */
   tmuxBin: string;
   /** A private package registry, or null on an install that has none. */
   registryHost: string | null;
@@ -75,35 +75,35 @@ export interface HostdConfig {
    * reachable (`reachableFromTask`). hostd in a container knows the bridge by
    * its compose name, `http://bridge:47311`, which a task's container, on the
    * install's task network, cannot resolve; it reaches the bridge's published port
-   * on the host instead. `FLEETADLC_HOSTD_TASK_BRIDGE_URL`.
+   * on the host instead. `OPENADLC_HOSTD_TASK_BRIDGE_URL`.
    */
   taskBridgeUrl?: string | null;
   /**
    * hostd as a task reaches it, when its own port is not the one published on
    * the host: in compose hostd listens on 47312 inside its container and is
-   * published on whatever `FLEETADLC_HOSTD_PORT` says. `FLEETADLC_HOSTD_TASK_HOSTD_URL`.
+   * published on whatever `OPENADLC_HOSTD_PORT` says. `OPENADLC_HOSTD_TASK_HOSTD_URL`.
    */
   taskHostdUrl?: string | null;
   /**
    * The skill runner bundle and OpenADLC's `gh`, as paths the Docker daemon can
    * see. Both are bind-mounted into every bot's container, and by default they
    * are where hostd's own files are — which, for a hostd running in a
-   * container, is inside it and not on the host. `FLEETADLC_RUNNER_BUNDLE`,
-   * `FLEETADLC_GH_SHIM_DIR`; null for the defaults.
+   * container, is inside it and not on the host. `OPENADLC_RUNNER_BUNDLE`,
+   * `OPENADLC_GH_SHIM_DIR`; null for the defaults.
    */
   runnerBundle?: string | null;
   ghShimDir?: string | null;
   /**
    * What this install's bot containers, sidecars and networks are named after,
    * and the install they are labelled with. Two installs on one Docker daemon
-   * need different ones; `fleetadlc up`'s keeps `bot-` and `default`, the names
-   * every install had before. `FLEETADLC_BOT_PREFIX`, `FLEETADLC_INSTALL_ID`.
+   * need different ones; `openadlc up`'s keeps `bot-` and `default`, the names
+   * every install had before. `OPENADLC_BOT_PREFIX`, `OPENADLC_INSTALL_ID`.
    */
   botPrefix?: string | null;
   installId?: string | null;
   /**
-   * The install's `models.yaml` from `FLEETADLC_CONFIG_ROOT`, read once at
-   * start and handed to every session (`FLEETADLC_MODEL_PRICES`): a session
+   * The install's `models.yaml` from `OPENADLC_CONFIG_ROOT`, read once at
+   * start and handed to every session (`OPENADLC_MODEL_PRICES`): a session
    * runs in a managed repository's checkout, where no file is the install's.
    * A malformed file, or a price below 0, stops hostd here.
    */
@@ -132,7 +132,7 @@ function namePart(variable: string): string | null {
  * nothing ever signs in to.
  */
 export function loginRootFromEnv(): string {
-  return resolve(envOr('FLEETADLC_LOGIN_ROOT', join(fleetHome(), 'logins')));
+  return resolve(envOr('OPENADLC_LOGIN_ROOT', join(openadlcHome(), 'logins')));
 }
 
 /**
@@ -140,15 +140,15 @@ export function loginRootFromEnv(): string {
  *
  * One without the other names another install's containers with this one's
  * label, or this install's containers with the default label: a prefix left
- * at `bot-` under a new id reaches `fleetadlc up`'s bots by name, and only the
+ * at `bot-` under a new id reaches `openadlc up`'s bots by name, and only the
  * label guard stops it. Refused here instead, before any container is named.
  */
 function botNames(): { botPrefix: string | null; installId: string | null } {
-  const botPrefix = namePart('FLEETADLC_BOT_PREFIX');
-  const installId = namePart('FLEETADLC_INSTALL_ID');
+  const botPrefix = namePart('OPENADLC_BOT_PREFIX');
+  const installId = namePart('OPENADLC_INSTALL_ID');
   if ((botPrefix === null) !== (installId === null)) {
-    const set = botPrefix === null ? 'FLEETADLC_INSTALL_ID' : 'FLEETADLC_BOT_PREFIX';
-    const unset = botPrefix === null ? 'FLEETADLC_BOT_PREFIX' : 'FLEETADLC_INSTALL_ID';
+    const set = botPrefix === null ? 'OPENADLC_INSTALL_ID' : 'OPENADLC_BOT_PREFIX';
+    const unset = botPrefix === null ? 'OPENADLC_BOT_PREFIX' : 'OPENADLC_INSTALL_ID';
     throw new Error(`${set} is set and ${unset} is not; another install on this Docker daemon needs both, and the default install neither`);
   }
   return { botPrefix, installId };
@@ -156,33 +156,33 @@ function botNames(): { botPrefix: string | null; installId: string | null } {
 
 export function loadHostdConfig(): HostdConfig {
   return {
-    hostName: envOr('FLEETADLC_HOST_NAME', hostname()),
-    zone: process.env.FLEETADLC_HOST_ZONE ?? null,
+    hostName: envOr('OPENADLC_HOST_NAME', hostname()),
+    zone: process.env.OPENADLC_HOST_ZONE ?? null,
     driver: hostdDriverFromEnv(),
-    port: envInt('FLEETADLC_HOSTD_PORT', DEFAULT_PORTS.hostd),
-    bridgeUrl: envOr('FLEETADLC_BRIDGE_URL', `http://127.0.0.1:${DEFAULT_PORTS.bridge}`),
-    workRoot: envOr('FLEETADLC_WORK_ROOT', join(fleetHome(), 'work')),
+    port: envInt('OPENADLC_HOSTD_PORT', DEFAULT_PORTS.hostd),
+    bridgeUrl: envOr('OPENADLC_BRIDGE_URL', `http://127.0.0.1:${DEFAULT_PORTS.bridge}`),
+    workRoot: envOr('OPENADLC_WORK_ROOT', join(openadlcHome(), 'work')),
     loginRoot: loginRootFromEnv(),
-    skillsRoot: envOr('FLEETADLC_SKILLS_ROOT', join(process.cwd(), 'crew', 'skills')),
-    rolesRoot: envOr('FLEETADLC_ROLES_ROOT', join(process.cwd(), 'crew', 'roles')),
-    capacityBots: envInt('FLEETADLC_HOST_CAPACITY', 8),
-    capacityTasks: Math.max(1, envInt('FLEETADLC_HOST_CAPACITY_TASKS', 4)),
-    pausedKeepMinutes: Math.max(0, envInt('FLEETADLC_PAUSED_KEEP_MINUTES', 15)),
-    localCiTimeoutMinutes: Math.max(1, envInt('FLEETADLC_LOCAL_CI_TIMEOUT_MINUTES', DEFAULT_LOCAL_CI_TIMEOUT_MINUTES)),
-    setupTimeoutMinutes: Math.max(1, envInt('FLEETADLC_SETUP_TIMEOUT_MINUTES', DEFAULT_SETUP_TIMEOUT_MINUTES)),
-    taskdbBind: process.env.FLEETADLC_TASKDB_BIND || null,
-    warmPool: envBool('FLEETADLC_WARM_POOL', false),
-    warmPoolMax: Math.max(0, envInt('FLEETADLC_WARM_POOL_MAX', 3)),
-    tmuxBin: envOr('FLEETADLC_TMUX_BIN', 'tmux'),
+    skillsRoot: envOr('OPENADLC_SKILLS_ROOT', join(process.cwd(), 'crew', 'skills')),
+    rolesRoot: envOr('OPENADLC_ROLES_ROOT', join(process.cwd(), 'crew', 'roles')),
+    capacityBots: envInt('OPENADLC_HOST_CAPACITY', 8),
+    capacityTasks: Math.max(1, envInt('OPENADLC_HOST_CAPACITY_TASKS', 4)),
+    pausedKeepMinutes: Math.max(0, envInt('OPENADLC_PAUSED_KEEP_MINUTES', 15)),
+    localCiTimeoutMinutes: Math.max(1, envInt('OPENADLC_LOCAL_CI_TIMEOUT_MINUTES', DEFAULT_LOCAL_CI_TIMEOUT_MINUTES)),
+    setupTimeoutMinutes: Math.max(1, envInt('OPENADLC_SETUP_TIMEOUT_MINUTES', DEFAULT_SETUP_TIMEOUT_MINUTES)),
+    taskdbBind: process.env.OPENADLC_TASKDB_BIND || null,
+    warmPool: envBool('OPENADLC_WARM_POOL', false),
+    warmPoolMax: Math.max(0, envInt('OPENADLC_WARM_POOL_MAX', 3)),
+    tmuxBin: envOr('OPENADLC_TMUX_BIN', 'tmux'),
     // Empty is none. The cloud host's hostd.env writes the line whether or not
     // the module names a registry, and "" kept as a host would read as a
     // registry with no token stored rather than as no registry at all.
-    registryHost: process.env.FLEETADLC_REGISTRY_HOST?.trim() || null,
-    taskBridgeUrl: process.env.FLEETADLC_HOSTD_TASK_BRIDGE_URL || null,
-    taskHostdUrl: process.env.FLEETADLC_HOSTD_TASK_HOSTD_URL || null,
-    runnerBundle: process.env.FLEETADLC_RUNNER_BUNDLE || null,
-    ghShimDir: process.env.FLEETADLC_GH_SHIM_DIR || null,
+    registryHost: process.env.OPENADLC_REGISTRY_HOST?.trim() || null,
+    taskBridgeUrl: process.env.OPENADLC_HOSTD_TASK_BRIDGE_URL || null,
+    taskHostdUrl: process.env.OPENADLC_HOSTD_TASK_HOSTD_URL || null,
+    runnerBundle: process.env.OPENADLC_RUNNER_BUNDLE || null,
+    ghShimDir: process.env.OPENADLC_GH_SHIM_DIR || null,
     ...botNames(),
-    modelPrices: readModelPrices(envOr('FLEETADLC_CONFIG_ROOT', join(process.cwd(), 'config'))),
+    modelPrices: readModelPrices(envOr('OPENADLC_CONFIG_ROOT', join(process.cwd(), 'config'))),
   };
 }

@@ -1,4 +1,4 @@
-import { DEFAULT_DELIVERY_RULES, deliveryRulesSchema, type DeliveryRules } from '@fleetadlc/shared';
+import { DEFAULT_DELIVERY_RULES, deliveryRulesSchema, type DeliveryRules } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
 import { deliveryCheck, productionEnvironmentOf, type DeliveryReader, type ProductionEnvironment } from './delivery.js';
 
@@ -15,7 +15,7 @@ function reader(
   rules: DeliveryRules,
   environment: ProductionEnvironment | null | undefined,
   planRefused = false,
-  crew = ['fleetadlc-sre', 'fleetadlc-builder'],
+  crew = ['openadlc-sre', 'openadlc-builder'],
 ): DeliveryReader {
   return {
     repos: async () => [{ name: 'app', fullName: 'exampleco/app', defaultBranch: 'main' }],
@@ -35,7 +35,7 @@ async function run(source: DeliveryReader) {
 
 describe('production held the way the rules say', () => {
   it('fails, blocking, when a crew account can approve a production deploy', async () => {
-    const result = await run(reader(REVIEWERS, { reviewers: [user('janedoe'), user('FleetADLC-SRE')], waitTimer: 0 }));
+    const result = await run(reader(REVIEWERS, { reviewers: [user('janedoe'), user('OpenADLC-SRE')], waitTimer: 0 }));
     expect(result).toMatchObject({ ok: false, severity: 'blocking' });
     expect(result && 'detail' in result ? result.detail : '').toContain('A bot never approves a deploy');
   });
@@ -43,9 +43,9 @@ describe('production held the way the rules say', () => {
   it('warns when the rules say a person approves and nobody is asked, and sends the person to choose how production ships', async () => {
     const result = await run(reader(REVIEWERS, { reviewers: [], waitTimer: 0 }));
     expect(result).toMatchObject({ ok: false, severity: 'warning', action: { href: '/onboarding?step=protect' } });
-    // Not bare `fleetadlc github apply`, which wrote an empty reviewer list again.
-    expect(result && 'action' in result ? JSON.stringify(result.action) : '').not.toContain('"command":"fleetadlc github apply"');
-    expect(result && 'detail' in result ? result.detail : '').toContain('fleetadlc github apply --production reviewers --reviewer <login>');
+    // Not bare `openadlc github apply`, which wrote an empty reviewer list again.
+    expect(result && 'action' in result ? JSON.stringify(result.action) : '').not.toContain('"command":"openadlc github apply"');
+    expect(result && 'detail' in result ? result.detail : '').toContain('openadlc github apply --production reviewers --reviewer <login>');
   });
 
   it('reads the default rules as automatic, which needs no reviewer', async () => {
@@ -56,7 +56,7 @@ describe('production held the way the rules say', () => {
   it('passes where the plan refused the reviewer, saying OpenADLC holds each promote for a person', async () => {
     expect(await run(reader(REVIEWERS, { reviewers: [], waitTimer: 0 }, true))).toMatchObject({
       ok: true,
-      facts: { approval: 'reviewers', heldBy: 'fleetadlc' },
+      facts: { approval: 'reviewers', heldBy: 'openadlc' },
     });
   });
 
@@ -76,7 +76,7 @@ describe('production held the way the rules say', () => {
   });
 
   it('does not take a team whose slug is a crew login for that crew account', async () => {
-    const result = await run(reader(REVIEWERS, { reviewers: [user('janedoe'), team('fleetadlc-sre')], waitTimer: 0 }));
+    const result = await run(reader(REVIEWERS, { reviewers: [user('janedoe'), team('openadlc-sre')], waitTimer: 0 }));
     expect(result).toMatchObject({ ok: null });
   });
 
@@ -101,7 +101,7 @@ describe('production held to the default branch', () => {
     for (const branches of ['protected', null, ['main', 'agent/*'], ['trunk'], []] as const) {
       const result = await run(reader(REVIEWERS, { ...held, branches: branches as never }));
       expect(result, JSON.stringify(branches)).toMatchObject({ ok: false, severity: 'warning' });
-      expect(result && 'detail' in result ? result.detail : '').toContain('fleetadlc github apply');
+      expect(result && 'detail' in result ? result.detail : '').toContain('openadlc github apply');
     }
   });
 

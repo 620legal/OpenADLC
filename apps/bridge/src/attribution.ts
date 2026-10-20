@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { attributions, audit } from '@fleetadlc/db';
-import { getSecretStore, type SecretStore } from '@fleetadlc/github';
+import { attributions, audit } from '@openadlc/db';
+import { getSecretStore, type SecretStore } from '@openadlc/github';
 import {
   UNVERIFIED_REASON,
   isFleetLogin,
@@ -10,7 +10,7 @@ import {
   type SignedFields,
   type SigningKey,
   type SignaturePayload,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 
 /**
  * The bridge's half of signed posts (packages/shared/src/signature.ts): it

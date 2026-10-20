@@ -15,7 +15,7 @@ describe('the dispatcher run as a program', () => {
   let home: string;
 
   beforeEach(() => {
-    home = mkdtempSync(join(tmpdir(), 'fleetadlc-dispatcher-main-'));
+    home = mkdtempSync(join(tmpdir(), 'openadlc-dispatcher-main-'));
   });
 
   afterEach(() => {
@@ -27,7 +27,7 @@ describe('the dispatcher run as a program', () => {
       cwd: APP,
       encoding: 'utf8',
       // An empty home: no secret, and a database nobody listens on.
-      env: { ...process.env, FLEETADLC_HOME: home, FLEETADLC_SECRET_STORE: 'file', DATABASE_URL: 'postgres://127.0.0.1:1/none' },
+      env: { ...process.env, OPENADLC_HOME: home, OPENADLC_SECRET_STORE: 'file', DATABASE_URL: 'postgres://127.0.0.1:1/none' },
       timeout: 30_000,
     });
 
@@ -46,6 +46,6 @@ describe('the dispatcher run as a program', () => {
     const result = run(['--once', '--dry-run']);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain(`no internal secret in the secret store for this FLEETADLC_HOME (${home})`);
+    expect(result.stderr).toContain(`no internal secret in the secret store for this OPENADLC_HOME (${home})`);
   }, 40_000);
 });

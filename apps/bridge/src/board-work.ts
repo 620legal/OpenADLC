@@ -1,5 +1,5 @@
-import { listEventsOfType, stageMoves, tasks as taskStore } from '@fleetadlc/db';
-import type { Gate } from '@fleetadlc/shared';
+import { listEventsOfType, stageMoves, tasks as taskStore } from '@openadlc/db';
+import type { Gate } from '@openadlc/shared';
 import {
   asCardTask,
   cardWork,

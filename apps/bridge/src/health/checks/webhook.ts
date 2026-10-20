@@ -1,4 +1,4 @@
-import type { HealthAction } from '@fleetadlc/shared';
+import type { HealthAction } from '@openadlc/shared';
 import type { Unheard } from '../../unheard.js';
 import type { WebhookStatus } from '../../webhook-setup.js';
 import { parseRef } from '../../work.js';

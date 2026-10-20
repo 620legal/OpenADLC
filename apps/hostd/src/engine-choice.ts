@@ -1,5 +1,5 @@
-import { createEngine, type Engine } from '@fleetadlc/engines';
-import type { EngineName } from '@fleetadlc/shared';
+import { createEngine, type Engine } from '@openadlc/engines';
+import type { EngineName } from '@openadlc/shared';
 import { scriptedRunFor } from './scripted-runs.js';
 
 /**
@@ -22,7 +22,7 @@ export async function chooseEngine(
     engine: EngineName;
     skill: string;
     subjectRef: string;
-    /** Set only by the integration suites, via `FLEETADLC_SCRIPTED_ENGINES`. */
+    /** Set only by the integration suites, via `OPENADLC_SCRIPTED_ENGINES`. */
     scripted: boolean;
   },
   /**

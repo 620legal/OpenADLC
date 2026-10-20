@@ -6,7 +6,7 @@
 import { existsSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { botsFileSchema, costsFileSchema, envOr, hostdDriverFromEnv, loadYamlFile, reposFileSchema, resolveBotRef } from '@fleetadlc/shared';
+import { botsFileSchema, costsFileSchema, envOr, hostdDriverFromEnv, loadYamlFile, reposFileSchema, resolveBotRef } from '@openadlc/shared';
 import { closePool, waitForDatabase } from '../client.js';
 import { migrate } from '../migrate.js';
 import * as bots from '../store/bots.js';
@@ -18,7 +18,7 @@ import { writeRepos } from './seed-repos.js';
 import { seedScriptedBoard } from './scripted-board.js';
 import { scriptedStandIn } from './scripted-repo.js';
 
-const configRoot = envOr('FLEETADLC_CONFIG_ROOT', join(process.cwd(), 'config'));
+const configRoot = envOr('OPENADLC_CONFIG_ROOT', join(process.cwd(), 'config'));
 
 async function seedCrew(): Promise<void> {
   const path = join(configRoot, 'bots.yaml');
@@ -31,8 +31,8 @@ async function seedCrew(): Promise<void> {
   const host = await hosts.ensureHost({
     // The name hostd registers itself under (apps/hostd/src/config.ts). With
     // 'local' here, the seed made a host row hostd never reported to and put
-    // every bot on it, and `fleetadlc doctor` said that host had stopped.
-    name: envOr('FLEETADLC_HOST_NAME', hostname()),
+    // every bot on it, and `openadlc doctor` said that host had stopped.
+    name: envOr('OPENADLC_HOST_NAME', hostname()),
     driver: hostdDriverFromEnv(),
     capacityBots: crew.length,
   });
@@ -69,7 +69,7 @@ async function seedRepos(): Promise<void> {
     for (const repo of refused) {
       console.error(
         `[seed] ${repo.fullName} was not written: ${repo.reason}. ` +
-          'Take that entry out of config/repos.yaml, then run: fleetadlc seed',
+          'Take that entry out of config/repos.yaml, then run: openadlc seed',
       );
     }
     process.exitCode = 1;
@@ -78,7 +78,7 @@ async function seedRepos(): Promise<void> {
     for (const repo of unknown) {
       console.error(
         `[seed] ${repo.fullName}'s owner "${repo.owner}" is no bot in this install, so nothing builds there. ` +
-          'Set owner in config/repos.yaml to a seat from config/bots.yaml (builder), then run: fleetadlc seed',
+          'Set owner in config/repos.yaml to a seat from config/bots.yaml (builder), then run: openadlc seed',
       );
     }
     process.exitCode = 1;
@@ -124,8 +124,8 @@ async function main(): Promise<void> {
   await seedCrew();
   await seedRepos();
   await seedBudget();
-  // Only the integration suites pass this; `fleetadlc up` never does, unless it
-  // was started with FLEETADLC_SCRIPTED_ENGINES, which is the same suite.
+  // Only the integration suites pass this; `openadlc up` never does, unless it
+  // was started with OPENADLC_SCRIPTED_ENGINES, which is the same suite.
   if (process.argv.includes('--scripted-board')) {
     await ensureScriptedRepository();
     await seedScriptedBoard();

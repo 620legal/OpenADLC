@@ -23,28 +23,28 @@ function project(answers: Partial<Record<'pool' | 'sql' | 'log' | 'network' | 's
   return { gcloud, asked };
 }
 
-const fresh = { projectId: 'acme-fleetadlc', prefix: 'fleetadlc', owned: new Set<string>(), now: NOW };
+const fresh = { projectId: 'acme-openadlc', prefix: 'openadlc', owned: new Set<string>(), now: NOW };
 
 describe('a project an earlier install was torn down from', () => {
   it('finds the soft-deleted workload identity pool, with how long Google keeps it', async () => {
     const { gcloud } = project({ pool: ok(JSON.stringify({ state: 'DELETED', expireTime: '2026-10-31T09:00:00Z' })) });
     const report = await findLeftovers(fresh, gcloud);
-    expect(report.found).toEqual([{ what: 'workload identity pool fleetadlc-github', detail: 'deleted; Google keeps it until 2026-10-31' }]);
+    expect(report.found).toEqual([{ what: 'workload identity pool openadlc-github', detail: 'deleted; Google keeps it until 2026-10-31' }]);
   });
 
   it('finds a database name Google still holds, from the deletion in the admin activity log', async () => {
-    const deletion = [{ timestamp: '2026-10-01T08:00:00Z', protoPayload: { resourceName: 'projects/acme-fleetadlc/instances/fleetadlc-db' } }];
+    const deletion = [{ timestamp: '2026-10-01T08:00:00Z', protoPayload: { resourceName: 'projects/acme-openadlc/instances/openadlc-db' } }];
     const { gcloud } = project({ log: ok(JSON.stringify(deletion)) });
     const report = await findLeftovers(fresh, gcloud);
     expect(report.found).toEqual([
-      { what: 'Cloud SQL instance fleetadlc-db', detail: 'deleted 2026-10-01; Google keeps the name reserved until about 2026-10-08' },
+      { what: 'Cloud SQL instance openadlc-db', detail: 'deleted 2026-10-01; Google keeps the name reserved until about 2026-10-08' },
     ]);
   });
 
   it('does not count a database deleted long enough ago that its name is free, or another instance', async () => {
     const deletions = [
-      { timestamp: '2026-09-20T08:00:00Z', protoPayload: { resourceName: 'projects/acme-fleetadlc/instances/fleetadlc-db' } },
-      { timestamp: '2026-10-02T08:00:00Z', protoPayload: { resourceName: 'projects/acme-fleetadlc/instances/someone-elses-db' } },
+      { timestamp: '2026-09-20T08:00:00Z', protoPayload: { resourceName: 'projects/acme-openadlc/instances/openadlc-db' } },
+      { timestamp: '2026-10-02T08:00:00Z', protoPayload: { resourceName: 'projects/acme-openadlc/instances/someone-elses-db' } },
     ];
     const { gcloud } = project({ log: ok(JSON.stringify(deletions)) });
     expect((await findLeftovers(fresh, gcloud)).found).toEqual([]);
@@ -53,24 +53,24 @@ describe('a project an earlier install was torn down from', () => {
   it('finds the network and the secrets an install kept, the bridge’s fleet- ones included', async () => {
     const { gcloud } = project({
       network: ok('{}'),
-      secrets: ok('projects/1/secrets/fleet-github-app-private-key\nfleet-bot-builder\nfleetadlc-webhook-secret\nunrelated-secret\n'),
+      secrets: ok('projects/1/secrets/fleet-github-app-private-key\nfleet-bot-builder\nopenadlc-webhook-secret\nunrelated-secret\n'),
     });
     const report = await findLeftovers(fresh, gcloud);
     expect(report.found).toEqual([
-      { what: 'network fleetadlc-network', detail: 'still there' },
+      { what: 'network openadlc-network', detail: 'still there' },
       {
-        what: '3 secrets (fleet-github-app-private-key, fleet-bot-builder, fleetadlc-webhook-secret)',
+        what: '3 secrets (fleet-github-app-private-key, fleet-bot-builder, openadlc-webhook-secret)',
         detail: 'kept from the earlier install, with its GitHub credentials',
       },
     ]);
   });
 
   it('says what to do: a new project', () => {
-    expect(leftoversMessage('acme-fleetadlc', [{ what: 'network fleetadlc-network', detail: 'still there' }])).toEqual([
-      'Project acme-fleetadlc still holds an earlier OpenADLC install:',
-      '  - network fleetadlc-network: still there',
+    expect(leftoversMessage('acme-openadlc', [{ what: 'network openadlc-network', detail: 'still there' }])).toEqual([
+      'Project acme-openadlc still holds an earlier OpenADLC install:',
+      '  - network openadlc-network: still there',
       'Setting up again in the same project is not supported.',
-      'Create a new Google Cloud project and run `fleetadlc cloud configure` with it.',
+      'Create a new Google Cloud project and run `openadlc cloud configure` with it.',
     ]);
   });
 });
@@ -115,9 +115,9 @@ describe('when gcloud cannot answer', () => {
     const report = await findLeftovers(fresh, gcloud);
     expect(report.found).toEqual([]);
     expect(report.unchecked).toEqual([
-      'workload identity pool fleetadlc-github: its API is not enabled in the project yet',
-      'Cloud SQL instance fleetadlc-db: gcloud is not signed in',
-      'network fleetadlc-network: gcloud is not installed',
+      'workload identity pool openadlc-github: its API is not enabled in the project yet',
+      'Cloud SQL instance openadlc-db: gcloud is not signed in',
+      'network openadlc-network: gcloud is not installed',
       'secrets: its API is not enabled in the project yet',
     ]);
   });
@@ -126,7 +126,7 @@ describe('when gcloud cannot answer', () => {
     const { gcloud } = project({ log: { code: 1, stdout: '', stderr: 'ERROR: (gcloud.logging.read) PERMISSION_DENIED: Permission denied' } });
     const report = await findLeftovers(fresh, gcloud);
     expect(report.found).toEqual([]);
-    expect(report.unchecked).toEqual(['whether fleetadlc-db was deleted this week: (gcloud.logging.read) PERMISSION_DENIED: Permission denied']);
+    expect(report.unchecked).toEqual(['whether openadlc-db was deleted this week: (gcloud.logging.read) PERMISSION_DENIED: Permission denied']);
   });
 });
 
@@ -134,13 +134,13 @@ describe('a Terraform failure on a name that is taken', () => {
   it('is said in words, with what to do', () => {
     const output = 'Error: Error creating WorkloadIdentityPool: googleapi: Error 409: Requested entity already exists';
     expect(explainTerraformFailure(output)).toMatch(/create a new Google Cloud project/);
-    expect(explainTerraformFailure('Error: Error, failed to create instance fleetadlc-db: googleapi: Error 409: The Cloud SQL instance already exists. When you delete an instance, you can\'t reuse the name of the deleted instance until one week from the deletion date., instanceAlreadyExists')).not.toBeNull();
+    expect(explainTerraformFailure('Error: Error, failed to create instance openadlc-db: googleapi: Error 409: The Cloud SQL instance already exists. When you delete an instance, you can\'t reuse the name of the deleted instance until one week from the deletion date., instanceAlreadyExists')).not.toBeNull();
   });
 
   it('says an API that was still being turned on is a reason to apply again, not a reason to start over', () => {
     const output =
       'Error: Error creating Secret: googleapi: Error 403: Secret Manager API has not been used in project 123456 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/secretmanager.googleapis.com/overview?project=123456 then retry.\nDetails: [{"reason": "SERVICE_DISABLED"}]';
-    expect(explainTerraformFailure(output)).toMatch(/fleetadlc cloud apply` again/);
+    expect(explainTerraformFailure(output)).toMatch(/openadlc cloud apply` again/);
     expect(explainTerraformFailure(output)).not.toMatch(/new Google Cloud project/);
   });
 

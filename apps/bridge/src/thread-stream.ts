@@ -1,4 +1,4 @@
-import { threads } from '@fleetadlc/db';
+import { threads } from '@openadlc/db';
 
 /**
  * Tells open thread panels and item views when something happened, so they do

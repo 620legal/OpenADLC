@@ -39,7 +39,7 @@ export interface BackupSelection {
   history: boolean;
 }
 
-/** The whole install, which is what `fleetadlc backup` takes unless told otherwise. History is still asked for. */
+/** The whole install, which is what `openadlc backup` takes unless told otherwise. History is still asked for. */
 export const EVERYTHING: BackupSelection = {
   install: true,
   repositories: true,

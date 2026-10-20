@@ -32,12 +32,12 @@ import { countWords, inPipelineOrder, roleTitle } from '@/lib/crew';
  * Backup is what to take, a passphrase, and the download. Restore is
  * `restore-into.tsx`.
  *
- * What goes in a backup is the bridge's to decide — the same code `fleetadlc
+ * What goes in a backup is the bridge's to decide — the same code `openadlc
  * backup` runs — and the card only ever sees names. It says, before the
  * download, what the file will hold and what it leaves out, and it says what
  * the two sign-in ticks mean, because they are the part of a backup that
  * behaves differently once it is copied. The archive is always sealed: the
- * unencrypted form is a deliberate `fleetadlc backup --unencrypted` and nothing
+ * unencrypted form is a deliberate `openadlc backup --unencrypted` and nothing
  * here offers it.
  */
 

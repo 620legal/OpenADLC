@@ -1,5 +1,5 @@
-import { closePool, settings } from '@fleetadlc/db';
-import { getSecretStore, webhookSecretRef } from '@fleetadlc/github';
+import { closePool, settings } from '@openadlc/db';
+import { getSecretStore, webhookSecretRef } from '@openadlc/github';
 import {
   LOCAL_DRIVER_NOTES,
   LOCAL_DRIVER_WARNING,
@@ -78,7 +78,7 @@ export async function init(
       ...(options.databaseUrl ? { databaseUrl: options.databaseUrl } : {}),
     },
     {
-      environment: process.env.FLEETADLC_WEBHOOK_SECRET,
+      environment: process.env.OPENADLC_WEBHOOK_SECRET,
       // The settings table is where an older install kept it, until its bridge
       // next starts and moves it into the secret store.
       stored: async () => (await getSecretStore().get(webhookSecretRef())) ?? (await settings.getSetting('webhookSecret')),
@@ -97,11 +97,11 @@ export async function init(
       ui.note('A webhook secret was generated and stored. It is not printed.');
       ui.note('GitHub must sign with that same value. The onboarding walkthrough sends it when it can.');
     } else if (settled.source === 'environment') {
-      ui.note('The webhook secret in FLEETADLC_WEBHOOK_SECRET was kept and saved with the install. It is not printed.');
+      ui.note('The webhook secret in OPENADLC_WEBHOOK_SECRET was kept and saved with the install. It is not printed.');
     } else if (settled.source === 'stored') {
       ui.note('The webhook secret the bridge already verifies against was saved with the install. It is not printed.');
     }
-    ui.note('Restart the stack for a driver or database change to take effect: fleetadlc down && fleetadlc up');
+    ui.note('Restart the stack for a driver or database change to take effect: openadlc down && openadlc up');
     ui.plain();
   }
 
@@ -116,11 +116,11 @@ export async function init(
     ui.note('Organization, GitHub App client id, gate approvers, public url and webhook');
     ui.note('secret are all set there, and take effect without a restart.');
   } else {
-    ui.step('fleetadlc up');
+    ui.step('openadlc up');
     ui.note(`Then open ${consoleUrl}/onboarding, where everything else is set.`);
     const using = driver ?? existing.driver;
     ui.note(
-      `\`fleetadlc up\` needs no other configuration: it runs each task with the ${using} driver` +
+      `\`openadlc up\` needs no other configuration: it runs each task with the ${using} driver` +
         (using === 'docker' ? ', in a container of its own.' : ', as this user on this machine.'),
     );
   }

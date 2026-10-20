@@ -2,9 +2,9 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { describeDatabase } from '@fleetadlc/db';
-import { ensureConsoleSecret, ensureInternalSecret, fleetHome } from '@fleetadlc/github';
-import { stepNamed } from '@fleetadlc/shared';
+import { describeDatabase } from '@openadlc/db';
+import { ensureConsoleSecret, ensureInternalSecret, openadlcHome } from '@openadlc/github';
+import { stepNamed } from '@openadlc/shared';
 import { githubClientId } from '../client-id.js';
 import { signInLink } from '../console-link.js';
 import type { DriverProbe, InstallConfig } from '../install.js';
@@ -42,8 +42,8 @@ const SERVICES = ['hostd', 'bridge', 'console'] as const;
 /**
  * Services an older install ran that this one does not start. The dispatcher
  * now runs inside the bridge, as soon as anything changes that could let work
- * start, so its own process — a look every five minutes — is gone. `fleetadlc down`
- * still stops one an older `fleetadlc up` left running, which would otherwise go on
+ * start, so its own process — a look every five minutes — is gone. `openadlc down`
+ * still stops one an older `openadlc up` left running, which would otherwise go on
  * dispatching beside the bridge.
  */
 const RETIRED = ['dispatcher'] as const;
@@ -55,11 +55,11 @@ async function answers(url: string): Promise<boolean> {
 }
 
 /**
- * What `up` says to do without a client id: what `fleetadlc doctor`, `auth
- * login` and the bridge say. Not `fleetadlc init`, which this used to name: it
+ * What `up` says to do without a client id: what `openadlc doctor`, `auth
+ * login` and the bridge say. Not `openadlc init`, which this used to name: it
  * sets only the driver and the database url.
  */
-export const NO_CLIENT_ID_NOTE = `create the app on ${stepNamed('app')} of the console walkthrough, or set FLEETADLC_GITHUB_CLIENT_ID, then connect the crew`;
+export const NO_CLIENT_ID_NOTE = `create the app on ${stepNamed('app')} of the console walkthrough, or set OPENADLC_GITHUB_CLIENT_ID, then connect the crew`;
 
 /**
  * Whether this install actually has a client id, wherever it is kept, looked
@@ -69,7 +69,7 @@ export const NO_CLIENT_ID_NOTE = `create the app on ${stepNamed('app')} of the c
  * the console writes it to the settings table, which the bridge prefers. An
  * install set up from the browser therefore has a working app and an empty
  * `install.json`, and this printed "no GitHub App client id yet" over a crew of
- * nine connected accounts — on every `fleetadlc up`.
+ * nine connected accounts — on every `openadlc up`.
  *
  * A database that cannot be read answers the same as one with nothing in it,
  * because the only thing this decides is whether to print a hint.
@@ -106,7 +106,7 @@ async function commandExists(command: string): Promise<boolean> {
  * was missing, or to install Docker, to someone who had both.
  */
 export const DOCKER_NOT_RUNNING = 'Docker is installed but not running';
-export const START_DOCKER = 'start Docker Desktop, or on Linux: sudo systemctl start docker; then run fleetadlc up again';
+export const START_DOCKER = 'start Docker Desktop, or on Linux: sudo systemctl start docker; then run openadlc up again';
 
 /**
  * What to say when `docker run` could not start the database container: the
@@ -139,17 +139,17 @@ async function dockerDaemonAnswers(): Promise<boolean> {
 }
 
 /**
- * The container `fleetadlc up` keeps the database in: `fleetadlc-db` for the
- * default install, and one named after any other (`FLEETADLC_INSTALL_ID`,
+ * The container `openadlc up` keeps the database in: `openadlc-db` for the
+ * default install, and one named after any other (`OPENADLC_INSTALL_ID`,
  * which a scratch install and the compose stack set). A scratch install whose
- * own database was slow to answer used to start, or reuse, `fleetadlc-db` —
+ * own database was slow to answer used to start, or reuse, `openadlc-db` —
  * the real install's name — on the scratch port, and the real install's next
  * `up` found that container and waited on a port it does not publish.
  */
 export function databaseContainer(env: NodeJS.ProcessEnv = process.env): string {
-  const install = env.FLEETADLC_INSTALL_ID;
-  if (!install || install === 'default') return 'fleetadlc-db';
-  return `${env.FLEETADLC_BOT_PREFIX || `${install}-`}db`;
+  const install = env.OPENADLC_INSTALL_ID;
+  if (!install || install === 'default') return 'openadlc-db';
+  return `${env.OPENADLC_BOT_PREFIX || `${install}-`}db`;
 }
 
 /** One of a container's port bindings, as `docker inspect` gives it. */
@@ -180,19 +180,19 @@ export async function publishedPostgresPort(
 }
 
 /**
- * What the default install's database container was called before Fleet
- * became FleetADLC; docs/upgrading-from-fleet.md. It has no restart policy, so
- * after a reboot `up` found nothing answering and ran a new, empty
- * `fleetadlc-db` on its port, which then held the port against it.
+ * What the default install's database container was called under the names
+ * before this one, newest first; docs/upgrading-from-fleet.md. Neither has a
+ * restart policy, so after a reboot `up` found nothing answering and ran a
+ * new, empty `openadlc-db` on its port, which then held the port against it.
  */
-export const LEGACY_DATABASE_CONTAINER = 'fleet-db';
+export const LEGACY_DATABASE_CONTAINERS = ['fleetadlc-db', 'fleet-db'] as const;
 
 /**
  * The container to start for this install's database: `databaseContainer()`,
- * except for a default install upgraded from Fleet, whose `fleet-db` publishes
- * the install's port and has no `fleetadlc-db` beside it. A `fleet-db` on
- * another port is someone else's, and an install with an id of its own never
- * had one.
+ * except for a default install upgraded from FleetADLC or Fleet, whose
+ * `fleetadlc-db` or `fleet-db` publishes the install's port and has no
+ * `openadlc-db` beside it. One on another port is someone else's, and an
+ * install with an id of its own never had one.
  */
 export async function existingDatabaseContainer(
   config: { ports: Pick<InstallConfig['ports'], 'postgres'> },
@@ -200,13 +200,16 @@ export async function existingDatabaseContainer(
   published: (name: string) => Promise<string | undefined> = publishedPostgresPort,
 ): Promise<string> {
   const name = databaseContainer(env);
-  if (name !== 'fleetadlc-db') return name;
+  if (name !== 'openadlc-db') return name;
   if ((await published(name)) !== undefined) return name;
-  return (await published(LEGACY_DATABASE_CONTAINER)) === String(config.ports.postgres) ? LEGACY_DATABASE_CONTAINER : name;
+  for (const legacy of LEGACY_DATABASE_CONTAINERS) {
+    if ((await published(legacy)) === String(config.ports.postgres)) return legacy;
+  }
+  return name;
 }
 
 /**
- * Whether a database url is the address of the container `fleetadlc up` keeps:
+ * Whether a database url is the address of the container `openadlc up` keeps:
  * this machine's loopback, on the install's postgres port. A url anywhere else
  * is a server somebody else runs, and `up` never changes its password.
  */
@@ -220,7 +223,7 @@ export function addressesInstallDatabase(databaseUrl: string, port: number): boo
 }
 
 /**
- * What `fleetadlc up` does about an install whose database url still has the
+ * What `openadlc up` does about an install whose database url still has the
  * published password.
  *
  * - `generate`: nothing is listening and there is no container yet, so the one
@@ -232,9 +235,9 @@ export function addressesInstallDatabase(databaseUrl: string, port: number): boo
  *   a container made before `databaseRunArgs` named its volume keeps its data
  *   in an anonymous one `docker rm` would orphan.
  * - `keep`: anything else. A server that is not this install's container —
- *   `tests/scratch.sh`'s `fleetadlc-scratch-db`, which it starts itself with
+ *   `tests/scratch.sh`'s `openadlc-scratch-db`, which it starts itself with
  *   the published password and hands to the integration suites, or an external
- *   one — is never altered; `fleetadlc doctor` says what to do about it.
+ *   one — is never altered; `openadlc doctor` says what to do about it.
  */
 export function databasePasswordStep(input: {
   databaseUrl: string;
@@ -256,7 +259,7 @@ export function databasePasswordStep(input: {
  * environment to run it with.
  *
  * User, password and database come from the url, so a password set with
- * `fleetadlc init --database-url` reaches the container too; these used to be
+ * `openadlc init --database-url` reaches the container too; these used to be
  * constants, and the first `up` with any other password could not connect.
  * The password is passed as a bare `-e POSTGRES_PASSWORD`, which docker reads
  * from its own environment, so it is not in the host's process list. The port
@@ -282,11 +285,11 @@ export function databaseRunArgs(
       '--name',
       name,
       '-e',
-      `POSTGRES_USER=${credentials.user || 'fleetadlc'}`,
+      `POSTGRES_USER=${credentials.user || 'openadlc'}`,
       '-e',
       'POSTGRES_PASSWORD',
       '-e',
-      `POSTGRES_DB=${credentials.database || 'fleetadlc_db'}`,
+      `POSTGRES_DB=${credentials.database || 'openadlc_db'}`,
       '-p',
       `127.0.0.1:${config.ports.postgres}:5432`,
       '-v',
@@ -409,7 +412,7 @@ async function ensureDatabase(config: InstallConfig): Promise<InstallConfig | nu
       return rotated;
     } catch (error) {
       ui.warn(`${name} still takes the password published with OpenADLC: ${error instanceof Error ? error.message : error}`);
-      ui.note('anything that reaches its port can log in as its superuser; run `fleetadlc up` again');
+      ui.note('anything that reaches its port can log in as its superuser; run `openadlc up` again');
       return current;
     }
   };
@@ -433,11 +436,11 @@ async function ensureDatabase(config: InstallConfig): Promise<InstallConfig | nu
       ui.note(
         `It may be this install's database. If it is, point this install back at it: set ports.postgres and the port in databaseUrl in ${configPath()} to ${published || 'the port it publishes'}`,
       );
-      ui.note(`Removing it (docker rm -f ${name}) makes the next fleetadlc up start a new, empty database`);
+      ui.note(`Removing it (docker rm -f ${name}) makes the next openadlc up start a new, empty database`);
       return null;
     }
 
-    if (name === LEGACY_DATABASE_CONTAINER) {
+    if ((LEGACY_DATABASE_CONTAINERS as readonly string[]).includes(name)) {
       // Started as it is, never run anew: it holds the install's data.
       ui.step(`starting postgres in ${name}, the container this install had before the rename`);
       await run('docker', ['start', name]).catch(() => undefined);
@@ -493,7 +496,7 @@ async function ensureDatabase(config: InstallConfig): Promise<InstallConfig | nu
    * and "no server" arrive as the same failure — and the advice for one is
    * useless for the other. A container that outlived its database sent somebody
    * to start a server that was already running and install Docker they already
-   * had. The same conflation once had `fleetadlc doctor` print "postgres answers"
+   * had. The same conflation once had `openadlc doctor` print "postgres answers"
    * and "cannot reach postgres" one line apart.
    */
   const created = await createDatabase(current).catch(() => false);
@@ -505,16 +508,16 @@ async function ensureDatabase(config: InstallConfig): Promise<InstallConfig | nu
   const where = describeDatabase(current.databaseUrl);
   ui.fail(where ? `cannot reach postgres: ${where}` : 'cannot reach postgres');
   if (stopped) ui.note(`${DOCKER_NOT_RUNNING}, so it could not start one: ${START_DOCKER}`);
-  else ui.note('Start a Postgres 16 server, or install Docker and run `fleetadlc up` again.');
+  else ui.note('Start a Postgres 16 server, or install Docker and run `openadlc up` again.');
   return null;
 }
 
 /** The database an install expects, taken from its url. */
 export function databaseName(databaseUrl: string): string {
   try {
-    return new URL(databaseUrl).pathname.replace(/^\//, '') || 'fleetadlc_db';
+    return new URL(databaseUrl).pathname.replace(/^\//, '') || 'openadlc_db';
   } catch {
-    return 'fleetadlc_db';
+    return 'openadlc_db';
   }
 }
 
@@ -556,17 +559,17 @@ async function createDatabase(config: InstallConfig): Promise<boolean> {
 /**
  * A local git repository for the integration suites to work in.
  *
- * Only reached when `FLEETADLC_SCRIPTED_ENGINES` is set, which only tests/scratch.sh
+ * Only reached when `OPENADLC_SCRIPTED_ENGINES` is set, which only tests/scratch.sh
  * and CI set — see `SCRIPTED_ENGINES` below.
  */
 async function ensureScriptedRepo(): Promise<string> {
-  const path = join(fleetHome(), 'scripted', 'testbed');
+  const path = join(openadlcHome(), 'scripted', 'testbed');
   if (existsSync(join(path, '.git'))) return path;
 
   mkdirSync(path, { recursive: true });
   const git = (args: string[]) => run('git', args, { cwd: path });
   await git(['init', '-q', '-b', 'main']);
-  await git(['config', 'user.email', 'scripted@fleetadlc.local']);
+  await git(['config', 'user.email', 'scripted@openadlc.local']);
   await git(['config', 'user.name', 'OpenADLC scripted testbed']);
 
   writeFileSync(
@@ -583,7 +586,7 @@ async function ensureScriptedRepo(): Promise<string> {
       '',
       '## Human review',
       '',
-      '- `infra/` @fleetadlc-operator',
+      '- `infra/` @openadlc-operator',
       '',
     ].join('\n'),
   );
@@ -596,15 +599,15 @@ async function ensureScriptedRepo(): Promise<string> {
 /**
  * Whether this process is running the integration suites rather than an install.
  *
- * Read from the environment and nowhere else: not `fleetadlc init`, not
- * `install.json`, not a flag of `fleetadlc up`. The point of replacing `--demo`
+ * Read from the environment and nowhere else: not `openadlc init`, not
+ * `install.json`, not a flag of `openadlc up`. The point of replacing `--demo`
  * with this variable is that there is no longer a supported way for an
  * operator to arrive here by accident.
  */
-const SCRIPTED_ENGINES = process.env.FLEETADLC_SCRIPTED_ENGINES === '1';
+const SCRIPTED_ENGINES = process.env.OPENADLC_SCRIPTED_ENGINES === '1';
 
 /**
- * Whether the bridge runs the dispatcher (`FLEETADLC_DISPATCH_IN_BRIDGE`): on every
+ * Whether the bridge runs the dispatcher (`OPENADLC_DISPATCH_IN_BRIDGE`): on every
  * install but one started for the integration suites.
  *
  * The suites run dispatcher passes of their own and read what each decided. A
@@ -612,23 +615,23 @@ const SCRIPTED_ENGINES = process.env.FLEETADLC_SCRIPTED_ENGINES === '1';
  * time — both reading the same free builder, one leasing what the other was
  * about to — which is nothing a suite asserts on and everything that makes it
  * flaky. CI never had it: it starts the services itself, without the variable.
- * A scratch install (`tests/scratch.sh`) runs through `fleetadlc up`, so it has
+ * A scratch install (`tests/scratch.sh`) runs through `openadlc up`, so it has
  * to be said here.
  */
 export function bridgeDispatches(scripted: boolean): boolean {
   return !scripted;
 }
 
-/** hostd settings only the compose stack sets, emptied for an install `fleetadlc up` runs. */
+/** hostd settings only the compose stack sets, emptied for an install `openadlc up` runs. */
 export const COMPOSE_ONLY_BLANK: Readonly<Record<string, string>> = {
-  FLEETADLC_HOSTD_TASK_BRIDGE_URL: '',
-  FLEETADLC_HOSTD_TASK_HOSTD_URL: '',
-  FLEETADLC_RUNNER_BUNDLE: '',
-  FLEETADLC_GH_SHIM_DIR: '',
+  OPENADLC_HOSTD_TASK_BRIDGE_URL: '',
+  OPENADLC_HOSTD_TASK_HOSTD_URL: '',
+  OPENADLC_RUNNER_BUNDLE: '',
+  OPENADLC_GH_SHIM_DIR: '',
 };
 
 /**
- * Where `fleetadlc up` and `fleetadlc status` ask whether a service answers.
+ * Where `openadlc up` and `openadlc status` ask whether a service answers.
  * The console's `/` refuses a browser that has not signed in, so it is asked
  * at `/signin`, which answers anybody.
  */
@@ -664,14 +667,14 @@ export function serviceSpecs(
       command: [node, join(effective.repoRoot, 'apps/bridge/dist/main.js')],
       cwd: effective.repoRoot,
       // The bridge dispatches (see `RETIRED`), except beside the suites.
-      env: { ...env, FLEETADLC_DISPATCH_IN_BRIDGE: bridgeDispatches(options.scripted) ? '1' : '0' },
+      env: { ...env, OPENADLC_DISPATCH_IN_BRIDGE: bridgeDispatches(options.scripted) ? '1' : '0' },
       health: healthUrl('bridge', effective.ports.bridge),
     },
     console: {
       name: 'console',
       command: ['pnpm', 'start'],
       cwd: join(effective.repoRoot, 'apps/console'),
-      env: { ...env, FLEETADLC_CONSOLE_SECRET: options.consoleSecret },
+      env: { ...env, OPENADLC_CONSOLE_SECRET: options.consoleSecret },
       health: healthUrl('console', effective.ports.console),
     },
   };
@@ -680,7 +683,7 @@ export function serviceSpecs(
 /**
  * The driver `up` runs with: the one install.json names, or for one that
  * names none, what this machine can run (`chooseDriver`). Not written back:
- * `fleetadlc init` records a choice; `up` only says which it made.
+ * `openadlc init` records a choice; `up` only says which it made.
  */
 export async function upDriver(
   config: InstallConfig,
@@ -710,20 +713,20 @@ export async function up(config: InstallConfig, options: { skipSeed?: boolean; p
   sayDriver(effective.driver, driven.reason);
 
   if (SCRIPTED_ENGINES) {
-    // Said as loudly as possible, every time. This used to be `fleetadlc up --demo`
+    // Said as loudly as possible, every time. This used to be `openadlc up --demo`
     // — a documented install option that produced fabricated work while looking
     // like a working install, and on a machine with a connected crew it reached
     // the real repository. It is now reachable only by setting an environment
     // variable, which the docs give only for the integration suites, set by
     // tests/scratch.sh on an install of its own.
-    ui.warn('FLEETADLC_SCRIPTED_ENGINES is set: every bot will fabricate its work.');
+    ui.warn('OPENADLC_SCRIPTED_ENGINES is set: every bot will fabricate its work.');
     ui.note('This exists for the integration suites. Nothing it produces is real.');
     const repoPath = await ensureScriptedRepo();
     ui.ok(`scripted repository at ${repoPath}`);
     ui.note('The bridge does not dispatch here: the suites run their own dispatcher passes.');
   }
-  ui.note(`state under ${fleetHome()}`);
-  if (makeHomePrivate()) ui.note(`${fleetHome()} could be read by others on this machine; it is now 0700`);
+  ui.note(`state under ${openadlcHome()}`);
+  if (makeHomePrivate()) ui.note(`${openadlcHome()} could be read by others on this machine; it is now 0700`);
 
   if (effective.driver === 'docker' && !(await dockerProbe.dockerAnswers())) {
     // Asked first: with the daemon down, the image looks missing too.
@@ -732,7 +735,7 @@ export async function up(config: InstallConfig, options: { skipSeed?: boolean; p
       ui.note(START_DOCKER);
     } else {
       ui.fail('the docker driver needs Docker, and Docker is not installed');
-      ui.note('install Docker and run fleetadlc up again, or choose the local driver: fleetadlc init --driver local');
+      ui.note('install Docker and run openadlc up again, or choose the local driver: openadlc init --driver local');
     }
     process.exitCode = 1;
     return;
@@ -809,7 +812,7 @@ export async function up(config: InstallConfig, options: { skipSeed?: boolean; p
     if (spec.health && (await answers(spec.health))) {
       refused += 1;
       ui.fail(`${name}: something is already serving ${spec.health} that this install did not start`);
-      ui.note(`stop it, or run \`fleetadlc down\` in the shell that started it, then try again`);
+      ui.note(`stop it, or run \`openadlc down\` in the shell that started it, then try again`);
       continue;
     }
 
@@ -850,11 +853,11 @@ export async function up(config: InstallConfig, options: { skipSeed?: boolean; p
     ui.heading('OpenADLC is up');
   }
   // A link, not the address: the console serves a browser only once it has
-  // signed in. It expires within the hour; `fleetadlc console-link` prints another.
+  // signed in. It expires within the hour; `openadlc console-link` prints another.
   ui.code(`console   ${signInLink(consoleSecret, `http://127.0.0.1:${effective.ports.console}`)}`);
   ui.code(`bridge    http://127.0.0.1:${effective.ports.bridge}`);
   ui.code(`hostd     http://127.0.0.1:${effective.ports.hostd}`);
-  ui.note('the console link signs this browser in and works for an hour; `fleetadlc console-link` prints another');
+  ui.note('the console link signs this browser in and works for an hour; `openadlc console-link` prints another');
   ui.plain();
 
   if (!(await clientIdConfigured(effective))) {
@@ -864,7 +867,7 @@ export async function up(config: InstallConfig, options: { skipSeed?: boolean; p
 }
 
 export async function down(): Promise<void> {
-  ui.heading(`Stopping OpenADLC (state under ${fleetHome()})`);
+  ui.heading(`Stopping OpenADLC (state under ${openadlcHome()})`);
   for (const name of [...SERVICES].reverse()) {
     const pid = readPid(name);
     const outcome = await stopService(name);
@@ -878,8 +881,8 @@ export async function down(): Promise<void> {
   for (const name of RETIRED) {
     if (keeperPid(name) !== null && (await stopService(name)) === 'stopped') ui.ok(`stopped the ${name} an older install ran; the bridge does its work now`);
   }
-  // Not "docker stop fleetadlc-db", which this used to suggest: that is the
-  // container `fleetadlc up` starts for the default install, and on a machine with
+  // Not "docker stop openadlc-db", which this used to suggest: that is the
+  // container `openadlc up` starts for the default install, and on a machine with
   // a scratch install or a database of its own it is another install's.
   ui.note('postgres and the bot containers were left alone: they hold the data and the bots’ sessions');
 }

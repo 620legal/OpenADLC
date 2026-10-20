@@ -58,8 +58,8 @@ describe('the app OpenADLC asks GitHub to create', () => {
   });
 
   it('does not double the slash when the console url has a trailing one', () => {
-    const manifest = buildAppManifest({ ...INPUT, consoleUrl: 'https://fleetadlc.example.com/' });
-    expect(manifest.redirect_url).toBe('https://fleetadlc.example.com/onboarding/app-created');
+    const manifest = buildAppManifest({ ...INPUT, consoleUrl: 'https://openadlc.example.com/' });
+    expect(manifest.redirect_url).toBe('https://openadlc.example.com/onboarding/app-created');
   });
 
   it('is private, because it exists for one install', () => {
@@ -126,8 +126,8 @@ describe('each permission, as a person finds it on the app’s page', () => {
   });
 
   it('is added on the app’s permissions page, and accepted on its installation’s', () => {
-    expect(appPermissionsUrl('fleetadlc-janedoe', null)).toBe('https://github.com/settings/apps/fleetadlc-janedoe/permissions');
-    expect(appPermissionsUrl('fleetadlc-acme', 'acme')).toBe('https://github.com/organizations/acme/settings/apps/fleetadlc-acme/permissions');
+    expect(appPermissionsUrl('openadlc-janedoe', null)).toBe('https://github.com/settings/apps/openadlc-janedoe/permissions');
+    expect(appPermissionsUrl('openadlc-acme', 'acme')).toBe('https://github.com/organizations/acme/settings/apps/openadlc-acme/permissions');
     expect(installationSettingsUrl(42, null)).toBe('https://github.com/settings/installations/42');
     expect(installationSettingsUrl(42, 'acme')).toBe('https://github.com/organizations/acme/settings/installations/42');
   });

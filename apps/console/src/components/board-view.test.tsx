@@ -31,7 +31,7 @@ function member(partial: Partial<CrewMember> & Pick<CrewMember, 'name'>): CrewMe
 
 const CREW = [
   member({ name: 'ottoexampleco', slot: 'intake', role: 'intake' }),
-  member({ name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement' }),
+  member({ name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement' }),
   member({ name: 'irisexampleco', slot: 'second-reviewer', role: 'review_second' }),
   member({ name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: null, authorization: 'unauthorized' }),
   member({ name: 'tessexampleco', slot: 'sre', role: 'deploy' }),
@@ -39,10 +39,10 @@ const CREW = [
 
 function card(partial: Partial<BoardCard> & Pick<BoardCard, 'ref' | 'stage' | 'title'>): BoardCard {
   return {
-    repo: 'fleetadlc',
+    repo: 'openadlc',
     assignees: [],
     gateOpen: false,
-    url: `https://github.com/janedoe/fleetadlc/issues/${partial.ref.split('#')[1]}`,
+    url: `https://github.com/janedoe/openadlc/issues/${partial.ref.split('#')[1]}`,
     labels: [],
     updatedAt: minutesAgo(30),
     number: Number(partial.ref.split('#')[1]),
@@ -65,7 +65,7 @@ function columns(cards: BoardCard[]): Board['columns'] {
   const staff: Record<string, Board['columns'][number]['bots']> = {
     intake: [{ name: 'ottoexampleco', displayName: 'intake', working: false, waiting: true }],
     spec: [],
-    build: [{ name: 'fleetadlc-atlas-janedoe', displayName: 'builder', working: true, waiting: false }],
+    build: [{ name: 'openadlc-atlas-janedoe', displayName: 'builder', working: true, waiting: false }],
     review: [
       { name: 'lead-reviewer', displayName: 'lead reviewer', working: false, waiting: false },
       { name: 'irisexampleco', displayName: 'second reviewer', working: true, waiting: false },
@@ -83,25 +83,25 @@ function columns(cards: BoardCard[]): Board['columns'] {
 }
 
 const WORKING: BoardCard[] = [
-  card({ ref: 'fleetadlc#15', stage: 'intake', title: 'Show what a task has cost on its card', gateOpen: true, costUsd: 0.12, active: [{ bot: 'ottoexampleco', kind: 'intake', state: 'paused', round: 0, startedAt: minutesAgo(5), endedAt: null, exitReason: null }] }),
+  card({ ref: 'openadlc#15', stage: 'intake', title: 'Show what a task has cost on its card', gateOpen: true, costUsd: 0.12, active: [{ bot: 'ottoexampleco', kind: 'intake', state: 'paused', round: 0, startedAt: minutesAgo(5), endedAt: null, exitReason: null }] }),
   card({
-    ref: 'fleetadlc#16',
+    ref: 'openadlc#16',
     stage: 'build',
     title: 'Let the board filter by label',
     labels: ['adlc:build', 'start:now'],
     costUsd: 0.84,
-    active: [{ bot: 'fleetadlc-atlas-janedoe', kind: 'implement', state: 'running', round: 0, startedAt: minutesAgo(12), endedAt: null, exitReason: null }],
+    active: [{ bot: 'openadlc-atlas-janedoe', kind: 'implement', state: 'running', round: 0, startedAt: minutesAgo(12), endedAt: null, exitReason: null }],
   }),
-  card({ ref: 'fleetadlc#17', stage: 'build', title: 'Show each bot’s model on its card', labels: ['adlc:build', 'start:now'] }),
-  card({ ref: 'fleetadlc#12', stage: 'review', title: 'Record which model each review used', prNumber: 31, reviewRound: 2, costUsd: 1.36, active: [{ bot: 'irisexampleco', kind: 'review', state: 'running', round: 0, startedAt: minutesAgo(6), endedAt: null, exitReason: null }] }),
-  card({ ref: 'fleetadlc#11', stage: 'review', title: 'Rate-limit the webhook route', prNumber: 29, stalledAfterRounds: 3, costUsd: 2.02 }),
-  card({ ref: 'fleetadlc#10', stage: 'done', title: 'Pin the Node version in CI', costUsd: 1.12, shippedAt: minutesAgo(120) }),
-  card({ ref: 'fleetadlc#4', stage: 'done', title: 'Something from last month', shippedAt: '2026-08-20T10:00:00.000Z' }),
+  card({ ref: 'openadlc#17', stage: 'build', title: 'Show each bot’s model on its card', labels: ['adlc:build', 'start:now'] }),
+  card({ ref: 'openadlc#12', stage: 'review', title: 'Record which model each review used', prNumber: 31, reviewRound: 2, costUsd: 1.36, active: [{ bot: 'irisexampleco', kind: 'review', state: 'running', round: 0, startedAt: minutesAgo(6), endedAt: null, exitReason: null }] }),
+  card({ ref: 'openadlc#11', stage: 'review', title: 'Rate-limit the webhook route', prNumber: 29, stalledAfterRounds: 3, costUsd: 2.02 }),
+  card({ ref: 'openadlc#10', stage: 'done', title: 'Pin the Node version in CI', costUsd: 1.12, shippedAt: minutesAgo(120) }),
+  card({ ref: 'openadlc#4', stage: 'done', title: 'Something from last month', shippedAt: '2026-08-20T10:00:00.000Z' }),
 ];
 
 const BOARD: Board = {
   repo: 'all',
-  repos: ['fleetadlc'],
+  repos: ['openadlc'],
   columns: columns(WORKING),
   mergeLine: [],
   waitingOnYou: 1,
@@ -114,7 +114,7 @@ const ATTENTION: AttentionItem[] = [
     id: 'gate:gate-1',
     kind: 'question',
     headline: 'ottoexampleco has a question',
-    subject: { repo: 'fleetadlc', number: 15, title: 'Show what a task has cost on its card', ref: 'fleetadlc#15', url: null },
+    subject: { repo: 'openadlc', number: 15, title: 'Show what a task has cost on its card', ref: 'openadlc#15', url: null },
     bot: { name: 'ottoexampleco', slot: 'intake', role: 'intake', roleLabel: 'intake', githubLogin: 'ottoexampleco' },
     since: minutesAgo(2),
     detail: 'Should the cost include review rounds, or only the build?',
@@ -146,7 +146,7 @@ function render(
         header={header}
         attention={attention}
         now={NOW}
-        repoFullName="janedoe/fleetadlc"
+        repoFullName="janedoe/openadlc"
         openBotOnLoad={openBotOnLoad}
         {...more}
       />
@@ -183,7 +183,7 @@ describe('the board’s columns', () => {
   });
 
   it('say Ship is skipped where merging ships it, instead of what a deploy would do', () => {
-    // fleetadlc-testbed deploys nothing: its Ship said "Deploys what was approved ·
+    // openadlc-testbed deploys nothing: its Ship said "Deploys what was approved ·
     // waits for you" over a stage that never happens there.
     const shipping = {
       ...BOARD,
@@ -199,7 +199,7 @@ describe('the board’s columns', () => {
 
   it('show who staffs them as faces, with a dot for working or waiting on you', () => {
     const html = render();
-    expect(column(html, 'Build')).toContain('title="builder (fleetadlc-atlas-janedoe) · working"');
+    expect(column(html, 'Build')).toContain('title="builder (openadlc-atlas-janedoe) · working"');
     expect(column(html, 'Intake')).toContain('title="intake (ottoexampleco) · waiting for you"');
     // Named by role until an account connects, never by its seat.
     expect(column(html, 'Review')).toContain('title="lead reviewer — not connected yet · idle"');
@@ -214,10 +214,10 @@ describe('the board’s columns', () => {
     // On the live install #7, shipped just now, showed between #5 and #1,
     // shipped hours before: the bridge lists cards in the dispatcher's order.
     const done = [
-      card({ ref: 'fleetadlc#3', stage: 'done', title: 'Shipped six hours ago', shippedAt: minutesAgo(360) }),
-      card({ ref: 'fleetadlc#5', stage: 'done', title: 'Shipped three hours ago', shippedAt: minutesAgo(180) }),
-      card({ ref: 'fleetadlc#7', stage: 'done', title: 'Shipped just now', shippedAt: minutesAgo(1) }),
-      card({ ref: 'fleetadlc#1', stage: 'done', title: 'Shipped seven hours ago', shippedAt: minutesAgo(420) }),
+      card({ ref: 'openadlc#3', stage: 'done', title: 'Shipped six hours ago', shippedAt: minutesAgo(360) }),
+      card({ ref: 'openadlc#5', stage: 'done', title: 'Shipped three hours ago', shippedAt: minutesAgo(180) }),
+      card({ ref: 'openadlc#7', stage: 'done', title: 'Shipped just now', shippedAt: minutesAgo(1) }),
+      card({ ref: 'openadlc#1', stage: 'done', title: 'Shipped seven hours ago', shippedAt: minutesAgo(420) }),
     ];
     const html = column(render({ ...BOARD, columns: columns(done) }), 'Done');
     const order = ['#7<', '#5<', '#3<', '#1<'].map((ref) => html.indexOf(ref));
@@ -240,11 +240,11 @@ describe('a card', () => {
     const writing = build.slice(build.indexOf('#16<'), build.indexOf('#17<'));
     expect(writing).toContain('$0.84 so far');
     expect(writing).toContain('Let the board filter by label');
-    expect(writing).toContain('>fleetadlc-atlas-janedoe</span>');
+    expect(writing).toContain('>openadlc-atlas-janedoe</span>');
     expect(writing).toContain('Writing the change · 12 min');
 
     const next = build.slice(build.indexOf('#17<'));
-    expect(next).toContain('Next up, when the builder (fleetadlc-atlas-janedoe) is free');
+    expect(next).toContain('Next up, when the builder (openadlc-atlas-janedoe) is free');
   });
 
   it('ready to build on a bridge without the dispatcher, says nothing is dispatching rather than next up', () => {
@@ -256,10 +256,10 @@ describe('a card', () => {
     expect(build.slice(build.indexOf('#16<'), build.indexOf('#17<'))).toContain('Writing the change · 12 min');
 
     const paused = column(
-      render(BOARD, ATTENTION, null, 'all', 'admin', { dispatching: false, pausedRepos: { fleetadlc: { by: 'janedoe', at: NOW, reason: null } } }),
+      render(BOARD, ATTENTION, null, 'all', 'admin', { dispatching: false, pausedRepos: { openadlc: { by: 'janedoe', at: NOW, reason: null } } }),
       'Build',
     );
-    expect(paused.slice(paused.indexOf('#17<'))).toContain('Waiting until fleetadlc is resumed');
+    expect(paused.slice(paused.indexOf('#17<'))).toContain('Waiting until openadlc is resumed');
   });
 
   it('puts what needs the person on the card, in the card’s tone', () => {
@@ -272,14 +272,14 @@ describe('a card', () => {
 
   it('keeps a way to move it that a keyboard can use', () => {
     const intake = column(render(), 'Intake');
-    expect(intake).toContain('Move fleetadlc#15 out of Intake');
+    expect(intake).toContain('Move openadlc#15 out of Intake');
     expect(intake).toMatch(/<option value="spec">Design<\/option>/);
   });
 
   it('offers a user no way to move it, by drag or by list: moving a card is an admin’s', () => {
     const html = render(BOARD, ATTENTION, null, 'all', 'user');
     expect(column(html, 'Intake')).toContain('Waiting for your answer');
-    expect(html).not.toContain('Move fleetadlc#15 out of Intake');
+    expect(html).not.toContain('Move openadlc#15 out of Intake');
     expect(html).not.toContain('draggable="true"');
     expect(render()).toContain('draggable="true"');
   });
@@ -350,7 +350,7 @@ describe('the first run', () => {
     const html = render(EMPTY, []);
     expect(html).not.toContain('aria-label="Board"');
     expect(html).toContain('File your first request');
-    expect(html).toContain('href="https://github.com/janedoe/fleetadlc/issues/new"');
+    expect(html).toContain('href="https://github.com/janedoe/openadlc/issues/new"');
     expect(html).toContain('How a request moves');
   });
 
@@ -366,7 +366,7 @@ describe('the first run', () => {
         board={EMPTY}
         crew={connected}
         repo="all"
-        header={headerData({ repos: ['fleetadlc'], crew: connected, budget: null, needsYou: 0 })}
+        header={headerData({ repos: ['openadlc'], crew: connected, budget: null, needsYou: 0 })}
         now={NOW}
       />,
     ).replace(/<!-- -->/g, '');
@@ -387,7 +387,7 @@ describe('the first run', () => {
       id: 'request:r-1',
       kind: 'triage_failed',
       headline: 'ottoexampleco could not triage your request',
-      subject: { repo: 'fleetadlc', number: null, title: 'Create html hello world', ref: null, url: null },
+      subject: { repo: 'openadlc', number: null, title: 'Create html hello world', ref: null, url: null },
       bot: null,
       since: minutesAgo(3),
       detail: 'Engine claude is not available on this host, so triage cannot run.',
@@ -438,7 +438,7 @@ describe('the board’s place on the page', () => {
         board={BOARD}
         crew={renamed}
         repo="all"
-        header={headerData({ repos: ['fleetadlc'], crew: renamed, budget: null, needsYou: null })}
+        header={headerData({ repos: ['openadlc'], crew: renamed, budget: null, needsYou: null })}
         now={NOW}
         openBotOnLoad="second-reviewer"
       />,
@@ -465,7 +465,7 @@ describe('the board’s place on the page', () => {
 
 describe('every repository at once', () => {
   const REPOSITORIES = [
-    { name: 'fleetadlc', fullName: 'janedoe/fleetadlc', color: 'blue' },
+    { name: 'openadlc', fullName: 'janedoe/openadlc', color: 'blue' },
     { name: 'api', fullName: 'janedoe/api', color: 'amber' },
     { name: 'website', fullName: 'janedoe/website', color: 'pink' },
   ];
@@ -478,7 +478,7 @@ describe('every repository at once', () => {
   const FROM_API: AttentionItem = {
     ...ATTENTION[0]!,
     id: 'gate:gate-2',
-    headline: 'fleetadlc-atlas-janedoe has a question',
+    headline: 'openadlc-atlas-janedoe has a question',
     subject: { repo: 'api', number: 3, title: 'Page the list of runs', ref: 'api#3', url: null },
   };
 
@@ -499,15 +499,15 @@ describe('every repository at once', () => {
     const shown = cards(render(ALL));
     expect(shown).toContain('amber api(amber) #3');
     expect(shown).toContain('pink website(pink) #8');
-    expect(shown).toContain('blue fleetadlc(blue) #16');
+    expect(shown).toContain('blue openadlc(blue) #16');
     // The badge says the repository, so the number no longer does.
-    expect(render(ALL)).not.toMatch(/>fleetadlc#16</);
+    expect(render(ALL)).not.toMatch(/>openadlc#16</);
   });
 
   it('leaves the badge its room, with the move list over the end of the row while it shows', () => {
     // A column is 12.5rem: a badge, the number, the move list and the cost do
     // not fit in one row of it, and the move list only shows on hover.
-    const moveList = (html: string) => /<label [^>]*class="([^"]*)"><span class="sr-only">Move fleetadlc#16 /.exec(html)?.[1] ?? '';
+    const moveList = (html: string) => /<label [^>]*class="([^"]*)"><span class="sr-only">Move openadlc#16 /.exec(html)?.[1] ?? '';
     expect(moveList(render(ALL))).toContain('reveal-over');
     expect(moveList(render(ALL))).not.toContain('ml-auto');
     expect(moveList(render())).toContain('ml-auto');
@@ -524,7 +524,7 @@ describe('every repository at once', () => {
       return `${name} ${color} ${href} (${title})`;
     });
     expect(entries).toEqual([
-      'fleetadlc blue /?board=1&repo=fleetadlc (janedoe/fleetadlc)',
+      'openadlc blue /?board=1&repo=openadlc (janedoe/openadlc)',
       'api amber /?board=1&repo=api (janedoe/api)',
       'website pink /?board=1&repo=website (janedoe/website)',
     ]);
@@ -534,14 +534,14 @@ describe('every repository at once', () => {
   it('marks what needs you with the repository it is in', () => {
     const html = render(ALL, [FROM_API]);
     const needs = html.slice(html.indexOf('id="needs"'), html.indexOf('aria-label="Board"'));
-    expect(needs).toMatch(/<h3[^>]*>fleetadlc-atlas-janedoe has a question<\/h3><span title="api"[^>]*><span aria-hidden="true" class="[^"]*bg-repo-amber/);
+    expect(needs).toMatch(/<h3[^>]*>openadlc-atlas-janedoe has a question<\/h3><span title="api"[^>]*><span aria-hidden="true" class="[^"]*bg-repo-amber/);
   });
 
   it('keeps the badge on a phone’s cards, where there is no room for the legend', () => {
     const html = render(ALL);
     const phone = html.slice(html.indexOf('aria-label="Stage"'));
-    // The phone opens on Intake, where fleetadlc#15 is.
-    expect(phone).toMatch(/<span title="fleetadlc"[^>]*><span aria-hidden="true" class="[^"]*bg-repo-blue[^"]*"><\/span><span class="truncate">fleetadlc<\/span>/);
+    // The phone opens on Intake, where openadlc#15 is.
+    expect(phone).toMatch(/<span title="openadlc"[^>]*><span aria-hidden="true" class="[^"]*bg-repo-blue[^"]*"><\/span><span class="truncate">openadlc<\/span>/);
     expect(html).toMatch(/<div class="hidden [^"]*md:flex"><span class="text-\[12px\] text-dim">Every repository:/);
   });
 
@@ -552,7 +552,7 @@ describe('every repository at once', () => {
     const needs = (html: string) => html.slice(html.indexOf('id="needs"'), html.indexOf('aria-label="Board"'));
     const html = render(one, [FROM_API, ATTENTION[0]!], null, 'api');
     const badges = [...needs(html).matchAll(/<\/h3><span title="([^"]+)"/g)].map((match) => match[1]);
-    expect(badges).toEqual(['fleetadlc']);
+    expect(badges).toEqual(['openadlc']);
   });
 
   it('says none of it when the board shows one repository, whatever else OpenADLC works in', () => {
@@ -588,7 +588,7 @@ describe('every repository at once', () => {
     const links = [
       ...html.matchAll(/href="https:\/\/github.com\/([^"]+)\/issues\/new"[^>]*><span aria-hidden="true" class="[^"]*bg-repo-([a-z]+)/g),
     ].map((match) => `${match[1]} ${match[2]}`);
-    expect(links).toEqual(['janedoe/fleetadlc blue', 'janedoe/api amber', 'janedoe/website pink']);
+    expect(links).toEqual(['janedoe/openadlc blue', 'janedoe/api amber', 'janedoe/website pink']);
   });
 });
 
@@ -654,12 +654,12 @@ describe('a board while some repositories are paused', () => {
   });
 
   it('marks each paused repository where the board names it', () => {
-    const two = { ...BOARD, repos: ['fleetadlc', 'web'], repositories: [{ name: 'fleetadlc', color: 'blue' }, { name: 'web', color: null }] } as Board;
+    const two = { ...BOARD, repos: ['openadlc', 'web'], repositories: [{ name: 'openadlc', color: 'blue' }, { name: 'web', color: null }] } as Board;
     const render = (pausedRepos: Record<string, typeof PAUSE>) =>
       renderToStaticMarkup(<BoardView board={two} crew={CREW} repo="all" header={header()} attention={[]} now={NOW} pausedRepos={pausedRepos} />);
     const legend = (markup: string) => markup.slice(markup.indexOf('aria-label="Repositories on the board"'));
     expect(legend(render({ web: PAUSE }))).toMatch(/web<span[^>]*>paused<\/span>/);
-    expect(legend(render({ web: PAUSE }))).not.toMatch(/fleetadlc<span[^>]*>paused<\/span>/);
+    expect(legend(render({ web: PAUSE }))).not.toMatch(/openadlc<span[^>]*>paused<\/span>/);
     expect(render({})).not.toMatch(/>paused<\/span>/);
   });
 });
@@ -669,7 +669,7 @@ describe('an issue’s own controls on its card', () => {
   const one = (cards: BoardCard[]) => ({ ...BOARD, columns: columns(cards) });
 
   it('offers an admin pause, play next and cancel on each issue, and nothing on a request', () => {
-    const html = render(one([card({ ref: 'fleetadlc#17', stage: 'build', title: 'Show each bot’s model on its card' }), REQUEST]));
+    const html = render(one([card({ ref: 'openadlc#17', stage: 'build', title: 'Show each bot’s model on its card' }), REQUEST]));
     expect(html).toContain('aria-label="Pause #17"');
     expect(html).toContain('aria-label="Do #17 next"');
     expect(html).toContain('aria-label="Cancel #17"');
@@ -679,7 +679,7 @@ describe('an issue’s own controls on its card', () => {
 
   it('shows its controls always, on their own row beside its status, as line icons rather than emoji', () => {
     // On hover in the top row they crowded the repository, number and cost.
-    const html = render(one([card({ ref: 'fleetadlc#17', stage: 'build', title: 'Show each bot’s model' })]));
+    const html = render(one([card({ ref: 'openadlc#17', stage: 'build', title: 'Show each bot’s model' })]));
     expect(html).not.toMatch(/⏯|⏭|✕/);
     expect(html).toMatch(/data-status[\s\S]*data-issue-controls/);
     expect(html).not.toMatch(/class="[^"]*reveal[^"]*"[^>]*>\s*<span data-issue-controls/);
@@ -687,17 +687,17 @@ describe('an issue’s own controls on its card', () => {
 
   it('offers nothing on finished work', () => {
     // On a Done card there is nothing left to pause, put next or cancel.
-    const html = render(one([card({ ref: 'fleetadlc#18', stage: 'done', title: 'Shipped' }), card({ ref: 'fleetadlc#19', stage: 'merged', title: 'Merged' })]));
+    const html = render(one([card({ ref: 'openadlc#18', stage: 'done', title: 'Shipped' }), card({ ref: 'openadlc#19', stage: 'merged', title: 'Merged' })]));
     expect(html).not.toContain('data-issue-controls');
   });
 
   it('offers nothing to someone who is not an admin', () => {
-    const html = render(one([card({ ref: 'fleetadlc#17', stage: 'build', title: 'Show each bot’s model on its card' })]), [], null, 'all', 'user');
+    const html = render(one([card({ ref: 'openadlc#17', stage: 'build', title: 'Show each bot’s model on its card' })]), [], null, 'all', 'user');
     expect(html).not.toContain('data-issue-controls');
   });
 
   it('says who paused a card, and why on hover, and offers to resume it', () => {
-    const held = card({ ref: 'fleetadlc#17', stage: 'build', title: 'Held', held: { by: 'janedoe', at: minutesAgo(3), why: 'waiting on the design' } });
+    const held = card({ ref: 'openadlc#17', stage: 'build', title: 'Held', held: { by: 'janedoe', at: minutesAgo(3), why: 'waiting on the design' } });
     const html = render(one([held]));
     expect(html).toContain('title="Paused by janedoe: waiting on the design"');
     expect(html).toContain('Paused · janedoe');
@@ -705,7 +705,7 @@ describe('an issue’s own controls on its card', () => {
   });
 
   it('says a card put first is next up', () => {
-    const html = render(one([card({ ref: 'fleetadlc#17', stage: 'build', title: 'First', next: true })]));
+    const html = render(one([card({ ref: 'openadlc#17', stage: 'build', title: 'First', next: true })]));
     expect(html).toMatch(/data-next[^>]*>.*Next up<\/span>/);
     expect(html).toMatch(/aria-label="Take #17 out of the front of the queue"[^>]*aria-pressed="true"/);
   });
@@ -731,7 +731,7 @@ describe('who is on a card', () => {
     const running = (bot: string) => ({ bot, kind: 'review', state: 'running', round: 1, startedAt: minutesAgo(3), endedAt: null, exitReason: null });
     const board: Board = {
       ...BOARD,
-      columns: columns([card({ ref: 'fleetadlc#40', stage: 'review', title: 'Two reviewers on one account', active: [running('lead-reviewer'), running('second-reviewer')] })]),
+      columns: columns([card({ ref: 'openadlc#40', stage: 'review', title: 'Two reviewers on one account', active: [running('lead-reviewer'), running('second-reviewer')] })]),
     };
     const header = headerData({ repos: board.repos, crew, budget: null, needsYou: 0 });
     const html = renderToStaticMarkup(
@@ -744,7 +744,7 @@ describe('who is on a card', () => {
   });
 
   it('keeps each handle where every seat has its own', () => {
-    const labels = ['fleetadlc-atlas-janedoe', 'irisexampleco'].map((name) => labelIn(CREW, name));
-    expect(peopleLine(labels)).toBe('fleetadlc-atlas-janedoe, irisexampleco');
+    const labels = ['openadlc-atlas-janedoe', 'irisexampleco'].map((name) => labelIn(CREW, name));
+    expect(peopleLine(labels)).toBe('openadlc-atlas-janedoe, irisexampleco');
   });
 });

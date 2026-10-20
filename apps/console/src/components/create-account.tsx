@@ -22,7 +22,7 @@ interface Suggestion {
  * From its seat — the role, and the bridge adds the owner's handle — never from
  * what the bot is called. A connected bot's name is its account's handle, so
  * there is nothing to suggest; and before bots were named by seat, a name was a
- * persona, which put `fleet-atlas` on GitHub (before FleetADLC was renamed): a
+ * persona, which put `fleet-atlas` on GitHub (before OpenADLC was renamed): a
  * name that told nobody there what the account was for.
  */
 export function suggestionPath(bot: BotFacts | string): string {
@@ -50,7 +50,7 @@ export interface SeatAccount {
   label: string;
   /** The bridge's suggestion before GitHub has been asked. */
   suggestedLogin: string;
-  /** `you+fleetadlc-<seat>@…`, or null until the person's own address is known. */
+  /** `you+openadlc-<seat>@…`, or null until the person's own address is known. */
   suggestedEmail: string | null;
   /** The login of the account connected for this seat, when there is one. */
   connectedLogin: string | null;
@@ -216,7 +216,7 @@ export function PrivateLink({ href, children }: { href: string; children: ReactN
 }
 
 function signupPasswordKey(seat: string): string {
-  return `fleetadlc.signup-password.${seat}`;
+  return `openadlc.signup-password.${seat}`;
 }
 
 /** Removes the password generated for a seat's sign-up, which belongs in a password manager, not in the browser. */

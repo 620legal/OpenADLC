@@ -310,7 +310,7 @@ describe('local mode believes the header only from the console and the CLI', () 
     for (const headers of callers) {
       const { status, message } = await refusal(local.resolve(request(headers)));
       expect(status).toBe(401);
-      expect(message).toContain('only to its console and the fleetadlc CLI');
+      expect(message).toContain('only to its console and the openadlc CLI');
       expect(message).not.toContain('b'.repeat(64));
     }
   });
@@ -334,7 +334,7 @@ describe('local mode believes the header only from the console and the CLI', () 
     expect(iapResolver().describe()).toContain(AUDIENCE);
   });
 
-  it('says it in the same words `fleetadlc status` is given', () => {
+  it('says it in the same words `openadlc status` is given', () => {
     // `/v1/status` built its own sentence, and told a local install that
     // anything reaching the bridge could name itself, long after the console
     // secret closed that.
@@ -347,11 +347,11 @@ describe('the install refuses to run a check that would pass everything', () => 
   it('will not start in iap mode without an audience', () => {
     // A signature check with no audience accepts any service's valid assertion,
     // which is worse than local mode because it looks like verification.
-    expect(() => identityFromConfig('iap', '')).toThrow(/FLEETADLC_IAP_AUDIENCE/);
+    expect(() => identityFromConfig('iap', '')).toThrow(/OPENADLC_IAP_AUDIENCE/);
   });
 
   it('will not start in local mode without the console secret', () => {
-    expect(() => identityFromConfig('local', '', '')).toThrow(/fleetadlc up/);
+    expect(() => identityFromConfig('local', '', '')).toThrow(/openadlc up/);
   });
 
   it('starts in local mode with one, and needs no audience', () => {

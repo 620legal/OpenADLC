@@ -1,6 +1,6 @@
-import { audit, bots, modelAccounts } from '@fleetadlc/db';
-import { checkModelAssignment, ModelAssignmentError } from '@fleetadlc/engines';
-import { resolveBotRef, type Bot, type BotRole } from '@fleetadlc/shared';
+import { audit, bots, modelAccounts } from '@openadlc/db';
+import { checkModelAssignment, ModelAssignmentError } from '@openadlc/engines';
+import { resolveBotRef, type Bot, type BotRole } from '@openadlc/shared';
 import { configuredFor } from './configured-crew.js';
 import { HttpFailure, type Router } from './router.js';
 

@@ -8,7 +8,7 @@ run-name: ${{ github.event.workflow_run && format('smoke-testing of {0}', github
 
 # Whether what was just deployed to testing works. It runs after each
 # deploy-testing that succeeded. Green, OpenADLC dispatches the promote, as
-# `.github/fleetadlc.yml` says; red, it reverts the change and sends it back to
+# `.github/openadlc.yml` says; red, it reverts the change and sends it back to
 # build. Keep the job's name the workflow's name, which is what OpenADLC
 # matches on.
 #
@@ -34,7 +34,7 @@ jobs:
   smoke-testing:
     name: smoke-testing
     # Skipped until the repository says its smoke is written, with the Actions
-    # variable FLEETADLC_SMOKE_TESTING set to `true`. A red smoke reverts the
+    # variable OPENADLC_SMOKE_TESTING set to `true`. A red smoke reverts the
     # change, so the Makefile's stub, which refuses, would revert every merge
     # once only the deploy was filled in. Its own variable, because the deploy
     # is often turned on first. Skipped neither promotes nor reverts.
@@ -51,7 +51,7 @@ jobs:
     # red nor green. Do not add secrets, `environment:` or `id-token: write`
     # to this job without this guard.
     if: >-
-      vars.FLEETADLC_SMOKE_TESTING == 'true' &&
+      vars.OPENADLC_SMOKE_TESTING == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.event == 'workflow_dispatch' &&

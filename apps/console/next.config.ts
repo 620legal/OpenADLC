@@ -1,10 +1,20 @@
 import type { NextConfig } from 'next';
 import { CONSOLE_HEADERS } from './src/lib/security-headers';
 
+// The console runs under Next, not a main.ts of its own, so the FLEETADLC_*
+// settings a unit or Cloud Run service still sets are adopted here, where the
+// server and the build both pass — inline, because this file runs before the
+// workspace packages are anywhere to import from.
+for (const name of Object.keys(process.env)) {
+  if (!/^(NEXT_PUBLIC_)?FLEETADLC_/.test(name)) continue;
+  const renamed = name.replace('FLEETADLC_', 'OPENADLC_');
+  if (process.env[renamed] === undefined) process.env[renamed] = process.env[name];
+}
+
 const config: NextConfig = {
   reactStrictMode: true,
   // The console holds no database of its own; every read goes to the bridge,
-  // at the address in `FLEETADLC_BRIDGE_URL` when the console starts. Only server
+  // at the address in `OPENADLC_BRIDGE_URL` when the console starts. Only server
   // code reads it, so it is not inlined here: listed under `env`, it was fixed
   // at build time, and a console built beside a live install talked to that
   // install's bridge whatever it was started with, and a cloud console to
@@ -13,7 +23,7 @@ const config: NextConfig = {
     // Take-over connects straight to the gateway, which is admitted to fewer
     // people than the console itself. Browser code reads this, so it is fixed
     // when the console is built.
-    NEXT_PUBLIC_FLEETADLC_TERMINAL_URL: process.env.NEXT_PUBLIC_FLEETADLC_TERMINAL_URL ?? '',
+    NEXT_PUBLIC_OPENADLC_TERMINAL_URL: process.env.NEXT_PUBLIC_OPENADLC_TERMINAL_URL ?? '',
   },
   // No site may frame the console, so a click on a page elsewhere cannot land
   // on one of its buttons (src/lib/security-headers.ts).

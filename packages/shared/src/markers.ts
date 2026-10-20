@@ -3,9 +3,9 @@
  * record, the event is derived from it. Every structured comment carries one
  * HTML-comment marker holding JSON.
  */
-export const MARKER_PREFIX = 'fleetadlc:';
+export const MARKER_PREFIX = 'openadlc:';
 
-export const FLEETADLC_EVENTS = [
+export const OPENADLC_EVENTS = [
   'plan_posted',
   'question',
   'plan_change',
@@ -19,7 +19,7 @@ export const FLEETADLC_EVENTS = [
   'design_memory',
   'send_back',
 ] as const;
-export type FleetEventType = (typeof FLEETADLC_EVENTS)[number];
+export type FleetEventType = (typeof OPENADLC_EVENTS)[number];
 
 export interface FleetMarker {
   event: FleetEventType;
@@ -49,13 +49,14 @@ export interface FleetMarker {
 }
 
 /**
- * `fleet:` is the prefix markers had before the rename. Comments already on
- * GitHub carry it, and the bridge reads its history from them, so both are read;
- * only the current one is written.
+ * `fleetadlc:` and `fleet:` are the prefixes markers had before the renames,
+ * newest first. Comments already on GitHub carry them, and the bridge reads
+ * its history from them, so every generation is read; only the current one is
+ * written.
  */
-export const LEGACY_MARKER_PREFIX = 'fleet:';
+export const LEGACY_MARKER_PREFIXES = ['fleetadlc:', 'fleet:'] as const;
 
-const MARKER_RE = /<!--\s*(?:fleetadlc|fleet):(\{[\s\S]*?\})\s*-->/;
+const MARKER_RE = /<!--\s*(?:openadlc|fleetadlc|fleet):(\{[\s\S]*?\})\s*-->/;
 
 export function renderMarker(marker: FleetMarker): string {
   return `<!-- ${MARKER_PREFIX}${JSON.stringify(marker)} -->`;
@@ -87,7 +88,7 @@ export function parseMarkers(body: string): FleetMarker[] {
  * `signBody` puts at the end, as `SEAT_TAG` in `stamp.ts` reads them; copied
  * here so this module, which every package reads, depends on nothing.
  */
-const AFTER_OWN_MARKER = /^\s*(?:<!-- fleet(?:adlc)?-seat:[a-z0-9][a-z0-9._-]* -->\s*)?(?:<!-- fleet(?:adlc)?-sig:[^>]*-->\s*)?$/i;
+const AFTER_OWN_MARKER = /^\s*(?:<!-- (?:openadlc|fleetadlc|fleet)-seat:[a-z0-9][a-z0-9._-]* -->\s*)?(?:<!-- (?:openadlc|fleetadlc|fleet)-sig:[^>]*-->\s*)?$/i;
 
 /**
  * The `review_posted` marker a review ends with, which is its verdict, or null
@@ -130,7 +131,7 @@ export interface SendBackRequest {
  * what the issue asks, an issue that cannot be built as filed, a deploy that
  * fails on the change itself — ends with
  *
- *     <!-- fleetadlc:{"event":"send_back","to":"spec","reason":"the design names no migration for the new column"} -->
+ *     <!-- openadlc:{"event":"send_back","to":"spec","reason":"the design names no migration for the new column"} -->
  *
  * Only the runner reads this, from its own session's output, and posts it to
  * the bridge with the task's token. A marker in a comment on GitHub is a
@@ -152,7 +153,7 @@ export function parseSendBack(body: string): SendBackRequest | null {
  *
  * What the console posts for a person goes out as the bot, with the bot's
  * seat tag and signature, and was posted as written: a hidden
- * `<!-- fleetadlc:{...} -->` in it reached the webhook as the bot's own
+ * `<!-- openadlc:{...} -->` in it reached the webhook as the bot's own
  * marker. A `design_memory` one rewrote the repository's accepted decisions,
  * which only an admin may edit, and a trailing seat tag replaced the real
  * one. Every `<!--` becomes `&lt;!--`, which GitHub shows as the characters
@@ -174,8 +175,8 @@ export function inertMarkup(text: string): string {
  */
 export function withoutMarker(body: string): string {
   return body
-    .replace(/^[ \t]*<!--\s*(?:fleetadlc|fleet):\{[\s\S]*?\}\s*-->[ \t]*(?:\r?\n|$)/gm, '')
-    .replace(/[ \t]*<!--\s*(?:fleetadlc|fleet):\{[\s\S]*?\}\s*-->/g, '')
+    .replace(/^[ \t]*<!--\s*(?:openadlc|fleetadlc|fleet):\{[\s\S]*?\}\s*-->[ \t]*(?:\r?\n|$)/gm, '')
+    .replace(/[ \t]*<!--\s*(?:openadlc|fleetadlc|fleet):\{[\s\S]*?\}\s*-->/g, '')
     .trim();
 }
 
@@ -310,7 +311,7 @@ export interface AskedQuestion {
  * its choices, and the text before it is the context:
  *
  *     The repository has no web root yet.
- *     <!-- fleetadlc:{"event":"question","question":"Where should the page go?","options":["index.html at the root","A different path"]} -->
+ *     <!-- openadlc:{"event":"question","question":"Where should the page go?","options":["index.html at the root","A different path"]} -->
  *
  * A marker with no choices asks in the person's own words, which is what
  * `"open": true` says it means to. A marker with no `question` is the older
@@ -321,7 +322,7 @@ export interface AskedQuestion {
  * a task that needs to write outside its lease's paths names the paths and why,
  * and pauses until a person approves or refuses.
  *
- *     <!-- fleetadlc:{"event":"plan_change","paths":["apps/hostd/src/skill-runner.ts"],"reason":"the runner drops the field"} -->
+ *     <!-- openadlc:{"event":"plan_change","paths":["apps/hostd/src/skill-runner.ts"],"reason":"the runner drops the field"} -->
  */
 export function parseQuestion(body: string): AskedQuestion | null {
   const questions = parseMarkers(body).filter((marker) => marker.event === 'question' || marker.event === 'plan_change');
@@ -491,10 +492,11 @@ export function dedupeMarker(kind: string, key: string): string {
   return `<!-- ${MARKER_PREFIX}${kind}:${key} -->`;
 }
 
-/** Whether a body carries that marker, under the current prefix or the one issues were filed with before the rename. */
+/** Whether a body carries that marker, under the current prefix or one issues were filed with before the renames. */
 export function carriesDedupeMarker(body: string | null | undefined, kind: string, key: string): boolean {
   const text = body ?? '';
-  return text.includes(dedupeMarker(kind, key)) || text.includes(`<!-- ${LEGACY_MARKER_PREFIX}${kind}:${key} -->`);
+  if (text.includes(dedupeMarker(kind, key))) return true;
+  return LEGACY_MARKER_PREFIXES.some((prefix) => text.includes(`<!-- ${prefix}${kind}:${key} -->`));
 }
 
 /** What a design asks a repository to remember, as one entry of a `design_memory` marker. */
@@ -515,7 +517,7 @@ export const DESIGN_MEMORY_PER_COMMENT = 12;
  * The entries a design comment proposes, from its `design_memory` marker.
  *
  * The design stage's comment ends with it:
- * `<!-- fleetadlc:{"event":"design_memory","entries":[{"kind":"decision","title":"…","body":"…"}]} -->`.
+ * `<!-- openadlc:{"event":"design_memory","entries":[{"kind":"decision","title":"…","body":"…"}]} -->`.
  * Only the comment's last marker is read. An entry the bridge cannot use — no kind it knows, no title, no body — is
  * dropped rather than stored half-read, and a title or a body is cut to a
  * length a summary has, because every one is given to every design task.

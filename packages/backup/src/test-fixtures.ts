@@ -1,5 +1,5 @@
-import { ProviderKeyRejected } from '@fleetadlc/engines';
-import { DeviceAuthError, GitHubApiError, type UserToken } from '@fleetadlc/github';
+import { ProviderKeyRejected } from '@openadlc/engines';
+import { DeviceAuthError, GitHubApiError, type UserToken } from '@openadlc/github';
 import { BackupError, type ArchivedHistory, type ArchivedSpendingLimit, type LoginFiles } from './archive.js';
 import type { RestoreDb, RestoreTarget } from './apply.js';
 import { capAboveGlobal, RESTORED_REQUEST_STATES, repositoryNameTaken, spendingCapKey, type InstallSnapshot } from './contents.js';
@@ -42,8 +42,8 @@ export const HISTORY: ArchivedHistory = {
     {
       id: 'aaaaaaaa-0000-4000-8000-000000000001',
       seat: 'builder',
-      repo: 'fleetadlc-testbed',
-      subjectRef: 'fleetadlc-testbed#12',
+      repo: 'openadlc-testbed',
+      subjectRef: 'openadlc-testbed#12',
       createdAt: '2026-09-01T10:00:00.000Z',
       updatedAt: '2026-09-02T10:00:00.000Z',
     },
@@ -61,7 +61,7 @@ export const HISTORY: ArchivedHistory = {
       id: 'bbbbbbbb-0000-4000-8000-000000000001',
       threadId: 'aaaaaaaa-0000-4000-8000-000000000001',
       kind: 'bot',
-      author: 'fleetadlc-atlas-janedoe',
+      author: 'openadlc-atlas-janedoe',
       text: 'Opened the pull request.',
       note: null,
       payload: null,
@@ -72,7 +72,7 @@ export const HISTORY: ArchivedHistory = {
       id: 'bbbbbbbb-0000-4000-8000-000000000002',
       threadId: 'aaaaaaaa-0000-4000-8000-000000000002',
       kind: 'sys',
-      author: 'fleetadlc',
+      author: 'openadlc',
       text: 'An old seat.',
       note: null,
       payload: null,
@@ -99,7 +99,7 @@ export const HISTORY: ArchivedHistory = {
       id: 'cccccccc-0000-4000-8000-000000000001',
       text: 'Add a health check',
       context: null,
-      repo: 'fleetadlc-testbed',
+      repo: 'openadlc-testbed',
       kind: 'feature',
       requestedBy: 'alex@example.test',
       issueNumber: 12,
@@ -117,10 +117,10 @@ export function sourceInstall(): InstallSnapshot {
       'github-app-private-key': VALUES.appKey,
       'internal-api-secret': VALUES.internal,
       'registry-token': VALUES.registry,
-      'ssh-signing-fleetadlc-atlas-janedoe': VALUES.builderSigning,
-      'github-refresh-fleetadlc-atlas-janedoe': VALUES.builderRefresh,
-      'ssh-signing-fleetadlc-sydney-janedoe': VALUES.reviewerSigning,
-      'github-refresh-fleetadlc-sydney-janedoe': VALUES.reviewerRefresh,
+      'ssh-signing-openadlc-atlas-janedoe': VALUES.builderSigning,
+      'github-refresh-openadlc-atlas-janedoe': VALUES.builderRefresh,
+      'ssh-signing-openadlc-sydney-janedoe': VALUES.reviewerSigning,
+      'github-refresh-openadlc-sydney-janedoe': VALUES.reviewerRefresh,
       [`model-account-${KEY_ACCOUNT}`]: VALUES.apiKey,
       [`model-account-${CLAUDE_SEAT}`]: VALUES.seatToken,
       'something-newer': 'zzz-unknown-zzz',
@@ -135,18 +135,18 @@ export function sourceInstall(): InstallSnapshot {
     },
     bots: [
       {
-        name: 'fleetadlc-atlas-janedoe',
+        name: 'openadlc-atlas-janedoe',
         slot: 'builder',
-        githubLogin: 'fleetadlc-atlas-janedoe',
+        githubLogin: 'openadlc-atlas-janedoe',
         engine: 'claude',
         model: 'newest:opus',
         modelAccountId: CLAUDE_SEAT,
         modelSetAt: '2026-09-01T12:00:00.000Z',
       },
       {
-        name: 'fleetadlc-sydney-janedoe',
+        name: 'openadlc-sydney-janedoe',
         slot: 'lead-reviewer',
-        githubLogin: 'fleetadlc-sydney-janedoe',
+        githubLogin: 'openadlc-sydney-janedoe',
         engine: 'codex',
         model: 'gpt-5-codex',
         modelAccountId: CODEX_SEAT,
@@ -163,8 +163,8 @@ export function sourceInstall(): InstallSnapshot {
       },
     ],
     credentials: {
-      'fleetadlc-atlas-janedoe': {
-        githubLogin: 'fleetadlc-atlas-janedoe',
+      'openadlc-atlas-janedoe': {
+        githubLogin: 'openadlc-atlas-janedoe',
         githubUserId: 101,
         scopes: [],
         tokenExpiresAt: '2026-09-24T18:00:00.000Z',
@@ -173,8 +173,8 @@ export function sourceInstall(): InstallSnapshot {
         authorizedAt: '2026-09-01T11:00:00.000Z',
         status: 'active',
       },
-      'fleetadlc-sydney-janedoe': {
-        githubLogin: 'fleetadlc-sydney-janedoe',
+      'openadlc-sydney-janedoe': {
+        githubLogin: 'openadlc-sydney-janedoe',
         githubUserId: 102,
         scopes: [],
         tokenExpiresAt: null,
@@ -186,8 +186,8 @@ export function sourceInstall(): InstallSnapshot {
     },
     repositories: [
       {
-        name: 'fleetadlc-testbed',
-        fullName: 'janedoe/fleetadlc-testbed',
+        name: 'openadlc-testbed',
+        fullName: 'janedoe/openadlc-testbed',
         ownerSeat: 'builder',
         concurrency: 2,
         stageModes: { merged: 'autonomous' },
@@ -206,7 +206,7 @@ export function sourceInstall(): InstallSnapshot {
   };
 }
 
-/** A clean install, as `fleetadlc up` leaves one: every seat seeded under its own name, nothing else. */
+/** A clean install, as `openadlc up` leaves one: every seat seeded under its own name, nothing else. */
 export function cleanShape(): InstallShape {
   return {
     secretRefs: ['internal-api-secret'],
@@ -459,8 +459,8 @@ export function fakeTakeOver(
 
 /** Which account each of the source install's refresh tokens signs in as. */
 export const REFRESH_LOGINS: Record<string, string> = {
-  [VALUES.builderRefresh]: 'fleetadlc-atlas-janedoe',
-  [VALUES.reviewerRefresh]: 'fleetadlc-sydney-janedoe',
+  [VALUES.builderRefresh]: 'openadlc-atlas-janedoe',
+  [VALUES.reviewerRefresh]: 'openadlc-sydney-janedoe',
 };
 
 // ------------------------------------------------------------------ an install in memory

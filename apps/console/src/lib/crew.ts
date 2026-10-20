@@ -95,7 +95,7 @@ export function taskItem(task: Pick<TaskSummary, 'subjectRef' | 'issue'> | null 
 
 /**
  * The two accounts a crew needs at the least, as the bridge has them
- * (`ACCOUNT_GROUPS` in @fleetadlc/shared): the reviewers approve what the crew
+ * (`ACCOUNT_GROUPS` in @openadlc/shared): the reviewers approve what the crew
  * account opens, and GitHub won't let an account approve its own pull request.
  */
 export type AccountGroup = 'crew' | 'reviewers';
@@ -214,8 +214,8 @@ export function countWords(count: number, noun: string): string {
 
 /**
  * Two letters for a bot's avatar, from its handle: `ottoexampleco` is AB,
- * `fleetadlc-atlas` is FA, and a handle of three parts or more takes its last two,
- * so `fleetadlc-atlas-janedoe` is AJ rather than the FA it would share. A bot with
+ * `openadlc-atlas` is FA, and a handle of three parts or more takes its last two,
+ * so `openadlc-atlas-janedoe` is AJ rather than the FA it would share. A bot with
  * no account yet takes its role's: the lead reviewer is LR.
  */
 export function initials(bot: BotFacts): string {
@@ -342,7 +342,7 @@ export function monthLine(bot: CrewMember, byBot: readonly { bot: string; costUs
 export type CrewLayout = 'cards' | 'table';
 
 /** Where each person's choice of layout is kept, in their own browser. */
-export const CREW_LAYOUT_KEY = 'fleetadlc.crew.layout';
+export const CREW_LAYOUT_KEY = 'openadlc.crew.layout';
 
 /** The layout this browser last chose, or cards. Storage can throw in a private window; then it is cards. */
 export function storedCrewLayout(): CrewLayout {

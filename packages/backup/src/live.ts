@@ -1,6 +1,6 @@
-import { bots, credentials, identities, modelAccounts, query, repos, settings, spendingLimits, withTransaction } from '@fleetadlc/db';
-import { appPrivateKeyRef, credentialKind, getSecretStore, modelAccountRef, signingKeyRef, webhookSecretRef, type SecretStore } from '@fleetadlc/github';
-import { MESSAGE_KINDS, holdsCredential, isRepoColor, nextRepoColor } from '@fleetadlc/shared';
+import { bots, credentials, identities, modelAccounts, query, repos, settings, spendingLimits, withTransaction } from '@openadlc/db';
+import { appPrivateKeyRef, credentialKind, getSecretStore, modelAccountRef, signingKeyRef, webhookSecretRef, type SecretStore } from '@openadlc/github';
+import { MESSAGE_KINDS, holdsCredential, isRepoColor, nextRepoColor } from '@openadlc/shared';
 import { archiveSpendingLimit, BackupError, resolveSpendingLimits, type ArchivedAccount, type ArchivedCredential, type ArchivedHistory, type ArchivedRepository, type ArchivedSpendingLimit, type LoginFiles } from './archive.js';
 import type { HistoryIds, RestoreDb, RestoreTarget } from './apply.js';
 import type { InstallFacts } from './clean.js';
@@ -40,22 +40,22 @@ interface Sql {
 }
 
 /** Who a restored setting is attributed to in the settings table. */
-const RESTORED_BY = 'fleetadlc restore';
+const RESTORED_BY = 'openadlc restore';
 
 /**
  * The environment variable each setting falls back to, as the bridge reads
  * them: a setting stored in the table wins, and absent, the environment
- * `fleetadlc up` assembled from `install.json` still answers. A backup takes the
+ * `openadlc up` assembled from `install.json` still answers. A backup takes the
  * answer, wherever it came from, so a restored install does not depend on the
  * old one's `install.json`.
  */
 const SETTING_ENV: Record<string, string> = {
-  organization: 'FLEETADLC_GITHUB_ORG',
-  githubClientId: 'FLEETADLC_GITHUB_CLIENT_ID',
-  webhookSecret: 'FLEETADLC_WEBHOOK_SECRET',
-  publicUrl: 'FLEETADLC_PUBLIC_URL',
-  humans: 'FLEETADLC_HUMANS',
-  automationBot: 'FLEETADLC_AUTOMATION_BOT',
+  organization: 'OPENADLC_GITHUB_ORG',
+  githubClientId: 'OPENADLC_GITHUB_CLIENT_ID',
+  webhookSecret: 'OPENADLC_WEBHOOK_SECRET',
+  publicUrl: 'OPENADLC_PUBLIC_URL',
+  humans: 'OPENADLC_HUMANS',
+  automationBot: 'OPENADLC_AUTOMATION_BOT',
 };
 
 export function effectiveSettings(
@@ -1024,7 +1024,7 @@ export async function installClientId(env: NodeJS.ProcessEnv = process.env): Pro
 /**
  * The four facts that say whether this install is set up — an app, a
  * repository, a connected bot, a model account — read the way the walkthrough
- * reads them, for a caller with no bridge to ask: `fleetadlc restore`.
+ * reads them, for a caller with no bridge to ask: `openadlc restore`.
  */
 export async function readInstallFacts(options: { store?: SecretStore; env?: NodeJS.ProcessEnv } = {}): Promise<InstallFacts> {
   const store = options.store ?? getSecretStore();

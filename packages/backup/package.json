@@ -1,5 +1,5 @@
 {
-  "name": "@fleetadlc/backup",
+  "name": "@openadlc/backup",
   "version": "0.1.0",
   "description": "Encrypted backup and restore of an OpenADLC install.",
   "private": true,
@@ -16,10 +16,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@fleetadlc/db": "workspace:*",
-    "@fleetadlc/engines": "workspace:*",
-    "@fleetadlc/github": "workspace:*",
-    "@fleetadlc/shared": "workspace:*"
+    "@openadlc/db": "workspace:*",
+    "@openadlc/engines": "workspace:*",
+    "@openadlc/github": "workspace:*",
+    "@openadlc/shared": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

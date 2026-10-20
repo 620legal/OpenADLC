@@ -4,7 +4,7 @@ given:
   declaredPaths: ["Makefile"]
 script:
   say:
-    - "The Makefile resolves cleanly, but fleetadlc-ci fails in src/clock.test.js, a file neither side changed."
+    - "The Makefile resolves cleanly, but openadlc-ci fails in src/clock.test.js, a file neither side changed."
   touch:
     - "Makefile"
   ask:

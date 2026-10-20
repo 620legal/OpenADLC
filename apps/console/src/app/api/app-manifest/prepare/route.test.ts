@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/api', () => ({ BRIDGE_URL: 'http://bridge.test' }));
-vi.mock('@/lib/identity', () => ({ identityHeadersFrom: () => ({ 'x-fleetadlc-user': 'alexsmith' }) }));
+vi.mock('@/lib/identity', () => ({ identityHeadersFrom: () => ({ 'x-openadlc-user': 'alexsmith' }) }));
 
 import { POST } from './route';
 

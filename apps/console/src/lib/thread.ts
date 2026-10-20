@@ -75,7 +75,7 @@ export function topicFor(
   return topics.find((topic) => topic.ref === ref) ?? guessed(ref, task);
 }
 
-/** A commit a deploy is about: `fleetadlc-testbed@3f2a1b0c` is commit 3f2a1b0. */
+/** A commit a deploy is about: `openadlc-testbed@3f2a1b0c` is commit 3f2a1b0. */
 function commitOf(ref: string): string | null {
   const match = /@([0-9a-f]{7,})$/i.exec(ref);
   return match ? match[1]!.slice(0, 7) : null;
@@ -519,7 +519,7 @@ function startNote(note: string | null): string | null {
 
 /**
  * A line the bridge wrote, as a sentence. The bridge writes them for its own
- * log — "irisexampleco started pr-review on fleetadlc-testbed#31", "ottoexampleco
+ * log — "irisexampleco started pr-review on openadlc-testbed#31", "ottoexampleco
  * could not finish request:a4b02784" — and the thread is the bot's own, so the
  * bot's name goes and the subject is said the way a person says it. A line
  * that says a task failed reads as a failure, with its reason under it.

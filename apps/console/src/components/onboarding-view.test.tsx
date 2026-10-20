@@ -40,9 +40,9 @@ const DATA: OnboardingData = {
       displayName: 'Grok (second reviewer)',
       role: 'review_second',
       roleLabel: 'second reviewer',
-      login: 'fleetadlc-second-reviewer-acme',
-      suggestedLogin: 'fleetadlc-second-reviewer-acme',
-      suggestedEmail: 'op+fleetadlc-second-reviewer@example.com',
+      login: 'openadlc-second-reviewer-acme',
+      suggestedLogin: 'openadlc-second-reviewer-acme',
+      suggestedEmail: 'op+openadlc-second-reviewer@example.com',
       emailNote: 'plus-addressed to your inbox',
       repositoryRole: 'write',
       accessReason: 'pushes branches',
@@ -323,7 +323,7 @@ describe('the GitHub accounts step', () => {
     expect(html).toMatch(/aria-pressed="false"[^>]*>.*Create a new account/);
     expect(html).toMatch(/aria-pressed="false"[^>]*>.*Use an account I have/);
     // Nothing of either answer until one is given, and no way on before two.
-    expect(html).not.toContain('fleetadlc-second-reviewer-acme');
+    expect(html).not.toContain('openadlc-second-reviewer-acme');
     expect(html).not.toContain('Continue to the next step');
     expect(html).toContain('None yet. Each one you add is listed here.');
     // Going on is one of this step's answers, so the footer offers none.
@@ -336,8 +336,8 @@ describe('the GitHub accounts step', () => {
     const html = page('github-accounts', {
       ...DATA,
       githubAccounts: [
-        { login: 'fleetadlc-crew', signIn: 'signed-in', group: null, seats: [] },
-        { login: 'fleetadlc-review', signIn: 'signed-in', group: null, seats: [] },
+        { login: 'openadlc-crew', signIn: 'signed-in', group: null, seats: [] },
+        { login: 'openadlc-review', signIn: 'signed-in', group: null, seats: [] },
       ],
     });
     expect(html).toContain('Add another account, or go on');
@@ -348,7 +348,7 @@ describe('the GitHub accounts step', () => {
     expect(html).toContain('Create a new account');
     expect(html).toContain('Use an account I have');
     expect(html).toContain('Accounts · 2 of 9');
-    expect(html).toContain('fleetadlc-review');
+    expect(html).toContain('openadlc-review');
   });
 
   it('does not open on a failure before anything has been asked for', () => {
@@ -371,8 +371,8 @@ describe('the GitHub accounts step', () => {
     const html = page('protect', {
       ...DATA,
       githubAccounts: [
-        { login: 'fleetadlc-crew', signIn: 'signed-in', group: null },
-        { login: 'fleetadlc-review', signIn: 'signed-in', group: null },
+        { login: 'openadlc-crew', signIn: 'signed-in', group: null },
+        { login: 'openadlc-review', signIn: 'signed-in', group: null },
       ],
     });
     expect(alreadyDone(html).map(([href]) => href)).toContain('?step=github-accounts');
@@ -382,8 +382,8 @@ describe('the GitHub accounts step', () => {
     const two = page('protect', {
       ...DATA,
       githubAccounts: [
-        { login: 'fleetadlc-crew', signIn: 'signed-in', group: null },
-        { login: 'fleetadlc-review', signIn: 'signed-in', group: null },
+        { login: 'openadlc-crew', signIn: 'signed-in', group: null },
+        { login: 'openadlc-review', signIn: 'signed-in', group: null },
       ],
       checks: { 'github-accounts': { done: false, failing: [] } },
     });
@@ -391,7 +391,7 @@ describe('the GitHub accounts step', () => {
 
     const one = page(null, {
       ...DATA,
-      githubAccounts: [{ login: 'fleetadlc-crew', signIn: 'signed-in', group: null }],
+      githubAccounts: [{ login: 'openadlc-crew', signIn: 'signed-in', group: null }],
       checks: { 'github-accounts': { done: true, failing: [] } },
     });
     expect(alreadyDone(one).map(([href]) => href)).not.toContain('?step=github-accounts');
@@ -426,15 +426,15 @@ describe('the steps, from the health checks', () => {
           title: 'The OpenADLC app does not have “SSH signing keys”',
           detail: 'Add “SSH signing keys” on the app’s permissions page, under Account permissions, as **Read and write**.',
           severity: 'blocking',
-          action: { label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/fleetadlc-acme/permissions' },
+          action: { label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/openadlc-acme/permissions' },
           waiting: false,
         },
         {
           id: 'signing-key:bot-builder',
-          title: 'fleetadlc-atlas-acme’s signing key is not on its GitHub account',
+          title: 'openadlc-atlas-acme’s signing key is not on its GitHub account',
           detail: 'Reconnect it.',
           severity: 'blocking',
-          action: { label: 'Reconnect fleetadlc-atlas-acme', href: '/settings#github-accounts' },
+          action: { label: 'Reconnect openadlc-atlas-acme', href: '/settings#github-accounts' },
           waiting: true,
         },
       ],
@@ -454,7 +454,7 @@ describe('the steps, from the health checks', () => {
 
     expect(html).toContain('The OpenADLC app does not have “SSH signing keys”');
     expect(html).toContain('under Account permissions, as <strong class="font-semibold">Read and write</strong>.');
-    expect(html).toMatch(/<a href="https:\/\/github.com\/settings\/apps\/fleetadlc-acme\/permissions" target="_blank"[^>]*>Open the app’s permissions/);
+    expect(html).toMatch(/<a href="https:\/\/github.com\/settings\/apps\/openadlc-acme\/permissions" target="_blank"[^>]*>Open the app’s permissions/);
     expect(html).not.toContain('signing key is not on its GitHub account');
   });
 
@@ -528,7 +528,7 @@ describe('what the checks say is wrong on a step', () => {
             {
               id: 'app-permissions:checks',
               title: 'Optional: give the OpenADLC app “Checks”',
-              detail: '1. Open [Permissions & events](https://github.com/settings/apps/fleetadlc/permissions), choose **Read and write**.\n2. Accept it.',
+              detail: '1. Open [Permissions & events](https://github.com/settings/apps/openadlc/permissions), choose **Read and write**.\n2. Accept it.',
               severity: 'warning',
               action: null,
               waiting: false,
@@ -540,7 +540,7 @@ describe('what the checks say is wrong on a step', () => {
     expect(html).toContain('border-attention/35');
     expect(html).not.toContain('border-alarm');
     expect(html).toContain('<ol');
-    expect(html).toContain('href="https://github.com/settings/apps/fleetadlc/permissions"');
+    expect(html).toContain('href="https://github.com/settings/apps/openadlc/permissions"');
     expect(html).not.toContain('**');
   });
 });
@@ -642,8 +642,8 @@ describe('the Ready step', () => {
   it('counts the GitHub accounts signed in, not the seats on one, which Crew decides', () => {
     // Two accounts connected and Crew still open said "GitHub accounts ✓ — 0 of 9 connected".
     const accounts = [
-      { login: 'fleetadlc-crew-acme', signIn: 'signed-in' as const, group: null },
-      { login: 'fleetadlc-review-acme', signIn: 'signed-in' as const, group: null },
+      { login: 'openadlc-crew-acme', signIn: 'signed-in' as const, group: null },
+      { login: 'openadlc-review-acme', signIn: 'signed-in' as const, group: null },
     ];
     const lines = readySummary({ ...DATA, githubAccounts: accounts }, [
       { key: 'github-accounts', title: 'GitHub accounts', done: true },

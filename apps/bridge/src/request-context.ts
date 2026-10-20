@@ -1,5 +1,5 @@
-import { attachments, issues, repos, requests, threads } from '@fleetadlc/db';
-import { pathMatches } from '@fleetadlc/dispatcher';
+import { attachments, issues, repos, requests, threads } from '@openadlc/db';
+import { pathMatches } from '@openadlc/dispatcher';
 import {
   DEFAULT_PATH_POLICY,
   declaredPathsFrom,
@@ -11,7 +11,7 @@ import {
   type PathPolicy,
   type StageKey,
   type StageMode,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 import { readUnowned, settingsStore, type UnownedIssue, type UnownedStore } from './unowned-issues.js';
 
 /**

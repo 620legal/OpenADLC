@@ -154,7 +154,7 @@ describe('Settings → Users', () => {
 });
 
 describe('what a user is shown', () => {
-  const data = headerData({ repos: ['fleetadlc-testbed'], crew: [], budget: null, needsYou: 0 });
+  const data = headerData({ repos: ['openadlc-testbed'], crew: [], budget: null, needsYou: 0 });
   const shell = (role: Role) =>
     renderToStaticMarkup(
       <RoleProvider role={role}>
@@ -191,7 +191,7 @@ describe('a cloud install that named no admin', () => {
     const html = renderToStaticMarkup(<NoAdmin email="jane@example.com" />).replace(/<!-- -->/g, '');
     expect(html).toContain('No admin is configured');
     expect(html).toContain('admin_emails');
-    expect(html).toContain('FLEETADLC_ADMIN_EMAILS');
+    expect(html).toContain('OPENADLC_ADMIN_EMAILS');
   });
 });
 
@@ -211,7 +211,7 @@ describe('what a user is not offered on a card', () => {
     const html = renderToStaticMarkup(<AdminsOnly email="bob@example.com" what="Setting up needs" doing="sets the install up" />).replace(/<!-- -->/g, '');
     expect(html).toContain('Setting up needs an admin');
     expect(html).toContain('href="/?board=1"');
-    expect(html).not.toContain('FLEETADLC_IDENTITY');
+    expect(html).not.toContain('OPENADLC_IDENTITY');
   });
 
   it('tells a local install whose console identity is a user how to get Settings back', () => {
@@ -220,8 +220,8 @@ describe('what a user is not offered on a card', () => {
     ).replace(/<!-- -->/g, '');
     expect(html).toContain('Settings need an admin');
     expect(html).toContain('This console signs in as <span class="font-mono text-soft">console</span>');
-    expect(html).toContain('To get Settings back, set <span class="font-mono text-soft">FLEETADLC_IDENTITY</span> to an admin’s address');
-    expect(html).toContain('run <span class="font-mono text-soft">fleetadlc up</span> again');
+    expect(html).toContain('To get Settings back, set <span class="font-mono text-soft">OPENADLC_IDENTITY</span> to an admin’s address');
+    expect(html).toContain('run <span class="font-mono text-soft">openadlc up</span> again');
     expect(html).toContain('href="/?board=1"');
   });
 });

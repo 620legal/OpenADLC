@@ -19,7 +19,7 @@ describe('what the configuration gives each bot', () => {
   });
 
   it('is empty, not an error, when the file is missing or malformed', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-configured-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-configured-'));
     try {
       expect(configuredSeats(undefined)).toEqual([]);
       expect(configuredSeats(dir)).toEqual([]);
@@ -44,7 +44,7 @@ describe('what a seat the file does not name falls back to', () => {
   });
 
   it('is nothing for a role the file gives no seat', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-configured-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-configured-'));
     try {
       writeFileSync(join(dir, 'bots.yaml'), 'bots:\n  - { slot: qa, displayName: QA, role: qa, engine: claude, model: m }\n');
       expect(configuredFor(dir, { slot: 'builder-2', role: 'implement' })).toBeNull();

@@ -1,5 +1,5 @@
 {
-  "name": "@fleetadlc/tests",
+  "name": "@openadlc/tests",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -19,10 +19,10 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@fleetadlc/db": "workspace:*",
-    "@fleetadlc/engines": "workspace:*",
-    "@fleetadlc/github": "workspace:*",
-    "@fleetadlc/shared": "workspace:*",
+    "@openadlc/db": "workspace:*",
+    "@openadlc/engines": "workspace:*",
+    "@openadlc/github": "workspace:*",
+    "@openadlc/shared": "workspace:*",
     "ws": "^8.18.0"
   },
   "devDependencies": {

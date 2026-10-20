@@ -16,13 +16,13 @@ import {
   type RestoreDb,
   type RestoreTarget,
   type SignInLine,
-} from '@fleetadlc/backup';
-import { DeviceAuthError, setSecretStore, type SecretStore } from '@fleetadlc/github';
+} from '@openadlc/backup';
+import { DeviceAuthError, setSecretStore, type SecretStore } from '@openadlc/github';
 import { Router } from './router.js';
 
 const CREW = [
   { id: 'b1', name: 'builder', slot: 'builder', role: 'implement', githubLogin: null as string | null },
-  { id: 'b2', name: 'fleetadlc-flow-janedoe', slot: 'automation', role: 'automation', githubLogin: 'fleetadlc-flow-janedoe' },
+  { id: 'b2', name: 'openadlc-flow-janedoe', slot: 'automation', role: 'automation', githubLogin: 'openadlc-flow-janedoe' },
 ];
 const CREDENTIALS: Record<string, { status: string } | null> = {};
 /** The settings a restore wrote, as the bridge reads them back after it. */
@@ -30,8 +30,8 @@ const STORED = new Map<string, string>();
 
 // The database, for the few reads the bridge makes itself. Everything else
 // here goes through fakes; the settings' closed list of keys is the real one.
-vi.mock('@fleetadlc/db', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@fleetadlc/db')>();
+vi.mock('@openadlc/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@openadlc/db')>();
   return {
     ...actual,
     audit: vi.fn(async () => undefined),
@@ -47,19 +47,19 @@ vi.mock('@fleetadlc/db', async (importOriginal) => {
 });
 
 // The install's own read, so a test can see what was asked of it.
-vi.mock('@fleetadlc/backup', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@fleetadlc/backup')>();
+vi.mock('@openadlc/backup', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@openadlc/backup')>();
   return { ...actual, readInstall: vi.fn(actual.readInstall) };
 });
 
 const { backupFilename, defaultBackupDeps, defaultRestoreIntoDeps, installFacts, registerBackupRoutes } = await import('./backup.js');
-const { readInstall } = await import('@fleetadlc/backup');
+const { readInstall } = await import('@openadlc/backup');
 type BackupRouteDeps = Parameters<typeof registerBackupRoutes>[1];
 
 /**
  * Backing up from the console and restoring a clean install from the
  * walkthrough, over the wire. What goes in an archive and how it comes back is
- * `@fleetadlc/backup`'s and tested there; this is the bridge's part — the
+ * `@openadlc/backup`'s and tested there; this is the bridge's part — the
  * download, the audit line, and the refusal of anything but a clean install.
  */
 
@@ -75,16 +75,16 @@ function snapshot(): InstallSnapshot {
     secrets: {
       'github-app-private-key': APP_KEY,
       'internal-api-secret': 'zzz-internal-zzz',
-      'ssh-signing-fleetadlc-atlas-janedoe': 'zzz-signing-zzz',
-      'github-refresh-fleetadlc-atlas-janedoe': REFRESH,
+      'ssh-signing-openadlc-atlas-janedoe': 'zzz-signing-zzz',
+      'github-refresh-openadlc-atlas-janedoe': REFRESH,
       [`model-account-${KEY_ACCOUNT}`]: KEY,
     },
     settings: { organization: 'janedoe', githubClientId: 'Iv1.zzz-client-zzz' },
     bots: [
       {
-        name: 'fleetadlc-atlas-janedoe',
+        name: 'openadlc-atlas-janedoe',
         slot: 'builder',
-        githubLogin: 'fleetadlc-atlas-janedoe',
+        githubLogin: 'openadlc-atlas-janedoe',
         engine: 'claude',
         model: 'newest:opus',
         modelAccountId: null,
@@ -174,7 +174,7 @@ function providers(spent: string[] = []) {
       if (secret === KEY) throw new Error('invalid x-api-key');
       return [{ id: 'claude-opus-5' }];
     },
-    gitHubUser: async () => ({ login: 'fleetadlc-atlas-janedoe', id: 101 }),
+    gitHubUser: async () => ({ login: 'openadlc-atlas-janedoe', id: 101 }),
   };
   const takeOver = () => ({
     refreshGitHub: async (token: string) => {
@@ -189,7 +189,7 @@ function providers(spent: string[] = []) {
         tokenType: 'bearer',
       };
     },
-    gitHubUser: async () => ({ login: 'fleetadlc-atlas-janedoe', id: 101 }),
+    gitHubUser: async () => ({ login: 'openadlc-atlas-janedoe', id: 101 }),
     adoptLogin: async () => ({ ok: true, message: 'answered: OK' }),
   });
   return { checks, takeOver, refreshed };
@@ -238,7 +238,7 @@ describe('downloading a backup', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/octet-stream');
-    expect(response.headers.get('content-disposition')).toBe('attachment; filename="fleetadlc-backup-2026-09-24.fleetbak"');
+    expect(response.headers.get('content-disposition')).toBe('attachment; filename="openadlc-backup-2026-09-24.fleetbak"');
     expect(bytes.subarray(0, 10).toString()).toBe('FLEETBAK1\n');
     expect(bytes.includes(Buffer.from(APP_KEY))).toBe(false);
     const opened = await decryptBackup(bytes, PASSPHRASE);
@@ -304,8 +304,8 @@ describe('downloading a backup', () => {
     expect(audited).toEqual([]);
   });
 
-  it('names the file the way `fleetadlc backup` does', () => {
-    expect(backupFilename(NOW)).toBe('fleetadlc-backup-2026-09-24.fleetbak');
+  it('names the file the way `openadlc backup` does', () => {
+    expect(backupFilename(NOW)).toBe('openadlc-backup-2026-09-24.fleetbak');
   });
 });
 
@@ -326,7 +326,7 @@ describe('restoring onto a clean install', () => {
     expect(response.status).toBe(200);
     expect(body.sealed).toBe(true);
     expect(body.holds.bots.map((bot) => bot.seat)).toEqual(['builder']);
-    expect(body.restores.bots[0]).toMatchObject({ becomes: 'fleetadlc-atlas-janedoe', signInState: 'take-over' });
+    expect(body.restores.bots[0]).toMatchObject({ becomes: 'openadlc-atlas-janedoe', signInState: 'take-over' });
     expect(body.signIns.map((line) => [line.key, line.verdict.state, line.chosen])).toEqual([
       ['bot:builder', 'check-by-use', true],
       [`account:${KEY_ACCOUNT}`, 'blocked', false],
@@ -345,13 +345,13 @@ describe('restoring onto a clean install', () => {
     const body = (await response.json()) as { renames: { name: string; to: string; state: string }[]; signIns: SignInLine[] };
 
     expect(response.status).toBe(200);
-    expect(memory.rows).toEqual(expect.arrayContaining(['setting organization', 'login builder=fleetadlc-atlas-janedoe', 'assignment builder', 'audit install.restored', 'credential builder']));
+    expect(memory.rows).toEqual(expect.arrayContaining(['setting organization', 'login builder=openadlc-atlas-janedoe', 'assignment builder', 'audit install.restored', 'credential builder']));
     expect(memory.secrets.get('github-app-private-key')).toBe(APP_KEY);
     // Checked by using it: the archive's token was exchanged, and the new one kept.
     expect(refreshed).toEqual([REFRESH]);
     expect(memory.secrets.get('github-refresh-builder')).toBe('ghr_zzz-fresh-refresh-zzz');
-    expect(memory.renamed).toEqual(['builder → fleetadlc-atlas-janedoe']);
-    expect(body.renames).toEqual([{ name: 'builder', to: 'fleetadlc-atlas-janedoe', state: 'renamed' }]);
+    expect(memory.renamed).toEqual(['builder → openadlc-atlas-janedoe']);
+    expect(body.renames).toEqual([{ name: 'builder', to: 'openadlc-atlas-janedoe', state: 'renamed' }]);
     expect(body.signIns.map((line) => [line.key, line.state])).toEqual([
       ['bot:builder', 'taken-over'],
       [`account:${KEY_ACCOUNT}`, 'blocked'],
@@ -364,7 +364,7 @@ describe('restoring onto a clean install', () => {
   it('puts a pause the archive carries on the dispatcher at once, audited as the restore’s', async () => {
     STORED.clear();
     const { DispatchGate } = await import('./dispatch-gate.js');
-    const { audit } = await import('@fleetadlc/db');
+    const { audit } = await import('@openadlc/db');
     vi.mocked(audit).mockClear();
     const gate = new DispatchGate();
     const pausedThere = { ...snapshot(), settings: { ...snapshot().settings, workPaused: JSON.stringify({ by: 'janedoe', at: '2026-09-20T09:00:00.000Z', reason: 'incident' }) } };
@@ -400,10 +400,10 @@ describe('restoring onto a clean install', () => {
     expect(memory.secrets.has('github-refresh-builder')).toBe(false);
     expect(memory.rows).not.toContain('credential builder');
     // Its account is still the one the backup named, for the walkthrough to connect.
-    expect(memory.rows).toContain('login builder=fleetadlc-atlas-janedoe');
+    expect(memory.rows).toContain('login builder=openadlc-atlas-janedoe');
     expect(body.renames).toEqual([]);
     expect(body.restored.next).toContain(
-      'Connect fleetadlc-atlas-janedoe to GitHub again: GitHub did not accept it: The refresh token passed is incorrect or expired.',
+      'Connect openadlc-atlas-janedoe to GitHub again: GitHub did not accept it: The refresh token passed is incorrect or expired.',
     );
   });
 
@@ -448,7 +448,7 @@ describe('restoring onto a clean install', () => {
 });
 
 describe('restoring onto an install that is set up', () => {
-  const setUp: InstallFacts = { appConfigured: true, repositories: [], connectedBots: ['fleetadlc-atlas-janedoe'], modelAccounts: [] };
+  const setUp: InstallFacts = { appConfigured: true, repositories: [], connectedBots: ['openadlc-atlas-janedoe'], modelAccounts: [] };
 
   it('is refused, in one sentence, before the archive is even opened', async () => {
     const { post, memory } = await serve({ facts: async () => setUp });
@@ -467,7 +467,7 @@ describe('restoring onto an install that is set up', () => {
 
     const answer = await (await fetch(`${base}/v1/restore`)).json();
 
-    expect(answer).toEqual({ clean: false, setUp: ['the GitHub App', 'fleetadlc-atlas-janedoe, connected to GitHub'] });
+    expect(answer).toEqual({ clean: false, setUp: ['the GitHub App', 'openadlc-atlas-janedoe, connected to GitHub'] });
   });
 });
 
@@ -506,7 +506,7 @@ describe('what counts as set up', () => {
     setSecretStore(memoryStore({ 'internal-api-secret': 'x' }));
     const facts = await installFacts(config);
 
-    // `fleetadlc-flow-janedoe` names an account and holds nothing for it: not connected.
+    // `openadlc-flow-janedoe` names an account and holds nothing for it: not connected.
     expect(facts).toEqual({ appConfigured: false, repositories: [], connectedBots: [], modelAccounts: [] });
   });
 
@@ -522,7 +522,7 @@ describe('what counts as set up', () => {
     setSecretStore(memoryStore({}));
     CREDENTIALS.b2 = { status: 'active' };
     try {
-      expect((await installFacts(config)).connectedBots).toEqual(['fleetadlc-flow-janedoe']);
+      expect((await installFacts(config)).connectedBots).toEqual(['openadlc-flow-janedoe']);
     } finally {
       delete CREDENTIALS.b2;
     }
@@ -535,10 +535,10 @@ describe('a restored bot’s rename', () => {
     const names = { rename: vi.fn(async (input: unknown) => (renames.push(input), { botId: 'b1', from: 'builder', to: 'x', state: 'renamed' as const })) };
     const deps = defaultBackupDeps({ config: {} as never, hostd: {} as never, names: names as never });
 
-    const outcome = await deps.target('alex@example.test').rename?.({ name: 'builder', to: 'fleetadlc-atlas-janedoe', reason: 'restored as fleetadlc-atlas-janedoe' });
+    const outcome = await deps.target('alex@example.test').rename?.({ name: 'builder', to: 'openadlc-atlas-janedoe', reason: 'restored as openadlc-atlas-janedoe' });
 
     expect(outcome?.state).toBe('renamed');
-    expect(renames).toEqual([{ botId: 'b1', to: 'fleetadlc-atlas-janedoe', reason: 'restored as fleetadlc-atlas-janedoe', actor: 'alex@example.test' }]);
+    expect(renames).toEqual([{ botId: 'b1', to: 'openadlc-atlas-janedoe', reason: 'restored as openadlc-atlas-janedoe', actor: 'alex@example.test' }]);
   });
 });
 
@@ -551,7 +551,7 @@ describe('restoring into an install that is set up, from Settings', () => {
       state: 'waiting',
       startedAt: NOW.toISOString(),
       finishedAt: null,
-      waitingFor: ['fleetadlc-other'],
+      waitingFor: ['openadlc-other'],
       error: null,
       result: null,
     };
@@ -580,7 +580,7 @@ describe('restoring into an install that is set up, from Settings', () => {
     return { into: into as unknown as import('./restore-into.js').RestoreInto, calls };
   }
   const sealed = async () => (await encryptBackup(archive(), PASSPHRASE)).toString('base64');
-  const setUp: InstallFacts = { appConfigured: true, repositories: [], connectedBots: ['fleetadlc-atlas-janedoe'], modelAccounts: [] };
+  const setUp: InstallFacts = { appConfigured: true, repositories: [], connectedBots: ['openadlc-atlas-janedoe'], modelAccounts: [] };
 
   it('lays the archive beside this install, whether or not it is set up, and says what can be undone', async () => {
     const { into, calls } = stubInto();
@@ -604,7 +604,7 @@ describe('restoring into an install that is set up, from Settings', () => {
     const body = (await response.json()) as { job: { state: string; waitingFor: string[] } };
 
     expect(response.status).toBe(200);
-    expect(body.job).toMatchObject({ state: 'waiting', waitingFor: ['fleetadlc-other'] });
+    expect(body.job).toMatchObject({ state: 'waiting', waitingFor: ['openadlc-other'] });
     expect(calls[0]).toEqual(['start', { 'setting:engineUpdates': true }, 'local operator']);
     const status = (await (await fetch(`${base}/v1/restore/into`)).json()) as { job: { id: string }; undo: unknown };
     expect(status.job.id).toBe('job-1');

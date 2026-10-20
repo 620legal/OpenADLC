@@ -27,13 +27,13 @@ function member(partial: Partial<CrewMember> & Pick<CrewMember, 'name'>): CrewMe
 }
 
 const CREW = [
-  member({ name: 'fleetadlc-atlas-janedoe', task: { kind: 'implement', state: 'running', subjectRef: 'fleetadlc#16', issue: null, startedAt: null, endedAt: null, round: null, waitingOnYou: false } }),
+  member({ name: 'openadlc-atlas-janedoe', task: { kind: 'implement', state: 'running', subjectRef: 'openadlc#16', issue: null, startedAt: null, endedAt: null, round: null, waitingOnYou: false } }),
   member({ name: 'irisexampleco', slot: 'second-reviewer', role: 'review_second' }),
   member({ name: 'ottoexampleco', slot: 'intake', role: 'intake' }),
 ];
 
 function header(page: Page, overrides: Partial<Parameters<typeof headerData>[0]> = {}): string {
-  const data = headerData({ repos: ['fleetadlc-testbed'], crew: CREW, budget: { spentUsd: 7.51, capUsd: 1500 }, needsYou: 3, ...overrides });
+  const data = headerData({ repos: ['openadlc-testbed'], crew: CREW, budget: { spentUsd: 7.51, capUsd: 1500 }, needsYou: 3, ...overrides });
   return renderToStaticMarkup(<AppHeader page={page} data={data} />).replace(/<!-- -->/g, '');
 }
 
@@ -105,7 +105,7 @@ describe('the header', () => {
 
 describe('every page under the header', () => {
   it('is kept current while it is on screen, so what needs you shows without a reload', () => {
-    const data = headerData({ repos: ['fleetadlc-testbed'], crew: CREW, budget: null, needsYou: 1 });
+    const data = headerData({ repos: ['openadlc-testbed'], crew: CREW, budget: null, needsYou: 1 });
     for (const page of ['board', 'crew', 'costs', 'settings'] as const) {
       const html = renderToStaticMarkup(
         <AppShell page={page} data={data}>
@@ -118,9 +118,9 @@ describe('every page under the header', () => {
 });
 
 describe('the repository switcher', () => {
-  const COLORS = { api: 'amber', 'fleetadlc-testbed': 'blue', website: 'pink' };
+  const COLORS = { api: 'amber', 'openadlc-testbed': 'blue', website: 'pink' };
 
-  function switcher(repo: string, repos = ['api', 'fleetadlc-testbed', 'website']): string {
+  function switcher(repo: string, repos = ['api', 'openadlc-testbed', 'website']): string {
     const data = headerData({ repos, repoColors: COLORS, crew: CREW, budget: null, needsYou: null });
     return wide(renderToStaticMarkup(<AppHeader page="board" repo={repo} data={data} />).replace(/<!-- -->/g, ''));
   }
@@ -136,7 +136,7 @@ describe('the repository switcher', () => {
   }
 
   it('offers every repository at once whenever there is more than one, each with its colour', () => {
-    expect(entries(switcher('all'))).toEqual(['amber+blue+pink All repositories *', 'amber api', 'blue fleetadlc-testbed', 'pink website']);
+    expect(entries(switcher('all'))).toEqual(['amber+blue+pink All repositories *', 'amber api', 'blue openadlc-testbed', 'pink website']);
   });
 
   it('says the repository on screen, by its colour and its name', () => {
@@ -153,9 +153,9 @@ describe('the repository switcher', () => {
   });
 
   it('is just the name when there is only one repository', () => {
-    const html = switcher('all', ['fleetadlc-testbed']);
+    const html = switcher('all', ['openadlc-testbed']);
     expect(html).not.toContain('All repositories');
-    expect(html).toMatch(/<span class="[^"]*">fleetadlc-testbed<\/span>/);
+    expect(html).toMatch(/<span class="[^"]*">openadlc-testbed<\/span>/);
   });
 });
 

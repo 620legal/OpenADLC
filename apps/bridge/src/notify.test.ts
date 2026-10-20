@@ -78,7 +78,7 @@ describe('a link about a piece of work opens its item', () => {
   it('names the subject, which any member of the item resolves from', () => {
     // A question about a request opened the intake bot's panel, with every
     // other request intake had worked on in it. Each request is its own conversation.
-    expect(itemLink('http://127.0.0.1:47300/', 'fleetadlc#12')).toBe('http://127.0.0.1:47300/?item=fleetadlc%2312');
+    expect(itemLink('http://127.0.0.1:47300/', 'openadlc#12')).toBe('http://127.0.0.1:47300/?item=openadlc%2312');
     expect(itemLink('http://127.0.0.1:47300', 'request:a4b02784')).toBe('http://127.0.0.1:47300/?item=request%3Aa4b02784');
   });
 });

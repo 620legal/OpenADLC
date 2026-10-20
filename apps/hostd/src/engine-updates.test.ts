@@ -2,9 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AccountCheck, EngineUpdateResult } from '@fleetadlc/shared';
+import type { AccountCheck, EngineUpdateResult } from '@openadlc/shared';
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   bots: { getBotByName: vi.fn(), listBots: vi.fn(async () => []) },
   modelAccounts: { get: vi.fn(async () => null) },
 }));
@@ -127,7 +127,7 @@ class World {
 
     if (command === 'bash') {
       const env = options.env ?? {};
-      if (this.buildFails) return { code: 1, stdout: 'building fleetadlc-bot:candidate\n', stderr: 'npm error code ETARGET\nnpm error notarget No matching version found for @openai/codex@9.9.9.\n' };
+      if (this.buildFails) return { code: 1, stdout: 'building openadlc-bot:candidate\n', stderr: 'npm error code ETARGET\nnpm error notarget No matching version found for @openai/codex@9.9.9.\n' };
       const pins: Record<string, string> = {};
       for (const spec of [env.CLAUDE_CLI, env.CODEX_CLI, env.GROK_CLI]) {
         const at = (spec ?? '').lastIndexOf('@');
@@ -194,7 +194,7 @@ class World {
 }
 
 const bot = (partial: Partial<CrewBot> = {}): CrewBot => ({
-  name: 'fleetadlc-atlas-janedoe',
+  name: 'openadlc-atlas-janedoe',
   engine: 'claude',
   model: 'newest:opus',
   modelAccountId: ANTHROPIC,
@@ -222,7 +222,7 @@ let scratch: string;
 let script: string;
 
 beforeEach(() => {
-  scratch = mkdtempSync(join(tmpdir(), 'fleetadlc-engine-updates-'));
+  scratch = mkdtempSync(join(tmpdir(), 'openadlc-engine-updates-'));
   mkdirSync(join(scratch, 'infra/local'), { recursive: true });
   script = join(scratch, 'infra/local/build-bot-image.sh');
   writeFileSync(script, '#!/usr/bin/env bash\n');
@@ -240,11 +240,11 @@ function updater(
   } = {},
 ) {
   const calls: { model: string; image: string; name: string; env: Record<string, string>; secret: string | null }[] = [];
-  const refresh = vi.fn(async () => ({ refreshed: ['fleetadlc-atlas-janedoe'], deferred: ['fleetadlc-cipher-janedoe'] }));
+  const refresh = vi.fn(async () => ({ refreshed: ['openadlc-atlas-janedoe'], deferred: ['openadlc-cipher-janedoe'] }));
   let clock = Date.parse('2026-09-27T15:00:00.000Z');
   const service = new EngineUpdater({
     driver: 'docker',
-    image: 'fleetadlc-bot:latest',
+    image: 'openadlc-bot:latest',
     buildScript: script,
     run: world.run,
     crew: async () => crew ?? [bot()],
@@ -265,11 +265,11 @@ function updater(
   return { service, calls, refresh };
 }
 
-/** A host whose `fleetadlc-bot:latest` carries today's pins, as the build script labels them. */
+/** A host whose `openadlc-bot:latest` carries today's pins, as the build script labels them. */
 function pinnedHost(): { world: World; latest: string } {
   const world = new World();
   const latest = world.image(PINS);
-  world.tags.set('fleetadlc-bot:latest', latest);
+  world.tags.set('openadlc-bot:latest', latest);
   return { world, latest };
 }
 
@@ -330,18 +330,18 @@ describe('reading a version', () => {
 
 describe('which tags an update moves', () => {
   it('is the latest tag of the image the bots run, and the candidate and previous beside it', () => {
-    expect(imageTags('fleetadlc-bot:latest')).toEqual({
-      latest: 'fleetadlc-bot:latest',
-      candidate: 'fleetadlc-bot:candidate',
-      previous: 'fleetadlc-bot:previous',
+    expect(imageTags('openadlc-bot:latest')).toEqual({
+      latest: 'openadlc-bot:latest',
+      candidate: 'openadlc-bot:candidate',
+      previous: 'openadlc-bot:previous',
     });
     expect(imageTags('scratch-eng-bot')?.candidate).toBe('scratch-eng-bot:candidate');
-    expect(imageTags('registry.local:5000/fleetadlc/bot:latest')?.previous).toBe('registry.local:5000/fleetadlc/bot:previous');
+    expect(imageTags('registry.local:5000/openadlc/bot:latest')?.previous).toBe('registry.local:5000/openadlc/bot:previous');
   });
 
   it('is nothing for an image pinned to another tag or a digest, which is built somewhere else', () => {
-    expect(imageTags('eu-docker.pkg.dev/p/fleetadlc/bot:2026-09-21')).toBeNull();
-    expect(imageTags('fleetadlc-bot@sha256:abc')).toBeNull();
+    expect(imageTags('eu-docker.pkg.dev/p/openadlc/bot:2026-09-21')).toBeNull();
+    expect(imageTags('openadlc-bot@sha256:abc')).toBeNull();
   });
 });
 
@@ -409,14 +409,14 @@ describe('a run with nothing newer', () => {
     expect(result.reason).toBe('every engine is already the newest version');
     expect(world.calls.some((call) => call.command === 'bash')).toBe(false);
     expect(world.retags()).toEqual([]);
-    expect(world.tags.get('fleetadlc-bot:latest')).toBe(latest);
+    expect(world.tags.get('openadlc-bot:latest')).toBe(latest);
     expect(calls).toEqual([]);
     expect(refresh).not.toHaveBeenCalled();
   });
 
   it('says what it checked when it was for Node alone, not that every engine is the newest', async () => {
     const { world } = pinnedHost();
-    const id = world.tags.get('fleetadlc-bot:latest') as string;
+    const id = world.tags.get('openadlc-bot:latest') as string;
     const image = world.images.get(id) as Image;
     image.labels = { [ENGINES_LABEL]: JSON.stringify({ ...PINS, node: '22.20.0' }) };
     image.says = { ...image.says, node: 'v22.20.0' };
@@ -525,7 +525,7 @@ describe('a run with a newer engine', () => {
       CLAUDE_CLI: '@anthropic-ai/claude-code@2.1.282',
       CODEX_CLI: '@openai/codex@0.156.1',
       GROK_CLI: '@xai-official/grok@1.0.41',
-      IMAGE: 'fleetadlc-bot:candidate',
+      IMAGE: 'openadlc-bot:candidate',
     });
     expect(build?.env).not.toHaveProperty('BUILD_PROXY');
   });
@@ -555,7 +555,7 @@ describe('a run with a newer engine', () => {
 
   it('builds a candidate that moves Node and leaves the engine pins where they are', async () => {
     const { world } = pinnedHost();
-    const id = world.tags.get('fleetadlc-bot:latest') as string;
+    const id = world.tags.get('openadlc-bot:latest') as string;
     const image = world.images.get(id) as Image;
     image.labels = { [ENGINES_LABEL]: JSON.stringify({ ...PINS, node: '22.14.0' }) };
     image.says = { ...image.says, node: 'v22.14.0' };
@@ -570,7 +570,7 @@ describe('a run with a newer engine', () => {
       CODEX_CLI: '@openai/codex@0.155.1',
       GROK_CLI: '@xai-official/grok@1.0.41',
       NODE_VERSION: '22.20.0',
-      IMAGE: 'fleetadlc-bot:candidate',
+      IMAGE: 'openadlc-bot:candidate',
     });
     expect(build?.env).not.toHaveProperty('GH_VERSION');
   });
@@ -580,7 +580,7 @@ describe('a run with a newer engine', () => {
     // not allow the github.com release downloads redirect to. A candidate
     // that is not moving gh copies the running image's instead of fetching it.
     const { world } = pinnedHost();
-    const id = world.tags.get('fleetadlc-bot:latest') as string;
+    const id = world.tags.get('openadlc-bot:latest') as string;
     const image = world.images.get(id) as Image;
     image.labels = { [ENGINES_LABEL]: JSON.stringify({ ...PINS, node: '22.14.0', gh: '2.67.0' }) };
     image.says = { ...image.says, node: 'v22.14.0', gh: 'gh version 2.67.0 (2025-02-11)' };
@@ -597,9 +597,9 @@ describe('a run with a newer engine', () => {
       GROK_CLI: '@xai-official/grok@1.0.41',
       NODE_VERSION: '22.14.0',
       GH_VERSION: '2.67.0',
-      GH_FROM: 'fleetadlc-bot:latest',
+      GH_FROM: 'openadlc-bot:latest',
       BUILD_PROXY: 'http://host.docker.internal:3128',
-      IMAGE: 'fleetadlc-bot:candidate',
+      IMAGE: 'openadlc-bot:candidate',
     });
     // Nothing asked where gh or Node could come from: neither is moving.
     expect(world.calls.filter((call) => call.command === 'curl')).toEqual([]);
@@ -608,7 +608,7 @@ describe('a run with a newer engine', () => {
 
   it('installs a newer gh from its apt repository, at the version that repository lists', async () => {
     const { world } = pinnedHost();
-    const id = world.tags.get('fleetadlc-bot:latest') as string;
+    const id = world.tags.get('openadlc-bot:latest') as string;
     const image = world.images.get(id) as Image;
     image.labels = { [ENGINES_LABEL]: JSON.stringify({ ...PINS, node: '22.14.0', gh: '2.67.0' }) };
     image.says = { ...image.says, node: 'v22.14.0', gh: 'gh version 2.67.0 (2025-02-11)' };
@@ -644,7 +644,7 @@ describe('a run with a newer engine', () => {
     await service.updateAndWait({ trigger: 'schedule' });
 
     const build = world.calls.find((call) => call.command === 'bash');
-    expect(build?.env).toMatchObject({ BUILD_PROXY: 'http://host.docker.internal:3128', IMAGE: 'fleetadlc-bot:candidate' });
+    expect(build?.env).toMatchObject({ BUILD_PROXY: 'http://host.docker.internal:3128', IMAGE: 'openadlc-bot:candidate' });
   });
 
   it('checks each CLI where a session looks for it: env -i, the session PATH, and the image’s entrypoint replaced', async () => {
@@ -655,21 +655,21 @@ describe('a run with a newer engine', () => {
     const result = await service.updateAndWait({ trigger: 'schedule' });
 
     const probe = world.calls.find(
-      (call) => call.command === 'docker' && call.args[0] === 'run' && call.args.includes('fleetadlc-engines-versions-candidate'),
+      (call) => call.command === 'docker' && call.args[0] === 'run' && call.args.includes('openadlc-engines-versions-candidate'),
     );
     // The image's entrypoint is `tini -- bot-init`, which ignores a command.
     expect(probe?.args.slice(0, 7)).toEqual([
       'run',
       '--rm',
       '--name',
-      'fleetadlc-engines-versions-candidate',
+      'openadlc-engines-versions-candidate',
       '--entrypoint',
       '/usr/bin/env',
-      'fleetadlc-bot:candidate',
+      'openadlc-bot:candidate',
     ]);
     expect(probe?.args).toContain('-i');
     expect(probe?.args).toContain(
-      'PATH=/opt/fleetadlc/bin:/home/bot/.local/share/pnpm:/home/bot/.local/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin',
+      'PATH=/opt/openadlc/bin:/home/bot/.local/share/pnpm:/home/bot/.local/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin',
     );
     expect(result.checks.filter((check) => check.kind === 'cli')).toEqual([
       { kind: 'cli', cli: 'claude', state: 'passed', detail: 'claude 2.1.282 at /home/bot/.local/bin/claude' },
@@ -682,10 +682,10 @@ describe('a run with a newer engine', () => {
     const { world } = pinnedHost();
     world.npm[CLAUDE] = '2.1.290';
     const crew = [
-      bot({ name: 'fleetadlc-atlas-janedoe' }),
+      bot({ name: 'openadlc-atlas-janedoe' }),
       // The same account and the same model: one call stands for both.
-      bot({ name: 'fleetadlc-lead-janedoe', model: 'claude-opus-5-5' }),
-      bot({ name: 'fleetadlc-cipher-janedoe', engine: 'codex', model: 'newest:codex', modelAccountId: OPENAI }),
+      bot({ name: 'openadlc-lead-janedoe', model: 'claude-opus-5-5' }),
+      bot({ name: 'openadlc-cipher-janedoe', engine: 'codex', model: 'newest:codex', modelAccountId: OPENAI }),
       // The automation account thinks with nothing.
       bot({ name: 'automation', engine: 'none', model: 'none', modelAccountId: null }),
     ];
@@ -694,8 +694,8 @@ describe('a run with a newer engine', () => {
     const result = await service.updateAndWait({ trigger: 'schedule' });
 
     expect(calls.map((call) => ({ model: call.model, image: call.image }))).toEqual([
-      { model: 'claude-opus-5-5', image: 'fleetadlc-bot:candidate' },
-      { model: 'gpt-5.5-codex', image: 'fleetadlc-bot:candidate' },
+      { model: 'claude-opus-5-5', image: 'openadlc-bot:candidate' },
+      { model: 'gpt-5.5-codex', image: 'openadlc-bot:candidate' },
     ]);
     // What a session has before its credential.
     expect(calls[0]?.env).toMatchObject({ HOME: '/home/bot', USER: 'bot' });
@@ -707,7 +707,7 @@ describe('a run with a newer engine', () => {
         model: 'claude-opus-5-5',
         configured: ['newest:opus', 'claude-opus-5-5'],
         account: { id: ANTHROPIC, label: 'Anthropic Max', provider: 'anthropic', kind: 'subscription' },
-        bots: ['fleetadlc-atlas-janedoe', 'fleetadlc-lead-janedoe'],
+        bots: ['openadlc-atlas-janedoe', 'openadlc-lead-janedoe'],
         detail: 'claude-opus-5-5 (newest:opus, claude-opus-5-5) on Anthropic Max: answered: OK',
       },
       expect.objectContaining({
@@ -722,17 +722,17 @@ describe('a run with a newer engine', () => {
   it('keeps the image in use as previous, makes the candidate latest, and drops what previous held before', async () => {
     const { world, latest } = pinnedHost();
     const older = world.image({ ...PINS, [CODEX]: '0.154.0' });
-    world.tags.set('fleetadlc-bot:previous', older);
+    world.tags.set('openadlc-bot:previous', older);
     world.npm[CODEX] = '0.156.1';
     const { service } = updater(world);
 
     await service.updateAndWait({ trigger: 'schedule' });
 
-    const now = world.tags.get('fleetadlc-bot:latest') as string;
+    const now = world.tags.get('openadlc-bot:latest') as string;
     expect(now).not.toBe(latest);
     expect(readEnginesLabel(world.images.get(now)?.labels)).toEqual({ ...PINS, [CODEX]: '0.156.1' });
-    expect(world.tags.get('fleetadlc-bot:previous')).toBe(latest);
-    expect(world.tags.has('fleetadlc-bot:candidate')).toBe(false);
+    expect(world.tags.get('openadlc-bot:previous')).toBe(latest);
+    expect(world.tags.has('openadlc-bot:candidate')).toBe(false);
     // Two images are kept, not one a week.
     expect(world.images.has(older)).toBe(false);
   });
@@ -751,15 +751,15 @@ describe('a run with a newer engine', () => {
       to: { ...PINS, [CODEX]: '0.156.1' },
       latest: { ...PINS, [CODEX]: '0.156.1' },
       reason: 'codex 0.155.1 → 0.156.1',
-      refreshed: ['fleetadlc-atlas-janedoe'],
-      deferred: ['fleetadlc-cipher-janedoe'],
+      refreshed: ['openadlc-atlas-janedoe'],
+      deferred: ['openadlc-cipher-janedoe'],
     });
   });
 
   it('leaves a previous image that something still runs where it is', async () => {
     const { world } = pinnedHost();
     const older = world.image({ ...PINS, [CODEX]: '0.154.0' });
-    world.tags.set('fleetadlc-bot:previous', older);
+    world.tags.set('openadlc-bot:previous', older);
     world.running.add(older);
     world.npm[CODEX] = '0.156.1';
     const { service } = updater(world);
@@ -786,8 +786,8 @@ describe('a candidate that fails a check', () => {
     expect(result.to).toEqual({ ...PINS, [CLAUDE]: '2.1.290' });
     // The image in use is exactly as it was, and the candidate is gone.
     expect(world.retags()).toEqual([]);
-    expect(world.tags.get('fleetadlc-bot:latest')).toBe(latest);
-    expect(world.tags.has('fleetadlc-bot:candidate')).toBe(false);
+    expect(world.tags.get('openadlc-bot:latest')).toBe(latest);
+    expect(world.tags.has('openadlc-bot:candidate')).toBe(false);
     expect(refresh).not.toHaveBeenCalled();
   });
 
@@ -802,8 +802,8 @@ describe('a candidate that fails a check', () => {
     expect(result.state).toBe('failed');
     expect(result.reason).toMatch(/^codex is not on the PATH a session gets in the candidate/);
     expect(calls).toEqual([]);
-    expect(world.tags.get('fleetadlc-bot:latest')).toBe(latest);
-    expect(world.tags.has('fleetadlc-bot:candidate')).toBe(false);
+    expect(world.tags.get('openadlc-bot:latest')).toBe(latest);
+    expect(world.tags.has('openadlc-bot:candidate')).toBe(false);
   });
 
   it('is discarded when a CLI says another version than the one it was built with', async () => {
@@ -827,7 +827,7 @@ describe('a candidate that fails a check', () => {
 
     expect(result.state).toBe('failed');
     expect(result.reason).toMatch(/^the candidate did not build: .*No matching version found/s);
-    expect(world.tags.get('fleetadlc-bot:latest')).toBe(latest);
+    expect(world.tags.get('openadlc-bot:latest')).toBe(latest);
   });
 
   it('fails when a bot’s model cannot be told, as a task on it would', async () => {
@@ -842,7 +842,7 @@ describe('a candidate that fails a check', () => {
     const result = await service.updateAndWait({ trigger: 'schedule' });
 
     expect(result.state).toBe('failed');
-    expect(result.reason).toMatch(/^could not tell which model fleetadlc-atlas-janedoe would call: nothing listed/);
+    expect(result.reason).toMatch(/^could not tell which model openadlc-atlas-janedoe would call: nothing listed/);
   });
 
   it('never carries the credential it called with', async () => {
@@ -914,7 +914,7 @@ describe('where there is nothing to update', () => {
   });
 
   it('is skipped for an image pinned to a tag this install does not build', async () => {
-    const { service } = updater(new World(), { image: 'eu-docker.pkg.dev/p/fleetadlc/bot:2026-09-21' });
+    const { service } = updater(new World(), { image: 'eu-docker.pkg.dev/p/openadlc/bot:2026-09-21' });
     expect(service.update({ trigger: 'schedule' }).last?.reason).toMatch(/pinned to a tag this install does not build/);
   });
 
@@ -932,7 +932,7 @@ describe('where there is nothing to update', () => {
 
     expect(result.state).toBe('failed');
     expect(result.reason).toMatch(/^could not ask npm which @anthropic-ai\/claude-code is newest: .*ENOTFOUND/s);
-    expect(world.tags.get('fleetadlc-bot:latest')).toBe(latest);
+    expect(world.tags.get('openadlc-bot:latest')).toBe(latest);
   });
 
   it('is current, saying so, when the only newer version is one a rollback undid', async () => {
@@ -950,18 +950,18 @@ describe('the versions in use', () => {
   it('are read from the label without starting a container when the label names every tool', async () => {
     const world = new World();
     const versions = { ...PINS, node: '22.14.0', gh: '2.67.0' };
-    world.tags.set('fleetadlc-bot:latest', world.image(versions));
+    world.tags.set('openadlc-bot:latest', world.image(versions));
     const { service } = updater(world);
 
     const status = await service.status();
 
-    expect(status).toMatchObject({ applicable: true, image: 'fleetadlc-bot:latest', inUse: versions, inUseSource: 'label', previous: null });
+    expect(status).toMatchObject({ applicable: true, image: 'openadlc-bot:latest', inUse: versions, inUseSource: 'label', previous: null });
     expect(world.calls.some((call) => call.args[0] === 'run')).toBe(false);
   });
 
   it('asks once for Node and gh when the label is from before they were stamped', async () => {
     const { world } = pinnedHost();
-    const id = world.tags.get('fleetadlc-bot:latest') as string;
+    const id = world.tags.get('openadlc-bot:latest') as string;
     const image = world.images.get(id) as Image;
     image.says = { ...image.says, node: 'v22.14.0', gh: 'gh version 2.67.0' };
     const { service } = updater(world);
@@ -972,12 +972,12 @@ describe('the versions in use', () => {
     expect(first.inUse).toEqual({ ...PINS, node: '22.14.0', gh: '2.67.0' });
     const probes = world.calls.filter((call) => call.args[0] === 'run');
     expect(probes).toHaveLength(1);
-    expect(probes[0]?.args).toContain('fleetadlc-engines-versions-in-use');
+    expect(probes[0]?.args).toContain('openadlc-engines-versions-in-use');
   });
 
   it('are asked of the CLIs themselves in an image built before the label, once per image', async () => {
     const world = new World();
-    world.tags.set('fleetadlc-bot:latest', world.image(PINS, false));
+    world.tags.set('openadlc-bot:latest', world.image(PINS, false));
     const { service } = updater(world);
 
     const first = await service.status();
@@ -986,7 +986,7 @@ describe('the versions in use', () => {
     expect(first).toMatchObject({ inUse: PINS, inUseSource: 'cli' });
     const probes = world.calls.filter((call) => call.args[0] === 'run');
     expect(probes).toHaveLength(1);
-    expect(probes[0]?.args).toContain('fleetadlc-engines-versions-in-use');
+    expect(probes[0]?.args).toContain('openadlc-engines-versions-in-use');
   });
 });
 
@@ -996,7 +996,7 @@ describe('rolling back', () => {
     world.npm[CODEX] = '0.156.1';
     const { service, refresh } = updater(world);
     await service.updateAndWait({ trigger: 'schedule' });
-    return { world, before: latest, after: world.tags.get('fleetadlc-bot:latest') as string, service, refresh };
+    return { world, before: latest, after: world.tags.get('openadlc-bot:latest') as string, service, refresh };
   }
 
   it('puts the previous image back as latest and keeps the one it replaced as previous', async () => {
@@ -1004,8 +1004,8 @@ describe('rolling back', () => {
 
     const result = await service.rollback('ada');
 
-    expect(world.tags.get('fleetadlc-bot:latest')).toBe(before);
-    expect(world.tags.get('fleetadlc-bot:previous')).toBe(after);
+    expect(world.tags.get('openadlc-bot:latest')).toBe(before);
+    expect(world.tags.get('openadlc-bot:previous')).toBe(after);
     expect(result).toMatchObject({
       state: 'rolled-back',
       trigger: 'rollback',
@@ -1022,13 +1022,13 @@ describe('rolling back', () => {
     const { world, after, service } = await updated();
     await service.rollback();
     await service.rollback();
-    expect(world.tags.get('fleetadlc-bot:latest')).toBe(after);
+    expect(world.tags.get('openadlc-bot:latest')).toBe(after);
   });
 
   it('refuses when there is nothing to go back to', async () => {
     const { world } = pinnedHost();
     const { service } = updater(world);
-    await expect(service.rollback()).rejects.toMatchObject({ status: 404, message: expect.stringMatching(/no fleetadlc-bot:previous/) });
+    await expect(service.rollback()).rejects.toMatchObject({ status: 404, message: expect.stringMatching(/no openadlc-bot:previous/) });
   });
 
   it('refuses while an update is running', async () => {
@@ -1067,19 +1067,19 @@ describe('the credential a candidate is called with', () => {
         kind: 'subscription',
         envVar: null,
         key: null,
-        login: { envVar: 'CODEX_HOME', path: '/fleetadlc/login' },
+        login: { envVar: 'CODEX_HOME', path: '/openadlc/login' },
         accountId: OPENAI,
       },
       loginRoot,
     );
     expect(presented).toEqual({
-      presented: { env: { CODEX_HOME: '/fleetadlc/login' }, mount: join(loginRoot, OPENAI), secret: null },
+      presented: { env: { CODEX_HOME: '/openadlc/login' }, mount: join(loginRoot, OPENAI), secret: null },
     });
   });
 
   it('is nothing to call with for a subscription that is not signed in, or a bot with nothing stored', () => {
     const login = { source: 'account' as const, kind: 'subscription' as const, envVar: null, key: null, accountId: OPENAI };
-    expect(presentCredential({ ...login, login: { envVar: 'CODEX_HOME', path: '/fleetadlc/login' } }, loginRoot)).toEqual({
+    expect(presentCredential({ ...login, login: { envVar: 'CODEX_HOME', path: '/openadlc/login' } }, loginRoot)).toEqual({
       skip: 'the subscription is not signed in',
     });
     expect(

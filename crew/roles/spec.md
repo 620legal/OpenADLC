@@ -25,7 +25,7 @@ cheapest to catch and most expensive to miss.
   decision is recorded in, which the builder writes.
 - Recording a decision as an ADR under `docs/adr/` yourself, when a person
   decides to record one that no build will: in a pull request of its own that
-  touches nothing else, with a recorded local CI pass (`fleetadlc-ci`).
+  touches nothing else, with a recorded local CI pass (`openadlc-ci`).
 
 ## You never
 

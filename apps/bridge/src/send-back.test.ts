@@ -8,8 +8,8 @@ interface Move {
 
 const REPO = {
   id: 'repo-1',
-  name: 'fleetadlc-testbed',
-  fullName: 'janedoe/fleetadlc-testbed',
+  name: 'openadlc-testbed',
+  fullName: 'janedoe/openadlc-testbed',
   stageModes: { intake: 'autonomous', spec: 'conditional', build: 'autonomous', review: 'autonomous', merged: 'autonomous', done: 'autonomous' } as Record<string, string>,
 };
 
@@ -28,7 +28,7 @@ const world = {
   deployRuns: [] as Record<string, unknown>[],
 };
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async (entry: Record<string, unknown>) => {
     world.audits.push(entry);
   }),
@@ -78,14 +78,14 @@ vi.mock('@fleetadlc/db', () => ({
   threads: { expireGatesOfTask: vi.fn(async () => ['gate-1']) },
 }));
 
-import { leases, threads } from '@fleetadlc/db';
-import { designMemoryProposals, parseMarkers } from '@fleetadlc/shared';
+import { leases, threads } from '@openadlc/db';
+import { designMemoryProposals, parseMarkers } from '@openadlc/shared';
 import { SendBack, recordComment } from './send-back.js';
 
 function sendBack(review: Record<string, unknown> = {}) {
   const automation = {
     moveStage: vi.fn(async () => ({ moved: true })),
-    comment: vi.fn(async () => 'https://github.test/janedoe/fleetadlc-testbed/issues/7#issuecomment-1'),
+    comment: vi.fn(async () => 'https://github.test/janedoe/openadlc-testbed/issues/7#issuecomment-1'),
     parkPull: vi.fn(async () => true),
     reopenIssue: vi.fn(async () => true),
     addLabels: vi.fn(async () => undefined),
@@ -139,28 +139,28 @@ beforeEach(() => {
 describe('a task sending its work back', () => {
   it('sends a build back to design when the issue had a design pass, and says why on the issue first', async () => {
     world.moves = designed;
-    running('task-build', { kind: 'implement', subjectRef: 'fleetadlc-testbed#7', botId: 'bot-builder', branch: 'agent/builder/7-issue-7' });
+    running('task-build', { kind: 'implement', subjectRef: 'openadlc-testbed#7', botId: 'bot-builder', branch: 'agent/builder/7-issue-7' });
     const { service, automation } = sendBack();
 
     const result = await service.request({ taskId: 'task-build', to: 'spec', reason: 'the design names no migration for the new column' });
 
     expect(result).toEqual({ sent: true, from: 'build', to: 'spec', staffed: true, round: 1, commentUrl: expect.stringContaining('issuecomment') });
     const said = automation.comment.mock.calls[0] as unknown as [string, number, string];
-    expect(said[0]).toBe('janedoe/fleetadlc-testbed');
+    expect(said[0]).toBe('janedoe/openadlc-testbed');
     expect(said[2]).toContain('**Sent back to Design** by builder');
     expect(said[2]).toContain('> the design names no migration for the new column');
-    expect(said[2]).toContain('<!-- fleetadlc:{"event":"send_back","from":"build","to":"spec","by":"builder","round":1} -->');
+    expect(said[2]).toContain('<!-- openadlc:{"event":"send_back","from":"build","to":"spec","by":"builder","round":1} -->');
     expect(automation.moveStage).toHaveBeenCalledWith(
       expect.objectContaining({ to: 'spec', direction: 'send_back', taskId: 'task-build', reason: 'the design names no migration for the new column' }),
     );
     // GitHub first, then the card.
     expect(automation.comment.mock.invocationCallOrder[0]).toBeLessThan(automation.moveStage.mock.invocationCallOrder[0]!);
-    expect(world.audits).toContainEqual(expect.objectContaining({ action: 'stage.sent_back', target: 'fleetadlc-testbed#7' }));
+    expect(world.audits).toContainEqual(expect.objectContaining({ action: 'stage.sent_back', target: 'openadlc-testbed#7' }));
   });
 
   it('closes the sending task’s questions and lets go of build’s lease', async () => {
     world.moves = designed;
-    running('task-build', { kind: 'implement', subjectRef: 'fleetadlc-testbed#7', botId: 'bot-builder' });
+    running('task-build', { kind: 'implement', subjectRef: 'openadlc-testbed#7', botId: 'bot-builder' });
     const { service } = sendBack();
 
     await service.request({ taskId: 'task-build', to: 'spec', reason: 'no migration' });
@@ -172,14 +172,14 @@ describe('a task sending its work back', () => {
   it('parks an open pull request: a draft again, out of the merge line', async () => {
     world.moves = designed;
     world.issue = { ...world.issue, prNumber: 31 };
-    running('task-patch', { kind: 'patch', subjectRef: 'fleetadlc-testbed#31', botId: 'bot-builder', branch: 'agent/builder/7-issue-7' });
+    running('task-patch', { kind: 'patch', subjectRef: 'openadlc-testbed#31', botId: 'bot-builder', branch: 'agent/builder/7-issue-7' });
     const { service, automation, mergeLine } = sendBack();
 
     const result = await service.request({ taskId: 'task-patch', to: 'spec', reason: 'the review shows the design cannot hold' });
 
     expect(result).toMatchObject({ sent: true, to: 'spec' });
-    expect(mergeLine.leave).toHaveBeenCalledWith('fleetadlc-testbed', 31);
-    expect(automation.parkPull).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 31);
+    expect(mergeLine.leave).toHaveBeenCalledWith('openadlc-testbed', 31);
+    expect(automation.parkPull).toHaveBeenCalledWith('janedoe/openadlc-testbed', 31);
   });
 
   it('sends back to intake a build that intake sent straight to build, and refuses design', async () => {
@@ -187,7 +187,7 @@ describe('a task sending its work back', () => {
       { from: null, to: 'intake', kind: 'forward' },
       { from: 'intake', to: 'build', kind: 'forward' },
     ];
-    running('task-build', { kind: 'implement', subjectRef: 'fleetadlc-testbed#7', botId: 'bot-builder' });
+    running('task-build', { kind: 'implement', subjectRef: 'openadlc-testbed#7', botId: 'bot-builder' });
     const { service, automation } = sendBack();
 
     const refused = await service.request({ taskId: 'task-build', to: 'spec', reason: 'unclear' });
@@ -203,7 +203,7 @@ describe('a task sending its work back', () => {
   it('passes over a design nobody staffs', async () => {
     world.moves = designed;
     REPO.stageModes = { ...REPO.stageModes, spec: 'untouched' };
-    running('task-build', { kind: 'implement', subjectRef: 'fleetadlc-testbed#7', botId: 'bot-builder' });
+    running('task-build', { kind: 'implement', subjectRef: 'openadlc-testbed#7', botId: 'bot-builder' });
     const { service } = sendBack();
 
     expect(await service.request({ taskId: 'task-build', to: 'intake', reason: 'unclear' })).toMatchObject({ sent: true, to: 'intake', staffed: true });
@@ -212,13 +212,13 @@ describe('a task sending its work back', () => {
   it('hands the work to a person when nothing on the way back is staffed', async () => {
     world.issue = { number: 7, stage: 'spec', prNumber: null, labels: ['adlc:spec'] };
     REPO.stageModes = { ...REPO.stageModes, intake: 'untouched' };
-    running('task-spec', { kind: 'spec', subjectRef: 'fleetadlc-testbed#7', botId: 'bot-spec' });
+    running('task-spec', { kind: 'spec', subjectRef: 'openadlc-testbed#7', botId: 'bot-spec' });
     const { service, automation } = sendBack();
 
     const result = await service.request({ taskId: 'task-spec', to: 'intake', reason: 'two readings of the request' });
 
     expect(result).toMatchObject({ sent: true, to: 'intake', staffed: false });
-    expect(automation.addLabels).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 7, ['needs-human']);
+    expect(automation.addLabels).toHaveBeenCalledWith('janedoe/openadlc-testbed', 7, ['needs-human']);
     expect(world.events).toContainEqual(expect.objectContaining({ type: 'send_back.to_person' }));
     expect((automation.comment.mock.calls[0] as unknown as string[])[2]).toContain('Nobody staffs Intake in this repository');
   });
@@ -226,13 +226,13 @@ describe('a task sending its work back', () => {
   it('sends a shipped change back to build, reopening the issue its merge closed', async () => {
     world.issue = { number: 7, stage: 'merged', prNumber: 31, labels: ['adlc:merged'] };
     world.moves = [...designed, { from: 'build', to: 'review', kind: 'forward' }, { from: 'review', to: 'merged', kind: 'forward' }];
-    running('task-deploy', { kind: 'deploy', subjectRef: 'fleetadlc-testbed#31', botId: 'bot-deploy' });
+    running('task-deploy', { kind: 'deploy', subjectRef: 'openadlc-testbed#31', botId: 'bot-deploy' });
     const { service, automation, dispatchRuns } = sendBack();
 
     const result = await service.request({ taskId: 'task-deploy', to: 'build', reason: 'the migration fails on testing data' });
 
     expect(result).toMatchObject({ sent: true, from: 'merged', to: 'build' });
-    expect(automation.reopenIssue).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 7);
+    expect(automation.reopenIssue).toHaveBeenCalledWith('janedoe/openadlc-testbed', 7);
     expect(automation.reopenIssue.mock.invocationCallOrder[0]).toBeLessThan(automation.moveStage.mock.invocationCallOrder[0]!);
     expect(leases.setLeaseState).toHaveBeenCalledWith('lease-7', 'released');
     expect(dispatchRuns.soon).toHaveBeenCalled();
@@ -244,20 +244,20 @@ describe('a task sending its work back', () => {
     world.issue = { number: 7, stage: 'merged', prNumber: 31, labels: ['adlc:merged'] };
     world.moves = [...designed, { from: 'build', to: 'review', kind: 'forward' }, { from: 'review', to: 'merged', kind: 'forward' }];
     world.deployRuns = [{ sha: 'c0ffee01'.padEnd(40, '0'), prNumber: 31 }];
-    running('task-sre', { kind: 'deploy', subjectRef: 'fleetadlc-testbed#900', botId: 'bot-deploy', branch: 'system/deploy-path-c0ffee01' });
+    running('task-sre', { kind: 'deploy', subjectRef: 'openadlc-testbed#900', botId: 'bot-deploy', branch: 'system/deploy-path-c0ffee01' });
     const { service, automation } = sendBack();
 
     const result = await service.request({ taskId: 'task-sre', to: 'build', reason: 'the migration fails on testing data' });
 
     expect(result).toMatchObject({ sent: true, from: 'merged', to: 'build' });
-    expect(automation.reopenIssue).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 7);
+    expect(automation.reopenIssue).toHaveBeenCalledWith('janedoe/openadlc-testbed', 7);
     expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ issueNumber: 7, to: 'build', taskId: 'task-sre' }));
   });
 
   it('refuses the SRE a send-back when no change on the board merged at its commit', async () => {
     world.issue = { number: 7, stage: 'merged', prNumber: 31, labels: ['adlc:merged'] };
     world.deployRuns = [{ sha: 'deadbeef'.padEnd(40, '0'), prNumber: 31 }];
-    running('task-sre', { kind: 'deploy', subjectRef: 'fleetadlc-testbed#900', botId: 'bot-deploy', branch: 'system/deploy-path-c0ffee01' });
+    running('task-sre', { kind: 'deploy', subjectRef: 'openadlc-testbed#900', botId: 'bot-deploy', branch: 'system/deploy-path-c0ffee01' });
     const { service, automation } = sendBack();
 
     const result = await service.request({ taskId: 'task-sre', to: 'build', reason: 'the migration fails' });
@@ -268,10 +268,10 @@ describe('a task sending its work back', () => {
 
   it('refuses intake, a reviewer, a task not running, a stage the issue is not in, and no reason', async () => {
     const { service } = sendBack();
-    running('task-intake', { kind: 'intake', subjectRef: 'fleetadlc-testbed#7', botId: 'bot-intake' });
-    running('task-review', { kind: 'review', subjectRef: 'fleetadlc-testbed#31', botId: 'bot-lead' });
-    world.tasks.set('task-done', { id: 'task-done', state: 'done', kind: 'implement', repoId: REPO.id, subjectRef: 'fleetadlc-testbed#7', botId: 'bot-builder' });
-    running('task-spec', { kind: 'spec', subjectRef: 'fleetadlc-testbed#7', botId: 'bot-spec' });
+    running('task-intake', { kind: 'intake', subjectRef: 'openadlc-testbed#7', botId: 'bot-intake' });
+    running('task-review', { kind: 'review', subjectRef: 'openadlc-testbed#31', botId: 'bot-lead' });
+    world.tasks.set('task-done', { id: 'task-done', state: 'done', kind: 'implement', repoId: REPO.id, subjectRef: 'openadlc-testbed#7', botId: 'bot-builder' });
+    running('task-spec', { kind: 'spec', subjectRef: 'openadlc-testbed#7', botId: 'bot-spec' });
 
     expect(await service.request({ taskId: 'task-intake', to: 'intake', reason: 'x' })).toMatchObject({ sent: false, reason: expect.stringMatching(/ask the person/) });
     expect(await service.request({ taskId: 'task-review', to: 'build', reason: 'x' })).toMatchObject({ sent: false, reason: expect.stringMatching(/requesting changes/) });
@@ -290,14 +290,14 @@ describe('the limits on sending back', () => {
       { from: 'build', to: 'spec', kind: 'send_back' },
       { from: 'spec', to: 'build', kind: 'forward' },
     ];
-    running('task-build', { kind: 'implement', subjectRef: 'fleetadlc-testbed#7', botId: 'bot-builder' });
+    running('task-build', { kind: 'implement', subjectRef: 'openadlc-testbed#7', botId: 'bot-builder' });
     const { service, automation } = sendBack();
 
     const result = await service.request({ taskId: 'task-build', to: 'spec', reason: 'still no migration' });
 
     expect(result).toMatchObject({ sent: false, stalled: true, reason: expect.stringMatching(/2 times from Build to Design/) });
     expect(automation.moveStage).not.toHaveBeenCalled();
-    expect(automation.addLabels).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 7, ['needs-human']);
+    expect(automation.addLabels).toHaveBeenCalledWith('janedoe/openadlc-testbed', 7, ['needs-human']);
     expect(world.events).toContainEqual(expect.objectContaining({ type: 'send_back.stalled' }));
     expect(leases.setLeaseState).not.toHaveBeenCalled();
   });
@@ -316,7 +316,7 @@ describe('the limits on sending back', () => {
       back('review', 'build'),
       back('review', 'build'),
     ];
-    running('task-build', { kind: 'implement', subjectRef: 'fleetadlc-testbed#7', botId: 'bot-builder' });
+    running('task-build', { kind: 'implement', subjectRef: 'openadlc-testbed#7', botId: 'bot-builder' });
 
     // Five back in all, three of them review rounds: two count, and two is the limit set here.
     const { service } = sendBack({ sendBack: { maxPerEdge: 5, maxPerIssue: 2 } });
@@ -353,7 +353,7 @@ describe('a review sending the work back to build', () => {
 
     // The stray file is in the diff, and the round that is to take it out
     // was let write it.
-    await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr, crew, client, by: 'fleetadlc', reason: 'it strayed', leasePathsOnly: true });
+    await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr, crew, client, by: 'openadlc', reason: 'it strayed', leasePathsOnly: true });
     expect(taskService.open).toHaveBeenLastCalledWith(expect.objectContaining({ declaredPaths: ['src/app.ts'] }));
   });
 
@@ -373,7 +373,7 @@ describe('a review sending the work back to build', () => {
   });
 
   it('moves nothing at the cap, and stops the loop for a person', async () => {
-    world.botTasks = [1, 2, 3].map((round) => ({ id: `p${round}`, subjectRef: 'fleetadlc-testbed#31', kind: 'patch', state: 'done', startedAt: 'x' }));
+    world.botTasks = [1, 2, 3].map((round) => ({ id: `p${round}`, subjectRef: 'openadlc-testbed#31', kind: 'patch', state: 'done', startedAt: 'x' }));
     const { service, automation, taskService } = sendBack();
 
     await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr, crew, client: null, by: 'lead-reviewer', reason: 'still wrong' });
@@ -386,8 +386,8 @@ describe('a review sending the work back to build', () => {
   it('counts every round on the pull request, however many newer tasks the builder has', async () => {
     // A busy builder: its twenty newest tasks are on other subjects, and the
     // three rounds on this pull request fell out of the count.
-    const elsewhere = Array.from({ length: 25 }, (_, n) => ({ id: `o${n}`, botId: 'bot-builder', subjectRef: `fleetadlc-testbed#${100 + n}`, kind: 'implement', state: 'done', startedAt: 'x' }));
-    const rounds = [1, 2, 3].map((round) => ({ id: `p${round}`, botId: 'bot-builder', subjectRef: 'fleetadlc-testbed#31', kind: 'patch', state: 'done', startedAt: 'x' }));
+    const elsewhere = Array.from({ length: 25 }, (_, n) => ({ id: `o${n}`, botId: 'bot-builder', subjectRef: `openadlc-testbed#${100 + n}`, kind: 'implement', state: 'done', startedAt: 'x' }));
+    const rounds = [1, 2, 3].map((round) => ({ id: `p${round}`, botId: 'bot-builder', subjectRef: 'openadlc-testbed#31', kind: 'patch', state: 'done', startedAt: 'x' }));
     world.botTasks = [...elsewhere, ...rounds];
     const { service, automation, taskService } = sendBack();
 
@@ -399,8 +399,8 @@ describe('a review sending the work back to build', () => {
 
   it('does not count conflict resolutions as review rounds', async () => {
     world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
-    const conflict = (id: string) => ({ id, botId: 'bot-builder', subjectRef: 'fleetadlc-testbed#31', kind: 'patch', skill: 'resolve-conflict', state: 'done', startedAt: 'x' });
-    world.botTasks = [conflict('c1'), conflict('c2'), { id: 'p1', botId: 'bot-builder', subjectRef: 'fleetadlc-testbed#31', kind: 'patch', state: 'done', startedAt: 'x' }];
+    const conflict = (id: string) => ({ id, botId: 'bot-builder', subjectRef: 'openadlc-testbed#31', kind: 'patch', skill: 'resolve-conflict', state: 'done', startedAt: 'x' });
+    world.botTasks = [conflict('c1'), conflict('c2'), { id: 'p1', botId: 'bot-builder', subjectRef: 'openadlc-testbed#31', kind: 'patch', state: 'done', startedAt: 'x' }];
     const { service, taskService } = sendBack();
 
     await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr, crew, client: null, by: 'lead-reviewer', reason: 'one more thing' });
@@ -424,7 +424,7 @@ describe('a review sending the work back to build', () => {
       world.lastForPr = released;
       const { service, taskService } = sendBack();
 
-      await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr: ci, crew, client: null, by: 'fleetadlc', reason: 'CI failed' });
+      await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr: ci, crew, client: null, by: 'openadlc', reason: 'CI failed' });
 
       expect(leases.reacquireForPullRequest).toHaveBeenCalledWith(expect.objectContaining({ repoId: REPO.id, issueNumber: 7, prNumber: 31, actor: 'bridge' }));
       expect(taskService.open).toHaveBeenCalledWith(expect.objectContaining({ kind: 'patch', leaseId: 'lease-again', bot: 'builder' }));
@@ -437,14 +437,14 @@ describe('a review sending the work back to build', () => {
       world.activeLeases = [{ id: 'lease-9', issueNumber: 9, declaredPaths: ['src/**'], botId: 'bot-builder' }];
       const { service, automation, taskService } = sendBack();
 
-      await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr: ci, crew, client: null, by: 'fleetadlc', reason: 'CI failed' });
-      await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr: ci, crew, client: null, by: 'fleetadlc', reason: 'CI failed' });
+      await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr: ci, crew, client: null, by: 'openadlc', reason: 'CI failed' });
+      await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr: ci, crew, client: null, by: 'openadlc', reason: 'CI failed' });
 
       expect(leases.reacquireForPullRequest).not.toHaveBeenCalled();
       expect(taskService.open).not.toHaveBeenCalled();
       expect(automation.comment).not.toHaveBeenCalled();
       expect(warned.mock.calls.map(([line]) => String(line))).toContainEqual(
-        expect.stringMatching(/^\[bridge\] janedoe\/fleetadlc-testbed#31: not sent back to build: #9 now holds paths #7 declared/),
+        expect.stringMatching(/^\[bridge\] janedoe\/openadlc-testbed#31: not sent back to build: #9 now holds paths #7 declared/),
       );
       // Once for the head, as a redelivery would say it again.
       expect(world.events.filter((event) => event.type === 'review.stalled')).toEqual([
@@ -459,7 +459,7 @@ describe('a review sending the work back to build', () => {
       world.lastForPr = released;
       const { service, taskService } = sendBack();
 
-      await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr: ci, crew, client: null, by: 'fleetadlc', reason: 'CI failed' });
+      await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr: ci, crew, client: null, by: 'openadlc', reason: 'CI failed' });
 
       expect(leases.reacquireForPullRequest).not.toHaveBeenCalled();
       expect(taskService.open).not.toHaveBeenCalled();
@@ -472,7 +472,7 @@ describe('a review sending the work back to build', () => {
       world.lastForPr = { ...released, botId: 'bot-gone' };
       const { service, taskService } = sendBack();
 
-      await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr: ci, crew, client: null, by: 'fleetadlc', reason: 'CI failed' });
+      await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr: ci, crew, client: null, by: 'openadlc', reason: 'CI failed' });
 
       expect(leases.reacquireForPullRequest).not.toHaveBeenCalled();
       expect(world.events).toContainEqual(
@@ -482,7 +482,7 @@ describe('a review sending the work back to build', () => {
       // Held, by a seat that has since been removed.
       world.events = [];
       world.lease = { id: 'lease-7', botId: 'bot-gone', declaredPaths: ['src/app.ts'], prNumber: 31 };
-      await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr: { ...ci, head: { ...ci.head, sha: 'h2' } }, crew, client: null, by: 'fleetadlc', reason: 'CI failed' });
+      await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr: { ...ci, head: { ...ci.head, sha: 'h2' } }, crew, client: null, by: 'openadlc', reason: 'CI failed' });
 
       expect(taskService.open).not.toHaveBeenCalled();
       expect(world.events).toContainEqual(
@@ -526,7 +526,7 @@ describe('the bridge sending a deployed change back', () => {
     const result = await service.fromBridge({ repoName: REPO.name, issueNumber: 7, from: 'merged', reason: 'The smoke failed on testing at `abc1234`.' });
 
     expect(result).toMatchObject({ sent: true, to: 'build' });
-    expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ to: 'build', direction: 'send_back', actor: 'fleetadlc' }));
+    expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ to: 'build', direction: 'send_back', actor: 'openadlc' }));
     expect(threads.expireGatesOfTask).not.toHaveBeenCalled();
   });
 });
@@ -535,8 +535,8 @@ describe('a person moving a card back', () => {
   it('says why on the issue, stops the build that was running, lets go of build, and starts the stage it went to', async () => {
     world.issue = { number: 7, stage: 'build', prNumber: 31, labels: ['adlc:build'] };
     world.onSubjects = [
-      { id: 'task-build', kind: 'implement', state: 'running', subjectRef: 'fleetadlc-testbed#7' },
-      { id: 'task-old', kind: 'spec', state: 'done', subjectRef: 'fleetadlc-testbed#7' },
+      { id: 'task-build', kind: 'implement', state: 'running', subjectRef: 'openadlc-testbed#7' },
+      { id: 'task-old', kind: 'spec', state: 'done', subjectRef: 'openadlc-testbed#7' },
     ];
     const { service, automation, stopTask, stages, mergeLine } = sendBack();
 
@@ -544,29 +544,29 @@ describe('a person moving a card back', () => {
 
     expect(result).toMatchObject({ sent: true, from: 'build', to: 'spec' });
     expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ to: 'spec', direction: 'person', reason: 'design the schema first' }));
-    expect(stopTask).toHaveBeenCalledWith('task-build', 'janedoe@example.com', 'fleetadlc-testbed#7 was moved back to spec');
+    expect(stopTask).toHaveBeenCalledWith('task-build', 'janedoe@example.com', 'openadlc-testbed#7 was moved back to spec');
     expect(stopTask).toHaveBeenCalledTimes(1);
     expect(leases.setLeaseState).toHaveBeenCalledWith('lease-7', 'released');
-    expect(mergeLine.leave).toHaveBeenCalledWith('fleetadlc-testbed', 31);
-    expect(stages.staff).toHaveBeenCalledWith({ repoName: 'fleetadlc-testbed', issueNumber: 7, stage: 'spec' });
+    expect(mergeLine.leave).toHaveBeenCalledWith('openadlc-testbed', 31);
+    expect(stages.staff).toHaveBeenCalledWith({ repoName: 'openadlc-testbed', issueNumber: 7, stage: 'spec' });
   });
 
   it('takes a pull request out of the line when a person moves review back to build, and opens the builder’s patch round', async () => {
     world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
-    world.onSubjects = [{ id: 'task-review', kind: 'review', state: 'running', subjectRef: 'fleetadlc-testbed#31' }];
+    world.onSubjects = [{ id: 'task-review', kind: 'review', state: 'running', subjectRef: 'openadlc-testbed#31' }];
     const { service, automation, mergeLine, taskService, stopTask } = sendBack();
 
     const result = await service.fromPerson({ repoName: REPO.name, issueNumber: 7, to: 'build', actor: 'janedoe@example.com', reason: 'handle the empty cart' });
 
     expect(result).toMatchObject({ sent: true, from: 'review', to: 'build' });
-    expect(mergeLine.leave).toHaveBeenCalledWith('fleetadlc-testbed', 31);
+    expect(mergeLine.leave).toHaveBeenCalledWith('openadlc-testbed', 31);
     expect(automation.setCiLabel).toHaveBeenCalledWith(REPO.fullName, 31, false);
     // Moved once, by the person's move; the patch round does not move it again.
     expect(automation.moveStage).toHaveBeenCalledTimes(1);
     expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ to: 'build', direction: 'person', reason: 'handle the empty cart' }));
     // The reason reaches the round from the move just recorded (`sent-back.md`).
     expect(taskService.open).toHaveBeenCalledWith(
-      expect.objectContaining({ bot: 'builder', kind: 'patch', subjectRef: 'fleetadlc-testbed#31', branch: 'agent/builder/7-issue-7', issueNumber: 7, leaseId: 'lease-7', round: 1 }),
+      expect.objectContaining({ bot: 'builder', kind: 'patch', subjectRef: 'openadlc-testbed#31', branch: 'agent/builder/7-issue-7', issueNumber: 7, leaseId: 'lease-7', round: 1 }),
     );
     // Not parked: the round pushes to it, and that push brings it back to review.
     expect(automation.parkPull).not.toHaveBeenCalled();
@@ -576,12 +576,12 @@ describe('a person moving a card back', () => {
 
   it('opens no patch round past maxRounds when a person moves review back to build, and still takes it out of the line', async () => {
     world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
-    world.botTasks = [1, 2, 3].map((round) => ({ id: `p${round}`, subjectRef: 'fleetadlc-testbed#31', kind: 'patch', state: 'done', startedAt: 'x' }));
+    world.botTasks = [1, 2, 3].map((round) => ({ id: `p${round}`, subjectRef: 'openadlc-testbed#31', kind: 'patch', state: 'done', startedAt: 'x' }));
     const { service, mergeLine, taskService } = sendBack();
 
     await service.fromPerson({ repoName: REPO.name, issueNumber: 7, to: 'build', actor: 'janedoe', reason: 'not yet' });
 
-    expect(mergeLine.leave).toHaveBeenCalledWith('fleetadlc-testbed', 31);
+    expect(mergeLine.leave).toHaveBeenCalledWith('openadlc-testbed', 31);
     expect(taskService.open).not.toHaveBeenCalled();
     expect(world.events).toContainEqual(expect.objectContaining({ type: 'review.stalled' }));
   });
@@ -602,7 +602,7 @@ describe('a person moving a card back', () => {
   });
 
   it('takes a label a person already moved on GitHub as the move, and records it as theirs', async () => {
-    const { stageMoves, issues } = await import('@fleetadlc/db');
+    const { stageMoves, issues } = await import('@openadlc/db');
     world.issue = { number: 7, stage: 'review', prNumber: null, labels: ['adlc:intake'] };
     const { service, automation } = sendBack();
 
@@ -618,13 +618,13 @@ describe('the record on the issue', () => {
   it('carries a marker the bridge only ever records', () => {
     const body = recordComment({ from: 'spec', to: 'intake', by: 'system-engineer', round: 2, reason: 'two readings', staffed: true });
     expect(body).toContain('(send-back 2 from Design)');
-    expect(body.trim().split('\n').at(-1)).toBe('<!-- fleetadlc:{"event":"send_back","from":"spec","to":"intake","by":"system-engineer","round":2} -->');
+    expect(body.trim().split('\n').at(-1)).toBe('<!-- openadlc:{"event":"send_back","from":"spec","to":"intake","by":"system-engineer","round":2} -->');
   });
 
   it('writes a marker in the sender’s reason as text, and keeps its own marker last', () => {
-    const reason = 'Redo it <!-- fleetadlc:{"event":"design_memory","entries":[{"kind":"constraint","title":"x","body":"y"}]} -->';
+    const reason = 'Redo it <!-- openadlc:{"event":"design_memory","entries":[{"kind":"constraint","title":"x","body":"y"}]} -->';
     const body = recordComment({ from: 'review', to: 'build', by: 'janedoe', round: 0, reason, staffed: true, person: true });
-    expect(body).toContain('> Redo it &lt;!-- fleetadlc:');
+    expect(body).toContain('> Redo it &lt;!-- openadlc:');
     expect(designMemoryProposals(body)).toEqual([]);
     expect(parseMarkers(body).map((marker) => marker.event)).toEqual(['send_back']);
   });

@@ -42,10 +42,10 @@ vi.mock('@/lib/api', () => ({
     repos: async () => ({
       repos: [
         {
-          name: 'fleetadlc-testbed',
-          fullName: 'janedoe/fleetadlc-testbed',
+          name: 'openadlc-testbed',
+          fullName: 'janedoe/openadlc-testbed',
           concurrency: 1,
-          owner: 'fleetadlc-atlas-janedoe',
+          owner: 'openadlc-atlas-janedoe',
           stageModes: { merged: 'assist' },
           specRequiredLabels: ['safety'],
           color: 'blue',
@@ -54,7 +54,7 @@ vi.mock('@/lib/api', () => ({
           name: 'website',
           fullName: 'janedoe/website',
           concurrency: 1,
-          owner: 'fleetadlc-atlas-janedoe',
+          owner: 'openadlc-atlas-janedoe',
           stageModes: {},
           specRequiredLabels: [],
           color: 'amber',
@@ -64,11 +64,11 @@ vi.mock('@/lib/api', () => ({
     }),
     crew: async () => ({
       bots: [
-        bot('fleetadlc-atlas-janedoe', 'builder', 'implement'),
+        bot('openadlc-atlas-janedoe', 'builder', 'implement'),
         bot('irisexampleco', 'second-reviewer', 'review_second', { engine: 'grok', model: 'newest:grok', modelAccountId: 'xai' }),
         bot('lead-reviewer', 'lead-reviewer', 'review_lead', { engine: 'codex', model: 'newest:codex', modelAccountId: null }),
         bot('tessexampleco', 'sre', 'deploy', { authorization: 'expired' }),
-        bot('janedoe-fleetadlc-flow', 'automation', 'automation', { engine: 'none', model: 'none', modelAccountId: null }),
+        bot('janedoe-openadlc-flow', 'automation', 'automation', { engine: 'none', model: 'none', modelAccountId: null }),
       ],
     }),
     costs: async () => ({ budget: { period: '2026-09', capUsd: 1500, spentUsd: 7.51, state: 'ok' }, perTaskCapUsd: 15 }),
@@ -85,11 +85,11 @@ vi.mock('@/lib/api', () => ({
     githubAccounts: async () => ({
       accounts: [
         {
-          login: 'fleetadlc-atlas-janedoe',
-          url: 'https://github.com/fleetadlc-atlas-janedoe',
+          login: 'openadlc-atlas-janedoe',
+          url: 'https://github.com/openadlc-atlas-janedoe',
           group: 'crew',
           signIn: 'signed-in',
-          seats: [{ name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', roleLabel: 'builder' }],
+          seats: [{ name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', roleLabel: 'builder' }],
         },
         {
           login: 'irisexampleco',
@@ -101,14 +101,14 @@ vi.mock('@/lib/api', () => ({
       ],
       bots: [
         {
-          name: 'fleetadlc-atlas-janedoe',
+          name: 'openadlc-atlas-janedoe',
           slot: 'builder',
           role: 'implement',
           roleLabel: 'builder',
           group: 'crew',
-          login: 'fleetadlc-atlas-janedoe',
+          login: 'openadlc-atlas-janedoe',
           choices: [
-            { login: 'fleetadlc-atlas-janedoe', refusal: null },
+            { login: 'openadlc-atlas-janedoe', refusal: null },
             { login: 'irisexampleco', refusal: 'the reviewers’ account (the second reviewer uses it) — the crew needs a different one' },
           ],
         },
@@ -120,7 +120,7 @@ vi.mock('@/lib/api', () => ({
           group: 'reviewers',
           login: null,
           choices: [
-            { login: 'fleetadlc-atlas-janedoe', refusal: 'used by the builder — reviewers need their own account' },
+            { login: 'openadlc-atlas-janedoe', refusal: 'used by the builder — reviewers need their own account' },
             { login: 'irisexampleco', refusal: null },
           ],
         },
@@ -134,13 +134,13 @@ vi.mock('@/lib/api', () => ({
     }),
     installations: async () => ({
       app: {
-        slug: 'fleetadlc-janedoe',
+        slug: 'openadlc-janedoe',
         name: 'OpenADLC (janedoe)',
         owner: { login: 'janedoe', type: 'User' },
         visibility: 'public',
-        settingsUrl: 'https://github.com/settings/apps/fleetadlc-janedoe',
-        advancedUrl: 'https://github.com/settings/apps/fleetadlc-janedoe/advanced',
-        installUrl: 'https://github.com/apps/fleetadlc-janedoe/installations/new',
+        settingsUrl: 'https://github.com/settings/apps/openadlc-janedoe',
+        advancedUrl: 'https://github.com/settings/apps/openadlc-janedoe/advanced',
+        installUrl: 'https://github.com/apps/openadlc-janedoe/installations/new',
       },
       accounts: [
         {
@@ -149,7 +149,7 @@ vi.mock('@/lib/api', () => ({
           id: 700,
           installUrl: 'https://github.com/settings/installations/7',
           installation: { id: 7, selection: 'all', settingsUrl: 'https://github.com/settings/installations/7', suspended: false },
-          repositories: ['fleetadlc-testbed'],
+          repositories: ['openadlc-testbed'],
           fix: null,
         },
       ],
@@ -160,7 +160,7 @@ vi.mock('@/lib/api', () => ({
       installName: 'OpenADLC_janedoe',
       attributionMode: 'audit',
       githubClientId: 'Iv23client',
-      automationBot: 'janedoe-fleetadlc-flow',
+      automationBot: 'janedoe-openadlc-flow',
       humans: 'janedoe',
       publicUrl: '',
       operatorEmail: '',
@@ -181,7 +181,7 @@ vi.mock('@/lib/api', () => ({
   },
 }));
 vi.mock('@/lib/read-header', () => ({
-  readHeader: async () => headerData({ repos: ['fleetadlc-testbed'], crew: [], budget: { spentUsd: 7.51, capUsd: 1500 }, needsYou: 0 }),
+  readHeader: async () => headerData({ repos: ['openadlc-testbed'], crew: [], budget: { spentUsd: 7.51, capUsd: 1500 }, needsYou: 0 }),
 }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 
@@ -207,7 +207,7 @@ describe('the settings page', () => {
       expect(html).toContain('bob@example.com');
       expect(html).not.toContain('id="users"');
       expect(html).not.toContain('id="backup"');
-      expect(html).not.toContain('FLEETADLC_IDENTITY');
+      expect(html).not.toContain('OPENADLC_IDENTITY');
     } finally {
       who.me = ADMIN;
     }
@@ -219,8 +219,8 @@ describe('the settings page', () => {
       const html = (await page()).replace(/<!-- -->/g, '');
       expect(html).toContain('Settings need an admin');
       expect(html).toContain('This console signs in as');
-      expect(html).toContain('FLEETADLC_IDENTITY');
-      expect(html).toContain('fleetadlc up');
+      expect(html).toContain('OPENADLC_IDENTITY');
+      expect(html).toContain('openadlc up');
     } finally {
       who.me = ADMIN;
     }
@@ -283,7 +283,7 @@ describe('the settings page', () => {
       .map((match) => [/href="([^"]+)"/.exec(match[0])?.[1], /aria-label="([^"]+)"/.exec(match[0])?.[1]])
       .filter(([href]) => href?.startsWith('/settings/'));
     expect(links).toEqual([
-      ['/settings/repositories/fleetadlc-testbed', 'fleetadlc-testbed settings'],
+      ['/settings/repositories/openadlc-testbed', 'openadlc-testbed settings'],
       ['/settings/repositories/website', 'website settings'],
     ]);
   });
@@ -341,7 +341,7 @@ describe('the settings page', () => {
     const html = await page();
     const github = html.slice(html.indexOf('id="github"'), html.indexOf('id="crew"'));
     const said = section(html, 'github-accounts');
-    expect(said).toContain('fleetadlc-atlas-janedoe Signed in Crew account Used by Builder Reconnect');
+    expect(said).toContain('openadlc-atlas-janedoe Signed in Crew account Used by Builder Reconnect');
     expect(said).toContain('irisexampleco Signed in Reviewer account Used by Second reviewer Reconnect');
     expect(said).toContain('Connect a GitHub account Connect');
     expect(github).not.toContain('<select');
@@ -353,17 +353,17 @@ describe('the settings page', () => {
     const said = section(html, 'crew');
     expect(said).toContain('Bot GitHub account Model');
     expect(said.indexOf('Crew account')).toBeLessThan(said.indexOf('Reviewer account'));
-    expect(crew).toMatch(/aria-label="GitHub account for the builder"[\s\S]*?<option value="fleetadlc-atlas-janedoe" selected="">fleetadlc-atlas-janedoe<\/option>/);
+    expect(crew).toMatch(/aria-label="GitHub account for the builder"[\s\S]*?<option value="openadlc-atlas-janedoe" selected="">openadlc-atlas-janedoe<\/option>/);
     expect(crew).toMatch(/aria-label="GitHub account for the lead reviewer"[\s\S]*?<option value="" selected="">Not connected<\/option>/);
     // What a bot may not use is there, disabled, with the bridge's reason.
     expect(crew).toContain(
-      '<option value="fleetadlc-atlas-janedoe" disabled="">fleetadlc-atlas-janedoe — used by the builder — reviewers need their own account</option>',
+      '<option value="openadlc-atlas-janedoe" disabled="">openadlc-atlas-janedoe — used by the builder — reviewers need their own account</option>',
     );
     expect(crew).toMatch(/aria-label="Model account for the builder"[\s\S]*?<option value="max" selected="">Anthropic — Max<\/option>/);
     expect(crew).toMatch(/aria-label="Model for the builder"[\s\S]*?<option value="newest:opus" selected="">/);
     expect(said).toContain('Automation');
     expect(said).toContain('No model, and that is correct');
-    expect(html).not.toContain('fleetadlc auth login');
+    expect(html).not.toContain('openadlc auth login');
   });
 
   it('gives Crew no link to AI models: that section is already above it, in the navigation', async () => {
@@ -418,7 +418,7 @@ describe('the settings page', () => {
     const appearance = html.slice(html.indexOf('id="appearance"'));
     expect(appearance).toContain('aria-label="Color mode"');
     expect(appearance).toContain('Repository colors');
-    expect(appearance).toContain('aria-label="fleetadlc-testbed color"');
+    expect(appearance).toContain('aria-label="openadlc-testbed color"');
     expect(appearance).toContain('Crew colors');
     expect(appearance).not.toMatch(/colour/i);
   });
@@ -429,13 +429,13 @@ describe('the settings page', () => {
     const { default: SettingsPage } = await import('./page');
     vi.spyOn(api, 'workPauses').mockResolvedValueOnce({
       paused: null,
-      repos: { 'fleetadlc-testbed': { by: 'janedoe', at: '2026-09-29T10:00:00.000Z', reason: 'a migration is running' } },
+      repos: { 'openadlc-testbed': { by: 'janedoe', at: '2026-09-29T10:00:00.000Z', reason: 'a migration is running' } },
     });
     const html = renderToStaticMarkup(<RoleProvider role="admin">{await SettingsPage()}</RoleProvider>).replace(/<!-- -->/g, '');
     expect(section(html, 'pause')).toContain('Paused by janedoe at 2026-09-29 10:00 UTC: a migration is running.');
     const markup = html.slice(html.indexOf('id="pause"'), html.indexOf('</section>', html.indexOf('id="pause"')));
     expect(markup).toContain('aria-label="Paused repositories"');
-    expect(markup).toContain('aria-label="Resume fleetadlc-testbed"');
+    expect(markup).toContain('aria-label="Resume openadlc-testbed"');
     expect(markup).toMatch(/<input type="radio"[^>]*value="chosen"/);
   });
 

@@ -20,7 +20,7 @@ const hasSshKeygen = (() => {
 // oracle; signing.ts itself never does.
 const dirs: string[] = [];
 function scratch(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-key-test-'));
+  const dir = mkdtempSync(join(tmpdir(), 'openadlc-key-test-'));
   dirs.push(dir);
   return dir;
 }
@@ -77,7 +77,7 @@ describe('a new signing key', () => {
     const pair = generateSigningKey('builder');
     expect(pair.privateKey.startsWith('-----BEGIN OPENSSH PRIVATE KEY-----\n')).toBe(true);
     expect(pair.privateKey.endsWith('-----END OPENSSH PRIVATE KEY-----\n')).toBe(true);
-    expect(pair.publicKey).toMatch(/^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5[A-Za-z0-9+/=]+ fleetadlc-builder$/);
+    expect(pair.publicKey).toMatch(/^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5[A-Za-z0-9+/=]+ openadlc-builder$/);
     for (const line of pair.privateKey.trim().split('\n')) expect(line.length).toBeLessThanOrEqual(70);
   });
 

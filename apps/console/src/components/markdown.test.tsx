@@ -13,7 +13,7 @@ const QUESTION = [
   '1. **Where does the page go?** I would assume `index.html` at the root.',
   '2. **The README already exists.** Add a section, or replace it?',
   '',
-  '<!-- fleetadlc:{"event":"question"} -->',
+  '<!-- openadlc:{"event":"question"} -->',
 ].join('\n');
 
 function html(text: string): string {
@@ -32,9 +32,9 @@ describe('a bot’s markdown', () => {
     expect(page).not.toContain('`');
   });
 
-  it('drops the fleetadlc marker a person was never meant to read', () => {
-    expect(html(QUESTION)).not.toContain('fleetadlc:');
-    expect(parseMarkdown('<!-- fleetadlc:{"event":"stopped"} -->')).toEqual([]);
+  it('drops the openadlc marker a person was never meant to read', () => {
+    expect(html(QUESTION)).not.toContain('openadlc:');
+    expect(parseMarkdown('<!-- openadlc:{"event":"stopped"} -->')).toEqual([]);
   });
 
   it('keeps a numbered list numbered from where it starts', () => {
@@ -83,7 +83,7 @@ describe('a bot’s markdown', () => {
 
 describe('what OpenADLC posted to GitHub, shown in the console', () => {
   it('leaves out the header, since the console already says which bot wrote it', () => {
-    const posted = '**OpenADLC_example · intake agent**<!-- fleetadlc-header -->\n\nThe issue is filed.';
+    const posted = '**OpenADLC_example · intake agent**<!-- openadlc-header -->\n\nThe issue is filed.';
     expect(parseMarkdown(posted)).toEqual([{ kind: 'paragraph', lines: ['The issue is filed.'] }]);
   });
 
@@ -150,11 +150,11 @@ describe('headings', () => {
 describe('a very long message', () => {
   it('formats up to the limit and shows the rest as plain text, not dropped', () => {
     const head = `**bold** ${'x'.repeat(100)}\n`.repeat(Math.ceil(FORMATTED_LIMIT / 110));
-    const tail = '**not bold past the limit** <!-- fleetadlc:{"event":"x"} -->';
+    const tail = '**not bold past the limit** <!-- openadlc:{"event":"x"} -->';
     const page = renderToStaticMarkup(<Markdown text={`${head}${tail}`} />);
     expect(page).toContain('<strong class="font-semibold">bold</strong>');
     expect(page).toContain('<p class="whitespace-pre-wrap">**bold**');
     expect(page).toContain('**not bold past the limit**</p></div>');
-    expect(page).not.toContain('fleetadlc:');
+    expect(page).not.toContain('openadlc:');
   });
 });

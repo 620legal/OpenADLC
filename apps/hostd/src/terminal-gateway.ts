@@ -1,7 +1,7 @@
 import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { audit } from '@fleetadlc/db';
+import { audit } from '@openadlc/db';
 import type { ExecDriver } from './drivers/types.js';
 
 /**
@@ -11,7 +11,7 @@ import type { ExecDriver } from './drivers/types.js';
  * log, and this token is a shell. A subprotocol is a header. The characters are
  * a token as the WebSocket spec defines one, which base64url is.
  */
-export const ATTACH_SUBPROTOCOL_PREFIX = 'fleetadlc-attach.';
+export const ATTACH_SUBPROTOCOL_PREFIX = 'openadlc-attach.';
 
 export interface AttachGrant {
   bot: string;
@@ -71,7 +71,7 @@ function requestedSize(frame: Frame | null): { cols: number; rows: number } | nu
  * The gateway holds no authority of its own: it only redeems a short-lived
  * attach token that hostd minted for one bot and one session.
  *
- * The token arrives as the subprotocol `fleetadlc-attach.<token>`. A value in the
+ * The token arrives as the subprotocol `openadlc-attach.<token>`. A value in the
  * query string is ignored, and ignoring it does not redeem it: a proxy that
  * logged the old URL must not be handed a working shell, and a probe must not
  * burn the operator's token.
@@ -123,7 +123,7 @@ export class TerminalGateway {
       // stop the runner. The base is a constant and the parse is guarded.
       let url: URL;
       try {
-        url = new URL(request.url ?? '/', 'http://fleetadlc.invalid');
+        url = new URL(request.url ?? '/', 'http://openadlc.invalid');
       } catch {
         socket.destroy();
         return;
@@ -428,8 +428,8 @@ export function consoleOrigins(consoleUrl: string): string[] {
 
 /** The console this process was configured with. An unparseable URL allows no browser. */
 export function configuredConsoleOrigins(env: NodeJS.ProcessEnv = process.env): readonly string[] {
-  const configured = env.FLEETADLC_CONSOLE_URL;
-  const port = env.FLEETADLC_CONSOLE_PORT && env.FLEETADLC_CONSOLE_PORT.length > 0 ? env.FLEETADLC_CONSOLE_PORT : '47300';
+  const configured = env.OPENADLC_CONSOLE_URL;
+  const port = env.OPENADLC_CONSOLE_PORT && env.OPENADLC_CONSOLE_PORT.length > 0 ? env.OPENADLC_CONSOLE_PORT : '47300';
   const url = configured && configured.length > 0 ? configured : `http://127.0.0.1:${port}`;
   return consoleOrigins(url);
 }
@@ -446,7 +446,7 @@ export function configuredConsoleOrigins(env: NodeJS.ProcessEnv = process.env): 
  * socket was reached on proves nothing: a name someone else controls can be
  * rebound to this machine, and then their page and this socket share a host. A
  * console served under a name of its own — a cloud domain, a LAN address, a
- * tunnel — is admitted by setting `FLEETADLC_CONSOLE_URL` for hostd.
+ * tunnel — is admitted by setting `OPENADLC_CONSOLE_URL` for hostd.
  */
 export function upgradeOriginAllowed(origin: string | undefined, allowed: readonly string[]): boolean {
   if (origin === undefined || origin.trim() === '') return true;

@@ -27,7 +27,7 @@ import {
   type UndoOutcome,
   type UndoStore,
   type UndoTarget,
-} from '@fleetadlc/backup';
+} from '@openadlc/backup';
 
 /**
  * Restoring a backup into an install that is already set up, and undoing it.

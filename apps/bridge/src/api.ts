@@ -1,6 +1,6 @@
 import { signInKind } from './sign-in.js';
 import { aggregateInsights, withoutIgnored } from './insights.js';
-import { insights } from '@fleetadlc/db';
+import { insights } from '@openadlc/db';
 import { heldForPerson } from './merge-line.js';
 import { monthStart, parseCap, summarize as summarizeCi } from './ci-usage.js';
 import { readHolds } from './item-hold.js';
@@ -29,7 +29,7 @@ import {
   tasks,
   threads,
   withAdvisoryLock,
-} from '@fleetadlc/db';
+} from '@openadlc/db';
 import {
   ADDABLE_SEAT_ROLES,
   STAGE_COLUMN_TITLES,
@@ -57,7 +57,7 @@ import {
   type CrewColor,
   type StageKey,
   type TaskState,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import type { Automation } from './automation.js';
 import type { BridgeConfig } from './config.js';
@@ -74,8 +74,8 @@ import {
   pendingInvitationsFrom,
   redeliverLatestFailure,
   rulesAppliedPayload,
-} from '@fleetadlc/github';
-import { REPO_DEFAULTS, buildAppManifest, hasNextLabel, hasPausedLabel, isGitHubLogin, loginCandidates, manifestPostUrl, sameLogin } from '@fleetadlc/shared';
+} from '@openadlc/github';
+import { REPO_DEFAULTS, buildAppManifest, hasNextLabel, hasPausedLabel, isGitHubLogin, loginCandidates, manifestPostUrl, sameLogin } from '@openadlc/shared';
 import { refuseWhilePaused } from './pause-work.js';
 import { HttpFailure, Router, STREAMING, WithStatus } from './router.js';
 import { RequestQueue, stillTried, withPositions } from './request-queue.js';
@@ -114,7 +114,7 @@ import { repinHumans } from './human-ids.js';
 import { registerItemRoutes } from './item-routes.js';
 import { itemOf, requestSubject } from './items.js';
 import { readSeatPauses } from './seat-pause.js';
-import type { HealthAction } from '@fleetadlc/shared';
+import type { HealthAction } from '@openadlc/shared';
 import { attachmentIds, claimableFor, claimWindowStart, registerAttachmentRoutes } from './attachment-routes.js';
 import { registerDesignMemoryRoutes } from './design-memory.js';
 import { ignoredSubjects, issueForSubject, parseRef, taskSummary } from './work.js';
@@ -176,7 +176,7 @@ function sessionsFor<T extends { lastLine?: unknown }>(role: string, rows: T[]):
 /**
  * A bot by the name it goes by, or by its seat. A page opened before a bot's
  * account connected still says `builder` after the bot has become
- * `fleetadlc-atlas-janedoe`, and that is the same bot, not an unknown one.
+ * `openadlc-atlas-janedoe`, and that is the same bot, not an unknown one.
  */
 async function botNamed(reference: string): Promise<Bot | null> {
   return (await bots.getBotByName(reference)) ?? (await bots.getBotBySlot(reference));
@@ -358,7 +358,7 @@ export async function dismissTask(
 
 /** The states a task can be stopped from: the ones whose card offers "Try again", and a pause nobody is asked about. */
 /** A request with no intake seat to triage it: the crew's to change, not the bridge failing. */
-const NO_INTAKE = 'no intake bot is configured; add an intake seat to config/bots.yaml and run fleetadlc up';
+const NO_INTAKE = 'no intake bot is configured; add an intake seat to config/bots.yaml and run openadlc up';
 
 const STOPPABLE: readonly string[] = ['failed', 'stopped', 'paused'];
 const HELD_LEASE: readonly string[] = ['leased', 'in_task', 'paused'];
@@ -602,7 +602,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     // The repositories OpenADLC works in. One removed keeps its issues and its
     // pull requests as history; they are not the board's any more.
     const workedIn = new Set(repoList.map((entry) => entry.name));
-    // Nor is an issue labelled `fleetadlc:ignore`, nor its pull request, nor
+    // Nor is an issue labelled `openadlc:ignore`, nor its pull request, nor
     // the request it was filed from: the board is the crew's work.
     const ignored = ignoredSubjects(issueList);
     const landing = (await mergeLines.line(named?.id)).filter(
@@ -720,7 +720,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       return request ? (request.text.split('\n')[0] ?? '').slice(0, 120) || null : null;
     };
     const gated = new Set(openGates.map((gate) => gate.taskId).filter((id): id is string => Boolean(id)));
-    // Work on an issue labelled `fleetadlc:ignore`, or its pull request, is not
+    // Work on an issue labelled `openadlc:ignore`, or its pull request, is not
     // the console's: not in a seat's queue or its history. What the seat is
     // doing now still is, since that is the seat's state, and its card is where
     // a person stops a task that was running when the label went on.
@@ -1166,7 +1166,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       issues.listIssues(),
     ]);
     // What was spent stays in the totals, whatever it was spent on; a task on
-    // an issue labelled `fleetadlc:ignore` is not listed as one to look at.
+    // an issue labelled `openadlc:ignore` is not listed as one to look at.
     const ignored = ignoredSubjects(issueList);
 
     return {
@@ -1239,7 +1239,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
             testingDeploy: choice,
             shipsByMerging: await deploys.shipsByMerging(repo.fullName, choice),
             // How it ships by its rules, and where they came from: its
-            // `.github/fleetadlc.yml`, its row, or the choice above.
+            // `.github/openadlc.yml`, its row, or the choice above.
             delivery: deps.delivery ? await deps.delivery.get(repo).catch(() => null) : null,
           };
         }),
@@ -1862,8 +1862,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
   /**
    * The install's own settings, so a person can finish a setup without a shell.
    *
-   * Everything here used to live in `~/.fleetadlc/install.json`, written by
-   * `fleetadlc init` and read into the environment once at start-up. The console
+   * Everything here used to live in `~/.openadlc/install.json`, written by
+   * `openadlc init` and read into the environment once at start-up. The console
    * could therefore say "no GitHub App client id" and offer no way to give it
    * one, which is the single thing standing between a running stack and a
    * working install.
@@ -2274,7 +2274,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     return { repository: repo.fullName, production: choice };
   });
 
-  // A new key for signing the crew's posts (`fleetadlc attribution rotate`).
+  // A new key for signing the crew's posts (`openadlc attribution rotate`).
   // Through this bridge's own instance, which holds the ring in memory: a key
   // written to the store from outside would not be used until a restart. Key
   // ids only, here and in the audit entry; never the key.
@@ -2434,7 +2434,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     const configured = configuredFirstOfRole(config?.configRoot, role);
     const base = configured ?? like;
     if (!base) {
-      throw new HttpFailure(409, `this install has no ${roleLabel(role)} seat to add one beside; add one to config/bots.yaml and run fleetadlc up`);
+      throw new HttpFailure(409, `this install has no ${roleLabel(role)} seat to add one beside; add one to config/bots.yaml and run openadlc up`);
     }
     const bot = await bots.addSeat({
       like: like?.slot ?? base.slot ?? role,
@@ -2514,7 +2514,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
   /**
    * Removes a seat added beside another of its role, when nothing depends on
    * it (`bots.removeSeat` says what does). A seat config/bots.yaml names is
-   * refused, since the next `fleetadlc up` would seed it again.
+   * refused, since the next `openadlc up` would seed it again.
    *
    * The seat is taken off its GitHub account first, as the crew table's "Not
    * connected" does: the account stays OpenADLC's, listed as used by no bot, and
@@ -2533,7 +2533,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       throw new HttpFailure(400, `${seat.name} is a ${roleLabel(seat.role)}, and only a seat added beside another builder can be removed`);
     }
     if (configuredSeats(config?.configRoot).some((entry) => entry.slot === seat.slot)) {
-      throw new HttpFailure(409, `${seat.slot} is in config/bots.yaml, and fleetadlc up would add it again; take it out of the file first`);
+      throw new HttpFailure(409, `${seat.slot} is in config/bots.yaml, and openadlc up would add it again; take it out of the file first`);
     }
     const refusal = await bots.seatRemovalRefusal(seat.id);
     if (refusal) throw refusal;

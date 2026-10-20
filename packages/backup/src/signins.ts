@@ -1,4 +1,4 @@
-import { ENGINE_PROVIDER, listProviderModels, scrubSecret, type ModelProvider } from '@fleetadlc/engines';
+import { ENGINE_PROVIDER, listProviderModels, scrubSecret, type ModelProvider } from '@openadlc/engines';
 import {
   GitHubApiError,
   GitHubClient,
@@ -8,8 +8,8 @@ import {
   refreshTokenRef,
   refreshUserToken,
   type UserToken,
-} from '@fleetadlc/github';
-import { redactSecrets, sameLogin, type EngineName } from '@fleetadlc/shared';
+} from '@openadlc/github';
+import { redactSecrets, sameLogin, type EngineName } from '@openadlc/shared';
 import type { ArchivedAccount, ArchivedBot, ArchivedCredential, BackupContents, LoginFiles } from './archive.js';
 import { signsInByFolder } from './contents.js';
 import { SIGN_IN_FILE } from './login-files.js';
@@ -26,7 +26,7 @@ import {
  * Whether each sign-in an archive carries is one a restore may write.
  *
  * Every restore runs this before it writes anything — the walkthrough's onto a
- * clean install, `fleetadlc restore`, and the one into an install that is already
+ * clean install, `openadlc restore`, and the one into an install that is already
  * set up — so an invalid sign-in is never written anywhere, and a working one
  * is never put over by one that fails. Each sign-in gets one of four verdicts:
  *
@@ -152,7 +152,7 @@ export interface SignInChecks {
 export function defaultSignInChecks(fetchImpl: typeof fetch = fetch): SignInChecks {
   return {
     listModels: (provider, secret, auth) => listProviderModels(provider, secret, fetchImpl, { auth }),
-    gitHubUser: (token) => new GitHubClient({ token, actingAs: 'fleetadlc restore', fetchImpl }).viewer(),
+    gitHubUser: (token) => new GitHubClient({ token, actingAs: 'openadlc restore', fetchImpl }).viewer(),
   };
 }
 
@@ -612,7 +612,7 @@ export interface TakeOverPorts {
 export function gitHubTakeOver(clientId: string, fetchImpl: typeof fetch = fetch): Pick<TakeOverPorts, 'refreshGitHub' | 'gitHubUser'> {
   return {
     refreshGitHub: (refreshToken) => refreshUserToken({ clientId, refreshToken }),
-    gitHubUser: (token) => new GitHubClient({ token, actingAs: 'fleetadlc restore', fetchImpl }).viewer(),
+    gitHubUser: (token) => new GitHubClient({ token, actingAs: 'openadlc restore', fetchImpl }).viewer(),
   };
 }
 

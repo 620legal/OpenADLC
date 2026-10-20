@@ -20,8 +20,8 @@ const world = vi.hoisted(() => ({
   ownerLookup: null as Error | null,
 }));
 
-vi.mock('@fleetadlc/github', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@fleetadlc/github')>();
+vi.mock('@openadlc/github', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@openadlc/github')>();
   return {
     ...actual,
     getSecretStore: () => ({ get: async () => 'app-private-key' }),
@@ -71,12 +71,12 @@ vi.mock('./effective-config.js', () => ({ effectiveConfig: vi.fn(async () => ({ 
 
 const crew = [
   { id: 'b1', name: 'ottoexampleco', role: 'intake', githubLogin: 'ottoexampleco' },
-  { id: 'b2', name: 'fleetadlc-atlas-janedoe', role: 'implement', githubLogin: 'fleetadlc-atlas-janedoe' },
+  { id: 'b2', name: 'openadlc-atlas-janedoe', role: 'implement', githubLogin: 'openadlc-atlas-janedoe' },
   { id: 'b3', name: 'noraexampleco', role: 'review_lead', githubLogin: 'noraexampleco' },
   { id: 'b4', name: 'qa', role: 'qa', githubLogin: null },
 ];
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -124,7 +124,7 @@ beforeEach(() => {
   world.access = new Map();
   world.invitations = new Map();
   world.sent = [];
-  world.connected = new Set(['ottoexampleco', 'fleetadlc-atlas-janedoe', 'noraexampleco']);
+  world.connected = new Set(['ottoexampleco', 'openadlc-atlas-janedoe', 'noraexampleco']);
   world.refuse = new Map();
   world.ownerLookup = null;
   ran.length = 0;
@@ -136,21 +136,21 @@ describe('letting the crew into a repository a person owns', () => {
 
     expect(results.map(({ bot, state, changed }) => `${bot} ${state}${changed ? ' changed' : ''}`)).toEqual([
       'ottoexampleco in changed',
-      'fleetadlc-atlas-janedoe in changed',
+      'openadlc-atlas-janedoe in changed',
       'noraexampleco in changed',
       'qa no-account',
     ]);
     // No triage on a repository a person owns: GitHub refuses it there.
     expect(world.sent.filter((line) => line.startsWith('PUT'))).toEqual([
       'PUT /repos/acme/api/collaborators/ottoexampleco push',
-      'PUT /repos/acme/api/collaborators/fleetadlc-atlas-janedoe push',
+      'PUT /repos/acme/api/collaborators/openadlc-atlas-janedoe push',
       'PUT /repos/acme/api/collaborators/noraexampleco push',
     ]);
-    expect(world.sent).toContain('PATCH /user/repository_invitations/1001 as fleetadlc-atlas-janedoe');
+    expect(world.sent).toContain('PATCH /user/repository_invitations/1001 as openadlc-atlas-janedoe');
   });
 
   it('leaves a bot that can already work there alone, whatever else it was given', async () => {
-    world.access.set('fleetadlc-atlas-janedoe', 'admin');
+    world.access.set('openadlc-atlas-janedoe', 'admin');
     world.access.set('noraexampleco', 'write');
     world.access.set('ottoexampleco', 'write');
 
@@ -159,7 +159,7 @@ describe('letting the crew into a repository a person owns', () => {
     expect(results.filter((one) => one.state === 'in').every((one) => !one.changed)).toBe(true);
     // Not invited again, and the admin somebody made by hand is not lowered to write.
     expect(world.sent.some((line) => line.startsWith('PUT'))).toBe(false);
-    expect(world.access.get('fleetadlc-atlas-janedoe')).toBe('admin');
+    expect(world.access.get('openadlc-atlas-janedoe')).toBe('admin');
   });
 
   it('says a bot that is not connected is invited, and accepts once it connects', async () => {
@@ -191,14 +191,14 @@ describe('letting the crew into a repository an organization owns', () => {
     await service().inviteAndAccept('acme/api');
     expect(world.sent.filter((line) => line.startsWith('PUT'))).toEqual([
       'PUT /repos/acme/api/collaborators/ottoexampleco triage',
-      'PUT /repos/acme/api/collaborators/fleetadlc-atlas-janedoe push',
+      'PUT /repos/acme/api/collaborators/openadlc-atlas-janedoe push',
       'PUT /repos/acme/api/collaborators/noraexampleco push',
     ]);
   });
 
   it('counts a team as a way in, and invites nobody it already lets in', async () => {
     world.access.set('ottoexampleco', 'triage');
-    world.access.set('fleetadlc-atlas-janedoe', 'write');
+    world.access.set('openadlc-atlas-janedoe', 'write');
     world.access.set('noraexampleco', 'maintain');
     const { results } = await service().inviteAndAccept('acme/api');
     expect(results.filter((one) => one.state === 'in')).toHaveLength(3);
@@ -237,7 +237,7 @@ describe('letting the crew into a repository an organization owns', () => {
       }
       // The rest need write wherever they are, so they are invited as usual.
       expect(puts).toEqual([
-        'PUT /repos/acme/api/collaborators/fleetadlc-atlas-janedoe push',
+        'PUT /repos/acme/api/collaborators/openadlc-atlas-janedoe push',
         'PUT /repos/acme/api/collaborators/noraexampleco push',
       ]);
     } finally {

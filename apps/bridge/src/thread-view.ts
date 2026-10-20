@@ -1,11 +1,11 @@
-import { inertMarkup, type Gate } from '@fleetadlc/shared';
+import { inertMarkup, type Gate } from '@openadlc/shared';
 import { requestPrefixOf } from './request-context.js';
 import { issueForSubject, parseRef, repoOfSubject, type IssueFacts } from './work.js';
 
 /**
  * What a bot's thread is about, and where a message written in it goes.
  *
- * A thread is filed under a subject, `fleetadlc-testbed#31` or `request:a4b02784`,
+ * A thread is filed under a subject, `openadlc-testbed#31` or `request:a4b02784`,
  * which is an address rather than something a person reads. The console named
  * its filter chips with them, and a message written in the panel went to no
  * subject at all: it landed in a thread nothing reads, so a person's words

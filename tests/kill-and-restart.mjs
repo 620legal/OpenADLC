@@ -11,16 +11,16 @@ import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { bots, closePool, issues, leases, listAudit, query, repos, tasks, waitForDatabase } from '@fleetadlc/db';
-import { fleetHome, getSecretStore, internalSecretRef } from '@fleetadlc/github';
+import { bots, closePool, issues, leases, listAudit, query, repos, tasks, waitForDatabase } from '@openadlc/db';
+import { openadlcHome, getSecretStore, internalSecretRef } from '@openadlc/github';
 import { refuseARealInstall } from './scratch-only.mjs';
 
 // Before anything else is read or written: see scratch-only.mjs.
 await refuseARealInstall();
 
 const run = promisify(execFile);
-const BRIDGE = process.env.FLEETADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
-const HOSTD = process.env.FLEETADLC_HOSTD_URL ?? 'http://127.0.0.1:47312';
+const BRIDGE = process.env.OPENADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
+const HOSTD = process.env.OPENADLC_HOSTD_URL ?? 'http://127.0.0.1:47312';
 
 // hostd authenticates its callers; the suite presents the same secret the bridge
 // does, read from the secret store.
@@ -29,8 +29,8 @@ const SECRET = await getSecretStore().get(internalSecretRef());
 function authHeaders(onBehalfOf) {
   return {
     'content-type': 'application/json',
-    'x-fleetadlc-internal-secret': SECRET ?? '',
-    ...(onBehalfOf ? { 'x-fleetadlc-on-behalf-of': onBehalfOf } : {}),
+    'x-openadlc-internal-secret': SECRET ?? '',
+    ...(onBehalfOf ? { 'x-openadlc-on-behalf-of': onBehalfOf } : {}),
   };
 }
 const results = [];
@@ -126,7 +126,7 @@ async function main() {
   // check can say nothing was rewritten. It used to look for "fatal" in
   // `git branch --list`'s output, where git never writes it, so it passed
   // whatever happened to the repository.
-  const repoPath = process.env.FLEETADLC_SCRIPTED_REPO_PATH;
+  const repoPath = process.env.OPENADLC_SCRIPTED_REPO_PATH;
   const revOf = async (ref) =>
     repoPath ? (await run('git', ['rev-parse', '--verify', '-q', ref], { cwd: repoPath }).catch(() => ({ stdout: '' }))).stdout.trim() : '';
   const mainBefore = await revOf('refs/heads/main');
@@ -162,7 +162,7 @@ async function main() {
 
   // The bare mirror is what makes the next task cheap; it must survive. There
   // is one per repository now, not one per bot.
-  const workRoot = process.env.FLEETADLC_WORK_ROOT ?? join(fleetHome(), 'work');
+  const workRoot = process.env.OPENADLC_WORK_ROOT ?? join(openadlcHome(), 'work');
   const mirror = join(workRoot, 'mirrors');
   check('the bare mirror survives an interrupted task', existsSync(mirror), mirror);
 

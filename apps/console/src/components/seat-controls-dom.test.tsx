@@ -34,7 +34,7 @@ const SEAT = {
   role: 'implement',
   engine: 'codex',
   model: 'newest:codex',
-  githubLogin: 'fleetadlc-atlas-janedoe',
+  githubLogin: 'openadlc-atlas-janedoe',
   authorization: 'active',
   modelAccountId: 'acct-1',
   maxTasks: 1,

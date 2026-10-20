@@ -23,10 +23,10 @@ import { updateRepoSettings } from '@/app/actions';
 import { REMOVAL_DEFAULTS, RemovalOutcome, RemovalReview, RepoSettings, deliveryLines, type RepoSettingsRepo } from './repo-settings';
 
 const REPO: RepoSettingsRepo = {
-  name: 'fleetadlc-testbed',
-  fullName: 'janedoe/fleetadlc-testbed',
+  name: 'openadlc-testbed',
+  fullName: 'janedoe/openadlc-testbed',
   concurrency: 1,
-  owner: 'fleetadlc-atlas-janedoe',
+  owner: 'openadlc-atlas-janedoe',
   stageModes: {
     intake: 'autonomous',
     spec: 'conditional',
@@ -40,11 +40,11 @@ const REPO: RepoSettingsRepo = {
 };
 
 const BUILDER = {
-  name: 'fleetadlc-atlas-janedoe',
+  name: 'openadlc-atlas-janedoe',
   slot: 'builder',
   role: 'implement',
   authorization: 'active',
-  githubLogin: 'fleetadlc-atlas-janedoe',
+  githubLogin: 'openadlc-atlas-janedoe',
 } as CrewMember;
 
 function settings(repo: RepoSettingsRepo = REPO, builders = 1): string {
@@ -71,8 +71,8 @@ describe('a repository’s settings', () => {
   it('says who builds it, and how many tasks at once with one builder', () => {
     const html = settings();
     // Under settings' Repositories heading, one of several, with its colour beside its name.
-    expect(html).toMatch(/<h3[^>]*><span aria-hidden="true" class="[^"]*bg-repo-teal[^"]*"><\/span>fleetadlc-testbed<\/h3><a href="https:\/\/github.com\/janedoe\/fleetadlc-testbed"/);
-    expect(html).toMatch(/<span class="font-semibold text-body">fleetadlc-atlas-janedoe<\/span><span class="text-muted"> · Builder<\/span>/);
+    expect(html).toMatch(/<h3[^>]*><span aria-hidden="true" class="[^"]*bg-repo-teal[^"]*"><\/span>openadlc-testbed<\/h3><a href="https:\/\/github.com\/janedoe\/openadlc-testbed"/);
+    expect(html).toMatch(/<span class="font-semibold text-body">openadlc-atlas-janedoe<\/span><span class="text-muted"> · Builder<\/span>/);
     expect(html).toContain('Its builder runs one task at a time. Raise its tasks at once on the Crew page, or add a builder, to run two.');
     // One task at once between the builders: neither fewer nor more is on offer.
     expect(html).toMatch(/aria-label="Fewer" disabled=""/);
@@ -174,7 +174,7 @@ describe('a repository’s testing deploy', () => {
         automatic!.click();
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
-      expect(vi.mocked(updateRepoSettings)).toHaveBeenCalledWith('fleetadlc-testbed', { testingDeploy: 'automatic' });
+      expect(vi.mocked(updateRepoSettings)).toHaveBeenCalledWith('openadlc-testbed', { testingDeploy: 'automatic' });
       expect(container.textContent).toContain('This repository has a testing deploy.');
       expect(container.textContent).not.toContain('Merging ships it.');
     } finally {
@@ -278,15 +278,15 @@ const PREVIEW: RemovalPreview = {
   removedAt: null,
   tasks: [
     { id: 't1', subject: 'app#12', kind: 'intake', state: 'paused', bot: 'ottoexampleco', question: 'Which database?' },
-    { id: 't2', subject: 'app#14', kind: 'implement', state: 'running', bot: 'fleetadlc-atlas-janedoe', question: null },
+    { id: 't2', subject: 'app#14', kind: 'implement', state: 'running', bot: 'openadlc-atlas-janedoe', question: null },
   ],
   questions: [{ id: 'g1', subject: 'app#12', question: 'Which database?' }],
-  leases: [{ id: 'l1', issue: 14, bot: 'fleetadlc-atlas-janedoe', state: 'in_task' }],
+  leases: [{ id: 'l1', issue: 14, bot: 'openadlc-atlas-janedoe', state: 'in_task' }],
   crew: {
     known: true,
     reason: null,
     accounts: [
-      { bots: ['fleetadlc-atlas-janedoe'], login: 'fleetadlc-atlas-janedoe', state: 'collaborator' },
+      { bots: ['openadlc-atlas-janedoe'], login: 'openadlc-atlas-janedoe', state: 'collaborator' },
       { bots: ['ottoexampleco'], login: 'ottoexampleco', state: 'invited' },
     ],
   },
@@ -304,7 +304,7 @@ describe('the review step of removing a repository', () => {
     const html = review();
     expect(html).toContain('app#12: ottoexampleco’s intake, waiting on a question');
     expect(html).toContain('“Which database?”');
-    expect(html).toContain('app#14: fleetadlc-atlas-janedoe’s implement, running');
+    expect(html).toContain('app#14: openadlc-atlas-janedoe’s implement, running');
     expect(html).toContain('Its open question is closed and leaves Needs you.');
     expect(html).toContain('The claim on #14 is released.');
   });
@@ -314,7 +314,7 @@ describe('the review step of removing a repository', () => {
     const box = (text: string) => html.match(new RegExp(`<input type="checkbox"([^>]*)/><span[^>]*><span[^>]*>${text}`))?.[1] ?? '';
     expect(box('Take the crew off its collaborators')).toContain('checked');
     expect(box('Remove OpenADLC’s labels')).not.toContain('checked');
-    expect(html).toContain('Collaborators: fleetadlc-atlas-janedoe. Invited: ottoexampleco.');
+    expect(html).toContain('Collaborators: openadlc-atlas-janedoe. Invited: ottoexampleco.');
     expect(html).toContain('Remove OpenADLC’s labels (those in config/labels.json)');
     expect(html).toContain('Deleting a label also takes it off every issue and pull request. It has 2: adlc:build, priority:p1.');
   });
@@ -355,7 +355,7 @@ describe('what a removal could not do', () => {
       stopped: [{ task: 't1', subject: 'app#12', was: 'paused' }],
       questionsClosed: 1,
       leasesReleased: [14],
-      collaboratorsRemoved: ['fleetadlc-atlas-janedoe'],
+      collaboratorsRemoved: ['openadlc-atlas-janedoe'],
       invitationsCancelled: [],
       labelsRemoved: [],
       app: { allRepositories: false, settingsUrl: null, reason: null },
@@ -370,7 +370,7 @@ describe('what a removal could not do', () => {
       ],
     };
     const html = renderToStaticMarkup(<RemovalOutcome report={report} />).replace(/<!-- -->/g, '');
-    expect(html).toContain('Done: 1 task stopped; 1 question closed; 1 claim released; fleetadlc-atlas-janedoe taken off.');
+    expect(html).toContain('Done: 1 task stopped; 1 question closed; 1 claim released; openadlc-atlas-janedoe taken off.');
     expect(html).toContain('the implement task on app#14 is still running');
     expect(html).toContain('hostd did not stop it');
     expect(html).toContain('irisexampleco is still a collaborator');
@@ -439,7 +439,7 @@ describe('the delivery rules, in words', () => {
     // Not only the environment's reviewers: where the plan cannot hold one, OpenADLC holds it.
     expect(said.rules.join(' ')).toContain('a person releasing it from Needs you');
     expect(said.rules[0]).toContain('https://testing.example.com');
-    expect(said.source).toContain('.github/fleetadlc.yml');
+    expect(said.source).toContain('.github/openadlc.yml');
   });
 
   it('says the soak where nobody approves, and the error of a file that did not parse', () => {
@@ -447,20 +447,20 @@ describe('the delivery rules, in words', () => {
       source: 'setting',
       rules: { ...rules, production: { ...rules.production, approval: 'auto', soakMinutes: 30 } },
       testingUrl: null,
-      fileError: '.github/fleetadlc.yml: production.approval: Invalid enum value',
+      fileError: '.github/openadlc.yml: production.approval: Invalid enum value',
     });
     expect(said.rules.join(' ')).toContain('with no reviewer, after 30 minutes on testing');
     expect(said.source).toContain('testing deploy choice');
     expect(said.problem).toContain('production.approval');
     // The file is there; it is the error that is shown next, not "it has no file".
-    expect(said.source).toBe('From the testing deploy choice above, because .github/fleetadlc.yml could not be read:');
+    expect(said.source).toBe('From the testing deploy choice above, because .github/openadlc.yml could not be read:');
   });
 
   it('says a repository without the file has none, and one whose file did not parse could not be read', () => {
     const absent = deliveryLines({ source: 'repository', rules, testingUrl: null, fileError: null });
-    expect(absent.source).toBe('From OpenADLC’s stored rules for this repository, since it has no .github/fleetadlc.yml.');
-    const broken = deliveryLines({ source: 'repository', rules, testingUrl: null, fileError: '.github/fleetadlc.yml: not YAML' });
-    expect(broken.source).toBe('From OpenADLC’s stored rules for this repository, because .github/fleetadlc.yml could not be read:');
+    expect(absent.source).toBe('From OpenADLC’s stored rules for this repository, since it has no .github/openadlc.yml.');
+    const broken = deliveryLines({ source: 'repository', rules, testingUrl: null, fileError: '.github/openadlc.yml: not YAML' });
+    expect(broken.source).toBe('From OpenADLC’s stored rules for this repository, because .github/openadlc.yml could not be read:');
   });
 
   it('says merging ships it where testing is none', () => {

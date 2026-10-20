@@ -1,11 +1,11 @@
-import type { MockScript } from '@fleetadlc/engines';
-import { renderMarker } from '@fleetadlc/shared';
+import type { MockScript } from '@openadlc/engines';
+import { renderMarker } from '@openadlc/shared';
 
 /**
  * Scripted runs for the integration suites, reached only when
- * `FLEETADLC_SCRIPTED_ENGINES=1` is set. They exist so the suites can show
+ * `OPENADLC_SCRIPTED_ENGINES=1` is set. They exist so the suites can show
  * the whole pipeline — task, session, gate, ledger, board — before an engine key
- * is configured. Nothing here runs unless FLEETADLC_SCRIPTED_ENGINES=1 is set;
+ * is configured. Nothing here runs unless OPENADLC_SCRIPTED_ENGINES=1 is set;
  * when it is, every task runs its script whatever engine its bot has, installed
  * or not (`chooseEngine`).
  */
@@ -20,7 +20,7 @@ export function scriptedRunFor(skill: string, subject: string): MockScript {
         ],
         ask: {
           question: 'Which repository owns this change, and is the deadline hard?',
-          options: ['fleetadlc (console)', 'fleetadlc (bridge)', 'let me decide after you answer'],
+          options: ['openadlc (console)', 'openadlc (bridge)', 'let me decide after you answer'],
         },
         tokensIn: 3200,
         tokensOut: 900,
@@ -47,8 +47,8 @@ export function scriptedRunFor(skill: string, subject: string): MockScript {
           // demo exercises the structured-event path rather than only narration.
           `posting the plan: approach, files, tests, risks, stop points ${renderMarker({ event: 'plan_posted' })}`,
           'implementing inside the declared paths, with tests as the evidence',
-          "running fleetadlc-ci against the task's own database",
-          'fleetadlc-ci is green; pushing and opening the pull request, ready for review',
+          "running openadlc-ci against the task's own database",
+          'openadlc-ci is green; pushing and opening the pull request, ready for review',
         ],
         touch: ['src/dispatcher/lease.ts', 'tests/dispatcher/lease.test.ts'],
         tokensIn: 18000,

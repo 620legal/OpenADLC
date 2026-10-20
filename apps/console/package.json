@@ -1,13 +1,13 @@
 {
-  "name": "@fleetadlc/console",
+  "name": "@openadlc/console",
   "version": "0.1.0",
   "description": "OpenADLC’s web console: the board, conversations, Needs you, the crew, costs, settings and onboarding.",
   "private": true,
   "license": "Apache-2.0",
   "scripts": {
-    "dev": "next dev --port ${FLEETADLC_CONSOLE_PORT:-47300} --hostname ${FLEETADLC_CONSOLE_HOST:-127.0.0.1}",
+    "dev": "next dev --port ${OPENADLC_CONSOLE_PORT:-47300} --hostname ${OPENADLC_CONSOLE_HOST:-127.0.0.1}",
     "build": "next build",
-    "start": "next start --port ${FLEETADLC_CONSOLE_PORT:-47300} --hostname ${FLEETADLC_CONSOLE_HOST:-127.0.0.1}",
+    "start": "next start --port ${OPENADLC_CONSOLE_PORT:-47300} --hostname ${OPENADLC_CONSOLE_HOST:-127.0.0.1}",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },

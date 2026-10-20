@@ -157,7 +157,7 @@ describe('builds at once', () => {
   });
 });
 
-describe('an issue labelled fleetadlc:ignore', () => {
+describe('an issue labelled openadlc:ignore', () => {
   it('counts in nothing: not its moves, its request, its pull request’s merge or what it waited on', () => {
     const merging = (issueNumber: number) => [
       { repoId: 'repo-a', issueNumber, from: 'build', to: 'review', kind: 'forward', at: hoursAgo(7) },
@@ -177,7 +177,7 @@ describe('an issue labelled fleetadlc:ignore', () => {
       { repoId: 'repo-a', repoName: 'api', number: 2, prNumber: 6, labels },
     ];
 
-    const counted = aggregateInsights(withoutIgnored(all, issues(['fleetadlc:ignore'])), { days: 7, now: NOW }).overall;
+    const counted = aggregateInsights(withoutIgnored(all, issues(['openadlc:ignore'])), { days: 7, now: NOW }).overall;
     expect(counted.merged).toBe(1);
     expect(counted.stages.mergeLine).toBe(0.5 * H);
     expect(counted.overlap.waits).toBe(0);

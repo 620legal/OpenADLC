@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { internalSecretRef, modelAccountRef, signingKeyRef, type SecretStore } from '@fleetadlc/github';
+import { internalSecretRef, modelAccountRef, signingKeyRef, type SecretStore } from '@openadlc/github';
 import { docker as runDocker, DockerDriver } from './drivers/docker.js';
 import { LocalDriver } from './drivers/local.js';
 import type { TaskComputer } from './drivers/types.js';
@@ -63,7 +63,7 @@ function memory(initial: Record<string, string>): SecretStore {
 }
 
 beforeAll(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'fleetadlc-argv-'));
+  dir = mkdtempSync(join(tmpdir(), 'openadlc-argv-'));
   bin = join(dir, 'bin');
   mkdirSync(bin);
   argvLog = join(dir, 'argv');
@@ -82,7 +82,7 @@ beforeAll(async () => {
   const minter = new SessionEnvMinter(
     memory({ [internalSecretRef()]: INSTALL_SECRET, [modelAccountRef(ACCOUNT)]: MODEL_KEY, [signingKeyRef('atlas')]: SIGNING_KEY }),
     async () => null,
-    () => '/fleetadlc/login',
+    () => '/openadlc/login',
     async () => ({ socket: '/tmp/agent.sock', publicKey: 'ssh-ed25519 AAAAC3Nza test', signer: null, stop: async () => {} }),
   );
   const minted = await minter.mint({
@@ -105,7 +105,7 @@ beforeAll(async () => {
     subjectRef: 'exampleco/widgets#1',
   });
   sessionEnv = minted.env;
-  taskToken = sessionEnv.FLEETADLC_TASK_TOKEN ?? '';
+  taskToken = sessionEnv.OPENADLC_TASK_TOKEN ?? '';
   expect(taskToken).not.toBe('');
   expect(sessionEnv).toMatchObject({ GH_TOKEN: GITHUB_TOKEN, ANTHROPIC_API_KEY: MODEL_KEY, DATABASE_URL });
 });
@@ -121,12 +121,12 @@ afterAll(() => {
 describe('a task’s credentials on the docker driver', () => {
   const driver = (): DockerDriver =>
     new DockerDriver({
-      image: 'fleetadlc-bot:latest',
-      networkPrefix: 'fleetadlc-bot',
-      runnerBundle: '/opt/fleetadlc/skill-runner.bundle.mjs',
+      image: 'openadlc-bot:latest',
+      networkPrefix: 'openadlc-bot',
+      runnerBundle: '/opt/openadlc/skill-runner.bundle.mjs',
       workRoot: join(dir, 'work'),
-      skillsRoot: '/opt/fleetadlc/skills',
-      rolesRoot: '/opt/fleetadlc/roles',
+      skillsRoot: '/opt/openadlc/skills',
+      rolesRoot: '/opt/openadlc/roles',
       hostdUrl: 'http://host.docker.internal:47312',
       loginRoot: join(dir, 'logins'),
       docker: runDocker,
@@ -135,17 +135,17 @@ describe('a task’s credentials on the docker driver', () => {
 
   it('are on no command line when its session starts, when `make setup` runs, or when its signing key is loaded', async () => {
     const docker = driver();
-    await docker.startSession({ computer, name: 'implement-3f2a9c1e', cwd: '/work/wt', command: ['node', '/fleetadlc/skill-runner.mjs'], env: sessionEnv });
+    await docker.startSession({ computer, name: 'implement-3f2a9c1e', cwd: '/work/wt', command: ['node', '/openadlc/skill-runner.mjs'], env: sessionEnv });
     await docker.exec(computer, ['make', '-s', 'setup'], {
       cwd: '/work/wt',
-      env: { DATABASE_URL, FLEETADLC_REPO_HOME: '/work/home', FLEETADLC_HOSTD_URL: 'http://host.docker.internal:47312', FLEETADLC_TASK_ID: TASK, FLEETADLC_TASK_TOKEN: taskToken },
+      env: { DATABASE_URL, OPENADLC_REPO_HOME: '/work/home', OPENADLC_HOSTD_URL: 'http://host.docker.internal:47312', OPENADLC_TASK_ID: TASK, OPENADLC_TASK_TOKEN: taskToken },
     });
     await docker.startSigningAgent(computer, SIGNING_KEY);
 
     const seen = argv();
     expect(seen).toContain('new-session');
     expect(seen).toContain('-e DATABASE_URL -e');
-    expect(seen).toContain('-e FLEETADLC_TASK_TOKEN');
+    expect(seen).toContain('-e OPENADLC_TASK_TOKEN');
     expect(seen).toContain('ssh-add -');
     expectNoSecretIn(seen);
   });
@@ -153,9 +153,9 @@ describe('a task’s credentials on the docker driver', () => {
   it('are on no command line when the task database server is made or a task’s role is', async () => {
     const databases = new TaskDatabases({
       docker: runDocker,
-      container: 'fleetadlc-taskdb',
+      container: 'openadlc-taskdb',
       image: 'pgvector/pgvector:pg16',
-      installLabel: 'fleetadlc.install=default',
+      installLabel: 'openadlc.install=default',
       bindAddress: '127.0.0.1',
       bootPassword: () => BOOT_PASSWORD,
       password: () => DB_PASSWORD,
@@ -172,17 +172,17 @@ describe('a task’s credentials on the docker driver', () => {
     writeFileSync(join(worktree, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
     const store = new PnpmStore({
       docker: runDocker,
-      image: 'fleetadlc-bot:latest',
+      image: 'openadlc-bot:latest',
       install: 'default',
       workRoot: join(dir, 'work'),
-      cacheVolume: (repoKey) => `fleetadlc-cache-${repoKey}`,
+      cacheVolume: (repoKey) => `openadlc-cache-${repoKey}`,
       networkArgs: [],
-      labels: ['fleetadlc.install=default'],
+      labels: ['openadlc.install=default'],
       registry: async () => ({ host: 'registry.example', token: REGISTRY_TOKEN }),
     });
     expect(await store.fill({ repoKey: 'exampleco__widgets', worktree })).toMatchObject({ filled: true });
 
-    expect(argv()).toContain('-e FLEETADLC_REGISTRY_TOKEN');
+    expect(argv()).toContain('-e OPENADLC_REGISTRY_TOKEN');
     expectNoSecretIn(argv());
   });
 
@@ -190,7 +190,7 @@ describe('a task’s credentials on the docker driver', () => {
     const logins = new LoginService({
       driver: 'docker',
       loginRoot: join(dir, 'logins'),
-      image: 'fleetadlc-bot:latest',
+      image: 'openadlc-bot:latest',
       store: memory({ [modelAccountRef(ACCOUNT)]: MODEL_KEY }),
       account: async () => ({ id: ACCOUNT, provider: 'anthropic', kind: 'key' }),
       verifyTimeoutMs: 5_000,
@@ -216,13 +216,13 @@ describe('a task’s credentials on the local driver', () => {
 
     const started = argv().split('\n').find((line) => line.includes('new-session')) ?? '';
     expect(started).toContain('/usr/bin/env -i /bin/sh -c');
-    const file = /(\S*fleetadlc-env-[0-9a-f]{16})/.exec(started)?.[1] ?? '';
+    const file = /(\S*openadlc-env-[0-9a-f]{16})/.exec(started)?.[1] ?? '';
     expect(file).not.toBe('');
     expect(existsSync(file)).toBe(false);
     const seenBySession = readFileSync(out, 'utf8');
     expect(seenBySession).toContain(`GH_TOKEN=${GITHUB_TOKEN}`);
     expect(seenBySession).toContain(`ANTHROPIC_API_KEY=${MODEL_KEY}`);
-    expect(seenBySession).toContain(`FLEETADLC_TASK_TOKEN=${taskToken}`);
+    expect(seenBySession).toContain(`OPENADLC_TASK_TOKEN=${taskToken}`);
     expectNoSecretIn(argv());
   });
 });
@@ -247,18 +247,18 @@ describe('a task’s token inside its computer', () => {
   const taskEnv = (): Record<string, string> => ({
     PATH: [join(import.meta.dirname, '..', 'bin'), join(dir, 'real'), bin, '/usr/bin', '/bin'].join(':'),
     HOME: join(dir, 'home'),
-    FLEETADLC_HOSTD_URL: 'http://host.docker.internal:47312',
-    FLEETADLC_TASK_ID: TASK,
-    FLEETADLC_TASK_TOKEN: taskToken,
+    OPENADLC_HOSTD_URL: 'http://host.docker.internal:47312',
+    OPENADLC_TASK_ID: TASK,
+    OPENADLC_TASK_TOKEN: taskToken,
   });
 
-  it('goes to curl on stdin when fleetadlc-install asks hostd for the registry’s credential', async () => {
+  it('goes to curl on stdin when openadlc-install asks hostd for the registry’s credential', async () => {
     const stdin = join(dir, 'curl-stdin-install');
     fakeCurl(stdin);
-    const code = await run(join(import.meta.dirname, '..', '..', '..', 'infra', 'local', 'fleetadlc-install'), ['true'], dir, taskEnv());
+    const code = await run(join(import.meta.dirname, '..', '..', '..', 'infra', 'local', 'openadlc-install'), ['true'], dir, taskEnv());
 
     expect(code).toBe(0);
-    expect(readFileSync(stdin, 'utf8')).toBe(`x-fleetadlc-task-token: ${taskToken}\n`);
+    expect(readFileSync(stdin, 'utf8')).toBe(`x-openadlc-task-token: ${taskToken}\n`);
     expect(argv()).toContain('--header @-');
     expectNoSecretIn(argv());
   });
@@ -276,13 +276,13 @@ describe('a task’s token inside its computer', () => {
     chmodSync(join(dir, 'real', 'pnpm'), 0o755);
     const code = await run(join(import.meta.dirname, '..', 'bin', 'pnpm'), ['add', '-D', 'left-pad'], wt, {
       ...taskEnv(),
-      FLEETADLC_PNPM_STORE: '/pnpm-store',
+      OPENADLC_PNPM_STORE: '/pnpm-store',
       PNPM_STORE_DIR: '/pnpm-store',
       npm_config_store_dir: '/pnpm-store',
     });
 
     expect(code).toBe(0);
-    expect(readFileSync(stdin, 'utf8')).toBe(`x-fleetadlc-task-token: ${taskToken}\n`);
+    expect(readFileSync(stdin, 'utf8')).toBe(`x-openadlc-task-token: ${taskToken}\n`);
     expectNoSecretIn(argv());
   });
 });

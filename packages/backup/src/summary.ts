@@ -1,7 +1,7 @@
-import { accessTokenRef, appPrivateKeyRef, modelAccountRef, refreshTokenRef, registryTokenRef, signingKeyRef, webhookSecretRef } from '@fleetadlc/github';
+import { accessTokenRef, appPrivateKeyRef, modelAccountRef, refreshTokenRef, registryTokenRef, signingKeyRef, webhookSecretRef } from '@openadlc/github';
 import type { ArchivedAccount, BackupContents, BackupManifest, FormatVersion } from './archive.js';
 import { isGitHubRefreshTokenRef, signsInByFolder } from './contents.js';
-import { nameForLogin, sameLogin, stepNamed } from '@fleetadlc/shared';
+import { nameForLogin, sameLogin, stepNamed } from '@openadlc/shared';
 import { ADD_THE_SEAT, archivedIdentities, archivedSeat, carriesSignIns, type AccountInArchive, type RestorePlan } from './plan.js';
 import type { SignInLine, SignInState } from './signins.js';
 
@@ -21,13 +21,13 @@ export function counted(total: number, noun: string): string {
 }
 
 /**
- * What `fleetadlc backup` says about sign-ins, every time: the fact about them
+ * What `openadlc backup` says about sign-ins, every time: the fact about them
  * that decides whether taking them was right.
  */
 export const SIGN_IN_ROTATION =
   'GitHub rotates a sign-in each time it is used, so restoring one moves it to the new install: right when the old install is gone; if the old one keeps running, one of the two will need reconnecting.';
 
-/** What `fleetadlc backup` says when the sign-ins were left out. */
+/** What `openadlc backup` says when the sign-ins were left out. */
 export function describeOmittedRefreshTokens(refs: string[]): string[] {
   const lines = [
     'The GitHub sign-ins are left out, so each bot connects again after a restore. Include them when the old install is going away.',
@@ -37,7 +37,7 @@ export function describeOmittedRefreshTokens(refs: string[]): string[] {
 }
 
 /**
- * What `fleetadlc restore` says about refresh tokens an archive carries without
+ * What `openadlc restore` says about refresh tokens an archive carries without
  * its maker having chosen them — one written before that was a choice. Naming
  * them shows they were passed over on purpose rather than lost.
  */
@@ -49,7 +49,7 @@ export function describeUnrestoredRefreshTokens(refs: string[]): string[] {
   return lines;
 }
 
-/** Where a bot's own login is written in a line: `builder (fleetadlc-atlas-janedoe) as fleetadlc-atlas-janedoe`. */
+/** Where a bot's own login is written in a line: `builder (openadlc-atlas-janedoe) as openadlc-atlas-janedoe`. */
 function botLine(bot: { name: string; slot?: string; githubLogin: string | null }): string {
   const seat = archivedSeat(bot);
   const called = bot.name === seat ? seat : `${seat} (${bot.name})`;
@@ -74,8 +74,8 @@ function accountLine(account: ArchivedAccount): string {
 }
 
 /**
- * An archive described by name, for `fleetadlc backup` before it asks for a
- * passphrase and `fleetadlc restore` once it has one.
+ * An archive described by name, for `openadlc backup` before it asks for a
+ * passphrase and `openadlc restore` once it has one.
  */
 export function describeContents(contents: BackupContents): string[] {
   const secrets = Object.keys(contents.secrets).sort();

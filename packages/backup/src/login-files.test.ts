@@ -69,7 +69,7 @@ const ACCOUNT = '33333333-3333-4333-8333-333333333333';
 const made: string[] = [];
 
 function scratch(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-logins-'));
+  const dir = mkdtempSync(join(tmpdir(), 'openadlc-logins-'));
   made.push(dir);
   return dir;
 }
@@ -255,9 +255,9 @@ describe('writing one back', () => {
     expect(() => accountLoginDir('/logins', '../../etc')).toThrow(BackupError);
   });
 
-  it('keeps them where hostd does: FLEETADLC_LOGIN_ROOT, or logins under the install’s home', () => {
-    expect(loginRoot({ FLEETADLC_LOGIN_ROOT: '/srv/logins' })).toBe('/srv/logins');
-    expect(loginRoot({ FLEETADLC_HOME: '/srv/fleetadlc' })).toBe('/srv/fleetadlc/logins');
+  it('keeps them where hostd does: OPENADLC_LOGIN_ROOT, or logins under the install’s home', () => {
+    expect(loginRoot({ OPENADLC_LOGIN_ROOT: '/srv/logins' })).toBe('/srv/logins');
+    expect(loginRoot({ OPENADLC_HOME: '/srv/openadlc' })).toBe('/srv/openadlc/logins');
   });
 });
 

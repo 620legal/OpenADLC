@@ -386,9 +386,9 @@ resource "google_project_iam_custom_role" "secrets" {
 
 # The host reads the per-bot credentials hostd hands a task, and the database
 # URL; hostd holds no refresh token and writes nothing. It writes through the
-# CLI a person runs on it: `fleetadlc restore` puts an install's secrets back,
+# CLI a person runs on it: `openadlc restore` puts an install's secrets back,
 # and with the bridge stopped the CLI refreshes a bot's token itself and saves
-# the one GitHub rotated (`fleetadlc auth login` hands a sign-in to the bridge,
+# the one GitHub rotated (`openadlc auth login` hands a sign-in to the bridge,
 # which saves it). It has no access to any product project.
 resource "google_project_iam_member" "host_secrets" {
   project = var.project_id
@@ -654,7 +654,7 @@ resource "google_cloud_run_v2_service" "bridge" {
   # `allUsers` binding could not be applied here. What still stands between the
   # internet and the bridge: ingress admits only the load balancer and the VPC,
   # the load balancer routes `/webhooks/github` alone, and every delivery is
-  # checked against FLEETADLC_WEBHOOK_SECRET.
+  # checked against OPENADLC_WEBHOOK_SECRET.
   invoker_iam_disabled = true
   deletion_protection  = false
 
@@ -695,22 +695,22 @@ resource "google_cloud_run_v2_service" "bridge" {
       }
 
       env {
-        name  = "FLEETADLC_SECRET_STORE"
+        name  = "OPENADLC_SECRET_STORE"
         value = "gcp"
       }
 
       env {
-        name  = "FLEETADLC_GCP_PROJECT"
+        name  = "OPENADLC_GCP_PROJECT"
         value = var.project_id
       }
 
       env {
-        name  = "FLEETADLC_PUBLIC_URL"
+        name  = "OPENADLC_PUBLIC_URL"
         value = "https://${local.console_domain}"
       }
 
       env {
-        name  = "FLEETADLC_CONSOLE_URL"
+        name  = "OPENADLC_CONSOLE_URL"
         value = "https://${local.console_domain}"
       }
 
@@ -719,7 +719,7 @@ resource "google_cloud_run_v2_service" "bridge" {
       dynamic "env" {
         for_each = var.automation_bot != "" ? [var.automation_bot] : []
         content {
-          name  = "FLEETADLC_AUTOMATION_BOT"
+          name  = "OPENADLC_AUTOMATION_BOT"
           value = env.value
         }
       }
@@ -727,31 +727,31 @@ resource "google_cloud_run_v2_service" "bridge" {
       # Who is asking is read from IAP's signed assertion, not from a header
       # anything that reaches the bridge could set.
       env {
-        name  = "FLEETADLC_IDENTITY_MODE"
+        name  = "OPENADLC_IDENTITY_MODE"
         value = "iap"
       }
 
       env {
-        name  = "FLEETADLC_IAP_AUDIENCE"
+        name  = "OPENADLC_IAP_AUDIENCE"
         value = "/projects/${data.google_project.this.number}/global/backendServices/${google_compute_backend_service.console.generated_id}"
       }
 
       env {
-        name  = "FLEETADLC_HOSTD_URL"
+        name  = "OPENADLC_HOSTD_URL"
         value = "http://${google_compute_instance.host.network_interface[0].network_ip}:${var.hostd_port}"
       }
 
       # May be empty on a fresh install: the organization the console's
       # walkthrough stores wins over this seed (apps/bridge/src/effective-config.ts).
       env {
-        name  = "FLEETADLC_GITHUB_ORG"
+        name  = "OPENADLC_GITHUB_ORG"
         value = var.github_organization
       }
 
       # From Secret Manager, not from a variable in the clear: a value set here
       # is readable by anyone who can describe the service.
       env {
-        name = "FLEETADLC_WEBHOOK_SECRET"
+        name = "OPENADLC_WEBHOOK_SECRET"
         value_source {
           secret_key_ref {
             secret  = google_secret_manager_secret.webhook.secret_id
@@ -761,12 +761,12 @@ resource "google_cloud_run_v2_service" "bridge" {
       }
 
       env {
-        name  = "FLEETADLC_GITHUB_CLIENT_ID"
+        name  = "OPENADLC_GITHUB_CLIENT_ID"
         value = var.github_app_client_id
       }
 
       env {
-        name  = "FLEETADLC_HUMANS"
+        name  = "OPENADLC_HUMANS"
         value = join(",", var.humans)
       }
 
@@ -774,18 +774,18 @@ resource "google_cloud_run_v2_service" "bridge" {
       # in admin_emails, or, when that is empty, every `user:` among the
       # console's IAP members. Read only while the users table is empty.
       env {
-        name  = "FLEETADLC_ADMIN_EMAILS"
+        name  = "OPENADLC_ADMIN_EMAILS"
         value = join(",", var.admin_emails)
       }
 
       env {
-        name  = "FLEETADLC_CONSOLE_MEMBERS"
+        name  = "OPENADLC_CONSOLE_MEMBERS"
         value = join(",", var.console_members)
       }
 
       # The dispatcher runs in the bridge; without this nothing starts work.
       env {
-        name  = "FLEETADLC_DISPATCH_IN_BRIDGE"
+        name  = "OPENADLC_DISPATCH_IN_BRIDGE"
         value = "1"
       }
 
@@ -876,21 +876,21 @@ resource "google_cloud_run_v2_service" "console" {
       }
 
       env {
-        name  = "FLEETADLC_BRIDGE_URL"
+        name  = "OPENADLC_BRIDGE_URL"
         value = local.bridge_url
       }
 
       # The name the console is served under. It answers only names it is
       # served under, so a page on a name rebound to it learns nothing.
       env {
-        name  = "FLEETADLC_CONSOLE_URL"
+        name  = "OPENADLC_CONSOLE_URL"
         value = "https://${local.console_domain}"
       }
 
       # Only turns on the console's report of a request that arrived without
       # IAP's assertion, which on an install behind IAP should never happen.
       env {
-        name  = "FLEETADLC_IDENTITY_MODE_EXPECTED"
+        name  = "OPENADLC_IDENTITY_MODE_EXPECTED"
         value = "iap"
       }
 
@@ -898,7 +898,7 @@ resource "google_cloud_run_v2_service" "console" {
       # address it could reach. This sends it back through the load balancer,
       # where `/terminal` is a backend of its own admitted to the operators.
       env {
-        name  = "NEXT_PUBLIC_FLEETADLC_TERMINAL_URL"
+        name  = "NEXT_PUBLIC_OPENADLC_TERMINAL_URL"
         value = "wss://${local.console_domain}"
       }
 
@@ -1197,12 +1197,12 @@ moved {
 
 # A denial has to be visible or the allowlist is a claim rather than a control.
 # Squid writes TCP_DENIED for a destination outside the list; the firewall
-# service writes `fleetadlc-egress-denied` for anything that tried to go round it.
+# service writes `openadlc-egress-denied` for anything that tried to go round it.
 resource "google_logging_metric" "egress_denied" {
   name   = "${var.name_prefix}-egress-denied"
   filter = <<-EOT
     resource.type="gce_instance"
-    (textPayload:"TCP_DENIED" OR textPayload:"fleetadlc-egress-denied" OR jsonPayload.MESSAGE:"TCP_DENIED" OR jsonPayload.MESSAGE:"fleetadlc-egress-denied")
+    (textPayload:"TCP_DENIED" OR textPayload:"openadlc-egress-denied" OR jsonPayload.MESSAGE:"TCP_DENIED" OR jsonPayload.MESSAGE:"openadlc-egress-denied")
   EOT
 
   metric_descriptor {

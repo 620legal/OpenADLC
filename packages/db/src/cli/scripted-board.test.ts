@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Bot } from '@fleetadlc/shared';
+import type { Bot } from '@openadlc/shared';
 
 // The board clears what it wrote last time in one transaction. Nothing was
 // written before, so the clear has nothing to find.
@@ -65,7 +65,7 @@ describe('the scripted board ledger', () => {
     // The ledger refuses `newest:`, so a bot assigned one stopped the whole
     // scripted seed at its first usage row.
     vi.mocked(bots.listBots).mockResolvedValue([
-      crewMember({ name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', model: 'newest:opus' }),
+      crewMember({ name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', model: 'newest:opus' }),
       crewMember({ name: 'intake', slot: 'intake', role: 'intake', model: 'newest:haiku' }),
       crewMember({ name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', engine: 'grok', model: 'grok-4' }),
     ]);
@@ -77,7 +77,7 @@ describe('the scripted board ledger', () => {
     for (const entry of rows) expect(entry.model).not.toMatch(/^newest:/);
     expect(rows).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ botId: 'bot-fleetadlc-atlas-janedoe', model: 'claude-opus-5', modelAlias: 'newest:opus' }),
+        expect.objectContaining({ botId: 'bot-openadlc-atlas-janedoe', model: 'claude-opus-5', modelAlias: 'newest:opus' }),
         expect.objectContaining({ botId: 'bot-intake', model: 'claude-haiku-4-5', modelAlias: 'newest:haiku' }),
         expect.objectContaining({ botId: 'bot-lead-reviewer', model: 'grok-4', modelAlias: null }),
       ]),

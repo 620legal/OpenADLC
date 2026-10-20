@@ -564,7 +564,7 @@ function AddressField({
           onKeyDown={(event) => {
             if (event.key === 'Enter' && value.trim()) onSubmit();
           }}
-          placeholder="https://fleetadlc.example.com"
+          placeholder="https://openadlc.example.com"
           className="mt-1.5 w-full rounded-md border border-edge-strong bg-surface px-3 py-2 text-[13px] text-body placeholder:text-dim focus-visible:outline-2 focus-visible:outline-link"
         />
       </label>

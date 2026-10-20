@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseYamlFile } from '@fleetadlc/shared';
+import { parseYamlFile } from '@openadlc/shared';
 
 /**
  * Cost is charged per million tokens.
@@ -8,8 +8,8 @@ import { parseYamlFile } from '@fleetadlc/shared';
  * The table below is a default and will go stale: a vendor changes its prices
  * without asking, and this repository is not where an install should have to
  * edit them. The install's own `config/models.yaml` is the override. hostd
- * reads it from `FLEETADLC_CONFIG_ROOT` when it starts (`readModelPrices`) and
- * hands the table to every session in `FLEETADLC_MODEL_PRICES`, which is all a
+ * reads it from `OPENADLC_CONFIG_ROOT` when it starts (`readModelPrices`) and
+ * hands the table to every session in `OPENADLC_MODEL_PRICES`, which is all a
  * session reads (`loadModelPrices`). A session used to read the file from its
  * working directory, which is the task's clone of a managed repository: the
  * install's file was never read, and a pull request carrying a
@@ -117,7 +117,7 @@ const DEFAULT_PRICES: Record<string, ModelPrice> = {
 };
 
 /** The variable a session is handed the install's prices in, as JSON. */
-export const MODEL_PRICES_ENV = 'FLEETADLC_MODEL_PRICES';
+export const MODEL_PRICES_ENV = 'OPENADLC_MODEL_PRICES';
 
 const overrides = new Map<string, ModelPrice>();
 
@@ -125,7 +125,7 @@ export function setModelPrice(model: string, price: ModelPrice): void {
   overrides.set(model, price);
 }
 
-/** Forgets what `FLEETADLC_MODEL_PRICES` last provided, and which ids were warned about. For tests. */
+/** Forgets what `OPENADLC_MODEL_PRICES` last provided, and which ids were warned about. For tests. */
 export function resetModelPrices(): void {
   overrides.clear();
   warned.clear();

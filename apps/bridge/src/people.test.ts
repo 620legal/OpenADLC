@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The install's people as pinned to their accounts (`human-ids.ts`): janedoe is account 101.
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   settings: {
     getSetting: vi.fn(async (key: string) => (key === 'humanIds' ? JSON.stringify({ janedoe: 101 }) : null)),
     mergeSettingJson: vi.fn(async () => undefined),

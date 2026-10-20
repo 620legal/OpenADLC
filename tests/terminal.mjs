@@ -6,32 +6,32 @@
  *
  *   tests/scratch.sh up && eval "$(tests/scratch.sh env)" && node tests/terminal.mjs
  */
-import { closePool, listAudit, query, waitForDatabase } from '@fleetadlc/db';
-import { getSecretStore, internalSecretRef } from '@fleetadlc/github';
+import { closePool, listAudit, query, waitForDatabase } from '@openadlc/db';
+import { getSecretStore, internalSecretRef } from '@openadlc/github';
 import WebSocket from 'ws';
 import { refuseARealInstall } from './scratch-only.mjs';
 
 // Before anything else is read or written: see scratch-only.mjs.
 await refuseARealInstall();
 
-const HOSTD = process.env.FLEETADLC_HOSTD_URL ?? 'http://127.0.0.1:47312';
+const HOSTD = process.env.OPENADLC_HOSTD_URL ?? 'http://127.0.0.1:47312';
 const WS = HOSTD.replace(/^http/, 'ws');
 /**
  * The bot to take over: the builder, found by its role, since its name is its
- * account's handle once one is connected. `FLEETADLC_TERMINAL_BOT` names another.
+ * account's handle once one is connected. `OPENADLC_TERMINAL_BOT` names another.
  */
-let BOT = process.env.FLEETADLC_TERMINAL_BOT ?? '';
+let BOT = process.env.OPENADLC_TERMINAL_BOT ?? '';
 const IDENTITY = 'terminal test';
 
 // hostd refuses a caller without the install's secret, so the suite holds it the
-// way the bridge and `fleetadlc attach` do: by reading the secret store.
+// way the bridge and `openadlc attach` do: by reading the secret store.
 const SECRET = await getSecretStore().get(internalSecretRef());
 
 function authHeaders(onBehalfOf) {
   return {
     'content-type': 'application/json',
-    'x-fleetadlc-internal-secret': SECRET ?? '',
-    ...(onBehalfOf ? { 'x-fleetadlc-on-behalf-of': onBehalfOf } : {}),
+    'x-openadlc-internal-secret': SECRET ?? '',
+    ...(onBehalfOf ? { 'x-openadlc-on-behalf-of': onBehalfOf } : {}),
   };
 }
 
@@ -57,7 +57,7 @@ function connect(token, options = {}) {
     // The token is the subprotocol. A query string is the request line, which
     // is what a proxy writes down, so `?token=` is not a way in.
     const url = options.query ? `${WS}/terminal?token=${encodeURIComponent(token)}` : `${WS}/terminal`;
-    const protocols = options.query ? [] : [`fleetadlc-attach.${token}`];
+    const protocols = options.query ? [] : [`openadlc-attach.${token}`];
     const ws = new WebSocket(url, protocols, { handshakeTimeout: 10_000 });
     const timer = setTimeout(() => reject(new Error('the socket did not open')), 10_000);
     let settled = false;
@@ -204,9 +204,9 @@ async function main() {
   // the marker is built by `printf` from two words, so the typed line can
   // never stand in for the output.
   const id = Date.now().toString(36);
-  const marker = `fleetadlc-terminal-${id}`;
+  const marker = `openadlc-terminal-${id}`;
   first.send(JSON.stringify({ type: 'resize', cols: 100, rows: 30 }));
-  first.send(JSON.stringify({ type: 'input', data: `printf '%s-%s\\n' fleetadlc-terminal ${id}\n` }));
+  first.send(JSON.stringify({ type: 'input', data: `printf '%s-%s\\n' openadlc-terminal ${id}\n` }));
   const printed = await output.waitFor(
     { test: (buffer) => screenLines(buffer).some((line) => line.trim() === marker) },
     10_000,
@@ -254,7 +254,7 @@ async function main() {
   // 8. None of the above is reachable without the secret.
   const unauthenticated = await fetch(`${HOSTD}/terminal/tokens`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-fleetadlc-on-behalf-of': 'root' },
+    headers: { 'content-type': 'application/json', 'x-openadlc-on-behalf-of': 'root' },
     body: JSON.stringify({ bot: BOT, session }),
   });
   check(

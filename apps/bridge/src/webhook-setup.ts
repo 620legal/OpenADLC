@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { accessSync, constants } from 'node:fs';
 import { join } from 'node:path';
-import { settings } from '@fleetadlc/db';
+import { settings } from '@openadlc/db';
 import {
   appJwt,
   appPrivateKeyRef,
@@ -13,8 +13,8 @@ import {
   type AppApi,
   type AppHookDelivery,
   type AppWebhook,
-} from '@fleetadlc/github';
-import { appSettingsUrl, PLACEHOLDER_HOOK_URL } from '@fleetadlc/shared';
+} from '@openadlc/github';
+import { appSettingsUrl, PLACEHOLDER_HOOK_URL } from '@openadlc/shared';
 import type { BridgeConfig } from './config.js';
 import { effectiveConfig, storeWebhookSecret } from './effective-config.js';
 import { APP_API } from './invitation-service.js';
@@ -392,8 +392,8 @@ export class WebhookSetup {
       github = await setAppWebhook(this.api, credentials, { url: webhookUrl, secret });
     }
 
-    await settings.setSetting('publicUrl', publicUrl, 'fleetadlc');
-    await storeWebhookSecret(secret, 'fleetadlc');
+    await settings.setSetting('publicUrl', publicUrl, 'openadlc');
+    await storeWebhookSecret(secret, 'openadlc');
 
     // Without the app key this is the fallback: the values are stored and
     // correct, and the app's own settings page is the one thing left to do by
@@ -448,7 +448,7 @@ export class WebhookSetup {
   async takeDown(): Promise<WebhookStatus> {
     this.keeper.stop();
     const live = await effectiveConfig(this.deps.config);
-    if (isQuickTunnel(live.publicUrl)) await settings.setSetting('publicUrl', '', 'fleetadlc');
+    if (isQuickTunnel(live.publicUrl)) await settings.setSetting('publicUrl', '', 'openadlc');
     return this.status();
   }
 
@@ -496,7 +496,7 @@ export class WebhookSetup {
     // Stored as this install's address, which is what `resume()` raises a new
     // tunnel for and repoints the app to on every start. The secret is not
     // made here: GitHub generates the webhook's, and the code exchange stores it.
-    await settings.setSetting('publicUrl', publicUrl, 'fleetadlc');
+    await settings.setSetting('publicUrl', publicUrl, 'openadlc');
     return publicUrl;
   }
 
@@ -504,7 +504,7 @@ export class WebhookSetup {
    * Brings a tunnel install's webhook back when the bridge starts.
    *
    * A quick tunnel dies with the process that raised it, and its address with
-   * it. Nothing raised it again, so every restart — a reboot, `fleetadlc up` —
+   * it. Nothing raised it again, so every restart — a reboot, `openadlc up` —
    * left GitHub delivering to a dead address until someone came back to the
    * webhook step and pressed a button. When the stored address is a quick
    * tunnel's and OpenADLC can speak as the app, a new tunnel is raised and the

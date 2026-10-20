@@ -1,4 +1,4 @@
-import { createEngine } from '@fleetadlc/engines';
+import { createEngine } from '@openadlc/engines';
 import { describe, expect, it } from 'vitest';
 import { chooseEngine } from './engine-choice.js';
 
@@ -7,7 +7,7 @@ import { chooseEngine } from './engine-choice.js';
  * which engine CLIs the host has: `codex` on the PATH turned the refusals
  * below into passes.
  */
-const base = { skill: 'implement', subjectRef: 'fleetadlc#145', scripted: false } as const;
+const base = { skill: 'implement', subjectRef: 'openadlc#145', scripted: false } as const;
 
 /** An engine that is not on this host. */
 const missing = () => ({
@@ -94,7 +94,7 @@ describe('choosing the engine a task runs on', () => {
 
   it('gives the integration suites their scripted engine when they ask', async () => {
     // The one remaining way to get fabricated work, and it is reachable only by
-    // exporting FLEETADLC_SCRIPTED_ENGINES by hand.
+    // exporting OPENADLC_SCRIPTED_ENGINES by hand.
     const engine = await chooseEngine({ ...base, engine: 'claude', scripted: true });
     expect(engine.name).toBe('none');
   });

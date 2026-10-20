@@ -12,7 +12,7 @@ describe('the host driver check', () => {
     const [result] = await hostDriverCheck(hostd({ ok: true, driver: 'local' })).run(new Date());
     expect(result).toMatchObject({ ok: false, severity: 'warning', title: LOCAL_DRIVER_TITLE });
     expect(result && 'detail' in result ? result.detail : '').toContain('private key');
-    expect(result && 'action' in result ? result.action : null).toMatchObject({ command: expect.stringContaining('fleetadlc init --driver docker') });
+    expect(result && 'action' in result ? result.action : null).toMatchObject({ command: expect.stringContaining('openadlc init --driver docker') });
   });
 
   it('passes once hostd runs tasks in containers', async () => {

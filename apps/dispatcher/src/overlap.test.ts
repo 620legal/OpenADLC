@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PATH_POLICY } from '@fleetadlc/shared';
+import { DEFAULT_PATH_POLICY } from '@openadlc/shared';
 import { overlapKind, pathMatches, pathsOverlap } from './overlap.js';
 
 describe('declared path overlap', () => {

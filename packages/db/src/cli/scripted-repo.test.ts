@@ -6,7 +6,7 @@ import { scriptedStandIn } from './scripted-repo.js';
 
 const CREW = [
   { name: 'intake', role: 'intake' },
-  { name: 'fleetadlc-atlas-janedoe', role: 'implement' },
+  { name: 'openadlc-atlas-janedoe', role: 'implement' },
 ];
 
 describe('a scripted install with no repository configured', () => {
@@ -18,7 +18,7 @@ describe('a scripted install with no repository configured', () => {
     expect(repo).toMatchObject({
       name: 'scripted',
       fullName: 'local/scripted',
-      owner: 'fleetadlc-atlas-janedoe',
+      owner: 'openadlc-atlas-janedoe',
       defaultBranch: 'main',
     });
     expect(repo?.stageModes?.build).toBe('autonomous');

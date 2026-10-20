@@ -4,7 +4,7 @@ import { bodyHash, newSigningKey, normalizeBody, SIGNED_BODY_MAX, signBody, veri
 
 const key = newSigningKey();
 const fields = { seat: 'lead-reviewer', task: 't-1', repo: 'exampleco/api', kind: 'review', n: 7 };
-const post = withSeat(withHeader('Looks right.', '**OpenADLC_exampleco · lead review agent**<!-- fleetadlc-header -->'), 'lead-reviewer');
+const post = withSeat(withHeader('Looks right.', '**OpenADLC_exampleco · lead review agent**<!-- openadlc-header -->'), 'lead-reviewer');
 
 describe('a signed post', () => {
   it('checks, and says who signed it for what', () => {
@@ -12,7 +12,7 @@ describe('a signed post', () => {
     const verdict = verifyBody(signed, [key]);
     expect(verdict.ok).toBe(true);
     if (verdict.ok) expect(verdict.payload).toMatchObject({ seat: 'lead-reviewer', task: 't-1', repo: 'exampleco/api', kind: 'review', n: 7 });
-    expect(signed.startsWith(`${post}\n\n<!-- fleetadlc-sig:`)).toBe(true);
+    expect(signed.startsWith(`${post}\n\n<!-- openadlc-sig:`)).toBe(true);
   });
 
   it('still checks after GitHub turns its line endings round or trims it', () => {
@@ -41,7 +41,7 @@ describe('a signed post', () => {
   it('is unsigned when it carries none, and a second signing replaces the first', () => {
     expect(verifyBody(post, [key])).toEqual({ ok: false, reason: 'unsigned' });
     const twice = signBody(signBody(post, fields, key), fields, key);
-    expect(twice.match(/fleetadlc-sig:/g)).toHaveLength(1);
+    expect(twice.match(/openadlc-sig:/g)).toHaveLength(1);
     expect(verifyBody(twice, [key]).ok).toBe(true);
   });
 
@@ -50,12 +50,12 @@ describe('a signed post', () => {
   });
 });
 
-describe('a signature made before the rename to FleetADLC', () => {
+describe('a signature made before the rename to OpenADLC', () => {
   it('still verifies, because the bridge reads its history from posts that carry one', () => {
     // Signed as it was then: the old seat tag in the body, the old prefix on the signature.
     const fields = { seat: 'lead-reviewer', task: 't1', repo: 'acme/web', kind: 'review' };
     const signed = signBody('A review.\n\n<!-- fleet-seat:lead-reviewer -->', fields, key);
-    const old = signed.replace('<!-- fleetadlc-sig:', '<!-- fleet-sig:');
+    const old = signed.replace('<!-- openadlc-sig:', '<!-- fleet-sig:');
     expect(verifyBody(old, [key])).toMatchObject({ ok: true, payload: { seat: 'lead-reviewer' } });
   });
 });
@@ -89,7 +89,7 @@ describe('a long run of newlines or spaces', () => {
 describe('the body a signature is made for', () => {
   it('is normalised as it was, so signatures already posted still check', () => {
     // Hashed by the regex version this replaced.
-    const body = 'Looks right.  \t\r\n\tindented line \t \n  \n<!-- fleetadlc-sig:v1.abc.def.ghi -->\nlast \u00a0\t';
+    const body = 'Looks right.  \t\r\n\tindented line \t \n  \n<!-- openadlc-sig:v1.abc.def.ghi -->\nlast \u00a0\t';
     expect(normalizeBody(body)).toBe('Looks right.\n\tindented line\n\n\nlast');
     expect(bodyHash(body)).toBe('DOMwz61Ryg1XHs9PHaH87dhdkVMttmu2un7-PQ9W0mI');
   });

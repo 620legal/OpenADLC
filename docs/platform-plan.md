@@ -40,7 +40,7 @@ it in one place.
    review for the paths it touches — and a deploy goes out when the repository's
    environment releases it — a person, or a soak timer when it ships
    automatically. That much is a platform invariant, not a setting. How far a
-   repository goes on its own is its own `.github/fleetadlc.yml`.
+   repository goes on its own is its own `.github/openadlc.yml`.
 7. **Every rule is a check.** A rule an agent must remember will be forgotten; a
    rule the system enforces will hold.
 8. **Bounded spend.** Every task and every month has a ceiling, and hitting one
@@ -57,8 +57,8 @@ or your own hosting for the products it builds.
 The install target is one command on this machine, and three for Google Cloud:
 
 ```bash
-fleetadlc up              # local: this machine; the crew needs GitHub accounts and model credentials
-fleetadlc cloud configure # Google Cloud: then fleetadlc cloud plan, then fleetadlc cloud apply
+openadlc up              # local: this machine; the crew needs GitHub accounts and model credentials
+openadlc cloud configure # Google Cloud: then openadlc cloud plan, then openadlc cloud apply
 ```
 
 Local Docker Compose and a local-process driver work today. A Google Cloud
@@ -77,27 +77,27 @@ that review are never on one account.
 | Piece | Choice |
 |---|---|
 | Identity | A real GitHub user account per seat, or one shared by a group of seats (a crew account, a reviewer account), invited to each repository as a collaborator with the widest role its seats need. That collaborator role is the account's least privilege; no organization or team is needed. |
-| Name | A bot goes by its account's handle, lowercased, and its container, work folder, secrets and sessions are kept under it. Until an account connects it is named after its seat — `builder`, `lead-reviewer` — which `config/bots.yaml` lists and `fleetadlc up` finds it by. The configuration names no account, so nothing is reserved in advance. |
+| Name | A bot goes by its account's handle, lowercased, and its container, work folder, secrets and sessions are kept under it. Until an account connects it is named after its seat — `builder`, `lead-reviewer` — which `config/bots.yaml` lists and `openadlc up` finds it by. The configuration names no account, so nothing is reserved in advance. |
 | Client | One **OpenADLC GitHub App** per install, with device flow enabled and expiring user tokens on. It is the bots' OAuth client, and acts as itself for the repository's administration and the merge line (invitations, rules, merges, the review gate); reviews and comments are never posted as the app, and no bot can act as it. Its private key mints installation tokens that can write to and administer every repository the app is installed on, so it is the install's widest credential. |
-| Authorization | `fleetadlc auth login --bot lead-reviewer` calls `POST https://github.com/login/device/code`, prints the user code, and polls `POST https://github.com/login/oauth/access_token` with `grant_type=urn:ietf:params:oauth:grant-type:device_code` until a person approves as that account. |
+| Authorization | `openadlc auth login --bot lead-reviewer` calls `POST https://github.com/login/device/code`, prints the user code, and polls `POST https://github.com/login/oauth/access_token` with `grant_type=urn:ietf:params:oauth:grant-type:device_code` until a person approves as that account. |
 | Credentials | The result is a user token (8 hours) and a refresh token (6 months). Only the refresh token is stored. GitHub rotates it on every use, so the new one replaces the old. The bridge is the install's only token service and the only component that refreshes: two refreshing one token would sign each other out. hostd asks it for a task's token (with at least five hours left) and injects it into the task's session environment. |
 | Attribution | Because the token is user-to-server, every comment, review, label and push is attributed to the bot's own account, so CODEOWNERS, required reviews and the review gate's author check all work against real logins. |
 | Signing | After device auth, OpenADLC generates an SSH signing key per bot and uploads the public half to that account. The private half stays in the secret store and is loaded into a per-task `ssh-agent`, so signed-commit rules hold. |
-| Re-auth | If a refresh token is revoked, `fleetadlc doctor` says so and `fleetadlc auth login --bot <name>` repeats the flow. Nothing expires on a ninety-day treadmill. |
+| Re-auth | If a refresh token is revoked, `openadlc doctor` says so and `openadlc auth login --bot <name>` repeats the flow. Nothing expires on a ninety-day treadmill. |
 
 ## 5. Architecture
 
 ```mermaid
 flowchart TB
-  subgraph cli [fleetadlc CLI]
-    init[fleetadlc init]
-    up[fleetadlc up]
-    auth[fleetadlc auth login]
+  subgraph cli [openadlc CLI]
+    init[openadlc init]
+    up[openadlc up]
+    auth[openadlc auth login]
   end
   subgraph runtime [One install, one organization]
     console[console]
     bridge[bridge, with the dispatcher in-process]
-    db[(fleetadlc_db)]
+    db[(openadlc_db)]
     hostd[hostd]
     bots[task containers + task database server]
   end
@@ -123,7 +123,7 @@ flowchart TB
 | `bridge` | The one event loop: GitHub webhooks, the console API, the GitHub automation (stage labels, reviewer requests, the `review:human:<login>` labels, the `review-gate` check run), gates, and task starts and resumptions |
 | `dispatcher` | A library the bridge runs shortly after anything changes that could let work start, and every five minutes: leases routable issues to builders with room — the repository's concurrency, each seat's tasks at once, the hosts' capacity — without path overlap, expires stale leases, stops leasing at the monthly cap |
 | `console` | Board, threads, gates, crew, Computer tab, costs, repository settings. Holds no database of its own |
-| `fleetadlc_db` | Bots, repositories and stage modes, issues, leases, tasks, sessions, threads, gates, ledger, budgets, audit, events |
+| `openadlc_db` | Bots, repositories and stage modes, issues, leases, tasks, sessions, threads, gates, ledger, budgets, audit, events |
 
 ### Why the automation lives in the bridge
 
@@ -144,7 +144,7 @@ Stages are labels, applied by the bots and the bridge:
 | `adlc:spec` | Design | A design comment is owed before implementation |
 | `adlc:build` | Build | Routable; the dispatcher may lease it |
 | `adlc:review` | Review | A pull request exists and reviews are owed |
-| `adlc:merged` | Ship | Merged; deploying to testing, promote pending, as the repository's `.github/fleetadlc.yml` says. `testing: none` ships by merging, straight to Done |
+| `adlc:merged` | Ship | Merged; deploying to testing, promote pending, as the repository's `.github/openadlc.yml` says. `testing: none` ships by merging, straight to Done |
 | `adlc:done` | Done | Live |
 
 **Stage modes** per repository: `autonomous` (act unless a stop rule fires),
@@ -157,23 +157,23 @@ delivery rules say — required reviewers or a soak — not by a stage mode.
 
 **Routability.** An issue is routable when it carries `adlc:build` and
 `start:now`, has no `needs-human`, `needs-triage`, do: label but `do:ai`
-(`do:human`, `do:product`, `do:legal`) or `fleetadlc:ignore`, declares the paths it expects to touch, and everything under its
+(`do:human`, `do:product`, `do:legal`) or `openadlc:ignore`, declares the paths it expects to touch, and everything under its
 `### Dependencies` has shipped. It must also say enough to be worked on
 (`missingForRouting`, `packages/shared/src/readiness.ts`): a `priority:` label,
 an `area:` label, exactly one `do:` label, and the Outcome, Acceptance criteria,
 Expected paths and Verification sections, every line of Expected paths a path.
 An issue missing any of them is sent to triage, or, when only a path line is
-unreadable, back to the stage that wrote it. One labelled `fleetadlc:paused` is
-passed over, and `fleetadlc:next` goes ahead of priority order. The dispatcher
+unreadable, back to the stage that wrote it. One labelled `openadlc:paused` is
+passed over, and `openadlc:next` goes ahead of priority order. The dispatcher
 leases the highest-priority routable issue whose declared paths no change in
 flight holds, by the repository's path policy (`paths:` in
-`.github/fleetadlc.yml`): an overlap on a shared path never holds it, an
+`.github/openadlc.yml`): an overlap on a shared path never holds it, an
 exclusive path holds it until the other change merges, and any other overlap
 holds it only while the other issue is being built, not while its pull request
 is in review. Work in flight is the work itself, rather than whatever a lease
 left behind claims.
 
-`fleetadlc:ignore` is a person telling the crew to leave an issue alone. While it is
+`openadlc:ignore` is a person telling the crew to leave an issue alone. While it is
 there the crew staffs no stage, hands on no stage, unblocks nothing and runs no
 failed task again: a task already running finishes without moving the stage, and
 a build that opens its pull request leaves the issue in build, though the pull
@@ -207,7 +207,7 @@ all as the seat's one GitHub account; and a host runs up to its
 The collision guarantee is the lease and the overlap check: a lease claims an
 issue's declared paths, and the dispatcher leases nothing whose paths another
 change in flight holds by the path policy above (`paths:` in
-`.github/fleetadlc.yml`). Two builds never edit one ordinary file at once; a
+`.github/openadlc.yml`). Two builds never edit one ordinary file at once; a
 change in review, or two on a shared path, may, and the merge line's conflict
 round settles what clashes. Two tasks in two computers never stopped two builds
 from editing one file; the check did. The dispatcher fills the owner's room first, then each other
@@ -238,7 +238,7 @@ a reason — or by its label on GitHub, and every move is recorded and audited.
 A gate on an issue or pull request is written to GitHub first — the comment is
 the durable record — then mirrored into the thread the console shows, and it
 pauses the task. A gate on a console request that has no issue yet, or on an
-issue labelled `fleetadlc:ignore`, is kept in the console thread only. The issue gets
+issue labelled `openadlc:ignore`, is kept in the console thread only. The issue gets
 `needs-human`, which keeps the dispatcher from leasing it again. Answering (in the
 console, or by replying to the comment on GitHub) removes the label, records who
 answered, and resumes the task with a fresh context off the branch head.
@@ -325,7 +325,7 @@ See [security.md](security.md) for the full model.
 
 | Phase | Deliverable | State |
 |---|---|---|
-| P0 | Monorepo, `fleetadlc_db`, engine adapters, hostd with both drivers, bridge, dispatcher, console, CLI, skills | **built** |
+| P0 | Monorepo, `openadlc_db`, engine adapters, hostd with both drivers, bridge, dispatcher, console, CLI, skills | **built** |
 | P1 | Real GitHub loop: webhooks, device-flow tokens, issue → lease → pull request | **mechanism built and proven against a live repository**; needs a crew of real accounts on a real organization |
 | P2 | Review lenses on three engines, deploy and revert, caps exercised under load | caps and the budget stop are **built and tested** (`tests/pipeline.mjs`); the merge line is **built and tested** (`apps/bridge/src/merge-line.test.ts`); the deploy path is **built and untried** — four workflows, two environments and the bridge's handling of `deployment_status`, of which **no deployment has ever been created**, so every claim about what GitHub does with it is a row in [`unverified.md`](unverified.md); a red smoke on testing reverts the change and sends it back to build, and a failed deploy files an issue instead |
 | P3 | Console: board, threads, gates, intake, crew, costs, repository settings | **built**; defects from real use are tracked as issues |
@@ -377,7 +377,7 @@ that would settle it.
 | D6 | Every bot message, gate and answer is a GitHub comment first, wherever there is an issue to comment on, and a console row second | GitHub stays the system of record |
 | D7 | Spec is conditional by default | A design gate where it matters, without a second stage on every small change |
 | D8 | Apache-2.0, with a trademark policy; `crew/templates/` also 0BSD (`Apache-2.0 OR 0BSD`, an SPDX line in each file copied into a managed repository); contributions inbound=outbound under GitHub's terms, under both for `crew/templates/` | Permissive for companies building products on OpenADLC; patent grant; the upstream name stays distinguishable; the files written into a user's own, possibly proprietary, repository carry no attribution duty there |
-| D9 | A `local` driver exists beside the `docker` driver | `fleetadlc up` has to work on a laptop with no Docker; production installs use Docker |
+| D9 | A `local` driver exists beside the `docker` driver | `openadlc up` has to work on a laptop with no Docker; production installs use Docker |
 | D10 | No demo mode (reversed: it shipped, and was taken out) | An install is live or not yet configured; work that is fabricated is worse than work that is absent. Scripted engines exist for the integration suites, on a scratch install |
 | D11 | A bot is named by its GitHub account's handle, and by its seat until one connects | The handle is what history shows and what a person looks for. A persona name matched no account on GitHub, and a login fixed in configuration did not match the account the operator actually connected |
-| D12 | A task paused on a person keeps its computer for a while (`FLEETADLC_PAUSED_KEEP_MINUTES`, fifteen by default), then gives it back with its branch kept in the mirror; the answer resumes it in a new computer off the branch head | A question can stay open for days, and a computer held for it holds a container, its memory and a database while nothing runs. Kept for a while, the task can still be taken over and a quick answer resumes cheaply. What was not committed in the paused worktree is lost, as it always was on resume. [ADR 0003](adr/0003-per-task-containers.md) |
+| D12 | A task paused on a person keeps its computer for a while (`OPENADLC_PAUSED_KEEP_MINUTES`, fifteen by default), then gives it back with its branch kept in the mirror; the answer resumes it in a new computer off the branch head | A question can stay open for days, and a computer held for it holds a container, its memory and a database while nothing runs. Kept for a while, the task can still be taken over and a quick answer resumes cheaply. What was not committed in the paused worktree is lost, as it always was on resume. [ADR 0003](adr/0003-per-task-containers.md) |

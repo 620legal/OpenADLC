@@ -37,7 +37,7 @@
   {
     "name": "area:cli",
     "color": "bfd4f2",
-    "description": "The fleetadlc command"
+    "description": "The openadlc command"
   },
   {
     "name": "area:skills",

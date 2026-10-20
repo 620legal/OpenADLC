@@ -30,7 +30,7 @@ async function agent(...args: string[]): Promise<{ stdout: string }> {
 }
 
 beforeAll(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'fleetadlc-signing-'));
+  dir = mkdtempSync(join(tmpdir(), 'openadlc-signing-'));
   repo = join(dir, 'repo');
   socket = join(dir, 'agent.sock');
 

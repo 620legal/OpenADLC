@@ -1,6 +1,6 @@
-import { audit, recordEvent, repos, requests, tasks, threads } from '@fleetadlc/db';
-import type { GitHubClient } from '@fleetadlc/github';
-import type { Task } from '@fleetadlc/shared';
+import { audit, recordEvent, repos, requests, tasks, threads } from '@openadlc/db';
+import type { GitHubClient } from '@openadlc/github';
+import type { Task } from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import { asAutomation } from './automation-bot.js';
 import type { BridgeConfig } from './config.js';
@@ -101,7 +101,7 @@ export function carriesRequestLine(body: string | null, subjectRef: string): boo
   const prefix = requestPrefixOf(subjectRef);
   if (!body || !prefix) return false;
   const plain = body.replace(/[`*]/g, '');
-  return new RegExp(`^[ \\t>-]*(?:OpenADLC|FleetADLC|Fleet) request:\\s*request:${prefix}(?![0-9a-f])`, 'im').test(plain);
+  return new RegExp(`^[ \\t>-]*(?:OpenADLC|OpenADLC|Fleet) request:\\s*request:${prefix}(?![0-9a-f])`, 'im').test(plain);
 }
 
 /**
@@ -111,7 +111,7 @@ export function carriesRequestLine(body: string | null, subjectRef: string): boo
 export function requestPrefixIn(body: string | null): string | null {
   if (!body) return null;
   const plain = body.replace(/[`*]/g, '');
-  return /^[ \t>-]*(?:OpenADLC|FleetADLC|Fleet) request:\s*request:([0-9a-f]{8})(?![0-9a-f])/im.exec(plain)?.[1] ?? null;
+  return /^[ \t>-]*(?:OpenADLC|OpenADLC|Fleet) request:\s*request:([0-9a-f]{8})(?![0-9a-f])/im.exec(plain)?.[1] ?? null;
 }
 
 /** How far back a finished triage is looked for: one page, newest first. */
@@ -156,7 +156,7 @@ export class RequestFiling {
    *
    * A triage's own ending looks for its issue among the repository's recent
    * ones, and GitHub's list can lag an issue created a moment before: intake
-   * filed fleetadlc-testbed#7 four seconds before its task ended, the list did not
+   * filed openadlc-testbed#7 four seconds before its task ended, the list did not
    * have it yet, and the request was left a draft, its thread saying triage
    * had filed nothing. The delivery carries the body, and arrives first.
    */
@@ -218,7 +218,7 @@ export class RequestFiling {
       await threads.addMessage({
         threadId: thread.id,
         kind: 'sys',
-        author: 'fleetadlc',
+        author: 'openadlc',
         text: `Triage of ${task.subjectRef} ended without filing anything`,
         note: client
           ? `no recent issue in ${where} carries “${requestLineFor(task.subjectRef)}”`
@@ -250,7 +250,7 @@ export class RequestFiling {
       await threads.addMessage({
         threadId: thread.id,
         kind: 'sys',
-        author: 'fleetadlc',
+        author: 'openadlc',
         text: `Filed as ${found.repo}#${found.number}`,
         note: found.title,
         payload: { taskId: task.id, requestId: request.id, issue: found.number },

@@ -1,10 +1,10 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { promisify } from 'node:util';
-import { audit, bots, sessions as sessionStore, tasks } from '@fleetadlc/db';
-import { TASK_TOKEN_HEADER, getSecretStore, taskTokenMatches } from '@fleetadlc/github';
-import { commandInImage, readinessFor } from '@fleetadlc/engines';
-import { DEFAULT_MIN_RELEASE_AGE_DAYS, isMinReleaseAgeDays, redactSecrets, SYSTEM_TOOLS, type ContextDocument, type EngineName, type EngineVersions, type TaskAttachment } from '@fleetadlc/shared';
+import { audit, bots, sessions as sessionStore, tasks } from '@openadlc/db';
+import { TASK_TOKEN_HEADER, getSecretStore, taskTokenMatches } from '@openadlc/github';
+import { commandInImage, readinessFor } from '@openadlc/engines';
+import { DEFAULT_MIN_RELEASE_AGE_DAYS, isMinReleaseAgeDays, redactSecrets, SYSTEM_TOOLS, type ContextDocument, type EngineName, type EngineVersions, type TaskAttachment } from '@openadlc/shared';
 import type { AttachTokens } from './attach-tokens.js';
 import { auditActor, authenticate, type Caller } from './auth.js';
 import type { HostdConfig } from './config.js';
@@ -80,7 +80,7 @@ const execFile = promisify(execFileCallback);
  * reads a file out of a bot's worktree, and the private network was the only
  * thing standing in front of them.
  *
- * `/healthz` stays open on purpose — `fleetadlc up` and `fleetadlc status` poll
+ * `/healthz` stays open on purpose — `openadlc up` and `openadlc status` poll
  * it to find out whether hostd is even there, and it reveals nothing a caller
  * could act on. The `/terminal` socket is open too, and
  * authorised differently: a browser cannot hold the install's secret, so the
@@ -127,7 +127,7 @@ export function createHostdServer(input: {
         host: config.hostName,
         driver: driver.kind,
         activeTasks: runner.activeTaskIds().length,
-        // That this hostd refuses a caller without the secret. `fleetadlc doctor`
+        // That this hostd refuses a caller without the secret. `openadlc doctor`
         // proves it instead, by making the call it expects to be refused.
         authenticating: true,
       });
@@ -139,7 +139,7 @@ export function createHostdServer(input: {
       // anything else that reached the port, so it serves neither.
       return send(response, 503, {
         error: 'hostd has no internal secret yet, so it cannot authenticate anyone',
-        remedy: 'start the bridge, which generates it, then retry: fleetadlc up',
+        remedy: 'start the bridge, which generates it, then retry: openadlc up',
       });
     }
 
@@ -162,7 +162,7 @@ export function createHostdServer(input: {
       if (!holdsTaskToken && !authenticate(request, expected)) {
         return send(response, 401, {
           error: `GET ${path} needs this task's own token`,
-          remedy: `the session has it as FLEETADLC_TASK_TOKEN; send it as ${TASK_TOKEN_HEADER}`,
+          remedy: `the session has it as OPENADLC_TASK_TOKEN; send it as ${TASK_TOKEN_HEADER}`,
         });
       }
 
@@ -199,7 +199,7 @@ export function createHostdServer(input: {
       if (!taskTokenMatches(taskId, expected, typeof presented === 'string' ? presented : '') && !authenticate(request, expected)) {
         return send(response, 401, {
           error: `POST ${path} needs this task's own token`,
-          remedy: `the session has it as FLEETADLC_TASK_TOKEN; send it as ${TASK_TOKEN_HEADER}`,
+          remedy: `the session has it as OPENADLC_TASK_TOKEN; send it as ${TASK_TOKEN_HEADER}`,
         });
       }
       if (!runner.activeTaskIds().includes(taskId)) {
@@ -218,7 +218,7 @@ export function createHostdServer(input: {
     if (!caller) {
       return send(response, 401, {
         error: `${method} ${path} needs the install's internal secret`,
-        remedy: 'only the bridge and `fleetadlc attach` call hostd; they read it from the secret store',
+        remedy: 'only the bridge and `openadlc attach` call hostd; they read it from the secret store',
       });
     }
 
@@ -254,7 +254,7 @@ export function createHostdServer(input: {
        */
       const probe =
         config.driver === 'docker'
-          ? commandInImage(process.env.FLEETADLC_BOT_IMAGE ?? 'fleetadlc-bot:latest', async (command, args) => {
+          ? commandInImage(process.env.OPENADLC_BOT_IMAGE ?? 'openadlc-bot:latest', async (command, args) => {
               try {
                 await execFile(command, args);
                 return true;
@@ -467,7 +467,7 @@ export function createHostdServer(input: {
     }
 
     // The repository's checks on a task's head, started and read by the
-    // bridge for the task's session (`fleetadlc-ci`); the result reaches the
+    // bridge for the task's session (`openadlc-ci`); the result reaches the
     // bridge from here, never from the session (`local-ci.ts`).
     const localCiMatch = /^\/tasks\/([^/]+)\/local-ci(?:\/([^/]+))?$/.exec(path);
     if (localCiMatch?.[1]) {
@@ -692,7 +692,7 @@ export function createHostdServer(input: {
       });
     }
 
-    // `fleetadlc attach` redeems the same token for a command to run in a real terminal.
+    // `openadlc attach` redeems the same token for a command to run in a real terminal.
     if (method === 'POST' && path === '/terminal/redeem') {
       const body = await readBody(request);
       const grant = attachTokens.redeem(String(body.token ?? ''));

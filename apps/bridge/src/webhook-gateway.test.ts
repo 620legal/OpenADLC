@@ -76,10 +76,10 @@ describe('the one route a tunnel exposes', () => {
     await post('/webhooks/github', {
       'content-type': 'application/json',
       'x-github-event': 'issues',
-      'x-fleetadlc-identity': 'owner@example.test',
+      'x-openadlc-identity': 'owner@example.test',
     });
 
-    expect(seen[0]?.headers['x-fleetadlc-identity']).toBeUndefined();
+    expect(seen[0]?.headers['x-openadlc-identity']).toBeUndefined();
   });
 
   it('strips the headers a proxied identity would arrive in', async () => {

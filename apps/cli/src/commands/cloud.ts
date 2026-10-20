@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fleetHome } from '@fleetadlc/github';
+import { openadlcHome } from '@openadlc/github';
 import type { InstallConfig } from '../install.js';
 import { prompt, ui } from '../ui.js';
 import { checkBucket, pullSettings } from './cloud-bucket.js';
@@ -18,10 +18,10 @@ type Provider = (typeof PROVIDERS)[number];
  * The module is OpenADLC's and ships in this repository; the values that make it
  * one install — the project, the domain, the organization, who may open the
  * console, the webhook secret — are not, and must not be. They used to exist
- * only as `$FLEETADLC_HOME/cloud.tfvars.json` on whichever machine ran `configure`,
+ * only as `$OPENADLC_HOME/cloud.tfvars.json` on whichever machine ran `configure`,
  * with the state beside the module in the checkout: the next operator, or the
  * same one on a new laptop, had neither. Both now live in a bucket in the
- * install's own project, so any machine with access can `fleetadlc cloud pull` and
+ * install's own project, so any machine with access can `openadlc cloud pull` and
  * carry on.
  */
 export interface CloudBackend {
@@ -69,12 +69,15 @@ const TFVARS = 'cloud.tfvars.json';
 export const DEFAULT_DEPLOYER_WORKFLOW = '.github/workflows/deploy.yml';
 
 /**
- * Every resource the module makes is named from this. Settings written before
- * the rename to FleetADLC carry no `name_prefix`, and their resources were made
- * under the module's old default, `fleet` — applying them with the new default
- * would replace the network, the database and the host rather than update them.
+ * Every resource the module makes is named from this. An existing install's
+ * prefix is pinned in its settings, so only an install made from nothing gets
+ * the default — applying an old install's settings with a new default would
+ * replace the network, the database and the host rather than update them. An
+ * install made under FleetADLC wrote `name_prefix = "fleetadlc"` itself; one
+ * from before that wrote none, and its resources were made under the module's
+ * oldest default, `fleet`, which `pinNamePrefix` still pins in.
  */
-export const NAME_PREFIX = 'fleetadlc';
+export const NAME_PREFIX = 'openadlc';
 export const LEGACY_NAME_PREFIX = 'fleet';
 
 /** The settings, with the name the install's resources already have pinned in. */
@@ -85,11 +88,11 @@ export function pinNamePrefix(vars: Record<string, unknown>): { vars: Record<str
 const BACKEND = 'cloud.backend.json';
 
 function tfVarsPath(): string {
-  return join(fleetHome(), TFVARS);
+  return join(openadlcHome(), TFVARS);
 }
 
 function backendPath(): string {
-  return join(fleetHome(), BACKEND);
+  return join(openadlcHome(), BACKEND);
 }
 
 function moduleDir(config: InstallConfig, provider: Provider): string {
@@ -138,7 +141,7 @@ export function tfVars(cloud: CloudConfig, hostdPort: number): Record<string, un
  * secret each run: run again on a live install, to set the deployer, it
  * rotated the secret at the next apply so GitHub's deliveries failed
  * verification, dropped settings added by hand such as `admin_emails`, and on
- * an install from before the rename reset `name_prefix` to `fleetadlc`, so
+ * an install from before the rename reset `name_prefix` to `openadlc`, so
  * plan looked at an empty state. Now the secret is made only when there is
  * none, everything not asked about carries over, and the prefix is the one the
  * install's resources already have.
@@ -172,7 +175,7 @@ export function consoleUsers(members: string[]): string[] {
  */
 export function noAdminWarning(adminEmails: string[], settingsPath: string): string | null {
   if (adminEmails.length > 0) return null;
-  return `the console will have no admin: nobody is named, so every visitor is refused. Add "admin_emails": ["you@example.com"] to ${settingsPath} and run: fleetadlc cloud apply`;
+  return `the console will have no admin: nobody is named, so every visitor is refused. Add "admin_emails": ["you@example.com"] to ${settingsPath} and run: openadlc cloud apply`;
 }
 
 /** A setting from `existing` as a prompt's default: a list joined with commas. */
@@ -190,10 +193,10 @@ export function configureDefaults(env: Readonly<Record<string, string | undefine
 } {
   const value = (name: string): string | undefined => env[name]?.trim() || undefined;
   return {
-    projectId: value('FLEETADLC_CLOUD_PROJECT'),
-    region: value('FLEETADLC_CLOUD_REGION'),
-    consoleMembers: value('FLEETADLC_CLOUD_CONSOLE_MEMBERS'),
-    domain: value('FLEETADLC_CLOUD_DOMAIN'),
+    projectId: value('OPENADLC_CLOUD_PROJECT'),
+    region: value('OPENADLC_CLOUD_REGION'),
+    consoleMembers: value('OPENADLC_CLOUD_CONSOLE_MEMBERS'),
+    domain: value('OPENADLC_CLOUD_DOMAIN'),
   };
 }
 
@@ -349,18 +352,18 @@ export function remoteTfVars(backend: CloudBackend): string {
  * operator to `bridge_url`, the internal Cloud Run address GitHub can never
  * reach, and to a webhook on the organization, when the bridge listens to the
  * app's, whose stored secret wins over the module's. And the rest once said
- * to run `fleetadlc auth login`, `doctor` and `restore` on the host, which
- * runs Container-Optimized OS and has no fleetadlc; from a laptop they wrote
+ * to run `openadlc auth login`, `doctor` and `restore` on the host, which
+ * runs Container-Optimized OS and has no openadlc; from a laptop they wrote
  * to the wrong secret store and probed the wrong install. The console does
  * all three.
  */
 export function postApplySteps(settingsPath: string, consoleDomain = ''): string[] {
   return [
     consoleDomain
-      ? 'point DNS for the console domain at console_ip (fleetadlc cloud output)'
-      : `open the console at console_url (fleetadlc cloud output): it is served on the install’s own address under nip.io, so no DNS record is needed. For a domain of your own, set "console_domain" in ${settingsPath}, run fleetadlc cloud apply, then point an A record for it at console_ip`,
+      ? 'point DNS for the console domain at console_ip (openadlc cloud output)'
+      : `open the console at console_url (openadlc cloud output): it is served on the install’s own address under nip.io, so no DNS record is needed. For a domain of your own, set "console_domain" in ${settingsPath}, run openadlc cloud apply, then point an A record for it at console_ip`,
     'connect the bots’ GitHub accounts in the console’s walkthrough, at its GitHub accounts step (GitHub needs a person at a browser), or restore a backup in its first step, taking over the sign-ins',
-    `an app created from the console already delivers here, with the secret it stored: leave its webhook alone. After a restore, or for an app made by hand, use the console’s webhook step, which sets one secret on both sides. Only for an app made by hand on a fresh install, point the GitHub App’s webhook (on the app’s settings page) at webhook_url (fleetadlc cloud output), with the webhook_secret in ${settingsPath} as its secret. The console’s webhook card shows whether a delivery arrived`,
+    `an app created from the console already delivers here, with the secret it stored: leave its webhook alone. After a restore, or for an app made by hand, use the console’s webhook step, which sets one secret on both sides. Only for an app made by hand on a fresh install, point the GitHub App’s webhook (on the app’s settings page) at webhook_url (openadlc cloud output), with the webhook_secret in ${settingsPath} as its secret. The console’s webhook card shows whether a delivery arrived`,
     'check the install on the console’s health cards and its walkthrough',
   ];
 }
@@ -368,7 +371,7 @@ export function postApplySteps(settingsPath: string, consoleDomain = ''): string
 /**
  * Asks until there is an answer. `prompt` shows a default in parentheses, and
  * these questions put an example there: Enter took what looked like
- * `fleetadlc.example.com` and wrote an empty console domain, which was then
+ * `openadlc.example.com` and wrote an empty console domain, which was then
  * pushed to the bucket.
  */
 export async function askRequired(
@@ -434,7 +437,7 @@ function list(value: string): string[] {
 function readBackend(): CloudBackend | null {
   if (!existsSync(backendPath())) return null;
   const parsed = JSON.parse(readFileSync(backendPath(), 'utf8')) as Partial<CloudBackend>;
-  return parsed.bucket ? { bucket: parsed.bucket, prefix: parsed.prefix || 'fleetadlc' } : null;
+  return parsed.bucket ? { bucket: parsed.bucket, prefix: parsed.prefix || 'openadlc' } : null;
 }
 
 function writeBackend(backend: CloudBackend): void {
@@ -443,12 +446,12 @@ function writeBackend(backend: CloudBackend): void {
 
 /**
  * `cloud configure` is often the first command on a laptop that never ran a
- * local install, so nothing had made $FLEETADLC_HOME: the settings write
+ * local install, so nothing had made $OPENADLC_HOME: the settings write
  * failed with ENOENT after every question was answered and the bucket made,
  * and the answers and the new webhook secret were lost.
  */
 function ensureHome(): void {
-  mkdirSync(fleetHome(), { recursive: true, mode: 0o700 });
+  mkdirSync(openadlcHome(), { recursive: true, mode: 0o700 });
 }
 
 /** What `configure` leaves on this machine: the settings and where their bucket is. */
@@ -757,7 +760,7 @@ export async function cloud(
       });
       const projectId = answers.projectId;
       if (!projectId) {
-        ui.fail('name the project: fleetadlc cloud configure --project <id>. Use a new one, for this install only (docs/self-hosting.md#one-install-per-project)');
+        ui.fail('name the project: openadlc cloud configure --project <id>. Use a new one, for this install only (docs/self-hosting.md#one-install-per-project)');
         process.exitCode = 1;
         return;
       }
@@ -782,7 +785,7 @@ export async function cloud(
       const adminEmails = existing ? list(shown(existing, 'admin_emails') ?? '') : consoleUsers(consoleMembers);
       const operators = existing ? list(shown(existing, 'operators') ?? '') : defaultOperators(consoleMembers);
 
-      const registry = `${region}-docker.pkg.dev/${projectId}/fleetadlc`;
+      const registry = `${region}-docker.pkg.dev/${projectId}/openadlc`;
       // The registry infra/gcp/install.sh just pushed to. The bot image is
       // built by infra/local/build-bot-image.sh, which is also what a laptop
       // builds from — the pinned engine CLIs live there, in one place, so the
@@ -833,9 +836,9 @@ export async function cloud(
       );
       ui.step('GitHub organization and app: the console’s walkthrough sets them up once the install is running');
 
-      const bucket = options.bucket ?? saved?.bucket ?? `${projectId}-fleetadlc-tfstate`;
+      const bucket = options.bucket ?? saved?.bucket ?? `${projectId}-openadlc-tfstate`;
       // An install pulled from before the rename keeps its state under `fleet`.
-      const backend = { bucket, prefix: saved?.prefix ?? 'fleetadlc' };
+      const backend = { bucket, prefix: saved?.prefix ?? 'openadlc' };
       if (!(await ensureBucket(backend, projectId, region))) {
         ui.fail(`gs://${bucket} was not used; nothing was uploaded`);
         process.exitCode = 1;
@@ -878,18 +881,18 @@ export async function cloud(
       const warning = noAdminWarning(adminEmails, tfVarsPath());
       if (warning) ui.warn(warning);
       process.exitCode = await push(backend);
-      ui.step('next: fleetadlc cloud plan');
+      ui.step('next: openadlc cloud plan');
       return;
     }
 
     case 'pull': {
       const bucket = options.bucket ?? readBackend()?.bucket;
       if (!bucket) {
-        ui.fail('which bucket? fleetadlc cloud pull --bucket <name>');
+        ui.fail('which bucket? openadlc cloud pull --bucket <name>');
         process.exitCode = 1;
         return;
       }
-      const backend = { bucket, prefix: options.prefix ?? 'fleetadlc' };
+      const backend = { bucket, prefix: options.prefix ?? 'openadlc' };
       // Checked against the project the settings name before anything here is
       // replaced: a bucket someone else made could hand this machine settings
       // that add them as an operator.
@@ -917,7 +920,7 @@ export async function cloud(
       const backend = readBackend();
       if (!backend || !existsSync(tfVarsPath())) {
         ui.fail('this machine has no cloud configuration to save');
-        ui.note('fleetadlc cloud configure, or fleetadlc cloud pull --bucket <name>');
+        ui.note('openadlc cloud configure, or openadlc cloud pull --bucket <name>');
         process.exitCode = 1;
         return;
       }
@@ -931,7 +934,7 @@ export async function cloud(
       const backend = readBackend();
       if (!backend || !existsSync(tfVarsPath())) {
         ui.fail('this machine has no cloud configuration');
-        ui.note('fleetadlc cloud configure, or fleetadlc cloud pull --bucket <name> for an install that exists');
+        ui.note('openadlc cloud configure, or openadlc cloud pull --bucket <name> for an install that exists');
         process.exitCode = 1;
         return;
       }
@@ -1009,7 +1012,7 @@ export async function cloud(
 
     default:
       ui.fail(`unknown cloud command: ${action ?? '(none)'}`);
-      ui.note('try: fleetadlc cloud configure | pull | push | plan | apply | output | validate');
+      ui.note('try: openadlc cloud configure | pull | push | plan | apply | output | validate');
       process.exitCode = 1;
   }
 }

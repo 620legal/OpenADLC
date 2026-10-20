@@ -1,5 +1,5 @@
-import { ConfigurationError, collaboratorsUrl, sameSigningKey } from '@fleetadlc/github';
-import { COMMITTING_ROLES, botAtStart, botInWords, holdsCredential, repositoryRoleFor, sameLogin, type Bot, type HealthAction } from '@fleetadlc/shared';
+import { ConfigurationError, collaboratorsUrl, sameSigningKey } from '@openadlc/github';
+import { COMMITTING_ROLES, botAtStart, botInWords, holdsCredential, repositoryRoleFor, sameLogin, type Bot, type HealthAction } from '@openadlc/shared';
 import { botSaid } from '../../bot-said.js';
 import type { CheckResult, HealthCheck } from '../types.js';
 import { GITHUB_CALLS_AT_ONCE, SLOW_CHECK_MS, mapLimited } from '../limited.js';
@@ -538,7 +538,7 @@ export function crewChecks(reader: SigningReader): CrewChecks {
         // refuses is a person asked.
         try {
           const created = await github.request<{ id: number }>('POST', '/user/ssh_signing_keys', {
-            title: `fleetadlc-${bot.name}`,
+            title: `openadlc-${bot.name}`,
             key: publicKey,
           });
           await reader.recordKeyId(bot, created.id).catch(() => undefined);

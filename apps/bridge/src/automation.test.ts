@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GitHubApiError, ReviewerStandings, type PullCommit } from '@fleetadlc/github';
+import { GitHubApiError, ReviewerStandings, type PullCommit } from '@openadlc/github';
 import { Automation, FORBIDDEN_PUSH, LABEL_READ_BACKOFF_MS, ciKeysChanged, contentChanged, fastPathOf, mergeDecision, requestsTakenAway, reviewSample, standingApprovals, type MergeFacts } from './automation.js';
 import type { BridgeConfig } from './config.js';
 import { ConflictRounds } from './conflict-round.js';
 import { issueNumberFromBranch } from './webhooks.js';
-import { declaredPathsFrom, reviewRulesSchema, type StageKey } from '@fleetadlc/shared';
+import { declaredPathsFrom, reviewRulesSchema, type StageKey } from '@openadlc/shared';
 
 /**
  * The crew as the install's database has it. Only the author check reads it:
@@ -26,7 +26,7 @@ const world = vi.hoisted(() => ({
   moves: [] as { from: string | null; to: string; kind: string }[],
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async (entry: Record<string, unknown>) => {
     world.audited.push(entry);
   }),
@@ -129,7 +129,7 @@ describe('who reviews a pull request', () => {
     const crew = [
       { name: 'tessexampleco', slot: 'lead-reviewer' },
       { name: 'second-reviewer', slot: 'second-reviewer' },
-      { name: 'fleetadlc-cipher-janedoe', slot: 'security-reviewer' },
+      { name: 'openadlc-cipher-janedoe', slot: 'security-reviewer' },
       { name: 'ottoexampleco', slot: 'sre' },
     ];
     const decision = automation.decideReviewers(
@@ -143,7 +143,7 @@ describe('who reviews a pull request', () => {
       crew,
     );
 
-    expect(decision.reviewers).toEqual(['tessexampleco', 'second-reviewer', 'fleetadlc-cipher-janedoe', 'ottoexampleco']);
+    expect(decision.reviewers).toEqual(['tessexampleco', 'second-reviewer', 'openadlc-cipher-janedoe', 'ottoexampleco']);
     expect(Object.keys(decision.reasons)).toContain('tessexampleco');
   });
 
@@ -187,18 +187,18 @@ describe('who reviews a pull request', () => {
 
   it('samples a pull request once: asked again, it gives the same answer', () => {
     // It was Math.random(), drawn again whenever the gate was worked out. On
-    // fleetadlc-testbed#2 the draw at opening said no security review, the draw at
+    // openadlc-testbed#2 the draw at opening said no security review, the draw at
     // the lead reviewer's approval said yes, and the gate waited on a review
     // nobody had been asked for.
-    const first = reviewSample('janedoe/fleetadlc-testbed', 2);
-    for (let again = 0; again < 5; again += 1) expect(reviewSample('janedoe/fleetadlc-testbed', 2)).toBe(first);
-    expect(reviewSample('JANEDOE/fleetadlc-testbed', 2)).toBe(first);
+    const first = reviewSample('janedoe/openadlc-testbed', 2);
+    for (let again = 0; again < 5; again += 1) expect(reviewSample('janedoe/openadlc-testbed', 2)).toBe(first);
+    expect(reviewSample('JANEDOE/openadlc-testbed', 2)).toBe(first);
     expect(first).toBeGreaterThanOrEqual(0);
     expect(first).toBeLessThan(100);
   });
 
   it('still samples about as often as the rules say, across pull requests', () => {
-    const sampled = Array.from({ length: 2000 }, (_, index) => reviewSample('janedoe/fleetadlc-testbed', index + 1)).filter(
+    const sampled = Array.from({ length: 2000 }, (_, index) => reviewSample('janedoe/openadlc-testbed', index + 1)).filter(
       (value) => value < 10,
     ).length;
     expect(sampled).toBeGreaterThan(140);
@@ -425,21 +425,21 @@ describe('the review gate holds until reviews are in', () => {
   it('names the reviewer it is waiting for', () => {
     const gate = automation.computeReviewGate({
       draft: false,
-      requestedReviewers: ['fleetadlc-sydney', 'fleetadlc-grok'],
-      postedReviewers: ['fleetadlc-sydney'],
+      requestedReviewers: ['openadlc-sydney', 'openadlc-grok'],
+      postedReviewers: ['openadlc-sydney'],
       humansRequired: [],
       humansApproved: [],
     });
 
     expect(gate.state).toBe('pending');
-    expect(gate.description).toContain('fleetadlc-grok');
+    expect(gate.description).toContain('openadlc-grok');
   });
 
   it('stays pending for a human review even when every bot has posted', () => {
     const gate = automation.computeReviewGate({
       draft: false,
-      requestedReviewers: ['fleetadlc-sydney'],
-      postedReviewers: ['fleetadlc-sydney'],
+      requestedReviewers: ['openadlc-sydney'],
+      postedReviewers: ['openadlc-sydney'],
       humansRequired: ['janedoe'],
       humansApproved: [],
     });
@@ -454,8 +454,8 @@ describe('the review gate holds until reviews are in', () => {
   it('goes green once the human has approved too', () => {
     const gate = automation.computeReviewGate({
       draft: false,
-      requestedReviewers: ['fleetadlc-sydney'],
-      postedReviewers: ['fleetadlc-sydney'],
+      requestedReviewers: ['openadlc-sydney'],
+      postedReviewers: ['openadlc-sydney'],
       humansRequired: ['janedoe'],
       humansApproved: ['janedoe'],
     });
@@ -521,40 +521,40 @@ describe('a push only invalidates an approval when the work changed', () => {
 
   it('takes only the standing approvals', () => {
     const standing = standingApprovals([
-      approval(1, 'fleetadlc-sydney', 'APPROVED'),
-      approval(2, 'fleetadlc-grok', 'CHANGES_REQUESTED'),
-      approval(3, 'fleetadlc-cipher', 'APPROVED'),
+      approval(1, 'openadlc-sydney', 'APPROVED'),
+      approval(2, 'openadlc-grok', 'CHANGES_REQUESTED'),
+      approval(3, 'openadlc-cipher', 'APPROVED'),
     ]);
 
-    expect(standing.map((review) => review.user).sort()).toEqual(['fleetadlc-cipher', 'fleetadlc-sydney']);
+    expect(standing.map((review) => review.user).sort()).toEqual(['openadlc-cipher', 'openadlc-sydney']);
   });
 
   it('uses a reviewer’s latest position, not their first', () => {
     // Approved, then asked for changes: there is no approval to dismiss.
     expect(
       standingApprovals([
-        approval(1, 'fleetadlc-sydney', 'APPROVED', '2026-09-18T00:00:00Z'),
-        approval(2, 'fleetadlc-sydney', 'CHANGES_REQUESTED', '2026-09-18T01:00:00Z'),
+        approval(1, 'openadlc-sydney', 'APPROVED', '2026-09-18T00:00:00Z'),
+        approval(2, 'openadlc-sydney', 'CHANGES_REQUESTED', '2026-09-18T01:00:00Z'),
       ]),
     ).toEqual([]);
 
     // And the other way round, which is the one that must be dismissed.
     expect(
       standingApprovals([
-        approval(3, 'fleetadlc-grok', 'CHANGES_REQUESTED', '2026-09-18T00:00:00Z'),
-        approval(4, 'fleetadlc-grok', 'APPROVED', '2026-09-18T01:00:00Z'),
+        approval(3, 'openadlc-grok', 'CHANGES_REQUESTED', '2026-09-18T00:00:00Z'),
+        approval(4, 'openadlc-grok', 'APPROVED', '2026-09-18T01:00:00Z'),
       ]),
-    ).toEqual([{ id: 4, user: 'fleetadlc-grok' }]);
+    ).toEqual([{ id: 4, user: 'openadlc-grok' }]);
   });
 
   it('does not let a comment displace a position', () => {
     // A reviewer who approves and then comments has still approved.
     expect(
       standingApprovals([
-        approval(1, 'fleetadlc-sydney', 'APPROVED', '2026-09-18T00:00:00Z'),
-        approval(2, 'fleetadlc-sydney', 'COMMENTED', '2026-09-18T01:00:00Z'),
+        approval(1, 'openadlc-sydney', 'APPROVED', '2026-09-18T00:00:00Z'),
+        approval(2, 'openadlc-sydney', 'COMMENTED', '2026-09-18T01:00:00Z'),
       ]),
-    ).toEqual([{ id: 1, user: 'fleetadlc-sydney' }]);
+    ).toEqual([{ id: 1, user: 'openadlc-sydney' }]);
   });
 
   it('has nothing to dismiss on a pull request nobody has reviewed', () => {
@@ -679,7 +679,7 @@ describe('an approval counts for the head it approved', () => {
 });
 
 describe('review-gate and a named person’s approval of an earlier head', () => {
-  const lead = { id: 1, user: 'exampleco-lead', state: 'APPROVED', body: 'Approved.\n\n<!-- fleetadlc-seat:lead-reviewer -->', submittedAt: null, commitId: 'head' };
+  const lead = { id: 1, user: 'exampleco-lead', state: 'APPROVED', body: 'Approved.\n\n<!-- openadlc-seat:lead-reviewer -->', submittedAt: null, commitId: 'head' };
 
   /** The gate on a change to config/, which AGENTS.md says @janedoe approves. */
   async function gateWith(person: Record<string, unknown>, fingerprints: Record<string, string>, carried: string[] = []) {
@@ -738,19 +738,19 @@ describe('the review gate refuses a commit by an account that never authors', ()
 
   const builderCommit: PullCommit = {
     sha: 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
-    authorLogin: 'fleetadlc-atlas-janedoe',
-    authorEmail: 'fleetadlc-atlas-janedoe@users.noreply.github.com',
-    authorName: 'fleetadlc-atlas-janedoe',
+    authorLogin: 'openadlc-atlas-janedoe',
+    authorEmail: 'openadlc-atlas-janedoe@users.noreply.github.com',
+    authorName: 'openadlc-atlas-janedoe',
   };
 
   beforeEach(() => {
     world.events = [];
     world.crew = [
-      { name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'fleetadlc-atlas-janedoe' },
-      { name: 'fleetadlc-sydney-janedoe', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'FleetADLC-Sydney-Janedoe' },
+      { name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'openadlc-atlas-janedoe' },
+      { name: 'openadlc-sydney-janedoe', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'OpenADLC-Sydney-Janedoe' },
       // A seat nobody has connected: no account, so nothing it could have written.
       { name: 'second-reviewer', slot: 'second-reviewer', role: 'review_second', githubLogin: null },
-      { name: 'janedoe-fleetadlc-flow', slot: 'automation', role: 'automation', githubLogin: 'janedoe-fleetadlc-flow' },
+      { name: 'janedoe-openadlc-flow', slot: 'automation', role: 'automation', githubLogin: 'janedoe-openadlc-flow' },
     ];
   });
 
@@ -777,14 +777,14 @@ describe('the review gate refuses a commit by an account that never authors', ()
   const setGate = (
     automation: Automation,
     gate: { state: 'pending' | 'success'; description: string } = REVIEWS_IN,
-  ) => automation.setReviewGate({ repoFullName: 'janedoe/fleetadlc-testbed', prNumber: 12, sha: HEAD, ...gate });
+  ) => automation.setReviewGate({ repoFullName: 'janedoe/openadlc-testbed', prNumber: 12, sha: HEAD, ...gate });
 
   it('fails on a commit GitHub matched to a reviewer, though every review is in', async () => {
     const { automation, client, published } = github([
       builderCommit,
       {
         sha: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
-        authorLogin: 'fleetadlc-sydney-janedoe',
+        authorLogin: 'openadlc-sydney-janedoe',
         authorEmail: 'sydney@example.com',
         authorName: 'Sydney',
       },
@@ -796,11 +796,11 @@ describe('the review gate refuses a commit by an account that never authors', ()
 
     const refused = {
       state: 'failure',
-      description: 'deadbee was authored by FleetADLC-Sydney-Janedoe — a reviewer must never author what it reviews',
+      description: 'deadbee was authored by OpenADLC-Sydney-Janedoe — a reviewer must never author what it reviews',
     };
     expect(gate).toEqual(refused);
     expect(published).toEqual([{ sha: HEAD, context: 'review-gate', ...refused }]);
-    expect(client.listPullCommits).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 12);
+    expect(client.listPullCommits).toHaveBeenCalledWith('janedoe/openadlc-testbed', 12);
   });
 
   it('fails on a commit only its no-reply address ties to the automation account', async () => {
@@ -811,20 +811,20 @@ describe('the review gate refuses a commit by an account that never authors', ()
       {
         sha: 'f10f10f10f10f10f10f10f10f10f10f10f10f10f',
         authorLogin: null,
-        authorEmail: 'janedoe-fleetadlc-flow@users.noreply.github.com',
+        authorEmail: 'janedoe-openadlc-flow@users.noreply.github.com',
         authorName: 'Flow',
       },
     ]);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const gate = await setGate(automation, { state: 'pending', description: 'waiting on fleetadlc-sydney-janedoe' });
+    const gate = await setGate(automation, { state: 'pending', description: 'waiting on openadlc-sydney-janedoe' });
     warn.mockRestore();
 
     // Refused outright, not left waiting on a review that cannot fix it.
     expect(gate).toEqual({
       state: 'failure',
       description:
-        'f10f10f was authored by janedoe-fleetadlc-flow — the automation account sets labels and statuses; it never authors commits',
+        'f10f10f was authored by janedoe-openadlc-flow — the automation account sets labels and statuses; it never authors commits',
     });
   });
 
@@ -840,9 +840,9 @@ describe('the review gate refuses a commit by an account that never authors', ()
     ]);
 
     expect(await setGate(automation)).toEqual(REVIEWS_IN);
-    expect(await setGate(automation, { state: 'pending', description: 'waiting on fleetadlc-sydney-janedoe' })).toEqual({
+    expect(await setGate(automation, { state: 'pending', description: 'waiting on openadlc-sydney-janedoe' })).toEqual({
       state: 'pending',
-      description: 'waiting on fleetadlc-sydney-janedoe',
+      description: 'waiting on openadlc-sydney-janedoe',
     });
     expect(published.map((status) => status.state)).toEqual(['success', 'pending']);
     // Looked, and found nobody who may not author.
@@ -855,51 +855,51 @@ describe('the review gate refuses a commit by an account that never authors', ()
     world.events = [
       {
         type: FORBIDDEN_PUSH,
-        payload: { repo: 'janedoe/fleetadlc-testbed', pr: '12', sha: HEAD, login: 'FleetADLC-Sydney-Janedoe', why: 'a reviewer must never author what it reviews' },
+        payload: { repo: 'janedoe/openadlc-testbed', pr: '12', sha: HEAD, login: 'OpenADLC-Sydney-Janedoe', why: 'a reviewer must never author what it reviews' },
       },
     ];
     const { automation, published } = github([builderCommit]);
 
     const refused = {
       state: 'failure',
-      description: 'FleetADLC-Sydney-Janedoe pushed c0ffee0, which changed the diff — a reviewer must never author what it reviews',
+      description: 'OpenADLC-Sydney-Janedoe pushed c0ffee0, which changed the diff — a reviewer must never author what it reviews',
     };
     expect(await setGate(automation)).toEqual(refused);
-    expect(await setGate(automation, { state: 'pending', description: 'waiting on fleetadlc-sydney-janedoe' })).toEqual(refused);
+    expect(await setGate(automation, { state: 'pending', description: 'waiting on openadlc-sydney-janedoe' })).toEqual(refused);
     expect(published.map((status) => status.state)).toEqual(['failure', 'failure']);
 
     // Another head, or another pull request, is not touched by it.
-    expect(await automation.setReviewGate({ repoFullName: 'janedoe/fleetadlc-testbed', prNumber: 12, sha: 'b'.repeat(40), ...REVIEWS_IN })).toEqual(REVIEWS_IN);
-    expect(await automation.setReviewGate({ repoFullName: 'janedoe/fleetadlc-testbed', prNumber: 13, sha: HEAD, ...REVIEWS_IN })).toEqual(REVIEWS_IN);
+    expect(await automation.setReviewGate({ repoFullName: 'janedoe/openadlc-testbed', prNumber: 12, sha: 'b'.repeat(40), ...REVIEWS_IN })).toEqual(REVIEWS_IN);
+    expect(await automation.setReviewGate({ repoFullName: 'janedoe/openadlc-testbed', prNumber: 13, sha: HEAD, ...REVIEWS_IN })).toEqual(REVIEWS_IN);
   });
 
   it.each([
     // Recorded before the push was stored in lower case, and asked for with the name as GitHub sends it.
-    ['GitHub’s casing', 'GitHub’s casing', 'JaneDoe/FleetADLC-Testbed', 'JaneDoe/FleetADLC-Testbed'],
+    ['GitHub’s casing', 'GitHub’s casing', 'JaneDoe/OpenADLC-Testbed', 'JaneDoe/OpenADLC-Testbed'],
     // Recorded in lower case, as the synchronize handler stores it now, and asked for in GitHub's casing.
-    ['lower case', 'GitHub’s casing', 'janedoe/fleetadlc-testbed', 'JaneDoe/FleetADLC-Testbed'],
+    ['lower case', 'GitHub’s casing', 'janedoe/openadlc-testbed', 'JaneDoe/OpenADLC-Testbed'],
     // Recorded in GitHub's casing before then, and asked for by a row stored in lower case.
-    ['GitHub’s casing', 'lower case', 'JaneDoe/FleetADLC-Testbed', 'janedoe/fleetadlc-testbed'],
+    ['GitHub’s casing', 'lower case', 'JaneDoe/OpenADLC-Testbed', 'janedoe/openadlc-testbed'],
   ])('finds that push when it was recorded in %s and the gate names the repository in %s', async (_recorded, _asked, recorded, asked) => {
     world.events = [
       {
         type: FORBIDDEN_PUSH,
-        payload: { repo: recorded, pr: '12', sha: HEAD, login: 'FleetADLC-Sydney-Janedoe', why: 'a reviewer must never author what it reviews' },
+        payload: { repo: recorded, pr: '12', sha: HEAD, login: 'OpenADLC-Sydney-Janedoe', why: 'a reviewer must never author what it reviews' },
       },
     ];
     const { automation } = github([builderCommit]);
 
     expect(await automation.setReviewGate({ repoFullName: asked, prNumber: 12, sha: HEAD, ...REVIEWS_IN })).toEqual({
       state: 'failure',
-      description: 'FleetADLC-Sydney-Janedoe pushed c0ffee0, which changed the diff — a reviewer must never author what it reviews',
+      description: 'OpenADLC-Sydney-Janedoe pushed c0ffee0, which changed the diff — a reviewer must never author what it reviews',
     });
     // The same number and head in another repository is not touched by it.
-    expect(await automation.setReviewGate({ repoFullName: 'janedoe/fleetadlc-other', prNumber: 12, sha: HEAD, ...REVIEWS_IN })).toEqual(REVIEWS_IN);
+    expect(await automation.setReviewGate({ repoFullName: 'janedoe/openadlc-other', prNumber: 12, sha: HEAD, ...REVIEWS_IN })).toEqual(REVIEWS_IN);
   });
 
   it('holds the gate, and says so, when the commits cannot be listed', async () => {
     const { automation, published } = github(
-      new Error('/repos/janedoe/fleetadlc-testbed/pulls/12/commits → 502: bad gateway'),
+      new Error('/repos/janedoe/openadlc-testbed/pulls/12/commits → 502: bad gateway'),
     );
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
@@ -913,7 +913,7 @@ describe('the review gate refuses a commit by an account that never authors', ()
       description: 'commit authors could not be checked; every requested review has been posted',
     });
     expect(published[0]?.state).toBe('pending');
-    expect(lines.some((line) => line.includes('janedoe/fleetadlc-testbed#12') && line.includes('502: bad gateway'))).toBe(
+    expect(lines.some((line) => line.includes('janedoe/openadlc-testbed#12') && line.includes('502: bad gateway'))).toBe(
       true,
     );
   });
@@ -921,7 +921,7 @@ describe('the review gate refuses a commit by an account that never authors', ()
   it('keeps what it says within the 140 characters a status holds, naming the commit first', async () => {
     // GitHub's longest login is 39 characters, and the automation account's is
     // the longest reason.
-    const login = 'janedoe-fleetadlc-flow-with-a-long-hand';
+    const login = 'janedoes-openadlc-flow-with-a-long-hand';
     expect(login).toHaveLength(39);
     world.crew = [{ name: login, slot: 'automation', role: 'automation', githubLogin: login }];
     const byFlow = (sha: string): PullCommit => ({ sha, authorLogin: login, authorEmail: '', authorName: login });
@@ -930,7 +930,7 @@ describe('the review gate refuses a commit by an account that never authors', ()
 
     const refused = await setGate(automation);
     const held = await github(new Error('timeout')).automation.setReviewGate({
-      repoFullName: 'janedoe/fleetadlc-testbed',
+      repoFullName: 'janedoe/openadlc-testbed',
       prNumber: 12,
       sha: HEAD,
       state: 'pending',
@@ -963,27 +963,27 @@ describe('the review gate refuses a commit by an account that never authors', ()
 });
 
 describe('reaching Done', () => {
-  // fleetadlc-testbed#1's lease was still holding README.md after its pull request
+  // openadlc-testbed#1's lease was still holding README.md after its pull request
   // had merged and shipped: nothing released a lease at the end of the work.
   it('releases the lease that held the issue, whatever moved it there', async () => {
-    const { leases } = await import('@fleetadlc/db');
+    const { leases } = await import('@openadlc/db');
     world.issues = [{ number: 1, stage: 'review', labels: ['adlc:review'] }];
     world.lease = { id: 'lease-1', state: 'in_task' };
     vi.mocked(leases.setLeaseState).mockClear();
 
-    const moved = await automation.moveStage({ repoName: 'fleetadlc-testbed', issueNumber: 1, to: 'done', actor: 'bridge' });
+    const moved = await automation.moveStage({ repoName: 'openadlc-testbed', issueNumber: 1, to: 'done', actor: 'bridge' });
 
     expect(moved).toEqual({ moved: true });
     expect(vi.mocked(leases.setLeaseState)).toHaveBeenCalledWith('lease-1', 'released');
   });
 
   it('leaves the lease alone on the way there', async () => {
-    const { leases } = await import('@fleetadlc/db');
+    const { leases } = await import('@openadlc/db');
     world.issues = [{ number: 1, stage: 'build', labels: ['adlc:build'] }];
     world.lease = { id: 'lease-1', state: 'in_task' };
     vi.mocked(leases.setLeaseState).mockClear();
 
-    await automation.moveStage({ repoName: 'fleetadlc-testbed', issueNumber: 1, to: 'review', actor: 'bridge' });
+    await automation.moveStage({ repoName: 'openadlc-testbed', issueNumber: 1, to: 'review', actor: 'bridge' });
 
     expect(vi.mocked(leases.setLeaseState)).not.toHaveBeenCalled();
   });
@@ -992,42 +992,42 @@ describe('reaching Done', () => {
 describe('the stage label a move writes', () => {
   it('writes GitHub’s own labels back in one call, with only the new stage', async () => {
     // Built from the stored row, the write took off a label a person had just
-    // added (a fleetadlc:paused here; it was a fleetadlc:ignore, which is now
+    // added (a openadlc:paused here; it was a openadlc:ignore, which is now
     // never moved at all), when a task finished before that delivery was
     // processed. Written as a removal and an addition, GitHub sent a delivery in
     // between with no stage label, which the webhook read as intake.
     world.issues = [{ number: 1, stage: 'spec', labels: ['adlc:spec', 'priority:p2'] }];
     const client = {
-      getIssue: vi.fn(async () => ({ number: 1, labels: ['adlc:spec', 'adlc:intake', 'priority:p2', 'fleetadlc:paused'] })),
+      getIssue: vi.fn(async () => ({ number: 1, labels: ['adlc:spec', 'adlc:intake', 'priority:p2', 'openadlc:paused'] })),
       setLabels: vi.fn(async () => undefined),
       addLabels: vi.fn(async () => undefined),
       removeLabel: vi.fn(async () => undefined),
     };
     const moving = new Automation(config, { asBot: vi.fn(async () => client) } as never);
 
-    expect(await moving.moveStage({ repoName: 'fleetadlc-testbed', issueNumber: 1, to: 'build', actor: 'spec task' })).toEqual({ moved: true });
+    expect(await moving.moveStage({ repoName: 'openadlc-testbed', issueNumber: 1, to: 'build', actor: 'spec task' })).toEqual({ moved: true });
 
     expect(client.setLabels).toHaveBeenCalledTimes(1);
-    expect(client.setLabels).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 1, ['priority:p2', 'fleetadlc:paused', 'adlc:build']);
+    expect(client.setLabels).toHaveBeenCalledWith('janedoe/openadlc-testbed', 1, ['priority:p2', 'openadlc:paused', 'adlc:build']);
     expect(client.removeLabel).not.toHaveBeenCalled();
     expect(client.addLabels).not.toHaveBeenCalled();
   });
 
   it('keeps a label added between its read and its write', async () => {
     // The write replaces the whole set. Built from the first read alone, it
-    // dropped a fleetadlc:ignore added in a second call after the issue was
+    // dropped a openadlc:ignore added in a second call after the issue was
     // opened, while the stage and lease were being written.
     world.issues = [{ number: 1, stage: 'intake', labels: [] }];
-    const reads = [['adlc:intake'], ['adlc:intake', 'fleetadlc:ignore']];
+    const reads = [['adlc:intake'], ['adlc:intake', 'openadlc:ignore']];
     const client = {
       getIssue: vi.fn(async () => ({ number: 1, labels: reads.shift() ?? [] })),
       setLabels: vi.fn(async () => undefined),
     };
     const moving = new Automation(config, { asBot: vi.fn(async () => client) } as never);
 
-    expect(await moving.moveStage({ repoName: 'fleetadlc-testbed', issueNumber: 1, to: 'build', actor: 'intake task' })).toEqual({ moved: true });
+    expect(await moving.moveStage({ repoName: 'openadlc-testbed', issueNumber: 1, to: 'build', actor: 'intake task' })).toEqual({ moved: true });
 
-    expect(client.setLabels).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 1, ['fleetadlc:ignore', 'adlc:build']);
+    expect(client.setLabels).toHaveBeenCalledWith('janedoe/openadlc-testbed', 1, ['openadlc:ignore', 'adlc:build']);
   });
 
   describe('of a closed issue', () => {
@@ -1043,9 +1043,9 @@ describe('the stage label a move writes', () => {
     it('is refused with a reason, and writes nothing: intake resumed on a closed issue moved it to Build', async () => {
       const { client, moving } = closedOnGitHub();
 
-      const moved = await moving.moveStage({ repoName: 'fleetadlc-testbed', issueNumber: 1, to: 'build', actor: 'intake task' });
+      const moved = await moving.moveStage({ repoName: 'openadlc-testbed', issueNumber: 1, to: 'build', actor: 'intake task' });
 
-      expect(moved).toEqual({ moved: false, reason: expect.stringContaining('fleetadlc-testbed#1 to build, but it is closed') });
+      expect(moved).toEqual({ moved: false, reason: expect.stringContaining('openadlc-testbed#1 to build, but it is closed') });
       expect(client.setLabels).not.toHaveBeenCalled();
       expect(world.issues[0]?.stage).toBe('intake');
     });
@@ -1053,8 +1053,8 @@ describe('the stage label a move writes', () => {
     it('still records a merge reaching Done, since the merge is what closed it', async () => {
       const { client, moving } = closedOnGitHub('review');
 
-      expect(await moving.moveStage({ repoName: 'fleetadlc-testbed', issueNumber: 1, to: 'done', actor: 'bridge' })).toEqual({ moved: true });
-      expect(client.setLabels).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 1, ['adlc:done']);
+      expect(await moving.moveStage({ repoName: 'openadlc-testbed', issueNumber: 1, to: 'done', actor: 'bridge' })).toEqual({ moved: true });
+      expect(client.setLabels).toHaveBeenCalledWith('janedoe/openadlc-testbed', 1, ['adlc:done']);
     });
   });
 
@@ -1070,7 +1070,7 @@ describe('the stage label a move writes', () => {
         setLabels: vi.fn(async () => undefined),
       };
       const moving = new Automation(config, { asBot: vi.fn(async () => client) } as never);
-      return (to: 'merged' | 'done' | 'review', recordsOutcome?: boolean) => moving.moveStage({ repoName: 'fleetadlc-testbed', issueNumber: 1, to, actor: 'bridge', recordsOutcome });
+      return (to: 'merged' | 'done' | 'review', recordsOutcome?: boolean) => moving.moveStage({ repoName: 'openadlc-testbed', issueNumber: 1, to, actor: 'bridge', recordsOutcome });
     }
 
     it('goes to Merged or Done from Build, and is stored as a forward move', async () => {
@@ -1111,24 +1111,24 @@ describe('the stage label a move writes', () => {
       return {
         client,
         move: (to: StageKey = 'intake', options: { recordsOutcome?: boolean; direction?: 'person' } = {}) =>
-          moving.moveStage({ repoName: 'fleetadlc-testbed', issueNumber: 1, to, actor: 'bridge', ...options }),
+          moving.moveStage({ repoName: 'openadlc-testbed', issueNumber: 1, to, actor: 'bridge', ...options }),
       };
     }
 
-    it('is refused when GitHub has the issue labelled fleetadlc:ignore, and the label is stored', async () => {
-      const { client, move } = labelledOnGitHub(['fleetadlc:ignore']);
+    it('is refused when GitHub has the issue labelled openadlc:ignore, and the label is stored', async () => {
+      const { client, move } = labelledOnGitHub(['openadlc:ignore']);
 
       expect(await move()).toMatchObject({ moved: false, ignored: true });
 
       expect(client.setLabels).not.toHaveBeenCalled();
-      expect(world.issues[0]).toMatchObject({ stage: 'intake', labels: ['fleetadlc:ignore'] });
+      expect(world.issues[0]).toMatchObject({ stage: 'intake', labels: ['openadlc:ignore'] });
     });
 
     it('goes ahead on an issue that is not labelled', async () => {
       const { client, move } = labelledOnGitHub(['priority:p2']);
 
       expect(await move()).toEqual({ moved: true });
-      expect(client.setLabels).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 1, ['priority:p2', 'adlc:intake']);
+      expect(client.setLabels).toHaveBeenCalledWith('janedoe/openadlc-testbed', 1, ['priority:p2', 'adlc:intake']);
     });
 
     // An ignored issue is off the board, so nothing moves it there: a merge
@@ -1137,13 +1137,13 @@ describe('the stage label a move writes', () => {
       ['a merge reaching Done', 'done', { recordsOutcome: true }],
       ['a person moving the card', 'review', { direction: 'person' }],
     ] as const)('refuses %s as well', async (_what, to, options) => {
-      const { client, move } = labelledOnGitHub(['adlc:build', 'fleetadlc:ignore']);
+      const { client, move } = labelledOnGitHub(['adlc:build', 'openadlc:ignore']);
       world.issues = [{ number: 1, stage: 'build', labels: ['adlc:build'] }];
       world.moves = [];
 
       expect(await move(to, options)).toMatchObject({ moved: false, ignored: true });
       expect(client.setLabels).not.toHaveBeenCalled();
-      expect(world.issues[0]).toMatchObject({ stage: 'build', labels: ['adlc:build', 'fleetadlc:ignore'] });
+      expect(world.issues[0]).toMatchObject({ stage: 'build', labels: ['adlc:build', 'openadlc:ignore'] });
       expect(world.moves).toEqual([]);
     });
   });
@@ -1167,12 +1167,12 @@ describe('the stage label a move writes', () => {
         getIssue: vi.fn(async () => {
           reads += 1;
           if (reads <= times) throw new Error('GitHub answered 502');
-          return { number: 1, labels: ['adlc:spec', 'priority:p2', 'fleetadlc:paused'] };
+          return { number: 1, labels: ['adlc:spec', 'priority:p2', 'openadlc:paused'] };
         }),
         setLabels: vi.fn(async () => undefined),
       };
       const moving = new Automation(config, { asBot: vi.fn(async () => client) } as never);
-      return { client, move: () => moving.moveStage({ repoName: 'fleetadlc-testbed', issueNumber: 1, to: 'build', actor: 'spec task' }) };
+      return { client, move: () => moving.moveStage({ repoName: 'openadlc-testbed', issueNumber: 1, to: 'build', actor: 'spec task' }) };
     }
 
     it('moves the stage when a read after a failed one answers', async () => {
@@ -1184,7 +1184,7 @@ describe('the stage label a move writes', () => {
       expect(await moved).toEqual({ moved: true });
       // Two reads before the stage moves, and one more just before the write.
       expect(client.getIssue).toHaveBeenCalledTimes(3);
-      expect(client.setLabels).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 1, ['priority:p2', 'fleetadlc:paused', 'adlc:build']);
+      expect(client.setLabels).toHaveBeenCalledWith('janedoe/openadlc-testbed', 1, ['priority:p2', 'openadlc:paused', 'adlc:build']);
       expect(world.issues[0]?.stage).toBe('build');
     });
 
@@ -1193,7 +1193,7 @@ describe('the stage label a move writes', () => {
 
       const moved = move();
       const failed = expect(moved).rejects.toThrow(
-        'fleetadlc-testbed#1 was not moved to build: its labels could not be read from GitHub (GitHub answered 502)',
+        'openadlc-testbed#1 was not moved to build: its labels could not be read from GitHub (GitHub answered 502)',
       );
       await vi.advanceTimersByTimeAsync(LABEL_READ_BACKOFF_MS[0] + LABEL_READ_BACKOFF_MS[1]);
       await failed;
@@ -1211,7 +1211,7 @@ describe('a stage move whose label GitHub will not take', () => {
   // so on the issue, stopped later work and let the lease go.
   beforeEach(async () => {
     vi.useFakeTimers();
-    const { issues, leases, stageMoves } = await import('@fleetadlc/db');
+    const { issues, leases, stageMoves } = await import('@openadlc/db');
     vi.mocked(issues.setIssueStage).mockClear();
     vi.mocked(leases.setLeaseState).mockClear();
     vi.mocked(stageMoves.record).mockClear();
@@ -1233,15 +1233,15 @@ describe('a stage move whose label GitHub will not take', () => {
       }),
     };
     const moving = new Automation(config, { asBot: vi.fn(async () => client) } as never);
-    return { client, move: () => moving.moveStage({ repoName: 'fleetadlc-testbed', issueNumber: 1, to: 'done', actor: 'bridge' }) };
+    return { client, move: () => moving.moveStage({ repoName: 'openadlc-testbed', issueNumber: 1, to: 'done', actor: 'bridge' }) };
   }
 
   it('puts the stored stage back, records no move, keeps the lease, and fails', async () => {
-    const { issues, leases, stageMoves } = await import('@fleetadlc/db');
+    const { issues, leases, stageMoves } = await import('@openadlc/db');
     const { client, move } = refusing(3);
 
     const moved = move();
-    const failed = expect(moved).rejects.toThrow('fleetadlc-testbed#1 was not moved to done: its stage label could not be written on GitHub (GitHub answered 502)');
+    const failed = expect(moved).rejects.toThrow('openadlc-testbed#1 was not moved to done: its stage label could not be written on GitHub (GitHub answered 502)');
     await vi.advanceTimersByTimeAsync(LABEL_READ_BACKOFF_MS[0] + LABEL_READ_BACKOFF_MS[1]);
     await failed;
 
@@ -1256,7 +1256,7 @@ describe('a stage move whose label GitHub will not take', () => {
   });
 
   it('moves once when a write after a failed one is taken, with one record of it', async () => {
-    const { issues, leases, stageMoves } = await import('@fleetadlc/db');
+    const { issues, leases, stageMoves } = await import('@openadlc/db');
     const { client, move } = refusing(1);
 
     const moved = move();
@@ -1272,11 +1272,11 @@ describe('a stage move whose label GitHub will not take', () => {
   });
 
   it('still records the move and lets the lease go at Done when there is no GitHub client', async () => {
-    const { stageMoves, leases } = await import('@fleetadlc/db');
+    const { stageMoves, leases } = await import('@openadlc/db');
     world.issues = [{ number: 1, stage: 'review', labels: ['adlc:review'] }];
     world.lease = { id: 'lease-1', state: 'in_task' };
 
-    expect(await automation.moveStage({ repoName: 'fleetadlc-testbed', issueNumber: 1, to: 'done', actor: 'bridge' })).toEqual({ moved: true });
+    expect(await automation.moveStage({ repoName: 'openadlc-testbed', issueNumber: 1, to: 'done', actor: 'bridge' })).toEqual({ moved: true });
 
     expect(stageMoves.record).toHaveBeenCalledTimes(1);
     expect(leases.setLeaseState).toHaveBeenCalledWith('lease-1', 'released');
@@ -1292,7 +1292,7 @@ describe('the gate as it is read from GitHub', () => {
       { id: 'b-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'exampleco-review' },
       { id: 'b-second', name: 'second-reviewer', slot: 'second-reviewer', role: 'review_second', githubLogin: 'exampleco-review' },
     ];
-    const seat = (name: string) => `Findings.\n\n<!-- fleetadlc-seat:${name} -->`;
+    const seat = (name: string) => `Findings.\n\n<!-- openadlc-seat:${name} -->`;
     const github = {
       listPullFiles: vi.fn(async () => ['apps/console/src/page.tsx']),
       listEveryPullFile: vi.fn(async () => ({ files: ['apps/console/src/page.tsx'], complete: true, renamedFrom: [] })),
@@ -1327,7 +1327,7 @@ describe('the gate as it is read from GitHub', () => {
         { id: 'b-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'exampleco-review' },
         { id: 'b-second', name: 'second-reviewer', slot: 'second-reviewer', role: 'review_second', githubLogin: 'exampleco-review' },
       ];
-      const seat = (name: string) => `Findings.\n\n<!-- fleetadlc-seat:${name} -->`;
+      const seat = (name: string) => `Findings.\n\n<!-- openadlc-seat:${name} -->`;
       const github = {
         listEveryPullFile: vi.fn(listEveryPullFile),
         listReviews: vi.fn(async () => [
@@ -1440,7 +1440,7 @@ describe('who the review rules need to approve', () => {
 });
 
 describe('the reviews on this diff, and the lead’s turn', () => {
-  const seat = (name: string, verdict = '') => `Findings.\n\n<!-- fleetadlc:{"event":"review_posted"${verdict}} -->\n\n<!-- fleetadlc-seat:${name} -->`;
+  const seat = (name: string, verdict = '') => `Findings.\n\n<!-- openadlc:{"event":"review_posted"${verdict}} -->\n\n<!-- openadlc-seat:${name} -->`;
 
   // The lead and the second reviewer share an account here, so a lead review
   // counts only when the attribution's check says it was signed for it:
@@ -1570,7 +1570,7 @@ describe('the reviews on this diff, and the lead’s turn', () => {
       { id: 'b-security', name: 'security-reviewer', slot: 'security-reviewer', role: 'review_security', githubLogin: 'exampleco-security' },
     ];
     const marker = (name: string, verdict: string) =>
-      `Findings.\n\n<!-- fleetadlc:{"event":"review_posted","verdict":"${verdict}","lens":"security"} -->\n\n<!-- fleetadlc-seat:${name} -->`;
+      `Findings.\n\n<!-- openadlc:{"event":"review_posted","verdict":"${verdict}","lens":"security"} -->\n\n<!-- openadlc-seat:${name} -->`;
     const reviews = (verdict: string) => [
       { id: 1, user: 'exampleco-security', state: 'COMMENTED', body: marker('security-reviewer', verdict), submittedAt: '2026-09-30T10:00:00Z', commitId: 'head' },
       { id: 2, user: 'exampleco-review', state: 'APPROVED', body: marker('lead-reviewer', 'approve'), submittedAt: '2026-09-30T10:05:00Z', commitId: 'head' },
@@ -1641,14 +1641,14 @@ describe('running a failed CI again', () => {
     const app = { request: vi.fn(async () => ({})) };
     const automation = new Automation({} as never, {} as never, { client: vi.fn(async () => app) } as never);
 
-    expect(await automation.rerunFailedJobs('janedoe/fleetadlc', 4242)).toBe(true);
-    expect(app.request).toHaveBeenCalledWith('POST', '/repos/janedoe/fleetadlc/actions/runs/4242/rerun-failed-jobs');
+    expect(await automation.rerunFailedJobs('janedoe/openadlc', 4242)).toBe(true);
+    expect(app.request).toHaveBeenCalledWith('POST', '/repos/janedoe/openadlc/actions/runs/4242/rerun-failed-jobs');
   });
 
   it('is not done at all where the app cannot be asked, rather than with a bot’s token', async () => {
     const automation = new Automation({} as never, {} as never, { client: vi.fn(async () => null) } as never);
 
-    expect(await automation.rerunFailedJobs('janedoe/fleetadlc', 4242)).toBe(false);
+    expect(await automation.rerunFailedJobs('janedoe/openadlc', 4242)).toBe(false);
   });
 });
 
@@ -1657,13 +1657,13 @@ describe('whether the bridge may merge a pull request', () => {
   const EARLIER = 'bead00bead00bead00bead00bead00bead00bead';
   // Seats on accounts of their own, unless a test says otherwise.
   const CREW = [
-    { name: 'fleetadlc-sydney-janedoe', slot: 'lead-reviewer', githubLogin: 'sydney-janedoe' },
-    { name: 'fleetadlc-vega-janedoe', slot: 'second-reviewer', githubLogin: 'vega-janedoe' },
-    { name: 'fleetadlc-atlas-janedoe', slot: 'builder', githubLogin: 'builder-janedoe' },
+    { name: 'openadlc-sydney-janedoe', slot: 'lead-reviewer', githubLogin: 'sydney-janedoe' },
+    { name: 'openadlc-vega-janedoe', slot: 'second-reviewer', githubLogin: 'vega-janedoe' },
+    { name: 'openadlc-atlas-janedoe', slot: 'builder', githubLogin: 'builder-janedoe' },
   ];
-  const LOGIN: Record<string, string> = { 'fleetadlc-sydney-janedoe': 'sydney-janedoe', 'fleetadlc-vega-janedoe': 'vega-janedoe' };
+  const LOGIN: Record<string, string> = { 'openadlc-sydney-janedoe': 'sydney-janedoe', 'openadlc-vega-janedoe': 'vega-janedoe' };
   let reviewId = 0;
-  const by = (seat: string, state: string, commitId = HEAD) => ({ id: ++reviewId, user: LOGIN[seat] ?? seat, state, commitId, body: `Verdict.\n\n<!-- fleetadlc-seat:${seat} -->` });
+  const by = (seat: string, state: string, commitId = HEAD) => ({ id: ++reviewId, user: LOGIN[seat] ?? seat, state, commitId, body: `Verdict.\n\n<!-- openadlc-seat:${seat} -->` });
   const person = (login: string, state: string, association = 'OWNER', commitId = HEAD) => ({ id: ++reviewId, user: login, state, commitId, association, body: 'A person.' });
   const ciRun = (overrides: Record<string, unknown> = {}) => ({ name: 'ci', status: 'completed', conclusion: 'success', app: 'github-actions', headSha: HEAD, workflow: 'ci', ...overrides });
   const job = (name: string, conclusion = 'success') => ({ name, status: 'completed', conclusion, app: 'github-actions', headSha: HEAD, workflow: null });
@@ -1671,10 +1671,10 @@ describe('whether the bridge may merge a pull request', () => {
   function facts(overrides: Partial<MergeFacts> = {}): MergeFacts {
     // The crew's reviews are signed by OpenADLC unless a test says otherwise:
     // a required seat's approval counts only when its signature checks.
-    const reviews = overrides.reviews ?? [by('fleetadlc-sydney-janedoe', 'APPROVED'), by('fleetadlc-vega-janedoe', 'APPROVED')];
+    const reviews = overrides.reviews ?? [by('openadlc-sydney-janedoe', 'APPROVED'), by('openadlc-vega-janedoe', 'APPROVED')];
     return {
-      repoFullName: 'janedoe/fleetadlc',
-      headRepoFullName: 'janedoe/fleetadlc',
+      repoFullName: 'janedoe/openadlc',
+      headRepoFullName: 'janedoe/openadlc',
       baseRef: 'main',
       defaultBranch: 'main',
       draft: false,
@@ -1685,7 +1685,7 @@ describe('whether the bridge may merge a pull request', () => {
       ciKeysChanged: [],
       requestsTakenAway: [],
       askingPermission: new Map(),
-      requestedReviewers: ['fleetadlc-sydney-janedoe', 'fleetadlc-vega-janedoe'],
+      requestedReviewers: ['openadlc-sydney-janedoe', 'openadlc-vega-janedoe'],
       pendingOnGitHub: [],
       humansRequired: [],
       humanRulesUnknown: false,
@@ -1693,8 +1693,8 @@ describe('whether the bridge may merge a pull request', () => {
       crew: CREW,
       signaturesEnforced: false,
       checkedReviews: reviews,
-      ciMergedBy: 'fleetadlc',
-      securitySeat: 'fleetadlc-vega-janedoe',
+      ciMergedBy: 'openadlc',
+      securitySeat: 'openadlc-vega-janedoe',
       checkRuns: [job('check'), job('integration'), ciRun()],
       statuses: [{ context: 'review-gate', state: 'success' }],
       gate: 'success',
@@ -1710,20 +1710,20 @@ describe('whether the bridge may merge a pull request', () => {
 
     expect(decision.land).toBe(true);
     expect(decision.approvals).toEqual([
-      { reviewer: 'fleetadlc-sydney-janedoe', person: false, commitId: HEAD, ofHead: true },
-      { reviewer: 'fleetadlc-vega-janedoe', person: false, commitId: HEAD, ofHead: true },
+      { reviewer: 'openadlc-sydney-janedoe', person: false, commitId: HEAD, ofHead: true },
+      { reviewer: 'openadlc-vega-janedoe', person: false, commitId: HEAD, ofHead: true },
     ]);
   });
 
   describe('where it would land', () => {
     it('may not from a fork', () => {
-      expect(mergeDecision(facts({ headRepoFullName: 'mallory/fleetadlc' }))).toMatchObject({ land: false, reason: 'its head is in mallory/fleetadlc, not janedoe/fleetadlc' });
+      expect(mergeDecision(facts({ headRepoFullName: 'mallory/openadlc' }))).toMatchObject({ land: false, reason: 'its head is in mallory/openadlc, not janedoe/openadlc' });
       expect(mergeDecision(facts({ headRepoFullName: null })).land).toBe(false);
     });
 
     it('may not while it is held for a person', () => {
       // "Hold this PR" on an unsigned post's card labels it `needs-human`.
-      expect(mergeDecision(facts({ held: true }))).toMatchObject({ land: false, reason: 'it is held for a person (needs-human or fleetadlc:paused)' });
+      expect(mergeDecision(facts({ held: true }))).toMatchObject({ land: false, reason: 'it is held for a person (needs-human or openadlc:paused)' });
     });
 
     it('may not onto a branch that is not the default one', () => {
@@ -1785,47 +1785,47 @@ describe('whether the bridge may merge a pull request', () => {
 
   describe('approvals', () => {
     it('may not on an approval of an earlier head whose diff was different, or could not be compared', () => {
-      const decision = mergeDecision(facts({ reviews: [by('fleetadlc-sydney-janedoe', 'APPROVED'), by('fleetadlc-vega-janedoe', 'APPROVED', EARLIER)] }));
-      expect(decision).toMatchObject({ land: false, reason: 'fleetadlc-vega-janedoe approved an earlier version whose diff is not known to be this one' });
+      const decision = mergeDecision(facts({ reviews: [by('openadlc-sydney-janedoe', 'APPROVED'), by('openadlc-vega-janedoe', 'APPROVED', EARLIER)] }));
+      expect(decision).toMatchObject({ land: false, reason: 'openadlc-vega-janedoe approved an earlier version whose diff is not known to be this one' });
     });
 
     it('may on an approval that stands across a merge of the base, the diff being the same', () => {
       const decision = mergeDecision(
-        facts({ reviews: [by('fleetadlc-sydney-janedoe', 'APPROVED'), by('fleetadlc-vega-janedoe', 'APPROVED', EARLIER)], sameDiffAs: new Set([EARLIER]) }),
+        facts({ reviews: [by('openadlc-sydney-janedoe', 'APPROVED'), by('openadlc-vega-janedoe', 'APPROVED', EARLIER)], sameDiffAs: new Set([EARLIER]) }),
       );
       expect(decision.land).toBe(true);
-      expect(decision.approvals[1]).toEqual({ reviewer: 'fleetadlc-vega-janedoe', person: false, commitId: EARLIER, ofHead: false });
+      expect(decision.approvals[1]).toEqual({ reviewer: 'openadlc-vega-janedoe', person: false, commitId: EARLIER, ofHead: false });
     });
 
     describe('after a lead-only resolution of a conflict', () => {
       // EARLIER is the head before the builder resolved the conflict; HEAD is
       // the resolution. Both seats approved EARLIER.
-      const before = [by('fleetadlc-sydney-janedoe', 'APPROVED', EARLIER), by('fleetadlc-vega-janedoe', 'APPROVED', EARLIER)];
+      const before = [by('openadlc-sydney-janedoe', 'APPROVED', EARLIER), by('openadlc-vega-janedoe', 'APPROVED', EARLIER)];
       const resolved = (overrides: Partial<MergeFacts> = {}) =>
-        facts({ reviews: before, carriedFrom: new Set([EARLIER]), leadRechecks: 'fleetadlc-sydney-janedoe', ...overrides });
+        facts({ reviews: before, carriedFrom: new Set([EARLIER]), leadRechecks: 'openadlc-sydney-janedoe', ...overrides });
 
       it('may not until the lead approves the resolution head itself, though the other seat’s approval carries', () => {
         expect(mergeDecision(resolved())).toMatchObject({
           land: false,
-          reason: 'fleetadlc-sydney-janedoe re-checks the resolution of a conflict, and has approved only the version before it',
+          reason: 'openadlc-sydney-janedoe re-checks the resolution of a conflict, and has approved only the version before it',
         });
 
-        const decision = mergeDecision(resolved({ reviews: [...before, by('fleetadlc-sydney-janedoe', 'APPROVED')] }));
+        const decision = mergeDecision(resolved({ reviews: [...before, by('openadlc-sydney-janedoe', 'APPROVED')] }));
         expect(decision.land).toBe(true);
         expect(decision.approvals).toEqual([
-          { reviewer: 'fleetadlc-sydney-janedoe', person: false, commitId: HEAD, ofHead: true },
-          { reviewer: 'fleetadlc-vega-janedoe', person: false, commitId: EARLIER, ofHead: false },
+          { reviewer: 'openadlc-sydney-janedoe', person: false, commitId: HEAD, ofHead: true },
+          { reviewer: 'openadlc-vega-janedoe', person: false, commitId: EARLIER, ofHead: false },
         ]);
       });
 
       it('may on the lead’s approval of a head with the resolution’s diff', () => {
         const SAME = '5a3e'.repeat(10);
-        const decision = mergeDecision(resolved({ reviews: [...before, by('fleetadlc-sydney-janedoe', 'APPROVED', SAME)], sameDiffAs: new Set([SAME]) }));
+        const decision = mergeDecision(resolved({ reviews: [...before, by('openadlc-sydney-janedoe', 'APPROVED', SAME)], sameDiffAs: new Set([SAME]) }));
         expect(decision.land).toBe(true);
       });
 
       it('may not on a person’s approval of a carried head', () => {
-        const reviews = [...before, by('fleetadlc-sydney-janedoe', 'APPROVED'), person('janedoe', 'APPROVED', 'OWNER', EARLIER)];
+        const reviews = [...before, by('openadlc-sydney-janedoe', 'APPROVED'), person('janedoe', 'APPROVED', 'OWNER', EARLIER)];
         expect(mergeDecision(resolved({ reviews, humansRequired: ['janedoe'] }))).toMatchObject({ land: false, reason: '@janedoe has not approved this version' });
         // Nor when the carry is a stacked update's, where the lead's does stand.
         expect(mergeDecision(resolved({ reviews, humansRequired: ['janedoe'], leadRechecks: null })).land).toBe(false);
@@ -1835,24 +1835,24 @@ describe('whether the bridge may merge a pull request', () => {
 
     it('may not while one reviewer still asks for changes, whatever it said before', () => {
       const decision = mergeDecision(
-        facts({ reviews: [by('fleetadlc-sydney-janedoe', 'APPROVED'), by('fleetadlc-vega-janedoe', 'APPROVED'), by('fleetadlc-vega-janedoe', 'CHANGES_REQUESTED')] }),
+        facts({ reviews: [by('openadlc-sydney-janedoe', 'APPROVED'), by('openadlc-vega-janedoe', 'APPROVED'), by('openadlc-vega-janedoe', 'CHANGES_REQUESTED')] }),
       );
-      expect(decision).toMatchObject({ land: false, reason: 'fleetadlc-vega-janedoe still asks for changes' });
+      expect(decision).toMatchObject({ land: false, reason: 'openadlc-vega-janedoe still asks for changes' });
     });
 
     it('may not before every requested reviewer has reviewed', () => {
-      expect(mergeDecision(facts({ reviews: [by('fleetadlc-sydney-janedoe', 'APPROVED')] }))).toMatchObject({ land: false, reason: 'fleetadlc-vega-janedoe has not reviewed it' });
+      expect(mergeDecision(facts({ reviews: [by('openadlc-sydney-janedoe', 'APPROVED')] }))).toMatchObject({ land: false, reason: 'openadlc-vega-janedoe has not reviewed it' });
     });
 
     it('may not count one account’s approval for two seats unless each signature checks', () => {
       const shared = CREW.map((bot) => (bot.slot === 'builder' ? bot : { ...bot, githubLogin: 'reviewer-janedoe' }));
       const reviews = [
-        { ...by('fleetadlc-sydney-janedoe', 'APPROVED'), user: 'reviewer-janedoe' },
-        { ...by('fleetadlc-vega-janedoe', 'APPROVED'), user: 'reviewer-janedoe' },
+        { ...by('openadlc-sydney-janedoe', 'APPROVED'), user: 'reviewer-janedoe' },
+        { ...by('openadlc-vega-janedoe', 'APPROVED'), user: 'reviewer-janedoe' },
       ];
       expect(mergeDecision(facts({ crew: shared, reviews, checkedReviews: [reviews[0]!] }))).toMatchObject({
         land: false,
-        reason: expect.stringContaining('fleetadlc-vega-janedoe’s review on reviewer-janedoe, an account other seats use too, is not signed'.replace('’', "'")),
+        reason: expect.stringContaining('openadlc-vega-janedoe’s review on reviewer-janedoe, an account other seats use too, is not signed'.replace('’', "'")),
       });
       expect(mergeDecision(facts({ crew: shared, reviews, checkedReviews: reviews })).land).toBe(true);
       expect(mergeDecision(facts({ crew: shared, reviews, checkedReviews: reviews, signaturesEnforced: true })).land).toBe(true);
@@ -1868,7 +1868,7 @@ describe('whether the bridge may merge a pull request', () => {
         { name: 'security-reviewer', slot: 'security-reviewer', githubLogin: 'exampleco-review' },
         { name: 'builder', slot: 'builder', githubLogin: 'exampleco-builder' },
       ];
-      const lead = { id: 501, user: 'exampleco-review', state: 'APPROVED', commitId: HEAD, body: 'Approved.\n\n<!-- fleetadlc-seat:lead-reviewer -->' };
+      const lead = { id: 501, user: 'exampleco-review', state: 'APPROVED', commitId: HEAD, body: 'Approved.\n\n<!-- openadlc-seat:lead-reviewer -->' };
       const shared = (overrides: Partial<MergeFacts>) =>
         facts({ crew: REVIEWERS, requestedReviewers: ['lead-reviewer'], securitySeat: 'security-reviewer', signaturesEnforced: false, reviews: [lead], ...overrides });
 
@@ -1895,11 +1895,11 @@ describe('whether the bridge may merge a pull request', () => {
       // A review session holds the reviewer account's token, so a test planted
       // in the code under review could post an approval tagged as the lead's
       // around OpenADLC's gh; in audit mode the merge counted it.
-      const lead = by('fleetadlc-sydney-janedoe', 'APPROVED');
-      const blocking = by('fleetadlc-vega-janedoe', 'APPROVED');
+      const lead = by('openadlc-sydney-janedoe', 'APPROVED');
+      const blocking = by('openadlc-vega-janedoe', 'APPROVED');
       const unsigned = mergeDecision(facts({ reviews: [lead, blocking], checkedReviews: [blocking], signaturesEnforced: false }));
       expect(unsigned.land).toBe(false);
-      expect(unsigned.reason).toContain('fleetadlc-sydney-janedoe');
+      expect(unsigned.reason).toContain('openadlc-sydney-janedoe');
       expect(unsigned.reason).toContain('not signed by OpenADLC');
       expect(mergeDecision(facts({ reviews: [lead, blocking], checkedReviews: [lead, blocking], signaturesEnforced: false })).land).toBe(true);
       // With nothing to check a signature, a person merges it.
@@ -2050,8 +2050,8 @@ describe('whether the bridge may merge a pull request', () => {
 
   it('merges a change to how CI runs on the security reviewer\u2019s checked approve verdict on this diff, as it merges anything else', () => {
     const verdict = (word: string, commitId = HEAD) => ({
-      ...by('fleetadlc-vega-janedoe', 'COMMENTED', commitId),
-      body: `Looks safe.\n\n<!-- fleetadlc:{"event":"review_posted","verdict":"${word}","lens":"security"} -->\n<!-- fleetadlc-seat:fleetadlc-vega-janedoe -->`,
+      ...by('openadlc-vega-janedoe', 'COMMENTED', commitId),
+      body: `Looks safe.\n\n<!-- openadlc:{"event":"review_posted","verdict":"${word}","lens":"security"} -->\n<!-- openadlc-seat:openadlc-vega-janedoe -->`,
     });
     const approvals = facts().reviews;
     const ci = { files: ['Makefile'], reviews: approvals };
@@ -2069,13 +2069,13 @@ describe('whether the bridge may merge a pull request', () => {
   });
 
   it('reads the security reviewer\u2019s verdict on a change to how CI runs from the marker its review ends with, never one it quotes', () => {
-    const marker = (word: string) => `<!-- fleetadlc:{"event":"review_posted","verdict":"${word}","lens":"security"} -->`;
-    const ending = '\n<!-- fleetadlc-seat:fleetadlc-vega-janedoe -->\n<!-- fleetadlc-sig:v1.abc.c2VjdXJpdHk.c2ln -->';
-    const review = (body: string, commitId = HEAD) => ({ ...by('fleetadlc-vega-janedoe', 'COMMENTED', commitId), body: `${body}${ending}` });
+    const marker = (word: string) => `<!-- openadlc:{"event":"review_posted","verdict":"${word}","lens":"security"} -->`;
+    const ending = '\n<!-- openadlc-seat:openadlc-vega-janedoe -->\n<!-- openadlc-sig:v1.abc.c2VjdXJpdHk.c2ln -->';
+    const review = (body: string, commitId = HEAD) => ({ ...by('openadlc-vega-janedoe', 'COMMENTED', commitId), body: `${body}${ending}` });
     // The lead alone is required here, and its approval is signed, as it is when it lands.
-    const lead = by('fleetadlc-sydney-janedoe', 'APPROVED');
+    const lead = by('openadlc-sydney-janedoe', 'APPROVED');
     const approvals = [lead];
-    const ci = { files: ['Makefile'], reviews: approvals, requestedReviewers: ['fleetadlc-sydney-janedoe'] };
+    const ci = { files: ['Makefile'], reviews: approvals, requestedReviewers: ['openadlc-sydney-janedoe'] };
 
     // A builder plants an approve marker in the diff, and the reviewer quotes it while asking for changes.
     const inline = review(`The Makefile gains \`${marker('approve')}\`, which is not the reviewer\u2019s to write.\n\n${marker('request_changes')}`);
@@ -2086,7 +2086,7 @@ describe('whether the bridge may merge a pull request', () => {
     const approving = review(`An earlier round said \`${marker('request_changes')}\`; that is fixed.\n\n${marker('approve')}`);
     expect(mergeDecision(facts({ ...ci, checkedReviews: [...approvals, approving] })).land).toBe(true);
     // A later review that quotes a marker with no verdict and ends asking for changes replaces an earlier approve.
-    const later = review(`It quotes \`<!-- fleetadlc:{"event":"review_posted"} -->\`.\n\n${marker('request_changes')}`);
+    const later = review(`It quotes \`<!-- openadlc:{"event":"review_posted"} -->\`.\n\n${marker('request_changes')}`);
     expect(mergeDecision(facts({ ...ci, checkedReviews: [...approvals, review(marker('approve')), later] }))).toMatchObject({
       land: false,
       reason: expect.stringContaining('its verdict: request_changes'),
@@ -2152,9 +2152,9 @@ describe('a review request taken away', () => {
   it('still holds when a crew account, an app, or someone who cannot write took it away', () => {
     const history = [
       { event: 'review_requested', actor: 'owner-janedoe', viaApp: false, subject: 'janedoe' },
-      { event: 'review_request_removed', actor: 'fleetadlc-atlas-janedoe', viaApp: false, subject: 'janedoe' },
+      { event: 'review_request_removed', actor: 'openadlc-atlas-janedoe', viaApp: false, subject: 'janedoe' },
       { event: 'review_requested', actor: 'owner-janedoe', viaApp: false, subject: 'team maintainers' },
-      { event: 'review_request_removed', actor: 'fleetadlc-app[bot]', viaApp: true, subject: 'team maintainers' },
+      { event: 'review_request_removed', actor: 'openadlc-app[bot]', viaApp: true, subject: 'team maintainers' },
     ];
     expect(requestsTakenAway(history, writer)).toEqual(['@janedoe', 'team maintainers']);
   });
@@ -2164,7 +2164,7 @@ describe('a review request taken away', () => {
       requestsTakenAway(
         [
           { event: 'review_request_removed', actor: 'owner-janedoe', viaApp: false, subject: 'janedoe' },
-          { event: 'review_request_removed', actor: 'fleetadlc-atlas-janedoe', viaApp: false, subject: 'dev-janedoe' },
+          { event: 'review_request_removed', actor: 'openadlc-atlas-janedoe', viaApp: false, subject: 'dev-janedoe' },
           { event: 'reviewed', actor: 'dev-janedoe', viaApp: false, subject: null },
         ],
         writer,
@@ -2196,18 +2196,18 @@ describe('merging as the app', () => {
     const app = { mergePullRequest: vi.fn(async () => ({ sha: 'merged00' })) };
     const automation = new Automation({} as never, {} as never, { client: vi.fn(async () => app) } as never);
 
-    expect(await automation.mergeAsApp('janedoe/fleetadlc', 31, 'c0ffee00')).toEqual({ sha: 'merged00' });
-    expect(app.mergePullRequest).toHaveBeenCalledWith('janedoe/fleetadlc', 31, 'c0ffee00');
+    expect(await automation.mergeAsApp('janedoe/openadlc', 31, 'c0ffee00')).toEqual({ sha: 'merged00' });
+    expect(app.mergePullRequest).toHaveBeenCalledWith('janedoe/openadlc', 31, 'c0ffee00');
   });
 
   it('is not done at all where the app cannot be asked', async () => {
     const automation = new Automation({} as never, {} as never, { client: vi.fn(async () => null) } as never);
-    expect(await automation.mergeAsApp('janedoe/fleetadlc', 31, 'c0ffee00')).toBeNull();
+    expect(await automation.mergeAsApp('janedoe/openadlc', 31, 'c0ffee00')).toBeNull();
   });
 });
 
 describe('what the bridge reads before it merges', () => {
-  const seat = (name: string) => `Approved.\n\n<!-- fleetadlc-seat:${name} -->`;
+  const seat = (name: string) => `Approved.\n\n<!-- openadlc-seat:${name} -->`;
   const PULL = {
     number: 79,
     draft: false,
@@ -2299,7 +2299,7 @@ describe('what the bridge reads before it merges', () => {
   it('counts a crew review only when its signature was made for this review, with signatures enforced', async () => {
     // Another seat's signed words, posted again as an approval: the
     // attribution's review check drops it, and the merge sees it as nobody's.
-    const { settings } = await import('@fleetadlc/db');
+    const { settings } = await import('@openadlc/db');
     vi.mocked(settings.allSettings).mockResolvedValue({ attributionMode: 'enforce' } as never);
     try {
       const reviewsThatCount = vi.fn(async (_repo: string, _n: number, reviews: { id: number }[]) => reviews.filter((review) => review.id !== 2));
@@ -2323,7 +2323,7 @@ describe('what the bridge reads before it merges', () => {
   it('leaves a change to CI for a person to merge when the settings cannot be read', async () => {
     // `effectiveConfig` still resolves on a failed read, from the environment,
     // with no repository in `ciMergeByPerson`: that is not "nobody asked".
-    const { settings } = await import('@fleetadlc/db');
+    const { settings } = await import('@openadlc/db');
     vi.mocked(settings.allSettings).mockRejectedValue(new Error('connection terminated'));
     try {
       const { github, appGate } = reading({ listEveryPullFile: vi.fn(async () => ({ files: ['.github/workflows/ci.yml'], complete: true })) });
@@ -2519,7 +2519,7 @@ describe('what the bridge reads before it merges', () => {
       };
 
       expect(await read(labelled('janedoe'))).toBe(true);
-      expect(await read(labelled('fleetadlc-exampleco[bot]', true))).toBe(true);
+      expect(await read(labelled('openadlc-exampleco[bot]', true))).toBe(true);
       expect(await read(labelled('exampleco-lead'))).toBe(false);
       expect(await read([])).toBe(false);
     });
@@ -2599,7 +2599,7 @@ describe('what the bridge reads before it merges', () => {
   });
 
   describe('review-gate as OpenADLC published it', () => {
-    const APP_BOT = 'fleetadlc-exampleco[bot]';
+    const APP_BOT = 'openadlc-exampleco[bot]';
 
     /** The gate the merge line reads, given the app's check run and the statuses on the head. */
     async function gateWith(input: {
@@ -2703,11 +2703,11 @@ describe('holding a pull request for a person', () => {
       publishStatus: vi.fn(async () => false),
     } as never);
 
-    const held = await automation.holdPull('janedoe/fleetadlc-testbed', 31);
+    const held = await automation.holdPull('janedoe/openadlc-testbed', 31);
 
     expect(pull.labels).toEqual(['needs-human']);
     // As the app, by the pull request's node id.
-    expect(app.calls.map((call) => `${call.method} ${call.path}`)).toEqual(['GET /repos/janedoe/fleetadlc-testbed/pulls/31', 'POST /graphql']);
+    expect(app.calls.map((call) => `${call.method} ${call.path}`)).toEqual(['GET /repos/janedoe/openadlc-testbed/pulls/31', 'POST /graphql']);
     expect(JSON.stringify(app.calls[1]!.body)).toContain('disablePullRequestAutoMerge');
     expect(JSON.stringify(app.calls[1]!.body)).toContain('PR_kw31');
     expect(held).toEqual({ autoMergeOff: true, gate: { state: 'pending', description: expect.stringContaining('needs-human') } });
@@ -2717,7 +2717,7 @@ describe('holding a pull request for a person', () => {
   it('keeps review-gate pending while needs-human is on, however the reviews stand', async () => {
     const labelled = github({ labels: ['needs-human'], autoMerge: false });
     const automation = new Automation({ automationBot: null } as BridgeConfig, { asBot: async () => labelled.client } as never);
-    const reviewsIn = { repoFullName: 'janedoe/fleetadlc-testbed', prNumber: 31, sha: HEAD, state: 'success', description: 'every requested review has been posted' } as const;
+    const reviewsIn = { repoFullName: 'janedoe/openadlc-testbed', prNumber: 31, sha: HEAD, state: 'success', description: 'every requested review has been posted' } as const;
     expect((await automation.setReviewGate(reviewsIn))?.state).toBe('pending');
     expect(labelled.statuses.at(-1)?.state).toBe('pending');
 
@@ -2729,14 +2729,14 @@ describe('holding a pull request for a person', () => {
 
   it('keeps review-gate pending while its work is paused, saying so', async () => {
     // A paused pull request's gate went green, and auto-merge or a person could land it.
-    const paused = github({ labels: ['fleetadlc:paused'], autoMerge: false });
+    const paused = github({ labels: ['openadlc:paused'], autoMerge: false });
     const automation = new Automation({ automationBot: null } as BridgeConfig, { asBot: async () => paused.client } as never);
-    const reviewsIn = { repoFullName: 'janedoe/fleetadlc-testbed', prNumber: 31, sha: HEAD, state: 'success', description: 'every requested review has been posted' } as const;
-    expect(await automation.setReviewGate(reviewsIn)).toEqual({ state: 'pending', description: expect.stringContaining('fleetadlc:paused') });
+    const reviewsIn = { repoFullName: 'janedoe/openadlc-testbed', prNumber: 31, sha: HEAD, state: 'success', description: 'every requested review has been posted' } as const;
+    expect(await automation.setReviewGate(reviewsIn)).toEqual({ state: 'pending', description: expect.stringContaining('openadlc:paused') });
   });
 
   it('holds a paused item’s pull request at once: auto-merge off, the gate pending, and no needs-human', async () => {
-    const pull = { labels: ['fleetadlc:paused'], autoMerge: true };
+    const pull = { labels: ['openadlc:paused'], autoMerge: true };
     const bot = github(pull);
     const app = github(pull);
     const automation = new Automation({ automationBot: null } as BridgeConfig, { asBot: async () => bot.client } as never, {
@@ -2745,9 +2745,9 @@ describe('holding a pull request for a person', () => {
       publishStatus: vi.fn(async () => false),
     } as never);
 
-    const held = await automation.pausePull('janedoe/fleetadlc-testbed', 31);
+    const held = await automation.pausePull('janedoe/openadlc-testbed', 31);
 
-    expect(pull.labels).toEqual(['fleetadlc:paused']);
+    expect(pull.labels).toEqual(['openadlc:paused']);
     expect(JSON.stringify(app.calls[1]?.body)).toContain('disablePullRequestAutoMerge');
     expect(held).toEqual({ autoMergeOff: true, gate: { state: 'pending', description: expect.stringContaining('paused') } });
   });
@@ -2756,7 +2756,7 @@ describe('holding a pull request for a person', () => {
     const unreadable = github({ labels: ['needs-human'], autoMerge: false });
     unreadable.client.getPullRequest.mockRejectedValue(new Error('GitHub answered 502'));
     const automation = new Automation({ automationBot: null } as BridgeConfig, { asBot: async () => unreadable.client } as never);
-    const reviewsIn = { repoFullName: 'janedoe/fleetadlc-testbed', prNumber: 31, sha: HEAD, state: 'success', description: 'every requested review has been posted' } as const;
+    const reviewsIn = { repoFullName: 'janedoe/openadlc-testbed', prNumber: 31, sha: HEAD, state: 'success', description: 'every requested review has been posted' } as const;
     const gate = await automation.setReviewGate(reviewsIn);
     expect(gate).toMatchObject({ state: 'pending', description: expect.stringContaining('could not read') });
   });
@@ -2765,7 +2765,7 @@ describe('holding a pull request for a person', () => {
     const pull = { labels: [] as string[], autoMerge: false };
     const bot = github(pull);
     const automation = new Automation({ automationBot: null } as BridgeConfig, { asBot: async () => bot.client } as never);
-    expect(await automation.holdPull('janedoe/fleetadlc-testbed', 31)).toMatchObject({ autoMergeOff: true, gate: { state: 'pending' } });
+    expect(await automation.holdPull('janedoe/openadlc-testbed', 31)).toMatchObject({ autoMergeOff: true, gate: { state: 'pending' } });
     expect(bot.calls).toEqual([]);
   });
 });
@@ -2829,16 +2829,16 @@ describe('asking GitHub for the reviews', () => {
   beforeEach(() => {
     world.audited = [];
     world.crew = [
-      { name: 'fleetadlc-sydney-janedoe', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'fleetadlc-sydney-janedoe' },
+      { name: 'openadlc-sydney-janedoe', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'openadlc-sydney-janedoe' },
       { name: 'second-reviewer', slot: 'second-reviewer', role: 'review_second', githubLogin: 'janedoe-reviewer' },
-      { name: 'janedoe-fleetadlc-flow', slot: 'automation', role: 'automation', githubLogin: 'janedoe-fleetadlc-flow' },
+      { name: 'janedoe-openadlc-flow', slot: 'automation', role: 'automation', githubLogin: 'janedoe-openadlc-flow' },
     ];
   });
 
   function github(refuse: (logins: string[]) => GitHubApiError | null) {
     const asked: string[][] = [];
     const client = {
-      getPullRequest: vi.fn(async () => ({ author: 'fleetadlc-atlas-janedoe', labels: [] })),
+      getPullRequest: vi.fn(async () => ({ author: 'openadlc-atlas-janedoe', labels: [] })),
       requestReviewers: vi.fn(async (_repo: string, _pr: number, logins: string[]) => {
         asked.push(logins);
         const refused = refuse(logins);
@@ -2860,11 +2860,11 @@ describe('asking GitHub for the reviews', () => {
 
   it('asks the others when GitHub refuses one, and says who it refused and why', async () => {
     const { automation, asked } = github(noSuchUser);
-    const refused = await automation.requestReviewers('exampleco/api', 4, ['fleetadlc-sydney-janedoe', 'second-reviewer']);
+    const refused = await automation.requestReviewers('exampleco/api', 4, ['openadlc-sydney-janedoe', 'second-reviewer']);
     expect(refused).toEqual([
       { seat: 'second-reviewer', login: 'janedoe-reviewer', reason: 'there is no such GitHub account', words: "Could not resolve user with login 'janedoe-reviewer'" },
     ]);
-    expect(asked).toEqual([['fleetadlc-sydney-janedoe', 'janedoe-reviewer'], ['fleetadlc-sydney-janedoe'], ['janedoe-reviewer']]);
+    expect(asked).toEqual([['openadlc-sydney-janedoe', 'janedoe-reviewer'], ['openadlc-sydney-janedoe'], ['janedoe-reviewer']]);
     // In the audit in GitHub's words, not swallowed.
     expect(world.audited).toEqual([
       expect.objectContaining({
@@ -2877,14 +2877,14 @@ describe('asking GitHub for the reviews', () => {
 
   it('remembers the refusal, so every later gate says why instead of waiting', async () => {
     const { automation } = github(noSuchUser);
-    await automation.requestReviewers('exampleco/api', 4, ['fleetadlc-sydney-janedoe', 'second-reviewer']);
-    const cannot = await automation.cannotReviewHere('exampleco/api', { seats: ['fleetadlc-sydney-janedoe', 'second-reviewer'], humans: [] });
+    await automation.requestReviewers('exampleco/api', 4, ['openadlc-sydney-janedoe', 'second-reviewer']);
+    const cannot = await automation.cannotReviewHere('exampleco/api', { seats: ['openadlc-sydney-janedoe', 'second-reviewer'], humans: [] });
     expect([...cannot]).toEqual([['second-reviewer', 'there is no such GitHub account']]);
   });
 
   it('still throws a failure that says nothing about the reviewer', async () => {
     const { automation } = github(() => new GitHubApiError(403, '/repos/exampleco/api/pulls/4/requested_reviewers', '{"message":"Resource not accessible by integration"}'));
-    await expect(automation.requestReviewers('exampleco/api', 4, ['fleetadlc-sydney-janedoe'])).rejects.toThrow(/403/);
+    await expect(automation.requestReviewers('exampleco/api', 4, ['openadlc-sydney-janedoe'])).rejects.toThrow(/403/);
   });
 
   it('calls no person missing when GitHub cannot be asked about them', async () => {
@@ -2934,7 +2934,7 @@ describe('asking GitHub for the reviews', () => {
   it('forgets what GitHub refused about a seat once the crew’s access changes', async () => {
     const { automation, standings } = github(noSuchUser);
     standings.record('exampleco/api', 'janedoe', { state: 'cannot-review', reason: 'janedoe is not a collaborator on exampleco/api' });
-    await automation.requestReviewers('exampleco/api', 4, ['fleetadlc-sydney-janedoe', 'second-reviewer']);
+    await automation.requestReviewers('exampleco/api', 4, ['openadlc-sydney-janedoe', 'second-reviewer']);
     expect((await automation.cannotReviewHere('exampleco/api', { seats: ['second-reviewer'], humans: [] })).size).toBe(1);
     await automation.forgetCrewStandings();
     expect((await automation.cannotReviewHere('exampleco/api', { seats: ['second-reviewer'], humans: [] })).size).toBe(0);
@@ -3027,7 +3027,7 @@ describe('the lead’s turn after a lead-only resolution of a conflict', () => {
   const BEFORE = 'b'.repeat(40);
   const AFTER = 'a'.repeat(40);
   const RESOLVED_AT = '2026-09-30T11:00:00.000Z';
-  const seat = (name: string) => `Approved.\n\n<!-- fleetadlc-seat:${name} -->`;
+  const seat = (name: string) => `Approved.\n\n<!-- openadlc-seat:${name} -->`;
 
   /** The reviews standing on AFTER, with the carry wired as main.ts wires it, over the real resolution round's events. */
   function standing(reviews: Record<string, unknown>[], resolution: 'lead-only' | 'none' = 'lead-only') {

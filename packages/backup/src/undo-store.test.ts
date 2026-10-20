@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SecretStore } from '@fleetadlc/github';
+import type { SecretStore } from '@openadlc/github';
 import { buildBackup, classifySecret } from './contents.js';
 import { EVERYTHING } from './selection.js';
 import { VALUES, sourceInstall } from './test-fixtures.js';
@@ -44,7 +44,7 @@ const JOURNAL: RestoreJournal = {
 
 describe('the backup an undo puts back', () => {
   it('is sealed with a key of its own, readable by this install alone, and opens again', async () => {
-    const root = join(mkdtempSync(join(tmpdir(), 'fleetadlc-undo-')), 'restore-undo');
+    const root = join(mkdtempSync(join(tmpdir(), 'openadlc-undo-')), 'restore-undo');
     made.push(join(root, '..'));
     const store = memoryStore();
     const undo = fileUndoStore({ root, store });
@@ -66,7 +66,7 @@ describe('the backup an undo puts back', () => {
   });
 
   it('is gone, key and all, once cleared', async () => {
-    const root = join(mkdtempSync(join(tmpdir(), 'fleetadlc-undo-')), 'restore-undo');
+    const root = join(mkdtempSync(join(tmpdir(), 'openadlc-undo-')), 'restore-undo');
     made.push(join(root, '..'));
     const store = memoryStore();
     const undo = fileUndoStore({ root, store });
@@ -81,7 +81,7 @@ describe('the backup an undo puts back', () => {
   });
 
   it('keeps the earlier restore’s undo when the next snapshot cannot be sealed', async () => {
-    const root = join(mkdtempSync(join(tmpdir(), 'fleetadlc-undo-')), 'restore-undo');
+    const root = join(mkdtempSync(join(tmpdir(), 'openadlc-undo-')), 'restore-undo');
     made.push(join(root, '..'));
     const store = memoryStore();
     const undo = fileUndoStore({ root, store });

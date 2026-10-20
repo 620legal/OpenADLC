@@ -5,14 +5,14 @@ import { BOT_ROLES, ENGINES, STAGE_MODES, type StageMode } from './types.js';
 import { STAGE_KEYS, mayBeUntouched, normaliseStageMode, stageOffersMode, untouchedRefusal, type StageKey } from './stages.js';
 import { BOT_NAME_PATTERN, seatForPersona } from './seats.js';
 
-// An older file's `assist` is read as `autonomous` rather than failing `fleetadlc up`.
+// An older file's `assist` is read as `autonomous` rather than failing `openadlc up`.
 const stageModeSchema = z.preprocess((mode) => (typeof mode === 'string' ? normaliseStageMode(mode) : mode), z.enum(STAGE_MODES));
 
 /**
  * A file written before seats named each bot by a persona under `name:`.
  * Read as the seat that persona was — `atlas` is `builder`, `atlas-2` is
  * `builder-2` — so a copy somebody edited keeps seeding the same rows rather
- * than failing `fleetadlc up` on a key it no longer has. Anything else under
+ * than failing `openadlc up` on a key it no longer has. Anything else under
  * `name:` is taken as the seat itself.
  *
  * The keys a bot entry no longer has are taken off here, before the schema
@@ -32,7 +32,7 @@ export const botConfigSchema = z.preprocess(
     /**
      * The seat: what this bot is for, as a stable key (`builder`,
      * `lead-reviewer`). The row seeded from this entry is found by it on
-     * every `fleetadlc up`, and it is the bot's name until an account connects —
+     * every `openadlc up`, and it is the bot's name until an account connects —
      * after that the name is the account's handle and the seat stays.
      *
      * There is no `githubLogin` any more. Which account a bot is, is decided
@@ -58,7 +58,7 @@ export const botConfigSchema = z.preprocess(
     /**
      * How many tasks the seat runs at once. Left out, the row keeps what it
      * has — 1 for a new seat, or what a person set in Crew → "tasks at once" —
-     * so a console change survives `fleetadlc up`; written here, the file
+     * so a console change survives `openadlc up`; written here, the file
      * wins at every start, as it does for `cpus`.
      */
     maxTasks: z.number().int().min(1).max(16).optional(),
@@ -107,7 +107,7 @@ export const REPO_DEFAULTS: {
 /**
  * A repository in `config/repos.yaml`. Its settings have no defaults here: a
  * default filled in by the schema was written over the row at every
- * `fleetadlc up`, so a stage a person set to `untouched` in the console went
+ * `openadlc up`, so a stage a person set to `untouched` in the console went
  * back to `autonomous`. A field written in the file wins; one left out keeps
  * the row's value, as `maxTasks` does in bots.yaml.
  */
@@ -212,7 +212,7 @@ type LegacySeat = { seat: string; lens: string; lead?: boolean; trigger: LegacyT
  * A review.yaml written before reviewers were a list — `lead`, `second`,
  * `security: {bot, labels, paths, samplePercent}`, `workflows: {bot, paths}` —
  * read as the list it means, so an install's edited copy keeps working after
- * an upgrade rather than failing `fleetadlc up`. The lead is the lead; the rest
+ * an upgrade rather than failing `openadlc up`. The lead is the lead; the rest
  * are advisory, which is what every seat but the lead is now. A seat named
  * twice keeps one entry, asked whenever either would have asked it.
  */

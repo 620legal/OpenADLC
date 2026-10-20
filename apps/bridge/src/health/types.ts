@@ -1,4 +1,4 @@
-import type { HealthAction, HealthSeverity, ManualStep } from '@fleetadlc/shared';
+import type { HealthAction, HealthSeverity, ManualStep } from '@openadlc/shared';
 
 /**
  * What one run of a check says about one subject.
@@ -39,7 +39,7 @@ export type CheckResult =
   | {
       subject?: string | null;
       ok: null;
-      /** Why there is no answer, which `fleetadlc doctor` prints. */
+      /** Why there is no answer, which `openadlc doctor` prints. */
       reason: string;
       facts?: Record<string, unknown>;
     };

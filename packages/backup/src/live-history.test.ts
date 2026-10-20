@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const attachments = vi.hoisted(() => ({ error: null as (Error & { code?: string }) | null }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   bots: { listBots: vi.fn(async () => []) },
   credentials: { listCredentials: vi.fn(async () => []) },
   identities: { listIdentities: vi.fn(async () => []) },
@@ -17,8 +17,8 @@ vi.mock('@fleetadlc/db', () => ({
   withTransaction: vi.fn(),
 }));
 
-import { query } from '@fleetadlc/db';
-import type { SecretStore } from '@fleetadlc/github';
+import { query } from '@openadlc/db';
+import type { SecretStore } from '@openadlc/github';
 import { readHistoryHere, readInstall, restoreDb } from './live.js';
 import { HISTORY } from './test-fixtures.js';
 import { EVERYTHING } from './selection.js';

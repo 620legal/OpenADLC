@@ -73,12 +73,12 @@ describe('an issue’s controls on its card', () => {
 
   it('a refusal is the bridge’s sentence on a line of its own, below the buttons, not beside them', async () => {
     const { pauseItem } = await import('@/app/actions');
-    vi.mocked(pauseItem).mockResolvedValueOnce({ ok: false, error: 'GitHub would not put fleetadlc:paused on acme/web#7.' } as never);
+    vi.mocked(pauseItem).mockResolvedValueOnce({ ok: false, error: 'GitHub would not put openadlc:paused on acme/web#7.' } as never);
     const { press } = await mount();
     await press('Pause #7');
 
     const said = document.querySelector('[data-control-error]')!;
-    expect(said.textContent).toBe('GitHub would not put fleetadlc:paused on acme/web#7.');
+    expect(said.textContent).toBe('GitHub would not put openadlc:paused on acme/web#7.');
     expect(said.closest('[data-issue-controls]')).toBeNull();
     expect(said.className).toContain('basis-full');
   });

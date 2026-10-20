@@ -9,10 +9,10 @@ describe('the links in the repository’s Markdown', () => {
 
   it('turns a heading into the anchor GitHub gives it', () => {
     expect(anchorOf('One request, start to finish')).toBe('one-request-start-to-finish');
-    expect(anchorOf('`fleetadlc up` and the `--driver` flag')).toBe('fleetadlc-up-and-the---driver-flag');
+    expect(anchorOf('`openadlc up` and the `--driver` flag')).toBe('openadlc-up-and-the---driver-flag');
     expect(anchorOf('Who OpenADLC acts for')).toBe('who-openadlc-acts-for');
     // GitHub keeps an underscore inside a word, and drops emphasis markers.
-    expect(anchorOf('$FLEETADLC_HOME')).toBe('fleetadlc_home');
+    expect(anchorOf('$OPENADLC_HOME')).toBe('openadlc_home');
     expect(anchorOf('`MANUAL_STEPS` and more')).toBe('manual_steps-and-more');
     expect(anchorOf('An _emphasised_ word')).toBe('an-emphasised-word');
   });

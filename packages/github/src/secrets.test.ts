@@ -1,12 +1,18 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // Passed through, so a test can fail one write the way a full disk does.
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   return { ...actual, writeSync: vi.fn(actual.writeSync) };
+});
+
+// Passed through, so the install-directory tests can point `~` at a scratch one.
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, homedir: vi.fn(actual.homedir) };
 });
 
 import {
@@ -29,7 +35,7 @@ describe('a model account ref', () => {
     const ref = modelAccountRef(id);
     expect(ref).toBe(`model-account-${id}`);
 
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-secrets-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-secrets-'));
     try {
       const store = new FileSecretStore(dir);
       await store.set(ref, 'sk-shared-by-the-crew');
@@ -54,7 +60,7 @@ describe('the secrets named after a bot', () => {
 
 describe('the console secret', () => {
   it('is made once, as 32 random bytes in hex, and read back after that', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'fleetadlc-secrets-'));
+    const root = mkdtempSync(join(tmpdir(), 'openadlc-secrets-'));
     const store = new FileSecretStore(root);
     expect(consoleSecretRef()).toBe('console-api-secret');
 
@@ -70,7 +76,7 @@ describe('the console secret', () => {
   });
 
   it('is not the internal secret, which also opens the dispatch lease', async () => {
-    const store = new FileSecretStore(mkdtempSync(join(tmpdir(), 'fleetadlc-secrets-')));
+    const store = new FileSecretStore(mkdtempSync(join(tmpdir(), 'openadlc-secrets-')));
     expect(consoleSecretRef()).not.toBe(internalSecretRef());
     await ensureConsoleSecret(store);
     expect(await store.list()).toEqual(['console-api-secret']);
@@ -79,7 +85,7 @@ describe('the console secret', () => {
 
 describe('the alerts secret', () => {
   it('is made once, under its own ref, and is not the internal secret', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'fleetadlc-secrets-'));
+    const root = mkdtempSync(join(tmpdir(), 'openadlc-secrets-'));
     const store = new FileSecretStore(root);
     expect(alertsSecretRef()).toBe('alerts-secret');
     expect(alertsSecretRef()).not.toBe(internalSecretRef());
@@ -96,7 +102,7 @@ describe('the alerts secret', () => {
 
 describe('writing a secret to a file', () => {
   it('replaces the file whole, readable by its owner only, and leaves no temporary file behind', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'fleetadlc-secrets-'));
+    const root = mkdtempSync(join(tmpdir(), 'openadlc-secrets-'));
     try {
       const store = new FileSecretStore(root);
       await store.set('github-refresh-atlas', 'r1');
@@ -111,7 +117,7 @@ describe('writing a secret to a file', () => {
   });
 
   it('keeps the old secret whole when a write fails part way', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'fleetadlc-secrets-'));
+    const root = mkdtempSync(join(tmpdir(), 'openadlc-secrets-'));
     try {
       const store = new FileSecretStore(root);
       await store.set('github-refresh-atlas', 'r1');
@@ -136,7 +142,7 @@ describe('the app’s client secret', () => {
     expect(appClientSecretRef()).toBe('github-app-client-secret');
     expect(BOT_SECRET_REFS.some((ref) => ref('atlas') === appClientSecretRef())).toBe(false);
 
-    const root = mkdtempSync(join(tmpdir(), 'fleetadlc-secrets-'));
+    const root = mkdtempSync(join(tmpdir(), 'openadlc-secrets-'));
     try {
       const store = new FileSecretStore(root);
       await store.set(appClientSecretRef(), 'zzz-client-secret-zzz');
@@ -155,7 +161,7 @@ describe('the webhook secret', () => {
     expect(webhookSecretRef()).not.toBe(appPrivateKeyRef());
     expect(BOT_SECRET_REFS.some((ref) => ref('atlas') === webhookSecretRef())).toBe(false);
 
-    const root = mkdtempSync(join(tmpdir(), 'fleetadlc-secrets-'));
+    const root = mkdtempSync(join(tmpdir(), 'openadlc-secrets-'));
     try {
       const store = new FileSecretStore(root);
       await store.set(webhookSecretRef(), 'zzz-hook-zzz');
@@ -163,6 +169,48 @@ describe('the webhook secret', () => {
       expect(await store.list()).toEqual(['github-webhook-secret']);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the install directory', () => {
+  const HOMES = ['OPENADLC_HOME', 'FLEETADLC_HOME'] as const;
+  const kept = Object.fromEntries(HOMES.map((name) => [name, process.env[name]]));
+  const put = (values: Partial<Record<(typeof HOMES)[number], string>>) => {
+    for (const name of HOMES) {
+      if (values[name] === undefined) delete process.env[name];
+      else process.env[name] = values[name];
+    }
+  };
+  afterEach(() => {
+    for (const [name, value] of Object.entries(kept)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
+  });
+
+  it('is OPENADLC_HOME, and FLEETADLC_HOME is still read where only it is set', async () => {
+    const { openadlcHome } = await import('./secrets.js');
+    put({ OPENADLC_HOME: '/srv/new', FLEETADLC_HOME: '/srv/old' });
+    expect(openadlcHome()).toBe('/srv/new');
+    put({ FLEETADLC_HOME: '/srv/old' });
+    expect(openadlcHome()).toBe('/srv/old');
+  });
+
+  it('finds an existing ~/.fleetadlc on its own, and prefers ~/.openadlc once that exists', async () => {
+    // The last rename did not look for the old directory, and every command on
+    // an upgraded install acted on an empty new home until an export said otherwise.
+    const { openadlcHome } = await import('./secrets.js');
+    const home = mkdtempSync(join(tmpdir(), 'openadlc-home-'));
+    const os = await import('node:os');
+    vi.mocked(os.homedir).mockReturnValue(home);
+    try {
+      put({});
+      expect(openadlcHome()).toBe(join(home, '.openadlc'));
+      mkdirSync(join(home, '.fleetadlc'));
+      expect(openadlcHome()).toBe(join(home, '.fleetadlc'));
+      mkdirSync(join(home, '.openadlc'));
+      expect(openadlcHome()).toBe(join(home, '.openadlc'));
+    } finally {
+      vi.mocked(os.homedir).mockReset();
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });

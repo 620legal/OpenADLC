@@ -2,13 +2,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Bot } from '@fleetadlc/shared';
-import { ModelUnavailable } from '@fleetadlc/engines';
-import { internalSecretRef, modelAccountRef, setSecretStore, taskTokenFor, type SecretStore } from '@fleetadlc/github';
+import type { Bot } from '@openadlc/shared';
+import { ModelUnavailable } from '@openadlc/engines';
+import { internalSecretRef, modelAccountRef, setSecretStore, taskTokenFor, type SecretStore } from '@openadlc/github';
 import type { ExecDriver, TaskComputer, TaskComputerSpec } from './drivers/types.js';
 import type { HostdConfig } from './config.js';
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   bots: { getBotByName: vi.fn(), getBotById: vi.fn() },
   repos: { getRepoByName: vi.fn(), listRepos: vi.fn(async () => []) },
   tasks: { updateTaskState: vi.fn(), getTask: vi.fn(), releaseComputer: vi.fn(async () => undefined) },
@@ -16,7 +16,7 @@ vi.mock('@fleetadlc/db', () => ({
   leases: { getLease: vi.fn(async () => null), settlePausedLeases: vi.fn(async () => ({ released: [], held: [] })) },
 }));
 
-import { bots, leases, modelAccounts, repos, tasks } from '@fleetadlc/db';
+import { bots, leases, modelAccounts, repos, tasks } from '@openadlc/db';
 import { SessionEnvMinter } from './session-env.js';
 import { HostFull, TaskRunner, type StartTaskInput } from './task-runner.js';
 import { BRANCH_GONE, BranchGoneError } from './worktree.js';
@@ -64,7 +64,7 @@ function driver(): ExecDriver {
     attachCommand: () => ['tmux'],
     exec: vi.fn(async () => ({ code: 0, stdout: '.git', stderr: '' })),
     // Where the docker driver mounts a login, which is what a session is told.
-    loginPath: vi.fn(() => '/fleetadlc/login'),
+    loginPath: vi.fn(() => '/openadlc/login'),
   };
 }
 
@@ -92,8 +92,8 @@ let loginRoot: string;
 let scratch: string;
 
 beforeEach(() => {
-  loginRoot = mkdtempSync(join(tmpdir(), 'fleetadlc-task-logins-'));
-  scratch = mkdtempSync(join(tmpdir(), 'fleetadlc-task-work-'));
+  loginRoot = mkdtempSync(join(tmpdir(), 'openadlc-task-logins-'));
+  scratch = mkdtempSync(join(tmpdir(), 'openadlc-task-work-'));
   vi.mocked(bots.getBotByName).mockReset();
   vi.mocked(bots.getBotById).mockReset();
   // The store answers the row it wrote; null is a write it refused.
@@ -112,7 +112,7 @@ const START = {
   taskId: 'task-1',
   bot: 'atlas',
   kind: 'implement',
-  subjectRef: 'fleetadlc#155',
+  subjectRef: 'openadlc#155',
   skill: 'implement',
 } as const;
 
@@ -120,7 +120,7 @@ describe('starting a task on the resolved model', () => {
   it('passes the resolved id into the session, and the alias beside it', async () => {
     vi.mocked(bots.getBotByName).mockResolvedValue(crew());
     const mint = vi.spyOn(SessionEnvMinter.prototype, 'mint').mockResolvedValue({
-      env: { FLEETADLC_MODEL: 'claude-opus-5', FLEETADLC_MODEL_ALIAS: 'newest:opus' },
+      env: { OPENADLC_MODEL: 'claude-opus-5', OPENADLC_MODEL_ALIAS: 'newest:opus' },
       cleanup: async () => undefined,
     });
     const exec = driver();
@@ -134,16 +134,16 @@ describe('starting a task on the resolved model', () => {
       taskId: 'task-1',
       bot: 'atlas',
       kind: 'implement',
-      subjectRef: 'fleetadlc#155',
+      subjectRef: 'openadlc#155',
       skill: 'implement',
     });
 
     expect(mint).toHaveBeenCalledWith(expect.objectContaining({ model: 'claude-opus-5', modelAlias: 'newest:opus' }));
     expect(vi.mocked(exec.startSession)).toHaveBeenCalledWith(
-      expect.objectContaining({ env: expect.objectContaining({ FLEETADLC_MODEL: 'claude-opus-5' }) }),
+      expect.objectContaining({ env: expect.objectContaining({ OPENADLC_MODEL: 'claude-opus-5' }) }),
     );
     const env = vi.mocked(exec.startSession).mock.calls[0]?.[0].env ?? {};
-    expect(env.FLEETADLC_MODEL).not.toMatch(/^newest:/);
+    expect(env.OPENADLC_MODEL).not.toMatch(/^newest:/);
     mint.mockRestore();
   });
 
@@ -165,7 +165,7 @@ describe('starting a task on the resolved model', () => {
       async () => ({ model: 'claude-opus-5', modelAlias: null, account: null }),
     );
 
-    await runner.start({ taskId: 'task-1', bot: 'atlas', kind: 'implement', subjectRef: 'fleetadlc#155', skill: 'implement' });
+    await runner.start({ taskId: 'task-1', bot: 'atlas', kind: 'implement', subjectRef: 'openadlc#155', skill: 'implement' });
 
     expect(mint).toHaveBeenCalledWith(
       expect.objectContaining({ bridgeUrl: 'http://host.docker.internal:47311', hostdUrl: 'http://host.docker.internal:58612' }),
@@ -202,7 +202,7 @@ describe('starting a task on the resolved model', () => {
         taskId: 'task-1',
         bot: 'atlas',
         kind: 'implement',
-        subjectRef: 'fleetadlc#155',
+        subjectRef: 'openadlc#155',
         skill: 'implement',
       }),
     ).rejects.toThrow(/cannot call claude-opus-4-6/);
@@ -333,7 +333,7 @@ describe('the GitHub token a task is given', () => {
       taskId: 'task-revert',
       bot: 'harbor',
       kind: 'deploy',
-      subjectRef: 'fleetadlc@a1b2c3d4',
+      subjectRef: 'openadlc@a1b2c3d4',
       skill: 'deploy',
       branch: 'system/revert-a1b2c3d4',
     });
@@ -386,7 +386,7 @@ describe('resuming a task', () => {
       botId: 'bot-1',
       repoId: null,
       kind: 'implement',
-      subjectRef: 'fleetadlc#155',
+      subjectRef: 'openadlc#155',
       branch: null,
       skill: 'implement',
       costCapUsd: 15,
@@ -472,7 +472,7 @@ describe('resuming a task', () => {
       botId: 'bot-1',
       repoId: null,
       kind: 'implement',
-      subjectRef: 'fleetadlc#155',
+      subjectRef: 'openadlc#155',
       branch: 'agent/atlas/155-issue-155',
       skill: 'implement',
       costCapUsd: 15,
@@ -481,7 +481,7 @@ describe('resuming a task', () => {
     } as never);
     const runner = new TaskRunner(config(), driver(), null, async () => ({ model: 'claude-opus-5', modelAlias: null, account: null }));
     const start = vi.spyOn(runner, 'start').mockResolvedValue({ session: 'implement' } as never);
-    const issue = { name: 'issue.md', title: 'fleetadlc#155', content: 'the issue' };
+    const issue = { name: 'issue.md', title: 'openadlc#155', content: 'the issue' };
 
     await runner.resume('task-1', [issue]);
 
@@ -589,7 +589,7 @@ describe('the login a task’s container holds', () => {
 
     const env = vi.mocked(exec.startSession).mock.calls[0]?.[0].env ?? {};
     expect(exec.loginPath).toHaveBeenCalledWith(SEAT);
-    expect(env.CODEX_HOME).toBe('/fleetadlc/login');
+    expect(env.CODEX_HOME).toBe('/openadlc/login');
     expect(env).not.toHaveProperty('OPENAI_API_KEY');
   });
 
@@ -652,10 +652,10 @@ describe('a bot on a subscription, resolved by the runner itself', () => {
 
     expect(cliModels).toHaveBeenCalledWith(SEAT);
     expect(sessionEnv(exec)).toMatchObject({
-      FLEETADLC_ENGINE: 'grok',
-      FLEETADLC_MODEL: 'grok-4.7',
-      FLEETADLC_MODEL_ALIAS: 'newest:grok',
-      GROK_HOME: '/fleetadlc/login',
+      OPENADLC_ENGINE: 'grok',
+      OPENADLC_MODEL: 'grok-4.7',
+      OPENADLC_MODEL_ALIAS: 'newest:grok',
+      GROK_HOME: '/openadlc/login',
     });
   });
 
@@ -687,9 +687,9 @@ describe('a bot on a subscription, resolved by the runner itself', () => {
     expect(asked[0]?.get('authorization')).toBe(`Bearer ${TOKEN}`);
     expect(asked[0]?.get('anthropic-beta')).toBe('oauth-2025-04-20');
     expect(sessionEnv(exec)).toMatchObject({
-      FLEETADLC_ENGINE: 'claude',
-      FLEETADLC_MODEL: 'claude-opus-5-5',
-      FLEETADLC_MODEL_ALIAS: 'newest:opus',
+      OPENADLC_ENGINE: 'claude',
+      OPENADLC_MODEL: 'claude-opus-5-5',
+      OPENADLC_MODEL_ALIAS: 'newest:opus',
       CLAUDE_CODE_OAUTH_TOKEN: TOKEN,
     });
   });
@@ -720,9 +720,9 @@ describe('a bot on a subscription, resolved by the runner itself', () => {
     await runner.start({ ...START, taskId: 'task-2' });
 
     expect(vi.mocked(exec.acquire).mock.calls.map(([spec]) => spec.login)).toEqual([null, { accountId: SEAT, provider: 'xai' }]);
-    expect(sessionEnv(exec, 0)).toMatchObject({ FLEETADLC_ENGINE: 'claude', FLEETADLC_MODEL: 'claude-sonnet-5' });
+    expect(sessionEnv(exec, 0)).toMatchObject({ OPENADLC_ENGINE: 'claude', OPENADLC_MODEL: 'claude-sonnet-5' });
     expect(sessionEnv(exec, 0)).not.toHaveProperty('GROK_HOME');
-    expect(sessionEnv(exec, 1)).toMatchObject({ FLEETADLC_ENGINE: 'grok', FLEETADLC_MODEL: 'grok-4.7', GROK_HOME: '/fleetadlc/login' });
+    expect(sessionEnv(exec, 1)).toMatchObject({ OPENADLC_ENGINE: 'grok', OPENADLC_MODEL: 'grok-4.7', GROK_HOME: '/openadlc/login' });
     // The Anthropic key does not travel with the bot to its new engine.
     expect(sessionEnv(exec, 1)).not.toHaveProperty('ANTHROPIC_API_KEY');
   });
@@ -741,7 +741,7 @@ describe('how many computers a host holds', () => {
 
     const [one, two] = await Promise.all([
       runner.start({ ...START, taskId: '11111111-0000-4000-8000-000000000001' }),
-      runner.start({ ...START, taskId: '22222222-0000-4000-8000-000000000002', subjectRef: 'fleetadlc#156' }),
+      runner.start({ ...START, taskId: '22222222-0000-4000-8000-000000000002', subjectRef: 'openadlc#156' }),
     ]);
 
     expect(runner.heldBy('atlas')).toBe(2);
@@ -762,10 +762,10 @@ describe('how many computers a host holds', () => {
     const runner = new TaskRunner({ ...config(), capacityTasks: 1 }, exec, null, RESOLVED);
     await runner.start(START);
 
-    const refused = runner.start({ ...START, taskId: 'task-2', subjectRef: 'fleetadlc#156' });
+    const refused = runner.start({ ...START, taskId: 'task-2', subjectRef: 'openadlc#156' });
 
     await expect(refused).rejects.toBeInstanceOf(HostFull);
-    await expect(refused).rejects.toThrow(/FLEETADLC_HOST_CAPACITY_TASKS/);
+    await expect(refused).rejects.toThrow(/OPENADLC_HOST_CAPACITY_TASKS/);
     expect(exec.acquire).toHaveBeenCalledTimes(1);
     mint.mockRestore();
   });
@@ -804,7 +804,7 @@ describe('a task paused on a person', () => {
       botId: 'bot-1',
       repoId: null,
       kind: 'implement',
-      subjectRef: 'fleetadlc#155',
+      subjectRef: 'openadlc#155',
       branch: null,
       skill: 'implement',
       costCapUsd: 15,
@@ -847,7 +847,7 @@ describe('a task paused on a person', () => {
       botId: 'bot-1',
       repoId: null,
       kind: 'implement',
-      subjectRef: 'fleetadlc#155',
+      subjectRef: 'openadlc#155',
       branch: null,
       skill: 'implement',
       costCapUsd: 15,
@@ -885,7 +885,7 @@ describe('a task paused on a person', () => {
 });
 
 describe('what a task may write, on a branch it checks out', () => {
-  const repo = { id: 'repo-fleetadlc', name: 'fleetadlc', fullName: 'exampleco/fleetadlc', defaultBranch: 'main' };
+  const repo = { id: 'repo-openadlc', name: 'openadlc', fullName: 'exampleco/openadlc', defaultBranch: 'main' };
 
   async function startOn(kind: 'review' | 'patch', skill?: string) {
     vi.mocked(bots.getBotByName).mockResolvedValue(crew());
@@ -896,12 +896,12 @@ describe('what a task may write, on a branch it checks out', () => {
       remoteFor: (fullName: string | null) => Promise<string | null>;
       worktrees: { checkoutExisting: unknown; changedFiles: unknown; pruneAbandoned: unknown };
     };
-    vi.spyOn(internals, 'remoteFor').mockResolvedValue('https://github.com/exampleco/fleetadlc.git');
+    vi.spyOn(internals, 'remoteFor').mockResolvedValue('https://github.com/exampleco/openadlc.git');
     internals.worktrees.pruneAbandoned = vi.fn(async () => 0);
     internals.worktrees.checkoutExisting = vi.fn(async () => ({ mirror: '/m', path: '/wt', branch: 'agent/builder/7-issue-7', baseSha: 'abc' }));
     internals.worktrees.changedFiles = vi.fn(async () => ['apps/bridge/src/attention.ts']);
     try {
-      await runner.start({ ...START, taskId: `task-${kind}`, kind, skill: skill ?? (kind === 'review' ? 'pr-review' : 'implement'), repo: 'fleetadlc', branch: 'agent/builder/7-issue-7', checkoutExistingBranch: true, declaredPaths: kind === 'patch' ? ['apps/console/src/page.tsx'] : [] });
+      await runner.start({ ...START, taskId: `task-${kind}`, kind, skill: skill ?? (kind === 'review' ? 'pr-review' : 'implement'), repo: 'openadlc', branch: 'agent/builder/7-issue-7', checkoutExistingBranch: true, declaredPaths: kind === 'patch' ? ['apps/console/src/page.tsx'] : [] });
       return mint.mock.calls.at(-1)?.[0] as { declaredPaths?: string[] };
     } finally {
       mint.mockRestore();
@@ -936,14 +936,14 @@ describe('what a task may write, on a branch it checks out', () => {
       remoteFor: (fullName: string | null) => Promise<string | null>;
       worktrees: { checkoutExisting: ReturnType<typeof vi.fn>; changedFiles: unknown; pruneAbandoned: unknown };
     };
-    vi.spyOn(internals, 'remoteFor').mockResolvedValue('https://github.com/exampleco/fleetadlc.git');
+    vi.spyOn(internals, 'remoteFor').mockResolvedValue('https://github.com/exampleco/openadlc.git');
     internals.worktrees.pruneAbandoned = vi.fn(async () => 0);
     internals.worktrees.changedFiles = vi.fn(async () => []);
-    const setAside = { ref: 'refs/fleetadlc/unpushed/agent/builder/7-issue-7', tip: 'b'.repeat(40), commits: ['b'.repeat(40)], reason: 'moved' as const };
+    const setAside = { ref: 'refs/openadlc/unpushed/agent/builder/7-issue-7', tip: 'b'.repeat(40), commits: ['b'.repeat(40)], reason: 'moved' as const };
     internals.worktrees.checkoutExisting = vi.fn(async () => ({ mirror: '/m', path: '/wt', branch: 'agent/builder/7-issue-7', baseSha: 'abc', setAside }));
     try {
       for (const [kind, keeps] of [['patch', true], ['review', false]] as const) {
-        await runner.start({ ...START, taskId: `task-${kind}`, kind, skill: kind === 'review' ? 'pr-review' : 'implement', repo: 'fleetadlc', branch: 'agent/builder/7-issue-7', checkoutExistingBranch: true });
+        await runner.start({ ...START, taskId: `task-${kind}`, kind, skill: kind === 'review' ? 'pr-review' : 'implement', repo: 'openadlc', branch: 'agent/builder/7-issue-7', checkoutExistingBranch: true });
         expect(internals.worktrees.checkoutExisting.mock.calls.at(-1)?.[0]).toMatchObject({ keepUnpushed: keeps });
       }
       const files = (mint.mock.calls.at(-1)?.[0] as { contextFiles: string[] }).contextFiles;
@@ -964,7 +964,7 @@ describe('resuming a task, what it may write', () => {
     vi.mocked(bots.getBotByName).mockResolvedValue(crew());
     vi.mocked(bots.getBotById).mockResolvedValue(crew());
     vi.mocked(tasks.getTask).mockResolvedValue({
-      id: 'task-1', botId: 'bot-1', repoId: null, kind: 'implement', subjectRef: 'fleetadlc#78', branch: null,
+      id: 'task-1', botId: 'bot-1', repoId: null, kind: 'implement', subjectRef: 'openadlc#78', branch: null,
       skill: 'implement', costCapUsd: 15, leaseId: 'lease-78',
     } as never);
     vi.mocked(leases.getLease).mockResolvedValue({ id: 'lease-78', declaredPaths: ['apps/bridge/src/webhooks.ts'] } as never);
@@ -984,9 +984,9 @@ describe('resuming a task whose pull request was merged or closed', () => {
     // The first resume sees the branch gone after it was pushed. By the second,
     // that fetch has pruned the branch and the record of its push, so the
     // branch looked never pushed and the builder started over from the base.
-    const repo = { id: 'repo-fleetadlc', name: 'fleetadlc', fullName: 'exampleco/fleetadlc', defaultBranch: 'main' };
+    const repo = { id: 'repo-openadlc', name: 'openadlc', fullName: 'exampleco/openadlc', defaultBranch: 'main' };
     const paused = {
-      id: 'task-9', botId: 'bot-1', repoId: repo.id, kind: 'implement', subjectRef: 'fleetadlc#9',
+      id: 'task-9', botId: 'bot-1', repoId: repo.id, kind: 'implement', subjectRef: 'openadlc#9',
       branch: 'agent/atlas/9-issue-9', skill: 'implement', costCapUsd: 15, leaseId: null, exitReason: null,
     };
     vi.mocked(bots.getBotByName).mockResolvedValue(crew());
@@ -1000,9 +1000,9 @@ describe('resuming a task whose pull request was merged or closed', () => {
       remoteFor: (fullName: string | null) => Promise<string | null>;
       worktrees: { checkoutExisting: ReturnType<typeof vi.fn>; pruneAbandoned: unknown };
     };
-    vi.spyOn(internals, 'remoteFor').mockResolvedValue('https://github.com/exampleco/fleetadlc.git');
+    vi.spyOn(internals, 'remoteFor').mockResolvedValue('https://github.com/exampleco/openadlc.git');
     internals.worktrees.pruneAbandoned = vi.fn(async () => 0);
-    const reason = `agent/atlas/9-issue-9 was deleted on exampleco/fleetadlc after this task pushed it: ${BRANCH_GONE}. Everything it had committed had been pushed.`;
+    const reason = `agent/atlas/9-issue-9 was deleted on exampleco/openadlc after this task pushed it: ${BRANCH_GONE}. Everything it had committed had been pushed.`;
     internals.worktrees.checkoutExisting = vi.fn(async () => {
       throw new BranchGoneError(reason);
     });
@@ -1170,7 +1170,7 @@ describe('a task adopted after hostd restarts', () => {
 
 describe('a task cancelled on the host', () => {
   it('settles its lease as a task that ends through the bridge does, since a restart or a drain never reaches that route', async () => {
-    vi.mocked(tasks.updateTaskState).mockResolvedValue({ id: 'task-1', subjectRef: 'fleetadlc#78', leaseId: 'lease-78' } as never);
+    vi.mocked(tasks.updateTaskState).mockResolvedValue({ id: 'task-1', subjectRef: 'openadlc#78', leaseId: 'lease-78' } as never);
     const runner = new TaskRunner(config(), driver(), null);
 
     await runner.cancel('task-1', 'container restarted');
@@ -1179,13 +1179,13 @@ describe('a task cancelled on the host', () => {
     expect(leases.settlePausedLeases).toHaveBeenCalledWith({
       leaseId: 'lease-78',
       actor: 'hostd',
-      reason: 'its task on fleetadlc#78 stopped: container restarted',
+      reason: 'its task on openadlc#78 stopped: container restarted',
       holdUntil: expect.any(Date),
     });
   });
 
   it('is still stopped when the lease cannot be settled: the reconciler sweeps it', async () => {
-    vi.mocked(tasks.updateTaskState).mockResolvedValue({ id: 'task-1', subjectRef: 'fleetadlc#78', leaseId: 'lease-78' } as never);
+    vi.mocked(tasks.updateTaskState).mockResolvedValue({ id: 'task-1', subjectRef: 'openadlc#78', leaseId: 'lease-78' } as never);
     vi.mocked(leases.settlePausedLeases).mockRejectedValueOnce(new Error('connection reset'));
     const runner = new TaskRunner(config(), driver(), null);
 
@@ -1390,7 +1390,7 @@ describe('the pnpm store a task installs from', () => {
 
     expect(exec.fillPnpmStore).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-1' }), worktree);
     expect(order).toEqual(['fill', 'make setup']);
-    for (const env of [setupEnv, sessionEnv, ciEnv]) expect(env.FLEETADLC_PNPM_STORE).toBe('/pnpm-store');
+    for (const env of [setupEnv, sessionEnv, ciEnv]) expect(env.OPENADLC_PNPM_STORE).toBe('/pnpm-store');
     expect(warn.mock.calls.filter((call) => String(call[0]).includes('pnpm'))).toEqual([]);
     warn.mockRestore();
   });
@@ -1398,7 +1398,7 @@ describe('the pnpm store a task installs from', () => {
   it('is the task’s own, said once with the repository and why, when the fill failed, and the task still starts', async () => {
     const { setupEnv, sessionEnv, ciEnv, warn } = await starting(async () => ({ filled: false, skipped: false, reason: 'pnpm fetch exited 1: ERR_PNPM_FETCH_404' }));
 
-    for (const env of [setupEnv, sessionEnv, ciEnv]) expect(env).not.toHaveProperty('FLEETADLC_PNPM_STORE');
+    for (const env of [setupEnv, sessionEnv, ciEnv]) expect(env).not.toHaveProperty('OPENADLC_PNPM_STORE');
     expect(warn.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('pnpm'))).toEqual([
       '[hostd] exampleco/widgets: its pnpm store could not be filled, so task task-1 installs into a store of its own: pnpm fetch exited 1: ERR_PNPM_FETCH_404',
     ]);
@@ -1435,9 +1435,9 @@ describe('the pnpm store a task installs from', () => {
 });
 
 /**
- * `fleetadlc-install` asks hostd for the registry credential with the task's
+ * `openadlc-install` asks hostd for the registry credential with the task's
  * own id and token. hostd's own `make setup` and the `make ci` behind
- * `fleetadlc-ci` ran with neither, so the wrapper installed with no credential.
+ * `openadlc-ci` ran with neither, so the wrapper installed with no credential.
  */
 describe('what the installs hostd runs itself are given for the registry', () => {
   it('is the task’s id, token and hostd URL in make setup and local CI, and the flag when a registry is configured', async () => {
@@ -1450,10 +1450,10 @@ describe('what the installs hostd runs itself are given for the registry', () =>
 
     for (const env of [setupEnv, ciEnv]) {
       expect(env).toMatchObject({
-        FLEETADLC_HOSTD_URL: 'http://host.docker.internal:58612',
-        FLEETADLC_TASK_ID: 'task-1',
-        FLEETADLC_TASK_TOKEN: taskTokenFor('task-1', 'install-secret'),
-        FLEETADLC_REGISTRY_CONFIGURED: '1',
+        OPENADLC_HOSTD_URL: 'http://host.docker.internal:58612',
+        OPENADLC_TASK_ID: 'task-1',
+        OPENADLC_TASK_TOKEN: taskTokenFor('task-1', 'install-secret'),
+        OPENADLC_REGISTRY_CONFIGURED: '1',
       });
     }
   });
@@ -1464,8 +1464,8 @@ describe('what the installs hostd runs itself are given for the registry', () =>
     warn.mockRestore();
 
     for (const env of [setupEnv, ciEnv]) {
-      expect(env.FLEETADLC_TASK_TOKEN).toBe(taskTokenFor('task-1', 'install-secret'));
-      expect(env).not.toHaveProperty('FLEETADLC_REGISTRY_CONFIGURED');
+      expect(env.OPENADLC_TASK_TOKEN).toBe(taskTokenFor('task-1', 'install-secret'));
+      expect(env).not.toHaveProperty('OPENADLC_REGISTRY_CONFIGURED');
     }
   });
 });

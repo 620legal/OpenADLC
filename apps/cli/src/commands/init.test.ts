@@ -2,15 +2,15 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { setSecretStore, webhookSecretRef } from '@fleetadlc/github';
+import { setSecretStore, webhookSecretRef } from '@openadlc/github';
 import { init } from './init.js';
 
 /**
- * What `fleetadlc init` does to the database and the install file.
+ * What `openadlc init` does to the database and the install file.
  *
  * The store is a fake that records which database each call would have reached:
  * the pool is opened from DATABASE_URL on first use, so that is what a call
- * made at that moment talks to. FLEETADLC_HOME is a temporary directory and `fetch`
+ * made at that moment talks to. OPENADLC_HOME is a temporary directory and `fetch`
  * refuses, so nothing here reads or writes a real install or reaches its ports.
  */
 const calls = vi.hoisted(() => ({
@@ -22,7 +22,7 @@ const calls = vi.hoisted(() => ({
 /** The secret store, in memory. */
 let secrets: Record<string, string> = {};
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   closePool: vi.fn(async () => undefined),
   settings: {
     getSetting: vi.fn(async () => {
@@ -35,8 +35,8 @@ vi.mock('@fleetadlc/db', () => ({
   },
 }));
 
-const OLD_DATABASE = 'postgres://fleetadlc:fleetadlc@127.0.0.1:1/the_old_one';
-const NEW_DATABASE = 'postgres://fleetadlc:fleetadlc@127.0.0.1:1/the_new_one';
+const OLD_DATABASE = 'postgres://openadlc:openadlc@127.0.0.1:1/the_old_one';
+const NEW_DATABASE = 'postgres://openadlc:openadlc@127.0.0.1:1/the_new_one';
 
 /** What `chooseDriver` asks of the machine, answered without Docker. */
 function probe(dockerAnswers: boolean, botImagePresent: boolean) {
@@ -52,12 +52,12 @@ function installFile(): { webhookSecret: string; databaseUrl: string } {
 }
 
 beforeEach(() => {
-  for (const key of ['FLEETADLC_HOME', 'DATABASE_URL', 'FLEETADLC_WEBHOOK_SECRET']) saved[key] = process.env[key];
-  home = mkdtempSync(join(tmpdir(), 'fleetadlc-init-'));
-  process.env.FLEETADLC_HOME = home;
+  for (const key of ['OPENADLC_HOME', 'DATABASE_URL', 'OPENADLC_WEBHOOK_SECRET']) saved[key] = process.env[key];
+  home = mkdtempSync(join(tmpdir(), 'openadlc-init-'));
+  process.env.OPENADLC_HOME = home;
   // What `main` does before `init` runs: fills DATABASE_URL from the install file.
   process.env.DATABASE_URL = OLD_DATABASE;
-  delete process.env.FLEETADLC_WEBHOOK_SECRET;
+  delete process.env.OPENADLC_WEBHOOK_SECRET;
 
   calls.stored = null;
   calls.reads.length = 0;
@@ -87,14 +87,14 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-describe('fleetadlc init and a webhook secret set in the environment', () => {
+describe('openadlc init and a webhook secret set in the environment', () => {
   it('keeps that one, and does not store a different one in the database', async () => {
     // The self-hosting guide: the value on the GitHub App goes in
-    // FLEETADLC_WEBHOOK_SECRET. A secret generated here and stored in the database
+    // OPENADLC_WEBHOOK_SECRET. A secret generated here and stored in the database
     // would win over it in the bridge, and GitHub's deliveries would all be refused.
-    process.env.FLEETADLC_WEBHOOK_SECRET = 'the-one-github-has';
+    process.env.OPENADLC_WEBHOOK_SECRET = 'the-one-github-has';
 
-    await init('/tmp/fleetadlc-repo', {}, NO_DOCKER);
+    await init('/tmp/openadlc-repo', {}, NO_DOCKER);
 
     expect(installFile().webhookSecret).toBe('the-one-github-has');
     expect(calls.writes).toEqual([]);
@@ -102,9 +102,9 @@ describe('fleetadlc init and a webhook secret set in the environment', () => {
   });
 });
 
-describe('fleetadlc init and a webhook secret it generates', () => {
+describe('openadlc init and a webhook secret it generates', () => {
   it('keeps it in the secret store, never in the settings table', async () => {
-    await init('/tmp/fleetadlc-repo', {}, NO_DOCKER);
+    await init('/tmp/openadlc-repo', {}, NO_DOCKER);
 
     expect(secrets[webhookSecretRef()]).toMatch(/^[0-9a-f]{64}$/);
     expect(installFile().webhookSecret).toBe(secrets[webhookSecretRef()]);
@@ -114,16 +114,16 @@ describe('fleetadlc init and a webhook secret it generates', () => {
   it('keeps the one the secret store already has', async () => {
     secrets[webhookSecretRef()] = 'zzz-in-the-store-zzz';
 
-    await init('/tmp/fleetadlc-repo', {}, NO_DOCKER);
+    await init('/tmp/openadlc-repo', {}, NO_DOCKER);
 
     expect(installFile().webhookSecret).toBe('zzz-in-the-store-zzz');
     expect(calls.writes).toEqual([]);
   });
 });
 
-describe('fleetadlc init --database-url', () => {
+describe('openadlc init --database-url', () => {
   it('looks an older install’s secret up in the database it was given', async () => {
-    await init('/tmp/fleetadlc-repo', { databaseUrl: NEW_DATABASE }, NO_DOCKER);
+    await init('/tmp/openadlc-repo', { databaseUrl: NEW_DATABASE }, NO_DOCKER);
 
     expect(calls.reads).toEqual([NEW_DATABASE]);
     expect(calls.writes).toEqual([]);
@@ -132,7 +132,7 @@ describe('fleetadlc init --database-url', () => {
   });
 });
 
-describe('fleetadlc init and the driver', () => {
+describe('openadlc init and the driver', () => {
   // Every new install got `local`, where a task runs as the operator's user
   // and can read the secret store, and nothing said so.
   function driverIn(): string | undefined {
@@ -143,32 +143,32 @@ describe('fleetadlc init and the driver', () => {
   }
 
   it('writes docker for a new install where Docker answers and the bot image is built, and says why', async () => {
-    await init('/tmp/fleetadlc-repo', {}, probe(true, true));
+    await init('/tmp/openadlc-repo', {}, probe(true, true));
     expect(driverIn()).toBe('docker');
     expect(printed()).toContain('driver: docker, because Docker answers and the bot image');
     expect(printed()).toContain('with the docker driver');
   });
 
   it('writes local when Docker or the bot image is missing, and says what a task can then reach', async () => {
-    await init('/tmp/fleetadlc-repo', {}, probe(true, false));
+    await init('/tmp/openadlc-repo', {}, probe(true, false));
     expect(driverIn()).toBe('local');
     expect(printed()).toContain('the bot image');
     expect(printed()).toContain('can read the secret store');
     rmSync(join(home, 'install.json'));
 
-    await init('/tmp/fleetadlc-repo', {}, probe(false, true));
+    await init('/tmp/openadlc-repo', {}, probe(false, true));
     expect(driverIn()).toBe('local');
     expect(printed()).toContain('Docker is not answering');
   });
 
   it('never changes a driver install.json already names', async () => {
     writeFileSync(join(home, 'install.json'), JSON.stringify({ driver: 'local', webhookSecret: 'kept' }));
-    await init('/tmp/fleetadlc-repo', {}, probe(true, true));
+    await init('/tmp/openadlc-repo', {}, probe(true, true));
     expect(driverIn()).toBe('local');
   });
 
   it('still takes --driver local on a machine that could run docker', async () => {
-    await init('/tmp/fleetadlc-repo', { driver: 'local' }, probe(true, true));
+    await init('/tmp/openadlc-repo', { driver: 'local' }, probe(true, true));
     expect(driverIn()).toBe('local');
   });
 });

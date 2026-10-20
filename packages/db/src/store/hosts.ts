@@ -6,7 +6,7 @@ export interface HostRecord {
   zone: string | null;
   driver: 'docker' | 'local';
   capacityBots: number;
-  /** How many tasks it runs at once, whoever's; see `FLEETADLC_HOST_CAPACITY_TASKS`. */
+  /** How many tasks it runs at once, whoever's; see `OPENADLC_HOST_CAPACITY_TASKS`. */
   capacityTasks: number;
   status: 'up' | 'down' | 'unknown';
   lastSeenAt: string | null;
@@ -69,7 +69,7 @@ export async function registerHost(input: {
  * The seed's host row: made when missing, and otherwise left as hostd
  * registered it. The seed used `registerHost`, which put `capacity_tasks` back
  * to 4 and marked the host up whether or not hostd was running, so a
- * `fleetadlc seed` beside a hostd set to 8 held every task past the fourth.
+ * `openadlc seed` beside a hostd set to 8 held every task past the fourth.
  */
 export async function ensureHost(input: { name: string; driver: 'docker' | 'local'; capacityBots: number }): Promise<{ id: string }> {
   await query(

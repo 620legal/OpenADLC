@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadToolsPolicy, resolveWriteScope } from '@fleetadlc/engines';
+import { loadToolsPolicy, resolveWriteScope } from '@openadlc/engines';
 import {
   PLAN_CHANGE_APPROVE,
   PLAN_CHANGE_REFUSE,
@@ -11,7 +11,7 @@ import {
   filesOutsideScope,
   parseQuestion,
   resolveAnswer,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
 import { pathsOverlap } from '../apps/dispatcher/src/overlap.ts';
 
@@ -69,7 +69,7 @@ describe('the tools policy of a build task', () => {
     expect(scope).toContain('docs/**');
     expect(scope).toContain('tests/**');
     expect(scope).toContain('apps/bridge/src/gates.ts');
-    expect(scope.filter((entry) => !['docs/**', 'tests/**', 'AGENTS.md', '.fleetadlc-scratch/**', 'apps/bridge/src/gates.ts'].includes(entry))).toEqual([]);
+    expect(scope.filter((entry) => !['docs/**', 'tests/**', 'AGENTS.md', '.openadlc-scratch/**', 'apps/bridge/src/gates.ts'].includes(entry))).toEqual([]);
   });
 
   it('is widened by the lease’s paths alone, so a plan change takes effect through the lease', () => {
@@ -83,7 +83,7 @@ describe('the tools policy of a build task', () => {
 describe('a path that is asked for, approved, and then changed', () => {
   const asked = [
     'The runner drops the field.',
-    '<!-- fleetadlc:{"event":"plan_change","paths":["apps/hostd/src/skill-runner.ts"],"reason":"it forwards nothing"} -->',
+    '<!-- openadlc:{"event":"plan_change","paths":["apps/hostd/src/skill-runner.ts"],"reason":"it forwards nothing"} -->',
   ].join('\n');
 
   it('is refused by the scope check until the issue’s Expected paths carry it, and passes after', () => {
@@ -118,7 +118,7 @@ describe('what the skills tell a bot', () => {
   const triage = read('crew/skills/triage/SKILL.md');
 
   it('is the marker the parser reads, in the form the implement skill shows', () => {
-    const example = /<!-- fleetadlc:(\{"event":"plan_change"[^\n]*\}) -->/.exec(implement)?.[0];
+    const example = /<!-- openadlc:(\{"event":"plan_change"[^\n]*\}) -->/.exec(implement)?.[0];
 
     expect(example).toBeDefined();
     const question = parseQuestion(`Context.\n${example}`);

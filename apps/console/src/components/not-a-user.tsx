@@ -45,7 +45,7 @@ export function NoAdmin({ email }: { email: string }) {
       <p className="mt-2 text-[13px] leading-relaxed text-muted">
         You’re signed in as <span className="font-mono text-soft">{email}</span>, but this install has no admin yet, so nobody can use it.
         Whoever runs it sets <span className="font-mono text-soft">admin_emails</span> (the bridge’s{' '}
-        <span className="font-mono text-soft">FLEETADLC_ADMIN_EMAILS</span>) to the first admins’ emails and deploys again.
+        <span className="font-mono text-soft">OPENADLC_ADMIN_EMAILS</span>) to the first admins’ emails and deploys again.
       </p>
     </main>
   );
@@ -81,8 +81,8 @@ export function AdminsOnly({
         <p className="mt-2 text-[13px] leading-relaxed text-muted">
           This console signs in as <span className="font-mono text-soft">{email}</span>, a user of this install, and sends that one
           identity on every request; an admin {doing}. To get Settings back, set{' '}
-          <span className="font-mono text-soft">FLEETADLC_IDENTITY</span> to an admin’s address and run{' '}
-          <span className="font-mono text-soft">fleetadlc up</span> again. {back}
+          <span className="font-mono text-soft">OPENADLC_IDENTITY</span> to an admin’s address and run{' '}
+          <span className="font-mono text-soft">openadlc up</span> again. {back}
         </p>
       ) : (
         <p className="mt-2 text-[13px] leading-relaxed text-muted">

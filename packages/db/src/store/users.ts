@@ -65,7 +65,7 @@ export function isEmail(email: string): boolean {
  * both would pass the last-admin check; two first visitors arriving at once
  * would each find the table empty and both become admin.
  */
-const LOCK = 'fleetadlc:users';
+const LOCK = 'openadlc:users';
 
 const COLUMNS = 'email, role, added_by, added_how, added_at, updated_at';
 

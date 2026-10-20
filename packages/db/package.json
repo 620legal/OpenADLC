@@ -1,5 +1,5 @@
 {
-  "name": "@fleetadlc/db",
+  "name": "@openadlc/db",
   "version": "0.1.0",
   "description": "OpenADLC’s Postgres schema, migrations and store.",
   "private": true,
@@ -18,7 +18,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@fleetadlc/shared": "workspace:*",
+    "@openadlc/shared": "workspace:*",
     "pg": "^8.13.1"
   },
   "devDependencies": {

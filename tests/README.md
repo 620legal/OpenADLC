@@ -7,12 +7,12 @@ the Terraform module, the skills — and need nothing running. Unit tests live
 beside the code in each package; `pnpm test` runs all of them, these
 `*.test.ts` files included.
 
-> **The suites default to the install at `~/.fleetadlc`.** The `*.mjs` suites read
-> `DATABASE_URL` (default `postgres://fleetadlc:fleetadlc@127.0.0.1:47432/fleetadlc_db`),
-> `FLEETADLC_HOME` (default `~/.fleetadlc`, for the install secret) and
-> `FLEETADLC_BRIDGE_URL`, `FLEETADLC_HOSTD_URL`, `FLEETADLC_CONSOLE_URL` (defaults on ports
+> **The suites default to the install at `~/.openadlc`.** The `*.mjs` suites read
+> `DATABASE_URL` (default `postgres://openadlc:openadlc@127.0.0.1:47432/openadlc_db`),
+> `OPENADLC_HOME` (default `~/.openadlc`, for the install secret) and
+> `OPENADLC_BRIDGE_URL`, `OPENADLC_HOSTD_URL`, `OPENADLC_CONSOLE_URL` (defaults on ports
 > 47311, 47312, 47300) — the database and ports of the installed OpenADLC, on a
-> machine that has one. They run under plain `node`, not through `fleetadlc`, so the
+> machine that has one. They run under plain `node`, not through `openadlc`, so the
 > ports and database in a scratch install's `install.json` do not reach them.
 > They clear tables to start from a known state: `pipeline.mjs`,
 > `concurrency.mjs`, `kill-and-restart.mjs` and `docker-computers.mjs` delete
@@ -26,8 +26,8 @@ beside the code in each package; `pnpm test` runs all of them, these
 ## Running
 
 ```bash
-pnpm build                          # the suites import @fleetadlc/* from dist/ and run the dispatcher's dist/main.js
-pnpm --filter @fleetadlc/tests test     # the *.test.ts files; nothing has to be running
+pnpm build                          # the suites import @openadlc/* from dist/ and run the dispatcher's dist/main.js
+pnpm --filter @openadlc/tests test     # the *.test.ts files; nothing has to be running
 tests/scratch.sh up && eval "$(tests/scratch.sh env)"   # a scratch install beside a real one, and the variables the suites read
 node tests/all.mjs                  # every suite whose requirement answers, one verdict
 node tests/pipeline.mjs             # one suite, against the install the environment names
@@ -37,21 +37,21 @@ tests/scratch.sh down               # stop it and remove its database
 `all.mjs` runs `pnpm test`, then each suite below whose requirement answers — the
 bridge's `/healthz` for an install, the console's `/` and a scripted bridge for
 onboarding — then `terraform validate` in `infra/gcp` when `terraform` is
-installed and the module is initialised (`fleetadlc cloud validate`). The live
+installed and the module is initialised (`openadlc cloud validate`). The live
 suites run only with `--live`, and then only when the bridge says `acting as` a
 connected bot; `--no-live` is still accepted and changes nothing.
 
 **A scripted install** is one whose services were started with
-`FLEETADLC_SCRIPTED_ENGINES=1`. hostd then runs the fabricated runs in
+`OPENADLC_SCRIPTED_ENGINES=1`. hostd then runs the fabricated runs in
 `apps/hostd/src/scripted-runs.ts` instead of an engine, and clones every
-repository from the local one `FLEETADLC_SCRIPTED_REPO_PATH` names, so the pipeline
-moves with no model key and no GitHub account. Under `fleetadlc up` the variable
-also creates that repository at `$FLEETADLC_HOME/scripted/testbed` and seeds with
+repository from the local one `OPENADLC_SCRIPTED_REPO_PATH` names, so the pipeline
+moves with no model key and no GitHub account. Under `openadlc up` the variable
+also creates that repository at `$OPENADLC_HOME/scripted/testbed` and seeds with
 `--scripted-board`. Export it for the suites too: they run the dispatcher
 themselves, a pass at a time (`node apps/dispatcher/dist/main.js --once`), and
 only with it does the dispatcher stop holding back builders whose GitHub checks
 fail. CI's `check` job (`.github/workflows/ci.yml`), after the unit tests, is the
-reference setup: an empty Postgres, `FLEETADLC_HOME` and a testbed under `.ci/`,
+reference setup: an empty Postgres, `OPENADLC_HOME` and a testbed under `.ci/`,
 the scripted seed, and hostd, the bridge and the console started directly, so
 its bridge does not dispatch on its own. It runs `pipeline`, `terminal`,
 `kill-and-restart`, `concurrency` and `onboarding` (not on a draft pull
@@ -62,15 +62,15 @@ request), and never the live suites or `docker-computers`.
 | File | What it proves | Needs |
 |---|---|---|
 | `pipeline.mjs` | A routable issue becomes a leased, running, finished task; spec hands on to build; the merge line's order, reverts first; a seat runs no more tasks at once than it may; overlapping paths wait; leases expire; the task and monthly caps stop work; triage and unblocking; an unsigned webhook answers no gate; a red smoke reverts; jobs are safe to fire twice; `/internal` refuses a caller without the secret | a scripted install |
-| `terminal.mjs` | Take-over: mint a token, open hostd's `/terminal` socket, type, read the output, detach; the session lives on and every step is audited | a scripted install; the first builder, or `FLEETADLC_TERMINAL_BOT` |
+| `terminal.mjs` | Take-over: mint a token, open hostd's `/terminal` socket, type, read the output, detach; the session lives on and every step is audited | a scripted install; the first builder, or `OPENADLC_TERMINAL_BOT` |
 | `kill-and-restart.mjs` | Killing a session leaves the branch and the issue and returns the work to the board; restarting a bot cancels its tasks, gives their computers back and keeps the repository's mirror | a scripted install; deletes every task and lease |
 | `concurrency.mjs` | Concurrency 2 is one builder with room for two taking two issues, each in a computer of its own, or two builder seats; a third issue waits rather than going past what the builders run between them | a scripted install; sets the owner's tasks at once and puts it back; adds a `<seat>-2` builder unless one exists, and retires only one it added |
-| `docker-computers.mjs` | Under the docker driver, each task gets a container of its own on the install's task network (`scratch-tasks` on a scratch install), mounting only its own folder; two tasks cannot reach each other; the task database server is reachable from a task; container, folder and database go when the task ends; and how long a cold start takes | a scripted install on the docker driver, and `FLEETADLC_DOCKER_COMPUTERS=1` for `all.mjs` to run it: it starts real containers |
+| `docker-computers.mjs` | Under the docker driver, each task gets a container of its own on the install's task network (`scratch-tasks` on a scratch install), mounting only its own folder; two tasks cannot reach each other; the task database server is reachable from a task; container, folder and database go when the task ends; and how long a cold start takes | a scripted install on the docker driver, and `OPENADLC_DOCKER_COMPUTERS=1` for `all.mjs` to run it: it starts real containers |
 | `onboarding.mjs` | The walkthrough tells the truth about accounts, connections and steps; the device flow starts, or is refused without a client id, and no token reaches the browser | bridge, console and database; starts a device flow for the `intake` seat when a client id is set |
 | `github-live.mjs` | The GitHub write path as a real account: file an issue, move its stage label, assign it, open and answer a gate comment, write `review-gate`; then close it (`--keep` leaves it) | a connected automation bot; writes to the first repository in the install's database |
-| `github-live-pr.mjs` | Clone with a brokered token, branch under `agent/`, commit signed, push, open a pull request, and have GitHub refuse an unknown reviewer on it; then close it and delete the branch (`--keep` leaves them) | a bot with push access (`FLEETADLC_LIVE_BUILDER`, else the automation bot) and `ssh-agent`; stores a signing key if the bot has none |
+| `github-live-pr.mjs` | Clone with a brokered token, branch under `agent/`, commit signed, push, open a pull request, and have GitHub refuse an unknown reviewer on it; then close it and delete the branch (`--keep` leaves them) | a bot with push access (`OPENADLC_LIVE_BUILDER`, else the automation bot) and `ssh-agent`; stores a signing key if the bot has none |
 | `second-builder.mjs` | Not a suite: the helpers `concurrency.mjs` adds and retires its builder with | — |
-| `scratch-only.mjs` | Not a suite: `refuseARealInstall()`, which every suite but the live ones calls first. It stops the suite before it reads or writes anything unless `FLEETADLC_BRIDGE_URL`, `FLEETADLC_HOSTD_URL`, `DATABASE_URL` and `FLEETADLC_HOME` are all exported, `FLEETADLC_HOME` is not `~/.fleetadlc`, and the bridge answers `/healthz` saying its engines are scripted | — |
+| `scratch-only.mjs` | Not a suite: `refuseARealInstall()`, which every suite but the live ones calls first. It stops the suite before it reads or writes anything unless `OPENADLC_BRIDGE_URL`, `OPENADLC_HOSTD_URL`, `DATABASE_URL` and `OPENADLC_HOME` are all exported, `OPENADLC_HOME` is not `~/.openadlc`, and the bridge answers `/healthz` saying its engines are scripted | — |
 | `action-pins.test.ts` | Every action a workflow runs is named by a commit, every service image by a digest, and every tool a workflow downloads (actionlint, gitleaks) is checked against its checksum | nothing |
 | `claims.test.ts` | Every file cited in `docs/platform-plan.md`'s "What is proven, and how" exists, and the plan does not overstate what has run | nothing |
 | `cloud-module.test.ts` | What `terraform validate` cannot: `infra/gcp`'s firewall, IAP, invokers, webhook path and egress allowlist are wired as its comments promise | nothing |
@@ -100,6 +100,6 @@ and opens a pull request there. That is why `all.mjs` runs them only with
 They ask that install's bridge for a bot's GitHub token, as the rest of
 OpenADLC does, with the internal secret from its secret store. Only when the
 bridge does not answer do they refresh the token with a `TokenBroker` of their
-own, and only when `FLEETADLC_GITHUB_CLIENT_ID` is set: GitHub rotates a refresh
+own, and only when `OPENADLC_GITHUB_CLIENT_ID` is set: GitHub rotates a refresh
 token each time it is used, so two refreshing the same bot invalidate each
 other.

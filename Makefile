@@ -53,7 +53,7 @@ clean:
 #
 # OpenADLC's own install has no hosted testing or production environment yet, so
 # every target below stops and says what to put there. That is why
-# `FLEETADLC_DEPLOY_TESTING` is unset on this repository and `deploy-testing` skips:
+# `OPENADLC_DEPLOY_TESTING` is unset on this repository and `deploy-testing` skips:
 # a green deploy of nothing would label a pull request as live somewhere it is
 # not, and the dependency logic reads that label.
 
@@ -80,16 +80,16 @@ smoke-testing:
 deploy-production:
 	$(call no_target,deploy-production,production,print the revision tag then its URL as the last two lines.)
 
-## smoke-production: exercise the revision in FLEETADLC_REVISION_TAG, not whatever
+## smoke-production: exercise the revision in OPENADLC_REVISION_TAG, not whatever
 ## is currently serving.
 smoke-production:
-	$(call no_target,smoke-production,production,exit non-zero when FLEETADLC_REVISION_TAG is not working.)
+	$(call no_target,smoke-production,production,exit non-zero when OPENADLC_REVISION_TAG is not working.)
 
-## shift-traffic: send production traffic to FLEETADLC_REVISION_TAG.
+## shift-traffic: send production traffic to OPENADLC_REVISION_TAG.
 shift-traffic:
-	$(call no_target,shift-traffic,production,move all traffic to FLEETADLC_REVISION_TAG.)
+	$(call no_target,shift-traffic,production,move all traffic to OPENADLC_REVISION_TAG.)
 
-## rollback-production: send traffic back to FLEETADLC_REVISION_TAG, or to whatever
+## rollback-production: send traffic back to OPENADLC_REVISION_TAG, or to whatever
 ## was serving before the last shift when it is empty. Never migrates.
 rollback-production:
 	$(call no_target,rollback-production,production,move traffic back and print what is serving now.)

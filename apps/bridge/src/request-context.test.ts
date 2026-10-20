@@ -34,7 +34,7 @@ const store = vi.hoisted(() => ({
   ambiguous: false,
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   attachments: {
     listForSubjects: vi.fn(async (refs: readonly string[]) => store.files.filter((one) => refs.includes(String(one.subjectRef)))),
   },
@@ -63,8 +63,8 @@ vi.mock('@fleetadlc/db', () => ({
   },
   costs: { currentPeriod: vi.fn(() => '2026-09') },
   repos: {
-    listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' }]),
-    getRepoByName: vi.fn(async () => ({ id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' })),
+    listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }]),
+    getRepoByName: vi.fn(async () => ({ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' })),
   },
   requests: (() => {
     class AmbiguousRequestPrefix extends Error {}
@@ -108,7 +108,7 @@ vi.mock('@fleetadlc/db', () => ({
   },
 }));
 
-import type { ContextDocument } from '@fleetadlc/shared';
+import type { ContextDocument } from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import type { BridgeConfig } from './config.js';
 import { Context } from './context.js';
@@ -132,7 +132,7 @@ function service(): TaskService {
 async function openTriage(): Promise<ContextDocument[]> {
   await service().open({
     bot: 'ottoexampleco',
-    repo: 'fleetadlc-testbed',
+    repo: 'openadlc-testbed',
     kind: 'intake',
     subjectType: 'request',
     subjectRef: 'request:a4b02784',
@@ -174,7 +174,7 @@ describe('the request a console request’s triage reads', () => {
     expect(content).toContain('Create html hello world and a readme file.');
     expect(content).toContain('Keep it to one page; no framework.');
     expect(content).toContain('**Kind:** feature');
-    expect(content).toContain('**Repository:** janedoe/fleetadlc-testbed');
+    expect(content).toContain('**Repository:** janedoe/openadlc-testbed');
     expect(content).toContain('**Asked by:** janedoe, at 2026-09-24T20:44:22.945Z');
     // The line the issue it files has to carry, so it can be linked back.
     expect(content).toContain('OpenADLC request: request:a4b02784');
@@ -207,7 +207,7 @@ describe('the request a console request’s triage reads', () => {
       { id: 'gate-3', taskId: 'task-1', question: 'A question nobody answered', options: [], state: 'open', answer: null },
     ];
     store.messages = [
-      { id: 'm-1', kind: 'sys', author: 'fleetadlc', text: 'Intake started triage on request:a4b02784', payload: null, at: '2026-09-24T20:44:23.000Z' },
+      { id: 'm-1', kind: 'sys', author: 'openadlc', text: 'Intake started triage on request:a4b02784', payload: null, at: '2026-09-24T20:44:23.000Z' },
       { id: 'm-2', kind: 'gate', author: 'ottoexampleco', text: 'Should the page say…', payload: { gateId: 'gate-1' }, at: '2026-09-24T20:50:00.000Z' },
       // The answer is written into the thread too. It is shown once, with its question.
       { id: 'm-3', kind: 'you', author: 'janedoe', text: 'Hello, world', payload: { gateId: 'gate-1' }, at: '2026-09-24T21:02:11.000Z' },
@@ -291,10 +291,10 @@ describe('the open work a triage compares its draft with', () => {
     // crew account that nothing was ever going to build.
     store.issues = [
       { number: 7, title: 'Add 3D rubicube as rub.html', stage: 'intake', labels: [], declaredPaths: ['rub.html', 'Makefile'], body: '' },
-      { number: 4, title: 'Ignored', stage: 'build', labels: ['fleetadlc:ignore'], declaredPaths: ['Makefile'], body: '' },
+      { number: 4, title: 'Ignored', stage: 'build', labels: ['openadlc:ignore'], declaredPaths: ['Makefile'], body: '' },
       { number: 3, title: 'Add a hello page', stage: 'build', labels: ['adlc:build'], declaredPaths: ['Makefile'], body: '' },
     ];
-    store.unowned = JSON.stringify({ 'fleetadlc-testbed': [{ number: 7, title: 'Add 3D rubicube as rub.html', url: 'u', author: 'outside-author' }] });
+    store.unowned = JSON.stringify({ 'openadlc-testbed': [{ number: 7, title: 'Add 3D rubicube as rub.html', url: 'u', author: 'outside-author' }] });
 
     const open = (await openTriage()).find((one) => one.name === OPEN_WORK_DOCUMENT);
 
@@ -324,8 +324,8 @@ describe('the open work a triage compares its draft with', () => {
   it('states the repository’s spec rule, which the bridge applies when the triage ends', async () => {
     // Triage was told to label adlc:spec "when the spec rule matches" and was
     // never told the rule.
-    const { repos } = await import('@fleetadlc/db');
-    const repo = { id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed', specRequiredLabels: ['touches:schema', 'size:large'] };
+    const { repos } = await import('@openadlc/db');
+    const repo = { id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', specRequiredLabels: ['touches:schema', 'size:large'] };
     vi.mocked(repos.listRepos).mockResolvedValue([{ ...repo, stageModes: { spec: 'conditional' } }] as never);
     try {
       const conditional = (await openTriage()).find((one) => one.name === OPEN_WORK_DOCUMENT);
@@ -336,7 +336,7 @@ describe('the open work a triage compares its draft with', () => {
       const untouched = (await openTriage()).find((one) => one.name === OPEN_WORK_DOCUMENT);
       expect(untouched?.content).toContain('Never label one `adlc:spec`.');
     } finally {
-      vi.mocked(repos.listRepos).mockResolvedValue([{ id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' }] as never);
+      vi.mocked(repos.listRepos).mockResolvedValue([{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }] as never);
     }
   });
 });

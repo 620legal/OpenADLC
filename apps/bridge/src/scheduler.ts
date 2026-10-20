@@ -1,12 +1,12 @@
-import { attachments, audit, bots, costs, credentials, deployRuns, health, issues, lastGithubDelivery, leases, pruneGithubDeliveries, recordEvent, repos, settings, spendingLimits, tasks, threads } from '@fleetadlc/db';
+import { attachments, audit, bots, costs, credentials, deployRuns, health, issues, lastGithubDelivery, leases, pruneGithubDeliveries, recordEvent, repos, settings, spendingLimits, tasks, threads } from '@openadlc/db';
 import { claimWindowStart } from './attachment-routes.js';
 import { sweepDesignMemory } from './design-memory.js';
 import { leadOnlyResolutionTo, resolutionCheckBrief } from './conflict-round.js';
 import type { Stacking } from './stacking.js';
 import type { UnlabeledIntake } from './unlabeled-intake.js';
 import { actsForOn } from './people.js';
-import { DEFAULT_PATH_POLICY, REVIEW_GATE_CHECK, actsFor, deliveryRulesFrom, envInt, type PathPolicy, type TaskKind, type TaskState, dedupeMarker, hasIgnoreLabel } from '@fleetadlc/shared';
-import { blockingOverlaps, type WorkInFlight } from '@fleetadlc/dispatcher';
+import { DEFAULT_PATH_POLICY, REVIEW_GATE_CHECK, actsFor, deliveryRulesFrom, envInt, type PathPolicy, type TaskKind, type TaskState, dedupeMarker, hasIgnoreLabel } from '@openadlc/shared';
+import { blockingOverlaps, type WorkInFlight } from '@openadlc/dispatcher';
 import { ATTENTION_WINDOW_DAYS, triedAgain } from './attention.js';
 import { subjectClosed, wasRefused } from './gates.js';
 import type { Automation } from './automation.js';
@@ -33,7 +33,7 @@ export interface JobResult {
   actions: string[];
 }
 
-/** Every job the scheduler knows, so `fleetadlc status` can list them. */
+/** Every job the scheduler knows, so `openadlc status` can list them. */
 export const SCHEDULED_JOBS = [
   'reconcile',
   'status',
@@ -66,8 +66,8 @@ export function attentionIn(status: {
 
   const locked = status.crew.filter((bot) => bot.authorization === 'revoked' || bot.authorization === 'expired');
   if (locked.length > 0) {
-    // A command per bot: `fleetadlc auth login` alone names none, and refuses.
-    return `${locked.map((bot) => bot.name).join(', ')} cannot act on GitHub any more. Run: ${locked.map((bot) => `\`fleetadlc auth login --bot ${bot.name}\``).join(', ')}.`;
+    // A command per bot: `openadlc auth login` alone names none, and refuses.
+    return `${locked.map((bot) => bot.name).join(', ')} cannot act on GitHub any more. Run: ${locked.map((bot) => `\`openadlc auth login --bot ${bot.name}\``).join(', ')}.`;
   }
 
   if (status.openGates > 0) {
@@ -265,7 +265,7 @@ export async function retryAfterRecovery(fixed: readonly string[] | null, deps: 
     // request's triage, is not held by one.
     const issue = issueForSubject(task.subjectRef, issueList);
     const repo = repoList.find((entry) => entry.id === task.repoId) ?? null;
-    // `fleetadlc:ignore` is a person telling the crew to leave the issue alone, and
+    // `openadlc:ignore` is a person telling the crew to leave the issue alone, and
     // running its failed work again is the crew starting a task there.
     // It is passed over before the claim, so taking the label off lets a later
     // sweep run it again as it would have.
@@ -317,16 +317,16 @@ export interface ContinueDeps {
   pathPolicy?: RecoveryDeps['pathPolicy'];
   /**
    * The earliest end a build is looked at for: when this bridge started, or
-   * a lease's length ago (`FLEETADLC_LEASE_HOURS`), whichever is later. Absent,
+   * a lease's length ago (`OPENADLC_LEASE_HOURS`), whichever is later. Absent,
    * a lease's length ago.
    */
   since?: Date;
   now?: () => Date;
 }
 
-/** How far back a build that ended without its pull request is still looked at: a lease's length, `FLEETADLC_LEASE_HOURS`. */
+/** How far back a build that ended without its pull request is still looked at: a lease's length, `OPENADLC_LEASE_HOURS`. */
 function leaseWindowMs(): number {
-  return envInt('FLEETADLC_LEASE_HOURS', 12) * 60 * 60 * 1000;
+  return envInt('OPENADLC_LEASE_HOURS', 12) * 60 * 60 * 1000;
 }
 
 /**
@@ -348,7 +348,7 @@ function leaseWindowMs(): number {
  *   instead, with a card that offers to open it from the branch.
  *
  * A build a later build took over from, one whose issue has moved past
- * building or that a person marked `fleetadlc:ignore`, and one GitHub cannot be
+ * building or that a person marked `openadlc:ignore`, and one GitHub cannot be
  * asked about are left as they are. Never failed or run again on a guess.
  */
 export async function continueBuildsWithoutPullRequest(deps: ContinueDeps): Promise<string[]> {
@@ -440,7 +440,7 @@ async function failBuild(task: { id: string; botId: string; repoId: string | nul
   );
   try {
     const thread = await threads.ensureThread({ botId: task.botId, repoId: task.repoId, subjectRef: task.subjectRef });
-    await threads.addMessage({ threadId: thread.id, kind: 'sys', author: 'fleetadlc', text: `the build on ${task.subjectRef} ${reason}`, payload: { taskId: task.id, state: 'failed' } });
+    await threads.addMessage({ threadId: thread.id, kind: 'sys', author: 'openadlc', text: `the build on ${task.subjectRef} ${reason}`, payload: { taskId: task.id, state: 'failed' } });
   } catch (error) {
     console.warn(`[bridge] could not say in its thread that ${task.id} failed: ${error instanceof Error ? error.message : error}`);
   }
@@ -655,7 +655,7 @@ export function deploySweepRefusal(plan: DeploySweepPlan): string | null {
     case 'idle':
       return 'nothing merged is waiting on a testing deploy';
     case 'no-target':
-      return `no testing deploy target is configured: set testing.url in the repository's .github/fleetadlc.yml (FLEETADLC_TESTING_URL is the deprecated fallback); not deploying ${describeWaiting(plan.waiting)}`;
+      return `no testing deploy target is configured: set testing.url in the repository's .github/openadlc.yml (OPENADLC_TESTING_URL is the deprecated fallback); not deploying ${describeWaiting(plan.waiting)}`;
     case 'no-bot':
       return `${describeWaiting(plan.waiting)} ${plan.waiting.length === 1 ? 'needs' : 'need'} a testing deploy, and no bot has the deploy role`;
     case 'work':
@@ -671,7 +671,7 @@ export interface QaTarget {
 
 /** Why no QA task opens without a testing URL, in the same words wherever it is refused. */
 export const NO_TESTING_URL =
-  "no testing environment is configured: set testing.url in the repository's .github/fleetadlc.yml (FLEETADLC_TESTING_URL is the deprecated fallback); not opening a QA task";
+  "no testing environment is configured: set testing.url in the repository's .github/openadlc.yml (OPENADLC_TESTING_URL is the deprecated fallback); not opening a QA task";
 
 /**
  * Who would run QA, or why nobody can.
@@ -815,7 +815,7 @@ export class Scheduler {
    *
    * The gate is worked out when something happens to a pull request — a
    * review, a push — and only then. One whose reviewers changed after its
-   * last event sat at pending with every review it needed in: fleetadlc-testbed#2
+   * last event sat at pending with every review it needed in: openadlc-testbed#2
    * was held on a sampled security review that a later decision no longer
    * asked for, and no event was ever coming to ask again. The same is true of
    * a review that arrived while the bridge was down. A pull request whose
@@ -1088,7 +1088,7 @@ export class Scheduler {
     const actions: string[] = [];
     for (const repo of await repos.listRepos()) {
       // Each repository's own testing URL, by its rules; the install's
-      // FLEETADLC_TESTING_URL where none says (deprecated, read in `delivery-rules.ts`).
+      // OPENADLC_TESTING_URL where none says (deprecated, read in `delivery-rules.ts`).
       const target = shared ?? (await qaTarget((await this.delivery?.get(repo).catch(() => null))?.testingUrl ?? ''));
       if ('refusal' in target) {
         actions.push(`${repo.name}: ${target.refusal}`);
@@ -1148,7 +1148,7 @@ export class Scheduler {
         '',
         ...failing.map((line) => `- ${line}`),
         '',
-        'Reconnect each with `fleetadlc auth login --bot <name>`.',
+        'Reconnect each with `openadlc auth login --bot <name>`.',
       ].join('\n'),
       marker: 'credential-health',
     });
@@ -1198,7 +1198,7 @@ export class Scheduler {
    * dispatched. On an install without the pipeline, it starts the deploy bot
    * instead. The webhook can be missed, and this job does not invent a deploy:
    * it dispatches the same workflow. OpenADLC does not read
-   * `FLEETADLC_DEPLOY_TESTING`. A repository set to no testing deploy — or
+   * `OPENADLC_DEPLOY_TESTING`. A repository set to no testing deploy — or
    * automatic, with no `deploy-testing` workflow — has nothing to run, so an
    * issue already in Ship is moved to Done here. That is what clears one left
    * behind after a merge, open or closed: GitHub closes the issue at
@@ -1396,7 +1396,7 @@ export class Scheduler {
     const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
     if (!client) {
       const name = await automationBotName(this.config);
-      return `${subjectRef}: no testing deploy was dispatched, because ${name} is not connected to GitHub. Run: fleetadlc auth login --bot ${name}`;
+      return `${subjectRef}: no testing deploy was dispatched, because ${name} is not connected to GitHub. Run: openadlc auth login --bot ${name}`;
     }
     const merged = await client
       .request<{ merge_commit_sha?: string | null }>('GET', `/repos/${repo.fullName}/pulls/${prNumber}`)
@@ -1453,7 +1453,7 @@ export class Scheduler {
       // failing the job, because the finding above is still worth reporting.
       if (!target) return `would file "${input.title}" (OpenADLC manages no repository to file it in)`;
       const name = await automationBotName(this.config);
-      return `would file "${input.title}" (${name} is not connected to GitHub. Run: fleetadlc auth login --bot ${name})`;
+      return `would file "${input.title}" (${name} is not connected to GitHub. Run: openadlc auth login --bot ${name})`;
     }
 
     const marker = dedupeMarker('job', input.marker);
@@ -1498,7 +1498,7 @@ export class Scheduler {
 
   private async runOnce(job: string): Promise<JobResult> {
     const result = await this.dispatch(job);
-    // Recorded so `fleetadlc status` can say when each job last ran. A schedule
+    // Recorded so `openadlc status` can say when each job last ran. A schedule
     // nobody can see the last run of is a schedule nobody knows has stopped.
     if (SCHEDULED_JOBS.includes(job as (typeof SCHEDULED_JOBS)[number])) {
       await recordEvent({
@@ -1593,12 +1593,12 @@ export class Scheduler {
 
   /**
    * Removes the processed GitHub deliveries older than
-   * `FLEETADLC_EVENT_RETENTION_DAYS`. Nothing deleted them before, so every
+   * `OPENADLC_EVENT_RETENTION_DAYS`. Nothing deleted them before, so every
    * payload stayed in the database and its backups for good. 0 keeps them.
    */
   private async pruneEvents(): Promise<string[]> {
     const days = this.config.eventRetentionDays;
-    if (days === 0) return ['GitHub deliveries are kept for good (FLEETADLC_EVENT_RETENTION_DAYS=0)'];
+    if (days === 0) return ['GitHub deliveries are kept for good (OPENADLC_EVENT_RETENTION_DAYS=0)'];
     const removed = await pruneGithubDeliveries(new Date(Date.now() - days * 24 * 60 * 60 * 1000));
     return removed > 0 ? [`removed ${removed} GitHub ${removed === 1 ? 'delivery' : 'deliveries'} older than ${days} days`] : [];
   }
@@ -1624,7 +1624,7 @@ export class Scheduler {
 
     const needsPerson = drift.filter((entry) => !entry.repaired);
     if (needsPerson.length > 0) {
-      const target = statusIssueTarget(process.env.FLEETADLC_STATUS_ISSUE, await repos.listRepos());
+      const target = statusIssueTarget(process.env.OPENADLC_STATUS_ISSUE, await repos.listRepos());
       if (target && 'refusal' in target) {
         actions.push(`did not post the drift to the status issue: ${target.refusal}`);
       } else if (target) {
@@ -1684,7 +1684,7 @@ export class Scheduler {
 
   private async refreshStatus(): Promise<string[]> {
     const status = await buildStatus(this.config, this.hostd);
-    const target = statusIssueTarget(process.env.FLEETADLC_STATUS_ISSUE, await repos.listRepos());
+    const target = statusIssueTarget(process.env.OPENADLC_STATUS_ISSUE, await repos.listRepos());
 
     if (!target) {
       return ['status rebuilt (no status issue configured)'];

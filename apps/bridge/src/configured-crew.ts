@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { botsFileSchema, loadYamlFile, type BotConfig, type BotRole } from '@fleetadlc/shared';
+import { botsFileSchema, loadYamlFile, type BotConfig, type BotRole } from '@openadlc/shared';
 
 /**
  * `config/bots.yaml` as the bridge reads it: the one reader, so the console's
@@ -10,7 +10,7 @@ import { botsFileSchema, loadYamlFile, type BotConfig, type BotRole } from '@fle
  *
  * Read per request, because the file is the operator's to edit, and an
  * unreadable file is no seats rather than an error on the page: a malformed
- * file is `fleetadlc up`'s to report.
+ * file is `openadlc up`'s to report.
  */
 export function configuredSeats(configRoot: string | undefined): BotConfig[] {
   if (!configRoot) return [];

@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
-import { fleetHome } from '@fleetadlc/github';
+import { openadlcHome } from '@openadlc/github';
 import { BackupError, type LoginFiles } from './archive.js';
 
 /**
@@ -78,13 +78,13 @@ const RUNNING_RECORD = /\.(jsonl|log)$/i;
 const ACCOUNT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Where hostd keeps sign-in folders: `FLEETADLC_LOGIN_ROOT`, or `logins` under the
+ * Where hostd keeps sign-in folders: `OPENADLC_LOGIN_ROOT`, or `logins` under the
  * install's home — the same answer hostd's own configuration gives.
  */
 export function loginRoot(env: NodeJS.ProcessEnv = process.env): string {
-  const configured = env.FLEETADLC_LOGIN_ROOT;
+  const configured = env.OPENADLC_LOGIN_ROOT;
   if (configured && configured.length > 0) return resolve(configured);
-  const home = env.FLEETADLC_HOME && env.FLEETADLC_HOME.length > 0 ? env.FLEETADLC_HOME : fleetHome();
+  const home = env.OPENADLC_HOME && env.OPENADLC_HOME.length > 0 ? env.OPENADLC_HOME : openadlcHome();
   return resolve(join(home, 'logins'));
 }
 

@@ -1,5 +1,5 @@
-import type { HealthRow } from '@fleetadlc/db';
-import { MANUAL_STEPS } from '@fleetadlc/shared';
+import type { HealthRow } from '@openadlc/db';
+import { MANUAL_STEPS } from '@openadlc/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defaultChecks } from './index.js';
 import { HealthRegistry, type HealthNotice, type HealthStore } from './registry.js';
@@ -59,7 +59,7 @@ const WEBHOOK_SILENT: CheckResult = {
   severity: 'blocking',
   title: 'GitHub is not sending events to OpenADLC',
   detail: 'Open the app’s settings and turn on **Active** under Webhook.',
-  action: { label: 'Open the app’s settings', url: 'https://github.com/settings/apps/fleetadlc-janedoe' },
+  action: { label: 'Open the app’s settings', url: 'https://github.com/settings/apps/openadlc-janedoe' },
 };
 
 function registry(checks: HealthCheck[], extra: { settingUp?: boolean; onFixed?: (ids: readonly string[]) => Promise<unknown>; log?: (line: string) => void } = {}) {
@@ -74,7 +74,7 @@ function registry(checks: HealthCheck[], extra: { settingUp?: boolean; onFixed?:
     },
     settingUp: async () => extra.settingUp ?? false,
     consoleUrl: 'http://127.0.0.1:47300',
-    botNames: async () => new Map([['bot-builder', 'fleetadlc-atlas-janedoe']]),
+    botNames: async () => new Map([['bot-builder', 'openadlc-atlas-janedoe']]),
     now: () => now,
     log: extra.log ?? (() => undefined),
     onFixed: extra.onFixed,
@@ -192,7 +192,7 @@ describe('what a check said, remembered', () => {
       {
         subject: 'bot-builder',
         ...WEBHOOK_SILENT,
-        title: 'fleetadlc-atlas-janedoe’s signing key is not on its GitHub account',
+        title: 'openadlc-atlas-janedoe’s signing key is not on its GitHub account',
         waitingFor: ['app-permissions:git_signing_ssh_public_keys'],
         facts: { botId: 'bot-builder' },
       },
@@ -200,7 +200,7 @@ describe('what a check said, remembered', () => {
 
     const views = await subject.views(await subject.run({ force: true }));
     expect(views.find((view) => view.id === 'signing-key:bot-builder')).toMatchObject({
-      bot: 'fleetadlc-atlas-janedoe',
+      bot: 'openadlc-atlas-janedoe',
       state: 'failing',
       proves: 'signing-key works',
       waitingFor: ['app-permissions:git_signing_ssh_public_keys'],
@@ -223,7 +223,7 @@ describe('a blocking failure that lasts', () => {
       {
         event: 'check_failing',
         text: 'GitHub is not sending events to OpenADLC — Open the app’s settings and turn on **Active** under Webhook.',
-        link: 'https://github.com/settings/apps/fleetadlc-janedoe',
+        link: 'https://github.com/settings/apps/openadlc-janedoe',
       },
     ]);
     expect(rows.get('webhook')?.notifiedAt).toBe(new Date(START.getTime() + 6 * 60_000).toISOString());
@@ -266,7 +266,7 @@ describe('a blocking failure that lasts', () => {
   it('links a console page by its address on this install', async () => {
     const hostd = scripted('bot-sign-in');
     const { subject, sent, advance } = registry([hostd]);
-    hostd.answer = [{ ...WEBHOOK_SILENT, title: 'fleetadlc-atlas-janedoe cannot sign in to GitHub', action: { label: 'Reconnect fleetadlc-atlas-janedoe', href: '/settings#github-accounts' } }];
+    hostd.answer = [{ ...WEBHOOK_SILENT, title: 'openadlc-atlas-janedoe cannot sign in to GitHub', action: { label: 'Reconnect openadlc-atlas-janedoe', href: '/settings#github-accounts' } }];
     await subject.run({ force: true });
     advance(6);
     await subject.run({ force: true });
@@ -285,7 +285,7 @@ describe('what waits on a check that is fixed', () => {
     await subject.run({ force: true });
     expect(onFixed).not.toHaveBeenCalled();
 
-    signIn.answer = [{ ok: true, subject: 'bot-builder', fixed: 'fleetadlc-atlas-janedoe can sign in again' }];
+    signIn.answer = [{ ok: true, subject: 'bot-builder', fixed: 'openadlc-atlas-janedoe can sign in again' }];
     await subject.run({ force: true });
     expect(onFixed).toHaveBeenCalledTimes(1);
     expect(onFixed).toHaveBeenCalledWith(['bot-sign-in:bot-builder']);

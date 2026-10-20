@@ -1,10 +1,10 @@
-import type { RuleReport } from '@fleetadlc/github';
+import type { RuleReport } from '@openadlc/github';
 import type { CheckResult, HealthCheck } from '../types.js';
 import { stepHref } from '../words.js';
 
 export interface RulesReader {
   /**
-   * What `fleetadlc github apply` sets on each repository, read as the app — the
+   * What `openadlc github apply` sets on each repository, read as the app — the
    * same reading the walkthrough's last step lists before it applies anything.
    * `canApply` is false when OpenADLC could not read it as the app, and
    * `detail` then says why: no app, no key, the app not installed there.
@@ -47,7 +47,7 @@ export function skippedByLastApply(outcomes: readonly unknown[], planRefused: re
 }
 
 /**
- * The repository is protected the way `fleetadlc github apply` protects it: the
+ * The repository is protected the way `openadlc github apply` protects it: the
  * rulesets that require a review, the review gate and signed commits on the
  * default branch, the environments, and a CODEOWNERS that makes the lead
  * reviewer's review the one that counts. Read from GitHub as the app, rule by

@@ -4,19 +4,19 @@ import { accountHolder, holdsCredential, provenSignIn } from './onboarding.js';
 const crew = [
   {
     id: 'b-builder',
-    name: 'fleetadlc-atlas-janedoe',
+    name: 'openadlc-atlas-janedoe',
     role: 'implement' as const,
-    githubLogin: 'fleetadlc-atlas-janedoe',
+    githubLogin: 'openadlc-atlas-janedoe',
     connected: true,
   },
   // Named by config/bots.yaml from an earlier install; nothing stored.
   { id: 'b-lead', name: 'sydney', role: 'review_lead' as const, githubLogin: 'noraexampleco', connected: false },
-  { id: 'b-se', name: 'nova', role: 'spec' as const, githubLogin: 'fleetadlc-nova', connected: false },
+  { id: 'b-se', name: 'nova', role: 'spec' as const, githubLogin: 'openadlc-nova', connected: false },
 ];
 
 describe('whose account an authorization is', () => {
   it('is another bot’s when that bot is connected as it', () => {
-    expect(accountHolder('FleetADLC-Atlas-Janedoe', 'b-se', crew)?.id).toBe('b-builder');
+    expect(accountHolder('OpenADLC-Atlas-Janedoe', 'b-se', crew)?.id).toBe('b-builder');
   });
 
   it('is nobody’s when another row only names it', () => {
@@ -27,7 +27,7 @@ describe('whose account an authorization is', () => {
   });
 
   it('does not count the bot being connected, or an account nobody has', () => {
-    expect(accountHolder('fleetadlc-nova', 'b-se', crew)).toBeNull();
+    expect(accountHolder('openadlc-nova', 'b-se', crew)).toBeNull();
     expect(accountHolder('someone-new', 'b-se', crew)).toBeNull();
   });
 

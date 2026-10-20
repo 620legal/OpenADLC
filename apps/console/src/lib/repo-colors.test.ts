@@ -6,7 +6,7 @@ const read = (path: string): string => readFileSync(new URL(path, import.meta.ur
 
 describe('the colours a repository can have', () => {
   it('are the ones the bridge stores, in the order it hands them out', () => {
-    // Two copies of one list: the console does not depend on @fleetadlc/shared, so
+    // Two copies of one list: the console does not depend on @openadlc/shared, so
     // this is where the two are held together.
     const shared = /REPO_COLORS = \[([^\]]+)\]/.exec(read('../../../../packages/shared/src/repo-colors.ts'))?.[1];
     expect(shared?.split(',').map((entry) => entry.trim().replace(/'/g, ''))).toEqual([...REPO_COLORS]);
@@ -33,7 +33,7 @@ describe('the colours a repository can have', () => {
 describe('which repository a subject is in', () => {
   it('is read from its address', () => {
     expect(repoOfRef('api#12')).toBe('api');
-    expect(repoOfRef('fleetadlc-testbed@3f2c1a9')).toBe('fleetadlc-testbed');
+    expect(repoOfRef('openadlc-testbed@3f2c1a9')).toBe('openadlc-testbed');
     expect(repoOfRef('request:a4b02784')).toBeNull();
     expect(repoOfRef('')).toBeNull();
   });

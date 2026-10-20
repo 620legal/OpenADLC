@@ -24,8 +24,8 @@ export function anchorOf(heading) {
     .replace(/<[^>]+>/g, '')
     .replace(/[`*~]/g, '')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    // GitHub keeps an underscore inside a word (`$FLEETADLC_HOME` is
-    // `#fleetadlc_home`); only `_emphasis_` markers go.
+    // GitHub keeps an underscore inside a word (`$OPENADLC_HOME` is
+    // `#openadlc_home`); only `_emphasis_` markers go.
     .replace(/(?<![\p{L}\p{N}])_+|_+(?![\p{L}\p{N}])/gu, '')
     .replace(/[^\p{L}\p{N}\s_-]/gu, '')
     .replace(/\s/g, '-');

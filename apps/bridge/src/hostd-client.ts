@@ -8,11 +8,11 @@ import {
   type EngineVersions,
   type SubscriptionLogin,
   type TaskAttachment,
-} from '@fleetadlc/shared';
-import type { EngineReadiness } from '@fleetadlc/engines';
+} from '@openadlc/shared';
+import type { EngineReadiness } from '@openadlc/engines';
 
-const INTERNAL_SECRET_HEADER = 'x-fleetadlc-internal-secret';
-const ON_BEHALF_OF_HEADER = 'x-fleetadlc-on-behalf-of';
+const INTERNAL_SECRET_HEADER = 'x-openadlc-internal-secret';
+const ON_BEHALF_OF_HEADER = 'x-openadlc-on-behalf-of';
 
 export interface HostdStartInput {
   taskId: string;
@@ -85,7 +85,7 @@ export const HEALTH_TIMEOUT_MS = 5_000;
  * How long the bridge waits on hostd to start or resume a task. hostd answers
  * only once the session is running: after a first clone of the repository and
  * `make setup`, which hostd gives up on after 30 minutes
- * (`FLEETADLC_SETUP_TIMEOUT_MINUTES`). A start the bridge gave up on sooner was
+ * (`OPENADLC_SETUP_TIMEOUT_MINUTES`). A start the bridge gave up on sooner was
  * failed while hostd was still completing it, and the session came up anyway.
  * Longer than hostd's slowest start, so it is hostd's answer that arrives. The
  * store now refuses `running` over an ended task, so a start that outlives

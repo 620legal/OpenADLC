@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { signingKeyRef, type SecretStore } from '@fleetadlc/github';
+import { signingKeyRef, type SecretStore } from '@openadlc/github';
 import { DockerDriver, type DockerResult } from './drivers/docker.js';
 import type { SigningAgent } from './drivers/types.js';
 import { SessionEnvMinter, type SessionEnvInput } from './session-env.js';
@@ -14,7 +14,7 @@ import { SessionEnvMinter, type SessionEnvInput } from './session-env.js';
  */
 
 const KEY = '-----BEGIN OPENSSH PRIVATE KEY-----\nnot-a-real-key\n-----END OPENSSH PRIVATE KEY-----';
-const PUBLIC = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeFakeFake fleetadlc-builder';
+const PUBLIC = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeFakeFake openadlc-builder';
 
 function memory(initial: Record<string, string> = {}): SecretStore {
   const data = new Map(Object.entries(initial));
@@ -37,21 +37,21 @@ function memory(initial: Record<string, string> = {}): SecretStore {
 function input(bot: string): SessionEnvInput {
   return {
     bot,
-    githubLogin: 'fleetadlc-atlas-janedoe',
+    githubLogin: 'openadlc-atlas-janedoe',
     taskId: `task-${bot}`,
     token: null,
     engine: 'claude',
     model: 'claude-opus-5',
     skill: 'implement',
-    workdir: '/work/fleetadlc-testbed',
+    workdir: '/work/openadlc-testbed',
     bridgeUrl: 'http://bridge',
     hostdUrl: 'http://hostd',
     costCapUsd: 15,
     contextFiles: [],
     databaseUrl: null,
     declaredPaths: [],
-    repoFullName: 'janedoe/fleetadlc-testbed',
-    subjectRef: 'janedoe/fleetadlc-testbed#1',
+    repoFullName: 'janedoe/openadlc-testbed',
+    subjectRef: 'janedoe/openadlc-testbed#1',
   };
 }
 
@@ -72,11 +72,11 @@ function fakeDocker(answers: { add?: number } = {}) {
 
 function driverWith(answer: (args: string[], input?: string) => Promise<DockerResult>): DockerDriver {
   return new DockerDriver({
-    image: 'fleetadlc-bot:latest',
-    networkPrefix: 'fleetadlc-bot',
+    image: 'openadlc-bot:latest',
+    networkPrefix: 'openadlc-bot',
     runnerBundle: '/tmp/skill-runner.bundle.mjs',
-    workRoot: '/tmp/fleetadlc-work',
-    loginRoot: '/tmp/fleetadlc-logins',
+    workRoot: '/tmp/openadlc-work',
+    loginRoot: '/tmp/openadlc-logins',
     docker: answer,
   } as never);
 }
@@ -84,10 +84,10 @@ function driverWith(answer: (args: string[], input?: string) => Promise<DockerRe
 /** A task's computer as the docker driver hands it out: the bot's container, for now. */
 const COMPUTER = {
   taskId: 'task-1',
-  bot: 'fleetadlc-atlas-janedoe',
-  container: 'bot-fleetadlc-atlas-janedoe',
+  bot: 'openadlc-atlas-janedoe',
+  container: 'bot-openadlc-atlas-janedoe',
   databaseUrl: null,
-  slotDir: '/tmp/fleetadlc-work/slots/task-1',
+  slotDir: '/tmp/openadlc-work/slots/task-1',
 };
 
 describe('the signing agent under docker', () => {
@@ -97,13 +97,13 @@ describe('the signing agent under docker', () => {
     const agent = await driverWith(answer).startSigningAgent(COMPUTER, KEY);
 
     expect(agent).not.toBeNull();
-    expect(agent!.socket).toMatch(/^\/tmp\/fleetadlc-agent-[0-9a-f]{16}\/agent\.sock$/);
+    expect(agent!.socket).toMatch(/^\/tmp\/openadlc-agent-[0-9a-f]{16}\/agent\.sock$/);
     expect(agent!.publicKey).toBe(PUBLIC);
     expect(agent!.signer).toBe('/usr/bin/ssh-keygen');
     // Every step is a `docker exec` into the bot's own container.
     for (const call of calls) {
       expect(call.args[0]).toBe('exec');
-      expect(call.args).toContain('bot-fleetadlc-atlas-janedoe');
+      expect(call.args).toContain('bot-openadlc-atlas-janedoe');
     }
     expect(calls[0]!.args.join(' ')).toContain(`ssh-agent -s -a ${agent!.socket}`);
   });
@@ -114,7 +114,7 @@ describe('the signing agent under docker', () => {
     await driverWith(answer).startSigningAgent(COMPUTER, KEY);
 
     const add = calls.find((call) => call.args.includes('-') && call.args.includes('ssh-add'));
-    expect(add?.args).toEqual(['exec', '-i', '-e', expect.stringMatching(/^SSH_AUTH_SOCK=\/tmp\/fleetadlc-agent-/), 'bot-fleetadlc-atlas-janedoe', 'ssh-add', '-']);
+    expect(add?.args).toEqual(['exec', '-i', '-e', expect.stringMatching(/^SSH_AUTH_SOCK=\/tmp\/openadlc-agent-/), 'bot-openadlc-atlas-janedoe', 'ssh-add', '-']);
     expect(add?.input).toBe(`${KEY}\n`);
     for (const call of calls) expect(call.args.join(' ')).not.toContain('not-a-real-key');
   });
@@ -125,7 +125,7 @@ describe('the signing agent under docker', () => {
     expect(await driverWith(answer).startSigningAgent(COMPUTER, KEY)).toBeNull();
     // That agent by its PID: `-k` with only the socket set refuses and stops nothing.
     const stop = calls.find((call) => call.args.includes('ssh-agent') && call.args.includes('-k'));
-    expect(stop?.args).toEqual(['exec', '-e', expect.stringMatching(/^SSH_AUTH_SOCK=\/tmp\/fleetadlc-agent-/), '-e', 'SSH_AGENT_PID=4242', 'bot-fleetadlc-atlas-janedoe', 'ssh-agent', '-k']);
+    expect(stop?.args).toEqual(['exec', '-e', expect.stringMatching(/^SSH_AUTH_SOCK=\/tmp\/openadlc-agent-/), '-e', 'SSH_AGENT_PID=4242', 'bot-openadlc-atlas-janedoe', 'ssh-agent', '-k']);
   });
 
   it('stops the agent it started when the task ends, by that agent’s PID', async () => {
@@ -136,8 +136,8 @@ describe('the signing agent under docker', () => {
     await agent!.stop();
 
     expect(calls.map((call) => call.args)).toEqual([
-      ['exec', '-e', `SSH_AUTH_SOCK=${agent!.socket}`, '-e', 'SSH_AGENT_PID=4242', 'bot-fleetadlc-atlas-janedoe', 'ssh-agent', '-k'],
-      ['exec', 'bot-fleetadlc-atlas-janedoe', 'rm', '-rf', agent!.socket.replace(/\/agent\.sock$/, '')],
+      ['exec', '-e', `SSH_AUTH_SOCK=${agent!.socket}`, '-e', 'SSH_AGENT_PID=4242', 'bot-openadlc-atlas-janedoe', 'ssh-agent', '-k'],
+      ['exec', 'bot-openadlc-atlas-janedoe', 'rm', '-rf', agent!.socket.replace(/\/agent\.sock$/, '')],
     ]);
   });
 });
@@ -146,13 +146,13 @@ describe('a session’s signing', () => {
   it('uses the agent the driver started, and signs with the ssh-keygen where the session runs', async () => {
     const started: string[] = [];
     const agent: SigningAgent = {
-      socket: '/tmp/fleetadlc-agent-0123456789abcdef/agent.sock',
+      socket: '/tmp/openadlc-agent-0123456789abcdef/agent.sock',
       publicKey: PUBLIC,
       signer: '/usr/bin/ssh-keygen',
       stop: async () => undefined,
     };
     const minter = new SessionEnvMinter(
-      memory({ [signingKeyRef('fleetadlc-atlas-janedoe')]: KEY }),
+      memory({ [signingKeyRef('openadlc-atlas-janedoe')]: KEY }),
       async () => null,
       undefined,
       async (bot, key) => {
@@ -161,9 +161,9 @@ describe('a session’s signing', () => {
       },
     );
 
-    const { env } = await minter.mint(input('fleetadlc-atlas-janedoe'));
+    const { env } = await minter.mint(input('openadlc-atlas-janedoe'));
 
-    expect(started).toEqual(['fleetadlc-atlas-janedoe:true']);
+    expect(started).toEqual(['openadlc-atlas-janedoe:true']);
     expect(env.SSH_AUTH_SOCK).toBe(agent.socket);
     expect(env.GIT_CONFIG_VALUE_1).toBe(`key::${PUBLIC}`);
     expect(env.GIT_CONFIG_KEY_3).toBe('gpg.ssh.program');
@@ -177,7 +177,7 @@ describe('a session’s signing', () => {
       return null;
     });
 
-    const { env } = await minter.mint(input('fleetadlc-atlas-janedoe'));
+    const { env } = await minter.mint(input('openadlc-atlas-janedoe'));
 
     expect(started).toEqual([]);
     expect(env.SSH_AUTH_SOCK).toBeUndefined();

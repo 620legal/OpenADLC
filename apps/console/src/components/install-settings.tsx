@@ -60,7 +60,7 @@ export function useInstallSettings(initial: InstallSettings | null = null) {
     try {
       // No answer at all is said as the house says it, not as the browser's "Failed to fetch".
       const response = await reach('/api/install', { cache: 'no-store' }, BRIDGE_NOT_ANSWERING);
-      if (!response.ok) throw new Error(`the bridge answered ${response.status}. Try again in a moment; if it keeps failing, run fleetadlc doctor.`);
+      if (!response.ok) throw new Error(`the bridge answered ${response.status}. Try again in a moment; if it keeps failing, run openadlc doctor.`);
       setSettings((await response.json()) as InstallSettings);
       setError(null);
     } catch (cause) {

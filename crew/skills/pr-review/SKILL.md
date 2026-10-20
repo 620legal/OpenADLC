@@ -18,7 +18,7 @@ in this round, which your task's brief gives on its `review part:` line
   you approve or request changes on GitHub.
 
 You review without CI. The builder ran the repository's checks (`make ci`) on
-this exact head through `fleetadlc-ci` before it opened or updated the pull
+this exact head through `openadlc-ci` before it opened or updated the pull
 request, and the lead's brief has the record. GitHub's CI on a crew pull
 request is what the merge waits for, not you: a red CI after the lead approved
 sends the work back to build by itself. Never wait for CI, and never request changes for a check that
@@ -32,7 +32,7 @@ has not run.
    approval lands the pull request, so the code under review would run with
    that account's token. The repository's checks have run on this head
    already, without any token: hostd ran `make ci` when the author ran
-   `fleetadlc-ci`, and that recorded run (`local-ci.md` in the lead's brief) is
+   `openadlc-ci`, and that recorded run (`local-ci.md` in the lead's brief) is
    the run there is; on a revert or a person's branch, GitHub's `ci` is. Verify a claim by reading the code that makes it true and
    the test that proves it. What only running it could show is not a finding:
    name it under what you did not verify.
@@ -150,13 +150,13 @@ Delivery and operations: CI workflows, runbooks and infrastructure.
 ## Advisory: a comment, with your verdict in its marker
 
 ```bash
-gh pr review <number> --comment --body-file .fleetadlc-scratch/review.md
+gh pr review <number> --comment --body-file .openadlc-scratch/review.md
 ```
 
 End the body with the marker that carries your verdict and your lens:
 
 ```
-<!-- fleetadlc:{"event":"review_posted","verdict":"request_changes","lens":"security"} -->
+<!-- openadlc:{"event":"review_posted","verdict":"request_changes","lens":"security"} -->
 ```
 
 `verdict` is `approve` or `request_changes`. OpenADLC's `gh` refuses you
@@ -188,7 +188,7 @@ whose review is only there has not reviewed.
   with its file and line — so the builder answers one list, not several:
 
   ```bash
-  gh pr review <number> --request-changes --body-file .fleetadlc-scratch/review.md   # or --approve
+  gh pr review <number> --request-changes --body-file .openadlc-scratch/review.md   # or --approve
   ```
 
   Requesting changes sends the work back to build: the card moves to Build and
@@ -209,7 +209,7 @@ whose review is only there has not reviewed.
 `local-ci.md` says whether `make ci` passed on this exact head, as hostd ran
 it in the author's worktree. On a crew branch (`agent/…`), a head with no
 recorded pass, or a failed one, is not approved: request changes saying so.
-The builder, QA and the system engineer each run `fleetadlc-ci` before they
+The builder, QA and the system engineer each run `openadlc-ci` before they
 push. Any other pull request — a revert the SRE opened, a person's own branch
 — has no crew author to run it. It is judged on GitHub's `ci` check on its
 head, which runs at once on such a branch and which the merge waits for; do not
@@ -232,7 +232,7 @@ next question is written after it, not before.
   marker, one line of JSON that carries the question itself and its choices:
 
   ```
-  <!-- fleetadlc:{"event":"question","question":"This waives a stated invariant. Escalate to a person rather than approving?","options":["escalate","request changes"]} -->
+  <!-- openadlc:{"event":"question","question":"This waives a stated invariant. Escalate to a person rather than approving?","options":["escalate","request changes"]} -->
   ```
 
   What you write before the marker is the context: what you found, and why you
@@ -244,7 +244,7 @@ next question is written after it, not before.
   and say so in the marker instead of giving choices:
 
   ```
-  <!-- fleetadlc:{"event":"question","question":"What does the repository mean this invariant to protect?","open":true} -->
+  <!-- openadlc:{"event":"question","question":"What does the repository mean this invariant to protect?","open":true} -->
   ```
 
 - Never number several questions in one message, and never put a second
@@ -281,7 +281,7 @@ Every comment below carries one marker, as the last line, so the bridge
 learns what you did rather than inferring it from GitHub. A comment with no
 marker is read as narration, which is what an operator's own comment is.
 
-- `<!-- fleetadlc:{"event":"review_posted","verdict":"...","lens":"..."} -->` on
+- `<!-- openadlc:{"event":"review_posted","verdict":"...","lens":"..."} -->` on
   the review you post: your verdict (`approve` or `request_changes`) and your
   lens, exactly as your brief's `lens:` line gives it. It is the only place an
   advisory seat's verdict is. The lead's approval may add

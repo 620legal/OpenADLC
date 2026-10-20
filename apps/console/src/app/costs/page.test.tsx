@@ -40,7 +40,7 @@ describe('the costs page', () => {
       const html = renderToStaticMarkup(await CostsPage()).replace(/<!-- -->/g, '');
       expect(html).toContain('The bridge answered with an error');
       expect(html).toContain('the bridge answered 500 to /v1/costs: the database is not answering');
-      expect(html).toContain('fleetadlc logs bridge');
+      expect(html).toContain('openadlc logs bridge');
       expect(html).not.toContain('cannot reach the bridge');
     } finally {
       answer.error = null;

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // Which bot is the automation account is looked up in the crew
 // (bots.listBots); the stub below returns `crewNow`, which is empty unless a
 // test fills it, so by default none is.
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -226,7 +226,7 @@ describe('task context', () => {
 
   it('gives a reviewer its own earlier reviews and nobody else’s', async () => {
     // The skill forbids reading another reviewer before posting, and the
-    // second reviewer of fleetadlc-testbed#4 was handed the lead's approval.
+    // second reviewer of openadlc-testbed#4 was handed the lead's approval.
     const context = new Context(
       stubActors({
         issues: {
@@ -507,7 +507,7 @@ describe('the lead reviewer, last', () => {
       {
         user: 'irisexampleco',
         state: 'COMMENTED',
-        body: 'The cache key misses the region.\n\n<!-- fleetadlc:{"event":"review_posted","verdict":"request_changes","lens":"second"} -->',
+        body: 'The cache key misses the region.\n\n<!-- openadlc:{"event":"review_posted","verdict":"request_changes","lens":"second"} -->',
         submittedAt: '2026-09-30T09:00:00Z',
         commitId: 'head',
         association: 'MEMBER',
@@ -576,7 +576,7 @@ describe('the lead reviewer, last', () => {
     );
     try {
       const reviews = [
-        { user: 'reviewsexampleco', state: 'CHANGES_REQUESTED', body: 'Token logged.\n\n<!-- fleetadlc-seat:security-reviewer -->', submittedAt: '2026-09-30T09:00:00Z', commitId: 'head', association: 'MEMBER' },
+        { user: 'reviewsexampleco', state: 'CHANGES_REQUESTED', body: 'Token logged.\n\n<!-- openadlc-seat:security-reviewer -->', submittedAt: '2026-09-30T09:00:00Z', commitId: 'head', association: 'MEMBER' },
         { user: 'irisexampleco', state: 'COMMENTED', body: 'Fine by me.', submittedAt: '2026-09-30T09:05:00Z', commitId: 'head', association: 'MEMBER' },
       ];
       const actors = stubActors({ issues: { 31: issue(31, 'Cache', 'x') }, reviews });
@@ -602,7 +602,7 @@ describe('the lead reviewer, last', () => {
   });
 
   it('holds any crew branch to a recorded run, a QA suite or an ADR as well as a build', async () => {
-    // QA and the system engineer run fleetadlc-ci before they push, and
+    // QA and the system engineer run openadlc-ci before they push, and
     // GitHub's ci on an agent/ branch waits for the lead's approval.
     const actors = stubActors({ issues: { 31: issue(31, 'Cache', 'x') }, reviews: [] });
     const client = await (actors as unknown as { asBot: () => Promise<Record<string, unknown>> }).asBot();
@@ -627,7 +627,7 @@ describe('where a QA task tests', () => {
   const WIDGETS = { id: 'repo-1', name: 'widgets', fullName: 'acme/widgets', defaultBranch: 'main' };
 
   async function testingFor(subjectRef: string, options: { rules?: string | null; legacy?: string } = {}) {
-    const { repos } = await import('@fleetadlc/db');
+    const { repos } = await import('@openadlc/db');
     vi.mocked(repos.getRepoByName).mockResolvedValueOnce(WIDGETS as never);
     const context = new Context(stubActors({}), { ...CONFIG, testingUrl: options.legacy ?? '' });
     const get = vi.fn(async () => ({ testingUrl: options.rules === undefined ? 'https://testing.widgets.example' : options.rules }));
@@ -681,15 +681,15 @@ describe('crew reviews, with signatures enforced', () => {
     noncesNow.clear();
     const attribution = new Attribution(secretStore());
     const signed = (seat: string, body: string, n = 31) =>
-      attribution.sign(`${body}\n\n<!-- fleetadlc-seat:${seat} -->`, { seat, task: 't-1', repo: 'acme/widgets', kind: 'review', n });
-    const quality = await signed('quality', 'The cache key misses the region.\n\n<!-- fleetadlc:{"event":"review_posted","verdict":"request_changes","lens":"quality"} -->');
+      attribution.sign(`${body}\n\n<!-- openadlc-seat:${seat} -->`, { seat, task: 't-1', repo: 'acme/widgets', kind: 'review', n });
+    const quality = await signed('quality', 'The cache key misses the region.\n\n<!-- openadlc:{"event":"review_posted","verdict":"request_changes","lens":"quality"} -->');
     const reviews = [
       { id: 1, user: LOGIN, state: 'COMMENTED', body: quality, submittedAt: '2026-09-30T09:00:00Z', commitId: HEAD, association: 'MEMBER' },
       {
         id: 2,
         user: LOGIN,
         state: 'COMMENTED',
-        body: 'No findings.\n\n<!-- fleetadlc:{"event":"review_posted","verdict":"approve","lens":"security"} -->\n\n<!-- fleetadlc-seat:security -->',
+        body: 'No findings.\n\n<!-- openadlc:{"event":"review_posted","verdict":"approve","lens":"security"} -->\n\n<!-- openadlc-seat:security -->',
         submittedAt: '2026-09-30T09:01:00Z',
         commitId: HEAD,
         association: 'MEMBER',
@@ -697,8 +697,8 @@ describe('crew reviews, with signatures enforced', () => {
       { id: 3, user: 'janedoe', state: 'COMMENTED', body: 'Looks fine to me.', submittedAt: '2026-09-30T09:02:00Z', commitId: HEAD, association: 'OWNER' },
     ];
     const comments = [
-      { user: LOGIN, body: await attribution.sign('Plan posted.\n\n<!-- fleetadlc-seat:lead -->', { seat: 'lead', task: null, repo: 'acme/widgets', kind: 'comment', n: 31 }), at: '2026-09-30T08:00:00Z', association: 'MEMBER' },
-      { user: LOGIN, body: 'Security signs off.\n\n<!-- fleetadlc-seat:security -->', at: '2026-09-30T08:05:00Z', association: 'MEMBER' },
+      { user: LOGIN, body: await attribution.sign('Plan posted.\n\n<!-- openadlc-seat:lead -->', { seat: 'lead', task: null, repo: 'acme/widgets', kind: 'comment', n: 31 }), at: '2026-09-30T08:00:00Z', association: 'MEMBER' },
+      { user: LOGIN, body: 'Security signs off.\n\n<!-- openadlc-seat:security -->', at: '2026-09-30T08:05:00Z', association: 'MEMBER' },
     ];
     const actors = stubActors({ issues: { 31: issue(31, 'Cache the price list', 'x') }, reviews, comments });
     (actors as unknown as { attribution: Attribution }).attribution = attribution;

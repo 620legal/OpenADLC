@@ -1,5 +1,5 @@
 {
-  "name": "fleetadlc",
+  "name": "openadlc",
   "version": "0.1.0",
   "private": true,
   "description": "Self-hosted autonomous ADLC platform: a crew of AI agents that take a request to a reviewed, deployed change on GitHub.",
@@ -20,8 +20,9 @@
     "build": "pnpm -r --filter \"./packages/**\" build && pnpm -r --filter \"./apps/**\" build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "db:migrate": "pnpm --filter @fleetadlc/db migrate",
-    "db:seed": "pnpm --filter @fleetadlc/db seed",
+    "db:migrate": "pnpm --filter @openadlc/db migrate",
+    "db:seed": "pnpm --filter @openadlc/db seed",
+    "openadlc": "node apps/cli/bin/openadlc.mjs",
     "fleetadlc": "node apps/cli/bin/fleetadlc.mjs",
     "postinstall": "node apps/hostd/scripts/node-pty-exec-bit.mjs"
   },

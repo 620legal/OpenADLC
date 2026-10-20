@@ -30,7 +30,7 @@ const REPOS = [
 ];
 
 const CREW = [
-  { name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', authorization: 'active', githubLogin: 'fleetadlc-atlas-janedoe', color: null },
+  { name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', authorization: 'active', githubLogin: 'openadlc-atlas-janedoe', color: null },
   { name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', authorization: 'unauthorized', githubLogin: null, color: 'rose' },
   { name: 'ottoexampleco', slot: 'intake', role: 'intake', authorization: 'active', githubLogin: 'ottoexampleco' },
 ] as unknown as CrewMember[];
@@ -196,18 +196,18 @@ describe('crew colors, in Appearance', () => {
     const groups = [...container.querySelectorAll('[role="radiogroup"]')].map((one) => one.getAttribute('aria-label'));
     expect(groups.filter((label) => label?.endsWith(' color') && !label.startsWith('api') && !label.startsWith('website'))).toEqual([
       'ottoexampleco color',
-      'fleetadlc-atlas-janedoe color',
+      'openadlc-atlas-janedoe color',
       'Lead reviewer color',
     ]);
     expect(container.textContent).toContain('Builder');
     expect(container.textContent).toContain('Not connected yet');
-    const swatches = [...group('fleetadlc-atlas-janedoe color').querySelectorAll('[role="radio"]')].map((one) => one.getAttribute('aria-label'));
+    const swatches = [...group('openadlc-atlas-janedoe color').querySelectorAll('[role="radio"]')].map((one) => one.getAttribute('aria-label'));
     expect(swatches).toEqual(['By role', 'Sand', 'Blue', 'Mint', 'Violet', 'Rose', 'Sky', 'Olive', 'Green']);
   });
 
   it('outlines every crew swatch in dim, which keeps 3:1 against the panel, so a quiet tint is still seen', async () => {
     await mount();
-    const fills = [...group('fleetadlc-atlas-janedoe color').querySelectorAll('[role="radio"] > span')].map((one) => one.className);
+    const fills = [...group('openadlc-atlas-janedoe color').querySelectorAll('[role="radio"] > span')].map((one) => one.className);
     expect(fills).toHaveLength(9);
     for (const fill of fills) expect(fill).toContain('border-dim');
     expect(fills[0]).toContain('border-dashed');
@@ -222,19 +222,19 @@ describe('crew colors, in Appearance', () => {
 
   it('checks By role for a bot with no color, and the stored one for a bot with one', async () => {
     await mount();
-    expect(checked('fleetadlc-atlas-janedoe color')).toBe('By role');
+    expect(checked('openadlc-atlas-janedoe color')).toBe('By role');
     expect(checked('ottoexampleco color')).toBe('By role');
     expect(checked('Lead reviewer color')).toBe('Rose');
     expect(avatarBeside('Lead reviewer color').className).toContain('bg-tint-rose');
-    expect(avatarBeside('fleetadlc-atlas-janedoe color').className).toContain('bg-tint-mint');
+    expect(avatarBeside('openadlc-atlas-janedoe color').className).toContain('bg-tint-mint');
   });
 
   it('saves a tint for that bot, and draws its avatar in it', async () => {
     await mount();
-    await choose('fleetadlc-atlas-janedoe color', 'Sky');
-    expect(saved.crew).toEqual([['fleetadlc-atlas-janedoe', 'sky']]);
-    expect(checked('fleetadlc-atlas-janedoe color')).toBe('Sky');
-    expect(avatarBeside('fleetadlc-atlas-janedoe color').className).toContain('bg-tint-sky');
+    await choose('openadlc-atlas-janedoe color', 'Sky');
+    expect(saved.crew).toEqual([['openadlc-atlas-janedoe', 'sky']]);
+    expect(checked('openadlc-atlas-janedoe color')).toBe('Sky');
+    expect(avatarBeside('openadlc-atlas-janedoe color').className).toContain('bg-tint-sky');
   });
 
   it('goes back to the role’s tint with By role, saved as null', async () => {
@@ -247,8 +247,8 @@ describe('crew colors, in Appearance', () => {
   it('puts the swatch back and says why when the bridge refuses', async () => {
     saved.refuse = "a crew member's color is one of sand, blue";
     await mount();
-    await choose('fleetadlc-atlas-janedoe color', 'Olive');
-    expect(checked('fleetadlc-atlas-janedoe color')).toBe('By role');
+    await choose('openadlc-atlas-janedoe color', 'Olive');
+    expect(checked('openadlc-atlas-janedoe color')).toBe('By role');
     expect(container.textContent).toContain("Not saved: a crew member's color is one of sand, blue");
   });
 });

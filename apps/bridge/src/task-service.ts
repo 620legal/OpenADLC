@@ -1,6 +1,6 @@
-import { audit, bots, costs, hasEventOfType, health, hosts, lastEventAt, leases, recordEvent, repos, spendingLimits, tasks, threads } from '@fleetadlc/db';
+import { audit, bots, costs, hasEventOfType, health, hosts, lastEventAt, leases, recordEvent, repos, spendingLimits, tasks, threads } from '@openadlc/db';
 import { attachmentsForTask } from './attachment-routes.js';
-import { botAtStart, headerFor, leaseExpiryFrom, maxTasksOf, resolveBotRef, type ContextDocument, type Task, type TaskKind } from '@fleetadlc/shared';
+import { botAtStart, headerFor, leaseExpiryFrom, maxTasksOf, resolveBotRef, type ContextDocument, type Task, type TaskKind } from '@openadlc/shared';
 import type { BridgeConfig } from './config.js';
 import type { Context } from './context.js';
 import { effectiveConfig } from './effective-config.js';
@@ -58,7 +58,7 @@ export class HostFullError extends BotBusyError {
       bot,
       1,
       `${bot} was not started: every host is running all the tasks it has room for, and this starts when one ends. ` +
-        'Give the host more with FLEETADLC_HOST_CAPACITY_TASKS, or move it to a larger machine',
+        'Give the host more with OPENADLC_HOST_CAPACITY_TASKS, or move it to a larger machine',
     );
     this.name = 'HostFullError';
   }
@@ -247,7 +247,7 @@ export type SubjectClosed = (repoFullName: string, number: number) => Promise<bo
 /**
  * When a lease put back in task should expire if no pull request is linked to
  * it: as long from now as the dispatcher leases an issue for
- * (`FLEETADLC_LEASE_HOURS`, twelve by default).
+ * (`OPENADLC_LEASE_HOURS`, twelve by default).
  */
 export function leaseHoldUntil(now = new Date()): Date {
   return leaseExpiryFrom(now);
@@ -413,7 +413,7 @@ export class TaskService {
         { row: `seat-paused:${seat.name}`, kind: 'paused', why: seatPausedWords(seat.name, pause), instruction: `Resume it on the Crew page.` },
       ]);
     }
-    if (process.env.FLEETADLC_SCRIPTED_ENGINES === '1') return blocked;
+    if (process.env.OPENADLC_SCRIPTED_ENGINES === '1') return blocked;
     let rows: Awaited<ReturnType<typeof health.listHealth>>;
     try {
       rows = await health.listHealth();
@@ -644,7 +644,7 @@ export class TaskService {
 
   /**
    * A review seat's part, from the review rules: the lead, a blocking seat, or
-   * advisory. It is the session's `FLEETADLC_REVIEW_MODE`, which OpenADLC's `gh`
+   * advisory. It is the session's `OPENADLC_REVIEW_MODE`, which OpenADLC's `gh`
    * holds an advisory seat to (comments only), and what decides whether its
    * task is briefed with the other seats' reviews. Undefined when the rules
    * cannot be read, which holds the seat to nothing more than before.
@@ -833,7 +833,7 @@ export class TaskService {
       await threads.addMessage({
         threadId: thread.id,
         kind: 'sys',
-        author: 'fleetadlc',
+        author: 'openadlc',
         text: `${botAtStart(bot)} started ${input.skill} on ${input.subjectRef}`,
         note: `engine ${bot.engine} · model ${bot.model} · cap $${cap}`,
         payload: { taskId: task.id, skill: input.skill },
@@ -852,7 +852,7 @@ export class TaskService {
         await threads.addMessage({
           threadId: thread.id,
           kind: 'sys',
-          author: 'fleetadlc',
+          author: 'openadlc',
           text: `started past a spending cap (${why}): ${pastCap}`,
         });
         console.warn(`[bridge] ${input.subjectRef}: started past a spending cap by ${by} (${why}): ${pastCap}`);
@@ -907,7 +907,7 @@ export class TaskService {
       if (hostWasFull(error)) {
         await tasks.discardUnstarted(task.id).catch(() => undefined);
         await threads
-          .addMessage({ threadId: thread.id, kind: 'sys', author: 'fleetadlc', text: `${input.skill} waits: every host is running all it has room for` })
+          .addMessage({ threadId: thread.id, kind: 'sys', author: 'openadlc', text: `${input.skill} waits: every host is running all it has room for` })
           .catch(() => undefined);
         throw new HostFullError(bot.name);
       }
@@ -916,7 +916,7 @@ export class TaskService {
       await threads.addMessage({
         threadId: thread.id,
         kind: 'sys',
-        author: 'fleetadlc',
+        author: 'openadlc',
         text: `could not start ${input.skill}: ${message}`,
       });
       return { taskId: task.id, session: null, error: message };
@@ -961,7 +961,7 @@ export class TaskService {
     );
     await tasks.updateTaskState(task.id, 'failed', { exitReason: reason });
     const thread = await threads.ensureThread({ botId: found.id, repoId: repo?.id ?? null, subjectRef: input.subjectRef });
-    await threads.addMessage({ threadId: thread.id, kind: 'sys', author: 'fleetadlc', text: `could not start ${input.skill}: ${reason}` });
+    await threads.addMessage({ threadId: thread.id, kind: 'sys', author: 'openadlc', text: `could not start ${input.skill}: ${reason}` });
     console.warn(`[bridge] ${input.subjectRef}: ${reason}`);
     return { taskId: task.id, session: null, error: reason };
   }
@@ -1070,7 +1070,7 @@ export class TaskService {
       await this.hostd.cleanupTask(task.id, reason).catch(() => undefined);
       await settleLeaseAfter({ ...task, state: 'stopped' });
       const thread = await threads.ensureThread({ botId: task.botId, repoId: task.repoId, subjectRef: task.subjectRef });
-      await threads.addMessage({ threadId: thread.id, kind: 'sys', author: 'fleetadlc', text: `not resumed: ${reason}` });
+      await threads.addMessage({ threadId: thread.id, kind: 'sys', author: 'openadlc', text: `not resumed: ${reason}` });
       return;
     }
 
@@ -1122,7 +1122,7 @@ export class TaskService {
       await threads.addMessage({
         threadId: thread.id,
         kind: 'sys',
-        author: 'fleetadlc',
+        author: 'openadlc',
         text: `could not resume ${task.skill ?? task.kind}: ${message}`,
       });
       throw error;
@@ -1155,7 +1155,7 @@ export class TaskService {
           threads.addMessage({
             threadId: thread.id,
             kind: 'sys',
-            author: 'fleetadlc',
+            author: 'openadlc',
             text: 'answered; it starts again as soon as a host has room — every host is running all the tasks it has room for',
           }),
         )
@@ -1196,7 +1196,7 @@ export class TaskService {
     }
     const bot = await bots.getBotById(task.botId);
     // The scripted engine, `none`, runs only in the integration suites.
-    const scripted = input.engine === 'none' && process.env.FLEETADLC_SCRIPTED_ENGINES === '1';
+    const scripted = input.engine === 'none' && process.env.OPENADLC_SCRIPTED_ENGINES === '1';
     if (!bot || (input.engine !== bot.engine && !scripted)) {
       throw new UsageRefusedError(`engine must be the task's bot's own (${bot?.engine ?? 'its bot is gone'}), not ${input.engine}`);
     }

@@ -1,13 +1,13 @@
-import { acknowledgements, bots, issues, listEventsOfType, mergeLines, modelAccounts, repos, requests, tasks, threads, type HealthRow } from '@fleetadlc/db';
+import { acknowledgements, bots, issues, listEventsOfType, mergeLines, modelAccounts, repos, requests, tasks, threads, type HealthRow } from '@openadlc/db';
 import { rulesFileEditUrl } from './deploy-routes.js';
 import { heldForPerson } from './merge-line.js';
 import { readUnowned } from './unowned-issues.js';
 import { INTAKE_STALLED } from './intake-events.js';
 import { DESIGN_MEMORY_SUPERSEDED } from './design-memory.js';
-import { botInWords, hasIgnoreLabel, roleLabel, STAGE_COLUMN_TITLES, STAGE_KEYS, type StageKey, type BotRole, type Gate, type HealthAction, type HealthSeverity, type TaskKind } from '@fleetadlc/shared';
+import { botInWords, hasIgnoreLabel, roleLabel, STAGE_COLUMN_TITLES, STAGE_KEYS, type StageKey, type BotRole, type Gate, type HealthAction, type HealthSeverity, type TaskKind } from '@openadlc/shared';
 import { botSaid } from './bot-said.js';
 import { NO_PULL_REQUEST, openPullRequestUrl } from './build-left.js';
-import type { GitHubClient } from '@fleetadlc/github';
+import type { GitHubClient } from '@openadlc/github';
 import type { EngineUpdateAttention } from './engine-updates.js';
 import { NO_REASON, explainFailure } from './failure-words.js';
 import { endsWithSubject, subjectClosed, wasRefused } from './gates.js';
@@ -357,7 +357,7 @@ export interface AttentionInput {
    * Promotes the bridge holds for a person (`DeployPipeline`): the rules say a
    * person approves production, and GitHub is not holding a reviewer.
    * `reason` is why this one is held. `fileGoverned` when
-   * `.github/fleetadlc.yml` sets the rules, which only an edit of that file
+   * `.github/openadlc.yml` sets the rules, which only an edit of that file
    * changes.
    */
   heldPromotes?: readonly HeldPromote[];
@@ -377,7 +377,7 @@ export interface AttentionInput {
   closed?: ReadonlySet<string>;
   /**
    * Whether this install deploys merged work to testing (the deprecated
-   * `FLEETADLC_TESTING_URL` is set), for a task with no repository only:
+   * `OPENADLC_TESTING_URL` is set), for a task with no repository only:
    * a task on a repository goes by `shipsByMerging`. The variable is empty on
    * an install whose repositories declare their own testing deploy, and read
    * first it folded every failed QA on a merged pull request into a notice.
@@ -386,7 +386,7 @@ export interface AttentionInput {
   testingDeploy?: boolean;
   /**
    * The repositories, by id, where merging is shipping: no testing deploy in
-   * `.github/fleetadlc.yml` or Settings, or Automatic with no `deploy-testing`
+   * `.github/openadlc.yml` or Settings, or Automatic with no `deploy-testing`
    * workflow (see `deploys.ts`). A deploy or QA task there has nothing to
    * reach once its pull request merged. A repository that could not be told
    * is left out, so its cards stay.
@@ -440,7 +440,7 @@ function withoutRemoved(input: AttentionInput): AttentionInput {
 }
 
 /**
- * The input without the issues labelled `fleetadlc:ignore`, their pull
+ * The input without the issues labelled `openadlc:ignore`, their pull
  * requests, the requests they were filed from, and the tasks and questions on
  * any of them (`ignoredSubjects`). Taken out before anything is folded, so a
  * folded card never counts one; whatever else names one of their subjects is
@@ -526,7 +526,7 @@ const ENDED_UNFINISHED: readonly TaskFacts['state'][] = ['failed', 'stopped'];
  * is no card: one saying it "was stopped before finishing", offering to try
  * again, is what lingered after the stop it records.
  *
- * It begins with `STOPPED_BY_PERSON` in `@fleetadlc/db`'s task store, "stopped by a
+ * It begins with `STOPPED_BY_PERSON` in `@openadlc/db`'s task store, "stopped by a
  * person", so the deploy sweep (`stoppedOnPurpose`) does not start again a
  * deploy a person stopped here either.
  */
@@ -650,7 +650,7 @@ function causeKey(prefix: string, sentence: string, bot: BotRow | undefined, own
 /**
  * Whether a failure's action names the one bot it is for — "Reconnect
  * irisexampleco" — rather than something that clears every bot with the same
- * cause at once — "Sign in again", "Run fleetadlc up". Only the second kind is
+ * cause at once — "Sign in again", "Run openadlc up". Only the second kind is
  * worth lifting to a card that speaks for several bots; the first has to stay
  * with the bot it is about, or the card would offer to fix one and call it done.
  */
@@ -891,7 +891,7 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     const actions: AttentionAction[] = [{ kind: 'promote_release', label: 'Release to production', repo: held.repo, sha: held.sha }];
     actions.push(
       held.fileGoverned
-        ? { kind: 'open_url', label: 'Switch to automatic in .github/fleetadlc.yml', url: rulesFileEditUrl({ fullName: repo.fullName, defaultBranch: repo.defaultBranch ?? 'main' }) }
+        ? { kind: 'open_url', label: 'Switch to automatic in .github/openadlc.yml', url: rulesFileEditUrl({ fullName: repo.fullName, defaultBranch: repo.defaultBranch ?? 'main' }) }
         : { kind: 'promote_automatic', label: 'Switch to automatic delivery', repo: held.repo, sha: held.sha },
     );
     items.push({
@@ -1060,7 +1060,7 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
       subject: subjectOf(key).subject,
       bot: null,
       since: one.at,
-      detail: `It ran ${one.tries} times and left the issue in intake each time, so it stopped trying. Answer what it asked on the issue, move it on the board yourself, or label it fleetadlc:ignore.`,
+      detail: `It ran ${one.tries} times and left the issue in intake each time, so it stopped trying. Answer what it asked on the issue, move it on the board yourself, or label it openadlc:ignore.`,
       actions: issue.url ? [{ kind: 'open_url', label: 'Open the issue', url: issue.url }] : [],
     });
   }

@@ -16,8 +16,8 @@ const seat = (slot: string, role: string, roleLabel: string, group: 'crew' | 're
 
 const GITHUB: GitHubAccountsView = {
   accounts: [
-    { login: 'fleetadlc-builder-acme', url: '', group: null, signIn: 'signed-in', seats: [] },
-    { login: 'fleetadlc-lead-reviewer-acme', url: '', group: null, signIn: 'signed-in', seats: [] },
+    { login: 'openadlc-builder-acme', url: '', group: null, signIn: 'signed-in', seats: [] },
+    { login: 'openadlc-lead-reviewer-acme', url: '', group: null, signIn: 'signed-in', seats: [] },
   ],
   bots: [
     seat('automation', 'automation', 'automation', 'crew'),
@@ -45,8 +45,8 @@ describe('the crew, said in a few lines', () => {
   it('says which account does the work and which approves it, from the accounts named for those seats', () => {
     const { github, unchosen } = summarisePlan(planCrew(GITHUB, null, null, null), GITHUB);
     expect(github).toEqual([
-      { what: 'fleetadlc-builder-acme', part: 'Does the work', seats: ['intake', 'builder', 'automation'] },
-      { what: 'fleetadlc-lead-reviewer-acme', part: 'Approves it', seats: ['lead reviewer', 'second reviewer'] },
+      { what: 'openadlc-builder-acme', part: 'Does the work', seats: ['intake', 'builder', 'automation'] },
+      { what: 'openadlc-lead-reviewer-acme', part: 'Approves it', seats: ['lead reviewer', 'second reviewer'] },
     ]);
     expect(unchosen).toEqual([]);
   });
@@ -96,18 +96,18 @@ describe('a seat that cannot run, or whose models could not be listed', () => {
 
 describe('an account named for a seat', () => {
   it('is that seat’s, by whole words, and not the numbered seat’s after it', () => {
-    expect(loginNamesSeat('fleetadlc-lead-reviewer-acme', 'lead-reviewer')).toBe(true);
-    expect(loginNamesSeat('fleetadlc-builder', 'builder')).toBe(true);
-    expect(loginNamesSeat('fleetadlc-builder-2-acme', 'builder')).toBe(false);
-    expect(loginNamesSeat('fleetadlc-builder-2-acme', 'builder-2')).toBe(true);
-    expect(loginNamesSeat('fleetadlc-second-reviewer', 'reviewer')).toBe(true);
+    expect(loginNamesSeat('openadlc-lead-reviewer-acme', 'lead-reviewer')).toBe(true);
+    expect(loginNamesSeat('openadlc-builder', 'builder')).toBe(true);
+    expect(loginNamesSeat('openadlc-builder-2-acme', 'builder')).toBe(false);
+    expect(loginNamesSeat('openadlc-builder-2-acme', 'builder-2')).toBe(true);
+    expect(loginNamesSeat('openadlc-second-reviewer', 'reviewer')).toBe(true);
     expect(loginNamesSeat('reviewer-tools', 'lead-reviewer')).toBe(false);
   });
 
   it('puts every seat on its own account when there is one per seat, with nothing to choose', () => {
-    const onePerSeat = GITHUB.bots.map((one) => ({ login: `fleetadlc-${one.slot}-acme`, signIn: 'signed-in', group: null }));
+    const onePerSeat = GITHUB.bots.map((one) => ({ login: `openadlc-${one.slot}-acme`, signIn: 'signed-in', group: null }));
     const { byBot } = prefillGitHubAccounts(GITHUB.bots, onePerSeat);
-    expect(byBot).toEqual(Object.fromEntries(GITHUB.bots.map((one) => [one.name, `fleetadlc-${one.slot}-acme`])));
+    expect(byBot).toEqual(Object.fromEntries(GITHUB.bots.map((one) => [one.name, `openadlc-${one.slot}-acme`])));
   });
 
   it('reads an account named for a persona the crew once had as that persona’s seat', () => {
@@ -163,7 +163,7 @@ describe('the table behind the summary', () => {
     const plan = planCrew(GITHUB, crew, [MAX], listings);
     expect(plan.map((seat) => seat.seat)).toEqual(['intake', 'builder', 'lead-reviewer', 'second-reviewer', 'automation']);
     const builder = plan.find((seat) => seat.seat === 'builder')!;
-    expect(builder.login).toBe('fleetadlc-builder-acme');
+    expect(builder.login).toBe('openadlc-builder-acme');
     expect(builder.model).toBe('max|claude-sonnet-5');
     expect(plan.find((seat) => seat.seat === 'automation')!.thinks).toBe(false);
   });

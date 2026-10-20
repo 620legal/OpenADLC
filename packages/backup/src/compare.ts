@@ -1,6 +1,6 @@
-import { settings as settingKeys } from '@fleetadlc/db';
-import { accessTokenRef, appPrivateKeyRef, engineKeyRef, modelAccountRef, refreshTokenRef, registryTokenRef, signingKeyRef, webhookSecretRef } from '@fleetadlc/github';
-import { ENGINES, sameLogin } from '@fleetadlc/shared';
+import { settings as settingKeys } from '@openadlc/db';
+import { accessTokenRef, appPrivateKeyRef, engineKeyRef, modelAccountRef, refreshTokenRef, registryTokenRef, signingKeyRef, webhookSecretRef } from '@openadlc/github';
+import { ENGINES, sameLogin } from '@openadlc/shared';
 import type { ArchivedBot, ArchivedRepository, BackupContents } from './archive.js';
 import {
   archivedSetting,

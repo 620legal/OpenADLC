@@ -39,8 +39,8 @@ function member(partial: Partial<CrewMember> & Pick<CrewMember, 'name'>): CrewMe
 
 function summary(partial: Partial<TaskSummary> & Pick<TaskSummary, 'kind' | 'state'>): TaskSummary {
   return {
-    subjectRef: 'fleetadlc#16',
-    issue: { repo: 'fleetadlc', number: 16, title: 'Let the board filter by label' },
+    subjectRef: 'openadlc#16',
+    issue: { repo: 'openadlc', number: 16, title: 'Let the board filter by label' },
     startedAt: null,
     endedAt: null,
     round: null,
@@ -51,7 +51,7 @@ function summary(partial: Partial<TaskSummary> & Pick<TaskSummary, 'kind' | 'sta
 
 describe('what a bot is doing', () => {
   it('comes from its task, never from the status column nothing updates', () => {
-    const writing = member({ name: 'fleetadlc-atlas-janedoe', status: 'stopped', task: summary({ kind: 'implement', state: 'running', startedAt: minutesAgo(12) }) });
+    const writing = member({ name: 'openadlc-atlas-janedoe', status: 'stopped', task: summary({ kind: 'implement', state: 'running', startedAt: minutesAgo(12) }) });
     expect(crewState(writing)).toBe('working');
     expect(nowLine(writing, NOW)).toBe('Writing #16 · 12 min');
 
@@ -64,7 +64,7 @@ describe('what a bot is doing', () => {
       name: 'ottoexampleco',
       slot: 'intake',
       role: 'intake',
-      task: summary({ kind: 'intake', state: 'paused', subjectRef: 'fleetadlc#15', issue: { repo: 'fleetadlc', number: 15, title: 'x' }, waitingOnYou: true }),
+      task: summary({ kind: 'intake', state: 'paused', subjectRef: 'openadlc#15', issue: { repo: 'openadlc', number: 15, title: 'x' }, waitingOnYou: true }),
     });
     expect(crewState(asking)).toBe('waiting');
     expect(nowLine(asking, NOW)).toBe('Asked you about #15');
@@ -73,7 +73,7 @@ describe('what a bot is doing', () => {
       name: 'tessexampleco',
       slot: 'sre',
       role: 'deploy',
-      task: summary({ kind: 'deploy', state: 'paused', subjectRef: 'fleetadlc#33', issue: { repo: 'fleetadlc', number: 14, title: 'x' }, waitingOnYou: true, approval: true }),
+      task: summary({ kind: 'deploy', state: 'paused', subjectRef: 'openadlc#33', issue: { repo: 'openadlc', number: 14, title: 'x' }, waitingOnYou: true, approval: true }),
     });
     expect(crewState(shipping)).toBe('waiting');
     expect(nowLine(shipping, NOW)).toBe('Asked you about #14');
@@ -84,7 +84,7 @@ describe('what a bot is doing', () => {
       name: 'irisexampleco',
       slot: 'second-reviewer',
       role: 'review_second',
-      task: summary({ kind: 'review', state: 'running', subjectRef: 'fleetadlc#31', issue: { repo: 'fleetadlc', number: 12, title: 'x' }, round: 2 }),
+      task: summary({ kind: 'review', state: 'running', subjectRef: 'openadlc#31', issue: { repo: 'openadlc', number: 12, title: 'x' }, round: 2 }),
     });
     expect(nowLine(reviewing, NOW)).toBe('Reviewing #12 · round 2');
 
@@ -92,7 +92,7 @@ describe('what a bot is doing', () => {
       name: 'noraexampleco',
       slot: 'lead-reviewer',
       role: 'review_lead',
-      lastTask: summary({ kind: 'review', state: 'done', issue: { repo: 'fleetadlc', number: 12, title: 'x' }, endedAt: minutesAgo(120) }),
+      lastTask: summary({ kind: 'review', state: 'done', issue: { repo: 'openadlc', number: 12, title: 'x' }, endedAt: minutesAgo(120) }),
     });
     expect(nowLine(reviewed, NOW)).toBe('Reviewed #12 2 hours ago');
 
@@ -106,7 +106,7 @@ describe('what a bot is doing', () => {
     expect(crewState(unconnected)).toBe('not-connected');
     expect(nowLine(unconnected, NOW)).toBe('Cannot work until its account is connected');
 
-    const flow = member({ name: 'janedoe-fleetadlc-flow', slot: 'automation', role: 'automation', engine: 'none', model: 'none' });
+    const flow = member({ name: 'janedoe-openadlc-flow', slot: 'automation', role: 'automation', engine: 'none', model: 'none' });
     expect(crewState(flow)).toBe('on-duty');
     expect(nowLine(flow, NOW)).toBe('Labels issues and sets the review gate');
     expect(thinksWith(flow, [])).toBe('No model, by design');
@@ -133,9 +133,9 @@ describe('what a bot spent this month', () => {
 
 describe('the header’s line about the crew', () => {
   const crew = [
-    member({ name: 'fleetadlc-atlas-janedoe', task: summary({ kind: 'implement', state: 'running' }) }),
+    member({ name: 'openadlc-atlas-janedoe', task: summary({ kind: 'implement', state: 'running' }) }),
     member({ name: 'irisexampleco', slot: 'second-reviewer', role: 'review_second' }),
-    member({ name: 'janedoe-fleetadlc-flow', slot: 'automation', role: 'automation', engine: 'none' }),
+    member({ name: 'janedoe-openadlc-flow', slot: 'automation', role: 'automation', engine: 'none' }),
   ];
 
   it('counts who is working and who is idle while anything is working', () => {
@@ -152,10 +152,10 @@ describe('the header’s line about the crew', () => {
 
   it('counts the bots whose GitHub sign-in was revoked or expired, or that the sign-in check fails, as needing reconnecting', () => {
     const lost = [
-      member({ name: 'fleetadlc-atlas-janedoe', authorization: 'revoked' }),
+      member({ name: 'openadlc-atlas-janedoe', authorization: 'revoked' }),
       member({ name: 'irisexampleco', slot: 'second-reviewer', role: 'review_second', authorization: 'expired' }),
       member({ name: 'noraexampleco', slot: 'lead-reviewer', role: 'review_lead', checks: [{ id: 'bot-sign-in', title: 'cannot sign in', severity: 'blocking' }] }),
-      member({ name: 'janedoe-fleetadlc-flow', slot: 'automation', role: 'automation', engine: 'none' }),
+      member({ name: 'janedoe-openadlc-flow', slot: 'automation', role: 'automation', engine: 'none' }),
     ];
     expect(crewCounts(lost)).toMatchObject({ total: 4, connected: 4, needsReconnecting: 3 });
   });
@@ -170,7 +170,7 @@ describe('the header’s line about the crew', () => {
     expect(crewLine(crewCounts(nine))).toBe('7 ready · 2 need attention');
     expect(crewState(nine[7]!)).toBe('attention');
 
-    const working = [...nine.slice(0, 6), member({ name: 'fleetadlc-atlas-janedoe', task: summary({ kind: 'implement', state: 'running' }) }), ...nine.slice(7)];
+    const working = [...nine.slice(0, 6), member({ name: 'openadlc-atlas-janedoe', task: summary({ kind: 'implement', state: 'running' }) }), ...nine.slice(7)];
     expect(crewLine(crewCounts(working))).toBe('1 working · 6 idle · 2 need attention');
     expect(crewLine(crewCounts(nine.slice(0, 8)))).toBe('7 ready · 1 needs attention');
   });
@@ -193,10 +193,10 @@ describe('the header’s line about the crew', () => {
 describe('a bot’s avatar', () => {
   it('takes two letters from its handle, the last two parts of a long one', () => {
     expect(initials({ name: 'ottoexampleco', slot: 'intake', role: 'intake' })).toBe('OT');
-    expect(initials({ name: 'fleetadlc-atlas', slot: 'system-engineer', role: 'spec' })).toBe('FA');
-    expect(initials({ name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement' })).toBe('AJ');
-    expect(initials({ name: 'janedoe-fleetadlc-flow', slot: 'automation', role: 'automation' })).toBe('FF');
-    expect(initials({ name: 'fleetadlc-cipher-janedoe', slot: 'security-reviewer', role: 'review_security' })).toBe('CJ');
+    expect(initials({ name: 'openadlc-atlas', slot: 'system-engineer', role: 'spec' })).toBe('OA');
+    expect(initials({ name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement' })).toBe('AJ');
+    expect(initials({ name: 'janedoe-openadlc-flow', slot: 'automation', role: 'automation' })).toBe('OF');
+    expect(initials({ name: 'openadlc-cipher-janedoe', slot: 'security-reviewer', role: 'review_security' })).toBe('CJ');
   });
 
   it('takes its role’s letters before an account connects, never its seat’s', () => {

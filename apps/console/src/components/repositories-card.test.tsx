@@ -75,7 +75,7 @@ describe('whether the crew can work in each repository, in settings', () => {
                 need: 'make-public',
                 title: 'The OpenADLC app is private to janedoe',
                 detail: 'GitHub installs a private app only on the account that owns it, so it cannot go on exampleco yet.',
-                action: { label: 'Make the app public', url: 'https://github.com/settings/apps/fleetadlc-janedoe/advanced' },
+                action: { label: 'Make the app public', url: 'https://github.com/settings/apps/openadlc-janedoe/advanced' },
                 steps: [],
               },
             }),
@@ -87,7 +87,7 @@ describe('whether the crew can work in each repository, in settings', () => {
     expect(rows(waiting)).toEqual([
       'infra | The OpenADLC app is private to janedoe | GitHub installs a private app only on the account that owns it, so it cannot go on exampleco yet. | Make the app public',
     ]);
-    expect(waiting).toMatch(/<a href="https:\/\/github.com\/settings\/apps\/fleetadlc-janedoe\/advanced" target="_blank"[^>]*>Make the app public/);
+    expect(waiting).toMatch(/<a href="https:\/\/github.com\/settings\/apps\/openadlc-janedoe\/advanced" target="_blank"[^>]*>Make the app public/);
     expect(waiting).not.toContain('Try again');
     expect(waiting).not.toContain('404');
   });

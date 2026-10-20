@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { internalSecretRef, modelAccountRef, engineKeyRef, taskTokenFor, type SecretStore } from '@fleetadlc/github';
+import { internalSecretRef, modelAccountRef, engineKeyRef, taskTokenFor, type SecretStore } from '@openadlc/github';
 import {
   SessionEnvMinter,
   hostSigningAgent,
@@ -54,7 +54,7 @@ function input(bot: string, engine = 'claude'): SessionEnvInput {
     databaseUrl: null,
     declaredPaths: [],
     repoFullName: null,
-    subjectRef: 'janedoe/FleetADLC#154',
+    subjectRef: 'janedoe/OpenADLC#154',
   };
 }
 
@@ -68,7 +68,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('what a session gives fleetadlc-install', () => {
+describe('what a session gives openadlc-install', () => {
   it('is the task’s own token, and the registry flag only when hostd names a registry', async () => {
     const store = memory({ [modelAccountRef(ACCOUNT)]: SECRET, [internalSecretRef()]: 'install-secret' });
     const minter = new SessionEnvMinter(store, assigned('key'));
@@ -76,17 +76,17 @@ describe('what a session gives fleetadlc-install', () => {
     const configured = await minter.mint({ ...input('atlas'), registryConfigured: true });
     const plain = await minter.mint(input('atlas'));
 
-    expect(configured.env.FLEETADLC_TASK_TOKEN).toBe(taskTokenFor('task-atlas', 'install-secret'));
-    expect(await minter.taskToken('task-atlas')).toBe(configured.env.FLEETADLC_TASK_TOKEN);
-    expect(configured.env.FLEETADLC_REGISTRY_CONFIGURED).toBe('1');
-    expect(plain.env).not.toHaveProperty('FLEETADLC_REGISTRY_CONFIGURED');
+    expect(configured.env.OPENADLC_TASK_TOKEN).toBe(taskTokenFor('task-atlas', 'install-secret'));
+    expect(await minter.taskToken('task-atlas')).toBe(configured.env.OPENADLC_TASK_TOKEN);
+    expect(configured.env.OPENADLC_REGISTRY_CONFIGURED).toBe('1');
+    expect(plain.env).not.toHaveProperty('OPENADLC_REGISTRY_CONFIGURED');
   });
 });
 
 describe('a task environment and where its key comes from', () => {
-  it('names the cost cap as it names every other session variable, under FLEETADLC_', async () => {
+  it('names the cost cap as it names every other session variable, under OPENADLC_', async () => {
     const minted = await new SessionEnvMinter(memory({ [modelAccountRef(ACCOUNT)]: SECRET }), assigned('key')).mint(input('atlas'));
-    expect(minted.env.FLEETADLC_TASK_COST_CAP_USD).toBe('15');
+    expect(minted.env.OPENADLC_TASK_COST_CAP_USD).toBe('15');
     expect(minted.env).not.toHaveProperty('TASK_COST_CAP_USD');
     await minted.cleanup();
   });
@@ -209,7 +209,7 @@ describe('a task environment and where its key comes from', () => {
     await minted.cleanup();
   });
 
-  it('puts the resolved id in FLEETADLC_MODEL and the alias in its own variable', async () => {
+  it('puts the resolved id in OPENADLC_MODEL and the alias in its own variable', async () => {
     const store = memory();
     const minted = await new SessionEnvMinter(store, none).mint({
       ...input('atlas'),
@@ -217,9 +217,9 @@ describe('a task environment and where its key comes from', () => {
       modelAlias: 'newest:opus',
     });
 
-    expect(minted.env.FLEETADLC_MODEL).toBe('claude-opus-5');
-    expect(minted.env.FLEETADLC_MODEL_ALIAS).toBe('newest:opus');
-    expect(minted.env.FLEETADLC_MODEL).not.toMatch(/^newest:/);
+    expect(minted.env.OPENADLC_MODEL).toBe('claude-opus-5');
+    expect(minted.env.OPENADLC_MODEL_ALIAS).toBe('newest:opus');
+    expect(minted.env.OPENADLC_MODEL).not.toMatch(/^newest:/);
     await minted.cleanup();
   });
 
@@ -231,12 +231,12 @@ describe('a task environment and where its key comes from', () => {
     const override = { 'gpt-5-codex': { inPerMtok: 250, outPerMtok: 10 } };
 
     const priced = await minter.mint({ ...input('quill', 'codex'), modelPrices: override });
-    expect(JSON.parse(priced.env.FLEETADLC_MODEL_PRICES ?? '')).toEqual(override);
-    expect(priced.env.FLEETADLC_CONFIG_ROOT).toBeUndefined();
+    expect(JSON.parse(priced.env.OPENADLC_MODEL_PRICES ?? '')).toEqual(override);
+    expect(priced.env.OPENADLC_CONFIG_ROOT).toBeUndefined();
     await priced.cleanup();
 
     const plain = await minter.mint({ ...input('quill', 'codex'), modelPrices: {} });
-    expect('FLEETADLC_MODEL_PRICES' in plain.env).toBe(false);
+    expect('OPENADLC_MODEL_PRICES' in plain.env).toBe(false);
     await plain.cleanup();
   });
 });
@@ -244,7 +244,7 @@ describe('a task environment and where its key comes from', () => {
 describe('a subscription, signed in once and shared by every bot on it', () => {
   const TOKEN = 'sk-ant-oat01-the-token-setup-token-printed';
   const SEAT = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
-  const MOUNTED = () => '/fleetadlc/login';
+  const MOUNTED = () => '/openadlc/login';
   const saved = { ...process.env };
 
   afterEach(() => {
@@ -302,7 +302,7 @@ describe('a subscription, signed in once and shared by every bot on it', () => {
     const quill = await minter.mint(input('quill', 'codex'));
     const cipher = await minter.mint(input('cipher', 'codex'));
 
-    expect(quill.env.CODEX_HOME).toBe('/fleetadlc/login');
+    expect(quill.env.CODEX_HOME).toBe('/openadlc/login');
     expect(cipher.env.CODEX_HOME).toBe(quill.env.CODEX_HOME);
     expect(quill.env).not.toHaveProperty('GROK_AUTH_PATH');
     expect(quill.env).not.toHaveProperty('OPENAI_API_KEY');
@@ -316,8 +316,8 @@ describe('a subscription, signed in once and shared by every bot on it', () => {
 
     const minted = await new SessionEnvMinter(memory(), seat, MOUNTED).mint(input('lens', 'grok'));
 
-    expect(minted.env.GROK_HOME).toBe('/fleetadlc/login');
-    expect(minted.env.GROK_AUTH_PATH).toBe('/fleetadlc/auth/auth.json');
+    expect(minted.env.GROK_HOME).toBe('/openadlc/login');
+    expect(minted.env.GROK_AUTH_PATH).toBe('/openadlc/auth/auth.json');
     expect(minted.env).not.toHaveProperty('XAI_API_KEY');
     expect(minted.env).not.toHaveProperty('CODEX_HOME');
     await minted.cleanup();
@@ -326,21 +326,21 @@ describe('a subscription, signed in once and shared by every bot on it', () => {
   it('does not set GROK_AUTH_PATH when the home is the account directory on the host', async () => {
     const seat = async () => ({ id: SEAT, provider: 'xai' as const, kind: 'subscription' as const });
 
-    const minted = await new SessionEnvMinter(memory(), seat, (accountId) => `/home/op/.fleetadlc/logins/${accountId}`).mint(input('lens', 'grok'));
+    const minted = await new SessionEnvMinter(memory(), seat, (accountId) => `/home/op/.openadlc/logins/${accountId}`).mint(input('lens', 'grok'));
 
-    expect(minted.env.GROK_HOME).toBe(`/home/op/.fleetadlc/logins/${SEAT}`);
+    expect(minted.env.GROK_HOME).toBe(`/home/op/.openadlc/logins/${SEAT}`);
     expect(minted.env).not.toHaveProperty('GROK_AUTH_PATH');
     await minted.cleanup();
   });
 
   it('asks the driver where the login is, so a host session gets the directory itself', async () => {
     const seat = async () => ({ id: SEAT, provider: 'openai' as const, kind: 'subscription' as const });
-    const locate = vi.fn((accountId: string) => `/home/op/.fleetadlc/logins/${accountId}`);
+    const locate = vi.fn((accountId: string) => `/home/op/.openadlc/logins/${accountId}`);
 
     const minted = await new SessionEnvMinter(memory(), seat, locate).mint(input('quill', 'codex'));
 
     expect(locate).toHaveBeenCalledWith(SEAT);
-    expect(minted.env.CODEX_HOME).toBe(`/home/op/.fleetadlc/logins/${SEAT}`);
+    expect(minted.env.CODEX_HOME).toBe(`/home/op/.openadlc/logins/${SEAT}`);
     await minted.cleanup();
   });
 
@@ -410,7 +410,7 @@ describe('a per-bot key another provider issued', () => {
 });
 
 describe('pushing', () => {
-  // The builder of fleetadlc-testbed#4 found mid-task that a plain `git push` had
+  // The builder of openadlc-testbed#4 found mid-task that a plain `git push` had
   // no credentials, and ran `gh auth setup-git`, which writes the helper into
   // the container's own configuration for good.
   it('lets git ask gh for the token the session holds, in the environment and nowhere else', async () => {
@@ -433,28 +433,28 @@ describe('pushing', () => {
 });
 
 describe('a review task’s part', () => {
-  it('is in the session as FLEETADLC_REVIEW_MODE, which OpenADLC’s gh holds an advisory seat to', async () => {
+  it('is in the session as OPENADLC_REVIEW_MODE, which OpenADLC’s gh holds an advisory seat to', async () => {
     const store = memory({ [modelAccountRef(ACCOUNT)]: SECRET });
     const minter = new SessionEnvMinter(store, assigned('key'));
 
     const advisory = await minter.mint({ ...input('iris'), skill: 'pr-review', reviewMode: 'advisory' });
     const builder = await minter.mint(input('atlas'));
 
-    expect(advisory.env.FLEETADLC_REVIEW_MODE).toBe('advisory');
-    expect(builder.env).not.toHaveProperty('FLEETADLC_REVIEW_MODE');
+    expect(advisory.env.OPENADLC_REVIEW_MODE).toBe('advisory');
+    expect(builder.env).not.toHaveProperty('OPENADLC_REVIEW_MODE');
     await advisory.cleanup();
     await builder.cleanup();
   });
 
-  it('comes with its lens as FLEETADLC_REVIEW_LENS, which the brief states', async () => {
+  it('comes with its lens as OPENADLC_REVIEW_LENS, which the brief states', async () => {
     const store = memory({ [modelAccountRef(ACCOUNT)]: SECRET });
     const minter = new SessionEnvMinter(store, assigned('key'));
 
     const security = await minter.mint({ ...input('iris'), skill: 'pr-review', reviewMode: 'blocking', reviewLens: 'security' });
     const builder = await minter.mint(input('atlas'));
 
-    expect(security.env.FLEETADLC_REVIEW_LENS).toBe('security');
-    expect(builder.env).not.toHaveProperty('FLEETADLC_REVIEW_LENS');
+    expect(security.env.OPENADLC_REVIEW_LENS).toBe('security');
+    expect(builder.env).not.toHaveProperty('OPENADLC_REVIEW_LENS');
     await security.cleanup();
     await builder.cleanup();
   });
@@ -468,7 +468,7 @@ const hasSshAgent = spawnSync('ssh-agent', ['-k'], { stdio: 'ignore', env: { PAT
 
 describe.runIf(hasSshAgent)('the signing agent a task on the host gets', () => {
   const agentsOf = (bot: string): string =>
-    spawnSync('pgrep', ['-f', `fleetadlc-agent-${bot}-`], { encoding: 'utf8' }).stdout.trim();
+    spawnSync('pgrep', ['-f', `openadlc-agent-${bot}-`], { encoding: 'utf8' }).stdout.trim();
   let keyDir: string;
   let decoy: ReturnType<typeof spawn> | null = null;
   const savedPid = process.env.SSH_AGENT_PID;
@@ -482,13 +482,13 @@ describe.runIf(hasSshAgent)('the signing agent a task on the host gets', () => {
   });
 
   function privateKey(): string {
-    keyDir = mkdtempSync(join(tmpdir(), 'fleetadlc-signing-key-'));
+    keyDir = mkdtempSync(join(tmpdir(), 'openadlc-signing-key-'));
     execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', 'atlas', '-f', join(keyDir, 'key')]);
     return readFileSync(join(keyDir, 'key'), 'utf8');
   }
 
   it('stops its own agent when the task ends, and not the one hostd’s environment names', async () => {
-    // The operator's own agent, as hostd inherits it from the shell that ran `fleetadlc up`.
+    // The operator's own agent, as hostd inherits it from the shell that ran `openadlc up`.
     decoy = spawn('sleep', ['60'], { stdio: 'ignore' });
     process.env.SSH_AGENT_PID = String(decoy.pid);
     const bot = `keytest${process.pid}`;

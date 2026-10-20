@@ -30,7 +30,7 @@ function world(
   const deps: UnownedRouteDeps = {
     repo: async (name) => (name === REPO.name ? REPO : null),
     github: async () => client,
-    automationName: async () => 'fleetadlc-flow',
+    automationName: async () => 'openadlc-flow',
     learn: vi.fn(async (_repo, issue) => void calls.push(`intake #${issue.number}`)),
     audit: vi.fn(async () => undefined),
     forget: async (_repo, numbers) => void forgotten.push(...numbers),
@@ -62,7 +62,7 @@ describe('a person’s decision about issues OpenADLC will not take on its own',
 
     expect(answer.status).toBe(503);
     expect(JSON.stringify(answer.body)).toContain(
-      'fleetadlc-flow is not connected to GitHub, so GitHub cannot be asked. Run: fleetadlc auth login --bot fleetadlc-flow',
+      'openadlc-flow is not connected to GitHub, so GitHub cannot be asked. Run: openadlc auth login --bot openadlc-flow',
     );
   });
 
@@ -83,7 +83,7 @@ describe('a person’s decision about issues OpenADLC will not take on its own',
   it('marks them to ignore, or closes them as not planned with a comment', async () => {
     const ignore = world();
     await post(ignore.router, '/v1/repos/testbed/unowned/ignore', { numbers: [3] });
-    expect(ignore.calls).toEqual(['label #3 fleetadlc:ignore']);
+    expect(ignore.calls).toEqual(['label #3 openadlc:ignore']);
 
     const close = world();
     const answer = await post(close.router, '/v1/repos/testbed/unowned/close', { numbers: [7], reason: 'a leftover' });
@@ -94,18 +94,18 @@ describe('a person’s decision about issues OpenADLC will not take on its own',
 
   it('posts the reason for closing with no live marker in it', async () => {
     const { router, deps } = world();
-    await post(router, '/v1/repos/testbed/unowned/close', { numbers: [7], reason: 'spam <!-- fleetadlc-seat:designer -->' });
+    await post(router, '/v1/repos/testbed/unowned/close', { numbers: [7], reason: 'spam <!-- openadlc-seat:designer -->' });
 
     const client = (await deps.github(REPO as never)) as UnownedGitHub;
     const body = String(vi.mocked(client.comment).mock.calls[0]?.[2]);
-    expect(body).toContain('spam &lt;!-- fleetadlc-seat:designer -->');
+    expect(body).toContain('spam &lt;!-- openadlc-seat:designer -->');
     expect(body).not.toContain('<!--');
   });
 
   // Behind IAP the identity is the person's email, and a comment is public.
   it('names the person who closed it by name, never by address', async () => {
     const { router, deps } = world();
-    await post(router, '/v1/repos/testbed/unowned/close', { numbers: [7] }, { 'x-fleetadlc-identity': 'jane@example.com' });
+    await post(router, '/v1/repos/testbed/unowned/close', { numbers: [7] }, { 'x-openadlc-identity': 'jane@example.com' });
 
     const client = (await deps.github(REPO as never)) as UnownedGitHub;
     const body = String(vi.mocked(client.comment).mock.calls[0]?.[2]);
@@ -113,8 +113,8 @@ describe('a person’s decision about issues OpenADLC will not take on its own',
     expect(body).not.toContain('@example.com');
   });
 
-  it('acts on none that is a pull request, or that a stage or fleetadlc:ignore has reached since the list was read', async () => {
-    const now = { 4: { pullRequest: true }, 5: { labels: ['adlc:build'] }, 6: { labels: ['fleetadlc:ignore'] } };
+  it('acts on none that is a pull request, or that a stage or openadlc:ignore has reached since the list was read', async () => {
+    const now = { 4: { pullRequest: true }, 5: { labels: ['adlc:build'] }, 6: { labels: ['openadlc:ignore'] } };
     for (const action of ['intake', 'ignore', 'close']) {
       const { router, calls } = world({}, [], now);
       const answer = await post(router, `/v1/repos/testbed/unowned/${action}`, { numbers: action === 'intake' ? [4, 5, 6] : [4, 5] });
@@ -122,7 +122,7 @@ describe('a person’s decision about issues OpenADLC will not take on its own',
       expect((answer.body.notDone as { why: string }[]).map((one) => one.why), action).toEqual([
         'it is a pull request, not an issue',
         'it is in build already, so it is OpenADLC’s work now',
-        ...(action === 'intake' ? ['it is labelled fleetadlc:ignore, which keeps it from intake'] : []),
+        ...(action === 'intake' ? ['it is labelled openadlc:ignore, which keeps it from intake'] : []),
       ]);
     }
   });

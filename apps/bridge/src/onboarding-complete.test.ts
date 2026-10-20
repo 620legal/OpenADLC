@@ -15,7 +15,7 @@ const world = vi.hoisted(() => ({
   asked: [] as string[],
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async () => undefined),
   bots: { listBots: vi.fn(async () => world.crew.map((bot) => ({ ...bot }))) },
   credentials: { getCredential: vi.fn(async (id: string) => ({ githubLogin: id, status: 'active', secretRef: id, scopes: [] })) },

@@ -94,7 +94,7 @@ export interface Bot {
   modelAccountId: string | null;
   /**
    * When the model was chosen in the console. Null when it came from
-   * config/bots.yaml, which is what lets `fleetadlc up` apply a YAML edit to a bot
+   * config/bots.yaml, which is what lets `openadlc up` apply a YAML edit to a bot
    * nobody has assigned and leave an assigned one alone.
    */
   modelSetAt: string | null;

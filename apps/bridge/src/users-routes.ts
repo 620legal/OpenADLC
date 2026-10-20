@@ -1,4 +1,4 @@
-import { users as usersStore, UserChangeRefused, type Role, type User } from '@fleetadlc/db';
+import { users as usersStore, UserChangeRefused, type Role, type User } from '@openadlc/db';
 import type { IdentityMode } from './identity.js';
 import type { Roles } from './roles.js';
 import { HttpFailure, type Router } from './router.js';
@@ -69,7 +69,7 @@ export function registerUsersRoutes(router: Router, deps: UsersRouteDeps): void 
 
   router.patch('/v1/users/:email', async ({ params, body, identity }) => {
     const role = roleIn((await body<{ role?: unknown }>()).role);
-    // A local console sends FLEETADLC_IDENTITY, or `console`, on every request
+    // A local console sends OPENADLC_IDENTITY, or `console`, on every request
     // and can send nothing else: demoted, it could never open Settings again,
     // and no other admin could ever sign in to undo it. Behind IAP another
     // admin can, so there the last-admin rule is enough.
@@ -77,8 +77,8 @@ export function registerUsersRoutes(router: Router, deps: UsersRouteDeps): void 
     if (deps.identityMode === 'local' && role === 'user' && usersStore.normalizeEmail(params.email ?? '') === self) {
       throw new HttpFailure(
         409,
-        `${self} is who this console says it is (FLEETADLC_IDENTITY, or console when unset); as a user it could not open ` +
-          `Settings again. Leave it an admin, or set FLEETADLC_IDENTITY to another admin's address and run fleetadlc up first.`,
+        `${self} is who this console says it is (OPENADLC_IDENTITY, or console when unset); as a user it could not open ` +
+          `Settings again. Leave it an admin, or set OPENADLC_IDENTITY to another admin's address and run openadlc up first.`,
         { code: 'self-demote' },
       );
     }

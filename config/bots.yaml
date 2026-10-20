@@ -2,10 +2,10 @@
 #
 # Each entry is a seat: what a bot is for, keyed by `slot`. A bot is its GitHub
 # account, connected with the OAuth device flow from the console or with
-# `fleetadlc auth login --bot <seat>`. Until one connects, the bot is named after its
+# `openadlc auth login --bot <seat>`. Until one connects, the bot is named after its
 # seat; once one does, it is named after that account's handle — lowercased —
 # and its secrets and sessions follow the name (a task's container is named
-# after the task). The seat stays, and it is what `fleetadlc up` finds the row
+# after the task). The seat stays, and it is what `openadlc up` finds the row
 # by. No personal access tokens are used.
 #
 # Seats may share an account. Two are enough: a crew account that intake,
@@ -29,7 +29,7 @@
 # and the review gate hold each bot to its work.
 #
 # `model` is the fresh-install default. The console can replace it, and
-# `fleetadlc up` does not put this file back over that assignment. A value is
+# `openadlc up` does not put this file back over that assignment. A value is
 # either a pinned id (`claude-sonnet-5`) or a floating family (`newest:opus`).
 # A family is resolved against the bot's account when a task starts, and the
 # ledger records the id that was called — never the alias. A pinned id the
@@ -48,14 +48,14 @@
 # is the thing that actually stops spend.
 #
 # `cpus` and `memoryGb` are what each of the seat's task computers is given
-# under the docker driver, written to the row at every `fleetadlc up`. They were
+# under the docker driver, written to the row at every `openadlc up`. They were
 # read and dropped, so every container ran on two CPUs and 4 GB whatever this
 # said.
 #
 # `maxTasks` is how many tasks the seat runs at once, 1 to 16, each in a
 # computer of its own and all as the seat's one GitHub account. Left out, the
 # row keeps what it has — 1 for a new seat, or what a person set in Crew →
-# "tasks at once" — so a console change survives `fleetadlc up`; written here,
+# "tasks at once" — so a console change survives `openadlc up`; written here,
 # the file wins at every start. Keep it at 1 on a seat whose account is an
 # OpenAI or xAI subscription: that CLI keeps one sign-in and refreshes it as it
 # works, and two tasks refreshing one sign-in at once is not known to be safe.
@@ -113,7 +113,7 @@ bots:
   # check on declared paths. The dispatcher staffs a repository from the owner
   # first, then every other bot with its role. A second builder seat is still
   # how a repository gets a second account — Settings → Crew → "Add a builder"
-  # adds `builder-2`, then `builder-3`, to a running install, and `fleetadlc up`
+  # adds `builder-2`, then `builder-3`, to a running install, and `openadlc up`
   # keeps a seat added that way — or it can be declared here, as below.
   #
   # - slot: builder-2

@@ -1,24 +1,24 @@
-# @fleetadlc/db
+# @openadlc/db
 
-`fleetadlc_db` as code: the schema (`migrations/*.sql`), the runner that applies it,
+`openadlc_db` as code: the schema (`migrations/*.sql`), the runner that applies it,
 the store modules every service reads and writes through, and the program that
 loads `config/` into rows. GitHub stays the system of record for issues, pull
 requests, reviews and labels; these tables hold what GitHub cannot — the bots
 and their hosts, leases, tasks, sessions, threads and gates, the cost ledger and
 budgets, settings, model accounts, health checks, the audit and event logs —
 and the board's copy of GitHub's issues. It is a library with no process of its
-own: the bridge, hostd, the dispatcher, the CLI, `@fleetadlc/backup` and the
+own: the bridge, hostd, the dispatcher, the CLI, `@openadlc/backup` and the
 integration suites import it. The console does not; it asks the bridge.
 
 ## Connecting
 
-- **`DATABASE_URL`**, read when the pool is first used (`src/client.ts`). `fleetadlc
+- **`DATABASE_URL`**, read when the pool is first used (`src/client.ts`). `openadlc
   up` gives each service the URL in `install.json`, whose password is generated
   for that install, so an install's database does not take the fallback used
-  when it is unset, `postgres://fleetadlc:fleetadlc@127.0.0.1:47432/fleetadlc_db`.
+  when it is unset, `postgres://openadlc:openadlc@127.0.0.1:47432/openadlc_db`.
   That fallback reaches a database only where one was started with that
   password, as CI and `tests/scratch.sh` do.
-- **Postgres 16.** `fleetadlc up` runs `pgvector/pgvector:pg16` when nothing
+- **Postgres 16.** `openadlc up` runs `pgvector/pgvector:pg16` when nothing
   answers; CI uses `postgres:16`. The schema needs the `pgcrypto` extension,
   which `0001_init.sql` creates.
 - **Two pools.** `query()`, `queryOne()` and `withTransaction()` use the main
@@ -42,8 +42,8 @@ integration suites import it. The console does not; it asks the bridge.
   (.github/CONTRIBUTING.md), so a change is a new file with the next number.
 - **A migration's comments describe the design when it was written.** Those
   before 0027 were written when the project was called Fleet: read Fleet as
-  OpenADLC, `fleet …` as `fleetadlc …`, `FLEET_*` as `FLEETADLC_*`, and
-  `~/.fleet` as `$FLEETADLC_HOME`. Some designs have moved on since: 0003 says branch
+  OpenADLC, `fleet …` as `openadlc …`, `FLEET_*` as `OPENADLC_*`, and
+  `~/.fleet` as `$OPENADLC_HOME`. Some designs have moved on since: 0003 says branch
   protection lands a pull request, and the merge line now lands it itself, as
   the app (`apps/bridge/src/merge-line.ts`). Numbers were reserved while
   changes were developed side by side, so the notes in 0021, 0031 and 0035
@@ -53,8 +53,8 @@ integration suites import it. The console does not; it asks the bridge.
   `config/repos.yaml` into `repos`; and the month's budget from
   `config/costs.yaml`. `--scripted-board` adds the integration suites'
   stand-in repository and a board with a card in every column.
-- **Who runs them.** `fleetadlc up` runs `dist/cli/migrate.js`, then
-  `dist/cli/seed.js` unless `--no-seed`; `fleetadlc seed` runs the seed; `make migrate`
+- **Who runs them.** `openadlc up` runs `dist/cli/migrate.js`, then
+  `dist/cli/seed.js` unless `--no-seed`; `openadlc seed` runs the seed; `make migrate`
   runs the migrations, and skips without `DATABASE_URL`; the root's
   `pnpm db:migrate` and `pnpm db:seed` run the sources with `tsx`.
 
@@ -62,7 +62,7 @@ integration suites import it. The console does not; it asks the bridge.
 
 - `src/index.ts` — the exports: each store as a namespace (`bots`, `issues`, `tasks`…), and the audit and event functions.
 - `src/client.ts` — the two pools, `query`, `queryOne`, `withTransaction`, `withAdvisoryLock`, `waitForDatabase`.
-- `src/migrate.ts`, `src/cli/migrate.ts` — the runner, and the program `fleetadlc up` runs.
+- `src/migrate.ts`, `src/cli/migrate.ts` — the runner, and the program `openadlc up` runs.
 - `src/cli/seed.ts`, `src/cli/seed-crew.ts` — the seed, and the crew loop it runs, seat by seat.
 - `src/cli/scripted-board.ts`, `src/cli/scripted-repo.ts` — the suites' stand-in repository and board.
 - `src/store/bots.ts` — bots by name, seat and id; model assignments; the row half of a rename.
@@ -79,15 +79,15 @@ integration suites import it. The console does not; it asks the bridge.
 ## Testing
 
 ```bash
-pnpm --filter @fleetadlc/db test                                          # every src/**/*.test.ts
-pnpm --filter @fleetadlc/db exec vitest run src/store/issues.test.ts -t "breaks a tie on priority"   # by name
-pnpm --filter @fleetadlc/db build                                         # tsc; every consumer imports dist/
+pnpm --filter @openadlc/db test                                          # every src/**/*.test.ts
+pnpm --filter @openadlc/db exec vitest run src/store/issues.test.ts -t "breaks a tie on priority"   # by name
+pnpm --filter @openadlc/db build                                         # tsc; every consumer imports dist/
 ```
 
 - **No database.** Store tests mock `../client.js` and check the SQL each
   function sends and what it makes of the rows it gets back;
   `migrations.test.ts` reads the SQL files themselves.
-- **Consumers read `dist/`.** After changing a store, `pnpm --filter @fleetadlc/db build`
+- **Consumers read `dist/`.** After changing a store, `pnpm --filter @openadlc/db build`
   (or `pnpm build`) before an app's tests or services see it. vitest does not
   type-check, so build after the last edit.
 - **The default is somebody's install.** `pnpm db:migrate`, `pnpm db:seed`, the

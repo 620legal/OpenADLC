@@ -13,7 +13,7 @@ const store = vi.hoisted(() => ({
   askedAgain: [] as { at: string; payload: Record<string, string> }[],
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   // No host has registered: room is not counted (`hosts.taskRoom`).
   hosts: { taskRoom: vi.fn(async () => null) },
   audit: vi.fn(async () => undefined),
@@ -77,7 +77,7 @@ vi.mock('@fleetadlc/db', () => ({
   },
 }));
 
-import { audit, costs, hosts, leases, repos, spendingLimits, tasks, threads } from '@fleetadlc/db';
+import { audit, costs, hosts, leases, repos, spendingLimits, tasks, threads } from '@openadlc/db';
 import type { BridgeConfig } from './config.js';
 import type { Context } from './context.js';
 import type { HostdClient } from './hostd-client.js';
@@ -114,7 +114,7 @@ beforeEach(() => {
     botId: 'bot-1',
     repoId: null,
     kind: 'implement',
-    subjectRef: 'fleetadlc#155',
+    subjectRef: 'openadlc#155',
     skill: 'implement',
   } as never);
 });
@@ -196,18 +196,18 @@ describe('a paused lease when its task ends', () => {
   beforeEach(() => vi.mocked(leases.settlePausedLeases).mockClear());
 
   it.each(['done', 'failed', 'stopped'] as const)('is settled when the task %s, and the reason says so', async (state) => {
-    await settleLeaseAfter({ leaseId: 'lease-78', state, subjectRef: 'fleetadlc#78' });
+    await settleLeaseAfter({ leaseId: 'lease-78', state, subjectRef: 'openadlc#78' });
 
     expect(leases.settlePausedLeases).toHaveBeenCalledWith({
       leaseId: 'lease-78',
       actor: 'bridge',
-      reason: `its task on fleetadlc#78 ${state === 'done' ? 'finished' : state}`,
+      reason: `its task on openadlc#78 ${state === 'done' ? 'finished' : state}`,
       holdUntil: expect.any(Date),
     });
   });
 
   it('is left alone while the task has not ended, or when it had no lease', async () => {
-    await settleLeaseAfter({ leaseId: 'lease-78', state: 'paused', subjectRef: 'fleetadlc#78' });
+    await settleLeaseAfter({ leaseId: 'lease-78', state: 'paused', subjectRef: 'openadlc#78' });
     await settleLeaseAfter({ leaseId: null, state: 'failed', subjectRef: 'request:abc' });
 
     expect(leases.settlePausedLeases).not.toHaveBeenCalled();
@@ -216,7 +216,7 @@ describe('a paused lease when its task ends', () => {
   it('never fails the end of a task: the reconciler sweeps what this misses', async () => {
     vi.mocked(leases.settlePausedLeases).mockRejectedValueOnce(new Error('connection reset'));
 
-    await expect(settleLeaseAfter({ leaseId: 'lease-78', state: 'failed', subjectRef: 'fleetadlc#78' })).resolves.toBeUndefined();
+    await expect(settleLeaseAfter({ leaseId: 'lease-78', state: 'failed', subjectRef: 'openadlc#78' })).resolves.toBeUndefined();
   });
 
   it('is settled when a resume after the answer cannot start, which is how that task ends', async () => {
@@ -225,7 +225,7 @@ describe('a paused lease when its task ends', () => {
       botId: 'bot-1',
       repoId: null,
       kind: 'implement',
-      subjectRef: 'fleetadlc#78',
+      subjectRef: 'openadlc#78',
       skill: 'implement',
       leaseId: 'lease-78',
       state: 'paused',
@@ -234,7 +234,7 @@ describe('a paused lease when its task ends', () => {
 
     await expect(tasksService.resume('task-1')).rejects.toThrow('no model');
 
-    expect(leases.settlePausedLeases).toHaveBeenCalledWith(expect.objectContaining({ leaseId: 'lease-78', reason: 'its task on fleetadlc#78 failed' }));
+    expect(leases.settlePausedLeases).toHaveBeenCalledWith(expect.objectContaining({ leaseId: 'lease-78', reason: 'its task on openadlc#78 failed' }));
   });
 
   it('holds a lease put back in task for as long as the dispatcher leases an issue', () => {
@@ -249,7 +249,7 @@ describe('resuming a task whose plan change was refused', () => {
     botId: 'bot-1',
     repoId: null,
     kind: 'implement',
-    subjectRef: 'fleetadlc#155',
+    subjectRef: 'openadlc#155',
     skill: 'implement',
     state: 'stopped',
     exitReason: 'plan change refused by alexsmith',
@@ -296,11 +296,11 @@ describe('resuming a task whose plan change was refused', () => {
 });
 
 describe('resuming a paused task whose work has already landed', () => {
-  const fleetadlc = { id: 'repo-1', name: 'fleetadlc', fullName: 'acme/fleetadlc' };
-  const paused = { id: 'task-1', botId: 'bot-1', repoId: 'repo-1', kind: 'review', subjectRef: 'fleetadlc#193', skill: 'pr-review', state: 'paused', leaseId: null };
+  const openadlc = { id: 'repo-1', name: 'openadlc', fullName: 'acme/openadlc' };
+  const paused = { id: 'task-1', botId: 'bot-1', repoId: 'repo-1', kind: 'review', subjectRef: 'openadlc#193', skill: 'pr-review', state: 'paused', leaseId: null };
 
   beforeEach(() => {
-    vi.mocked(repos.listRepos).mockImplementation((async () => [fleetadlc]) as never);
+    vi.mocked(repos.listRepos).mockImplementation((async () => [openadlc]) as never);
   });
   afterEach(() => {
     vi.mocked(repos.listRepos).mockImplementation((async () => []) as never);
@@ -315,9 +315,9 @@ describe('resuming a paused task whose work has already landed', () => {
 
     await tasksService.resume('task-1');
 
-    expect(closed).toHaveBeenCalledWith('acme/fleetadlc', 193);
+    expect(closed).toHaveBeenCalledWith('acme/openadlc', 193);
     expect(resumeTask).not.toHaveBeenCalled();
-    expect(tasks.updateTaskState).toHaveBeenCalledWith('task-1', 'stopped', { exitReason: expect.stringMatching(/^already landed: fleetadlc#193 is closed/) });
+    expect(tasks.updateTaskState).toHaveBeenCalledWith('task-1', 'stopped', { exitReason: expect.stringMatching(/^already landed: openadlc#193 is closed/) });
     expect(cleanupTask).toHaveBeenCalledWith('task-1', expect.stringMatching(/^already landed/));
     expect(threads.addMessage).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('not resumed: already landed') }));
   });
@@ -345,7 +345,7 @@ describe('resuming a paused task whose work has already landed', () => {
   });
 
   it('cleans up a task an answer on landed work already ended, without starting it', async () => {
-    vi.mocked(tasks.getTask).mockResolvedValueOnce({ ...paused, state: 'stopped', exitReason: 'already landed: fleetadlc#193 is closed, so the work it was for is finished' } as never);
+    vi.mocked(tasks.getTask).mockResolvedValueOnce({ ...paused, state: 'stopped', exitReason: 'already landed: openadlc#193 is closed, so the work it was for is finished' } as never);
     const resumeTask = vi.fn();
     const cleanupTask = vi.fn(async () => undefined);
 
@@ -397,7 +397,7 @@ describe('resuming a paused task in a repository since removed from OpenADLC', (
 
 describe('a piece of work a person held on the board', () => {
   it('starts nothing new on the issue or its pull request, and says who held it', async () => {
-    store.issues = [{ repoName: 'api', number: 1, prNumber: 2, labels: ['adlc:review', 'fleetadlc:paused'] }];
+    store.issues = [{ repoName: 'api', number: 1, prNumber: 2, labels: ['adlc:review', 'openadlc:paused'] }];
     vi.mocked(repos.getRepoByName).mockResolvedValue({ id: 'repo-api', name: 'api', fullName: 'exampleco/api' } as never);
     const startTask = vi.fn(async () => ({ session: 's', worktree: 'w' }));
     const tasksService = new TaskService(
@@ -621,7 +621,7 @@ describe('the cap a new task starts with', () => {
 });
 
 describe('opening a task on a seat that runs several at once', () => {
-  const OPEN = { bot: 'builder', botId: 'bot-1', kind: 'implement' as const, subjectType: 'issue' as const, subjectRef: 'fleetadlc#7', skill: 'implement' };
+  const OPEN = { bot: 'builder', botId: 'bot-1', kind: 'implement' as const, subjectType: 'issue' as const, subjectRef: 'openadlc#7', skill: 'implement' };
 
   function opener(startTask: HostdClient['startTask'] = vi.fn(async () => ({ session: 's', worktree: 'w' }))) {
     return new TaskService(
@@ -675,7 +675,7 @@ describe('opening a task on a seat that runs several at once', () => {
 
     await expect(refused).rejects.toBeInstanceOf(SubjectBusyError);
     await expect(refused).rejects.toBeInstanceOf(BotBusyError);
-    await expect(refused).rejects.toThrow('builder is already working on fleetadlc#7; it is not started twice');
+    await expect(refused).rejects.toThrow('builder is already working on openadlc#7; it is not started twice');
     expect(tasks.createTask).not.toHaveBeenCalled();
   });
 
@@ -704,7 +704,7 @@ describe('opening a task on a seat that runs several at once', () => {
     const refused = opener().open(OPEN);
 
     await expect(refused).rejects.toBeInstanceOf(HostFullError);
-    await expect(refused).rejects.toThrow(/FLEETADLC_HOST_CAPACITY_TASKS/);
+    await expect(refused).rejects.toThrow(/OPENADLC_HOST_CAPACITY_TASKS/);
     expect(tasks.createTask).not.toHaveBeenCalled();
   });
 
@@ -721,7 +721,7 @@ describe('opening a task on a seat that runs several at once', () => {
   it('keeps a paused task paused when no host has room to resume it, and tries again', async () => {
     vi.useFakeTimers();
     try {
-      vi.mocked(tasks.getTask).mockResolvedValue({ id: 'task-1', botId: 'bot-1', repoId: null, kind: 'implement', subjectRef: 'fleetadlc#7', skill: 'implement', state: 'paused' } as never);
+      vi.mocked(tasks.getTask).mockResolvedValue({ id: 'task-1', botId: 'bot-1', repoId: null, kind: 'implement', subjectRef: 'openadlc#7', skill: 'implement', state: 'paused' } as never);
       const full = Object.assign(new Error('POST /tasks/task-1/resume → 503: all it has room for'), { status: 503 });
       const resumeTask = vi.fn().mockRejectedValueOnce(full).mockResolvedValueOnce({ session: 'builder/implement-task1' });
       const tasksService = service({ resumeTask, cleanupTask: vi.fn(async () => undefined) });
@@ -738,7 +738,7 @@ describe('opening a task on a seat that runs several at once', () => {
 });
 
 describe('a start that breaks between its row and hostd', () => {
-  const OPEN = { bot: 'builder', botId: 'bot-1', kind: 'implement' as const, subjectType: 'issue' as const, subjectRef: 'fleetadlc#7', skill: 'implement' };
+  const OPEN = { bot: 'builder', botId: 'bot-1', kind: 'implement' as const, subjectType: 'issue' as const, subjectRef: 'openadlc#7', skill: 'implement' };
 
   function opener(startTask: HostdClient['startTask'] = vi.fn(async () => ({ session: 's', worktree: 'w' }))) {
     return new TaskService({ costs: { perTaskCapUsd: 5 } } as BridgeConfig, { startTask } as unknown as HostdClient, { forSubject: async () => [] } as unknown as Context);
@@ -792,7 +792,7 @@ describe('a start that breaks between its row and hostd', () => {
 });
 
 describe('a paused task whose question was answered before the bridge restarted', () => {
-  const PAUSED = { id: 'task-1', botId: 'bot-1', repoId: null, kind: 'implement', subjectRef: 'fleetadlc#7', skill: 'implement', state: 'paused' };
+  const PAUSED = { id: 'task-1', botId: 'bot-1', repoId: null, kind: 'implement', subjectRef: 'openadlc#7', skill: 'implement', state: 'paused' };
   const full = () => Object.assign(new Error('POST /tasks/task-1/resume → 503: all it has room for'), { status: 503 });
   const answeredAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
@@ -848,7 +848,7 @@ describe('a paused task whose question was answered before the bridge restarted'
     seatPaused.seatPauses = async () => ({ builder: { by: 'janedoe', at: '2026-10-02T10:00:00Z', why: 'changing its model' } });
     expect(await seatPaused.resumeAnswered()).toEqual([]);
 
-    store.issues = [{ repoName: 'fleetadlc', number: 7, prNumber: null, labels: ['adlc:build', 'fleetadlc:paused'] }];
+    store.issues = [{ repoName: 'openadlc', number: 7, prNumber: null, labels: ['adlc:build', 'openadlc:paused'] }];
     const itemHeld = service({ resumeTask });
     itemHeld.seatPauses = async () => ({});
     expect(await itemHeld.resumeAnswered()).toEqual([]);
@@ -890,18 +890,18 @@ describe('opening a task on a bot that is being renamed', () => {
       botId: 'bot-1',
       kind: 'implement',
       subjectType: 'issue',
-      subjectRef: 'fleetadlc#1',
+      subjectRef: 'openadlc#1',
       skill: 'implement',
     });
     await vi.waitFor(() => expect(held).toHaveBeenCalledWith('bot-1'));
     expect(tasks.createTask).not.toHaveBeenCalled();
 
-    crew[0]!.name = 'fleetadlc-atlas-janedoe';
+    crew[0]!.name = 'openadlc-atlas-janedoe';
     try {
       finishRename();
       await opened;
 
-      expect(startTask).toHaveBeenCalledWith(expect.objectContaining({ bot: 'fleetadlc-atlas-janedoe' }));
+      expect(startTask).toHaveBeenCalledWith(expect.objectContaining({ bot: 'openadlc-atlas-janedoe' }));
     } finally {
       // Every other test opens tasks as `builder`.
       crew[0]!.name = 'builder';
@@ -922,8 +922,8 @@ describe('a bot that must be able to work before a task starts', () => {
     vi.mocked(repos.getRepoByName).mockImplementation((async (name: string) => ({ id: `repo-${name}`, name })) as never);
   });
 
-  const LEAD = { id: 'bot-lead', name: 'fleetadlc-sydney-janedoe', githubLogin: 'fleetadlc-sydney-janedoe' };
-  const SECURITY = { id: 'bot-security', name: 'fleetadlc-cipher-janedoe', githubLogin: 'fleetadlc-cipher-janedoe' };
+  const LEAD = { id: 'bot-lead', name: 'openadlc-sydney-janedoe', githubLogin: 'openadlc-sydney-janedoe' };
+  const SECURITY = { id: 'bot-security', name: 'openadlc-cipher-janedoe', githubLogin: 'openadlc-cipher-janedoe' };
 
   const signedOut = (id: string) => ({
     id: `bot-sign-in:${id}`,
@@ -945,9 +945,9 @@ describe('a bot that must be able to work before a task starts', () => {
   const REVIEW = {
     kind: 'review' as const,
     subjectType: 'pr' as const,
-    subjectRef: 'fleetadlc#2',
+    subjectRef: 'openadlc#2',
     skill: 'pr-review',
-    repo: 'fleetadlc',
+    repo: 'openadlc',
   };
 
   describe('opening a task for a bot that cannot do it yet', () => {
@@ -960,7 +960,7 @@ describe('a bot that must be able to work before a task starts', () => {
       expect(refused).toBeInstanceOf(PrerequisiteNotReadyError);
       expect(refused).toMatchObject({ status: 409 });
       expect((refused as Error).message).toBe(
-        'fleetadlc-cipher-janedoe was not started: fleetadlc-cipher-janedoe cannot sign in to GitHub. Reconnect it from Settings → GitHub → Connected accounts.',
+        'openadlc-cipher-janedoe was not started: openadlc-cipher-janedoe cannot sign in to GitHub. Reconnect it from Settings → GitHub → Connected accounts.',
       );
       expect(tasks.createTask).not.toHaveBeenCalled();
       expect(startTask).not.toHaveBeenCalled();
@@ -976,20 +976,20 @@ describe('a bot that must be able to work before a task starts', () => {
     });
 
     it('is refused for a seat missing from this repository only, not another', async () => {
-      store.health = [{ id: 'bot-access:bot-security:fleetadlc', state: 'failing', title: 'Not in fleetadlc', detail: 'Invite it.' }];
+      store.health = [{ id: 'bot-access:bot-security:openadlc', state: 'failing', title: 'Not in openadlc', detail: 'Invite it.' }];
       const { tasksService } = readyService();
 
       await expect(tasksService.open({ ...REVIEW, bot: SECURITY.name })).rejects.toThrow(
-        'fleetadlc-cipher-janedoe was not started: fleetadlc-cipher-janedoe cannot work in fleetadlc. Invite it.',
+        'openadlc-cipher-janedoe was not started: openadlc-cipher-janedoe cannot work in openadlc. Invite it.',
       );
       await expect(tasksService.open({ ...REVIEW, bot: SECURITY.name, repo: 'other', subjectRef: 'other#2' })).resolves.toBeDefined();
     });
 
     it('is refused for every bot while the host service is not answering', async () => {
-      store.health = [{ id: 'hostd', state: 'failing', title: 'hostd is down', detail: 'Start it with fleetadlc up.' }];
+      store.health = [{ id: 'hostd', state: 'failing', title: 'hostd is down', detail: 'Start it with openadlc up.' }];
       const { tasksService } = readyService();
 
-      await expect(tasksService.open({ ...REVIEW, bot: LEAD.name })).rejects.toThrow(/host service is not answering\. Start it with fleetadlc up\./);
+      await expect(tasksService.open({ ...REVIEW, bot: LEAD.name })).rejects.toThrow(/host service is not answering\. Start it with openadlc up\./);
     });
 
     it('names everything in the way when there is more than one', async () => {
@@ -1024,11 +1024,11 @@ describe('a bot that must be able to work before a task starts', () => {
       await expect(tasksService.open({ ...REVIEW, bot: LEAD.name })).resolves.toBeDefined();
 
       paused = false;
-      await expect(tasksService.open({ ...REVIEW, bot: SECURITY.name, subjectRef: 'fleetadlc#3' })).resolves.toBeDefined();
+      await expect(tasksService.open({ ...REVIEW, bot: SECURITY.name, subjectRef: 'openadlc#3' })).resolves.toBeDefined();
     });
 
     it('holds a paused seat on a scripted install too: the pause is a person’s word, not GitHub’s', async () => {
-      vi.stubEnv('FLEETADLC_SCRIPTED_ENGINES', '1');
+      vi.stubEnv('OPENADLC_SCRIPTED_ENGINES', '1');
       const { tasksService } = readyService();
       tasksService.seatPauses = async () => ({ [SECURITY.name]: { by: 'janedoe', at: '2026-10-02T10:00:00.000Z', why: null } });
 
@@ -1037,7 +1037,7 @@ describe('a bot that must be able to work before a task starts', () => {
 
     it('is not held back on an install whose engines are scripted', async () => {
       // The integration suites run with no GitHub account behind any bot.
-      vi.stubEnv('FLEETADLC_SCRIPTED_ENGINES', '1');
+      vi.stubEnv('OPENADLC_SCRIPTED_ENGINES', '1');
       store.health = [signedOut('bot-security')];
       const { tasksService } = readyService();
 
@@ -1068,16 +1068,16 @@ describe('a bot that must be able to work before a task starts', () => {
       });
 
       const reason =
-        'fleetadlc-cipher-janedoe was not started: fleetadlc-cipher-janedoe cannot sign in to GitHub. Reconnect it from Settings → GitHub → Connected accounts.';
+        'openadlc-cipher-janedoe was not started: openadlc-cipher-janedoe cannot sign in to GitHub. Reconnect it from Settings → GitHub → Connected accounts.';
       expect(held).toEqual({ taskId: 'task-2', session: null, error: reason });
       expect(tasks.createTask).toHaveBeenCalledWith(
-        expect.objectContaining({ botId: 'bot-security', kind: 'patch', subjectRef: 'fleetadlc#2', round: 2, leaseId: 'lease-1' }),
+        expect.objectContaining({ botId: 'bot-security', kind: 'patch', subjectRef: 'openadlc#2', round: 2, leaseId: 'lease-1' }),
       );
       expect(tasks.updateTaskState).toHaveBeenCalledWith('task-2', 'failed', { exitReason: reason });
       expect(threads.addMessage).toHaveBeenCalledWith(expect.objectContaining({ text: `could not start implement: ${reason}` }));
       expect(startTask).not.toHaveBeenCalled();
       // The words are what the recovery reads its cause from.
-      expect(causeOfFailure(reason, { botId: 'bot-security', repoName: 'fleetadlc' })).toBe('bot-sign-in:bot-security');
+      expect(causeOfFailure(reason, { botId: 'bot-security', repoName: 'openadlc' })).toBe('bot-sign-in:bot-security');
     });
   });
 
@@ -1086,8 +1086,8 @@ describe('a bot that must be able to work before a task starts', () => {
       store.health = [signedOut('bot-security')];
       const { tasksService } = readyService();
 
-      expect(await tasksService.gateDescription('waiting on fleetadlc-sydney-janedoe, fleetadlc-cipher-janedoe', 'fleetadlc')).toBe(
-        'waiting on the reviewer account: fleetadlc-cipher-janedoe cannot sign in to GitHub',
+      expect(await tasksService.gateDescription('waiting on openadlc-sydney-janedoe, openadlc-cipher-janedoe', 'openadlc')).toBe(
+        'waiting on the reviewer account: openadlc-cipher-janedoe cannot sign in to GitHub',
       );
     });
 
@@ -1095,14 +1095,14 @@ describe('a bot that must be able to work before a task starts', () => {
       store.health = [signedOut('bot-security')];
       const { tasksService } = readyService();
 
-      expect(await tasksService.gateDescription('waiting on fleetadlc-sydney-janedoe', 'fleetadlc')).toBe('waiting on fleetadlc-sydney-janedoe');
-      expect(await tasksService.gateDescription('waiting on @janedoe', 'fleetadlc')).toBe('waiting on @janedoe');
-      expect(await tasksService.gateDescription('pull request is still a draft', 'fleetadlc')).toBe('pull request is still a draft');
+      expect(await tasksService.gateDescription('waiting on openadlc-sydney-janedoe', 'openadlc')).toBe('waiting on openadlc-sydney-janedoe');
+      expect(await tasksService.gateDescription('waiting on @janedoe', 'openadlc')).toBe('waiting on @janedoe');
+      expect(await tasksService.gateDescription('pull request is still a draft', 'openadlc')).toBe('pull request is still a draft');
     });
   });
 
   describe('the reviews a gate waits on with none under way', () => {
-    const input = { repo: { name: 'fleetadlc' }, prNumber: 2, branch: 'agent/x/1-issue-1', issueNumber: 1, waitingOn: [LEAD.name, SECURITY.name] };
+    const input = { repo: { name: 'openadlc' }, prNumber: 2, branch: 'agent/x/1-issue-1', issueNumber: 1, waitingOn: [LEAD.name, SECURITY.name] };
 
     it('are started for the seats that can work, and only those', async () => {
       store.health = [signedOut('bot-security')];
@@ -1113,9 +1113,9 @@ describe('a bot that must be able to work before a task starts', () => {
 
       expect(open).toHaveBeenCalledTimes(1);
       expect(open).toHaveBeenCalledWith(
-        expect.objectContaining({ bot: LEAD.name, botId: LEAD.id, kind: 'review', subjectRef: 'fleetadlc#2', branch: 'agent/x/1-issue-1', issueNumber: 1, checkoutExistingBranch: true }),
+        expect.objectContaining({ bot: LEAD.name, botId: LEAD.id, kind: 'review', subjectRef: 'openadlc#2', branch: 'agent/x/1-issue-1', issueNumber: 1, checkoutExistingBranch: true }),
       );
-      expect(lines).toEqual(['fleetadlc#2: started fleetadlc-sydney-janedoe’s review']);
+      expect(lines).toEqual(['openadlc#2: started openadlc-sydney-janedoe’s review']);
     });
 
     it('are started once the seat can work: a seat is never started twice for the same pull request', async () => {
@@ -1123,7 +1123,7 @@ describe('a bot that must be able to work before a task starts', () => {
       const open = vi.spyOn(tasksService, 'open').mockResolvedValue({ taskId: 'task-2', session: 's' });
 
       await tasksService.openMissingReviews({ ...input, waitingOn: [SECURITY.name] });
-      store.reviewTasks = [{ botId: SECURITY.id, subjectRef: 'fleetadlc#2', state: 'running' }];
+      store.reviewTasks = [{ botId: SECURITY.id, subjectRef: 'openadlc#2', state: 'running' }];
       await tasksService.openMissingReviews({ ...input, waitingOn: [SECURITY.name] });
 
       expect(open).toHaveBeenCalledTimes(1);
@@ -1132,18 +1132,18 @@ describe('a bot that must be able to work before a task starts', () => {
     it('are started again on a new round, though the seat reviewed an earlier one', async () => {
       // second-reviewer was busy when the push opened round two: the refusal
       // recorded nothing, and its round-one review kept it from being asked.
-      store.reviewTasks = [{ botId: SECURITY.id, subjectRef: 'fleetadlc#2', state: 'done', createdAt: '2026-10-01T09:00:00.000Z' } as never];
+      store.reviewTasks = [{ botId: SECURITY.id, subjectRef: 'openadlc#2', state: 'done', createdAt: '2026-10-01T09:00:00.000Z' } as never];
       store.roundAt = '2026-10-01T10:00:00.000Z';
       const { tasksService } = readyService();
       const open = vi.spyOn(tasksService, 'open').mockResolvedValue({ taskId: 'task-2', session: 's' });
 
       await tasksService.openMissingReviews({ ...input, waitingOn: [SECURITY.name] });
 
-      expect(open).toHaveBeenCalledWith(expect.objectContaining({ bot: SECURITY.name, subjectRef: 'fleetadlc#2' }));
+      expect(open).toHaveBeenCalledWith(expect.objectContaining({ bot: SECURITY.name, subjectRef: 'openadlc#2' }));
     });
 
     it.each(['done', 'failed'])('are not started twice on one diff: a review %s since the round began is that review', async (state) => {
-      store.reviewTasks = [{ botId: SECURITY.id, subjectRef: 'fleetadlc#2', state, createdAt: '2026-10-01T10:00:05.000Z' } as never];
+      store.reviewTasks = [{ botId: SECURITY.id, subjectRef: 'openadlc#2', state, createdAt: '2026-10-01T10:00:05.000Z' } as never];
       store.roundAt = '2026-10-01T10:00:00.000Z';
       const { tasksService } = readyService();
       const open = vi.spyOn(tasksService, 'open');
@@ -1154,7 +1154,7 @@ describe('a bot that must be able to work before a task starts', () => {
     });
 
     it('leave a seat whose review ran and failed to its card', async () => {
-      store.reviewTasks = [{ botId: SECURITY.id, subjectRef: 'fleetadlc#2', state: 'failed' }];
+      store.reviewTasks = [{ botId: SECURITY.id, subjectRef: 'openadlc#2', state: 'failed' }];
       const { tasksService } = readyService();
       const open = vi.spyOn(tasksService, 'open');
 
@@ -1187,7 +1187,7 @@ describe('a bot that must be able to work before a task starts', () => {
   });
 
   describe('the lead’s review, last', () => {
-    const input = { repo: { name: 'fleetadlc' }, prNumber: 2, branch: 'agent/x/1-issue-1', issueNumber: 1, seat: LEAD.name, since: '2026-09-30T10:00:00Z' };
+    const input = { repo: { name: 'openadlc' }, prNumber: 2, branch: 'agent/x/1-issue-1', issueNumber: 1, seat: LEAD.name, since: '2026-09-30T10:00:00Z' };
 
     it('is started once, and not again for the same diff while it runs or once it was opened after the others posted', async () => {
       const { tasksService } = readyService();
@@ -1196,18 +1196,18 @@ describe('a bot that must be able to work before a task starts', () => {
 
       try {
         expect(await tasksService.openLeadReview(input)).toMatch(/the lead’s, last/);
-        store.reviewTasks = [{ botId: LEAD.id, subjectRef: 'fleetadlc#2', state: 'running' }];
+        store.reviewTasks = [{ botId: LEAD.id, subjectRef: 'openadlc#2', state: 'running' }];
         expect(await tasksService.openLeadReview(input)).toBeNull();
-        store.reviewTasks = [{ botId: LEAD.id, subjectRef: 'fleetadlc#2', state: 'done', createdAt: '2026-09-30T10:01:00Z' } as never];
+        store.reviewTasks = [{ botId: LEAD.id, subjectRef: 'openadlc#2', state: 'done', createdAt: '2026-09-30T10:01:00Z' } as never];
         expect(await tasksService.openLeadReview(input)).toBeNull();
         // A lead review from before the others last posted is an earlier diff's: asked again.
-        store.reviewTasks = [{ botId: LEAD.id, subjectRef: 'fleetadlc#2', state: 'done', createdAt: '2026-09-30T09:00:00Z' } as never];
+        store.reviewTasks = [{ botId: LEAD.id, subjectRef: 'openadlc#2', state: 'done', createdAt: '2026-09-30T09:00:00Z' } as never];
         expect(await tasksService.openLeadReview(input)).toMatch(/the lead’s, last/);
       } finally {
         quiet.mockRestore();
       }
       expect(open).toHaveBeenCalledTimes(2);
-      expect(open).toHaveBeenCalledWith(expect.objectContaining({ bot: LEAD.name, kind: 'review', subjectRef: 'fleetadlc#2', checkoutExistingBranch: true }));
+      expect(open).toHaveBeenCalledWith(expect.objectContaining({ bot: LEAD.name, kind: 'review', subjectRef: 'openadlc#2', checkoutExistingBranch: true }));
     });
 
     it('with no cut-off, counts only a lead task under way, never any earlier one', async () => {
@@ -1216,9 +1216,9 @@ describe('a bot that must be able to work before a task starts', () => {
       const quiet = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
       try {
-        store.reviewTasks = [{ botId: LEAD.id, subjectRef: 'fleetadlc#2', state: 'done', createdAt: '2026-09-30T09:00:00Z' } as never];
+        store.reviewTasks = [{ botId: LEAD.id, subjectRef: 'openadlc#2', state: 'done', createdAt: '2026-09-30T09:00:00Z' } as never];
         expect(await tasksService.openLeadReview({ ...input, since: null })).toMatch(/the lead’s, last/);
-        store.reviewTasks = [{ botId: LEAD.id, subjectRef: 'fleetadlc#2', state: 'queued', createdAt: '2026-09-30T09:00:00Z' } as never];
+        store.reviewTasks = [{ botId: LEAD.id, subjectRef: 'openadlc#2', state: 'queued', createdAt: '2026-09-30T09:00:00Z' } as never];
         expect(await tasksService.openLeadReview({ ...input, since: null })).toBeNull();
       } finally {
         quiet.mockRestore();
@@ -1234,9 +1234,9 @@ describe('a bot that must be able to work before a task starts', () => {
   });
 
   describe('a seat whose review a bot dismissed', () => {
-    const input = { repo: { name: 'fleetadlc' }, prNumber: 2, branch: 'agent/x/1-issue-1', issueNumber: 1, reviewId: 41 };
+    const input = { repo: { name: 'openadlc' }, prNumber: 2, branch: 'agent/x/1-issue-1', issueNumber: 1, reviewId: 41 };
     // The review the bot dismissed, from a task opened since the round began.
-    const dismissedTask = (botId: string) => ({ botId, subjectRef: 'fleetadlc#2', state: 'done', createdAt: '2026-10-01T10:00:05.000Z' }) as never;
+    const dismissedTask = (botId: string) => ({ botId, subjectRef: 'openadlc#2', state: 'done', createdAt: '2026-10-01T10:00:05.000Z' }) as never;
 
     it.each([
       ['the lead', LEAD],
@@ -1254,7 +1254,7 @@ describe('a bot that must be able to work before a task starts', () => {
         quiet.mockRestore();
       }
       expect(open).toHaveBeenCalledWith(
-        expect.objectContaining({ bot: seat.name, botId: seat.id, kind: 'review', skill: 'pr-review', subjectRef: 'fleetadlc#2', checkoutExistingBranch: true }),
+        expect.objectContaining({ bot: seat.name, botId: seat.id, kind: 'review', skill: 'pr-review', subjectRef: 'openadlc#2', checkoutExistingBranch: true }),
       );
     });
 
@@ -1266,7 +1266,7 @@ describe('a bot that must be able to work before a task starts', () => {
       try {
         await tasksService.askAgain({ ...input, seat: SECURITY.name });
         await tasksService.askAgain({ ...input, seat: SECURITY.name });
-        store.reviewTasks = [{ botId: LEAD.id, subjectRef: 'fleetadlc#2', state: 'running' }];
+        store.reviewTasks = [{ botId: LEAD.id, subjectRef: 'openadlc#2', state: 'running' }];
         expect(await tasksService.askAgain({ ...input, reviewId: 42, seat: LEAD.name })).toBeNull();
       } finally {
         quiet.mockRestore();
@@ -1305,7 +1305,7 @@ describe('usage a task’s session reports', () => {
     ({ taskId: 'task-1', tokensIn: 1200, tokensOut: 300, costUsd: 0.5, engine: 'claude', model: 'claude-opus-5', modelAlias: null, ...overrides }) as never;
   const reporting = () => new TaskService({ costs: { monthlyCapUsd: 1500, perTaskCapUsd: 15, warningAt: 0.9 } } as BridgeConfig, {} as HostdClient, {} as Context);
   const task = (state: string) =>
-    vi.mocked(tasks.getTask).mockResolvedValue({ id: 'task-1', botId: 'bot-1', repoId: null, state, costCapUsd: 15, kind: 'implement', subjectRef: 'fleetadlc#155' } as never);
+    vi.mocked(tasks.getTask).mockResolvedValue({ id: 'task-1', botId: 'bot-1', repoId: null, state, costCapUsd: 15, kind: 'implement', subjectRef: 'openadlc#155' } as never);
 
   beforeEach(() => {
     vi.mocked(costs.recordUsage).mockClear();
@@ -1334,7 +1334,7 @@ describe('usage a task’s session reports', () => {
     await expect(reporting().recordUsage(usage({ engine: 'none' }))).rejects.toThrow(UsageRefusedError);
     expect(costs.recordUsage).not.toHaveBeenCalled();
 
-    vi.stubEnv('FLEETADLC_SCRIPTED_ENGINES', '1');
+    vi.stubEnv('OPENADLC_SCRIPTED_ENGINES', '1');
     try {
       await reporting().recordUsage(usage({ engine: 'none' }));
     } finally {

@@ -25,11 +25,11 @@ import {
 
 const INVENTORY: BackupInventory = {
   install: { settings: ['operatorEmail', 'organization', 'publicUrl'], app: { clientId: true, privateKey: true, webhookSecret: true } },
-  repositories: [{ name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' }],
+  repositories: [{ name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }],
   bots: [
-    { seat: 'builder', name: 'fleetadlc-atlas-janedoe', role: 'implement', login: 'fleetadlc-atlas-janedoe', signIn: 'refresh', signingKey: true, modelAccountId: 'max' },
+    { seat: 'builder', name: 'openadlc-atlas-janedoe', role: 'implement', login: 'openadlc-atlas-janedoe', signIn: 'refresh', signingKey: true, modelAccountId: 'max' },
     { seat: 'lead-reviewer', name: 'lead-reviewer', role: 'review_lead', login: null, signIn: null, signingKey: false, modelAccountId: null },
-    { seat: 'automation', name: 'janedoe-fleetadlc-flow', role: 'automation', login: 'janedoe-fleetadlc-flow', signIn: 'refresh', signingKey: true, modelAccountId: null },
+    { seat: 'automation', name: 'janedoe-openadlc-flow', role: 'automation', login: 'janedoe-openadlc-flow', signIn: 'refresh', signingKey: true, modelAccountId: null },
   ],
   accounts: [
     { id: 'max', label: 'Anthropic — Max', provider: 'anthropic', kind: 'subscription', credential: 'token', stored: true },
@@ -76,8 +76,8 @@ describe('the Backup card', () => {
       expect(said).toContain(group);
     }
     expect(said).toContain('The install’s three settings, and the app’s client id, private key and webhook secret.');
-    expect(said).toContain('janedoe/fleetadlc-testbed');
-    expect(said).toContain('fleetadlc-atlas-janedoe · Builder');
+    expect(said).toContain('janedoe/openadlc-testbed');
+    expect(said).toContain('openadlc-atlas-janedoe · Builder');
     expect(said).toContain('Lead reviewer — not connected');
     expect(said).toContain('Anthropic — Max');
     expect(said).toContain('ChatGPT Pro');
@@ -207,9 +207,9 @@ describe('what the card sends and saves', () => {
   });
 
   it('saves the file under the bridge’s name for it', () => {
-    expect(backupFilename('attachment; filename="fleetadlc-backup-2026-09-24.fleetbak"')).toBe('fleetadlc-backup-2026-09-24.fleetbak');
-    expect(backupFilename(null, new Date('2026-09-24T10:00:00Z'))).toBe('fleetadlc-backup-2026-09-24.fleetbak');
-    expect(backupFilename('attachment; filename="../../x"', new Date('2026-09-24T10:00:00Z'))).toBe('fleetadlc-backup-2026-09-24.fleetbak');
+    expect(backupFilename('attachment; filename="openadlc-backup-2026-09-24.fleetbak"')).toBe('openadlc-backup-2026-09-24.fleetbak');
+    expect(backupFilename(null, new Date('2026-09-24T10:00:00Z'))).toBe('openadlc-backup-2026-09-24.fleetbak');
+    expect(backupFilename('attachment; filename="../../x"', new Date('2026-09-24T10:00:00Z'))).toBe('openadlc-backup-2026-09-24.fleetbak');
   });
 });
 
@@ -247,7 +247,7 @@ describe('Backup and Restore as two rows', () => {
               onAgain={() => undefined}
               busy={null}
               error={null}
-              downloaded="fleetadlc-backup-2026-09-24.fleetbak"
+              downloaded="openadlc-backup-2026-09-24.fleetbak"
               onDownload={() => undefined}
             />
           }
@@ -262,7 +262,7 @@ describe('Backup and Restore as two rows', () => {
     expect(html).toContain('aria-label="Passphrase again"');
     expect(html).toContain('value="correct horse"');
     expect(said).toContain('Download backup');
-    expect(said).toContain('Downloaded fleetadlc-backup-2026-09-24.fleetbak');
+    expect(said).toContain('Downloaded openadlc-backup-2026-09-24.fleetbak');
     expect(said).toContain('The file will hold');
   });
 });

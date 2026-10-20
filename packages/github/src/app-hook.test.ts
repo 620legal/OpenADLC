@@ -137,7 +137,7 @@ describe('an address GitHub could never deliver to', () => {
   });
 
   it('refuses plain http, because GitHub will not send a secret over it', () => {
-    expect(deliverableUrl('http://fleetadlc.example.com/webhooks/github')).toMatch(/https/);
+    expect(deliverableUrl('http://openadlc.example.com/webhooks/github')).toMatch(/https/);
   });
 
   it('accepts a public https address', () => {

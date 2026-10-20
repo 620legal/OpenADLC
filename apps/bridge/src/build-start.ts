@@ -1,4 +1,4 @@
-import { leases } from '@fleetadlc/db';
+import { leases } from '@openadlc/db';
 import type { Automation } from './automation.js';
 import { stackBrief } from './stacking.js';
 import type { TaskService } from './task-service.js';

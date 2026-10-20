@@ -1,4 +1,4 @@
-import { bots, repos, requests, tasks, withAdvisoryLock } from '@fleetadlc/db';
+import { bots, repos, requests, tasks, withAdvisoryLock } from '@openadlc/db';
 import { BotBusyError, PrerequisiteNotReadyError, SpendingCapError, heldAtCap, type TaskService } from './task-service.js';
 
 /**

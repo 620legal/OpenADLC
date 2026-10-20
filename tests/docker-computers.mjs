@@ -11,29 +11,29 @@
  *
  * It starts real containers, so it runs only when asked:
  *
- *   FLEETADLC_DOCKER_COMPUTERS=1 node tests/all.mjs
- *   FLEETADLC_SCRATCH_DRIVER=docker tests/scratch.sh up && eval "$(tests/scratch.sh env)" && node tests/docker-computers.mjs
+ *   OPENADLC_DOCKER_COMPUTERS=1 node tests/all.mjs
+ *   OPENADLC_SCRATCH_DRIVER=docker tests/scratch.sh up && eval "$(tests/scratch.sh env)" && node tests/docker-computers.mjs
  */
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { bots, closePool, issues, leases, query, repos, waitForDatabase } from '@fleetadlc/db';
-import { fleetHome, getSecretStore, internalSecretRef } from '@fleetadlc/github';
+import { bots, closePool, issues, leases, query, repos, waitForDatabase } from '@openadlc/db';
+import { openadlcHome, getSecretStore, internalSecretRef } from '@openadlc/github';
 import { refuseARealInstall } from './scratch-only.mjs';
 
 // Before anything else is read or written: see scratch-only.mjs.
 await refuseARealInstall();
 
 const run = promisify(execFile);
-const BRIDGE = process.env.FLEETADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
-const HOSTD = process.env.FLEETADLC_HOSTD_URL ?? 'http://127.0.0.1:47312';
+const BRIDGE = process.env.OPENADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
+const HOSTD = process.env.OPENADLC_HOSTD_URL ?? 'http://127.0.0.1:47312';
 const SECRET = await getSecretStore().get(internalSecretRef());
-const NETWORK = process.env.FLEETADLC_BOT_PREFIX ? `${process.env.FLEETADLC_BOT_PREFIX}tasks` : 'fleetadlc-tasks';
-const TASKDB = process.env.FLEETADLC_BOT_PREFIX ? `${process.env.FLEETADLC_BOT_PREFIX}taskdb` : 'fleetadlc-taskdb';
-const workRoot = process.env.FLEETADLC_WORK_ROOT ?? join(fleetHome(), 'work');
+const NETWORK = process.env.OPENADLC_BOT_PREFIX ? `${process.env.OPENADLC_BOT_PREFIX}tasks` : 'openadlc-tasks';
+const TASKDB = process.env.OPENADLC_BOT_PREFIX ? `${process.env.OPENADLC_BOT_PREFIX}taskdb` : 'openadlc-taskdb';
+const workRoot = process.env.OPENADLC_WORK_ROOT ?? join(openadlcHome(), 'work');
 
-const headers = { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': SECRET ?? '' };
+const headers = { 'content-type': 'application/json', 'x-openadlc-internal-secret': SECRET ?? '' };
 const results = [];
 
 function check(name, ok, detail = '') {
@@ -110,7 +110,7 @@ async function main() {
   await waitForDatabase();
   const health = await fetch(`${HOSTD}/healthz`).then((response) => response.json()).catch(() => null);
   if (health?.driver !== 'docker') {
-    console.log(`\nhostd at ${HOSTD} runs the ${health?.driver ?? 'unknown'} driver; this suite is for docker. Start a scratch install on the docker driver: FLEETADLC_SCRATCH_DRIVER=docker tests/scratch.sh up && eval "$(tests/scratch.sh env)"\n`);
+    console.log(`\nhostd at ${HOSTD} runs the ${health?.driver ?? 'unknown'} driver; this suite is for docker. Start a scratch install on the docker driver: OPENADLC_SCRATCH_DRIVER=docker tests/scratch.sh up && eval "$(tests/scratch.sh env)"\n`);
     await closePool();
     process.exit(2);
   }
@@ -135,9 +135,9 @@ async function main() {
     if (first.container) {
       const inspected = JSON.parse((await docker('container', 'inspect', first.container)).stdout || '[]')[0] ?? {};
       const labels = inspected.Config?.Labels ?? {};
-      check('it is labelled a computer of this install', labels['fleetadlc.kind'] === 'computer' && Boolean(labels['fleetadlc.install']), JSON.stringify(labels['fleetadlc.install']));
+      check('it is labelled a computer of this install', labels['openadlc.kind'] === 'computer' && Boolean(labels['openadlc.install']), JSON.stringify(labels['openadlc.install']));
       check('it is on the install’s task network', Object.keys(inspected.NetworkSettings?.Networks ?? {}).includes(NETWORK));
-      const slot = labels['fleetadlc.slot'] ?? '';
+      const slot = labels['openadlc.slot'] ?? '';
       const binds = (inspected.HostConfig?.Binds ?? []).filter((bind) => bind.startsWith(workRoot));
       check('only its own task directory of the work root is mounted, at its own path', binds.length === 1 && binds[0] === `${slot}:${slot}`, binds.join(', '));
       check('the task database server is reachable from it', await reaches(first.container, 'host.docker.internal', 47433));
@@ -163,7 +163,7 @@ async function main() {
       const slot = join(workRoot, 'slots', first.taskId);
       check('its directory goes with it', !existsSync(slot), slot);
       const name = `t_${first.taskId.replace(/[^a-z0-9]/gi, '').toLowerCase()}`;
-      const left = await docker('exec', TASKDB, 'psql', '-U', 'fleetadlc', '-d', 'postgres', '-tAc', `select 1 from pg_database where datname = '${name}'`);
+      const left = await docker('exec', TASKDB, 'psql', '-U', 'openadlc', '-d', 'postgres', '-tAc', `select 1 from pg_database where datname = '${name}'`);
       check('its database goes with it', left.stdout === '', name);
     }
   } finally {

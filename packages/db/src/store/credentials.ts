@@ -49,7 +49,7 @@ function toRecord(row: CredentialRow): BotCredentialRecord {
 
 /**
  * Device-flow bookkeeping only. The refresh token itself lives in the install's
- * secret store under `secretRef`; this row is what the console and `fleetadlc doctor` read.
+ * secret store under `secretRef`; this row is what the console and `openadlc doctor` read.
  */
 export async function recordAuthorization(input: {
   botId: string;

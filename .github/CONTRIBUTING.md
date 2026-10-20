@@ -50,8 +50,8 @@ pnpm build
 pnpm test
 ```
 
-There is no demo mode. `fleetadlc up` starts the install `FLEETADLC_HOME` points at,
-`~/.fleetadlc` by default, which on a machine that runs OpenADLC is the real one. To
+There is no demo mode. `openadlc up` starts the install `OPENADLC_HOME` points at,
+`~/.openadlc` by default, which on a machine that runs OpenADLC is the real one. To
 see a change work end to end, start a scratch install beside it, as
 [docs/development.md](../docs/development.md) says.
 
@@ -72,7 +72,7 @@ see a change work end to end, start a scratch install beside it, as
   `apps/dispatcher/src/overlap.test.ts` for pure logic.
 - **Code that reads like the code around it.** Match the naming and the comment
   density you find. Comments explain constraints, not what the next line does.
-- **Errors a person can act on.** `${bot} is not connected to GitHub. Run: fleetadlc auth login --bot ${bot}`
+- **Errors a person can act on.** `${bot} is not connected to GitHub. Run: openadlc auth login --bot ${bot}`
   beats `unauthorized`.
 - **No new dependency in a change that is not about dependencies.**
 - **Documentation when behaviour changes**, in the same pull request: the guide

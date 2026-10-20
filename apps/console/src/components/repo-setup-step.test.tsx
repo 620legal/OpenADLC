@@ -13,7 +13,7 @@ function plan(repository: string, partial: Partial<RepoPlan> = {}): RepoPlan {
       { name: 'stage:build', action: 'unchanged', detail: '' },
     ],
     rules: [
-      { name: 'fleetadlc: main', state: 'missing', detail: 'no ruleset by this name' },
+      { name: 'openadlc: main', state: 'missing', detail: 'no ruleset by this name' },
       { name: 'triage role', state: 'unsupported', detail: TRIAGE },
     ],
     templates: [{ name: 'AGENTS.md', state: 'present', detail: '' }],
@@ -82,14 +82,14 @@ describe('the last step', () => {
       running: true,
       runs: {
         'acme/one': { state: 'ok', written: 2 },
-        'acme/two': { state: 'attention', written: 1, reasons: ['fleetadlc: main — Upgrade to GitHub Pro'] },
+        'acme/two': { state: 'attention', written: 1, reasons: ['openadlc: main — Upgrade to GitHub Pro'] },
         'acme/three': { state: 'running' },
       },
     });
     expect(html).toContain('Setting up… 2 of 3');
     expect(html).toContain('>✓ ready</span>');
     expect(html).toContain('needs attention');
-    expect(html).toContain('fleetadlc: main — Upgrade to GitHub Pro');
+    expect(html).toContain('openadlc: main — Upgrade to GitHub Pro');
     expect(html).toContain('setting up…');
   });
 
@@ -257,7 +257,7 @@ describe('setting up one repository', () => {
     ).toEqual({ written: 1, refused: 1 });
     expect(
       outcomeCounts([
-        { name: 'fleetadlc: main', action: 'skipped', detail: 'could not be created: 422' },
+        { name: 'openadlc: main', action: 'skipped', detail: 'could not be created: 422' },
         { name: 'environment production', action: 'unsupported', detail: 'not on this plan' },
         { name: 'CODEOWNERS', action: 'created', detail: '' },
       ]),
@@ -271,7 +271,7 @@ describe('setting up one repository', () => {
         status: 200,
         body: {
           outcomes: [
-            { name: 'fleetadlc: main', action: 'created', detail: '6 rule(s)' },
+            { name: 'openadlc: main', action: 'created', detail: '6 rule(s)' },
             { name: 'triage role', action: 'skipped', detail: TRIAGE },
           ],
         },
@@ -413,7 +413,7 @@ describe('how production ships, asked for each repository', () => {
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Save<\/button>/);
   });
 
-  it('shows the file’s rule as read-only where .github/fleetadlc.yml sets it', () => {
+  it('shows the file’s rule as read-only where .github/openadlc.yml sets it', () => {
     const html = render([plan('acme/one', { production: { ...auto, governedByFile: true } })]);
     expect(html).toContain('the file governs it');
     expect(html).not.toContain('type="radio"');

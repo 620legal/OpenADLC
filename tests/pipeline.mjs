@@ -22,26 +22,26 @@ import {
   tasks,
   threads,
   waitForDatabase,
-} from '@fleetadlc/db';
+} from '@openadlc/db';
 import { connect } from 'node:net';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { consoleSecretRef, getSecretStore, fleetHome, internalSecretRef, webhookSecretRef } from '@fleetadlc/github';
+import { consoleSecretRef, getSecretStore, openadlcHome, internalSecretRef, webhookSecretRef } from '@openadlc/github';
 import { join } from 'node:path';
 import { refuseARealInstall } from './scratch-only.mjs';
 
 // Before anything else is read or written: see scratch-only.mjs.
 await refuseARealInstall();
 
-const BRIDGE = process.env.FLEETADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
-const HOSTD = process.env.FLEETADLC_HOSTD_URL ?? 'http://127.0.0.1:47312';
+const BRIDGE = process.env.OPENADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
+const HOSTD = process.env.OPENADLC_HOSTD_URL ?? 'http://127.0.0.1:47312';
 const SECRET = await getSecretStore().get(internalSecretRef());
 // `/v1` is served only to the console and the CLI, which hold this; the suite reads it as they do.
 const CONSOLE_SECRET = await getSecretStore().get(consoleSecretRef());
 
 /** hostd refuses a caller without the install's secret. */
 function hostdHeaders() {
-  return { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': SECRET ?? '' };
+  return { 'content-type': 'application/json', 'x-openadlc-internal-secret': SECRET ?? '' };
 }
 
 const results = [];
@@ -99,11 +99,11 @@ async function post(path, body) {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-fleetadlc-identity': 'integration test',
+      'x-openadlc-identity': 'integration test',
       // `/internal` is no longer served to whatever reached the port, so the
       // suite holds the secret the way the dispatcher and hostd do.
-      'x-fleetadlc-internal-secret': SECRET ?? '',
-      'x-fleetadlc-console-secret': CONSOLE_SECRET ?? '',
+      'x-openadlc-internal-secret': SECRET ?? '',
+      'x-openadlc-console-secret': CONSOLE_SECRET ?? '',
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
@@ -113,7 +113,7 @@ async function post(path, body) {
 
 async function get(path) {
   const response = await fetch(path.startsWith('http') ? path : BRIDGE + path, {
-    headers: { 'x-fleetadlc-identity': 'integration test', 'x-fleetadlc-console-secret': CONSOLE_SECRET ?? '' },
+    headers: { 'x-openadlc-identity': 'integration test', 'x-openadlc-console-secret': CONSOLE_SECRET ?? '' },
   });
   return { status: response.status, body: await response.json() };
 }
@@ -131,7 +131,7 @@ let webhookSigningSecret;
 let suiteStoredSecret = false;
 
 function secretFromInstallFile() {
-  const path = join(fleetHome(), 'install.json');
+  const path = join(openadlcHome(), 'install.json');
   if (!existsSync(path)) return '';
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8'));
@@ -154,7 +154,7 @@ async function signingSecret() {
     return stored;
   }
 
-  const fromEnv = process.env.FLEETADLC_WEBHOOK_SECRET || secretFromInstallFile();
+  const fromEnv = process.env.OPENADLC_WEBHOOK_SECRET || secretFromInstallFile();
   if (fromEnv) {
     webhookSigningSecret = fromEnv;
     return fromEnv;
@@ -1410,7 +1410,7 @@ async function main() {
   const statusWithJobs = await get('/v1/status');
   const jobNames = (statusWithJobs.body.jobs ?? []).map((entry) => entry.job);
   check(
-    'fleetadlc status can list every job',
+    'openadlc status can list every job',
     ['reconcile', 'status', 'budget', 'stages', 'merge', 'qa', 'credentials', 'deps', 'deploy'].every((job) =>
       jobNames.includes(job),
     ),
@@ -1440,7 +1440,7 @@ async function main() {
   const fired = await post('/internal/schedule/qa');
   const firedActions = fired.body.actions ?? [];
 
-  if (process.env.FLEETADLC_TESTING_URL) {
+  if (process.env.OPENADLC_TESTING_URL) {
     check(
       'firing the job opens a QA run',
       firedActions.some((line) => line.includes('opened a QA run')),
@@ -1471,7 +1471,7 @@ async function main() {
   }
 
   // -------------------------------------------- structured events in the thread
-  // The `fleetadlc:` events were declared, but only `question` was ever produced,
+  // The `openadlc:` events were declared, but only `question` was ever produced,
   // so the bridge learned what a bot did from GitHub's webhooks and nothing at all
   // about a step that leaves no GitHub trace — a plan posted, a task that
   // stopped on its own terms.

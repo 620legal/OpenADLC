@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { BotRole } from '@fleetadlc/shared';
+import type { BotRole } from '@openadlc/shared';
 import { builderPool, builderSlots, combinedTasks, missingBuildersReason, ownerCannotBuild } from './pool.js';
 
 function bot(name: string, slot: string, role: BotRole = 'implement', githubLogin: string | null = name, maxTasks = 1) {
@@ -7,7 +7,7 @@ function bot(name: string, slot: string, role: BotRole = 'implement', githubLogi
 }
 
 // The owner is connected, so it goes by its handle.
-const owner = bot('fleetadlc-atlas-janedoe', 'builder');
+const owner = bot('openadlc-atlas-janedoe', 'builder');
 
 describe('who builds in a repository', () => {
   it('is the owner and the other bots with its role, whatever they are called', () => {
@@ -22,7 +22,7 @@ describe('who builds in a repository', () => {
     ];
 
     expect(builderPool(owner, crew, 3).map((entry) => entry.name)).toEqual([
-      'fleetadlc-atlas-janedoe',
+      'openadlc-atlas-janedoe',
       'irisexampleco',
       'builder-3',
     ]);
@@ -49,7 +49,7 @@ describe('a builder seat on no GitHub account yet', () => {
 
   it('is given no work until it is on one', () => {
     expect(builderPool(owner, [owner, added], 2)).toEqual([owner]);
-    expect(builderPool(owner, [owner, { ...added, githubLogin: 'fleetadlc-crew-janedoe' }], 2).map((entry) => entry.slot)).toEqual([
+    expect(builderPool(owner, [owner, { ...added, githubLogin: 'openadlc-crew-janedoe' }], 2).map((entry) => entry.slot)).toEqual([
       'builder',
       'builder-2',
     ]);
@@ -114,15 +114,15 @@ describe('where a repository’s next builds go', () => {
 
 describe('an owner that cannot build', () => {
   it('is the automation account, which thinks with no model, and the repository is skipped saying so', () => {
-    expect(ownerCannotBuild({ name: 'janedoe-fleetadlc-flow', engine: 'none' }, 'fleetadlc-testbed')).toBe(
-      'janedoe-fleetadlc-flow owns fleetadlc-testbed but thinks with no model, so nothing is leased to it; ' +
-        'set `owner: builder` for fleetadlc-testbed in config/repos.yaml and run `fleetadlc seed` ' +
+    expect(ownerCannotBuild({ name: 'janedoe-openadlc-flow', engine: 'none' }, 'openadlc-testbed')).toBe(
+      'janedoe-openadlc-flow owns openadlc-testbed but thinks with no model, so nothing is leased to it; ' +
+        'set `owner: builder` for openadlc-testbed in config/repos.yaml and run `openadlc seed` ' +
         '(settings the entry leaves out keep what the console set)',
     );
   });
 
   it('is not a builder on any engine', () => {
-    expect(ownerCannotBuild({ name: 'fleetadlc-atlas-janedoe', engine: 'claude' }, 'fleetadlc-testbed')).toBeNull();
-    expect(ownerCannotBuild({ name: 'irisexampleco', engine: 'grok' }, 'fleetadlc-testbed')).toBeNull();
+    expect(ownerCannotBuild({ name: 'openadlc-atlas-janedoe', engine: 'claude' }, 'openadlc-testbed')).toBeNull();
+    expect(ownerCannotBuild({ name: 'irisexampleco', engine: 'grok' }, 'openadlc-testbed')).toBeNull();
   });
 });

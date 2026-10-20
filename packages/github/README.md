@@ -1,4 +1,4 @@
-# @fleetadlc/github
+# @openadlc/github
 
 Everything that holds or uses a GitHub credential: connecting a bot's own
 account with the OAuth device flow, keeping what that yields, turning it into
@@ -9,7 +9,7 @@ rewriting the App's webhook — as the GitHub App itself, with its JWT or an
 installation token (`src/app-auth.ts` lists what runs as the app).
 OpenADLC never holds a personal access token. It is a library with no process and
 no port; `src/index.ts` is built to `dist/index.js`. The bridge, hostd, the CLI,
-the dispatcher's program, `@fleetadlc/backup` and the integration suites import it.
+the dispatcher's program, `@openadlc/backup` and the integration suites import it.
 
 ## Rules it carries
 
@@ -18,15 +18,15 @@ the dispatcher's program, `@fleetadlc/backup` and the integration suites import 
   until a person repeats the device flow. `TokenBroker` runs in the bridge
   (`apps/bridge/src/actors.ts`); hostd and the CLI ask the bridge's
   `/internal/tokens/:bot` instead of building one. Two exceptions, neither
-  beside a running bridge's refresh: `fleetadlc github` builds one only when
+  beside a running bridge's refresh: `openadlc github` builds one only when
   nothing answers on the bridge's port, under the same advisory lock
-  (`github-refresh:<sign-in>`), and `fleetadlc restore` refreshes each GitHub
-  sign-in once to take it over (`@fleetadlc/backup`, `src/signins.ts`).
+  (`github-refresh:<sign-in>`), and `openadlc restore` refreshes each GitHub
+  sign-in once to take it over (`@openadlc/backup`, `src/signins.ts`).
 - **Secrets live in the secret store**, never in the database, a log or a
-  comment. `getSecretStore()` is a `FileSecretStore` under `$FLEETADLC_HOME/secrets`
-  (`~/.fleetadlc/secrets`, one `0600` file per ref), or Google Secret Manager
+  comment. `getSecretStore()` is a `FileSecretStore` under `$OPENADLC_HOME/secrets`
+  (`~/.openadlc/secrets`, one `0600` file per ref), or Google Secret Manager
   (`src/gcp-secrets.ts`, through the metadata server's service account) when
-  `FLEETADLC_SECRET_STORE=gcp`, as the cloud module sets. `setSecretStore()` puts another
+  `OPENADLC_SECRET_STORE=gcp`, as the cloud module sets. `setSecretStore()` puts another
   store behind the same interface; the tests use it for an in-memory one.
   The install's own credentials are here too: the App's private key
   (`appPrivateKeyRef()`), its client secret (`appClientSecretRef()`) and the
@@ -34,16 +34,16 @@ the dispatcher's program, `@fleetadlc/backup` and the integration suites import 
 - **The install secret** (`internalSecretRef()`, made by `ensureInternalSecret()`)
   is what OpenADLC's own components present to each other. A task's session holds
   only `taskTokenFor(taskId, installSecret)`, an HMAC of its own id under that secret, sent as
-  `x-fleetadlc-task-token`: good for that task and nothing else.
+  `x-openadlc-task-token`: good for that task and nothing else.
 - **The console secret** (`consoleSecretRef()`, `console-api-secret`, made by
   `ensureConsoleSecret()`) is what the console's server and the CLI present to
-  the bridge's `/v1` on a local install, as `x-fleetadlc-console-secret`, and
+  the bridge's `/v1` on a local install, as `x-openadlc-console-secret`, and
   what the console's sign-in links are signed with. It is its own secret
   because the install secret also opens `/internal/dispatch/lease`. A backup
   leaves it out; the restored install makes its own.
 - **The alerts secret** (`alertsSecretRef()`, `alerts-secret`, made by
   `ensureAlertsSecret()`) is what an outside monitoring system presents to the
-  bridge's `/internal/alerts`, as `x-fleetadlc-alerts-secret`. It opens that
+  bridge's `/internal/alerts`, as `x-openadlc-alerts-secret`. It opens that
   route and no other, so a monitor never holds the install secret, which mints
   every bot's token.
 - **A delivery is trusted by its signature**, computed over the body's bytes
@@ -55,7 +55,7 @@ the dispatcher's program, `@fleetadlc/backup` and the integration suites import 
 
 - `src/device-auth.ts` — requesting a device code, polling for the user token, refreshing it.
 - `src/token-broker.ts` — short-lived tokens from a stored refresh token; what a task's token must still have left.
-- `src/secrets.ts` — the secret store, every ref's name, `fleetHome()`, the install secret and task tokens.
+- `src/secrets.ts` — the secret store, every ref's name, `openadlcHome()`, the install secret and task tokens.
 - `src/gcp-secrets.ts` — the secret store on Google Secret Manager, for a cloud install.
 - `src/client.ts` — `GitHubClient`: issues, labels, comments, reviews, statuses and pull requests, as one account.
 - `src/app-auth.ts` — the App's JWT, and installation tokens for the repositories it is installed on.
@@ -71,9 +71,9 @@ the dispatcher's program, `@fleetadlc/backup` and the integration suites import 
 ## Testing
 
 ```bash
-pnpm --filter @fleetadlc/github test                                        # every src/*.test.ts
-pnpm --filter @fleetadlc/github exec vitest run src/token-broker.test.ts    # one file
-pnpm --filter @fleetadlc/github build                                       # tsc; consumers import dist/
+pnpm --filter @openadlc/github test                                        # every src/*.test.ts
+pnpm --filter @openadlc/github exec vitest run src/token-broker.test.ts    # one file
+pnpm --filter @openadlc/github build                                       # tsc; consumers import dist/
 ```
 
 - **No network, no real store.** Tests stub `fetch` (`vi.stubGlobal`, or the
@@ -83,8 +83,8 @@ pnpm --filter @fleetadlc/github build                                       # ts
 - **Consumers read `dist/`, and vitest does not type-check.** Build after a change
   and after the last edit, before the bridge's or hostd's tests see it.
 - **Scripts reach real credentials.** Anything that calls `getSecretStore()` with
-  no `FLEETADLC_HOME` reads and writes the installed OpenADLC's secrets, and a
+  no `OPENADLC_HOME` reads and writes the installed OpenADLC's secrets, and a
   `TokenBroker` built outside the bridge rotates its bots' refresh tokens. Point
-  `FLEETADLC_HOME` at a scratch install: [docs/development.md](../../docs/development.md).
-  `FLEETADLC_HOME` does not isolate the Secret Manager store, so a script run on
-  a cloud host must leave `FLEETADLC_SECRET_STORE` unset.
+  `OPENADLC_HOME` at a scratch install: [docs/development.md](../../docs/development.md).
+  `OPENADLC_HOME` does not isolate the Secret Manager store, so a script run on
+  a cloud host must leave `OPENADLC_SECRET_STORE` unset.

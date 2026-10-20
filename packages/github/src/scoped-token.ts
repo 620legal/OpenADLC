@@ -72,7 +72,7 @@ export async function createScopedToken(input: {
         authorization: basic(input.clientId, input.clientSecret),
         'content-type': 'application/json',
         'x-github-api-version': '2022-11-28',
-        'user-agent': 'fleetadlc-token-broker',
+        'user-agent': 'openadlc-token-broker',
       },
       body: JSON.stringify({ access_token: input.accessToken, target: owner, repositories: [name] }),
     });
@@ -120,7 +120,7 @@ export async function clientSecretAccepted(input: {
       authorization: basic(input.clientId, input.clientSecret),
       'content-type': 'application/json',
       'x-github-api-version': '2022-11-28',
-      'user-agent': 'fleetadlc-health',
+      'user-agent': 'openadlc-health',
     },
     body: JSON.stringify({ access_token: input.accessToken }),
   });

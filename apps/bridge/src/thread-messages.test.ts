@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GitHubApiError } from '@fleetadlc/github';
+import { GitHubApiError } from '@openadlc/github';
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   repos: { getRepoByName: vi.fn(async (name: string) => ({ id: 'repo-1', name, fullName: `exampleco/${name}` })) },
   tasks: { getTask: vi.fn(async () => null) },
   threads: {
@@ -13,7 +13,7 @@ vi.mock('@fleetadlc/db', () => ({
 
 import { sendThreadMessage } from './thread-messages.js';
 
-const BUILDER = { id: 'bot-builder', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'fleetadlc-atlas-janedoe' };
+const BUILDER = { id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'openadlc-atlas-janedoe' };
 
 /** A message to the builder about an issue, sent with `client` as the bot's GitHub. */
 async function refusal(bot: Record<string, unknown>, client: unknown): Promise<{ status: number; message: string }> {
@@ -33,7 +33,7 @@ describe('a message a person sends to GitHub that is not sent', () => {
     const { status, message } = await refusal({ ...BUILDER, githubLogin: null }, null);
     expect(status).toBe(409);
     expect(message).toContain('has no GitHub account yet, so it was not sent');
-    expect(message).toContain('run: fleetadlc auth login --bot builder');
+    expect(message).toContain('run: openadlc auth login --bot builder');
   });
 
   it('tells a sign-in that failed apart from no account, and says to try again or reconnect', async () => {

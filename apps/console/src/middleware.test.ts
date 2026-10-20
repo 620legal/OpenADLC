@@ -11,9 +11,9 @@ import { middleware, middlewareCovers } from './middleware';
 const SECRET = 'e'.repeat(64);
 
 beforeEach(() => {
-  vi.stubEnv('FLEETADLC_CONSOLE_SECRET', SECRET);
-  vi.stubEnv('FLEETADLC_IDENTITY_MODE_EXPECTED', '');
-  vi.stubEnv('FLEETADLC_ALLOWED_HOSTS', '');
+  vi.stubEnv('OPENADLC_CONSOLE_SECRET', SECRET);
+  vi.stubEnv('OPENADLC_IDENTITY_MODE_EXPECTED', '');
+  vi.stubEnv('OPENADLC_ALLOWED_HOSTS', '');
 });
 
 afterEach(() => {
@@ -42,17 +42,17 @@ describe('a browser that has not signed in', () => {
   it('is told how to sign in: JSON for /api, text for a page', async () => {
     const api = await at('/api/backup', { method: 'POST' });
     expect(api?.headers.get('content-type')).toContain('application/json');
-    expect(((await api?.json()) as { error: string }).error).toContain('fleetadlc console-link');
+    expect(((await api?.json()) as { error: string }).error).toContain('openadlc console-link');
 
     const page = await at('/');
     expect(page?.headers.get('content-type')).toContain('text/plain');
-    expect(await page?.text()).toContain('fleetadlc console-link');
+    expect(await page?.text()).toContain('openadlc console-link');
   });
 
   it('is refused with a sign-in link in place of a session, or a session from another install', async () => {
-    expect((await at('/', { cookie: `fleetadlc_session=${await signInToken(SECRET)}` }))?.status).toBe(401);
-    expect((await at('/', { cookie: `fleetadlc_session=${await sessionValue('f'.repeat(64))}` }))?.status).toBe(401);
-    expect((await at('/', { cookie: 'fleetadlc_session=' }))?.status).toBe(401);
+    expect((await at('/', { cookie: `openadlc_session=${await signInToken(SECRET)}` }))?.status).toBe(401);
+    expect((await at('/', { cookie: `openadlc_session=${await sessionValue('f'.repeat(64))}` }))?.status).toBe(401);
+    expect((await at('/', { cookie: 'openadlc_session=' }))?.status).toBe(401);
   });
 
   it('can still reach /signin', async () => {
@@ -73,7 +73,7 @@ describe('a browser that has not signed in', () => {
       expect(await refused?.text()).toBe('');
       const said = warn.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('mybox.lan'));
       expect(said).toEqual([expect.stringContaining('[console] refusing requests for Host "mybox.lan:47300"')]);
-      expect(said[0]).toContain('"allowedHosts" in install.json (FLEETADLC_ALLOWED_HOSTS)');
+      expect(said[0]).toContain('"allowedHosts" in install.json (OPENADLC_ALLOWED_HOSTS)');
     } finally {
       warn.mockRestore();
     }
@@ -100,7 +100,7 @@ describe('paths the matcher must still sign in', () => {
 
 describe('a browser that has signed in', () => {
   it('is served every page and /api route', async () => {
-    const cookie = `theme=dark; fleetadlc_session=${await sessionValue(SECRET)}`;
+    const cookie = `theme=dark; openadlc_session=${await sessionValue(SECRET)}`;
     expect(await at('/', { cookie })).toBeUndefined();
     expect(await at('/api/backup', { method: 'POST', cookie })).toBeUndefined();
   });
@@ -108,7 +108,7 @@ describe('a browser that has signed in', () => {
 
 describe('a console with nothing to check against', () => {
   it('answers 503 on every path when it was started without its secret', async () => {
-    vi.stubEnv('FLEETADLC_CONSOLE_SECRET', '');
+    vi.stubEnv('OPENADLC_CONSOLE_SECRET', '');
     for (const path of ['/', '/signin', '/api/backup']) {
       const refused = await at(path);
       expect(refused?.status, path).toBe(503);
@@ -118,8 +118,8 @@ describe('a console with nothing to check against', () => {
   });
 
   it('leaves signing in to IAP behind it', async () => {
-    vi.stubEnv('FLEETADLC_IDENTITY_MODE_EXPECTED', 'iap');
-    vi.stubEnv('FLEETADLC_CONSOLE_SECRET', '');
+    vi.stubEnv('OPENADLC_IDENTITY_MODE_EXPECTED', 'iap');
+    vi.stubEnv('OPENADLC_CONSOLE_SECRET', '');
     expect(await at('/')).toBeUndefined();
     expect(await at('/api/engines')).toBeUndefined();
   });

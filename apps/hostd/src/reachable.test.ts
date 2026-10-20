@@ -4,7 +4,7 @@ import { CONTAINER_HOST_ALIAS, reachableFromTask } from './reachable.js';
 describe('the address a task is given for a host service', () => {
   it('rewrites loopback under the docker driver', () => {
     // The bug this exists for: the skill runner posts every state report, cost
-    // check and gate to FLEETADLC_BRIDGE_URL, and inside a container on a per-bot
+    // check and gate to OPENADLC_BRIDGE_URL, and inside a container on a per-bot
     // network `127.0.0.1` is the container itself.
     expect(reachableFromTask('http://127.0.0.1:47311', 'docker')).toBe(`http://${CONTAINER_HOST_ALIAS}:47311`);
     expect(reachableFromTask('http://localhost:47312', 'docker')).toBe(`http://${CONTAINER_HOST_ALIAS}:47312`);
@@ -17,7 +17,7 @@ describe('the address a task is given for a host service', () => {
   it('leaves a real hostname alone, because the operator meant it', () => {
     // An install whose bridge is behind a name already reachable from the
     // container must not have it replaced by the docker alias.
-    expect(reachableFromTask('https://fleetadlc.internal.example', 'docker')).toBe('https://fleetadlc.internal.example');
+    expect(reachableFromTask('https://openadlc.internal.example', 'docker')).toBe('https://openadlc.internal.example');
     expect(reachableFromTask('http://bridge:47311', 'docker')).toBe('http://bridge:47311');
   });
 

@@ -12,7 +12,7 @@ const ROWS: Record<
   { id: string; state: string; kind: string; branch: string | null; tmuxSession: string | null; repoId: string | null; subjectRef: string; container?: string | null; worktree?: string | null }
 > = {};
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async () => undefined),
   bots: { listBots: vi.fn(async () => []) },
   hosts: { heartbeat: vi.fn(async () => undefined) },
@@ -26,7 +26,7 @@ vi.mock('@fleetadlc/db', () => ({
   },
 }));
 
-const db = await import('@fleetadlc/db');
+const db = await import('@openadlc/db');
 const { SessionObserver } = await import('./observer.js');
 
 function found(taskId: string | null, name = `task-${(taskId ?? 'xxxxxxxx').slice(0, 8)}`): FoundComputer {

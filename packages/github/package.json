@@ -1,5 +1,5 @@
 {
-  "name": "@fleetadlc/github",
+  "name": "@openadlc/github",
   "version": "0.1.0",
   "description": "GitHub for OpenADLC: the device flow, the token broker, the secret store, the REST client and repository rules.",
   "private": true,
@@ -16,7 +16,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@fleetadlc/shared": "workspace:*"
+    "@openadlc/shared": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { bots, modelAccounts } from '@fleetadlc/db';
-import { modelPricesEnv, type ModelPrice } from '@fleetadlc/engines';
+import { bots, modelAccounts } from '@openadlc/db';
+import { modelPricesEnv, type ModelPrice } from '@openadlc/engines';
 import {
   engineKeyRef,
   getSecretStore,
@@ -13,11 +13,11 @@ import {
   signingKeyRef,
   taskTokenFor,
   type SecretStore,
-} from '@fleetadlc/github';
+} from '@openadlc/github';
 import { loginRootFromEnv } from './config.js';
 import type { SigningAgent } from './drivers/types.js';
 import { keyEnv } from './key-env.js';
-import { signInDir } from '@fleetadlc/backup';
+import { signInDir } from '@openadlc/backup';
 import { CONTAINER_AUTH, CONTAINER_LOGIN, LOGIN_HOME_ENV, isDeviceProvider, loginDir } from './logins.js';
 
 /** The account a bot was assigned, when it has been. */
@@ -235,7 +235,7 @@ export interface SessionEnvInput {
   bridgeUrl: string;
   /** Where the task reaches hostd, for the registry credential it installs with. */
   hostdUrl: string;
-  /** hostd names a private registry (`FLEETADLC_REGISTRY_HOST`), so `fleetadlc-install` must not install without it. */
+  /** hostd names a private registry (`OPENADLC_REGISTRY_HOST`), so `openadlc-install` must not install without it. */
   registryConfigured?: boolean;
   costCapUsd: number;
   contextFiles: string[];
@@ -292,7 +292,7 @@ export class SessionEnvMinter {
 
   /**
    * The task's own token (`taskTokenFor`), which `make setup` and local CI
-   * need as well as the session: `fleetadlc-install` presents it to hostd for
+   * need as well as the session: `openadlc-install` presents it to hostd for
    * the registry credential. Null on an install whose bridge has not written
    * its secret yet, in which case the session reports nothing and hostd's own
    * observer is what notices the task ending.
@@ -306,41 +306,41 @@ export class SessionEnvMinter {
     const taskToken = await this.taskToken(input.taskId);
 
     const env: Record<string, string> = {
-      FLEETADLC_TASK_ID: input.taskId,
-      FLEETADLC_BOT: input.bot,
-      FLEETADLC_SKILL: input.skill,
-      FLEETADLC_ENGINE: input.engine,
+      OPENADLC_TASK_ID: input.taskId,
+      OPENADLC_BOT: input.bot,
+      OPENADLC_SKILL: input.skill,
+      OPENADLC_ENGINE: input.engine,
       // The id the engine calls. The alias, if the bot was configured with
       // one, is a second variable so the ledger can record both and the model
       // column never holds `newest:`.
-      FLEETADLC_MODEL: input.model,
-      ...(input.modelAlias ? { FLEETADLC_MODEL_ALIAS: input.modelAlias } : {}),
-      FLEETADLC_BRIDGE_URL: input.bridgeUrl,
-      FLEETADLC_HOSTD_URL: input.hostdUrl,
+      OPENADLC_MODEL: input.model,
+      ...(input.modelAlias ? { OPENADLC_MODEL_ALIAS: input.modelAlias } : {}),
+      OPENADLC_BRIDGE_URL: input.bridgeUrl,
+      OPENADLC_HOSTD_URL: input.hostdUrl,
       // Scoped to this task and nothing else. The session's command reports its
       // state, usage and gates to `/internal/tasks/<id>/*`, and this is what
       // admits it there — not the install's secret, which would also open
       // `/internal/dispatch/lease` and let a bot start work as any other bot.
-      ...(taskToken ? { FLEETADLC_TASK_TOKEN: taskToken } : {}),
+      ...(taskToken ? { OPENADLC_TASK_TOKEN: taskToken } : {}),
       // Set from hostd's own configuration, never the repository's, so a
-      // repository cannot turn off `fleetadlc-install`'s refusal to install
+      // repository cannot turn off `openadlc-install`'s refusal to install
       // without the registry's credential.
-      ...(input.registryConfigured ? { FLEETADLC_REGISTRY_CONFIGURED: '1' } : {}),
-      FLEETADLC_SUBJECT_REF: input.subjectRef,
-      FLEETADLC_WORKDIR: input.workdir,
-      FLEETADLC_CONTEXT_FILES: input.contextFiles.join(','),
-      FLEETADLC_DECLARED_PATHS: input.declaredPaths.join(','),
-      FLEETADLC_TASK_COST_CAP_USD: String(input.costCapUsd),
+      ...(input.registryConfigured ? { OPENADLC_REGISTRY_CONFIGURED: '1' } : {}),
+      OPENADLC_SUBJECT_REF: input.subjectRef,
+      OPENADLC_WORKDIR: input.workdir,
+      OPENADLC_CONTEXT_FILES: input.contextFiles.join(','),
+      OPENADLC_DECLARED_PATHS: input.declaredPaths.join(','),
+      OPENADLC_TASK_COST_CAP_USD: String(input.costCapUsd),
       // Passed through so the integration suites can run scripted engines.
-      // Never set by an install: see FLEETADLC_SCRIPTED_ENGINES in the CLI.
-      ...(process.env.FLEETADLC_SCRIPTED_ENGINES === '1' ? { FLEETADLC_SCRIPTED_ENGINES: '1' } : {}),
+      // Never set by an install: see OPENADLC_SCRIPTED_ENGINES in the CLI.
+      ...(process.env.OPENADLC_SCRIPTED_ENGINES === '1' ? { OPENADLC_SCRIPTED_ENGINES: '1' } : {}),
       // Only ever the task's own: the platform's database is not a bot's to see.
       ...(input.databaseUrl ? { DATABASE_URL: input.databaseUrl } : {}),
-      ...(input.repoFullName ? { FLEETADLC_REPO: input.repoFullName } : {}),
-      ...(input.postHeader ? { FLEETADLC_POST_HEADER: input.postHeader } : {}),
-      ...(input.reviewMode ? { FLEETADLC_REVIEW_MODE: input.reviewMode } : {}),
-      ...(input.reviewLens ? { FLEETADLC_REVIEW_LENS: input.reviewLens } : {}),
-      ...(input.repoHome ? { FLEETADLC_REPO_HOME: input.repoHome } : {}),
+      ...(input.repoFullName ? { OPENADLC_REPO: input.repoFullName } : {}),
+      ...(input.postHeader ? { OPENADLC_POST_HEADER: input.postHeader } : {}),
+      ...(input.reviewMode ? { OPENADLC_REVIEW_MODE: input.reviewMode } : {}),
+      ...(input.reviewLens ? { OPENADLC_REVIEW_LENS: input.reviewLens } : {}),
+      ...(input.repoHome ? { OPENADLC_REPO_HOME: input.repoHome } : {}),
       // The install's prices. The session never reads a price from its
       // working directory, which is the managed repository's checkout.
       ...modelPricesEnv(input.modelPrices ?? {}),
@@ -428,7 +428,7 @@ export class SessionEnvMinter {
 
     if (input.token) {
       // `git push` asks gh for the token the session already holds. Without
-      // this a plain push had no credentials: the builder of fleetadlc-testbed#4
+      // this a plain push had no credentials: the builder of openadlc-testbed#4
       // found that out mid-task and ran `gh auth setup-git`, which writes the
       // helper into the container's own configuration for good.
       gitConfig.push(['credential.https://github.com.helper', '!gh auth git-credential']);
@@ -463,13 +463,13 @@ export class SessionEnvMinter {
  * starts one inside the container instead.
  */
 export async function hostSigningAgent(bot: string, privateKey: string): Promise<SigningAgent | null> {
-  const dir = mkdtempSync(join(tmpdir(), `fleetadlc-agent-${bot}-`));
+  const dir = mkdtempSync(join(tmpdir(), `openadlc-agent-${bot}-`));
   const socket = join(dir, 'agent.sock');
   let pid: number | null = null;
   // The agent is stopped by the PID it printed. `ssh-agent -k` kills whatever
   // SSH_AGENT_PID names: with only the socket set it refused, and the agent
   // stayed up holding the bot's key, one more per task; with the SSH_AGENT_PID
-  // hostd inherited from the shell that ran `fleetadlc up`, it killed the
+  // hostd inherited from the shell that ran `openadlc up`, it killed the
   // operator's own agent instead.
   const stopAgent = (): void => {
     if (pid === null) return;

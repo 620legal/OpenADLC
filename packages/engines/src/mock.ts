@@ -1,4 +1,4 @@
-import { renderMarker, type EngineName } from '@fleetadlc/shared';
+import { renderMarker, type EngineName } from '@openadlc/shared';
 import type { Engine, EngineEvent, EngineRunInput, EngineUsage } from './types.js';
 
 export interface MockScript {

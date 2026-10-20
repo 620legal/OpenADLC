@@ -17,7 +17,7 @@ let root: string;
 let worktree: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'fleetadlc-pnpm-store-'));
+  root = mkdtempSync(join(tmpdir(), 'openadlc-pnpm-store-'));
   worktree = join(root, 'work', 'slots', 'task-1-abc', 'wt');
   mkdirSync(worktree, { recursive: true });
   writeFileSync(join(worktree, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n");
@@ -47,12 +47,12 @@ function store(answer: (args: string[]) => Promise<DockerResult> | DockerResult 
   };
   const pnpm = new PnpmStore({
     docker,
-    image: 'fleetadlc-bot:latest',
+    image: 'openadlc-bot:latest',
     install: 'default',
     workRoot: join(root, 'work'),
-    cacheVolume: (repoKey) => `fleetadlc-cache-default-${repoKey}`,
+    cacheVolume: (repoKey) => `openadlc-cache-default-${repoKey}`,
     networkArgs: ['--add-host', 'host.docker.internal:host-gateway', '-e', 'HTTPS_PROXY=http://host.docker.internal:3128'],
-    labels: ['fleetadlc.install=default', 'fleetadlc.kind=pnpm-fill'],
+    labels: ['openadlc.install=default', 'openadlc.kind=pnpm-fill'],
     ...(registry ? { registry: async () => registry } : {}),
   });
   return { pnpm, seen };
@@ -70,7 +70,7 @@ describe('filling a repository’s pnpm store', () => {
     const [{ args, secrets, files }] = seen as [Seen];
     expect(args.slice(0, 2)).toEqual(['run', '--rm']);
     const copy = mounts(args).find((mount) => mount.endsWith(`:${worktree}`))!.split(':')[0]!;
-    expect(mounts(args)).toEqual(['fleetadlc-pnpm-default-acme__widgets:/pnpm-store', 'fleetadlc-cache-default-acme__widgets:/cache', `${copy}:${worktree}`]);
+    expect(mounts(args)).toEqual(['openadlc-pnpm-default-acme__widgets:/pnpm-store', 'openadlc-cache-default-acme__widgets:/cache', `${copy}:${worktree}`]);
     // Its copy, mounted at the worktree's path so the task finds its project
     // recorded in the store; never the slot or the worktree themselves.
     expect(copy.startsWith(join(root, 'work', 'pnpm-fill'))).toBe(true);
@@ -78,7 +78,7 @@ describe('filling a repository’s pnpm store', () => {
     expect(files).toEqual({ 'pnpm-lock.yaml': "lockfileVersion: '9.0'\n", 'package.json': '{"packageManager":"pnpm@10.33.3"}\n' });
     // The proxy and nothing that signs anybody in.
     expect(envs(args)).toEqual(['HTTPS_PROXY=http://host.docker.internal:3128', 'COREPACK_ENABLE_DOWNLOAD_PROMPT=0']);
-    expect(args.join(' ')).not.toMatch(/GH_TOKEN|GITHUB_TOKEN|ANTHROPIC|OPENAI|CODEX_HOME|GROK_HOME|\/fleetadlc\/login|DATABASE_URL/);
+    expect(args.join(' ')).not.toMatch(/GH_TOKEN|GITHUB_TOKEN|ANTHROPIC|OPENAI|CODEX_HOME|GROK_HOME|\/openadlc\/login|DATABASE_URL/);
     expect(secrets).toBeUndefined();
     const script = args.at(-1)!;
     expect(script).toContain('timeout --kill-after=10s 300s pnpm fetch --frozen-lockfile --ignore-scripts --ignore-pnpmfile --store-dir /pnpm-store');
@@ -184,10 +184,10 @@ describe('filling a repository’s pnpm store', () => {
     await pnpm.fill({ repoKey: 'acme__widgets', worktree });
 
     const [{ args, secrets, files }] = seen as [Seen];
-    expect(envs(args)).toContain('FLEETADLC_REGISTRY_TOKEN');
+    expect(envs(args)).toContain('OPENADLC_REGISTRY_TOKEN');
     expect(args.join(' ')).not.toContain('npm_TOKEN');
-    expect(secrets).toEqual({ FLEETADLC_REGISTRY_TOKEN: 'npm_TOKEN' });
-    expect(files['.npmrc']).toBe('//npm.example.com/:_authToken=${FLEETADLC_REGISTRY_TOKEN}\n');
+    expect(secrets).toEqual({ OPENADLC_REGISTRY_TOKEN: 'npm_TOKEN' });
+    expect(files['.npmrc']).toBe('//npm.example.com/:_authToken=${OPENADLC_REGISTRY_TOKEN}\n');
   });
 });
 

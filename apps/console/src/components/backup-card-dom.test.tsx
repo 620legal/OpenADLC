@@ -14,9 +14,9 @@ import { BackupCard } from './backup-card';
 
 const INVENTORY: BackupInventory = {
   install: { settings: ['operatorEmail'], app: { clientId: true, privateKey: true, webhookSecret: true } },
-  repositories: [{ name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' }],
+  repositories: [{ name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }],
   bots: [
-    { seat: 'builder', name: 'fleetadlc-atlas-janedoe', role: 'implement', login: 'fleetadlc-atlas-janedoe', signIn: 'refresh', signingKey: true, modelAccountId: null },
+    { seat: 'builder', name: 'openadlc-atlas-janedoe', role: 'implement', login: 'openadlc-atlas-janedoe', signIn: 'refresh', signingKey: true, modelAccountId: null },
   ],
   accounts: [],
   history: { threads: 1, messages: 2, audit: 3, ledger: 4, requests: 5 },
@@ -28,7 +28,7 @@ const WAITING: RestoreJob = {
   state: 'waiting',
   startedAt: '2026-09-25T10:00:00.000Z',
   finishedAt: null,
-  waitingFor: ['fleetadlc-atlas-janedoe'],
+  waitingFor: ['openadlc-atlas-janedoe'],
   error: null,
   result: null,
 };
@@ -257,7 +257,7 @@ describe('the Restore modal', () => {
     await mount();
     await click(button('Restore', container));
     const picker = dialog()!.querySelector<HTMLInputElement>('input[type=file]')!;
-    const sealed = new File([new TextEncoder().encode('FLEETBAK sealed bytes')], 'fleetadlc-backup.fleetbak');
+    const sealed = new File([new TextEncoder().encode('FLEETBAK sealed bytes')], 'openadlc-backup.fleetbak');
     await act(async () => {
       Object.defineProperty(picker, 'files', { value: [sealed], configurable: true });
       picker.dispatchEvent(new Event('change', { bubbles: true }));
@@ -268,7 +268,7 @@ describe('the Restore modal', () => {
 
     await click(button('Close', dialog()!));
     await click(button('Restore', container));
-    expect(dialog()?.textContent).not.toContain('fleetadlc-backup.fleetbak');
+    expect(dialog()?.textContent).not.toContain('openadlc-backup.fleetbak');
     expect(dialog()?.querySelector('input[type=password]')).toBeNull();
     expect(button('choose the backup file', dialog()!)).toBeTruthy();
   });

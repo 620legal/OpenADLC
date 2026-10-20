@@ -1,4 +1,4 @@
-import { NEXT_LABEL, PAUSED_LABEL, hasNextLabel, inertMarkup } from '@fleetadlc/shared';
+import { NEXT_LABEL, PAUSED_LABEL, hasNextLabel, inertMarkup } from '@openadlc/shared';
 import { forgetHold, type ItemHold, recordHold } from './item-hold.js';
 import { HttpFailure, type Router } from './router.js';
 import { publicNameOf } from './thread-view.js';
@@ -8,11 +8,11 @@ import { issueNumberFromBranch } from './work.js';
  * A person's controls on one piece of work, from its card: hold it, let it go
  * on, build it next, or cancel it.
  *
- * - **Pause** puts `fleetadlc:paused` on the issue and its pull request: the
+ * - **Pause** puts `openadlc:paused` on the issue and its pull request: the
  *   step running finishes, and nothing new starts — the dispatcher passes it
  *   over, the task service opens nothing on it, the merge line holds it.
  * - **Resume** takes it off and starts what the hold kept back.
- * - **Next** puts `fleetadlc:next` on it, and the dispatcher builds it ahead of
+ * - **Next** puts `openadlc:next` on it, and the dispatcher builds it ahead of
  *   priority order once nothing it overlaps is in flight. One per repository:
  *   putting it on one takes it off any other.
  * - **Cancel** takes the issue off the board, stops its tasks, closes its

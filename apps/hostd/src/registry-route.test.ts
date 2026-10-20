@@ -1,10 +1,10 @@
 import type { AddressInfo } from 'node:net';
-import { registryTokenRef, TASK_TOKEN_HEADER, taskTokenFor, type SecretStore } from '@fleetadlc/github';
+import { registryTokenRef, TASK_TOKEN_HEADER, taskTokenFor, type SecretStore } from '@openadlc/github';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // hostd's other unit tests are pure; this one needs the route, and the route
 // reads the task to refuse a credential to a task that has ended.
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async () => undefined),
   bots: { setBotStatus: vi.fn(), getBotByName: vi.fn(), listBots: vi.fn(async () => []) },
   costs: { taskSpend: vi.fn(async () => 0) },
@@ -99,7 +99,7 @@ describe('a task asking hostd for a registry credential', () => {
 
   it('is served to the platform, which holds the install secret', async () => {
     // hostd's own suites and the bridge drive this directly.
-    const result = await server.get('task-live', { 'x-fleetadlc-internal-secret': INSTALL_SECRET });
+    const result = await server.get('task-live', { 'x-openadlc-internal-secret': INSTALL_SECRET });
     expect(result.status).toBe(200);
   });
 

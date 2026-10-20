@@ -29,7 +29,7 @@ say) in `config/bots.yaml`, or have a person merge them with `ciMergeByPerson`.
 
 Each task runs in a computer of its own: under the `docker` driver a container,
 `task-<id8>`, made when the task starts and removed when it ends — or, for a task
-paused on a person, `FLEETADLC_PAUSED_KEEP_MINUTES` after it pauses. A seat is
+paused on a person, `OPENADLC_PAUSED_KEEP_MINUTES` after it pauses. A seat is
 the task's GitHub identity and never its computer: two tasks of one seat run in
 two containers. On an `infra/gcp` install a task's computer can reach only
 GitHub, package registries and its engine's API; anywhere else it can reach
@@ -44,7 +44,7 @@ the platform database is one of those ports, and its password, below, is what
 keeps a task out of it.
 
 OpenADLC turns the engine CLIs' own sandboxes off inside a container
-(`FLEETADLC_CONTAINED`), so the container is what limits a task. It runs with
+(`OPENADLC_CONTAINED`), so the container is what limits a task. It runs with
 its seat's CPUs and memory, at most 4096 processes (`--pids-limit`), so a fork
 bomb fills its own container and not the host's process table, and with
 `no-new-privileges`, so a setuid binary in the image (`su`, `mount`,
@@ -53,13 +53,13 @@ defaults, and its root filesystem is writable.
 
 None of this holds under the `local` driver. There a task is a tmux session on
 the host, running as the user hostd runs as, with no container around it. It
-can read the secret store (`~/.fleetadlc/secrets/`: the GitHub App's private
+can read the secret store (`~/.openadlc/secrets/`: the GitHub App's private
 key, every bot's sign-in, the model keys) and `install.json` (the database
 password, the webhook secret), and can run anything on the machine. A bot
 talked into it by what it reads could act as the App or as any bot. Use local
 only with a throwaway App, accounts and repositories. A new install takes
 `docker` when Docker answers and the bot image is built; while hostd runs
-local, `fleetadlc up` and `fleetadlc doctor` say so and the board shows a
+local, `openadlc up` and `openadlc doctor` say so and the board shows a
 `hostd-driver` warning card.
 
 It does reach the host's bridge and hostd ports: that is how its own task
@@ -69,7 +69,7 @@ is running or paused on a person's question: a gate, a message, usage or a new
 state for a task that has ended is refused with 409 and changes nothing. It
 does not reach the console's API. On a local install the bridge
 serves `/v1/*` only to a caller presenting the install's console secret, which
-only the console's server and the `fleetadlc` CLI hold, and the console serves
+only the console's server and the `openadlc` CLI hold, and the console serves
 nothing to a browser that has not signed in. Before that, anything that reached
 port 47311 or 47300 — a task's container through `host.docker.internal`, or a
 host on the LAN — named itself and was an admin: it could download a backup of
@@ -77,12 +77,12 @@ every credential, or mint a terminal into another seat's session.
 
 The one exception is a bot on an OpenAI or xAI **subscription**. That CLI keeps
 its own login and refreshes it as it works, so the login lives in a directory
-rather than in the session's environment: `~/.fleetadlc/logins/<account-id>` on the
+rather than in the session's environment: `~/.openadlc/logins/<account-id>` on the
 host, 0700 and made by hostd. Under the docker driver a task does not get that
 directory as its home. Its `CODEX_HOME` or `GROK_HOME` is
 `logins/.homes/<slot>`, outside the slot — the slot is mounted at its host
 path, so a directory inside it can be replaced with a link — and mounted at
-`/fleetadlc/login`. It starts empty apart from mount points. The sealed files
+`/openadlc/login`. It starts empty apart from mount points. The sealed files
 — `config.toml`, `managed_config.toml`, `requirements.toml`, `AGENTS.md`,
 `AGENTS.override.md` and `.env` — are bind-mounted read-only from
 `logins/.published/<account-id>/` over that home. A file the task creates
@@ -94,11 +94,11 @@ does. It is not what the next task loads.
 The sign-in stays the account's `auth.json`, one file every task on the
 account uses, kept in a directory of its own:
 `logins/<account-id>/sign-in/auth.json`. Codex 0.155.1 writes that file in
-place, so it is bind-mounted at `/fleetadlc/login/auth.json` and a refresh
+place, so it is bind-mounted at `/openadlc/login/auth.json` and a refresh
 is the same inode. A Codex task gets no directory of the account's. Grok
 renames a new file over `auth.json`, which a file mount refuses with EBUSY
 and would leave the old inode, so a Grok task has the `sign-in` directory,
-and nothing else of the account's, at `/fleetadlc/auth`, and
+and nothing else of the account's, at `/openadlc/auth`, and
 `GROK_AUTH_PATH` names `auth.json` there. A refresh is visible to the other
 tasks at once, and a hostd crash before the computer ends does not lose it.
 OpenAI refresh tokens are single-use, so a per-task copy made the next
@@ -145,7 +145,7 @@ command line and valued only in the docker client's own environment, so it is
 not in the process list.
 
 With the `docker` driver every task's container sits on one network per
-install, `fleetadlc-tasks`, made with inter-container traffic off
+install, `openadlc-tasks`, made with inter-container traffic off
 (`com.docker.network.bridge.enable_icc=false`): a task cannot open a connection
 to another task's container, whichever seat either belongs to. A network per
 task would have been simpler to reason about, but would exhaust Docker's
@@ -155,7 +155,7 @@ the path it has on the host, and nothing else of the work root: no other
 task's folder and no mirror.
 
 A task whose seat runs checks gets a database of its own on the host's one
-task database server, `fleetadlc-taskdb`: a login role and a database named
+task database server, `openadlc-taskdb`: a login role and a database named
 after the task's whole id (`t_<id>`), owned by that role, closed to every other role
 (`revoke connect … from public`), limited to 20 connections so one task's pool
 cannot take the server from the rest, and dropped with the task's computer.
@@ -179,14 +179,14 @@ the server is made, and a role's goes to `psql` on its stdin. The `local` driver
 only.
 
 What a repository's tasks share on a host and can write is its cache volume,
-`fleetadlc-cache-<install>-<repo>`, mounted at `/cache`, and on it only npm's
+`openadlc-cache-<install>-<repo>`, mounted at `/cache`, and on it only npm's
 cache, which keeps each package under the hash its lockfile names and verifies
 it as it is taken out. A task can write anything there, so a cache that did not
 check would let one task — any seat's, in that repository — plant something the
 next task runs. pnpm's store does not check: for a package it already holds,
 pnpm trusts its own index, which a task could rewrite along with the files, and
 it does not hash a file older than the index again. So each repository's pnpm
-store is a volume of its own, `fleetadlc-pnpm-<install>-<repo>`, mounted
+store is a volume of its own, `openadlc-pnpm-<install>-<repo>`, mounted
 read-only at `/pnpm-store` in every task's computer, and hostd alone writes it:
 as a task starts or resumes, it runs `pnpm fetch --ignore-scripts` on a copy of
 the task's lockfile in a short-lived container that has no task's folder, no
@@ -200,7 +200,7 @@ fill, the `local` driver — the task installs into a store of its own, in its
 home. Global installs and `~/.cache` are the task's own too, and go with it. A
 task in another repository never has either volume.
 
-A warm computer (`FLEETADLC_WARM_POOL`, off by default) is made before its task
+A warm computer (`OPENADLC_WARM_POOL`, off by default) is made before its task
 is known and claimed by resizing and renaming it, so it holds nothing of any
 seat: no login — a task whose account needs one is always made cold — no
 credential, and no task's folder until the claim writes whose it is. One left
@@ -238,14 +238,14 @@ that Makefile is the pull request's, and it would run outside the skill's tools.
 No credential is on a command line in the host's process list.
 
 Keeping the URL out of the environment does not keep a task out of the platform
-database on its own. `fleetadlc up` publishes that database on the host's
+database on its own. `openadlc up` publishes that database on the host's
 loopback, and a task's computer reaches the host through `host.docker.internal`,
 which on Docker Desktop and OrbStack leads to the host's loopback too. What
-keeps it out is the password: `fleetadlc up` gives each install one of its own,
+keeps it out is the password: `openadlc up` gives each install one of its own,
 64 hex characters kept only in `databaseUrl` in `install.json` (0600), and on
-the container it keeps changes an older install's `fleetadlc` to one on its next
-start. Every install used to take `fleetadlc`, which is printed in this
-repository, as its superuser's password. `fleetadlc doctor` fails while the URL
+the container it keeps changes an older install's `openadlc` to one on its next
+start. Every install used to take `openadlc`, which is printed in this
+repository, as its superuser's password. `openadlc doctor` fails while the URL
 it connects with still has that one, and warns while the container is published
 beyond 127.0.0.1.
 
@@ -309,18 +309,18 @@ to make (`apps/bridge/src/account-guard.ts`).
 
 Credentials are short-lived. The device flow yields an eight-hour user token and a
 six-month refresh token; only the refresh token is stored, GitHub rotates it on
-every use, and a revoked authorization surfaces in `fleetadlc doctor` and the console
+every use, and a revoked authorization surfaces in `openadlc doctor` and the console
 rather than failing quietly.
 
 Because that rotation invalidates the token it replaces, **only the bridge
 refreshes while it runs**. It is the install's token service: hostd and the CLI
 ask it for a short-lived token rather than holding a refresh token of their own,
 so two components can never race and lock an account out. There are two
-exceptions. When nothing answers on the bridge's port, `fleetadlc github
+exceptions. When nothing answers on the bridge's port, `openadlc github
 sync-labels`, `check` and `apply` refresh the token themselves, under the same
 Postgres advisory lock the bridge's broker takes for that sign-in
 (`github-refresh:<sign-in>`); a bridge that answers with a refusal stops the
-command instead. And `fleetadlc restore` refreshes each GitHub sign-in in the
+command instead. And `openadlc restore` refreshes each GitHub sign-in in the
 archive once, which is how it checks one and takes it over
 (`packages/backup/src/signins.ts`). A task is handed a token with
 at least five hours left, because a task may run four and a credential that
@@ -519,7 +519,7 @@ can answer the crew's questions, and is audited as `github.account_allowed`.
   approval a push superseded is recorded by the review's id as it is made
   (`review.dismissed_by_bridge`), and is not an incident.
 - Production is a GitHub environment held as the repository's
-  `.github/fleetadlc.yml` says: required reviewers who are people, or a wait
+  `.github/openadlc.yml` says: required reviewers who are people, or a wait
   timer. A bot never approves a deploy; the repository's GitHub rules do. Where
   GitHub's plan cannot hold a reviewer on the environment (a private
   repository on Free, Pro or Team), the bridge holds each promote of a
@@ -539,7 +539,7 @@ can answer the crew's questions, and is audited as `github.account_allowed`.
 - `testing`, `production` and `production-rollback` deploy only from the default branch: each
   environment's branch policy names it and nothing else, because the crew's own
   `agent/**` and `system/**` branches are protected too and "protected
-  branches" would admit them. `fleetadlc github check` and the
+  branches" would admit them. `openadlc github check` and the
   `production-rules` health check report any other policy as drift. That
   protects what the environment holds and nothing else: any crew account can
   push a workflow to its own branch and run it, and that workflow reads every
@@ -592,7 +592,7 @@ instructions or the environment file this one loads
 as every engine does. Under the docker driver that home is a directory of
 this task's own, so `skills/`, `rules/` and any other file it creates there
 go with the task. A Grok task also has the account's `sign-in` directory,
-and only that, at `/fleetadlc/auth` so Grok can refresh `auth.json`; a file
+and only that, at `/openadlc/auth` so Grok can refresh `auth.json`; a file
 written there is in no container's home and in no backup. A sign-in
 container gets a fresh home too.
 
@@ -616,8 +616,8 @@ what CI holds it to.
 
 **OpenADLC's `git` and `gh`** (`apps/hostd/bin/`) are first on every session's
 PATH, whatever the engine. The engine hands them the skill's rules in
-`FLEETADLC_TOOLS_POLICY`, which a task's own environment cannot override. A
-person's shell in the same session has no `FLEETADLC_TOOLS_POLICY` and is held to
+`OPENADLC_TOOLS_POLICY`, which a task's own environment cannot override. A
+person's shell in the same session has no `OPENADLC_TOOLS_POLICY` and is held to
 none of it.
 
 - **`git`** reads every command a task runs (`git-check.mjs`). It resolves an
@@ -640,7 +640,7 @@ none of it.
   refused rather than read as changing nothing.
   With `local_ci` (set by the build, resolve-conflict, QA and spec skills),
   each commit a push would put on a branch needs a local CI pass the bridge
-  recorded for it (`fleetadlc-ci`).
+  recorded for it (`openadlc-ci`).
 - **`gh`** refuses a command that starts with a `deny.github` entry
   (`pr review`, `workflow run`, `api`). It reads the command past a flag given
   before the subcommand (`gh pr -R o/r review`), expands an alias before it
@@ -652,7 +652,7 @@ none of it.
   because it cannot be read. With `local_ci` it refuses
   `gh pr create --draft`, and `gh pr create` or `gh pr ready` on a HEAD with no
   recorded local CI pass. It refuses a stage label (`adlc:*`) to every skill
-  but intake, and to an advisory reviewer (`FLEETADLC_REVIEW_MODE=advisory`)
+  but intake, and to an advisory reviewer (`OPENADLC_REVIEW_MODE=advisory`)
   `--approve` or `--request-changes`, an `APPROVE` or `REQUEST_CHANGES` review
   event through `gh api` (a field or a JSON body), and a GraphQL review that
   approves or asks for changes. A skill that denies `pr review` (a builder, QA,
@@ -661,7 +661,7 @@ none of it.
   since a comment approves nothing. `apps/hostd/src/gh-shim-run.test.ts` runs the
   script itself against a stand-in `gh`, so a refusal it stops calling fails.
 
-**Local CI is recorded by hostd, never by the session.** `fleetadlc-ci` asks the
+**Local CI is recorded by hostd, never by the session.** `openadlc-ci` asks the
 bridge with the task's token, which can start a run and read whether a commit
 passed, and nothing more. The worktree's `.git` is the session's, so hostd
 first proves the worktree is the commit's own tree, with git's system and
@@ -688,7 +688,7 @@ session holds its bot's GitHub token (`GH_TOKEN`), and `node` and `python` are
 allowed commands, so a task can call the API directly and do anything its
 account may, around both of them. On Codex, whose sandbox runs every command,
 `curl` works too. A session can also run the real `git` or `gh` by its full
-path, or unset `FLEETADLC_TOOLS_POLICY` in its own shell. A command git runs itself finds git's own binary
+path, or unset `OPENADLC_TOOLS_POLICY` in its own shell. A command git runs itself finds git's own binary
 first, so its pushes are not read. The guard refuses the commands and options
 whose job is to run one, abbreviated or not: `rebase --exec`/`-x`,
 `difftool --extcmd`/`-x`, `--upload-pack` on `fetch`, `pull`, `ls-remote`,
@@ -844,19 +844,19 @@ does not know who it was (`publicNameOf`, `apps/bridge/src/thread-view.ts`).
 The full identity stays in the audit log, the gate record and the console
 thread.
 
-`FLEETADLC_IDENTITY_MODE` chooses how, and `fleetadlc status` and the bridge's start-up
+`OPENADLC_IDENTITY_MODE` chooses how, and `openadlc status` and the bridge's start-up
 line both say which is in force, because the difference matters and is otherwise
 invisible:
 
 | Mode | How the person is established | Use |
 |---|---|---|
-| `iap` | The `x-goog-iap-jwt-assertion` JWT is verified against Google's published keys, pinned to ES256, and checked for issuer and for `FLEETADLC_IAP_AUDIENCE`. The identity is the `email` claim of the verified token. | A cloud install |
-| `local` (default) | The `x-fleetadlc-identity` header, believed only beside the install's console secret (`x-fleetadlc-console-secret`), which only the console's server and the `fleetadlc` CLI hold. A request without it gets 401 and never reaches a handler. `x-goog-authenticated-user-email` is not read. | An install run by `fleetadlc up` or the compose stack |
+| `iap` | The `x-goog-iap-jwt-assertion` JWT is verified against Google's published keys, pinned to ES256, and checked for issuer and for `OPENADLC_IAP_AUDIENCE`. The identity is the `email` claim of the verified token. | A cloud install |
+| `local` (default) | The `x-openadlc-identity` header, believed only beside the install's console secret (`x-openadlc-console-secret`), which only the console's server and the `openadlc` CLI hold. A request without it gets 401 and never reaches a handler. `x-goog-authenticated-user-email` is not read. | An install run by `openadlc up` or the compose stack |
 
-In `local` mode the console has a sign-in of its own. `fleetadlc up` prints the
-console as a link, `http://127.0.0.1:47300/signin?token=…`, and `fleetadlc
+In `local` mode the console has a sign-in of its own. `openadlc up` prints the
+console as a link, `http://127.0.0.1:47300/signin?token=…`, and `openadlc
 console-link` prints a fresh one. The token is an HMAC of its expiry under the
-console secret and works for an hour; opening it sets a `fleetadlc_session`
+console secret and works for an hour; opening it sets a `openadlc_session`
 cookie (HttpOnly, SameSite=Lax, thirty days) signed the same way under another
 label, so a link is never a session. Until a browser has that cookie the
 console answers every page, server action and `/api` route with 401, and only
@@ -866,7 +866,7 @@ that merely starts like one of those still requires the cookie. A server
 action checks the cookie again before it attaches the console secret, so one
 posted to a path the middleware does not run on still cannot call the bridge. Neither the link nor the cookie
 is the secret, and the secret never reaches a browser. The console listens on
-127.0.0.1 unless `FLEETADLC_CONSOLE_HOST` says otherwise.
+127.0.0.1 unless `OPENADLC_CONSOLE_HOST` says otherwise.
 
 Three things about `iap` mode are worth stating, because each is a way the check
 could look like it was working and not be:
@@ -878,7 +878,7 @@ could look like it was working and not be:
 - **The audience is checked, not just the signature.** An assertion IAP
   correctly signed for a different backend service is a valid JWT. Without the
   audience it would be accepted here, which is why the bridge refuses to start
-  in `iap` mode with no `FLEETADLC_IAP_AUDIENCE` rather than run a check that passes
+  in `iap` mode with no `OPENADLC_IAP_AUDIENCE` rather than run a check that passes
   everything.
 - **The algorithm is pinned, not read from the token.** A verifier that takes
   `alg` from the thing it is verifying can be handed `none`.
@@ -929,12 +929,12 @@ removing and changing a role are audited (`user.added`, `user.removed`,
 cannot be removed or demoted.
 
 On a local install roles are advisory: every console request carries one
-identity (`FLEETADLC_IDENTITY`, or `console` when it is unset), so they restrict
+identity (`OPENADLC_IDENTITY`, or `console` when it is unset), so they restrict
 nobody, and anyone who reaches the console acts as an admin. The console's Users
 card says so. Demoting that identity would close Settings with no way back from
 the console, so the bridge refuses it there (`409 self-demote`); an install
-locked out already sets `FLEETADLC_IDENTITY` to an admin's address and runs
-`fleetadlc up` again.
+locked out already sets `OPENADLC_IDENTITY` to an admin's address and runs
+`openadlc up` again.
 
 ### Attachments
 
@@ -999,7 +999,7 @@ body is in it. A delivery for a repository the install does not manage keeps
 only its type, its delivery id and the repository's name, never its content;
 an app installed on more repositories than OpenADLC works in does not fill the
 database with theirs. Once processed, a delivery is kept for
-`FLEETADLC_EVENT_RETENTION_DAYS` (30 by default; 0 keeps them for good), and
+`OPENADLC_EVENT_RETENTION_DAYS` (30 by default; 0 keeps them for good), and
 the daily `events` job removes older ones, except the newest, which says when
 GitHub was last heard from. The platform's own events, which the board reads
 back over windows, and the jobs' run records are not removed. Backups carry
@@ -1018,7 +1018,7 @@ of `cross-site` or `same-site`. `same-site` is the one that matters on a
 machine: another port on `127.0.0.1` is a different origin and is still
 same-site, so refusing only `cross-site` would leave a page served from this
 host working. The origins that are allowed are the console's
-(`FLEETADLC_CONSOLE_URL`, or `http://127.0.0.1:47300` when that is unset) and, for
+(`OPENADLC_CONSOLE_URL`, or `http://127.0.0.1:47300` when that is unset) and, for
 a loopback console, the other loopback names of that same port. A request with
 neither header is not a browser — the console's own server, the CLI, hostd,
 GitHub — and is served. The check runs in `local` and in `iap`. In `iap` a
@@ -1069,22 +1069,22 @@ is served under, and anything else gets `421 Misdirected Request` with no body:
 - an address, IPv4 or IPv6: rebinding needs a name, and a page whose own
   address is this machine's was served from this machine. A console opened on
   a LAN address passes this check, once it listens there
-  (`FLEETADLC_CONSOLE_HOST=0.0.0.0`); the browser still signs in with the
-  link `fleetadlc console-link` prints;
+  (`OPENADLC_CONSOLE_HOST=0.0.0.0`); the browser still signs in with the
+  link `openadlc console-link` prints;
 - `localhost` and `*.localhost`, which the browser resolves itself, and
   `host.docker.internal` and `host.containers.internal`, a container's names
   for the machine it runs on;
-- the hosts of `FLEETADLC_CONSOLE_URL` and `FLEETADLC_PUBLIC_URL`; for the bridge,
-  `FLEETADLC_BRIDGE_URL` (the compose file sets it to the `bridge` service name the
-  console calls it by); for the console, `NEXT_PUBLIC_FLEETADLC_TERMINAL_URL`;
+- the hosts of `OPENADLC_CONSOLE_URL` and `OPENADLC_PUBLIC_URL`; for the bridge,
+  `OPENADLC_BRIDGE_URL` (the compose file sets it to the `bridge` service name the
+  console calls it by); for the console, `NEXT_PUBLIC_OPENADLC_TERMINAL_URL`;
 - on Cloud Run (`K_SERVICE` is set there), any `*.run.app` name. A service does
   not know its own run.app address to list it, the console's server and hostd
   call the bridge by exactly that address, and nobody but Google can point a
   run.app name anywhere;
-- whatever `FLEETADLC_ALLOWED_HOSTS` lists, comma-separated, as names (`mybox.lan`,
+- whatever `OPENADLC_ALLOWED_HOSTS` lists, comma-separated, as names (`mybox.lan`,
   `mybox.lan:47300`) or URLs (`http://mybox.lan:47300`). A console opened under
   a LAN hostname or through a tunnel of the operator's own needs its name here;
-  `allowedHosts` in `install.json` keeps it across `fleetadlc up`. `*` switches the
+  `allowedHosts` in `install.json` keeps it across `openadlc up`. `*` switches the
   check off.
 
 A cloud install is defended twice over. The load balancer listens only on 443,
@@ -1107,16 +1107,16 @@ The terminal upgrade checks `Origin` before the token is redeemed, so a probe
 from another page does not burn a token. A browser cannot omit `Origin` on a
 WebSocket. A client that sends none is not a browser and still has to present
 a valid token. The origins admitted are the console's, by the same rule as the
-bridge: `FLEETADLC_CONSOLE_URL` as hostd sees it, or the loopback console when that
+bridge: `OPENADLC_CONSOLE_URL` as hostd sees it, or the loopback console when that
 is unset. A console opened under any other name — a cloud domain, a LAN
 address, an SSH tunnel, a remapped port — cannot open the terminal until
-`FLEETADLC_CONSOLE_URL` names it for hostd, and the terminal pane names the
+`OPENADLC_CONSOLE_URL` names it for hostd, and the terminal pane names the
 setting when its socket fails. The cloud module sets it from `console_domain`. The `Host` header is not consulted: an `Origin` that matches
 the host the socket was reached on is also what a name rebound to this machine
 looks like, and admitting it would let a page on such a name open a shell.
 
 The attach token does not travel in the query string. The console offers it as
-the WebSocket subprotocol `fleetadlc-attach.<token>`. Query strings are written to
+the WebSocket subprotocol `openadlc-attach.<token>`. Query strings are written to
 proxy access logs, and this token is a shell. A token presented only as
 `?token=` is refused, and refusing it does not redeem it. Nor does a handshake
 the WebSocket server would refuse anyway: the token is redeemed only once the
@@ -1153,7 +1153,7 @@ a `taskId` in the body. It refuses, with a 400 and nothing written:
 - token counts that are not whole numbers of 0 or more;
 - an empty model, or an alias that is not a `newest:` one;
 - an engine other than the task's bot's own (`none`, the scripted engine, only
-  while `FLEETADLC_SCRIPTED_ENGINES=1`);
+  while `OPENADLC_SCRIPTED_ENGINES=1`);
 - a task that is not running or paused.
 
 The ledger and the task's cost refuse a negative or NaN amount themselves too.
@@ -1178,9 +1178,9 @@ that. Neither is in a task's session.
 wrong, or when the install has no webhook secret. There is no configuration
 in which that check is skipped. An empty secret is not verified against: an
 HMAC under the empty string is computable by anyone, so it would let a forged
-body answer a gate as whatever person it named. `fleetadlc doctor` reports
-an install that still has no secret, and warns when `FLEETADLC_WEBHOOK_SECRET`, the
-install file and the database hold different ones. `fleetadlc init` and the
+body answer a gate as whatever person it named. `openadlc doctor` reports
+an install that still has no secret, and warns when `OPENADLC_WEBHOOK_SECRET`, the
+install file and the database hold different ones. `openadlc init` and the
 console walkthrough keep a secret any of those already has, and generate one
 only when none does. The value is not written to logs.
 
@@ -1206,27 +1206,27 @@ one bot, one session, one minute, one use.
 
 | Secret | Where it lives | Lifetime |
 |---|---|---|
-| Per-bot GitHub refresh token | Secret store (`~/.fleetadlc/secrets/*.secret`, mode 0600, or a cloud secret manager) | 6 months, rotated on every use |
-| Per-bot GitHub user token | The task's session environment, and the secret store (`github-token-<bot>`) for an app with token expiry off. Like the session's other credentials (its model key or token, its task token, its database's URL with the password, a registry token) it is on no command line, on the host or in the task's computer, so `ps` never shows it: a session's environment reaches it in a file only it can read, which it reads and removes before it runs (in `/dev/shm` in its container under `docker`, in hostd's temporary directory under `local`); a `docker exec` or `docker run` names a credential with `-e NAME` and holds its value in the docker client's own environment; and OpenADLC's `pnpm` and `fleetadlc-install` hand the task token to `curl` on stdin (`apps/hostd/src/drivers/credential-env.ts`) | 8 hours, or until revoked for a token that does not expire |
+| Per-bot GitHub refresh token | Secret store (`~/.openadlc/secrets/*.secret`, mode 0600, or a cloud secret manager) | 6 months, rotated on every use |
+| Per-bot GitHub user token | The task's session environment, and the secret store (`github-token-<bot>`) for an app with token expiry off. Like the session's other credentials (its model key or token, its task token, its database's URL with the password, a registry token) it is on no command line, on the host or in the task's computer, so `ps` never shows it: a session's environment reaches it in a file only it can read, which it reads and removes before it runs (in `/dev/shm` in its container under `docker`, in hostd's temporary directory under `local`); a `docker exec` or `docker run` names a credential with `-e NAME` and holds its value in the docker client's own environment; and OpenADLC's `pnpm` and `openadlc-install` hand the task token to `curl` on stdin (`apps/hostd/src/drivers/credential-env.ts`) | 8 hours, or until revoked for a token that does not expire |
 | GitHub App private key | Secret store (`github-app-private-key`); never given to a task under the `docker` driver, but readable by a task under `local` | until a new one is generated on the app's page |
 | Per-bot SSH signing key | Secret store; loaded into a per-task `ssh-agent` | until rotated |
-| Attribution key, which signs the crew's posts | Secret store (`attribution-key`); held by the bridge, never given to a task | until rotated with `fleetadlc attribution rotate`; a rotated key keeps checking old posts for 30 days, unless `--drop-old` |
+| Attribution key, which signs the crew's posts | Secret store (`attribution-key`); held by the bridge, never given to a task | until rotated with `openadlc attribution rotate`; a rotated key keeps checking old posts for 30 days, unless `--drop-old` |
 | Per-bot engine API key | Secret store; injected per session | until rotated |
 | Model account API key, or a Claude subscription's `claude setup-token` token | Secret store (`model-account-<id>`); injected per session as the provider's key variable, or as `CLAUDE_CODE_OAUTH_TOKEN`; sent by the bridge and hostd, in a header, to the provider's `/v1/models` to list what the account can call | until replaced or revoked |
-| OpenAI or xAI subscription login | `~/.fleetadlc/logins/<account-id>/sign-in/auth.json`, in 0700 directories; mounted (the file for Codex, its `sign-in` directory for Grok) only into the computers of tasks whose seat is on that account, and into hostd's throwaway containers that sign it in, check it and, for xAI, run `grok models` | refreshed by its CLI; deleted with the account |
-| Task database superuser (`fleetadlc-taskdb`) | No password: reached only through `docker exec` inside its container. The random one the image needs to make a new server is kept nowhere | removed as soon as the server is up, and again at every hostd start |
-| Private package registry token, when `FLEETADLC_REGISTRY_HOST` is set | Secret store (`registry-token`); served raw by hostd to any task running on the host that asks with its own task token, so any session can read it and send it anywhere its egress allows. Store a read-only one ([self-hosting](self-hosting.md#installing-from-a-private-package-registry)) | until a person rotates it; the five minutes hostd sends with it is a caching hint |
-| The install's internal secret (`internal-api-secret`), which opens every `/internal` route of the bridge — the token service that hands out every bot's GitHub token among them — and hostd's API | Secret store; generated by the first `fleetadlc up` or bridge start, read by the bridge, hostd and the CLI. Never given to a task, though each task's own token is derived from it | until a person deletes it from the store and restarts the bridge and hostd, which generate and read a new one; the running tasks' tokens stop working with the old one |
-| Platform database password | `databaseUrl` in `install.json` (0600), which the first `fleetadlc up` gives a password of the install's own in place of the published `fleetadlc`; `POSTGRES_PASSWORD` under `infra/local/docker-compose.yml`; on Google Cloud, the `<prefix>-database-url` secret in Secret Manager and the Terraform state | until rotated: `ALTER ROLE … PASSWORD` on the server, then the new value where the install reads it; on Google Cloud, replace `random_password.database` and apply |
-| Webhook secret | The secret store (`github-webhook-secret`), where the app's creation, the webhook step, `PATCH /v1/install` and `fleetadlc init` write it and the bridge reads it on each delivery; also `install.json` (`0600`) for a local install, the `webhook-secret` volume under `infra/local/docker-compose.yml`, and the bridge's environment (`FLEETADLC_WEBHOOK_SECRET`), which it falls back to. Never the database: an older install's settings row is moved into the store when the bridge starts | until rotated |
+| OpenAI or xAI subscription login | `~/.openadlc/logins/<account-id>/sign-in/auth.json`, in 0700 directories; mounted (the file for Codex, its `sign-in` directory for Grok) only into the computers of tasks whose seat is on that account, and into hostd's throwaway containers that sign it in, check it and, for xAI, run `grok models` | refreshed by its CLI; deleted with the account |
+| Task database superuser (`openadlc-taskdb`) | No password: reached only through `docker exec` inside its container. The random one the image needs to make a new server is kept nowhere | removed as soon as the server is up, and again at every hostd start |
+| Private package registry token, when `OPENADLC_REGISTRY_HOST` is set | Secret store (`registry-token`); served raw by hostd to any task running on the host that asks with its own task token, so any session can read it and send it anywhere its egress allows. Store a read-only one ([self-hosting](self-hosting.md#installing-from-a-private-package-registry)) | until a person rotates it; the five minutes hostd sends with it is a caching hint |
+| The install's internal secret (`internal-api-secret`), which opens every `/internal` route of the bridge — the token service that hands out every bot's GitHub token among them — and hostd's API | Secret store; generated by the first `openadlc up` or bridge start, read by the bridge, hostd and the CLI. Never given to a task, though each task's own token is derived from it | until a person deletes it from the store and restarts the bridge and hostd, which generate and read a new one; the running tasks' tokens stop working with the old one |
+| Platform database password | `databaseUrl` in `install.json` (0600), which the first `openadlc up` gives a password of the install's own in place of the published `openadlc`; `POSTGRES_PASSWORD` under `infra/local/docker-compose.yml`; on Google Cloud, the `<prefix>-database-url` secret in Secret Manager and the Terraform state | until rotated: `ALTER ROLE … PASSWORD` on the server, then the new value where the install reads it; on Google Cloud, replace `random_password.database` and apply |
+| Webhook secret | The secret store (`github-webhook-secret`), where the app's creation, the webhook step, `PATCH /v1/install` and `openadlc init` write it and the bridge reads it on each delivery; also `install.json` (`0600`) for a local install, the `webhook-secret` volume under `infra/local/docker-compose.yml`, and the bridge's environment (`OPENADLC_WEBHOOK_SECRET`), which it falls back to. Never the database: an older install's settings row is moved into the store when the bridge starts | until rotated |
 
 Outside this table, a credential is on disk in one more place, and only when
-someone asks for it: a backup (`fleetadlc backup`) carries the App key, signing
+someone asks for it: a backup (`openadlc backup`) carries the App key, signing
 keys, the webhook secret, the registry token, bot tokens, API keys and
 subscription tokens, encrypted with its passphrase — or in plain text when it
 is written with `--unencrypted`. Keep one as you would the secret store.
 
-**Rotating the attribution key.** `fleetadlc attribution rotate` asks the
+**Rotating the attribution key.** `openadlc attribution rotate` asks the
 running bridge (`POST /v1/attribution/rotate`, an admin's) for a new key; the
 bridge signs with it at once, and the audit log records who rotated it and the
 key ids, never a key. A routine rotation keeps the old key checking posts
@@ -1508,12 +1508,12 @@ Three things hold it, because a proxy on its own is advice:
   component holding the credentials is not an allowlist. Its environment sets
   the proxy variables and `NODE_USE_ENV_PROXY=1`, without which Node's own
   `fetch` ignores them, and an iptables OUTPUT rule on hostd's uid (1000)
-  refuses, and logs as `fleetadlc-egress-denied`, a new connection to anything
+  refuses, and logs as `openadlc-egress-denied`, a new connection to anything
   but the host itself, the metadata server, the docker bridges and the VPC — so
   code in hostd that ignores the variables still cannot leave except through
   the proxy.
 - **iptables on the host** rejects traffic leaving a bot container by any route
-  other than the proxy, and logs it as `fleetadlc-egress-denied`. A bot that unsets
+  other than the proxy, and logs it as `openadlc-egress-denied`. A bot that unsets
   `HTTP_PROXY`, or opens a socket to an address it resolved itself, does not get
   out.
 - **The VPC firewall** permits egress on 80 and 443 to the internet, Postgres
@@ -1535,7 +1535,7 @@ first minute in which the refusals, the proxy's and the firewall's added
 together, exceed `egress_denial_rate_threshold` (an `infra/gcp` variable,
 default 5). A rise is worth looking at, because a bot has no legitimate reason
 to develop new destinations. The alert goes to the module's
-`notification_channels` (`fleetadlc cloud configure --channels`); with none,
+`notification_channels` (`openadlc cloud configure --channels`); with none,
 it notifies nobody and only opens an incident in the Cloud Monitoring console.
 
 Some refusals are the allowlist working, and are never a reason to widen it:
@@ -1577,12 +1577,12 @@ version); `GROK_TELEMETRY_ENABLED=0`, `GROK_TELEMETRY_MIXPANEL_ENABLED=0`,
 `NEXT_TELEMETRY_DISABLED=1`. Codex reads none of these: it is run with
 `-c analytics.enabled=false -c feedback.enabled=false`, its own config keys in
 the pinned 0.155.1. Model calls are unaffected. An operator who wants the
-vendors' defaults back sets `FLEETADLC_ENGINE_TELEMETRY=on` in hostd's
+vendors' defaults back sets `OPENADLC_ENGINE_TELEMETRY=on` in hostd's
 environment and restarts it; sessions then start with none of the switches.
 They could not be set any other way through a session's environment: it starts
 under `env -i` with a fresh home. Claude Code's managed settings on a
 local-driver host, or a Codex or Grok subscription's published config at
-`~/.fleetadlc/logins/.published/<account-id>/config.toml`, can also turn them
+`~/.openadlc/logins/.published/<account-id>/config.toml`, can also turn them
 off. A computer starting rewrites the copy in the shared login directory
 from that file, so an edit there does not last.
 
@@ -1593,7 +1593,7 @@ tests, not against a live install. Each has a row, and the command that would
 prove it, in [docs/unverified.md](unverified.md#open):
 
 - IAP has not been seen refusing someone who is not in `console_members` (U21).
-- The required reviewer `fleetadlc github apply` sets on `production` has not
+- The required reviewer `openadlc github apply` sets on `production` has not
   been seen sticking on a real organization's repository (U42). If it does
   not, a promote is not held for a person.
 - The `docker` driver's suites have not run on a Linux host, so that one task's
@@ -1620,7 +1620,7 @@ prove it, in [docs/unverified.md](unverified.md#open):
   can override, and does (`GROK_TELEMETRY_TRACE_UPLOAD=0`); the others are set
   on the account, at the provider.
 - It does not stop engine telemetry when an operator asks for it back
-  (`FLEETADLC_ENGINE_TELEMETRY=on`, [Egress](#egress)): usage reports then go
+  (`OPENADLC_ENGINE_TELEMETRY=on`, [Egress](#egress)): usage reports then go
   to the vendors' analytics and crash-report services, as well as to the model's
   API.
 - It does not answer for what the crew does. Whoever runs OpenADLC runs it

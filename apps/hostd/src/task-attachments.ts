@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getSecretStore, internalSecretRef, type SecretStore } from '@fleetadlc/github';
-import { ATTACHMENT_LIMITS, isTextType, safeFileName, type ContextDocument, type TaskAttachment } from '@fleetadlc/shared';
+import { getSecretStore, internalSecretRef, type SecretStore } from '@openadlc/github';
+import { ATTACHMENT_LIMITS, isTextType, safeFileName, type ContextDocument, type TaskAttachment } from '@openadlc/shared';
 
 /**
  * The files a task is given — a screenshot sent with the request, a PDF of the
@@ -15,7 +15,7 @@ import { ATTACHMENT_LIMITS, isTextType, safeFileName, type ContextDocument, type
  * of its own, which every engine reads, and every file is written under
  * `<context dir>/attachments/`, listed in `attachments.md` with what it is, for
  * the engine to open with its file tool; the images and PDFs are in
- * `FLEETADLC_ATTACHMENTS` too, for an engine that takes them on its command line.
+ * `OPENADLC_ATTACHMENTS` too, for an engine that takes them on its command line.
  */
 
 /** Fetches one file's bytes from the bridge, as hostd asks it for a task's token. See `token-client.ts`. */
@@ -36,10 +36,10 @@ export class AttachmentClient {
   async bytes(id: string): Promise<Buffer> {
     let secret = await this.sharedSecret();
     if (!secret) {
-      throw new Error('hostd has no internal secret yet, so it cannot fetch the file. Start the bridge, which generates it, then retry: fleetadlc up');
+      throw new Error('hostd has no internal secret yet, so it cannot fetch the file. Start the bridge, which generates it, then retry: openadlc up');
     }
     const ask = (with_: string) =>
-      fetch(`${this.bridgeUrl}/internal/attachments/${encodeURIComponent(id)}`, { headers: { 'x-fleetadlc-internal-secret': with_ } });
+      fetch(`${this.bridgeUrl}/internal/attachments/${encodeURIComponent(id)}`, { headers: { 'x-openadlc-internal-secret': with_ } });
     let response = await ask(secret);
     // The bridge writes the secret on its first start, which may come after
     // hostd found none, so one refusal is worth a second look.
@@ -57,7 +57,7 @@ export interface PreparedAttachments {
   documents: ContextDocument[];
   /** What to write once the context directory exists, which writing the documents empties first. */
   writes: { path: string; bytes: Buffer }[];
-  /** The images and PDFs, by path, for `FLEETADLC_ATTACHMENTS`. */
+  /** The images and PDFs, by path, for `OPENADLC_ATTACHMENTS`. */
   binaries: string[];
 }
 

@@ -3,15 +3,15 @@
 # The targets the platform calls by name. A repository missing one of these is a
 # repository a task cannot set up, check or migrate — hostd runs `make setup` at
 # task start for a task with a database of its own (the docker driver, a seat
-# marked sidecarDb), and `make ci` when the builder runs `fleetadlc-ci` before
+# marked sidecarDb), and `make ci` when the builder runs `openadlc-ci` before
 # opening a pull request.
 #
 # The four deploy targets are what the delivery workflows run, when this
-# repository ships by `.github/fleetadlc.yml` (see the templates beside it).
+# repository ships by `.github/openadlc.yml` (see the templates beside it).
 # Until they say how, they refuse, so a deploy nobody set up fails loudly.
 # Write `smoke-testing` together with `deploy-testing`: a red smoke reverts the
 # change. Each workflow skips until its repository Actions variable is `true`:
-# FLEETADLC_DEPLOY_TESTING for the deploy, FLEETADLC_SMOKE_TESTING for the
+# OPENADLC_DEPLOY_TESTING for the deploy, OPENADLC_SMOKE_TESTING for the
 # smoke. Turn the smoke on only once it checks something: while it is skipped,
 # a merged change waits on testing and is neither promoted nor reverted.
 

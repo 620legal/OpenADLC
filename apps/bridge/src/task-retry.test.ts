@@ -40,13 +40,13 @@ const store = vi.hoisted(() => ({
   events: [] as { type: string; at: string; payload: unknown }[],
 }));
 
-vi.mock('@fleetadlc/db', () => {
+vi.mock('@openadlc/db', () => {
   const BOTS = [
     { id: 'bot-lead', name: 'noraexampleco', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'noraexampleco' },
-    { id: 'bot-builder', name: 'fleetadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'fleetadlc-atlas-janedoe' },
+    { id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'openadlc-atlas-janedoe' },
     { id: 'bot-intake', name: 'ottoexampleco', slot: 'intake', role: 'intake', githubLogin: 'ottoexampleco' },
   ];
-  const REPO = { id: 'repo-1', name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed', defaultBranch: 'main', stageModes: {} };
+  const REPO = { id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', defaultBranch: 'main', stageModes: {} };
   return {
     spendingLimits: {
       SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
@@ -183,16 +183,16 @@ async function deps() {
     taskService: {
       open: vi.fn(async (input: Record<string, unknown>) => {
         opened.push(input);
-        return { taskId: 'task-new', session: 'fleetadlc-1' };
+        return { taskId: 'task-new', session: 'openadlc-1' };
       }),
     },
     startBuild: vi.fn(async (input: Record<string, unknown>) => {
       builds.push(input);
-      return { taskId: 'task-build', session: 'fleetadlc-2' };
+      return { taskId: 'task-build', session: 'openadlc-2' };
     }),
     startTriage: vi.fn(async (requestId: string) => {
       triages.push(requestId);
-      return { task: { taskId: 'task-triage', session: 'fleetadlc-3' }, bot: 'ottoexampleco' };
+      return { task: { taskId: 'task-triage', session: 'openadlc-3' }, bot: 'ottoexampleco' };
     }),
     leaseHours: 12,
   };
@@ -220,10 +220,10 @@ describe('trying a failed task again', () => {
         botId: 'bot-lead',
         kind: 'review',
         subjectType: 'pr',
-        subjectRef: 'fleetadlc-testbed#2',
+        subjectRef: 'openadlc-testbed#2',
         state: 'failed',
         skill: 'pr-review',
-        branch: 'agent/fleetadlc-atlas-janedoe/1-issue-1',
+        branch: 'agent/openadlc-atlas-janedoe/1-issue-1',
       }),
     ];
 
@@ -234,12 +234,12 @@ describe('trying a failed task again', () => {
       {
         bot: 'noraexampleco',
         botId: 'bot-lead',
-        repo: 'fleetadlc-testbed',
+        repo: 'openadlc-testbed',
         kind: 'review',
         subjectType: 'pr',
-        subjectRef: 'fleetadlc-testbed#2',
+        subjectRef: 'openadlc-testbed#2',
         skill: 'pr-review',
-        branch: 'agent/fleetadlc-atlas-janedoe/1-issue-1',
+        branch: 'agent/openadlc-atlas-janedoe/1-issue-1',
         issueNumber: 1,
         checkoutExistingBranch: true,
         round: 0,
@@ -250,7 +250,7 @@ describe('trying a failed task again', () => {
 
   it('builds again under a lease it takes for the same builder, the way the dispatcher does', async () => {
     const { retryTask } = await import('./task-retry.js');
-    store.tasks = [task({ id: 'task-build-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#1', state: 'failed' })];
+    store.tasks = [task({ id: 'task-build-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#1', state: 'failed' })];
 
     await retryTask('task-build-failed', 'janedoe', await deps());
 
@@ -258,9 +258,9 @@ describe('trying a failed task again', () => {
     expect(builds).toEqual([
       {
         leaseId: 'lease-1',
-        repo: expect.objectContaining({ name: 'fleetadlc-testbed', fullName: 'janedoe/fleetadlc-testbed' }),
+        repo: expect.objectContaining({ name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }),
         issue: 1,
-        bot: expect.objectContaining({ id: 'bot-builder', name: 'fleetadlc-atlas-janedoe' }),
+        bot: expect.objectContaining({ id: 'bot-builder', name: 'openadlc-atlas-janedoe' }),
         declaredPaths: ['apps/api/'],
         expiresAt: expect.any(String),
       },
@@ -269,7 +269,7 @@ describe('trying a failed task again', () => {
 
   it('keeps the builder’s own lease when it still holds one, and refuses one another bot holds', async () => {
     const { retryTask } = await import('./task-retry.js');
-    store.tasks = [task({ id: 'task-build-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#1', state: 'failed' })];
+    store.tasks = [task({ id: 'task-build-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#1', state: 'failed' })];
     store.leases = [{ id: 'lease-held', repoId: 'repo-1', issueNumber: 1, botId: 'bot-builder', declaredPaths: [], state: 'in_task', expiresAt: null, prNumber: null }];
 
     await retryTask('task-build-failed', 'janedoe', await deps());
@@ -284,7 +284,7 @@ describe('trying a failed task again', () => {
 
   it('lets go of a lease it took for a build that did not start', async () => {
     const { retryTask } = await import('./task-retry.js');
-    store.tasks = [task({ id: 'task-build-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#1', state: 'failed' })];
+    store.tasks = [task({ id: 'task-build-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#1', state: 'failed' })];
     const refusing = await deps();
     refusing.startBuild = vi.fn(async () => ({ taskId: 'task-build', session: null as unknown as string, error: 'hostd refused' }));
 
@@ -307,12 +307,12 @@ describe('trying a failed task again', () => {
 describe('what is refused', () => {
   it('is work that is already going again, a busy bot, and a task that did not fail', async () => {
     const { retryTask } = await import('./task-retry.js');
-    const failed = task({ id: 'task-review', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'fleetadlc-testbed#2', state: 'failed' });
+    const failed = task({ id: 'task-review', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'openadlc-testbed#2', state: 'failed' });
 
-    store.tasks = [failed, task({ id: 'task-again', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'fleetadlc-testbed#2', state: 'running' })];
+    store.tasks = [failed, task({ id: 'task-again', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'openadlc-testbed#2', state: 'running' })];
     await expect(retryTask('task-review', 'janedoe', await deps())).rejects.toMatchObject({ status: 409, message: 'it is already running again' });
 
-    store.tasks = [failed, task({ id: 'task-else', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'fleetadlc-testbed#9', state: 'running' })];
+    store.tasks = [failed, task({ id: 'task-else', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'openadlc-testbed#9', state: 'running' })];
     await expect(retryTask('task-review', 'janedoe', await deps())).rejects.toMatchObject({
       status: 409,
       message:
@@ -327,7 +327,7 @@ describe('what is refused', () => {
 
   it('is anything at all while work is paused, before it looks at the task', async () => {
     const { retryTask } = await import('./task-retry.js');
-    store.tasks = [task({ id: 'task-review', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'fleetadlc-testbed#2', state: 'failed' })];
+    store.tasks = [task({ id: 'task-review', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'openadlc-testbed#2', state: 'failed' })];
     const paused = { ...(await deps()), paused: () => 'work is paused, by janedoe since 2026-09-29T10:00:00.000Z; resume it in Settings → Pause work' };
     await expect(retryTask('task-review', 'janedoe', paused)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/^nothing new starts: work is paused/) });
     expect(opened).toEqual([]);
@@ -337,33 +337,33 @@ describe('what is refused', () => {
     const { retryTask } = await import('./task-retry.js');
     const { RECOVERY_ACTOR } = await import('./scheduler.js');
     store.tasks = [
-      task({ id: 'task-review', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'fleetadlc-testbed#2', state: 'failed' }),
-      task({ id: 'task-build-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#1', state: 'failed' }),
+      task({ id: 'task-review', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'openadlc-testbed#2', state: 'failed' }),
+      task({ id: 'task-build-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#1', state: 'failed' }),
     ];
-    const words = 'work is paused in fleetadlc-testbed, by janedoe since 2026-09-29T10:00:00.000Z; resume it in Settings → Pause work';
-    const inTestbed = { ...(await deps()), paused: (repo?: string | null) => (repo === 'fleetadlc-testbed' ? words : null) };
+    const words = 'work is paused in openadlc-testbed, by janedoe since 2026-09-29T10:00:00.000Z; resume it in Settings → Pause work';
+    const inTestbed = { ...(await deps()), paused: (repo?: string | null) => (repo === 'openadlc-testbed' ? words : null) };
 
     // Try again on a card, and the retry a recovered health check asks for.
     await expect(retryTask('task-review', 'janedoe', inTestbed)).rejects.toMatchObject({ status: 409, message: `nothing new starts: ${words}` });
     await expect(retryTask('task-build-failed', RECOVERY_ACTOR, inTestbed)).rejects.toMatchObject({ status: 409, message: `nothing new starts: ${words}` });
     expect(opened).toEqual([]);
 
-    const elsewhere = { ...(await deps()), paused: (repo?: string | null) => (repo === 'fleetadlc-other' ? 'work is paused in fleetadlc-other' : null) };
+    const elsewhere = { ...(await deps()), paused: (repo?: string | null) => (repo === 'openadlc-other' ? 'work is paused in openadlc-other' : null) };
     await expect(retryTask('task-review', 'janedoe', elsewhere)).resolves.toMatchObject({ retried: 'task-review' });
   });
 
   it('is building again an issue that has a pull request now', async () => {
     const { retryTask } = await import('./task-retry.js');
-    store.tasks = [task({ id: 'task-build-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#1', state: 'failed' })];
+    store.tasks = [task({ id: 'task-build-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#1', state: 'failed' })];
     store.issuePr = 2;
     await expect(retryTask('task-build-failed', 'janedoe', await deps())).rejects.toMatchObject({ status: 409 });
   });
 });
 
 describe('a build that ended without its pull request', () => {
-  const BRANCH = 'agent/fleetadlc-atlas-janedoe/216-issue-216';
+  const BRANCH = 'agent/openadlc-atlas-janedoe/216-issue-216';
   const done = () =>
-    task({ id: 'task-built', botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#216', state: 'done', branch: BRANCH, exitReason: 'complete' });
+    task({ id: 'task-built', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#216', state: 'done', branch: BRANCH, exitReason: 'complete' });
 
   it('goes on from its branch under the builder’s lease, and the build started is not continued again by the sweep', async () => {
     const { retryTask } = await import('./task-retry.js');
@@ -401,7 +401,7 @@ describe('a build that ended without its pull request', () => {
     await expect(retryTask('task-built', 'janedoe', await deps())).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/has a pull request now/) });
 
     store.issuePr = null;
-    store.tasks = [done(), task({ id: 'task-later', botId: 'bot-builder', kind: 'implement', subjectRef: 'fleetadlc-testbed#216', state: 'failed', createdAt: '2026-09-25T11:00:00.000Z' })];
+    store.tasks = [done(), task({ id: 'task-later', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#216', state: 'failed', createdAt: '2026-09-25T11:00:00.000Z' })];
     await expect(retryTask('task-built', 'janedoe', await deps())).rejects.toMatchObject({
       status: 409,
       message: 'a later build of the issue has run since, so there is nothing to go on from here',
@@ -418,7 +418,7 @@ describe('a build that ended without its pull request', () => {
       status: 409,
       message: `${BRANCH} has pull request #230, so its review is where the work goes on`,
     });
-    expect(branchOf).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', BRANCH, 'main');
+    expect(branchOf).toHaveBeenCalledWith('janedoe/openadlc-testbed', BRANCH, 'main');
     expect(builds).toEqual([]);
   });
 });
@@ -427,20 +427,20 @@ describe('work that has already landed', () => {
   it('is not run again: a reviewer on a merged pull request, by a person or by the recovery', async () => {
     const { retryTask } = await import('./task-retry.js');
     const { RECOVERY_ACTOR } = await import('./scheduler.js');
-    store.tasks = [task({ id: 'task-review', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'fleetadlc-testbed#2', state: 'failed' })];
+    store.tasks = [task({ id: 'task-review', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'openadlc-testbed#2', state: 'failed' })];
     const subjectClosed = vi.fn(async () => true);
     const landed = { ...(await deps()), subjectClosed };
 
     for (const actor of ['janedoe', RECOVERY_ACTOR]) {
-      await expect(retryTask('task-review', actor, landed)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/^already landed: fleetadlc-testbed#2 is closed/) });
+      await expect(retryTask('task-review', actor, landed)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/^already landed: openadlc-testbed#2 is closed/) });
     }
-    expect(subjectClosed).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 2);
+    expect(subjectClosed).toHaveBeenCalledWith('janedoe/openadlc-testbed', 2);
     expect(opened).toEqual([]);
   });
 
   it('is run again while the subject is open, or cannot be read', async () => {
     const { retryTask } = await import('./task-retry.js');
-    store.tasks = [task({ id: 'task-review', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'fleetadlc-testbed#2', state: 'failed' })];
+    store.tasks = [task({ id: 'task-review', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'openadlc-testbed#2', state: 'failed' })];
     await expect(retryTask('task-review', 'janedoe', { ...(await deps()), subjectClosed: async () => false })).resolves.toMatchObject({ retried: 'task-review' });
     await expect(
       retryTask('task-review', 'janedoe', { ...(await deps()), subjectClosed: async () => Promise.reject(new Error('GitHub is down')) }),
@@ -466,7 +466,7 @@ describe('POST /v1/tasks/:id/retry', () => {
       invitations: {} as never,
       automation: {} as never,
       gates: {} as never,
-      taskService: { open: async (input: Record<string, unknown>) => (opened.push(input), { taskId: 'task-new', session: 'fleetadlc-1' }) } as never,
+      taskService: { open: async (input: Record<string, unknown>) => (opened.push(input), { taskId: 'task-new', session: 'openadlc-1' }) } as never,
       threadStream: { subscribe: () => () => undefined, watching: 0 } as never,
       onboarding: {} as never,
       webhookSetup: {} as never,
@@ -500,12 +500,12 @@ describe('POST /v1/tasks/:id/retry', () => {
   });
 
   it('starts the review again and answers with the new task, or says why it will not', async () => {
-    store.tasks = [task({ id: 'task-review', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'fleetadlc-testbed#2', state: 'failed' })];
+    store.tasks = [task({ id: 'task-review', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'openadlc-testbed#2', state: 'failed' })];
 
     const response = await fetch(`${bridgeUrl}/v1/tasks/task-review/retry`, { method: 'POST' });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ retried: 'task-review', bot: 'noraexampleco', task: { taskId: 'task-new' } });
-    expect(opened[0]).toMatchObject({ kind: 'review', subjectRef: 'fleetadlc-testbed#2', bot: 'noraexampleco' });
+    expect(opened[0]).toMatchObject({ kind: 'review', subjectRef: 'openadlc-testbed#2', bot: 'noraexampleco' });
 
     const refused = await fetch(`${bridgeUrl}/v1/tasks/no-such-task/retry`, { method: 'POST' });
     expect(refused.status).toBe(404);
@@ -518,7 +518,7 @@ describe('POST /v1/tasks/:id/retry', () => {
         botId: 'bot-builder',
         kind: 'deploy',
         subjectType: 'merge',
-        subjectRef: 'fleetadlc-testbed@deadbeef',
+        subjectRef: 'openadlc-testbed@deadbeef',
         state: 'failed',
         skill: 'deploy',
         branch: 'system/revert-deadbeef',
@@ -529,7 +529,7 @@ describe('POST /v1/tasks/:id/retry', () => {
 
     expect(response.status).toBe(200);
     expect(opened[0]).toMatchObject({
-      subjectRef: 'fleetadlc-testbed@deadbeef',
+      subjectRef: 'openadlc-testbed@deadbeef',
       branch: 'system/revert-deadbeef',
       bypassCap: { by: expect.any(String), why: 'an admin ran the revert again' },
     });
@@ -542,17 +542,17 @@ describe('POST /v1/tasks/:id/retry', () => {
         botId: 'bot-builder',
         kind: 'deploy',
         subjectType: 'merge',
-        subjectRef: 'fleetadlc-testbed@deadbeef',
+        subjectRef: 'openadlc-testbed@deadbeef',
         state: 'failed',
         skill: 'deploy',
         branch: 'system/revert-deadbeef',
       }),
     ];
 
-    const response = await fetch(`${bridgeUrl}/v1/tasks/task-revert/retry`, { method: 'POST', headers: { 'x-fleetadlc-identity': 'bob@example.com' } });
+    const response = await fetch(`${bridgeUrl}/v1/tasks/task-revert/retry`, { method: 'POST', headers: { 'x-openadlc-identity': 'bob@example.com' } });
 
     expect(response.status).toBe(200);
-    expect(opened[0]).toMatchObject({ subjectRef: 'fleetadlc-testbed@deadbeef', branch: 'system/revert-deadbeef' });
+    expect(opened[0]).toMatchObject({ subjectRef: 'openadlc-testbed@deadbeef', branch: 'system/revert-deadbeef' });
     expect(opened[0]).not.toHaveProperty('bypassCap');
   });
 });
@@ -564,7 +564,7 @@ describe('a revert run again', () => {
       botId: 'bot-builder',
       kind: 'deploy',
       subjectType: 'merge',
-      subjectRef: 'fleetadlc-testbed@deadbeef',
+      subjectRef: 'openadlc-testbed@deadbeef',
       state: 'failed',
       skill: 'deploy',
       branch: 'system/revert-deadbeef',
@@ -585,7 +585,7 @@ describe('a revert run again', () => {
 
     await retryTask('task-revert', 'bob@example.com', await deps(), { byAdmin: false });
 
-    expect(opened[0]).toMatchObject({ subjectRef: 'fleetadlc-testbed@deadbeef' });
+    expect(opened[0]).toMatchObject({ subjectRef: 'openadlc-testbed@deadbeef' });
     expect(opened[0]).not.toHaveProperty('bypassCap');
   });
 
@@ -595,7 +595,7 @@ describe('a revert run again', () => {
 
     await retryTask('task-revert', 'health-recovery', await deps());
 
-    expect(opened[0]).toMatchObject({ subjectRef: 'fleetadlc-testbed@deadbeef' });
+    expect(opened[0]).toMatchObject({ subjectRef: 'openadlc-testbed@deadbeef' });
     expect(opened[0]).not.toHaveProperty('bypassCap');
   });
 
@@ -608,18 +608,18 @@ describe('a revert run again', () => {
     // somebody pressed Try again.
     const { retryTask } = await import('./task-retry.js');
     store.tasks = [revert()];
-    store.revert = { 'fleetadlc-testbed@deadbeef': { state: 'held', taskId: 'task-revert' } };
+    store.revert = { 'openadlc-testbed@deadbeef': { state: 'held', taskId: 'task-revert' } };
 
     await retryTask('task-revert', 'health-recovery', await deps());
 
     expect(opened[0]).toMatchObject({ bypassCap: BYPASS });
-    expect(store.revert['fleetadlc-testbed@deadbeef']).toEqual({ state: 'spent', taskId: 'task-revert' });
+    expect(store.revert['openadlc-testbed@deadbeef']).toEqual({ state: 'spent', taskId: 'task-revert' });
   });
 
   it('is not let past a cap by a second retry of the same task: the authorisation was spent', async () => {
     const { retryTask } = await import('./task-retry.js');
     store.tasks = [revert()];
-    store.revert = { 'fleetadlc-testbed@deadbeef': { state: 'held', taskId: 'task-revert' } };
+    store.revert = { 'openadlc-testbed@deadbeef': { state: 'held', taskId: 'task-revert' } };
 
     await retryTask('task-revert', 'health-recovery', await deps());
     await retryTask('task-revert', 'health-recovery', await deps());
@@ -631,18 +631,18 @@ describe('a revert run again', () => {
   it('is not let past a cap by a user’s Try again on a held revert, which leaves the hold for the recovery', async () => {
     const { retryTask } = await import('./task-retry.js');
     store.tasks = [revert()];
-    store.revert = { 'fleetadlc-testbed@deadbeef': { state: 'held', taskId: 'task-revert' } };
+    store.revert = { 'openadlc-testbed@deadbeef': { state: 'held', taskId: 'task-revert' } };
 
     await retryTask('task-revert', 'bob@example.com', await deps(), { byAdmin: false });
 
     expect(opened[0]).not.toHaveProperty('bypassCap');
-    expect(store.revert['fleetadlc-testbed@deadbeef']).toEqual({ state: 'held', taskId: 'task-revert' });
+    expect(store.revert['openadlc-testbed@deadbeef']).toEqual({ state: 'held', taskId: 'task-revert' });
   });
 
   it('is not let past a cap by the automatic retry when another task holds the authorisation', async () => {
     const { retryTask } = await import('./task-retry.js');
     store.tasks = [revert()];
-    store.revert = { 'fleetadlc-testbed@deadbeef': { state: 'held', taskId: 'task-other' } };
+    store.revert = { 'openadlc-testbed@deadbeef': { state: 'held', taskId: 'task-other' } };
 
     await retryTask('task-revert', 'health-recovery', await deps());
 
@@ -653,48 +653,48 @@ describe('a revert run again', () => {
     const { retryTask } = await import('./task-retry.js');
     const { PrerequisiteNotReadyError } = await import('./task-service.js');
     store.tasks = [revert()];
-    store.revert = { 'fleetadlc-testbed@deadbeef': { state: 'held', taskId: 'task-revert' } };
+    store.revert = { 'openadlc-testbed@deadbeef': { state: 'held', taskId: 'task-revert' } };
     const refusing = await deps();
-    refusing.taskService.open.mockRejectedValueOnce(new PrerequisiteNotReadyError('fleetadlc-atlas-janedoe', []));
+    refusing.taskService.open.mockRejectedValueOnce(new PrerequisiteNotReadyError('openadlc-atlas-janedoe', []));
 
     await expect(retryTask('task-revert', 'health-recovery', refusing)).rejects.toThrow('was not started');
 
-    expect(store.revert['fleetadlc-testbed@deadbeef']).toEqual({ state: 'held', taskId: 'task-revert' });
+    expect(store.revert['openadlc-testbed@deadbeef']).toEqual({ state: 'held', taskId: 'task-revert' });
   });
 
   it('leaves the authorisation spent when the retry is recorded without starting again: the recovery never runs that task', async () => {
     const { retryTask } = await import('./task-retry.js');
     store.tasks = [
       revert(),
-      task({ id: 'task-new', botId: 'bot-builder', kind: 'deploy', subjectRef: 'fleetadlc-testbed@deadbeef', state: 'failed', exitReason: 'fleetadlc-atlas-janedoe was not started: its sign-in' }),
+      task({ id: 'task-new', botId: 'bot-builder', kind: 'deploy', subjectRef: 'openadlc-testbed@deadbeef', state: 'failed', exitReason: 'openadlc-atlas-janedoe was not started: its sign-in' }),
     ];
-    store.revert = { 'fleetadlc-testbed@deadbeef': { state: 'held', taskId: 'task-revert' } };
+    store.revert = { 'openadlc-testbed@deadbeef': { state: 'held', taskId: 'task-revert' } };
     const recorded = await deps();
-    recorded.taskService.open.mockResolvedValueOnce({ taskId: 'task-new', session: null, error: 'fleetadlc-atlas-janedoe was not started' } as never);
+    recorded.taskService.open.mockResolvedValueOnce({ taskId: 'task-new', session: null, error: 'openadlc-atlas-janedoe was not started' } as never);
 
     await retryTask('task-revert', 'health-recovery', recorded);
 
-    expect(store.revert['fleetadlc-testbed@deadbeef']).toEqual({ state: 'spent', taskId: 'task-revert' });
+    expect(store.revert['openadlc-testbed@deadbeef']).toEqual({ state: 'spent', taskId: 'task-revert' });
   });
 
   it('spends the authorisation on a start hostd refused, which may have begun', async () => {
     const { retryTask } = await import('./task-retry.js');
     store.tasks = [
       revert(),
-      task({ id: 'task-new', botId: 'bot-builder', kind: 'deploy', subjectRef: 'fleetadlc-testbed@deadbeef', state: 'failed', exitReason: 'hostd refused: fetch failed' }),
+      task({ id: 'task-new', botId: 'bot-builder', kind: 'deploy', subjectRef: 'openadlc-testbed@deadbeef', state: 'failed', exitReason: 'hostd refused: fetch failed' }),
     ];
-    store.revert = { 'fleetadlc-testbed@deadbeef': { state: 'held', taskId: 'task-revert' } };
+    store.revert = { 'openadlc-testbed@deadbeef': { state: 'held', taskId: 'task-revert' } };
     const refused = await deps();
     refused.taskService.open.mockResolvedValueOnce({ taskId: 'task-new', session: null, error: 'fetch failed' } as never);
 
     await retryTask('task-revert', 'health-recovery', refused);
 
-    expect(store.revert['fleetadlc-testbed@deadbeef']).toEqual({ state: 'spent', taskId: 'task-revert' });
+    expect(store.revert['openadlc-testbed@deadbeef']).toEqual({ state: 'spent', taskId: 'task-revert' });
   });
 
   it('lets nothing but a revert past a cap, whoever asks', async () => {
     const { retryTask } = await import('./task-retry.js');
-    store.tasks = [task({ id: 'task-review', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'fleetadlc-testbed#2', state: 'failed' })];
+    store.tasks = [task({ id: 'task-review', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'openadlc-testbed#2', state: 'failed' })];
 
     await retryTask('task-review', 'janedoe', await deps(), { byAdmin: true });
 
@@ -708,10 +708,10 @@ describe('a patch round run again', () => {
     botId: 'bot-builder',
     kind: 'patch',
     subjectType: 'pr',
-    subjectRef: 'fleetadlc-testbed#2',
+    subjectRef: 'openadlc-testbed#2',
     state: 'failed',
     skill: 'implement',
-    branch: 'agent/fleetadlc-atlas-janedoe/1-issue-1',
+    branch: 'agent/openadlc-atlas-janedoe/1-issue-1',
     leaseId: 'lease-9',
     round: 2,
   };
@@ -731,7 +731,7 @@ describe('a patch round run again', () => {
 
     await retryTask('task-patch', 'janedoe', { ...(await deps()), pullFiles });
 
-    expect(pullFiles).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 2);
+    expect(pullFiles).toHaveBeenCalledWith('janedoe/openadlc-testbed', 2);
     expect(opened).toEqual([
       expect.objectContaining({
         kind: 'patch',
@@ -765,7 +765,7 @@ describe('a patch round run again', () => {
       {
         type: 'conflict.resolving',
         at: '2026-10-02T12:00:00.000Z',
-        payload: { repo: 'fleetadlc-testbed', pr: 2, issue: 1, files: ['Makefile'], review: 'lead-only', head: 'abc', prFiles: ['Makefile', 'apps/api/src/route.ts'], base: 'main', pending: 'blocked', at: '2026-10-02T12:00:00.000Z' },
+        payload: { repo: 'openadlc-testbed', pr: 2, issue: 1, files: ['Makefile'], review: 'lead-only', head: 'abc', prFiles: ['Makefile', 'apps/api/src/route.ts'], base: 'main', pending: 'blocked', at: '2026-10-02T12:00:00.000Z' },
       },
     ];
     const pullFiles = vi.fn(async () => ['Makefile', 'apps/api/src/route.ts']);
@@ -806,15 +806,15 @@ describe('the retry the console and the recovery share', () => {
 
     const retry = retryDepsFor({ taskService: {} as never, automation: automation as never });
 
-    expect(await retry.pullFiles?.('janedoe/fleetadlc-testbed', 2)).toEqual(['apps/web/src/page.tsx']);
-    expect(listPullFilesAsNamed).toHaveBeenCalledWith('janedoe/fleetadlc-testbed', 2);
+    expect(await retry.pullFiles?.('janedoe/openadlc-testbed', 2)).toEqual(['apps/web/src/page.tsx']);
+    expect(listPullFilesAsNamed).toHaveBeenCalledWith('janedoe/openadlc-testbed', 2);
   });
 
   it('says what to do when the automation account is not connected', async () => {
     const { retryDepsFor } = await import('./api.js');
     const automation = { actors: { asBot: vi.fn(async () => null) }, config: { automationBot: null } };
 
-    await expect(retryDepsFor({ taskService: {} as never, automation: automation as never }).pullFiles?.('janedoe/fleetadlc-testbed', 2)).rejects.toThrow(
+    await expect(retryDepsFor({ taskService: {} as never, automation: automation as never }).pullFiles?.('janedoe/openadlc-testbed', 2)).rejects.toThrow(
       /is not connected to GitHub/,
     );
   });

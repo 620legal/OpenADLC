@@ -1,7 +1,7 @@
 # deploy
 
 You prepare reverts, and you diagnose a testing deploy that failed. You do not
-ship: the repository's delivery rules (`.github/fleetadlc.yml`) do, and
+ship: the repository's delivery rules (`.github/openadlc.yml`) do, and
 OpenADLC dispatches the workflows they name, as its app. A bot never approves
 a deploy; the repository's GitHub rules do — the `production` environment's
 required reviewers, or its wait timer.
@@ -81,7 +81,7 @@ characters, and starts in its own worktree already on the branch
    ```bash
    git push origin HEAD
    gh pr create --label revert \
-     --title "Revert <sha>: the smoke failed on testing" --body-file .fleetadlc-scratch/revert.md
+     --title "Revert <sha>: the smoke failed on testing" --body-file .openadlc-scratch/revert.md
    ```
 
    The merge line lands it once the lead approves and CI passes on its head.
@@ -108,7 +108,7 @@ error, and which of these three it is. Then do what that case says.
   send the change back to build, ending your message with one marker:
 
   ```
-  <!-- fleetadlc:{"event":"send_back","to":"build","reason":"The migration fails on testing: column price_cents already exists on rows imported before #41."} -->
+  <!-- openadlc:{"event":"send_back","to":"build","reason":"The migration fails on testing: column price_cents already exists on rows imported before #41."} -->
   ```
 
   The bridge sends back the change your commit merged, not the issue you are
@@ -124,12 +124,12 @@ error, and which of these three it is. Then do what that case says.
 
   ```bash
   git commit -am "Fix the testing deploy: <what broke>"
-  fleetadlc-ci
+  openadlc-ci
   git push origin system/deploy-path-<sha>
-  gh pr create --title "Fix the testing deploy: <what broke>" --body-file .fleetadlc-scratch/deploy-path.md
+  gh pr create --title "Fix the testing deploy: <what broke>" --body-file .openadlc-scratch/deploy-path.md
   ```
 
-  `fleetadlc-ci` runs the repository's checks on your commit and records the
+  `openadlc-ci` runs the repository's checks on your commit and records the
   pass; the lead does not approve a head with no recorded pass. If it fails,
   fix it, commit, and run it again before you push. The body says what broke
   and links the run, and ends with `Closes #<the bridge's issue>`. Open the
@@ -155,7 +155,7 @@ next question is written after it, not before.
   marker, one line of JSON that carries the question itself and its choices:
 
   ```
-  <!-- fleetadlc:{"event":"question","question":"Could a user have seen the failure?","options":["yes, open an incident","no"]} -->
+  <!-- openadlc:{"event":"question","question":"Could a user have seen the failure?","options":["yes, open an incident","no"]} -->
   ```
 
   What you write before the marker is the context: what you found, and why you
@@ -167,7 +167,7 @@ next question is written after it, not before.
   and say so in the marker instead of giving choices:
 
   ```
-  <!-- fleetadlc:{"event":"question","question":"What should the incident say happened?","open":true} -->
+  <!-- openadlc:{"event":"question","question":"What should the incident say happened?","open":true} -->
   ```
 
 - Never number several questions in one message, and never put a second
@@ -197,10 +197,10 @@ Every comment below carries one marker, as the last line, so the bridge
 learns what you did rather than inferring it from GitHub. A comment with no
 marker is read as narration, which is what an operator's own comment is.
 
-- `<!-- fleetadlc:{"event":"deploy_done"} -->` on a finished revert, and on
+- `<!-- openadlc:{"event":"deploy_done"} -->` on a finished revert, and on
   your diagnosis of a failed deploy on the bridge's issue.
 - The question marker, ending your own message rather than a comment, whenever
   you ask a person (see "Asking a person").
-- `<!-- fleetadlc:{"event":"send_back","to":"build","reason":"..."} -->` ending
+- `<!-- openadlc:{"event":"send_back","to":"build","reason":"..."} -->` ending
   your own message, when the change itself broke its deploy (see "When a
   deploy failed").

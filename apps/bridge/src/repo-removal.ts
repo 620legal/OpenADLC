@@ -1,4 +1,4 @@
-import { audit, bots, leases, repos, tasks, threads } from '@fleetadlc/db';
+import { audit, bots, leases, repos, tasks, threads } from '@openadlc/db';
 import {
   GitHubApiError,
   GitHubClient,
@@ -6,10 +6,10 @@ import {
   getSecretStore,
   installationTokenFor,
   type PendingInvitation,
-} from '@fleetadlc/github';
+} from '@openadlc/github';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { LEGACY_STAGE_LABEL_PREFIX, PERMISSION_NAMES, RENAMED_LABELS, accessInWords, sameLogin, type TaskState } from '@fleetadlc/shared';
+import { LEGACY_STAGE_LABEL_PREFIX, PERMISSION_NAMES, RENAMED_LABELS, accessInWords, sameLogin, type TaskState } from '@openadlc/shared';
 import type { AppReach } from './app-reach.js';
 import type { BridgeConfig } from './config.js';
 import type { CrewAccessKeeper } from './crew-access.js';
@@ -167,7 +167,7 @@ export interface LabelSort {
 /**
  * Sorts by name, in any letter case. It went by prefix, which deleted a
  * repository's own `priority:high` and `area:frontend` — and with them their
- * place on every issue — and left OpenADLC's `fleetadlc:paused` and
+ * place on every issue — and left OpenADLC's `openadlc:paused` and
  * `deployed:prod` behind.
  */
 export function sortLabels(names: readonly string[], configured: readonly string[]): LabelSort {
@@ -572,7 +572,7 @@ export async function appOnRepository(config: BridgeConfig, repository: string):
   const live = await effectiveConfig(config);
   if (!live.gitHubClientId) throw new Error('OpenADLC has no GitHub App yet');
   const { token } = await installationTokenFor(APP_API, { clientId: live.gitHubClientId, privateKey }, repository);
-  return removalGitHub(new GitHubClient({ token, actingAs: 'fleetadlc-app' }), repository);
+  return removalGitHub(new GitHubClient({ token, actingAs: 'openadlc-app' }), repository);
 }
 
 /** Every page of a listing, up to ten of a hundred. */

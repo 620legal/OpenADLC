@@ -7,7 +7,7 @@ name: deploy-testing
 run-name: deploy-testing ${{ inputs.sha }}
 
 # Deploys a merged commit to testing. OpenADLC dispatches it, as its app, when
-# a pull request merges and `.github/fleetadlc.yml` says `testing: on: merge`;
+# a pull request merges and `.github/openadlc.yml` says `testing: on: merge`;
 # nothing else starts it, so one merge is one deploy.
 #
 # What it runs is the repository's own: the Makefile's `deploy-testing` target,
@@ -41,11 +41,13 @@ jobs:
   deploy-testing:
     name: deploy-testing
     # Skipped until the repository says it has somewhere to deploy to, with the
-    # Actions variable FLEETADLC_DEPLOY_TESTING set to `true`. The Makefile's
+    # Actions variable OPENADLC_DEPLOY_TESTING set to `true`. The Makefile's
     # stub refuses, and a green deploy of nothing would label a change live on
     # testing when it is live nowhere. Skipped is neither red nor green, so it
     # starts nothing: the merged change waits on testing.
-    if: vars.FLEETADLC_DEPLOY_TESTING == 'true'
+    # The old variable's name still counts: it is set on the repository, which
+    # a new template cannot rename.
+    if: vars.OPENADLC_DEPLOY_TESTING == 'true' || vars.FLEETADLC_DEPLOY_TESTING == 'true'
     runs-on: ubuntu-latest
     environment:
       name: testing

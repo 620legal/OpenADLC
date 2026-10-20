@@ -16,7 +16,7 @@ updates:
       actions:
         patterns: ['*']
 
-  # What `fleetadlc github apply` and a person copy into a managed repository.
+  # What `openadlc github apply` and a person copy into a managed repository.
   - package-ecosystem: github-actions
     directory: /crew/templates/repo
     schedule:

@@ -101,7 +101,7 @@ describe('who a route that acts for no person is called by', () => {
     await new Promise<void>((resolve) => own.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${(own.address() as AddressInfo).port}`;
     try {
-      const headers = { 'x-goog-authenticated-user-email': 'accounts.google.com:admin@example.com', 'x-fleetadlc-identity': 'admin@example.com' };
+      const headers = { 'x-goog-authenticated-user-email': 'accounts.google.com:admin@example.com', 'x-openadlc-identity': 'admin@example.com' };
       for (const path of ['/webhooks/github', '/internal/events', '/healthz']) {
         expect((await fetch(`${base}${path}`, { method: 'POST', headers })).status).toBe(200);
       }

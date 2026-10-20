@@ -4,8 +4,8 @@ import { whyNotScratch } from './scratch-only.mjs';
 
 /**
  * The suites' guard let a suite carry on when no bridge answered, and never
- * looked at which database or FLEETADLC_HOME it would write to. With a real
- * install stopped by `fleetadlc down`, whose database keeps running, a suite
+ * looked at which database or OPENADLC_HOME it would write to. With a real
+ * install stopped by `openadlc down`, whose database keeps running, a suite
  * deleted its tasks and leases.
  */
 const home = '/home/dev';
@@ -13,20 +13,20 @@ const SCRIPTED = { status: 'ok', scripted: true };
 
 /** What `tests/scratch.sh env` exports. */
 const scratch = {
-  FLEETADLC_HOME: '/work/fleetadlc/.scratch/home',
-  DATABASE_URL: 'postgres://fleetadlc:fleetadlc@127.0.0.1:57432/fleetadlc_db',
-  FLEETADLC_BRIDGE_URL: 'http://127.0.0.1:57311',
-  FLEETADLC_HOSTD_URL: 'http://127.0.0.1:57312',
-  FLEETADLC_CONSOLE_URL: 'http://127.0.0.1:57300',
-  FLEETADLC_INSTALL_ID: 'scratch',
+  OPENADLC_HOME: '/work/openadlc/.scratch/home',
+  DATABASE_URL: 'postgres://openadlc:openadlc@127.0.0.1:57432/openadlc_db',
+  OPENADLC_BRIDGE_URL: 'http://127.0.0.1:57311',
+  OPENADLC_HOSTD_URL: 'http://127.0.0.1:57312',
+  OPENADLC_CONSOLE_URL: 'http://127.0.0.1:57300',
+  OPENADLC_INSTALL_ID: 'scratch',
 };
 
 /** CI's (.github/workflows/ci.yml): the default ports, a home under the workspace. */
 const ci = {
-  DATABASE_URL: 'postgres://fleetadlc:fleetadlc@127.0.0.1:5432/fleetadlc_db',
-  FLEETADLC_BRIDGE_URL: 'http://127.0.0.1:47311',
-  FLEETADLC_HOSTD_URL: 'http://127.0.0.1:47312',
-  FLEETADLC_HOME: '/home/runner/work/fleetadlc/fleetadlc/.ci/fleetadlc-home',
+  DATABASE_URL: 'postgres://openadlc:openadlc@127.0.0.1:5432/openadlc_db',
+  OPENADLC_BRIDGE_URL: 'http://127.0.0.1:47311',
+  OPENADLC_HOSTD_URL: 'http://127.0.0.1:47312',
+  OPENADLC_HOME: '/home/runner/work/openadlc/openadlc/.ci/openadlc-home',
 };
 
 describe('whether a suite may run', () => {
@@ -47,15 +47,15 @@ describe('whether a suite may run', () => {
     expect(whyNotScratch({ env: scratch, health: { status: 'ok', scripted: false }, home })).toMatch(/is a real one/);
   });
 
-  it.each(['FLEETADLC_BRIDGE_URL', 'FLEETADLC_HOSTD_URL', 'DATABASE_URL', 'FLEETADLC_HOME'])('refuses when %s is not set', (name) => {
+  it.each(['OPENADLC_BRIDGE_URL', 'OPENADLC_HOSTD_URL', 'DATABASE_URL', 'OPENADLC_HOME'])('refuses when %s is not set', (name) => {
     const env: Record<string, string> = { ...scratch };
     delete env[name];
     expect(whyNotScratch({ env, health: SCRIPTED, home })).toMatch(new RegExp(`^${name} is not set`));
   });
 
   it('refuses the real install’s home, however it is written', () => {
-    for (const given of ['/home/dev/.fleetadlc', '/home/dev/.fleetadlc/', '~/.fleetadlc', '/home/dev/x/../.fleetadlc']) {
-      expect(whyNotScratch({ env: { ...scratch, FLEETADLC_HOME: given }, health: SCRIPTED, home })).toMatch(/the real install's home/);
+    for (const given of ['/home/dev/.openadlc', '/home/dev/.openadlc/', '~/.openadlc', '/home/dev/x/../.openadlc']) {
+      expect(whyNotScratch({ env: { ...scratch, OPENADLC_HOME: given }, health: SCRIPTED, home })).toMatch(/the real install's home/);
     }
   });
 });

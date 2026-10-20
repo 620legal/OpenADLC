@@ -62,7 +62,7 @@ interface LedgerRow {
 }
 
 const world = vi.hoisted(() => {
-  const real = { id: 'repo-real', name: 'fleetadlc', fullName: 'janedoe/fleetadlc' };
+  const real = { id: 'repo-real', name: 'openadlc', fullName: 'janedoe/openadlc' };
   const standIn = { id: 'repo-scripted', name: 'scripted', fullName: 'local/scripted' };
   const crew = [
     {
@@ -77,7 +77,7 @@ const world = vi.hoisted(() => {
     {
       id: 'bot-builder',
       // Connected, so it goes by its account's handle.
-      name: 'fleetadlc-atlas-janedoe',
+      name: 'openadlc-atlas-janedoe',
       slot: 'builder',
       displayName: 'Builder',
       role: 'implement',
@@ -412,7 +412,7 @@ describe('the scripted board seed', () => {
     expect(once.cards).toBe(6);
     expect(once.gates).toBe(1);
     expect(once.intake).toEqual(['intake']);
-    expect(once.implement).toEqual(['fleetadlc-atlas-janedoe']);
+    expect(once.implement).toEqual(['openadlc-atlas-janedoe']);
     expect(once.review).toEqual(['lead-reviewer']);
     expect(once.messages).toBe(4);
     expect(new Set(once.texts).size).toBe(once.texts.length);
@@ -486,7 +486,7 @@ describe('the scripted board seed', () => {
     expect(world.ledger).toContainEqual({ taskId: 'leased-43', costUsd: 0.5, promptHash: null });
     expect(world.messages.some((message) => message.id === 'leased-line')).toBe(true);
     expect(world.gates.some((gate) => gate.id === 'leased-gate')).toBe(true);
-    expect(assignees(inStandIn('#43'))).toEqual(['fleetadlc-atlas-janedoe', 'fleetadlc-atlas-janedoe']);
+    expect(assignees(inStandIn('#43'))).toEqual(['openadlc-atlas-janedoe', 'openadlc-atlas-janedoe']);
   });
 });
 

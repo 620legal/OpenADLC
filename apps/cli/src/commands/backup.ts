@@ -65,15 +65,15 @@ import {
   type SignInFacts,
   type SignInLine,
   type TakeOverPorts,
-} from '@fleetadlc/backup';
-import { closePool, waitForDatabase } from '@fleetadlc/db';
-import { stepNamed } from '@fleetadlc/shared';
-import { getSecretStore, internalSecretRef } from '@fleetadlc/github';
+} from '@openadlc/backup';
+import { closePool, waitForDatabase } from '@openadlc/db';
+import { stepNamed } from '@openadlc/shared';
+import { getSecretStore, internalSecretRef } from '@openadlc/github';
 import { databaseUnreachable } from '../database.js';
 import { prompt, ui } from '../ui.js';
 
 /**
- * `fleetadlc backup` and `fleetadlc restore`.
+ * `openadlc backup` and `openadlc restore`.
  *
  * Nothing reconstructs an install's durable credentials. The GitHub App private
  * key is shown once by GitHub, the signing keys were generated here, and the
@@ -83,7 +83,7 @@ import { prompt, ui } from '../ui.js';
  * somewhere else, encrypted, and puts them back.
  *
  * What goes in the archive, and what a restore does with it, is not decided
- * here: `@fleetadlc/backup` decides, for this command, for the console's Backup
+ * here: `@openadlc/backup` decides, for this command, for the console's Backup
  * card and for the walkthrough's restore, so the three cannot drift. This file
  * is the terminal around it — where the file may be written, the passphrase
  * asked twice, the plan shown and `overwrite` typed before anything is written.
@@ -97,7 +97,7 @@ import { prompt, ui } from '../ui.js';
 export const CONFIRM_WORD = 'overwrite';
 
 /** Who a restore is attributed to in the settings table and the audit log. */
-const RESTORED_BY = 'fleetadlc restore';
+const RESTORED_BY = 'openadlc restore';
 
 // ---------------------------------------------------------------- the decisions
 
@@ -127,7 +127,7 @@ export interface PathRefusal {
   notes: string[];
 }
 
-/** Where `fleetadlc backup` writes when nobody says where. */
+/** Where `openadlc backup` writes when nobody says where. */
 export function defaultBackupPath(now: Date, home = homedir(), unencrypted = false): string {
   // The home directory rather than the working directory: the working directory
   // is usually the repository, which is the one place this file must not be.
@@ -135,7 +135,7 @@ export function defaultBackupPath(now: Date, home = homedir(), unencrypted = fal
   // A different extension for the unencrypted form, so the two are never
   // confused at a glance in a directory listing or a file picker: `.fleetbak` is
   // a sealed archive and always was, and this one says what it is.
-  const name = `fleetadlc-backup-${now.toISOString().slice(0, 10)}`;
+  const name = `openadlc-backup-${now.toISOString().slice(0, 10)}`;
   return join(home, unencrypted ? `${name}.plain.json` : `${name}.fleetbak`);
 }
 
@@ -148,7 +148,7 @@ const ALREADY_THERE_NOTE = 'Overwriting a backup loses it. Move that file aside,
  * GitHub App private key and the signing keys, so a copy inside the tree is one
  * `git add -A` away from being published — and a `.gitignore` line is not the
  * fix, because the rule travels with the repository while the habit of running
- * `fleetadlc backup` from the checkout travels with the operator.
+ * `openadlc backup` from the checkout travels with the operator.
  *
  * An existing file is also refused. The default path carries the date, so the
  * file it would land on is either today's archive or a backup somebody put
@@ -280,7 +280,7 @@ export function asMissingSchema(error: unknown): never {
   if (/relation "[^"]+" does not exist/.test(message)) {
     throw new BackupError(
       'this install has no database schema yet, so there is nothing to restore into — ' +
-        'run `fleetadlc up` first, then restore',
+        'run `openadlc up` first, then restore',
     );
   }
   throw error;
@@ -321,9 +321,9 @@ function leftOutLines(leftOut: LeftOut[]): string[] {
  *
  * Split by what it exposes: `shape()` is names only and is all a restore
  * reads, so no code path in a restore has a live credential in hand until it
- * writes the archive's. Only `snapshot()` reads values, and only `fleetadlc
+ * writes the archive's. Only `snapshot()` reads values, and only `openadlc
  * backup` calls it. The tests pass a fake, which is what makes it impossible
- * for a unit test to reach `~/.fleetadlc` or a real database.
+ * for a unit test to reach `~/.openadlc` or a real database.
  */
 export interface InstallAccess {
   snapshot(selection: BackupSelection): Promise<InstallSnapshot>;
@@ -507,15 +507,15 @@ const NO_APP: Pick<TakeOverPorts, 'refreshGitHub' | 'gitHubUser'> = {
  * there is nothing to check with, and so nothing is written.
  */
 async function adoptThroughHostd(accountId: string, files: LoginFiles): Promise<{ ok: boolean; message: string }> {
-  const base = process.env.FLEETADLC_HOSTD_URL || 'http://127.0.0.1:47312';
+  const base = process.env.OPENADLC_HOSTD_URL || 'http://127.0.0.1:47312';
   const secret = await getSecretStore().get(internalSecretRef());
-  const stopped = `hostd is not running, so this sign-in could not be checked by using it — start the stack with \`fleetadlc up\`, then restore again or sign in on ${stepNamed('models')}`;
+  const stopped = `hostd is not running, so this sign-in could not be checked by using it — start the stack with \`openadlc up\`, then restore again or sign in on ${stepNamed('models')}`;
   if (!secret) return { ok: false, message: stopped };
   let response: Response;
   try {
     response = await fetch(`${base}/model-accounts/${encodeURIComponent(accountId)}/login/adopt`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': secret, 'x-fleetadlc-on-behalf-of': RESTORED_BY },
+      headers: { 'content-type': 'application/json', 'x-openadlc-internal-secret': secret, 'x-openadlc-on-behalf-of': RESTORED_BY },
       body: JSON.stringify({ files }),
       signal: AbortSignal.timeout(150_000),
     });
@@ -648,7 +648,7 @@ export async function backup(
 
     if (holdsNothing(contents)) {
       io.out.fail('this install has nothing to back up yet');
-      io.out.note('Run `fleetadlc up` and connect at least one bot first.');
+      io.out.note('Run `openadlc up` and connect at least one bot first.');
       process.exitCode = 1;
       return;
     }
@@ -688,7 +688,7 @@ export async function backup(
       ];
       io.out.note(`Anyone who reads the file holds this install: ${held.slice(0, -1).join(', ')}, and ${held.at(-1)}.`);
       io.out.note(
-        'Recovering from a leak means a new App key, webhook secret and commit-signing keys, a new key for signing posts (fleetadlc attribution rotate --drop-old), revoking each bot’s GitHub authorization, revoking any non-expiring bot token, rotating every API key and the registry token, and signing each model subscription out and in again.',
+        'Recovering from a leak means a new App key, webhook secret and commit-signing keys, a new key for signing posts (openadlc attribution rotate --drop-old), revoking each bot’s GitHub authorization, revoking any non-expiring bot token, rotating every API key and the registry token, and signing each model subscription out and in again.',
       );
 
       deps.write(target, deps.plain(contents));
@@ -791,7 +791,7 @@ function signInLabel(line: Pick<SignIn, 'seat' | 'seats' | 'who' | 'provider' | 
 }
 
 /**
- * What `fleetadlc restore` says about each sign-in before it asks: its verdict,
+ * What `openadlc restore` says about each sign-in before it asks: its verdict,
  * and what this restore will do with it.
  */
 function describeSignIns(lines: readonly SignInLine[], into: 'clean' | 'running'): string[] {
@@ -945,7 +945,7 @@ export async function restore(
     if (pending.some((line) => line.provider === 'github')) io.out.note(GITHUB_TAKE_OVER);
     if (pending.some((line) => line.provider !== 'github')) io.out.note(SUBSCRIPTION_TAKE_OVER);
     if (shown.bots.deviceFlow.length > 0) {
-      io.out.note('Each bot named above will need to connect again: `fleetadlc auth login --bot <name>`.');
+      io.out.note('Each bot named above will need to connect again: `openadlc auth login --bot <name>`.');
     }
 
     if (options.dryRun) {
@@ -997,7 +997,7 @@ export async function restore(
 
     io.out.plain();
     io.out.note('Restart the stack so the services read the restored credentials:');
-    io.out.note('fleetadlc down && fleetadlc up');
+    io.out.note('openadlc down && openadlc up');
     io.out.note('A bot holding a credential again takes its account’s handle as its name when the bridge starts.');
   } catch (error) {
     io.out.fail(`restore failed: ${safeMessage(error)}`);

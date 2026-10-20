@@ -1,6 +1,6 @@
-import { audit, bots, costs, health, hosts, issues, leases, listEventsOfType, recordEvent, repos, settings, spendingLimits, tasks } from '@fleetadlc/db';
-import { fetchJson, maxTasksOf, type CostsConfig, hasIgnoreLabel, hasNextLabel, hasPausedLabel } from '@fleetadlc/shared';
-import { DEFAULT_PATH_POLICY, deliveryRulesFrom, dependencyIsSatisfied, missingForRouting, onlyExpectedPathsUnreadable, parseDependencies, UNREADABLE_PATH_LINE, tooManyAttempts, type PathPolicy } from '@fleetadlc/shared';
+import { audit, bots, costs, health, hosts, issues, leases, listEventsOfType, recordEvent, repos, settings, spendingLimits, tasks } from '@openadlc/db';
+import { fetchJson, maxTasksOf, type CostsConfig, hasIgnoreLabel, hasNextLabel, hasPausedLabel } from '@openadlc/shared';
+import { DEFAULT_PATH_POLICY, deliveryRulesFrom, dependencyIsSatisfied, missingForRouting, onlyExpectedPathsUnreadable, parseDependencies, UNREADABLE_PATH_LINE, tooManyAttempts, type PathPolicy } from '@openadlc/shared';
 import { overlapKind, pathsOverlap } from './overlap.js';
 
 export { overlapKind, pathMatches } from './overlap.js';
@@ -30,7 +30,7 @@ export interface DispatcherOptions {
   paused?: (repo?: string) => string | null;
   /**
    * Which overlapping changes may be built side by side in a repository: its
-   * `paths:` in `.github/fleetadlc.yml`, as the bridge reads that file. Without
+   * `paths:` in `.github/openadlc.yml`, as the bridge reads that file. Without
    * it (a dispatcher of its own) the repository's stored rules are read, and
    * the default policy when there are none.
    */
@@ -308,7 +308,7 @@ export class Dispatcher {
     try {
       await fetchJson(`${this.options.bridgeUrl}/internal/issues/${repo.name}/${issueNumber}/triage`, {
         method: 'POST',
-        headers: { 'x-fleetadlc-internal-secret': this.options.internalSecret },
+        headers: { 'x-openadlc-internal-secret': this.options.internalSecret },
         body: JSON.stringify({ reason }),
       });
     } catch (error) {
@@ -343,7 +343,7 @@ export class Dispatcher {
         `${this.options.bridgeUrl}/internal/issues/${repo.name}/${issueNumber}/expected-paths`,
         {
           method: 'POST',
-          headers: { 'x-fleetadlc-internal-secret': this.options.internalSecret },
+          headers: { 'x-openadlc-internal-secret': this.options.internalSecret },
           body: JSON.stringify({ reason }),
         },
       );
@@ -389,7 +389,7 @@ export class Dispatcher {
       try {
         await fetchJson(`${this.options.bridgeUrl}/internal/issues/${repo.name}/${issue.number}/unblock`, {
           method: 'POST',
-          headers: { 'x-fleetadlc-internal-secret': this.options.internalSecret },
+          headers: { 'x-openadlc-internal-secret': this.options.internalSecret },
           body: JSON.stringify({ dependencies }),
         });
         decisions.push({
@@ -494,7 +494,7 @@ export class Dispatcher {
       // each in a computer of its own, so a second build needs room on a seat,
       // not a second seat.
       const crew = await bots.listBots();
-      const scripted = process.env.FLEETADLC_SCRIPTED_ENGINES === '1';
+      const scripted = process.env.OPENADLC_SCRIPTED_ENGINES === '1';
       const pool = builderPool(owner, crew, Number.POSITIVE_INFINITY, { scripted });
 
       // The repository's concurrency counts its builds that have not finished,
@@ -527,7 +527,7 @@ export class Dispatcher {
           issue: 0,
           bot: owner.name,
           action: 'skipped',
-          reason: `every host is running all the tasks it has room for; ${idle.length - Math.max(0, hostRoom)} more start when tasks end, or give a host more with FLEETADLC_HOST_CAPACITY_TASKS`,
+          reason: `every host is running all the tasks it has room for; ${idle.length - Math.max(0, hostRoom)} more start when tasks end, or give a host more with OPENADLC_HOST_CAPACITY_TASKS`,
         });
         idle.splice(Math.max(0, hostRoom));
       }
@@ -577,7 +577,7 @@ export class Dispatcher {
 
         // Held by a person: nothing new starts on it until the hold comes off.
         if (hasPausedLabel(issue.labels)) {
-          decisions.push({ repo: repo.name, issue: issue.number, bot: null, action: 'skipped', reason: 'held by a person (fleetadlc:paused)' });
+          decisions.push({ repo: repo.name, issue: issue.number, bot: null, action: 'skipped', reason: 'held by a person (openadlc:paused)' });
           continue;
         }
 
@@ -690,7 +690,7 @@ export class Dispatcher {
         try {
           await fetchJson(`${this.options.bridgeUrl}/internal/dispatch/lease`, {
             method: 'POST',
-            headers: { 'x-fleetadlc-internal-secret': this.options.internalSecret },
+            headers: { 'x-openadlc-internal-secret': this.options.internalSecret },
             body: JSON.stringify({
               leaseId: lease.id,
               repo: repo.name,

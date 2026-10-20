@@ -1,4 +1,4 @@
--- What a person with access stood behind on an issue whose author FleetADLC
+-- What a person with access stood behind on an issue whose author OpenADLC
 -- does not act for. Labelling a stranger's issue is what lets the crew start
 -- on it, and the label vouches for the text as it was then. GitHub lets the
 -- author edit it at any time, and every later task re-read the live text:

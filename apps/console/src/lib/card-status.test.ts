@@ -8,8 +8,8 @@ const minutesAgo = (minutes: number): string => new Date(Date.parse(NOW) - minut
 
 function card(partial: Partial<BoardCard> = {}): BoardCard {
   return {
-    repo: 'fleetadlc',
-    ref: 'fleetadlc#16',
+    repo: 'openadlc',
+    ref: 'openadlc#16',
     title: 'Let the board filter by label',
     stage: 'build',
     assignees: [],
@@ -31,7 +31,7 @@ function card(partial: Partial<BoardCard> = {}): BoardCard {
 }
 
 function task(partial: Partial<CardTask> & Pick<CardTask, 'kind' | 'state'>): CardTask {
-  return { bot: 'fleetadlc-atlas-janedoe', round: 0, startedAt: null, endedAt: null, exitReason: null, ...partial };
+  return { bot: 'openadlc-atlas-janedoe', round: 0, startedAt: null, endedAt: null, exitReason: null, ...partial };
 }
 
 const CONTEXT: CardContext = { now: NOW, said: (bot) => bot };
@@ -84,8 +84,8 @@ describe('a card’s status line', () => {
 
   it('names the builder a card is next in line for, while it is busy', () => {
     expect(
-      cardStatus(card(), { ...CONTEXT, queue: { next: true, builder: 'fleetadlc-atlas-janedoe', builderBusy: true } }).text,
-    ).toBe('Next up, when fleetadlc-atlas-janedoe is free');
+      cardStatus(card(), { ...CONTEXT, queue: { next: true, builder: 'openadlc-atlas-janedoe', builderBusy: true } }).text,
+    ).toBe('Next up, when openadlc-atlas-janedoe is free');
     expect(cardStatus(card(), { ...CONTEXT, queue: { next: true, builder: 'x', builderBusy: false } }).text).toBe('Next up');
     expect(cardStatus(card(), { ...CONTEXT, queue: { next: false, builder: 'x', builderBusy: true } }).text).toBe(
       'Waiting its turn',
@@ -99,8 +99,8 @@ describe('a card’s status line', () => {
   it('says where an approved pull request is in the line to merge', () => {
     const approved = card({ stage: 'review', prNumber: 31 });
     const line = [
-      { repo: 'fleetadlc', ref: 'fleetadlc#30', position: 1, state: 'merging', detail: null },
-      { repo: 'fleetadlc', ref: 'fleetadlc#31', position: 2, state: 'waiting', detail: null },
+      { repo: 'openadlc', ref: 'openadlc#30', position: 1, state: 'merging', detail: null },
+      { repo: 'openadlc', ref: 'openadlc#31', position: 2, state: 'waiting', detail: null },
     ];
     expect(cardStatus(approved, { ...CONTEXT, mergeLine: line }).text).toBe('Approved · 2nd in line to merge');
     expect(cardStatus(approved, { ...CONTEXT, mergeLine: line.slice(1) }).text).toBe('Approved · next to merge');
@@ -109,7 +109,7 @@ describe('a card’s status line', () => {
 
   it('says a pull request only a person can land waits for them, not that it is merging', () => {
     const approved = card({ stage: 'review', prNumber: 30 });
-    const line = [{ repo: 'fleetadlc', ref: 'fleetadlc#30', position: 1, state: 'merging', detail: 'green', heldFor: 'it changes how CI runs (Makefile)' }];
+    const line = [{ repo: 'openadlc', ref: 'openadlc#30', position: 1, state: 'merging', detail: 'green', heldFor: 'it changes how CI runs (Makefile)' }];
     expect(cardStatus(approved, { ...CONTEXT, mergeLine: line })).toMatchObject({ text: 'Approved · waiting for you to merge it', tone: 'attention' });
   });
 
@@ -121,8 +121,8 @@ describe('a card’s status line', () => {
 
   it('reads a card from a bridge that sends no work as nothing known, not as an error', () => {
     const bare: BoardCard = {
-      repo: 'fleetadlc',
-      ref: 'fleetadlc#3',
+      repo: 'openadlc',
+      ref: 'openadlc#3',
       title: 'Old bridge',
       stage: 'intake',
       assignees: [],
@@ -154,13 +154,13 @@ describe('the card the builder takes next', () => {
     const column = {
       stage: 'build',
       cards: [
-        card({ ref: 'fleetadlc#16', active: [task({ kind: 'implement', state: 'running' })] }),
-        card({ ref: 'fleetadlc#18', labels: ['adlc:build', 'blocked'] }),
-        card({ ref: 'fleetadlc#17' }),
-        card({ ref: 'fleetadlc#19' }),
+        card({ ref: 'openadlc#16', active: [task({ kind: 'implement', state: 'running' })] }),
+        card({ ref: 'openadlc#18', labels: ['adlc:build', 'blocked'] }),
+        card({ ref: 'openadlc#17' }),
+        card({ ref: 'openadlc#19' }),
       ],
     };
-    expect(nextUp(column).get('fleetadlc')).toBe('fleetadlc#17');
+    expect(nextUp(column).get('openadlc')).toBe('openadlc#17');
     expect(nextUp({ ...column, stage: 'review' }).size).toBe(0);
   });
 
@@ -168,23 +168,23 @@ describe('the card the builder takes next', () => {
     const column = {
       stage: 'build',
       cards: [
-        card({ ref: 'fleetadlc#16', held: { by: 'janedoe', at: minutesAgo(5), why: null } }),
-        card({ ref: 'fleetadlc#17', labels: ['adlc:build', 'start:now', 'fleetadlc:paused'] }),
-        card({ ref: 'fleetadlc#18', labels: ['adlc:build', 'start:now', 'do:human'] }),
-        card({ ref: 'fleetadlc#19', labels: ['adlc:build', 'start:now', 'fleetadlc:ignore'] }),
-        card({ ref: 'fleetadlc#20' }),
+        card({ ref: 'openadlc#16', held: { by: 'janedoe', at: minutesAgo(5), why: null } }),
+        card({ ref: 'openadlc#17', labels: ['adlc:build', 'start:now', 'openadlc:paused'] }),
+        card({ ref: 'openadlc#18', labels: ['adlc:build', 'start:now', 'do:human'] }),
+        card({ ref: 'openadlc#19', labels: ['adlc:build', 'start:now', 'openadlc:ignore'] }),
+        card({ ref: 'openadlc#20' }),
       ],
     };
-    expect(nextUp(column).get('fleetadlc')).toBe('fleetadlc#20');
+    expect(nextUp(column).get('openadlc')).toBe('openadlc#20');
   });
 
   it('is one card in each repository, on the board of all of them', () => {
     const column = {
       stage: 'build',
-      cards: [card({ ref: 'fleetadlc#17' }), card({ ref: 'fleetadlc#18' }), card({ repo: 'website', ref: 'website#3' })],
+      cards: [card({ ref: 'openadlc#17' }), card({ ref: 'openadlc#18' }), card({ repo: 'website', ref: 'website#3' })],
     };
     expect([...nextUp(column)]).toEqual([
-      ['fleetadlc', 'fleetadlc#17'],
+      ['openadlc', 'openadlc#17'],
       ['website', 'website#3'],
     ]);
   });
@@ -193,8 +193,8 @@ describe('the card the builder takes next', () => {
 describe('the bot a card opens', () => {
   it('is whoever is on it now, else whoever last was', () => {
     expect(cardBot(card({ active: [task({ kind: 'review', state: 'running', bot: 'irisexampleco' })] }))).toBe('irisexampleco');
-    expect(cardBot(card({ last: task({ kind: 'implement', state: 'done', bot: 'fleetadlc-atlas-janedoe' }) }))).toBe(
-      'fleetadlc-atlas-janedoe',
+    expect(cardBot(card({ last: task({ kind: 'implement', state: 'done', bot: 'openadlc-atlas-janedoe' }) }))).toBe(
+      'openadlc-atlas-janedoe',
     );
   });
 });
@@ -243,27 +243,27 @@ describe('a request’s card', () => {
 });
 
 describe('a card in a repository a person paused', () => {
-  const PAUSED: CardContext = { ...CONTEXT, pausedRepos: ['fleetadlc'] };
+  const PAUSED: CardContext = { ...CONTEXT, pausedRepos: ['openadlc'] };
 
   it('says a request filed there waits, with a link to the issue, until the repository is resumed', () => {
-    const filed = card({ ref: 'request:1a2b3c4d', stage: 'intake', request: true, requestState: 'filed', issueNumber: 31, url: 'https://github.com/exampleco/fleetadlc/issues/31', labels: [] });
+    const filed = card({ ref: 'request:1a2b3c4d', stage: 'intake', request: true, requestState: 'filed', issueNumber: 31, url: 'https://github.com/exampleco/openadlc/issues/31', labels: [] });
     expect(cardStatus(filed, PAUSED)).toEqual({
-      text: 'Filed #31 · waits until fleetadlc is resumed',
+      text: 'Filed #31 · waits until openadlc is resumed',
       tone: 'muted',
       mark: 'check',
-      href: 'https://github.com/exampleco/fleetadlc/issues/31',
+      href: 'https://github.com/exampleco/openadlc/issues/31',
     });
     expect(cardStatus(filed, CONTEXT).text).toBe('Filed #31');
   });
 
   it('says a request for it waits in the queue until it is resumed', () => {
     const queued = card({ ref: 'request:1a2b3c4d', stage: 'intake', request: true, requestState: 'queued', queuePosition: 2, labels: [] });
-    expect(cardStatus(queued, PAUSED).text).toBe('Queued · waits until fleetadlc is resumed');
+    expect(cardStatus(queued, PAUSED).text).toBe('Queued · waits until openadlc is resumed');
     expect(cardStatus(queued, CONTEXT).text).toBe('Queued (#2)');
   });
 
   it('says an issue ready to build waits for the resume, and one elsewhere does not', () => {
-    expect(cardStatus(card(), { ...PAUSED, queue: { next: true, builder: 'x', builderBusy: false } }).text).toBe('Waiting until fleetadlc is resumed');
+    expect(cardStatus(card(), { ...PAUSED, queue: { next: true, builder: 'x', builderBusy: false } }).text).toBe('Waiting until openadlc is resumed');
     expect(cardStatus(card({ repo: 'web' }), { ...PAUSED, queue: { next: true, builder: 'x', builderBusy: false } }).text).toBe('Next up');
   });
 });
@@ -286,7 +286,7 @@ describe('a card on a bridge without the dispatcher', () => {
   });
 
   it('lets a repository’s pause win, and leaves other statuses as they were', () => {
-    expect(cardStatus(card(), { ...OFF, pausedRepos: ['fleetadlc'] }).text).toBe('Waiting until fleetadlc is resumed');
+    expect(cardStatus(card(), { ...OFF, pausedRepos: ['openadlc'] }).text).toBe('Waiting until openadlc is resumed');
     expect(cardStatus(card({ labels: ['adlc:build', 'blocked'], waitingOn: [1] }), OFF).text).toBe('Waiting on #1');
     expect(cardStatus(card({ labels: ['adlc:build'] }), OFF).text).toBe('Not ready to build yet');
     expect(cardStatus(card({ labels: ['adlc:build', 'start:now', 'needs-triage'] }), OFF).text).toBe('Waiting for triage');

@@ -72,7 +72,7 @@ describe('a repository the app cannot reach', () => {
     need: 'make-public' as const,
     title: 'The OpenADLC app is private to janedoe',
     detail: 'GitHub installs a private app only on the account that owns it, so it cannot go on exampleco yet.',
-    action: { label: 'Make the app public', url: 'https://github.com/settings/apps/fleetadlc-janedoe/advanced' },
+    action: { label: 'Make the app public', url: 'https://github.com/settings/apps/openadlc-janedoe/advanced' },
     steps: [],
   };
 
@@ -82,7 +82,7 @@ describe('a repository the app cannot reach', () => {
       text: 'The OpenADLC app is private to janedoe',
       reason: 'GitHub installs a private app only on the account that owns it, so it cannot go on exampleco yet.',
       action: null,
-      link: { label: 'Make the app public', url: 'https://github.com/settings/apps/fleetadlc-janedoe/advanced' },
+      link: { label: 'Make the app public', url: 'https://github.com/settings/apps/openadlc-janedoe/advanced' },
       busy: false,
     });
   });

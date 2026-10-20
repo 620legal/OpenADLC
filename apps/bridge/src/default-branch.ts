@@ -1,4 +1,4 @@
-import type { GitHubClient } from '@fleetadlc/github';
+import type { GitHubClient } from '@openadlc/github';
 
 /**
  * A repository's default branch, as GitHub says it is.

@@ -152,7 +152,7 @@ describe('signed posts, under Settings → GitHub', () => {
         new Response(
           JSON.stringify({
             accounts: [
-              { login: 'fleetadlc-builder', seats: [{ role: 'implement' }, { role: 'qa' }] },
+              { login: 'openadlc-builder', seats: [{ role: 'implement' }, { role: 'qa' }] },
               {
                 login: 'irisexampleco',
                 seats: [{ role: 'review_lead' }, { role: 'review_second' }, { role: 'review_security' }],
@@ -236,7 +236,7 @@ describe('what counting only signed posts changes, in one place', () => {
   it('counts only reviewer seats, and only when two of them share a login', () => {
     expect(
       sharedReviewersFromAccounts([
-        { login: 'fleetadlc-builder', seats: [{ role: 'implement' }, { role: 'qa' }] },
+        { login: 'openadlc-builder', seats: [{ role: 'implement' }, { role: 'qa' }] },
         { login: 'reviewer-one', seats: [{ role: 'review_lead' }] },
         { login: 'irisexampleco', seats: [{ role: 'review_second' }, { role: 'review_security' }] },
       ]),

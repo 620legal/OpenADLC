@@ -8,8 +8,8 @@ import type { AccountRef, CrewBot } from '@/lib/model-onboarding';
 
 const VIEW: GitHubAccountsView = {
   accounts: [
-    { login: 'fleetadlc-builder-acme', url: '', group: null, signIn: 'signed-in', seats: [], connectedAt: '2026-10-01T10:00:00Z' },
-    { login: 'fleetadlc-lead-reviewer-acme', url: '', group: null, signIn: 'signed-in', seats: [], connectedAt: '2026-10-01T10:05:00Z' },
+    { login: 'openadlc-builder-acme', url: '', group: null, signIn: 'signed-in', seats: [], connectedAt: '2026-10-01T10:00:00Z' },
+    { login: 'openadlc-lead-reviewer-acme', url: '', group: null, signIn: 'signed-in', seats: [], connectedAt: '2026-10-01T10:05:00Z' },
   ],
   bots: [
     { name: 'builder', slot: 'builder', role: 'implement', roleLabel: 'builder', group: 'crew', login: null, choices: [] },
@@ -65,8 +65,8 @@ describe('saving the crew', () => {
     expect(container.textContent).toContain('Does the work');
     await save();
     expect(calls.filter((call) => call.url === '/api/github/accounts/assign').map((call) => call.body)).toEqual([
-      { bot: 'builder', login: 'fleetadlc-builder-acme' },
-      { bot: 'lead-reviewer', login: 'fleetadlc-lead-reviewer-acme' },
+      { bot: 'builder', login: 'openadlc-builder-acme' },
+      { bot: 'lead-reviewer', login: 'openadlc-lead-reviewer-acme' },
     ]);
     expect(onContinue).toHaveBeenCalledOnce();
     done();
@@ -160,8 +160,8 @@ describe('saving a fresh crew, one GitHub account per seat', () => {
       'PATCH /api/bots/lead-reviewer/assignment',
     ]);
     expect(bridge.seats.map((one) => [one.bot, one.modelAccountId])).toEqual([
-      ['fleetadlc-builder-acme', 'max'],
-      ['fleetadlc-lead-reviewer-acme', 'max'],
+      ['openadlc-builder-acme', 'max'],
+      ['openadlc-lead-reviewer-acme', 'max'],
     ]);
     expect(container.textContent).not.toContain('no bot named');
     expect(onContinue).toHaveBeenCalledOnce();

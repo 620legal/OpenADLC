@@ -1,6 +1,6 @@
 // What OpenADLC's `git` lets a task run, by its skill's `allow.git` rules. Run by
 // the shell script beside this file as `node git-check.mjs <real git> <args…>`,
-// for every git command a session runs while FLEETADLC_TOOLS_POLICY is set.
+// for every git command a session runs while OPENADLC_TOOLS_POLICY is set.
 //
 // The guard used to look only at an invocation whose arguments named `push`.
 // A reviewer showed four ways past that, none needing the real git's full path:
@@ -275,7 +275,7 @@ export function porcelainRefs(stdout) {
  * GitHub's CI on a crew pull request runs only after the lead approves, so
  * what a builder pushes is reviewed on the strength of its own run of the
  * checks — and that run is hostd's, recorded by the bridge for a commit
- * (`fleetadlc-ci`), not the builder's word. Each commit a push would put on a
+ * (`openadlc-ci`), not the builder's word. Each commit a push would put on a
  * branch needs a pass; one the remote already has, or a deletion, needs none.
  * `resolve` names a ref's commit; `passed` asks the bridge, and answers null
  * when it could not.
@@ -287,21 +287,21 @@ export async function localCiPushRefusal(refs, policy, resolve, passed) {
     const sha = resolve(from);
     if (!sha) return `could not read which commit ${from} is, to check it passed local CI`;
     const answer = await passed(sha);
-    if (answer === null) return 'could not ask the bridge whether this commit passed local CI; run fleetadlc-ci and push again';
-    if (!answer) return `${sha.slice(0, 7)} (${to}) has no recorded local CI pass: run fleetadlc-ci on it, then push`;
+    if (answer === null) return 'could not ask the bridge whether this commit passed local CI; run openadlc-ci and push again';
+    if (!answer) return `${sha.slice(0, 7)} (${to}) has no recorded local CI pass: run openadlc-ci on it, then push`;
   }
   return null;
 }
 
 /** Whether the bridge has a local CI pass for a commit in this task's repository, or null when it could not be asked. */
 export async function bridgePassed(sha, env = process.env, fetchImpl = globalThis.fetch) {
-  const bridge = env.FLEETADLC_BRIDGE_URL;
-  const task = env.FLEETADLC_TASK_ID;
+  const bridge = env.OPENADLC_BRIDGE_URL;
+  const task = env.OPENADLC_TASK_ID;
   if (!bridge || !task || !fetchImpl) return null;
   try {
     const response = await fetchImpl(`${bridge}/internal/tasks/${encodeURIComponent(task)}/local-ci/pass`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...(env.FLEETADLC_TASK_TOKEN ? { 'x-fleetadlc-task-token': env.FLEETADLC_TASK_TOKEN } : {}) },
+      headers: { 'content-type': 'application/json', ...(env.OPENADLC_TASK_TOKEN ? { 'x-openadlc-task-token': env.OPENADLC_TASK_TOKEN } : {}) },
       body: JSON.stringify({ sha }),
     });
     if (!response.ok) return null;
@@ -465,9 +465,9 @@ async function main() {
 
   let policy = null;
   try {
-    policy = JSON.parse(process.env.FLEETADLC_TOOLS_POLICY ?? '');
+    policy = JSON.parse(process.env.OPENADLC_TOOLS_POLICY ?? '');
   } catch {
-    refuse("could not read this task's rules (FLEETADLC_TOOLS_POLICY)");
+    refuse("could not read this task's rules (OPENADLC_TOOLS_POLICY)");
   }
 
   const resolved = resolveAliases(args, ask);

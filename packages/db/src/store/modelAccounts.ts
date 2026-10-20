@@ -1,4 +1,4 @@
-import type { ModelAccount } from '@fleetadlc/shared';
+import type { ModelAccount } from '@openadlc/shared';
 import { query, queryOne } from '../client.js';
 
 /**

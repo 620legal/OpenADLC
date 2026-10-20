@@ -1,5 +1,5 @@
-import { audit, bots, deployRuns, issues, leases, listEventsOfTypeWith, recordEvent, repos, stageMoves, tasks, threads } from '@fleetadlc/db';
-import type { GitHubClient } from '@fleetadlc/github';
+import { audit, bots, deployRuns, issues, leases, listEventsOfTypeWith, recordEvent, repos, stageMoves, tasks, threads } from '@openadlc/db';
+import type { GitHubClient } from '@openadlc/github';
 import {
   STAGE_COLUMN_TITLES,
   STAGE_KEYS,
@@ -10,7 +10,7 @@ import {
   type Lease,
   type StageKey,
   type TaskKind,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 import { reviewLimits, type Automation } from './automation.js';
 import type { BridgeConfig } from './config.js';
 import type { MergeLine } from './merge-line.js';
@@ -198,7 +198,7 @@ export class SendBack {
     const history = await stageMoves.listForIssue(repo.id, input.issueNumber).catch(() => []);
     const back = previousStage(input.from, history, repo.stageModes);
     if (!back) return refuse(`${title(input.from)} has no stage before it to send work back to`);
-    return this.send({ repo, issueNumber: input.issueNumber, from: input.from, to: back.to, reason: input.reason, actor: 'fleetadlc', taskId: null });
+    return this.send({ repo, issueNumber: input.issueNumber, from: input.from, to: back.to, reason: input.reason, actor: 'openadlc', taskId: null });
   }
 
   private async send(input: {
@@ -375,7 +375,7 @@ export class SendBack {
     pr: { number: number; head: { ref: string; sha?: string } };
     crew: readonly { id: string; name: string }[];
     client: Pick<GitHubClient, 'listPullFilesAsNamed'> | null;
-    /** Who sent it back: the lead's seat, or `fleetadlc` for CI. */
+    /** Who sent it back: the lead's seat, or `openadlc` for CI. */
     by: string;
     reason: string;
     /** Brief the round with the lease's paths alone, not the files in its diff: it was sent back for straying outside them. */
@@ -585,7 +585,7 @@ export class SendBack {
       pr: { number: input.prNumber, head: { ref: pull.headRef, sha: pull.headSha } },
       crew,
       client,
-      by: 'fleetadlc',
+      by: 'openadlc',
       reason: input.reason,
       ...(input.leasePathsOnly ? { leasePathsOnly: true } : {}),
     });

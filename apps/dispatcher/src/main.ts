@@ -1,12 +1,13 @@
+import './legacy-env.js';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { closePool, waitForDatabase } from '@fleetadlc/db';
-import { costsFileSchema, envInt, envOr, loadYamlFile } from '@fleetadlc/shared';
+import { closePool, waitForDatabase } from '@openadlc/db';
+import { costsFileSchema, envInt, envOr, loadYamlFile } from '@openadlc/shared';
 import { Dispatcher } from './dispatcher.js';
-import { fleetHome, getSecretStore, internalSecretRef } from '@fleetadlc/github';
+import { openadlcHome, getSecretStore, internalSecretRef } from '@openadlc/github';
 
 function loadCosts() {
-  const path = join(envOr('FLEETADLC_CONFIG_ROOT', join(process.cwd(), 'config')), 'costs.yaml');
+  const path = join(envOr('OPENADLC_CONFIG_ROOT', join(process.cwd(), 'config')), 'costs.yaml');
   return existsSync(path) ? loadYamlFile(path, costsFileSchema) : costsFileSchema.parse({});
 }
 
@@ -22,20 +23,20 @@ async function main(): Promise<void> {
   if (unknown.length > 0) {
     throw new Error(
       `${unknown.join(' ')} is not an option: it takes ${OPTIONS.join(' and ')}, ` +
-        'and FLEETADLC_DISPATCH_INTERVAL_SECONDS for how often it runs',
+        'and OPENADLC_DISPATCH_INTERVAL_SECONDS for how often it runs',
     );
   }
-  const intervalSeconds = envInt('FLEETADLC_DISPATCH_INTERVAL_SECONDS', 300);
+  const intervalSeconds = envInt('OPENADLC_DISPATCH_INTERVAL_SECONDS', 300);
   const once = process.argv.includes('--once');
   const dryRun = process.argv.includes('--dry-run');
 
-  // Read, not generated: the bridge owns this secret. `fleetadlc up` establishes
+  // Read, not generated: the bridge owns this secret. `openadlc up` establishes
   // it before starting anything. Without it every call to the bridge was
   // refused, and each refused lease counted as an attempt on its issue.
   const internalSecret = await getSecretStore().get(internalSecretRef());
   if (!internalSecret) {
     throw new Error(
-      `no internal secret in the secret store for this FLEETADLC_HOME (${fleetHome()}); ` +
+      `no internal secret in the secret store for this OPENADLC_HOME (${openadlcHome()}); ` +
         'run it against the install whose bridge it calls',
     );
   }
@@ -43,10 +44,10 @@ async function main(): Promise<void> {
   await waitForDatabase();
 
   const dispatcher = new Dispatcher({
-    bridgeUrl: envOr('FLEETADLC_BRIDGE_URL', 'http://127.0.0.1:47311'),
+    bridgeUrl: envOr('OPENADLC_BRIDGE_URL', 'http://127.0.0.1:47311'),
     internalSecret,
     costs: loadCosts(),
-    leaseHours: envInt('FLEETADLC_LEASE_HOURS', 12),
+    leaseHours: envInt('OPENADLC_LEASE_HOURS', 12),
     dryRun,
   });
 

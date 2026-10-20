@@ -22,7 +22,7 @@ const said = vi.hoisted(() => ({
 const REASON =
   'engine claude is not available on this host, so triage cannot run. Install it, or change this bot’s engine in config/bots.yaml.';
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -57,7 +57,7 @@ vi.mock('@fleetadlc/db', () => ({
   mergeLines: {},
   recordEvent: vi.fn(),
   repos: {
-    getRepoByName: vi.fn(async (name: string) => (name === 'fleetadlc-testbed' ? { name, fullName: 'janedoe/fleetadlc-testbed' } : null)),
+    getRepoByName: vi.fn(async (name: string) => (name === 'openadlc-testbed' ? { name, fullName: 'janedoe/openadlc-testbed' } : null)),
   },
   // No request behind the subject: what a finished triage says about the
   // request it filed is `request-lifecycle.test.ts`'s to show.
@@ -73,7 +73,7 @@ vi.mock('@fleetadlc/db', () => ({
             repoId: 'repo-1',
             kind: 'review',
             subjectType: 'pr',
-            subjectRef: 'fleetadlc-testbed#2',
+            subjectRef: 'openadlc-testbed#2',
             state,
             exitReason: extra.exitReason,
             startedAt: '2026-09-25T07:31:12.000Z',
@@ -93,7 +93,7 @@ vi.mock('@fleetadlc/db', () => ({
     // the one write, since a task written done is not changed again.
     getTask: vi.fn(async (id: string) =>
       id === 'task-review'
-        ? { id, botId: 'bot-lead', repoId: 'repo-1', kind: 'review', subjectType: 'pr', subjectRef: 'fleetadlc-testbed#2', state: 'running', exitReason: null, startedAt: '2026-09-25T07:31:12.000Z' }
+        ? { id, botId: 'bot-lead', repoId: 'repo-1', kind: 'review', subjectType: 'pr', subjectRef: 'openadlc-testbed#2', state: 'running', exitReason: null, startedAt: '2026-09-25T07:31:12.000Z' }
         : { id, botId: 'bot-intake', repoId: 'repo-1', kind: 'intake', subjectType: 'request', subjectRef: 'request:a4b02784', state: 'running', exitReason: null },
     ),
   },
@@ -101,11 +101,11 @@ vi.mock('@fleetadlc/db', () => ({
     ensureThread: vi.fn(async () => ({ id: 'thread-1' })),
     addMessage: vi.fn(async () => ({ id: 'message-1' })),
     listMessages: vi.fn(async () => said.messages),
-    listThreadsForSubject: vi.fn(async () => [{ id: 'thread-1', bot_id: 'bot-lead', repo_id: 'repo-1', subject_ref: 'fleetadlc-testbed#2' }]),
+    listThreadsForSubject: vi.fn(async () => [{ id: 'thread-1', bot_id: 'bot-lead', repo_id: 'repo-1', subject_ref: 'openadlc-testbed#2' }]),
   },
 }));
 
-import { tasks, threads } from '@fleetadlc/db';
+import { tasks, threads } from '@openadlc/db';
 
 const handedOn = vi.fn(async () => undefined);
 const github = {
@@ -161,7 +161,7 @@ afterEach(async () => {
 function end(state: string, reason?: string, task = 'task-1') {
   return fetch(`${bridgeUrl}/internal/tasks/${task}/state`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': SECRET },
+    headers: { 'content-type': 'application/json', 'x-openadlc-internal-secret': SECRET },
     body: JSON.stringify({ state, ...(reason ? { reason } : {}) }),
   });
 }
@@ -180,7 +180,7 @@ describe('a task that ends without finishing', () => {
     expect(vi.mocked(threads.addMessage)).toHaveBeenCalledWith({
       threadId: 'thread-1',
       kind: 'sys',
-      author: 'fleetadlc',
+      author: 'openadlc',
       text: 'The intake bot (ottoexampleco) could not finish request:a4b02784',
       note: REASON,
       payload: { taskId: 'task-1', state: 'failed' },
@@ -228,7 +228,7 @@ describe('a review task that ends without its review', () => {
       { kind: 'sys', author: 'noraexampleco', text: 'reading review_lead.md, AGENTS.md', at: '2026-09-25T07:31:13.000Z', payload: null },
       { kind: 'bot', author: 'noraexampleco', text: BLOCKED, at: '2026-09-25T07:31:18.000Z', payload: null },
       // OpenADLC's, in the same thread.
-      { kind: 'sys', author: 'fleetadlc', text: 'Lead reviewer started pr-review', at: '2026-09-25T07:31:19.000Z', payload: null },
+      { kind: 'sys', author: 'openadlc', text: 'Lead reviewer started pr-review', at: '2026-09-25T07:31:19.000Z', payload: null },
     ];
 
     expect((await end('done', 'complete', 'task-review')).status).toBe(200);
@@ -238,7 +238,7 @@ describe('a review task that ends without its review', () => {
       ['task-review', 'failed', { exitReason: `ended without posting its review. It said: “${BLOCKED}”` }],
     ]);
     expect(vi.mocked(threads.addMessage)).toHaveBeenCalledWith(
-      expect.objectContaining({ text: 'The lead reviewer (noraexampleco) could not finish fleetadlc-testbed#2', payload: { taskId: 'task-review', state: 'failed' } }),
+      expect.objectContaining({ text: 'The lead reviewer (noraexampleco) could not finish openadlc-testbed#2', payload: { taskId: 'task-review', state: 'failed' } }),
     );
     expect(handedOn).not.toHaveBeenCalled();
   });
@@ -251,7 +251,7 @@ describe('a review task that ends without its review', () => {
     expect(vi.mocked(tasks.updateTaskState)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(tasks.updateTaskState)).toHaveBeenCalledWith('task-review', 'done', { exitReason: 'complete' });
     expect(vi.mocked(threads.addMessage)).not.toHaveBeenCalled();
-    expect(handedOn).toHaveBeenCalledWith(expect.objectContaining({ kind: 'review', subjectRef: 'fleetadlc-testbed#2' }));
+    expect(handedOn).toHaveBeenCalledWith(expect.objectContaining({ kind: 'review', subjectRef: 'openadlc-testbed#2' }));
   });
 
   it('stays done when GitHub cannot be asked', async () => {

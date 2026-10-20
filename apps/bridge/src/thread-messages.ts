@@ -1,5 +1,5 @@
-import { repos, tasks, threads, type Role } from '@fleetadlc/db';
-import { botAtStart, botInWords, type Bot, type Message } from '@fleetadlc/shared';
+import { repos, tasks, threads, type Role } from '@openadlc/db';
+import { botAtStart, botInWords, type Bot, type Message } from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import type { Gates } from './gates.js';
 import { HttpFailure } from './router.js';
@@ -85,7 +85,7 @@ export async function sendThreadMessage(
         409,
         bot.githubLogin
           ? `${botAtStart(bot)} could not sign in to GitHub just now, so it was not sent. Try again in a minute; if it fails again, reconnect it from Settings → GitHub → Connected accounts`
-          : `${botAtStart(bot)} has no GitHub account yet, so it was not sent. Connect it from Settings → GitHub → Connected accounts, or run: fleetadlc auth login --bot ${bot.slot}`,
+          : `${botAtStart(bot)} has no GitHub account yet, so it was not sent. Connect it from Settings → GitHub → Connected accounts, or run: openadlc auth login --bot ${bot.slot}`,
       );
     }
     // Refused rather than kept here: the console said it would be on GitHub.

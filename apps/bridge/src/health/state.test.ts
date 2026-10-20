@@ -1,4 +1,4 @@
-import type { HealthRow } from '@fleetadlc/db';
+import type { HealthRow } from '@openadlc/db';
 import { describe, expect, it } from 'vitest';
 import { unconfirmedOf, forgotten, nextRow, notificationsDue, showsNotice, stepVerdicts } from './state.js';
 import type { CheckResult } from './types.js';
@@ -18,7 +18,7 @@ const FAILING: CheckResult = {
   severity: 'blocking',
   title: 'The OpenADLC app does not have “SSH signing keys”',
   detail: 'Add it on the app’s permissions page.',
-  action: { label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/fleetadlc-janedoe/permissions' },
+  action: { label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/openadlc-janedoe/permissions' },
 };
 
 function row(partial: Partial<HealthRow> & Pick<HealthRow, 'id' | 'state'>): HealthRow {

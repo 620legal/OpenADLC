@@ -23,11 +23,11 @@ import {
   taskLoginHome,
   writeLoginFolder,
   type LoginFiles,
-} from '@fleetadlc/backup';
-import { modelAccounts } from '@fleetadlc/db';
-import { isModelId, modelListCache, type AvailableModel, type ModelListCache } from '@fleetadlc/engines';
-import { modelAccountRef, type SecretStore } from '@fleetadlc/github';
-import { SECRET_SHAPES, stepNamed, type AccountCheck, type SubscriptionLogin } from '@fleetadlc/shared';
+} from '@openadlc/backup';
+import { modelAccounts } from '@openadlc/db';
+import { isModelId, modelListCache, type AvailableModel, type ModelListCache } from '@openadlc/engines';
+import { modelAccountRef, type SecretStore } from '@openadlc/github';
+import { SECRET_SHAPES, stepNamed, type AccountCheck, type SubscriptionLogin } from '@openadlc/shared';
 import { hostBaseEnv, telemetryEnv } from './drivers/base-env.js';
 import { probeNetworkArgs } from './drivers/docker.js';
 import { keyEnv } from './key-env.js';
@@ -65,7 +65,7 @@ import { keyEnv } from './key-env.js';
  */
 
 /** Where a container's own home appears: a task's, a sign-in's or a check's. `CODEX_HOME` or `GROK_HOME` names it. */
-export const CONTAINER_LOGIN = '/fleetadlc/login';
+export const CONTAINER_LOGIN = '/openadlc/login';
 
 /**
  * Where a Grok container sees the account's sign-in directory, so its rename
@@ -73,7 +73,7 @@ export const CONTAINER_LOGIN = '/fleetadlc/login';
  * nothing hostd reads besides; it is not `GROK_HOME`. Codex does not get it;
  * Codex's file mount is `CONTAINER_LOGIN/auth.json`.
  */
-export const CONTAINER_AUTH = '/fleetadlc/auth';
+export const CONTAINER_AUTH = '/openadlc/auth';
 
 /** The variable each device-signed-in CLI reads its home from. */
 export const LOGIN_HOME_ENV = { openai: 'CODEX_HOME', xai: 'GROK_HOME' } as const;
@@ -774,7 +774,7 @@ export class LoginService {
     // fresh sign-in left it in place.
     const opened = this.options.driver === 'docker' ? openEphemeralLogin(dir, account.provider) : null;
     if (opened) {
-      const name = `fleetadlc-login-${id}`;
+      const name = `openadlc-login-${id}`;
       // A container of this name is from a sign-in hostd no longer knows
       // about — it restarted, or the last one was never cleaned up.
       await this.removeContainer(name);
@@ -864,7 +864,7 @@ export class LoginService {
   private async stop(id: string, run: LoginRun): Promise<void> {
     clearTimeout(run.timer);
     run.process.kill();
-    if (this.options.driver === 'docker') await this.removeContainer(`fleetadlc-login-${id}`);
+    if (this.options.driver === 'docker') await this.removeContainer(`openadlc-login-${id}`);
   }
 
   private async report(id: string): Promise<SubscriptionLogin> {
@@ -915,7 +915,7 @@ export class LoginService {
     const run = this.runs.get(id);
     this.runs.delete(id);
     if (run) await this.stop(id, run);
-    else if (this.options.driver === 'docker') await this.removeContainer(`fleetadlc-login-${id}`);
+    else if (this.options.driver === 'docker') await this.removeContainer(`openadlc-login-${id}`);
     // A check or an adopt still running would make the folder again after it
     // was removed, for an account that is gone.
     await this.checking.get(id)?.catch(() => undefined);
@@ -1237,7 +1237,7 @@ export class LoginService {
     let spawned: RunningCli;
     let scratch: string | null = null;
     let closeLogin = (): void => undefined;
-    const name = task.name ?? `fleetadlc-${task.purpose}-${id}`;
+    const name = task.name ?? `openadlc-${task.purpose}-${id}`;
     const loginArgs = (): string[] => {
       if (!presented.mount || !isDeviceProvider(account.provider)) return [];
       // A home of this run's own, an adopt copy's check included. The copy
@@ -1282,7 +1282,7 @@ export class LoginService {
       // On the host a fixed socket path would be one leader for every run at
       // once; each gets its own in its own scratch directory, as the grok
       // engine gives each session one.
-      scratch = mkdtempSync(join(tmpdir(), `fleetadlc-${task.purpose}-`));
+      scratch = mkdtempSync(join(tmpdir(), `openadlc-${task.purpose}-`));
       const args = task.args(join(scratch, 'grok-leader.sock'));
       spawned = this.spawn(cli, args, { env: { ...hostBaseEnv(), ...env }, cwd: scratch, stdin: 'ignore' });
     }

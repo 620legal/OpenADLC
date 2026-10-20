@@ -1,5 +1,5 @@
-import { appJwt, GitHubClient, installationTokenFor, type AppApi, type AppCredentials } from '@fleetadlc/github';
-import { REVIEW_GATE_CHECK } from '@fleetadlc/shared';
+import { appJwt, GitHubClient, installationTokenFor, type AppApi, type AppCredentials } from '@openadlc/github';
+import { REVIEW_GATE_CHECK } from '@openadlc/shared';
 
 /**
  * `review-gate` published by the GitHub App, as a check run, rather than by a
@@ -40,7 +40,7 @@ export class AppGate {
 
   /**
    * The login GitHub names as the creator of what the app writes, such as
-   * `fleetadlc-janedoe[bot]`, whether or not it holds "Checks: write". Null
+   * `openadlc-janedoe[bot]`, whether or not it holds "Checks: write". Null
    * when the app cannot be asked. An app without Checks sets the gate as a
    * status, and this is how that status is told from one a bot's token set.
    */
@@ -84,7 +84,7 @@ export class AppGate {
    */
   async client(repoFullName: string): Promise<GitHubClient | null> {
     const token = await this.token(repoFullName);
-    return token ? new GitHubClient({ token, actingAs: 'fleetadlc-app' }) : null;
+    return token ? new GitHubClient({ token, actingAs: 'openadlc-app' }) : null;
   }
 
   /** Publishes the gate on a head. False when the app cannot, and the caller falls back to the status. */

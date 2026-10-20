@@ -49,7 +49,7 @@ function source(files: Record<string, string>): string {
   git(repo, 'init', '--quiet', '--initial-branch=main');
   git(repo, 'config', 'user.name', 'Somebody Else');
   git(repo, 'config', 'user.email', 'somebody@example.com');
-  writeFileSync(join(repo, 'package.json'), '{\n  "name": "fleetadlc",\n  "version": "0.1.0"\n}\n');
+  writeFileSync(join(repo, 'package.json'), '{\n  "name": "openadlc",\n  "version": "0.1.0"\n}\n');
   git(repo, 'add', '--all');
   git(repo, 'commit', '--quiet', '-m', 'The first of the history');
   for (const [name, text] of Object.entries(files)) {

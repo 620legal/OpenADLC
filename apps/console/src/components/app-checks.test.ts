@@ -8,7 +8,7 @@ const done: AppChecks = {
   repository: 'example-org/app',
   settingsUrl: null,
   installUrl: null,
-  app: { slug: 'fleetadlc-example', id: 1, installations: 1 },
+  app: { slug: 'openadlc-example', id: 1, installations: 1 },
   detail: '',
 };
 
@@ -47,7 +47,7 @@ describe('whether the panel keeps asking', () => {
 });
 
 describe('the install line before a repository is chosen', () => {
-  const fresh: AppChecks = { ...done, repository: null, installed: 'unknown', installUrl: 'https://github.com/apps/fleetadlc-example/installations/new', app: { slug: 'fleetadlc-example', id: 1, installations: 0 } };
+  const fresh: AppChecks = { ...done, repository: null, installed: 'unknown', installUrl: 'https://github.com/apps/openadlc-example/installations/new', app: { slug: 'openadlc-example', id: 1, installations: 0 } };
 
   it('offers the install instead of saying "not checked"', async () => {
     const { installRow } = await import('./app-checks');
@@ -67,7 +67,7 @@ describe('the install line before a repository is chosen', () => {
 
   it('counts an install anywhere as done for this step, and stops asking', async () => {
     const { installRow } = await import('./app-checks');
-    const installed = { ...fresh, app: { slug: 'fleetadlc-example', id: 1, installations: 1 } };
+    const installed = { ...fresh, app: { slug: 'openadlc-example', id: 1, installations: 1 } };
     expect(installRow(installed).chip).toEqual({ tone: 'signal', text: 'installed on 1 account' });
     expect(installRow(installed).button).toBeNull();
     expect(keepsAsking(installed, 'install')).toBe(false);
@@ -76,7 +76,7 @@ describe('the install line before a repository is chosen', () => {
 });
 
 describe('the install line for the account named in the first step', () => {
-  const base: AppChecks = { ...done, repository: null, installed: 'unknown', account: 'example-org', installUrl: 'https://github.com/apps/fleetadlc-example/installations/new/permissions?target_id=42', app: { slug: 'fleetadlc-example', id: 1, installations: 1 } };
+  const base: AppChecks = { ...done, repository: null, installed: 'unknown', account: 'example-org', installUrl: 'https://github.com/apps/openadlc-example/installations/new/permissions?target_id=42', app: { slug: 'openadlc-example', id: 1, installations: 1 } };
 
   it('asks about that account, not about installs anywhere', async () => {
     const { installRow } = await import('./app-checks');
@@ -118,7 +118,7 @@ describe('an install step GitHub was not asked about, or did not answer', () => 
   });
 
   it('does not count an install on some other account while the install’s own is unknown', () => {
-    const elsewhere = { ...unknown, privateKeyHeld: true, app: { slug: 'fleetadlc-example', id: 1, installations: 1 } };
+    const elsewhere = { ...unknown, privateKeyHeld: true, app: { slug: 'openadlc-example', id: 1, installations: 1 } };
     expect(installRow(elsewhere).chip).toBeNull();
     expect(installUndecided(elsewhere)).toBe(true);
   });

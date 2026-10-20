@@ -81,7 +81,7 @@ It says what the machine is missing and asks before installing it: Node 22+,
 pnpm, git, tmux, Docker ([OrbStack](https://orbstack.dev) on a Mac), cloudflared
 (so GitHub's webhooks reach a laptop), and on Linux the compiler node-pty needs.
 Then it clones this repository to `~/OpenADLC`, builds it and the bot image,
-writes the install to `~/.fleetadlc`, starts it and opens the console. Run it
+writes the install to `~/.openadlc`, starts it and opens the console. Run it
 again to bring the checkout up to date; `--help` lists its options.
 
 <details>
@@ -100,15 +100,15 @@ instead.
 git clone https://github.com/620legal/OpenADLC.git && cd OpenADLC
 pnpm install && pnpm build
 infra/local/build-bot-image.sh           # the image each task's container runs
-pnpm fleetadlc init --driver docker      # the install lives in ~/.fleetadlc
-pnpm fleetadlc up                        # then open the console link it prints
+pnpm openadlc init --driver docker      # the install lives in ~/.openadlc
+pnpm openadlc up                        # then open the console link it prints
 ```
 
 </details>
 
 The link signs your browser in to the console, which listens on 127.0.0.1 and
 serves nothing to a browser that has not signed in. It works for an hour;
-`pnpm fleetadlc console-link` prints another.
+`pnpm openadlc console-link` prints another.
 
 The console walks you through the rest and checks each step as you go: a
 GitHub App, the crew's GitHub accounts (two at least: one builds, one
@@ -122,7 +122,7 @@ whether it may drive an automated crew is for the provider's current terms to
 say, not OpenADLC, and a provider may suspend an account it finds used against
 them. See [Subscriptions](docs/self-hosting.md#subscriptions).
 
-`pnpm fleetadlc doctor` says what would break; `pnpm fleetadlc down` stops it.
+`pnpm openadlc doctor` says what would break; `pnpm openadlc down` stops it.
 
 **In the cloud:** one command builds the images on Cloud Build and applies
 [`infra/gcp`](infra/gcp) to a Google Cloud project of its own: Cloud Run, Cloud

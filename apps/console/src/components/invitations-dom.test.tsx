@@ -23,7 +23,7 @@ const bot = (name: string, login: string): Bot => ({
   accountExists: true,
 });
 
-const BOTS = [bot('builder', 'fleetadlc-atlas-janedoe'), bot('lead-reviewer', 'fleetadlc-vega-janedoe')];
+const BOTS = [bot('builder', 'openadlc-atlas-janedoe'), bot('lead-reviewer', 'openadlc-vega-janedoe')];
 
 let posted: unknown[];
 let answer: () => Response;
@@ -40,7 +40,7 @@ beforeEach(() => {
       if (!init?.method) {
         return Response.json({
           repository: 'janedoe/api',
-          pending: [{ id: 2, invitee: 'fleetadlc-vega-janedoe' }],
+          pending: [{ id: 2, invitee: 'openadlc-vega-janedoe' }],
           reason: null,
           repositories: [
             { repository: 'janedoe/api', pending: [], reason: null },
@@ -88,8 +88,8 @@ describe('accepting invitations pasted by hand', () => {
     answer = () =>
       Response.json({
         results: [
-          { bot: 'builder', invitee: 'fleetadlc-atlas-janedoe', id: 1, outcome: { action: 'accepted' } },
-          { bot: 'lead-reviewer', invitee: 'fleetadlc-vega-janedoe', id: 2, outcome: { action: 'refused', detail: 'this invitation has expired; send a new one' } },
+          { bot: 'builder', invitee: 'openadlc-atlas-janedoe', id: 1, outcome: { action: 'accepted' } },
+          { bot: 'lead-reviewer', invitee: 'openadlc-vega-janedoe', id: 2, outcome: { action: 'refused', detail: 'this invitation has expired; send a new one' } },
           { bot: null, invitee: 'somebody-else', id: 3, outcome: { action: 'none', detail: "somebody-else is not one of this install's bots" } },
         ],
       });
@@ -121,7 +121,7 @@ describe('a run whose invitation a connected bot could not accept', () => {
   it('says why, and does not call the bot not connected or offer to connect it', async () => {
     answer = () =>
       Response.json({
-        results: [{ bot: 'builder', login: 'fleetadlc-atlas-janedoe', state: 'invited', changed: false, detail: 'GitHub refused the acceptance: 403' }],
+        results: [{ bot: 'builder', login: 'openadlc-atlas-janedoe', state: 'invited', changed: false, detail: 'GitHub refused the acceptance: 403' }],
       });
     await act(async () =>
       root.render(
@@ -132,7 +132,7 @@ describe('a run whose invitation a connected bot could not accept', () => {
     const invite = [...container.querySelectorAll('button')].find((one) => one.textContent === 'invite them and let them in')!;
     await act(async () => invite.click());
     await settle();
-    expect(container.textContent).toContain('fleetadlc-atlas-janedoe: GitHub refused the acceptance: 403');
+    expect(container.textContent).toContain('openadlc-atlas-janedoe: GitHub refused the acceptance: 403');
     expect(container.textContent).not.toContain('invited but not connected');
     expect([...container.querySelectorAll('button')].some((one) => one.textContent?.startsWith('connect '))).toBe(false);
   });

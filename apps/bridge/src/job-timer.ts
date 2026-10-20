@@ -44,23 +44,23 @@ export const DEFAULT_INTERVALS: Record<Job, number> = {
   engines: 5,
   // Uploads nobody sent with anything; they wait a day, so hourly is plenty.
   attachments: 60,
-  // GitHub deliveries past FLEETADLC_EVENT_RETENTION_DAYS; kept for weeks, so daily.
+  // GitHub deliveries past OPENADLC_EVENT_RETENTION_DAYS; kept for weeks, so daily.
   events: 24 * 60,
 };
 
-/** Reads `FLEETADLC_JOB_<NAME>_MINUTES`; 0 turns a job off. */
+/** Reads `OPENADLC_JOB_<NAME>_MINUTES`; 0 turns a job off. */
 export function intervalsFromEnv(env: NodeJS.ProcessEnv = process.env): Record<Job, number> {
   const intervals = { ...DEFAULT_INTERVALS };
   for (const job of SCHEDULED_JOBS) {
-    const raw = env[`FLEETADLC_JOB_${job.toUpperCase()}_MINUTES`];
+    const raw = env[`OPENADLC_JOB_${job.toUpperCase()}_MINUTES`];
     if (raw === undefined) continue;
     // A value that is not a number is a typo, and silently keeping the default
     // is how somebody believes they turned a job off and did not. A blank one
     // is checked too: Number('') is 0, so an env file that wrote
-    // `FLEETADLC_JOB_RECONCILE_MINUTES=` turned the backstop off without a word.
+    // `OPENADLC_JOB_RECONCILE_MINUTES=` turned the backstop off without a word.
     if (!/^\d+(\.\d+)?$/.test(raw.trim())) {
       throw new Error(
-        `FLEETADLC_JOB_${job.toUpperCase()}_MINUTES is "${raw}", which is not a number of minutes. ` +
+        `OPENADLC_JOB_${job.toUpperCase()}_MINUTES is "${raw}", which is not a number of minutes. ` +
           `Where the bridge is started, set it to a number of minutes (0 turns the job off), or remove it for the default of ${DEFAULT_INTERVALS[job]}`,
       );
     }
@@ -85,7 +85,7 @@ const MAX_DELAY = 2_147_483_647;
  *   burst of comments. Each starts a little after the last.
  * - **A job that throws keeps its timer.** The failure is reported and the next
  *   firing still happens, because a job that stops silently is worse than one
- *   that fails loudly — nothing in `fleetadlc status` distinguishes "never ran"
+ *   that fails loudly — nothing in `openadlc status` distinguishes "never ran"
  *   from "stopped running" except the timestamp nobody is looking at.
  */
 export class JobTimer {
@@ -128,7 +128,7 @@ export class JobTimer {
    *
    * Node's timers hold at most 2^31-1 ms (24.8 days). Past that it prints a
    * TimeoutOverflowWarning and waits 1 ms instead, so a monthly
-   * `FLEETADLC_JOB_DEPS_MINUTES=43200` ran the dependency sweep back to back
+   * `OPENADLC_JOB_DEPS_MINUTES=43200` ran the dependency sweep back to back
    * from start-up. A longer wait is a chain of shorter ones.
    */
   private arm(job: Job, wait: number, period: number): void {

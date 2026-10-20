@@ -48,7 +48,7 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   # owner's. Matched by name alone, the provider admitted any workflow on the default branch, started by any
   # trigger that runs there (schedule, issue_comment, workflow_run, pull_request_target), and a name freed by
   # a rename or a transfer could be registered by someone else. `workflow_ref` is
-  # `<owner>/<name>/<path>@<ref>`, spelled as GitHub spells the repository: `fleetadlc cloud configure
+  # `<owner>/<name>/<path>@<ref>`, spelled as GitHub spells the repository: `openadlc cloud configure
   # --deployer` asks GitHub for the spelling and the ids. The ids and the path are checked by their variables' validation
   # before they are put into this expression.
   attribute_condition = join(" && ", [
@@ -61,7 +61,7 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   lifecycle {
     precondition {
       condition     = var.deployer_repository_id != "" && var.deployer_repository_owner_id != ""
-      error_message = "deployer_repository is set, so deployer_repository_id and deployer_repository_owner_id must be too: the provider admits the repository by its ids. Run fleetadlc cloud configure, or: gh api repos/${var.deployer_repository} --jq '.id, .owner.id'"
+      error_message = "deployer_repository is set, so deployer_repository_id and deployer_repository_owner_id must be too: the provider admits the repository by its ids. Run openadlc cloud configure, or: gh api repos/${var.deployer_repository} --jq '.id, .owner.id'"
     }
   }
 
@@ -127,7 +127,7 @@ resource "google_secret_manager_secret_iam_member" "deployer_app_key" {
   count   = var.deployer_repository != "" && var.deployer_reads_app_key ? 1 : 0
   project = var.project_id
   # The bridge names every secret `fleet-<ref>` (GcpSecretStore), whatever the prefix; the
-  # name predates FleetADLC and is kept so existing secrets stay where they are.
+  # name predates OpenADLC and is kept so existing secrets stay where they are.
   secret_id = "fleet-github-app-private-key"
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.deployer[0].email}"

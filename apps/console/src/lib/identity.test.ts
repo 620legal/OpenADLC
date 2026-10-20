@@ -21,35 +21,35 @@ function headersFor(incoming: Record<string, string> = {}) {
 
 describe('on a local install', () => {
   it('carries the console secret when the console has one', () => {
-    vi.stubEnv('FLEETADLC_IDENTITY_MODE_EXPECTED', '');
-    vi.stubEnv('FLEETADLC_CONSOLE_SECRET', 'c'.repeat(64));
-    expect(headersFor()['x-fleetadlc-console-secret']).toBe('c'.repeat(64));
+    vi.stubEnv('OPENADLC_IDENTITY_MODE_EXPECTED', '');
+    vi.stubEnv('OPENADLC_CONSOLE_SECRET', 'c'.repeat(64));
+    expect(headersFor()['x-openadlc-console-secret']).toBe('c'.repeat(64));
   });
 
   it('carries no secret header when it has none', () => {
-    vi.stubEnv('FLEETADLC_IDENTITY_MODE_EXPECTED', '');
-    vi.stubEnv('FLEETADLC_CONSOLE_SECRET', '');
-    expect(headersFor()).not.toHaveProperty('x-fleetadlc-console-secret');
+    vi.stubEnv('OPENADLC_IDENTITY_MODE_EXPECTED', '');
+    vi.stubEnv('OPENADLC_CONSOLE_SECRET', '');
+    expect(headersFor()).not.toHaveProperty('x-openadlc-console-secret');
   });
 
   it('never forwards the x-goog headers a browser sent, nor takes a name from them', () => {
-    vi.stubEnv('FLEETADLC_IDENTITY_MODE_EXPECTED', '');
-    vi.stubEnv('FLEETADLC_CONSOLE_SECRET', 'c'.repeat(64));
-    vi.stubEnv('FLEETADLC_IDENTITY', '');
-    delete process.env.FLEETADLC_IDENTITY;
+    vi.stubEnv('OPENADLC_IDENTITY_MODE_EXPECTED', '');
+    vi.stubEnv('OPENADLC_CONSOLE_SECRET', 'c'.repeat(64));
+    vi.stubEnv('OPENADLC_IDENTITY', '');
+    delete process.env.OPENADLC_IDENTITY;
     const sent = headersFor(FROM_A_BROWSER);
     expect(Object.keys(sent).filter((name) => name.startsWith('x-goog-'))).toEqual([]);
-    expect(sent).not.toHaveProperty('x-fleetadlc-iap-assertion');
-    expect(sent['x-fleetadlc-identity']).toBe('console');
+    expect(sent).not.toHaveProperty('x-openadlc-iap-assertion');
+    expect(sent['x-openadlc-identity']).toBe('console');
   });
 });
 
 describe('behind IAP', () => {
   it('forwards the assertion and the email IAP set, as before', () => {
-    vi.stubEnv('FLEETADLC_IDENTITY_MODE_EXPECTED', 'iap');
+    vi.stubEnv('OPENADLC_IDENTITY_MODE_EXPECTED', 'iap');
     const sent = headersFor(FROM_A_BROWSER);
     expect(sent['x-goog-iap-jwt-assertion']).toBe('header.payload.signature');
-    expect(sent['x-fleetadlc-iap-assertion']).toBe('header.payload.signature');
-    expect(sent['x-fleetadlc-identity']).toBe('attacker@example.com');
+    expect(sent['x-openadlc-iap-assertion']).toBe('header.payload.signature');
+    expect(sent['x-openadlc-identity']).toBe('attacker@example.com');
   });
 });

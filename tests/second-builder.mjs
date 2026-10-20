@@ -10,7 +10,7 @@
  * A second builder for the owner, and whether this call created it.
  *
  * It is the owner's next seat — `builder` gives `builder-2` — seeded the way
- * `fleetadlc up` seeds config/bots.yaml, so it is named after the seat and holds
+ * `openadlc up` seeds config/bots.yaml, so it is named after the seat and holds
  * no account. The dispatcher staffs a repository from every bot with the
  * owner's role, which is what makes it a second builder at all.
  *
@@ -41,7 +41,7 @@ export async function addSecondBuilder(owner, deps) {
  * Retires the builder the suite created: its hostd sessions, the host tmux
  * sessions named for it, then its row.
  *
- * Deleting the row and leaving the idle shell makes `fleetadlc__<bot>__shell` a
+ * Deleting the row and leaving the idle shell makes `openadlc__<bot>__shell` a
  * session with no bot behind it. Cancelling the task leaves that shell: it is
  * created when the container comes up, and the task has a session of its own.
  * With the row gone, the console has no bot to attach the shell to.
@@ -54,7 +54,7 @@ export async function addSecondBuilder(owner, deps) {
  * gone.
  */
 export async function retireBuilder(name, deps) {
-  const prefix = `fleetadlc__${name}__`;
+  const prefix = `openadlc__${name}__`;
   for (const session of await deps.listHostSessions(name)) {
     await deps.killHostSession(name, session.name);
   }

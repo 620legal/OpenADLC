@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// OpenADLC's `fleetadlc-ci`, on a task session's PATH beside OpenADLC's `gh` and
+// OpenADLC's `openadlc-ci`, on a task session's PATH beside OpenADLC's `gh` and
 // `git` (hostd mounts this folder into each bot's container at
-// /opt/fleetadlc/bin, and puts it first for the local driver too).
+// /opt/openadlc/bin, and puts it first for the local driver too).
 //
 // It runs the repository's checks — `make ci` — on this task's exact head, and
 // waits for them. It does not run them itself: it asks the bridge, the bridge
@@ -37,16 +37,16 @@ function readHead() {
  * Everything it touches is passed in, so it is tested without a bridge.
  */
 export async function runLocalCi({ env = process.env, fetchImpl = globalThis.fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = (line) => process.stdout.write(`${line}\n`), now = Date.now, head = readHead } = {}) {
-  const bridge = env.FLEETADLC_BRIDGE_URL;
-  const task = env.FLEETADLC_TASK_ID;
+  const bridge = env.OPENADLC_BRIDGE_URL;
+  const task = env.OPENADLC_TASK_ID;
   if (!bridge || !task) {
-    log('fleetadlc-ci: this is not an OpenADLC task session (no FLEETADLC_BRIDGE_URL or FLEETADLC_TASK_ID), so there is nobody to run the checks for');
+    log('openadlc-ci: this is not an OpenADLC task session (no OPENADLC_BRIDGE_URL or OPENADLC_TASK_ID), so there is nobody to run the checks for');
     return 2;
   }
   const call = async (path, body) => {
     const response = await fetchImpl(`${bridge}/internal/tasks/${encodeURIComponent(task)}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...(env.FLEETADLC_TASK_TOKEN ? { 'x-fleetadlc-task-token': env.FLEETADLC_TASK_TOKEN } : {}) },
+      headers: { 'content-type': 'application/json', ...(env.OPENADLC_TASK_TOKEN ? { 'x-openadlc-task-token': env.OPENADLC_TASK_TOKEN } : {}) },
       body: JSON.stringify(body ?? {}),
     });
     const text = await response.text();
@@ -68,7 +68,7 @@ export async function runLocalCi({ env = process.env, fetchImpl = globalThis.fet
   if (sha) {
     const recorded = await call('/local-ci/pass', { sha }).catch(() => null);
     if (recorded?.passed === true) {
-      log(`fleetadlc-ci: make ci already passed on ${sha}, recorded; you may push it and open or update the pull request`);
+      log(`openadlc-ci: make ci already passed on ${sha}, recorded; you may push it and open or update the pull request`);
       return 0;
     }
   }
@@ -77,16 +77,16 @@ export async function runLocalCi({ env = process.env, fetchImpl = globalThis.fet
   try {
     run = (await call('/local-ci')).run;
   } catch (error) {
-    log(`fleetadlc-ci: the checks could not be started: ${error instanceof Error ? error.message : error}`);
+    log(`openadlc-ci: the checks could not be started: ${error instanceof Error ? error.message : error}`);
     return 2;
   }
-  log(`fleetadlc-ci: running make ci on this worktree's HEAD (run ${run.id})`);
+  log(`openadlc-ci: running make ci on this worktree's HEAD (run ${run.id})`);
 
   const started = now();
   let recordedBy = null;
   for (;;) {
     if (now() - started > GIVE_UP_MS) {
-      log('fleetadlc-ci: gave up waiting for make ci after 65 minutes; run fleetadlc-ci again once it is fixed to finish sooner');
+      log('openadlc-ci: gave up waiting for make ci after 65 minutes; run openadlc-ci again once it is fixed to finish sooner');
       return 2;
     }
     await sleep(POLL_MS);
@@ -94,21 +94,21 @@ export async function runLocalCi({ env = process.env, fetchImpl = globalThis.fet
     try {
       status = await call('/local-ci/status', { run: run.id });
     } catch (error) {
-      log(`fleetadlc-ci: could not read the run: ${error instanceof Error ? error.message : error}`);
+      log(`openadlc-ci: could not read the run: ${error instanceof Error ? error.message : error}`);
       return 2;
     }
     run = status.run;
     if (run.state === 'running') continue;
     if (run.state === 'refused') {
       if (run.logTail) log(run.logTail);
-      log(`fleetadlc-ci: not run — ${run.reason}`);
+      log(`openadlc-ci: not run — ${run.reason}`);
       return 2;
     }
     if (run.state === 'failed') {
       log(run.logTail);
       // hostd stopped it at its limit, and says what to look for.
-      if (run.reason) log(`fleetadlc-ci: ${run.reason}`);
-      else log(`fleetadlc-ci: make ci failed (exit ${run.exitCode}) on ${String(run.headSha).slice(0, 7)}; fix it, commit, and run fleetadlc-ci again`);
+      if (run.reason) log(`openadlc-ci: ${run.reason}`);
+      else log(`openadlc-ci: make ci failed (exit ${run.exitCode}) on ${String(run.headSha).slice(0, 7)}; fix it, commit, and run openadlc-ci again`);
       return 1;
     }
     // Passed. hostd tells the bridge, and that write can come a moment after
@@ -116,13 +116,13 @@ export async function runLocalCi({ env = process.env, fetchImpl = globalThis.fet
     if (status.recorded) break;
     recordedBy ??= now() + RECORD_WAIT_MS;
     if (now() > recordedBy) {
-      log(`fleetadlc-ci: make ci passed on ${String(run.headSha).slice(0, 7)}, but the bridge has no record of it; run fleetadlc-ci again`);
+      log(`openadlc-ci: make ci passed on ${String(run.headSha).slice(0, 7)}, but the bridge has no record of it; run openadlc-ci again`);
       return 2;
     }
   }
   log(run.logTail);
-  log(`fleetadlc-ci: make ci passed on ${run.headSha}, recorded; you may push it and open or update the pull request`);
+  log(`openadlc-ci: make ci passed on ${run.headSha}, recorded; you may push it and open or update the pull request`);
   return 0;
 }
 
-if (process.argv[1]?.endsWith('fleetadlc-ci')) process.exit(await runLocalCi());
+if (process.argv[1]?.endsWith('openadlc-ci')) process.exit(await runLocalCi());

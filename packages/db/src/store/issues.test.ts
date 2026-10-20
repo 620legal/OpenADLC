@@ -21,7 +21,7 @@ function issue(partial: Partial<IssueRecord> & { number: number }): IssueRecord 
   return {
     id: `id-${partial.number}`,
     repoId: 'repo',
-    repoName: 'janedoe/FleetADLC',
+    repoName: 'janedoe/OpenADLC',
     title: `issue ${partial.number}`,
     stage: 'build',
     labels: [],
@@ -94,8 +94,8 @@ describe('what a builder may be given', () => {
     vi.mocked(query).mockClear();
   });
 
-  it('skips an issue labelled fleetadlc:ignore, as it skips needs-human, needs-triage and every do: label but do:ai', async () => {
-    // Those three still enter the pipeline: a person owes something. fleetadlc:ignore
+  it('skips an issue labelled openadlc:ignore, as it skips needs-human, needs-triage and every do: label but do:ai', async () => {
+    // Those three still enter the pipeline: a person owes something. openadlc:ignore
     // is the issue sitting untouched, and a builder was leased it because the
     // query never looked for the label.
     await listRoutableIssues('repo-1');
@@ -106,30 +106,30 @@ describe('what a builder may be given', () => {
     // do:product and do:legal wait on a person's decision as do:human does; a
     // builder was leased them because only do:human was looked for.
     expect(String(sql)).toMatch(/not exists \(select 1 from unnest\(i\.labels\) as l where l like 'do:%' and l <> 'do:ai'\)/);
-    expect(String(sql)).toMatch(/not \(i\.labels && array\['fleetadlc:ignore', 'fleet:ignore'\]::text\[\]\)/);
+    expect(String(sql)).toMatch(/not \(i\.labels && array\['openadlc:ignore', 'fleet:ignore'\]::text\[\]\)/);
     expect(params).toEqual(['repo-1']);
   });
 
-  it('leaves an issue labelled fleetadlc:ignore out of the blocked issues the dispatcher unblocks', async () => {
+  it('leaves an issue labelled openadlc:ignore out of the blocked issues the dispatcher unblocks', async () => {
     // Unblocking swaps blocked for start:now, so an ignored issue past spec
     // was made routable once what it waited for shipped.
     await listBlockedIssues('repo-1');
 
     const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
     expect(String(sql)).toMatch(/'blocked' = any\(i\.labels\)/);
-    expect(String(sql)).toMatch(/not \(i\.labels && array\['fleetadlc:ignore', 'fleet:ignore'\]::text\[\]\)/);
+    expect(String(sql)).toMatch(/not \(i\.labels && array\['openadlc:ignore', 'fleet:ignore'\]::text\[\]\)/);
     expect(params).toEqual(['repo-1']);
   });
 
-  it('writes fleetadlc:ignore onto a row that is already there, and does not insert one', async () => {
+  it('writes openadlc:ignore onto a row that is already there, and does not insert one', async () => {
     // Inserting would have to name a stage. Naming intake is what the sweep
     // then staffs, so the label would have been replaced by a stage.
-    await setIssueLabels('repo-1', 4, ['fleetadlc:ignore']);
+    await setIssueLabels('repo-1', 4, ['openadlc:ignore']);
 
     const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
     expect(String(sql)).toMatch(/update issues set/);
     expect(String(sql)).not.toMatch(/insert into/i);
-    expect(params).toEqual(['repo-1', 4, ['fleetadlc:ignore']]);
+    expect(params).toEqual(['repo-1', 4, ['openadlc:ignore']]);
   });
 });
 
@@ -215,19 +215,19 @@ describe('boardCards', () => {
     vi.mocked(query).mockReset();
   });
 
-  it('leaves out an issue labelled fleetadlc:ignore, and keeps it once the label is off', async () => {
+  it('leaves out an issue labelled openadlc:ignore, and keeps it once the label is off', async () => {
     const row = (number: number, labels: string[]) => ({
-      id: `id-${number}`, repo_id: 'repo', repo_name: 'fleetadlc', number, title: `issue ${number}`, stage: 'build', labels,
+      id: `id-${number}`, repo_id: 'repo', repo_name: 'openadlc', number, title: `issue ${number}`, stage: 'build', labels,
       declared_paths: [], pr_changed_paths: [], body: '', url: null, pr_number: null,
       updated_at: new Date('2026-09-18T00:00:00Z'), created_at: new Date('2026-09-18T00:00:00Z'),
     });
     const read = (rows: ReturnType<typeof row>[]) =>
       vi.mocked(query).mockImplementation((async (sql: string) => (sql.includes('from issues i join repos') ? rows : [])) as never);
 
-    read([row(1, ['adlc:build']), row(2, ['adlc:build', 'fleetadlc:ignore']), row(3, ['fleet:ignore'])]);
-    expect((await boardCards()).map((card) => card.ref)).toEqual(['fleetadlc#1']);
+    read([row(1, ['adlc:build']), row(2, ['adlc:build', 'openadlc:ignore']), row(3, ['fleet:ignore'])]);
+    expect((await boardCards()).map((card) => card.ref)).toEqual(['openadlc#1']);
 
     read([row(1, ['adlc:build']), row(2, ['adlc:build'])]);
-    expect((await boardCards()).map((card) => card.ref).sort()).toEqual(['fleetadlc#1', 'fleetadlc#2']);
+    expect((await boardCards()).map((card) => card.ref).sort()).toEqual(['openadlc#1', 'openadlc#2']);
   });
 });

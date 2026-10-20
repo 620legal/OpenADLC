@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { TaskAttachment } from '@fleetadlc/shared';
+import type { TaskAttachment } from '@openadlc/shared';
 import { AttachmentClient, prepareAttachments, writeAttachments } from './task-attachments.js';
 
 /**
@@ -23,7 +23,7 @@ function file(id: string, name: string, mediaType: string, bytes: Buffer, extra:
 
 let dir: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'fleetadlc-attachments-'));
+  dir = mkdtempSync(join(tmpdir(), 'openadlc-attachments-'));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -94,7 +94,7 @@ describe('fetching a file before the bridge has written the install’s secret',
   it('says to start the bridge, not only that the secret is missing', async () => {
     const empty = { get: async () => null, set: async () => undefined, delete: async () => undefined, list: async () => [] };
     await expect(new AttachmentClient('http://127.0.0.1:9', empty).bytes('att-1')).rejects.toThrow(
-      /no internal secret yet.*Start the bridge, which generates it, then retry: fleetadlc up/,
+      /no internal secret yet.*Start the bridge, which generates it, then retry: openadlc up/,
     );
   });
 });

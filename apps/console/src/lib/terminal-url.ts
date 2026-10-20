@@ -1,7 +1,7 @@
 /**
  * Where take-over's socket goes: hostd's terminal gateway.
  *
- * `NEXT_PUBLIC_FLEETADLC_TERMINAL_URL` was read in browser code alone, so Next
+ * `NEXT_PUBLIC_OPENADLC_TERMINAL_URL` was read in browser code alone, so Next
  * fixed it when the console was built. A cloud console is built without it
  * (the service is started with it), so every one dialled port 47312 on its own
  * domain, where the load balancer does not listen, and take-over never
@@ -17,7 +17,7 @@
  * as well (each seen in the built chunk, where the value was gone).
  */
 export function terminalUrlFrom(env: Record<string, string | undefined>): string | undefined {
-  return env['NEXT_PUBLIC_FLEETADLC_TERMINAL_URL'] || undefined;
+  return env['NEXT_PUBLIC_OPENADLC_TERMINAL_URL'] || undefined;
 }
 
 /** hostd's gateway port when nothing says otherwise. */
@@ -48,8 +48,8 @@ export function terminalBase(
  */
 export function socketFailure(address: string, origin: string): string {
   return (
-    `the terminal socket to ${address} failed. The address comes from NEXT_PUBLIC_FLEETADLC_TERMINAL_URL when the console is started with one, ` +
+    `the terminal socket to ${address} failed. The address comes from NEXT_PUBLIC_OPENADLC_TERMINAL_URL when the console is started with one, ` +
     `and is port ${GATEWAY_PORT} on this page's host otherwise. If that is where hostd's gateway is, hostd admits only the console ` +
-    `FLEETADLC_CONSOLE_URL names; if that is not ${origin}, set it for hostd and restart it.`
+    `OPENADLC_CONSOLE_URL names; if that is not ${origin}, set it for hostd and restart it.`
   );
 }

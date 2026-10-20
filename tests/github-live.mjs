@@ -11,9 +11,9 @@
  *   node tests/github-live.mjs            # run against the install's first repository by name (the database DATABASE_URL points at)
  *   node tests/github-live.mjs --keep     # leave the issue open for inspection
  */
-import { closePool, bots, repos, tasks, threads, waitForDatabase } from '@fleetadlc/db';
-import { GitHubClient, accessTokenRef, getSecretStore, internalSecretRef, refreshTokenRef, TokenBroker } from '@fleetadlc/github';
-import { automationBotOf, renderGateComment, parseMarker, STAGE_LABELS } from '@fleetadlc/shared';
+import { closePool, bots, repos, tasks, threads, waitForDatabase } from '@openadlc/db';
+import { GitHubClient, accessTokenRef, getSecretStore, internalSecretRef, refreshTokenRef, TokenBroker } from '@openadlc/github';
+import { automationBotOf, renderGateComment, parseMarker, STAGE_LABELS } from '@openadlc/shared';
 
 const keep = process.argv.includes('--keep');
 const results = [];
@@ -31,13 +31,13 @@ function check(name, ok, detail = '') {
  * does not answer, and only then does this suite refresh the token itself.
  */
 async function tokenFromBridge(botName) {
-  const bridge = process.env.FLEETADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
+  const bridge = process.env.OPENADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
   const secret = (await getSecretStore().get(internalSecretRef()).catch(() => null)) ?? '';
   let response;
   try {
     response = await fetch(`${bridge}/internal/tokens/${encodeURIComponent(botName)}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': secret },
+      headers: { 'content-type': 'application/json', 'x-openadlc-internal-secret': secret },
       body: JSON.stringify({ purpose: 'call' }),
       signal: AbortSignal.timeout(30_000),
     });
@@ -58,14 +58,14 @@ async function clientFor(botName) {
   const store = getSecretStore();
 
   const refresh = await store.get(refreshTokenRef(botName));
-  if (refresh && process.env.FLEETADLC_GITHUB_CLIENT_ID) {
-    const broker = new TokenBroker({ clientId: process.env.FLEETADLC_GITHUB_CLIENT_ID });
+  if (refresh && process.env.OPENADLC_GITHUB_CLIENT_ID) {
+    const broker = new TokenBroker({ clientId: process.env.OPENADLC_GITHUB_CLIENT_ID });
     const brokered = await broker.tokenFor(botName, login);
     return new GitHubClient({ token: brokered.token, actingAs: login });
   }
 
   const staticToken = await store.get(accessTokenRef(botName));
-  if (!staticToken) throw new Error(`${botName} is not connected; run: fleetadlc auth login --bot ${botName}`);
+  if (!staticToken) throw new Error(`${botName} is not connected; run: openadlc auth login --bot ${botName}`);
   return new GitHubClient({ token: staticToken, actingAs: login });
 }
 
@@ -74,9 +74,9 @@ async function main() {
 
   const repo = (await repos.listRepos())[0];
   if (!repo) throw new Error('no repository is configured');
-  // The automation bot by its role, or the one FLEETADLC_AUTOMATION_BOT names by
+  // The automation bot by its role, or the one OPENADLC_AUTOMATION_BOT names by
   // seat or name: its name is its account's handle once one is connected.
-  const automation = automationBotOf(await bots.listBots(), process.env.FLEETADLC_AUTOMATION_BOT ?? null);
+  const automation = automationBotOf(await bots.listBots(), process.env.OPENADLC_AUTOMATION_BOT ?? null);
   if (!automation) throw new Error('this install has no automation bot');
   const client = await clientFor(automation.name);
   const viewer = await client.viewer();

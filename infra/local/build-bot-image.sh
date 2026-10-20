@@ -2,22 +2,22 @@
 #
 # Builds the bot image, with the engine CLIs pinned.
 #
-# This exists because the image was not reproducible. `fleetadlc-bot:latest` was on
+# This exists because the image was not reproducible. `openadlc-bot:latest` was on
 # one laptop because somebody built it by hand once, no command for it was
 # written down anywhere in the repo, and the cloud host provisions no bot image
 # at all — so "local and cloud behave the same" could not be true. The pins live
 # here so both build the same thing.
 #
 # Usage:
-#   infra/local/build-bot-image.sh                 # builds fleetadlc-bot:latest
-#   IMAGE=eu-docker.pkg.dev/p/fleetadlc/bot:2026-09-21 infra/local/build-bot-image.sh
+#   infra/local/build-bot-image.sh                 # builds openadlc-bot:latest
+#   IMAGE=eu-docker.pkg.dev/p/openadlc/bot:2026-09-21 infra/local/build-bot-image.sh
 #
 # The image holds Claude Code, whose licence lets you install it for your own
 # use, not redistribute it. Push the image only to a private registry your own
 # install pulls from; never publish it.
 #
 # hostd's weekly update runs this too, with newer versions in the variables
-# below and IMAGE=fleetadlc-bot:candidate, and swaps the candidate in only once
+# below and IMAGE=openadlc-bot:candidate, and swaps the candidate in only once
 # every tool that changed, and every model the crew uses, has answered from
 # it. NODE_VERSION and GH_VERSION are set when the running image's are known,
 # so a candidate that is only moving an engine CLI does not take whatever Node
@@ -46,7 +46,7 @@ tool_version_is() {
 # The image whose gh a build may keep, or nothing. The kept-gh stage is
 # `FROM <that image>`, and only Docker's own builder sees the images on this
 # host: a docker-container builder (a `docker buildx create` one) would look
-# for fleetadlc-bot:latest on Docker Hub and fail the build. On such a builder gh
+# for openadlc-bot:latest on Docker Hub and fail the build. On such a builder gh
 # comes from its apt repository instead, which has only its newest package —
 # so a candidate there moves gh to the newest, or fails at the version check
 # below if it cannot, rather than failing at a pull. `--gh-from <image>` is
@@ -86,7 +86,7 @@ GH_VERSION="${GH_VERSION:-}"
 # The image whose gh the build keeps. Empty: gh comes from its apt repository.
 GH_FROM="$(gh_from_for_builder "${GH_FROM:-}")"
 
-IMAGE="${IMAGE:-fleetadlc-bot:latest}"
+IMAGE="${IMAGE:-openadlc-bot:latest}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The forward proxy the build's own steps leave through, as a container on
@@ -112,7 +112,7 @@ if [ -n "${BUILD_PROXY}" ]; then
 fi
 
 # What the image says it carries: package → version, as JSON, in the
-# `fleetadlc.engines` label. hostd reads it to know which engines a bot runs without
+# `openadlc.engines` label. hostd reads it to know which engines a bot runs without
 # starting a container, and the weekly update compares it with npm. So a pin has
 # to be a version — `@latest` or a range would put a word in the label that
 # nothing can compare, and a build nobody can reproduce in the image.
@@ -158,7 +158,7 @@ docker build \
   ${network_args[@]+"${network_args[@]}"} \
   ${version_args[@]+"${version_args[@]}"} \
   --build-arg ENGINE_CLI_PACKAGES="${CLAUDE_CLI} ${CODEX_CLI} ${GROK_CLI}" \
-  --label "fleetadlc.engines=${ENGINES}" \
+  --label "openadlc.engines=${ENGINES}" \
   -t "${IMAGE}" \
   "${HERE}"
 

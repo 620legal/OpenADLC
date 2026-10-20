@@ -1,7 +1,7 @@
 import { permissionOn, theApp } from './people.js';
-import { audit, bots, hasEventOfType, issues, lastEventAt, leases, listEventsOfTypeWith, recordEvent, repos, stageMoves } from '@fleetadlc/db';
+import { audit, bots, hasEventOfType, issues, lastEventAt, leases, listEventsOfTypeWith, recordEvent, repos, stageMoves } from '@openadlc/db';
 import { REVIEW_DISMISSED_BY_BRIDGE, REVIEW_ROUND_OPENED, issueNumberFromBranch, scopeLabelAcceptedFrom } from './work.js';
-import { ReviewerStandings, isTemplatePlaceholder, reviewRequestRefusal, reviewerStandingOf, type GitHubClient, type PullCommit, type ReviewerStanding } from '@fleetadlc/github';
+import { ReviewerStandings, isTemplatePlaceholder, reviewRequestRefusal, reviewerStandingOf, type GitHubClient, type PullCommit, type ReviewerStanding } from '@openadlc/github';
 import {
   STAGE_LABELS,
   isBackwardMove,
@@ -37,7 +37,7 @@ import {
   CROSS_CUTTING_LABEL,
   closingKeywords,
   filesOutsideScope,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import type { AppGate } from './app-gate.js';
 import type { BridgeConfig } from './config.js';
@@ -134,7 +134,7 @@ export const CI_APP = 'github-actions';
 /** What the bridge reads before it merges, gathered by `Automation.mergeFacts`. */
 export interface MergeFacts {
   repoFullName: string;
-  /** Held for a person: labelled `needs-human` (which "Hold this PR" on an unsigned post's card sets) or `fleetadlc:paused`. */
+  /** Held for a person: labelled `needs-human` (which "Hold this PR" on an unsigned post's card sets) or `openadlc:paused`. */
   held?: boolean;
   /** The repository the head branch is in; another one's for a fork. */
   headRepoFullName: string | null;
@@ -178,7 +178,7 @@ export interface MergeFacts {
    */
   checkedReviews: readonly { id: number; user: string; state: string; body?: string | null; commitId: string | null }[] | null;
   /** Who merges a change to how CI runs here: OpenADLC once the security reviewer approves (the default), or a person. */
-  ciMergedBy: 'fleetadlc' | 'person';
+  ciMergedBy: 'openadlc' | 'person';
   /** The seat that reviews for security, by bot name, or null when the rules name none. */
   securitySeat: string | null;
   /** The check runs on the head, with the app that set each and, for CI's, the workflow run behind it. */
@@ -399,7 +399,7 @@ export function securityVerdictOn(
   let verdict: string | null = null;
   for (const review of reviews) {
     const author = whoWrote(review.user, crew, { bot: seatOf(review.body) });
-    if (author.kind !== 'fleetadlc' || author.bot?.name !== seat || !onThisDiff(review.commitId ?? null)) continue;
+    if (author.kind !== 'openadlc' || author.bot?.name !== seat || !onThisDiff(review.commitId ?? null)) continue;
     const said = ownReviewMarker(review.body);
     verdict = review.state === 'APPROVED' ? 'approve' : typeof said?.verdict === 'string' ? said.verdict : verdict;
   }
@@ -427,7 +427,7 @@ export function seatsApproving<M extends { name: string; slot?: string; githubLo
     const state = review.state.toUpperCase();
     if (state === 'COMMENTED' || state === 'PENDING') continue;
     const author = whoWrote(review.user, crew, { bot: seatOf(review.body) });
-    if (author.kind === 'fleetadlc' && author.bot) latest.set(author.bot.name, state);
+    if (author.kind === 'openadlc' && author.bot) latest.set(author.bot.name, state);
   }
   return seats.filter((seat) => latest.get(seat) === 'APPROVED');
 }
@@ -457,7 +457,7 @@ export function checkedForSharedSeats<R extends { id: number; user: string | nul
   const ids = new Set((checked ?? []).map((review) => review.id));
   return reviews.filter((review) => {
     const author = whoWrote(review.user, crew, { bot: seatOf(review.body) });
-    if (author.kind !== 'fleetadlc' || !author.shared || !author.bot || !seats.includes(author.bot.name)) return true;
+    if (author.kind !== 'openadlc' || !author.shared || !author.bot || !seats.includes(author.bot.name)) return true;
     return ids.has(review.id);
   });
 }
@@ -471,7 +471,7 @@ function lastPostedBy<M extends { name: string; slot?: string; githubLogin: stri
   let last: string | null = null;
   for (const review of reviews) {
     const author = whoWrote(review.user, crew, { bot: seatOf(review.body) });
-    if (author.kind !== 'fleetadlc' || !author.bot || !seats.includes(author.bot.name) || !review.submittedAt) continue;
+    if (author.kind !== 'openadlc' || !author.bot || !seats.includes(author.bot.name) || !review.submittedAt) continue;
     if (!last || Date.parse(review.submittedAt) > Date.parse(last)) last = review.submittedAt;
   }
   return last;
@@ -507,7 +507,7 @@ const MAY_APPROVE = new Set(['admin', 'maintain', 'write']);
  *
  * - the head is this repository's, and it lands on the default branch, whose
  *   `AGENTS.md` is where the human paths were read;
- * - it carries neither `needs-human` nor `fleetadlc:paused`;
+ * - it carries neither `needs-human` nor `openadlc:paused`;
  * - the lead's latest verdict, and each `blocking` seat's, is an approval, of
  *   this head or of an earlier one whose diff against the base is the same
  *   (the merge line's update from the base moves the head and changes nothing
@@ -536,7 +536,7 @@ export function mergeDecision(facts: MergeFacts): {
     return refuse(`its head is in ${facts.headRepoFullName ?? 'a repository that is gone'}, not ${facts.repoFullName}`);
   }
   if (facts.baseRef !== facts.defaultBranch) return refuse(`it would land on ${facts.baseRef}, not the default branch ${facts.defaultBranch}`);
-  if (facts.held) return refuse('it is held for a person (needs-human or fleetadlc:paused)');
+  if (facts.held) return refuse('it is held for a person (needs-human or openadlc:paused)');
   if (facts.draft) return refuse('it is a draft');
   if (!facts.mergeableState || !LANDABLE.has(facts.mergeableState)) {
     return refuse(`GitHub says it is ${facts.mergeableState ?? 'not yet known to be mergeable'}`);
@@ -645,7 +645,7 @@ export function mergeDecision(facts: MergeFacts): {
     facts.reviews
       .filter((review) => !reviews.includes(review) && review.state !== 'COMMENTED' && review.state !== 'PENDING')
       .map((review) => whoWrote(review.user, facts.crew, { bot: seatOf(review.body) }))
-      .flatMap((author) => (author.kind === 'fleetadlc' && author.bot ? [author.bot.name] : [])),
+      .flatMap((author) => (author.kind === 'openadlc' && author.bot ? [author.bot.name] : [])),
   );
 
   // A carried head stands for a seat, but not for the lead re-checking the
@@ -664,7 +664,7 @@ export function mergeDecision(facts: MergeFacts): {
   for (const review of reviews) {
     if (review.state === 'COMMENTED' || review.state === 'PENDING') continue;
     const author = whoWrote(review.user, facts.crew, { bot: seatOf(review.body) });
-    if (author.kind === 'fleetadlc' && author.bot) bySeat.set(author.bot.name, review);
+    if (author.kind === 'openadlc' && author.bot) bySeat.set(author.bot.name, review);
     else if (author.kind === 'person') byPerson.set(review.user.toLowerCase(), review);
   }
 
@@ -764,7 +764,7 @@ function ciRunOf(run: RawRun): CiRun {
  * same place every time it is asked.
  *
  * It was `Math.random()`, drawn again every time the gate was worked out: on
- * fleetadlc-testbed#2 the draw at opening said no security review, so none was
+ * openadlc-testbed#2 the draw at opening said no security review, so none was
  * started, and the draw when the lead reviewer approved said yes — the gate
  * then waited on a security review nobody was doing, and the next draw could
  * have taken it away again. A hash of the pull request decides it once.
@@ -1223,7 +1223,7 @@ export class Automation {
       const own = new Set(await this.onThisDiff(client, repoFullName, pr.baseRef, pr.head.sha, counted));
       reviewed = reviewed.filter((review) => {
         const author = whoWrote(review.user, crew, { bot: seatOf(review.body) });
-        return own.has(review) || author.kind !== 'fleetadlc' || author.bot?.name !== decision.lead;
+        return own.has(review) || author.kind !== 'openadlc' || author.bot?.name !== decision.lead;
       });
     }
     const onDiff = checkedForSharedSeats(reviewed, checked, crew, decision.approvers);
@@ -1607,13 +1607,13 @@ export class Automation {
     const securitySeat = security ? (resolveBotRef(crew, security.seat)?.name ?? security.seat) : null;
     const live = await effectiveConfig(this.config).catch(() => null);
     // Unreadable settings may be the ones that asked for a person: a person.
-    const ciMergedBy = !live || !live.settingsRead || live.ciMergeByPerson.includes(repoFullName.split('/')[1]?.toLowerCase() ?? '') ? 'person' : 'fleetadlc';
+    const ciMergedBy = !live || !live.settingsRead || live.ciMergeByPerson.includes(repoFullName.split('/')[1]?.toLowerCase() ?? '') ? 'person' : 'openadlc';
 
     // The earlier heads an approval, or the security reviewer's verdict, was on.
     const earlier = [
       ...new Set(
         [...counted, ...(checked ?? [])]
-          .filter((review) => (review.state === 'APPROVED' || (() => { const author = whoWrote(review.user, crew, { bot: seatOf(review.body) }); return author.kind === 'fleetadlc' && author.bot?.name === securitySeat; })()) && review.commitId && review.commitId !== pull.headSha)
+          .filter((review) => (review.state === 'APPROVED' || (() => { const author = whoWrote(review.user, crew, { bot: seatOf(review.body) }); return author.kind === 'openadlc' && author.bot?.name === securitySeat; })()) && review.commitId && review.commitId !== pull.headSha)
           .map((review) => review.commitId as string),
       ),
     ];
@@ -1839,7 +1839,7 @@ export class Automation {
     const client = await this.automationClient();
     if (!client) return null;
 
-    // Held for a person (`needs-human`), or paused (`fleetadlc:paused`): the
+    // Held for a person (`needs-human`), or paused (`openadlc:paused`): the
     // gate stays pending, whatever the reviews say, so nothing lands it until
     // the label comes off. A paused one used to go green, and GitHub's
     // auto-merge or a person reading the gate could land it.
@@ -1879,7 +1879,7 @@ export class Automation {
     return gate;
   }
 
-  /** Whether a pull request is labelled `needs-human` or `fleetadlc:paused`, or `unknown` when its labels cannot be read. */
+  /** Whether a pull request is labelled `needs-human` or `openadlc:paused`, or `unknown` when its labels cannot be read. */
   private async heldForPerson(
     client: GitHubClient,
     repoFullName: string,
@@ -2126,7 +2126,7 @@ export class Automation {
         refused.push({ seat, login, reason: refusal.standing.reason, words: refusal.words });
         console.warn(`[bridge] ${repoFullName}#${prNumber}: GitHub refused to ask ${login} (${seat}) for a review: ${refusal.words}`);
         await audit({
-          actor: 'fleetadlc',
+          actor: 'openadlc',
           action: 'review.request_refused',
           target: `${repoFullName}#${prNumber}`,
           payload: { seat, login, standing: refusal.standing.state, github: refusal.words },
@@ -2230,7 +2230,7 @@ export class Automation {
     const client = await this.automationClient();
     if (!client) return;
 
-    // By `sameLogin`: `JaneDoe` in FLEETADLC_HUMANS and `@janedoe` in AGENTS.md
+    // By `sameLogin`: `JaneDoe` in OPENADLC_HUMANS and `@janedoe` in AGENTS.md
     // are one person, who was withdrawn though needed.
     const unneeded = this.config.humans.filter((login) => !needed.some((one) => sameLogin(one, login)));
     if (unneeded.length === 0) return;
@@ -2292,7 +2292,7 @@ export class Automation {
    * allow it. `person` goes anywhere: a person moving a card. A bot that
    * reached for a backward move any other way is refused here.
    *
-   * An issue labelled `fleetadlc:ignore` is never moved, by anyone: the board
+   * An issue labelled `openadlc:ignore` is never moved, by anyone: the board
    * is for the work the crew does, and a person said the crew leaves this one
    * alone. Not the move that begins crew work, not a merge reaching Merged or
    * Done. Taking the label off brings it back where its stage label says.
@@ -2344,7 +2344,7 @@ export class Automation {
 
     // One write of the whole set, built from the labels GitHub has now. Built
     // from the stored row, it erased a label the row had not seen yet: an
-    // intake task finishing just after a person added `fleetadlc:ignore`, before
+    // intake task finishing just after a person added `openadlc:ignore`, before
     // that delivery was processed, took the label off again. Removing
     // the old stage and adding the new one as two calls is no better: GitHub
     // sends an `unlabeled` delivery in between with no stage label at all,
@@ -2400,7 +2400,7 @@ export class Automation {
       return {
         moved: false,
         ignored: true,
-        reason: `${input.repoName}#${input.issueNumber} is labelled fleetadlc:ignore, which the crew leaves alone`,
+        reason: `${input.repoName}#${input.issueNumber} is labelled openadlc:ignore, which the crew leaves alone`,
       };
     }
 
@@ -2409,7 +2409,7 @@ export class Automation {
     await issues.setIssueStage(repo.id, input.issueNumber, input.to);
 
     // Read once more just before the write. The write replaces the whole set,
-    // so a label added since the read above (the `fleetadlc:ignore` of an issue
+    // so a label added since the read above (the `openadlc:ignore` of an issue
     // created and then labelled in a second call, landing while the stage and
     // lease were written) was dropped by it. This narrows that window to one
     // round trip; it does not close it, since GitHub has no conditional label
@@ -2522,8 +2522,8 @@ export function forbiddenPushGate(push: { login: string; why: string; sha: strin
 
 /** What `review-gate` says while a pull request is held for a person. */
 export const HELD_GATE = 'held for a person (needs-human); take the label off to let it go';
-/** What `review-gate` says while its work is paused (`fleetadlc:paused`), a person's hold on the item. */
-export const PAUSED_GATE = 'paused by a person (fleetadlc:paused); resume it to let it go';
+/** What `review-gate` says while its work is paused (`openadlc:paused`), a person's hold on the item. */
+export const PAUSED_GATE = 'paused by a person (openadlc:paused); resume it to let it go';
 /** Said while the labels could not be read: held rather than risk landing a pull request a person held. */
 export const HELD_UNREAD_GATE = 'could not read the pull request’s labels; held until the next check can';
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { SecretStore } from '@fleetadlc/github';
-import type { Bot, BotRole } from '@fleetadlc/shared';
+import type { SecretStore } from '@openadlc/github';
+import type { Bot, BotRole } from '@openadlc/shared';
 import { BotNames, type NamesDb } from './bot-names.js';
 
 /**
@@ -161,7 +161,7 @@ function refused(status: number, message: string) {
 describe('renaming a bot', () => {
   it('moves the computer first, then the secrets and the row together, and leaves nothing under the old name', async () => {
     const w = world({
-      crew: [bot('atlas', 'builder', 'implement', 'fleetadlc-atlas-janedoe')],
+      crew: [bot('atlas', 'builder', 'implement', 'openadlc-atlas-janedoe')],
       secrets: {
         'github-refresh-atlas': 'ghr_live',
         'ssh-signing-atlas': 'PRIVATE KEY',
@@ -169,29 +169,29 @@ describe('renaming a bot', () => {
         'internal-api-secret': 'untouched',
       },
       credentials: {
-        'id-builder': { githubLogin: 'fleetadlc-atlas-janedoe', status: 'active', secretRef: 'github-refresh-atlas' },
+        'id-builder': { githubLogin: 'openadlc-atlas-janedoe', status: 'active', secretRef: 'github-refresh-atlas' },
       },
     });
 
     const outcome = await w.names.rename({
       botId: 'id-builder',
-      to: 'FleetADLC-Atlas-Janedoe',
-      reason: 'connected as FleetADLC-Atlas-Janedoe',
+      to: 'OpenADLC-Atlas-Janedoe',
+      reason: 'connected as OpenADLC-Atlas-Janedoe',
       actor: 'ada',
     });
 
-    expect(outcome).toMatchObject({ state: 'renamed', from: 'atlas', to: 'fleetadlc-atlas-janedoe' });
-    expect(w.named('builder')).toBe('fleetadlc-atlas-janedoe');
+    expect(outcome).toMatchObject({ state: 'renamed', from: 'atlas', to: 'openadlc-atlas-janedoe' });
+    expect(w.named('builder')).toBe('openadlc-atlas-janedoe');
     expect([...w.secrets.keys()].sort()).toEqual([
-      'engine-key-fleetadlc-atlas-janedoe',
-      'github-refresh-fleetadlc-atlas-janedoe',
+      'engine-key-openadlc-atlas-janedoe',
+      'github-refresh-openadlc-atlas-janedoe',
       'internal-api-secret',
-      'ssh-signing-fleetadlc-atlas-janedoe',
+      'ssh-signing-openadlc-atlas-janedoe',
     ]);
-    expect(w.secrets.get('github-refresh-fleetadlc-atlas-janedoe')).toBe('ghr_live');
-    expect(w.creds.get('id-builder')?.secretRef).toBe('github-refresh-fleetadlc-atlas-janedoe');
+    expect(w.secrets.get('github-refresh-openadlc-atlas-janedoe')).toBe('ghr_live');
+    expect(w.creds.get('id-builder')?.secretRef).toBe('github-refresh-openadlc-atlas-janedoe');
     expect(w.audits).toContainEqual(
-      expect.objectContaining({ action: 'bot.renamed', payload: expect.objectContaining({ from: 'atlas', to: 'fleetadlc-atlas-janedoe' }) }),
+      expect.objectContaining({ action: 'bot.renamed', payload: expect.objectContaining({ from: 'atlas', to: 'openadlc-atlas-janedoe' }) }),
     );
     // hostd, then copies, then the row, then the old secrets go, then the mark.
     const order = w.events.map((event) => event.split(' ')[0]);
@@ -200,7 +200,7 @@ describe('renaming a bot', () => {
     expect(order.indexOf('delete')).toBeGreaterThan(order.indexOf('row'));
     expect(order.at(-1)).toBe('finish');
     // With the broker held off both names while the refresh token moved.
-    expect(w.held).toEqual([['atlas', 'fleetadlc-atlas-janedoe']]);
+    expect(w.held).toEqual([['atlas', 'openadlc-atlas-janedoe']]);
     expect(w.marks.size).toBe(0);
   });
 
@@ -226,7 +226,7 @@ describe('renaming a bot', () => {
     const w = world({ crew: [bot('atlas', 'builder', 'implement')], secrets: { 'ssh-signing-atlas': 'KEY' } });
     w.active.set('id-builder', 1);
 
-    const outcome = await w.names.rename({ botId: 'id-builder', to: 'fleetadlc-atlas-janedoe', reason: 'r', actor: 'ada' });
+    const outcome = await w.names.rename({ botId: 'id-builder', to: 'openadlc-atlas-janedoe', reason: 'r', actor: 'ada' });
 
     expect(outcome.state).toBe('waiting');
     expect(outcome.reason).toMatch(/task queued or running/);
@@ -254,18 +254,18 @@ describe('renaming a bot', () => {
     const w = world({ crew: [bot('atlas', 'builder', 'implement')], secrets: { 'ssh-signing-atlas': 'KEY' } });
 
     w.answerHostd(refused(409, 'atlas is running task t-1; a bot is renamed between tasks'));
-    expect(await w.names.rename({ botId: 'id-builder', to: 'fleetadlc-atlas-janedoe', reason: 'r', actor: 'ada' })).toMatchObject({
+    expect(await w.names.rename({ botId: 'id-builder', to: 'openadlc-atlas-janedoe', reason: 'r', actor: 'ada' })).toMatchObject({
       state: 'waiting',
       reason: 'atlas is running task t-1; a bot is renamed between tasks',
     });
 
     w.answerHostd(refused(502, 'hostd is not answering'));
-    expect((await w.names.rename({ botId: 'id-builder', to: 'fleetadlc-atlas-janedoe', reason: 'r', actor: 'ada' })).state).toBe(
+    expect((await w.names.rename({ botId: 'id-builder', to: 'openadlc-atlas-janedoe', reason: 'r', actor: 'ada' })).state).toBe(
       'waiting',
     );
 
     w.answerHostd(refused(400, '"x" cannot be a bot\'s name'));
-    expect((await w.names.rename({ botId: 'id-builder', to: 'fleetadlc-atlas-janedoe', reason: 'r', actor: 'ada' })).state).toBe(
+    expect((await w.names.rename({ botId: 'id-builder', to: 'openadlc-atlas-janedoe', reason: 'r', actor: 'ada' })).state).toBe(
       'refused',
     );
 
@@ -278,26 +278,26 @@ describe('renaming a bot', () => {
     // had the name took its own with it. Kept, it would act as that account.
     const w = world({
       crew: [bot('builder', 'builder', 'implement')],
-      secrets: { 'github-refresh-fleetadlc-atlas-janedoe': 'ghr_someone_elses' },
+      secrets: { 'github-refresh-openadlc-atlas-janedoe': 'ghr_someone_elses' },
     });
 
-    await w.names.rename({ botId: 'id-builder', to: 'fleetadlc-atlas-janedoe', reason: 'r', actor: 'ada' });
+    await w.names.rename({ botId: 'id-builder', to: 'openadlc-atlas-janedoe', reason: 'r', actor: 'ada' });
 
-    expect(w.secrets.has('github-refresh-fleetadlc-atlas-janedoe')).toBe(false);
+    expect(w.secrets.has('github-refresh-openadlc-atlas-janedoe')).toBe(false);
   });
 
   it('is finished by the next reconcile when the bridge stopped after hostd answered', async () => {
     const w = world({
-      crew: [bot('atlas', 'builder', 'implement', 'fleetadlc-atlas-janedoe')],
+      crew: [bot('atlas', 'builder', 'implement', 'openadlc-atlas-janedoe')],
       secrets: { 'github-refresh-atlas': 'ghr_live' },
-      credentials: { 'id-builder': { githubLogin: 'fleetadlc-atlas-janedoe', status: 'active', secretRef: 'github-refresh-atlas' } },
+      credentials: { 'id-builder': { githubLogin: 'openadlc-atlas-janedoe', status: 'active', secretRef: 'github-refresh-atlas' } },
     });
     const recover = w.failRowOnce();
 
     // Waiting, not thrown: a connect that got this far has stored its
     // credential, and that stands whatever the rename does.
     expect(
-      await w.names.rename({ botId: 'id-builder', to: 'fleetadlc-atlas-janedoe', reason: 'r', actor: 'ada' }),
+      await w.names.rename({ botId: 'id-builder', to: 'openadlc-atlas-janedoe', reason: 'r', actor: 'ada' }),
     ).toMatchObject({ state: 'waiting', reason: expect.stringContaining('the database went away') });
     expect(w.named('builder')).toBe('atlas');
     expect(w.secrets.get('github-refresh-atlas')).toBe('ghr_live');
@@ -305,24 +305,24 @@ describe('renaming a bot', () => {
 
     const [outcome] = await w.names.reconcile();
 
-    expect(outcome).toMatchObject({ state: 'renamed', from: 'atlas', to: 'fleetadlc-atlas-janedoe' });
+    expect(outcome).toMatchObject({ state: 'renamed', from: 'atlas', to: 'openadlc-atlas-janedoe' });
     // hostd was asked twice with the same names, which it finishes the second time.
-    expect(w.hostdCalls).toEqual(['atlas → fleetadlc-atlas-janedoe', 'atlas → fleetadlc-atlas-janedoe']);
-    expect([...w.secrets.entries()]).toEqual([['github-refresh-fleetadlc-atlas-janedoe', 'ghr_live']]);
+    expect(w.hostdCalls).toEqual(['atlas → openadlc-atlas-janedoe', 'atlas → openadlc-atlas-janedoe']);
+    expect([...w.secrets.entries()]).toEqual([['github-refresh-openadlc-atlas-janedoe', 'ghr_live']]);
   });
 
   it('finishes moving the secrets of a rename that stopped after the row changed, keeping the live one', async () => {
     // The row already says the new name, so the broker has refreshed under it:
     // that token is the live one, and the copy under the old name is stale.
     const w = world({
-      crew: [bot('fleetadlc-atlas-janedoe', 'builder', 'implement', 'fleetadlc-atlas-janedoe')],
+      crew: [bot('openadlc-atlas-janedoe', 'builder', 'implement', 'openadlc-atlas-janedoe')],
       secrets: {
         'github-refresh-atlas': 'ghr_stale',
-        'github-refresh-fleetadlc-atlas-janedoe': 'ghr_rotated_since',
+        'github-refresh-openadlc-atlas-janedoe': 'ghr_rotated_since',
         'ssh-signing-atlas': 'KEY',
       },
       credentials: {
-        'id-builder': { githubLogin: 'fleetadlc-atlas-janedoe', status: 'active', secretRef: 'github-refresh-fleetadlc-atlas-janedoe' },
+        'id-builder': { githubLogin: 'openadlc-atlas-janedoe', status: 'active', secretRef: 'github-refresh-openadlc-atlas-janedoe' },
       },
     });
     w.marks.set('id-builder', 'atlas');
@@ -330,8 +330,8 @@ describe('renaming a bot', () => {
     await w.names.reconcile();
 
     expect(Object.fromEntries(w.secrets)).toEqual({
-      'github-refresh-fleetadlc-atlas-janedoe': 'ghr_rotated_since',
-      'ssh-signing-fleetadlc-atlas-janedoe': 'KEY',
+      'github-refresh-openadlc-atlas-janedoe': 'ghr_rotated_since',
+      'ssh-signing-openadlc-atlas-janedoe': 'KEY',
     });
     expect(w.marks.size).toBe(0);
     expect(w.hostdCalls).toEqual([]);
@@ -378,18 +378,18 @@ describe('renaming a bot', () => {
   it('finishing an interrupted rename of an own-account bot moves its sign-in', async () => {
     // The row has changed, so an unshared identity is filed under the new name.
     const w = world({
-      crew: [bot('fleetadlc-atlas-janedoe', 'builder', 'implement', 'fleetadlc-atlas-janedoe')],
+      crew: [bot('openadlc-atlas-janedoe', 'builder', 'implement', 'openadlc-atlas-janedoe')],
       secrets: { 'github-refresh-atlas': 'ghr_live', 'github-token-atlas': 'ghu_live', 'ssh-signing-atlas': 'KEY' },
-      signIns: { 'id-builder': { ns: 'fleetadlc-atlas-janedoe', shared: false } },
+      signIns: { 'id-builder': { ns: 'openadlc-atlas-janedoe', shared: false } },
     });
     w.marks.set('id-builder', 'atlas');
 
     await w.names.reconcile();
 
     expect(Object.fromEntries(w.secrets)).toEqual({
-      'github-refresh-fleetadlc-atlas-janedoe': 'ghr_live',
-      'github-token-fleetadlc-atlas-janedoe': 'ghu_live',
-      'ssh-signing-fleetadlc-atlas-janedoe': 'KEY',
+      'github-refresh-openadlc-atlas-janedoe': 'ghr_live',
+      'github-token-openadlc-atlas-janedoe': 'ghu_live',
+      'ssh-signing-openadlc-atlas-janedoe': 'KEY',
     });
     expect(w.marks.size).toBe(0);
   });
@@ -399,13 +399,13 @@ describe('renaming a bot', () => {
     let letHostdAnswer!: () => void;
     w.answerHostd(() => new Promise((resolve) => (letHostdAnswer = () => resolve({}))));
 
-    const renaming = w.names.rename({ botId: 'id-builder', to: 'fleetadlc-atlas-janedoe', reason: 'r', actor: 'ada' });
+    const renaming = w.names.rename({ botId: 'id-builder', to: 'openadlc-atlas-janedoe', reason: 'r', actor: 'ada' });
     await vi.waitFor(() => expect(w.hostdCalls).toHaveLength(1));
     const opened = w.names.withBot('id-builder', async () => w.named('builder'));
 
     letHostdAnswer();
     await renaming;
-    expect(await opened).toBe('fleetadlc-atlas-janedoe');
+    expect(await opened).toBe('openadlc-atlas-janedoe');
   });
 });
 
@@ -414,17 +414,17 @@ describe('bringing the crew’s names in line with their accounts', () => {
   function ownersInstall() {
     const connected: [string, string, BotRole, string][] = [
       ['mira', 'intake', 'intake', 'irisexampleco'],
-      ['atlas', 'builder', 'implement', 'fleetadlc-atlas-janedoe'],
+      ['atlas', 'builder', 'implement', 'openadlc-atlas-janedoe'],
       ['grok', 'second-reviewer', 'review_second', 'tessexampleco'],
-      ['cipher', 'security-reviewer', 'review_security', 'fleetadlc-cipher-janedoe'],
+      ['cipher', 'security-reviewer', 'review_security', 'openadlc-cipher-janedoe'],
       ['harbor', 'sre', 'deploy', 'ottoexampleco'],
-      ['flow', 'automation', 'automation', 'janedoe-fleetadlc-flow'],
+      ['flow', 'automation', 'automation', 'janedoe-openadlc-flow'],
     ];
     const crew = [
       ...connected.map(([name, slot, role, login]) => bot(name, slot, role, login)),
-      bot('nova', 'system-engineer', 'spec', 'fleetadlc-nova'),
+      bot('nova', 'system-engineer', 'spec', 'openadlc-nova'),
       bot('sydney', 'lead-reviewer', 'review_lead', 'noraexampleco'),
-      bot('vega', 'qa', 'qa', 'fleetadlc-vega'),
+      bot('vega', 'qa', 'qa', 'openadlc-vega'),
     ];
     const secrets = Object.fromEntries(connected.map(([name]) => [`github-refresh-${name}`, `ghr_${name}`]));
     const credentials = Object.fromEntries(
@@ -444,21 +444,21 @@ describe('bringing the crew’s names in line with their accounts', () => {
     expect(outcomes.every((outcome) => outcome.state === 'renamed')).toBe(true);
     expect(Object.fromEntries(w.crew.map((entry) => [entry.slot, [entry.name, entry.githubLogin]]))).toEqual({
       intake: ['irisexampleco', 'irisexampleco'],
-      builder: ['fleetadlc-atlas-janedoe', 'fleetadlc-atlas-janedoe'],
+      builder: ['openadlc-atlas-janedoe', 'openadlc-atlas-janedoe'],
       'second-reviewer': ['tessexampleco', 'tessexampleco'],
-      'security-reviewer': ['fleetadlc-cipher-janedoe', 'fleetadlc-cipher-janedoe'],
+      'security-reviewer': ['openadlc-cipher-janedoe', 'openadlc-cipher-janedoe'],
       sre: ['ottoexampleco', 'ottoexampleco'],
-      automation: ['janedoe-fleetadlc-flow', 'janedoe-fleetadlc-flow'],
+      automation: ['janedoe-openadlc-flow', 'janedoe-openadlc-flow'],
       // Seats that named an account but never held a sign-in for it (nova,
       // sydney, vega) go back to their seat names and let go of those logins.
       'system-engineer': ['system-engineer', null],
       'lead-reviewer': ['lead-reviewer', null],
       qa: ['qa', null],
     });
-    expect(w.secrets.get('github-refresh-janedoe-fleetadlc-flow')).toBe('ghr_flow');
+    expect(w.secrets.get('github-refresh-janedoe-openadlc-flow')).toBe('ghr_flow');
     expect([...w.secrets.keys()].filter((ref) => /^github-refresh-(atlas|mira|flow|grok|cipher|harbor)$/.test(ref))).toEqual([]);
     expect(w.audits.filter((entry) => entry.action === 'bot.login_released').map((entry) => entry.payload?.login)).toEqual(
-      ['fleetadlc-nova', 'noraexampleco', 'fleetadlc-vega'],
+      ['openadlc-nova', 'noraexampleco', 'openadlc-vega'],
     );
   });
 
@@ -466,10 +466,10 @@ describe('bringing the crew’s names in line with their accounts', () => {
     // A restore puts back which account each seat was, without a refresh
     // token to make it connected. It is not a name to take, and not a login
     // to throw away.
-    const w = world({ crew: [bot('builder', 'builder', 'implement', 'fleetadlc-atlas-janedoe')] });
+    const w = world({ crew: [bot('builder', 'builder', 'implement', 'openadlc-atlas-janedoe')] });
 
     expect(await w.names.reconcile()).toEqual([]);
-    expect(w.crew[0]).toMatchObject({ name: 'builder', githubLogin: 'fleetadlc-atlas-janedoe' });
+    expect(w.crew[0]).toMatchObject({ name: 'builder', githubLogin: 'openadlc-atlas-janedoe' });
     expect(w.audits).toEqual([]);
   });
 
@@ -506,7 +506,7 @@ describe('a crew with one row that cannot be written', () => {
     const w = world({
       crew: [bot('atlas', 'builder', 'implement'), bot('nova', 'system-engineer', 'spec')],
       secrets: { 'github-refresh-atlas': 'ghr' },
-      credentials: { 'id-builder': { githubLogin: 'fleetadlc-atlas-janedoe', status: 'active', secretRef: 'github-refresh-atlas' } },
+      credentials: { 'id-builder': { githubLogin: 'openadlc-atlas-janedoe', status: 'active', secretRef: 'github-refresh-atlas' } },
     });
     const setLogin = vi.fn(async () => {
       throw new Error('duplicate key value violates unique constraint "bots_github_login_key"');

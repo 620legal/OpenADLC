@@ -24,9 +24,9 @@ describe('everything', () => {
     expect(contents.secrets['github-app-private-key']).toBe(VALUES.appKey);
     expect(contents.secrets['registry-token']).toBe(VALUES.registry);
     expect(contents.settings).toMatchObject({ organization: 'janedoe', githubClientId: VALUES.clientId, webhookSecret: VALUES.hook });
-    expect(contents.repositories?.map((repo) => repo.fullName)).toEqual(['janedoe/fleetadlc-testbed']);
+    expect(contents.repositories?.map((repo) => repo.fullName)).toEqual(['janedoe/openadlc-testbed']);
     expect(contents.bots.map((bot) => bot.slot)).toEqual(['builder', 'lead-reviewer', 'automation']);
-    expect(contents.secrets['github-refresh-fleetadlc-atlas-janedoe']).toBe(VALUES.builderRefresh);
+    expect(contents.secrets['github-refresh-openadlc-atlas-janedoe']).toBe(VALUES.builderRefresh);
     expect(contents.bots[0]?.credential?.signingKeyId).toBe(9001);
     expect(contents.accounts?.map((account) => account.id)).toEqual([KEY_ACCOUNT, CLAUDE_SEAT, CODEX_SEAT]);
     expect(contents.secrets[`model-account-${CLAUDE_SEAT}`]).toBe(VALUES.seatToken);
@@ -116,7 +116,7 @@ describe('everything', () => {
     });
     expect(manifest.counts).toMatchObject({ bots: 3, repositories: 1, accounts: 3, logins: 1, threads: 0 });
     const cleartext = JSON.stringify(manifest);
-    for (const name of ['janedoe', 'fleetadlc-atlas', 'builder', 'Claude Max', CODEX_SEAT]) expect(cleartext).not.toContain(name);
+    for (const name of ['janedoe', 'openadlc-atlas', 'builder', 'Claude Max', CODEX_SEAT]) expect(cleartext).not.toContain(name);
   });
 
   it('round-trips through the sealed form exactly', async () => {
@@ -134,10 +134,10 @@ describe('part of the install', () => {
     const { contents, leftOut } = take({ ...EVERYTHING, install: false, repositories: false, bots: ['builder'], accounts: [], botSignIns: false });
 
     expect(contents.bots.map((bot) => bot.slot)).toEqual(['builder']);
-    expect(Object.keys(contents.secrets)).toEqual(['ssh-signing-fleetadlc-atlas-janedoe']);
+    expect(Object.keys(contents.secrets)).toEqual(['ssh-signing-openadlc-atlas-janedoe']);
     expect(contents.settings).toEqual({});
     expect(contents.accounts).toEqual([]);
-    expect(leftOut.find((entry) => entry.ref === 'ssh-signing-fleetadlc-sydney-janedoe')?.reason).toMatch(/was not chosen/);
+    expect(leftOut.find((entry) => entry.ref === 'ssh-signing-openadlc-sydney-janedoe')?.reason).toMatch(/was not chosen/);
     expect(readManifest(await encryptBackup(contents, 'p')).includes).toMatchObject({ bots: 'some', botSignIns: false, install: false });
   });
 
@@ -145,9 +145,9 @@ describe('part of the install', () => {
     const without = take({ ...EVERYTHING, bots: ['builder'], botSignIns: false }).contents;
     const withIt = take({ ...EVERYTHING, bots: ['builder'], botSignIns: true }).contents;
 
-    expect(without.secrets).not.toHaveProperty('github-refresh-fleetadlc-atlas-janedoe');
+    expect(without.secrets).not.toHaveProperty('github-refresh-openadlc-atlas-janedoe');
     expect(without.bots[0]).not.toHaveProperty('credential');
-    expect(withIt.secrets['github-refresh-fleetadlc-atlas-janedoe']).toBe(VALUES.builderRefresh);
+    expect(withIt.secrets['github-refresh-openadlc-atlas-janedoe']).toBe(VALUES.builderRefresh);
     expect(withIt.bots[0]?.credential?.githubUserId).toBe(101);
   });
 

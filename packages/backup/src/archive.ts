@@ -61,7 +61,7 @@ export interface ManifestIncludes {
  * client id, not a bot login, not a secret's name and certainly not its value —
  * because this is the half of the file that anyone who has the file can read.
  * "Nine secrets, eight settings, nine bots, taken on Tuesday" is what somebody
- * staring at `fleetadlc-backup-2026-09-21.fleetbak` needs in order to know they
+ * staring at `openadlc-backup-2026-09-21.fleetbak` needs in order to know they
  * have the right file; who the install belongs to is not.
  */
 export interface BackupManifest {
@@ -617,8 +617,8 @@ function asStrings(value: unknown, what: string): string[] {
 
 /**
  * Note what the messages here do and do not name: a key, never a value. A ref
- * like `github-refresh-builder` is already printed by `fleetadlc backup` and
- * `fleetadlc restore`, but a value that lands in a CLI log or a bug report has
+ * like `github-refresh-builder` is already printed by `openadlc backup` and
+ * `openadlc restore`, but a value that lands in a CLI log or a bug report has
  * escaped the archive.
  */
 function asStringMap(value: unknown, what: string): Record<string, string> {
@@ -1233,14 +1233,14 @@ export async function decryptBackup(archive: Buffer, passphrase: string): Promis
  * key in the document is a warning, readable by anyone who opens it, and the
  * extension differs so it cannot be mistaken for a sealed archive at a glance.
  */
-const PLAIN_FORMAT = 'fleetadlc-backup-plain';
+const PLAIN_FORMAT = 'openadlc-backup-plain';
 
 /**
- * What a plain file may say it is: this name, and the one written before the
- * rename from Fleet. Only the new one is written; the old one was refused as
- * "not an OpenADLC backup", though the file was a good backup.
+ * What a plain file may say it is: this name, and the ones written before the
+ * renames from FleetADLC and Fleet. Only the new one is written; an old one
+ * was refused as "not an OpenADLC backup", though the file was a good backup.
  */
-const PLAIN_FORMATS: ReadonlySet<unknown> = new Set([PLAIN_FORMAT, 'fleet-backup-plain']);
+const PLAIN_FORMATS: ReadonlySet<unknown> = new Set([PLAIN_FORMAT, 'fleetadlc-backup-plain', 'fleet-backup-plain']);
 
 const PLAIN_WARNING =
   'UNENCRYPTED. This file holds the GitHub App private key, signing keys, webhook ' +

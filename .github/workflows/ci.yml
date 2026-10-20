@@ -18,7 +18,7 @@ on:
 # branch of that name is a person's) runs only once it carries
 # `adlc:ci`, which OpenADLC's merge line puts on as its app after the lead
 # reviewer approved and the pull request is at the front of the line and up
-# to date: the builder ran `make ci` on its head already (`fleetadlc-ci`), and
+# to date: the builder ran `make ci` on its head already (`openadlc-ci`), and
 # the runner minutes go to the one head that lands. A branch update re-runs it
 # while the label stays. A person's pull request, a push to main and the merge
 # queue run as they always did, and of the label events only `adlc:ci` and
@@ -198,19 +198,19 @@ jobs:
       postgres:
         image: postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
         env:
-          POSTGRES_USER: fleetadlc
-          POSTGRES_PASSWORD: fleetadlc
-          POSTGRES_DB: fleetadlc_db
+          POSTGRES_USER: openadlc
+          POSTGRES_PASSWORD: openadlc
+          POSTGRES_DB: openadlc_db
         ports: ['5432:5432']
         options: >-
-          --health-cmd "pg_isready -U fleetadlc -d fleetadlc_db"
+          --health-cmd "pg_isready -U openadlc -d openadlc_db"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
 
     env:
-      DATABASE_URL: postgres://fleetadlc:fleetadlc@127.0.0.1:5432/fleetadlc_db
-      FLEETADLC_CONFIG_ROOT: ${{ github.workspace }}/config
+      DATABASE_URL: postgres://openadlc:openadlc@127.0.0.1:5432/openadlc_db
+      OPENADLC_CONFIG_ROOT: ${{ github.workspace }}/config
 
     steps:
       # The checks below compare against the base branch, which needs its history.
@@ -251,7 +251,7 @@ jobs:
       # The root tests/ are not a package `pnpm build` compiles, so their
       # types are checked here, against the packages just built.
       - name: typecheck the root tests
-        run: pnpm --filter @fleetadlc/tests typecheck
+        run: pnpm --filter @openadlc/tests typecheck
 
       # A change that quietly grows past what its issues declared is caught
       # here, with the workflow's own read-only token and no secrets. Whether a
@@ -289,22 +289,22 @@ jobs:
         if: ${{ !github.event.pull_request.draft }}
         run: |
           # From here on the job is an install: the names the code reads. An
-          # unread variable fails silently — `FLEETADLC_DEMO_REPO_PATH` once
+          # unread variable fails silently — `OPENADLC_DEMO_REPO_PATH` once
           # sent the suite to clone a private repository with no credentials.
           {
-            echo "FLEETADLC_SKILLS_ROOT=$GITHUB_WORKSPACE/crew/skills"
-            echo "FLEETADLC_BRIDGE_URL=http://127.0.0.1:47311"
-            echo "FLEETADLC_HOSTD_URL=http://127.0.0.1:47312"
-            echo "FLEETADLC_HOSTD_DRIVER=local"
-            echo "FLEETADLC_HOST_NAME=ci"
-            echo "FLEETADLC_SCRIPTED_ENGINES=1"
-            echo "FLEETADLC_SCRIPTED_REPO_PATH=$GITHUB_WORKSPACE/.ci/demo-repo"
-            echo "FLEETADLC_HOME=$GITHUB_WORKSPACE/.ci/fleetadlc-home"
+            echo "OPENADLC_SKILLS_ROOT=$GITHUB_WORKSPACE/crew/skills"
+            echo "OPENADLC_BRIDGE_URL=http://127.0.0.1:47311"
+            echo "OPENADLC_HOSTD_URL=http://127.0.0.1:47312"
+            echo "OPENADLC_HOSTD_DRIVER=local"
+            echo "OPENADLC_HOST_NAME=ci"
+            echo "OPENADLC_SCRIPTED_ENGINES=1"
+            echo "OPENADLC_SCRIPTED_REPO_PATH=$GITHUB_WORKSPACE/.ci/demo-repo"
+            echo "OPENADLC_HOME=$GITHUB_WORKSPACE/.ci/openadlc-home"
           } >> "$GITHUB_ENV"
-          mkdir -p .ci/demo-repo .ci/fleetadlc-home
+          mkdir -p .ci/demo-repo .ci/openadlc-home
           cd .ci/demo-repo
           git init -q -b main
-          git config user.email ci@fleetadlc.local
+          git config user.email ci@openadlc.local
           git config user.name "OpenADLC CI"
           printf 'ci: ; @echo "ci ok"\n' > Makefile
           printf '# Agent notes\n\nRun make ci before opening a pull request.\n' > AGENTS.md
@@ -315,16 +315,16 @@ jobs:
         if: ${{ !github.event.pull_request.draft }}
         run: |
           node packages/db/dist/cli/seed.js --scripted-board
-          # The console secret, made as `fleetadlc up` makes it, before anything
+          # The console secret, made as `openadlc up` makes it, before anything
           # starts: the bridge serves /v1 only beside it, and the console is
           # started with it. Read from the file, never echoed.
-          (umask 077 && mkdir -p "$FLEETADLC_HOME/secrets" \
+          (umask 077 && mkdir -p "$OPENADLC_HOME/secrets" \
             && node -e 'require("fs").writeFileSync(process.argv[1], require("crypto").randomBytes(32).toString("hex") + "\n", {mode:0o600})' \
-              "$FLEETADLC_HOME/secrets/console-api-secret.secret")
+              "$OPENADLC_HOME/secrets/console-api-secret.secret")
           node apps/hostd/dist/main.js > "$RUNNER_TEMP/hostd.log" 2>&1 &
           node apps/bridge/dist/main.js > "$RUNNER_TEMP/bridge.log" 2>&1 &
           (cd apps/console \
-            && FLEETADLC_CONSOLE_SECRET="$(tr -d '\n' < "$FLEETADLC_HOME/secrets/console-api-secret.secret")" \
+            && OPENADLC_CONSOLE_SECRET="$(tr -d '\n' < "$OPENADLC_HOME/secrets/console-api-secret.secret")" \
               pnpm start > "$RUNNER_TEMP/console.log" 2>&1 &)
           # /signin, because the console's / refuses a browser that has not signed in.
           for _ in $(seq 1 60); do
@@ -391,7 +391,7 @@ jobs:
 
       # scope-check reads the declared paths through the shared package, and
       # origin-cors.test.ts reaches the database package through hostd's source.
-      - run: pnpm --filter @fleetadlc/shared --filter @fleetadlc/db build
+      - run: pnpm --filter @openadlc/shared --filter @openadlc/db build
 
       - name: the diff stays inside what the issues declared
         env:
@@ -407,7 +407,7 @@ jobs:
         run: node .github/scripts/scope-check.mjs
 
       - name: links resolve, and the docs say what is true
-        run: pnpm --filter @fleetadlc/tests exec vitest run links.test.ts claims.test.ts images.test.ts origin-cors.test.ts repo-templates.test.ts
+        run: pnpm --filter @openadlc/tests exec vitest run links.test.ts claims.test.ts images.test.ts origin-cors.test.ts repo-templates.test.ts
 
   cloud-module:
     name: cloud module

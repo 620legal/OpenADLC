@@ -8,7 +8,7 @@ const run = promisify(execFile);
  * Separates the fields of a `-F` format. It is not a tab: tmux rewrites control
  * characters in format output to '_', so a tab-separated format comes back as
  * one run-together field — `#{session_name}\t#{session_attached}` reads as
- * `fleetadlc__mira__shell_0`, a session name that does not exist, and every attach
+ * `openadlc__mira__shell_0`, a session name that does not exist, and every attach
  * fails with "can't find session". Any printable character is safe; this one
  * appears in no session name and no process name.
  */
@@ -78,7 +78,7 @@ export class Tmux {
    * assembled for it and nothing else. tmux's own `-e` adds variables to a
    * session but cannot take away the ones the tmux server inherited when it
    * started, and hostd's environment holds the platform's database URL — which
-   * a bot must never see, because `fleetadlc_db` is where its ledger and its audit
+   * a bot must never see, because `openadlc_db` is where its ledger and its audit
    * trail live.
    *
    * `env` is on tmux's command line, which every process can read, so it

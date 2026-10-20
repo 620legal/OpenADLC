@@ -4,7 +4,7 @@ import { attributionCheck, type UnattributedRecord } from './attribution.js';
 const post: UnattributedRecord = {
   repo: 'exampleco/api',
   kind: 'review',
-  login: 'fleetadlc-review',
+  login: 'openadlc-review',
   reason: 'unsigned',
   url: 'https://github.com/exampleco/api/pull/31#pullrequestreview-7',
   seat: null,
@@ -21,7 +21,7 @@ describe('the card for a crew post OpenADLC did not sign', () => {
     expect(audited).toMatchObject({
       ok: false,
       severity: 'warning',
-      title: 'A review on exampleco/api#31 by fleetadlc-review is not signed by OpenADLC',
+      title: 'A review on exampleco/api#31 by openadlc-review is not signed by OpenADLC',
       action: { label: 'Open the post', url: post.url },
     });
     const detail = audited && 'detail' in audited ? audited.detail : '';
@@ -92,7 +92,7 @@ describe('the card for a crew post OpenADLC did not sign', () => {
       resolve: async (one) => void resolved.push(one.id!),
     }).run(new Date());
     expect(resolved).toEqual([40]);
-    expect(results[0]).toMatchObject({ title: 'A review on exampleco/api#31 by fleetadlc-review is not signed by OpenADLC' });
+    expect(results[0]).toMatchObject({ title: 'A review on exampleco/api#31 by openadlc-review is not signed by OpenADLC' });
     // Every post still on the card, for "This was me" to cover.
     expect((results[0] as { facts?: Record<string, unknown> }).facts).toMatchObject({ occurrence: 'post:41', occurrences: ['post:41'] });
 

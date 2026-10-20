@@ -16,7 +16,7 @@ const UNCONNECTED: Record<string, BotFacts> = {
     roleLabel: 'second reviewer',
     connected: false,
     // What the bridge would suggest. It is nobody's account yet.
-    login: 'fleetadlc-second-reviewer',
+    login: 'openadlc-second-reviewer',
     profile: null,
   },
   engines: { bot: 'second-reviewer', slot: 'second-reviewer', role: 'review_second', roleLabel: 'second reviewer' },
@@ -84,19 +84,19 @@ describe('what a bot is called', () => {
   });
 
   it('names a bot the bridge has not renamed yet by the account that connected, not by its seat', () => {
-    const label = botLabel({ bot: 'builder', slot: 'builder', role: 'implement', connected: true, login: 'janedoe-fleetadlc-builder' });
-    expect(label.text).toBe('builder (janedoe-fleetadlc-builder)');
+    const label = botLabel({ bot: 'builder', slot: 'builder', role: 'implement', connected: true, login: 'janedoe-openadlc-builder' });
+    expect(label.text).toBe('builder (janedoe-openadlc-builder)');
   });
 
   it('never shows a persona name, whatever an older bridge still calls the bot', () => {
     const older: BotFacts[] = [
       // Unconnected, with the login config/bots.yaml set aside for it.
-      { bot: 'atlas', role: 'implement', roleLabel: 'builder', connected: false, login: 'fleetadlc-atlas' },
-      { name: 'grok', role: 'review_second', authorization: 'unauthorized', githubLogin: 'fleetadlc-grok' },
-      { name: 'flow', role: 'automation', authorization: 'unauthorized', githubLogin: 'fleetadlc-flow-janedoe' },
+      { bot: 'atlas', role: 'implement', roleLabel: 'builder', connected: false, login: 'openadlc-atlas' },
+      { name: 'grok', role: 'review_second', authorization: 'unauthorized', githubLogin: 'openadlc-grok' },
+      { name: 'flow', role: 'automation', authorization: 'unauthorized', githubLogin: 'openadlc-flow-janedoe' },
       // Connected: the account that authorized is who it is.
       { bot: 'sydney', role: 'review_lead', roleLabel: 'lead reviewer', connected: true, login: 'noraexampleco' },
-      { name: 'cipher', role: 'review_security', authorization: 'active', githubLogin: 'janedoe-fleetadlc-cipher' },
+      { name: 'cipher', role: 'review_security', authorization: 'active', githubLogin: 'janedoe-openadlc-cipher' },
     ];
     const labels = older.map(botLabel);
 
@@ -105,7 +105,7 @@ describe('what a bot is called', () => {
       'second reviewer — not connected yet',
       'automation — not connected yet',
       'lead reviewer (noraexampleco)',
-      'security reviewer (janedoe-fleetadlc-cipher)',
+      'security reviewer (janedoe-openadlc-cipher)',
     ]);
     for (const label of labels) {
       for (const persona of PERSONAS) {
@@ -120,8 +120,8 @@ describe('what a bot is called', () => {
       text: 'builder 2 — not connected yet',
       said: 'builder 2',
     });
-    expect(botLabel({ name: 'janedoe-fleetadlc-builder-2', slot: 'builder-2', role: 'implement' }).text).toBe(
-      'builder 2 (janedoe-fleetadlc-builder-2)',
+    expect(botLabel({ name: 'janedoe-openadlc-builder-2', slot: 'builder-2', role: 'implement' }).text).toBe(
+      'builder 2 (janedoe-openadlc-builder-2)',
     );
     expect(atStart(botLabel({ name: 'builder-2', slot: 'builder-2', role: 'implement', authorization: 'unauthorized' }).said)).toBe(
       'Builder 2',
@@ -137,7 +137,7 @@ describe('what a bot is called', () => {
     expect(botLabel({ name: 'irisexampleco' })).toMatchObject({ name: 'irisexampleco', text: 'irisexampleco', handle: 'irisexampleco' });
     expect(isSeat('builder-2')).toBe(true);
     expect(isSeat('builder-1')).toBe(false);
-    expect(isSeat('janedoe-fleetadlc-builder')).toBe(false);
+    expect(isSeat('janedoe-openadlc-builder')).toBe(false);
   });
 
   it('says a role in a sentence the way a person would', () => {

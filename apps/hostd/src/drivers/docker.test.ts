@@ -22,7 +22,7 @@ const OLD_IMAGE = 'sha256:0f5a1c6d2e3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0
 const TASK = '3f2a9c1e-7b4d-4e8a-9c2f-1a2b3c4d5e6f';
 
 /** The mounts label of a container made by `driverWith`: where its read-only mounts come from. */
-const MOUNTS = ['/opt/fleetadlc/skills', '/opt/fleetadlc/roles', '/opt/fleetadlc/skill-runner.bundle.mjs', GH_SHIM_DIR].join(':');
+const MOUNTS = ['/opt/openadlc/skills', '/opt/openadlc/roles', '/opt/openadlc/skill-runner.bundle.mjs', GH_SHIM_DIR].join(':');
 
 interface Container {
   status: 'running' | 'exited';
@@ -36,8 +36,8 @@ let workRoot: string;
 let loginRoot: string;
 
 beforeEach(() => {
-  workRoot = mkdtempSync(join(tmpdir(), 'fleetadlc-docker-work-'));
-  loginRoot = join(mkdtempSync(join(tmpdir(), 'fleetadlc-docker-logins-')), 'logins');
+  workRoot = mkdtempSync(join(tmpdir(), 'openadlc-docker-work-'));
+  loginRoot = join(mkdtempSync(join(tmpdir(), 'openadlc-docker-logins-')), 'logins');
 });
 
 afterEach(() => {
@@ -69,7 +69,7 @@ function docker(
       return found ? ok(JSON.stringify([{ Labels: found.labels ?? {}, Options: found.options ?? {} }])) : { code: 1, stdout: '', stderr: 'no such network' };
     }
     if (args[0] === 'network' && args[1] === 'create') {
-      networks[args.at(-1) ?? ''] = { labels: { 'fleetadlc.install': (flag(args, '--label') ?? '').split('=')[1] ?? '' }, options: { 'com.docker.network.bridge.enable_icc': 'false' } };
+      networks[args.at(-1) ?? ''] = { labels: { 'openadlc.install': (flag(args, '--label') ?? '').split('=')[1] ?? '' }, options: { 'com.docker.network.bridge.enable_icc': 'false' } };
       return ok();
     }
     if (args[0] === 'run') {
@@ -88,9 +88,9 @@ function docker(
       return ok();
     }
     if (args[0] === 'ps') {
-      const install = args.find((arg) => arg.startsWith('label=fleetadlc.install='))?.split('=')[2];
+      const install = args.find((arg) => arg.startsWith('label=openadlc.install='))?.split('=')[2];
       const names = Object.entries(containers)
-        .filter(([, found]) => found.labels?.['fleetadlc.kind'] === 'computer' && found.labels?.['fleetadlc.install'] === install)
+        .filter(([, found]) => found.labels?.['openadlc.kind'] === 'computer' && found.labels?.['openadlc.install'] === install)
         .map(([name]) => name);
       return ok(`${names.join('\n')}\n`);
     }
@@ -109,12 +109,12 @@ function driverWith(
 ): DockerDriver {
   return new DockerDriver({
     ...extra,
-    image: 'fleetadlc-bot:latest',
-    networkPrefix: 'fleetadlc-bot',
-    runnerBundle: '/opt/fleetadlc/skill-runner.bundle.mjs',
+    image: 'openadlc-bot:latest',
+    networkPrefix: 'openadlc-bot',
+    runnerBundle: '/opt/openadlc/skill-runner.bundle.mjs',
     workRoot,
-    skillsRoot: '/opt/fleetadlc/skills',
-    rolesRoot: '/opt/fleetadlc/roles',
+    skillsRoot: '/opt/openadlc/skills',
+    rolesRoot: '/opt/openadlc/roles',
     hostdUrl: 'http://host.docker.internal:47312',
     loginRoot,
     docker: answer,
@@ -161,11 +161,11 @@ describe('a task’s computer, made cold', () => {
 
     const run = created(calls, 'task-3f2a9c1e');
     expect(computer).toMatchObject({ taskId: TASK, bot: 'atlas', container: 'task-3f2a9c1e', slotDir: join(workRoot, 'slots', TASK), cacheDir: '/cache' });
-    expect(values(run, '--network')).toEqual(['fleetadlc-tasks']);
+    expect(values(run, '--network')).toEqual(['openadlc-tasks']);
     expect(values(run, '--add-host')).toEqual(['host.docker.internal:host-gateway']);
     expect(values(run, '--cpus')).toEqual(['2']);
     expect(values(run, '--memory')).toEqual([String(6 * 1024 ** 3)]);
-    expect(run?.at(-1)).toBe('fleetadlc-bot:latest');
+    expect(run?.at(-1)).toBe('openadlc-bot:latest');
   });
 
   it('runs under a process limit and with no-new-privileges, which its engine’s own sandbox no longer gives it', async () => {
@@ -176,7 +176,7 @@ describe('a task’s computer, made cold', () => {
     const run = created(calls, 'task-3f2a9c1e');
     expect(values(run, '--pids-limit')).toEqual([String(TASK_PIDS_LIMIT)]);
     expect(values(run, '--security-opt')).toEqual(['no-new-privileges:true']);
-    expect(labels(run)).toContain(`fleetadlc.hardening=pids-${TASK_PIDS_LIMIT}+no-new-privileges`);
+    expect(labels(run)).toContain(`openadlc.hardening=pids-${TASK_PIDS_LIMIT}+no-new-privileges`);
     // hostd still owns the cache as root: no-new-privileges does not reach `docker exec -u 0`.
     expect(run).not.toContain('--cap-drop');
     expect(run).not.toContain('--read-only');
@@ -195,11 +195,11 @@ describe('a task’s computer, made cold', () => {
     expect(mounts(run).filter((mount) => mount.startsWith(workRoot))).toEqual([`${slot}:${slot}`]);
     expect(mounts(run)).toEqual(
       expect.arrayContaining([
-        'fleetadlc-cache-default-acme__widgets:/cache',
-        '/opt/fleetadlc/skills:/skills:ro',
-        '/opt/fleetadlc/roles:/roles:ro',
-        '/opt/fleetadlc/skill-runner.bundle.mjs:/usr/local/lib/fleetadlc/skill-runner.mjs:ro',
-        `${GH_SHIM_DIR}:/opt/fleetadlc/bin:ro`,
+        'openadlc-cache-default-acme__widgets:/cache',
+        '/opt/openadlc/skills:/skills:ro',
+        '/opt/openadlc/roles:/roles:ro',
+        '/opt/openadlc/skill-runner.bundle.mjs:/usr/local/lib/openadlc/skill-runner.mjs:ro',
+        `${GH_SHIM_DIR}:/opt/openadlc/bin:ro`,
       ]),
     );
     // Docker made the cache volume's mount point as root; the bot is given it.
@@ -219,7 +219,7 @@ describe('a task’s computer, made cold', () => {
     await driverWith(answer).acquire(spec());
 
     const run = created(calls, 'task-3f2a9c1e');
-    expect(mounts(run).filter((mount) => mount.includes('pnpm'))).toEqual(['fleetadlc-pnpm-default-acme__widgets:/pnpm-store:ro']);
+    expect(mounts(run).filter((mount) => mount.includes('pnpm'))).toEqual(['openadlc-pnpm-default-acme__widgets:/pnpm-store:ro']);
     expect(calls.filter((args) => args[0] === 'exec' && args.join(' ').includes('/pnpm-store'))).toEqual([]);
   });
 
@@ -234,8 +234,8 @@ describe('a task’s computer, made cold', () => {
     expect(await driver.fillPnpmStore(computer, worktree)).toEqual({ filled: true, path: '/pnpm-store' });
 
     const fill = calls.find((args) => args[0] === 'run' && args.join(' ').includes('pnpm fetch'))!;
-    expect(mounts(fill)).toContain('fleetadlc-pnpm-default-acme__widgets:/pnpm-store');
-    expect(labels(fill)).toEqual(expect.arrayContaining(['fleetadlc.install=default', 'fleetadlc.kind=pnpm-fill']));
+    expect(mounts(fill)).toContain('openadlc-pnpm-default-acme__widgets:/pnpm-store');
+    expect(labels(fill)).toEqual(expect.arrayContaining(['openadlc.install=default', 'openadlc.kind=pnpm-fill']));
   });
 
   it('records what it was made with, and nothing of the seat in its environment', async () => {
@@ -246,15 +246,15 @@ describe('a task’s computer, made cold', () => {
     const run = created(calls, 'task-3f2a9c1e');
     expect(labels(run)).toEqual(
       expect.arrayContaining([
-        'fleetadlc.install=default',
-        'fleetadlc.kind=computer',
-        `fleetadlc.image=${IMAGE}`,
-        'fleetadlc.login=none',
-        'fleetadlc.repo=acme__widgets',
-        `fleetadlc.slot=${join(workRoot, 'slots', TASK)}`,
-        `fleetadlc.mounts=${MOUNTS}`,
-        'fleetadlc.tools=gh-shim-1',
-        'fleetadlc.egress=none',
+        'openadlc.install=default',
+        'openadlc.kind=computer',
+        `openadlc.image=${IMAGE}`,
+        'openadlc.login=none',
+        'openadlc.repo=acme__widgets',
+        `openadlc.slot=${join(workRoot, 'slots', TASK)}`,
+        `openadlc.mounts=${MOUNTS}`,
+        'openadlc.tools=gh-shim-1',
+        'openadlc.egress=none',
       ]),
     );
     // A container's environment is fixed when it is made, and a warm one is
@@ -272,7 +272,7 @@ describe('a task’s computer, made cold', () => {
 
     const made = calls.filter((args) => args[0] === 'network' && args[1] === 'create');
     expect(made).toEqual([
-      ['network', 'create', '--driver', 'bridge', '--opt', 'com.docker.network.bridge.enable_icc=false', '--label', 'fleetadlc.install=default', 'fleetadlc-tasks'],
+      ['network', 'create', '--driver', 'bridge', '--opt', 'com.docker.network.bridge.enable_icc=false', '--label', 'openadlc.install=default', 'openadlc-tasks'],
     ]);
   });
 
@@ -304,7 +304,7 @@ describe('a task’s name when another task already has it', () => {
     const otherSlot = join(workRoot, 'slots', 'someone-else');
     mkdirSync(otherSlot, { recursive: true });
     const { calls, answer } = docker({
-      'task-3f2a9c1e': { status: 'running', labels: { 'fleetadlc.install': 'default', 'fleetadlc.slot': otherSlot }, image: IMAGE },
+      'task-3f2a9c1e': { status: 'running', labels: { 'openadlc.install': 'default', 'openadlc.slot': otherSlot }, image: IMAGE },
     });
 
     const computer = await driverWith(answer).acquire(spec());
@@ -317,7 +317,7 @@ describe('a task’s name when another task already has it', () => {
     const slot = join(workRoot, 'slots', TASK);
     mkdirSync(slot, { recursive: true });
     const { calls, answer } = docker({
-      'task-3f2a9c1e': { status: 'running', labels: { 'fleetadlc.install': 'default', 'fleetadlc.slot': slot }, image: IMAGE },
+      'task-3f2a9c1e': { status: 'running', labels: { 'openadlc.install': 'default', 'openadlc.slot': slot }, image: IMAGE },
     });
     const driver = driverWith(answer);
     // What the first computer wrote before hostd lost it.
@@ -350,7 +350,7 @@ describe('giving a task’s computer back', () => {
   });
 
   it('never removes a directory outside the work root', async () => {
-    const outside = mkdtempSync(join(tmpdir(), 'fleetadlc-outside-'));
+    const outside = mkdtempSync(join(tmpdir(), 'openadlc-outside-'));
     try {
       const { answer } = docker();
       const driver = driverWith(answer);
@@ -372,7 +372,7 @@ describe('a task on an OpenAI or xAI subscription', () => {
     return join(dir, 'sign-in', 'auth.json');
   };
 
-  it('gets a home of its own at /fleetadlc/login, outside the slot, and the account sign-in beside it', async () => {
+  it('gets a home of its own at /openadlc/login, outside the slot, and the account sign-in beside it', async () => {
     // The home used to live in the slot. The slot is mounted at its host
     // path, so replacing that home with a link made release read another
     // directory's auth.json onto the account. A copy of the token also went
@@ -386,20 +386,20 @@ describe('a task on an OpenAI or xAI subscription', () => {
     await driverWith(answer).acquire(spec({ login: { accountId: SEAT, provider: 'openai' } }));
 
     const run = created(calls, 'task-3f2a9c1e');
-    expect(mounts(run)).toContain(`${home(TASK)}:/fleetadlc/login`);
-    expect(mounts(run)).toContain(`${auth}:/fleetadlc/login/auth.json`);
-    expect(mounts(run).some((mount) => mount.endsWith(':/fleetadlc/auth'))).toBe(false);
+    expect(mounts(run)).toContain(`${home(TASK)}:/openadlc/login`);
+    expect(mounts(run)).toContain(`${auth}:/openadlc/login/auth.json`);
+    expect(mounts(run).some((mount) => mount.endsWith(':/openadlc/auth'))).toBe(false);
     expect(envs(run).some((env) => env.startsWith('GROK_AUTH_PATH='))).toBe(false);
     expect(readFileSync(join(home(TASK), 'auth.json'), 'utf8')).toBe('');
     expect(readFileSync(auth, 'utf8')).toBe('{"tokens":"start"}');
     expect(existsSync(join(home(TASK), 'plugins'))).toBe(false);
-    expect(labels(run)).toContain(`fleetadlc.login=${SEAT}`);
+    expect(labels(run)).toContain(`openadlc.login=${SEAT}`);
     expect(statSync(home(TASK)).mode & 0o777).toBe(0o700);
     expect(statSync(dir).mode & 0o777).toBe(0o700);
     expect(statSync(loginRoot).mode & 0o777).toBe(0o700);
   });
 
-  it('mounts only the sign-in directory for a Grok task, at /fleetadlc/auth, and tells Grok where auth.json is', async () => {
+  it('mounts only the sign-in directory for a Grok task, at /openadlc/auth, and tells Grok where auth.json is', async () => {
     // The whole account directory used to be this mount: what a task planted
     // there sat beside the account's own files, and a backup carried it.
     const dir = join(loginRoot, SEAT);
@@ -409,10 +409,10 @@ describe('a task on an OpenAI or xAI subscription', () => {
     await driverWith(answer).acquire(spec({ login: { accountId: SEAT, provider: 'xai' } }));
 
     const run = created(calls, 'task-3f2a9c1e');
-    expect(mounts(run)).toContain(`${home(TASK)}:/fleetadlc/login`);
-    expect(mounts(run)).toContain(`${join(dir, 'sign-in')}:/fleetadlc/auth`);
+    expect(mounts(run)).toContain(`${home(TASK)}:/openadlc/login`);
+    expect(mounts(run)).toContain(`${join(dir, 'sign-in')}:/openadlc/auth`);
     expect(mounts(run).some((mount) => mount.startsWith(`${dir}:`))).toBe(false);
-    expect(envs(run)).toContain('GROK_AUTH_PATH=/fleetadlc/auth/auth.json');
+    expect(envs(run)).toContain('GROK_AUTH_PATH=/openadlc/auth/auth.json');
   });
 
   it('moves a sign-in an earlier build kept at the top of the account directory, and mounts it from its own', async () => {
@@ -426,7 +426,7 @@ describe('a task on an OpenAI or xAI subscription', () => {
     const run = created(calls, 'task-3f2a9c1e');
     expect(existsSync(join(dir, 'auth.json'))).toBe(false);
     expect(readFileSync(join(dir, 'sign-in', 'auth.json'), 'utf8')).toBe('{"tokens":"legacy"}');
-    expect(mounts(run)).toContain(`${join(dir, 'sign-in')}:/fleetadlc/auth`);
+    expect(mounts(run)).toContain(`${join(dir, 'sign-in')}:/openadlc/auth`);
   });
 
   it('refuses a login that names no provider, rather than mounting it as an OpenAI one', async () => {
@@ -451,7 +451,7 @@ describe('a task on an OpenAI or xAI subscription', () => {
     await driverWith(answer).acquire(spec({ login: { accountId: SEAT, provider: 'openai' } }));
 
     const run = created(calls, 'task-3f2a9c1e');
-    expect(mounts(run).some((mount) => mount.includes('auth.json') || mount.endsWith(':/fleetadlc/auth'))).toBe(false);
+    expect(mounts(run).some((mount) => mount.includes('auth.json') || mount.endsWith(':/openadlc/auth'))).toBe(false);
     expect(envs(run).some((env) => env.startsWith('GROK_AUTH_PATH='))).toBe(false);
     expect(existsSync(join(home(TASK), 'auth.json'))).toBe(false);
   });
@@ -466,10 +466,10 @@ describe('a task on an OpenAI or xAI subscription', () => {
     writeFileSync(join(home(TASK), 'plugins', 'planted', '.mcp.json'), '{}\n');
     await driver.acquire(spec({ taskId: other, bot: 'quill', login: { accountId: SEAT, provider: 'openai' } }));
 
-    const first = mounts(created(calls, 'task-3f2a9c1e')).filter((mount) => mount.endsWith(':/fleetadlc/login'));
-    const second = mounts(created(calls, 'task-9d8c7b6a')).filter((mount) => mount.endsWith(':/fleetadlc/login'));
-    expect(first).toEqual([`${home(TASK)}:/fleetadlc/login`]);
-    expect(second).toEqual([`${home(other)}:/fleetadlc/login`]);
+    const first = mounts(created(calls, 'task-3f2a9c1e')).filter((mount) => mount.endsWith(':/openadlc/login'));
+    const second = mounts(created(calls, 'task-9d8c7b6a')).filter((mount) => mount.endsWith(':/openadlc/login'));
+    expect(first).toEqual([`${home(TASK)}:/openadlc/login`]);
+    expect(second).toEqual([`${home(other)}:/openadlc/login`]);
     expect(existsSync(join(home(other), 'plugins'))).toBe(false);
     expect(existsSync(join(loginRoot, SEAT, 'plugins'))).toBe(false);
   });
@@ -528,7 +528,7 @@ describe('a task on an OpenAI or xAI subscription', () => {
     const { answer, containers } = docker({
       'task-3f2a9c1e': {
         status: 'exited',
-        labels: { 'fleetadlc.install': 'default', 'fleetadlc.kind': 'computer', 'fleetadlc.slot': slot },
+        labels: { 'openadlc.install': 'default', 'openadlc.kind': 'computer', 'openadlc.slot': slot },
         image: IMAGE,
       },
     });
@@ -542,7 +542,7 @@ describe('a task on an OpenAI or xAI subscription', () => {
   it('is told the login is at the mount point, whatever the host calls it', () => {
     const driver = driverWith(docker().answer);
 
-    expect(driver.loginPath(SEAT)).toBe('/fleetadlc/login');
+    expect(driver.loginPath(SEAT)).toBe('/openadlc/login');
     expect(() => driver.loginPath('../../../etc')).toThrow(/not a model account id/);
   });
 });
@@ -554,8 +554,8 @@ describe('a task on anything else', () => {
     await driverWith(answer).acquire(spec({ login: null }));
 
     const run = created(calls, 'task-3f2a9c1e');
-    expect(mounts(run).some((mount) => mount.endsWith(':/fleetadlc/login'))).toBe(false);
-    expect(labels(run)).toContain('fleetadlc.login=none');
+    expect(mounts(run).some((mount) => mount.endsWith(':/openadlc/login'))).toBe(false);
+    expect(labels(run)).toContain('openadlc.login=none');
   });
 
   it('mounts only its own seat’s sealed files, never another’s and never the login root', async () => {
@@ -565,13 +565,13 @@ describe('a task on anything else', () => {
 
     const logins = mounts(created(calls, 'task-3f2a9c1e')).filter((mount) => mount.startsWith(loginRoot));
     expect(logins).toEqual([
-      `${join(loginRoot, '.homes', TASK)}:/fleetadlc/login`,
-      `${join(loginRoot, '.published', OTHER_SEAT, 'config.toml')}:/fleetadlc/login/config.toml:ro`,
-      `${join(loginRoot, '.published', OTHER_SEAT, 'AGENTS.md')}:/fleetadlc/login/AGENTS.md:ro`,
-      `${join(loginRoot, '.published', OTHER_SEAT, 'AGENTS.override.md')}:/fleetadlc/login/AGENTS.override.md:ro`,
-      `${join(loginRoot, '.published', OTHER_SEAT, 'managed_config.toml')}:/fleetadlc/login/managed_config.toml:ro`,
-      `${join(loginRoot, '.published', OTHER_SEAT, 'requirements.toml')}:/fleetadlc/login/requirements.toml:ro`,
-      `${join(loginRoot, '.published', OTHER_SEAT, '.env')}:/fleetadlc/login/.env:ro`,
+      `${join(loginRoot, '.homes', TASK)}:/openadlc/login`,
+      `${join(loginRoot, '.published', OTHER_SEAT, 'config.toml')}:/openadlc/login/config.toml:ro`,
+      `${join(loginRoot, '.published', OTHER_SEAT, 'AGENTS.md')}:/openadlc/login/AGENTS.md:ro`,
+      `${join(loginRoot, '.published', OTHER_SEAT, 'AGENTS.override.md')}:/openadlc/login/AGENTS.override.md:ro`,
+      `${join(loginRoot, '.published', OTHER_SEAT, 'managed_config.toml')}:/openadlc/login/managed_config.toml:ro`,
+      `${join(loginRoot, '.published', OTHER_SEAT, 'requirements.toml')}:/openadlc/login/requirements.toml:ro`,
+      `${join(loginRoot, '.published', OTHER_SEAT, '.env')}:/openadlc/login/.env:ro`,
     ]);
   });
 
@@ -586,13 +586,13 @@ describe('a task on anything else', () => {
     const other = '9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a';
 
     await driver.acquire(spec({ login: { accountId: SEAT, provider: 'openai' } }));
-    const firstMount = mounts(created(calls, 'task-3f2a9c1e')).find((mount) => mount.endsWith(':/fleetadlc/login/config.toml:ro'));
+    const firstMount = mounts(created(calls, 'task-3f2a9c1e')).find((mount) => mount.endsWith(':/openadlc/login/config.toml:ro'));
     writeFileSync(join(dir, 'config.toml'), '[mcp_servers.planted]\ncommand = "sh"\n');
     await driver.acquire(spec({ taskId: other, bot: 'quill', login: { accountId: SEAT, provider: 'openai' } }));
 
-    const secondMount = mounts(created(calls, 'task-9d8c7b6a')).find((mount) => mount.endsWith(':/fleetadlc/login/config.toml:ro'));
+    const secondMount = mounts(created(calls, 'task-9d8c7b6a')).find((mount) => mount.endsWith(':/openadlc/login/config.toml:ro'));
     const sealed = join(loginRoot, '.published', SEAT, 'config.toml');
-    expect(firstMount).toBe(`${sealed}:/fleetadlc/login/config.toml:ro`);
+    expect(firstMount).toBe(`${sealed}:/openadlc/login/config.toml:ro`);
     expect(secondMount).toBe(firstMount);
     expect(readFileSync(sealed, 'utf8')).toBe('model = "gpt-5"\n');
   });
@@ -608,7 +608,7 @@ describe('a task behind the cloud host’s egress proxy', () => {
 
     const env = envs(created(calls, 'task-3f2a9c1e'));
     expect(env).toEqual(expect.arrayContaining([`HTTPS_PROXY=${PROXY}`, `https_proxy=${PROXY}`, 'NO_PROXY=host.docker.internal,localhost,127.0.0.1']));
-    expect(labels(created(calls, 'task-3f2a9c1e'))).toContain(`fleetadlc.egress=${PROXY}#2`);
+    expect(labels(created(calls, 'task-3f2a9c1e'))).toContain(`openadlc.egress=${PROXY}#2`);
   });
 
   it('is told nothing about a proxy on an install that has none', async () => {
@@ -633,20 +633,20 @@ describe('a container hostd starts for a moment', () => {
 });
 
 /**
- * Two installs on one Docker daemon — `fleetadlc up` and the compose stack —
+ * Two installs on one Docker daemon — `openadlc up` and the compose stack —
  * both run tasks. One install's hostd must never reuse or remove the other's.
  */
 describe('two installs on one Docker daemon', () => {
   function composeDriver(answer: (args: string[]) => Promise<DockerResult>): DockerDriver {
     return new DockerDriver({
-      image: 'fleetadlc-bot:latest',
-      networkPrefix: 'fleetadlc-compose-bot-net',
-      botPrefix: 'fleetadlc-compose-bot-',
-      installId: 'compose-fleetadlc',
-      runnerBundle: '/opt/fleetadlc/skill-runner.bundle.mjs',
+      image: 'openadlc-bot:latest',
+      networkPrefix: 'openadlc-compose-bot-net',
+      botPrefix: 'openadlc-compose-bot-',
+      installId: 'compose-openadlc',
+      runnerBundle: '/opt/openadlc/skill-runner.bundle.mjs',
       workRoot,
-      skillsRoot: '/opt/fleetadlc/skills',
-      rolesRoot: '/opt/fleetadlc/roles',
+      skillsRoot: '/opt/openadlc/skills',
+      rolesRoot: '/opt/openadlc/roles',
       hostdUrl: 'http://host.docker.internal:47312',
       loginRoot,
       docker: answer,
@@ -658,27 +658,27 @@ describe('two installs on one Docker daemon', () => {
 
     await composeDriver(answer).acquire(spec());
 
-    const run = created(calls, 'fleetadlc-compose-bot-task-3f2a9c1e');
-    expect(labels(run)).toContain('fleetadlc.install=compose-fleetadlc');
-    expect(values(run, '--network')).toEqual(['fleetadlc-compose-bot-tasks']);
-    expect(mounts(run)).toContain('fleetadlc-cache-compose-fleetadlc-acme__widgets:/cache');
+    const run = created(calls, 'openadlc-compose-bot-task-3f2a9c1e');
+    expect(labels(run)).toContain('openadlc.install=compose-openadlc');
+    expect(values(run, '--network')).toEqual(['openadlc-compose-bot-tasks']);
+    expect(mounts(run)).toContain('openadlc-cache-compose-openadlc-acme__widgets:/cache');
   });
 
   it('never reuses or removes a task container another install made, and says whose it is', async () => {
     const { calls, answer } = docker({
-      'task-3f2a9c1e': { status: 'running', labels: { 'fleetadlc.install': 'compose-fleetadlc', 'fleetadlc.kind': 'computer' }, image: IMAGE },
+      'task-3f2a9c1e': { status: 'running', labels: { 'openadlc.install': 'compose-openadlc', 'openadlc.kind': 'computer' }, image: IMAGE },
     });
     const driver = driverWith(answer);
 
-    await expect(driver.acquire(spec())).rejects.toThrow('task-3f2a9c1e belongs to install compose-fleetadlc');
-    await expect(driver.discard('task-3f2a9c1e')).rejects.toThrow('belongs to install compose-fleetadlc');
+    await expect(driver.acquire(spec())).rejects.toThrow('task-3f2a9c1e belongs to install compose-openadlc');
+    await expect(driver.discard('task-3f2a9c1e')).rejects.toThrow('belongs to install compose-openadlc');
     expect(calls.some((args) => args[0] === 'rm')).toBe(false);
   });
 
   it('never takes over another install’s task network', async () => {
-    const { answer } = docker({}, { networks: { 'fleetadlc-tasks': { labels: { 'fleetadlc.install': 'compose-fleetadlc' } } } });
+    const { answer } = docker({}, { networks: { 'openadlc-tasks': { labels: { 'openadlc.install': 'compose-openadlc' } } } });
 
-    await expect(driverWith(answer).acquire(spec())).rejects.toThrow('fleetadlc-tasks belongs to install compose-fleetadlc');
+    await expect(driverWith(answer).acquire(spec())).rejects.toThrow('openadlc-tasks belongs to install compose-openadlc');
   });
 });
 
@@ -690,16 +690,16 @@ describe('computers found after hostd restarts', () => {
     const { answer } = docker({
       'task-3f2a9c1e': {
         status: 'running',
-        labels: { 'fleetadlc.install': 'default', 'fleetadlc.kind': 'computer', 'fleetadlc.slot': slot, 'fleetadlc.repo': 'acme__widgets' },
+        labels: { 'openadlc.install': 'default', 'openadlc.kind': 'computer', 'openadlc.slot': slot, 'openadlc.repo': 'acme__widgets' },
         image: IMAGE,
         sessions: ['shell', 'implement-3f2a9c1e'],
       },
       'warm-a1b2c3d4': {
         status: 'running',
-        labels: { 'fleetadlc.install': 'default', 'fleetadlc.kind': 'computer', 'fleetadlc.slot': join(workRoot, 'slots', 'warm-a1b2c3d4') },
+        labels: { 'openadlc.install': 'default', 'openadlc.kind': 'computer', 'openadlc.slot': join(workRoot, 'slots', 'warm-a1b2c3d4') },
         image: IMAGE,
       },
-      'task-ffffffff': { status: 'running', labels: { 'fleetadlc.install': 'compose-fleetadlc', 'fleetadlc.kind': 'computer' }, image: IMAGE },
+      'task-ffffffff': { status: 'running', labels: { 'openadlc.install': 'compose-openadlc', 'openadlc.kind': 'computer' }, image: IMAGE },
     });
     const driver = driverWith(answer);
 
@@ -724,7 +724,7 @@ describe('computers found after hostd restarts', () => {
     const { writeSlotTask } = await import('../worktree.js');
     writeSlotTask(slot, { taskId: TASK, bot: 'atlas' });
     const containers: Record<string, Container> = {
-      'task-3f2a9c1e': { status: 'running', labels: { 'fleetadlc.install': 'default', 'fleetadlc.kind': 'computer', 'fleetadlc.slot': slot }, image: IMAGE },
+      'task-3f2a9c1e': { status: 'running', labels: { 'openadlc.install': 'default', 'openadlc.kind': 'computer', 'openadlc.slot': slot }, image: IMAGE },
     };
     const url = `postgres://t_x:derived@host.docker.internal:47433/t_x`;
     const databases = { create: vi.fn(async () => url), drop: vi.fn(async () => undefined), urlFor: vi.fn(async () => url) };
@@ -794,9 +794,9 @@ describe('a warm computer', () => {
     expect(made.name).toMatch(/^warm-[0-9a-f]{8}$/);
     const run = created(calls, made.name);
     expect(mounts(run)).toEqual(
-      expect.arrayContaining([`${made.slotDir}:${made.slotDir}`, 'fleetadlc-cache-default-acme__widgets:/cache', 'fleetadlc-pnpm-default-acme__widgets:/pnpm-store:ro']),
+      expect.arrayContaining([`${made.slotDir}:${made.slotDir}`, 'openadlc-cache-default-acme__widgets:/cache', 'openadlc-pnpm-default-acme__widgets:/pnpm-store:ro']),
     );
-    expect(labels(run)).toEqual(expect.arrayContaining(['fleetadlc.login=none', 'fleetadlc.kind=computer', 'fleetadlc.repo=acme__widgets']));
+    expect(labels(run)).toEqual(expect.arrayContaining(['openadlc.login=none', 'openadlc.kind=computer', 'openadlc.repo=acme__widgets']));
     // Nothing in a computer ever writes the store, not even to own it.
     expect(calls.filter((args) => args[0] === 'exec' && args.join(' ').includes('/pnpm-store'))).toEqual([]);
     expect(envs(run).some((env) => env.startsWith('BOT_NAME='))).toBe(false);
@@ -811,7 +811,7 @@ describe('a warm computer', () => {
     const run = created(calls, made.name);
     expect(values(run, '--pids-limit')).toEqual([String(TASK_PIDS_LIMIT)]);
     expect(values(run, '--security-opt')).toEqual(['no-new-privileges:true']);
-    expect(labels(run)).toContain(`fleetadlc.hardening=pids-${TASK_PIDS_LIMIT}+no-new-privileges`);
+    expect(labels(run)).toContain(`openadlc.hardening=pids-${TASK_PIDS_LIMIT}+no-new-privileges`);
   });
 
   it('made by a hostd before the limits, is found as warm and not the pool’s, so the reaper drains it', async () => {
@@ -819,7 +819,7 @@ describe('a warm computer', () => {
     containers['warm-0ld0ld00'] = {
       status: 'running',
       image: IMAGE,
-      labels: { 'fleetadlc.install': 'default', 'fleetadlc.kind': 'computer', 'fleetadlc.repo': 'acme__widgets', 'fleetadlc.slot': join(workRoot, 'slots', 'warm-0ld0ld00') },
+      labels: { 'openadlc.install': 'default', 'openadlc.kind': 'computer', 'openadlc.repo': 'acme__widgets', 'openadlc.slot': join(workRoot, 'slots', 'warm-0ld0ld00') },
     };
     const { driver, pool } = await warmDriver(answer);
     const ours = pool.list().find((warm) => warm.repoKey === 'acme__widgets')!;
@@ -832,7 +832,7 @@ describe('a warm computer', () => {
     await driver.acquire(spec());
     expect(calls).toContainEqual(['rename', ours.name, 'task-3f2a9c1e']);
     expect(calls.some((args) => args[0] === 'rename' && args[1] === 'warm-0ld0ld00')).toBe(false);
-    expect(containers[ours.name]?.labels?.['fleetadlc.hardening']).toBe(`pids-${TASK_PIDS_LIMIT}+no-new-privileges`);
+    expect(containers[ours.name]?.labels?.['openadlc.hardening']).toBe(`pids-${TASK_PIDS_LIMIT}+no-new-privileges`);
   });
 
   it('is claimed by resizing it to the seat and renaming it the task’s, and its folder says whose it is', async () => {
@@ -912,7 +912,7 @@ describe('a task’s secrets on their way into its computer', () => {
     const computer = await driver.acquire(spec());
     const url = 'postgres://t_x:a-task-password@host.docker.internal:47433/t_x';
 
-    await driver.exec(computer, ['make', '-s', 'setup'], { cwd: '/work', env: { DATABASE_URL: url, FLEETADLC_REPO_HOME: '/work/home' } });
+    await driver.exec(computer, ['make', '-s', 'setup'], { cwd: '/work', env: { DATABASE_URL: url, OPENADLC_REPO_HOME: '/work/home' } });
 
     const exec = calls.at(-1)!;
     expect(exec.join(' ')).not.toContain('a-task-password');
@@ -946,7 +946,7 @@ describe('a task’s secrets on their way into its computer', () => {
       '/bin/sh',
       '-c',
       'set -a && . "$0" && rm -f "$0" && exec "$@"',
-      expect.stringMatching(/^\/dev\/shm\/fleetadlc-env-[0-9a-f]{16}$/),
+      expect.stringMatching(/^\/dev\/shm\/openadlc-env-[0-9a-f]{16}$/),
       'node',
       '/runner.mjs',
     ]);
@@ -954,7 +954,7 @@ describe('a task’s secrets on their way into its computer', () => {
   });
 
   it('writes an environment the shell reads back exactly, quotes and newlines and all', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-session-env-'));
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-session-env-'));
     try {
       const file = join(dir, 'env');
       const env = { PLAIN: 'value', QUOTED: "it's $HOME `x` \\ \"y\"", LINES: 'one\ntwo' };
@@ -1001,12 +1001,12 @@ describe('a Docker daemon that does not answer', () => {
     const seen: { args: string[]; timeoutMs?: number }[] = [];
     const { answer } = docker();
     const driver = new DockerDriver({
-      image: 'fleetadlc-bot:latest',
-      networkPrefix: 'fleetadlc-bot',
-      runnerBundle: '/opt/fleetadlc/skill-runner.bundle.mjs',
+      image: 'openadlc-bot:latest',
+      networkPrefix: 'openadlc-bot',
+      runnerBundle: '/opt/openadlc/skill-runner.bundle.mjs',
       workRoot,
-      skillsRoot: '/opt/fleetadlc/skills',
-      rolesRoot: '/opt/fleetadlc/roles',
+      skillsRoot: '/opt/openadlc/skills',
+      rolesRoot: '/opt/openadlc/roles',
       hostdUrl: 'http://host.docker.internal:47312',
       loginRoot,
       docker: (args, _input, _secrets, options) => {
@@ -1024,7 +1024,8 @@ describe('a Docker daemon that does not answer', () => {
     expect(timeoutOf((args) => args[0] === 'run')).toEqual([undefined]);
     expect(timeoutOf((args) => args.includes('make'))).toEqual([undefined]);
     expect(timeoutOf((args) => args.includes('tmux') && args.includes('list-sessions'))).toEqual([30_000]);
-    expect(timeoutOf((args) => args[0] === 'ps')).toEqual([30_000]);
+    // Two listings: the reaper looks under the new label keys and FleetADLC's.
+    expect(timeoutOf((args) => args[0] === 'ps')).toEqual([30_000, 30_000]);
     expect(timeoutOf((args) => args[0] === 'rm')).toEqual([30_000]);
   });
 });

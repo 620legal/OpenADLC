@@ -2,13 +2,13 @@ import { createHmac } from 'node:crypto';
 import { createServer, request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TASK_TOKEN_HEADER, taskTokenFor } from '@fleetadlc/github';
+import { TASK_TOKEN_HEADER, taskTokenFor } from '@openadlc/github';
 
 /**
  * Who a local install's bridge serves `/v1` to.
  *
  * A default install runs in `local` mode and listens on every interface, and
- * it used to believe whatever name `x-fleetadlc-identity` gave, making any
+ * it used to believe whatever name `x-openadlc-identity` gave, making any
  * name it did not know an admin. A host on the LAN, or code in a task's
  * container through `host.docker.internal`, downloaded a backup of every
  * credential with one POST. Now only a caller holding the console secret is
@@ -16,7 +16,7 @@ import { TASK_TOKEN_HEADER, taskTokenFor } from '@fleetadlc/github';
  * the health check — answer as they did. The router, the identity check and
  * the internal routes are the real ones; the store is a fake.
  */
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -141,7 +141,7 @@ describe('a person route without the console secret', () => {
   it('is refused from a host on the LAN, and its handler never runs', async () => {
     const answer = await call('POST', '/v1/backup', { host: `192.168.1.50:${port}` }, BACKUP);
     expect(answer.status).toBe(401);
-    expect(String(answer.body.error)).toContain('only to its console and the fleetadlc CLI');
+    expect(String(answer.body.error)).toContain('only to its console and the openadlc CLI');
     expect(served).toEqual([]);
   });
 
@@ -158,14 +158,14 @@ describe('a person route without the console secret', () => {
   });
 
   it('is refused when it names a known admin', async () => {
-    const answer = await call('POST', '/v1/backup', { host: `192.168.1.50:${port}`, 'x-fleetadlc-identity': 'owner@example.com' }, BACKUP);
+    const answer = await call('POST', '/v1/backup', { host: `192.168.1.50:${port}`, 'x-openadlc-identity': 'owner@example.com' }, BACKUP);
     expect(answer.status).toBe(401);
     expect(served).toEqual([]);
   });
 
   it('is refused with a wrong secret, and the refusal does not repeat it', async () => {
     const wrong = 'd'.repeat(64);
-    const answer = await call('POST', '/v1/backup', { host: `127.0.0.1:${port}`, 'x-fleetadlc-console-secret': wrong }, BACKUP);
+    const answer = await call('POST', '/v1/backup', { host: `127.0.0.1:${port}`, 'x-openadlc-console-secret': wrong }, BACKUP);
     expect(answer.status).toBe(401);
     expect(JSON.stringify(answer.body)).not.toContain(wrong);
     expect(served).toEqual([]);
@@ -177,7 +177,7 @@ describe('a person route with the console secret', () => {
     const answer = await call(
       'POST',
       '/v1/backup',
-      { host: `127.0.0.1:${port}`, 'x-fleetadlc-console-secret': CONSOLE_SECRET, 'x-fleetadlc-identity': 'janedoe' },
+      { host: `127.0.0.1:${port}`, 'x-openadlc-console-secret': CONSOLE_SECRET, 'x-openadlc-identity': 'janedoe' },
       BACKUP,
     );
     expect(answer.status).toBe(200);
@@ -185,7 +185,7 @@ describe('a person route with the console secret', () => {
   });
 
   it('is served as the local operator when no name is given', async () => {
-    const answer = await call('GET', '/v1/status', { host: `127.0.0.1:${port}`, 'x-fleetadlc-console-secret': CONSOLE_SECRET });
+    const answer = await call('GET', '/v1/status', { host: `127.0.0.1:${port}`, 'x-openadlc-console-secret': CONSOLE_SECRET });
     expect(answer.status).toBe(200);
     expect(served).toEqual([{ path: '/v1/status', identity: 'local operator' }]);
   });
@@ -193,7 +193,7 @@ describe('a person route with the console secret', () => {
   it('does not take the IAP email header as the name', async () => {
     await call('GET', '/v1/status', {
       host: `127.0.0.1:${port}`,
-      'x-fleetadlc-console-secret': CONSOLE_SECRET,
+      'x-openadlc-console-secret': CONSOLE_SECRET,
       'x-goog-authenticated-user-email': 'accounts.google.com:attacker@example.com',
     });
     expect(served).toEqual([{ path: '/v1/status', identity: 'local operator' }]);

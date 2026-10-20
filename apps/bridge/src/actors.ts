@@ -1,5 +1,5 @@
-import { bots, credentials, identities, withAdvisoryLock } from '@fleetadlc/db';
-import { headerFor, type Bot } from '@fleetadlc/shared';
+import { bots, credentials, identities, withAdvisoryLock } from '@openadlc/db';
+import { headerFor, type Bot } from '@openadlc/shared';
 import type { Attribution } from './attribution.js';
 import {
   appClientSecretRef,
@@ -9,7 +9,7 @@ import {
   refusedByGitHub,
   TokenBroker,
   type ScopedOutcome,
-} from '@fleetadlc/github';
+} from '@openadlc/github';
 
 export interface MintedToken {
   token: string;

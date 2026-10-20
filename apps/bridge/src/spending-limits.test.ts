@@ -14,7 +14,7 @@ const store = vi.hoisted(() => ({
   lock: Promise.resolve() as Promise<unknown>,
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async (input: { action: string; target: string; payload: Record<string, unknown> }) => {
     store.audits.push(input);
   }),
@@ -81,8 +81,8 @@ vi.mock('@fleetadlc/db', () => ({
   },
 }));
 
-import { spendingLimits } from '@fleetadlc/db';
-import type { CostsConfig } from '@fleetadlc/shared';
+import { spendingLimits } from '@openadlc/db';
+import type { CostsConfig } from '@openadlc/shared';
 import { SpendingLimitRejected, applySpendingLimits, spendingView } from './spending-limits.js';
 
 const costs = {

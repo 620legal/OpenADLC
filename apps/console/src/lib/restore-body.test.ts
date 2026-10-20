@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/api', () => ({ BRIDGE_URL: 'http://bridge.test' }));
-vi.mock('@/lib/identity', () => ({ identityHeadersFrom: () => ({ 'x-fleetadlc-user': 'alexsmith' }) }));
+vi.mock('@/lib/identity', () => ({ identityHeadersFrom: () => ({ 'x-openadlc-user': 'alexsmith' }) }));
 
 import { POST as restore } from '@/app/api/restore/route';
 import { POST as restorePreview } from '@/app/api/restore/preview/route';
@@ -48,7 +48,7 @@ describe('a restore body', () => {
     vi.stubGlobal('fetch', fetchMock);
     const response = await handler(post(path, '{}', RESTORE_BODY_MAX + 1));
     expect(response.status).toBe(413);
-    expect(((await response.json()) as { error: string }).error).toContain('fleetadlc restore');
+    expect(((await response.json()) as { error: string }).error).toContain('openadlc restore');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -57,7 +57,7 @@ describe('a restore body', () => {
     vi.stubGlobal('fetch', fetchMock);
     const response = await handler(post(path, '{}', null));
     expect(response.status).toBe(411);
-    expect(((await response.json()) as { error: string }).error).toContain('fleetadlc restore');
+    expect(((await response.json()) as { error: string }).error).toContain('openadlc restore');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

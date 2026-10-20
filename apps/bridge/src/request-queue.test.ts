@@ -22,7 +22,7 @@ const store = vi.hoisted(() => ({
   taskRows: [] as { id: string; subjectRef: string; state: string; exitReason?: string }[],
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -40,7 +40,7 @@ vi.mock('@fleetadlc/db', () => ({
   },
 
   bots: { listBots: vi.fn(async () => [{ id: 'bot-intake', name: 'ottoexampleco', role: 'intake' }]) },
-  repos: { listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'fleetadlc-testbed' }]) },
+  repos: { listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'openadlc-testbed' }]) },
   requests: {
     listQueued: vi.fn(async () =>
       store.requests
@@ -84,7 +84,7 @@ vi.mock('@fleetadlc/db', () => ({
 
 const { MAX_ATTEMPTS, RETRY_AFTER_MS, RequestQueue, queuePositions, withPositions, REQUEST_QUEUE_LOCK } = await import('./request-queue.js');
 const { BotBusyError, PrerequisiteNotReadyError, SpendingCapError } = await import('./task-service.js');
-const { withAdvisoryLock } = await import('@fleetadlc/db');
+const { withAdvisoryLock } = await import('@openadlc/db');
 
 function queued(id: string, at: string, overrides: Partial<Row> = {}): Row {
   return { id, state: 'queued', repoId: 'repo-1', createdAt: at, queueAttempts: 0, queueReason: null, updatedAt: at, ...overrides };
@@ -97,7 +97,7 @@ function intake() {
     if (store.running > 0) throw new BotBusyError('ottoexampleco');
     store.running += 1;
     opened.push(input.subjectRef);
-    return { taskId: `task-${opened.length}`, session: 'fleetadlc-1' };
+    return { taskId: `task-${opened.length}`, session: 'openadlc-1' };
   });
   return { taskService: { open }, opened };
 }
@@ -181,15 +181,15 @@ describe('a request waiting for intake', () => {
     const said: string[] = [];
     const opened: string[] = [];
     const open = vi.fn(async (input: { subjectRef: string }) => {
-      if (input.subjectRef === 'request:aaaaaaaa') throw new Error('ottoexampleco was not started: ottoexampleco cannot work in fleetadlc-private.');
+      if (input.subjectRef === 'request:aaaaaaaa') throw new Error('ottoexampleco was not started: ottoexampleco cannot work in openadlc-private.');
       opened.push(input.subjectRef);
-      return { taskId: 'task-1', session: 'fleetadlc-1' };
+      return { taskId: 'task-1', session: 'openadlc-1' };
     });
 
     await new RequestQueue({ taskService: { open }, log: (line) => said.push(line) }).drain();
 
     expect(opened).toEqual(['request:bbbbbbbb']);
-    expect(store.requests[0]).toMatchObject({ state: 'queued', queueAttempts: 1, queueReason: expect.stringContaining('cannot work in fleetadlc-private') });
+    expect(store.requests[0]).toMatchObject({ state: 'queued', queueAttempts: 1, queueReason: expect.stringContaining('cannot work in openadlc-private') });
     expect(said).toContainEqual(expect.stringContaining('its triage could not start, and it waits (attempt 1 of 5)'));
   });
 
@@ -207,7 +207,7 @@ describe('a request waiting for intake', () => {
         throw new SpendingCapError('ottoexampleco', `month-to-date spend is $${spent.toFixed(2)} of $1500.00; not leasing new work`);
       }
       opened.push(input.subjectRef);
-      return { taskId: `task-${opened.length}`, session: 'fleetadlc-1' };
+      return { taskId: `task-${opened.length}`, session: 'openadlc-1' };
     });
     const said: string[] = [];
     const queue = new RequestQueue({ taskService: { open }, log: (line) => said.push(line) });
@@ -231,7 +231,7 @@ describe('a request waiting for intake', () => {
   });
 
   it('is tried a bounded number of times, then waits for a person', async () => {
-    store.requests = [queued('aaaaaaaa-1', '2026-09-29T10:00:00Z', { queueAttempts: MAX_ATTEMPTS, queueReason: 'cannot work in fleetadlc-private' })];
+    store.requests = [queued('aaaaaaaa-1', '2026-09-29T10:00:00Z', { queueAttempts: MAX_ATTEMPTS, queueReason: 'cannot work in openadlc-private' })];
     const { taskService, opened } = intake();
 
     await new RequestQueue({ taskService, ...quiet }).drain();
@@ -276,7 +276,7 @@ describe('a request waiting for intake', () => {
       const open = vi.fn(async (input: { subjectRef: string }) => {
         if (down) throw new PrerequisiteNotReadyError('ottoexampleco', [blockers[kind]]);
         opened.push(input.subjectRef);
-        return { taskId: `task-${opened.length}`, session: 'fleetadlc-1' };
+        return { taskId: `task-${opened.length}`, session: 'openadlc-1' };
       });
       const said: string[] = [];
       const queue = new RequestQueue({ taskService: { open }, log: (line) => said.push(line) });
@@ -307,11 +307,11 @@ describe('a request waiting for intake', () => {
     const open = vi.fn(async (input: { subjectRef: string }) => {
       if (input.subjectRef === 'request:aaaaaaaa') {
         throw new PrerequisiteNotReadyError('ottoexampleco', [
-          { row: 'bot-access:bot-intake:fleetadlc-testbed', kind: 'access', why: 'ottoexampleco cannot work in fleetadlc-testbed', instruction: 'Invite it.' },
+          { row: 'bot-access:bot-intake:openadlc-testbed', kind: 'access', why: 'ottoexampleco cannot work in openadlc-testbed', instruction: 'Invite it.' },
         ]);
       }
       opened.push(input.subjectRef);
-      return { taskId: 'task-1', session: 'fleetadlc-1' };
+      return { taskId: 'task-1', session: 'openadlc-1' };
     });
 
     await new RequestQueue({ taskService: { open }, ...quiet }).drain();
@@ -338,9 +338,9 @@ describe('a request waiting for intake', () => {
     const ago = (ms: number) => new Date(now - ms).toISOString();
     store.requests = [
       // Failed three times, two minutes ago: its next try is at five.
-      queued('aaaaaaaa-1', '2026-09-29T10:00:00Z', { queueAttempts: 3, queueReason: 'cannot work in fleetadlc-private', updatedAt: ago(RETRY_AFTER_MS[0]! * 2) }),
+      queued('aaaaaaaa-1', '2026-09-29T10:00:00Z', { queueAttempts: 3, queueReason: 'cannot work in openadlc-private', updatedAt: ago(RETRY_AFTER_MS[0]! * 2) }),
       // Failed once, two minutes ago: a minute's wait is over.
-      queued('bbbbbbbb-2', '2026-09-29T10:05:00Z', { queueAttempts: 1, queueReason: 'cannot work in fleetadlc-private', updatedAt: ago(RETRY_AFTER_MS[0]! * 2) }),
+      queued('bbbbbbbb-2', '2026-09-29T10:05:00Z', { queueAttempts: 1, queueReason: 'cannot work in openadlc-private', updatedAt: ago(RETRY_AFTER_MS[0]! * 2) }),
     ];
     const { taskService, opened } = intake();
 
@@ -401,7 +401,7 @@ describe('a request waiting for intake', () => {
     const opened: string[] = [];
     const open = vi.fn(async (input: { subjectRef: string }) => {
       opened.push(input.subjectRef);
-      return { taskId: 'task-1', session: 'fleetadlc-1' };
+      return { taskId: 'task-1', session: 'openadlc-1' };
     });
     // Two processes that each think they hold the lock.
     const free = <T,>(_key: string, fn: () => Promise<T>) => fn();
@@ -491,9 +491,9 @@ describe('a request claimed but never started', () => {
 
 describe('while one repository is paused', () => {
   it('passes over its requests, keeping their place, starts the rest, and starts them once it resumes', async () => {
-    vi.mocked((await import('@fleetadlc/db')).repos.listRepos).mockResolvedValue([
-      { id: 'repo-1', name: 'fleetadlc-testbed' },
-      { id: 'repo-2', name: 'fleetadlc-other' },
+    vi.mocked((await import('@openadlc/db')).repos.listRepos).mockResolvedValue([
+      { id: 'repo-1', name: 'openadlc-testbed' },
+      { id: 'repo-2', name: 'openadlc-other' },
     ] as never);
     store.requests = [
       queued('req-a', '2026-09-29T10:00:00.000Z'),
@@ -501,7 +501,7 @@ describe('while one repository is paused', () => {
       // No repository yet: intake picks one, so its triage runs.
       queued('req-c', '2026-09-29T10:02:00.000Z', { repoId: null }),
     ];
-    const pausedRepos = new Set(['fleetadlc-testbed']);
+    const pausedRepos = new Set(['openadlc-testbed']);
     const { taskService, opened } = intake();
     const queue = new RequestQueue({
       taskService,
@@ -518,8 +518,8 @@ describe('while one repository is paused', () => {
     // Waiting, not failed: nothing counted against it.
     expect(store.requests.find((one) => one.id === 'req-a')).toMatchObject({ state: 'queued', queueAttempts: 0, queueReason: null });
 
-    pausedRepos.delete('fleetadlc-testbed');
+    pausedRepos.delete('openadlc-testbed');
     expect((await queue.drain()).map((one) => one.requestId)).toEqual(['req-a']);
-    vi.mocked((await import('@fleetadlc/db')).repos.listRepos).mockResolvedValue([{ id: 'repo-1', name: 'fleetadlc-testbed' }] as never);
+    vi.mocked((await import('@openadlc/db')).repos.listRepos).mockResolvedValue([{ id: 'repo-1', name: 'openadlc-testbed' }] as never);
   });
 });

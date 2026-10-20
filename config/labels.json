@@ -75,17 +75,17 @@
     "description": "Intake has not shaped this yet"
   },
   {
-    "name": "fleetadlc:ignore",
+    "name": "openadlc:ignore",
     "color": "5a5a5a",
     "description": "An issue the crew does not touch"
   },
   {
-    "name": "fleetadlc:paused",
+    "name": "openadlc:paused",
     "color": "b08800",
     "description": "Held by a person: the step running finishes, nothing new starts"
   },
   {
-    "name": "fleetadlc:next",
+    "name": "openadlc:next",
     "color": "1f6feb",
     "description": "Built next in its repository, ahead of priority"
   },

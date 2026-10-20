@@ -3,7 +3,7 @@ import { withoutComments } from './comments';
 
 describe('withoutComments', () => {
   it('takes out every comment, as the pattern it replaces did', () => {
-    const text = 'one <!-- fleetadlc:{"event":"question"} --> two <!----> three <!-- a\nb --> four';
+    const text = 'one <!-- openadlc:{"event":"question"} --> two <!----> three <!-- a\nb --> four';
     expect(withoutComments(text)).toBe(text.replace(/<!--[\s\S]*?-->/g, ''));
     expect(withoutComments(text)).toBe('one  two  three  four');
   });

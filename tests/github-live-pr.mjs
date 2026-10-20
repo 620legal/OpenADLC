@@ -15,7 +15,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { bots, closePool, repos, waitForDatabase } from '@fleetadlc/db';
+import { bots, closePool, repos, waitForDatabase } from '@openadlc/db';
 import {
   GitHubApiError,
   GitHubClient,
@@ -26,8 +26,8 @@ import {
   refreshTokenRef,
   signingKeyRef,
   TokenBroker,
-} from '@fleetadlc/github';
-import { automationBotOf, redactSecrets, resolveBotRef } from '@fleetadlc/shared';
+} from '@openadlc/github';
+import { automationBotOf, redactSecrets, resolveBotRef } from '@openadlc/shared';
 
 const run = promisify(execFile);
 const keep = process.argv.includes('--keep');
@@ -46,13 +46,13 @@ function check(name, ok, detail = '') {
  * does not answer, and only then does this suite refresh the token itself.
  */
 async function tokenFromBridge(botName) {
-  const bridge = process.env.FLEETADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
+  const bridge = process.env.OPENADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
   const secret = (await getSecretStore().get(internalSecretRef()).catch(() => null)) ?? '';
   let response;
   try {
     response = await fetch(`${bridge}/internal/tokens/${encodeURIComponent(botName)}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': secret },
+      headers: { 'content-type': 'application/json', 'x-openadlc-internal-secret': secret },
       body: JSON.stringify({ purpose: 'call' }),
       signal: AbortSignal.timeout(30_000),
     });
@@ -73,14 +73,14 @@ async function tokenFor(botName) {
   const store = getSecretStore();
 
   const refresh = await store.get(refreshTokenRef(botName));
-  if (refresh && process.env.FLEETADLC_GITHUB_CLIENT_ID) {
-    const broker = new TokenBroker({ clientId: process.env.FLEETADLC_GITHUB_CLIENT_ID });
+  if (refresh && process.env.OPENADLC_GITHUB_CLIENT_ID) {
+    const broker = new TokenBroker({ clientId: process.env.OPENADLC_GITHUB_CLIENT_ID });
     const brokered = await broker.tokenFor(botName, login);
     return { token: brokered.token, login };
   }
 
   const staticToken = await store.get(accessTokenRef(botName));
-  if (!staticToken) throw new Error(`${botName} is not connected; run: fleetadlc auth login --bot ${botName}`);
+  if (!staticToken) throw new Error(`${botName} is not connected; run: openadlc auth login --bot ${botName}`);
   return { token: staticToken, login };
 }
 
@@ -95,7 +95,7 @@ async function startSigningAgent(botName) {
     privateKey = pair.privateKey;
   }
 
-  const dir = mkdtempSync(join(tmpdir(), `fleetadlc-live-agent-`));
+  const dir = mkdtempSync(join(tmpdir(), `openadlc-live-agent-`));
   const socket = join(dir, 'agent.sock');
   await run('ssh-agent', ['-a', socket]);
 
@@ -124,13 +124,13 @@ async function main() {
   const repo = (await repos.listRepos())[0];
   if (!repo) throw new Error('no repository is configured');
 
-  // The bot to push as: FLEETADLC_LIVE_BUILDER by seat or name, else the
+  // The bot to push as: OPENADLC_LIVE_BUILDER by seat or name, else the
   // automation bot, found by its role — whatever handle its account gave it.
   const crew = await bots.listBots();
-  const builder = process.env.FLEETADLC_LIVE_BUILDER
-    ? resolveBotRef(crew, process.env.FLEETADLC_LIVE_BUILDER)
+  const builder = process.env.OPENADLC_LIVE_BUILDER
+    ? resolveBotRef(crew, process.env.OPENADLC_LIVE_BUILDER)
     : automationBotOf(crew);
-  if (!builder) throw new Error(`no bot ${process.env.FLEETADLC_LIVE_BUILDER ?? 'with the automation role'} on this install`);
+  if (!builder) throw new Error(`no bot ${process.env.OPENADLC_LIVE_BUILDER ?? 'with the automation role'} on this install`);
   const builderName = builder.name;
   const { token, login } = await tokenFor(builderName);
   const client = new GitHubClient({ token, actingAs: login });
@@ -139,7 +139,7 @@ async function main() {
 
   const stamp = Date.now().toString(36);
   const branch = `agent/${builderName}/live-${stamp}`;
-  const workdir = mkdtempSync(join(tmpdir(), 'fleetadlc-live-wt-'));
+  const workdir = mkdtempSync(join(tmpdir(), 'openadlc-live-wt-'));
   const agent = await startSigningAgent(builderName);
 
   const gitEnv = {
@@ -313,7 +313,7 @@ async function main() {
     //    a missing pull request included.
     let refusal = null;
     try {
-      await client.requestReviewers(repo.fullName, pull.number, ['this-account-does-not-exist-fleetadlc']);
+      await client.requestReviewers(repo.fullName, pull.number, ['this-account-does-not-exist-openadlc']);
     } catch (error) {
       refusal = error;
     }

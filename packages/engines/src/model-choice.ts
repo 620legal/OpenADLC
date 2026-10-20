@@ -1,4 +1,4 @@
-import type { EngineName } from '@fleetadlc/shared';
+import type { EngineName } from '@openadlc/shared';
 import type { ModelProvider } from './provider-models.js';
 
 /**

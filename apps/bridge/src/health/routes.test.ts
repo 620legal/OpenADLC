@@ -1,4 +1,4 @@
-import type { HealthRow } from '@fleetadlc/db';
+import type { HealthRow } from '@openadlc/db';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -55,7 +55,7 @@ beforeEach(async () => {
       severity: 'blocking',
       title: 'The OpenADLC app does not have “Deployments”',
       detail: 'Add it.',
-      action: { label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/fleetadlc-janedoe/permissions' },
+      action: { label: 'Open the app’s permissions', url: 'https://github.com/settings/apps/openadlc-janedoe/permissions' },
     },
   ]);
   webhook = scripted('webhook', [{ ok: true }]);

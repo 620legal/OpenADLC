@@ -3,7 +3,7 @@
 # file for where the folder is mounted). It applies the `allow.git` rules of the
 # skill a task runs — push only to branches under `push_branch_prefix`, and no
 # forced update unless `force_push` — which no engine can express as a
-# permission. The engine passes the rules in FLEETADLC_TOOLS_POLICY
+# permission. The engine passes the rules in OPENADLC_TOOLS_POLICY
 # (`toolsPolicyEnv`, packages/engines/src/tools.ts); a person's own shell in the
 # same session has none, and its git runs untouched.
 #
@@ -33,7 +33,7 @@ if [ -z "$real" ]; then
   exit 127
 fi
 
-if [ -n "$FLEETADLC_TOOLS_POLICY" ]; then
+if [ -n "$OPENADLC_TOOLS_POLICY" ]; then
   exec node "$self_dir/git-check.mjs" "$real" "$@"
 fi
 

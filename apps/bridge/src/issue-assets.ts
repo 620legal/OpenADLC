@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { attachments as attachmentStore } from '@fleetadlc/db';
-import type { GitHubClient } from '@fleetadlc/github';
-import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, checkAttachment, itemRoomFor, safeFileName } from '@fleetadlc/shared';
+import { attachments as attachmentStore } from '@openadlc/db';
+import type { GitHubClient } from '@openadlc/github';
+import { ATTACHMENT_LIMITS, ATTACHMENT_TYPES, checkAttachment, itemRoomFor, safeFileName } from '@openadlc/shared';
 
 /**
  * Images written into an issue on GitHub — a screenshot pasted into the

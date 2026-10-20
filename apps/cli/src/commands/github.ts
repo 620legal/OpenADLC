@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { audit, bots, closePool, identities, repos, settings, withAdvisoryLock } from '@fleetadlc/db';
+import { audit, bots, closePool, identities, repos, settings, withAdvisoryLock } from '@openadlc/db';
 import {
   applyRepoRules,
   checkRepoRules,
@@ -25,13 +25,14 @@ import {
   type RepoLabel,
   type RepoRulesInput,
   type RuleApi,
-} from '@fleetadlc/github';
+} from '@openadlc/github';
 import { githubClientId } from '../client-id.js';
 import { reachDatabase } from '../database.js';
 import { configPath, type InstallConfig } from '../install.js';
 import { prompt, ui } from '../ui.js';
 import {
   DELIVERY_RULES_PATH,
+  readDeliveryRulesFile,
   REQUIRED_CHECK,
   REVIEW_GATE_CHECK,
   automationBotOf,
@@ -39,7 +40,7 @@ import {
   rulesSetApproval,
   type Bot,
   labelStep,
-} from '@fleetadlc/shared';
+} from '@openadlc/shared';
 
 interface LabelSpec {
   name: string;
@@ -53,7 +54,7 @@ interface LabelSpec {
  * Run it after editing the file, or when adding a repository.
  *
  * `file` writes another label file instead, relative to the checkout:
- * OpenADLC's own component areas (`config/labels-fleetadlc.json`) go only to
+ * OpenADLC's own component areas (`config/labels-openadlc.json`) go only to
  * OpenADLC's own repository, never to every one an install manages.
  */
 export async function syncLabels(config: InstallConfig, options: { repo?: string; file?: string }): Promise<void> {
@@ -212,14 +213,14 @@ export async function githubCheck(config: InstallConfig): Promise<void> {
   }
 
   if (missing > 0) {
-    ui.note('`fleetadlc github apply` creates what is missing and brings what drifted up to date');
+    ui.note('`openadlc github apply` creates what is missing and brings what drifted up to date');
     process.exitCode = 1;
   }
 
   ui.heading('Crew')
   for (const bot of await bots.listBots()) {
     if (!bot.githubLogin) {
-      ui.warn(`${bot.name.padEnd(8)} has no account connected — fleetadlc auth login --bot ${bot.slot}`);
+      ui.warn(`${bot.name.padEnd(8)} has no account connected — openadlc auth login --bot ${bot.slot}`);
       continue;
     }
     try {
@@ -239,7 +240,7 @@ export async function githubCheck(config: InstallConfig): Promise<void> {
  *
  * Found where the console's repository setup finds them, so `check` measures
  * what the console applied: a `humans` setting stored from the console wins
- * over `FLEETADLC_HUMANS`, which `main` fills from install.json's `humans` unless it
+ * over `OPENADLC_HUMANS`, which `main` fills from install.json's `humans` unless it
  * was exported. With no humans the organization stands in, which on a personal
  * account is its owner.
  *
@@ -261,7 +262,7 @@ export function templateProblem(report: { name: string; state: string; detail: s
 export function rulesHumans(install: {
   /** The console's settings: `humans` comma-separated, as the bridge reads it. */
   stored: { humans?: string; organization?: string };
-  /** `FLEETADLC_HUMANS`. */
+  /** `OPENADLC_HUMANS`. */
   environment: string | undefined;
   /** install.json's `organization`. */
   organization: string;
@@ -274,7 +275,7 @@ export function rulesHumans(install: {
   if (!human) {
     throw new Error(
       `no human reviewer is configured, and the repository rules name one: set "humans" in ${configPath()} ` +
-        'to the GitHub logins who approve, e.g. "humans": ["your-login"], or export FLEETADLC_HUMANS=your-login',
+        'to the GitHub logins who approve, e.g. "humans": ["your-login"], or export OPENADLC_HUMANS=your-login',
     );
   }
   return { human, humans };
@@ -283,7 +284,7 @@ export function rulesHumans(install: {
 /** GitHub, spoken to as the app itself, with its JWT. */
 const APP_API: AppApi = {
   request: <T>(method: string, path: string, token: string, body?: unknown) =>
-    new GitHubClient({ token, actingAs: 'fleetadlc-app' }).request<T>(method, path, body),
+    new GitHubClient({ token, actingAs: 'openadlc-app' }).request<T>(method, path, body),
 };
 
 /**
@@ -317,7 +318,7 @@ export async function rulesInputFor(
   const stored: { humans?: string; organization?: string } = await settings.allSettings().catch(() => ({}));
   const { human, humans } = rulesHumans({
     stored,
-    environment: process.env.FLEETADLC_HUMANS,
+    environment: process.env.OPENADLC_HUMANS,
     organization: config.organization,
   });
   // Whoever holds the lead reviewer's role, as the console's setup does. With
@@ -354,7 +355,7 @@ export async function rulesInputFor(
     crew: logins,
     productionReviewers,
     // What holds production, by the repository's rules: its
-    // `.github/fleetadlc.yml`, else its stored rules, else a person approves.
+    // `.github/openadlc.yml`, else its stored rules, else a person approves.
     production: await productionRuleOf(repo, client ?? null),
     // The app's bypass and the review gate pinned to it, as the bridge writes them.
     ...(await appFieldsFor(config, api)),
@@ -379,11 +380,11 @@ function rulesFileOf(
   client: Pick<GitHubClient, 'readFileIfPresent'> | null,
 ): Promise<string | null> {
   return client
-    ? client.readFileIfPresent(repo.fullName, DELIVERY_RULES_PATH, repo.defaultBranch ?? 'main').catch(() => null)
+    ? readDeliveryRulesFile((path) => client.readFileIfPresent(repo.fullName, path, repo.defaultBranch ?? 'main')).catch(() => null)
     : Promise.resolve(null);
 }
 
-/** How production ships, as `fleetadlc github apply --production … --reviewer … --soak …` says it. */
+/** How production ships, as `openadlc github apply --production … --reviewer … --soak …` says it. */
 export interface ProductionOptions {
   production?: string;
   reviewers?: string[];
@@ -470,7 +471,7 @@ async function settleProduction(
 /**
  * Creates the containment a managed repository is supposed to have: the `main`
  * ruleset, the agent-branch restriction, the two environments and a CODEOWNERS
- * if none exists. This writes to GitHub — `fleetadlc github check` is the read-only
+ * if none exists. This writes to GitHub — `openadlc github check` is the read-only
  * half, and is what to run first.
  */
 export async function githubApply(config: InstallConfig, options: ProductionOptions = {}): Promise<void> {
@@ -511,7 +512,7 @@ export async function githubApply(config: InstallConfig, options: ProductionOpti
       // The entry the console's apply writes, which the repo-rules check reads
       // for what GitHub refused: without it, an apply from here left the
       // check reading an older one.
-      await audit({ actor: 'fleetadlc github apply', action: 'repo.rules_applied', target: repo.fullName, payload: rulesAppliedPayload(outcomes) }).catch(
+      await audit({ actor: 'openadlc github apply', action: 'repo.rules_applied', target: repo.fullName, payload: rulesAppliedPayload(outcomes) }).catch(
         () => undefined,
       );
       for (const outcome of outcomes) {
@@ -540,7 +541,7 @@ export async function githubApply(config: InstallConfig, options: ProductionOpti
       if (approvers.length === 0) {
         ui.warn(
           `${repo.fullName}: nobody to name as approving AGENTS.md's human-review paths — set "humans" in ${configPath()} ` +
-            'or export FLEETADLC_HUMANS=your-login, and run this again. Until then AGENTS.md keeps the template\'s @owner.',
+            'or export OPENADLC_HUMANS=your-login, and run this again. Until then AGENTS.md keeps the template\'s @owner.',
         );
       }
       // The checkout's templates, wherever the command is run from.
@@ -558,7 +559,7 @@ export async function githubApply(config: InstallConfig, options: ProductionOpti
   }
 
   ui.plain();
-  ui.note('now run `fleetadlc github check` to see it from the outside');
+  ui.note('now run `openadlc github check` to see it from the outside');
   await closePool();
 }
 
@@ -572,7 +573,7 @@ type AutomationClient = { client: GitHubClient; login: string } | { reason: stri
  */
 export function credentialFailure(error: unknown, login: string): { reason: string; hint: string | null } {
   if (error instanceof GitHubApiError && (error.status === 401 || error.status === 403)) {
-    return { reason: `GitHub refused ${login}’s stored credential`, hint: `fleetadlc auth login --bot ${login}` };
+    return { reason: `GitHub refused ${login}’s stored credential`, hint: `openadlc auth login --bot ${login}` };
   }
   return {
     reason: `could not ask GitHub who ${login} is: ${error instanceof Error ? error.message : String(error)}`,
@@ -601,7 +602,7 @@ async function tokenFromBridge(
   try {
     response = await fetch(`http://127.0.0.1:${config.ports.bridge}/internal/tokens/${encodeURIComponent(bot)}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-fleetadlc-internal-secret': secret },
+      headers: { 'content-type': 'application/json', 'x-openadlc-internal-secret': secret },
       body: JSON.stringify({ purpose: 'call' }),
       signal: AbortSignal.timeout(30_000),
     });
@@ -639,7 +640,7 @@ async function signInOf(bot: Bot): Promise<string> {
 
 async function automationClient(config: InstallConfig): Promise<AutomationClient> {
   const bot = await automationBot(config);
-  const notConnected = (name: string): AutomationClient => ({ reason: `${name} is not connected`, hint: `fleetadlc auth login --bot ${name}` });
+  const notConnected = (name: string): AutomationClient => ({ reason: `${name} is not connected`, hint: `openadlc auth login --bot ${name}` });
   if (!bot) return notConnected(config.automationBotName ?? 'automation');
   const name = bot.name;
   const login = bot.githubLogin ?? name;
@@ -648,7 +649,7 @@ async function automationClient(config: InstallConfig): Promise<AutomationClient
   // seat on a shared account keeps its sign-in, and it refreshes under the lock.
   const asked = await tokenFromBridge(config, name);
   if ('token' in asked) return { client: new GitHubClient({ token: asked.token, actingAs: login }), login };
-  if ('refused' in asked) return { reason: asked.refused, hint: asked.status === 404 ? `fleetadlc auth login --bot ${name}` : null };
+  if ('refused' in asked) return { reason: asked.refused, hint: asked.status === 404 ? `openadlc auth login --bot ${name}` : null };
 
   const store = getSecretStore();
   const signIn = await signInOf(bot);
@@ -661,14 +662,14 @@ async function automationClient(config: InstallConfig): Promise<AutomationClient
     if (!clientId) {
       return {
         reason: 'the bridge is not answering, and this install has no GitHub App client id to refresh the token with',
-        hint: 'start the bridge: fleetadlc up, and run this again',
+        hint: 'start the bridge: openadlc up, and run this again',
       };
     }
     // This path is for a stopped install, and says so. The lock is the one the
     // bridge's broker takes, so a bridge that is up after all, on some other
     // port, cannot spend the same refresh token at the same time.
     ui.warn('the bridge is not answering; refreshing this token directly');
-    ui.note('run this while `fleetadlc up` is running and the bridge mints it instead');
+    ui.note('run this while `openadlc up` is running and the bridge mints it instead');
     const broker = new TokenBroker({
       clientId: async () => (await githubClientId(config)) ?? '',
       exclusive: (key, fn) => withAdvisoryLock(key, fn),
@@ -730,7 +731,7 @@ export async function repositoryWriter(
   if (app) {
     try {
       const token = await mint(app, repoFullName);
-      return { client: new GitHubClient({ token, actingAs: 'fleetadlc-app' }), as: 'as the OpenADLC app' };
+      return { client: new GitHubClient({ token, actingAs: 'openadlc-app' }), as: 'as the OpenADLC app' };
     } catch (error) {
       return {
         reason: `${repoFullName}: the OpenADLC app could not act on it: ${error instanceof Error ? error.message.slice(0, 120) : error}`,

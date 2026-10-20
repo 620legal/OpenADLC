@@ -65,7 +65,7 @@ export async function markEventProcessed(id: string, error?: string): Promise<vo
  *
  * A cloud install's entire event path runs on the GitHub App's webhook reaching
  * the bridge, and when it does not, nothing is obviously broken: the board is
- * simply always empty and no bot ever starts. `fleetadlc doctor` asks this so the
+ * simply always empty and no bot ever starts. `openadlc doctor` asks this so the
  * answer is "GitHub has never delivered anything here" rather than silence.
  */
 export async function lastGithubDelivery(): Promise<{ at: string; type: string } | null> {

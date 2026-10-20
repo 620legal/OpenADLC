@@ -6,7 +6,7 @@
 # or, from a checkout, infra/local/install.sh. It says what is missing and asks
 # before installing it: git, Node 22+, pnpm, tmux, Docker (OrbStack on a Mac),
 # cloudflared, and on Linux the compiler node-pty needs. Then it clones the
-# repository, builds it, builds the bot image, writes the install (~/.fleetadlc),
+# repository, builds it, builds the bot image, writes the install (~/.openadlc),
 # starts it and opens the console's sign-in link, where the walkthrough does the
 # rest.
 #
@@ -77,7 +77,7 @@ as_root() {
 }
 
 # A pipeline into a root shell: `curl … | sudo bash -`. Not `sudo -E`: a re-run's
-# environment can hold FLEETADLC_WEBHOOK_SECRET or a DATABASE_URL with its
+# environment can hold OPENADLC_WEBHOOK_SECRET or a DATABASE_URL with its
 # password, and a remote installer has no business with them. Only a proxy,
 # which those installers do need behind one, goes across.
 pipe_to_root() {
@@ -283,7 +283,7 @@ docker_group() {
 
 # The driver install.json names now, or nothing.
 stored_driver() {
-  local file="${FLEETADLC_HOME:-$HOME/.fleetadlc}/install.json"
+  local file="${OPENADLC_HOME:-$HOME/.openadlc}/install.json"
   [ -f "$file" ] || return 0
   node -e 'try { process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).driver ?? "")) } catch {}' "$file" 2>/dev/null || true
 }
@@ -293,7 +293,7 @@ main() {
   ref="${OPENADLC_REF:-main}"
   dir="${OPENADLC_DIR:-}"
   assume_yes=0 start=1 rebuild_image=0 dry_run=0 allow_local=0 docker_planned=0 want_local=0
-  bot_image="${IMAGE:-fleetadlc-bot:latest}"
+  bot_image="${IMAGE:-openadlc-bot:latest}"
   # Corepack otherwise stops to ask before it fetches the pnpm package.json pins.
   export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
@@ -368,7 +368,7 @@ main() {
   # Run from inside a checkout, that checkout is the one installed.
   local here=''
   if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; fi
-  if [ -z "$dir" ] && [ -n "$here" ] && grep -qs '"name": "fleetadlc"' "$here/../../package.json"; then
+  if [ -z "$dir" ] && [ -n "$here" ] && grep -qs '"name": "openadlc"' "$here/../../package.json"; then
     dir="$(cd "$here/../.." && pwd)"
     step "Using the checkout at $dir"
   else
@@ -408,16 +408,16 @@ main() {
   # driver an install already has, and a new one takes docker when Docker
   # answers and the bot image (built just above) is here. A flag on every run
   # would overwrite a driver somebody chose.
-  step "Writing the install (${FLEETADLC_HOME:-~/.fleetadlc})"
+  step "Writing the install (${OPENADLC_HOME:-~/.openadlc})"
   local before after
   before="$(stored_driver)"
-  if [ "$want_local" = 1 ]; then in_checkout node apps/cli/bin/fleetadlc.mjs init --driver local
-  else in_checkout node apps/cli/bin/fleetadlc.mjs init; fi
+  if [ "$want_local" = 1 ]; then in_checkout node apps/cli/bin/openadlc.mjs init --driver local
+  else in_checkout node apps/cli/bin/openadlc.mjs init; fi
   after="$(stored_driver)"
 
   if [ "$start" = 0 ]; then
     step "Installed, not started"
-    say "  Start it with:  cd $dir && pnpm fleetadlc up"
+    say "  Start it with:  cd $dir && pnpm openadlc up"
     return 0
   fi
 
@@ -426,15 +426,15 @@ main() {
   # under the old one while this said it was running.
   if [ "$dry_run" = 0 ] && [ "$before" != "$after" ]; then
     step "Restarting, for the ${after:-new} driver"
-    in_checkout node apps/cli/bin/fleetadlc.mjs down
+    in_checkout node apps/cli/bin/openadlc.mjs down
   fi
 
   step "Starting OpenADLC"
-  in_checkout node apps/cli/bin/fleetadlc.mjs up
+  in_checkout node apps/cli/bin/openadlc.mjs up
 
   if [ "$dry_run" = 0 ]; then
     local link
-    link="$(cd "$dir" && node apps/cli/bin/fleetadlc.mjs console-link 2>/dev/null | grep -Eo 'https?://[^ ]+/signin\?token=[^ ]+' | head -n 1 || true)"
+    link="$(cd "$dir" && node apps/cli/bin/openadlc.mjs console-link 2>/dev/null | grep -Eo 'https?://[^ ]+/signin\?token=[^ ]+' | head -n 1 || true)"
     if [ -n "$link" ]; then
       if [ "$platform" = mac ]; then open "$link" >/dev/null 2>&1 || true
       elif have xdg-open && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then xdg-open "$link" >/dev/null 2>&1 || true
@@ -447,9 +447,9 @@ main() {
   say "  does the rest: the GitHub App, the crew's accounts, a model account, a repository."
   say ""
   say "  In $dir:"
-  say "    pnpm fleetadlc console-link   a fresh sign-in link (each works for an hour)"
-  say "    pnpm fleetadlc doctor         what would break"
-  say "    pnpm fleetadlc down           stop it"
+  say "    pnpm openadlc console-link   a fresh sign-in link (each works for an hour)"
+  say "    pnpm openadlc doctor         what would break"
+  say "    pnpm openadlc down           stop it"
 }
 
 main "$@"

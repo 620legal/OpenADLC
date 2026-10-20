@@ -11,7 +11,7 @@ export interface CrewMember {
 /**
  * Who wrote something on GitHub, as far as OpenADLC can tell.
  *
- * `person` is anybody whose login is none of the crew's accounts. `fleetadlc` is
+ * `person` is anybody whose login is none of the crew's accounts. `openadlc` is
  * one of the crew's accounts; `bot` is the seat that wrote it when that can be
  * told — always on an account only one seat uses, and on a shared account only
  * from the comment's own marker. A seat named by a marker on a shared account
@@ -24,7 +24,7 @@ export interface CrewMember {
 export type Authorship<M extends CrewMember = CrewMember> =
   | { kind: 'person'; login: string | null }
   | {
-      kind: 'fleetadlc';
+      kind: 'openadlc';
       login: string;
       bot: M | null;
       /** More than one seat signs in as this account. */
@@ -54,12 +54,12 @@ export function whoWrote<M extends CrewMember>(
   if (!login || seats.length === 0) return { kind: 'person', login: login ?? null };
 
   if (seats.length === 1) {
-    return { kind: 'fleetadlc', login, bot: seats[0] ?? null, shared: false };
+    return { kind: 'openadlc', login, bot: seats[0] ?? null, shared: false };
   }
 
   const named = marker?.bot?.toLowerCase();
   const bot = named ? (seats.find((seat) => seat.name.toLowerCase() === named || seat.slot?.toLowerCase() === named) ?? null) : null;
-  return { kind: 'fleetadlc', login, bot, shared: true };
+  return { kind: 'openadlc', login, bot, shared: true };
 }
 
 /**
@@ -78,7 +78,7 @@ export function seatsThatPosted<M extends CrewMember>(
   const wrote = new Set<string>();
   for (const post of posts) {
     const author = whoWrote(post.user, crew, { bot: seatOf(post.body) });
-    if (author.kind === 'fleetadlc' && author.bot) wrote.add(author.bot.name);
+    if (author.kind === 'openadlc' && author.bot) wrote.add(author.bot.name);
   }
   return seats.filter((seat) => wrote.has(seat));
 }
@@ -117,7 +117,7 @@ export function seatsAskingForChanges<M extends CrewMember>(
     const state = (post.state ?? '').toUpperCase();
     if (!state || state === 'COMMENTED' || state === 'PENDING') continue;
     const author = whoWrote(post.user, crew, { bot: seatOf(post.body) });
-    if (author.kind === 'fleetadlc' && author.bot) latest.set(author.bot.name, state);
+    if (author.kind === 'openadlc' && author.bot) latest.set(author.bot.name, state);
   }
   return seats.filter((seat) => latest.get(seat) === 'CHANGES_REQUESTED');
 }

@@ -69,32 +69,32 @@ function sharedInstall(): InstallSnapshot {
       'internal-api-secret': VALUES.internal,
       [ATTRIBUTION_KEY_REF]: KEYRING,
       [`github-refresh-${CREW}`]: CREW_REFRESH,
-      'github-refresh-fleetadlc-sydney-janedoe': VALUES.reviewerRefresh,
-      'ssh-signing-fleetadlc-sydney-janedoe': VALUES.reviewerSigning,
+      'github-refresh-openadlc-sydney-janedoe': VALUES.reviewerRefresh,
+      'ssh-signing-openadlc-sydney-janedoe': VALUES.reviewerSigning,
       ...Object.fromEntries(SHARED_SEATS.map((seat) => [`ssh-signing-${seat}`, `zzz-${seat}-signing-zzz`])),
     },
     settings: { organization: 'janedoe', githubClientId: VALUES.clientId, webhookSecret: VALUES.hook },
     bots: [
       ...seatBots,
       {
-        name: 'fleetadlc-sydney-janedoe',
+        name: 'openadlc-sydney-janedoe',
         slot: 'lead-reviewer',
-        githubLogin: 'fleetadlc-sydney-janedoe',
+        githubLogin: 'openadlc-sydney-janedoe',
         engine: 'codex',
         model: 'gpt-5-codex',
         modelAccountId: null,
         modelSetAt: null,
-        identity: 'fleetadlc-sydney-janedoe',
+        identity: 'openadlc-sydney-janedoe',
       },
     ],
     identities: [
       { login: CREW, githubUserId: 300, secretNs: CREW },
-      { login: 'fleetadlc-sydney-janedoe', githubUserId: 102, secretNs: 'fleetadlc-sydney-janedoe' },
+      { login: 'openadlc-sydney-janedoe', githubUserId: 102, secretNs: 'openadlc-sydney-janedoe' },
     ],
     credentials: {
       ...Object.fromEntries(SHARED_SEATS.map((seat, index) => [seat, crewCredential(index)])),
-      'fleetadlc-sydney-janedoe': {
-        githubLogin: 'fleetadlc-sydney-janedoe',
+      'openadlc-sydney-janedoe': {
+        githubLogin: 'openadlc-sydney-janedoe',
         githubUserId: 102,
         scopes: [],
         tokenExpiresAt: null,
@@ -164,13 +164,13 @@ describe('backing up a crew that shares one GitHub account', () => {
     expect(contents.secrets[`github-refresh-${CREW}`]).toBe(CREW_REFRESH);
     // No copy per seat: there is one token, and it is the account's.
     expect(Object.keys(contents.secrets).filter((ref) => ref.startsWith('github-refresh-'))).toEqual([
-      'github-refresh-fleetadlc-sydney-janedoe',
       `github-refresh-${CREW}`,
+      'github-refresh-openadlc-sydney-janedoe',
     ]);
     expect(leftOut.map((entry) => entry.ref)).toEqual(['internal-api-secret']);
     expect(contents.identities).toEqual([
       { login: CREW, githubUserId: 300, secretNs: CREW, seats: SHARED_SEATS },
-      { login: 'fleetadlc-sydney-janedoe', githubUserId: 102, secretNs: 'fleetadlc-sydney-janedoe', seats: ['lead-reviewer'] },
+      { login: 'openadlc-sydney-janedoe', githubUserId: 102, secretNs: 'openadlc-sydney-janedoe', seats: ['lead-reviewer'] },
     ]);
     // Each seat keeps its own record and its own signing key.
     expect(contents.bots.map((bot) => bot.credential?.signingKeyId)).toEqual([8000, 8001, 8002, 8003, 8004, 9002]);
@@ -179,7 +179,7 @@ describe('backing up a crew that shares one GitHub account', () => {
 
   it('sorts a sign-in filed under an account’s name as that account’s seats’, not as belonging to no bot', () => {
     const holders = [{ ns: CREW, bots: SHARED_SEATS }];
-    expect(classifySecret(`github-refresh-${CREW}`, [...SHARED_SEATS, 'fleetadlc-sydney-janedoe'], holders)).toEqual({
+    expect(classifySecret(`github-refresh-${CREW}`, [...SHARED_SEATS, 'openadlc-sydney-janedoe'], holders)).toEqual({
       group: 'sign-in',
       ns: CREW,
       bots: SHARED_SEATS,
@@ -210,7 +210,7 @@ describe('backing up a crew that shares one GitHub account', () => {
     const summary = summarizeArchive(contents);
     expect(summary.githubAccounts).toEqual([
       { login: CREW, seats: SHARED_SEATS, signIn: true },
-      { login: 'fleetadlc-sydney-janedoe', seats: ['lead-reviewer'], signIn: true },
+      { login: 'openadlc-sydney-janedoe', seats: ['lead-reviewer'], signIn: true },
     ]);
     expect(summary.bots.every((bot) => bot.signIn)).toBe(true);
   });
@@ -236,7 +236,7 @@ describe('restoring a crew on one account into a clean install', () => {
     const github = signIns.filter((one) => one.provider === 'github');
     expect(github.map((one) => [one.key, one.who, one.seats])).toEqual([
       [`github:${CREW}`, CREW, SHARED_SEATS],
-      ['bot:lead-reviewer', 'fleetadlc-sydney-janedoe', ['lead-reviewer']],
+      ['bot:lead-reviewer', 'openadlc-sydney-janedoe', ['lead-reviewer']],
     ]);
     expect(github[0]?.seat).toBeNull();
   });
@@ -257,17 +257,17 @@ describe('restoring a crew on one account into a clean install', () => {
     });
     expect(recorded.identities).toEqual({
       ...Object.fromEntries(SHARED_SEATS.map((seat) => [seat, { login: CREW, ns: CREW }])),
-      'lead-reviewer': { login: 'fleetadlc-sydney-janedoe', ns: 'lead-reviewer' },
+      'lead-reviewer': { login: 'openadlc-sydney-janedoe', ns: 'lead-reviewer' },
     });
     expect(report.signIns.filter((one) => one.provider === 'github').map((one) => one.state)).toEqual(['taken-over', 'taken-over']);
   });
 
   it('keeps the shared seats under their seats’ names, and names the reviewer for its account', async () => {
     const { recorded, report } = await restoreOnto(backup().contents, cleanSixSeats());
-    expect(recorded.renamed).toEqual([{ name: 'lead-reviewer', to: 'fleetadlc-sydney-janedoe' }]);
+    expect(recorded.renamed).toEqual([{ name: 'lead-reviewer', to: 'openadlc-sydney-janedoe' }]);
     const bots = report.summary.bots;
     expect(bots.filter((bot) => SHARED_SEATS.includes(bot.seat)).every((bot) => bot.becomes === null && bot.signIn)).toBe(true);
-    expect(bots.find((bot) => bot.seat === 'lead-reviewer')?.becomes).toBe('fleetadlc-sydney-janedoe');
+    expect(bots.find((bot) => bot.seat === 'lead-reviewer')?.becomes).toBe('openadlc-sydney-janedoe');
   });
 
   it('writes the seats onto one account, with the sign-in where the bridge looks for each of them', async () => {
@@ -324,7 +324,7 @@ describe('restoring a crew on one account into a clean install', () => {
   it('asks for a shared account left out of the backup as one account to connect', async () => {
     const { report } = await restoreOnto(backup({ ...EVERYTHING, botSignIns: false }).contents, cleanSixSeats());
     expect(report.summary.next[0]).toMatch(
-      /^Sign in again to 2 GitHub accounts — irisexampleco, fleetadlc-sydney-janedoe — because their sign-ins were not in the backup/,
+      /^Sign in again to 2 GitHub accounts — irisexampleco, openadlc-sydney-janedoe — because their sign-ins were not in the backup/,
     );
   });
 
@@ -511,12 +511,12 @@ describe('restoring an archive written before accounts could be shared', () => {
     expect(recorded.credentials).toEqual({ builder: 'github-refresh-builder', 'lead-reviewer': 'github-refresh-lead-reviewer' });
     // Each on an account filed under its own name here, which moves with it when it takes the handle.
     expect(recorded.identities).toEqual({
-      builder: { login: 'fleetadlc-atlas-janedoe', ns: 'builder' },
-      'lead-reviewer': { login: 'fleetadlc-sydney-janedoe', ns: 'lead-reviewer' },
+      builder: { login: 'openadlc-atlas-janedoe', ns: 'builder' },
+      'lead-reviewer': { login: 'openadlc-sydney-janedoe', ns: 'lead-reviewer' },
     });
     expect(recorded.renamed).toEqual([
-      { name: 'builder', to: 'fleetadlc-atlas-janedoe' },
-      { name: 'lead-reviewer', to: 'fleetadlc-sydney-janedoe' },
+      { name: 'builder', to: 'openadlc-atlas-janedoe' },
+      { name: 'lead-reviewer', to: 'openadlc-sydney-janedoe' },
     ]);
   });
 });

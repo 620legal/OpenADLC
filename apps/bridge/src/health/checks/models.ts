@@ -1,4 +1,4 @@
-import type { Bot, ModelAccount, SubscriptionLogin } from '@fleetadlc/shared';
+import type { Bot, ModelAccount, SubscriptionLogin } from '@openadlc/shared';
 import type { CheckResult, HealthCheck } from '../types.js';
 import { ACCOUNTS_STEP, accountInWords, accountTrouble, atStart, quotedName, stepNamed } from '../words.js';
 

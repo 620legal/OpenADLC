@@ -19,9 +19,9 @@ describe('the repository owner check', () => {
     }).run(NOW);
 
     expect(results[0]).toMatchObject({ subject: 'exampleco/app', ok: true });
-    expect(results[1]).toMatchObject({ subject: 'exampleco/other', ok: false, severity: 'blocking', action: { command: 'fleetadlc seed' } });
+    expect(results[1]).toMatchObject({ subject: 'exampleco/other', ok: false, severity: 'blocking', action: { command: 'openadlc seed' } });
     const detail = results[1]!.ok === false ? results[1]!.detail : '';
     expect(detail).toContain('config/repos.yaml');
-    expect(detail).toContain('at every `fleetadlc up`');
+    expect(detail).toContain('at every `openadlc up`');
   });
 });

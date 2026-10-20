@@ -10,12 +10,12 @@ import { allowWarning, byAccount, RepositoryField, WaitingForApp, type Available
  */
 
 const REACHABLE: Available[] = [
-  { fullName: 'janedoe/fleetadlc-testbed', private: true, defaultBranch: 'main' },
+  { fullName: 'janedoe/openadlc-testbed', private: true, defaultBranch: 'main' },
   { fullName: 'janedoe/api', private: false, defaultBranch: 'main' },
   { fullName: 'janedoe/website', private: false, defaultBranch: 'main' },
 ];
 
-function picker(added: string[], installUrl: string | null = 'https://github.com/apps/fleetadlc/installations/new'): string {
+function picker(added: string[], installUrl: string | null = 'https://github.com/apps/openadlc/installations/new'): string {
   return renderToStaticMarkup(
     <RepositoryField added={added} installUrl={installUrl} onAdded={() => undefined} initial={{ repositories: REACHABLE }} />,
   ).replace(/<!-- -->/g, '');
@@ -32,8 +32,8 @@ function rows(html: string): string[] {
 
 describe('the repositories the app can reach', () => {
   it('says which ones OpenADLC already works in — several at once — and offers a box to tick for each of the rest', () => {
-    expect(rows(picker(['janedoe/fleetadlc-testbed', 'janedoe/website']))).toEqual([
-      'janedoe/fleetadlc-testbed private OpenADLC works here',
+    expect(rows(picker(['janedoe/openadlc-testbed', 'janedoe/website']))).toEqual([
+      'janedoe/openadlc-testbed private OpenADLC works here',
       'checkbox: janedoe/api',
       'janedoe/website OpenADLC works here',
     ]);
@@ -46,7 +46,7 @@ describe('the repositories the app can reach', () => {
   });
 
   it('offers no selection once OpenADLC works in every one it can reach', () => {
-    expect(picker(['janedoe/fleetadlc-testbed', 'janedoe/api', 'janedoe/website'])).not.toContain('Select all');
+    expect(picker(['janedoe/openadlc-testbed', 'janedoe/api', 'janedoe/website'])).not.toContain('Select all');
   });
 
   it('knows one already added whatever case GitHub or a person wrote it in', () => {
@@ -59,7 +59,7 @@ describe('the repositories the app can reach', () => {
 
   it('points to where the app is given another, for the one that is not listed', () => {
     const html = picker(['janedoe/api']);
-    expect(html).toContain('href="https://github.com/apps/fleetadlc/installations/new"');
+    expect(html).toContain('href="https://github.com/apps/openadlc/installations/new"');
     expect(html).toContain('give the app another repository');
   });
 
@@ -71,13 +71,13 @@ describe('the repositories the app can reach', () => {
 /** The install this was found on: the app private to janedoe, and OpenADLC told to work in exampleco/infra. */
 const INSTALLATIONS: InstallationsView = {
   app: {
-    slug: 'fleetadlc-janedoe',
+    slug: 'openadlc-janedoe',
     name: 'OpenADLC (janedoe)',
     owner: { login: 'janedoe', type: 'User' },
     visibility: 'private',
-    settingsUrl: 'https://github.com/settings/apps/fleetadlc-janedoe',
-    advancedUrl: 'https://github.com/settings/apps/fleetadlc-janedoe/advanced',
-    installUrl: 'https://github.com/apps/fleetadlc-janedoe/installations/new',
+    settingsUrl: 'https://github.com/settings/apps/openadlc-janedoe',
+    advancedUrl: 'https://github.com/settings/apps/openadlc-janedoe/advanced',
+    installUrl: 'https://github.com/apps/openadlc-janedoe/installations/new',
   },
   accounts: [
     {
@@ -86,14 +86,14 @@ const INSTALLATIONS: InstallationsView = {
       id: 700,
       installUrl: 'https://github.com/settings/installations/7',
       installation: { id: 7, selection: 'all', settingsUrl: 'https://github.com/settings/installations/7', suspended: false },
-      repositories: ['fleetadlc-testbed'],
+      repositories: ['openadlc-testbed'],
       fix: null,
     },
     {
       login: 'exampleco',
       type: 'Organization',
       id: 4242,
-      installUrl: 'https://github.com/apps/fleetadlc-janedoe/installations/new/permissions?target_id=4242',
+      installUrl: 'https://github.com/apps/openadlc-janedoe/installations/new/permissions?target_id=4242',
       installation: null,
       repositories: ['infra'],
       fix: null,
@@ -104,37 +104,37 @@ const INSTALLATIONS: InstallationsView = {
 
 describe('the repositories the app can reach, by account', () => {
   const html = renderToStaticMarkup(
-    <RepositoryField added={['janedoe/fleetadlc-testbed']} onAdded={() => undefined} initial={{ repositories: REACHABLE, installations: INSTALLATIONS }} />,
+    <RepositoryField added={['janedoe/openadlc-testbed']} onAdded={() => undefined} initial={{ repositories: REACHABLE, installations: INSTALLATIONS }} />,
   ).replace(/<!-- -->/g, '');
   const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
   it('heads each account’s with what the app has of it, and where to choose more', () => {
     expect(text).toContain('janedoe personal · all repositories Choose repositories ↗');
     expect(html).toContain('href="https://github.com/settings/installations/7"');
-    expect(rows(html)).toEqual(['janedoe/fleetadlc-testbed private OpenADLC works here', 'checkbox: janedoe/api', 'checkbox: janedoe/website']);
+    expect(rows(html)).toEqual(['janedoe/openadlc-testbed private OpenADLC works here', 'checkbox: janedoe/api', 'checkbox: janedoe/website']);
   });
 
   it('says to install it on the account OpenADLC works in that it is not on, past GitHub’s account picker — made public first, being private to another', () => {
     expect(text).toContain('Not listed? Install the app on exampleco ↗ and come back');
-    expect(html).toContain('href="https://github.com/apps/fleetadlc-janedoe/installations/new/permissions?target_id=4242"');
-    expect(html).not.toContain('href="https://github.com/apps/fleetadlc-janedoe/installations/new"');
+    expect(html).toContain('href="https://github.com/apps/openadlc-janedoe/installations/new/permissions?target_id=4242"');
+    expect(html).not.toContain('href="https://github.com/apps/openadlc-janedoe/installations/new"');
     expect(text).toContain(
       'It is private to janedoe, and GitHub installs a private app only on the account that owns it: make it public ↗ before installing it on exampleco.',
     );
-    expect(html).toContain('href="https://github.com/settings/apps/fleetadlc-janedoe/advanced"');
+    expect(html).toContain('href="https://github.com/settings/apps/openadlc-janedoe/advanced"');
   });
 
   it('puts each repository under its own account, the app’s own first, and one GitHub did not name under its owner', () => {
     const grouped = byAccount(
       [
         { fullName: 'exampleco/infra', private: true, defaultBranch: 'main' },
-        { fullName: 'janedoe/fleetadlc-testbed', private: true, defaultBranch: 'main' },
+        { fullName: 'janedoe/openadlc-testbed', private: true, defaultBranch: 'main' },
         { fullName: 'acme/api', private: false, defaultBranch: 'main' },
       ],
       INSTALLATIONS.accounts,
     );
     expect(grouped.map((group) => [group.owner, group.account?.login ?? null, group.repositories.map((one) => one.fullName)])).toEqual([
-      ['janedoe', 'janedoe', ['janedoe/fleetadlc-testbed']],
+      ['janedoe', 'janedoe', ['janedoe/openadlc-testbed']],
       ['exampleco', 'exampleco', ['exampleco/infra']],
       ['acme', null, ['acme/api']],
     ]);
@@ -144,13 +144,13 @@ describe('the repositories the app can reach, by account', () => {
 /** The live install: the app private to the organization exampleco, and installed there. */
 const OWN_ORGANIZATION: InstallationsView = {
   app: {
-    slug: 'fleetadlc-exampleco',
+    slug: 'openadlc-exampleco',
     name: 'OpenADLC (exampleco)',
     owner: { login: 'exampleco', type: 'Organization' },
     visibility: 'private',
-    settingsUrl: 'https://github.com/organizations/exampleco/settings/apps/fleetadlc-exampleco',
-    advancedUrl: 'https://github.com/organizations/exampleco/settings/apps/fleetadlc-exampleco/advanced',
-    installUrl: 'https://github.com/apps/fleetadlc-exampleco/installations/new',
+    settingsUrl: 'https://github.com/organizations/exampleco/settings/apps/openadlc-exampleco',
+    advancedUrl: 'https://github.com/organizations/exampleco/settings/apps/openadlc-exampleco/advanced',
+    installUrl: 'https://github.com/apps/openadlc-exampleco/installations/new',
   },
   accounts: [
     {
@@ -199,14 +199,14 @@ describe('more repositories, where the account is known', () => {
 
   it('installs on the walkthrough’s account past GitHub’s account picker, even before the app is there', () => {
     const view: InstallationsView = { ...OWN_ORGANIZATION, accounts: [] };
-    const { html, text } = field(view, 'exampleco', 'https://github.com/apps/fleetadlc-exampleco/installations/new/permissions?target_id=4242');
+    const { html, text } = field(view, 'exampleco', 'https://github.com/apps/openadlc-exampleco/installations/new/permissions?target_id=4242');
     expect(text).toContain('Install the app on exampleco ↗');
-    expect(html).toContain('href="https://github.com/apps/fleetadlc-exampleco/installations/new/permissions?target_id=4242"');
+    expect(html).toContain('href="https://github.com/apps/openadlc-exampleco/installations/new/permissions?target_id=4242"');
     expect(text).not.toContain('make it public');
   });
 
   it('says a private app has to be made public only for an account other than its owner', () => {
-    const { text } = field(OWN_ORGANIZATION, 'acme', 'https://github.com/apps/fleetadlc-exampleco/installations/new/permissions?target_id=77');
+    const { text } = field(OWN_ORGANIZATION, 'acme', 'https://github.com/apps/openadlc-exampleco/installations/new/permissions?target_id=77');
     expect(text).toContain('Install the app on acme ↗');
     expect(text).toContain('It is private to exampleco, and GitHub installs a private app only on the account that owns it: make it public ↗ before installing it on acme.');
   });
@@ -215,7 +215,7 @@ describe('more repositories, where the account is known', () => {
     const open: InstallationsView = { ...OWN_ORGANIZATION, app: { ...OWN_ORGANIZATION.app!, visibility: 'public' } };
     const known = field(open, 'exampleco');
     expect(known.text).toContain('Choose more of exampleco’s repositories ↗ , or install it on another account ↗ , and come back');
-    expect(known.html).toContain('href="https://github.com/apps/fleetadlc-exampleco/installations/new"');
+    expect(known.html).toContain('href="https://github.com/apps/openadlc-exampleco/installations/new"');
 
     const unknown = field({ ...open, accounts: [] }, null);
     expect(unknown.text).toContain('Choose more of an account’s repositories above, or install the app on another account ↗ and come back');
@@ -228,10 +228,10 @@ describe('a repository typed in that the app cannot reach yet', () => {
     need: 'make-public',
     title: 'The OpenADLC app is private to janedoe',
     detail: 'GitHub installs a private app only on the account that owns it, so it cannot go on exampleco yet.',
-    action: { label: 'Make the app public', url: 'https://github.com/settings/apps/fleetadlc-janedoe/advanced' },
+    action: { label: 'Make the app public', url: 'https://github.com/settings/apps/openadlc-janedoe/advanced' },
     steps: [
-      { text: 'Make the app public — only janedoe can', action: { label: 'Make the app public', url: 'https://github.com/settings/apps/fleetadlc-janedoe/advanced' } },
-      { text: 'Install it on exampleco and choose infra', action: { label: 'Install on exampleco', url: 'https://github.com/apps/fleetadlc-janedoe/installations/new' } },
+      { text: 'Make the app public — only janedoe can', action: { label: 'Make the app public', url: 'https://github.com/settings/apps/openadlc-janedoe/advanced' } },
+      { text: 'Install it on exampleco and choose infra', action: { label: 'Install on exampleco', url: 'https://github.com/apps/openadlc-janedoe/installations/new' } },
     ],
   };
 
@@ -244,7 +244,7 @@ describe('a repository typed in that the app cannot reach yet', () => {
       step[1]!.replace(/<svg[\s\S]*?<\/svg>/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
     );
     expect(steps).toEqual(['1 Make the app public — only janedoe can Make the app public', '2 Install it on exampleco and choose infra Install on exampleco']);
-    expect(html).toContain('href="https://github.com/apps/fleetadlc-janedoe/installations/new"');
+    expect(html).toContain('href="https://github.com/apps/openadlc-janedoe/installations/new"');
     expect(text).toContain('Waiting for GitHub… it is added as soon as the app can reach it.');
     expect(text).toContain('Stop waiting');
   });

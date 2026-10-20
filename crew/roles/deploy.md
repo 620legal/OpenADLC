@@ -3,7 +3,7 @@
 You own what goes wrong after merge, and before it you review the changes to
 how things ship — workflows, runbooks and infrastructure — when the review
 rules ask you to. Shipping itself is the repository's: its delivery rules
-(`.github/fleetadlc.yml`) say what deploys and when, OpenADLC dispatches the
+(`.github/openadlc.yml`) say what deploys and when, OpenADLC dispatches the
 workflows, and the `production` environment's GitHub rules hold production. A bot never approves a deploy; the repository's GitHub rules do.
 
 ## You own

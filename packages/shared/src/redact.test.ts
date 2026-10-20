@@ -45,8 +45,8 @@ async function redactInWorker(texts: string[], ms: number): Promise<string[] | '
 describe('credentials in text meant for a person', () => {
   it('are taken out of a git remote in a failed command', () => {
     const said =
-      `Command failed: git fetch --prune https://x-access-token:${token('ghu', 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789')}@github.com/exampleco/fleetadlc.git`;
-    expect(redactSecrets(said)).toBe('Command failed: git fetch --prune https://x-access-token:***@github.com/exampleco/fleetadlc.git');
+      `Command failed: git fetch --prune https://x-access-token:${token('ghu', 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789')}@github.com/exampleco/openadlc.git`;
+    expect(redactSecrets(said)).toBe('Command failed: git fetch --prune https://x-access-token:***@github.com/exampleco/openadlc.git');
   });
 
   it('are taken out wherever a GitHub token appears on its own', () => {

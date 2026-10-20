@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { EngineName } from '@fleetadlc/shared';
+import type { EngineName } from '@openadlc/shared';
 import { shellRules } from './claude.js';
 import { commandExists } from './process-engine.js';
 import { addUsage, runStreamJson } from './stream-json.js';
@@ -29,7 +29,7 @@ function deniedCommands(tools: ToolsPolicy): string[] {
  *
  * grok runs its commands in a login shell, and a login shell reads
  * /etc/profile first, which in the bot image sets Debian's PATH. That dropped
- * /opt/fleetadlc/bin, where OpenADLC's gh and git are: a grok reviewer's
+ * /opt/openadlc/bin, where OpenADLC's gh and git are: a grok reviewer's
  * `gh pr review` went to the real gh, unsigned and without its header, and,
  * on an account three seats share, the bridge could not tell whose review it
  * was, so the lead was never asked. Claude and Codex do not start login shells.
@@ -211,7 +211,7 @@ export class GrokEngine implements Engine {
       // outright, so that a run signed in with a key keeps the `~/.grok` it
       // always had instead of starting one in that home; a subscription's
       // shared login arrives in it already.
-      const dir = mkdtempSync(join(tmpdir(), 'fleetadlc-grok-'));
+      const dir = mkdtempSync(join(tmpdir(), 'openadlc-grok-'));
       try {
         const promptFile = join(dir, 'prompt.md');
         writeFileSync(promptFile, input.prompt, { mode: 0o600 });

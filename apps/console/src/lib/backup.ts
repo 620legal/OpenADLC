@@ -6,7 +6,7 @@ import { countWords } from './crew';
  * Settings card and the walkthrough use.
  *
  * What goes in an archive and how it comes back is decided by the bridge —
- * the same code `fleetadlc backup` runs — and it answers with names, never values.
+ * the same code `openadlc backup` runs — and it answers with names, never values.
  * These are its answers' shapes, and the choice a person makes on the card, so
  * the card can say what it will download before anything is downloaded.
  */
@@ -47,7 +47,7 @@ export interface HistoryCounts {
 
 /**
  * What a person chose. The two sign-in ticks are null until somebody touches
- * them, and until then they follow the rule the bridge and `fleetadlc backup` use:
+ * them, and until then they follow the rule the bridge and `openadlc backup` use:
  * on for the whole install, off for part of it.
  */
 export interface BackupChoice {
@@ -252,7 +252,7 @@ export function backupRequest(choice: BackupChoice, passphrase: string, again: s
 /** The file's name, as the bridge gave it, or the one it would have. */
 export function backupFilename(disposition: string | null, now: Date = new Date()): string {
   const named = /filename="([^"]+)"/.exec(disposition ?? '')?.[1];
-  return named && /^[\w.-]+$/.test(named) ? named : `fleetadlc-backup-${now.toISOString().slice(0, 10)}.fleetbak`;
+  return named && /^[\w.-]+$/.test(named) ? named : `openadlc-backup-${now.toISOString().slice(0, 10)}.fleetbak`;
 }
 
 // ------------------------------------------------------------------ restoring

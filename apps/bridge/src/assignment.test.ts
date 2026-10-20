@@ -1,8 +1,8 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ModelAccount } from '@fleetadlc/db';
-import type { Bot } from '@fleetadlc/shared';
+import type { ModelAccount } from '@openadlc/db';
+import type { Bot } from '@openadlc/shared';
 import { join } from 'node:path';
 import { assignBotModel, defaultAssignmentDeps, registerAssignmentRoutes, type AssignmentDeps } from './assignment.js';
 import { Router } from './router.js';
@@ -201,7 +201,7 @@ describe('assigning a model from the console', () => {
 
   it('reads what the configuration gives a bot by its seat, not by the handle it goes by', async () => {
     // config/bots.yaml is keyed by seat. The security reviewer is connected as
-    // fleetadlc-cipher-janedoe, and a lookup by that name found no entry — so a
+    // openadlc-cipher-janedoe, and a lookup by that name found no entry — so a
     // cleared account left it on the engine the account had moved it to.
     const configured = vi.fn((seat: { slot: string }) =>
       seat.slot === 'security-reviewer' ? { engine: 'codex', model: 'gpt-5-codex' } : null,
@@ -209,7 +209,7 @@ describe('assigning a model from the console', () => {
     const used = deps({
       listBots: vi.fn(async () => [
         bot({
-          name: 'fleetadlc-cipher-janedoe',
+          name: 'openadlc-cipher-janedoe',
           slot: 'security-reviewer',
           engine: 'claude',
           model: 'claude-opus-5',
@@ -219,7 +219,7 @@ describe('assigning a model from the console', () => {
       configured,
     });
 
-    await assignBotModel({ botName: 'fleetadlc-cipher-janedoe', modelAccountId: null, actor: 'ada' }, used);
+    await assignBotModel({ botName: 'openadlc-cipher-janedoe', modelAccountId: null, actor: 'ada' }, used);
 
     expect(configured).toHaveBeenCalledWith({ slot: 'security-reviewer', role: 'implement' });
     expect(used.setAssignment).toHaveBeenCalledWith('bot-1', { engine: 'codex', model: 'gpt-5-codex', modelAccountId: null });

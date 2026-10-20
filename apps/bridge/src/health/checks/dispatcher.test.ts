@@ -17,28 +17,28 @@ describe('the dispatcher check', () => {
     expect(result).toMatchObject({ ok: false, severity: 'blocking', title: DISPATCHER_OFF_TITLE });
     expect(DISPATCHER_OFF_TITLE).toBe('The dispatcher isn’t running: nothing will start building');
     const detail = result!.ok === false ? result!.detail : '';
-    expect(detail).toContain('FLEETADLC_DISPATCH_IN_BRIDGE=1');
+    expect(detail).toContain('OPENADLC_DISPATCH_IN_BRIDGE=1');
     expect(detail).toContain('restart the bridge');
     expect(detail).toContain('Settings → Pause work');
-    expect(result).toMatchObject({ action: { label: 'Restart OpenADLC', command: 'fleetadlc down && fleetadlc up' } });
+    expect(result).toMatchObject({ action: { label: 'Restart OpenADLC', command: 'openadlc down && openadlc up' } });
   });
 
   it('on Cloud Run offers to apply the cloud install again, not a restart on the operator’s machine', async () => {
     const [result] = await dispatcherCheck({ dispatching: false, scripted: false, cloud: true }).run(NOW);
 
-    expect(result).toMatchObject({ ok: false, severity: 'blocking', action: { label: 'Apply the cloud install again', command: 'fleetadlc cloud apply' } });
+    expect(result).toMatchObject({ ok: false, severity: 'blocking', action: { label: 'Apply the cloud install again', command: 'openadlc cloud apply' } });
     const detail = result!.ok === false ? result!.detail : '';
-    expect(detail).toContain('the cloud module sets FLEETADLC_DISPATCH_IN_BRIDGE=1');
+    expect(detail).toContain('the cloud module sets OPENADLC_DISPATCH_IN_BRIDGE=1');
     expect(detail).toContain('infra/gcp/main.tf');
-    expect(detail).not.toContain('fleetadlc up');
+    expect(detail).not.toContain('openadlc up');
   });
 
   it('reads the mode from the environment once, for the check and the pause route alike', () => {
-    expect(dispatchModeOf(false, { K_SERVICE: 'fleetadlc-bridge' })).toEqual({ dispatching: false, scripted: false, cloud: true });
-    expect(dispatchModeOf(false, { FLEETADLC_SCRIPTED_ENGINES: '1' })).toEqual({ dispatching: false, scripted: true, cloud: false });
+    expect(dispatchModeOf(false, { K_SERVICE: 'openadlc-bridge' })).toEqual({ dispatching: false, scripted: false, cloud: true });
+    expect(dispatchModeOf(false, { OPENADLC_SCRIPTED_ENGINES: '1' })).toEqual({ dispatching: false, scripted: true, cloud: false });
     expect(anythingDispatches(dispatchModeOf(false, {}))).toBe(false);
     expect(anythingDispatches(dispatchModeOf(true, {}))).toBe(true);
-    expect(anythingDispatches(dispatchModeOf(false, { FLEETADLC_SCRIPTED_ENGINES: '1' }))).toBe(true);
+    expect(anythingDispatches(dispatchModeOf(false, { OPENADLC_SCRIPTED_ENGINES: '1' }))).toBe(true);
   });
 
   it('passes on a bridge that runs the dispatcher, and says so once when it comes back', async () => {

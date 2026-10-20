@@ -21,8 +21,8 @@ import {
 
 describe('a webhook secret for a new install', () => {
   it('generates one when the install has none', () => {
-    const first = ensureWebhookSecret(defaultConfig('/tmp/fleetadlc'));
-    const second = ensureWebhookSecret(defaultConfig('/tmp/fleetadlc'));
+    const first = ensureWebhookSecret(defaultConfig('/tmp/openadlc'));
+    const second = ensureWebhookSecret(defaultConfig('/tmp/openadlc'));
 
     expect(first.generated).toBe(true);
     expect(first.config.webhookSecret).toMatch(/^[0-9a-f]{64}$/);
@@ -31,7 +31,7 @@ describe('a webhook secret for a new install', () => {
   });
 
   it('keeps an existing one', () => {
-    const config = { ...defaultConfig('/tmp/fleetadlc'), webhookSecret: 'already-set' };
+    const config = { ...defaultConfig('/tmp/openadlc'), webhookSecret: 'already-set' };
     const next = ensureWebhookSecret(config);
 
     expect(next.generated).toBe(false);
@@ -41,13 +41,13 @@ describe('a webhook secret for a new install', () => {
 });
 
 /**
- * Every install's platform database took `fleetadlc`/`fleetadlc`, a password
+ * Every install's platform database took `openadlc`/`openadlc`, a password
  * printed in this repository, as its superuser — from the LAN, and from any
  * task's computer through `host.docker.internal`.
  */
 describe('a database password for an install', () => {
   it('replaces the published one with one of the install’s own', () => {
-    const fresh = defaultConfig('/tmp/fleetadlc');
+    const fresh = defaultConfig('/tmp/openadlc');
     const first = ensureDatabasePassword(fresh);
     const second = ensureDatabasePassword(fresh);
 
@@ -56,12 +56,12 @@ describe('a database password for an install', () => {
     // Two installs, or two calls, never share one.
     expect(second.config.databaseUrl).not.toBe(first.config.databaseUrl);
     // Only the password changes.
-    expect(first.config.databaseUrl).toMatch(/^postgres:\/\/fleetadlc:[0-9a-f]{64}@127\.0\.0\.1:47432\/fleetadlc_db$/);
-    expect(fresh.databaseUrl).toBe('postgres://fleetadlc:fleetadlc@127.0.0.1:47432/fleetadlc_db');
+    expect(first.config.databaseUrl).toMatch(/^postgres:\/\/openadlc:[0-9a-f]{64}@127\.0\.0\.1:47432\/openadlc_db$/);
+    expect(fresh.databaseUrl).toBe('postgres://openadlc:openadlc@127.0.0.1:47432/openadlc_db');
   });
 
   it('replaces the superuser from before the rename the same way', () => {
-    const config = { ...defaultConfig('/tmp/fleetadlc'), databaseUrl: 'postgres://fleet:fleet@127.0.0.1:47432/fleet_db' };
+    const config = { ...defaultConfig('/tmp/openadlc'), databaseUrl: 'postgres://fleet:fleet@127.0.0.1:47432/fleet_db' };
     const next = ensureDatabasePassword(config);
     expect(next.generated).toBe(true);
     expect(databaseCredentials(next.config.databaseUrl)?.user).toBe('fleet');
@@ -74,10 +74,10 @@ describe('a database password for an install', () => {
 
   it('keeps any other password, an external server’s included', () => {
     for (const databaseUrl of [
-      'postgres://fleetadlc:0123abcd@127.0.0.1:47432/fleetadlc_db',
-      'postgres://app:s3cret@db.internal:5432/fleetadlc_db?sslmode=require',
+      'postgres://openadlc:0123abcd@127.0.0.1:47432/openadlc_db',
+      'postgres://app:s3cret@db.internal:5432/openadlc_db?sslmode=require',
     ]) {
-      const config = { ...defaultConfig('/tmp/fleetadlc'), databaseUrl };
+      const config = { ...defaultConfig('/tmp/openadlc'), databaseUrl };
       const next = ensureDatabasePassword(config);
       expect(next.generated).toBe(false);
       expect(next.config).toBe(config);
@@ -91,10 +91,10 @@ describe('a database password for an install', () => {
 });
 
 /**
- * Which secret `fleetadlc init` keeps.
+ * Which secret `openadlc init` keeps.
  *
  * An operator who followed the self-hosting guide gave GitHub a secret and put
- * the same value in FLEETADLC_WEBHOOK_SECRET. Onboarding then saw nothing in the
+ * the same value in OPENADLC_WEBHOOK_SECRET. Onboarding then saw nothing in the
  * install file or the database, generated another, and stored it in the
  * database, which the bridge prefers to its environment — so every real
  * delivery was refused.
@@ -120,7 +120,7 @@ describe('settling on a webhook secret', () => {
   it('keeps the one in the environment, and writes nothing to the database', async () => {
     const { written, from } = sources({ environment: 'the-one-github-has' });
 
-    const settled = await settleWebhookSecret(defaultConfig('/tmp/fleetadlc'), from);
+    const settled = await settleWebhookSecret(defaultConfig('/tmp/openadlc'), from);
 
     expect(settled.source).toBe('environment');
     expect(settled.config.webhookSecret).toBe('the-one-github-has');
@@ -130,7 +130,7 @@ describe('settling on a webhook secret', () => {
   it('prefers a stored one to the environment, because the bridge does', async () => {
     const { written, from } = sources({ environment: 'from-the-shell', stored: 'from-the-console' });
 
-    const settled = await settleWebhookSecret(defaultConfig('/tmp/fleetadlc'), from);
+    const settled = await settleWebhookSecret(defaultConfig('/tmp/openadlc'), from);
 
     expect(settled.source).toBe('stored');
     expect(settled.config.webhookSecret).toBe('from-the-console');
@@ -139,7 +139,7 @@ describe('settling on a webhook secret', () => {
 
   it('keeps the one in the install file without asking anything else', async () => {
     const { written, from } = sources({ environment: 'other', stored: 'another' });
-    const config = { ...defaultConfig('/tmp/fleetadlc'), webhookSecret: 'already-set' };
+    const config = { ...defaultConfig('/tmp/openadlc'), webhookSecret: 'already-set' };
 
     const settled = await settleWebhookSecret(config, from);
 
@@ -150,7 +150,7 @@ describe('settling on a webhook secret', () => {
   it('generates and stores one only when there is none anywhere', async () => {
     const { written, from } = sources({ environment: '' });
 
-    const settled = await settleWebhookSecret(defaultConfig('/tmp/fleetadlc'), from);
+    const settled = await settleWebhookSecret(defaultConfig('/tmp/openadlc'), from);
 
     expect(settled.source).toBe('generated');
     expect(settled.config.webhookSecret).toMatch(/^[0-9a-f]{64}$/);
@@ -160,7 +160,7 @@ describe('settling on a webhook secret', () => {
   it('still uses the environment when the database cannot be read', async () => {
     const { written, from } = sources({ environment: 'the-one-github-has', unreachable: true });
 
-    const settled = await settleWebhookSecret(defaultConfig('/tmp/fleetadlc'), from);
+    const settled = await settleWebhookSecret(defaultConfig('/tmp/openadlc'), from);
 
     expect(settled.config.webhookSecret).toBe('the-one-github-has');
     expect(written).toEqual([]);
@@ -170,29 +170,29 @@ describe('settling on a webhook secret', () => {
 describe('which bot is the automation account', () => {
   it('is left to the bridge, which finds it by role, unless the install names one', () => {
     // Every install.json used to say `flow`, and every service was started
-    // with FLEETADLC_AUTOMATION_BOT=flow — a name that is nobody once the seat
+    // with OPENADLC_AUTOMATION_BOT=flow — a name that is nobody once the seat
     // takes its account's handle.
     const fresh = defaultConfig('/repo');
     expect(fresh).not.toHaveProperty('automationBotName');
-    expect(serviceEnv(fresh)).not.toHaveProperty('FLEETADLC_AUTOMATION_BOT');
+    expect(serviceEnv(fresh)).not.toHaveProperty('OPENADLC_AUTOMATION_BOT');
 
-    expect(serviceEnv({ ...fresh, automationBotName: 'automation' }).FLEETADLC_AUTOMATION_BOT).toBe('automation');
+    expect(serviceEnv({ ...fresh, automationBotName: 'automation' }).OPENADLC_AUTOMATION_BOT).toBe('automation');
   });
 });
 
 describe('the names an install is opened under', () => {
   it('are handed to every service from install.json, and nothing is set when it lists none', () => {
     const fresh = defaultConfig('/repo');
-    expect(serviceEnv(fresh)).not.toHaveProperty('FLEETADLC_ALLOWED_HOSTS');
+    expect(serviceEnv(fresh)).not.toHaveProperty('OPENADLC_ALLOWED_HOSTS');
 
-    expect(serviceEnv({ ...fresh, allowedHosts: ['mybox.lan', 'fleetadlc.tailnet.ts.net'] }).FLEETADLC_ALLOWED_HOSTS).toBe(
-      'mybox.lan,fleetadlc.tailnet.ts.net',
+    expect(serviceEnv({ ...fresh, allowedHosts: ['mybox.lan', 'openadlc.tailnet.ts.net'] }).OPENADLC_ALLOWED_HOSTS).toBe(
+      'mybox.lan,openadlc.tailnet.ts.net',
     );
   });
 
   it('takes a single name written as a string, and refuses anything else with what to write', () => {
     const fresh = defaultConfig('/repo');
-    expect(serviceEnv({ ...fresh, allowedHosts: 'mybox.lan' as never }).FLEETADLC_ALLOWED_HOSTS).toBe('mybox.lan');
+    expect(serviceEnv({ ...fresh, allowedHosts: 'mybox.lan' as never }).OPENADLC_ALLOWED_HOSTS).toBe('mybox.lan');
     expect(() => allowedHostsOf({ allowedHosts: 5 as never })).toThrow(/must be a list of names, e\.g\. "allowedHosts": \["mybox\.lan"\]/);
   });
 });
@@ -212,20 +212,20 @@ describe('the driver an install names', () => {
 
 describe('what install.json leaves to the environment', () => {
   it('sets the organization, client id, public address and humans only when it has them', () => {
-    // `fleetadlc github` tells an operator to export FLEETADLC_HUMANS; an empty
+    // `openadlc github` tells an operator to export OPENADLC_HUMANS; an empty
     // value from install.json replaced it, and the bridge saw nobody.
     const fresh = defaultConfig('/repo');
     const env = serviceEnv(fresh);
-    for (const key of ['FLEETADLC_GITHUB_ORG', 'FLEETADLC_GITHUB_CLIENT_ID', 'FLEETADLC_PUBLIC_URL', 'FLEETADLC_HUMANS']) {
+    for (const key of ['OPENADLC_GITHUB_ORG', 'OPENADLC_GITHUB_CLIENT_ID', 'OPENADLC_PUBLIC_URL', 'OPENADLC_HUMANS']) {
       expect(env).not.toHaveProperty(key);
     }
 
     const set = serviceEnv({ ...fresh, organization: 'exampleco', githubClientId: 'Iv1.zzz', publicUrl: 'https://fleet.example.test', humans: ['alex', 'sam'] });
     expect(set).toMatchObject({
-      FLEETADLC_GITHUB_ORG: 'exampleco',
-      FLEETADLC_GITHUB_CLIENT_ID: 'Iv1.zzz',
-      FLEETADLC_PUBLIC_URL: 'https://fleet.example.test',
-      FLEETADLC_HUMANS: 'alex,sam',
+      OPENADLC_GITHUB_ORG: 'exampleco',
+      OPENADLC_GITHUB_CLIENT_ID: 'Iv1.zzz',
+      OPENADLC_PUBLIC_URL: 'https://fleet.example.test',
+      OPENADLC_HUMANS: 'alex,sam',
     });
   });
 });
@@ -236,9 +236,9 @@ describe('the install folder', () => {
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const { homeIsOpen, makeHomePrivate, runtimeDir } = await import('./install.js');
-    const scratch = mkdtempSync(join(tmpdir(), 'fleetadlc-home-'));
-    const before = process.env.FLEETADLC_HOME;
-    process.env.FLEETADLC_HOME = join(scratch, 'home');
+    const scratch = mkdtempSync(join(tmpdir(), 'openadlc-home-'));
+    const before = process.env.OPENADLC_HOME;
+    process.env.OPENADLC_HOME = join(scratch, 'home');
     try {
       expect(homeIsOpen()).toBeNull();
       const run = runtimeDir();
@@ -251,8 +251,8 @@ describe('the install folder', () => {
       expect(statSync(join(scratch, 'home')).mode & 0o777).toBe(0o700);
       expect(makeHomePrivate()).toBe(false);
     } finally {
-      if (before === undefined) delete process.env.FLEETADLC_HOME;
-      else process.env.FLEETADLC_HOME = before;
+      if (before === undefined) delete process.env.OPENADLC_HOME;
+      else process.env.OPENADLC_HOME = before;
       rmSync(scratch, { recursive: true, force: true });
     }
   });
@@ -278,9 +278,9 @@ describe('the driver for an install that names none', () => {
   });
 
   it('is told from one install.json names, which a missing key no longer looks like', () => {
-    const home = mkdtempSync(join(tmpdir(), 'fleetadlc-driver-'));
-    const before = process.env.FLEETADLC_HOME;
-    process.env.FLEETADLC_HOME = home;
+    const home = mkdtempSync(join(tmpdir(), 'openadlc-driver-'));
+    const before = process.env.OPENADLC_HOME;
+    process.env.OPENADLC_HOME = home;
     try {
       expect(storedDriver()).toBeUndefined();
       writeFileSync(join(home, 'install.json'), JSON.stringify({ organization: 'exampleco' }));
@@ -290,8 +290,8 @@ describe('the driver for an install that names none', () => {
       writeFileSync(join(home, 'install.json'), JSON.stringify({ driver: 'Docker' }));
       expect(storedDriver()).toBe('docker');
     } finally {
-      if (before === undefined) delete process.env.FLEETADLC_HOME;
-      else process.env.FLEETADLC_HOME = before;
+      if (before === undefined) delete process.env.OPENADLC_HOME;
+      else process.env.OPENADLC_HOME = before;
       rmSync(home, { recursive: true, force: true });
     }
   });
@@ -304,15 +304,15 @@ describe('the driver for an install that names none', () => {
  */
 describe('a hand-edited install.json', () => {
   const load = (file: unknown) => {
-    const home = mkdtempSync(join(tmpdir(), 'fleetadlc-load-'));
-    const before = process.env.FLEETADLC_HOME;
-    process.env.FLEETADLC_HOME = home;
+    const home = mkdtempSync(join(tmpdir(), 'openadlc-load-'));
+    const before = process.env.OPENADLC_HOME;
+    process.env.OPENADLC_HOME = home;
     try {
       writeFileSync(join(home, 'install.json'), JSON.stringify(file));
-      return loadConfig('/tmp/fleetadlc');
+      return loadConfig('/tmp/openadlc');
     } finally {
-      if (before === undefined) delete process.env.FLEETADLC_HOME;
-      else process.env.FLEETADLC_HOME = before;
+      if (before === undefined) delete process.env.OPENADLC_HOME;
+      else process.env.OPENADLC_HOME = before;
       rmSync(home, { recursive: true, force: true });
     }
   };
@@ -325,23 +325,23 @@ describe('a hand-edited install.json', () => {
 
   it('points the default database at the postgres port it names, and keeps a url it writes', () => {
     expect(load({ ports: { postgres: 58432 } }).databaseUrl).toContain('127.0.0.1:58432/');
-    const written = 'postgres://u:p@db.example.com:5432/fleetadlc_db';
+    const written = 'postgres://u:p@db.example.com:5432/openadlc_db';
     expect(load({ ports: { postgres: 58432 }, databaseUrl: written }).databaseUrl).toBe(written);
   });
 
   it('names the file, and what to do, when it is not JSON', () => {
     // A trailing comma stopped every command with JSON.parse's words alone.
-    const home = mkdtempSync(join(tmpdir(), 'fleetadlc-load-'));
-    const before = process.env.FLEETADLC_HOME;
-    process.env.FLEETADLC_HOME = home;
+    const home = mkdtempSync(join(tmpdir(), 'openadlc-load-'));
+    const before = process.env.OPENADLC_HOME;
+    process.env.OPENADLC_HOME = home;
     try {
       writeFileSync(join(home, 'install.json'), '{"driver": "local",}');
-      expect(() => loadConfig('/tmp/fleetadlc')).toThrow(`${join(home, 'install.json')} is not valid JSON`);
-      expect(() => loadConfig('/tmp/fleetadlc')).toThrow('fix it, or move it aside');
+      expect(() => loadConfig('/tmp/openadlc')).toThrow(`${join(home, 'install.json')} is not valid JSON`);
+      expect(() => loadConfig('/tmp/openadlc')).toThrow('fix it, or move it aside');
       expect(() => storedDriver()).toThrow(`${join(home, 'install.json')} is not valid JSON`);
     } finally {
-      if (before === undefined) delete process.env.FLEETADLC_HOME;
-      else process.env.FLEETADLC_HOME = before;
+      if (before === undefined) delete process.env.OPENADLC_HOME;
+      else process.env.OPENADLC_HOME = before;
       rmSync(home, { recursive: true, force: true });
     }
   });
@@ -349,7 +349,7 @@ describe('a hand-edited install.json', () => {
   it('takes humans written as one string', () => {
     const config = load({ humans: 'alice' });
     expect(config.humans).toEqual(['alice']);
-    expect(serviceEnv(config).FLEETADLC_HUMANS).toBe('alice');
+    expect(serviceEnv(config).OPENADLC_HUMANS).toBe('alice');
     expect(load({ humans: 'alice, bob' }).humans).toEqual(['alice', 'bob']);
   });
 
@@ -379,18 +379,18 @@ describe('a DATABASE_URL exported beside install.json', () => {
   // main fills only what the shell has not set, so a stale export beat
   // install.json for the commands that open the database themselves, while
   // `up` gave the services install.json's: a restore wrote to two databases.
-  const install = { databaseUrl: 'postgres://fleetadlc:install-secret@127.0.0.1:47432/fleetadlc_db' };
-  const scratch = 'postgres://fleetadlc:scratch-secret@127.0.0.1:58432/fleetadlc_db';
+  const install = { databaseUrl: 'postgres://openadlc:install-secret@127.0.0.1:47432/openadlc_db' };
+  const scratch = 'postgres://openadlc:scratch-secret@127.0.0.1:58432/openadlc_db';
 
   it('is a conflict when it differs, named with both passwords masked', () => {
     const conflict = databaseUrlConflict(install, { DATABASE_URL: scratch });
     expect(conflict).toEqual({
-      shell: 'postgres://fleetadlc:***@127.0.0.1:58432/fleetadlc_db',
-      install: 'postgres://fleetadlc:***@127.0.0.1:47432/fleetadlc_db',
+      shell: 'postgres://openadlc:***@127.0.0.1:58432/openadlc_db',
+      install: 'postgres://openadlc:***@127.0.0.1:47432/openadlc_db',
     });
-    const message = databaseConflictMessage(conflict!, '/home/ada/.fleetadlc');
+    const message = databaseConflictMessage(conflict!, '/home/ada/.openadlc');
     expect(message).toBe(
-      'DATABASE_URL in this shell is postgres://fleetadlc:***@127.0.0.1:58432/fleetadlc_db, but the install at /home/ada/.fleetadlc uses postgres://fleetadlc:***@127.0.0.1:47432/fleetadlc_db. Run: unset DATABASE_URL',
+      'DATABASE_URL in this shell is postgres://openadlc:***@127.0.0.1:58432/openadlc_db, but the install at /home/ada/.openadlc uses postgres://openadlc:***@127.0.0.1:47432/openadlc_db. Run: unset DATABASE_URL',
     );
     expect(message).not.toMatch(/secret/);
   });

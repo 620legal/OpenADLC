@@ -18,7 +18,7 @@ import { summarizeRestore, type RestoreSummary } from './summary.js';
 /**
  * A restore from start to finish, the same wherever it is run from.
  *
- * The walkthrough's restore onto a clean install, `fleetadlc restore`, and a
+ * The walkthrough's restore onto a clean install, `openadlc restore`, and a
  * restore into an install that is already set up all come through here, with
  * the archive's sign-ins already judged (`judgeSignIns`) and a choice made of
  * them. In order:

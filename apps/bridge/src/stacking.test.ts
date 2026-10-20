@@ -1,4 +1,4 @@
-import { leases } from '@fleetadlc/db';
+import { leases } from '@openadlc/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { startBuild } from './build-start.js';
 import { STACK_MADE, STACK_PAUSED, STACK_STARTED, STACK_UPDATED, STACK_UPDATING, Stacking } from './stacking.js';
@@ -26,7 +26,7 @@ const world = vi.hoisted(() => ({
   unfinished: 0,
 }));
 
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   bots: { listBots: vi.fn(async () => [{ id: 'bot-1', name: 'atlas' }]) },
   issues: {
     getIssue: vi.fn(async (_repo: string, number: number) => world.issues.get(number) ?? null),
@@ -159,9 +159,9 @@ describe('an issue that depends on one in review', () => {
     expect(world.stacks.get(5)).toMatchObject({ repoId: 'repo-1', issue: 5, onIssue: 4, onPr: 30, onBranch: A_BRANCH });
   });
 
-  it('leases for as long as FLEETADLC_LEASE_HOURS says, as every other lease does', async () => {
+  it('leases for as long as OPENADLC_LEASE_HOURS says, as every other lease does', async () => {
     // It was twelve hours whatever the install set.
-    vi.stubEnv('FLEETADLC_LEASE_HOURS', '3');
+    vi.stubEnv('OPENADLC_LEASE_HOURS', '3');
     try {
       const { subject } = stacking();
       await subject.sweep();
@@ -193,7 +193,7 @@ describe('an issue that depends on one in review', () => {
     });
 
     expect(await subject.sweep()).toEqual([
-      'shop: no stacked work started, since .github/fleetadlc.yml could not be read: GitHub answered 502: Bad Gateway',
+      'shop: no stacked work started, since .github/openadlc.yml could not be read: GitHub answered 502: Bad Gateway',
       `cart#5: stacked on #4, from ${A_BRANCH}`,
     ]);
     expect(build).toHaveBeenCalledTimes(1);
@@ -319,7 +319,7 @@ describe('an issue that depends on one in review', () => {
 
     expect(await subject.sweep()).toEqual(['shop#5: held, #4 was sent back']);
 
-    expect(client.addLabels).toHaveBeenCalledWith('janedoe/shop', 5, ['fleetadlc:paused']);
+    expect(client.addLabels).toHaveBeenCalledWith('janedoe/shop', 5, ['openadlc:paused']);
     expect(world.holds).toEqual([{ subject: 'shop#5', why: expect.stringContaining('#4, which this was built on, was sent back') }]);
     expect(client.comment).toHaveBeenCalledWith('janedoe/shop', 5, expect.stringContaining('**Held.**'));
     expect(events.at(-1)).toMatchObject({ type: STACK_PAUSED, payload: { repo: 'shop', issue: 5, on: 4 } });
@@ -336,7 +336,7 @@ describe('an issue that depends on one in review', () => {
 
     for (const said of [
       'Resume it from its card in OpenADLC once #4 is settled',
-      'take the `fleetadlc:paused` label off this issue and its pull request',
+      'take the `openadlc:paused` label off this issue and its pull request',
       'cancel it from its card and file the work again as a new issue',
     ]) {
       expect(client.comment).toHaveBeenCalledWith('janedoe/shop', 5, expect.stringContaining(said));
@@ -372,7 +372,7 @@ describe('an issue that depends on one in review', () => {
 
     expect(await subject.sweep()).toEqual(['shop#5: held, #4 was closed without merging']);
 
-    expect(client.addLabels).toHaveBeenCalledWith('janedoe/shop', 5, ['fleetadlc:paused']);
+    expect(client.addLabels).toHaveBeenCalledWith('janedoe/shop', 5, ['openadlc:paused']);
     expect(world.holds).toEqual([{ subject: 'shop#5', why: '#4, which this was built on, was closed without merging' }]);
     expect(client.comment).toHaveBeenCalledWith('janedoe/shop', 5, expect.stringContaining('#4 was closed without merging'));
     expect(world.stacks.get(5)?.pausedAt).not.toBeNull();
@@ -479,7 +479,7 @@ describe('a stacked build the dispatcher would not start', () => {
     world.issues.set(4, { ...world.issues.get(4)!, stage: 'build' });
 
     expect(await subject.sweep()).toEqual(['shop#5: held, #4 was sent back']);
-    expect(client.addLabels).toHaveBeenCalledWith('janedoe/shop', 5, ['fleetadlc:paused']);
+    expect(client.addLabels).toHaveBeenCalledWith('janedoe/shop', 5, ['openadlc:paused']);
   });
 
   it('starts nothing where nothing dispatches', async () => {

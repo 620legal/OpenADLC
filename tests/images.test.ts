@@ -126,7 +126,7 @@ describe('node-pty in the service image', () => {
   it('is compiled in the build stage, after the production install that would throw it away', () => {
     expect(build).toMatch(/apt-get install -y --no-install-recommends[\s\\]+python3 make g\+\+/);
     const prodInstall = build.lastIndexOf('pnpm install --prod');
-    const rebuild = build.indexOf('pnpm --filter @fleetadlc/hostd rebuild node-pty');
+    const rebuild = build.indexOf('pnpm --filter @openadlc/hostd rebuild node-pty');
     expect(prodInstall).toBeGreaterThan(-1);
     expect(rebuild).toBeGreaterThan(prodInstall);
     // And loaded once, so a module that did not build fails the image build.
@@ -164,7 +164,7 @@ describe('the bot image proves the exact Node and gh versions', () => {
 
 /** What `build-bot-image.sh` keeps gh from, with a `docker` on the PATH whose builder has `driver`. */
 function ghFrom(image: string, driver: string | null): string {
-  const bin = mkdtempSync(join(tmpdir(), 'fleetadlc-docker-'));
+  const bin = mkdtempSync(join(tmpdir(), 'openadlc-docker-'));
   try {
     const answer = driver === null ? 'exit 1' : `printf 'Name: b\\nDriver: %s\\n' '${driver}'; exit 0`;
     writeFileSync(join(bin, 'docker'), `#!/bin/sh\nif [ "$1" = buildx ] && [ "$2" = inspect ]; then ${answer}; fi\nexit 1\n`);
@@ -181,12 +181,12 @@ function ghFrom(image: string, driver: string | null): string {
 
 describe('keeping the running image’s gh', () => {
   it('keeps it on Docker’s own builder, and on the classic one, which see this host’s images', () => {
-    expect(ghFrom('fleetadlc-bot:latest', 'docker')).toBe('fleetadlc-bot:latest');
-    expect(ghFrom('fleetadlc-bot:latest', null)).toBe('fleetadlc-bot:latest');
+    expect(ghFrom('openadlc-bot:latest', 'docker')).toBe('openadlc-bot:latest');
+    expect(ghFrom('openadlc-bot:latest', null)).toBe('openadlc-bot:latest');
   });
 
   it('installs from the apt repository on a builder that cannot see the image, rather than failing to pull it', () => {
-    expect(ghFrom('fleetadlc-bot:latest', 'docker-container')).toBe('');
+    expect(ghFrom('openadlc-bot:latest', 'docker-container')).toBe('');
     expect(ghFrom('', 'docker')).toBe('');
   });
 });
@@ -257,7 +257,7 @@ describe('what the images built from the repository root take with them', () => 
 
   it('makes the bridge’s webhook-secret directory node’s, so a new volume over it is', () => {
     const final = readFileSync(join(ROOT, 'infra', 'local', 'Dockerfile.service'), 'utf8').split(/^FROM /m).pop() ?? '';
-    expect(final).toMatch(/^RUN mkdir -p \/var\/lib\/fleetadlc && chown node:node \/var\/lib\/fleetadlc$/m);
+    expect(final).toMatch(/^RUN mkdir -p \/var\/lib\/openadlc && chown node:node \/var\/lib\/openadlc$/m);
   });
 
   it('keeps Node’s own LICENSE when it unpacks a named release', () => {

@@ -35,9 +35,9 @@ export function repoOwnerCheck(reader: RepoOwnerReader): HealthCheck {
           detail:
             'The dispatcher leases a repository’s issues to its owner and the bots that share the owner’s role, and skips one ' +
             'with no owner. Set its `owner` in config/repos.yaml to a seat from config/bots.yaml, such as `builder`, and run ' +
-            '`fleetadlc seed`: a repository listed there takes the file’s settings at every `fleetadlc up`. One that is not ' +
+            '`openadlc seed`: a repository listed there takes the file’s settings at every `openadlc up`. One that is not ' +
             'listed there is given the builder when it is added again in Settings → Repositories.',
-          action: { label: 'Seed the repositories again', command: 'fleetadlc seed' },
+          action: { label: 'Seed the repositories again', command: 'openadlc seed' },
           facts: { repository: repo.fullName },
         });
       }

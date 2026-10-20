@@ -6,8 +6,8 @@
 # corepack's pnpm and an app's node_modules) with its LICENSE, LICENCE,
 # COPYING or NOTICE files, and which package each engine CLI comes from.
 #
-#   infra/local/third-party-notices.sh fleetadlc-bot:latest              # to stdout
-#   infra/local/third-party-notices.sh fleetadlc-bot:latest notices.txt  # to a file
+#   infra/local/third-party-notices.sh openadlc-bot:latest              # to stdout
+#   infra/local/third-party-notices.sh openadlc-bot:latest notices.txt  # to a file
 #
 # It reads them from the image by running it once, as root, with no network,
 # and adds nothing to it: an image stays as it was built, and whoever

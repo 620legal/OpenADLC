@@ -1,5 +1,5 @@
-import { appJwt, requestDeviceCode, DeviceAuthError } from '@fleetadlc/github';
-import { appInstallUrl, appSettingsUrl, installationSettingsUrl } from '@fleetadlc/shared';
+import { appJwt, requestDeviceCode, DeviceAuthError } from '@openadlc/github';
+import { appInstallUrl, appSettingsUrl, installationSettingsUrl } from '@openadlc/shared';
 
 /**
  * Whether the app is actually set up the way the walkthrough asked.
@@ -39,7 +39,7 @@ export interface AppChecks {
    * have means pasting a client id and a private key, and pasting is how you end
    * up authenticated as something other than what you meant — an app from an
    * older install, or one belonging to a different account. Named here, the page
-   * can say "this is fleetadlc-janedoe, installed on one repository" instead of
+   * can say "this is openadlc-janedoe, installed on one repository" instead of
    * accepting two opaque strings and hoping.
    */
   app: { slug: string; id: number; installations: number } | null;

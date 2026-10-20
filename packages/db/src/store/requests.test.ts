@@ -120,12 +120,12 @@ describe('the queue of requests waiting for intake', () => {
   it('counts a failed start as an attempt only when the request is what failed', async () => {
     vi.mocked(query).mockResolvedValue([]);
 
-    await requeue('a', 'cannot work in fleetadlc-private');
+    await requeue('a', 'cannot work in openadlc-private');
     await requeue('a', 'hostd refused: hostd did not answer', { counts: false });
     await requeue('a');
 
     expect(vi.mocked(query).mock.calls.map((call) => call[1])).toEqual([
-      ['a', 'cannot work in fleetadlc-private', true],
+      ['a', 'cannot work in openadlc-private', true],
       ['a', 'hostd refused: hostd did not answer', false],
       ['a', null, false],
     ]);

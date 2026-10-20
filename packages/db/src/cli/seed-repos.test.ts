@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RepoConfig } from '@fleetadlc/shared';
+import type { RepoConfig } from '@openadlc/shared';
 
 vi.mock('../store/bots.js', () => ({ listBots: vi.fn() }));
 vi.mock('../store/repos.js', () => ({
@@ -17,7 +17,7 @@ function listed(owner: string, fullName = 'exampleco/app'): RepoConfig {
 }
 
 beforeEach(() => {
-  vi.mocked(bots.listBots).mockReset().mockResolvedValue([{ id: 'b1', name: 'fleetadlc-builder-janedoe', slot: 'builder' }] as never);
+  vi.mocked(bots.listBots).mockReset().mockResolvedValue([{ id: 'b1', name: 'openadlc-builder-janedoe', slot: 'builder' }] as never);
   vi.mocked(repos.upsertRepo).mockReset();
 });
 

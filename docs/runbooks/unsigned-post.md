@@ -89,7 +89,7 @@ Stop new work from starting while you look:
 - **Settings → Pause work** stops anything new from starting, across the
   whole install. Work already running finishes. The pause is kept, audited,
   and shown on the board until someone resumes it.
-- Don't pause by restarting the bridge with `FLEETADLC_DISPATCH_IN_BRIDGE=0`. That
+- Don't pause by restarting the bridge with `OPENADLC_DISPATCH_IN_BRIDGE=0`. That
   is only for the integration suites and scripted engines. It stops builds
   alone, not intake, reviews or deploys, and Resume doesn't undo it.
 

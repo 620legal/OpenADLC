@@ -21,7 +21,7 @@ const minutesAgo = (minutes: number): string => new Date(NOW - minutes * 60_000)
 function issue(partial: Partial<IssueFacts> & Pick<IssueFacts, 'number' | 'stage'>): IssueFacts {
   return {
     repoId: 'repo-1',
-    repoName: 'fleetadlc',
+    repoName: 'openadlc',
     title: `Issue ${partial.number}`,
     url: null,
     prNumber: null,
@@ -49,7 +49,7 @@ function task(partial: Partial<TaskFacts> & Pick<TaskFacts, 'kind' | 'subjectRef
 }
 
 const BOTS = [
-  { id: 'bot-builder', name: 'fleetadlc-atlas-janedoe' },
+  { id: 'bot-builder', name: 'openadlc-atlas-janedoe' },
   { id: 'bot-intake', name: 'ottoexampleco' },
   { id: 'bot-lead', name: 'noraexampleco' },
   { id: 'bot-second', name: 'irisexampleco' },
@@ -61,11 +61,11 @@ describe('which issue a subject is about', () => {
   const issues = [issue({ number: 12, stage: 'review', prNumber: 31 }), issue({ number: 31, stage: 'build', repoName: 'other' })];
 
   it('is the issue itself, or the issue whose pull request it is', () => {
-    expect(issueForSubject('fleetadlc#12', issues)?.number).toBe(12);
-    expect(issueForSubject('fleetadlc#31', issues)?.number).toBe(12);
+    expect(issueForSubject('openadlc#12', issues)?.number).toBe(12);
+    expect(issueForSubject('openadlc#31', issues)?.number).toBe(12);
     expect(issueForSubject('other#31', issues)?.repoName).toBe('other');
     expect(issueForSubject('request:a4b02784', issues)).toBeNull();
-    expect(issueForSubject('fleetadlc@3f2a1b0c', issues)).toBeNull();
+    expect(issueForSubject('openadlc@3f2a1b0c', issues)).toBeNull();
   });
 });
 
@@ -82,19 +82,19 @@ describe('the review round', () => {
 
 
 describe('a review loop that stopped', () => {
-  const stalled = { at: minutesAgo(40), payload: { repo: 'fleetadlc', pr: 31, issue: 12, rounds: 3 } };
+  const stalled = { at: minutesAgo(40), payload: { repo: 'openadlc', pr: 31, issue: 12, rounds: 3 } };
   const issues = [issue({ number: 12, stage: 'review', prNumber: 31 })];
 
   it('stands, the newest stop per pull request', () => {
-    const again = { at: minutesAgo(20), payload: { repo: 'fleetadlc', pr: 31, issue: 12, rounds: 4 } };
+    const again = { at: minutesAgo(20), payload: { repo: 'openadlc', pr: 31, issue: 12, rounds: 4 } };
     const standing = standingStalls([stalled, again], issues, []);
-    expect([...standing.keys()]).toEqual(['fleetadlc#31']);
-    expect(standing.get('fleetadlc#31')?.rounds).toBe(4);
+    expect([...standing.keys()]).toEqual(['openadlc#31']);
+    expect(standing.get('openadlc#31')?.rounds).toBe(4);
   });
 
   it('ends when anything is started on the pull request after it, or the issue leaves review', () => {
-    const later = task({ kind: 'review', subjectRef: 'fleetadlc#31', state: 'running', createdAt: minutesAgo(10) });
-    const earlier = task({ kind: 'patch', subjectRef: 'fleetadlc#31', state: 'done', createdAt: minutesAgo(50) });
+    const later = task({ kind: 'review', subjectRef: 'openadlc#31', state: 'running', createdAt: minutesAgo(10) });
+    const earlier = task({ kind: 'patch', subjectRef: 'openadlc#31', state: 'done', createdAt: minutesAgo(50) });
     expect(standingStalls([stalled], issues, [earlier]).size).toBe(1);
     expect(standingStalls([stalled], issues, [later]).size).toBe(0);
     expect(standingStalls([stalled], [issue({ number: 12, stage: 'merged', prNumber: 31 })], []).size).toBe(0);
@@ -105,9 +105,9 @@ describe('a review loop that stopped', () => {
   });
 
   it('names the blocking seats a lead’s approval could not set aside, and none for a loop out of rounds', () => {
-    const held = { at: minutesAgo(5), payload: { repo: 'fleetadlc', pr: 31, issue: 12, rounds: 0, heldBy: ['security-reviewer', 7] } };
-    expect(standingStalls([held], issues, []).get('fleetadlc#31')?.heldBy).toEqual(['security-reviewer']);
-    expect(standingStalls([stalled], issues, []).get('fleetadlc#31')?.heldBy).toEqual([]);
+    const held = { at: minutesAgo(5), payload: { repo: 'openadlc', pr: 31, issue: 12, rounds: 0, heldBy: ['security-reviewer', 7] } };
+    expect(standingStalls([held], issues, []).get('openadlc#31')?.heldBy).toEqual(['security-reviewer']);
+    expect(standingStalls([stalled], issues, []).get('openadlc#31')?.heldBy).toEqual([]);
   });
 });
 
@@ -118,11 +118,11 @@ describe('what a card says about the work on it', () => {
     const inReview = issue({ number: 12, stage: 'review', prNumber: 31 });
     const tasks = [
       task({ kind: 'intake', subjectRef: 'request:a4b02784', state: 'done', costUsd: 0.12 }),
-      task({ kind: 'implement', subjectRef: 'fleetadlc#12', state: 'done', costUsd: 0.84, endedAt: minutesAgo(30) }),
-      task({ kind: 'review', subjectRef: 'fleetadlc#31', state: 'done', costUsd: 0.2, botId: 'bot-lead', endedAt: minutesAgo(20) }),
-      task({ kind: 'patch', subjectRef: 'fleetadlc#31', state: 'done', costUsd: 0.3, round: 1, endedAt: minutesAgo(15) }),
-      task({ kind: 'review', subjectRef: 'fleetadlc#31', state: 'running', costUsd: 0.05, botId: 'bot-second', startedAt: minutesAgo(6) }),
-      task({ kind: 'implement', subjectRef: 'fleetadlc#99', state: 'running', costUsd: 5 }),
+      task({ kind: 'implement', subjectRef: 'openadlc#12', state: 'done', costUsd: 0.84, endedAt: minutesAgo(30) }),
+      task({ kind: 'review', subjectRef: 'openadlc#31', state: 'done', costUsd: 0.2, botId: 'bot-lead', endedAt: minutesAgo(20) }),
+      task({ kind: 'patch', subjectRef: 'openadlc#31', state: 'done', costUsd: 0.3, round: 1, endedAt: minutesAgo(15) }),
+      task({ kind: 'review', subjectRef: 'openadlc#31', state: 'running', costUsd: 0.05, botId: 'bot-second', startedAt: minutesAgo(6) }),
+      task({ kind: 'implement', subjectRef: 'openadlc#99', state: 'running', costUsd: 5 }),
     ];
 
     const work = cardWork(inReview, {
@@ -148,23 +148,23 @@ describe('what a card says about the work on it', () => {
 
   it('says when the review loop stopped', () => {
     const inReview = issue({ number: 12, stage: 'review', prNumber: 31 });
-    const stall = { repo: 'fleetadlc', pr: 31, issue: 12, rounds: 3, botId: null, bot: null, heldBy: [], reason: null, at: minutesAgo(10) };
+    const stall = { repo: 'openadlc', pr: 31, issue: 12, rounds: 3, botId: null, bot: null, heldBy: [], reason: null, at: minutesAgo(10) };
     expect(
-      cardWork(inReview, { tasks: [], botName, stalls: new Map([['fleetadlc#31', stall]]) })
+      cardWork(inReview, { tasks: [], botName, stalls: new Map([['openadlc#31', stall]]) })
         .stalledAfterRounds,
     ).toBe(3);
   });
 
   it('says a reviewer’s review failed, even after another reviewer finished, until that reviewer reviews again', () => {
     const inReview = issue({ number: 1, stage: 'review', prNumber: 2 });
-    const failed = task({ kind: 'review', subjectRef: 'fleetadlc#2', state: 'failed', botId: 'bot-second', endedAt: minutesAgo(12) });
-    const finished = task({ kind: 'review', subjectRef: 'fleetadlc#2', state: 'done', botId: 'bot-lead', endedAt: minutesAgo(5) });
+    const failed = task({ kind: 'review', subjectRef: 'openadlc#2', state: 'failed', botId: 'bot-second', endedAt: minutesAgo(12) });
+    const finished = task({ kind: 'review', subjectRef: 'openadlc#2', state: 'done', botId: 'bot-lead', endedAt: minutesAgo(5) });
     const reviewFailed = (tasks: TaskFacts[], card = inReview) =>
       cardWork(card, { tasks, botName, stalls: new Map() }).reviewFailed;
 
     // The card read "Waiting for the reviewers" here: its newest task was the one that finished.
     expect(reviewFailed([failed, finished])).toBe(true);
-    const again = task({ kind: 'review', subjectRef: 'fleetadlc#2', state: 'running', botId: 'bot-second', startedAt: minutesAgo(1) });
+    const again = task({ kind: 'review', subjectRef: 'openadlc#2', state: 'running', botId: 'bot-second', startedAt: minutesAgo(1) });
     expect(reviewFailed([failed, finished, again])).toBe(false);
     // Not a review card any more: whatever failed holds nothing up.
     expect(reviewFailed([failed, finished], issue({ number: 1, stage: 'merged', prNumber: 2 }))).toBe(false);
@@ -172,7 +172,7 @@ describe('what a card says about the work on it', () => {
 
   it('says when a finished card shipped: its last deploy, or when it last changed', () => {
     const done = issue({ number: 10, stage: 'done', prNumber: 30, updatedAt: minutesAgo(5) });
-    const deployed = task({ kind: 'deploy', subjectRef: 'fleetadlc#30', state: 'done', endedAt: minutesAgo(120) });
+    const deployed = task({ kind: 'deploy', subjectRef: 'openadlc#30', state: 'done', endedAt: minutesAgo(120) });
     expect(cardWork(done, { tasks: [deployed], botName, stalls: new Map() }).shippedAt).toBe(
       minutesAgo(120),
     );
@@ -195,14 +195,14 @@ describe('what a card says about the work on it', () => {
 describe('the board’s work, read together', () => {
   it('marks a bot working, or waiting behind a question', () => {
     const issues = [issue({ number: 14, stage: 'merged', prNumber: 33 }), issue({ number: 16, stage: 'build' })];
-    const asking = task({ kind: 'deploy', subjectRef: 'fleetadlc#33', state: 'paused', botId: 'bot-sre' });
-    const writing = task({ kind: 'implement', subjectRef: 'fleetadlc#16', state: 'running', startedAt: minutesAgo(12) });
+    const asking = task({ kind: 'deploy', subjectRef: 'openadlc#33', state: 'paused', botId: 'bot-sre' });
+    const writing = task({ kind: 'implement', subjectRef: 'openadlc#16', state: 'running', startedAt: minutesAgo(12) });
 
     const work = boardWork({
       issues,
       tasks: [asking, writing],
       bots: BOTS,
-      repos: [{ id: 'repo-1', name: 'fleetadlc', stageModes: { merged: 'autonomous' } }],
+      repos: [{ id: 'repo-1', name: 'openadlc', stageModes: { merged: 'autonomous' } }],
       gates: [{ taskId: asking.id }],
       stallEvents: [],
       requests: [],
@@ -210,8 +210,8 @@ describe('the board’s work, read together', () => {
 
     expect([...work.running]).toEqual(['bot-builder']);
     expect([...work.waiting]).toEqual(['bot-sre']);
-    expect(work.byRef.get('fleetadlc#14')).toMatchObject({ assignees: ['tessexampleco'] });
-    expect(work.byRef.get('fleetadlc#16')).toMatchObject({ assignees: ['fleetadlc-atlas-janedoe'] });
+    expect(work.byRef.get('openadlc#14')).toMatchObject({ assignees: ['tessexampleco'] });
+    expect(work.byRef.get('openadlc#16')).toMatchObject({ assignees: ['openadlc-atlas-janedoe'] });
   });
 });
 
@@ -231,7 +231,7 @@ describe('a request intake is working on', () => {
       issues: [],
       tasks,
       bots: BOTS,
-      repos: [{ id: 'repo-1', name: 'fleetadlc-testbed', stageModes: {} }],
+      repos: [{ id: 'repo-1', name: 'openadlc-testbed', stageModes: {} }],
       gates,
       stallEvents: [],
       requests,
@@ -243,7 +243,7 @@ describe('a request intake is working on', () => {
     expect(read([REQUEST], [triage], [{ taskId: triage.id }])).toEqual([
       expect.objectContaining({
         ref: 'request:57796b82',
-        repo: 'fleetadlc-testbed',
+        repo: 'openadlc-testbed',
         title: 'Add a keyboard-controlled snake game at snake.html',
         stage: 'intake',
         request: true,
@@ -271,7 +271,7 @@ describe('a bot’s task, for the crew page', () => {
   it('names the issue a review is about, the round it is in out of how many, and what it has cost', () => {
     const reviewing = task({
       kind: 'review',
-      subjectRef: 'fleetadlc#31',
+      subjectRef: 'openadlc#31',
       state: 'running',
       botId: 'bot-second',
       startedAt: minutesAgo(6),
@@ -287,9 +287,9 @@ describe('a bot’s task, for the crew page', () => {
     expect(summary).toEqual({
       kind: 'review',
       state: 'running',
-      subjectRef: 'fleetadlc#31',
-      repo: 'fleetadlc',
-      issue: { repo: 'fleetadlc', number: 12, title: 'Record which model each review used' },
+      subjectRef: 'openadlc#31',
+      repo: 'openadlc',
+      issue: { repo: 'openadlc', number: 12, title: 'Record which model each review used' },
       startedAt: minutesAgo(6),
       endedAt: null,
       round: 2,
@@ -300,7 +300,7 @@ describe('a bot’s task, for the crew page', () => {
   });
 
   it('names the repository the work is in, a removed one as much as any, and none for work in none', () => {
-    const repoNames = new Map([['repo-1', 'fleetadlc'], ['repo-old', 'old-api']]);
+    const repoNames = new Map([['repo-1', 'openadlc'], ['repo-old', 'old-api']]);
     // Its own repository first: a request filed for one says so nowhere in its subject.
     const triage = task({ kind: 'intake', subjectRef: 'request:a4b02784', state: 'running', repoId: 'repo-old' });
     expect(taskSummary(triage, { issues: [], gated: new Set(), repoNames }).repo).toBe('old-api');
@@ -312,21 +312,21 @@ describe('a bot’s task, for the crew page', () => {
   });
 
   it('gives a round limit only to work in the review loop', () => {
-    const building = task({ kind: 'implement', subjectRef: 'fleetadlc#16', state: 'running', costUsd: 0.84 });
+    const building = task({ kind: 'implement', subjectRef: 'openadlc#16', state: 'running', costUsd: 0.84 });
     const summary = taskSummary(building, { issues: [], gated: new Set(), maxRounds: 3 });
     expect(summary.maxRounds).toBeNull();
     expect(summary.costUsd).toBe(0.84);
   });
 
   it('says a paused task is waiting on a person only when a question is open', () => {
-    const paused = task({ kind: 'intake', subjectRef: 'fleetadlc#15', state: 'paused' });
+    const paused = task({ kind: 'intake', subjectRef: 'openadlc#15', state: 'paused' });
     expect(taskSummary(paused, { issues: [], gated: new Set([paused.id]) }).waitingOnYou).toBe(true);
     expect(taskSummary(paused, { issues: [], gated: new Set() }).waitingOnYou).toBe(false);
   });
 });
 
 describe('the issues a merged pull request finishes', () => {
-  const PULL = { number: 12, branch: 'agent/fleetadlc-atlas-janedoe/5-issue-5', body: '', intoDefaultBranch: true, sameRepository: true };
+  const PULL = { number: 12, branch: 'agent/openadlc-atlas-janedoe/5-issue-5', body: '', intoDefaultBranch: true, sameRepository: true };
 
   // Another tool's pull request said "Closes #N": GitHub closed the issue, and
   // the board kept it in Review, since only the branch was read.
@@ -368,13 +368,13 @@ describe('the issue a pull request’s branch was cut for', () => {
   const pr = (repo: { full_name?: string } | null | undefined) => ({ head: { ref: 'agent/x/12-fix', repo } });
 
   it('is read from a branch in the repository itself, whatever the case of its name', () => {
-    expect(ownIssueOf(pr({ full_name: 'JaneDoe/FleetADLC' }), 'janedoe/fleetadlc')).toBe(12);
+    expect(ownIssueOf(pr({ full_name: 'JaneDoe/OpenADLC' }), 'janedoe/openadlc')).toBe(12);
   });
 
   it('is none for a fork’s branch, or one whose repository GitHub no longer names', () => {
-    expect(ownIssueOf(pr({ full_name: 'stranger/fleetadlc' }), 'janedoe/fleetadlc')).toBeNull();
-    expect(ownIssueOf(pr(null), 'janedoe/fleetadlc')).toBeNull();
-    expect(ownIssueOf(pr(undefined), 'janedoe/fleetadlc')).toBeNull();
+    expect(ownIssueOf(pr({ full_name: 'stranger/openadlc' }), 'janedoe/openadlc')).toBeNull();
+    expect(ownIssueOf(pr(null), 'janedoe/openadlc')).toBeNull();
+    expect(ownIssueOf(pr(undefined), 'janedoe/openadlc')).toBeNull();
   });
 });
 
@@ -385,7 +385,7 @@ describe('who may put scope:cross-cutting on', () => {
   };
 
   it('takes it from the app, the automation account and a person', () => {
-    expect(scopeLabelAcceptedFrom({ login: 'fleetadlc-exampleco[bot]', viaApp: true }, context)).toBe(true);
+    expect(scopeLabelAcceptedFrom({ login: 'openadlc-exampleco[bot]', viaApp: true }, context)).toBe(true);
     expect(scopeLabelAcceptedFrom({ login: 'exampleco-flow' }, context)).toBe(true);
     expect(scopeLabelAcceptedFrom({ login: 'janedoe' }, context)).toBe(true);
   });
@@ -400,8 +400,8 @@ describe('who may put scope:cross-cutting on', () => {
 describe('what the console leaves out', () => {
   const issue = (number: number, prNumber: number | null, labels: string[]) => ({ repoName: 'api', number, prNumber, labels });
 
-  it('is every issue labelled fleetadlc:ignore (or fleet:ignore) and the pull request recorded on it, and nothing else', () => {
-    const issues = [issue(1, 5, ['fleetadlc:ignore']), issue(2, null, ['fleet:ignore']), issue(3, 7, ['adlc:review'])];
+  it('is every issue labelled openadlc:ignore (or fleet:ignore) and the pull request recorded on it, and nothing else', () => {
+    const issues = [issue(1, 5, ['openadlc:ignore']), issue(2, null, ['fleet:ignore']), issue(3, 7, ['adlc:review'])];
     expect([...ignoredSubjects(issues)].sort()).toEqual(['api#1', 'api#2', 'api#5']);
     expect(shownIssues(issues).map((one) => one.number)).toEqual([3]);
   });

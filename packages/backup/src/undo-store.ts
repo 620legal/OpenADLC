@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fleetHome, getSecretStore, type SecretStore } from '@fleetadlc/github';
+import { openadlcHome, getSecretStore, type SecretStore } from '@openadlc/github';
 import { BackupError, decryptBackup, encryptBackup, type BackupContents } from './archive.js';
 import type { RestoreJournal } from './undo.js';
 
@@ -36,7 +36,7 @@ function writePrivate(path: string, bytes: Buffer | string): void {
 }
 
 export function fileUndoStore(options: { root?: string; store?: SecretStore } = {}): UndoStore {
-  const root = options.root ?? join(fleetHome(), 'restore-undo');
+  const root = options.root ?? join(openadlcHome(), 'restore-undo');
   const store = (): SecretStore => options.store ?? getSecretStore();
   const journalPath = join(root, 'journal.json');
   const backupPath = join(root, 'backup.fleetbak');

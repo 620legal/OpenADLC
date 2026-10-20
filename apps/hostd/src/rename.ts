@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { isBotName } from '@fleetadlc/shared';
+import { isBotName } from '@openadlc/shared';
 import type { ExecDriver } from './drivers/types.js';
 
 const run = promisify(execFile);
@@ -13,7 +13,7 @@ const run = promisify(execFile);
  * A bot is renamed when an account connects — it takes the account's handle —
  * and what hostd keeps for it is named after it: the folder
  * `<workRoot>/<name>`, its task computers' sessions, and on the local driver
- * every `fleetadlc__<name>__` tmux session. Under docker a bot has no
+ * every `openadlc__<name>__` tmux session. Under docker a bot has no
  * container between tasks: renaming ends the tasks it holds, releases their
  * computers, retires any seat container, sidecar or network left from before,
  * and moves the folder. Nothing new is made; a task's computer, login and

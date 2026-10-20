@@ -15,7 +15,7 @@ to Done. The design and its decisions are in
                             │  └─▶  a task's container: tmux session
                             │        └─ skill runner ─▶ engine CLI (Claude, Codex, Grok)
                             ▼
-              Postgres (fleetadlc_db)    task database server (fleetadlc-taskdb)
+              Postgres (openadlc_db)    task database server (openadlc-taskdb)
 ```
 
 | Part | Runs as | Job |
@@ -24,10 +24,10 @@ to Done. The design and its decisions are in
 | **dispatcher** (`apps/dispatcher`) | a library, in the bridge | Decides which issues may start and leases each to a free builder, holding back work whose files another change in flight holds, by the repository's path policy |
 | **hostd** (`apps/hostd`) | one process per host, :47312 | Gives each task a computer of its own — a container under the docker driver, made when the task starts and removed when it ends; a folder and tmux sessions under the local one — and runs the task in it: a clone, a session, the skill runner. A seat is a task's GitHub identity, never its computer |
 | **skill runner** (`apps/hostd/src/skill-runner.ts`) | inside the session | Builds the prompt from the skill and the task's context, drives the engine, reports usage and questions to the bridge, and says how the task ended |
-| **console** (`apps/console`) | Next.js, :47300 | The board, the bots' threads, gates, costs, settings and onboarding. It holds nothing: every read is the bridge's, and the bridge leaves out every issue labelled `fleetadlc:ignore` and its pull request (`ignoredSubjects`) |
-| **cli** (`apps/cli`) | `fleetadlc …` | Sets an install up, starts and stops it, checks it; each service runs under a keeper that restarts it |
-| **Postgres** | `fleetadlc-db`, :47432 | The platform's own state. GitHub stays the record of the work |
-| **Task database server** | `fleetadlc-taskdb`, :47433, one per host, on the host's gateway address only (docker driver) | A database of its own for each task whose seat has `sidecarDb`, dropped with the task's computer |
+| **console** (`apps/console`) | Next.js, :47300 | The board, the bots' threads, gates, costs, settings and onboarding. It holds nothing: every read is the bridge's, and the bridge leaves out every issue labelled `openadlc:ignore` and its pull request (`ignoredSubjects`) |
+| **cli** (`apps/cli`) | `openadlc …` | Sets an install up, starts and stops it, checks it; each service runs under a keeper that restarts it |
+| **Postgres** | `openadlc-db`, :47432 | The platform's own state. GitHub stays the record of the work |
+| **Task database server** | `openadlc-taskdb`, :47433, one per host, on the host's gateway address only (docker driver) | A database of its own for each task whose seat has `sidecarDb`, dropped with the task's computer |
 
 GitHub is the system of record: an issue's stage is its `adlc:*` label, a
 decision is a comment, a change is a pull request. OpenADLC's database holds what
@@ -40,16 +40,16 @@ ledger, threads and gates, and the console's settings.
 - **Console → bridge.** On a local install the bridge takes the console user
   from a header, and serves `/v1` only beside the console secret
   (`console-api-secret`), which only the console's server and the CLI hold; a
-  browser signs in to the console with a link `fleetadlc up` and `fleetadlc
+  browser signs in to the console with a link `openadlc up` and `openadlc
   console-link` print. In the cloud it verifies Google IAP's signed assertion
-  (`FLEETADLC_IDENTITY_MODE=iap`). A request from a browser on another origin is
+  (`OPENADLC_IDENTITY_MODE=iap`). A request from a browser on another origin is
   refused.
 - **bridge ↔ hostd.** Both hold the internal secret (`internal-api-secret` in the
   secret store). A task's session gets a token that speaks for that task only.
 - **Browser → hostd.** Take-over's WebSocket goes from the person's browser
   straight to hostd's terminal gateway (`/terminal`, on :47312 unless
-  `NEXT_PUBLIC_FLEETADLC_TERMINAL_URL` says otherwise), admitted by its Origin
-  (`FLEETADLC_CONSOLE_URL`) and a one-minute, one-use attach token that hostd
+  `NEXT_PUBLIC_OPENADLC_TERMINAL_URL` says otherwise), admitted by its Origin
+  (`OPENADLC_CONSOLE_URL`) and a one-minute, one-use attach token that hostd
   mints when an admin asks the bridge, sent as a subprotocol and never in the
   query string.
 - **OpenADLC → GitHub.** The crew works as the GitHub accounts the operator
@@ -149,13 +149,13 @@ ledger, threads and gates, and the console's settings.
    says enough to be built, has its dependencies shipped, does not overlap files
    another change in flight holds — an exclusive path until that change merges,
    any other path only while it is being built, a shared path never, as the
-   repository's `paths:` in `.github/fleetadlc.yml` says — and a builder has room — a seat runs
+   repository's `paths:` in `.github/openadlc.yml` says — and a builder has room — a seat runs
    up to its tasks at once, each in a computer of its own. It **leases** the
    issue to that builder — the issue, the bot, the declared paths, an expiry —
    and the bridge opens an `implement` task. hostd clones the repository's
    mirror for the task, on a branch
    named `agent/<bot>/<n>-issue-<n>`, and the builder writes the change inside
-   the declared paths, commits, and runs `fleetadlc-ci`: the session asks the
+   the declared paths, commits, and runs `openadlc-ci`: the session asks the
    bridge, the bridge asks hostd, and hostd runs `make ci` in the worktree with
    the task's own database once it has proved the worktree is the commit's own
    tree (in a clean checkout of the commit when it cannot, such as an index
@@ -174,7 +174,7 @@ ledger, threads and gates, and the console's settings.
    changes — and the lead last.
    Every seat but the lead reviews at once, without CI, and posts a comment
    with its verdict and lens in its marker; OpenADLC's `gh` refuses an advisory
-   seat an approval or a request for changes (`FLEETADLC_REVIEW_MODE`). Once every
+   seat an approval or a request for changes (`OPENADLC_REVIEW_MODE`). Once every
    other seat asked has posted on this diff, the lead is asked, with all of
    their reviews in front of it, and decides: approve, or one request for
    changes with every finding that stands. Each round of reviews records
@@ -192,7 +192,7 @@ ledger, threads and gates, and the console's settings.
    `review-gate` on the head commit: pending while a seat has not posted on
    this diff, while the lead has not, until the lead and every blocking
    seat approved and each person `AGENTS.md` names for the paths it touches
-   approved, and while it is held (`needs-human` or `fleetadlc:paused`). The lead's request for changes sends the work back to build
+   approved, and while it is held (`needs-human` or `openadlc:paused`). The lead's request for changes sends the work back to build
    (below): the card moves to Build and a patch round opens for the builder,
    up to `maxRounds`; a loop that does not agree stops and asks a person. A
    failed `ci` run is run again once, as the app (it needs "Actions: write");
@@ -236,11 +236,11 @@ ledger, threads and gates, and the console's settings.
    changes that the base also changed since the branch left it. The builder
    holding the issue gets a `patch` task with the `resolve-conflict` skill,
    which may write only those files. It merges the base in, keeps both sides'
-   intent, runs `fleetadlc-ci` and pushes. The bridge records
+   intent, runs `openadlc-ci` and pushes. The bridge records
    `conflict.resolving` `{repo, pr, issue, files, review, head, prFiles, base, at}`.
    How the push is reviewed depends on the files:
    - If every conflicted file is shared (`paths.shared` in
-     `.github/fleetadlc.yml`; the defaults are the Makefile, `README*`,
+     `.github/openadlc.yml`; the defaults are the Makefile, `README*`,
      `CHANGELOG*`, `docs/**/index*`, `package.json`, `.gitignore` and
      `AGENTS.md`), only the lead is asked again. Its task is told to check the
      resolution alone (`resolution-check.md`), whatever lead reviews it did
@@ -259,7 +259,7 @@ ledger, threads and gates, and the console's settings.
    - A conflict in a file that can decide how CI runs (anything `changesCi`
      names, a `package.json` or `tsconfig*.json` at any depth) or in
      `AGENTS.md` is always reviewed in full, whatever `paths.shared` says. So
-     is any conflict when `.github/fleetadlc.yml` cannot be read (anything but
+     is any conflict when `.github/openadlc.yml` cannot be read (anything but
      a 404, which gets the defaults) or does not parse.
    - Otherwise the approvals are dismissed and the reviews run again in full.
 
@@ -289,7 +289,7 @@ ledger, threads and gates, and the console's settings.
    (squash) as the GitHub App, never with a bot's token, when every rule
    holds on that head (`mergeDecision` in `apps/bridge/src/automation.ts`):
    - it is the repository's own branch, not a fork's, onto the default branch;
-   - it carries neither `needs-human` nor `fleetadlc:paused`;
+   - it carries neither `needs-human` nor `openadlc:paused`;
    - the lead's latest verdict, and each blocking seat's, is an approval, of
      this head or of an earlier one whose diff against the base is the same,
      with seats on one account told apart only by a signature that checks for
@@ -353,14 +353,14 @@ ledger, threads and gates, and the console's settings.
      that it made nothing, and the builder's resolution goes to a resolution
      round with that round's re-review.
    - If the dependency is sent back to build, or closed without merging, the
-     stacked issue is held (`fleetadlc:paused`) with a note, for a person to
+     stacked issue is held (`openadlc:paused`) with a note, for a person to
      resume or redo, once per stacking (`stacks.paused_at`).
    - It is one level only, and on unless the repository sets
      `stacking: false`. It records `stack.started`, `stack.updating` (the
      head about to be updated), `stack.made` `{repo, pr, from, to, at}` (the
      commit the update made, `to: null` when it conflicted, failed or landed
      on a head that had moved), `stack.updated` and `stack.paused`.
-7. **Ship.** By the repository's rules, `.github/fleetadlc.yml` on its default
+7. **Ship.** By the repository's rules, `.github/openadlc.yml` on its default
    branch (`apps/bridge/src/delivery-rules.ts`): a merge dispatches the testing
    deploy as the app (or as the automation account where the app cannot act
    on the repository); only a merge into the default branch moves its issue
@@ -368,7 +368,7 @@ ledger, threads and gates, and the console's settings.
    the issue, its lease and testing alone; a green smoke on testing
    dispatches the promote; the
    `production` environment holds it for its required reviewers or its wait
-   timer, which `fleetadlc github apply` writes from the same rules. Where
+   timer, which `openadlc github apply` writes from the same rules. Where
    GitHub's plan cannot hold either, the bridge holds the soak itself
    (`deploy_runs.promote_after`), and a promote the rules say a person
    approves waits in Needs you (`deploy_runs.promote_held_at`) until a person
@@ -385,7 +385,7 @@ ledger, threads and gates, and the console's settings.
    `deploy_runs`). `testing: none` ships by merging,
    straight to Done. A repository with no rules file follows Settings →
    Repositories' **Automatic**, **Has a testing deploy** or **No testing
-   deploy** as those rules. OpenADLC does not read the `FLEETADLC_DEPLOY_TESTING`
+   deploy** as those rules. OpenADLC does not read the `OPENADLC_DEPLOY_TESTING`
    Actions variable.
 8. **Done.** The issue is closed, the lease is let go, and its files are free
    for the next change.
@@ -438,7 +438,7 @@ back. A crew account that moves a stage label back is put back.
 - **The reconciler** (every 15 minutes) compares GitHub with the board and
   repairs what a missed delivery left wrong: an issue never heard of, a stage
   changed by hand, a merge whose delivery never came (the issue GitHub closed
-  moves to Merged or Done, not off the board; one labelled `fleetadlc:ignore`
+  moves to Merged or Done, not off the board; one labelled `openadlc:ignore`
   is left where it is, its labels only kept up to date), a lease on a closed issue, a
   lease a question paused whose task has since ended, a task recorded half an
   hour ago that no host ever started. It reads at most 5000 open issues and
@@ -465,7 +465,7 @@ back. A crew account that moves a stage label back is put back.
 | **Seat** | A place in the crew, such as `builder` or `lead-reviewer` (`config/bots.yaml`). A bot is the seat until an account connects, then the account's handle |
 | **Role** | What a seat is accountable for: `intake`, `spec`, `implement`, `review_lead`, `review_second`, `review_security`, `deploy`, `qa`, `automation`. Its playbook is `crew/roles/<role>.md` |
 | **Skill** | What a task does, step by step: `crew/skills/<name>/SKILL.md`, with the commands and files it may use in `tools.yaml` |
-| **Delivery rules** | How a repository ships: `.github/fleetadlc.yml` on its default branch — what deploys on merge, what holds production (`approval: reviewers` or `auto` with a soak), and the workflows OpenADLC dispatches. See [configuration.md](configuration.md#githubfleetadlcyml--how-a-repository-ships) |
+| **Delivery rules** | How a repository ships: `.github/openadlc.yml` on its default branch — what deploys on merge, what holds production (`approval: reviewers` or `auto` with a soak), and the workflows OpenADLC dispatches. See [configuration.md](configuration.md#githubopenadlcyml--how-a-repository-ships) |
 | **Stage** | Where an issue is: intake, spec, build, review, merged (Ship), done. It is the `adlc:*` label |
 | **Stage mode** | How much a stage may do without asking, per repository: `autonomous`, `conditional` (Design only), `untouched` (Intake and Design only; a repository's bots are stopped with Pause work) |
 | **Send-back** | A stage returning its work to the stage before it, with a reason the receiving stage works from; recorded in `stage_moves` and on the issue |
@@ -474,8 +474,8 @@ back. A crew account that moves a stage label back is put back.
 | **Work item** | One piece of work as a person means it: a console request, the issue it became and that issue's pull request. Its key is `<repo>#<issue>` once the issue exists, `request:<id8>` before; any other subject (a deploy of a commit) is an item of its own. Its conversation is every thread about any of its subjects, each labelled by the role and seat it was with (kept on the thread when it was opened, migration 0028), so seats sharing one GitHub account are still told apart |
 | **Lease** | The record that an issue is being built by a bot, with the paths it may touch and an expiry |
 | **Gate** | A question that holds a task until a person answers. A **plan change** is one: a task asks to add paths to its lease, and a person approves or refuses ([development.md](development.md#plan-changes)) |
-| **Marker** | A line such as `<!-- fleetadlc:{"event":"review_posted"} -->` that ends a bot's comment, so the bridge learns what it did rather than guessing |
-| **review-gate** | The gate the bridge publishes on a pull request's head: a check run by OpenADLC's App when it holds Checks: write (what `fleetadlc github apply` pins), with a commit status of the same name beside it. It is green once every seat asked has reviewed this diff, the lead last; the lead and every blocking seat have approved; each person `AGENTS.md` names for the touched paths has approved the head; and neither `needs-human` nor `fleetadlc:paused` is on the pull request |
+| **Marker** | A line such as `<!-- openadlc:{"event":"review_posted"} -->` that ends a bot's comment, so the bridge learns what it did rather than guessing |
+| **review-gate** | The gate the bridge publishes on a pull request's head: a check run by OpenADLC's App when it holds Checks: write (what `openadlc github apply` pins), with a commit status of the same name beside it. It is green once every seat asked has reviewed this diff, the lead last; the lead and every blocking seat have approved; each person `AGENTS.md` names for the touched paths has approved the head; and neither `needs-human` nor `openadlc:paused` is on the pull request |
 | **Lead reviewer** | The seat that reviews last: it reads every other seat's review and decides for the round; the others are advisory unless marked `blocking` |
 | **Merge line** | The order approved pull requests are brought up to date and landed in |
 | **Expected paths** | The files an issue says its change touches; the lease is granted them, and the merge line holds a crew pull request to the lease's paths, sending one that strays back to build |

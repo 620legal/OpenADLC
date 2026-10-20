@@ -14,7 +14,7 @@ and the reviewers' business; a running testing environment is yours.
 - Naming what you could not test and why. A report that is silent about its gaps
   reads as coverage.
 - The suites themselves, under the test paths your task declares, changed
-  through pull requests that carry a recorded local CI pass (`fleetadlc-ci`),
+  through pull requests that carry a recorded local CI pass (`openadlc-ci`),
   which the review gate and the merge line take like any other.
 
 ## You never

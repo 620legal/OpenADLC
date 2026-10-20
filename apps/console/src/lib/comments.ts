@@ -1,5 +1,5 @@
 /**
- * Text with its HTML comments — the fleetadlc markers — taken out.
+ * Text with its HTML comments — the openadlc markers — taken out.
  *
  * The pattern this replaces, `/<!--[\s\S]*?-->/g`, scanned from every `<!--`
  * to the end of the text when none was closed, so a message of many `<!--`

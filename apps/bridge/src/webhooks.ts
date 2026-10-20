@@ -18,7 +18,7 @@ import {
   tasks,
   threads,
   withAdvisoryLock,
-} from '@fleetadlc/db';
+} from '@openadlc/db';
 import {
   CI_LABEL,
   CROSS_CUTTING_LABEL,
@@ -44,8 +44,8 @@ import {
   dedupeMarker,
   hasIgnoreLabel,
   isIgnoreLabel,
-} from '@fleetadlc/shared';
-import { touchesConfig, type GitHubClient } from '@fleetadlc/github';
+} from '@openadlc/shared';
+import { touchesConfig, type GitHubClient } from '@openadlc/github';
 import type { Attribution } from './attribution.js';
 import type { Automation } from './automation.js';
 import { effectiveConfig } from './effective-config.js';
@@ -82,12 +82,12 @@ const APP_CLIENT_MS = 10 * 60 * 1000;
 
 /** The deliveries that can change what may start, each of which asks for a dispatch. */
 const STARTS_WORK = new Set(['issues', 'pull_request', 'deployment_status']);
-import { PAUSED_LABEL } from '@fleetadlc/shared';
+import { PAUSED_LABEL } from '@openadlc/shared';
 import { forgetHold } from './item-hold.js';
 
 /** Why an app's reply is not an answer. */
 const APP_ACCOUNT = 'it is an app’s account, not a person';
-const IGNORED_ISSUE = 'the issue is labelled fleetadlc:ignore, which the crew leaves alone; take the label off and reply again, or answer in the console';
+const IGNORED_ISSUE = 'the issue is labelled openadlc:ignore, which the crew leaves alone; take the label off and reply again, or answer in the console';
 
 /**
  * An app's account, such as `renovate[bot]`. A machine user a person created
@@ -364,7 +364,7 @@ export class Webhooks {
    *
    * Every handler below finds its repository by name alone, which is what the
    * install keys its issues and tasks by. So a delivery from somebody else's
-   * repository of the same name — `someone/fleetadlc` — was taken for ours, and its
+   * repository of the same name — `someone/openadlc` — was taken for ours, and its
    * issue learned as ours and handed to a builder with write access here. Once
    * the app is installable by anyone, anyone can send one. A delivery about no
    * repository, an installation's, is not this check's to refuse.
@@ -403,7 +403,7 @@ export class Webhooks {
       await threads.addMessage({
         threadId: gate.threadId,
         kind: 'sys',
-        author: 'fleetadlc',
+        author: 'openadlc',
         text: `${login} replied on GitHub, and it was not taken as the answer: ${why}.`,
         payload: { gateId: gate.id, login },
         githubUrl: payload.comment?.html_url ?? null,
@@ -443,7 +443,7 @@ export class Webhooks {
       await threads.addMessage({
         threadId: thread.id,
         kind: 'sys',
-        author: 'fleetadlc',
+        author: 'openadlc',
         text: `${login} asked for changes on #${pr.number}, and the work was not sent back: ${why}.`,
         payload: { pr: pr.number, login },
         githubUrl: pr.html_url ?? null,
@@ -738,7 +738,7 @@ export class Webhooks {
     // Every `issues` delivery carries the labels as they were when GitHub made
     // it, and one made between the bridge writing its stage and writing the
     // label still has the old one. The merge's own `issues.closed` arrived
-    // with `adlc:review` (fleetadlc-testbed#1), and was taken for a person
+    // with `adlc:review` (openadlc-testbed#1), and was taken for a person
     // moving the card back: work sent back to Review, and the builder's lease
     // let go of. An edit or another label is no move; a move whose delivery
     // never came is the reconciler's (`movedBack`).
@@ -867,7 +867,7 @@ export class Webhooks {
       }
     }
 
-    // `fleetadlc:ignore` is an issue the crew does not touch. The stage move
+    // `openadlc:ignore` is an issue the crew does not touch. The stage move
     // below writes `adlc:intake` onto one a person filed with no stage, and
     // staffing intake retitles it and adds `start:now`. A stage the sweep
     // does not staff is recorded so the routable query can see the label;
@@ -912,7 +912,7 @@ export class Webhooks {
 
     // An issue filed by a person with no stage label is intake's to shape.
     // The labels checked above are the delivery's. An issue created and then
-    // labelled `fleetadlc:ignore` in a second call arrives as `opened` with no
+    // labelled `openadlc:ignore` in a second call arrives as `opened` with no
     // labels, and the move is where GitHub's labels are read. It refuses such
     // an issue and stores its labels, and intake is not staffed.
     if (action === 'opened' && !stageFromLabels(labels)) {
@@ -1102,7 +1102,7 @@ export class Webhooks {
 
     const crew = await bots.listBots();
     const marker = parseMarker(comment.body);
-    const authorIsBot = whoWrote(comment.user.login, crew, marker).kind === 'fleetadlc';
+    const authorIsBot = whoWrote(comment.user.login, crew, marker).kind === 'openadlc';
 
     // A design comment proposes what the repository should remember; only
     // one whose signature verifies to the issue's design task may, whatever
@@ -1113,7 +1113,7 @@ export class Webhooks {
     // seat tag is the poster's word on a shared account, so the design seat's
     // tag is asked first and the signature decides.
     const wrote = whoWrote(comment.user.login, crew, { bot: seatOf(comment.body) });
-    const designSeat = wrote.kind === 'fleetadlc' && wrote.bot?.role === 'spec';
+    const designSeat = wrote.kind === 'openadlc' && wrote.bot?.role === 'spec';
     if (designSeat) {
       await recordDesignMemory({ repoName, issueNumber: issue.number, body: comment.body, commentUrl: comment.html_url ?? null, signature }).catch(
         (error: unknown) => console.warn(`[bridge] ${repoName}#${issue.number}: design memory not recorded: ${error instanceof Error ? error.message : error}`),
@@ -1175,7 +1175,7 @@ export class Webhooks {
       return;
     }
 
-    // A comment is not a reason to start. `fleetadlc:ignore` means the crew leaves
+    // A comment is not a reason to start. `openadlc:ignore` means the crew leaves
     // the issue alone, and a reply here would otherwise resume the task that
     // was waiting on it. It is checked after the crew's own comments, which
     // still record what a task already running did, and after the access
@@ -1233,7 +1233,7 @@ export class Webhooks {
    * none: found live, a person asked the builder to finish and open the pull
    * request, and no task started in the hour after. Its new session reads the
    * issue again, the comment with it. The same people who may answer a
-   * question may do this, and `fleetadlc:ignore` stops it; anyone else's comment
+   * question may do this, and `openadlc:ignore` stops it; anyone else's comment
    * is recorded and starts nothing, as before.
    */
   private async wakeBuild(payload: WebhookPayload, repo: { id: string; name: string; fullName: string }, subjectRef: string): Promise<void> {
@@ -1289,7 +1289,7 @@ export class Webhooks {
    * Writes a bot's structured comment into its thread, as the kind its event
    * means.
    *
-   * The `fleetadlc:` events were declared, but only `question` was ever produced
+   * The `openadlc:` events were declared, but only `question` was ever produced
    * or consumed, so the bridge learned what a bot did from GitHub's own webhooks
    * and learned nothing at all about a plan posted or a task that stopped on its
    * own terms. A comment with no marker never reaches here, so an operator's own
@@ -1307,7 +1307,7 @@ export class Webhooks {
     const crew = await bots.listBots().catch(() => []);
     const who = whoWrote(input.comment.user.login, crew, input.marker);
     const bot =
-      (who.kind === 'fleetadlc' ? who.bot : null) ?? (await bots.getBotByName(input.marker.bot ?? '').catch(() => null));
+      (who.kind === 'openadlc' ? who.bot : null) ?? (await bots.getBotByName(input.marker.bot ?? '').catch(() => null));
     const repo = await repos.getRepoByName(input.repoName);
     if (!bot || !repo) return;
 
@@ -1725,7 +1725,7 @@ export class Webhooks {
     // `git` refuse to open or push without a recorded pass, but a session holds
     // a token that can do either without them, so a crew account's change with
     // no pass on its head is not reviewed: the gate says why, and the work goes
-    // back to build to run `fleetadlc-ci`. A person's push is theirs; a merge
+    // back to build to run `openadlc-ci`. A person's push is theirs; a merge
     // line update changes no diff and never reaches here.
     const crewSender = payload.sender?.login ? isFleetLogin(await bots.listBots().catch(() => []), payload.sender.login) : false;
     if (crewSender && forIssue) {
@@ -1737,19 +1737,19 @@ export class Webhooks {
           prNumber: pr.number,
           sha: pr.head.sha,
           state: 'pending',
-          description: `no local CI pass for ${short}: the builder runs fleetadlc-ci on it and pushes again`,
+          description: `no local CI pass for ${short}: the builder runs openadlc-ci on it and pushes again`,
         });
         await audit({ actor: payload.sender?.login ?? 'a crew account', action: 'local_ci.missing', target: `${repo.name}#${pr.number}`, payload: { sha: pr.head.sha } }).catch(() => undefined);
         const client = await asAutomation(this.automation['actors'], this.config);
         await this.patchRound(repo, repoFullName, pr, await bots.listBots(), client, {
-          by: 'fleetadlc',
-          reason: `No local CI pass is recorded for ${short}, the head of #${pr.number}: run fleetadlc-ci on it, then push again. Nothing reviews it until then.`,
+          by: 'openadlc',
+          reason: `No local CI pass is recorded for ${short}, the head of #${pr.number}: run openadlc-ci on it, then push again. Nothing reviews it until then.`,
         });
         return;
       }
     }
 
-    // A build already running when a person labelled its issue `fleetadlc:ignore`
+    // A build already running when a person labelled its issue `openadlc:ignore`
     // finishes and opens its pull request; that is the task ending, not the
     // crew being let back in, so the issue stays where it is. The pull
     // request is still reviewed like any other: it is there, and a person can
@@ -2022,7 +2022,7 @@ export class Webhooks {
     if (review.id === undefined || (review.commit_id && review.commit_id !== pr.head.sha)) return;
     if (pr.labels.some((label) => label.name === CROSS_CUTTING_LABEL)) return;
     const author = whoWrote(review.user.login, crew, { bot: seatOf(review.body ?? '') });
-    if (author.kind !== 'fleetadlc' || !lead || author.bot?.name !== lead) return;
+    if (author.kind !== 'openadlc' || !lead || author.bot?.name !== lead) return;
     const target = `${repoFullName}#${pr.number}`;
     const attribution = this.automation['actors'].attribution;
     const signed = attribution
@@ -2194,13 +2194,13 @@ export class Webhooks {
       if (!(await issues.getIssue(repo.id, merged.own).catch(() => null))) {
         console.log(`[bridge] ${repo.name}#${pr.number} was cut for ${repo.name}#${merged.own}, which OpenADLC does not track; left where it is`);
       } else {
-        // Not an issue labelled `fleetadlc:ignore`: `moveStage` refuses it, and
+        // Not an issue labelled `openadlc:ignore`: `moveStage` refuses it, and
         // it stays where it is, off the board.
         //
         // One move. It was two — to Ship, then to Done — and the issue's own
         // `closed` delivery, arriving between them with the labels it had
         // before the merge, put the stage back to Review; the second move was
-        // then backwards, refused, and fleetadlc-testbed#1 stayed in Ship.
+        // then backwards, refused, and openadlc-testbed#1 stayed in Ship.
         const moved = await this.automation.moveStage({ repoName: repo.name, issueNumber: merged.own, to, actor: 'bridge', recordsOutcome: true });
         // Written when the pull request opened too; a missed delivery left it
         // empty, and the deploy after the merge finds its issues by it. Only
@@ -2274,7 +2274,7 @@ export class Webhooks {
    *
    * Only issues the crew already tracks. A merge's label on any other — one
    * from before the repository joined OpenADLC, a pull request's number — was
-   * learnt as a card at that stage; and `fleetadlc:ignore` holds, since a person
+   * learnt as a card at that stage; and `openadlc:ignore` holds, since a person
    * said to leave the issue alone. A move that fails is said and not thrown:
    * the lease and the deploy after the merge belong to the branch's issue, and
    * an issue someone transferred or deleted should not hold them up.
@@ -2324,7 +2324,7 @@ export class Webhooks {
     };
     const reviewer = review.user?.login;
     const author = reviewer ? whoWrote(reviewer, crew, { bot: seatOf(review.body ?? '') }) : null;
-    const seat = author?.kind === 'fleetadlc' ? author.bot?.name ?? null : null;
+    const seat = author?.kind === 'openadlc' ? author.bot?.name ?? null : null;
 
     await audit({
       actor,
@@ -2516,8 +2516,8 @@ export class Webhooks {
     // comments; one made around it is still only advice), or, from a blocking
     // seat, a hold on the merge the lead answers; see the stall above.
     const reviewer = whoWrote(review.user.login, crew, { bot: seatOf(review.body ?? '') });
-    const seat = reviewer.kind === 'fleetadlc' ? reviewer.bot?.name ?? null : null;
-    if (reviewer.kind === 'fleetadlc' && seat !== decision.lead) {
+    const seat = reviewer.kind === 'openadlc' ? reviewer.bot?.name ?? null : null;
+    if (reviewer.kind === 'openadlc' && seat !== decision.lead) {
       console.log(`[bridge] ${repoFullName}#${pr.number}: ${seat ?? review.user.login} asked for changes; only the lead's request sends the work back`);
       return;
     }
@@ -2527,7 +2527,7 @@ export class Webhooks {
     // the organization. Such a person steered the builder, spent its budget
     // and used up the rounds, though they could neither answer a gate nor
     // hold the merge. The review stays on the pull request for the lead.
-    if (reviewer.kind !== 'fleetadlc') {
+    if (reviewer.kind !== 'openadlc') {
       const may = await this.mayAnswerGates(repoFullName, review.user.login, review.user.id);
       if (may !== true) {
         await this.reviewNotTaken(
@@ -2816,7 +2816,7 @@ export class Webhooks {
       await this.mergeLine.leave(repo.name, pull.number).catch(() => undefined);
       if (full.labels.includes(CI_LABEL)) await this.automation.setCiLabel(repo.fullName, pull.number, false).catch(() => null);
       await this.patchRound(repo, repo.fullName, { number: pull.number, head: { ref: pull.headRef } }, crew, client, {
-        by: 'fleetadlc',
+        by: 'openadlc',
         reason: `CI failed again on ${ci.sha.slice(0, 7)} after its rerun, after the lead approved: https://github.com/${repo.fullName}/actions/runs/${ci.runId}`,
       });
     }
@@ -2956,7 +2956,7 @@ export class Webhooks {
     // environment to point one at. Either way the person is still told, because
     // the promote is still waiting for them — now with nothing to read first.
     // Where this repository's testing is served, by its rules; the install's
-    // FLEETADLC_TESTING_URL only where none says (deprecated).
+    // OPENADLC_TESTING_URL only where none says (deprecated).
     const url = this.delivery ? (await this.delivery.get(repo).catch(() => null))?.testingUrl : null;
     const target = await qaTarget(url ?? this.config.testingUrl);
     if ('refusal' in target) {
@@ -3199,7 +3199,7 @@ export class Webhooks {
     const automation = await automationBotName(this.config);
     const client = await this.automation['actors'].asBot(automation);
     if (!client) {
-      throw new Error(`no credential for ${automation}. Run: fleetadlc auth login --bot ${automation}`);
+      throw new Error(`no credential for ${automation}. Run: openadlc auth login --bot ${automation}`);
     }
 
     const since = await this.previousPromote(job, last, client, options.strict);
@@ -3352,7 +3352,7 @@ export class Webhooks {
     if (!client) {
       console.warn(
         `[bridge] ${repo.name} is on ${outcome.environment} at ${outcome.sha.slice(0, 8)}, but nothing was labelled: ` +
-          `no credential for ${automation}. Run: fleetadlc auth login --bot ${automation}`,
+          `no credential for ${automation}. Run: openadlc auth login --bot ${automation}`,
       );
       return;
     }
@@ -3754,7 +3754,7 @@ export class Webhooks {
     if (!client) {
       console.warn(
         `[bridge] ${repoFullName}@${sha.slice(0, 8)} failed its smoke on testing, but no issue was reopened: ` +
-          `no credential for ${automation}. Run: fleetadlc auth login --bot ${automation}`,
+          `no credential for ${automation}. Run: openadlc auth login --bot ${automation}`,
       );
       return;
     }
@@ -3835,7 +3835,7 @@ export class Webhooks {
     if (!client) {
       console.warn(
         `[bridge] the ${production ? 'production' : 'testing'} deploy failed at ${sha.slice(0, 8)}, but nothing was filed: ` +
-          `no credential for ${automation}. Run: fleetadlc auth login --bot ${automation}`,
+          `no credential for ${automation}. Run: openadlc auth login --bot ${automation}`,
       );
       return;
     }

@@ -3,7 +3,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { randomBytes } from 'node:crypto';
-import { forgetTaskLogin } from '@fleetadlc/backup';
+import { forgetTaskLogin } from '@openadlc/backup';
 import { CONTAINER_AUTH, CONTAINER_LOGIN, ensureLoginDir, isAccountId, taskLoginMounts, type DeviceProvider } from '../logins.js';
 import { retireSeatContainers } from '../legacy.js';
 import { readSlotTask, removeSlot, writeSlotTask } from '../worktree.js';
@@ -38,7 +38,7 @@ const run = promisify(execFile);
  * code, not the bot's work, so there is no `.git` recording an absolute path and
  * nothing that has to match hostd's filesystem.
  */
-export const CONTAINER_RUNNER = '/usr/local/lib/fleetadlc/skill-runner.mjs';
+export const CONTAINER_RUNNER = '/usr/local/lib/openadlc/skill-runner.mjs';
 
 /** Where a task's container has its repository's cache volume. */
 export const CONTAINER_CACHE = '/cache';
@@ -52,32 +52,48 @@ export type DockerResult = { code: number; stdout: string; stderr: string };
  * is discarded whatever its labels say (`SessionObserver.reapComputers`), and
  * the pool compares a warm one's image through `docker inspect`'s `.Image`.
  */
-export const LOGIN_LABEL = 'fleetadlc.login';
-export const IMAGE_LABEL = 'fleetadlc.image';
+export const LOGIN_LABEL = 'openadlc.login';
+export const IMAGE_LABEL = 'openadlc.image';
 /** How the container reaches the internet: `none`, or the proxy and the version of what is passed with it. */
-export const EGRESS_LABEL = 'fleetadlc.egress';
+export const EGRESS_LABEL = 'openadlc.egress';
 /** Which of OpenADLC's own tools are mounted into the container — now, its `gh` (see GH_SHIM_DIR). */
-export const TOOLS_LABEL = 'fleetadlc.tools';
+export const TOOLS_LABEL = 'openadlc.tools';
 /** Where on the host the skills, the role playbooks, the runner and `gh` were mounted from. */
-export const MOUNTS_LABEL = 'fleetadlc.mounts';
+export const MOUNTS_LABEL = 'openadlc.mounts';
 /** The limits that `docker update` cannot add later: its process limit and `no-new-privileges`. */
-export const HARDENING_LABEL = 'fleetadlc.hardening';
+export const HARDENING_LABEL = 'openadlc.hardening';
 /**
  * Which install a container belongs to. Container and network names are
- * global on a Docker daemon, and two installs on one machine — `fleetadlc up`
+ * global on a Docker daemon, and two installs on one machine — `openadlc up`
  * and the compose stack, say — both run tasks. Without this, one install's
  * hostd reused or removed the other's, with the other's work, logins and
  * hostd address. A container with no label is from before installs were
  * named, and belongs to the default install.
  */
-export const INSTALL_LABEL = 'fleetadlc.install';
+export const INSTALL_LABEL = 'openadlc.install';
 /** What a container is to hostd: `computer` for a task's, warm or claimed. */
-export const KIND_LABEL = 'fleetadlc.kind';
+export const KIND_LABEL = 'openadlc.kind';
 /** The repository a computer was made for (`repoKeyOf`), or `none`: its cache volume. */
-export const REPO_LABEL = 'fleetadlc.repo';
+export const REPO_LABEL = 'openadlc.repo';
 /** The task directory a computer mounts at its own path, where its slot file says whose it is. */
-export const SLOT_LABEL = 'fleetadlc.slot';
-/** The install `fleetadlc up` runs, which keeps the names every install had before. */
+export const SLOT_LABEL = 'openadlc.slot';
+/**
+ * The same labels as FleetADLC wrote them. A computer made before the rename
+ * keeps them through the upgrade — a waiting task's above all — and reading
+ * only the new keys left it invisible: never reused, never reaped, and its
+ * install read as `default`, which on a named install refused the install's
+ * own container. Read beside the new keys, never written.
+ */
+export const LEGACY_INSTALL_LABEL = 'fleetadlc.install';
+export const LEGACY_KIND_LABEL = 'fleetadlc.kind';
+export const LEGACY_REPO_LABEL = 'fleetadlc.repo';
+export const LEGACY_SLOT_LABEL = 'fleetadlc.slot';
+
+/** A label under its new key, else under its FleetADLC key. */
+function labelOf(labels: Record<string, string> | null | undefined, key: string): string | undefined {
+  return labels?.[key] ?? labels?.[key.replace('openadlc.', 'fleetadlc.')];
+}
+/** The install `openadlc up` runs, which keeps the names every install had before. */
 export const DEFAULT_INSTALL = 'default';
 
 /** A container is not this install's, and is left exactly as it is. */
@@ -85,7 +101,7 @@ export class NotThisInstall extends Error {
   constructor(name: string, owner: string, mine: string) {
     super(
       `${name} belongs to install ${owner}, and this hostd is install ${mine}: it will not reuse or remove it. ` +
-        `Give this install names of its own with FLEETADLC_BOT_PREFIX (and FLEETADLC_INSTALL_ID).`,
+        `Give this install names of its own with OPENADLC_BOT_PREFIX (and OPENADLC_INSTALL_ID).`,
     );
     this.name = 'NotThisInstall';
   }
@@ -93,7 +109,7 @@ export class NotThisInstall extends Error {
 const TOOLS = 'gh-shim-1';
 /**
  * How many processes one task's container may run. The engine CLIs' own
- * sandboxes are off inside a container (FLEETADLC_CONTAINED), so a runaway or
+ * sandboxes are off inside a container (OPENADLC_CONTAINED), so a runaway or
  * prompt-injected task could fork until hostd and every other task on the host
  * had no process slots left. High enough for parallel builds and test runners.
  */
@@ -201,7 +217,7 @@ export function proxyEnv(proxy: string | undefined): string[] {
  * xAI sign-in timed out: the check's every connection was refused at the
  * firewall.
  */
-export function probeNetworkArgs(proxy: string | undefined = process.env.FLEETADLC_BOT_EGRESS_PROXY || undefined): string[] {
+export function probeNetworkArgs(proxy: string | undefined = process.env.OPENADLC_BOT_EGRESS_PROXY || undefined): string[] {
   if (!proxy) return [];
   return ['--add-host', 'host.docker.internal:host-gateway', ...proxyEnv(proxy)];
 }
@@ -233,7 +249,7 @@ export interface DockerDriverOptions {
   networkPrefix?: string;
   /**
    * What this install's containers are named after: nothing for the default
-   * install (`task-<id8>`), `FLEETADLC_BOT_PREFIX` for another install on the
+   * install (`task-<id8>`), `OPENADLC_BOT_PREFIX` for another install on the
    * same daemon (`<prefix>task-<id8>`); without one, a second install would
    * give its tasks the names the first already uses. Seat containers were `<prefix><bot>`, `bot-` by
    * default.
@@ -298,7 +314,7 @@ export function loginMounts(loginDir: string, slotDir: string, provider: DeviceP
  * the task's GitHub identity, never its computer: two tasks of one seat run in
  * two containers, and no task's container outlives its task.
  *
- * Every computer sits on one network per install, `fleetadlc-tasks`, made with
+ * Every computer sits on one network per install, `openadlc-tasks`, made with
  * inter-container traffic off, so one task cannot reach another's processes;
  * a network per task would exhaust the address pools Docker has (about 31 by
  * default) at the first busy afternoon. Each mounts its own task directory at
@@ -349,12 +365,12 @@ export class DockerDriver implements ExecDriver {
 
   /** The install's one network for task computers. */
   get networkName(): string {
-    return this.options.botPrefix ? `${this.options.botPrefix}tasks` : 'fleetadlc-tasks';
+    return this.options.botPrefix ? `${this.options.botPrefix}tasks` : 'openadlc-tasks';
   }
 
   /** A repository's cache volume, shared by its tasks on this host and no other repository's. */
   cacheVolume(repoKey: string): string {
-    return `fleetadlc-cache-${this.install}-${repoKey}`;
+    return `openadlc-cache-${this.install}-${repoKey}`;
   }
 
   /**
@@ -389,7 +405,7 @@ export class DockerDriver implements ExecDriver {
   private async assertOurs(name: string, quick: DockerCallOptions = {}): Promise<Inspected | null> {
     const found = await this.inspect(name, quick);
     if (!found) return null;
-    const owner = found.labels[INSTALL_LABEL] ?? DEFAULT_INSTALL;
+    const owner = labelOf(found.labels, INSTALL_LABEL) ?? DEFAULT_INSTALL;
     if (owner !== this.install) throw new NotThisInstall(name, owner, this.install);
     return found;
   }
@@ -455,7 +471,7 @@ export class DockerDriver implements ExecDriver {
       } catch {
         entry = undefined;
       }
-      const owner = entry?.Labels?.[INSTALL_LABEL] ?? DEFAULT_INSTALL;
+      const owner = labelOf(entry?.Labels, INSTALL_LABEL) ?? DEFAULT_INSTALL;
       if (owner !== this.install) throw new NotThisInstall(name, owner, this.install);
       if (entry?.Options?.['com.docker.network.bridge.enable_icc'] !== 'false') {
         console.warn(
@@ -482,7 +498,7 @@ export class DockerDriver implements ExecDriver {
       const name = `${this.taskPrefix}${id.slice(0, length)}`;
       const found = await this.assertOurs(name);
       if (!found) return name;
-      const slot = found.labels[SLOT_LABEL];
+      const slot = labelOf(found.labels, SLOT_LABEL);
       // Only by the record hostd wrote beside its directory: one inside it is
       // the task's to write, and could name any task.
       const record = slot ? readSlotTask(slot) : null;
@@ -780,18 +796,28 @@ export class DockerDriver implements ExecDriver {
    * task could write.
    */
   async computers(): Promise<FoundComputer[]> {
-    const listed = await this.docker(
-      ['ps', '-a', '--filter', `label=${INSTALL_LABEL}=${this.install}`, '--filter', `label=${KIND_LABEL}=computer`, '--format', '{{.Names}}'],
-      undefined,
-      undefined,
-      QUICK,
-    );
-    if (listed.code !== 0) return [];
+    // Listed under both generations of keys: a computer made before the rename
+    // wears `fleetadlc.*`, and a filter on the new keys alone left it unlisted,
+    // so the reaper never saw it again.
+    const names = new Set<string>();
+    for (const [install, kind] of [
+      [INSTALL_LABEL, KIND_LABEL],
+      [LEGACY_INSTALL_LABEL, LEGACY_KIND_LABEL],
+    ]) {
+      const listed = await this.docker(
+        ['ps', '-a', '--filter', `label=${install}=${this.install}`, '--filter', `label=${kind}=computer`, '--format', '{{.Names}}'],
+        undefined,
+        undefined,
+        QUICK,
+      );
+      if (listed.code !== 0) return [];
+      for (const name of listed.stdout.split('\n').map((line) => line.trim()).filter(Boolean)) names.add(name);
+    }
     const found: FoundComputer[] = [];
-    for (const name of listed.stdout.split('\n').map((line) => line.trim()).filter(Boolean)) {
+    for (const name of names) {
       const container = await this.inspect(name, QUICK).catch(() => null);
       if (!container) continue;
-      const slotDir = container.labels[SLOT_LABEL] ?? null;
+      const slotDir = labelOf(container.labels, SLOT_LABEL) ?? null;
       const record = slotDir ? readSlotTask(slotDir) : null;
       found.push({
         name: container.name,
@@ -801,7 +827,7 @@ export class DockerDriver implements ExecDriver {
         slotDir,
         running: container.running,
         image: container.image,
-        repoKey: container.labels[REPO_LABEL] && container.labels[REPO_LABEL] !== 'none' ? container.labels[REPO_LABEL] : null,
+        repoKey: labelOf(container.labels, REPO_LABEL) && labelOf(container.labels, REPO_LABEL) !== 'none' ? (labelOf(container.labels, REPO_LABEL) ?? null) : null,
       });
     }
     return found;
@@ -845,7 +871,7 @@ export class DockerDriver implements ExecDriver {
   async discard(name: string): Promise<void> {
     if (!name.startsWith(this.taskPrefix) && !name.startsWith(this.warmPrefix)) return;
     await this.assertOurs(name, QUICK);
-    const slotDir = (await this.inspect(name, QUICK).catch(() => null))?.labels[SLOT_LABEL];
+    const slotDir = labelOf((await this.inspect(name, QUICK).catch(() => null))?.labels, SLOT_LABEL);
     await this.docker(['rm', '-f', '-v', name], undefined, undefined, QUICK);
     // The home is not in the slot, so the leftover-slot sweep does not reach
     // it. An earlier build also left a copy of the token under `.running`.
@@ -884,7 +910,7 @@ export class DockerDriver implements ExecDriver {
       docker: (args) => this.docker(args),
       install: this.install,
       botPrefix: this.options.botPrefix ?? 'bot-',
-      networkPrefix: this.options.networkPrefix ?? 'fleetadlc-bot',
+      networkPrefix: this.options.networkPrefix ?? 'openadlc-bot',
       seats,
       log: (line) => console.log(line),
     });
@@ -907,7 +933,7 @@ export class DockerDriver implements ExecDriver {
     const bot = computer.bot;
     const container = computer.container;
     if (!container) return null;
-    const dir = `/tmp/fleetadlc-agent-${randomBytes(8).toString('hex')}`;
+    const dir = `/tmp/openadlc-agent-${randomBytes(8).toString('hex')}`;
     const socket = `${dir}/agent.sock`;
     const withAgent = ['-e', `SSH_AUTH_SOCK=${socket}`];
 
@@ -997,7 +1023,7 @@ export class DockerDriver implements ExecDriver {
     // in the host's process list, so it goes on stdin into a file only the bot
     // can read, in the container's memory, which the session's shell reads,
     // removes, and then runs the command with nothing else.
-    const envFile = `/dev/shm/fleetadlc-env-${randomBytes(8).toString('hex')}`;
+    const envFile = `/dev/shm/openadlc-env-${randomBytes(8).toString('hex')}`;
     const wrote = await this.docker(
       ['exec', '-i', container, 'sh', '-c', `umask 077 && cat > ${envFile}`],
       sessionEnvFile(withRepoHome(containerBaseEnv(), input.env)),
@@ -1083,7 +1109,7 @@ export class DockerDriver implements ExecDriver {
     const args = ['exec'];
     if (options.cwd) args.push('-w', options.cwd);
     // A command run for a repository (`make setup`) runs in its home too.
-    const env = options.env?.FLEETADLC_REPO_HOME ? withRepoHome(containerBaseEnv(), options.env) : (options.env ?? {});
+    const env = options.env?.OPENADLC_REPO_HOME ? withRepoHome(containerBaseEnv(), options.env) : (options.env ?? {});
     // A credential (the database URL with its password, the task's token) is
     // named here and valued in the docker client's own environment, so `make
     // setup` and `make ci` do not show it in the host's process list while

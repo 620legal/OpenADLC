@@ -16,8 +16,8 @@ const BASE: AppChecks = {
   installed: 'no',
   repository: 'exampleco/api',
   settingsUrl: null,
-  installUrl: 'https://github.com/apps/fleetadlc-exampleco/installations/new',
-  app: { slug: 'fleetadlc-exampleco', id: 1, installations: 0 },
+  installUrl: 'https://github.com/apps/openadlc-exampleco/installations/new',
+  app: { slug: 'openadlc-exampleco', id: 1, installations: 0 },
   privateKeyHeld: true,
   detail: '',
 };

@@ -565,7 +565,7 @@ function expandBraces(path: string, budget: number): string[] | null {
  * nothing. And a bot's own comment is supposed to be ignored; unrecognised, the
  * platform answered its own comment as though a person had written it.
  *
- * It was also self-inflicting: `fleetadlc up` seeds the crew from the configuration
+ * It was also self-inflicting: `openadlc up` seeds the crew from the configuration
  * on every start, so the login onboarding had corrected to the real casing was
  * overwritten again at the next restart.
  */

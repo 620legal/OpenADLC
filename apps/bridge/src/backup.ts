@@ -39,10 +39,10 @@ import {
   type SignInChoices,
   type SignInFacts,
   type TakeOverPorts,
-} from '@fleetadlc/backup';
-import { audit, bots, credentials, modelAccounts, repos, settings, tasks } from '@fleetadlc/db';
-import { appPrivateKeyRef, credentialKind, getSecretStore } from '@fleetadlc/github';
-import { holdsCredential } from '@fleetadlc/shared';
+} from '@openadlc/backup';
+import { audit, bots, credentials, modelAccounts, repos, settings, tasks } from '@openadlc/db';
+import { appPrivateKeyRef, credentialKind, getSecretStore } from '@openadlc/github';
+import { holdsCredential } from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import type { BotNames } from './bot-names.js';
 import type { BridgeConfig } from './config.js';
@@ -58,8 +58,8 @@ import { HttpFailure, readBytes, STREAMING, type Router } from './router.js';
  * Backing an install up from the console, and restoring one into a clean
  * install from the walkthrough.
  *
- * What a backup takes and how a restore puts it back are `@fleetadlc/backup`'s —
- * the same code `fleetadlc backup` and `fleetadlc restore` run, sign-in checks and
+ * What a backup takes and how a restore puts it back are `@openadlc/backup`'s —
+ * the same code `openadlc backup` and `openadlc restore` run, sign-in checks and
  * all. This is the part only the bridge can do: it reaches a subscription's
  * sign-in folder through hostd, which keeps it and checks it, and it renames
  * a restored bot through the one routine that moves a bot's computer, folder
@@ -158,7 +158,7 @@ export interface BackupWiring {
 
 /**
  * What restoring into a set-up install reads and holds: the install through
- * `@fleetadlc/backup`, a subscription's sign-in through hostd, the crew's queues
+ * `@openadlc/backup`, a subscription's sign-in through hostd, the crew's queues
  * through the one routine that renames bots, their tokens through the one
  * broker, the dispatcher through its gate, and afterwards the health checks.
  */
@@ -292,9 +292,9 @@ export function defaultBackupDeps(input: BackupWiring): BackupRouteDeps {
   };
 }
 
-/** `fleetadlc-backup-2026-09-24.fleetbak`, the name `fleetadlc backup` gives it too. */
+/** `openadlc-backup-2026-09-24.fleetbak`, the name `openadlc backup` gives it too. */
 export function backupFilename(now: Date): string {
-  return `fleetadlc-backup-${now.toISOString().slice(0, 10)}.fleetbak`;
+  return `openadlc-backup-${now.toISOString().slice(0, 10)}.fleetbak`;
 }
 
 function refused(error: unknown): never {
@@ -347,7 +347,7 @@ export function registerBackupRoutes(router: Router, deps: BackupRouteDeps): voi
 
   /**
    * The archive, as a download. Sealed always: the console does not offer
-   * the unencrypted form, which is `fleetadlc backup --unencrypted`'s alone.
+   * the unencrypted form, which is `openadlc backup --unencrypted`'s alone.
    */
   router.post('/v1/backup', async ({ body, identity, res }) => {
     const input = await body<{ selection?: unknown; passphrase?: unknown; confirm?: unknown }>();

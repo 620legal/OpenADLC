@@ -1,6 +1,6 @@
 # Getting back to the revision that worked.
 #
-# This job runs in the **`production-rollback`** environment, which `fleetadlc
+# This job runs in the **`production-rollback`** environment, which `openadlc
 # github apply` makes with no reviewer and no wait timer: a rollback that waits
 # for an approval is not a rollback. The environment is there for its branch
 # policy, which admits the default branch alone, and its secrets: the credential
@@ -71,7 +71,7 @@ jobs:
           # Empty means "whatever was serving before the last shift", which the
           # repository's own target resolves. A rollback should not need someone
           # to remember a tag under pressure.
-          FLEETADLC_REVISION_TAG: ${{ inputs.to }}
+          OPENADLC_REVISION_TAG: ${{ inputs.to }}
         # pipefail, or the step's status is tee's, and a failed rollback reads
         # as a success.
         run: |

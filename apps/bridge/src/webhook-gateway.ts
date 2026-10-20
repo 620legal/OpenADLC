@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
  *
  * OpenADLC can start a public tunnel for you, and the obvious way to do it — point
  * the tunnel at the bridge — is wrong. In `local` mode the bridge takes
- * `x-fleetadlc-identity` at face value, which `identity.ts` itself describes as
+ * `x-openadlc-identity` at face value, which `identity.ts` itself describes as
  * honest only for "an install reachable only from the machine it runs on". A
  * tunnel makes it reachable from everywhere, and then one header is the
  * difference between a stranger and the operator: answering a gate, moving a
@@ -26,7 +26,7 @@ const WEBHOOK_PATH = '/webhooks/github';
 
 /**
  * Headers worth forwarding: what the handler reads, plus what is useful in a
- * log. `x-fleetadlc-identity` and the IAP headers are deliberately absent, and so is
+ * log. `x-openadlc-identity` and the IAP headers are deliberately absent, and so is
  * anything bearing a credential — `authorization`, `cookie`.
  */
 const FORWARDED = new Set([

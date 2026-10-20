@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GitHubApiError } from '@fleetadlc/github';
+import { GitHubApiError } from '@openadlc/github';
 import { continuesBranch, endedWithoutPullRequest, openPullRequestUrl, readBranch } from './build-left.js';
 
-const BRANCH = 'agent/fleetadlc-atlas-janedoe/216-issue-216';
+const BRANCH = 'agent/openadlc-atlas-janedoe/216-issue-216';
 
 /** A client that answers the pulls and compare calls from what it is given. */
 function client(answers: { pulls?: { number: number }[]; compare?: { ahead_by: number } | Error }) {
@@ -17,23 +17,23 @@ function client(answers: { pulls?: { number: number }[]; compare?: { ahead_by: n
 describe('what GitHub says of a build’s branch', () => {
   it('finds a pull request from the branch, open or not, by its owner and name', async () => {
     const github = client({ pulls: [{ number: 230 }] });
-    expect(await readBranch(github, 'janedoe/fleetadlc-testbed', BRANCH, 'main')).toEqual({ pullRequest: 230, ahead: 0 });
-    expect(github.calls[0]?.[1]).toBe(`/repos/janedoe/fleetadlc-testbed/pulls?state=all&per_page=1&head=${encodeURIComponent(`janedoe:${BRANCH}`)}`);
+    expect(await readBranch(github, 'janedoe/openadlc-testbed', BRANCH, 'main')).toEqual({ pullRequest: 230, ahead: 0 });
+    expect(github.calls[0]?.[1]).toBe(`/repos/janedoe/openadlc-testbed/pulls?state=all&per_page=1&head=${encodeURIComponent(`janedoe:${BRANCH}`)}`);
   });
 
   it('counts the commits beyond the base when there is none', async () => {
     const github = client({ compare: { ahead_by: 3 } });
-    expect(await readBranch(github, 'janedoe/fleetadlc-testbed', BRANCH, 'main')).toEqual({ pullRequest: null, ahead: 3 });
+    expect(await readBranch(github, 'janedoe/openadlc-testbed', BRANCH, 'main')).toEqual({ pullRequest: null, ahead: 3 });
   });
 
   it('reads a branch never pushed as no commits', async () => {
     const github = client({ compare: new GitHubApiError(404, '/compare', 'Not Found') });
-    expect(await readBranch(github, 'janedoe/fleetadlc-testbed', BRANCH, 'main')).toEqual({ pullRequest: null, ahead: 0 });
+    expect(await readBranch(github, 'janedoe/openadlc-testbed', BRANCH, 'main')).toEqual({ pullRequest: null, ahead: 0 });
   });
 
   it('says nothing when GitHub cannot be asked, so nothing is done on a guess', async () => {
     const github = client({ compare: new GitHubApiError(502, '/compare', 'Bad Gateway') });
-    expect(await readBranch(github, 'janedoe/fleetadlc-testbed', BRANCH, 'main')).toBeNull();
+    expect(await readBranch(github, 'janedoe/openadlc-testbed', BRANCH, 'main')).toBeNull();
   });
 });
 
@@ -58,7 +58,7 @@ describe('a build that ended without its pull request', () => {
   });
 
   it('is opened from GitHub’s compare page for the branch', () => {
-    expect(openPullRequestUrl('janedoe/fleetadlc-testbed', BRANCH, 'main')).toBe(`https://github.com/janedoe/fleetadlc-testbed/compare/main...${BRANCH}?expand=1`);
-    expect(openPullRequestUrl('janedoe/fleetadlc-testbed', BRANCH)).toBe(`https://github.com/janedoe/fleetadlc-testbed/compare/${BRANCH}?expand=1`);
+    expect(openPullRequestUrl('janedoe/openadlc-testbed', BRANCH, 'main')).toBe(`https://github.com/janedoe/openadlc-testbed/compare/main...${BRANCH}?expand=1`);
+    expect(openPullRequestUrl('janedoe/openadlc-testbed', BRANCH)).toBe(`https://github.com/janedoe/openadlc-testbed/compare/${BRANCH}?expand=1`);
   });
 });

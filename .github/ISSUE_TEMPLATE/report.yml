@@ -37,7 +37,7 @@ body:
       label: Steps to reproduce
       description: From a running install, the steps that make it happen again.
       placeholder: |
-        1. fleetadlc up
+        1. openadlc up
         2. Open the console and ...
     validations:
       required: true
@@ -70,8 +70,8 @@ body:
   - type: textarea
     id: output
     attributes:
-      label: fleetadlc doctor and logs
+      label: openadlc doctor and logs
       description: >
-        The output of `fleetadlc doctor`, and the service log lines around the
+        The output of `openadlc doctor`, and the service log lines around the
         failure. Take out any token, key or webhook secret first.
       render: text

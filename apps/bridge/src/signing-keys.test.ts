@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GitHubApiError, signingKeyRef, type SecretStore } from '@fleetadlc/github';
+import { GitHubApiError, signingKeyRef, type SecretStore } from '@openadlc/github';
 import { ensureSigningKeyRegistered, signingKeyWarning } from './signing-keys.js';
 
 /**
@@ -9,7 +9,7 @@ import { ensureSigningKeyRegistered, signingKeyWarning } from './signing-keys.js
  * because a key already existed.
  */
 
-const PUBLIC = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIStoredKeyStoredKey fleetadlc-atlas';
+const PUBLIC = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIStoredKeyStoredKey openadlc-atlas';
 
 function memory(initial: Record<string, string> = {}): SecretStore & { data: Map<string, string> } {
   const data = new Map(Object.entries(initial));
@@ -37,7 +37,7 @@ function github(known: { id: number; key: string }[], refuse?: GitHubApiError) {
     client: {
       async listSshSigningKeys() {
         if (refuse) throw refuse;
-        return known.map((key) => ({ ...key, title: 'fleetadlc' }));
+        return known.map((key) => ({ ...key, title: 'openadlc' }));
       },
       async uploadSshSigningKey(title: string, key: string) {
         uploads.push({ title, key });
@@ -51,20 +51,20 @@ const derive = () => PUBLIC;
 
 describe('registering a bot’s signing key', () => {
   it('uploads the key the bot already has when its account does not know it', async () => {
-    const store = memory({ [signingKeyRef('fleetadlc-atlas-janedoe')]: 'PRIVATE' });
+    const store = memory({ [signingKeyRef('openadlc-atlas-janedoe')]: 'PRIVATE' });
     const { client, uploads } = github([]);
 
-    const result = await ensureSigningKeyRegistered({ name: 'fleetadlc-atlas-janedoe', store, client, derive });
+    const result = await ensureSigningKeyRegistered({ name: 'openadlc-atlas-janedoe', store, client, derive });
 
     expect(result).toEqual({ state: 'uploaded', keyId: 42 });
-    expect(uploads).toEqual([{ title: 'fleetadlc-fleetadlc-atlas-janedoe', key: PUBLIC }]);
+    expect(uploads).toEqual([{ title: 'openadlc-openadlc-atlas-janedoe', key: PUBLIC }]);
   });
 
   it('uploads nothing when the account already has it, whatever its comment says', async () => {
-    const store = memory({ [signingKeyRef('fleetadlc-atlas-janedoe')]: 'PRIVATE' });
+    const store = memory({ [signingKeyRef('openadlc-atlas-janedoe')]: 'PRIVATE' });
     const { client, uploads } = github([{ id: 7, key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIStoredKeyStoredKey' }]);
 
-    expect(await ensureSigningKeyRegistered({ name: 'fleetadlc-atlas-janedoe', store, client, derive })).toEqual({
+    expect(await ensureSigningKeyRegistered({ name: 'openadlc-atlas-janedoe', store, client, derive })).toEqual({
       state: 'registered',
       keyId: 7,
     });
@@ -79,23 +79,23 @@ describe('registering a bot’s signing key', () => {
       name: 'qa',
       store,
       client,
-      generate: () => ({ privateKey: 'NEW-PRIVATE', publicKey: 'ssh-ed25519 AAAANEW fleetadlc-qa' }),
+      generate: () => ({ privateKey: 'NEW-PRIVATE', publicKey: 'ssh-ed25519 AAAANEW openadlc-qa' }),
     });
 
     expect(store.data.get(signingKeyRef('qa'))).toBe('NEW-PRIVATE');
-    expect(uploads).toEqual([{ title: 'fleetadlc-qa', key: 'ssh-ed25519 AAAANEW fleetadlc-qa' }]);
+    expect(uploads).toEqual([{ title: 'openadlc-qa', key: 'ssh-ed25519 AAAANEW openadlc-qa' }]);
   });
 
   it('says what the app needs when GitHub refuses, instead of claiming it uploaded', async () => {
-    const store = memory({ [signingKeyRef('fleetadlc-atlas-janedoe')]: 'PRIVATE' });
+    const store = memory({ [signingKeyRef('openadlc-atlas-janedoe')]: 'PRIVATE' });
     const refused = new GitHubApiError(403, '/user/ssh_signing_keys', 'Resource not accessible by integration');
     const { client } = github([], refused);
 
-    const result = await ensureSigningKeyRegistered({ name: 'fleetadlc-atlas-janedoe', store, client, derive });
+    const result = await ensureSigningKeyRegistered({ name: 'openadlc-atlas-janedoe', store, client, derive });
 
     expect(result.state).toBe('refused');
     expect(result.state === 'refused' && result.warning).toContain('"SSH signing keys" permission');
-    expect(result.state === 'refused' && result.warning).toContain('connect fleetadlc-atlas-janedoe again');
+    expect(result.state === 'refused' && result.warning).toContain('connect openadlc-atlas-janedoe again');
   });
 
   it('passes on any other refusal in GitHub’s words', () => {

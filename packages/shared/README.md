@@ -1,4 +1,4 @@
-# @fleetadlc/shared
+# @openadlc/shared
 
 The vocabulary the rest of OpenADLC agrees on: the shapes of the rows and messages
 that pass between processes, the strings more than one component has to spell
@@ -6,13 +6,13 @@ the same way, and the pure rules more than one of them applies. It has no
 process and no state, and does no I/O beyond reading a YAML file and `fetchJson`.
 It depends on nothing in the workspace — `yaml` and `zod` only — so every
 TypeScript package can import it: the bridge, hostd, the dispatcher, the CLI,
-`@fleetadlc/db`, `@fleetadlc/github`, `@fleetadlc/engines`, `@fleetadlc/backup` and the
+`@openadlc/db`, `@openadlc/github`, `@openadlc/engines`, `@openadlc/backup` and the
 integration suites. The console does not; it keeps copies of the few lists it
 shows, and its tests hold them to these.
 
 ## Source map
 
-- `src/index.ts` — the barrel, built to `dist/index.js`, which is what `@fleetadlc/shared` resolves to.
+- `src/index.ts` — the barrel, built to `dist/index.js`, which is what `@openadlc/shared` resolves to.
 - `src/types.ts` — roles, engines, task kinds and states, stage modes, and the row shapes (`Bot`, `Repo`, `Task`, `Gate`…).
 - `src/config.ts` — the zod schemas for `config/bots.yaml`, `repos.yaml`, `costs.yaml` and `review.yaml`, and `loadYamlFile`.
 - `src/env.ts` — `envOr`, `envInt`, `envBool`, and `DEFAULT_PORTS`: console 47300, bridge 47311, hostd 47312, Postgres 47432.
@@ -44,13 +44,13 @@ says where:
 ## Testing
 
 ```bash
-pnpm --filter @fleetadlc/shared test                                   # every src/*.test.ts
-pnpm --filter @fleetadlc/shared exec vitest run src/markers.test.ts    # one file
-pnpm --filter @fleetadlc/shared build                                  # tsc; every consumer imports dist/
+pnpm --filter @openadlc/shared test                                   # every src/*.test.ts
+pnpm --filter @openadlc/shared exec vitest run src/markers.test.ts    # one file
+pnpm --filter @openadlc/shared build                                  # tsc; every consumer imports dist/
 ```
 
 - **Every consumer reads `dist/`.** A change here reaches the bridge, hostd and
-  the rest only after `pnpm --filter @fleetadlc/shared build` (or `pnpm build`); their
+  the rest only after `pnpm --filter @openadlc/shared build` (or `pnpm build`); their
   tests run against the last build.
 - **vitest does not type-check.** A type changed here can break a consumer that
   vitest still runs happily; `pnpm build` compiles every package and is what

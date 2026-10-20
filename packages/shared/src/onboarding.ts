@@ -115,7 +115,7 @@ export function onboardingStepKey(named: string): OnboardingStep | null {
  *
  * A bot's identity is its GitHub handle — that is what appears on a commit, a
  * review and a comment, and what somebody looks for when reading history. The
- * display name is a label for a role, so it is said as one: `fleetadlc-builder-janedoe`,
+ * display name is a label for a role, so it is said as one: `openadlc-builder-janedoe`,
  * connected as the builder.
  *
  * The wording matches what `config/bots.yaml` puts in each display name — the
@@ -298,22 +298,22 @@ export function otherGroupRefusal(login: string, bot: { role: BotRole }, holder:
  * seat, prefixed. Only ever a suggestion. Which account a bot is, is decided
  * by the account that authorizes.
  */
-export function suggestedLogin(bot: string, prefix = 'fleetadlc'): string {
+export function suggestedLogin(bot: string, prefix = 'openadlc'): string {
   return `${prefix}-${bot}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
 }
 
 /**
  * Names to try for a bot's account, best first.
  *
- * The bare `fleetadlc-<bot>` name of one seat was taken — by a stranger,
+ * The bare `openadlc-<bot>` name of one seat was taken — by a stranger,
  * registered years earlier — and the install went out with a bot pointed at
  * somebody else's account until the creation dates gave it away. A global
  * namespace of nine obvious names was always going to collide; what made it
  * dangerous was that nothing checked.
  *
- * So the owner's identifier goes in the name by default. `fleetadlc-builder-janedoe`
+ * So the owner's identifier goes in the name by default. `openadlc-builder-janedoe`
  * is nobody else's, reads as belonging to this install, and still says which bot
- * it is. The bare `fleetadlc-builder` is offered last rather than first: it is the one
+ * it is. The bare `openadlc-builder` is offered last rather than first: it is the one
  * most likely to be taken, and taken by someone unrelated.
  *
  * GitHub allows alphanumerics and single hyphens, cannot start or end with one,
@@ -332,8 +332,8 @@ export function loginCandidates(bot: string, owner: string | null): string[] {
 
   const tail = owner ? clean(owner) : '';
   const candidates = tail
-    ? [clean(`fleetadlc-${bot}-${tail}`), clean(`${tail}-fleetadlc-${bot}`), clean(`fleetadlc-${bot}`)]
-    : [clean(`fleetadlc-${bot}`)];
+    ? [clean(`openadlc-${bot}-${tail}`), clean(`${tail}-openadlc-${bot}`), clean(`openadlc-${bot}`)]
+    : [clean(`openadlc-${bot}`)];
 
   return [...new Set(candidates)].filter(Boolean);
 }
@@ -379,7 +379,7 @@ export function suggestBotEmail(operatorEmail: string | null | undefined, bot: s
   }
 
   const [, local = '', , domain = ''] = match;
-  const tagged = `${local}+fleetadlc-${bot}@${domain}`;
+  const tagged = `${local}+openadlc-${bot}@${domain}`;
 
   if (PLUS_ADDRESSING.includes(domain)) {
     return {

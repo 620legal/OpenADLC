@@ -32,18 +32,18 @@ function daemon(containers: Record<string, Record<string, string> | null | Fake>
 describe('retiring each seat’s container from before a task had its own', () => {
   it('removes the container, its sidecar and its network for a seat with nothing running, and keeps a busy one', async () => {
     const { calls, docker } = daemon({
-      'bot-builder': { 'fleetadlc.install': 'default' },
-      'bot-builder-db': { 'fleetadlc.install': 'default' },
+      'bot-builder': { 'openadlc.install': 'default' },
+      'bot-builder-db': { 'openadlc.install': 'default' },
       // From before installs were named: the default install's, by its seat label.
       'bot-intake': { 'fleet.login': 'none' },
-      'bot-lead-reviewer': { 'fleetadlc.install': 'default' },
+      'bot-lead-reviewer': { 'openadlc.install': 'default' },
     });
 
     const result = await retireSeatContainers({
       docker,
       install: 'default',
       botPrefix: 'bot-',
-      networkPrefix: 'fleetadlc-bot',
+      networkPrefix: 'openadlc-bot',
       seats: [
         { name: 'builder', busy: false },
         { name: 'intake', busy: false },
@@ -58,22 +58,29 @@ describe('retiring each seat’s container from before a task had its own', () =
     expect(removed).toEqual(['bot-builder', 'bot-builder-db', 'bot-intake']);
     expect(calls).toContainEqual(['rm', '-f', '-v', 'bot-builder']);
     const networks = calls.filter((args) => args[0] === 'network').map((args) => args.at(-1));
-    // And the network's name from before the rename.
-    expect(networks).toEqual(['fleetadlc-bot-builder', 'fleet-bot-builder', 'fleetadlc-bot-intake', 'fleet-bot-intake']);
+    // And the network's names from before the renames.
+    expect(networks).toEqual([
+      'openadlc-bot-builder',
+      'fleetadlc-bot-builder',
+      'fleet-bot-builder',
+      'openadlc-bot-intake',
+      'fleetadlc-bot-intake',
+      'fleet-bot-intake',
+    ]);
   });
 
   it('never removes another install’s container that shares the name', async () => {
-    const { calls, docker } = daemon({ 'bot-builder': { 'fleetadlc.install': 'compose-fleetadlc' } });
+    const { calls, docker } = daemon({ 'bot-builder': { 'openadlc.install': 'compose-openadlc' } });
 
     const result = await retireSeatContainers({
       docker,
       install: 'default',
       botPrefix: 'bot-',
-      networkPrefix: 'fleetadlc-bot',
+      networkPrefix: 'openadlc-bot',
       seats: [{ name: 'builder', busy: false }],
     });
 
-    expect(result.kept).toEqual([{ seat: 'builder', why: 'it belongs to install compose-fleetadlc' }]);
+    expect(result.kept).toEqual([{ seat: 'builder', why: 'it belongs to install compose-openadlc' }]);
     expect(calls.some((args) => args[0] === 'rm' || args[0] === 'network')).toBe(false);
   });
 
@@ -85,7 +92,7 @@ describe('retiring each seat’s container from before a task had its own', () =
       docker,
       install: 'default',
       botPrefix: 'bot-',
-      networkPrefix: 'fleetadlc-bot',
+      networkPrefix: 'openadlc-bot',
       seats: [{ name: 'qa', busy: false }],
       log: (line) => lines.push(line),
     });
@@ -99,7 +106,7 @@ describe('retiring each seat’s container from before a task had its own', () =
 
   it('takes an unlabelled container as the default install’s by OpenADLC’s image or its seat network', async () => {
     const { calls, docker } = daemon({
-      'bot-sre': { image: 'fleetadlc-bot:latest' },
+      'bot-sre': { image: 'openadlc-bot:latest' },
       'bot-sre-db': { image: 'pgvector/pgvector:pg16', networks: ['fleet-bot-sre'] },
     });
 
@@ -107,7 +114,7 @@ describe('retiring each seat’s container from before a task had its own', () =
       docker,
       install: 'default',
       botPrefix: 'bot-',
-      networkPrefix: 'fleetadlc-bot',
+      networkPrefix: 'openadlc-bot',
       seats: [{ name: 'sre', busy: false }],
     });
 

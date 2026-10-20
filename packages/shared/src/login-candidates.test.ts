@@ -2,23 +2,23 @@ import { describe, expect, it } from 'vitest';
 import { loginCandidates } from './onboarding.js';
 
 /**
- * Bot names such as `fleetadlc-flow` live in GitHub's global namespace, and a
+ * Bot names such as `openadlc-flow` live in GitHub's global namespace, and a
  * suggested name has been found already taken by a stranger. An install that adopts one of them
  * works for a stranger, so the owner's name goes into every proposed name.
  */
 describe('names to try for a bot account', () => {
   it('puts the owner in the name, so it is nobody else’s', () => {
-    expect(loginCandidates('atlas', 'janedoe')[0]).toBe('fleetadlc-atlas-janedoe');
+    expect(loginCandidates('atlas', 'janedoe')[0]).toBe('openadlc-atlas-janedoe');
   });
 
   it('offers the bare name last, because it is the one most likely to be taken', () => {
     const candidates = loginCandidates('flow', 'janedoe');
-    expect(candidates.at(-1)).toBe('fleetadlc-flow');
-    expect(candidates[0]).not.toBe('fleetadlc-flow');
+    expect(candidates.at(-1)).toBe('openadlc-flow');
+    expect(candidates[0]).not.toBe('openadlc-flow');
   });
 
   it('falls back to the bare name when there is no owner yet', () => {
-    expect(loginCandidates('atlas', null)).toEqual(['fleetadlc-atlas']);
+    expect(loginCandidates('atlas', null)).toEqual(['openadlc-atlas']);
   });
 
   it('produces something GitHub will accept from an awkward owner name', () => {

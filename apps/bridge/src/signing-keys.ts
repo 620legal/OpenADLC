@@ -1,4 +1,4 @@
-import { GitHubApiError, generateSigningKey, publicKeyOf, sameSigningKey, signingKeyRef, type SecretStore } from '@fleetadlc/github';
+import { GitHubApiError, generateSigningKey, publicKeyOf, sameSigningKey, signingKeyRef, type SecretStore } from '@openadlc/github';
 
 /**
  * Makes sure the key a bot signs its commits with is one its GitHub account
@@ -45,7 +45,7 @@ export async function ensureSigningKeyRegistered(input: {
   try {
     const known = (await input.client.listSshSigningKeys()).find((key) => sameSigningKey(key.key, publicKey));
     if (known) return { state: 'registered', keyId: known.id };
-    const keyId = await input.client.uploadSshSigningKey(`fleetadlc-${input.name}`, publicKey);
+    const keyId = await input.client.uploadSshSigningKey(`openadlc-${input.name}`, publicKey);
     return { state: 'uploaded', keyId };
   } catch (error) {
     return { state: 'refused', warning: signingKeyWarning(input.name, error) };

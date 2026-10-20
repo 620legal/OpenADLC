@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const audited: Record<string, unknown>[] = [];
-vi.mock('@fleetadlc/db', () => ({ audit: vi.fn(async (entry: Record<string, unknown>) => void audited.push(entry)) }));
+vi.mock('@openadlc/db', () => ({ audit: vi.fn(async (entry: Record<string, unknown>) => void audited.push(entry)) }));
 
 const { chooseIssueText, editNotTaken, forgetSaidEdits } = await import('./vouched-text.js');
 

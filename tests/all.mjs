@@ -26,13 +26,13 @@ const live = process.argv.includes('--live');
 /**
  * The environment with the install's own settings taken out. The suites below
  * run with a scratch install's exported (`tests/scratch.sh env`), and the
- * unit tests inherited them: `FLEETADLC_SCRIPTED_ENGINES=1` turned off the
+ * unit tests inherited them: `OPENADLC_SCRIPTED_ENGINES=1` turned off the
  * sign-in holds a dozen bridge tests are about, and they failed here while
  * passing in `make ci`. Unit tests need nothing running, so they get nothing.
  */
 function withoutInstall(env) {
   return Object.fromEntries(
-    Object.entries(env).filter(([name]) => !name.startsWith('FLEETADLC_') && !name.startsWith('FLEET_') && name !== 'DATABASE_URL'),
+    Object.entries(env).filter(([name]) => !name.startsWith('OPENADLC_') && !name.startsWith('FLEET_') && name !== 'DATABASE_URL'),
   );
 }
 
@@ -65,7 +65,7 @@ const suites = [
   },
   {
     // Starts real containers on the machine's Docker, so only when asked:
-    // FLEETADLC_DOCKER_COMPUTERS=1, against a scratch install on the docker driver.
+    // OPENADLC_DOCKER_COMPUTERS=1, against a scratch install on the docker driver.
     name: 'docker computers',
     command: process.execPath,
     args: [join(here, 'docker-computers.mjs')],
@@ -124,7 +124,7 @@ function run(suite) {
  * they run against; see `scratch-only.mjs`.
  */
 async function installState() {
-  const bridge = process.env.FLEETADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
+  const bridge = process.env.OPENADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
   const health = await fetch(`${bridge}/healthz`)
     .then((response) => (response.ok ? response.json() : null))
     .catch(() => null);
@@ -133,7 +133,7 @@ async function installState() {
 }
 
 async function githubIsConnected() {
-  const bridge = process.env.FLEETADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
+  const bridge = process.env.OPENADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
   return fetch(`${bridge}/healthz`)
     .then((response) => response.json())
     .then((body) => typeof body.github === 'string' && body.github.startsWith('acting as'))
@@ -142,7 +142,7 @@ async function githubIsConnected() {
 
 async function consoleIsUp() {
   // `/` refuses a browser that has not signed in; `/signin` answers either way.
-  const url = process.env.FLEETADLC_CONSOLE_URL ?? 'http://127.0.0.1:47300';
+  const url = process.env.OPENADLC_CONSOLE_URL ?? 'http://127.0.0.1:47300';
   return fetch(`${url}/signin`)
     .then((response) => response.ok)
     .catch(() => false);
@@ -159,7 +159,7 @@ async function terraformIsInstalled() {
 /**
  * `terraform validate` needs the module's providers, which only `terraform init`
  * fetches. On a machine that never ran it, the check failed on that rather than
- * on anything in the module; `fleetadlc cloud validate` initialises and validates.
+ * on anything in the module; `openadlc cloud validate` initialises and validates.
  */
 function terraformIsInitialised() {
   return existsSync(join(root, 'infra', 'gcp', '.terraform'));
@@ -186,20 +186,20 @@ async function main() {
     console: await consoleIsUp(),
     consoleAndInstall: (await consoleIsUp()) && (await installState()) === 'scripted',
     terraform: (await terraformIsInstalled()) && terraformIsInitialised(),
-    dockerComputers: process.env.FLEETADLC_DOCKER_COMPUTERS === '1' && (await installState()) === 'scripted',
+    dockerComputers: process.env.OPENADLC_DOCKER_COMPUTERS === '1' && (await installState()) === 'scripted',
   };
 
-  console.log('\nfleetadlc checks\n');
+  console.log('\nopenadlc checks\n');
   if (!available.install && (await installState()) === 'real') {
-    console.log(`  the install at ${process.env.FLEETADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311'} is a real one, so the integration checks are skipped:`);
+    console.log(`  the install at ${process.env.OPENADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311'} is a real one, so the integration checks are skipped:`);
     console.log('  they write into the board of whatever install they run against');
   } else if (!available.install) {
     console.log('  the install is not running, so the integration checks are skipped');
-    // Never plain `fleetadlc up`: it starts the install ~/.fleetadlc points at, the real one on a machine that runs OpenADLC.
+    // Never plain `openadlc up`: it starts the install ~/.openadlc points at, the real one on a machine that runs OpenADLC.
     console.log('  start a scratch one: tests/scratch.sh up && eval "$(tests/scratch.sh env)"\n');
   }
   if (!available.terraform) {
-    console.log('  terraform is missing or the gcp module is not initialised, so its check is skipped: fleetadlc cloud validate\n');
+    console.log('  terraform is missing or the gcp module is not initialised, so its check is skipped: openadlc cloud validate\n');
   }
   if (!available.console) {
     console.log('  the console is not running, so the onboarding checks are skipped\n');

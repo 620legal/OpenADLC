@@ -3,7 +3,7 @@
 #
 #   gcloud builds submit --config infra/gcp/cloudbuild.yaml \
 #     --ignore-file infra/gcp/.gcloudignore \
-#     --substitutions _REGISTRY=<region>-docker.pkg.dev/<project>/fleetadlc .
+#     --substitutions _REGISTRY=<region>-docker.pkg.dev/<project>/openadlc .
 #
 # Built here rather than on the machine that installs: Cloud Run and the host
 # run linux/amd64 only, and an Apple-silicon Mac builds arm64 unless told

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // The console API reads the crew and the task list to turn "atlas" into "the
 // worktree of the task atlas is running", which is the only decision this route
 // makes. Same shape as hostd's route tests: the store is a fake, the HTTP is real.
-vi.mock('@fleetadlc/db', () => ({
+vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
     GLOBAL_SCOPE: 'global',
@@ -60,12 +60,12 @@ beforeEach(async () => {
   const { registerConsoleApi } = await import('./api.js');
   const { Router } = await import('./router.js');
 
-  RUNNING_TASKS = [{ id: 'task-live', subjectRef: 'janedoe/FleetADLC#63', branch: 'agent/atlas/63' }];
+  RUNNING_TASKS = [{ id: 'task-live', subjectRef: 'janedoe/OpenADLC#63', branch: 'agent/atlas/63' }];
   ALL_TASKS = [
-    { id: 'task-live', botId: 'bot-atlas', state: 'running', subjectRef: 'janedoe/FleetADLC#63', branch: 'agent/atlas/63' },
-    { id: 'task-other', botId: 'bot-atlas', state: 'running', subjectRef: 'janedoe/FleetADLC#64', branch: 'agent/atlas/64' },
-    { id: 'task-done', botId: 'bot-atlas', state: 'done', subjectRef: 'janedoe/FleetADLC#60', branch: 'agent/atlas/60' },
-    { id: 'task-theirs', botId: 'bot-nova', state: 'running', subjectRef: 'janedoe/FleetADLC#65', branch: 'agent/nova/65' },
+    { id: 'task-live', botId: 'bot-atlas', state: 'running', subjectRef: 'janedoe/OpenADLC#63', branch: 'agent/atlas/63' },
+    { id: 'task-other', botId: 'bot-atlas', state: 'running', subjectRef: 'janedoe/OpenADLC#64', branch: 'agent/atlas/64' },
+    { id: 'task-done', botId: 'bot-atlas', state: 'done', subjectRef: 'janedoe/OpenADLC#60', branch: 'agent/atlas/60' },
+    { id: 'task-theirs', botId: 'bot-nova', state: 'running', subjectRef: 'janedoe/OpenADLC#65', branch: 'agent/nova/65' },
   ];
   askedFor = [];
 
@@ -121,7 +121,7 @@ describe('the Computer tab asking for a bot’s worktree', () => {
     const result = await browse('atlas');
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
-      task: { id: 'task-live', subjectRef: 'janedoe/FleetADLC#63', branch: 'agent/atlas/63' },
+      task: { id: 'task-live', subjectRef: 'janedoe/OpenADLC#63', branch: 'agent/atlas/63' },
       kind: 'directory',
     });
   });
@@ -149,7 +149,7 @@ describe('the Computer tab asking for a bot’s worktree', () => {
 describe('a seat running several tasks at once', () => {
   it('shows the worktree of the task an item’s tab names, not the bot’s newest', async () => {
     const result = await browse('atlas', '', 'task-other');
-    expect(result.body).toMatchObject({ task: { id: 'task-other', subjectRef: 'janedoe/FleetADLC#64' } });
+    expect(result.body).toMatchObject({ task: { id: 'task-other', subjectRef: 'janedoe/OpenADLC#64' } });
     expect(askedFor[0]).toBe('/tasks/task-other/worktree');
   });
 

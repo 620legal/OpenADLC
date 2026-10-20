@@ -117,7 +117,7 @@ RUN if [ -x /usr/local/bin/gh ]; then \
       && rm -rf /var/lib/apt/lists/*; \
     fi
 
-# Every login shell gets OpenADLC's gh, git and fleetadlc-ci first again.
+# Every login shell gets OpenADLC's gh, git and openadlc-ci first again.
 # Debian's /etc/profile sets PATH outright, and Codex and grok run their
 # commands in login shells: their `gh pr review` was the real gh, unsigned,
 # and on an account seats share, nobody could tell which seat had reviewed —
@@ -125,8 +125,8 @@ RUN if [ -x /usr/local/bin/gh ]; then \
 # /etc/profile reads profile.d after it sets PATH, so this comes after.
 RUN printf '%s\n' \
       '# OpenADLC: its wrappers first, and the paths ENV set that /etc/profile drops.' \
-      'PATH="/opt/fleetadlc/bin:/home/bot/.local/share/pnpm:/home/bot/.local/bin:/usr/local/bin:$PATH"' \
-      'export PATH' > /etc/profile.d/00-fleetadlc.sh
+      'PATH="/opt/openadlc/bin:/home/bot/.local/share/pnpm:/home/bot/.local/bin:/usr/local/bin:$PATH"' \
+      'export PATH' > /etc/profile.d/00-openadlc.sh
 
 RUN useradd -m -s /bin/bash bot && mkdir -p /work && chown bot:bot /work
 USER bot
@@ -161,7 +161,7 @@ RUN if [ -n "$ENGINE_CLI_PACKAGES" ]; then \
 COPY --chown=bot:bot bot-init /usr/local/bin/bot-init
 # Wraps a package install with a registry credential fetched from hostd at the
 # moment of the install, rather than one minted when the task started.
-COPY --chown=bot:bot fleetadlc-install /usr/local/bin/fleetadlc-install
+COPY --chown=bot:bot openadlc-install /usr/local/bin/openadlc-install
 
 # /skills and /roles are mounted read-only at run time at the version the host is
 # on; /work is the bot's own volume and holds mirrors, worktrees and caches.

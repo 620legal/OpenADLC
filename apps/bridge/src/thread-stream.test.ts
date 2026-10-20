@@ -1,4 +1,4 @@
-import { threads } from '@fleetadlc/db';
+import { threads } from '@openadlc/db';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WatermarkStream, botProbe } from './thread-stream.js';
 

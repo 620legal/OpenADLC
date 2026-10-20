@@ -31,7 +31,7 @@
  */
 
 /** Where the head script leaves the button, for the layout to find. */
-export const EARLY_CLICK_KEY = '__fleetadlcEarlyClick';
+export const EARLY_CLICK_KEY = '__openadlcEarlyClick';
 
 /** React's key on the container it rendered into, `hydrateRoot(document)` here. */
 export const REACT_CONTAINER_KEY = '__reactContainer$';
@@ -88,7 +88,7 @@ export function replayEarlyClick(
   if (options.started === false) {
     holder[EARLY_CLICK_KEY] = null;
     options.warn?.(
-      `[fleetadlc] React no longer marks the document with ${REACT_CONTAINER_KEY}, so a click made before the page ` +
+      `[openadlc] React no longer marks the document with ${REACT_CONTAINER_KEY}, so a click made before the page ` +
         'was ready is not pressed again (lib/early-clicks.ts).',
     );
     return;

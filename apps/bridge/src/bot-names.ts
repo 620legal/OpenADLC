@@ -1,7 +1,7 @@
 import { signInOf, type SignIn } from './sign-in.js';
-import { audit, bots, credentials, tasks } from '@fleetadlc/db';
-import { BOT_SECRET_REFS, accessTokenRef, credentialKind, getSecretStore, refreshTokenRef, type SecretStore } from '@fleetadlc/github';
-import { holdsCredential, isBotName, nameForLogin, roleLabel, type Bot } from '@fleetadlc/shared';
+import { audit, bots, credentials, tasks } from '@openadlc/db';
+import { BOT_SECRET_REFS, accessTokenRef, credentialKind, getSecretStore, refreshTokenRef, type SecretStore } from '@openadlc/github';
+import { holdsCredential, isBotName, nameForLogin, roleLabel, type Bot } from '@openadlc/shared';
 
 /**
  * What a bot is called, and the one routine that changes it.

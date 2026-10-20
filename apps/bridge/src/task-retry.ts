@@ -1,5 +1,5 @@
-import { audit, bots, issues, leases, repos, requests, spendingLimits, tasks } from '@fleetadlc/db';
-import { botAtStart, envInt, type TaskKind, type TaskState } from '@fleetadlc/shared';
+import { audit, bots, issues, leases, repos, requests, spendingLimits, tasks } from '@openadlc/db';
+import { botAtStart, envInt, type TaskKind, type TaskState } from '@openadlc/shared';
 import type { Started } from './build-start.js';
 import { continuesBranch, type BranchFacts } from './build-left.js';
 import { requestPrefixOf } from './request-context.js';
@@ -205,7 +205,7 @@ export async function retryTask(taskId: string, actor: string, deps: RetryDeps, 
         issueNumber: parsed.number,
         botId: bot.id,
         declaredPaths: issue?.declaredPaths ?? [],
-        expiresAt: new Date(Date.now() + (deps.leaseHours ?? envInt('FLEETADLC_LEASE_HOURS', 12)) * 3600 * 1000),
+        expiresAt: new Date(Date.now() + (deps.leaseHours ?? envInt('OPENADLC_LEASE_HOURS', 12)) * 3600 * 1000),
       });
       started = await deps.startBuild({
         leaseId: lease.id,

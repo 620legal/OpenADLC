@@ -43,7 +43,7 @@ function matchFrom(path: string[], pattern: string[]): boolean {
   return segmentsMatch(head as string, path[0] as string) && matchFrom(path.slice(1), rest);
 }
 
-/** How two overlapping paths are treated; see `pathPolicySchema` in `@fleetadlc/shared`. */
+/** How two overlapping paths are treated; see `pathPolicySchema` in `@openadlc/shared`. */
 export type OverlapKind = 'shared' | 'exclusive' | 'ordinary';
 
 /**

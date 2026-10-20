@@ -1,5 +1,5 @@
-import { attachments, bots, threads } from '@fleetadlc/db';
-import { hasIgnoreLabel } from '@fleetadlc/shared';
+import { attachments, bots, threads } from '@openadlc/db';
+import { hasIgnoreLabel } from '@openadlc/shared';
 import { attachmentIds, claimableFor, claimWindowStart } from './attachment-routes.js';
 import type { ApiDeps } from './api.js';
 import { readItem, resolveItem, routeItemMessage } from './items.js';
@@ -28,14 +28,14 @@ function noItem(subject: string): HttpFailure {
 
 /**
  * The item a subject names, if the console shows it. Not one whose issue is
- * labelled `fleetadlc:ignore`: the console is for the work the crew does, and
+ * labelled `openadlc:ignore`: the console is for the work the crew does, and
  * that issue and its pull request are a person's (`ignoredSubjects`).
  */
 function shown<T extends { item: { issue: object | null } }>(subject: string, read: T | null): T {
   if (!read) throw noItem(subject);
   const labels = (read.item.issue as { labels?: string[] } | null)?.labels;
   if (hasIgnoreLabel(labels)) {
-    throw new HttpFailure(404, `${subject} is labelled fleetadlc:ignore, which the console leaves out; take the label off on GitHub to bring it back`);
+    throw new HttpFailure(404, `${subject} is labelled openadlc:ignore, which the console leaves out; take the label off on GitHub to bring it back`);
   }
   return read;
 }

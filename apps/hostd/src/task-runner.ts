@@ -3,11 +3,11 @@ import type { LocalCiTarget } from './local-ci.js';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { repoKeyOf } from './drivers/base-env.js';
 import { join } from 'node:path';
-import { sweepTaskHomes } from '@fleetadlc/backup';
-import { bots, leases, modelAccounts, repos, tasks } from '@fleetadlc/db';
-import { listProviderModels, modelListCache, type AvailableModel, type ModelListCache } from '@fleetadlc/engines';
-import { engineKeyRef, getSecretStore, modelAccountRef } from '@fleetadlc/github';
-import { ATTACHMENTS_ENV, leaseExpiryFrom, type Bot, type BotRole, type ContextDocument, type TaskAttachment, type TaskKind } from '@fleetadlc/shared';
+import { sweepTaskHomes } from '@openadlc/backup';
+import { bots, leases, modelAccounts, repos, tasks } from '@openadlc/db';
+import { listProviderModels, modelListCache, type AvailableModel, type ModelListCache } from '@openadlc/engines';
+import { engineKeyRef, getSecretStore, modelAccountRef } from '@openadlc/github';
+import { ATTACHMENTS_ENV, leaseExpiryFrom, type Bot, type BotRole, type ContextDocument, type TaskAttachment, type TaskKind } from '@openadlc/shared';
 import { AttachmentClient, prepareAttachments, writeAttachments } from './task-attachments.js';
 import { DEFAULT_SETUP_TIMEOUT_MINUTES, type HostdConfig } from './config.js';
 import type { ExecDriver, TaskComputer } from './drivers/types.js';
@@ -52,7 +52,7 @@ export interface StartTaskInput {
 /**
  * What a review task may post. An advisory seat comments, with its verdict in
  * its marker, and the lead decides: OpenADLC's `gh` refuses it an approval or
- * a request for changes (`FLEETADLC_REVIEW_MODE`).
+ * a request for changes (`OPENADLC_REVIEW_MODE`).
  */
 export type ReviewMode = 'lead' | 'blocking' | 'advisory';
 
@@ -93,7 +93,7 @@ interface ActiveTask {
   repoHome: string;
   /** The repository's read-only pnpm store it installs from, or null for a store of its own in its home. */
   pnpmStore: string | null;
-  /** What `fleetadlc-install` needs to ask hostd for the registry credential; see `installEnv`. */
+  /** What `openadlc-install` needs to ask hostd for the registry credential; see `installEnv`. */
   installEnv: Record<string, string>;
 }
 
@@ -175,7 +175,7 @@ export function taskModelChooser(
           cache,
         }),
         cache,
-        scripted: process.env.FLEETADLC_SCRIPTED_ENGINES === '1',
+        scripted: process.env.OPENADLC_SCRIPTED_ENGINES === '1',
       },
     );
 }
@@ -198,7 +198,7 @@ export function playbookPaths(
 
 /**
  * A task this host cannot start: it already runs as many computers as it was
- * given (`FLEETADLC_HOST_CAPACITY_TASKS`). Each is a container with its seat's
+ * given (`OPENADLC_HOST_CAPACITY_TASKS`). Each is a container with its seat's
  * CPUs and memory, so one more would take them from the tasks running. The
  * bridge tries it again as it does a busy seat; nothing is recorded as failed.
  */
@@ -208,7 +208,7 @@ export class HostFull extends Error {
   constructor(host: string, capacity: number) {
     super(
       `${host} is running ${capacity} task(s), all it has room for; this one starts when one ends. ` +
-        'Give the host more with FLEETADLC_HOST_CAPACITY_TASKS (or a larger machine).',
+        'Give the host more with OPENADLC_HOST_CAPACITY_TASKS (or a larger machine).',
     );
     this.name = 'HostFull';
   }
@@ -388,7 +388,7 @@ export class TaskRunner {
     const result = await this.driver
       .exec(computer, ['make', '-s', 'setup'], {
         cwd: worktree,
-        env: { DATABASE_URL: databaseUrl, FLEETADLC_REPO_HOME: repoHome, ...cache },
+        env: { DATABASE_URL: databaseUrl, OPENADLC_REPO_HOME: repoHome, ...cache },
         timeoutMs: minutes * 60_000,
       })
       .catch(() => null);
@@ -415,9 +415,9 @@ export class TaskRunner {
 
   private async remoteFor(repoFullName: string | null): Promise<string | null> {
     if (!repoFullName) return null;
-    const override = process.env[`FLEETADLC_REMOTE_${repoFullName.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}`];
+    const override = process.env[`OPENADLC_REMOTE_${repoFullName.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}`];
     if (override) return override;
-    if (process.env.FLEETADLC_SCRIPTED_REPO_PATH) return process.env.FLEETADLC_SCRIPTED_REPO_PATH;
+    if (process.env.OPENADLC_SCRIPTED_REPO_PATH) return process.env.OPENADLC_SCRIPTED_REPO_PATH;
     return `https://github.com/${repoFullName}.git`;
   }
 
@@ -572,8 +572,8 @@ export class TaskRunner {
     const pnpmStore = remote && repo ? await this.fillPnpmStore(computer, worktree, repo.fullName) : null;
     writeFileSync(join(computer.slotDir, PNPM_STORE_CHOICE), pnpmStore ?? '');
     const cache: Record<string, string> = {
-      ...(computer.cacheDir ? { FLEETADLC_CACHE_DIR: computer.cacheDir } : {}),
-      ...(pnpmStore ? { FLEETADLC_PNPM_STORE: pnpmStore } : {}),
+      ...(computer.cacheDir ? { OPENADLC_CACHE_DIR: computer.cacheDir } : {}),
+      ...(pnpmStore ? { OPENADLC_PNPM_STORE: pnpmStore } : {}),
     };
 
     this.stopIfCancelled(input.taskId);
@@ -676,7 +676,7 @@ export class TaskRunner {
       env: {
         ...minted.env,
         ...cache,
-        FLEETADLC_SKILLS_ROOT: this.config.driver === 'docker' ? '/skills' : this.config.skillsRoot,
+        OPENADLC_SKILLS_ROOT: this.config.driver === 'docker' ? '/skills' : this.config.skillsRoot,
         ...(attached.binaries.length > 0 ? { [ATTACHMENTS_ENV]: attached.binaries.join(',') } : {}),
       },
     });
@@ -745,9 +745,9 @@ export class TaskRunner {
       branch: entry.branch,
       env: {
         ...(entry.databaseUrl ? { DATABASE_URL: entry.databaseUrl } : {}),
-        FLEETADLC_REPO_HOME: entry.repoHome,
-        ...(entry.computer.cacheDir ? { FLEETADLC_CACHE_DIR: entry.computer.cacheDir } : {}),
-        ...(entry.pnpmStore ? { FLEETADLC_PNPM_STORE: entry.pnpmStore } : {}),
+        OPENADLC_REPO_HOME: entry.repoHome,
+        ...(entry.computer.cacheDir ? { OPENADLC_CACHE_DIR: entry.computer.cacheDir } : {}),
+        ...(entry.pnpmStore ? { OPENADLC_PNPM_STORE: entry.pnpmStore } : {}),
         ...entry.installEnv,
       },
     };
@@ -759,8 +759,8 @@ export class TaskRunner {
   }
 
   /**
-   * What `fleetadlc-install` reads, for the installs hostd runs itself: `make
-   * setup` at the start and the `make ci` behind `fleetadlc-ci`. Without them
+   * What `openadlc-install` reads, for the installs hostd runs itself: `make
+   * setup` at the start and the `make ci` behind `openadlc-ci`. Without them
    * the wrapper took itself to be outside a session and installed with no
    * credential, so a private package failed to install or, unscoped, resolved
    * on the public registry. The flag comes from hostd's configuration, never
@@ -773,10 +773,10 @@ export class TaskRunner {
 
   private installEnvWith(taskId: string, token: string | null): Record<string, string> {
     return {
-      FLEETADLC_HOSTD_URL: this.taskHostdUrl(),
-      FLEETADLC_TASK_ID: taskId,
-      ...(token ? { FLEETADLC_TASK_TOKEN: token } : {}),
-      ...(this.config.registryHost ? { FLEETADLC_REGISTRY_CONFIGURED: '1' } : {}),
+      OPENADLC_HOSTD_URL: this.taskHostdUrl(),
+      OPENADLC_TASK_ID: taskId,
+      ...(token ? { OPENADLC_TASK_TOKEN: token } : {}),
+      ...(this.config.registryHost ? { OPENADLC_REGISTRY_CONFIGURED: '1' } : {}),
     };
   }
 
@@ -1052,7 +1052,7 @@ export class TaskRunner {
    *
    * A paused task's computer was kept for as long as the question was open —
    * hours, sometimes days — holding a container, its memory and its database
-   * while nothing ran in it. It is kept for a while (`FLEETADLC_PAUSED_KEEP_MINUTES`,
+   * while nothing ran in it. It is kept for a while (`OPENADLC_PAUSED_KEEP_MINUTES`,
    * fifteen by default), so a person can take over and a quick answer resumes
    * it cheaply, and then given back. The resume starts a fresh computer from
    * the branch head, as every resume always has: whatever was committed is
@@ -1204,7 +1204,7 @@ export class TaskRunner {
  * the intake bot's questions on a console request.
  *
  * All at once, each for at most `perTaskMs`. One after another, they ran past
- * the time `fleetadlc down` gives hostd, which then killed it mid-drain: the
+ * the time `openadlc down` gives hostd, which then killed it mid-drain: the
  * tasks it had not reached kept running with nothing supervising them. A
  * cancel that runs out of time is reported in `timedOut`, not waited for; the
  * next start's reconciliation adopts or cleans up its task. Cancels in one

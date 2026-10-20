@@ -20,13 +20,13 @@ export function refuseRestoreBody(request: Request): Response | null {
   const declared = Number(request.headers.get('content-length') ?? NaN);
   if (!Number.isFinite(declared)) {
     return Response.json(
-      { error: 'the restore did not say how large the backup is; choose the file again, or run: fleetadlc restore PATH' },
+      { error: 'the restore did not say how large the backup is; choose the file again, or run: openadlc restore PATH' },
       { status: 411 },
     );
   }
   if (declared > RESTORE_BODY_MAX) {
     return Response.json(
-      { error: `that backup is larger than the ${RESTORE_BODY_MAX / (1024 * 1024)} MB the console can carry; run: fleetadlc restore PATH` },
+      { error: `that backup is larger than the ${RESTORE_BODY_MAX / (1024 * 1024)} MB the console can carry; run: openadlc restore PATH` },
       { status: 413 },
     );
   }

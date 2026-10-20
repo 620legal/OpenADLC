@@ -1,5 +1,5 @@
-import { audit, deployRuns, issues, repos } from '@fleetadlc/db';
-import type { DeliveryRules } from '@fleetadlc/shared';
+import { audit, deployRuns, issues, repos } from '@openadlc/db';
+import type { DeliveryRules } from '@openadlc/shared';
 import type { EffectiveDelivery } from './delivery-rules.js';
 import type { SendBackResult } from './send-back.js';
 import { issueNumberFromBranch } from './work.js';
@@ -8,7 +8,7 @@ import { issueNumberFromBranch } from './work.js';
  * A merged change's way to production, by the repository's rules.
  *
  * It was the deploy bot's task after every merge, and a person's approval of
- * production in GitHub. Now the rules (`.github/fleetadlc.yml`, see
+ * production in GitHub. Now the rules (`.github/openadlc.yml`, see
  * `delivery-rules.ts`) decide, and the bridge does what they say, as the
  * OpenADLC app, or as the automation account where the app cannot act on the
  * repository: a merge dispatches the testing deploy; a green smoke on
@@ -35,7 +35,7 @@ import { issueNumberFromBranch } from './work.js';
 
 /** What dispatching a workflow takes: the app's client, or the automation account's where there is no app. */
 export interface DispatchClient {
-  /** Who it acts as, for the audit trail: `fleetadlc-app`, or the automation account's login. */
+  /** Who it acts as, for the audit trail: `openadlc-app`, or the automation account's login. */
   readonly actingAs?: string;
   request<T>(method: string, path: string, body?: unknown): Promise<T>;
   listPullsForCommit(repo: string, sha: string): Promise<{ number: number; headRef: string }[]>;
@@ -53,7 +53,7 @@ export interface DeployPipelineDeps {
 type Repo = { id: string; name: string; fullName: string; defaultBranch: string };
 
 /** Who a step was taken as: the app, or the automation account the dispatch fell back to. */
-const actorOf = (client: DispatchClient): string => client.actingAs ?? 'fleetadlc-app';
+const actorOf = (client: DispatchClient): string => client.actingAs ?? 'openadlc-app';
 
 /** A workflow by the name the rules give it, as the file GitHub dispatches. */
 export function workflowFile(name: string): string {

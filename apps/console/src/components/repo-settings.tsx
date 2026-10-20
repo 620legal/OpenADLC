@@ -63,10 +63,10 @@ export function deliveryLines(delivery: RepoDelivery): { rules: string[]; source
   // The bridge falls back the same way when the file is there and cannot be
   // read, and the error is shown on the next line: "since it has no file"
   // over that file's own error left a person unsure it was read at all.
-  const why = delivery.fileError ? 'because .github/fleetadlc.yml could not be read:' : 'since it has no .github/fleetadlc.yml.';
+  const why = delivery.fileError ? 'because .github/openadlc.yml could not be read:' : 'since it has no .github/openadlc.yml.';
   const source =
     delivery.source === 'file'
-      ? 'From .github/fleetadlc.yml on the default branch: change it by a pull request.'
+      ? 'From .github/openadlc.yml on the default branch: change it by a pull request.'
       : delivery.source === 'repository'
         ? `From OpenADLC’s stored rules for this repository, ${why}`
         : `From the testing deploy choice above, ${why}`;

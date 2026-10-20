@@ -40,7 +40,7 @@ export const STAGE_COLUMN_TITLES: Record<StageKey, string> = {
 export const STAGE_LABEL_PREFIX = 'adlc:';
 
 /**
- * The prefix stage labels had before FleetADLC was named, when the pipeline was
+ * The prefix stage labels had before OpenADLC was named, when the pipeline was
  * called an SDLC. Issues on GitHub still carry it until label sync renames the
  * labels in place, so a stage is still read from it, and every stage move
  * replaces it with the current one.
@@ -67,14 +67,15 @@ export function stageFromLabels(labels: readonly string[]): StageKey | null {
 }
 
 /**
- * A person telling the crew to leave an issue alone. `fleet:ignore` is the name
- * it had before the rename, and an issue labelled with it is still left alone.
+ * A person telling the crew to leave an issue alone. `fleetadlc:ignore` and
+ * `fleet:ignore` are the names it had before the renames, and an issue
+ * labelled with either is still left alone.
  */
-export const IGNORE_LABEL = 'fleetadlc:ignore';
-export const LEGACY_IGNORE_LABEL = 'fleet:ignore';
+export const IGNORE_LABEL = 'openadlc:ignore';
+export const LEGACY_IGNORE_LABELS = ['fleetadlc:ignore', 'fleet:ignore'] as const;
 
 export function isIgnoreLabel(label: string): boolean {
-  return label === IGNORE_LABEL || label === LEGACY_IGNORE_LABEL;
+  return label === IGNORE_LABEL || (LEGACY_IGNORE_LABELS as readonly string[]).includes(label);
 }
 
 export function hasIgnoreLabel(labels: readonly string[] | null | undefined): boolean {
@@ -87,23 +88,27 @@ export function hasIgnoreLabel(labels: readonly string[] | null | undefined): bo
  * On the issue and its pull request both: the merge line reads the pull
  * request's labels, the dispatcher and the task service the issue's.
  */
-export const PAUSED_LABEL = 'fleetadlc:paused';
+export const PAUSED_LABEL = 'openadlc:paused';
+const LEGACY_PAUSED_LABEL = 'fleetadlc:paused';
 
 /** The one issue a repository builds next, ahead of priority order. */
-export const NEXT_LABEL = 'fleetadlc:next';
+export const NEXT_LABEL = 'openadlc:next';
+const LEGACY_NEXT_LABEL = 'fleetadlc:next';
 
 export function hasPausedLabel(labels: readonly string[] | null | undefined): boolean {
-  return (labels ?? []).includes(PAUSED_LABEL);
+  return (labels ?? []).some((label) => label === PAUSED_LABEL || label === LEGACY_PAUSED_LABEL);
 }
 
 export function hasNextLabel(labels: readonly string[] | null | undefined): boolean {
-  return (labels ?? []).includes(NEXT_LABEL);
+  return (labels ?? []).some((label) => label === NEXT_LABEL || label === LEGACY_NEXT_LABEL);
 }
 
 /** Labels that were renamed, by their old name: label sync renames them in place. */
 export const RENAMED_LABELS: Readonly<Record<string, string>> = {
   ...Object.fromEntries(STAGE_KEYS.map((key) => [`${LEGACY_STAGE_LABEL_PREFIX}${key}`, `${STAGE_LABEL_PREFIX}${key}`])),
-  [LEGACY_IGNORE_LABEL]: IGNORE_LABEL,
+  ...Object.fromEntries(LEGACY_IGNORE_LABELS.map((label) => [label, IGNORE_LABEL])),
+  [LEGACY_PAUSED_LABEL]: PAUSED_LABEL,
+  [LEGACY_NEXT_LABEL]: NEXT_LABEL,
 };
 
 /**
@@ -280,8 +285,10 @@ export type LabelStep =
 export function labelStep(wanted: WantedLabel, existing: readonly ExistingLabel[]): LabelStep {
   const current = existing.find((label) => label.name === wanted.name);
   if (!current) {
-    const legacy = Object.entries(RENAMED_LABELS).find(([, now]) => now === wanted.name)?.[0];
-    const old = legacy ? existing.find((label) => label.name === legacy) : undefined;
+    // A label may have more than one old name by now (`fleetadlc:ignore` and
+    // `fleet:ignore`); whichever the repository still has is the one renamed.
+    const legacies = Object.entries(RENAMED_LABELS).filter(([, now]) => now === wanted.name).map(([old]) => old);
+    const old = existing.find((label) => legacies.includes(label.name));
     if (old) return { action: 'update', from: old.name, detail: `renamed from ${old.name}; issues keep it` };
     return { action: 'create', detail: 'not there yet' };
   }

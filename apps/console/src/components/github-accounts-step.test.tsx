@@ -12,15 +12,15 @@ import type { GitHubAccountsView } from '@/lib/api';
 const VIEW: GitHubAccountsView = {
   accounts: [
     {
-      login: 'fleetadlc-crew',
-      url: 'https://github.com/fleetadlc-crew',
+      login: 'openadlc-crew',
+      url: 'https://github.com/openadlc-crew',
       group: 'crew',
       signIn: 'signed-in',
       seats: [{ name: 'qa', slot: 'qa', role: 'qa', roleLabel: 'QA' }],
     },
     {
-      login: 'fleetadlc-review',
-      url: 'https://github.com/fleetadlc-review',
+      login: 'openadlc-review',
+      url: 'https://github.com/openadlc-review',
       group: 'reviewers',
       signIn: 'signed-in',
       seats: [{ name: 'second-reviewer', slot: 'second-reviewer', role: 'review_second', roleLabel: 'second reviewer' }],
@@ -35,8 +35,8 @@ const VIEW: GitHubAccountsView = {
       group: 'crew',
       login: null,
       choices: [
-        { login: 'fleetadlc-crew', refusal: null },
-        { login: 'fleetadlc-review', refusal: 'the reviewers’ account (the lead reviewer uses it) — the crew needs a different one' },
+        { login: 'openadlc-crew', refusal: null },
+        { login: 'openadlc-review', refusal: 'the reviewers’ account (the lead reviewer uses it) — the crew needs a different one' },
       ],
     },
     {
@@ -47,8 +47,8 @@ const VIEW: GitHubAccountsView = {
       group: 'reviewers',
       login: null,
       choices: [
-        { login: 'fleetadlc-crew', refusal: 'used by the builder — reviewers need their own account' },
-        { login: 'fleetadlc-review', refusal: null },
+        { login: 'openadlc-crew', refusal: 'used by the builder — reviewers need their own account' },
+        { login: 'openadlc-review', refusal: null },
       ],
     },
   ],
@@ -57,14 +57,14 @@ const VIEW: GitHubAccountsView = {
 /** The first run: two accounts just connected, no seat on either, so the bridge gives neither a group. */
 const FRESH: GitHubAccountsView = {
   accounts: [
-    { login: 'fleetadlc-one', url: 'https://github.com/fleetadlc-one', group: null, signIn: 'signed-in', seats: [] },
-    { login: 'fleetadlc-two', url: 'https://github.com/fleetadlc-two', group: null, signIn: 'signed-in', seats: [] },
+    { login: 'openadlc-one', url: 'https://github.com/openadlc-one', group: null, signIn: 'signed-in', seats: [] },
+    { login: 'openadlc-two', url: 'https://github.com/openadlc-two', group: null, signIn: 'signed-in', seats: [] },
   ],
   bots: VIEW.bots.map((bot) => ({
     ...bot,
     choices: [
-      { login: 'fleetadlc-one', refusal: null },
-      { login: 'fleetadlc-two', refusal: null },
+      { login: 'openadlc-one', refusal: null },
+      { login: 'openadlc-two', refusal: null },
     ],
   })),
 };
@@ -76,7 +76,7 @@ function chosen(container: HTMLElement, label: string): string | undefined {
 describe('prefilled GitHub accounts', () => {
   it('uses each group’s one account', () => {
     const filled = prefillGitHubAccounts(VIEW.bots, VIEW.accounts);
-    expect(filled.byBot).toEqual({ builder: 'fleetadlc-crew', 'lead-reviewer': 'fleetadlc-review' });
+    expect(filled.byBot).toEqual({ builder: 'openadlc-crew', 'lead-reviewer': 'openadlc-review' });
   });
 
   it('is not done on one working sign-in', () => {
@@ -92,8 +92,8 @@ describe('disconnecting an account from the walkthrough', () => {
         signupUrl="https://github.com/signup"
         emailSettingsUrl="https://github.com/settings/emails"
         accounts={[
-          { login: 'fleetadlc-crew', signIn: 'signed-in', group: 'crew', seats: [{ name: 'builder' }] },
-          { login: 'fleetadlc-spare', signIn: 'signed-in', group: null, seats: [] },
+          { login: 'openadlc-crew', signIn: 'signed-in', group: 'crew', seats: [{ name: 'builder' }] },
+          { login: 'openadlc-spare', signIn: 'signed-in', group: null, seats: [] },
         ]}
         settings={null}
         save={async () => undefined}
@@ -122,7 +122,7 @@ describe('disconnecting an account from the walkthrough', () => {
           email="op@example.com"
           signupUrl="https://github.com/signup"
           emailSettingsUrl="https://github.com/settings/emails"
-          accounts={[{ login: 'fleetadlc-spare', signIn: 'signed-in', group: null, seats: [] }]}
+          accounts={[{ login: 'openadlc-spare', signIn: 'signed-in', group: null, seats: [] }]}
           settings={null}
           save={async () => undefined}
           onEmail={() => undefined}
@@ -136,7 +136,7 @@ describe('disconnecting an account from the walkthrough', () => {
       button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(confirm).toHaveBeenCalledWith(
-      'Disconnect fleetadlc-spare? OpenADLC forgets its sign-in; using it again means connecting it again.',
+      'Disconnect openadlc-spare? OpenADLC forgets its sign-in; using it again means connecting it again.',
     );
     expect(fetchMock).not.toHaveBeenCalledWith(
       expect.stringContaining('/api/github/accounts/disconnect'),
@@ -150,20 +150,20 @@ describe('disconnecting an account from the walkthrough', () => {
 
 describe('one account at a time', () => {
   const seats = [
-    { seat: 'intake', label: 'intake', suggestedLogin: 'fleetadlc-intake-acme', suggestedEmail: 'op+fleetadlc-intake@example.com', connectedLogin: null },
-    { seat: 'builder', label: 'builder', suggestedLogin: 'fleetadlc-builder-acme', suggestedEmail: 'op+fleetadlc-builder@example.com', connectedLogin: null },
-    { seat: 'lead-reviewer', label: 'lead reviewer', suggestedLogin: 'fleetadlc-lead-reviewer-acme', suggestedEmail: 'op+fleetadlc-lead-reviewer@example.com', connectedLogin: null },
+    { seat: 'intake', label: 'intake', suggestedLogin: 'openadlc-intake-acme', suggestedEmail: 'op+openadlc-intake@example.com', connectedLogin: null },
+    { seat: 'builder', label: 'builder', suggestedLogin: 'openadlc-builder-acme', suggestedEmail: 'op+openadlc-builder@example.com', connectedLogin: null },
+    { seat: 'lead-reviewer', label: 'lead reviewer', suggestedLogin: 'openadlc-lead-reviewer-acme', suggestedEmail: 'op+openadlc-lead-reviewer@example.com', connectedLogin: null },
   ];
 
   it('makes the builder first and the lead reviewer second, the two that are required, then the rest in order', () => {
     expect(nextSeatToCreate(seats, [])?.seat).toBe('builder');
-    expect(nextSeatToCreate(seats, ['fleetadlc-builder-acme'])?.seat).toBe('lead-reviewer');
-    expect(nextSeatToCreate(seats, ['fleetadlc-builder-acme', 'FleetADLC-Lead-Reviewer-Acme'])?.seat).toBe('intake');
-    expect(nextSeatToCreate(seats, ['fleetadlc-builder-acme', 'fleetadlc-lead-reviewer-acme', 'fleetadlc-intake-acme'])).toBeNull();
+    expect(nextSeatToCreate(seats, ['openadlc-builder-acme'])?.seat).toBe('lead-reviewer');
+    expect(nextSeatToCreate(seats, ['openadlc-builder-acme', 'OpenADLC-Lead-Reviewer-Acme'])?.seat).toBe('intake');
+    expect(nextSeatToCreate(seats, ['openadlc-builder-acme', 'openadlc-lead-reviewer-acme', 'openadlc-intake-acme'])).toBeNull();
   });
 
   it('passes over a seat whose account was made under another name the page suggests', () => {
-    expect(nextSeatToCreate(seats, ['acme-fleetadlc-builder'])?.seat).toBe('lead-reviewer');
+    expect(nextSeatToCreate(seats, ['acme-openadlc-builder'])?.seat).toBe('lead-reviewer');
   });
 
   it('forgets the password made for a seat once an account connects, and when the step goes', async () => {
@@ -185,16 +185,16 @@ describe('one account at a time', () => {
         onChanged={() => undefined}
       />
     );
-    sessionStorage.setItem('fleetadlc.signup-password.builder', 'generated-for-the-builder');
-    sessionStorage.setItem('fleetadlc.signup-password.lead-reviewer', 'generated-for-the-lead');
+    sessionStorage.setItem('openadlc.signup-password.builder', 'generated-for-the-builder');
+    sessionStorage.setItem('openadlc.signup-password.lead-reviewer', 'generated-for-the-lead');
     await act(async () => root.render(step([])));
     // The builder's form is open; its account connects under the name it was given.
-    await act(async () => root.render(step([{ login: 'fleetadlc-builder-acme', signIn: 'signed-in', group: null }])));
-    expect(sessionStorage.getItem('fleetadlc.signup-password.builder')).toBeNull();
-    expect(sessionStorage.getItem('fleetadlc.signup-password.lead-reviewer')).toBe('generated-for-the-lead');
+    await act(async () => root.render(step([{ login: 'openadlc-builder-acme', signIn: 'signed-in', group: null }])));
+    expect(sessionStorage.getItem('openadlc.signup-password.builder')).toBeNull();
+    expect(sessionStorage.getItem('openadlc.signup-password.lead-reviewer')).toBe('generated-for-the-lead');
 
     act(() => root.unmount());
-    expect(sessionStorage.getItem('fleetadlc.signup-password.lead-reviewer')).toBeNull();
+    expect(sessionStorage.getItem('openadlc.signup-password.lead-reviewer')).toBeNull();
     container.remove();
     vi.unstubAllGlobals();
   });
@@ -244,8 +244,8 @@ describe('one account at a time', () => {
   it('shows what to sign up with for the next seat only, once a new account is chosen', async () => {
     const { container, click, done } = await render([]);
     await click('Create a new account');
-    expect(container.textContent).toContain('fleetadlc-builder-acme');
-    expect(container.textContent).not.toContain('fleetadlc-lead-reviewer-acme');
+    expect(container.textContent).toContain('openadlc-builder-acme');
+    expect(container.textContent).not.toContain('openadlc-lead-reviewer-acme');
     expect(container.textContent).toContain('Connect it');
     done();
   });
@@ -253,7 +253,7 @@ describe('one account at a time', () => {
   it('shows only the connect button for an account you have', async () => {
     const { container, click, done } = await render([]);
     await click('Use an account I have');
-    expect(container.textContent).not.toContain('fleetadlc-builder-acme');
+    expect(container.textContent).not.toContain('openadlc-builder-acme');
     expect(container.textContent).toContain('Connect it');
     done();
   });

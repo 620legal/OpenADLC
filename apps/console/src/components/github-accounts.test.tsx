@@ -29,7 +29,7 @@ const member = (name: string, slot: string, role: string, displayName: string): 
 /** Settings → Crew, where a running install gets a second builder and loses it again. */
 describe('adding and removing a builder in the crew table', () => {
   const crew = [
-    member('fleetadlc-atlas-janedoe', 'builder', 'implement', 'Builder'),
+    member('openadlc-atlas-janedoe', 'builder', 'implement', 'Builder'),
     member('builder-2', 'builder-2', 'implement', 'Builder'),
     member('lead-reviewer', 'lead-reviewer', 'review_lead', 'Lead reviewer'),
   ];

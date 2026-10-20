@@ -65,7 +65,7 @@ export function PauseWorkCard({
   const dispatcherOff = !dispatching && (
     <p role="status" className="rounded-md border border-alarm/40 bg-alarm/5 px-2.5 py-2 text-alarm">
       Nothing new will start building: the dispatcher isn’t running, so no issue is leased to a builder. Pause and Resume do not change
-      that; restart the bridge with FLEETADLC_DISPATCH_IN_BRIDGE=1. The card on the board says how.
+      that; restart the bridge with OPENADLC_DISPATCH_IN_BRIDGE=1. The card on the board says how.
     </p>
   );
   const [scope, setScope] = useState<Scope>('all');

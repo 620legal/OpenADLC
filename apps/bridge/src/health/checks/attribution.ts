@@ -1,4 +1,4 @@
-import { UNVERIFIED_REASON } from '@fleetadlc/shared';
+import { UNVERIFIED_REASON } from '@openadlc/shared';
 import { postTarget, seatToRecord } from '../../attribution.js';
 import type { CheckResult, HealthCheck } from '../types.js';
 import { RECONNECT } from '../words.js';

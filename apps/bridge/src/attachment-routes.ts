@@ -1,14 +1,14 @@
 import { createHash } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
-import { attachments, audit } from '@fleetadlc/db';
-import { ATTACHMENT_LIMITS, checkAttachment, itemRoomFor, safeFileName, type TaskAttachment } from '@fleetadlc/shared';
+import { attachments, audit } from '@openadlc/db';
+import { ATTACHMENT_LIMITS, checkAttachment, itemRoomFor, safeFileName, type TaskAttachment } from '@openadlc/shared';
 import { resolveItem } from './items.js';
 import { HttpFailure, readBytes, STREAMING, type Router } from './router.js';
 
 /**
  * Files a person gives the crew, uploaded from the console one at a time and
- * then sent with a request or a message. See `@fleetadlc/shared`'s
- * `attachments.ts` for what is taken, and `@fleetadlc/db`'s for where it is
+ * then sent with a request or a message. See `@openadlc/shared`'s
+ * `attachments.ts` for what is taken, and `@openadlc/db`'s for where it is
  * kept.
  *
  * An upload comes first and is sent second because a request is written in
@@ -169,8 +169,8 @@ export function registerInternalAttachmentRoutes(router: Router, guard: (raw: In
     res.writeHead(200, {
       'content-type': 'application/octet-stream',
       'content-length': String(found.content.length),
-      'x-fleetadlc-sha256': found.meta.sha256,
-      'x-fleetadlc-media-type': found.meta.mediaType,
+      'x-openadlc-sha256': found.meta.sha256,
+      'x-openadlc-media-type': found.meta.mediaType,
     });
     res.end(found.content);
     return STREAMING;

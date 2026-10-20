@@ -43,7 +43,7 @@ describe('the people no bot may be', () => {
     const people = await peopleOf(deps({ humans: ['alice-example'] }));
 
     expect(people.map((person) => person.login)).toEqual(['alice-example', 'janedoe', 'ExampleCo-Ops']);
-    expect(people[0]?.why).toBe('one of this install’s people (FLEETADLC_HUMANS)');
+    expect(people[0]?.why).toBe('one of this install’s people (OPENADLC_HUMANS)');
     expect(people[1]?.why).toBe('named in exampleco/app’s AGENTS.md Human review');
   });
 

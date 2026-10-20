@@ -31,10 +31,10 @@ output "host_name" {
 # database URL and of the CA that URL checks the server against.
 # Container-Optimized OS applies cloud-init at boot, and hostd reads the URL
 # only when it starts, so a host that was merely restarted ran the old prepare
-# script against the new URL. `fleetadlc cloud apply` resets the host when this
+# script against the new URL. `openadlc cloud apply` resets the host when this
 # changed. A hash, and no secret in it: the password is never in the cloud-init.
 output "host_rollout" {
-  description = "Changes whenever the host's cloud-init, the database URL or the database's CA changes. `fleetadlc cloud apply` resets the host when it does, so cloud-init and hostd start again on the new ones."
+  description = "Changes whenever the host's cloud-init, the database URL or the database's CA changes. `openadlc cloud apply` resets the host when it does, so cloud-init and hostd start again on the new ones."
   value       = sha256("${local.host_cloud_init}|${google_secret_manager_secret_version.database_url.version}|${google_secret_manager_secret_version.database_ca.version}")
 }
 
@@ -64,7 +64,7 @@ output "next_steps" {
          https://${local.console_domain}
        It is served on the install's own address under nip.io; no DNS record is
        needed. For a domain of your own, set console_domain in
-       ~/.fleetadlc/cloud.tfvars.json, run `fleetadlc cloud apply` (the managed
+       ~/.openadlc/cloud.tfvars.json, run `openadlc cloud apply` (the managed
        certificate is reissued for the new name, which takes a while), and point
        an A record for it at ${google_compute_global_address.console.address}.
     %{endif~}
@@ -81,13 +81,13 @@ output "next_steps" {
        restore, or for an app made by hand, use the console's webhook step,
        which sets one secret on both sides. Only for an app made by hand on a
        fresh install, point its webhook there on the app's settings page, with
-       `webhook_secret` from ~/.fleetadlc/cloud.tfvars.json (also kept in the
+       `webhook_secret` from ~/.openadlc/cloud.tfvars.json (also kept in the
        state bucket) as its secret. The console's webhook card shows whether a
        delivery arrived.
     4. Check the install on the console's health cards and its walkthrough,
        which say what is left and where it is done:
          https://${local.console_domain}
-    The host runs no fleetadlc command: everything above is in the console.
+    The host runs no openadlc command: everything above is in the console.
   EOT
 }
 
