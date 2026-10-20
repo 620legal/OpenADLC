@@ -2028,7 +2028,12 @@ egress allowlist, and IAP in front of the console.
 
 **In one command:** [`infra/gcp/install.sh`](../infra/gcp/install.sh), from
 Cloud Shell or any machine with gcloud, does everything below up to and
-including the apply: it checks gcloud's and Terraform's sign-ins, installs
+including the apply: it checks gcloud's and Terraform's sign-ins — naming the
+account Terraform's Application Default Credentials belong to, and asking
+before going on with one that is not gcloud's own, rather than a 403 at
+`terraform init` after the images are built; an expired sign-in stops the run
+with `gcloud auth login` to rerun instead of reading as a missing project —
+installs
 Terraform 1.6 or later into `~/.local/bin` from releases.hashicorp.com when
 there is none (checked against the release's SHA256SUMS; Cloud Shell's own
 `terraform` is only a placeholder that prints install instructions, and
