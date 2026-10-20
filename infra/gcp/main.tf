@@ -1226,8 +1226,18 @@ resource "google_logging_metric" "egress_denied" {
 resource "time_sleep" "egress_metric_visible" {
   create_duration = "60s"
 
+  # The reference is also the dependency: the sleep starts only once the
+  # metric exists.
   triggers = {
     metric = google_logging_metric.egress_denied.id
+  }
+
+  # The id is the metric's name, so the trigger alone would miss a metric
+  # replaced under the same name: slept again whenever the metric changes at
+  # all, since Monitoring has to learn of it again either way, and a spare
+  # minute is cheaper than a failed apply.
+  lifecycle {
+    replace_triggered_by = [google_logging_metric.egress_denied]
   }
 }
 
