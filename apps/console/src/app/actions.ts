@@ -185,6 +185,39 @@ export async function dismissNotice(checkId: string): Promise<{ ok: boolean; err
   }
 }
 
+/** "This key is used elsewhere" on the signing-key card: the check stops counting it. */
+export async function dismissSigningKey(login: string, keyId: number, title: string | null): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await call(`/v1/signing-keys/${encodeURIComponent(login)}/keys/${keyId}/dismiss`, 'POST', title ? { title } : {});
+    revalidatePath('/');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not dismiss it' };
+  }
+}
+
+/** The undo: the key counts as a stranger's again. */
+export async function undismissSigningKey(login: string, keyId: number): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await call(`/v1/signing-keys/${encodeURIComponent(login)}/keys/${keyId}/dismiss`, 'DELETE');
+    revalidatePath('/');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not undo it' };
+  }
+}
+
+/** Deletes a key from the bot's GitHub account, as the bot; the card confirms first. */
+export async function revokeSigningKey(login: string, keyId: number): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await call(`/v1/signing-keys/${encodeURIComponent(login)}/keys/${keyId}/revoke`, 'POST');
+    revalidatePath('/');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not revoke it' };
+  }
+}
+
 /**
  * Asks one health check again now. The board is read again either way: a
  * check that still fails keeps its card, one that passes turns it into "fixed".

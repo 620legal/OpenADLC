@@ -267,6 +267,12 @@ export type AttentionAction =
   | { kind: 'dismiss'; label: string; checkId: string }
   /** Dismisses a notice with nothing to fix until a newer occurrence arrives. */
   | { kind: 'acknowledge'; label: string; checkId: string; occurrence: string }
+  /**
+   * The signing-key card's buttons about a key OpenADLC did not register:
+   * delete it from the bot's GitHub account with the bot's own sign-in, say it
+   * is somebody's on purpose so the check stops counting it, or take that back.
+   */
+  | { kind: 'signing_key_revoke' | 'signing_key_dismiss' | 'signing_key_undo'; label: string; login: string; keyId: number; title: string | null }
   /** Opens the steps for the item's `incident`: what to do about a post OpenADLC did not sign. */
   | { kind: 'incident'; label: string }
   | { kind: 'recheck'; label: string; checkId: string }

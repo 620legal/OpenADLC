@@ -62,6 +62,33 @@ describe('a promote held for a person', () => {
   });
 });
 
+describe('a signing key OpenADLC did not register', () => {
+  const card = {
+    ...ITEM,
+    id: 'check:signing-key:account:abner620legal',
+    kind: 'check_failed' as const,
+    actions: [
+      { kind: 'signing_key_revoke' as const, label: 'Revoke key 6', login: 'abner620legal', keyId: 6, title: 'laptop' },
+      { kind: 'signing_key_dismiss' as const, label: 'Key 6 is used elsewhere', login: 'abner620legal', keyId: 6, title: 'laptop' },
+      { kind: 'signing_key_revoke' as const, label: 'Revoke key 8', login: 'abner620legal', keyId: 8, title: null },
+      { kind: 'signing_key_dismiss' as const, label: 'Key 8 is used elsewhere', login: 'abner620legal', keyId: 8, title: null },
+      { kind: 'signing_key_undo' as const, label: 'Count key 4 again', login: 'abner620legal', keyId: 4, title: null },
+      { kind: 'open_url' as const, label: 'Open the account’s keys', url: 'https://github.com/settings/keys' },
+      { kind: 'recheck' as const, label: 'Check again', checkId: 'signing-key' },
+    ],
+  };
+
+  it('has the first key’s Revoke and Dismiss on the card, and the rest behind Show more', () => {
+    expect(faceActions(card).map((action) => action.label)).toEqual(['Revoke key 6', 'Key 6 is used elsewhere']);
+    expect(hasMore(card)).toBe(true);
+  });
+
+  it('leads with Dismiss where the check offered no Revoke', () => {
+    const blocked = { ...card, actions: card.actions.filter((action) => action.kind !== 'signing_key_revoke') };
+    expect(faceActions(blocked).map((action) => action.label)).toEqual(['Key 6 is used elsewhere']);
+  });
+});
+
 describe('an unsigned post’s card', () => {
   const unsigned: AttentionItem = {
     ...ITEM,

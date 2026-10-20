@@ -456,7 +456,9 @@ function crewReader(options: {
   refused?: string[];
   user?: (login: string) => Promise<unknown>;
   repo?: (login: string) => Promise<unknown>;
-  listed?: { id: number; key: string }[];
+  listed?: { id: number; title?: string | null; key: string }[];
+  /** What a second list of the account's keys returns: the re-list after an upload GitHub refused as already in use. */
+  relisted?: { id: number; title?: string | null; key: string }[];
   upload?: () => Promise<unknown>;
   stored?: string | null;
   requires?: boolean | null;
@@ -464,8 +466,11 @@ function crewReader(options: {
   calls?: Calls[];
   repositories?: RepoRef[];
   githubUserId?: number | null;
+  knownExternal?: { keyId: number; title: string | null; by: string; at: string }[];
+  revokeBlocked?: string | null;
 }): SigningReader {
   const calls = options.calls ?? [];
+  let lists = 0;
   return {
     crew: async () => options.crew ?? [BUILDER, REVIEWER],
     repositories: async () => options.repositories ?? [{ name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', defaultBranch: 'main' }],
@@ -482,8 +487,12 @@ function crewReader(options: {
         calls.push({ method, path, body });
         if (path === '/user') return ((await options.user?.(login)) ?? { login }) as T;
         if (path.startsWith('/repos/')) return ((await options.repo?.(login)) ?? { permissions: { push: true }, owner: { type: 'User' } }) as T;
-        if (path.endsWith('/ssh_signing_keys') && method === 'GET') return (options.listed ?? []) as T;
+        if (path.endsWith('/ssh_signing_keys') && method === 'GET') {
+          lists += 1;
+          return (lists > 1 && options.relisted ? options.relisted : (options.listed ?? [])) as T;
+        }
         if (path === '/user/ssh_signing_keys' && method === 'POST') return ((await options.upload?.()) ?? { id: 91 }) as T;
+        if (path.startsWith('/user/ssh_signing_keys/') && method === 'DELETE') return undefined as T;
         throw new GitHubApiError(404, path, 'not faked');
       },
     }),
@@ -492,6 +501,8 @@ function crewReader(options: {
     requiresSignatures: async () => (options.requires === undefined ? true : options.requires),
     appLacksSigningPermission: async () => options.lacksPermission ?? false,
     recordKeyId: async () => undefined,
+    knownExternalKeys: async () => options.knownExternal ?? [],
+    revokeBlockedBy: async () => (options.revokeBlocked === undefined ? null : options.revokeBlocked),
   };
 }
 
@@ -849,5 +860,126 @@ describe('each committing bot’s signing key', () => {
       ok: null,
       reason: 'its signing key could not be read from or written to the secret store: the secret store is locked',
     });
+  });
+
+  it('removes its own stale upload — the bot’s title on a key that is not the bot’s — before registering, and does not warn of it', async () => {
+    const calls: Calls[] = [];
+    const results = await crewChecks(
+      crewReader({ listed: [{ id: 7, title: 'openadlc-openadlc-atlas-janedoe', key: 'ssh-ed25519 AAAAC3Nza-stale-retry' }], calls }),
+    ).signingKey.run(NOW);
+    expect(calls.some((call) => call.method === 'DELETE' && call.path === '/user/ssh_signing_keys/7')).toBe(true);
+    expect(results).toMatchObject([{ subject: 'bot-builder', ok: true, facts: { registered: true, keyId: 91 } }]);
+    expect(results.some((result) => result.subject === 'account:openadlc-atlas-janedoe')).toBe(false);
+  });
+
+  it('removes a raced registration’s leftover even when the stored key is registered, so the card never names it', async () => {
+    // The race settles with the store's key on the account and the loser's
+    // beside it under the same title; only the next check is left to remove it.
+    const calls: Calls[] = [];
+    const results = await crewChecks(
+      crewReader({
+        listed: [
+          { id: 5, title: 'openadlc-openadlc-atlas-janedoe', key: 'ssh-ed25519 AAAAC3Nza-builder openadlc-openadlc-atlas-janedoe' },
+          { id: 7, title: 'openadlc-openadlc-atlas-janedoe', key: 'ssh-ed25519 AAAAC3Nza-lost-the-race' },
+        ],
+        calls,
+      }),
+    ).signingKey.run(NOW);
+    expect(calls.filter((call) => call.method === 'DELETE').map((call) => call.path)).toEqual(['/user/ssh_signing_keys/7']);
+    expect(calls.some((call) => call.method === 'POST')).toBe(false);
+    expect(results).toMatchObject([{ subject: 'bot-builder', ok: true, facts: { registered: true, keyId: 5 } }]);
+    expect(results.some((result) => result.subject === 'account:openadlc-atlas-janedoe')).toBe(false);
+  });
+
+  it('reads an upload refused as already in use as registered, once the account lists the key', async () => {
+    const results = await crewChecks(
+      crewReader({
+        listed: [],
+        relisted: [{ id: 12, title: 'openadlc-openadlc-atlas-janedoe', key: 'ssh-ed25519 AAAAC3Nza-builder openadlc-openadlc-atlas-janedoe' }],
+        upload: async () => {
+          throw new GitHubApiError(422, '/user/ssh_signing_keys', 'Validation Failed: key is already in use');
+        },
+      }),
+    ).signingKey.run(NOW);
+    expect(results).toMatchObject([{ subject: 'bot-builder', ok: true, facts: { registered: true, keyId: 12 } }]);
+  });
+
+  it('still says the key is missing when GitHub refused it as in use and the account does not list it', async () => {
+    const [result] = await crewChecks(
+      crewReader({
+        listed: [],
+        relisted: [],
+        upload: async () => {
+          throw new GitHubApiError(422, '/user/ssh_signing_keys', 'Validation Failed: key is already in use');
+        },
+      }),
+    ).signingKey.run(NOW);
+    expect(result).toMatchObject({ ok: false, title: 'The builder (openadlc-atlas-janedoe) has no signing key on its GitHub account' });
+  });
+});
+
+describe('the keys on an account OpenADLC did not register', () => {
+  const STRANGER = { id: 6, title: 'laptop', key: 'ssh-ed25519 AAAAC3Nza-somebody-else' };
+  const OURS = { id: 5, key: 'ssh-ed25519 AAAAC3Nza-builder openadlc-openadlc-atlas-janedoe' };
+
+  it('carries what the card’s Revoke and Dismiss act on: each key, its title, and that revoking is open', async () => {
+    const results = await crewChecks(crewReader({ listed: [OURS, STRANGER] })).signingKey.run(NOW);
+    expect(results).toMatchObject([
+      { subject: 'bot-builder', ok: true },
+      {
+        subject: 'account:openadlc-atlas-janedoe',
+        ok: false,
+        severity: 'warning',
+        facts: {
+          keyIds: [6],
+          signingKeys: {
+            login: 'openadlc-atlas-janedoe',
+            foreign: [{ id: 6, title: 'laptop' }],
+            acknowledged: [],
+            revokeBlockedBy: null,
+          },
+        },
+      },
+    ]);
+  });
+
+  it('stops counting a key a person dismissed, and lists it with who said so for the undo', async () => {
+    const results = await crewChecks(
+      crewReader({
+        listed: [OURS, STRANGER, { id: 8, title: null, key: 'ssh-ed25519 AAAAC3Nza-a-third' }],
+        knownExternal: [{ keyId: 6, title: 'laptop', by: 'or@example.com', at: '2026-10-19T08:00:00.000Z' }],
+      }),
+    ).signingKey.run(NOW);
+    const card = results.find((result) => result.subject === 'account:openadlc-atlas-janedoe');
+    expect(card).toMatchObject({
+      ok: false,
+      title: 'openadlc-atlas-janedoe has a signing key OpenADLC did not register',
+      facts: {
+        keyIds: [8],
+        signingKeys: {
+          foreign: [{ id: 8, title: null }],
+          acknowledged: [{ id: 6, title: 'laptop', by: 'or@example.com', at: '2026-10-19T08:00:00.000Z' }],
+        },
+      },
+    });
+    expect(card && 'detail' in card ? card.detail : '').toContain('Dismissed as used elsewhere: laptop, id 6 (by or@example.com, 2026-10-19)');
+  });
+
+  it('raises no card when every stranger’s key was dismissed', async () => {
+    const results = await crewChecks(
+      crewReader({
+        listed: [OURS, STRANGER],
+        knownExternal: [{ keyId: 6, title: 'laptop', by: 'or@example.com', at: '2026-10-19T08:00:00.000Z' }],
+      }),
+    ).signingKey.run(NOW);
+    expect(results.some((result) => result.subject === 'account:openadlc-atlas-janedoe')).toBe(false);
+  });
+
+  it('says on the card why Revoke is not offered, when the bot’s sign-in may not delete keys', async () => {
+    const blocked = 'the bot’s sign-in is a personal access token without the admin:ssh_signing_key scope, which deleting a signing key needs';
+    const results = await crewChecks(crewReader({ listed: [OURS, STRANGER], revokeBlocked: blocked })).signingKey.run(NOW);
+    const card = results.find((result) => result.subject === 'account:openadlc-atlas-janedoe');
+    expect(card).toMatchObject({ facts: { signingKeys: { revokeBlockedBy: blocked } } });
+    expect(card && 'detail' in card ? card.detail : '').toContain(`Revoke is not offered: ${blocked}`);
   });
 });

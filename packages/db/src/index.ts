@@ -16,6 +16,8 @@ export * as spendingLimits from './store/spending-limits.js';
 export * as hosts from './store/hosts.js';
 export * as requests from './store/requests.js';
 export * as credentials from './store/credentials.js';
+export * as externalSigningKeys from './store/external-signing-keys.js';
+export type { ExternalSigningKey } from './store/external-signing-keys.js';
 export * as mergeLines from './store/merge-lines.js';
 export * as stageMoves from './store/stage-moves.js';
 export type { StageMove, StageMoveKind } from './store/stage-moves.js';

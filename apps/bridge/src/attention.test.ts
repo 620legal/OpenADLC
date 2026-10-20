@@ -1334,6 +1334,92 @@ describe('what the health checks say', () => {
     ]);
   });
 
+  it('gives the signing-key card a Revoke and a Dismiss per key it counts, and an undo per key dismissed', async () => {
+    const { attentionItems } = await load();
+    const items = attentionItems({
+      now: NOW,
+      gates: [],
+      tasks: [],
+      bots: BOTS,
+      repos: REPOS,
+      issues: ISSUES,
+      requests: [],
+      stallEvents: [],
+      health: [
+        healthRow({
+          id: 'signing-key:account:abner620legal',
+          checkId: 'signing-key',
+          state: 'failing',
+          severity: 'warning',
+          title: 'abner620legal has 2 signing keys OpenADLC did not register',
+          action: { label: 'Open the account’s keys', url: 'https://github.com/settings/keys' },
+          facts: {
+            login: 'abner620legal',
+            keyIds: [6, 8],
+            signingKeys: {
+              login: 'abner620legal',
+              foreign: [
+                { id: 6, title: 'laptop' },
+                { id: 8, title: null },
+              ],
+              acknowledged: [{ id: 4, title: 'openadlc-old', by: 'or@example.com', at: '2026-10-19T08:00:00.000Z' }],
+              revokeBlockedBy: null,
+            },
+          },
+        }),
+      ],
+    });
+
+    const [card] = items;
+    expect(card?.id).toBe('check:signing-key:account:abner620legal');
+    expect(card?.actions).toMatchObject([
+      { kind: 'signing_key_revoke', label: 'Revoke key 6', login: 'abner620legal', keyId: 6, title: 'laptop' },
+      { kind: 'signing_key_dismiss', label: 'Key 6 is used elsewhere', login: 'abner620legal', keyId: 6, title: 'laptop' },
+      { kind: 'signing_key_revoke', label: 'Revoke key 8', login: 'abner620legal', keyId: 8, title: null },
+      { kind: 'signing_key_dismiss', label: 'Key 8 is used elsewhere', login: 'abner620legal', keyId: 8, title: null },
+      { kind: 'signing_key_undo', label: 'Count key 4 again', login: 'abner620legal', keyId: 4 },
+      { kind: 'open_url', label: 'Open the account’s keys' },
+      { kind: 'recheck', checkId: 'signing-key' },
+    ]);
+  });
+
+  it('offers no Revoke where the check said the bot’s sign-in may not delete, and no key id on one key’s buttons', async () => {
+    const { attentionItems } = await load();
+    const items = attentionItems({
+      now: NOW,
+      gates: [],
+      tasks: [],
+      bots: BOTS,
+      repos: REPOS,
+      issues: ISSUES,
+      requests: [],
+      stallEvents: [],
+      health: [
+        healthRow({
+          id: 'signing-key:account:abner620legal',
+          checkId: 'signing-key',
+          state: 'failing',
+          severity: 'warning',
+          title: 'abner620legal has a signing key OpenADLC did not register',
+          facts: {
+            login: 'abner620legal',
+            keyIds: [6],
+            signingKeys: {
+              login: 'abner620legal',
+              foreign: [{ id: 6, title: 'laptop' }],
+              acknowledged: [],
+              revokeBlockedBy: 'the bot’s sign-in is a personal access token without the admin:ssh_signing_key scope, which deleting a signing key needs',
+            },
+          },
+        }),
+      ],
+    });
+
+    const kinds = items[0]?.actions.map((action) => action.kind);
+    expect(kinds).not.toContain('signing_key_revoke');
+    expect(items[0]?.actions.find((action) => action.kind === 'signing_key_dismiss')).toMatchObject({ label: 'Key is used elsewhere', keyId: 6 });
+  });
+
   it('does not fold a blocking row behind a newer warning under the same check', async () => {
     // repo-rules and signing-key emit both severities under one checkId — a
     // repository stuck for everyone, and another merely unprotected. Folding

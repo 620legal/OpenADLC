@@ -1,6 +1,7 @@
 import { ConfigurationError, collaboratorsUrl, sameSigningKey } from '@openadlc/github';
 import { COMMITTING_ROLES, botAtStart, botInWords, holdsCredential, repositoryRoleFor, sameLogin, type Bot, type HealthAction } from '@openadlc/shared';
 import { botSaid } from '../../bot-said.js';
+import { alreadyInUse, signingKeyTitle } from '../../signing-keys.js';
 import type { CheckResult, HealthCheck } from '../types.js';
 import { GITHUB_CALLS_AT_ONCE, SLOW_CHECK_MS, mapLimited } from '../limited.js';
 import { ACCESS_STEP, RECONNECT } from '../words.js';
@@ -44,6 +45,21 @@ export interface SigningReader extends CrewReader {
   appLacksSigningPermission(): Promise<boolean>;
   /** Keeps the id GitHub gave a key OpenADLC registered. */
   recordKeyId(bot: Bot, keyId: number): Promise<void>;
+  /** The keys on this account a person has dismissed as used outside OpenADLC; the card stops counting them. */
+  knownExternalKeys(login: string): Promise<{ keyId: number; title: string | null; by: string; at: string }[]>;
+  /** Why this bot's sign-in cannot delete keys on its account, or null when it can (`revokeGate`). */
+  revokeBlockedBy(bot: Bot): Promise<string | null>;
+}
+
+/** What the foreign-keys card carries in its facts, for the console's Revoke, Dismiss and Undo buttons. */
+export interface SigningKeyCardFacts {
+  login: string;
+  /** The keys no seat here holds, which the card counts. */
+  foreign: { id: number; title: string | null }[];
+  /** The keys a person dismissed as used elsewhere, each listed with an undo. */
+  acknowledged: { id: number; title: string | null; by: string; at: string }[];
+  /** Why Revoke is not offered, or null when the bot's sign-in can delete keys. */
+  revokeBlockedBy: string | null;
 }
 
 
@@ -447,10 +463,11 @@ export function crewChecks(reader: SigningReader): CrewChecks {
       // Per account: the signing keys GitHub lists for it, and the public half
       // of every seat's key on it, so a key nobody here registered is seen.
       // Incomplete when a seat's key could not be read: its key would look
-      // like a stranger's.
-      const accounts = new Map<string, { listed: { id: number; key: string }[] | null; ours: string[]; complete: boolean }>();
+      // like a stranger's. `bot` is a seat whose sign-in worked, whose
+      // credential the card's Revoke would act with.
+      const accounts = new Map<string, { listed: { id: number; title?: string | null; key: string }[] | null; ours: string[]; complete: boolean; bot: Bot | null }>();
       const account = (login: string) => {
-        const known = accounts.get(login) ?? { listed: null, ours: [], complete: true };
+        const known = accounts.get(login) ?? { listed: null, ours: [], complete: true, bot: null };
         accounts.set(login, known);
         return known;
       };
@@ -514,11 +531,11 @@ export function crewChecks(reader: SigningReader): CrewChecks {
           continue;
         }
 
-        let listed: { id: number; key: string }[];
+        let listed: { id: number; title?: string | null; key: string }[];
         try {
           // The account's public list: no permission is needed to read it,
           // which is what makes it evidence rather than the bot's own say-so.
-          listed = await github.request<{ id: number; key: string }[]>('GET', `/users/${bot.githubLogin}/ssh_signing_keys`);
+          listed = await github.request<{ id: number; title?: string | null; key: string }[]>('GET', `/users/${bot.githubLogin}/ssh_signing_keys`);
         } catch (error) {
           keys.complete = false;
           results.push({ subject: bot.id, ok: null, reason: `GitHub did not list the signing keys of ${botInWords(bot)}: ${messageOf(error)}`, facts });
@@ -526,6 +543,19 @@ export function crewChecks(reader: SigningReader): CrewChecks {
         }
         keys.listed = listed;
         keys.ours.push(publicKey);
+        keys.bot ??= bot;
+
+        // A key this bot's title is on that is not this key is a stale upload
+        // of OpenADLC's own — a retried or raced registration — removed, best
+        // effort, so registering never grows the account's list. Whether or
+        // not this key is registered already: a race leaves the key the store
+        // kept on the account and the loser's beside it, and removed only on
+        // the way to an upload, the loser stayed for good and the card named
+        // OpenADLC's own leftover as a stranger's.
+        for (const stale of listed.filter((key) => key.title === signingKeyTitle(bot.name) && !sameSigningKey(key.key, publicKey))) {
+          const gone = await github.request<void>('DELETE', `/user/ssh_signing_keys/${stale.id}`).then(() => true, () => false);
+          if (gone) keys.listed = (keys.listed ?? []).filter((key) => key.id !== stale.id);
+        }
 
         const known = listed.find((key) => sameSigningKey(key.key, publicKey));
         if (known) {
@@ -550,6 +580,22 @@ export function crewChecks(reader: SigningReader): CrewChecks {
             facts: { ...facts, registered: true, keyId: created.id },
           });
         } catch (error) {
+          // A connect registering the same key between the list and this
+          // upload makes GitHub refuse it as already in use. That is the key
+          // registered, not missing: read as missing it was a blocking card on
+          // a repository that requires signatures, for a seat that was fine.
+          if (alreadyInUse(error)) {
+            const again = await github
+              .request<{ id: number; title?: string | null; key: string }[]>('GET', `/users/${bot.githubLogin}/ssh_signing_keys`)
+              .catch(() => null);
+            const landed = again?.find((key) => sameSigningKey(key.key, publicKey));
+            if (again && landed) {
+              keys.listed = again;
+              await reader.recordKeyId(bot, landed.id).catch(() => undefined);
+              results.push({ subject: bot.id, ok: true, fixed: `GitHub knows the signing key of ${botInWords(bot)} now`, facts: { ...facts, registered: true, keyId: landed.id } });
+              continue;
+            }
+          }
           const status = statusOf(error);
           if (forbiddenBecause(error) === 'rate-limit') {
             results.push(missing(' — GitHub was rate limiting its account when OpenADLC tried to register it, and the next check tries again'));
@@ -568,10 +614,33 @@ export function crewChecks(reader: SigningReader): CrewChecks {
       // it removes leaves the other seats' commits Unverified. Until sessions
       // get a token without account permissions, a key OpenADLC did not
       // register is a card. Only while it is there: the row goes when it does.
+      // One a person has dismissed as used elsewhere is not counted, until the
+      // undo on the card says to count it again.
       for (const [login, keys] of accounts) {
         if (!keys.complete || !keys.listed) continue;
-        const foreign = keys.listed.filter((key) => !keys.ours.some((ours) => sameSigningKey(key.key, ours)));
+        const strangers = keys.listed.filter((key) => !keys.ours.some((ours) => sameSigningKey(key.key, ours)));
+        if (strangers.length === 0) continue;
+        const dismissed = new Map((await reader.knownExternalKeys(login).catch(() => [])).map((key) => [key.keyId, key]));
+        const foreign = strangers.filter((key) => !dismissed.has(key.id));
         if (foreign.length === 0) continue;
+        const acknowledged = strangers
+          .filter((key) => dismissed.has(key.id))
+          .map((key) => {
+            const seen = dismissed.get(key.id)!;
+            return { id: key.id, title: key.title ?? seen.title ?? null, by: seen.by, at: seen.at };
+          });
+        // What the card's Revoke would act with is a seat's sign-in; told here,
+        // not at the click, so a sign-in that may not delete keys is a sentence
+        // on the card instead of a button that fails.
+        const revokeBlockedBy = keys.bot
+          ? await reader.revokeBlockedBy(keys.bot).catch((error: unknown) => `it could not be told whether its sign-in may delete keys: ${messageOf(error)}`)
+          : 'no seat on the account holds a working sign-in';
+        const signingKeys: SigningKeyCardFacts = {
+          login,
+          foreign: foreign.map((key) => ({ id: key.id, title: key.title ?? null })),
+          acknowledged,
+          revokeBlockedBy,
+        };
         results.push({
           subject: `account:${login}`,
           ok: false,
@@ -579,11 +648,17 @@ export function crewChecks(reader: SigningReader): CrewChecks {
           title: `${login} has ${foreign.length === 1 ? 'a signing key' : `${foreign.length} signing keys`} OpenADLC did not register`,
           detail:
             `GitHub lists ${foreign.length === 1 ? 'a key' : 'keys'} on ${login} that ${foreign.length === 1 ? 'is' : 'are'} no seat's ` +
-            `(id ${foreign.map((key) => key.id).join(', ')}). A commit signed with ${foreign.length === 1 ? 'it' : 'one'} reads Verified ` +
-            'for the account, whichever seat or session made it. If nobody here added it, remove it on the account’s SSH and GPG keys ' +
-            `page, signed in as ${login}; OpenADLC registers each seat’s own key again when it is missing.`,
+            `(${foreign.map((key) => (key.title ? `${key.title}, id ${key.id}` : `id ${key.id}`)).join('; ')}). A commit signed with ${foreign.length === 1 ? 'it' : 'one'} reads Verified ` +
+            'for the account, whichever seat or session made it. If nobody here added it, revoke it here — OpenADLC registers each ' +
+            `seat’s own key again when it is missing. If it is somebody’s on purpose, dismiss it, and the check stops counting it.` +
+            (revokeBlockedBy ? `\n\nRevoke is not offered: ${revokeBlockedBy}.` : '') +
+            (acknowledged.length > 0
+              ? `\n\nDismissed as used elsewhere: ${acknowledged
+                  .map((key) => `${key.title ? `${key.title}, ` : ''}id ${key.id} (by ${key.by}, ${key.at.slice(0, 10)})`)
+                  .join('; ')}.`
+              : ''),
           action: { label: 'Open the account’s keys', url: 'https://github.com/settings/keys' },
-          facts: { login, keyIds: foreign.map((key) => key.id) },
+          facts: { login, keyIds: foreign.map((key) => key.id), signingKeys },
         });
       }
       return results;

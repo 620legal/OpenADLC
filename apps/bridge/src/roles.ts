@@ -182,6 +182,10 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'POST /v1/health/checks/:checkId/run': 'admin',
   'POST /v1/health/:id/dismiss': 'admin',
   'POST /v1/health/:id/acknowledge': 'admin',
+  // What is on a bot account's keys page changes who can sign as the crew.
+  'POST /v1/signing-keys/:login/keys/:keyId/dismiss': 'admin',
+  'DELETE /v1/signing-keys/:login/keys/:keyId/dismiss': 'admin',
+  'POST /v1/signing-keys/:login/keys/:keyId/revoke': 'admin',
   'POST /v1/users': 'admin',
   'PATCH /v1/users/:email': 'admin',
   'POST /v1/users/:email/remove': 'admin',

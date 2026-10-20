@@ -7,8 +7,8 @@ import type { AttentionItem } from '@/lib/api';
 
 /** What the card sent the gate-answer route. */
 const answers = vi.hoisted(() => [] as { gateId: string; answer: string }[]);
-/** What was run again, and what was dismissed. */
-const pressed = vi.hoisted(() => ({ retried: [] as string[], stopped: [] as string[], dismissed: [] as string[] }));
+/** What was run again, what was dismissed, and which signing keys were acted on. */
+const pressed = vi.hoisted(() => ({ retried: [] as string[], stopped: [] as string[], dismissed: [] as string[], revoked: [] as string[] }));
 
 vi.mock('@/app/actions', () => ({
   answerGate: vi.fn(async (gateId: string, answer: string) => {
@@ -43,6 +43,18 @@ vi.mock('@/app/actions', () => ({
   }),
   recheckHealth: vi.fn(async () => ({ ok: true })),
   decideUnowned: vi.fn(async () => ({ ok: true })),
+  dismissSigningKey: vi.fn(async (login: string, keyId: number) => {
+    pressed.dismissed.push(`key:${login}:${keyId}`);
+    return { ok: true };
+  }),
+  undismissSigningKey: vi.fn(async (login: string, keyId: number) => {
+    pressed.dismissed.push(`undo:${login}:${keyId}`);
+    return { ok: true };
+  }),
+  revokeSigningKey: vi.fn(async (login: string, keyId: number) => {
+    pressed.revoked.push(`${login}:${keyId}`);
+    return { ok: true };
+  }),
 }));
 
 /**
@@ -65,6 +77,7 @@ beforeEach(() => {
   pressed.retried.length = 0;
   pressed.stopped.length = 0;
   pressed.dismissed.length = 0;
+  pressed.revoked.length = 0;
 });
 
 type Pressable = ReactElement<{ onClick?: () => void; children?: ReactNode }>;
@@ -173,6 +186,42 @@ describe('what needs you', () => {
     for (const label of ['Release to production', 'Switch to automatic delivery']) expect(html).toMatch(new RegExp(`<button type="button"[^>]*>${label}</button>`));
     // An admin's to press, as the bridge enforces: a user's card shows neither.
     for (const action of HELD.actions) expect(adminOnly(action)).toBe(true);
+  });
+
+  it('offers Revoke and Dismiss for a signing key OpenADLC did not register, admins only, the other keys behind Show more', async () => {
+    const KEYS: AttentionItem = {
+      id: 'check:signing-key:account:abner620legal',
+      kind: 'check_failed',
+      severity: 'warning',
+      headline: 'abner620legal has 2 signing keys OpenADLC did not register',
+      subject: { repo: null, number: null, title: null, ref: null, url: null },
+      bot: null,
+      since: '2026-09-24T11:59:00.000Z',
+      detail: 'GitHub lists keys on abner620legal that are no seat’s (laptop, id 6; id 8).',
+      actions: [
+        { kind: 'signing_key_revoke', label: 'Revoke key 6', login: 'abner620legal', keyId: 6, title: 'laptop' },
+        { kind: 'signing_key_dismiss', label: 'Key 6 is used elsewhere', login: 'abner620legal', keyId: 6, title: 'laptop' },
+        { kind: 'signing_key_revoke', label: 'Revoke key 8', login: 'abner620legal', keyId: 8, title: null },
+        { kind: 'signing_key_dismiss', label: 'Key 8 is used elsewhere', login: 'abner620legal', keyId: 8, title: null },
+        { kind: 'signing_key_undo', label: 'Count key 4 again', login: 'abner620legal', keyId: 4, title: null },
+        { kind: 'open_url', label: 'Open the account’s keys', url: 'https://github.com/settings/keys' },
+        { kind: 'recheck', label: 'Check again', checkId: 'signing-key' },
+      ],
+    };
+    const html = needs([KEYS]);
+    for (const label of ['Revoke key 6', 'Key 6 is used elsewhere']) expect(html).toMatch(new RegExp(`<button type="button"[^>]*>${label}</button>`));
+    // The second key's buttons and the undo wait in the sheet.
+    expect(html).not.toContain('Revoke key 8');
+    expect(html).toContain('Show more');
+    // An admin's to press, as the bridge enforces; and each key's button runs apart from the next key's.
+    for (const action of KEYS.actions.filter((one) => one.kind.startsWith('signing_key'))) expect(adminOnly(action)).toBe(true);
+    expect(keyOf(KEYS.actions[1]!)).not.toBe(keyOf(KEYS.actions[3]!));
+
+    // Dismiss asks nothing further; Revoke confirms first, in the DOM tests.
+    press(buttonsIn(<NeedsYou items={[KEYS]} now="2026-09-24T12:00:00.000Z" onOpenBot={() => undefined} />), 'Key 6 is used elsewhere');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(pressed.dismissed).toEqual(['key:abner620legal:6']);
+    expect(pressed.revoked).toEqual([]);
   });
 
   it('shows three on the board, and links to all of them', () => {
