@@ -83,8 +83,12 @@ exit 0`,
   });
 
   function stub(name: string, body = 'exit 0'): void {
-    writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
-    chmodSync(join(bin, name), 0o755);
+    const path = join(bin, name);
+    // Some names are links to the real tool (the loop above): writing through
+    // one would overwrite the machine's own.
+    rmSync(path, { force: true });
+    writeFileSync(path, `#!/bin/sh\n${body}\n`);
+    chmodSync(path, 0o755);
   }
 
   function install(args: string[]): { status: number | null; out: string } {
@@ -137,6 +141,9 @@ exit 0`,
       stub('terraform', placeholder);
       stub('curl');
       stub('unzip');
+      // The URL names the machine's kind: through the real uname the suite
+      // expected linux_ and saw darwin_arm64 on a Mac.
+      stub('uname', 'case "$1" in -m) echo x86_64 ;; *) echo Linux ;; esac');
       const run = spawnSync(join(bin, 'bash'), [join(GCP, 'install.sh'), '--dry-run', '--project', 'acme-openadlc', '--plan-only'], {
         env: { PATH: bin, HOME: work, TERM: 'dumb', OPENADLC_TERRAFORM_VERSION: '1.9.8' },
         encoding: 'utf8',
@@ -301,6 +308,90 @@ exit 0`,
       expect(enable, out).toBeGreaterThanOrEqual(0);
       expect(enable).toBeLessThan(out.indexOf('cloud plan'));
     }
+  });
+
+  describe('a sign-in that needs renewing', () => {
+    // An expired credential fails `projects describe` too, and reading every
+    // failure as "does not exist" steered a live run toward creating a
+    // project that was already there (issue #11).
+    it.each([
+      ['Reauthentication failed', 'ERROR: (gcloud.projects.describe) Reauthentication failed.'],
+      ['invalid_grant', "ERROR: (gcloud.projects.describe) ('invalid_grant: Token has been expired or revoked.')"],
+      ['a problem refreshing auth tokens', 'ERROR: (gcloud.projects.describe) There was a problem refreshing your current auth tokens.'],
+    ])('stops at "%s" rather than offer to create the project', (_, said) => {
+      stub(
+        'gcloud',
+        `case "$*" in
+  *"auth list"*) echo alex@example.com ;;
+  *"projects describe"*) echo "${said}" >&2; exit 1 ;;
+esac
+exit 0`,
+      );
+      const { status, out } = install(['--project', 'acme-openadlc']);
+      expect(status).not.toBe(0);
+      expect(out).toContain('Run: gcloud auth login');
+      expect(out, out).toContain(said);
+      expect(out).not.toContain('does not exist');
+      expect(out).not.toContain('Create project');
+    });
+  });
+
+  describe("who Terraform's credentials belong to", () => {
+    // That ADC exists is not enough: a live run's ADC was another Google
+    // account than gcloud's, every check passed, and the install died at
+    // terraform init with a 403 on the state bucket, after the images were
+    // built (issue #11).
+    function adcFile(account: string): void {
+      const config = join(work, 'gcloud-config');
+      mkdirSync(config, { recursive: true });
+      writeFileSync(join(config, 'application_default_credentials.json'), JSON.stringify({ account, type: 'authorized_user' }, null, 2));
+      stub(
+        'gcloud',
+        `case "$*" in
+  *"auth list"*) echo alex@example.com ;;
+  *"config.paths.global_config_dir"*) echo "${config}" ;;
+  *billingEnabled*) echo True ;;
+esac
+exit 0`,
+      );
+    }
+
+    it('asks before going on with credentials of another account than gcloud', () => {
+      adcFile('pat@example.com');
+      const { status, out } = install(['--project', 'acme-openadlc', '--skip-images', '--plan-only']);
+      expect(status, out).toBe(0);
+      expect(out).toContain('gcloud acts as alex@example.com, but Terraform\'s credentials belong to pat@example.com');
+      expect(out).toContain('gcloud auth application-default login');
+      expect(out).toContain('(would ask) Go on with Terraform as pat@example.com?');
+    });
+
+    it('asks nothing when they are gcloud\'s own account', () => {
+      adcFile('alex@example.com');
+      const { status, out } = install(['--project', 'acme-openadlc', '--skip-images', '--plan-only']);
+      expect(status, out).toBe(0);
+      expect(out).toContain("Terraform's credentials (alex@example.com)");
+      expect(out).not.toContain('belong to');
+    });
+
+    it("asks Google's tokeninfo when the file does not name the account, with the token out of the URL", () => {
+      stub(
+        'gcloud',
+        `case "$*" in
+  *"auth list"*) echo alex@example.com ;;
+  *"application-default print-access-token"*) echo tok-123 ;;
+  *billingEnabled*) echo True ;;
+esac
+exit 0`,
+      );
+      stub('curl', `echo "$@" >> "${join(work, 'curl.log')}"\necho '{ "email": "pat@example.com", "expires_in": 3599 }'`);
+      const { status, out } = install(['--project', 'acme-openadlc', '--skip-images', '--plan-only']);
+      expect(status, out).toBe(0);
+      expect(out).toContain("Terraform's credentials belong to pat@example.com");
+      const calls = readFileSync(join(work, 'curl.log'), 'utf8');
+      expect(calls).toContain('tokeninfo');
+      expect(calls).not.toContain('tokeninfo?');
+      expect(calls).toContain('--data-urlencode access_token=tok-123');
+    });
   });
 
   it('will not create a project without knowing whose bill it goes on', () => {

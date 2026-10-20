@@ -7,8 +7,9 @@
 # or, from a checkout, infra/gcp/install.sh --project <id>. In order, asking
 # before anything that costs money or cannot be taken back:
 #
-#   1. checks gcloud is signed in (and Terraform's credentials), and that the
-#      project exists with billing on; offers to create it (--billing-account);
+#   1. checks gcloud is signed in, that Terraform's credentials are there and
+#      whose they are (another account than gcloud's is asked about), and that
+#      the project exists with billing on; offers to create it (--billing-account);
 #   2. clones the repository and builds the `openadlc` CLI;
 #   3. builds the four images on Cloud Build, as a service account of the
 #      install's own, into the project's Artifact Registry. Nothing is built on
@@ -244,16 +245,53 @@ ensure_signed_in() {
     note "Terraform needs Application Default Credentials; a browser opens to sign in"
     interactive gcloud auth application-default login
   fi
-  ok "Terraform's credentials"
+  # That they exist is not enough: a live run's ADC belonged to another Google
+  # account than gcloud's, every check here passed, and the install died at
+  # `terraform init` with a 403 on the state bucket, after the images were
+  # built. So name the account Terraform acts as: newer gcloud writes it into
+  # the ADC file, and otherwise Google's tokeninfo names the token's owner.
+  local adc_account='' adc_file='' gcloud_dir token
+  if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
+    # The client libraries read this file ahead of gcloud's, so gcloud's would
+    # name an account Terraform does not use.
+    adc_file="$GOOGLE_APPLICATION_CREDENTIALS"
+  else
+    gcloud_dir="$(gcloud info --format='value(config.paths.global_config_dir)' 2>/dev/null || true)"
+    [ -z "$gcloud_dir" ] || adc_file="$gcloud_dir/application_default_credentials.json"
+  fi
+  if [ -n "$adc_file" ] && [ -f "$adc_file" ]; then
+    adc_account="$(sed -n 's/.*"account": *"\([^"]*\)".*/\1/p; s/.*"client_email": *"\([^"]*\)".*/\1/p' "$adc_file" | head -n 1)"
+  fi
+  if [ -z "$adc_account" ] && have curl; then
+    token="$(gcloud auth application-default print-access-token 2>/dev/null || true)"
+    # The token goes in the request's body, not the URL: query strings end up
+    # in proxy and server logs.
+    [ -z "$token" ] || adc_account="$(curl -fsS --data-urlencode "access_token=$token" https://oauth2.googleapis.com/tokeninfo 2>/dev/null | sed -n 's/.*"email": *"\([^"]*\)".*/\1/p' | head -n 1)"
+  fi
+  if [ -n "$adc_account" ] && [ -n "$account" ] && [ "$adc_account" != "$account" ]; then
+    say "  gcloud acts as $account, but Terraform's credentials belong to $adc_account."
+    say "  The whole install as $account: gcloud auth application-default login"
+    confirm "Go on with Terraform as $adc_account?" || die "run gcloud auth application-default login, then run this again"
+  fi
+  ok "Terraform's credentials${adc_account:+ ($adc_account)}"
 }
 
 ensure_project() {
   step "The project"
   project="${project:-$(gcloud config get-value project 2>/dev/null || true)}"
   [ -n "$project" ] || die "name the project: --project <id>. Use a new one, for this install only (docs/self-hosting.md#one-install-per-project)"
-  if gcloud projects describe "$project" --format='value(projectId)' >/dev/null 2>&1; then
+  local said
+  if said="$(gcloud projects describe "$project" --format='value(projectId)' 2>&1 >/dev/null)"; then
     ok "$project exists"
   else
+    # An expired sign-in fails `describe` too: a live run hit Workspace's
+    # reauthentication window here and was steered toward creating a project
+    # that already existed. Only an answer about the project itself may lead
+    # to that offer; a credential error stops with the sign-in to renew.
+    case "$said" in
+      *"Reauthentication failed"*|*"invalid_grant"*|*"There was a problem refreshing your current auth tokens"*)
+        die "gcloud's sign-in needs renewing (it could not read $project). Run: gcloud auth login — then run this again. gcloud said: $said" ;;
+    esac
     say "  $project does not exist (or you cannot see it)."
     if [ -z "$billing_account" ]; then
       local accounts count
