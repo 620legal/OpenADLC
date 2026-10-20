@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runtimeDir } from './install.js';
-import { isKeeperOf, isRunning, keeperPid, readPid, stopGraceMs, stopService, waitForHealth } from './processes.js';
+import { isKeeperOf, isRunning, keeperPid, psCommand, readPid, stopGraceMs, stopService, waitForHealth } from './processes.js';
 
 let scratch = '';
 let before: string | undefined;
@@ -29,6 +29,22 @@ describe('stopping a service by its pid file', () => {
     writeFileSync(pidFile, '999999');
     expect(await stopService('bridge')).toBe('not-running');
     expect(existsSync(pidFile)).toBe(false);
+  });
+
+  it('reads a command line from /proc where there is no ps, as the crew’s slim task image has none', () => {
+    // There a missing ps read as "cannot say", the stale pid was kept, and
+    // `make ci` failed "never signals an unrelated process a stale pid file
+    // names" on every branch.
+    const proc = join(scratch, 'proc');
+    mkdirSync(join(proc, '4242'), { recursive: true });
+    writeFileSync(join(proc, '4242', 'cmdline'), 'node\0/x/apps/cli/dist/keep.js\0bridge\0--log\0/x/run/bridge.log\0');
+    const command = (pid: number) => psCommand(pid, 'openadlc-no-such-ps', proc);
+    expect(command(4242)).toBe('node /x/apps/cli/dist/keep.js bridge --log /x/run/bridge.log');
+    expect(isKeeperOf('bridge', 4242, command)).toBe(true);
+    expect(isKeeperOf('hostd', 4242, command)).toBe(false);
+    // A pid /proc does not list is nobody's keeper; with no /proc either, nothing can say.
+    expect(command(4243)).toBe('');
+    expect(psCommand(4242, 'openadlc-no-such-ps', join(scratch, 'no-proc'))).toBeNull();
   });
 
   it('leaves alone a live pid that is not this service’s keeper', async () => {

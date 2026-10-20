@@ -1624,6 +1624,12 @@ describe('the grok engine', () => {
     realHome = join(dir, 'real-home');
     mkdirSync(realHome);
     vi.stubEnv('HOME', realHome);
+    // DISABLE_AUTOUPDATER is set in the bot image, which turns Claude Code's
+    // updater off with it, and in a Claude Code shell. The grok engine passes
+    // the parent environment through, the fake records the variable, and the
+    // exact environment asserted below then failed on every branch where the
+    // checks ran in either.
+    vi.stubEnv('DISABLE_AUTOUPDATER', undefined);
   });
 
   afterEach(() => {
