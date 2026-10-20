@@ -112,12 +112,34 @@ export function isKeeperOf(name: string, pid: number, commandLine: (pid: number)
   return line.includes(`keep.js ${name} `);
 }
 
-function psCommand(pid: number): string | null {
+/**
+ * A process's command line as `ps` prints it, '' when there is no such
+ * process, or null when nothing can say.
+ *
+ * A slim Linux image has no `ps`: the crew's task containers are Debian slim
+ * without procps, and there a missing `ps` read as "cannot say" kept a stale
+ * pid file's number, so `make ci` failed the stale-pid test on every branch
+ * and no build could open its pull request. Linux's /proc says the same
+ * thing, so it answers where `ps` is missing.
+ */
+export function psCommand(pid: number, ps = 'ps', proc = '/proc'): string | null {
   try {
-    return execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return execFileSync(ps, ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   } catch (error) {
     // ps exits 1 when there is no such process: then it is nobody's keeper.
-    return (error as { status?: number }).status === 1 ? '' : null;
+    if ((error as { status?: number }).status === 1) return '';
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? procCommand(pid, proc) : null;
+  }
+}
+
+/** The command line /proc keeps for a pid, its arguments joined by spaces as `ps` joins them. */
+function procCommand(pid: number, proc: string): string | null {
+  if (!existsSync(proc)) return null;
+  try {
+    return readFileSync(join(proc, String(pid), 'cmdline'), 'utf8').split('\0').filter(Boolean).join(' ');
+  } catch (error) {
+    // No such process is nobody's keeper; a /proc that would not be read says nothing.
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? '' : null;
   }
 }
 
