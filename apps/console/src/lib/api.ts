@@ -690,6 +690,14 @@ export interface ConsoleUser {
   /** `added` by an admin, or one of the first admins, and from where. */
   addedHow: 'added' | 'first' | 'admin-emails' | 'console-members';
   addedAt: string;
+  /**
+   * Behind IAP only: whether IAP admits this address, judged from the
+   * console's own member list (the bridge's `roles.ts`). `absent` means IAP
+   * turns them away before the console loads; `unknown`, that a `group:` or
+   * `domain:` member may admit them. Absent from a local install's bridge,
+   * and from one older than this field.
+   */
+  iapAccess?: 'member' | 'absent' | 'unknown';
 }
 
 /**

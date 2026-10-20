@@ -422,6 +422,31 @@ export function firstAdmins(
 }
 
 /**
+ * Whether IAP admits an address, judged from the console's own member list.
+ *
+ * The list is `var.console_members`, passed as `OPENADLC_CONSOLE_MEMBERS` —
+ * the same value the module's authoritative IAP binding is made from, so it
+ * is what holds after every apply. The live policy is deliberately not read:
+ * that would take an IAM role the bridge does not need, and would also bless
+ * a grant added by hand that the next apply deletes.
+ *
+ * `member`: a `user:` entry names the address. `absent`: no entry does, and
+ * every entry names a person, so IAP turns the address away before the
+ * console loads. `unknown`: a `group:` or `domain:` entry may admit them, or
+ * the list is empty (an install whose Terraform predates the variable), and
+ * a warning here would cry wolf.
+ */
+export type IapAccess = 'member' | 'absent' | 'unknown';
+
+export function iapAccess(email: string, consoleMembers: readonly string[]): IapAccess {
+  if (consoleMembers.length === 0) return 'unknown';
+  const address = usersStore.normalizeEmail(email);
+  const people = consoleMembers.map(memberEmail);
+  if (people.includes(address)) return 'member';
+  return people.every((person) => person !== null) ? 'absent' : 'unknown';
+}
+
+/**
  * The email in an IAM member, `user:someone@example.com`. A group, a domain or
  * a service account names no one person, so it makes nobody an admin.
  */

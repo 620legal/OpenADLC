@@ -2208,6 +2208,28 @@ bridge enforces this on every route, not only by hiding controls. Someone IAP
 lets in who is not in Users sees "Ask an admin to add you", with the admins'
 addresses, and nothing else.
 
+**Adding a person takes both layers.** Settings → Users gives them a role;
+whether they reach the console at all is IAP's, which admits exactly the
+`console_members` the last `openadlc cloud apply` applied. The module's
+binding is authoritative, so even a grant added by hand with `gcloud iap web
+add-iam-policy-binding` is deleted by the next apply. Someone added in the
+console whom IAP does not admit gets Google's own block page, which says
+nothing about this install — so the Users page warns about such an address and
+names the fix, `openadlc cloud members add them@example.com`, which appends
+`user:them@example.com` to `console_members` in
+`$OPENADLC_HOME/cloud.tfvars.json`, saves the settings to the state bucket and
+runs the apply (`--no-apply` leaves the apply to you). `openadlc cloud
+members` lists who is admitted. The warning is judged from the same
+`console_members` the binding is made from (`OPENADLC_CONSOLE_MEMBERS` on the
+bridge), not from the live policy: reading that would take an IAM role the
+bridge does not need, and would bless hand-added grants the next apply
+deletes. With a `group:` or `domain:` member the bridge cannot tell who is in
+it, so it says nothing rather than warn wrongly. Someone outside the project's
+Google Cloud organization can still be refused at sign-in once they are
+listed; [People from outside your Google Cloud
+organization](#people-from-outside-your-google-cloud-organization) is what
+that takes.
+
 A role covers the whole install, whatever the person's permission on GitHub.
 A user answers every managed repository's gates, including approving a plan
 change (which widens the paths a builder may write) and letting a task go on

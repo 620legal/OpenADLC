@@ -75,6 +75,8 @@ once the cause is fixed.
 | `openadlc cloud push` | Saves this machine's settings back to the bucket |
 | `openadlc cloud plan`, `openadlc cloud apply` | `terraform plan` and `apply` in `infra/gcp`, with the state in the install's bucket; `apply` saves the settings there too. Both first stop if the project still holds an earlier install ([one install per project](self-hosting.md#one-install-per-project)) |
 | `openadlc cloud output` | `terraform output` |
+| `openadlc cloud members` | Lists `console_members`, who IAP admits to the console, from the install's settings (this machine's, else the bucket's) |
+| `openadlc cloud members add EMAIL [EMAIL…] [--no-apply]` | Lets someone through IAP: appends `user:EMAIL` to `console_members`, keeps every other setting, saves the settings to the bucket and runs the same apply as `openadlc cloud apply`. An address already listed, in any case and with or without `user:`, is not added twice; then nothing changes, it exits 0 and points to `openadlc cloud apply` in case the earlier change never went out. `--no-apply` saves without applying. A grant added by hand with `gcloud` does not last: the next apply removes it ([who may do what](self-hosting.md#who-may-do-what-in-the-console)) |
 | `openadlc cloud validate` | Initialises the module without a backend and validates it |
 
 Every `cloud` command takes `--provider`, the module under `infra/` it works

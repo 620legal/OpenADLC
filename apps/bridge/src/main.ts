@@ -432,10 +432,11 @@ async function main(): Promise<void> {
 
   // Who may do what, by the verified identity: an admin everything, a user
   // what creating and running work takes. See `roles.ts`.
+  const consoleMembers = listFromEnv(process.env.OPENADLC_CONSOLE_MEMBERS);
   const roles = new Roles({
     mode: config.identityMode,
     adminEmails: listFromEnv(process.env.OPENADLC_ADMIN_EMAILS),
-    consoleMembers: listFromEnv(process.env.OPENADLC_CONSOLE_MEMBERS),
+    consoleMembers,
   });
   const router = new Router(identity, undefined, undefined, (method, path, person) => authorize(roles, method, path, person));
   // Owns the tunnel it raises, so the tunnel dies with the bridge rather than
@@ -672,7 +673,7 @@ async function main(): Promise<void> {
     soak: (repoId, sha, after, detail) => deployRuns.holdPromote(repoId, sha, after, detail),
     audit: auditEntry,
   });
-  registerUsersRoutes(router, liveUsersDeps(roles, config.identityMode));
+  registerUsersRoutes(router, liveUsersDeps(roles, config.identityMode, consoleMembers));
   // Resuming starts what waited: the queued requests, the issues whose
   // intake was deferred, oldest first, and — for a repository resumed on its
   // own, which the dispatcher passed over — its issues ready to build.

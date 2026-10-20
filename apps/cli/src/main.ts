@@ -8,7 +8,7 @@ import { answerOf, attachFailure } from './attach.js';
 import { rotateAttribution } from './commands/attribution.js';
 import { authLogin, authStatus } from './commands/auth.js';
 import { backup, restore, selectionFromFlags } from './commands/backup.js';
-import { cloud } from './commands/cloud.js';
+import { cloud, memberArguments } from './commands/cloud.js';
 import { bridgeHeaders, consoleLink } from './console-link.js';
 import { doctor, status } from './commands/doctor.js';
 import { githubApply, githubCheck, syncLabels } from './commands/github.js';
@@ -109,6 +109,13 @@ openadlc — a crew of agents that takes a request to a reviewed, deployed chang
   openadlc cloud push              save this machine's cloud settings back to the bucket
   openadlc cloud plan | apply      stand the install up on that cloud
   openadlc cloud output            the console and webhook URLs
+  openadlc cloud members           who IAP admits to the console (console_members)
+  openadlc cloud members add EMAIL [EMAIL…] [--no-apply]
+                                    admit them: appends user:EMAIL to console_members
+                                    in the settings, saves them to the bucket and runs
+                                    the apply that makes IAP enforce it (--no-apply
+                                    leaves the apply to you). Settings → Users still
+                                    decides what they may do once they are in
   openadlc cloud validate          check the cloud module without touching the install
                                     Every cloud command takes --provider (gcp, the default)
 
@@ -289,6 +296,7 @@ async function main(): Promise<void> {
       const deployerId = flag('deployer-id');
       const deployerOwnerId = flag('deployer-owner-id');
       const channels = flag('channels');
+      const noApply = has('no-apply');
       return cloud(config, subcommand, {
         ...(provider ? { provider } : {}),
         ...(bucket ? { bucket } : {}),
@@ -306,6 +314,8 @@ async function main(): Promise<void> {
         ...(deployerId ? { deployerId } : {}),
         ...(deployerOwnerId ? { deployerOwnerId } : {}),
         ...(channels !== undefined ? { channels } : {}),
+        // What follows `cloud members`: the verb and the members to admit.
+        ...(subcommand === 'members' ? { rest: memberArguments(process.argv.slice(4)), ...(noApply ? { noApply } : {}) } : {}),
       });
     }
 

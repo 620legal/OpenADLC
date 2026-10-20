@@ -290,6 +290,75 @@ export function normalizedMembers(members: string[]): string[] {
   return members.map((member) => (member.includes(':') ? member : `user:${member}`));
 }
 
+const EMAIL = /^[^\s@]+@[^\s@]+$/;
+
+/**
+ * Why something typed after `cloud members add` cannot be an IAM member, or
+ * null. Taken as typed, a stray word became `user:<word>`: IAP admitted
+ * nobody by it, the apply still went through, and nothing said which entry
+ * was the dud.
+ */
+export function invalidMember(typed: string): string | null {
+  const member = typed.includes(':') ? typed : `user:${typed}`;
+  const colon = member.indexOf(':');
+  const kind = member.slice(0, colon);
+  const name = member.slice(colon + 1);
+  if (kind === 'user' || kind === 'group' || kind === 'serviceAccount') {
+    return EMAIL.test(name) ? null : `${typed} is not an email address`;
+  }
+  if (kind === 'domain') {
+    return name && !name.includes('@') && !/\s/.test(name) ? null : `${typed} does not name a domain (domain:example.com)`;
+  }
+  return `${typed} is not an IAM member: user:, group:, domain: or serviceAccount:`;
+}
+
+/**
+ * `console_members` with the typed members admitted: each as IAM spells it,
+ * added once. A member the list already has — however it capitalises the
+ * address, since IAP's sign-in does not care — is said rather than doubled.
+ *
+ * Both sides are compared as IAM spells them. Settings written before
+ * `configure` added the prefix can hold a bare `jane@example.com`, and
+ * compared as stored it matched neither `jane@example.com` nor
+ * `user:jane@example.com`, so the same person went in twice.
+ */
+export function withAddedMembers(
+  current: readonly string[],
+  typed: readonly string[],
+): { members: string[]; added: string[]; already: string[] } {
+  const members = [...current];
+  const added: string[] = [];
+  const already: string[] = [];
+  const identity = (member: string): string => (normalizedMembers([member.trim()])[0] as string).toLowerCase();
+  for (const one of normalizedMembers([...typed])) {
+    if (members.some((member) => identity(member) === identity(one))) already.push(one);
+    else {
+      members.push(one);
+      added.push(one);
+    }
+  }
+  return { members, added, already };
+}
+
+/**
+ * The arguments after `cloud members`, with flags and their values passed
+ * over: `members add a@b.com --provider gcp` adds a@b.com, not gcp too.
+ */
+export function memberArguments(argv: readonly string[]): string[] {
+  const positionals: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index] as string;
+    if (!argument.startsWith('-')) {
+      positionals.push(argument);
+      continue;
+    }
+    // The one value-taking flag every cloud command shares, written with a
+    // space; written as --provider=gcp it is one argument and skips itself.
+    if (argument === '--provider') index += 1;
+  }
+  return positionals;
+}
+
 function shown(existing: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = existing?.[key];
   if (typeof value === 'string' && value) return value;
@@ -632,9 +701,9 @@ async function ensureBucket(backend: CloudBackend, projectId: string, region: st
 /**
  * The settings this install already has: this machine's copy, else the one in
  * the bucket `cloud.backend.json` names. Undefined for a new install, or when
- * neither could be read, which is said.
+ * neither could be read, which is said with what that means to the caller.
  */
-async function existingSettings(): Promise<Record<string, unknown> | undefined> {
+async function existingSettings(unread = 'so this is configured as a new install'): Promise<Record<string, unknown> | undefined> {
   const parse = (text: string, where: string): Record<string, unknown> | undefined => {
     try {
       const vars = JSON.parse(text) as unknown;
@@ -642,7 +711,7 @@ async function existingSettings(): Promise<Record<string, unknown> | undefined> 
     } catch {
       // Said below.
     }
-    ui.note(`${where} could not be read as settings, so this is configured as a new install`);
+    ui.note(`${where} could not be read as settings, ${unread}`);
     return undefined;
   };
   if (existsSync(tfVarsPath())) return parse(readFileSync(tfVarsPath(), 'utf8'), tfVarsPath());
@@ -651,7 +720,7 @@ async function existingSettings(): Promise<Record<string, unknown> | undefined> 
   const remote = remoteTfVars(backend);
   const copied = await capture('gcloud', ['storage', 'cat', remote]);
   if (copied.code !== 0) {
-    ui.note(`could not read ${remote}, so this is configured as a new install`);
+    ui.note(`could not read ${remote}, ${unread}`);
     return undefined;
   }
   return parse(copied.stdout, remote);
@@ -661,6 +730,84 @@ async function push(backend: CloudBackend): Promise<number> {
   const code = await run('gcloud', ['storage', 'cp', tfVarsPath(), remoteTfVars(backend)]);
   if (code === 0) ui.ok(`settings saved to ${remoteTfVars(backend)}`);
   return code;
+}
+
+/** What `cloud members` runs, passed in so a test can stand in for each. */
+export interface MembersRunners {
+  backend: () => CloudBackend | null;
+  /** This machine's settings, else the bucket's, as `configure` reads them; undefined when neither could be read. */
+  settings: () => Promise<Record<string, unknown> | undefined>;
+  write: (vars: Record<string, unknown>, backend: CloudBackend) => void;
+  push: (backend: CloudBackend) => Promise<number>;
+  /** `openadlc cloud apply`, and the exit code it left. */
+  apply: () => Promise<number>;
+}
+
+/**
+ * `openadlc cloud members [add EMAIL…]`, returning its exit code.
+ *
+ * Who IAP admits to the console, and letting someone else in. Settings →
+ * Users decides what a person may do; this list decides whether they reach
+ * the console at all, and it is all the module's authoritative binding
+ * keeps after an apply — a grant added by hand with gcloud is deleted by
+ * the next one. The console's Users page names this command when it lists
+ * an address IAP does not admit.
+ */
+export async function membersCommand(rest: readonly string[], noApply: boolean, runners: MembersRunners): Promise<number> {
+  const backend = runners.backend();
+  // The settings as `configure` reads them: a machine that never ran
+  // `configure` or `pull` has only the bucket's copy, and refusing it there
+  // sent the admin to pull an install they already had.
+  const vars = backend ? await runners.settings() : undefined;
+  if (!backend || !vars) {
+    ui.fail('this machine has no cloud configuration');
+    ui.note('openadlc cloud configure, or openadlc cloud pull --bucket <name> for an install that exists');
+    return 1;
+  }
+  const current = Array.isArray(vars.console_members) ? vars.console_members.filter((member): member is string => typeof member === 'string') : [];
+  const [verb, ...typed] = rest;
+
+  if (verb === undefined) {
+    ui.heading('Who IAP admits to the console (console_members)');
+    if (current.length === 0) ui.warn('nobody: console_members is empty, so IAP turns everyone away');
+    for (const member of current) ui.step(member);
+    ui.note('from this install’s settings; IAP enforces what the last openadlc cloud apply applied');
+    return 0;
+  }
+  if (verb !== 'add' || typed.length === 0) {
+    if (verb === 'add') ui.fail('whom? openadlc cloud members add you@example.com');
+    else ui.fail(`unknown members command: ${verb}`);
+    ui.note('try: openadlc cloud members, or openadlc cloud members add EMAIL [EMAIL…] [--no-apply]');
+    return 2;
+  }
+  const refused = typed.map(invalidMember).filter((reason): reason is string => reason !== null);
+  if (refused.length > 0) {
+    for (const reason of refused) ui.fail(reason);
+    ui.note('nothing was changed');
+    return 2;
+  }
+
+  const { members, added, already } = withAddedMembers(current, typed);
+  for (const member of already) ui.note(`${member} is already admitted`);
+  if (added.length === 0) {
+    // The list can name someone IAP does not admit yet: an earlier add whose
+    // push or apply failed, or that ran with --no-apply, wrote the file first.
+    // Adding them again changes nothing, so say what does.
+    ui.ok('nothing to change');
+    ui.step('if IAP still turns them away, the change never went out: openadlc cloud apply');
+    return 0;
+  }
+  runners.write({ ...vars, console_members: members }, backend);
+  ui.ok(`console_members now admits ${added.join(', ')}`);
+  const pushed = await runners.push(backend);
+  if (pushed !== 0) return pushed;
+  if (noApply) {
+    ui.step('next: openadlc cloud apply — IAP admits them only once it runs');
+    return 0;
+  }
+  // The apply is what makes IAP enforce the new list; without it the file
+  // and the bucket say one thing and the install another.
+  return runners.apply();
 }
 
 /** What `afterTerraform` runs, passed in so a test can stand in for each. */
@@ -719,7 +866,7 @@ export async function afterTerraform(
 export async function cloud(
   config: InstallConfig,
   action: string | undefined,
-  options: { provider?: string; bucket?: string; prefix?: string } & ConfigureFlags,
+  options: { provider?: string; bucket?: string; prefix?: string; rest?: string[]; noApply?: boolean } & ConfigureFlags,
 ): Promise<void> {
   const provider = (options.provider ?? 'gcp') as Provider;
   if (!PROVIDERS.includes(provider)) {
@@ -996,6 +1143,20 @@ export async function cloud(
       return;
     }
 
+    case 'members': {
+      process.exitCode = await membersCommand(options.rest ?? [], Boolean(options.noApply), {
+        backend: readBackend,
+        settings: () => existingSettings('so nobody can be added from here'),
+        write: writeCloudFiles,
+        push,
+        apply: async () => {
+          await cloud(config, 'apply', options);
+          return Number(process.exitCode ?? 0);
+        },
+      });
+      return;
+    }
+
     case 'validate': {
       if (!(await terraformReady())) {
         process.exitCode = 1;
@@ -1012,7 +1173,7 @@ export async function cloud(
 
     default:
       ui.fail(`unknown cloud command: ${action ?? '(none)'}`);
-      ui.note('try: openadlc cloud configure | pull | push | plan | apply | output | validate');
+      ui.note('try: openadlc cloud configure | pull | push | plan | apply | output | validate | members');
       process.exitCode = 1;
   }
 }
