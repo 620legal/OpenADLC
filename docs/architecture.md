@@ -201,7 +201,9 @@ ledger, threads and gates, and the console's settings.
    OpenADLC has opened a round on it and while it is not a draft: it
    publishes the gate, starts the seats and the lead as above, and puts one
    whose gate passes in the merge line. One with no issue that the line let
-   go of, for a red check or a conflict, stays out until its head moves. A
+   go of, for a red check or a conflict, stays out until its head moves; one
+   let go of for a red check goes back once the checks on that head are
+   green, as they are when CI's one rerun passed. A
    fork's pull request, or one by somebody OpenADLC does not act for (as a
    delivery is judged, the install's `humans` included), is never swept. A
    seat marked `blocking` approves

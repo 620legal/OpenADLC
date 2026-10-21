@@ -57,6 +57,16 @@ export { TASK_TOKEN_HEADER };
 const RUNS_LOCAL_CI: ReadonlySet<string> = new Set(['implement', 'patch', 'qa', 'spec', 'deploy']);
 
 /**
+ * Whether hostd did not answer in time (`LOCAL_CI_TIMEOUT_MS`): said as a 504,
+ * which `openadlc-ci` reads as a run that may be going. Said as a refusal or
+ * an unknown run, the session exited 2 and forgot the run, and its builder
+ * could end its turn with make ci running, as on #22.
+ */
+function hostdLate(error: unknown): boolean {
+  return (error as { status?: number } | null)?.status === 504;
+}
+
+/**
  * Refuses a caller that does not hold the install's shared secret.
  *
  * This used to guard the token service alone, and the private network was the
@@ -509,7 +519,7 @@ export function registerInternalApi(
       throw new HttpFailure(409, `a ${task.kind} task does not run local CI; only ${[...RUNS_LOCAL_CI].join(', ')} tasks do, as they open pull requests`);
     }
     return deps.hostd.startLocalCi(task.id).catch((error: unknown) => {
-      throw new HttpFailure(409, error instanceof Error ? error.message : String(error));
+      throw new HttpFailure(hostdLate(error) ? 504 : 409, error instanceof Error ? error.message : String(error));
     });
   });
 
@@ -517,7 +527,7 @@ export function registerInternalApi(
     const input = await body<{ run?: unknown }>();
     if (typeof input.run !== 'string' || !input.run) throw new HttpFailure(400, 'name the run: { "run": "<id>" }');
     const answer = await deps.hostd.localCiRun(params.id ?? '', input.run).catch((error: unknown) => {
-      throw new HttpFailure(404, error instanceof Error ? error.message : String(error));
+      throw new HttpFailure(hostdLate(error) ? 504 : 404, error instanceof Error ? error.message : String(error));
     });
     const task = await tasks.getTask(params.id ?? '');
     const recorded =

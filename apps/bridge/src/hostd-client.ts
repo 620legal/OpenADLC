@@ -94,6 +94,16 @@ export const HEALTH_TIMEOUT_MS = 5_000;
  */
 export const START_TIMEOUT_MS = 40 * 60_000;
 
+/**
+ * How long the bridge waits on hostd to start a task's local CI run or say
+ * where one stands. hostd answers both at once, from memory: `make ci` runs
+ * after the answer. With no limit, a hostd that took the connection and never
+ * answered held the bridge's handler for fetch's five minutes, long after the
+ * session's `openadlc-ci` had given up on its own 20-second call. Shorter than
+ * that call, so the session hears hostd did not answer rather than nothing.
+ */
+export const LOCAL_CI_TIMEOUT_MS = 15_000;
+
 export const HOSTD_NOT_ANSWERING = 'hostd is not answering. It may be restarting; try again in a moment.';
 
 export const HOSTD_NOT_ANSWERING_FOR_ATTACH =
@@ -145,7 +155,7 @@ export class HostdClient {
   constructor(
     private readonly baseUrl: string,
     private readonly secret: string,
-    private readonly options: { enginesTimeoutMs?: number; healthTimeoutMs?: number } = {},
+    private readonly options: { enginesTimeoutMs?: number; healthTimeoutMs?: number; localCiTimeoutMs?: number } = {},
   ) {}
 
   // Every path segment below is encoded. The router decodes a route's
@@ -200,12 +210,17 @@ export class HostdClient {
 
   /** Starts the repository's checks on a running task's head (hostd's `local-ci.ts`), or answers the run already going. */
   async startLocalCi(taskId: string): Promise<{ run: LocalCiView }> {
-    return this.call('POST', `/tasks/${encodeURIComponent(taskId)}/local-ci`, { body: {} });
+    return this.call('POST', `/tasks/${encodeURIComponent(taskId)}/local-ci`, {
+      body: {},
+      timeoutMs: this.options.localCiTimeoutMs ?? LOCAL_CI_TIMEOUT_MS,
+    });
   }
 
   /** One local CI run of a task, as hostd has it. */
   async localCiRun(taskId: string, runId: string): Promise<{ run: LocalCiView }> {
-    return this.call('GET', `/tasks/${encodeURIComponent(taskId)}/local-ci/${encodeURIComponent(runId)}`);
+    return this.call('GET', `/tasks/${encodeURIComponent(taskId)}/local-ci/${encodeURIComponent(runId)}`, {
+      timeoutMs: this.options.localCiTimeoutMs ?? LOCAL_CI_TIMEOUT_MS,
+    });
   }
 
   /** Releases the worktree and session of a task that has already finished. */

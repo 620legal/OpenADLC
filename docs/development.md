@@ -237,7 +237,8 @@ the skill. Whether a model reading the skill stops takes a live run
   a commit without one. One call waits up to eight minutes, which a shell
   tool can hold, and exits 0 when it passed, 1 when it failed, 2 when it was
   refused or could not be asked for, and 3 when it is still running or the
-  bridge did not answer about it in time; the next call joins the same run,
+  bridge, or hostd behind it, did not answer about it in time (a start that
+  went unanswered may have begun); the next call joins the same run,
   or answers from it if it ended in between, so a builder runs it again
   until it answers 0, 1 or 2. A call that waited for the whole run outlived
   the tool, went to the background, and the builder ended its session to

@@ -79,6 +79,9 @@ export async function enter(input: {
          -- went ahead of the one being tested, which then needed another update
          -- and another CI run once it landed. One still in the line keeps its place.
          state = case when merge_lines.state in ('failed', 'merged') then 'waiting' else merge_lines.state end,
+         -- Why it failed is not where it stands once it is back: a row put
+         -- back after its checks passed on a rerun said "checks failed".
+         detail = case when merge_lines.state in ('failed', 'merged') then null else merge_lines.detail end,
          position = case when merge_lines.state in ('failed', 'merged') then excluded.position else merge_lines.position end,
          entered_at = case when merge_lines.state in ('failed', 'merged') then now() else merge_lines.entered_at end,
          updated_at = now()

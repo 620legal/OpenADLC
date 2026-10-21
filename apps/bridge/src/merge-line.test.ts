@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CI_REQUEST_WAIT_MS, MergeLine, REQUIRED_CHECKS, UPDATE_WAIT_MS, askedForCi, heldForPerson, verdictFor } from './merge-line.js';
+import { CI_REQUEST_WAIT_MS, MergeLine, REQUIRED_CHECKS, UNKNOWN_WAIT_MS, UPDATE_WAIT_MS, askedForCi, heldForPerson, verdictFor } from './merge-line.js';
 import { REQUIRED_CHECK, REVIEW_GATE_CHECK } from '@openadlc/shared';
 
 const green = (name: string) => ({ name, status: 'completed', conclusion: 'success' });
@@ -511,6 +511,88 @@ describe('the front of the line, green and up to date', () => {
     decide.mockReturnValue({ land: false, reason: '@janedoe still asks for changes', approvals: [] });
     await merge.advance('openadlc');
     expect(github.comment).toHaveBeenCalledTimes(2);
+  });
+
+  it('says nothing while GitHub is still working out whether it can be merged, and waits for its answer', async () => {
+    // GitHub says `unknown` for a moment after a push or an update of the
+    // base. Said as a reason, a pull request going blocked, unknown, blocked
+    // had its detail changed and a comment posted each time.
+    const blocked = { land: false, reason: 'main requires signed commits', approvals: [] };
+    const notYet = { land: false, reason: 'GitHub has not yet worked out whether it can be merged', approvals: [] };
+    decide.mockReturnValue(blocked);
+    const { line: merge, github, automation } = line({ pull: { mergeableState: 'blocked' } });
+    const read = await github.getPullRequest();
+
+    await merge.advance('openadlc');
+    expect(github.comment).toHaveBeenCalledTimes(1);
+    const said = store.entry.detail;
+    expect(said).toContain('main requires signed commits');
+
+    for (const mergeableState of ['unknown', null]) {
+      decide.mockReturnValue(notYet);
+      github.getPullRequest.mockResolvedValueOnce({ ...read, mergeableState } as never);
+      const step = await merge.advance('openadlc');
+      expect(step).toMatchObject({ state: 'merging', detail: expect.stringContaining('GitHub has not yet worked out whether it can be merged') });
+      expect(store.entry).toMatchObject({ state: 'merging', detail: said });
+
+      decide.mockReturnValue(blocked);
+      await merge.advance('openadlc');
+      expect(store.entry.detail).toBe(said);
+    }
+    expect(github.comment).toHaveBeenCalledTimes(1);
+    expect(automation.mergeAsApp).not.toHaveBeenCalled();
+  });
+
+  it('says why it waits, once, when GitHub has said `unknown` at one head for ten minutes', async () => {
+    // Left as it was for good, the entry's detail said whatever it said
+    // before GitHub stopped answering, and nothing told a person anything.
+    const notYet = { land: false, reason: 'GitHub has not yet worked out whether it can be merged', approvals: [] };
+    decide.mockReturnValue(notYet);
+    const { line: merge, github, clock } = line({ pull: { mergeableState: 'unknown' } });
+
+    await merge.advance('openadlc');
+    clock.now += UNKNOWN_WAIT_MS - 1;
+    await merge.advance('openadlc');
+    expect(github.comment).not.toHaveBeenCalled();
+    expect(store.entry).toMatchObject({ state: 'testing', detail: null });
+
+    clock.now += 1;
+    await merge.advance('openadlc');
+    expect(store.entry).toMatchObject({ state: 'merging', detail: expect.stringContaining('because GitHub has not yet worked out whether it can be merged') });
+    await merge.advance('openadlc');
+    expect(github.comment).toHaveBeenCalledTimes(1);
+    expect(UNKNOWN_WAIT_MS).toBe(10 * 60 * 1000);
+  });
+
+  it('times `unknown` afresh after GitHub has answered in between', async () => {
+    decide.mockReturnValue({ land: false, reason: 'main requires signed commits', approvals: [] });
+    const { line: merge, github, clock } = line({ pull: { mergeableState: 'unknown' } });
+    const read = await github.getPullRequest();
+
+    await merge.advance('openadlc');
+    clock.now += UNKNOWN_WAIT_MS - 60_000;
+    github.getPullRequest.mockResolvedValueOnce({ ...read, mergeableState: 'blocked' } as never);
+    await merge.advance('openadlc');
+    expect(github.comment).toHaveBeenCalledTimes(1);
+
+    // Unknown again two minutes later: twelve since it was first, two since GitHub last answered.
+    clock.now += 2 * 60_000;
+    await merge.advance('openadlc');
+    expect(github.comment).toHaveBeenCalledTimes(1);
+    expect(store.entry.detail).toContain('main requires signed commits');
+  });
+
+  it('lands on the pass after GitHub has worked it out', async () => {
+    decide.mockReturnValue({ land: true, reason: 'ok', approvals: APPROVALS });
+    const { line: merge, github, automation } = line();
+    github.getPullRequest.mockResolvedValueOnce({ ...(await github.getPullRequest()), mergeableState: 'unknown' } as never);
+
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'testing' });
+    expect(automation.mergeAsApp).not.toHaveBeenCalled();
+    expect(github.comment).not.toHaveBeenCalled();
+
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'merged' });
+    expect(automation.mergeAsApp).toHaveBeenCalledTimes(1);
   });
 
   it('is left for a person in a repository the install turned it off for', async () => {

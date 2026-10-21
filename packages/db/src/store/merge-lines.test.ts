@@ -38,6 +38,29 @@ describe('a pull request entering the merge line again', () => {
   });
 });
 
+describe('a pull request put back in the merge line', () => {
+  it('starts with no detail, so the reason it failed is not shown as where it stands', async () => {
+    // Put back after its checks went green on a rerun, a row still said
+    // "checks failed on the updated head" while it waited its turn.
+    vi.mocked(queryOne).mockResolvedValueOnce({ first: 2, last: 3 }).mockResolvedValueOnce({
+      id: 'entry-1',
+      repo_id: 'repo-1',
+      repo_name: 'api',
+      pr_number: 1,
+      position: 4,
+      state: 'waiting',
+      head_sha: 'abc',
+      detail: null,
+      entered_at: new Date('2026-10-01T00:00:00.000Z'),
+    });
+
+    await enter({ repoId: 'repo-1', prNumber: 1, headSha: 'abc' });
+
+    const text = String(vi.mocked(queryOne).mock.calls[1]?.[0]).replace(/\s+/g, ' ');
+    expect(text).toContain("detail = case when merge_lines.state in ('failed', 'merged') then null else merge_lines.detail end");
+  });
+});
+
 describe('a pull request’s row in the merge line', () => {
   it('is read whatever its state, with the head it failed at', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce({

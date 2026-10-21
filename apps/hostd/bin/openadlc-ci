@@ -14,8 +14,8 @@
 // Exit 0: passed and recorded. 1: `make ci` failed. 2: refused, or the run
 // could not be asked for or read; what to do is printed. 3: still running
 // when this call's wait ran out (8 minutes, or OPENADLC_CI_WAIT_SECONDS), or
-// the bridge did not answer about it in time; run openadlc-ci again, in the
-// foreground, and it joins the same run.
+// the bridge, or hostd behind it, did not answer about it in time; run
+// openadlc-ci again, in the foreground, and it joins the same run.
 //
 // Plain Node with no dependencies, like the `gh` beside it.
 import { spawnSync } from 'node:child_process';
@@ -49,6 +49,8 @@ const REQUEST_TIMEOUT_MS = 20_000;
 const RECORD_WAIT_MS = 30_000;
 /** The last line's second half whenever the run may still be going. */
 const AGAIN = 'Run openadlc-ci again now, in the foreground: it joins this same run. Do not end your turn, or run it in the background, while it runs.';
+/** The same, when the start went unanswered and there may be no run yet. */
+const AGAIN_STARTED = 'Run openadlc-ci again now, in the foreground: it joins the run if one started, or starts it. Do not end your turn, or run it in the background, while it may be running.';
 
 /** The step from OPENADLC_CI_WAIT_SECONDS, which tests set, or WAIT_MS. */
 function waitMs(env) {
@@ -96,7 +98,19 @@ function leftRun(dir, task, sha) {
 /** Why a request failed, in words: a timeout's own message names no one. */
 function why(error) {
   if (error?.name === 'TimeoutError') return `the bridge did not answer within ${REQUEST_TIMEOUT_MS / 1000} seconds`;
+  if (error?.status === 504) return 'hostd did not answer the bridge in time';
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Whether a request went unanswered rather than refused: this call's own time
+ * limit, or the bridge's 504 for a hostd that did not answer it. Either way
+ * the run may be going. Read as a refusal, the call exited 2 and forgot the
+ * run, and a builder could end its turn with make ci still running in its
+ * computer, as on #22.
+ */
+function unanswered(error) {
+  return error?.name === 'TimeoutError' || error?.status === 504;
 }
 
 /**
@@ -122,7 +136,7 @@ export async function runLocalCi({ env = process.env, fetchImpl = globalThis.fet
     try {
       parsed = text ? JSON.parse(text) : {};
     } catch {}
-    if (!response.ok) throw new Error(parsed.error ?? `the bridge answered ${response.status}`);
+    if (!response.ok) throw Object.assign(new Error(parsed.error ?? `the bridge answered ${response.status}`), { status: response.status });
     return parsed;
   };
 
@@ -156,6 +170,10 @@ export async function runLocalCi({ env = process.env, fetchImpl = globalThis.fet
       try {
         run = (await call('/local-ci')).run;
       } catch (error) {
+        if (unanswered(error)) {
+          log(`openadlc-ci: ${why(error)} when asked to start make ci, so it may have started. ${AGAIN_STARTED}`);
+          return 3;
+        }
         log(`openadlc-ci: the checks could not be started: ${why(error)}`);
         return 2;
       }
@@ -172,7 +190,7 @@ export async function runLocalCi({ env = process.env, fetchImpl = globalThis.fet
       } catch (error) {
         // The run is known and may well be going; a bridge slow to say so is
         // no reason to start over, and the next call reads this run first.
-        if (error?.name === 'TimeoutError') {
+        if (unanswered(error)) {
           log(`openadlc-ci: ${why(error)} about run ${run.id}, so make ci may still be running. ${AGAIN}`);
           return 3;
         }
@@ -222,8 +240,11 @@ export async function runLocalCi({ env = process.env, fetchImpl = globalThis.fet
   const code = await follow();
   // Kept only while the run may still be going: once a call has answered, the
   // next one is a run of its own, as a builder rerunning a flaky suite means.
-  if (code === 3) left?.keep(run.id);
-  else left?.forget();
+  // A start that went unanswered has no run to keep; the next call's start
+  // joins the one going, if it began.
+  if (code === 3) {
+    if (run) left?.keep(run.id);
+  } else left?.forget();
   return code;
 }
 

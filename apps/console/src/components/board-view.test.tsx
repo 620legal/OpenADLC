@@ -171,7 +171,7 @@ describe('the board’s columns', () => {
     const board = html.slice(html.indexOf('aria-label="Board"'));
     const titles = [...board.matchAll(/<h2 id="column-[a-z]+"[^>]*>([^<]+)<\/h2>/g)].map((match) => match[1]);
     expect(titles).toEqual(['Intake', 'Design', 'Build', 'Review', 'Ship', 'Done']);
-    expect(column(html, 'Design')).toContain('Designs what needs one, remembering what was decided');
+    expect(column(html, 'Design')).toContain('Designs each issue, remembering what was decided');
     expect(column(html, 'Build')).toContain('Builds it, runs CI locally, opens the pull request');
   });
 

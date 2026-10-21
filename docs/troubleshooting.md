@@ -176,7 +176,15 @@ issue or pull request records the answer, says on GitHub that the task is not
 resumed, and ends the task as `already landed: <ref> is closed`. A resume for
 any other reason does the same: the bot is not started, the task is cleaned up,
 and no card results. **Try again**, and the retry after a check passes, are
-refused with `already landed`. A stage move of a closed issue is refused too,
+refused with `already landed`. No review is started on a pull request GitHub
+says has closed or merged, whatever asked for it: a delivery the bridge works
+through late, a review posted after the merge, the gate sweep or the lead's
+turn. The bridge log says `<ref> is closed; <seat>'s review of it is not
+started`. A delivery worked through after its pull request closed opens no
+round at all: no reviewers are asked, no labels or gate are set, and the log
+says `<owner/repo#n> has closed since this delivery was sent; no review round
+is opened`. Closing or merging one stops the reviews queued, running or paused
+on it. A stage move of a closed issue is refused too,
 except to Merged or Done, which is how a merge records itself. The bot's
 thread card shows such work as landed: a last task that failed, or was stopped
 by anything but a person, on an intake, design, build, fix or review whose
@@ -1100,7 +1108,11 @@ as many as GitHub lists). Those are read only then, a few seconds each at
 most, and a read that fails leaves the words as they were for that head, so a
 GitHub blip posts no new comment. The words change nothing about what lands:
 a pull request GitHub does not call `clean`, `unstable` or `has_hooks` does
-not.
+not. While GitHub says `unknown`, as it does for a moment after each push or
+update of the base, the line says nothing and leaves its detail as it was;
+it reads the pull request again on its next pass, and says what GitHub
+worked out only when that is a new reason. After ten minutes of `unknown` at
+one head it says so, once, as below.
 
 | It says | What it means | What to do |
 |---|---|---|
@@ -1111,7 +1123,7 @@ not.
 | main requires a code owner's approval, and `@<login>` is asked for a review on GitHub and has not given one · main requires N approving reviews, and it has M | The base's pull request rule is not met | The person asked reviews it; for approvals, as many people who can write approve it as the rule asks |
 | it conflicts with main | GitHub's `dirty` | Merge main into its branch and resolve the conflict |
 | it is behind main, and main requires a branch to be up to date | GitHub's `behind` | Update it from main |
-| GitHub has not yet worked out whether it can be merged | GitHub's `unknown`, which it works out after each push | Nothing: the line reads it again on its next pass |
+| GitHub has not yet worked out whether it can be merged | GitHub has said `unknown` at this head for ten minutes; it usually works it out within seconds of a push | Nothing, usually: the line reads it again on each pass. If it stays, the merge box on the pull request's GitHub page says whether it can merge |
 | GitHub says it is blocked, and did not say why | Nothing OpenADLC read explains it. It names what the rules also require that it did not check (every conversation resolved, a code owner's approval, a deployment), or says no ruleset applies to the base, which leaves a branch protection rule (Settings → Branches), which only an admin can read | The merge box on the pull request's GitHub page lists what is missing |
 
 ## A pull request waits on "GitHub Actions minutes this month reached the cap"

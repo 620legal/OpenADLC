@@ -630,6 +630,26 @@ describe('the repository’s checks on a task’s head', () => {
     expect(await response.json()).toMatchObject({ run: { id: 'run-1', state: 'passed' }, recorded: true });
   });
 
+  it('say hostd did not answer in time as a 504, on a start and on a read, so the session knows the run may be going', async () => {
+    // Said as a refusal (409) or an unknown run (404), the session exited 2
+    // and forgot the run, and a builder could end its turn with make ci still
+    // going in its computer, as on #22.
+    const late = () => Object.assign(new Error('hostd did not answer in time. It may be busy; try again in a moment.'), { status: 504 });
+    startLocalCi.mockRejectedValueOnce(late());
+    localCiRun.mockRejectedValueOnce(late());
+
+    const start = await asTask('task-1', '/internal/tasks/task-1/local-ci', {});
+    expect(start.status).toBe(504);
+    expect(await start.text()).toContain('hostd did not answer in time');
+    expect((await asTask('task-1', '/internal/tasks/task-1/local-ci/status', { run: 'run-1' })).status).toBe(504);
+
+    // hostd's refusals keep their statuses.
+    startLocalCi.mockRejectedValueOnce(Object.assign(new Error('task task-1 is not running on this host'), { status: 409 }));
+    localCiRun.mockRejectedValueOnce(Object.assign(new Error('no local CI run run-9 for task task-1 on this host'), { status: 404 }));
+    expect((await asTask('task-1', '/internal/tasks/task-1/local-ci', {})).status).toBe(409);
+    expect((await asTask('task-1', '/internal/tasks/task-1/local-ci/status', { run: 'run-9' })).status).toBe(404);
+  });
+
   it('answer whether a commit passed, in the task’s own repository', async () => {
     const yes = await asTask('task-1', '/internal/tasks/task-1/local-ci/pass', { sha: 'a'.repeat(40) });
     expect(await yes.json()).toMatchObject({ passed: true });

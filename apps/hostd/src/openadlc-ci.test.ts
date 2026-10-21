@@ -30,6 +30,10 @@ const MINUTE = 60_000;
 const runningFor = (minutes: number) => Array.from({ length: minutes * 12 }, () => ({ run: run('running') }));
 const AGAIN = 'Run openadlc-ci again now, in the foreground: it joins this same run. Do not end your turn, or run it in the background, while it runs.';
 const START = 'http://bridge/internal/tasks/task-1/local-ci';
+const PASS = 'http://bridge/internal/tasks/task-1/local-ci/pass';
+const STATUS = 'http://bridge/internal/tasks/task-1/local-ci/status';
+/** The bridge's answer when hostd did not answer it within its 15 seconds. */
+const hostdLate = () => new Response(JSON.stringify({ error: 'hostd did not answer in time. It may be busy; try again in a moment.' }), { status: 504 });
 
 const SHA = 'abc1234def0123456789abc1234def0123456789';
 
@@ -43,10 +47,14 @@ afterAll(() => rmSync(STATE, { recursive: true, force: true }));
  */
 type Statuses = Record<string, unknown>[] | ((at: number) => Record<string, unknown>);
 
-function bridge(statuses: Statuses, passed: boolean | 'unreachable' = false, at: () => number = () => 0, timesOut: (read: number) => boolean = () => false) {
+/** Which starts, and which reads of a run, hostd did not answer the bridge about in time (a 504). */
+type Stalls = { start?: (start: number) => boolean; read?: (read: number) => boolean };
+
+function bridge(statuses: Statuses, passed: boolean | 'unreachable' = false, at: () => number = () => 0, timesOut: (read: number) => boolean = () => false, stalls: Stalls = {}) {
   const calls: { url: string; body: unknown }[] = [];
   const signals: unknown[] = [];
   let reads = 0;
+  let starts = 0;
   const status = () => (typeof statuses === 'function' ? statuses(at()) : statuses.length > 1 ? statuses.shift() : statuses[0]) ?? { run: run('running') };
   const fetchImpl = async (url: string, init: { body: string; signal?: AbortSignal }) => {
     calls.push({ url, body: JSON.parse(init.body) });
@@ -54,9 +62,10 @@ function bridge(statuses: Statuses, passed: boolean | 'unreachable' = false, at:
     if (url.endsWith('/local-ci/pass')) {
       return passed === 'unreachable' ? new Response('{}', { status: 502 }) : new Response(JSON.stringify({ passed, run: null }), { status: 200 });
     }
-    if (url === START) return new Response(JSON.stringify({ run: run('running') }), { status: 200 });
+    if (url === START) return stalls.start?.(++starts) ? hostdLate() : new Response(JSON.stringify({ run: run('running') }), { status: 200 });
     // As `AbortSignal.timeout` fails a request.
     if (timesOut(++reads)) throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+    if (stalls.read?.(reads)) return hostdLate();
     return new Response(JSON.stringify(status()), { status: 200 });
   };
   return { calls, signals, fetchImpl };
@@ -68,9 +77,9 @@ function bridge(statuses: Statuses, passed: boolean | 'unreachable' = false, at:
  * first one left going. `waited` is how long that call held the shell, and
  * `idle` the time between two calls.
  */
-function session(statuses: Statuses, options: { head?: string | null; passed?: boolean | 'unreachable'; env?: Record<string, string>; timesOut?: (read: number) => boolean } = {}) {
+function session(statuses: Statuses, options: { head?: string | null; passed?: boolean | 'unreachable'; env?: Record<string, string>; timesOut?: (read: number) => boolean; stalls?: Stalls } = {}) {
   let clock = 0;
-  const { calls, signals, fetchImpl } = bridge(statuses, options.passed, () => clock, options.timesOut);
+  const { calls, signals, fetchImpl } = bridge(statuses, options.passed, () => clock, options.timesOut, options.stalls);
   const stateDir = mkdtempSync(join(STATE, 'session-'));
   const call = async (head = options.head) => {
     const lines: string[] = [];
@@ -198,6 +207,41 @@ describe('openadlc-ci', () => {
     const second = await call();
     expect(second.code).toBe(0);
     expect(second.asked).toEqual(['http://bridge/internal/tasks/task-1/local-ci/pass', 'http://bridge/internal/tasks/task-1/local-ci/status', 'http://bridge/internal/tasks/task-1/local-ci/status']);
+  });
+
+  /**
+   * The bridge gives hostd 15 seconds, and says so with a 504. Read as a
+   * refusal, a stall exited 2, forgot the run, and dropped the line that
+   * says not to end the turn: the way to #22, where a builder ended its
+   * session with make ci still running in its computer.
+   */
+  it('exits 3, not 2, and keeps the run, when hostd did not answer the bridge about it in time', async () => {
+    const { call, idle } = session((at) => (at < 2 * MINUTE ? { run: run('running') } : { run: run('passed', { exitCode: 0 }), recorded: true }), {
+      head: SHA,
+      stalls: { read: (read) => read === 3 },
+    });
+    const first = await call();
+    expect(first.code).toBe(3);
+    expect(first.lines.at(-1)).toBe(`openadlc-ci: hostd did not answer the bridge in time about run run-1, so make ci may still be running. ${AGAIN}`);
+
+    idle(2 * MINUTE);
+    const second = await call();
+    expect(second.code).toBe(0);
+    expect(second.asked).toEqual([PASS, STATUS, STATUS]);
+  });
+
+  it('exits 3 when a start went unanswered, says it may have started, and joins it on the next call', async () => {
+    const { call } = session([{ run: run('passed', { exitCode: 0 }), recorded: true }], { head: SHA, stalls: { start: (start) => start === 1 } });
+    const first = await call();
+    expect(first.code).toBe(3);
+    expect(first.lines.at(-1)).toBe(
+      'openadlc-ci: hostd did not answer the bridge in time when asked to start make ci, so it may have started. ' +
+        'Run openadlc-ci again now, in the foreground: it joins the run if one started, or starts it. Do not end your turn, or run it in the background, while it may be running.',
+    );
+
+    const second = await call();
+    expect(second.code).toBe(0);
+    expect(second.asked).toEqual([PASS, START, STATUS]);
   });
 
   it('keeps joining past hostd’s own limit on make ci, so it is hostd’s failed run and its reason the bot sees', async () => {

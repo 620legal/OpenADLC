@@ -15,6 +15,7 @@ import {
   type AwaitingDeploy,
 } from './scheduler.js';
 import { TaskService } from './task-service.js';
+import { CHECKS_FAILED } from './merge-line.js';
 
 /**
  * The store is a fake so a whole deploy sweep can be run. Everything above the
@@ -49,7 +50,7 @@ const store = vi.hoisted(() => ({
   /** The changes being made in a repository (`issues.workInFlight`). */
   inFlight: [] as { number: number; paths: string[]; building: boolean }[],
   /** Each pull request's row in the merge line, whatever its state (`mergeLines.entryFor`). */
-  mergeRows: [] as { prNumber: number; state: string; headSha: string | null }[],
+  mergeRows: [] as { prNumber: number; state: string; headSha: string | null; detail?: string | null }[],
   /** The `humanIds` setting: each of the install's people pinned to an account id. */
   humanIds: null as string | null,
 }));
@@ -1720,6 +1721,8 @@ describe('a person’s pull request, settled by the sweep too', () => {
     /** Each page of GitHub's list; by default `pulls` is the first and only one. */
     pageOf?: (page: number) => Pull[];
     config?: Record<string, unknown>;
+    /** The checks on a head, as GitHub reports them (`checksFor`). */
+    checks?: (sha: string) => { name: string; status: string; conclusion: string | null; id?: number }[];
   }) {
     store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
     store.issues = [];
@@ -1729,6 +1732,7 @@ describe('a person’s pull request, settled by the sweep too', () => {
     const entered: { repoName: string; prNumber: number; headSha: string; revert?: boolean }[] = [];
     const opened: Opened[] = [];
     const pagesAsked: number[] = [];
+    const checksAsked: string[] = [];
     const pageOf = options.pageOf ?? ((page: number) => (page === 1 ? options.pulls : []));
     const taskService = new TaskService({} as never, {} as never, {} as never);
     // Recorded as the task service records it, so the next sweep finds it under way.
@@ -1754,6 +1758,10 @@ describe('a person’s pull request, settled by the sweep too', () => {
           labels: (pull.labels ?? []).map((name) => ({ name })),
           ...(pull.author ?? PERSON),
         }));
+      },
+      checksFor: async (_repo: string, sha: string) => {
+        checksAsked.push(sha);
+        return options.checks?.(sha) ?? [];
       },
     };
     const scheduler = new Scheduler(
@@ -1781,13 +1789,13 @@ describe('a person’s pull request, settled by the sweep too', () => {
           entered.push(input);
           const row = store.mergeRows.find((entry) => entry.prNumber === input.prNumber);
           if (!row) store.mergeRows.push({ prNumber: input.prNumber, state: 'waiting', headSha: input.headSha });
-          else if (row.state === 'failed' || row.state === 'merged') Object.assign(row, { state: 'waiting', headSha: input.headSha });
+          else if (row.state === 'failed' || row.state === 'merged') Object.assign(row, { state: 'waiting', headSha: input.headSha, detail: null });
           else row.headSha = input.headSha;
         },
       } as never,
       taskService as never,
     );
-    return { scheduler, published, entered, opened, pagesAsked };
+    return { scheduler, published, entered, opened, pagesAsked, checksAsked };
   }
 
   it('starts a second reviewer that was busy when the round opened', async () => {
@@ -1920,6 +1928,46 @@ describe('a person’s pull request, settled by the sweep too', () => {
     pulls[0] = { number: 15, sha: 'sha-15-fixed' };
     await scheduler.settleGates();
     expect(entered.map((entry) => entry.headSha)).toEqual(['sha-15', 'sha-15-fixed']);
+  });
+
+  it('puts a person’s pull request back in the line once CI’s rerun passed at the head the line let go of it at', async () => {
+    // CI's first run failed at the front, so the line let it go
+    // (`CHECKS_FAILED`), and `onCiRun` ran it again, which passed on the same
+    // head. Kept out until the head moved, it waited for a push or a review.
+    store.roundAt = ROUND;
+    store.mergeRows = [{ prNumber: 15, state: 'failed', headSha: 'sha-15', detail: CHECKS_FAILED }];
+    type Check = { name: string; status: string; conclusion: string | null; id?: number };
+    const first: Check = { name: 'ci', status: 'completed', conclusion: 'failure', id: 101 };
+    let checks: Check[] = [first, { name: 'review-gate', status: 'completed', conclusion: 'success' }];
+    const { scheduler, entered } = sweeping({ pulls: [{ number: 15 }], gate: { state: 'success', description: 'all required reviews are in' }, checks: () => checks });
+
+    await scheduler.settleGates();
+    expect(entered).toEqual([]);
+
+    // The rerun is under way: still out.
+    checks = [first, { name: 'ci', status: 'in_progress', conclusion: null, id: 102 }, checks[1]!];
+    await scheduler.settleGates();
+    expect(entered).toEqual([]);
+
+    checks = [first, { name: 'ci', status: 'completed', conclusion: 'success', id: 102 }, checks[2]!];
+    await scheduler.settleGates();
+    expect(entered).toEqual([{ repoName: 'openadlc-testbed', prNumber: 15, headSha: 'sha-15', revert: false }]);
+  });
+
+  it('keeps out one the line let go of for anything but its checks, though they are green', async () => {
+    // A conflict, or a base that is not the default branch, fails it again at
+    // the front whatever CI says, and says "Leaving the merge line" each time.
+    store.roundAt = ROUND;
+    const green = [{ name: 'ci', status: 'completed', conclusion: 'success', id: 102 }, { name: 'review-gate', status: 'completed', conclusion: 'success' }];
+    for (const detail of ['conflicts with main', 'not for the merge line: it is based on release, not main', null]) {
+      store.mergeRows = [{ prNumber: 15, state: 'failed', headSha: 'sha-15', detail }];
+      const { scheduler, entered, checksAsked } = sweeping({ pulls: [{ number: 15 }], gate: { state: 'success', description: 'all required reviews are in' }, checks: () => green });
+
+      await scheduler.settleGates();
+
+      expect(entered).toEqual([]);
+      expect(checksAsked).toEqual([]);
+    }
   });
 
   it('admits one of the install’s people as a delivery does, from the account their login was pinned to', async () => {
