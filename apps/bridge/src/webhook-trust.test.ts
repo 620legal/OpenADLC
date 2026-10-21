@@ -51,6 +51,8 @@ let STORED: Record<string, string> = {};
 let bridge: Server;
 let bridgeUrl: string;
 let received: { event: string }[];
+/** What handling a delivery throws, when it should fail. */
+let failure: unknown = null;
 
 /** Every field `effectiveConfig` falls back to, since it reads all of them. */
 function config(overrides: Record<string, unknown> = {}) {
@@ -76,6 +78,7 @@ async function startBridge(configured: Record<string, unknown> = {}) {
     webhooks: {
       receive: async (event: string) => {
         received.push({ event });
+        if (failure) throw failure;
       },
     } as never,
     scheduler: {} as never,
@@ -113,6 +116,7 @@ function deliver(payload: string | Uint8Array, headers: Record<string, string> =
 
 beforeEach(() => {
   STORED = {};
+  failure = null;
 });
 
 afterEach(async () => {
@@ -226,5 +230,39 @@ describe('an install with no secret at all', () => {
     expect(response.status).toBe(401);
     expect(await response.text()).toMatch(/no webhook secret/);
     expect(received).toEqual([]);
+  });
+});
+
+describe('a delivery the bridge fails to handle', () => {
+  /**
+   * GitHub answered the bridge 503 while it handled a delivery, and the route
+   * answered GitHub the same 503 through the gateway and the tunnel: the
+   * webhook check read it as the tunnel's address being dead.
+   */
+  it('is answered 500, never a status a proxy in front of it would give', async () => {
+    const { GitHubApiError } = await import('@openadlc/github');
+    STORED = { webhookSecret: 'from-the-console' };
+    failure = new GitHubApiError(503, '/repos/janedoe/openadlc-testbed/issues/1', 'Service Unavailable');
+    await startBridge();
+
+    const payload = '{"action":"opened"}';
+    const response = await deliver(payload, { 'x-hub-signature-256': signed(payload, 'from-the-console') });
+
+    expect(response.status).toBe(500);
+    expect(received).toEqual([{ event: 'issues' }]);
+    const { unreached } = await import('./webhook-setup.js');
+    expect(unreached(response.status)).toBe(false);
+  });
+
+  it('keeps a refusal of its own as the refusal it is', async () => {
+    const { HttpFailure } = await import('./router.js');
+    STORED = { webhookSecret: 'from-the-console' };
+    failure = new HttpFailure(409, 'that pull request is already in the merge line');
+    await startBridge();
+
+    const payload = '{"action":"opened"}';
+    const response = await deliver(payload, { 'x-hub-signature-256': signed(payload, 'from-the-console') });
+
+    expect(response.status).toBe(409);
   });
 });

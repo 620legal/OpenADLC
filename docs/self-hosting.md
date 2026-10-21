@@ -17,6 +17,19 @@ runs on infrastructure you control.
 | The bot image | Each task's container runs it. Build with `infra/local/build-bot-image.sh` |
 | cloudflared, on a laptop | The console's webhook step runs a quick tunnel with it, so GitHub's webhooks reach this machine. An install with a public URL of its own does not need it |
 
+A quick tunnel's address is new each time one is raised, and can die while
+cloudflared goes on running: a laptop that sleeps can wake to an address that
+no longer reaches it. The bridge raises a new tunnel at every start. While it
+runs, it tries the address of the tunnel it raised from this machine every
+five minutes, and at once on waking; when one that answered has stopped for a
+minute, and GitHub's deliveries to it fail too, it raises a new tunnel, points
+the app's webhook at it with the same secret, and has GitHub send again what
+failed meanwhile. It waits twice as long after each, from half an hour up to
+eight hours, until GitHub delivers to the new one, and never raises one for an
+install taken off the internet, one with a fixed address, or a quick tunnel of
+your own given as one; see
+[Webhooks do not arrive](troubleshooting.md#webhooks-do-not-arrive).
+
 Without Docker, the `local` driver runs the same tmux sessions on the host, as
 your user. A session there can read the App's private key, every bot's sign-in,
 the model keys and the database password, and can run anything on the machine.

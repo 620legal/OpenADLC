@@ -1928,9 +1928,11 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
    * Does the step. `tunnel` for a bridge on somebody's machine, `address` for one
    * that already has a public name.
    *
-   * A tunnel is a public address for this install, so it is only ever raised by
-   * somebody asking for it here — never on start-up, and never as a side effect
-   * of anything else.
+   * A tunnel is a public address for this install, so a first one is only
+   * ever raised by somebody asking for it here. After that, the bridge keeps
+   * the one a person chose: it raises it again at start-up (`resume`), and
+   * replaces it when its address stops answering (`watchTunnel`), but never
+   * once a person has taken the install off the internet.
    */
   router.post('/v1/webhook/configure', async ({ body, identity }) => {
     const input = await body<{ mode?: string; url?: string }>();

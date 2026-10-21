@@ -1109,9 +1109,17 @@ export class Scheduler {
    * any, to the last delivery the bridge took; a pass that failed moves
    * nothing, so the next one reads its stretch again. A minute's slack for
    * GitHub's clock against this one.
+   *
+   * `afterRepoint` is for a pass asked for once the app's hook points at a new
+   * tunnel (`main.ts`): one already going began before that, and what it had
+   * GitHub send again went to the dead address, so this runs after it rather
+   * than joining it.
    */
-  async redeliverFailed(now = Date.now()): Promise<string | null> {
+  async redeliverFailed(now = Date.now(), options: { afterRepoint?: boolean } = {}): Promise<string | null> {
     if (!this.redeliver) return null;
+    if (this.redelivering && options.afterRepoint) {
+      return this.redelivering.then(() => this.redeliverFailed(Date.now(), options));
+    }
     if (this.redelivering) return this.redelivering;
     const redeliver = this.redeliver;
     const pass = (async (): Promise<string | null> => {
