@@ -870,8 +870,22 @@ template OpenADLC writes runs as little as the merge line needs:
   of the build, so it runs.
 - **The push to the default branch** after a merge runs nothing again when its
   pull request already passed that exact tree, which a merge the merge line
-  made always did. The template runs on a push to `main`, `master` or `trunk`;
-  add your default branch to its `push:` filter if it is called something else.
+  made always did. Only a pull request into the default branch counts: a
+  passed run of the workflow itself, for a pull request of the repository
+  rather than a fork's, whose base never changed, on that tree, with `make ci`
+  run and passed. A pull request into any other branch runs that branch's copy
+  of the workflow, which could pass anything, so neither it nor any other pull
+  request from the same branch vouches for a tree; and whatever GitHub does not
+  answer, or answers too slowly (three minutes), the push runs the tests for.
+  To tell, the workflow reads the run and its jobs, the branch's pull requests
+  and their events (`actions: read`, `pull-requests: read`, `issues: read`)
+  with the runner's own `node` and `gh`, so it needs no action beyond
+  `actions/checkout` and `actions/upload-artifact`, and writes nothing. The
+  step's log, *already passed on its pull request*, says which run it
+  counted, or why each did not count (not yet watched on a live repository:
+  [unverified](unverified.md#open), U87). The template runs on a push to
+  `main`, `master` or `trunk`; add your default branch to its `push:` filter
+  if it is called something else.
 - **A hung run** stops after 30 minutes rather than GitHub's six hours.
 - **A first failure** is run again once, as the app, before the work goes back
   to the builder: a rerun costs minutes, sending it back costs a model's round.
@@ -883,7 +897,11 @@ repository's runs on GitHub's standard runners are free.
 
 A repository set up before this template keeps its workflow until it is set up
 again: Settings → Repositories offers the current one in place of an earlier
-template nobody changed, and leaves an edited one alone.
+template nobody changed, and leaves an edited one alone. An edited copy of an
+earlier template that skips the push's tests counts a pull request into any
+branch, so its default branch can pass a tree nothing tested: copy the
+template's steps from *the tree it tests* to *what this change needs*, and its
+`permissions`, into it.
 
 The shipped copies are in `crew/templates/repo/`. This repository shares the
 issue forms and the pull request template with them, kept identical by a test

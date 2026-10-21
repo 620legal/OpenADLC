@@ -25,9 +25,11 @@ name: ci
 # - a change to docs alone (docs/, Markdown at the root or directly under
 #   .github/, the licence files) passes without `make setup` or `make ci`. Set
 #   DOCS_ALONE_SKIPS to 'false' below if your tests read your docs;
-# - the push to the default branch that lands a tree a pull request already
-#   passed runs nothing again. The merge line lands a pull request only once it is up to
-#   date and green, so the merge is the tree that was tested;
+# - the push to the default branch that lands a tree a pull request into it
+#   already passed runs nothing again. The merge line lands a pull request only
+#   once it is up to date and green, so the merge is the tree that was tested.
+#   A pull request into any other branch counts for nothing: it ran that
+#   branch's copy of this file, which could pass anything;
 # - a run that hangs stops after 30 minutes, not GitHub's six hours.
 # To make each run cheaper still, cache your dependencies in `make setup`'s
 # step (actions/cache, or setup-node's `cache:`, keyed on your lockfile).
@@ -41,11 +43,16 @@ on:
     branches: [main, master, trunk]
   merge_group:
 
-# It reads the code and writes nothing. `actions: read` is to ask whether a
-# pull request's run already passed the tree a push lands.
+# It reads the code and writes nothing. The rest is for a push to ask whether
+# a pull request's run already passed the tree it lands: the run and its jobs
+# (`actions`), the pull requests from the run's branch (`pull-requests`), and
+# whether any of them had its base changed (`issues`, where GitHub keeps a
+# pull request's events).
 permissions:
   contents: read
   actions: read
+  pull-requests: read
+  issues: read
 
 env:
   DOCS_ALONE_SKIPS: 'true'
@@ -69,36 +76,134 @@ jobs:
         with:
           fetch-depth: 2
 
+      # What a pull request's run passed, and what a push lands, are named by
+      # their tree: the squash of an up-to-date pull request is a new commit
+      # with its head's tree.
+      - name: the tree it tests
+        id: tree
+        run: echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+
+      # The push to the default branch skips `make setup` and `make ci` for a
+      # tree a pull request's run already passed, which leaves an artifact
+      # named after the tree. The name proves nothing: any run can upload one,
+      # and a pull request into some other branch runs that branch's copy of
+      # this file, which anyone who can push there writes. So only this
+      # counts: a passed run of this file for a pull request of this
+      # repository into the default branch, whose head has this tree and
+      # whose `make ci` passed. Nothing in a run says which pull request it
+      # was for, and two can share a head, one into a branch whose copy
+      # passes anything and one into the default branch; so every pull
+      # request ever opened from the run's branch must be into the default
+      # branch, and none may have had its base changed. Anything else, a
+      # question GitHub does not answer, or a stalled one, runs the tests:
+      # this step never fails CI.
+      #
+      # It is the runner's own node and gh, not an action: the runner fetches
+      # every action a job names before its first step, a skipped step's
+      # too, so one an organization has not allowed fails every run.
+      - name: already passed on its pull request
+        id: vouched
+        if: github.event_name == 'push'
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REPO_ID: ${{ github.repository_id }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TREE: ${{ steps.tree.outputs.tree }}
+        run: |
+          node - <<'JS'
+          const { execFileSync } = require('node:child_process');
+          const { appendFileSync } = require('node:fs');
+          // What GitHub answers is data: a branch's name or a run's path is
+          // compared and printed, never run.
+          const { REPO: repo, REPO_ID: repoId, DEFAULT_BRANCH: base, TREE: tree } = process.env;
+          function gh(args) {
+            let out;
+            try {
+              out = execFileSync('gh', ['api', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024 });
+            } catch (error) {
+              throw new Error(`gh api ${args.at(-1)}: ${String(error.stderr ?? '').trim().split('\n')[0] || error.message}`);
+            }
+            return JSON.parse(out);
+          }
+          const api = (path) => gh([path]);
+          // Every page of a list: a base change can be past a pull request's
+          // hundredth event.
+          const all = (path) => gh(['--paginate', '--slurp', path]).flat();
+          const ours = (id) => String(id) === repoId;
+          const where = (pull) => (ours(pull.base?.repo?.id) ? pull.base?.ref : `${pull.base?.ref} of another repository`);
+
+          // Why the run that uploaded this artifact does not vouch for the
+          // tree, or null when it does.
+          function refusal(artifact) {
+            const id = artifact.workflow_run?.id;
+            if (!id) return 'it names no run';
+            if (!ours(artifact.workflow_run.head_repository_id)) return "a fork's run uploaded it";
+            const run = api(`repos/${repo}/actions/runs/${id}`);
+            if (run.event !== 'pull_request') return `it ran for a ${run.event}, not a pull request`;
+            if (run.path !== '.github/workflows/ci.yml') return `it ran ${run.path}, not .github/workflows/ci.yml`;
+            if (run.conclusion !== 'success') return `it ended ${run.conclusion}`;
+            if (!ours(run.head_repository?.id)) return "it ran for a fork's branch";
+            if (!run.head_branch) return 'it names no branch';
+            if (api(`repos/${repo}/git/commits/${run.head_sha}`).tree?.sha !== tree) return `its head ${run.head_sha} is another tree`;
+            // Tied to its pull request by its branch as well as its head: a
+            // run's `pull_requests` is empty once the pull request merged.
+            const branch = run.head_branch;
+            const withHead = api(`repos/${repo}/commits/${run.head_sha}/pulls`).filter(
+              (pull) => pull.head?.sha === run.head_sha && pull.head?.ref === branch && ours(pull.head?.repo?.id),
+            );
+            if (withHead.length === 0) return `no pull request from ${branch} has its head`;
+            const owner = repo.split('/')[0];
+            const fromBranch = all(`repos/${repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=100`);
+            if (fromBranch.length === 0) return `GitHub lists no pull request from ${branch}`;
+            // Both lists: either can miss one the other has.
+            const pulls = [...withHead, ...fromBranch];
+            const elsewhere = pulls.find((pull) => pull.base?.ref !== base || !ours(pull.base?.repo?.id));
+            if (elsewhere) return `pull request #${elsewhere.number} from ${branch} is into ${where(elsewhere)}, not ${base}`;
+            for (const number of new Set(pulls.map((pull) => pull.number))) {
+              const events = all(`repos/${repo}/issues/${number}/events?per_page=100`);
+              if (events.some((event) => event.event === 'base_ref_changed')) return `pull request #${number} from ${branch} had its base changed`;
+            }
+            const { jobs = [] } = api(`repos/${repo}/actions/runs/${id}/jobs?per_page=100`);
+            const job = jobs.filter((candidate) => candidate.name === 'ci').at(-1);
+            if (job?.conclusion !== 'success') return `its ci job did not pass (${job?.conclusion ?? 'none'})`;
+            const tests = job.steps?.find((step) => step.name === 'make ci')?.conclusion;
+            if (tests !== 'success') return `its make ci did not pass (${tests ?? 'not run'})`;
+            return null;
+          }
+
+          let vouched = false;
+          try {
+            const { artifacts = [] } = api(`repos/${repo}/actions/artifacts?name=tested-tree-${tree}&per_page=100`);
+            for (const artifact of artifacts) {
+              const why = refusal(artifact);
+              if (why === null) {
+                console.log(`tree ${tree} passed in run ${artifact.workflow_run.id}, of a pull request into ${base}; nothing to run again`);
+                vouched = true;
+                break;
+              }
+              console.log(`run ${artifact.workflow_run?.id} does not count: ${why}`);
+            }
+            if (!vouched) console.log(`no pull request's run into ${base} passed tree ${tree}; running the tests`);
+          } catch (error) {
+            console.log(`could not tell whether a pull request's run passed tree ${tree} (${error.message}); running the tests`);
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `vouched=${vouched}\n`);
+          JS
+
       - name: what this change needs
         id: needs
         env:
-          GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
-          REPO: ${{ github.repository }}
-          REPO_ID: ${{ github.repository_id }}
+          VOUCHED: ${{ steps.vouched.outputs.vouched }}
         run: |
-          tree=$(git rev-parse 'HEAD^{tree}')
-          echo "tree=$tree" >> "$GITHUB_OUTPUT"
           run=true
-          # A pull request's own runs only: a fork's run is the fork's
-          # workflow, and could name any tree. And only a passing pull request
-          # run of this workflow whose head is this tree: any branch here can
-          # upload an artifact by this name, so the name proves nothing until
-          # it is tied to the tree its own run was given.
-          if [ "$EVENT" = push ]; then
-            runs=$(gh api "repos/$REPO/actions/artifacts?name=tested-tree-$tree" \
-              --jq ".artifacts[] | select(.expired == false and .workflow_run.head_repository_id == $REPO_ID) | \"\(.workflow_run.id) \(.workflow_run.head_sha)\"" 2>/dev/null || true)
-            while read -r passed head; do
-              [ -n "$passed" ] || continue
-              verdict=$(gh api "repos/$REPO/actions/runs/$passed" --jq '"\(.event) \(.conclusion) \(.path)"' 2>/dev/null || true)
-              [ "$verdict" = "pull_request success .github/workflows/ci.yml" ] || continue
-              if [ "$(gh api "repos/$REPO/git/commits/$head" --jq .tree.sha 2>/dev/null || true)" = "$tree" ]; then
-                echo "this tree passed on its pull request; nothing to run again"
-                run=false
-                break
-              fi
-            done <<< "$runs"
+          if [ "$VOUCHED" = true ]; then
+            echo "this tree passed on its pull request; nothing to run again"
+            run=false
           fi
           # More than one commit pushed at once: the diff below would not see
           # them all, so it runs. The diff lists both sides of a rename: a
@@ -118,6 +223,8 @@ jobs:
         if: steps.needs.outputs.run == 'true'
         run: make setup
 
+      # A push to the default branch reads this step's outcome, by its name,
+      # in a pull request's run before it skips the tests for that tree.
       - name: make ci
         if: steps.needs.outputs.run == 'true'
         run: make ci
@@ -126,11 +233,11 @@ jobs:
       # nothing again.
       - name: remember the tree that passed
         if: github.event_name == 'pull_request' && steps.needs.outputs.run == 'true'
-        run: echo "${{ steps.needs.outputs.tree }}" > tested-tree.txt
+        run: echo "${{ steps.tree.outputs.tree }}" > tested-tree.txt
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: github.event_name == 'pull_request' && steps.needs.outputs.run == 'true'
         with:
-          name: tested-tree-${{ steps.needs.outputs.tree }}
+          name: tested-tree-${{ steps.tree.outputs.tree }}
           path: tested-tree.txt
           retention-days: 14

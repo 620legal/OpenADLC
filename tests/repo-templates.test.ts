@@ -142,31 +142,6 @@ describe('an issue filed from the bug form', () => {
   });
 });
 
-/**
- * A `gh` that answers the three questions the push asks before it skips a tree
- * a pull request passed: which runs left an artifact by that name (one, or
- * none), what that run was, and the tree of the head it ran on.
- */
-function fakeGh(bin: string, artifact: { headTree: string; verdict?: string } | undefined): Record<string, string> {
-  writeFileSync(
-    join(bin, 'gh'),
-    [
-      '#!/bin/sh',
-      'case "$2" in',
-      '  *actions/artifacts*) [ -n "$FAKE_HEAD_TREE" ] && echo "7 0123456789abcdef0123456789abcdef01234567" ;;',
-      '  *actions/runs/*) echo "$FAKE_VERDICT" ;;',
-      '  *git/commits/*) echo "$FAKE_HEAD_TREE" ;;',
-      'esac',
-      '',
-    ].join('\n'),
-    { mode: 0o755 },
-  );
-  return {
-    FAKE_HEAD_TREE: artifact?.headTree ?? '',
-    FAKE_VERDICT: artifact?.verdict ?? 'pull_request success .github/workflows/ci.yml',
-  };
-}
-
 describe('what the template tree carries', () => {
   it.each([
     'AGENTS.md',
@@ -245,13 +220,15 @@ describe('what the template tree carries', () => {
     /**
      * The step's script, run as the runner runs it, in a repository with these
      * two commits. The first holds README.md and `start`; `change` writes the
-     * second, where `null` removes a file.
+     * second, where `null` removes a file. `vouched` is what the step before it
+     * answered; a `gh` that answers nothing stands in for GitHub, since this
+     * step asks it nothing.
      */
     function needs(
       change: Record<string, string | null>,
       env: {
         event: string;
-        artifact?: { headTree: 'this' | 'other'; verdict?: string };
+        vouched?: string;
         before?: 'parent' | 'other';
         docsSkip?: string;
         start?: Record<string, string>;
@@ -282,11 +259,7 @@ describe('what the template tree carries', () => {
         git('commit', '-q', '-m', 'two');
         const bin = join(repo, '.bin');
         execFileSync('mkdir', ['-p', bin]);
-        const tree = git('rev-parse', 'HEAD^{tree}');
-        const answers = fakeGh(
-          bin,
-          env.artifact && { headTree: env.artifact.headTree === 'this' ? tree : 'f'.repeat(40), verdict: env.artifact.verdict },
-        );
+        writeFileSync(join(bin, 'gh'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
         const output = join(repo, '.output');
         writeFileSync(output, '');
         execFileSync('bash', ['-e', '-c', script], {
@@ -300,7 +273,7 @@ describe('what the template tree carries', () => {
             REPO: 'exampleco/api',
             REPO_ID: '42',
             DOCS_ALONE_SKIPS: env.docsSkip ?? workflow.env.DOCS_ALONE_SKIPS ?? '',
-            ...answers,
+            VOUCHED: env.vouched ?? '',
           },
         });
         return /^run=(.*)$/m.exec(readFileSync(output, 'utf8'))?.[1];
@@ -328,23 +301,342 @@ describe('what the template tree carries', () => {
       expect(needs(moved, { event: 'pull_request', start: { 'src/app.js': 'module.exports = 1;\n' } })).toBe('true');
     });
 
-    it('runs nothing again on a push that lands a tree its pull request passed', () => {
-      expect(needs({ 'src/app.js': 'x\n' }, { event: 'push', artifact: { headTree: 'this' } })).toBe('false');
+    it('runs nothing again on a push whose tree the step before it vouched for, and runs any other', () => {
+      expect(needs({ 'src/app.js': 'x\n' }, { event: 'push', vouched: 'true' })).toBe('false');
+      expect(needs({ 'src/app.js': 'x\n' }, { event: 'push', vouched: 'false' })).toBe('true');
+      // That step skipped, or failed and let go: it answered nothing.
       expect(needs({ 'src/app.js': 'x\n' }, { event: 'push' })).toBe('true');
-    });
-
-    it('runs a push whose tree was only named by a run, not tested by a passing pull request run on it', () => {
-      // Any branch here can upload an artifact by any name, an edited ci.yml
-      // included; only a passing pull request run whose own head is the tree
-      // vouches for it.
-      expect(needs({ 'src/app.js': 'x\n' }, { event: 'push', artifact: { headTree: 'other' } })).toBe('true');
-      expect(needs({ 'src/app.js': 'x\n' }, { event: 'push', artifact: { headTree: 'this', verdict: 'push success .github/workflows/ci.yml' } })).toBe('true');
-      expect(needs({ 'src/app.js': 'x\n' }, { event: 'push', artifact: { headTree: 'this', verdict: 'pull_request failure .github/workflows/ci.yml' } })).toBe('true');
-      expect(needs({ 'src/app.js': 'x\n' }, { event: 'push', artifact: { headTree: 'this', verdict: 'pull_request success .github/workflows/other.yml' } })).toBe('true');
     });
 
     it('runs a push of several commits at once, whose diff it cannot read from two', () => {
       expect(needs({ 'docs/guide.md': 'x\n' }, { event: 'push', before: 'other' })).toBe('true');
+    });
+  });
+
+  describe('lets only a pull request’s own run into the default branch vouch for the tree a push lands', () => {
+    // The lookup took any passing pull request run of ci.yml whose head had
+    // the tree. A pull request into some other branch runs that branch's
+    // ci.yml, which anyone who can push there writes: one whose `make ci` was
+    // `true` uploaded the tree's artifact, and the default branch's push of
+    // that tree passed untested.
+    interface Step {
+      id?: string;
+      if?: string;
+      uses?: string;
+      run?: string;
+      env?: Record<string, string>;
+      with?: Record<string, string>;
+      'continue-on-error'?: boolean;
+      'timeout-minutes'?: number;
+    }
+    const workflow = parseYamlFile(join(TEMPLATE, '.github', 'workflows', 'ci.yml')) as {
+      permissions: Record<string, string>;
+      jobs: Record<string, { steps: Step[] }>;
+    };
+    const steps = workflow.jobs[REQUIRED_CHECK]?.steps ?? [];
+    const index = (id: string) => steps.findIndex((step) => step.id === id);
+    const step = steps.find((candidate) => candidate.id === 'vouched');
+
+    const REPO = 'exampleco/api';
+    const TREE = 'a'.repeat(40);
+    const HEAD = 'f'.repeat(40);
+
+    interface Pull {
+      number: number;
+      head: { sha: string; ref: string; repo: { id: number } };
+      base: { ref: string; repo: { id: number } };
+    }
+
+    /** What GitHub says about a pull request's run of ci.yml, piece by piece, for a test to change one. */
+    interface Found {
+      artifacts: { name: string; workflow_run: { id: number; head_repository_id: number } }[];
+      run: Record<string, unknown>;
+      headTree: string;
+      /** `commits/<head>/pulls`: the pull requests with that head. */
+      withHead: Pull[];
+      /** `pulls?state=all&head=exampleco:<branch>`: every pull request ever opened from the run's branch. */
+      fromBranch: Pull[];
+      events: Record<number, { event: string }[]>;
+      job: { name: string; conclusion: string; steps: { name: string; conclusion: string }[] };
+    }
+
+    /**
+     * A `gh` that answers `gh api` from fixtures as GitHub would: a list a
+     * hundred at a time, all of it with `--paginate --slurp` as a list of
+     * pages, and only its first page without. A path with no fixture is
+     * recorded and fails as a 404 does; one matching `failing` fails as a
+     * token without the permission does.
+     */
+    const FAKE_GH = [
+      '#!/usr/bin/env node',
+      "const { appendFileSync, readFileSync } = require('node:fs');",
+      "const { answers, failing, unanswered } = JSON.parse(readFileSync(process.env.FAKE_GH_ANSWERS, 'utf8'));",
+      'const args = process.argv.slice(2);',
+      'const path = args.at(-1);',
+      "const paginate = args.includes('--paginate');",
+      "if (args[0] !== 'api') { process.stderr.write('gh: this stand-in answers only gh api\\n'); process.exit(2); }",
+      "if (failing && new RegExp(failing).test(path)) { process.stderr.write('gh: Resource not accessible by integration (HTTP 403)\\n'); process.exit(1); }",
+      "if (!(path in answers)) { appendFileSync(unanswered, path + '\\n'); process.stderr.write('gh: Not Found (HTTP 404)\\n'); process.exit(1); }",
+      'const answer = answers[path];',
+      'if (!Array.isArray(answer)) {',
+      "  if (paginate) { process.stderr.write(`gh: ${path} is not a list to paginate\\n`); process.exit(2); }",
+      '  process.stdout.write(JSON.stringify(answer));',
+      '  process.exit(0);',
+      '}',
+      'const pages = [];',
+      'for (let at = 0; at < answer.length; at += 100) pages.push(answer.slice(at, at + 100));',
+      'if (pages.length === 0) pages.push([]);',
+      "if (!paginate) process.stdout.write(JSON.stringify(pages[0]));",
+      "else if (args.includes('--slurp')) process.stdout.write(JSON.stringify(pages));",
+      "else process.stdout.write(pages.map((page) => JSON.stringify(page)).join(''));",
+      '',
+    ].join('\n');
+
+    /**
+     * The step's script, run as the runner runs it, with the runner's node
+     * and a stand-in `gh` that answers from fixtures: run 900 of the
+     * template's ci.yml, for pull request #31 from branch `x` into `main`,
+     * which tested TREE and passed, unless `change` says otherwise.
+     */
+    function vouched(change: (found: Found) => void = () => undefined, options: { defaultBranch?: string; failing?: RegExp } = {}) {
+      const pull: Pull = { number: 31, head: { sha: HEAD, ref: 'x', repo: { id: 42 } }, base: { ref: 'main', repo: { id: 42 } } };
+      const found: Found = {
+        artifacts: [{ name: `tested-tree-${TREE}`, workflow_run: { id: 900, head_repository_id: 42 } }],
+        run: { id: 900, event: 'pull_request', conclusion: 'success', path: '.github/workflows/ci.yml', head_sha: HEAD, head_branch: 'x', head_repository: { id: 42 } },
+        headTree: TREE,
+        withHead: [pull],
+        fromBranch: [pull],
+        events: { 31: [{ event: 'labeled' }] },
+        job: { name: 'ci', conclusion: 'success', steps: [{ name: 'make setup', conclusion: 'success' }, { name: 'make ci', conclusion: 'success' }] },
+      };
+      change(found);
+      const answers: Record<string, unknown> = {
+        [`repos/${REPO}/actions/artifacts?name=tested-tree-${TREE}&per_page=100`]: { total_count: found.artifacts.length, artifacts: found.artifacts },
+        [`repos/${REPO}/actions/runs/900`]: found.run,
+        [`repos/${REPO}/git/commits/${HEAD}`]: { sha: HEAD, tree: { sha: found.headTree } },
+        [`repos/${REPO}/commits/${HEAD}/pulls`]: found.withHead,
+        [`repos/${REPO}/pulls?state=all&head=${encodeURIComponent(`exampleco:${String(found.run.head_branch)}`)}&per_page=100`]: found.fromBranch,
+        [`repos/${REPO}/actions/runs/900/jobs?per_page=100`]: { total_count: 1, jobs: [found.job] },
+      };
+      for (const [number, events] of Object.entries(found.events)) answers[`repos/${REPO}/issues/${number}/events?per_page=100`] = events;
+
+      const dir = mkdtempSync(join(tmpdir(), 'openadlc-ci-vouched-'));
+      try {
+        const unanswered = join(dir, 'unanswered');
+        const output = join(dir, 'output');
+        writeFileSync(unanswered, '');
+        writeFileSync(output, '');
+        writeFileSync(join(dir, 'answers.json'), JSON.stringify({ answers, failing: options.failing?.source, unanswered }));
+        writeFileSync(join(dir, 'gh'), FAKE_GH, { mode: 0o755 });
+        const said = execFileSync('bash', ['-e', '-c', step?.run ?? 'false'], {
+          cwd: dir,
+          encoding: 'utf8',
+          env: {
+            PATH: `${dir}:${dirname(process.execPath)}:${process.env.PATH}`,
+            GITHUB_OUTPUT: output,
+            FAKE_GH_ANSWERS: join(dir, 'answers.json'),
+            GH_TOKEN: 'none',
+            REPO,
+            REPO_ID: '42',
+            DEFAULT_BRANCH: options.defaultBranch ?? 'main',
+            TREE,
+          },
+        });
+        return {
+          result: /^vouched=(.*)$/m.exec(readFileSync(output, 'utf8'))?.[1],
+          said,
+          unanswered: readFileSync(unanswered, 'utf8').split('\n').filter(Boolean),
+        };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    it('is a step of its own on a push, before what the change needs is decided, that never fails CI', () => {
+      expect(step?.if).toBe("github.event_name == 'push'");
+      // A refusal runs the tests, and so does a question GitHub does not
+      // answer, a stalled one, or the step itself failing.
+      expect(step?.['continue-on-error']).toBe(true);
+      expect(step?.['timeout-minutes']).toBe(3);
+      // The default branch by its own name: the push filter lists three.
+      expect(step?.env).toEqual({
+        GH_TOKEN: '${{ github.token }}',
+        REPO: '${{ github.repository }}',
+        REPO_ID: '${{ github.repository_id }}',
+        DEFAULT_BRANCH: '${{ github.event.repository.default_branch }}',
+        TREE: '${{ steps.tree.outputs.tree }}',
+      });
+      // What GitHub says reaches the script as data, never spliced into it.
+      expect(step?.run).toMatch(/^node - <<'JS'\n/);
+      expect(step?.run ?? '').not.toContain('${{');
+      expect(steps[index('tree')]?.run).toContain("git rev-parse 'HEAD^{tree}'");
+      expect(index('tree')).toBeLessThan(index('vouched'));
+      expect(index('vouched')).toBeLessThan(index('needs'));
+      expect(steps[index('needs')]?.env?.VOUCHED).toBe('${{ steps.vouched.outputs.vouched }}');
+      // The artifact it looks for is the one a pull request's run uploads.
+      const upload = steps.find((candidate) => candidate.uses?.startsWith('actions/upload-artifact@'));
+      expect(upload?.with?.name).toBe('tested-tree-${{ steps.tree.outputs.tree }}');
+      expect(upload?.if).toBe("github.event_name == 'pull_request' && steps.needs.outputs.run == 'true'");
+    });
+
+    it('names no action but checkout and upload-artifact, so an organization that allows only those can run it', () => {
+      // The runner fetches every action a job names before its first step,
+      // a skipped step's too: an action the organization has not allowed
+      // fails every run, a pull request's included, and continue-on-error
+      // does not reach that far.
+      const actions = steps.flatMap((candidate) => (candidate.uses ? [candidate.uses.split('@')[0]] : []));
+      expect(actions).toEqual(['actions/checkout', 'actions/upload-artifact']);
+    });
+
+    it('reads what it needs with the token CI has, and writes nothing', () => {
+      // `issues` for a pull request's events, where GitHub records a base change.
+      expect(workflow.permissions).toEqual({ contents: 'read', actions: 'read', 'pull-requests': 'read', issues: 'read' });
+    });
+
+    it('vouches for a tree that a pull request of this repository into the default branch passed in full', () => {
+      const { result, said, unanswered } = vouched();
+      expect(unanswered).toEqual([]);
+      expect(result).toBe('true');
+      expect(said).toMatch(/tree a{40} passed in run 900, of a pull request into main; nothing to run again/);
+    });
+
+    it('reads the default branch by the name the repository gives it', () => {
+      const intoTrunk = (found: Found) => void (found.withHead[0]!.base.ref = 'trunk');
+      expect(vouched(intoTrunk, { defaultBranch: 'trunk' }).result).toBe('true');
+      const intoMain = vouched(() => undefined, { defaultBranch: 'trunk' });
+      expect(intoMain.result).toBe('false');
+      expect(intoMain.said).toMatch(/pull request #31 from x is into main, not trunk/);
+    });
+
+    // Each thing it reads, changed one at a time: each must refuse on its own,
+    // and say why in the run's log.
+    it.each<[string, (found: Found) => void, RegExp]>([
+      // A run of some other workflow, event or outcome.
+      ['a run that did not pass', (found) => (found.run.conclusion = 'failure'), /run 900 does not count: it ended failure/],
+      ['a run of a push, not of a pull request', (found) => (found.run.event = 'push'), /it ran for a push, not a pull request/],
+      ['a run of another workflow', (found) => (found.run.path = '.github/workflows/other.yml'), /it ran \.github\/workflows\/other\.yml, not \.github\/workflows\/ci\.yml/],
+      ['a run whose ci job did not pass', (found) => (found.job.conclusion = 'failure'), /its ci job did not pass \(failure\)/],
+      ['a run that skipped make ci', (found) => (found.job.steps[1]!.conclusion = 'skipped'), /its make ci did not pass \(skipped\)/],
+      ['a run whose job ran no make ci', (found) => (found.job.steps = [found.job.steps[0]!]), /its make ci did not pass \(not run\)/],
+      // From a fork.
+      ['a run from a fork', (found) => (found.run.head_repository = { id: 7 }), /it ran for a fork's branch/],
+      ['an artifact a fork’s run uploaded', (found) => (found.artifacts[0]!.workflow_run.head_repository_id = 7), /a fork's run uploaded it/],
+      ['a pull request from a fork', (found) => (found.withHead[0]!.head.repo.id = 7), /no pull request from x has its head/],
+      ['a pull request into another repository', (found) => (found.withHead[0]!.base.repo.id = 7), /#31 from x is into main of another repository, not main/],
+      // On another tree.
+      ['a run whose head is another tree', (found) => (found.headTree = 'b'.repeat(40)), /its head f{40} is another tree/],
+      // Into another branch, or moved from one.
+      ['a pull request into another branch', (found) => (found.withHead[0]!.base.ref = 'y'), /#31 from x is into y, not main/],
+      ['a pull request whose base changed', (found) => (found.events[31] = [{ event: 'labeled' }, { event: 'base_ref_changed' }]), /#31 from x had its base changed/],
+      // Not tied to its pull request by both its branch and its head.
+      ['a run with no branch', (found) => (found.run.head_branch = null), /it names no branch/],
+      ['a pull request with another head', (found) => (found.withHead[0]!.head.sha = 'e'.repeat(40)), /no pull request from x has its head/],
+      ['a pull request from another branch', (found) => (found.withHead[0]!.head.ref = 'y'), /no pull request from x has its head/],
+      ['a branch GitHub lists no pull request from', (found) => (found.fromBranch = []), /GitHub lists no pull request from x/],
+      ['no pull request at all', (found) => ((found.withHead = []), (found.fromBranch = [])), /no pull request from x has its head/],
+    ])('refuses %s', (_what, change, reason) => {
+      const { result, said, unanswered } = vouched(change);
+      expect(unanswered).toEqual([]);
+      expect(result).toBe('false');
+      expect(said).toMatch(reason);
+      expect(said).toMatch(/running the tests/);
+    });
+
+    it('refuses a run of a branch that also has a pull request into another branch, which ran that branch’s ci.yml', () => {
+      // Branch x at one head, two pull requests: #30 into foo, whose fake
+      // ci.yml uploaded the tree's artifact from run 900, and #31 into main.
+      // Nothing in run 900 says which it was for, so the other one refuses it.
+      const { result, said } = vouched((found) => {
+        const intoFoo: Pull = { number: 30, head: { sha: HEAD, ref: 'x', repo: { id: 42 } }, base: { ref: 'foo', repo: { id: 42 } } };
+        found.withHead = [found.withHead[0]!, intoFoo];
+        found.fromBranch = [found.fromBranch[0]!, intoFoo];
+        found.events[30] = [];
+      });
+      expect(result).toBe('false');
+      expect(said).toMatch(/#30 from x is into foo, not main/);
+    });
+
+    it('refuses a run of a branch that ever had a pull request into another branch, even one GitHub no longer lists with that head', () => {
+      const { result, said } = vouched((found) => {
+        const intoFoo: Pull = { number: 30, head: { sha: 'd'.repeat(40), ref: 'x', repo: { id: 42 } }, base: { ref: 'foo', repo: { id: 42 } } };
+        found.fromBranch = [intoFoo, ...found.fromBranch];
+        found.events[30] = [];
+      });
+      expect(result).toBe('false');
+      expect(said).toMatch(/#30 from x is into foo, not main/);
+    });
+
+    // Either list can leave out a pull request the other has, so each check
+    // reads both.
+    it('refuses a run whose head GitHub ties to a pull request into another branch that the branch’s own list leaves out', () => {
+      const { result, said } = vouched((found) => {
+        const intoFoo: Pull = { number: 30, head: { sha: HEAD, ref: 'x', repo: { id: 42 } }, base: { ref: 'foo', repo: { id: 42 } } };
+        found.withHead = [found.withHead[0]!, intoFoo];
+        found.events[30] = [];
+      });
+      expect(result).toBe('false');
+      expect(said).toMatch(/#30 from x is into foo, not main/);
+    });
+
+    it('refuses a run whose head GitHub ties to a pull request whose base changed, that the branch’s own list leaves out', () => {
+      const { result, said } = vouched((found) => {
+        const moved: Pull = { number: 30, head: { sha: HEAD, ref: 'x', repo: { id: 42 } }, base: { ref: 'main', repo: { id: 42 } } };
+        found.withHead = [found.withHead[0]!, moved];
+        found.events[30] = [{ event: 'base_ref_changed' }];
+      });
+      expect(result).toBe('false');
+      expect(said).toMatch(/#30 from x had its base changed/);
+    });
+
+    it('refuses a run of a branch one of whose other pull requests had its base changed', () => {
+      const { result, said } = vouched((found) => {
+        const earlier: Pull = { number: 29, head: { sha: 'd'.repeat(40), ref: 'x', repo: { id: 42 } }, base: { ref: 'main', repo: { id: 42 } } };
+        found.fromBranch = [earlier, ...found.fromBranch];
+        found.events[29] = [{ event: 'base_ref_changed' }];
+      });
+      expect(result).toBe('false');
+      expect(said).toMatch(/#29 from x had its base changed/);
+    });
+
+    it('reads every page: a base change past a pull request’s hundredth event, and a pull request past the branch’s hundredth', () => {
+      const late = vouched((found) => (found.events[31] = [...Array.from({ length: 100 }, () => ({ event: 'labeled' })), { event: 'base_ref_changed' }]));
+      expect(late.result).toBe('false');
+      expect(late.said).toMatch(/#31 from x had its base changed/);
+      const many = vouched((found) => {
+        const earlier = Array.from({ length: 100 }, (_, n): Pull => ({ number: 100 + n, head: { sha: 'd'.repeat(40), ref: 'x', repo: { id: 42 } }, base: { ref: 'main', repo: { id: 42 } } }));
+        const intoFoo: Pull = { number: 30, head: { sha: 'd'.repeat(40), ref: 'x', repo: { id: 42 } }, base: { ref: 'foo', repo: { id: 42 } } };
+        found.fromBranch = [...earlier, intoFoo, ...found.fromBranch];
+        for (const pull of earlier) found.events[pull.number] = [];
+        found.events[30] = [];
+      });
+      expect(many.result).toBe('false');
+      expect(many.said).toMatch(/#30 from x is into foo, not main/);
+    });
+
+    it('passes over an artifact that does not count, to one that does', () => {
+      const { result, said, unanswered } = vouched((found) => {
+        found.artifacts = [{ name: `tested-tree-${TREE}`, workflow_run: { id: 800, head_repository_id: 7 } }, ...found.artifacts];
+      });
+      expect(unanswered).toEqual([]);
+      expect(result).toBe('true');
+      expect(said).toMatch(/run 800 does not count: a fork's run uploaded it\n.*passed in run 900/);
+    });
+
+    it('runs the tests in a repository where no pull request has passed anything yet', () => {
+      const { result, said, unanswered } = vouched((found) => (found.artifacts = []));
+      expect(unanswered).toEqual([]);
+      expect(result).toBe('false');
+      expect(said).toMatch(/no pull request's run into main passed tree a{40}; running the tests/);
+    });
+
+    it.each([
+      ['the artifacts', /actions\/artifacts/],
+      ['a pull request’s events', /\/events/],
+      ['the run’s jobs', /\/jobs/],
+    ])('runs the tests, rather than failing CI, when GitHub does not answer for %s', (_what, failing) => {
+      const { result, said } = vouched(() => undefined, { failing });
+      expect(result).toBe('false');
+      expect(said).toMatch(/could not tell whether a pull request's run passed tree a{40} \(gh api \S+: gh: Resource not accessible by integration \(HTTP 403\)\); running the tests/);
     });
   });
 
