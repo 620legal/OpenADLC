@@ -90,6 +90,12 @@ describe('a repository’s settings', () => {
     expect(html).toContain('What releases production is not a');
   });
 
+  it('puts the stages under the anchor the settings list’s Design link lands on', () => {
+    expect(settings({ ...REPO, name: 'api' })).toMatch(
+      /<section aria-labelledby="api-stages"[^>]*><h4 id="api-stages"[^>]*>What each stage may do without asking<\/h4>/,
+    );
+  });
+
   it('shows Done without a control: nothing at Done waits on anyone', () => {
     const html = settings();
     expect(html).toContain('Closes the issue once the change is live');

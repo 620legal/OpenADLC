@@ -6710,7 +6710,8 @@ describe('a stage label moved forward on GitHub', () => {
   const issue = (labels: string[]) => ({ number: 7, title: 'Cache the price list', body: '', htmlUrl: 'https://github.test/janedoe/openadlc/issues/7', labels });
   const REPO_ROW = { id: 'repo-1', name: 'openadlc', fullName: 'janedoe/openadlc', defaultBranch: 'main', specRequiredLabels: ['touches:schema'] };
 
-  function bridge(specMode = 'conditional') {
+  /** `null` is a row stored with no spec mode, which the bridge reads as the default. */
+  function bridge(specMode: string | null = 'conditional') {
     const automation = {
       moveStage: vi.fn(async (input: { to: string }) => {
         if (store.issue) store.issue = { ...store.issue, stage: input.to };
@@ -6720,7 +6721,7 @@ describe('a stage label moved forward on GitHub', () => {
     const stages = { staff: vi.fn(async () => false) };
     const sendBack = { fromPerson: vi.fn(async () => ({ sent: true })) };
     const webhooks = new Webhooks({} as never, automation as never, {} as never, {} as never, stages as never, {} as never, null, null, null, null, null, sendBack as never);
-    vi.mocked(repos.getRepoByName).mockImplementation(async () => ({ ...REPO_ROW, stageModes: { spec: specMode } }) as never);
+    vi.mocked(repos.getRepoByName).mockImplementation(async () => ({ ...REPO_ROW, stageModes: specMode === null ? {} : { spec: specMode } }) as never);
     return { webhooks, automation, stages, sendBack };
   }
 
@@ -6771,6 +6772,19 @@ describe('a stage label moved forward on GitHub', () => {
     const { webhooks, automation, stages } = bridge('conditional');
 
     await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:build', 'touches:schema']), 'labeled', 'ottoexampleco');
+
+    expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ issueNumber: 7, to: 'spec', actor: 'bridge' }));
+    expect(store.issue?.stage).toBe('spec');
+    expect(stages.staff).toHaveBeenCalledWith({ repoName: 'openadlc', issueNumber: 7, stage: 'spec' });
+  });
+
+  it('routes intake’s Build to Design on a repository with no spec mode stored: Design is Always by default', async () => {
+    // The fallback was `conditional`, which kept an issue without a
+    // spec-required label, nearly every issue, in Build.
+    store.issue = { number: 7, stage: 'intake', labels: ['adlc:intake'], prNumber: null };
+    const { webhooks, automation, stages } = bridge(null);
+
+    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:build']), 'labeled', 'ottoexampleco');
 
     expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ issueNumber: 7, to: 'spec', actor: 'bridge' }));
     expect(store.issue?.stage).toBe('spec');

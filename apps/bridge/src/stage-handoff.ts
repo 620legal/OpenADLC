@@ -1,6 +1,6 @@
 import { audit, bots, issues, listEventsOfType, recordEvent, repos, stageMoves, tasks, withAdvisoryLock } from '@openadlc/db';
 import { acceptOnStage } from './design-memory.js';
-import { leadReviewer, type StageKey, type StageMode } from '@openadlc/shared';
+import { leadReviewer, REPO_DEFAULTS, type StageKey, type StageMode } from '@openadlc/shared';
 import type { Automation } from './automation.js';
 import type { DispatchGate } from './dispatch-gate.js';
 import type { TaskService } from './task-service.js';
@@ -9,9 +9,10 @@ import { isActive, issueNumberFromBranch, REVIEW_STALLED } from './work.js';
 import { INTAKE_STALLED } from './intake-events.js';
 
 /**
- * Where an issue goes once intake has shaped it. A design pass costs a stage,
- * so `conditional` spends it only on the changes that earn one — a schema, a
- * contract, a migration, anything large or safety-relevant.
+ * Where an issue goes once intake has shaped it: to Design, unless the
+ * repository chose otherwise. `conditional` spends a design pass only on the
+ * changes that carry a spec-required label — a schema, a contract, a
+ * migration, anything large or safety-relevant — and `untouched` on none.
  */
 export function stageAfterIntake(input: {
   labels: string[];
@@ -278,7 +279,10 @@ export class StageHandoff {
     const to = stageAfterIntake({
       labels: known.labels,
       specRequiredLabels: repo.specRequiredLabels,
-      specMode: repo.stageModes.spec ?? 'conditional',
+      // A row with no spec mode stored reads as a new repository's default.
+      // This was a `conditional` of its own, one of five copies of the
+      // default in code that could drift apart (ADR 0004).
+      specMode: repo.stageModes.spec ?? REPO_DEFAULTS.stageModes.spec,
     });
     // The check above reads the stored labels. A label added a moment before
     // the task ended may not have been delivered yet, so the move checks

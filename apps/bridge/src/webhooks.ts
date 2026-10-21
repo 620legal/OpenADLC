@@ -44,6 +44,7 @@ import {
   dedupeMarker,
   hasIgnoreLabel,
   isIgnoreLabel,
+  REPO_DEFAULTS,
 } from '@openadlc/shared';
 import { touchesConfig, type GitHubClient } from '@openadlc/github';
 import type { Attribution } from './attribution.js';
@@ -834,7 +835,7 @@ export class Webhooks {
           if (fromIntake && (liveStage === 'spec' || liveStage === 'build')) {
             const full = await repos.getRepoByName(repo.name).catch(() => null);
             const to = full
-              ? stageAfterIntake({ labels, specRequiredLabels: full.specRequiredLabels ?? [], specMode: full.stageModes.spec ?? 'conditional' })
+              ? stageAfterIntake({ labels, specRequiredLabels: full.specRequiredLabels ?? [], specMode: full.stageModes.spec ?? REPO_DEFAULTS.stageModes.spec })
               : liveStage;
             if (to !== liveStage) {
               // From intake, where the bridge puts a new issue, so the move is forward.

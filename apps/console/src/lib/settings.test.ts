@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { STAGE_MODES } from './stages';
-import { accountState, buildersOf, hashSection, modeOf, repoSettingsPath, sectionBeingRead, SETTINGS_SECTIONS, stageChoices, stageLine, tasksAtOnceLine } from './settings';
+import { REPO_DEFAULTS } from '../../../../packages/shared/src/config';
+import { STAGE_MODES, STAGES } from './stages';
+import {
+  accountState,
+  buildersOf,
+  designChoiceLabel,
+  hashSection,
+  modeOf,
+  repoSettingsPath,
+  repoStagesPath,
+  sectionBeingRead,
+  SETTINGS_SECTIONS,
+  stageChoices,
+  stageLine,
+  stagesSectionId,
+  tasksAtOnceLine,
+} from './settings';
 
 describe('what a stage may do without asking', () => {
   it('is said in words, and offers only modes the bridge has', () => {
@@ -34,10 +49,26 @@ describe('what a stage may do without asking', () => {
   });
 
   it('reads a stage with nothing stored as the bridge does', () => {
-    expect(modeOf({}, 'spec')).toBe('conditional');
+    // Design included: `conditional` here said "When it matters" of a row the
+    // bridge sends every issue to Design for (ADR 0004).
+    expect(modeOf({}, 'spec')).toBe('autonomous');
     expect(modeOf({}, 'merged')).toBe('autonomous');
+    expect(modeOf({ spec: 'conditional' }, 'spec')).toBe('conditional');
     // An older bridge may still send assist, which is what autonomous is.
     expect(modeOf({ merged: 'assist' }, 'merged')).toBe('autonomous');
+    expect(modeOf({ spec: 'assist' }, 'spec')).toBe('autonomous');
+  });
+
+  it('assumes, for a stage with nothing stored, what a new repository starts with on the bridge', () => {
+    // The console cannot import the bridge's defaults, so its copy is held to them here.
+    for (const { key } of STAGES) expect(modeOf({}, key), key).toBe(REPO_DEFAULTS.stageModes[key]);
+  });
+
+  it('names Design’s choice in the words the repository page draws it with', () => {
+    expect(designChoiceLabel({})).toBe('Always');
+    expect(designChoiceLabel({ spec: 'autonomous' })).toBe('Always');
+    expect(designChoiceLabel({ spec: 'conditional' })).toBe('When it matters');
+    expect(designChoiceLabel({ spec: 'untouched' })).toBe('Never');
   });
 
   it('says what Review does from the crew and the round limit', () => {
@@ -99,6 +130,12 @@ describe('where a repository’s settings are', () => {
   it('is a page of its own, named after it', () => {
     expect(repoSettingsPath('openadlc-testbed')).toBe('/settings/repositories/openadlc-testbed');
     expect(repoSettingsPath('a b')).toBe('/settings/repositories/a%20b');
+  });
+
+  it('has its stages under an anchor the settings list links to', () => {
+    expect(stagesSectionId('api')).toBe('api-stages');
+    expect(repoStagesPath('api')).toBe('/settings/repositories/api#api-stages');
+    expect(repoStagesPath('my repo')).toBe('/settings/repositories/my%20repo#my%20repo-stages');
   });
 });
 

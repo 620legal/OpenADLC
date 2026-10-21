@@ -17,7 +17,7 @@ import { cn } from '@/lib/cn';
 import { roleTitle } from '@/lib/crew';
 import { safeAction } from '@/lib/safe-action';
 import { modeIsSettable, type StageKey } from '@/lib/stages';
-import { modeOf, SETTINGS_STAGES, stageChoices, stageLine, tasksAtOnceLine, type StageChoice } from '@/lib/settings';
+import { modeOf, SETTINGS_STAGES, stageChoices, stageLine, stagesSectionId, tasksAtOnceLine, type StageChoice } from '@/lib/settings';
 
 export interface RepoSettingsRepo {
   name: string;
@@ -359,8 +359,9 @@ export function RepoSettings({
         </div>
       </section>
 
-      <section aria-labelledby={`${repo.name}-stages`} className="flex flex-col gap-1 rounded-[10px] border border-edge bg-panel px-5 py-[18px]">
-        <h4 id={`${repo.name}-stages`} className="text-[13.5px] font-semibold text-body">
+      {/* Settings' list links here by this id (`repoStagesPath`). */}
+      <section aria-labelledby={stagesSectionId(repo.name)} className="flex flex-col gap-1 rounded-[10px] border border-edge bg-panel px-5 py-[18px]">
+        <h4 id={stagesSectionId(repo.name)} className="text-[13.5px] font-semibold text-body">
           What each stage may do without asking
         </h4>
         <p className="mb-2 text-[12.5px] leading-normal text-muted">

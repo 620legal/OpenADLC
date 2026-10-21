@@ -128,8 +128,11 @@ ledger, threads and gates, and the console's settings.
    stage label a crew account sets, forward or back, is put back and audited
    (`stage.forward_refused`, `stage.backward_refused`): the bridge moves work
    on when its stage ends.
-3. **Design** (sometimes). The system engineer writes the design on the issue and
-   stops on the choices a person must make. It reads what intake learned
+3. **Design**. Every issue gets a design pass, unless the repository limits
+   Design to issues with a spec-required label (`conditional`, its Design
+   choice in Settings → Repositories; [ADR 0004](adr/0004-design-always-by-default.md)).
+   The system engineer writes the design on the issue and stops on the
+   choices a person must make. It reads what intake learned
    (`intake.md`: the request, its detail, its files and every answer, whole),
    which the issue only summarises, and the repository's **design memory**
    (`design-memory.md`): what it has decided before. Design is the one stage

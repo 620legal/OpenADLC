@@ -1,10 +1,12 @@
 # Which repositories the crew works in, who owns each one, and how much the bots
 # may do without asking.
 #
-#   autonomous  the staffing bot acts unless a stop rule fires
+#   autonomous  the staffing bot acts unless a stop rule fires; every stage's
+#               default, spec included: a design pass on every issue
 #   untouched   (intake and spec only) no bot staffs the stage; refused for
 #               the rest: stop a repository's bots with Pause work instead
-#   conditional (spec only) run the spec stage when a spec-required label is present
+#   conditional (spec only) run the spec stage only when a spec-required label
+#               is present: the way to have fewer design passes
 #
 # `assist` is no longer a mode: it did what `autonomous` does, and is read as
 # that. Production waits for a person through the `production` environment's
@@ -34,7 +36,7 @@ repos:
   #     defaultBranch: main
   #     stageModes:
   #       intake: autonomous
-  #       spec: conditional
+  #       spec: autonomous
   #       build: autonomous
   #       review: autonomous
   #       merged: autonomous

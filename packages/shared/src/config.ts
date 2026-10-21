@@ -82,6 +82,15 @@ export const botsFileSchema = z
  * What a new repository starts with, whether it was added in the console or
  * seeded from `config/repos.yaml`. Given only when the row is made: a field
  * the file leaves out keeps what the row has.
+ *
+ * Design is `autonomous`, a design pass on every issue. It was `conditional`,
+ * and intake seldom puts on a spec-required label, so nearly every issue went
+ * from intake straight to Build (ADR 0004, `docs/adr/`). `conditional` is the
+ * way to have fewer, chosen in Settings. The bridge's fallback for a row with
+ * no `spec` stored reads this rather than a literal of its own. The
+ * `stage_modes` column's default (migration 0018) still says `conditional`,
+ * and is not read: every insert writes a whole stage map, these defaults
+ * merged with what it was given, or a backup's own on restore.
  */
 export const REPO_DEFAULTS: {
   readonly concurrency: number;
@@ -94,7 +103,7 @@ export const REPO_DEFAULTS: {
   defaultBranch: 'main',
   stageModes: {
     intake: 'autonomous',
-    spec: 'conditional',
+    spec: 'autonomous',
     build: 'autonomous',
     review: 'autonomous',
     merged: 'autonomous',

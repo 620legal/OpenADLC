@@ -10,6 +10,7 @@ import {
   costsFileSchema,
   leadReviewer,
   loadYamlFile,
+  REPO_DEFAULTS,
   repoConfigSchema,
   reposFileSchema,
   reviewRulesSchema,
@@ -151,6 +152,20 @@ describe('a repository’s stage modes', () => {
       intake: 'untouched',
       spec: 'untouched',
     });
+  });
+
+  it('starts a new repository with a design pass on every issue, and still takes conditional, for fewer', () => {
+    // Under `conditional`, intake seldom put on a spec-required label, so
+    // nearly every issue went from intake straight to Build (ADR 0004).
+    expect(REPO_DEFAULTS.stageModes).toEqual({
+      intake: 'autonomous',
+      spec: 'autonomous',
+      build: 'autonomous',
+      review: 'autonomous',
+      merged: 'autonomous',
+      done: 'autonomous',
+    });
+    expect(repoConfigSchema.parse({ ...base, stageModes: { spec: 'conditional' } }).stageModes).toEqual({ spec: 'conditional' });
   });
 });
 

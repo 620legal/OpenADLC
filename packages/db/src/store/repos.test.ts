@@ -229,8 +229,28 @@ describe('seeding a repository from config/repos.yaml', () => {
     vi.mocked(query).mockResolvedValueOnce([{ color: 'blue' }]);
     const repo = await upsertRepo({ ...FILE, stageModes: { intake: 'untouched' } });
     expect(repo).toMatchObject({ concurrency: 1, defaultBranch: 'main', specRequiredLabels: expect.arrayContaining(['safety']) });
-    expect(repo.stageModes).toMatchObject({ spec: 'conditional', intake: 'untouched' });
+    expect(repo.stageModes).toMatchObject({ spec: 'autonomous', intake: 'untouched' });
     expect(db.now()?.color).not.toBe('blue');
+    expect(audited()).toEqual([]);
+  });
+
+  it('gives a new row a design pass on every issue when the file names no stage modes', async () => {
+    // Under `conditional`, intake seldom put on a spec-required label, so
+    // nearly every issue went from intake straight to Build (ADR 0004).
+    const db = table(null);
+    const repo = await upsertRepo(FILE);
+    const everyStage = { intake: 'autonomous', spec: 'autonomous', build: 'autonomous', review: 'autonomous', merged: 'autonomous', done: 'autonomous' };
+    expect(repo.stageModes).toEqual(everyStage);
+    expect(db.now()?.stage_modes).toEqual(everyStage);
+  });
+
+  it('keeps a stored conditional when the file names no stage modes, and audits nothing', async () => {
+    // The new default is for a new row: an existing repository keeps what it has.
+    const db = table(row({ name: 'api', full_name: 'acme/api', stage_modes: { intake: 'autonomous', spec: 'conditional', build: 'autonomous' } }));
+    const repo = await upsertRepo(FILE);
+    expect(repo.stageModes.spec).toBe('conditional');
+    expect(db.now()?.stage_modes).toMatchObject({ spec: 'conditional' });
+    expect(sent().some((one) => one.sql.startsWith('update repos'))).toBe(false);
     expect(audited()).toEqual([]);
   });
 

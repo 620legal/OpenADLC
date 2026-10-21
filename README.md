@@ -49,7 +49,7 @@ flowchart LR
 | Stage | What happens |
 |---|---|
 | **Intake** | Asks you, in the request's own conversation, until it is clear, then files the issue |
-| **Design** | Only when an issue needs one; the one stage that remembers earlier decisions |
+| **Design** | Every issue gets a design pass, unless the repository limits it to issues with a spec-required label in Settings; the one stage that remembers earlier decisions |
 | **Build** | Implements it, runs `make ci` until green, opens the pull request |
 | **Review** | Reviewers on different models post their verdicts; the lead reads them all and approves or sends it back |
 | **Merge & ship** | GitHub CI runs after the lead approves; OpenADLC merges as its GitHub App, one pull request at a time, and your repository's rules deploy |

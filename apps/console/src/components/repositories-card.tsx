@@ -10,7 +10,7 @@ import { RepositoryField } from '@/components/repository-field';
 import { atStart, labelIn, type BotFacts } from '@/lib/bot-label';
 import { cn } from '@/lib/cn';
 import { accessLine, type RepoAccess } from '@/lib/crew-access';
-import { repoSettingsPath } from '@/lib/settings';
+import { designChoiceLabel, repoSettingsPath, repoStagesPath } from '@/lib/settings';
 
 /** A repository as the card lists it. */
 export interface CardRepository {
@@ -18,6 +18,8 @@ export interface CardRepository {
   fullName?: string | null;
   color?: string | null;
   access?: RepoAccess | null;
+  /** As `/v1/repos` gives them. Absent, Design reads as the default, as the bridge reads it. */
+  stageModes?: Record<string, string> | null;
 }
 
 const TONE = {
@@ -28,8 +30,8 @@ const TONE = {
 } as const;
 
 /**
- * The head of settings' Repositories: what they are, whether the crew can
- * work in each, and adding another.
+ * The head of settings' Repositories: what they are, how much each designs,
+ * whether the crew can work in each, and adding another.
  *
  * Adding one used to be possible only in the walkthrough, which asked for a
  * single repository, so an install stayed with the one it started with. This
@@ -38,6 +40,10 @@ const TONE = {
  * bridge lets the crew into it straight away. Each repository's line says how
  * that went: all of them in, being let in, or the first one that could not
  * get in and why, with a way to try again.
+ *
+ * Each line also says the repository's Design choice and links to where it is
+ * changed. The control was only on the repository's own page, which nothing
+ * here led to, and Design ran on nearly nothing without anyone seeing why.
  */
 export function RepositoriesCard({
   repositories,
@@ -82,7 +88,7 @@ export function RepositoriesCard({
       </div>
 
       {repositories.length > 0 && (
-        <ul aria-label="Whether the crew can work in each repository" className="flex flex-col border-t border-well">
+        <ul aria-label="Each repository’s Design choice, and whether the crew can work in it" className="flex flex-col border-t border-well">
           {repositories.map((repo) => (
             <AccessRow key={repo.name} repo={repo} nameOf={(bot) => atStart(labelIn(crew, bot).said)} onDone={() => router.refresh()} />
           ))}
@@ -109,7 +115,7 @@ export function newerAccess(answer: RepoAccess | null, read: RepoAccess | null |
   return (answer.checkedAt ?? '') >= read.checkedAt ? answer : read;
 }
 
-/** One repository: its colour and name, whether the crew can work there, and trying again. */
+/** One repository: its colour and name, its Design choice, whether the crew can work there, and trying again. */
 function AccessRow({
   repo,
   nameOf,
@@ -123,6 +129,7 @@ function AccessRow({
   const [answer, setAnswer] = useState<RepoAccess | null>(null);
   const [error, setError] = useState<string | null>(null);
   const shown = accessLine(pending ? { repository: repo.fullName ?? repo.name, running: true, trigger: 'retry', checkedAt: null, error: null, bots: [] } : newerAccess(answer, repo.access), nameOf);
+  const design = designChoiceLabel(repo.stageModes ?? {});
 
   const retry = (): void => {
     setError(null);
@@ -148,6 +155,13 @@ function AccessRow({
         <RepoDot color={repo.color} />
         <span className="truncate">{repo.name}</span>
         <ChevronRightIcon size={12} className="shrink-0 text-dim" />
+      </Link>
+      <Link
+        href={repoStagesPath(repo.name)}
+        aria-label={`${repo.name} Design: ${design}, change it`}
+        className="-my-1 flex min-h-11 shrink-0 items-center rounded-md text-[12.5px] text-muted hover:text-body hover:underline focus-visible:outline-2 focus-visible:outline-link md:min-h-0"
+      >
+        Design: {design}
       </Link>
       <span role="status" className="flex min-w-0 flex-1 flex-col gap-0.5 text-[12.5px]">
         <span className={cn('font-medium', TONE[shown.tone], shown.busy && 'animate-pulse')}>{shown.text}</span>

@@ -150,8 +150,11 @@ Stages are labels, applied by the bots and the bridge:
 **Stage modes** per repository: `autonomous` (act unless a stop rule fires),
 `untouched` for intake and spec only (no bot staffs it; refused for the later
 stages, whose bots are stopped with Pause work), and `conditional` for spec (run
-when a spec-required label is present). `assist` (prepare, then ask before the stage's
-terminal act) was one, and nothing enforced it: it is read as `autonomous`.
+only when a spec-required label is present). `autonomous` is the default for
+every stage, spec included, so every issue is designed before it is built;
+`conditional` is the opt-out, set per repository in Settings (D7). `assist`
+(prepare, then ask before the stage's terminal act) was one, and nothing
+enforced it: it is read as `autonomous`.
 Production is held by the repository's `production` environment, as its
 delivery rules say — required reviewers or a soak — not by a stage mode.
 
@@ -375,7 +378,7 @@ that would settle it.
 | D4 | Engine adapters are the only place a CLI or API is invoked | One place to pin versions, count cost and swap engines |
 | D5 | Concurrency is a number: a computer per task, up to a seat's tasks at once, a repository's `concurrency` and a host's `capacity_tasks`; the collision guarantee is the lease plus the overlap check on declared paths | One task per container was a guarantee about containers, not about files, and it made every extra build an extra account. [ADR 0003](adr/0003-per-task-containers.md) |
 | D6 | Every bot message, gate and answer is a GitHub comment first, wherever there is an issue to comment on, and a console row second | GitHub stays the system of record |
-| D7 | Spec is conditional by default | A design gate where it matters, without a second stage on every small change |
+| D7 | Design is Always by default | Spec was conditional by default, and a design gate only on labelled issues designed almost nothing: intake seldom puts on a spec-required label, so nearly every issue went from intake straight to Build. `conditional` stays, as a repository's opt-out in Settings, and a repository that has a mode stored keeps it. [ADR 0004](adr/0004-design-always-by-default.md) |
 | D8 | Apache-2.0, with a trademark policy; `crew/templates/` also 0BSD (`Apache-2.0 OR 0BSD`, an SPDX line in each file copied into a managed repository); contributions inbound=outbound under GitHub's terms, under both for `crew/templates/` | Permissive for companies building products on OpenADLC; patent grant; the upstream name stays distinguishable; the files written into a user's own, possibly proprietary, repository carry no attribution duty there |
 | D9 | A `local` driver exists beside the `docker` driver | `openadlc up` has to work on a laptop with no Docker; production installs use Docker |
 | D10 | No demo mode (reversed: it shipped, and was taken out) | An install is live or not yet configured; work that is fabricated is worse than work that is absent. Scripted engines exist for the integration suites, on a scratch install |

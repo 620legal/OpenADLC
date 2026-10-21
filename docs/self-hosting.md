@@ -755,7 +755,7 @@ repos:
     concurrency: 1
     stageModes:
       intake: autonomous
-      spec: conditional
+      spec: autonomous      # a design pass on every issue; conditional: only spec-required ones
       build: autonomous
       review: autonomous
       merged: autonomous    # production asks through its environment's reviewers
@@ -764,6 +764,13 @@ repos:
 Which paths need a person's review is not set here. It is the `## Human review`
 section of the repository's own `AGENTS.md`, read from its base branch
 ([§6](#6-protect-the-repositories)).
+
+`spec: autonomous` is what a new repository starts with, written or not: every
+issue gets a design pass before Build. `spec: conditional` gives one only to
+issues with a spec-required label (`touches:schema`, `size:large`, `safety`
+and the like), so most go straight to Build. In the console the choice is
+Design on the repository's row in **Settings → Repositories**, which links to
+where it is changed on the repository's page.
 
 Run `openadlc seed` to load changes, or change the same values from the console's
 repositories page (those changes are audited). A setting written in this file

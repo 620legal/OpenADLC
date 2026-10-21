@@ -686,6 +686,19 @@ describe('the end of intake, on either intake path', () => {
     expect(started).toEqual([]);
   });
 
+  it('sends an unlabelled issue to Design on a repository with no spec mode stored: Design is Always by default', async () => {
+    // The fallback was `conditional`, which sent an issue without a
+    // spec-required label, nearly every issue, straight to Build.
+    board.issues = [{ number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:build', 'do:ai'], body: '' }];
+    const { stages, moves, readiness, started } = handoff();
+
+    expect(await withRepo({}, () => stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 }))).toBe('spec');
+
+    expect(moves).toEqual([{ issueNumber: 9, to: 'spec' }]);
+    expect(readiness).toEqual([]);
+    expect(started).toEqual(['spec openadlc#9']);
+  });
+
   it('keeps an issue with a trigger label in Design, and staffs it for spec', async () => {
     board.issues = [{ number: 9, repoName: 'openadlc', stage: 'spec', labels: ['adlc:spec', 'touches:schema'], body: '' }];
     const { stages, moves, readiness, started } = handoff();
