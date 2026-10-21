@@ -6,7 +6,7 @@ vi.mock('../client.js', () => ({
 }));
 
 import { queryOne } from '../client.js';
-import { enter } from './merge-lines.js';
+import { enter, entryFor } from './merge-lines.js';
 
 beforeEach(() => {
   vi.mocked(queryOne).mockReset();
@@ -35,5 +35,33 @@ describe('a pull request entering the merge line again', () => {
     expect(text).toContain("position = case when merge_lines.state in ('failed', 'merged') then excluded.position else merge_lines.position end");
     expect(text).toContain("entered_at = case when merge_lines.state in ('failed', 'merged') then now() else merge_lines.entered_at end");
     expect(params).toEqual(['repo-1', 1, 4, 'abc']);
+  });
+});
+
+describe('a pull request’s row in the merge line', () => {
+  it('is read whatever its state, with the head it failed at', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({
+      id: 'entry-1',
+      repo_id: 'repo-1',
+      repo_name: 'api',
+      pr_number: 15,
+      position: 4,
+      state: 'failed',
+      head_sha: 'abc',
+      detail: 'checks failed on the updated head',
+      entered_at: new Date('2026-10-01T00:00:00.000Z'),
+    });
+
+    expect(await entryFor('repo-1', 15)).toEqual(expect.objectContaining({ prNumber: 15, state: 'failed', headSha: 'abc' }));
+    const [sql, params] = vi.mocked(queryOne).mock.calls[0] ?? [];
+    const text = String(sql).replace(/\s+/g, ' ');
+    expect(text).toContain('where m.repo_id = $1 and m.pr_number = $2');
+    expect(text).not.toContain('state = any');
+    expect(params).toEqual(['repo-1', 15]);
+  });
+
+  it('is null for one that never entered, or left', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce(null);
+    expect(await entryFor('repo-1', 15)).toBeNull();
   });
 });

@@ -187,7 +187,17 @@ ledger, threads and gates, and the console's settings.
    seat's post, is that review; otherwise the sweep asks the lead again. A
    pull request only the lead reviews (a revert no other seat's trigger asks
    for) gets the
-   lead's review in every round this way. A seat marked `blocking` approves
+   lead's review in every round this way. The sweep, on the merge job's
+   schedule, reads every page of a repository's open pull requests (up to a
+   thousand) and settles an issue's pull request while the issue is in
+   Review, and any other — a person's own branch, the SRE's revert — once
+   OpenADLC has opened a round on it and while it is not a draft: it
+   publishes the gate, starts the seats and the lead as above, and puts one
+   whose gate passes in the merge line. One with no issue that the line let
+   go of, for a red check or a conflict, stays out until its head moves. A
+   fork's pull request, or one by somebody OpenADLC does not act for (as a
+   delivery is judged, the install's `humans` included), is never swept. A
+   seat marked `blocking` approves
    or requests changes itself, before the lead. The bridge publishes
    `review-gate` on the head commit: pending while a seat has not posted on
    this diff, while the lead has not, until the lead and every blocking

@@ -2433,7 +2433,9 @@ export class Webhooks {
     // Only while its issue is in Review: a person who moved the card back to
     // Build took it out of the line, and a reviewer still running turned the
     // gate green and put it back, to land over their decision. The gate
-    // sweep (`scheduler.ts`) asks only of issues in Review for the same reason.
+    // sweep (`scheduler.ts`) settles an issue's pull request only while the
+    // issue is in Review, for the same reason; a person's, with no issue, it
+    // settles as this does.
     const ownIssue = ownIssueOf(pr, repoFullName);
     const inReview =
       !repo || !ownIssue ? true : await issues.getIssue(repo.id, ownIssue).then((issue) => !issue || issue.stage === 'review', () => false);

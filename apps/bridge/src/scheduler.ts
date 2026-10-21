@@ -1,4 +1,4 @@
-import { attachments, audit, bots, costs, credentials, deployRuns, health, issues, lastGithubDelivery, leases, pruneGithubDeliveries, recordEvent, repos, settings, spendingLimits, tasks, threads } from '@openadlc/db';
+import { attachments, audit, bots, costs, credentials, deployRuns, health, issues, lastEventAt, lastGithubDelivery, leases, mergeLines, pruneGithubDeliveries, recordEvent, repos, settings, spendingLimits, tasks, threads } from '@openadlc/db';
 import { claimWindowStart } from './attachment-routes.js';
 import { sweepDesignMemory } from './design-memory.js';
 import { leadOnlyResolutionTo, resolutionCheckBrief } from './conflict-round.js';
@@ -9,10 +9,11 @@ import { DEFAULT_PATH_POLICY, REVIEW_GATE_CHECK, actsFor, deliveryRulesFrom, env
 import { blockingOverlaps, type WorkInFlight } from '@openadlc/dispatcher';
 import { ATTENTION_WINDOW_DAYS, triedAgain } from './attention.js';
 import { subjectClosed, wasRefused } from './gates.js';
-import type { Automation } from './automation.js';
+import { fastPathOf, type Automation } from './automation.js';
 import { causeOfFailure, isPrerequisiteRow } from './health/checks/crew.js';
-import { endedBySendingBack, issueForSubject, issueNumberFromBranch, parseRef, stageOfTask } from './work.js';
+import { REVIEW_ROUND_OPENED, endedBySendingBack, headInRepository, issueForSubject, issueNumberFromBranch, parseRef, stageOfTask } from './work.js';
 import { asAutomation, automationBotName, findOwnOpenIssue } from './automation-bot.js';
+import { effectiveConfig } from './effective-config.js';
 import { shipsByMerging, testingDeployChoice, type TestingDeployChoice } from './deploys.js';
 import type { DeployPipeline } from './deploy-pipeline.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
@@ -728,6 +729,46 @@ export async function openQaRun(
 /** How close a refresh token may get to expiry before a person is told. */
 const CREDENTIAL_WARNING_MS = 21 * 86_400_000;
 
+/** One open pull request, as GitHub lists them. */
+interface OpenPull {
+  number: number;
+  draft: boolean;
+  head: { ref: string; sha: string; repo?: { full_name: string } | null };
+  base: { ref: string };
+  labels: { name: string }[];
+  user?: { login: string; id?: number } | null;
+  author_association?: string;
+}
+
+/** GitHub's largest page, and how many of them the gate sweep reads of one repository: a thousand open pull requests. */
+const OPEN_PULLS_PAGE = 100;
+const OPEN_PULLS_PAGES = 10;
+
+/**
+ * A repository's open pull requests, a page at a time. One page was all the
+ * sweep read, so past the first hundred open a pull request's gate was never
+ * settled here. Null when the first page cannot be read. A later page that
+ * cannot be read, or the last page allowed, ends the list there: what was read
+ * is still settled, each on its own, and `more` says the rest was not.
+ */
+async function openPullsOf(
+  client: { request<T>(method: string, path: string): Promise<T> },
+  repoFullName: string,
+): Promise<{ pulls: OpenPull[]; more: boolean } | null> {
+  const pulls = new Map<number, OpenPull>();
+  for (let page = 1; page <= OPEN_PULLS_PAGES; page += 1) {
+    const listed = await client
+      .request<OpenPull[]>('GET', `/repos/${repoFullName}/pulls?state=open&per_page=${OPEN_PULLS_PAGE}&page=${page}`)
+      .catch(() => null);
+    if (!listed) return page === 1 ? null : { pulls: [...pulls.values()], more: true };
+    // Newest first, so one opened mid-read pushes another onto the next page
+    // twice. The first sighting stands.
+    for (const pull of listed) if (!pulls.has(pull.number)) pulls.set(pull.number, pull);
+    if (listed.length < OPEN_PULLS_PAGE) return { pulls: [...pulls.values()], more: false };
+  }
+  return { pulls: [...pulls.values()], more: true };
+}
+
 /**
  * The recurring work that has no webhook: reconciling what the platform believes
  * against what GitHub says, regenerating the status view, and keeping the budget
@@ -820,30 +861,32 @@ export class Scheduler {
    * asked for, and no event was ever coming to ask again. The same is true of
    * a review that arrived while the bridge was down. A pull request whose
    * gate passes now takes its place in the merge line.
+   *
+   * An issue's pull request is settled while its issue is in Review; a
+   * person's — any branch not cut for an issue — once OpenADLC has opened a
+   * review round on it, and while it is ready for review.
    */
   async settleGates(): Promise<string[]> {
     const client = await asAutomation(this.automation['actors'], this.config);
     if (!client) return [];
     const actions: string[] = [];
     const crew = await bots.listBots().catch(() => []);
+    // The install's people count as they do for a delivery
+    // (`fromSomeoneWithAccess`), from the account each login was pinned to:
+    // GitHub can label one CONTRIBUTOR on a repository of their own
+    // organization, and without them the sweep passed by a pull request its
+    // webhooks had reviewed.
+    const humans = (await effectiveConfig(this.config).catch(() => null))?.humans ?? [];
 
     for (const repo of await repos.listRepos()) {
       // GitHub's list, not the issues' own record of their pull requests: that
       // record was never written, and a sweep that trusted it found nothing.
-      const open = await client
-        .request<
-          {
-            number: number;
-            draft: boolean;
-            head: { ref: string; sha: string; repo?: { full_name: string } | null };
-            base: { ref: string };
-            labels: { name: string }[];
-            user?: { login: string } | null;
-            author_association?: string;
-          }[]
-        >('GET', `/repos/${repo.fullName}/pulls?state=open&per_page=100`)
-        .catch(() => null);
-      if (!open) continue;
+      const listed = await openPullsOf(client, repo.fullName);
+      if (!listed) continue;
+      if (listed.more) {
+        actions.push(`${repo.name}: read ${listed.pulls.length} open pull requests and no more; the review gates of the rest were not settled`);
+      }
+      const open = listed.pulls;
       let inReview: Map<number, issues.IssueRecord>;
       try {
         inReview = new Map(
@@ -861,14 +904,31 @@ export class Scheduler {
           // and one by somebody without access is nobody's OpenADLC acts for; see
           // `actsFor`. Either would otherwise be recorded as the issue's pull
           // request, and its gate worked out and its place taken in the line.
-          const fork = opened.head.repo?.full_name && opened.head.repo.full_name.toLowerCase() !== repo.fullName.toLowerCase();
-          if (fork) continue;
-          if (!(await actsForOn({ client, repoFullName: repo.fullName, author: { login: opened.user?.login, association: opened.author_association }, crew }))) continue;
+          // A fork's pull request is reviewed by people, and no seat is asked
+          // on it (`onPullRequest`); one whose fork was deleted has no head
+          // repository, and is a fork's all the same.
+          if (!headInRepository(opened.head.repo?.full_name, repo.fullName)) continue;
+          const author = { login: opened.user?.login, association: opened.author_association, id: opened.user?.id ?? null };
+          if (!(await actsForOn({ client, repoFullName: repo.fullName, author, crew, humans }))) continue;
           const issueNumber = issueNumberFromBranch(opened.head.ref);
-          const issue = issueNumber ? inReview.get(issueNumber) : undefined;
-          if (!issue || !issueNumber) continue;
-          if (issue.prNumber !== opened.number) {
-            await issues.setPullRequestNumber(repo.id, issueNumber, opened.number).catch(() => undefined);
+          if (issueNumber) {
+            const issue = inReview.get(issueNumber);
+            if (!issue) continue;
+            if (issue.prNumber !== opened.number) {
+              await issues.setPullRequestNumber(repo.id, issueNumber, opened.number).catch(() => undefined);
+            }
+          } else {
+            // A person's pull request has no issue in Review, and the sweep
+            // passed it by: a seat busy when its round opened, or a lead busy
+            // when its turn came, is left to this sweep by the task service,
+            // and was never asked again. #15, #19 and #25 sat "waiting on" a
+            // seat with no task until a person posted a review. Only a round
+            // OpenADLC opened is continued, and only while the pull request is
+            // ready: on one from before the repository was managed, every seat
+            // would be started here, which no webhook asked for.
+            if (opened.draft) continue;
+            const round = await lastEventAt(REVIEW_ROUND_OPENED, { subjectRef: `${repo.name}#${opened.number}` }).catch(() => null);
+            if (!round) continue;
           }
           const pull = {
             number: opened.number,
@@ -935,7 +995,24 @@ export class Scheduler {
           }
 
           if (state === 'success') {
-            await this.mergeLine.enter({ repoName: repo.name, prNumber: pull.number, headSha: pull.headSha });
+            // A pull request with no issue that the line let go of at this head
+            // stays out until the head moves. Entered again on every sweep, its
+            // failed place became a waiting one (`mergeLines.enter`), the line
+            // failed it on the same red check or conflict, and "Leaving the
+            // merge line" would be said on it every ten minutes. An issue's
+            // leaves the sweep when its card goes back to Build.
+            const left = issueNumber ? null : await mergeLines.entryFor(repo.id, pull.number);
+            if (!(left?.state === 'failed' && left.headSha === pull.headSha)) {
+              // The SRE's revert goes to the front, as it does from its review
+              // (`onReview`): entered here first without saying so, it would
+              // wait behind every pull request already in the line.
+              await this.mergeLine.enter({
+                repoName: repo.name,
+                prNumber: pull.number,
+                headSha: pull.headSha,
+                revert: fastPathOf(pull.labels, opened.head.ref),
+              });
+            }
           } else {
             // A seat the gate waits on with no review under way — its account was
             // connected after the pull request opened, or it could not work when
