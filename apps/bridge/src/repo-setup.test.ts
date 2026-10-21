@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { GitHubApiError, type AppApi } from '@openadlc/github';
+import { CREW_ADMIN_REPORT, GitHubApiError, type AppApi } from '@openadlc/github';
 
 /**
  * The last setup step, with no GitHub behind it.
@@ -38,6 +38,11 @@ vi.mock('@openadlc/db', () => ({
     clearPlanLimits: vi.fn(async (name: string) => PLAN_LIMITS.delete(name)),
   },
   bots: { listBots: vi.fn(async () => CREW) },
+  identities: {
+    listIdentities: vi.fn(async () => ACCOUNTS),
+    seatIdentities: vi.fn(async () => SEATED),
+  },
+  credentials: { listCredentials: vi.fn(async () => []) },
 }));
 
 /** `repo_plan_limits`, by repository. */
@@ -56,7 +61,10 @@ vi.mock('@openadlc/github', async (importOriginal) => ({
 let STORED: Record<string, string> = {};
 let SECRETS: Record<string, string> = {};
 let REPOS: { name: string; fullName: string; defaultBranch: string | null }[] = [];
-let CREW: { name: string; role: string; githubLogin: string | null }[] = [];
+let CREW: { id?: string; name: string; role: string; githubLogin: string | null }[] = [];
+/** The accounts OpenADLC holds a sign-in for, and which seat is on which. */
+let ACCOUNTS: { id: string; login: string; githubUserId: number | null; secretNs: string }[] = [];
+let SEATED: { botId: string; identityId: string }[] = [];
 /** Every call the subject made, so a read-only path can be proven read-only. */
 let CALLS: { method: string; path: string; body?: unknown }[] = [];
 let REMOTE_LABELS: { name: string; color: string; description: string }[] = [];
@@ -123,6 +131,8 @@ beforeEach(async () => {
   CALLS = [];
   REPOS = [{ name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', defaultBranch: 'main' }];
   CREW = [{ name: 'sydney', role: 'review_lead', githubLogin: 'ottoexampleco' }];
+  ACCOUNTS = [];
+  SEATED = [];
   REMOTE_LABELS = [];
   REFUSES = new Set();
   PLAN_LIMITS.clear();
@@ -375,6 +385,51 @@ describe('acting as the app rather than as a bot', () => {
     expect(input.leadReviewer).toBe('a-different-login');
   });
 
+  it('judges the rulesets’ bypass against every account the crew works as, by the id stored for it', async () => {
+    CREW = [
+      { id: 'bot-lead', name: 'sydney', role: 'review_lead', githubLogin: 'ottoexampleco' },
+      { id: 'bot-flow', name: 'flow', role: 'automation', githubLogin: 'janedoe-flow' },
+    ];
+    ACCOUNTS = [
+      { id: 'identity-otto', login: 'ottoexampleco', githubUserId: 583231, secretNs: 'sydney' },
+      { id: 'identity-flow', login: 'janedoe-flow', githubUserId: 333371704, secretNs: 'flow' },
+      { id: 'identity-spare', login: 'janedoe-spare', githubUserId: 340000001, secretNs: 'account-spare' },
+    ];
+    SEATED = [
+      { botId: 'bot-lead', identityId: 'identity-otto' },
+      { botId: 'bot-flow', identityId: 'identity-flow' },
+    ];
+    const input = await (await subject() as unknown as {
+      rulesInput: (repo: unknown) => Promise<{ crewAccounts?: unknown; crewUnread?: string }>;
+    }).rulesInput({ fullName: 'janedoe/openadlc-testbed', defaultBranch: 'main' });
+
+    expect(input.crewAccounts).toEqual([
+      { login: 'ottoexampleco', id: 583231 },
+      { login: 'janedoe-flow', id: 333371704 },
+      { login: 'janedoe-spare', id: 340000001 },
+    ]);
+    expect(input.crewUnread).toBeUndefined();
+  });
+
+  it('says the crew could not be read, rather than reading it as nobody, and every bypass then waits on it', async () => {
+    const { bots } = await import('@openadlc/db');
+    vi.mocked(bots.listBots).mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:5432'));
+    try {
+      const setup = await subject();
+      const input = await (setup as unknown as {
+        rulesInput: (repo: unknown) => Promise<{ crewAccounts?: unknown; crewUnread?: string }>;
+      }).rulesInput({ fullName: 'janedoe/openadlc-testbed', defaultBranch: 'main' });
+      expect(input.crewUnread).toContain('ECONNREFUSED');
+      expect(input.crewAccounts).toBeUndefined();
+
+      const [plan] = await setup.plan();
+      expect(plan?.rules.find((rule) => rule.name === CREW_ADMIN_REPORT)).toMatchObject({ state: 'drifted' });
+      expect(plan?.rules.find((rule) => rule.name === CREW_ADMIN_REPORT)?.detail).toContain('the crew could not be read');
+    } finally {
+      vi.mocked(bots.listBots).mockImplementation(async () => CREW as never);
+    }
+  });
+
   it('names the person, not a guessed account, when no lead reviewer is connected', async () => {
     // A seat with no account has no login to put in CODEOWNERS. The fallback
     // was `openadlc-sydney`, which is somebody's account or will be.
@@ -411,6 +466,17 @@ describe('counting what is being agreed to', () => {
 
     const names = [...(plan?.rules ?? []), ...(plan?.templates ?? [])].map((one) => one.name);
     expect(names.length).toBe(new Set(names).size);
+  });
+
+  it('does not count a crew account’s role as a change, since applying changes nobody’s role', async () => {
+    const { countable } = await import('./repo-setup.js');
+    expect(
+      countable([
+        { name: 'openadlc: main', state: 'drifted', detail: 'bypass: app 999 is not OpenADLC’s' },
+        { name: CREW_ADMIN_REPORT, state: 'drifted', detail: 'openadlc-atlas-janedoe is an admin of janedoe/openadlc-testbed' },
+        { name: 'CODEOWNERS', state: 'present', detail: '' },
+      ]),
+    ).toBe(1);
   });
 
   it('counts that file once as well', async () => {

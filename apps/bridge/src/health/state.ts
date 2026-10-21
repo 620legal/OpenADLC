@@ -110,7 +110,7 @@ export function nextRow(
             fixedDismissedAt: previous?.fixedDismissedAt ?? null,
           };
     return {
-      row: { ...blank(checkId, subject, now), state: 'ok', facts: result.facts ?? {}, ...notice },
+      row: { ...blank(checkId, subject, now), state: 'ok', detail: result.says ?? null, facts: result.facts ?? {}, ...notice },
       transition: wasFailing ? 'fixed' : 'passing',
       write: true,
     };

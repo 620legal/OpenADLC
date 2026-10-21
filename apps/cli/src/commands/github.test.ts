@@ -3,10 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GitHubApiError, appPrivateKeyRef, appRuleFields, mainRuleset, type AppApi, type ApplyOutcome, type RepoRulesInput } from '@openadlc/github';
+import { CREW_ADMIN_REPORT, GitHubApiError, appPrivateKeyRef, appRuleFields, mainRuleset, type AppApi, type ApplyOutcome, type RepoRulesInput } from '@openadlc/github';
 import { REQUIRED_CHECK, REVIEW_GATE_CHECK } from '@openadlc/shared';
 import { defaultConfig, type InstallConfig } from '../install.js';
-import { credentialFailure, githubApply, productionFromFlags, repositoryAccessLine, rulesHumans, rulesInputFor, syncLabels, templateProblem } from './github.js';
+import { credentialFailure, githubApply, productionFromFlags, repositoryAccessLine, ruleLine, rulesHumans, rulesInputFor, syncLabels, templateProblem } from './github.js';
 
 describe('a repository template that is not as it should be', () => {
   it('says drifted for a file that is there, and missing only for one that is not', () => {
@@ -26,6 +26,12 @@ const world = vi.hoisted(() => ({
   crew: [] as { id?: string; name: string; slot: string; role: string; githubLogin: string | null }[],
   /** The secret namespace of the account each seat is on, by seat id: seats on one account share it. */
   identities: new Map<string, string>(),
+  /** The accounts OpenADLC holds a sign-in for, which seat is on which, and each seat's stored sign-in. */
+  accounts: [] as { id: string; login: string; githubUserId: number | null; secretNs: string }[],
+  seated: [] as { botId: string; identityId: string }[],
+  signedIn: [] as { botId: string; githubUserId: number | null }[],
+  /** The crew's read failing, as the database not answering would. */
+  crewFails: false,
   settings: {} as Record<string, string>,
   secrets: new Map<string, string>(),
   /** Every request, with who it was made as: `openadlc-app`, or the account's login. */
@@ -55,13 +61,21 @@ const world = vi.hoisted(() => ({
 
 vi.mock('@openadlc/db', () => ({
   audit: async () => undefined,
-  bots: { listBots: async () => world.crew },
+  bots: {
+    listBots: async () => {
+      if (world.crewFails) throw new Error('connect ECONNREFUSED 127.0.0.1:5432');
+      return world.crew;
+    },
+  },
   identities: {
     identityOfBot: async (id: string) => {
       const secretNs = world.identities.get(id);
       return secretNs ? { id: `identity-${secretNs}`, login: 'alice-crew', githubUserId: 1, secretNs } : null;
     },
+    listIdentities: async () => world.accounts,
+    seatIdentities: async () => world.seated,
   },
+  credentials: { listCredentials: async () => world.signedIn },
   repos: {
     listRepos: async () => world.repos,
     clearPlanLimits: async (name: string) => {
@@ -150,6 +164,10 @@ beforeEach(async () => {
   world.settings = {};
   world.secrets = new Map();
   world.identities = new Map();
+  world.accounts = [];
+  world.seated = [];
+  world.signedIn = [];
+  world.crewFails = false;
   const { accessTokenRef } = await import('@openadlc/github');
   world.secrets.set(accessTokenRef('automation'), 'a-static-token');
   world.requests = [];
@@ -539,6 +557,30 @@ describe('the rules `github check` and `github apply` build', () => {
     }
   });
 
+  it('judge a bypass against every account the crew works as, the automation account’s among them, by its stored id', async () => {
+    world.crew = [
+      { id: 'bot-flow', name: 'automation', slot: 'automation', role: 'automation', githubLogin: 'alice-automation' },
+      { id: 'bot-lead', name: 'reviewer', slot: 'reviewer', role: 'review_lead', githubLogin: 'alice-reviews' },
+    ];
+    world.accounts = [{ id: 'identity-flow', login: 'alice-automation', githubUserId: 333371704, secretNs: 'automation' }];
+    world.seated = [{ botId: 'bot-flow', identityId: 'identity-flow' }];
+    world.signedIn = [{ botId: 'bot-lead', githubUserId: 5150 }];
+
+    const { input } = await rulesInputFor({ ...config, humans: ['alice'], organization: 'alice' }, repo, null, app);
+    expect(input.crewAccounts).toEqual([
+      { login: 'alice-automation', id: 333371704 },
+      { login: 'alice-reviews', id: 5150 },
+    ]);
+    expect(input.crewUnread).toBeUndefined();
+  });
+
+  it('say the crew could not be read, rather than read it as nobody, when the database does not answer', async () => {
+    world.crewFails = true;
+    const { input } = await rulesInputFor({ ...config, humans: ['alice'], organization: 'alice' }, repo, null, app);
+    expect(input.crewUnread).toContain('ECONNREFUSED');
+    expect(input.crewAccounts).toBeUndefined();
+  });
+
   it('carry no app id without the app’s key on this machine, which leaves the app’s rulesets to the console', async () => {
     const { input } = await rulesInputFor({ ...config, githubClientId: 'Iv23liTEST', humans: ['alice'], organization: 'alice' }, repo, null, app);
     expect(input.appId).toBeUndefined();
@@ -625,6 +667,34 @@ describe('who writes labels and rules from the terminal', () => {
     await githubApply(config, { production: 'auto' });
 
     expect(world.appliedAs).toEqual(['alice-automation']);
+  });
+});
+
+describe('what `github check` says of each rule', () => {
+  it('says what it found beside a rule that is in place: who else may bypass a ruleset', () => {
+    expect(ruleLine({ name: 'openadlc: main', state: 'present', detail: 'a person may bypass it: orzelig (user 2146989, always)' })).toEqual({
+      level: 'ok',
+      text: 'openadlc: main — a person may bypass it: orzelig (user 2146989, always)',
+      counts: false,
+    });
+    expect(ruleLine({ name: 'openadlc: agent and system branches', state: 'present', detail: '' })).toEqual({
+      level: 'ok',
+      text: 'openadlc: agent and system branches',
+      counts: false,
+    });
+  });
+
+  it('fails a crew account that is an admin, and counts it toward the exit code', () => {
+    expect(ruleLine({ name: CREW_ADMIN_REPORT, state: 'drifted', detail: 'alice-reviews is an admin of alice/app' })).toEqual({
+      level: 'fail',
+      text: 'drifted: crew accounts — alice-reviews is an admin of alice/app',
+      counts: true,
+    });
+    expect(ruleLine({ name: 'environment production', state: 'unsupported', detail: 'the plan' })).toEqual({
+      level: 'warn',
+      text: 'cannot be expressed: environment production — the plan',
+      counts: false,
+    });
   });
 });
 

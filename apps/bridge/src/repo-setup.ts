@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { bots, repos } from '@openadlc/db';
+import { bots, credentials, identities, repos } from '@openadlc/db';
 import {
   CI_WORKFLOW,
   GitHubClient,
@@ -12,6 +12,8 @@ import {
   checkRepoRules,
   approversFor,
   checkRepoTemplates,
+  CREW_ADMIN_REPORT,
+  crewAccountsOf,
   ENVIRONMENT_ABSENT,
   enforcesRulesets,
   getSecretStore,
@@ -24,7 +26,7 @@ import {
   type RuleApi,
   type RuleReport,
 } from '@openadlc/github';
-import { REQUIRED_CHECK, REVIEW_GATE_CHECK, labelStep } from '@openadlc/shared';
+import { REQUIRED_CHECK, REVIEW_GATE_CHECK, labelStep, type Bot } from '@openadlc/shared';
 import type { BridgeConfig } from './config.js';
 import { effectiveConfig } from './effective-config.js';
 import { APP_API } from './invitation-service.js';
@@ -149,9 +151,35 @@ class LabelsUnread extends Error {
   }
 }
 
-/** A rule that is neither in place nor expressible is not something to agree to. */
-function countable(reports: RuleReport[]): number {
-  return reports.filter((report) => report.state === 'missing' || report.state === 'drifted').length;
+/**
+ * A rule that is neither in place nor expressible is not something to agree
+ * to. Nor is a crew account that is an admin: applying changes nobody's role,
+ * so counted, it was a change the Protect step offered and could not make.
+ */
+export function countable(reports: RuleReport[]): number {
+  return reports.filter((report) => (report.state === 'missing' || report.state === 'drifted') && report.name !== CREW_ADMIN_REPORT).length;
+}
+
+/**
+ * The crew's seats, and every account the crew works as with the id stored
+ * when it connected, which is what a ruleset's bypass list is judged
+ * against. Read as no crew when the database did not answer, every bypass on
+ * the rulesets passed as a person's: a crew that could not be read is said,
+ * and nothing a crew account might be passes.
+ */
+export async function crewOfInstall(): Promise<{ seats: Bot[]; fields: Pick<RepoRulesInput, 'crewAccounts' | 'crewUnread'> }> {
+  try {
+    const [seats, accounts, seated, signedIn] = await Promise.all([
+      bots.listBots(),
+      identities.listIdentities(),
+      identities.seatIdentities(),
+      credentials.listCredentials(),
+    ]);
+    return { seats, fields: { crewAccounts: crewAccountsOf(seats, accounts, seated, signedIn) } };
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    return { seats: [], fields: { crewUnread: `the crew’s accounts could not be read from the install’s database (${why})` } };
+  }
 }
 
 /**
@@ -293,7 +321,7 @@ export class RepoSetup {
     // Whoever holds the lead reviewer's role, rather than a name written down
     // here — the crew is configurable and this would otherwise quietly name a
     // bot that does not exist on this install.
-    const crew = await bots.listBots().catch(() => []);
+    const { seats: crew, fields: crewFields } = await crewOfInstall();
     const lead = crew.find((bot) => bot.role === 'review_lead');
     // The people who own what a bot may not change: never the organization's
     // name, which was the fallback and which no review can come from.
@@ -311,6 +339,8 @@ export class RepoSetup {
       leadReviewer: lead?.githubLogin ?? humans[0] ?? '',
       // So a code owner line naming a seat's old account is known for one.
       crew: crew.map((bot) => bot.githubLogin).filter((login): login is string => Boolean(login)),
+      // Who may bypass the rulesets is judged against these, by stored id.
+      ...crewFields,
       humans,
       productionReviewers: await this.productionReviewers(repo, humans),
       // Reviewers or a soak, as the repository's rules say.

@@ -74,6 +74,19 @@ export interface RepoRulesInput {
    */
   crew?: string[];
   /**
+   * Every GitHub account the crew works as, each with the user id the install
+   * stored when it connected (`crewAccountsOf`): each seat's, the automation
+   * account's and the reviewers' among them, and any account connected
+   * without a seat. Who may bypass a ruleset is judged against these by id; a
+   * login in `crew` with no stored id is looked up by login.
+   */
+  crewAccounts?: CrewAccount[];
+  /**
+   * Why the crew could not be read, when it could not. Who is a crew account
+   * is then not known, so no `User` or role bypass passes, and none is taken off.
+   */
+  crewUnread?: string;
+  /**
    * The people who own the paths a bot may not change. Never the
    * organization's own name: it was the fallback while nobody was named, and
    * an organization cannot review — every line naming it waited for good.
@@ -138,14 +151,385 @@ interface Ruleset {
   target: string;
   enforcement: string;
   conditions?: { ref_name?: { include?: string[]; exclude?: string[] } } | null;
-  /** Who may act outside this ruleset; OpenADLC's own app, so it can repair what it owns. */
-  bypass_actors?: { actor_id: number; actor_type: string; bypass_mode: string }[];
+  /** Who may act outside this ruleset: OpenADLC's own app, so it can repair what it owns, and any person a person added. */
+  bypass_actors?: BypassActor[];
   rules: { type: string; parameters?: Record<string, unknown> }[];
 }
 
+/**
+ * One entry of a ruleset's bypass list, as GitHub holds it. A `DeployKey` has
+ * no id, and GitHub ignores an `OrganizationAdmin`'s.
+ */
+export interface BypassActor {
+  actor_id: number | null;
+  actor_type: string;
+  bypass_mode: string;
+}
+
 /** OpenADLC's own app, named so it can maintain the files this ruleset depends on. */
-export function bypassForApp(appId?: number): { actor_id: number; actor_type: string; bypass_mode: string }[] {
+export function bypassForApp(appId?: number): BypassActor[] {
   return appId ? [{ actor_id: appId, actor_type: 'Integration', bypass_mode: 'always' }] : [];
+}
+
+/** What `checkRepoRules` and `applyRepoRules` report the crew's own standing on a repository under. */
+export const CREW_ADMIN_REPORT = 'crew accounts';
+
+/** A base repository role, or none; a custom role is read as the base permission GitHub says it has. */
+export type BaseRole = 'none' | 'read' | 'triage' | 'write' | 'maintain' | 'admin';
+
+const ROLE_ORDER: readonly BaseRole[] = ['none', 'read', 'triage', 'write', 'maintain', 'admin'];
+
+/**
+ * GitHub's base repository roles by the id a `RepositoryRole` bypass names
+ * them with, as its ruleset API gives them. Any other id is a custom role,
+ * whose holders cannot be told from its id.
+ */
+const BYPASS_ROLES: Readonly<Record<number, BaseRole>> = { 2: 'maintain', 4: 'write', 5: 'admin' };
+
+/** A GitHub account the crew works as, with the user id stored when it connected, or null where none was. */
+export interface CrewAccount {
+  login: string;
+  id: number | null;
+}
+
+/**
+ * Every account the crew works as, from the install's records: each seat
+ * with an account, by the ids its account and its sign-in stored, and each
+ * account OpenADLC holds a sign-in for with no seat on it. One entry an id.
+ */
+export function crewAccountsOf(
+  seats: readonly { id: string; githubLogin: string | null }[],
+  accounts: readonly { id: string; login: string; githubUserId: number | null }[],
+  seated: readonly { botId: string; identityId: string }[],
+  credentials: readonly { botId: string; githubUserId: number | null }[],
+): CrewAccount[] {
+  const accountOf = new Map(seated.map((one) => [one.botId, accounts.find((account) => account.id === one.identityId)]));
+  const signedIn = new Map(credentials.map((one) => [one.botId, one.githubUserId]));
+  const all: CrewAccount[] = [
+    ...seats.flatMap((seat) =>
+      seat.githubLogin
+        ? [
+            { login: seat.githubLogin, id: accountOf.get(seat.id)?.githubUserId ?? null },
+            { login: seat.githubLogin, id: signedIn.get(seat.id) ?? null },
+          ]
+        : [],
+    ),
+    ...accounts.map((account) => ({ login: account.login, id: account.githubUserId })),
+  ];
+  return mergedAccounts(all);
+}
+
+/**
+ * One entry an id, and one a login, whatever its casing, only where no id is
+ * stored for it. Kept one a login, the first id found won, so of an account's
+ * and its seat's sign-in's ids, where the two differ, one was not matched.
+ */
+function mergedAccounts(all: readonly CrewAccount[]): CrewAccount[] {
+  const byId = new Map<number, CrewAccount>();
+  for (const one of all) if (one.login && one.id !== null && !byId.has(one.id)) byId.set(one.id, { login: one.login, id: one.id });
+  const known = new Set([...byId.values()].map((one) => one.login.toLowerCase()));
+  const byLogin = new Map<string, CrewAccount>();
+  for (const one of all) {
+    const key = one.login?.toLowerCase();
+    if (one.login && one.id === null && !known.has(key) && !byLogin.has(key)) byLogin.set(key, { login: one.login, id: null });
+  }
+  return [...byId.values(), ...byLogin.values()];
+}
+
+/** What is said of a seat's login GitHub has no account for, with no id stored to find it by. */
+const NO_ACCOUNT_BY_LOGIN = 'GitHub has no account by that login, so it may have been renamed: reconnect the seat, which stores its id';
+
+/** What is said of a stored id GitHub answers 404 for, which a flagged or suspended account does too. */
+const NO_ACCOUNT_BY_ID = 'GitHub has no account by that id, and a flagged or suspended one still holds its role: reconnect the account, or disconnect it';
+
+/**
+ * What GitHub says of the crew's accounts on one repository, asked once per
+ * check or apply: who they are by id, and what role each holds.
+ */
+export interface CrewStanding {
+  /**
+   * Each crew account's login, by its GitHub user id. A `User` bypass actor
+   * carries only an id, and an id is what a rename does not change.
+   */
+  ids: ReadonlyMap<number, string>;
+  /** Crew logins GitHub gave no id for, and what it said: whether a `User` bypass is one of them is not known. */
+  unresolved: readonly { login: string; said: string }[];
+  /** Each crew login's role on the repository; one that is not a collaborator is absent. */
+  roles: ReadonlyMap<string, BaseRole>;
+  /** Crew logins whose role could not be read, and what GitHub said. */
+  unreadable: readonly { login: string; said: string }[];
+  /** Why the crew itself could not be read, when it could not: then nothing a crew account might be passes. */
+  unknown?: string;
+}
+
+function baseRoleOf(permission: unknown, roleName: unknown): BaseRole {
+  const named = ROLE_ORDER.includes(roleName as BaseRole) ? (roleName as BaseRole) : 'none';
+  // `permission` is GitHub's older word: maintain reads as write there, and
+  // triage as read, so the role's own name wins where it is a base role.
+  const legacy = ROLE_ORDER.includes(permission as BaseRole) ? (permission as BaseRole) : 'none';
+  return ROLE_ORDER.indexOf(named) >= ROLE_ORDER.indexOf(legacy) ? named : legacy;
+}
+
+/**
+ * The crew's ids and roles on `fullName`, read as the caller acts.
+ *
+ * An account's id is the one stored when it connected, and its login now is
+ * asked by that id (`GET /user/<id>`), so its role is read under the login it
+ * has. It was looked up by the login stored, and a 404 read as no account:
+ * after a rename the seat's id on a bypass list read as a person's and was
+ * kept, and whoever registered the freed login was taken for crew. A 404
+ * for a stored id is not nobody either: its role is not known. A login with
+ * no stored id is still looked up (`GET /users/<login>`), and a 404 there is
+ * not known, not nobody. The role is the repository permission, where an
+ * organization's owner shows as admin.
+ */
+export async function crewStanding(
+  api: RuleApi,
+  input: Pick<RepoRulesInput, 'fullName' | 'crew' | 'crewAccounts' | 'crewUnread'>,
+): Promise<CrewStanding> {
+  const ids = new Map<number, string>();
+  const unresolved: { login: string; said: string }[] = [];
+  const roles = new Map<string, BaseRole>();
+  const unreadable: { login: string; said: string }[] = [];
+  if (input.crewUnread) return { ids, unresolved, roles, unreadable, unknown: input.crewUnread };
+  const accounts = mergedAccounts([...(input.crewAccounts ?? []), ...(input.crew ?? []).map((login) => ({ login, id: null }))]);
+  for (const account of accounts) {
+    let login = account.login;
+    if (account.id !== null) {
+      ids.set(account.id, login);
+      try {
+        const user = await api.request<{ login?: unknown } | null>('GET', `/user/${account.id}`);
+        if (typeof user?.login === 'string' && user.login) {
+          login = user.login;
+          ids.set(account.id, login);
+        }
+      } catch (cause) {
+        // Not nobody: GitHub answers 404 for a flagged or suspended account
+        // too, which keeps its role, and new bot accounts are the ones it
+        // flags. Read as gone, a crew admin let an admin role bypass pass as
+        // a person's. Its id still marks it crew; its role is not known.
+        unreadable.push({ login, said: notFound(cause) ? NO_ACCOUNT_BY_ID : githubSaid(cause) });
+        continue;
+      }
+    } else {
+      try {
+        const user = await api.request<{ id?: unknown } | null>('GET', `/users/${encodeURIComponent(login)}`);
+        if (typeof user?.id === 'number' && Number.isInteger(user.id)) ids.set(user.id, login);
+        else unresolved.push({ login, said: 'GitHub gave no user id for it' });
+      } catch (cause) {
+        const gone = notFound(cause);
+        unresolved.push({ login, said: gone ? NO_ACCOUNT_BY_LOGIN : githubSaid(cause) });
+        // Whose account the seat is on is not known, so neither is its role.
+        if (gone) {
+          unreadable.push({ login, said: NO_ACCOUNT_BY_LOGIN });
+          continue;
+        }
+      }
+    }
+    try {
+      const standing = await api.request<{ permission?: unknown; role_name?: unknown } | null>(
+        'GET',
+        `/repos/${input.fullName}/collaborators/${encodeURIComponent(login)}/permission`,
+      );
+      roles.set(login, baseRoleOf(standing?.permission, standing?.role_name));
+    } catch (cause) {
+      if (notFound(cause)) continue;
+      unreadable.push({ login, said: githubSaid(cause) });
+    }
+  }
+  return { ids, unresolved, roles, unreadable };
+}
+
+/** The crew logins that hold `role` on the repository, or one above it. */
+function holdersOf(standing: CrewStanding, role: BaseRole): string[] {
+  const at = ROLE_ORDER.indexOf(role);
+  return [...standing.roles].filter(([, held]) => ROLE_ORDER.indexOf(held) >= at).map(([login]) => login);
+}
+
+function listed(logins: readonly string[]): string {
+  if (logins.length <= 1) return logins[0] ?? '';
+  return `${logins.slice(0, -1).join(', ')} and ${logins.at(-1)}`;
+}
+
+/** What a ruleset's bypass list holds, actor by actor; see `judgeBypass`. */
+export interface BypassVerdict {
+  /** What is wrong with OpenADLC's own entry, or null: it is there in `always`, or the app's id is not known here. */
+  app: string | null;
+  /** The people on the list, each with how a person reads who they are. Apply keeps them as they are. */
+  people: { actor: BypassActor; name: string }[];
+  /**
+   * Everything else, each with why. Apply takes a `remove` off. An `unknown`
+   * is one whether a crew account holds it could not be told: apply keeps it
+   * as it was found, and the check never passes it.
+   */
+  drift: { actor: BypassActor; verdict: 'remove' | 'unknown'; said: string }[];
+}
+
+/**
+ * Who may bypass one of OpenADLC's rulesets: its app, in `always`, and people
+ * who are not crew accounts. Anything a crew account is, or holds, is a bot
+ * able to merge around the merge line, and is drift.
+ *
+ * The bypass list had to be exactly the app. A person who added themselves to
+ * it, to merge while the crew was down, was called drift on every check, and
+ * an apply took them off. It is an allow-list, so an actor type nobody named
+ * here is drift: a team, whose members OpenADLC does not read; a deploy key;
+ * another app. A role is people only while no crew account holds it, or one
+ * above it; an organization's owners only while no crew account is an admin
+ * of the repository, because the app cannot list the owners and an owner
+ * always shows as admin. `logins` names the people GitHub was asked about.
+ */
+export function judgeBypass(
+  actors: readonly BypassActor[],
+  appId: number | undefined,
+  standing: CrewStanding,
+  repository: string,
+  logins: ReadonlyMap<number, string> = new Map(),
+): BypassVerdict {
+  const people: BypassVerdict['people'] = [];
+  const drift: BypassVerdict['drift'] = [];
+  let appMode: string | null = null;
+  // Why a `User`, or a role, cannot be told from the crew's, when it cannot.
+  const idsUnknown = standing.unknown
+    ? `the crew could not be read: ${standing.unknown}`
+    : standing.unresolved.length > 0
+      ? `${listed(standing.unresolved.map((one) => one.login))} could not be looked up`
+      : null;
+  const rolesUnknown = standing.unknown
+    ? `the crew could not be read: ${standing.unknown}`
+    : standing.unreadable.length > 0
+      ? `${listed(standing.unreadable.map((one) => one.login))}’s role on ${repository} could not be read`
+      : null;
+
+  /** A role that is people's unless a crew account holds it, or its holders could not all be read. */
+  const byRole = (actor: BypassActor, role: BaseRole, who: string): void => {
+    const holders = holdersOf(standing, role);
+    if (holders.length > 0) {
+      const one = holders.length === 1;
+      const holds = role === 'admin' ? `${one ? 'is an admin' : 'are admins'} of` : `${one ? 'holds' : 'hold'} ${role} or more on`;
+      drift.push({ actor, verdict: 'remove', said: `${who}, and crew account${one ? '' : 's'} ${listed(holders)} ${holds} ${repository}` });
+    } else if (rolesUnknown) {
+      drift.push({ actor, verdict: 'unknown', said: `${who}: whether a crew account is among them is not known: ${rolesUnknown}` });
+    } else {
+      people.push({ actor, name: `${who} (${actor.bypass_mode})` });
+    }
+  };
+
+  for (const actor of actors) {
+    const id = actor.actor_id;
+    switch (actor.actor_type) {
+      case 'Integration':
+        if (appId && id === appId) {
+          appMode ??= actor.bypass_mode;
+          if (actor.bypass_mode === 'always') appMode = 'always';
+        } else {
+          drift.push({
+            actor,
+            verdict: 'remove',
+            said: appId ? `app ${id} is not OpenADLC’s` : `app ${id}: OpenADLC’s own app id is not known here, so it cannot be told from another app`,
+          });
+        }
+        break;
+      case 'User': {
+        const crew = id === null ? undefined : standing.ids.get(id);
+        if (crew) drift.push({ actor, verdict: 'remove', said: `${crew} is a crew account (user ${id}), not a person` });
+        else if (idsUnknown) {
+          drift.push({ actor, verdict: 'unknown', said: `whether user ${id} is a crew account is not known: ${idsUnknown}` });
+        } else {
+          const login = id === null ? undefined : logins.get(id);
+          people.push({ actor, name: login ? `${login} (user ${id}, ${actor.bypass_mode})` : `user ${id} (${actor.bypass_mode})` });
+        }
+        break;
+      }
+      case 'OrganizationAdmin':
+        byRole(actor, 'admin', 'the organization’s owners');
+        break;
+      case 'RepositoryRole': {
+        const role = id === null ? undefined : BYPASS_ROLES[id];
+        if (role) byRole(actor, role, `the repository’s ${role} role`);
+        else drift.push({ actor, verdict: 'remove', said: `repository role ${id}, a custom role, whose holders OpenADLC cannot tell apart from the crew` });
+        break;
+      }
+      case 'Team':
+        drift.push({ actor, verdict: 'remove', said: `team ${id}, whose members OpenADLC does not read, so a crew account may be one` });
+        break;
+      case 'DeployKey':
+        drift.push({ actor, verdict: 'remove', said: 'deploy keys, which are not a person' });
+        break;
+      default:
+        drift.push({ actor, verdict: 'remove', said: `${actor.actor_type}${id === null ? '' : ` ${id}`}, which is neither OpenADLC’s app nor a person` });
+    }
+  }
+
+  const app = !appId
+    ? null
+    : appMode === null
+      ? 'OpenADLC’s app is not on it'
+      : appMode !== 'always'
+        ? `OpenADLC’s app may bypass it only in ${appMode} mode, not always`
+        : null;
+  return { app, people, drift };
+}
+
+/** Who besides the app may bypass a ruleset, as a report says it: empty with nobody. */
+function peopleSaid(verdict: BypassVerdict): string {
+  if (verdict.people.length === 0) return '';
+  return `${verdict.people.length === 1 ? 'a person may' : 'people may'} bypass it: ${verdict.people.map((one) => one.name).join(', ')}`;
+}
+
+/**
+ * Each `User` bypass actor's login, asked once per id across a check, so a
+ * person is named rather than numbered. A crew account is named by the crew's
+ * own login, and not asked. A read that fails leaves the id unnamed.
+ */
+async function namesOf(
+  api: RuleApi,
+  actors: readonly BypassActor[],
+  standing: CrewStanding,
+  asked: Map<number, string | null>,
+): Promise<ReadonlyMap<number, string>> {
+  for (const actor of actors) {
+    const id = actor.actor_id;
+    if (actor.actor_type !== 'User' || id === null || asked.has(id) || standing.ids.has(id)) continue;
+    const user = await api.request<{ login?: unknown } | null>('GET', `/user/${id}`).catch(() => null);
+    asked.set(id, typeof user?.login === 'string' ? user.login : null);
+  }
+  return new Map([...asked].filter((entry): entry is [number, string] => entry[1] !== null));
+}
+
+/**
+ * What is said of the crew's standing: a crew account that is an admin can
+ * change these rulesets and merge past them, whatever they hold, so no crew
+ * account may be one. Applying changes nobody's role. This is what
+ * `github check`, an apply and the repo-rules card say; `bot-access` says it
+ * too, for each bot, asked with its own sign-in.
+ */
+function crewAdminSaid(fullName: string, standing: CrewStanding, personal: boolean): { state: RuleState; detail: string } {
+  if (standing.unknown) {
+    return { state: 'drifted', detail: `whether a crew account is an admin of ${fullName} is not known: the crew could not be read: ${standing.unknown}` };
+  }
+  const admins = holdersOf(standing, 'admin');
+  const unread = standing.unreadable.map((one) => `${one.login} (${one.said})`);
+  if (admins.length === 0 && unread.length === 0) return { state: 'present', detail: `no crew account is an admin of ${fullName}` };
+  const parts: string[] = [];
+  if (admins.length > 0) {
+    const one = admins.length === 1;
+    parts.push(
+      personal
+        ? `${listed(admins)} ${one ? 'is an admin' : 'are admins'} of ${fullName}, a person’s repository, where only its owner is ` +
+            'one, and an admin can change these rulesets and merge past them. Transfer the repository to an account or an ' +
+            'organization that is not a crew account'
+        : `${listed(admins)} ${one ? 'is an admin' : 'are admins'} of ${fullName} (directly, through a team, or as an organization ` +
+            `owner), and an admin can change these rulesets and merge past them. Lower ${one ? 'it' : 'each'} to Write under the ` +
+            'repository’s Settings → Collaborators and teams; an organization owner, to a member under the organization’s People',
+    );
+  }
+  // GitHub not saying is not "no admin": it is said, and never passes.
+  if (unread.length > 0) {
+    const said = `the role on ${fullName} of ${unread.join(', ')} could not be read`;
+    parts.push(`${admins.length > 0 ? 'Whether any other crew account is one' : 'whether a crew account is an admin'} is not known: ${said}`);
+  }
+  return { state: 'drifted', detail: parts.join('. ') };
 }
 
 /**
@@ -621,9 +1005,10 @@ async function rulesetByName(
  * drift, nor is an extra branch the ruleset covers or an extra required check.
  * `full` is false when only the list entry could be read: it has no
  * conditions, and reading that as an empty list would rewrite the ruleset on
- * every pass.
+ * every pass. `judged` is the verdict on the bypass list (`judgeBypass`);
+ * without one, the list has to be exactly OpenADLC's.
  */
-export function rulesetDrift(desired: Ruleset, actual: Ruleset, full: boolean): string[] {
+export function rulesetDrift(desired: Ruleset, actual: Ruleset, full: boolean, judged?: BypassVerdict): string[] {
   const problems: string[] = [];
   if (actual.name && actual.name !== desired.name) {
     problems.push(`named "${actual.name}", not "${desired.name}"`);
@@ -663,16 +1048,24 @@ export function rulesetDrift(desired: Ruleset, actual: Ruleset, full: boolean): 
    * and never sent the update that would have added it — so a repository OpenADLC
    * had already locked itself out of stayed locked out. It is also worth
    * noticing in its own right: a bypass quietly added to a ruleset is somebody
-   * granted an exemption from it.
+   * granted an exemption from it. A person's exemption is theirs to grant
+   * (`judgeBypass`); a crew account's is a bot merging around the merge line.
    */
-  const bypassOf = (ruleset: Ruleset): string =>
-    JSON.stringify(
-      [...(ruleset.bypass_actors ?? [])]
-        .map((actor) => `${actor.actor_type}:${actor.actor_id}:${actor.bypass_mode}`)
-        .sort(),
-    );
-  if (bypassOf(actual) !== bypassOf(desired)) {
-    problems.push(`bypass actors are ${bypassOf(actual)}, not ${bypassOf(desired)}`);
+  if (judged) {
+    if (judged.app) problems.push(`bypass: ${judged.app}`);
+    for (const one of judged.drift) {
+      problems.push(`bypass: ${one.said}${one.verdict === 'unknown' ? '; applying leaves it as it is until that is known' : ''}`);
+    }
+  } else {
+    const bypassOf = (ruleset: Ruleset): string =>
+      JSON.stringify(
+        [...(ruleset.bypass_actors ?? [])]
+          .map((actor) => `${actor.actor_type}:${actor.actor_id}:${actor.bypass_mode}`)
+          .sort(),
+      );
+    if (bypassOf(actual) !== bypassOf(desired)) {
+      problems.push(`bypass actors are ${bypassOf(actual)}, not ${bypassOf(desired)}`);
+    }
   }
 
   const actualByType = new Map(actual.rules?.map((rule) => [rule.type, rule]) ?? []);
@@ -715,15 +1108,20 @@ function statusChecksOf(value: unknown): StatusCheck[] {
  * everything a person had added to it, a `code_scanning` rule, a
  * `refs/heads/release/*` branch or a required `codeql` check, whenever any
  * declared setting drifted, saying only `updated`. So the name, target,
- * enforcement and bypass actors are OpenADLC's; every rule it does not
+ * enforcement and the app's bypass are OpenADLC's; every rule it does not
  * declare stays, in order; a declared rule keeps the parameters it had with
  * OpenADLC's laid over them; required checks are the union, OpenADLC's entry
  * winning where both name a context so pinning holds; and the branches are
  * OpenADLC's plus any other included. Excludes are dropped, and named in
  * `removed`. Built from `existing`'s fields one by one, never spread: the full
  * read carries `id`, `source`, `_links` and other fields a `PUT` does not take.
+ *
+ * With `judged`, the bypass list is OpenADLC's app in `always`, then each
+ * person and each actor it could not judge, as GitHub held them: a `PUT`
+ * without them took a person off who had added themselves on purpose, and a
+ * moment GitHub did not answer would have done the same.
  */
-export function repairedRuleset(desired: Ruleset, existing: Ruleset): { ruleset: Ruleset; removed: string[] } {
+export function repairedRuleset(desired: Ruleset, existing: Ruleset, judged?: BypassVerdict): { ruleset: Ruleset; removed: string[] } {
   const declared = new Map(desired.rules.map((rule) => [rule.type, rule]));
   const kept = new Set<string>();
   const rules: Ruleset['rules'] = [];
@@ -752,11 +1150,18 @@ export function repairedRuleset(desired: Ruleset, existing: Ruleset): { ruleset:
       target: desired.target,
       enforcement: desired.enforcement,
       conditions: { ref_name: { include, exclude } },
-      bypass_actors: desired.bypass_actors,
+      bypass_actors: judged ? [...(desired.bypass_actors ?? []), ...keptAsFound(judged)] : desired.bypass_actors,
       rules,
     },
     removed,
   };
+}
+
+/** The people, and what could not be judged, as GitHub held them: only the fields a `PUT` takes. */
+function keptAsFound(judged: BypassVerdict): BypassActor[] {
+  return [...judged.people.map((one) => one.actor), ...judged.drift.filter((one) => one.verdict === 'unknown').map((one) => one.actor)].map(
+    (actor) => ({ actor_id: actor.actor_id, actor_type: actor.actor_type, bypass_mode: actor.bypass_mode }),
+  );
 }
 
 function mergedRule(desired: Ruleset['rules'][number], existing: Ruleset['rules'][number]): Ruleset['rules'][number] {
@@ -843,6 +1248,9 @@ export async function checkRepoRules(api: RuleApi, input: RepoRulesInput): Promi
   // a person owns as limited, though GitHub Pro holds rulesets there, and a
   // free organization's only once it refused.
   const limited = owner.private && refused;
+  // Asked once for both rulesets, and for the crew's own report below.
+  const standing = await crewStanding(api, input);
+  const asked = new Map<number, string | null>();
   for (const desired of wanted.rulesets) {
     if (refused) {
       reports.push({ name: desired.name, state: 'unsupported', detail: PLAN_REFUSES_RULESETS });
@@ -853,13 +1261,19 @@ export async function checkRepoRules(api: RuleApi, input: RepoRulesInput): Promi
       reports.push({ name: desired.name, state: 'missing', detail: 'no ruleset by this name' });
       continue;
     }
-    const problems = rulesetDrift(desired, actual.ruleset, actual.full);
+    const actors = actual.ruleset.bypass_actors ?? [];
+    const judged = judgeBypass(actors, input.appId, standing, input.fullName, await namesOf(api, actors, standing, asked));
+    const problems = rulesetDrift(desired, actual.ruleset, actual.full, judged);
+    // Who else may bypass it is said either way: it is an exemption from
+    // the ruleset, and a person reading the report should know who holds one.
+    const people = peopleSaid(judged);
     reports.push(
       problems.length === 0
-        ? { name: desired.name, state: 'present', detail: '' }
-        : { name: desired.name, state: 'drifted', detail: problems.join('; ') },
+        ? { name: desired.name, state: 'present', detail: people }
+        : { name: desired.name, state: 'drifted', detail: [...problems, ...(people ? [people] : [])].join('; ') },
     );
   }
+  reports.push({ name: CREW_ADMIN_REPORT, ...crewAdminSaid(input.fullName, standing, owner.personal) });
 
   for (const environment of ENVIRONMENTS) {
     const read = await readEnvironment(api, input.fullName, environment);
@@ -1320,6 +1734,7 @@ export async function applyRepoRules(api: RuleApi, input: RepoRulesInput): Promi
   }
 
   const refused = await rulesetsRefusedByPlan(api, input.fullName);
+  const standing = await crewStanding(api, input);
   for (const desired of wanted.rulesets) {
     if (refused) {
       outcomes.push({ name: desired.name, action: 'skipped', detail: PLAN_REFUSES_RULESETS });
@@ -1341,7 +1756,8 @@ export async function applyRepoRules(api: RuleApi, input: RepoRulesInput): Promi
         outcomes.push({ name: desired.name, action: 'created', detail: `${desired.rules.length} rule(s)` });
         continue;
       }
-      const problems = rulesetDrift(desired, existing, found.full);
+      const judged = judgeBypass(existing.bypass_actors ?? [], input.appId, standing, input.fullName);
+      const problems = rulesetDrift(desired, existing, found.full, judged);
       if (problems.length === 0) {
         outcomes.push({ name: desired.name, action: 'unchanged', detail: '' });
         continue;
@@ -1356,7 +1772,14 @@ export async function applyRepoRules(api: RuleApi, input: RepoRulesInput): Promi
         outcomes.push({ name: desired.name, action: 'skipped', detail: APP_UNKNOWN_DETAIL });
         continue;
       }
-      const repair = repairedRuleset(desired, existing);
+      // Nothing to write when all that is wrong is a bypass it could not
+      // judge: the repair would send the list back as it is.
+      const decided = { ...judged, drift: judged.drift.filter((one) => one.verdict === 'remove') };
+      if (rulesetDrift(desired, existing, found.full, decided).length === 0) {
+        outcomes.push({ name: desired.name, action: 'skipped', detail: problems.join('; ') });
+        continue;
+      }
+      const repair = repairedRuleset(desired, existing, judged);
       await api.request('PUT', `/repos/${input.fullName}/rulesets/${existing.id}`, repair.ruleset);
       const removed = repair.removed.map((ref) => `removed exclude ${JSON.stringify(ref)}`);
       outcomes.push({ name: desired.name, action: 'updated', detail: [...problems, ...removed].join('; ') });
@@ -1365,6 +1788,9 @@ export async function applyRepoRules(api: RuleApi, input: RepoRulesInput): Promi
       outcomes.push({ name: desired.name, action: 'skipped', detail: PLAN_REFUSES_RULESETS });
     }
   }
+  // Said, never changed: who is an admin is a person's decision to undo.
+  const crew = crewAdminSaid(input.fullName, standing, owner.personal);
+  outcomes.push({ name: CREW_ADMIN_REPORT, action: crew.state === 'present' ? 'unchanged' : 'skipped', detail: crew.detail });
 
   for (const environment of ENVIRONMENTS) {
     const name = `environment ${environment}`;

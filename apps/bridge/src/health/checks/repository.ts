@@ -1,4 +1,4 @@
-import type { RuleReport } from '@openadlc/github';
+import { AGENT_BRANCHES_RULESET, CREW_ADMIN_REPORT, MAIN_RULESET, type RuleReport } from '@openadlc/github';
 import type { CheckResult, HealthCheck } from '../types.js';
 import { stepHref } from '../words.js';
 
@@ -26,6 +26,18 @@ const LANDING = new Set(['CODEOWNERS', 'required status checks', 'auto-merge']);
  * approval required after the merge line's own update, which nobody is asked for.
  */
 const STUCK_RULE = /require_last_push_approval is true/;
+
+const RULESETS = new Set([MAIN_RULESET, AGENT_BRANCHES_RULESET]);
+
+/**
+ * Who besides OpenADLC's app may bypass the repository's rulesets, from the
+ * rulesets that are in place: a person added on purpose, said whether the
+ * repository passes or not, so that an exemption is never one nobody sees.
+ * A drifted ruleset says its own in its line.
+ */
+function bypassLines(rules: readonly RuleReport[], line: (rule: RuleReport) => string): string[] {
+  return rules.filter((rule) => RULESETS.has(rule.name) && rule.state === 'present' && rule.detail).map(line);
+}
 
 /**
  * What the last apply's outcomes say GitHub refused, for `RulesReader.refused`:
@@ -60,6 +72,13 @@ export function skippedByLastApply(outcomes: readonly unknown[], planRefused: re
  * checks, auto-merge, or an approval required after the last push. What it
  * guards against is protection that was there and was changed, or never went
  * on.
+ *
+ * Who besides the app may bypass the rulesets is said on the card, and in its
+ * detail while it passes, which `openadlc doctor` prints. The crew's own
+ * standing is a line on it too: a crew account that is an admin, or one whose
+ * role GitHub would not give. Applying changes nobody's role, so that line
+ * says what does; with it left off, a role that could not be read raised no
+ * card at all.
  */
 export function rulesCheck(reader: RulesReader): HealthCheck {
   return {
@@ -99,12 +118,31 @@ export function rulesCheck(reader: RulesReader): HealthCheck {
             !(rule.state === 'missing' && refused.has(rule.name) && rule.name !== 'required status checks'),
         );
         if (wrong.length === 0) {
-          results.push({ subject, ok: true, fixed: `${plan.repository} is protected the way OpenADLC sets it again` });
+          const people = bypassLines(plan.rules, (rule) => `${rule.name} on ${plan.repository}: ${rule.detail}`);
+          results.push({
+            subject,
+            ok: true,
+            fixed: `${plan.repository} is protected the way OpenADLC sets it again`,
+            ...(people.length > 0 ? { says: people.join('\n') } : {}),
+          });
           continue;
         }
+        const people = bypassLines(plan.rules, (rule) => `- **${rule.name}:** ${rule.detail}`);
         // Some of it is not protection at all but whether anything can land:
         // with these wrong, every pull request the crew opens waits forever.
         const stuck = wrong.filter((rule) => LANDING.has(rule.name) || STUCK_RULE.test(rule.detail));
+        // Applying changes nobody's role: a card whose one problem is a crew
+        // account's role said to apply the rules again, which would not fix it.
+        const crewOnly = wrong.every((rule) => rule.name === CREW_ADMIN_REPORT);
+        const whatToDo = [
+          ...(crewOnly ? [] : ['Apply the rules again on the walkthrough’s last step, which lists what it will change first.']),
+          ...(wrong.some((rule) => rule.name === CREW_ADMIN_REPORT)
+            ? [
+                `Applying changes nobody’s role: lower a crew account that is an admin to Write on GitHub, under ${plan.repository}’s ` +
+                  'Settings → Collaborators and teams, and an organization owner to a member under the organization’s People.',
+              ]
+            : []),
+        ].join(' ');
         results.push({
           subject,
           ok: false,
@@ -116,9 +154,11 @@ export function rulesCheck(reader: RulesReader): HealthCheck {
           // One line each: three reasons run together with semicolons were a
           // paragraph nobody could scan on the card.
           detail:
-            `${wrong.map((rule) => `- **${rule.name}:** ${rule.detail || rule.state}`).join('\n')}\n\n` +
-            'Apply the rules again on the walkthrough’s last step, which lists what it will change first.',
-          action: { label: stuck.length > 0 ? 'Fix the repository' : 'Protect the repository', href: stepHref('protect') },
+            `${wrong.map((rule) => `- **${rule.name}:** ${rule.detail || rule.state}`).join('\n')}\n\n${whatToDo}` +
+            (people.length > 0 ? `\n\nApplying keeps who else may bypass them:\n${people.join('\n')}` : ''),
+          action: crewOnly
+            ? { label: 'Change its role on GitHub', url: `https://github.com/${plan.repository}/settings/access` }
+            : { label: stuck.length > 0 ? 'Fix the repository' : 'Protect the repository', href: stepHref('protect') },
           facts: { repository: plan.repository },
         });
       }

@@ -1,4 +1,4 @@
-import type { RuleReport } from '@openadlc/github';
+import { CREW_ADMIN_REPORT, type RuleReport } from '@openadlc/github';
 import type { Bot, Lease, ModelAccount, SubscriptionLogin, TaskState } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
 import { leaseCheck, type LeaseReader } from './leases.js';
@@ -241,6 +241,97 @@ describe('the repository’s protection', () => {
     }).run(NOW);
 
     expect(result).toMatchObject({ ok: false, severity: 'blocking', title: 'Nothing the crew builds can land in janedoe/openadlc-testbed' });
+  });
+
+  it('puts the crew’s standing on the repository’s card when a crew account is an admin, or may be', async () => {
+    const run = (detail: string) =>
+      rulesCheck({
+        plan: async () => [
+          {
+            repository: 'janedoe/openadlc-testbed',
+            canApply: true,
+            rules: [report('openadlc: main', 'present'), report(CREW_ADMIN_REPORT, 'drifted', detail)],
+          },
+        ],
+        refused: async () => new Set(),
+      }).run(NOW);
+
+    const [admin] = await run('openadlc-atlas-janedoe is an admin of janedoe/openadlc-testbed (directly, through a team, or as an organization owner)');
+    expect(admin).toMatchObject({
+      ok: false,
+      severity: 'warning',
+      title: 'janedoe/openadlc-testbed is not protected the way OpenADLC sets it',
+      // Applying changes nobody's role: the card sends a person to where it is changed.
+      action: { label: 'Change its role on GitHub', url: 'https://github.com/janedoe/openadlc-testbed/settings/access' },
+    });
+    const said = admin && 'detail' in admin ? admin.detail : '';
+    expect(said).toContain('- **crew accounts:** openadlc-atlas-janedoe is an admin');
+    expect(said).not.toContain('Apply the rules again');
+    expect(said).toContain('Settings → Collaborators and teams');
+
+    // A role GitHub would not give is a card too: with none, only the sign-in card said anything.
+    const [unread] = await run('whether a crew account is an admin is not known: the role on janedoe/openadlc-testbed of openadlc-atlas-janedoe (GitHub answered 502) could not be read');
+    expect(unread).toMatchObject({ ok: false });
+    expect(unread && 'detail' in unread ? unread.detail : '').toContain('- **crew accounts:** whether a crew account is an admin is not known');
+  });
+
+  it('says both what applying fixes and what it does not, when a crew account’s role is wrong beside a ruleset', async () => {
+    const [result] = await rulesCheck({
+      plan: async () => [
+        {
+          repository: 'janedoe/openadlc-testbed',
+          canApply: true,
+          rules: [report('openadlc: main', 'drifted', 'enforcement is evaluate, not active'), report(CREW_ADMIN_REPORT, 'drifted', 'openadlc-atlas-janedoe is an admin')],
+        },
+      ],
+      refused: async () => new Set(),
+    }).run(NOW);
+
+    expect(result).toMatchObject({ ok: false, action: { label: 'Protect the repository', href: '/onboarding?step=protect' } });
+    const said = result && 'detail' in result ? result.detail : '';
+    expect(said).toContain('Apply the rules again');
+    expect(said).toContain('Applying changes nobody’s role');
+  });
+
+  it('passes a repository whose other bypass is a person, and names them while it passes', async () => {
+    const [result] = await rulesCheck({
+      plan: async () => [
+        {
+          repository: 'janedoe/openadlc-testbed',
+          canApply: true,
+          rules: [
+            report('openadlc: main', 'present', 'a person may bypass it: janedoe (user 1001, always)'),
+            report('openadlc: agent and system branches', 'present'),
+            report('CODEOWNERS', 'present', 'GitHub reads .github/CODEOWNERS'),
+            report(CREW_ADMIN_REPORT, 'present', 'no crew account is an admin of janedoe/openadlc-testbed'),
+          ],
+        },
+      ],
+      refused: async () => new Set(),
+    }).run(NOW);
+
+    expect(result).toEqual({
+      subject: 'janedoe/openadlc-testbed',
+      ok: true,
+      fixed: 'janedoe/openadlc-testbed is protected the way OpenADLC sets it again',
+      says: 'openadlc: main on janedoe/openadlc-testbed: a person may bypass it: janedoe (user 1001, always)',
+    });
+  });
+
+  it('names the people who may bypass a ruleset on a failing card too', async () => {
+    const [result] = await rulesCheck({
+      plan: async () => [
+        {
+          repository: 'janedoe/openadlc-testbed',
+          canApply: true,
+          rules: [report('openadlc: main', 'present', 'a person may bypass it: janedoe (user 1001, always)'), report('CODEOWNERS', 'missing')],
+        },
+      ],
+      refused: async () => new Set(),
+    }).run(NOW);
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result && 'detail' in result ? result.detail : '').toContain('- **openadlc: main:** a person may bypass it: janedoe (user 1001, always)');
   });
 
   it('has no answer without the app’s key', async () => {

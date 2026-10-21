@@ -102,6 +102,14 @@ describe('a check’s answer, against what it said before', () => {
     expect(showsNotice(next.row, NOW)).toBe(true);
   });
 
+  it('keeps what a passing check says while it passes, and nothing from the failure before it', () => {
+    const failing = row({ id: 'repo-rules:acme/api', state: 'failing', detail: 'openadlc: main drifted' });
+    const next = nextRow(failing, 'repo-rules', { ok: true, subject: 'acme/api', says: 'a person may bypass it: janedoe (user 1001, always)' }, NOW);
+    expect(next.row).toMatchObject({ state: 'ok', detail: 'a person may bypass it: janedoe (user 1001, always)' });
+
+    expect(nextRow(failing, 'repo-rules', { ok: true, subject: 'acme/api' }, NOW).row.detail).toBeNull();
+  });
+
   it('neither clears nor raises a card when there is no answer about something already known', () => {
     const passing = row({ id: 'webhook', state: 'ok' });
     const quiet = nextRow(passing, 'webhook', { ok: null, reason: 'GitHub could not be asked' }, NOW);

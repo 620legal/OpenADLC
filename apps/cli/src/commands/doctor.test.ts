@@ -310,6 +310,29 @@ describe('openadlc doctor on the health checks', () => {
     expect(blocking).toBe(0);
   });
 
+  it('prints what a passing check says while it passes, under its line', () => {
+    // Who besides the app may bypass a repository's rulesets: an exemption
+    // nobody is warned about is still one somebody should be able to see.
+    const { lines, blocking } = healthLines(
+      [
+        view({
+          id: 'repo-rules:620legal/OpenADLC',
+          check: 'repo-rules',
+          state: 'ok',
+          proves: 'Each repository is protected the way OpenADLC sets it',
+          detail: 'openadlc: main on 620legal/OpenADLC: a person may bypass it: orzelig (user 2146989, always)',
+        }),
+        view({ id: 'repo-rules:620legal/OpenADLC:crew-admin', check: 'repo-rules', state: 'ok', proves: 'Each repository is protected the way OpenADLC sets it' }),
+      ],
+      'http://127.0.0.1:47300',
+    );
+    expect(lines).toEqual([
+      { level: 'ok', text: 'Each repository is protected the way OpenADLC sets it' },
+      { level: 'note', text: 'openadlc: main on 620legal/OpenADLC: a person may bypass it: orzelig (user 2146989, always)' },
+    ]);
+    expect(blocking).toBe(0);
+  });
+
   it('prints each failure with what to do and where, a console page as its address, and counts the blocking ones', () => {
     const { lines, blocking } = healthLines(
       [
