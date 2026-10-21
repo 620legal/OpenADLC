@@ -1,0 +1,276 @@
+# Checks, builds, signs and publishes a release of OpenADLC. Only release.yml
+# calls it, always as release-build.yml@main, for a pushed version tag; the
+# release it makes is docs/self-hosting.md#what-a-release-holds.
+#
+# This file is what makes a release trustworthy, so it is always main's: a
+# reviewed version, run with the context of the tag's run. Its attestation
+# names release-build.yml@refs/heads/main as the signer, and that is the
+# identity every install and the docs' check verify. A tagged commit that
+# carried its own release.yml, signing whatever it liked, signs as that file
+# instead, and is refused everywhere.
+#
+# What it refuses, before anything is built (`check`, which runs main's
+# .github/scripts/release-check.mjs): a run that is not the push of a version
+# tag from release.yml onto the commit it ran for; a tag pushed, or a run
+# re-run, by anyone but one of RELEASERS below, so no crew account can release
+# even where it can push a tag; a commit that is not one of main's first
+# parents; a version that is not above every release this workflow made, or
+# whose newest is not behind it on main; and a commit whose own run of ci.yml
+# on main did not pass with its tests run. `build` runs the tagged commit's
+# install and build with a read-only token and nothing that can sign.
+# `publish` signs and publishes, and runs nothing from the repository or from
+# what the build made: it checks the run is still the releaser's, that the
+# archive is the build's, attests it, checks the attestation exactly as an
+# install will, checks the tag has not moved, and only then makes the release,
+# which must come out immutable.
+name: release-build
+
+on:
+  # No inputs: nothing a caller passes decides anything here.
+  workflow_call:
+
+# Nothing by default; each job names what it needs, within what release.yml grants.
+permissions: {}
+
+env:
+  # Who may release: the GitHub logins whose push of a version tag, or re-run
+  # of its run, makes one. Here, in a file a person must approve (AGENTS.md,
+  # Human review), and not in a file the crew's own review can change, as the
+  # code owners file is. Comma-separated; adding one is a reviewed change to this line.
+  RELEASERS: orzelig
+
+jobs:
+  check:
+    name: the tag is a releaser's release of main whose ci passed
+    runs-on: ubuntu-24.04
+    # Half an hour of it is waiting for ci; see below.
+    timeout-minutes: 40
+    permissions:
+      # The commit's history and the releases' files.
+      contents: read
+      # ci.yml's runs and their jobs and artifacts.
+      actions: read
+      # The pull request a run tested, and whether its base ever changed.
+      pull-requests: read
+      issues: read
+    outputs:
+      sha: ${{ steps.check.outputs.sha }}
+      tree: ${{ steps.check.outputs.tree }}
+      actor: ${{ steps.check.outputs.actor }}
+    steps:
+      # Full history: whether the commit is on main, and where the last
+      # release is, are read from it. Nothing from the checkout is run here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # main's copy of the checks, read from main rather than run from the
+      # checkout, which is the tagged commit's: what each refuses, and why, is
+      # in the script, and tests/release-check.test.ts runs each refusal.
+      - name: the tag is a releaser's next version of main, whose ci passed
+        id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
+          CALLER: ${{ github.workflow_ref }}
+          REPO: ${{ github.repository }}
+          REPO_ID: ${{ github.repository_id }}
+          PUSHED: ${{ github.sha }}
+          ACTOR: ${{ github.triggering_actor }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git show refs/remotes/origin/main:.github/scripts/release-check.mjs > "$RUNNER_TEMP/release-check.mjs"
+          node "$RUNNER_TEMP/release-check.mjs" check
+
+  build:
+    name: build
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    # The tagged commit's own install and build run here, its dependencies'
+    # install scripts among them: nothing in this job can write or sign.
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.ref_name }}
+      SHA: ${{ needs.check.outputs.sha }}
+      TREE: ${{ needs.check.outputs.tree }}
+    steps:
+      # Re-running a job alone reuses `check`'s earlier result: whoever re-runs
+      # this one must be who `check` let through.
+      - name: the run is still the releaser's
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+          CHECKED: ${{ needs.check.outputs.actor }}
+        run: |
+          if [ -z "$CHECKED" ] || [ "$ACTOR" != "$CHECKED" ]; then
+            echo "this run was started or re-run by $ACTOR, not by ${CHECKED:-the releaser check let through}. Nothing is published"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.33.3
+
+      # No cache: a release is built from the registry, against the lockfile's
+      # hashes, not from a store another workflow's run left.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      # The layout is docs/self-hosting.md#what-a-release-holds: the built
+      # output and nothing else, with the paths it has in the repository, and
+      # `openadlc-release.json` naming the commit and tree it was built from.
+      # An install refuses a link of any kind, so a build that made one is
+      # refused here rather than on every install.
+      - name: the archive
+        run: |
+          [ "$(git rev-parse HEAD)" = "$SHA" ] || { echo "the checkout is at $(git rev-parse HEAD), not $SHA"; exit 1; }
+          roots=$(ls -d packages/*/dist apps/*/dist apps/console/.next)
+          # shellcheck disable=SC2086
+          links=$(find $roots -path apps/console/.next/cache -prune -o -type l -print)
+          if [ -n "$links" ]; then
+            echo "the build made links, which an install refuses to unpack:"
+            echo "$links"
+            exit 1
+          fi
+          printf '{"format":1,"tag":"%s","commit":"%s","tree":"%s"}\n' "$TAG" "$SHA" "$TREE" > openadlc-release.json
+          mkdir -p out
+          # shellcheck disable=SC2086
+          tar --format=pax --sort=name --owner=0 --group=0 --numeric-owner --hard-dereference \
+            --mtime="@$(git log -1 --format=%ct "$SHA")" --exclude='apps/console/.next/cache' \
+            -czf "out/openadlc-$TAG.tar.gz" openadlc-release.json $roots
+          (cd out && sha256sum "openadlc-$TAG.tar.gz" > SHA256SUMS)
+          cat out/SHA256SUMS
+          ls -l out
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: out/
+          if-no-files-found: error
+          # Only `publish` reads it; the release keeps the archive.
+          retention-days: 1
+
+  publish:
+    name: publish
+    needs: [check, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Nothing from the repository is checked out or run in this job, and
+    # nothing the build made is run either: its files are only hashed, signed
+    # and uploaded.
+    permissions:
+      # The release and its files.
+      contents: write
+      # The OIDC token the attestation's certificate is issued for.
+      id-token: write
+      # The attestation, kept with the repository as well as in the release.
+      attestations: write
+    env:
+      TAG: ${{ github.ref_name }}
+      SHA: ${{ needs.check.outputs.sha }}
+      REPO: ${{ github.repository }}
+    steps:
+      # As in `build`, and the releasers asked again: a re-run of this job
+      # alone would otherwise sign for whoever pressed it.
+      - name: the run is still a releaser's
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+          CHECKED: ${{ needs.check.outputs.actor }}
+        run: |
+          if [ -z "$CHECKED" ] || [ "$ACTOR" != "$CHECKED" ]; then
+            echo "this run was started or re-run by $ACTOR, not by ${CHECKED:-the releaser check let through}. Nothing is published"
+            exit 1
+          fi
+          # Not `actor`: beside ACTOR, shellcheck reads it as a misspelling
+          # (SC2153) and actionlint fails the workflow.
+          pusher=$(printf '%s' "$ACTOR" | tr '[:upper:]' '[:lower:]')
+          releaser=false
+          for login in $(printf '%s' "$RELEASERS" | tr ',' ' ' | tr '[:upper:]' '[:lower:]'); do
+            if [ "${login#@}" = "$pusher" ]; then releaser=true; fi
+          done
+          if [ "$releaser" != true ]; then
+            echo "$ACTOR is not one of RELEASERS ($RELEASERS). Nothing is published"
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: out
+
+      - name: the archive is the one the build made
+        working-directory: out
+        run: |
+          [ "$(wc -l < SHA256SUMS)" -eq 1 ] || { echo "SHA256SUMS names more than the archive"; exit 1; }
+          sha256sum -c SHA256SUMS
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        id: attest
+        with:
+          subject-path: out/openadlc-${{ github.ref_name }}.tar.gz
+
+      # The command docs/self-hosting.md gives, and self-update runs, on the
+      # bundle the release will carry: a release that would fail it on every
+      # install is not published.
+      - name: the attestation passes the check every install makes
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          cp "$BUNDLE" "out/openadlc-$TAG.tar.gz.sigstore.json"
+          gh attestation verify "out/openadlc-$TAG.tar.gz" \
+            --bundle "out/openadlc-$TAG.tar.gz.sigstore.json" \
+            --repo "$REPO" \
+            --cert-identity "https://github.com/$REPO/.github/workflows/release-build.yml@refs/heads/main" \
+            --source-ref "refs/tags/$TAG" \
+            --source-digest "$SHA" \
+            --deny-self-hosted-runners \
+            --predicate-type https://slsa.dev/provenance/v1
+
+      # The tag was checked minutes ago; it is read again, as GitHub has it
+      # now, so a tag moved meanwhile does not get the checked commit's release.
+      - name: the tag is still on the commit that was checked
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          read -r type sha < <(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '"\(.object.type) \(.object.sha)"')
+          while [ "$type" = tag ]; do
+            read -r type sha < <(gh api "repos/$REPO/git/tags/$sha" --jq '"\(.object.type) \(.object.sha)"')
+          done
+          if [ "$type" != commit ] || [ "$sha" != "$SHA" ]; then
+            echo "$TAG is on $sha now, not on $SHA, which was checked and built. Nothing is published"
+            exit 1
+          fi
+
+      # gh makes it a draft, uploads the files, then publishes it. A release
+      # is never to be replaced, which GitHub enforces only for a repository
+      # with immutable releases on; this token cannot read that setting, but
+      # can read whether the release came out immutable. One that did not is
+      # deleted (its tag stays), and the run fails saying what to turn on;
+      # installs take only an immutable release in any case.
+      - name: the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" --repo "$REPO" --verify-tag --title "$TAG" --generate-notes \
+            "out/openadlc-$TAG.tar.gz" "out/openadlc-$TAG.tar.gz.sigstore.json" out/SHA256SUMS
+          immutable=$(gh api "repos/$REPO/releases/tags/$TAG" --jq '.immutable')
+          if [ "$immutable" != true ]; then
+            gh release delete "$TAG" --repo "$REPO" --yes
+            echo "the release came out mutable, so it was deleted again and the tag kept: turn on immutable releases for $REPO (docs/development.md#once-per-repository), then re-run this workflow"
+            exit 1
+          fi

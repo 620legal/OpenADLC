@@ -2551,6 +2551,118 @@ then Cloud SQL, then Cloud Run, logging and NAT. Engine spend is bounded
 separately by the caps in Settings → Spending limits (`config/costs.yaml` only
 seeds the two global amounts the first time OpenADLC starts).
 
+## Releases
+
+A release of OpenADLC is made by a person pushing a version tag: `v` and three
+numbers, such as `v0.2.0`. Nothing else makes one, and there is none for each
+commit of `main`. The tag starts `.github/workflows/release.yml`, which does
+nothing but call `.github/workflows/release-build.yml` as `main` has it: a tag
+push runs the `release.yml` of the commit it tags, which could be any commit,
+so everything that decides is in the reusable workflow, and its signature is
+the one an install checks. `release-build.yml`:
+
+1. runs `main`'s `.github/scripts/release-check.mjs`, which refuses the run
+   unless it is the push of a version tag from `release.yml`; unless the person
+   who pushed it (or re-ran it) is one of `RELEASERS`, which
+   `release-build.yml` itself names, so no crew account releases; unless the
+   tag is on one of `main`'s first parents; unless the version is above every
+   release this workflow made (immutable, and passing the check below), with
+   the newest of them among the tagged commit's first parents, so a release
+   anybody else created is passed over rather than counted; and unless
+   `ci.yml`'s own run for the push of that commit to `main` passed, having run
+   the tests itself or having skipped them for a pull request's run into
+   `main` that ran them, waiting up to half an hour for one still running. A
+   commit a merge brought in is not a first parent; the earlier commits of a
+   rebased pull request are, but have no run of `ci` on `main` of their own,
+   so they are refused too;
+2. builds that commit (`pnpm install --frozen-lockfile`, `pnpm build`) with a
+   read-only token and no cache, and packs the built output;
+3. attests the archive with GitHub's artifact attestations, signed through
+   Sigstore's public instance since the repository is public, runs the check
+   below on it, reads the tag again to see it has not moved, and only then
+   publishes the release, which must come out immutable. `build` and
+   `publish` each refuse a re-run by anyone but the person `check` let
+   through, and `publish` asks `RELEASERS` again. One release runs at a time,
+   whatever the tag.
+
+A tag that is refused publishes nothing, and the run says why. Cutting one is
+in [development.md](development.md#cutting-a-release), and what the chain
+proves is in [security.md](security.md#releases).
+
+### What a release holds
+
+This is the contract between the workflow and anything that takes a release,
+and both follow it as written here.
+
+| Part | What it is |
+|---|---|
+| The tag | `vMAJOR.MINOR.PATCH`, three numbers without leading zeros and nothing after them: `v0.2.0`, above every earlier release. A release is never a draft or a prerelease, and is never replaced: it is an immutable release (GitHub's `immutable`), whose files and tag cannot change once it is published |
+| `openadlc-<tag>.tar.gz` | The archive (`openadlc-v0.2.0.tar.gz`): a gzip-compressed tar, in pax format, of the built output at the paths it has in the repository: each `packages/<name>/dist/` and `apps/<name>/dist/`, and `apps/console/.next/` without its `cache/`, beside `openadlc-release.json` at the top. Directories and regular files only: no link of any kind, no absolute path, no `..`, nothing else. No `node_modules`: whoever takes it runs `pnpm install --frozen-lockfile` against the same commit, which builds node-pty for their own OS and architecture |
+| `openadlc-release.json` | Inside the archive, one line naming what it was built from: `{"format":1,"tag":"v0.2.0","commit":"<40 hex>","tree":"<40 hex>"}`, the tagged commit and its tree |
+| `SHA256SUMS` | One line in `sha256sum`'s format: the archive's SHA-256 in lower-case hex, two spaces, and its name |
+| `openadlc-<tag>.tar.gz.sigstore.json` | The archive's build provenance attestation (SLSA provenance v1) as a Sigstore bundle; GitHub keeps the same attestation under the repository's attestations |
+
+The built output serves any install whatever its path: the console's
+`.next/` was seen serving pages from a directory other than the one it was
+built in, and what differs from one install to another, such as
+`NEXT_PUBLIC_OPENADLC_TERMINAL_URL`, is read when the console starts
+([configuration.md](configuration.md#console)).
+
+### Checking a release
+
+The attestation is the proof; the checksum only catches a download that went
+wrong. In a clone that has the tag:
+
+```bash
+tag=v0.2.0
+gh release download "$tag" --repo 620legal/OpenADLC --dir "release-$tag"
+cd "release-$tag"
+sha256sum -c SHA256SUMS                  # macOS: shasum -a 256 -c SHA256SUMS
+commit=$(git rev-parse "$tag^{commit}")
+gh attestation verify "openadlc-$tag.tar.gz" \
+  --bundle "openadlc-$tag.tar.gz.sigstore.json" \
+  --repo 620legal/OpenADLC \
+  --cert-identity "https://github.com/620legal/OpenADLC/.github/workflows/release-build.yml@refs/heads/main" \
+  --source-ref "refs/tags/$tag" \
+  --source-digest "$commit" \
+  --deny-self-hosted-runners \
+  --predicate-type https://slsa.dev/provenance/v1
+```
+
+It passes only for an archive whose exact bytes `release-build.yml`, as `main`
+had it, signed on a GitHub-hosted runner, in a run for the push of that tag
+onto that commit. `--cert-identity` is the signer: a reusable workflow's
+certificate names the reusable workflow and the ref it was called at (Fulcio's
+`job_workflow_ref`), not the `release.yml` that called it, so an attestation a
+tagged commit's own workflow made, whatever it calls itself, fails here.
+`--source-ref` and `--source-digest` are the tag and the commit the run was
+for, and `--deny-self-hosted-runners` refuses a run on a machine someone else
+keeps. The workflow's own commit is not checked: it is `main`'s at the time of
+the release, which moves. With `--bundle` the check needs no GitHub sign-in:
+`gh` reads Sigstore's root of trust, not the GitHub API. It needs a GitHub CLI
+whose `gh attestation verify --help` lists `--source-digest` and
+`--cert-identity`. A fork's releases are its own `release-build.yml`'s, once
+the fork's `release.yml` calls it rather than this repository's: put the
+fork's name in place of `620legal/OpenADLC` in both places.
+
+### How long releases are kept
+
+Every release is kept. Each is about 6 MB, most of it the console's `.next/`,
+and GitHub does not count release files against a repository's storage or
+bill for them, nor limit their downloads. The archive also passes from the
+build to the job that publishes it as a workflow artifact, kept for one day,
+which counts toward the repository's Actions storage for that day. A release
+cannot be changed once it is published; one that should not be taken is
+followed by a higher version, which every install takes over it.
+
+Anyone who can push to the repository can push a tag, and a tag push runs
+whatever `release.yml` the tagged commit has. What a person relies on is that
+only `release-build.yml` as `main` has it can sign a release installs accept,
+and that it refuses a tag on anything but a releaser's push onto a
+first-parent, ci-green commit of `main`. The tag ruleset and immutable
+releases in [development.md](development.md#once-per-repository) narrow who can
+push or move a `v*` tag at all; `openadlc github apply` sets neither.
+
 ## Upgrading
 
 An install made before the rename to OpenADLC (its state in `~/.fleet`, its

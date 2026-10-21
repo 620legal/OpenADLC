@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest';
  * (.github/dependabot.yml), and each service image a digest.
  */
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const OWN_RELEASE_BUILD = '620legal/OpenADLC/.github/workflows/release-build.yml@main';
 const DIRECTORIES = [join(ROOT, '.github', 'workflows'), join(ROOT, 'crew', 'templates', 'repo', '.github', 'workflows')];
 
 interface Workflow {
@@ -53,6 +54,10 @@ describe('what the workflows run', () => {
     for (const line of readFileSync(file, 'utf8').split('\n')) {
       const uses = /^\s*-?\s*uses:\s*(\S+)(.*)$/.exec(line);
       if (!uses || uses[1]!.startsWith('./')) continue;
+      // release.yml calls this repository's release-build.yml at main, on
+      // purpose: main's reviewed checks are the point, and the signature
+      // installs verify is main's (tests/release-workflow.test.ts).
+      if (uses[1] === OWN_RELEASE_BUILD) continue;
       expect(uses[2], line.trim()).toMatch(/^ # v\d+\.\d+\.\d+$/);
     }
   });

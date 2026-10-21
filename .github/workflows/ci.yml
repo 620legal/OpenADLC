@@ -111,15 +111,17 @@ jobs:
           if printf '%s\n' "$files" | grep -q '^infra/gcp/'; then echo "infra=true" >> "$GITHUB_OUTPUT"; else echo "infra=false" >> "$GITHUB_OUTPUT"; fi
           echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
 
-      # The verdict of a pull request's full run leaves an artifact named
-      # after the tree it passed. Only this repository's own runs count: a
-      # fork's run is the fork's workflow, and could name any tree. Nor is the
-      # name enough on its own: any run from a branch here can upload one, a
-      # branch with an edited ci.yml among them. So the run has to be a pull
-      # request's run of this workflow that passed, and the tree has to be its
-      # own head's — a run vouches only for the tree it was given, and that tree
-      # reaches main only through review. (An up-to-date pull request's merge
-      # commit has its head's tree, and only an up-to-date one lands.)
+      # The verdict of a pull request's full run leaves an artifact named after
+      # the tree it passed, and a push to main of that exact tree skips the
+      # tests. The name proves nothing: any run can upload one, a run for a
+      # pull request into some other branch among them, which runs that
+      # branch's ci.yml, and anyone who can push can write that. So
+      # .github/scripts/release-check.mjs (`vouchedRun`) counts only a passed
+      # run of ci.yml for a pull request of this repository into main, whose
+      # base never changed, whose head has this tree, and that ran the tests.
+      # A run vouches only for the tree it was given, and that tree reaches
+      # main only through review. (An up-to-date pull request's merge commit
+      # has its head's tree, and only an up-to-date one lands.)
       - name: already passed on its pull request
         id: tested
         if: github.event_name == 'push'
@@ -128,21 +130,7 @@ jobs:
           REPO: ${{ github.repository }}
           REPO_ID: ${{ github.repository_id }}
           TREE: ${{ steps.paths.outputs.tree }}
-        run: |
-          tested=false
-          runs=$(gh api "repos/$REPO/actions/artifacts?name=tested-tree-$TREE" \
-            --jq ".artifacts[] | select(.expired == false and .workflow_run.head_repository_id == $REPO_ID) | \"\(.workflow_run.id) \(.workflow_run.head_sha)\"" 2>/dev/null || true)
-          while read -r run head; do
-            [ -n "$run" ] || continue
-            verdict=$(gh api "repos/$REPO/actions/runs/$run" --jq '"\(.event) \(.conclusion) \(.path)"' 2>/dev/null || true)
-            [ "$verdict" = "pull_request success .github/workflows/ci.yml" ] || continue
-            if [ "$(gh api "repos/$REPO/git/commits/$head" --jq .tree.sha 2>/dev/null || true)" = "$TREE" ]; then
-              tested=true
-              break
-            fi
-          done <<< "$runs"
-          if [ "$tested" = true ]; then echo "tree $TREE passed in full on its pull request; nothing to run again"; fi
-          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+        run: node .github/scripts/release-check.mjs vouched
 
   # No credential lands in the history: gitleaks reads each commit the pull
   # request adds (or the push or merge group brings), with this repository's

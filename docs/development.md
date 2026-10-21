@@ -271,6 +271,62 @@ the skill. Whether a model reading the skill stops takes a live run
   crew's to review. A change to that section itself needs every person the
   base branch's section names; an edit elsewhere in AGENTS.md needs nobody.
 
+## Cutting a release
+
+A release is a version tag, pushed by one of `RELEASERS` (named at the top of
+`.github/workflows/release-build.yml`, a person-reviewed file: adding a
+releaser is a reviewed change to that line), on a commit of `main` whose `ci`
+has passed
+([self-hosting](self-hosting.md#releases) says what one holds):
+
+```bash
+git fetch origin main
+git tag v0.2.0 origin/main        # or an earlier first-parent commit of main, after the last release
+git push origin v0.2.0
+```
+
+`release.yml` calls `release-build.yml` as `main` has it, which does the rest
+or refuses and says why: a tag pushed by anyone else, a commit that is not
+one of `main`'s first parents, a commit whose own `ci` run on `main` failed,
+has not finished in half an hour, or did not run the tests (a commit that
+changed only docs does not build in `ci`: tag the commit before it), a
+version that is not above every release, or one that already has a release.
+A refused tag publishes nothing; delete it
+(`git push origin :refs/tags/v0.2.0`, which the tag ruleset below lets only
+you do) and tag again, or re-run the workflow once `ci` has passed. Versions
+only go up, three numbers with no suffix: there are no prereleases.
+
+On a first release, and after a change to either workflow, look at the run:
+`publish` ran `gh attestation verify` on the release's own bundle before
+creating it, and the release should be immutable, with exactly three files:
+the archive, its `.sigstore.json` bundle and `SHA256SUMS`. A change to
+`release-build.yml` or `.github/scripts/release-check.mjs` takes effect for
+the next tag once it is on `main`; a change to `release.yml` only for tags on
+commits that have it. `tests/release-check.test.ts` runs each of the checks'
+refusals, and `tests/release-workflow.test.ts` checks the triggers and
+permissions, that `release.yml` only calls `release-build.yml@main`, runs the
+steps of `build` and `publish` that refuse, checks that the job that signs
+runs nothing it should not, that the attestation check is the same wherever
+it is written, and that `ci.yml` stays read-only; nothing short of a pushed tag
+runs either workflow.
+
+### Once per repository
+
+Two settings the workflows cannot make for themselves, done once by a
+repository admin:
+
+- **Immutable releases.** Settings → General → Releases → enable release
+  immutability. A published release's files and its tag can then never
+  change, so "never replaced" is GitHub's rule, not only this workflow's. The
+  workflow's token cannot read the setting; it reads whether each release it
+  makes came out immutable, and deletes one that did not and fails.
+- **A tag ruleset for `v*`.** Settings → Rules → Rulesets → New tag ruleset,
+  targeting `refs/tags/v*`, active, with *Restrict creations*, *Restrict
+  updates* and *Restrict deletions*, and nobody on the bypass list but the
+  person who releases (a role or team no crew account has). Then a crew
+  account cannot even push a version tag, let alone release one, which the
+  workflow refuses anyway.
+
 ## Plan changes
 
 A task that needs to write outside its lease's paths ends a message with a

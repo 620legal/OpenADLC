@@ -1,0 +1,45 @@
+# Starts a release of OpenADLC when a person pushes a version tag: `v` and
+# three numbers, such as v0.2.0. Everything else is release-build.yml, and
+# always main's: docs/self-hosting.md#releases says what a release holds and
+# how an install checks it.
+#
+# A tag push runs the release.yml of the commit it tags, and anyone who can
+# push can tag any commit, a branch nobody reviewed included. So nothing here
+# may decide anything: this file only calls release-build.yml at main, which
+# runs main's reviewed checks, build and signing with this run's context. Its
+# attestation names release-build.yml@refs/heads/main as its signer, and that
+# is the identity every install verifies. A tagged commit whose own release.yml
+# does something else signs, if at all, as that release.yml, and installs
+# refuse it.
+#
+# Not pinned to a commit, unlike every other `uses:`
+# (tests/action-pins.test.ts): main is the point. A pin would freeze the checks
+# at one version, and its signature would not be main's.
+name: release
+run-name: release ${{ github.ref_name }}
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions: {}
+
+# One release at a time, whatever the tag: two tags checked at once would each
+# pass the version check against the same newest release. A third tag pushed
+# meanwhile replaces the one waiting, which then needs pushing again.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    # What release-build.yml's jobs may have, at most; each takes less.
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+      issues: read
+      id-token: write
+      attestations: write
+    uses: 620legal/OpenADLC/.github/workflows/release-build.yml@main

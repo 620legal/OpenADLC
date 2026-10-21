@@ -1284,6 +1284,108 @@ before it is stored. The redaction knows credentials by their shape, not by
 value. A session's last line is shown only to admins; the crew page a user
 reads leaves it out.
 
+## Releases
+
+A release ([self-hosting](self-hosting.md#releases)) is code that installs
+will run with the services' rights, so who can make one, and what checking one
+proves, are written down here.
+
+**Who can make one.** Anyone who can push to the repository can push a tag,
+onto any commit, and a tag push runs the `release.yml` of the commit it tags,
+which that person could have written. So nothing in `release.yml` is trusted:
+it only calls `release-build.yml@main`, the reusable workflow as `main` has it,
+which runs `main`'s reviewed code with the tag run's context, and is the only
+signer an install accepts. A tagged commit whose own `release.yml` builds and
+signs something else gets a certificate naming that file, which fails every
+install's check. Before anything is built, `release-build.yml` refuses:
+
+- a run that is not the push of a version tag, from this repository's
+  `release.yml`, onto the commit the run is for;
+- a tag pushed or re-run by anyone but one of `RELEASERS`, the logins
+  `release-build.yml` itself names (today @orzelig), in a file the
+  [Human review](../AGENTS.md#human-review) of `.github/workflows/` holds to a
+  person, so no crew account can release even where it can push a tag, and
+  none can make itself a releaser with the crew's own review; `build` and
+  `publish` each refuse a re-run by anyone but who `check` let through, and
+  `publish` asks `RELEASERS` again;
+- a commit that is not one of `main`'s first parents: one a merge brought in
+  never is, and the earlier commits of a rebased pull request are, but have no
+  run of `ci` of their own on `main`;
+- a commit whose `ci.yml` run for its push to `main` did not pass its `ci`
+  job, or did not run the tests: it skips them for a tree a pull request's
+  run already tested, and that counts only for a passed run of `ci.yml` for a
+  pull request of this repository into `main`, whose base never changed, that
+  ran them, tied to that pull request by its head branch as well as its head
+  commit, from a branch every one of whose pull requests was into `main`
+  (`vouchedRun`; `ci.yml` reads the same, so a pull request into
+  another branch, running that branch's `ci.yml`, cannot make `main`'s run
+  skip its tests);
+- a version that is not above every release this workflow made, or whose
+  newest is not among its first parents, and a tag that already has a
+  release. A release counts only if it is immutable and its own bundle passes
+  the check an install makes, so one a crew account created by hand, such as
+  `v999.0.0`, is passed over rather than blocking every tag after it.
+
+The checks are main's `.github/scripts/release-check.mjs`, which the workflow
+reads from `main` rather than running the tagged commit's copy, and
+`tests/release-check.test.ts` runs each refusal against a real repository and
+a stand-in for GitHub's API. One release runs at a time, whatever the tag, so
+two tags cannot both pass the version check against the same newest release.
+
+A commit of `main` reached it through the merge line or a person's merge, with
+the reviews [the platform](#the-platform) holds a merge to and the people
+[Human review](../AGENTS.md#human-review) names, `.github/workflows/` among
+them. Nothing runs for a pull request.
+
+**What each job holds.** Both workflows grant nothing by default; `release.yml`
+hands the reusable workflow at most `contents: write`, `actions: read`,
+`id-token: write` and `attestations: write`, and each of its jobs takes less.
+The job that checks reads the contents and the Actions runs. The job that
+builds runs the tagged commit's `pnpm install --frozen-lockfile` and `pnpm
+build`, and so its dependencies' install scripts, with a token that reads the
+contents and nothing more, and nothing that can sign; it installs from the
+registry against the lockfile's hashes, with no cache another run could have
+written. Only the job that publishes holds `contents: write`, `id-token:
+write` and `attestations: write`, and it runs nothing from the repository and
+nothing the build made: it checks the archive against the build's SHA-256,
+attests it, runs the same `gh attestation verify` an install runs, reads the
+tag again from GitHub to see it is still on the checked commit, and creates
+the release. A release that does not come out immutable is deleted again and
+the run fails: the workflow's token cannot read the repository's
+immutable-releases setting (that takes administration access), but it can
+read whether the release it made is immutable. `ci.yml`, which runs for every
+pull request, a fork's among them, keeps `contents: read` and grants no job
+anything of its own. `tests/release-workflow.test.ts` fails if any of this
+changes: if `release.yml` does anything but call `release-build.yml@main`, if
+the job that signs runs any program but the few it needs, or if any workflow
+has no permissions block or writes what it is not listed for. Every action is
+named by its commit ([action-pins.test.ts](../tests/action-pins.test.ts)),
+except that one call to `main`.
+
+**What a check proves.** `gh attestation verify` with the flags in
+[Checking a release](self-hosting.md#checking-a-release) passes only for the
+bytes `release-build.yml`, as `main` had it, signed on a GitHub-hosted runner,
+in a run for the push of that tag onto that commit. The signature is
+Sigstore's public instance: a certificate Fulcio issued for GitHub's OIDC token
+for that run, logged in Rekor, whose identity is the reusable workflow at
+`refs/heads/main`. So a release file replaced afterwards fails it, and so does
+an archive signed by any other workflow, any other ref of this one, or another
+repository. It does not prove the checks above ran as written, except in that
+`main`'s version of the file is the one that signed.
+
+What it does not prove is that the code is safe. It proves where the bytes
+came from, so it is worth what `main` is worth: the reviews a change had, and
+GitHub's `ci` on it. A dependency that does something its version should not
+is held off by the lockfile's hashes and by `pnpm-workspace.yaml`'s
+`minimumReleaseAge` and `trustPolicy` when the lockfile is resolved, not by
+the attestation. And it is worth what the people who approve changes to
+`main`'s `.github/workflows/` and `.github/scripts/` are: they decide who may
+release, and how a release is checked. The tag
+ruleset and immutable releases in
+[development.md](development.md#once-per-repository) keep anyone else from
+creating, moving or deleting a `v*` tag, and keep a release from being
+replaced.
+
 ## Who OpenADLC acts for
 
 On a public repository anybody can open an issue, comment on one, review a pull
