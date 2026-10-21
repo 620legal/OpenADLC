@@ -24,25 +24,37 @@ export interface CiTemplateUpdate {
   outcome: string;
 }
 
+/**
+ * What bringing any earlier template up to date changes for its push to the
+ * default branch. None of them looked at the base of the pull request whose
+ * run let that push skip its tests (the first two never skipped them), and
+ * the current one reads more to tell, which a repository agrees to with it.
+ */
+const COUNTS_ONLY_THE_DEFAULT_BRANCH =
+  'counts only a pull request into the default branch as having tested a tree, since one into another branch runs that branch’s copy of the workflow, which can pass anything, and reads pull requests and their events to tell (`pull-requests: read`, `issues: read`)';
+
 const RUNS_ONLY_WHAT_A_CHANGE_NEEDS: CiTemplateUpdate = {
-  reason:
-    'an earlier OpenADLC workflow, unchanged since it was written; the current one runs only what a change needs — not the build for docs alone, not again on the default branch for a tree its pull request passed — stops a hung run after 30 minutes, names each action by a commit rather than a tag that can be moved, and says in its first line that the file is also 0BSD',
+  reason: `an earlier OpenADLC workflow, unchanged since it was written; the current one runs only what a change needs — not the build for docs alone, not again on the default branch for a tree its pull request passed — stops a hung run after 30 minutes, names each action by a commit rather than a tag that can be moved, says in its first line that the file is also 0BSD, and ${COUNTS_ONLY_THE_DEFAULT_BRANCH}`,
   title: 'run only what a change needs',
-  outcome: 'the current template, which runs only what a change needs',
+  outcome: 'the current template, which runs only what a change needs, and counts only a pull request into the default branch as having tested a tree',
 };
 
 const ADDS_THE_SPDX_LINE: CiTemplateUpdate = {
-  reason:
-    'the OpenADLC workflow before this one, unchanged since it was written; the current one runs the same and adds the SPDX line saying the file is also 0BSD, so the repository can keep it with no attribution or notice',
-  title: 'add the SPDX line saying it is also 0BSD',
-  outcome: 'the current template, which adds the SPDX line saying the file is also 0BSD',
+  reason: `an earlier OpenADLC workflow, unchanged since it was written; the current one adds the SPDX line saying the file is also 0BSD, so the repository can keep it with no attribution or notice, and ${COUNTS_ONLY_THE_DEFAULT_BRANCH}`,
+  title: 'add the SPDX line saying it is also 0BSD, and count only a pull request into the default branch as having tested a tree',
+  outcome: 'the current template, which adds the SPDX line saying the file is also 0BSD, and counts only a pull request into the default branch as having tested a tree',
 };
 
 const RENAMES_THE_PLATFORM: CiTemplateUpdate = {
-  reason:
-    'the workflow from before the platform was renamed to OpenADLC, unchanged since it was written; the current one runs the same, and its comments name the platform and its command as they are spelled now',
-  title: 'say the platform is called OpenADLC now',
-  outcome: 'the current template, the same workflow; its comments name the platform and its command as they are spelled now',
+  reason: `the workflow from before the platform was renamed to OpenADLC, unchanged since it was written; in the current one the comments name the platform and its command as they are spelled now, and it ${COUNTS_ONLY_THE_DEFAULT_BRANCH}`,
+  title: 'say the platform is called OpenADLC now, and count only a pull request into the default branch as having tested a tree',
+  outcome: 'the current template, whose comments name the platform and its command as they are spelled now, and which counts only a pull request into the default branch as having tested a tree',
+};
+
+const ONLY_THE_DEFAULT_BRANCH_VOUCHES: CiTemplateUpdate = {
+  reason: `the OpenADLC workflow before this one, unchanged since it was written, whose push to the default branch skipped the tests for a tree a pull request into any branch had passed; the current one ${COUNTS_ONLY_THE_DEFAULT_BRANCH}`,
+  title: 'count only a pull request into the default branch as having tested a tree',
+  outcome: 'the current template, which counts only a pull request into the default branch as having tested a tree',
 };
 
 /**
@@ -60,7 +72,9 @@ const RENAMES_THE_PLATFORM: CiTemplateUpdate = {
  *
  * Each hash carries its own reason because they differ: the third template
  * already ran only what a change needs, and saying so again told a repository
- * set up from it that its CI would change when only a comment line would.
+ * set up from it that its CI would change in ways it would not. What does
+ * change for every one of them is which pull requests the push counts, so
+ * each reason says that too (`COUNTS_ONLY_THE_DEFAULT_BRANCH`).
  */
 export const EARLIER_CI_TEMPLATES: ReadonlyMap<string, CiTemplateUpdate> = new Map<string, CiTemplateUpdate>([
   // Fleet, before the renames: on every push and pull request.
@@ -76,10 +90,13 @@ export const EARLIER_CI_TEMPLATES: ReadonlyMap<string, CiTemplateUpdate> = new M
   // FleetADLC's fourth: the same workflow from before the rename to OpenADLC,
   // its comments still saying `fleetadlc github apply`.
   ['d188418766bed6373c2c46725cc92c2c7cef55040013d148de1b326bd28b1d15', RENAMES_THE_PLATFORM],
+  // OpenADLC's first: a push to the default branch skipped its tests for a
+  // tree any pull request's run had passed, one into another branch included.
+  ['133faab3f26feb56293c136a5594df51a8ae9242b5a13dfd80a156a0a57539d7', ONLY_THE_DEFAULT_BRANCH_VOUCHES],
 ]);
 
 /** The SHA-256 of the CI template as it ships now. */
-export const CURRENT_CI_TEMPLATE = '133faab3f26feb56293c136a5594df51a8ae9242b5a13dfd80a156a0a57539d7';
+export const CURRENT_CI_TEMPLATE = '746578e36a684368e3a1f3375d2aefb22642f1993e7235bba0096f72ceb9644b';
 
 export function templateHash(body: string): string {
   return createHash('sha256').update(body).digest('hex');

@@ -321,19 +321,32 @@ describe('a CI workflow OpenADLC wrote earlier', () => {
   }
 
   // The ones that shipped before this one, exactly as they were written into
-  // repositories: Fleet's, and FleetADLC's first through fourth. Each is
-  // offered with what bringing it up to date changes for it: the third already
-  // ran only what a change needs and differs only by the SPDX line, and the
-  // fourth differs only by what the platform is called in its comments.
+  // repositories: Fleet's, FleetADLC's first through fourth, and OpenADLC's
+  // first. Each is offered with what bringing it up to date changes for it:
+  // the third already ran only what a change needs and differs by the SPDX
+  // line, the fourth by what the platform is called in its comments, and
+  // OpenADLC's first skipped the default branch's tests for a pull request
+  // into any branch, as the second through fourth did too.
   const RUNS_LESS = { says: 'runs only what a change needs', title: 'run only what a change needs' };
-  const SPDX = { says: 'adds the SPDX line saying the file is also 0BSD', title: 'add the SPDX line saying it is also 0BSD' };
-  const RENAMED = { says: 'name the platform and its command as they are spelled now', title: 'say the platform is called OpenADLC now' };
+  const SPDX = {
+    says: 'adds the SPDX line saying the file is also 0BSD',
+    title: 'add the SPDX line saying it is also 0BSD, and count only a pull request into the default branch as having tested a tree',
+  };
+  const RENAMED = {
+    says: 'name the platform and its command as they are spelled now',
+    title: 'say the platform is called OpenADLC now, and count only a pull request into the default branch as having tested a tree',
+  };
+  const VOUCHES = {
+    says: 'counts only a pull request into the default branch as having tested a tree',
+    title: 'count only a pull request into the default branch as having tested a tree',
+  };
   const versions = [
     { name: 'Fleet’s', file: 'ci-template-fleet.yml', ...RUNS_LESS },
     { name: 'FleetADLC’s first', file: 'ci-template-fleetadlc-1.yml', ...RUNS_LESS },
     { name: 'FleetADLC’s second', file: 'ci-template-fleetadlc-2.yml', ...RUNS_LESS },
     { name: 'FleetADLC’s third', file: 'ci-template-fleetadlc-3.yml', ...SPDX },
     { name: 'FleetADLC’s fourth', file: 'ci-template-fleetadlc-4.yml', ...RENAMED },
+    { name: 'OpenADLC’s first', file: 'ci-template-openadlc-1.yml', ...VOUCHES },
   ].map((version) => ({ ...version, body: readFileSync(join(import.meta.dirname, 'fixtures', version.file), 'utf8') }));
   const shipped = versions.map((version) => version.body);
 
@@ -377,19 +390,36 @@ describe('a CI workflow OpenADLC wrote earlier', () => {
     },
   );
 
-  it.each(['ci-template-fleetadlc-3.yml', 'ci-template-fleetadlc-4.yml'])(
-    'does not tell a repository on %s that its CI will run differently',
+  it.each(['ci-template-fleetadlc-3.yml', 'ci-template-fleetadlc-4.yml', 'ci-template-openadlc-1.yml'])(
+    'tells a repository on %s that its push counts fewer pull requests, not that it runs less',
     async (file) => {
+      // These already ran only what a change needs; what changes is which
+      // pull request's run lets the push to the default branch skip its tests.
       const version = versions.find((candidate) => candidate.file === file)!;
       const { api, writes } = withWorkflow(version.body);
       const detail = (await checkRepoTemplates(api, 'owner/repo')).find((report) => report.name === CI_WORKFLOW)?.detail;
       expect(detail).not.toContain('runs only what a change needs');
       expect(detail).not.toContain('stops a hung run');
+      expect(detail).toContain('counts only a pull request into the default branch as having tested a tree');
 
       await applyRepoTemplates(api, { fullName: 'owner/repo', root: ROOT });
       expect(writes[0]!.body.message).not.toContain('run only what a change needs');
+      expect(writes[0]!.body.message).toContain('count only a pull request into the default branch');
     },
   );
+
+  it.each(versions)('tells a repository on $name which pull requests its push counts now, and what it reads to tell', async ({ body }) => {
+    // Every earlier template skipped the push's tests for a pull request into
+    // any branch, or never skipped them; the current one also reads pull
+    // requests and their events, which a repository agrees to with it.
+    const { api } = withWorkflow(body);
+    const detail = (await checkRepoTemplates(api, 'owner/repo')).find((report) => report.name === CI_WORKFLOW)?.detail;
+    expect(detail).toContain('counts only a pull request into the default branch as having tested a tree');
+    expect(detail).toContain('(`pull-requests: read`, `issues: read`)');
+    const outcome = (await applyRepoTemplates(api, { fullName: 'owner/repo', root: ROOT })).find((entry) => entry.name === CI_WORKFLOW)?.detail;
+    expect(outcome).toContain('counts only a pull request into the default branch as having tested a tree');
+    expect(outcome).not.toContain('the same workflow');
+  });
 
   it('leaves a workflow somebody changed alone, by a single byte, and the current one too', async () => {
     for (const body of [`${shipped[1]}# ours\n`, templateBody(CI_WORKFLOW, ROOT)]) {
