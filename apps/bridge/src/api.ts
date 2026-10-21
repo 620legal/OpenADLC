@@ -120,7 +120,7 @@ import type { HealthAction } from '@openadlc/shared';
 import { attachmentIds, claimableFor, claimWindowStart, registerAttachmentRoutes } from './attachment-routes.js';
 import { registerDesignMemoryRoutes } from './design-memory.js';
 import { ignoredSubjects, issueForSubject, parseRef, taskSummary } from './work.js';
-import { endedWithoutPullRequest, readBranch } from './build-left.js';
+import { endedWithoutPullRequest, readBranch, workLanded } from './build-left.js';
 import { SpendingLimitRejected, applySpendingLimits, spendingView } from './spending-limits.js';
 import { DEFAULT_REMOVAL, RepoRemoval, appOnRepository, appStanding, configuredLabelNames } from './repo-removal.js';
 import type { SendBack } from './send-back.js';
@@ -744,25 +744,29 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     // What a task is, in the words the crew page uses: the issue it is about, and
     // for a review the round it is in, which is one more than the fixes so far,
     // out of how many rounds the loop runs before it stops and asks.
-    const summarise = async (task: Awaited<ReturnType<typeof tasks.listTasks>>[number] | undefined) =>
-      task
-        ? {
-            // The thread's Stop acts on it by id, and offers it for a task a
-            // person did not stop already.
-            id: task.id,
-            stoppedByAPerson: task.state === 'stopped' && Boolean(task.exitReason?.startsWith(STOPPED_BY_A_PERSON)),
-            // A build that ended `done` with no pull request: the thread offers
-            // Try again for it, which goes on from its branch.
-            endedWithoutPullRequest: endedWithoutPullRequest(task, issueForSubject(task.subjectRef, issueList)),
-            ...taskSummary(task, {
-              issues: issueList,
-              gated,
-              patches: task.kind === 'review' ? await tasks.listTasksForSubjects('patch', [task.subjectRef]) : [],
-              maxRounds: config?.review?.maxRounds ?? null,
-              repoNames,
-            }),
-          }
-        : null;
+    const summarise = async (task: Awaited<ReturnType<typeof tasks.listTasks>>[number] | undefined) => {
+      if (!task) return null;
+      const issue = issueForSubject(task.subjectRef, issueList);
+      return {
+        // The thread's Stop acts on it by id, and offers it for a task a
+        // person did not stop already.
+        id: task.id,
+        stoppedByAPerson: task.state === 'stopped' && Boolean(task.exitReason?.startsWith(STOPPED_BY_A_PERSON)),
+        // A build that ended `done` with no pull request: the thread offers
+        // Try again for it, which goes on from its branch.
+        endedWithoutPullRequest: endedWithoutPullRequest(task, issue),
+        // Work whose issue merged or closed: the thread says it landed,
+        // and offers no Try again, which the retry refuses for it.
+        landed: workLanded(task, issue),
+        ...taskSummary(task, {
+          issues: issueList,
+          gated,
+          patches: task.kind === 'review' ? await tasks.listTasksForSubjects('patch', [task.subjectRef]) : [],
+          maxRounds: config?.review?.maxRounds ?? null,
+          repoNames,
+        }),
+      };
+    };
 
     return {
       bots: await Promise.all(

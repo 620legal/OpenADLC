@@ -121,6 +121,8 @@ export interface TaskSummary {
   stoppedByAPerson?: boolean;
   /** A build that ended `done` without opening its pull request, which Try again goes on with. Absent from an older bridge. */
   endedWithoutPullRequest?: boolean;
+  /** The work it was for has landed: its issue is merged or done, or it was stopped as `already landed`. Absent from an older bridge. */
+  landed?: boolean;
   kind: string;
   state: string;
   subjectRef: string;

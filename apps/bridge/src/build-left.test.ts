@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { GitHubApiError } from '@openadlc/github';
-import { continuesBranch, endedWithoutPullRequest, openPullRequestUrl, readBranch } from './build-left.js';
+import { continuesBranch, endedWithoutPullRequest, openPullRequestUrl, readBranch, workLanded } from './build-left.js';
 
 const BRANCH = 'agent/openadlc-atlas-janedoe/216-issue-216';
 
@@ -60,5 +60,40 @@ describe('a build that ended without its pull request', () => {
   it('is opened from GitHub’s compare page for the branch', () => {
     expect(openPullRequestUrl('janedoe/openadlc-testbed', BRANCH, 'main')).toBe(`https://github.com/janedoe/openadlc-testbed/compare/main...${BRANCH}?expand=1`);
     expect(openPullRequestUrl('janedoe/openadlc-testbed', BRANCH)).toBe(`https://github.com/janedoe/openadlc-testbed/compare/${BRANCH}?expand=1`);
+  });
+});
+
+describe('work that has landed', () => {
+  const failed = { kind: 'implement' as const, subjectRef: 'openadlc-testbed#18', exitReason: 'engine exited 1' };
+
+  it('is work that ends with its subject, on an issue that merged or is done', () => {
+    expect(workLanded(failed, { stage: 'merged' })).toBe(true);
+    expect(workLanded(failed, { stage: 'done' })).toBe(true);
+    for (const kind of ['intake', 'request', 'spec', 'patch', 'review'] as const) {
+      expect(workLanded({ ...failed, kind, subjectRef: 'openadlc-testbed#19' }, { stage: 'merged' }), kind).toBe(true);
+    }
+  });
+
+  it('is work stopped because its subject had closed, whatever stage its issue reads', () => {
+    const stopped = { ...failed, exitReason: 'already landed: openadlc-testbed#18 is closed, so the work it was for is finished' };
+    expect(workLanded(stopped, { stage: 'build' })).toBe(true);
+    expect(workLanded(stopped, null)).toBe(true);
+  });
+
+  it('is not work whose issue is still being built or reviewed, or that the board does not know', () => {
+    expect(workLanded(failed, { stage: 'build' })).toBe(false);
+    expect(workLanded({ ...failed, kind: 'review', subjectRef: 'openadlc-testbed#19' }, { stage: 'review' })).toBe(false);
+    expect(workLanded(failed, null)).toBe(false);
+  });
+
+  it('is not a deploy or QA task on a merged issue, whose work starts at the merge', () => {
+    for (const kind of ['deploy', 'qa'] as const) {
+      expect(workLanded({ ...failed, kind, subjectRef: 'openadlc-testbed#19' }, { stage: 'merged' }), kind).toBe(false);
+      expect(workLanded({ ...failed, kind, subjectRef: 'openadlc-testbed#19' }, { stage: 'done' }), kind).toBe(false);
+    }
+  });
+
+  it('is not work on a console request, which has no issue or pull request to close', () => {
+    expect(workLanded({ ...failed, kind: 'request', subjectRef: 'request:a4b02784' }, { stage: 'merged' })).toBe(false);
   });
 });

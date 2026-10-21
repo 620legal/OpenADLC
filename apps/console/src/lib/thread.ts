@@ -291,7 +291,7 @@ export interface PinnedTask {
   ref: string;
   /** Whether this is the task going now, or the last thing the bot did. */
   current: boolean;
-  /** For the last task: what it did, "Reviewed", "Could not finish"; with when, "2 hours ago". */
+  /** For the last task: what it did, "Reviewed", "Could not finish", "Landed"; with when, "2 hours ago". */
   did: string | null;
   when: string | null;
   /** "#12", or null for a request or a commit. */
@@ -302,6 +302,24 @@ export interface PinnedTask {
   links: { label: string; url: string }[];
   /** "$0.38 on this task", once it has cost anything. */
   cost: string | null;
+}
+
+/** What its card on the board offers "Try again" and "Stop" for: failed, or stopped by anything but a person. */
+export function couldNotFinish(task: Pick<TaskSummary, 'state' | 'stoppedByAPerson'>): boolean {
+  return task.state === 'failed' || (task.state === 'stopped' && !task.stoppedByAPerson);
+}
+
+/**
+ * Whether the last task could not finish, and the bridge says the work it was
+ * for landed anyway (`landed`). A builder's task failed on #18 and #18
+ * merged; its card read "Could not finish #18" with Try again, and Try again
+ * was refused with "already landed". There is nothing left to run, so the
+ * card says it landed and offers neither Try again nor Stop. A build that
+ * ended without its pull request is never `landed`: the bridge says that of
+ * one only while its issue is at Build or before.
+ */
+export function landedAnyway(task: Pick<TaskSummary, 'state' | 'stoppedByAPerson' | 'landed'>): boolean {
+  return Boolean(task.landed) && couldNotFinish(task);
 }
 
 /**
@@ -334,14 +352,16 @@ export function pinnedTask(
   const spent = task.costUsd ?? 0;
   const did = current
     ? null
-    : task.state === 'failed'
-      ? 'Could not finish'
-      : task.state === 'stopped'
-        ? 'Stopped work on'
-        : // Done, but its pull request was never opened: not finished.
-          task.endedWithoutPullRequest
-          ? 'No pull request for'
-          : (DID[task.kind] ?? 'Finished');
+    : landedAnyway(task)
+      ? 'Landed'
+      : task.state === 'failed'
+        ? 'Could not finish'
+        : task.state === 'stopped'
+          ? 'Stopped work on'
+          : // Done, but its pull request was never opened: not finished.
+            task.endedWithoutPullRequest
+            ? 'No pull request for'
+            : (DID[task.kind] ?? 'Finished');
 
   return {
     ref: task.subjectRef,

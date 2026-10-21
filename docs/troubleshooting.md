@@ -173,7 +173,14 @@ resumed, and ends the task as `already landed: <ref> is closed`. A resume for
 any other reason does the same: the bot is not started, the task is cleaned up,
 and no card results. **Try again**, and the retry after a check passes, are
 refused with `already landed`. A stage move of a closed issue is refused too,
-except to Merged or Done, which is how a merge records itself.
+except to Merged or Done, which is how a merge records itself. The bot's
+thread card shows such work as landed: a last task that failed, or was stopped
+by anything but a person, on an intake, design, build, fix or review whose
+issue is at Merged or Done or that ended `already landed`, reads
+**Landed #N …** with its links and cost, and offers neither **Try again** nor
+**Stop** (`landed` on `GET /v1/bots`). A deploy or QA task on a merged issue
+keeps **Could not finish** and both buttons: the merge is where its work
+starts.
 
 | The card says | What to do |
 |---|---|
