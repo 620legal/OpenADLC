@@ -19,3 +19,4 @@ only where it changed a decision the table already had (0003, from D5 and D12;
 - [0002](0002-design-memory.md): the design stage remembers, in ADRs and a summary of them
 - [0003](0003-per-task-containers.md): a computer per task, and several tasks per seat
 - [0004](0004-design-always-by-default.md): Design is Always by default; `conditional` is a repository's opt-out (supersedes D7)
+- [0005](0005-ruleset-bypass-is-the-app-or-a-person.md): a ruleset bypass is OpenADLC's app or a person who is not a crew account

@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { audit, bots, closePool, identities, repos, settings, withAdvisoryLock } from '@openadlc/db';
+import { audit, bots, closePool, credentials, identities, repos, settings, withAdvisoryLock } from '@openadlc/db';
 import {
   applyRepoRules,
   checkRepoRules,
   checkRepoTemplates,
   applyRepoTemplates,
+  crewAccountsOf,
   approversFor,
   GitHubApiError,
   GitHubClient,
@@ -25,6 +26,7 @@ import {
   type RepoLabel,
   type RepoRulesInput,
   type RuleApi,
+  type RuleReport,
 } from '@openadlc/github';
 import { githubClientId } from '../client-id.js';
 import { reachDatabase } from '../database.js';
@@ -181,20 +183,9 @@ export async function githubCheck(config: InstallConfig): Promise<void> {
   for (const repo of await repos.listRepos()) {
     const { input } = await rulesInputFor(config, repo, client);
     for (const report of await checkRepoRules(client, input)) {
-      const line = `${report.name}${report.detail ? ` — ${report.detail}` : ''}`;
-      if (report.state === 'present') ui.ok(report.name);
-      else if (report.state === 'drifted') {
-        missing += 1;
-        ui.fail(`drifted: ${line}`);
-      } else if (report.state === 'missing') {
-        missing += 1;
-        ui.fail(`missing: ${line}`);
-      } else {
-        // Not a pass and not a failure of this install: GitHub will not hold it
-        // here, so the containment has to come from somewhere else and somebody
-        // has to know that.
-        ui.warn(`cannot be expressed: ${line}`);
-      }
+      const line = ruleLine(report);
+      if (line.counts) missing += 1;
+      ui[line.level](line.text);
     }
   }
   // A repository can have every rule and still be one no bot can work in: the
@@ -232,6 +223,22 @@ export async function githubCheck(config: InstallConfig): Promise<void> {
   }
 
   await closePool();
+}
+
+/**
+ * How `github check` says one rule, and whether it counts toward the exit
+ * code. A rule in place says what was found beside its name: who besides the
+ * app may bypass a ruleset is an exemption from it, and was said nowhere once
+ * a person's bypass stopped being drift.
+ */
+export function ruleLine(report: RuleReport): { level: 'ok' | 'fail' | 'warn'; text: string; counts: boolean } {
+  const line = `${report.name}${report.detail ? ` — ${report.detail}` : ''}`;
+  if (report.state === 'present') return { level: 'ok', text: line, counts: false };
+  if (report.state === 'drifted' || report.state === 'missing') return { level: 'fail', text: `${report.state}: ${line}`, counts: true };
+  // Not a pass and not a failure of this install: GitHub will not hold it
+  // here, so the containment has to come from somewhere else and somebody
+  // has to know that.
+  return { level: 'warn', text: `cannot be expressed: ${line}`, counts: false };
 }
 
 /**
@@ -304,6 +311,27 @@ async function appFieldsFor(config: InstallConfig, api: AppApi): Promise<{ appId
 }
 
 /**
+ * The crew's seats, and every account the crew works as with the id stored
+ * when it connected, as the bridge reads them (`crewOfInstall` there). A crew
+ * that could not be read was read as none, and every bypass on the rulesets
+ * then passed as a person's; it is said instead, and nothing passes on it.
+ */
+async function crewOfInstall(): Promise<{ seats: Bot[]; fields: Pick<RepoRulesInput, 'crewAccounts' | 'crewUnread'> }> {
+  try {
+    const [seats, accounts, seated, signedIn] = await Promise.all([
+      bots.listBots(),
+      identities.listIdentities(),
+      identities.seatIdentities(),
+      credentials.listCredentials(),
+    ]);
+    return { seats, fields: { crewAccounts: crewAccountsOf(seats, accounts, seated, signedIn) } };
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    return { seats: [], fields: { crewUnread: `the crew’s accounts could not be read from the install’s database (${why})` } };
+  }
+}
+
+/**
  * What the rules are built from. Nothing here is a policy decision made in this
  * file: the checks are the ones CI publishes, the lead reviewer is the one the
  * review rules name, and the humans are the install's. `approvers` is who
@@ -324,7 +352,7 @@ export async function rulesInputFor(
   // Whoever holds the lead reviewer's role, as the console's setup does. With
   // no account connected there, the person owns everything instead of a login
   // nobody connected.
-  const crew = await bots.listBots().catch(() => []);
+  const { seats: crew, fields: crewFields } = await crewOfInstall();
   const lead = crew.find((bot) => bot.role === 'review_lead');
   // The same people the console's Protect step names; see `approversFor`.
   const logins = crew.map((bot) => bot.githubLogin).filter((login): login is string => Boolean(login));
@@ -353,6 +381,8 @@ export async function rulesInputFor(
     humans: approvers.length > 0 ? approvers : [human],
     // So a code owner line naming a seat's old account is known for one, as the bridge does.
     crew: logins,
+    // Who may bypass the rulesets is judged against these, by stored id, as the bridge does.
+    ...crewFields,
     productionReviewers,
     // What holds production, by the repository's rules: its
     // `.github/openadlc.yml`, else its stored rules, else a person approves.

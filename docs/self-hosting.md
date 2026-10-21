@@ -937,15 +937,49 @@ so it belongs in whatever watches this install. What the two of them cover:
   rewriting or deleting another's work branch under `agent/**` and `system/**`
   while leaving each free to create its own. Repairing either one changes only
   what OpenADLC declares there: a rule, a branch or a required check you
-  added to it stays, and is not drift. Apply still replaces the bypass actors
-  with OpenADLC's own app and removes any exclude pattern, since an exclude can
-  carve the default branch back out, and says which patterns it removed. When
-  GitHub lets it read only the ruleset's list entry, which has no rules, apply
-  leaves the ruleset as it is and says so rather than write over rules it could
-  not see. Both name OpenADLC's app as their one bypass actor, in `always`
-  mode, so it can write CODEOWNERS to a branch they protect; the merge line
-  merges as the app, so what holds its merges is `mergeDecision`, not the
-  ruleset, and the app's private key is what guards `main`;
+  added to it stays, and is not drift. Apply still removes any exclude
+  pattern, since an exclude can carve the default branch back out, and says
+  which patterns it removed. When GitHub lets it read only the ruleset's list
+  entry, which has no rules, apply leaves the ruleset as it is and says so
+  rather than write over rules it could not see. Both name OpenADLC's app as a
+  bypass actor, in `always` mode, so it can write CODEOWNERS to a branch they
+  protect; the merge line merges as the app, so what holds its merges is
+  `mergeDecision`, not the ruleset, and the app's private key is what guards
+  `main`;
+- **who else may bypass them**, judged entry by entry on both rulesets. A
+  person may: a `User` who is not one of the crew's accounts, and the
+  organization's owners (`OrganizationAdmin`) or a repository role
+  (`RepositoryRole`: maintain is 2, write 4, admin 5) while no crew account
+  holds that role or one above it. A `User` entry carries only an id, so the
+  crew is matched by GitHub user id: the id the install stored when each
+  account connected, for every account the crew works as (each seat's, the
+  automation account's and the reviewers' among them, and any account
+  connected without a seat), and both ids where an account and its seat's
+  sign-in stored different ones. An account's login now is asked by that id
+  (`GET /user/<id>`), so a renamed account is still known and whoever
+  registers its old login is not taken for crew; a 404 there, which GitHub
+  also gives a flagged or suspended account that keeps its role, leaves that
+  account's role not known. A seat with no stored id is
+  looked up by login, and a login with no account behind it is not known, not
+  nobody: reconnecting the seat stores its id. A role is read from the
+  repository's permission for each crew account, where an organization owner
+  shows as admin. `check` names each person beside the ruleset ("a person may bypass it:
+  orzelig (user 2146989, always)"), as `openadlc doctor` does under its passing
+  line; apply keeps them and never adds one. Anything else is drift, named in
+  the warning and taken off by apply: a crew account, an app other than
+  OpenADLC's, a team, a deploy key, a custom role, or a role a crew account
+  holds, so a person on the list who later becomes a seat's account is flagged
+  on the next check. When GitHub would not say a crew account's id or role,
+  or the install's database would not say who the crew is, whether an entry
+  covers a crew account is not known: `check` says so, and apply leaves that
+  entry as it was;
+- **`crew accounts`**: no crew account may be an admin of the repository,
+  directly, through a team or as an organization owner, since an admin can
+  change these rulesets and merge past them. `check` reports one as drifted
+  with where to lower it, and so does one whose role could not be read; apply
+  reports it skipped, since it changes nobody's role. On the board it is a
+  line on the repository's protection card, and the `bot-access` card for
+  that bot;
 - the **`testing`**, **`production`** and **`production-rollback`**
   environments, each held to the default branch alone by its deployment branch
   policy, and production held as the repository's choice says: a wait timer

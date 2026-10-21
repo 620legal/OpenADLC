@@ -20,6 +20,13 @@ export type CheckResult =
        * or not the check was failing: "Released #12, which nothing was working on".
        */
       note?: string;
+      /**
+       * Something worth knowing while it passes, kept as the row's `detail`,
+       * which `openadlc doctor` prints under the passing line: who besides
+       * OpenADLC's app may bypass a repository's rulesets. Not a notification.
+       * Not named `detail` here, which a failing result alone carries.
+       */
+      says?: string;
       facts?: Record<string, unknown>;
     }
   | {

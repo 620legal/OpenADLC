@@ -421,13 +421,29 @@ can answer the crew's questions, and is audited as `github.account_allowed`.
   **The primary gate is the review:** every required reviewer approving the
   exact diff that would land. Everything below is defence in depth around it.
 
-  The rulesets OpenADLC writes do not hold the merge line back. Their one
-  bypass actor is OpenADLC's own GitHub App (`bypassForApp`,
+  The rulesets OpenADLC writes do not hold the merge line back. The bypass
+  actor it writes is OpenADLC's own GitHub App (`bypassForApp`,
   `packages/github/src/rules.ts`), in `always` mode, so it can write CODEOWNERS
   to a branch it protects. The merge line merges as the app, so `mergeDecision`,
   not the ruleset, is what holds its merges, and the app's private key is what
   guards `main`: whoever holds it can push straight to the default branch of
   every repository the app is installed on, past required reviews and checks.
+
+  A person may add themselves to the bypass list, as GitHub allows, to merge
+  when the crew cannot; they can then merge past the rulesets, and the merge
+  line plays no part in it. No crew account can be given that
+  (`judgeBypass`, [ADR 0005](adr/0005-ruleset-bypass-is-the-app-or-a-person.md)):
+  a `User` entry that is a crew account, matched by the GitHub user id the
+  install stored when the account connected, is drift that apply takes off; so
+  is a role entry while a crew account holds that role, an app other than
+  OpenADLC's, a team or a deploy key. A crew account that is an admin of the
+  repository could change the rulesets themselves, so it is a blocking card of
+  its own (`bot-access`), a line on the repository's protection card, and
+  drift in `openadlc github check`, until a person lowers it. An entry
+  OpenADLC could not judge, because GitHub would not say who or what a crew
+  account is, or the install could not read its crew, is warned about and left
+  as it was, never passed. `openadlc github check` and `openadlc doctor` name
+  every person who holds a bypass.
 
   A pull request that changes how CI runs needs more than the lead: CI runs
   the head's own workflow and scripts, so such a change grades itself. The

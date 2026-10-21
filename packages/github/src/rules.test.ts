@@ -27,6 +27,12 @@ import { codeownersRepair,
   repairedRuleset,
   rulesetDrift,
   agentBranchesRuleset,
+  CREW_ADMIN_REPORT,
+  crewAccountsOf,
+  crewStanding,
+  judgeBypass,
+  type BypassActor,
+  type CrewStanding,
   type RepoRulesInput,
   type RuleApi,
 } from './rules.js';
@@ -108,6 +114,18 @@ class FakeGitHub implements RuleApi {
     ['janedoe', { login: 'janedoe', id: 1001, type: 'User' }],
     ['alex-maintainer', { login: 'alex-maintainer', id: 77120, type: 'User' }],
   ]);
+  /**
+   * Each login's standing on the repository, as
+   * `GET /repos/<repo>/collaborators/<login>/permission` answers: a role, a
+   * status it fails with, or absent for a 404, which is not a collaborator.
+   */
+  permissions = new Map<string, { permission: string; role_name: string } | number>();
+  /**
+   * A status `GET /user/<id>` answers with for an id, in place of the account:
+   * GitHub answers 404 for a flagged or suspended account too, which still
+   * holds its role on the repository.
+   */
+  userByIdFailures = new Map<number, number>();
   private nextId = 1;
 
   constructor(
@@ -137,6 +155,21 @@ class FakeGitHub implements RuleApi {
       if (account === undefined) throw new GitHubApiError(404, path, '{"message":"Not Found"}');
       if (typeof account === 'number') throw new GitHubApiError(account, path, '{"message":"Server Error"}');
       return account as T;
+    }
+    const byId = /^\/user\/(\d+)$/.exec(path);
+    if (method === 'GET' && byId) {
+      const failure = this.userByIdFailures.get(Number(byId[1]));
+      if (failure) throw new GitHubApiError(failure, path, failure === 404 ? '{"message":"Not Found"}' : '{"message":"Server Error"}');
+      const account = [...this.users.values()].find((one) => typeof one !== 'number' && one.id === Number(byId[1]));
+      if (!account) throw new GitHubApiError(404, path, '{"message":"Not Found"}');
+      return account as T;
+    }
+    const standing = new RegExp(`^${repoPath}/collaborators/([^/]+)/permission$`).exec(path);
+    if (method === 'GET' && standing) {
+      const answer = this.permissions.get(decodeURIComponent(standing[1] as string));
+      if (answer === undefined) throw new GitHubApiError(404, path, '{"message":"Not Found"}');
+      if (typeof answer === 'number') throw new GitHubApiError(answer, path, '{"message":"Server Error"}');
+      return answer as T;
     }
 
     if (this.refusesRulesets && path.startsWith(`${repoPath}/rulesets`)) {
@@ -1824,11 +1857,11 @@ describe('repairing an OpenADLC ruleset keeps what a person added', () => {
     await settles(github, MAIN_RULESET);
   });
 
-  it('replaces a bypass someone added with its own', async () => {
+  it('takes off a bypass that is neither its app nor a person', async () => {
     const github = await applied();
     named(github, MAIN_RULESET).bypass_actors = [
       { actor_id: APP_ID, actor_type: 'Integration', bypass_mode: 'always' },
-      { actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' },
+      { actor_id: 7, actor_type: 'Team', bypass_mode: 'always' },
     ];
 
     expect(stateOf(await checkRepoRules(github, INPUT), MAIN_RULESET)).toBe('drifted');
@@ -1874,6 +1907,451 @@ describe('repairing an OpenADLC ruleset keeps what a person added', () => {
     } as never);
     expect(ruleset).toEqual(desired);
     expect(removed).toEqual(['~DEFAULT_BRANCH']);
+  });
+});
+
+/**
+ * Who may bypass an OpenADLC ruleset: its app, and a person who is not a crew
+ * account. The bypass list had to be exactly the app, so when Or added
+ * himself to `openadlc: main` on 2026-10-20 to merge while the crew was down,
+ * every check after called the repository unprotected, and an apply would
+ * have taken him off. A crew account on it, or a role a crew account holds,
+ * is a bot able to merge around the merge line, and is still taken off.
+ */
+describe('who may bypass an OpenADLC ruleset', () => {
+  const OR = 2146989;
+  const ATLAS = 331772670;
+  const CIPHER = 331780716;
+  const CREW_INPUT: RepoRulesInput = { ...INPUT, crew: ['fleet-atlas-orzelig', 'fleet-cipher-orzelig'] };
+  const app: BypassActor = { actor_id: APP_ID, actor_type: 'Integration', bypass_mode: 'always' };
+  const or: BypassActor = { actor_id: OR, actor_type: 'User', bypass_mode: 'always' };
+  const atlas: BypassActor = { actor_id: ATLAS, actor_type: 'User', bypass_mode: 'always' };
+  const role = (id: number): BypassActor => ({ actor_id: id, actor_type: 'RepositoryRole', bypass_mode: 'always' });
+  const owners: BypassActor = { actor_id: 1, actor_type: 'OrganizationAdmin', bypass_mode: 'always' };
+
+  /** The crew as it is on the real repository: two accounts, each on write. */
+  const standing = (over: Partial<CrewStanding> = {}): CrewStanding => ({
+    ids: new Map([
+      [ATLAS, 'fleet-atlas-orzelig'],
+      [CIPHER, 'fleet-cipher-orzelig'],
+    ]),
+    unresolved: [],
+    roles: new Map([
+      ['fleet-atlas-orzelig', 'write'],
+      ['fleet-cipher-orzelig', 'write'],
+    ]),
+    unreadable: [],
+    ...over,
+  });
+  const judged = (actors: BypassActor[], over: Partial<CrewStanding> = {}) =>
+    judgeBypass(actors, APP_ID, standing(over), INPUT.fullName, new Map([[OR, 'orzelig']]));
+  /** Each actor's verdict, people first. */
+  const verdicts = (actors: BypassActor[], over: Partial<CrewStanding> = {}): string[] => {
+    const { people, drift } = judged(actors, over);
+    return [...people.map(() => 'person'), ...drift.map((one) => one.verdict)];
+  };
+  const asAdmin = { roles: new Map([['fleet-atlas-orzelig', 'admin'], ['fleet-cipher-orzelig', 'write']]) } as Partial<CrewStanding>;
+
+  describe('the verdict on each actor', () => {
+    it('keeps a person who is not a crew account, and names them', () => {
+      expect(judged([app, or])).toEqual({ app: null, people: [{ actor: or, name: 'orzelig (user 2146989, always)' }], drift: [] });
+    });
+
+    it('takes off a crew account, matched by its user id and not by the login GitHub gives that id', () => {
+      const verdict = judgeBypass([app, atlas], APP_ID, standing(), INPUT.fullName, new Map([[ATLAS, 'atlas-renamed']]));
+      expect(verdict.people).toEqual([]);
+      expect(verdict.drift).toEqual([{ actor: atlas, verdict: 'remove', said: 'fleet-atlas-orzelig is a crew account (user 331772670), not a person' }]);
+    });
+
+    it('takes off any app but OpenADLC’s, a team and a deploy key', () => {
+      expect(
+        verdicts([
+          app,
+          { actor_id: 999, actor_type: 'Integration', bypass_mode: 'always' },
+          { actor_id: 7, actor_type: 'Team', bypass_mode: 'always' },
+          { actor_id: null, actor_type: 'DeployKey', bypass_mode: 'always' },
+          { actor_id: 3, actor_type: 'EnterpriseOwner', bypass_mode: 'always' },
+        ]),
+      ).toEqual(['remove', 'remove', 'remove', 'remove']);
+    });
+
+    it('takes the organization’s owners for people only while no crew account is an admin', () => {
+      expect(verdicts([owners])).toEqual(['person']);
+      expect(verdicts([owners], asAdmin)).toEqual(['remove']);
+      expect(judged([owners], asAdmin).drift[0]?.said).toContain('fleet-atlas-orzelig');
+    });
+
+    it('takes a repository role for people only while no crew account holds it', () => {
+      expect(verdicts([role(5)])).toEqual(['person']);
+      expect(verdicts([role(5)], asAdmin)).toEqual(['remove']);
+      // The crew push, so it holds write: that one is a bot's bypass.
+      expect(verdicts([role(4)])).toEqual(['remove']);
+      expect(judged([role(4)]).drift[0]?.said).toContain('fleet-atlas-orzelig');
+      expect(verdicts([role(2)])).toEqual(['person']);
+      expect(verdicts([role(2)], { roles: new Map([['fleet-atlas-orzelig', 'maintain']]) })).toEqual(['remove']);
+      // A custom role: which crew account holds it cannot be told from its id.
+      expect(verdicts([role(31337)])).toEqual(['remove']);
+    });
+
+    it('names GitHub’s base roles by the ids its rulesets give them: maintain 2, write 4, admin 5', () => {
+      const { people } = judged([role(2), role(4), role(5)], { roles: new Map() });
+      expect(people.map((one) => one.name)).toEqual([
+        'the repository’s maintain role (always)',
+        'the repository’s write role (always)',
+        'the repository’s admin role (always)',
+      ]);
+    });
+
+    it('neither keeps nor takes off what it could not tell, and never passes it', () => {
+      const lookedUp = { unresolved: [{ login: 'fleet-cipher-orzelig', said: 'GitHub answered 502: Server Error' }] };
+      expect(verdicts([or], lookedUp)).toEqual(['unknown']);
+      expect(judged([or], lookedUp).drift[0]?.said).toContain('fleet-cipher-orzelig');
+      // A crew account it did look up is still known to be one.
+      expect(verdicts([atlas], lookedUp)).toEqual(['remove']);
+
+      const unread = { unreadable: [{ login: 'fleet-cipher-orzelig', said: 'GitHub answered 502: Server Error' }] };
+      expect(verdicts([owners, role(5)], unread)).toEqual(['unknown', 'unknown']);
+    });
+
+    it('says the app is held in another mode, and keeps nothing of it but the app in always', () => {
+      const verdict = judged([{ ...app, bypass_mode: 'pull_request' }]);
+      expect(verdict.app).toContain('pull_request');
+      expect(verdict.drift).toEqual([]);
+      expect(judged([]).app).toContain('not on it');
+    });
+  });
+
+  /** The repository, as it is on GitHub: the crew on write, Or an admin, and the rules applied. */
+  async function repository(bypass: BypassActor[]): Promise<FakeGitHub> {
+    const github = new FakeGitHub();
+    github.workflows = ['ci.yml'];
+    github.users.set('fleet-atlas-orzelig', { login: 'fleet-atlas-orzelig', id: ATLAS, type: 'User' });
+    github.users.set('fleet-cipher-orzelig', { login: 'fleet-cipher-orzelig', id: CIPHER, type: 'User' });
+    github.users.set('orzelig', { login: 'orzelig', id: OR, type: 'User' });
+    github.permissions.set('fleet-atlas-orzelig', { permission: 'write', role_name: 'write' });
+    github.permissions.set('fleet-cipher-orzelig', { permission: 'write', role_name: 'write' });
+    github.permissions.set('orzelig', { permission: 'admin', role_name: 'admin' });
+    await applyRepoRules(github, CREW_INPUT);
+    mainOf(github).bypass_actors = bypass;
+    github.calls.length = 0;
+    return github;
+  }
+  const mainOf = (github: FakeGitHub) =>
+    github.rulesets.find((one) => one.name === MAIN_RULESET) as FakeGitHub['rulesets'][number] & { bypass_actors?: BypassActor[] };
+  const reportOf = (reports: { name: string; state: string; detail: string }[], name: string) => reports.find((one) => one.name === name);
+  const rulesetPuts = (github: FakeGitHub) => github.calls.filter((call) => call.method === 'PUT' && call.path.includes('/rulesets/'));
+
+  it('passes the repository as it is, with Or on `main` beside the app, and names him', async () => {
+    // GitHub's own order: the person first.
+    const github = await repository([or, app]);
+
+    const reports = await checkRepoRules(github, CREW_INPUT);
+    expect(reportOf(reports, MAIN_RULESET)).toEqual({ name: MAIN_RULESET, state: 'present', detail: 'a person may bypass it: orzelig (user 2146989, always)' });
+    expect(reportOf(reports, AGENT_BRANCHES_RULESET)).toMatchObject({ state: 'present', detail: '' });
+    expect(reportOf(reports, CREW_ADMIN_REPORT)?.state).toBe('present');
+
+    const outcomes = await applyRepoRules(github, CREW_INPUT);
+    expect(outcomes.find((one) => one.name === MAIN_RULESET)?.action).toBe('unchanged');
+    expect(rulesetPuts(github)).toHaveLength(0);
+    expect(mainOf(github).bypass_actors).toEqual([or, app]);
+  });
+
+  it('calls a crew account on the list drift, and apply takes it off and keeps Or', async () => {
+    const github = await repository([or, app, atlas]);
+
+    const main = reportOf(await checkRepoRules(github, CREW_INPUT), MAIN_RULESET);
+    expect(main?.state).toBe('drifted');
+    expect(main?.detail).toContain('fleet-atlas-orzelig is a crew account (user 331772670)');
+    expect(main?.detail).toContain('orzelig (user 2146989, always)');
+
+    const outcome = (await applyRepoRules(github, CREW_INPUT)).find((one) => one.name === MAIN_RULESET);
+    expect(outcome?.action).toBe('updated');
+    expect((rulesetPuts(github)[0]?.body as { bypass_actors?: unknown }).bypass_actors).toEqual([app, or]);
+    expect(reportOf(await checkRepoRules(github, CREW_INPUT), MAIN_RULESET)?.state).toBe('present');
+  });
+
+  it('flags a person on the list once their account joins the crew', async () => {
+    const github = await repository([or, app]);
+
+    const main = reportOf(await checkRepoRules(github, { ...CREW_INPUT, crew: [...(CREW_INPUT.crew ?? []), 'orzelig'] }), MAIN_RULESET);
+    expect(main?.state).toBe('drifted');
+    expect(main?.detail).toContain('orzelig is a crew account (user 2146989)');
+  });
+
+  it('puts the app back when it is missing, and keeps the person', async () => {
+    const github = await repository([or]);
+
+    expect(reportOf(await checkRepoRules(github, CREW_INPUT), MAIN_RULESET)?.state).toBe('drifted');
+    await applyRepoRules(github, CREW_INPUT);
+    expect((rulesetPuts(github)[0]?.body as { bypass_actors?: unknown }).bypass_actors).toEqual([app, or]);
+  });
+
+  it('takes a role bypass off while a crew account holds that role', async () => {
+    const github = await repository([app, role(5)]);
+    expect(reportOf(await checkRepoRules(github, CREW_INPUT), MAIN_RULESET)?.state).toBe('present');
+
+    github.permissions.set('fleet-atlas-orzelig', { permission: 'admin', role_name: 'admin' });
+    expect(reportOf(await checkRepoRules(github, CREW_INPUT), MAIN_RULESET)?.state).toBe('drifted');
+    await applyRepoRules(github, CREW_INPUT);
+    expect(mainOf(github).bypass_actors).toEqual([app]);
+  });
+
+  it('keeps a person it could not tell from the crew, warns, and writes nothing over it', async () => {
+    const github = await repository([or, app]);
+    github.users.set('fleet-cipher-orzelig', 502);
+
+    const main = reportOf(await checkRepoRules(github, CREW_INPUT), MAIN_RULESET);
+    expect(main?.state).toBe('drifted');
+    expect(main?.detail).toContain('fleet-cipher-orzelig');
+
+    const outcome = (await applyRepoRules(github, CREW_INPUT)).find((one) => one.name === MAIN_RULESET);
+    expect(outcome?.action).toBe('skipped');
+    expect(rulesetPuts(github)).toHaveLength(0);
+
+    // With something else to repair, the repair keeps the person as found.
+    mainOf(github).enforcement = 'evaluate';
+    await applyRepoRules(github, CREW_INPUT);
+    expect((rulesetPuts(github)[0]?.body as { bypass_actors?: unknown }).bypass_actors).toEqual([app, or]);
+  });
+
+  it('reports a crew account that is an admin, with where to change it, whatever the rulesets say', async () => {
+    const github = await repository([or, app]);
+    github.permissions.set('fleet-atlas-orzelig', { permission: 'admin', role_name: 'admin' });
+
+    const reports = await checkRepoRules(github, CREW_INPUT);
+    const crew = reportOf(reports, CREW_ADMIN_REPORT);
+    expect(crew?.state).toBe('drifted');
+    expect(crew?.detail).toContain('fleet-atlas-orzelig is an admin of exampleco/OpenADLC');
+    expect(crew?.detail).toContain('Collaborators and teams');
+    // Or's own bypass is still a person's: no role bypass is on the list.
+    expect(reportOf(reports, MAIN_RULESET)?.state).toBe('present');
+
+    const outcomes = await applyRepoRules(github, CREW_INPUT);
+    expect(outcomes.find((one) => one.name === CREW_ADMIN_REPORT)).toMatchObject({ action: 'skipped' });
+    // Apply changes nobody's role.
+    expect(github.calls.some((call) => call.method !== 'GET' && call.path.includes('/collaborators/'))).toBe(false);
+  });
+
+  it('says whose role it could not read, rather than that no crew account is an admin', async () => {
+    const github = await repository([or, app]);
+    github.permissions.set('fleet-cipher-orzelig', 502);
+
+    const crew = reportOf(await checkRepoRules(github, CREW_INPUT), CREW_ADMIN_REPORT);
+    expect(crew?.state).toBe('drifted');
+    expect(crew?.detail).toContain('whether a crew account is an admin is not known');
+    expect(crew?.detail).toContain('fleet-cipher-orzelig (GitHub answered 502');
+  });
+
+  it('asks GitHub each crew account’s id and role once a check, under one casing of its login', async () => {
+    const github = await repository([or, app]);
+    const read = await crewStanding(github, { fullName: INPUT.fullName, crew: ['fleet-atlas-orzelig', 'Fleet-Atlas-Orzelig'] });
+    expect([...read.ids]).toEqual([[ATLAS, 'fleet-atlas-orzelig']]);
+    expect([...read.roles]).toEqual([['fleet-atlas-orzelig', 'write']]);
+    expect(read.unresolved).toEqual([]);
+    expect(github.calls.filter((call) => call.path.includes('/collaborators/')).map((call) => call.path)).toEqual([
+      `/repos/${INPUT.fullName}/collaborators/fleet-atlas-orzelig/permission`,
+    ]);
+  });
+
+  describe('a crew account that changed its login', () => {
+    /** The atlas seat's account renamed on GitHub, and its old login registered by somebody else. */
+    async function renamed(): Promise<FakeGitHub> {
+      const github = await repository([or, app]);
+      github.users.delete('fleet-atlas-orzelig');
+      github.users.set('atlas-renamed', { login: 'atlas-renamed', id: ATLAS, type: 'User' });
+      github.users.set('fleet-atlas-orzelig', { login: 'fleet-atlas-orzelig', id: 4040, type: 'User' });
+      github.permissions.delete('fleet-atlas-orzelig');
+      github.permissions.set('atlas-renamed', { permission: 'admin', role_name: 'admin' });
+      return github;
+    }
+    const STORED: RepoRulesInput = {
+      ...CREW_INPUT,
+      crewAccounts: [
+        { login: 'fleet-atlas-orzelig', id: ATLAS },
+        { login: 'fleet-cipher-orzelig', id: CIPHER },
+      ],
+    };
+
+    it('is still matched by the id stored when it connected, and a stranger with its old login is not', async () => {
+      const github = await renamed();
+      const stranger: BypassActor = { actor_id: 4040, actor_type: 'User', bypass_mode: 'always' };
+      mainOf(github).bypass_actors = [or, app, atlas, stranger];
+
+      const main = reportOf(await checkRepoRules(github, STORED), MAIN_RULESET);
+      expect(main?.detail).toContain('is a crew account (user 331772670)');
+      expect(main?.detail).toContain('fleet-atlas-orzelig (user 4040, always)');
+      // Asked by id, never by the login it no longer has.
+      expect(github.wrote('GET', '/users/fleet-atlas-orzelig')).toBe(false);
+
+      await applyRepoRules(github, STORED);
+      expect(mainOf(github).bypass_actors).toEqual([app, or, stranger]);
+    });
+
+    it('has its role read under the login it has now', async () => {
+      const github = await renamed();
+      const crew = reportOf(await checkRepoRules(github, STORED), CREW_ADMIN_REPORT);
+      expect(crew?.state).toBe('drifted');
+      expect(crew?.detail).toContain('atlas-renamed is an admin');
+    });
+
+    it.each([404, 502])('is not known, rather than nobody, when GitHub answers %i for its stored id: its role still holds', async (status) => {
+      // A flagged or suspended account answers 404 and keeps its role: read as
+      // nobody, a crew admin let an admin role bypass pass as a person's.
+      const github = await repository([app, role(5)]);
+      github.permissions.set('fleet-atlas-orzelig', { permission: 'admin', role_name: 'admin' });
+      github.userByIdFailures.set(ATLAS, status);
+
+      const reports = await checkRepoRules(github, STORED);
+      const main = reportOf(reports, MAIN_RULESET);
+      expect(main?.state).toBe('drifted');
+      expect(main?.detail).toContain('the repository’s admin role: whether a crew account is among them is not known');
+      const crew = reportOf(reports, CREW_ADMIN_REPORT);
+      expect(crew?.state).toBe('drifted');
+      expect(crew?.detail).toContain('fleet-atlas-orzelig');
+      if (status === 404) expect(crew?.detail).toContain('GitHub has no account by that id');
+
+      // Its id still marks it crew.
+      mainOf(github).bypass_actors = [or, app, atlas];
+      expect(reportOf(await checkRepoRules(github, STORED), MAIN_RULESET)?.detail).toContain('is a crew account (user 331772670)');
+      // And apply keeps the role bypass it could not judge.
+      mainOf(github).bypass_actors = [app, role(5)];
+      await applyRepoRules(github, STORED);
+      expect(mainOf(github).bypass_actors).toEqual([app, role(5)]);
+    });
+
+    it('keeps both ids when an account and its seat’s sign-in stored different ones', async () => {
+      const github = await repository([or, app]);
+      const other: BypassActor = { actor_id: 5150, actor_type: 'User', bypass_mode: 'always' };
+      github.users.set('fleet-atlas-other', { login: 'fleet-atlas-other', id: 5150, type: 'User' });
+      mainOf(github).bypass_actors = [or, app, other];
+      const both: RepoRulesInput = { ...STORED, crewAccounts: [...(STORED.crewAccounts ?? []), { login: 'fleet-atlas-orzelig', id: 5150 }] };
+
+      expect(reportOf(await checkRepoRules(github, both), MAIN_RULESET)?.detail).toContain('is a crew account (user 5150)');
+    });
+
+    it('is not known, rather than nobody, when no id is stored and its login has no account', async () => {
+      const github = await repository([or, app]);
+      github.users.delete('fleet-atlas-orzelig');
+
+      const reports = await checkRepoRules(github, CREW_INPUT);
+      expect(reportOf(reports, MAIN_RULESET)?.state).toBe('drifted');
+      expect(reportOf(reports, MAIN_RULESET)?.detail).toContain('whether user 2146989 is a crew account is not known');
+      expect(reportOf(reports, CREW_ADMIN_REPORT)).toMatchObject({ state: 'drifted' });
+      expect(reportOf(reports, CREW_ADMIN_REPORT)?.detail).toContain('fleet-atlas-orzelig');
+      // Or stays on the list.
+      await applyRepoRules(github, CREW_INPUT);
+      expect(mainOf(github).bypass_actors).toEqual([or, app]);
+    });
+  });
+
+  it('passes nothing a crew account might be when the crew could not be read, and writes nothing over it', async () => {
+    const github = await repository([or, app, role(5)]);
+    const unread: RepoRulesInput = { ...CREW_INPUT, crew: [], crewUnread: 'the install’s database did not answer' };
+
+    const reports = await checkRepoRules(github, unread);
+    const main = reportOf(reports, MAIN_RULESET);
+    expect(main?.state).toBe('drifted');
+    expect(main?.detail).toContain('whether user 2146989 is a crew account is not known');
+    expect(main?.detail).toContain('the repository’s admin role: whether a crew account is among them is not known');
+    expect(reportOf(reports, CREW_ADMIN_REPORT)).toMatchObject({ state: 'drifted' });
+    expect(reportOf(reports, CREW_ADMIN_REPORT)?.detail).toContain('the install’s database did not answer');
+
+    const outcome = (await applyRepoRules(github, unread)).find((one) => one.name === MAIN_RULESET);
+    expect(outcome?.action).toBe('skipped');
+    expect(rulesetPuts(github)).toHaveLength(0);
+  });
+
+  it('reads a crew account’s role by its name over GitHub’s older word for it: maintain is not write', async () => {
+    const github = await repository([app, role(2)]);
+    github.permissions.set('fleet-atlas-orzelig', { permission: 'write', role_name: 'maintain' });
+
+    expect(reportOf(await checkRepoRules(github, CREW_INPUT), MAIN_RULESET)?.detail).toContain(
+      'the repository’s maintain role, and crew account fleet-atlas-orzelig holds maintain or more',
+    );
+    await applyRepoRules(github, CREW_INPUT);
+    expect(mainOf(github).bypass_actors).toEqual([app]);
+  });
+
+  it('counts a crew account above a role as holding it: an admin holds write', async () => {
+    const github = await repository([app, role(4)]);
+    github.permissions.set('fleet-atlas-orzelig', { permission: 'admin', role_name: 'admin' });
+    github.permissions.set('fleet-cipher-orzelig', { permission: 'read', role_name: 'triage' });
+
+    expect(reportOf(await checkRepoRules(github, CREW_INPUT), MAIN_RULESET)?.detail).toContain(
+      'the repository’s write role, and crew account fleet-atlas-orzelig holds write or more',
+    );
+    await applyRepoRules(github, CREW_INPUT);
+    expect(mainOf(github).bypass_actors).toEqual([app]);
+  });
+});
+
+describe('every account the crew works as', () => {
+  it('keeps every id stored for a seat, its account’s and its sign-in’s, where they differ', () => {
+    expect(
+      crewAccountsOf(
+        [{ id: 'bot-builder', githubLogin: 'fleet-atlas-orzelig' }],
+        [{ id: 'identity-atlas', login: 'fleet-atlas-orzelig', githubUserId: 331772670 }],
+        [{ botId: 'bot-builder', identityId: 'identity-atlas' }],
+        [{ botId: 'bot-builder', githubUserId: 5150 }],
+      ),
+    ).toEqual([
+      { login: 'fleet-atlas-orzelig', id: 331772670 },
+      { login: 'fleet-atlas-orzelig', id: 5150 },
+    ]);
+  });
+
+  it('is each seat’s, the automation account’s and the reviewers’ among them, and each account connected without a seat, with its stored id', () => {
+    const accounts = crewAccountsOf(
+      [
+        { id: 'bot-builder', githubLogin: 'fleet-atlas-orzelig' },
+        { id: 'bot-lead', githubLogin: 'fleet-cipher-orzelig' },
+        { id: 'bot-security', githubLogin: 'fleet-cipher-orzelig' },
+        { id: 'bot-automation', githubLogin: 'orzelig-fleet-flow' },
+        { id: 'bot-qa', githubLogin: null },
+        { id: 'bot-legacy', githubLogin: 'old-seat' },
+      ],
+      [
+        { id: 'identity-atlas', login: 'fleet-atlas-orzelig', githubUserId: 331772670 },
+        { id: 'identity-cipher', login: 'fleet-cipher-orzelig', githubUserId: 331780716 },
+        { id: 'identity-flow', login: 'orzelig-fleet-flow', githubUserId: 333371704 },
+        { id: 'identity-spare', login: 'fleet-spare', githubUserId: 340000001 },
+      ],
+      [
+        { botId: 'bot-builder', identityId: 'identity-atlas' },
+        { botId: 'bot-lead', identityId: 'identity-cipher' },
+        { botId: 'bot-security', identityId: 'identity-cipher' },
+        { botId: 'bot-automation', identityId: 'identity-flow' },
+      ],
+      [{ botId: 'bot-legacy', githubUserId: 77 }],
+    );
+    expect(accounts).toEqual([
+      { login: 'fleet-atlas-orzelig', id: 331772670 },
+      { login: 'fleet-cipher-orzelig', id: 331780716 },
+      { login: 'orzelig-fleet-flow', id: 333371704 },
+      { login: 'old-seat', id: 77 },
+      { login: 'fleet-spare', id: 340000001 },
+    ]);
+  });
+
+  it('takes the automation account’s bypass off like any seat’s', async () => {
+    const github = new FakeGitHub();
+    github.workflows = ['ci.yml'];
+    github.users.set('orzelig', { login: 'orzelig', id: 2146989, type: 'User' });
+    github.users.set('orzelig-fleet-flow', { login: 'orzelig-fleet-flow', id: 333371704, type: 'User' });
+    github.permissions.set('orzelig-fleet-flow', { permission: 'read', role_name: 'triage' });
+    const input: RepoRulesInput = { ...INPUT, crew: ['orzelig-fleet-flow'], crewAccounts: [{ login: 'orzelig-fleet-flow', id: 333371704 }] };
+    await applyRepoRules(github, input);
+    const main = github.rulesets.find((one) => one.name === MAIN_RULESET) as { bypass_actors?: BypassActor[] };
+    const flow: BypassActor = { actor_id: 333371704, actor_type: 'User', bypass_mode: 'always' };
+    const or: BypassActor = { actor_id: 2146989, actor_type: 'User', bypass_mode: 'always' };
+    main.bypass_actors = [or, flow, { actor_id: APP_ID, actor_type: 'Integration', bypass_mode: 'always' }];
+
+    expect((await checkRepoRules(github, input)).find((one) => one.name === MAIN_RULESET)?.detail).toContain(
+      'orzelig-fleet-flow is a crew account (user 333371704)',
+    );
+    await applyRepoRules(github, input);
+    const after = github.rulesets.find((one) => one.name === MAIN_RULESET) as { bypass_actors?: BypassActor[] };
+    expect(after.bypass_actors).toEqual([{ actor_id: APP_ID, actor_type: 'Integration', bypass_mode: 'always' }, or]);
   });
 });
 

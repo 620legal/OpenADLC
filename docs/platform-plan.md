@@ -282,11 +282,14 @@ the lead and every blocking seat approved, until every person AGENTS.md names
 for the paths it touches approved, or while `needs-human` is on; success
 otherwise. Overriding a reviewer is a person dismissing the
 review with a reason and approving, and a bot dismissing a review is treated as
-an incident. The rulesets' one bypass actor is OpenADLC's own GitHub App
-(`bypassForApp`, `packages/github/src/rules.ts`), in `always` mode, so it can
-write CODEOWNERS to a branch it protects. The merge line merges as the app, so
-`mergeDecision`, not the ruleset, is what holds its merges, and the app's
-private key is what guards `main`.
+an incident. The bypass actor OpenADLC writes on its rulesets is its own
+GitHub App (`bypassForApp`, `packages/github/src/rules.ts`), in `always` mode,
+so it can write CODEOWNERS to a branch it protects. A person who is not a crew
+account may keep a bypass they added; no crew account may hold one, directly or
+through a role, or be an admin
+([ADR 0005](adr/0005-ruleset-bypass-is-the-app-or-a-person.md)). The merge line
+merges as the app, so `mergeDecision`, not the ruleset, is what holds its
+merges, and the app's private key is what guards `main`.
 
 ## 10. Security posture
 

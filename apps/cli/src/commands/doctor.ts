@@ -175,6 +175,10 @@ export function healthLines(checks: readonly HealthView[], consoleUrl: string): 
     const unknown = rows.filter((row) => row.state === 'unknown');
     if (failing.length === 0 && unknown.length === 0) {
       add({ level: 'ok', text: rows[0]?.proves ?? id });
+      // What a check says while it passes: who besides the app may bypass a
+      // repository's rulesets was a warning until a person's bypass was theirs
+      // to keep, and an exemption nobody is warned about should still be seen.
+      for (const row of rows) if (row.detail) add({ level: 'note', text: row.detail.replace(/\*\*/g, '') });
       continue;
     }
     for (const row of failing) {
