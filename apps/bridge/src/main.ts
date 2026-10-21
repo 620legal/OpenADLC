@@ -3,7 +3,7 @@ import { heldBySeatPause, registerSeatPauseRoutes, seatPausedReason } from './se
 import { createServer } from 'node:http';
 import { audit as auditEntry, bots, ciUsage, closePool, costs, deployRuns, issues as issueStore, leases as leaseStore, repos, settings, tasks, threads as threadStore, waitForDatabase } from '@openadlc/db';
 import { registerPauseRoutes, restorePause } from './pause-work.js';
-import { accountOf, appPrivateKeyRef, appVisibility, ensureAlertsSecret, ensureConsoleSecret, ensureInternalSecret, getSecretStore, installationTokenFor, redeliverFailedSince } from '@openadlc/github';
+import { accountOf, appPrivateKeyRef, appVisibility, ensureAlertsSecret, ensureConsoleSecret, ensureInternalSecret, getSecretStore, installationTokenFor, openadlcHome, redeliverFailedSince } from '@openadlc/github';
 import { sameLogin } from '@openadlc/shared';
 import { Actors } from './actors.js';
 import { registerConsoleApi, retryDepsFor, stopTask } from './api.js';
@@ -33,6 +33,7 @@ import { MergeLine } from './merge-line.js';
 import { Onboarding } from './onboarding.js';
 import { effectiveConfig, moveWebhookSecretToStore } from './effective-config.js';
 import { engineUpdatesFor } from './engine-updates.js';
+import { SelfUpdate, isRestartProcess, registerSelfUpdateRoutes, runCommand, spawnDetached } from './self-update.js';
 import { APP_API, InvitationService } from './invitation-service.js';
 import { CrewAccessKeeper } from './crew-access.js';
 import { Reconciler } from './reconciler.js';
@@ -340,7 +341,11 @@ async function main(): Promise<void> {
     readRepos: () => settings.getSetting('workPausedRepos'),
   });
   const retryDeps = retryDepsFor({ taskService, automation, dispatchGate });
+  // OpenADLC's own update is made below; work recorded while its restart was
+  // owed is started by the recovery once that has passed.
+  let restartPending: () => string | null = () => null;
   const recovery = {
+    restartPending: () => restartPending(),
     retry: (taskId: string, actor: string) => retryTask(taskId, actor, retryDeps),
     // A run again waits on overlapping work as the dispatcher's leases do, by the same paths policy.
     pathPolicy: async (repo: { id: string; name: string; fullName: string; defaultBranch: string }) => (await delivery.get(repo)).rules.paths,
@@ -363,6 +368,42 @@ async function main(): Promise<void> {
   );
   scheduler.useDelivery(pipeline, delivery);
   scheduler.useStacking(stacking);
+  // OpenADLC updating itself from the releases a person tags (`self-update.ts`):
+  // its clock is the `releases` job; while it waits to restart, the gate holds
+  // new work and a task's start is refused as busy.
+  const selfUpdate = new SelfUpdate({
+    repoRoot: config.repoRoot,
+    home: openadlcHome(),
+    run: runCommand,
+    fetch,
+    token: automationToken,
+    liveTasks: async () => {
+      const live = await tasks.listTasks({ states: ['queued', 'running'], limit: 100 });
+      // A resume under way is still `paused` until hostd has the computer
+      // ready: it counts, or the restart could land under it.
+      const resuming = taskService.resumesInFlight().filter((id) => !live.some((task) => task.id === id));
+      for (const id of resuming) {
+        const task = await tasks.getTask(id).catch(() => null);
+        if (task) live.push(task);
+      }
+      const crew = new Map((await bots.listBots()).map((bot) => [bot.id, bot.name]));
+      return live.map((task) => ({ id: task.id, bot: crew.get(task.botId) ?? task.botId, subjectRef: task.subjectRef, kind: task.kind }));
+    },
+    engineUpdateRunning: async () => Boolean((await hostd.engineUpdateStatus()).running),
+    gate: dispatchGate,
+    spawnApply: spawnDetached,
+    isAlive: (pid) => isRestartProcess(pid),
+  });
+  taskService.restartPending = () => selfUpdate.restartPending();
+  restartPending = () => selfUpdate.restartPending();
+  engineUpdates.holdWhile(() => selfUpdate.restartPending());
+  scheduler.useSelfUpdate(selfUpdate);
+  // A restart onto a release ends with this bridge's start: its result is
+  // recorded now, and a wait a restart of the bridge cut off goes on.
+  void selfUpdate
+    .resume()
+    .then((lines) => lines.forEach((line) => console.log(`[bridge] ${line}`)))
+    .catch((error: unknown) => console.warn(`[bridge] could not look at OpenADLC's own update: ${error instanceof Error ? error.message : error}`));
   // What GitHub could not deliver while the bridge was down, sent again as the
   // app; nothing without the app's credentials.
   scheduler.useRedelivery(async (since) => {
@@ -700,6 +741,7 @@ async function main(): Promise<void> {
     audit: auditEntry,
   });
   registerUsersRoutes(router, liveUsersDeps(roles, config.identityMode, consoleMembers));
+  registerSelfUpdateRoutes(router, selfUpdate);
   // Resuming starts what waited: the queued requests, the issues whose
   // intake was deferred, oldest first, and — for a repository resumed on its
   // own, which the dispatcher passed over — its issues ready to build.

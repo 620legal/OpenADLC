@@ -94,6 +94,7 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'GET /v1/webhook': 'admin',
   'GET /v1/engines': 'admin',
   'GET /v1/engines/updates': 'admin',
+  'GET /v1/self-update': 'admin',
   'GET /v1/repo-setup': 'admin',
   'GET /v1/model-accounts/:id/models': 'admin',
   'GET /v1/model-accounts/:id/login': 'admin',
@@ -165,6 +166,10 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'POST /v1/engines/updates': 'admin',
   'PATCH /v1/engines/updates': 'admin',
   'POST /v1/engines/updates/rollback': 'admin',
+  // OpenADLC updating itself restarts every service onto code a release
+  // brings: as an engine update, a person who may change settings decides.
+  'POST /v1/self-update': 'admin',
+  'PATCH /v1/self-update': 'admin',
   'POST /v1/repo-setup/labels': 'admin',
   'POST /v1/repo-setup/rules': 'admin',
   'POST /v1/repo-setup/production': 'admin',

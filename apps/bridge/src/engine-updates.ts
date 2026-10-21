@@ -541,6 +541,14 @@ export class EngineUpdates {
   private current: Promise<Started> | null = null;
   private following: { startedAt: string; trigger: string } | null = null;
 
+  /** Why no update may start now: OpenADLC's own restart is owed (`SelfUpdate.restartPending`). */
+  private heldBy: (() => string | null) | null = null;
+
+  /** Holds every start while `reason` answers words; `main.ts` wires OpenADLC's own update. */
+  holdWhile(reason: () => string | null): void {
+    this.heldBy = reason;
+  }
+
   constructor(private readonly options: EngineUpdatesOptions) {
     this.hostd = options.hostd;
     this.store = options.store ?? settingsStore;
@@ -662,6 +670,13 @@ export class EngineUpdates {
    * A hostd that does not answer is thrown, so the caller can say so.
    */
   start(input: StartInput): Promise<Started> {
+    // A new image swapped in while the services restart would be cut off by
+    // it, and an update in flight holds the restart: none starts while one is
+    // owed. A schedule's look claims nothing, so its tools are still due after.
+    const held = this.heldBy?.();
+    if (held) {
+      return Promise.reject(input.trigger === 'console' ? new HttpFailure(409, `${held}; update the engines after it`) : new Error(held));
+    }
     if (this.current) {
       // A person's Update now used to join the run already going, and the
       // tool they pressed it for was not in that run: the page said it had

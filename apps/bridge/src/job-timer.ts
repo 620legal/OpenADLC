@@ -42,6 +42,9 @@ export const DEFAULT_INTERVALS: Record<Job, number> = {
   // weekly (Sunday 18:00 unless the console says otherwise). Looking often
   // is what lets a machine that slept through the hour run it on waking.
   engines: 5,
+  // The same for OpenADLC's own update, which takes the newest release a
+  // person tagged; see `self-update.ts`.
+  releases: 5,
   // Uploads nobody sent with anything; they wait a day, so hourly is plenty.
   attachments: 60,
   // GitHub deliveries past OPENADLC_EVENT_RETENTION_DAYS; kept for weeks, so daily.

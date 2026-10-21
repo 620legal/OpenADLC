@@ -1019,6 +1019,23 @@ describe('the weekly engine update’s clock', () => {
   });
 });
 
+describe('OpenADLC’s own update’s clock', () => {
+  it('is a scheduled job that looks every five minutes, as the engines’ does', () => {
+    expect(SCHEDULED_JOBS).toContain('releases');
+    expect(DEFAULT_INTERVALS.releases).toBe(5);
+  });
+
+  it('asks self-update whether this week’s run is owed, and says when it is not wired', async () => {
+    const scheduler = new Scheduler({} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
+    expect((await scheduler.run('releases')).actions).toEqual(['OpenADLC’s own update is not wired into this bridge']);
+
+    const tick = vi.fn(async () => ['the next OpenADLC update is at 2026-10-25T18:00:00.000Z']);
+    scheduler.useSelfUpdate({ tick });
+    expect(await scheduler.run('releases')).toEqual({ job: 'releases', actions: ['the next OpenADLC update is at 2026-10-25T18:00:00.000Z'] });
+    expect(tick).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('uploads nobody sent with anything', () => {
   it('are swept hourly once they are a day old, and the sweep says how many', async () => {
     // A dialog closed half-way leaves its files behind, their bytes in the database.
@@ -2369,6 +2386,92 @@ describe('the sweep that comes back for a failed task the recovery could not run
 
     expect(retry.mock.calls.map(([id]) => id)).toEqual(['t-revert']);
     expect(store.tasks.find((task) => task.id === 'retry-recorded')?.autoRetriedAt).not.toBeNull();
+  });
+
+  describe('work OpenADLC’s restart held', () => {
+    const HELD = 'openadlc-cipher-janedoe was not started: OpenADLC restarts onto v0.2.0 once the running tasks end, and this starts after the restart';
+
+    it('waits while the restart is owed, and starts the patch round once it is done', async () => {
+      store.tasks = [failed('t-patch', 'openadlc-testbed#2', { kind: 'patch', startedAt: null, exitReason: HELD })];
+      store.health = [];
+      const { retry } = recovering();
+      let owed: string | null = 'OpenADLC restarts onto v0.2.0 once the running tasks end';
+
+      expect(await retryAfterRecovery(null, { retry, now: () => NOW, restartPending: () => owed })).toEqual([]);
+      expect(retry).not.toHaveBeenCalled();
+      expect(store.tasks.find((task) => task.id === 't-patch')?.autoRetriedAt).toBeNull();
+
+      owed = null;
+      const actions = await retryAfterRecovery(null, { retry, now: () => NOW, restartPending: () => owed });
+      expect(retry.mock.calls.map(([id]) => id)).toEqual(['t-patch']);
+      expect(actions).toEqual(['openadlc-testbed#2: openadlc-cipher-janedoe’s patch started, now that OpenADLC has restarted']);
+      expect(store.audits).toContainEqual(expect.objectContaining({ action: 'task.auto_retried', payload: expect.objectContaining({ cause: 'openadlc-restart' }) }));
+    });
+
+    // The SRE's task on the issue the bridge files for a failed testing deploy
+    // (`Webhooks.diagnoseDeploy`): filed in Build, with `adlc:build`.
+    function heldSre(issue: { stage: string; labels: string[] }) {
+      store.tasks = [
+        failed('t-sre', 'openadlc-testbed#5', {
+          kind: 'deploy',
+          subjectType: 'issue',
+          skill: 'deploy',
+          branch: 'system/deploy-path-abc12345',
+          startedAt: null,
+          exitReason: HELD,
+        }),
+      ];
+      store.health = [];
+      const { retry } = recovering();
+      store.issues = [{ repoName: 'openadlc-testbed', number: 5, prNumber: null, ...issue }];
+      return retry;
+    }
+
+    it('starts the SRE on a failed testing deploy once the restart is done, though its issue is in Build', async () => {
+      // Read as any deploy, it was held for a card in Merged, and never started.
+      const retry = heldSre({ stage: 'build', labels: ['adlc:build', 'priority:p1', 'area:general', 'do:ai'] });
+
+      const actions = await retryAfterRecovery(null, { retry, now: () => NOW, restartPending: () => null });
+
+      expect(retry.mock.calls.map(([id]) => id)).toEqual(['t-sre']);
+      expect(actions).toEqual(['openadlc-testbed#5: openadlc-cipher-janedoe’s deploy started, now that OpenADLC has restarted']);
+    });
+
+    it('leaves the SRE once its issue is closed, or a person has it', async () => {
+      const done = heldSre({ stage: 'done', labels: ['adlc:done', 'do:ai'] });
+      await retryAfterRecovery(null, { retry: done, now: () => NOW, restartPending: () => null });
+      expect(done).not.toHaveBeenCalled();
+
+      const theirs = heldSre({ stage: 'build', labels: ['adlc:build', 'do:human'] });
+      await retryAfterRecovery(null, { retry: theirs, now: () => NOW, restartPending: () => null });
+      expect(theirs).not.toHaveBeenCalled();
+    });
+
+    it('still holds any other deploy for a card in Merged', async () => {
+      const retry = heldSre({ stage: 'build', labels: ['adlc:build'] });
+      store.tasks = store.tasks.map((task) => ({ ...task, branch: 'agent/openadlc-cipher-janedoe/5-issue-5' }));
+
+      await retryAfterRecovery(null, { retry, now: () => NOW, restartPending: () => null });
+
+      expect(retry).not.toHaveBeenCalled();
+    });
+
+    it('waits for a cap spent during the wait, and starts once the cap allows it', async () => {
+      // Started anyway, the cap refused it, and the claim went back, on every pass.
+      store.tasks = [failed('t-patch', 'openadlc-testbed#2', { kind: 'patch', startedAt: null, exitReason: HELD })];
+      store.health = [];
+      const { retry } = recovering();
+      const caps = { monthlyCapUsd: 1500, onCap: { stopLeasing: true } };
+      const { spendingLimits } = await import('@openadlc/db');
+      vi.mocked(spendingLimits.refusal).mockResolvedValueOnce('janedoe/openadlc-testbed has spent $200 of its $200 this month');
+
+      await retryAfterRecovery(null, { retry, now: () => NOW, costs: caps, restartPending: () => null });
+      expect(retry).not.toHaveBeenCalled();
+      expect(store.tasks.find((task) => task.id === 't-patch')?.autoRetriedAt).toBeNull();
+
+      await retryAfterRecovery(null, { retry, now: () => NOW, costs: caps, restartPending: () => null });
+      expect(retry.mock.calls.map(([id]) => id)).toEqual(['t-patch']);
+    });
   });
 
   describe('work a spending cap held', () => {

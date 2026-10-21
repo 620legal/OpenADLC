@@ -12,7 +12,7 @@ import { ATTENTION_WINDOW_DAYS, GITHUB_RETRY_CLAIM_MS, githubRetry, triedAgain }
 import { ALREADY_LANDED, alreadyLanded, subjectClosed, wasRefused } from './gates.js';
 import { fastPathOf, type Automation } from './automation.js';
 import { causeOfFailure, isPrerequisiteRow } from './health/checks/crew.js';
-import { REVIEW_ROUND_OPENED, endedBySendingBack, headInRepository, issueForSubject, issueNumberFromBranch, parseRef, stageOfTask } from './work.js';
+import { DEPLOY_PATH_BRANCH_PREFIX, REVIEW_ROUND_OPENED, endedBySendingBack, headInRepository, issueForSubject, issueNumberFromBranch, parseRef, stageOfTask } from './work.js';
 import { asAutomation, automationBotName, findOwnOpenIssue } from './automation-bot.js';
 import { effectiveConfig } from './effective-config.js';
 import { shipsByMerging, testingDeployChoice, type TestingDeployChoice } from './deploys.js';
@@ -26,9 +26,10 @@ import { buildStatus, renderStatusMarkdown, statusDrift, statusIssueTarget } fro
 import { CHECKS_FAILED, verdictFor, type MergeLine } from './merge-line.js';
 import type { StageHandoff } from './stage-handoff.js';
 import type { HostdClient } from './hostd-client.js';
-import { heldAtCap, type TaskService } from './task-service.js';
+import { heldAtCap, heldForRestart, type TaskService } from './task-service.js';
 import type { Notifier } from './notify.js';
 import type { EngineUpdates } from './engine-updates.js';
+import type { SelfUpdate } from './self-update.js';
 
 export interface JobResult {
   job: string;
@@ -47,6 +48,7 @@ export const SCHEDULED_JOBS = [
   'deps',
   'deploy',
   'engines',
+  'releases',
   'attachments',
   'events',
 ] as const;
@@ -90,6 +92,13 @@ export interface RecoveryDeps {
    */
   costs?: { monthlyCapUsd: number; onCap: { stopLeasing: boolean } };
   /**
+   * Whether OpenADLC still waits to restart (`SelfUpdate.restartPending`):
+   * work only an event starts, refused meanwhile, was recorded with the
+   * restart's words (`heldForRestart`), and is started once this is null.
+   * Absent, such work is started at once.
+   */
+  restartPending?: () => string | null;
+  /**
    * Which overlapping changes may be built side by side in a repository, as
    * the dispatcher is given it. Absent, the repository's stored rules, as a
    * dispatcher of its own reads them.
@@ -106,7 +115,15 @@ function heldFromTheCrew(labels: readonly string[] | undefined): boolean {
  * Whether the card holds this work back: it is not in the stage the work is
  * for, or it carries a label the dispatcher leases nothing under.
  */
-function cardHoldsIt(task: { kind: TaskKind; skill?: string | null }, issue: { stage: string; labels: string[] }): boolean {
+function cardHoldsIt(task: { kind: TaskKind; skill?: string | null; branch?: string | null }, issue: { stage: string; labels: string[] }): boolean {
+  // The SRE on a failed testing deploy works on the issue the bridge filed
+  // for it (`Webhooks.diagnoseDeploy`), which is filed in Build and is no
+  // card's change: read as a deploy, held for a card in Merged, it was never
+  // started again, whether a cap, a seat's sign-in or OpenADLC's restart had
+  // held it, and nothing said so. Only Done, the issue closed, holds it.
+  if (task.kind === 'deploy' && task.branch?.startsWith(DEPLOY_PATH_BRANCH_PREFIX)) {
+    return issue.stage === 'done' || heldFromTheCrew(issue.labels);
+  }
   // A conflict resolution round is a patch the merge line opens on a pull
   // request in Review: read as Build work, it was never run again.
   const stage = task.kind === 'patch' && task.skill === 'resolve-conflict' ? 'review' : stageOfTask(task.kind);
@@ -129,7 +146,7 @@ type StartedThisPass = Map<string, WorkInFlight[]>;
  * sweep once what held it is gone.
  */
 async function dispatcherWouldStart(
-  task: { kind: TaskKind; skill?: string | null },
+  task: { kind: TaskKind; skill?: string | null; branch?: string | null },
   issue: { number: number; stage: string; labels: string[]; declaredPaths?: string[] } | null,
   repo: { id: string; name: string; fullName: string; defaultBranch: string; concurrency: number } | null,
   pass: { started: StartedThisPass; pathPolicy?: RecoveryDeps['pathPolicy'] },
@@ -158,6 +175,8 @@ function startedBuild(pass: StartedThisPass, repoId: string | null, issue: { num
 
 /** The cause the audit trail names for work run again once a spending cap allowed it. */
 export const SPENDING_CAP_CAUSE = 'spending-cap';
+/** What the audit log names as the cause of work started once OpenADLC's restart onto a release was done. */
+export const RESTART_CAUSE = 'openadlc-restart';
 
 /** The cause the audit trail names for work run again after GitHub did not answer its start; see `githubRetry`. */
 export const GITHUB_UNANSWERED_CAUSE = 'github-unanswered';
@@ -280,8 +299,10 @@ export async function retryAfterRecovery(fixed: readonly string[] | null, deps: 
     if (githubDue && (githubDue.at.getTime() > now.getTime() || unansweredFor.has(task.botId))) continue;
     const healthCause = githubDue ? null : causeOfFailure(task.exitReason, { botId: task.botId, repoName });
     const capHeld = !healthCause && !justFixed && Boolean(deps.costs) && heldAtCap(task.exitReason);
-    if (healthCause ? !putRight(healthCause, endedAt) : !capHeld && !githubDue) continue;
-    const cause = healthCause ?? (capHeld ? SPENDING_CAP_CAUSE : GITHUB_UNANSWERED_CAUSE);
+    const restartHeld = !healthCause && !justFixed && heldForRestart(task.exitReason);
+    if (restartHeld && deps.restartPending?.()) continue;
+    if (healthCause ? !putRight(healthCause, endedAt) : !capHeld && !githubDue && !restartHeld) continue;
+    const cause = healthCause ?? (capHeld ? SPENDING_CAP_CAUSE : restartHeld ? RESTART_CAUSE : GITHUB_UNANSWERED_CAUSE);
 
     // The card has moved past the stage this work was for: whatever failed no
     // longer holds anything up, and running it again would start a review of a
@@ -298,7 +319,10 @@ export async function retryAfterRecovery(fixed: readonly string[] | null, deps: 
     if (!(await dispatcherWouldStart(task, issue, repo, { started: startedIn, pathPolicy: deps.pathPolicy }))) continue;
 
     if (!(await tasks.seatHasRoom(task.botId, startedFor.get(task.botId) ?? 0))) continue;
-    if (capHeld && deps.costs) {
+    // Work the restart held was under its cap when it was recorded, but a
+    // month may have been spent since: started anyway, the cap refused it,
+    // and the claim went back, on every pass until the cap allowed it.
+    if ((capHeld || restartHeld) && deps.costs) {
       if (!(await capAllows(task, repo, deps.costs))) continue;
     }
     const claimed = staleClaim
@@ -321,6 +345,8 @@ export async function retryAfterRecovery(fixed: readonly string[] | null, deps: 
       actions.push(
         capHeld
           ? `${task.subjectRef}: ${retried.bot}’s ${task.kind} started, now that the spending cap allows it`
+          : restartHeld
+            ? `${task.subjectRef}: ${retried.bot}’s ${task.kind} started, now that OpenADLC has restarted`
           : githubDue
             ? `${task.subjectRef}: ${retried.bot}’s ${task.kind} run again (retry ${githubDue.attempt} of ${githubDue.of}), as GitHub did not answer when it started`
             : `${task.subjectRef}: ${retried.bot}’s ${task.kind} run again, now that ${cause} passes`,
@@ -1140,6 +1166,13 @@ export class Scheduler {
 
   private stacking: Pick<Stacking, 'sweep'> | null = null;
 
+  private selfUpdate: Pick<SelfUpdate, 'tick'> | null = null;
+
+  /** OpenADLC's own update from its releases (`self-update.ts`): its clock is the `releases` job. */
+  useSelfUpdate(update: Pick<SelfUpdate, 'tick'>): void {
+    this.selfUpdate = update;
+  }
+
   /** Starts work that depends on work in review from its branch, and holds it when that is sent back (`stacking.ts`); run with the merge job. */
   useStacking(stacking: Pick<Stacking, 'sweep'>): void {
     this.stacking = stacking;
@@ -1718,6 +1751,9 @@ export class Scheduler {
           job,
           actions: this.engineUpdates ? await this.engineUpdates.tick() : ['engine updates are not wired into this bridge'],
         };
+      case 'releases':
+        // As the engines' clock: a look every few minutes, a run once a week.
+        return { job, actions: this.selfUpdate ? await this.selfUpdate.tick() : ['OpenADLC’s own update is not wired into this bridge'] };
       case 'attachments':
         return { job, actions: await this.sweepAttachments() };
       case 'events':

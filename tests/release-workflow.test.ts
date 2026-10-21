@@ -3,10 +3,22 @@ import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseYamlFile } from '@openadlc/shared';
+import {
+  attestationCheckArgs,
+  parseYamlFile,
+  RELEASE_CHECKSUMS,
+  RELEASE_MANIFEST,
+  RELEASE_TAG,
+  RELEASE_SIGNER,
+  RELEASE_SIGNER_REF,
+  RELEASE_TAG_FILTER,
+  RELEASE_WORKFLOW,
+  releaseAssets,
+  releaseSignerIdentity,
+} from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error — a plain script with no types; release-build.yml and ci.yml run it directly.
-import { realTools } from '../.github/scripts/release-check.mjs';
+import { realTools, VERSION as CHECKED_TAG } from '../.github/scripts/release-check.mjs';
 
 /**
  * Who may write, among this repository's workflows, and how a release is
@@ -410,5 +422,61 @@ describe('the other workflows', () => {
       const calls = [...text.matchAll(/^\s*uses:\s*(620legal\/OpenADLC\/\S+)/gm)].map((match) => match[1]);
       expect(calls, file).toEqual(file === 'release.yml' ? ['620legal/OpenADLC/.github/workflows/release-build.yml@main'] : []);
     }
+  });
+});
+
+/**
+ * The contract between release-build.yml and self-update
+ * (docs/self-hosting.md#what-a-release-holds), read from both. Self-update
+ * takes its names from `packages/shared/src/self-update.ts`; a workflow that
+ * renamed a file, or checked the attestation another way, would publish
+ * releases every install refused, and say nothing.
+ */
+describe('a release, as release-build.yml makes it and self-update takes it', () => {
+  const release = workflow('release.yml');
+  const build = workflow('release-build.yml');
+  const scripts = (job: string) => (build.jobs[job]?.steps ?? []).map((step) => step.run ?? '').join('\n');
+  /** A shell command's words: continuation lines joined, quotes taken off. */
+  const words = (command: string) => command.replace(/\\\n/g, ' ').split(/\s+/).filter(Boolean).map((word) => word.replace(/^"|"$/g, ''));
+
+  it('is signed by the workflow whose identity an install trusts, for the tags it takes', () => {
+    expect(FILES).toContain(RELEASE_WORKFLOW.split('/').at(-1));
+    expect(FILES).toContain(RELEASE_SIGNER.split('/').at(-1));
+    expect(release.jobs.release?.uses).toBe(`620legal/OpenADLC/${RELEASE_SIGNER}@${RELEASE_SIGNER_REF.replace('refs/heads/', '')}`);
+    expect(release.on.push).toEqual({ tags: [RELEASE_TAG_FILTER] });
+    // The tags the workflow's checks accept are the ones self-update takes.
+    for (const tag of ['v0.2.0', 'v10.0.1', 'v01.2.0', 'v0.2.0-rc.1', 'v0.2', '0.2.0']) expect(CHECKED_TAG.test(tag), tag).toBe(RELEASE_TAG.test(tag));
+  });
+
+  it('names its files and its manifest as self-update reads them', () => {
+    const names = releaseAssets('$TAG');
+    const made = scripts('build');
+    expect(made).toContain(`"out/${names.archive}"`);
+    expect(made).toContain(`> ${RELEASE_CHECKSUMS}`);
+    expect(made).toContain(`'{"format":1,"tag":"%s","commit":"%s","tree":"%s"}\\n' "$TAG" "$SHA" "$TREE" > ${RELEASE_MANIFEST}`);
+    expect(made).toContain(`-czf "out/${names.archive}" ${RELEASE_MANIFEST} $roots`);
+    expect(scripts('publish')).toContain(
+      `gh release create "$TAG" --repo "$REPO" --verify-tag --title "$TAG" --generate-notes \\\n  "out/${names.archive}" "out/${names.bundle}" out/${RELEASE_CHECKSUMS}`,
+    );
+  });
+
+  it('checks the attestation with the very command self-update runs, before it publishes', () => {
+    const publish = scripts('publish');
+    const command = publish.slice(publish.indexOf('gh attestation verify'), publish.indexOf('\n', publish.indexOf('--predicate-type')));
+    const names = releaseAssets('$TAG');
+    expect(words(command).slice(1)).toEqual(
+      attestationCheckArgs({ archive: `out/${names.archive}`, bundle: `out/${names.bundle}`, repo: '$REPO', tag: '$TAG', commit: '$SHA' }),
+    );
+    expect(releaseSignerIdentity('$REPO')).toBe('https://github.com/$REPO/.github/workflows/release-build.yml@refs/heads/main');
+  });
+
+  it('is the command the docs give a person', () => {
+    const docs = readFileSync(join(ROOT, 'docs', 'self-hosting.md'), 'utf8');
+    const start = docs.indexOf('gh attestation verify "openadlc-$tag.tar.gz"');
+    expect(start).toBeGreaterThan(-1);
+    const command = docs.slice(start, docs.indexOf('\n', docs.indexOf('--predicate-type', start)));
+    expect(words(command).slice(1)).toEqual(
+      attestationCheckArgs({ archive: 'openadlc-$tag.tar.gz', bundle: 'openadlc-$tag.tar.gz.sigstore.json', repo: '620legal/OpenADLC', tag: '$tag', commit: '$commit' }),
+    );
   });
 });

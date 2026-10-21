@@ -102,6 +102,7 @@ const SETTING_LABELS: Record<string, string> = {
   engineUpdateTime: 'The engine update’s time',
   engineUpdateMinReleaseAgeDays: 'How many days old a release must be before an engine update takes it',
   systemToolSchedules: 'When each tool updates, and its pin',
+  selfUpdateSchedule: 'When OpenADLC updates itself',
   systemTimeZone: 'The install’s time zone',
   installName: 'The install’s name on its posts',
   attributionMode: 'Whether a crew post that does not check still counts',
@@ -121,6 +122,7 @@ const SETTING_LABELS: Record<string, string> = {
 /** Labelled, but a JSON value nobody reads by eye, so only said to differ. */
 const STRUCTURED_SETTINGS = new Set([
   'systemToolSchedules',
+  'selfUpdateSchedule',
   'humanIds',
   'workPaused',
   'workPausedRepos',

@@ -113,6 +113,21 @@ describe('everything', () => {
     });
   });
 
+  it('keeps when OpenADLC updates itself without this machine’s slot, and leaves out its run and results', () => {
+    const found = sourceInstall();
+    found.settings.selfUpdateSchedule = JSON.stringify({ mode: 'schedule', day: 'wednesday', time: '09:30', slot: '2026-10-21T09:30:00.000Z' });
+    found.settings.selfUpdateRun = JSON.stringify({ phase: 'waiting', tag: 'v0.2.0' });
+    found.settings.selfUpdateLast = JSON.stringify({ state: 'updated', tag: 'v0.2.0' });
+    found.settings.selfUpdateCandidate = JSON.stringify({ tag: 'v0.3.0' });
+
+    const archived = buildBackup(found, EVERYTHING, NOW).contents.settings;
+
+    expect(JSON.parse(archived.selfUpdateSchedule ?? '{}')).toEqual({ mode: 'schedule', day: 'wednesday', time: '09:30', slot: null });
+    expect(archived).not.toHaveProperty('selfUpdateRun');
+    expect(archived).not.toHaveProperty('selfUpdateLast');
+    expect(archived).not.toHaveProperty('selfUpdateCandidate');
+  });
+
   it('records the choice in the manifest as flags and counts — never a name', async () => {
     const archive = await encryptBackup(contents, 'a passphrase');
     const manifest = readManifest(archive);

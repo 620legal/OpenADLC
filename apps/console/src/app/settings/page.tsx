@@ -2,6 +2,7 @@ import { AppShell } from '@/components/app-header';
 import { BackupCard } from '@/components/backup-card';
 import { BridgeDown } from '@/components/bridge-down';
 import { EngineUpdates } from '@/components/engine-updates';
+import { SelfUpdate } from '@/components/self-update';
 import { GitHubCard } from '@/components/github-card';
 import { CrewTable } from '@/components/github-accounts';
 import { RepositoriesCard } from '@/components/repositories-card';
@@ -26,9 +27,10 @@ export const dynamic = 'force-dynamic';
  * adding another; GitHub — where the app is installed, the install name its
  * posts are headed with, and the accounts OpenADLC signs in as; AI models — the
  * accounts the crew thinks with, set up before the table that picks one; the
- * crew — which GitHub account and which model each bot uses; the weekly engine
- * updates; the spending caps, summarised, with the amounts edited on their own
- * page; a backup of the install; pausing new work, across the install or in
+ * crew — which GitHub account and which model each bot uses; System, the
+ * weekly updates of OpenADLC itself and of the tools it runs; the spending
+ * caps, summarised, with the amounts edited on their own page; a backup of the
+ * install; pausing new work, across the install or in
  * chosen repositories; who may use the console; and how it looks: the color
  * mode, and each repository's and crew member's color.
  */
@@ -51,7 +53,7 @@ export default async function SettingsPage() {
     // drawn at the height it keeps; a section the bridge does not answer here
     // within `SECTION_READ_MS` still reads its own, so a slow GitHub costs the
     // page at most that.
-    const [repos, crew, costs, spending, accounts, github, installations, install, engineUpdates, backup, paused] = await Promise.all([
+    const [repos, crew, costs, spending, accounts, github, installations, install, engineUpdates, selfUpdate, backup, paused] = await Promise.all([
       api.repos(),
       api.crew(),
       api.costs().catch(() => null),
@@ -61,6 +63,7 @@ export default async function SettingsPage() {
       api.installations().catch(() => null),
       api.install().catch(() => null),
       api.engineUpdates().catch(() => null),
+      api.selfUpdate().catch(() => null),
       api.backup().catch(() => null),
       api.workPauses().catch((): WorkPauses => ({ paused: null, repos: {} })),
     ]);
@@ -114,7 +117,8 @@ export default async function SettingsPage() {
               <CrewTable crew={crew.bots} accounts={accounts ?? []} github={github} />
             </SettingsCard>
 
-            <EngineUpdates initial={engineUpdates} />
+            {/* OpenADLC itself is the first row of System, above the tools it runs. */}
+            <EngineUpdates initial={engineUpdates} extra={<SelfUpdate initial={selfUpdate} />} />
 
             <SpendingSummary initial={spending} />
 

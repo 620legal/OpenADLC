@@ -25,6 +25,9 @@ const SKILL: Record<TaskKind, string> = {
 
 const ACTIVE: readonly TaskState[] = ['queued', 'running', 'paused'];
 
+/** What a QA run may write, as the deploy's verification and the nightly run each open one. */
+const QA_PATHS = ['tests/**'];
+
 export interface RetryDeps {
   /**
    * Why nothing new may start now (work paused, a restore), or null; about a
@@ -242,6 +245,17 @@ export async function retryTask(taskId: string, actor: string, deps: RetryDeps, 
         : task.kind === 'patch' && onBranch && parsed
           ? await patchPaths(leaseHeld ? lease.declaredPaths : [], repo.fullName, parsed.number, deps)
           : undefined;
+      // A QA run is opened as work of its own, not a round on the pull
+      // request's branch (`Webhooks.verifyOnTesting`, the nightly run). Run
+      // again as one, a verification after a deploy had no issue in its
+      // context, nothing it could write, and the branch checked out as a
+      // review's is, so hostd ran no `make setup` and gave it no database.
+      // That was every Try again, every cap it waited at and every restart
+      // onto a release it waited through.
+      const qa =
+        task.kind === 'qa'
+          ? { issueNumber: onBranch && parsed ? await verifiedIssue(repo, parsed.number) : null, declaredPaths: QA_PATHS }
+          : null;
       const held = options.byAdmin ? false : await spendHold(task, actor);
       const bypass =
         options.byAdmin && isRevert(task)
@@ -260,7 +274,7 @@ export async function retryTask(taskId: string, actor: string, deps: RetryDeps, 
         subjectRef: task.subjectRef,
         skill: task.skill ?? SKILL[task.kind],
         branch: task.branch,
-        ...(onBranch ? { issueNumber: issueNumberFromBranch(task.branch ?? ''), checkoutExistingBranch: true } : {}),
+        ...(qa ?? (onBranch ? { issueNumber: issueNumberFromBranch(task.branch ?? ''), checkoutExistingBranch: true } : {})),
         ...(leaseHeld ? { leaseId: lease.id } : {}),
         ...(declaredPaths ? { declaredPaths } : {}),
         ...(resolution ? { extraContext: [resolution.brief] } : {}),
@@ -301,6 +315,19 @@ export async function retryTask(taskId: string, actor: string, deps: RetryDeps, 
     },
   });
   return { retried: task.id, task: started, bot: bot.name, ...(queued ? { queued: true as const, position: queued.position } : {}) };
+}
+
+/**
+ * The issue a verification on testing checks, which the deploy that opened it
+ * read from the pull request's branch: the issue whose lease the pull request
+ * held, or, with none, the card it is the pull request of. Null when neither
+ * says.
+ */
+async function verifiedIssue(repo: { id: string; name: string }, prNumber: number): Promise<number | null> {
+  const lease = await leases.lastForPullRequest(repo.id, prNumber).catch(() => null);
+  if (lease) return lease.issueNumber;
+  const tracked = await issues.listIssues(repo.name).catch(() => []);
+  return tracked.find((issue) => issue.prNumber === prNumber)?.number ?? null;
 }
 
 /** The lease's paths and every file the pull request changes, once each. */

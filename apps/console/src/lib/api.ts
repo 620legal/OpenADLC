@@ -1,4 +1,5 @@
 import type { EngineUpdatesView } from '@/components/engine-updates';
+import type { SelfUpdateView } from '@/components/self-update';
 import type { InstallSettings } from '@/components/install-settings';
 import type { InstallationsView } from './app-reach';
 import type { BackupInventory } from './backup';
@@ -788,6 +789,7 @@ export const api = {
   installations: () => get<InstallationsView>('/v1/github/installations', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
   install: () => get<InstallSettings>('/v1/install', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
   engineUpdates: () => get<EngineUpdatesView>('/v1/engines/updates', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
+  selfUpdate: () => get<SelfUpdateView>('/v1/self-update', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
   backup: () => get<BackupInventory>('/v1/backup', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
   users: () => get<{ users: ConsoleUser[] }>('/v1/users').then((body) => body.users),
   /** Whether a person has paused new work from Settings; see `pause-work.ts` in the bridge. */
