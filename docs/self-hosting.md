@@ -1961,8 +1961,9 @@ only its type, delivery id and repository name ([security](security.md)).
 
 Settings calls this System. The tools it can move are the engine CLIs —
 `@anthropic-ai/claude-code`, `@openai/codex` and `@xai-official/grok` — the
-GitHub CLI and Node. pnpm, the Debian packages, uv, a repository's own
-toolchain and OpenADLC itself stay where they are. The three engine CLIs are
+GitHub CLI and Node. pnpm, the Debian packages, uv and a repository's own
+toolchain stay where they are; OpenADLC itself has a row of its own, first in
+the table ([Updating OpenADLC](#updating-openadlc)). The three engine CLIs are
 pinned in `infra/local/build-bot-image.sh`, and those pins are what a fresh
 install starts from. Node and the GitHub CLI are pinned the same way once an
 update has read them (`NODE_VERSION`, `GH_VERSION`); a build that does not
@@ -2592,7 +2593,10 @@ proves is in [security.md](security.md#releases).
 ### What a release holds
 
 This is the contract between the workflow and anything that takes a release,
-and both follow it as written here.
+and both follow it as written here. [Self-update](#updating-openadlc) reads
+these names and formats from `packages/shared/src/self-update.ts`, whose test
+pins each one, and `tests/release-workflow.test.ts` checks that the workflow
+and the command under [Checking a release](#checking-a-release) use the same.
 
 | Part | What it is |
 |---|---|
@@ -2663,7 +2667,140 @@ first-parent, ci-green commit of `main`. The tag ruleset and immutable
 releases in [development.md](development.md#once-per-repository) narrow who can
 push or move a `v*` tag at all; `openadlc github apply` sets neither.
 
+## Updating OpenADLC
+
+Settings → System has a row for OpenADLC itself, first, above the tools it
+runs: the commit in use (and its release, when it is one), the release an
+update would take or why there is none, the run in flight or how the last one
+ended, and the next run. It has the same choice as an engine's row,
+*Automatically on a schedule* (every Sunday at 18:00 in `systemTimeZone`
+unless moved) or *Only when I press Update*, and **Update now**. An install
+from before this has the same weekly default; its first look claims this
+week's slot without running, so its first update is the next Sunday at 18:00.
+Only an admin can press Update now or change the schedule (`GET`, `POST` and
+`PATCH /v1/self-update`).
+
+**A tag is a deploy.** On the schedule, the default, every release a code
+owner tags is taken by every install that updates itself at its next run,
+within the week, with nobody there pressing anything; the row says so. Set it
+to *Only when I press Update* to choose when.
+
+It takes only [releases](#releases): the newest version of the checkout's
+`origin` (as GitHub spells its name, which the certificate carries, whatever
+case the remote has) that has all three files and that GitHub holds
+immutable, never a
+commit of `main` without one. It updates only an install that runs from a git
+checkout on `main`, with no changes of its own, still at the commit the
+services started on, able to fast-forward to the release, and that no other
+running install runs from too: `openadlc up` notes each install's home in the
+checkout's `.openadlc/installs/` (ignored by git), and an update refuses while
+another one's services are running from it, since it would change the files
+under them. Running means a pid file naming that service's keeper, by its
+command line, so one a reboot left behind does not count; the refusal names
+how to stop the other (`OPENADLC_HOME=<its home> openadlc down`) or drop a
+note it left. Give each install its own clone; a scratch install of a
+developer's checkout is one such second install. Anything else and it does
+nothing, and the row says why: it never stashes, merges over, resets or
+discards what a person changed. A checkout ahead of the newest release is current. It needs a GitHub
+CLI where the bridge runs whose `gh attestation verify` has the flags
+[Checking a release](#checking-a-release) uses; without one the row says so.
+
+A run has three phases.
+
+1. **Prepare, at once, while tasks run.** It fetches `main` and the release's
+   tag into the checkout, which writes only refs (a tag the checkout already
+   has on another commit is refused, not moved), and checks that the tag's
+   commit is one of `main`'s first parents. It downloads the three files into
+   `$OPENADLC_HOME/self-update/<tag>/download/`, checks the archive against
+   `SHA256SUMS`, then its attestation with the command in
+   [Checking a release](#checking-a-release), with `--format json` added so it
+   can also check, from the certificate, that the run was the push of that tag
+   by `release.yml` at it. A release that fails any of this is passed over for
+   the next older one (up to five, each in the audit log as
+   `openadlc.release_refused`), so one bad release, or one made by hand, does
+   not stall every update after it. Only then does it open the
+   archive, reading every entry against [the contract](#what-a-release-holds):
+   a link, an absolute path, `..` or anything that is not built output
+   refuses the whole archive, and its manifest must name the tag's commit and
+   that commit's tree. Then it adds a detached worktree of the commit at
+   `$OPENADLC_HOME/self-update/<tag>/tree`, unpacks the output into it, runs
+   `pnpm install --frozen-lockfile` there, which builds node-pty for this
+   machine, with an environment of its own and none of the services' (no
+   database URL, no secret), and checks that the release's CLI starts. A failure at any step
+   removes the worktree and the downloads and records the step and why;
+   nothing the services run from was touched.
+2. **Wait for the tasks.** No new work starts: leases, requests and intake
+   wait behind the same hold a restore takes, and a review, a fix round or any
+   other start is refused as busy, as when its seat is full, and comes back
+   the way busy work does, after the restart. A paused task
+   stays paused and does not hold the restart, since a question can stay open
+   for days; one answered meanwhile goes on after it. Once two looks thirty
+   seconds apart find no task queued or running and no engine update (hostd
+   not answering counts as one), it restarts. No engine update starts
+   meanwhile. System names the tasks it is waiting for. There is no cancel: to
+   end the wait sooner, stop a task.
+3. **Restart.** A detached `openadlc self-update apply`, run from the
+   release's own CLI in the worktree, stops the services and checks that each
+   one's keeper has gone, fast-forwards the checkout to the release's commit,
+   writes the release's built output (each `dist/` and `apps/console/.next/`)
+   over the checkout's, file by file and in place, flushed, keeping each file
+   it writes over and moving aside each the release no longer has, runs `pnpm install --frozen-lockfile --offline` from the store the
+   worktree just filled, applies the migrations, and runs the checkout's
+   `openadlc up`, the release's now, which leaves out its console sign-in link
+   since its output goes to a log. It writes to `run/self-update.log` and
+   leaves `run/self-update-result.json`, which the bridge that comes up
+   records.
+
+   In place, because a paused task's computer goes on: it bind-mounts the
+   skill runner's bundle, one file of `apps/hostd/dist`, and a file moved
+   aside and replaced would leave that computer running the old runner under
+   the new hostd. Written over, the same file has the new runner when the task
+   resumes. The `gh` and `git` it mounts from `apps/hostd/bin` change in place
+   with the fast-forward.
+
+   Before it stops anything it writes `run/self-update-applying.json`, and
+   `.openadlc/applying.json` in the checkout for any other install that runs
+   from it, and removes both once the checkout is one release again. If the restart dies
+   partway, `openadlc up` refuses while that file is there and says how to
+   finish or go back
+   ([troubleshooting](troubleshooting.md#openadlc-does-not-update-itself)).
+   A resume under way counts as a running task in the wait, since its row
+   stays paused until hostd has the task's computer ready. Work only an event
+   starts (a fix round after changes requested, the check after a deploy, a
+   revert, the SRE on a failed deploy) that comes during the wait is recorded
+   with the restart's words, and the merge sweep starts it once the restart is
+   done and its spending cap allows it, as it starts work a cap held. Work a
+   cap holds, or that its seat cannot do yet, is recorded in those words
+   instead, and work on a card a person held is not started, as at any other
+   time.
+
+If a service will not stop, nothing is changed and the services are started
+again. If the fast-forward, the swap or the install fails, the restart puts
+back what was there (`git reset --keep` to the commit it started from, each
+file it wrote over written back, each it added removed, each it moved aside
+moved back, `pnpm install` against the old lockfile) and starts the services again: the install is as it
+was, after a few minutes down. Once migrations may
+have run it does not go back, since they are forward-only: a failed migration
+or start leaves the checkout on the release, and says so
+([troubleshooting](troubleshooting.md#openadlc-does-not-update-itself)).
+
+The checkout stays the install, as after a `git pull` by hand: the `openadlc`
+on your PATH, `config/`, and the skills, roles and `gh` each task's computer
+mounts from it move together. Each run is in the audit log, as
+`openadlc.updated`, `openadlc.update_failed` with its step, or
+`openadlc.update_checked` for one that found nothing to take or could not run,
+with who or what started it, the commit it started from and the one the
+install ended on. A failure is a card in Needs you, under System, until a
+later run updates or finds the install current. A backup carries the
+Schedule or Manual choice, the day and the time, and leaves out the slot, the
+run in flight, the last result and the last look at the releases. Why it works
+this way is [ADR 0007](adr/0007-self-update-follows-verified-releases.md).
+
 ## Upgrading
+
+An install that runs from a git checkout of `main` updates itself from
+releases ([Updating OpenADLC](#updating-openadlc)). By hand, or on any other
+install, it is the steps below.
 
 An install made before the rename to OpenADLC (its state in `~/.fleet`, its
 command `fleet`): follow [upgrading-from-fleet.md](upgrading-from-fleet.md)

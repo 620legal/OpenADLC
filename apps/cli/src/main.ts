@@ -3,7 +3,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getSecretStore, internalSecretRef } from '@openadlc/github';
+import { getSecretStore, internalSecretRef, openadlcHome } from '@openadlc/github';
+import { otherInstallsRunning } from '@openadlc/shared';
 import { answerOf, attachFailure } from './attach.js';
 import { rotateAttribution } from './commands/attribution.js';
 import { authLogin, authStatus } from './commands/auth.js';
@@ -13,9 +14,10 @@ import { bridgeHeaders, consoleLink } from './console-link.js';
 import { doctor, status } from './commands/doctor.js';
 import { githubApply, githubCheck, syncLabels } from './commands/github.js';
 import { init } from './commands/init.js';
+import { applyRelease, runForApply, writeResult } from './commands/self-update.js';
 import { down, up } from './commands/up.js';
 import { configPath, databaseConflictMessage, databaseUrlConflict, loadConfig, serviceEnv } from './install.js';
-import { logFile } from './processes.js';
+import { keeperPid, logFile } from './processes.js';
 import { ui } from './ui.js';
 import { flagValue, hasFlag, refusal, strayArgument, unknownFlag, wantsHelp } from './flags.js';
 
@@ -93,6 +95,10 @@ openadlc — a crew of agents that takes a request to a reviewed, deployed chang
                                     asks how production ships where nothing says:
                                     --production auto [--soak MINUTES] or
                                     --production reviewers --reviewer LOGIN[,LOGIN]
+  openadlc self-update apply --checkout DIR --staging DIR --tag TAG --from SHA --to SHA
+                                    what Settings → System runs to restart onto a release
+                                    it has prepared and checked, once no task runs; not
+                                    for running by hand (docs/self-hosting.md#updating-openadlc)
   openadlc cloud configure         set up a cloud install (gcp). One question: who
                                     may open the console (Enter takes the signed-in
                                     gcloud account). The rest defaults, or comes from
@@ -341,6 +347,37 @@ async function main(): Promise<void> {
       ui.note('try: openadlc github sync-labels | openadlc github check | openadlc github apply');
       process.exitCode = 2;
       return;
+
+    case 'self-update': {
+      if (subcommand !== 'apply') {
+        ui.fail(`unknown self-update command: ${subcommand ?? '(none)'}`);
+        ui.note('OpenADLC updates itself from Settings → System; `self-update apply` is what that runs');
+        process.exitCode = 2;
+        return;
+      }
+      const checkout = flag('checkout');
+      const staging = flag('staging');
+      const tag = flag('tag');
+      const from = flag('from');
+      const to = flag('to');
+      if (!checkout || !staging || !tag || !from || !to) {
+        ui.fail('usage: openadlc self-update apply --checkout DIR --staging DIR --tag TAG --from SHA --to SHA');
+        process.exitCode = 2;
+        return;
+      }
+      const result = await applyRelease(
+        { checkout, staging, tag, from, to, home: openadlcHome() },
+        {
+          run: runForApply,
+          down,
+          running: () => ['hostd', 'bridge', 'console'].filter((name) => keeperPid(name) !== null),
+          otherInstalls: () => otherInstallsRunning(checkout, openadlcHome()),
+        },
+      );
+      ui.plain(`result in ${writeResult(openadlcHome(), result)}: ${result.state}${result.step ? ` at ${result.step}` : ''} — ${result.reason}`);
+      if (result.state !== 'updated') process.exitCode = 1;
+      return;
+    }
 
     case 'backup': {
       const out = flag('out');

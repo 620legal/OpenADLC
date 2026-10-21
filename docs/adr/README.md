@@ -21,3 +21,4 @@ only where it changed a decision the table already had (0003, from D5 and D12;
 - [0004](0004-design-always-by-default.md): Design is Always by default; `conditional` is a repository's opt-out (supersedes D7)
 - [0005](0005-ruleset-bypass-is-the-app-or-a-person.md): a ruleset bypass is OpenADLC's app or a person who is not a crew account
 - [0006](0006-abandoned-is-a-label.md): an issue closed without merging is Done, labelled `openadlc:abandoned`, and not shipped
+- [0007](0007-self-update-follows-verified-releases.md): self-update takes only verified releases, prepared beside the install, and the checkout stays the install

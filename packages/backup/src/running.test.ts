@@ -212,6 +212,23 @@ describe('an archive laid beside an install that is set up', () => {
     expect(chosen.contents.settings).not.toHaveProperty('systemToolLast');
   });
 
+  it('compares when OpenADLC updates itself without this machine’s slot, and never offers a backup’s run in flight', async () => {
+    const contents = archive();
+    // An archive from before these were left out.
+    contents.settings.selfUpdateSchedule = JSON.stringify({ mode: 'manual', day: 'sunday', time: '18:00', slot: '2026-10-18T18:00:00.000Z' });
+    contents.settings.selfUpdateRun = JSON.stringify({ phase: 'restarting', tag: 'v0.2.0', pid: 4242 });
+    const install = memoryInstall({
+      ...installB(),
+      settings: { ...installB().settings, selfUpdateSchedule: JSON.stringify({ mode: 'manual', day: 'sunday', time: '18:00', slot: '2026-10-25T18:00:00.000Z' }) },
+    });
+    const comparison = compareInstall({ contents, here: install.view(), signIns: [], historyHere: null });
+
+    expect(find(comparison, 'setting:selfUpdateSchedule')).toMatchObject({ state: 'same', label: 'When OpenADLC updates itself' });
+    expect(itemsOf(comparison).some((one) => one.key === 'setting:selfUpdateRun')).toBe(false);
+    const chosen = chosenArchive({ contents, here: install.view(), comparison, choices: { ...comparison.choices } });
+    expect(chosen.contents.settings).not.toHaveProperty('selfUpdateRun');
+  });
+
   it('names every setting it compares, and shows a plain one’s values', async () => {
     // Every setting without a label was taken for a secret: a backup's CI
     // minutes cap or pause of new work showed as "The setting ciMinutesCap",

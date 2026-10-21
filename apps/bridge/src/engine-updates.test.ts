@@ -472,6 +472,24 @@ describe('a run a person starts', () => {
     expect(toolSlot(data, 'grok')).not.toBe(new Date(THIS_WEEK).toISOString());
   });
 
+  it('starts no update, by schedule or by hand, while OpenADLC waits to restart', async () => {
+    const { service, hostd } = updates();
+    let owed: string | null = 'OpenADLC restarts onto v0.2.0 once the running tasks end';
+    service.holdWhile(() => owed);
+
+    await expect(service.start({ trigger: 'console', actor: 'ada', tools: ['grok'] })).rejects.toMatchObject({
+      status: 409,
+      message: 'OpenADLC restarts onto v0.2.0 once the running tasks end; update the engines after it',
+    });
+    await expect(service.start({ trigger: 'schedule', actor: 'schedule' })).rejects.toThrow(/restarts onto v0\.2\.0/);
+    expect(hostd.starts).toEqual([]);
+
+    owed = null;
+    hostd.hang = true;
+    await service.start({ trigger: 'console', actor: 'ada', tools: ['grok'] });
+    expect(hostd.starts).toHaveLength(1);
+  });
+
   it('refuses Update now when hostd is already running a run this bridge did not start', async () => {
     const { service, hostd } = updates();
     hostd.startEngineUpdate = async () => ({ running: true, startedAt: '2026-09-28T05:00:00.000Z', joined: true, last: null });

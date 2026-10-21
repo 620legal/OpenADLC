@@ -9,7 +9,7 @@ commands, [cli.md](cli.md).
 | Place | Holds | Written by |
 |---|---|---|
 | `$OPENADLC_HOME/install.json` | This machine's install: driver, database, ports, the App's client id, the humans, the webhook secret | `openadlc init`, `openadlc up` (the database password), or by hand. The console's walkthrough writes the settings table instead |
-| The `settings` table | What the console set: organization, client id, automation bot, humans, operator email, public URL, install name, the engine update schedules and time zone, attribution mode, which repositories a person merges for (`bridgeMergeOff`, `ciMergeByPerson`), testing deploys, the CI minutes cap, pauses and holds. The closed list is `SETTING_KEYS` in `packages/db/src/store/settings.ts`. No credential: the webhook secret, the App's private key and its client secret, set through the console, go to the secret store | the console |
+| The `settings` table | What the console set: organization, client id, automation bot, humans, operator email, public URL, install name, the engine update schedules and time zone, OpenADLC's own update (`selfUpdateSchedule`, and what the bridge records of it: `selfUpdateRun`, `selfUpdateLast`, `selfUpdateCandidate`), attribution mode, which repositories a person merges for (`bridgeMergeOff`, `ciMergeByPerson`), testing deploys, the CI minutes cap, pauses and holds. The closed list is `SETTING_KEYS` in `packages/db/src/store/settings.ts`. No credential: the webhook secret, the App's private key and its client secret, set through the console, go to the secret store | the console |
 | `config/*.yaml` | The crew, the repositories to seed, the caps, the review rules | you, in git |
 | Environment variables | Everything else, per service | you, or `openadlc up` |
 | `$OPENADLC_HOME/secrets/` | Refresh tokens, signing keys, model keys, the App's private key and client secret, the webhook secret, the internal secret | OpenADLC, never by hand |
@@ -529,7 +529,7 @@ them.
 | `OPENADLC_TESTING_URL` | empty | Deprecated: the testing environment QA checks, for a repository whose `.github/openadlc.yml` and settings name none; empty and QA refuses | |
 | `OPENADLC_NOTIFY_WEBHOOK` | empty | Where notifications are posted as `{ text, link, event }`; empty logs them. `event` is one of `gate_opened` (a gate opened), `cap_warning` (the month's spend reached its warning), `promote_waiting` (a promote waits for its approval), `check_failing` (a blocking health check has failed for five minutes, and again a day later) and `check_fixed` (its all-clear) | |
 | `OPENADLC_STATUS_ISSUE` | unset | The issue the status job keeps up to date and reconcile reports drift on, as `<owner>/<name>#<number>`, in a repository the install manages. A bare number, another form, or a repository the install does not manage writes nothing, and the job's output line says what to set. The issue may be public, so its body publishes only the board counts, the month's spend and cap, the open gates and active leases, and each bot's name, role, engine and authorization with its work in that repository; a bot working elsewhere reads "working in another repository". It leaves out other repositories' subjects and host names. Reconcile's comments follow the same rule: that repository's drift, and only a count of the rest. The console's status view still shows everything | |
-| `OPENADLC_JOB_<JOB>_MINUTES` | per job | A scheduled job's interval; 0 turns it off. Any length works, a month or more included; the clock starts again when the bridge restarts. RECONCILE 15, STATUS 15, BUDGET 30, STAGES 60, MERGE 10, QA 1440, CREDENTIALS 720, DEPS 10080, DEPLOY 30, ENGINES 5, ATTACHMENTS 60, EVENTS 1440 | |
+| `OPENADLC_JOB_<JOB>_MINUTES` | per job | A scheduled job's interval; 0 turns it off. Any length works, a month or more included; the clock starts again when the bridge restarts. RECONCILE 15, STATUS 15, BUDGET 30, STAGES 60, MERGE 10, QA 1440, CREDENTIALS 720, DEPS 10080, DEPLOY 30, ENGINES 5, RELEASES 5 (OpenADLC's own update; [self-hosting](self-hosting.md#updating-openadlc)), ATTACHMENTS 60, EVENTS 1440 | |
 | `OPENADLC_EVENT_RETENTION_DAYS` | 30 | How many days a processed GitHub delivery is kept in the `events` table; the daily `events` job removes older ones, keeping the newest. 0 keeps them for good. A value that is not a whole number of days stops the bridge at start. A delivery for a repository the install does not manage keeps only its type, delivery id and repository name | |
 | `OPENADLC_SCRIPTED_ENGINES` | unset | `1` makes the install a scripted one; `/healthz` says so | when exported |
 | `OPENADLC_ALLOWED_HOSTS` | empty | Names, comma-separated, a person reaches the bridge under besides loopback, an address, and the hosts of `OPENADLC_CONSOLE_URL`, `OPENADLC_PUBLIC_URL` and `OPENADLC_BRIDGE_URL`, and on Cloud Run a `*.run.app` name; as names or URLs. `*` takes any. See [security.md](security.md#a-page-on-another-origin) | from `allowedHosts`, or when exported |
@@ -607,6 +607,7 @@ run with `-c analytics.enabled=false -c feedback.enabled=false`.
 | `OPENADLC_WORK_ROOT` | `$OPENADLC_HOME/work` | Where `openadlc doctor` looks for leftovers of the per-seat layout |
 | `OPENADLC_BOT_IMAGE` | `openadlc-bot:latest` | The image `openadlc up` checks for under the docker driver, and that an install naming no driver must have to be given `docker` |
 | `OPENADLC_SCRIPTED_ENGINES` | unset | `openadlc up` starts a scripted install, with a local repository to work in |
+| `OPENADLC_NO_SIGN_IN_LINK` | unset | `openadlc up` prints the console's address rather than a sign-in link. OpenADLC's own update sets it, since that `up`'s output goes to `run/self-update.log` |
 | `NO_COLOR` | unset | Plain output |
 
 ### compose
@@ -646,4 +647,6 @@ the build's steps leave through, as a container sees it; hostd sets it from
 | `logins/` | Subscription sign-ins for engines that keep them on disk |
 | `cloud.tfvars.json` | `openadlc cloud configure`'s answers |
 | `restore-undo/` | What a restore replaced, for Undo; the bridge removes it once it is a day old |
+| `self-update/<tag>/` | A release being taken: its `download/`, the worktree it is unpacked and installed in (`tree/`), and the built output the restart moved aside (`previous/`). Removed once the run is recorded ([self-hosting](self-hosting.md#updating-openadlc)) |
+| `run/self-update.log`, `run/self-update-result.json` | The restart onto a release: what it did, and how it ended, for the bridge that comes up |
 | `scripted/testbed` | A scripted install's repository |

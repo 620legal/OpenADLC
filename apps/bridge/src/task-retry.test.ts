@@ -28,6 +28,8 @@ const store = vi.hoisted(() => ({
   tasks: [] as TaskRow[],
   leases: [] as { id: string; repoId: string; issueNumber: number; botId: string; declaredPaths: string[]; state: string; expiresAt: string | null; prNumber: number | null }[],
   issuePr: null as number | null,
+  /** The cards OpenADLC tracks, as `issues.listIssues` answers. */
+  tracked: [] as { repoName: string; number: number; prNumber: number | null }[],
   audits: [] as { action: string; payload?: Record<string, unknown> }[],
   released: [] as string[],
   /** Tasks claimed as a retry OpenADLC made by itself; see `claimAutoRetry`. */
@@ -93,6 +95,7 @@ vi.mock('@openadlc/db', () => {
         declaredPaths: ['apps/api/'],
         prNumber: store.issuePr,
       })),
+      listIssues: vi.fn(async (repoName: string) => store.tracked.filter((issue) => issue.repoName === repoName)),
     },
     lastGithubDelivery: vi.fn(async () => null),
     leases: {
@@ -100,6 +103,9 @@ vi.mock('@openadlc/db', () => {
         store.leases.find((lease) => lease.issueNumber === number && ['leased', 'in_task', 'paused'].includes(lease.state)) ?? null,
       ),
       getLease: vi.fn(async (id: string) => store.leases.find((lease) => lease.id === id) ?? null),
+      lastForPullRequest: vi.fn(
+        async (repoId: string, prNumber: number) => store.leases.findLast((lease) => lease.repoId === repoId && lease.prNumber === prNumber) ?? null,
+      ),
       createLease: vi.fn(async (input: { repoId: string; issueNumber: number; botId: string; declaredPaths: string[]; expiresAt: Date }) => {
         const lease = { id: `lease-${store.leases.length + 1}`, ...input, state: 'leased', expiresAt: input.expiresAt.toISOString(), prNumber: null };
         store.leases.push(lease);
@@ -202,6 +208,7 @@ beforeEach(() => {
   store.tasks = [];
   store.leases = [];
   store.issuePr = null;
+  store.tracked = [];
   store.audits = [];
   store.released = [];
   store.claimed = [];
@@ -795,6 +802,51 @@ describe('a patch round run again', () => {
 
     expect(opened[0]).not.toHaveProperty('leaseId');
     expect(opened[0]).toMatchObject({ declaredPaths: ['apps/web/src/page.tsx'] });
+  });
+});
+
+describe('a QA run run again', () => {
+  // As the deploy opens it (`Webhooks.verifyOnTesting`): no branch of its own,
+  // so a computer hostd runs `make setup` in and gives a database.
+  const VERIFY = { bot: 'openadlc-atlas-janedoe', botId: 'bot-builder', repo: 'openadlc-testbed', kind: 'qa', skill: 'qa', branch: null, round: 0 };
+
+  function verification(overrides: Partial<TaskRow> = {}) {
+    store.tasks = [
+      task({ id: 'task-qa', botId: 'bot-builder', kind: 'qa', subjectType: 'pr', subjectRef: 'openadlc-testbed#2', state: 'failed', skill: 'qa', ...overrides }),
+    ];
+  }
+
+  it('is the verification the deploy opened: with the issue it closes, its tests to write, and not the branch checked out', async () => {
+    // Run again as a round on the pull request's branch, it had no issue,
+    // could write nothing, and hostd ran no `make setup` and gave it no database.
+    const { retryTask } = await import('./task-retry.js');
+    verification();
+    store.leases = [
+      { id: 'lease-1', repoId: 'repo-1', issueNumber: 1, botId: 'bot-builder', declaredPaths: ['apps/api/'], state: 'released', expiresAt: null, prNumber: 2 },
+    ];
+
+    await retryTask('task-qa', 'health-recovery', await deps());
+
+    expect(opened).toEqual([{ ...VERIFY, subjectType: 'pr', subjectRef: 'openadlc-testbed#2', issueNumber: 1, declaredPaths: ['tests/**'] }]);
+  });
+
+  it('finds the issue from its card when no lease was linked to the pull request', async () => {
+    const { retryTask } = await import('./task-retry.js');
+    verification();
+    store.tracked = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2 }];
+
+    await retryTask('task-qa', 'janedoe', await deps());
+
+    expect(opened).toEqual([{ ...VERIFY, subjectType: 'pr', subjectRef: 'openadlc-testbed#2', issueNumber: 1, declaredPaths: ['tests/**'] }]);
+  });
+
+  it('gives the nightly run on testing its tests to write too, with no issue', async () => {
+    const { retryTask } = await import('./task-retry.js');
+    verification({ subjectType: 'request', subjectRef: 'openadlc-testbed#testing' });
+
+    await retryTask('task-qa', 'janedoe', await deps());
+
+    expect(opened).toEqual([{ ...VERIFY, subjectType: 'request', subjectRef: 'openadlc-testbed#testing', issueNumber: null, declaredPaths: ['tests/**'] }]);
   });
 });
 

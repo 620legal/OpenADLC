@@ -23,6 +23,7 @@ import { botSaid } from './bot-said.js';
 import { NO_PULL_REQUEST, openPullRequestUrl } from './build-left.js';
 import { githubDidNotAnswer, type GitHubClient } from '@openadlc/github';
 import type { EngineUpdateAttention } from './engine-updates.js';
+import type { SelfUpdateAttention } from '@openadlc/shared';
 import { GITHUB_STATUS_URL, NO_REASON, explainFailure } from './failure-words.js';
 import { endsWithSubject, subjectClosed, wasRefused } from './gates.js';
 import { failingIds, isWaiting, showsNotice, unconfirmedOf } from './health/state.js';
@@ -80,6 +81,8 @@ export type AttentionKind =
   | 'task_failed'
   | 'triage_failed'
   | 'engine_update_failed'
+  /** OpenADLC's update to a release did not go in, or did not finish (`self-update.ts`). */
+  | 'self_update_failed'
   /** A health check failing: something only a person can do was not done, or has come undone. */
   | 'check_failed'
   /** A check that was failing passes, or OpenADLC fixed something itself: said once, until dismissed. */
@@ -228,6 +231,7 @@ const GROUP: Record<AttentionKind, AttentionGroup> = {
   check_failed: 'system',
   check_fixed: 'system',
   engine_update_failed: 'system',
+  self_update_failed: 'system',
   merge_waiting: 'work',
   unowned_issues: 'work',
   promote_held: 'work',
@@ -384,6 +388,8 @@ export interface AttentionInput {
   resumeWaits?: readonly ResumeWait[];
   /** The last weekly engine update, when it failed. */
   engineUpdate?: EngineUpdateAttention | null;
+  /** OpenADLC's last update of itself, when it failed. */
+  selfUpdate?: SelfUpdateAttention | null;
   /**
    * Pull requests the merge line holds for a person, and why (`heldForPerson`).
    * The board called one "Merging" and Needs you said nothing, so an approved,
@@ -1468,6 +1474,22 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     });
   }
 
+  // OpenADLC's update of itself. Failed before the restart, the install is on
+  // what it had; failed after its migrations, it is on the release and a
+  // person looks at why. It stays until a later run updates or finds it current.
+  if (input.selfUpdate) {
+    items.push({
+      id: 'self-update',
+      kind: 'self_update_failed',
+      headline: input.selfUpdate.title,
+      subject: { repo: null, number: null, title: 'OpenADLC itself', ref: null, url: null },
+      bot: null,
+      since: input.selfUpdate.at,
+      detail: shortReason(input.selfUpdate.detail),
+      actions: [{ kind: 'open_page', label: 'See System in Settings', href: input.selfUpdate.href }],
+    });
+  }
+
   items.push(...healthItems(input.health ?? [], input.bots, input.now, input.acknowledged));
 
   const leftOut = (ref: string | null | undefined): boolean => Boolean(ref) && (ignored.has(ref!) || abandoned.has(ref!));
@@ -1763,6 +1785,8 @@ export function waitingCount(items: readonly Pick<AttentionItem, 'kind'>[]): num
  */
 export interface AttentionDeps {
   engineUpdates?: { attention(): Promise<EngineUpdateAttention | null> };
+  /** Where a failed update of OpenADLC itself is read from (`selfUpdateAttentionFromSettings`). */
+  selfUpdate?: { attention(): Promise<SelfUpdateAttention | null> };
   /** What the health checks last said; see `health/registry.ts`. */
   health?: { rows(): Promise<HealthRow[]> };
   titles?: (refs: readonly string[]) => Promise<ReadonlyMap<string, SubjectTitle>>;
@@ -1896,6 +1920,8 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     return said.length > 0 ? waitingOnGitHub(said) : [];
   })().catch((): ResumeWait[] => []);
   const designMemoryEvents = await (async () => listEventsOfType(DESIGN_MEMORY_SUPERSEDED, since))().catch(() => []);
+  // As the engine update's: a record that cannot be read is no failed update.
+  const selfUpdate = deps.selfUpdate ? await deps.selfUpdate.attention().catch(() => null) : null;
 
   // A gate can be older than the window. Its task is paused, which the read
   // above includes, unless it ended some other way with the question open.
@@ -1969,6 +1995,7 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     resumeWaits,
     designMemoryEvents,
     engineUpdate,
+    selfUpdate,
     heldMerges,
     unowned,
     heldPromotes,

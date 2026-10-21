@@ -100,6 +100,7 @@ import { configuredFirstOfRole, configuredFor, configuredSeats } from './configu
 import { defaultModelAccountDeps, registerModelAccountRoutes } from './model-accounts.js';
 import { onAccountsWorkedIn, registerAppReachRoutes, repositoryFrom, type AppReach } from './app-reach.js';
 import { engineUpdatesFor, registerEngineUpdateRoutes } from './engine-updates.js';
+import { selfUpdateAttentionFromSettings } from './self-update.js';
 import { ATTENTION_WINDOW_DAYS, ClosedSubjects, registerAttentionRoutes, STOPPED_BY_A_PERSON, type HeldPromote } from './attention.js';
 import { asAutomation } from './automation-bot.js';
 import { DeployKnowledge, isTestingDeployChoice, testingDeployChoice, testingDeployStored } from './deploys.js';
@@ -542,6 +543,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
   });
   registerAttentionRoutes(router, {
     engineUpdates: engineUpdatesFor(hostd),
+    selfUpdate: { attention: () => selfUpdateAttentionFromSettings() },
     ...(deps.health ? { health: deps.health } : {}),
     titles: (refs) => titles.lookup(refs),
     closed: (refs) => closed.lookup(refs),

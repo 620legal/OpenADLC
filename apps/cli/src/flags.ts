@@ -46,6 +46,8 @@ export const FLAGS: Readonly<Record<string, readonly string[]>> = {
   'github sync-labels': ['repo', 'file'],
   'github check': [],
   'github apply': ['production', 'reviewer', 'soak'],
+  // Started by the bridge, never by a person: the restart onto a prepared release.
+  'self-update apply': ['checkout', 'staging', 'tag', 'from', 'to'],
   backup: ['out', 'without', 'bots', 'accounts', 'history', 'sign-ins', 'no-sign-ins', 'unencrypted'],
   restore: ['dry-run', 'take-over-sign-ins'],
   attach: [],

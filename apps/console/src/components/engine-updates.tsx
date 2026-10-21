@@ -352,6 +352,7 @@ export function EngineUpdatesPanel({
   onToolSchedule,
   onUpdateTool,
   onMinReleaseAge,
+  extra,
 }: {
   view: EngineUpdatesView;
   busy: Busy;
@@ -373,6 +374,8 @@ export function EngineUpdatesPanel({
   onUpdateTool?: (id: string) => void;
   /** How many days a new engine CLI release waits. Absent on a panel that only shows it. */
   onMinReleaseAge?: (days: number) => void;
+  /** Rows drawn first in the same table: OpenADLC itself (`self-update.tsx`). */
+  extra?: ReactNode;
 }) {
   const zone = view.schedule.timeZone;
   const last = lastResultSentence(view.last, zone);
@@ -394,6 +397,7 @@ export function EngineUpdatesPanel({
             model the crew uses, has answered from it. Each tool updates on its own day and time, or only when
             somebody presses Update. A pin stays on the installed version; the schedule may say a newer one is out and
             does not take it. Each update is in the audit log.
+            {extra && ' OpenADLC itself takes only a release a person tagged, checks it before unpacking it, and restarts onto it once no task runs.'}
             {ownSchedules && ' The tools no longer share one schedule, so each is turned off or moved in its own row.'}
           </p>
         </div>
@@ -423,6 +427,7 @@ export function EngineUpdatesPanel({
 
       {view.tools ? (
         <ul className="divide-y divide-edge rounded-lg border border-edge">
+          {extra}
           {view.tools.map((tool) => (
             <ToolRow
               key={tool.id}
@@ -438,23 +443,26 @@ export function EngineUpdatesPanel({
           ))}
         </ul>
       ) : (
-        <table className="text-left text-[12px]">
-          <tbody>
-            {ENGINES.map(({ pkg, name }) => {
-              const inUse = view.inUse?.[pkg] ?? null;
-              const newest = view.latest?.[pkg] ?? null;
-              return (
-                <tr key={pkg}>
-                  <td className="py-0.5 pr-4 text-soft">{name}</td>
-                  <td className="py-0.5 pr-4 font-mono text-[11.5px] text-body">{inUse ?? (view.hostd.reachable ? 'unknown' : '—')}</td>
-                  <td className="py-0.5 pr-4 text-[11.5px] text-dim">
-                    {newest && inUse && newest !== inUse ? `npm had ${newest} at the last check` : ''}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <>
+          {extra ? <ul className="divide-y divide-edge rounded-lg border border-edge">{extra}</ul> : null}
+          <table className="text-left text-[12px]">
+            <tbody>
+              {ENGINES.map(({ pkg, name }) => {
+                const inUse = view.inUse?.[pkg] ?? null;
+                const newest = view.latest?.[pkg] ?? null;
+                return (
+                  <tr key={pkg}>
+                    <td className="py-0.5 pr-4 text-soft">{name}</td>
+                    <td className="py-0.5 pr-4 font-mono text-[11.5px] text-body">{inUse ?? (view.hostd.reachable ? 'unknown' : '—')}</td>
+                    <td className="py-0.5 pr-4 text-[11.5px] text-dim">
+                      {newest && inUse && newest !== inUse ? `npm had ${newest} at the last check` : ''}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </>
       )}
 
       {!view.hostd.reachable && (
@@ -760,7 +768,7 @@ async function bridgeError(response: Response): Promise<string> {
   return text.slice(0, 300) || `the bridge answered ${response.status}`;
 }
 
-export function EngineUpdates({ initial = null }: { initial?: EngineUpdatesView | null }) {
+export function EngineUpdates({ initial = null, extra }: { initial?: EngineUpdatesView | null; extra?: ReactNode }) {
   const [view, setView] = useState<EngineUpdatesView | null>(initial);
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState<string | null>(null);
@@ -859,9 +867,13 @@ export function EngineUpdates({ initial = null }: { initial?: EngineUpdatesView 
           onUpdateTool={(id) => void act('updating', '/api/engine-updates', { method: 'POST', body: JSON.stringify({ tools: [id] }) })}
           onRollback={() => void act('rolling-back', '/api/engine-updates/rollback', { method: 'POST', body: '{}' })}
           onConfirm={setConfirming}
+          extra={extra}
         />
       ) : (
-        <p className="text-[12.5px] text-muted">{error ?? pollError ?? 'asking which engines the crew runs…'}</p>
+        <div className="space-y-3">
+          <p className="text-[12.5px] text-muted">{error ?? pollError ?? 'asking which engines the crew runs…'}</p>
+          {extra ? <ul className="divide-y divide-edge rounded-lg border border-edge">{extra}</ul> : null}
+        </div>
       )}
     </section>
   );

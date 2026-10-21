@@ -8,10 +8,11 @@
 # `openadlc up` starts the install OPENADLC_HOME points at, ~/.openadlc by default, and on
 # a machine that runs OpenADLC that is the real one. This one shares nothing with
 # it: its own OPENADLC_HOME under .scratch/, its own Postgres container and ports,
-# the local driver on a tmux server of its own, engine updates off, scripted
-# engines, so no model is called and nothing is written to GitHub (the
-# walkthrough still asks GitHub's public API whether the bot logins it suggests
-# exist), and no dispatcher in its bridge, since the suites run their own.
+# the local driver on a tmux server of its own, engine updates off, OpenADLC's
+# own update on Manual, scripted engines, so no model is called and nothing is
+# written to GitHub (the walkthrough still asks GitHub's public API whether the
+# bot logins it suggests exist), and no dispatcher in its bridge, since the
+# suites run their own.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -141,6 +142,13 @@ up() {
     -H "x-openadlc-console-secret: $(cat "$home/secrets/console-api-secret.secret")" \
     -d '{"enabled":false}' > /dev/null
   echo "  engine updates are off on this install"
+  # OpenADLC's own update fast-forwards the checkout it runs from, which here is
+  # the developer's: Manual, so it runs only when somebody presses Update now.
+  curl -fsS -X PATCH "http://127.0.0.1:$bridge_port/v1/self-update" \
+    -H 'content-type: application/json' -H 'x-openadlc-identity: scratch' \
+    -H "x-openadlc-console-secret: $(cat "$home/secrets/console-api-secret.secret")" \
+    -d '{"mode":"manual"}' > /dev/null
+  echo "  OpenADLC updates itself only when asked on this install"
   # Its engines are scripted, so `openadlc up` starts its bridge without the
   # dispatcher: the suites run their own passes, and a second dispatcher
   # deciding beside them would make them flaky.

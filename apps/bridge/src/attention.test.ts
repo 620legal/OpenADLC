@@ -773,6 +773,39 @@ describe('what needs a person', () => {
     });
   });
 
+  it('says an OpenADLC update that did not go in, in System, until a later run goes in', async () => {
+    const { attentionItems } = await load();
+    const input = {
+      now: NOW,
+      gates: [],
+      tasks: [],
+      bots: BOTS,
+      repos: REPOS,
+      issues: ISSUES,
+      requests: [],
+      stallEvents: [],
+      selfUpdate: {
+        kind: 'self-update-failed' as const,
+        title: 'OpenADLC did not update to v0.2.0 — it is still on the version it had',
+        detail: 'attestation: gh attestation verify refused openadlc-v0.2.0.tar.gz, so it is not unpacked. The install is as it was',
+        at: minutesAgo(30),
+        href: '/settings#system',
+      },
+    };
+    const [item] = attentionItems(input);
+
+    expect(item).toMatchObject({
+      id: 'self-update',
+      kind: 'self_update_failed',
+      group: 'system',
+      headline: 'OpenADLC did not update to v0.2.0 — it is still on the version it had',
+      bot: null,
+      since: minutesAgo(30),
+      actions: [{ kind: 'open_page', label: 'See System in Settings', href: '/settings#system' }],
+    });
+    expect(attentionItems({ ...input, selfUpdate: null })).toEqual([]);
+  });
+
   it('says GitHub is not sending, from the webhook’s check, with the app’s settings page as the thing to do', async () => {
     // On a real install the app was created with its webhook switched off, and
     // the board stayed empty while GitHub sent nothing at all. The only fix is
@@ -1865,6 +1898,17 @@ describe('GET /v1/attention', () => {
     expect(body.items.map((item) => item.kind)).toContain('engine_update_failed');
     expect(body.items.find((item) => item.kind === 'engine_update_failed')?.actions).toEqual([
       { kind: 'open_page', label: 'See the engine updates', href: '/settings#engine-updates' },
+    ]);
+  });
+
+  it('reads a failed OpenADLC update from the settings self-update wrote', async () => {
+    store.gates = [];
+    store.settings = {
+      selfUpdateLast: JSON.stringify({ state: 'failed', trigger: 'schedule', actor: 'schedule', from: 'a', to: 'a', tag: 'v0.2.0', step: 'checksum', reason: 'the download is not the release’s', startedAt: '2026-09-24T09:00:00.000Z', finishedAt: '2026-09-24T10:00:00.000Z' }),
+    };
+    const body = (await (await fetch(`${bridgeUrl}/v1/attention`)).json()) as { items: { id: string; kind: string; actions: unknown[] }[] };
+    expect(body.items.find((item) => item.kind === 'self_update_failed')?.actions).toEqual([
+      { kind: 'open_page', label: 'See System in Settings', href: '/settings#system' },
     ]);
   });
 

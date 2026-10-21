@@ -17,7 +17,7 @@ short form of it.
 | jq | any | `apps/hostd/src/openadlc-install.test.ts` runs `infra/local/openadlc-install`, which reads hostd's answer with it; macOS 15 and later ship it |
 | Docker | any recent | a scratch install's database, and the docker driver |
 | jq | any recent | the `openadlc-install` wrapper and its tests |
-| curl | any | `tests/scratch.sh`, which switches engine updates off on a scratch install with it |
+| curl | any | `tests/scratch.sh`, which switches engine updates off, and OpenADLC's own update to Manual, on a scratch install with it |
 | terraform | 1.6 or later, optional | the `infra/gcp` module's check |
 | python3, make, g++ (`build-essential`) | Linux only | `pnpm install` compiles node-pty, which has prebuilt binaries only for macOS and Windows |
 
@@ -93,6 +93,7 @@ It shares nothing with another install:
 | Engines | real models | scripted: no model is called |
 | GitHub | the crew's accounts | none of the crew's accounts, and nothing is written to GitHub; the walkthrough still asks GitHub's public API, unauthenticated, whether the logins it suggests for the bots exist, and the account type of an owner typed in |
 | Engine updates | weekly, rebuilding `openadlc-bot:latest` | off, because that image is every install's |
+| OpenADLC's own update | weekly, onto the newest release | Manual, because it would fast-forward the checkout it runs from, which is yours; on a branch other than `main` it does nothing anyway |
 | Dispatching | the bridge, after every change and every five minutes | none in the bridge: the suites run their own passes |
 
 The ports, the directory and the container's name can be changed with
@@ -295,6 +296,9 @@ A refused tag publishes nothing; delete it
 (`git push origin :refs/tags/v0.2.0`, which the tag ruleset below lets only
 you do) and tag again, or re-run the workflow once `ci` has passed. Versions
 only go up, three numbers with no suffix: there are no prereleases.
+**A tag is a deploy to every install**: each one that updates itself takes the
+newest release at its next scheduled run, within a week by default
+([self-hosting](self-hosting.md#updating-openadlc)).
 
 On a first release, and after a change to either workflow, look at the run:
 `publish` ran `gh attestation verify` on the release's own bundle before
@@ -307,8 +311,10 @@ refusals, and `tests/release-workflow.test.ts` checks the triggers and
 permissions, that `release.yml` only calls `release-build.yml@main`, runs the
 steps of `build` and `publish` that refuse, checks that the job that signs
 runs nothing it should not, that the attestation check is the same wherever
-it is written, and that `ci.yml` stays read-only; nothing short of a pushed tag
-runs either workflow.
+it is written, that the workflows and the docs name the files and run the
+check exactly as self-update does (`packages/shared/src/self-update.ts`), and
+that `ci.yml` stays read-only; nothing short of a pushed tag runs either
+workflow.
 
 ### Once per repository
 
@@ -319,7 +325,8 @@ repository admin:
   immutability. A published release's files and its tag can then never
   change, so "never replaced" is GitHub's rule, not only this workflow's. The
   workflow's token cannot read the setting; it reads whether each release it
-  makes came out immutable, and deletes one that did not and fails.
+  makes came out immutable, and deletes one that did not and fails; an
+  install takes only an immutable release.
 - **A tag ruleset for `v*`.** Settings → Rules → Rulesets → New tag ruleset,
   targeting `refs/tags/v*`, active, with *Restrict creations*, *Restrict
   updates* and *Restrict deletions*, and nobody on the bypass list but the

@@ -87,12 +87,14 @@ import {
   HostFullError,
   ItemHeldError,
   PrerequisiteNotReadyError,
+  RestartPendingError,
   SubjectBusyError,
   SubjectClosedError,
   SpendingCapError,
   TaskService,
   UsageRefusedError,
   heldAtCap,
+  heldForRestart,
   isRevert,
   leaseHoldUntil,
   settleLeaseAfter,
@@ -814,6 +816,142 @@ describe('opening a task on a seat that runs several at once', () => {
     await expect(refused).rejects.toBeInstanceOf(HostFullError);
     await expect(refused).rejects.toThrow(/OPENADLC_HOST_CAPACITY_TASKS/);
     expect(tasks.createTask).not.toHaveBeenCalled();
+  });
+
+  it('is busy, and records nothing, while OpenADLC waits to restart onto a release', async () => {
+    // Reviews, patch rounds and verifications start from events and never ask
+    // the dispatch gate; one started now would hold the restart, or be cut off by it.
+    const tasksService = opener();
+    tasksService.restartPending = () => 'OpenADLC restarts onto v0.2.0 once the running tasks end';
+
+    const refused = tasksService.open(OPEN);
+
+    await expect(refused).rejects.toBeInstanceOf(RestartPendingError);
+    await expect(refused).rejects.toBeInstanceOf(BotBusyError);
+    await expect(refused).rejects.toThrow('builder was not started: OpenADLC restarts onto v0.2.0 once the running tasks end, and this starts after the restart');
+    expect(tasks.createTask).not.toHaveBeenCalled();
+  });
+
+  it('records, rather than drops, work only an event starts while OpenADLC waits to restart', async () => {
+    // A patch round after changes requested, a verification after a deploy,
+    // a revert, the SRE on a failed deploy: nothing sweeps for them, so a
+    // refusal would lose them. Recorded with the restart's words, the
+    // recovery starts them once it is done (`heldForRestart`).
+    const tasksService = opener();
+    tasksService.restartPending = () => 'OpenADLC restarts onto v0.2.0 once the running tasks end';
+
+    const recorded = await tasksService.open({ ...OPEN, whenBlocked: 'record' });
+
+    expect(recorded.session).toBeNull();
+    expect(tasks.createTask).toHaveBeenCalledTimes(1);
+    const reason = 'builder was not started: OpenADLC restarts onto v0.2.0 once the running tasks end, and this starts after the restart';
+    expect(tasks.updateTaskState).toHaveBeenCalledWith(recorded.taskId, 'failed', { exitReason: reason });
+    expect(heldForRestart(reason)).toBe(true);
+  });
+
+  it('records it too when the restart became owed while the start waited', async () => {
+    const tasksService = opener();
+    let owed = false;
+    tasksService.restartPending = () => (owed ? 'OpenADLC restarts onto v0.2.0 once the running tasks end' : null);
+    vi.mocked(hosts.taskRoom).mockImplementation(async () => {
+      owed = true;
+      return null;
+    });
+
+    const recorded = await tasksService.open({ ...OPEN, whenBlocked: 'record' });
+
+    expect(recorded.session).toBeNull();
+    expect(tasks.updateTaskState).toHaveBeenCalledWith(recorded.taskId, 'failed', { exitReason: expect.stringMatching(/OpenADLC restarts onto v0\.2\.0/) });
+  });
+
+  it('drops work on a card a person held while OpenADLC waits to restart, as at any other time', async () => {
+    // Recorded first, it was kept for the sweep, which tried it on every pass
+    // for a week and started it once the hold went.
+    store.issues = [{ repoName: 'openadlc', number: 7, prNumber: null, labels: ['adlc:build', 'openadlc:paused'] }];
+    const tasksService = opener();
+    tasksService.restartPending = () => 'OpenADLC restarts onto v0.2.0 once the running tasks end';
+
+    try {
+      await expect(tasksService.open({ ...OPEN, whenBlocked: 'record' })).rejects.toBeInstanceOf(ItemHeldError);
+      expect(tasks.createTask).not.toHaveBeenCalled();
+    } finally {
+      store.issues = [];
+    }
+  });
+
+  it('records work a cap holds in the cap’s words while OpenADLC waits to restart, so the sweep asks the cap', async () => {
+    // In the restart's words, the sweep started it once the restart was done
+    // without asking the cap, and the cap refused it on every pass.
+    const tasksService = opener();
+    tasksService.restartPending = () => 'OpenADLC restarts onto v0.2.0 once the running tasks end';
+    vi.mocked(spendingLimits.refusal).mockResolvedValue('the month is spent');
+    vi.mocked(tasks.updateTaskState).mockClear();
+
+    try {
+      const recorded = await tasksService.open({ ...OPEN, whenBlocked: 'record' });
+
+      const words = new SpendingCapError('builder', 'the month is spent').message;
+      expect(tasks.updateTaskState).toHaveBeenCalledWith(recorded.taskId, 'failed', { exitReason: words });
+      expect(heldAtCap(words)).toBe(true);
+      expect(heldForRestart(words)).toBe(false);
+    } finally {
+      vi.mocked(spendingLimits.refusal).mockResolvedValue(null);
+    }
+  });
+
+  it('leaves a paused task paused while OpenADLC waits to restart, for the bridge that comes up to resume', async () => {
+    vi.mocked(tasks.getTask).mockResolvedValue({ id: 'task-1', botId: 'bot-1', repoId: null, kind: 'implement', subjectRef: 'openadlc#7', skill: 'implement', state: 'paused' } as never);
+    const resumeTask = vi.fn(async () => ({ session: 'builder/implement-task1' }));
+    const tasksService = service({ resumeTask, cleanupTask: vi.fn(async () => undefined) });
+    tasksService.restartPending = () => 'OpenADLC restarts onto v0.2.0 once the running tasks end';
+
+    await tasksService.resume('task-1');
+
+    expect(resumeTask).not.toHaveBeenCalled();
+    expect(tasks.updateTaskState).not.toHaveBeenCalled();
+  });
+
+  it('refuses a start the restart became owed during, before its row is written', async () => {
+    // The first look was before this start's reads, the hold after them: the
+    // check at the top passed, and only the one before the row sees it.
+    const tasksService = opener();
+    let owed = false;
+    tasksService.restartPending = () => (owed ? 'OpenADLC restarts onto v0.2.0 once the running tasks end' : null);
+    vi.mocked(hosts.taskRoom).mockImplementation(async () => {
+      owed = true;
+      return null;
+    });
+
+    await expect(tasksService.open(OPEN)).rejects.toBeInstanceOf(RestartPendingError);
+    expect(tasks.createTask).not.toHaveBeenCalled();
+  });
+
+  it('does not resume a paused task the restart became owed during', async () => {
+    vi.mocked(tasks.getTask).mockResolvedValue({ id: 'task-1', botId: 'bot-1', repoId: null, kind: 'implement', subjectRef: 'openadlc#7', skill: 'implement', state: 'paused' } as never);
+    const resumeTask = vi.fn(async () => ({ session: 'builder/implement-task1' }));
+    const tasksService = service({ resumeTask, cleanupTask: vi.fn(async () => undefined) });
+    let asked = 0;
+    tasksService.restartPending = () => (++asked > 1 ? 'OpenADLC restarts onto v0.2.0 once the running tasks end' : null);
+
+    await tasksService.resume('task-1');
+
+    expect(asked).toBe(2);
+    expect(resumeTask).not.toHaveBeenCalled();
+    expect(tasks.updateTaskState).not.toHaveBeenCalled();
+  });
+
+  it('counts a resume as in flight from its start until hostd has it, for a restart to wait for', async () => {
+    vi.mocked(tasks.getTask).mockResolvedValue({ id: 'task-1', botId: 'bot-1', repoId: null, kind: 'implement', subjectRef: 'openadlc#7', skill: 'implement', state: 'paused' } as never);
+    let started: () => void = () => undefined;
+    const resumeTask = vi.fn(() => new Promise<{ session: string }>((resolve) => (started = () => resolve({ session: 'builder/implement-task1' }))));
+    const tasksService = service({ resumeTask, cleanupTask: vi.fn(async () => undefined) });
+
+    const resuming = tasksService.resume('task-1');
+    await vi.waitFor(() => expect(resumeTask).toHaveBeenCalled());
+    expect(tasksService.resumesInFlight()).toEqual(['task-1']);
+    started();
+    await resuming;
+    expect(tasksService.resumesInFlight()).toEqual([]);
   });
 
   it('takes back the row of a start hostd refused for want of room, rather than failing it', async () => {

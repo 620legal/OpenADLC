@@ -1,10 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 import { defaultConfig, type InstallConfig } from '../install.js';
 import {
   addressesInstallDatabase,
   bridgeDispatches,
   clientIdConfigured,
   COMPOSE_ONLY_BLANK,
+  consoleLines,
+  up,
   databaseName,
   databasePasswordStep,
   databaseRunArgs,
@@ -444,6 +449,78 @@ describe('whether up says there is no client id', () => {
     } finally {
       if (before === undefined) delete process.env.OPENADLC_GITHUB_CLIENT_ID;
       else process.env.OPENADLC_GITHUB_CLIENT_ID = before;
+    }
+  });
+});
+
+describe('what up prints about the console', () => {
+  const ports = { console: 47300, bridge: 47311, hostd: 47312 };
+
+  it('is a sign-in link for the person at the terminal', () => {
+    expect(consoleLines('s3cret', ports, {})[0]).toMatch(/^console {3}http:\/\/127\.0\.0\.1:47300\/signin\?token=\d+\.[0-9a-f]{64}$/);
+  });
+
+  it('is the address alone when OpenADLC’s own update runs it, since that goes to a log', () => {
+    const lines = consoleLines('s3cret', ports, { OPENADLC_NO_SIGN_IN_LINK: '1' });
+    expect(lines[0]).toBe('console   http://127.0.0.1:47300 (openadlc console-link signs a browser in)');
+    expect(lines.join('\n')).not.toContain('token=');
+  });
+});
+
+describe('up after a restart onto a release stopped partway', () => {
+  it('refuses for another install too, which runs from the same checkout', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'up-applying-checkout-'));
+    const was = process.env.OPENADLC_HOME;
+    const printed: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((line: string) => void printed.push(String(line)));
+    process.env.OPENADLC_HOME = join(root, 'scratch-home');
+    try {
+      const checkout = join(root, 'OpenADLC');
+      mkdirSync(join(checkout, '.openadlc'), { recursive: true });
+      writeFileSync(
+        join(checkout, '.openadlc', 'applying.json'),
+        JSON.stringify({ format: 1, tag: 'v0.2.0', from: 'a'.repeat(40), to: 'b'.repeat(40), checkout, step: 'merge', startedAt: 't' }),
+      );
+      process.exitCode = undefined;
+      await up(defaultConfig(checkout), { probe: { dockerAnswers: async () => { throw new Error('up went on to the driver'); } } as never });
+      expect(process.exitCode).toBe(1);
+      expect(printed.join('\n')).toContain('stopped during merge');
+    } finally {
+      log.mockRestore();
+      process.exitCode = undefined;
+      if (was === undefined) delete process.env.OPENADLC_HOME;
+      else process.env.OPENADLC_HOME = was;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+
+  it('refuses, saying how to finish or go back, and starts nothing', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'up-applying-'));
+    const was = process.env.OPENADLC_HOME;
+    const printed: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((line: string) => void printed.push(String(line)));
+    process.env.OPENADLC_HOME = home;
+    try {
+      mkdirSync(join(home, 'run'));
+      writeFileSync(
+        join(home, 'run', 'self-update-applying.json'),
+        JSON.stringify({ format: 1, tag: 'v0.2.0', from: 'a'.repeat(40), to: 'b'.repeat(40), checkout: '/Users/me/OpenADLC', step: 'output', startedAt: 't' }),
+      );
+      process.exitCode = undefined;
+      await up(defaultConfig('/Users/me/OpenADLC'), { probe: { dockerAnswers: async () => { throw new Error('up went on to the driver'); } } as never });
+      expect(process.exitCode).toBe(1);
+      const said = printed.join('\n');
+      expect(said).toContain('OpenADLC was restarting onto v0.2.0 and stopped during output');
+      expect(said).toContain('git merge --ff-only ' + 'b'.repeat(40) + ' && pnpm install --frozen-lockfile && pnpm build');
+      expect(said).toContain('git reset --keep ' + 'a'.repeat(40));
+      expect(said).not.toContain('Starting OpenADLC');
+    } finally {
+      log.mockRestore();
+      process.exitCode = undefined;
+      if (was === undefined) delete process.env.OPENADLC_HOME;
+      else process.env.OPENADLC_HOME = was;
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });

@@ -65,6 +65,27 @@ export class HostFullError extends BotBusyError {
   }
 }
 
+/** Whether a task's reason says it was recorded, not started, because OpenADLC was about to restart. */
+export function heldForRestart(reason: string | null | undefined): boolean {
+  return /^\S+ was not started: OpenADLC restarts onto /.test(reason ?? '');
+}
+
+/**
+ * OpenADLC is about to restart onto a release (`self-update.ts`), once the
+ * running tasks end. A task started now would keep that wait going, and one
+ * started on the old build would be cut off by it, so no task starts. Busy,
+ * so every caller that comes back for busy work starts it after the restart,
+ * with nothing recorded. Work only an event starts (`whenBlocked: 'record'`)
+ * is recorded as a failed task in these words instead (`heldForRestart`),
+ * which the merge sweep starts once the restart is done.
+ */
+export class RestartPendingError extends BotBusyError {
+  constructor(bot: string, words: string) {
+    super(bot, 1, `${bot} was not started: ${words}, and this starts after the restart`);
+    this.name = 'RestartPendingError';
+  }
+}
+
 /** Whether hostd refused a start or a resume for want of room (`HostFull`, answered 503). */
 function hostWasFull(error: unknown): boolean {
   const status = (error as { status?: number } | null)?.status;
@@ -350,6 +371,14 @@ export class TaskService {
    * null. Only the sweep of answered tasks asks it; `main.ts` wires the gate.
    */
   workPaused: (repoName: string | null) => string | null = () => null;
+
+  /**
+   * The words of a restart OpenADLC owes once the running tasks end, or null
+   * (`SelfUpdate.restartPending`). Event-driven starts — a review, a patch
+   * round, a verification — do not read the dispatch gate, so `openNow` reads
+   * this; `main.ts` wires it.
+   */
+  restartPending: () => string | null = () => null;
 
   /** Whether a subject is closed on GitHub. Not when it cannot be read: the task resumes as it would have. */
   private async subjectIsClosed(repoFullName: string, number: number): Promise<boolean> {
@@ -776,6 +805,12 @@ export class TaskService {
     /** A review whose caller has just read from GitHub that its pull request is open, so it is not asked again for each seat. */
     knownOpen?: boolean;
   }): Promise<{ taskId: string; session: string | null; error?: string }> {
+    // Before anything is read: a refused start leaves no row. Work only an
+    // event starts is recorded with the restart's words instead, below.
+    if (input.whenBlocked !== 'record') {
+      const restart = this.restartPending();
+      if (restart) throw new RestartPendingError(input.bot, restart);
+    }
     const found = (input.botId ? await bots.getBotById(input.botId) : null) ?? (await bots.getBotByName(input.bot));
     if (!found) throw new Error(`unknown bot ${input.bot}`);
 
@@ -815,6 +850,15 @@ export class TaskService {
       if (input.whenBlocked !== 'record') throw refused;
       return this.recordBlocked(found, repo, input, refused.message);
     }
+    // Recorded for the recovery to start once OpenADLC is back
+    // (`heldForRestart`), but only past everything else that holds work back.
+    // Recorded before them, work on a card a person held was kept, where at
+    // any other time it is dropped, and the sweep tried it on every pass for
+    // a week until the hold went; and work a cap held carried the restart's
+    // words, so the sweep started it without asking the cap, and the cap
+    // refused it on every pass.
+    const restart = this.restartPending();
+    if (restart) return this.recordBlocked(found, repo, input, new RestartPendingError(found.name, restart).message);
     // GitHub is asked, not the delivery: one from before #40 merged, worked
     // through after it, said open, and its review started on a deleted branch.
     // Every review is started through here, by a delivery, a review that came
@@ -823,7 +867,7 @@ export class TaskService {
     // no read, and not when the caller has just read it. A read that fails
     // starts it, as a resume does (`subjectIsClosed`).
     const reviewed = input.kind === 'review' && repo && !input.knownOpen ? parseRef(input.subjectRef) : null;
-    const { bot, task } = await this.names.withBot(found.id, async () => {
+    const opened = await this.names.withBot(found.id, async () => {
       // Read again: a rename this waited for has given the bot another name.
       const bot = (await bots.getBotById(found.id)) ?? found;
       // The same work twice, then room on the seat, then room on a host, then
@@ -836,7 +880,11 @@ export class TaskService {
         console.log(`[bridge] ${input.subjectRef} is closed; ${bot.name}'s review of it is not started`);
         throw new SubjectClosedError(input.subjectRef);
       }
-
+      // Again, last, with nothing awaited between this and the row: a restart
+      // the reads above waited through would otherwise count this start in
+      // neither of its two looks.
+      const restarting = this.restartPending();
+      if (restarting) throw new RestartPendingError(bot.name, restarting);
       const task = await tasks.createTask({
         botId: bot.id,
         repoId: repo?.id ?? null,
@@ -857,7 +905,13 @@ export class TaskService {
         throw error;
       });
       return { bot, task };
+    }).catch((error: unknown) => {
+      // The restart became owed while this waited: recorded, as above, outside the bot's lock.
+      if (error instanceof RestartPendingError && input.whenBlocked === 'record') return error;
+      throw error;
     });
+    if (opened instanceof RestartPendingError) return this.recordBlocked(found, repo, input, opened.message);
+    const { bot, task } = opened;
 
     // Everything between the row and hostd. A throw here — a database error,
     // mostly — left the row queued for good: it held its seat, a host's room,
@@ -1035,6 +1089,15 @@ export class TaskService {
   private readonly resuming = new Set<string>();
 
   /**
+   * The tasks this bridge is resuming now. Their rows stay `paused` until
+   * hostd has taken the computer, cloned and prepared, so a restart waiting
+   * for running tasks counts these too, or it could restart under one.
+   */
+  resumesInFlight(): string[] {
+    return [...this.resuming];
+  }
+
+  /**
    * Resumes every paused task whose question was answered after it paused
    * (`tasks.pausedWithAnswer`). The resume an answer starts is tried again
    * from a timer while every host is full, and a timer dies with the bridge:
@@ -1084,6 +1147,10 @@ export class TaskService {
 
   private async resumeNow(taskId: string): Promise<void> {
     const task = await tasks.getTask(taskId);
+    // A paused task answered while OpenADLC waits to restart stays paused: it
+    // would hold the restart, and be cut off by it. The bridge that comes up
+    // resumes it (`resumeAnswered`, at start).
+    if (task && task.state === 'paused' && this.restartPending()) return;
     // A refused plan change, or "hand to a person" or "abandon" at the cost
     // cap, answers its gate like any other, and every caller resumes the task
     // that asked. It was stopped by the answer, so what is left is its worktree.
@@ -1144,8 +1211,14 @@ export class TaskService {
       // rename is moving it to another name.
       // Read again: a file sent while it waited on a question goes with it.
       const files = task ? await attachmentsForTask(task.subjectRef) : [];
-      if (task) await this.names.withBot(task.botId, () => this.hostd.resumeTask(taskId, context, postHeader, files, reviewMode, reviewLens));
-      else await this.hostd.resumeTask(taskId, context, postHeader, files);
+      // Asked again just before hostd is: the reads above can straddle a restart's looks.
+      const resume = () => {
+        if (task?.state === 'paused' && this.restartPending()) return Promise.resolve(null);
+        return this.hostd.resumeTask(taskId, context, postHeader, files, reviewMode, reviewLens);
+      };
+      if (task) {
+        if ((await this.names.withBot(task.botId, resume)) === null) return;
+      } else await this.hostd.resumeTask(taskId, context, postHeader, files);
       this.resumeRetries.delete(taskId);
       this.githubWaits.delete(taskId);
     } catch (error) {

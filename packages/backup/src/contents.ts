@@ -212,10 +212,14 @@ export function mergedAttributionKeys(archived: string, here: string | null, now
 }
 
 /**
- * Settings that record what this install's engine update last did, rather than
- * anything a person set: the week it last ran, how it ended, the version a
- * rollback undid, each tool's last check, and the run in flight. They are
- * about this machine's bot image, and a new machine has its own.
+ * Settings that record what this install's updates last did, rather than
+ * anything a person set: for the engines, the week it last ran, how it ended,
+ * the version a rollback undid, each tool's last check, and the run in
+ * flight; for OpenADLC itself, the run in flight, how the last one ended, and
+ * what the last look at the releases found. They are about this machine's bot
+ * image and checkout, and a new machine has its own: a restored run
+ * "waiting" or "restarting" would hold its work for a restart that is
+ * nowhere.
  */
 export const RUNTIME_SETTINGS: readonly string[] = [
   'engineUpdateSlot',
@@ -223,6 +227,9 @@ export const RUNTIME_SETTINGS: readonly string[] = [
   'engineUpdateHold',
   'systemToolLast',
   'systemToolRun',
+  'selfUpdateRun',
+  'selfUpdateLast',
+  'selfUpdateCandidate',
 ];
 
 /**
@@ -258,15 +265,15 @@ export const RESTORED_REQUEST_STATES: ReadonlySet<string> = new Set(['queued', '
 
 /**
  * A setting as a backup carries it: null for a runtime one, and each tool's
- * schedule without the slot this machine last ran it for. The mode, day, time
- * and pin are what a person chose. The slot is when this machine's image was
- * last updated: restored onto a new machine it said a week was done that had
- * never run there. Without it the first look starts counting from then, as a
- * new install does.
+ * schedule, and OpenADLC's own, without the slot this machine last ran it
+ * for. The mode, day, time and pin are what a person chose. The slot is when
+ * this machine was last updated: restored onto a new machine it said a week
+ * was done that had never run there. Without it the first look starts
+ * counting from then, as a new install does.
  */
 export function archivedSetting(key: string, value: string): string | null {
   if (RUNTIME_SETTINGS.includes(key)) return null;
-  if (key !== 'systemToolSchedules') return value;
+  if (key !== 'systemToolSchedules' && key !== 'selfUpdateSchedule') return value;
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
@@ -274,6 +281,7 @@ export function archivedSetting(key: string, value: string): string | null {
     return value;
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return value;
+  if (key === 'selfUpdateSchedule') return JSON.stringify({ ...(parsed as Record<string, unknown>), slot: null });
   const rows: Record<string, unknown> = {};
   for (const [id, row] of Object.entries(parsed as Record<string, unknown>)) {
     rows[id] = row && typeof row === 'object' && !Array.isArray(row) ? { ...(row as Record<string, unknown>), slot: null } : row;

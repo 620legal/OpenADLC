@@ -17,7 +17,7 @@ everything after that line is about that install. It says whether each service
 is running, answering on its port but started by something else, or not running,
 and when each scheduled job last ran. `never run` means no run of that job is
 recorded yet. Each job first runs one interval after the bridge starts
-(engines 5 minutes, merge 10, reconcile and status 15, budget, deploy and
+(engines and releases 5 minutes, merge 10, reconcile and status 15, budget, deploy and
 stages within the hour, credentials 12 hours, qa and events a day, deps a
 week), and every restart starts that wait again: a young install, or one
 restarted more often than a job's interval, shows the long ones as `never
@@ -859,6 +859,61 @@ then its number may be some other program's. OpenADLC takes a pid for a service
 only while its command line is that service's keeper (`keep.js bridge …`); any
 other pid file is removed, never signalled, and `openadlc down` says so with
 this line. Nothing needs doing: `openadlc up` starts the service as usual.
+
+## OpenADLC does not update itself
+
+**What it means.** The OpenADLC row in Settings → System says why in its own
+words ([Updating OpenADLC](self-hosting.md#updating-openadlc)): the checkout
+has changes, is not on `main`, moved since the services started, cannot
+fast-forward, another running install runs from the same checkout (give each
+its own clone, or stop the other), the newest release is not immutable (turn
+immutable releases on, [development.md](development.md#once-per-repository)),
+or this machine's GitHub CLI cannot check an attestation. Those
+change nothing and need a person to decide. A run that failed is a card under
+System in Needs you, with the step it failed at; the audit log has it as
+`openadlc.update_failed`.
+
+**What to do.**
+
+- **Before the restart** (`download`, `checksum`, `attestation`, `archive`,
+  `worktree`, `unpack`, `install`, `check`): the install is as it was and the
+  worktree is gone. A failed `checksum` or `attestation` means the files are
+  not the release's, or `gh` could not reach Sigstore: check the release by
+  hand ([Checking a release](self-hosting.md#checking-a-release)) before
+  pressing Update now again, and do not unpack it yourself if it fails there.
+  A failed `install` is usually the toolchain node-pty needs on Linux
+  (`build-essential`, python3).
+- **Waiting for ever.** It waits only for tasks queued or running, and System
+  names them; a paused one never holds it. Let them finish, or stop one from
+  its card. An engine update on hostd holds it too, until that ends.
+- **During the restart.** Read `$OPENADLC_HOME/run/self-update.log`. A
+  failed `stop` (a service that would not stop) changed nothing and started
+  the services again. A failed `merge`, `output` or `install` put the old
+  commit, output and install back and started the services: the card says
+  `put back on <sha>`.
+  A failed `migrate` or `start` left the checkout on the release; fix what the
+  log names, then `openadlc up`.
+- **The restart itself died** (power lost, the process killed, out of
+  memory): the services are down, no card came, and the checkout may hold the
+  release's source with part of its built output and the old dependencies.
+  The restart wrote `$OPENADLC_HOME/run/self-update-applying.json`, and the
+  same in the checkout's `.openadlc/applying.json`, before it stopped
+  anything, and `openadlc up` refuses while either is there, for this install
+  and for any other that runs from the same checkout. It prints the ways out:
+  finish onto the release (`git merge --ff-only <release commit>`, then
+  `pnpm install --frozen-lockfile && pnpm build`) or go back (`git reset
+  --keep <commit before>`, then the same), each in the checkout. If git
+  refuses either, because the restart died inside it, remove
+  `.git/index.lock` if it is there and use `git reset --hard` to the one you
+  want: the checkout had no changes of its own when the restart began. Then
+  remove the files it names and run `openadlc up`. Rebuilding is what makes
+  the built output one release's again; starting the mix would run it, and the
+  release's migrations.
+
+To finish one by hand, or to update without it, see
+[Upgrading](self-hosting.md#upgrading). What a run left under
+`$OPENADLC_HOME/self-update/` is removed when the next bridge records it;
+`git worktree prune` in the checkout clears a worktree whose folder is gone.
 
 ## The console is a blank page under a LAN name or a tunnel
 

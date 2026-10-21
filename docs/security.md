@@ -1386,6 +1386,74 @@ ruleset and immutable releases in
 creating, moving or deleting a `v*` tag, and keep a release from being
 replaced.
 
+**Taking one.** An install's self-update
+([self-hosting](self-hosting.md#updating-openadlc)) runs a release's code
+with the services' rights: the bridge's database URL, the secret store, every
+bot's tokens. So it trusts a release only in this order, and stops at the first
+step that fails, with the install as it was:
+
+1. The repository is the checkout's own `origin`, read as configured, and the
+   release is a version tag with all three files that GitHub holds immutable,
+   so its files cannot be swapped after the check. The tag is fetched without
+   force, so a tag that moved on GitHub after this checkout saw it is refused;
+   its commit must be a first-parent commit of `main` and a fast-forward from
+   the commit in use. A pull request's commit, a branch's, or an older one
+   never qualifies.
+2. The files come from the release's own download address, never one a
+   response named, carry no credential, and have a size limit each.
+3. The archive's SHA-256 must be the one `SHA256SUMS` gives it. Then `gh
+   attestation verify` must pass with the exact flags of
+   [Checking a release](self-hosting.md#checking-a-release): signed by
+   `release-build.yml@refs/heads/main`, for that tag and that commit, with no
+   GitHub credential in its environment. Until both pass, nothing reads the
+   archive. A commit id GitHub's API answers is checked to be one before git is
+   given it.
+4. The archive is then read by the bridge's own reader
+   (`apps/bridge/src/release-archive.ts`), not the system's tar: only
+   directories and regular files of the built output, plus its manifest, each
+   once, at a relative path with no `..`; a link of any kind refuses it. The
+   manifest must name the tag's commit and that commit's tree.
+5. Only then is a worktree of that commit added beside the install, the output
+   written into it (each file created new, never over or through anything
+   there), and `pnpm install --frozen-lockfile` run in it. That runs the
+   release's dependencies' install scripts, the first code of the release
+   that runs, and it runs with an environment of its own (`releaseInstallEnv`:
+   the PATH, the home, a proxy, npm's and pnpm's settings but not their
+   tokens, what node-gyp reads) and none of the services': not the database
+   URL, the webhook secret or any other variable the bridge was started with.
+   The restart's offline install does the same. That keeps the services'
+   variables away from them, and no more: they run as the same user, with
+   the real home, so they can read `~/.openadlc`, the secret store in it, and
+   `~/.npmrc`. That is acceptable only because the lockfile they come from is
+   part of the release: reviewed on `main`, pinned by hash, and signed with
+   the rest.
+6. The restart runs the release's own CLI from that worktree. It stops nothing
+   unless the checkout is still clean, on `main`, at the commit the run started
+   from, the worktree is at the release's commit, and no other install runs
+   from the same checkout; it changes nothing unless every service stopped.
+
+Until the restart, the checkout is written by nothing but `git fetch` (its
+refs) and `git worktree` (its worktree list), and `openadlc up`'s note of the
+installs that run from it (`.openadlc/installs/`, which git ignores). The
+restart writes it: `git merge --ff-only`, the built output written over file
+by file (each one it replaces or removes kept for putting back),
+`pnpm install --offline`, and, to put it back, `git reset --keep`, which
+refuses to touch a change of a person's. A restart cut short leaves a record
+that makes `openadlc up` refuse a checkout between two releases. Self-update runs only for an admin's Update now or the schedule an
+admin set, and is audited either way. On the schedule, which is weekly by
+default, a release a releaser tags is deployed to every install that
+updates itself within the week, with nobody there pressing anything: a tag
+is a deploy. What it adds to what is trusted is Sigstore's public instance,
+through `gh`, and the people who can change `main`'s workflows and
+`CODEOWNERS`, as above.
+
+What a command it ran said is kept, in the last result, the audit log, the
+bridge's log and a card, only from its standard error, and only after
+`safeWords` takes out credentials by their shape and any `token=`, `secret=`
+or `password=` value. The `openadlc up` the restart runs does not print its
+console sign-in link, which works for an hour, since its output goes to
+`run/self-update.log`.
+
 ## Who OpenADLC acts for
 
 On a public repository anybody can open an issue, comment on one, review a pull

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { describeDatabase } from '@openadlc/db';
 import { ensureConsoleSecret, ensureInternalSecret, openadlcHome } from '@openadlc/github';
-import { stepNamed } from '@openadlc/shared';
+import { applyingRefusal, recordCheckoutInstall, stepNamed } from '@openadlc/shared';
 import { githubClientId } from '../client-id.js';
 import { signInLink } from '../console-link.js';
 import type { DriverProbe, InstallConfig } from '../install.js';
@@ -707,6 +707,16 @@ export function sayDriver(driver: InstallConfig['driver'], reason?: string): voi
 }
 
 export async function up(config: InstallConfig, options: { skipSeed?: boolean; probe?: DriverProbe } = {}): Promise<void> {
+  // A restart onto a release that stopped partway left the checkout between
+  // two releases: started now, it would run that mix, and the release's
+  // migrations. Said first, before anything is started.
+  const cutShort = applyingRefusal(openadlcHome(), config.repoRoot);
+  if (cutShort) {
+    ui.fail(cutShort.reason);
+    for (const step of cutShort.steps) ui.note(step);
+    process.exitCode = 1;
+    return;
+  }
   const driven = await upDriver(config, options.probe);
   let effective: InstallConfig = driven.config;
   ui.heading(`Starting OpenADLC (${effective.driver} driver)`);
@@ -796,6 +806,14 @@ export async function up(config: InstallConfig, options: { skipSeed?: boolean; p
 
   const specs = serviceSpecs(effective, env, { consoleSecret, scripted: SCRIPTED_ENGINES, node });
 
+  // Which installs run from this checkout, so one updating itself refuses to
+  // change the files under another's running services (`otherInstallsRunning`).
+  try {
+    recordCheckoutInstall(effective.repoRoot, openadlcHome());
+  } catch (error) {
+    ui.warn(`could not note this install in ${effective.repoRoot}/.openadlc: ${error instanceof Error ? error.message : error}`);
+  }
+
   let refused = 0;
 
   for (const name of SERVICES) {
@@ -852,18 +870,37 @@ export async function up(config: InstallConfig, options: { skipSeed?: boolean; p
   } else {
     ui.heading('OpenADLC is up');
   }
-  // A link, not the address: the console serves a browser only once it has
-  // signed in. It expires within the hour; `openadlc console-link` prints another.
-  ui.code(`console   ${signInLink(consoleSecret, `http://127.0.0.1:${effective.ports.console}`)}`);
-  ui.code(`bridge    http://127.0.0.1:${effective.ports.bridge}`);
-  ui.code(`hostd     http://127.0.0.1:${effective.ports.hostd}`);
-  ui.note('the console link signs this browser in and works for an hour; `openadlc console-link` prints another');
+  for (const line of consoleLines(consoleSecret, effective.ports)) ui.code(line);
+  if (!process.env.OPENADLC_NO_SIGN_IN_LINK) {
+    ui.note('the console link signs this browser in and works for an hour; `openadlc console-link` prints another');
+  }
   ui.plain();
 
   if (!(await clientIdConfigured(effective))) {
     ui.warn('no GitHub App client id yet, so no bot can connect');
     ui.note(NO_CLIENT_ID_NOTE);
   }
+}
+
+/**
+ * What `up` prints about where the services are. A link, not the address,
+ * for the console: it serves a browser only once it has signed in, and the
+ * link expires within the hour (`openadlc console-link` prints another).
+ * Started by OpenADLC's own update (`OPENADLC_NO_SIGN_IN_LINK`), its output
+ * goes to a log, so the link is left out: whoever reads that log has not
+ * signed in.
+ */
+export function consoleLines(
+  consoleSecret: string,
+  ports: { console: number; bridge: number; hostd: number },
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const address = `http://127.0.0.1:${ports.console}`;
+  return [
+    env.OPENADLC_NO_SIGN_IN_LINK ? `console   ${address} (openadlc console-link signs a browser in)` : `console   ${signInLink(consoleSecret, address)}`,
+    `bridge    http://127.0.0.1:${ports.bridge}`,
+    `hostd     http://127.0.0.1:${ports.hostd}`,
+  ];
 }
 
 export async function down(): Promise<void> {

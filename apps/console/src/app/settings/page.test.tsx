@@ -174,6 +174,22 @@ vi.mock('@/lib/api', () => ({
     engineUpdates: async () => {
       throw new Error('bridge /v1/engines/updates → 404');
     },
+    selfUpdate: async () => ({
+      repository: '620legal/OpenADLC',
+      inUse: { sha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', date: '2026-10-18T09:12:00.000Z', tag: 'v0.1.0' },
+      candidate: { tag: 'v0.2.0', sha: 'b'.repeat(40), publishedAt: '2026-10-20T12:00:00.000Z' },
+      candidateReason: 'v0.2.0 is the newest release',
+      checkedAt: '2026-10-21T10:00:00.000Z',
+      schedule: { mode: 'schedule', day: 'sunday', time: '18:00' },
+      timeZone: 'UTC',
+      nextRun: '2026-10-25T18:00:00.000Z',
+      due: false,
+      applicable: true,
+      reason: '',
+      running: null,
+      last: null,
+      attention: null,
+    }),
     backup: async () => {
       throw new Error('bridge /v1/backup → 404');
     },
@@ -338,6 +354,15 @@ describe('the settings page', () => {
   it('still draws a section the bridge did not answer for, which reads its own', async () => {
     const html = await page();
     expect(section(html, 'engine-updates')).toContain('asking which engines the crew runs');
+  });
+
+  it('lists OpenADLC itself in System, with the release an update would take, even before the engines answer', async () => {
+    const system = section(await page(), 'system');
+    expect(system).toContain('OpenADLC');
+    expect(system).toContain('a1b2c3d (v0.1.0)');
+    expect(system).toContain('would take v0.2.0, published Oct 20, 12:00');
+    expect(system).toContain('Update now');
+    expect(system).toContain('asking which engines the crew runs');
   });
 
   it('manages the connections there, and nothing about which bot uses which', async () => {
