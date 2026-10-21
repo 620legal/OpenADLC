@@ -147,7 +147,33 @@ export interface PullHistoryEntry {
   dismissedState?: string | null;
   /** On `labeled` and `unlabeled`: the label's name. Who put `scope:cross-cutting` on decides whether it counts. */
   label?: string | null;
+  /**
+   * On a change of base (`base_ref_changed`, `automatic_base_change_succeeded`):
+   * when GitHub made it. A `ci` run made before it ran against the old base.
+   */
+  at?: string | null;
 }
+
+/** Timeline events that change a pull request's base. */
+export const BASE_CHANGES: ReadonlySet<string> = new Set(['base_ref_changed', 'automatic_base_change_succeeded']);
+
+/** The Actions workflow run behind a check suite, as `workflowRunOfSuite` reads it. */
+export interface SuiteWorkflowRun {
+  /** The workflow's name. */
+  name: string;
+  headSha: string;
+  /** The workflow file it ran, `.github/workflows/ci.yml`. */
+  path: string | null;
+  /** What started it: `pull_request`, `push`… */
+  event: string | null;
+  headBranch: string | null;
+  headRepoFullName: string | null;
+  /** When it was made, which a re-run keeps. */
+  createdAt: string | null;
+}
+
+/** How many pages of a branch's pull requests `pullsFromBranch` reads before it says it cannot list them all. */
+const BRANCH_PULL_PAGES = 3;
 
 /**
  * Every call is made with the one token the client was built with: a bot's own
@@ -901,6 +927,7 @@ export class GitHubClient {
           requested_team?: { slug?: string } | null;
           dismissed_review?: { review_id?: number; state?: string } | null;
           label?: { name?: string } | null;
+          created_at?: string;
         }[]
       >('GET', `/repos/${repo}/issues/${prNumber}/timeline?per_page=${PAGE}&page=${page}`);
       for (const entry of events) {
@@ -919,6 +946,7 @@ export class GitHubClient {
             ? { dismissedReviewId: entry.dismissed_review?.review_id ?? null, dismissedState: entry.dismissed_review?.state ?? null }
             : {}),
           ...(entry.event === 'labeled' || entry.event === 'unlabeled' ? { label: entry.label?.name ?? null } : {}),
+          ...(BASE_CHANGES.has(entry.event) ? { at: entry.created_at ?? null } : {}),
         });
       }
       if (events.length < PAGE) return history;
@@ -1204,14 +1232,63 @@ export class GitHubClient {
     return answer.role_name || answer.permission || 'none';
   }
 
-  /** The Actions workflow run a check suite belongs to: its workflow's name and its head. Null when it is none. */
-  async workflowRunOfSuite(repo: string, suiteId: number): Promise<{ name: string; headSha: string } | null> {
-    const found = await this.request<{ workflow_runs?: { name: string; head_sha: string }[] }>(
-      'GET',
-      `/repos/${repo}/actions/runs?check_suite_id=${suiteId}&per_page=1`,
-    );
+  /**
+   * The Actions workflow run a check suite belongs to: its workflow, what
+   * started it, for which branch, and when. Null when it is none. Its
+   * `pull_requests` are not read: GitHub fills them in as the pull requests
+   * are when asked, so a run made before a retarget names the new base.
+   */
+  async workflowRunOfSuite(repo: string, suiteId: number, options: { timeoutMs?: number } = {}): Promise<SuiteWorkflowRun | null> {
+    const found = await this.request<{
+      workflow_runs?: {
+        name: string;
+        head_sha: string;
+        path?: string;
+        event?: string;
+        head_branch?: string | null;
+        head_repository?: { full_name?: string } | null;
+        created_at?: string;
+      }[];
+    }>('GET', `/repos/${repo}/actions/runs?check_suite_id=${suiteId}&per_page=1`, undefined, options);
     const run = found.workflow_runs?.[0];
-    return run ? { name: run.name, headSha: run.head_sha } : null;
+    return run
+      ? {
+          name: run.name,
+          headSha: run.head_sha,
+          path: run.path ?? null,
+          event: run.event ?? null,
+          headBranch: run.head_branch ?? null,
+          headRepoFullName: run.head_repository?.full_name ?? null,
+          createdAt: run.created_at ?? null,
+        }
+      : null;
+  }
+
+  /**
+   * Every pull request, open or closed, whose head is this branch of this
+   * repository (not a fork's of the same name): its base, its head (where a
+   * closed one's stopped), and when it was opened and closed. Null when the
+   * branch has more than it reads, so a caller does not take part of the list
+   * for all of it.
+   */
+  async pullsFromBranch(
+    repo: string,
+    branch: string,
+    options: { timeoutMs?: number } = {},
+  ): Promise<{ number: number; baseRef: string; headSha: string; createdAt: string; closedAt: string | null }[] | null> {
+    const pulls: { number: number; baseRef: string; headSha: string; createdAt: string; closedAt: string | null }[] = [];
+    const head = encodeURIComponent(`${repo.split('/')[0]}:${branch}`);
+    for (let page = 1; page <= BRANCH_PULL_PAGES; page++) {
+      const listed = await this.request<
+        { number: number; created_at: string; closed_at: string | null; base: { ref: string }; head: { sha: string; repo?: { full_name?: string } | null } }[]
+      >('GET', `/repos/${repo}/pulls?head=${head}&state=all&per_page=${PAGE}&page=${page}`, undefined, options);
+      for (const pull of listed) {
+        if (pull.head.repo?.full_name?.toLowerCase() !== repo.toLowerCase()) continue;
+        pulls.push({ number: pull.number, baseRef: pull.base.ref, headSha: pull.head.sha, createdAt: pull.created_at, closedAt: pull.closed_at ?? null });
+      }
+      if (listed.length < PAGE) return pulls;
+    }
+    return null;
   }
 
   /**

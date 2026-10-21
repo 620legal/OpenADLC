@@ -420,8 +420,12 @@ can answer the crew's questions, and is audited as `github.account_allowed`.
     repository still asks for changes;
   - `ci` is GitHub Actions' own check run of the `ci` workflow on that head,
     since a commit status named `ci` can be set by any token that may write
-    statuses and is refused; `review-gate` as OpenADLC published it is green;
-    and no check or status is red or errored.
+    statuses and is refused, and it is from this pull request's own run of
+    `.github/workflows/ci.yml` against the base it lands on: a green `ci`
+    from before a retarget, or from another pull request from the same
+    branch into a base whose `ci.yml` runs nothing, is on the same commit
+    and is refused ([architecture](architecture.md)); `review-gate` as
+    OpenADLC published it is green; and no check or status is red or errored.
 
   **The primary gate is the review:** every required reviewer approving the
   exact diff that would land. Everything below is defence in depth around it.

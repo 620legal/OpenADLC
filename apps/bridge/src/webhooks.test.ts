@@ -2648,14 +2648,23 @@ describe('a commit by an account that never authors, on every path that sets the
         readFileIfPresent: vi.fn(async () => null),
         checkRunsFor: vi.fn(async () => [{ name: 'ci', status: 'completed', conclusion: 'success', app: 'github-actions', headSha: HEAD, suiteId: 9 }]),
         statusesFor: vi.fn(async () => []),
-        workflowRunOfSuite: vi.fn(async () => ({ name: 'ci', headSha: HEAD })),
+        workflowRunOfSuite: vi.fn(async () => ({
+          name: 'ci',
+          headSha: HEAD,
+          path: '.github/workflows/ci.yml',
+          event: 'pull_request',
+          headBranch: 'feature',
+          headRepoFullName: 'janedoe/openadlc',
+          createdAt: '2026-09-24T09:00:00Z',
+        })),
+        pullsFromBranch: vi.fn(async () => [{ number: 12, baseRef: 'main', headSha: HEAD, createdAt: '2026-09-24T08:00:00Z', closedAt: null }]),
         viewer: vi.fn(async () => ({ login: 'janedoe-openadlc-flow' })),
         request: vi.fn(async () => ({ statuses: [{ context: 'review-gate', state: 'success', creator: { login: 'janedoe-openadlc-flow' } }] })),
       });
 
       const facts = await automation.mergeFacts(
         { fullName: 'janedoe/openadlc', defaultBranch: 'main' },
-        { number: 12, draft: false, headSha: HEAD, baseRef: 'main', labels: [], mergeableState: 'clean', headRepoFullName: 'janedoe/openadlc', requestedReviewers: [], requestedTeams: [] },
+        { number: 12, draft: false, headSha: HEAD, headRef: 'feature', baseRef: 'main', labels: [], mergeableState: 'clean', headRepoFullName: 'janedoe/openadlc', requestedReviewers: [], requestedTeams: [] },
       );
 
       expect(facts?.gate).toBe('success');

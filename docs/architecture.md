@@ -330,6 +330,31 @@ ledger, threads and gates, and the console's settings.
    - `ci` is GitHub Actions' run of the `ci` workflow on the head, never a
      commit status; `review-gate` as OpenADLC published it is green; no check is
      red;
+   - the newest `ci` on the head is this pull request's own run against the
+     base it lands on (`ciRunElsewhere`). A check run is on a commit, not a
+     pull request, and GitHub keeps it there: a pull request opened into a
+     branch whose `ci.yml` runs nothing came out green, and kept that `ci` when
+     it was retargeted onto the default branch, since the `edited` a retarget
+     sends runs nothing; another pull request from the same branch, into such
+     a base, puts its `ci` on the same head, and still does once it is closed,
+     since a label or an edit on a closed pull request starts a run on the
+     head it closed at. A run's own `pull_requests` cannot tell: GitHub fills
+     them in as the pull requests are when asked, a retargeted one with its
+     new base. So the run has to be of `.github/workflows/ci.yml`, started by
+     a pull request (or by a push to the base itself), for this branch in this
+     repository, made after the pull request was opened, more than a minute
+     after its last base change on its timeline ([U86](unverified.md)), and at
+     no time another pull request from the branch could have made it: while
+     that one was open or within a minute of its closing, or at all once it
+     closed at this head. Otherwise it waits. A crew pull request is asked for
+     CI again at once, `adlc:ci` taken off and put back, as one with no `ci`
+     would be, though never within that minute, when the run would not count
+     either; a person's says to push or to close and reopen it. One that
+     another pull request from its branch may make a run on at any time says
+     what takes it away: close that one, or push a commit, since a closed one's
+     head stays where it closed. Where each run ran is read once per check
+     suite and kept; the pull requests from the branch are read on each pass,
+     a few seconds at most;
    - it is not a draft, and GitHub says it can merge.
 
    Anything it cannot read in full (more files than GitHub lists) refuses. A
