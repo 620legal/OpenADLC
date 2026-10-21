@@ -16,11 +16,18 @@
 
 self_dir=$(dirname "$0")
 
+# Another copy of this folder is not the real pnpm either. In a task's
+# container the install's copy is mounted at /opt/openadlc/bin, first on
+# PATH, and hostd's own tests put the worktree's copy before it: each copy
+# took the other for the real pnpm, and they exec'd each other for good, so
+# `make ci` never finished in any task and every build sat in Build until
+# hostd's hour ran out. A folder with git-check.mjs beside the pnpm is one
+# of these.
 real=
 saved_ifs=$IFS
 IFS=:
 for dir in $PATH; do
-  if [ -n "$dir" ] && [ "$dir" != "$self_dir" ] && [ -x "$dir/pnpm" ] && ! [ "$dir/pnpm" -ef "$0" ]; then
+  if [ -n "$dir" ] && [ "$dir" != "$self_dir" ] && [ -x "$dir/pnpm" ] && ! [ "$dir/pnpm" -ef "$0" ] && ! [ -e "$dir/git-check.mjs" ]; then
     real="$dir/pnpm"
     break
   fi

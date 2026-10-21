@@ -1,5 +1,5 @@
-import { spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -93,6 +93,24 @@ function pnpm(args: string[], extra: Record<string, string> = {}): Promise<{ cod
 }
 
 const calls = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []);
+
+describe('OpenADLC’s pnpm beside another copy of itself', () => {
+  it('runs the real pnpm, not the other copy, which it once exec’d back and forth with for good', () => {
+    const bin = join(import.meta.dirname, '..', 'bin');
+    const other = join(dir, 'other-shims');
+    cpSync(bin, other, { recursive: true });
+    const ran = spawnSync(SHIM, ['--version'], {
+      cwd: join(dir, 'wt'),
+      env: { PATH: [bin, other, join(dir, 'real'), '/usr/bin', '/bin'].join(':'), HOME: home },
+      encoding: 'utf8',
+      timeout: 10_000,
+      killSignal: 'SIGKILL',
+    });
+    expect(ran.error).toBeUndefined();
+    expect(ran.status).toBe(0);
+    expect(calls()).toEqual([`--version | store= | retries=`]);
+  });
+});
 
 describe('a dependency added in a session on the shared store', () => {
   it('is worked out off the store, filled into it by hostd from this task’s lockfile, then installed from it', async () => {

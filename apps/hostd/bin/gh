@@ -19,7 +19,7 @@
 // Plain Node with no dependencies: it runs inside the bot's image, beside the
 // engines, and is read from hostd's own checkout at whatever version hostd is.
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 
@@ -27,14 +27,19 @@ const HEADER_TAG = '<!-- openadlc-header -->';
 const LEADING_HEADER = /^\*\*[^\n]*\*\*<!-- (?:openadlc|fleetadlc|fleet)-header -->/;
 const POSTS = { issue: ['create', 'comment', 'edit'], pr: ['create', 'comment', 'edit', 'review'] };
 
-/** The real gh: the first on PATH that is not this file. */
+/**
+ * The real gh: the first on PATH that is not this file, nor another copy of
+ * OpenADLC's folder of these (one with git-check.mjs in it). Two copies on one
+ * PATH — the install's mounted at /opt/openadlc/bin and a worktree's in its
+ * tests — each took the other for the real one and ran it, and so on for good.
+ */
 export function realGh(path = process.env.PATH ?? '', self = process.argv[1] ?? '') {
   let selfReal = '';
   try {
     selfReal = realpathSync(self);
   } catch {}
   for (const dir of path.split(delimiter)) {
-    if (!dir) continue;
+    if (!dir || existsSync(join(dir, 'git-check.mjs'))) continue;
     const candidate = join(dir, 'gh');
     try {
       accessSync(candidate, constants.X_OK);

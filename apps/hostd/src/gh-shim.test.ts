@@ -87,6 +87,24 @@ describe('OpenADLC’s gh', () => {
       for (const dir of [own, real]) rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('passes over another copy of OpenADLC’s folder, which would run this gh again', () => {
+    // The install's copy at /opt/openadlc/bin and a worktree's, both on PATH,
+    // each took the other for the real gh and ran it back and forth for good.
+    const own = mkdtempSync(join(tmpdir(), 'openadlc-shim-'));
+    const other = mkdtempSync(join(tmpdir(), 'openadlc-other-shims-'));
+    const real = mkdtempSync(join(tmpdir(), 'openadlc-real-'));
+    for (const dir of [own, other, real]) {
+      writeFileSync(join(dir, 'gh'), '#!/bin/sh\n');
+      chmodSync(join(dir, 'gh'), 0o755);
+    }
+    writeFileSync(join(other, 'git-check.mjs'), '');
+    try {
+      expect(shim.realGh(`${other}:${own}:${real}`, join(own, 'gh'))).toBe(join(real, 'gh'));
+    } finally {
+      for (const dir of [own, other, real]) rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('which seat OpenADLC’s gh says posted', () => {
