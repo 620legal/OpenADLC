@@ -397,17 +397,49 @@ describe('what the template tree carries', () => {
     };
     const script = own.jobs.changes?.steps?.find((step) => step.id === 'tested')?.run ?? '';
 
-    function tested(artifact?: { headTree: 'this' | 'other'; verdict?: string }) {
+    /**
+     * What the step answers, run as ci.yml runs it, against a stand-in `gh`
+     * that answers each API path from fixtures. The lookup itself is
+     * `vouchedRun` in .github/scripts/release-check.mjs, whose refusals
+     * tests/release-check.test.ts runs; this is that ci.yml asks it, and
+     * that a lookup that cannot be made runs the tests rather than failing ci.
+     */
+    function tested(base: string | null) {
       const dir = mkdtempSync(join(tmpdir(), 'openadlc-ci-tested-'));
       try {
         const tree = 'a'.repeat(40);
-        const answers = fakeGh(dir, artifact && { headTree: artifact.headTree === 'this' ? tree : 'f'.repeat(40), verdict: artifact.verdict });
+        const head = 'f'.repeat(40);
+        const repo = 'exampleco/openadlc';
+        const answers: Record<string, unknown> = base
+          ? {
+              [`repos/${repo}/actions/artifacts?name=tested-tree-${tree}&per_page=100`]: { artifacts: [{ workflow_run: { id: 900, head_repository_id: 42, head_sha: head } }] },
+              [`repos/${repo}/actions/runs/900`]: { event: 'pull_request', conclusion: 'success', path: '.github/workflows/ci.yml', head_sha: head, head_branch: 'x', head_repository: { id: 42 } },
+              [`repos/${repo}/git/commits/${head}`]: { tree: { sha: tree } },
+              [`repos/${repo}/commits/${head}/pulls`]: [{ number: 31, head: { sha: head, ref: 'x', repo: { id: 42 } }, base: { ref: base, repo: { id: 42 } } }],
+              [`repos/${repo}/pulls?state=all&head=exampleco%3Ax&per_page=100`]: [[{ number: 31, head: { sha: head, ref: 'x', repo: { id: 42 } }, base: { ref: base, repo: { id: 42 } } }]],
+              [`repos/${repo}/issues/31/events?per_page=100`]: [[{ event: 'labeled' }]],
+              [`repos/${repo}/actions/runs/900/jobs?per_page=100`]: { jobs: [{ name: 'check', conclusion: 'success' }] },
+            }
+          : {};
+        writeFileSync(join(dir, 'answers.json'), JSON.stringify(answers));
+        writeFileSync(
+          join(dir, 'gh'),
+          [
+            '#!/usr/bin/env node',
+            `const answers = require(${JSON.stringify(join(dir, 'answers.json'))});`,
+            'const path = process.argv.at(-1);',
+            'if (!(path in answers)) process.exit(1);',
+            'process.stdout.write(JSON.stringify(answers[path]));',
+            '',
+          ].join('\n'),
+          { mode: 0o755 },
+        );
         const output = join(dir, '.output');
         writeFileSync(output, '');
         execFileSync('bash', ['-e', '-c', script], {
-          cwd: dir,
+          cwd: ROOT,
           stdio: 'ignore',
-          env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_OUTPUT: output, REPO: 'exampleco/openadlc', REPO_ID: '42', TREE: tree, ...answers },
+          env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_OUTPUT: output, REPO: repo, REPO_ID: '42', TREE: tree, GH_TOKEN: 'none' },
         });
         return /^tested=(.*)$/m.exec(readFileSync(output, 'utf8'))?.[1];
       } finally {
@@ -415,12 +447,12 @@ describe('what the template tree carries', () => {
       }
     }
 
-    it('skips a tree only a passing pull request run on that very tree vouches for', () => {
-      expect(tested({ headTree: 'this' })).toBe('true');
-      expect(tested()).toBe('false');
-      expect(tested({ headTree: 'other' })).toBe('false');
-      expect(tested({ headTree: 'this', verdict: 'push success .github/workflows/ci.yml' })).toBe('false');
-      expect(tested({ headTree: 'this', verdict: 'pull_request failure .github/workflows/ci.yml' })).toBe('false');
+    it('skips a tree only a passing pull request run into main on that very tree vouches for', () => {
+      expect(tested('main')).toBe('true');
+      // A pull request into another branch ran that branch's ci.yml, which anyone who can push writes.
+      expect(tested('agent/y')).toBe('false');
+      // And a lookup that cannot be made runs the tests rather than failing ci.
+      expect(tested(null)).toBe('false');
     });
 
     it('runs, in the docs job, the unit tests that read what it counts as docs', () => {
