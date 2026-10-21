@@ -129,7 +129,32 @@ describe('what needs a person', () => {
     expect(item?.actions).toEqual([
       { kind: 'answer', label: 'Something else…', bot: 'ottoexampleco' },
       { kind: 'open_url', label: 'On GitHub', url: 'https://github.com/janedoe/openadlc-testbed/issues/15#issuecomment-1' },
+      { kind: 'stop_task', label: 'Stop', taskId: 'task-q' },
     ]);
+  });
+
+  it('offers Stop on a question its task asked, and none on a question with no task', async () => {
+    // Intake 28ac028c's question outlived its issue's merge: answering was the
+    // only way off the board, and its computer ran on meanwhile.
+    const { attentionItems } = await load();
+    const asking = task({ id: 'task-q', botId: 'bot-intake', kind: 'intake', subjectRef: 'openadlc-testbed#15', state: 'paused' });
+    const items = attentionItems({
+      now: NOW,
+      gates: [
+        { id: 'gate-1', taskId: 'task-q', question: 'Which window?', options: ['tonight'], githubCommentUrl: null, createdAt: minutesAgo(2) },
+        { id: 'gate-2', taskId: null, question: 'Which window?', options: ['tonight'], githubCommentUrl: null, createdAt: minutesAgo(2) },
+      ],
+      tasks: [asking],
+      bots: BOTS,
+      repos: REPOS,
+      issues: ISSUES,
+      requests: [],
+      stallEvents: [],
+    });
+
+    const stops = (id: string) => items.find((item) => item.id === id)?.actions.filter((action) => action.kind === 'stop_task');
+    expect(stops('gate:gate-1')).toEqual([{ kind: 'stop_task', label: 'Stop', taskId: 'task-q' }]);
+    expect(stops('gate:gate-2')).toEqual([]);
   });
 
   it('says intake stopped trying an issue still in intake, and not once it has moved on', async () => {
@@ -724,8 +749,11 @@ describe('what needs a person', () => {
       // No ref, since it is no issue yet: its item is how the card opens the request's own conversation.
       subject: { repo: 'openadlc-testbed', number: null, title: 'Create html hello world and a readme file.', ref: null, item: 'request:a4b02784' },
       detail: 'Which page should link to it?',
-      actions: [{ kind: 'answer', label: 'Answer', bot: 'ottoexampleco' }],
-      // An open question: nothing to press but Answer.
+      actions: [
+        { kind: 'answer', label: 'Answer', bot: 'ottoexampleco' },
+        { kind: 'stop_task', label: 'Stop', taskId: 'task-request' },
+      ],
+      // An open question: no choice to press, only Answer, or Stop.
       question: { gateId: 'gate-r', options: [] },
     });
   });

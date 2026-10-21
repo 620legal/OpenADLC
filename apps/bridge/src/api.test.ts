@@ -941,6 +941,8 @@ describe('stopping a task that could not finish', () => {
     vi.mocked(leases.getLease).mockImplementation(async () => lease as never);
     vi.mocked(leases.getActiveLease).mockImplementation(async () => active as never);
     vi.mocked(threads.listOpenGates).mockImplementation(async () => openGates as never);
+    // The questions it closes are the open ones of this task.
+    vi.mocked(threads.expireGatesOfTask).mockImplementation(async (id: string) => openGates.filter((gate) => gate.taskId === id).map((_, n) => `gate-${n}`) as never);
     vi.mocked(bots.getBotById).mockImplementation(async () => ({ id: 'bot-intake', name: 'intake' }) as never);
     vi.mocked(audit).mockClear();
   });
@@ -956,7 +958,7 @@ describe('stopping a task that could not finish', () => {
     const response = await stop('the operator takes over');
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ task: 'task-81', state: 'stopped', releasedLease: 'lease-81', questionsClosed: 0 });
+    expect(await response.json()).toEqual({ task: 'task-81', state: 'stopped', releasedLease: 'lease-81', questionsClosed: 0, stopped: true });
     expect(asked).toEqual([{ method: 'POST', url: '/tasks/task-81/cancel', secret: 'install-secret-for-the-test' }]);
     expect(vi.mocked(leases.setLeaseState)).toHaveBeenCalledWith('lease-81', 'released');
     expect(vi.mocked(audit)).toHaveBeenCalledWith(
@@ -990,13 +992,26 @@ describe('stopping a task that could not finish', () => {
     expect(asked).toEqual([]);
   });
 
-  it('refuses one paused on a question, which is answered instead', async () => {
+  it('stops one paused on a question, and closes the question unanswered so it leaves Needs you', async () => {
+    // Intake 28ac028c sat paused on a question after its issue merged, its
+    // computer running, and this route refused to stop it.
     task = { ...FAILED, state: 'paused' };
     openGates = [{ taskId: 'task-81' }];
-    const response = await stop();
-    expect(response.status).toBe(409);
-    expect(((await response.json()) as { error: string }).error).toContain('waiting on a question');
-    expect(asked).toEqual([]);
+    const response = await stop('its issue merged');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ task: 'task-81', state: 'stopped', releasedLease: 'lease-81', questionsClosed: 1, stopped: true });
+    expect(asked).toEqual([{ method: 'POST', url: '/tasks/task-81/cancel', secret: 'install-secret-for-the-test' }]);
+    expect(vi.mocked(threads.expireGatesOfTask)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(threads.expireGatesOfTask)).toHaveBeenCalledWith('task-81', expect.any(String), 'its issue merged');
+    expect(vi.mocked(audit)).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'task.stopped', payload: expect.objectContaining({ was: 'paused', questionsClosed: 1 }) }),
+    );
+  });
+
+  it('no longer has a refusal for a task waiting on a question', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const source = await readFile(new URL('./api.ts', import.meta.url), 'utf8');
+    expect(source).not.toContain('waiting on a question');
   });
 
   it('says so, and keeps the lease, when hostd answers but does not stop it', async () => {
@@ -1012,6 +1027,7 @@ describe('stopping a task that could not finish', () => {
     task = { ...FAILED, state: 'paused' };
     const response = await stop();
     expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ questionsClosed: 0, stopped: true });
     expect(asked).toHaveLength(1);
   });
 
@@ -1081,7 +1097,7 @@ describe('stopping a task that could not finish', () => {
       task = { ...FAILED, state: 'paused' };
       openGates = [{ taskId: 'task-81' }];
 
-      expect(await removing()).toEqual({ task: 'task-81', state: 'stopped', releasedLease: 'lease-81', questionsClosed: 1 });
+      expect(await removing()).toEqual({ task: 'task-81', state: 'stopped', releasedLease: 'lease-81', questionsClosed: 1, stopped: true });
       expect(cancelled).toEqual([{ id: 'task-81', reason: 'stopped by a person from the console (janedoe): repository removed from OpenADLC by janedoe' }]);
       expect(threads.expireGatesOfTask).toHaveBeenCalledWith('task-81', 'janedoe', 'repository removed from OpenADLC by janedoe');
       expect(vi.mocked(audit)).toHaveBeenCalledWith(
@@ -1109,7 +1125,8 @@ describe('stopping a task that could not finish', () => {
 
     it('leaves a task that ended on its own as it ended, without asking hostd', async () => {
       task = { ...FAILED, state: 'done' };
-      expect(await removing()).toEqual({ task: 'task-81', state: 'done', releasedLease: null, questionsClosed: 0 });
+      // `stopped: false`, so a close that says what it stopped says nothing of it.
+      expect(await removing()).toEqual({ task: 'task-81', state: 'done', releasedLease: null, questionsClosed: 0, stopped: false });
       expect(cancelled).toEqual([]);
       expect(vi.mocked(audit)).not.toHaveBeenCalled();
     });
@@ -1132,10 +1149,10 @@ describe('stopping a task that could not finish', () => {
     });
   });
 
-  it('does not stop a task that a question paused since the card was drawn', async () => {
+  it('does not stop a task that an answer resumed since the card was drawn', async () => {
+    task = { ...FAILED, state: 'paused' };
     let reads = 0;
-    vi.mocked(tasks.getTask).mockImplementation(async () => (++reads === 1 ? task : { ...FAILED, state: 'paused' }) as never);
-    openGates = [{ taskId: 'task-81' }];
+    vi.mocked(tasks.getTask).mockImplementation(async () => (++reads === 1 ? task : { ...FAILED, state: 'running' }) as never);
     const response = await stop();
     expect(response.status).toBe(409);
     expect(asked).toEqual([]);

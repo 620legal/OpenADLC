@@ -1241,6 +1241,22 @@ describe('an issue closed on GitHub', () => {
 });
 
 /**
+ * A stop as `stopTask` does one for a close: a paused task ends, and says it
+ * was this call that stopped it; one already ended says it was not.
+ */
+function stopping(going: { id: string; state: string }[]) {
+  const calls: string[] = [];
+  const stop = async (taskId: string, actor: string, note: string) => {
+    calls.push(`${taskId} by ${actor}: ${note}`);
+    const task = going.find((one) => one.id === taskId);
+    if (!task || !['queued', 'running', 'paused'].includes(task.state)) return { stopped: false };
+    task.state = 'stopped';
+    return { stopped: true };
+  };
+  return { calls, stop };
+}
+
+/**
  * An issue closed without a merge, by a person or by its own pull request
  * closing unmerged: its card goes to Done labelled `openadlc:abandoned`, and
  * its work stops. #15's "Review stopped without agreeing" stood in Needs you
@@ -1419,8 +1435,9 @@ describe('an issue or pull request closed without a merge', () => {
     expect(moves).toEqual([expect.objectContaining({ to: 'done', actor: 'bridge', recordsOutcome: true, reason: 'Abandoned: closed on GitHub without a merge' })]);
     expect(store.issue).toMatchObject({ stage: 'done', labels: [`adlc:${stage}`, 'openadlc:abandoned'] });
     expect(world.live.labels).toContain('openadlc:abandoned');
-    // Every task still going on the issue, any kind, and on its pull request.
-    const expected = stage === 'review' ? ['build-going', 'design-asking', 'review-going'] : ['build-going', 'design-asking'];
+    // Every task still going on the issue, any kind, and on its pull request;
+    // the paused ones after the rest.
+    const expected = stage === 'review' ? ['build-going', 'review-going', 'design-asking'] : ['build-going', 'design-asking'];
     expect(stopped).toEqual(expected.map((id) => `${id}: its issue was closed without merging`));
   });
 
@@ -1626,6 +1643,83 @@ describe('an issue or pull request closed without a merge', () => {
 
     expect(store.issue).toMatchObject({ stage: 'done' });
     expect(stopped).toEqual(['build-going: its issue was closed without merging']);
+  });
+
+  it('stops a paused deploy on an abandoned issue, but not the paused task of the account that closed it', async () => {
+    store.bots = [
+      { id: 'bot-sre', name: 'tessexampleco', role: 'deploy', githubLogin: 'tessexampleco' },
+      { id: 'bot-other', name: 'rexexampleco', role: 'deploy', githubLogin: 'rexexampleco' },
+    ];
+    store.issue = { number: 11, stage: 'build', labels: ['adlc:build'], prNumber: null };
+    const going = [
+      { id: 'sre-asking', subjectRef: 'openadlc#11', kind: 'deploy', state: 'paused', botId: 'bot-sre' },
+      { id: 'other-asking', subjectRef: 'openadlc#11', kind: 'deploy', state: 'paused', botId: 'bot-other' },
+      { id: 'other-queued', subjectRef: 'openadlc#11', kind: 'deploy', state: 'queued', botId: 'bot-other' },
+      { id: 'other-running', subjectRef: 'openadlc#11', kind: 'deploy', state: 'running', botId: 'bot-other' },
+    ];
+    onSubjects(going);
+    const { webhooks, log } = harness({ live: { state: 'closed', labels: ['adlc:build'] } });
+    const { calls, stop } = stopping(going);
+    webhooks.useStopTask(stop);
+
+    await webhooks.receive('issues', { ...(issueDelivery('closed', ['adlc:build']) as object), sender: { login: 'tessexampleco' } } as never, 'delivery-closed-by-the-sre-paused');
+
+    expect(store.issue).toMatchObject({ stage: 'done' });
+    expect(calls).toEqual(['other-asking by bridge: its issue was closed without merging']);
+    const said = log.filter((line) => line.startsWith('github comment'));
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("rexexampleco's deploy task");
+    expect(said[0]).not.toContain('tessexampleco');
+  });
+
+  it('stops a task paused on a question on an issue its merge closed, says so once, and nothing on a second delivery', async () => {
+    // Intake 28ac028c asked on #46, #46 merged as #61, and it stayed paused
+    // with its computer running.
+    store.bots = [{ id: 'bot-intake', name: 'ottoexampleco', role: 'intake', githubLogin: 'ottoexampleco' }];
+    store.issue = { number: 11, stage: 'review', labels: ['adlc:review'], prNumber: 31 };
+    const going = [
+      { id: 'intake-asking', subjectRef: 'openadlc#11', kind: 'intake', state: 'paused', botId: 'bot-intake' },
+      { id: 'build-going', subjectRef: 'openadlc#11', kind: 'spec', state: 'running', botId: 'bot-intake' },
+    ];
+    onSubjects(going);
+    const { webhooks, log } = harness({ live: { state: 'closed', labels: ['adlc:review'] }, pulls: new Map([[31, { merged: true, headRef: BRANCH }]]) });
+    const { calls, stop } = stopping(going);
+    webhooks.useStopTask(stop);
+
+    await webhooks.receive('issues', issueDelivery('closed', ['adlc:review']), 'delivery-closed-by-merge');
+
+    expect(calls).toEqual([`intake-asking by bridge: ${alreadyLanded('openadlc#11')}`]);
+    const said = () => log.filter((line) => line.startsWith('github comment'));
+    expect(said()).toHaveLength(1);
+    expect(said()[0]).toContain('github comment #11: Stopped the work still paused here');
+    expect(said()[0]).toContain("ottoexampleco's intake task");
+    expect(said()[0]).toContain('closed unanswered, and its computer is taken down');
+
+    await webhooks.receive('issues', issueDelivery('closed', ['adlc:review']), 'delivery-closed-by-merge-again');
+
+    expect(calls).toHaveLength(1);
+    expect(said()).toHaveLength(1);
+  });
+
+  it('stops what is paused on a merged pull request and on the issue it finishes, QA and deploy too, and not a running deploy', async () => {
+    store.issue = { number: 11, stage: 'review', labels: ['adlc:review'], prNumber: 31 };
+    const going = [
+      { id: 'qa-asking', subjectRef: 'openadlc#31', kind: 'qa', state: 'paused', botId: 'bot-sre' },
+      { id: 'deploy-asking', subjectRef: 'openadlc#11', kind: 'deploy', state: 'paused', botId: 'bot-sre' },
+      { id: 'deploy-going', subjectRef: 'openadlc#31', kind: 'deploy', state: 'running', botId: 'bot-sre' },
+    ];
+    onSubjects(going);
+    const { webhooks, world, log } = harness({ live: { state: 'closed', labels: ['adlc:review'] } });
+    world.pulls.set(31, { merged: true, headRef: BRANCH });
+    const { calls, stop } = stopping(going);
+    webhooks.useStopTask(stop);
+
+    await webhooks.receive('pull_request', pullDelivery(31, { merged: true }), 'delivery-merged-with-questions');
+
+    expect(calls).toEqual([`qa-asking by bridge: ${alreadyLanded('openadlc#31')}`, `deploy-asking by bridge: ${alreadyLanded('openadlc#11')}`]);
+    expect(going.find((task) => task.id === 'deploy-going')?.state).toBe('running');
+    const said = log.filter((line) => line.startsWith('github comment')).map((line) => line.slice(0, line.indexOf(':')));
+    expect(said).toEqual(['github comment #31', 'github comment #11']);
   });
 
   it.each([
@@ -3878,6 +3972,61 @@ describe('a merge whose delivery never came, found by the reconciler', () => {
 
     expect(await webhooks.mergeUnheard(REPO, 5, 12)).toBeNull();
     expect(moves).toEqual([]);
+  });
+
+  describe('with work paused on it', () => {
+    // #46 merged as #61 while the bridge was down; the reconciler moved #46
+    // on, and its intake, paused on a question, ran on.
+    const before = vi.mocked(tasks.listTasksOnSubjects).getMockImplementation()!;
+    let going: { id: string; subjectRef: string; kind: string; state: string; botId: string }[];
+
+    beforeEach(() => {
+      going = [];
+      vi.mocked(tasks.listTasksOnSubjects).mockImplementation((async (refs: readonly string[]) => going.filter((task) => refs.includes(task.subjectRef))) as never);
+    });
+
+    afterEach(() => {
+      vi.mocked(tasks.listTasksOnSubjects).mockImplementation(before);
+    });
+
+    it('stops what is paused on the issue and on its pull request, and says so on each', async () => {
+      going = [
+        { id: 'intake-asking', subjectRef: 'openadlc#5', kind: 'intake', state: 'paused', botId: 'bot-intake' },
+        { id: 'review-asking', subjectRef: 'openadlc#12', kind: 'review', state: 'paused', botId: 'bot-lead' },
+        { id: 'build-done', subjectRef: 'openadlc#5', kind: 'implement', state: 'done', botId: 'bot-builder' },
+      ];
+      const { webhooks, client } = unheard([{ name: 'deploy-testing', path: '.github/workflows/deploy-testing.yml' }]);
+      const { calls, stop } = stopping(going);
+      webhooks.useStopTask(stop);
+
+      expect(await webhooks.mergeUnheard(REPO, 5, 12)).toBe('merged');
+
+      expect(calls).toEqual([`intake-asking by bridge: ${alreadyLanded('openadlc#5')}`, `review-asking by bridge: ${alreadyLanded('openadlc#5')}`]);
+      expect(client.comment.mock.calls.map((call) => (call as unknown[])[1])).toEqual([5, 12]);
+    });
+
+    it('stops it on an issue the board recorded the pull request on, whatever its branch is called', async () => {
+      going = [{ id: 'spec-asking', subjectRef: 'openadlc#9', kind: 'spec', state: 'paused', botId: 'bot-design' }];
+      const { webhooks } = unheard([{ name: 'deploy-testing', path: '.github/workflows/deploy-testing.yml' }], { headRef: 'janedoe/quick-fix' });
+      const { calls, stop } = stopping(going);
+      webhooks.useStopTask(stop);
+
+      expect(await webhooks.mergeUnheard(REPO, 9, 12)).toBe('merged');
+
+      expect(calls).toEqual([`spec-asking by bridge: ${alreadyLanded('openadlc#9')}`]);
+    });
+
+    it('stops it on an issue another commit closed, as landedUnheard finds one', async () => {
+      going = [{ id: 'spec-asking', subjectRef: 'openadlc#5', kind: 'spec', state: 'paused', botId: 'bot-design' }];
+      const { webhooks, client } = unheard([]);
+      const { calls, stop } = stopping(going);
+      webhooks.useStopTask(stop);
+
+      expect(await webhooks.landedUnheard(REPO, 5, 'ab'.repeat(20))).toBe(true);
+
+      expect(calls).toEqual([`spec-asking by bridge: ${alreadyLanded('openadlc#5')}`]);
+      expect(client.comment).toHaveBeenCalledWith('janedoe/openadlc', 5, expect.stringContaining('Stopped the work still paused here'));
+    });
   });
 });
 

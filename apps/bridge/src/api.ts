@@ -359,10 +359,10 @@ export async function dismissTask(
   return { task: task.id, dismissed: seen };
 }
 
-/** The states a task can be stopped from: the ones whose card offers "Try again", and a pause nobody is asked about. */
 /** A request with no intake seat to triage it: the crew's to change, not the bridge failing. */
 const NO_INTAKE = 'no intake bot is configured; add an intake seat to config/bots.yaml and run openadlc up';
 
+/** The states a task can be stopped from: the ones whose card offers "Try again", and a pause, on a question or not. */
 const STOPPABLE: readonly string[] = ['failed', 'stopped', 'paused'];
 const HELD_LEASE: readonly string[] = ['leased', 'in_task', 'paused'];
 const UNFINISHED: readonly TaskState[] = ['queued', 'running', 'paused'];
@@ -380,13 +380,20 @@ const UNFINISHED: readonly TaskState[] = ['queued', 'running', 'paused'];
  * work going again is refused, as `retryTask` refuses it, and a lease another
  * unfinished task on the subject holds is left where it is.
  *
- * `unfinished` is the same stop for work that has not ended — queued,
- * running, or paused on a question — which is what removing a repository from
- * OpenADLC does to every task there (`repo-removal.ts`). A task paused on a
- * question is stopped rather than refused, and its question is closed so it
- * leaves Needs you; the same work going again is not a reason to refuse,
- * because that task is stopped too; and a task that ended on its own in the
- * meantime is left as it ended.
+ * A task paused on a question is stopped too, and its question is closed
+ * unanswered, so it leaves Needs you and an answer resumes nothing. The route
+ * used to refuse one, and intake 28ac028c, paused on a question after its
+ * issue had merged, kept its computer running with nothing to end it.
+ *
+ * `unfinished` is the same stop for work that has not ended — queued or
+ * running as well as paused — which is what removing a repository from
+ * OpenADLC does to every task there (`repo-removal.ts`), and what a close does
+ * to the tasks paused on it (`webhooks.ts`). The same work going again is not
+ * a reason to refuse, because that task is stopped too; and a task that ended
+ * on its own in the meantime is left as it ended.
+ *
+ * `stopped` says whether this call asked hostd to cancel: false for a task
+ * that had already ended, so a caller saying what it stopped says it once.
  */
 export async function stopTask(
   taskId: string,
@@ -394,21 +401,18 @@ export async function stopTask(
   note: string,
   hostd: Pick<HostdClient, 'cancelTask'>,
   options: { unfinished?: boolean } = {},
-): Promise<{ task: string; state: string; releasedLease: string | null; questionsClosed: number }> {
+): Promise<{ task: string; state: string; releasedLease: string | null; questionsClosed: number; stopped: boolean }> {
   const task = await tasks.getTask(taskId);
   if (!task) throw new HttpFailure(404, 'there is no such task');
   const ended = (state: string): boolean => Boolean(options.unfinished) && !UNFINISHED.includes(state as TaskState);
-  if (ended(task.state)) return { task: task.id, state: task.state, releasedLease: null, questionsClosed: 0 };
-  const refuse = async (state: string): Promise<void> => {
+  if (ended(task.state)) return { task: task.id, state: task.state, releasedLease: null, questionsClosed: 0, stopped: false };
+  const refuse = (state: string): void => {
     if (options.unfinished) return;
     if (!STOPPABLE.includes(state)) {
       throw new HttpFailure(409, `that task is ${state}; only one that failed, was stopped, or is paused can be stopped here`);
     }
-    if (state === 'paused' && (await threads.listOpenGates()).some((gate) => gate.taskId === task.id)) {
-      throw new HttpFailure(409, 'that task is waiting on a question; answer it in its thread instead');
-    }
   };
-  await refuse(task.state);
+  refuse(task.state);
 
   const others = (await tasks.listTasksOnSubjects([task.subjectRef])).filter(
     (other) => other.id !== task.id && UNFINISHED.includes(other.state),
@@ -425,8 +429,8 @@ export async function stopTask(
   // between the checks above and here. What is left is the time one request
   // to hostd takes.
   const now = await tasks.getTask(task.id);
-  if (now && ended(now.state)) return { task: task.id, state: now.state, releasedLease: null, questionsClosed: 0 };
-  await refuse(now?.state ?? task.state);
+  if (now && ended(now.state)) return { task: task.id, state: now.state, releasedLease: null, questionsClosed: 0, stopped: false };
+  refuse(now?.state ?? task.state);
 
   const reason = `${STOPPED_BY_A_PERSON} (${actor})${note ? `: ${note}` : ''}`;
   try {
@@ -437,15 +441,14 @@ export async function stopTask(
 
   // A question the task was waiting on is one nobody can act on now: an answer
   // would resume nothing. hostd's cancel closes it only for a task whose lease
-  // a gate paused, and a triage has no lease.
+  // a gate paused, and a triage has no lease. A task with no open question
+  // closes none.
   let questionsClosed = 0;
   let questionError: string | null = null;
-  if (options.unfinished) {
-    try {
-      questionsClosed = (await threads.expireGatesOfTask(task.id, actor, note || reason)).length;
-    } catch (error) {
-      questionError = error instanceof Error ? error.message : String(error);
-    }
+  try {
+    questionsClosed = (await threads.expireGatesOfTask(task.id, actor, note || reason)).length;
+  } catch (error) {
+    questionError = error instanceof Error ? error.message : String(error);
   }
 
   // The task's own lease, or, for a build that recorded none, the one its bot
@@ -490,7 +493,7 @@ export async function stopTask(
       was: task.state,
       reason,
       lease: releasing?.id ?? null,
-      ...(options.unfinished ? { questionsClosed } : {}),
+      questionsClosed,
       ...(leaseError ? { leaseError } : {}),
       ...(questionError ? { questionError } : {}),
     },
@@ -501,7 +504,7 @@ export async function stopTask(
   if (leaseError && !options.unfinished) {
     throw new HttpFailure(500, `it is stopped, but its lease could not be released: ${leaseError}. The idle-lease check lets it go within minutes`);
   }
-  return { task: task.id, state: 'stopped', releasedLease: releasing?.id ?? null, questionsClosed };
+  return { task: task.id, state: 'stopped', releasedLease: releasing?.id ?? null, questionsClosed, stopped: true };
 }
 
 export function registerConsoleApi(router: Router, deps: ApiDeps): void {

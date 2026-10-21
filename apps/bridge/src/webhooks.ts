@@ -694,6 +694,7 @@ export class Webhooks {
     if (action === 'closed' || issue.state === 'closed') {
       const finished = (stage: string | null | undefined) => stage === 'merged' || stage === 'done';
       const known = await (async () => issues.getIssue(repo.id, issue.number))().catch(() => null);
+      let how: HowClosed | undefined;
       if (!finished(stageFromLabels(issue.labels)) && !finished(known?.stage)) {
         // Only a row already on the board: one for a closed issue is not made.
         if (known) await issues.setIssueLabels(repo.id, issue.number, issue.labels.filter((label) => label !== 'start:now'));
@@ -701,13 +702,22 @@ export class Webhooks {
         // delivered with the label on it, and would abandon it a second time.
         const abandoning = hasAbandonedLabel(issue.labels) || hasAbandonedLabel(known?.labels);
         if (known && !abandoning && !hasIgnoreLabel(issue.labels) && !hasIgnoreLabel(known.labels)) {
-          const how = await this.howClosed(repo, known).catch(() => undefined);
+          how = await this.howClosed(repo, known).catch(() => undefined);
           const abandoned =
             how === 'abandoned' &&
             (await this.abandon(repo, issue.number, 'closed on GitHub without a merge', sender ?? null).catch(abandonFailed(repo.name, issue.number)));
+          // The abandon stopped what was paused on it as well (`stopWorkOf`).
           if (abandoned) return;
         }
         await this.stopBuildsOf(repo.name, issue.number);
+      }
+      // Any other close ends what is paused on it too, one already in Merged
+      // or Done included: a person's move or label may have put it there, and
+      // nothing stopped its work. Only the close itself, not a later delivery
+      // about an issue that is closed.
+      if (action === 'closed') {
+        const why = how === 'abandoned' ? ABANDONED_STOP : alreadyLanded(`${repo.name}#${issue.number}`);
+        await this.stopPausedOn(repo.name, [issue.number, known?.prNumber ?? null], why, sender ?? null);
       }
       return;
     }
@@ -1152,7 +1162,11 @@ export class Webhooks {
    */
   async landedUnheard(repo: { id: string; name: string }, issueNumber: number, sha: string): Promise<boolean> {
     const moved = await this.automation.moveStage({ repoName: repo.name, issueNumber, to: 'done', actor: 'bridge', recordsOutcome: true, reason: `closed by ${sha}` });
-    if (moved.moved) await this.stopBuildsOf(repo.name, issueNumber);
+    if (moved.moved) {
+      await this.stopBuildsOf(repo.name, issueNumber);
+      const known = await (async () => issues.getIssue(repo.id, issueNumber))().catch(() => null);
+      await this.stopPausedOn(repo.name, [issueNumber, known?.prNumber ?? null], alreadyLanded(`${repo.name}#${issueNumber}`), null);
+    }
     return moved.moved;
   }
 
@@ -1661,7 +1675,7 @@ export class Webhooks {
     this.conflicts = rounds;
   }
 
-  private stopTask: ((taskId: string, actor: string, note: string) => Promise<unknown>) | null = null;
+  private stopTask: ((taskId: string, actor: string, note: string) => Promise<{ stopped?: boolean } | void>) | null = null;
 
   /** Counts each completed workflow run's minutes (`ci-usage.ts`); set once the counter exists (`main.ts`). */
   private ciUsage: ((delivery: WebhookPayload) => Promise<string | null>) | null = null;
@@ -1670,8 +1684,8 @@ export class Webhooks {
     this.ciUsage = record;
   }
 
-  /** How a task is stopped, as a card's Stop does it; set once at start-up (main.ts). */
-  useStopTask(stop: (taskId: string, actor: string, note: string) => Promise<unknown>): void {
+  /** How a task is stopped, as a card's Stop does it; set once at start-up (main.ts). `stopped` is whether it was this call that stopped it. */
+  useStopTask(stop: (taskId: string, actor: string, note: string) => Promise<{ stopped?: boolean } | void>): void {
     this.stopTask = stop;
   }
 
@@ -1709,23 +1723,98 @@ export class Webhooks {
   /**
    * The tasks still going on an issue closed without merging and on its pull
    * request: its work is over, and a build, a review or a patch round left
-   * running spends to post on it. Not a deploy task, and not one of the
-   * account that closed it (`closedBy`): the SRE closes the issue a failed
-   * deploy filed (`gh issue close`, `crew/skills/deploy/SKILL.md`) and then
-   * sends the change back, and stopping its task there lost the send-back.
+   * running spends to post on it. Not a deploy task still queued or running,
+   * and not one of the account that closed it (`closedBy`): the SRE closes the
+   * issue a failed deploy filed (`gh issue close`, `crew/skills/deploy/SKILL.md`)
+   * and then sends the change back, and stopping its task there lost the
+   * send-back. A paused one of any kind is stopped (`stopPausedOn`).
    */
   private async stopWorkOf(repoName: string, issueNumber: number, prNumber: number | null, why: string, closedBy: string | null = null): Promise<void> {
     if (!this.stopTask) return;
     const subjects = [`${repoName}#${issueNumber}`, ...(prNumber ? [`${repoName}#${prNumber}`] : [])];
-    const crew = closedBy ? await bots.listBots().catch(() => []) : [];
-    const closers = new Set(crew.filter((bot) => sameLogin(bot.githubLogin, closedBy)).map((bot) => bot.id));
+    const closers = await this.closersOf(closedBy);
     const going = (await (async () => tasks.listTasksOnSubjects(subjects))().catch(() => [])).filter(
-      (task) => ['queued', 'running', 'paused'].includes(task.state) && task.kind !== 'deploy' && !closers.has(task.botId),
+      (task) => ['queued', 'running'].includes(task.state) && task.kind !== 'deploy' && !closers.has(task.botId),
     );
     for (const task of going) {
       await this.stopTask(task.id, 'bridge', why).catch((error: unknown) =>
         console.warn(`[bridge] ${task.kind} ${task.id} on ${task.subjectRef} not stopped: ${error instanceof Error ? error.message : error}`),
       );
+    }
+    // A paused one is stopped whatever its kind, a deploy too, and the thread says so.
+    await this.stopPausedOn(repoName, [issueNumber, prNumber], why, closedBy);
+  }
+
+  /** The crew's bots that act as the account that closed something: their own tasks go on. */
+  private async closersOf(closedBy: string | null): Promise<Set<string>> {
+    const crew = closedBy ? await bots.listBots().catch(() => []) : [];
+    return new Set(crew.filter((bot) => sameLogin(bot.githubLogin, closedBy)).map((bot) => bot.id));
+  }
+
+  /** Tasks a close is stopping now, so the issue's and the pull request's deliveries, which arrive together, do not both stop one and both say so. */
+  private readonly stopping = new Set<string>();
+
+  /**
+   * Every task paused on an issue or pull request that has just closed, of any
+   * kind, deploy and QA included: its work is over, and nothing else ends a
+   * pause. Intake 28ac028c stayed paused on a question after #46 merged as #61
+   * while the bridge was down, its computer running, because the merge paths
+   * stopped only builds and reviews. Not a task of the account that closed it
+   * (`closedBy`), as `stopWorkOf` spares it.
+   *
+   * Only at the moment of the close, from its delivery or from the reconcile
+   * that settles it, never from a sweep of closed subjects: a deploy or QA task
+   * asks after a merge, about a merged pull request, and must still be heard.
+   * A stop that fails here is said, and not tried again.
+   *
+   * The thread is told once per subject, naming what was stopped, and only for
+   * a task this call stopped: a redelivery, or a second path to the same close,
+   * finds nothing paused and says nothing.
+   */
+  private async stopPausedOn(repoName: string, numbers: readonly (number | null)[], why: string, closedBy: string | null): Promise<void> {
+    if (!this.stopTask) return;
+    const subjects = [...new Set(numbers.filter((n): n is number => typeof n === 'number' && n > 0))].map((n) => `${repoName}#${n}`);
+    if (subjects.length === 0) return;
+    const closers = await this.closersOf(closedBy);
+    const paused = (await (async () => tasks.listTasksOnSubjects(subjects))().catch(() => [])).filter(
+      (task) => task.state === 'paused' && !closers.has(task.botId),
+    );
+    const stopped = new Map<string, { botId: string; kind: string }[]>();
+    for (const task of paused) {
+      if (this.stopping.has(task.id)) continue;
+      this.stopping.add(task.id);
+      try {
+        const done = await this.stopTask(task.id, 'bridge', why);
+        if (done && done.stopped) stopped.set(task.subjectRef, [...(stopped.get(task.subjectRef) ?? []), { botId: task.botId, kind: task.kind }]);
+      } catch (error) {
+        console.warn(`[bridge] ${task.kind} ${task.id} on ${task.subjectRef} not stopped: ${error instanceof Error ? error.message : error}`);
+      } finally {
+        this.stopping.delete(task.id);
+      }
+    }
+    if (stopped.size === 0) return;
+
+    const record = await repos.getRepoByName(repoName).catch(() => null);
+    const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
+    const crew = await bots.listBots().catch(() => []);
+    for (const [subjectRef, which] of stopped) {
+      const number = Number(subjectRef.slice(subjectRef.lastIndexOf('#') + 1));
+      const named = which.map(({ botId, kind }) => `- ${crew.find((bot) => bot.id === botId)?.name ?? 'a bot'}'s ${kind} task`);
+      console.log(`[bridge] ${subjectRef}: stopped ${which.length} paused task(s): ${why}`);
+      if (!record || !client) continue;
+      await client
+        .comment(
+          record.fullName,
+          number,
+          [
+            `Stopped the work still paused here: ${why}.`,
+            '',
+            ...named,
+            '',
+            'A question it was waiting on is closed unanswered, and its computer is taken down. Reopen the issue to start its stage again.',
+          ].join('\n'),
+        )
+        .catch((error: unknown) => console.warn(`[bridge] ${subjectRef}: paused work stopped, and not said on GitHub: ${error instanceof Error ? error.message : error}`));
     }
   }
 
@@ -1790,6 +1879,15 @@ export class Webhooks {
       await this.mergeLine.leave(repo.name, pr.number);
       await this.mergeLine.advance(repo.name).catch(() => null);
       await this.stopReviewsOf(repo.name, pr.number, pr.merged ? 'its pull request merged' : 'its pull request closed');
+      // And whatever else is paused on it, a patch round's question too. Here,
+      // before the returns below: a merge the unreviewed-merge hold keeps, or
+      // one into another branch, still ends the work on this pull request.
+      await this.stopPausedOn(
+        repo.name,
+        [pr.number],
+        pr.merged ? alreadyLanded(`${repo.name}#${pr.number}`) : 'its pull request closed',
+        payload.sender?.login ?? null,
+      );
 
       // A lease outlived its implement task to hold the ground this change sits
       // on. Closed unmerged, that ground is free again; merged, the verification
@@ -2478,7 +2576,7 @@ export class Webhooks {
     const to = byMerging ? 'done' : 'merged';
     // The issues the pull request closes besides its own, first, so a failed
     // move of its own issue, thrown below, does not leave them behind.
-    await this.moveClosedByMerge(repo, pr.number, merged.closes, to);
+    const moved = await this.moveClosedByMerge(repo, pr.number, merged.closes, to);
     if (merged.own) {
       // Only an issue the crew tracks, as for the ones it closes: a branch
       // named for any other number learnt that number as a card.
@@ -2493,13 +2591,23 @@ export class Webhooks {
         // before the merge, put the stage back to Review; the second move was
         // then backwards, refused, and openadlc-testbed#1 stayed in Ship.
         await this.takeAbandonOff(repo, merged.own);
-        const moved = await this.automation.moveStage({ repoName: repo.name, issueNumber: merged.own, to, actor: 'bridge', recordsOutcome: true });
+        const own = await this.automation.moveStage({ repoName: repo.name, issueNumber: merged.own, to, actor: 'bridge', recordsOutcome: true });
         // Written when the pull request opened too; a missed delivery left it
         // empty, and the deploy after the merge finds its issues by it. Only
         // once the move went through: a refused one is not this issue's merge.
-        if (moved.moved) await issues.setPullRequestNumber(repo.id, merged.own, pr.number).catch(() => undefined);
-        else console.log(`[bridge] ${repo.name}#${pr.number} merged, but ${repo.name}#${merged.own} was not moved to ${to}: ${moved.reason ?? 'refused'}`);
+        if (own.moved) {
+          await issues.setPullRequestNumber(repo.id, merged.own, pr.number).catch(() => undefined);
+          moved.push(merged.own);
+        } else console.log(`[bridge] ${repo.name}#${pr.number} merged, but ${repo.name}#${merged.own} was not moved to ${to}: ${own.reason ?? 'refused'}`);
       }
+    }
+    // What was paused on each issue this merge finished, and on the pull
+    // request, ends here, from the delivery or from the reconcile that found
+    // the merge late: intake 28ac028c outlived #46's merge as #61, made while
+    // the bridge was down. Only an issue that moved: one already moved on is a
+    // redelivery, and a task paused since then asked after the merge.
+    for (const issueNumber of moved) {
+      await this.stopPausedOn(repo.name, [issueNumber, pr.number], alreadyLanded(`${repo.name}#${issueNumber}`), null);
     }
     if (byMerging) {
       // Nothing runs after the merge, so nothing else would let go of the
@@ -2553,7 +2661,10 @@ export class Webhooks {
     });
     // Its pull request by what the board recorded, and not by the branch or
     // the closing references GitHub lists: moved all the same.
-    if (own !== issueNumber && !closes.includes(issueNumber)) await this.moveClosedByMerge(record, prNumber, [issueNumber], to);
+    if (own !== issueNumber && !closes.includes(issueNumber)) {
+      const moved = await this.moveClosedByMerge(record, prNumber, [issueNumber], to);
+      if (moved.length > 0) await this.stopPausedOn(record.name, [issueNumber, prNumber], alreadyLanded(`${record.name}#${issueNumber}`), null);
+    }
     return to;
   }
 
@@ -2569,14 +2680,16 @@ export class Webhooks {
    * learnt as a card at that stage; and `openadlc:ignore` holds, since a person
    * said to leave the issue alone. A move that fails is said and not thrown:
    * the lease and the deploy after the merge belong to the branch's issue, and
-   * an issue someone transferred or deleted should not hold them up.
+   * an issue someone transferred or deleted should not hold them up. The
+   * issues it moved.
    */
   private async moveClosedByMerge(
     repo: { id: string; name: string },
     prNumber: number,
     closes: readonly number[],
     to: 'merged' | 'done',
-  ): Promise<void> {
+  ): Promise<number[]> {
+    const done: number[] = [];
     for (const issueNumber of closes) {
       const ref = `${repo.name}#${issueNumber}`;
       try {
@@ -2590,6 +2703,7 @@ export class Webhooks {
           console.log(`[bridge] ${repo.name}#${prNumber} closes ${ref}, not moved to ${to}: ${moved.reason ?? 'refused'}`);
           continue;
         }
+        done.push(issueNumber);
         await issues.setPullRequestNumber(repo.id, issueNumber, prNumber);
       } catch (error) {
         console.warn(
@@ -2598,6 +2712,7 @@ export class Webhooks {
         );
       }
     }
+    return done;
   }
 
   /**
