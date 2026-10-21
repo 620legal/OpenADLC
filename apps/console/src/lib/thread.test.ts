@@ -162,6 +162,33 @@ describe('the task pinned at the top', () => {
     expect(pinnedTask({ task: null, lastTask: { ...done, kind: 'implement', endedWithoutPullRequest: true } }, [PULL], NOW)?.did).toBe('No pull request for');
     expect(pinnedTask({ task: null, lastTask: null }, [], NOW)).toBeNull();
   });
+
+  it('says the work landed when the last task did not finish and its issue merged or closed since', () => {
+    const done = { ...REVIEWING, kind: 'implement', state: 'done', startedAt: minutesAgo(130), endedAt: minutesAgo(120) };
+    const landed = { ...done, state: 'failed', landed: true };
+    // Its links and its cost stay: only the words before the number change.
+    expect(pinnedTask({ task: null, lastTask: landed }, [PULL], NOW)).toMatchObject({
+      did: 'Landed',
+      number: '#12',
+      title: 'Record which model each review used',
+      links: [
+        { label: 'Pull request #31', url: 'https://github.com/janedoe/openadlc-testbed/pull/31' },
+        { label: 'Issue #12', url: 'https://github.com/janedoe/openadlc-testbed/issues/12' },
+      ],
+      cost: '$0.38 on this task',
+    });
+    expect(pinnedTask({ task: null, lastTask: { ...landed, state: 'stopped' } }, [PULL], NOW)?.did).toBe('Landed');
+  });
+
+  it('reads as before for a task that finished, one a person stopped, or work that has not landed', () => {
+    const done = { ...REVIEWING, state: 'done', startedAt: minutesAgo(130), endedAt: minutesAgo(120), landed: true };
+    // A review that finished on a pull request that merged since did what it was for.
+    expect(pinnedTask({ task: null, lastTask: done }, [PULL], NOW)?.did).toBe('Reviewed');
+    expect(pinnedTask({ task: null, lastTask: { ...done, state: 'stopped', stoppedByAPerson: true } }, [PULL], NOW)?.did).toBe('Stopped work on');
+    expect(pinnedTask({ task: null, lastTask: { ...done, state: 'failed', landed: false } }, [PULL], NOW)?.did).toBe('Could not finish');
+    // A bridge older than the field says nothing landed.
+    expect(pinnedTask({ task: null, lastTask: { ...done, state: 'failed', landed: undefined } }, [PULL], NOW)?.did).toBe('Could not finish');
+  });
 });
 
 describe('where a message goes', () => {

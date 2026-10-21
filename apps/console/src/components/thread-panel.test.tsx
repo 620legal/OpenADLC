@@ -87,6 +87,22 @@ describe('a bot’s last task, when it could not finish', () => {
     }
   });
 
+  it('says the work landed, and offers neither, once its issue merged or closed', () => {
+    // #12's pull request merged after the review failed: Try again is refused with "already landed".
+    const landed = (state: string) =>
+      panel({ ...REVIEWER, task: null, lastTask: { ...REVIEWER.task!, id: 'task-31', state, landed: true, endedAt: '2026-09-24T10:50:00.000Z' } });
+    for (const html of [landed('failed'), landed('stopped')]) {
+      expect(html).toMatch(/<span class="[^"]*text-dim[^"]*">Landed <\/span>/);
+      expect(html).not.toContain('Could not finish');
+      expect(html).not.toContain('text-alarm');
+      for (const label of ['Try again', 'Stop']) expect(buttons(html)).not.toContain(label);
+    }
+    // Still in Build or Review: as before.
+    const building = panel({ ...REVIEWER, task: null, lastTask: { ...REVIEWER.task!, id: 'task-31', state: 'failed', landed: false, endedAt: '2026-09-24T10:50:00.000Z' } });
+    expect(building).toContain('Could not finish');
+    expect(buttons(building)).toEqual(expect.arrayContaining(['Try again', 'Stop']));
+  });
+
   it('offers Try again, and not Stop, for a build that finished without a pull request', () => {
     const html = panel({
       ...REVIEWER,

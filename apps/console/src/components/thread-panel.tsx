@@ -18,7 +18,9 @@ import { useEventStream } from '@/lib/use-event-stream';
 import {
   composerPlaceholder,
   composerTarget,
+  couldNotFinish,
   groupByItem,
+  landedAnyway,
   NO_ITEM,
   modelInWords,
   pinnedTask,
@@ -374,7 +376,12 @@ export function ThreadPanel({
             round={roundOf(task)}
             pinned={pinned}
             showRepo={manyRepos}
-            failedTaskId={!task && member?.lastTask && (couldNotFinish(member.lastTask) || member.lastTask.endedWithoutPullRequest) ? (member.lastTask.id ?? null) : null}
+            // Work that landed has nothing to run again or stop: the retry refuses it.
+            failedTaskId={
+              !task && member?.lastTask && !landedAnyway(member.lastTask) && (couldNotFinish(member.lastTask) || member.lastTask.endedWithoutPullRequest)
+                ? (member.lastTask.id ?? null)
+                : null
+            }
             // A finished task has nothing left to stop: its Try again goes on from its branch.
             canStop={!member?.lastTask?.endedWithoutPullRequest}
           />
@@ -613,7 +620,7 @@ function NowCard({
   round: string | null;
   pinned: PinnedTask | null;
   showRepo: boolean;
-  /** The last task, when it failed or was stopped under the bot and nothing is going now: what "Try again" and "Stop" act on. */
+  /** The last task, when it failed or was stopped under the bot, its work has not landed, and nothing is going now: what "Try again" and "Stop" act on. */
   failedTaskId?: string | null;
   /** Whether "Stop" is offered beside "Try again": not for a build that finished without its pull request. */
   canStop?: boolean;
@@ -663,11 +670,6 @@ function NowCard({
       )}
     </div>
   );
-}
-
-/** What its card on the board offers "Try again" and "Stop" for: failed, or stopped by anything but a person. */
-function couldNotFinish(task: { state: string; stoppedByAPerson?: boolean }): boolean {
-  return task.state === 'failed' || (task.state === 'stopped' && !task.stoppedByAPerson);
 }
 
 /**

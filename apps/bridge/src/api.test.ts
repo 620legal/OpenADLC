@@ -160,7 +160,7 @@ vi.mock('@openadlc/db', () => ({
   threads: { listOpenGates: vi.fn(async () => []), expireGatesOfTask: vi.fn(async () => []) },
 }));
 
-import { acknowledgements, audit, bots, costs, credentials, leases, modelAccounts, repos, requests, sessions, settings, tasks, threads, withAdvisoryLock } from '@openadlc/db';
+import { acknowledgements, audit, bots, costs, credentials, issues, leases, modelAccounts, repos, requests, sessions, settings, tasks, threads, withAdvisoryLock } from '@openadlc/db';
 
 let hostd: Server;
 let bridge: Server;
@@ -1956,6 +1956,69 @@ describe('a bot’s sessions on the crew page', () => {
 
   it('shows it to an admin, who may watch the screen itself', async () => {
     expect((await asRole('admin')).sessions[0]?.lastLine).toBe('export GH_TOKEN=ghp_secret');
+  });
+});
+
+describe('whether a bot’s last task landed, as the crew list says it for its thread', () => {
+  // #18 merged as #19; #16 is still being built.
+  const ISSUE = { repoId: 'repo-1', repoName: 'openadlc-testbed', title: 'Let the board filter by label', labels: [], url: null, updatedAt: '2026-10-04T09:00:00Z' };
+  const MERGED = { ...ISSUE, id: 'issue-18', number: 18, stage: 'merged', prNumber: 19 };
+  const BUILDING = { ...ISSUE, id: 'issue-16', number: 16, stage: 'build', prNumber: null };
+  const CREW = [
+    { id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement' },
+    { id: 'bot-second-builder', name: 'openadlc-bolt-janedoe', slot: 'second-builder', role: 'implement' },
+    { id: 'bot-sre', name: 'openadlc-sre-janedoe', slot: 'sre', role: 'sre' },
+  ];
+  const failed = (botId: string, kind: string, subjectRef: string) => ({
+    id: `task-${botId}`,
+    botId,
+    repoId: 'repo-1',
+    kind,
+    subjectRef,
+    state: 'failed',
+    exitReason: 'engine exited 1',
+    branch: null,
+    round: 0,
+    costUsd: 0.42,
+    createdAt: '2026-10-04T09:00:00Z',
+    startedAt: '2026-10-04T09:01:00Z',
+    endedAt: '2026-10-04T09:30:00Z',
+  });
+  const LAST = [
+    failed('bot-builder', 'implement', 'openadlc-testbed#18'),
+    failed('bot-second-builder', 'implement', 'openadlc-testbed#16'),
+    // Filed under the merged pull request, where a deploy's work starts.
+    failed('bot-sre', 'deploy', 'openadlc-testbed#19'),
+  ];
+
+  beforeEach(() => {
+    vi.mocked(bots.listBots).mockResolvedValueOnce(CREW as never);
+    vi.mocked(issues.listIssues).mockResolvedValue([MERGED, BUILDING] as never);
+    vi.mocked(tasks.listTasks).mockImplementation((async (filter: { botId?: string; states?: string[] }) =>
+      LAST.filter((task) => task.botId === filter.botId && (filter.states ?? []).includes(task.state))) as never);
+    Object.assign(sessions, { listSessions: vi.fn(async () => []) });
+    Object.assign(credentials, { getCredential: vi.fn(async () => ({ status: 'active', tokenExpiresAt: null })) });
+  });
+
+  afterEach(() => {
+    vi.mocked(issues.listIssues).mockReset();
+  });
+
+  async function lastTasks(): Promise<Record<string, { landed?: boolean } | null>> {
+    const body = (await (await fetch(`${bridgeUrl}/v1/bots`)).json()) as { bots: { name: string; lastTask: { landed?: boolean } | null }[] };
+    return Object.fromEntries(body.bots.map((bot) => [bot.name, bot.lastTask]));
+  }
+
+  it('says a build that failed on an issue that merged since has landed', async () => {
+    expect((await lastTasks())['openadlc-atlas-janedoe']).toMatchObject({ kind: 'implement', state: 'failed', landed: true });
+  });
+
+  it('says a build that failed on an issue still in Build has not', async () => {
+    expect((await lastTasks())['openadlc-bolt-janedoe']).toMatchObject({ kind: 'implement', state: 'failed', landed: false });
+  });
+
+  it('says a deploy that failed on a merged issue has not, since the merge is where its work starts', async () => {
+    expect((await lastTasks())['openadlc-sre-janedoe']).toMatchObject({ kind: 'deploy', state: 'failed', issue: { number: 18 }, landed: false });
   });
 });
 

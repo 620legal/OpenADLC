@@ -1,5 +1,6 @@
 import type { GitHubClient } from '@openadlc/github';
 import { STAGE_KEYS, type TaskKind, type TaskState } from '@openadlc/shared';
+import { ALREADY_LANDED, endsWithSubject } from './gates.js';
 import { endedBySendingBack, stageOfTask, type IssueFacts } from './work.js';
 
 /**
@@ -118,4 +119,24 @@ export function endedWithoutPullRequest(
   if (endedBySendingBack(task.exitReason)) return false;
   if (now - Date.parse(task.endedAt) < PULL_REQUEST_GRACE_MS) return false;
   return (STAGE_KEYS as readonly string[]).indexOf(issue.stage) <= (STAGE_KEYS as readonly string[]).indexOf(stageOfTask(task.kind));
+}
+
+/**
+ * Whether the work a task was for has landed: its kind's work is over once
+ * its subject closes (`endsWithSubject`), and its issue is merged or done, or
+ * the task was stopped because its subject had closed (`ALREADY_LANDED`).
+ *
+ * A builder's task failed on #18, and #18's pull request merged anyway. The
+ * thread card still read "Could not finish #18" and offered Try again, which
+ * the retry refused with "already landed". The console's thread panel reads
+ * this to say the work landed and offer neither Try again nor Stop. A deploy
+ * or QA task's work starts at the merge, so a merged issue is not landed for
+ * it.
+ */
+export function workLanded(
+  task: { kind: TaskKind; subjectRef: string; exitReason?: string | null },
+  issue: Pick<IssueFacts, 'stage'> | null | undefined,
+): boolean {
+  if (!endsWithSubject(task)) return false;
+  return issue?.stage === 'merged' || issue?.stage === 'done' || Boolean(task.exitReason?.startsWith(ALREADY_LANDED));
 }
