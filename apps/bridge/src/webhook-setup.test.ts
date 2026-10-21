@@ -34,6 +34,12 @@ vi.mock('@openadlc/db', () => ({
       if (value === '') delete STORED[key];
       else STORED[key] = value;
     }),
+    setSettings: vi.fn(async (values: Record<string, string>) => {
+      for (const [key, value] of Object.entries(values)) {
+        if (value === '') delete STORED[key];
+        else STORED[key] = value;
+      }
+    }),
   },
   // What reconcile recorded of activity GitHub never delivered, and when the
   // bridge last took a delivery: the two local facts the webhook's report reads.
@@ -497,6 +503,8 @@ describe('a restart', () => {
 
     expect(status.tunnel.running).toBe(false);
     expect(STORED.publicUrl).toBeUndefined();
+    // Forgotten with the address, or it would describe the next one.
+    expect(STORED.webhookMode).toBeUndefined();
     const patches = CALLS.filter((call) => call.method === 'PATCH').length;
     expect(await (await subject()).resume()).toBeNull();
     expect(CALLS.filter((call) => call.method === 'PATCH').length).toBe(patches);
@@ -515,6 +523,123 @@ describe('a restart', () => {
 
     expect(await setup.resume()).toBeNull();
     expect(CALLS.filter((call) => call.method === 'PATCH').length).toBe(patches);
+  });
+});
+
+/**
+ * Who made the address is stored beside it (`webhookMode`), and decides what
+ * a restart does with it. Going by the address alone, a quick tunnel a person
+ * runs themselves and gave as a fixed address was taken for one this bridge
+ * raised: replaced at every restart, and called stopped until it was.
+ */
+describe('a restart, by who made the address', () => {
+  const PERSONS = 'https://persons-own-1.trycloudflare.com';
+  /** When the restarted bridge started; GitHub's deliveries are placed after it. */
+  const STARTED = Date.parse('2026-10-21T09:00:00.000Z');
+  const delivery = (statusCode: number) => [
+    { event: 'issues', action: 'opened', status_code: statusCode, delivered_at: '2026-10-21T09:05:00.000Z', redelivery: false },
+  ];
+  const patches = (): number => CALLS.filter((call) => call.method === 'PATCH').length;
+  /** cloudflared as before, counting how many tunnels were raised. */
+  const counted = () => {
+    const cloudflared = fakeCloudflared();
+    let raised = 0;
+    const spawner: Spawner = (command, args) => {
+      raised += 1;
+      return cloudflared.spawner(command, args);
+    };
+    return { spawner, raised: () => raised };
+  };
+
+  it('keeps a quick tunnel a person gave as a fixed address, and judges it by GitHub’s deliveries, never as a tunnel that stopped', async () => {
+    await (await subject()).configure({ mode: 'address', url: PERSONS });
+    expect(STORED).toMatchObject({ publicUrl: PERSONS, webhookMode: 'address' });
+    const before = patches();
+
+    const cloudflared = counted();
+    const restarted = await subject({ spawner: cloudflared.spawner, now: () => STARTED });
+    expect(await restarted.resume()).toBeNull();
+
+    expect(cloudflared.raised()).toBe(0);
+    expect(patches()).toBe(before);
+    expect(HOOK.url).toBe(`${PERSONS}/webhooks/github`);
+    expect(STORED).toMatchObject({ publicUrl: PERSONS, webhookMode: 'address' });
+    expect(await restarted.localReadiness()).toEqual({ ready: true, stale: false });
+    expect(await restarted.newAppAddress()).toBe('have');
+    expect(await restarted.watchTunnel(STARTED + 60 * 60_000)).toBeNull();
+
+    const { webhookCheck } = await import('./health/checks/webhook.js');
+    const check = webhookCheck({ status: () => restarted.status(), lastHeard: async () => null });
+    const now = new Date('2026-10-21T09:10:00.000Z');
+    DELIVERIES = delivery(200);
+    expect(await restarted.status()).toMatchObject({ stale: false, ready: true });
+    expect(await check.run(now)).toEqual([{ ok: true, fixed: 'GitHub is delivering again' }]);
+    // The person's cloudflared stopped: GitHub says so, and the card names it as theirs.
+    DELIVERIES = delivery(530);
+    const [failed] = await check.run(now);
+    expect(failed).toMatchObject({ ok: false, title: 'GitHub cannot reach this bridge' });
+    expect(failed && 'detail' in failed ? failed.detail : '').toContain('a tunnel of your own');
+  });
+
+  it('keeps a quick tunnel of a person’s own given in install.json, which has no row or mode of its own', async () => {
+    const cloudflared = counted();
+    const restarted = await subject({ config: { ...(CONFIG as Record<string, unknown>), publicUrl: PERSONS }, spawner: cloudflared.spawner });
+
+    expect(await restarted.resume()).toBeNull();
+    expect(cloudflared.raised()).toBe(0);
+    expect((await restarted.status()).stale).toBe(false);
+  });
+
+  it('raises again a tunnel it raised itself, and goes on watching it', async () => {
+    await (await subject()).configure({ mode: 'tunnel' });
+    expect(STORED).toMatchObject({ publicUrl: 'https://calm-badger-42.trycloudflare.com', webhookMode: 'tunnel' });
+
+    const tunnels = quickTunnels(['brisk-otter-7']);
+    const restarted = await subject({ spawner: tunnels.spawner });
+    const status = await restarted.resume();
+
+    expect(tunnels.started()).toBe(1);
+    expect(status?.publicUrl).toBe('https://brisk-otter-7.trycloudflare.com');
+    expect(HOOK.url).toBe('https://brisk-otter-7.trycloudflare.com/webhooks/github');
+    expect(STORED).toMatchObject({ publicUrl: 'https://brisk-otter-7.trycloudflare.com', webhookMode: 'tunnel' });
+    expect(status?.watch.keeps).toBe(true);
+  });
+
+  it('keeps a person’s quick tunnel, and that it is theirs, through a take-down and the restart after', async () => {
+    const setup = await subject();
+    await setup.configure({ mode: 'address', url: PERSONS });
+
+    await setup.takeDown();
+
+    expect(STORED).toMatchObject({ publicUrl: PERSONS, webhookMode: 'address' });
+    const cloudflared = counted();
+    expect(await (await subject({ spawner: cloudflared.spawner })).resume()).toBeNull();
+    expect(cloudflared.raised()).toBe(0);
+  });
+
+  it('takes a quick tunnel’s address stored before the mode was for its own, as it did then', async () => {
+    // An install from before `webhookMode`, or one restored from a backup,
+    // which does not carry it.
+    STORED = { publicUrl: 'https://old-dead-name.trycloudflare.com', webhookSecret: 'kept-secret' };
+    HOOK = { url: 'https://old-dead-name.trycloudflare.com/webhooks/github', secret: 'kept-secret' };
+    const setup = await subject();
+
+    expect((await setup.status()).stale).toBe(true);
+    expect((await setup.resume())?.publicUrl).toBe('https://calm-badger-42.trycloudflare.com');
+    // Stored from now on, so the next start reads it rather than guessing.
+    expect(STORED.webhookMode).toBe('tunnel');
+  });
+
+  it('raises nothing over an address that is no quick tunnel’s, whatever the mode beside it says', async () => {
+    // This bridge raises only quick tunnels: `tunnel` beside another address
+    // is a row out of step with it, not a tunnel of its own.
+    STORED = { publicUrl: 'https://openadlc.example.com', webhookMode: 'tunnel', webhookSecret: 'kept-secret' };
+    const cloudflared = counted();
+    const setup = await subject({ spawner: cloudflared.spawner });
+
+    expect(await setup.resume()).toBeNull();
+    expect((await setup.status()).stale).toBe(false);
+    expect(cloudflared.raised()).toBe(0);
   });
 });
 
@@ -1064,6 +1189,25 @@ describe('a tunnel whose address stops reaching the bridge', () => {
     expect(await watching).toBeNull();
     expect(patches()).toHaveLength(1);
     expect((await setup.status()).tunnel.running).toBe(false);
+  });
+
+  it('leaves the tunnel it raised once the stored mode says a person gave that address', async () => {
+    // A restore, or PATCH /v1/install with the same address, says so without
+    // a Configure, and the watch still held the address as its own.
+    const { tunnels, made } = setupWith(['calm-badger-42', 'brisk-otter-7']);
+    const setup = await made;
+    await setup.configure({ mode: 'tunnel' });
+    await tick(setup, 1);
+    STORED.webhookMode = 'address';
+    DEAD.add(OLD);
+
+    for (let minute = 2; minute <= 120; minute += 1) expect(await tick(setup, minute)).toBeNull();
+
+    expect(tunnels.started()).toBe(1);
+    expect(patches()).toHaveLength(1);
+    expect(HOOK.url).toBe(`${OLD}/webhooks/github`);
+    // Nor does its status say the watch keeps it.
+    expect((await setup.status()).watch.keeps).toBe(false);
   });
 
   it('never raises one for a fixed address, and does not try it', async () => {

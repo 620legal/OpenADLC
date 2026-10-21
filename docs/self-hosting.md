@@ -19,16 +19,38 @@ runs on infrastructure you control.
 
 A quick tunnel's address is new each time one is raised, and can die while
 cloudflared goes on running: a laptop that sleeps can wake to an address that
-no longer reaches it. The bridge raises a new tunnel at every start. While it
-runs, it tries the address of the tunnel it raised from this machine every
-five minutes, and at once on waking; when one that answered has stopped for a
-minute, and GitHub's deliveries to it fail too, it raises a new tunnel, points
-the app's webhook at it with the same secret, and has GitHub send again what
-failed meanwhile. It waits twice as long after each, from half an hour up to
-eight hours, until GitHub delivers to the new one, and never raises one for an
-install taken off the internet, one with a fixed address, or a quick tunnel of
-your own given as one; see
+no longer reaches it. The bridge raises a new tunnel at every start for one it
+raised itself. While it runs, it tries the address of the tunnel it raised
+from this machine every five minutes, and at once on waking; when one that
+answered has stopped for a minute, and GitHub's deliveries to it fail too, it
+raises a new tunnel, points the app's webhook at it with the same secret, and
+has GitHub send again what failed meanwhile. It waits twice as long after
+each, from half an hour up to eight hours, until GitHub delivers to the new
+one, and never raises one for an install taken off the internet, one with a
+fixed address, or a quick tunnel of your own given as one; see
 [Webhooks do not arrive](troubleshooting.md#webhooks-do-not-arrive).
+
+Which it is, the webhook step stores beside the address as the `webhookMode`
+setting: `tunnel` when the step raised one for you (**set it up for me**),
+`address` when you gave one (**use this address**). An address in
+`install.json` or `OPENADLC_PUBLIC_URL` is always one you gave, and so is one
+sent as `PATCH /v1/install {"publicUrl": …}`, which stores `address` with it;
+`webhookMode` itself is written only by the step, and the route refuses it. A
+quick tunnel of your own (`cloudflared tunnel --url …`) given as the address
+is kept through every restart and a take-down, never called a tunnel that
+stopped, and judged by what GitHub delivers to it: the `webhook` check says
+"GitHub cannot reach this bridge" once GitHub's deliveries to it fail. An
+install from before the mode was stored has none, and a stored quick tunnel's
+address is read as one the bridge raised, as it was; the next start stores
+`tunnel`. If yours is a tunnel of your own on such an install, give its
+address on the step once more, which stores `address`.
+
+A backup carries the mode with the address, and one from `install.json` as an
+address you gave; a restore takes them together as one item, "The public
+address, and who made it". Restored from a backup made
+before the mode was stored, another address clears this install's mode, which
+Undo puts back, and is read as one from before the mode was; the same address
+keeps the mode this install has for it.
 
 Without Docker, the `local` driver runs the same tmux sessions on the host, as
 your user. A session there can read the App's private key, every bot's sign-in,

@@ -693,8 +693,13 @@ quick tunnel the bridge runs itself (`apps/bridge/src/tunnel.ts`). A quick tunne
 is a new hostname every time one starts, and its address dies with the process
 that raised it. So at every start the bridge raises a new one and points the
 GitHub App's webhook at it, keeping the secret — when the stored address is a
-quick tunnel's, `cloudflared` is on the PATH, and OpenADLC holds the app's private
-key (`resume()` in `apps/bridge/src/webhook-setup.ts`). The bridge's log says
+quick tunnel the bridge raised, `cloudflared` is on the PATH, and OpenADLC holds
+the app's private key (`resume()` in `apps/bridge/src/webhook-setup.ts`). Who
+raised it is the `webhookMode` setting beside the address: `tunnel`, or
+`address` for one you gave, a quick tunnel of your own among them, which is
+never replaced. An install from before the mode was stored has none, and its
+quick tunnel's address is taken for the bridge's own; give a tunnel of your
+own on the webhook step once more to store `address`. The bridge's log says
 `tunnel back up at https://….trycloudflare.com` when it worked. The tunnel
 reaches a gateway that forwards only `POST /webhooks/github`, never the bridge
 itself (`apps/bridge/src/webhook-gateway.ts`).

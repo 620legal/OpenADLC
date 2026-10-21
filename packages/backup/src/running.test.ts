@@ -217,7 +217,9 @@ describe('an archive laid beside an install that is set up', () => {
     // minutes cap or pause of new work showed as "The setting ciMinutesCap",
     // "the backup’s is another one", so nobody could see what taking it meant.
     const app = ['githubClientId', 'webhookSecret', 'appPrivateKey', 'appClientSecret'];
-    const keys = settingKeys.SETTING_KEYS.filter((key) => !app.includes(key) && !RUNTIME_SETTINGS.includes(key));
+    // Who made the webhook's address is compared and taken in the address's own item.
+    const withAnother = ['webhookMode'];
+    const keys = settingKeys.SETTING_KEYS.filter((key) => !app.includes(key) && !withAnother.includes(key) && !RUNTIME_SETTINGS.includes(key));
     const contents = archive();
     const here = installB();
     for (const key of keys) {
@@ -1088,6 +1090,132 @@ describe('the spending caps in a restore into a set-up install', () => {
     const plan = planUndo(snapshot, journal, install.shape());
     await applyUndo({ plan, signIns: [], shape: install.shape(), target: install.target, takeOver: takeOver.ports, actor: 'alex@example.test', journal });
     expect(capsOf(install)).toEqual(['global month_total 300', 'global task 10', 'janedoe/widgets month_total 25']);
+  });
+});
+
+describe('who made the webhook’s address, in a restore into a set-up install', () => {
+  // `webhookMode` says who made `publicUrl`, and goes with it. Taken apart,
+  // the backup's own tunnel came back beside this install's `address`, and
+  // its bridge never raised it again.
+  const HERE = 'https://b.example.test';
+  const BACKUP_TUNNEL = 'https://calm-badger-42.trycloudflare.com';
+  const installHere = () => memoryInstall({ ...installB(), settings: { ...installB().settings, publicUrl: HERE, webhookMode: 'address' } });
+
+  async function restoreAddress(archived: Record<string, string>) {
+    const install = installHere();
+    const snapshot = buildBackup(install.view(), { ...EVERYTHING, history: true }, NOW).contents;
+    const contents = archive();
+    Object.assign(contents.settings, archived);
+    const comparison = compareInstall({ contents, here: install.view(), signIns: [], historyHere: null });
+    const choices = { ...comparison.choices, 'setting:publicUrl': true };
+    const chosen = chosenArchive({ contents, here: install.view(), comparison, choices });
+    const journal = journalOf({
+      id: 'r9',
+      now: NOW,
+      actor: 'alex@example.test',
+      contents,
+      chosen: chosen.contents,
+      comparison,
+      choices,
+      storedSettings: install.shape().settingKeys,
+    });
+    const takeOver = fakeTakeOver({ logins: REFRESH_LOGINS });
+    const report = await runRestore({
+      contents: chosen.contents,
+      shape: install.shape(),
+      signIns: [],
+      choices: chosen.signIns,
+      target: install.target,
+      takeOver: takeOver.ports,
+      actor: 'alex@example.test',
+      spending: 'merge',
+    });
+    const undo = async () => {
+      const plan = planUndo(snapshot, journal, install.shape());
+      await applyUndo({ plan, signIns: [], shape: install.shape(), target: install.target, takeOver: takeOver.ports, actor: 'alex@example.test', journal });
+    };
+    return { install, comparison, report, undo };
+  }
+
+  it('is one item with the address and taken with it: the backup’s own tunnel comes back as one the bridge raised, and Undo puts both back', async () => {
+    const { install, comparison, undo } = await restoreAddress({ publicUrl: BACKUP_TUNNEL, webhookMode: 'tunnel' });
+
+    expect(itemsOf(comparison).some((one) => one.key === 'setting:webhookMode')).toBe(false);
+    expect(find(comparison, 'setting:publicUrl')).toMatchObject({
+      state: 'different',
+      differences: [`${HERE} here, ${BACKUP_TUNNEL} in the backup`, 'an address a person gave here, a tunnel OpenADLC raised in the backup'],
+    });
+    expect(install.state().settings).toMatchObject({ publicUrl: BACKUP_TUNNEL, webhookMode: 'tunnel' });
+
+    await undo();
+    expect(install.state().settings).toMatchObject({ publicUrl: HERE, webhookMode: 'address' });
+  });
+
+  it('is different when only who made it differs', () => {
+    const install = installHere();
+    const contents = archive();
+    Object.assign(contents.settings, { publicUrl: HERE, webhookMode: 'tunnel' });
+
+    const comparison = compareInstall({ contents, here: install.view(), signIns: [], historyHere: null });
+
+    expect(find(comparison, 'setting:publicUrl')).toMatchObject({
+      state: 'different',
+      differences: ['an address a person gave here, a tunnel OpenADLC raised in the backup'],
+    });
+  });
+
+  it('clears this install’s mode beside an address from a backup older than the mode, as an overwrite Undo puts back', async () => {
+    const { install, report, undo } = await restoreAddress({ publicUrl: BACKUP_TUNNEL });
+
+    expect(report.plan.settings.overwrite).toContain('webhookMode');
+    expect(install.state().settings.publicUrl).toBe(BACKUP_TUNNEL);
+    expect(install.state().settings).not.toHaveProperty('webhookMode');
+
+    await undo();
+    expect(install.state().settings).toMatchObject({ publicUrl: HERE, webhookMode: 'address' });
+  });
+
+  it('keeps this install’s mode when a backup older than the mode has the same address', async () => {
+    // Cleared beside its own address, a person's quick tunnel marked as theirs
+    // was read as the bridge's again, and replaced at the next start.
+    const install = installHere();
+    const contents = archive();
+    contents.settings.publicUrl = HERE;
+    const choices = defaultSignInChoices([], 'running');
+
+    expect(previewRestore({ contents, shape: install.shape(), signIns: [], choices }).plan.settings.overwrite).not.toContain('webhookMode');
+    await runRestore({
+      contents,
+      shape: install.shape(),
+      signIns: [],
+      choices,
+      target: install.target,
+      takeOver: fakeTakeOver({ logins: REFRESH_LOGINS }).ports,
+      actor: 'alex@example.test',
+    });
+
+    expect(install.state().settings).toMatchObject({ publicUrl: HERE, webhookMode: 'address' });
+  });
+
+  it('clears it in a restore of the whole archive over this install too, as `openadlc restore` makes one', async () => {
+    const install = installHere();
+    const contents = archive();
+    contents.settings.publicUrl = BACKUP_TUNNEL;
+    const choices = defaultSignInChoices([], 'running');
+
+    expect(previewRestore({ contents, shape: install.shape(), signIns: [], choices }).plan.settings.overwrite).toContain('webhookMode');
+    await runRestore({
+      contents,
+      shape: install.shape(),
+      signIns: [],
+      choices,
+      target: install.target,
+      takeOver: fakeTakeOver({ logins: REFRESH_LOGINS }).ports,
+      actor: 'alex@example.test',
+    });
+
+    expect(install.state().settings.publicUrl).toBe(BACKUP_TUNNEL);
+    expect(install.state().settings).not.toHaveProperty('webhookMode');
   });
 });
 

@@ -62,6 +62,12 @@ vi.mock('@openadlc/db', () => ({
       if (value === '') delete STORED[key];
       else STORED[key] = value;
     }),
+    setSettings: vi.fn(async (values: Record<string, string>) => {
+      for (const [key, value] of Object.entries(values)) {
+        if (value === '') delete STORED[key];
+        else STORED[key] = value;
+      }
+    }),
   },
   tasks: {},
   threads: {},
@@ -180,6 +186,8 @@ describe('the app the walkthrough creates', () => {
     expect(raised).toBe(1);
     expect(prepared.manifest.hook_attributes).toEqual({ url: `${TUNNEL}/webhooks/github`, active: true });
     expect(STORED.publicUrl).toBe(TUNNEL);
+    // As one the bridge raised, which it raises again at every start.
+    expect(STORED.webhookMode).toBe('tunnel');
     expect(prepared.postUrl).toMatch(/^https:\/\/github\.com\/settings\/apps\/new\?state=[0-9a-f]{64}$/);
   });
 

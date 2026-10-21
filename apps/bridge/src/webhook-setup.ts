@@ -16,7 +16,7 @@ import {
 } from '@openadlc/github';
 import { appSettingsUrl, PLACEHOLDER_HOOK_URL } from '@openadlc/shared';
 import type { BridgeConfig } from './config.js';
-import { effectiveConfig, storeWebhookSecret } from './effective-config.js';
+import { effectiveConfig, storeWebhookSecret, type EffectiveConfig } from './effective-config.js';
 import { APP_API } from './invitation-service.js';
 import { TunnelKeeper, type Spawner, type TunnelState } from './tunnel.js';
 import { readUnheard, type Unheard } from './unheard.js';
@@ -44,6 +44,9 @@ import { startWebhookGateway, type WebhookGateway } from './webhook-gateway.js';
  */
 
 export type SetupMode = 'tunnel' | 'address';
+
+/** The stored address, and who made it. */
+type StoredAddress = Pick<EffectiveConfig, 'publicUrl' | 'webhookMode'>;
 
 /** What the app about to be created will have for a webhook address; see `addressForNewApp`. */
 export type NewAppAddress = 'have' | 'tunnel' | 'none';
@@ -247,9 +250,9 @@ export interface WebhookStatus {
   watch: TunnelWatch;
   /**
    * A quick tunnel's address dies with the process that raised it. When the
-   * stored address is one of those and no tunnel is running, the install looks
-   * configured and receives nothing — so it is said outright rather than shown
-   * as green.
+   * stored address is one this bridge raised and no tunnel is running, the
+   * install looks configured and receives nothing — so it is said outright
+   * rather than shown as green.
    */
   stale: boolean;
   /**
@@ -283,6 +286,25 @@ export interface WebhookSetupDeps {
 /** A quick tunnel's hostname, which is the shape that goes stale. */
 function isQuickTunnel(url: string): boolean {
   return /\.trycloudflare\.com/i.test(url);
+}
+
+/**
+ * Whether the stored address is a quick tunnel this bridge raised: the only
+ * kind `resume()` raises again at start, the watch replaces, a take-down
+ * forgets, and a status calls stopped when no tunnel runs behind it. Said by
+ * the mode stored beside it. Going by the address alone, a quick tunnel a
+ * person runs themselves and gave as a fixed address was replaced at every
+ * restart, and called stopped until it was.
+ *
+ * An install from before the mode was stored has none, nor has an address
+ * restored from a backup made then: a quick tunnel's address is then read as
+ * this bridge's own, as it was before. One from the environment is always a
+ * person's (`effectiveConfig`). `tunnel` beside any other address is a row
+ * out of step with it, not a tunnel to raise again: this bridge raises only
+ * quick tunnels.
+ */
+function raisedHere(live: StoredAddress): boolean {
+  return isQuickTunnel(live.publicUrl) && live.webhookMode !== 'address';
 }
 
 /** Whether `cloudflared` is on the PATH, without starting it to find out. */
@@ -384,7 +406,7 @@ export class WebhookSetup {
    */
   async localReadiness(): Promise<{ ready: boolean; stale: boolean }> {
     const live = await effectiveConfig(this.deps.config);
-    const stale = this.tunnelStopped(live.publicUrl);
+    const stale = this.tunnelStopped(live);
     return {
       ready: Boolean(live.publicUrl) && live.webhookSecretConfigured && !stale,
       stale,
@@ -438,6 +460,7 @@ export class WebhookSetup {
     const status: WebhookStatus = {
       ...this.describe({
         publicUrl: live.publicUrl,
+        webhookMode: live.webhookMode,
         secretStored: live.webhookSecretConfigured,
         github,
         canAutomate: credentials !== null,
@@ -473,8 +496,7 @@ export class WebhookSetup {
     }
   }
 
-  private describe(input: {
-    publicUrl: string;
+  private describe(input: StoredAddress & {
     secretStored: boolean;
     github: AppWebhook | null;
     canAutomate: boolean;
@@ -484,7 +506,7 @@ export class WebhookSetup {
   }): Omit<WebhookStatus, 'lastDelivery' | 'settingsUrl'> {
     const tunnel = this.tunnelState();
     const webhookUrl = input.publicUrl ? `${input.publicUrl.replace(/\/$/, '')}/webhooks/github` : '';
-    const stale = this.tunnelStopped(input.publicUrl);
+    const stale = this.tunnelStopped(input);
     const pointedHere = Boolean(webhookUrl) && input.github?.url === webhookUrl;
     const configured = pointedHere && input.secretStored && Boolean(input.github?.secretSet) && !stale;
     const hearing: Hearing = !input.deliveriesRead
@@ -506,7 +528,7 @@ export class WebhookSetup {
       hearing,
       unreached: unreachedHere,
       revived: this.revived,
-      watch: this.watchState(input.publicUrl),
+      watch: this.watchState(input),
       unheard: input.unheard,
       placeholderHook: input.github?.url === PLACEHOLDER_HOOK_URL,
       publicUrl: input.publicUrl,
@@ -627,7 +649,9 @@ export class WebhookSetup {
       overtaken();
     }
 
-    await settings.setSetting('publicUrl', publicUrl, 'openadlc');
+    // With who made it, in one write (`setSettings`): what `resume()` raises
+    // again at the next start goes by it, and never by the address alone.
+    await settings.setSettings({ publicUrl, webhookMode: input.mode }, 'openadlc');
     await storeWebhookSecret(secret, 'openadlc');
     this.ours = input.mode === 'tunnel' ? publicUrl : null;
 
@@ -676,10 +700,12 @@ export class WebhookSetup {
   }
 
   /**
-   * A person taking the install off the internet, which lasts: the quick
-   * tunnel's address is forgotten as well, or `resume()` raised a new tunnel
-   * for it at the next start and the install was back on the internet without
-   * anyone asking. A fixed address is left, since nothing raises it.
+   * A person taking the install off the internet, which lasts: the address of
+   * the tunnel this bridge raised is forgotten as well, with its mode, or
+   * `resume()` raised a new tunnel for it at the next start and the install
+   * was back on the internet without anyone asking. An address a person gave
+   * is left with its mode, a quick tunnel of their own among them, since
+   * nothing here raises it.
    *
    * Stopped at once, and again in its turn: a change already under way — a
    * revive raising its tunnel — finishes first and would leave one running.
@@ -692,16 +718,19 @@ export class WebhookSetup {
       this.ours = null;
       this.keeper.stop();
       const live = await effectiveConfig(this.deps.config);
-      if (isQuickTunnel(live.publicUrl)) await settings.setSetting('publicUrl', '', 'openadlc');
+      if (raisedHere(live)) await settings.setSettings({ publicUrl: '', webhookMode: '' }, 'openadlc');
     });
     return this.status();
   }
 
-  /** The address this install answers on now, or null: none, or a quick tunnel's that died with it. */
-  private liveAddress(publicUrl: string): string | null {
-    if (!publicUrl) return null;
-    if (isQuickTunnel(publicUrl) && !this.keeper.state().running) return null;
-    return publicUrl;
+  /**
+   * The address this install answers on now, or null: none, or a quick tunnel
+   * this bridge raised that died with it. A person's own is theirs to keep up.
+   */
+  private liveAddress(live: StoredAddress): string | null {
+    if (!live.publicUrl) return null;
+    if (raisedHere(live) && !this.keeper.state().running) return null;
+    return live.publicUrl;
   }
 
   /**
@@ -711,7 +740,7 @@ export class WebhookSetup {
    */
   async newAppAddress(): Promise<NewAppAddress> {
     const live = await effectiveConfig(this.deps.config);
-    if (this.liveAddress(live.publicUrl)) return 'have';
+    if (this.liveAddress(live)) return 'have';
     return (this.deps.hasCloudflared ?? cloudflaredOnPath)() ? 'tunnel' : 'none';
   }
 
@@ -734,15 +763,16 @@ export class WebhookSetup {
   addressForNewApp(): Promise<string | null> {
     return this.exclusive(async () => {
       const live = await effectiveConfig(this.deps.config);
-      const standing = this.liveAddress(live.publicUrl);
+      const standing = this.liveAddress(live);
       if (standing) return standing;
       if (!(this.deps.hasCloudflared ?? cloudflaredOnPath)()) return null;
 
       const publicUrl = await this.raiseTunnel();
-      // Stored as this install's address, which is what `resume()` raises a new
-      // tunnel for and repoints the app to on every start. The secret is not
-      // made here: GitHub generates the webhook's, and the code exchange stores it.
-      await settings.setSetting('publicUrl', publicUrl, 'openadlc');
+      // Stored as this install's address, and as one this bridge raised: what
+      // `resume()` raises a new tunnel for and repoints the app to on every
+      // start. The secret is not made here: GitHub generates the webhook's,
+      // and the code exchange stores it.
+      await settings.setSettings({ publicUrl, webhookMode: 'tunnel' }, 'openadlc');
       this.ours = publicUrl;
       return publicUrl;
     });
@@ -755,10 +785,11 @@ export class WebhookSetup {
    * it. Nothing raised it again, so every restart — a reboot, `openadlc up` —
    * left GitHub delivering to a dead address until someone came back to the
    * webhook step and pressed a button. When the stored address is a quick
-   * tunnel's and OpenADLC can speak as the app, a new tunnel is raised and the
-   * app's hook repointed at it, keeping the secret. An install on a fixed
-   * address, one whose app key OpenADLC does not hold, or one without cloudflared
-   * is left as it is, and the step still says what it would need.
+   * tunnel this bridge raised (`raisedHere`) and OpenADLC can speak as the app,
+   * a new tunnel is raised and the app's hook repointed at it, keeping the
+   * secret. An install on an address a person gave, a quick tunnel of their
+   * own among them, one whose app key OpenADLC does not hold, or one without
+   * cloudflared is left as it is, and the step still says what it would need.
    */
   async resume(): Promise<WebhookStatus | null> {
     // Set before the first await, so a check that runs while the tunnel is
@@ -767,7 +798,7 @@ export class WebhookSetup {
     try {
       return await this.exclusive(async () => {
         const live = await effectiveConfig(this.deps.config);
-        if (!isQuickTunnel(live.publicUrl) || this.keeper.state().running) return null;
+        if (!raisedHere(live) || this.keeper.state().running) return null;
         if (!(this.deps.hasCloudflared ?? cloudflaredOnPath)()) return null;
         if (!(await this.appCredentials())) return null;
         // Taken back as this bridge's own, so the watch raises it again when
@@ -871,7 +902,8 @@ export class WebhookSetup {
 
   /**
    * Raises a new tunnel for `dead`, in its turn, when nothing changed while it
-   * waited: not the generation, the stored address, or what the keeper runs.
+   * waited: not the generation, the stored address or who made it, or what the
+   * keeper runs.
    */
   private async revive(attempt: { dead: string; serving: string | null; tried: boolean; generation: number; now: number }): Promise<TunnelRevival | null> {
     const { dead, serving, now } = attempt;
@@ -886,7 +918,7 @@ export class WebhookSetup {
 
     const live = await effectiveConfig(this.deps.config);
     const tunnel = this.keeper.state();
-    if (!still() || live.publicUrl !== dead || (tunnel.running ? tunnel.url : null) !== serving) return null;
+    if (!still() || live.publicUrl !== dead || !raisedHere(live) || (tunnel.running ? tunnel.url : null) !== serving) return null;
     // What `resume()` needs at start, and the secret already stored: the
     // hook is repointed with the one GitHub signs with now, never a new one.
     if (!(this.deps.hasCloudflared ?? cloudflaredOnPath)() || !live.webhookSecret) return hold('not-possible');
@@ -953,13 +985,17 @@ export class WebhookSetup {
     if (this.revived) this.notBefore = Math.min(this.notBefore, Date.parse(this.revived.at) + REVIVE_WAIT_MS);
   }
 
-  /** What the status says of the watch, for `publicUrl`. */
-  private watchState(publicUrl: string): TunnelWatch {
+  /**
+   * What the status says of the watch, for the stored address. Kept only while
+   * the stored mode still says this bridge raised it: a restore marking the
+   * running tunnel's address as a person's left the status saying it kept it.
+   */
+  private watchState(live: StoredAddress): TunnelWatch {
     const tunnel = this.keeper.state();
     const probed = tunnel.running && this.probed?.url === tunnel.url ? this.probed : null;
     const until = Math.max(this.notBefore, this.holdUntil);
     return {
-      keeps: this.ours !== null && this.ours === publicUrl,
+      keeps: this.ours !== null && this.ours === live.publicUrl && raisedHere(live),
       answered: probed?.answered ?? false,
       failingSince: probed?.failingSince != null ? new Date(probed.failingSince).toISOString() : null,
       held: this.held,
@@ -977,12 +1013,14 @@ export class WebhookSetup {
   private resuming = false;
 
   /**
-   * A quick tunnel's address with no tunnel behind it. Not while the bridge is
-   * raising it again at start: that is a tunnel coming back, not one that
-   * stopped.
+   * The address of a quick tunnel this bridge raised, with no tunnel behind
+   * it. Not while the bridge is raising it again at start: that is a tunnel
+   * coming back, not one that stopped. Never a person's own, whose cloudflared
+   * this bridge cannot see: GitHub's deliveries say whether it reaches here
+   * (`unreached`, and the webhook check).
    */
-  private tunnelStopped(publicUrl: string): boolean {
-    return isQuickTunnel(publicUrl) && !this.keeper.state().running && !this.resuming;
+  private tunnelStopped(live: StoredAddress): boolean {
+    return raisedHere(live) && !this.keeper.state().running && !this.resuming;
   }
 
   /** So a tunnel does not outlive the bridge that raised it. */

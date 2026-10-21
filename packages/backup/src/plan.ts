@@ -27,6 +27,12 @@ import {
 export interface InstallShape {
   secretRefs: string[];
   settingKeys: string[];
+  /**
+   * The webhook's address the settings table holds, so a restore can tell
+   * whether an archive's is the same one (`withAddressMode`). Absent when it
+   * holds none, or in a shape read before this was kept.
+   */
+  publicUrl?: string;
   bots: { name: string; slot: string; githubLogin: string | null; engine?: string; color?: string | null; avatar?: string | null }[];
   /** Repository names. Absent in a shape read before repositories were restored. */
   repositories?: string[];

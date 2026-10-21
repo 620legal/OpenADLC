@@ -574,6 +574,7 @@ export function memoryInstall(initial: Partial<MemoryState> = {}) {
   const shape = (): InstallShape => ({
     secretRefs: Object.keys(state.secrets),
     settingKeys: Object.keys(state.settings),
+    ...(state.settings.publicUrl !== undefined ? { publicUrl: state.settings.publicUrl } : {}),
     bots: state.bots.map((bot) => ({
       name: bot.name,
       slot: bot.slot,

@@ -51,6 +51,16 @@ export interface EffectiveConfig {
   /** Accounts an admin allowed beyond those the install works in already, lower-cased; see `app-reach.ts`. */
   allowedAccounts: string[];
   publicUrl: string;
+  /**
+   * Who made `publicUrl`, as the webhook step stored it beside it: a quick
+   * tunnel this bridge raised, or an address a person gave. Always `address`
+   * for one from the environment: install.json and `OPENADLC_PUBLIC_URL` hold
+   * only what a person wrote there, and a quick tunnel of their own given
+   * there had no mode and was replaced at every start. Null for a stored
+   * address from before the mode was stored; `webhook-setup.ts` says what
+   * that is read as.
+   */
+  webhookMode: 'tunnel' | 'address' | null;
   /** The address the bots' own addresses are suggested from. */
   operatorEmail: string;
   clientIdConfigured: boolean;
@@ -104,6 +114,14 @@ export async function effectiveConfig(config: BridgeConfig): Promise<EffectiveCo
       .map((entry) => entry.trim().toLowerCase())
       .filter(Boolean),
     publicUrl: stored.publicUrl ?? config.publicUrl,
+    webhookMode:
+      stored.publicUrl === undefined
+        ? config.publicUrl
+          ? 'address'
+          : null
+        : stored.webhookMode === 'tunnel' || stored.webhookMode === 'address'
+          ? stored.webhookMode
+          : null,
     operatorEmail: stored.operatorEmail ?? '',
     clientIdConfigured: clientId.length > 0,
     webhookSecretConfigured: webhookSecret.length > 0,

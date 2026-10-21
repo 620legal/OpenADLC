@@ -11,6 +11,7 @@ import {
   spendingAmount,
   spendingCapKey,
   spendingCapName,
+  withAddressMode,
   type InstallSnapshot,
 } from './contents.js';
 import { ADD_THE_SEAT, archivedIdentities, archivedSeat } from './plan.js';
@@ -93,7 +94,7 @@ export interface HistoryHere {
 const SETTING_LABELS: Record<string, string> = {
   organization: 'The organization',
   operatorEmail: 'The operator’s email',
-  publicUrl: 'The public address',
+  publicUrl: 'The public address, and who made it',
   humans: 'The people who may approve',
   automationBot: 'The automation account',
   engineUpdates: 'Weekly engine updates',
@@ -131,6 +132,20 @@ const STRUCTURED_SETTINGS = new Set([
 
 /** The App's parts, which are taken or kept together: one app's client id with another's key is neither. */
 const APP_SETTINGS = ['githubClientId', 'webhookSecret', 'appPrivateKey'];
+
+/**
+ * Settings compared and taken in another's item. Who made the webhook's
+ * address goes with the address: taken apart, the backup's own tunnel came
+ * back beside this install's `address`, and the bridge never raised it again.
+ */
+const TAKEN_WITH: Record<string, string> = { webhookMode: 'publicUrl' };
+
+/** Who made the webhook's address, as a comparison says it. */
+function madeBy(mode: string | undefined): string {
+  if (mode === 'tunnel') return 'a tunnel OpenADLC raised';
+  if (mode === 'address') return 'an address a person gave';
+  return 'not said';
+}
 
 /**
  * Settings shown by value when they differ. The App's own are compared in its
@@ -231,7 +246,7 @@ function compareInstallGroup(contents: BackupContents, here: InstallSnapshot): C
   }
 
   for (const key of Object.keys(contents.settings).sort()) {
-    if (APP_SETTINGS.includes(key)) continue;
+    if (APP_SETTINGS.includes(key) || TAKEN_WITH[key]) continue;
     // A backup from before these were left out can still carry this machine's
     // update state; it is not offered, and the schedules are compared without
     // their slots, which differ between any two machines.
@@ -254,20 +269,20 @@ function compareInstallGroup(contents: BackupContents, here: InstallSnapshot): C
     }
     const stored = here.settings[key];
     const current = stored === undefined || stored === '' ? stored : (archivedSetting(key, stored) ?? undefined);
-    const state: ItemState = current === undefined || current === '' ? 'new' : current === archive ? 'same' : 'different';
-    items.push(
-      item({
-        key: `setting:${key}`,
-        group: 'install',
-        label,
-        state,
-        differences:
-          state === 'different' ? [PLAIN_SETTINGS.has(key) ? `${current} here, ${archive} in the backup` : 'the backup’s is another one'] : [],
-      }),
-    );
+    let state: ItemState = current === undefined || current === '' ? 'new' : current === archive ? 'same' : 'different';
+    const differences =
+      state === 'different' ? [PLAIN_SETTINGS.has(key) ? `${current} here, ${archive} in the backup` : 'the backup’s is another one'] : [];
+    // The same address made another way is not the same. An archive from
+    // before the mode was stored says nothing of it, and the mode here stands
+    // beside the same address (`withAddressMode` clears it beside another).
+    if (key === 'publicUrl' && state !== 'new' && contents.settings.webhookMode !== undefined && contents.settings.webhookMode !== here.settings.webhookMode) {
+      state = 'different';
+      differences.push(`${madeBy(here.settings.webhookMode)} here, ${madeBy(contents.settings.webhookMode)} in the backup`);
+    }
+    items.push(item({ key: `setting:${key}`, group: 'install', label, state, differences }));
   }
   for (const key of Object.keys(here.settings).sort()) {
-    if (APP_SETTINGS.includes(key) || contents.settings[key] !== undefined || !SETTING_LABELS[key]) continue;
+    if (APP_SETTINGS.includes(key) || TAKEN_WITH[key] || contents.settings[key] !== undefined || !SETTING_LABELS[key]) continue;
     items.push(item({ key: `setting:${key}`, group: 'install', label: SETTING_LABELS[key] as string, state: 'only-here' }));
   }
 
@@ -757,12 +772,14 @@ export function chosenArchive(input: {
   const { contents, here, comparison, choices } = input;
   const take = (key: string) => taken(comparison, choices, key);
 
-  const settings: Record<string, string> = {};
+  const taking: Record<string, string> = {};
   for (const [key, value] of Object.entries(contents.settings)) {
     const archived = archivedSetting(key, value);
     if (archived === null) continue;
-    if (APP_SETTINGS.includes(key) ? take('app') : take(`setting:${key}`)) settings[key] = archived;
+    if (APP_SETTINGS.includes(key) ? take('app') : take(`setting:${TAKEN_WITH[key] ?? key}`)) taking[key] = archived;
   }
+  // In the journal Undo reads, so a mode this clears is put back.
+  const settings = withAddressMode(taking, { settingKeys: Object.keys(here.settings), publicUrl: here.settings.publicUrl });
 
   const secrets: Record<string, string> = {};
   const keep = (ref: string) => {

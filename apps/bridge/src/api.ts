@@ -2331,6 +2331,13 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       // The bridge's own: written from GitHub's answer when humans is saved,
       // so a login is never pinned to an account somebody typed in.
       if (key === 'humanIds') throw new HttpFailure(400, 'humanIds is kept by the bridge: it pins each of humans to its GitHub account when humans is saved');
+      // Who made the webhook's address, which says whether the bridge raises
+      // it again at start: `tunnel` written beside a person's own quick
+      // tunnel had it replaced, and `address` beside the bridge's had it never
+      // raised again. The step that makes the address writes it.
+      if (key === 'webhookMode') {
+        throw new HttpFailure(400, 'webhookMode is kept by the webhook step: set the address with POST /v1/webhook/configure, which says whether OpenADLC raises a tunnel for it');
+      }
       // Allowed one at a time, after its warning, and audited by name.
       if (key === 'allowedAccounts') throw new HttpFailure(400, 'an account is allowed with POST /v1/github/allowed-accounts, which says what allowing it means');
       // Written here it would skip the gate and the audit trail: the live
@@ -2403,6 +2410,15 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
           throw new HttpFailure(400, `“${value.trim()}” is not a GitHub login: give the organization or account name alone, such as acme, with no repository, spaces or @`);
         }
         await settings.setSetting(key, login, identity);
+        written.push(key);
+        continue;
+      }
+      if (key === 'publicUrl') {
+        // An address given here is a person's, and the mode of the one before
+        // is not left beside it: a tunnel's `tunnel` beside a quick tunnel of
+        // their own had the next start replace it. Cleared with it when empty.
+        const address = value.trim();
+        await settings.setSettings({ publicUrl: address, webhookMode: address ? 'address' : '' }, identity);
         written.push(key);
         continue;
       }
