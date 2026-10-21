@@ -1269,6 +1269,33 @@ describe('what Claude may run', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('gives a shell command ten minutes by default, whatever the session or the parent environment says', async () => {
+    // Claude Code's own default is two minutes. On #22 it sent openadlc-ci to
+    // the background mid-run, the builder ended its turn to wait, and the
+    // session ended with make ci still running. Nothing hands a session these
+    // today, as it starts under `env -i`; a lower value in its environment or
+    // the runner's would do the same, so neither wins.
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-claude-timeout-'));
+    vi.stubEnv('BASH_DEFAULT_TIMEOUT_MS', '120000');
+    vi.stubEnv('BASH_MAX_TIMEOUT_MS', '120000');
+    try {
+      const record = join(dir, 'call.json');
+      const result = { type: 'result', subtype: 'success', is_error: false, result: 'ok', usage: {}, total_cost_usd: 0 };
+      await runAll(new ClaudeEngine(fakeGrok(dir, [JSON.stringify(result)])), {
+        workdir: dir,
+        env: { FAKE_GROK_RECORD: record, BASH_DEFAULT_TIMEOUT_MS: '60000', BASH_MAX_TIMEOUT_MS: '300000' },
+      });
+      const { env } = readCall(record);
+      expect(env.BASH_DEFAULT_TIMEOUT_MS).toBe('600000');
+      expect(env.BASH_MAX_TIMEOUT_MS).toBe('600000');
+      // Longer than the step openadlc-ci waits before it hands back (WAIT_MS).
+      expect(Number(env.BASH_DEFAULT_TIMEOUT_MS)).toBeGreaterThan(8 * 60_000);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('the files given with the work', () => {
@@ -1355,6 +1382,8 @@ function fakeGrok(dir: string, lines: string[], stderr = '', exitCode = 0): stri
     '    args,',
     '    cwd: process.cwd(),',
     '    env: {',
+    '      BASH_DEFAULT_TIMEOUT_MS: process.env.BASH_DEFAULT_TIMEOUT_MS,',
+    '      BASH_MAX_TIMEOUT_MS: process.env.BASH_MAX_TIMEOUT_MS,',
     '      DISABLE_AUTOUPDATER: process.env.DISABLE_AUTOUPDATER,',
     '      GROK_DISABLE_AUTOUPDATER: process.env.GROK_DISABLE_AUTOUPDATER,',
     '      GROK_FEEDBACK_ENABLED: process.env.GROK_FEEDBACK_ENABLED,',
@@ -1630,6 +1659,11 @@ describe('the grok engine', () => {
     // exact environment asserted below then failed on every branch where the
     // checks ran in either.
     vi.stubEnv('DISABLE_AUTOUPDATER', undefined);
+    // The fake records Claude Code's shell timeouts too, for the Claude
+    // engine, and whoever runs these checks may have them set for their own
+    // Claude Code.
+    vi.stubEnv('BASH_DEFAULT_TIMEOUT_MS', undefined);
+    vi.stubEnv('BASH_MAX_TIMEOUT_MS', undefined);
   });
 
   afterEach(() => {

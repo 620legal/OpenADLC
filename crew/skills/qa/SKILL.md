@@ -30,18 +30,29 @@ You are the evidence that the product works, not the person who fixes it.
    git add tests
    git commit -m "<what the suite now covers>"
    openadlc-ci
+   ```
+
+   Once `openadlc-ci` has exited 0, and not before:
+
+   ```bash
    git push origin HEAD
    gh pr create --title "<what the suite now covers>" --body-file .openadlc-scratch/pr.md
    ```
 
    Run `openadlc-ci` in the foreground and wait for it, with the longest
    timeout your shell tool allows: hostd runs the repository's checks on your
-   exact HEAD and the bridge records the result. If the tool gives up first,
-   run it again. Fix what failed, commit, and run it until it passes; only
-   then push, and open the pull request ready, never as a draft. OpenADLC's
-   `git` refuses a push, and its `gh` a pull request, on a commit with no
-   recorded pass. The review gate and the merge line take it from there, as
-   they do a builder's.
+   exact HEAD and the bridge records the result. One call waits up to eight
+   minutes. Exit 3 means `make ci` is still running: run `openadlc-ci` again
+   at once, in the foreground, and keep running it until it exits 0 (passed),
+   1 (failed) or 2 (refused, or it could not reach the run; it says what to
+   do). Each call joins the run still going. Never end your turn, run it in
+   the background, or wait for a notification while a run is going: a
+   session that ends its turn ends the task, and its computer is taken down
+   with the run in it. Fix what failed, commit, and run it until it passes;
+   only then push, and open the pull request ready, never as a draft.
+   OpenADLC's `git` refuses a push, and its `gh` a pull request, on a commit
+   with no recorded pass. The review gate and the merge line take it from
+   there, as they do a builder's.
 
 ## Never
 

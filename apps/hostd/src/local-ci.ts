@@ -111,8 +111,14 @@ export class LocalCiRefused extends Error {
   readonly status = 409;
 }
 
+/**
+ * A run as hostd holds it: what it is waiting on, and until when it may still
+ * be in a command hostd started for it (see `start`).
+ */
+type HeldRun = LocalCiRun & { done: Promise<void>; deadlineAt: number };
+
 export class LocalCi {
-  private readonly runs = new Map<string, LocalCiRun & { done: Promise<void> }>();
+  private readonly runs = new Map<string, HeldRun>();
 
   constructor(
     private readonly driver: Pick<ExecDriver, 'exec'>,
@@ -133,16 +139,19 @@ export class LocalCi {
    * Starts a run for a task, or answers the one already going for it: two
    * `make ci` at once in one worktree share its build output and its database.
    * Only while it is within its deadline: one past it has been killed, so a
-   * new run cannot share the worktree with it.
+   * new run cannot share the worktree with it. The deadline is set again
+   * before each command hostd times (`make setup` in a clean checkout, then
+   * `make ci`). Counted from the run's start, a run whose clone and setup came
+   * first could still be in `make ci` past it, and the next call would start
+   * a second checkout, setup and `make ci` beside it, on the same task
+   * database.
    */
   start(taskId: string): LocalCiRun {
     const target = this.target(taskId);
     if (!target) throw new LocalCiRefused(`task ${taskId} is not running on this host, so there is no worktree to run make ci in`);
     this.forgetOld();
-    const deadline = this.now() - this.timeoutMs - KILL_AFTER_MS;
-    const going = [...this.runs.values()].find(
-      (run) => run.taskId === taskId && run.state === 'running' && Date.parse(run.startedAt) > deadline,
-    );
+    const now = this.now();
+    const going = [...this.runs.values()].find((run) => run.taskId === taskId && run.state === 'running' && now < run.deadlineAt);
     if (going) return view(going);
     const run: LocalCiRun = {
       id: randomUUID(),
@@ -157,7 +166,7 @@ export class LocalCi {
       startedAt: new Date(this.now()).toISOString(),
       finishedAt: null,
     };
-    const entry = Object.assign(run, { done: Promise.resolve() });
+    const entry: HeldRun = Object.assign(run, { done: Promise.resolve(), deadlineAt: this.deadline() });
     this.runs.set(run.id, entry);
     entry.done = this.execute(entry, target).catch((error: unknown) => {
       this.finish(entry, 'refused', { reason: `make ci could not be run: ${error instanceof Error ? error.message : String(error)}` });
@@ -179,7 +188,12 @@ export class LocalCi {
     return view(run);
   }
 
-  private async execute(run: LocalCiRun, target: LocalCiTarget): Promise<void> {
+  /** When a command timed from now has been killed, if it has not finished: its limit, then the kill after it. */
+  private deadline(): number {
+    return this.now() + this.timeoutMs + KILL_AFTER_MS;
+  }
+
+  private async execute(run: HeldRun, target: LocalCiTarget): Promise<void> {
     const before = await this.commit(target, target.worktree);
     if (!before.head) {
       this.finish(run, 'refused', { reason: `could not read HEAD in the worktree: ${before.error}` });
@@ -204,6 +218,7 @@ export class LocalCi {
       await this.cleanCheckout(target, dir, before.head);
       // As task-runner.ts runs it at a task's start; a repository with no
       // such target needs nothing done, so its exit is not the run's.
+      run.deadlineAt = this.deadline();
       await this.driver.exec(target.computer, ['make', '-s', 'setup'], { cwd: dir, env: target.env, timeoutMs: this.timeoutMs });
       return await this.check(run, target, dir, before.head, `ran in a clean checkout of ${before.head.slice(0, 7)}: ${why}\n`);
     } finally {
@@ -212,8 +227,9 @@ export class LocalCi {
   }
 
   /** `make ci` in `dir` on `head`, and the run finished from what it did. */
-  private async check(run: LocalCiRun, target: LocalCiTarget, dir: string, head: string, note: string): Promise<void> {
+  private async check(run: HeldRun, target: LocalCiTarget, dir: string, head: string, note: string): Promise<void> {
     const started = this.now();
+    run.deadlineAt = this.deadline();
     const result = await this.driver.exec(target.computer, LOCAL_CI_COMMAND, { cwd: dir, env: target.env, timeoutMs: this.timeoutMs });
     const durationMs = this.now() - started;
     const logTail = `${note}${`${result.stdout}${result.stderr ? `\n${result.stderr}` : ''}`.slice(-LOG_TAIL_BYTES)}`;
@@ -341,7 +357,7 @@ export class LocalCi {
 }
 
 function view(run: LocalCiRun): LocalCiRun {
-  const { done: _done, ...rest } = run as LocalCiRun & { done?: unknown };
+  const { done: _done, deadlineAt: _deadlineAt, ...rest } = run as LocalCiRun & { done?: unknown; deadlineAt?: unknown };
   return { ...rest };
 }
 

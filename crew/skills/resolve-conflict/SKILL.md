@@ -17,8 +17,16 @@ those files and nothing else: this is not a new round of the work.
    conflict does not involve.
 4. Commit the merge (`git commit --no-edit`). The checks run on a commit, not
    on your working tree: `openadlc-ci` refuses a merge that is not committed yet.
-5. Run `openadlc-ci`. If it fails because of the resolution, fix it, commit,
-   and run it again. If it fails for anything else, stop and ask (below).
+5. Run `openadlc-ci`, in the foreground, with the longest timeout your shell
+   tool allows; one call waits up to eight minutes. Exit 3 means `make ci` is
+   still running: run `openadlc-ci` again at once, in the foreground, and keep
+   running it until it exits 0 (passed), 1 (failed) or 2 (refused, or it
+   could not reach the run; it says what to do). Each call joins the run
+   still going. Never end your turn, run it in the background, or wait for a
+   notification while a run is going: a session that ends its turn ends the
+   task, and its computer is taken down with the run in it. If it fails
+   because of the resolution, fix it, commit, and run it again. If it fails
+   for anything else, stop and ask (below).
 6. Push. Say in your last message which files you resolved and how, one line
    each.
 

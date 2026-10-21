@@ -39,9 +39,15 @@ its comments, the repository's `AGENTS.md` and the code in front of you.
 6. Run `openadlc-ci`, in the foreground, and wait for it. It has hostd run the
    repository's checks (`make ci`) on your exact HEAD and records the result;
    it prints the end of the log and exits 0 only when they passed. Give the
-   command the longest timeout your shell tool allows. If the tool gives up
-   first, run `openadlc-ci` again: it joins the run still going, and answers
-   at once for a HEAD that has already passed. Fix what failed, commit, and
+   command the longest timeout your shell tool allows: one call waits up to
+   eight minutes, and `make ci` can take longer. Exit 3 means `make ci` is
+   still running: run `openadlc-ci` again at once, in the foreground, and keep
+   running it until it exits 0 (passed), 1 (failed) or 2 (refused, or it
+   could not reach the run; it says what to do). Each call joins the run
+   still going, and answers at once for a HEAD that has already passed. Never
+   end your turn, run it in the background, or wait for a notification while
+   a run is going: a session that ends its turn ends the task, and its
+   computer is taken down with the run in it. Fix what failed, commit, and
    run it again until it passes. Nothing else counts:
    OpenADLC's `git` refuses to push a commit with no recorded pass, and its `gh`
    refuses to open or ready a pull request on one. GitHub's CI does not run on

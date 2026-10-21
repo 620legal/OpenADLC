@@ -12,19 +12,49 @@
 // session cannot write one, which is the point.
 //
 // Exit 0: passed and recorded. 1: `make ci` failed. 2: refused, or the run
-// could not be asked for or read; what to do is printed.
+// could not be asked for or read; what to do is printed. 3: still running
+// when this call's wait ran out (8 minutes, or OPENADLC_CI_WAIT_SECONDS), or
+// the bridge did not answer about it in time; run openadlc-ci again, in the
+// foreground, and it joins the same run.
 //
 // Plain Node with no dependencies, like the `gh` beside it.
 import { spawnSync } from 'node:child_process';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const POLL_MS = 5_000;
 /**
- * A little longer than hostd lets `make ci` run (60 minutes unless the install
- * says otherwise), so it is hostd's failed run and its reason that arrive.
+ * How long one call waits for the run before it hands back with exit 3.
+ *
+ * An engine's shell tool holds a command for about ten minutes at most, and
+ * `make ci` in a two-CPU task container takes six to ten, more under load.
+ * This used to wait for the whole run, up to 65 minutes. On #22 the call
+ * outlived the tool twice: it went to the background, the builder ended its
+ * turn to wait for the notification, and a headless session that ends its
+ * turn exits. hostd counted the task done and took its container down with
+ * `make ci` still running (exit 137), and the build was lost. So each call
+ * waits a step that fits inside the tool, and the next call joins the same
+ * run. No call needs a limit of its own beyond the step: hostd stops `make ci`
+ * at its limit, and joins no run past it, so the run being waited on ends.
  */
-const GIVE_UP_MS = 65 * 60 * 1000;
+const WAIT_MS = 8 * 60 * 1000;
+/**
+ * How long one request to the bridge may take. With none, a bridge or a
+ * hostd behind it that never answered would hold the call past its step and
+ * past the shell tool's limit, which is what WAIT_MS is there to prevent.
+ */
+const REQUEST_TIMEOUT_MS = 20_000;
 /** How long a pass is waited for to be recorded after hostd says it passed. */
 const RECORD_WAIT_MS = 30_000;
+/** The last line's second half whenever the run may still be going. */
+const AGAIN = 'Run openadlc-ci again now, in the foreground: it joins this same run. Do not end your turn, or run it in the background, while it runs.';
+
+/** The step from OPENADLC_CI_WAIT_SECONDS, which tests set, or WAIT_MS. */
+function waitMs(env) {
+  const seconds = Number(env.OPENADLC_CI_WAIT_SECONDS);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : WAIT_MS;
+}
 
 /** This worktree's HEAD, or null when it cannot be read. */
 function readHead() {
@@ -33,10 +63,47 @@ function readHead() {
 }
 
 /**
+ * The run a call that exited 3 left going, by task and commit, for the next
+ * call to read first. hostd joins only a run still going, so one that ended
+ * between two calls, failed or stopped at hostd's limit, was started over by
+ * the next: another whole `make ci` on the same commit, to the same end. A
+ * convenience only: a file that cannot be written or read is a call that
+ * starts or joins a run as hostd decides.
+ */
+function leftRun(dir, task, sha) {
+  const file = join(dir, `openadlc-ci-${`${task}-${sha}`.replace(/[^A-Za-z0-9_.-]/g, '_')}`);
+  return {
+    read() {
+      try {
+        return readFileSync(file, 'utf8').trim() || null;
+      } catch {
+        return null;
+      }
+    },
+    keep(id) {
+      try {
+        writeFileSync(file, `${id}\n`, { mode: 0o600 });
+      } catch {}
+    },
+    forget() {
+      try {
+        rmSync(file, { force: true });
+      } catch {}
+    },
+  };
+}
+
+/** Why a request failed, in words: a timeout's own message names no one. */
+function why(error) {
+  if (error?.name === 'TimeoutError') return `the bridge did not answer within ${REQUEST_TIMEOUT_MS / 1000} seconds`;
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
  * Runs local CI for this task and waits for it, printing what happened.
  * Everything it touches is passed in, so it is tested without a bridge.
  */
-export async function runLocalCi({ env = process.env, fetchImpl = globalThis.fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = (line) => process.stdout.write(`${line}\n`), now = Date.now, head = readHead } = {}) {
+export async function runLocalCi({ env = process.env, fetchImpl = globalThis.fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = (line) => process.stdout.write(`${line}\n`), now = Date.now, head = readHead, stateDir = tmpdir() } = {}) {
   const bridge = env.OPENADLC_BRIDGE_URL;
   const task = env.OPENADLC_TASK_ID;
   if (!bridge || !task) {
@@ -48,6 +115,7 @@ export async function runLocalCi({ env = process.env, fetchImpl = globalThis.fet
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(env.OPENADLC_TASK_TOKEN ? { 'x-openadlc-task-token': env.OPENADLC_TASK_TOKEN } : {}) },
       body: JSON.stringify(body ?? {}),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     const text = await response.text();
     let parsed = {};
@@ -58,71 +126,105 @@ export async function runLocalCi({ env = process.env, fetchImpl = globalThis.fet
     return parsed;
   };
 
-  // A shell tool gives up on a long `make ci` long before this does, and the
-  // model runs it again. A run still going is joined below; one that already
-  // passed is finished, and asking for another ran `make ci` again on the same
-  // commit. So a HEAD with a recorded pass is answered from the record, the
-  // one `gh` and `git` read. Not being able to ask is no answer: the run goes
-  // ahead.
+  // A long `make ci` takes several calls (WAIT_MS). A run still going is
+  // joined below; one that already passed, perhaps between two calls, is
+  // finished, and asking for another ran `make ci` again on the same commit.
+  // So a HEAD with a recorded pass is answered from the record, the one `gh`
+  // and `git` read. Not being able to ask is no answer: the run goes ahead.
   const sha = head();
+  const left = sha ? leftRun(stateDir, task, sha) : null;
   if (sha) {
     const recorded = await call('/local-ci/pass', { sha }).catch(() => null);
     if (recorded?.passed === true) {
+      left?.forget();
       log(`openadlc-ci: make ci already passed on ${sha}, recorded; you may push it and open or update the pull request`);
       return 0;
     }
   }
 
-  let run;
-  try {
-    run = (await call('/local-ci')).run;
-  } catch (error) {
-    log(`openadlc-ci: the checks could not be started: ${error instanceof Error ? error.message : error}`);
-    return 2;
-  }
-  log(`openadlc-ci: running make ci on this worktree's HEAD (run ${run.id})`);
+  let run = null;
+  const follow = async () => {
+    // A run the last call left that has ended since is answered from (see
+    // leftRun). One still going is hostd's to join below, or, past its
+    // deadline, to start again.
+    const id = left?.read();
+    if (id) {
+      const status = await call('/local-ci/status', { run: id }).catch(() => null);
+      if (status?.run && status.run.state !== 'running') run = status.run;
+    }
+    if (!run) {
+      try {
+        run = (await call('/local-ci')).run;
+      } catch (error) {
+        log(`openadlc-ci: the checks could not be started: ${why(error)}`);
+        return 2;
+      }
+      log(`openadlc-ci: running make ci on this worktree's HEAD (run ${run.id})`);
+    }
 
-  const started = now();
-  let recordedBy = null;
-  for (;;) {
-    if (now() - started > GIVE_UP_MS) {
-      log('openadlc-ci: gave up waiting for make ci after 65 minutes; run openadlc-ci again once it is fixed to finish sooner');
-      return 2;
+    const started = now();
+    const wait = waitMs(env);
+    let recordedBy = null;
+    for (;;) {
+      let status;
+      try {
+        status = await call('/local-ci/status', { run: run.id });
+      } catch (error) {
+        // The run is known and may well be going; a bridge slow to say so is
+        // no reason to start over, and the next call reads this run first.
+        if (error?.name === 'TimeoutError') {
+          log(`openadlc-ci: ${why(error)} about run ${run.id}, so make ci may still be running. ${AGAIN}`);
+          return 3;
+        }
+        log(`openadlc-ci: could not read the run: ${why(error)}`);
+        return 2;
+      }
+      run = status.run;
+      if (run.state === 'running') {
+        if (now() - started >= wait) {
+          // Counted from when hostd started it, so a joined run says how long
+          // it has really been going; from this call when that cannot be read.
+          const since = Date.parse(run.startedAt);
+          const minutes = Math.round((Number.isFinite(since) && since <= now() ? now() - since : now() - started) / 60_000);
+          log(`openadlc-ci: make ci is still running (run ${run.id}, ${minutes} min so far). ${AGAIN}`);
+          return 3;
+        }
+        await sleep(POLL_MS);
+        continue;
+      }
+      if (run.state === 'refused') {
+        if (run.logTail) log(run.logTail);
+        log(`openadlc-ci: not run — ${run.reason}`);
+        return 2;
+      }
+      if (run.state === 'failed') {
+        log(run.logTail);
+        // hostd stopped it at its limit, and says what to look for.
+        if (run.reason) log(`openadlc-ci: ${run.reason}`);
+        else log(`openadlc-ci: make ci failed (exit ${run.exitCode}) on ${String(run.headSha).slice(0, 7)}; fix it, commit, and run openadlc-ci again`);
+        return 1;
+      }
+      // Passed. hostd tells the bridge, and that write can come a moment after
+      // the run reads as finished here.
+      if (status.recorded) break;
+      recordedBy ??= now() + RECORD_WAIT_MS;
+      if (now() > recordedBy) {
+        log(`openadlc-ci: make ci passed on ${String(run.headSha).slice(0, 7)}, but the bridge has no record of it; run openadlc-ci again`);
+        return 2;
+      }
+      await sleep(POLL_MS);
     }
-    await sleep(POLL_MS);
-    let status;
-    try {
-      status = await call('/local-ci/status', { run: run.id });
-    } catch (error) {
-      log(`openadlc-ci: could not read the run: ${error instanceof Error ? error.message : error}`);
-      return 2;
-    }
-    run = status.run;
-    if (run.state === 'running') continue;
-    if (run.state === 'refused') {
-      if (run.logTail) log(run.logTail);
-      log(`openadlc-ci: not run — ${run.reason}`);
-      return 2;
-    }
-    if (run.state === 'failed') {
-      log(run.logTail);
-      // hostd stopped it at its limit, and says what to look for.
-      if (run.reason) log(`openadlc-ci: ${run.reason}`);
-      else log(`openadlc-ci: make ci failed (exit ${run.exitCode}) on ${String(run.headSha).slice(0, 7)}; fix it, commit, and run openadlc-ci again`);
-      return 1;
-    }
-    // Passed. hostd tells the bridge, and that write can come a moment after
-    // the run reads as finished here.
-    if (status.recorded) break;
-    recordedBy ??= now() + RECORD_WAIT_MS;
-    if (now() > recordedBy) {
-      log(`openadlc-ci: make ci passed on ${String(run.headSha).slice(0, 7)}, but the bridge has no record of it; run openadlc-ci again`);
-      return 2;
-    }
-  }
-  log(run.logTail);
-  log(`openadlc-ci: make ci passed on ${run.headSha}, recorded; you may push it and open or update the pull request`);
-  return 0;
+    log(run.logTail);
+    log(`openadlc-ci: make ci passed on ${run.headSha}, recorded; you may push it and open or update the pull request`);
+    return 0;
+  };
+
+  const code = await follow();
+  // Kept only while the run may still be going: once a call has answered, the
+  // next one is a run of its own, as a builder rerunning a flaky suite means.
+  if (code === 3) left?.keep(run.id);
+  else left?.forget();
+  return code;
 }
 
 if (process.argv[1]?.endsWith('openadlc-ci')) process.exit(await runLocalCi());

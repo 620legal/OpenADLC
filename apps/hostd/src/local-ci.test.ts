@@ -168,6 +168,38 @@ describe('a make ci that does not finish', () => {
     clock += 31 * 60_000 + 30_000;
     expect(ci.start('task-1').id).not.toBe(first.id);
   });
+
+  it('counts that deadline from make ci itself, so a clean checkout’s setup does not let a second run start beside it', async () => {
+    // The deadline ran from the run's start. In a clean checkout the clone
+    // and `make setup` come first, so a run still inside its `make ci` limit
+    // read as past it, and the next start ran a second make ci on the same
+    // task database.
+    let clock = Date.parse('2026-10-04T10:00:00.000Z');
+    const exec = vi.fn(async (_target: unknown, command: string[]) => {
+      // A skip-worktree entry, so the run goes to a clean checkout.
+      if (command.includes('ls-files')) return { code: 0, stdout: 'S Makefile\n', stderr: '' };
+      const proved = proof(command);
+      if (proved) return proved;
+      if (command.includes('rev-parse')) return { code: 0, stdout: 'abc123\n', stderr: '' };
+      if (command.includes('status')) return { code: 0, stdout: '', stderr: '' };
+      if (command.includes('setup')) {
+        clock += 50 * 60_000;
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (command === LOCAL_CI_COMMAND) return new Promise<never>(() => undefined);
+      return { code: 0, stdout: '', stderr: '' };
+    });
+    const ci = new LocalCi({ exec }, () => TARGET, async () => undefined, () => clock, 60 * 60_000);
+
+    const first = ci.start('task-1');
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledWith(TARGET.computer, LOCAL_CI_COMMAND, expect.anything()));
+    // Seventy minutes after the run started, twenty into its make ci.
+    clock += 20 * 60_000;
+    expect(ci.start('task-1').id).toBe(first.id);
+    // Past make ci's own limit and the kill after it.
+    clock += 40 * 60_000 + 30_000;
+    expect(ci.start('task-1').id).not.toBe(first.id);
+  });
 });
 
 describe('the proof that a worktree is its commit’s own tree', () => {
