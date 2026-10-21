@@ -939,6 +939,65 @@ for its shape:
 - **A chain.** Grok runs `a && b` only when every part is allowed, and refuses
   `$(…)`, subshells, loops and `bash -c` whole.
 
+## `openadlc-ci` times out in a stand-in's test, or aborts with exit 134
+
+**What it was.** A builder of OpenADLC itself could not pass `openadlc-ci` in
+its task's computer, though the same `make ci` passed in a clean container.
+hostd runs `make ci` with the session's PATH, OpenADLC's `git` and `pnpm` from
+`/opt/openadlc/bin` first. Four tests in `apps/hostd/src/worktree.test.ts` put
+a stand-in `git` first on PATH and have it run the git they found there before,
+which in a task's computer was OpenADLC's. OpenADLC's `git` took the first git
+on PATH that was not itself, the stand-in, and the two exec'd each other for
+good: the tests timed out at 30 seconds, with `ENOTEMPTY` on
+`…/mirrors/acme__widgets.git.making`. Run in the builder's own session, where a
+skill's rules are set, each pass started one more `git-check.mjs`, until the
+computer's 4096 processes were used up: the engine died of SIGABRT
+(`pthread_create: Resource temporarily unavailable`), and every later `make
+ci` there hung or aborted at `pnpm -r typecheck` with exit 134. OpenADLC's
+`git` and `pnpm` now take only the real tool after them on PATH, and hostd ends
+every process a `make ci` started once it ends (see
+[development.md](development.md), the `make ci` item).
+
+**How to tell.** A computer in that state is near its process limit:
+
+```bash
+docker stats --no-stream --format '{{.Name}} {{.PIDs}}' task-<id8>      # near 4096
+docker top task-<id8> -eo pid,etime,args | grep -c git-check.mjs       # hundreds
+```
+
+**What to do.** Update OpenADLC, then clear the computer without taking the
+task's work down. `docker exec` needs a process slot of its own, so give it
+one for a moment, end the chain, and put the limit back:
+
+```bash
+docker update --pids-limit 8192 task-<id8>
+docker exec task-<id8> sh -c 'for p in /proc/[0-9]*; do case "$(tr "\0" " " < $p/cmdline 2>/dev/null)" in "node /opt/openadlc/bin/git-check.mjs"*) kill -KILL "${p#/proc/}";; esac; done'
+docker update --pids-limit 4096 task-<id8>
+```
+
+Then have the builder run `openadlc-ci` again. A `make ci` that started while
+the computer was full can hang in `pnpm -r typecheck` for good, and the next
+call joins it rather than starting another until it reaches its limit, an hour
+by default. Not to wait, end it: its `timeout` leads a process group that
+holds the run, so end that group, and hostd records the run as one stopped at
+its limit.
+
+```bash
+docker exec task-<id8> sh -c 'for p in /proc/[0-9]*; do case "$(tr "\0" " " < $p/cmdline 2>/dev/null)" in "timeout --kill-after"*) kill -KILL "-${p#/proc/}";; esac; done'
+```
+
+A run that a hostd with this change started is then gone, whatever left the
+group, because hostd ends the rest of its session. One that an older hostd
+started can leave running what left the group, a detached child or a test's
+own `timeout`: list what the computer runs, and end by its pid each process
+of the run's (vitest, tsc, git, a test's `sleep`), never the engine, tmux or
+`bot-init`.
+
+```bash
+docker exec task-<id8> sh -c 'for p in /proc/[0-9]*; do echo "${p#/proc/} $(tr "\0" " " < $p/cmdline 2>/dev/null)"; done'
+docker exec task-<id8> kill -KILL <pid>
+```
+
 ## A card is stuck in a column
 
 Every card has one status line, made from live state — the tasks on it, the

@@ -230,7 +230,8 @@ export class LocalCi {
   private async check(run: HeldRun, target: LocalCiTarget, dir: string, head: string, note: string): Promise<void> {
     const started = this.now();
     run.deadlineAt = this.deadline();
-    const result = await this.driver.exec(target.computer, LOCAL_CI_COMMAND, { cwd: dir, env: target.env, timeoutMs: this.timeoutMs });
+    // Nothing it started outlives it, however it ends (`ExecOptions.reap`).
+    const result = await this.driver.exec(target.computer, LOCAL_CI_COMMAND, { cwd: dir, env: target.env, timeoutMs: this.timeoutMs, reap: true });
     const durationMs = this.now() - started;
     const logTail = `${note}${`${result.stdout}${result.stderr ? `\n${result.stderr}` : ''}`.slice(-LOG_TAIL_BYTES)}`;
 

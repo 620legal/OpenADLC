@@ -4,9 +4,19 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SLOT_FILE, slotRecordPath } from '../worktree.js';
 import { GH_SHIM_DIR } from './base-env.js';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync } from 'node:fs';
-import { docker as runDocker, DockerDriver, probeNetworkArgs, sessionEnvFile, TASK_PIDS_LIMIT, type DockerResult, type TaskDatabaseServer } from './docker.js';
+import {
+  docker as runDocker,
+  DockerDriver,
+  probeNetworkArgs,
+  REAP_SCRIPT,
+  sessionEnvFile,
+  TASK_PIDS_LIMIT,
+  type DockerResult,
+  type DockerRunner,
+  type TaskDatabaseServer,
+} from './docker.js';
 import type { TaskComputerSpec } from './types.js';
 
 /**
@@ -967,6 +977,170 @@ describe('a task’s secrets on their way into its computer', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+/**
+ * `make ci` in a task's computer, run by hostd for `openadlc-ci`. What a
+ * failed run left going outlived it there: a test's git looping, vitest's
+ * workers, a tsc that could not start its threads. It held the computer's
+ * CPU and processes from the next run and from the builder's engine.
+ */
+describe('a make ci that ends in a task’s computer', () => {
+  it('runs under a reaper, outside its deadline, so the reaper is there after the deadline has killed it', async () => {
+    const { calls, answer } = docker();
+    const driver = driverWith(answer);
+    const computer = await driver.acquire(spec());
+
+    await driver.exec(computer, ['make', 'ci'], { cwd: '/work', timeoutMs: 60 * 60_000, reap: true });
+
+    const exec = calls.at(-1)!;
+    expect(exec.slice(exec.indexOf(computer.container!))).toEqual([
+      computer.container,
+      'sh',
+      '-c',
+      REAP_SCRIPT,
+      'openadlc-reap',
+      expect.stringMatching(/^[0-9a-f]{16}$/),
+      'timeout',
+      '--kill-after=30s',
+      '3600s',
+      'make',
+      'ci',
+    ]);
+  });
+
+  /**
+   * A Docker whose `exec` runs the command here, as the container would: for
+   * what the command line does rather than what it says. Linux only, as the
+   * reaper reads /proc and the image has setsid.
+   */
+  function runsHere(): DockerRunner {
+    return async (args) => {
+      if (args[0] !== 'exec') return { code: 0, stdout: '', stderr: '' };
+      let at = 1;
+      let cwd: string | undefined;
+      const env: Record<string, string> = {};
+      for (; args[at]?.startsWith('-'); at++) {
+        if (args[at] === '-w') cwd = args[++at];
+        else if (args[at] === '-e') {
+          const [name, ...value] = (args[++at] ?? '').split('=');
+          env[name!] = value.join('=');
+        } else if (args[at] === '-u') at++;
+      }
+      const [, binary, ...rest] = args.slice(at);
+      const ran = spawnSync(binary!, rest, { cwd, env: { ...process.env, ...env }, encoding: 'utf8', timeout: 60_000 });
+      return { code: ran.status ?? 1, stdout: ran.stdout ?? '', stderr: ran.stderr ?? '' };
+    };
+  }
+
+  const computer = { taskId: TASK, bot: 'atlas', container: 'task-3f2a9c1e', databaseUrl: null, slotDir: '/work', cacheDir: null, repoKey: null };
+
+  /** Whether a process is still there and not only waiting to be reaped. */
+  function alive(pid: number): boolean {
+    try {
+      return !/^\d+ \(.*\) Z /.test(readFileSync(`/proc/${pid}/stat`, 'utf8'));
+    } catch {
+      return false;
+    }
+  }
+
+  it.skipIf(process.platform !== 'linux')(
+    'ends what it left in its own group, in a group of its own and in a session of its own, and keeps its exit status',
+    async () => {
+      const driver = driverWith(runsHere());
+      const left = [
+        // In make ci's own group, as vitest's workers and a test's git are.
+        'sleep 300 & echo $!',
+        // In a group of its own, as coreutils timeout makes one, and without
+        // the run's mark: only its session says it is the run's.
+        'env -u OPENADLC_RUN_MARK timeout 300 sleep 300 & echo $!',
+        // In a session of its own, as a detached Node child is.
+        `node -e "const child = require('node:child_process').spawn('sleep', ['300'], { detached: true, stdio: 'ignore' }); child.unref(); console.log(child.pid)"`,
+        'exit 3',
+      ].join('\n');
+      let pids: number[] = [];
+      try {
+        const result = await driver.exec(computer, ['sh', '-c', left], { cwd: workRoot, timeoutMs: 60_000, reap: true });
+        pids = result.stdout.trim().split('\n').map(Number);
+
+        expect(result.code).toBe(3);
+        expect(result.timedOut).toBeUndefined();
+        expect(pids).toHaveLength(3);
+        await vi.waitFor(() => expect(pids.filter(alive)).toEqual([]), { timeout: 5_000 });
+      } finally {
+        for (const pid of pids) {
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            // Already gone.
+          }
+        }
+      }
+    },
+    30_000,
+  );
+
+  it.skipIf(process.platform !== 'linux' || spawnSync('sh', ['-c', 'command -v prlimit']).status !== 0)(
+    'keeps make ci’s exit status, and still ends what it left, when the computer can start no more processes',
+    async () => {
+      // That is when the reaper is needed most. A fork it tried then failed,
+      // dash gave up with "Cannot fork" and exit 2, and a pass read as a
+      // failure. The command leaves a child in its session, then takes away
+      // the reaper's forks: its process limit, set on the reaper, which is
+      // the parent of the command's `timeout`.
+      const driver = driverWith(runsHere());
+      const left = [
+        'sleep 300 >/dev/null 2>&1 & echo $!',
+        'read -r line < "/proc/$PPID/stat"',
+        'set -- ${line##*") "}',
+        'prlimit --pid "$2" --nproc=1:1',
+        'exit 0',
+      ].join('\n');
+      let pid = 0;
+      try {
+        const result = await driver.exec(computer, ['sh', '-c', left], { cwd: workRoot, timeoutMs: 60_000, reap: true });
+        pid = Number(result.stdout.trim());
+
+        expect(result.stderr).toBe('');
+        expect(result.code).toBe(0);
+        await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5_000 });
+      } finally {
+        if (pid) {
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            // Already gone.
+          }
+        }
+      }
+    },
+    30_000,
+  );
+
+  it.skipIf(process.platform !== 'linux')('ends them after its deadline too, and still says it timed out', async () => {
+    const driver = driverWith(runsHere());
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-reap-'));
+    const pidFile = join(dir, 'pid');
+    let pid = 0;
+    try {
+      // A child in a session of its own, which the deadline's signals to make ci's group never reach.
+      const left = `node -e "require('node:fs').writeFileSync('${pidFile}', String(require('node:child_process').spawn('sleep', ['300'], { detached: true, stdio: 'ignore' }).pid))"; sleep 300`;
+      const result = await driver.exec(computer, ['sh', '-c', left], { cwd: workRoot, timeoutMs: 1_000, reap: true });
+      pid = Number(readFileSync(pidFile, 'utf8'));
+
+      expect(result.timedOut).toBe(true);
+      await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5_000 });
+    } finally {
+      if (pid) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // Already gone.
+        }
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
 
 describe('a Docker daemon that does not answer', () => {

@@ -189,6 +189,15 @@ export interface ExecOptions {
   env?: Record<string, string>;
   /** How long the command may run; see `KILL_AFTER_MS` for what follows. */
   timeoutMs?: number;
+  /**
+   * End every process the command started once it has ended, passed, failed
+   * or timed out. For `make ci`: what a run left going (a test's git
+   * looping, a worker never stopped, a tsc that could not start) ran on in
+   * the task's computer, holding its processes and CPU from the next run
+   * and the builder's engine.
+   * Not for `make setup`, which may start a service the session then uses.
+   */
+  reap?: boolean;
 }
 
 export interface ExecResult {

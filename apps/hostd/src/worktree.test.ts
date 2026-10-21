@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { GH_SHIM_DIR } from './drivers/base-env.js';
 import { gitAuthEnv, readSlotTask, SCRATCH_DIR, SET_ASIDE_DAYS, SET_ASIDE_LOG, SLOT_FILE, setAsideBrief, slotRecordPath, Worktrees, writeSlotTask } from './worktree.js';
 
 const run = promisify(execFile);
@@ -1111,6 +1112,10 @@ describe('the bot’s token and the mirror', () => {
   });
 
   beforeEach(() => {
+    // Run in a builder's session, these had its skill's rules, under which
+    // OpenADLC's git drops an `insteadOf` and the fetch went to GitHub. What
+    // is tested is hostd's own git, which runs with no rules.
+    vi.stubEnv('OPENADLC_TOOLS_POLICY', '');
     root = mkdtempSync(join(tmpdir(), 'openadlc-wt-token-'));
     origin = join(root, 'origin');
     mkdirSync(origin, { recursive: true });
@@ -1184,6 +1189,38 @@ describe('the bot’s token and the mirror', () => {
     const seen = readFileSync(log, 'utf8').split('\n').filter((line) => line.startsWith('low speed:'));
     expect(seen.length).toBeGreaterThan(0);
     expect(new Set(seen)).toEqual(new Set(['low speed: 1000 60']));
+  }, 30_000);
+
+  it('makes the mirror with OpenADLC’s git first on PATH, as hostd runs make ci in a task’s computer', async () => {
+    // There the git these tests found on PATH, and so the one their stand-in
+    // ran, was OpenADLC's own, which took the stand-in for the real git: the
+    // two exec'd each other for good, and these tests timed out in every
+    // task's `make ci`, with ENOTEMPTY on the mirror they were still making.
+    // The stand-in gives up after a few hundred runs, so a loop fails here
+    // rather than running on past the test.
+    const runs = join(root, 'runs');
+    writeFileSync(
+      join(root, 'bin', 'git'),
+      [
+        '#!/bin/sh',
+        `[ -f '${runs}' ] && [ "$(wc -l < '${runs}')" -ge 200 ] && { echo 'the stand-in was run again and again' >&2; exit 97; }`,
+        `printf '%s\\n' "$*" >> '${runs}'`,
+        `exec '${join(GH_SHIM_DIR, 'git')}' "$@"`,
+        '',
+      ].join('\n'),
+    );
+    const rest = (process.env.PATH ?? '').split(':').filter((dir) => dir !== join(root, 'bin') && dir !== GH_SHIM_DIR);
+    vi.stubEnv('PATH', [join(root, 'bin'), GH_SHIM_DIR, ...rest].join(':'));
+
+    const made = await new Worktrees(join(root, 'work')).create(request('task-one'));
+
+    expect(readFileSync(join(made.mirror, 'config'), 'utf8')).toContain(`url = ${REMOTE}`);
+    const seen = readFileSync(runs, 'utf8').split('\n').filter(Boolean);
+    expect(seen.some((line) => line.startsWith('fetch'))).toBe(true);
+    expect(seen.join('\n')).not.toContain(TOKEN);
+    // Each git call ran the stand-in once: none was handed back to it.
+    expect(seen.filter((line, index) => line === seen[index - 1])).toEqual([]);
+    expect(existsSync(`${made.mirror}.making`)).toBe(false);
   }, 30_000);
 
   it('hands git the token in its environment, after what the environment already sets, and only for an https remote', () => {

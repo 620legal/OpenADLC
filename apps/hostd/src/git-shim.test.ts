@@ -1,7 +1,7 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { chmodSync, cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -191,6 +191,68 @@ describe('OpenADLC’s git beside another copy of itself', () => {
       expect(ran.stdout).toMatch(/^git version /);
     } finally {
       rmSync(other, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('OpenADLC’s git behind a stand-in git that runs it', () => {
+  // hostd's worktree tests put a git that writes down what it was asked first
+  // on PATH, and have it run the git they found there before: in a task's
+  // container, this one. This took theirs for the real git and the two exec'd
+  // each other for good, so those tests timed out in every task's `make ci`;
+  // with a skill's rules set, each pass started one more git-check.mjs until
+  // the container could start no process, the builder's engine with it. The
+  // stand-in here gives up after a few runs, so a loop fails at once rather
+  // than filling the machine.
+  it.each([
+    ['with no rules', ''],
+    ['with a skill’s rules set', JSON.stringify(BUILDER)],
+  ])('runs the git after it on PATH, not the stand-in before it, %s', (_name, policy) => {
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-stand-in-git-'));
+    try {
+      const runs = join(dir, 'runs');
+      writeFileSync(
+        join(dir, 'git'),
+        [
+          '#!/bin/sh',
+          `[ -f '${runs}' ] && [ "$(wc -l < '${runs}')" -ge 5 ] && { echo 'the stand-in was run again' >&2; exit 97; }`,
+          `echo "$*" >> '${runs}'`,
+          `exec '${SHIM}' "$@"`,
+          '',
+        ].join('\n'),
+      );
+      chmodSync(join(dir, 'git'), 0o755);
+      const ran = spawnSync(join(dir, 'git'), ['version'], {
+        env: { ...process.env, PATH: `${dir}:${BIN}:${process.env.PATH ?? ''}`, OPENADLC_TOOLS_POLICY: policy },
+        encoding: 'utf8',
+        timeout: 20_000,
+        killSignal: 'SIGKILL',
+      });
+      expect(ran.error).toBeUndefined();
+      expect(ran.stderr).toBe('');
+      expect(ran.status).toBe(0);
+      expect(ran.stdout).toMatch(/^git version /);
+      expect(readFileSync(runs, 'utf8')).toBe('version\n');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('says there is no git after it on PATH, rather than that git is not installed, when one is only before it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-stand-in-git-'));
+    try {
+      const [stand, tools] = [join(dir, 'stand-in'), join(dir, 'tools')];
+      mkdirSync(stand);
+      mkdirSync(tools);
+      writeFileSync(join(stand, 'git'), '#!/bin/sh\nexit 0\n');
+      chmodSync(join(stand, 'git'), 0o755);
+      // What the wrapper itself runs, and no git.
+      symlinkSync(execFileSync('sh', ['-c', 'command -v dirname'], { encoding: 'utf8' }).trim(), join(tools, 'dirname'));
+      const ran = spawnSync(SHIM, ['version'], { env: { PATH: [stand, BIN, tools].join(':'), OPENADLC_TOOLS_POLICY: '' }, encoding: 'utf8', timeout: 10_000 });
+      expect(ran.status).toBe(127);
+      expect(ran.stderr).toBe(`git: no git after OpenADLC's (${BIN}) on PATH; put the real git's directory after it\n`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

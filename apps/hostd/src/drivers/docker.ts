@@ -1131,13 +1131,70 @@ export class DockerDriver implements ExecDriver {
     const limit = options.timeoutMs
       ? ['timeout', `--kill-after=${Math.ceil(KILL_AFTER_MS / 1000)}s`, `${Math.max(1, Math.ceil(options.timeoutMs / 1000))}s`]
       : [];
-    args.push(container, ...limit, ...command);
+    // Outside the deadline, so it is still there to clear up after it.
+    const reap = options.reap ? ['sh', '-c', REAP_SCRIPT, 'openadlc-reap', randomBytes(8).toString('hex')] : [];
+    args.push(container, ...reap, ...limit, ...command);
     const result = Object.keys(secrets).length > 0 ? await this.docker(args, undefined, secrets) : await this.docker(args);
     return options.timeoutMs && (result.code === 124 || result.code === 137) ? { ...result, timedOut: true } : result;
   }
 }
 
 export { sessionEnvFile };
+
+/**
+ * What runs a command none of whose processes may outlive it
+ * (`ExecOptions.reap`): the command in a session of its own, and once it has
+ * ended, however it ended, every process still in that session, and every
+ * one started with the run's mark in its environment, which is how one that
+ * made a session of its own is found. `timeout` signals its group only when
+ * the deadline passes, so what a run that passed or failed left going, a
+ * test's git looping or a worker never stopped, ran on in the computer and
+ * held its CPU and processes from the next run and the builder's engine.
+ *
+ * By /proc, since the image has no ps or pkill, and with the shell's
+ * builtins alone once the command has ended: that is when the computer is
+ * likeliest to be out of processes, and dash gives up on a fork it cannot
+ * make. A `grep` for the mark failed there with "Cannot fork" and exit 2,
+ * and a run that passed read as failed; the trap keeps the command's exit
+ * status whatever ends the reaper. dash's `read` drops the NULs between the
+ * variables in /proc/<pid>/environ, so the mark is looked for in what is
+ * left. `kill -KILL -<group>` is how dash takes a group: it refuses `--`.
+ * A process that both left the session and dropped its environment
+ * (`env -i setsid …`) is not found.
+ */
+export const REAP_SCRIPT = [
+  'mark=$1',
+  'shift',
+  'OPENADLC_RUN_MARK=$mark setsid "$@" &',
+  'leader=$!',
+  'wait "$leader"',
+  'code=$?',
+  `trap 'exit "$code"' EXIT`,
+  'for pass in 1 2 3 4 5; do',
+  '  kill -KILL "-$leader" 2>/dev/null',
+  '  left=',
+  '  for stat in /proc/[0-9]*/stat; do',
+  '    pid=${stat#/proc/}',
+  '    pid=${pid%/stat}',
+  '    line=',
+  '    { read -r line < "$stat"; } 2>/dev/null',
+  '    rest=${line##*") "}',
+  '    set -- $rest',
+  '    [ -n "$line" ] && [ "$pid" != "$$" ] && [ "$1" != Z ] || continue',
+  '    ours=',
+  '    if [ "$4" = "$leader" ]; then',
+  '      ours=1',
+  '    else',
+  '      { while IFS= read -r vars || [ -n "$vars" ]; do',
+  '        case "$vars" in *"OPENADLC_RUN_MARK=$mark"*) ours=1; break ;; esac',
+  '      done < "/proc/$pid/environ"; } 2>/dev/null',
+  '    fi',
+  '    [ -n "$ours" ] && kill -KILL "$pid" 2>/dev/null && left=1',
+  '  done',
+  '  [ -n "$left" ] || break',
+  'done',
+  'exit "$code"',
+].join('\n');
 
 /** The tmux session the bot image starts in every container (`bot-init`), which no task runs in. */
 export const IDLE_SHELL = 'shell';

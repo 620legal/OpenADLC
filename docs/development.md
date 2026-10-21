@@ -246,7 +246,18 @@ the skill. Whether a model reading the skill stops takes a live run
   in the worktree when it can prove the worktree is that commit's tree, and
   in a clean checkout of the commit when it cannot (hidden index entries,
   hooks, replace refs and the like); a session changing files while it runs
-  is not covered.
+  is not covered. It runs with the session's own PATH, OpenADLC's `git` and
+  `pnpm` first, so the task's pnpm store is the one `make setup` and the
+  session use. Each of those takes only the real tool after it on PATH: a
+  test that puts a stand-in `git` first and has it run the git it found
+  there, as `apps/hostd/src/worktree.test.ts` does, gets OpenADLC's, which
+  passes the command on rather than back. When `make ci` ends, passed,
+  failed or timed out, hostd ends every process it started: it runs in a
+  session of its own, and what is left in that session, or carries the run's
+  mark in its environment, is killed (`REAP_SCRIPT`,
+  `apps/hostd/src/drivers/docker.ts`; its process group under the local
+  driver). Nothing a failed run left can hold the next run or the builder's
+  engine.
 - **The docs in the same pull request** when behaviour changes.
 - **Paths that need a person.** The `## Human review` section of
   [AGENTS.md](../AGENTS.md), read from the base branch, names who must approve
