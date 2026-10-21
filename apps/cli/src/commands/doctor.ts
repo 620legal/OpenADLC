@@ -199,11 +199,13 @@ export function healthLines(checks: readonly HealthView[], consoleUrl: string): 
 /**
  * Runs the bridge's checks now and prints them. The number of blocking
  * failures, which doctor counts as problems and exits non-zero on, or null
- * when the bridge could not be asked.
+ * when the bridge could not be asked. Each warning is said through `warn`,
+ * which is how doctor counts them.
  */
 export async function checkHealth(
   config: Pick<InstallConfig, 'ports'>,
   store: SecretStore = getSecretStore(),
+  warn: (message: string) => void = ui.warn,
 ): Promise<number | null> {
   let checks: HealthView[];
   try {
@@ -215,7 +217,7 @@ export async function checkHealth(
     if (!response.ok) throw new Error(`the bridge answered ${response.status}`);
     checks = ((await response.json()) as { checks?: HealthView[] }).checks ?? [];
   } catch (error) {
-    ui.warn(`the bridge could not run its health checks: ${error instanceof Error ? error.message : error}`);
+    warn(`the bridge could not run its health checks: ${error instanceof Error ? error.message : error}`);
     return null;
   }
   if (checks.length === 0) {
@@ -226,7 +228,7 @@ export async function checkHealth(
   for (const line of lines) {
     if (line.level === 'ok') ui.ok(line.text);
     else if (line.level === 'fail') ui.fail(line.text);
-    else if (line.level === 'warn') ui.warn(line.text);
+    else if (line.level === 'warn') warn(line.text);
     else if (line.level === 'unknown') ui.note(`? ${line.text}`);
     else ui.note(line.text);
   }
@@ -235,7 +237,8 @@ export async function checkHealth(
 
 /**
  * The bridge's checks as doctor counts them: each blocking failure, or one
- * problem, said through `fail`, when the bridge could not be asked.
+ * problem, said through `fail`, when the bridge could not be asked. Warnings
+ * are said through `warn`.
  *
  * A null from `checkHealth` added nothing, so with the bridge down (its keeper
  * given up after repeated crashes) doctor printed a warning, then "no problems
@@ -246,8 +249,9 @@ export async function bridgeProblems(
   config: Pick<InstallConfig, 'ports'>,
   fail: (message: string, hint?: string) => void,
   store: SecretStore = getSecretStore(),
+  warn: (message: string) => void = ui.warn,
 ): Promise<number> {
-  const blocking = await checkHealth(config, store);
+  const blocking = await checkHealth(config, store, warn);
   if (blocking !== null) return blocking;
   fail(
     `the bridge is not answering on :${config.ports.bridge}, so its health checks could not run`,
@@ -275,6 +279,7 @@ async function version(command: string, args: string[]): Promise<string | null> 
 async function checkHostdAuthenticates(
   config: InstallConfig,
   fail: (message: string, remedy?: string) => void,
+  warn: (message: string) => void,
 ): Promise<void> {
   // Any bot will do — the answer wanted is the refusal — so a seat every
   // install has, rather than whatever this one's bots are called now.
@@ -283,7 +288,7 @@ async function checkHostdAuthenticates(
   try {
     response = await fetch(url, { signal: AbortSignal.timeout(3000) });
   } catch {
-    ui.warn('hostd is not answering, so its authentication was not checked');
+    warn('hostd is not answering, so its authentication was not checked');
     return;
   }
 
@@ -486,9 +491,16 @@ export function oldSeatFolders(workRoot: string): string[] {
 
 export async function doctor(config: InstallConfig): Promise<void> {
   let problems = 0;
+  let warnings = 0;
   const fail = (message: string, hint?: string): void => {
     problems += 1;
     ui.fail(message);
+    if (hint) ui.note(hint);
+  };
+  // Every `!` doctor prints goes through here, so the closing line counts it.
+  const warn = (message: string, hint?: string): void => {
+    warnings += 1;
+    ui.warn(message);
     if (hint) ui.note(hint);
   };
 
@@ -506,13 +518,13 @@ export async function doctor(config: InstallConfig): Promise<void> {
   // The driver `up` would run with, which for an install.json naming none
   // depends on what this machine can run.
   const { driver } = (await upDriver(config)).config;
-  say(tmuxLine(await version('tmux', ['-V']), driver), fail);
+  say(tmuxLine(await version('tmux', ['-V']), driver), fail, warn);
 
   const docker = await version('docker', ['--version']);
-  for (const line of dockerLines(docker, driver, docker ? await dockerProbe.dockerAnswers() : false)) say(line, fail);
+  for (const line of dockerLines(docker, driver, docker ? await dockerProbe.dockerAnswers() : false)) say(line, fail, warn);
 
   ui.heading('Containment');
-  await checkHostdAuthenticates(config, fail);
+  await checkHostdAuthenticates(config, fail, warn);
   if (homeIsOpen()) {
     fail(`${openadlcHome()} can be read by others on this machine`, `It holds install.json and the logs: chmod 700 ${shellQuote(openadlcHome())}, or run openadlc up, which does.`);
   }
@@ -543,10 +555,7 @@ export async function doctor(config: InstallConfig): Promise<void> {
   const { password, exposed } = await databaseContainerGaps(config, databaseInUse(config));
   if (password) fail(password.message, password.remedy);
   else ui.ok('the platform database url does not use the password published with OpenADLC');
-  if (exposed) {
-    ui.warn(exposed.message);
-    ui.note(exposed.remedy);
-  }
+  if (exposed) warn(exposed.message, exposed.remedy);
 
   if (reachable) {
     try {
@@ -554,7 +563,7 @@ export async function doctor(config: InstallConfig): Promise<void> {
       // Only a host some bot is on can stop anything. A row nothing uses — an
       // older name for this machine, say — is said, not failed.
       const inUse = new Set((await bots.listBots()).map((bot) => bot.hostId).filter(Boolean));
-      if (hostList.length === 0) ui.warn('no host has registered yet; start hostd');
+      if (hostList.length === 0) warn('no host has registered yet; start hostd');
       else
         for (const host of hostList) {
           const line = hostLine(host, inUse.has(host.id), Date.now());
@@ -564,7 +573,7 @@ export async function doctor(config: InstallConfig): Promise<void> {
         }
     } catch {
       // The expected state before the first `openadlc up`, so it is not a failure.
-      ui.warn('the schema is not applied yet; `openadlc up` applies the migrations');
+      warn('the schema is not applied yet; `openadlc up` applies the migrations');
     }
   }
 
@@ -591,10 +600,11 @@ export async function doctor(config: InstallConfig): Promise<void> {
   say(
     clientIdLine({ clientId: await githubClientId(config, async () => storedClientId ?? null), storedRead: storedClientId !== undefined, staticOnly }),
     fail,
+    warn,
   );
 
   if (usable.length > 0) ui.ok(`${usable.length} of ${crew.length} accounts can act: ${usable.join(', ')}`);
-  for (const name of missing) ui.warn(`${name} is not connected — openadlc auth login --bot ${name}`);
+  for (const name of missing) warn(`${name} is not connected — openadlc auth login --bot ${name}`);
   if (crew.length > 0 && usable.length === 0) {
     fail('no bot can act as a GitHub account', 'openadlc auth login --all');
   }
@@ -612,16 +622,13 @@ export async function doctor(config: InstallConfig): Promise<void> {
     .catch(() => null);
   const read = inStore ?? (reachable ? await settings.getSetting('webhookSecret').catch(() => undefined) : undefined);
   const storedSecret = read ?? null;
-  say(webhookSecretLine({ installSecret: config.webhookSecret, environmentSecret: process.env.OPENADLC_WEBHOOK_SECRET, storedSecret: read }), fail);
+  say(webhookSecretLine({ installSecret: config.webhookSecret, environmentSecret: process.env.OPENADLC_WEBHOOK_SECRET, storedSecret: read }), fail, warn);
   const mismatch = webhookSecretMismatch({
     installSecret: config.webhookSecret,
     environmentSecret: process.env.OPENADLC_WEBHOOK_SECRET,
     storedSecret,
   });
-  if (mismatch) {
-    ui.warn(mismatch.message);
-    ui.note(mismatch.remedy);
-  }
+  if (mismatch) warn(mismatch.message, mismatch.remedy);
 
   // A webhook that never arrives looks like nothing at all: the board stays
   // empty, no bot starts, and every component reports itself healthy. In a cloud
@@ -638,38 +645,37 @@ export async function doctor(config: InstallConfig): Promise<void> {
       const age = Date.now() - Date.parse(delivery.at);
       const hours = Math.round(age / 3_600_000);
       if (age > 24 * 3_600_000) {
-        ui.warn(`the last GitHub delivery was ${hours} hours ago (${delivery.type})`);
-        ui.note('quiet is normal on a quiet repository; silence for days usually means the webhook stopped');
+        warn(`the last GitHub delivery was ${hours} hours ago (${delivery.type})`, 'quiet is normal on a quiet repository; silence for days usually means the webhook stopped');
       } else {
         ui.ok(`GitHub last delivered ${delivery.type}, ${hours < 1 ? 'less than an hour' : `${hours} hours`} ago`);
       }
     }
   } catch {
-    ui.warn('could not read the event log, so the webhook was not checked');
+    warn('could not read the event log, so the webhook was not checked');
   }
 
   // What only a person can do, proved by its effect: the same checks that put
   // a card on the board, run now rather than read from the last run.
   ui.heading('What OpenADLC cannot do for itself');
-  problems += await bridgeProblems(config, fail);
+  problems += await bridgeProblems(config, fail, getSecretStore(), warn);
 
   ui.heading('Spend');
   try {
     const budget = await costs.getBudget(costs.currentPeriod());
-    if (!budget) ui.warn('no budget row for this month yet');
+    if (!budget) warn('no budget row for this month yet');
     else if (budget.state === 'stopped')
       fail(`the monthly cap is reached ($${budget.spentUsd.toFixed(2)} of $${budget.capUsd})`, spendCapRemedy());
     else ui.ok(`$${budget.spentUsd.toFixed(2)} of $${budget.capUsd.toFixed(0)} (${budget.state})`);
   } catch {
-    ui.warn('could not read the ledger');
+    warn('could not read the ledger');
   }
 
   ui.plain();
-  if (problems === 0) ui.ok('no problems found');
-  else {
-    ui.fail(`${counted(problems, 'problem')} ${problems === 1 ? 'needs' : 'need'} attention`);
-    process.exitCode = 1;
-  }
+  const closing = closingLine(problems, warnings);
+  ui[closing.kind](closing.text);
+  // A problem fails the run, for a watchdog on the exit code; a warning is
+  // said and counted, not failed.
+  if (problems > 0) process.exitCode = 1;
 
   await closePool();
 }
@@ -684,10 +690,25 @@ export interface DoctorLine {
   hint?: string;
 }
 
-function say(line: DoctorLine, fail: (message: string, hint?: string) => void): void {
+function say(line: DoctorLine, fail: (message: string, hint?: string) => void, warn: (message: string, hint?: string) => void): void {
   if (line.kind === 'fail') return fail(line.text, line.hint);
+  if (line.kind === 'warn') return warn(line.text, line.hint);
   ui[line.kind](line.text);
   if (line.hint) ui.note(line.hint);
+}
+
+/**
+ * The line doctor ends with, counting the problems and the warnings it
+ * printed. It counted problems alone, so a run that had just printed two
+ * warnings — a webhook secret that differs between install.json and the
+ * environment, signing keys OpenADLC did not register — ended under them with
+ * "no problems found".
+ */
+export function closingLine(problems: number, warnings: number): DoctorLine {
+  if (problems > 0 && warnings > 0) return { kind: 'fail', text: `${counted(problems, 'problem')}, ${counted(warnings, 'warning')}` };
+  if (problems > 0) return { kind: 'fail', text: `${counted(problems, 'problem')} ${problems === 1 ? 'needs' : 'need'} attention` };
+  if (warnings > 0) return { kind: 'warn', text: `${counted(warnings, 'warning')}, no problems` };
+  return { kind: 'ok', text: 'no problems found' };
 }
 
 /**
