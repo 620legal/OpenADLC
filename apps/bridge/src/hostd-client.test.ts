@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HOSTD_NOT_ANSWERING_FOR_ACCOUNTS, HOSTD_NOT_ANSWERING_FOR_ATTACH, HostdClient, START_TIMEOUT_MS } from './hostd-client.js';
+import { HOSTD_NOT_ANSWERING_FOR_ACCOUNTS, HOSTD_NOT_ANSWERING_FOR_ATTACH, HostdClient, LOCAL_CI_TIMEOUT_MS, START_TIMEOUT_MS } from './hostd-client.js';
 
 /**
  * A stand-in for hostd that records what it was asked and answers what it is
@@ -284,6 +284,42 @@ describe('the bridge starting or resuming a task', () => {
     expect(bodies[0]).toMatchObject({ reviewMode: 'blocking', reviewLens: 'security' });
     expect(bodies[1]).toMatchObject({ reviewMode: 'blocking', reviewLens: 'security' });
     expect(bodies[2]).not.toHaveProperty('reviewLens');
+  });
+});
+
+describe('the bridge asking hostd for a task’s local CI', () => {
+  it('gives up on a hostd that takes the connection and never answers, instead of holding the handler', async () => {
+    // Both routes passed no timeout, so a hung hostd held the bridge's
+    // handler for fetch's five minutes, long after the session's own call
+    // had given up on the bridge.
+    const silent = createServer(() => undefined);
+    await new Promise<void>((resolve) => silent.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = silent.address() as AddressInfo;
+      const hung = new HostdClient(`http://127.0.0.1:${port}`, SECRET, { localCiTimeoutMs: 100 });
+      const started = Date.now();
+
+      await expect(hung.startLocalCi('task-1')).rejects.toMatchObject({ status: 504 });
+      await expect(hung.localCiRun('task-1', 'run-1')).rejects.toMatchObject({ status: 504 });
+      expect(Date.now() - started).toBeLessThan(3000);
+    } finally {
+      silent.closeAllConnections();
+      await new Promise<void>((resolve) => silent.close(() => resolve()));
+    }
+  });
+
+  it('waits fifteen seconds, which hostd needs a fraction of and the session’s own call outlasts', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    answer = { status: 202, body: { run: { id: 'run-1', state: 'running' } } };
+    try {
+      await client.startLocalCi('task-1');
+      await client.localCiRun('task-1', 'run-1');
+
+      expect(timeout.mock.calls).toEqual([[LOCAL_CI_TIMEOUT_MS], [LOCAL_CI_TIMEOUT_MS]]);
+      expect(LOCAL_CI_TIMEOUT_MS).toBe(15_000);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 });
 

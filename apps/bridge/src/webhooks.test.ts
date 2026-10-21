@@ -2894,16 +2894,18 @@ describe('a merge', () => {
     vi.mocked(console.warn).mockRestore();
   });
 
-  it('stops the reviews still going on it, which would post on what is already merged', async () => {
+  it('stops the reviews still going on it, or queued or paused, which would post on what is already merged', async () => {
     store.qaTasks = [
       { id: 'review-going', subjectRef: 'openadlc#12', state: 'running' },
+      { id: 'review-queued', subjectRef: 'openadlc#12', state: 'queued' },
+      { id: 'review-paused', subjectRef: 'openadlc#12', state: 'paused' },
       { id: 'review-over', subjectRef: 'openadlc#12', state: 'done' },
     ] as never;
     const stopped: string[] = [];
     const { delivered } = merge([{ name: 'ci', path: '.github/workflows/ci.yml' }], { stopped });
     await delivered;
 
-    expect(stopped).toEqual(['review-going']);
+    expect(stopped).toEqual(['review-going', 'review-queued', 'review-paused']);
   });
 
   it('moves on an issue whose own closed delivery came first, with the labels from before the merge', async () => {
@@ -3941,6 +3943,91 @@ describe('a pull request for an issue', () => {
     expect(open).toHaveBeenCalledTimes(1);
     const recordedAt = vi.mocked(recordEvent).mock.invocationCallOrder[vi.mocked(recordEvent).mock.calls.findIndex(([event]) => event.type === 'review.round_opened')]!;
     expect(recordedAt).toBeLessThan(open.mock.invocationCallOrder[0]!);
+  });
+
+  describe('a delivery worked through after its pull request closed', () => {
+    // #40 merged, and a delivery from before the merge, handled twelve
+    // minutes after it, said open: its round requested reviewers, labelled
+    // who must review, published a gate and started a review on the deleted
+    // branch.
+    function delivered(state: 'open' | 'closed') {
+      const getIssue = vi.fn(async () => ({ number: 2, state }));
+      const client = { getIssue, listEveryPullFile: async () => ({ files: [], complete: true, renamedFrom: [] }), readFileIfPresent: async () => null };
+      const did: string[] = [];
+      const opened: Record<string, unknown>[] = [];
+      const webhooks = new Webhooks(
+        { automationBot: null, humans: [] } as never,
+        {
+          actors: { asBot: async () => client },
+          moveStage: async () => (did.push('moveStage'), { moved: true }),
+          decideReviewers: () => ({
+            reviewers: ['openadlc-cipher-janedoe', 'openadlc-vega-janedoe', 'openadlc-sydney-janedoe'],
+            lead: 'openadlc-sydney-janedoe',
+            reasons: {},
+            humanReviewRequired: false,
+          }),
+          requestReviewers: async () => void did.push('requestReviewers'),
+          humansRequiredFor: async () => ({ rules: null, required: [] }),
+          setHumanReviewLabels: async () => void did.push('setHumanReviewLabels'),
+          dropUnneededHumanRequests: async () => undefined,
+          computeReviewGate: () => ({ state: 'pending', description: 'waiting on openadlc-cipher-janedoe' }),
+          cannotReviewHere: async () => new Map(),
+          setReviewGate: async () => void did.push('setReviewGate'),
+        } as never,
+        {} as never,
+        { gateDescription: async (description: string) => description, open: async (input: Record<string, unknown>) => (opened.push(input), { taskId: 'task-review' }) } as never,
+        {} as never,
+        {} as never,
+      );
+      const receive = () =>
+        webhooks.receive(
+          'pull_request',
+          {
+            // A push's delivery when it closed; GitHub reads diffs for a push, so an open one is `opened` here.
+            action: state === 'closed' ? 'synchronize' : 'opened',
+            before: 'abc000',
+            repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+            pull_request: { author_association: 'COLLABORATOR', number: 2, draft: false, head: { ref: 'agent/openadlc-atlas-janedoe/1-issue-1', sha: 'abc123', repo: { full_name: 'janedoe/openadlc' } }, base: { ref: 'main' }, labels: [] },
+          } as never,
+          `delivery-late-${state}`,
+        );
+      return { receive, getIssue, did, opened };
+    }
+
+    beforeEach(() => {
+      vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    });
+    afterEach(() => {
+      vi.mocked(console.log).mockRestore();
+    });
+
+    it('opens no round once GitHub says it closed: no reviewers asked, no labels, no gate, no round recorded, no review', async () => {
+      const { recordEvent } = await import('@openadlc/db');
+      vi.mocked(recordEvent).mockClear();
+      const { receive, getIssue, did, opened } = delivered('closed');
+
+      await receive();
+
+      expect(getIssue).toHaveBeenCalledTimes(1);
+      expect(getIssue).toHaveBeenCalledWith('janedoe/openadlc', 2);
+      expect(did).toEqual([]);
+      expect(opened).toEqual([]);
+      expect(vi.mocked(recordEvent).mock.calls.filter(([event]) => event.type === 'review.round_opened')).toEqual([]);
+      expect(vi.mocked(console.log)).toHaveBeenCalledWith(expect.stringContaining('janedoe/openadlc#2 has closed since this delivery was sent; no review round is opened'));
+    });
+
+    it('asks GitHub once for the whole round while it is open, and tells each seat’s start it is open', async () => {
+      const { receive, getIssue, did, opened } = delivered('open');
+
+      await receive();
+
+      expect(getIssue).toHaveBeenCalledTimes(1);
+      expect(did).toEqual(expect.arrayContaining(['requestReviewers', 'setReviewGate']));
+      expect(opened.map((input) => [input.bot, input.knownOpen])).toEqual([
+        ['openadlc-cipher-janedoe', true],
+        ['openadlc-vega-janedoe', true],
+      ]);
+    });
   });
 
   it('still withdraws the requests it does not need and sets the gate when a person’s label cannot be put on', async () => {

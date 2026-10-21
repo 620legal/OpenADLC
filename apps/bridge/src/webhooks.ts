@@ -54,7 +54,7 @@ import { actsForOn, permissionOn, repoAccess, type PermissionAsker } from './peo
 import { isPinnedHuman } from './human-ids.js';
 import { asAutomation, automationBotName, findOwnOpenIssue } from './automation-bot.js';
 import type { BridgeConfig } from './config.js';
-import { alreadyLanded, type Gates } from './gates.js';
+import { alreadyLanded, subjectClosed, type Gates } from './gates.js';
 import { askedForCi, type MergeLine } from './merge-line.js';
 import { itemLink, type Notifier } from './notify.js';
 import { recordDesignMemory, type CommentSignature } from './design-memory.js';
@@ -1624,6 +1624,19 @@ export class Webhooks {
 
     if (!readyForReview || fork) return;
 
+    // GitHub is asked, not the payload, and once for the whole round. A
+    // delivery from before #40 merged, worked through twelve minutes after it,
+    // said open: its round requested reviewers, labelled who must review,
+    // published a gate, recorded a round and started a review on the deleted
+    // branch. A read that fails goes on, as `subjectClosed` answers.
+    const closedNow = await asAutomation(this.automation['actors'], this.config)
+      .then((client) => (client ? subjectClosed(client, repoFullName, pr.number) : false))
+      .catch(() => false);
+    if (closedNow) {
+      console.log(`[bridge] ${repoFullName}#${pr.number} has closed since this delivery was sent; no review round is opened`);
+      return;
+    }
+
     // A push is not on its own a reason to review again. GitHub's "dismiss stale
     // reviews on push" is off by design, because the merge line merges the base
     // into a branch before landing it — which moves the head and changes nothing
@@ -1918,6 +1931,8 @@ export class Webhooks {
           // change has to be reviewed against.
           issueNumber,
           checkoutExistingBranch: true,
+          // Read above, for every seat at once.
+          knownOpen: true,
         })
         .catch((error) => console.warn(`[bridge] review task for ${reviewer} not started: ${error.message}`));
     }

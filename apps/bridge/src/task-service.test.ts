@@ -88,6 +88,7 @@ import {
   ItemHeldError,
   PrerequisiteNotReadyError,
   SubjectBusyError,
+  SubjectClosedError,
   SpendingCapError,
   TaskService,
   UsageRefusedError,
@@ -353,6 +354,113 @@ describe('resuming a paused task whose work has already landed', () => {
 
     expect(resumeTask).not.toHaveBeenCalled();
     expect(cleanupTask).toHaveBeenCalled();
+  });
+});
+
+describe('a review of a pull request that has closed', () => {
+  // #40 merged and its branch was deleted; a delivery from before the merge,
+  // worked through after it, said the pull request was open, and a second
+  // review of it started and failed with "clearer-blocked-reasons is not a branch".
+  const openadlc = { id: 'repo-1', name: 'openadlc', fullName: 'acme/openadlc' };
+  const REVIEW = { bot: 'builder', repo: 'openadlc', kind: 'review' as const, subjectType: 'pr' as const, subjectRef: 'openadlc#40', skill: 'pr-review', branch: 'clearer-blocked-reasons', checkoutExistingBranch: true };
+
+  function reviewing(closed: (repoFullName: string, number: number) => Promise<boolean>) {
+    const startTask = vi.fn(async () => ({ session: 'reviewer/review', worktree: 'w' }));
+    const tasksService = new TaskService(
+      { costs: { perTaskCapUsd: 5 } } as BridgeConfig,
+      { startTask } as unknown as HostdClient,
+      { forSubject: async () => [] } as unknown as Context,
+      undefined,
+      closed,
+    );
+    return { tasksService, startTask };
+  }
+
+  beforeEach(() => {
+    vi.mocked(repos.getRepoByName).mockResolvedValue(openadlc as never);
+  });
+  afterEach(() => {
+    vi.mocked(repos.getRepoByName).mockResolvedValue(null);
+  });
+
+  it('is not started, and nothing is recorded, once GitHub says it closed or merged', async () => {
+    const closed = vi.fn(async () => true);
+    const { tasksService, startTask } = reviewing(closed);
+
+    await expect(tasksService.open(REVIEW)).rejects.toThrow(SubjectClosedError);
+    await expect(tasksService.open(REVIEW)).rejects.toThrow('openadlc#40 is closed, so no review of it is started');
+
+    expect(closed).toHaveBeenCalledWith('acme/openadlc', 40);
+    expect(tasks.createTask).not.toHaveBeenCalled();
+    expect(startTask).not.toHaveBeenCalled();
+  });
+
+  it('is started as before while it is open, or when GitHub cannot be asked', async () => {
+    for (const closed of [vi.fn(async () => false), vi.fn(async () => Promise.reject(new Error('GitHub is down')))]) {
+      const { tasksService, startTask } = reviewing(closed);
+
+      await tasksService.open(REVIEW);
+
+      expect(startTask).toHaveBeenCalledWith(expect.objectContaining({ kind: 'review', subjectRef: 'openadlc#40' }));
+    }
+  });
+
+  it('is not asked of GitHub for a seat with no room, which the gate sweep asks again every ten minutes', async () => {
+    vi.mocked(tasks.seatHasRoom).mockResolvedValue(false);
+    const closed = vi.fn(async () => false);
+    const { tasksService } = reviewing(closed);
+
+    await expect(tasksService.open(REVIEW)).rejects.toThrow(BotBusyError);
+
+    expect(closed).not.toHaveBeenCalled();
+  });
+
+  it('is not asked again when the caller has just read that it is open, as a delivery’s round does for every seat', async () => {
+    const closed = vi.fn(async () => true);
+    const { tasksService, startTask } = reviewing(closed);
+
+    await tasksService.open({ ...REVIEW, knownOpen: true });
+
+    expect(closed).not.toHaveBeenCalled();
+    expect(startTask).toHaveBeenCalled();
+  });
+
+  it('is not a reason to hold back a deploy, whose work starts at the merge', async () => {
+    const closed = vi.fn(async () => true);
+    const { tasksService, startTask } = reviewing(closed);
+
+    await tasksService.open({ bot: 'builder', repo: 'openadlc', kind: 'deploy', subjectType: 'merge', subjectRef: 'openadlc#40', skill: 'deploy' });
+
+    expect(closed).not.toHaveBeenCalled();
+    expect(startTask).toHaveBeenCalled();
+  });
+
+  it('is asked of no other seat once one is refused, and without a warning, from the gate or the lead’s turn', async () => {
+    store.crew = [
+      { id: 'bot-lead', name: 'lead-reviewer', githubLogin: 'lead-reviewer' },
+      { id: 'bot-second', name: 'second-reviewer', githubLogin: 'second-reviewer' },
+    ];
+    store.reviewTasks = [];
+    store.roundAt = '2026-10-21T02:38:15.000Z';
+    const closed = vi.fn(async () => true);
+    const { tasksService, startTask } = reviewing(closed);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const quiet = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const pr = { repo: { name: 'openadlc' }, prNumber: 40, branch: 'clearer-blocked-reasons', issueNumber: null };
+
+    try {
+      expect(await tasksService.openMissingReviews({ ...pr, waitingOn: ['second-reviewer', 'lead-reviewer'] })).toEqual([]);
+      expect(await tasksService.openLeadReview({ ...pr, seat: 'lead-reviewer', since: null })).toBeNull();
+
+      expect(closed).toHaveBeenCalledTimes(2);
+      expect(startTask).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      quiet.mockRestore();
+      store.crew = [];
+      store.roundAt = null;
+    }
   });
 });
 

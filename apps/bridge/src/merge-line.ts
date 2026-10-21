@@ -34,6 +34,14 @@ export function heldForPerson(entry: { state: string; detail: string | null }): 
   return entry.detail.split('because ')[1]?.trim() || 'auto-merge is not on for it';
 }
 
+/**
+ * What a failed entry's detail says when the line let it go on red checks at
+ * its head. The gate sweep reads it to put a person's pull request back once
+ * CI's rerun at that head passed, and to keep out one it let go of for
+ * anything else.
+ */
+export const CHECKS_FAILED = 'checks failed on the updated head';
+
 export type ChecksVerdict = 'green' | 'pending' | 'red';
 
 /**
@@ -62,6 +70,12 @@ export const CI_REQUEST_WAIT_MS = 10 * 60 * 1000;
  * merge afterwards, and one that never comes is asked for once more.
  */
 export const UPDATE_WAIT_MS = 10 * 60 * 1000;
+
+/**
+ * How long the line says nothing while GitHub answers `unknown` at one head
+ * before it says why it waits, as it would for any other reason.
+ */
+export const UNKNOWN_WAIT_MS = 10 * 60 * 1000;
 
 /**
  * When the merge line asked for CI on each pull request, by `owner/repo#n`.
@@ -223,6 +237,9 @@ export class MergeLine {
 
   /** When the line first found an update it asked for still unmade, by `repo#n@sha`. */
   private readonly updateWaited = new Map<string, number>();
+
+  /** When GitHub began answering `unknown` at a head, by `repo#n@sha`; gone once it answers anything else. */
+  private readonly unknownSince = new Map<string, number>();
 
   /** Joins the line, or refreshes the place it already holds. */
   async enter(input: {
@@ -498,13 +515,13 @@ export class MergeLine {
 
     if (verdict === 'red') {
       // CI's own failure is `onCiRun`'s: run again once, then back to build.
-      await mergeLines.setState(entry.id, 'failed', { detail: 'checks failed on the updated head' });
+      await mergeLines.setState(entry.id, 'failed', { detail: CHECKS_FAILED });
       await this.leaveFor(repo.name, entry.prNumber, 'the checks failed once the branch was up to date', false);
       return {
         repo: repo.name,
         prNumber: entry.prNumber,
         state: 'failed',
-        detail: 'checks failed on the updated head',
+        detail: CHECKS_FAILED,
       };
     }
 
@@ -520,6 +537,28 @@ export class MergeLine {
     // holds; otherwise auto-merge, if the builder enabled it, or a person.
     let held: string | null = null;
     if (this.automation && !(await this.mergesOff(repo.name))) {
+      // GitHub says `unknown` for a moment after a push or an update of the
+      // base, while it works out whether the pull request can be merged, and
+      // `mergeDecision` lands nothing on it. Said as the reason it waits, it
+      // changed the entry's detail and posted a comment, and the next pass's
+      // answer changed it back and posted another: blocked, unknown, blocked
+      // was three comments. The entry is left as it was, and the next pass —
+      // a webhook's or the merge job's — reads what GitHub worked out. Past
+      // `UNKNOWN_WAIT_MS` at one head it is said like any other reason, once:
+      // left as it was for good, the detail said whatever it said before.
+      const key = `${repo.fullName.toLowerCase()}#${entry.prNumber}@${pull.headSha}`;
+      if (pull.mergeableState === 'unknown' || pull.mergeableState === null) {
+        const since = this.unknownSince.get(key) ?? this.now();
+        this.unknownSince.set(key, since);
+        if (this.now() - since < UNKNOWN_WAIT_MS) {
+          return {
+            repo: repo.name,
+            prNumber: entry.prNumber,
+            state: entry.state,
+            detail: 'GitHub has not yet worked out whether it can be merged; read again on the next pass',
+          };
+        }
+      } else this.unknownSince.delete(key);
       const landed = await this.land(repo, entry, pull, automation);
       if (landed.step) return landed.step;
       held = landed.held;

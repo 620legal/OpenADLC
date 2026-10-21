@@ -14,7 +14,7 @@
  */
 export const STAGES = [
   { key: 'intake', title: 'Intake', subtitle: 'Clarifies the request with you, then files the issue' },
-  { key: 'spec', title: 'Design', subtitle: 'Designs what needs one, remembering what was decided' },
+  { key: 'spec', title: 'Design', subtitle: 'Designs each issue, remembering what was decided' },
   { key: 'build', title: 'Build', subtitle: 'Builds it, runs CI locally, opens the pull request' },
   { key: 'review', title: 'Review', subtitle: 'Reviewers on different models; the lead decides last' },
   { key: 'merged', title: 'Ship', subtitle: 'Deploys by the repository’s own rules' },

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { STAGE_COLUMN_TITLES, STAGE_KEYS, UNTOUCHABLE_STAGES as SHARED_UNTOUCHABLE } from '../../../../packages/shared/src/stages';
 import { STAGE_MODES as SHARED_MODES } from '../../../../packages/shared/src/types';
-import { modeIsSettable, modesFor, STAGE_MODES, STAGES, UNTOUCHABLE_STAGES } from './stages';
+import { modeIsSettable, modesFor, STAGE_MODES, STAGES, stageOf, UNTOUCHABLE_STAGES } from './stages';
 
 describe('the console’s copy of the stages', () => {
   it('names every stage the way the board does, in the board’s order', () => {
@@ -16,6 +16,14 @@ describe('the console’s copy of the stages', () => {
   it('calls them what a person would: a design pass, a build, shipping', () => {
     expect(STAGES.map((stage) => stage.title)).toEqual(['Intake', 'Design', 'Build', 'Review', 'Ship', 'Done']);
     for (const stage of STAGES) expect(stage.subtitle.length).toBeGreaterThan(0);
+  });
+
+  it('says Design works every issue, as it does unless a repository limits it', () => {
+    // Design became every issue's by default (#24, `REPO_DEFAULTS`), and the
+    // board went on saying it designed only what needed one.
+    const design = stageOf('spec')?.subtitle ?? '';
+    expect(design).toMatch(/^Designs each issue/);
+    expect(design).not.toContain('what needs one');
   });
 
   it('no longer has assist, which did what autonomous does', () => {

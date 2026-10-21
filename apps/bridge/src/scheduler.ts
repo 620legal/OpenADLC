@@ -7,6 +7,7 @@ import type { UnlabeledIntake } from './unlabeled-intake.js';
 import { actsForOn } from './people.js';
 import { DEFAULT_PATH_POLICY, REVIEW_GATE_CHECK, actsFor, deliveryRulesFrom, envInt, type PathPolicy, type TaskKind, type TaskState, dedupeMarker, hasIgnoreLabel } from '@openadlc/shared';
 import { blockingOverlaps, type WorkInFlight } from '@openadlc/dispatcher';
+import type { GitHubClient } from '@openadlc/github';
 import { ATTENTION_WINDOW_DAYS, triedAgain } from './attention.js';
 import { subjectClosed, wasRefused } from './gates.js';
 import { fastPathOf, type Automation } from './automation.js';
@@ -22,7 +23,7 @@ import type { BridgeConfig } from './config.js';
 import { driftLine, renderDrift, type Reconciler } from './reconciler.js';
 import type { CrewAccessKeeper } from './crew-access.js';
 import { buildStatus, renderStatusMarkdown, statusDrift, statusIssueTarget } from './status.js';
-import type { MergeLine } from './merge-line.js';
+import { CHECKS_FAILED, verdictFor, type MergeLine } from './merge-line.js';
 import type { StageHandoff } from './stage-handoff.js';
 import type { HostdClient } from './hostd-client.js';
 import { heldAtCap, type TaskService } from './task-service.js';
@@ -770,6 +771,23 @@ async function openPullsOf(
 }
 
 /**
+ * Whether the merge line let a pull request go on red checks at this head and
+ * they are green there now, as the line reads them (`verdictFor`, the newest
+ * run of each). Only red checks: one it let go of for a conflict, or a base
+ * that is not the default branch, fails again at the front whatever CI says.
+ * Checks that cannot be read are no checks, which is not green.
+ */
+async function greenAgain(
+  client: Pick<GitHubClient, 'checksFor'>,
+  repoFullName: string,
+  left: { headSha: string | null; detail: string | null },
+): Promise<boolean> {
+  if (left.detail !== CHECKS_FAILED || !left.headSha) return false;
+  const checks = await client.checksFor(repoFullName, left.headSha).catch(() => []);
+  return verdictFor(checks) === 'green';
+}
+
+/**
  * The recurring work that has no webhook: reconciling what the platform believes
  * against what GitHub says, regenerating the status view, and keeping the budget
  * state current.
@@ -1000,9 +1018,13 @@ export class Scheduler {
             // failed place became a waiting one (`mergeLines.enter`), the line
             // failed it on the same red check or conflict, and "Leaving the
             // merge line" would be said on it every ten minutes. An issue's
-            // leaves the sweep when its card goes back to Build.
+            // leaves the sweep when its card goes back to Build. One let go of
+            // on red checks goes back once they are green at that head: CI's
+            // one rerun (`onCiRun`) passed, and nothing else was coming for it
+            // but a push or a review.
             const left = issueNumber ? null : await mergeLines.entryFor(repo.id, pull.number);
-            if (!(left?.state === 'failed' && left.headSha === pull.headSha)) {
+            const out = left?.state === 'failed' && left.headSha === pull.headSha && !(await greenAgain(client, repo.fullName, left));
+            if (!out) {
               // The SRE's revert goes to the front, as it does from its review
               // (`onReview`): entered here first without saying so, it would
               // wait behind every pull request already in the line.

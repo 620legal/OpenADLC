@@ -12,7 +12,7 @@ import { reviewRulesOf } from './automation.js';
 import { requestPrefixOf } from './request-context.js';
 import { readSeatPauses, seatPausedWords, type SeatPause } from './seat-pause.js';
 import { heldWords } from './item-hold.js';
-import { REVIEW_ASKED_AGAIN, REVIEW_ROUND_OPENED } from './work.js';
+import { REVIEW_ASKED_AGAIN, REVIEW_ROUND_OPENED, parseRef } from './work.js';
 
 /**
  * A seat running all the tasks it may at once (`bots.max_tasks`, Crew →
@@ -89,6 +89,21 @@ export class ItemHeldError extends Error {
   constructor(words: string) {
     super(words);
     this.name = 'ItemHeldError';
+  }
+}
+
+/**
+ * A review asked for on a pull request GitHub says has closed or merged. There
+ * is nothing left to review, and its branch may be gone: a review of #40
+ * started after it merged and failed with "clearer-blocked-reasons is not a
+ * branch". Nothing is recorded, and no seat is asked in its place.
+ */
+export class SubjectClosedError extends Error {
+  readonly status = 409;
+
+  constructor(subjectRef: string) {
+    super(`${subjectRef} is closed, so no review of it is started`);
+    this.name = 'SubjectClosedError';
   }
 }
 
@@ -517,6 +532,8 @@ export class TaskService {
         });
         started.push(`${subjectRef}: started ${bot.name}’s review${opened.error ? ` (${opened.error.slice(0, 80)})` : ''}`);
       } catch (error) {
+        // Closed since the gate was read: no other seat is asked either.
+        if (error instanceof SubjectClosedError) break;
         // A reviewer busy with another pull request is asked again on the
         // next sweep; that is not worth a line every time it is.
         if (!(error instanceof BotBusyError)) {
@@ -580,8 +597,9 @@ export class TaskService {
       console.log(`[bridge] ${subjectRef}: every other review is in; ${lead.name} reviews last`);
       return `${subjectRef}: started ${lead.name}’s review, the lead’s, last${opened.error ? ` (${opened.error.slice(0, 80)})` : ''}`;
     } catch (error) {
-      // Busy with another pull request: the gate sweep asks again.
-      if (!(error instanceof BotBusyError) && !(error instanceof PrerequisiteNotReadyError)) {
+      // Busy with another pull request: the gate sweep asks again. Closed:
+      // nothing does, and nothing needs to.
+      if (!(error instanceof BotBusyError) && !(error instanceof PrerequisiteNotReadyError) && !(error instanceof SubjectClosedError)) {
         console.warn(`[bridge] the lead's review of ${subjectRef} not started: ${error instanceof Error ? error.message : error}`);
       }
       return null;
@@ -635,7 +653,7 @@ export class TaskService {
       return `${subjectRef}: started ${bot.name}’s review again${opened.error ? ` (${opened.error.slice(0, 80)})` : ''}`;
     } catch (error) {
       // Busy, or not able to work yet: the gate sweep asks again.
-      if (!(error instanceof BotBusyError) && !(error instanceof PrerequisiteNotReadyError)) {
+      if (!(error instanceof BotBusyError) && !(error instanceof PrerequisiteNotReadyError) && !(error instanceof SubjectClosedError)) {
         console.warn(`[bridge] ${bot.name}'s review of ${subjectRef} not asked again: ${error instanceof Error ? error.message : error}`);
       }
       return null;
@@ -748,6 +766,8 @@ export class TaskService {
     extraContext?: ContextDocument[];
     /** The branch a new branch starts from, as `refs/heads/<name>`; the default branch when absent. A stacked build's is the work it depends on. */
     baseRef?: string;
+    /** A review whose caller has just read from GitHub that its pull request is open, so it is not asked again for each seat. */
+    knownOpen?: boolean;
   }): Promise<{ taskId: string; session: string | null; error?: string }> {
     const found = (input.botId ? await bots.getBotById(input.botId) : null) ?? (await bots.getBotByName(input.bot));
     if (!found) throw new Error(`unknown bot ${input.bot}`);
@@ -788,14 +808,27 @@ export class TaskService {
       if (input.whenBlocked !== 'record') throw refused;
       return this.recordBlocked(found, repo, input, refused.message);
     }
+    // GitHub is asked, not the delivery: one from before #40 merged, worked
+    // through after it, said open, and its review started on a deleted branch.
+    // Every review is started through here, by a delivery, a review that came
+    // in after the merge, the gate sweep or the lead's turn. Asked once the
+    // seat and a host have room, so a busy seat the sweep comes back for costs
+    // no read, and not when the caller has just read it. A read that fails
+    // starts it, as a resume does (`subjectIsClosed`).
+    const reviewed = input.kind === 'review' && repo && !input.knownOpen ? parseRef(input.subjectRef) : null;
     const { bot, task } = await this.names.withBot(found.id, async () => {
       // Read again: a rename this waited for has given the bot another name.
       const bot = (await bots.getBotById(found.id)) ?? found;
-      // The same work twice, then room on the seat, then room on a host.
+      // The same work twice, then room on the seat, then room on a host, then
+      // whether a review's pull request is still open (above).
       if (await tasks.liveTaskOn(bot.id, input.subjectRef)) throw new SubjectBusyError(bot.name, input.subjectRef);
       if (!(await tasks.seatHasRoom(bot.id))) throw new BotBusyError(bot.name, maxTasksOf(bot));
       const room = await hosts.taskRoom();
       if (room !== null && room <= 0) throw new HostFullError(bot.name);
+      if (reviewed && repo && (await this.subjectIsClosed(repo.fullName, reviewed.number))) {
+        console.log(`[bridge] ${input.subjectRef} is closed; ${bot.name}'s review of it is not started`);
+        throw new SubjectClosedError(input.subjectRef);
+      }
 
       const task = await tasks.createTask({
         botId: bot.id,
