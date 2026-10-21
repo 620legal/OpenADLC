@@ -1,5 +1,6 @@
 import { BackupError, type BackupContents } from './archive.js';
 import { applyRestore, type RestoreOutcome, type RestoreTarget } from './apply.js';
+import { withAddressMode } from './contents.js';
 import { planRestore, restoredIdentities, restoredName, type InstallShape, type RestorePlan } from './plan.js';
 import {
   keepOnlySignIns,
@@ -66,6 +67,16 @@ export interface RestoreReport {
   summary: RestoreSummary;
 }
 
+/**
+ * The archive with an older one's webhook address taking this install's mode
+ * away with it (`withAddressMode`): `openadlc restore` writes a whole archive
+ * over an install that is set up, with no comparison to have done it.
+ */
+function withWebhookMode(contents: BackupContents, shape: InstallShape): BackupContents {
+  const settings = withAddressMode(contents.settings, shape);
+  return settings === contents.settings ? contents : { ...contents, settings };
+}
+
 /** An error's words, bounded, for a line a person reads. The messages here name things, never values. */
 function said(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 300);
@@ -81,7 +92,7 @@ export function previewRestore(input: Pick<RestoreRun, 'contents' | 'shape' | 's
   summary: RestoreSummary;
 } {
   const selection = selectSignIns(input.signIns, input.choices);
-  const contents = keepOnlySignIns(input.contents, selection.write);
+  const contents = keepOnlySignIns(withWebhookMode(input.contents, input.shape), selection.write);
   const plan = planRestore(contents, input.shape);
   const signIns = signInLines(input.signIns, input.choices);
   return { plan, signIns, summary: summarizeRestore(contents, plan, input.shape.bots, signIns) };
@@ -92,7 +103,7 @@ export async function runRestore(run: RestoreRun): Promise<RestoreReport> {
   if (refusal) throw new BackupError(refusal);
 
   const selection = selectSignIns(run.signIns, run.choices);
-  const contents = keepOnlySignIns(run.contents, selection.write);
+  const contents = keepOnlySignIns(withWebhookMode(run.contents, run.shape), selection.write);
   const plan = planRestore(contents, run.shape);
   const outcome = await applyRestore(contents, plan, run.target, {
     actor: run.actor,

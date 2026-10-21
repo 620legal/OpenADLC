@@ -67,6 +67,10 @@ export function effectiveSettings(
     const value = env[variable]?.trim();
     if (out[key] === undefined && value) out[key] = value;
   }
+  // An address from the environment is one a person gave, as the bridge
+  // reads it (`effectiveConfig`). Taken alone, it was stored on the new
+  // install with no mode, read as a tunnel the bridge raised, and replaced.
+  if (stored.publicUrl === undefined && out.publicUrl !== undefined) out.webhookMode = 'address';
   return out;
 }
 
@@ -362,6 +366,7 @@ export async function readShape(
   return {
     secretRefs,
     settingKeys: Object.keys(stored),
+    ...(stored.publicUrl !== undefined ? { publicUrl: stored.publicUrl } : {}),
     bots: crew.map((bot) => ({
       name: bot.name,
       slot: bot.slot,

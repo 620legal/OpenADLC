@@ -27,6 +27,12 @@ export const SETTING_KEYS = [
   'humanIds',
   'operatorEmail',
   'publicUrl',
+  // Who made `publicUrl`: `tunnel`, a quick tunnel the bridge raised, which it
+  // raises again at start and replaces when it stops answering, or `address`,
+  // one a person gave, which it leaves alone. Written with it by the webhook
+  // step and cleared with it by a take-down (`setSettings`). Absent on an
+  // install from before it was stored. See the bridge's `webhook-setup.ts`.
+  'webhookMode',
   // A field of PATCH /v1/install, which sends it to the secret store. An older
   // install kept it in this table; the bridge moves that row into the store
   // when it starts, and a restore of an older backup writes it there too.
@@ -131,6 +137,26 @@ export async function setSetting(key: SettingKey, value: string, updatedBy: stri
     `insert into settings (key, value, updated_by) values ($1, $2, $3)
      on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
     [key, value, updatedBy],
+  );
+}
+
+/**
+ * Writes several settings in one statement, clearing each that is empty as
+ * `setSetting` does. For settings that say one thing together: the webhook's
+ * address and who made it, written one after the other, could be left by a
+ * bridge stopped between the two with a person's address beside a mode that
+ * says the bridge raised it, which the next start would replace.
+ */
+export async function setSettings(values: Partial<Record<SettingKey, string>>, updatedBy: string): Promise<void> {
+  const entries = Object.entries(values) as [SettingKey, string][];
+  const cleared = entries.filter(([, value]) => value.length === 0).map(([key]) => key);
+  const written = entries.filter(([, value]) => value.length > 0);
+  await query(
+    `with cleared as (delete from settings where key = any($1::text[]))
+     insert into settings (key, value, updated_by)
+     select given.key, given.value, $4 from unnest($2::text[], $3::text[]) as given(key, value)
+     on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()`,
+    [cleared, written.map(([key]) => key), written.map(([, value]) => value), updatedBy],
   );
 }
 

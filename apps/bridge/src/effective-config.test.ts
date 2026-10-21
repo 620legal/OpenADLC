@@ -126,3 +126,31 @@ describe('the install’s settings as they are now', () => {
     expect(live.bridgeMergeOff).toEqual(['app']);
   });
 });
+
+describe('who made the webhook’s address', () => {
+  it('is the mode stored beside it, and none for an install from before it was, or a value it does not know', async () => {
+    expect((await effectiveConfig(config)).webhookMode).toBeNull();
+    table.rows.publicUrl = 'https://persons-own-1.trycloudflare.com';
+    expect((await effectiveConfig(config)).webhookMode).toBeNull();
+
+    table.rows.webhookMode = 'address';
+    expect((await effectiveConfig(config)).webhookMode).toBe('address');
+    table.rows.webhookMode = 'tunnel';
+    expect((await effectiveConfig(config)).webhookMode).toBe('tunnel');
+    table.rows.webhookMode = 'Tunnel';
+    expect((await effectiveConfig(config)).webhookMode).toBeNull();
+  });
+});
+
+describe('who made an address the environment gives', () => {
+  it('is a person: install.json and OPENADLC_PUBLIC_URL hold only what a person wrote there', async () => {
+    const given = { ...config, publicUrl: 'https://persons-own-1.trycloudflare.com' } as BridgeConfig;
+    expect((await effectiveConfig(given)).webhookMode).toBe('address');
+
+    // A stored address wins, with the mode stored beside it, or none.
+    table.rows.publicUrl = 'https://calm-badger-42.trycloudflare.com';
+    expect((await effectiveConfig(given)).webhookMode).toBeNull();
+    table.rows.webhookMode = 'tunnel';
+    expect((await effectiveConfig(given)).webhookMode).toBe('tunnel');
+  });
+});

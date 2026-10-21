@@ -226,6 +226,28 @@ export const RUNTIME_SETTINGS: readonly string[] = [
 ];
 
 /**
+ * An archive's settings as a restore writes them over an install whose
+ * settings table holds the keys `settingKeys` and the address `publicUrl`.
+ * Who made the webhook's address (`webhookMode`) goes with the address, and
+ * an archive from before the mode was stored carries the address alone:
+ * written beside this install's mode, that mode described an address it had
+ * never seen, and `address` beside the backup's own tunnel kept the bridge
+ * from raising it again. So this install's mode is cleared with another
+ * address, an overwrite Undo puts back, and that address is read as one from
+ * before the mode was. Beside the same address the mode still describes it:
+ * cleared, a person's own quick tunnel was read as the bridge's again and
+ * replaced at the next start.
+ */
+export function withAddressMode(
+  settings: Record<string, string>,
+  here: { settingKeys: readonly string[]; publicUrl?: string | undefined },
+): Record<string, string> {
+  if (settings.publicUrl === undefined || settings.webhookMode !== undefined || !here.settingKeys.includes('webhookMode')) return settings;
+  if (settings.publicUrl === here.publicUrl) return settings;
+  return { ...settings, webhookMode: '' };
+}
+
+/**
  * The request states a restore writes back: every one `requests_state_check`
  * accepts. `queued` came with migration 0021 and was missing here, so a request
  * waiting its turn when the backup was taken was dropped on restore while the

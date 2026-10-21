@@ -74,6 +74,16 @@ async function restoreOnto(
 }
 
 describe('a restore of everything onto a clean install', () => {
+  it('puts back a person’s own quick tunnel as theirs, so the new install’s bridge never replaces it', async () => {
+    const found = sourceInstall();
+    found.settings.publicUrl = 'https://persons-own-1.trycloudflare.com';
+    found.settings.webhookMode = 'address';
+
+    const { recorded } = await restoreOnto(buildBackup(found, EVERYTHING, NOW).contents);
+
+    expect(recorded.settings).toMatchObject({ publicUrl: 'https://persons-own-1.trycloudflare.com', webhookMode: 'address' });
+  });
+
   it('puts back the settings and the App’s key, but never the internal API secret', async () => {
     // A backup leaves the secret out, so one is put in by hand: the install
     // and the archive held the same value, and a restore that wrote it back

@@ -83,6 +83,19 @@ describe('everything', () => {
     expect(contents.settings).not.toHaveProperty('engineUpdateLast');
   });
 
+  it('carries the webhook’s address with who made it', () => {
+    // The mode says who made the address. Left behind, a person's own quick
+    // tunnel restored onto a new install had none, was read as the bridge's,
+    // and was replaced at its first start.
+    const found = sourceInstall();
+    found.settings.publicUrl = 'https://persons-own-1.trycloudflare.com';
+    found.settings.webhookMode = 'address';
+
+    const archived = buildBackup(found, EVERYTHING, NOW).contents.settings;
+
+    expect(archived).toMatchObject({ publicUrl: 'https://persons-own-1.trycloudflare.com', webhookMode: 'address' });
+  });
+
   it('keeps each tool’s schedule and pin, and leaves out when this machine last ran it and how', () => {
     const found = sourceInstall();
     found.settings.systemToolSchedules = JSON.stringify({

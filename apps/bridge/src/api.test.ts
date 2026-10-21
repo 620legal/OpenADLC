@@ -147,6 +147,12 @@ vi.mock('@openadlc/db', () => ({
       if (value.length === 0) delete stored.settings[key];
       else stored.settings[key] = value;
     }),
+    setSettings: vi.fn(async (values: Record<string, string>) => {
+      for (const [key, value] of Object.entries(values)) {
+        if (value.length === 0) delete stored.settings[key];
+        else stored.settings[key] = value;
+      }
+    }),
     allSettings: vi.fn(async () => ({ ...stored.settings })),
   },
   tasks: {
@@ -187,6 +193,7 @@ beforeEach(async () => {
   stored.intakeBusy = false;
   stored.settings = {};
   vi.mocked(settings.setSetting).mockClear();
+  vi.mocked(settings.setSettings).mockClear();
   vi.mocked(requests.createRequest).mockClear();
   // Blocks below give these their own answers; each test starts from the
   // factory's. mockReset puts back the implementation vi.fn was made with.
@@ -1213,6 +1220,38 @@ describe('the install’s people, written through PATCH /v1/install', () => {
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: string }).error).toContain('kept by the bridge');
     expect(vi.mocked(settings.setSetting)).not.toHaveBeenCalled();
+  });
+});
+
+describe('the webhook’s address, written through PATCH /v1/install', () => {
+  const patch = (body: Record<string, string>) =>
+    fetch(`${bridgeUrl}/v1/install`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('refuses who made it, which only the webhook step writes', async () => {
+    // `tunnel` written here beside a person's own quick tunnel had the next
+    // start replace it; `address` beside the bridge's, never raise it again.
+    for (const webhookMode of ['tunnel', 'address', '']) {
+      const response = await patch({ webhookMode });
+      expect(response.status, webhookMode).toBe(400);
+      expect(((await response.json()) as { error: string }).error).toContain('POST /v1/webhook/configure');
+    }
+    expect(vi.mocked(settings.setSetting)).not.toHaveBeenCalled();
+    expect(vi.mocked(settings.setSettings)).not.toHaveBeenCalled();
+  });
+
+  it('is stored as one a person gave, so the mode of the address before is never left beside it', async () => {
+    stored.settings = { publicUrl: 'https://calm-badger-42.trycloudflare.com', webhookMode: 'tunnel' };
+
+    await patch({ publicUrl: ' https://persons-own-1.trycloudflare.com ' });
+    expect(stored.settings).toEqual({ publicUrl: 'https://persons-own-1.trycloudflare.com', webhookMode: 'address' });
+
+    // Cleared with it, as a take-down clears the two.
+    await patch({ publicUrl: '' });
+    expect(stored.settings).toEqual({});
   });
 });
 
