@@ -87,6 +87,22 @@ describe('OpenADLC’s gh', () => {
       for (const dir of [own, real]) rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('passes over a copy of itself elsewhere on PATH, as a task has the image’s beside the checkout’s', () => {
+    const own = mkdtempSync(join(tmpdir(), 'openadlc-shim-'));
+    const copy = mkdtempSync(join(tmpdir(), 'openadlc-copy-'));
+    const real = mkdtempSync(join(tmpdir(), 'openadlc-real-'));
+    const ours = readFileSync(join(import.meta.dirname, '..', 'bin', 'gh'));
+    try {
+      writeFileSync(join(own, 'gh'), ours);
+      writeFileSync(join(copy, 'gh'), ours);
+      writeFileSync(join(real, 'gh'), '#!/bin/sh\n');
+      for (const dir of [own, copy, real]) chmodSync(join(dir, 'gh'), 0o755);
+      expect(shim.realGh(`${own}:${copy}:${real}`, join(own, 'gh'))).toBe(join(real, 'gh'));
+    } finally {
+      for (const dir of [own, copy, real]) rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('which seat OpenADLC’s gh says posted', () => {

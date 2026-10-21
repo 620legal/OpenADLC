@@ -1,7 +1,7 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -31,6 +31,31 @@ const check = (await import(join(BIN, 'git-check.mjs'))) as {
 
 const BUILDER = { pushBranchPrefix: 'agent/', forcePush: false, denyGithub: [] };
 const REVIEWER = { pushBranchPrefix: null, forcePush: false, denyGithub: ['pr merge', 'push'] };
+
+describe('finding the real git', () => {
+  it('passes over a copy of itself elsewhere on PATH, as a task has the image’s beside the checkout’s', () => {
+    // OpenADLC's tests ran in a task with the image's /opt/openadlc/bin on
+    // PATH after the checkout's apps/hostd/bin: each copy took the other for
+    // git and exec'd it, for good, and `make ci` there never finished.
+    const copy = mkdtempSync(join(tmpdir(), 'openadlc-git-copy-'));
+    try {
+      for (const file of ['git', 'git-check.mjs', 'package.json']) writeFileSync(join(copy, file), readFileSync(join(BIN, file)));
+      chmodSync(join(copy, 'git'), 0o755);
+      for (const policy of ['', JSON.stringify(BUILDER)]) {
+        const run = spawnSync(SHIM, ['--version'], {
+          env: { ...process.env, PATH: `${BIN}:${copy}:${process.env.PATH ?? ''}`, OPENADLC_TOOLS_POLICY: policy },
+          encoding: 'utf8',
+          timeout: 15_000,
+        });
+        expect(run.error).toBeUndefined();
+        expect(run.status).toBe(0);
+        expect(run.stdout).toMatch(/^git version/);
+      }
+    } finally {
+      rmSync(copy, { recursive: true, force: true });
+    }
+  }, 40_000);
+});
 
 describe('reading a git command before it runs', () => {
   it('finds the command past the options git takes before it, the valued ones included', () => {

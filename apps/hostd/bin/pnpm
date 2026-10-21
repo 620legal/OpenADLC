@@ -1,4 +1,5 @@
 #!/bin/sh
+# openadlc-shim: pnpm
 # OpenADLC's `pnpm`, first on a task session's PATH beside OpenADLC's `gh` and
 # `git` (see `gh` for where the folder is mounted).
 #
@@ -16,11 +17,20 @@
 
 self_dir=$(dirname "$0")
 
+# A copy of this file elsewhere on PATH is not pnpm either. When OpenADLC's own
+# tests ran in a task, the checkout's apps/hostd/bin and the image's
+# /opt/openadlc/bin were both on PATH: each copy took the other for the real
+# pnpm and exec'd it, for good, and `make ci` in the crew's task image never
+# finished. The marker on this file's second line is what a copy is known by.
+is_shim() {
+  LC_ALL=C head -c 4096 "$1" 2>/dev/null | LC_ALL=C grep -q -F 'openadlc-shim: pnpm'
+}
+
 real=
 saved_ifs=$IFS
 IFS=:
 for dir in $PATH; do
-  if [ -n "$dir" ] && [ "$dir" != "$self_dir" ] && [ -x "$dir/pnpm" ] && ! [ "$dir/pnpm" -ef "$0" ]; then
+  if [ -n "$dir" ] && [ "$dir" != "$self_dir" ] && [ -x "$dir/pnpm" ] && ! [ "$dir/pnpm" -ef "$0" ] && ! is_shim "$dir/pnpm"; then
     real="$dir/pnpm"
     break
   fi

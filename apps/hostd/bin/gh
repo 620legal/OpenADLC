@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// openadlc-shim: gh
 // OpenADLC's `gh`, first on a task session's PATH (hostd mounts this folder into
 // each bot's container at /opt/openadlc/bin, and puts it first for the local
 // driver too). It puts the session's header — OPENADLC_POST_HEADER, e.g.
@@ -19,7 +20,7 @@
 // Plain Node with no dependencies: it runs inside the bot's image, beside the
 // engines, and is read from hostd's own checkout at whatever version hostd is.
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { accessSync, closeSync, constants, mkdtempSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 
@@ -27,7 +28,28 @@ const HEADER_TAG = '<!-- openadlc-header -->';
 const LEADING_HEADER = /^\*\*[^\n]*\*\*<!-- (?:openadlc|fleetadlc|fleet)-header -->/;
 const POSTS = { issue: ['create', 'comment', 'edit'], pr: ['create', 'comment', 'edit', 'review'] };
 
-/** The real gh: the first on PATH that is not this file. */
+/**
+ * Whether a file on PATH is a copy of this one, by the marker on its second
+ * line. When OpenADLC's own tests ran in a task, the checkout's apps/hostd/bin
+ * and the image's /opt/openadlc/bin were both on PATH, and each copy of the
+ * `git` and `pnpm` beside this one took the other for the real tool and ran
+ * it, for good; this one would have too.
+ */
+function isShim(file) {
+  try {
+    const fd = openSync(file, 'r');
+    try {
+      const head = Buffer.alloc(4096);
+      return head.subarray(0, readSync(fd, head, 0, head.length, 0)).includes('openadlc-shim: gh');
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
+/** The real gh: the first on PATH that is not this file, nor a copy of it. */
 export function realGh(path = process.env.PATH ?? '', self = process.argv[1] ?? '') {
   let selfReal = '';
   try {
@@ -38,7 +60,7 @@ export function realGh(path = process.env.PATH ?? '', self = process.argv[1] ?? 
     const candidate = join(dir, 'gh');
     try {
       accessSync(candidate, constants.X_OK);
-      if (realpathSync(candidate) === selfReal || dirname(candidate) === dirname(self)) continue;
+      if (realpathSync(candidate) === selfReal || dirname(candidate) === dirname(self) || isShim(candidate)) continue;
       return candidate;
     } catch {}
   }

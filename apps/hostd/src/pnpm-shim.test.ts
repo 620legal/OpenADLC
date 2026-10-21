@@ -25,6 +25,33 @@ let hostdUrl: string;
 let refills: { path: string; token: string | undefined }[];
 let refillStatus: number;
 
+describe('finding the real pnpm', () => {
+  it('passes over a copy of itself elsewhere on PATH, as a task has the image’s beside the checkout’s', async () => {
+    // Each copy took the other for pnpm and exec'd it, for good.
+    const scratch = mkdtempSync(join(tmpdir(), 'openadlc-pnpm-copy-'));
+    const copy = join(scratch, 'copy');
+    const real = join(scratch, 'real');
+    try {
+      mkdirSync(copy);
+      mkdirSync(real);
+      writeFileSync(join(copy, 'pnpm'), readFileSync(SHIM));
+      writeFileSync(join(real, 'pnpm'), '#!/bin/sh\necho "real pnpm $*"\n');
+      chmodSync(join(copy, 'pnpm'), 0o755);
+      chmodSync(join(real, 'pnpm'), 0o755);
+      const child = spawn(SHIM, ['--version'], { env: { PATH: `${join(SHIM, '..')}:${copy}:${real}:/usr/bin:/bin`, HOME: scratch } });
+      let out = '';
+      child.stdout.on('data', (chunk: Buffer) => (out += chunk.toString()));
+      const timer = setTimeout(() => child.kill('SIGKILL'), 15_000);
+      const code = await new Promise<number | null>((resolve) => child.on('close', resolve));
+      clearTimeout(timer);
+      expect(code).toBe(0);
+      expect(out.trim()).toBe('real pnpm --version');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
+
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'openadlc-pnpm-shim-'));
   home = join(dir, 'home');
