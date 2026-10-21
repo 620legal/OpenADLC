@@ -234,10 +234,18 @@ the skill. Whether a model reading the skill stops takes a live run
 - **`make ci` green after the last edit**, and `pnpm build` too. A builder runs
   it through `openadlc-ci`, which has hostd run it on the exact commit and
   records the pass; its `git` and `gh` will not push or open a pull request on
-  a commit without one. hostd runs it in the worktree when it can prove the
-  worktree is that commit's tree, and in a clean checkout of the commit when
-  it cannot (hidden index entries, hooks, replace refs and the like); a
-  session changing files while it runs is not covered.
+  a commit without one. One call waits up to eight minutes, which a shell
+  tool can hold, and exits 0 when it passed, 1 when it failed, 2 when it was
+  refused or could not be asked for, and 3 when it is still running or the
+  bridge did not answer about it in time; the next call joins the same run,
+  or answers from it if it ended in between, so a builder runs it again
+  until it answers 0, 1 or 2. A call that waited for the whole run outlived
+  the tool, went to the background, and the builder ended its session to
+  wait for it, which took its computer down with the run in it. hostd runs it
+  in the worktree when it can prove the worktree is that commit's tree, and
+  in a clean checkout of the commit when it cannot (hidden index entries,
+  hooks, replace refs and the like); a session changing files while it runs
+  is not covered.
 - **The docs in the same pull request** when behaviour changes.
 - **Paths that need a person.** The `## Human review` section of
   [AGENTS.md](../AGENTS.md), read from the base branch, names who must approve

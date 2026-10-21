@@ -125,13 +125,26 @@ error, and which of these three it is. Then do what that case says.
   ```bash
   git commit -am "Fix the testing deploy: <what broke>"
   openadlc-ci
+  ```
+
+  Once `openadlc-ci` has exited 0, and not before:
+
+  ```bash
   git push origin system/deploy-path-<sha>
   gh pr create --title "Fix the testing deploy: <what broke>" --body-file .openadlc-scratch/deploy-path.md
   ```
 
   `openadlc-ci` runs the repository's checks on your commit and records the
-  pass; the lead does not approve a head with no recorded pass. If it fails,
-  fix it, commit, and run it again before you push. The body says what broke
+  pass; the lead does not approve a head with no recorded pass. Run it in the
+  foreground, with the longest timeout your shell tool allows; one call waits
+  up to eight minutes. Exit 3 means `make ci` is still running: run
+  `openadlc-ci` again at once, in the foreground, and keep running it until it
+  exits 0 (passed), 1 (failed) or 2 (refused, or it could not reach the run;
+  it says what to do). Each call joins the run still going. Never end your
+  turn, run it in the background, or wait for a notification while a run is
+  going: a session that ends its turn ends the task, and its computer is
+  taken down with the run in it. If it fails, fix it, commit, and run it
+  again before you push. The body says what broke
   and links the run, and ends with `Closes #<the bridge's issue>`. Open the
   pull request ready, not as a draft, and never push with force.
 

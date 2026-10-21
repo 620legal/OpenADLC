@@ -582,3 +582,40 @@ describe('the skills that install can install with the registry’s credential',
     expect(implement).toContain('Add and install packages through `openadlc-install`');
   });
 });
+
+/**
+ * `openadlc-ci` waits up to eight minutes a call, which a shell tool can hold,
+ * and exits 3 while `make ci` goes on. One call used to wait for the whole
+ * run: on #22 it outlived the tool and went to the background, the builder
+ * ended its turn to wait for the notification, and a headless session that
+ * ends its turn exits, so hostd took the task's container down with the run
+ * in it. Every skill that may run it says what 3 means.
+ */
+describe('every skill that runs openadlc-ci says what its exit 3 means', () => {
+  const runners = skillNames().filter((skill) => isShellAllowed(loadToolsPolicy(join(SKILLS_ROOT, skill, 'tools.yaml')), 'openadlc-ci'));
+
+  it('finds the skills that run it', () => {
+    expect(runners).toEqual(expect.arrayContaining(['deploy', 'implement', 'qa', 'resolve-conflict', 'spec']));
+  });
+
+  it.each(runners)('%s says to run it again in the foreground until it answers, and never to end the turn meanwhile', (skill) => {
+    const text = readFileSync(join(SKILLS_ROOT, skill, 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+    expect(text).toContain(
+      'Exit 3 means `make ci` is still running: run `openadlc-ci` again at once, in the foreground, and keep running it until it exits 0 (passed), 1 (failed) or 2',
+    );
+    expect(text).toContain('Never end your turn, run it in the background, or wait for a notification while a run is going');
+  });
+
+  it.each(runners)('%s ends a block of commands at openadlc-ci, so nothing after it runs on an exit 3', (skill) => {
+    // A block that went on to `git push` and `gh pr create` after it, pasted
+    // as one, ran them whatever openadlc-ci said.
+    const markdown = readFileSync(join(SKILLS_ROOT, skill, 'SKILL.md'), 'utf8');
+    const blocks = [...markdown.matchAll(/^\s*```[a-z]*\n([\s\S]*?)^\s*```/gm)].map((match) => (match[1] ?? '').split('\n').map((line) => line.trim()).filter(Boolean));
+    for (const lines of blocks) {
+      lines.forEach((line, index) => {
+        if (!/^openadlc-ci\b/.test(line)) return;
+        expect(line === 'openadlc-ci' ? index === lines.length - 1 : line.startsWith('openadlc-ci && '), `crew/skills/${skill}/SKILL.md: ${lines.join('; ')}`).toBe(true);
+      });
+    }
+  });
+});

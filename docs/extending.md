@@ -225,6 +225,12 @@ one literal command, so every shell call needed an approval nobody could give.
 Claude Code is also given `--setting-sources user --strict-mcp-config`, so a
 worktree's `.claude/` settings and hooks, `.mcp.json` and `CLAUDE.md` do not
 load; Grok Build is never given `--trust`, for the same reason.
+Its shell gives a command ten minutes, by default and at most
+(`BASH_DEFAULT_TIMEOUT_MS`, `BASH_MAX_TIMEOUT_MS`), whatever the session's
+environment says: at Claude Code's own two-minute default, `openadlc-ci` went
+to the background mid-run and the builder ended its session, and an
+eight-minute `openadlc-ci` step now fits even when the model asks for no
+timeout.
 Codex's sandbox inside a container is `danger-full-access`, because bubblewrap
 cannot run there; the container is the sandbox. The paths themselves are said
 to the bot in its brief, and the merge line holds a crew pull request's diff to

@@ -166,6 +166,10 @@ ledger, threads and gates, and the console's settings.
    stayed clean, and reports the result to the bridge with the install's
    secret, which
    records it for that commit (`local_ci_runs`, `apps/hostd/src/local-ci.ts`).
+   `openadlc-ci` waits for the run in steps of up to eight minutes, so each
+   call fits inside an engine's shell tool, and exits 3 while it is still
+   going; the builder runs it again, which joins the same run, until it
+   passes (0), fails (1), or is refused or cannot be reached (2).
    OpenADLC's `git` refuses to push a commit with no recorded pass and its `gh`
    refuses to open or ready a pull request on one; the builder opens it ready,
    never as a draft, and never turns auto-merge on. Those are guards: the

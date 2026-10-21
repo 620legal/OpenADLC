@@ -20,6 +20,23 @@ export function shellRules(commands: readonly string[]): string[] {
   return commands.map((command) => `Bash(${command}:*)`);
 }
 
+/**
+ * How long Claude Code's shell gives a command, by default and at most: ten
+ * minutes, its own ceiling. Its default is two. On #22 that default sent a
+ * builder's `openadlc-ci` to the background mid-run; the builder ended its
+ * turn to wait for it, the headless session exited, and hostd took the task's
+ * computer down with `make ci` still running. `openadlc-ci` waits in steps of
+ * eight minutes, which fit inside this whether or not the model asks for a
+ * timeout. Set over the session's environment and the runner's, though
+ * neither sets them today: a session starts under `env -i` with a fixed list
+ * (`apps/hostd/src/drivers/base-env.ts`), so a person's own never reaches it.
+ * A lower value handed to a session later would bring the same failure back.
+ */
+const SHELL_TIMEOUT_ENV: Readonly<Record<string, string>> = {
+  BASH_DEFAULT_TIMEOUT_MS: '600000',
+  BASH_MAX_TIMEOUT_MS: '600000',
+};
+
 /** The folders a run's attachments are in, each once. */
 export function attachmentDirs(input: Pick<EngineRunInput, 'attachments'>): string[] {
   return [...new Set((input.attachments ?? []).map((path) => dirname(path)))];
@@ -93,7 +110,7 @@ export class ClaudeEngine implements Engine {
       // Claude Code updates itself unless told not to, into a prefix the bot
       // can write, and a bot whose engine changed under it is a change nobody
       // made. The image sets this too; a session is where it has to hold.
-      env: { ...input.env, ...toolsPolicyEnv(input.tools), DISABLE_AUTOUPDATER: '1' },
+      env: { ...input.env, ...toolsPolicyEnv(input.tools), ...SHELL_TIMEOUT_ENV, DISABLE_AUTOUPDATER: '1' },
       stdin: input.prompt,
       signal: input.signal,
       model: input.model,

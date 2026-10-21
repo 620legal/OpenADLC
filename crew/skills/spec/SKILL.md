@@ -163,10 +163,16 @@ a policy that changes no code yet. Then:
    for, and its merge would count as finishing an issue that still has to be
    built.
 3. Run `openadlc-ci` in the foreground and wait for it, with the longest
-   timeout your shell tool allows; if the tool gives up first, run it again.
-   It has hostd run the repository's checks on your exact HEAD and records the
-   result. OpenADLC's `git` refuses to push, and its `gh` to open a pull
-   request on, a commit with no recorded pass.
+   timeout your shell tool allows; one call waits up to eight minutes. It has
+   hostd run the repository's checks on your exact HEAD and records the
+   result. Exit 3 means `make ci` is still running: run `openadlc-ci` again
+   at once, in the foreground, and keep running it until it exits 0 (passed),
+   1 (failed) or 2 (refused, or it could not reach the run; it says what to
+   do). Each call joins the run still going. Never end your turn, run it in
+   the background, or wait for a notification while a run is going: a
+   session that ends its turn ends the task, and its computer is taken down
+   with the run in it. OpenADLC's `git` refuses to push, and its `gh` to open
+   a pull request on, a commit with no recorded pass.
 4. Push, and open the pull request ready, never as a draft. Its body says what
    the ADR records and refers to the issue with `Refs #<issue>`, never
    `Closes`: the issue still goes on to build.
@@ -176,6 +182,11 @@ git switch -c "agent/$OPENADLC_BOT/adr-NNNN-short-title"
 git add docs/adr/NNNN-short-title.md
 git commit -m "Record the decision: <short title>"
 openadlc-ci
+```
+
+Once `openadlc-ci` has exited 0, and not before:
+
+```bash
 git push origin HEAD
 gh pr create --title "ADR NNNN: <short title>" --body-file .openadlc-scratch/adr-pr.md
 ```
