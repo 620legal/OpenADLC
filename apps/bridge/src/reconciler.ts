@@ -1,7 +1,8 @@
 import { audit, bots, hosts, issues, lastGithubDelivery, leases, repos, stageMoves, tasks } from '@openadlc/db';
 import { actsForOn } from './people.js';
 import { GitHubApiError, type GitHubClient } from '@openadlc/github';
-import { actsFor, declaredPathsFrom, isBackwardMove, isStageLabel, STAGE_LABELS, stageFromLabels, hasIgnoreLabel, type StageKey } from '@openadlc/shared';
+import { actsFor, declaredPathsFrom, hasAbandonedLabel, isBackwardMove, isStageLabel, STAGE_LABELS, stageFromLabels, hasIgnoreLabel, type StageKey } from '@openadlc/shared';
+import { howClosed } from './abandoned.js';
 import type { Actors } from './actors.js';
 import { asAutomation, automationBotName } from './automation-bot.js';
 import type { BridgeConfig } from './config.js';
@@ -9,7 +10,6 @@ import type { HostdClient } from './hostd-client.js';
 import { leaseHoldUntil } from './task-service.js';
 import { openedUnheard, recordUnheard, type UnheardFinding } from './unheard.js';
 import { chooseIssueText, editNotTaken } from './vouched-text.js';
-import { issueNumberFromBranch } from './work.js';
 
 export interface Drift {
   kind:
@@ -53,6 +53,24 @@ export interface IssueIntake {
    * reached, or null when the pull request did not merge.
    */
   mergeUnheard?(repo: { id: string; name: string }, issueNumber: number, prNumber: number): Promise<'merged' | 'done' | null>;
+  /**
+   * An issue closed without a merge, with no delivery to say so: moved to
+   * Done labelled `openadlc:abandoned`, its work stopped, as the webhook would
+   * have (`Webhooks.abandonUnheard`). Whether it moved.
+   */
+  abandonUnheard?(repo: { id: string; name: string }, issueNumber: number): Promise<boolean>;
+  /**
+   * An issue GitHub closed with a commit, no pull request of its own having
+   * merged: moved to Done without the label, as shipped by that commit
+   * (`Webhooks.landedUnheard`). Whether it moved.
+   */
+  landedUnheard?(repo: { id: string; name: string }, issueNumber: number, sha: string): Promise<boolean>;
+  /**
+   * An abandoned issue reopened with no delivery to say so: the label taken
+   * off and the card back where it was (`Webhooks.reviveUnheard`). The stage
+   * it is in now, or null when it was not brought back.
+   */
+  reviveUnheard?(repo: { id: string; name: string }, issueNumber: number, labels: readonly string[]): Promise<StageKey | null>;
 }
 
 /** An issue or pull request as reconcile reads it from GitHub. */
@@ -465,34 +483,33 @@ export class Reconciler {
       return;
     }
 
-    // A closed issue whose change never merged is finished business —
-    // abandoned, or closed by hand: it leaves the board rather than sitting in
-    // a column nobody is working. One whose change merged is not. GitHub
-    // closes an issue at the merge that says it closes it, with the card in
-    // Ship; dropping it there lost openadlc-testbed#1, and #3, which waits on it,
-    // could never be unblocked.
+    // A closed issue short of Ship or Done is one whose close no delivery
+    // settled. One whose change merged moves on: GitHub closes an issue at the
+    // merge that says it closes it, with the card in Ship, and dropping it
+    // there lost openadlc-testbed#1, and #3, which waits on it, could never be
+    // unblocked. One closed without a merge goes to Done as abandoned. It was
+    // forgotten here, leaving the board with its Needs you cards still
+    // standing, and an issue waiting on it waiting on one OpenADLC no longer had.
     const merged = (stage: string | null | undefined): boolean => stage === 'merged' || stage === 'done';
     if (issue.state === 'closed' && !merged(liveStage) && !merged(known?.stage)) {
       if (known) {
-        // GitHub closes the issue at the merge either way; only the merge's
-        // own delivery moved the card on. With that delivery missed, the issue
-        // was forgotten here as closed unmerged, and an issue waiting on it
-        // waited on one OpenADLC had never seen, for good.
-        const pull = client ? await mergedPullOf(client, repo.fullName, known) : undefined;
-        if (pull === undefined) {
+        const subject = `${repo.name}#${issue.number}`;
+        const how = client ? await howClosed(client, repo.fullName, known) : undefined;
+        if (how === undefined) {
           drift.push({
             kind: 'issue_closed',
-            subject: `${repo.name}#${issue.number}`,
-            detail: `closed while the board had it in ${known.stage}, and whether its pull request merged could not be read; kept until GitHub answers`,
+            subject,
+            detail: `closed while the board had it in ${known.stage}, and whether it merged could not be read from GitHub; kept until GitHub answers`,
             repaired: false,
           });
           return;
         }
-        if (pull !== null) {
+        if (how !== 'abandoned' && 'merged' in how) {
+          const pull = how.merged;
           const to = repair && this.intake.mergeUnheard ? await this.intake.mergeUnheard(repo, issue.number, pull) : null;
           drift.push({
             kind: 'issue_closed',
-            subject: `${repo.name}#${issue.number}`,
+            subject,
             detail: to
               ? `#${pull} merged and its webhook never arrived; moved from ${known.stage} to ${to}`
               : `#${pull} merged and its webhook never arrived; still in ${known.stage}`,
@@ -500,12 +517,29 @@ export class Reconciler {
           });
           return;
         }
-        if (repair) await issues.forget(repo.id, issue.number);
+        if (how !== 'abandoned') {
+          // Only here, never on the webhook: the merge's own delivery may still
+          // be on its way there, and would be overtaken.
+          const moved = repair && this.intake.landedUnheard ? await this.intake.landedUnheard(repo, issue.number, how.commit) : false;
+          const sha = how.commit.slice(0, 7);
+          drift.push({
+            kind: 'issue_closed',
+            subject,
+            detail: moved
+              ? `closed by ${sha} with no pull request of its own merged; moved from ${known.stage} to Done`
+              : `closed by ${sha} with no pull request of its own merged; still in ${known.stage}`,
+            repaired: moved,
+          });
+          return;
+        }
+        const abandoned = repair && this.intake.abandonUnheard ? await this.intake.abandonUnheard(repo, issue.number) : false;
         drift.push({
           kind: 'issue_closed',
-          subject: `${repo.name}#${issue.number}`,
-          detail: `closed while the board had it in ${known.stage}`,
-          repaired: repair,
+          subject,
+          detail: abandoned
+            ? `closed without a merge while the board had it in ${known.stage}; moved to Done as abandoned`
+            : `closed without a merge while the board had it in ${known.stage}; still there`,
+          repaired: abandoned,
         });
       }
       return;
@@ -549,6 +583,27 @@ export class Reconciler {
         subject: `${repo.name}#${issue.number}`,
         detail: WEBHOOK_NEVER_ARRIVED,
         repaired: repair,
+      });
+      return;
+    }
+
+    // Abandoned and reopened, with no delivery to say so: the label comes off
+    // and a card in Done goes back where it was, as the webhook's `reopened`
+    // does. The stage label still says Done, which is no person's move back.
+    // One a person moved out of Done keeps its stage and loses the label: left
+    // on, a later merge carried it into Done, where it read as not shipped.
+    if (issue.state === 'open' && hasAbandonedLabel(known.labels)) {
+      const to = repair && this.intake.reviveUnheard ? await this.intake.reviveUnheard(repo, issue.number, issue.labels) : null;
+      const inDone = known.stage === 'done';
+      drift.push({
+        kind: inDone ? 'stage_mismatch' : 'stale_labels',
+        subject: `${repo.name}#${issue.number}`,
+        detail: inDone
+          ? to
+            ? `reopened on GitHub while the board had it in Done as abandoned; moved back to ${to}`
+            : 'reopened on GitHub while the board has it in Done as abandoned; still there'
+          : `open on GitHub and in ${known.stage}, still labelled openadlc:abandoned; ${to ? 'the label was taken off' : 'it could not be taken off'}`,
+        repaired: to !== null,
       });
       return;
     }
@@ -733,36 +788,6 @@ export function renderDrift(drift: readonly Drift[]): string {
 }
 
 /** The first line of what went wrong, short enough for a log line. */
-/**
- * The pull request that merged a closed issue's change: the one recorded on
- * it, or else one whose branch was cut for it, among the latest closed ones.
- * Null when none did; undefined when GitHub could not be asked, which is no
- * reason to forget an issue.
- */
-async function mergedPullOf(
-  client: GitHubClient,
-  repoFullName: string,
-  known: { number: number; prNumber: number | null },
-): Promise<number | null | undefined> {
-  try {
-    if (known.prNumber) {
-      const pull = await client.getPullRequest(repoFullName, known.prNumber).catch((error: unknown) => {
-        if (error instanceof GitHubApiError && error.status === 404) return null;
-        throw error;
-      });
-      if (pull?.merged) return pull.number;
-    }
-    const closed = await client.request<{ number: number; merged_at?: string | null; head?: { ref?: string } }[]>(
-      'GET',
-      `/repos/${repoFullName}/pulls?state=closed&sort=updated&direction=desc&per_page=100`,
-    );
-    const found = closed.find((pull) => pull.merged_at && pull.head?.ref && issueNumberFromBranch(pull.head.ref) === known.number);
-    return found ? found.number : null;
-  } catch {
-    return undefined;
-  }
-}
-
 function reasonOf(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const line = message.split('\n')[0] ?? '';

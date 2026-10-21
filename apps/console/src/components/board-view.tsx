@@ -15,7 +15,7 @@ import { ThreadPanel } from '@/components/thread-panel';
 import type { AttentionItem, Board, BoardCard, BoardColumn, CrewMember, WorkPause } from '@/lib/api';
 import { findBot, labelIn } from '@/lib/bot-label';
 import { attemptMove, columnsWithMoves, movesBack, NO_MOVES, reconcile, type MoveState } from '@/lib/board-move';
-import { cardBot, cardCost, cardStatus, nextUp, type CardContext, type CardStatus } from '@/lib/card-status';
+import { abandoned, cardBot, cardCost, cardStatus, nextUp, type CardContext, type CardStatus } from '@/lib/card-status';
 import { cn } from '@/lib/cn';
 import { heldLine, IssueControls } from '@/components/issue-controls';
 import { boardHref, type HeaderData } from '@/lib/header';
@@ -404,14 +404,18 @@ interface CardHandlers {
  * first. The bridge lists every column in the order the dispatcher takes work
  * in, which is what Build is read by and says nothing about what shipped when:
  * Done showed something shipped just now between two that shipped hours before.
+ * `shipped` is how many of the week's shipped and `older` how many shipped
+ * before it: a card closed without merging is shown for the week and counted
+ * in neither.
  */
-function visibleCards(column: BoardColumn, now: string): { cards: BoardCard[]; older: number } {
-  if (column.stage !== 'done') return { cards: column.cards, older: 0 };
-  const shipped = (card: BoardCard) => card.shippedAt ?? card.updatedAt;
+function visibleCards(column: BoardColumn, now: string): { cards: BoardCard[]; shipped: number; older: number } {
+  if (column.stage !== 'done') return { cards: column.cards, shipped: column.cards.length, older: 0 };
+  const at = (card: BoardCard) => card.shippedAt ?? card.updatedAt;
   const recent = column.cards
-    .filter((card) => within(shipped(card), DONE_DAYS, now))
-    .sort((a, b) => Date.parse(shipped(b)) - Date.parse(shipped(a)));
-  return { cards: recent, older: column.cards.length - recent.length };
+    .filter((card) => within(at(card), DONE_DAYS, now))
+    .sort((a, b) => Date.parse(at(b)) - Date.parse(at(a)));
+  const counted = (cards: readonly BoardCard[]) => cards.filter((card) => !abandoned(card)).length;
+  return { cards: recent, shipped: counted(recent), older: counted(column.cards) - counted(recent) };
 }
 
 function Column({
@@ -436,7 +440,7 @@ function Column({
   cards: CardHandlers;
 }) {
   const stage = stageOf(column.stage);
-  const { cards: shown, older } = visibleCards(column, now);
+  const { cards: shown, shipped, older } = visibleCards(column, now);
 
   return (
     <section
@@ -452,7 +456,7 @@ function Column({
             {stage?.title ?? column.title}
           </h2>
           <span className="text-[12px] text-dim">
-            {column.stage === 'done' ? `${shown.length} this week` : column.cards.length}
+            {column.stage === 'done' ? `${shipped} this week` : column.cards.length}
           </span>
           <Staff bots={column.bots} crew={crew} onOpenBot={onOpenBot} />
         </div>
@@ -718,7 +722,7 @@ function PhoneStages({ columns, now, cards }: { columns: BoardColumn[]; now: str
       <nav aria-label="Stage" className="scroll-row flex gap-1.5 overflow-x-auto px-4">
         {columns.map((one) => {
           const current = one.stage === column.stage;
-          const count = one.stage === 'done' ? visibleCards(one, now).cards.length : one.cards.length;
+          const count = one.stage === 'done' ? visibleCards(one, now).shipped : one.cards.length;
           return (
             <button
               key={one.stage}

@@ -963,6 +963,7 @@ question open on it, its place in the line to merge — never from a setting
 | Live on testing · waiting for production | The production environment's required reviewer, or its soak timer | The repository's deployments page; Settings → Repositories |
 | Waiting until `<repo>` is resumed | The repository is paused | Settings → Pause work |
 | Merged · waiting to deploy | No `deployed:testing` yet, in a repository that has a testing deploy | Settings → Repositories: how it ships, and where the rules came from; the bridge log's `dispatched deploy-testing` or `not dispatched` line |
+| Abandoned … (in Done) | Closed without merging: it is labelled `openadlc:abandoned`, nothing shipped, and it is not in "N this week" | The issue on GitHub; see [Closed, but still on the board or in Needs you](#closed-but-still-on-the-board-or-in-needs-you) |
 
 A repository whose delivery rules say `testing: on: none` does not sit on that
 line. That is set in its `.github/openadlc.yml` or, without that file, by
@@ -1013,6 +1014,60 @@ closed then, since answering it would resume nothing. To sweep now:
 SECRET="$(cat "${OPENADLC_HOME:-$HOME/.openadlc}/secrets/internal-api-secret.secret")"
 curl -X POST -H "x-openadlc-internal-secret: $SECRET" \
   http://127.0.0.1:47311/internal/schedule/stages   # or reconcile, merge, deploy
+```
+
+## Closed, but still on the board or in Needs you
+
+An issue closed on GitHub without its change merging goes to Done, labelled
+`openadlc:abandoned`, and its card says "Abandoned". That covers an issue a
+person closed, one a Projects board closed, and one in Review whose own pull
+request a person closed unmerged; the bridge then closes that issue as not
+planned, with a comment saying why and what each way back does. Reopening the
+pull request brings both back, to Review; reopening only the issue brings the
+card back to Build, for a new pull request. The lease is let
+go, every task still going on the issue or its pull request is stopped (`its
+issue was closed without merging`) but a deploy task and the closing account's
+own, it is left out of Insights' merges, and its Needs you cards clear: its
+questions, failed tasks, review stalls, send-backs and held merges. A review
+stall on a pull request GitHub says is closed clears too, within ten minutes
+(`ClosedSubjects`), even when the board has no row for its issue. See
+[architecture](architecture.md#closing-without-merging).
+
+When a closed card is still in its old column:
+
+- **A merge closed it.** GitHub closes an issue at the merge that says
+  `Closes #N`, and the merge's delivery is what moves the card to Ship or
+  Done. If the issue's own pull request merged, or GitHub's timeline says a
+  merged pull request or a commit closed it, it is not abandoned; with that
+  delivery missed, the reconciler moves it within 15 minutes (a commit with no
+  pull request here to Done, without the label). One taken for abandoned
+  before its merge was handled loses the label when the merge is.
+- **GitHub could not be asked.** Whether it merged is read from GitHub, and a
+  read that fails moves nothing. The reconcile report says `whether it merged
+  could not be read from GitHub; kept until GitHub answers`.
+- **The label could not be put on.** The bridge log says `closed without a
+  merge, and was left in <stage>` and why. On a repository set up before the
+  label existed, the app makes it first; without an app key it cannot, and the
+  fix is Settings → Repositories → set up again. Then reconcile.
+- **It is labelled `openadlc:ignore`.** Nothing moves it.
+- **Its pull request was closed, and the issue was not.** Only a person's
+  close of the pull request the card names, with the card in Review, takes the
+  issue along. Closing an older round's draft after a send-back, closing it
+  while the card is in Build, and a crew account's or an app's close leave the
+  issue where it is: close the issue itself.
+
+An issue that waits on an abandoned one under `## Dependencies` stays
+`blocked`, and Needs you has a card: "#N waits on #M, which was closed without
+merging". Drop or change #M in #N's Dependencies, or reopen #M, and the card
+goes; the dispatcher then unblocks #N as usual.
+
+Reopening the issue takes the label off and brings the card back to the stage
+its label names, or to the stage it was abandoned from, or to Build; to Build
+rather than Review while its pull request stays closed. A card moved out of
+Done from the board reopens the issue and stays where it was moved.
+
+```bash
+grep -E 'closed without a merge|was reopened' "$(openadlc logs bridge)" | tail -n 20
 ```
 
 ## Work moves slowly: reading Insights

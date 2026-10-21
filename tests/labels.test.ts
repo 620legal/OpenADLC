@@ -48,3 +48,22 @@ describe('review:human', () => {
     expect(plan).toMatch(/while `needs-human` is on/);
   });
 });
+
+/**
+ * The bridge puts `openadlc:abandoned` on an issue it moves to Done because it
+ * closed without merging (`ABANDONED_LABEL`). A repository set up before the
+ * label existed gets it from `RepoSetup.ensureLabel`, which makes only the
+ * labels this file lists; unlisted, the abandon could not label the issue and
+ * the card stayed where it was.
+ */
+describe('openadlc:abandoned', () => {
+  it('is in config/labels.json, and says that nothing shipped', () => {
+    const labels = JSON.parse(readFileSync(join(ROOT, 'config', 'labels.json'), 'utf8')) as { name: string; description: string }[];
+    const stages = readFileSync(join(ROOT, 'packages', 'shared', 'src', 'stages.ts'), 'utf8');
+    const entry = labels.find((label) => label.name === 'openadlc:abandoned');
+
+    expect(stages).toContain("export const ABANDONED_LABEL = 'openadlc:abandoned';");
+    expect(entry?.description).toMatch(/without merging/);
+    expect(entry?.description).toMatch(/nothing shipped/);
+  });
+});

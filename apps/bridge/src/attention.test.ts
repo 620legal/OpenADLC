@@ -1044,6 +1044,98 @@ describe('an issue labelled openadlc:ignore', () => {
   });
 });
 
+describe('an issue closed without merging', () => {
+  // #11 was closed with its pull request #29 unmerged: its card is in Done,
+  // labelled openadlc:abandoned, and nothing on it or on #29 waits on anyone.
+  // A "Review stopped without agreeing" for #15 stood after #15 was closed.
+  const abandoned = { ...issue(11, 'Rate-limit the webhook route', 'done', 29), labels: ['adlc:done', 'openadlc:abandoned', 'needs-human'] };
+  const withAbandoned = (one = abandoned) => ISSUES.map((entry) => (entry.number === 11 ? one : entry));
+
+  it('has no question, failure, stall, send-back, intake stall or held merge of its own or its pull request’s', async () => {
+    const { attentionItems } = await load();
+    const asking = task({ id: 'task-q', botId: 'bot-lead', kind: 'review', subjectRef: 'openadlc-testbed#29', state: 'paused' });
+    const failed = task({ botId: 'bot-second', kind: 'review', subjectRef: 'openadlc-testbed#29', state: 'failed', endedAt: minutesAgo(1), exitReason: 'boom' });
+    // Another issue's work stays.
+    const other = task({ botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'failed', endedAt: minutesAgo(1), exitReason: 'boom' });
+    const input = {
+      now: NOW,
+      gates: [{ id: 'gate-5', taskId: 'task-q', question: 'Which?', options: [], githubCommentUrl: null, createdAt: minutesAgo(20) }],
+      tasks: [asking, failed, other],
+      bots: BOTS,
+      repos: REPOS,
+      requests: [],
+      stallEvents: [{ at: minutesAgo(10), payload: { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 3 } }],
+      sendBackEvents: [{ at: minutesAgo(30), type: 'send_back.stalled', payload: { repo: 'openadlc-testbed', issue: 11, from: 'done', to: 'build', by: 'lead-reviewer', reason: 'Still wrong' } }],
+      intakeStalls: [{ at: minutesAgo(40), payload: { subjectRef: 'openadlc-testbed#11', tries: 2 } }],
+      heldMerges: [{ repo: 'openadlc-testbed', prNumber: 29, reason: 'it changes how CI runs (Makefile)', since: minutesAgo(2) }],
+    };
+
+    // In Review without the label, all but the intake stall are items.
+    const before = attentionItems({ ...input, issues: withAbandoned({ ...abandoned, stage: 'review' as never, labels: ['needs-human'] }) });
+    expect(before.filter((item) => item.subject.item === 'openadlc-testbed#11').map((item) => item.kind).sort()).toEqual(
+      ['merge_waiting', 'question', 'review_stalled', 'task_failed'].sort(),
+    );
+
+    const after = attentionItems({ ...input, issues: withAbandoned() });
+    expect(after.map((item) => item.subject.ref)).toEqual(['openadlc-testbed#16']);
+  });
+
+  it('has no stall on a pull request GitHub says is closed, even with no card on the board', async () => {
+    // The reconciler had already forgotten #15's row, so its stall named no issue the board had.
+    const { attentionItems } = await load();
+    const input = {
+      now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [],
+      stallEvents: [{ at: minutesAgo(10), payload: { repo: 'openadlc-testbed', pr: 40, issue: null, rounds: 3 } }],
+    };
+    expect(attentionItems(input).map((item) => item.id)).toEqual(['stall:openadlc-testbed#40']);
+    expect(attentionItems({ ...input, closed: new Set(['openadlc-testbed#40']) })).toEqual([]);
+  });
+
+  it('tells a person once what a blocked issue waits on, with a way to settle it, until the dependency is reopened', async () => {
+    const { attentionItems } = await load();
+    const waiting = {
+      ...issue(20, 'Show the limit on the card', 'build'),
+      labels: ['adlc:build', 'blocked'],
+      body: '### Outcome\n\nIt shows.\n\n### Dependencies\n\n- #11\n- #16\n',
+    };
+    // Not blocked, or waiting only on work that is still going: no card.
+    const unblocked = { ...issue(21, 'Something else', 'build'), labels: ['adlc:build'], body: '### Dependencies\n\n- #11\n' };
+    const onOpen = { ...issue(22, 'Waits on a build', 'build'), labels: ['adlc:build', 'blocked'], body: '### Dependencies\n\n- #16\n' };
+    const base = { now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, requests: [], stallEvents: [] };
+
+    const items = attentionItems({ ...base, issues: [...withAbandoned(), waiting, unblocked, onOpen] });
+    expect(items).toEqual([
+      {
+        id: 'dependency-abandoned:openadlc-testbed#20',
+        kind: 'dependency_abandoned',
+        group: 'work',
+        headline: '#20 waits on #11, which was closed without merging',
+        subject: { repo: 'openadlc-testbed', number: 20, title: 'Show the limit on the card', ref: 'openadlc-testbed#20', url: 'https://github.com/janedoe/openadlc-testbed/issues/20', item: 'openadlc-testbed#20' },
+        bot: null,
+        since: abandoned.updatedAt,
+        detail: 'Drop or change #11 in its Dependencies, or reopen #11.',
+        actions: [
+          { kind: 'open_url', label: 'Edit #20', url: 'https://github.com/janedoe/openadlc-testbed/issues/20' },
+          { kind: 'open_url', label: 'Reopen #11', url: 'https://github.com/janedoe/openadlc-testbed/issues/11' },
+        ],
+      },
+    ]);
+
+    const reopened = { ...abandoned, stage: 'build' as never, labels: ['adlc:build'] };
+    expect(attentionItems({ ...base, issues: [...withAbandoned(reopened), waiting] }).filter((item) => item.kind === 'dependency_abandoned')).toEqual([]);
+  });
+
+  it('is said in one card per waiting issue, naming every dependency abandoned', async () => {
+    const { attentionItems } = await load();
+    const twelve = { ...issue(12, 'Count rounds', 'done', 30), labels: ['adlc:done', 'openadlc:abandoned'] };
+    const waiting = { ...issue(20, 'Show the limit on the card', 'build'), labels: ['adlc:build', 'blocked'], body: '## Dependencies\n\n- #11\n- #12\n' };
+    const items = attentionItems({ now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, requests: [], stallEvents: [], issues: [...withAbandoned(), twelve, waiting] });
+    expect(items.map((item) => [item.id, item.headline, item.actions.map((action) => action.label)])).toEqual([
+      ['dependency-abandoned:openadlc-testbed#20', '#20 waits on #11 and #12, which were closed without merging', ['Edit #20', 'Reopen #11', 'Reopen #12']],
+    ]);
+  });
+});
+
 describe('work sent back to a person', () => {
   const refused = { at: daysAgo(3), type: 'send_back.stalled', payload: { repo: 'openadlc-testbed', issue: 11, from: 'review', to: 'build', by: 'lead-reviewer', reason: 'Still wrong' } };
   const held = { ...issue(11, 'Rate-limit the webhook route', 'review', 29), labels: ['needs-human'] };
@@ -1865,6 +1957,7 @@ describe('which group an item is in', () => {
     const { attentionItems, groupOf } = await load();
     expect(['question', 'review_stalled', 'task_failed', 'triage_failed'].map((kind) => groupOf(kind as never))).toEqual(['work', 'work', 'work', 'work']);
     expect(['check_failed', 'check_fixed', 'engine_update_failed'].map((kind) => groupOf(kind as never))).toEqual(['system', 'system', 'system']);
+    expect(groupOf('dependency_abandoned')).toBe('work');
 
     const failed = task({ id: 'task-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'failed', endedAt: minutesAgo(40), exitReason: 'engine exited 1' });
     const items = attentionItems({
@@ -2306,6 +2399,26 @@ describe('reading which subjects have closed', () => {
     expect(closed).toHaveBeenCalledTimes(1);
     expect(closed).toHaveBeenCalledWith(['openadlc-testbed#202']);
     expect([...(input.closed ?? [])]).toEqual(['openadlc-testbed#202']);
+  });
+});
+
+describe('reading which stalled pull requests have closed', () => {
+  it('asks GitHub about a stall whose pull request has no card on the board, and not about one the board can settle', async () => {
+    const { readAttention } = await load();
+    const { listEventsOfType } = await import('@openadlc/db');
+    store.gates = [];
+    store.tasks = [];
+    vi.mocked(listEventsOfType).mockImplementationOnce(async () => [
+      // #11's card is in Review: its stall goes when the card leaves.
+      { id: 1, at: '2026-09-24T11:20:00.000Z', payload: { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 3 } },
+      { id: 2, at: '2026-09-24T11:30:00.000Z', payload: { repo: 'openadlc-testbed', pr: 40, issue: null, rounds: 3 } },
+    ] as never);
+    const closed = vi.fn(async () => new Set(['openadlc-testbed#40']));
+
+    const input = await readAttention(NOW, { closed });
+
+    expect(closed).toHaveBeenCalledWith(['openadlc-testbed#40']);
+    expect([...(input.closed ?? [])]).toEqual(['openadlc-testbed#40']);
   });
 });
 

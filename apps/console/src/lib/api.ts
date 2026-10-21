@@ -303,7 +303,9 @@ export type AttentionKind =
   /** A production promote OpenADLC holds for a person, where GitHub's plan cannot hold a reviewer. */
   | 'promote_held'
   /** A design took an accepted design memory entry out of effect: a notice, revertible in Settings. */
-  | 'design_memory_superseded';
+  | 'design_memory_superseded'
+  /** A blocked issue waits on one closed without merging: drop the dependency, or reopen it. */
+  | 'dependency_abandoned';
 
 /** One thing waiting on a person, as `GET /v1/attention` says it. */
 export interface AttentionItem {

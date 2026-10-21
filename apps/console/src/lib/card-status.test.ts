@@ -119,6 +119,13 @@ describe('a card’s status line', () => {
     expect(cardStatus(card({ stage: 'done', shippedAt: minutesAgo(60 * 30) }), CONTEXT).text).toBe('Shipped yesterday');
   });
 
+  it('says a card in Done that was closed without merging was abandoned, with no tick', () => {
+    // In Done so it leaves the columns work is in; nothing of it shipped.
+    const abandoned = card({ stage: 'done', labels: ['adlc:done', 'openadlc:abandoned'], shippedAt: minutesAgo(120) });
+    expect(cardStatus(abandoned, CONTEXT)).toEqual({ text: 'Abandoned 2 hours ago', tone: 'muted', mark: null });
+    expect(cardStatus({ ...abandoned, shippedAt: null, updatedAt: 'not a date' }, CONTEXT).text).toBe('Abandoned');
+  });
+
   it('reads a card from a bridge that sends no work as nothing known, not as an error', () => {
     const bare: BoardCard = {
       repo: 'openadlc',

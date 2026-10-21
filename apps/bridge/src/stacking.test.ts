@@ -217,6 +217,16 @@ describe('an issue that depends on one in review', () => {
     expect(await subject.waitingOn('shop', 5)).toBeNull();
   });
 
+  it('keeps out of the merge line when that one reached Done by being closed without merging', async () => {
+    // Done is where an abandoned issue goes too; taken for shipped, #5's pull
+    // request joined the line with #4's commits in it, which never landed.
+    const { subject } = stacking();
+    await subject.sweep();
+
+    world.issues.set(4, { ...world.issues.get(4)!, stage: 'done', labels: ['adlc:done', 'openadlc:abandoned'] });
+    expect(await subject.waitingOn('shop', 5)).toBe(4);
+  });
+
   /** #5's pull request, #31, with #4 merged and the line about to bring it up to date. */
   async function readyToUpdate(options: { sleep?: (ms: number) => Promise<void> } = {}) {
     const stacked = stacking(options);
@@ -360,6 +370,17 @@ describe('an issue that depends on one in review', () => {
     world.issues.delete(4);
     again.client.getPullRequest.mockResolvedValue({ state: 'closed', merged: false, headRef: A_BRANCH, headRepoFullName: 'janedoe/shop' });
     expect(await again.subject.sweep()).toEqual(['shop#5: held, #4 was closed without merging']);
+  });
+
+  it('is held when that one is in Done, closed without merging', async () => {
+    // The reconciler forgot such an issue; now it is in Done, labelled.
+    const { subject, client } = stacking();
+    await subject.sweep();
+    world.leases.set(5, { id: 'lease-5' });
+    world.issues.set(4, { ...world.issues.get(4)!, stage: 'done', labels: ['adlc:done', 'openadlc:abandoned'] });
+
+    expect(await subject.sweep()).toEqual(['shop#5: held, #4 was closed without merging']);
+    expect(client.comment).toHaveBeenCalledWith('janedoe/shop', 5, expect.stringContaining('#4 was closed without merging'));
   });
 
   it('is held, with a note, when that one is closed without merging', async () => {

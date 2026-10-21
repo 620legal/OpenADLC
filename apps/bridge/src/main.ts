@@ -455,6 +455,9 @@ async function main(): Promise<void> {
       return { approval: production.approval, soakMinutes: production.soakMinutes, governedByFile: known.approvalInFile === true };
     },
   });
+  // `openadlc:abandoned` on a repository set up before it existed: the
+  // automation account may put a label on, and only the app may make one.
+  webhooks.useEnsureLabel((repoFullName, label) => repoSetup.ensureLabel(repoFullName, label));
   // Everything OpenADLC cannot do for itself, proved by its effect and kept
   // proving: a failing check is a card on the board until it passes, and a
   // lasting blocking one is sent through the notifier. See `health/`.

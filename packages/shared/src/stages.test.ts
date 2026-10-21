@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { REPO_DEFAULTS, repoConfigSchema } from './config.js';
 import {
+  ABANDONED_LABEL,
   UNTOUCHABLE_STAGES,
+  hasAbandonedLabel,
   hasIgnoreLabel,
+  hasShipped,
   hasNextLabel,
   hasPausedLabel,
   IGNORE_LABEL,
@@ -83,6 +86,27 @@ describe('assist, which is no longer a stage mode', () => {
     expect(repoConfigSchema.parse({ ...base, stageModes: { merged: 'assist' } }).stageModes).toEqual({ merged: 'autonomous' });
     expect(Object.values(REPO_DEFAULTS.stageModes)).not.toContain('assist');
     expect(() => repoConfigSchema.parse({ ...base, stageModes: { merged: 'sometimes' } })).toThrow();
+  });
+});
+
+describe('Done reached by abandoning', () => {
+  // An issue closed without its change merging goes to Done too, so that it
+  // leaves the columns work is in. Read as shipped, it unblocked what waited
+  // on it and let a pull request stacked on it into the merge line.
+  it('is not shipped; Done and Ship without the label are', () => {
+    expect(ABANDONED_LABEL).toBe('openadlc:abandoned');
+    expect(hasShipped({ stage: 'done', labels: [ABANDONED_LABEL] })).toBe(false);
+    expect(hasShipped({ stage: 'done', labels: ['adlc:done'] })).toBe(true);
+    expect(hasShipped({ stage: 'merged', labels: [] })).toBe(true);
+    expect(hasShipped({ stage: 'review', labels: [] })).toBe(false);
+  });
+
+  it('is told by the label alone, and nothing is abandoned without it', () => {
+    expect(hasAbandonedLabel(['adlc:done', 'openadlc:abandoned'])).toBe(true);
+    expect(hasAbandonedLabel(['adlc:done'])).toBe(false);
+    expect(hasAbandonedLabel(undefined)).toBe(false);
+    // A store row read without its labels is no abandon either.
+    expect(hasShipped({ stage: 'done' })).toBe(true);
   });
 });
 

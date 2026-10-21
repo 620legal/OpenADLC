@@ -13,6 +13,10 @@ import type { designMemory as store } from '@openadlc/db';
 const world = vi.hoisted(() => ({
   entries: [] as store.DesignMemoryEntry[],
   stage: 'spec' as string,
+  /** The issue's labels on the board. */
+  labels: [] as string[],
+  /** What the issue's pull request changed. */
+  changed: [] as string[],
   tasks: {} as Record<string, { id: string; kind: string; repoId: string; subjectRef: string; botId: string }>,
   bots: {} as Record<string, { id: string; name: string }>,
   gates: [] as { taskId: string | null; state: string; answeredBy: string | null }[],
@@ -52,7 +56,7 @@ vi.mock('@openadlc/db', () => {
       ),
       listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'api', fullName: 'acme/api' }]),
     },
-    issues: { getIssue: vi.fn(async () => ({ stage: world.stage, prChangedPaths: [] })) },
+    issues: { getIssue: vi.fn(async () => ({ stage: world.stage, labels: world.labels, prChangedPaths: world.changed })) },
     tasks: { getTask: vi.fn(async (id: string) => world.tasks[id] ?? null) },
     bots: { getBotById: vi.fn(async (id: string) => world.bots[id] ?? null) },
     threads: { listGatesForSubject: vi.fn(async () => world.gates) },
@@ -97,6 +101,7 @@ vi.mock('@openadlc/db', () => {
         return found ?? null;
       }),
       decisionsWithoutAdr: vi.fn(async () => []),
+      setAdrPath: vi.fn(async () => undefined),
     },
   };
 });
@@ -119,6 +124,8 @@ const design = (entries: unknown, signature: { verified: boolean; seat: string |
 beforeEach(() => {
   world.entries = [];
   world.stage = 'spec';
+  world.labels = [];
+  world.changed = [];
   world.tasks = { [SPEC.id]: SPEC, [BUILD.id]: BUILD, [OTHER_SPEC.id]: OTHER_SPEC };
   world.bots = { 'bot-se': { id: 'bot-se', name: 'system-engineer' }, 'bot-builder': { id: 'bot-builder', name: 'builder' } };
   world.gates = [];
@@ -201,6 +208,36 @@ describe('what a design proposes', () => {
     expect(await acceptOnStage('api', 12, 'build')).toBe(0);
     expect(await sweepDesignMemory()).toEqual([]);
     expect(world.entries[0]?.state).toBe('proposed');
+  });
+
+  // An issue closed without merging goes to Done too. Read as past design,
+  // what its design proposed became what every later design is told, for a
+  // design nobody built.
+  it('stays proposed on an issue abandoned from design, whether its comment comes late or the sweep finds it', async () => {
+    const { recordDesignMemory, sweepDesignMemory } = await import('./design-memory.js');
+    const { designMemory } = await import('@openadlc/db');
+    await recordDesignMemory(design([{ kind: 'decision', title: 'Costs per round', body: 'One row per review round.' }]));
+    world.stage = 'done';
+    world.labels = ['adlc:done', 'openadlc:abandoned'];
+
+    await recordDesignMemory(design([{ kind: 'glossary', title: 'Round', body: 'One review of one head.' }]));
+    expect(await sweepDesignMemory()).toEqual([]);
+    expect(world.entries.map((one) => [one.title, one.state])).toEqual([
+      ['Costs per round', 'proposed'],
+      ['Round', 'proposed'],
+    ]);
+
+    // Nor is an ADR taken from its pull request, which never merged.
+    world.changed = ['docs/adr/0009-costs-per-round.md'];
+    const decided = { ...world.entries[0]!, state: 'accepted' as const, sourceSubject: 'api#12' };
+    vi.mocked(designMemory.decisionsWithoutAdr).mockResolvedValueOnce([decided] as never);
+    expect(await sweepDesignMemory()).toEqual([]);
+
+    // Shipped, it would have been.
+    world.labels = ['adlc:done'];
+    vi.mocked(designMemory.decisionsWithoutAdr).mockResolvedValueOnce([decided] as never);
+    const said = await sweepDesignMemory();
+    expect(said).toContain('api#12: "Costs per round" is recorded in docs/adr/0009-costs-per-round.md');
   });
 
   it('says a supersede on the issue and to the board, naming both entries and how to revert', async () => {

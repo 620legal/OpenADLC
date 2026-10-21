@@ -1,5 +1,6 @@
 import type { insights } from '@openadlc/db';
 import { hasIgnoreLabel } from '@openadlc/shared';
+import { isAbandonMove } from './abandoned.js';
 import { FULL_REVIEW_WHY } from './conflict-round.js';
 
 type InsightData = insights.InsightData;
@@ -115,9 +116,13 @@ function summarise(data: InsightData, options: { since: number; now: number; rep
     // Merged, or straight from review to done: a repository that deploys
     // nothing ships by merging, and its issues never pass through `merged` —
     // read only as moves to merged, eight merges in a day counted as none.
+    // Not an abandon's move to Done, which goes from review too: nothing of
+    // it shipped (`isAbandonMove`).
     const landed = moves.find(
       (move) =>
-        (move.to === 'merged' || (move.to === 'done' && move.from === 'review')) && Date.parse(move.at) >= since && Date.parse(move.at) <= now,
+        (move.to === 'merged' || (move.to === 'done' && move.from === 'review' && !isAbandonMove(move))) &&
+        Date.parse(move.at) >= since &&
+        Date.parse(move.at) <= now,
     );
     if (landed) {
       merged += 1;

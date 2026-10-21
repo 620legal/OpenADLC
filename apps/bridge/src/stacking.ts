@@ -5,8 +5,10 @@ import {
   DELIVERY_RULES_PATH,
   readDeliveryRulesFile,
   dependencyIsSatisfied,
+  hasAbandonedLabel,
   hasIgnoreLabel,
   hasPausedLabel,
+  hasShipped,
   leaseExpiryFrom,
   missingForRouting,
   PAUSED_LABEL,
@@ -185,8 +187,9 @@ export class Stacking {
    * The issue a pull request must wait for before it may join the merge line:
    * the one its issue was stacked on, until that one has merged, however long
    * that takes. Null when it waits on nothing. A dependency that cannot be
-   * read, or is gone from the board, is still waited on; a stack that cannot
-   * be read throws, and the caller keeps the pull request out of the line.
+   * read, is gone from the board, or is in Done because it was closed without
+   * merging (`hasShipped`), is still waited on; a stack that cannot be read
+   * throws, and the caller keeps the pull request out of the line.
    */
   async waitingOn(repoName: string, issue: number | null): Promise<number | null> {
     if (!issue) return null;
@@ -194,7 +197,7 @@ export class Stacking {
     if (!on) return null;
     const repo = await repos.getRepoByName(repoName).catch(() => null);
     const dependency = repo ? await issues.getIssue(repo.id, on).catch(() => null) : null;
-    return dependency && (dependency.stage === 'merged' || dependency.stage === 'done') ? null : on;
+    return dependency && hasShipped(dependency) ? null : on;
   }
 
   /**
@@ -344,24 +347,28 @@ export class Stacking {
       // Undefined when it could not be read, which says nothing; null when it is gone.
       const dependency = await issues.getIssue(repo.id, stack.onIssue).catch(() => undefined);
       if (dependency === undefined) continue;
+      // Closed without merging: in Done, labelled `openadlc:abandoned`.
+      const abandoned = Boolean(dependency && hasAbandonedLabel(dependency.labels));
       // Any stage before review, not only build: a person who moves it back to
       // spec or intake for a redesign changes what this was built on as much,
       // and its approvals were carried across the merge of the redone code.
-      if (dependency && !SENT_BACK_TO.includes(dependency.stage)) continue;
-      // Gone from the board is a dependency closed without merging: the
-      // reconciler forgets such an issue, and keeps a merged one. Its pull
-      // request says for certain; one GitHub could not be asked about waits.
+      if (dependency && !abandoned && !SENT_BACK_TO.includes(dependency.stage)) continue;
+      // Gone from the board is a dependency closed without merging too, from
+      // before the reconciler kept such an issue in Done, or cancelled from
+      // the board. Its pull request says for certain; one GitHub could not be
+      // asked about waits.
       if (!dependency) {
         const pull = await client.getPullRequest(repo.fullName, stack.onPr).catch(() => undefined);
         if (!pull || pull.merged) continue;
       }
 
       const on = stack.onIssue;
-      const why = dependency
-        ? `#${on}, which this was built on, was sent back to ${dependency.stage}: what it was built on is changing`
+      const sentBack = dependency && !abandoned ? dependency : null;
+      const why = sentBack
+        ? `#${on}, which this was built on, was sent back to ${sentBack.stage}: what it was built on is changing`
         : `#${on}, which this was built on, was closed without merging`;
-      const note = dependency
-        ? `**Held.** This was started from #${on}'s branch while #${on} was in review, and #${on} has been sent back to ${dependency.stage}. ` +
+      const note = sentBack
+        ? `**Held.** This was started from #${on}'s branch while #${on} was in review, and #${on} has been sent back to ${sentBack.stage}. ` +
           `Resume it from its card in OpenADLC once #${on} is settled (or take the \`${PAUSED_LABEL}\` label off this issue and its pull request); ` +
           `its pull request is then brought up to date with the base before it merges. ${START_OVER}`
         : `**Held.** This was started from #${on}'s branch while #${on} was in review, and #${on} was closed without merging, so its work is in this ` +
@@ -374,7 +381,7 @@ export class Stacking {
       await client.comment(repo.fullName, issue.number, note).catch(() => undefined);
       await stacks.markPaused(repo.id, issue.number).catch(() => undefined);
       await this.record(STACK_PAUSED, { repo: repo.name, issue: issue.number, on, at: this.at() });
-      done.push(`${repo.name}#${issue.number}: held, #${on} ${dependency ? 'was sent back' : 'was closed without merging'}`);
+      done.push(`${repo.name}#${issue.number}: held, #${on} ${sentBack ? 'was sent back' : 'was closed without merging'}`);
     }
     return done;
   }

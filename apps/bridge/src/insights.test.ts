@@ -49,6 +49,23 @@ describe('how fast work moves', () => {
     expect(aggregateInsights(data({ moves }), { days: 7, now: NOW }).overall.merged).toBe(2);
   });
 
+  it('does not count an issue closed without merging, which went from review to done as well', () => {
+    // An abandon's move is Review to Done, as a merge that ships is; counted,
+    // work that never merged was in "merged" with a cycle time.
+    const moves = [
+      { repoId: 'repo-a', issueNumber: 5, from: 'build', to: 'review', kind: 'forward', at: hoursAgo(4) },
+      { repoId: 'repo-a', issueNumber: 5, from: 'review', to: 'done', kind: 'forward', reason: 'Abandoned: #31 was closed without merging', at: hoursAgo(3) },
+      // Reopened and merged after all: counted, at its merge.
+      { repoId: 'repo-a', issueNumber: 6, from: 'review', to: 'done', kind: 'forward', reason: 'Abandoned: closed on GitHub without a merge', at: hoursAgo(5) },
+      { repoId: 'repo-a', issueNumber: 6, from: 'done', to: 'review', kind: 'person', reason: 'reopened on GitHub', at: hoursAgo(4) },
+      { repoId: 'repo-a', issueNumber: 6, from: 'review', to: 'done', kind: 'forward', reason: null, at: hoursAgo(2) },
+    ];
+    const requests = [{ repoId: 'repo-a', issueNumber: 6, createdAt: hoursAgo(6) }];
+    const result = aggregateInsights(data({ moves, requests }), { days: 7, now: NOW });
+    expect(result.overall.merged).toBe(1);
+    expect(result.overall.cycleMs).toBe(4 * H);
+  });
+
   it('counts send-backs in the window by the stage they left', () => {
     const moves = [
       { repoId: 'repo-a', issueNumber: 3, from: 'review', to: 'build', kind: 'send_back', at: hoursAgo(2) },
