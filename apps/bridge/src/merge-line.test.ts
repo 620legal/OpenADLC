@@ -459,6 +459,63 @@ describe('the front of the line, green and up to date', () => {
     expect(store.audits).toEqual([]);
   });
 
+  it('asks CI again for a crew pull request whose green ci ran before it was retargeted, and merges nothing on it', async () => {
+    // Its `ci` is on the head, so the line asks for no run before it reads
+    // the rules; the rules say the run was not this pull request's against
+    // main, which is no run at all.
+    const reason = "ci on the head is not this pull request's run against main: its run was made before its base was last changed (2026-10-16T16:34:01Z)";
+    decide.mockReturnValue({ land: false, reason, approvals: [], ciAgain: { after: null } });
+    const { line: merge, github, automation } = line();
+
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'testing', detail: "the ci on c0ffee0 is not its own run against its base; asked GitHub's CI to run again" });
+    expect(automation.setCiLabel).toHaveBeenCalledWith('janedoe/openadlc', 31, true);
+    expect(store.audits).toEqual([{ actor: 'openadlc-app', action: 'ci.requested', target: 'openadlc#31', payload: { head: HEAD, again: false, stale: true } }]);
+    expect(automation.mergeAsApp).not.toHaveBeenCalled();
+    expect(store.states.at(-1)?.state).toBe('testing');
+    expect(JSON.stringify(github.comment.mock.calls)).not.toContain('waiting to be merged');
+
+    // A person's pull request runs CI on its own events: it waits, saying why.
+    const person = line({ pull: { headRef: 'janedoe/fix-typo' } });
+    expect(await person.line.advance('openadlc')).toMatchObject({ state: 'merging' });
+    expect(person.automation.setCiLabel).not.toHaveBeenCalled();
+    expect(person.automation.mergeAsApp).not.toHaveBeenCalled();
+    expect(store.states.at(-1)?.detail).toContain(reason);
+  });
+
+  it('puts adlc:ci on again at once for a ci that was not its own, though the label is on, and then waits for that run', async () => {
+    // The label is on from the run that made the stale `ci`, so nothing is
+    // coming: waiting the usual ten minutes for a push's run waited on nothing.
+    decide.mockReturnValue({ land: false, reason: 'ci on the head is not its own', approvals: [], ciAgain: { after: null } });
+    const { line: merge, automation, clock } = line({ pull: { labels: ['adlc:ci'] } });
+
+    await merge.advance('openadlc');
+    expect(automation.setCiLabel.mock.calls).toEqual([
+      ['janedoe/openadlc', 31, false],
+      ['janedoe/openadlc', 31, true],
+    ]);
+
+    // The run it asked for is under way, and the stale `ci` still the newest.
+    clock.now += CI_REQUEST_WAIT_MS - 1;
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'testing', detail: "waiting for GitHub's CI on c0ffee0" });
+    expect(automation.setCiLabel).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks no run before one would count: a minute past the base change', async () => {
+    const { line: merge, automation, clock } = line({ pull: { labels: ['adlc:ci'] } });
+    const after = new Date(clock.now + 30_000).toISOString();
+    decide.mockReturnValue({ land: false, reason: 'ci on the head is not its own', approvals: [], ciAgain: { after } });
+
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'testing', detail: `the ci on c0ffee0 is not its own run against its base; asking GitHub's CI again after ${after}` });
+    expect(automation.setCiLabel).not.toHaveBeenCalled();
+
+    clock.now += 30_001;
+    await merge.advance('openadlc');
+    expect(automation.setCiLabel.mock.calls).toEqual([
+      ['janedoe/openadlc', 31, false],
+      ['janedoe/openadlc', 31, true],
+    ]);
+  });
+
   it('is left for a person where the app cannot merge, rather than merged with a bot’s token', async () => {
     decide.mockReturnValue({ land: true, reason: 'ok', approvals: APPROVALS });
     const { line: merge, github } = line({ app: false });

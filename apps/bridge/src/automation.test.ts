@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GitHubApiError, ReviewerStandings, type PullCommit } from '@openadlc/github';
-import { Automation, BLOCKED_READ_TIMEOUT_MS, COMMITS_LISTED, FORBIDDEN_PUSH, LABEL_READ_BACKOFF_MS, ciKeysChanged, contentChanged, fastPathOf, mergeDecision, requestsTakenAway, reviewSample, standingApprovals, type BlockedFacts, type MergeFacts } from './automation.js';
+import { Automation, BLOCKED_READ_TIMEOUT_MS, CI_RUN_LAG_MS, CI_RUN_READ_TIMEOUT_MS, COMMITS_LISTED, FORBIDDEN_PUSH, LABEL_READ_BACKOFF_MS, ciKeysChanged, contentChanged, fastPathOf, mergeDecision, requestsTakenAway, reviewSample, standingApprovals, type BlockedFacts, type MergeFacts } from './automation.js';
 import type { BridgeConfig } from './config.js';
 import { ConflictRounds } from './conflict-round.js';
 import { WAITING_FOR_PERSON, heldForPerson } from './merge-line.js';
@@ -1666,8 +1666,20 @@ describe('whether the bridge may merge a pull request', () => {
   let reviewId = 0;
   const by = (seat: string, state: string, commitId = HEAD) => ({ id: ++reviewId, user: LOGIN[seat] ?? seat, state, commitId, body: `Verdict.\n\n<!-- openadlc-seat:${seat} -->` });
   const person = (login: string, state: string, association = 'OWNER', commitId = HEAD) => ({ id: ++reviewId, user: login, state, commitId, association, body: 'A person.' });
-  const ciRun = (overrides: Record<string, unknown> = {}) => ({ name: 'ci', status: 'completed', conclusion: 'success', app: 'github-actions', headSha: HEAD, workflow: 'ci', ...overrides });
+  // Opened at nine; CI's run, this pull request's own against main, at ten.
+  const OPENED = '2026-10-01T09:00:00Z';
+  const RAN = '2026-10-01T10:00:00Z';
+  const workflowRun = (overrides: Record<string, unknown> = {}) => ({
+    event: 'pull_request',
+    path: '.github/workflows/ci.yml',
+    headBranch: 'feature',
+    headRepoFullName: 'janedoe/openadlc',
+    createdAt: RAN,
+    ...overrides,
+  });
+  const ciRun = (overrides: Record<string, unknown> = {}) => ({ name: 'ci', status: 'completed', conclusion: 'success', app: 'github-actions', headSha: HEAD, workflow: 'ci', run: workflowRun(), ...overrides });
   const job = (name: string, conclusion = 'success') => ({ name, status: 'completed', conclusion, app: 'github-actions', headSha: HEAD, workflow: null });
+  const CI_CONTEXT = { headRef: 'feature', openedAt: OPENED, baseChangedAt: null, sameBranch: [] };
 
   function facts(overrides: Partial<MergeFacts> = {}): MergeFacts {
     // The crew's reviews are signed by OpenADLC unless a test says otherwise:
@@ -1697,6 +1709,7 @@ describe('whether the bridge may merge a pull request', () => {
       ciMergedBy: 'openadlc',
       securitySeat: 'openadlc-vega-janedoe',
       checkRuns: [job('check'), job('integration'), ciRun()],
+      ciContext: CI_CONTEXT,
       statuses: [{ context: 'review-gate', state: 'success' }],
       gate: 'success',
       sameDiffAs: new Set(),
@@ -2005,6 +2018,129 @@ describe('whether the bridge may merge a pull request', () => {
       expect(mergeDecision(facts({ checkRuns: [ciRun({ app: 'some-other-app' })] })).land).toBe(false);
       expect(mergeDecision(facts({ checkRuns: [ciRun({ workflow: 'docs' })] })).land).toBe(false);
       expect(mergeDecision(facts({ checkRuns: [ciRun({ headSha: EARLIER })] })).land).toBe(false);
+    });
+
+    // A check run is on a commit, not on a pull request. A pull request opened
+    // into a branch whose ci.yml runs nothing came out green, kept that `ci`
+    // when it was retargeted onto main (the `edited` a retarget sends runs
+    // nothing), and the lead's approval would have landed it untested.
+    describe('a ci run that was not this pull request’s, against the base it lands on', () => {
+      const AFTER_RUN = '2026-10-01T10:05:00Z';
+      const BEFORE_RUN = '2026-10-01T09:30:00Z';
+
+      it('holds a pull request retargeted onto the default branch on the green ci of a run made before the retarget', () => {
+        const retargeted = facts({ ciContext: { ...CI_CONTEXT, baseChangedAt: AFTER_RUN } });
+
+        expect(mergeDecision(retargeted)).toMatchObject({
+          land: false,
+          reason: expect.stringMatching(/^ci on the head is not this pull request's run against main: its run was made before its base was last changed .*; CI has to run on it again/),
+        });
+        // A run asked for now counts once it is a minute past the retarget.
+        expect(mergeDecision(retargeted).ciAgain).toEqual({ after: '2026-10-01T10:06:00.000Z' });
+        // A run made after the retarget ran against main.
+        expect(mergeDecision(facts({ ciContext: { ...CI_CONTEXT, baseChangedAt: BEFORE_RUN } })).land).toBe(true);
+      });
+
+      it('does not take a run made just after a base change for one against the new base', () => {
+        // A run is made a moment after the event that started it: one made
+        // just after the retarget may be from a push before it.
+        const justBefore = new Date(Date.parse(RAN) - CI_RUN_LAG_MS + 1000).toISOString();
+        expect(mergeDecision(facts({ ciContext: { ...CI_CONTEXT, baseChangedAt: justBefore } })).land).toBe(false);
+        const wellBefore = new Date(Date.parse(RAN) - CI_RUN_LAG_MS - 1000).toISOString();
+        expect(mergeDecision(facts({ ciContext: { ...CI_CONTEXT, baseChangedAt: wellBefore } })).land).toBe(true);
+      });
+
+      it('holds a run made before this pull request was opened', () => {
+        expect(mergeDecision(facts({ ciContext: { ...CI_CONTEXT, openedAt: AFTER_RUN } }))).toMatchObject({
+          land: false,
+          reason: expect.stringContaining('its run was made before this pull request was opened'),
+          ciAgain: { after: null },
+        });
+      });
+
+      it('holds a head another pull request from its branch, into another base, may have run ci on', () => {
+        // Branch `feature` at one head, with #31 into `foo` and this one into
+        // main: #31's run puts its `ci` on the same commit, and can be the
+        // newest there.
+        const open = { number: 31, baseRef: 'foo', headSha: HEAD, openedAt: OPENED, closedAt: null };
+        expect(mergeDecision(facts({ ciContext: { ...CI_CONTEXT, sameBranch: [open] } }))).toMatchObject({
+          land: false,
+          reason: expect.stringContaining("its run was made while #31, from the same branch into foo, was open, so it may be that one's: close #31, then push a commit to it"),
+        });
+        // Asking CI again while #31 is open would be one more run it may be #31's.
+        expect(mergeDecision(facts({ ciContext: { ...CI_CONTEXT, sameBranch: [open] } })).ciAgain).toBeUndefined();
+        // Opened after the run, it did not make it.
+        expect(mergeDecision(facts({ ciContext: { ...CI_CONTEXT, sameBranch: [{ ...open, openedAt: AFTER_RUN }] } })).land).toBe(true);
+      });
+
+      it('holds a head another pull request was closed at for good: a label on a closed one still starts a run there', () => {
+        // #31 into `foo` closed at this head at ten past nine; a label put on
+        // it at ten started a run on its last merge commit, with foo's
+        // ci.yml, and its green `ci` landed on this head, newer than ours.
+        const closedHere = { number: 31, baseRef: 'foo', headSha: HEAD, openedAt: '2026-10-01T08:00:00Z', closedAt: '2026-10-01T09:10:00Z' };
+        const ours = ciRun({ id: 1, conclusion: 'failure', run: workflowRun({ createdAt: '2026-10-01T09:30:00Z' }) });
+        const labelled = ciRun({ id: 2 });
+        const held = mergeDecision(facts({ checkRuns: [ours, labelled], ciContext: { ...CI_CONTEXT, sameBranch: [closedHere] } }));
+        expect(held).toMatchObject({
+          land: false,
+          reason: expect.stringContaining('#31, from the same branch into foo, was opened, and #31 was closed at this head, where a label or an edit on it still starts a run'),
+        });
+        // A run asked for on this head could be #31's as well: a push moves this one off it.
+        expect(held.reason).toContain('push a commit to it, so its head is not the one #31 was closed at');
+        expect(held.ciAgain).toBeUndefined();
+        // Closed before the run at this head too: still #31's to make.
+        expect(mergeDecision(facts({ ciContext: { ...CI_CONTEXT, sameBranch: [{ ...closedHere, closedAt: '2026-10-01T09:50:00Z' }] } })).land).toBe(false);
+      });
+
+      it('lets a closed pull request at another head go a minute after it closed', () => {
+        // Its head stopped where it closed, so what a label on it runs is on that head, not this one.
+        const elsewhere = { number: 31, baseRef: 'foo', headSha: EARLIER, openedAt: OPENED, closedAt: AFTER_RUN };
+        // Closed after the run, it may still have made it; a run of its own is asked for, past the minute.
+        expect(mergeDecision(facts({ ciContext: { ...CI_CONTEXT, sameBranch: [elsewhere] } }))).toMatchObject({ land: false, ciAgain: { after: '2026-10-01T10:06:00.000Z' } });
+        expect(mergeDecision(facts({ ciContext: { ...CI_CONTEXT, sameBranch: [{ ...elsewhere, closedAt: '2026-10-01T09:50:00Z' }] } })).land).toBe(true);
+        // And a run that would answer something else is not asked for while one is open: it could be that one's.
+        const open = { ...elsewhere, number: 32, closedAt: null, openedAt: AFTER_RUN };
+        expect(mergeDecision(facts({ ciContext: { ...CI_CONTEXT, openedAt: AFTER_RUN, sameBranch: [open] } }))).toMatchObject({
+          land: false,
+          reason: expect.stringContaining("and a run asked for now could be #32's too: close #32, then push a commit to it"),
+        });
+      });
+
+      it('reads the newest ci: a later green one another pull request may have made does not answer this one’s failure', () => {
+        const ours = ciRun({ id: 1, conclusion: 'failure' });
+        const theirs = ciRun({ id: 2, run: workflowRun({ createdAt: '2026-10-01T10:30:00Z' }) });
+        const sameBranch = [{ number: 31, baseRef: 'foo', headSha: HEAD, openedAt: '2026-10-01T10:20:00Z', closedAt: null }];
+        expect(mergeDecision(facts({ checkRuns: [ours, theirs], ciContext: { ...CI_CONTEXT, sameBranch } })).land).toBe(false);
+      });
+
+      it('takes only a pull request’s run of the repository’s own ci.yml, for this branch, in this repository', () => {
+        // A workflow named `ci` in another file is one any branch can add.
+        expect(mergeDecision(facts({ checkRuns: [ciRun({ run: workflowRun({ path: '.github/workflows/quick.yml' }) })] }))).toMatchObject({
+          land: false,
+          reason: expect.stringContaining('its run is of .github/workflows/quick.yml, not .github/workflows/ci.yml'),
+        });
+        for (const event of ['pull_request_target', 'workflow_dispatch', 'merge_group']) {
+          expect(mergeDecision(facts({ checkRuns: [ciRun({ run: workflowRun({ event }) })] })).land).toBe(false);
+        }
+        // Another branch at this commit, a backport say: a run of its own answers it.
+        expect(mergeDecision(facts({ checkRuns: [ciRun({ run: workflowRun({ headBranch: 'feature-copy' }) })] }))).toMatchObject({
+          land: false,
+          reason: expect.stringContaining('its run was for the branch feature-copy, not feature'),
+          ciAgain: { after: null },
+        });
+        expect(mergeDecision(facts({ checkRuns: [ciRun({ run: workflowRun({ headRepoFullName: 'mallory/openadlc' }) })] })).land).toBe(false);
+        // A push to the base ran this very commit as the base.
+        expect(mergeDecision(facts({ checkRuns: [ciRun({ run: workflowRun({ event: 'push', headBranch: 'main' }) })] })).land).toBe(true);
+        expect(mergeDecision(facts({ checkRuns: [ciRun({ run: workflowRun({ event: 'push', headBranch: 'feature' }) })] })).land).toBe(false);
+      });
+
+      it('holds when the run, or when the pull request was opened and retargeted, cannot be read', () => {
+        expect(mergeDecision(facts({ checkRuns: [ciRun({ run: null })] })).land).toBe(false);
+        expect(mergeDecision(facts({ checkRuns: [ciRun({ run: undefined })] })).land).toBe(false);
+        expect(mergeDecision(facts({ checkRuns: [ciRun({ run: workflowRun({ createdAt: null }) })] })).land).toBe(false);
+        expect(mergeDecision(facts({ ciContext: null }))).toMatchObject({ land: false, reason: expect.stringContaining('could not be read') });
+        expect(mergeDecision(facts({ ciContext: { ...CI_CONTEXT, baseChangedAt: 'not a time' } })).land).toBe(false);
+      });
     });
 
     it('may not unless OpenADLC’s own review-gate on the head is green', () => {
@@ -2344,6 +2480,7 @@ describe('what the bridge reads before it merges', () => {
     number: 79,
     draft: false,
     headSha: 'head',
+    headRef: 'feature',
     baseRef: 'main',
     labels: [],
     mergeableState: 'clean',
@@ -2373,7 +2510,16 @@ describe('what the bridge reads before it merges', () => {
         { name: 'check', status: 'completed', conclusion: 'success', app: 'github-actions', headSha: 'head', suiteId: 9 },
       ]),
       statusesFor: vi.fn(async () => []),
-      workflowRunOfSuite: vi.fn(async () => ({ name: 'ci', headSha: 'head' })),
+      workflowRunOfSuite: vi.fn(async () => ({
+        name: 'ci',
+        headSha: 'head',
+        path: '.github/workflows/ci.yml',
+        event: 'pull_request',
+        headBranch: 'feature',
+        headRepoFullName: 'exampleco/app',
+        createdAt: '2026-10-16T16:40:00Z',
+      })),
+      pullsFromBranch: vi.fn(async () => [{ number: 79, baseRef: 'main', headSha: 'head', createdAt: '2026-10-16T13:19:13Z', closedAt: null }]),
       readFileAtRef: vi.fn(async () => '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n'),
       diffFingerprint: vi.fn(async (_repo: string, _base: string, sha: string) => fingerprints[sha] ?? null),
       closingIssues: vi.fn(async (): Promise<number[]> => []),
@@ -2400,6 +2546,67 @@ describe('what the bridge reads before it merges', () => {
     expect([...(facts?.sameDiffAs ?? [])]).toEqual(['before-main-merge']);
     expect(facts?.gate).toBe('success');
     expect(appGate.standing).toHaveBeenCalledWith('exampleco/app', 'head');
+  });
+
+  it('holds a pull request retargeted onto main whose green ci ran before the retarget, as GitHub answers for one', async () => {
+    // As GitHub answered for a real one (vercel/next.js#100307): a push at
+    // 16:33:41, its run made at 16:33:45, the base changed at 16:34:01, and
+    // nothing run since. The run's own `pull_requests` already named the new
+    // base, so only the timeline says the run predates it.
+    const { automation, github } = reading({
+      workflowRunOfSuite: vi.fn(async () => ({
+        name: 'ci',
+        headSha: 'head',
+        path: '.github/workflows/ci.yml',
+        event: 'pull_request',
+        headBranch: 'feature',
+        headRepoFullName: 'exampleco/app',
+        createdAt: '2026-10-16T16:33:45Z',
+      })),
+      listPullHistory: vi.fn(async () => [
+        { event: 'head_ref_force_pushed', actor: 'janedoe', viaApp: false, sha: null },
+        { event: 'base_ref_changed', actor: 'janedoe', viaApp: false, sha: null, at: '2026-10-16T16:34:01Z' },
+      ]),
+    });
+    const repo = { fullName: 'exampleco/app', defaultBranch: 'main' };
+
+    const facts = (await automation.mergeFacts(repo, PULL)) as MergeFacts;
+
+    expect(facts.ciContext).toEqual({ headRef: 'feature', openedAt: '2026-10-16T13:19:13Z', baseChangedAt: '2026-10-16T16:34:01Z', sameBranch: [] });
+    expect(mergeDecision(facts)).toMatchObject({ land: false, reason: expect.stringContaining('its run was made before its base was last changed (2026-10-16T16:34:01Z)') });
+    // Each read waits a few seconds at most, not the client's thirty.
+    expect(github.pullsFromBranch).toHaveBeenCalledWith('exampleco/app', 'feature', { timeoutMs: CI_RUN_READ_TIMEOUT_MS });
+    expect(github.workflowRunOfSuite).toHaveBeenCalledWith('exampleco/app', 9, { timeoutMs: CI_RUN_READ_TIMEOUT_MS });
+
+    // A run never changes where it ran, so the merge line's next pass asks
+    // GitHub once more only for what can change: the pull requests from the
+    // branch, and the timeline it reads anyway.
+    await automation.mergeFacts(repo, PULL);
+    expect(github.workflowRunOfSuite).toHaveBeenCalledTimes(1);
+    expect(github.pullsFromBranch).toHaveBeenCalledTimes(2);
+  });
+
+  it('names the other pull requests from its branch, and reads nothing for a head with no ci on it', async () => {
+    const { automation, github } = reading({
+      pullsFromBranch: vi.fn(async () => [
+        { number: 79, baseRef: 'main', headSha: 'head', createdAt: '2026-10-16T13:19:13Z', closedAt: null },
+        { number: 31, baseRef: 'foo', headSha: 'head', createdAt: '2026-10-16T12:00:00Z', closedAt: '2026-10-16T17:00:00Z' },
+      ]),
+    });
+    const repo = { fullName: 'exampleco/app', defaultBranch: 'main' };
+
+    expect((await automation.mergeFacts(repo, PULL))?.ciContext?.sameBranch).toEqual([{ number: 31, baseRef: 'foo', headSha: 'head', openedAt: '2026-10-16T12:00:00Z', closedAt: '2026-10-16T17:00:00Z' }]);
+    // Not in the list GitHub gave, or without a head branch: not known.
+    github.pullsFromBranch.mockResolvedValueOnce([]);
+    expect((await automation.mergeFacts(repo, PULL))?.ciContext).toBeNull();
+    github.pullsFromBranch.mockResolvedValueOnce(null as never);
+    expect((await automation.mergeFacts(repo, PULL))?.ciContext).toBeNull();
+    expect((await automation.mergeFacts(repo, { ...PULL, headRef: undefined }))?.ciContext).toBeNull();
+
+    github.pullsFromBranch.mockClear();
+    github.checkRunsFor.mockResolvedValue([{ name: 'check', status: 'completed', conclusion: 'success', app: 'github-actions', headSha: 'head', suiteId: 9 }]);
+    expect((await automation.mergeFacts(repo, PULL))?.ciContext).toBeNull();
+    expect(github.pullsFromBranch).not.toHaveBeenCalled();
   });
 
   it('reads the base’s rules only when GitHub says blocked, and the commits only when those rules require signed commits', async () => {

@@ -662,11 +662,24 @@ describe('what the merge decides on, read to its end', () => {
     });
   });
 
-  it('names the app behind each check run, and the workflow behind a check suite', async () => {
+  it('names the app behind each check run, and the workflow run behind a check suite: what it ran, for which branch, and when', async () => {
     const runs = { check_runs: [{ name: 'ci', status: 'completed', conclusion: 'success', head_sha: 'abc', app: { slug: 'github-actions' }, check_suite: { id: 9 } }] };
+    // A workflow run as GitHub gives it. Its `pull_requests` are the pull
+    // requests as they are now, a retargeted one with its new base, so they
+    // are not read.
+    const run = {
+      name: 'ci',
+      head_sha: 'abc',
+      path: '.github/workflows/ci.yml',
+      event: 'pull_request',
+      head_branch: 'feature',
+      head_repository: { full_name: 'janedoe/openadlc-testbed' },
+      created_at: '2026-10-16T16:33:45Z',
+      pull_requests: [{ number: 7, base: { ref: 'main' } }],
+    };
     const fetchImpl = (async (input: string | URL) => {
       const path = new URL(String(input)).pathname;
-      const answer = path.endsWith('/check-runs') ? runs : { workflow_runs: [{ name: 'ci', head_sha: 'abc' }] };
+      const answer = path.endsWith('/check-runs') ? runs : { workflow_runs: [run] };
       return new Response(JSON.stringify(answer), { status: 200 });
     }) as typeof fetch;
     const client = new GitHubClient({ token: 't', actingAs: 'openadlc-app', fetchImpl });
@@ -674,7 +687,42 @@ describe('what the merge decides on, read to its end', () => {
     expect(await client.checkRunsFor('janedoe/openadlc-testbed', 'abc')).toEqual([
       { name: 'ci', status: 'completed', conclusion: 'success', app: 'github-actions', headSha: 'abc', suiteId: 9 },
     ]);
-    expect(await client.workflowRunOfSuite('janedoe/openadlc-testbed', 9)).toEqual({ name: 'ci', headSha: 'abc' });
+    expect(await client.workflowRunOfSuite('janedoe/openadlc-testbed', 9)).toEqual({
+      name: 'ci',
+      headSha: 'abc',
+      path: '.github/workflows/ci.yml',
+      event: 'pull_request',
+      headBranch: 'feature',
+      headRepoFullName: 'janedoe/openadlc-testbed',
+      createdAt: '2026-10-16T16:33:45Z',
+    });
+  });
+
+  it('lists the pull requests from one branch of the repository, open and closed, and not a fork’s of the same name', async () => {
+    const asked: string[] = [];
+    const listed = [
+      { number: 32, created_at: '2026-10-16T13:00:00Z', closed_at: null, base: { ref: 'main' }, head: { ref: 'feature', sha: 'abc', repo: { full_name: 'janedoe/openadlc-testbed' } } },
+      { number: 31, created_at: '2026-10-16T12:00:00Z', closed_at: '2026-10-16T12:30:00Z', base: { ref: 'foo' }, head: { ref: 'feature', sha: 'old', repo: { full_name: 'JaneDoe/openadlc-testbed' } } },
+      { number: 30, created_at: '2026-10-16T11:00:00Z', closed_at: null, base: { ref: 'main' }, head: { ref: 'feature', sha: 'abc', repo: { full_name: 'janedoe/a-fork' } } },
+    ];
+    const fetchImpl = (async (input: string | URL) => {
+      asked.push(`${new URL(String(input)).pathname}${new URL(String(input)).search}`);
+      return new Response(JSON.stringify(listed), { status: 200 });
+    }) as typeof fetch;
+    const client = new GitHubClient({ token: 't', actingAs: 'openadlc-app', fetchImpl });
+
+    expect(await client.pullsFromBranch('janedoe/openadlc-testbed', 'agent/atlas/7-x')).toEqual([
+      { number: 32, baseRef: 'main', headSha: 'abc', createdAt: '2026-10-16T13:00:00Z', closedAt: null },
+      { number: 31, baseRef: 'foo', headSha: 'old', createdAt: '2026-10-16T12:00:00Z', closedAt: '2026-10-16T12:30:00Z' },
+    ]);
+    expect(asked).toEqual(['/repos/janedoe/openadlc-testbed/pulls?head=janedoe%3Aagent%2Fatlas%2F7-x&state=all&per_page=100&page=1']);
+  });
+
+  it('says it cannot list the pull requests from a branch that has more than it reads', async () => {
+    const page = Array.from({ length: 100 }, (_, i) => ({ number: i + 1, created_at: '2026-10-16T12:00:00Z', closed_at: null, base: { ref: 'main' }, head: { ref: 'feature', sha: 'abc', repo: { full_name: 'janedoe/openadlc-testbed' } } }));
+    const fetchImpl = (async () => new Response(JSON.stringify(page), { status: 200 })) as typeof fetch;
+
+    expect(await new GitHubClient({ token: 't', actingAs: 'openadlc-app', fetchImpl }).pullsFromBranch('janedoe/openadlc-testbed', 'feature')).toBeNull();
   });
 });
 
@@ -829,6 +877,22 @@ describe('what a merge reads about a pull request’s files and history', () => 
     expect(history?.[0]).toMatchObject({ event: 'labeled', actor: 'openadlc-atlas-janedoe', viaApp: false, label: 'scope:cross-cutting' });
     expect(history?.[1]).toMatchObject({ event: 'unlabeled', viaApp: true, label: 'scope:cross-cutting' });
     expect(history?.[2]).not.toHaveProperty('label');
+  });
+
+  it('says when the base was changed, and nothing of when for anything else', async () => {
+    const client = answering(() => ({
+      status: 200,
+      body: [
+        { event: 'base_ref_changed', actor: { login: 'janedoe' }, created_at: '2026-10-16T16:34:01Z' },
+        { event: 'automatic_base_change_succeeded', actor: { login: 'janedoe' }, created_at: '2026-10-17T09:00:00Z' },
+        { event: 'labeled', actor: { login: 'janedoe' }, created_at: '2026-10-17T10:00:00Z', label: { name: 'bug' } },
+      ],
+    }));
+
+    const history = await client.listPullHistory('janedoe/openadlc-testbed', 7);
+    expect(history?.[0]).toMatchObject({ event: 'base_ref_changed', actor: 'janedoe', at: '2026-10-16T16:34:01Z' });
+    expect(history?.[1]).toMatchObject({ event: 'automatic_base_change_succeeded', at: '2026-10-17T09:00:00Z' });
+    expect(history?.[2]).not.toHaveProperty('at');
   });
 
   it('names which review was dismissed, what it said, and who dismissed it', async () => {

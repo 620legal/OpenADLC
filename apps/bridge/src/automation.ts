@@ -1,7 +1,7 @@
 import { permissionOn, theApp } from './people.js';
 import { audit, bots, hasEventOfType, issues, lastEventAt, leases, listEventsOfTypeWith, recordEvent, repos, stageMoves } from '@openadlc/db';
 import { REVIEW_DISMISSED_BY_BRIDGE, REVIEW_ROUND_OPENED, issueNumberFromBranch, scopeLabelAcceptedFrom } from './work.js';
-import { ReviewerStandings, isTemplatePlaceholder, reviewRequestRefusal, reviewerStandingOf, type GitHubClient, type PullCommit, type ReviewerStanding } from '@openadlc/github';
+import { BASE_CHANGES, ReviewerStandings, isTemplatePlaceholder, reviewRequestRefusal, reviewerStandingOf, type GitHubClient, type PullCommit, type ReviewerStanding, type SuiteWorkflowRun } from '@openadlc/github';
 import {
   STAGE_LABELS,
   isBackwardMove,
@@ -131,6 +131,39 @@ export interface LandedApproval {
 /** The app whose check runs are CI's: GitHub Actions. */
 export const CI_APP = 'github-actions';
 
+/** The workflow file whose run `ci` counts from: the repository's own CI. */
+export const CI_WORKFLOW_PATH = '.github/workflows/ci.yml';
+
+/**
+ * How long after a base change, or after another pull request from the same
+ * branch closed, a `ci` run is still not taken for this pull request's against
+ * the base it has now. GitHub makes a run a moment after the event that
+ * started it, so one made just after a retarget may be from a push before it.
+ */
+export const CI_RUN_LAG_MS = 60_000;
+
+/** How long each read of where CI ran may take: the merge line waits on it, as on `blockedFacts`. */
+export const CI_RUN_READ_TIMEOUT_MS = 5_000;
+
+/** How many check suites' workflow runs the bridge keeps (`Automation.ciRunOf`). */
+const CI_RUNS_KEPT = 500;
+
+/** Where and when a `ci` check run's workflow ran, from the run behind its check suite. */
+export type CiRunFacts = Omit<SuiteWorkflowRun, 'name' | 'headSha'>;
+
+/**
+ * What says whether a `ci` run on the head was this pull request's, against
+ * the base it has now (`ciRunElsewhere`).
+ */
+export interface CiContext {
+  headRef: string;
+  openedAt: string;
+  /** When its base was last changed, or null when it never was. */
+  baseChangedAt: string | null;
+  /** The other pull requests from its branch, open or closed, each with its head: where a closed one's stopped. */
+  sameBranch: readonly { number: number; baseRef: string; headSha: string; openedAt: string; closedAt: string | null }[];
+}
+
 /** What the bridge reads before it merges, gathered by `Automation.mergeFacts`. */
 export interface MergeFacts {
   repoFullName: string;
@@ -181,8 +214,23 @@ export interface MergeFacts {
   ciMergedBy: 'openadlc' | 'person';
   /** The seat that reviews for security, by bot name, or null when the rules name none. */
   securitySeat: string | null;
-  /** The check runs on the head, with the app that set each and, for CI's, the workflow run behind it. */
-  checkRuns: readonly { name: string; status: string; conclusion: string | null; app: string | null; headSha: string; workflow: string | null; id?: number }[];
+  /** The check runs on the head, with the app that set each and, for CI's, the workflow run behind it: its name, and where and when it ran. */
+  checkRuns: readonly {
+    name: string;
+    status: string;
+    conclusion: string | null;
+    app: string | null;
+    headSha: string;
+    workflow: string | null;
+    run?: CiRunFacts | null;
+    id?: number;
+  }[];
+  /**
+   * What says whether CI's run on the head was this pull request's against
+   * the base it has now (`ciRunElsewhere`). Null when no CI run is on the
+   * head, or when any of it cannot be read.
+   */
+  ciContext: CiContext | null;
   /** The commit statuses on the head, which any token that may write statuses can set. */
   statuses: readonly { context: string; state: string }[];
   /** `review-gate` as OpenADLC published it on the head, or null when it cannot be read. */
@@ -774,6 +822,92 @@ export async function blockedFacts(
 }
 
 /**
+ * Why a `ci` check run on the head is not this pull request's own run against
+ * the base it lands on, or null when it is. `again` is set when a run of its
+ * own, asked for now, would answer it; one made before `after` would not.
+ *
+ * A check run is on a commit, not on a pull request, and GitHub keeps it there
+ * whatever happens to the pull request after. A pull request opened into a
+ * branch whose `ci.yml` runs nothing came out green, kept that `ci` when it
+ * was retargeted onto the default branch (the `edited` a retarget sends runs
+ * nothing), and the lead's approval would have landed it untested. So would a
+ * green `ci` that another pull request from the same branch, into a base like
+ * that, put on the same head after this one's own red, even once it was
+ * closed: a label or an edit on a closed pull request still starts a run, on
+ * the head it closed at. The run's `pull_requests` tell none of these apart:
+ * GitHub fills them in as the pull requests are when asked, a retargeted one
+ * with its new base, and every one open from the branch.
+ *
+ * So the run must be of this repository's `ci.yml`, for this pull request's
+ * branch, made after it was opened and after its base last changed, at no
+ * time another pull request from the branch could have made it; or of a push
+ * to the base, which ran this very commit as the base.
+ */
+export function ciRunElsewhere(
+  run: CiRunFacts | null | undefined,
+  facts: Pick<MergeFacts, 'repoFullName' | 'baseRef' | 'headSha' | 'ciContext'>,
+): { why: string; again: false } | { why: string; again: true; after: string | null } | null {
+  const held = (why: string) => ({ why, again: false as const });
+  if (!run) return held('its workflow run could not be read');
+  if (run.path !== CI_WORKFLOW_PATH) return held(`its run is of ${run.path ?? 'a workflow GitHub did not name'}, not ${CI_WORKFLOW_PATH}`);
+  if (run.headRepoFullName?.toLowerCase() !== facts.repoFullName.toLowerCase()) {
+    return held(`its run was for ${run.headRepoFullName ?? 'a repository that is gone'}, not ${facts.repoFullName}`);
+  }
+  if (run.event === 'push' && run.headBranch === facts.baseRef) return null;
+  if (run.event !== 'pull_request') return held(`its run was started by ${run.event ?? 'an event GitHub did not name'}, not by a pull request`);
+  const context = facts.ciContext;
+  const unknown = held('when this pull request was opened and had its base changed, or which other pull requests share its branch, could not be read');
+  if (!context) return unknown;
+  // A time that does not parse is not known, and not knowing is not a pass.
+  const when = (at: string | null) => {
+    const time = Date.parse(at ?? '');
+    return Number.isNaN(time) ? null : time;
+  };
+  const opened = when(context.openedAt);
+  const changed = context.baseChangedAt === null ? null : when(context.baseChangedAt);
+  if (opened === null || (context.baseChangedAt !== null && changed === null)) return unknown;
+
+  // When each other pull request from the branch may have made a run here:
+  // from its opening to a minute after it closed, or for good while it is
+  // open or once it closed at this head, where a label on it still starts one.
+  const others = context.sameBranch.map((other) => {
+    const closed = other.closedAt === null ? null : when(other.closedAt);
+    const forGood = closed === null || other.headSha === facts.headSha;
+    return { other, from: when(other.openedAt) ?? -Infinity, to: forGood ? Infinity : (closed as number) + CI_RUN_LAG_MS };
+  });
+  // A closed one's head stops where it closed, so a push takes this one away from it.
+  const remedy = (other: CiContext['sameBranch'][number]) =>
+    other.closedAt === null ? `close #${other.number}, then push a commit to it` : `push a commit to it, so its head is not the one #${other.number} was closed at`;
+  const mayBe = (other: CiContext['sameBranch'][number]) =>
+    other.closedAt === null
+      ? `#${other.number}, from the same branch into ${other.baseRef}, was open, so it may be that one's`
+      : `#${other.number}, from the same branch into ${other.baseRef}, was opened, and #${other.number} was closed at this head, where a label or an edit on it still starts a run, so it may be that one's`;
+  // A run of its own, asked for now: none made before `after` counts, and
+  // none at all while another pull request may make one here at any time.
+  const forGood = others.find((one) => one.to === Infinity);
+  const after = Math.max(changed === null ? -Infinity : changed + CI_RUN_LAG_MS, ...others.map((one) => one.to).filter((to) => to !== Infinity));
+  const again = (why: string) =>
+    forGood
+      ? held(`${why}, and a run asked for now could be #${forGood.other.number}'s too: ${remedy(forGood.other)}`)
+      : { why, again: true as const, after: Number.isFinite(after) ? new Date(after).toISOString() : null };
+
+  // From another branch at this commit, a backport's say: a run of its own answers it.
+  if (run.headBranch !== context.headRef) return again(`its run was for the branch ${run.headBranch ?? 'GitHub did not name'}, not ${context.headRef}`);
+  const made = when(run.createdAt);
+  if (made === null) return held('when its run was made could not be read');
+  const covering = others.filter((one) => made >= one.from && made <= one.to);
+  const stuck = covering.find((one) => one.to === Infinity);
+  if (stuck) return held(`its run was made ${stuck.other.closedAt === null ? 'while' : 'after'} ${mayBe(stuck.other)}: ${remedy(stuck.other)}`);
+  const suspect = covering[0];
+  if (made < opened) return again('its run was made before this pull request was opened');
+  if (changed !== null && made <= changed + CI_RUN_LAG_MS) {
+    return again(`its run was made before its base was last changed (${context.baseChangedAt}), or too soon after to have run against ${facts.baseRef}`);
+  }
+  if (suspect) return again(`its run was made while #${suspect.other.number}, from the same branch into ${suspect.other.baseRef}, was open, so it may be that one's`);
+  return null;
+}
+
+/**
  * Whether the bridge may merge a pull request now, and on whose approvals.
  *
  * On GitHub's free plan a private repository has no branch protection, so
@@ -798,8 +932,10 @@ export async function blockedFacts(
  * - a change to how CI runs is also approved on this diff by the security
  *   reviewer, in a signed review, unless a person merges those here;
  * - `ci` is GitHub Actions' own check run of the `ci` workflow on this head,
- *   never a status anyone can set; `review-gate` as OpenADLC published it is
- *   green; and no check or status is red.
+ *   never a status anyone can set, from a run of this repository's `ci.yml`
+ *   for this pull request against the base it has now (`ciRunElsewhere`);
+ *   `review-gate` as OpenADLC published it is green; and no check or status
+ *   is red.
  */
 export function mergeDecision(facts: MergeFacts): {
   land: boolean;
@@ -807,6 +943,12 @@ export function mergeDecision(facts: MergeFacts): {
   approvals: LandedApproval[];
   /** Set when the pull request goes back to its builder rather than wait for a person: the files it should not have changed. */
   sendBack?: { files: string[] };
+  /**
+   * Set when `ci` on the head is not this pull request's run against its
+   * base, and a run of its own asked for now would answer that; one made
+   * before `after` would not.
+   */
+  ciAgain?: { after: string | null };
 } {
   const refuse = (reason: string) => ({ land: false, reason, approvals: [] });
   if (facts.headRepoFullName?.toLowerCase() !== facts.repoFullName.toLowerCase()) {
@@ -884,6 +1026,14 @@ export function mergeDecision(facts: MergeFacts): {
   const ci = runs.filter((run) => run.name === REQUIRED_CHECK);
   if (ci.some((run) => run.app !== CI_APP || run.workflow?.toLowerCase() !== REQUIRED_CHECK || run.headSha !== facts.headSha)) {
     return refuse(`a ${REQUIRED_CHECK} check run on the head is not GitHub Actions' run of the ${REQUIRED_CHECK} workflow`);
+  }
+  // And this pull request's own run against the base it lands on: GitHub
+  // keeps another's, or one from before a retarget, on the same commit.
+  const elsewhere = ci.map((run) => ciRunElsewhere(run.run, facts)).find((one) => one !== null);
+  if (elsewhere) {
+    const reason = `${REQUIRED_CHECK} on the head is not this pull request's run against ${facts.baseRef}: ${elsewhere.why}`;
+    if (!elsewhere.again) return refuse(reason);
+    return { ...refuse(`${reason}; CI has to run on it again: push a commit to it, or close and reopen it`), ciAgain: { after: elsewhere.after } };
   }
   const red = [
     ...runs.filter((run) => run.status === 'completed' && RED.has(run.conclusion ?? '')).map((run) => run.name),
@@ -1867,16 +2017,18 @@ export class Automation {
       asking.set(login.toLowerCase(), await permissionOn(client, repoFullName, login));
     }
 
-    // Which workflow each of CI's check runs belongs to, from the run behind it.
-    const checkRuns = await Promise.all(
-      runs.map(async (run) => ({
-        ...run,
-        workflow:
-          run.name === REQUIRED_CHECK && run.app === CI_APP && run.suiteId !== null
-            ? ((await client.workflowRunOfSuite(repoFullName, run.suiteId))?.name ?? null)
-            : null,
-      })),
+    // Which workflow each of CI's check runs belongs to, from the run behind
+    // it, and where and when that ran; and, when there is one to judge, what
+    // says whether it was this pull request's against the base it has now.
+    const checkRuns: MergeFacts['checkRuns'] = await Promise.all(
+      runs.map(async (run) => {
+        const behind = run.name === REQUIRED_CHECK && run.app === CI_APP && run.suiteId !== null ? await this.ciRunOf(client, repoFullName, run.suiteId) : null;
+        if (!behind) return { ...run, workflow: null };
+        const { event, path, headBranch, headRepoFullName, createdAt } = behind;
+        return { ...run, workflow: behind.name, run: { event, path, headBranch, headRepoFullName, createdAt } };
+      }),
     );
+    const ciContext = checkRuns.some((run) => run.run) ? await this.ciContextOf(client, repoFullName, pull, history) : null;
 
     const security = this.reviewRules(crew).reviewers.find((entry) => entry.lens === 'security');
     const securitySeat = security ? (resolveBotRef(crew, security.seat)?.name ?? security.seat) : null;
@@ -1944,6 +2096,7 @@ export class Automation {
       ciMergedBy,
       securitySeat,
       checkRuns,
+      ciContext,
       statuses,
       gate,
       sameDiffAs,
@@ -1977,6 +2130,56 @@ export class Automation {
 
   /** The last full reading of `blockedFacts` for each pull request, by `owner/repo#n`, with the head it was of. */
   private readonly lastBlocked = new Map<string, { headSha: string; facts: BlockedFacts }>();
+
+  /**
+   * The workflow run behind one of CI's check suites, read from GitHub once:
+   * where and when a run ran never changes, re-runs included, and the merge
+   * line reads the same head on every pass.
+   */
+  private async ciRunOf(client: GitHubClient, repoFullName: string, suiteId: number): Promise<SuiteWorkflowRun | null> {
+    const key = `${repoFullName.toLowerCase()}@${suiteId}`;
+    const kept = this.ciRuns.get(key);
+    if (kept) return kept;
+    const run = await client.workflowRunOfSuite(repoFullName, suiteId, { timeoutMs: CI_RUN_READ_TIMEOUT_MS });
+    if (run) {
+      this.ciRuns.set(key, run);
+      const oldest = this.ciRuns.keys().next().value;
+      if (this.ciRuns.size > CI_RUNS_KEPT && oldest !== undefined) this.ciRuns.delete(oldest);
+    }
+    return run;
+  }
+
+  /** CI's workflow runs, by `owner/repo@suite`, oldest first (`ciRunOf`). */
+  private readonly ciRuns = new Map<string, SuiteWorkflowRun>();
+
+  /**
+   * What says whether a `ci` run was this pull request's against the base it
+   * has now (`ciRunElsewhere`): when it was opened and the other pull requests
+   * from its branch, as GitHub lists them now, and its last base change, from
+   * the timeline `mergeFacts` reads anyway. Null when any of it is not known:
+   * no head branch, a history too long to read, or a list without it in.
+   */
+  private async ciContextOf(
+    client: GitHubClient,
+    repoFullName: string,
+    pull: { number: number; headRef?: string },
+    history: readonly { event: string; at?: string | null }[] | null,
+  ): Promise<CiContext | null> {
+    if (!pull.headRef || !history) return null;
+    const fromBranch = await client.pullsFromBranch(repoFullName, pull.headRef, { timeoutMs: CI_RUN_READ_TIMEOUT_MS });
+    const self = fromBranch?.find((one) => one.number === pull.number);
+    if (!fromBranch || !self) return null;
+    const changed = history.filter((entry) => BASE_CHANGES.has(entry.event)).at(-1);
+    if (changed && !changed.at) return null;
+    return {
+      headRef: pull.headRef,
+      openedAt: self.createdAt,
+      baseChangedAt: changed?.at ?? null,
+      sameBranch: fromBranch
+        .filter((one) => one.number !== pull.number)
+        .map((one) => ({ number: one.number, baseRef: one.baseRef, headSha: one.headSha, openedAt: one.createdAt, closedAt: one.closedAt })),
+    };
+  }
 
   /**
    * A crew pull request's scope: the issues it closes, its lease's paths, and

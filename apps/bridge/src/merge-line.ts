@@ -628,6 +628,13 @@ export class MergeLine {
       });
       return { step: { repo: repo.name, prNumber: entry.prNumber, state: 'failed', detail }, held: null };
     }
+    // A `ci` on the head that was not this pull request's run against its
+    // base — one from before a retarget — is no run at all, but it is a `ci`,
+    // so `advanceOnce` asked for none. A crew pull request's is asked for here,
+    // as one with none on its head would be; a person's runs on its own events.
+    if (!decision.land && decision.ciAgain && pull.headRef?.startsWith('agent/')) {
+      return { step: await this.askForCi(repo, entry, pull, decision.ciAgain), held: null };
+    }
     if (!decision.land) return { step: null, held: decision.reason };
 
     let merged: { sha: string } | null;
@@ -679,22 +686,34 @@ export class MergeLine {
    * Puts `adlc:ci` on the head at the front of the line, or puts it back when
    * no `ci` run has appeared for it in `CI_REQUEST_WAIT_MS`. Each ask is
    * audited as `ci.requested`.
+   *
+   * `stale` is set when the `ci` already on the head was not this pull
+   * request's run against its base (`ciAgain`). The label is then on from the
+   * run that made it, and nothing is coming: it goes on again at once rather
+   * than after the wait, but not before `after`, since a run made sooner would
+   * not count either and the line would only ask once more.
    */
   private async askForCi(
     repo: { name: string; fullName: string },
     entry: { id: string; prNumber: number },
     pull: { headSha: string; labels: string[] },
+    stale?: { after: string | null },
   ): Promise<MergeLineStep> {
     const key = `${repo.fullName.toLowerCase()}#${entry.prNumber}@${pull.headSha}`;
-    const at = this.ciAsked.get(key);
     const labelled = pull.labels.includes(CI_LABEL);
     const waiting = (detail: string): Promise<MergeLineStep> =>
       mergeLines
         .setState(entry.id, 'testing', { headSha: pull.headSha, detail })
         .then(() => ({ repo: repo.name, prNumber: entry.prNumber, state: 'testing', detail }));
+    const after = stale?.after ? Date.parse(stale.after) : null;
+    const notOwn = `the ${REQUIRED_CHECK} on ${pull.headSha.slice(0, 7)} is not its own run against its base`;
+    if (after !== null && !Number.isNaN(after) && this.now() <= after) return waiting(`${notOwn}; asking GitHub's CI again after ${stale?.after}`);
+    // An ask made before then was for a run that does not count.
+    const asked = this.ciAsked.get(key);
+    const at = asked !== undefined && after !== null && !Number.isNaN(after) && asked <= after ? undefined : asked;
 
     // On already, from an earlier head: the push that made this head runs CI.
-    if (labelled && at === undefined) {
+    if (labelled && at === undefined && !stale) {
       this.ciAsked.set(key, this.now());
       return waiting(`waiting for GitHub's CI on ${pull.headSha.slice(0, 7)}`);
     }
@@ -720,12 +739,13 @@ export class MergeLine {
         actor: as === 'app' ? 'openadlc-app' : 'bridge',
         action: 'ci.requested',
         target: `${repo.name}#${entry.prNumber}`,
-        payload: { head: pull.headSha, again },
+        payload: { head: pull.headSha, again, ...(stale ? { stale: true } : {}) },
       }).catch(() => undefined);
     } catch (error) {
       this.ciAsked.delete(key);
       return waiting(`could not put ${CI_LABEL} on it: ${error instanceof Error ? error.message : String(error)}`);
     }
+    if (stale) return waiting(`${notOwn}; asked GitHub's CI to run again`);
     return waiting(
       again ? `no ${REQUIRED_CHECK} run appeared; asked GitHub's CI again on ${pull.headSha.slice(0, 7)}` : `asked GitHub's CI to run on ${pull.headSha.slice(0, 7)}`,
     );
