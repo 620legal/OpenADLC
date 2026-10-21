@@ -1,5 +1,5 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -467,8 +467,25 @@ describe('a review task’s part', () => {
 const hasSshAgent = spawnSync('ssh-agent', ['-k'], { stdio: 'ignore', env: { PATH: process.env.PATH ?? '' } }).error === undefined;
 
 describe.runIf(hasSshAgent)('the signing agent a task on the host gets', () => {
-  const agentsOf = (bot: string): string =>
-    spawnSync('pgrep', ['-f', `openadlc-agent-${bot}-`], { encoding: 'utf8' }).stdout.trim();
+  // The crew's task image is Debian slim without procps, so it has no pgrep:
+  // its spawn failed, `.stdout` was undefined, and both tests failed there on
+  // every branch, the second only after its wait ran out. /proc lists the
+  // same processes.
+  const agentsOf = (bot: string): string => {
+    const pattern = `openadlc-agent-${bot}-`;
+    const found = spawnSync('pgrep', ['-f', pattern], { encoding: 'utf8' });
+    if (!found.error) return found.stdout.trim();
+    return readdirSync('/proc')
+      .filter((pid) => /^\d+$/.test(pid))
+      .filter((pid) => {
+        try {
+          return readFileSync(join('/proc', pid, 'cmdline'), 'utf8').split('\0').join(' ').includes(pattern);
+        } catch {
+          return false;
+        }
+      })
+      .join('\n');
+  };
   let keyDir: string;
   let decoy: ReturnType<typeof spawn> | null = null;
   const savedPid = process.env.SSH_AGENT_PID;
