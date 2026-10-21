@@ -22,6 +22,7 @@ const GUARDED = [
   'infra/gcp/main.tf',
   '.github/workflows/ci.yml',
   '.github/scripts/scope-check.mjs',
+  '.github/CODEOWNERS',
   'docs/platform-plan.md',
   'apps/bridge/src/automation.ts',
   'apps/bridge/src/merge-line.ts',
@@ -45,6 +46,14 @@ describe('the Human review section of this repository', () => {
     // A file that moved would leave its rule guarding nothing.
     expect(existsSync(join(ROOT, file)), file).toBe(true);
     expect(humanReviewersFor([file], rules)).toEqual(maintainer);
+  });
+
+  it('waits on the maintainer for a script the workflows have yet to run', () => {
+    // CODEOWNERS and the scripts beside scope-check.mjs were the crew's to
+    // change: a pull request could take the maintainer off a CODEOWNERS line,
+    // or add a crew account to one, or change what a workflow runs, on the
+    // lead's approval alone.
+    expect(humanReviewersFor(['.github/scripts/release-check.mjs'], rules)).toEqual(maintainer);
   });
 
   it('covers every skill’s tools.yaml there is', () => {

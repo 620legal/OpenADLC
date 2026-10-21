@@ -7,7 +7,8 @@
 /config/                              @orzelig
 /infra/                               @orzelig
 /.github/workflows/                   @orzelig
-/.github/scripts/scope-check.mjs      @orzelig
+/.github/scripts/                     @orzelig
+/.github/CODEOWNERS                   @orzelig
 /docs/platform-plan.md                @orzelig
 /apps/bridge/src/automation.ts        @orzelig
 /apps/bridge/src/merge-line.ts        @orzelig

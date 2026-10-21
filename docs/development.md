@@ -251,10 +251,12 @@ the skill. Whether a model reading the skill stops takes a live run
 - **Paths that need a person.** The `## Human review` section of
   [AGENTS.md](../AGENTS.md), read from the base branch, names who must approve
   a change to the files that define how the crew is held in check: `config/`,
-  `infra/`, the workflows, the scope check, `docs/platform-plan.md`, the merge
+  `infra/`, the workflows and the scripts they run (the scope check among
+  them), `.github/CODEOWNERS` itself, `docs/platform-plan.md`, the merge
   decision and gates, the access, authorship, human-review and check rules, and
   each skill's `tools.yaml`. That section is the list; `.github/CODEOWNERS`
-  mirrors it. Skill prose, roles, templates and the rest of the code are the
+  mirrors it, and owns itself, so a crew pull request cannot change who GitHub
+  asks to review a path. Skill prose, roles, templates and the rest of the code are the
   crew's to review. A change to that section itself needs every person the
   base branch's section names; an edit elsewhere in AGENTS.md needs nobody.
 

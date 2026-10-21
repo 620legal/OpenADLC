@@ -150,14 +150,16 @@ does not change what that pull request is subject to.
 
 They are the files that define how the crew is held in check: the merge
 decision and gates, the access, authorship, human-review and scope rules, the
-workflows, and what each skill may run. Everything else, skill prose, roles and
+workflows and the scripts they run, who GitHub asks to review each path, and
+what each skill may run. Everything else, skill prose, roles and
 templates included, is left to the crew's review, so the crew can keep
 improving itself. `.github/CODEOWNERS` lists the same paths.
 
 - `config/` @orzelig
 - `infra/` @orzelig
 - `.github/workflows/` @orzelig
-- `.github/scripts/scope-check.mjs` @orzelig
+- `.github/scripts/` @orzelig
+- `.github/CODEOWNERS` @orzelig
 - `docs/platform-plan.md` @orzelig
 - `apps/bridge/src/automation.ts` @orzelig
 - `apps/bridge/src/merge-line.ts` @orzelig
