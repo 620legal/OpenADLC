@@ -1,7 +1,7 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -169,6 +169,29 @@ describe('what a push would change, as git says it', () => {
 
   it('refuses every push from a skill with no push prefix', () => {
     expect(check.pushRefusal([{ flag: '*', to: 'refs/heads/agent/12' }], REVIEWER)).toMatch(/does not push/);
+  });
+});
+
+describe('OpenADLC’s git beside another copy of itself', () => {
+  it('runs the real git, not the other copy, which it once exec’d back and forth with for good', () => {
+    // A task's container has the install's copy at /opt/openadlc/bin, first on
+    // PATH, and these tests put the worktree's before it: `make ci` hung on
+    // the first `git add` here in every task, and no build could finish.
+    const other = mkdtempSync(join(tmpdir(), 'openadlc-other-shims-'));
+    try {
+      cpSync(BIN, other, { recursive: true });
+      const ran = spawnSync(SHIM, ['--version'], {
+        env: { ...process.env, PATH: `${BIN}:${other}:${process.env.PATH ?? ''}`, OPENADLC_TOOLS_POLICY: '' },
+        encoding: 'utf8',
+        timeout: 10_000,
+        killSignal: 'SIGKILL',
+      });
+      expect(ran.error).toBeUndefined();
+      expect(ran.status).toBe(0);
+      expect(ran.stdout).toMatch(/^git version /);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 });
 
