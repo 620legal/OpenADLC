@@ -5,6 +5,7 @@ import {
   declaredPathsFrom,
   deliveryRulesFrom,
   hasIgnoreLabel,
+  REPO_DEFAULTS,
   type ContextDocument,
   type Gate,
   type Message,
@@ -424,7 +425,8 @@ export async function openWorkDocumentFor(
   // reading the file itself needs GitHub, and this is a briefing.
   const stored = await (async () => repos.getDelivery(repo.id))().catch(() => null);
   // Both intake paths read this document, so this is where triage learns the
-  // rule the bridge applies when it ends (`StageHandoff.afterIntake`).
-  const spec = { mode: repo.stageModes?.spec ?? 'conditional', labels: repo.specRequiredLabels ?? [] };
+  // rule the bridge applies when it ends (`StageHandoff.afterIntake`), and
+  // the same default for a row with no mode stored.
+  const spec = { mode: repo.stageModes?.spec ?? REPO_DEFAULTS.stageModes.spec, labels: repo.specRequiredLabels ?? [] };
   return renderOpenWork(repo.fullName, open, deliveryRulesFrom(null, stored?.deliveryRules ?? null).paths, spec);
 }

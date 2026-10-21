@@ -56,6 +56,19 @@ export function repoSettingsPath(name: string): string {
   return `/settings/repositories/${encodeURIComponent(name)}`;
 }
 
+/** The id of a repository page's "What each stage may do without asking", which settings' list links to. */
+export function stagesSectionId(name: string): string {
+  return `${name}-stages`;
+}
+
+/**
+ * Where a repository's Design choice is changed: its page, at the stages. The
+ * control was only there, and nothing on the settings page led to it.
+ */
+export function repoStagesPath(name: string): string {
+  return `${repoSettingsPath(name)}#${encodeURIComponent(stagesSectionId(name))}`;
+}
+
 export interface StageChoice {
   mode: string;
   label: string;
@@ -76,11 +89,27 @@ export function stageChoices(stage: StageKey, current: string | undefined): Stag
   return choices;
 }
 
-/** A stage's mode when the repository has none stored: what the bridge assumes for it. */
+/**
+ * A stage's mode, or what the bridge assumes when the repository has none
+ * stored: `autonomous`, Design included, as the bridge's `REPO_DEFAULTS` say.
+ * The console does not read `@openadlc/shared`, so this is a copy that has to
+ * match it. Design's was `conditional`, and the page said "When it matters"
+ * of a repository the bridge designs every issue for (ADR 0004).
+ */
 export function modeOf(modes: Readonly<Record<string, string>>, stage: StageKey): string {
-  const mode = modes[stage] ?? (stage === 'spec' ? 'conditional' : 'autonomous');
+  const mode = modes[stage] ?? 'autonomous';
   // What an older bridge may still send: `assist` did what `autonomous` does.
   return mode === 'assist' ? 'autonomous' : mode;
+}
+
+/**
+ * Design's choice in the words the repository page draws it with: "Always",
+ * "When it matters" or "Never". Taken from `stageChoices`, so settings' list
+ * and the repository page cannot say two things.
+ */
+export function designChoiceLabel(modes: Readonly<Record<string, string>>): string {
+  const mode = modeOf(modes, 'spec');
+  return stageChoices('spec', mode).find((choice) => choice.mode === mode)?.label ?? mode;
 }
 
 /** What each stage does, as the settings page says it. */

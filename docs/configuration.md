@@ -117,6 +117,17 @@ Design nobody staffs. An older file's `assist` is read as `autonomous`, which
 is all it ever did; production waits for a person through the `production`
 environment's required reviewers.
 
+Every stage defaults to `autonomous`, Design included, so every issue gets a
+design pass before Build. `conditional` is the way to keep Design for the
+issues with a spec-required label only. It was the default once, and since
+intake seldom puts one of those labels on, nearly every issue went straight to
+Build ([ADR 0004](adr/0004-design-always-by-default.md)). Change it in
+Settings: under Repositories, each repository's row says its Design choice
+(Always, When it matters, or Never when `untouched`) and links to its page's
+"What each stage may do without asking", where it is set. A repository stored
+with a `spec` mode keeps it; one stored without reads as `autonomous`, in the
+bridge and the console alike.
+
 A repository's default branch is the branch every task starts from and every
 merge lands on. A repository added from the console is stored with the
 default branch GitHub reports for it, asked as the app or else the automation

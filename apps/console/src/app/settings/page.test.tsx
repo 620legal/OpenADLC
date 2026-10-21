@@ -273,7 +273,7 @@ describe('the settings page', () => {
     }
   });
 
-  it('lists the repositories under one heading, each linking to its own page, with a way to add another', async () => {
+  it('lists the repositories under one heading, each linking to its own page and its Design choice, with a way to add another', async () => {
     const html = await page();
     const repositories = html.slice(html.indexOf('id="repository"'), html.indexOf('id="github"'));
     expect(repositories).toMatch(/aria-labelledby="repositories-title"/);
@@ -282,9 +282,12 @@ describe('the settings page', () => {
     const links = [...repositories.matchAll(/<a [^>]*>/g)]
       .map((match) => [/href="([^"]+)"/.exec(match[0])?.[1], /aria-label="([^"]+)"/.exec(match[0])?.[1]])
       .filter(([href]) => href?.startsWith('/settings/'));
+    // Neither has a spec mode stored: each reads as the default, Always.
     expect(links).toEqual([
       ['/settings/repositories/openadlc-testbed', 'openadlc-testbed settings'],
+      ['/settings/repositories/openadlc-testbed#openadlc-testbed-stages', 'openadlc-testbed Design: Always, change it'],
       ['/settings/repositories/website', 'website settings'],
+      ['/settings/repositories/website#website-stages', 'website Design: Always, change it'],
     ]);
   });
 

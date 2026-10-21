@@ -335,6 +335,13 @@ describe('the open work a triage compares its draft with', () => {
       vi.mocked(repos.listRepos).mockResolvedValue([{ ...repo, stageModes: { spec: 'untouched' } }] as never);
       const untouched = (await openTriage()).find((one) => one.name === OPEN_WORK_DOCUMENT);
       expect(untouched?.content).toContain('Never label one `adlc:spec`.');
+
+      // A row with no spec mode stored is told the default the bridge routes
+      // by: it was told `conditional` and sent nearly everything to Build.
+      vi.mocked(repos.listRepos).mockResolvedValue([{ ...repo, stageModes: {} }] as never);
+      const unstored = (await openTriage()).find((one) => one.name === OPEN_WORK_DOCUMENT);
+      expect(unstored?.content).toContain('Spec mode: `autonomous`.');
+      expect(unstored?.content).toContain('Every issue in this repository goes to Design before it is built');
     } finally {
       vi.mocked(repos.listRepos).mockResolvedValue([{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }] as never);
     }
