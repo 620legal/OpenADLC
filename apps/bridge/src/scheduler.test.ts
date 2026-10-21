@@ -48,6 +48,10 @@ const store = vi.hoisted(() => ({
   answered: [] as Record<string, unknown>[],
   /** The changes being made in a repository (`issues.workInFlight`). */
   inFlight: [] as { number: number; paths: string[]; building: boolean }[],
+  /** Each pull request's row in the merge line, whatever its state (`mergeLines.entryFor`). */
+  mergeRows: [] as { prNumber: number; state: string; headSha: string | null }[],
+  /** The `humanIds` setting: each of the install's people pinned to an account id. */
+  humanIds: null as string | null,
 }));
 
 // The status job's report reads the whole store; which issue it lands on is what is tested here.
@@ -120,7 +124,11 @@ vi.mock('@openadlc/db', async () => ({
     getDelivery: vi.fn(async () => ({ deliveryRules: null, testingUrl: null })),
   },
   settings: {
-    getSetting: vi.fn(async (key: string) => (key === 'testingDeploy' ? store.testingDeploy : null)),
+    getSetting: vi.fn(async (key: string) => (key === 'testingDeploy' ? store.testingDeploy : key === 'humanIds' ? store.humanIds : null)),
+    allSettings: vi.fn(async () => ({})),
+  },
+  mergeLines: {
+    entryFor: vi.fn(async (_repoId: string, prNumber: number) => store.mergeRows.find((row) => row.prNumber === prNumber) ?? null),
   },
   tasks: {
     listTasks: vi.fn(async () => store.recentTasks),
@@ -186,6 +194,8 @@ beforeEach(() => {
   store.said = [];
   store.answered = [];
   store.inFlight = [];
+  store.mergeRows = [];
+  store.humanIds = null;
 });
 
 /**
@@ -1269,7 +1279,8 @@ describe('the gates of pull requests in review, worked out again', () => {
         path.includes('/pulls?state=open')
           ? [
               { number: 2, draft: false, head: { ref: 'agent/openadlc-atlas-janedoe/1-issue-1', sha: 'abc123', repo: { full_name: 'janedoe/openadlc-testbed' } }, base: { ref: 'main' }, labels: [], ...BUILT },
-              // Not an issue's branch, or not an issue in review: left alone.
+              // Not an issue's branch, with no review round OpenADLC opened on it,
+              // or not an issue in review: left alone.
               { number: 9, draft: false, head: { ref: 'dependabot/npm/x', sha: 'def456', repo: { full_name: 'janedoe/openadlc-testbed' } }, base: { ref: 'main' }, labels: [], ...BUILT },
               { number: 10, draft: false, head: { ref: 'agent/openadlc-atlas-janedoe/3-issue-3', sha: 'fed789', repo: { full_name: 'janedoe/openadlc-testbed' } }, base: { ref: 'main' }, labels: [], ...BUILT },
               // A stranger's fork, its branch named like the builder's: not the issue's.
@@ -1308,7 +1319,7 @@ describe('the gates of pull requests in review, worked out again', () => {
 
     expect(await scheduler.settleGates()).toEqual(['openadlc-testbed#2: review gate is success (all required reviews are in)']);
     expect(published).toEqual([{ state: 'success', description: 'all required reviews are in' }]);
-    expect(entered).toEqual([{ repoName: 'openadlc-testbed', prNumber: 2, headSha: 'abc123' }]);
+    expect(entered).toEqual([{ repoName: 'openadlc-testbed', prNumber: 2, headSha: 'abc123', revert: false }]);
   });
 
   it('finds the pull request from GitHub, and records it on the issue that had none', async () => {
@@ -1650,6 +1661,280 @@ describe('the lead’s review, asked again by the sweep', () => {
     store.reviewTasks.push({ subjectRef: 'openadlc-testbed#2', state: 'running', botId: LEAD.id, createdAt: '2026-10-01T10:05:00.000Z' });
     await scheduler.settleGates();
     expect(opened).toHaveLength(1);
+  });
+});
+
+describe('a person’s pull request, settled by the sweep too', () => {
+  // A person's branch is not cut for an issue, so no issue in Review stands
+  // for it, and the sweep passed it by. #15, #19 and #25 sat "waiting on" a
+  // seat that was busy when the round opened, or a lead busy when its turn
+  // came, with no task, until a person posted a review.
+  const BRANCH = 'janedoe/fix-the-sweep';
+  const CIPHER = { id: 'bot-cipher', name: 'openadlc-cipher-janedoe', githubLogin: 'openadlc-cipher-janedoe' };
+  const LEAD = { id: 'bot-lead', name: 'openadlc-sydney-janedoe', githubLogin: 'openadlc-sydney-janedoe' };
+  const ROUND = '2026-10-20T10:00:00.000Z';
+  const PERSON = { user: { login: 'janedoe' }, author_association: 'OWNER' };
+  const waitingOn = (seat: { name: string }) => ({ state: 'pending' as const, description: `waiting on ${seat.name}` });
+
+  type Gate = { state: 'pending' | 'success'; description: string };
+  type Pull = {
+    number: number;
+    draft?: boolean;
+    ref?: string;
+    sha?: string;
+    /** The head's repository; null once a fork is deleted. */
+    headRepo?: string | null;
+    labels?: string[];
+    author?: { user: { login: string; id?: number }; author_association: string };
+  };
+  type Opened = { bot: string; botId?: string; kind: string; subjectRef: string; branch?: string | null; issueNumber?: number | null };
+
+  function sweeping(options: {
+    pulls: Pull[];
+    gate: Gate;
+    standing?: { state: string; description: string } | null;
+    leadDue?: { seat: string; since: string | null };
+    /** Each page of GitHub's list; by default `pulls` is the first and only one. */
+    pageOf?: (page: number) => Pull[];
+    config?: Record<string, unknown>;
+  }) {
+    store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
+    store.issues = [];
+    store.bots = [CIPHER, LEAD];
+    const standing = options.standing === undefined ? options.gate : options.standing;
+    const published: { prNumber: number; state: string; description: string }[] = [];
+    const entered: { repoName: string; prNumber: number; headSha: string; revert?: boolean }[] = [];
+    const opened: Opened[] = [];
+    const pagesAsked: number[] = [];
+    const pageOf = options.pageOf ?? ((page: number) => (page === 1 ? options.pulls : []));
+    const taskService = new TaskService({} as never, {} as never, {} as never);
+    // Recorded as the task service records it, so the next sweep finds it under way.
+    taskService.open = (async (input: Opened) => {
+      opened.push(input);
+      store.reviewTasks.push({ subjectRef: input.subjectRef, state: 'queued', botId: input.botId ?? '', createdAt: '2026-10-20T10:30:00.000Z' });
+      return { taskId: `task-${opened.length}`, session: 'review-1' };
+    }) as never;
+    const github = {
+      request: async (_method: string, path: string) => {
+        if (!path.includes('/pulls?state=open')) return { statuses: standing ? [{ context: 'review-gate', ...standing }] : [] };
+        const page = Number(/[?&]page=(\d+)/.exec(path)?.[1] ?? '1');
+        pagesAsked.push(page);
+        return pageOf(page).map((pull) => ({
+          number: pull.number,
+          draft: pull.draft ?? false,
+          head: {
+            ref: pull.ref ?? BRANCH,
+            sha: pull.sha ?? `sha-${pull.number}`,
+            repo: pull.headRepo === null ? null : { full_name: pull.headRepo ?? 'janedoe/openadlc-testbed' },
+          },
+          base: { ref: 'main' },
+          labels: (pull.labels ?? []).map((name) => ({ name })),
+          ...(pull.author ?? PERSON),
+        }));
+      },
+    };
+    const scheduler = new Scheduler(
+      (options.config ?? { automationBot: 'flow' }) as never,
+      {} as never,
+      {
+        actors: { asBot: async () => github },
+        reviewStanding: async () => ({
+          gate: options.gate,
+          decision: { lead: LEAD.name, reviewers: [CIPHER.name, LEAD.name], approvers: [LEAD.name] },
+          posted: [],
+          approved: [],
+          leadDue: options.leadDue ?? null,
+        }),
+        setReviewGate: async (input: { prNumber: number; state: string; description: string }) => {
+          published.push({ prNumber: input.prNumber, state: input.state, description: input.description });
+          return { state: input.state, description: input.description };
+        },
+      } as never,
+      {} as never,
+      {} as never,
+      {
+        // As the store takes a place: a failed one becomes waiting again, at the head entered with.
+        enter: async (input: { repoName: string; prNumber: number; headSha: string; revert?: boolean }) => {
+          entered.push(input);
+          const row = store.mergeRows.find((entry) => entry.prNumber === input.prNumber);
+          if (!row) store.mergeRows.push({ prNumber: input.prNumber, state: 'waiting', headSha: input.headSha });
+          else if (row.state === 'failed' || row.state === 'merged') Object.assign(row, { state: 'waiting', headSha: input.headSha });
+          else row.headSha = input.headSha;
+        },
+      } as never,
+      taskService as never,
+    );
+    return { scheduler, published, entered, opened, pagesAsked };
+  }
+
+  it('starts a second reviewer that was busy when the round opened', async () => {
+    // The round opened at 10:00 and the seat had no room, so no task was recorded.
+    store.roundAt = ROUND;
+    const { scheduler, opened } = sweeping({ pulls: [{ number: 15 }], gate: waitingOn(CIPHER) });
+
+    const actions = await scheduler.settleGates();
+
+    expect(opened).toEqual([
+      expect.objectContaining({ bot: CIPHER.name, kind: 'review', subjectRef: 'openadlc-testbed#15', branch: BRANCH, issueNumber: null }),
+    ]);
+    expect(actions).toContainEqual(expect.stringContaining('openadlc-testbed#15: started openadlc-cipher-janedoe’s review'));
+  });
+
+  it('starts the lead, due once the others posted, that was busy when its turn came', async () => {
+    store.roundAt = ROUND;
+    // The second reviewer posted at 10:20; the review that completed the set found the lead busy.
+    store.reviewTasks = [{ subjectRef: 'openadlc-testbed#15', state: 'done', botId: CIPHER.id, createdAt: '2026-10-20T10:01:00.000Z' }];
+    const { scheduler, opened } = sweeping({
+      pulls: [{ number: 15 }],
+      gate: waitingOn(LEAD),
+      leadDue: { seat: LEAD.name, since: '2026-10-20T10:20:00.000Z' },
+    });
+
+    const actions = await scheduler.settleGates();
+
+    expect(opened).toEqual([expect.objectContaining({ bot: LEAD.name, subjectRef: 'openadlc-testbed#15', branch: BRANCH, issueNumber: null })]);
+    expect(actions).toContainEqual(expect.stringContaining('the lead’s, last'));
+  });
+
+  it('asks each seat once: a review under way, or one opened on this diff, is that seat’s review', async () => {
+    store.roundAt = ROUND;
+    const second = sweeping({ pulls: [{ number: 15 }], gate: waitingOn(CIPHER) });
+    await second.scheduler.settleGates();
+    await second.scheduler.settleGates();
+    expect(second.opened.map((task) => task.bot)).toEqual([CIPHER.name]);
+
+    store.reviewTasks = [{ subjectRef: 'openadlc-testbed#15', state: 'done', botId: CIPHER.id, createdAt: '2026-10-20T10:01:00.000Z' }];
+    const lead = sweeping({ pulls: [{ number: 15 }], gate: waitingOn(LEAD), leadDue: { seat: LEAD.name, since: '2026-10-20T10:20:00.000Z' } });
+    await lead.scheduler.settleGates();
+    await lead.scheduler.settleGates();
+    expect(lead.opened.map((task) => task.bot)).toEqual([LEAD.name]);
+
+    // A seat whose task on this diff already ran is left to it, though the gate still names it.
+    store.reviewTasks = [{ subjectRef: 'openadlc-testbed#15', state: 'failed', botId: CIPHER.id, createdAt: '2026-10-20T10:01:00.000Z' }];
+    const ran = sweeping({ pulls: [{ number: 15 }], gate: waitingOn(CIPHER) });
+    await ran.scheduler.settleGates();
+    expect(ran.opened).toEqual([]);
+  });
+
+  it('leaves a fork’s pull request, a deleted fork’s, a draft, a stranger’s, and one OpenADLC opened no round on alone', async () => {
+    store.roundAt = ROUND;
+    const { scheduler, published, opened } = sweeping({
+      pulls: [
+        { number: 15 },
+        { number: 16, headRepo: 'collaborator/openadlc-testbed' },
+        { number: 17, headRepo: null },
+        { number: 18, draft: true },
+        // From a branch somebody else pushed, by somebody with no role here.
+        { number: 19, author: { user: { login: 'stranger' }, author_association: 'NONE' } },
+      ],
+      gate: waitingOn(CIPHER),
+      standing: null,
+    });
+
+    await scheduler.settleGates();
+
+    expect(published.map((gate) => gate.prNumber)).toEqual([15]);
+    expect(opened.map((task) => task.subjectRef)).toEqual(['openadlc-testbed#15']);
+
+    // Open before the repository was managed: no webhook asked any seat, and neither does the sweep.
+    store.roundAt = null;
+    store.reviewTasks = [];
+    const never = sweeping({ pulls: [{ number: 15 }], gate: waitingOn(CIPHER), standing: null });
+    await never.scheduler.settleGates();
+    expect(never.published).toEqual([]);
+    expect(never.opened).toEqual([]);
+  });
+
+  it('puts a person’s pull request whose gate passes in the merge line, and the SRE’s revert at its front', async () => {
+    store.roundAt = ROUND;
+    const { scheduler, entered, opened } = sweeping({
+      pulls: [
+        { number: 15 },
+        {
+          number: 20,
+          ref: 'system/revert-0a1b2c3d',
+          labels: ['revert'],
+          author: { user: { login: 'openadlc-sre-janedoe' }, author_association: 'COLLABORATOR' },
+        },
+      ],
+      gate: { state: 'success', description: 'all required reviews are in' },
+      standing: waitingOn(LEAD),
+    });
+
+    const actions = await scheduler.settleGates();
+
+    expect(actions).toContain('openadlc-testbed#15: review gate is success (all required reviews are in)');
+    expect(entered).toEqual([
+      { repoName: 'openadlc-testbed', prNumber: 15, headSha: 'sha-15', revert: false },
+      { repoName: 'openadlc-testbed', prNumber: 20, headSha: 'sha-20', revert: true },
+    ]);
+    expect(opened).toEqual([]);
+  });
+
+  it('does not put a person’s pull request back in the line at the head the line let go of it at', async () => {
+    store.roundAt = ROUND;
+    const pulls: Pull[] = [{ number: 15 }];
+    const { scheduler, entered } = sweeping({ pulls, gate: { state: 'success', description: 'all required reviews are in' } });
+    // The line at its front: the checks on that head are red, so it fails
+    // the place and says so on the pull request (`leaveFor`).
+    const said: string[] = [];
+    const lineFails = () => {
+      for (const row of store.mergeRows.filter((entry) => entry.state === 'waiting')) {
+        row.state = 'failed';
+        said.push(`#${row.prNumber}@${row.headSha}: Leaving the merge line`);
+      }
+    };
+
+    await scheduler.settleGates();
+    lineFails();
+    await scheduler.settleGates();
+    lineFails();
+
+    expect(entered.map((entry) => entry.headSha)).toEqual(['sha-15']);
+    expect(said).toEqual(['#15@sha-15: Leaving the merge line']);
+
+    // A push moves the head, and it takes a place again.
+    pulls[0] = { number: 15, sha: 'sha-15-fixed' };
+    await scheduler.settleGates();
+    expect(entered.map((entry) => entry.headSha)).toEqual(['sha-15', 'sha-15-fixed']);
+  });
+
+  it('admits one of the install’s people as a delivery does, from the account their login was pinned to', async () => {
+    // GitHub labels an organization's owner whose membership is private a
+    // CONTRIBUTOR, and no role lookup answers for them here.
+    store.roundAt = ROUND;
+    store.humanIds = JSON.stringify({ janedoe: 4242 });
+    const config = { automationBot: 'flow', humans: ['janedoe'], gitHubClientId: '', webhookSecret: '', organization: 'janedoe', publicUrl: '' };
+    const byJane = (id: number): Pull => ({ number: 15, author: { user: { login: 'janedoe', id }, author_association: 'CONTRIBUTOR' } });
+
+    const pinned = sweeping({ pulls: [byJane(4242)], gate: waitingOn(CIPHER), config });
+    await pinned.scheduler.settleGates();
+    expect(pinned.opened.map((task) => task.subjectRef)).toEqual(['openadlc-testbed#15']);
+
+    // The same login on another account is not them.
+    store.reviewTasks = [];
+    const taken = sweeping({ pulls: [byJane(999)], gate: waitingOn(CIPHER), config });
+    await taken.scheduler.settleGates();
+    expect(taken.opened).toEqual([]);
+  });
+
+  it('reads every page of open pull requests, up to a thousand, and says when it stopped short', async () => {
+    store.roundAt = ROUND;
+    // A hundred drafts fill a page.
+    const drafts = (page: number): Pull[] => Array.from({ length: 100 }, (_, index) => ({ number: page * 1000 + index, draft: true }));
+
+    // The pull request waiting on a seat is on the second page.
+    const two = sweeping({ pulls: [], gate: waitingOn(CIPHER), pageOf: (page) => (page === 1 ? drafts(1) : page === 2 ? [{ number: 15 }] : []) });
+    const actions = await two.scheduler.settleGates();
+    expect(two.pagesAsked).toEqual([1, 2]);
+    expect(two.opened.map((task) => task.subjectRef)).toEqual(['openadlc-testbed#15']);
+    expect(actions.join('\n')).not.toContain('no more');
+
+    // Every page full: it stops at the tenth, and says so.
+    const endless = sweeping({ pulls: [], gate: waitingOn(CIPHER), pageOf: drafts });
+    const stopped = await endless.scheduler.settleGates();
+    expect(endless.pagesAsked).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(stopped).toContain('openadlc-testbed: read 1000 open pull requests and no more; the review gates of the rest were not settled');
   });
 });
 

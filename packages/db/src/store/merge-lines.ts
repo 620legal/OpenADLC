@@ -104,6 +104,16 @@ export async function line(repoId?: string): Promise<MergeLineEntry[]> {
   return rows.map(toEntry);
 }
 
+/**
+ * A pull request's row, whatever its state: one that failed or merged keeps
+ * its row, and its head, until it enters again. Null when it never entered,
+ * or left.
+ */
+export async function entryFor(repoId: string, prNumber: number): Promise<MergeLineEntry | null> {
+  const row = await queryOne<MergeLineRow>(`${SELECT} where m.repo_id = $1 and m.pr_number = $2`, [repoId, prNumber]);
+  return row ? toEntry(row) : null;
+}
+
 /** The one the bridge is working on, or the next to start. */
 export async function head(repoId: string): Promise<MergeLineEntry | null> {
   const entries = await line(repoId);
