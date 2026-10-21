@@ -208,6 +208,23 @@ export interface MergeFacts {
    * anybody else's: a person's, or the deploy skill's `system/revert-*`.
    */
   scope?: ScopeFacts;
+  /** What may say why GitHub calls it `blocked`, read only when it does (`blockedFacts`). */
+  blocked?: BlockedFacts;
+}
+
+/**
+ * What `mergeDecision` words GitHub's `blocked` from, which is all GitHub
+ * says when a rule on the base branch is not met.
+ */
+export interface BlockedFacts {
+  /** The rules GitHub applies to the base branch from its rulesets, or null when they could not be read. */
+  rules: readonly { type: string; parameters?: Record<string, unknown> }[] | null;
+  /**
+   * Its commits, as GitHub verified each one's signature (`reason` is
+   * GitHub's: `unsigned`, `unknown_key`…). Read only when those rules require
+   * signed commits; null otherwise, or when they could not be read.
+   */
+  commits: readonly { sha: string; verified: boolean | null; reason: string | null }[] | null;
 }
 
 /** A crew pull request's scope, as `mergeFacts` reads it for `mergeDecision`. */
@@ -496,6 +513,266 @@ const NO_SAY = new Set(['none', 'read', 'triage', '']);
  */
 const MAY_APPROVE = new Set(['admin', 'maintain', 'write']);
 
+/** Conclusions GitHub takes as a required check met. */
+const MEETS_REQUIRED = new Set(['success', 'neutral', 'skipped']);
+
+/**
+ * Rule types GitHub reports for a branch that `whyBlocked` reads, or that
+ * never hold a pull request's merge: a deletion, a force push or a branch's
+ * creation is not what a merge does, and a squash merge keeps history linear.
+ */
+const READ_OR_NOT_MERGE_RULES = new Set([
+  'deletion',
+  'non_fast_forward',
+  'creation',
+  'required_linear_history',
+  'required_signatures',
+  'required_status_checks',
+  'pull_request',
+]);
+
+/** How the rules `whyBlocked` does not check read in a sentence, by type; any other is named by its type. */
+const UNCHECKED_RULE_WORDS: Record<string, (parameters: Record<string, unknown>) => string> = {
+  required_deployments: (parameters) => {
+    const environments = Array.isArray(parameters.required_deployment_environments)
+      ? parameters.required_deployment_environments.filter((one) => typeof one === 'string')
+      : [];
+    return environments.length > 0 ? `a deployment to ${environments.map(nameInReason).join(', ')}` : 'a deployment';
+  },
+  merge_queue: () => 'landing through the merge queue',
+  workflows: () => 'its required workflows to pass',
+  code_scanning: () => 'code scanning results',
+  update: () => 'that only those who may bypass its rules update it',
+};
+
+/**
+ * A name from GitHub — a check's, an environment's — as it goes into a
+ * reason. `heldForPerson` splits the merge line's detail on the first
+ * "because ", so a check named "skipped because draft" would cut the reason
+ * a person reads short at its name; a no-break space reads the same and
+ * splits nothing.
+ */
+function nameInReason(name: string): string {
+  return name.replace(/because /g, 'because\u00a0');
+}
+
+/**
+ * Why GitHub will not land it as it stands, said so a person can act on it.
+ *
+ * It said `GitHub says it is blocked`, and a person's pull request whose
+ * commits were unsigned, onto a main whose ruleset requires signed commits,
+ * waited with nothing saying so: finding it took reading the rulesets by hand.
+ * Never with "because " in it: `heldForPerson` splits the merge line's detail
+ * on the first one.
+ */
+function notLandable(facts: MergeFacts): string {
+  const base = facts.baseRef;
+  switch (facts.mergeableState) {
+    case 'blocked':
+      return whyBlocked(facts);
+    case 'dirty':
+      return `it conflicts with ${base}, so GitHub cannot merge it as it is: merge ${base} into its branch and resolve the conflict`;
+    case 'behind':
+      return `it is behind ${base}, and ${base} requires a branch to be up to date before it merges: update it from ${base}`;
+    case 'draft':
+      return 'GitHub says it is a draft: mark it ready for review';
+    default:
+      return facts.mergeableState && facts.mergeableState !== 'unknown'
+        ? `GitHub says it is ${facts.mergeableState}`
+        : 'GitHub has not yet worked out whether it can be merged; it does after each push, and the line reads it again on its next pass';
+  }
+}
+
+/**
+ * Why GitHub says `blocked`, from what the merge facts hold and the rules on
+ * the base branch (`BlockedFacts`): each cause they show, with what to do,
+ * or, when none shows, that GitHub did not say why and what OpenADLC did
+ * not check. The verdict is the same either way: it does not land.
+ */
+function whyBlocked(facts: MergeFacts): string {
+  const base = facts.baseRef;
+  const rules = facts.blocked?.rules ?? null;
+  const ofType = (type: string) => (rules ?? []).filter((rule) => rule.type === type).map((rule) => rule.parameters ?? {});
+  const causes: string[] = [];
+  const unchecked: string[] = [];
+
+  const signatures = ofType('required_signatures').length > 0;
+  const commits = facts.blocked?.commits ?? null;
+  if (signatures && !commits) unchecked.push('signed commits');
+  const unverified = (commits ?? []).filter((commit) => commit.verified === false);
+  if (signatures && unverified.length > 0) {
+    const n = unverified.length;
+    const total = commits?.length ?? n;
+    const are = n === 1 ? 'is' : 'are';
+    // At GitHub's cap there may be more than it listed, so not "its commits".
+    const which =
+      total >= COMMITS_LISTED
+        ? `${n} of the first ${total} of its commits, as many as GitHub lists, ${are}`
+        : n === total
+          ? (n === 1 ? 'its commit is' : 'its commits are')
+          : `${n} of its ${total} commits ${are}`;
+    const shown = unverified.slice(0, 5);
+    const more = n > shown.length ? ` and ${n - shown.length} more` : '';
+    // Signed with a key GitHub does not know is not the same fix as not signed.
+    const plain = unverified.every((commit) => commit.reason === 'unsigned');
+    const listed = shown.map((commit) => (plain ? commit.sha.slice(0, 7) : `${commit.sha.slice(0, 7)}: ${nameInReason((commit.reason ?? 'unverified').replace(/_/g, ' '))}`));
+    causes.push(
+      `${which} ${plain ? 'not signed' : 'not verified as signed'} (${listed.join(', ')}${more}), and ${base} requires signed commits: ` +
+        `sign ${n === 1 ? 'it' : 'them'} and push again (a commit made in GitHub's web editor or through its API is signed by GitHub), or have the crew build it`,
+    );
+  }
+
+  // A required check as GitHub matches it: by name, from a check run or a status.
+  const runs = latestByName(facts.checkRuns);
+  const required = [
+    ...new Set(
+      ofType('required_status_checks').flatMap((parameters) =>
+        (Array.isArray(parameters.required_status_checks) ? parameters.required_status_checks : [])
+          .map((check: unknown) => (check as { context?: unknown } | null)?.context)
+          .filter((context): context is string => typeof context === 'string'),
+      ),
+    ),
+  ];
+  const reported = (context: string) => runs.some((run) => run.name === context) || facts.statuses.some((status) => status.context === context);
+  const met = (context: string) =>
+    runs.some((run) => run.name === context && run.status === 'completed' && MEETS_REQUIRED.has(run.conclusion ?? '')) ||
+    facts.statuses.some((status) => status.context === context && status.state === 'success');
+  const unreported = required.filter((context) => !reported(context));
+  const unmet = required.filter((context) => reported(context) && !met(context));
+  if (unreported.length > 0) {
+    const one = unreported.length === 1;
+    causes.push(
+      `${base} requires ${unreported.map(nameInReason).join(', ')} to pass, and ${one ? 'it has' : 'they have'} not reported on the head: ` +
+        `run what reports ${one ? 'it' : 'them'}, or take ${one ? 'it' : 'them'} out of ${base}'s rules`,
+    );
+  }
+  if (unmet.length > 0) causes.push(`${base} requires ${unmet.map(nameInReason).join(', ')} to pass, and ${unmet.length === 1 ? 'it has' : 'they have'} not passed on the head`);
+  const red = [
+    ...runs.filter((run) => run.status === 'completed' && RED.has(run.conclusion ?? '')).map((run) => run.name),
+    ...facts.statuses.filter((status) => RED.has(status.state)).map((status) => status.context),
+  ].filter((name) => !unmet.includes(name));
+  if (red.length > 0) causes.push(`${[...new Set(red)].map(nameInReason).join(', ')} failed on the head`);
+
+  // GitHub holds a pull request for a request for changes from anyone who can
+  // write, a seat the merge does not wait on included.
+  const asking = latestByLogin(facts.reviews)
+    .filter((review) => review.state === 'CHANGES_REQUESTED' && !NO_SAY.has(facts.askingPermission.get(review.user.toLowerCase()) ?? 'unknown'))
+    .map((review) => `@${review.user}`);
+  if (asking.length > 0) causes.push(`${asking.join(', ')} still ${asking.length === 1 ? 'asks' : 'ask'} for changes`);
+
+  for (const parameters of ofType('pull_request')) {
+    const wanted = typeof parameters.required_approving_review_count === 'number' ? parameters.required_approving_review_count : 0;
+    const approvals = latestByLogin(facts.reviews).filter((review) => review.state === 'APPROVED').length;
+    if (approvals < wanted) causes.push(`${base} requires ${wanted} approving review${wanted === 1 ? '' : 's'}, and it has ${approvals === 0 ? 'none' : approvals}`);
+    if (parameters.require_code_owner_review === true) {
+      // A code owner is asked for a review when the pull request opens, so one
+      // still asked is most likely the one it waits for.
+      const pending = facts.pendingOnGitHub;
+      if (pending.length > 0) {
+        const asked = pending.length === 1 ? 'is asked for a review on GitHub and has' : 'are asked for a review on GitHub and have';
+        causes.push(`${base} requires a code owner's approval, and ${pending.join(', ')} ${asked} not given one`);
+      } else unchecked.push("a code owner's approval");
+    }
+    if (parameters.required_review_thread_resolution === true) unchecked.push('every conversation resolved');
+    if (parameters.require_last_push_approval === true) unchecked.push('an approval after the last push');
+  }
+  for (const rule of rules ?? []) {
+    if (READ_OR_NOT_MERGE_RULES.has(rule.type)) continue;
+    unchecked.push(UNCHECKED_RULE_WORDS[rule.type]?.(rule.parameters ?? {}) ?? `what its ${nameInReason(rule.type.replace(/_/g, ' '))} rule asks`);
+  }
+
+  if (causes.length > 0) return causes.join('; ');
+  const look = 'the merge box on its GitHub page lists what is missing';
+  if (!facts.blocked) return `GitHub says it is blocked, and did not say why: ${look}`;
+  if (!rules) return `GitHub says it is blocked, and did not say why, and ${base}'s rules could not be read to tell: ${look}`;
+  if (unchecked.length > 0) {
+    const wants = [...new Set(unchecked)];
+    const listed = wants.length === 1 ? wants[0] : `${wants.slice(0, -1).join(', ')} and ${wants.at(-1)}`;
+    return `GitHub says it is blocked, and did not say why; ${base} also requires ${listed}, which OpenADLC did not check: ${look}`;
+  }
+  // Rulesets are what `rules/branches` lists; a branch protection rule is not
+  // among them, and reading one takes admin.
+  if (rules.length === 0) {
+    return `GitHub says it is blocked, and did not say why; no ruleset applies to ${base}, so it is likely its branch protection rule (Settings → Branches): ${look}`;
+  }
+  return (
+    `GitHub says it is blocked, and did not say why; what ${base}'s rulesets require is met as far as OpenADLC can check, ` +
+    `so it may be its branch protection rule (Settings → Branches): ${look}`
+  );
+}
+
+/** GitHub lists at most this many of a pull request's commits, a hundred to a page. */
+export const COMMITS_LISTED = 250;
+
+/**
+ * How long each read `blockedFacts` makes may take. It makes up to four, one
+ * after another, inside the merge line's advance, and at the client's
+ * 30-second default a slow GitHub could hold that line, and every repository
+ * `advanceAll` reaches after it, for two minutes over words.
+ */
+export const BLOCKED_READ_TIMEOUT_MS = 5_000;
+
+/** How many pull requests' last `blockedFacts` the bridge keeps (`Automation.blockedFactsOf`). */
+const LAST_BLOCKED_KEPT = 500;
+
+/**
+ * What may say why GitHub calls a pull request `blocked` (`BlockedFacts`):
+ * the rules on its base branch, which anyone who can read the repository may
+ * list, and, only when they require signed commits, its commits as GitHub
+ * verified them. A read that fails is not thrown: the merge does not land
+ * either way. It gives `last`, the last full reading of this head, when there
+ * is one, and `read` is false; without one, what it could not read is null.
+ */
+export async function blockedFacts(
+  client: Pick<GitHubClient, 'request'>,
+  repoFullName: string,
+  pull: { number: number; baseRef: string },
+  last: BlockedFacts | null = null,
+): Promise<{ facts: BlockedFacts; read: boolean }> {
+  const options = { timeoutMs: BLOCKED_READ_TIMEOUT_MS };
+  let rules: NonNullable<BlockedFacts['rules']>;
+  try {
+    const listed: { type: string; parameters?: Record<string, unknown> }[] = [];
+    for (let page = 1; ; page += 1) {
+      const one = await client.request<{ type: string; parameters?: Record<string, unknown> }[]>(
+        'GET',
+        `/repos/${repoFullName}/rules/branches/${encodeURIComponent(pull.baseRef)}?per_page=100&page=${page}`,
+        undefined,
+        options,
+      );
+      listed.push(...one.map((rule) => ({ type: rule.type, ...(rule.parameters ? { parameters: rule.parameters } : {}) })));
+      if (one.length < 100) break;
+    }
+    rules = listed;
+  } catch {
+    return { facts: last ?? { rules: null, commits: null }, read: false };
+  }
+  if (!rules.some((rule) => rule.type === 'required_signatures')) return { facts: { rules, commits: null }, read: true };
+  try {
+    const commits: { sha: string; verified: boolean | null; reason: string | null }[] = [];
+    for (let page = 1; commits.length < COMMITS_LISTED; page += 1) {
+      const one = await client.request<{ sha: string; commit?: { verification?: { verified?: boolean; reason?: string } | null } }[]>(
+        'GET',
+        `/repos/${repoFullName}/pulls/${pull.number}/commits?per_page=100&page=${page}`,
+        undefined,
+        options,
+      );
+      for (const entry of one) {
+        const verification = entry.commit?.verification;
+        commits.push({
+          sha: entry.sha,
+          verified: typeof verification?.verified === 'boolean' ? verification.verified : null,
+          reason: verification?.reason ?? null,
+        });
+      }
+      if (one.length < 100) break;
+    }
+    return { facts: { rules, commits }, read: true };
+  } catch {
+    return { facts: last ?? { rules, commits: null }, read: false };
+  }
+}
+
 /**
  * Whether the bridge may merge a pull request now, and on whose approvals.
  *
@@ -538,9 +815,7 @@ export function mergeDecision(facts: MergeFacts): {
   if (facts.baseRef !== facts.defaultBranch) return refuse(`it would land on ${facts.baseRef}, not the default branch ${facts.defaultBranch}`);
   if (facts.held) return refuse('it is held for a person (needs-human or openadlc:paused)');
   if (facts.draft) return refuse('it is a draft');
-  if (!facts.mergeableState || !LANDABLE.has(facts.mergeableState)) {
-    return refuse(`GitHub says it is ${facts.mergeableState ?? 'not yet known to be mergeable'}`);
-  }
+  if (!facts.mergeableState || !LANDABLE.has(facts.mergeableState)) return refuse(notLandable(facts));
   if (!facts.filesComplete) return refuse('it changes more files than GitHub lists (3000), so the paths a person must review are not all known');
   // A crew pull request lands only inside the paths its lease declared. A
   // managed repository's CI has no scope check, and one shipped in its
@@ -614,7 +889,7 @@ export function mergeDecision(facts: MergeFacts): {
     ...runs.filter((run) => run.status === 'completed' && RED.has(run.conclusion ?? '')).map((run) => run.name),
     ...facts.statuses.filter((status) => RED.has(status.state)).map((status) => status.context),
   ];
-  if (red.length > 0) return refuse(`${[...new Set(red)].join(', ')} failed on the head`);
+  if (red.length > 0) return refuse(`${[...new Set(red)].map(nameInReason).join(', ')} failed on the head`);
   if (verdictFor([...ci], [REQUIRED_CHECK]) !== 'green') return refuse(`${REQUIRED_CHECK} has not passed on the head`);
   if (facts.gate !== 'success') return refuse('review-gate as OpenADLC published it is not green on the head');
   if (facts.humanRulesUnknown) return refuse('the human review rules cannot be read from AGENTS.md on the default branch');
@@ -1638,6 +1913,9 @@ export class Automation {
 
     const crewBranch = Boolean(pull.headRef?.startsWith('agent/')) && pull.headRepoFullName?.toLowerCase() === repoFullName.toLowerCase();
     const scope = crewBranch ? await this.scopeFacts(client, repoFullName, pull, history, crew) : { crewBranch: false, issue: null, closes: [], declared: null, crossCutting: false };
+    // `blocked` says only that a rule on the base is not met, so what can say
+    // which is read then, and only then: every other merge pays nothing for it.
+    const blocked = pull.mergeableState === 'blocked' ? await this.blockedFactsOf(client, repoFullName, pull) : undefined;
 
     return {
       repoFullName,
@@ -1672,8 +1950,33 @@ export class Automation {
       carriedFrom,
       leadRechecks: resolution.rechecks ? decision.lead : null,
       scope,
+      ...(blocked ? { blocked } : {}),
     };
   }
+
+  /**
+   * `blockedFacts` for this head, the last full reading of it standing in for
+   * a read that failed. The merge line comments on the pull request each time
+   * its detail changes, so a 502, a timeout or a rate limit on the rules read
+   * would turn the reason into "could not be read" and back, a comment each
+   * way, on a pull request where nothing had changed.
+   */
+  private async blockedFactsOf(client: GitHubClient, repoFullName: string, pull: { number: number; baseRef: string; headSha: string }): Promise<BlockedFacts> {
+    const key = `${repoFullName.toLowerCase()}#${pull.number}`;
+    const kept = this.lastBlocked.get(key);
+    const { facts, read } = await blockedFacts(client, repoFullName, pull, kept?.headSha === pull.headSha ? kept.facts : null);
+    if (read) {
+      // Newest last, one per pull request, the oldest let go past the bound.
+      this.lastBlocked.delete(key);
+      this.lastBlocked.set(key, { headSha: pull.headSha, facts });
+      const oldest = this.lastBlocked.keys().next().value;
+      if (this.lastBlocked.size > LAST_BLOCKED_KEPT && oldest !== undefined) this.lastBlocked.delete(oldest);
+    }
+    return facts;
+  }
+
+  /** The last full reading of `blockedFacts` for each pull request, by `owner/repo#n`, with the head it was of. */
+  private readonly lastBlocked = new Map<string, { headSha: string; facts: BlockedFacts }>();
 
   /**
    * A crew pull request's scope: the issues it closes, its lease's paths, and

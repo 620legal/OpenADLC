@@ -25,8 +25,12 @@ run`. A job set to 0 with `OPENADLC_JOB_<NAME>_MINUTES` never runs.
 
 `openadlc doctor` checks the tools, hostd's authentication, the database, the GitHub
 accounts, the webhook secret and the last delivery, then has the bridge run every
-health check now and prints each failure with what to do and where. It exits
-non-zero on any blocking failure (`apps/cli/src/commands/doctor.ts`).
+health check now and prints each failure with what to do and where. Its last
+line counts what it printed: `✓ no problems found` only when it printed no `✗`
+and no `!`, `! 2 warnings, no problems` when it printed only warnings, and
+`✗ 1 problem, 2 warnings` (or `✗ 1 problem needs attention`) when anything
+failed. It exits non-zero on any problem, a blocking health check among them,
+and not on a warning (`apps/cli/src/commands/doctor.ts`).
 
 | What | Where |
 |---|---|
@@ -901,7 +905,7 @@ question open on it, its place in the line to merge — never from a setting
 | Next up · Waiting its turn | Routable, and no builder has taken it | The bridge log's dispatch lines |
 | Waiting: the dispatcher isn’t running | Routable, but the bridge was started without `OPENADLC_DISPATCH_IN_BRIDGE=1`, so nothing leases it | The `dispatcher` card on the board; see [Stopping new work while you look](#stopping-new-work-while-you-look) |
 | Approved · 2nd in line to merge · Catching up with main… | The merge line | A `repo-rules` card, if nothing lands |
-| Approved · waiting for you to merge it | Only a person can land it | Its **Needs you** card says why |
+| Approved · waiting for you to merge it | Only a person can land it | Its **Needs you** card says why; see [A green pull request waits for a person](#a-green-pull-request-waits-for-a-person) |
 | Checks running before it merges | CI on its head, or the merge line held at the GitHub Actions minutes cap | The pull request's checks; Costs, and [the cap](#a-pull-request-waits-on-github-actions-minutes-this-month-reached-the-cap) |
 | Waiting for the reviewers | A review seat asked has not posted on this diff | The pull request, and the reviewer's thread |
 | Live on testing · waiting for production | The production environment's required reviewer, or its soak timer | The repository's deployments page; Settings → Repositories |
@@ -1041,6 +1045,35 @@ behaves like this:
 ```bash
 grep -E 'resolution round|waits for #|stacked on' "$(openadlc logs bridge)" | tail -n 20
 ```
+
+## A green pull request waits for a person
+
+At the front of the line, up to date with its base and green, a pull request
+OpenADLC does not merge waits for a person. Its **Needs you** card, the merge
+line's detail ("OpenADLC did not, because …") and a comment on the pull request
+say why, in `mergeDecision`'s words (`apps/bridge/src/automation.ts`). When the
+reason is GitHub's — it will not land the pull request as it stands — the
+words say what holds it, from what the merge already read and, when GitHub
+says only `blocked`, from the rules GitHub applies to the base branch
+(`GET /repos/<repo>/rules/branches/<base>`) and, when those require signed
+commits, the pull request's commits as GitHub verified them (the first 250,
+as many as GitHub lists). Those are read only then, a few seconds each at
+most, and a read that fails leaves the words as they were for that head, so a
+GitHub blip posts no new comment. The words change nothing about what lands:
+a pull request GitHub does not call `clean`, `unstable` or `has_hooks` does
+not.
+
+| It says | What it means | What to do |
+|---|---|---|
+| its commits are not signed (`abc1234`, `def5678`), and main requires signed commits | A ruleset on the base requires signed commits, and these carry no signature. `not verified as signed (abc1234: unknown key)` is a signature GitHub cannot tie to the author's account | Sign them and push again; a commit made in GitHub's web editor or through its API is signed by GitHub. Or have the crew build it: each bot signs with its own key |
+| main requires `<check>` to pass, and it has not reported on the head · has not passed on the head | A check the base's rulesets require has no check run or status of that name on the head, or none that passed | Run what reports it, or take it out of the ruleset; for one that has not passed, its run says why |
+| `<check>` failed on the head | A check or status besides `ci` and `review-gate` is red | Its run says why |
+| `@<login>` still asks for changes | A request for changes stands from someone who can write. GitHub holds the merge for it from an advisory seat too, though OpenADLC waits only on the lead and blocking seats | They approve, or someone with write access dismisses that review |
+| main requires a code owner's approval, and `@<login>` is asked for a review on GitHub and has not given one · main requires N approving reviews, and it has M | The base's pull request rule is not met | The person asked reviews it; for approvals, as many people who can write approve it as the rule asks |
+| it conflicts with main | GitHub's `dirty` | Merge main into its branch and resolve the conflict |
+| it is behind main, and main requires a branch to be up to date | GitHub's `behind` | Update it from main |
+| GitHub has not yet worked out whether it can be merged | GitHub's `unknown`, which it works out after each push | Nothing: the line reads it again on its next pass |
+| GitHub says it is blocked, and did not say why | Nothing OpenADLC read explains it. It names what the rules also require that it did not check (every conversation resolved, a code owner's approval, a deployment), or says no ruleset applies to the base, which leaves a branch protection rule (Settings → Branches), which only an admin can read | The merge box on the pull request's GitHub page lists what is missing |
 
 ## A pull request waits on "GitHub Actions minutes this month reached the cap"
 

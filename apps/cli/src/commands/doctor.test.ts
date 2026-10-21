@@ -3,6 +3,7 @@ import type { HealthView } from '@openadlc/shared';
 import {
   bridgeProblems,
   checkHealth,
+  closingLine,
   databaseBindingGap,
   databaseContainerGaps,
   databaseInUse,
@@ -389,6 +390,26 @@ describe('openadlc doctor asking the bridge', () => {
     expect(secrets).toEqual(['c'.repeat(64)]);
   });
 
+  it('says each warning through the warn it is given, which is how doctor counts it', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          checks: [
+            { id: 'hostd', check: 'hostd', state: 'failing', severity: 'blocking', title: 'OpenADLC’s host service is not answering', proves: 'x', waitingFor: [], action: null, detail: null },
+            { id: 'token-expiry', check: 'token-expiry', state: 'failing', severity: 'warning', title: 'The OpenADLC app’s user tokens never expire', proves: 'x', waitingFor: [], action: null, detail: null },
+            { id: 'signing-key:atlas', check: 'signing-key', state: 'failing', severity: 'warning', title: 'openadlc-atlas-janedoe has 7 signing keys OpenADLC did not register', proves: 'x', waitingFor: [], action: null, detail: null },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    const warned: string[] = [];
+
+    expect(await checkHealth({ ports }, store, (message) => void warned.push(message))).toBe(1);
+    expect(warned).toEqual(['The OpenADLC app’s user tokens never expire', 'openadlc-atlas-janedoe has 7 signing keys OpenADLC did not register']);
+  });
+
   it('says the bridge could not be asked, rather than that nothing is wrong', async () => {
     const printed: string[] = [];
     vi.spyOn(console, 'log').mockImplementation((line: string) => void printed.push(line));
@@ -440,6 +461,17 @@ describe('openadlc doctor with the bridge down', () => {
     expect(said[0]).toContain('openadlc logs bridge');
   });
 
+  it('says, as a warning it counts, that the checks could not run, beside the problem', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:47311'));
+    const { said, fail } = failures();
+    const warned: string[] = [];
+
+    await bridgeProblems({ ports }, fail, store, (message) => void warned.push(message));
+    expect(warned).toEqual(['the bridge could not run its health checks: connect ECONNREFUSED 127.0.0.1:47311']);
+    expect(said).toHaveLength(1);
+  });
+
   it('counts a bridge that answers with an error as a problem', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 500 }));
@@ -456,6 +488,26 @@ describe('openadlc doctor with the bridge down', () => {
 
     expect(await bridgeProblems({ ports }, fail, store)).toBe(0);
     expect(said).toEqual([]);
+  });
+});
+
+describe('openadlc doctor’s last line', () => {
+  // It counted problems alone. A run that had just printed two warnings — the
+  // webhook secret differing between install.json and the environment, a
+  // bot's signing keys OpenADLC did not register — ended "no problems found".
+  it('counts the warnings it printed when there was no problem, as a warning', () => {
+    expect(closingLine(0, 2)).toEqual({ kind: 'warn', text: '2 warnings, no problems' });
+    expect(closingLine(0, 1)).toEqual({ kind: 'warn', text: '1 warning, no problems' });
+  });
+
+  it('counts problems and warnings together, as a failure', () => {
+    expect(closingLine(1, 2)).toEqual({ kind: 'fail', text: '1 problem, 2 warnings' });
+    expect(closingLine(2, 1)).toEqual({ kind: 'fail', text: '2 problems, 1 warning' });
+    expect(closingLine(2, 0)).toEqual({ kind: 'fail', text: '2 problems need attention' });
+  });
+
+  it('finds no problems only when it printed neither', () => {
+    expect(closingLine(0, 0)).toEqual({ kind: 'ok', text: 'no problems found' });
   });
 });
 

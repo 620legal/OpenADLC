@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GitHubApiError, ReviewerStandings, type PullCommit } from '@openadlc/github';
-import { Automation, FORBIDDEN_PUSH, LABEL_READ_BACKOFF_MS, ciKeysChanged, contentChanged, fastPathOf, mergeDecision, requestsTakenAway, reviewSample, standingApprovals, type MergeFacts } from './automation.js';
+import { Automation, BLOCKED_READ_TIMEOUT_MS, COMMITS_LISTED, FORBIDDEN_PUSH, LABEL_READ_BACKOFF_MS, ciKeysChanged, contentChanged, fastPathOf, mergeDecision, requestsTakenAway, reviewSample, standingApprovals, type BlockedFacts, type MergeFacts } from './automation.js';
 import type { BridgeConfig } from './config.js';
 import { ConflictRounds } from './conflict-round.js';
+import { WAITING_FOR_PERSON, heldForPerson } from './merge-line.js';
 import { issueNumberFromBranch } from './webhooks.js';
 import { declaredPathsFrom, reviewRulesSchema, type StageKey } from '@openadlc/shared';
 
@@ -2108,6 +2109,137 @@ describe('whether the bridge may merge a pull request', () => {
     expect(mergeDecision(facts({ humanRulesUnknown: true })).land).toBe(false);
     expect(mergeDecision(facts({ requestedReviewers: [] })).land).toBe(false);
   });
+
+  describe('when GitHub will not land it as it stands', () => {
+    // `blocked` is all GitHub says. The merge line said "GitHub says it is
+    // blocked" of a person's pull request whose commits were unsigned, onto a
+    // main whose ruleset requires signed commits, and finding that took
+    // reading the rulesets by hand.
+    const UNSIGNED = 'abc1234'.padEnd(40, '0');
+    const ALSO_UNSIGNED = 'def5678'.padEnd(40, '0');
+    const SIGNED = 'f00d999'.padEnd(40, '0');
+    const commit = (sha: string, reason: string) => ({ sha, verified: reason === 'valid', reason });
+    const SIGNATURES = { type: 'required_signatures' };
+    const blocked = (rules: BlockedFacts['rules'], commits: BlockedFacts['commits'] = null, overrides: Partial<MergeFacts> = {}) =>
+      mergeDecision(facts({ mergeableState: 'blocked', blocked: { rules, commits }, ...overrides }));
+    const LOOK = 'the merge box on its GitHub page lists what is missing';
+
+    it('names the commits that are not signed, when main requires signed commits, and how to sign them', () => {
+      const decision = blocked([SIGNATURES, { type: 'deletion' }], [commit(UNSIGNED, 'unsigned'), commit(ALSO_UNSIGNED, 'unsigned')]);
+
+      expect(decision).toMatchObject({ land: false, approvals: [] });
+      expect(decision.reason).toBe(
+        "its commits are not signed (abc1234, def5678), and main requires signed commits: sign them and push again (a commit made in GitHub's web editor or through its API is signed by GitHub), or have the crew build it",
+      );
+    });
+
+    it('says which of several commits, with GitHub’s reason when one is signed with a key it cannot verify', () => {
+      expect(blocked([SIGNATURES], [commit(SIGNED, 'valid'), commit(UNSIGNED, 'unknown_key')]).reason).toBe(
+        "1 of its 2 commits is not verified as signed (abc1234: unknown key), and main requires signed commits: sign it and push again (a commit made in GitHub's web editor or through its API is signed by GitHub), or have the crew build it",
+      );
+      // Signed and verified, they are not what holds it.
+      expect(blocked([SIGNATURES], [commit(SIGNED, 'valid')]).reason).not.toContain('signed (');
+    });
+
+    it('names a check main requires that has not reported on the head, or has not passed there', () => {
+      const checks = { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: 'ci' }, { context: 'review-gate' }, { context: 'build' }] } };
+
+      expect(blocked([checks]).reason).toBe("main requires build to pass, and it has not reported on the head: run what reports it, or take it out of main's rules");
+      const running = { ...job('build'), status: 'in_progress', conclusion: null };
+      expect(blocked([checks], null, { checkRuns: [job('check'), ciRun(), running] }).reason).toBe('main requires build to pass, and it has not passed on the head');
+      // Failed, whether or not the rules can be read to say it is required.
+      expect(blocked(null, null, { checkRuns: [job('check'), ciRun(), job('lint', 'failure')] }).reason).toBe('lint failed on the head');
+    });
+
+    it('names a request for changes still standing from anyone who can write, a seat the merge does not wait on included', () => {
+      const reviews = [
+        by('openadlc-sydney-janedoe', 'APPROVED'),
+        by('openadlc-vega-janedoe', 'CHANGES_REQUESTED'),
+        person('janedoe', 'CHANGES_REQUESTED'),
+        person('passerby', 'CHANGES_REQUESTED', 'NONE'),
+      ];
+      const decision = blocked([], null, {
+        reviews,
+        checkedReviews: reviews,
+        requestedReviewers: ['openadlc-sydney-janedoe'],
+        askingPermission: new Map([
+          ['janedoe', 'admin'],
+          ['passerby', 'read'],
+        ]),
+      });
+
+      expect(decision.reason).toBe('@vega-janedoe, @janedoe still ask for changes');
+    });
+
+    it('names who is still asked for a review where main requires a code owner’s approval, and approvals it lacks', () => {
+      const owners = { type: 'pull_request', parameters: { required_approving_review_count: 1, require_code_owner_review: true } };
+      expect(blocked([owners], null, { pendingOnGitHub: ['@janedoe'] }).reason).toBe(
+        "main requires a code owner's approval, and @janedoe is asked for a review on GitHub and has not given one",
+      );
+      const three = { type: 'pull_request', parameters: { required_approving_review_count: 3 } };
+      expect(blocked([three]).reason).toBe('main requires 3 approving reviews, and it has 2');
+    });
+
+    it('says what to do for a conflict, a branch behind its base, a draft, and a state GitHub has not worked out', () => {
+      expect(mergeDecision(facts({ mergeableState: 'dirty' })).reason).toBe('it conflicts with main, so GitHub cannot merge it as it is: merge main into its branch and resolve the conflict');
+      expect(mergeDecision(facts({ mergeableState: 'behind' })).reason).toBe('it is behind main, and main requires a branch to be up to date before it merges: update it from main');
+      expect(mergeDecision(facts({ mergeableState: 'draft' })).reason).toBe('GitHub says it is a draft: mark it ready for review');
+      for (const state of [null, 'unknown']) {
+        expect(mergeDecision(facts({ mergeableState: state })).reason).toBe(
+          'GitHub has not yet worked out whether it can be merged; it does after each push, and the line reads it again on its next pass',
+        );
+      }
+    });
+
+    it('says GitHub did not say why when nothing it read shows a cause, and what it did not check', () => {
+      const reviewRule = { type: 'pull_request', parameters: { required_approving_review_count: 1, require_code_owner_review: true, required_review_thread_resolution: true } };
+      const deploys = { type: 'required_deployments', parameters: { required_deployment_environments: ['staging'] } };
+
+      expect(blocked([SIGNATURES, reviewRule, deploys], [commit(SIGNED, 'valid')]).reason).toBe(
+        `GitHub says it is blocked, and did not say why; main also requires a code owner's approval, every conversation resolved and a deployment to staging, which OpenADLC did not check: ${LOOK}`,
+      );
+      expect(blocked([SIGNATURES]).reason).toBe(`GitHub says it is blocked, and did not say why; main also requires signed commits, which OpenADLC did not check: ${LOOK}`);
+      expect(blocked(null).reason).toBe(`GitHub says it is blocked, and did not say why, and main's rules could not be read to tell: ${LOOK}`);
+      expect(blocked([]).reason).toBe(`GitHub says it is blocked, and did not say why; no ruleset applies to main, so it is likely its branch protection rule (Settings → Branches): ${LOOK}`);
+      expect(blocked([{ type: 'deletion' }, { type: 'non_fast_forward' }]).reason).toBe(
+        `GitHub says it is blocked, and did not say why; what main's rulesets require is met as far as OpenADLC can check, so it may be its branch protection rule (Settings → Branches): ${LOOK}`,
+      );
+      expect(mergeDecision(facts({ mergeableState: 'blocked' }))).toMatchObject({ land: false, reason: `GitHub says it is blocked, and did not say why: ${LOOK}` });
+    });
+
+    it('says how many it checked when GitHub listed as many commits as it lists, not that it read them all', () => {
+      // GitHub stops at 250 and says nothing of the rest.
+      expect(COMMITS_LISTED).toBe(250);
+      const listed = Array.from({ length: 250 }, (_, index) => commit(index.toString(16).padStart(40, '0'), index < 3 ? 'unsigned' : 'valid'));
+      expect(blocked([SIGNATURES], listed).reason).toMatch(/^3 of the first 250 of its commits, as many as GitHub lists, are not signed \(0000000, 0000000, 0000000\), and main requires signed commits: /);
+    });
+
+    it('keeps a "because " in a name GitHub gave from cutting short what the merge line says a person waits for', () => {
+      const checks = { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'skipped because draft' }] } };
+      const deploys = { type: 'required_deployments', parameters: { required_deployment_environments: ['staging because of soak'] } };
+      const reasons = [
+        blocked([checks]).reason,
+        blocked(null, null, { checkRuns: [job('check'), ciRun(), job('lint because style', 'failure')] }).reason,
+        blocked([deploys]).reason,
+        mergeDecision(facts({ checkRuns: [job('check'), ciRun(), job('lint because style', 'failure')] })).reason,
+      ];
+      expect(reasons[0]).toContain('skipped because\u00a0draft');
+      for (const reason of reasons) {
+        expect(heldForPerson({ state: 'merging', detail: `green and up to date; ${WAITING_FOR_PERSON}: OpenADLC did not, because ${reason}` })).toBe(reason);
+      }
+    });
+
+    it('never says "because ", which the merge line splits its detail on to say why a person merges it', () => {
+      const reasons = [
+        blocked([SIGNATURES], [commit(UNSIGNED, 'unsigned')]).reason,
+        blocked([{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'build' }] } }]).reason,
+        blocked([{ type: 'merge_queue' }]).reason,
+        blocked(null).reason,
+        ...['dirty', 'behind', 'draft', 'unknown'].map((state) => mergeDecision(facts({ mergeableState: state })).reason),
+      ];
+      for (const reason of reasons) expect(reason).not.toContain('because ');
+    });
+  });
 });
 
 describe('the part of a file that decides how CI runs', () => {
@@ -2268,6 +2400,91 @@ describe('what the bridge reads before it merges', () => {
     expect([...(facts?.sameDiffAs ?? [])]).toEqual(['before-main-merge']);
     expect(facts?.gate).toBe('success');
     expect(appGate.standing).toHaveBeenCalledWith('exampleco/app', 'head');
+  });
+
+  it('reads the base’s rules only when GitHub says blocked, and the commits only when those rules require signed commits', async () => {
+    const UNSIGNED = 'abc1234'.padEnd(40, '0');
+    const SIGNED = 'f00d999'.padEnd(40, '0');
+    let rules: unknown[] | Error = [{ type: 'required_signatures', ruleset_source_type: 'Repository', ruleset_source: 'exampleco/app', ruleset_id: 3 }, { type: 'deletion' }];
+    const request = vi.fn(async (_method: string, path: string) => {
+      if (path.includes('/rules/branches/')) {
+        if (rules instanceof Error) throw rules;
+        return rules;
+      }
+      if (path.includes('/pulls/79/commits')) {
+        return [
+          { sha: UNSIGNED, commit: { verification: { verified: false, reason: 'unsigned' } } },
+          { sha: SIGNED, commit: { verification: { verified: true, reason: 'valid' } } },
+        ];
+      }
+      return { statuses: [] };
+    });
+    const asked = () => request.mock.calls.map(([, path]) => path).filter((path) => !path.includes('/status'));
+    const { automation } = reading({ request });
+    const repo = { fullName: 'exampleco/app', defaultBranch: 'main' };
+
+    const clean = await automation.mergeFacts(repo, PULL);
+    expect(asked()).toEqual([]);
+    expect(clean?.blocked).toBeUndefined();
+
+    const blocked = await automation.mergeFacts(repo, { ...PULL, mergeableState: 'blocked' });
+    expect(asked()).toEqual(['/repos/exampleco/app/rules/branches/main?per_page=100&page=1', '/repos/exampleco/app/pulls/79/commits?per_page=100&page=1']);
+    // Each read waits a few seconds at most, not the client's thirty.
+    for (const path of asked()) expect(request).toHaveBeenCalledWith('GET', path, undefined, { timeoutMs: BLOCKED_READ_TIMEOUT_MS });
+    expect(blocked?.blocked).toEqual({
+      rules: [{ type: 'required_signatures' }, { type: 'deletion' }],
+      commits: [
+        { sha: UNSIGNED, verified: false, reason: 'unsigned' },
+        { sha: SIGNED, verified: true, reason: 'valid' },
+      ],
+    });
+    expect(mergeDecision(blocked as MergeFacts)).toMatchObject({ land: false, reason: expect.stringMatching(/^1 of its 2 commits is not signed \(abc1234\), and main requires signed commits: /) });
+
+    // No rule asks for signatures: the commits are not read.
+    request.mockClear();
+    rules = [{ type: 'pull_request', parameters: { required_approving_review_count: 1 } }];
+    expect((await automation.mergeFacts(repo, { ...PULL, mergeableState: 'blocked' }))?.blocked?.commits).toBeNull();
+    expect(asked()).toEqual(['/repos/exampleco/app/rules/branches/main?per_page=100&page=1']);
+
+    // Rules that cannot be read, on a head never read in full, make the words
+    // poorer, not the read fail.
+    rules = new GitHubApiError(403, '/repos/exampleco/app/rules/branches/main', 'Resource not accessible by integration');
+    expect((await automation.mergeFacts(repo, { ...PULL, headSha: 'another-head', mergeableState: 'blocked' }))?.blocked).toEqual({ rules: null, commits: null });
+  });
+
+  it('keeps the words it last read in full for a head when a read of that head fails', async () => {
+    // The merge line comments each time its detail changes: a 502 on the rules
+    // read would have said "could not be read", and the next read the reason
+    // again, two comments on a pull request where nothing had changed.
+    const UNSIGNED = 'abc1234'.padEnd(40, '0');
+    const failing = { rules: false, commits: false };
+    const request = vi.fn(async (_method: string, path: string) => {
+      if (path.includes('/rules/branches/')) {
+        if (failing.rules) throw new GitHubApiError(502, path, 'Bad Gateway');
+        return [{ type: 'required_signatures' }];
+      }
+      if (path.includes('/pulls/79/commits')) {
+        if (failing.commits) throw new Error('The operation was aborted due to timeout');
+        return [{ sha: UNSIGNED, commit: { verification: { verified: false, reason: 'unsigned' } } }];
+      }
+      return { statuses: [] };
+    });
+    const { automation } = reading({ request });
+    const repo = { fullName: 'exampleco/app', defaultBranch: 'main' };
+    const reason = async (headSha = 'head') => mergeDecision((await automation.mergeFacts(repo, { ...PULL, headSha, mergeableState: 'blocked' })) as MergeFacts).reason;
+
+    const said = await reason();
+    expect(said).toMatch(/^its commit is not signed \(abc1234\), and main requires signed commits: /);
+
+    failing.rules = true;
+    expect(await reason()).toBe(said);
+    failing.rules = false;
+    failing.commits = true;
+    expect(await reason()).toBe(said);
+
+    // Never another head's: what was read of one says nothing about the next.
+    failing.rules = true;
+    expect(await reason('a-new-head')).toBe(`GitHub says it is blocked, and did not say why, and main's rules could not be read to tell: the merge box on its GitHub page lists what is missing`);
   });
 
   // A bare `review:human` was once described as a hold; nothing reads it.
