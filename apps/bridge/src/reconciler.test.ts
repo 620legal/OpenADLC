@@ -91,6 +91,10 @@ let MOVES: { actor: string; to: string }[] = [];
 let PULLS: Map<number, { merged: boolean; headRef: string }> = new Map();
 /** What a pull request lookup throws when GitHub cannot be asked. */
 let PULLS_FAIL: Error | null = null;
+/** What closed each issue at its newest close, as GitHub's timeline says; absent, nothing did, which is a person's close. */
+let CLOSERS: Map<number, Record<string, unknown>> = new Map();
+/** What a timeline read throws when GitHub cannot be asked. */
+let CLOSERS_FAIL: Error | null = null;
 /** Who GitHub says last edited an issue's text; null when it cannot be asked. */
 let EDITS: { author: string; association: string; editor: string | null; lastEditedAt: string | null; renamedBy: string | null } | null = null;
 /** The text reconcile kept as vouched for, by issue. */
@@ -213,10 +217,15 @@ const pullLookups = {
     if (!pull) throw new GitHubApiError(404, `/repos/janedoe/OpenADLC/pulls/${number}`, '{"message":"Not Found"}');
     return { number, merged: pull.merged, headRef: pull.headRef };
   },
-  async request(_method: string, path: string) {
+  async request(_method: string, path: string, body?: { variables?: { number?: number } }) {
     // Who has access, as GitHub's permission lookup says: the maintainer.
     const asked = /\/collaborators\/([^/]+)\/permission$/.exec(path);
     if (asked) return { permission: asked[1] === 'janedoe' ? 'admin' : 'none' };
+    if (path === '/graphql') {
+      if (CLOSERS_FAIL) throw CLOSERS_FAIL;
+      const closer = CLOSERS.get(Number(body?.variables?.number)) ?? null;
+      return { data: { repository: { issue: { timelineItems: { nodes: [{ stateReason: 'COMPLETED', closer }] } } } } };
+    }
     if (PULLS_FAIL) throw PULLS_FAIL;
     if (!path.includes('/pulls?state=closed')) throw new Error(`unexpected ${path}`);
     return [...PULLS].map(([number, pull]) => ({ number, merged_at: pull.merged ? '2026-10-01T00:00:00Z' : null, head: { ref: pull.headRef } }));
@@ -289,6 +298,8 @@ beforeEach(() => {
   MOVES = [];
   PULLS = new Map();
   PULLS_FAIL = null;
+  CLOSERS = new Map();
+  CLOSERS_FAIL = null;
   LABELS_SET = [];
 });
 
@@ -743,17 +754,6 @@ describe('a closed issue', () => {
     expect(vi.mocked(issues.forget)).not.toHaveBeenCalled();
   });
 
-  it('still leaves the board when its work never merged', async () => {
-    const { issues } = await import('@openadlc/db');
-    vi.mocked(issues.forget).mockClear();
-    CACHED = [{ number: 9, stage: 'build', declaredPaths: [], prNumber: null, body: BODY, labels: ['adlc:build'] }];
-    LIVE = [issue({ number: 9, state: 'closed', labels: ['adlc:build'] })];
-
-    await reconcileOnce();
-
-    expect(vi.mocked(issues.forget)).toHaveBeenCalledWith('repo-1', 9);
-  });
-
   const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
 
   // A repository that deploys keeps the lease past the merge, until the
@@ -815,13 +815,16 @@ describe('a closed issue', () => {
       const { Reconciler } = await import('./reconciler.js');
       const mergeUnheard = vi.fn(async () => 'merged' as const);
       const movedBack = vi.fn(async () => undefined);
+      const abandonUnheard = vi.fn(async () => true);
+      const landedUnheard = vi.fn(async () => true);
+      const reviveUnheard = vi.fn(async () => 'review' as const);
       const reconciler = new Reconciler(
         { automationBot: 'flow' } as never,
         { asBot: async () => ({ listIssues, getIssue, ...pullLookups }) } as never,
         { health: async () => ({ ok: true }) } as never,
-        { learnIssue: async () => undefined, movedBack, mergeUnheard },
+        { learnIssue: async () => undefined, movedBack, mergeUnheard, abandonUnheard, landedUnheard, reviveUnheard },
       );
-      return { run: () => reconciler.run({ repair: true }), mergeUnheard, movedBack };
+      return { run: () => reconciler.run({ repair: true }), mergeUnheard, movedBack, abandonUnheard, landedUnheard, reviveUnheard };
     }
 
     it('is moved to merged rather than deleted, when the pull request recorded on it merged', async () => {
@@ -854,11 +857,12 @@ describe('a closed issue', () => {
       CACHED = [{ number: 11, stage: 'review', declaredPaths: [], prNumber: 31, body: BODY, labels: ['adlc:review'] }];
       LIVE = [issue({ number: 11, state: 'closed', labels: ['adlc:review', 'openadlc:ignore'] })];
       PULLS.set(31, { merged: true, headRef: 'agent/openadlc-atlas-janedoe/11-issue-11' });
-      const { run, mergeUnheard, movedBack } = await withIntake();
+      const { run, mergeUnheard, movedBack, abandonUnheard } = await withIntake();
 
       const drift = await run();
 
       expect(mergeUnheard).not.toHaveBeenCalled();
+      expect(abandonUnheard).not.toHaveBeenCalled();
       expect(movedBack).not.toHaveBeenCalled();
       expect(vi.mocked(issues.forget)).not.toHaveBeenCalled();
       expect(drift.find((one) => one.subject === 'openadlc#11')).toBeUndefined();
@@ -882,33 +886,128 @@ describe('a closed issue', () => {
       expect(vi.mocked(issues.forget)).not.toHaveBeenCalled();
     });
 
-    it('is still forgotten when its pull request closed unmerged', async () => {
+    // A closed issue whose change never merged used to leave the board here,
+    // and the webhook left its row where it was: its Needs you cards stood
+    // for a pull request that was gone, and what waited on it waited on an
+    // issue OpenADLC no longer had.
+    it.each(['intake', 'spec', 'build', 'review'])('goes to Done as abandoned from %s, rather than being forgotten, when nothing merged it', async (stage) => {
       const { issues } = await import('@openadlc/db');
       vi.mocked(issues.forget).mockClear();
-      CACHED = [{ number: 11, stage: 'review', declaredPaths: [], prNumber: 31, body: BODY, labels: ['adlc:review'] }];
-      LIVE = [issue({ number: 11, state: 'closed', labels: ['adlc:review'] })];
+      CACHED = [{ number: 11, stage, declaredPaths: [], prNumber: stage === 'review' ? 31 : null, body: BODY, labels: [`adlc:${stage}`] }];
+      LIVE = [issue({ number: 11, state: 'closed', labels: [`adlc:${stage}`] })];
       PULLS.set(31, { merged: false, headRef: 'agent/openadlc-atlas-janedoe/11-issue-11' });
-      const { run, mergeUnheard } = await withIntake();
-
-      await run();
-
-      expect(mergeUnheard).not.toHaveBeenCalled();
-      expect(vi.mocked(issues.forget)).toHaveBeenCalledWith('repo-1', 11);
-    });
-
-    it('is kept for the next pass when GitHub cannot say whether it merged', async () => {
-      const { issues } = await import('@openadlc/db');
-      vi.mocked(issues.forget).mockClear();
-      CACHED = [{ number: 11, stage: 'review', declaredPaths: [], prNumber: 31, body: BODY, labels: ['adlc:review'] }];
-      LIVE = [issue({ number: 11, state: 'closed', labels: ['adlc:review'] })];
-      PULLS_FAIL = new GitHubApiError(502, '/repos/janedoe/OpenADLC/pulls/31', 'Bad Gateway');
-      const { run, mergeUnheard } = await withIntake();
+      const { run, mergeUnheard, abandonUnheard, landedUnheard } = await withIntake();
 
       const drift = await run();
 
       expect(vi.mocked(issues.forget)).not.toHaveBeenCalled();
       expect(mergeUnheard).not.toHaveBeenCalled();
-      expect(drift.find((one) => one.subject === 'openadlc#11')).toMatchObject({ kind: 'issue_closed', repaired: false });
+      expect(landedUnheard).not.toHaveBeenCalled();
+      expect(abandonUnheard).toHaveBeenCalledWith(expect.objectContaining({ id: 'repo-1' }), 11);
+      expect(drift.find((one) => one.subject === 'openadlc#11')).toEqual({
+        kind: 'issue_closed',
+        subject: 'openadlc#11',
+        detail: `closed without a merge while the board had it in ${stage}; moved to Done as abandoned`,
+        repaired: true,
+      });
+    });
+
+    it('is moved on as a merge when a pull request on a branch of its own closed it, whose merge was never delivered', async () => {
+      // 620legal/OpenADLC#33 was closed by #42 merging; nothing names #33 on #42's branch.
+      CACHED = [{ number: 11, stage: 'review', declaredPaths: [], prNumber: null, body: BODY, labels: ['adlc:review'] }];
+      LIVE = [issue({ number: 11, state: 'closed', labels: ['adlc:review'] })];
+      CLOSERS.set(11, { __typename: 'PullRequest', number: 42, merged: true, repository: { nameWithOwner: 'janedoe/OpenADLC' } });
+      const { run, mergeUnheard, abandonUnheard } = await withIntake();
+
+      await run();
+
+      expect(abandonUnheard).not.toHaveBeenCalled();
+      expect(mergeUnheard).toHaveBeenCalledWith(expect.objectContaining({ id: 'repo-1' }), 11, 42);
+    });
+
+    it('goes to Done as shipped, without the label, when GitHub closed it with a commit and no pull request of its own merged', async () => {
+      // A person's pull request on a branch not named for the issue, or a
+      // `fixes #11` pushed to main. Only the reconciler moves this one: the
+      // webhook leaves it for the merge's own delivery, which may be on its way.
+      CACHED = [{ number: 11, stage: 'build', declaredPaths: [], prNumber: null, body: BODY, labels: ['adlc:build'] }];
+      LIVE = [issue({ number: 11, state: 'closed', labels: ['adlc:build'] })];
+      CLOSERS.set(11, { __typename: 'Commit', oid: 'ab'.repeat(20) });
+      const { run, abandonUnheard, landedUnheard } = await withIntake();
+
+      const drift = await run();
+
+      expect(abandonUnheard).not.toHaveBeenCalled();
+      expect(landedUnheard).toHaveBeenCalledWith(expect.objectContaining({ id: 'repo-1' }), 11, 'ab'.repeat(20));
+      expect(drift.find((one) => one.subject === 'openadlc#11')).toMatchObject({
+        kind: 'issue_closed',
+        detail: 'closed by abababa with no pull request of its own merged; moved from build to Done',
+        repaired: true,
+      });
+    });
+
+    it('is kept for the next pass when GitHub cannot say whether it merged, or how it closed', async () => {
+      const { issues } = await import('@openadlc/db');
+      for (const fail of ['pulls', 'closer'] as const) {
+        vi.mocked(issues.forget).mockClear();
+        CACHED = [{ number: 11, stage: 'review', declaredPaths: [], prNumber: 31, body: BODY, labels: ['adlc:review'] }];
+        LIVE = [issue({ number: 11, state: 'closed', labels: ['adlc:review'] })];
+        PULLS = new Map([[31, { merged: false, headRef: 'agent/openadlc-atlas-janedoe/11-issue-11' }]]);
+        PULLS_FAIL = fail === 'pulls' ? new GitHubApiError(502, '/repos/janedoe/OpenADLC/pulls/31', 'Bad Gateway') : null;
+        CLOSERS_FAIL = fail === 'closer' ? new GitHubApiError(502, '/graphql', 'Bad Gateway') : null;
+        const { run, mergeUnheard, abandonUnheard, landedUnheard } = await withIntake();
+
+        const drift = await run();
+
+        expect(vi.mocked(issues.forget)).not.toHaveBeenCalled();
+        expect(mergeUnheard).not.toHaveBeenCalled();
+        expect(abandonUnheard).not.toHaveBeenCalled();
+        expect(landedUnheard).not.toHaveBeenCalled();
+        expect(drift.find((one) => one.subject === 'openadlc#11')).toMatchObject({ kind: 'issue_closed', repaired: false });
+      }
+    });
+
+    it('is brought back out of Done when it was reopened with no delivery to say so', async () => {
+      CACHED = [{ number: 11, stage: 'done', declaredPaths: [], prNumber: 31, body: BODY, labels: ['adlc:done', 'openadlc:abandoned'] }];
+      LIVE = [issue({ number: 11, state: 'open', labels: ['adlc:done', 'openadlc:abandoned', 'do:ai'] })];
+      const { run, reviveUnheard, movedBack } = await withIntake();
+
+      const drift = await run();
+
+      expect(reviveUnheard).toHaveBeenCalledWith(expect.objectContaining({ id: 'repo-1' }), 11, ['adlc:done', 'openadlc:abandoned', 'do:ai']);
+      expect(movedBack).not.toHaveBeenCalled();
+      expect(upserts).toEqual([]);
+      expect(drift.find((one) => one.subject === 'openadlc#11')).toEqual({
+        kind: 'stage_mismatch',
+        subject: 'openadlc#11',
+        detail: 'reopened on GitHub while the board had it in Done as abandoned; moved back to review',
+        repaired: true,
+      });
+    });
+
+    it('takes the label off an open issue a person moved out of Done, whose reopen was never delivered', async () => {
+      // Left on, a later merge would carry it into Done, where it would read as not shipped.
+      CACHED = [{ number: 11, stage: 'build', declaredPaths: [], prNumber: null, body: BODY, labels: ['adlc:build', 'openadlc:abandoned'] }];
+      LIVE = [issue({ number: 11, state: 'open', labels: ['adlc:build', 'openadlc:abandoned'] })];
+      const { run, reviveUnheard } = await withIntake();
+      reviveUnheard.mockResolvedValueOnce('build' as never);
+
+      const drift = await run();
+
+      expect(reviveUnheard).toHaveBeenCalledWith(expect.objectContaining({ id: 'repo-1' }), 11, ['adlc:build', 'openadlc:abandoned']);
+      expect(drift.find((one) => one.subject === 'openadlc#11')).toMatchObject({
+        detail: 'open on GitHub and in build, still labelled openadlc:abandoned; the label was taken off',
+        repaired: true,
+      });
+    });
+
+    it('leaves an open issue in Done alone when it shipped', async () => {
+      CACHED = [{ number: 11, stage: 'done', declaredPaths: [], prNumber: 31, body: BODY, labels: ['adlc:done'] }];
+      LIVE = [issue({ number: 11, state: 'open', labels: ['adlc:done'] })];
+      const { run, reviveUnheard } = await withIntake();
+
+      await run();
+
+      expect(reviveUnheard).not.toHaveBeenCalled();
     });
 
     it('writes the label again when the bridge’s own move to merged never reached it, rather than moving the card back', async () => {

@@ -65,6 +65,13 @@ describe('whether a dependency has shipped far enough', () => {
     expect(dependencyIsSatisfied(dep('done', []))).toBe(true);
   });
 
+  it('is not satisfied by Done reached by closing it without a merge', () => {
+    // Abandoned work is in Done so it leaves the board's working columns, and
+    // nothing of it shipped: what waits on it stays blocked for a person.
+    expect(dependencyIsSatisfied(dep('done', ['adlc:done', 'openadlc:abandoned']))).toBe(false);
+    expect(dependencyIsSatisfied(dep('done', ['adlc:done']))).toBe(true);
+  });
+
   it('is not satisfied by a merge alone', () => {
     // A merge is not a release. An issue waiting on a behaviour is waiting for
     // it to be somewhere it can be seen.

@@ -62,6 +62,29 @@ describe('a promote held for a person', () => {
   });
 });
 
+describe('a blocked issue waiting on one closed without merging', () => {
+  it('has both ways to settle it on the card, and is work', () => {
+    const waiting: AttentionItem = {
+      id: 'dependency-abandoned:api#20',
+      kind: 'dependency_abandoned',
+      headline: '#20 waits on #11, which was closed without merging',
+      subject: { repo: 'api', number: 20, title: 'Show the limit on the card', ref: 'api#20', url: 'https://github.com/acme/api/issues/20' },
+      bot: null,
+      since: '2026-09-24T11:59:00.000Z',
+      detail: 'Drop or change #11 in its Dependencies, or reopen #11.',
+      actions: [
+        { kind: 'open_url', label: 'Edit #20', url: 'https://github.com/acme/api/issues/20' },
+        { kind: 'open_url', label: 'Reopen #11', url: 'https://github.com/acme/api/issues/11' },
+      ],
+    };
+    expect(faceActions(waiting).map((action) => action.label)).toEqual(['Edit #20', 'Reopen #11']);
+    expect(hasMore(waiting)).toBe(false);
+    expect(groupOf(waiting)).toBe('work');
+    // From a bridge that sends no group, by its kind.
+    expect(groupOf({ kind: 'dependency_abandoned' })).toBe('work');
+  });
+});
+
 describe('a signing key OpenADLC did not register', () => {
   const card = {
     ...ITEM,

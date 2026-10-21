@@ -409,6 +409,62 @@ ledger, threads and gates, and the console's settings.
 8. **Done.** The issue is closed, the lease is let go, and its files are free
    for the next change.
 
+### Closing without merging
+
+An issue closed on GitHub without its change merging goes to Done labelled
+`openadlc:abandoned`. That covers an issue a person closes, as completed or as
+not planned, and one whose own pull request is closed unmerged
+(`apps/bridge/src/abandoned.ts`, `Webhooks.abandon`, ADR
+[0006](adr/0006-abandoned-is-a-label.md)). Done takes the card out of the
+columns work is in, and the label says nothing shipped.
+
+- **Telling it from a merge.** GitHub closes an issue at the merge that says
+  `Closes #N`, and that close can be delivered before the merge. So the issue
+  is abandoned only when no pull request of its own merged (`mergedPullOf`)
+  and GitHub's timeline names nothing that ships as what closed it
+  (`ClosedEvent.closer`): a merged pull request or a commit there means it
+  landed, however the close is described; no closer, or a Projects board
+  that closed it, means abandoned. When GitHub cannot be read, the card stays where it is and
+  the reconciler asks again on its next pass. When a commit closed it with no
+  pull request here, only the reconciler moves it, to Done without the label:
+  the merge's delivery may still be on its way to the webhook. A merge
+  handled after the close took the issue for abandoned takes the label off
+  and moves it on as a merge (`takeAbandonOff`).
+- **What happens, in order.** The label goes on, on GitHub and then on the
+  board's row, before the card moves, so nothing reads Done without it. The
+  move lets go of the lease, and its reason starts `Abandoned:`, which keeps
+  it out of Insights' merges. Every queued, running or paused task on the
+  issue and on its pull request stops (`its issue was closed without
+  merging`), which closes their questions, except a deploy task and the tasks
+  of the account that closed it. Plan changes waiting on its paths are tried
+  again. The audit says `issue.abandoned`.
+- **A pull request closed unmerged** abandons its issue only when the issue is
+  in Review, the card names that pull request, and a person closed it, not a
+  crew account or an app's. Then the bridge comments on the issue and closes
+  it as not planned. The card is in Done before the close, so the close's own delivery
+  changes nothing. Reopening the pull request, as a person does to run CI
+  again, reopens the issue and brings the card back before the lease is taken
+  again. Cancel from the board takes the card off the board first, so its
+  close abandons nothing.
+- **What waits on it.** Done with the label is not shipped
+  (`hasShipped`, `dependencyIsSatisfied`): an issue with it under
+  `## Dependencies` stays `blocked`, and Needs you has a
+  `dependency_abandoned` card saying which dependency it waits on, with links
+  to edit the issue or reopen the dependency. A pull request stacked on it
+  stays out of the merge line and is held. Design memory it proposed is not
+  accepted.
+- **Needs you.** The issue's and its pull request's questions, failed tasks,
+  review stalls, send-backs, intake stalls and held merges are not cards. A
+  review stall on a pull request GitHub says is closed is not one either,
+  even when the board has no row for its issue.
+- **Reopened.** The label comes off. A card still in Done goes back to the
+  stage the issue's own label names, if a person set one other than Done.
+  Otherwise it goes back to the stage it was abandoned from, or to Build when
+  no move says, and that stage is started. Review whose pull request is still
+  closed is Build instead, where the builder opens a new pull request. A card a person dragged out of
+  Done stays where they put it.
+- An `openadlc:ignore` issue is never labelled, moved or closed.
+
 ### Sending work back
 
 Any stage can send its work back to the stage before it with a reason
@@ -458,7 +514,8 @@ back. A crew account that moves a stage label back is put back.
   repairs what a missed delivery left wrong: an issue never heard of, a stage
   changed by hand, a merge whose delivery never came (the issue GitHub closed
   moves to Merged or Done, not off the board; one labelled `openadlc:ignore`
-  is left where it is, its labels only kept up to date), a lease on a closed issue, a
+  is left where it is, its labels only kept up to date), an issue closed
+  without a merge (to Done as abandoned) or reopened after one, a lease on a closed issue, a
   lease a question paused whose task has since ended, a task recorded half an
   hour ago that no host ever started. It reads at most 5000 open issues and
   pull requests of a repository; past that it skips the repository, says so
@@ -499,6 +556,7 @@ back. A crew account that moves a stage label back is put back.
 | **Merge line** | The order approved pull requests are brought up to date and landed in |
 | **Expected paths** | The files an issue says its change touches; the lease is granted them, and the merge line holds a crew pull request to the lease's paths, sending one that strays back to build |
 | **Dependencies** | An issue's `### Dependencies` section; it does not start until those have shipped |
+| **Abandoned** | An issue in Done whose change never merged: closed by a person, or its pull request closed unmerged. It carries `openadlc:abandoned` and is not shipped |
 | **Model account** | An engine credential, a key or a subscription, that bots are assigned to |
 | **Driver** | How hostd gives a task a computer: `docker` or `local` |
 | **Computer** | Where a task runs: under `docker` a container of its own (`task-<id8>`), with its own folder, its repository's cache, and a database of its own when its seat runs checks |

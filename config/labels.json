@@ -90,6 +90,11 @@
     "description": "Built next in its repository, ahead of priority"
   },
   {
+    "name": "openadlc:abandoned",
+    "color": "5a5a5a",
+    "description": "Closed without merging: in Done, but nothing shipped"
+  },
+  {
     "name": "review:human",
     "color": "d4a017",
     "description": "Retired; has no effect. Use needs-human to hold a pull request"

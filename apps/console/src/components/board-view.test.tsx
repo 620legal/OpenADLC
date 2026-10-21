@@ -232,6 +232,22 @@ describe('the board’s columns', () => {
     expect(done).not.toContain('Something from last month');
     expect(done).toContain('and 1 shipped before this week');
   });
+
+  it('show a card closed without merging in Done as abandoned, and do not count it as shipped', () => {
+    const cards = [
+      ...WORKING,
+      card({ ref: 'openadlc#13', stage: 'done', title: 'Closed before it merged', labels: ['adlc:done', 'openadlc:abandoned'], shippedAt: minutesAgo(30) }),
+      card({ ref: 'openadlc#2', stage: 'done', title: 'Abandoned last month', labels: ['adlc:done', 'openadlc:abandoned'], shippedAt: '2026-08-21T10:00:00.000Z' }),
+    ];
+    const html = render({ ...BOARD, columns: columns(cards) });
+    const done = column(html, 'Done');
+    expect(done).toContain('Closed before it merged');
+    expect(done).toContain('Abandoned 30 min ago');
+    expect(done).toContain('1 this week');
+    expect(done).toContain('and 1 shipped before this week');
+    // The phone's pill says the same count.
+    expect(html).toMatch(/>Done<span class="[^"]*">1<\/span>/);
+  });
 });
 
 describe('a card', () => {

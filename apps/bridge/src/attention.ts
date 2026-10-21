@@ -4,7 +4,21 @@ import { heldForPerson } from './merge-line.js';
 import { readUnowned } from './unowned-issues.js';
 import { INTAKE_STALLED } from './intake-events.js';
 import { DESIGN_MEMORY_SUPERSEDED } from './design-memory.js';
-import { botInWords, hasIgnoreLabel, roleLabel, STAGE_COLUMN_TITLES, STAGE_KEYS, type StageKey, type BotRole, type Gate, type HealthAction, type HealthSeverity, type TaskKind } from '@openadlc/shared';
+import {
+  botInWords,
+  hasAbandonedLabel,
+  hasIgnoreLabel,
+  parseDependencies,
+  roleLabel,
+  STAGE_COLUMN_TITLES,
+  STAGE_KEYS,
+  type StageKey,
+  type BotRole,
+  type Gate,
+  type HealthAction,
+  type HealthSeverity,
+  type TaskKind,
+} from '@openadlc/shared';
 import { botSaid } from './bot-said.js';
 import { NO_PULL_REQUEST, openPullRequestUrl } from './build-left.js';
 import type { GitHubClient } from '@openadlc/github';
@@ -27,6 +41,7 @@ import {
   stageOfTask,
   stallFrom,
   standingStalls,
+  subjectsOf,
   type IssueFacts,
   type TaskFacts,
 } from './work.js';
@@ -75,7 +90,9 @@ export type AttentionKind =
   /** A production promote the bridge holds for a person, where GitHub's plan cannot hold a reviewer. */
   | 'promote_held'
   /** A design took an accepted design memory entry out of effect: a notice, holding nothing, revertible in Settings. */
-  | 'design_memory_superseded';
+  | 'design_memory_superseded'
+  /** A blocked issue waits on one closed without merging, which will never ship: a person drops the dependency or reopens it. */
+  | 'dependency_abandoned';
 
 /**
  * What a person can do about an item. The first is the one the console offers
@@ -212,6 +229,7 @@ const GROUP: Record<AttentionKind, AttentionGroup> = {
   unowned_issues: 'work',
   promote_held: 'work',
   design_memory_superseded: 'work',
+  dependency_abandoned: 'work',
 };
 
 export function groupOf(kind: AttentionKind): AttentionGroup {
@@ -222,7 +240,7 @@ export interface AttentionItem {
   /**
    * Stable across reads, by kind: `gate:…`, `merge:repo#pr`, `promote:repo@sha`,
    * `unowned:repo`, `stall:repo#pr`, `sendback:repo#n`, `design-memory:…`,
-   * `intake-stalled:repo#n`, `task:…`, `landed:…`, `request:…`,
+   * `intake-stalled:repo#n`, `dependency-abandoned:repo#n`, `task:…`, `landed:…`, `request:…`,
    * `engine-update`, `check:…`, `fixed:…`, or `task-group:…`,
    * `triage-group:…` and `check-group:…` for a folded card.
    */
@@ -379,7 +397,8 @@ export interface AttentionInput {
   accounts?: readonly AccountRow[];
   /**
    * The issues and pull requests GitHub says are closed, by ref: a merged
-   * pull request is one. A failed task on one of them holds nothing up.
+   * pull request is one. A failed task on one of them holds nothing up, and
+   * nor does a review stalled on one.
    */
   closed?: ReadonlySet<string>;
   /**
@@ -470,6 +489,38 @@ function withoutIgnored(input: AttentionInput): { input: AttentionInput; ignored
       issues: input.issues.filter((issue) => !ignored.has(`${issue.repoName}#${issue.number}`)),
       requests: input.requests.filter((one) => !filedAsIgnored(one)),
       heldMerges: input.heldMerges?.filter((held) => !ignored.has(`${held.repo}#${held.prNumber}`)),
+    },
+  };
+}
+
+/**
+ * The input without the work of issues closed without merging
+ * (`openadlc:abandoned`) and of their pull requests: the tasks and questions
+ * on them, their review stalls, send-backs, intake stalls and held merges.
+ * Their work is over, and its cards stood for an issue and a pull request
+ * that were gone. The issues themselves stay, for what waits on them.
+ */
+function withoutAbandoned(input: AttentionInput): { input: AttentionInput; abandoned: ReadonlySet<string> } {
+  const abandoned = new Set(input.issues.filter((issue) => hasAbandonedLabel(issue.labels)).flatMap(subjectsOf));
+  if (abandoned.size === 0) return { input, abandoned };
+  const goneTasks = new Set(input.tasks.filter((task) => abandoned.has(task.subjectRef)).map((task) => task.id));
+  const named = (event: { payload: unknown }, key: 'issue' | 'pr'): boolean => {
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    return typeof payload.repo === 'string' && typeof payload[key] === 'number' && abandoned.has(`${payload.repo}#${payload[key]}`);
+  };
+  return {
+    abandoned,
+    input: {
+      ...input,
+      tasks: input.tasks.filter((task) => !goneTasks.has(task.id)),
+      gates: input.gates.filter((gate) => !gate.taskId || !goneTasks.has(gate.taskId)),
+      stallEvents: input.stallEvents.filter((event) => !named(event, 'pr') && !named(event, 'issue')),
+      sendBackEvents: input.sendBackEvents?.filter((event) => !named(event, 'issue')),
+      intakeStalls: input.intakeStalls?.filter((event) => {
+        const ref = ((event.payload ?? {}) as Record<string, unknown>).subjectRef;
+        return typeof ref !== 'string' || !abandoned.has(ref);
+      }),
+      heldMerges: input.heldMerges?.filter((held) => !abandoned.has(`${held.repo}#${held.prNumber}`)),
     },
   };
 }
@@ -772,7 +823,8 @@ function foldCauses(kind: AttentionKind, groupPrefix: string, candidates: readon
 }
 
 export function attentionItems(given: AttentionInput): AttentionItem[] {
-  const { input, ignored } = withoutIgnored(withoutRemoved(given));
+  const { input: kept, ignored } = withoutIgnored(withoutRemoved(given));
+  const { input, abandoned } = withoutAbandoned(kept);
   const botsById = new Map(input.bots.map((bot) => [bot.id, bot]));
   const reposById = new Map(input.repos.map((repo) => [repo.id, repo]));
   const reposByName = new Map(input.repos.map((repo) => [repo.name, repo]));
@@ -943,8 +995,11 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     });
   }
 
-  // Review loops that stopped without the reviewers agreeing.
+  // Review loops that stopped without the reviewers agreeing, on a pull
+  // request still open: one GitHub says is closed has nothing left to agree
+  // on, whether or not the board still has its issue.
   for (const [key, stall] of standingStalls(input.stallEvents, input.issues, input.tasks)) {
+    if (input.closed?.has(key)) continue;
     const bot =
       (stall.botId ? botsById.get(stall.botId) : undefined) ??
       input.bots.find((one) => one.name === stall.bot || one.slot === stall.bot);
@@ -1069,6 +1124,34 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
       since: one.at,
       detail: `It ran ${one.tries} times and left the issue in intake each time, so it stopped trying. Answer what it asked on the issue, move it on the board yourself, or label it openadlc:ignore.`,
       actions: issue.url ? [{ kind: 'open_url', label: 'Open the issue', url: issue.url }] : [],
+    });
+  }
+
+  // A blocked issue waiting on one closed without merging, which will never
+  // ship: the dispatcher leaves it blocked, and only a person can settle it.
+  // One card per waiting issue, made from what the issues say and stored
+  // nowhere, so it goes once the dependency is dropped or reopened.
+  for (const waiting of input.issues) {
+    if (!waiting.labels.includes('blocked') || waiting.stage === 'merged' || waiting.stage === 'done') continue;
+    const on = parseDependencies(waiting.body ?? null)
+      .map((number) => input.issues.find((one) => one.repoId === waiting.repoId && one.number === number))
+      .filter((one): one is IssueFacts => one !== undefined && one.stage === 'done' && hasAbandonedLabel(one.labels));
+    if (on.length === 0) continue;
+    const key = `${waiting.repoName}#${waiting.number}`;
+    const refs = on.map((one) => `#${one.number}`);
+    const named = refs.length > 1 ? `${refs.slice(0, -1).join(', ')} and ${refs[refs.length - 1]}` : refs[0]!;
+    const actions: AttentionAction[] = [];
+    if (waiting.url) actions.push({ kind: 'open_url', label: `Edit #${waiting.number}`, url: waiting.url });
+    for (const one of on) if (one.url) actions.push({ kind: 'open_url', label: `Reopen #${one.number}`, url: one.url });
+    items.push({
+      id: `dependency-abandoned:${key}`,
+      kind: 'dependency_abandoned',
+      headline: `#${waiting.number} waits on ${named}, which ${on.length > 1 ? 'were' : 'was'} closed without merging`,
+      subject: subjectOf(key).subject,
+      bot: null,
+      since: on.map((one) => one.updatedAt).sort().at(-1) ?? input.now.toISOString(),
+      detail: `Drop or change ${named} in its Dependencies, or reopen ${on.length > 1 ? 'them' : named}.`,
+      actions,
     });
   }
 
@@ -1335,8 +1418,9 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
 
   items.push(...healthItems(input.health ?? [], input.bots, input.now, input.acknowledged));
 
+  const leftOut = (ref: string | null | undefined): boolean => Boolean(ref) && (ignored.has(ref!) || abandoned.has(ref!));
   return items
-    .filter((item) => !(item.subject.ref && ignored.has(item.subject.ref)) && !(item.subject.item && ignored.has(item.subject.item)))
+    .filter((item) => !leftOut(item.subject.ref) && !leftOut(item.subject.item))
     .map((item) => ({ ...item, group: groupOf(item.kind) }))
     .sort((a, b) => Date.parse(b.since) - Date.parse(a.since) || a.id.localeCompare(b.id));
 }
@@ -1756,7 +1840,16 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
   // the tasks that could still be a card. Asked for every failed or stopped
   // task of the week — stopped by a person, tried again, dismissed — each
   // open one cost a read every two minutes on the automation account's token.
-  const endable = [...new Set(failedTaskCandidates(withoutRemoved(read)).map((task) => task.subjectRef).filter((ref) => parseRef(ref)))];
+  //
+  // And the pull requests of review stalls that name no issue on the board:
+  // the reconciler forgot a closed issue's row, and its stall stood for a
+  // pull request that was gone. A stall whose issue is on the board goes when
+  // the card leaves Review, so it costs no read.
+  const present = withoutRemoved(read);
+  const unboarded = [...standingStalls(present.stallEvents, present.issues, present.tasks)]
+    .filter(([, stall]) => !present.issues.some((one) => one.repoName === stall.repo && one.number === stall.issue))
+    .map(([key]) => key);
+  const endable = [...new Set([...failedTaskCandidates(present).map((task) => task.subjectRef), ...unboarded].filter((ref) => parseRef(ref)))];
   const closed = deps.closed && endable.length > 0 ? await deps.closed(endable).catch(() => new Set<string>()) : new Set<string>();
   return { ...read, closed };
 }

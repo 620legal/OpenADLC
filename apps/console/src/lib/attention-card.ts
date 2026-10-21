@@ -48,6 +48,8 @@ export function faceActions(item: AttentionItem): AttentionAction[] {
   if (item.kind === 'unowned_issues') return item.actions;
   // Release it, or stop holding promotes for a person at all: both on the card.
   if (item.kind === 'promote_held') return item.actions;
+  // Drop the dependency, or reopen what it waits on: either settles it.
+  if (item.kind === 'dependency_abandoned') return item.actions;
   // A signing key OpenADLC did not register: revoke it, or say it is used
   // elsewhere — both on the card for the first key; more keys and the undos
   // are in the sheet.
@@ -104,6 +106,7 @@ const GROUP: Record<AttentionItem['kind'], AttentionGroup> = {
   unowned_issues: 'work',
   promote_held: 'work',
   design_memory_superseded: 'work',
+  dependency_abandoned: 'work',
 };
 
 export function groupOf(item: Pick<AttentionItem, 'kind' | 'group'>): AttentionGroup {

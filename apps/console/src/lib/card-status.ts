@@ -14,6 +14,15 @@ import { ago, duration, ordinal } from './when';
 
 export type StatusTone = 'signal' | 'attention' | 'alarm' | 'muted';
 
+/**
+ * A card in Done because its issue was closed without merging: the bridge's
+ * `openadlc:abandoned`. Done takes it out of the columns work is in; nothing
+ * of it shipped, so it has no tick and is not counted with what did.
+ */
+export function abandoned(card: Pick<BoardCard, 'stage' | 'labels'>): boolean {
+  return card.stage === 'done' && card.labels.includes('openadlc:abandoned');
+}
+
 export interface CardStatus {
   text: string;
   tone: StatusTone;
@@ -151,6 +160,7 @@ export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
   switch (card.stage) {
     case 'done': {
       const when = ago(card.shippedAt ?? card.updatedAt, context.now);
+      if (abandoned(card)) return { text: when ? `Abandoned ${when}` : 'Abandoned', tone: 'muted', mark: null };
       return { text: when ? `Shipped ${when}` : 'Shipped', tone: 'muted', mark: 'check' };
     }
     case 'merged':

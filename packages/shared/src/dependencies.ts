@@ -1,3 +1,5 @@
+import { hasAbandonedLabel } from './stages.js';
+
 /**
  * What an issue is waiting for, read from its own body.
  *
@@ -71,10 +73,13 @@ export function dependencyIsSatisfied(dependency: { stage: string; labels: strin
     // unblocked by its absence. Somebody has to look.
     return false;
   }
-  // Done is shipped, however it got there. In a repository that deploys, Done
-  // comes after production, which is past testing. In one that deploys
-  // nothing, merging is shipping: the card goes to Done with no deploy label
-  // at all, and an issue waiting on it would have waited for good.
+  // Closed without merging: in Done, and nothing of it shipped. Read as
+  // shipped, the issue waiting on it started on work that will never land.
+  if (hasAbandonedLabel(dependency.labels)) return false;
+  // Done is otherwise shipped, however it got there. In a repository that
+  // deploys, Done comes after production, which is past testing. In one that
+  // deploys nothing, merging is shipping: the card goes to Done with no deploy
+  // label at all, and an issue waiting on it would have waited for good.
   if (dependency.stage === 'done') return true;
   if (dependency.stage !== 'merged') return false;
   return dependency.labels.includes('deployed:testing');

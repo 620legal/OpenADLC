@@ -1,5 +1,5 @@
 import { audit, bots, designMemory, issues, recordEvent, repos, tasks, threads } from '@openadlc/db';
-import { designMemoryProposals, inertMarkup, type ContextDocument, type StageKey } from '@openadlc/shared';
+import { designMemoryProposals, hasAbandonedLabel, hasShipped, inertMarkup, type ContextDocument, type StageKey } from '@openadlc/shared';
 import { HttpFailure, type Router } from './router.js';
 import { parseRef } from './work.js';
 
@@ -31,6 +31,15 @@ import { parseRef } from './work.js';
 
 /** Stages an issue is in once its design has been taken. */
 const PAST_DESIGN: ReadonlySet<StageKey> = new Set<StageKey>(['build', 'review', 'merged', 'done']);
+
+/**
+ * Whether an issue's design was taken: past design, and not in Done because
+ * it was closed without merging. An issue abandoned in Design is in Done, and
+ * what it proposed was accepted for a design nobody built.
+ */
+function pastDesign(issue: { stage: StageKey; labels?: readonly string[] | null }): boolean {
+  return PAST_DESIGN.has(issue.stage) && !hasAbandonedLabel(issue.labels);
+}
 
 /** How long `design-memory.md` may be: enough for a repository's working summary, and no more. */
 export const DESIGN_MEMORY_CHARS = 16_000;
@@ -90,7 +99,7 @@ export async function recordDesignMemory(input: {
   if (!source) return [];
   const saved = await designMemory.propose(repo.id, proposals, { subject, url: input.commentUrl, by: source.seat, task: source.taskId });
   const issue = await issues.getIssue(repo.id, input.issueNumber).catch(() => null);
-  if (issue && PAST_DESIGN.has(issue.stage) && saved.length > 0) {
+  if (issue && pastDesign(issue) && saved.length > 0) {
     await acceptFor(repo, input.issueNumber, { sourceTask: source.taskId, ids: saved.map((entry) => entry.id) });
   }
   return saved;
@@ -223,7 +232,7 @@ export async function sweepDesignMemory(): Promise<string[]> {
     for (const subject of subjects) {
       const number = parseRef(subject)?.number;
       const issue = number ? await issues.getIssue(repo.id, number).catch(() => null) : null;
-      if (number && issue && PAST_DESIGN.has(issue.stage)) {
+      if (number && issue && pastDesign(issue)) {
         const accepted = await acceptFor(repo, number);
         if (accepted > 0) said.push(`${subject}: accepted ${accepted} design memory entr${accepted === 1 ? 'y' : 'ies'}, its issue having moved to ${issue.stage}`);
       }
@@ -232,7 +241,8 @@ export async function sweepDesignMemory(): Promise<string[]> {
   for (const entry of await designMemory.decisionsWithoutAdr()) {
     const number = entry.sourceSubject ? parseRef(entry.sourceSubject)?.number : undefined;
     const issue = number ? await issues.getIssue(entry.repoId, number).catch(() => null) : null;
-    if (!issue || (issue.stage !== 'merged' && issue.stage !== 'done')) continue;
+    // Only a change that shipped: an abandoned one's ADR never reached main.
+    if (!issue || !hasShipped(issue)) continue;
     const path = adrFor(entry.title, issue.prChangedPaths);
     if (!path) continue;
     await designMemory.setAdrPath(entry.id, path);

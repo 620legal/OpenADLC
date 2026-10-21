@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PullCommit } from '@openadlc/github';
+import { GitHubApiError, type PullCommit } from '@openadlc/github';
 import { DEFAULT_DELIVERY_RULES, MERGE_IS_SHIPPING, isForwardMove, renderGateComment, type StageKey } from '@openadlc/shared';
 import { hasEventOfType, issues, leases, listEventsOfType, repos, spendingLimits, tasks } from '@openadlc/db';
 import { Automation, mergeDecision, type MergeFacts } from './automation.js';
@@ -64,6 +64,8 @@ const store = vi.hoisted(() => ({
   localCiPasses: new Set<string>(),
   /** What applying the repository rules last found GitHub's plan refused. */
   planLimits: null as { limits: { name: string; detail: string }[] } | null,
+  /** The issue's recorded stage moves, oldest first. */
+  moves: [] as { from: string | null; to: string }[],
 }));
 
 beforeEach(() => {
@@ -81,6 +83,7 @@ beforeEach(() => {
   store.testingDeploy = null;
   store.humanIds = null;
   store.planLimits = null;
+  store.moves = [];
 });
 
 vi.mock('@openadlc/db', () => ({
@@ -208,6 +211,7 @@ vi.mock('@openadlc/db', () => ({
       ...store.botTasks.filter((task) => task.kind === kind && refs.includes(task.subjectRef as string)),
     ]),
   },
+  stageMoves: { listForIssue: vi.fn(async () => store.moves) },
   threads: {
     listOpenGates: vi.fn(async () => [{ id: 'gate-1', taskId: 'task-1' }] as { id: string; taskId: string; createdAt?: string }[]),
     claimGateReply: vi.fn(async () => true),
@@ -1233,6 +1237,483 @@ describe('an issue closed on GitHub', () => {
     expect(vi.mocked(issues.setIssueLabels)).toHaveBeenCalledWith('repo-1', 7, ['adlc:review']);
     expect(moved).toEqual([]);
     expect(staffed).toEqual([]);
+  });
+});
+
+/**
+ * An issue closed without a merge, by a person or by its own pull request
+ * closing unmerged: its card goes to Done labelled `openadlc:abandoned`, and
+ * its work stops. #15's "Review stopped without agreeing" stood in Needs you
+ * after #15 was closed, its row still in Review.
+ */
+describe('an issue or pull request closed without a merge', () => {
+  const BRANCH = 'agent/openadlc-atlas-janedoe/11-issue-11';
+  interface World {
+    /** The issue as GitHub has it now. */
+    live: { state: 'open' | 'closed'; labels: string[] };
+    /** Pull requests GitHub has, by number; one with no state is open unless it merged. */
+    pulls: Map<number, { merged: boolean; headRef: string; state?: 'open' | 'closed' }>;
+    /** What GitHub's timeline says closed the issue at its newest close: null for a person's close. */
+    closer: Record<string, unknown> | null;
+    closerFails?: boolean;
+  }
+
+  function harness(over: Partial<World> = {}) {
+    const world: World = { live: { state: 'closed', labels: [] }, pulls: new Map(), closer: null, ...over };
+    // Every write, in order: GitHub's, the row's and the board's.
+    const log: string[] = [];
+    const client = {
+      getIssue: vi.fn(async () => ({ number: 11, labels: [...world.live.labels], state: world.live.state })),
+      addLabels: vi.fn(async (_repo: string, _number: number, labels: string[]) => {
+        log.push(`github +${labels.join(',')}`);
+        world.live.labels.push(...labels);
+      }),
+      removeLabel: vi.fn(async (_repo: string, _number: number, label: string) => {
+        log.push(`github -${label}`);
+        world.live.labels = world.live.labels.filter((one) => one !== label);
+      }),
+      getPullRequest: vi.fn(async (_repo: string, number: number) => {
+        const pull = world.pulls.get(number);
+        if (!pull) throw new GitHubApiError(404, `/repos/janedoe/openadlc/pulls/${number}`, '{"message":"Not Found"}');
+        return { number, merged: pull.merged, headRef: pull.headRef, state: pull.state ?? (pull.merged ? 'closed' : 'open') };
+      }),
+      comment: vi.fn(async (_repo: string, number: number, body: string) => {
+        log.push(`github comment #${number}: ${body}`);
+        return { id: 1, body, htmlUrl: 'https://github.com/janedoe/openadlc/issues/11#issuecomment-1', user: 'flow' };
+      }),
+      reopenIssue: vi.fn(async (_repo: string, number: number) => {
+        log.push(`github reopen #${number}`);
+        world.live.state = 'open';
+      }),
+      closingIssues: vi.fn(async () => []),
+      request: vi.fn(async (method: string, path: string, body?: unknown) => {
+        if (path.includes('/pulls?state=closed')) {
+          return [...world.pulls].map(([number, pull]) => ({ number, merged_at: pull.merged ? '2026-10-01T00:00:00Z' : null, head: { ref: pull.headRef } }));
+        }
+        if (path === '/graphql') {
+          if (world.closerFails) throw new GitHubApiError(502, path, 'Bad Gateway');
+          // As GitHub answered for 620legal/OpenADLC#33, closed as completed.
+          return { data: { repository: { issue: { timelineItems: { nodes: [{ createdAt: '2026-10-21T02:54:25Z', stateReason: 'COMPLETED', closer: world.closer }] } } } } };
+        }
+        // No deploy workflow: merging ships.
+        if (path.includes('/actions/workflows')) return { workflows: [{ name: 'ci', path: '.github/workflows/ci.yml' }] };
+        if (method === 'PATCH') {
+          log.push(`github PATCH ${path} ${JSON.stringify(body)}`);
+          world.live.state = 'closed';
+          return {};
+        }
+        throw new Error(`unexpected ${method} ${path}`);
+      }),
+    };
+    const moves: Record<string, unknown>[] = [];
+    const staffed: unknown[] = [];
+    const stopped: string[] = [];
+    const webhooks = new Webhooks(
+      { automationBot: null } as never,
+      {
+        moveStage: async (input: Record<string, unknown>) => {
+          log.push(`move ${String(input.to)}`);
+          moves.push(input);
+          store.issue = { ...store.issue, stage: input.to };
+          return { moved: true };
+        },
+        actors: { asBot: async () => client },
+      } as never,
+      { applyHeld: async () => [] } as never,
+      {} as never,
+      { staff: async (input: unknown) => void staffed.push(input) } as never,
+      { leave: async () => undefined, advance: async () => null } as never,
+    );
+    webhooks.useStopTask(async (taskId, _actor, note) => void stopped.push(`${taskId}: ${note}`));
+    return { webhooks, world, client, log, moves, staffed, stopped };
+  }
+
+  function issueDelivery(action: string, labels: string[], state: 'open' | 'closed' = 'closed') {
+    return {
+      action,
+      repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+      sender: { login: 'janedoe' },
+      issue: {
+        author_association: 'COLLABORATOR',
+        number: 11,
+        title: 'Rate-limit the webhook route',
+        body: '',
+        state,
+        labels: labels.map((name) => ({ name })),
+        html_url: 'https://github.com/janedoe/openadlc/issues/11',
+      },
+    } as never;
+  }
+
+  function pullDelivery(number: number, options: { action?: string; merged?: boolean; sender?: string; senderType?: string; draft?: boolean } = {}) {
+    return {
+      action: options.action ?? 'closed',
+      repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+      sender: { login: options.sender ?? 'janedoe', ...(options.senderType ? { type: options.senderType } : {}) },
+      pull_request: {
+        author_association: 'COLLABORATOR',
+        number,
+        merged: options.merged ?? false,
+        draft: options.draft ?? false,
+        body: null,
+        head: { ref: BRANCH, sha: 'abc123', repo: { full_name: 'janedoe/openadlc' } },
+        base: { ref: 'main' },
+        merge_commit_sha: options.merged ? 'fed9876' : null,
+        labels: [],
+      },
+    } as never;
+  }
+  const pullClosed = (number: number, sender?: string, senderType?: string) => pullDelivery(number, { ...(sender ? { sender } : {}), ...(senderType ? { senderType } : {}) });
+
+  const listTasksOnSubjects = vi.mocked(tasks.listTasksOnSubjects).getMockImplementation()!;
+  /** The tasks on the board, by subject, as `listTasksOnSubjects` reads them. */
+  const onSubjects = (going: { id: string; subjectRef: string; kind: string; state: string; botId?: string }[]) =>
+    vi.mocked(tasks.listTasksOnSubjects).mockImplementation((async (refs: readonly string[]) => going.filter((task) => refs.includes(task.subjectRef))) as never);
+
+  beforeEach(() => {
+    vi.mocked(issues.setIssueLabels).mockImplementation(async (_repo: string, _number: number, labels: readonly string[]) => {
+      store.issue = { ...store.issue, labels: [...labels] };
+    });
+    vi.mocked(issues.setIssueStage).mockImplementation(async (_repo: string, _number: number, stage: StageKey) => {
+      store.issue = { ...store.issue, stage };
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.mocked(issues.getIssue).mockImplementation(async () => store.issue as never);
+    vi.mocked(issues.setIssueLabels).mockImplementation(async () => undefined);
+    vi.mocked(issues.setIssueStage).mockImplementation(async () => undefined);
+    vi.mocked(tasks.listTasksOnSubjects).mockImplementation(listTasksOnSubjects);
+    vi.mocked(console.log).mockRestore();
+    vi.mocked(console.warn).mockRestore();
+    store.issue = null;
+  });
+
+  it.each(['intake', 'spec', 'build', 'review'])('moves a card closed on GitHub from %s to Done, labelled before it moves, and stops its work', async (stage) => {
+    store.issue = { number: 11, stage, labels: [`adlc:${stage}`, 'start:now'], prNumber: stage === 'review' ? 31 : null };
+    const going = [
+      { id: 'build-going', subjectRef: 'openadlc#11', kind: 'implement', state: 'running' },
+      { id: 'design-asking', subjectRef: 'openadlc#11', kind: 'spec', state: 'paused' },
+      { id: 'review-going', subjectRef: 'openadlc#31', kind: 'review', state: 'queued' },
+      { id: 'build-over', subjectRef: 'openadlc#11', kind: 'implement', state: 'failed' },
+    ];
+    onSubjects(going);
+    const { webhooks, world, log, moves, stopped } = harness({
+      live: { state: 'closed', labels: [`adlc:${stage}`, 'start:now'] },
+      pulls: new Map([[31, { merged: false, headRef: BRANCH }]]),
+    });
+    const rows: string[][] = [];
+    vi.mocked(issues.setIssueLabels).mockImplementation(async (_repo: string, _number: number, labels: readonly string[]) => {
+      log.push(`row ${labels.join(',')}`);
+      rows.push([...labels]);
+      store.issue = { ...store.issue, labels: [...labels] };
+    });
+
+    await webhooks.receive('issues', issueDelivery('closed', [`adlc:${stage}`, 'start:now']), `delivery-closed-${stage}`);
+
+    // GitHub's label first, then the row's, then the move: a dependent that
+    // reads the row between them never sees Done without the label.
+    expect(log).toEqual([`row adlc:${stage}`, 'github +openadlc:abandoned', `row adlc:${stage},openadlc:abandoned`, 'move done']);
+    expect(moves).toEqual([expect.objectContaining({ to: 'done', actor: 'bridge', recordsOutcome: true, reason: 'Abandoned: closed on GitHub without a merge' })]);
+    expect(store.issue).toMatchObject({ stage: 'done', labels: [`adlc:${stage}`, 'openadlc:abandoned'] });
+    expect(world.live.labels).toContain('openadlc:abandoned');
+    // Every task still going on the issue, any kind, and on its pull request.
+    const expected = stage === 'review' ? ['build-going', 'design-asking', 'review-going'] : ['build-going', 'design-asking'];
+    expect(stopped).toEqual(expected.map((id) => `${id}: its issue was closed without merging`));
+  });
+
+  it('leaves the move to the merge when a pull request of its own merged, as before', async () => {
+    store.issue = { number: 11, stage: 'review', labels: ['adlc:review'], prNumber: 31 };
+    const { webhooks, log } = harness({ live: { state: 'closed', labels: ['adlc:review'] }, pulls: new Map([[31, { merged: true, headRef: BRANCH }]]) });
+
+    await webhooks.receive('issues', issueDelivery('closed', ['adlc:review']), 'delivery-closed-merged');
+
+    expect(log).toEqual([]);
+    expect(store.issue).toMatchObject({ stage: 'review', labels: ['adlc:review'] });
+  });
+
+  it('leaves the move to the merge when a person’s pull request on a branch of its own closed it', async () => {
+    // 620legal/OpenADLC#33 was closed as completed by #42 merging, and its
+    // REST close event says `commit_id: null`: read as an abandon, a change
+    // that shipped went to Done as not shipped.
+    store.issue = { number: 11, stage: 'review', labels: ['adlc:review'], prNumber: null };
+    const { webhooks, log } = harness({
+      live: { state: 'closed', labels: ['adlc:review'] },
+      closer: { __typename: 'PullRequest', number: 42, merged: true, repository: { nameWithOwner: 'janedoe/openadlc' }, mergeCommit: { oid: '9f'.repeat(20) } },
+    });
+
+    await webhooks.receive('issues', issueDelivery('closed', ['adlc:review']), 'delivery-closed-by-a-person-s-pull');
+
+    expect(log).toEqual([]);
+    expect(store.issue).toMatchObject({ stage: 'review', labels: ['adlc:review'] });
+  });
+
+  it('takes the label off and moves it on when the merge is handled after the issue’s close took it for abandoned', async () => {
+    // Deliveries race: the close is handled first, while GitHub does not say
+    // yet that the merge closed it. Done to Ship is backwards, and Done to
+    // Done kept the label.
+    store.issue = { number: 11, stage: 'review', labels: ['adlc:review'], prNumber: 31 };
+    const { webhooks, world, log, moves } = harness({ live: { state: 'closed', labels: ['adlc:review'] } });
+    vi.mocked(issues.setIssueStage).mockImplementation(async (_repo: string, _number: number, stage: StageKey) => {
+      log.push(`row stage ${stage}`);
+      store.issue = { ...store.issue, stage };
+    });
+    store.moves = [];
+    await webhooks.receive('issues', issueDelivery('closed', ['adlc:review']), 'delivery-closed-first');
+    expect(store.issue).toMatchObject({ stage: 'done', labels: ['adlc:review', 'openadlc:abandoned'] });
+    store.moves = [{ from: 'review', to: 'done' }];
+    world.pulls.set(31, { merged: true, headRef: BRANCH });
+    log.length = 0;
+
+    await webhooks.receive('pull_request', pullDelivery(31, { merged: true }), 'delivery-merged-after');
+
+    expect(log).toEqual(['github -openadlc:abandoned', 'row stage review', 'move done']);
+    expect(moves.at(-1)).toEqual(expect.objectContaining({ to: 'done', recordsOutcome: true }));
+    expect(store.issue).toMatchObject({ stage: 'done', labels: ['adlc:review'] });
+    expect(world.live.labels).not.toContain('openadlc:abandoned');
+  });
+
+  it('still moves a merged issue on and lets go of its files when the label cannot be taken off', async () => {
+    // One GitHub error here threw out of the merge: no move, no lease let go.
+    // The label left is the reconciler's to take off.
+    store.issue = { number: 11, stage: 'done', labels: ['adlc:done', 'openadlc:abandoned'], prNumber: 31 };
+    store.moves = [{ from: 'review', to: 'done' }];
+    const { webhooks, client, moves, world } = harness({ live: { state: 'closed', labels: ['adlc:done', 'openadlc:abandoned'] } });
+    world.pulls.set(31, { merged: true, headRef: BRANCH });
+    client.removeLabel.mockRejectedValueOnce(new GitHubApiError(502, '/repos/janedoe/openadlc/issues/11/labels/openadlc%3Aabandoned', 'Bad Gateway'));
+    vi.mocked(leases.releaseForPullRequest).mockClear();
+
+    await webhooks.receive('pull_request', pullDelivery(31, { merged: true }), 'delivery-merged-label-stuck');
+
+    expect(moves.at(-1)).toEqual(expect.objectContaining({ issueNumber: 11, to: 'done', recordsOutcome: true }));
+    expect(vi.mocked(leases.releaseForPullRequest)).toHaveBeenCalledWith('repo-1', 31, 'merged, and the repository deploys nothing');
+  });
+
+  it('takes the label off another issue the merge closes, and moves it on as well', async () => {
+    // #12 was closed, and taken for abandoned, before the merge of #31 that says `Closes #12` was handled.
+    const rows: Record<number, Record<string, unknown>> = {
+      11: { number: 11, stage: 'review', labels: ['adlc:review'], prNumber: 31 },
+      12: { number: 12, stage: 'done', labels: ['adlc:done', 'openadlc:abandoned'], prNumber: null },
+    };
+    vi.mocked(issues.getIssue).mockImplementation((async (_repo: string, number: number) => rows[number] ?? null) as never);
+    vi.mocked(issues.setIssueLabels).mockImplementation(async (_repo: string, number: number, labels: readonly string[]) => {
+      rows[number] = { ...rows[number], labels: [...labels] };
+    });
+    vi.mocked(issues.setIssueStage).mockImplementation(async (_repo: string, number: number, stage: StageKey) => {
+      rows[number] = { ...rows[number], stage };
+    });
+    store.moves = [{ from: 'build', to: 'done' }];
+    const { webhooks, client, moves, world } = harness({ live: { state: 'closed', labels: [] } });
+    world.pulls.set(31, { merged: true, headRef: BRANCH });
+    client.closingIssues.mockResolvedValue([12] as never);
+
+    await webhooks.receive('pull_request', pullDelivery(31, { merged: true }), 'delivery-merged-closes-12');
+
+    expect(client.removeLabel).toHaveBeenCalledWith('janedoe/openadlc', 12, 'openadlc:abandoned');
+    expect(client.removeLabel).not.toHaveBeenCalledWith('janedoe/openadlc', 11, 'openadlc:abandoned');
+    expect(rows[12]).toMatchObject({ stage: 'build', labels: ['adlc:done'] });
+    expect(moves.map((move) => [move.issueNumber, move.to])).toEqual([
+      [12, 'done'],
+      [11, 'done'],
+    ]);
+  });
+
+  it('leaves it to the reconciler when GitHub closed it with a commit, or could not say how it closed', async () => {
+    for (const over of [{ closer: { __typename: 'Commit', oid: 'ab'.repeat(20) } }, { closerFails: true }]) {
+      store.issue = { number: 11, stage: 'build', labels: ['adlc:build'], prNumber: null };
+      const { webhooks, log } = harness({ live: { state: 'closed', labels: ['adlc:build'] }, ...over });
+
+      await webhooks.receive('issues', issueDelivery('closed', ['adlc:build']), 'delivery-closed-commit');
+
+      expect(log).toEqual([]);
+      expect(store.issue).toMatchObject({ stage: 'build' });
+    }
+  });
+
+  it('abandons once: the bridge’s own label, delivered, finds it abandoned already', async () => {
+    store.issue = { number: 11, stage: 'build', labels: ['adlc:build', 'openadlc:abandoned'], prNumber: null };
+    const { webhooks, log, client } = harness({ live: { state: 'closed', labels: ['adlc:build', 'openadlc:abandoned'] } });
+
+    await webhooks.receive('issues', issueDelivery('labeled', ['adlc:build', 'openadlc:abandoned']), 'delivery-labeled-abandoned');
+
+    expect(log).toEqual([]);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it('leaves an issue labelled openadlc:ignore alone, closed or with its pull request closed', async () => {
+    store.issue = { number: 11, stage: 'review', labels: ['adlc:review', 'openadlc:ignore'], prNumber: 31 };
+    const first = harness({ live: { state: 'closed', labels: ['adlc:review', 'openadlc:ignore'] } });
+    await first.webhooks.receive('issues', issueDelivery('closed', ['adlc:review', 'openadlc:ignore']), 'delivery-closed-ignored');
+    expect(first.log).toEqual([]);
+
+    store.issue = { number: 11, stage: 'review', labels: ['adlc:review', 'openadlc:ignore'], prNumber: 31 };
+    const second = harness({ live: { state: 'open', labels: ['adlc:review', 'openadlc:ignore'] } });
+    await second.webhooks.receive('pull_request', pullClosed(31), 'delivery-pull-closed-ignored');
+    expect(second.log).toEqual([]);
+    expect(store.issue).toMatchObject({ stage: 'review' });
+  });
+
+  it('closes the issue of a pull request closed unmerged as not planned, after its card is in Done, and nothing loops', async () => {
+    store.issue = { number: 11, stage: 'review', labels: ['adlc:review'], prNumber: 31 };
+    const { webhooks, log, world } = harness({ live: { state: 'open', labels: ['adlc:review'] } });
+
+    await webhooks.receive('pull_request', pullClosed(31), 'delivery-pull-closed');
+
+    expect(log.map((line) => line.replace(/^(github comment #11):[\s\S]*$/, '$1'))).toEqual([
+      'github +openadlc:abandoned',
+      'move done',
+      'github comment #11',
+      'github PATCH /repos/janedoe/openadlc/issues/11 {"state":"closed","state_reason":"not_planned"}',
+    ]);
+    expect(log[2]).toContain('#31 was closed without merging');
+    // Each way back, and what it does.
+    expect(log[2]).toContain('reopen #31 to go on with it, which reopens this issue and puts the card back in Review');
+    expect(log[2]).toContain('reopen only this issue to have it built again, in a new pull request, from Build');
+    expect(store.issue).toMatchObject({ stage: 'done', labels: ['adlc:review', 'openadlc:abandoned'] });
+
+    // The close the bridge made is delivered too, and finds the card in Done.
+    const before = log.length;
+    await webhooks.receive('issues', issueDelivery('closed', world.live.labels), 'delivery-closed-by-bridge');
+    expect(log.slice(before)).toEqual([]);
+  });
+
+  it('brings the issue back when its pull request is reopened, as a person does to run CI again', async () => {
+    store.issue = { number: 11, stage: 'review', labels: ['adlc:review'], prNumber: 31 };
+    const { webhooks, log, moves, world } = harness({ live: { state: 'open', labels: ['adlc:review'] } });
+    await webhooks.receive('pull_request', pullClosed(31), 'delivery-pull-closed');
+    expect(store.issue).toMatchObject({ stage: 'done' });
+    store.moves = [{ from: 'build', to: 'review' }, { from: 'review', to: 'done', reason: moves[0]!.reason } as never];
+    log.length = 0;
+
+    // A draft, so no reviews are asked here: that is the reopen's own business.
+    await webhooks.receive('pull_request', pullDelivery(31, { action: 'reopened', draft: true }), 'delivery-pull-reopened');
+
+    expect(log).toEqual(['github reopen #11', 'github -openadlc:abandoned', 'move review']);
+    expect(world.live.state).toBe('open');
+    expect(store.issue).toMatchObject({ stage: 'review', labels: ['adlc:review'] });
+  });
+
+  it('leaves a closed issue closed when its pull request is reopened, if a person closed the issue itself', async () => {
+    store.issue = { number: 11, stage: 'done', labels: ['adlc:done', 'openadlc:abandoned'], prNumber: 31 };
+    store.moves = [{ from: 'review', to: 'done', reason: 'Abandoned: closed on GitHub without a merge' } as never];
+    const { webhooks, log } = harness({ live: { state: 'closed', labels: ['adlc:done', 'openadlc:abandoned'] } });
+
+    await webhooks.receive('pull_request', pullDelivery(31, { action: 'reopened', draft: true }), 'delivery-pull-reopened-person');
+
+    expect(log).toEqual([]);
+  });
+
+  it('does not stop a deploy task, nor the task of the account that closed it', async () => {
+    // The SRE closes the issue a failed deploy filed, then sends the change
+    // back to build (`crew/skills/deploy/SKILL.md`); stopped there, its
+    // send-back was lost.
+    store.bots = [
+      { id: 'bot-sre', name: 'tessexampleco', role: 'deploy', githubLogin: 'tessexampleco' },
+      { id: 'bot-builder', name: 'openadlc-atlas-janedoe', role: 'implement', githubLogin: 'openadlc-atlas-janedoe' },
+    ];
+    store.issue = { number: 11, stage: 'build', labels: ['adlc:build'], prNumber: null };
+    onSubjects([
+      { id: 'sre-deploy', subjectRef: 'openadlc#11', kind: 'deploy', state: 'running', botId: 'bot-sre' },
+      { id: 'sre-qa', subjectRef: 'openadlc#11', kind: 'qa', state: 'running', botId: 'bot-sre' },
+      { id: 'other-deploy', subjectRef: 'openadlc#11', kind: 'deploy', state: 'queued', botId: 'bot-other' },
+      { id: 'build-going', subjectRef: 'openadlc#11', kind: 'implement', state: 'running', botId: 'bot-builder' },
+    ]);
+    const { webhooks, stopped } = harness({ live: { state: 'closed', labels: ['adlc:build'] } });
+
+    await webhooks.receive('issues', { ...(issueDelivery('closed', ['adlc:build']) as object), sender: { login: 'tessexampleco' } } as never, 'delivery-closed-by-the-sre');
+
+    expect(store.issue).toMatchObject({ stage: 'done' });
+    expect(stopped).toEqual(['build-going: its issue was closed without merging']);
+  });
+
+  it.each([
+    ['in Build, sent back with its old draft still open', { stage: 'build', prNumber: 31 }, 'janedoe'],
+    ['naming no pull request', { stage: 'review', prNumber: null }, 'janedoe'],
+    ['closed by a crew account, which may run gh pr close', { stage: 'review', prNumber: 31 }, 'openadlc-atlas-janedoe'],
+    ['closed by an app’s account, such as a workflow’s', { stage: 'review', prNumber: 31 }, 'github-actions[bot]'],
+  ])('leaves the issue alone when its pull request is closed with the card %s', async (_case, row, sender) => {
+    store.bots = [{ id: 'bot-builder', name: 'openadlc-atlas-janedoe', role: 'implement', githubLogin: 'openadlc-atlas-janedoe' }];
+    store.issue = { number: 11, labels: [`adlc:${row.stage}`], ...row };
+    const { webhooks, log, stopped } = harness({ live: { state: 'open', labels: [`adlc:${row.stage}`] } });
+
+    await webhooks.receive('pull_request', pullClosed(31, sender), 'delivery-pull-closed-left-alone');
+
+    expect(log).toEqual([]);
+    expect(stopped).toEqual([]);
+    expect(store.issue).toMatchObject({ stage: row.stage });
+  });
+
+  it('leaves the issue alone when the pull request closed is not the one its card names', async () => {
+    // A person closing an older round's pull request after the issue moved on.
+    store.issue = { number: 11, stage: 'review', labels: ['adlc:review'], prNumber: 32 };
+    const { webhooks, log } = harness({ live: { state: 'open', labels: ['adlc:review'] } });
+
+    await webhooks.receive('pull_request', pullClosed(31), 'delivery-older-pull-closed');
+
+    expect(log).toEqual([]);
+    expect(store.issue).toMatchObject({ stage: 'review', prNumber: 32 });
+  });
+
+  it('brings an abandoned card back where it was when the issue is reopened, and takes the label off', async () => {
+    store.issue = { number: 11, stage: 'done', labels: ['adlc:done', 'openadlc:abandoned'], prNumber: 31 };
+    store.moves = [
+      { from: 'build', to: 'review' },
+      { from: 'review', to: 'done' },
+    ];
+    const { webhooks, log, moves } = harness({
+      live: { state: 'open', labels: ['adlc:done', 'openadlc:abandoned', 'do:ai'] },
+      pulls: new Map([[31, { merged: false, headRef: BRANCH, state: 'open' }]]),
+    });
+
+    await webhooks.receive('issues', issueDelivery('reopened', ['adlc:done', 'openadlc:abandoned', 'do:ai'], 'open'), 'delivery-reopened');
+
+    expect(log).toEqual(['github -openadlc:abandoned', 'move review']);
+    expect(moves).toEqual([expect.objectContaining({ to: 'review', direction: 'person', actor: 'janedoe' })]);
+    expect(store.issue).toMatchObject({ stage: 'review', labels: ['adlc:done', 'do:ai'] });
+  });
+
+  it('brings it back to Build, not Review, when only the issue is reopened and its pull request stays closed', async () => {
+    // Review reviews nothing while its pull request is closed (#54 starts no
+    // review of one), and the card sat there. In Build the builder opens a new one.
+    store.issue = { number: 11, stage: 'done', labels: ['adlc:done', 'openadlc:abandoned'], prNumber: 31 };
+    store.moves = [{ from: 'review', to: 'done' }];
+    const { webhooks, moves } = harness({
+      live: { state: 'open', labels: ['adlc:done', 'openadlc:abandoned'] },
+      pulls: new Map([[31, { merged: false, headRef: BRANCH, state: 'closed' }]]),
+    });
+
+    await webhooks.receive('issues', issueDelivery('reopened', ['adlc:done', 'openadlc:abandoned'], 'open'), 'delivery-reopened-pull-closed');
+
+    expect(moves).toEqual([expect.objectContaining({ to: 'build', direction: 'person' })]);
+    expect(store.issue).toMatchObject({ stage: 'build' });
+  });
+
+  it('brings it back to the stage a person labelled it with, or to Build with no move to go by', async () => {
+    store.issue = { number: 11, stage: 'done', labels: ['adlc:done', 'openadlc:abandoned'], prNumber: null };
+    store.moves = [{ from: 'review', to: 'done' }];
+    const labelled = harness({ live: { state: 'open', labels: ['adlc:spec', 'openadlc:abandoned'] } });
+    await labelled.webhooks.receive('issues', issueDelivery('reopened', ['adlc:spec', 'openadlc:abandoned'], 'open'), 'delivery-reopened-labelled');
+    expect(labelled.moves).toEqual([expect.objectContaining({ to: 'spec' })]);
+    expect(labelled.staffed).toEqual([expect.objectContaining({ issueNumber: 11, stage: 'spec' })]);
+
+    store.issue = { number: 11, stage: 'done', labels: ['adlc:done', 'openadlc:abandoned'], prNumber: null };
+    store.moves = [];
+    const unrecorded = harness({ live: { state: 'open', labels: ['adlc:done', 'openadlc:abandoned'] } });
+    await unrecorded.webhooks.receive('issues', issueDelivery('reopened', ['adlc:done', 'openadlc:abandoned'], 'open'), 'delivery-reopened-unrecorded');
+    expect(unrecorded.moves).toEqual([expect.objectContaining({ to: 'build' })]);
+  });
+
+  it('only takes the label off when a person already moved the card out of Done', async () => {
+    // Dragged out of Done from the board: `SendBack.fromPerson` reopened the issue and moved the card.
+    store.issue = { number: 11, stage: 'build', labels: ['adlc:build', 'openadlc:abandoned'], prNumber: null };
+    const { webhooks, log } = harness({ live: { state: 'open', labels: ['adlc:build', 'openadlc:abandoned'] } });
+
+    await webhooks.receive('issues', issueDelivery('reopened', ['adlc:build', 'openadlc:abandoned'], 'open'), 'delivery-reopened-moved');
+
+    expect(log).toEqual(['github -openadlc:abandoned']);
+    expect(store.issue).toMatchObject({ stage: 'build', labels: ['adlc:build'] });
   });
 });
 

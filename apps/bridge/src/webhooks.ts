@@ -15,6 +15,7 @@ import {
   repos,
   settings,
   spendingLimits,
+  stageMoves,
   tasks,
   threads,
   withAdvisoryLock,
@@ -42,11 +43,14 @@ import {
   withoutMarker,
   type FleetMarker,
   dedupeMarker,
+  ABANDONED_LABEL,
+  hasAbandonedLabel,
   hasIgnoreLabel,
   isIgnoreLabel,
   REPO_DEFAULTS,
 } from '@openadlc/shared';
 import { touchesConfig, type GitHubClient } from '@openadlc/github';
+import { ABANDONED_STOP, abandonMoveReason, howClosed, isAbandonMove, putAbandonedLabel, type HowClosed } from './abandoned.js';
 import type { Attribution } from './attribution.js';
 import type { Automation } from './automation.js';
 import { effectiveConfig } from './effective-config.js';
@@ -662,7 +666,8 @@ export class Webhooks {
    * `start:now`, so the dispatch a cancelled build's end asked for leased it
    * again and opened a new pull request. Unless it is merged or done, its row,
    * if there is one, loses `start:now`, and an implement task still on it is
-   * stopped.
+   * stopped. Closed without a merge, it goes to Done as abandoned
+   * (`abandon`); reopened, it comes back (`revive`).
    */
   async learnIssue(
     repo: { id: string; name: string; fullName?: string },
@@ -682,17 +687,39 @@ export class Webhooks {
     }
     // Closed, the row stays: a pull request that closes an issue can be heard
     // closing it before it is heard merging, and the merge is what moves the
-    // row on (`moveClosedByMerge`). The reconciler forgets a closed issue no
-    // merge closed.
+    // row on (`moveClosedByMerge`). Closed with no merge and no commit, it goes
+    // to Done as abandoned. A merge or a commit that may still be on its way
+    // leaves it where it is, as does a close GitHub cannot say more about: the
+    // reconciler asks again.
     if (action === 'closed' || issue.state === 'closed') {
       const finished = (stage: string | null | undefined) => stage === 'merged' || stage === 'done';
       const known = await (async () => issues.getIssue(repo.id, issue.number))().catch(() => null);
       if (!finished(stageFromLabels(issue.labels)) && !finished(known?.stage)) {
         // Only a row already on the board: one for a closed issue is not made.
         if (known) await issues.setIssueLabels(repo.id, issue.number, issue.labels.filter((label) => label !== 'start:now'));
+        // Not one whose abandon is under way: the bridge's own label write is
+        // delivered with the label on it, and would abandon it a second time.
+        const abandoning = hasAbandonedLabel(issue.labels) || hasAbandonedLabel(known?.labels);
+        if (known && !abandoning && !hasIgnoreLabel(issue.labels) && !hasIgnoreLabel(known.labels)) {
+          const how = await this.howClosed(repo, known).catch(() => undefined);
+          const abandoned =
+            how === 'abandoned' &&
+            (await this.abandon(repo, issue.number, 'closed on GitHub without a merge', sender ?? null).catch(abandonFailed(repo.name, issue.number)));
+          if (abandoned) return;
+        }
         await this.stopBuildsOf(repo.name, issue.number);
       }
       return;
+    }
+
+    // Abandoned, and now reopened: the label comes off and the card goes back
+    // where it was. Read on, the delivery's `adlc:done` would keep it in Done.
+    if (action === 'reopened' && !hasIgnoreLabel(issue.labels)) {
+      const known = await (async () => issues.getIssue(repo.id, issue.number))().catch(() => null);
+      if (known && (hasAbandonedLabel(issue.labels) || hasAbandonedLabel(known.labels))) {
+        await this.revive(repo, issue.number, issue.labels, sender ?? 'a person on GitHub');
+        return;
+      }
     }
 
     // On an issue whose author OpenADLC does not act for, what is stored is
@@ -1040,6 +1067,224 @@ export class Webhooks {
       reason: `Moved back on GitHub from ${from}; the reconciler found it, as no delivery said so.`,
       moved: { from },
     });
+  }
+
+  /** Makes one of OpenADLC's labels on a repository that lacks it, as the app (`RepoSetup.ensureLabel`); set once at start-up (main.ts). */
+  private ensureLabel: ((repoFullName: string, label: string) => Promise<boolean>) | null = null;
+
+  useEnsureLabel(ensure: (repoFullName: string, label: string) => Promise<boolean>): void {
+    this.ensureLabel = ensure;
+  }
+
+  /** How a closed issue on the board closed (`howClosed`), or undefined when GitHub cannot be asked. */
+  private async howClosed(repo: { name: string; fullName?: string }, known: { number: number; prNumber: number | null }): Promise<HowClosed | undefined> {
+    const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
+    const fullName = repo.fullName ?? (await repos.getRepoByName(repo.name).catch(() => null))?.fullName;
+    if (!client || !fullName) return undefined;
+    return howClosed(client, fullName, { number: known.number, prNumber: known.prNumber ?? null });
+  }
+
+  /**
+   * Moves an issue closed without a merge to Done, labelled
+   * `openadlc:abandoned`, and stops its work: closed by a person, or its own
+   * pull request closed unmerged. Before, it stayed in its column, or left
+   * the board at the next reconcile, and its Needs you cards stood for work
+   * that was gone.
+   *
+   * In this order. The label goes on first, on GitHub and then on the row, so
+   * a dependent that reads the row never sees Done without it, which is
+   * shipped. The move releases the lease (`moveStage`), and its reason marks
+   * it as an abandon (`abandonMoveReason`). Then the tasks still going on the
+   * issue or its pull request are stopped (`stopWorkOf`), which closes their
+   * questions; `closedBy` is the account that closed it, whose own tasks go
+   * on. Whether it moved: an `openadlc:ignore` issue, one already in Ship or
+   * Done, or one GitHub would not label or move stays where it is.
+   */
+  private async abandon(repo: { id: string; name: string }, issueNumber: number, why: string, closedBy: string | null = null): Promise<boolean> {
+    const ref = `${repo.name}#${issueNumber}`;
+    const record = await repos.getRepoByName(repo.name).catch(() => null);
+    const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
+    if (!record || !client) return false;
+    const known = await (async () => issues.getIssue(repo.id, issueNumber))().catch(() => null);
+    if (!known || known.stage === 'merged' || known.stage === 'done') return false;
+    // GitHub's labels, not only the row's: an `openadlc:ignore` whose delivery
+    // is still on its way holds all the same.
+    const live = await (async () => client.getIssue(record.fullName, issueNumber))().catch((error: unknown) => {
+      console.warn(`[bridge] ${ref} closed without a merge, and was left in ${known.stage}: its labels could not be read (${error instanceof Error ? error.message : error})`);
+      return null;
+    });
+    if (!live || hasIgnoreLabel(live.labels) || hasIgnoreLabel(known.labels)) return false;
+    const labelled = stageFromLabels(live.labels);
+    if (labelled === 'merged' || labelled === 'done') return false;
+
+    const refused = await putAbandonedLabel(client, this.ensureLabel, record.fullName, issueNumber);
+    if (refused) {
+      console.warn(`[bridge] ${ref} closed without a merge, and was left in ${known.stage}: ${refused}`);
+      return false;
+    }
+    await issues.setIssueLabels(repo.id, issueNumber, [...live.labels.filter((label) => label !== 'start:now' && label !== ABANDONED_LABEL), ABANDONED_LABEL]);
+    const moved = await this.automation
+      .moveStage({ repoName: repo.name, issueNumber, to: 'done', actor: 'bridge', recordsOutcome: true, reason: abandonMoveReason(why), prNumber: known.prNumber ?? null })
+      .catch((error: unknown): { moved: boolean; reason?: string } => ({ moved: false, reason: error instanceof Error ? error.message : String(error) }));
+    if (!moved.moved) {
+      console.warn(`[bridge] ${ref} closed without a merge, and was left in ${known.stage}: ${moved.reason ?? 'the move was refused'}`);
+      return false;
+    }
+
+    await this.stopWorkOf(repo.name, issueNumber, known.prNumber ?? null, ABANDONED_STOP, closedBy);
+    await this.resumeHeldPlanChanges();
+    await audit({ actor: 'bridge', action: 'issue.abandoned', target: ref, payload: { from: known.stage, prNumber: known.prNumber ?? null, why } }).catch(() => undefined);
+    console.log(`[bridge] ${ref}: ${why}; moved from ${known.stage} to Done as abandoned`);
+    return true;
+  }
+
+  /** A close the reconciler found with no delivery to say so, and no merge or commit behind it: as the delivery would have (`abandon`). */
+  async abandonUnheard(repo: { id: string; name: string }, issueNumber: number): Promise<boolean> {
+    return this.abandon(repo, issueNumber, 'closed on GitHub without a merge; no delivery said so');
+  }
+
+  /**
+   * An issue GitHub closed with a commit while no pull request of its own
+   * merged — a person's pull request from another branch, a `fixes #N` pushed
+   * to main — found by the reconciler: shipped by that commit, so Done with no
+   * label. Never from the webhook, where the merge's own delivery may still be
+   * on its way and would move it to Ship instead.
+   */
+  async landedUnheard(repo: { id: string; name: string }, issueNumber: number, sha: string): Promise<boolean> {
+    const moved = await this.automation.moveStage({ repoName: repo.name, issueNumber, to: 'done', actor: 'bridge', recordsOutcome: true, reason: `closed by ${sha}` });
+    if (moved.moved) await this.stopBuildsOf(repo.name, issueNumber);
+    return moved.moved;
+  }
+
+  /**
+   * An abandoned issue reopened: the label comes off, on GitHub first so the
+   * move does not write it back, and a card still in Done goes back to the
+   * stage the issue's own label names, if a person set one other than Done,
+   * else to the stage it was abandoned from, else to Build; to Build too
+   * rather than to Review while its pull request is still closed. That stage
+   * is started. A card a person dragged out of Done is where they put it
+   * (`SendBack.fromPerson`, which reopened the issue); only the label comes
+   * off. The stage it is in now, or null when it could not be brought back.
+   */
+  private async revive(repo: { id: string; name: string }, issueNumber: number, labels: readonly string[], actor: string): Promise<StageKey | null> {
+    const ref = `${repo.name}#${issueNumber}`;
+    const known = await (async () => issues.getIssue(repo.id, issueNumber))().catch(() => null);
+    const record = await repos.getRepoByName(repo.name).catch(() => null);
+    const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
+    if (!known || !record || !client) return null;
+    try {
+      await client.removeLabel(record.fullName, issueNumber, ABANDONED_LABEL);
+    } catch (error) {
+      console.warn(`[bridge] ${ref} was reopened, and ${ABANDONED_LABEL} could not be taken off: ${error instanceof Error ? error.message : error}`);
+      return null;
+    }
+    const kept = labels.filter((label) => label !== ABANDONED_LABEL);
+    // Moved out of Done already: the row's labels, whose stage label is its
+    // own; a delivery's may still say Done.
+    if (known.stage !== 'done') {
+      await issues.setIssueLabels(repo.id, issueNumber, (known.labels ?? []).filter((label) => label !== ABANDONED_LABEL));
+      return known.stage;
+    }
+    await issues.setIssueLabels(repo.id, issueNumber, kept);
+
+    const back = await this.stageBeforeAbandon(repo.id, issueNumber, kept);
+    // Review with its pull request still closed reviews nothing (#54 starts
+    // no review of a closed pull request), and the card sat there: it goes to
+    // Build, where the builder opens a new one.
+    const pull = back === 'review' && known.prNumber ? await client.getPullRequest(record.fullName, known.prNumber).catch(() => null) : null;
+    const to: StageKey = pull && pull.state === 'closed' && !pull.merged ? 'build' : back;
+    const moved = await this.automation.moveStage({ repoName: repo.name, issueNumber, to, actor, direction: 'person', reason: 'reopened on GitHub', prNumber: known.prNumber ?? null });
+    if (!moved.moved) {
+      console.warn(`[bridge] ${ref} was reopened, and was not moved out of Done: ${moved.reason ?? 'the move was refused'}`);
+      return null;
+    }
+    await audit({ actor, action: 'issue.reopened', target: ref, payload: { to, from: 'done' } }).catch(() => undefined);
+    await this.stages.staff({ repoName: repo.name, issueNumber, stage: to }).catch(() => false);
+    if (to === 'build') this.dispatchRuns?.soon(`${ref} was reopened`);
+    return to;
+  }
+
+  /** An abandoned issue the reconciler found reopened with no delivery to say so: as the delivery would have (`revive`). */
+  async reviveUnheard(repo: { id: string; name: string }, issueNumber: number, labels: readonly string[]): Promise<StageKey | null> {
+    return this.revive(repo, issueNumber, labels, 'reconciler');
+  }
+
+  /** Where a reopened abandoned card goes; see `revive`. */
+  private async stageBeforeAbandon(repoId: string, issueNumber: number, labels: readonly string[]): Promise<StageKey> {
+    const working = (stage: StageKey | null | undefined): stage is StageKey => Boolean(stage) && stage !== 'merged' && stage !== 'done';
+    const labelled = stageFromLabels(labels);
+    if (working(labelled)) return labelled;
+    const moves = await (async () => stageMoves.listForIssue(repoId, issueNumber))().catch(() => []);
+    const from = moves.filter((move) => move.to === 'done').at(-1)?.from;
+    return working(from) ? from : 'build';
+  }
+
+  /**
+   * A person closing an issue's pull request unmerged while it is in Review
+   * takes the issue with it: the card goes to Done as abandoned, and the issue
+   * is closed as not planned, after the move, so the `issues.closed` that close
+   * sends finds the card in Done and is not read as a person's close.
+   *
+   * Only then. Only the pull request the card names now: the row keeps the
+   * number after a send-back, and a person closing the old draft while the
+   * build went on stopped the build and closed the issue. Only from Review:
+   * in Build the work goes on, and a person who means to stop it closes the
+   * issue. And not by a crew account, which the review, QA and build skills let
+   * run `gh pr close`: a bot alone does not get an issue closed. Cancel from the
+   * board takes the card off first, so its close finds no card here.
+   */
+  private async abandonWithPull(
+    repo: { id: string; name: string },
+    repoFullName: string,
+    issueNumber: number,
+    prNumber: number,
+    closedBy: { login: string; type?: string } | null,
+  ): Promise<void> {
+    const issue = await (async () => issues.getIssue(repo.id, issueNumber))().catch(() => null);
+    if (!issue || hasIgnoreLabel(issue.labels) || issue.stage !== 'review' || issue.prNumber !== prNumber) return;
+    const crew = await bots.listBots().catch(() => null);
+    // Unknown crew, or no sender: not known to be a person. Nor is an app's
+    // account, `github-actions[bot]` among them, as the CI label's guard says.
+    if (!crew || !closedBy?.login || isAppAccount(closedBy) || isFleetLogin(crew, closedBy.login)) return;
+    const why = closedByPull(prNumber);
+    if (!(await this.abandon(repo, issueNumber, why, closedBy.login))) return;
+    const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
+    if (!client) return;
+    await client
+      .comment(
+        repoFullName,
+        issueNumber,
+        `**Closed as not planned.** ${why}, so nothing of this issue shipped. Its card is in Done, labelled \`${ABANDONED_LABEL}\`, ` +
+          `and what waits on it stays blocked. To bring it back: reopen #${prNumber} to go on with it, which reopens this issue and ` +
+          `puts the card back in Review; or reopen only this issue to have it built again, in a new pull request, from Build.`,
+      )
+      .catch(() => undefined);
+    await client
+      .request('PATCH', `/repos/${repoFullName}/issues/${issueNumber}`, { state: 'closed', state_reason: 'not_planned' })
+      .catch((error: unknown) =>
+        console.warn(`[bridge] ${repo.name}#${issueNumber} is in Done as abandoned, and could not be closed on GitHub: ${error instanceof Error ? error.message : error}`),
+      );
+  }
+
+  /**
+   * A pull request reopened whose close abandoned its issue: closing and
+   * reopening is how a person runs CI again, and the issue was lost, closed as
+   * not planned, with nothing to bring it back and `retakeLease` refusing a
+   * card in Done. The issue is reopened, the label comes off and the card goes
+   * back where it was (`revive`), before the lease is taken again. Only when
+   * the last move into Done is this pull request's abandon: an issue a person
+   * closed stays closed.
+   */
+  private async reviveWithPull(repo: { id: string; name: string }, repoFullName: string, issueNumber: number, prNumber: number, actor: string): Promise<void> {
+    const issue = await (async () => issues.getIssue(repo.id, issueNumber))().catch(() => null);
+    if (!issue || issue.stage !== 'done' || !hasAbandonedLabel(issue.labels)) return;
+    const moves = await (async () => stageMoves.listForIssue(repo.id, issueNumber))().catch(() => []);
+    if (moves.filter((move) => move.to === 'done').at(-1)?.reason !== abandonMoveReason(closedByPull(prNumber))) return;
+    const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
+    if (!client) return;
+    await client.reopenIssue(repoFullName, issueNumber);
+    const live = await client.getIssue(repoFullName, issueNumber);
+    await this.revive(repo, issueNumber, live.labels, actor);
   }
 
   private async onIssue(payload: WebhookPayload): Promise<void> {
@@ -1461,6 +1706,29 @@ export class Webhooks {
     }
   }
 
+  /**
+   * The tasks still going on an issue closed without merging and on its pull
+   * request: its work is over, and a build, a review or a patch round left
+   * running spends to post on it. Not a deploy task, and not one of the
+   * account that closed it (`closedBy`): the SRE closes the issue a failed
+   * deploy filed (`gh issue close`, `crew/skills/deploy/SKILL.md`) and then
+   * sends the change back, and stopping its task there lost the send-back.
+   */
+  private async stopWorkOf(repoName: string, issueNumber: number, prNumber: number | null, why: string, closedBy: string | null = null): Promise<void> {
+    if (!this.stopTask) return;
+    const subjects = [`${repoName}#${issueNumber}`, ...(prNumber ? [`${repoName}#${prNumber}`] : [])];
+    const crew = closedBy ? await bots.listBots().catch(() => []) : [];
+    const closers = new Set(crew.filter((bot) => sameLogin(bot.githubLogin, closedBy)).map((bot) => bot.id));
+    const going = (await (async () => tasks.listTasksOnSubjects(subjects))().catch(() => [])).filter(
+      (task) => ['queued', 'running', 'paused'].includes(task.state) && task.kind !== 'deploy' && !closers.has(task.botId),
+    );
+    for (const task of going) {
+      await this.stopTask(task.id, 'bridge', why).catch((error: unknown) =>
+        console.warn(`[bridge] ${task.kind} ${task.id} on ${task.subjectRef} not stopped: ${error instanceof Error ? error.message : error}`),
+      );
+    }
+  }
+
   private async onPullRequest(payload: WebhookPayload): Promise<void> {
     const pr = payload.pull_request;
     const repoName = payload.repository?.name;
@@ -1482,6 +1750,12 @@ export class Webhooks {
     // files, and the gate sweep found no pull request to settle.
     const forIssue = fork ? null : ownIssueOf(pr, repoFullName);
     if (forIssue && payload.action !== 'closed') {
+      // Its close abandoned the issue: back first, so the lease below can be taken again.
+      if (payload.action === 'reopened') {
+        await this.reviveWithPull(repo, repoFullName, forIssue, pr.number, payload.sender?.login ?? 'a person on GitHub').catch((error: unknown) =>
+          console.warn(`[bridge] ${repoFullName}#${pr.number} was reopened, and ${repo.name}#${forIssue}, which its close abandoned, was not brought back: ${error instanceof Error ? error.message : error}`),
+        );
+      }
       await issues.setPullRequestNumber(repo.id, forIssue, pr.number).catch(() => undefined);
       // And the lease that holds the issue's files, which is released by it:
       // with none recorded, nothing ever released a lease at a merge.
@@ -1558,6 +1832,7 @@ export class Webhooks {
           }
         }
         await this.resumeHeldPlanChanges();
+        if (forIssue) await this.abandonWithPull(repo, repoFullName, forIssue, pr.number, payload.sender ?? null).catch(abandonFailed(repo.name, forIssue));
       }
     }
 
@@ -2217,6 +2492,7 @@ export class Webhooks {
         // `closed` delivery, arriving between them with the labels it had
         // before the merge, put the stage back to Review; the second move was
         // then backwards, refused, and openadlc-testbed#1 stayed in Ship.
+        await this.takeAbandonOff(repo, merged.own);
         const moved = await this.automation.moveStage({ repoName: repo.name, issueNumber: merged.own, to, actor: 'bridge', recordsOutcome: true });
         // Written when the pull request opened too; a missed delivery left it
         // empty, and the deploy after the merge finds its issues by it. Only
@@ -2308,6 +2584,7 @@ export class Webhooks {
           console.log(`[bridge] ${repo.name}#${prNumber} closes ${ref}, which OpenADLC does not track; left where it is`);
           continue;
         }
+        await this.takeAbandonOff(repo, issueNumber);
         const moved = await this.automation.moveStage({ repoName: repo.name, issueNumber, to, actor: 'bridge', recordsOutcome: true });
         if (!moved.moved) {
           console.log(`[bridge] ${repo.name}#${prNumber} closes ${ref}, not moved to ${to}: ${moved.reason ?? 'refused'}`);
@@ -2320,6 +2597,37 @@ export class Webhooks {
             `${error instanceof Error ? error.message : error}`,
         );
       }
+    }
+  }
+
+  /**
+   * An issue a merge finishes that was taken for abandoned. Deliveries race:
+   * the issue's `closed` can be handled before the pull request's merge, while
+   * GitHub does not yet say the merge closed it. The label comes off, on
+   * GitHub first so the move does not write it back, and the card is put back
+   * in the stage it was abandoned from, on the board alone, so the merge's
+   * own move goes from there as it would have: Done to Ship is backwards, and
+   * Done to Done kept the label, which reads as not shipped.
+   */
+  private async takeAbandonOff(repo: { id: string; name: string }, issueNumber: number): Promise<void> {
+    const ref = `${repo.name}#${issueNumber}`;
+    try {
+      const known = await (async () => issues.getIssue(repo.id, issueNumber))().catch(() => null);
+      if (!known || !hasAbandonedLabel(known.labels)) return;
+      const record = await repos.getRepoByName(repo.name).catch(() => null);
+      const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
+      if (!record || !client) return;
+      await client.removeLabel(record.fullName, issueNumber, ABANDONED_LABEL);
+      await issues.setIssueLabels(repo.id, issueNumber, known.labels.filter((label) => label !== ABANDONED_LABEL));
+      const back = known.stage === 'done' ? await this.stageBeforeAbandon(repo.id, issueNumber, []) : known.stage;
+      if (back !== known.stage) await issues.setIssueStage(repo.id, issueNumber, back);
+      await audit({ actor: 'bridge', action: 'issue.abandon_undone', target: ref, payload: { back, why: 'a merge finished it' } }).catch(() => undefined);
+      console.log(`[bridge] ${ref} was taken for abandoned, and a merge finished it: the label is off, and it moves on from ${back}`);
+    } catch (error) {
+      // Said, never thrown: the merge's move and its lease's release come
+      // after this, and one GitHub error here stopped both. The label left
+      // behind is the reconciler's to take off (it mirrors GitHub's labels).
+      console.warn(`[bridge] ${ref} merged, and ${ABANDONED_LABEL} could not be taken off it: ${error instanceof Error ? error.message : error}`);
     }
   }
 
@@ -3990,6 +4298,22 @@ export class Webhooks {
  * Why a review sent the work back, as the record on the issue says it: the
  * review's own words, markers out, cut short, and where to read the rest.
  */
+/**
+ * Said, and taken as not abandoned, when an abandon threw: the delivery it
+ * runs in carries on, and the reconciler tries the issue again.
+ */
+/** Why an issue was abandoned when its pull request closed unmerged: its stage move's reason, which a reopen of that pull request looks for. */
+function closedByPull(prNumber: number): string {
+  return `#${prNumber} was closed without merging`;
+}
+
+function abandonFailed(repoName: string, issueNumber: number): (error: unknown) => false {
+  return (error) => {
+    console.warn(`[bridge] ${repoName}#${issueNumber} closed without a merge, and was not moved to Done: ${error instanceof Error ? error.message : error}`);
+    return false;
+  };
+}
+
 function reviewReason(review: { body?: string | null; html_url?: string }): string {
   const said = withoutMarker(review.body ?? '').replace(/<!--[\s\S]*?-->/g, '').trim();
   const short = said.length > 600 ? `${said.slice(0, 599).trimEnd()}…` : said;

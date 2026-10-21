@@ -103,6 +103,30 @@ export function hasNextLabel(labels: readonly string[] | null | undefined): bool
   return (labels ?? []).some((label) => label === NEXT_LABEL || label === LEGACY_NEXT_LABEL);
 }
 
+/**
+ * An issue the bridge moved to Done because it closed without its change
+ * merging: closed by a person, or its own pull request closed unmerged. Done
+ * takes it out of the columns work is in; the label says nothing shipped.
+ * Put on and taken off (when the issue is reopened) only by the bridge.
+ * Kept as a label rather than a column so GitHub shows it, and a row rebuilt
+ * from GitHub still has it (docs/adr/0006-abandoned-is-a-label.md).
+ */
+export const ABANDONED_LABEL = 'openadlc:abandoned';
+
+export function hasAbandonedLabel(labels: readonly string[] | null | undefined): boolean {
+  return (labels ?? []).includes(ABANDONED_LABEL);
+}
+
+/**
+ * Whether an issue's change has shipped: in Ship or Done, and not abandoned.
+ * Whatever reads Done as shipped — a dependency, a stacked pull request, a
+ * design taken — asks this rather than the stage, or an issue closed without
+ * merging unblocked what waited on it.
+ */
+export function hasShipped(issue: { stage: string; labels?: readonly string[] | null }): boolean {
+  return (issue.stage === 'merged' || issue.stage === 'done') && !hasAbandonedLabel(issue.labels);
+}
+
 /** Labels that were renamed, by their old name: label sync renames them in place. */
 export const RENAMED_LABELS: Readonly<Record<string, string>> = {
   ...Object.fromEntries(STAGE_KEYS.map((key) => [`${LEGACY_STAGE_LABEL_PREFIX}${key}`, `${STAGE_LABEL_PREFIX}${key}`])),

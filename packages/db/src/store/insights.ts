@@ -11,7 +11,8 @@ import { query } from '../client.js';
  */
 export interface InsightData {
   repos: { id: string; name: string }[];
-  moves: { repoId: string; issueNumber: number; from: string | null; to: string; kind: string; at: string }[];
+  /** `reason` is why the move was made, which tells an abandon's move to Done from a merge's. */
+  moves: { repoId: string; issueNumber: number; from: string | null; to: string; kind: string; reason?: string | null; at: string }[];
   builds: { repoId: string | null; kind: string; state: string; startedAt: string | null; endedAt: string | null }[];
   requests: { repoId: string | null; issueNumber: number; createdAt: string }[];
   landed: { repoId: string; prNumber: number; enteredAt: string; mergedAt: string }[];
@@ -27,8 +28,8 @@ export async function readInsightData(since: Date): Promise<InsightData> {
   const lookBack = new Date(since.getTime() - 60 * 24 * 60 * 60 * 1000);
   const [repos, moves, builds, requests, landed, events] = await Promise.all([
     query<{ id: string; name: string }>(`select id, name from repos where removed_at is null order by name`),
-    query<{ repo_id: string; issue_number: number; from_stage: string | null; to_stage: string; kind: string; created_at: Date }>(
-      `select repo_id, issue_number, from_stage, to_stage, kind, created_at from stage_moves where created_at >= $1 order by created_at`,
+    query<{ repo_id: string; issue_number: number; from_stage: string | null; to_stage: string; kind: string; reason: string | null; created_at: Date }>(
+      `select repo_id, issue_number, from_stage, to_stage, kind, reason, created_at from stage_moves where created_at >= $1 order by created_at`,
       [lookBack],
     ),
     query<{ repo_id: string | null; kind: string; state: string; started_at: Date | null; ended_at: Date | null }>(
@@ -52,7 +53,15 @@ export async function readInsightData(since: Date): Promise<InsightData> {
   const iso = (date: Date | null) => (date ? date.toISOString() : null);
   return {
     repos,
-    moves: moves.map((row) => ({ repoId: row.repo_id, issueNumber: row.issue_number, from: row.from_stage, to: row.to_stage, kind: row.kind, at: row.created_at.toISOString() })),
+    moves: moves.map((row) => ({
+      repoId: row.repo_id,
+      issueNumber: row.issue_number,
+      from: row.from_stage,
+      to: row.to_stage,
+      kind: row.kind,
+      reason: row.reason,
+      at: row.created_at.toISOString(),
+    })),
     builds: builds.map((row) => ({ repoId: row.repo_id, kind: row.kind, state: row.state, startedAt: iso(row.started_at), endedAt: iso(row.ended_at) })),
     requests: requests.map((row) => ({ repoId: row.repo_id, issueNumber: row.issue_number, createdAt: row.created_at.toISOString() })),
     landed: landed.map((row) => ({ repoId: row.repo_id, prNumber: row.pr_number, enteredAt: row.entered_at.toISOString(), mergedAt: row.updated_at.toISOString() })),
