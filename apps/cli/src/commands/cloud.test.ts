@@ -16,6 +16,7 @@ import {
   defaultOperators,
   hostNeedsReset,
   hostResetArgs,
+  INSTANCE_NAME,
   invalidMember,
   LEGACY_NAME_PREFIX,
   memberArguments,
@@ -24,6 +25,7 @@ import {
   NAME_PREFIX,
   noAdminWarning,
   normalizedMembers,
+  outputAnswer,
   pinNamePrefix,
   postApplySteps,
   remoteTfVars,
@@ -320,6 +322,65 @@ describe('a cloud configure question that needs an answer', () => {
   });
 });
 
+// What `terraform output` prints — on stdout, exiting 0 — on a state with no
+// outputs, which is what an apply that ended in an error leaves behind.
+const NO_OUTPUTS_WARNING = [
+  '╷',
+  '│ Warning: No outputs found',
+  '│',
+  '│ The state file either has no outputs defined, or all the defined outputs',
+  '│ are empty. Please define an output in your configuration with the',
+  '│ `output` keyword and run `terraform refresh` for it to become available.',
+  '╵',
+].join('\n');
+
+describe('what a terraform output read answers', () => {
+  it('is not the "No outputs found" warning, which terraform prints on stdout exiting 0', () => {
+    // The warning was once read back as the host's name, and gcloud was asked
+    // to reset an instance named by the whole warning.
+    expect(outputAnswer('host_name', { code: 0, stdout: NO_OUTPUTS_WARNING })).toBeNull();
+    expect(outputAnswer('host_rollout', { code: 0, stdout: NO_OUTPUTS_WARNING })).toBeNull();
+  });
+
+  it('is nothing when the read printed nothing', () => {
+    expect(outputAnswer('host_name', { code: 0, stdout: '' })).toBeNull();
+    expect(outputAnswer('host_name', { code: 0, stdout: '\n' })).toBeNull();
+  });
+
+  it('is nothing when the read exited with an error, whatever it printed', () => {
+    expect(outputAnswer('host_name', { code: 1, stdout: 'openadlc-host-1\n' })).toBeNull();
+  });
+
+  it('is the host name when it is one as GCE allows them', () => {
+    expect(outputAnswer('host_name', { code: 0, stdout: 'openadlc-host-1\n' })).toBe('openadlc-host-1');
+  });
+
+  it('is never a host name gcloud could read as something else', () => {
+    expect(outputAnswer('host_name', { code: 0, stdout: '--zone=elsewhere' })).toBeNull();
+    expect(outputAnswer('host_name', { code: 0, stdout: 'Host-1' })).toBeNull();
+  });
+
+  it('is a host name only up to the 63 characters GCE allows', () => {
+    const longest = `a${'b'.repeat(61)}c`;
+    expect(longest).toHaveLength(63);
+    expect(INSTANCE_NAME.test(longest)).toBe(true);
+    expect(INSTANCE_NAME.test(`${longest}d`)).toBe(false);
+  });
+
+  it('is never a host name GCE would refuse to have named', () => {
+    expect(INSTANCE_NAME.test('openadlc-host-1')).toBe(true);
+    expect(INSTANCE_NAME.test('openadlc-host-')).toBe(false);
+    expect(INSTANCE_NAME.test('1openadlc-host')).toBe(false);
+    expect(INSTANCE_NAME.test('Openadlc-host-1')).toBe(false);
+    expect(INSTANCE_NAME.test('openadlc-HOST-1')).toBe(false);
+  });
+
+  it('is the rollout when it is one line', () => {
+    const rollout = 'ab12'.repeat(16);
+    expect(outputAnswer('host_rollout', { code: 0, stdout: `${rollout}\n` })).toBe(rollout);
+  });
+});
+
 describe('the host after an apply', () => {
   it('is reset when its cloud-init or database settings changed, since a restart runs the old prepare script', () => {
     expect(hostNeedsReset({ host: 'openadlc-host-1', rollout: 'a' }, 'b')).toBe(true);
@@ -375,6 +436,174 @@ describe('the host after an apply', () => {
     expect(ran).toEqual([['gcloud', ...hostResetArgs('openadlc-host-1', 'us-central1-b', 'example-project')]]);
     // A failed apply's settings are not the ones the next operator should find.
     expect(pushed).toEqual([]);
+  });
+
+  it('is left alone when the outputs could not be read, because there is nothing to decide with', () => {
+    expect(hostNeedsReset({ host: null, rollout: null }, null)).toBe(false);
+  });
+
+  it('is never reset by a name that is not one, even handed past the reads', () => {
+    expect(hostNeedsReset({ host: NO_OUTPUTS_WARNING, rollout: 'a' }, 'b')).toBe(false);
+  });
+
+  it('is not reset, and the operator is sent back to apply, when a failed apply left no outputs', async () => {
+    // The live first apply of a fresh project: the alert-policy race ended it
+    // in an error, Terraform wrote no outputs, and the host the apply had just
+    // made was reset by a garbled name. No outputs is no decision.
+    const printed: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => void printed.push(String(line ?? '')));
+    const ran: string[][] = [];
+    try {
+      await afterTerraform(
+        'apply',
+        1,
+        { host: null, rollout: null },
+        { zone: 'us-central1-b', project_id: 'example-project' },
+        {
+          run: async (command, args) => {
+            ran.push([command, ...args]);
+            return 0;
+          },
+          outputValue: async () => null,
+          push: async () => 0,
+        },
+      );
+    } finally {
+      log.mockRestore();
+    }
+    expect(ran).toEqual([]);
+    const said = printed.join('\n');
+    expect(said).toContain('no outputs');
+    expect(said).toContain('openadlc cloud apply again');
+  });
+
+  it('is handed to the operator to reset by hand when the rollout could not be read under a known host', async () => {
+    // The note once said a finished apply would decide it. It does not: the
+    // next apply compares only its own before and after, and a rollout this
+    // one committed reads the same on both sides of it, so the host kept the
+    // old prepare script and lost the database.
+    const printed: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => void printed.push(String(line ?? '')));
+    const ran: string[][] = [];
+    try {
+      await afterTerraform(
+        'apply',
+        1,
+        { host: 'openadlc-host-1', rollout: 'a' },
+        { zone: 'us-central1-b', project_id: 'example-project' },
+        {
+          run: async (command, args) => {
+            ran.push([command, ...args]);
+            return 0;
+          },
+          outputValue: async () => null,
+          push: async () => 0,
+        },
+      );
+    } finally {
+      log.mockRestore();
+    }
+    expect(ran).toEqual([]);
+    const said = printed.join('\n');
+    expect(said).toContain('whether openadlc-host-1 must be reset was not decided');
+    expect(said).toContain(`gcloud ${hostResetArgs('openadlc-host-1', 'us-central1-b', 'example-project').join(' ')}`);
+    expect(said).toContain('a later apply will not decide it');
+    expect(said).not.toContain('decides it');
+    // The apply itself still failed, and has to be run again to finish.
+    expect(said).toContain('typically because the apply ended in an error');
+    expect(said).toContain('openadlc cloud apply again');
+  });
+
+  it.each([
+    ['a known host', 'openadlc-host-1'],
+    ['no host known before it', null],
+  ])('says the apply ended in an error only when it did, with %s', async (_, host) => {
+    // An apply that exited 0 and whose read after it failed (the state bucket
+    // unreachable, say) was told it had typically ended in an error.
+    const printed: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => void printed.push(String(line ?? '')));
+    vi.stubEnv('OPENADLC_HOME', join(tmpdir(), 'openadlc-cloud-no-home'));
+    const ran: string[][] = [];
+    try {
+      await afterTerraform(
+        'apply',
+        0,
+        { host, rollout: 'a' },
+        { zone: 'us-central1-b', project_id: 'example-project' },
+        {
+          run: async (command, args) => {
+            ran.push([command, ...args]);
+            return 0;
+          },
+          outputValue: async () => null,
+          push: async () => 0,
+        },
+      );
+    } finally {
+      log.mockRestore();
+      vi.unstubAllEnvs();
+    }
+    expect(ran).toEqual([]);
+    const said = printed.join('\n');
+    expect(said).toContain('could not be read after the apply');
+    expect(said).not.toContain('ended in an error');
+    const reset = `gcloud ${hostResetArgs('openadlc-host-1', 'us-central1-b', 'example-project').join(' ')}`;
+    if (host) {
+      // A step under "Still to do by hand", since the apply itself finished.
+      expect(said).toContain('Still to do by hand');
+      expect(said.slice(said.indexOf('Still to do by hand'))).toContain(reset);
+    } else {
+      expect(said).not.toContain(reset);
+    }
+  });
+
+  it('never puts what is not a host name on a gcloud command line, even handed one past the reads', async () => {
+    const printed: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => void printed.push(String(line ?? '')));
+    const ran: string[][] = [];
+    try {
+      await afterTerraform(
+        'apply',
+        1,
+        { host: NO_OUTPUTS_WARNING, rollout: NO_OUTPUTS_WARNING },
+        { zone: 'us-central1-b', project_id: 'example-project' },
+        {
+          run: async (command, args) => {
+            ran.push([command, ...args]);
+            return 0;
+          },
+          outputValue: async () => 'b',
+          push: async () => 0,
+        },
+      );
+    } finally {
+      log.mockRestore();
+    }
+    expect(ran).toEqual([]);
+    // And never echoes it back as a command to run by hand.
+    expect(printed.join('\n')).not.toContain('No outputs found');
+  });
+
+  it('never names what is not a host name in the note that sends the operator back to apply', async () => {
+    // hostNeedsReset keeps it off gcloud's command line; the note that the
+    // outputs are gone is built from the same before-read, and would have
+    // named the whole warning as the host.
+    const printed: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((line?: unknown) => void printed.push(String(line ?? '')));
+    try {
+      await afterTerraform(
+        'apply',
+        1,
+        { host: NO_OUTPUTS_WARNING, rollout: null },
+        { zone: 'us-central1-b', project_id: 'example-project' },
+        { run: async () => 0, outputValue: async () => null, push: async () => 0 },
+      );
+    } finally {
+      log.mockRestore();
+    }
+    const said = printed.join('\n');
+    expect(said).toContain('openadlc cloud apply again');
+    expect(said).not.toContain('No outputs found');
   });
 
   it('is reset by name, in its zone and project', () => {

@@ -23,6 +23,10 @@ terraform {
       source  = "hashicorp/google-beta"
       version = "~> 6.9"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.13"
+    }
   }
 }
 
@@ -1214,6 +1218,30 @@ resource "google_logging_metric" "egress_denied" {
   depends_on = [google_project_service.enabled]
 }
 
+# The Monitoring API learns of a new logging metric a little after the Logging
+# API has made it: the alert policy below, created in the same apply, read its
+# own metric back as a 404, and the first apply of every fresh project ended in
+# an error that a second apply then cleared. The minute here is the dependency
+# Terraform cannot see, slept when the metric is made and again whenever it
+# changes.
+resource "time_sleep" "egress_metric_visible" {
+  create_duration = "60s"
+
+  # The reference is also the dependency: the sleep starts only once the
+  # metric exists.
+  triggers = {
+    metric = google_logging_metric.egress_denied.id
+  }
+
+  # The id is the metric's name, so the trigger alone would miss a metric
+  # replaced under the same name: slept again whenever the metric changes at
+  # all, since Monitoring has to learn of it again either way, and a spare
+  # minute is cheaper than a failed apply.
+  lifecycle {
+    replace_triggered_by = [google_logging_metric.egress_denied]
+  }
+}
+
 resource "google_monitoring_alert_policy" "egress_denied" {
   display_name = "${var.name_prefix}: a bot is trying to reach somewhere it may not"
   combiner     = "OR"
@@ -1245,7 +1273,7 @@ resource "google_monitoring_alert_policy" "egress_denied" {
   }
 
   notification_channels = var.notification_channels
-  depends_on            = [google_project_service.enabled]
+  depends_on            = [google_project_service.enabled, time_sleep.egress_metric_visible]
 }
 
 # ---------------------------------------------------------------- liveness

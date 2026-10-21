@@ -638,6 +638,23 @@ describe('a first apply on a new project', () => {
     // enabling, they stopped the first apply with SERVICE_DISABLED.
     expect(resourceBlock(type, name)).toMatch(/depends_on\s*=\s*\[[^\]]*google_project_service\.enabled/);
   });
+
+  it('makes the egress alert a minute after its metric, which Monitoring does not see at once', () => {
+    // The alert policy, made in the same apply as its logging metric, read the
+    // metric back as a 404, and the first apply of a fresh project ended in an
+    // error that left no outputs. `validate` is as clean with the sleep gone,
+    // or with nothing waiting on it, and the alert's `depends_on` still names
+    // the APIs either way.
+    const sleep = resourceBlock('time_sleep', 'egress_metric_visible');
+    expect(sleep).toMatch(/create_duration\s*=\s*"60s"/);
+    expect(sleep).toMatch(/triggers\s*=\s*\{[^}]*google_logging_metric\.egress_denied\./);
+    // The trigger is the metric's id, which is its name: a metric replaced
+    // under the same name slept nothing without this.
+    expect(sleep).toMatch(/lifecycle\s*\{[^}]*replace_triggered_by\s*=\s*\[\s*google_logging_metric\.egress_denied\s*\]/);
+    expect(resourceBlock('google_monitoring_alert_policy', 'egress_denied')).toMatch(
+      /depends_on\s*=\s*\[[^\]]*time_sleep\.egress_metric_visible/,
+    );
+  });
 });
 
 describe('one install per project', () => {

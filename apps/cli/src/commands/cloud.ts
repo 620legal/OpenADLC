@@ -466,15 +466,29 @@ export interface HostBeforeApply {
 }
 
 /**
+ * A name as GCE allows instance names. Nothing that fails this is a host, and
+ * nothing that fails this goes on a gcloud command line.
+ */
+export const INSTANCE_NAME = /^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$/;
+
+/**
  * Whether an apply has to reset the host. Container-Optimized OS applies
  * cloud-init at boot, and hostd reads the database URL only when it starts: a
  * host that was only restarted ran the old prepare script against the new URL,
  * found no CA where the URL names one, and lost the database. Not for a host
  * this apply made, which booted on the new ones. A host whose state predates
  * `host_rollout` has none before, and is reset once.
+ *
+ * Only for a host that is known by name: when the outputs could not be read —
+ * an apply that ends in an error writes none — there is nothing to decide
+ * with, and this run does not decide: `afterTerraform` says so and, for a host
+ * it knows, prints the reset to run by hand. `outputAnswer` turns everything
+ * unusable into null, and a name that is not one is refused here too;
+ * `afterTerraform` checks it once more, last, before it puts it on a gcloud
+ * command line.
  */
 export function hostNeedsReset(before: HostBeforeApply, after: string | null): boolean {
-  return before.host !== null && after !== null && before.rollout !== after;
+  return before.host !== null && INSTANCE_NAME.test(before.host) && after !== null && before.rollout !== after;
 }
 
 /**
@@ -631,11 +645,28 @@ async function runKeeping(command: string, args: string[], cwd?: string): Promis
   });
 }
 
-/** One of the module's outputs from the state, or null when there is none. */
-async function outputValue(name: string, dir: string): Promise<string | null> {
-  const read = await capture('terraform', ['output', '-raw', name], dir);
+/** One printable line: the shape of every value the module's outputs hold. */
+const OUTPUT_SHAPE = /^[\x21-\x7e]{1,256}$/;
+
+/**
+ * What a `terraform output -raw` read answered, or null when it answered
+ * nothing usable. On a state with no outputs — what an apply that ended in an
+ * error leaves behind — `terraform output` exits 0 and prints a multi-line
+ * "No outputs found" warning on stdout. That warning was once read back as the
+ * host's name, and the reset ran `gcloud compute instances reset '<the whole
+ * warning>'` on a host this very apply had made. An answer counts only when it
+ * looks like one: the host's name as GCE allows names, anything else one
+ * printable line.
+ */
+export function outputAnswer(name: string, read: { code: number; stdout: string }): string | null {
+  if (read.code !== 0) return null;
   const value = read.stdout.trim();
-  return read.code === 0 && value ? value : null;
+  return (name === 'host_name' ? INSTANCE_NAME : OUTPUT_SHAPE).test(value) ? value : null;
+}
+
+/** One of the module's outputs from the state, or null when there is none to use. */
+async function outputValue(name: string, dir: string): Promise<string | null> {
+  return outputAnswer(name, await capture('terraform', ['output', '-raw', name], dir));
 }
 
 /**
@@ -837,16 +868,42 @@ export async function afterTerraform(
   // Outside the success branch: a failed apply can already have committed
   // the new rollout, and the host is then on the old prepare script.
   const afterRollout = action === 'apply' ? await runners.outputValue('host_rollout') : null;
+  // What the state knew before, only when it is a host: nothing else may be
+  // reset, named in a message, or suggested as a command to run.
+  const host = before.host !== null && INSTANCE_NAME.test(before.host) ? before.host : null;
+  // The module's default, for settings that never named a zone.
+  const zone = typeof settled.zone === 'string' && settled.zone ? settled.zone : 'us-central1-a';
+  const projectId = String(settled.project_id ?? '');
   let resetMissed: string | null = null;
-  if (before.host && applyShouldResetHost(action, before, afterRollout)) {
-    const args = hostResetArgs(
-      before.host,
-      // The module's default, for settings that never named a zone.
-      typeof settled.zone === 'string' && settled.zone ? settled.zone : 'us-central1-a',
-      String(settled.project_id ?? ''),
-    );
+  if (action === 'apply' && afterRollout === null) {
+    // Nothing usable to decide with, and no deciding on a warning. Nor will a
+    // later apply decide it, as this note once said: it compares only its own
+    // before and after, so a rollout this apply committed reads the same on
+    // both sides of the next one, and the host stays on the old prepare script
+    // and loses the database. So a known host gets its reset to run by hand.
+    const unread =
+      code === 0
+        ? "Terraform's host_rollout output could not be read after the apply"
+        : 'Terraform left no outputs to read, typically because the apply ended in an error';
+    const again = code === 0 ? '' : '. Run openadlc cloud apply again to finish the apply';
     ui.plain();
-    ui.note(`the host's cloud-init or database settings changed: resetting ${before.host} so it boots on them`);
+    if (host) {
+      ui.note(
+        `${unread}: whether ${host} must be reset was not decided, and a later apply will not decide it, since it compares only its own before and after${again}`,
+      );
+      resetMissed = `gcloud ${hostResetArgs(host, zone, projectId).join(' ')}   (if this apply changed the host's cloud-init or database settings: the host runs on the old ones until it is reset)`;
+    } else {
+      ui.note(
+        code === 0
+          ? `${unread}, and no host was known before it: nothing was reset. Check the outputs with openadlc cloud output`
+          : `${unread}: run openadlc cloud apply again`,
+      );
+    }
+  }
+  if (host && applyShouldResetHost(action, before, afterRollout)) {
+    const args = hostResetArgs(host, zone, projectId);
+    ui.plain();
+    ui.note(`the host's cloud-init or database settings changed: resetting ${host} so it boots on them`);
     if ((await runners.run('gcloud', args)) !== 0) {
       resetMissed = `gcloud ${args.join(' ')}   (the host still runs on the old settings until it is reset)`;
     }

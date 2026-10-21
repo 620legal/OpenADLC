@@ -2138,6 +2138,16 @@ The first apply that turns the instance's TLS requirement on leaves the bridge
 and the host without the database for the short while until both are back on
 the new settings; they reconnect by themselves.
 
+When `host_rollout` cannot be read back after the apply (an apply that ends in
+an error writes no outputs, and `terraform output` then prints a warning where
+the value would be), `apply` resets nothing and never takes that warning for
+the host's name. Nor will a later apply make up for it, because it compares
+only its own before and after. So when the host was known before the apply,
+`apply` prints its `gcloud compute instances reset` command, in the same place
+as a failed reset's, to run by hand if this apply changed the host's
+cloud-init or database settings. A failed apply still needs `openadlc cloud
+apply` again to finish.
+
 Nothing about your install is written into this repository. The Terraform state
 and the answers `configure` collected (`cloud.tfvars.json`, which holds the
 webhook secret) live in a bucket in the install's own project. On another
