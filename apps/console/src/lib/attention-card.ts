@@ -107,6 +107,7 @@ const GROUP: Record<AttentionItem['kind'], AttentionGroup> = {
   promote_held: 'work',
   design_memory_superseded: 'work',
   dependency_abandoned: 'work',
+  resume_waiting: 'work',
 };
 
 export function groupOf(item: Pick<AttentionItem, 'kind' | 'group'>): AttentionGroup {

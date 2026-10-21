@@ -1,3 +1,4 @@
+import { githubDidNotAnswer } from '@openadlc/github';
 import { PERMISSION_NAMES } from '@openadlc/shared';
 import { ACCOUNTS_STEP, RECONNECT, accountInWords, accountTrouble, atStart, stepHref, stepNamed } from './health/words.js';
 import { NO_PULL_REQUEST, NOTHING_PUSHED } from './build-left.js';
@@ -28,6 +29,13 @@ export interface FailureContext {
   account?: { label: string; provider: 'anthropic' | 'openai' | 'xai'; kind: 'key' | 'subscription' } | null;
   /** The app's permissions page, when OpenADLC knows the app. */
   permissionsUrl?: string | null;
+  /**
+   * When OpenADLC runs the work again by itself, for a start GitHub did not
+   * answer for (`githubRetry`): null once every retry is spent.
+   */
+  retry?: { at: Date; attempt: number; of: number } | null;
+  /** The time the card is read at, which a retry's time is said against. Absent, the time is said as it is. */
+  now?: Date;
 }
 
 export interface FailureWords {
@@ -40,6 +48,9 @@ export interface FailureWords {
 }
 
 const PROVIDER = { anthropic: 'Anthropic', openai: 'OpenAI', xai: 'xAI' } as const;
+
+/** Where GitHub says whether it is having an outage. */
+export const GITHUB_STATUS_URL = 'https://www.githubstatus.com';
 
 /** The provider a failure names by its address, whatever account the bot has. */
 function providerIn(text: string): string | null {
@@ -131,6 +142,30 @@ export function explainFailure(reason: string | null | undefined, context: Failu
   if (raw.startsWith(NOTHING_PUSHED)) {
     const sentence = `${atStart(bot)} finished without pushing a commit or opening a pull request. Open its thread to see why, then try again.`;
     return { sentence, action: null, raw: detailOf(sentence) };
+  }
+
+  // GitHub not answering the refresh of the bot's sign-in, which is not
+  // GitHub refusing it: the work goes on by itself once GitHub answers
+  // (`githubRetry`), and a reconnect would redo a sign-in that is fine.
+  // First, since the reason carries whatever page GitHub answered with.
+  if (githubDidNotAnswer(raw)) {
+    const retry = context.retry;
+    const start = `GitHub did not answer when OpenADLC refreshed the sign-in of ${bot}, so the work did not start`;
+    // The sweep that runs it comes every ten minutes, so a retry that is due
+    // can wait for it: "after 04:18" still read so at 04:24. Before then, to
+    // the minute after, so the time said is never before the sweep may run it.
+    const when = !retry
+      ? ''
+      : context.now && retry.at.getTime() <= context.now.getTime()
+        ? 'at its next sweep'
+        : `after ${new Date(Math.ceil(retry.at.getTime() / 60_000) * 60_000).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+    const sentence =
+      retry === null
+        ? `${start}, and OpenADLC has stopped trying on its own. Try again once GitHub answers.`
+        : retry
+          ? `${start}. OpenADLC tries again on its own ${when} (retry ${retry.attempt} of ${retry.of}).`
+          : `${start}. OpenADLC tries again on its own.`;
+    return { sentence, action: { kind: 'open_url', label: 'GitHub’s status', url: GITHUB_STATUS_URL }, raw };
   }
 
   // Stopped by OpenADLC itself, not by anything wrong with the work: nothing

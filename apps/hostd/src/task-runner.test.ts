@@ -416,6 +416,34 @@ describe('resuming a task', () => {
     mint.mockRestore();
   });
 
+  it('asks for its GitHub token before it takes the old session down, and starts on that one', async () => {
+    paused();
+    vi.mocked(bots.getBotByName).mockResolvedValue(crew({ githubLogin: 'atlas-janedoe' }));
+    vi.mocked(bots.getBotById).mockResolvedValue(crew({ githubLogin: 'atlas-janedoe' }));
+    const mint = vi.spyOn(SessionEnvMinter.prototype, 'mint').mockResolvedValue({ env: {}, cleanup: async () => undefined });
+    const exec = driver();
+    const tokenForTask = vi
+      .fn()
+      .mockResolvedValueOnce({ token: 'ghu_first', expiresAt: null, login: 'atlas-janedoe' })
+      .mockRejectedValueOnce(
+        new Error("atlas has no GitHub token yet: GitHub did not answer the refresh of atlas's sign-in (GitHub returned a non-JSON response (503): <html>)"),
+      )
+      .mockResolvedValueOnce({ token: 'ghu_after', expiresAt: null, login: 'atlas-janedoe' });
+    const runner = new TaskRunner(config(), exec, { tokenForTask } as never, async () => ({ model: 'claude-opus-5', modelAlias: null, account: null }));
+    await runner.start(START);
+
+    // GitHub not answering leaves the task as it was, for the bridge to resume later.
+    await expect(runner.resume('task-1', [])).rejects.toThrow(/GitHub did not answer the refresh/);
+    expect(exec.killSession).not.toHaveBeenCalled();
+    expect(runner.activeTaskIds()).toEqual(['task-1']);
+
+    await runner.resume('task-1', []);
+    expect(tokenForTask).toHaveBeenCalledTimes(3);
+    expect(exec.killSession).toHaveBeenCalledTimes(1);
+    expect(mint).toHaveBeenLastCalledWith(expect.objectContaining({ token: 'ghu_after' }));
+    mint.mockRestore();
+  });
+
   it('takes down the session it made and gives the computer back when the bridge ended the task meanwhile', async () => {
     // The bridge's resume request timed out and it failed the task; the store
     // refuses `running` over `failed`, so the resumed session must not run on.

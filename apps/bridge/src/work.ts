@@ -56,6 +56,14 @@ export const REVIEW_DISMISSED_BY_BRIDGE = 'review.dismissed_by_bridge';
  */
 export const REVIEW_ASKED_AGAIN = 'review.asked_again';
 
+/**
+ * Answered work whose resume GitHub did not answer the sign-in's refresh for,
+ * and which waits paused for it (`TaskService.resume`): `{ taskId, subjectRef,
+ * answeredAt, until }`, all strings. Needs you reads it for a card while the
+ * task is still owed that resume (`attention.ts`).
+ */
+export const RESUME_WAITS_ON_GITHUB = 'task.resume_waits_on_github';
+
 /** A task as these functions need it. The store's rows have all of it. */
 export interface TaskFacts {
   id: string;

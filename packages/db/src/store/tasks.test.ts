@@ -27,6 +27,7 @@ import {
   pausedWithAnswer,
   raiseCostCap,
   releaseAutoRetry,
+  retakeAutoRetry,
   stopIfRunning,
   stoppedByPerson,
   TASK_STATE_FROM,
@@ -295,6 +296,34 @@ describe('the one automatic retry a task gets', () => {
     const [sql, params] = vi.mocked(queryOne).mock.calls[0] ?? [];
     expect(String(sql)).toMatch(/where id = \$1 and auto_retried_at is null/);
     expect(params).toEqual(['task-1']);
+  });
+
+  it('is taken, or taken back, only while no later task of the same work exists, as Try again counts one', async () => {
+    vi.mocked(queryOne).mockResolvedValue(null);
+
+    await claimAutoRetry('task-1');
+    await retakeAutoRetry('task-1', new Date('2026-10-21T04:15:00.000Z'));
+
+    for (const [sql] of vi.mocked(queryOne).mock.calls) {
+      const flat = String(sql).replace(/\s+/g, ' ');
+      expect(flat).toContain(
+        "and not exists ( select 1 from tasks later where later.subject_ref = tasks.subject_ref and later.kind = tasks.kind " +
+          "and (tasks.kind <> 'review' or later.bot_id = tasks.bot_id) and later.created_at > tasks.created_at )",
+      );
+    }
+    expect(vi.mocked(queryOne)).toHaveBeenCalledTimes(2);
+  });
+
+  it('is taken back, in one statement, only from a claim older than the one asked for', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ id: 'task-1' }).mockResolvedValueOnce(null);
+    const before = new Date('2026-10-21T04:15:00.000Z');
+
+    expect(await retakeAutoRetry('task-1', before)).toBe(true);
+    expect(await retakeAutoRetry('task-1', before)).toBe(false);
+
+    const [sql, params] = vi.mocked(queryOne).mock.calls[0] ?? [];
+    expect(String(sql)).toMatch(/set auto_retried_at = now\(\).* where id = \$1 and auto_retried_at < \$2/);
+    expect(params).toEqual(['task-1', before]);
   });
 
   it('is given back when the retry was refused', async () => {

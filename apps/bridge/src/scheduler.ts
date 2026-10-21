@@ -7,9 +7,9 @@ import type { UnlabeledIntake } from './unlabeled-intake.js';
 import { actsForOn } from './people.js';
 import { DEFAULT_PATH_POLICY, REVIEW_GATE_CHECK, actsFor, deliveryRulesFrom, envInt, type PathPolicy, type TaskKind, type TaskState, dedupeMarker, hasIgnoreLabel } from '@openadlc/shared';
 import { blockingOverlaps, type WorkInFlight } from '@openadlc/dispatcher';
-import type { GitHubClient } from '@openadlc/github';
-import { ATTENTION_WINDOW_DAYS, triedAgain } from './attention.js';
-import { subjectClosed, wasRefused } from './gates.js';
+import { githubDidNotAnswer, type GitHubClient } from '@openadlc/github';
+import { ATTENTION_WINDOW_DAYS, GITHUB_RETRY_CLAIM_MS, githubRetry, triedAgain } from './attention.js';
+import { ALREADY_LANDED, alreadyLanded, subjectClosed, wasRefused } from './gates.js';
 import { fastPathOf, type Automation } from './automation.js';
 import { causeOfFailure, isPrerequisiteRow } from './health/checks/crew.js';
 import { REVIEW_ROUND_OPENED, endedBySendingBack, headInRepository, issueForSubject, issueNumberFromBranch, parseRef, stageOfTask } from './work.js';
@@ -159,6 +159,9 @@ function startedBuild(pass: StartedThisPass, repoId: string | null, issue: { num
 /** The cause the audit trail names for work run again once a spending cap allowed it. */
 export const SPENDING_CAP_CAUSE = 'spending-cap';
 
+/** The cause the audit trail names for work run again after GitHub did not answer its start; see `githubRetry`. */
+export const GITHUB_UNANSWERED_CAUSE = 'github-unanswered';
+
 /**
  * Whether a spending cap would let this task's bot start in its repository
  * now: raised in Settings, or a new month begun. Asked with the same check
@@ -219,6 +222,15 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * again and starts the work when it answers yes. Like any failure, it is
  * looked for within the board's window (`ATTENTION_WINDOW_DAYS`): older than
  * that, it has left the board and waits for a person.
+ *
+ * And it runs again work whose start GitHub did not answer for — the refresh
+ * of its bot's sign-in got a 5xx or no answer at all — on a backoff, a few
+ * times (`githubRetry`); its card says when. No health row fails for those,
+ * and run once, a start in a long outage failed for good. The start each
+ * retry records is not claimed, since the next retry is its; the backoff's
+ * end is what bounds them. A claim on one that is older than a retry takes
+ * is taken back (`GITHUB_RETRY_CLAIM_MS`), and a seat whose retry GitHub did
+ * not answer again has no more of them this pass.
  */
 export async function retryAfterRecovery(fixed: readonly string[] | null, deps: RecoveryDeps): Promise<string[]> {
   const justFixed = fixed ? new Set(fixed.filter(isPrerequisiteRow)) : null;
@@ -246,19 +258,30 @@ export async function retryAfterRecovery(fixed: readonly string[] | null, deps: 
   // busy, every time, with a line in the log for each.
   const startedFor = new Map<string, number>();
   const startedIn: StartedThisPass = new Map();
+  // Seats whose start GitHub did not answer again this pass. Their other such
+  // work waits for the next sweep, as the request queue stops its walk at a
+  // start hostd refused: each would ask GitHub again, and wait, before the
+  // gates and the merge line had their turn, and spend a retry doing it.
+  const unansweredFor = new Set<string>();
   for (const task of recent) {
     if (task.state !== 'failed' && task.state !== 'stopped') continue;
-    if (task.autoRetriedAt) continue;
+    // GitHub did not answer its start: run again once its wait is out, by the
+    // sweep alone. Its time is put off while the sweep holds a claim on it,
+    // so one past its time here is a claim a bridge exited holding.
+    const githubDue = justFixed ? null : githubRetry(task, recent);
+    const staleClaim = Boolean(githubDue && task.autoRetriedAt);
+    if (task.autoRetriedAt && !staleClaim) continue;
     const endedAt = Date.parse(task.endedAt ?? task.startedAt ?? task.createdAt);
     if (endedAt < windowStart) continue;
     if (triedAgain(task, recent)) continue;
 
     const parsed = parseRef(task.subjectRef);
     const repoName = repoList.find((repo) => repo.id === task.repoId)?.name ?? parsed?.repo ?? null;
-    const healthCause = causeOfFailure(task.exitReason, { botId: task.botId, repoName });
+    if (githubDue && (githubDue.at.getTime() > now.getTime() || unansweredFor.has(task.botId))) continue;
+    const healthCause = githubDue ? null : causeOfFailure(task.exitReason, { botId: task.botId, repoName });
     const capHeld = !healthCause && !justFixed && Boolean(deps.costs) && heldAtCap(task.exitReason);
-    if (healthCause ? !putRight(healthCause, endedAt) : !capHeld) continue;
-    const cause = healthCause ?? SPENDING_CAP_CAUSE;
+    if (healthCause ? !putRight(healthCause, endedAt) : !capHeld && !githubDue) continue;
+    const cause = healthCause ?? (capHeld ? SPENDING_CAP_CAUSE : GITHUB_UNANSWERED_CAUSE);
 
     // The card has moved past the stage this work was for: whatever failed no
     // longer holds anything up, and running it again would start a review of a
@@ -278,13 +301,17 @@ export async function retryAfterRecovery(fixed: readonly string[] | null, deps: 
     if (capHeld && deps.costs) {
       if (!(await capAllows(task, repo, deps.costs))) continue;
     }
-    if (!(await tasks.claimAutoRetry(task.id))) continue;
+    const claimed = staleClaim
+      ? await tasks.retakeAutoRetry(task.id, new Date(now.getTime() - GITHUB_RETRY_CLAIM_MS))
+      : await tasks.claimAutoRetry(task.id);
+    if (!claimed) continue;
     try {
       const retried = await deps.retry(task.id, RECOVERY_ACTOR);
+      if (githubDue && githubDidNotAnswer(retried.task?.error)) unansweredFor.add(task.botId);
       startedFor.set(task.botId, (startedFor.get(task.botId) ?? 0) + 1);
       if (task.kind === 'implement') startedBuild(startedIn, task.repoId, issue);
       // A request's triage may be waiting its turn for intake; it starts from the queue.
-      if (retried.task) await tasks.claimAutoRetry(retried.task.taskId);
+      if (retried.task && !githubDue) await tasks.claimAutoRetry(retried.task.taskId);
       await audit({
         actor: RECOVERY_ACTOR,
         action: 'task.auto_retried',
@@ -294,11 +321,23 @@ export async function retryAfterRecovery(fixed: readonly string[] | null, deps: 
       actions.push(
         capHeld
           ? `${task.subjectRef}: ${retried.bot}’s ${task.kind} started, now that the spending cap allows it`
-          : `${task.subjectRef}: ${retried.bot}’s ${task.kind} run again, now that ${cause} passes`,
+          : githubDue
+            ? `${task.subjectRef}: ${retried.bot}’s ${task.kind} run again (retry ${githubDue.attempt} of ${githubDue.of}), as GitHub did not answer when it started`
+            : `${task.subjectRef}: ${retried.bot}’s ${task.kind} run again, now that ${cause} passes`,
       );
     } catch (error) {
-      await tasks.releaseAutoRetry(task.id).catch(() => undefined);
       const why = error instanceof Error ? error.message : String(error);
+      // Its issue or pull request closed since it failed (`retryTask`): the
+      // work is over. Stopped as landed, as a resume finds it, with the claim
+      // kept. Given back, the claim was taken, refused and given back on every
+      // sweep for the week the task stays in the window, a GitHub read each.
+      if (why.startsWith(ALREADY_LANDED)) {
+        const landed = alreadyLanded(task.subjectRef);
+        await tasks.updateTaskState(task.id, 'stopped', { exitReason: landed }).catch(() => undefined);
+        actions.push(`${task.subjectRef}: not run again: ${landed}`);
+        continue;
+      }
+      await tasks.releaseAutoRetry(task.id).catch(() => undefined);
       actions.push(`${task.subjectRef}: not run again (${why})`);
     }
   }

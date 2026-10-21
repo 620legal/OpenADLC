@@ -1749,6 +1749,9 @@ const store = vi.hoisted(() => ({
   since: null as Date | null,
   eventTypes: [] as string[],
   settings: {} as Record<string, string>,
+  /** Answered work waiting for GitHub (`task.resume_waits_on_github`), and what is still owed a resume. */
+  resumeWaits: [] as { at: string; payload: Record<string, unknown> }[],
+  owed: [] as Record<string, unknown>[],
 }));
 
 vi.mock('@openadlc/db', () => ({
@@ -1781,6 +1784,7 @@ vi.mock('@openadlc/db', () => ({
     store.since = since;
     // A stopped review loop's shape; a supersede's is another, and none is recorded here.
     if (type === 'design_memory.superseded') return [];
+    if (type === 'task.resume_waits_on_github') return store.resumeWaits;
     return [{ at: '2026-09-24T11:20:00.000Z', payload: { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 3 } }];
   }),
   mergeLines: {},
@@ -1793,6 +1797,7 @@ vi.mock('@openadlc/db', () => ({
   tasks: {
     STOPPED_BY_PERSON: 'stopped by a person',
     listTasksSince: vi.fn(async () => store.tasks),
+    pausedWithAnswer: vi.fn(async () => store.owed),
     getTask: vi.fn(async (id: string) =>
       id === 'task-old-gate'
         ? {
@@ -1871,7 +1876,7 @@ describe('GET /v1/attention', () => {
     // And the send-backs a person has to take, the issues intake stopped
     // trying, and the design memory a design superseded, which this store has
     // none of.
-    expect(store.eventTypes).toEqual(['review.stalled', 'send_back.stalled', 'send_back.to_person', 'intake.stalled', 'design_memory.superseded']);
+    expect(store.eventTypes).toEqual(['review.stalled', 'send_back.stalled', 'send_back.to_person', 'intake.stalled', 'task.resume_waits_on_github', 'design_memory.superseded']);
     expect(body.items.map((item) => item.id)).toEqual(['stall:openadlc-testbed#29', 'gate:gate-old']);
     // A gate older than the week is still a gate: its task is read on its own.
     expect(body.items[1]).toMatchObject({ kind: 'question', bot: { name: 'ottoexampleco' } });
@@ -2383,6 +2388,31 @@ describe('reading what the stopped tasks asked', () => {
   });
 });
 
+describe('reading which answered work waits for GitHub', () => {
+  it('is each task still owed a resume whose wait began after its newest answer', async () => {
+    const { readAttention } = await load();
+    store.gates = [];
+    store.tasks = [];
+    const owed = (id: string, number: number, answeredAt: string) => ({ id, botId: 'bot-builder', kind: 'implement', subjectRef: `openadlc-testbed#${number}`, answeredAt });
+    // Waiting since its answer; answered again since it waited; never waited.
+    store.owed = [owed('task-waits', 10, minutesAgo(20)), owed('task-answered-again', 19, minutesAgo(5)), owed('task-never', 21, minutesAgo(20))];
+    store.resumeWaits = [
+      { at: minutesAgo(19), payload: { taskId: 'task-waits', subjectRef: 'openadlc-testbed#10', answeredAt: minutesAgo(20), until: '2026-09-24T13:40:00.000Z' } },
+      { at: minutesAgo(15), payload: { taskId: 'task-answered-again', subjectRef: 'openadlc-testbed#19', answeredAt: minutesAgo(16), until: '2026-09-24T13:44:00.000Z' } },
+    ];
+
+    try {
+      const input = await readAttention(NOW);
+      expect(input.resumeWaits).toEqual([
+        { taskId: 'task-waits', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#10', since: minutesAgo(19), until: '2026-09-24T13:40:00.000Z' },
+      ]);
+    } finally {
+      store.owed = [];
+      store.resumeWaits = [];
+    }
+  });
+});
+
 describe('reading which subjects have closed', () => {
   it('asks GitHub only about the tasks that could still be a card', async () => {
     const { readAttention, STOPPED_BY_A_PERSON } = await load();
@@ -2446,5 +2476,125 @@ describe('reading which repositories ship by merging', () => {
     ].map((one) => ({ ...one }));
     const input = await readAttention(NOW, { shipsByMerging: async () => Promise.reject(new Error('GitHub down')) });
     expect([...(input.shipsByMerging ?? [])]).toEqual([]);
+  });
+});
+
+describe('a start GitHub did not answer for', () => {
+  const UNANSWERED =
+    "hostd refused: openadlc-atlas-janedoe has no GitHub token yet: GitHub did not answer the refresh of openadlc-atlas-janedoe's sign-in (GitHub returned a non-JSON response (503): <html>); it is asked again next time";
+  /** One of the same build's starts, `minutes` ago, failed this way unless it says otherwise. */
+  const start = (minutes: number, partial: Partial<TaskFacts> = {}) =>
+    task({
+      botId: 'bot-builder',
+      kind: 'implement',
+      subjectRef: 'openadlc-testbed#16',
+      state: 'failed',
+      createdAt: minutesAgo(minutes + 1),
+      endedAt: minutesAgo(minutes),
+      exitReason: UNANSWERED,
+      ...partial,
+    });
+
+  it('says on its card that OpenADLC tries again on its own, and when', async () => {
+    const { attentionItems } = await load();
+    const failed = start(1, { id: 'task-unanswered' });
+
+    const items = attentionItems({ now: NOW, gates: [], tasks: [failed], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      id: 'task:task-unanswered',
+      detail:
+        'GitHub did not answer when OpenADLC refreshed the sign-in of the builder (openadlc-atlas-janedoe), so the work did not start. ' +
+        'OpenADLC tries again on its own after 2026-09-24 12:01 UTC (retry 1 of 6).',
+    });
+    expect(items[0]?.actions[0]).toEqual({ kind: 'open_url', label: 'GitHub’s status', url: 'https://www.githubstatus.com' });
+  });
+
+  it('says the next sweep once its time has passed and the sweep has not run it yet', async () => {
+    const { attentionItems } = await load();
+    // Due two minutes after it ended, seven minutes ago.
+    const failed = start(7, { id: 'task-due' });
+
+    const [item] = attentionItems({ now: NOW, gates: [], tasks: [failed], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] });
+
+    expect(item?.detail).toMatch(/OpenADLC tries again on its own at its next sweep \(retry 1 of 6\)\.$/);
+  });
+
+  it('waits longer after each start that failed this way in a row, and stops after the last', async () => {
+    const { githubRetry, GITHUB_RETRY_MINUTES } = await load();
+    const earlier = [start(200), start(150), start(100, { state: 'done', exitReason: null }), start(60)];
+    const newest = start(30);
+
+    // The done build ends the run: two in a row, so the second retry, five minutes after.
+    expect(githubRetry(newest, [...earlier, newest])).toEqual({ at: new Date(Date.parse(minutesAgo(30)) + 5 * 60_000), attempt: 2, of: 6 });
+    // Another reason is not GitHub not answering.
+    expect(githubRetry(start(5, { exitReason: 'engine exited 1' }), [])).toBeNull();
+
+    const run = GITHUB_RETRY_MINUTES.map((_, index) => start(500 - index * 10));
+    const last = start(1);
+    expect(githubRetry(run.at(-1)!, run)?.attempt).toBe(GITHUB_RETRY_MINUTES.length);
+    expect(githubRetry(last, [...run, last])).toBeNull();
+  });
+
+  it('is not a start to run again when the task ran before it failed, nor a console request’s, which its queue tries again', async () => {
+    const { githubRetry } = await load();
+
+    expect(githubRetry(start(1, { startedAt: minutesAgo(30) }), [])).toBeNull();
+    expect(githubRetry(start(1, { subjectRef: 'request:5f2c' }), [])).toBeNull();
+  });
+
+  it('puts the time off while the sweep holds a claim on it, until the claim can be taken back', async () => {
+    const { githubRetry, GITHUB_RETRY_CLAIM_MS } = await load();
+    const claimed = { ...start(10), autoRetriedAt: minutesAgo(5) };
+
+    expect(githubRetry(claimed, [claimed])?.at).toEqual(new Date(Date.parse(minutesAgo(5)) + GITHUB_RETRY_CLAIM_MS));
+  });
+
+  it('shows answered work that waits for GitHub as a card that says so, and until when', async () => {
+    const { attentionItems } = await load();
+
+    const items = attentionItems({
+      now: NOW,
+      gates: [],
+      tasks: [],
+      bots: BOTS,
+      repos: REPOS,
+      issues: ISSUES,
+      requests: [],
+      stallEvents: [],
+      resumeWaits: [
+        { taskId: 'task-paused', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', since: minutesAgo(3), until: '2026-09-24T13:57:00.000Z' },
+      ],
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      id: 'resume-wait:task-paused',
+      kind: 'resume_waiting',
+      group: 'work',
+      headline: 'The builder (openadlc-atlas-janedoe) waits for GitHub to go on with the change',
+      detail:
+        'The answer is recorded. GitHub did not answer when OpenADLC refreshed the sign-in of the builder (openadlc-atlas-janedoe), so the work has not started again. ' +
+        'OpenADLC tries again on every sweep until 2026-09-24 13:57 UTC, then fails it with a card to try again.',
+      since: minutesAgo(3),
+      subject: { number: 16 },
+    });
+    expect(items[0]?.actions).toEqual([
+      { kind: 'open_url', label: 'GitHub’s status', url: 'https://www.githubstatus.com' },
+      { kind: 'stop_task', label: 'Stop', taskId: 'task-paused' },
+      { kind: 'open_thread', label: 'Open thread', bot: 'openadlc-atlas-janedoe' },
+    ]);
+  });
+
+  it('says it has stopped trying once every retry is spent', async () => {
+    const { attentionItems, GITHUB_RETRY_MINUTES } = await load();
+    const run = GITHUB_RETRY_MINUTES.map((_, index) => start(500 - index * 10));
+    const last = start(1, { id: 'task-last' });
+
+    const items = attentionItems({ now: NOW, gates: [], tasks: [...run, last], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] });
+
+    expect(items.map((item) => item.id)).toEqual(['task:task-last']);
+    expect(items[0]?.detail).toMatch(/and OpenADLC has stopped trying on its own\. Try again once GitHub answers\.$/);
   });
 });

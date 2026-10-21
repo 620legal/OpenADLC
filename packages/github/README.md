@@ -22,6 +22,17 @@ the dispatcher's program, `@openadlc/backup` and the integration suites import i
   nothing answers on the bridge's port, under the same advisory lock
   (`github-refresh:<sign-in>`), and `openadlc restore` refreshes each GitHub
   sign-in once to take it over (`@openadlc/backup`, `src/signins.ts`).
+- **GitHub not answering a refresh is not GitHub refusing it.** A 5xx or a
+  429 is asked again a few times within the request (`REFRESH_RETRY_MS`); a
+  timeout or no connection is not, since GitHub may have taken that refresh.
+  Either ends in `GitHubUnavailableError`, whose words
+  (`GITHUB_DID_NOT_ANSWER`, `githubDidNotAnswer`) the bridge runs a task
+  again on, and the sign-in is not asked again for a minute
+  (`UNANSWERED_FOR_MS`). A call is handed the last good token meanwhile while
+  it is valid; a task is not, as its token must outlast it
+  (`TASK_TOKEN_MIN_LIFETIME_MS`). Only an OAuth error or a 401 is a refusal
+  (`refusedByGitHub`), and it reads the stored token again before marking
+  anything revoked; anything else fails as it is (`refreshFailure`).
 - **Secrets live in the secret store**, never in the database, a log or a
   comment. `getSecretStore()` is a `FileSecretStore` under `$OPENADLC_HOME/secrets`
   (`~/.openadlc/secrets`, one `0600` file per ref), or Google Secret Manager

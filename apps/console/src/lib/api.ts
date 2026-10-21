@@ -305,7 +305,9 @@ export type AttentionKind =
   /** A design took an accepted design memory entry out of effect: a notice, revertible in Settings. */
   | 'design_memory_superseded'
   /** A blocked issue waits on one closed without merging: drop the dependency, or reopen it. */
-  | 'dependency_abandoned';
+  | 'dependency_abandoned'
+  /** Answered work waiting for GitHub to answer the refresh of its bot's sign-in before it goes on. */
+  | 'resume_waiting';
 
 /** One thing waiting on a person, as `GET /v1/attention` says it. */
 export interface AttentionItem {

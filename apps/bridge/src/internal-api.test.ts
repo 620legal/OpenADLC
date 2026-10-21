@@ -981,6 +981,26 @@ describe('a task’s GitHub token', () => {
 
     expect(tokenFor.mock.calls.map(([, options]) => options.repository)).toEqual([undefined, undefined]);
   });
+
+  it('is answered 503 when GitHub did not answer its refresh, so hostd can tell later from never', async () => {
+    const { GitHubUnavailableError } = await import('@openadlc/github');
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    tokenFor.mockRejectedValueOnce(new GitHubUnavailableError('account_janedoe-crew', 'GitHub returned a non-JSON response (503): <html>'));
+
+    const response = await post('/internal/tokens/builder', { purpose: 'task' });
+
+    expect(response.status).toBe(503);
+    expect(((await response.json()) as { error: string }).error).toMatch(/^GitHub did not answer the refresh of account_janedoe-crew's sign-in/);
+    logged.mockRestore();
+  });
+
+  it('is answered 409 when GitHub refused the sign-in, as before', async () => {
+    tokenFor.mockRejectedValueOnce(new Error("builder's GitHub authorization is no longer valid (bad_refresh_token). Reconnect it: openadlc auth login --bot janedoe-crew"));
+
+    const response = await post('/internal/tokens/builder', { purpose: 'task' });
+
+    expect(response.status).toBe(409);
+  });
 });
 
 describe('a task’s session reporting its usage', () => {

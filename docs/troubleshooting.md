@@ -176,7 +176,8 @@ issue or pull request records the answer, says on GitHub that the task is not
 resumed, and ends the task as `already landed: <ref> is closed`. A resume for
 any other reason does the same: the bot is not started, the task is cleaned up,
 and no card results. **Try again**, and the retry after a check passes, are
-refused with `already landed`. No review is started on a pull request GitHub
+refused with `already landed`; a failed task the sweep finds refused this way
+is stopped as `already landed` too, so it is not asked about again. No review is started on a pull request GitHub
 says has closed or merged, whatever asked for it: a delivery the bridge works
 through late, a review posted after the merge, the gate sweep or the lead's
 turn. The bridge log says `<ref> is closed; <seat>'s review of it is not
@@ -200,6 +201,9 @@ starts.
 | OpenADLC stopped while `<bot>` was working · The computer `<bot>` was working on restarted | **Try again**: nothing starts the work again on its own |
 | GitHub refused a commit by `<bot>`: it was not signed with a key its account has | Reconnect the bot, so GitHub learns its signing key |
 | GitHub no longer accepts the sign-in of `<bot>` | Reconnect the bot |
+| GitHub did not answer when OpenADLC refreshed the sign-in of `<bot>`, so the work did not start. OpenADLC tries again on its own after `<time>` UTC (retry N of 6), or at its next sweep once that time has passed | Nothing: it starts by itself once GitHub answers. The card's button opens GitHub's status page |
+| … and OpenADLC has stopped trying on its own | **Try again** once GitHub answers |
+| `<bot>` waits for GitHub to go on with … (an answered question) | Nothing: it resumes by itself once GitHub answers, until the time the card says |
 | Engine claude is not available on this host | Build the bot image, `infra/local/build-bot-image.sh`; under the `local` driver, install the CLI |
 | This account cannot call `<model>` — it offers … | Give the bot a model its account lists, on the walkthrough's **Crew** step or in **Settings → Crew** |
 
@@ -285,6 +289,61 @@ and repository (`PREREQUISITE_CHECKS`, `apps/bridge/src/health/checks/crew.ts`).
   bot has room. The sweep runs a task only when its check passes now
   and was fixed after the task ended; a refused connection is the host service's
   only when it was the bridge's call to it (`hostd refused: fetch failed`).
+
+**A GitHub outage costs time, not work.** Every task's GitHub token comes from
+the bridge, which refreshes the bot's sign-in with GitHub when the token it
+holds would not outlast the task (`TokenBroker`, `packages/github/src/token-broker.ts`).
+How a refresh that did not work is read (`refreshFailure`):
+
+| GitHub's answer | Read as | What happens |
+|---|---|---|
+| A 5xx (a 503 page included), a 429, or `server_error` / `temporarily_unavailable` | GitHub busy | Asked again three more times over about seven seconds, then **not answering** |
+| A timeout, an abort, or no connection | No answer | **Not answering** at once: GitHub may have taken that refresh and rotated the token, so the same one is not sent again within the request |
+| An OAuth refusal such as `bad_refresh_token`, or a 401 | Refused | The sign-in is marked revoked, and the card says to reconnect. The stored token is read again first: when another refresh stored a newer one meanwhile, that one is sent instead |
+| Anything else: a 403, a 404, a 200 with no token | Neither | Fails as it is, with the reason on the card; nothing is marked revoked and nothing is retried on its own |
+
+When GitHub is **not answering**:
+
+- **The sign-in is not asked again for a minute**: every ask meanwhile fails at
+  once, so a sweep does not wait on GitHub once per task. A call the bridge
+  makes for itself is handed the token from the last refresh that worked,
+  while it has a minute left; a task is not, since a token that expires part
+  way fails the task at the end, where its work is. Nothing is marked revoked.
+- **A task that could not start fails with words that say so**:
+  `<bot> has no GitHub token yet: GitHub did not answer the refresh of
+  <sign-in>'s sign-in (…)`. The bridge's token service answers hostd `503`
+  for it, where a refused sign-in is `409`.
+- **The merge job's sweep starts it again by itself** (`retryAfterRecovery`
+  and `githubRetry`, `apps/bridge/src/scheduler.ts` and `attention.ts`) at
+  least 2, 5, 10, 20, 30 and then 60 minutes after each try ended, the sweep
+  being every ten minutes. Each retry is audited as `task.auto_retried` by
+  `health-recovery` with the cause `github-unanswered`, and the task it starts
+  can be run again the same way, as the next retry. The card names the time
+  of the next retry and which one it is, or says the next sweep once that
+  time has passed; after the sixth it says OpenADLC has
+  stopped trying, and the work waits for **Try again**. The retries count the
+  starts of the work that failed this way in a row, so a restart of the
+  bridge changes nothing, and a start that got going, or failed for any
+  other reason, ends the run. Only a start that never ran counts: a task
+  that ran and then failed is not started again this way. Once a seat's
+  retry is not answered again, the rest of its work waits for the next sweep.
+  A claim the sweep took on a retry that never started — the bridge stopped
+  in between — is taken back after fifteen minutes. Neither a claim nor its
+  taking back holds once a later task of the work exists, asked in the same
+  statement, so the work is never started twice. A health run that sees
+  a check pass does not run these; the sweep alone does, and holds them back
+  for what it holds any run again for: a person's pause, `openadlc:ignore`, a
+  full seat, a card moved on. A console request's triage is tried again by
+  its queue instead, as any start hostd refused is.
+- **An answered question whose resume failed this way stays paused**, with the
+  answer recorded and nothing taken down: hostd asks for the token before it
+  ends the paused session. A card, *`<bot>` waits for GitHub to go on with …*,
+  says so with **Stop** and GitHub's status, and the bot's thread says so once.
+  The bridge's sweep of answered tasks (when it starts, and on the merge job)
+  tries the resume again each time, for two hours from the answer; then the
+  task fails as any refused resume does, with **Try again** on its card. A
+  resume no answered question explains (a plan change approved) fails at
+  once, since that sweep would not come back for it.
 
 When a check cannot get an answer — a rate limit, an outage, a question
 GitHub will not answer as the account asking — it neither raises a card nor

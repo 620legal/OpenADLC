@@ -3,6 +3,7 @@ import { registerInternalAttachmentRoutes } from './attachment-routes.js';
 import type { IncomingMessage } from 'node:http';
 import { audit, bots, costs, issues, leases, localCiRuns, recordEvent, repos, spendingLimits, stageMoves, tasks, threads } from '@openadlc/db';
 import {
+  GitHubUnavailableError,
   TASK_TOKEN_HEADER,
   TASK_TOKEN_MIN_LIFETIME_MS,
   taskTokenMatches,
@@ -311,7 +312,9 @@ export function registerInternalApi(
       .catch((error: unknown) => {
         // A revoked or expired authorization is the bot's problem to fix, not a
         // fault in the bridge, so it must not read as one in the caller's log.
-        throw new HttpFailure(409, error instanceof Error ? error.message : String(error));
+        // GitHub not answering the refresh is neither: 503, so hostd's refusal
+        // says the start can be tried again (`githubDidNotAnswer`).
+        throw new HttpFailure(error instanceof GitHubUnavailableError ? 503 : 409, error instanceof Error ? error.message : String(error));
       });
     if (!minted) throw new HttpFailure(404, `${name} has no connected GitHub account`);
     return minted;

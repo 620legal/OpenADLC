@@ -163,6 +163,12 @@ vi.mock('@openadlc/db', async () => ({
       const task = store.tasks.find((one) => one.id === id);
       if (task) task.autoRetriedAt = null;
     }),
+    retakeAutoRetry: vi.fn(async (id: string, claimedBefore: Date) => {
+      const task = store.tasks.find((one) => one.id === id);
+      if (!task?.autoRetriedAt || Date.parse(task.autoRetriedAt) >= claimedBefore.getTime()) return false;
+      task.autoRetriedAt = new Date().toISOString();
+      return true;
+    }),
     updateTaskState: vi.fn(async (id: string, state: string, patch: { exitReason?: string | null } = {}) => {
       const task = store.tasks.find((one) => one.id === id);
       if (task) Object.assign(task, { state, exitReason: patch.exitReason ?? task.exitReason });
@@ -2451,6 +2457,185 @@ describe('the sweep that comes back for a failed task the recovery could not run
 
     expect(order).toEqual(['retry', 'gates']);
     expect(result.actions).toContain('openadlc-testbed#2: openadlc-cipher-janedoe’s review run again, now that bot-sign-in:bot-cipher passes');
+  });
+});
+
+describe('a start GitHub did not answer for, run again on a backoff', () => {
+  /**
+   * On 2026-10-21 GitHub answered the bridge's refresh of a crew account with
+   * a 503 page for about eighteen minutes: intake and builder tasks started
+   * then failed for good, and sat until a person pressed Try again.
+   */
+  const NOW = new Date('2026-10-21T04:30:00.000Z');
+  const later = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000);
+  const UNANSWERED =
+    "hostd refused: fleet-atlas-orzelig has no GitHub token yet: GitHub did not answer the refresh of account_fleet-atlas-orzelig's sign-in (GitHub returned a non-JSON response (503): <html>); it is asked again next time";
+
+  function failedStart(id: string, endedAt: Date, overrides: Record<string, unknown> = {}) {
+    return {
+      id,
+      botId: 'bot-intake',
+      repoId: 'repo-1',
+      kind: 'intake',
+      subjectType: 'issue',
+      subjectRef: 'openadlc-testbed#45',
+      state: 'failed',
+      startedAt: null,
+      endedAt: endedAt.toISOString(),
+      createdAt: new Date(endedAt.getTime() - 1000).toISOString(),
+      exitReason: UNANSWERED,
+      autoRetriedAt: null,
+      ...overrides,
+    };
+  }
+
+  /** Each retry records a new start of the same work, failed the same way until GitHub answers. */
+  function recovering(now: () => Date) {
+    store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
+    let n = 0;
+    let answers = false;
+    const retry = vi.fn(async (id: string, _actor: string) => {
+      const original = store.tasks.find((task) => task.id === id);
+      const started = `retry-${++n}`;
+      const at = now().toISOString();
+      store.tasks.push({
+        ...original,
+        id: started,
+        autoRetriedAt: null,
+        createdAt: at,
+        ...(answers ? { state: 'running', endedAt: null, exitReason: null } : { state: 'failed', endedAt: at, exitReason: UNANSWERED }),
+      });
+      return { task: { taskId: started, ...(answers ? {} : { error: UNANSWERED }) }, bot: 'fleet-atlas-orzelig' };
+    });
+    return {
+      retry,
+      sweep: () => retryAfterRecovery(null, { retry, now }),
+      githubAnswers: () => {
+        answers = true;
+      },
+    };
+  }
+
+  it('waits out each backoff, runs it again while GitHub does not answer, and it starts once GitHub does', async () => {
+    let now = NOW;
+    store.tasks = [failedStart('t-intake', later(-1))];
+    const { retry, sweep, githubAnswers } = recovering(() => now);
+
+    // A minute after it failed, and its first wait is two.
+    expect(await sweep()).toEqual([]);
+    expect(store.tasks[0]?.autoRetriedAt).toBeNull();
+
+    now = later(2);
+    expect(await sweep()).toEqual([
+      'openadlc-testbed#45: fleet-atlas-orzelig’s intake run again (retry 1 of 6), as GitHub did not answer when it started',
+    ]);
+    // The start it recorded is left unclaimed: the next retry is its.
+    expect(store.tasks.find((task) => task.id === 'retry-1')?.autoRetriedAt).toBeNull();
+
+    // The second wait is five minutes from that start.
+    now = later(6);
+    await sweep();
+    expect(retry).toHaveBeenCalledTimes(1);
+
+    now = later(8);
+    githubAnswers();
+    await sweep();
+    expect(retry.mock.calls.map(([id]) => id)).toEqual(['t-intake', 'retry-1']);
+    expect(store.tasks.at(-1)).toMatchObject({ id: 'retry-2', state: 'running' });
+    expect(store.audits).toContainEqual(
+      expect.objectContaining({ action: 'task.auto_retried', payload: expect.objectContaining({ retried: 'retry-1', cause: 'github-unanswered' }) }),
+    );
+  });
+
+  it('takes back a claim a bridge exited holding, once it is older than a retry takes, and leaves a newer one', async () => {
+    store.tasks = [
+      failedStart('t-stale', later(-25), { autoRetriedAt: later(-20).toISOString() }),
+      // Another seat's, so only its claim holds it back.
+      failedStart('t-fresh', later(-25), { botId: 'bot-builder', subjectRef: 'openadlc-testbed#46', autoRetriedAt: later(-5).toISOString() }),
+    ];
+    const { retry, sweep } = recovering(() => NOW);
+
+    await sweep();
+
+    expect(retry.mock.calls.map(([id]) => id)).toEqual(['t-stale']);
+  });
+
+  it('runs no more of a seat’s starts this pass once GitHub did not answer one of them again', async () => {
+    const { tasks } = await import('@openadlc/db');
+    store.tasks = [failedStart('t-45', later(-30)), failedStart('t-46', later(-30), { subjectRef: 'openadlc-testbed#46' })];
+    const { retry, sweep } = recovering(() => NOW);
+    // A seat with room for both, so room is not what holds the second back.
+    const room = vi.mocked(tasks.seatHasRoom).getMockImplementation();
+    vi.mocked(tasks.seatHasRoom).mockImplementation(async () => true);
+
+    try {
+      await sweep();
+    } finally {
+      vi.mocked(tasks.seatHasRoom).mockImplementation(room!);
+    }
+    expect(retry.mock.calls.map(([id]) => id)).toEqual(['t-45']);
+    expect(store.tasks.find((task) => task.id === 't-46')?.autoRetriedAt).toBeNull();
+  });
+
+  it('stops, as landed, a start whose pull request closed since, rather than asking GitHub again on every sweep', async () => {
+    store.tasks = [failedStart('t-review', later(-30), { kind: 'review', subjectType: 'pr', subjectRef: 'openadlc-testbed#47' })];
+    const { retry, sweep } = recovering(() => NOW);
+    // `retryTask`'s refusal once GitHub says the pull request is closed.
+    retry.mockRejectedValue(new Error('already landed: openadlc-testbed#47 is closed, so there is nothing to run again'));
+
+    expect(await sweep()).toEqual(['openadlc-testbed#47: not run again: already landed: openadlc-testbed#47 is closed, so the work it was for is finished']);
+    expect(store.tasks[0]).toMatchObject({
+      state: 'stopped',
+      exitReason: 'already landed: openadlc-testbed#47 is closed, so the work it was for is finished',
+    });
+    expect(store.tasks[0]?.autoRetriedAt).not.toBeNull();
+
+    // Every later sweep leaves it.
+    await sweep();
+    await sweep();
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it('is never a task that ran before it failed', async () => {
+    store.tasks = [failedStart('t-resumed', later(-30), { startedAt: later(-90).toISOString() })];
+    const { retry, sweep } = recovering(() => NOW);
+
+    await sweep();
+
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it('leaves it for a person once every retry is spent', async () => {
+    const { GITHUB_RETRY_MINUTES } = await import('./attention.js');
+    store.tasks = [...GITHUB_RETRY_MINUTES, 0].map((_, index) => failedStart(`t-${index}`, later(-300 + index * 30)));
+    const { retry, sweep } = recovering(() => NOW);
+
+    expect(await sweep()).toEqual([]);
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it('is left to the sweep by a health run', async () => {
+    store.tasks = [failedStart('t-intake', later(-30))];
+    const { retry } = recovering(() => NOW);
+
+    await retryAfterRecovery(['bot-sign-in:bot-intake'], { retry, now: () => NOW });
+
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it('never runs again on a backoff a start GitHub refused the sign-in for', async () => {
+    store.tasks = [
+      failedStart('t-intake', later(-30), {
+        exitReason:
+          "hostd refused: fleet-atlas-orzelig has no GitHub token: the bridge would not mint one (409) account_fleet-atlas-orzelig's GitHub authorization is no longer valid (bad_refresh_token). Reconnect it: openadlc auth login --bot fleet-atlas-orzelig",
+      }),
+    ];
+    store.health = [{ id: 'bot-sign-in:bot-intake', state: 'failing', fixedAt: null }];
+    const { retry, sweep } = recovering(() => NOW);
+
+    await sweep();
+
+    expect(retry).not.toHaveBeenCalled();
   });
 });
 
