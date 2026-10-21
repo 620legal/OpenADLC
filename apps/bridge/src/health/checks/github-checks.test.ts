@@ -57,6 +57,9 @@ function webhookStatus(partial: Partial<WebhookStatus> = {}): WebhookStatus {
     tunnel: { running: false } as never,
     github: { url: 'https://openadlc.example.com/webhooks/github', secretSet: true },
     lastDelivery: null,
+    unreached: null,
+    revived: null,
+    watch: { keeps: false, answered: false, failingSince: null, held: null, notBefore: null },
     stale: false,
     resuming: false,
     canAutomate: true,
@@ -144,6 +147,127 @@ describe('GitHub delivering to the bridge', () => {
         }),
       ),
     ).toMatchObject({ ok: false, title: 'OpenADLC refuses what GitHub delivers' });
+  });
+
+  /**
+   * A Mac slept with its quick tunnel up and woke with cloudflared still
+   * running and the address dead: every delivery GitHub made got a 502, and
+   * this said ✓ because GitHub listed them.
+   */
+  describe('when GitHub’s newest delivery never reached the bridge', () => {
+    const dead = { event: 'pull_request', action: 'opened', statusCode: 502, deliveredAt: minutesAgo(3), redelivery: false };
+    /** A tunnel this bridge raised, that answered from here and has not since four minutes ago. */
+    const tunnelled = (partial: Partial<WebhookStatus> = {}) =>
+      webhookStatus({
+        hearing: 'heard',
+        lastDelivery: dead,
+        unreached: dead,
+        publicUrl: 'https://calm-badger-42.trycloudflare.com',
+        webhookUrl: 'https://calm-badger-42.trycloudflare.com/webhooks/github',
+        tunnel: { running: true, url: 'https://calm-badger-42.trycloudflare.com', since: minutesAgo(90), detail: '' },
+        watch: { keeps: true, answered: true, failingSince: minutesAgo(4), held: null, notBefore: null },
+        ...partial,
+      });
+    const detailOf = (answer: Awaited<ReturnType<typeof webhookAnswer>>): string => (answer && 'detail' in answer ? answer.detail : '');
+
+    it('fails through a tunnel, saying OpenADLC raises a new one soon when nothing holds it back', async () => {
+      const answer = await webhookAnswer(tunnelled(), minutesAgo(45));
+
+      expect(answer).toMatchObject({ ok: false, severity: 'blocking', title: 'GitHub cannot reach this bridge through its tunnel', action: { href: '/onboarding?step=webhook' } });
+      const detail = detailOf(answer);
+      expect(detail).toContain('got 502');
+      expect(detail).toContain('https://calm-badger-42.trycloudflare.com no longer reaches OpenADLC');
+      expect(detail).toContain('It has not answered from here since 2026-09-25 11:56 UTC; OpenADLC raises a new tunnel within a minute or two');
+    });
+
+    it('says when OpenADLC raised this tunnel itself, and when it raises the next', async () => {
+      const answer = await webhookAnswer(
+        tunnelled({
+          revived: { at: '2026-09-25T11:20:00.000Z', from: 'https://old-dead-name.trycloudflare.com', to: 'https://calm-badger-42.trycloudflare.com', error: null },
+          watch: { keeps: true, answered: true, failingSince: minutesAgo(4), held: null, notBefore: '2026-09-25T12:20:00.000Z' },
+        }),
+      );
+
+      const detail = detailOf(answer);
+      expect(detail).toContain('OpenADLC raised this tunnel at 2026-09-25 11:20 UTC to replace one that had stopped, and waits longer each time');
+      expect(detail).toContain('It raises the next at 2026-09-25 12:20 UTC; or raise one now on the webhook step');
+    });
+
+    it('does not promise a new tunnel for an address that never answered from here', async () => {
+      const detail = detailOf(await webhookAnswer(tunnelled({ watch: { keeps: true, answered: false, failingSince: null, held: null, notBefore: null } })));
+
+      expect(detail).toContain('never answered from this machine, so OpenADLC cannot tell whether it works and does not replace it on its own');
+      expect(detail).not.toContain('raises a new tunnel');
+    });
+
+    it('does not promise a new tunnel while the address answers from here, and says how long noticing takes', async () => {
+      const detail = detailOf(await webhookAnswer(tunnelled({ watch: { keeps: true, answered: true, failingSince: null, held: null, notBefore: null } })));
+
+      expect(detail).toContain('It answers from this machine now, so OpenADLC leaves it');
+      expect(detail).toContain('notices one that stopped within about six');
+      expect(detail).not.toContain('raises a new tunnel');
+    });
+
+    it('says GitHub could not be asked, and when the watch asks again', async () => {
+      const detail = detailOf(
+        await webhookAnswer(tunnelled({ watch: { keeps: true, answered: true, failingSince: minutesAgo(4), held: 'github-unreachable', notBefore: '2026-09-25T12:08:00.000Z' } })),
+      );
+
+      expect(detail).toContain('OpenADLC could not ask GitHub to point the app at a new one. It tries again at 2026-09-25 12:08 UTC');
+    });
+
+    it('says a repoint failed, and when it is tried again', async () => {
+      const detail = detailOf(
+        await webhookAnswer(
+          tunnelled({
+            tunnel: { running: true, url: 'https://brisk-otter-7.trycloudflare.com', since: minutesAgo(10), detail: '' },
+            revived: { at: '2026-09-25T11:50:00.000Z', from: 'https://calm-badger-42.trycloudflare.com', to: null, error: 'GitHub did not answer PATCH /app/hook/config within 15s' },
+            watch: { keeps: true, answered: false, failingSince: null, held: null, notBefore: '2026-09-25T12:50:00.000Z' },
+          }),
+        ),
+      );
+
+      expect(detail).toContain('OpenADLC raised a new tunnel at 2026-09-25 11:50 UTC but could not point the app at it: GitHub did not answer PATCH /app/hook/config within 15s');
+      expect(detail).toContain('It tries again at 2026-09-25 12:50 UTC, waiting longer each time');
+    });
+
+    it('leaves a tunnel this bridge did not raise to the person who did', async () => {
+      const detail = detailOf(await webhookAnswer(tunnelled({ watch: { keeps: false, answered: false, failingSince: null, held: null, notBefore: null } })));
+      expect(detail).toContain('OpenADLC did not raise this tunnel, so it does not replace it');
+    });
+
+    it('fails at a fixed address, naming whatever serves it', async () => {
+      const answer = await webhookAnswer(webhookStatus({ hearing: 'heard', lastDelivery: { ...dead, statusCode: 0 }, unreached: { ...dead, statusCode: 0 } }));
+
+      expect(answer).toMatchObject({ ok: false, title: 'GitHub cannot reach this bridge' });
+      expect(detailOf(answer)).toContain('got no answer: https://openadlc.example.com/webhooks/github does not reach OpenADLC');
+    });
+
+    it('passes when the bridge took a delivery after it, which came another way', async () => {
+      expect(await webhookAnswer(tunnelled(), minutesAgo(1))).toEqual({ ok: true, fixed: 'GitHub is delivering again' });
+    });
+
+    it('says why the tunnel stopped when OpenADLC could not raise another, and when it tries again', async () => {
+      const answer = await webhookAnswer(
+        tunnelled({
+          stale: true,
+          tunnel: { running: false, url: '', since: null, detail: '' },
+          revived: { at: '2026-09-25T11:50:00.000Z', from: 'https://calm-badger-42.trycloudflare.com', to: null, error: 'cloudflared did not report an address within 30s. It printed nothing.' },
+          watch: { keeps: true, answered: false, failingSince: null, held: null, notBefore: '2026-09-25T12:20:00.000Z' },
+        }),
+      );
+
+      expect(answer).toMatchObject({ ok: false, title: 'GitHub is delivering to a tunnel that has stopped' });
+      const detail = detailOf(answer);
+      expect(detail).toContain('raising a new one at 2026-09-25 11:50 UTC failed: cloudflared did not report an address within 30s. It printed nothing.');
+      expect(detail).toContain('OpenADLC tries again at 2026-09-25 12:20 UTC');
+    });
+
+    it('says OpenADLC raises a new one when the cloudflared it ran stopped', async () => {
+      const detail = detailOf(await webhookAnswer(tunnelled({ stale: true, tunnel: { running: false, url: '', since: null, detail: '' } })));
+      expect(detail).toContain('cloudflared, which served https://calm-badger-42.trycloudflare.com, has stopped');
+      expect(detail).toContain('OpenADLC raises a new tunnel within a minute or two');
+    });
   });
 
   it('is the walkthrough’s to say while nothing is set up', async () => {

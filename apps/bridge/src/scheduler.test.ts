@@ -1161,6 +1161,29 @@ describe('reconciling', () => {
       expect(asked[1]).toBe(asked[0]);
     });
 
+    it('runs a pass asked for after the hook was repointed after the one already going, rather than joining it', async () => {
+      // A reconcile's pass that began before a new tunnel had GitHub send
+      // what failed to the dead address; joined, what failed waited for the
+      // next reconcile.
+      const scheduler = reconciling();
+      const passes: number[] = [];
+      let release: () => void = () => undefined;
+      scheduler.useRedelivery(async (since) => {
+        passes.push(since);
+        if (passes.length === 1) await new Promise<void>((resolve) => (release = resolve));
+        return [passes.length];
+      });
+
+      const going = scheduler.redeliverFailed();
+      const joined = scheduler.redeliverFailed();
+      const afterRepoint = scheduler.redeliverFailed(Date.now(), { afterRepoint: true });
+      await vi.waitFor(() => expect(passes).toHaveLength(1));
+      release();
+
+      await Promise.all([going, joined, afterRepoint]);
+      expect(passes).toHaveLength(2);
+    });
+
     it('says nothing without app credentials, or with nothing to redeliver', async () => {
       const scheduler = reconciling();
       scheduler.useRedelivery(async () => null);

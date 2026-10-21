@@ -691,13 +691,52 @@ key (`resume()` in `apps/bridge/src/webhook-setup.ts`). The bridge's log says
 reaches a gateway that forwards only `POST /webhooks/github`, never the bridge
 itself (`apps/bridge/src/webhook-gateway.ts`).
 
+A quick tunnel's address can also die while the bridge and cloudflared go on
+running. A Mac that slept woke with cloudflared still up and `GET /v1/webhook`
+saying it served its address, while every delivery GitHub made got a 502 and
+was lost. So the bridge watches the tunnel it raised — only that one: a quick
+tunnel of your own, given on the step as a fixed address, is left alone —
+and tries its address from this machine: a `GET` of `/webhooks/github`, which
+the gateway answers with a 404 and never passes on. Every five minutes, and at
+once on waking, so one that stopped is noticed within about six minutes;
+every minute only to confirm a first failure, and through a new tunnel's
+first ten minutes.
+
+When an address that answered before has failed two tries a minute apart,
+GitHub answers, the app's hook still points at that address, and GitHub's
+newest delivery to it (if there is one) failed too, the bridge raises a new
+tunnel, points the app at it with the secret it already has, and has GitHub
+send again the deliveries that failed (`watchTunnel` in
+`apps/bridge/src/webhook-setup.ts`). It does the same when no tunnel runs
+behind the address: cloudflared ended, or a raise or a repoint failed. The log
+says `… stopped reaching this bridge; raised a new tunnel at
+https://….trycloudflare.com`, and the audit log records `install.tunnel_revived`.
+
+It does not do it in a loop. After each new tunnel it waits twice as long
+before raising another — half an hour, an hour, two, up to eight — and back to
+half an hour once GitHub delivers to the new address. When it would not go
+ahead — GitHub did not answer, the hook points elsewhere, GitHub still
+delivers there — it looks again after a minute, then two, four, up to half an
+hour. It never raises one for an install taken off the internet from the
+webhook step, or for a fixed address, and never replaces an address that has
+not once answered from this machine, since it then cannot tell. A take-down,
+a Configure or the bridge stopping while it raises one wins: that tunnel is
+stopped and the app is not pointed at it. While the address fails,
+`GET /v1/webhook` says `cloudflared is running, but … has not reached this
+bridge since …`; its `unreached` is GitHub's newest delivery when that never
+arrived, and its `watch` says what the watch knows and will do next. The
+bridge's webhook route answers no more than 500 for a failure of its own, so a
+502 or more means the delivery never reached it.
+
 The `webhook` check reads GitHub's own list of what it delivered, beside what
 happened on GitHub that nothing was delivered for. Its step is
 `/onboarding?step=webhook`.
 
 | Its card says | What to do |
 |---|---|
-| GitHub is delivering to a tunnel that has stopped | Raise a new one on the webhook step; OpenADLC points the app at it |
+| GitHub is delivering to a tunnel that has stopped | Raise a new one on the webhook step; OpenADLC points the app at it. For a tunnel OpenADLC raised, the card says when it raises the next itself, and why the last try failed |
+| GitHub cannot reach this bridge through its tunnel | GitHub's newest delivery got a 502 or no answer: the address is dead though cloudflared runs, as after a sleep. The card says what OpenADLC will do — raise a new one and when, or not, because the address never answered from this machine or still does — and to raise one on the webhook step if it stays |
+| GitHub cannot reach this bridge | The fixed address GitHub delivers to does not reach the bridge. Put right whatever serves it, or give the bridge another address on the step |
 | GitHub has nowhere to deliver to | Give the bridge an address on the webhook step |
 | GitHub delivers somewhere other than this bridge · The app’s webhook is not set up for this bridge | Set it up again on the step, which writes the address and the secret to both sides |
 | OpenADLC refuses what GitHub delivers | GitHub signs with a secret OpenADLC does not hold (401); set it up again on the step |

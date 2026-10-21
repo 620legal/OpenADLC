@@ -252,7 +252,16 @@ export function registerInternalApi(
     });
     if (!valid) throw new HttpFailure(401, 'webhook signature did not verify');
 
-    await deps.webhooks.receive(event, JSON.parse(payload.toString('utf8') || '{}'), delivery);
+    try {
+      await deps.webhooks.receive(event, JSON.parse(payload.toString('utf8') || '{}'), delivery);
+    } catch (error) {
+      // No more than 500 for a failure of the bridge's own. A 503 GitHub gave
+      // it while it handled the delivery was its answer, through the gateway
+      // and the tunnel, and the webhook check read that as the tunnel failing
+      // (`unreached`). GitHub redelivers a 500 as it does a 503.
+      if (error instanceof HttpFailure && error.status < 500) throw error;
+      throw new HttpFailure(500, error instanceof Error ? error.message : String(error));
+    }
     // A delivery is the webhook's check passing; a card saying GitHub is
     // silent goes now rather than at the next run.
     deps.health?.heard();

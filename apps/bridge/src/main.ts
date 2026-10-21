@@ -44,7 +44,7 @@ import { Scheduler, retryAfterRecovery } from './scheduler.js';
 import { StageHandoff } from './stage-handoff.js';
 import { TaskService } from './task-service.js';
 import { Webhooks } from './webhooks.js';
-import { WebhookSetup } from './webhook-setup.js';
+import { TUNNEL_WATCH_MS, WebhookSetup, afterRevival } from './webhook-setup.js';
 import { RepoSetup } from './repo-setup.js';
 import { Attribution } from './attribution.js';
 import { sayDesignMemoryWith } from './design-memory.js';
@@ -508,6 +508,29 @@ async function main(): Promise<void> {
       if (sameLogin(repo.fullName.split('/')[0], account)) void crewAccess.ensure(repo.fullName, 'reconcile').catch(() => undefined);
     }
   });
+  // A quick tunnel can stop reaching the bridge with cloudflared still
+  // running: a Mac slept, woke, and GitHub's deliveries got 502s until a
+  // person raised a new tunnel by hand. Watched every minute; what the watch
+  // raises is said, audited and redelivered to (`afterRevival`).
+  const tunnelWatch = setInterval(() => {
+    void webhookSetup
+      .watchTunnel()
+      .then((revival) =>
+        revival
+          ? afterRevival(revival, {
+              audit: (entry) => auditEntry(entry),
+              recheck: () => health.runSoon(['webhook']),
+              redeliver: () => scheduler.redeliverFailed(Date.now(), { afterRepoint: true }),
+              say: (line) => console.log(`[bridge] ${line}`),
+              warn: (line) => console.warn(`[bridge] ${line}`),
+            })
+          : undefined,
+      )
+      .catch((error: unknown) => {
+        console.warn(`[bridge] could not watch the webhook tunnel: ${error instanceof Error ? error.message : error}`);
+      });
+  }, TUNNEL_WATCH_MS);
+  tunnelWatch.unref();
   onboarding.useWebhookSetup(webhookSetup);
   onboarding.useNames(names);
   onboarding.useHealth(health);
@@ -792,6 +815,7 @@ async function main(): Promise<void> {
     server.close();
     // Before the pool, because a tunnel left running keeps a public hostname
     // pointing at a port that no longer answers.
+    clearInterval(tunnelWatch);
     await webhookSetup.shutdown();
     // A start cut off between its row and hostd left the row queued for good.
     await taskService.drain(10_000);

@@ -25,6 +25,56 @@ function sentence(text: string): string {
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 
+/** A moment as a card says it: `2026-10-20 09:41 UTC`. */
+function utc(iso: string): string {
+  return `${iso.slice(0, 16).replace('T', ' ')} UTC`;
+}
+
+/** An error as a card quotes it, mid-sentence. */
+function quoted(error: string | null): string {
+  return (error ?? '').trim().replace(/[.\s]+$/, '');
+}
+
+/** How soon the watch acts, as a card says it. */
+function when(status: WebhookStatus): string {
+  return status.watch.notBefore ? `at ${utc(status.watch.notBefore)}` : 'within a minute or two';
+}
+
+/** How long the watch can take to notice an address that stopped, said wherever a card leans on it. */
+const NOTICES = 'It tries the address every five minutes, so it notices one that stopped within about six, and at once when the machine wakes.';
+
+/**
+ * What the watch will do about a tunnel whose address GitHub cannot reach, as
+ * it knows it (`WebhookStatus.watch`). It said "OpenADLC raises a new tunnel"
+ * where it would not: for an address that never answered from here, one that
+ * answers from here while GitHub gets 502s, and after a repoint that failed.
+ */
+function tunnelNext(status: WebhookStatus): string {
+  const { watch, revived } = status;
+  if (!watch.keeps) return 'OpenADLC did not raise this tunnel, so it does not replace it. Raise a new one on the webhook step.';
+  if (revived?.from === status.publicUrl && revived.error) {
+    return `OpenADLC raised a new tunnel at ${utc(revived.at)} but could not point the app at it: ${quoted(revived.error)}. It tries again ${when(status)}, waiting longer each time; or raise one now on the webhook step.`;
+  }
+  if (!watch.answered) {
+    return 'That address has never answered from this machine, so OpenADLC cannot tell whether it works and does not replace it on its own. Raise a new one on the webhook step.';
+  }
+  if (!watch.failingSince) {
+    return `It answers from this machine now, so OpenADLC leaves it: it may have come back since, and the next reconcile has GitHub send again what failed. ${NOTICES} If this stays, raise a new one on the webhook step.`;
+  }
+  const since = `It has not answered from here since ${utc(watch.failingSince)}`;
+  if (watch.held === 'github-unreachable') {
+    return `${since}, and OpenADLC could not ask GitHub to point the app at a new one. It tries again ${when(status)}; or raise one now on the webhook step.`;
+  }
+  if (watch.held === 'not-possible') {
+    return `${since}, and OpenADLC cannot raise another itself: it needs cloudflared, the app’s private key and the webhook secret. Raise a new one on the webhook step.`;
+  }
+  if (watch.notBefore) {
+    const raisedThis = revived?.to === status.publicUrl ? `OpenADLC raised this tunnel at ${utc(revived.at)} to replace one that had stopped, and waits longer each time before raising another. ` : '';
+    return `${since}. ${raisedThis}It raises the next ${when(status)}; or raise one now on the webhook step.`;
+  }
+  return `${since}; OpenADLC raises a new tunnel ${when(status)}, points the app at it, and has GitHub send again what failed.`;
+}
+
 function failing(title: string, detail: string, action: HealthAction = STEP, facts: Record<string, unknown> = {}): CheckResult {
   return { ok: false, severity: 'blocking', title, detail, action, facts };
 }
@@ -50,7 +100,7 @@ export function webhookCheck(reader: WebhookReader): HealthCheck {
   return {
     id: 'webhook',
     proves: 'GitHub delivers the repository’s events to this bridge',
-    how: 'reads GitHub’s own list of what it delivered to the app’s webhook, beside what happened on GitHub that nothing was delivered for',
+    how: 'reads GitHub’s own list of what it delivered to the app’s webhook and whether the newest reached this bridge, beside what happened on GitHub that nothing was delivered for',
     everyMinutes: 5,
     steps: ['webhook'],
     async run(now) {
@@ -65,11 +115,20 @@ export function webhookCheck(reader: WebhookReader): HealthCheck {
       if (status.resuming) return [{ ok: null, reason: 'the bridge is bringing its tunnel back' }];
 
       if (status.stale) {
+        // What the watch tried, or will, says more than "it ended with the
+        // bridge", which a tunnel whose cloudflared stopped mid-run did not.
+        const tried = status.revived?.from === status.publicUrl && status.revived.error ? status.revived : null;
+        const willRaise = status.watch.keeps && status.watch.held !== 'not-possible';
         return [
           failing(
             'GitHub is delivering to a tunnel that has stopped',
-            'The address GitHub has was a tunnel that ended with the bridge that raised it, so nothing reaches OpenADLC. ' +
-              'Raise a new one on the webhook step, and OpenADLC points the app at it.',
+            tried
+              ? `The tunnel at ${status.publicUrl} stopped reaching OpenADLC, and raising a new one at ${utc(tried.at)} failed: ${quoted(tried.error)}. ` +
+                  `OpenADLC tries again ${when(status)}, waiting longer each time; or raise one now on the webhook step, and OpenADLC points the app at it.`
+              : willRaise
+                ? `cloudflared, which served ${status.publicUrl}, has stopped, so nothing reaches OpenADLC. OpenADLC raises a new tunnel ${when(status)} and points the app at it; or raise one now on the webhook step.`
+                : 'The address GitHub has was a tunnel that ended with the bridge that raised it, so nothing reaches OpenADLC. ' +
+                  'Raise a new one on the webhook step, and OpenADLC points the app at it.',
           ),
         ];
       }
@@ -113,6 +172,31 @@ export function webhookCheck(reader: WebhookReader): HealthCheck {
             'OpenADLC refuses what GitHub delivers',
             'GitHub’s last delivery was refused (401): it signs with a secret OpenADLC does not hold. ' +
               'Set the webhook up again from its step, which writes one secret to both sides.',
+          ),
+        ];
+      }
+
+      // GitHub delivers, and its newest delivery to this address never
+      // arrived: the address is dead. A Mac woke from sleep with cloudflared
+      // still running and its quick tunnel's address gone; every delivery got
+      // a 502, and this said ✓ because GitHub listed them. One the bridge took
+      // since came another way, an organization's webhook, and says it hears.
+      const failed = status.unreached;
+      if (failed && !(lastHeard && Date.parse(lastHeard) > Date.parse(failed.deliveredAt))) {
+        const answer = `GitHub’s last delivery, at ${utc(failed.deliveredAt)}, ${failed.statusCode === 0 ? 'got no answer' : `got ${failed.statusCode}`}`;
+        if (!status.tunnel.running) {
+          return [
+            failing(
+              'GitHub cannot reach this bridge',
+              `${answer}: ${status.webhookUrl} does not reach OpenADLC. Whatever serves that address — a proxy, a load balancer, a tunnel of your own — is not passing deliveries to the bridge. ` +
+                'Put it right, or give the bridge another address on the webhook step.',
+            ),
+          ];
+        }
+        return [
+          failing(
+            'GitHub cannot reach this bridge through its tunnel',
+            `${answer}: ${status.publicUrl} no longer reaches OpenADLC, though cloudflared is still running — as after the machine slept. ${tunnelNext(status)}`,
           ),
         ];
       }

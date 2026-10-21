@@ -711,3 +711,463 @@ describe('an app created before there was an address', () => {
     expect(configured.hearing).toBe('never');
   });
 });
+
+/** cloudflared announcing a new address each time it starts, as a quick tunnel does; null for a start that gives none. */
+function quickTunnels(names: (string | null)[]) {
+  let started = 0;
+  let holding = false;
+  const held: (() => void)[] = [];
+  const spawner: Spawner = () => {
+    const name = names[Math.min(started, names.length - 1)] ?? null;
+    started += 1;
+    const events = new EventEmitter();
+    const stderr = new Readable({ read() {} });
+    const announce = (): void => {
+      if (name === null) events.emit('close', 1);
+      else stderr.push(`INF |  https://${name}.trycloudflare.com  |\n`);
+    };
+    if (holding) held.push(announce);
+    else setTimeout(announce, 0);
+    return {
+      stderr,
+      stdout: null,
+      once: (event, listener) => events.once(event, listener as (...a: unknown[]) => void),
+      kill: () => true,
+      pid: 1234,
+    };
+  };
+  return {
+    spawner,
+    started: () => started,
+    /** Starts from now on say nothing until `release`. */
+    hold: () => {
+      holding = true;
+    },
+    release: () => held.splice(0).forEach((announce) => announce()),
+  };
+}
+
+const minutes = (count: number): number => count * 60_000;
+const OLD = 'https://calm-badger-42.trycloudflare.com';
+const NEW = 'https://brisk-otter-7.trycloudflare.com';
+const THIRD = 'https://third-heron-9.trycloudflare.com';
+
+/**
+ * A Mac slept for forty minutes with its quick tunnel up, and woke with
+ * cloudflared still running: the keeper said it was serving, `GET /v1/webhook`
+ * said so, and the address was dead. Every delivery GitHub made got a 502 and
+ * was lost until a person pressed Configure.
+ */
+describe('a tunnel whose address stops reaching the bridge', () => {
+  /** Addresses that do not answer from here: the probe gets nothing back. */
+  let DEAD: Set<string>;
+  let OFFLINE: boolean;
+  /** Set to make GitHub's answer about the hook wait until it is called. */
+  let HOOK_HELD: { release: () => void } | null;
+  let hookHeld: Promise<void> | null;
+  /** How many times the hook's address was asked of GitHub. */
+  let ASKED: number;
+  let CLOCK: number;
+  let base: number;
+
+  /** GitHub, unreachable while the machine is offline. */
+  const github = (): AppApi => {
+    const api = fakeGitHub();
+    return {
+      request: async <T>(method: string, path: string, token: string, body?: unknown): Promise<T> => {
+        if (method === 'GET' && path === '/app/hook/config') {
+          ASKED += 1;
+          if (hookHeld) await hookHeld;
+        }
+        if (OFFLINE) throw new Error('fetch failed');
+        return api.request<T>(method, path, token, body);
+      },
+    };
+  };
+  const probe = vi.fn(async (url: string) => (DEAD.has(url.replace(/\/webhooks\/github$/, '')) ? 0 : 404));
+
+  beforeEach(() => {
+    DEAD = new Set();
+    OFFLINE = false;
+    HOOK_HELD = null;
+    hookHeld = null;
+    ASKED = 0;
+    base = Date.now();
+    CLOCK = base;
+    probe.mockClear();
+  });
+
+  const setupWith = (names: (string | null)[], overrides: Record<string, unknown> = {}) => {
+    const tunnels = quickTunnels(names);
+    return { tunnels, made: subject({ spawner: tunnels.spawner, probe, api: github(), now: () => CLOCK, ...overrides }) };
+  };
+  /** The watch's run at `minute` minutes after the test began. */
+  const at = (minute: number): number => base + minutes(minute);
+  const tick = (setup: { watchTunnel: () => Promise<unknown> }, minute: number) => {
+    CLOCK = at(minute);
+    return setup.watchTunnel();
+  };
+  const holdHook = (): void => {
+    hookHeld = new Promise<void>((resolve) => {
+      HOOK_HELD = { release: resolve };
+    });
+  };
+  const delivered = (statusCode: number, minute: number) => [
+    { event: 'issues', action: 'opened', status_code: statusCode, delivered_at: new Date(at(minute)).toISOString(), redelivery: false },
+  ];
+  const patches = (): { url?: string; secret?: string }[] =>
+    CALLS.filter((call) => call.method === 'PATCH').map((call) => call.body as { url?: string; secret?: string });
+
+  it('is noticed and replaced once, the app repointed with the secret it had, and waits twice as long before each next one', async () => {
+    const { tunnels, made } = setupWith(['calm-badger-42', 'brisk-otter-7', 'third-heron-9', 'fourth-lark-3']);
+    const setup = await made;
+    await setup.configure({ mode: 'tunnel' });
+    const secret = SECRETS[HOOK_SECRET];
+
+    // It answers, which is what makes its stopping mean anything.
+    expect(await tick(setup, 1)).toBeNull();
+
+    // Asleep for forty minutes; on waking it is tried at once, and given a
+    // minute to come back by itself.
+    DEAD.add(OLD);
+    expect(await tick(setup, 45)).toBeNull();
+    expect((await setup.status()).tunnel).toMatchObject({ running: true, detail: expect.stringMatching(/has not reached this bridge since/) });
+
+    expect(await tick(setup, 46)).toMatchObject({ from: OLD, to: NEW, error: null });
+    expect(tunnels.started()).toBe(2);
+    expect(patches().at(-1)).toEqual(expect.objectContaining({ url: `${NEW}/webhooks/github`, secret }));
+    expect(STORED.publicUrl).toBe(NEW);
+    expect(await setup.status()).toMatchObject({ publicUrl: NEW, tunnel: { running: true, url: NEW }, revived: { from: OLD, to: NEW } });
+
+    // The new one answers and stops as well: replaced after half an hour, not before.
+    expect(await tick(setup, 47)).toBeNull();
+    DEAD.add(NEW);
+    for (const minute of [52, 53, 60, 75]) expect(await tick(setup, minute)).toBeNull();
+    expect(await tick(setup, 77)).toMatchObject({ from: NEW, to: THIRD });
+
+    // And the one after that, after an hour: where a flat half hour raised one
+    // every half hour for good.
+    expect(await tick(setup, 78)).toBeNull();
+    DEAD.add(THIRD);
+    for (const minute of [83, 84, 107, 120, 136]) expect(await tick(setup, minute)).toBeNull();
+    expect(tunnels.started()).toBe(3);
+    expect(await tick(setup, 137)).toMatchObject({ from: THIRD, to: 'https://fourth-lark-3.trycloudflare.com' });
+    expect((await setup.status()).watch.notBefore).toBe(new Date(at(137 + 120)).toISOString());
+  });
+
+  it('starts the waits again from the shortest once GitHub delivers to the new address', async () => {
+    const { tunnels, made } = setupWith(['calm-badger-42', 'brisk-otter-7', 'third-heron-9', 'fourth-lark-3']);
+    const setup = await made;
+    await setup.configure({ mode: 'tunnel' });
+    await tick(setup, 1);
+    DEAD.add(OLD);
+    await tick(setup, 45);
+    await tick(setup, 46);
+    await tick(setup, 47);
+    DEAD.add(NEW);
+    await tick(setup, 52);
+    await tick(setup, 53);
+    expect(await tick(setup, 77)).toMatchObject({ to: THIRD });
+
+    // GitHub delivers to the third: it works, and the next wait is half an hour from it again.
+    DELIVERIES = delivered(200, 80);
+    CLOCK = at(80);
+    await setup.status();
+    await tick(setup, 81);
+    DEAD.add(THIRD);
+    DELIVERIES = delivered(502, 86);
+    await tick(setup, 86);
+    await tick(setup, 87);
+
+    expect(await tick(setup, 107)).toMatchObject({ from: THIRD, to: 'https://fourth-lark-3.trycloudflare.com' });
+    expect(tunnels.started()).toBe(4);
+  });
+
+  it('leaves an address GitHub still delivers to, whatever this machine sees, until GitHub’s deliveries fail too', async () => {
+    const { tunnels, made } = setupWith(['calm-badger-42', 'brisk-otter-7']);
+    const setup = await made;
+    await setup.configure({ mode: 'tunnel' });
+    await tick(setup, 1);
+    DEAD.add(OLD);
+    DELIVERIES = delivered(200, 44);
+
+    expect(await tick(setup, 45)).toBeNull();
+    expect(await tick(setup, 46)).toBeNull();
+    expect(tunnels.started()).toBe(1);
+    expect((await setup.status()).watch).toMatchObject({ keeps: true, answered: true, held: 'github-delivers' });
+
+    DELIVERIES = delivered(530, 46);
+    expect(await tick(setup, 47)).toMatchObject({ from: OLD, to: NEW });
+  });
+
+  it('leaves a tunnel whose address answers alone, and asks GitHub nothing', async () => {
+    const { tunnels, made } = setupWith(['calm-badger-42', 'brisk-otter-7']);
+    const setup = await made;
+    await setup.configure({ mode: 'tunnel' });
+    const calls = CALLS.length;
+
+    for (let minute = 1; minute <= 60; minute += 1) expect(await tick(setup, minute)).toBeNull();
+
+    expect(probe).toHaveBeenCalledWith(`${OLD}/webhooks/github`);
+    expect(probe.mock.calls.length).toBeLessThanOrEqual(13);
+    expect(CALLS.length).toBe(calls);
+    expect(tunnels.started()).toBe(1);
+    expect((await setup.status()).tunnel.detail).toBe(`cloudflared is serving ${OLD}`);
+  });
+
+  it('does not replace an address that never answered from here, and tries it less often after its first ten minutes', async () => {
+    const { tunnels, made } = setupWith(['calm-badger-42', 'brisk-otter-7']);
+    const setup = await made;
+    await setup.configure({ mode: 'tunnel' });
+    DEAD.add(OLD);
+
+    for (let minute = 1; minute <= 90; minute += 1) expect(await tick(setup, minute)).toBeNull();
+
+    expect(tunnels.started()).toBe(1);
+    // Every minute for ten, then every five: not ninety tries.
+    expect(probe.mock.calls.length).toBeGreaterThan(20);
+    expect(probe.mock.calls.length).toBeLessThan(30);
+    expect((await setup.status()).watch).toMatchObject({ keeps: true, answered: false });
+  });
+
+  it('waits for GitHub to answer before replacing it, and asks less often each time it does not', async () => {
+    const { tunnels, made } = setupWith(['calm-badger-42', 'brisk-otter-7']);
+    const setup = await made;
+    await setup.configure({ mode: 'tunnel' });
+    await tick(setup, 1);
+    DEAD.add(OLD);
+    OFFLINE = true;
+    ASKED = 0;
+
+    for (let minute = 45; minute <= 60; minute += 1) expect(await tick(setup, minute)).toBeNull();
+    // At 46, 47, 49 and 53: not every minute.
+    expect(ASKED).toBe(4);
+    // The old tunnel was not stopped for a new one that could not have been raised.
+    expect(tunnels.started()).toBe(1);
+    expect((await setup.status()).tunnel.running).toBe(true);
+    expect((await setup.status()).watch.held).toBe('github-unreachable');
+
+    OFFLINE = false;
+    expect(await tick(setup, 61)).toMatchObject({ from: OLD, to: NEW });
+  });
+
+  it('leaves a hook a person pointed elsewhere on GitHub as they set it, asking less often', async () => {
+    const { tunnels, made } = setupWith(['calm-badger-42', 'brisk-otter-7']);
+    const setup = await made;
+    await setup.configure({ mode: 'tunnel' });
+    await tick(setup, 1);
+    DEAD.add(OLD);
+    HOOK = { url: 'https://smee.io/janedoe-debugging', secret: HOOK.secret };
+    ASKED = 0;
+
+    for (let minute = 45; minute <= 60; minute += 1) expect(await tick(setup, minute)).toBeNull();
+
+    expect(tunnels.started()).toBe(1);
+    expect(HOOK.url).toBe('https://smee.io/janedoe-debugging');
+    expect(ASKED).toBe(4);
+  });
+
+  it('tries again later when a new tunnel could not be raised, and says why meanwhile', async () => {
+    const { tunnels, made } = setupWith(['calm-badger-42', null, 'brisk-otter-7']);
+    const setup = await made;
+    await setup.configure({ mode: 'tunnel' });
+    await tick(setup, 1);
+    DEAD.add(OLD);
+    await tick(setup, 45);
+
+    expect(await tick(setup, 46)).toMatchObject({ from: OLD, to: null, error: expect.stringMatching(/stopped before it had an address/) });
+    expect(await setup.status()).toMatchObject({ stale: true, revived: { from: OLD, to: null }, watch: { notBefore: new Date(at(76)).toISOString() } });
+    expect(STORED.publicUrl).toBe(OLD);
+
+    for (const minute of [47, 60, 75]) expect(await tick(setup, minute)).toBeNull();
+    expect(tunnels.started()).toBe(2);
+
+    expect(await tick(setup, 77)).toMatchObject({ from: OLD, to: NEW, error: null });
+    expect(HOOK.url).toBe(`${NEW}/webhooks/github`);
+  });
+
+  it('never raises one again for an install a person took off the internet', async () => {
+    const { tunnels, made } = setupWith(['calm-badger-42', 'brisk-otter-7']);
+    const setup = await made;
+    await setup.configure({ mode: 'tunnel' });
+    await tick(setup, 1);
+
+    await setup.takeDown();
+    DEAD.add(OLD);
+    for (let minute = 2; minute <= 120; minute += 1) expect(await tick(setup, minute)).toBeNull();
+
+    expect(tunnels.started()).toBe(1);
+    expect(patches()).toHaveLength(1);
+    expect(STORED.publicUrl).toBeUndefined();
+  });
+
+  it('raises nothing when the install is taken down while it waits on GitHub', async () => {
+    const { tunnels, made } = setupWith(['calm-badger-42', 'brisk-otter-7']);
+    const setup = await made;
+    await setup.configure({ mode: 'tunnel' });
+    await tick(setup, 1);
+    DEAD.add(OLD);
+    await tick(setup, 45);
+
+    holdHook();
+    ASKED = 0;
+    const watching = tick(setup, 46);
+    await vi.waitFor(() => expect(ASKED).toBe(1));
+    const down = setup.takeDown();
+    HOOK_HELD?.release();
+
+    expect(await watching).toBeNull();
+    await down;
+    expect(tunnels.started()).toBe(1);
+    expect(patches()).toHaveLength(1);
+    expect(STORED.publicUrl).toBeUndefined();
+    expect((await setup.status()).tunnel.running).toBe(false);
+  });
+
+  it('stops the tunnel it raised when the install is taken down while it was being raised', async () => {
+    const { tunnels, made } = setupWith(['calm-badger-42', 'brisk-otter-7']);
+    const setup = await made;
+    await setup.configure({ mode: 'tunnel' });
+    await tick(setup, 1);
+    DEAD.add(OLD);
+    await tick(setup, 45);
+
+    tunnels.hold();
+    const watching = tick(setup, 46);
+    await vi.waitFor(() => expect(tunnels.started()).toBe(2));
+    const down = setup.takeDown();
+    tunnels.release();
+
+    expect(await watching).toBeNull();
+    await down;
+    expect((await setup.status()).tunnel.running).toBe(false);
+    expect(patches()).toHaveLength(1);
+    expect(STORED.publicUrl).toBeUndefined();
+    expect(await tick(setup, 120)).toBeNull();
+    expect(tunnels.started()).toBe(2);
+  });
+
+  it('raises nothing behind a bridge that stopped while a tunnel was being raised', async () => {
+    const { tunnels, made } = setupWith(['calm-badger-42', 'brisk-otter-7']);
+    const setup = await made;
+    await setup.configure({ mode: 'tunnel' });
+    await tick(setup, 1);
+    DEAD.add(OLD);
+    await tick(setup, 45);
+
+    tunnels.hold();
+    const watching = tick(setup, 46);
+    await vi.waitFor(() => expect(tunnels.started()).toBe(2));
+    await setup.shutdown();
+    tunnels.release();
+
+    expect(await watching).toBeNull();
+    expect(patches()).toHaveLength(1);
+    expect((await setup.status()).tunnel.running).toBe(false);
+  });
+
+  it('never raises one for a fixed address, and does not try it', async () => {
+    const setup = await subject({
+      spawner: (() => {
+        throw new Error('no tunnel was asked for');
+      }) as Spawner,
+      probe,
+      api: github(),
+      now: () => CLOCK,
+    });
+    await setup.configure({ mode: 'address', url: 'https://openadlc.example.com' });
+
+    for (let minute = 1; minute <= 60; minute += 1) expect(await tick(setup, minute)).toBeNull();
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('never replaces a quick tunnel a person runs themselves and gave as a fixed address', async () => {
+    // Its address looks like one of OpenADLC's, and no tunnel of this
+    // bridge's runs behind it: the watch replaced it.
+    const setup = await subject({
+      spawner: (() => {
+        throw new Error('no tunnel was asked for');
+      }) as Spawner,
+      probe,
+      api: github(),
+      now: () => CLOCK,
+    });
+    await setup.configure({ mode: 'address', url: 'https://persons-own-1.trycloudflare.com' });
+    const calls = CALLS.length;
+
+    for (let minute = 1; minute <= 120; minute += 1) expect(await tick(setup, minute)).toBeNull();
+
+    expect(HOOK.url).toBe('https://persons-own-1.trycloudflare.com/webhooks/github');
+    expect(STORED.publicUrl).toBe('https://persons-own-1.trycloudflare.com');
+    expect(CALLS.length).toBe(calls);
+    expect((await setup.status()).watch.keeps).toBe(false);
+  });
+});
+
+describe('what follows a tunnel the watch raised', () => {
+  const follow = () => ({
+    audit: vi.fn(async () => undefined),
+    recheck: vi.fn(),
+    redeliver: vi.fn(async () => 'redelivered 3 webhook deliveries GitHub recorded as failed'),
+    say: vi.fn(),
+    warn: vi.fn(),
+  });
+
+  it('is said once, audited, the webhook check asked again, and what failed redelivered', async () => {
+    const { afterRevival } = await import('./webhook-setup.js');
+    const deps = follow();
+
+    await afterRevival({ at: '2026-10-20T09:46:00.000Z', from: OLD, to: NEW, error: null }, deps);
+
+    expect(deps.say).toHaveBeenCalledWith(`${OLD} stopped reaching this bridge; raised a new tunnel at ${NEW} and pointed the GitHub app's webhook at it`);
+    expect(deps.audit).toHaveBeenCalledWith({ actor: 'bridge', action: 'install.tunnel_revived', target: 'install', payload: { from: OLD, to: NEW, error: null } });
+    expect(deps.recheck).toHaveBeenCalledTimes(1);
+    expect(deps.redeliver).toHaveBeenCalledTimes(1);
+    expect(deps.say).toHaveBeenCalledWith('redelivered 3 webhook deliveries GitHub recorded as failed');
+  });
+
+  it('is warned of and audited when no tunnel could be raised, and redelivers nothing to no address', async () => {
+    const { afterRevival } = await import('./webhook-setup.js');
+    const deps = follow();
+
+    await afterRevival({ at: '2026-10-20T09:46:00.000Z', from: OLD, to: null, error: 'cloudflared stopped before it had an address (exit 1)' }, deps);
+
+    expect(deps.warn).toHaveBeenCalledWith(expect.stringContaining('a new tunnel could not be raised: cloudflared stopped before it had an address (exit 1)'));
+    expect(deps.audit).toHaveBeenCalledWith(expect.objectContaining({ action: 'install.tunnel_revived', payload: expect.objectContaining({ to: null }) }));
+    expect(deps.recheck).toHaveBeenCalledTimes(1);
+    expect(deps.redeliver).not.toHaveBeenCalled();
+  });
+});
+
+describe('a delivery that never reached the bridge', () => {
+  const NOW = Date.parse('2026-10-20T09:00:00.000Z');
+  const at = (offsetMinutes: number): string => new Date(NOW + minutes(offsetMinutes)).toISOString();
+
+  it('is reported when GitHub made it after the app was pointed here, and is not ready', async () => {
+    const setup = await subject({ now: () => NOW });
+    await setup.configure({ mode: 'address', url: 'https://openadlc.example.com' });
+    DELIVERIES = [{ event: 'pull_request', action: 'opened', status_code: 502, delivered_at: at(40), redelivery: false }];
+
+    const status = await setup.status();
+
+    expect(status.unreached).toMatchObject({ statusCode: 502, deliveredAt: at(40) });
+    expect(status.ready).toBe(false);
+    expect(status.detail).toMatch(/at 2026-10-20T09:40:00.000Z, got 502: that address does not reach this bridge/);
+  });
+
+  it('is not, when it was made before this bridge pointed the app here — to an address since replaced, or while it was down', async () => {
+    const setup = await subject({ now: () => NOW });
+    await setup.configure({ mode: 'address', url: 'https://openadlc.example.com' });
+    DELIVERIES = [{ event: 'issue_comment', action: 'created', status_code: 0, delivered_at: at(-10), redelivery: false }];
+
+    expect(await setup.status()).toMatchObject({ unreached: null, ready: true });
+  });
+
+  it('is not a delivery the bridge itself answered, even with a failure', async () => {
+    const setup = await subject({ now: () => NOW });
+    await setup.configure({ mode: 'address', url: 'https://openadlc.example.com' });
+    DELIVERIES = [{ event: 'issues', action: 'opened', status_code: 500, delivered_at: at(40), redelivery: false }];
+
+    expect((await setup.status()).unreached).toBeNull();
+  });
+});
