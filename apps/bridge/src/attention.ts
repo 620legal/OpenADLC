@@ -21,9 +21,9 @@ import {
 } from '@openadlc/shared';
 import { botSaid } from './bot-said.js';
 import { NO_PULL_REQUEST, openPullRequestUrl } from './build-left.js';
-import type { GitHubClient } from '@openadlc/github';
+import { githubDidNotAnswer, type GitHubClient } from '@openadlc/github';
 import type { EngineUpdateAttention } from './engine-updates.js';
-import { NO_REASON, explainFailure } from './failure-words.js';
+import { GITHUB_STATUS_URL, NO_REASON, explainFailure } from './failure-words.js';
 import { endsWithSubject, subjectClosed, wasRefused } from './gates.js';
 import { failingIds, isWaiting, showsNotice, unconfirmedOf } from './health/state.js';
 import { itemOf, requestSubject } from './items.js';
@@ -35,6 +35,7 @@ import {
   ignoredSubjects,
   issueForSubject,
   parseRef,
+  RESUME_WAITS_ON_GITHUB,
   REVIEW_STALLED,
   SEND_BACK_STALLED,
   SEND_BACK_TO_PERSON,
@@ -92,7 +93,9 @@ export type AttentionKind =
   /** A design took an accepted design memory entry out of effect: a notice, holding nothing, revertible in Settings. */
   | 'design_memory_superseded'
   /** A blocked issue waits on one closed without merging, which will never ship: a person drops the dependency or reopens it. */
-  | 'dependency_abandoned';
+  | 'dependency_abandoned'
+  /** Answered work waiting for GitHub to answer the refresh of its bot's sign-in before it goes on. */
+  | 'resume_waiting';
 
 /**
  * What a person can do about an item. The first is the one the console offers
@@ -230,6 +233,7 @@ const GROUP: Record<AttentionKind, AttentionGroup> = {
   promote_held: 'work',
   design_memory_superseded: 'work',
   dependency_abandoned: 'work',
+  resume_waiting: 'work',
 };
 
 export function groupOf(kind: AttentionKind): AttentionGroup {
@@ -348,6 +352,18 @@ interface RequestRow {
 type GateRow = Pick<Gate, 'id' | 'taskId' | 'question' | 'options' | 'githubCommentUrl' | 'createdAt' | 'context'>;
 type AskedGate = Pick<Gate, 'id' | 'taskId' | 'answer' | 'answeredAt' | 'createdAt'>;
 
+/** Answered work whose resume waits for GitHub; see `RESUME_WAITS_ON_GITHUB`. */
+export interface ResumeWait {
+  taskId: string;
+  botId: string;
+  kind: TaskKind;
+  subjectRef: string;
+  /** When it began to wait. */
+  since: string;
+  /** Until when it is tried again, after which it is failed with a card. */
+  until: string;
+}
+
 export interface AttentionInput {
   now: Date;
   gates: readonly GateRow[];
@@ -364,6 +380,8 @@ export interface AttentionInput {
   designMemoryEvents?: readonly { at: string; payload: unknown }[];
   /** Issues intake stopped trying, newest first (`StageHandoff.intakeGaveUp`). Absent, none. */
   intakeStalls?: readonly { at: string; payload: unknown }[];
+  /** Answered work waiting for GitHub before it resumes (`TaskService.waitForGitHub`), while still owed that resume. Absent, none. */
+  resumeWaits?: readonly ResumeWait[];
   /** The last weekly engine update, when it failed. */
   engineUpdate?: EngineUpdateAttention | null;
   /**
@@ -1104,6 +1122,32 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     });
   }
 
+  // Answered work waiting for GitHub to answer its bot's sign-in's refresh
+  // (`TaskService.waitForGitHub`). It is neither failed nor asking, so it was
+  // on no card at all while it waited, and Needs you said nothing about work
+  // a person had just answered.
+  for (const wait of input.resumeWaits ?? []) {
+    const bot = botsById.get(wait.botId);
+    const until = `${wait.until.slice(0, 16).replace('T', ' ')} UTC`;
+    const actions: AttentionAction[] = [
+      { kind: 'open_url', label: 'GitHub’s status', url: GITHUB_STATUS_URL },
+      { kind: 'stop_task', label: 'Stop', taskId: wait.taskId },
+    ];
+    if (bot) actions.push({ kind: 'open_thread', label: 'Open thread', bot: bot.name });
+    items.push({
+      id: `resume-wait:${wait.taskId}`,
+      kind: 'resume_waiting',
+      headline: `${botSaid(bot)} waits for GitHub to go on with ${WORK[wait.kind]}`,
+      subject: subjectOf(wait.subjectRef).subject,
+      bot: asAttentionBot(bot),
+      since: wait.since,
+      detail:
+        `The answer is recorded. GitHub did not answer when OpenADLC refreshed the sign-in of ${botInWords(bot)}, so the work has not started again. ` +
+        `OpenADLC tries again on every sweep until ${until}, then fails it with a card to try again.`,
+      actions,
+    });
+  }
+
   // Issues intake stopped trying (`StageHandoff.intakeGaveUp`), while they are
   // still in intake: the sweep would have triaged them every hour for good.
   const stalledIntake = new Map<string, { at: string; tries: number }>();
@@ -1249,7 +1293,13 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
       continue;
     }
 
-    const words = explainFailure(task.exitReason, { bot: botInWords(bot), account: accountOf(bot), permissionsUrl });
+    const words = explainFailure(task.exitReason, {
+      bot: botInWords(bot),
+      account: accountOf(bot),
+      permissionsUrl,
+      retry: githubRetry(task, input.tasks),
+      now: input.now,
+    });
     // A spend limit or a sign-in that has been fixed since clears the card
     // only once the work moved on too: its subject closed, or a later task on
     // it started. Nothing runs a model-account failure again by itself
@@ -1363,6 +1413,8 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
 
     const bot = botsById.get(latest.botId);
     const repo = request.repoId ? reposById.get(request.repoId) : undefined;
+    // GitHub not answering its start is tried again by the queue, not on a
+    // schedule a card can name.
     const words = explainFailure(latest.exitReason, { bot: botInWords(bot), account: accountOf(bot), permissionsUrl });
     const ownFix = words.action && namesBot(words.action, bot) ? words.action : null;
     const sharedFix = words.action && !ownFix ? words.action : null;
@@ -1440,6 +1492,94 @@ export function triedAgain(failed: TaskFacts, all: readonly TaskFacts[]): boolea
       (failed.kind !== 'review' || other.botId === failed.botId) &&
       Date.parse(other.createdAt) > Date.parse(failed.createdAt),
   );
+}
+
+/**
+ * The waits, in minutes, before OpenADLC runs again by itself work whose start
+ * GitHub did not answer for, each counted from the end of the try before it.
+ * The merge job's sweep runs it (`retryAfterRecovery`, every ten minutes), so
+ * a wait is the earliest it goes. Together they span about two hours: the
+ * 503s that failed intake and builds for good on 2026-10-21 lasted eighteen
+ * minutes.
+ */
+export const GITHUB_RETRY_MINUTES: readonly number[] = [2, 5, 10, 20, 30, 60];
+
+/**
+ * How long the sweep's claim on such a retry holds before the sweep takes it
+ * back (`tasks.retakeAutoRetry`). A bridge that exited between the claim and
+ * the start left the task claimed for good, its card naming a time that had
+ * passed. A retry that got as far as its task row is not taken back: that
+ * row is a later task, and the failure has been tried again.
+ */
+export const GITHUB_RETRY_CLAIM_MS = 15 * 60_000;
+
+/** When work GitHub did not answer for is next run again, and which retry that is, from 1. */
+export interface GitHubRetry {
+  at: Date;
+  attempt: number;
+  of: number;
+}
+
+/** Whether a task's start never happened because GitHub did not answer its sign-in's refresh. */
+function startUnanswered(task: TaskFacts): boolean {
+  return task.state === 'failed' && task.startedAt === null && githubDidNotAnswer(task.exitReason);
+}
+
+/**
+ * When a task whose start GitHub did not answer for (`githubDidNotAnswer`) is
+ * run again by itself, or null: it failed for something else, it ran before
+ * it failed (a resume's card is `TaskService.waitForGitHub`'s), or every
+ * retry is spent. A console request's triage is null too: its queue tries the
+ * start again itself (`request-queue.ts`). Its tries are the starts of the
+ * same work, as `triedAgain` counts them, that failed this way one after
+ * another up to it: a start that got going, or failed for another reason,
+ * ends the run, and a person's Try again in it is one of them. Counted from
+ * the tasks, not a timer, so a restart neither loses a retry nor starts the
+ * run again; a claim the sweep holds on it puts the time off until the claim
+ * can be taken back (`GITHUB_RETRY_CLAIM_MS`).
+ */
+export function githubRetry(failed: TaskFacts & { autoRetriedAt?: string | null }, all: readonly TaskFacts[]): GitHubRetry | null {
+  if (!startUnanswered(failed) || failed.subjectRef.startsWith('request:')) return null;
+  const before = all
+    .filter(
+      (other) =>
+        other.id !== failed.id &&
+        other.subjectRef === failed.subjectRef &&
+        other.kind === failed.kind &&
+        (failed.kind !== 'review' || other.botId === failed.botId) &&
+        Date.parse(other.createdAt) < Date.parse(failed.createdAt),
+    )
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  let tries = 1;
+  for (const other of before) {
+    if (!startUnanswered(other)) break;
+    tries += 1;
+  }
+  const wait = GITHUB_RETRY_MINUTES[tries - 1];
+  if (wait === undefined) return null;
+  const due = taskEndedAt(failed) + wait * 60_000;
+  const claimFreed = failed.autoRetriedAt ? Date.parse(failed.autoRetriedAt) + GITHUB_RETRY_CLAIM_MS : Number.NEGATIVE_INFINITY;
+  return { at: new Date(Math.max(due, claimFreed)), attempt: tries, of: GITHUB_RETRY_MINUTES.length };
+}
+
+/**
+ * Answered work waiting for GitHub, from the events that said so: one for
+ * each task still owed a resume (`tasks.pausedWithAnswer`) whose wait began
+ * after its newest answer. A task answered again since, or resumed, has none.
+ */
+async function waitingOnGitHub(events: readonly { at: string; payload: unknown }[]): Promise<ResumeWait[]> {
+  const owed = await tasks.pausedWithAnswer();
+  const waits: ResumeWait[] = [];
+  for (const task of owed) {
+    const said = events.find((event) => {
+      const payload = (event.payload ?? {}) as Record<string, unknown>;
+      return payload.taskId === task.id && Date.parse(event.at) >= Date.parse(task.answeredAt);
+    });
+    const until = (said?.payload as Record<string, unknown> | undefined)?.until;
+    if (!said || typeof until !== 'string') continue;
+    waits.push({ taskId: task.id, botId: task.botId, kind: task.kind, subjectRef: task.subjectRef, since: said.at, until });
+  }
+  return waits;
 }
 
 /** Said first on a failing card whose check has had no answer since; see `nextRow`. */
@@ -1750,6 +1890,11 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     })().catch(() => []),
   ]);
   const intakeStalls = await (async () => listEventsOfType(INTAKE_STALLED, since))().catch(() => []);
+  // Asked for only when one waited this week: the board reads this every fifteen seconds.
+  const resumeWaits = await (async () => {
+    const said = await listEventsOfType(RESUME_WAITS_ON_GITHUB, since);
+    return said.length > 0 ? waitingOnGitHub(said) : [];
+  })().catch((): ResumeWait[] => []);
   const designMemoryEvents = await (async () => listEventsOfType(DESIGN_MEMORY_SUPERSEDED, since))().catch(() => []);
 
   // A gate can be older than the window. Its task is paused, which the read
@@ -1821,6 +1966,7 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     stallEvents,
     sendBackEvents,
     intakeStalls,
+    resumeWaits,
     designMemoryEvents,
     engineUpdate,
     heldMerges,

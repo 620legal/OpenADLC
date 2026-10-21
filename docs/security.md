@@ -324,7 +324,12 @@ command instead. And `openadlc restore` refreshes each GitHub sign-in in the
 archive once, which is how it checks one and takes it over
 (`packages/backup/src/signins.ts`). A task is handed a token with
 at least five hours left, because a task may run four and a credential that
-expires part way through fails at the end, where the work is. Like every
+expires part way through fails at the end, where the work is. GitHub not
+answering a refresh — a 5xx, a timeout — never marks a sign-in revoked: the
+broker asks again after a 5xx but not after a timeout, which GitHub may have
+taken, a call is handed the last good token while it is still valid, and a
+task that could not get one is started again later
+([troubleshooting](troubleshooting.md#how-a-problem-reaches-you)). Like every
 `/internal` route, the service does not serve the private network alone: a
 caller presents a shared secret the bridge generates on first start and keeps
 in the same secret store, so reaching the port is not enough to be given a

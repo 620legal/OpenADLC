@@ -535,17 +535,49 @@ export async function addTaskCost(id: string, costUsd: number): Promise<number> 
 }
 
 /**
+ * No later task of the same work: the same subject and kind, and for a review
+ * the same seat, as `triedAgain` counts them. A sweep decides from a list it
+ * read when it began, and a task another sweep or a person's Try again
+ * started since is not in it; asked in the claim's own statement, the work is
+ * never run again beside it.
+ */
+const NO_LATER_TASK = `not exists (
+  select 1 from tasks later
+  where later.subject_ref = tasks.subject_ref
+    and later.kind = tasks.kind
+    and (tasks.kind <> 'review' or later.bot_id = tasks.bot_id)
+    and later.created_at > tasks.created_at
+)`;
+
+/**
  * Takes the one automatic retry a task gets, in one statement.
  *
  * The health check that explains a failure can pass again from two runs at
  * once, or from a run and an event, and each would find the task still
- * waiting. The `where` clause is what lets exactly one of them have it.
- * Returns false when it was already taken.
+ * waiting. The `where` clause is what lets exactly one of them have it, and
+ * none once the work has been started again (`NO_LATER_TASK`). Returns false
+ * when it was already taken, or the work was.
  */
 export async function claimAutoRetry(id: string): Promise<boolean> {
   const row = await queryOne<{ id: string }>(
-    'update tasks set auto_retried_at = now(), updated_at = now() where id = $1 and auto_retried_at is null returning id',
+    `update tasks set auto_retried_at = now(), updated_at = now() where id = $1 and auto_retried_at is null and ${NO_LATER_TASK} returning id`,
     [id],
+  );
+  return row !== null;
+}
+
+/**
+ * Takes over a claim on an automatic retry that was taken before
+ * `claimedBefore`: a bridge that exited between claiming the retry and
+ * starting it left the claim, and nothing else would take it back. One
+ * statement, as `claimAutoRetry`, so two sweeps cannot both have it, and none
+ * once a later task of the work exists. Returns false when the claim is
+ * newer, or gone, or the work was started again.
+ */
+export async function retakeAutoRetry(id: string, claimedBefore: Date): Promise<boolean> {
+  const row = await queryOne<{ id: string }>(
+    `update tasks set auto_retried_at = now(), updated_at = now() where id = $1 and auto_retried_at < $2 and ${NO_LATER_TASK} returning id`,
+    [id, claimedBefore],
   );
   return row !== null;
 }

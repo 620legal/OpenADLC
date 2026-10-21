@@ -44,6 +44,10 @@ export interface TokenBrokerOptions {
   now?: () => Date;
   /** How long to wait before each retry of saving a rotated refresh token. */
   saveRetryMs?: readonly number[];
+  /** How long to wait before each retry of a refresh GitHub answered with an outage; see `REFRESH_RETRY_MS`. */
+  refreshRetryMs?: readonly number[];
+  /** How long a sign-in GitHub did not answer the refresh of is not asked again; see `UNANSWERED_FOR_MS`. */
+  unansweredForMs?: number;
   /**
    * The app's client secret, which narrowing a token to one repository needs
    * (`tokenForRepository`); null when the install has none. Asked per call, as
@@ -90,14 +94,101 @@ const NOT_A_REFUSAL = new Set(['server_error', 'temporarily_unavailable', 'slow_
 export function refusedByGitHub(error: unknown): boolean {
   const cause = error instanceof DeviceAuthError ? error : error instanceof Error ? error.cause : undefined;
   if (!(cause instanceof DeviceAuthError)) return false;
-  if (cause.status !== undefined && cause.status >= 500) return false;
+  if (cause.status !== undefined && (cause.status >= 500 || cause.status === 429)) return false;
   if (cause.code === 'http_error' || cause.code === 'bad_response') return cause.status === 401;
   // A 200 with neither a token nor an error names nothing GitHub refused.
   return cause.code !== 'unknown' && !NOT_A_REFUSAL.has(cause.code);
 }
 
+/**
+ * How a refresh that did not work went, by what GitHub answered:
+ *
+ * - `refused`: GitHub said no, with an OAuth error or a 401 (`refusedByGitHub`).
+ * - `busy`: GitHub answered that it is failing or overloaded — a 5xx, a 429,
+ *   or an OAuth code that says so (`NOT_A_REFUSAL`) — and so did not take the
+ *   refresh token. Asked again.
+ * - `unclear`: no answer at all — a timeout, an abort, the network. GitHub may
+ *   have taken the refresh and rotated the token before the answer was lost,
+ *   so the same token is not sent again at once.
+ * - `other`: anything else — a 403, a 404, a 200 with no token, a fault here.
+ *   Neither an outage nor a refusal, so it is not waited out and marks
+ *   nothing revoked: it fails as it is, for a person to read. Counting these
+ *   as GitHub not answering left answered work paused with no end.
+ */
+export type RefreshFailure = 'refused' | 'busy' | 'unclear' | 'other';
+
+export function refreshFailure(error: unknown): RefreshFailure {
+  if (refusedByGitHub(error)) return 'refused';
+  if (error instanceof DeviceAuthError) {
+    if (error.status !== undefined && (error.status >= 500 || error.status === 429)) return 'busy';
+    return NOT_A_REFUSAL.has(error.code) ? 'busy' : 'other';
+  }
+  if (!(error instanceof Error)) return 'other';
+  if (error.name === 'TimeoutError' || error.name === 'AbortError') return 'unclear';
+  // Node's fetch: `fetch failed` when the connection could not be made or was
+  // reset, `terminated` when the answer was cut off part way.
+  return error instanceof TypeError && /^(?:fetch failed|terminated)$/.test(error.message) ? 'unclear' : 'other';
+}
+
+/**
+ * What every error says when GitHub did not answer a sign-in's refresh — a
+ * 5xx, a timeout, the network — rather than refusing it. It travels as words:
+ * the bridge's token service answers 503 with it, hostd fails a task's start
+ * with it, and the bridge reads it back from the task (`githubDidNotAnswer`)
+ * to run the task again later instead of leaving it failed for a person.
+ */
+export const GITHUB_DID_NOT_ANSWER = 'GitHub did not answer the refresh of';
+
+/** Whether a reason, as it reached a task or a log, says GitHub did not answer a sign-in's refresh. */
+export function githubDidNotAnswer(reason: string | null | undefined): boolean {
+  return (reason ?? '').includes(GITHUB_DID_NOT_ANSWER);
+}
+
+/**
+ * A refresh GitHub did not answer (`busy` or `unclear`, `refreshFailure`):
+ * an outage or the network, which says nothing about the sign-in. Its `cause`
+ * is the last try's error; `askedAgainAt` is when the broker asks GitHub
+ * again, null when the next ask does.
+ */
+export class GitHubUnavailableError extends Error {
+  constructor(
+    bot: string,
+    reason: string,
+    options: { cause?: unknown; askedAgainAt?: Date | null } = {},
+  ) {
+    const again = options.askedAgainAt ? `after ${options.askedAgainAt.toISOString().slice(11, 19)} UTC` : 'next time';
+    super(`${GITHUB_DID_NOT_ANSWER} ${bot}'s sign-in (${reason}); it is asked again ${again}`, { cause: options.cause });
+    this.name = 'GitHubUnavailableError';
+  }
+}
+
 /** The waits between tries at saving a rotated refresh token. */
 const SAVE_RETRY_MS = [250, 1000, 4000];
+
+/**
+ * The waits between tries at a refresh GitHub answered with an outage (`busy`).
+ * GitHub answered a crew account's refresh with a 503 page for minutes at a
+ * time (found live, 2026-10-21), and asked once, every task that started then
+ * failed for good. A few seconds rides out a blip; a longer outage is the
+ * bridge's to wait out (`retryAfterRecovery`). An `unclear` try is not asked
+ * again at once: had GitHub taken it, the same token sent again is refused as
+ * used, and every seat on the account would be marked revoked.
+ */
+const REFRESH_RETRY_MS = [1000, 2000, 4000];
+
+/**
+ * How long a sign-in whose refresh GitHub did not answer is not asked again:
+ * every ask fails at once meanwhile. The merge job's sweep runs failed starts
+ * again one after another, and each asked GitHub again, and waited for it,
+ * before the gates and the merge line had their turn.
+ */
+const UNANSWERED_FOR_MS = 60 * 1000;
+
+/**
+ * What a token kept from before must still have left to serve a call while
+ * GitHub does not answer its refresh: enough for one call to finish.
+ */
+const KEPT_TOKEN_MIN_LIFETIME_MS = 60 * 1000;
 
 /** Refresh a little early so a short call never carries a token to its last second. */
 const CALL_TOKEN_MIN_LIFETIME_MS = 5 * 60 * 1000;
@@ -140,6 +231,10 @@ export class TokenBroker {
    */
   private readonly scopedCache = new Map<string, { parent: string; entry: BrokeredToken }>();
   private readonly scopedInflight = new Map<string, Promise<RepositoryToken>>();
+  /** Sign-ins GitHub did not answer the refresh of, until when they are not asked again, and why; see `UNANSWERED_FOR_MS`. */
+  private readonly unanswered = new Map<string, { until: number; reason: string }>();
+  /** The refresh token each sign-in last sent in a try that got no answer (`unclear`), which GitHub may have taken. */
+  private readonly sentUnanswered = new Map<string, string>();
   private readonly store: SecretStore;
 
   constructor(private readonly options: TokenBrokerOptions) {
@@ -186,12 +281,28 @@ export class TokenBroker {
     const cached = this.cache.get(bot);
     if (this.fresh(cached, minLifetimeMs)) return cached;
 
-    const existing = this.inflight.get(bot);
-    if (existing) return existing;
+    let minting = this.inflight.get(bot);
+    if (!minting) {
+      minting = this.mint(bot, login).finally(() => this.inflight.delete(bot));
+      this.inflight.set(bot, minting);
+    }
+    return minting.catch((error: unknown) => this.keptWhileUnanswered(bot, error, minLifetimeMs));
+  }
 
-    const promise = this.mint(bot, login).finally(() => this.inflight.delete(bot));
-    this.inflight.set(bot, promise);
-    return promise;
+  /**
+   * The token from the last refresh that worked, for a call, when GitHub did
+   * not answer this one: GitHub's sign-in endpoint can be down while its API
+   * answers, and the token it issued is good until it expires. A caller asking
+   * for more than a call's lifetime is a task, whose token must outlast it
+   * (`TASK_TOKEN_MIN_LIFETIME_MS`): handed one that expires part way, it would
+   * fail at the end, where the work is, so it is refused and started later.
+   */
+  private keptWhileUnanswered(bot: string, error: unknown, minLifetimeMs: number): BrokeredToken {
+    const kept = this.cache.get(bot);
+    if (!(error instanceof GitHubUnavailableError) || minLifetimeMs > CALL_TOKEN_MIN_LIFETIME_MS) throw error;
+    if (!this.fresh(kept, KEPT_TOKEN_MIN_LIFETIME_MS)) throw error;
+    console.warn(`[token-broker] using ${bot}'s last GitHub token until GitHub answers its refresh; it expires ${kept.expiresAt?.toISOString() ?? 'never'}`);
+    return kept;
   }
 
   /**
@@ -261,12 +372,17 @@ export class TokenBroker {
   }
 
   private async mint(bot: string, login: string): Promise<BrokeredToken> {
+    const quiet = this.unanswered.get(bot);
+    if (quiet && quiet.until > this.now().getTime()) {
+      throw new GitHubUnavailableError(bot, quiet.reason, { askedAgainAt: new Date(quiet.until) });
+    }
     const exclusive = this.options.exclusive;
     return exclusive ? exclusive(`github-refresh:${bot}`, () => this.mintAlone(bot, login)) : this.mintAlone(bot, login);
   }
 
   private async mintAlone(bot: string, login: string): Promise<BrokeredToken> {
-    const refreshToken = this.unsaved.get(bot) ?? (await this.store.get(refreshTokenRef(bot)));
+    const held = this.unsaved.get(bot);
+    let refreshToken = held ?? (await this.store.get(refreshTokenRef(bot)));
 
     if (!refreshToken) {
       // Apps with token expiry disabled issue no refresh token; the access token
@@ -282,31 +398,69 @@ export class TokenBroker {
       );
     }
 
+    // A credential is marked revoked when GitHub says the authorization is
+    // gone — not when this install cannot ask, which is a fault here and is
+    // repaired by fixing the configuration. Marking it revoked turned a
+    // missing client id into nine device flows to redo.
+    const clientId = await this.clientId();
+    const waits = this.options.refreshRetryMs ?? REFRESH_RETRY_MS;
+    let readAgain = false;
     let refreshed: UserToken;
-    try {
-      refreshed = await refreshUserToken({ clientId: await this.clientId(), refreshToken });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      // Not revoked. A credential is marked revoked when GitHub says the
-      // authorization is gone — not when this install cannot ask, which is a
-      // fault here and is repaired by fixing the configuration. Marking it
-      // revoked turned a missing client id into nine device flows to redo.
-      if (error instanceof ConfigurationError) throw error;
-      // Nor when GitHub could not be reached, or answered with an outage: that
-      // says nothing about the authorization, and marking it revoked turned one
-      // network blip into a reconnect for every seat on the account. Nothing
-      // is cached, so the next ask refreshes again.
-      if (!refusedByGitHub(error)) {
-        console.warn(`[token-broker] could not refresh ${bot}'s GitHub sign-in; asking again next time: ${message}`);
-        throw new Error(`GitHub could not be asked to refresh ${bot}'s sign-in (${message})`, { cause: error });
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        refreshed = await refreshUserToken({ clientId, refreshToken, now: () => this.now() });
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const failure = refreshFailure(error);
+        if (failure === 'refused') {
+          // The store may hold a newer token than the one sent: another
+          // refresh — another bridge, the CLI, or one whose answer was lost
+          // here — stored it since this one was read. Sent instead, once,
+          // before anything is marked; never the store's when the token sent
+          // was one held in memory, which is newer than the store's.
+          if (!readAgain && held === undefined) {
+            readAgain = true;
+            const stored = await this.store.get(refreshTokenRef(bot)).catch(() => null);
+            if (stored && stored !== refreshToken) {
+              refreshToken = stored;
+              continue;
+            }
+          }
+          const spent = this.sentUnanswered.get(bot) === refreshToken ? '; a refresh before this one got no answer, and GitHub may have taken the token then' : '';
+          await this.options.onRevoked?.(bot, message);
+          // `--bot` takes the account's login, which every seat on it shares; the
+          // name here is where the sign-in is filed, which a seat may not go by.
+          throw new Error(`${bot}'s GitHub authorization is no longer valid (${message}${spent}). Reconnect it: openadlc auth login --bot ${login || bot}`, {
+            cause: error,
+          });
+        }
+        // Neither GitHub not answering nor a refusal: not waited out, and
+        // nothing is marked. The next ask refreshes again.
+        if (failure === 'other') {
+          console.warn(`[token-broker] could not refresh ${bot}'s GitHub sign-in: ${message}`);
+          throw new Error(`GitHub did not refresh ${bot}'s sign-in (${message})`, { cause: error });
+        }
+        // Not revoked when GitHub could not be reached, or answered with an
+        // outage: that says nothing about the authorization, and marking it
+        // revoked turned one network blip into a reconnect for every seat on
+        // the account. An outage GitHub answered is asked again with the
+        // same token, which it did not take.
+        const wait = failure === 'busy' ? waits[attempt] : undefined;
+        if (wait !== undefined) {
+          await new Promise((resolve) => setTimeout(resolve, wait));
+          continue;
+        }
+        if (failure === 'unclear') this.sentUnanswered.set(bot, refreshToken);
+        const until = this.now().getTime() + (this.options.unansweredForMs ?? UNANSWERED_FOR_MS);
+        this.unanswered.set(bot, { until, reason: message });
+        const unanswered = new GitHubUnavailableError(bot, message, { cause: error, askedAgainAt: new Date(until) });
+        console.warn(`[token-broker] ${unanswered.message} (${attempt + 1} ${attempt === 0 ? 'try' : 'tries'})`);
+        throw unanswered;
       }
-      await this.options.onRevoked?.(bot, message);
-      // `--bot` takes the account's login, which every seat on it shares; the
-      // name here is where the sign-in is filed, which a seat may not go by.
-      throw new Error(`${bot}'s GitHub authorization is no longer valid (${message}). Reconnect it: openadlc auth login --bot ${login || bot}`, {
-        cause: error,
-      });
     }
+    this.unanswered.delete(bot);
+    this.sentUnanswered.delete(bot);
 
     // GitHub rotates the refresh token on every use; the new one must replace
     // it. Held in memory and the access token cached first, so a store that

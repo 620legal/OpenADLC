@@ -1,4 +1,4 @@
-import { getSecretStore, internalSecretRef, type SecretStore } from '@openadlc/github';
+import { getSecretStore, githubDidNotAnswer, internalSecretRef, type SecretStore } from '@openadlc/github';
 
 export interface TaskToken {
   token: string;
@@ -86,6 +86,12 @@ export class TokenClient {
         if (typeof parsed.error === 'string') reason = parsed.error;
       } catch {
         // Not JSON: the text as it came.
+      }
+      // GitHub did not answer the bridge's refresh (503, in the broker's
+      // words): not a refusal, so not said as one. The bridge runs the start
+      // again later on these words (`githubDidNotAnswer`).
+      if (response.status === 503 && githubDidNotAnswer(reason)) {
+        throw new Error(`${bot} has no GitHub token yet: ${reason.slice(0, 300)}`);
       }
       throw new Error(`${bot} has no GitHub token: the bridge would not mint one (${response.status}) ${reason.slice(0, 300)}`.trim());
     }

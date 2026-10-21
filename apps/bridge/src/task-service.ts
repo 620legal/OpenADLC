@@ -1,4 +1,5 @@
 import { audit, bots, costs, hasEventOfType, health, hosts, lastEventAt, leases, recordEvent, repos, spendingLimits, tasks, threads } from '@openadlc/db';
+import { githubDidNotAnswer } from '@openadlc/github';
 import { attachmentsForTask } from './attachment-routes.js';
 import { botAtStart, headerFor, leaseExpiryFrom, maxTasksOf, resolveBotRef, type ContextDocument, type Task, type TaskKind } from '@openadlc/shared';
 import type { BridgeConfig } from './config.js';
@@ -12,7 +13,7 @@ import { reviewRulesOf } from './automation.js';
 import { requestPrefixOf } from './request-context.js';
 import { readSeatPauses, seatPausedWords, type SeatPause } from './seat-pause.js';
 import { heldWords } from './item-hold.js';
-import { REVIEW_ASKED_AGAIN, REVIEW_ROUND_OPENED, parseRef } from './work.js';
+import { RESUME_WAITS_ON_GITHUB, REVIEW_ASKED_AGAIN, REVIEW_ROUND_OPENED, parseRef } from './work.js';
 
 /**
  * A seat running all the tasks it may at once (`bots.max_tasks`, Crew →
@@ -81,6 +82,12 @@ const RESUME_RETRY_MS = 60_000;
 const RESUME_RETRIES = 60;
 /** How long after its answer a task waits for a host with room, counted from the answer, so a restart does not start the hour again. */
 const RESUME_WAIT_MS = RESUME_RETRIES * RESUME_RETRY_MS;
+/**
+ * How long answered work waits, from the answer, for GitHub to answer the
+ * refresh of its bot's sign-in before it is failed with a card: as long as a
+ * start GitHub did not answer for is tried again (`GITHUB_RETRY_MINUTES`).
+ */
+export const RESUME_GITHUB_WAIT_MS = 2 * 60 * 60_000;
 
 /** A piece of work a person held on the board (`item-hold.ts`): nothing new starts on it until it is resumed. */
 export class ItemHeldError extends Error {
@@ -1008,7 +1015,9 @@ export class TaskService {
    * A refusal is handled as `open` handles one: the task is marked failed and
    * the reason goes in its thread. It used to reach only the bridge's log,
    * and the task sat paused with its question answered and nothing running.
-   * The usual reason is a model the bot's account can no longer call.
+   * The usual reason is a model the bot's account can no longer call. GitHub
+   * not answering the refresh of the bot's sign-in is not a refusal, for a
+   * while: the task stays paused for `resumeAnswered` to try again.
    *
    * A task whose plan change was refused, that a person stopped at its cost
    * cap, or whose work has already landed, is not resumed: it is cleaned up.
@@ -1032,7 +1041,9 @@ export class TaskService {
    * a restart in that hour, or an exit between recording the answer and
    * resuming, left the task paused with nothing open, out of Needs you, and
    * its issue counted as building for good. The answer is the record that a
-   * resume is owed, so this runs at start and on the merge sweep.
+   * resume is owed, so this runs at start and on the merge sweep. It is also
+   * what tries again, on every sweep for up to `RESUME_GITHUB_WAIT_MS`, a
+   * resume GitHub did not answer the sign-in's refresh for (`waitForGitHub`).
    *
    * One a person paused since — its seat, its item or its repository — is
    * left: the sweep must not undo a person's pause. One this process is
@@ -1058,9 +1069,11 @@ export class TaskService {
         await this.resume(task.id);
         const now = await tasks.getTask(task.id).catch(() => null);
         lines.push(
-          now?.state === 'paused'
-            ? `${task.subjectRef}: answered, and waits for a host with room`
-            : `resumed ${task.skill ?? task.kind} on ${task.subjectRef}, answered ${task.answeredAt}`,
+          now?.state !== 'paused'
+            ? `resumed ${task.skill ?? task.kind} on ${task.subjectRef}, answered ${task.answeredAt}`
+            : this.githubWaits.has(task.id)
+              ? `${task.subjectRef}: answered, and waits for GitHub to answer its sign-in’s refresh`
+              : `${task.subjectRef}: answered, and waits for a host with room`,
         );
       } catch (error) {
         lines.push(`${task.subjectRef}: could not resume: ${error instanceof Error ? error.message.slice(0, 120) : String(error)}`);
@@ -1134,6 +1147,7 @@ export class TaskService {
       if (task) await this.names.withBot(task.botId, () => this.hostd.resumeTask(taskId, context, postHeader, files, reviewMode, reviewLens));
       else await this.hostd.resumeTask(taskId, context, postHeader, files);
       this.resumeRetries.delete(taskId);
+      this.githubWaits.delete(taskId);
     } catch (error) {
       if (!task) throw error;
       // A resume may take its seat past its tasks at once — the task was
@@ -1142,6 +1156,13 @@ export class TaskService {
       // only if no host has had room for an hour.
       if (hostWasFull(error) && (await this.retryResumeLater(task))) return;
       const message = error instanceof Error ? error.message : String(error);
+      // GitHub did not answer the refresh of its sign-in. Failed, work a
+      // person had just answered sat until somebody pressed Try again
+      // (found live, 2026-10-21). hostd asks for the token before it takes
+      // the old session down, so nothing was: it stays paused and answered,
+      // and the sweep of answered tasks resumes it once GitHub answers —
+      // for a while, after which it is failed here as any refusal is.
+      if (githubDidNotAnswer(message) && (await this.waitForGitHub(task, message))) return;
       await tasks.updateTaskState(task.id, 'failed', { exitReason: `hostd refused: ${message}` });
       await this.hostd.cleanupTask(task.id, 'resume refused').catch(() => undefined);
       // It was paused on a question, so its lease was too, and a resume that
@@ -1164,6 +1185,47 @@ export class TaskService {
 
   /** A resume a full host refused, and how many times it has been tried again. */
   private readonly resumeRetries = new Map<string, number>();
+
+  /** Answered tasks whose resume GitHub did not answer for, which `resumeAnswered` tries again on every sweep. */
+  private readonly githubWaits = new Set<string>();
+
+  /**
+   * Keeps answered work paused for the sweep of answered tasks to resume once
+   * GitHub answers, and says so once — in its thread, in the log, and as an
+   * event Needs you shows a card for (`RESUME_WAITS_ON_GITHUB`). False once it
+   * has waited `RESUME_GITHUB_WAIT_MS` since the answer, and for a resume no
+   * answered question explains (a plan change approved), which that sweep
+   * never comes back for: kept paused, it would wait with nothing to start it.
+   */
+  private async waitForGitHub(task: Task, reason: string): Promise<boolean> {
+    const answeredAt = await this.answeredAt(task.id);
+    const until = answeredAt === null ? Number.NEGATIVE_INFINITY : Date.parse(answeredAt) + RESUME_GITHUB_WAIT_MS;
+    if (answeredAt === null || Date.now() >= until) {
+      this.githubWaits.delete(task.id);
+      return false;
+    }
+    if (this.githubWaits.has(task.id)) return true;
+    this.githubWaits.add(task.id);
+    const untilAt = new Date(until).toISOString();
+    console.warn(`[bridge] ${task.subjectRef}: answered, and resumes once GitHub answers, until ${untilAt}: ${reason.slice(0, 300)}`);
+    await recordEvent({
+      source: 'platform',
+      type: RESUME_WAITS_ON_GITHUB,
+      payload: { taskId: task.id, subjectRef: task.subjectRef, answeredAt, until: untilAt },
+    }).catch(() => undefined);
+    await threads
+      .ensureThread({ botId: task.botId, repoId: task.repoId, subjectRef: task.subjectRef })
+      .then((thread) =>
+        threads.addMessage({
+          threadId: thread.id,
+          kind: 'sys',
+          author: 'openadlc',
+          text: `answered; it starts again on its own once GitHub answers, which it did not just now when OpenADLC refreshed the bot's sign-in. Tried until ${untilAt.slice(0, 16).replace('T', ' ')} UTC`,
+        }),
+      )
+      .catch(() => undefined);
+    return true;
+  }
 
   /**
    * Schedules a resume again a minute from now; false once no host has had

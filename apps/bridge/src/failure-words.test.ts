@@ -215,3 +215,46 @@ describe('anything else', () => {
     );
   });
 });
+
+describe('a start GitHub did not answer for', () => {
+  // As the bridge recorded it on 2026-10-21, when GitHub answered the refresh with a 503 page.
+  const REASON =
+    "hostd refused: openadlc-atlas-janedoe has no GitHub token yet: GitHub did not answer the refresh of account_fleet-atlas's sign-in (GitHub returned a non-JSON response (503): <!DOCTYPE html>); it is asked again next time";
+
+  it('says OpenADLC tries again on its own, and when, with GitHub’s status beside it', () => {
+    const words = explainFailure(REASON, { bot: 'the builder (openadlc-atlas-janedoe)', retry: { at: new Date('2026-10-21T04:21:30.000Z'), attempt: 1, of: 6 } });
+
+    expect(words.sentence).toBe(
+      'GitHub did not answer when OpenADLC refreshed the sign-in of the builder (openadlc-atlas-janedoe), so the work did not start. ' +
+        'OpenADLC tries again on its own after 2026-10-21 04:22 UTC (retry 1 of 6).',
+    );
+    expect(words.action).toEqual({ kind: 'open_url', label: 'GitHub’s status', url: 'https://www.githubstatus.com' });
+    expect(words.raw).toBe(REASON);
+  });
+
+  it('says the next sweep, not a time that has passed, once the retry is due and the sweep has not come yet', () => {
+    const retry = { at: new Date('2026-10-21T04:18:00.000Z'), attempt: 1, of: 6 };
+
+    const words = explainFailure(REASON, { bot: 'the builder (openadlc-atlas-janedoe)', retry, now: new Date('2026-10-21T04:24:00.000Z') });
+
+    expect(words.sentence).toBe(
+      'GitHub did not answer when OpenADLC refreshed the sign-in of the builder (openadlc-atlas-janedoe), so the work did not start. ' +
+        'OpenADLC tries again on its own at its next sweep (retry 1 of 6).',
+    );
+    // Before it is due, the time.
+    expect(explainFailure(REASON, { bot: 'the builder', retry, now: new Date('2026-10-21T04:17:00.000Z') }).sentence).toContain('after 2026-10-21 04:18 UTC');
+  });
+
+  it('says it has stopped trying once every retry is spent', () => {
+    const words = explainFailure(REASON, { bot: 'the builder (openadlc-atlas-janedoe)', retry: null });
+
+    expect(words.sentence).toBe(
+      'GitHub did not answer when OpenADLC refreshed the sign-in of the builder (openadlc-atlas-janedoe), so the work did not start, ' +
+        'and OpenADLC has stopped trying on its own. Try again once GitHub answers.',
+    );
+  });
+
+  it('is not a sign-in GitHub refused, which needs a reconnect', () => {
+    expect(explainFailure(REASON, { bot: 'the builder' }).action).not.toMatchObject({ kind: 'open_page' });
+  });
+});

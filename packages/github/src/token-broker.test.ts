@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { refreshTokenRef, type SecretStore } from './secrets.js';
-import { refusedByGitHub, TASK_TOKEN_MIN_LIFETIME_MS, TokenBroker } from './token-broker.js';
+import { GitHubUnavailableError, githubDidNotAnswer, refusedByGitHub, TASK_TOKEN_MIN_LIFETIME_MS, TokenBroker } from './token-broker.js';
 
 function memoryStore(seed: Record<string, string> = {}): SecretStore {
   const values = new Map(Object.entries(seed));
@@ -363,11 +363,19 @@ describe('two bridges refreshing one sign-in, as during a rollout', () => {
 });
 
 describe('telling a refused sign-in from GitHub not answering', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
 
   async function refreshFails(answer: () => Promise<Response>): Promise<unknown> {
     vi.stubGlobal('fetch', vi.fn(answer));
-    const broker = new TokenBroker({ clientId: 'Iv1.client', store: memoryStore({ [refreshTokenRef('builder')]: 'ghr_old' }) });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const broker = new TokenBroker({
+      clientId: 'Iv1.client',
+      store: memoryStore({ [refreshTokenRef('builder')]: 'ghr_old' }),
+      refreshRetryMs: [1, 1],
+    });
     return broker.tokenFor('builder').then(
       () => undefined,
       (error: unknown) => error,
@@ -397,13 +405,15 @@ describe('telling a refused sign-in from GitHub not answering', () => {
 
   it('does not count GitHub’s busy or failing OAuth codes, or an OAuth error sent with a 5xx, as refused', async () => {
     const answers = [
-      new Response(JSON.stringify({ error: 'server_error' }), { status: 200 }),
-      new Response(JSON.stringify({ error: 'temporarily_unavailable' }), { status: 200 }),
-      new Response(JSON.stringify({ error: 'slow_down' }), { status: 200 }),
-      new Response(JSON.stringify({ error: 'bad_refresh_token' }), { status: 503 }),
+      () => new Response(JSON.stringify({ error: 'server_error' }), { status: 200 }),
+      () => new Response(JSON.stringify({ error: 'temporarily_unavailable' }), { status: 200 }),
+      () => new Response(JSON.stringify({ error: 'slow_down' }), { status: 200 }),
+      () => new Response(JSON.stringify({ error: 'bad_refresh_token' }), { status: 503 }),
     ];
     for (const answer of answers) {
-      expect(refusedByGitHub(await refreshFails(async () => answer))).toBe(false);
+      const failed = await refreshFails(async () => answer());
+      expect(refusedByGitHub(failed)).toBe(false);
+      expect(failed).toBeInstanceOf(GitHubUnavailableError);
     }
   });
 
@@ -454,7 +464,14 @@ describe('marking a sign-in revoked', () => {
       }),
     );
     const revoked: string[] = [];
-    const one = broker(revoked);
+    // No tries within a request, and none held off, so each ask is one call to GitHub.
+    const one = new TokenBroker({
+      clientId: 'Iv1.client',
+      store: memoryStore({ [refreshTokenRef('atlas')]: 'ghr_stored' }),
+      refreshRetryMs: [],
+      unansweredForMs: 0,
+      onRevoked: (bot) => void revoked.push(bot),
+    });
 
     await expect(one.tokenFor('atlas', 'openadlc-atlas')).rejects.not.toThrow(/no longer valid/);
     await expect(one.tokenFor('atlas', 'openadlc-atlas')).rejects.not.toThrow(/no longer valid/);
@@ -464,6 +481,236 @@ describe('marking a sign-in revoked', () => {
     expect(calls).toBe(3);
     expect(warn).toHaveBeenCalledTimes(2);
     warn.mockRestore();
+  });
+});
+
+describe('GitHub not answering a refresh for a while', () => {
+  /**
+   * On 2026-10-21 GitHub answered a crew account's refresh with a 503 page for
+   * about eighteen minutes. Asked once, the broker gave no token, hostd refused
+   * intake and builder tasks, and they failed for good.
+   */
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const OUTAGE = () => new Response('<!DOCTYPE html><html><body>No server is currently available to service your request.</body></html>', { status: 503 });
+  const REFRESHED = (lifetimeSeconds = 28_800) =>
+    new Response(JSON.stringify({ access_token: 'ghu_fresh', expires_in: lifetimeSeconds, refresh_token: 'ghr_fresh', refresh_token_expires_in: 1 }), {
+      status: 200,
+    });
+
+  function github(answers: (() => Response)[]): { calls: () => number } {
+    let calls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const answer = answers[Math.min(calls, answers.length - 1)]!;
+        calls += 1;
+        return answer();
+      }),
+    );
+    return { calls: () => calls };
+  }
+
+  function broker(options: { revoked?: string[]; now?: () => Date; unansweredForMs?: number } = {}) {
+    const store = memoryStore({ [refreshTokenRef('atlas')]: 'ghr_stored' });
+    return {
+      store,
+      broker: new TokenBroker({
+        clientId: 'Iv1.client',
+        store,
+        refreshRetryMs: [1, 1, 1],
+        unansweredForMs: options.unansweredForMs ?? 0,
+        onRevoked: (bot) => void options.revoked?.push(bot),
+        ...(options.now ? { now: options.now } : {}),
+      }),
+    };
+  }
+
+  it('tries again within the request, and hands out the token GitHub gives once it answers', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const answered = github([OUTAGE, OUTAGE, REFRESHED]);
+    const revoked: string[] = [];
+    const { broker: one, store } = broker({ revoked });
+
+    const token = await one.tokenFor('atlas', 'atlas', { minLifetimeMs: TASK_TOKEN_MIN_LIFETIME_MS });
+
+    expect(token.token).toBe('ghu_fresh');
+    expect(answered.calls()).toBe(3);
+    expect(revoked).toEqual([]);
+    expect(await store.get(refreshTokenRef('atlas'))).toBe('ghr_fresh');
+  });
+
+  it('says GitHub did not answer once its tries are spent, and never marks the sign-in revoked', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const answered = github([OUTAGE]);
+    const revoked: string[] = [];
+    const { broker: one } = broker({ revoked });
+
+    const error = await one.tokenFor('atlas', 'openadlc-atlas').catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(GitHubUnavailableError);
+    expect(githubDidNotAnswer((error as Error).message)).toBe(true);
+    expect((error as Error).message).not.toMatch(/no longer valid/);
+    expect(refusedByGitHub(error)).toBe(false);
+    // The first try and three more.
+    expect(answered.calls()).toBe(4);
+    expect(revoked).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps handing a call the last good token while it is still valid, and not a task, which would outlive it', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let now = new Date('2026-10-21T04:00:00.000Z');
+    // A token with eight hours, then GitHub down.
+    const answered = github([() => REFRESHED(8 * 60 * 60), OUTAGE]);
+    const { broker: one } = broker({ now: () => now });
+    await one.tokenFor('atlas');
+
+    // Two minutes left: a call would refresh it, and gets it back when GitHub does not answer.
+    now = new Date('2026-10-21T11:58:00.000Z');
+    await expect(one.tokenFor('atlas')).resolves.toMatchObject({ token: 'ghu_fresh' });
+    // A task needs five hours it does not have: it is refused, to be tried again later.
+    await expect(one.tokenFor('atlas', 'atlas', { minLifetimeMs: TASK_TOKEN_MIN_LIFETIME_MS })).rejects.toBeInstanceOf(GitHubUnavailableError);
+    // Expired, it is not handed out at all.
+    now = new Date('2026-10-21T12:00:01.000Z');
+    await expect(one.tokenFor('atlas')).rejects.toBeInstanceOf(GitHubUnavailableError);
+    expect(answered.calls()).toBe(1 + 3 * 4);
+  });
+
+  it('counts a 429 as GitHub busy, and asks again', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const answered = github([() => new Response(JSON.stringify({ message: 'API rate limit exceeded' }), { status: 429 }), REFRESHED]);
+
+    await expect(broker().broker.tokenFor('atlas')).resolves.toMatchObject({ token: 'ghu_fresh' });
+    expect(answered.calls()).toBe(2);
+  });
+
+  it('does not ask again within the request after a try that got no answer, which GitHub may have taken', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const unanswered = [
+      () => {
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      },
+      () => {
+        throw new TypeError('fetch failed');
+      },
+    ];
+    for (const answer of unanswered) {
+      const answered = github([answer as () => Response, REFRESHED]);
+      const revoked: string[] = [];
+
+      const error = await broker({ revoked }).broker.tokenFor('atlas').catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(GitHubUnavailableError);
+      expect(answered.calls()).toBe(1);
+      expect(revoked).toEqual([]);
+    }
+  });
+
+  it('counts a 403, a 404, a 200 with no token and a fault here as neither GitHub not answering nor a refusal', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const answers = [
+      () => new Response('<html>Forbidden</html>', { status: 403 }),
+      () => new Response(JSON.stringify({ message: 'Not Found' }), { status: 404 }),
+      () => new Response(JSON.stringify({}), { status: 200 }),
+      () => {
+        throw new RangeError('Invalid URL');
+      },
+    ];
+    for (const answer of answers) {
+      const answered = github([answer as () => Response, REFRESHED]);
+      const revoked: string[] = [];
+
+      const error = (await broker({ revoked }).broker.tokenFor('atlas').catch((caught: unknown) => caught)) as Error;
+
+      expect(error).not.toBeInstanceOf(GitHubUnavailableError);
+      expect(githubDidNotAnswer(error.message)).toBe(false);
+      expect(error.message).toMatch(/^GitHub did not refresh atlas's sign-in/);
+      expect(answered.calls()).toBe(1);
+      expect(revoked).toEqual([]);
+    }
+    expect(warn).toHaveBeenCalledTimes(answers.length);
+  });
+
+  it('does not ask GitHub again for a minute after it did not answer, and fails at once meanwhile', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let now = new Date('2026-10-21T04:16:00.000Z');
+    const answered = github([OUTAGE]);
+    const { broker: one } = broker({ now: () => now, unansweredForMs: 60_000 });
+
+    await expect(one.tokenFor('atlas')).rejects.toBeInstanceOf(GitHubUnavailableError);
+    expect(answered.calls()).toBe(4);
+
+    now = new Date('2026-10-21T04:16:30.000Z');
+    await expect(one.tokenFor('atlas', 'atlas', { minLifetimeMs: TASK_TOKEN_MIN_LIFETIME_MS })).rejects.toThrow(
+      /^GitHub did not answer the refresh of atlas's sign-in .*; it is asked again after 04:17:00 UTC$/,
+    );
+    expect(answered.calls()).toBe(4);
+
+    now = new Date('2026-10-21T04:17:01.000Z');
+    await expect(one.tokenFor('atlas')).rejects.toBeInstanceOf(GitHubUnavailableError);
+    expect(answered.calls()).toBe(8);
+  });
+
+  it('sends the token another refresh stored when GitHub refuses the one it read, after a try that got no answer, and marks nothing revoked', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const revoked: string[] = [];
+    const { broker: one, store } = broker({ revoked });
+    const sent: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        const token = new URLSearchParams(String(init?.body)).get('refresh_token') ?? '';
+        sent.push(token);
+        if (sent.length === 1) throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+        if (token === 'ghr_stored') {
+          // Another bridge refreshed with it meanwhile, and stored what it got.
+          await store.set(refreshTokenRef('atlas'), 'ghr_other');
+          return new Response(JSON.stringify({ error: 'bad_refresh_token', error_description: 'The refresh token passed is incorrect or expired.' }), { status: 200 });
+        }
+        return REFRESHED();
+      }),
+    );
+
+    await expect(one.tokenFor('atlas')).rejects.toBeInstanceOf(GitHubUnavailableError);
+    await expect(one.tokenFor('atlas')).resolves.toMatchObject({ token: 'ghu_fresh' });
+
+    expect(sent).toEqual(['ghr_stored', 'ghr_stored', 'ghr_other']);
+    expect(revoked).toEqual([]);
+  });
+
+  it('marks it revoked, saying why, when GitHub refuses the token a try that got no answer spent', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const revoked: string[] = [];
+    const answered = github([
+      () => {
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      },
+      () => new Response(JSON.stringify({ error: 'bad_refresh_token', error_description: 'The refresh token passed is incorrect or expired.' }), { status: 200 }),
+    ]);
+    const { broker: one } = broker({ revoked });
+
+    await expect(one.tokenFor('atlas')).rejects.toBeInstanceOf(GitHubUnavailableError);
+    await expect(one.tokenFor('atlas', 'openadlc-atlas')).rejects.toThrow(
+      /no longer valid \(The refresh token passed is incorrect or expired\.; a refresh before this one got no answer, and GitHub may have taken the token then\)\. Reconnect it/,
+    );
+    expect(answered.calls()).toBe(2);
+    expect(revoked).toEqual(['atlas']);
+  });
+
+  it('fails at once, with what to do, when GitHub refuses the sign-in with a 401', async () => {
+    const answered = github([() => new Response('Unauthorized', { status: 401 }), REFRESHED]);
+    const revoked: string[] = [];
+    const { broker: one } = broker({ revoked });
+
+    await expect(one.tokenFor('atlas', 'openadlc-atlas')).rejects.toThrow(
+      /atlas's GitHub authorization is no longer valid .*Reconnect it: openadlc auth login --bot openadlc-atlas$/,
+    );
+    expect(answered.calls()).toBe(1);
+    expect(revoked).toEqual(['atlas']);
   });
 });
 

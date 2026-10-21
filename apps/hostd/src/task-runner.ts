@@ -66,6 +66,13 @@ export interface StartedTask {
   branch: string | null;
 }
 
+/** What a resumption settles before it ends the old session; see `TaskRunner.resume`. */
+interface PreparedStart {
+  model: SessionModel;
+  /** Null for a bot with no GitHub login. */
+  githubToken: string | null;
+}
+
 interface ActiveTask {
   cleanup: () => Promise<void>;
   /** The computer the task runs in; `release` takes it down. */
@@ -421,7 +428,12 @@ export class TaskRunner {
     return `https://github.com/${repoFullName}.git`;
   }
 
-  async start(input: StartTaskInput, resolved?: SessionModel): Promise<StartedTask> {
+  /**
+   * `prepared` is what a resumption asked for before it ended the old
+   * session: its model, and its GitHub token. A fresh start asks for both
+   * itself.
+   */
+  async start(input: StartTaskInput, prepared?: PreparedStart): Promise<StartedTask> {
     // Its harvest has to finish before the resume can read the commits back,
     // and nothing may take down the computer this start is about to make.
     const releasing = this.releasing.get(input.taskId);
@@ -432,7 +444,7 @@ export class TaskRunner {
     this.starting.set(input.bot, (this.starting.get(input.bot) ?? 0) + 1);
     this.startingTasks.set(input.taskId, input.bot);
     try {
-      return await this.begin(input, resolved);
+      return await this.begin(input, prepared);
     } catch (error) {
       // Said here too: the bridge was told, and hostd's own log said nothing,
       // so a failed resume looked like a quiet host.
@@ -455,7 +467,7 @@ export class TaskRunner {
     if (this.cancelledStarts.has(taskId)) throw new Error(`task ${taskId} was stopped while it was starting`);
   }
 
-  private async begin(input: StartTaskInput, resolved?: SessionModel): Promise<StartedTask> {
+  private async begin(input: StartTaskInput, prepared?: PreparedStart): Promise<StartedTask> {
     const bot = await bots.getBotByName(input.bot);
     if (!bot) throw new Error(`there is no bot ${input.bot}: it was renamed or removed. Start the work again from the board`);
 
@@ -464,7 +476,7 @@ export class TaskRunner {
     // put a model nobody selected into the ledger. The bot row is read here,
     // so a console change applies to this start and hostd does not restart.
     // A resumption has already resolved it, before ending the old session.
-    const choice = resolved ?? (await this.chooseModel(bot));
+    const choice = prepared?.model ?? (await this.chooseModel(bot));
 
     // Found even once it is removed from OpenADLC: nothing new is started in one,
     // so this is a paused task in it being resumed, and it resumes where it was.
@@ -477,10 +489,8 @@ export class TaskRunner {
     const login = loginFor(choice.account);
     if (login) ensureLoginDir(this.config.loginRoot, login.accountId);
     // Its GitHub token, before a computer or a worktree: a bridge that cannot
-    // mint one fails the start with its reason. A bot with no GitHub login is
-    // not asked, and runs with none.
-    // Narrowed to the task's repository where the install can; see `TokenClient`.
-    const token = this.tokens && bot.githubLogin ? (await this.tokens.tokenForTask(bot.name, repo?.fullName ?? null)).token : null;
+    // mint one fails the start with its reason. A resumption asked already.
+    const token = prepared ? prepared.githubToken : await this.githubTokenFor(bot, repo?.fullName ?? null);
     // The task's own computer, sized as its seat says (config/bots.yaml: it was
     // parsed and never passed, so every computer had the driver's default),
     // with its own database emptied and its own directory. Its clone goes in
@@ -771,6 +781,15 @@ export class TaskRunner {
     return this.installEnvWith(taskId, await this.minter.taskToken(taskId));
   }
 
+  /**
+   * The GitHub token a task of this bot runs with, narrowed to its repository
+   * where the install can (see `TokenClient`); null for a bot with no GitHub
+   * login, which is not asked and runs with none.
+   */
+  private async githubTokenFor(bot: Bot, repoFullName: string | null): Promise<string | null> {
+    return this.tokens && bot.githubLogin ? (await this.tokens.tokenForTask(bot.name, repoFullName)).token : null;
+  }
+
   private installEnvWith(taskId: string, token: string | null): Record<string, string> {
     return {
       OPENADLC_HOSTD_URL: this.taskHostdUrl(),
@@ -806,6 +825,11 @@ export class TaskRunner {
     // worktree, so the task was left paused with nothing behind it. Refused
     // here, the task is as it was and the bridge fails it with the reason.
     const choice = await this.chooseModel(bot);
+    // Its GitHub token too. GitHub not answering the bridge's refresh is a
+    // resume the bridge tries again later (`TaskService.resumeAnswered`).
+    // Asked after `end`, such a refusal left the paused task's computer given
+    // back while its row still named one, which counted against its seat.
+    const githubToken = await this.githubTokenFor(bot, repo?.fullName ?? null);
 
     await this.end(taskId, 'resuming');
 
@@ -841,7 +865,7 @@ export class TaskRunner {
         ...(reviewMode ? { reviewMode } : {}),
         ...(reviewLens ? { reviewLens } : {}),
       },
-      choice,
+      { model: choice, githubToken },
     ).catch(async (error: unknown) => {
       // Written on the task, where the next resume looks: see above.
       if (error instanceof BranchGoneError) {

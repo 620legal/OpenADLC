@@ -77,7 +77,7 @@ vi.mock('@openadlc/db', () => ({
   },
 }));
 
-import { audit, costs, hosts, leases, repos, spendingLimits, tasks, threads } from '@openadlc/db';
+import { audit, costs, hosts, leases, recordEvent, repos, spendingLimits, tasks, threads } from '@openadlc/db';
 import type { BridgeConfig } from './config.js';
 import type { Context } from './context.js';
 import type { HostdClient } from './hostd-client.js';
@@ -968,6 +968,115 @@ describe('a paused task whose question was answered before the bridge restarted'
     expect(await workPaused.resumeAnswered()).toEqual([]);
 
     expect(resumeTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('an answered task whose resume GitHub did not answer for', () => {
+  /**
+   * On 2026-10-21 GitHub answered the bridge's refresh of a crew account with
+   * a 503 page, hostd could not get the task's token, and the bridge failed
+   * tasks a person had just answered in Needs you. Nothing tried them again.
+   */
+  const PAUSED = { id: 'task-1', botId: 'bot-1', repoId: null, kind: 'implement', subjectRef: 'openadlc#7', skill: 'implement', state: 'paused' };
+  const UNANSWERED =
+    "builder has no GitHub token yet: GitHub did not answer the refresh of builder's sign-in (GitHub returned a non-JSON response (503): <html>); it is asked again after 04:17:00 UTC";
+  const unanswered = () => Object.assign(new Error(UNANSWERED), { status: 500 });
+  const answeredAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  let state: string;
+
+  function answered(minutesAgo: number | null) {
+    vi.mocked(threads.listGatesForTasks).mockResolvedValue(
+      (minutesAgo === null ? [] : [{ id: 'gate-1', taskId: 'task-1', state: 'answered', answeredAt: answeredAgo(minutesAgo) }]) as never,
+    );
+  }
+
+  beforeEach(() => {
+    state = 'paused';
+    vi.mocked(tasks.getTask).mockImplementation(async () => ({ ...PAUSED, state }) as never);
+    vi.mocked(tasks.pausedWithAnswer).mockImplementation(async () =>
+      (state === 'paused' ? [{ ...PAUSED, answeredAt: answeredAgo(1) }] : []) as never,
+    );
+    vi.mocked(recordEvent).mockClear();
+  });
+  afterEach(() => {
+    vi.mocked(tasks.pausedWithAnswer).mockReset().mockResolvedValue([]);
+    vi.mocked(threads.listGatesForTasks).mockResolvedValue([]);
+  });
+
+  it('stays paused and answered, says so once, and is resumed by the sweep once GitHub answers', async () => {
+    answered(1);
+    const resumeTask = vi
+      .fn()
+      .mockRejectedValueOnce(unanswered())
+      .mockRejectedValueOnce(unanswered())
+      .mockImplementationOnce(async () => {
+        state = 'running';
+        return { session: 'builder/implement' };
+      });
+    const cleanupTask = vi.fn(async () => undefined);
+    const tasksService = service({ resumeTask, cleanupTask });
+    tasksService.seatPauses = async () => ({});
+
+    // The resume the answer started: not a failure for the person who answered.
+    await expect(tasksService.resume('task-1')).resolves.toBeUndefined();
+    expect(tasks.updateTaskState).not.toHaveBeenCalled();
+    expect(cleanupTask).not.toHaveBeenCalled();
+    expect(vi.mocked(threads.addMessage).mock.calls.map(([message]) => message.text)).toEqual([
+      expect.stringMatching(/^answered; it starts again on its own once GitHub answers, .*Tried until \d{4}-\d\d-\d\d \d\d:\d\d UTC$/),
+    ]);
+    // What Needs you shows a card for while it waits.
+    expect(recordEvent).toHaveBeenCalledWith({
+      source: 'platform',
+      type: 'task.resume_waits_on_github',
+      payload: { taskId: 'task-1', subjectRef: 'openadlc#7', answeredAt: expect.any(String), until: expect.any(String) },
+    });
+
+    // GitHub still down at the next sweep: still paused, and not said again.
+    expect(await tasksService.resumeAnswered()).toEqual(['openadlc#7: answered, and waits for GitHub to answer its sign-in’s refresh']);
+    expect(threads.addMessage).toHaveBeenCalledTimes(1);
+    expect(recordEvent).toHaveBeenCalledTimes(1);
+
+    // GitHub answers: the sweep resumes it.
+    const lines = await tasksService.resumeAnswered();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^resumed implement on openadlc#7/);
+    expect(resumeTask).toHaveBeenCalledTimes(3);
+    expect(tasks.updateTaskState).not.toHaveBeenCalled();
+  });
+
+  it('is failed with why, as any refusal is, once it has waited two hours since the answer', async () => {
+    answered(121);
+    const refusal = unanswered();
+    const cleanupTask = vi.fn(async () => undefined);
+    const tasksService = service({ resumeTask: vi.fn(async () => Promise.reject(refusal)), cleanupTask });
+
+    await expect(tasksService.resume('task-1')).rejects.toBe(refusal);
+
+    expect(tasks.updateTaskState).toHaveBeenCalledWith('task-1', 'failed', { exitReason: `hostd refused: ${UNANSWERED}` });
+    expect(cleanupTask).toHaveBeenCalledWith('task-1', 'resume refused');
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('is failed at once when no answered question explains the resume, since no sweep would come back for it', async () => {
+    answered(null);
+    const refusal = unanswered();
+    const tasksService = service({ resumeTask: vi.fn(async () => Promise.reject(refusal)), cleanupTask: vi.fn(async () => undefined) });
+
+    await expect(tasksService.resume('task-1')).rejects.toBe(refusal);
+
+    expect(tasks.updateTaskState).toHaveBeenCalledWith('task-1', 'failed', { exitReason: `hostd refused: ${UNANSWERED}` });
+  });
+
+  it('is failed at once, with what to do, when GitHub refused the sign-in', async () => {
+    answered(1);
+    const refusal = new Error(
+      "builder has no GitHub token: the bridge would not mint one (409) builder's GitHub authorization is no longer valid (bad_refresh_token). Reconnect it: openadlc auth login --bot janedoe-crew",
+    );
+    const tasksService = service({ resumeTask: vi.fn(async () => Promise.reject(refusal)), cleanupTask: vi.fn(async () => undefined) });
+
+    await expect(tasksService.resume('task-1')).rejects.toBe(refusal);
+
+    expect(tasks.updateTaskState).toHaveBeenCalledWith('task-1', 'failed', { exitReason: `hostd refused: ${refusal.message}` });
   });
 });
 
