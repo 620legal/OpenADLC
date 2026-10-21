@@ -50,12 +50,13 @@ also creates that repository at `$OPENADLC_HOME/scripted/testbed` and seeds with
 `--scripted-board`. Export it for the suites too: they run the dispatcher
 themselves, a pass at a time (`node apps/dispatcher/dist/main.js --once`), and
 only with it does the dispatcher stop holding back builders whose GitHub checks
-fail. CI's `check` job (`.github/workflows/ci.yml`), after the unit tests, is the
-reference setup: an empty Postgres, `OPENADLC_HOME` and a testbed under `.ci/`,
-the scripted seed, and hostd, the bridge and the console started directly, so
-its bridge does not dispatch on its own. It runs `pipeline`, `terminal`,
-`kill-and-restart`, `concurrency` and `onboarding` (not on a draft pull
-request), and never the live suites or `docker-computers`.
+fail. CI's `integration` job (`.github/workflows/ci.yml`), beside the unit
+tests' `check`, is the reference setup: an empty Postgres, `OPENADLC_HOME` and
+a testbed under `.ci/`, the scripted seed, and hostd, the bridge and the
+console started directly, so its bridge does not dispatch on its own. It runs
+`pipeline`, `terminal`, `kill-and-restart`, `concurrency` and `onboarding`
+(not on a draft pull request), and never the live suites or
+`docker-computers`.
 
 ## The suites
 

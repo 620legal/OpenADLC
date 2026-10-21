@@ -43,8 +43,10 @@ on:
 # - the commits are scanned for secrets in a short job of their own, docs
 #   too;
 # - the cloud module runs when `infra/gcp` changed;
-# - the build runs once, and the integration suites follow the unit tests in
-#   the same job (not on a draft);
+# - the unit tests and the integration suites run side by side, in jobs of
+#   their own (`check` and `integration`; the suites not on a draft), each
+#   with the build it needs; setup-node keeps pnpm's store between runs, keyed
+#   by the lockfile;
 # - a push to main whose tree a pull request already passed in full runs
 #   nothing more: the merge line and a squash of an up-to-date pull request
 #   land exactly the tree that was tested.
@@ -172,32 +174,24 @@ jobs:
           echo "scanning $range"
           /tmp/gitleaks git --no-banner --redact --config .gitleaks.toml --log-opts="$range" .
 
-  # The build once, the unit tests, then a real install driven by the
-  # integration suites. One job, because the second build was the costliest
-  # thing two jobs did.
+  # The unit tests, the typecheck and the checks of the change itself, while
+  # `integration` builds everything and drives an install. One job did both,
+  # one after the other, in about four minutes: the build 46 s, the unit tests
+  # 79 s, the suites 60 s. Side by side, each job builds what it needs, and
+  # the run takes as long as the longer one.
+  #
+  # Its name is read: .github/scripts/release-check.mjs counts a run as having
+  # run the tests only when its `check` passed.
   check:
     name: check
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' && needs.changes.outputs.tested != 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 20
 
-    services:
-      postgres:
-        image: postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
-        env:
-          POSTGRES_USER: openadlc
-          POSTGRES_PASSWORD: openadlc
-          POSTGRES_DB: openadlc_db
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U openadlc -d openadlc_db"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
-
+    # No database: no unit test opens one, and make ci runs on a laptop
+    # without one.
     env:
-      DATABASE_URL: postgres://openadlc:openadlc@127.0.0.1:5432/openadlc_db
       OPENADLC_CONFIG_ROOT: ${{ github.workspace }}/config
 
     steps:
@@ -210,6 +204,8 @@ jobs:
         with:
           version: 10.33.3
 
+      # `cache: pnpm` keeps pnpm's store between runs, keyed by the lockfile, so
+      # the install below takes a second.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -231,15 +227,11 @@ jobs:
           # `ci` anywhere, and the merge line waits in every repository at once.
           /tmp/actionlint crew/templates/repo/.github/workflows/*.yml
 
-      # `tsc` for every package and app, and `next build` for the console:
-      # each compiles its tests too, so this is the typecheck as well.
-      - name: build
-        run: pnpm build
-
-      # The root tests/ are not a package `pnpm build` compiles, so their
-      # types are checked here, against the packages just built.
-      - name: typecheck the root tests
-        run: pnpm --filter @openadlc/tests typecheck
+      # The builds the apps' typecheck and tests read: the packages', and the
+      # dispatcher's, which the bridge imports. The apps' own build, `next
+      # build` among them, is `integration`'s.
+      - name: build what the apps import
+        run: pnpm build:imported
 
       # A change that quietly grows past what its issues declared is caught
       # here, with the workflow's own read-only token and no secrets. Whether a
@@ -259,8 +251,62 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: node .github/scripts/scope-check.mjs
 
-      - name: test
-        run: pnpm test
+      # What a builder runs before it opens a pull request (openadlc-ci): every
+      # package's typecheck (`tsc --noEmit`, tests and the root tests/ included)
+      # and unit tests, at once. The Makefile says how many at a time.
+      - name: typecheck and unit tests
+        run: make ci
+
+  # `pnpm build`, then a real install driven by the integration suites. The
+  # build runs on a draft too, which skips only the suites: `check` builds
+  # only what the apps import, and this is where `tsc` writes the apps and
+  # `next build` builds the console.
+  integration:
+    name: integration
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && needs.changes.outputs.tested != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
+        env:
+          POSTGRES_USER: openadlc
+          POSTGRES_PASSWORD: openadlc
+          POSTGRES_DB: openadlc_db
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U openadlc -d openadlc_db"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://openadlc:openadlc@127.0.0.1:5432/openadlc_db
+      OPENADLC_CONFIG_ROOT: ${{ github.workspace }}/config
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.33.3
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # `tsc` for every package and app, and `next build` for the console. It
+      # is the only check of what `tsc --noEmit` does not report, a
+      # declaration that cannot be written among them.
+      - name: build
+        run: pnpm build
 
       - name: migrations apply to an empty database
         run: pnpm db:migrate
@@ -272,7 +318,8 @@ jobs:
       # real install and drives it. The live GitHub suites are deliberately
       # absent: a workflow holds no credentials, and everything the platform
       # does to GitHub is done by a bot's own account through the bridge.
-      # A draft runs the unit tests only; marking it ready runs these.
+      # A draft builds, migrates and seeds, and stops here; marking it ready
+      # runs these.
       - name: a repository for the crew to work in
         if: ${{ !github.event.pull_request.draft }}
         run: |
@@ -427,7 +474,7 @@ jobs:
   # needed and that did not succeed is not.
   ci:
     name: ${{ (github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled' && (github.event.action != 'edited' || github.event.changes.body)) || github.event.label.name == 'adlc:ci' || github.event.label.name == 'scope:cross-cutting') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) && (github.event.pull_request.draft && 'ci (draft)' || 'ci') || 'ci (after approval)' }}
-    needs: [changes, secrets, check, docs, cloud-module]
+    needs: [changes, secrets, check, integration, docs, cloud-module]
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled' && (github.event.action != 'edited' || github.event.changes.body)) || github.event.label.name == 'adlc:ci' || github.event.label.name == 'scope:cross-cutting') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -437,13 +484,14 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           SECRETS: ${{ needs.secrets.result }}
           CHECK: ${{ needs.check.result }}
+          INTEGRATION: ${{ needs.integration.result }}
           DOCS: ${{ needs.docs.result }}
           CLOUD: ${{ needs.cloud-module.result }}
           CODE: ${{ needs.changes.outputs.code }}
           INFRA: ${{ needs.changes.outputs.infra }}
           TESTED: ${{ needs.changes.outputs.tested }}
         run: |
-          echo "changes=$CHANGES secrets=$SECRETS check=$CHECK docs=$DOCS cloud=$CLOUD (code=$CODE infra=$INFRA already-passed=$TESTED)"
+          echo "changes=$CHANGES secrets=$SECRETS check=$CHECK integration=$INTEGRATION docs=$DOCS cloud=$CLOUD (code=$CODE infra=$INFRA already-passed=$TESTED)"
           failed=0
           [ "$CHANGES" = success ] || failed=1
           if [ "$TESTED" = true ]; then
@@ -451,6 +499,7 @@ jobs:
           else
             [ "$SECRETS" = success ] || failed=1
             if [ "$CODE" = true ] && [ "$CHECK" != success ]; then failed=1; fi
+            if [ "$CODE" = true ] && [ "$INTEGRATION" != success ]; then failed=1; fi
             if [ "$CODE" = false ] && [ "$DOCS" != success ]; then failed=1; fi
             if [ "$INFRA" = true ] && [ "$CLOUD" != success ]; then failed=1; fi
           fi
