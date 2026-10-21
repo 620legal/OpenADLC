@@ -61,7 +61,8 @@ describe('local CI on a task’s head', () => {
 
     expect(started.state).toBe('running');
     expect(finished).toMatchObject({ state: 'passed', headSha: 'abc123', exitCode: 0, branch: 'agent/builder/7-issue-7' });
-    expect(exec.exec).toHaveBeenCalledWith(TARGET.computer, LOCAL_CI_COMMAND, { cwd: TARGET.worktree, env: TARGET.env, timeoutMs: 60 * 60_000 });
+    // `reap`: nothing make ci started outlives it, whether it passes, fails or times out.
+    expect(exec.exec).toHaveBeenCalledWith(TARGET.computer, LOCAL_CI_COMMAND, { cwd: TARGET.worktree, env: TARGET.env, timeoutMs: 60 * 60_000, reap: true });
     expect(reported).toEqual([expect.objectContaining({ state: 'passed', headSha: 'abc123' })]);
   });
 
@@ -144,7 +145,7 @@ describe('a make ci that does not finish', () => {
 
     const finished = await ci.settled(ci.start('task-1').id);
 
-    expect(exec).toHaveBeenCalledWith(TARGET.computer, LOCAL_CI_COMMAND, expect.objectContaining({ timeoutMs: 45 * 60_000 }));
+    expect(exec).toHaveBeenCalledWith(TARGET.computer, LOCAL_CI_COMMAND, expect.objectContaining({ timeoutMs: 45 * 60_000, reap: true }));
     expect(finished).toMatchObject({ state: 'failed', headSha: 'abc123', exitCode: 124 });
     expect(finished?.reason).toMatch(/^make ci did not finish within 45 minutes/);
     expect(finished?.logTail).toContain('still waiting on port 5432');

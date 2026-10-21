@@ -24,11 +24,31 @@ self_dir=$(dirname "$0")
 # `make ci` never finished in any task and every build sat in Build until
 # hostd's hour ran out. A folder with git-check.mjs beside the git is one
 # of these.
+#
+# And only a git after this one on PATH: what comes before it there has had
+# its turn. hostd's worktree tests put a git that writes down what it was
+# asked first on PATH, and have it run the git they found there before,
+# which in a task's container is this one. This took theirs for the real
+# git, and the two exec'd each other for good: the tests waited out their
+# 30 seconds in every task's `make ci`, and with a skill's rules set each
+# pass started one more git-check.mjs, until the container had no process
+# left to start and the builder's engine died of SIGABRT. Run by its full
+# path from a PATH that does not hold it, it takes the first git there.
 real=
 saved_ifs=$IFS
 IFS=:
+on_path=
 for dir in $PATH; do
-  if [ -n "$dir" ] && [ "$dir" != "$self_dir" ] && [ -x "$dir/git" ] && ! [ "$dir/git" -ef "$0" ] && ! [ -e "$dir/git-check.mjs" ]; then
+  if [ -n "$dir" ] && [ "$dir/git" -ef "$0" ]; then
+    on_path=1
+    break
+  fi
+done
+before_me=$on_path
+for dir in $PATH; do
+  if [ -n "$dir" ] && [ "$dir/git" -ef "$0" ]; then
+    before_me=
+  elif [ -z "$before_me" ] && [ -n "$dir" ] && [ "$dir" != "$self_dir" ] && [ -x "$dir/git" ] && ! [ -e "$dir/git-check.mjs" ]; then
     real="$dir/git"
     break
   fi
@@ -36,7 +56,11 @@ done
 IFS=$saved_ifs
 
 if [ -z "$real" ]; then
-  echo "git: git is not installed on this host" >&2
+  if [ -n "$on_path" ]; then
+    echo "git: no git after OpenADLC's ($self_dir) on PATH; put the real git's directory after it" >&2
+  else
+    echo "git: git is not installed on this host" >&2
+  fi
   exit 127
 fi
 

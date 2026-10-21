@@ -23,11 +23,27 @@ self_dir=$(dirname "$0")
 # `make ci` never finished in any task and every build sat in Build until
 # hostd's hour ran out. A folder with git-check.mjs beside the pnpm is one
 # of these.
+#
+# And only a pnpm after this one on PATH, as OpenADLC's `git` beside it
+# takes only a git after it: a stand-in first on PATH that runs the pnpm it
+# found there before, which in a task's container is this one, was taken
+# for the real pnpm, and the two exec'd each other for good. Run by its
+# full path from a PATH that does not hold it, it takes the first pnpm there.
 real=
 saved_ifs=$IFS
 IFS=:
+on_path=
 for dir in $PATH; do
-  if [ -n "$dir" ] && [ "$dir" != "$self_dir" ] && [ -x "$dir/pnpm" ] && ! [ "$dir/pnpm" -ef "$0" ] && ! [ -e "$dir/git-check.mjs" ]; then
+  if [ -n "$dir" ] && [ "$dir/pnpm" -ef "$0" ]; then
+    on_path=1
+    break
+  fi
+done
+before_me=$on_path
+for dir in $PATH; do
+  if [ -n "$dir" ] && [ "$dir/pnpm" -ef "$0" ]; then
+    before_me=
+  elif [ -z "$before_me" ] && [ -n "$dir" ] && [ "$dir" != "$self_dir" ] && [ -x "$dir/pnpm" ] && ! [ -e "$dir/git-check.mjs" ]; then
     real="$dir/pnpm"
     break
   fi
@@ -35,7 +51,11 @@ done
 IFS=$saved_ifs
 
 if [ -z "$real" ]; then
-  echo "pnpm: pnpm is not installed here" >&2
+  if [ -n "$on_path" ]; then
+    echo "pnpm: no pnpm after OpenADLC's ($self_dir) on PATH; put the real pnpm's directory after it" >&2
+  else
+    echo "pnpm: pnpm is not installed here" >&2
+  fi
   exit 127
 fi
 

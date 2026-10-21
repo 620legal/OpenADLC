@@ -310,7 +310,9 @@ export class LocalDriver implements ExecDriver {
     // The same rule as a session: the base environment and what was asked
     // for, never hostd's own, which holds the platform's database.
     const env = withRepoHome(hostBaseEnv(), options.env ?? {});
-    if (options.timeoutMs) return execWithDeadline(binary, args, { cwd, env, timeoutMs: options.timeoutMs, killAfterMs: KILL_AFTER_MS });
+    if (options.timeoutMs || options.reap) {
+      return execWithDeadline(binary, args, { cwd, env, timeoutMs: options.timeoutMs, killAfterMs: KILL_AFTER_MS, reap: options.reap });
+    }
     try {
       const { stdout, stderr } = await run(binary, args, { cwd, env, maxBuffer: EXEC_MAX_BUFFER });
       return { code: 0, stdout, stderr };
@@ -333,12 +335,14 @@ const EXEC_MAX_BUFFER = 16 * 1024 * 1024;
  * has passed: SIGTERM to its process group, then SIGKILL `killAfterMs` later.
  * Its own group, so `make ci`'s test runner and its workers go with it;
  * killing only `make` left them running. Not coreutils `timeout`, which a
- * Mac does not have.
+ * Mac does not have. With `reap`, what is left in that group is killed as
+ * soon as the command ends, however it ends (`ExecOptions.reap`); the host
+ * has no /proc to find one that left the group, as the docker driver does.
  */
 export function execWithDeadline(
   binary: string,
   args: string[],
-  options: { cwd: string; env: Record<string, string>; timeoutMs: number; killAfterMs: number },
+  options: { cwd: string; env: Record<string, string>; timeoutMs?: number; killAfterMs: number; reap?: boolean },
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     const child = spawn(binary, args, { cwd: options.cwd, env: options.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -356,20 +360,24 @@ export function execWithDeadline(
         // Already gone.
       }
     };
-    const deadline = setTimeout(() => {
-      timedOut = true;
-      signal('SIGTERM');
-      killer = setTimeout(() => {
-        signal('SIGKILL');
-        // Something that left the group may still hold its output open.
-        setTimeout(() => settle({ code: 137, stdout, stderr }), 1000).unref();
-      }, options.killAfterMs);
-    }, options.timeoutMs);
+    const deadline = options.timeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          signal('SIGTERM');
+          killer = setTimeout(() => {
+            signal('SIGKILL');
+            // Something that left the group may still hold its output open.
+            setTimeout(() => settle({ code: 137, stdout, stderr }), 1000).unref();
+          }, options.killAfterMs);
+        }, options.timeoutMs)
+      : null;
     const settle = (result: ExecResult) => {
-      clearTimeout(deadline);
+      if (deadline) clearTimeout(deadline);
       if (killer) clearTimeout(killer);
       resolve(timedOut ? { ...result, timedOut: true } : result);
     };
+    // On its exit rather than its output's end: what it left may hold that open.
+    if (options.reap) child.on('exit', () => signal('SIGKILL'));
     child.on('error', (error) => settle({ code: 1, stdout, stderr: stderr || error.message }));
     child.on('close', (code, signalName) => settle({ code: code ?? (signalName ? 128 + (signalName === 'SIGKILL' ? 9 : 15) : 1), stdout, stderr }));
   });

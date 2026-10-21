@@ -1,5 +1,5 @@
-import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -109,6 +109,53 @@ describe('OpenADLC’s pnpm beside another copy of itself', () => {
     expect(ran.error).toBeUndefined();
     expect(ran.status).toBe(0);
     expect(calls()).toEqual([`--version | store= | retries=`]);
+  });
+});
+
+describe('OpenADLC’s pnpm behind a stand-in pnpm that runs it', () => {
+  it('runs the pnpm after it on PATH, not the stand-in before it, which it exec’d back and forth with for good', () => {
+    // A test's pnpm first on PATH that runs the one it found there before,
+    // which in a task's container is this one. The stand-in gives up after a
+    // few runs, so a loop fails here at once.
+    const bin = join(import.meta.dirname, '..', 'bin');
+    const stand = join(dir, 'stand-in');
+    const runs = join(dir, 'stand-in-runs');
+    mkdirSync(stand);
+    writeFileSync(
+      join(stand, 'pnpm'),
+      [
+        '#!/bin/sh',
+        `[ -f '${runs}' ] && [ "$(wc -l < '${runs}')" -ge 5 ] && { echo 'the stand-in was run again' >&2; exit 97; }`,
+        `echo "$*" >> '${runs}'`,
+        `exec '${SHIM}' "$@"`,
+        '',
+      ].join('\n'),
+    );
+    chmodSync(join(stand, 'pnpm'), 0o755);
+    const ran = spawnSync(join(stand, 'pnpm'), ['--version'], {
+      cwd: join(dir, 'wt'),
+      env: { PATH: [stand, bin, join(dir, 'real'), '/usr/bin', '/bin'].join(':'), HOME: home },
+      encoding: 'utf8',
+      timeout: 10_000,
+      killSignal: 'SIGKILL',
+    });
+    expect(ran.error).toBeUndefined();
+    expect(ran.stderr).toBe('');
+    expect(ran.status).toBe(0);
+    expect(readFileSync(runs, 'utf8')).toBe('--version\n');
+    expect(calls()).toEqual([`--version | store= | retries=`]);
+  });
+
+  it('says there is no pnpm after it on PATH, rather than that pnpm is not installed, when one is only before it', () => {
+    const bin = join(import.meta.dirname, '..', 'bin');
+    const tools = join(dir, 'tools');
+    mkdirSync(tools);
+    // What the wrapper itself runs, and no pnpm.
+    symlinkSync(execFileSync('sh', ['-c', 'command -v dirname'], { encoding: 'utf8' }).trim(), join(tools, 'dirname'));
+    const ran = spawnSync(SHIM, ['--version'], { cwd: join(dir, 'wt'), env: { PATH: [join(dir, 'real'), bin, tools].join(':'), HOME: home }, encoding: 'utf8', timeout: 10_000 });
+    expect(ran.status).toBe(127);
+    expect(ran.stderr).toBe(`pnpm: no pnpm after OpenADLC's (${bin}) on PATH; put the real pnpm's directory after it\n`);
+    expect(calls()).toEqual([]);
   });
 });
 

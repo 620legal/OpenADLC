@@ -221,6 +221,26 @@ describe('a command past its deadline on the host', () => {
     }
   });
 
+  it('ends what the command left in its group once it has ended, deadline or not, when told to', async () => {
+    // As hostd runs `make ci`: what a failed run left going outlived it.
+    const driver = new LocalDriver('tmux', '/tmp', '/tmp/openadlc-logins');
+    for (const deadline of [{ timeoutMs: 60_000 }, {}]) {
+      const result = await driver.exec({ bot: 'atlas' }, ['sh', '-c', 'sleep 30 >/dev/null 2>&1 & echo $!; exit 2'], { cwd: '/tmp', reap: true, ...deadline });
+      const pid = Number(result.stdout.trim());
+      try {
+        expect(result.code).toBe(2);
+        expect(result.timedOut).toBeUndefined();
+        await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5_000 });
+      } finally {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+  });
+
   it('runs as before with no deadline', async () => {
     const driver = new LocalDriver('tmux', '/tmp', '/tmp/openadlc-logins');
     expect(await driver.exec({ bot: 'atlas' }, ['sh', '-c', 'echo hi'], { cwd: '/tmp' })).toEqual({ code: 0, stdout: 'hi\n', stderr: '' });
