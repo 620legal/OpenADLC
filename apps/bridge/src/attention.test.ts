@@ -91,6 +91,103 @@ async function load() {
   return import('./attention.js');
 }
 
+/**
+ * A plan-change card offers the ways to settle a builder's requests in one
+ * step (#77), and says which is on: approve all for the work, the designer's
+ * view, or neither.
+ */
+describe('a builder asking for more paths', () => {
+  const architect = { id: 'bot-architect', name: 'architect', slot: 'system-engineer', role: 'spec', githubLogin: null };
+  const gate = { id: 'gate-p', taskId: 'task-p', question: 'Add `apps/hostd/src/x.ts`?', options: ['Approve', 'Refuse'], githubCommentUrl: null, createdAt: minutesAgo(3) };
+  const build = () => task({ id: 'task-p', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'paused' });
+  const read = async (extra: Record<string, unknown>, tasks: TaskFacts[] = [build()]) => {
+    const { attentionItems } = await load();
+    return attentionItems({
+      now: NOW,
+      gates: [gate],
+      tasks,
+      bots: [...BOTS, architect],
+      repos: REPOS,
+      issues: ISSUES,
+      requests: [],
+      stallEvents: [],
+      ...extra,
+    } as never)[0];
+  };
+  const plan = { paths: ['apps/hostd/src/x.ts'], reason: 'r', held: null };
+
+  it('offers approve all for its issue and asking the designer, beside the choices', async () => {
+    const item = await read({ planChanges: new Map([['gate-p', plan]]) });
+    expect(item?.question).toEqual({ gateId: 'gate-p', options: ['Approve', 'Refuse'] });
+    expect(item?.actions.slice(0, 2)).toEqual([
+      { kind: 'approve_all', label: 'Approve, and any more paths for #16', gateId: 'gate-p' },
+      { kind: 'ask_designer', label: 'Ask the designer', gateId: 'gate-p' },
+    ]);
+  });
+
+  it('says approve all is on, why this one still asks, and offers to turn it off', async () => {
+    const item = await read({
+      planChanges: new Map([['gate-p', { ...plan, standing: { setBy: 'orzelig', humanReview: ['config/review.yaml'] } }]]),
+      standing: [{ repoId: 'repo-1', issueNumber: 16, setBy: 'orzelig', setAt: minutesAgo(30) }],
+    });
+    expect(item?.context).toContain('Approve all is on for #16, set by orzelig; `config/review.yaml` is under Human review, so a person decides this one.');
+    expect(item?.actions.map((action) => action.kind)).not.toContain('approve_all');
+    expect(item?.actions).toContainEqual({ kind: 'approve_all_off', label: 'Turn off approve all for #16', subject: 'openadlc-testbed#16' });
+  });
+
+  it('says the designer is judging it while it is, and offers nothing to ask again', async () => {
+    const judging = task({ id: 'task-d', botId: 'bot-architect', kind: 'spec', subjectRef: 'openadlc-testbed#16', state: 'running', skill: 'plan-change-review' });
+    const item = await read({ planChanges: new Map([['gate-p', { ...plan, designer: { taskId: 'task-d', askedBy: 'orzelig', at: minutesAgo(1) } }]]) }, [build(), judging]);
+    expect(item?.context).toContain('The designer (architect) is judging it, asked by orzelig.');
+    expect(item?.actions.map((action) => action.kind)).not.toContain('ask_designer');
+  });
+
+  it('shows the designer’s view, and why it did not settle it', async () => {
+    const judged = task({ id: 'task-d', botId: 'bot-architect', kind: 'spec', subjectRef: 'openadlc-testbed#16', state: 'done', skill: 'plan-change-review' });
+    const item = await read(
+      {
+        planChanges: new Map([
+          [
+            'gate-p',
+            {
+              ...plan,
+              designer: { taskId: 'task-d', askedBy: 'orzelig', at: minutesAgo(1), verdict: 'approve', reason: 'The design needs it.', counted: false, outside: [{ path: 'apps/hostd/src/x.ts', why: 'the design neither names it nor anything beside it' }] },
+            },
+          ],
+        ]),
+      },
+      [build(), judged],
+    );
+    expect(item?.context).toContain('The designer (architect) would approve: The design needs it.');
+    expect(item?.context).toContain('It does not settle it: `apps/hostd/src/x.ts`: the design neither names it nor anything beside it.');
+    expect(item?.actions.map((action) => action.kind)).not.toContain('ask_designer');
+  });
+
+  it('offers the designer again when its task ended without an answer', async () => {
+    const failed = task({ id: 'task-d', botId: 'bot-architect', kind: 'spec', subjectRef: 'openadlc-testbed#16', state: 'failed', skill: 'plan-change-review' });
+    const item = await read({ planChanges: new Map([['gate-p', { ...plan, designer: { taskId: 'task-d', askedBy: 'orzelig', at: minutesAgo(1) } }]]) }, [build(), failed]);
+    expect(item?.context).toContain('The designer’s task ended without an answer.');
+    expect(item?.actions.map((action) => action.kind)).toContain('ask_designer');
+  });
+
+  it('offers neither while a person’s approval waits on another lease', async () => {
+    const item = await read({ planChanges: new Map([['gate-p', { ...plan, held: { approvedBy: 'orzelig', blockedBy: [12] } }]]) });
+    expect(item?.actions.map((action) => action.kind)).not.toContain('approve_all');
+    expect(item?.actions.map((action) => action.kind)).not.toContain('ask_designer');
+  });
+
+  it('offers no designer to a crew with no design seat', async () => {
+    const { attentionItems } = await load();
+    const [item] = attentionItems({ now: NOW, gates: [gate], tasks: [build()], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [], planChanges: new Map([['gate-p', plan]]) } as never);
+    expect(item?.actions.map((action) => action.kind)).toEqual(['approve_all', 'answer', 'stop_task']);
+  });
+
+  it('is an ordinary question when the gate asked no plan change', async () => {
+    const item = await read({});
+    expect(item?.actions.map((action) => action.kind)).toEqual(['answer', 'stop_task']);
+  });
+});
+
 describe('what needs a person', () => {
   it('says a bot’s question, offers its choices to answer it with, and something else in its thread', async () => {
     const { attentionItems } = await load();

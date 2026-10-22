@@ -12,7 +12,11 @@ import {
   lastForPullRequest,
   latestLease,
   listHeldPlanChanges,
+  narrowPaths,
+  notePlanChange,
+  planChangeOfDesignerTask,
   planChangeOfGate,
+  planChangesOfGates,
   reacquireForPullRequest,
   releaseForPullRequest,
   releaseForRepo,
@@ -426,5 +430,67 @@ describe('an issue’s attempts without a pull request', () => {
     expect(text).toContain("a.action = 'issue.triaged' and a.target = r.name || '#' || $2::int");
     expect(text).toMatch(/l\.created_at > coalesce\( \(select max\(a\.at\) from audit a, repos r where r\.id = \$1 /);
     expect(text).toContain("'-infinity')");
+  });
+});
+
+describe('what was decided about a plan change, beside its request (#77)', () => {
+  it('reads who was asked to judge it, who decided it and whether it was taken back', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({
+      payload: {
+        planChange: { paths: ['a.ts'], reason: 'r' },
+        designer: { taskId: 'task-9', askedBy: 'orzelig', at: '2026-10-22T10:00:00.000Z', verdict: 'approve', reason: 'named', counted: false, outside: [{ path: 'a.ts', why: 'w' }] },
+        decided: { by: 'designer', seat: 'architect', at: '2026-10-22T10:05:00.000Z' },
+        takenBack: { by: 'orzelig', at: '2026-10-22T11:00:00.000Z' },
+        standing: { setBy: 'orzelig', humanReview: ['config/x.yaml', 3] },
+      },
+    });
+
+    await expect(planChangeOfGate('gate-1')).resolves.toEqual({
+      paths: ['a.ts'],
+      reason: 'r',
+      held: null,
+      designer: { taskId: 'task-9', askedBy: 'orzelig', at: '2026-10-22T10:00:00.000Z', verdict: 'approve', reason: 'named', counted: false, outside: [{ path: 'a.ts', why: 'w' }] },
+      decided: { by: 'designer', seat: 'architect', at: '2026-10-22T10:05:00.000Z' },
+      takenBack: { by: 'orzelig', at: '2026-10-22T11:00:00.000Z' },
+      standing: { setBy: 'orzelig', humanReview: ['config/x.yaml'] },
+    });
+  });
+
+  it('writes a note on the gate’s message, one key at a time, beside what is there', async () => {
+    await notePlanChange('gate-1', 'designer', { taskId: 'task-9', askedBy: 'orzelig' });
+    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
+    expect(String(sql)).toMatch(/update messages set payload = payload \|\| jsonb_build_object\(\$2::text, \$3::jsonb\)/);
+    expect(params).toEqual(['gate-1', 'designer', JSON.stringify({ taskId: 'task-9', askedBy: 'orzelig' })]);
+    await expect(notePlanChange('gate-1', 'planChange' as never, {})).rejects.toThrow(/not a note/);
+  });
+
+  it('finds the plan change a designer’s task was asked to judge', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ gate_id: 'gate-1', payload: { planChange: { paths: ['a.ts'], reason: 'r' }, designer: { taskId: 'task-9', askedBy: 'x', at: 't' } } });
+    await expect(planChangeOfDesignerTask('task-9')).resolves.toMatchObject({ gateId: 'gate-1', request: { paths: ['a.ts'] } });
+    const [sql, params] = vi.mocked(queryOne).mock.calls[0] ?? [];
+    expect(String(sql)).toMatch(/payload->'designer'->>'taskId' = \$1/);
+    expect(params).toEqual(['task-9']);
+  });
+
+  it('reads the plan changes of many gates in one read', async () => {
+    vi.mocked(query).mockResolvedValueOnce([
+      { gate_id: 'gate-1', payload: { planChange: { paths: ['a.ts'], reason: 'r' } } },
+      { gate_id: 'gate-2', payload: { options: ['yes'] } },
+    ]);
+    const read = await planChangesOfGates(['gate-1', 'gate-2']);
+    expect([...read.keys()]).toEqual(['gate-1']);
+    await expect(planChangesOfGates([])).resolves.toEqual(new Map());
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes paths back out of a lease and its issue, whatever state the lease is in', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, state: 'released', declared_paths: ['apps/bridge/src/gates.ts'] });
+    const lease = await narrowPaths('lease-1', ['apps/hostd/src/skill-runner.ts']);
+    const [sql, params] = vi.mocked(queryOne).mock.calls[0] ?? [];
+    expect(String(sql)).toMatch(/update leases set/);
+    expect(String(sql)).toMatch(/update issues set/);
+    expect(String(sql)).not.toMatch(/state = any/);
+    expect(params).toEqual(['lease-1', ['apps/hostd/src/skill-runner.ts']]);
+    expect(lease?.declaredPaths).toEqual(['apps/bridge/src/gates.ts']);
   });
 });

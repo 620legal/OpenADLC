@@ -504,11 +504,39 @@ export interface PlanChangeRecord {
   reason: string;
   /** Approved, but waiting for another lease to let go of a path it asked for, or failed once none did. */
   held: PlanChangeHold | null;
+  /** The design seat asked to judge it, and its answer once it gave one (#77). */
+  designer?: DesignerAsk;
+  /** Approved by someone other than a person answering: the designer, or a standing approval. */
+  decided?: { by: 'designer' | 'standing_approval'; at: string; [key: string]: unknown };
+  /** A person refused it after it was approved that way, and the paths were taken back. */
+  takenBack?: { by: string; at: string };
+  /** A standing approval was on when it was asked, and these paths kept it for a person. */
+  standing?: { setBy: string; humanReview: string[] };
 }
+
+/** The design seat's part in a plan change: who asked it, its task, and what it answered. */
+export interface DesignerAsk {
+  taskId: string;
+  askedBy: string;
+  at: string;
+  verdict?: 'approve' | 'refuse';
+  reason?: string;
+  /** Whether its answer counted as the decision; false is advice, with `outside` saying why. */
+  counted?: boolean;
+  outside?: { path: string; why: string }[];
+}
+
+/** What may be noted on a plan change's gate message, beside the request and its hold. */
+export type PlanChangeNote = 'designer' | 'decided' | 'takenBack' | 'standing';
+const NOTES: readonly PlanChangeNote[] = ['designer', 'decided', 'takenBack', 'standing'];
 
 interface PlanChangePayload {
   planChange?: { paths?: unknown; reason?: unknown };
   held?: unknown;
+  designer?: Record<string, unknown>;
+  decided?: Record<string, unknown>;
+  takenBack?: Record<string, unknown>;
+  standing?: Record<string, unknown>;
 }
 
 /** A hold as `holdPlanChange` wrote it, or null for anything else. */
@@ -522,13 +550,51 @@ export function toHold(raw: unknown): PlanChangeHold | null {
   };
 }
 
+const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+
+function designerOf(raw: Record<string, unknown> | undefined): DesignerAsk | null {
+  if (!raw || typeof raw.taskId !== 'string') return null;
+  const verdict = raw.verdict === 'approve' || raw.verdict === 'refuse' ? raw.verdict : undefined;
+  const outside = Array.isArray(raw.outside)
+    ? raw.outside
+        .filter((entry): entry is { path: string; why: string } => typeof entry?.path === 'string' && typeof entry?.why === 'string')
+        .map((entry) => ({ path: entry.path, why: entry.why }))
+    : undefined;
+  return {
+    taskId: raw.taskId,
+    askedBy: text(raw.askedBy),
+    at: text(raw.at),
+    ...(verdict ? { verdict } : {}),
+    ...(typeof raw.reason === 'string' ? { reason: raw.reason } : {}),
+    ...(typeof raw.counted === 'boolean' ? { counted: raw.counted } : {}),
+    ...(outside ? { outside } : {}),
+  };
+}
+
 function toPlanChange(payload: PlanChangePayload | null): PlanChangeRecord | null {
   const request = payload?.planChange;
   if (!request || !Array.isArray(request.paths)) return null;
+  const designer = designerOf(payload?.designer);
+  const decided = payload?.decided;
+  const takenBack = payload?.takenBack;
+  const standing = payload?.standing;
   return {
     paths: request.paths.filter((path): path is string => typeof path === 'string'),
     reason: typeof request.reason === 'string' ? request.reason : '',
     held: toHold(payload?.held),
+    ...(designer ? { designer } : {}),
+    ...(decided && (decided.by === 'designer' || decided.by === 'standing_approval')
+      ? { decided: { ...decided, by: decided.by, at: text(decided.at) } }
+      : {}),
+    ...(takenBack && typeof takenBack.by === 'string' ? { takenBack: { by: takenBack.by, at: text(takenBack.at) } } : {}),
+    ...(standing && typeof standing.setBy === 'string'
+      ? {
+          standing: {
+            setBy: standing.setBy,
+            humanReview: Array.isArray(standing.humanReview) ? standing.humanReview.filter((path): path is string => typeof path === 'string') : [],
+          },
+        }
+      : {}),
   };
 }
 
@@ -573,4 +639,76 @@ export async function listHeldPlanChanges(): Promise<{ gateId: string; request: 
     const request = toPlanChange(row.payload);
     return request?.held ? [{ gateId: row.gate_id, request }] : [];
   });
+}
+
+/**
+ * Notes one thing about a plan change on its gate's message, beside the
+ * request: the designer asked and its answer, who decided it when no person
+ * answered, a refusal after the fact, a standing approval that could not
+ * cover it. Only these keys: the request itself is what the bot asked, and is
+ * never rewritten.
+ */
+export async function notePlanChange(gateId: string, note: PlanChangeNote, value: Record<string, unknown>): Promise<void> {
+  if (!NOTES.includes(note)) throw new Error(`${String(note)} is not a note a plan change keeps`);
+  await query(
+    `update messages set payload = payload || jsonb_build_object($2::text, $3::jsonb)
+      where kind = 'gate' and payload->>'gateId' = $1`,
+    [gateId, note, JSON.stringify(value)],
+  );
+}
+
+/** The plan change a design seat's task was asked to judge, by that task. */
+export async function planChangeOfDesignerTask(taskId: string): Promise<{ gateId: string; request: PlanChangeRecord } | null> {
+  const row = await queryOne<{ gate_id: string; payload: PlanChangePayload }>(
+    `select payload->>'gateId' as gate_id, payload from messages
+      where kind = 'gate' and payload->'designer'->>'taskId' = $1
+      order by at desc limit 1`,
+    [taskId],
+  );
+  const request = row ? toPlanChange(row.payload) : null;
+  return row && request ? { gateId: row.gate_id, request } : null;
+}
+
+/** The plan changes these gates asked, by gate, in one read; a gate that asked an ordinary question is left out. */
+export async function planChangesOfGates(gateIds: readonly string[]): Promise<Map<string, PlanChangeRecord>> {
+  if (gateIds.length === 0) return new Map();
+  const rows = await query<{ gate_id: string; payload: PlanChangePayload }>(
+    `select payload->>'gateId' as gate_id, payload from messages
+      where kind = 'gate' and payload->>'gateId' = any($1::text[]) and payload ? 'planChange'`,
+    [[...gateIds]],
+  );
+  const read = new Map<string, PlanChangeRecord>();
+  for (const row of rows) {
+    const request = toPlanChange(row.payload);
+    if (request) read.set(row.gate_id, request);
+  }
+  return read;
+}
+
+/**
+ * Takes paths back out of a lease and its issue's paths, in one statement:
+ * what a person's refusal of an approval they did not give undoes. Whatever
+ * the lease's state: a released lease is still what the merge line holds the
+ * pull request to (`latestLease`).
+ */
+export async function narrowPaths(leaseId: string, paths: readonly string[]): Promise<Lease | null> {
+  const row = await queryOne<LeaseRow>(
+    `with narrowed as (
+       update leases set
+         declared_paths = array(select path from unnest(declared_paths) as entry(path) where path <> all($2::text[])),
+         updated_at = now()
+       where id = $1
+       returning id, repo_id, issue_number, bot_id, declared_paths, state, expires_at, pr_number, updated_at
+     ), issue as (
+       update issues set
+         declared_paths = array(select path from unnest(issues.declared_paths) as entry(path) where path <> all($2::text[])),
+         updated_at = now()
+       from narrowed
+       where issues.repo_id = narrowed.repo_id and issues.number = narrowed.issue_number
+       returning issues.id
+     )
+     select * from narrowed`,
+    [leaseId, [...paths]],
+  );
+  return row ? toLease(row) : null;
 }

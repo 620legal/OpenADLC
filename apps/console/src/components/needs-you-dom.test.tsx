@@ -27,6 +27,7 @@ const pressed = vi.hoisted(() => ({
   keysRevoked: [] as string[],
   keysDismissed: [] as string[],
   keysUndone: [] as string[],
+  settled: [] as string[],
 }));
 vi.mock('@/app/actions', () => ({
   answerGate: vi.fn(async () => ({ ok: true })),
@@ -48,6 +49,9 @@ vi.mock('@/app/actions', () => ({
   revokeSigningKey: vi.fn(async (login: string, keyId: number) => (pressed.keysRevoked.push(`${login}:${keyId}`), { ok: true })),
   dismissSigningKey: vi.fn(async (login: string, keyId: number) => (pressed.keysDismissed.push(`${login}:${keyId}`), { ok: true })),
   undismissSigningKey: vi.fn(async (login: string, keyId: number) => (pressed.keysUndone.push(`${login}:${keyId}`), { ok: true })),
+  approveAll: vi.fn(async (gateId: string) => (pressed.settled.push(`approve-all:${gateId}`), { ok: true })),
+  askDesigner: vi.fn(async (gateId: string) => (pressed.settled.push(`designer:${gateId}`), { ok: true })),
+  turnOffApproveAll: vi.fn(async (subject: string) => (pressed.settled.push(`off:${subject}`), { ok: true })),
 }));
 const navigated = vi.hoisted(() => [] as string[]);
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => undefined, replace: (to: string) => void navigated.push(to) }) }));
@@ -822,5 +826,46 @@ describe('what a card opens', () => {
     await click(button('Open thread', container));
     expect(bots).toEqual(['irisexampleco']);
     expect(items).toEqual([]);
+  });
+});
+
+describe('a builder asking for more paths (#77)', () => {
+  const ASKING: AttentionItem = {
+    id: 'gate:g-1',
+    kind: 'question',
+    headline: 'The builder (atlas) has a question',
+    subject: { repo: 'openadlc-testbed', number: 16, title: 'Let the board filter by label', ref: 'openadlc-testbed#16', url: null },
+    bot: { name: 'atlas', slot: 'builder', role: 'implement', roleLabel: 'builder', githubLogin: 'atlas' },
+    since: '2026-09-24T11:58:00.000Z',
+    detail: 'Add `apps/hostd/src/x.ts` to this issue’s Expected paths?',
+    question: { gateId: 'g-1', options: ['Approve', 'Refuse'] },
+    actions: [
+      { kind: 'approve_all', label: 'Approve, and any more paths for #16', gateId: 'g-1' },
+      { kind: 'ask_designer', label: 'Ask the designer', gateId: 'g-1' },
+      { kind: 'answer', label: 'Something else…', bot: 'atlas' },
+      { kind: 'stop_task', label: 'Stop', taskId: 'task-b' },
+      { kind: 'approve_all_off', label: 'Turn off approve all for #16', subject: 'openadlc-testbed#16' },
+    ],
+  };
+
+  it('approves this and the rest of the work’s paths, or asks the designer, from the card', async () => {
+    pressed.settled = [];
+    await render([ASKING]);
+    const card = container.querySelector('article')!;
+    expect(button('Approve', card)).toBeTruthy();
+
+    await click(button('Approve, and any more paths for #16', card));
+    await click(button('Ask the designer', card));
+    expect(pressed.settled).toEqual(['approve-all:g-1', 'designer:g-1']);
+    // Neither is drawn as the one to press: the choices are.
+    expect(button('Approve, and any more paths for #16', card).className).not.toContain('bg-body');
+  });
+
+  it('turns approve all off from its sheet', async () => {
+    pressed.settled = [];
+    await render([ASKING]);
+    await click(button('Show more', container));
+    await click(button('Turn off approve all for #16', sheet()!));
+    expect(pressed.settled).toEqual(['off:openadlc-testbed#16']);
   });
 });

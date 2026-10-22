@@ -62,8 +62,11 @@ export function faceActions(item: AttentionItem): AttentionAction[] {
   const dismiss = item.actions.find((action) => action.kind === 'acknowledge');
   const incident = item.actions.find((action) => action.kind === 'incident');
   const question = item.kind === 'question' && (item.question?.options.length ?? 0) > 0;
+  // A plan change's other ways to settle it sit beside Approve and Refuse:
+  // approving the rest of the work's requests, or asking the designer.
+  const settle = question ? item.actions.filter((action) => action.kind === 'approve_all' || action.kind === 'ask_designer') : [];
   const first = question ? null : (item.actions.find((action) => action !== dismiss && action !== incident) ?? null);
-  return [dismiss, first, incident].filter((action): action is AttentionAction => Boolean(action));
+  return [...settle, dismiss, first, incident].filter((action): action is AttentionAction => Boolean(action));
 }
 
 /**

@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useId, useRef, useState } from 'react';
-import { sendItemMessage } from '@/app/actions';
+import { useEffect, useId, useRef, useState, useTransition } from 'react';
+import { refuseSettledPlanChange, sendItemMessage, turnOffApproveAll } from '@/app/actions';
 import { useRole } from '@/components/app-header';
 import { AttachmentDrop, type AttachmentState } from '@/components/attachment-drop';
 import { CheckIcon, CloseIcon, ComputerIcon, ExternalIcon, TerminalIcon, WarningIcon } from '@/components/icons';
@@ -11,7 +11,7 @@ import { RepoBadge } from '@/components/repo-badge';
 import { ComputerTab, TerminalTab, useSessions } from '@/components/task-computer';
 import { OpenQuestions } from '@/components/thread-panel';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import type { DesignMemoryEntry, ItemAttachment, ItemTask, ItemView as ItemData } from '@/lib/api';
+import type { DesignMemoryEntry, ItemAttachment, ItemTask, ItemView as ItemData, SettledPlanChange } from '@/lib/api';
 import { KIND_WORDS } from '@/components/design-memory';
 import { megabytes, WHERE_FILES_GO } from '@/lib/attachments';
 import { botLabel } from '@/lib/bot-label';
@@ -409,7 +409,83 @@ function ItemHeader({
       {view?.issue && !['merged', 'done'].includes(view.issue.stage) && (
         <IssueControls issue={{ subject: view.key, number: view.issue.number, held: view.held ?? null, next: view.next ?? false }} />
       )}
+      {view && (view.standingApproval || (view.settledPlanChanges ?? []).length > 0) && (
+        <PlanChangeSettlements subject={view.key} standing={view.standingApproval ?? null} settled={view.settledPlanChanges ?? []} />
+      )}
     </div>
+  );
+}
+
+/**
+ * The builder's plan changes settled without a person answering each (#77):
+ * approve all while it is on, with Turn off, and each request the designer or
+ * approve all approved, with Refuse, which takes its paths back out of the
+ * lease and the issue and stops the task.
+ */
+function PlanChangeSettlements({
+  subject,
+  standing,
+  settled,
+}: {
+  subject: string;
+  standing: NonNullable<ItemData['standingApproval']> | null;
+  settled: readonly SettledPlanChange[];
+}) {
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const run = (work: () => Promise<{ ok: boolean; error?: string }>) => {
+    setError(null);
+    startTransition(async () => {
+      const result = await safeAction(work);
+      if (!result.ok) setError(result.error ?? 'that did not go through');
+    });
+  };
+  const button =
+    'inline-flex h-7 items-center rounded-md border border-edge bg-panel px-2.5 text-[12.5px] text-soft transition-colors hover:border-edge-strong hover:text-body disabled:opacity-40';
+  return (
+    <section data-plan-changes aria-label="Plan changes" className="flex flex-col gap-2 rounded-lg border border-edge bg-surface px-3 py-2 text-[12.5px] leading-normal text-soft">
+      {standing && (
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="min-w-0 flex-1">
+            Approve all is on for #{standing.issueNumber}, set by {personName(standing.setBy)}: the builder&apos;s later paths are approved as it asks
+            for them, except paths under Human review, until its pull request merges or closes.
+          </p>
+          <button type="button" className={button} disabled={pending} onClick={() => run(() => turnOffApproveAll(subject))}>
+            Turn off
+          </button>
+        </div>
+      )}
+      {settled.map((change) => (
+        <div key={change.gateId} className="flex flex-wrap items-center gap-2">
+          <p className="min-w-0 flex-1">
+            {change.decidedBy === 'designer' ? `The designer (${change.by}) approved ` : `Approve all, set by ${personName(change.by)}, approved `}
+            {change.paths.map((path, index) => (
+              <span key={path}>
+                {index > 0 && ', '}
+                <code className="font-mono text-[11.5px]">{path}</code>
+              </span>
+            ))}
+          </p>
+          <button
+            type="button"
+            className={cn(button, 'hover:border-alarm/40 hover:text-alarm')}
+            disabled={pending}
+            title="Takes these paths back out of the lease and the issue's Expected paths, and stops the task"
+            onClick={() => {
+              if (!window.confirm(`Refuse ${change.paths.join(', ')}? The paths come out of the lease and the issue, and the task stops.`)) return;
+              run(() => refuseSettledPlanChange(change.gateId));
+            }}
+          >
+            Refuse
+          </button>
+        </div>
+      ))}
+      {error && (
+        <p role="status" className="text-[12px] text-alarm">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 

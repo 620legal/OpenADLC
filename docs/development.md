@@ -473,6 +473,49 @@ A task that needs to write outside its lease's paths ends a message with a
   nothing: the gate stays open and the issue says what it waits on.
 - **`docs/**`** is never asked for by a build or patch task, and triage names
   the documentation a change touches in its Expected paths.
+- **Settling them in one step** (#77). A plan-change card offers two more
+  ways than `Approve` and `Refuse` (`apps/bridge/src/plan-changes.ts`):
+  - **Approve, and any more paths for #N** approves this request as the person
+    who pressed it and turns on a standing approval for the issue
+    (`standing_plan_approvals`, migration 0148). Each later request from its
+    builder is approved as it is asked (`Gates.open`, through
+    `standingCoverFor`): no question is posted, nobody is notified, and the
+    answer's comment on the issue is the record, naming the approval and who
+    set it; the task resumes once its session reports itself paused. A path
+    under `## Human review` in `AGENTS.md` on the base branch is never
+    approved this way, and neither is anything when those rules cannot be
+    read: the question is asked as before, and says why. The standing approval
+    ends when the issue's pull request merges or closes, the issue closes, or a
+    person turns it off, from the card or the item.
+  - **Ask the designer** starts a short task on the design seat: kind `spec`,
+    skill `plan-change-review`, on the issue, with `plan-change.md` (the
+    paths, the builder's reason, which paths are under Human review). It reads
+    the design and ends with a `plan_change_verdict` marker, which the bridge
+    reads only from its session's message (`/internal/tasks/:id/message`). An
+    approval counts as the decision when every path is one the design names or
+    sits beside (the same package, a test of a file it names, `docs/`) and none
+    is under Human review (`designerLimits`,
+    `packages/shared/src/plan-change-review.ts`); the design is the comment
+    with a `plan_posted` marker whose signature names a spec task on that
+    issue as its own seat, plus the issue's Expected paths, and an issue with
+    none has nothing to judge against. Otherwise, and for any refusal, the
+    designer's view is said on the issue and on the card, and a person
+    decides. The task's end hands the issue to no stage. It is a task rather
+    than a model call from the bridge: engines run in hostd, where usage is
+    written to the ledger before their output is acted on.
+  - **Refuse** on the item, for what the designer or a standing approval
+    approved, takes the paths back: they come out of the lease
+    (`leases.narrowPaths`, whatever its state, since the merge line reads the
+    last lease), the issue's paths and its Expected paths on GitHub; the task
+    is stopped, its lease released, and `needs-human` put on the issue, as a
+    refusal does.
+
+  The `gate.answer` audit row of a plan change says who decided it
+  (`decidedBy`: `person`, `designer` or `standing_approval`), with the seat or
+  the person who set the standing approval, and the paths. Turning a standing
+  approval on or off, asking the designer and a refusal after the fact are
+  audited as `plan_change.standing_on`, `plan_change.standing_off`,
+  `plan_change.designer_asked` and `plan_change.refused_after`.
 
 ## Expected paths decide what runs together
 

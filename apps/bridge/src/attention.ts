@@ -1,4 +1,4 @@
-import { acknowledgements, bots, issues, leases, listEventsOfType, mergeLines, modelAccounts, repos, requests, tasks, threads, type HealthRow } from '@openadlc/db';
+import { acknowledgements, bots, issues, leases, listEventsOfType, mergeLines, modelAccounts, repos, requests, standingApprovals, tasks, threads, type HealthRow } from '@openadlc/db';
 import { rulesFileEditUrl } from './deploy-routes.js';
 import { heldForPerson } from './merge-line.js';
 import { readUnowned } from './unowned-issues.js';
@@ -36,6 +36,7 @@ import type { SubjectTitle } from './subject-titles.js';
 import {
   ignoredSubjects,
   issueForSubject,
+  issueNumberFromBranch,
   parseRef,
   RESUME_WAITS_ON_GITHUB,
   REVIEW_STALLED,
@@ -175,7 +176,16 @@ export type AttentionAction =
    * production, or switch the repository to automatic delivery. `repo` is the
    * repository's name.
    */
-  | { kind: 'promote_release' | 'promote_automatic'; label: string; repo: string; sha: string };
+  | { kind: 'promote_release' | 'promote_automatic'; label: string; repo: string; sha: string }
+  /**
+   * A plan change settled in one step (`plan-changes.ts`): approve it and
+   * leave approve all on for the rest of its issue's build
+   * (`POST /v1/gates/:id/approve-all`), have the designer judge it
+   * (`POST /v1/gates/:id/ask-designer`), or turn approve all off for the
+   * issue `subject` names (`POST /v1/items/:subject/approve-all/off`).
+   */
+  | { kind: 'approve_all' | 'ask_designer'; label: string; gateId: string }
+  | { kind: 'approve_all_off'; label: string; subject: string };
 
 export interface HeldPromote {
   repo: string;
@@ -362,6 +372,9 @@ interface RequestRow {
 }
 
 type GateRow = Pick<Gate, 'id' | 'taskId' | 'question' | 'options' | 'githubCommentUrl' | 'createdAt' | 'context'>;
+
+/** What a plan-change card says about its request: whether it waits on a lease, the designer's part, a standing approval that could not cover it. */
+type PlanChangeFacts = Pick<leases.PlanChangeRecord, 'paths' | 'held' | 'designer' | 'standing'>;
 type AskedGate = Pick<Gate, 'id' | 'taskId' | 'answer' | 'answeredAt' | 'createdAt'>;
 
 /**
@@ -436,6 +449,10 @@ export interface AttentionInput {
   heldPromotes?: readonly HeldPromote[];
   /** What the health checks last said. See `health/`. */
   health?: readonly HealthRow[];
+  /** The plan changes the open gates asked, by gate (`leases.planChangesOfGates`). Absent, none. */
+  planChanges?: ReadonlyMap<string, PlanChangeFacts>;
+  /** The standing approvals of plan changes that are on (`standingApprovals.listActive`). Absent, none. */
+  standing?: readonly { repoId: string; issueNumber: number; setBy: string; setAt: string }[];
   /**
    * What a person has dismissed, by health row id, or `task:<id>` for a
    * dismissed task card: every occurrence covered so far.
@@ -880,6 +897,73 @@ function foldCauses(kind: AttentionKind, groupPrefix: string, candidates: readon
   return items;
 }
 
+const LIVE: readonly string[] = ['queued', 'running', 'paused'];
+
+/**
+ * What a plan-change card offers and says beyond its two choices (#77):
+ * approve all for its issue, unless it is on already, and then a way to turn
+ * it off and why this request still asks; the designer, unless it is judging
+ * or has judged; and the designer's view once it has one. A request a person
+ * approved that waits on another lease is theirs already, and gets neither.
+ */
+function planChangeCard(
+  gateId: string,
+  task: TaskFacts & { branch?: string | null },
+  input: AttentionInput,
+  botsById: ReadonlyMap<string, BotRow>,
+): { actions: AttentionAction[]; off: AttentionAction | null; notes: string[] } | null {
+  const plan = input.planChanges?.get(gateId);
+  if (!plan) return null;
+  const parsed = parseRef(task.subjectRef);
+  const issueNumber = task.kind === 'patch' ? issueNumberFromBranch(task.branch ?? '') : (parsed?.number ?? null);
+  if (!parsed || !issueNumber) return null;
+  const actions: AttentionAction[] = [];
+  const notes: string[] = [];
+  const on = input.standing?.find((one) => one.repoId === task.repoId && one.issueNumber === issueNumber);
+  const off = on ? turnOff(parsed.repo, issueNumber) : null;
+  // Approved already, by a person or approve all, and waiting for other work to let go of its paths.
+  if (plan.held) return { actions, off, notes };
+  if (on) {
+    const kept = plan.standing?.humanReview ?? [];
+    notes.push(
+      `Approve all is on for #${issueNumber}, set by ${on.setBy}` +
+        (kept.length > 0
+          ? `; ${kept.map((path) => `\`${path}\``).join(', ')} ${kept.length === 1 ? 'is' : 'are'} under Human review, so a person decides this one.`
+          : '; it could not be applied to this one, so a person decides it.'),
+    );
+  }
+  if (!on) actions.push({ kind: 'approve_all', label: `Approve, and any more paths for #${issueNumber}`, gateId });
+
+  const asked = plan.designer;
+  const judge = asked ? input.tasks.find((one) => one.id === asked.taskId) : undefined;
+  const seat = (judge ? botsById.get(judge.botId)?.name : undefined) ?? 'the design seat';
+  // A crew with no design seat has nobody to ask.
+  const designer = input.bots.some((bot) => bot.role === 'spec');
+  if (!asked) {
+    if (designer) actions.push({ kind: 'ask_designer', label: 'Ask the designer', gateId });
+  } else if (asked.verdict) {
+    const view = `The designer (${seat}) would ${asked.verdict}: ${asked.reason?.trim() || 'it gave no reason.'}`;
+    const outside = asked.outside ?? [];
+    notes.push(
+      asked.verdict === 'approve' && outside.length > 0
+        ? `${view}\n\nIt does not settle it: ${outside.map((entry) => `\`${entry.path}\`: ${entry.why}`).join('; ')}.`
+        : asked.verdict === 'refuse'
+          ? `${view}\n\nA refusal stops the task, so a person gives it.`
+          : view,
+    );
+  } else if (judge && LIVE.includes(judge.state)) {
+    notes.push(`The designer (${seat}) is judging it, asked by ${asked.askedBy}.`);
+  } else {
+    notes.push('The designer’s task ended without an answer.');
+    if (designer) actions.push({ kind: 'ask_designer', label: 'Ask the designer again', gateId });
+  }
+  return { actions, off, notes };
+}
+
+function turnOff(repo: string, issueNumber: number): AttentionAction {
+  return { kind: 'approve_all_off', label: `Turn off approve all for #${issueNumber}`, subject: `${repo}#${issueNumber}` };
+}
+
 export function attentionItems(given: AttentionInput): AttentionItem[] {
   const { input: kept, ignored } = withoutIgnored(withoutRemoved(given));
   const { input, abandoned } = withoutAbandoned(kept);
@@ -980,12 +1064,16 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
 
     // A choice answers from the card; anything else is said in the thread.
     const actions: AttentionAction[] = [];
+    const plan = task ? planChangeCard(gate.id, task, input, botsById) : null;
+    if (plan) actions.push(...plan.actions);
     if (bot) actions.push({ kind: 'answer', label: gate.options.length > 0 ? 'Something else…' : 'Answer', bot: bot.name });
     if (gate.githubCommentUrl) actions.push({ kind: 'open_url', label: 'On GitHub', url: gate.githubCommentUrl });
     // A question nobody means to answer, such as one left after its issue
     // merged, had no way off the board but answering it, and its task's
     // computer ran on meanwhile.
     if (gate.taskId) actions.push({ kind: 'stop_task', label: 'Stop', taskId: gate.taskId });
+    if (plan?.off) actions.push(plan.off);
+    const context = [...(plan?.notes ?? []), gate.context?.trim() ?? ''].filter(Boolean).join('\n\n');
     items.push({
       id: `gate:${gate.id}`,
       kind: 'question',
@@ -999,7 +1087,7 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
         : gate.question,
       actions,
       question: { gateId: gate.id, options: gate.options },
-      ...(gate.context?.trim() ? { context: gate.context.trim() } : {}),
+      ...(context ? { context } : {}),
     });
   }
 
@@ -2060,6 +2148,10 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
               : [],
           ))().catch((): HeldPlanChange[] => [])
       : [];
+  // What each plan-change card offers and says; one read each, and a table
+  // not there yet holds nothing (#77).
+  const planChanges = await (async () => leases.planChangesOfGates(gates.map((gate) => gate.id)))().catch(() => new Map<string, leases.PlanChangeRecord>());
+  const standing = planChanges.size > 0 ? await (async () => standingApprovals.listActive())().catch(() => []) : [];
   // As the engine update's: a record that cannot be read is no failed update.
   const selfUpdate = deps.selfUpdate ? await deps.selfUpdate.attention().catch(() => null) : null;
 
@@ -2141,6 +2233,8 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     unowned,
     heldPromotes,
     health: checks,
+    planChanges,
+    standing,
     acknowledged: new Map([...seen.values()].map((one) => [one.id, new Set([one.occurrence, ...(one.covers ?? [])])])),
     accounts,
     titles,

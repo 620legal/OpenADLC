@@ -18,6 +18,8 @@ export const OPENADLC_EVENTS = [
   'stopped',
   'design_memory',
   'send_back',
+  /** The design seat's judgement of one plan change (`plan-change-review.ts`). */
+  'plan_change_verdict',
 ] as const;
 export type FleetEventType = (typeof OPENADLC_EVENTS)[number];
 
@@ -458,6 +460,8 @@ export function messageKindFor(event: FleetEventType): 'sys' | 'bot' | 'gate' | 
     // What the design asks the repository to remember; the design itself is the comment it ends.
     case 'design_memory':
     case 'send_back':
+    // The designer's answer to a plan change: the bridge acts on it, and says what it did.
+    case 'plan_change_verdict':
       return 'sys';
     default:
       return 'bot';
@@ -478,6 +482,7 @@ const HEADLINES: Record<FleetEventType, string> = {
   stopped: 'stopped',
   design_memory: 'proposed what the repository should remember',
   send_back: 'sent the work back',
+  plan_change_verdict: 'judged a plan change',
 };
 
 export function headlineFor(event: FleetEventType): string {
