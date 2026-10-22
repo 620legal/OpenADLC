@@ -2842,6 +2842,19 @@ Each task starts in a new container, so the next task of every bot runs the
 rebuilt image, and warm computers on the old one are drained; nothing has to
 be removed by hand.
 
+**The first start with work items** (migration `0146`,
+[ADR 0009](adr/0009-work-items.md)) reads each managed repository's whole
+history of issues and pull requests from GitHub, as the automation account,
+to give each a work item number. It costs about 2 calls per 100 issues and
+pull requests, and makes no GitHub write. It saves its place after each page,
+so a restart or a rate limit resumes it rather than starting over. The bridge
+looks at it every 15 minutes, and its last error, if any, is in the table's
+`last_error`. The reconciler, webhooks and dispatcher run as before while it
+reads. Nothing is numbered until every repository is read, and the board keeps
+today's keys until then. `select numbered_at from work_item_backfill where
+repo_id is null` says when it finished. A repository added later is read the
+same way, and numbered after what is already numbered.
+
 Migrations are applied by `openadlc up` and are forward-only. Take a database backup
 first; the platform database (`openadlc_db` locally, `fleet_db` on Cloud SQL)
 holds the leases, ledger and audit trail, and nothing else reconstructs them.

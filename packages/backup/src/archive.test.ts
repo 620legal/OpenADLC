@@ -17,6 +17,8 @@ import {
   writePlain,
   type BackupContents,
 } from './index.js';
+import type { ArchivedWorkItem } from './archive.js';
+import { HISTORY } from './test-fixtures.js';
 
 /**
  * An install is a crew of seats on one or more GitHub accounts, a GitHub App
@@ -596,5 +598,57 @@ describe('a bot’s seat', () => {
 
     expect(back.bots).toEqual(seated.bots);
     expect(back.bots[1]).not.toHaveProperty('slot');
+  });
+});
+
+describe('the work items in a history', () => {
+  // History is in archives from version 2 on.
+  const current = {
+    ...install,
+    manifest: {
+      ...install.manifest,
+      version: 3,
+      includes: { install: true, repositories: true, bots: 'all', botSignIns: false, accounts: 'none', accountSignIns: false, history: true },
+    },
+  } as BackupContents;
+  const WORK_ITEMS: ArchivedWorkItem[] = [
+    {
+      id: 'eeeeeeee-0000-4000-8000-000000000001',
+      number: 1,
+      mergedInto: null,
+      links: [
+        { kind: 'request', repo: null, number: null, requestId: 'cccccccc-0000-4000-8000-000000000001', linkedBy: null, title: 'Add a dark mode', state: 'open', url: null, openedAt: '2026-09-01T09:30:00.000Z' },
+        { kind: 'issue', repo: 'janedoe/openadlc-testbed', number: 7, requestId: null, linkedBy: null, title: 'Add a dark mode', state: 'closed', url: 'https://github.com/janedoe/openadlc-testbed/issues/7', openedAt: '2026-09-01T09:40:00.000Z' },
+        { kind: 'pull', repo: 'janedoe/openadlc-testbed', number: 8, requestId: null, linkedBy: 'janedoe', title: 'Dark mode', state: 'merged', url: 'https://github.com/janedoe/openadlc-testbed/pull/8', openedAt: '2026-09-02T10:00:00.000Z' },
+      ],
+    },
+    { id: 'eeeeeeee-0000-4000-8000-000000000002', number: 2, mergedInto: 'eeeeeeee-0000-4000-8000-000000000001', links: [] },
+  ];
+
+  it('round-trip with their numbers, merges and links, and are counted', () => {
+    const back = readPlain(writePlain({ ...current, history: { ...HISTORY, workItems: WORK_ITEMS } }));
+    expect(back.history?.workItems).toEqual(WORK_ITEMS);
+    expect(back.manifest.counts.workItems).toBe(2);
+  });
+
+  it('are absent from an archive written before them, which reads as it was written', () => {
+    const back = readPlain(writePlain({ ...current, history: HISTORY }));
+    expect(back.history).not.toHaveProperty('workItems');
+    expect(back.manifest.counts).not.toHaveProperty('workItems');
+  });
+
+  it('refuse a link that is not an issue, a pull request or a request, and a number that is not one', async () => {
+    const odd = (patch: Record<string, unknown>, link: Record<string, unknown>) => {
+      const item = { ...WORK_ITEMS[0]!, ...patch, links: [{ ...WORK_ITEMS[0]!.links[1]!, ...link }] };
+      return writePlain({ ...current, history: { ...HISTORY, workItems: [item as ArchivedWorkItem] } });
+    };
+    const cases: [Record<string, unknown>, Record<string, unknown>, RegExp][] = [
+      [{}, { kind: 'deploy' }, /is a deploy, which is not an issue/],
+      [{}, { state: 'draft' }, /is draft, which is not open, closed or merged/],
+      [{ number: 0 }, {}, /numbered 0, which is not a work item number/],
+    ];
+    for (const [patch, link, says] of cases) {
+      expect((await refusal(() => readPlain(odd(patch, link)))).message).toMatch(says);
+    }
   });
 });

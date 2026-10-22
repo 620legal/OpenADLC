@@ -552,6 +552,17 @@ back. A crew account that moves a stage label back is put back.
   5xx, up to three times each and within GitHub's three days
   (`redeliverFailedSince`, `packages/github/src/app-hook.ts`). A gate answered
   on GitHub during an outage is taken once the bridge is back.
+- **Work items** (docs/adr/0009-work-items.md) give every issue, pull
+  request and console request a number of the install's own, never reused,
+  and group what belongs together: a request with the issue intake files
+  from it, and a pull request with its branch's issue or else the
+  lowest-numbered issue it closes. On the first start after the upgrade the
+  bridge reads each repository's history, oldest first and resumably
+  (`work-item-backfill.ts`), and numbers it all in opened order once every
+  repository is read. Until then nothing is numbered live. From then on,
+  deliveries, request filing and the reconciler's sweep keep each link and
+  its snapshot current, and a repository added later is read and numbered
+  on its own. Nothing is written on GitHub.
 - **The scheduler** runs the rest on timers: the budget, the review-gate sweep,
   the merge line, stalled stages, credentials, engine updates, nightly QA.
 - **Health checks** (`apps/bridge/src/health/`) prove what a person was asked to

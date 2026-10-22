@@ -59,7 +59,7 @@ vi.mock('@openadlc/db', () => ({
     getLease: vi.fn(async (id: string) => LEASES_BY_ID.get(id) ?? null),
   },
   hosts: { listHosts: vi.fn(async () => HOSTS) },
-  repos: { listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'openadlc', fullName: 'janedoe/OpenADLC' }]) },
+  repos: { listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'openadlc', fullName: 'janedoe/OpenADLC', defaultBranch: 'main' }]) },
   tasks: {
     listTasks: vi.fn(async () => RUNNING),
     // Fails a running task, and finds nothing to fail once it has ended.
@@ -83,7 +83,24 @@ vi.mock('@openadlc/db', () => ({
   listEventsOfType: vi.fn(async () => ALREADY_RECORDED),
   lastGithubDelivery: vi.fn(async () => HEARD),
   stageMoves: { listForIssue: vi.fn(async () => MOVES) },
+  // Work items: a link per thing, an item per link, numbered once `WORK.numbered`.
+  workItems: {
+    backfillState: vi.fn(async () => (WORK.numbered ? [{ repoId: 'repo-1', numberedAt: '2026-10-01T00:00:00Z' }] : [])),
+    isNumbered: vi.fn(async () => WORK.numbered),
+    itemOf: vi.fn(async (thing: { repoId: string; number: number }) => WORK.links.get(`${thing.repoId}#${thing.number}`) ?? null),
+    ensureLink: vi.fn(async (thing: { repoId: string; number: number }, _snapshot: unknown, claim: string | null) => {
+      const key = `${thing.repoId}#${thing.number}`;
+      const item = WORK.links.get(key) ?? (claim ? { id: claim, number: 0, mergedInto: null } : { id: `item-${key}`, number: WORK.links.size + 1, mergedInto: null });
+      WORK.links.set(key, item);
+      return item;
+    }),
+    // No pull request here waits on its branch's issue.
+    standsAlone: vi.fn(async () => false),
+  },
 }));
+
+/** The work items the sweep sees: whether the repository is numbered, and each thing's item. */
+const WORK = vi.hoisted(() => ({ numbered: false, links: new Map<string, { id: string; number: number; mergedInto: null }>() }));
 
 /** The stage moves recorded on an issue, oldest first. */
 let MOVES: { actor: string; to: string }[] = [];
@@ -215,7 +232,10 @@ const pullLookups = {
     if (PULLS_FAIL) throw PULLS_FAIL;
     const pull = PULLS.get(number);
     if (!pull) throw new GitHubApiError(404, `/repos/janedoe/OpenADLC/pulls/${number}`, '{"message":"Not Found"}');
-    return { number, merged: pull.merged, headRef: pull.headRef };
+    return { number, merged: pull.merged, headRef: pull.headRef, state: pull.merged ? 'closed' : 'open', baseRef: 'main', headRepoFullName: 'janedoe/OpenADLC' };
+  },
+  async closingIssueRefs(): Promise<{ repo: string; number: number }[]> {
+    throw new Error('GitHub could not be asked');
   },
   async request(_method: string, path: string, body?: { variables?: { number?: number } }) {
     // Who has access, as GitHub's permission lookup says: the maintainer.
@@ -301,6 +321,46 @@ beforeEach(() => {
   CLOSERS = new Map();
   CLOSERS_FAIL = null;
   LABELS_SET = [];
+  WORK.numbered = false;
+  WORK.links.clear();
+});
+
+describe('the work items of what the sweep reads', () => {
+  it('links an issue and a pull request whose deliveries never came, and refreshes a link already made', async () => {
+    WORK.numbered = true;
+    WORK.links.set('repo-1#151', { id: 'item-old', number: 1, mergedInto: null });
+    LIVE = [
+      issue({ number: 145 }),
+      issue({ number: 150, title: 'Let a task write its test', body: 'Closes #145', pullRequest: true, labels: [] }),
+      issue({ number: 151, title: 'Renamed on GitHub', body: null, pullRequest: true, labels: [] }),
+    ];
+    PULLS.set(150, { merged: false, headRef: 'feature' });
+    const { workItems } = await import('@openadlc/db');
+    vi.mocked(workItems.ensureLink).mockClear();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await reconcileOnce();
+
+    const calls = vi.mocked(workItems.ensureLink).mock.calls;
+    const of = (number: number) => calls.filter(([thing]) => 'number' in thing && thing.number === number);
+    expect(of(145)[0]?.[0]).toEqual({ repoId: 'repo-1', number: 145, kind: 'issue' });
+    // GitHub could not say what it closes, so its body did: #145's item.
+    expect(of(150).at(-1)?.[0]).toEqual({ repoId: 'repo-1', number: 150, kind: 'pull' });
+    expect(of(150).at(-1)?.[2]).toBe('item-repo-1#145');
+    expect(of(151).at(-1)?.[1]).toMatchObject({ title: 'Renamed on GitHub', state: 'open' });
+    expect(of(151).at(-1)?.[2]).toBeNull();
+  });
+
+  it('leaves a repository whose history is not numbered yet to the history read', async () => {
+    LIVE = [issue({ number: 150, pullRequest: true, labels: [] })];
+    PULLS.set(150, { merged: false, headRef: 'feature' });
+    const { workItems } = await import('@openadlc/db');
+    vi.mocked(workItems.ensureLink).mockClear();
+
+    await reconcileOnce();
+
+    expect(vi.mocked(workItems.ensureLink).mock.calls.filter(([thing]) => 'number' in thing && thing.number === 150)).toEqual([]);
+  });
 });
 
 /**

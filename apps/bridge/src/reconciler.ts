@@ -10,6 +10,7 @@ import type { HostdClient } from './hostd-client.js';
 import { leaseHoldUntil } from './task-service.js';
 import { openedUnheard, recordUnheard, type UnheardFinding } from './unheard.js';
 import { chooseIssueText, editNotTaken } from './vouched-text.js';
+import { linkListed, numberedRepoIds } from './work-items.js';
 
 export interface Drift {
   kind:
@@ -221,6 +222,8 @@ export class Reconciler {
     const unheard: UnheardFinding[] = [];
     const heardAt = (await lastGithubDelivery().catch(() => null))?.at ?? null;
     const crew = await bots.listBots().catch(() => []);
+    // Work items are linked live only in a repository whose history is numbered.
+    const numbered = repair ? await numberedRepoIds().catch(() => new Set<string>()) : new Set<string>();
 
     const repoList = await repos.listRepos();
     // Named, with the command that connects it: "the automation account is
@@ -292,6 +295,17 @@ export class Reconciler {
             detail: `${known ? 'could not be repaired' : 'could not be imported from GitHub'}: ${reasonOf(error)}`,
             repaired: false,
           });
+        }
+      }
+
+      // Every issue and pull request read keeps its work item: one whose
+      // delivery never came is linked, and a link's title and state are
+      // brought up to date. One that fails is said and the rest go on.
+      if (numbered.has(repo.id)) {
+        for (const entry of live) {
+          await linkListed(repo, entry, client).catch((error: unknown) =>
+            console.warn(`[reconciler] ${repo.name}#${entry.number}: its work item was not brought up to date: ${reasonOf(error)}`),
+          );
         }
       }
 

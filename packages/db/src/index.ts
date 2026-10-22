@@ -15,6 +15,8 @@ export * as costs from './store/costs.js';
 export * as spendingLimits from './store/spending-limits.js';
 export * as hosts from './store/hosts.js';
 export * as requests from './store/requests.js';
+export * as workItems from './store/work-items.js';
+export type { WorkItem } from './store/work-items.js';
 export * as credentials from './store/credentials.js';
 export * as externalSigningKeys from './store/external-signing-keys.js';
 export type { ExternalSigningKey } from './store/external-signing-keys.js';

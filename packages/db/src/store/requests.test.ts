@@ -3,9 +3,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../client.js', () => ({
   query: vi.fn(),
   queryOne: vi.fn(),
+  // One transaction: its statements go through queryOne, so each test says what they return.
+  withTransaction: vi.fn(async (fn: (client: unknown) => unknown) =>
+    fn({ query: async (text: string, params?: unknown[]) => ({ rows: [await queryOne(text, params)].filter(Boolean) }) }),
+  ),
+}));
+vi.mock('./work-items.js', () => ({
+  ensureLink: vi.fn(async () => null),
+  requestTitle: (text: string) => text.split('\n')[0],
 }));
 
-import { query, queryOne } from '../client.js';
+import { query, queryOne, withTransaction } from '../client.js';
+import { ensureLink } from './work-items.js';
 import { AmbiguousRequestPrefix, claimQueued, createRequest, findRequestByPrefix, listQueued, queueAgain, requeue, updateRequest } from './requests.js';
 
 const row = (id: string) => ({
@@ -23,6 +32,7 @@ const row = (id: string) => ({
 beforeEach(() => {
   vi.mocked(query).mockReset();
   vi.mocked(queryOne).mockReset();
+  vi.mocked(ensureLink).mockClear();
 });
 
 describe('the request a subject names', () => {
@@ -74,6 +84,26 @@ describe('a new request', () => {
     expect(queryOne).toHaveBeenCalledTimes(2);
     // The id is the column's default, never one the store made up.
     expect(String(vi.mocked(queryOne).mock.calls[1]?.[0])).toMatch(/insert into requests \(text, context, repo_id, kind, requested_by, state\)/);
+  });
+
+  it('gets its work item in the transaction that creates it', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...row('b71c09e2-3ae8-450b-abe9-0c93eb4d67dc'), text: 'Add a dark mode.\nPlease.' });
+
+    await createRequest(input);
+
+    expect(withTransaction).toHaveBeenCalled();
+    const [thing, snapshot, claim, client] = vi.mocked(ensureLink).mock.calls[0] ?? [];
+    expect(thing).toEqual({ requestId: 'b71c09e2-3ae8-450b-abe9-0c93eb4d67dc' });
+    expect(snapshot).toEqual({ title: 'Add a dark mode.', state: 'open', url: null, openedAt: '2026-09-24T20:44:22.945Z' });
+    expect(claim).toBeNull();
+    // The transaction's own client, so a failed link takes the request with it.
+    expect(client).toBeDefined();
+  });
+
+  it('is not created when its work item cannot be', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce(row('b71c09e2-3ae8-450b-abe9-0c93eb4d67dc'));
+    vi.mocked(ensureLink).mockRejectedValueOnce(new Error('the work items lock timed out'));
+    await expect(createRequest(input)).rejects.toThrow('the work items lock timed out');
   });
 
   it('gives up after a few draws, and says why', async () => {
@@ -147,5 +177,17 @@ describe('a request filed', () => {
     const [sql, params] = vi.mocked(queryOne).mock.calls.at(-1)!;
     expect(String(sql)).toContain('repo_id = coalesce(repo_id, $4)');
     expect(params).toEqual(['a4b02784-3ae8-450b-abe9-0c93eb4d67dc', 'filed', 7, 'repo-2']);
+    expect(query).not.toHaveBeenCalled();
+  });
+});
+
+describe('a request abandoned', () => {
+  it('shows its work item closed', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...row('a4b02784-3ae8-450b-abe9-0c93eb4d67dc'), state: 'abandoned' });
+    vi.mocked(query).mockResolvedValueOnce([]);
+    await updateRequest('a4b02784-3ae8-450b-abe9-0c93eb4d67dc', { state: 'abandoned' });
+    const [sql, params] = vi.mocked(query).mock.calls[0]!;
+    expect(String(sql)).toMatch(/update work_item_links set state = 'closed'.* where request_id = \$1/);
+    expect(params).toEqual(['a4b02784-3ae8-450b-abe9-0c93eb4d67dc']);
   });
 });

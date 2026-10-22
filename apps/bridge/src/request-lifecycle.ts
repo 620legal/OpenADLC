@@ -5,6 +5,7 @@ import type { Actors } from './actors.js';
 import { asAutomation } from './automation-bot.js';
 import type { BridgeConfig } from './config.js';
 import { requestFor, requestLineFor, requestPrefixOf } from './request-context.js';
+import { linkFiled } from './work-items.js';
 
 /**
  * A console request moves with its triage.
@@ -245,6 +246,14 @@ export class RequestFiling {
       issueNumber: found.number,
       ...(!request.repoId && found.repoId ? { repoId: found.repoId } : {}),
     });
+    // The issue joins the request's work item, so it carries the number the
+    // request had before intake started. Never in the way of the filing.
+    const repoId = found.repoId ?? request.repoId;
+    if (repoId) {
+      await linkFiled(request, { id: repoId }, found).catch((error: unknown) =>
+        console.warn(`[bridge] ${found.repo}#${found.number} was filed for request ${request.id.slice(0, 8)}, and did not join its work item: ${error instanceof Error ? error.message : error}`),
+      );
+    }
     if (task) {
       const thread = await threads.ensureThread({ botId: task.botId, repoId: task.repoId, subjectRef: task.subjectRef });
       await threads.addMessage({

@@ -9,6 +9,7 @@ import { DEFAULT_DELIVERY_RULES, MERGE_IS_SHIPPING, isForwardMove, renderGateCom
 import { hasEventOfType, issues, leases, listEventsOfType, repos, spendingLimits, tasks } from '@openadlc/db';
 import { Automation, mergeDecision, type MergeFacts } from './automation.js';
 import { recordDesignMemory } from './design-memory.js';
+import { linkIssue, linkPull } from './work-items.js';
 import { BotBusyError, TaskService } from './task-service.js';
 import { DispatchGate } from './dispatch-gate.js';
 import { alreadyLanded } from './gates.js';
@@ -235,6 +236,12 @@ function taskServiceOpening(open: (input: never) => Promise<unknown>) {
 vi.mock('./design-memory.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./design-memory.js')>();
   return { ...actual, recordDesignMemory: vi.fn(actual.recordDesignMemory) };
+});
+
+// Work items are linked through these; `work-items.test.ts` tests what they do.
+vi.mock('./work-items.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./work-items.js')>();
+  return { ...actual, linkIssue: vi.fn(async () => null), linkPull: vi.fn(async () => null) };
 });
 
 /**
@@ -8831,5 +8838,99 @@ describe('a pull request that changes the Human review section, opened', () => {
     await open(webhooks);
 
     expect(github.addLabels).not.toHaveBeenCalled();
+  });
+});
+
+describe('the work item of an issue or pull request a delivery is about', () => {
+  const REPO = { name: 'openadlc', full_name: 'janedoe/openadlc' };
+  const pullRequest = (action: string, patch: Record<string, unknown> = {}) =>
+    ({
+      action,
+      repository: REPO,
+      sender: { login: 'janedoe' },
+      pull_request: {
+        number: 77,
+        title: 'Tidy the readme',
+        body: 'Closes #5',
+        draft: false,
+        merged: false,
+        state: 'open',
+        created_at: '2026-10-01T00:00:00Z',
+        html_url: 'https://github.com/janedoe/openadlc/pull/77',
+        head: { ref: 'agent/x/12-tidy', sha: 'abc123', repo: { full_name: 'janedoe/openadlc' } },
+        base: { ref: 'main' },
+        labels: [],
+        user: { login: 'janedoe' },
+        author_association: 'COLLABORATOR',
+        ...patch,
+      },
+    }) as never;
+
+  beforeEach(() => {
+    vi.mocked(linkIssue).mockClear().mockResolvedValue(null);
+    vi.mocked(linkPull).mockClear().mockResolvedValue(null);
+  });
+
+  it('works out a pull request’s item again when it opens or its body is edited, and only refreshes it otherwise', async () => {
+    const github = { closingIssueRefs: vi.fn(async () => []) };
+    const automation = { actors: { asBot: vi.fn(async () => github) } };
+    const webhooks = new Webhooks({} as never, automation as never, {} as never, {} as never, {} as never, {} as never);
+
+    await webhooks.receive('pull_request', pullRequest('edited'), 'delivery-wi-edited');
+    await webhooks.receive('pull_request', pullRequest('labeled', { merged_at: '2026-10-02T00:00:00Z', state: 'closed' }), 'delivery-wi-labeled');
+
+    expect(linkPull).toHaveBeenCalledTimes(2);
+    const [repo, sighting, options] = vi.mocked(linkPull).mock.calls[0]!;
+    expect(repo).toMatchObject({ id: 'repo-1', defaultBranch: 'main' });
+    expect(sighting).toEqual({
+      number: 77,
+      repoFullName: 'janedoe/openadlc',
+      headRef: 'agent/x/12-tidy',
+      headRepoFullName: 'janedoe/openadlc',
+      baseRef: 'main',
+      defaultBranch: 'main',
+      body: 'Closes #5',
+      title: 'Tidy the readme',
+      htmlUrl: 'https://github.com/janedoe/openadlc/pull/77',
+      state: 'open',
+      merged: false,
+      createdAt: '2026-10-01T00:00:00Z',
+    });
+    expect(options).toEqual({ reclaim: true, client: github });
+    expect(vi.mocked(linkPull).mock.calls[1]?.[1]).toMatchObject({ merged: true, state: 'closed' });
+    expect(vi.mocked(linkPull).mock.calls[1]?.[2]).toEqual({ reclaim: false, client: null });
+  });
+
+  it('never keeps the rest of a delivery from being handled when the link fails', async () => {
+    vi.mocked(linkIssue).mockRejectedValueOnce(new Error('the database is gone'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const webhooks = new Webhooks({} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
+    vi.mocked(issues.forget).mockClear();
+
+    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, { number: 9, title: 'Gone', body: null, htmlUrl: 'u', labels: [] }, 'deleted');
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('openadlc#9: its work item was not brought up to date: the database is gone'));
+    expect(issues.forget).toHaveBeenCalledWith('repo-1', 9);
+    warn.mockRestore();
+  });
+
+  it('keeps a deleted or transferred issue’s link, closed, and links any other on every delivery', async () => {
+    const webhooks = new Webhooks({} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
+    const issue = { number: 9, title: 'Moved', body: null, htmlUrl: 'u', labels: [], createdAt: '2026-10-01T00:00:00Z' };
+    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue, 'transferred');
+    expect(linkIssue).toHaveBeenCalledWith({ id: 'repo-1', name: 'openadlc' }, issue, true);
+
+    await webhooks.receive(
+      'issues',
+      {
+        action: 'assigned',
+        repository: REPO,
+        sender: { login: 'janedoe' },
+        issue: { number: 10, title: 'Assigned', body: null, html_url: 'u10', labels: [], state: 'open', created_at: '2026-10-02T00:00:00Z', user: { login: 'janedoe' }, author_association: 'COLLABORATOR' },
+      } as never,
+      'delivery-wi-assigned',
+    );
+    expect(vi.mocked(linkIssue).mock.calls[1]?.[1]).toMatchObject({ number: 10, createdAt: '2026-10-02T00:00:00Z' });
+    expect(vi.mocked(linkIssue).mock.calls[1]?.[2]).toBe(false);
   });
 });

@@ -1,0 +1,578 @@
+import type { PoolClient } from 'pg';
+import { query, queryOne, withTransaction } from '../client.js';
+
+/**
+ * Work items: the install's own number for every issue, pull request and
+ * console request it has seen, and the links that group them. See
+ * `migrations/0146_work_items.sql` and docs/adr/0009-work-items.md.
+ *
+ * Every write runs in one transaction under one advisory transaction lock.
+ * Two deliveries for the same pull request, a webhook and the sweep, would
+ * otherwise each find no link and each draw an item; one row per delivery is
+ * cheap to serialize.
+ */
+
+/** What runs a statement: the pool, or a transaction's client. */
+export type Sql = Pick<PoolClient, 'query'>;
+
+/** A thing a link names: a request, or an issue or pull request by its repository and number. */
+export type ThingRef = { requestId: string } | { repoId: string; number: number };
+
+/** A thing to link, with what kind it is. */
+export type Thing = { requestId: string } | { repoId: string; number: number; kind: 'issue' | 'pull' };
+
+export type LinkState = 'open' | 'closed' | 'merged';
+
+/** What the board shows of a linked thing, as last seen. */
+export interface Snapshot {
+  title: string;
+  state: LinkState;
+  url: string | null;
+  openedAt: string;
+  /** A pull request's, kept by the history read until it is numbered. */
+  headRef?: string | null;
+  headRepo?: string | null;
+  baseRef?: string | null;
+  closes?: readonly number[];
+}
+
+export interface WorkItem {
+  id: string;
+  number: number;
+  mergedInto: string | null;
+}
+
+const LOCK = `select pg_advisory_xact_lock(hashtext('work_items'))`;
+
+/** How far `merged_into` is followed: far past any real chain, short of a loop. */
+const MOST_HOPS = 64;
+
+interface ItemRow {
+  id: string;
+  number: string | number;
+  merged_into: string | null;
+}
+
+function toItem(row: ItemRow): WorkItem {
+  return { id: row.id, number: Number(row.number), mergedInto: row.merged_into };
+}
+
+/**
+ * Runs `fn` holding the work items' lock: inside the caller's transaction
+ * when one is given (`createRequest` links in its own), else in one of its own.
+ */
+async function locked<T>(client: Sql | undefined, fn: (sql: Sql) => Promise<T>): Promise<T> {
+  if (client) {
+    await client.query(LOCK);
+    return fn(client);
+  }
+  return withTransaction(async (sql) => {
+    await sql.query(LOCK);
+    return fn(sql);
+  });
+}
+
+async function one<T extends object>(sql: Sql, text: string, params: unknown[]): Promise<T | null> {
+  const result = await sql.query(text, params);
+  return (result.rows[0] as T | undefined) ?? null;
+}
+
+const pool: Sql = {
+  query: (async (text: string, params?: unknown[]) => ({ rows: await query(text, params ?? []) })) as unknown as Sql['query'],
+};
+
+/** The item at the end of `merged_into`, from `id`. */
+async function resolve(sql: Sql, id: string): Promise<WorkItem | null> {
+  let at = id;
+  for (let hop = 0; hop < MOST_HOPS; hop += 1) {
+    const row = await one<ItemRow>(sql, 'select id, number, merged_into from work_items where id = $1', [at]);
+    if (!row) return null;
+    if (!row.merged_into) return toItem(row);
+    at = row.merged_into;
+  }
+  throw new Error(`work item ${id} is merged into itself further than ${MOST_HOPS} times; its merged_into makes a loop`);
+}
+
+/**
+ * Whether live numbering has begun for a thing: for an issue or pull request,
+ * once its repository's history was numbered; for a request, once the
+ * install's first numbering committed.
+ */
+async function numberedFor(sql: Sql, thing: ThingRef): Promise<boolean> {
+  const row =
+    'requestId' in thing
+      ? await one<{ numbered_at: Date | null }>(sql, 'select numbered_at from work_item_backfill where repo_id is null', [])
+      : await one<{ numbered_at: Date | null }>(sql, 'select numbered_at from work_item_backfill where repo_id = $1', [thing.repoId]);
+  return Boolean(row?.numbered_at);
+}
+
+/** Whether the install's first numbering has committed: before it, nothing is numbered live. */
+export async function isNumbered(): Promise<boolean> {
+  const row = await queryOne<{ numbered_at: Date | null }>('select numbered_at from work_item_backfill where repo_id is null');
+  return Boolean(row?.numbered_at);
+}
+
+interface LinkRow {
+  id: string;
+  work_item_id: string;
+  linked_by: string | null;
+  kind: 'issue' | 'pull' | 'request';
+}
+
+async function linkOf(sql: Sql, thing: ThingRef): Promise<LinkRow | null> {
+  return 'requestId' in thing
+    ? one<LinkRow>(sql, 'select id, work_item_id, linked_by, kind from work_item_links where request_id = $1', [thing.requestId])
+    : one<LinkRow>(sql, 'select id, work_item_id, linked_by, kind from work_item_links where repo_id = $1 and number = $2', [thing.repoId, thing.number]);
+}
+
+/** The item a thing is linked to, following merges to the end; null when it has none. */
+export async function itemOf(thing: ThingRef, client?: Sql): Promise<WorkItem | null> {
+  const sql = client ?? pool;
+  const link = await linkOf(sql, thing);
+  return link ? resolve(sql, link.work_item_id) : null;
+}
+
+/**
+ * Whether a pull request's link is automatic and its item holds no issue:
+ * the one whose claim can still change, once its branch's issue has an item.
+ */
+export async function standsAlone(thing: { repoId: string; number: number }): Promise<boolean> {
+  const row = await queryOne<{ alone: boolean }>(
+    `select l.kind = 'pull' and l.linked_by is null
+            and not exists (select 1 from work_item_links o where o.work_item_id = l.work_item_id and o.kind = 'issue') as alone
+       from work_item_links l where l.repo_id = $1 and l.number = $2`,
+    [thing.repoId, thing.number],
+  );
+  return Boolean(row?.alone);
+}
+
+/** A new item, with the next number. `nextval` never rolls back, so a number drawn by a transaction that failed is skipped, never handed out. */
+async function newItem(sql: Sql): Promise<WorkItem> {
+  const row = await one<ItemRow>(sql, `insert into work_items (number) values (nextval('work_item_number_seq')) returning id, number, merged_into`, []);
+  if (!row) throw new Error('failed to create a work item');
+  return toItem(row);
+}
+
+async function insertLink(sql: Sql, itemId: string, thing: Thing, snapshot: Snapshot, linkedBy: string | null = null): Promise<void> {
+  const byRequest = 'requestId' in thing;
+  await sql.query(
+    `insert into work_item_links (work_item_id, kind, repo_id, number, request_id, linked_by, title, state, url, opened_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [
+      itemId,
+      byRequest ? 'request' : thing.kind,
+      byRequest ? null : thing.repoId,
+      byRequest ? null : thing.number,
+      byRequest ? thing.requestId : null,
+      linkedBy,
+      snapshot.title,
+      snapshot.state,
+      snapshot.url,
+      snapshot.openedAt,
+    ],
+  );
+}
+
+/**
+ * An item whose last link moved away keeps its row and its number, and points
+ * at where the link went, so its key still resolves.
+ */
+async function settleEmptied(sql: Sql, itemId: string, into: string): Promise<void> {
+  const left = await one<{ links: number }>(sql, 'select count(*)::int as links from work_item_links where work_item_id = $1', [itemId]);
+  if (Number(left?.links ?? 0) === 0) await sql.query('update work_items set merged_into = $2 where id = $1', [itemId, into]);
+}
+
+/** A pull request's or issue's snapshot, kept for the history numbering while its repository is not numbered yet. */
+async function recordUnnumbered(sql: Sql, thing: { repoId: string; number: number; kind: 'issue' | 'pull' }, snapshot: Snapshot): Promise<void> {
+  await sql.query(
+    `insert into work_item_backfill_rows (repo_id, number, kind, title, state, url, opened_at, head_ref, head_repo, base_ref, closes)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     on conflict (repo_id, number) do update set
+       title = excluded.title, state = excluded.state, url = excluded.url,
+       head_ref = coalesce(excluded.head_ref, work_item_backfill_rows.head_ref),
+       head_repo = coalesce(excluded.head_repo, work_item_backfill_rows.head_repo),
+       base_ref = coalesce(excluded.base_ref, work_item_backfill_rows.base_ref),
+       closes = case when cardinality(excluded.closes) > 0 then excluded.closes else work_item_backfill_rows.closes end`,
+    [
+      thing.repoId,
+      thing.number,
+      thing.kind,
+      snapshot.title,
+      snapshot.state,
+      snapshot.url ?? '',
+      snapshot.openedAt,
+      snapshot.headRef ?? null,
+      snapshot.headRepo ?? null,
+      snapshot.baseRef ?? null,
+      [...(snapshot.closes ?? [])],
+    ],
+  );
+}
+
+/**
+ * Makes sure a thing has its link, and brings the link's snapshot up to date.
+ *
+ * - With a link already, the snapshot is refreshed. A merged pull request
+ *   stays merged: the sweep reads only `closed`.
+ * - With none, it joins the item `claim` names, or a new item when `claim` is null.
+ * - A pull request's automatic link to another item than `claim` moves to it;
+ *   the item it left, if now empty, points where it went. A link a person
+ *   made (`linked_by`) is never moved, and neither is an issue's or a request's.
+ * - Before its numbering has begun (`numberedFor`), an issue or pull request
+ *   is only recorded for the history numbering, and nothing is returned.
+ *
+ * The item the thing is in afterwards.
+ */
+export async function ensureLink(thing: Thing, snapshot: Snapshot, claim: string | null, client?: Sql): Promise<WorkItem | null> {
+  return locked(client, async (sql) => {
+    if (!(await numberedFor(sql, thing))) {
+      if (!('requestId' in thing)) await recordUnnumbered(sql, thing, snapshot);
+      return null;
+    }
+    const claimed = claim ? await resolve(sql, claim) : null;
+    const link = await linkOf(sql, thing);
+    if (link) {
+      await sql.query(
+        `update work_item_links set
+           title = $2,
+           state = case when state = 'merged' then state else $3 end,
+           url = coalesce($4, url),
+           seen_at = now()
+         where id = $1`,
+        [link.id, snapshot.title, snapshot.state, snapshot.url],
+      );
+      const current = await resolve(sql, link.work_item_id);
+      if (claimed && current && claimed.id !== current.id && link.kind === 'pull' && link.linked_by === null) {
+        await sql.query('update work_item_links set work_item_id = $2 where id = $1', [link.id, claimed.id]);
+        await settleEmptied(sql, link.work_item_id, claimed.id);
+        return claimed;
+      }
+      return current;
+    }
+    const item = claimed ?? (await newItem(sql));
+    await insertLink(sql, item.id, thing, snapshot);
+    return item;
+  });
+}
+
+/**
+ * Moves every link of `from` into `into`, and points `from` at it. Refused
+ * (false) when each holds an issue, so no item ever holds two issues by
+ * itself, and when `from` holds a link a person made, which automatic
+ * linking never moves. The only automatic merge: a request filed as an
+ * issue that already had an item of its own.
+ */
+export async function mergeInto(from: string, into: string, client?: Sql): Promise<boolean> {
+  return locked(client, (sql) => merge(sql, from, into));
+}
+
+/** `mergeInto`, under the lock its caller holds. */
+async function merge(sql: Sql, from: string, into: string): Promise<boolean> {
+  const source = await resolve(sql, from);
+  const target = await resolve(sql, into);
+  if (!source || !target) return false;
+  if (source.id === target.id) return true;
+  const held = async (id: string) =>
+    (await one<{ issues: number; by_hand: number }>(
+      sql,
+      `select count(*) filter (where kind = 'issue')::int as issues, count(*) filter (where linked_by is not null)::int as by_hand
+       from work_item_links where work_item_id = $1`,
+      [id],
+    )) ?? { issues: 0, by_hand: 0 };
+  const [a, b] = [await held(source.id), await held(target.id)];
+  if (Number(a.by_hand) > 0) return false;
+  if (Number(a.issues) > 0 && Number(b.issues) > 0) return false;
+  await sql.query('update work_item_links set work_item_id = $2 where work_item_id = $1', [source.id, target.id]);
+  await sql.query('update work_items set merged_into = $2 where id = $1', [source.id, target.id]);
+  return true;
+}
+
+/**
+ * The item of the earliest request filed as an issue, other than `except`:
+ * what a later request filed as the same issue joins while the issue itself
+ * has no item, its repository not numbered yet. Null when there is none.
+ */
+export async function firstFiledItem(repoId: string, issueNumber: number, except: string): Promise<WorkItem | null> {
+  const row = await queryOne<{ work_item_id: string }>(
+    `select l.work_item_id from requests q join work_item_links l on l.request_id = q.id
+      where q.repo_id = $1 and q.issue_number = $2 and q.id <> $3
+      order by q.created_at, q.id limit 1`,
+    [repoId, issueNumber, except],
+  );
+  return row ? resolve(pool, row.work_item_id) : null;
+}
+
+/** Something without a link yet, as the history numbering sees it. */
+export type Pending =
+  | {
+      kind: 'issue' | 'pull';
+      repoId: string;
+      repoFullName: string;
+      number: number;
+      title: string;
+      state: LinkState;
+      url: string | null;
+      openedAt: string;
+      headRef: string | null;
+      headRepo: string | null;
+      baseRef: string | null;
+      /** The issues of its own repository it closes, for a pull request. */
+      closes: number[];
+    }
+  | {
+      kind: 'request';
+      requestId: string;
+      /** Where it was filed, once it was. */
+      repoId: string | null;
+      issueNumber: number | null;
+      title: string;
+      state: LinkState;
+      openedAt: string;
+      /** Its item, for a request already numbered whose issue has none yet. */
+      itemId: string | null;
+    };
+
+/** An issue already linked in a repository being numbered, which a pull request or request may join. */
+export interface LinkedIssue {
+  repoId: string;
+  number: number;
+  itemId: string;
+}
+
+/** Things to number as one item, earliest-opened group first; `claim` is an existing item they join instead. */
+export interface PlannedGroup {
+  members: Pending[];
+  claim: string | null;
+}
+
+export type Plan = (pending: Pending[], linked: LinkedIssue[]) => PlannedGroup[];
+
+interface PendingRow {
+  kind: 'issue' | 'pull' | 'request';
+  repo_id: string | null;
+  repo_full_name: string | null;
+  number: number | null;
+  request_id: string | null;
+  issue_number: number | null;
+  item_id: string | null;
+  title: string;
+  state: string;
+  url: string | null;
+  opened_at: Date;
+  head_ref: string | null;
+  head_repo: string | null;
+  base_ref: string | null;
+  closes: number[] | null;
+}
+
+function asState(state: string): LinkState {
+  return state === 'merged' ? 'merged' : state === 'closed' ? 'closed' : 'open';
+}
+
+function toPending(row: PendingRow): Pending {
+  if (row.kind === 'request') {
+    return {
+      kind: 'request',
+      requestId: row.request_id!,
+      repoId: row.repo_id,
+      issueNumber: row.issue_number,
+      title: row.title,
+      state: asState(row.state),
+      openedAt: row.opened_at.toISOString(),
+      itemId: row.item_id,
+    };
+  }
+  return {
+    kind: row.kind,
+    repoId: row.repo_id!,
+    repoFullName: row.repo_full_name ?? '',
+    number: row.number!,
+    title: row.title,
+    state: asState(row.state),
+    url: row.url,
+    openedAt: row.opened_at.toISOString(),
+    headRef: row.head_ref,
+    headRepo: row.head_repo,
+    baseRef: row.base_ref,
+    closes: (row.closes ?? []).map(Number),
+  };
+}
+
+/** A request's title on the board: its first line, as long as a title. */
+export function requestTitle(text: string): string {
+  const first = text.trim().split('\n')[0]?.trim() ?? '';
+  return (first.length > 200 ? `${first.slice(0, 199)}…` : first) || 'Request';
+}
+
+/**
+ * Numbers everything without a link in the repositories whose history has
+ * been read and not yet numbered, and every request without a link, in one
+ * transaction: `plan` says what goes together, in opened order, and each
+ * group gets the next number. The numbered repositories' read rows are
+ * deleted, and they, and the install, are marked numbered: from then on
+ * their things are numbered live. What it numbered.
+ */
+export async function numberPending(plan: Plan): Promise<{ items: number; links: number; repos: string[] }> {
+  return locked(undefined, async (sql) => {
+    const ready = (
+      await sql.query(`select repo_id from work_item_backfill where repo_id is not null and read_at is not null and numbered_at is null`)
+    ).rows.map((row: { repo_id: string }) => row.repo_id);
+    const pending = (
+      await sql.query(
+        `select b.kind, b.repo_id, r.full_name as repo_full_name, b.number, null::uuid as request_id, null::int as issue_number,
+                null::uuid as item_id, b.title, b.state, b.url, b.opened_at, b.head_ref, b.head_repo, b.base_ref, b.closes
+           from work_item_backfill_rows b join repos r on r.id = b.repo_id
+          where b.repo_id = any($1::uuid[])
+            and not exists (select 1 from work_item_links l where l.repo_id = b.repo_id and l.number = b.number)
+         union all
+         select 'issue', i.repo_id, r.full_name, i.number, null, null, null, i.title,
+                case when i.stage in ('merged', 'done') then 'closed' else 'open' end, i.url, i.created_at, null, null, null, null
+           from issues i join repos r on r.id = i.repo_id
+          where i.repo_id = any($1::uuid[])
+            and not exists (select 1 from work_item_backfill_rows b where b.repo_id = i.repo_id and b.number = i.number)
+            and not exists (select 1 from work_item_links l where l.repo_id = i.repo_id and l.number = i.number)
+         union all
+         select 'request', q.repo_id, null, null, q.id, q.issue_number, l.work_item_id, q.text,
+                case when q.state = 'abandoned' then 'closed' else 'open' end, null, q.created_at, null, null, null, null
+           from requests q left join work_item_links l on l.request_id = q.id
+          where l.id is null
+             or (q.issue_number is not null and q.repo_id = any($1::uuid[])
+                 and not exists (select 1 from work_item_links i where i.repo_id = q.repo_id and i.number = q.issue_number))`,
+        [ready],
+      )
+    ).rows.map((row: PendingRow) => toPending(row.kind === 'request' ? { ...row, title: requestTitle(row.title) } : row));
+    const linked = (
+      await sql.query(`select repo_id, number, work_item_id from work_item_links where kind = 'issue' and repo_id = any($1::uuid[])`, [ready])
+    ).rows.map((row: { repo_id: string; number: number; work_item_id: string }) => ({ repoId: row.repo_id, number: row.number, itemId: row.work_item_id }));
+
+    let items = 0;
+    let links = 0;
+    for (const group of plan(pending, linked)) {
+      const unlinked = group.members.filter((member) => member.kind !== 'request' || !member.itemId);
+      const numbered = group.members.flatMap((member) => (member.kind === 'request' && member.itemId ? [member.itemId] : []));
+      if (unlinked.length === 0 && numbered.length < 2) continue;
+      const claimed = group.claim ? await resolve(sql, group.claim) : null;
+      const item = claimed ?? (await newItem(sql));
+      if (!claimed) items += 1;
+      for (const member of unlinked) {
+        const thing: Thing = member.kind === 'request' ? { requestId: member.requestId } : { repoId: member.repoId, number: member.number, kind: member.kind };
+        await insertLink(sql, item.id, thing, {
+          title: member.title,
+          state: member.state,
+          url: member.kind === 'request' ? null : member.url,
+          openedAt: member.openedAt,
+        });
+        links += 1;
+      }
+      // Requests numbered live, filed as one issue while its repository was
+      // still being read: each had drawn an item of its own at create, and
+      // only the issue joined the earliest's, leaving the later requests on
+      // numbers of their own. They join the group's item, on `mergeInto`'s
+      // terms: never a person's link moved, never two issues in one item.
+      for (const itemId of numbered) await merge(sql, itemId, item.id);
+    }
+    await sql.query('delete from work_item_backfill_rows where repo_id = any($1::uuid[])', [ready]);
+    await sql.query('update work_item_backfill set numbered_at = now() where repo_id = any($1::uuid[])', [ready]);
+    await sql.query(
+      `insert into work_item_backfill (repo_id, numbered_at) values (null, now())
+       on conflict ((repo_id is null)) where repo_id is null do update set numbered_at = coalesce(work_item_backfill.numbered_at, excluded.numbered_at)`,
+    );
+    return { items, links, repos: ready };
+  });
+}
+
+/** How far one repository's history read has got. */
+export interface BackfillState {
+  repoId: string | null;
+  issuesPage: number;
+  pullsPage: number;
+  readAt: string | null;
+  numberedAt: string | null;
+  caughtUpAt: string | null;
+  lastError: string | null;
+}
+
+interface BackfillRow {
+  repo_id: string | null;
+  issues_page: number;
+  pulls_page: number;
+  read_at: Date | null;
+  numbered_at: Date | null;
+  caught_up_at: Date | null;
+  last_error: string | null;
+}
+
+/** Every repository's read, and the install's (repoId null). */
+export async function backfillState(): Promise<BackfillState[]> {
+  const rows = await query<BackfillRow>(
+    'select repo_id, issues_page, pulls_page, read_at, numbered_at, caught_up_at, last_error from work_item_backfill order by id',
+  );
+  return rows.map((row) => ({
+    repoId: row.repo_id,
+    issuesPage: row.issues_page,
+    pullsPage: row.pulls_page,
+    readAt: row.read_at?.toISOString() ?? null,
+    numberedAt: row.numbered_at?.toISOString() ?? null,
+    caughtUpAt: row.caught_up_at?.toISOString() ?? null,
+    lastError: row.last_error,
+  }));
+}
+
+/** A repository's read begins: its row, if it has none. */
+export async function startBackfill(repoId: string): Promise<void> {
+  await query('insert into work_item_backfill (repo_id) values ($1) on conflict (repo_id) do nothing', [repoId]);
+}
+
+/** A row the history read found. */
+export interface BackfillRowInput {
+  number: number;
+  kind: 'issue' | 'pull';
+  title: string;
+  state: LinkState;
+  url: string;
+  openedAt: string;
+  headRef?: string | null;
+  headRepo?: string | null;
+  baseRef?: string | null;
+  closes?: readonly number[];
+}
+
+/**
+ * One page of the read, and the page after it, in one transaction: a restart
+ * never skips half a page, nor reads one twice into the count.
+ */
+export async function saveBackfillPage(repoId: string, which: 'issues' | 'pulls', nextPage: number, rows: readonly BackfillRowInput[]): Promise<void> {
+  await locked(undefined, async (sql) => {
+    for (const row of rows) {
+      await recordUnnumbered(sql, { repoId, number: row.number, kind: row.kind }, {
+        title: row.title,
+        state: row.state,
+        url: row.url,
+        openedAt: row.openedAt,
+        headRef: row.headRef ?? null,
+        headRepo: row.headRepo ?? null,
+        baseRef: row.baseRef ?? null,
+        closes: row.closes ?? [],
+      });
+    }
+    await sql.query(
+      `update work_item_backfill set ${which === 'issues' ? 'issues_page' : 'pulls_page'} = $2, last_error = null where repo_id = $1`,
+      [repoId, nextPage],
+    );
+  });
+}
+
+/** Both listings of a repository are read to the end. */
+export async function markRead(repoId: string): Promise<void> {
+  await query('update work_item_backfill set read_at = now(), last_error = null where repo_id = $1', [repoId]);
+}
+
+/** A catch-up read finished, as of `at`, by GitHub's clock or the bridge's a little before it. */
+export async function markCaughtUp(repoId: string, at: string): Promise<void> {
+  await query('update work_item_backfill set caught_up_at = $2, last_error = null where repo_id = $1', [repoId, at]);
+}
+
+/** Why the read stopped, for the next run and a person reading the table. */
+export async function recordBackfillError(repoId: string, error: string): Promise<void> {
+  await query('update work_item_backfill set last_error = $2 where repo_id = $1', [repoId, error.slice(0, 1000)]);
+}
