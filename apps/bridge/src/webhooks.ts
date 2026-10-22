@@ -292,6 +292,84 @@ export class Webhooks {
   useDelivery(pipeline: DeployPipeline, delivery: DeliveryKnowledge): void {
     this.pipeline = pipeline;
     this.delivery = delivery;
+    // A merge whose testing deploy deployed nothing has its lease let go by
+    // the pipeline, from a delivery or the deploy sweep; what that frees is
+    // taken up here, as for a merge that ships.
+    pipeline.onLeaseReleased?.((why) => this.leasesReleased(why));
+  }
+
+  /**
+   * What letting a lease go sets off, wherever it was let go: the approved
+   * plan changes held on its paths tried again, their tasks resumed, and,
+   * where `why` names a release, the dispatcher asked. Only a merge, a close
+   * and an abandon did, so #27's plan change, held on #71's paths, stayed held
+   * after the reconciler let #71's lease go, and a person approved it again.
+   * The reconciler calls this at the end of every pass, naming the leases it
+   * let go, if any: that is the backstop for a lease let go where nothing
+   * looks — one the dispatcher expired, the bridge's own move to Done.
+   */
+  async leasesReleased(why?: string): Promise<void> {
+    await this.resumeHeldPlanChanges();
+    if (why) this.dispatchRuns?.soon(why);
+  }
+
+  /**
+   * A card that reached Done another way than the bridge's own move, which
+   * lets go of the issue's lease itself (`moveStage`): a person's `adlc:done`,
+   * heard in its delivery or found by reconcile. OpenADLC#71 was moved there
+   * by its label after its merge, and its lease, waiting on a verification
+   * that never came, held two files a stacked issue waited on. Whether it was
+   * let go.
+   *
+   * Only for a change that merged: the card was in Ship (`from`), or its pull
+   * request merged. `adlc:done` on a card in Review, its pull request still
+   * open, let overlapping work start beside a change still being built. And
+   * not while its verification on testing, or a deploy, is still going on its
+   * pull request: that task opens with no lease, so the store's own check
+   * (`releaseIdleForIssue`) cannot see it, and it is looked for by subject.
+   */
+  async reachedDone(
+    repo: { id: string; name: string; fullName?: string },
+    issueNumber: number,
+    input: { how: string; actor: string; from: StageKey | null; prNumber: number | null },
+  ): Promise<boolean> {
+    const ref = `${repo.name}#${issueNumber}`;
+    const lease = await leases.getActiveLease(repo.id, issueNumber).catch(() => null);
+    if (!lease) return false;
+    const prNumber = lease.prNumber ?? input.prNumber;
+    const merged = input.from === 'merged' || (prNumber !== null && (await this.pullMerged(repo, prNumber)));
+    if (!merged) {
+      console.log(`[bridge] ${ref} is in Done, and its lease is kept: it was in ${input.from ?? 'no column'}, and its pull request is not known to have merged`);
+      return false;
+    }
+    if (prNumber !== null) {
+      const going = await (async () => tasks.listTasksOnSubjects([`${repo.name}#${prNumber}`]))().catch(() => null);
+      const verifying = going?.find((task) => (task.kind === 'qa' || task.kind === 'deploy') && ['queued', 'running', 'paused'].includes(task.state));
+      if (!going || verifying) {
+        console.log(
+          `[bridge] ${ref} is in Done, and its lease is kept: ${verifying ? `its ${verifying.kind} task on #${prNumber} is ${verifying.state}` : `what is still going on #${prNumber} could not be read`}`,
+        );
+        return false;
+      }
+    }
+    const released = await leases
+      .releaseIdleForIssue({ repoId: repo.id, issueNumber, actor: input.actor, reason: `${input.how}, and no task works under it` })
+      .catch((error: unknown) => {
+        console.warn(`[bridge] ${repo.name}#${issueNumber} reached Done, and its lease could not be let go: ${error instanceof Error ? error.message : error}`);
+        return null;
+      });
+    if (!released) return false;
+    console.log(`[bridge] released the lease on ${ref}: ${input.how}`);
+    await this.leasesReleased(`${ref} reached Done`);
+    return true;
+  }
+
+  /** Whether GitHub says a pull request merged; false when it cannot be asked. */
+  private async pullMerged(repo: { name: string; fullName?: string }, prNumber: number): Promise<boolean> {
+    const fullName = repo.fullName ?? (await (async () => repos.getRepoByName(repo.name))().catch(() => null))?.fullName;
+    const client = fullName ? await (async () => asAutomation(this.automation['actors'], this.config))().catch(() => null) : null;
+    if (!fullName || !client) return false;
+    return (await client.getPullRequest(fullName, prNumber).catch(() => null))?.merged === true;
   }
 
   async receive(event: string, payload: WebhookPayload, deliveryId: string | null): Promise<void> {
@@ -967,6 +1045,8 @@ export class Webhooks {
     }
 
     const stage = liveStage ?? 'intake';
+    // Where it was, for a move to Done: only a merged change's lets its lease go.
+    const before = stage === 'done' ? await (async () => issues.getIssue(repo.id, issue.number))().catch(() => null) : null;
 
     await store({
       repoId: repo.id,
@@ -983,6 +1063,10 @@ export class Webhooks {
       url: issue.htmlUrl,
       prNumber: null,
     });
+    // A person's `adlc:done` is the end of the work as much as the bridge's move to Done.
+    if (stage === 'done') {
+      await this.reachedDone(repo, issue.number, { how: 'moved to Done on GitHub', actor: 'bridge', from: before?.stage ?? null, prNumber: before?.prNumber ?? null });
+    }
 
     // An issue filed by a person with no stage label is intake's to shape.
     // The labels checked above are the delivery's. An issue created and then
@@ -3205,6 +3289,28 @@ export class Webhooks {
       }
     }
 
+    // How a testing deploy the bridge dispatched ended, told to the pipeline:
+    // one that deployed nothing — skipped, as the template's is where the
+    // repository sets no OPENADLC_DEPLOY_TESTING, or cancelled with no later
+    // deploy to carry it — is followed by no deployment, so nothing else
+    // would verify the merge and let its lease go. Only a dispatched run on the default branch: the bridge starts
+    // the testing deploy no other way, and one on any other branch, or pushed,
+    // says nothing about a merge.
+    if (origin && run && this.pipeline && payload.action === 'completed' && run.conclusion && isWorkflow(run.name, origin.deploy)) {
+      const refused = runOriginRefusal(run, origin, { what: 'testing deploy', events: ['workflow_dispatch'] });
+      const repo = refused ? null : await repos.getRepoByName(repoName).catch(() => null);
+      if (refused || !repo) {
+        console.log(`[bridge] ${repoName}@${run.head_sha.slice(0, 8)}: a testing deploy run the pipeline is not told of: ${refused ?? 'the repository is not one OpenADLC works in'}`);
+      } else {
+        const pipeline = this.pipeline;
+        const sha = testedCandidate(run, 'deploy-testing') ?? run.head_sha;
+        const line = await (async () => pipeline.onTestingRun(repo, sha, { id: typeof run.id === 'number' ? run.id : null, conclusion: run.conclusion, workflow: run.name }))().catch(
+          (error: unknown) => `${repo.name}@${sha.slice(0, 8)}: how its testing deploy ended was not recorded: ${error instanceof Error ? error.message : error}`,
+        );
+        console.log(`[bridge] ${line}`);
+      }
+    }
+
     if (origin && run && deployFailedOnTesting(run, origin.deploy)) {
       // Pushed or dispatched on the default branch, as the template's runs are.
       const refused = runOriginRefusal(run, origin, { what: 'deploy', events: ['push', 'workflow_dispatch'] });
@@ -3214,6 +3320,26 @@ export class Webhooks {
       }
       // The commit the run was dispatched to deploy, not the tip it ran at.
       await this.reportDeployFailure(repoName, testedCandidate(run, 'deploy-testing') ?? run.head_sha, run.html_url ?? null);
+      return;
+    }
+
+    // A testing deploy that never started is a broken workflow file, most
+    // often: GitHub ran no job of it. It deployed nothing, which the pipeline
+    // settled above; it failed too, and nobody was told, since only a
+    // `failure` reached here.
+    if (origin && run && payload.action === 'completed' && run.conclusion === 'startup_failure' && isWorkflow(run.name, origin.deploy)) {
+      const refused = runOriginRefusal(run, origin, { what: 'deploy', events: ['workflow_dispatch'] });
+      if (refused) {
+        console.log(`[bridge] ${repoName}@${run.head_sha.slice(0, 8)}: a deploy that did not start, which the bridge does not act on: ${refused}`);
+        return;
+      }
+      const sha = testedCandidate(run, 'deploy-testing') ?? run.head_sha;
+      await this.reportDeployFailure(repoName, sha, run.html_url ?? null, {
+        environment: 'testing',
+        note:
+          `The \`${run.name}\` run for \`${sha.slice(0, 8)}\` did not start (GitHub says \`startup_failure\`), so that revision never reached testing. ` +
+          'GitHub ran none of its jobs, which is most often a workflow file it could not read: check the run page, and the workflow file on the default branch.',
+      });
     }
   }
 
@@ -4135,6 +4261,7 @@ export class Webhooks {
         `[bridge] ${subjectRef} not verified on testing: ${NO_TESTING_URL}` +
           (released ? `; released the lease on #${released.issueNumber}` : ''),
       );
+      if (released) await this.leasesReleased(`${subjectRef} needs no verification on testing`);
       return;
     }
 
@@ -4366,8 +4493,10 @@ export class Webhooks {
     repoName: string,
     sha: string,
     runUrl: string | null,
-    production: { environment: 'production'; note: string } | null = null,
+    /** Production's failure, with what the person's issue says; or the words a testing failure opens with in place of a failed run's. */
+    said: { environment: 'production' | 'testing'; note: string } | null = null,
   ): Promise<void> {
+    const production = said?.environment === 'production' ? said : null;
     const repo = await repos.getRepoByName(repoName);
     if (!repo) return;
 
@@ -4439,7 +4568,7 @@ export class Webhooks {
           body: [
             '### Outcome',
             '',
-            `The \`deploy-testing\` run for \`${sha.slice(0, 8)}\` failed, so that revision never reached testing.`,
+            said?.environment === 'testing' ? said.note : `The \`deploy-testing\` run for \`${sha.slice(0, 8)}\` failed, so that revision never reached testing.`,
             'Testing is still serving whatever was there before, which is why this is an issue and not a revert:',
             'there is nothing on the environment to take back, and reverting `main` would be a second change',
             'for a commit whose only fault is that the deploy did not run.',

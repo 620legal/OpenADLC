@@ -72,6 +72,22 @@ export interface IssueIntake {
    * it is in now, or null when it was not brought back.
    */
   reviveUnheard?(repo: { id: string; name: string }, issueNumber: number, labels: readonly string[]): Promise<StageKey | null>;
+  /**
+   * A card moved to Done on GitHub with no delivery to say so, repaired onto
+   * the board: its lease let go when no task works under it, and what that
+   * frees taken up (`Webhooks.reachedDone`). Whether a lease was let go.
+   */
+  reachedDone?(
+    repo: { id: string; name: string },
+    issueNumber: number,
+    input: { how: string; actor: string; from: StageKey | null; prNumber: number | null },
+  ): Promise<boolean>;
+  /**
+   * What letting a lease go sets off: the plan changes held on paths tried
+   * again, and, where `why` names the release, the dispatcher asked
+   * (`Webhooks.leasesReleased`).
+   */
+  leasesReleased?(why?: string): Promise<void>;
 }
 
 /** An issue or pull request as reconcile reads it from GitHub. */
@@ -211,9 +227,22 @@ export class Reconciler {
   /** When each repository was last read in full, by repository id: the next read asks only for closed issues changed since. */
   private readonly readAt = new Map<string, number>();
 
+  /**
+   * What leases let go free, taken up: at the end of every pass, and by the
+   * reconcile job for the ones that ran out (`expireStaleLeases`). Never a
+   * reason for the job to fail.
+   */
+  async leasesReleased(why?: string): Promise<void> {
+    await (async () => this.intake.leasesReleased?.(why))().catch((error: unknown) =>
+      console.warn(`[reconciler] ${why ? `after ${why}, ` : ''}the plan changes waiting on paths were not looked at: ${reasonOf(error)}`),
+    );
+  }
+
   async run(options: { repair?: boolean } = {}): Promise<Drift[]> {
     const repair = options.repair ?? true;
     const drift: Drift[] = [];
+    // Leases this pass let go: what they free is taken up once, at its end.
+    let letGo = 0;
     const client = await asAutomation(this.actors, this.config);
     const now = new Date();
     // What GitHub told OpenADLC about and what it did not, for the webhook's own
@@ -331,6 +360,7 @@ export class Reconciler {
         if (closed) {
           if (repair) {
             await leases.setLeaseState(lease.id, 'released');
+            letGo += 1;
             await audit({
               actor: 'reconciler',
               action: 'lease.released',
@@ -384,7 +414,10 @@ export class Reconciler {
             // A lease with a pull request is kept, as hostd's observer keeps it:
             // the pull request still needs its paths.
             const lease = await leases.getLease(task.leaseId);
-            if (lease && lease.prNumber == null) await leases.setLeaseState(task.leaseId, 'released');
+            if (lease && lease.prNumber == null) {
+              await leases.setLeaseState(task.leaseId, 'released');
+              letGo += 1;
+            }
           }
         }
         drift.push({
@@ -416,7 +449,7 @@ export class Reconciler {
       if (repair) {
         failed = (await tasks.failUnstarted(task.id, NEVER_STARTED)) !== null;
         // Only a lease nothing else is working under: a retry may have started beside it.
-        if (failed && task.leaseId) await leases.releaseIfIdle(task.leaseId);
+        if (failed && task.leaseId && (await leases.releaseIfIdle(task.leaseId))) letGo += 1;
       }
       drift.push({
         kind: 'orphaned_task',
@@ -437,6 +470,7 @@ export class Reconciler {
         reason: 'its work had ended',
         holdUntil: leaseHoldUntil(),
       });
+      letGo += settled.released.length;
       for (const lease of [...settled.released, ...settled.held]) {
         const released = lease.state === 'released';
         drift.push({
@@ -449,6 +483,14 @@ export class Reconciler {
         });
       }
     }
+
+    // A lease let go frees its paths, and an approved plan change held on
+    // them stays held until something looks again: #71's, let go here, left
+    // #27's waiting until a person approved it a second time. Every pass
+    // looks, not only one that let a lease go: a lease the dispatcher
+    // expired, or the bridge's own move to Done let go, is looked at by
+    // nothing else.
+    if (repair) await this.leasesReleased(letGo > 0 ? `reconcile let go of ${letGo} ${letGo === 1 ? 'lease' : 'leases'}` : undefined);
 
     // A bot whose account is missing from configuration cannot act at all.
     for (const bot of await bots.listBots()) {
@@ -677,10 +719,17 @@ export class Reconciler {
         });
       }
       if (repair && isBackwardMove(known.stage, liveStage)) await this.intake.movedBack?.(repo, issue.number, known.stage, liveStage);
+      // Done on GitHub is the end of the work, as the bridge's own move is.
+      // The lease loop below reads the board from before this repair, and
+      // took a merged card's lease for one still owed its verification.
+      const doneLetGo =
+        repair && liveStage === 'done' && this.intake.reachedDone
+          ? await this.intake.reachedDone(repo, issue.number, { how: 'moved to Done on GitHub', actor: 'reconciler', from: known.stage, prNumber: known.prNumber })
+          : false;
       drift.push({
         kind: 'stage_mismatch',
         subject: `${repo.name}#${issue.number}`,
-        detail: `the board said ${known.stage}, GitHub says ${liveStage}`,
+        detail: `the board said ${known.stage}, GitHub says ${liveStage}${doneLetGo ? '; its lease was let go' : ''}`,
         repaired: repair,
       });
     } else if (!sameLabels(issue.labels, known.labels)) {

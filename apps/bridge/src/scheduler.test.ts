@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TaskState } from '@openadlc/shared';
+import { DEFAULT_DELIVERY_RULES, type TaskState } from '@openadlc/shared';
 import { DEFAULT_INTERVALS } from './job-timer.js';
 import {
   attentionIn,
@@ -53,6 +53,8 @@ const store = vi.hoisted(() => ({
   mergeRows: [] as { prNumber: number; state: string; headSha: string | null; detail?: string | null }[],
   /** The `humanIds` setting: each of the install's people pinned to an account id. */
   humanIds: null as string | null,
+  /** What the deploy pipeline recorded of each merged commit (`deployRuns.forPullRequests`). */
+  deployRuns: [] as Record<string, unknown>[],
 }));
 
 // The status job's report reads the whole store; which issue it lands on is what is tested here.
@@ -109,6 +111,7 @@ vi.mock('@openadlc/db', async () => ({
     workInFlight: vi.fn(async () => store.inFlight),
   },
   leases: { expireStaleLeases: vi.fn(async () => []) },
+  deployRuns: { forPullRequests: vi.fn(async () => store.deployRuns) },
   lastEventAt: vi.fn(async () => store.roundAt),
   listEventsOfTypeWith: vi.fn(async (type: string, fields: Record<string, unknown>) =>
     store.events
@@ -185,6 +188,7 @@ vi.mock('@openadlc/db', async () => ({
 
 beforeEach(() => {
   store.issues = [];
+  store.deployRuns = [];
   store.bots = [];
   store.recentTasks = [];
   store.deployTasks = [];
@@ -319,7 +323,7 @@ const ready = {
   testingUrl: 'https://testing.example',
   deployBot: 'harbor',
   newest: { openadlc: 145 } as Record<string, number | null>,
-  priorDeploys: [] as { subjectRef: string; state: TaskState; exitReason?: string | null }[],
+  priorDeploys: [] as { subjectRef: string; state: TaskState; exitReason?: string | null; nothing?: string | null }[],
 };
 
 describe('the deploy sweep decides before it acts', () => {
@@ -353,6 +357,22 @@ describe('the deploy sweep decides before it acts', () => {
     if (second.kind !== 'work') return;
     expect(second.start).toBeNull();
     expect(second.hold).toEqual(['openadlc#145: a testing deploy was already started (running)']);
+  });
+
+  it('says a deploy that deployed nothing did so, and why, rather than that it is still running', () => {
+    // OpenADLC#72's run finished skipped, and every sweep after said "a
+    // testing deploy was already started (running)".
+    const plan = planDeploySweep({
+      ...ready,
+      waiting: [waiting],
+      priorDeploys: [{ subjectRef: 'openadlc#145', state: 'running', nothing: 'deploy-testing run 9 was skipped' }],
+    });
+    expect(plan.kind).toBe('work');
+    if (plan.kind !== 'work') return;
+    expect(plan.start).toBeNull();
+    expect(plan.hold).toEqual([
+      'openadlc#145: its testing deploy deployed nothing (deploy-testing run 9 was skipped), so its lease was let go; it stays in Ship until a later deploy carries it or a person moves it to Done',
+    ]);
   });
 
   it('tries again after a deploy that never ran', () => {
@@ -717,6 +737,7 @@ describe('a whole deploy sweep', () => {
     store.issues = [];
     const { scheduler } = sweeper();
     const pipeline = {
+      checkTestingDeploys: vi.fn(async () => []),
       checkRollbacks: vi.fn(async () => []),
       promoteDue: vi.fn(async () => []),
       sendBackDue: vi.fn(async () => []),
@@ -730,6 +751,27 @@ describe('a whole deploy sweep', () => {
     expect(result.actions).toContain('openadlc@abc1234: dispatched promote-production');
   });
 
+  it('settles each dispatched testing deploy first, and says of one that deployed nothing what its record says', async () => {
+    const { scheduler } = sweeper();
+    const pipeline = {
+      checkTestingDeploys: vi.fn(async () => ['app@f00dcaf: deploy-testing run 9 was skipped: nothing reached testing; released the lease on #45']),
+      checkRollbacks: vi.fn(async () => []),
+      promoteDue: vi.fn(async () => []),
+      sendBackDue: vi.fn(async () => []),
+      retryUndispatched: vi.fn(async () => []),
+    };
+    store.deployRuns = [{ prNumber: 145, testingDispatchedAt: '2026-10-22T16:57:00.000Z', testingConclusion: 'skipped', detail: 'deploy-testing run 9 was skipped' }];
+    scheduler.useDelivery(pipeline as never, { get: vi.fn(async () => ({ rules: DEFAULT_DELIVERY_RULES, readError: null })) } as never);
+
+    const result = await scheduler.run('deploy');
+
+    expect(result.actions[0]).toBe('app@f00dcaf: deploy-testing run 9 was skipped: nothing reached testing; released the lease on #45');
+    expect(result.actions).toContain(
+      'openadlc#145: its testing deploy deployed nothing (deploy-testing run 9 was skipped), so its lease was let go; it stays in Ship until a later deploy carries it or a person moves it to Done',
+    );
+    expect(result.actions.some((line) => line.includes('already started'))).toBe(false);
+  });
+
   it('looks at each dispatched rollback’s run before it promotes or dispatches again', async () => {
     // A rollback was dispatched and never looked at again: one cancelled
     // behind a promote, or never started, left production broken.
@@ -737,6 +779,7 @@ describe('a whole deploy sweep', () => {
     const { scheduler } = sweeper();
     const order: string[] = [];
     const pipeline = {
+      checkTestingDeploys: vi.fn(async () => (order.push('testing'), [])),
       checkRollbacks: vi.fn(async () => (order.push('check'), ['openadlc@abc1234: production was rolled back (rollback-production run 91)'])),
       promoteDue: vi.fn(async () => (order.push('promote'), [])),
       sendBackDue: vi.fn(async () => []),
@@ -746,7 +789,7 @@ describe('a whole deploy sweep', () => {
 
     const result = await scheduler.run('deploy');
 
-    expect(order).toEqual(['check', 'promote', 'retry']);
+    expect(order).toEqual(['testing', 'check', 'promote', 'retry']);
     expect(result.actions).toContain('openadlc@abc1234: production was rolled back (rollback-production run 91)');
   });
 });
@@ -1102,11 +1145,24 @@ describe('reconciling', () => {
     const { leases } = await import('@openadlc/db');
     vi.mocked(leases.expireStaleLeases).mockResolvedValueOnce([{ repoId: 'repo-9', issueNumber: 12 }] as never);
     store.repos = [{ id: 'repo-9', name: 'widgets' }];
-    const scheduler = new Scheduler({} as never, {} as never, {} as never, { run: async () => [] } as never, {} as never, {} as never, {} as never, null);
+    const leasesReleased = vi.fn(async (_why: string) => undefined);
+    const scheduler = new Scheduler({} as never, {} as never, {} as never, { run: async () => [], leasesReleased } as never, {} as never, {} as never, {} as never, null);
 
     const result = await scheduler.run('reconcile');
 
     expect(result.actions).toContain('expired the lease on widgets#12: it ran out with no pull request');
+    // The plan changes held on its paths are tried again, as for a lease let go:
+    // #27's stayed held after #71's lease was gone, until a person approved it again.
+    expect(leasesReleased).toHaveBeenCalledWith('1 lease ran out');
+  });
+
+  it('looks at no held plan change when no lease ran out', async () => {
+    const leasesReleased = vi.fn(async (_why: string) => undefined);
+    const scheduler = new Scheduler({} as never, {} as never, {} as never, { run: async () => [], leasesReleased } as never, {} as never, {} as never, {} as never, null);
+
+    await scheduler.run('reconcile');
+
+    expect(leasesReleased).not.toHaveBeenCalled();
   });
 
   it('keeps each repository’s default branch in step with GitHub, and says only what it changed', async () => {

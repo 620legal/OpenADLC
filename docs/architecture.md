@@ -430,7 +430,10 @@ ledger, threads and gates, and the console's settings.
    straight to Done. A repository with no rules file follows Settings →
    Repositories' **Automatic**, **Has a testing deploy** or **No testing
    deploy** as those rules. OpenADLC does not read the `OPENADLC_DEPLOY_TESTING`
-   Actions variable.
+   Actions variable: a testing deploy whose run is skipped or never starts, or
+   is cancelled with no later deploy to carry it, deployed nothing, and the
+   merge's lease is let go then, since no verification on testing will come (`DeployPipeline.onTestingRun`, and the
+   deploy sweep's `checkTestingDeploys` for a run whose delivery never came).
 8. **Done.** The issue is closed, the lease is let go, and its files are free
    for the next change.
 

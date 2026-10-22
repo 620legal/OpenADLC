@@ -16,7 +16,7 @@ import { DEPLOY_PATH_BRANCH_PREFIX, REVIEW_ROUND_OPENED, endedBySendingBack, hea
 import { asAutomation, automationBotName, findOwnOpenIssue } from './automation-bot.js';
 import { effectiveConfig } from './effective-config.js';
 import { shipsByMerging, testingDeployChoice, type TestingDeployChoice } from './deploys.js';
-import type { DeployPipeline } from './deploy-pipeline.js';
+import { deployedNothing, type DeployPipeline } from './deploy-pipeline.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
 import { PULL_REQUEST_GRACE_MS, continuesBranch, nothingPushed, noPullRequest, readBranch, type BranchFacts } from './build-left.js';
 import type { BridgeConfig } from './config.js';
@@ -591,6 +591,8 @@ export interface PriorDeploy {
   subjectRef: string;
   state: TaskState;
   exitReason?: string | null;
+  /** Why a testing deploy the pipeline dispatched deployed nothing (`deployedNothing`), from its record; absent for one that may still deploy. */
+  nothing?: string | null;
 }
 
 /**
@@ -682,6 +684,14 @@ export function planDeploySweep(input: {
     const subjectRef = `${repo}#${newest}`;
     const prior = input.priorDeploys.filter((task) => task.subjectRef === subjectRef);
     const live = prior.find((task) => !taskGaveUp(task.state));
+    // One that deployed nothing is said as such: OpenADLC#72's skipped run
+    // was "already started (running)" on every sweep until its lease ran out.
+    if (live?.nothing) {
+      hold.push(
+        `${subjectRef}: its testing deploy deployed nothing (${live.nothing}), so its lease was let go; it stays in Ship until a later deploy carries it or a person moves it to Done`,
+      );
+      continue;
+    }
     if (live) {
       hold.push(`${subjectRef}: a testing deploy was already started (${live.state})`);
       continue;
@@ -1397,6 +1407,15 @@ export class Scheduler {
    * `MAX_DEPLOY_ATTEMPTS`.
    */
   private async runDeploySweep(): Promise<string[]> {
+    // How each testing deploy dispatched lately ended, first: one whose run
+    // was skipped, cancelled or never started deployed nothing, and lets its
+    // merge's lease go here when its delivery never came. The plan below then
+    // reads what it recorded.
+    const settled = this.pipeline
+      ? await this.pipeline
+          .checkTestingDeploys()
+          .catch((error: unknown) => [`the testing deploys dispatched could not be checked: ${error instanceof Error ? error.message : String(error)}`])
+      : [];
     const board = await issues.listIssues();
     const found = awaitingTestingDeploy(board);
     // Every issue in Ship is asked about, not only those still waiting on a
@@ -1433,7 +1452,7 @@ export class Scheduler {
       priorDeploys,
     });
 
-    const actions: string[] = [...moved];
+    const actions: string[] = [...settled, ...moved];
     const refusal = deploySweepRefusal(plan);
     if (refusal) {
       actions.push(refusal);
@@ -1557,7 +1576,12 @@ export class Scheduler {
       if (!repo) continue;
       const numbers = waiting.filter((item) => item.repo === name && item.prNumber).map((item) => item.prNumber as number);
       for (const run of await deployRuns.forPullRequests(repo.id, numbers).catch(() => [])) {
-        if (run.testingDispatchedAt) prior.push({ subjectRef: `${name}#${run.prNumber}`, state: 'running' });
+        if (!run.testingDispatchedAt) continue;
+        prior.push({
+          subjectRef: `${name}#${run.prNumber}`,
+          state: 'running',
+          ...(deployedNothing(run.testingConclusion) ? { nothing: run.detail ?? run.testingConclusion } : {}),
+        });
       }
     }
     return prior;
@@ -1803,6 +1827,8 @@ export class Scheduler {
 
     const drift = await this.reconciler.run({ repair: true });
     for (const entry of drift) actions.push(driftLine(entry));
+    // A lease that ran out frees its paths as one let go does.
+    if (expired.length > 0) await this.reconciler.leasesReleased(`${expired.length} ${expired.length === 1 ? 'lease' : 'leases'} ran out`);
 
     const needsPerson = drift.filter((entry) => !entry.repaired);
     if (needsPerson.length > 0) {

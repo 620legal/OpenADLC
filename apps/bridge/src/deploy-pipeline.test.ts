@@ -15,6 +15,8 @@ const world = {
   runs: new Map<string, Run>(),
   limits: null as { limits: { name: string; detail: string }[] } | null,
   audits: [] as Record<string, unknown>[],
+  /** The leases let go, by the pull request they were held for. */
+  released: [] as { repoId: string; prNumber: number; why: string }[],
 };
 
 vi.mock('@openadlc/db', () => ({
@@ -22,6 +24,14 @@ vi.mock('@openadlc/db', () => ({
     world.audits.push(entry);
   }),
   issues: { listIssues: vi.fn(async () => [{ number: 12, prNumber: 40 }]) },
+  // A lease held for each pull request until it is let go once.
+  leases: {
+    releaseForPullRequest: vi.fn(async (repoId: string, prNumber: number, why: string) => {
+      if (world.released.some((one) => one.prNumber === prNumber)) return null;
+      world.released.push({ repoId, prNumber, why });
+      return { issueNumber: prNumber - 1 };
+    }),
+  },
   repos: {
     listRepos: vi.fn(async () => [REPO]),
     getPlanLimits: vi.fn(async () => world.limits),
@@ -91,9 +101,41 @@ vi.mock('@openadlc/db', () => ({
             rollbackDispatchedAt: run.rollback_dispatched_at ?? null,
             rollbackConclusion: run.rollbackConclusion ?? null,
             sentBackAt: run.sent_back_at ?? null,
+            testingDispatchedAt: run.testing_dispatched_at ?? null,
+            testingConclusion: run.testingConclusion ?? null,
+            detail: run.detail ?? null,
           }
         : null;
     }),
+    // As the store does it: once, and a run that deployed, or one settled
+    // once its superseding deploy is known, over one that did not.
+    recordTesting: vi.fn(async (_repo: string, sha: string, conclusion: string, detail: string | null) => {
+      const run = world.runs.get(sha);
+      if (!run?.testing_dispatched_at) return false;
+      if (run.testingConclusion && run.testingConclusion !== 'superseded' && !(conclusion === 'success' && run.testingConclusion !== 'success')) return false;
+      run.testingConclusion = conclusion;
+      if (detail) run.detail = detail;
+      return true;
+    }),
+    // By dispatch time, as the store orders them.
+    laterTestingDeploy: vi.fn(async (_repo: string, sha: string) => {
+      const at = String(world.runs.get(sha)?.testing_dispatched_at ?? '');
+      const later = [...world.runs.values()]
+        .filter((run) => run.testing_dispatched_at && String(run.testing_dispatched_at) > at && (!run.testingConclusion || run.testingConclusion === 'success'))
+        .sort((a, b) => String(a.testing_dispatched_at).localeCompare(String(b.testing_dispatched_at)))[0];
+      return later ? { sha: later.sha } : null;
+    }),
+    supersededBefore: vi.fn(async (_repo: string, sha: string) => {
+      const at = String(world.runs.get(sha)?.testing_dispatched_at ?? '');
+      return [...world.runs.values()]
+        .filter((run) => run.testingConclusion === 'superseded' && String(run.testing_dispatched_at) < at)
+        .map((run) => ({ repoId: REPO.id, sha: run.sha, prNumber: run.prNumber ?? null, testingDispatchedAt: run.testing_dispatched_at }));
+    }),
+    unsettledTesting: vi.fn(async () =>
+      [...world.runs.values()]
+        .filter((run) => run.testing_dispatched_at && !run.testingConclusion && !run.smoke)
+        .map((run) => ({ repoId: REPO.id, sha: run.sha, prNumber: run.prNumber ?? null, testingDispatchedAt: run.testing_dispatched_at, testingConclusion: null })),
+    ),
     unsentBack: vi.fn(async () =>
       [...world.runs.values()]
         .filter((run) => !run.sent_back_at && (run.smoke === 'failure' || run.production === 'failure'))
@@ -151,7 +193,7 @@ vi.mock('@openadlc/db', () => ({
   },
 }));
 
-import { DeployPipeline, promoteFailure, rollbackSaid, workflowFile } from './deploy-pipeline.js';
+import { DeployPipeline, promoteFailure, rollbackSaid, TESTING_APPEARS_MS, workflowFile } from './deploy-pipeline.js';
 
 function rules(input: unknown): DeliveryRules {
   return deliveryRulesSchema.parse({ version: 1, ...(input as object) });
@@ -246,6 +288,7 @@ beforeEach(() => {
   world.runs.clear();
   world.limits = null;
   world.audits = [];
+  world.released = [];
 });
 
 describe('a merge', () => {
@@ -999,6 +1042,239 @@ describe('a rollback of production', () => {
 
     expect(sentBack).toEqual([expect.objectContaining({ reason: 'The production deploy of `abc1234` failed. A rollback of production was dispatched.' })]);
     expect(rollbackSaid({ rollbackDispatchedAt: DISPATCHED_AT, rollbackConclusion: 'success' })).toBe(' Production was rolled back.');
+  });
+});
+
+/**
+ * A testing deploy that deployed nothing. OpenADLC#72 merged, the bridge
+ * dispatched deploy-testing, and its run finished skipped: the template's job
+ * runs only where the repository sets OPENADLC_DEPLOY_TESTING. No deployment
+ * came, so no verification ran, and the verification's end was the only thing
+ * that let #71's lease go. A stacked issue's plan change waited on its files
+ * until the lease ran out.
+ */
+describe('a testing deploy that deployed nothing', () => {
+  const SHA = '9da5ed6948cb33fefa7b3fc27459871df94d5623';
+  const DISPATCHED_AT = '2026-10-22T16:57:00.000Z';
+  const dispatched = () => world.runs.set(SHA, { sha: SHA, prNumber: 72, testing_dispatched_at: DISPATCHED_AT });
+  /** GitHub's list of the testing deploy's runs. */
+  const deployRuns = (runs: Record<string, unknown>[]) => (path: string) => (path.includes('/deploy-testing.yml/') ? runs : []);
+  const at = (ms: number) => Date.parse(DISPATCHED_AT) + ms;
+
+  it.each([
+    ['skipped', 'deploy-testing run 39818398577 was skipped'],
+    ['cancelled', 'deploy-testing run 39818398577 was cancelled before it deployed, and no later testing deploy carries it'],
+    ['startup_failure', 'deploy-testing run 39818398577 never started (startup_failure)'],
+  ])('%s: lets go of its merge’s lease, retries the plan changes held on it, and says why on its record', async (conclusion, why) => {
+    dispatched();
+    const { line } = pipeline(DEFAULT_DELIVERY_RULES);
+    const released = vi.fn();
+    line.onLeaseReleased(released);
+
+    const said = await line.onTestingRun(REPO, SHA, { id: 39818398577, conclusion });
+
+    expect(world.released).toEqual([{ repoId: 'repo-1', prNumber: 72, why: expect.stringContaining(why) }]);
+    expect(released).toHaveBeenCalledTimes(1);
+    expect(world.runs.get(SHA)).toMatchObject({ testingConclusion: conclusion, detail: expect.stringContaining(why) });
+    expect(world.audits).toContainEqual(
+      expect.objectContaining({ action: 'deploy.testing_deployed_nothing', target: 'app@9da5ed6', payload: expect.objectContaining({ prNumber: 72, conclusion }) }),
+    );
+    expect(said).toContain(why);
+    expect(said).toContain('released the lease on #71');
+  });
+
+  it('is settled once, however often its end is heard', async () => {
+    dispatched();
+    const { line } = pipeline(DEFAULT_DELIVERY_RULES);
+    const released = vi.fn();
+    line.onLeaseReleased(released);
+
+    await line.onTestingRun(REPO, SHA, { id: 1, conclusion: 'skipped' });
+    const again = await line.onTestingRun(REPO, SHA, { id: 1, conclusion: 'skipped' });
+
+    expect(world.released).toHaveLength(1);
+    expect(released).toHaveBeenCalledTimes(1);
+    expect(again).toContain('already settled');
+  });
+
+  it.each(['success', 'failure'])('is not a run that ended %s: that one is recorded, and lets no lease go nor plan change through', async (conclusion) => {
+    // A failed deploy is a failure the bridge reports; a successful one is
+    // followed by its deployment, whose verification lets the lease go.
+    dispatched();
+    const { line } = pipeline(DEFAULT_DELIVERY_RULES);
+    const released = vi.fn();
+    line.onLeaseReleased(released);
+
+    await line.onTestingRun(REPO, SHA, { id: 1, conclusion });
+
+    expect(world.runs.get(SHA)?.testingConclusion).toBe(conclusion);
+    expect(world.released).toEqual([]);
+    expect(released).not.toHaveBeenCalled();
+    expect(world.audits.filter((entry) => entry.action === 'deploy.testing_deployed_nothing')).toEqual([]);
+  });
+
+  describe('cancelled for a later merge’s deploy', () => {
+    // deploy-testing's concurrency group cancels B's waiting run when C's
+    // queues, and C's deployment finishes B too: B's verification is what
+    // lets B's lease go. Let go at the cancel, overlapping work started
+    // before B was verified anywhere.
+    const LATER = 'c0ffee0000000000000000000000000000000c0c';
+    const later = (conclusion?: string) =>
+      world.runs.set(LATER, { sha: LATER, prNumber: 74, testing_dispatched_at: '2026-10-22T16:58:00.000Z', ...(conclusion ? { testingConclusion: conclusion } : {}) });
+
+    it('keeps its lease, and is recorded as carried, while that deploy is still to end or deployed', async () => {
+      dispatched();
+      later();
+      const { line } = pipeline(DEFAULT_DELIVERY_RULES);
+      const released = vi.fn();
+      line.onLeaseReleased(released);
+
+      const said = await line.onTestingRun(REPO, SHA, { id: 5, conclusion: 'cancelled' });
+
+      expect(said).toBe('app@9da5ed6: deploy-testing run 5 was cancelled, and the testing deploy of c0ffee0, dispatched after it, carries it; its lease is kept for that deploy’s verification'.replace('’', "'"));
+      expect(world.runs.get(SHA)).toMatchObject({ testingConclusion: 'superseded', detail: expect.stringContaining('carries it') });
+      expect(world.released).toEqual([]);
+      expect(released).not.toHaveBeenCalled();
+
+      later('success');
+      world.runs.get(SHA)!.testingConclusion = undefined;
+      await line.onTestingRun(REPO, SHA, { id: 5, conclusion: 'cancelled' });
+      expect(world.runs.get(SHA)?.testingConclusion).toBe('superseded');
+      expect(world.released).toEqual([]);
+    });
+
+    it('lets its lease go with that deploy’s, once that one deploys nothing either', async () => {
+      dispatched();
+      later();
+      const { line } = pipeline(DEFAULT_DELIVERY_RULES);
+      const released = vi.fn();
+      line.onLeaseReleased(released);
+      await line.onTestingRun(REPO, SHA, { id: 5, conclusion: 'cancelled' });
+
+      const said = await line.onTestingRun(REPO, LATER, { id: 6, conclusion: 'skipped' });
+
+      expect(world.released.map((one) => one.prNumber)).toEqual([74, 72]);
+      expect(world.runs.get(SHA)).toMatchObject({ testingConclusion: 'cancelled', detail: expect.stringContaining('for the testing deploy of c0ffee0, which deployed nothing either') });
+      expect(said).toContain('released the lease on #71');
+      expect(released).toHaveBeenCalledTimes(2);
+    });
+
+    it('lets its lease go at once when the later deploy has already deployed nothing', async () => {
+      dispatched();
+      later('skipped');
+      const { line } = pipeline(DEFAULT_DELIVERY_RULES);
+
+      await line.onTestingRun(REPO, SHA, { id: 5, conclusion: 'cancelled' });
+
+      expect(world.runs.get(SHA)?.testingConclusion).toBe('cancelled');
+      expect(world.released.map((one) => one.prNumber)).toEqual([72]);
+    });
+  });
+
+  it('is not a commit this bridge dispatched a testing deploy of', async () => {
+    world.runs.set(SHA, { sha: SHA, prNumber: 72 });
+    const { line } = pipeline(DEFAULT_DELIVERY_RULES);
+
+    expect(await line.onTestingRun(REPO, SHA, { id: 1, conclusion: 'skipped' })).toContain('dispatched no testing deploy of it');
+    expect(world.released).toEqual([]);
+  });
+
+  it('counts one whose run never appeared within the bound, and waits until then', async () => {
+    dispatched();
+    const { line, advance } = pipeline(DEFAULT_DELIVERY_RULES, { now: at(60_000), runsFor: deployRuns([]) });
+    const released = vi.fn();
+    line.onLeaseReleased(released);
+
+    expect(await line.checkTestingDeploys()).toEqual([]);
+    expect(world.released).toEqual([]);
+
+    advance(TESTING_APPEARS_MS);
+    const [said] = await line.checkTestingDeploys();
+
+    expect(said).toContain('no run of deploy-testing appeared within 10 minutes of its dispatch');
+    expect(world.runs.get(SHA)?.testingConclusion).toBe('not_started');
+    expect(world.released).toEqual([{ repoId: 'repo-1', prNumber: 72, why: expect.stringContaining('no run of deploy-testing appeared') }]);
+    expect(released).toHaveBeenCalledTimes(1);
+  });
+
+  it('finds the end of one whose delivery never came, by the commit its run is named for', async () => {
+    dispatched();
+    const listed: string[] = [];
+    const { line } = pipeline(DEFAULT_DELIVERY_RULES, {
+      now: at(3_600_000),
+      runsFor: (path) => {
+        listed.push(path);
+        return deployRuns([
+          { id: 8, status: 'completed', conclusion: 'success', display_title: `deploy-testing ${'b'.repeat(40)}`, created_at: '2026-10-22T16:58:00Z' },
+          { id: 39818398577, status: 'completed', conclusion: 'skipped', display_title: `deploy-testing ${SHA}`, created_at: '2026-10-22T16:57:12Z' },
+        ])(path);
+      },
+    });
+
+    const [said] = await line.checkTestingDeploys();
+
+    expect(listed).toEqual([
+      `/repos/exampleco/app/actions/workflows/deploy-testing.yml/runs?event=workflow_dispatch&created=${encodeURIComponent('>=2026-10-22T16:56:00.000Z')}&per_page=100`,
+    ]);
+    expect(said).toContain('deploy-testing run 39818398577 was skipped');
+    expect(world.released).toEqual([{ repoId: 'repo-1', prNumber: 72, why: expect.stringContaining('skipped') }]);
+  });
+
+  it('leaves one still queued or running, and records one that ran without letting anything go', async () => {
+    dispatched();
+    const running = pipeline(DEFAULT_DELIVERY_RULES, {
+      now: at(3_600_000),
+      runsFor: deployRuns([{ id: 9, status: 'queued', conclusion: null, display_title: `deploy-testing ${SHA}`, created_at: '2026-10-22T16:57:12Z' }]),
+    });
+    expect(await running.line.checkTestingDeploys()).toEqual([]);
+    expect(world.runs.get(SHA)?.testingConclusion).toBeUndefined();
+
+    const ran = pipeline(DEFAULT_DELIVERY_RULES, {
+      now: at(3_600_000),
+      runsFor: deployRuns([{ id: 9, status: 'completed', conclusion: 'success', display_title: `deploy-testing ${SHA}`, created_at: '2026-10-22T16:57:12Z' }]),
+    });
+    await ran.line.checkTestingDeploys();
+    expect(world.runs.get(SHA)?.testingConclusion).toBe('success');
+    expect(world.released).toEqual([]);
+  });
+
+  it('decides nothing from a page of runs that may not hold its own, nor from runs whose names carry no commit', async () => {
+    dispatched();
+    const others = Array.from({ length: 100 }, (_, index) => ({
+      id: index,
+      status: 'completed',
+      conclusion: 'success',
+      display_title: `deploy-testing ${String(index).padStart(40, 'c')}`,
+      created_at: '2026-10-22T17:00:00Z',
+    }));
+    const full = pipeline(DEFAULT_DELIVERY_RULES, { now: at(3_600_000), runsFor: deployRuns(others) });
+    expect(await full.line.checkTestingDeploys()).toEqual([expect.stringContaining('more runs of deploy-testing than one page')]);
+
+    const unnamed = pipeline(DEFAULT_DELIVERY_RULES, {
+      now: at(3_600_000),
+      runsFor: deployRuns([{ id: 9, status: 'completed', conclusion: 'success', display_title: 'deploy-testing', created_at: '2026-10-22T16:57:12Z' }]),
+    });
+    expect(await unnamed.line.checkTestingDeploys()).toEqual([expect.stringContaining('names no whole commit id')]);
+
+    expect(world.runs.get(SHA)?.testingConclusion).toBeUndefined();
+    expect(world.released).toEqual([]);
+  });
+
+  it('keeps waiting, and says until when, for a run named with a short commit id, which may be its own still deploying', async () => {
+    dispatched();
+    const { line } = pipeline(DEFAULT_DELIVERY_RULES, {
+      now: at(3_600_000),
+      runsFor: deployRuns([{ id: 9, status: 'in_progress', conclusion: null, display_title: 'deploy-testing 9da5ed6', created_at: '2026-10-22T16:57:12Z' }]),
+    });
+
+    expect(await line.checkTestingDeploys()).toEqual([
+      'app@9da5ed6: a run of deploy-testing since its dispatch names no whole commit id, so whether it is this one’s cannot be told; waiting, and asking again until 2026-10-29T16:57:00.000Z'.replace(
+        '’',
+        "'",
+      ),
+    ]);
+    expect(world.runs.get(SHA)?.testingConclusion).toBeUndefined();
+    expect(world.released).toEqual([]);
   });
 });
 

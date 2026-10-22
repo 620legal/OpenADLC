@@ -16,6 +16,7 @@ import {
   reacquireForPullRequest,
   releaseForPullRequest,
   releaseForRepo,
+  releaseIdleForIssue,
   releaseIfIdle,
   settlePausedLeases,
   widenPaths,
@@ -314,6 +315,34 @@ describe('the leases of a repository removed from OpenADLC', () => {
 
     const text = String(vi.mocked(query).mock.calls[0]?.[0]).replace(/\s+/g, ' ');
     expect(text).toContain("not exists (select 1 from tasks t where t.lease_id = l.id and t.state in ('queued', 'running', 'paused'))");
+  });
+});
+
+describe('the lease of an issue that reached Done', () => {
+  // OpenADLC#71's card was moved to Done by its label, and reconcile put it
+  // there on the board; nothing let go of its lease, which held two files a
+  // stacked issue's plan change waited on until the lease ran out.
+  it('is let go, whatever pull request it names, and audited with why, in the statement that checks no task works under it', async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ ...ROW, state: 'released', pr_number: 72 }]);
+
+    const released = await releaseIdleForIssue({ repoId: 'repo-1', issueNumber: 71, actor: 'reconciler', reason: 'moved to Done on GitHub' });
+
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
+    const text = String(sql).replace(/\s+/g, ' ');
+    expect(text).toContain("update leases l set state = 'released'");
+    expect(text).toContain('where l.repo_id = $1 and l.issue_number = $2 and l.state = any($3)');
+    expect(text).toContain("not exists (select 1 from tasks t where t.lease_id = l.id and t.state in ('queued', 'running', 'paused'))");
+    expect(text).not.toContain('pr_number is null');
+    expect(text).toContain("'lease.released'");
+    expect(params).toEqual(['repo-1', 71, ['leased', 'in_task', 'paused'], 'reconciler', 'moved to Done on GitHub']);
+    expect(released).toEqual(expect.objectContaining({ id: 'lease-1', state: 'released', prNumber: 72 }));
+  });
+
+  it('is kept while a task still works under it, and none held is nothing', async () => {
+    vi.mocked(query).mockResolvedValueOnce([]);
+
+    expect(await releaseIdleForIssue({ repoId: 'repo-1', issueNumber: 71, actor: 'bridge', reason: 'r' })).toBeNull();
   });
 });
 

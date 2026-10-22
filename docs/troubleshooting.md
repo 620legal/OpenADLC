@@ -1503,6 +1503,71 @@ it was; otherwise it says why not, and that the sweep tries again.
   `production-rules` check has no answer, rather than passing: any member of a
   reviewer team may approve, and OpenADLC cannot see who is in it. Confirm on
   the organization's Teams page that no crew account is a member.
+- **`deploy-testing run <id> was skipped`** — the run was dispatched and its
+  job did not run: the template's runs only where the repository sets the
+  `OPENADLC_DEPLOY_TESTING` Actions variable to `true`. The bridge dispatches
+  it all the same, since only the run says what a workflow did, and reads the
+  skip as a deploy of nothing ([below](#a-stacked-issue-waits-after-its-base-merged)).
+  If the repository has no testing environment, say so in its rules
+  (`testing: on: none`, or Settings → Repositories → **No testing deploy**):
+  merging then ships, and its cards go to Done.
+
+## A stacked issue waits after its base merged
+
+An issue stacked on another, or one whose files overlap it, waits while the
+base's lease holds those files. After the base merges, its lease is kept until
+the builder has verified the change on testing, and the end of that
+verification lets it go. Its approved `plan_change` waits the same way: the
+bridge says `#N holds paths that overlap them`, and approving it again changes
+nothing while the lease is held.
+
+No deployment, no verification. So the lease is also let go when:
+
+- **The testing deploy deployed nothing.** The `deploy-testing` run the bridge
+  dispatched finished `skipped` (the repository sets no
+  `OPENADLC_DEPLOY_TESTING`), was `cancelled` with no later deploy to carry
+  it, failed to start (`startup_failure`, which is also filed as a failed
+  testing deploy that did not start: most often a workflow file GitHub could
+  not run), or no run of it appeared within 10 minutes of the dispatch. The
+  run's `workflow_run` delivery settles it at once; the deploy sweep looks up
+  any whose delivery never came. The commit's `deploy_runs` row records how it
+  ended (`testing_conclusion`) and why (`detail`), the audit log has
+  `deploy.testing_deployed_nothing`, and the deploy sweep says `its testing
+  deploy deployed nothing (…), so its lease was let go` instead of `a testing
+  deploy was already started (running)`. The card stays in Ship: move it to
+  Done, or turn the repository's testing deploy off as above. A run that
+  failed lets nothing go: it is filed as a failed deploy, and the deploy that
+  fixes it is verified as usual.
+- **Not a cancelled run a later merge's deploy carries.** deploy-testing's
+  concurrency group cancels a waiting run when a newer merge's queues, and the
+  newer deploy finishes both. That run is recorded `superseded`, and its
+  lease waits for the newer deploy's verification; if the newer deploy
+  deploys nothing too, both are let go then.
+- **The sweep waits on a run it cannot place.** A commit's run is found by the
+  whole commit id in its name (`deploy-testing <sha>`). While any run of the
+  workflow since the dispatch names none — a short id, or a workflow of the
+  rules' own that names its runs otherwise — the sweep does not take the
+  dispatch for one that never started: it says so, and asks again, for a week.
+- **The card reaches Done.** The bridge's own moves let the lease go. So does
+  a person's `adlc:done`, from its delivery or, on a closed issue, from the
+  next reconcile, which repairs the board and lets the lease go in that pass —
+  but only for a change that merged (the card was in Ship, or its pull request
+  merged), and not while a verification or deploy task is still going on its
+  pull request. `adlc:done` on a card in Review keeps its lease: the change is
+  still open, and overlapping work would start beside it.
+- **A day passes** with the issue merged and no verification started: the
+  reconciler lets it go then, `merged, and its verification on testing never
+  started within a day`.
+
+Wherever a lease is let go — one of these, a lease that ran out, one the
+reconciler releases, a task's end, a pull request closing — the approved plan
+changes held on paths are tried again, and the tasks they were for resume.
+Every reconcile pass (a quarter of an hour) tries them as well, for a lease
+let go where nothing looks at once.
+
+```bash
+grep -E 'deployed nothing|released the lease|reached Done' "$(openadlc logs bridge)" | tail -n 20
+```
 
 ## Something is left after removing a repository
 
