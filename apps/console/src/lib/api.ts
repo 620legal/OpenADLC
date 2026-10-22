@@ -18,6 +18,18 @@ export interface CardTask {
   startedAt: string | null;
   endedAt: string | null;
   exitReason: string | null;
+  /**
+   * What a running task is doing now, in the bridge's own words: "running
+   * tests", "reading the diff". Null when it is not running or has printed no
+   * step yet; absent from an older bridge.
+   */
+  activity?: string | null;
+  /**
+   * When a running task last began running: its start, or the answer that
+   * resumed it after a question. Null when it is not running, or resumed at a
+   * time nothing records; absent from an older bridge, which said only its start.
+   */
+  since?: string | null;
 }
 
 export interface BoardCard {
@@ -109,6 +121,8 @@ export interface Board {
   waitingOnYou: number;
   working: number;
   idle: number;
+  /** Tasks running across the install, whatever the board shows. Absent from an older bridge. */
+  running?: number;
 }
 
 export interface BotSession {

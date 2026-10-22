@@ -1,4 +1,4 @@
-import { audit, deployRuns, issues, repos } from '@openadlc/db';
+import { audit, deployRuns, issues, leases, repos, type DeployRun } from '@openadlc/db';
 import type { DeliveryRules } from '@openadlc/shared';
 import type { EffectiveDelivery } from './delivery-rules.js';
 import type { SendBackResult } from './send-back.js';
@@ -144,11 +144,63 @@ const CLOCK_SLACK_MS = 60_000;
 /** A promote GitHub has not started: queued, or waiting on the production environment's reviewer or timer. */
 const NOT_STARTED = ['queued', 'waiting', 'pending'] as const;
 
+/** How long after its dispatch a testing deploy's run may be missing from GitHub's list before it is taken as never started. */
+export const TESTING_APPEARS_MS = 10 * 60_000;
+
+/** The most runs GitHub lists on one page, which is all the deploy sweep reads of a testing workflow's. */
+const RUNS_PAGE = 100;
+
+/**
+ * A run's name that carries a whole commit id, as `deploy-testing.yml`'s
+ * `deploy-testing <sha>` does. A commit's run is found only by its whole id,
+ * so a run named with a short one cannot be told from another merge's.
+ */
+const NAMES_A_COMMIT = /\b[0-9a-f]{40}\b/i;
+
+/**
+ * How a dispatched testing deploy deployed nothing: its run finished skipped
+ * — the template's job runs only where the repository sets
+ * `OPENADLC_DEPLOY_TESTING` — or was cancelled with no later deploy to carry
+ * it, or never started (GitHub's `startup_failure`, or no run of it at all,
+ * `not_started`). No deployment follows any of them, so no verification on
+ * testing does either, and that verification's end was the one thing that let
+ * the merge's lease go. A run cancelled for a later merge's deploy is
+ * `superseded` instead, and keeps its lease (`settleTesting`).
+ */
+export const DEPLOYED_NOTHING: readonly string[] = ['skipped', 'cancelled', 'startup_failure', 'not_started'];
+
+/** Whether a testing deploy's recorded conclusion is one that deployed nothing (`DEPLOYED_NOTHING`). */
+export function deployedNothing(conclusion: string | null | undefined): boolean {
+  return Boolean(conclusion && DEPLOYED_NOTHING.includes(conclusion));
+}
+
+/** A finished run of the testing deploy, as its `workflow_run` delivery or GitHub's list of runs has it. */
+export interface TestingRun {
+  id: number | null;
+  conclusion: string | null;
+  /** The workflow's name; the rules' testing workflow when absent. */
+  workflow?: string;
+}
+
+/** A run as GitHub lists a workflow's runs. */
+type ListedRun = { id: number; status: string; conclusion?: string | null; display_title?: string | null; created_at?: string };
+
 export class DeployPipeline {
   constructor(private readonly deps: DeployPipelineDeps) {}
 
   private now(): number {
     return (this.deps.now ?? Date.now)();
+  }
+
+  private leaseListener: ((why: string) => unknown) | null = null;
+
+  /**
+   * Told, with why, when a merge's testing deploy deployed nothing and its
+   * lease was let go here: the webhooks set off what a merge that ships does,
+   * the plan changes held on its paths tried again (`Webhooks.useDelivery`).
+   */
+  onLeaseReleased(listener: (why: string) => unknown): void {
+    this.leaseListener = listener;
   }
 
   /**
@@ -163,7 +215,19 @@ export class DeployPipeline {
     return this.deployTesting(repo, mergeSha, prNumber, rules);
   }
 
-  /** Dispatches the testing deploy of a commit, once. */
+  /**
+   * Dispatches the testing deploy of a commit, once.
+   *
+   * Whether the workflow then deploys is its own to say. The template's job
+   * runs only where the repository sets `OPENADLC_DEPLOY_TESTING`, and
+   * OpenADLC#72's run finished skipped. It is dispatched all the same, and the
+   * skip read as a deploy of nothing (`onTestingRun`): the rules can name any
+   * workflow, whose condition can be anything, and only its run says what it
+   * did; reading the variable would need the app's Variables permission,
+   * which it does not ask for; and a skipped job takes no runner minutes. A
+   * repository with no testing environment says so in its rules
+   * (`testing: none`), which ships by merging and dispatches nothing.
+   */
   async deployTesting(repo: Repo, sha: string, prNumber: number | null, given?: DeliveryRules): Promise<string> {
     const rules = given ?? (await this.rulesOf(repo, `${repo.name}@${sha.slice(0, 7)}`));
     if (typeof rules === 'string') return rules;
@@ -174,6 +238,178 @@ export class DeployPipeline {
       return `${repo.name}@${sha.slice(0, 7)}: its testing deploy was already dispatched`;
     }
     return this.dispatch(repo, sha, 'testing_dispatched_at', workflow, { sha }, 'deploy.testing_dispatched');
+  }
+
+  /**
+   * A run of the testing deploy ended, as its `workflow_run` delivery says.
+   * Recorded once per commit, which is what stops the deploy sweep looking it
+   * up. One that deployed nothing settles the merge (`settleNothingDeployed`);
+   * one that ran is left to its deployment, whose verification on testing lets
+   * the lease go, or to the failure it reports.
+   */
+  async onTestingRun(repo: Repo, sha: string, run: TestingRun): Promise<string> {
+    const ref = `${repo.name}@${sha.slice(0, 7)}`;
+    const record = await deployRuns.get(repo.id, sha);
+    if (!record?.testingDispatchedAt) {
+      return `${ref}: a testing deploy run ended (${run.conclusion ?? 'no conclusion'}), and this bridge dispatched no testing deploy of it; nothing settled`;
+    }
+    const rules = run.workflow ? null : await this.rulesOf(repo, ref);
+    const workflow = run.workflow ?? (rules && typeof rules !== 'string' ? rules.testing.workflow : 'the testing deploy');
+    return (await this.settleTesting(repo, record, workflow, run)) ?? `${ref}: its testing deploy ran`;
+  }
+
+  /**
+   * Testing deploys dispatched and not yet seen to end, looked up on GitHub.
+   * The deploy sweep calls this before it plans. A run whose delivery never
+   * came is settled as the delivery would have settled it; a dispatch no run
+   * appeared for within `TESTING_APPEARS_MS` deployed nothing.
+   *
+   * The dispatch answers with no run id, so a commit's run is the one whose
+   * name carries it, as `deploy-testing.yml` names each `deploy-testing <sha>`.
+   * Nothing is decided from a list that may not hold it: a full page, or runs
+   * whose names carry no commit, as a workflow of the rules' own may have.
+   */
+  async checkTestingDeploys(): Promise<string[]> {
+    const unsettled = await deployRuns.unsettledTesting(new Date(this.now() - RETRY_WITHIN_MS));
+    if (unsettled.length === 0) return [];
+    const lines: string[] = [];
+    for (const repo of await repos.listRepos()) {
+      const mine = unsettled.filter((run) => run.repoId === repo.id && run.testingDispatchedAt);
+      if (mine.length === 0) continue;
+      lines.push(
+        ...(await this.checkTestingIn(repo, mine).catch((error: unknown) => [
+          `${repo.name}: its testing deploys could not be checked: ${error instanceof Error ? error.message : String(error)}`,
+        ])),
+      );
+    }
+    return lines;
+  }
+
+  private async checkTestingIn(repo: Repo, runs: readonly DeployRun[]): Promise<string[]> {
+    const rules = await this.rulesOf(repo, repo.name);
+    if (typeof rules === 'string') return [rules];
+    const client = await this.deps.client(repo.fullName);
+    if (!client) return [`${repo.name}: its testing deploys cannot be checked; neither the app nor the automation account can act here`];
+    const workflow = rules.testing.workflow;
+    const dispatchedAt = (run: DeployRun) => Date.parse(run.testingDispatchedAt as string);
+    const since = new Date(Math.min(...runs.map(dispatchedAt)) - CLOCK_SLACK_MS).toISOString();
+    const listed = await client.request<{ workflow_runs?: ListedRun[] }>(
+      'GET',
+      `/repos/${repo.fullName}/actions/workflows/${encodeURIComponent(workflowFile(workflow))}/runs?event=workflow_dispatch&created=${encodeURIComponent(`>=${since}`)}&per_page=${RUNS_PAGE}`,
+    );
+    const found = listed.workflow_runs ?? [];
+    const lines: string[] = [];
+    for (const run of runs) {
+      const ref = `${repo.name}@${run.sha.slice(0, 7)}`;
+      const own = found.find((one) => (one.display_title ?? '').toLowerCase().includes(run.sha.toLowerCase()));
+      if (own) {
+        // Queued behind another deploy in its concurrency group, or running.
+        if (own.status !== 'completed') continue;
+        const line = await this.settleTesting(repo, run, workflow, { id: own.id, conclusion: own.conclusion ?? null });
+        if (line) lines.push(line);
+        continue;
+      }
+      if (this.now() - dispatchedAt(run) < TESTING_APPEARS_MS) continue;
+      if (found.length >= RUNS_PAGE) {
+        lines.push(`${ref}: GitHub lists more runs of ${workflow} than one page since its dispatch, and none of them names it; not deciding whether it ran`);
+        continue;
+      }
+      // Not started only when every run since its dispatch names a whole
+      // commit id that is not its own. One named otherwise — a short id, or
+      // none — may be its own still deploying; the sweep asks again until a
+      // week after the dispatch (`RETRY_WITHIN_MS`), as for every step here.
+      const after = found.filter((one) => !one.created_at || Date.parse(one.created_at) >= dispatchedAt(run) - CLOCK_SLACK_MS);
+      if (after.some((one) => !NAMES_A_COMMIT.test(one.display_title ?? ''))) {
+        lines.push(
+          `${ref}: a run of ${workflow} since its dispatch names no whole commit id, so whether it is this one's cannot be told; ` +
+            `waiting, and asking again until ${new Date(dispatchedAt(run) + RETRY_WITHIN_MS).toISOString()}`,
+        );
+        continue;
+      }
+      lines.push(await this.settleNothingDeployed(repo, run, 'not_started', `no run of ${workflow} appeared within ${TESTING_APPEARS_MS / 60_000} minutes of its dispatch`));
+    }
+    return lines;
+  }
+
+  /** A testing deploy's run that ended, recorded, and settled when it deployed nothing; null when there is nothing to say. */
+  private async settleTesting(repo: Repo, record: DeployRun, workflow: string, run: TestingRun): Promise<string | null> {
+    const conclusion = run.conclusion ?? 'no conclusion';
+    const which = run.id !== null ? `${workflow} run ${run.id}` : `its ${workflow} run`;
+    // Cancelled for a later merge's deploy, most likely: deploy-testing's
+    // concurrency group cancels a waiting run when a newer one queues, and
+    // that deploy's deployment finishes this merge too (`finishDeployed`),
+    // whose verification lets its lease go. Let go here, overlapping work
+    // started before this change was verified anywhere.
+    if (conclusion === 'cancelled') {
+      const later = await deployRuns.laterTestingDeploy(repo.id, record.sha);
+      if (later) {
+        const why = `${which} was cancelled, and the testing deploy of ${later.sha.slice(0, 7)}, dispatched after it, carries it`;
+        await deployRuns.recordTesting(repo.id, record.sha, 'superseded', why);
+        return `${repo.name}@${record.sha.slice(0, 7)}: ${why}; its lease is kept for that deploy's verification`;
+      }
+    }
+    if (deployedNothing(conclusion)) {
+      const why =
+        conclusion === 'skipped'
+          ? `${which} was skipped`
+          : conclusion === 'cancelled'
+            ? `${which} was cancelled before it deployed, and no later testing deploy carries it`
+            : `${which} never started (${conclusion})`;
+      return this.settleNothingDeployed(repo, record, conclusion, why);
+    }
+    // Its deployment, or the failure it reports, takes it from here. The
+    // detail is left: a late delivery would overwrite what a later step said.
+    await deployRuns.recordTesting(repo.id, record.sha, conclusion, null);
+    return conclusion === 'success' ? null : `${repo.name}@${record.sha.slice(0, 7)}: ${which} ended ${conclusion.replace(/_/g, ' ')}`;
+  }
+
+  /**
+   * A merge whose testing deploy deployed nothing, settled as a merge in a
+   * repository that deploys nothing is (`Webhooks.finishMerge`): its lease is
+   * let go, and the plan changes held on its paths tried again
+   * (`onLeaseReleased`). Before, the deploy sweep read the dispatch as a
+   * deploy still running, and the lease held its files for a day. Once per
+   * commit; the record says why.
+   *
+   * The earlier runs cancelled for this one (`superseded`) were waiting on it
+   * to carry them, and are settled with it, unless a deploy later still
+   * carries them.
+   */
+  private async settleNothingDeployed(repo: Repo, record: DeployRun, conclusion: string, why: string, carried = true): Promise<string> {
+    const ref = `${repo.name}@${record.sha.slice(0, 7)}`;
+    if (!(await deployRuns.recordTesting(repo.id, record.sha, conclusion, why))) return `${ref}: its testing deploy was already settled`;
+    await audit({
+      actor: 'bridge',
+      action: 'deploy.testing_deployed_nothing',
+      target: ref,
+      payload: { sha: record.sha, prNumber: record.prNumber, conclusion, why },
+    }).catch(() => undefined);
+    const released =
+      record.prNumber !== null
+        ? await leases.releaseForPullRequest(repo.id, record.prNumber, `merged, and its testing deploy deployed nothing: ${why}`).catch(() => null)
+        : null;
+    await (async () => this.leaseListener?.(`${ref}: ${why}`))().catch(() => undefined);
+    const earlier: string[] = [];
+    if (carried) {
+      for (const waiting of await deployRuns.supersededBefore(repo.id, record.sha).catch(() => [])) {
+        if (await deployRuns.laterTestingDeploy(repo.id, waiting.sha).catch(() => null)) continue;
+        earlier.push(
+          await this.settleNothingDeployed(
+            repo,
+            waiting,
+            'cancelled',
+            `its run was cancelled for the testing deploy of ${record.sha.slice(0, 7)}, which deployed nothing either`,
+            false,
+          ),
+        );
+      }
+    }
+    const lease = released
+      ? `so released the lease on #${released.issueNumber}`
+      : record.prNumber === null
+        ? 'and no pull request is recorded for it, so no lease was let go'
+        : `and no lease was held for #${record.prNumber}`;
+    return [`${ref}: ${why}; nothing reached testing to verify the merge on, ${lease}`, ...earlier].join('; ');
   }
 
   /**

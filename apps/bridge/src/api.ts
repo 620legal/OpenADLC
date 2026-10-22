@@ -111,7 +111,7 @@ import { registerHealthRoutes } from './health/routes.js';
 import { registerSigningKeyRoutes } from './signing-key-routes.js';
 import { SubjectTitles } from './subject-titles.js';
 import { retryTask } from './task-retry.js';
-import { itemCards, lonePulls, loosePulls, readBoardWork } from './board-work.js';
+import { itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork } from './board-work.js';
 import { describeSubject } from './thread-view.js';
 import { sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
@@ -639,7 +639,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     // A table a release behind is an install not numbered, not a board that fails.
     const numbered = await (async () => workItems.isNumbered())().catch(() => false);
     const readFor = numbered ? undefined : repoName;
-    const [cards, crew, repoList, openGates, issueList, requestList, links, organization] = await Promise.all([
+    const [cards, crew, repoList, openGates, issueList, requestList, links, organization, activeSessions] = await Promise.all([
       issues.boardCards(readFor),
       bots.listBots(),
       repos.listRepos(),
@@ -648,6 +648,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       requests.listRequests(200),
       numbered ? workItems.allLinks() : Promise.resolve([] as workItems.Link[]),
       numbered ? settings.getSetting('organization').catch(() => null) : Promise.resolve(null),
+      sessions.listSessions(),
     ]);
     // Nor is an issue labelled `openadlc:ignore`, nor its pull request, nor
     // the request it was filed from: the board is the crew's work.
@@ -657,8 +658,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     // every link's, not only its issues' and their own pull requests'.
     const loose = loosePulls(links, repoList, issueList).filter((pull) => !ignored.has(pull.ref));
 
-    // What each card has cost and who is on it now, and which bots are working
-    // or waiting on a person: what a card and a column say in words.
+    // What each card has cost and who is on it now, what its running task is
+    // doing, and which bots are working or waiting on a person: what a card
+    // and a column say in words.
     const work = await readBoardWork({
       issues: issueList,
       bots: crew,
@@ -667,6 +669,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       // Each queued request's place as the queue walks it: one source for the number the 202 gave.
       requests: await withPositions(requestList),
       pulls: loose,
+      sessions: activeSessions,
     });
 
     // What is waiting to land, and what the bridge is doing about it. A person
@@ -739,7 +742,6 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       done: [],
     };
 
-    const activeSessions = await sessions.listSessions();
     const working = new Set(
       activeSessions.filter((session) => session.state === 'working').map((session) => session.botId),
     );
@@ -796,7 +798,16 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       waitingOnYou: openGates.length,
       working: activeSessions.filter((session) => session.state === 'working').length,
       idle: activeSessions.filter((session) => session.state === 'idle').length,
+      // Tasks running across the install, which the board counts above its columns.
+      running: work.runningTasks,
     };
+  });
+
+  // What the board polls every few seconds while a card it shows runs: each
+  // running card's work and step, and the count, rather than the whole page.
+  router.get('/v1/board/activity', async ({ query }) => {
+    const repoFilter = query.get('repo');
+    return readBoardActivity(!repoFilter || repoFilter === 'all' ? undefined : repoFilter);
   });
 
   router.get('/v1/bots', async ({ role }) => {

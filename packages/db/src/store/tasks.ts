@@ -211,6 +211,33 @@ export async function countActiveTasksForBot(botId: string): Promise<number> {
   return Number(row?.count ?? 0);
 }
 
+/** How many tasks are running across the install: the board's count, which a listing that stops at 200 would understate. */
+export async function countRunning(): Promise<number> {
+  const row = await queryOne<{ count: string }>(`select count(*)::text as count from tasks where state = 'running'`);
+  return Number(row?.count ?? 0);
+}
+
+/**
+ * When each of these running tasks last began running: its start, or, for one
+ * that paused, the newest answer after its pause, which is what resumed it.
+ * Null for one that paused and went on with no answer after it, whose resume
+ * nothing records. A card counted from the start, so a task answered a day
+ * after it asked read "1 day" the moment it resumed.
+ */
+export async function runningSince(ids: readonly string[]): Promise<Map<string, string | null>> {
+  if (ids.length === 0) return new Map();
+  const rows = await query<{ id: string; started_at: Date | null; paused_at: Date | null; answered_at: Date | null }>(
+    `select t.id, t.started_at, t.paused_at,
+            (select max(g.answered_at) from gates g where g.task_id = t.id and g.answered_at > t.paused_at) as answered_at
+     from tasks t
+     where t.id = any($1::uuid[]) and t.state = 'running'`,
+    [ids],
+  );
+  return new Map(
+    rows.map((row) => [row.id, ((row.paused_at === null ? row.started_at : row.answered_at)?.toISOString() ?? null)] as const),
+  );
+}
+
 /**
  * Whether a seat may start one more task: it holds fewer computers than its
  * `bots.max_tasks` (Crew → "tasks at once"), counting `alsoStarting` the

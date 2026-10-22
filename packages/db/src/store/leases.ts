@@ -165,6 +165,41 @@ export async function releaseForPullRequest(repoId: string, prNumber: number, wh
   return rows[0] ? toLease(rows[0]) : null;
 }
 
+/**
+ * Lets go of an issue's lease once its card reached Done another way than the
+ * bridge's own move: a person's `adlc:done`, heard in its delivery or found by
+ * reconcile. OpenADLC#71 was moved there by its label after its pull request
+ * merged, and its lease, linked to that pull request and waiting on a
+ * verification that never came, held two files a stacked issue waited on
+ * until it ran out.
+ *
+ * Whatever pull request it names, unlike `releaseIfIdle`; but only while no
+ * task works under it, checked in the statement that writes it. That is a
+ * task opened with the lease: the verification on testing opens with none,
+ * so the caller looks for it by its pull request, and decides whether the
+ * change merged at all (`Webhooks.reachedDone`). Audited as the actor's
+ * `lease.released`, with `reason`. Null when nothing was let go.
+ */
+export async function releaseIdleForIssue(input: { repoId: string; issueNumber: number; actor: string; reason: string }): Promise<Lease | null> {
+  const rows = await query<LeaseRow>(
+    `with released as (
+       update leases l set state = 'released', updated_at = now()
+        where l.repo_id = $1 and l.issue_number = $2 and l.state = any($3)
+          and not exists (select 1 from tasks t where t.lease_id = l.id and t.state in ('queued', 'running', 'paused'))
+        returning l.id, l.repo_id, l.issue_number, l.bot_id, l.declared_paths, l.state, l.expires_at, l.pr_number, l.updated_at
+     ), logged as (
+       insert into audit (actor, action, target, payload)
+       select $4::text, 'lease.released',
+              coalesce((select r.name from repos r where r.id = released.repo_id), 'issue') || '#' || released.issue_number,
+              jsonb_build_object('leaseId', released.id, 'reason', $5::text, 'pullRequest', released.pr_number)
+         from released
+     )
+     select * from released`,
+    [input.repoId, input.issueNumber, ACTIVE, input.actor, input.reason],
+  );
+  return rows[0] ? toLease(rows[0]) : null;
+}
+
 /** The newest lease a pull request was linked to, in any state: what a re-take would copy. */
 export async function lastForPullRequest(repoId: string, prNumber: number): Promise<Lease | null> {
   const row = await queryOne<LeaseRow>(`${SELECT} where repo_id = $1 and pr_number = $2 order by created_at desc limit 1`, [repoId, prNumber]);

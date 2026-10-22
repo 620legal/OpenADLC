@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GitHubApiError, type PullCommit } from '@openadlc/github';
 import { DEFAULT_DELIVERY_RULES, MERGE_IS_SHIPPING, isForwardMove, renderGateComment, type StageKey } from '@openadlc/shared';
-import { hasEventOfType, issues, leases, listEventsOfType, repos, spendingLimits, tasks } from '@openadlc/db';
+import { deployRuns, hasEventOfType, issues, leases, listEventsOfType, repos, spendingLimits, tasks } from '@openadlc/db';
 import { Automation, mergeDecision, type MergeFacts } from './automation.js';
 import { recordDesignMemory } from './design-memory.js';
 import { linkIssue, linkPull } from './work-items.js';
@@ -146,6 +146,7 @@ vi.mock('@openadlc/db', () => ({
     lastForPullRequest: vi.fn(async () => null),
     listActiveLeases: vi.fn(async () => []),
     reacquireForPullRequest: vi.fn(async () => null),
+    releaseIdleForIssue: vi.fn(async () => null),
   },
   markEventProcessed: vi.fn(async (id: string) => {
     const event = store.queued.find((queued) => queued.id === id);
@@ -187,6 +188,7 @@ vi.mock('@openadlc/db', () => ({
     release: vi.fn(async () => undefined),
     recordProduction: vi.fn(async () => undefined),
     record: vi.fn(async () => undefined),
+    recordTesting: vi.fn(async () => true),
   },
   localCiRuns: {
     passFor: vi.fn(async (_repo: string, sha: string) => (store.localCiPasses.has(sha) ? { runId: 'run-1', ok: true, headSha: sha } : null)),
@@ -4297,6 +4299,225 @@ describe('a plan change waiting for a path to be let go', () => {
     warn.mockRestore();
     expect(lines.some((line) => /the database is down/.test(line))).toBe(true);
     expect(lines.filter((line) => /hostd refused/.test(line))).toHaveLength(2);
+  });
+});
+
+/**
+ * OpenADLC#72 merged, and the deploy-testing run the bridge dispatched for it
+ * finished skipped: the template's job runs only where the repository sets
+ * OPENADLC_DEPLOY_TESTING. Nothing reported a deployment, so no verification
+ * ran, and #71's lease held two files until it ran out. #27, stacked on #71,
+ * waited on a plan change for those files through four approvals.
+ */
+describe('a plan change waiting on a merge whose testing deploy deployed nothing', () => {
+  const SHA = '9da5ed6948cb33fefa7b3fc27459871df94d5623';
+
+  function bridge() {
+    const applyHeld = vi.fn(async () => ['task-27']);
+    const resume = vi.fn(async (_taskId: string) => undefined);
+    const asked: string[] = [];
+    const webhooks = new Webhooks(
+      {} as never,
+      { actors: { asBot: async () => null } } as never,
+      { applyHeld } as never,
+      { resume } as never,
+      {} as never,
+      {} as never,
+      null,
+      { soon: (reason: string) => asked.push(reason) },
+    );
+    const pipeline = new DeployPipeline({
+      delivery: { get: async () => ({ rules: DEFAULT_DELIVERY_RULES, source: 'file', testingUrl: null, fileError: null }) },
+      client: async () => null,
+      sendBack: null,
+    });
+    webhooks.useDelivery(pipeline, { get: async () => ({ rules: DEFAULT_DELIVERY_RULES }), forget: () => undefined } as never);
+    return { webhooks, applyHeld, resume, asked };
+  }
+
+  const ended = (conclusion: string, run: Record<string, unknown> = {}) => ({
+    action: 'completed',
+    repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+    sender: { login: 'openadlc-app[bot]', type: 'Bot' },
+    workflow_run: {
+      id: 39818398577,
+      name: 'deploy-testing',
+      display_title: `deploy-testing ${SHA}`,
+      conclusion,
+      head_sha: SHA,
+      event: 'workflow_dispatch',
+      head_branch: 'main',
+      html_url: 'https://github.com/janedoe/openadlc/actions/runs/39818398577',
+      ...run,
+    },
+  });
+
+  beforeEach(() => {
+    vi.mocked(leases.releaseForPullRequest).mockClear();
+    vi.mocked(deployRuns.recordTesting).mockClear();
+    vi.mocked(deployRuns.get).mockImplementation(async (_repo: string, sha: string) =>
+      sha === SHA ? ({ sha, prNumber: 72, testingDispatchedAt: '2026-10-22T16:57:00.000Z', testingConclusion: null } as never) : null,
+    );
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.mocked(deployRuns.get).mockReset();
+    vi.mocked(deployRuns.get).mockImplementation(
+      async (_repo: string, sha: string) => ({ sha, prNumber: null, promoteDispatchedAt: '2026-10-01T00:00:00.000Z', rollbackDispatchedAt: null }) as never,
+    );
+    vi.mocked(console.log).mockRestore();
+  });
+
+  it('is granted, and its task resumed, once the run finishes skipped: the merge’s lease is let go as a merge that ships does', async () => {
+    const { webhooks, resume, asked } = bridge();
+
+    await webhooks.receive('workflow_run', ended('skipped') as never, 'delivery-skipped');
+
+    expect(vi.mocked(leases.releaseForPullRequest)).toHaveBeenCalledWith('repo-1', 72, expect.stringContaining('deploy-testing run 39818398577 was skipped'));
+    expect(vi.mocked(deployRuns.recordTesting)).toHaveBeenCalledWith('repo-1', SHA, 'skipped', expect.stringContaining('was skipped'));
+    expect(resume).toHaveBeenCalledWith('task-27');
+    expect(asked).toEqual([expect.stringContaining('openadlc@9da5ed6')]);
+  });
+
+  /** The bridge's report of a failed testing deploy, as it is filed. */
+  const reported = (webhooks: Webhooks) =>
+    vi.spyOn(webhooks as unknown as { reportDeployFailure: (...args: unknown[]) => Promise<void> }, 'reportDeployFailure').mockResolvedValue(undefined);
+
+  it('is left waiting by a run that failed, which is reported, and lets no lease go', async () => {
+    // A failed deploy is a person's or the SRE's to look at; whatever fixes it
+    // deploys again, and that deploy's verification lets the lease go.
+    const { webhooks, applyHeld } = bridge();
+    const report = reported(webhooks);
+
+    await webhooks.receive('workflow_run', ended('failure') as never, 'delivery-failed');
+
+    expect(vi.mocked(deployRuns.recordTesting)).toHaveBeenCalledWith('repo-1', SHA, 'failure', null);
+    expect(vi.mocked(leases.releaseForPullRequest)).not.toHaveBeenCalled();
+    expect(applyHeld).not.toHaveBeenCalled();
+    expect(report).toHaveBeenCalledWith('openadlc', SHA, 'https://github.com/janedoe/openadlc/actions/runs/39818398577');
+  });
+
+  it('is granted when the run never started, which is reported as a deploy that did not start', async () => {
+    // GitHub's `startup_failure`: a workflow file it could not run, most often.
+    // Only a `failure` was reported, so this one told nobody.
+    const { webhooks, resume } = bridge();
+    const report = reported(webhooks);
+
+    await webhooks.receive('workflow_run', ended('startup_failure') as never, 'delivery-did-not-start');
+
+    expect(vi.mocked(leases.releaseForPullRequest)).toHaveBeenCalledWith('repo-1', 72, expect.stringContaining('never started (startup_failure)'));
+    expect(resume).toHaveBeenCalledWith('task-27');
+    expect(report).toHaveBeenCalledWith('openadlc', SHA, 'https://github.com/janedoe/openadlc/actions/runs/39818398577', {
+      environment: 'testing',
+      note: expect.stringContaining('did not start (GitHub says `startup_failure`)'),
+    });
+  });
+
+  it('is left waiting by a run on another branch, or one nothing dispatched, which say nothing about the merge', async () => {
+    const { webhooks, applyHeld } = bridge();
+
+    await webhooks.receive('workflow_run', ended('skipped', { head_branch: 'agent/builder/71-issue-71' }) as never, 'delivery-branch');
+    await webhooks.receive('workflow_run', ended('skipped', { event: 'push' }) as never, 'delivery-push');
+
+    expect(vi.mocked(leases.releaseForPullRequest)).not.toHaveBeenCalled();
+    expect(applyHeld).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Moving OpenADLC#71's card to Done by hand — its `adlc:done` label, which
+ * reconcile repaired onto the board — did not let its lease go either.
+ */
+describe('a card that reaches Done by its label', () => {
+  beforeEach(() => {
+    vi.mocked(leases.releaseIdleForIssue).mockReset();
+    vi.mocked(leases.releaseIdleForIssue).mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    store.issue = null;
+    store.lease = null;
+  });
+
+  function labelled(stage = 'merged') {
+    store.issue = { number: 71, stage, labels: [`adlc:${stage}`], prNumber: 72 };
+    store.lease = { id: 'lease-71', issueNumber: 71, prNumber: 72, state: 'in_task' };
+    const applyHeld = vi.fn(async () => ['task-27']);
+    const resume = vi.fn(async (_taskId: string) => undefined);
+    const webhooks = new Webhooks(
+      {} as never,
+      { moveStage: async () => ({ moved: true }) } as never,
+      { applyHeld } as never,
+      { resume } as never,
+      { staff: async () => false } as never,
+      {} as never,
+    );
+    const delivered = webhooks.receive(
+      'issues',
+      {
+        action: 'labeled',
+        label: { name: 'adlc:done' },
+        repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+        issue: {
+          author_association: 'COLLABORATOR',
+          number: 71,
+          state: 'open',
+          title: 'Number every issue',
+          body: '',
+          labels: [{ name: 'adlc:done' }],
+          html_url: 'https://github.com/janedoe/openadlc/issues/71',
+        },
+      } as never,
+      'delivery-done',
+    );
+    return { delivered, applyHeld, resume };
+  }
+
+  it('lets its lease go when no task works under it, and the plan change waiting on its files resumes', async () => {
+    vi.mocked(leases.releaseIdleForIssue).mockResolvedValue({ id: 'lease-71', issueNumber: 71, prNumber: 72, state: 'released' } as never);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { delivered, resume } = labelled();
+    await delivered;
+    log.mockRestore();
+
+    expect(vi.mocked(leases.releaseIdleForIssue)).toHaveBeenCalledWith({
+      repoId: 'repo-1',
+      issueNumber: 71,
+      actor: 'bridge',
+      reason: expect.stringContaining('moved to Done'),
+    });
+    expect(resume).toHaveBeenCalledWith('task-27');
+  });
+
+  it('keeps a lease a task still works under, and resumes nothing for it', async () => {
+    const { delivered, applyHeld } = labelled();
+    await delivered;
+
+    expect(vi.mocked(leases.releaseIdleForIssue)).toHaveBeenCalledTimes(1);
+    expect(applyHeld).not.toHaveBeenCalled();
+  });
+
+  it('keeps the lease of a card in Review, whose pull request has not merged: the change is still being built', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { delivered, applyHeld } = labelled('review');
+    await delivered;
+    log.mockRestore();
+
+    expect(vi.mocked(leases.releaseIdleForIssue)).not.toHaveBeenCalled();
+    expect(applyHeld).not.toHaveBeenCalled();
+  });
+
+  it('keeps the lease while the verification on testing still runs on its pull request, which holds no lease to be seen by', async () => {
+    vi.mocked(tasks.listTasksOnSubjects).mockResolvedValueOnce([{ id: 'task-qa', kind: 'qa', state: 'running', subjectRef: 'openadlc#72', leaseId: null }] as never);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { delivered, applyHeld } = labelled();
+    await delivered;
+    log.mockRestore();
+
+    expect(vi.mocked(tasks.listTasksOnSubjects)).toHaveBeenCalledWith(['openadlc#72']);
+    expect(vi.mocked(leases.releaseIdleForIssue)).not.toHaveBeenCalled();
+    expect(applyHeld).not.toHaveBeenCalled();
   });
 });
 

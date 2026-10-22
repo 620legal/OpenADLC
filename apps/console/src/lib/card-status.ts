@@ -28,6 +28,12 @@ export interface CardStatus {
   tone: StatusTone;
   /** A tick for a card that shipped; a dot for one being worked. */
   mark: 'dot' | 'check' | null;
+  /**
+   * A task is running on the card now: its dot pulses, and reads as
+   * "working". Only then — a card waiting on a person, in the queue or in the
+   * line to merge keeps a still dot, so the board moves only where work does.
+   */
+  live?: boolean;
   /** Where the line goes, when it names something that can be opened: the issue a request became. */
   href?: string;
 }
@@ -64,6 +70,8 @@ export interface CardContext {
   now: string;
   /** A bot's name as a person reads it: its handle, or its role before it connects. */
   said: (bot: string) => string;
+  /** A bot's role in words, `builder` or `lead reviewer`, which a running card's line starts with; empty for one the crew does not know. */
+  role?: (bot: string) => string;
   /** The line to merge, for a card whose pull request is in it. */
   mergeLine?: readonly MergeLineEntry[];
   /** The repositories a person paused on their own, by name. */
@@ -80,24 +88,53 @@ export interface CardContext {
   dispatching?: boolean;
 }
 
+/** What a running task is doing, by its kind, for one that has not said a step yet. */
 const WORKING: Record<string, string> = {
-  intake: 'Shaping the issue',
-  request: 'Reading the request',
-  spec: 'Writing the design',
-  implement: 'Writing the change',
-  patch: 'Fixing what the reviewers found',
-  deploy: 'Deploying',
-  qa: 'Checking it on testing',
+  intake: 'shaping the issue',
+  request: 'reading the request',
+  spec: 'writing the design',
+  implement: 'writing the change',
+  patch: 'fixing what the reviewers found',
+  review: 'reviewing',
+  deploy: 'deploying',
+  qa: 'checking it on testing',
 };
 
-function withTime(text: string, since: string | null, now: string): string {
-  const took = duration(since, now);
-  return took ? `${text} · ${took}` : text;
+/**
+ * Since when a task has been running: from its last resume, as the bridge
+ * says it, or its start from an older bridge. Counted from the start, a task
+ * answered a day after it asked read "1 day" the moment it went on.
+ */
+function runningSince(task: CardTask): string | null {
+  return task.since !== undefined ? task.since : task.startedAt;
 }
 
 /** The newest running task, or failing that the newest of any that is going. */
 function leading(active: readonly CardTask[]): CardTask | undefined {
   return active.find((task) => task.state === 'running') ?? active[0];
+}
+
+/**
+ * A running card's line: who, doing what, and for how long — "Builder ·
+ * running tests · 12 min", "Lead reviewer · reading the diff · round 2 ·
+ * 6 min". It used to be the kind of work and the time alone, so it read the
+ * same for twelve minutes whatever the builder was doing, or not doing.
+ */
+function runningLine(card: BoardCard, task: CardTask, active: readonly CardTask[], context: CardContext): CardStatus {
+  const round = task.kind === 'review' && card.reviewRound ? `round ${card.reviewRound}` : null;
+  const reviews = active.filter((one) => one.kind === 'review' && one.state === 'running');
+  let parts: (string | null)[];
+  if (task.kind === 'review' && reviews.length > 1) {
+    // Each reviewer's step is in the item view; the card says how many are at it, since the first began.
+    const first = reviews.map(runningSince).filter((at): at is string => Boolean(at)).sort()[0] ?? null;
+    parts = [`${reviews.length} reviewers reviewing`, round, duration(first, context.now)];
+  } else {
+    // The role starts the sentence; a handle, for a bot the crew does not know, is left as it is written.
+    const role = context.role?.(task.bot);
+    const who = role ? `${role.charAt(0).toUpperCase()}${role.slice(1)}` : task.bot;
+    parts = [who, task.activity || WORKING[task.kind] || 'working', round, duration(runningSince(task), context.now)];
+  }
+  return { text: parts.filter(Boolean).join(' · '), tone: 'signal', mark: 'dot', live: true };
 }
 
 function inLine(card: BoardCard, mergeLine: readonly MergeLineEntry[] | undefined): CardStatus | null {
@@ -124,7 +161,10 @@ function inLine(card: BoardCard, mergeLine: readonly MergeLineEntry[] | undefine
 
 export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
   const active = card.active ?? [];
-  const request = card.request ? requestStatus(card, context.pausedRepos) : null;
+  // A request intake is on says what its triage is doing, as any card does;
+  // "Intake working" is for a bridge that sends no tasks with it.
+  const byTasks = card.requestState === 'working' && active.length > 0;
+  const request = card.request && !byTasks ? requestStatus(card, context.pausedRepos) : null;
   if (request) return request;
 
   if (card.stalledAfterRounds) {
@@ -142,15 +182,9 @@ export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
   }
 
   const task = leading(active);
-  if (task?.state === 'running') {
-    if (task.kind === 'review') {
-      const reviewing = active.filter((one) => one.kind === 'review' && one.state === 'running').length;
-      const who = reviewing > 1 ? `${reviewing} reviewers reviewing` : 'Reviewing';
-      return { text: card.reviewRound ? `${who} · round ${card.reviewRound}` : who, tone: 'signal', mark: 'dot' };
-    }
-    return { text: withTime(WORKING[task.kind] ?? 'Working', task.startedAt, context.now), tone: 'signal', mark: 'dot' };
-  }
-  if (task?.state === 'queued') return { text: 'About to start', tone: 'muted', mark: null };
+  if (task?.state === 'running') return runningLine(card, task, active, context);
+  if (task?.state === 'queued') return { text: 'Queued', tone: 'muted', mark: null };
+  // Paused with no question open: answered, and not started again yet.
   if (task?.state === 'paused') return { text: 'Paused', tone: 'muted', mark: null };
 
   if (card.last?.state === 'failed' && card.stage !== 'done') {
