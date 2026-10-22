@@ -238,6 +238,18 @@ body {
 }
 
 /*
+ * Still for anyone who asked their system for less motion: the dot is still
+ * there, in its colour, and still says "working" to a screen reader. The
+ * board's dots leave the class off once the page has read the setting; this
+ * holds them, the header's and a computer's, before it has.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .working-dot {
+    animation: none !important;
+  }
+}
+
+/*
  * A crew member's mark while it works (`engine-avatars.tsx`). Slow and small:
  * it says the bot is busy, which the dot already says, so it must never pull
  * the eye the way a status would. The classes are only there while the bot is

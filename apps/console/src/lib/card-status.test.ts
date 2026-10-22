@@ -34,25 +34,78 @@ function task(partial: Partial<CardTask> & Pick<CardTask, 'kind' | 'state'>): Ca
   return { bot: 'openadlc-atlas-janedoe', round: 0, startedAt: null, endedAt: null, exitReason: null, ...partial };
 }
 
-const CONTEXT: CardContext = { now: NOW, said: (bot) => bot };
+/** Each bot's role in words, as `labelIn` gives it; a bot the crew does not know has none. */
+const ROLES: Record<string, string> = {
+  'openadlc-atlas-janedoe': 'builder',
+  noraexampleco: 'lead reviewer',
+  irisexampleco: 'second reviewer',
+  ottoexampleco: 'intake',
+};
+
+const CONTEXT: CardContext = { now: NOW, said: (bot) => bot, role: (bot) => ROLES[bot] ?? '' };
 
 describe('a card’s status line', () => {
-  it('says what the bot on it is doing, and for how long', () => {
-    const writing = card({ active: [task({ kind: 'implement', state: 'running', startedAt: minutesAgo(12) })] });
-    expect(cardStatus(writing, CONTEXT)).toEqual({ text: 'Writing the change · 12 min', tone: 'signal', mark: 'dot' });
+  it('says which bot is working, what it is doing now, and for how long, with a mark that is live', () => {
+    const testing = card({ active: [task({ kind: 'implement', state: 'running', startedAt: minutesAgo(12), activity: 'running tests' })] });
+    expect(cardStatus(testing, CONTEXT)).toEqual({ text: 'Builder · running tests · 12 min', tone: 'signal', mark: 'dot', live: true });
   });
 
-  it('gives a review its round, and says when more than one reviewer is at it', () => {
-    const one = card({ stage: 'review', prNumber: 31, reviewRound: 2, active: [task({ kind: 'review', state: 'running' })] });
-    expect(cardStatus(one, CONTEXT).text).toBe('Reviewing · round 2');
+  it('says the kind of work for a running task that has not printed a step, or from an older bridge', () => {
+    const writing = card({ active: [task({ kind: 'implement', state: 'running', startedAt: minutesAgo(12) })] });
+    expect(cardStatus(writing, CONTEXT)).toEqual({ text: 'Builder · writing the change · 12 min', tone: 'signal', mark: 'dot', live: true });
+    // A bot the crew does not know is said by its name.
+    const stranger = card({ active: [task({ kind: 'spec', state: 'running', bot: 'someone-else', startedAt: minutesAgo(0.5) })] });
+    expect(cardStatus(stranger, CONTEXT).text).toBe('someone-else · writing the design · under a minute');
+  });
+
+  it('gives a review its reviewer, its step and its round, and says when more than one reviewer is at it', () => {
+    const one = card({ stage: 'review', prNumber: 31, reviewRound: 2, active: [task({ kind: 'review', state: 'running', bot: 'noraexampleco', startedAt: minutesAgo(6), activity: 'reading the diff' })] });
+    expect(cardStatus(one, CONTEXT)).toEqual({ text: 'Lead reviewer · reading the diff · round 2 · 6 min', tone: 'signal', mark: 'dot', live: true });
+    const unsaid = card({ stage: 'review', prNumber: 31, reviewRound: 2, active: [task({ kind: 'review', state: 'running', bot: 'irisexampleco' })] });
+    expect(cardStatus(unsaid, CONTEXT).text).toBe('Second reviewer · reviewing · round 2');
 
     const two = card({
       stage: 'review',
       prNumber: 31,
       reviewRound: 1,
-      active: [task({ kind: 'review', state: 'running', bot: 'a' }), task({ kind: 'review', state: 'running', bot: 'b' })],
+      active: [
+        task({ kind: 'review', state: 'running', bot: 'noraexampleco', startedAt: minutesAgo(2) }),
+        task({ kind: 'review', state: 'running', bot: 'irisexampleco', startedAt: minutesAgo(4) }),
+      ],
     });
-    expect(cardStatus(two, CONTEXT).text).toBe('2 reviewers reviewing · round 1');
+    expect(cardStatus(two, CONTEXT)).toEqual({ text: '2 reviewers reviewing · round 1 · 4 min', tone: 'signal', mark: 'dot', live: true });
+  });
+
+  it('counts the time from when the task last began running, not from a start before it paused', () => {
+    // Started a day ago, asked, and answered two minutes ago: "1 day" was the wait on a person.
+    const resumed = card({ active: [task({ kind: 'implement', state: 'running', startedAt: minutesAgo(24 * 60), since: minutesAgo(2), activity: 'running tests' })] });
+    expect(cardStatus(resumed, CONTEXT).text).toBe('Builder · running tests · 2 min');
+    // Resumed at a time nothing recorded: no time rather than a wrong one.
+    const unrecorded = card({ active: [task({ kind: 'implement', state: 'running', startedAt: minutesAgo(24 * 60), since: null, activity: 'running tests' })] });
+    expect(cardStatus(unrecorded, CONTEXT).text).toBe('Builder · running tests');
+    // Two reviewers: since the first of them began, each from its own resume.
+    const two = card({
+      stage: 'review',
+      prNumber: 31,
+      reviewRound: 1,
+      active: [
+        task({ kind: 'review', state: 'running', bot: 'noraexampleco', startedAt: minutesAgo(600), since: minutesAgo(3) }),
+        task({ kind: 'review', state: 'running', bot: 'irisexampleco', startedAt: minutesAgo(5), since: minutesAgo(5) }),
+      ],
+    });
+    expect(cardStatus(two, CONTEXT).text).toBe('2 reviewers reviewing · round 1 · 5 min');
+  });
+
+  it('shows a still mark, not a live one, for work that waits: on your answer, in the queue, or paused', () => {
+    const asking = card({ gateOpen: true, active: [task({ kind: 'implement', state: 'paused', startedAt: minutesAgo(9) })] });
+    expect(cardStatus(asking, CONTEXT)).toEqual({ text: 'Waiting for your answer', tone: 'attention', mark: 'dot' });
+    const queued = card({ active: [task({ kind: 'implement', state: 'queued' })] });
+    expect(cardStatus(queued, CONTEXT)).toEqual({ text: 'Queued', tone: 'muted', mark: null });
+    // Answered, and not started again yet: nothing is waiting on the person.
+    const resuming = card({ active: [task({ kind: 'implement', state: 'paused' })] });
+    expect(cardStatus(resuming, CONTEXT)).toEqual({ text: 'Paused', tone: 'muted', mark: null });
+    // Nothing on it at all.
+    expect(cardStatus(card(), CONTEXT).live).toBeUndefined();
   });
 
   it('says a review failed rather than that the reviewers are being waited for', () => {
@@ -235,6 +288,9 @@ describe('a request’s card', () => {
   it('says where the request is', () => {
     expect(say(request({ requestState: 'queued', queuePosition: 3 }))).toMatchObject({ text: 'Queued (#3)', tone: 'muted' });
     expect(say(request({ requestState: 'working' }))).toMatchObject({ text: 'Intake working', tone: 'signal', mark: 'dot' });
+    // Its triage running: what intake is doing now, as any card says it.
+    const triaging = request({ requestState: 'working', active: [task({ kind: 'intake', state: 'running', bot: 'ottoexampleco', startedAt: '2026-09-29T11:57:00.000Z', activity: 'reading the code' })] });
+    expect(cardStatus(triaging, { ...CONTEXT, now: '2026-09-29T12:00:00.000Z' })).toEqual({ text: 'Intake · reading the code · 3 min', tone: 'signal', mark: 'dot', live: true });
     expect(say(request({ requestState: 'waiting', gateOpen: true }))).toMatchObject({ text: 'Waiting for you', tone: 'attention' });
     expect(say(request({ requestState: 'filed', issueNumber: 42, url: 'https://github.com/exampleco/api/issues/42' }))).toEqual({
       text: 'Filed #42',
@@ -298,6 +354,6 @@ describe('a card on a bridge without the dispatcher', () => {
     expect(cardStatus(card({ labels: ['adlc:build'] }), OFF).text).toBe('Not ready to build yet');
     expect(cardStatus(card({ labels: ['adlc:build', 'start:now', 'needs-triage'] }), OFF).text).toBe('Waiting for triage');
     const writing = card({ active: [task({ kind: 'implement', state: 'running', startedAt: minutesAgo(12) })] });
-    expect(cardStatus(writing, OFF).text).toBe('Writing the change · 12 min');
+    expect(cardStatus(writing, OFF).text).toBe('Builder · writing the change · 12 min');
   });
 });

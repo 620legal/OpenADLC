@@ -23,6 +23,8 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
 
   // The board, the crew, the threads and the costs, to read.
   'GET /v1/board': 'user',
+  // The running cards' lines, which the board reads every few seconds while one runs.
+  'GET /v1/board/activity': 'user',
   'GET /v1/bots': 'user',
   'GET /v1/bots/:name': 'user',
   'GET /v1/threads/:bot': 'user',

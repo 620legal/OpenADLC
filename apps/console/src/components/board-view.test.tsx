@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// What keeps the page current runs only in a browser; here it says how often it would.
+vi.mock('@/components/live-refresh', () => ({
+  LiveRefresh: ({ every }: { every?: number }) => <meta name="live-refresh" content={every === undefined ? 'every 15 seconds' : `every ${every} ms`} />,
+}));
 import { RoleProvider } from './app-header';
 import { BoardView, peopleLine } from './board-view';
 import type { AttentionItem, Board, BoardCard, CrewMember } from '@/lib/api';
@@ -107,6 +112,7 @@ const BOARD: Board = {
   waitingOnYou: 1,
   working: 2,
   idle: 3,
+  running: 2,
 };
 
 const ATTENTION: AttentionItem[] = [
@@ -257,7 +263,7 @@ describe('a card', () => {
     expect(writing).toContain('$0.84 so far');
     expect(writing).toContain('Let the board filter by label');
     expect(writing).toContain('>openadlc-atlas-janedoe</span>');
-    expect(writing).toContain('Writing the change · 12 min');
+    expect(writing).toContain('Builder · writing the change · 12 min');
 
     const next = build.slice(build.indexOf('#17<'));
     expect(next).toContain('Next up, when the builder (openadlc-atlas-janedoe) is free');
@@ -269,7 +275,7 @@ describe('a card', () => {
     expect(ready).toContain('Waiting: the dispatcher isn’t running');
     expect(ready).not.toContain('Next up');
     // What is being worked on says so still.
-    expect(build.slice(build.indexOf('#16<'), build.indexOf('#17<'))).toContain('Writing the change · 12 min');
+    expect(build.slice(build.indexOf('#16<'), build.indexOf('#17<'))).toContain('Builder · writing the change · 12 min');
 
     const paused = column(
       render(BOARD, ATTENTION, null, 'all', 'admin', { dispatching: false, pausedRepos: { openadlc: { by: 'janedoe', at: NOW, reason: null } } }),
@@ -282,7 +288,7 @@ describe('a card', () => {
     const html = render();
     expect(column(html, 'Intake')).toContain('Waiting for your answer');
     expect(column(html, 'Review')).toContain('Stopped after 3 rounds · needs you');
-    expect(column(html, 'Review')).toContain('Reviewing · round 2');
+    expect(column(html, 'Review')).toContain('Second reviewer · reviewing · round 2 · 6 min');
     expect(column(html, 'Done')).toContain('Shipped 2 hours ago');
   });
 
@@ -332,7 +338,7 @@ describe('a request intake is working on', () => {
 
   it('says it is being written up while intake works on it', () => {
     const writing = { ...asking, gateOpen: false, active: [{ ...asking.active![0]!, state: 'running' as const }] };
-    expect(column(render(board([writing])), 'Intake')).toContain('Shaping the issue · 3 min');
+    expect(column(render(board([writing])), 'Intake')).toContain('Intake · shaping the issue · 3 min');
   });
 
   it('keeps the board from reading as a first run, since the first request is under way', () => {
@@ -762,5 +768,86 @@ describe('who is on a card', () => {
   it('keeps each handle where every seat has its own', () => {
     const labels = ['openadlc-atlas-janedoe', 'irisexampleco'].map((name) => labelIn(CREW, name));
     expect(peopleLine(labels)).toBe('openadlc-atlas-janedoe, irisexampleco');
+  });
+});
+
+describe('a card with work running', () => {
+  /** One desktop card's markup, by its number. */
+  function cardOf(html: string, number: number): string {
+    const board = html.slice(html.indexOf('aria-label="Board"'), html.indexOf('aria-label="Stage"'));
+    const found = [...board.matchAll(/<article[\s\S]*?<\/article>/g)].map((match) => match[0]).find((one) => one.includes(`>#${number}<`));
+    if (!found) throw new Error(`no card #${number} on the board`);
+    return found;
+  }
+  /** The mark before a card's line: live, and read as working, or still and hidden from a screen reader. */
+  const mark = (html: string): string => /<span data-status[^>]*>(<span [^>]*><\/span>)?/.exec(html)?.[1] ?? 'no mark';
+
+  const testing = card({
+    ref: 'openadlc#16',
+    stage: 'build',
+    title: 'Let the board filter by label',
+    labels: ['adlc:build', 'start:now'],
+    active: [{ bot: 'openadlc-atlas-janedoe', kind: 'implement', state: 'running', round: 0, startedAt: minutesAgo(12), endedAt: null, exitReason: null, activity: 'running tests' }],
+  });
+  const queued = card({
+    ref: 'openadlc#18',
+    stage: 'build',
+    title: 'Queued for the builder',
+    labels: ['adlc:build', 'start:now'],
+    active: [{ bot: 'openadlc-atlas-janedoe', kind: 'implement', state: 'queued', round: 0, startedAt: null, endedAt: null, exitReason: null }],
+  });
+  const board = (cards: BoardCard[], running = 1): Board => ({ ...BOARD, columns: columns(cards), running });
+
+  it('pulses a small dot, reads as working, and says who is doing what and for how long', () => {
+    const html = cardOf(render(board([testing])), 16);
+    expect(mark(html)).toBe('<span role="img" aria-label="working" data-live="true" class="size-1.5 shrink-0 rounded-full bg-signal working-dot"></span>');
+    expect(html).toContain('Builder · running tests · 12 min');
+  });
+
+  it('shows a still mark that waits for you while its task is paused on a question, and is not read as working', () => {
+    const html = cardOf(render(board([...WORKING.filter((one) => one.ref === 'openadlc#15'), testing])), 15);
+    expect(mark(html)).toBe('<span aria-hidden="true" class="size-1.5 shrink-0 rounded-full bg-attention"></span>');
+    expect(html).toContain('Waiting for your answer');
+    expect(html).not.toContain('working-dot');
+  });
+
+  it('says queued, with no mark, for a task waiting its turn, and nothing moves on a card nothing is on', () => {
+    const idle = card({ ref: 'openadlc#17', stage: 'build', title: 'Show each bot’s model on its card', labels: ['adlc:build', 'start:now'] });
+    const html = render(board([testing, queued, idle]));
+    expect(mark(cardOf(html, 18))).toBe('no mark');
+    expect(cardOf(html, 18)).toContain('>Queued<');
+    expect(cardOf(html, 17)).not.toContain('working');
+    // One card works, and one dot on the columns moves.
+    const columns = html.slice(html.indexOf('aria-label="Board"'), html.indexOf('aria-label="Stage"'));
+    expect(columns.match(/working-dot/g)).toHaveLength(1);
+  });
+
+  it('says above the board how many tasks are running across the install', () => {
+    const count = (html: string) => /<p role="status" data-running[^>]*>([\s\S]*?)<\/p>/.exec(html)?.[1] ?? 'no count';
+    expect(count(render())).toBe('<span aria-hidden="true" class="size-1.5 shrink-0 rounded-full bg-signal working-dot"></span>2 tasks running');
+    expect(count(render(board([testing], 1)))).toContain('>1 task running');
+    // Still, and said, when nothing runs.
+    expect(count(render(board([queued], 0)))).toBe('<span aria-hidden="true" class="size-1.5 shrink-0 rounded-full bg-dim"></span>Nothing running');
+    // A board of one repository says the count is not only its own.
+    expect(count(render({ ...board([testing], 3), repo: 'openadlc' }, ATTENTION, null, 'openadlc'))).toContain('>3 tasks running across every repository');
+    // Before the columns, on a phone as on a desk.
+    const html = render();
+    expect(html.indexOf('data-running')).toBeLessThan(html.indexOf('aria-label="Board"'));
+    expect(html.indexOf('data-running')).toBeLessThan(html.indexOf('aria-label="Stage"'));
+  });
+
+  it('reads the whole page every fifteen seconds whatever runs: the running cards are polled on their own', () => {
+    // At five seconds while anything ran, it read the board, the crew, the
+    // costs and what needs you for every person looking, nearly all the time.
+    expect(render(board([testing], 1))).toContain('<meta name="live-refresh" content="every 15 seconds"/>');
+    expect(render(board([queued], 0))).toContain('<meta name="live-refresh" content="every 15 seconds"/>');
+    // An older bridge says no count: the board claims nothing about what runs.
+    const { running: _running, ...older } = board([testing], 1);
+    expect(render(older as Board)).not.toContain('data-running');
+  });
+
+  it('stops pulsing under prefers-reduced-motion before the page has read the setting, everywhere a working dot is', () => {
+    const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8');
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[^}]*\.working-dot[^{]*\{\s*animation: none !important;/);
   });
 });

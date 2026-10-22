@@ -178,6 +178,7 @@ The files, in order:
 | Which engine an account runs | `ENGINE_PROVIDER`, `PROVIDER_ENGINE`, `ALIAS_FAMILIES` and `SUBSCRIPTION_LISTS_MODELS` in `packages/engines/src/model-choice.ts` |
 | The credential | The variable a session is given, in `apps/hostd/src/session-env.ts`; `KEY_SOURCES` and `COMMANDS` in `packages/engines/src/readiness.ts`; for a subscription signed in by device code, `CLI` and `LOGIN_HOME_ENV` in `apps/hostd/src/logins.ts` |
 | Pricing | `DEFAULT_PRICES` in `packages/engines/src/pricing.ts`, with the date each rate was checked; an install overrides it in `config/models.yaml` |
+| Its steps on the board | `TOOLS` and `SHELLS` in `apps/bridge/src/board-work.ts`: the words a running card says for each tool the engine calls, "reading the code" for its file reader. A tool they do not name leaves the card saying its kind of work |
 | The bot image | The pin in `infra/local/build-bot-image.sh`, as `<package>@<x.y.z>`, and its two verification loops; `ENGINE_PACKAGES` in `packages/shared/src/engine-updates.ts`; `build()` in `apps/hostd/src/engine-updates.ts`; `ENGINES` in `apps/console/src/components/engine-updates.tsx` |
 
 `pnpm build` finds much of what the table misses: a table typed

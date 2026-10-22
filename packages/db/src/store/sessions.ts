@@ -107,6 +107,28 @@ export async function appendSessionLog(sessionId: string, lines: readonly string
   );
 }
 
+/**
+ * The newest `perSession` lines of each of these sessions, oldest first, in
+ * one read. The board asks it for every running task it shows on each read,
+ * and a read per session was a query per running card every few seconds.
+ */
+export async function recentLines(sessionIds: readonly string[], perSession: number): Promise<Map<string, string[]>> {
+  if (sessionIds.length === 0) return new Map();
+  const rows = await query<{ session_id: string; line: string }>(
+    `select session_id, line from (
+       select session_id, seq, line, row_number() over (partition by session_id order by seq desc) as n
+       from session_log
+       where session_id = any($1::uuid[])
+     ) recent
+     where n <= $2
+     order by session_id, seq`,
+    [sessionIds, perSession],
+  );
+  const lines = new Map<string, string[]>();
+  for (const row of rows) lines.set(row.session_id, [...(lines.get(row.session_id) ?? []), row.line]);
+  return lines;
+}
+
 export async function readSessionPane(sessionId: string, limit = 80): Promise<string[]> {
   const rows = await query<{ line: string }>(
     'select line from session_log where session_id = $1 order by seq desc limit $2',
