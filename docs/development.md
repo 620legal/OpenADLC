@@ -445,7 +445,9 @@ A task that needs to write outside its lease's paths ends a message with a
   body is edited as the seat that wrote it: an edit signed as another seat fails
   signature verification (`seat-mismatch`). The resumed task's write scope is
   the widened lease. Answering `Approve` again finishes an approval that stopped
-  part-way; every step can be repeated.
+  part-way; every step can be repeated. A seat that is not connected to GitHub
+  leaves the question open, and the console's answer is a 409 that says which
+  seat and the `openadlc auth login` that connects it, not a 500.
 - **Refuse** stops the task and releases its lease. `needs-human` stays on the
   issue, because taking it off would hand the issue to the dispatcher, which
   would lease it again and ask for the same paths.
@@ -455,6 +457,9 @@ A task that needs to write outside its lease's paths ends a message with a
   told which issues hold the paths, and the task stays paused. Needs you shows
   it as waiting on them, with no Approve or Refuse on the card's face
   (`plan_change_waiting`, `apps/bridge/src/attention.ts`; [troubleshooting.md](troubleshooting.md#an-approved-plan-change-waits-on-another-issue)),
+  and the board's card says the same from that item (`heldApproval`,
+  `heldApprovalsOf` in `apps/console/src/lib/card-status.ts`), not
+  "Waiting for your answer";
   and the thread and the item view offer only Refuse (`offeredGate`). When
   the paths are free but adding them fails, the hold records why
   (`held.failed`) and the question is asked again with the reason.
@@ -485,9 +490,13 @@ A task that needs to write outside its lease's paths ends a message with a
     set it; the task resumes once its session reports itself paused. A path
     under `## Human review` in `AGENTS.md` on the base branch is never
     approved this way, and neither is anything when those rules cannot be
-    read: the question is asked as before, and says why. The standing approval
+    read: the question is asked as before, and says why. Rules that cannot be
+    read (the file, its section, or a line of it) are said as that, with what
+    to do (`keptForPerson`, `packages/shared/src/plan-change-review.ts`), and
+    never as a path under Human review. The standing approval
     ends when the issue's pull request merges or closes, the issue closes, or a
-    person turns it off, from the card or the item.
+    person turns it off, from the question's card, the waiting card or the
+    item.
   - **Ask the designer** starts a short task on the design seat: kind `spec`,
     skill `plan-change-review`, on the issue, with `plan-change.md` (the
     paths, the builder's reason, which paths are under Human review). It reads
@@ -501,9 +510,12 @@ A task that needs to write outside its lease's paths ends a message with a
     issue as its own seat, plus the issue's Expected paths, and an issue with
     none has nothing to judge against. Otherwise, and for any refusal, the
     designer's view is said on the issue and on the card, and a person
-    decides. The task's end hands the issue to no stage. It is a task rather
-    than a model call from the bridge: engines run in hostd, where usage is
-    written to the ledger before their output is acted on.
+    decides. The task's end hands the issue to no stage. One that ends without
+    its verdict is failed, as a review that leaves no review is, with what it
+    last said (`PlanChanges.missingVerdict`), and the builder's thread, where
+    the question waits, says so; **Ask the designer again** starts another. It
+    is a task rather than a model call from the bridge: engines run in hostd,
+    where usage is written to the ledger before their output is acted on.
   - **Refuse** on the item, for what the designer or a standing approval
     approved, takes the paths back: they come out of the lease
     (`leases.narrowPaths`, whatever its state, since the merge line reads the

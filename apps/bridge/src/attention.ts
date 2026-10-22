@@ -8,6 +8,7 @@ import {
   botInWords,
   hasAbandonedLabel,
   hasIgnoreLabel,
+  outsideInWords,
   parseDependencies,
   PLAN_CHANGE_REFUSE,
   roleLabel,
@@ -314,6 +315,13 @@ export interface AttentionItem {
    * was, where, and whether it counted. See `health/checks/attribution.ts`.
    */
   incident?: Record<string, unknown>;
+  /**
+   * A plan change's, approved and waiting (`plan_change_waiting`): the issues
+   * that hold its paths, and the paths. The board's card says it from these,
+   * as this card does: it said "Waiting for your answer" while this one said
+   * the builder waited for #44.
+   */
+  heldApproval?: { blockedBy: number[]; paths: string[] };
 }
 
 /** One of several items folded into a card by `foldCauses`, keeping what is its own rather than the cause's. */
@@ -914,22 +922,25 @@ function planChangeCard(
 ): { actions: AttentionAction[]; off: AttentionAction | null; notes: string[] } | null {
   const plan = input.planChanges?.get(gateId);
   if (!plan) return null;
-  const parsed = parseRef(task.subjectRef);
-  const issueNumber = task.kind === 'patch' ? issueNumberFromBranch(task.branch ?? '') : (parsed?.number ?? null);
-  if (!parsed || !issueNumber) return null;
+  const widens = planIssue(task);
+  if (!widens) return null;
+  const { repo, issueNumber } = widens;
   const actions: AttentionAction[] = [];
   const notes: string[] = [];
   const on = input.standing?.find((one) => one.repoId === task.repoId && one.issueNumber === issueNumber);
-  const off = on ? turnOff(parsed.repo, issueNumber) : null;
+  const off = on ? turnOff(repo, issueNumber) : null;
   // Approved already, by a person or approve all, and waiting for other work to let go of its paths.
   if (plan.held) return { actions, off, notes };
   if (on) {
     const kept = plan.standing?.humanReview ?? [];
+    const unread = plan.standing?.rulesUnread;
     notes.push(
       `Approve all is on for #${issueNumber}, set by ${on.setBy}` +
-        (kept.length > 0
-          ? `; ${kept.map((path) => `\`${path}\``).join(', ')} ${kept.length === 1 ? 'is' : 'are'} under Human review, so a person decides this one.`
-          : '; it could not be applied to this one, so a person decides it.'),
+        (unread
+          ? `, but ${unread}.`
+          : kept.length > 0
+            ? `; ${kept.map((path) => `\`${path}\``).join(', ')} ${kept.length === 1 ? 'is' : 'are'} under Human review, so a person decides this one.`
+            : '; it could not be applied to this one, so a person decides it.'),
     );
   }
   if (!on) actions.push({ kind: 'approve_all', label: `Approve, and any more paths for #${issueNumber}`, gateId });
@@ -946,7 +957,7 @@ function planChangeCard(
     const outside = asked.outside ?? [];
     notes.push(
       asked.verdict === 'approve' && outside.length > 0
-        ? `${view}\n\nIt does not settle it: ${outside.map((entry) => `\`${entry.path}\`: ${entry.why}`).join('; ')}.`
+        ? `${view}\n\nIt does not settle it: ${outsideInWords(outside)}.`
         : asked.verdict === 'refuse'
           ? `${view}\n\nA refusal stops the task, so a person gives it.`
           : view,
@@ -960,8 +971,28 @@ function planChangeCard(
   return { actions, off, notes };
 }
 
+/** The issue a plan change widens, as its card names it: a patch round's from its branch, since its subject is the pull request. */
+function planIssue(task: Pick<TaskFacts, 'kind' | 'subjectRef'> & { branch?: string | null }): { repo: string; issueNumber: number } | null {
+  const parsed = parseRef(task.subjectRef);
+  const issueNumber = task.kind === 'patch' ? issueNumberFromBranch(task.branch ?? '') : (parsed?.number ?? null);
+  return parsed && issueNumber ? { repo: parsed.repo, issueNumber } : null;
+}
+
 function turnOff(repo: string, issueNumber: number): AttentionAction {
   return { kind: 'approve_all_off', label: `Turn off approve all for #${issueNumber}`, subject: `${repo}#${issueNumber}` };
+}
+
+/**
+ * Turning approve all off for the issue a plan change widens, while it is on.
+ * The question's card offered it and the waiting card did not, though approve
+ * all stays on while an approval waits, and approves the builder's next
+ * request as it is asked: the item was the only place left to turn it off.
+ */
+function turnOffWhileOn(task: Pick<TaskFacts, 'kind' | 'subjectRef' | 'repoId'> & { branch?: string | null }, input: AttentionInput): AttentionAction | null {
+  const widens = planIssue(task);
+  if (!widens) return null;
+  const on = input.standing?.some((one) => one.repoId === task.repoId && one.issueNumber === widens.issueNumber);
+  return on ? turnOff(widens.repo, widens.issueNumber) : null;
 }
 
 export function attentionItems(given: AttentionInput): AttentionItem[] {
@@ -1686,6 +1717,8 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     if (bot) actions.push({ kind: 'open_thread', label: 'Open thread', bot: bot.name });
     if (gate.githubCommentUrl) actions.push({ kind: 'open_url', label: 'On GitHub', url: gate.githubCommentUrl });
     actions.push({ kind: 'answer_gate', label: 'Refuse', gateId: gate.id, answer: PLAN_CHANGE_REFUSE });
+    const off = task ? turnOffWhileOn(task, input) : null;
+    if (off) actions.push(off);
     items.push({
       id: `plan-change:${gate.id}`,
       kind: 'plan_change_waiting',
@@ -1698,6 +1731,7 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
         `${holders.length === 1 ? 'holds' : 'hold'} paths that overlap ${one ? 'it' : 'them'}, so the task stays paused. ${next} ` +
         'Refusing drops the change and stops the task.',
       actions,
+      heldApproval: { blockedBy: [...held.blockedBy], paths: [...held.paths] },
     });
   }
 

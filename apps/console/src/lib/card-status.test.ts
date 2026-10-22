@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BoardCard, CardTask } from './api';
-import { cardBot, cardCost, cardStatus, nextUp, type CardContext } from './card-status';
+import { cardBot, cardCost, cardStatus, heldApprovalsOf, nextUp, type CardContext } from './card-status';
 import { ago, duration, money, ordinal } from './when';
 
 const NOW = '2026-09-24T12:00:00.000Z';
@@ -117,6 +117,43 @@ describe('a card’s status line', () => {
     const meanwhile = card({ ...failed, active: [task({ kind: 'review', state: 'running', bot: 'b' })] });
     expect(cardStatus(meanwhile, CONTEXT).text).toBe('Review failed · needs you');
     expect(cardStatus(card({ stage: 'review', prNumber: 2, reviewFailed: false }), CONTEXT).text).toBe('Waiting for the reviewers');
+  });
+
+  it('says an approved plan change waits for the work that holds its paths, not for the person', () => {
+    // Needs you said the builder waited for #44; the card said "Waiting for your answer" (#100).
+    const asking = card({ gateOpen: true, active: [task({ kind: 'implement', state: 'paused' })] });
+    expect(cardStatus(asking, { ...CONTEXT, heldApproval: { blockedBy: [44], paths: ['a.ts'] } })).toEqual({
+      text: 'Approved · waits for #44 to let go of the path',
+      tone: 'muted',
+      mark: null,
+    });
+    expect(cardStatus(asking, { ...CONTEXT, heldApproval: { blockedBy: [11, 15, 44], paths: ['a.ts', 'b.ts'] } }).text).toBe(
+      'Approved · waits for #11, #15 and #44 to let go of the paths',
+    );
+    expect(cardStatus(asking, { ...CONTEXT, heldApproval: null }).text).toBe('Waiting for your answer');
+  });
+
+  it('reads each card’s waiting approval from Needs you, and none for a card with a question of its own', () => {
+    const subject = (ref: string) => ({ repo: 'openadlc', number: Number(ref.split('#')[1]), title: null, ref, url: null, item: ref });
+    const waiting = (ref: string, blockedBy: number[]) => ({
+      id: `plan-change:${ref}`,
+      kind: 'plan_change_waiting' as const,
+      headline: '',
+      subject: subject(ref),
+      bot: null,
+      since: NOW,
+      detail: '',
+      actions: [],
+      heldApproval: { blockedBy, paths: ['a.ts'] },
+    });
+    const held = heldApprovalsOf([
+      waiting('openadlc#60', [44]),
+      waiting('openadlc#60', [12]),
+      waiting('openadlc#61', [44]),
+      { ...waiting('openadlc#61', []), id: 'gate:g', kind: 'question' as const, heldApproval: undefined },
+    ]);
+    expect(held.get('openadlc#60')).toEqual({ blockedBy: [12, 44], paths: ['a.ts'] });
+    expect(held.has('openadlc#61')).toBe(false);
   });
 
   it('puts what needs the person first: a question, an OK, a review loop that gave up', () => {

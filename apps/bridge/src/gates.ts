@@ -26,6 +26,7 @@ import type { Actors } from './actors.js';
 import { itemLink, type Notifier } from './notify.js';
 import { acceptOnAnswer } from './design-memory.js';
 import { moveRequest } from './request-lifecycle.js';
+import { HttpFailure } from './router.js';
 import { publicNameOf } from './thread-view.js';
 import { issueNumberFromBranch, parseRef } from './work.js';
 
@@ -197,16 +198,16 @@ interface AnswerRecord {
 
 /**
  * Whether a standing approval on the work a plan change widens covers it.
- * Null when none is on. `covers` is false when a path is under Human review
- * (or the rules could not be read), and `humanReview` says which: those
- * always ask a person.
+ * Null when none is on. `covers` is false when a path is under Human review,
+ * and `humanReview` says which, or when the rules could not be read, and
+ * `rulesUnread` says so and what to do: either asks a person.
  */
 export type StandingCover = (input: {
   repoId: string;
   repoFullName: string;
   issueNumber: number;
   paths: readonly string[];
-}) => Promise<{ covers: boolean; setBy: string; setAt: string; humanReview: readonly string[] } | null>;
+}) => Promise<{ covers: boolean; setBy: string; setAt: string; humanReview: readonly string[]; rulesUnread?: string } | null>;
 
 /**
  * A gate is the only thing that demands a person. It is written to GitHub first
@@ -353,7 +354,9 @@ export class Gates {
           input.context?.trim(),
           `Approve adds ${request.paths.length === 1 ? 'it' : 'them'} to ${leaseIssue === issueNumber ? "this issue's" : `#${leaseIssue}'s`} Expected paths and to the task's lease, and the task goes on. Refuse stops the task.`,
           standing && !standing.covers
-            ? `Approve all is on for #${leaseIssue}, but ${pathList([...standing.humanReview])} ${standing.humanReview.length === 1 ? 'is' : 'are'} under Human review in AGENTS.md, so a person decides.`
+            ? standing.rulesUnread
+              ? `Approve all is on for #${leaseIssue}, but ${standing.rulesUnread}.`
+              : `Approve all is on for #${leaseIssue}, but ${pathList([...standing.humanReview])} ${standing.humanReview.length === 1 ? 'is' : 'are'} under Human review in AGENTS.md, so a person decides.`
             : '',
         ]
           .filter(Boolean)
@@ -457,7 +460,9 @@ export class Gates {
         gateId: gate.id,
         ...(request ? { planChange: request } : {}),
         // What kept a standing approval from settling it, for the card to say.
-        ...(standing && !standing.covers ? { standing: { setBy: standing.setBy, humanReview: [...standing.humanReview] } } : {}),
+        ...(standing && !standing.covers
+          ? { standing: { setBy: standing.setBy, humanReview: [...standing.humanReview], ...(standing.rulesUnread ? { rulesUnread: standing.rulesUnread } : {}) } }
+          : {}),
       },
       githubUrl: commentUrl,
     });
@@ -1120,8 +1125,12 @@ export class Gates {
   }): Promise<string> {
     const { subjectRef, repoId, repoFullName, issueNumber, bot, leaseId, paths } = on;
     const reader = await this.actors.asBot(bot.name);
+    // A seat that is not connected is a person's to fix, so the route answers
+    // a conflict with the words that say how: Approve with the builder signed
+    // out answered 500 on 2026-10-22, the right words said as a crash.
     if (!reader) {
-      throw new Error(
+      throw new HttpFailure(
+        409,
         `${botAtStart(bot)} is not connected to GitHub, so the Expected paths of ${subjectRef} cannot be updated. Run: openadlc auth login --bot ${bot.name}`,
       );
     }
@@ -1142,7 +1151,8 @@ export class Gates {
       const seat = seatOf(current);
       const editor = seat && seat !== bot.name ? await this.actors.asBot(seat) : reader;
       if (!editor) {
-        throw new Error(
+        throw new HttpFailure(
+          409,
           `${seat} wrote ${subjectRef}, and only ${seat} can edit it without breaking its signature, but ${seat} is not connected to GitHub. Run: openadlc auth login --bot ${seat}`,
         );
       }

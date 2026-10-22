@@ -1,4 +1,4 @@
-import type { BoardCard, BoardColumn, CardTask, MergeLineEntry } from './api';
+import type { AttentionItem, BoardCard, BoardColumn, CardTask, MergeLineEntry } from './api';
 import { ago, duration, ordinal } from './when';
 
 /**
@@ -86,6 +86,44 @@ export interface CardContext {
    * however long it waits. Absent is read as dispatching.
    */
   dispatching?: boolean;
+  /** A plan change approved on the card that waits for other work to let go of its paths, as Needs you has it (`heldApprovalsOf`). */
+  heldApproval?: HeldApproval | null;
+}
+
+export interface HeldApproval {
+  /** The issues holding its paths. */
+  blockedBy: readonly number[];
+  paths: readonly string[];
+}
+
+/** `#11`, `#11 and #15`, `#11, #15 and #20`. */
+function numbersInWords(numbers: readonly number[]): string {
+  const said = numbers.map((number) => `#${number}`);
+  return said.length > 1 ? `${said.slice(0, -1).join(', ')} and ${said[said.length - 1]}` : (said[0] ?? '');
+}
+
+/**
+ * Each card's approved plan change that waits for other work, by the card's
+ * ref, from what Needs you says of it: the card and Needs you then say the
+ * same. A card with a question of its own open is left out, since that one
+ * is waiting for the person's answer.
+ */
+export function heldApprovalsOf(attention: readonly AttentionItem[]): ReadonlyMap<string, HeldApproval> {
+  const refsOf = (item: AttentionItem): string[] => [...new Set([item.subject.ref, item.subject.item].filter((ref): ref is string => Boolean(ref)))];
+  const asking = new Set(attention.filter((item) => item.kind === 'question').flatMap(refsOf));
+  const held = new Map<string, HeldApproval>();
+  for (const item of attention) {
+    if (item.kind !== 'plan_change_waiting' || !item.heldApproval || item.heldApproval.blockedBy.length === 0) continue;
+    for (const ref of refsOf(item)) {
+      if (asking.has(ref)) continue;
+      const was = held.get(ref);
+      held.set(ref, {
+        blockedBy: [...new Set([...(was?.blockedBy ?? []), ...item.heldApproval.blockedBy])].sort((a, b) => a - b),
+        paths: [...new Set([...(was?.paths ?? []), ...item.heldApproval.paths])],
+      });
+    }
+  }
+  return held;
 }
 
 /** What a running task is doing, by its kind, for one that has not said a step yet. */
@@ -172,6 +210,18 @@ export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
   }
 
   if (card.gateOpen) {
+    // A plan change approved while other work holds its paths keeps its
+    // question open, though nobody is asked anything: it goes on by itself.
+    // The card said "Waiting for your answer" while Needs you said the
+    // builder waited for #44 to let go of the approved path.
+    const held = context.heldApproval;
+    if (held && held.blockedBy.length > 0) {
+      return {
+        text: `Approved · waits for ${numbersInWords(held.blockedBy)} to let go of the ${held.paths.length === 1 ? 'path' : 'paths'}`,
+        tone: 'muted',
+        mark: null,
+      };
+    }
     return { text: 'Waiting for your answer', tone: 'attention', mark: 'dot' };
   }
 

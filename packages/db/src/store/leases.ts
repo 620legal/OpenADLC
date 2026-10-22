@@ -510,8 +510,12 @@ export interface PlanChangeRecord {
   decided?: { by: 'designer' | 'standing_approval'; at: string; [key: string]: unknown };
   /** A person refused it after it was approved that way, and the paths were taken back. */
   takenBack?: { by: string; at: string };
-  /** A standing approval was on when it was asked, and these paths kept it for a person. */
-  standing?: { setBy: string; humanReview: string[] };
+  /**
+   * A standing approval was on when it was asked, and these paths kept it for
+   * a person, or `rulesUnread`: the Human-review rules could not be read, in
+   * words that say what to do, and every path was a person's.
+   */
+  standing?: { setBy: string; humanReview: string[]; rulesUnread?: string };
 }
 
 /** The design seat's part in a plan change: who asked it, its task, and what it answered. */
@@ -592,6 +596,7 @@ function toPlanChange(payload: PlanChangePayload | null): PlanChangeRecord | nul
           standing: {
             setBy: standing.setBy,
             humanReview: Array.isArray(standing.humanReview) ? standing.humanReview.filter((path): path is string => typeof path === 'string') : [],
+            ...(typeof standing.rulesUnread === 'string' && standing.rulesUnread ? { rulesUnread: standing.rulesUnread } : {}),
           },
         }
       : {}),

@@ -1424,8 +1424,10 @@ Needs you shows it as waiting, not as the question again: "The builder (…)
 waits for #71 to let go of the approved paths", naming who approved it, the
 paths, and each issue that holds them with its pull request, with a button to
 open it. Its face has nothing that answers it; **Refuse** is under **Show
-more**, and drops the change and stops the task. The bot's thread and the
-item view offer only **Refuse** on it too.
+more**, and drops the change and stops the task, beside **Turn off approve
+all** while approve all is on for the issue. The bot's thread and the item
+view offer only **Refuse** on it too. Its card on the board says the same:
+"Approved · waits for #71 to let go of the paths".
 
 - **It goes on by itself.** When that work merges, closes or lets go of the
   paths, the paths are added and the task resumes, and the card goes with its

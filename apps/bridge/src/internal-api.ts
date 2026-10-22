@@ -11,6 +11,7 @@ import {
 } from '@openadlc/github';
 import {
   OPENADLC_EVENTS,
+  PLAN_CHANGE_REVIEW_SKILL,
   botAtStart,
   headlineFor,
   messageKindFor,
@@ -377,6 +378,15 @@ export function registerInternalApi(
           reason = missing;
         }
       }
+      // So is a designer's judgement of a plan change when its verdict is in:
+      // one that ended without it read "done" (`PlanChanges.missingVerdict`).
+      if (current?.skill === PLAN_CHANGE_REVIEW_SKILL) {
+        const missing = await planChanges.missingVerdict(current).catch(() => null);
+        if (missing) {
+          state = 'failed';
+          reason = missing;
+        }
+      }
     }
     const task = await tasks.updateTaskState(params.id ?? '', state, { exitReason: reason });
     if (!task) {
@@ -431,6 +441,13 @@ export function registerInternalApi(
       // account signed out, a host service gone — and a lease it leaves
       // holding its issue is one of them too.
       deps.health?.runSoon(['model-account', 'hostd', 'idle-lease']);
+      // A designer asked to judge a plan change: the builder's thread, where
+      // the question waits, says it has no answer coming.
+      if (ended.skill === PLAN_CHANGE_REVIEW_SKILL) {
+        await planChanges
+          .designerEnded(ended, reason)
+          .catch((error: unknown) => console.warn(`[bridge] ${ended.subjectRef}: the builder's thread was not told the designer ended: ${error instanceof Error ? error.message : error}`));
+      }
     }
 
     // A stage ends because its own work ended. Only a task that finished cleanly

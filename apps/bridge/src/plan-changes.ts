@@ -7,15 +7,19 @@ import {
   designerLimits,
   hasIgnoreLabel,
   inertMarkup,
+  keepsForPerson,
+  keptForPerson,
+  outsideInWords,
   parseMarkers,
   parsePlanChangeVerdict,
   pathsNamedIn,
   seatOf,
-  underHumanReview,
   verifyBody,
   withoutExpectedPaths,
+  withoutMarker,
   type ContextDocument,
   type HumanReviewRule,
+  type KeptForPerson,
   type SigningKey,
 } from '@openadlc/shared';
 import type { Actors } from './actors.js';
@@ -82,12 +86,18 @@ function warn(what: string): (error: unknown) => void {
   return (error) => console.warn(`[bridge] ${what}: ${error instanceof Error ? error.message : error}`);
 }
 
-/** The Human-review rules, or null (every path a person's) when they cannot be read. */
-async function rulesFor(
+/**
+ * What keeps these paths for a person: those under Human review on the base
+ * branch, or every one when the rules cannot be read, which is said as that.
+ */
+async function keptFor(
   read: PlanChangeDeps['humanReviewRules'],
   repo: { fullName: string; defaultBranch?: string | null },
-): Promise<HumanReviewRule[] | null> {
-  return read(repo.fullName, repo.defaultBranch || 'HEAD').catch(() => null);
+  paths: readonly string[],
+): Promise<KeptForPerson> {
+  const base = repo.defaultBranch || 'HEAD';
+  const rules = await read(repo.fullName, base).catch(() => null);
+  return keptForPerson(paths, rules, repo.defaultBranch || null);
 }
 
 /**
@@ -100,9 +110,14 @@ export function standingCoverFor(deps: Pick<PlanChangeDeps, 'humanReviewRules'>)
     const on = await standingApprovals.activeFor(repoId, issueNumber);
     if (!on) return null;
     const repo = (await repos.listRepos()).find((entry) => entry.id === repoId);
-    const rules = await rulesFor(deps.humanReviewRules, { fullName: repoFullName, defaultBranch: repo?.defaultBranch ?? null });
-    const humanReview = underHumanReview(paths, rules);
-    return { covers: humanReview.length === 0, setBy: on.setBy, setAt: on.setAt, humanReview };
+    const kept = await keptFor(deps.humanReviewRules, { fullName: repoFullName, defaultBranch: repo?.defaultBranch ?? null }, paths);
+    return {
+      covers: !keepsForPerson(kept),
+      setBy: on.setBy,
+      setAt: on.setAt,
+      humanReview: kept.humanReview,
+      ...(kept.rulesUnread ? { rulesUnread: `${kept.rulesUnread.what}, so it does not cover this one and a person decides. ${kept.rulesUnread.fix}` } : {}),
+    };
   };
 }
 
@@ -133,6 +148,17 @@ interface Work {
   issueNumber: number;
   builder: { id: string; name: string } | null;
 }
+
+/**
+ * How a designer's task that ended without its verdict begins its reason. It
+ * ended `done` with nothing said in the builder's thread, and only Needs you
+ * said the designer had no answer; a review that leaves no review is failed
+ * (`review-left.ts`), and so is this.
+ */
+export const NO_VERDICT = 'ended without its verdict on the plan change';
+
+/** What the reason quotes of the designer, at most. */
+const SAID_LIMIT = 600;
 
 export class PlanChanges {
   constructor(private readonly deps: PlanChangeDeps) {}
@@ -266,7 +292,7 @@ export class PlanChanges {
     if (!designer) throw new HttpFailure(409, 'the crew has no design seat (system engineer) to ask. Add one in Crew, or answer it yourself');
 
     const subject = `${work.repo.name}#${work.issueNumber}`;
-    const humanReview = underHumanReview(work.request.paths, await rulesFor(this.deps.humanReviewRules, work.repo));
+    const { humanReview, rulesUnread } = await keptFor(this.deps.humanReviewRules, work.repo, work.request.paths);
     const brief: ContextDocument = {
       name: 'plan-change.md',
       title: `The plan change you judge, on ${subject}`,
@@ -285,9 +311,11 @@ export class PlanChanges {
         '',
         'OpenADLC takes your approval as the decision only for paths the design names, or that sit beside them: the same package, their tests, the docs. ' +
           'For any other path, and for a refusal, your view is shown to a person, who decides.',
-        ...(humanReview.length > 0
-          ? ['', `${pathList(humanReview)} ${humanReview.length === 1 ? 'is' : 'are'} under Human review in AGENTS.md: only a person approves ${humanReview.length === 1 ? 'it' : 'them'}, whatever you answer.`]
-          : []),
+        ...(rulesUnread
+          ? ['', `${rulesUnread.what}, so only a person approves these paths, whatever you answer. Judge them all the same: your view is shown to the person.`]
+          : humanReview.length > 0
+            ? ['', `${pathList(humanReview)} ${humanReview.length === 1 ? 'is' : 'are'} under Human review in AGENTS.md: only a person approves ${humanReview.length === 1 ? 'it' : 'them'}, whatever you answer.`]
+            : []),
       ].join('\n'),
     };
     const opened = await this.deps.taskService
@@ -372,9 +400,9 @@ export class PlanChanges {
     }
 
     const client = work.builder ? await this.deps.actors.asBot(work.builder.name).catch(() => null) : null;
-    const humanReview = underHumanReview(work.request.paths, await rulesFor(this.deps.humanReviewRules, work.repo));
+    const { humanReview, rulesUnread } = await keptFor(this.deps.humanReviewRules, work.repo, work.request.paths);
     const designPaths = await this.designOf(client, work.repo, work.issueNumber);
-    const limits = designerLimits({ paths: work.request.paths, designPaths, humanReview });
+    const limits = designerLimits({ paths: work.request.paths, designPaths, humanReview, rulesUnread });
 
     if (said.verdict === 'approve' && limits.counts) {
       await note({ counted: true, outside: [] });
@@ -399,7 +427,7 @@ export class PlanChanges {
     const why = said.reason ? inertMarkup(said.reason) : 'it gave no reason';
     const kept =
       said.verdict === 'approve'
-        ? `That does not settle it: ${limits.outside.map((entry) => `\`${entry.path}\`: ${entry.why}`).join('; ')}.`
+        ? `That does not settle it: ${outsideInWords(limits.outside)}.`
         : 'A refusal stops the task, so a person gives it.';
     await this.say(
       seat === 'the designer' ? (work.builder?.name ?? null) : seat,
@@ -409,6 +437,51 @@ export class PlanChanges {
     );
     await this.line(work.gate.threadId, work.gate.id, `${seat}, the designer, would ${said.verdict} it; a person decides`, said.reason || undefined);
     return { counted: false };
+  }
+
+  /**
+   * Why a designer's task that ended `done` failed: it was asked to judge a
+   * plan change and gave no verdict, with what it last said. Null when it gave
+   * one, was not asked to judge one, or that cannot be told: a task is never
+   * failed on a guess. The verdict's own message is looked for as well as its
+   * note, since the note is written only once the verdict has been acted on.
+   */
+  async missingVerdict(task: { id: string; botId: string; skill: string | null; subjectRef: string; startedAt: string | null }): Promise<string | null> {
+    if (task.skill !== PLAN_CHANGE_REVIEW_SKILL) return null;
+    const found = await leases.planChangeOfDesignerTask(task.id);
+    if (!found?.request.designer || found.request.designer.verdict) return null;
+    const seat = await bots.getBotById(task.botId);
+    if (!seat) return null;
+    const thread = (await threads.listThreadsForSubject(task.subjectRef)).find((row) => row.bot_id === task.botId);
+    const since = task.startedAt ? Date.parse(task.startedAt) : Number.NEGATIVE_INFINITY;
+    const said = thread
+      ? (await threads.listMessages([thread.id], 50)).filter((message) => message.author === seat.name && Date.parse(message.at) >= since)
+      : [];
+    if (said.some((message) => parsePlanChangeVerdict(message.text))) return null;
+    const last = withoutMarker(said.filter((message) => message.kind === 'bot').at(-1)?.text ?? '').trim();
+    if (!last) return NO_VERDICT;
+    return `${NO_VERDICT}. It said: “${last.length > SAID_LIMIT ? `${last.slice(0, SAID_LIMIT - 1).trimEnd()}…` : last}”`;
+  }
+
+  /**
+   * Says in the builder's thread, where the question is, that the designer it
+   * was waiting on ended without an answer, and what is left to press. Only
+   * its own thread said so, and the builder's said nothing at all. Nothing
+   * when it gave a verdict, or the question has been answered since.
+   */
+  async designerEnded(task: { id: string; botId: string; skill: string | null }, reason: string | null): Promise<void> {
+    if (task.skill !== PLAN_CHANGE_REVIEW_SKILL) return;
+    const found = await leases.planChangeOfDesignerTask(task.id);
+    if (!found?.request.designer || found.request.designer.verdict) return;
+    const gate = await threads.getGate(found.gateId);
+    if (!gate || gate.state !== 'open') return;
+    const seat = (await bots.getBotById(task.botId))?.name ?? 'the design seat';
+    await this.line(
+      gate.threadId,
+      gate.id,
+      `${seat}, the designer, ended without an answer, so nothing is settled. Ask the designer again from the card, or answer it yourself`,
+      reason ?? undefined,
+    );
   }
 
   /**

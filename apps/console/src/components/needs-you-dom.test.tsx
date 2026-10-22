@@ -268,6 +268,18 @@ describe('an approved plan change waiting on another lease', () => {
     await click(button('Refuse', sheet()!));
     expect(vi.mocked(answerGate)).toHaveBeenCalledWith('gate-27', 'Refuse');
   });
+
+  it('turns approve all off from its sheet while it is on, as the question’s card does', async () => {
+    // Approve all stays on while the approval waits, and approves the
+    // builder's next request as it asks; the card had no way to stop it (#100).
+    pressed.settled = [];
+    await render([{ ...WAITING, actions: [...WAITING.actions, { kind: 'approve_all_off', label: 'Turn off approve all for #27', subject: 'openadlc#27' }] }]);
+    const card = container.querySelector('article')!;
+    expect(() => button('Turn off approve all for #27', card)).toThrow();
+    await click(button('Show more', card));
+    await click(button('Turn off approve all for #27', sheet()!));
+    expect(pressed.settled).toEqual(['off:openadlc#27']);
+  });
 });
 
 describe('a failed triage’s Dismiss and Abandon', () => {
@@ -867,5 +879,20 @@ describe('a builder asking for more paths (#77)', () => {
     await click(button('Show more', container));
     await click(button('Turn off approve all for #16', sheet()!));
     expect(pressed.settled).toEqual(['off:openadlc-testbed#16']);
+  });
+
+  it('says what the bridge refused approve all with, on the card, when the builder cannot act', async () => {
+    // The bridge's 409: the words to act on, said on the card the person pressed.
+    const words = 'The builder is not connected to GitHub, so the Expected paths of openadlc-testbed#16 cannot be updated. Run: openadlc auth login --bot atlas';
+    const { approveAll } = await import('@/app/actions');
+    vi.mocked(approveAll).mockResolvedValueOnce({ ok: false, error: words });
+    await render([ASKING]);
+    const card = container.querySelector('article')!;
+
+    await click(button('Approve, and any more paths for #16', card));
+
+    expect([...card.querySelectorAll('[role="status"]')].map((line) => line.textContent)).toEqual([words]);
+    // The question stays, to be answered once that is put right.
+    expect(button('Approve', card).disabled).toBe(false);
   });
 });

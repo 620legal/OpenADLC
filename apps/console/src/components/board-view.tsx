@@ -17,7 +17,7 @@ import type { AttentionItem, Board, BoardCard, BoardColumn, CrewMember, WorkPaus
 import { findBot, labelIn } from '@/lib/bot-label';
 import { withActivity, type BoardActivity } from '@/lib/board-activity';
 import { attemptMove, columnsWithMoves, movesBack, NO_MOVES, reconcile, type MoveState } from '@/lib/board-move';
-import { abandoned, cardBot, cardCost, cardStatus, nextUp, type CardContext, type CardStatus, type StatusTone } from '@/lib/card-status';
+import { abandoned, cardBot, cardCost, cardStatus, heldApprovalsOf, nextUp, type CardContext, type CardStatus, type StatusTone } from '@/lib/card-status';
 import { cn } from '@/lib/cn';
 import { cardMatches, exactKey } from '@/lib/item';
 import { heldLine, IssueControls } from '@/components/issue-controls';
@@ -179,6 +179,8 @@ export function BoardView({
   const build = columns.find((column) => column.stage === 'build');
   const builder = build?.bots[0] ?? null;
   const next = build ? nextUp(build) : null;
+  // What Needs you says of an approval that waits on other work, so the card says it too.
+  const heldApprovals = heldApprovalsOf(attention);
   const context = (card: BoardCard): CardContext => ({
     now,
     said: (name) => labelOf(name).said,
@@ -186,6 +188,7 @@ export function BoardView({
     mergeLine: board.mergeLine,
     pausedRepos: pausedNames,
     dispatching,
+    heldApproval: heldApprovals.get(card.ref) ?? null,
     queue:
       card.stage === 'build'
         ? { next: card.ref === next?.get(card.repo), builder: builder?.name ?? null, builderBusy: Boolean(builder?.working) }
