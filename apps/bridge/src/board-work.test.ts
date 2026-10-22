@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boardWork, FILED_SHOWN_MS } from './board-work.js';
+import { boardWork, FILED_SHOWN_MS, itemCards, LONE_PULL_DONE_DAYS, lonePulls, type BoardLink } from './board-work.js';
 import type { TaskFacts } from './work.js';
 
 /**
@@ -157,5 +157,102 @@ describe('an issue whose work was sent back', () => {
     });
     expect(work.byRef.get('api#7')?.sentBack).toBe(2);
     expect(work.byRef.get('api#8')?.sentBack).toBe(0);
+  });
+});
+
+describe('one card per work item', () => {
+  const REPOS = [
+    { id: 'repo-1', name: 'api' },
+    { id: 'repo-2', name: 'web' },
+  ];
+  let linkId = 0;
+  const link = (itemId: string, itemNumber: number, kind: BoardLink['kind'], repoId: string | null, number: number | null, extra: Partial<BoardLink> = {}): BoardLink => {
+    linkId += 1;
+    return { id: linkId, itemId, itemNumber, kind, repoId, number, requestId: null, title: `${kind} ${number}`, state: 'open', url: null, openedAt: minutesAgo(60), ...extra };
+  };
+  const card = (repo: string, number: number, stage: string, extra: Record<string, unknown> = {}) => ({
+    repo,
+    ref: `${repo}#${number}`,
+    stage,
+    assignees: [] as string[],
+    gateOpen: false,
+    costUsd: 1,
+    ...extra,
+  });
+  const keyOf = (number: number) => `acme-${number}`;
+
+  it('is the first-linked issue’s card, in its column, with the cost and people of every linked card', () => {
+    linkId = 0;
+    const links = [
+      link('w-7', 7, 'issue', 'repo-2', 3),
+      link('w-7', 7, 'issue', 'repo-1', 12),
+      link('w-7', 7, 'pull', 'repo-1', 31),
+      link('w-8', 8, 'issue', 'repo-1', 15),
+    ];
+    const { cards } = itemCards({
+      cards: [card('api', 12, 'review', { assignees: ['lead-reviewer'], gateOpen: true }), card('web', 3, 'build', { assignees: ['builder'] }), card('api', 15, 'spec')],
+      requests: [],
+      links,
+      repos: REPOS,
+      keyOf,
+    });
+    expect(cards.map((one) => [one.ref, one.stage, one.item?.key, one.repos, one.costUsd, one.assignees, one.gateOpen])).toEqual([
+      // #3 in web was linked first: its column stands, though #12 is in Review.
+      ['web#3', 'build', 'acme-7', ['web', 'api'], 2, ['builder', 'lead-reviewer'], true],
+      ['api#15', 'spec', 'acme-8', ['api'], 1, [], false],
+    ]);
+  });
+
+  it('keeps a request card in Intake with its key until its item has an issue on the board', () => {
+    linkId = 0;
+    const requestId = 'abcdef01-0000-4000-8000-000000000000';
+    const links = [link('w-9', 9, 'request', null, null, { requestId }), link('w-10', 10, 'request', null, null, { requestId: '12345678-0000-4000-8000-000000000000' }), link('w-10', 10, 'issue', 'repo-1', 20)];
+    const { requests } = itemCards({
+      cards: [card('api', 20, 'build')],
+      requests: [
+        { repo: 'api', ref: 'request:abcdef01' },
+        { repo: 'api', ref: 'request:12345678' },
+      ],
+      links,
+      repos: REPOS,
+      keyOf,
+    });
+    expect(requests).toEqual([{ repo: 'api', ref: 'request:abcdef01', item: { number: 9, key: 'acme-9' }, repos: ['api'] }]);
+  });
+
+  it('leaves a card as it was, with no key, where nothing is numbered yet', () => {
+    const { cards } = itemCards({ cards: [card('api', 12, 'build')], requests: [], links: [], repos: REPOS, keyOf });
+    expect(cards).toEqual([{ ...card('api', 12, 'build'), item: null, repos: ['api'] }]);
+  });
+
+  it('makes a pull request no issue claims a card in Review while open, and in Done for a while once merged or closed', () => {
+    linkId = 0;
+    const links = [
+      link('w-1', 1, 'pull', 'repo-1', 40, { title: 'A person’s fix' }),
+      link('w-2', 2, 'pull', 'repo-1', 41, { state: 'merged' }),
+      link('w-3', 3, 'pull', 'repo-1', 42, { state: 'closed', openedAt: new Date(NOW.getTime() - (LONE_PULL_DONE_DAYS + 1) * 86_400_000).toISOString() }),
+      link('w-4', 4, 'issue', 'repo-1', 5),
+      link('w-4', 4, 'pull', 'repo-1', 43),
+    ];
+    expect(lonePulls(links, REPOS, NOW).map((pull) => [pull.ref, pull.stage, pull.title])).toEqual([
+      ['api#40', 'review', 'A person’s fix'],
+      ['api#41', 'done', 'pull 41'],
+    ]);
+  });
+
+  it('gives a lone pull request’s card the cost and people of its own tasks', () => {
+    const task = { ...triage('api#40', 'running'), botId: 'bot-intake', costUsd: 0.5 };
+    const work = boardWork({
+      issues: [],
+      tasks: [task],
+      bots: [{ id: 'bot-intake', name: 'lead-reviewer' }],
+      repos: [{ id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {} }],
+      gates: [],
+      stallEvents: [],
+      requests: [],
+      now: NOW,
+      pulls: [{ ref: 'api#40', number: 40 }],
+    });
+    expect(work.byRef.get('api#40')).toMatchObject({ number: 40, prNumber: 40, costUsd: 0.5, assignees: ['lead-reviewer'] });
   });
 });

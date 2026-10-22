@@ -189,6 +189,8 @@ vi.mock('@openadlc/db', () => ({
     ),
   },
   threads: { listOpenGates: vi.fn(async () => []) },
+  // Not numbered: the board as it was before work items, unless a test numbers it.
+  workItems: { isNumbered: vi.fn(async () => false), allLinks: vi.fn(async () => []) },
 }));
 
 let bridge: Server;
@@ -252,6 +254,38 @@ describe('GET /v1/board', () => {
       reviewRound: 2,
       stalledAfterRounds: null,
     });
+  });
+
+  it('shows one card per work item, on the board of every repository it has a link in and once on all of them', async () => {
+    const { workItems } = await import('@openadlc/db');
+    const link = (id: number, itemId: string, itemNumber: number, kind: string, repoId: string, number: number, extra: Record<string, unknown> = {}) => ({
+      id, itemId, itemNumber, kind, repoId, number, requestId: null, linkedBy: null, title: `${kind} ${number}`, state: 'open', url: null, openedAt: new Date().toISOString(), ...extra,
+    });
+    const links = [
+      link(1, 'w-5', 5, 'issue', 'repo-1', 12),
+      link(2, 'w-5', 5, 'pull', 'repo-1', 31),
+      // A pull request in a second repository, linked by hand to the same work.
+      link(3, 'w-5', 5, 'pull', 'repo-2', 9, { linkedBy: 'janedoe' }),
+      link(4, 'w-6', 6, 'issue', 'repo-1', 16),
+      // A person's pull request that closes no issue.
+      link(5, 'w-7', 7, 'pull', 'repo-2', 50, { title: 'Fix a typo', state: 'open' }),
+    ];
+    const read = async (repo: string) => {
+      vi.mocked(workItems.isNumbered).mockResolvedValueOnce(true);
+      vi.mocked(workItems.allLinks).mockResolvedValueOnce(links as never);
+      const board = (await (await fetch(`${bridgeUrl}/v1/board?repo=${repo}`)).json()) as { columns: { stage: string; cards: { ref: string; item?: { key: string } | null; repos?: string[] }[] }[] };
+      return board.columns.flatMap((column) => column.cards.map((card) => [column.stage, card.ref, card.item?.key ?? null, card.repos ?? []]));
+    };
+
+    expect(await read('all')).toEqual([
+      ['build', 'openadlc-testbed#16', 'W-6', ['openadlc-testbed']],
+      ['review', 'openadlc-testbed#12', 'W-5', ['openadlc-testbed', 'website']],
+      ['review', 'website#50', 'W-7', ['website']],
+    ]);
+    expect(await read('website')).toEqual([
+      ['review', 'openadlc-testbed#12', 'W-5', ['openadlc-testbed', 'website']],
+      ['review', 'website#50', 'W-7', ['website']],
+    ]);
   });
 
   it('names each repository with the colour it is told apart by', async () => {
