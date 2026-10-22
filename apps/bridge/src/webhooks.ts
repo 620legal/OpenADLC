@@ -134,6 +134,8 @@ interface WebhookPayload {
     labels: { name: string }[];
     pull_request?: unknown;
     state?: string;
+    /** When it closed, by GitHub's clock: the same on a late or resent delivery. */
+    closed_at?: string | null;
     /** `id` is the account's, which a login in `humans` is pinned to (`human-ids.ts`). */
     user?: { login: string; id?: number };
     author_association?: string;
@@ -151,6 +153,8 @@ interface WebhookPayload {
     /** Once merged: the commit the merge made on the base branch, which is what deploys. */
     merge_commit_sha?: string | null;
     merged_by?: { login: string } | null;
+    /** When it closed or merged, by GitHub's clock: the same on a late or resent delivery. */
+    closed_at?: string | null;
     labels: { name: string }[];
     html_url: string;
     user?: { login: string; id?: number };
@@ -671,7 +675,7 @@ export class Webhooks {
    */
   async learnIssue(
     repo: { id: string; name: string; fullName?: string },
-    issue: { number: number; title: string; body: string | null; htmlUrl: string; labels: readonly string[]; state?: string },
+    issue: { number: number; title: string; body: string | null; htmlUrl: string; labels: readonly string[]; state?: string; closedAt?: string | null },
     action?: string,
     /** Who changed it, from the delivery; reconcile has nobody to name. */
     sender?: string | null,
@@ -695,7 +699,8 @@ export class Webhooks {
       const finished = (stage: string | null | undefined) => stage === 'merged' || stage === 'done';
       const known = await (async () => issues.getIssue(repo.id, issue.number))().catch(() => null);
       let how: HowClosed | undefined;
-      if (!finished(stageFromLabels(issue.labels)) && !finished(known?.stage)) {
+      const wasFinished = finished(stageFromLabels(issue.labels)) || finished(known?.stage);
+      if (!wasFinished) {
         // Only a row already on the board: one for a closed issue is not made.
         if (known) await issues.setIssueLabels(repo.id, issue.number, issue.labels.filter((label) => label !== 'start:now'));
         // Not one whose abandon is under way: the bridge's own label write is
@@ -715,9 +720,19 @@ export class Webhooks {
       // or Done included: a person's move or label may have put it there, and
       // nothing stopped its work. Only the close itself, not a later delivery
       // about an issue that is closed.
+      // Said as landed only when it did: a close GitHub could not say more
+      // about is only a close.
       if (action === 'closed') {
-        const why = how === 'abandoned' ? ABANDONED_STOP : alreadyLanded(`${repo.name}#${issue.number}`);
-        await this.stopPausedOn(repo.name, [issue.number, known?.prNumber ?? null], why, sender ?? null);
+        const why =
+          how === 'abandoned'
+            ? ABANDONED_STOP
+            : wasFinished || how
+              ? alreadyLanded(`${repo.name}#${issue.number}`)
+              : `${repo.name}#${issue.number} was closed`;
+        await this.stopPausedOn(repo.name, [issue.number, known?.prNumber ?? null], why, sender ?? null, {
+          closedAt: issue.closedAt ?? null,
+          ignored: hasIgnoreLabel(issue.labels) || hasIgnoreLabel(known?.labels),
+        });
       }
       return;
     }
@@ -1318,6 +1333,7 @@ export class Webhooks {
         htmlUrl: issue.html_url,
         labels: issue.labels.map((label) => label.name),
         ...(issue.state ? { state: issue.state } : {}),
+        ...(issue.closed_at ? { closedAt: issue.closed_at } : {}),
       },
       payload.action,
       payload.sender?.login ?? null,
@@ -1777,13 +1793,30 @@ export class Webhooks {
    * a task this call stopped: a redelivery, or a second path to the same close,
    * finds nothing paused and says nothing.
    */
-  private async stopPausedOn(repoName: string, numbers: readonly (number | null)[], why: string, closedBy: string | null): Promise<void> {
+  private async stopPausedOn(
+    repoName: string,
+    numbers: readonly (number | null)[],
+    why: string,
+    closedBy: string | null,
+    /**
+     * `closedAt` is when the delivery says the subject closed. A task started
+     * after it is work the close made — QA on the merged pull request, which
+     * sits on `repo#PR` and asks its questions there — and is left alone: a
+     * late `closed` delivery, or one `redeliverFailed` sends again on each
+     * reconcile, stopped it. `ignored` is an issue labelled `openadlc:ignore`,
+     * which the crew does not write on: its work is stopped and nothing said.
+     */
+    { closedAt = null, ignored = false }: { closedAt?: string | null; ignored?: boolean } = {},
+  ): Promise<void> {
     if (!this.stopTask) return;
     const subjects = [...new Set(numbers.filter((n): n is number => typeof n === 'number' && n > 0))].map((n) => `${repoName}#${n}`);
     if (subjects.length === 0) return;
     const closers = await this.closersOf(closedBy);
+    const closed = closedAt ? Date.parse(closedAt) : NaN;
+    const startedAfter = (task: { createdAt?: string | null }): boolean =>
+      Number.isFinite(closed) && Boolean(task.createdAt) && Date.parse(task.createdAt!) > closed;
     const paused = (await (async () => tasks.listTasksOnSubjects(subjects))().catch(() => [])).filter(
-      (task) => task.state === 'paused' && !closers.has(task.botId),
+      (task) => task.state === 'paused' && !closers.has(task.botId) && !startedAfter(task),
     );
     const stopped = new Map<string, { botId: string; kind: string }[]>();
     for (const task of paused) {
@@ -1807,7 +1840,8 @@ export class Webhooks {
       const number = Number(subjectRef.slice(subjectRef.lastIndexOf('#') + 1));
       const named = which.map(({ botId, kind }) => `- ${crew.find((bot) => bot.id === botId)?.name ?? 'a bot'}'s ${kind} task`);
       console.log(`[bridge] ${subjectRef}: stopped ${which.length} paused task(s): ${why}`);
-      if (!record || !client) continue;
+      if (!record || !client || ignored) continue;
+      if (hasIgnoreLabel((await (async () => issues.getIssue(record.id, number))().catch(() => null))?.labels)) continue;
       await client
         .comment(
           record.fullName,
@@ -1817,7 +1851,9 @@ export class Webhooks {
             '',
             ...named,
             '',
-            'A question it was waiting on is closed unanswered, and its computer is taken down. Reopen the issue to start its stage again.',
+            // Reopening brings back only an abandoned issue (`revive`); after
+            // a merge there is no stage to start again.
+            `A question it was waiting on is closed unanswered, and its computer is taken down.${why === ABANDONED_STOP ? ' Reopening it brings the work back.' : ''}`,
           ].join('\n'),
         )
         .catch((error: unknown) => console.warn(`[bridge] ${subjectRef}: paused work stopped, and not said on GitHub: ${error instanceof Error ? error.message : error}`));
@@ -1893,6 +1929,7 @@ export class Webhooks {
         [pr.number],
         pr.merged ? alreadyLanded(`${repo.name}#${pr.number}`) : 'its pull request closed',
         payload.sender?.login ?? null,
+        { closedAt: pr.closed_at ?? null },
       );
 
       // A lease outlived its implement task to hold the ground this change sits

@@ -76,7 +76,7 @@ import {
   redeliverLatestFailure,
   rulesAppliedPayload,
 } from '@openadlc/github';
-import { REPO_DEFAULTS, buildAppManifest, hasNextLabel, hasPausedLabel, isGitHubLogin, loginCandidates, manifestPostUrl, sameLogin } from '@openadlc/shared';
+import { REPO_DEFAULTS, buildAppManifest, hasIgnoreLabel, hasNextLabel, hasPausedLabel, isGitHubLogin, loginCandidates, manifestPostUrl, sameLogin } from '@openadlc/shared';
 import { refuseWhilePaused } from './pause-work.js';
 import { HttpFailure, Router, STREAMING, WithStatus } from './router.js';
 import { RequestQueue, stillTried, withPositions } from './request-queue.js';
@@ -394,13 +394,20 @@ const UNFINISHED: readonly TaskState[] = ['queued', 'running', 'paused'];
  *
  * `stopped` says whether this call asked hostd to cancel: false for a task
  * that had already ended, so a caller saying what it stopped says it once.
+ *
+ * `untag` takes `needs-human` off the task's issue or pull request, which
+ * asking the question put on it and only an answer took off (`Gates.close`):
+ * left on after a Stop, the dispatcher would not lease the issue again and
+ * the merge line would hold the pull request, with no card saying why. It is
+ * asked by the same rule as an answer: the question this stop closed put the
+ * label there, and no other question waits on the subject.
  */
 export async function stopTask(
   taskId: string,
   actor: string,
   note: string,
   hostd: Pick<HostdClient, 'cancelTask'>,
-  options: { unfinished?: boolean } = {},
+  options: { unfinished?: boolean; untag?: (task: { subjectRef: string; repoId: string | null; botId: string }) => Promise<boolean> } = {},
 ): Promise<{ task: string; state: string; releasedLease: string | null; questionsClosed: number; stopped: boolean }> {
   const task = await tasks.getTask(taskId);
   if (!task) throw new HttpFailure(404, 'there is no such task');
@@ -445,8 +452,20 @@ export async function stopTask(
   // closes none.
   let questionsClosed = 0;
   let questionError: string | null = null;
+  let labelTakenOff = false;
   try {
-    questionsClosed = (await threads.expireGatesOfTask(task.id, actor, note || reason)).length;
+    // Read first: once closed, which of them put `needs-human` on is not asked again.
+    const waiting = options.untag ? await threads.listOpenGatesOnSubject(task.subjectRef) : [];
+    const closed = await threads.expireGatesOfTask(task.id, actor, note || reason);
+    questionsClosed = closed.length;
+    const ours = waiting.some((gate) => closed.includes(gate.id) && gate.addedNeedsHuman !== false);
+    const othersWait = waiting.some((gate) => !closed.includes(gate.id));
+    if (options.untag && ours && !othersWait) {
+      labelTakenOff = await options.untag(task).catch((error: unknown) => {
+        console.warn(`[bridge] needs-human is still on ${task.subjectRef}: ${error instanceof Error ? error.message : error}`);
+        return false;
+      });
+    }
   } catch (error) {
     questionError = error instanceof Error ? error.message : String(error);
   }
@@ -510,6 +529,7 @@ export async function stopTask(
       reason,
       lease: releasing?.id ?? null,
       questionsClosed,
+      ...(labelTakenOff ? { needsHumanRemoved: true } : {}),
       ...(requestAbandoned ? { requestAbandoned } : {}),
       ...(leaseError ? { leaseError } : {}),
       ...(questionError ? { questionError } : {}),
@@ -1138,16 +1158,31 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
   });
 
   /**
-   * Ends for good a task that failed, was stopped, or is paused with no
-   * question open, from its card: its session and worktree go through hostd's
-   * own cancel, its lease is let go, and the card with it. Before this the only
-   * way was hostd's internal route by hand, which left the lease holding the
-   * issue and the card offering "Try again" on work somebody had decided not to
-   * finish.
+   * Ends for good a task that failed, was stopped, or is paused, from its card
+   * or its question's: its session and worktree go through hostd's own
+   * cancel, its lease is let go, and the card with it. A question it waited on
+   * is closed unanswered, and `needs-human` comes off as an answer would take
+   * it off; a console request whose triage it was is abandoned. Before this
+   * the only way was hostd's internal route by hand, which left the lease
+   * holding the issue and the card offering "Try again" on work somebody had
+   * decided not to finish.
    */
   router.post('/v1/tasks/:id/stop', async ({ params, identity, body }) => {
     const input = await body<{ reason?: string }>().catch(() => ({}) as { reason?: string });
-    const stopped = await stopTask(params.id ?? '', identity, (input.reason ?? '').trim().slice(0, 300), hostd);
+    // As the task's bot, as the question's label went on, and not on an issue
+    // labelled `openadlc:ignore`, which the crew leaves alone.
+    const untag = async (task: { subjectRef: string; repoId: string | null; botId: string }): Promise<boolean> => {
+      const parsed = parseRef(task.subjectRef);
+      const repo = parsed && task.repoId ? (await repos.listRepos()).find((entry) => entry.id === task.repoId) : null;
+      const bot = repo ? await bots.getBotById(task.botId) : null;
+      const client = bot ? await deps.actors.asBot(bot.name) : null;
+      if (!parsed || !repo || !client) return false;
+      const labels = (await client.getIssue(repo.fullName, parsed.number)).labels;
+      if (hasIgnoreLabel(labels) || !labels.includes('needs-human')) return false;
+      await client.removeLabel(repo.fullName, parsed.number, 'needs-human');
+      return true;
+    };
+    const stopped = await stopTask(params.id ?? '', identity, (input.reason ?? '').trim().slice(0, 300), hostd, { untag });
     deps.health?.runSoon(['idle-lease']);
     return stopped;
   });

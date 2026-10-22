@@ -28,8 +28,10 @@ and such a task may ask after the merge ("testing failed, what next?").
   paused on it, or on the issue's pull request, is stopped, deploy and QA
   included (`Webhooks.stopPausedOn`). The one exception is a task of the
   account that closed it, as `stopWorkOf` already spares it: the SRE closes a
-  failed deploy's issue and then sends the change back. Queued and running tasks
-  keep the rules they had.
+  failed deploy's issue and then sends the change back. A task started after
+  the close, by the delivery's `closed_at`, is not the close's: a late or
+  resent delivery leaves the QA asking on the merged pull request alone.
+  Queued and running tasks keep the rules they had.
 - **The thread is told once.** One comment per subject, as the automation
   account, names what was stopped. It is posted only for a task this close
   actually stopped (`stopTask` returns `stopped: true`). Concurrent deliveries
@@ -38,7 +40,10 @@ and such a task may ask after the merge ("testing failed, what next?").
 - **A person's Stop ends a task waiting on a question.** `POST
   /v1/tasks/:id/stop` no longer refuses one. Every stop closes the task's
   questions unanswered (`expireGatesOfTask`), so an answer resumes nothing, and
-  a question's card offers **Stop**.
+  a question's card offers **Stop**. An answer that claimed its question just
+  before the stop does not start the task again: the resume looks at the task
+  just before hostd is asked (`TaskService.resumeNow`). `needs-human` comes off
+  as an answer would take it off.
 
 ## What this rules out
 
