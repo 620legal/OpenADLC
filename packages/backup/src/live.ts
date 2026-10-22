@@ -1,7 +1,7 @@
 import { bots, credentials, identities, modelAccounts, query, repos, settings, spendingLimits, withTransaction } from '@openadlc/db';
 import { appPrivateKeyRef, credentialKind, getSecretStore, modelAccountRef, signingKeyRef, webhookSecretRef, type SecretStore } from '@openadlc/github';
 import { MESSAGE_KINDS, holdsCredential, isRepoColor, nextRepoColor } from '@openadlc/shared';
-import { archiveSpendingLimit, BackupError, resolveSpendingLimits, type ArchivedAccount, type ArchivedCredential, type ArchivedHistory, type ArchivedRepository, type ArchivedSpendingLimit, type LoginFiles } from './archive.js';
+import { archiveSpendingLimit, BackupError, resolveSpendingLimits, type ArchivedAccount, type ArchivedCredential, type ArchivedHistory, type ArchivedRepository, type ArchivedWorkItem, type ArchivedWorkItemLink, type ArchivedSpendingLimit, type LoginFiles } from './archive.js';
 import type { HistoryIds, RestoreDb, RestoreTarget } from './apply.js';
 import type { InstallFacts } from './clean.js';
 import {
@@ -123,7 +123,7 @@ function onlyWithoutTable<T>(error: unknown, none: T): T {
 }
 
 export async function readHistory(): Promise<ArchivedHistory> {
-  const [threads, messages, audit, ledger, requests, files] = await Promise.all([
+  const [threads, messages, audit, ledger, requests, files, items, links] = await Promise.all([
     query<Record<string, unknown>>(
       `select t.id, b.slot as seat, r.name as repo, t.subject_ref, t.created_at, t.updated_at
          from threads t join bots b on b.id = t.bot_id left join repos r on r.id = t.repo_id
@@ -153,7 +153,35 @@ export async function readHistory(): Promise<ArchivedHistory> {
         where a.subject_ref is not null
         order by a.created_at, a.id`,
     ).catch((error: unknown) => onlyWithoutTable(error, [] as Record<string, unknown>[])),
+    // Work items, from migration 0146: null on a database from before it, so
+    // the archive carries none rather than an empty list.
+    query<Record<string, unknown>>('select id, number, merged_into from work_items order by number').catch((error: unknown) =>
+      onlyWithoutTable(error, null),
+    ),
+    query<Record<string, unknown>>(
+      `select l.work_item_id, l.kind, r.full_name as repo, l.number, l.request_id, l.linked_by, l.title, l.state, l.url, l.opened_at
+         from work_item_links l left join repos r on r.id = l.repo_id
+        order by l.id`,
+    ).catch((error: unknown) => onlyWithoutTable(error, null)),
   ]);
+  const linksOf = new Map<string, ArchivedWorkItemLink[]>();
+  for (const row of links ?? []) {
+    const itemId = String(row.work_item_id);
+    linksOf.set(itemId, [
+      ...(linksOf.get(itemId) ?? []),
+      {
+        kind: row.kind as ArchivedWorkItemLink['kind'],
+        repo: (row.repo as string | null) ?? null,
+        number: row.number === null || row.number === undefined ? null : Number(row.number),
+        requestId: (row.request_id as string | null) ?? null,
+        linkedBy: (row.linked_by as string | null) ?? null,
+        title: String(row.title),
+        state: row.state as ArchivedWorkItemLink['state'],
+        url: (row.url as string | null) ?? null,
+        openedAt: iso(row.opened_at),
+      },
+    ]);
+  }
   return {
     threads: threads.map((row) => ({
       id: String(row.id),
@@ -220,6 +248,16 @@ export async function readHistory(): Promise<ArchivedHistory> {
       uploadedBy: String(row.uploaded_by),
       createdAt: iso(row.created_at),
     })),
+    ...(items === null
+      ? {}
+      : {
+          workItems: items.map((row) => ({
+            id: String(row.id),
+            number: Number(row.number),
+            mergedInto: (row.merged_into as string | null) ?? null,
+            links: linksOf.get(String(row.id)) ?? [],
+          })),
+        }),
   };
 }
 
@@ -908,6 +946,13 @@ export function restoreDb(sql: Sql): UndoDb {
         for (const added of row.rows) ids.attachments!.push(String(added.id));
       }
 
+      if (history.workItems) {
+        const restored = await putWorkItems(sql, history.workItems);
+        counts.workItems = restored.ids.length;
+        counts.renumbered = restored.renumbered;
+        ids.workItems = restored.ids;
+      }
+
       return { ...counts, ids };
     },
 
@@ -963,11 +1008,121 @@ export function restoreDb(sql: Sql): UndoDb {
         [ids.threads],
       );
       await sql.query('delete from attachments where id = any($1::uuid[])', [ids.attachments ?? []]);
+      // The work items it added, with their links, before the requests a link
+      // names. Their numbers are not handed out again: the sequence stays past them.
+      if (ids.workItems?.length) {
+        await sql.query('delete from work_item_links where work_item_id = any($1::uuid[])', [ids.workItems]);
+        await sql.query('update work_items set merged_into = null where merged_into = any($1::uuid[]) and not (id = any($1::uuid[]))', [ids.workItems]);
+        await sql.query('delete from work_items where id = any($1::uuid[])', [ids.workItems]);
+      }
       await sql.query('delete from requests where id = any($1::uuid[])', [ids.requests]);
       await sql.query('delete from audit where id = any($1::bigint[])', [ids.audit]);
       await sql.query('delete from ledger where id = any($1::bigint[])', [ids.ledger]);
     },
   };
+}
+
+/**
+ * The archive's work items, onto this install's: after its requests, which a
+ * link may name. Each item keeps its number when no item here holds it, and
+ * takes the next free one otherwise (`renumbered`). A link to a repository
+ * this install does not manage, to a request it does not have, or to a thing
+ * linked here already is left out. An item left with no links is too, unless
+ * it keeps a key resolving: merged into an item that comes back or is here,
+ * or the item another one that comes back was merged into. `merged_into` is mapped
+ * once every item is in, and the sequence is moved past the highest number,
+ * so no restored number is drawn again.
+ */
+async function putWorkItems(sql: Sql, items: readonly ArchivedWorkItem[]): Promise<{ ids: string[]; renumbered: number }> {
+  const repoIds = new Map(
+    (await sql.query('select id, full_name from repos where removed_at is null')).rows.map((row) => [String(row.full_name).toLowerCase(), String(row.id)]),
+  );
+  const placed = new Map<string, string>();
+  const added: string[] = [];
+  const wanted: { item: ArchivedWorkItem; links: { link: ArchivedWorkItemLink; repoId: string | null }[]; taken: boolean }[] = [];
+
+  for (const item of [...items].sort((a, b) => a.number - b.number)) {
+    // Restored into the install it was taken from: the item is already here.
+    if ((await sql.query('select id from work_items where id = $1', [item.id])).rows[0]) {
+      placed.set(item.id, item.id);
+      continue;
+    }
+    const links: { link: ArchivedWorkItemLink; repoId: string | null }[] = [];
+    for (const link of item.links) {
+      const repoId = link.repo ? (repoIds.get(link.repo.toLowerCase()) ?? null) : null;
+      if (link.kind === 'request') {
+        if (!link.requestId) continue;
+        const here = await sql.query(
+          'select 1 from requests q where q.id = $1 and not exists (select 1 from work_item_links l where l.request_id = q.id)',
+          [link.requestId],
+        );
+        if (here.rows[0]) links.push({ link, repoId: null });
+        continue;
+      }
+      if (!repoId || link.number === null) continue;
+      const linked = await sql.query('select 1 from work_item_links where repo_id = $1 and number = $2', [repoId, link.number]);
+      if (!linked.rows[0]) links.push({ link, repoId });
+    }
+    const taken = Boolean((await sql.query('select 1 from work_items where number = $1', [item.number])).rows[0]);
+    wanted.push({ item, links, taken });
+  }
+  // An item with no links left comes back only to keep a key resolving: one
+  // merged into an item that comes back or is here, or one an item that
+  // comes back was merged into. Anything else of it was elsewhere.
+  const kept = new Set(wanted.filter((entry) => entry.links.length > 0).map((entry) => entry.item.id));
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const { item } of wanted) {
+      if (kept.has(item.id)) continue;
+      const resolves = item.mergedInto !== null && (kept.has(item.mergedInto) || placed.has(item.mergedInto));
+      const joined = wanted.some((other) => kept.has(other.item.id) && other.item.mergedInto === item.id);
+      if (resolves || joined) {
+        kept.add(item.id);
+        grew = true;
+      }
+    }
+  }
+  wanted.splice(0, wanted.length, ...wanted.filter((entry) => kept.has(entry.item.id)));
+
+  // The free numbers first, then the sequence past every number here, then
+  // a new number for each taken one: drawn in between, one could land on an
+  // archived number that was still free.
+  const pastHighest = () =>
+    sql.query(
+      `select setval('work_item_number_seq', m.top)
+         from (select max(number) as top from work_items) m, work_item_number_seq s
+        where m.top > case when s.is_called then s.last_value else s.last_value - 1 end`,
+    );
+  const put = async ({ item, links, taken }: (typeof wanted)[number]) => {
+    const row = await sql.query(
+      taken
+        ? `insert into work_items (id, number) values ($1, nextval('work_item_number_seq')) returning id`
+        : 'insert into work_items (id, number) values ($1, $2) returning id',
+      taken ? [item.id] : [item.id, item.number],
+    );
+    const id = String(row.rows[0]?.id ?? item.id);
+    placed.set(item.id, id);
+    added.push(id);
+    for (const { link, repoId } of links) {
+      await sql.query(
+        `insert into work_item_links (work_item_id, kind, repo_id, number, request_id, linked_by, title, state, url, opened_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [id, link.kind, repoId, link.kind === 'request' ? null : link.number, link.kind === 'request' ? link.requestId : null, link.linkedBy, link.title, link.state, link.url, link.openedAt],
+      );
+    }
+  };
+  for (const one of wanted.filter((entry) => !entry.taken)) await put(one);
+  if (added.length > 0) await pastHighest();
+  for (const one of wanted.filter((entry) => entry.taken)) await put(one);
+  const renumbered = wanted.filter((entry) => entry.taken).length;
+
+  for (const item of items) {
+    const id = placed.get(item.id);
+    const into = item.mergedInto ? placed.get(item.mergedInto) : undefined;
+    if (id && into && added.includes(id)) await sql.query('update work_items set merged_into = $2 where id = $1', [id, into]);
+  }
+  if (added.length > 0) await pastHighest();
+  return { ids: added, renumbered };
 }
 
 /** The install a restore writes: the database, in one transaction, and the secret store; the edges passed in. */

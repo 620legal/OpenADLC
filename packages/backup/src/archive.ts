@@ -28,6 +28,8 @@ export interface ManifestCounts {
    * carries them, so one written before them still reads as it was written.
    */
   attachments?: number;
+  /** Work items, in the history. Counted only by an archive that carries them, as attachments are. */
+  workItems?: number;
 }
 
 /**
@@ -264,6 +266,32 @@ export interface ArchivedAttachment {
 }
 
 /**
+ * A work item (migration 0146): the install's own number for an issue, pull
+ * request or request, kept across a restore so a key a person wrote down
+ * still names the same work. A link names its repository by full name and a
+ * request by id, as the rest of the history does.
+ */
+export interface ArchivedWorkItem {
+  id: string;
+  number: number;
+  mergedInto: string | null;
+  links: ArchivedWorkItemLink[];
+}
+
+export interface ArchivedWorkItemLink {
+  kind: 'issue' | 'pull' | 'request';
+  repo: string | null;
+  number: number | null;
+  requestId: string | null;
+  /** Null when OpenADLC linked it; who linked it by hand otherwise. */
+  linkedBy: string | null;
+  title: string;
+  state: 'open' | 'closed' | 'merged';
+  url: string | null;
+  openedAt: string;
+}
+
+/**
  * One cap from `spending_limits`.
  *
  * A repository cap names the repository (`repository`), and a per-bot cap
@@ -368,6 +396,8 @@ export interface ArchivedHistory {
   requests: ArchivedRequest[];
   /** Absent from an archive written before attachments existed. */
   attachments?: ArchivedAttachment[];
+  /** Absent from an archive written before work items existed; the history read numbers what it lacks. */
+  workItems?: ArchivedWorkItem[];
 }
 
 /**
@@ -844,6 +874,40 @@ function asHistory(value: unknown): ArchivedHistory | null {
             };
           }),
         }),
+    ...(history.workItems === undefined ? {} : { workItems: asArray(history.workItems, 'the work items').map(asWorkItem) }),
+  };
+}
+
+const LINK_KINDS = new Set(['issue', 'pull', 'request']);
+const LINK_STATES = new Set(['open', 'closed', 'merged']);
+
+function asWorkItem(entry: unknown, index: number): ArchivedWorkItem {
+  const row = asObject(entry, `work item ${index}`);
+  const number = asNumber(row.number, `work item ${index} number`);
+  if (!Number.isSafeInteger(number) || number < 1) throw new BackupError(`work item ${index} is numbered ${number}, which is not a work item number`);
+  return {
+    id: asString(row.id, `work item ${index} id`),
+    number,
+    mergedInto: asStringOrNull(row.mergedInto, `work item ${index} mergedInto`),
+    links: asArray(row.links ?? [], `work item ${index} links`).map((link, at) => {
+      const one = asObject(link, `work item ${index} link ${at}`);
+      const what = `work item ${index} link ${at}`;
+      const kind = asString(one.kind, `${what} kind`);
+      if (!LINK_KINDS.has(kind)) throw new BackupError(`${what} is a ${kind}, which is not an issue, a pull request or a request`);
+      const state = asString(one.state, `${what} state`);
+      if (!LINK_STATES.has(state)) throw new BackupError(`${what} is ${state}, which is not open, closed or merged`);
+      return {
+        kind: kind as ArchivedWorkItemLink['kind'],
+        repo: asStringOrNull(one.repo, `${what} repo`),
+        number: asNumberOrNull(one.number, `${what} number`),
+        requestId: asStringOrNull(one.requestId, `${what} requestId`),
+        linkedBy: asStringOrNull(one.linkedBy, `${what} linkedBy`),
+        title: asString(one.title, `${what} title`),
+        state: state as ArchivedWorkItemLink['state'],
+        url: asStringOrNull(one.url, `${what} url`),
+        openedAt: asString(one.openedAt, `${what} openedAt`),
+      };
+    }),
   };
 }
 
@@ -974,6 +1038,7 @@ function countsOf(payload: Payload, version: FormatVersion): ManifestCounts {
     // Only when the archive carries them, so an archive written before them
     // counts what it was written with and still reads.
     ...(payload.history?.attachments ? { attachments: payload.history.attachments.length } : {}),
+    ...(payload.history?.workItems ? { workItems: payload.history.workItems.length } : {}),
   };
   if (version === 2) return v2;
   return { ...v2, identities: payload.identities?.length ?? 0 };
@@ -1096,6 +1161,7 @@ function parseManifest(json: string): BackupManifest {
   }
   if (version >= 3) parsed.counts.identities = count('identities');
   if (version >= 2 && 'attachments' in (counts as Record<string, unknown>)) parsed.counts.attachments = count('attachments');
+  if (version >= 2 && 'workItems' in (counts as Record<string, unknown>)) parsed.counts.workItems = count('workItems');
   return parsed;
 }
 

@@ -51,6 +51,7 @@ import {
   type BackupContents,
   type BackupManifest,
   type BackupSelection,
+  type HistoryCounts,
   type InstallFacts,
   type InstallShape,
   type InstallSnapshot,
@@ -759,20 +760,30 @@ function describeOutcome(plan: RestorePlan, outcome: RestoreOutcome, signIns: re
   for (const line of signIns) {
     if (line.state === 'taken-over') lines.push(`${signInLabel(line)}: checked by using it, and taken over`);
   }
-  if (outcome.history) {
-    const { threads, messages, audit, ledger, requests, attachments } = outcome.history;
-    lines.push(
-      `history: ${[
-        counted(threads, 'thread'),
-        counted(messages, 'message'),
-        counted(audit, 'audit line'),
-        counted(ledger, 'ledger row'),
-        counted(requests, 'request'),
-        ...(attachments ? [counted(attachments, 'attachment')] : []),
-      ].join(', ')}`,
-    );
-  }
+  if (outcome.history) lines.push(historyLine(outcome.history));
   return lines;
+}
+
+/**
+ * What a restore wrote of the history, in one line. A work item whose number
+ * was taken here came back under the next free one, and a person who wrote
+ * the old key down needs to know that it moved.
+ */
+export function historyLine(history: HistoryCounts): string {
+  const { threads, messages, audit, ledger, requests, attachments, workItems, renumbered } = history;
+  const items =
+    workItems === undefined
+      ? []
+      : [`${counted(workItems, 'work item')}${renumbered ? ` (${renumbered} renumbered: their numbers were taken here)` : ''}`];
+  return `history: ${[
+    counted(threads, 'thread'),
+    counted(messages, 'message'),
+    counted(audit, 'audit line'),
+    counted(ledger, 'ledger row'),
+    counted(requests, 'request'),
+    ...(attachments ? [counted(attachments, 'attachment')] : []),
+    ...items,
+  ].join(', ')}`;
 }
 
 /**

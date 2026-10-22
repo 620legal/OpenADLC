@@ -227,6 +227,10 @@ export interface HistoryCounts {
   requests: number;
   /** Files given to the crew. Absent where none were counted. */
   attachments?: number;
+  /** Work items restored. Absent where none were counted. */
+  workItems?: number;
+  /** Of those, how many came back under another number, theirs being taken here. */
+  renumbered?: number;
 }
 
 /** What an archive holds, by group and name: what the walkthrough shows before anything is written. */

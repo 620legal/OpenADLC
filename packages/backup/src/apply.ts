@@ -82,6 +82,8 @@ export interface HistoryIds {
   ledger: string[];
   /** Absent from an undo written before attachments were restored. */
   attachments?: string[];
+  /** The work items a restore added. Absent from an undo written before they were restored. */
+  workItems?: string[];
 }
 
 export interface RestoreTarget {

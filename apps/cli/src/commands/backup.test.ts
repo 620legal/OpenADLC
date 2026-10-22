@@ -38,6 +38,7 @@ import {
   backup,
   confirmed,
   defaultBackupPath,
+  historyLine,
   outputRefusal,
   printable,
   resolveSelection,
@@ -1817,5 +1818,20 @@ describe('a restore with the database down', () => {
     expect(io.text()).toContain('start the stack with openadlc up');
     expect(io.text()).not.toContain('ask-secret');
     expect(process.exitCode).toBe(1);
+  });
+});
+
+describe('the line a restore prints for the history', () => {
+  const written = { threads: 2, messages: 5, audit: 1, ledger: 0, requests: 1 };
+
+  it('counts the work items it brought back, and says how many came back under another number', () => {
+    expect(historyLine({ ...written, workItems: 4, renumbered: 1 })).toBe(
+      'history: 2 threads, 5 messages, 1 audit line, 0 ledger rows, 1 request, 4 work items (1 renumbered: their numbers were taken here)',
+    );
+    expect(historyLine({ ...written, workItems: 1, renumbered: 0 })).toBe('history: 2 threads, 5 messages, 1 audit line, 0 ledger rows, 1 request, 1 work item');
+  });
+
+  it('says nothing of work items for an archive that carried none', () => {
+    expect(historyLine({ ...written, attachments: 3 })).toBe('history: 2 threads, 5 messages, 1 audit line, 0 ledger rows, 1 request, 3 attachments');
   });
 });
