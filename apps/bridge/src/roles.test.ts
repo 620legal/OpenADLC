@@ -97,6 +97,9 @@ describe('every console route says who may call it', () => {
       'GET /v1/self-update',
       'POST /v1/self-update',
       'PATCH /v1/self-update',
+      'POST /v1/items/:subject/links',
+      'DELETE /v1/items/:subject/links/:ref',
+      'POST /v1/items/:subject/merge',
     ]) {
       expect(ROUTE_ROLES[key], key).toBe('admin');
     }

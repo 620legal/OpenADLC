@@ -203,6 +203,21 @@ const db = vi.hoisted(() => {
         const alone = link.kind === 'pull' && link.linked_by === null && !s.links.some((other) => other.work_item_id === link.work_item_id && other.kind === 'issue');
         return { rows: [{ alone }] };
       }
+      if (text === 'select id, number, merged_into from work_items where number = $1') {
+        return { rows: s.items.filter((item) => item.number === Number(p[0])).map((item) => ({ ...item })) };
+      }
+      if (/^select l\.id, l\.work_item_id, .* from work_item_links l where l\.work_item_id = \$1 order by l\.id$/.test(text)) {
+        return { rows: s.links.filter((link) => link.work_item_id === p[0]).sort((a, b) => a.id - b.id).map((link) => ({ ...link })) };
+      }
+      if (/^select l\.id, .*, w\.number as item_number from work_item_links l join work_items w/.test(text)) {
+        return {
+          rows: [...s.links].sort((a, b) => a.id - b.id).map((link) => ({ ...link, item_number: s.items.find((item) => item.id === link.work_item_id)!.number })),
+        };
+      }
+      if (text === 'update work_item_links set work_item_id = $2, linked_by = $3 where id = $1') {
+        Object.assign(s.links.find((one) => one.id === p[0])!, { work_item_id: p[1], linked_by: p[2] });
+        return { rows: [] };
+      }
       throw new Error(`the fake database does not know: ${text}`);
     },
     async transaction<T>(fn: (client: { query: (text: string, params?: unknown[]) => Promise<{ rows: unknown[] }> }) => Promise<T>): Promise<T> {
@@ -230,7 +245,13 @@ vi.mock('../client.js', () => ({
 
 import { withTransaction } from '../client.js';
 import {
+  allLinks,
+  byNumber,
   ensureLink,
+  linkByHand,
+  linksOf,
+  mergeByHand,
+  unlinkByHand,
   firstFiledItem,
   isNumbered,
   itemOf,
@@ -448,5 +469,56 @@ describe('before the first numbering', () => {
     expect((await itemOf({ repoId: REPO, number: 7 }))?.number).toBe(3);
     expect(db.state.links.find((link) => link.request_id === 'req-1')?.title).toBe('Add a dark mode');
     expect(db.state.rows).toEqual([]);
+  });
+});
+
+describe('by hand', () => {
+  beforeEach(numbered);
+
+  it('a link moves a thing from its item, the emptied item points here, and no automatic pass moves it back', async () => {
+    const issue = await ensureLink({ repoId: REPO, number: 5, kind: 'issue' }, snap('#5'), null);
+    const pull = await ensureLink({ repoId: REPO, number: 9, kind: 'pull' }, snap('a pull request'), null);
+    const moved = await linkByHand(issue!.id, { repoId: REPO, number: 9, kind: 'pull' }, snap('a pull request'), 'ada');
+    expect(moved).toMatchObject({ item: { id: issue!.id }, from: { id: pull!.id } });
+    expect(db.state.items.find((item) => item.id === pull!.id)?.merged_into).toBe(issue!.id);
+    expect((await byNumber(pull!.number))?.id).toBe(issue!.id);
+
+    const other = await ensureLink({ repoId: REPO, number: 6, kind: 'issue' }, snap('#6'), null);
+    expect((await ensureLink({ repoId: REPO, number: 9, kind: 'pull' }, snap('pr'), other!.id))?.id).toBe(issue!.id);
+    expect((await linksOf(issue!.id)).map((link) => [link.kind, link.number, link.linkedBy])).toEqual([
+      ['issue', 5, null],
+      ['pull', 9, 'ada'],
+    ]);
+  });
+
+  it('a link of a thing seen nowhere yet is made, and is the person who made it', async () => {
+    const issue = await ensureLink({ repoId: REPO, number: 5, kind: 'issue' }, snap('#5'), null);
+    await linkByHand(issue!.id, { repoId: 'repo-2', number: 3, kind: 'issue' }, snap('another repository'), 'ada');
+    expect((await allLinks()).map((link) => [link.repoId, link.number, link.itemNumber, link.linkedBy])).toEqual([
+      [REPO, 5, 1, null],
+      ['repo-2', 3, 1, 'ada'],
+    ]);
+  });
+
+  it('an unlink gives the thing a new item, and is refused for the only link of an item', async () => {
+    const issue = await ensureLink({ repoId: REPO, number: 5, kind: 'issue' }, snap('#5'), null);
+    await ensureLink({ repoId: REPO, number: 9, kind: 'pull' }, snap('pr'), issue!.id);
+    const fresh = await unlinkByHand(issue!.id, { repoId: REPO, number: 9 }, 'ada');
+    expect(fresh).toMatchObject({ number: 2 });
+    expect((await linksOf(issue!.id)).map((link) => link.number)).toEqual([5]);
+    expect(await itemOf({ repoId: REPO, number: 9 })).toMatchObject({ number: 2 });
+    expect(await unlinkByHand(issue!.id, { repoId: REPO, number: 5 }, 'ada')).toBe('only');
+    expect(await unlinkByHand(issue!.id, { repoId: REPO, number: 9 }, 'ada')).toBeNull();
+  });
+
+  it('a merge puts two items that each hold an issue together, which an automatic merge refuses', async () => {
+    const a = await ensureLink({ repoId: REPO, number: 5, kind: 'issue' }, snap('#5'), null);
+    const b = await ensureLink({ repoId: REPO, number: 6, kind: 'issue' }, snap('#6'), null);
+    expect(await mergeInto(b!.id, a!.id)).toBe(false);
+    expect(await mergeByHand(b!.id, a!.id)).toMatchObject({ id: a!.id });
+    expect((await byNumber(2))?.number).toBe(1);
+    expect((await linksOf(a!.id)).map((link) => link.number)).toEqual([5, 6]);
+    expect(await mergeByHand(b!.id, a!.id)).toBeNull();
+    expect(await byNumber(99)).toBeNull();
   });
 });

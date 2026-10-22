@@ -1,8 +1,20 @@
-import { attachments as attachmentStore, designMemory as designMemoryStore, bots as botStore, issues as issueStore, repos as repoStore, requests as requestStore, tasks as taskStore, threads as threadStore } from '@openadlc/db';
+import {
+  attachments as attachmentStore,
+  designMemory as designMemoryStore,
+  bots as botStore,
+  issues as issueStore,
+  repos as repoStore,
+  requests as requestStore,
+  settings as settingsStore,
+  tasks as taskStore,
+  threads as threadStore,
+  workItems as workItemStore,
+} from '@openadlc/db';
 import { BOT_ROLES, hasNextLabel, hasPausedLabel, roleLabel, type BotRole, type Gate, type Message, type StageKey, type TaskKind, type TaskState } from '@openadlc/shared';
 import { requestPrefixOf } from './request-context.js';
 import { readHolds } from './item-hold.js';
 import { isActive, issueForSubject, parseRef, subjectsOf, type IssueFacts } from './work.js';
+import { formatKey } from './work-items.js';
 
 /**
  * A work item: one request, the issue it became, and that issue's pull
@@ -62,6 +74,78 @@ export interface Item<I extends IssueRow = IssueRow, R extends RequestRow = Requ
   repo: string | null;
   /** Each member's subject, for routing a message to the one a role works on. */
   refs: { request: string | null; issue: string | null; pullRequest: string | null };
+  /** Its numbered work item, once the install is numbered (docs/adr/0009-work-items.md). */
+  workItem?: ItemWorkItem | null;
+  /** Everything linked to its work item, in the order it was linked. */
+  links?: ItemLink[];
+}
+
+/** A work item's number and key, and the item a merged one's key came from. */
+export interface ItemWorkItem {
+  id: string;
+  number: number;
+  /** `<organization>-<n>`, or `W-<n>` with no organization set: for display; the number is the identity. */
+  key: string;
+  /** The number asked for, when it was merged into this one. */
+  mergedFrom: number | null;
+}
+
+/** One issue, pull request or request linked to a work item, as its page lists it. */
+export interface ItemLink {
+  kind: 'issue' | 'pull' | 'request';
+  /** The repository, by name; null for a request. */
+  repo: string | null;
+  number: number | null;
+  /** What tasks and threads on it are filed under: `repo#n`, `request:<id8>`. */
+  ref: string;
+  title: string;
+  state: 'open' | 'closed' | 'merged';
+  /** Where it stands on the board; null for a request filed as an issue, which stands where its issue does. */
+  stage: StageKey | null;
+  url: string | null;
+  /** Who linked it by hand; null when OpenADLC did. */
+  linkedBy: string | null;
+}
+
+/**
+ * A work item's key, read from what a person typed or a link carried: the
+ * number, with any prefix and in any case (`acme-128`, `W-128`, `w-128`,
+ * `128`), the prefix being for display only. Null for a subject, which
+ * has `#`, `:` or `@` in it, or anything else.
+ */
+export function parseItemKey(subject: string): number | null {
+  const trimmed = subject.trim();
+  if (!trimmed || /[#:@\s/]/.test(trimmed)) return null;
+  const match = /^(?:[A-Za-z0-9][A-Za-z0-9_.-]*-)?(\d+)$/.exec(trimmed);
+  if (!match) return null;
+  const number = Number(match[1]);
+  return Number.isSafeInteger(number) && number > 0 ? number : null;
+}
+
+/** The key a number is shown as on this install. */
+export function itemKey(number: number, organization: string | null): string {
+  return formatKey(number, organization?.trim() || 'W');
+}
+
+/**
+ * Where a linked thing stands. An issue stands where its row says, or
+ * Intake before one is read, Done once closed. A pull request stands with
+ * the issue it is recorded on, else in Review while open and Done once
+ * merged or closed: closed unmerged reads as abandoned.
+ */
+export function linkStage(
+  link: Pick<workItemStore.Link, 'kind' | 'number' | 'state'> & { repo: string | null },
+  issues: readonly Pick<IssueFacts, 'repoName' | 'number' | 'prNumber' | 'stage'>[],
+  request?: { issueNumber: number | null; state: string } | null,
+): StageKey | null {
+  if (link.kind === 'request') return request && (request.issueNumber !== null || request.state === 'filed') ? null : 'intake';
+  const inRepo = issues.filter((issue) => issue.repoName === link.repo);
+  if (link.kind === 'issue') {
+    const row = inRepo.find((issue) => issue.number === link.number);
+    return row?.stage ?? (link.state === 'open' ? 'intake' : 'done');
+  }
+  const owner = inRepo.find((issue) => issue.prNumber === link.number);
+  return owner?.stage ?? (link.state === 'open' ? 'review' : 'done');
 }
 
 /**
@@ -238,6 +322,10 @@ export interface ItemView {
    * conversation, and each of `roles` by its role (`messageRoutes`).
    */
   routes?: Record<string, ItemRoutePreview>;
+  /** Its work item's number and key; null before the install is numbered. */
+  workItem: { number: number; key: string; mergedFrom: number | null } | null;
+  /** Every issue, pull request and request linked to it; empty before the install is numbered. */
+  links: ItemLink[];
 }
 
 export interface ItemRows {
@@ -371,9 +459,10 @@ export function itemView(rows: ItemRows): ItemView {
   return {
     key: item.key,
     subjects: item.subjects,
-    title: issue?.title ?? (request ? firstLine(request.text) : item.key),
+    // A pull request alone on its item has no issue row: its link says what it is called and where it stands.
+    title: issue?.title ?? (request ? firstLine(request.text) : (item.links?.[0]?.title ?? item.key)),
     repo: item.repo,
-    stage: issue?.stage ?? (request ? 'intake' : null),
+    stage: issue?.stage ?? (request ? 'intake' : (item.links?.[0]?.stage ?? null)),
     costUsd: Math.round(tasks.reduce((total, task) => total + task.costUsd, 0) * 10_000) / 10_000,
     request: request
       ? {
@@ -408,6 +497,8 @@ export function itemView(rows: ItemRows): ItemView {
     tasks: itemTasks,
     attachments: [...(rows.attachments ?? [])],
     designMemory: [...(rows.designMemory ?? [])],
+    workItem: item.workItem ? { number: item.workItem.number, key: item.workItem.key, mergedFrom: item.workItem.mergedFrom } : null,
+    links: [...(item.links ?? [])],
   };
 }
 
@@ -567,6 +658,94 @@ export function messageRoutes(
 export async function resolveItem(subject: string): Promise<{ item: Item; repo: RepoRow | null } | null> {
   const trimmed = subject.trim();
   const repoList = await repoStore.listRepos({ includeRemoved: true });
+  // Before the first numbering commits nothing reads the work items as
+  // authoritative, and every item resolves as it did before them. A table
+  // a release behind is the same.
+  if (await (async () => workItemStore.isNumbered())().catch(() => false)) {
+    const asked = parseItemKey(trimmed);
+    const found = await workItemFor(trimmed, asked, repoList);
+    if (found) return withWorkItem(found, asked, repoList);
+    if (asked !== null) return null;
+  }
+  return resolveBySubject(trimmed, repoList);
+}
+
+/** The work item a key or a linked subject names, merges followed; null when it names none. */
+async function workItemFor(subject: string, asked: number | null, repoList: readonly RepoRow[]): Promise<workItemStore.WorkItem | null> {
+  if (asked !== null) return workItemStore.byNumber(asked);
+  const prefix = requestPrefixOf(subject);
+  if (prefix) {
+    const request = await requestStore.findRequestByPrefix(prefix).catch(() => null);
+    return request ? workItemStore.itemOf({ requestId: request.id }) : null;
+  }
+  const parsed = parseRef(subject);
+  const repo = parsed ? repoList.find((one) => one.name === parsed.repo) : undefined;
+  return parsed && repo ? workItemStore.itemOf({ repoId: repo.id, number: parsed.number }) : null;
+}
+
+/**
+ * The item read through its work item: the conversation is its first
+ * issue's, else its request's, else its first pull request's, as before
+ * work items, and its subjects are every link's besides, so the tasks,
+ * threads and costs of a second repository's issue are on it too.
+ */
+async function withWorkItem(
+  workItem: workItemStore.WorkItem,
+  asked: number | null,
+  repoList: readonly RepoRow[],
+): Promise<{ item: Item; repo: RepoRow | null } | null> {
+  const [rows, organization] = await Promise.all([
+    workItemStore.linksOf(workItem.id),
+    settingsStore.getSetting('organization').catch(() => null),
+  ]);
+  const repoName = (id: string | null) => repoList.find((one) => one.id === id)?.name ?? null;
+  const refOf = (link: workItemStore.Link) => (link.kind === 'request' ? requestSubject(link.requestId!) : `${repoName(link.repoId)}#${link.number}`);
+  const first = rows.find((link) => link.kind === 'issue' && repoName(link.repoId)) ?? rows.find((link) => link.kind === 'request') ?? rows.find((link) => repoName(link.repoId));
+  const base = first ? await resolveBySubject(refOf(first), repoList) : null;
+  if (!base) return null;
+
+  const names = [...new Set(rows.map((link) => repoName(link.repoId)).filter((name): name is string => Boolean(name)))];
+  const issueRows = (await Promise.all(names.map((name) => issueStore.listIssues(name)))).flat();
+  const requests = await Promise.all(
+    rows.map((link) => (link.kind === 'request' ? requestStore.getRequest(link.requestId!).catch(() => null) : Promise.resolve(null))),
+  );
+  const links: ItemLink[] = rows.flatMap((link, index) => {
+    const repo = repoName(link.repoId);
+    if (link.kind !== 'request' && !repo) return [];
+    return [
+      {
+        kind: link.kind,
+        repo,
+        number: link.number,
+        ref: refOf(link),
+        title: link.title,
+        state: link.state,
+        stage: linkStage({ ...link, repo }, issueRows, requests[index]),
+        url: link.url,
+        linkedBy: link.linkedBy,
+      },
+    ];
+  });
+  const linkSubjects = links.flatMap((link) => {
+    const issue = link.kind === 'issue' ? issueRows.find((one) => one.repoName === link.repo && one.number === link.number) : undefined;
+    return issue ? subjectsOf(issue) : [link.ref];
+  });
+  const item: Item = {
+    ...base.item,
+    subjects: [...new Set([...base.item.subjects, ...linkSubjects])],
+    workItem: {
+      id: workItem.id,
+      number: workItem.number,
+      key: itemKey(workItem.number, organization),
+      mergedFrom: asked !== null && asked !== workItem.number ? asked : null,
+    },
+    links,
+  };
+  return { item, repo: base.repo };
+}
+
+/** An item by the subject of one of its members, as before work items. */
+async function resolveBySubject(trimmed: string, repoList: readonly RepoRow[]): Promise<{ item: Item; repo: RepoRow | null } | null> {
   let requestRows: requestStore.RequestRecord[] = [];
   let ref = trimmed;
 

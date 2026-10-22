@@ -309,4 +309,8 @@ export interface BoardCard {
   url: string | null;
   labels: string[];
   updatedAt: string;
+  /** Its work item's number and key (docs/adr/0009-work-items.md); null before the install is numbered. */
+  item?: { number: number; key: string } | null;
+  /** Every repository its work item has a link in, its own first. */
+  repos?: string[];
 }

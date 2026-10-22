@@ -30,6 +30,7 @@ import {
   tasks,
   threads,
   withAdvisoryLock,
+  workItems,
 } from '@openadlc/db';
 import {
   ADDABLE_SEAT_ROLES,
@@ -110,12 +111,12 @@ import { registerHealthRoutes } from './health/routes.js';
 import { registerSigningKeyRoutes } from './signing-key-routes.js';
 import { SubjectTitles } from './subject-titles.js';
 import { retryTask } from './task-retry.js';
-import { readBoardWork } from './board-work.js';
+import { itemCards, lonePulls, readBoardWork } from './board-work.js';
 import { describeSubject } from './thread-view.js';
 import { sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
-import { registerItemRoutes } from './item-routes.js';
-import { itemOf, requestSubject } from './items.js';
+import { defaultItemLinkDeps, registerItemLinkRoutes, registerItemRoutes } from './item-routes.js';
+import { itemKey, itemOf, requestSubject } from './items.js';
 import { readSeatPauses } from './seat-pause.js';
 import type { HealthAction } from '@openadlc/shared';
 import { attachmentIds, claimableFor, claimWindowStart, registerAttachmentRoutes } from './attachment-routes.js';
@@ -631,14 +632,27 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
   router.get('/v1/board', async ({ query }) => {
     const repoFilter = query.get('repo');
     const repoName = !repoFilter || repoFilter === 'all' ? undefined : repoFilter;
-    const [cards, crew, repoList, openGates, issueList, requestList] = await Promise.all([
-      issues.boardCards(repoName),
+    // Once the install is numbered, a card is a work item's, and an item with
+    // a link in this repository is on its board even when its first issue is
+    // in another: every repository's cards are read, and filtered after
+    // they are grouped. Before, the board is what it was.
+    // A table a release behind is an install not numbered, not a board that fails.
+    const numbered = await (async () => workItems.isNumbered())().catch(() => false);
+    const readFor = numbered ? undefined : repoName;
+    const [cards, crew, repoList, openGates, issueList, requestList, links, organization] = await Promise.all([
+      issues.boardCards(readFor),
       bots.listBots(),
       repos.listRepos(),
       threads.listOpenGates(),
-      issues.listIssues(repoName),
+      issues.listIssues(readFor),
       requests.listRequests(200),
+      numbered ? workItems.allLinks() : Promise.resolve([] as workItems.Link[]),
+      numbered ? settings.getSetting('organization').catch(() => null) : Promise.resolve(null),
     ]);
+    // Nor is an issue labelled `openadlc:ignore`, nor its pull request, nor
+    // the request it was filed from: the board is the crew's work.
+    const ignored = ignoredSubjects(issueList);
+    const pulls = lonePulls(links, repoList).filter((pull) => !ignored.has(pull.ref));
 
     // What each card has cost and who is on it now, and which bots are working
     // or waiting on a person: what a card and a column say in words.
@@ -649,6 +663,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       gates: openGates,
       // Each queued request's place as the queue walks it: one source for the number the 202 gave.
       requests: await withPositions(requestList),
+      pulls,
     });
 
     // What is waiting to land, and what the bridge is doing about it. A person
@@ -658,17 +673,51 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     // The repositories OpenADLC works in. One removed keeps its issues and its
     // pull requests as history; they are not the board's any more.
     const workedIn = new Set(repoList.map((entry) => entry.name));
-    // Nor is an issue labelled `openadlc:ignore`, nor its pull request, nor
-    // the request it was filed from: the board is the crew's work.
-    const ignored = ignoredSubjects(issueList);
     const landing = (await mergeLines.line(named?.id)).filter(
       (entry) => workedIn.has(entry.repoName) && !ignored.has(`${entry.repoName}#${entry.prNumber}`),
     );
-    const onBoard = cards.filter((card) => workedIn.has(card.repo) && !ignored.has(card.ref));
+    const holds = await readHolds();
+    const issueCards = cards
+      .filter((card) => workedIn.has(card.repo) && !ignored.has(card.ref))
+      .map((card) => {
+        const extras = work.byRef.get(card.ref);
+        // Held from the board, and who did; the one its repository builds next.
+        const marks = {
+          held: hasPausedLabel(card.labels) ? (holds[card.ref] ?? { by: 'a person on GitHub', at: '', why: null }) : null,
+          next: hasNextLabel(card.labels),
+        };
+        // Who is on it now, the pull request's reviewers included; the store
+        // only knew the tasks filed under the issue itself.
+        return extras ? { ...card, ...extras, assignees: extras.assignees, ...marks } : { ...card, ...marks };
+      });
+    // A pull request no issue claims, a person's included, is a card of its
+    // own; with no issue there is nothing a board move could act on.
+    const pullCards = pulls.map((pull) => ({
+      repo: pull.repo,
+      ref: pull.ref,
+      title: pull.title,
+      stage: pull.stage as StageKey,
+      assignees: [] as string[],
+      gateOpen: false,
+      url: pull.url,
+      labels: [] as string[],
+      updatedAt: pull.openedAt,
+      ...work.byRef.get(pull.ref),
+      held: null,
+      next: false,
+      pull: true as const,
+    }));
+    const grouped = itemCards({
+      cards: [...issueCards, ...pullCards],
+      requests: work.requests.filter((card) => !(card.issueNumber !== null && ignored.has(`${card.repo}#${card.issueNumber}`))),
+      links,
+      repos: repoList,
+      keyOf: (number) => itemKey(number, organization),
+    });
+    const shownHere = (card: { repo: string; repos: string[] }) => !repoName || card.repo === repoName || card.repos.includes(repoName);
+    const onBoard = grouped.cards.filter(shownHere);
     // A request nobody has named a repository for yet is only on the board of all of them.
-    const inFlight = work.requests
-      .filter((card) => (repoName ? card.repo === repoName : !card.repo || workedIn.has(card.repo)))
-      .filter((card) => !(card.issueNumber !== null && ignored.has(`${card.repo}#${card.issueNumber}`)));
+    const inFlight = grouped.requests.filter((card) => (repoName ? shownHere(card) : !card.repo || workedIn.has(card.repo)));
 
     const staffing: Record<string, string[]> = {
       intake: crew.filter((bot) => bot.role === 'intake').map((bot) => bot.name),
@@ -699,7 +748,6 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       ),
     );
     const shipsByMerging = inView.length > 0 && byMerging.every((answer) => answer === true);
-    const holds = await readHolds();
 
     const columns = STAGE_KEYS.map((stage) => ({
       stage,
@@ -718,19 +766,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       cards: [
         // What intake is asking about or writing up, before it is an issue.
         ...(stage === 'intake' ? inFlight : []),
-        ...onBoard
-          .filter((card) => card.stage === stage)
-          .map((card) => {
-            const extras = work.byRef.get(card.ref);
-            // Held from the board, and who did; the one its repository builds next.
-            const marks = {
-              held: hasPausedLabel(card.labels) ? (holds[card.ref] ?? { by: 'a person on GitHub', at: '', why: null }) : null,
-              next: hasNextLabel(card.labels),
-            };
-            // Who is on it now, the pull request's reviewers included; the store
-            // only knew the tasks filed under the issue itself.
-            return extras ? { ...card, ...extras, assignees: extras.assignees, ...marks } : { ...card, ...marks };
-          }),
+        ...onBoard.filter((card) => card.stage === stage),
       ],
     }));
 
@@ -976,6 +1012,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
   });
 
   registerItemRoutes(router, deps);
+  registerItemLinkRoutes(router, defaultItemLinkDeps(() => asAutomation(deps.actors, config)));
   registerAttachmentRoutes(router);
   registerDesignMemoryRoutes(router);
 
