@@ -10,6 +10,7 @@ import { listEventsOfType } from './audit.js';
 import {
   addTaskCost,
   claimAutoRetry,
+  countRunning,
   createTask,
   getTask,
   countSeatSlotsInUse,
@@ -26,6 +27,7 @@ import {
   noteStoppedByPerson,
   pausedWithAnswer,
   raiseCostCap,
+  runningSince,
   releaseAutoRetry,
   retakeAutoRetry,
   stopIfRunning,
@@ -412,5 +414,44 @@ describe('adding to what a task cost', () => {
     }
     expect(queryOne).not.toHaveBeenCalled();
     expect(query).not.toHaveBeenCalled();
+  });
+});
+
+describe('the tasks running across the install', () => {
+  it('are counted by the database, not by a listing that stops at 200', async () => {
+    vi.mocked(queryOne).mockResolvedValue({ count: '231' });
+    expect(await countRunning()).toBe(231);
+    expect(String(vi.mocked(queryOne).mock.calls.at(-1)?.[0])).toBe("select count(*)::text as count from tasks where state = 'running'");
+  });
+});
+
+describe('when a running task last began running', () => {
+  it('is its start, or the answer after its pause that resumed it, and nothing when no answer did', async () => {
+    // A card counted from the start, and a task answered a day after it paused read "1 day".
+    vi.mocked(query).mockResolvedValue([
+      { id: 'never-paused', started_at: new Date('2026-09-24T11:00:00.000Z'), paused_at: null, answered_at: null },
+      { id: 'answered', started_at: new Date('2026-09-23T11:00:00.000Z'), paused_at: new Date('2026-09-23T11:30:00.000Z'), answered_at: new Date('2026-09-24T11:50:00.000Z') },
+      { id: 'resumed-unrecorded', started_at: new Date('2026-09-23T11:00:00.000Z'), paused_at: new Date('2026-09-23T11:30:00.000Z'), answered_at: null },
+    ]);
+    const since = await runningSince(['never-paused', 'answered', 'resumed-unrecorded']);
+
+    expect(since).toEqual(
+      new Map([
+        ['never-paused', '2026-09-24T11:00:00.000Z'],
+        ['answered', '2026-09-24T11:50:00.000Z'],
+        ['resumed-unrecorded', null],
+      ]),
+    );
+    const [sql, params] = vi.mocked(query).mock.calls.at(-1)!;
+    const statement = String(sql).replace(/\s+/g, ' ');
+    // Only an answer after the pause resumed it; an older one is one it already went on from.
+    expect(statement).toContain('(select max(g.answered_at) from gates g where g.task_id = t.id and g.answered_at > t.paused_at) as answered_at');
+    expect(statement).toContain("where t.id = any($1::uuid[]) and t.state = 'running'");
+    expect(params).toEqual([['never-paused', 'answered', 'resumed-unrecorded']]);
+  });
+
+  it('asks nothing for no tasks', async () => {
+    expect(await runningSince([])).toEqual(new Map());
+    expect(vi.mocked(query)).not.toHaveBeenCalled();
   });
 });

@@ -110,7 +110,7 @@ import { registerHealthRoutes } from './health/routes.js';
 import { registerSigningKeyRoutes } from './signing-key-routes.js';
 import { SubjectTitles } from './subject-titles.js';
 import { retryTask } from './task-retry.js';
-import { readBoardWork } from './board-work.js';
+import { readBoardActivity, readBoardWork } from './board-work.js';
 import { describeSubject } from './thread-view.js';
 import { sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
@@ -631,17 +631,19 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
   router.get('/v1/board', async ({ query }) => {
     const repoFilter = query.get('repo');
     const repoName = !repoFilter || repoFilter === 'all' ? undefined : repoFilter;
-    const [cards, crew, repoList, openGates, issueList, requestList] = await Promise.all([
+    const [cards, crew, repoList, openGates, issueList, requestList, activeSessions] = await Promise.all([
       issues.boardCards(repoName),
       bots.listBots(),
       repos.listRepos(),
       threads.listOpenGates(),
       issues.listIssues(repoName),
       requests.listRequests(200),
+      sessions.listSessions(),
     ]);
 
-    // What each card has cost and who is on it now, and which bots are working
-    // or waiting on a person: what a card and a column say in words.
+    // What each card has cost and who is on it now, what its running task is
+    // doing, and which bots are working or waiting on a person: what a card
+    // and a column say in words.
     const work = await readBoardWork({
       issues: issueList,
       bots: crew,
@@ -649,6 +651,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       gates: openGates,
       // Each queued request's place as the queue walks it: one source for the number the 202 gave.
       requests: await withPositions(requestList),
+      sessions: activeSessions,
     });
 
     // What is waiting to land, and what the bridge is doing about it. A person
@@ -681,7 +684,6 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       done: [],
     };
 
-    const activeSessions = await sessions.listSessions();
     const working = new Set(
       activeSessions.filter((session) => session.state === 'working').map((session) => session.botId),
     );
@@ -751,7 +753,16 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       waitingOnYou: openGates.length,
       working: activeSessions.filter((session) => session.state === 'working').length,
       idle: activeSessions.filter((session) => session.state === 'idle').length,
+      // Tasks running across the install, which the board counts above its columns.
+      running: work.runningTasks,
     };
+  });
+
+  // What the board polls every few seconds while a card it shows runs: each
+  // running card's work and step, and the count, rather than the whole page.
+  router.get('/v1/board/activity', async ({ query }) => {
+    const repoFilter = query.get('repo');
+    return readBoardActivity(!repoFilter || repoFilter === 'all' ? undefined : repoFilter);
   });
 
   router.get('/v1/bots', async ({ role }) => {

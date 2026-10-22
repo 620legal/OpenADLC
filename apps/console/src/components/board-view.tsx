@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { moveCard } from '@/app/actions';
 import { AppShell, useRole } from '@/components/app-header';
-import { BotAvatar, type AvatarStatus } from '@/components/avatar';
+import { BotAvatar, usePrefersReducedMotion, type AvatarStatus } from '@/components/avatar';
+import { BoardActivityPoll } from '@/components/board-activity-poll';
 import { FirstRun } from '@/components/first-run';
 import { NextIcon, CheckIcon, ChevronDownIcon } from '@/components/icons';
 import { NeedsYou, type OpenBot } from '@/components/needs-you';
@@ -14,8 +15,9 @@ import { ItemView } from '@/components/item-view';
 import { ThreadPanel } from '@/components/thread-panel';
 import type { AttentionItem, Board, BoardCard, BoardColumn, CrewMember, WorkPause } from '@/lib/api';
 import { findBot, labelIn } from '@/lib/bot-label';
+import { withActivity, type BoardActivity } from '@/lib/board-activity';
 import { attemptMove, columnsWithMoves, movesBack, NO_MOVES, reconcile, type MoveState } from '@/lib/board-move';
-import { abandoned, cardBot, cardCost, cardStatus, nextUp, type CardContext, type CardStatus } from '@/lib/card-status';
+import { abandoned, cardBot, cardCost, cardStatus, nextUp, type CardContext, type CardStatus, type StatusTone } from '@/lib/card-status';
 import { cn } from '@/lib/cn';
 import { heldLine, IssueControls } from '@/components/issue-controls';
 import { boardHref, type HeaderData } from '@/lib/header';
@@ -60,7 +62,7 @@ function subtitleOf(column: Pick<BoardColumn, 'stage' | 'shipsByMerging'>, subti
 }
 
 export function BoardView({
-  board,
+  board: read,
   crew,
   repo,
   header,
@@ -98,6 +100,11 @@ export function BoardView({
   dispatching?: boolean;
 }) {
   const admin = useRole() === 'admin';
+  // The board as last read whole, with its running cards as last polled
+  // (`BoardActivityPoll`): their lines follow what each bot is doing between
+  // the reads of the whole page, fifteen seconds apart.
+  const [polled, setPolled] = useState<{ board: Board; activity: BoardActivity } | null>(null);
+  const board = polled && polled.board === read ? withActivity(read, polled.activity) : read;
   // Seeded from `?bot=` so a notification's link opens the thread it names —
   // under the name the bot has now. A link written before it connected carries
   // the seat it has since left for its account's handle. A name that is no
@@ -129,8 +136,8 @@ export function BoardView({
   // Every re-read of the board is the bridge's answer about the cards a move is
   // still being shown for, so it is what retires them.
   useEffect(() => {
-    setMoves((state) => reconcile(state, board.columns));
-  }, [board]);
+    setMoves((state) => reconcile(state, read.columns));
+  }, [read]);
 
   const columns = columnsWithMoves(board.columns, moves);
   const empty = board.columns.every((column) => column.cards.length === 0);
@@ -168,6 +175,7 @@ export function BoardView({
   const context = (card: BoardCard): CardContext => ({
     now,
     said: (name) => labelOf(name).said,
+    role: (name) => labelOf(name).role,
     mergeLine: board.mergeLine,
     pausedRepos: pausedNames,
     dispatching,
@@ -199,9 +207,14 @@ export function BoardView({
     },
   };
 
+  // Tasks running across the install, which the board counts above its
+  // columns. An older bridge says no count, and the board claims nothing.
+  const running = board.running;
+
   const shell = (
     <AppShell page="board" repo={repo} data={header} fill>
       <h1 className="sr-only">Board</h1>
+      <BoardActivityPoll board={read} repo={repo} onActivity={(asked, activity) => setPolled({ board: asked, activity })} />
 
       {paused && (
         <div role="status" className="shrink-0 border-b border-alarm/30 bg-alarm/5 px-4 py-2 md:px-6">
@@ -278,13 +291,15 @@ export function BoardView({
           />
         ) : (
           <>
-            {showRepo && <Legend repositories={repositories} />}
+            {(running !== undefined || showRepo) && (
+              <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1.5 px-4 pt-3.5 md:px-6 md:pt-4">
+                {running !== undefined && <RunningCount count={running} everyRepository={repo !== 'all'} />}
+                {showRepo && <Legend repositories={repositories} />}
+              </div>
+            )}
             <section
               aria-label="Board"
-              className={cn(
-                'hidden min-h-[22rem] flex-1 gap-3 overflow-x-auto px-6 pb-6 md:grid md:grid-cols-[repeat(6,minmax(12.5rem,1fr))]',
-                showRepo ? 'pt-3' : 'pt-4',
-              )}
+              className="hidden min-h-[22rem] flex-1 gap-3 overflow-x-auto px-6 pb-6 pt-3 md:grid md:grid-cols-[repeat(6,minmax(12.5rem,1fr))]"
             >
               {columns.map((column) => (
                 <Column
@@ -345,6 +360,24 @@ export function BoardView({
 }
 
 /**
+ * How many tasks are running across the install, above the columns: a person
+ * looking at a board whose cards had not changed for a while could not tell
+ * whether the crew was working or stuck. Its dot moves only while something
+ * runs, and never for someone who asked for less motion; the count is a
+ * status, so a screen reader hears it when it changes.
+ */
+function RunningCount({ count, everyRepository }: { count: number; everyRepository: boolean }) {
+  const reduced = usePrefersReducedMotion();
+  const tasks = `${count} ${count === 1 ? 'task' : 'tasks'} running${everyRepository ? ' across every repository' : ''}`;
+  return (
+    <p role="status" data-running className={cn('flex items-center gap-1.5 text-[12px]', count > 0 ? 'text-soft' : 'text-dim')}>
+      <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', count > 0 ? ['bg-signal', !reduced && 'working-dot'] : 'bg-dim')} />
+      {count > 0 ? tasks : 'Nothing running'}
+    </p>
+  );
+}
+
+/**
  * Which colour is which repository, above a board that shows them all, each
  * a link to the board with only that one. A phone has no room for it and does
  * not need it: every card there carries its repository's name.
@@ -352,7 +385,7 @@ export function BoardView({
 function Legend({ repositories }: { repositories: readonly RepoLook[] }) {
   const paused = usePausedRepos();
   return (
-    <div className="hidden shrink-0 flex-wrap items-center gap-x-4 gap-y-1.5 px-6 pt-4 md:flex">
+    <div className="hidden flex-wrap items-center gap-x-4 gap-y-1.5 md:flex">
       <span className="text-[12px] text-dim">Every repository:</span>
       <ul aria-label="Repositories on the board" className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
         {repositories.map((repository) => (
@@ -517,13 +550,31 @@ function Staff({
   );
 }
 
+/**
+ * The dot before a card's line. While a task runs on the card it pulses,
+ * slowly, and is read as "working"; under reduced motion it keeps still and
+ * says the same. Every other dot is still and left to the words beside it.
+ *
+ * It is the working green (`signal`), not the bot's own colour, though the
+ * issue asked for that: a bot's colour is a tint made to sit behind its
+ * avatar's initials, close to the card in lightness, and as a 6px dot it is
+ * about 1.5:1 against the card in the dark mode and 1.2:1 in the light, under
+ * the 3:1 a mark has to have to be seen (WCAG 1.4.11). The bot's avatar, in
+ * its colour, is in the row above the line.
+ */
+function StatusDot({ tone, live }: { tone: StatusTone; live: boolean }) {
+  const reduced = usePrefersReducedMotion();
+  if (!live) return <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', DOT[tone])} />;
+  return <span role="img" aria-label="working" data-live className={cn('size-1.5 shrink-0 rounded-full', DOT[tone], !reduced && 'working-dot')} />;
+}
+
 function StatusLine({ status }: { status: CardStatus }) {
   return (
     <span
       data-status
       className={cn('flex items-center gap-1.5 text-[11.5px] leading-snug', status.mark === 'check' ? 'text-muted' : TONE[status.tone])}
     >
-      {status.mark === 'dot' && <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', DOT[status.tone])} />}
+      {status.mark === 'dot' && <StatusDot tone={status.tone} live={Boolean(status.live)} />}
       {status.mark === 'check' && <CheckIcon size={12} className="shrink-0 text-signal" />}
       {status.href ? (
         <a href={status.href} target="_blank" rel="noreferrer" className="relative z-10 hover:text-link hover:underline">
@@ -718,7 +769,7 @@ function PhoneStages({ columns, now, cards }: { columns: BoardColumn[]; now: str
   const { cards: shown, older } = visibleCards(column, now);
 
   return (
-    <div className="flex flex-col gap-3.5 pb-4 pt-3.5 md:hidden">
+    <div className="flex flex-col gap-3.5 pb-4 pt-3 md:hidden">
       <nav aria-label="Stage" className="scroll-row flex gap-1.5 overflow-x-auto px-4">
         {columns.map((one) => {
           const current = one.stage === column.stage;

@@ -1,10 +1,20 @@
-import { listEventsOfType, stageMoves, tasks as taskStore } from '@openadlc/db';
-import type { Gate } from '@openadlc/shared';
+import {
+  bots as botStore,
+  issues as issueStore,
+  listEventsOfType,
+  repos as repoStore,
+  requests as requestStore,
+  sessions as sessionStore,
+  stageMoves,
+  tasks as taskStore,
+} from '@openadlc/db';
+import type { Gate, Session } from '@openadlc/shared';
 import {
   asCardTask,
   cardWork,
   isActive,
   REVIEW_STALLED,
+  shownIssues,
   stageOfTask,
   standingStalls,
   subjectsOf,
@@ -28,7 +38,44 @@ import { stillTried } from './request-queue.js';
 /** How far back a stopped review loop is looked for. Older than this, the card has moved or been left. */
 const STALL_WINDOW_DAYS = 30;
 
+/**
+ * How many of a running task's latest lines of output are read for the step
+ * it is on. A long command is three or four rows of the pane (`PANE_WIDTH`);
+ * twenty finds its first one behind whatever printed after it.
+ */
+const STEP_LINES = 20;
+
+/**
+ * The width of a task's pane: hostd starts each session detached and never
+ * sets one, so tmux gives it its default, 80 columns, and a longer line goes
+ * on in the row below.
+ */
+const PANE_WIDTH = 80;
+
+/**
+ * A task on a card, and for one running, what it is doing now in a few words
+ * of the board's own: "running tests", "reading the diff". Null when it is
+ * not running, or has not printed a step yet, and the card says its kind of
+ * work instead.
+ *
+ * The card's line used to come from the task's kind and nothing else, so it
+ * said "Writing the change · 12 min" for twelve minutes and a person could not
+ * tell a builder running the tests from one stuck since its first minute.
+ */
+export interface BoardTask extends CardTask {
+  activity: string | null;
+  /**
+   * When a running task last began running: its start, or the answer that
+   * resumed it after a question (`tasks.runningSince`). A card counted from
+   * the start, so a task answered a day after it asked read "1 day". Null
+   * when it is not running, or resumed at a time nothing records.
+   */
+  since: string | null;
+}
+
 export interface CardExtras extends CardWork {
+  /** Queued, running or paused, newest first; each running one with its step. */
+  active: BoardTask[];
   /** Every bot on the card now, on the issue or its pull request. */
   assignees: string[];
   /** How many times its work was sent back to an earlier stage; the card says "sent back ×N". */
@@ -68,7 +115,7 @@ export interface RequestCard {
   /** The issue it became, once `filed`. */
   issueNumber: number | null;
   costUsd: number;
-  active: CardTask[];
+  active: BoardTask[];
   last: CardTask | null;
 }
 
@@ -93,6 +140,8 @@ export interface BoardWork {
   running: Set<string>;
   /** Bots whose task is paused behind a question a person has not answered. */
   waiting: Set<string>;
+  /** Tasks running across the install, on a card or not, whatever repository the board shows. */
+  runningTasks: number;
 }
 
 interface BoardWorkInput {
@@ -125,6 +174,132 @@ interface BoardWorkInput {
   now?: Date;
   /** Send-backs per issue, by `repoId#number` (`stageMoves.sendBackCounts`). */
   sendBacks?: ReadonlyMap<string, number>;
+  /** Each running task's latest lines of output, oldest first, by its id: where its step is read from. */
+  steps?: ReadonlyMap<string, readonly string[]>;
+  /** When each running task last began running, by its id (`tasks.runningSince`); its start for one not in it. */
+  since?: ReadonlyMap<string, string | null>;
+  /** Tasks running across the install, counted by the database; counted from `tasks` when absent. */
+  runningTasks?: number;
+}
+
+/**
+ * A line the skill runner prints for each step (`skill-runner.ts`): a tool it
+ * called, a file it wrote, or a line of its own — starting, its briefing, a
+ * question, finishing.
+ */
+const STEP_HEAD = /^\s*\[(tool|wrote|skill)\] /;
+
+/** Longer than any step the runner prints (a summary is at most 200 characters), so other output glued on stays out. */
+const STEP_MAX = 260;
+
+/**
+ * The newest step in a session's output, with the rows tmux wrapped it onto
+ * joined back: the pane is read without joining, so the last row of a long
+ * command was its end, and the tool's name was a row above it.
+ *
+ * A row is the step going on only when the one above it filled the pane's
+ * width. tmux trims the trailing space of a row, so one a column short ended
+ * in a space and is joined with one. Any other row is the next thing the
+ * session printed, and gluing it on read "vitest" in a test runner's own
+ * output as the command.
+ */
+function latestStep(lines: readonly string[]): string | null {
+  for (let at = lines.length - 1; at >= 0; at -= 1) {
+    let row = lines[at] ?? '';
+    if (!STEP_HEAD.test(row)) continue;
+    let step = row;
+    for (let next = at + 1; next < lines.length && row.length >= PANE_WIDTH - 1 && step.length < STEP_MAX; next += 1) {
+      const gap = row.length === PANE_WIDTH - 1 ? ' ' : '';
+      row = lines[next] ?? '';
+      step = `${step}${gap}${row}`;
+    }
+    return step.trim().slice(0, STEP_MAX);
+  }
+  return null;
+}
+
+/** A tool by its name, as Claude, Codex and Grok call it, and what the card says it is doing. */
+const TOOLS: readonly [RegExp, string][] = [
+  [/^(read|read_?file|view|view_?file|notebook_?read|cat)$/, 'reading the code'],
+  [/^(grep|glob|ls|search|find|list_?dir|list_?files|codebase_?search|grep_?search|file_?search)$/, 'searching the code'],
+  [/^(edit|write|multi_?edit|notebook_?edit|search_?replace|hashline_?edit|apply_?patch|str_?replace\w*|create_?file|write_?file|edit_?file)$/, 'editing files'],
+  [/^(web_?fetch|web_?search|fetch)$/, 'reading the web'],
+  [/^(todo_?write|update_?plan)$/, 'planning the work'],
+];
+
+const SHELLS = /^(bash|shell|sh|exec|terminal|run_?terminal_?cmd|run_?command|execute)$/;
+
+/** A shell a command is handed to whole, as Codex runs each one: `bash -lc "make ci"`, `/bin/sh -c '…'`. */
+const SHELL_WRAPPER = /^\s*(?:\S*\/)?(?:ba|z)?sh\s+-(?:lc|cl|c)\s+/;
+
+/**
+ * The command a shell was handed, without the shell and its quotes: the
+ * patterns below look for a command where one starts, and `bash -lc "make ci"`
+ * has none there. A summary cut short has lost its closing quote.
+ */
+function unwrapped(command: string): string {
+  const wrapper = SHELL_WRAPPER.exec(command);
+  if (!wrapper) return command;
+  const inner = command.slice(wrapper[0].length).trim();
+  const quote = inner.charAt(0);
+  if (quote !== '"' && quote !== "'") return inner;
+  return inner.length > 1 && inner.endsWith(quote) ? inner.slice(1, -1) : inner.slice(1);
+}
+
+/** Where a command starts in a line: at its beginning, or after `&&`, `;` or a pipe, not inside a quoted message. */
+const AT_COMMAND = String.raw`(?:^|&&|;|\|)\s*`;
+
+/**
+ * A command, by what it is for. First match wins, so a commit whose message
+ * says "test" is committing, and `pnpm build && pnpm test` is the tests.
+ */
+const COMMANDS: readonly [RegExp, string][] = [
+  [new RegExp(String.raw`${AT_COMMAND}(?:openadlc-ci|make\s+ci)\b`), 'running CI locally'],
+  [/\bgh\s+pr\s+create\b/, 'opening the pull request'],
+  [/\bgh\s+pr\s+review\b/, 'writing the review'],
+  [/\bgh\s+pr\s+diff\b|\bgit\s+diff\b/, 'reading the diff'],
+  [/\bgh\s+(?:pr|issue)\s+comment\b/, 'writing a comment'],
+  [/\bgit\s+commit\b/, 'committing'],
+  [/\bgit\s+push\b/, 'pushing the branch'],
+  [/\bgit\s+(?:fetch|pull|rebase|merge)\b/, 'updating the branch'],
+  [
+    /\b(?:vitest|jest|pytest|mocha|rspec|phpunit|playwright|cypress)\b|\b(?:go|cargo|dotnet|mix|deno|bun)\s+test\b|\b(?:npm|pnpm|yarn)\b[^;&|]*\btest\b|\bmake\s+test\b|\bnode\s+--test\b/,
+    'running tests',
+  ],
+  [/\btsc\b|\btypecheck\b|\bmypy\b|\bpyright\b/, 'type-checking'],
+  [/\b(?:eslint|lint|prettier|biome|ruff|rubocop|clippy)\b/, 'linting'],
+  [/\b(?:npm|pnpm|yarn|bun)\s+(?:install|i|add|ci)\b|\bpip3?\s+install\b|\bbundle\s+install\b|\bgo\s+mod\s+download\b/, 'installing dependencies'],
+  [new RegExp(String.raw`\b(?:npm|pnpm|yarn|bun)\b[^;&|]*\bbuild\b|\b(?:cargo|go|dotnet)\s+build\b|${AT_COMMAND}make\b`), 'building'],
+  [/\bgh\s+(?:pr|issue|run|api|repo|release)\b/, 'reading GitHub'],
+  [/\bgit\s+(?:log|show|blame)\b/, 'reading the history'],
+  [/\bgit\b/, 'working with git'],
+  [new RegExp(String.raw`${AT_COMMAND}(?:rg|grep|find|fd|ag|ls|tree)\b`), 'searching the code'],
+  [new RegExp(String.raw`${AT_COMMAND}(?:cat|head|tail|sed\s+-n|less|wc|nl|bat)\b`), 'reading the code'],
+  [/\b(?:curl|wget)\b/, 'reading the web'],
+];
+
+/**
+ * What a running task is doing now, in the board's own words, from its
+ * latest output; null when its last step is not a tool (it is starting, or
+ * says something of its own) or is one these words do not know.
+ *
+ * Never any of the output itself: a session's screen is an admin's
+ * (`sessionsFor` in api.ts), and a command line can hold a token, a path or
+ * a person's words. The board is read by every user, so it carries only one
+ * of the phrases here.
+ */
+export function activityOf(lines: readonly string[]): string | null {
+  const step = latestStep(lines);
+  if (!step) return null;
+  if (step.startsWith('[wrote] ')) return 'editing files';
+  const tool = /^\[tool\] ([^:]+):\s?(.*)$/.exec(step);
+  if (!tool) return null;
+  const name = (tool[1] ?? '').trim().toLowerCase();
+  if (SHELLS.test(name)) {
+    const command = unwrapped(tool[2] ?? '');
+    return COMMANDS.find(([pattern]) => pattern.test(command))?.[1] ?? 'running a command';
+  }
+  return TOOLS.find(([pattern]) => pattern.test(name))?.[1] ?? null;
 }
 
 /** The first line of what was asked, as a card's title. */
@@ -137,6 +312,15 @@ export function boardWork(input: BoardWorkInput): BoardWork {
   const botName = (id: string): string => input.bots.find((bot) => bot.id === id)?.name ?? 'a bot';
   const gated = new Set(input.gates.map((gate) => gate.taskId).filter((id): id is string => Boolean(id)));
   const stalls = standingStalls(input.stallEvents, input.issues, input.tasks);
+  const newestFirst = (a: TaskFacts, b: TaskFacts): number => Date.parse(b.createdAt) - Date.parse(a.createdAt);
+  const onCard = (task: TaskFacts): BoardTask => {
+    const running = task.state === 'running';
+    return {
+      ...asCardTask(task, botName),
+      activity: running ? activityOf(input.steps?.get(task.id) ?? []) : null,
+      since: !running ? null : input.since?.has(task.id) ? (input.since.get(task.id) ?? null) : task.startedAt,
+    };
+  };
 
   const byRef = new Map<string, CardExtras>();
   for (const issue of input.issues) {
@@ -144,9 +328,14 @@ export function boardWork(input: BoardWorkInput): BoardWork {
       .filter((request) => request.repoId === issue.repoId && request.issueNumber === issue.number)
       .map((request) => `request:${request.id.slice(0, 8)}`);
     const work = cardWork(issue, { tasks: input.tasks, botName, stalls, requestSubjects });
+    // `cardWork`'s own active tasks, chosen and ordered as it chooses them,
+    // with each running one's step: a card task carries no id to find it by.
+    const subjects = new Set([...subjectsOf(issue), ...requestSubjects]);
+    const active = input.tasks.filter((task) => subjects.has(task.subjectRef) && isActive(task)).sort(newestFirst).map(onCard);
     byRef.set(`${issue.repoName}#${issue.number}`, {
       ...work,
-      assignees: [...new Set(work.active.map((task) => task.bot))],
+      active,
+      assignees: [...new Set(active.map((task) => task.bot))],
       sentBack: input.sendBacks?.get(`${issue.repoId}#${issue.number}`) ?? 0,
     });
   }
@@ -163,7 +352,7 @@ export function boardWork(input: BoardWorkInput): BoardWork {
   const requests: RequestCard[] = [];
   for (const request of input.requests) {
     const subject = `request:${request.id.slice(0, 8)}`;
-    const mine = input.tasks.filter((task) => task.subjectRef === subject).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+    const mine = input.tasks.filter((task) => task.subjectRef === subject).sort(newestFirst);
     const active = mine.filter(isActive);
     const ended = mine.filter((task) => !isActive(task));
     const repo = input.repos.find((one) => one.id === request.repoId);
@@ -199,7 +388,7 @@ export function boardWork(input: BoardWorkInput): BoardWork {
       queuePosition: state === 'queued' ? (request.queuePosition ?? null) : null,
       issueNumber: state === 'filed' ? request.issueNumber : null,
       costUsd: Math.round(mine.reduce((total, task) => total + task.costUsd, 0) * 10_000) / 10_000,
-      active: active.map((task) => asCardTask(task, botName)),
+      active: active.map(onCard),
       last: ended[0] ? asCardTask(ended[0], botName) : null,
     });
   }
@@ -215,17 +404,71 @@ export function boardWork(input: BoardWorkInput): BoardWork {
 
   const running = new Set<string>();
   const waiting = new Set<string>();
+  let runningTasks = 0;
   for (const task of input.tasks) {
-    if (task.state === 'running') running.add(task.botId);
+    if (task.state === 'running') {
+      running.add(task.botId);
+      runningTasks += 1;
+    }
     if (task.state === 'paused' && gated.has(task.id)) waiting.add(task.botId);
   }
 
-  return { byRef, requests, running, waiting };
+  return { byRef, requests, running, waiting, runningTasks: input.runningTasks ?? runningTasks };
+}
+
+type SessionFacts = Pick<Session, 'id' | 'taskId'>;
+
+/**
+ * The issues whose cards the board shows, as the board route has them: in a
+ * repository OpenADLC works in, and not left out by `openadlc:ignore`.
+ */
+function onTheBoard(issues: readonly IssueFacts[], repos: BoardWorkInput['repos']): IssueFacts[] {
+  const workedIn = new Set(repos.map((repo) => repo.id));
+  return shownIssues(issues).filter((issue) => workedIn.has(issue.repoId));
+}
+
+const subjectOfRequest = (request: { id: string }): string => `request:${request.id.slice(0, 8)}`;
+
+/** The running tasks on the cards shown: on an issue or its pull request, or a request's triage. */
+function runningOn(tasks: readonly TaskFacts[], shown: readonly IssueFacts[], requests: readonly { id: string }[]): TaskFacts[] {
+  const subjects = new Set([...shown.flatMap(subjectsOf), ...requests.map(subjectOfRequest)]);
+  return tasks.filter((task) => task.state === 'running' && subjects.has(task.subjectRef));
+}
+
+/**
+ * What the board says of each running task it shows: its step, from the
+ * latest lines hostd already stored from its session's pane (`session_log`),
+ * and since when it has run. One query for each, however many cards run, and
+ * none for a task on no card shown; nothing asks hostd or GitHub. A read that
+ * fails is a card with no step, or timed from its start, not a board that
+ * fails.
+ */
+async function readLive(
+  running: readonly TaskFacts[],
+  sessions: readonly SessionFacts[],
+): Promise<{ steps: Map<string, string[]>; since: Map<string, string | null> }> {
+  const ids = new Set(running.map((task) => task.id));
+  const watched = sessions.filter((session) => session.taskId !== null && ids.has(session.taskId));
+  const [lines, since] = await Promise.all([
+    watched.length === 0
+      ? new Map<string, string[]>()
+      : (async () => sessionStore.recentLines(watched.map((session) => session.id), STEP_LINES))().catch(() => new Map<string, string[]>()),
+    ids.size === 0 ? new Map<string, string | null>() : (async () => taskStore.runningSince([...ids]))().catch(() => new Map<string, string | null>()),
+  ]);
+  return { steps: new Map(watched.map((session) => [session.taskId!, lines.get(session.id) ?? []] as const)), since };
+}
+
+/** Every running task in the install, by a count; null when it could not be read, and the board counts what it listed. */
+function countRunning(): Promise<number | null> {
+  return (async () => taskStore.countRunning())().catch(() => null);
 }
 
 /** Reads what `boardWork` needs beyond what the board route already has. */
 export async function readBoardWork(
-  input: Omit<BoardWorkInput, 'tasks' | 'stallEvents'>,
+  input: Omit<BoardWorkInput, 'tasks' | 'stallEvents' | 'steps'> & {
+    /** The sessions the route read, each with the task it runs: where a running task's step is. */
+    sessions?: readonly Pick<Session, 'id' | 'taskId'>[];
+  },
   now = new Date(),
 ): Promise<BoardWork> {
   const subjects = input.issues.flatMap(subjectsOf);
@@ -239,15 +482,70 @@ export async function readBoardWork(
     .filter((request) => request.state !== 'abandoned')
     .filter((request) => request.issueNumber === null || now.getTime() - Date.parse(request.updatedAt ?? request.createdAt) < FILED_SHOWN_MS)
     .map((request) => `request:${request.id.slice(0, 8)}`);
-  const [onCards, going, stallEvents, sendBacks] = await Promise.all([
+  const [onCards, going, stallEvents, sendBacks, count] = await Promise.all([
     taskStore.listTasksOnSubjects([...new Set([...subjects, ...requestSubjects, ...intakeSubjects])]),
     taskStore.listTasks({ states: ['queued', 'running', 'paused'], limit: 200 }),
     listEventsOfType(REVIEW_STALLED, since),
     // A table not there yet is no send-backs, not a board that fails.
     (async () => stageMoves.sendBackCounts())().catch(() => new Map<string, number>()),
+    countRunning(),
   ]);
 
   const seen = new Set(onCards.map((task) => task.id));
   const tasks = [...onCards, ...going.filter((task) => isActive(task) && !seen.has(task.id))];
-  return boardWork({ ...input, tasks, stallEvents, now, sendBacks });
+  const live = await readLive(runningOn(tasks, onTheBoard(input.issues, input.repos), input.requests), input.sessions ?? []);
+  const { sessions: _sessions, ...facts } = input;
+  return boardWork({ ...facts, tasks, stallEvents, now, sendBacks, ...live, runningTasks: count ?? undefined });
+}
+
+/** What the board polls for every few seconds while a card it shows is running. */
+export interface BoardActivity {
+  /** Tasks running across the install. */
+  running: number;
+  /** Each card shown with a task running on it, by its ref, with every task going on it now. */
+  cards: { ref: string; active: BoardTask[] }[];
+}
+
+/**
+ * The running cards of the board for a repository, or of all of them, and
+ * nothing else: what the console reads every few seconds while any card it
+ * shows runs, to keep their lines current without reading the whole page.
+ * A full read of the board, with what needs you, the crew and the costs, was
+ * every five seconds, and dozens of queries for each person looking.
+ *
+ * The console reads the whole board again when the cards here are not the
+ * ones it shows running: one started, paused or ended.
+ */
+export async function readBoardActivity(repoName: string | undefined, now = new Date()): Promise<BoardActivity> {
+  const [issueList, crew, repoList, requestList, runningNow, sessionList, count] = await Promise.all([
+    issueStore.listIssues(repoName),
+    botStore.listBots(),
+    repoStore.listRepos(),
+    requestStore.listRequests(200),
+    taskStore.listTasks({ states: ['running'], limit: 200 }),
+    sessionStore.listSessions(),
+    countRunning(),
+  ]);
+  const running = count ?? runningNow.length;
+  // A request's card is on its repository's board, or on the board of all of them.
+  const requests = repoName ? requestList.filter((request) => repoList.find((repo) => repo.id === request.repoId)?.name === repoName) : requestList;
+  const live = runningOn(runningNow, onTheBoard(issueList, repoList), requests);
+  if (live.length === 0) return { running, cards: [] };
+
+  const liveSubjects = new Set(live.map((task) => task.subjectRef));
+  const issuesLive = onTheBoard(issueList, repoList).filter((issue) => subjectsOf(issue).some((subject) => liveSubjects.has(subject)));
+  const requestsLive = requests.filter((request) => liveSubjects.has(subjectOfRequest(request)));
+  const [onCards, { steps, since }] = await Promise.all([
+    taskStore.listTasksOnSubjects([...new Set([...issuesLive.flatMap(subjectsOf), ...requestsLive.map(subjectOfRequest)])]),
+    readLive(live, sessionList),
+  ]);
+  const work = boardWork({ issues: issuesLive, tasks: onCards, bots: crew, repos: repoList, gates: [], stallEvents: [], requests: requestsLive, now, steps, since });
+  const cards = [
+    ...[...work.byRef].map(([ref, card]) => ({ ref, active: card.active })),
+    ...work.requests.map((card) => ({ ref: card.ref, active: card.active })),
+  ];
+  return {
+    running,
+    cards: cards.filter((card) => card.active.some((task) => task.state === 'running')).sort((a, b) => a.ref.localeCompare(b.ref)),
+  };
 }

@@ -35,6 +35,39 @@ GitHub cannot: the bots and the record of their sign-ins (the tokens and keys
 themselves are in the secret store), leases, tasks and sessions, the cost
 ledger, threads and gates, and the console's settings.
 
+### What the board shows while work runs
+
+There is no stream of the board. The console reads the whole page again every
+fifteen seconds while it is on screen, and, while a card it shows has a task
+running, reads only those cards every five (`GET /v1/board/activity`,
+`BoardActivityPoll`) and changes their lines in place. When that read says a
+card started, paused or ended, the whole page is read again at once, at most
+once in fifteen seconds. Above the columns the board says how many tasks are
+running across the install, from a count, not a listing.
+
+A card with a running task has one small dot that pulses slowly in the
+console's working green, which a screen reader reads as "working" and which
+keeps still under `prefers-reduced-motion`, and a line saying who is doing what
+and for how long: "Builder · running tests · 12 min", "Lead reviewer · reading
+the diff · round 2 · 6 min". The time is from when the task last began running:
+for one that paused on a question, the answer that resumed it, and none at all
+when nothing recorded its resume. (A bot's own tint is the background of its
+avatar, too faint for a dot; the avatar is beside the line.) A card waiting on
+a person keeps a still dot and says "Waiting for your answer", a queued task
+says "Queued", and nothing moves on a card nothing runs on.
+
+What the bot is doing comes from the skill runner's own lines, `[tool] Bash:
+pnpm test` or `[wrote] src/prices.ts`, which hostd stores from the session's
+pane every ten seconds (`session_log`). For the running tasks on the cards
+shown, and no others, the bridge reads the last twenty lines of each session
+in one query, joins a step's rows back where tmux wrapped it at the pane's 80
+columns, takes the command out of a `bash -lc "…"` such as Codex runs, and
+turns the newest step into one of a fixed set of phrases (`activityOf` in
+`apps/bridge/src/board-work.ts`). The phrase never carries the output itself: a
+session's screen is an admin's, a command line can hold a token, and the board
+is read by every user. A step it has no phrase for, or a task that has printed
+none yet, says its kind of work instead ("writing the change").
+
 ## How the parts trust each other
 
 - **Console → bridge.** On a local install the bridge takes the console user
