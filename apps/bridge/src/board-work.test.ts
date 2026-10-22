@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { activityOf, boardWork, FILED_SHOWN_MS, itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, withItemPulls, type BoardLink } from './board-work.js';
+import { activityOf, boardWork, FILED_SHOWN_MS, itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, requestsOnCards, withItemPulls, type BoardLink } from './board-work.js';
 import type { IssueFacts, TaskFacts } from './work.js';
 
 /** What `readBoardWork` and `readBoardActivity` read, for the tests of them that read anything. */
@@ -14,17 +14,46 @@ const store = vi.hoisted(() => ({
   sinceReads: [] as string[][],
   since: {} as Record<string, string | null>,
   running: 0,
-  /** Whether the install is numbered, and its work items' links (`workItems.allLinks`). */
+  /** Whether the install is numbered, and its work items' links. */
   numbered: false,
   links: [] as BoardLink[],
+  /** Each read of the issues: `*` for every repository's, a repository's name for its own, `repo#n` for one row. */
+  issueReads: [] as string[],
+  /** Each read of links: `all`, or the things the poll asked for the items of. */
+  linkReads: [] as string[],
 }));
 vi.mock('@openadlc/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@openadlc/db')>()),
   listEventsOfType: vi.fn(async () => []),
   stageMoves: { sendBackCounts: vi.fn(async () => new Map()) },
-  workItems: { isNumbered: vi.fn(async () => store.numbered), allLinks: vi.fn(async () => store.links) },
+  workItems: {
+    isNumbered: vi.fn(async () => store.numbered),
+    allLinks: vi.fn(async () => {
+      store.linkReads.push('all');
+      return store.links;
+    }),
+    // Every link of the items holding any of these, as the store reads it.
+    linksOfItemsHolding: vi.fn(async (things: readonly ({ repoId: string; number: number } | { requestId: string })[]) => {
+      store.linkReads.push(things.map((thing) => ('requestId' in thing ? thing.requestId : `${thing.repoId}#${thing.number}`)).join(','));
+      const held = new Set(
+        store.links
+          .filter((link) => things.some((thing) => ('requestId' in thing ? link.requestId === thing.requestId : link.repoId === thing.repoId && link.number === thing.number)))
+          .map((link) => link.itemId),
+      );
+      return store.links.filter((link) => held.has(link.itemId));
+    }),
+  },
   bots: { listBots: vi.fn(async () => [{ id: 'bot-builder', name: 'openadlc-atlas-janedoe' }, { id: 'bot-lead', name: 'noraexampleco' }]) },
-  issues: { listIssues: vi.fn(async (repoName?: string) => store.issues.filter((issue) => !repoName || issue.repoName === repoName)) },
+  issues: {
+    listIssues: vi.fn(async (repoName?: string) => {
+      store.issueReads.push(repoName ?? '*');
+      return store.issues.filter((issue) => !repoName || issue.repoName === repoName);
+    }),
+    getIssue: vi.fn(async (repoId: string, number: number) => {
+      store.issueReads.push(`${repoId}#${number}`);
+      return store.issues.find((issue) => issue.repoId === repoId && issue.number === number) ?? null;
+    }),
+  },
   repos: {
     listRepos: vi.fn(async () => [
       { id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {} },
@@ -616,6 +645,8 @@ describe('reading the board’s work', () => {
     store.running = 231;
     store.lineReads = [];
     store.sinceReads = [];
+    store.issueReads = [];
+    store.linkReads = [];
   }
 
   it('reads, in one query each, the latest output and the resume of only the running tasks on the cards it shows', async () => {
@@ -698,6 +729,87 @@ describe('reading the board’s work', () => {
       store.numbered = false;
       store.links = [];
     }
+  });
+
+  it('reads nothing but the running tasks and their count when nothing runs', async () => {
+    install();
+    store.tasks = store.tasks.filter((task) => task.state !== 'running');
+    store.numbered = true;
+    try {
+      expect(await readBoardActivity(undefined, NOW)).toEqual({ running: 231, cards: [] });
+      // It read every link and every repository's issues before finding nothing ran.
+      expect(store.issueReads).toEqual([]);
+      expect(store.linkReads).toEqual([]);
+    } finally {
+      store.numbered = false;
+    }
+  });
+
+  it('reads, numbered, only the links of the items with work running, and their issues one by one', async () => {
+    install();
+    const link = (id: number, itemId: string, kind: BoardLink['kind'], repoId: string, number: number): BoardLink => ({
+      id, itemId, itemNumber: id, kind, repoId, number, requestId: null, title: `${kind} ${number}`, state: 'open', url: null, openedAt: minutesAgo(60),
+    });
+    store.numbered = true;
+    store.links = [
+      link(1, 'w-1', 'issue', 'repo-2', 3),
+      link(2, 'w-1', 'issue', 'repo-1', 9),
+      // Nothing runs on it: none of it is read.
+      link(3, 'w-3', 'issue', 'repo-1', 70),
+      link(4, 'w-3', 'pull', 'repo-1', 71),
+    ];
+    try {
+      const all = await readBoardActivity(undefined, NOW);
+      expect(all.cards.map((card) => card.ref)).toEqual(['api#7', 'web#3']);
+      expect(store.linkReads).toHaveLength(1);
+      expect(store.linkReads[0]).not.toBe('all');
+      // web#3 and api#9 by their rows; api, for the running review on api#31 that no link names yet.
+      expect([...store.issueReads].sort()).toEqual(['api', 'repo-1#9', 'repo-2#3']);
+    } finally {
+      store.numbered = false;
+      store.links = [];
+    }
+  });
+
+  it('takes from a linked issue the pull its row records when that pull is not linked to the same item, read or not', () => {
+    const link = (id: number, itemId: string, kind: BoardLink['kind'], number: number): BoardLink => ({
+      id, itemId, itemNumber: id, kind, repoId: 'repo-1', number, requestId: null, title: `${kind} ${number}`, state: 'open', url: null, openedAt: minutesAgo(60),
+    });
+    const repos = [{ id: 'repo-1', name: 'api' }];
+    // Pull 31's item is outside the links the board read, its link closed long ago.
+    expect(withItemPulls([issue('api', 12, { prNumber: 31 })], [link(1, 'w-1', 'issue', 12)], repos)[0]?.prNumber).toBeNull();
+    // An issue with no link, in a repository not numbered yet, keeps its row's.
+    expect(withItemPulls([issue('api', 12, { prNumber: 31 })], [link(1, 'w-1', 'issue', 40)], repos)[0]?.prNumber).toBe(31);
+  });
+
+  it('puts a request’s work on its item’s card by its link, and not on the issue it was filed as once unlinked', () => {
+    const repos = [{ id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {} }];
+    const filed = { id: 'abcdef01-0000-4000-8000-000000000000', repoId: 'repo-1', issueNumber: 12, text: 'Request', state: 'filed', createdAt: minutesAgo(60), updatedAt: minutesAgo(50) };
+    const links: BoardLink[] = [
+      { id: 1, itemId: 'w-2', itemNumber: 2, kind: 'request', repoId: null, number: null, requestId: filed.id, title: 'Request', state: 'open', url: null, openedAt: minutesAgo(60) },
+      { id: 2, itemId: 'w-1', itemNumber: 1, kind: 'issue', repoId: 'repo-1', number: 12, requestId: null, title: 'Issue 12', state: 'open', url: null, openedAt: minutesAgo(50) },
+      { id: 3, itemId: 'w-3', itemNumber: 3, kind: 'issue', repoId: 'repo-1', number: 13, requestId: null, title: 'Issue 13', state: 'open', url: null, openedAt: minutesAgo(50) },
+      { id: 4, itemId: 'w-3', itemNumber: 3, kind: 'issue', repoId: 'repo-1', number: 14, requestId: null, title: 'Issue 14', state: 'open', url: null, openedAt: minutesAgo(50) },
+      { id: 5, itemId: 'w-3', itemNumber: 3, kind: 'request', repoId: null, number: null, requestId: 'fedcba98-0000-4000-8000-000000000000', title: 'Another', state: 'open', url: null, openedAt: minutesAgo(40) },
+    ];
+    const issues = [issue('api', 12, { stage: 'review' }), issue('api', 13), issue('api', 14)];
+    const itemRequests = requestsOnCards(links, repos, issues);
+    // W-3's request on its first issue's card only, so it is counted once.
+    expect(Object.fromEntries(itemRequests)).toEqual({ 'api#12': [], 'api#13': ['request:fedcba98'], 'api#14': [] });
+    const work = boardWork({
+      issues,
+      tasks: [{ ...triage('request:abcdef01', 'done'), costUsd: 0.25 } as TaskFacts],
+      bots: [],
+      repos,
+      gates: [],
+      stallEvents: [],
+      requests: [filed],
+      now: NOW,
+      itemRequests,
+    });
+    expect(work.byRef.get('api#12')?.costUsd).toBe(0);
+    // Joined by `issue_number`, as before work items, it was #12's.
+    expect(boardWork({ issues, tasks: [{ ...triage('request:abcdef01', 'done'), costUsd: 0.25 } as TaskFacts], bots: [], repos, gates: [], stallEvents: [], requests: [filed], now: NOW }).byRef.get('api#12')?.costUsd).toBe(0.25);
   });
 
   it('counts a pull unlinked from its issue on its own card, and no longer on the issue’s, though the issue still records it', () => {

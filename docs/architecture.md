@@ -602,29 +602,49 @@ back. A crew account that moves a stage label back is put back.
   its snapshot current, and a repository added later is read and numbered
   on its own. Nothing is written on GitHub.
 - **The board and the item page read work items** once the install is
-  numbered; before, they are what they were. The board has one card per
+  numbered; before, they are what they were, and so is anything in a
+  repository whose history is not numbered yet. Once numbered, an item is
+  its links and nothing else (`withWorkItem`, `items.ts`): a subject finds
+  its item through its link, the item's subjects are exactly its links',
+  its issue is its first issue link, its pull request is the one that
+  issue's row records only while that pull is linked to the same item, else
+  its first pull in its repository, and its requests are its request links.
+  Nothing joins through `issues.pr_number` or `requests.issue_number`, so a
+  request unlinked from its issue opens as the request, and a subject no
+  link names opens as itself. An issue the board has no row for (closed
+  before OpenADLC read it) is drawn from its link's title and state, with
+  `onBoard: false` and no pause, next or cancel.
+  The board has one card per
   work item (`itemCards`, `board-work.ts`): its first-linked issue's card, in
   that issue's column even when a later link stands elsewhere, with the
   cost, people, tasks and open questions of every link, a pull request
   linked beside its issue or a second pull on an item with none included
-  (`loosePulls`), and `item` and `repos` on it. An item is on the board of
+  (`loosePulls`), its request links' work by link (`requestsOnCards`), and
+  `item` and `repos` on it. An item is on the board of
   every repository it has a link in. A pull request no issue claims is a
   card of its own (`lonePulls`), in Review while open and in Done once
   merged or closed, for the week from when its link closed (`closed_at`,
   or when it opened for one closed before that was recorded); it has no issue, so nothing moves, holds, puts next or
-  cancels it, on the board or on its page (`lonePullRefusal`); an item with
-  no issue and no request opens as its pull, even where an issue row still
-  records that pull. An issue's pull request a person linked to another
-  item is that item's work, on its card and its page, and no longer the
-  issue's (`withItemPulls`). A request in intake carries its item's key,
+  cancels it, on the board or on its page (`controlRefusal`). A linked
+  issue counts a pull request its row records only while that pull is
+  linked to the same item: one a person linked to another item is that
+  item's work, on its card and its page (`withItemPulls`). A request in
+  intake carries its item's key,
   and the work on any pull linked to it, until its item has an issue on the
   board; a triage still running on the request once its issue is there is
-  that issue's card's.
+  that issue's card's. The board reads only the links of items with a link
+  open, or closed in the week Done shows, or with an issue it has a card
+  for outside Done or changed in that week (`boardLinks`, indexed by
+  migration 0150); the activity poll reads nothing but the running tasks
+  and their count when nothing runs, and otherwise only the links of the
+  items running work is linked to (`linksOfItemsHolding`) and their issues
+  by row.
   `/v1/items/:subject` takes a key in any case and with any prefix
   (`acme-128`, `W-128`, `128`) or any linked subject, follows a merge to
-  the item it went into, and returns `workItem` and `links`; the item's
-  subjects are every link's, so its conversation, tasks and costs span them
-  all (`items.ts`). The console's `/items/<anything>` redirects to
+  the item it went into, and returns `workItem` and `links`; its
+  conversation, tasks and costs span every link. Pause, next and cancel act
+  on the item's own issue, pull request and requests only (`ownSubjects`,
+  `resolveControlled`), never on a second link's tasks. The console's `/items/<anything>` redirects to
   `/items/<key>`, and `/?item=<old subject>` still opens the sheet. An admin
   links an issue or pull request of any managed repository by hand
   (`POST /v1/items/:subject/links`, read from GitHub, never written), unlinks

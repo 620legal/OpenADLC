@@ -28,7 +28,7 @@ import { issueNumberFromBranch } from './work.js';
  * All four are an admin's (`roles.ts`), and all four are audited.
  */
 
-/** A work item as these routes need it; see `main.ts`, which reads it from `items.ts`. */
+/** A work item as these routes need it (`controlledItem` in items.ts, which `main.ts` resolves it with). */
 export interface ControlledItem {
   key: string;
   repoName: string;
@@ -52,7 +52,11 @@ export interface ControlledItem {
   } | null;
   /** The request it started as, while it has not become an issue; null otherwise. */
   request?: { id: string; state: string } | null;
-  /** Every subject its work is filed under. */
+  /**
+   * The subjects of its own issue, pull request and requests, whose tasks it
+   * stops (`ownSubjects` in items.ts). Never a second link's: Cancel stopped
+   * a second issue's build, and a second pull's deploy.
+   */
   subjects: string[];
 }
 
@@ -80,7 +84,7 @@ export interface ItemControlDeps {
   /** Writes an issue's labels to the board at once, rather than when GitHub's delivery arrives. */
   setLabels(repoId: string, number: number, labels: string[]): Promise<void>;
   audit(entry: { actor: string; action: string; target: string; payload?: Record<string, unknown> }): Promise<void>;
-  /** Its tasks, every subject. */
+  /** The tasks on these subjects. */
   tasks(subjects: readonly string[]): Promise<{ id: string; bot: string; kind: string; state: string }[]>;
   /** How many questions are open on it. */
   openQuestions(subjects: readonly string[]): Promise<number>;

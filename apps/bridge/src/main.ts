@@ -39,7 +39,7 @@ import { APP_API, InvitationService } from './invitation-service.js';
 import { CrewAccessKeeper } from './crew-access.js';
 import { Reconciler } from './reconciler.js';
 import { JobTimer } from './job-timer.js';
-import { HttpFailure, Router } from './router.js';
+import { Router } from './router.js';
 import { REQUEST_SWEEP_MS, RequestQueue } from './request-queue.js';
 import { WatermarkStream } from './thread-stream.js';
 import { Scheduler, retryAfterRecovery } from './scheduler.js';
@@ -62,7 +62,7 @@ import { recordUnowned } from './unowned-issues.js';
 import { registerItemControlRoutes } from './item-controls.js';
 import { registerUnownedRoutes } from './unowned-routes.js';
 import { registerDeployRoutes } from './deploy-routes.js';
-import { lonePullRefusal, resolveItem } from './items.js';
+import { resolveControlled } from './items.js';
 import { botNames, defaultChecks, settingUp } from './health/index.js';
 import { anythingDispatches, dispatchModeOf } from './health/checks/dispatcher.js';
 import { HealthRegistry } from './health/registry.js';
@@ -652,41 +652,11 @@ async function main(): Promise<void> {
   // wait on, and the merge line.
   registerItemControlRoutes(router, {
     resolve: async (subject) => {
-      const found = await resolveItem(subject);
-      if (!found?.repo || !found.item.repo) return null;
-      const { item, repo } = found;
       const client = await asAutomation(actors, config).catch(() => null);
-      const pull = item.pr && client ? await client.getPullRequest(repo.fullName, item.pr).catch(() => null) : null;
-      const refused = lonePullRefusal(item, pull?.merged ?? null);
-      if (refused) throw new HttpFailure(409, refused);
-      return {
-        key: item.key,
-        repoName: repo.name,
-        repoFullName: repo.fullName,
-        repoId: repo.id,
-        defaultBranch: (await repos.getRepoByName(repo.name).catch(() => null))?.defaultBranch ?? null,
-        issue: item.issue
-          ? {
-              number: item.issue.number,
-              title: item.issue.title,
-              url: item.issue.url ?? `https://github.com/${repo.fullName}/issues/${item.issue.number}`,
-              labels: (item.issue as { labels?: string[] }).labels ?? [],
-              stage: item.issue.stage ?? null,
-            }
-          : null,
-        pr: item.pr
-          ? {
-              number: item.pr,
-              url: `https://github.com/${repo.fullName}/pull/${item.pr}`,
-              branch: pull?.headRef ?? null,
-              headRepoFullName: pull?.headRepoFullName ?? null,
-              merged: pull?.merged ?? null,
-              state: pull?.state ?? null,
-            }
-          : null,
-        request: item.request && !item.issue ? { id: item.request.id, state: item.request.state } : null,
-        subjects: item.subjects,
-      };
+      return resolveControlled(subject, {
+        pull: async (repoFullName, number) => (client ? client.getPullRequest(repoFullName, number) : null),
+        defaultBranch: async (repoName) => (await repos.getRepoByName(repoName))?.defaultBranch ?? null,
+      });
     },
     abandonRequest: async (requestId, actor, note) => {
       const done = await abandonRequest({ requestId, actor, note, stop: (taskId, by, why) => stopTask(taskId, by, why, hostd, { unfinished: true }) });

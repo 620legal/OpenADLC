@@ -114,7 +114,7 @@ import { registerHealthRoutes } from './health/routes.js';
 import { registerSigningKeyRoutes } from './signing-key-routes.js';
 import { SubjectTitles } from './subject-titles.js';
 import { retryTask } from './task-retry.js';
-import { itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, withItemPulls } from './board-work.js';
+import { doneSince, itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, requestsOnCards, withItemPulls } from './board-work.js';
 import { describeSubject } from './thread-view.js';
 import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
@@ -1040,7 +1040,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       threads.listOpenGates(),
       issues.listIssues(readFor),
       requests.listRequests(200),
-      numbered ? workItems.allLinks() : Promise.resolve([] as workItems.Link[]),
+      // The links of the work open, and of what closed in the week Done
+      // shows: every link ever, and every closed lone pull, was read and sent.
+      numbered ? workItems.boardLinks(doneSince(new Date())) : Promise.resolve([] as workItems.Link[]),
       numbered ? settings.getSetting('organization').catch(() => null) : Promise.resolve(null),
       sessions.listSessions(),
     ]);
@@ -1053,6 +1055,12 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     // Every pull whose work no issue's card counts, so an item's card sums
     // every link's, not only its issues' and their own pull requests'.
     const loose = loosePulls(links, repoList, issueList).filter((pull) => !ignored.has(pull.ref));
+    // A request's work is on its item's card, by its link: by `issue_number`
+    // it stayed on the issue it was filed as once a person unlinked it.
+    const workedInIds = new Set(repoList.map((entry) => entry.id));
+    const itemRequests = numbered
+      ? requestsOnCards(links, repoList, issueList.filter((issue) => workedInIds.has(issue.repoId) && !ignored.has(`${issue.repoName}#${issue.number}`)))
+      : undefined;
 
     // What each card has cost and who is on it now, what its running task is
     // doing, and which bots are working or waiting on a person: what a card
@@ -1065,6 +1073,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       // Each queued request's place as the queue walks it: one source for the number the 202 gave.
       requests: await withPositions(requestList),
       pulls: loose,
+      itemRequests,
       sessions: activeSessions,
     });
 
