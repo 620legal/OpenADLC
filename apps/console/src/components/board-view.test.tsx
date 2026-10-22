@@ -231,12 +231,15 @@ describe('the board’s columns', () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
-  it('keep a week of Done, and say how many shipped before it', () => {
-    const done = column(render(), 'Done');
+  it('keep a week of Done, and claim no count of what shipped before it', () => {
+    // The bridge reads only the week's Done: a count of the cards before it
+    // was of the few it read for another reason, not of what shipped.
+    const html = render();
+    const done = column(html, 'Done');
     expect(done).toContain('1 this week');
     expect(done).toContain('Pin the Node version in CI');
     expect(done).not.toContain('Something from last month');
-    expect(done).toContain('and 1 shipped before this week');
+    expect(html).not.toContain('shipped before this week');
   });
 
   it('show a card closed without merging in Done as abandoned, and do not count it as shipped', () => {
@@ -250,7 +253,7 @@ describe('the board’s columns', () => {
     expect(done).toContain('Closed before it merged');
     expect(done).toContain('Abandoned 30 min ago');
     expect(done).toContain('1 this week');
-    expect(done).toContain('and 1 shipped before this week');
+    expect(done).not.toContain('Abandoned last month');
     // The phone's pill says the same count.
     expect(html).toMatch(/>Done<span class="[^"]*">1<\/span>/);
   });
@@ -439,6 +442,17 @@ describe('the first run', () => {
     expect(html).toContain('id="needs"');
     expect(html).toMatch(/<button[^>]*>Try again<\/button>/);
     expect(html).toContain('File your first request');
+  });
+
+  it('is not a quiet board’s: one whose work went to Done before the week shows its columns', () => {
+    // The bridge reads only the week of Done, so a repository with nothing
+    // open and nothing done this week sent no card at all, and said "File
+    // your first request" over its history.
+    const html = render({ ...EMPTY, doneBefore: true }, []);
+    expect(html).toContain('aria-label="Board"');
+    expect(html).not.toContain('File your first request');
+    expect(column(html, 'Done')).toContain('Nothing shipped this week');
+    expect(render({ ...EMPTY, doneBefore: false }, [])).toContain('File your first request');
   });
 });
 

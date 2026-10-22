@@ -115,7 +115,7 @@ import { registerHealthRoutes } from './health/routes.js';
 import { registerSigningKeyRoutes } from './signing-key-routes.js';
 import { SubjectTitles } from './subject-titles.js';
 import { retryTask } from './task-retry.js';
-import { doneSince, itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, requestsOnCards, withItemPulls } from './board-work.js';
+import { doneSince, itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, requestsOnCards, withItemIssues, withItemPulls } from './board-work.js';
 import { describeSubject } from './thread-view.js';
 import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
@@ -1034,19 +1034,26 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     // A table a release behind is an install not numbered, not a board that fails.
     const numbered = await (async () => workItems.isNumbered())().catch(() => false);
     const readFor = numbered ? undefined : repoName;
-    const [cards, crew, repoList, openGates, listed, requestList, links, organization, activeSessions] = await Promise.all([
-      issues.boardCards(readFor),
+    // The first day of the week Done shows, for the issues and the links alike.
+    const since = doneSince(new Date());
+    const [crew, repoList, openGates, recent, requestList, links, organization, activeSessions] = await Promise.all([
       bots.listBots(),
       repos.listRepos(),
       threads.listOpenGates(),
-      issues.listIssues(readFor),
+      // The issues not in Done, and those Done in the week it shows: every
+      // issue there had ever been was read, twice, with every task on it.
+      issues.boardIssues(since, readFor),
       requests.listRequests(200),
       // The links of the work open, and of what closed in the week Done
       // shows: every link ever, and every closed lone pull, was read and sent.
-      numbered ? workItems.boardLinks(doneSince(new Date())) : Promise.resolve([] as workItems.Link[]),
+      numbered ? workItems.boardLinks(since) : Promise.resolve([] as workItems.Link[]),
       numbered ? settings.getSetting('organization').catch(() => null) : Promise.resolve(null),
       sessions.listSessions(),
     ]);
+    // An item's card is its first issue's, wherever that issue stands: the
+    // issues of the items read that went to Done before the week, by row.
+    const listed = await withItemIssues(recent, links);
+    const cards = await issues.boardCards(listed);
     // Nor is an issue labelled `openadlc:ignore`, nor its pull request, nor
     // the request it was filed from: the board is the crew's work.
     const ignored = ignoredSubjects(listed);
@@ -1189,6 +1196,10 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
         ...onBoard.filter((card) => card.stage === stage),
       ],
     }));
+    // A board with no card is the first run's, unless something went to Done
+    // before the week, which the board does not read: a quiet repository's
+    // board said "File your first request" over its history.
+    const doneBefore = columns.every((column) => column.cards.length === 0) ? await issues.anyDoneBefore(since, repoName) : undefined;
 
     return {
       repo: repoName ?? 'all',
@@ -1209,6 +1220,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       idle: activeSessions.filter((session) => session.state === 'idle').length,
       // Tasks running across the install, which the board counts above its columns.
       running: work.runningTasks,
+      ...(doneBefore !== undefined ? { doneBefore } : {}),
     };
   });
 

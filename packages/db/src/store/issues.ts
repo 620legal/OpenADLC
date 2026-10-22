@@ -193,6 +193,65 @@ export async function listIssues(repoName?: string): Promise<IssueRecord[]> {
 }
 
 /**
+ * The issues the board can show: every one not in Done, and those in Done
+ * that changed since `since`, the start of the week Done shows (`doneSince`,
+ * apps/bridge/src/board-work.ts). Done shows a card from when it shipped,
+ * its last deploy or else when its row last changed, and the deploy that
+ * ships a card ends before the move to Done that writes the row: what
+ * changed since `since` is every card Done can show. One that leaves the
+ * week leaves the read, and one reopened is out of Done and back in it.
+ *
+ * The board read every issue there had ever been, twice, every fifteen
+ * seconds for each person looking, and every task on each of them, for the
+ * console to keep a week of Done. Each half is its own selection so that
+ * each reads its own index (migration 0151): one `or` across the two read
+ * every row.
+ */
+export async function boardIssues(since: Date, repoName?: string): Promise<IssueRecord[]> {
+  const rows = await query<IssueRow>(
+    `${SELECT} where i.stage <> 'done' and ($2::text is null or r.name = $2)
+     union all
+     ${SELECT} where i.stage = 'done' and i.updated_at >= $1 and ($2::text is null or r.name = $2)`,
+    [since, repoName ?? null],
+  );
+  return rows.map(toIssue).sort(byNextFirst);
+}
+
+/** The rows of these issues, by repository and number; one the board has no row for is not in it. */
+export async function getIssues(refs: readonly { repoId: string; number: number }[]): Promise<IssueRecord[]> {
+  if (refs.length === 0) return [];
+  const rows = await query<IssueRow>(
+    `${SELECT} join unnest($1::uuid[], $2::int[]) as t(repo_id, number) on t.repo_id = i.repo_id and t.number = i.number`,
+    [refs.map((ref) => ref.repoId), refs.map((ref) => ref.number)],
+  );
+  return rows.map(toIssue).sort(byNextFirst);
+}
+
+/**
+ * Whether a repository's board, or the board of all of them, had a card go
+ * to Done before `since`. The board reads none of those (`boardIssues`), and
+ * one with nothing open and nothing done this week is a quiet one, not the
+ * first run's empty board. An issue labelled `openadlc:ignore`, or in a
+ * repository OpenADLC no longer works in, was never a card.
+ *
+ * Asked of each repository: asked of the issues with the repository joined,
+ * a repository with none read every issue of the others to find so.
+ */
+export async function anyDoneBefore(since: Date, repoName?: string): Promise<boolean> {
+  const row = await queryOne<{ done: boolean }>(
+    `select exists (
+       select 1 from repos r
+        where r.removed_at is null and ($2::text is null or r.name = $2)
+          and exists (select 1 from issues i
+                       where i.repo_id = r.id and i.stage = 'done' and i.updated_at < $1
+                         and not (i.labels && array['openadlc:ignore', 'fleet:ignore']::text[]))
+     ) as done`,
+    [since, repoName ?? null],
+  );
+  return Boolean(row?.done);
+}
+
+/**
  * The issues a builder could be given: in build, switched on with `start:now`,
  * with no question to a person outstanding, not waiting on triage, with no
  * do: label but `do:ai` (`do:human`, `do:product` and `do:legal` each wait on
@@ -298,14 +357,15 @@ export async function forget(repoId: string, number: number): Promise<void> {
 }
 
 /**
- * The board's cards. Not an issue labelled `openadlc:ignore`: the board is
+ * The board's cards, of the issues it read (`boardIssues`). Not an issue
+ * labelled `openadlc:ignore`: the board is
  * for the work the crew does, and a person said the crew leaves that one
  * alone. Its row is kept, so taking the label off brings the card back where
  * it was; the bridge leaves its pull request off the board as well
  * (`ignoredSubjects` in apps/bridge/src/work.ts).
  */
-export async function boardCards(repoName?: string): Promise<BoardCard[]> {
-  const issues = (await listIssues(repoName)).filter((issue) => !hasIgnoreLabel(issue.labels));
+export async function boardCards(listed: readonly IssueRecord[]): Promise<BoardCard[]> {
+  const issues = listed.filter((issue) => !hasIgnoreLabel(issue.labels));
   const gateRefs = await query<{ subject_ref: string }>(
     `select distinct t.subject_ref
      from gates g join tasks t on t.id = g.task_id

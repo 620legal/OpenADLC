@@ -123,6 +123,12 @@ export interface Board {
   idle: number;
   /** Tasks running across the install, whatever the board shows. Absent from an older bridge. */
   running?: number;
+  /**
+   * Said of a board with no card on it: whether anything went to Done before
+   * the week Done shows, which the bridge does not read. Such a board is a
+   * quiet one, not the first run's. Absent while there are cards, and from an older bridge.
+   */
+  doneBefore?: boolean;
 }
 
 export interface BotSession {

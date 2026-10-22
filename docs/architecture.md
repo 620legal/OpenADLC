@@ -657,6 +657,22 @@ back. A crew account that moves a stage label back is put back.
   merges two items (`POST /v1/items/:subject/merge`); each is audited
   (`item.linked`, `item.unlinked`, `item.merged`), and no automatic pass
   moves a link a person made.
+- **The board reads the issues it can show**, numbered or not: those not in
+  Done, and those in Done whose row changed in the week Done shows
+  (`boardIssues`, indexed by migration 0151), and of the tasks only theirs
+  and those still going. A card in Done is shown for the week from when it
+  shipped, its last deploy or else when its row last changed, and the move
+  to Done that follows a deploy writes the row, so every card Done shows is
+  read. One that leaves the week leaves the read; reopened, it is out of
+  Done and read again. An item the board reads the links of has every
+  issue read, those in Done before the week by row (`withItemIssues`), so
+  its card is its first issue's whatever the week holds. The other readers
+  of the issues (the dispatcher, the reconciler, Needs you, an item's page)
+  read every one, through `listIssues`. Done says nothing of how many
+  shipped before the week, which the board does not read; a board with no
+  card at all says whether anything in its repositories went to Done before
+  it (`doneBefore`, `anyDoneBefore`), so a quiet repository's board shows
+  its columns, not the first run's.
 - **Console actions answer once the decision is recorded.** A button's route
   answers as soon as what it decided is in the database, and does GitHub's and
   hostd's part after (`Afterwards`, `apps/bridge/src/api.ts`). An answer is
