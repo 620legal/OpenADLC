@@ -1458,6 +1458,20 @@ describe('a failed task, in words a person acts on', () => {
     expect(attentionItems({ now: NOW, gates: [], tasks: [stopped], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] })).toEqual([]);
   });
 
+  it('shows nothing for a task the bridge stopped because its pull request merged: its work is over, though no person stopped it', async () => {
+    const { attentionItems } = await load();
+    const stopped = task({
+      id: 'task-stopped',
+      botId: 'bot-builder',
+      kind: 'implement',
+      subjectRef: 'openadlc-testbed#16',
+      state: 'stopped',
+      endedAt: minutesAgo(3),
+      exitReason: 'stopped by the bridge: its pull request merged',
+    });
+    expect(attentionItems({ now: NOW, gates: [], tasks: [stopped], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] })).toEqual([]);
+  });
+
   it('folds two reviewers stopped the same way into one card, listing both rather than repeating the story', async () => {
     const { attentionItems } = await load();
     // Two different pull requests, both in review, so neither is skipped as

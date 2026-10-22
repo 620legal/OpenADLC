@@ -276,6 +276,26 @@ describe('where the item’s box says a message goes, before it is sent', () => 
     const routes = messageRoutes({ timeline: [], tasks: [], stage: null, openGates: [], roles: [] }, item, BOTS);
     expect(routes['']).toEqual({ kind: 'refused', error: expect.stringMatching(/nobody has worked on this item yet.*pick a role/) });
   });
+
+  it('offers every role the crew has to pick when nobody has worked on it, each saying where it would go', () => {
+    // It asked to "pick a role to write to", and an item nobody had worked on had no role tab to pick.
+    const crew = [...BOTS, { id: 'b-auto', name: 'acme-automation', slot: 'automation', role: 'automation' as const, githubLogin: 'acme-automation' }];
+    const routes = messageRoutes({ timeline: [], tasks: [], stage: null, openGates: [], roles: [] }, item, crew);
+    // Not the automation account's, which reads no message.
+    expect(Object.keys(routes)).toEqual(['', 'intake', 'implement', 'review_lead', 'review_second', 'review_security']);
+    expect(routes['implement']).toEqual({ kind: 'post', bot: 'builder', role: 'implement', handle: 'acme-crew', subject: 'api#12', on: 'issue', number: 12 });
+    expect(routes['review_lead']).toMatchObject({ kind: 'post', bot: 'lead-reviewer', on: 'pull_request', number: 31 });
+    // A role a tab already names is not offered twice.
+    const tabbed = messageRoutes({ timeline: [], tasks: [], stage: null, openGates: [], roles: [{ role: 'implement', label: 'builder', seats: [] }] }, item, BOTS);
+    expect(Object.keys(tabbed)).toEqual(['', 'implement', 'intake', 'review_lead', 'review_second', 'review_security']);
+  });
+
+  it('asks for no role when the crew has none a message can go to', () => {
+    const alone = [{ id: 'b-auto', name: 'acme-automation', slot: 'automation', role: 'automation' as const, githubLogin: 'acme-automation' }];
+    const routes = messageRoutes({ timeline: [], tasks: [], stage: null, openGates: [], roles: [] }, item, alone);
+    expect(Object.keys(routes)).toEqual(['']);
+    expect(routes['']).toEqual({ kind: 'refused', error: 'nobody has worked on this item yet, and the crew has no seat that reads a message; add one in Settings → Crew' });
+  });
 });
 
 describe('holding, putting next or cancelling a pull request alone on its item', () => {

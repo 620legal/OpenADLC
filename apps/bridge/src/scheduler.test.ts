@@ -433,6 +433,15 @@ describe('the deploy sweep decides before it acts', () => {
     ]);
   });
 
+  it('does not start again a deploy the bridge stopped when the issue it was paused on closed', () => {
+    const plan = planDeploySweep({
+      ...ready,
+      waiting: [waiting],
+      priorDeploys: [{ subjectRef: 'openadlc#145', state: 'stopped', exitReason: 'stopped by the bridge: already landed: openadlc#145 is closed, so the work it was for is finished' }],
+    });
+    expect(plan.kind === 'work' && plan.start).toBeNull();
+  });
+
   it('does not start again a deploy whose plan change a person refused', () => {
     const plan = planDeploySweep({
       ...ready,

@@ -22,6 +22,7 @@ import {
   type TaskKind,
 } from '@openadlc/shared';
 import { botSaid } from './bot-said.js';
+import { stoppedByTheBridge } from './bridge-stops.js';
 import { NO_PULL_REQUEST, openPullRequestUrl } from './build-left.js';
 import { githubDidNotAnswer, type GitHubClient } from '@openadlc/github';
 import type { EngineUpdateAttention } from './engine-updates.js';
@@ -673,9 +674,12 @@ export const STOPPED_BY_A_PERSON = 'stopped by a person from the console';
  * (who): its session was killed`. Only the card's own Stop was read as a
  * person's, so stopping the second reviewer on a merged issue from its thread
  * left a "was stopped before finishing" card.
+ *
+ * A stop the bridge made because the work was over — its pull request merged
+ * or closed, its issue closed — is no card either (`stoppedByTheBridge`).
  */
 function stoppedByAPerson(task: Pick<TaskFacts, 'state' | 'exitReason'>): boolean {
-  return task.state === 'stopped' && (Boolean(task.exitReason?.startsWith(tasks.STOPPED_BY_PERSON)) || wasRefused(task.exitReason));
+  return task.state === 'stopped' && (Boolean(task.exitReason?.startsWith(tasks.STOPPED_BY_PERSON)) || wasRefused(task.exitReason) || stoppedByTheBridge(task));
 }
 
 /** A model account's spending limit at the provider, as its refusal says it. */

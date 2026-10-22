@@ -73,7 +73,7 @@ See [docs/security.md](../../docs/security.md).
 - `src/components/thread-panel.tsx` — a bot's own conversation and its questions, its subjects grouped by work item (a thread about no subject under "Not about any item"), each group linking to its item; its Computer and Terminal tabs.
 - `src/components/task-computer.tsx` — the Computer (pane, worktree, sessions) and Terminal tabs, shared by a bot's panel and a work item's tasks; an item's tab opens on the task's own session.
 - `src/components/terminal.tsx` — xterm on the hostd socket, the attach token as its subprotocol.
-- `src/components/needs-you.tsx`, `src/components/app-header.tsx` — what waits on a person, a work card opening its item on the tab of the role that asked (a check on the install still opens the bot's panel); the header on every page.
+- `src/components/needs-you.tsx`, `src/components/app-header.tsx` — what waits on a person, a work card opening its item on the tab of the role that asked (a check on the install still opens the bot's panel); the header on every page, one row from 768px up in which nothing wraps, and two rows below.
 - `src/components/crew-view.tsx`, `src/lib/crew.ts` — the crew in sections by role, in pipeline order, each seat saying whom it shares its GitHub account with, its current task opening that task's item.
 - `src/lib/model-onboarding.ts` — what the two model steps decide, apart from their widgets.
 - `src/lib/stages.ts`, `src/lib/repo-colors.ts`, `src/lib/bot-label.ts` — how a stage, a repository and a bot are shown, each in one place.
