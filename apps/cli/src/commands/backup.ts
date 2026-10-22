@@ -71,7 +71,7 @@ import { closePool, waitForDatabase } from '@openadlc/db';
 import { stepNamed } from '@openadlc/shared';
 import { getSecretStore, internalSecretRef } from '@openadlc/github';
 import { databaseUnreachable } from '../database.js';
-import { prompt, ui } from '../ui.js';
+import { prompt, promptSecret, ui } from '../ui.js';
 
 /**
  * `openadlc backup` and `openadlc restore`.
@@ -390,12 +390,10 @@ export interface RestoreDeps {
 }
 
 /**
- * Reads a line without echoing it.
- *
- * `prompt` echoes, which would leave the passphrase in the scrollback of
- * whatever terminal this ran in and in any recording of it. readline has no
- * option for that, so the write it echoes through is replaced once the question
- * is on screen and before the first keystroke can arrive.
+ * Reads a passphrase without echoing it, through the one helper every secret
+ * the CLI asks for goes through (`promptSecret`): `prompt` echoes, which would
+ * leave the passphrase in the scrollback of whatever terminal this ran in and
+ * in any recording of it.
  *
  * A pipe is refused rather than read: a passphrase supplied by a shell lives in
  * that shell's history, which is the thing this archive most needs not to
@@ -411,21 +409,11 @@ async function askHidden(question: string): Promise<string> {
       'a passphrase has to be typed at a terminal, not piped in — run this without redirecting stdin',
     );
   }
-  const { createInterface } = await import('node:readline/promises');
-  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-  try {
-    const asked = rl.question(`  ${question}: `);
-    (rl as unknown as { _writeToOutput: (text: string) => void })._writeToOutput = () => {};
-    const answer = await asked;
-    // The newline the operator typed was swallowed with everything else.
-    process.stdout.write('\n');
-    return answer;
-  } finally {
-    rl.close();
-  }
+  return promptSecret(question);
 }
 
-function terminalIo(): BackupIo {
+/** How `openadlc backup` and `restore` talk to the person at the terminal. */
+export function terminalIo(): BackupIo {
   return { out: ui, askSecret: askHidden, askLine: (question) => prompt(question) };
 }
 

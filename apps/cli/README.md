@@ -84,6 +84,7 @@ reads from the secret store: it runs as the operator, on the install's machine.
 - `src/commands/github.ts` — labels, rulesets, environments and CODEOWNERS on the managed repositories.
 - `src/commands/attribution.ts` — `openadlc attribution rotate`, a new key for signing the crew's posts.
 - `src/commands/backup.ts` — `openadlc backup` and `openadlc restore`, the terminal around `@openadlc/backup`.
+- `src/ui.ts` — what the CLI prints and asks; `promptSecret` is the one way it asks for a secret, read in raw mode so nothing typed reaches the screen.
 - `src/commands/cloud.ts` — `openadlc cloud configure | pull | push | plan | apply | output | validate`.
 
 ## Testing
@@ -95,7 +96,10 @@ pnpm --filter @openadlc/cli build                                       # tsc; b
 ```
 
 - **No database, no terminal.** Tests mock `@openadlc/db`, give `init` a temporary
-  `OPENADLC_HOME`, and drive backup's decisions through injected ports.
+  `OPENADLC_HOME`, and drive backup's decisions through injected ports. The one
+  exception is `src/commands/backup-terminal.test.ts`, which types a passphrase
+  into a pseudo-terminal made by `script` and is skipped, saying why, where
+  there is none.
 - **Built imports, no type check.** `@openadlc/*` resolves to each package's
   `dist/`, and vitest does not type-check: `pnpm build` after editing a package,
   and after the last edit.
