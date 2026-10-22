@@ -63,7 +63,7 @@ import type { Actors } from './actors.js';
 import type { Automation } from './automation.js';
 import type { BridgeConfig } from './config.js';
 import type { DispatchGate } from './dispatch-gate.js';
-import { subjectClosed, type Gates } from './gates.js';
+import { subjectClosed, wasRefused, type Gates } from './gates.js';
 import { botProbe, type WatermarkStream } from './thread-stream.js';
 import type { HostdClient } from './hostd-client.js';
 import type { Onboarding } from './onboarding.js';
@@ -75,6 +75,7 @@ import {
   pendingInvitationsFrom,
   redeliverLatestFailure,
   rulesAppliedPayload,
+  type GitHubClient,
 } from '@openadlc/github';
 import { REPO_DEFAULTS, buildAppManifest, hasIgnoreLabel, hasNextLabel, hasPausedLabel, isGitHubLogin, loginCandidates, manifestPostUrl, sameLogin } from '@openadlc/shared';
 import { refuseWhilePaused } from './pause-work.js';
@@ -115,7 +116,7 @@ import { describeSubject } from './thread-view.js';
 import { sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
 import { registerItemRoutes } from './item-routes.js';
-import { itemOf, requestSubject } from './items.js';
+import { itemOf, offeredGate, requestSubject } from './items.js';
 import { readSeatPauses } from './seat-pause.js';
 import type { HealthAction } from '@openadlc/shared';
 import { attachmentIds, claimableFor, claimWindowStart, registerAttachmentRoutes } from './attachment-routes.js';
@@ -367,6 +368,110 @@ const STOPPABLE: readonly string[] = ['failed', 'stopped', 'paused'];
 const HELD_LEASE: readonly string[] = ['leased', 'in_task', 'paused'];
 const UNFINISHED: readonly TaskState[] = ['queued', 'running', 'paused'];
 
+/** What `stopTask` hands `untag` of the task it stopped. */
+export interface StoppedTask {
+  subjectRef: string;
+  repoId: string | null;
+  botId: string;
+  startedAt: string | null;
+  createdAt: string;
+}
+
+/**
+ * How long each GitHub call a person's Stop makes may take. The route waits on
+ * up to three in a row, and at the client's thirty seconds each a Stop could
+ * hang for a minute and a half before it answered.
+ */
+const STOP_GITHUB_MS = 5_000;
+
+/** A GitHub account, by the id GitHub gives it when it is known, else by its login. */
+interface Account {
+  login: string | null;
+  id: number | null;
+}
+
+function sameAccount(a: Account, b: Account): boolean {
+  return a.id !== null && b.id !== null ? a.id === b.id : sameLogin(a.login, b.login);
+}
+
+/** A bot's account: its login, and the id its sign-in recorded. A credential that cannot be read leaves the login. */
+async function accountOf(bot: { id: string; githubLogin: string | null }): Promise<Account> {
+  const credential = await (async () => credentials.getCredential(bot.id))().catch(() => null);
+  return { login: bot.githubLogin, id: credential?.githubUserId ?? null };
+}
+
+/**
+ * Whether the `needs-human` on an issue or pull request is the stopped task's
+ * own: the newest time GitHub's timeline has it put on, the account the
+ * task's bot acts as put it on, after the task started. The minute allows for
+ * GitHub's clock and this database's disagreeing. Accounts are compared by
+ * the id GitHub gives, where both sides have one: a login can be renamed.
+ *
+ * Not any crew account's: the automation account puts it on to hold work for
+ * a person ("Hold this PR", a send-back past its limit, a merge without its
+ * reviews), and a Stop that took that off would lift a person's hold. A bot
+ * whose account an automation seat shares is not told apart from it, so its
+ * label stays. A timeline that cannot be read, or that does not reach back to
+ * the label, is a label that stays.
+ */
+export async function labelledByTask(
+  client: Pick<GitHubClient, 'request'>,
+  repoFullName: string,
+  number: number,
+  task: Pick<StoppedTask, 'startedAt' | 'createdAt'>,
+  bot: { id: string; githubLogin: string | null },
+): Promise<boolean> {
+  try {
+    const own = await accountOf(bot);
+    if (!own.login && own.id === null) return false;
+    const automation = await Promise.all((await bots.listBots()).filter((member) => member.role === 'automation').map(accountOf));
+    if (automation.some((account) => sameAccount(account, own))) return false;
+    const [owner, name] = repoFullName.split('/');
+    const items =
+      'timelineItems(itemTypes: [LABELED_EVENT], last: 100) { nodes { ... on LabeledEvent { ' +
+      'actor { login ... on User { databaseId } ... on Bot { databaseId } } createdAt label { name } } } }';
+    const answer = await client.request<{
+      data?: {
+        repository?: {
+          issueOrPullRequest?: {
+            timelineItems?: {
+              nodes?: ({ actor?: { login?: string; databaseId?: number } | null; createdAt?: string; label?: { name?: string } | null } | null)[];
+            } | null;
+          } | null;
+        } | null;
+      };
+      errors?: unknown[];
+    }>(
+      'POST',
+      '/graphql',
+      {
+        query:
+          'query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { issueOrPullRequest(number: $number) { ' +
+          `... on Issue { ${items} } ... on PullRequest { ${items} } } } }`,
+        variables: { owner, name, number },
+      },
+      { timeoutMs: STOP_GITHUB_MS },
+    );
+    if (answer.errors?.length) return false;
+    const last = (answer.data?.repository?.issueOrPullRequest?.timelineItems?.nodes ?? []).filter((node) => node?.label?.name === 'needs-human').at(-1);
+    if (!last) return false;
+    const by: Account = { login: last.actor?.login ?? null, id: typeof last.actor?.databaseId === 'number' ? last.actor.databaseId : null };
+    const since = Date.parse(task.startedAt ?? task.createdAt);
+    return sameAccount(by, own) && Date.parse(last.createdAt ?? '') >= since - 60_000;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether an issue is work a person owes: a `do:` other than `do:ai`. Triage
+ * gives one `needs-human` on purpose, so the dispatcher never offers it to a
+ * builder (`crew/skills/triage/SKILL.md`), and no Stop takes that off.
+ */
+function personOwes(labels: readonly string[]): boolean {
+  return labels.some((label) => label.startsWith('do:') && label !== 'do:ai');
+}
+
 /**
  * Ends a task for good, as a person decided: hostd's cancel ends whatever
  * is left of its session and marks it stopped with the reason, its lease is
@@ -399,15 +504,27 @@ const UNFINISHED: readonly TaskState[] = ['queued', 'running', 'paused'];
  * asking the question put on it and only an answer took off (`Gates.close`):
  * left on after a Stop, the dispatcher would not lease the issue again and
  * the merge line would hold the pull request, with no card saying why. It is
- * asked by the same rule as an answer: the question this stop closed put the
- * label there, and no other question waits on the subject.
+ * asked when no other question waits on the subject, and told whether a
+ * question this stop closed recorded putting the label there (`ours`); when
+ * none did, it decides from who GitHub says put the label on
+ * (`labelledByTask`). A label a bot put on itself with `gh`, before it asked
+ * or without asking, is one no question records: the question found it on
+ * already, and a Stop left it there with nothing to say why.
+ *
+ * GitHub is not asked when an answer ended the task and kept the label on
+ * purpose (`wasRefused`: Refuse, handing off or abandoning at the cost cap),
+ * or when any question the task asked recorded putting it on: that label is
+ * the question's, and its answer's rule decides. A refused task is stopped,
+ * and its thread still offers Stop: asked, the timeline named the task's own
+ * account, the label came off, and the dispatcher leased the issue again to
+ * ask for the same paths.
  */
 export async function stopTask(
   taskId: string,
   actor: string,
   note: string,
   hostd: Pick<HostdClient, 'cancelTask'>,
-  options: { unfinished?: boolean; untag?: (task: { subjectRef: string; repoId: string | null; botId: string }) => Promise<boolean> } = {},
+  options: { unfinished?: boolean; untag?: (task: StoppedTask, ours: boolean) => Promise<boolean> } = {},
 ): Promise<{ task: string; state: string; releasedLease: string | null; questionsClosed: number; stopped: boolean }> {
   const task = await tasks.getTask(taskId);
   if (!task) throw new HttpFailure(404, 'there is no such task');
@@ -456,12 +573,15 @@ export async function stopTask(
   try {
     // Read first: once closed, which of them put `needs-human` on is not asked again.
     const waiting = options.untag ? await threads.listOpenGatesOnSubject(task.subjectRef) : [];
+    // A read that fails closes the questions all the same, and asks GitHub nothing.
+    const asked = options.untag ? await threads.listGatesForTasks([task.id]).catch(() => null) : [];
     const closed = await threads.expireGatesOfTask(task.id, actor, note || reason);
     questionsClosed = closed.length;
     const ours = waiting.some((gate) => closed.includes(gate.id) && gate.addedNeedsHuman !== false);
     const othersWait = waiting.some((gate) => !closed.includes(gate.id));
-    if (options.untag && ours && !othersWait) {
-      labelTakenOff = await options.untag(task).catch((error: unknown) => {
+    const timeline = asked !== null && !wasRefused(task.exitReason) && !asked.some((gate) => gate.addedNeedsHuman !== false);
+    if (options.untag && !othersWait && (ours || timeline)) {
+      labelTakenOff = await options.untag(task, ours).catch((error: unknown) => {
         console.warn(`[bridge] needs-human is still on ${task.subjectRef}: ${error instanceof Error ? error.message : error}`);
         return false;
       });
@@ -896,7 +1016,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     const selected = subject ? all.filter((thread) => thread.subject_ref === subject) : all;
     const [messages, gates, issueList, repoList, requestList] = await Promise.all([
       threads.listMessages(selected.map((thread) => thread.id)),
-      threads.listOpenGates(),
+      // Without Approve on one whose approval waits (`offeredGate`).
+      threads.listOpenGates().then((open) => open.map(offeredGate)),
       issues.listIssues(),
       // What a thread was about stays what it was about after its repository
       // is removed from OpenADLC.
@@ -1173,7 +1294,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
    * or its question's: its session and worktree go through hostd's own
    * cancel, its lease is let go, and the card with it. A question it waited on
    * is closed unanswered, and `needs-human` comes off as an answer would take
-   * it off; a console request whose triage it was is abandoned. Before this
+   * it off, or when the task's own account put it on while it ran
+   * (`labelledByTask`); a console request whose triage it was is abandoned. Before this
    * the only way was hostd's internal route by hand, which left the lease
    * holding the issue and the card offering "Try again" on work somebody had
    * decided not to finish.
@@ -1181,16 +1303,19 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
   router.post('/v1/tasks/:id/stop', async ({ params, identity, body }) => {
     const input = await body<{ reason?: string }>().catch(() => ({}) as { reason?: string });
     // As the task's bot, as the question's label went on, and not on an issue
-    // labelled `openadlc:ignore`, which the crew leaves alone.
-    const untag = async (task: { subjectRef: string; repoId: string | null; botId: string }): Promise<boolean> => {
+    // labelled `openadlc:ignore`, which the crew leaves alone, nor on work a
+    // person owes. A label no closed question recorded as its own comes off
+    // only when the task's own account put it on while the task ran.
+    const untag = async (task: StoppedTask, ours: boolean): Promise<boolean> => {
       const parsed = parseRef(task.subjectRef);
       const repo = parsed && task.repoId ? (await repos.listRepos()).find((entry) => entry.id === task.repoId) : null;
       const bot = repo ? await bots.getBotById(task.botId) : null;
       const client = bot ? await deps.actors.asBot(bot.name) : null;
-      if (!parsed || !repo || !client) return false;
-      const labels = (await client.getIssue(repo.fullName, parsed.number)).labels;
-      if (hasIgnoreLabel(labels) || !labels.includes('needs-human')) return false;
-      await client.removeLabel(repo.fullName, parsed.number, 'needs-human');
+      if (!parsed || !repo || !bot || !client) return false;
+      const labels = (await client.getIssue(repo.fullName, parsed.number, { timeoutMs: STOP_GITHUB_MS })).labels;
+      if (hasIgnoreLabel(labels) || !labels.includes('needs-human') || personOwes(labels)) return false;
+      if (!ours && !(await labelledByTask(client, repo.fullName, parsed.number, task, bot))) return false;
+      await client.removeLabel(repo.fullName, parsed.number, 'needs-human', { timeoutMs: STOP_GITHUB_MS });
       return true;
     };
     const stopped = await stopTask(params.id ?? '', identity, (input.reason ?? '').trim().slice(0, 300), hostd, { untag });

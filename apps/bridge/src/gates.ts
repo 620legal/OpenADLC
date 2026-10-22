@@ -444,11 +444,13 @@ export class Gates {
     // gate on a stray comment ("any news?") would resume the task without the
     // paths and drop the approval without a word.
     if (request?.held && answer !== PLAN_CHANGE_APPROVE) {
+      const approval = `**${publicNameOf(input.answeredBy)} commented**, which changes nothing: ${publicNameOf(request.held.approvedBy)}'s approval of ${pathList(request.paths)}`;
       await this.say(
         gate,
-        `**${publicNameOf(input.answeredBy)} commented**, which changes nothing: ${publicNameOf(request.held.approvedBy)}'s approval of ${pathList(request.paths)} is still waiting for ` +
-          `${request.held.blockedBy.map((number) => `#${number}`).join(', ')} to let go of overlapping paths. ` +
-          'Reply `Approve` to try again now, or `Refuse` to stop the task.',
+        request.held.failed
+          ? `${approval} is kept, but adding the paths failed; the console says why. Reply \`Approve\` to try again, or \`Refuse\` to stop the task.`
+          : `${approval} is still waiting for ${request.held.blockedBy.map((number) => `#${number}`).join(', ')} to let go of overlapping paths. ` +
+              'It goes on by itself once they do; reply `Refuse` to stop the task instead.',
       );
       return { answer, taskId: null, held: true };
     }
@@ -459,7 +461,7 @@ export class Gates {
       // Applied only by the answer that claims the gate. Two answers at once (a
       // console click and a reply on the issue) both read the gate open, and
       // both edited the issue and widened the lease before one of them lost.
-      return this.close(gate, answer, input.answeredBy, null, { via, grant: 'plan_change_approved' }, approved.apply);
+      return this.applyApproval(gate, request, input.answeredBy, via, approved.apply);
     }
 
     // The cost-cap gate. "continue" resumed the task with the cap where it
@@ -579,22 +581,55 @@ export class Gates {
       try {
         const gate = await threads.getGate(gateId);
         if (!gate || gate.state !== 'open' || !request.held) continue;
-        const approved = await this.approve(gate, request, request.held.approvedBy, true);
+        const approved = await this.approve(gate, request, request.held.approvedBy);
         if (approved.held) continue;
-        const done = await this.close(
-          gate,
-          PLAN_CHANGE_APPROVE,
-          request.held.approvedBy,
-          null,
-          { via: 'held', grant: 'plan_change_approved' },
-          approved.apply,
-        );
+        const done = await this.applyApproval(gate, request, request.held.approvedBy, 'held', approved.apply);
         if (done.taskId) resume.push(done.taskId);
       } catch (error) {
         console.warn(`[bridge] could not apply the plan change on gate ${gateId}: ${error instanceof Error ? error.message : error}`);
       }
     }
     return resume;
+  }
+
+  /**
+   * Carries out an approval whose paths are free, as the answer that claims
+   * the gate. When that fails, `close` hands the claim back and the question
+   * is open again; an approval that had waited still named what it waited on,
+   * so its card went on saying it would go on by itself once #71 let go, with
+   * nothing to press and the failure only in the log. It is recorded instead,
+   * and the card asks again with the reason (`attention.ts`).
+   */
+  private async applyApproval(
+    gate: GateRef,
+    request: leases.PlanChangeRecord,
+    approvedBy: string,
+    via: GateChannel,
+    apply: () => Promise<string>,
+  ): Promise<{ answer: string; taskId: string | null }> {
+    try {
+      return await this.close(gate, PLAN_CHANGE_APPROVE, approvedBy, null, { via, grant: 'plan_change_approved' }, apply);
+    } catch (error) {
+      if (request.held) await this.notApplied(gate, request.held, approvedBy, error).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /** Records, once for each reason, that a waiting approval could not be carried out, and says so in the thread. */
+  private async notApplied(gate: GateRef, was: leases.PlanChangeHold, approvedBy: string, error: unknown): Promise<void> {
+    if ((await threads.getGate(gate.id))?.state !== 'open') return;
+    const why = redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 500);
+    if (was.failed === why && was.blockedBy.length === 0) return;
+    if (!(await leases.holdPlanChange(gate.id, { approvedBy, blockedBy: [], failed: why }, was))) return;
+    if (!gate.threadId) return;
+    await threads.addMessage({
+      threadId: gate.threadId,
+      kind: 'sys',
+      author: 'openadlc',
+      text: `${approvedBy} approved the plan change and nothing holds its paths now, but adding them failed. Approve again to try once more, or Refuse to stop the task`,
+      note: why,
+      payload: { gateId: gate.id },
+    });
   }
 
   private async planChangeOf(gate: { id: string; options: string[] }): Promise<leases.PlanChangeRecord | null> {
@@ -822,7 +857,6 @@ export class Gates {
     gate: GateRef,
     request: leases.PlanChangeRecord,
     approvedBy: string,
-    retry = false,
   ): Promise<{ held: true } | { held: false; apply: () => Promise<string> }> {
     const task = gate.taskId ? await tasks.getTask(gate.taskId) : null;
     const repo = task?.repoId ? (await repos.listRepos()).find((entry) => entry.id === task.repoId) : null;
@@ -837,16 +871,21 @@ export class Gates {
     const blockedBy = await this.blockers(lease, request.paths);
     if (blockedBy.length > 0) {
       const stillWaiting =
-        retry && request.held?.blockedBy.length === blockedBy.length && request.held.blockedBy.every((number, i) => number === blockedBy[i]);
+        request.held?.blockedBy.length === blockedBy.length && request.held.blockedBy.every((number, i) => number === blockedBy[i]);
       // A retry runs whenever any work ends, so it speaks only when what it waits
       // on has changed: once per event, not once per unrelated task that ends.
+      // So does a person approving again: #27 was approved three times while
+      // #71 held its paths, from a card that still asked, and got the same
+      // comment each time. Needs you shows it as waiting (`attention.ts`).
       if (stillWaiting) return { held: true };
-      await leases.holdPlanChange(gate.id, { approvedBy, blockedBy });
+      // Two approvals at once both read the same hold: only the one whose
+      // write lands tells the issue.
+      if (!(await leases.holdPlanChange(gate.id, { approvedBy, blockedBy }, request.held))) return { held: true };
       const waiting = blockedBy.map((number) => `#${number}`).join(', ');
       await this.say(
         gate,
         `**${publicNameOf(approvedBy)} approved** adding ${pathList(request.paths)}, but ${waiting} holds paths that overlap ${request.paths.length === 1 ? 'it' : 'them'}. ` +
-          'The task stays paused and the paths are added when that work lets go of them; approving again tries at once.',
+          'The task stays paused until that work lets go of them; then the paths are added and the task goes on, with nothing more to answer.',
       );
       if (gate.threadId) {
         await threads.addMessage({

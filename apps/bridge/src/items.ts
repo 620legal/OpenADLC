@@ -1,5 +1,6 @@
 import { attachments as attachmentStore, designMemory as designMemoryStore, bots as botStore, issues as issueStore, repos as repoStore, requests as requestStore, tasks as taskStore, threads as threadStore } from '@openadlc/db';
-import { BOT_ROLES, hasNextLabel, hasPausedLabel, roleLabel, type BotRole, type Gate, type Message, type StageKey, type TaskKind, type TaskState } from '@openadlc/shared';
+import type { leases } from '@openadlc/db';
+import { BOT_ROLES, PLAN_CHANGE_APPROVE, hasNextLabel, hasPausedLabel, roleLabel, type BotRole, type Gate, type Message, type StageKey, type TaskKind, type TaskState } from '@openadlc/shared';
 import { requestPrefixOf } from './request-context.js';
 import { readHolds } from './item-hold.js';
 import { isActive, issueForSubject, parseRef, subjectsOf, type IssueFacts } from './work.js';
@@ -184,7 +185,22 @@ export interface ItemRole {
 }
 
 export type ItemMessage = Message & { subjectRef: string; role: string | null; seat: string | null; bot: string | null };
-export type ItemGate = Gate & { subjectRef: string | null; role: string | null; bot: string | null; seat: string | null };
+export type ItemGate = OpenGate & { subjectRef: string | null; role: string | null; bot: string | null; seat: string | null };
+
+/** An open gate, with whether a person's approval of its plan change waits (`threads.listOpenGates`). */
+export type OpenGate = Gate & { held?: leases.PlanChangeHold | null };
+
+/**
+ * An open gate as the console offers it to be answered. One whose approval
+ * waits on other work has no Approve: it goes on by itself, and the thread
+ * and the item view offered Approve on it again, which #27 was given three
+ * times on 2026-10-22. Once adding the paths failed, Approve is what tries
+ * again, so it stays.
+ */
+export function offeredGate<G extends OpenGate>(gate: G): G {
+  const waits = Boolean(gate.held && !gate.held.failed && gate.held.blockedBy.length > 0);
+  return waits ? { ...gate, options: gate.options.filter((option) => option !== PLAN_CHANGE_APPROVE) } : gate;
+}
 
 export interface ItemTask {
   id: string;
@@ -247,7 +263,7 @@ export interface ItemRows {
   threads: readonly ItemThread[];
   messages: readonly Message[];
   /** Open gates anywhere; only the item's are kept. */
-  gates: readonly Gate[];
+  gates: readonly OpenGate[];
   tasks: readonly ItemTaskRow[];
   attachments?: readonly unknown[];
   designMemory?: readonly unknown[];
@@ -335,7 +351,7 @@ export function itemView(rows: ItemRows): ItemView {
       const botId = thread?.bot_id ?? task?.botId ?? '';
       return [
         {
-          ...gate,
+          ...offeredGate(gate),
           subjectRef: task?.subjectRef ?? thread?.subject_ref ?? null,
           role: thread ? roleOfThread(thread) : (botById.get(botId)?.role ?? null),
           seat: thread ? seatOfThread(thread) : (botById.get(botId)?.slot ?? null),

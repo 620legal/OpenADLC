@@ -1844,6 +1844,8 @@ const store = vi.hoisted(() => ({
   /** Answered work waiting for GitHub (`task.resume_waits_on_github`), and what is still owed a resume. */
   resumeWaits: [] as { at: string; payload: Record<string, unknown> }[],
   owed: [] as Record<string, unknown>[],
+  /** Approved plan changes waiting on another lease, as `leases.listHeldPlanChanges` reads them. */
+  heldPlanChanges: [] as { gateId: string; request: Record<string, unknown> }[],
 }));
 
 vi.mock('@openadlc/db', () => ({
@@ -1869,7 +1871,7 @@ vi.mock('@openadlc/db', () => ({
   costs: {},
   credentials: {},
   issues: { listIssues: vi.fn(async () => ISSUES) },
-  leases: {},
+  leases: { listHeldPlanChanges: vi.fn(async () => store.heldPlanChanges) },
   listAudit: vi.fn(),
   listEventsOfType: vi.fn(async (type: string, since: Date) => {
     store.eventTypes.push(type);
@@ -1983,6 +1985,167 @@ describe('GET /v1/attention', () => {
     expect(body.items.map((item) => item.id)).toEqual(['stall:openadlc-testbed#29', 'gate:gate-old']);
     // A gate older than the week is still a gate: its task is read on its own.
     expect(body.items[1]).toMatchObject({ kind: 'question', bot: { name: 'ottoexampleco' } });
+  });
+});
+
+/**
+ * A plan change a person approved that waits for another lease to let go of
+ * its paths. On 2026-10-22 #27's stayed "has a question" with Approve and
+ * Refuse after it was approved; it looked as if nothing had happened, and it
+ * was approved three times.
+ */
+describe('an approved plan change that waits on another lease', () => {
+  const PATHS = ['packages/db/src/store/work-items.ts', 'packages/db/src/store/work-items.test.ts'];
+  const planGate = (id: string, taskId: string) => ({
+    id,
+    taskId,
+    question: 'Add `packages/db/src/store/work-items.ts` and `packages/db/src/store/work-items.test.ts` to this issue’s Expected paths?',
+    options: ['Approve', 'Refuse'],
+    githubCommentUrl: `https://github.com/janedoe/openadlc-testbed/issues/16#issuecomment-${id}`,
+    createdAt: minutesAgo(30),
+  });
+  const building = (id: string, subjectRef: string) => task({ id, botId: 'bot-builder', kind: 'implement', subjectRef, state: 'paused' });
+  const base = { now: NOW, bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] };
+
+  it('is a waiting card naming the holder, its pull request and the paths, with no Approve or Refuse on its face', async () => {
+    const { attentionItems } = await load();
+    const items = attentionItems({
+      ...base,
+      gates: [planGate('gate-pc', 'task-pc')],
+      tasks: [building('task-pc', 'openadlc-testbed#16')],
+      heldPlanChanges: [{ gateId: 'gate-pc', paths: PATHS, approvedBy: 'janedoe', blockedBy: [11] }],
+    });
+
+    expect(items).toHaveLength(1);
+    const [item] = items;
+    expect(item).toMatchObject({
+      id: 'plan-change:gate-pc',
+      kind: 'plan_change_waiting',
+      group: 'work',
+      headline: 'The builder (openadlc-atlas-janedoe) waits for #11 to let go of the approved paths',
+      subject: { repo: 'openadlc-testbed', number: 16 },
+      since: minutesAgo(30),
+    });
+    // Not the question again: no choices to answer it with.
+    expect(item?.question).toBeUndefined();
+    expect(item?.detail).toContain('janedoe approved adding `packages/db/src/store/work-items.ts` and `packages/db/src/store/work-items.test.ts`');
+    expect(item?.detail).toContain('#11 (pull request #29)');
+    expect(item?.detail).toContain('goes on by itself');
+    // What it waits on first; Refuse only behind Show more, and Approve nowhere.
+    expect(item?.actions[0]).toEqual({ kind: 'open_url', label: 'Open pull request #29', url: 'https://github.com/janedoe/openadlc-testbed/pull/29' });
+    expect(item?.actions).toContainEqual({ kind: 'answer_gate', label: 'Refuse', gateId: 'gate-pc', answer: 'Refuse' });
+    expect(item?.actions.some((action) => 'answer' in action && action.answer === 'Approve')).toBe(false);
+    expect(item?.actions.map((action) => action.kind)).not.toContain('answer');
+  });
+
+  it('links an issue with no pull request yet, and names every holder', async () => {
+    const { attentionItems } = await load();
+    const [item] = attentionItems({
+      ...base,
+      gates: [planGate('gate-pc', 'task-pc')],
+      tasks: [building('task-pc', 'openadlc-testbed#16')],
+      heldPlanChanges: [{ gateId: 'gate-pc', paths: [PATHS[0]!], approvedBy: 'janedoe', blockedBy: [11, 15] }],
+    });
+    expect(item?.headline).toBe('The builder (openadlc-atlas-janedoe) waits for #11 and #15 to let go of the approved path');
+    expect(item?.detail).toContain('#11 (pull request #29) and #15 hold paths that overlap it');
+    expect(item?.actions.slice(0, 2)).toEqual([
+      { kind: 'open_url', label: 'Open pull request #29', url: 'https://github.com/janedoe/openadlc-testbed/pull/29' },
+      { kind: 'open_url', label: 'Open #15', url: 'https://github.com/janedoe/openadlc-testbed/issues/15' },
+    ]);
+  });
+
+  it('says what to do when the work it waits on is itself waiting on a person', async () => {
+    const { attentionItems } = await load();
+    const stuck = task({ id: 'task-review', botId: 'bot-second', kind: 'review', subjectRef: 'openadlc-testbed#29', state: 'failed', endedAt: minutesAgo(20), exitReason: 'engine exited 1' });
+    const items = attentionItems({
+      ...base,
+      gates: [planGate('gate-pc', 'task-pc')],
+      tasks: [building('task-pc', 'openadlc-testbed#16'), stuck],
+      heldPlanChanges: [{ gateId: 'gate-pc', paths: PATHS, approvedBy: 'janedoe', blockedBy: [11] }],
+    });
+    const waiting = items.find((item) => item.kind === 'plan_change_waiting');
+    expect(items.some((item) => item.kind === 'task_failed' && item.subject.number === 11)).toBe(true);
+    expect(waiting?.detail).toContain('#11 has its own card in Needs you');
+    expect(waiting?.detail).not.toContain('goes on by itself');
+  });
+
+  it('says neither goes on when two of them wait on each other', async () => {
+    const { attentionItems } = await load();
+    const items = attentionItems({
+      ...base,
+      gates: [planGate('gate-16', 'task-16'), planGate('gate-11', 'task-11')],
+      tasks: [building('task-16', 'openadlc-testbed#16'), building('task-11', 'openadlc-testbed#11')],
+      heldPlanChanges: [
+        { gateId: 'gate-16', paths: PATHS, approvedBy: 'janedoe', blockedBy: [11] },
+        { gateId: 'gate-11', paths: ['apps/bridge/src/gates.ts'], approvedBy: 'janedoe', blockedBy: [16] },
+      ],
+    });
+    expect(items.map((item) => item.kind)).toEqual(['plan_change_waiting', 'plan_change_waiting']);
+    for (const item of items) expect(item.detail).toContain('wait on each other');
+  });
+
+  it('is gone once the paths are added and the task resumes, which answers its question', async () => {
+    const { attentionItems } = await load();
+    // `Gates.applyHeld` answers the gate as the person approved: it is no
+    // longer open, so no card is left of it, waiting or asking.
+    const items = attentionItems({
+      ...base,
+      gates: [],
+      tasks: [task({ id: 'task-pc', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'running' })],
+      heldPlanChanges: [{ gateId: 'gate-pc', paths: PATHS, approvedBy: 'janedoe', blockedBy: [11] }],
+    });
+    expect(items).toEqual([]);
+  });
+
+  it('asks again, with why and its choices on its face, once the paths are free but adding them failed', async () => {
+    // Left as it was, the card said it would go on by itself once #11 let go,
+    // with nothing to press, while the failure was only in the log.
+    const { attentionItems } = await load();
+    const failed = 'The builder (openadlc-atlas-janedoe) is not connected to GitHub. Run: openadlc auth login --bot builder';
+    const [item] = attentionItems({
+      ...base,
+      gates: [planGate('gate-pc', 'task-pc')],
+      tasks: [building('task-pc', 'openadlc-testbed#16')],
+      heldPlanChanges: [{ gateId: 'gate-pc', paths: PATHS, approvedBy: 'janedoe', blockedBy: [], failed }],
+    });
+    expect(item).toMatchObject({
+      id: 'gate:gate-pc',
+      kind: 'question',
+      headline: 'The paths janedoe approved could not be added',
+      question: { gateId: 'gate-pc', options: ['Approve', 'Refuse'] },
+    });
+    expect(item?.detail).toContain('nothing holds them now, but adding them failed. The builder (openadlc-atlas-janedoe) is not connected to GitHub. Run: openadlc auth login --bot builder.');
+    expect(item?.detail).toContain('Approve again to try once more');
+    expect(item?.detail).not.toContain('goes on by itself');
+  });
+
+  it('leaves a plan change nobody has approved a question, with its choices', async () => {
+    const { attentionItems } = await load();
+    const [item] = attentionItems({
+      ...base,
+      gates: [planGate('gate-pc', 'task-pc')],
+      tasks: [building('task-pc', 'openadlc-testbed#16')],
+      heldPlanChanges: [{ gateId: 'gate-other', paths: PATHS, approvedBy: 'janedoe', blockedBy: [11] }],
+    });
+    expect(item).toMatchObject({ id: 'gate:gate-pc', kind: 'question', question: { gateId: 'gate-pc', options: ['Approve', 'Refuse'] } });
+  });
+
+  it('is read from the held approvals, and a read that fails leaves the question as it was', async () => {
+    const { readAttention } = await load();
+    store.gates = [planGate('gate-pc', 'task-pc')];
+    store.tasks = [];
+    store.heldPlanChanges = [
+      { gateId: 'gate-pc', request: { paths: PATHS, reason: 'the store moved', held: { approvedBy: 'janedoe', blockedBy: [11] } } },
+    ];
+    try {
+      expect((await readAttention(NOW)).heldPlanChanges).toEqual([{ gateId: 'gate-pc', paths: PATHS, approvedBy: 'janedoe', blockedBy: [11] }]);
+      const { leases } = await import('@openadlc/db');
+      vi.mocked(leases.listHeldPlanChanges).mockRejectedValueOnce(new Error('database gone'));
+      expect((await readAttention(NOW)).heldPlanChanges).toEqual([]);
+    } finally {
+      store.gates = [];
+      store.heldPlanChanges = [];
+    }
   });
 });
 

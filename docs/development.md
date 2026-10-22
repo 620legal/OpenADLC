@@ -365,7 +365,8 @@ A task that needs to write outside its lease's paths ends a message with a
 
 - **It is a gate with two choices**, `Approve` and `Refuse`, so it shows as a
   question in Needs you and on the issue. The paths and the reason are in it.
-  The task pauses like it does for any gate.
+  The task pauses like it does for any gate. Once approved and waiting on
+  another issue (below), its card is a waiting one instead.
 - **Who is asked.** When the issue had a design pass, whoever answered its
   spec gate; otherwise the person who filed the console request it came from;
   otherwise the person who filed the issue on GitHub, when they have access to
@@ -395,17 +396,22 @@ A task that needs to write outside its lease's paths ends a message with a
 - **A path another lease holds** is not granted. Another active lease, or an
   issue in build or review that declared or changed an overlapping path, holds
   it, whatever the repository's path policy says. The approval is kept, the issue is
-  told which issues hold the paths, and the task stays paused. The paths are
-  added when that work ends (a task ending, a pull request closing or merging),
-  and a person answering `Approve` again tries at once. There is no timer for
+  told which issues hold the paths, and the task stays paused. Needs you shows
+  it as waiting on them, with no Approve or Refuse on the card's face
+  (`plan_change_waiting`, `apps/bridge/src/attention.ts`; [troubleshooting.md](troubleshooting.md#an-approved-plan-change-waits-on-another-issue)),
+  and the thread and the item view offer only Refuse (`offeredGate`). When
+  the paths are free but adding them fails, the hold records why
+  (`held.failed`) and the question is asked again with the reason.
+  The paths are added when that work ends (a task ending, a pull request
+  closing or merging), and a person answering `Approve` again tries at once. There is no timer for
   this: a lease that only expires is let go the next time some work ends. A
   task ending, a pull request closing or merging, and an answer that stops a
   task and releases its lease (Refuse, or handing off or abandoning at the
   cost cap) all retry the held approvals. Two paused tasks that each
   ask for a path the other holds wait on each other until a person refuses or
   edits one of them. The issue is told once, when a person's answer holds the
-  approval, and again only when the issues it waits on change; a retry that
-  finds the same blockers says nothing. The check for a blocking lease and the
+  approval, and again only when the issues it waits on change; a retry, or a
+  person approving again, that finds the same blockers says nothing. The check for a blocking lease and the
   widening are not one step, so another issue can be leased onto the paths in
   between; the window is a GitHub round trip. While
   an approval is held, a comment that is not `Approve` or `Refuse` changes

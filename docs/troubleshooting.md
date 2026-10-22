@@ -122,7 +122,22 @@ card goes (`POST /v1/tasks/:id/stop`). **Stop** works on a task waiting on a
 question too: its question is closed unanswered and leaves Needs you, the
 bot is not resumed (an answer already on its way when the stop lands resumes
 nothing), and `needs-human` comes off its issue or pull request as an answer
-would take it off. The question's card offers **Stop**: on the card itself
+would take it off. When no question it closed recorded putting the label on
+(the bot labelled the issue itself before it asked, or asked nothing at all),
+it comes off when GitHub's timeline says the task's own account put it on
+last, after the task started. It stays when no question is left open on the
+subject but a person, another crew account (the automation account's holds:
+**Hold this PR**, a send-back past its limit) or an earlier task put it on;
+on an issue with a `do:` label other than `do:ai`, which triage gives it on
+purpose because a person owes the work; on one labelled `openadlc:ignore`;
+while another question waits on the subject; on a task an answer ended that
+keeps the label on purpose (a refused plan change, a hand-off or abandon at
+the cost cap), so the issue is not leased again to ask the same; and when a
+question the task asked, answered since, recorded putting it on, which
+leaves it to that question's rule. Accounts are compared by the id GitHub
+gives where both sides have one, and each GitHub call a Stop makes is given
+up after five seconds. The audit row says when it came off
+(`needsHumanRemoved`). The question's card offers **Stop**: on the card itself
 for a question with no choices, and under **Show more** for one with choices,
 whose face holds the choices. Stopping the triage of a console request abandons the request, as **Abandon**
 does: nothing starts it again.
@@ -1385,6 +1400,42 @@ behaves like this:
 
 ```bash
 grep -E 'resolution round|waits for #|stacked on' "$(openadlc logs bridge)" | tail -n 20
+```
+
+## An approved plan change waits on another issue
+
+A builder that asks to add paths to its lease (`plan_change`) and is approved
+while another issue's lease or work in build or review holds an overlapping
+path stays paused, and its question stays open ([development.md](development.md#plan-changes)).
+Needs you shows it as waiting, not as the question again: "The builder (…)
+waits for #71 to let go of the approved paths", naming who approved it, the
+paths, and each issue that holds them with its pull request, with a button to
+open it. Its face has nothing that answers it; **Refuse** is under **Show
+more**, and drops the change and stops the task. The bot's thread and the
+item view offer only **Refuse** on it too.
+
+- **It goes on by itself.** When that work merges, closes or lets go of the
+  paths, the paths are added and the task resumes, and the card goes with its
+  question. Nothing needs pressing.
+- **What it waits on waits on you.** When the holder has its own card in Needs
+  you (a question, a failed task, a stalled review), the waiting card says so:
+  settle that one, and this one follows.
+- **Two wait on each other.** When each holds a path the other asked for, both
+  cards say neither goes on: refuse one of the changes, or edit one issue's
+  Expected paths.
+- **The paths were free, but adding them failed.** The builder is not
+  connected to GitHub, say. The card is the question again, "The paths …
+  approved could not be added", with the reason and **Approve** and
+  **Refuse** on its face; the thread says so once for each reason. Fix what
+  it says, then **Approve** again, or let the next work that ends try it.
+- **Approving again posts nothing.** An `Approve` on GitHub tries again at
+  once: it is granted if the paths are free, and while the same issues hold
+  them it changes nothing and writes nothing on the issue. The issue is told
+  again only when what it waits on changes, and two approvals at once tell
+  it once.
+
+```bash
+grep -E 'could not apply the plan change' "$(openadlc logs bridge)" | tail -n 20
 ```
 
 ## A green pull request waits for a person

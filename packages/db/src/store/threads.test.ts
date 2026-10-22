@@ -85,6 +85,13 @@ describe('whether a gate put needs-human on its subject', () => {
     expect((vi.mocked(queryOne).mock.calls.at(-1)?.[1] as unknown[])[6]).toBe(true);
   });
 
+  it('is read with every gate a task asked, answered or not, so a Stop can tell a label its question kept', async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ ...ROW, state: 'answered', added_needs_human: true }]);
+
+    expect(await listGatesForTasks(['task-1'])).toEqual([expect.objectContaining({ id: 'gate-1', addedNeedsHuman: true })]);
+    expect(String(vi.mocked(query).mock.calls.at(-1)?.[0])).toMatch(/added_needs_human\n\s+from gates/);
+  });
+
   it('is read with the gates still open on the subject, by any of its tasks', async () => {
     vi.mocked(query).mockResolvedValueOnce([{ ...ROW, added_needs_human: true }]);
 
@@ -94,6 +101,23 @@ describe('whether a gate put needs-human on its subject', () => {
     const [sql, params] = vi.mocked(query).mock.calls.at(-1) ?? [];
     expect(String(sql)).toMatch(/t\.subject_ref = \$1 and g\.state = 'open'/);
     expect(params).toEqual(['openadlc#31']);
+  });
+});
+
+describe('an open plan change a person approved', () => {
+  it('comes with the hold its message carries, so nothing offers Approve on it again', async () => {
+    vi.mocked(query).mockResolvedValueOnce([
+      { ...ROW, held: { approvedBy: 'janedoe', blockedBy: [71, 'x'] } },
+      { ...ROW, id: 'gate-2', held: null },
+    ]);
+
+    const [held, asking] = await listOpenGates();
+
+    expect(held?.held).toEqual({ approvedBy: 'janedoe', blockedBy: [71] });
+    expect(asking?.held).toBeNull();
+    expect(String(vi.mocked(query).mock.calls.at(-1)?.[0])).toMatch(
+      /q\.payload->'held' from messages q\s+where q\.thread_id = g\.thread_id and q\.kind = 'gate' and q\.payload->>'gateId' = g\.id::text/,
+    );
   });
 });
 

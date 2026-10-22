@@ -1,6 +1,7 @@
 import { redactSecrets } from '@openadlc/shared';
 import type { Gate, Message, MessageKind } from '@openadlc/shared';
 import { query, queryOne } from '../client.js';
+import { toHold, type PlanChangeHold } from './leases.js';
 
 export interface ThreadRow {
   id: string;
@@ -46,14 +47,17 @@ interface GateRow {
   created_at: Date;
   context?: string | null;
   added_needs_human?: boolean;
+  held?: unknown;
 }
 
 /**
  * A gate as the bridge reads it to answer it: with whether opening it put
  * `needs-human` on its subject, so answering it takes off only a label the
- * crew's question put there and never a person's hold.
+ * crew's question put there and never a person's hold. An open gate also says
+ * whether a person's approval of its plan change waits (`held`), so nothing
+ * offers Approve on one already approved.
  */
-export type GateRecord = Gate & { addedNeedsHuman?: boolean };
+export type GateRecord = Gate & { addedNeedsHuman?: boolean; held?: PlanChangeHold | null };
 
 function toMessage(row: MessageRow): Message {
   return {
@@ -87,6 +91,7 @@ function toGate(row: GateRow): GateRecord {
     ...(row.created_at ? { createdAt: row.created_at.toISOString() } : {}),
     ...(row.context !== undefined ? { context: row.context } : {}),
     ...(row.added_needs_human !== undefined ? { addedNeedsHuman: row.added_needs_human } : {}),
+    ...(row.held !== undefined ? { held: toHold(row.held) } : {}),
   };
 }
 
@@ -256,12 +261,16 @@ export async function createGate(input: {
   return toGate(row);
 }
 
-export async function listOpenGates(): Promise<Gate[]> {
+export async function listOpenGates(): Promise<GateRecord[]> {
   const rows = await query<GateRow>(
     // With the bot's last message before it in its conversation, since the
-    // question it ended on: what the card shows the question is about.
+    // question it ended on: what the card shows the question is about. And
+    // the hold its own message carries (`leases.holdPlanChange`).
     `select g.id, g.task_id, g.thread_id, g.question, g.options, g.state, g.answer, g.answered_by, g.answered_at,
             g.addressed_to, g.github_comment_url, g.created_at,
+            (select q.payload->'held' from messages q
+              where q.thread_id = g.thread_id and q.kind = 'gate' and q.payload->>'gateId' = g.id::text
+              order by q.at desc limit 1) as held,
             (select m.text from messages m
               where m.thread_id = g.thread_id and m.kind = 'bot' and m.at <= g.created_at
                 and m.at > coalesce((select max(q.at) from messages q
@@ -315,10 +324,13 @@ export async function listOpenGatesOnSubject(subjectRef: string): Promise<GateRe
  * what needs you, and one read per task was a query each fifteen seconds for
  * every one of them.
  */
-export async function listGatesForTasks(taskIds: readonly string[]): Promise<Gate[]> {
+export async function listGatesForTasks(taskIds: readonly string[]): Promise<GateRecord[]> {
   if (taskIds.length === 0) return [];
   const rows = await query<GateRow>(
-    `select id, task_id, thread_id, question, options, state, answer, answered_by, answered_at, addressed_to, github_comment_url, created_at
+    // With whether each put `needs-human` on: a Stop leaves a label one of
+    // its task's questions recorded to the rule that question's answer keeps.
+    `select id, task_id, thread_id, question, options, state, answer, answered_by, answered_at, addressed_to, github_comment_url, created_at,
+            added_needs_human
        from gates
       where task_id = any($1::uuid[])
       order by created_at`,
