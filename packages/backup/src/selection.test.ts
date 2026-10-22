@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { applyRestore } from './apply.js';
-import { BackupError, decryptBackup, encryptBackup, readManifest } from './archive.js';
+import { BackupError, readManifest } from './archive.js';
 import { buildBackup } from './contents.js';
 import { planRestore } from './plan.js';
 import { EVERYTHING, selectionFrom, signInsByDefault, type BackupSelection } from './selection.js';
-import { CLAUDE_SEAT, CODEX_SEAT, KEY_ACCOUNT, VALUES, cleanShape, fakeTarget, sourceInstall } from './test-fixtures.js';
+import { CLAUDE_SEAT, CODEX_SEAT, KEY_ACCOUNT, VALUES, cleanShape, fakeTarget, open, seal, sourceInstall } from './test-fixtures.js';
 
 /**
  * What a choice takes from an install, and what the archive then says about
@@ -68,13 +68,13 @@ describe('everything', () => {
     const crewOnly = buildBackup(found, { ...EVERYTHING, install: false }, NOW).contents;
     expect(crewOnly.spendingLimits).toBeUndefined();
 
-    const back = await decryptBackup(await encryptBackup(whole, 'a passphrase'), 'a passphrase');
+    const back = await open(await seal(whole, 'a passphrase'), 'a passphrase');
     expect(back.spendingLimits).toEqual([{ scope: 'global', kind: 'month_total', amountUsd: 80 }]);
 
     // An archive from before caps were saved has no list, so a restore of it
     // must not wipe caps set since.
     const { spendingLimits: _dropped, ...older } = whole;
-    const fromBefore = await decryptBackup(await encryptBackup(older, 'a passphrase'), 'a passphrase');
+    const fromBefore = await open(await seal(older, 'a passphrase'), 'a passphrase');
     expect(fromBefore.spendingLimits).toBeUndefined();
   });
 
@@ -129,7 +129,7 @@ describe('everything', () => {
   });
 
   it('records the choice in the manifest as flags and counts — never a name', async () => {
-    const archive = await encryptBackup(contents, 'a passphrase');
+    const archive = await seal(contents, 'a passphrase');
     const manifest = readManifest(archive);
 
     expect(manifest.version).toBe(3);
@@ -148,7 +148,7 @@ describe('everything', () => {
   });
 
   it('round-trips through the sealed form exactly', async () => {
-    const back = await decryptBackup(await encryptBackup(contents, 'a passphrase'), 'a passphrase');
+    const back = await open(await seal(contents, 'a passphrase'), 'a passphrase');
     expect(back.bots).toEqual(contents.bots);
     expect(back.repositories).toEqual(contents.repositories);
     expect(back.accounts).toEqual(contents.accounts);
@@ -166,7 +166,7 @@ describe('part of the install', () => {
     expect(contents.settings).toEqual({});
     expect(contents.accounts).toEqual([]);
     expect(leftOut.find((entry) => entry.ref === 'ssh-signing-openadlc-sydney-janedoe')?.reason).toMatch(/was not chosen/);
-    expect(readManifest(await encryptBackup(contents, 'p')).includes).toMatchObject({ bots: 'some', botSignIns: false, install: false });
+    expect(readManifest(await seal(contents, 'p')).includes).toMatchObject({ bots: 'some', botSignIns: false, install: false });
   });
 
   it('takes a bot’s sign-in only with its tick, and the record of it with the token', () => {
@@ -203,7 +203,7 @@ describe('part of the install', () => {
     expect(take(EVERYTHING).contents.history).toBeNull();
     const { contents } = take({ ...EVERYTHING, history: true });
     expect(contents.history?.threads).toHaveLength(2);
-    expect(readManifest(await encryptBackup(contents, 'p')).counts).toMatchObject({ threads: 2, messages: 2, audit: 1, ledger: 1, requests: 1 });
+    expect(readManifest(await seal(contents, 'p')).counts).toMatchObject({ threads: 2, messages: 2, audit: 1, ledger: 1, requests: 1 });
   });
 });
 

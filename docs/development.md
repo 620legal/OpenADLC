@@ -64,6 +64,19 @@ pnpm --filter @openadlc/bridge exec vitest run src/webhooks.test.ts        # one
 pnpm --filter @openadlc/bridge exec vitest run src/webhooks.test.ts -t 'a gate answered'   # one test
 ```
 
+A test that seals or opens a backup does it at `TEST_KEY_COST`
+(`packages/backup/src/archive.ts`): with `seal` and `open` from
+`packages/backup/src/test-fixtures.ts` in that package, or with `{ keyCost:
+TEST_KEY_COST }` from `@openadlc/backup` outside it. At a backup's own cost a
+key takes about 0.3 s to derive on a laptop and seconds under load, and the
+tests that paid it, once or more each, timed out at vitest's 5 s while other
+builds ran. Only a test may: every archive records the cost its key was
+derived at, `encryptBackup` and `decryptBackup` refuse one below a backup's
+unless they are handed that very object, and `tests/backup-key-cost.test.ts`
+fails when a file that is not a test names it. One test in
+`packages/backup/src/archive.test.ts` still seals and opens at the real cost,
+with a minute to do it.
+
 Unit tests live beside the code they test, as `*.test.ts`. The suites in
 `tests/` are different: `tests/*.test.ts` run with `pnpm test` and check the
 repository itself (skills, templates, the claims in the docs), and

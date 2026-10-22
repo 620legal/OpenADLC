@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decryptBackup, encryptBackup, type BackupContents } from './archive.js';
+import type { BackupContents } from './archive.js';
 import { chosenArchive, compareInstall } from './compare.js';
 import { ATTRIBUTION_KEY_REF, SIGN_INS_NOT_CHOSEN, buildBackup, classifySecret, mergedAttributionKeys, type InstallSnapshot } from './contents.js';
 import type { InstallShape } from './plan.js';
@@ -15,6 +15,8 @@ import {
   fakeTakeOver,
   fakeTarget,
   memoryInstall,
+  open,
+  seal,
   sourceInstall,
   type MemoryBot,
 } from './test-fixtures.js';
@@ -217,7 +219,7 @@ describe('backing up a crew that shares one GitHub account', () => {
 
   it('keeps the accounts through sealing and opening', async () => {
     const { contents } = backup();
-    const opened = await decryptBackup(await encryptBackup(contents, 'correct horse'), 'correct horse');
+    const opened = await open(await seal(contents, 'correct horse'), 'correct horse');
     expect(opened.manifest.counts.identities).toBe(2);
     expect(opened.identities).toEqual(contents.identities);
   });
@@ -496,14 +498,14 @@ describe('restoring an archive written before accounts could be shared', () => {
   }
 
   it('opens as it was written', async () => {
-    const opened = await decryptBackup(await encryptBackup(versionTwo(), 'correct horse'), 'correct horse');
+    const opened = await open(await seal(versionTwo(), 'correct horse'), 'correct horse');
     expect(opened.manifest.version).toBe(2);
     expect(opened.identities).toBeUndefined();
     expect(opened.manifest.counts.identities).toBeUndefined();
   });
 
   it('reads each bot as an account of its own, and restores it as it always did', async () => {
-    const contents = await decryptBackup(await encryptBackup(versionTwo(), 'correct horse'), 'correct horse');
+    const contents = await open(await seal(versionTwo(), 'correct horse'), 'correct horse');
     const { recorded, takeOver, signIns } = await restoreOnto(contents, cleanShape());
 
     expect(signIns.filter((one) => one.provider === 'github').map((one) => one.key)).toEqual(['bot:builder', 'bot:lead-reviewer']);

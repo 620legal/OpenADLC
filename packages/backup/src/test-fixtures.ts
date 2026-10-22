@@ -1,6 +1,15 @@
 import { ProviderKeyRejected } from '@openadlc/engines';
 import { DeviceAuthError, GitHubApiError, type UserToken } from '@openadlc/github';
-import { BackupError, type ArchivedHistory, type ArchivedSpendingLimit, type LoginFiles } from './archive.js';
+import {
+  BackupError,
+  TEST_KEY_COST,
+  decryptBackup,
+  encryptBackup,
+  type ArchivedHistory,
+  type ArchivedSpendingLimit,
+  type BackupContents,
+  type LoginFiles,
+} from './archive.js';
 import type { RestoreDb, RestoreTarget } from './apply.js';
 import { capAboveGlobal, RESTORED_REQUEST_STATES, repositoryNameTaken, spendingCapKey, type InstallSnapshot } from './contents.js';
 import type { InstallShape } from './plan.js';
@@ -109,6 +118,17 @@ export const HISTORY: ArchivedHistory = {
     },
   ],
 };
+
+/**
+ * `encryptBackup` and `decryptBackup` at the tests' key cost, which every
+ * test that seals an archive uses but the one in archive.test.ts that pays a
+ * backup's own: see `TEST_KEY_COST`.
+ */
+export const seal = (contents: BackupContents, passphrase: string): Promise<Buffer> =>
+  encryptBackup(contents, passphrase, { keyCost: TEST_KEY_COST });
+
+export const open = (archive: Buffer, passphrase: string): Promise<BackupContents> =>
+  decryptBackup(archive, passphrase, { keyCost: TEST_KEY_COST });
 
 /** The install being backed up: three seats, two of them connected, three model accounts, one repository. */
 export function sourceInstall(): InstallSnapshot {

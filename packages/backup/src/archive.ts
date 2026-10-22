@@ -55,6 +55,13 @@ export interface ManifestIncludes {
   history: boolean;
 }
 
+/** What a key costs to derive: scrypt's N, r and p. */
+export interface KeyCost {
+  N: number;
+  r: number;
+  p: number;
+}
+
 /**
  * The cleartext part of an archive: enough to tell an operator what a file is,
  * and nothing more.
@@ -64,7 +71,9 @@ export interface ManifestIncludes {
  * because this is the half of the file that anyone who has the file can read.
  * "Nine secrets, eight settings, nine bots, taken on Tuesday" is what somebody
  * staring at `openadlc-backup-2026-09-21.fleetbak` needs in order to know they
- * have the right file; who the install belongs to is not.
+ * have the right file; who the install belongs to is not. The one other thing
+ * in it, the cost the key was derived at, is in the open in any key
+ * derivation's format, and was in OpenADLC's source before it was in the file.
  */
 export interface BackupManifest {
   /**
@@ -76,6 +85,12 @@ export interface BackupManifest {
   counts: ManifestCounts;
   /** Version 2 and later. */
   includes?: ManifestIncludes;
+  /**
+   * What the key was derived at, in a sealed archive of any version. Absent
+   * from one sealed before it was recorded, which was derived at
+   * N = 2^17, r = 8, p = 1, and from the plain form, which has no key.
+   */
+  scrypt?: KeyCost;
 }
 
 /** Every version of the contents this OpenADLC reads. */
@@ -492,14 +507,22 @@ const TAG_BYTES = 16;
 const KEY_BYTES = 32;
 
 /**
- * The manifest is counts, flags and a timestamp, so it is a few hundred
- * bytes at most. The cap exists so that a file which merely *begins* with our magic
- * cannot make us scan gigabytes looking for a newline that is not there.
+ * The manifest is counts, flags, a timestamp and the key's cost, so it is a
+ * few hundred bytes at most. The cap exists so that a file which merely
+ * *begins* with our magic cannot make us scan gigabytes looking for a newline
+ * that is not there.
  */
 const MAX_MANIFEST_BYTES = 1024;
 
 /**
- * Key derivation cost.
+ * What every archive was sealed at before the manifest recorded it, so what
+ * one that records nothing is opened at — whatever `KEY_COST` becomes — and
+ * the least a backup is sealed or opened at.
+ */
+const FIRST_KEY_COST: Readonly<KeyCost> = Object.freeze({ N: 2 ** 17, r: 8, p: 1 });
+
+/**
+ * What a backup is sealed at, recorded in its manifest.
  *
  * N = 2**17, r = 8, p = 1 measures ~0.3s on an M-series laptop, so it stays
  * inside the ~1s budget even on a machine two or three times slower — which is
@@ -509,25 +532,80 @@ const MAX_MANIFEST_BYTES = 1024;
  * cloud drive: an attacker gets unlimited offline guesses, and 0.3s per guess is
  * what makes a guessing run expensive.
  *
- * scrypt needs roughly 128 * N * r bytes = 128 MiB here, and Node's default
- * `maxmem` is 32 MiB, so it throws `memory limit exceeded` unless maxmem is
- * raised with N. 256 MiB leaves headroom without inviting a caller-controlled
- * allocation (N is ours, not theirs).
+ * Recorded so it can rise: an archive opens at the cost it says, and one from
+ * a newer OpenADLC that sealed at more still opens here, up to `MOST_N`.
  */
-const SCRYPT: ScryptOptions = { N: 2 ** 17, r: 8, p: 1, maxmem: 256 * 1024 * 1024 };
+const KEY_COST: Readonly<KeyCost> = FIRST_KEY_COST;
+
+/**
+ * The most N an archive is opened at. The header is read before anything
+ * vouches for it, so its cost is the file's to say: an edited one could
+ * otherwise have a restore allocate and churn without bound before the tag
+ * check refuses it. 2^20 at r = 8 is 1 GiB and a few seconds.
+ */
+const MOST_N = 2 ** 20;
+
+/**
+ * The cost the tests seal and open archives at: N = 2^10, a millisecond or
+ * two, where a backup's own took about 0.3 s a derivation on a laptop and
+ * seconds under load — and the tests that paid it, once or more each, timed
+ * out at vitest's 5 s while other builds ran.
+ *
+ * A guess at a passphrase costs 128 times less here, so nothing but a test
+ * seals or opens at it: a cost below `FIRST_KEY_COST` is refused unless the
+ * caller passes this very object, `{ keyCost: TEST_KEY_COST }` — a copy with
+ * the same numbers is refused like any other — and tests/backup-key-cost.test.ts
+ * fails when a file that is not a test names it. One test in archive.test.ts
+ * still seals and opens at `KEY_COST`.
+ */
+export const TEST_KEY_COST: Readonly<KeyCost> = Object.freeze({ N: 2 ** 10, r: 8, p: 1 });
+
+export interface KeyCostOption {
+  /**
+   * Sealing, the cost to seal at: `KEY_COST` when left out, which is what
+   * every caller but a test does. Opening, an archive opens at the cost it
+   * records, and only `TEST_KEY_COST` here changes anything: it lets that be
+   * the test's.
+   */
+  keyCost?: Readonly<KeyCost>;
+}
+
+const sameCost = (a: Readonly<KeyCost>, b: Readonly<KeyCost>): boolean => a.N === b.N && a.r === b.r && a.p === b.p;
+
+const costText = (cost: Readonly<KeyCost>): string => `scrypt N=${String(cost.N)}, r=${String(cost.r)}, p=${String(cost.p)}`;
+
+/**
+ * Whether a key is derived at `cost`: `below` the least a backup is guarded
+ * with, `unknown` to this version (N past `MOST_N` or not a power of two, or
+ * an r or p it never seals at), or null when it is.
+ */
+function costRefusal(cost: Readonly<KeyCost>, testCost: boolean): 'below' | 'unknown' | null {
+  if (testCost && sameCost(cost, TEST_KEY_COST)) return null;
+  const { N, r, p } = cost;
+  if (![N, r, p].every((value) => Number.isSafeInteger(value) && value >= 1)) return 'unknown';
+  if (N < FIRST_KEY_COST.N || r < FIRST_KEY_COST.r) return 'below';
+  if (N > MOST_N || !Number.isInteger(Math.log2(N)) || r !== FIRST_KEY_COST.r || p !== FIRST_KEY_COST.p) return 'unknown';
+  return null;
+}
 
 /**
  * Passphrases get typed on a different machine than they were invented on —
  * that is the entire premise of a backup — and macOS and Linux disagree about
  * how to encode an accented character. Normalising means "café" opens an archive
  * written as "café" whichever keyboard produced it.
+ *
+ * scrypt needs roughly 128 * N * r bytes, 128 MiB at `KEY_COST`, and Node's
+ * default `maxmem` is 32 MiB, so it throws `memory limit exceeded` unless
+ * maxmem is raised with N. Twice the need leaves headroom; N is bounded by
+ * `costRefusal` before it gets here, so a file cannot choose the allocation.
  */
-function deriveKey(passphrase: string, salt: Buffer): Promise<Buffer> {
+function deriveKey(passphrase: string, salt: Buffer, cost: Readonly<KeyCost>): Promise<Buffer> {
+  const options: ScryptOptions = { N: cost.N, r: cost.r, p: cost.p, maxmem: 2 * 128 * cost.N * cost.r };
   // Off the event loop, in libuv's pool: the bridge seals and opens archives
   // inside request handlers, and `scryptSync` held every webhook, the merge
   // line and the console for the whole derivation, once per preview.
   return new Promise((resolve, reject) => {
-    scrypt(passphrase.normalize('NFC'), salt, KEY_BYTES, SCRYPT, (error, key) => (error ? reject(error) : resolve(key)));
+    scrypt(passphrase.normalize('NFC'), salt, KEY_BYTES, options, (error, key) => (error ? reject(error) : resolve(key)));
   });
 }
 
@@ -1072,7 +1150,9 @@ function headerBytes(manifest: BackupManifest): Buffer {
  * Layout: `FLEETBAK1\n` + manifest JSON + `\n` + salt(16) + iv(12) + tag(16) +
  * aes-256-gcm ciphertext. The two cleartext lines are passed to GCM as
  * additional authenticated data, so editing the manifest breaks decryption
- * instead of quietly mislabelling the file.
+ * instead of quietly mislabelling the file. The key is scrypt's over the
+ * passphrase and salt, at the cost the manifest's `scrypt` records — edited,
+ * it derives another key, and the tag refuses that too.
  *
  * The version written is the one the caller's manifest names: what OpenADLC
  * collects now is version 3, and a version 1 or 2 archive can still be made,
@@ -1082,11 +1162,26 @@ function headerBytes(manifest: BackupManifest): Buffer {
  * The counts say so out loud and the ciphertext length says so anyway; hiding it
  * would mean padding, and it is not worth protecting.
  */
-export async function encryptBackup(contents: BackupContents, passphrase: string): Promise<Buffer> {
+export async function encryptBackup(contents: BackupContents, passphrase: string, options: KeyCostOption = {}): Promise<Buffer> {
   requirePassphrase(passphrase);
+  const cost = options.keyCost ?? KEY_COST;
+  const refused = costRefusal(cost, cost === TEST_KEY_COST);
+  if (refused === 'below') {
+    throw new BackupError(
+      `refusing to seal a backup at ${costText(cost)}, below the ${costText(FIRST_KEY_COST)} every backup is sealed at: whoever has the file could guess its passphrase that much faster. Leave keyCost out to seal at ${costText(KEY_COST)}`,
+    );
+  }
+  if (refused === 'unknown') {
+    throw new BackupError(
+      `refusing to seal a backup at ${costText(cost)}: a backup is sealed at an N that is a power of two from ${FIRST_KEY_COST.N} to ${MOST_N}, with r=${FIRST_KEY_COST.r} and p=${FIRST_KEY_COST.p}. Leave keyCost out to seal at ${costText(KEY_COST)}`,
+    );
+  }
   const version = versionOf(contents.manifest?.version);
   const payload = payloadOf(contents, version);
-  const manifest = manifestFor(contents, payload, version);
+  // Whatever the caller's manifest said about a cost is dropped by
+  // `manifestFor`, as an opened archive's is when it is sealed again: the
+  // record is of this sealing.
+  const manifest: BackupManifest = { ...manifestFor(contents, payload, version), scrypt: { N: cost.N, r: cost.r, p: cost.p } };
   const header = headerBytes(manifest);
 
   // Fresh per archive, and never derived from the passphrase or the contents:
@@ -1096,7 +1191,7 @@ export async function encryptBackup(contents: BackupContents, passphrase: string
   const salt = randomBytes(SALT_BYTES);
   const iv = randomBytes(IV_BYTES);
 
-  const cipher = createCipheriv('aes-256-gcm', await deriveKey(passphrase, salt), iv, { authTagLength: TAG_BYTES });
+  const cipher = createCipheriv('aes-256-gcm', await deriveKey(passphrase, salt, cost), iv, { authTagLength: TAG_BYTES });
   cipher.setAAD(header);
   const body = Buffer.concat([cipher.update(serialize(payload), 'utf8'), cipher.final()]);
 
@@ -1162,6 +1257,18 @@ function parseManifest(json: string): BackupManifest {
   if (version >= 3) parsed.counts.identities = count('identities');
   if (version >= 2 && 'attachments' in (counts as Record<string, unknown>)) parsed.counts.attachments = count('attachments');
   if (version >= 2 && 'workItems' in (counts as Record<string, unknown>)) parsed.counts.workItems = count('workItems');
+  // Only when there is one, so an archive sealed before it was recorded reads
+  // back as it was written. Whole numbers and nothing else, because they are
+  // printed in a refusal before any passphrase proves the file.
+  if ('scrypt' in manifest) {
+    const cost = asObject(manifest.scrypt, "this backup's key cost");
+    const whole = (key: keyof KeyCost): number => {
+      const found = cost[key];
+      if (typeof found !== 'number' || !Number.isSafeInteger(found) || found < 1) throw new BackupError(`this backup's manifest has no scrypt ${key}`);
+      return found;
+    };
+    parsed.scrypt = { N: whole('N'), r: whole('r'), p: whole('p') };
+  }
   return parsed;
 }
 
@@ -1236,12 +1343,29 @@ function sameCounts(a: ManifestCounts, b: ManifestCounts): boolean {
  * The manifest that comes back is the cleartext one, but by the time it is
  * returned the auth tag has covered it: the header was the AAD, so a manifest
  * that disagrees with the file it sits on cannot get this far.
+ *
+ * The key is derived at the cost the manifest records, or at the first one
+ * when it records none. One below that is refused before anything is derived:
+ * only a test seals so cheaply, and its archive is not one to restore an
+ * install from.
  */
-export async function decryptBackup(archive: Buffer, passphrase: string): Promise<BackupContents> {
+export async function decryptBackup(archive: Buffer, passphrase: string, options: KeyCostOption = {}): Promise<BackupContents> {
   requirePassphrase(passphrase);
   const parsed = parse(archive);
+  const cost = parsed.manifest.scrypt ?? FIRST_KEY_COST;
+  const refused = costRefusal(cost, options.keyCost === TEST_KEY_COST);
+  if (refused === 'below') {
+    throw new BackupError(
+      `this backup's key was derived at ${costText(cost)}, below the ${costText(FIRST_KEY_COST)} OpenADLC seals every backup at, so neither \`openadlc backup\` nor Settings → Backup made it (a test's archive is sealed that cheaply). Restore from a backup one of them made`,
+    );
+  }
+  if (refused === 'unknown') {
+    throw new BackupError(
+      `this backup's key was derived at ${costText(cost)}, which this version of OpenADLC does not derive keys at. Upgrade OpenADLC, then restore again`,
+    );
+  }
 
-  const decipher = createDecipheriv('aes-256-gcm', await deriveKey(passphrase, parsed.salt), parsed.iv, {
+  const decipher = createDecipheriv('aes-256-gcm', await deriveKey(passphrase, parsed.salt, cost), parsed.iv, {
     authTagLength: TAG_BYTES,
   });
   decipher.setAAD(parsed.header);
