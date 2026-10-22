@@ -139,6 +139,14 @@ vi.mock('@openadlc/db', () => ({
   bots: { listBots: vi.fn(async () => CREW) },
   costs: {},
   credentials: { getCredential: vi.fn(async () => ({ status: 'active', tokenExpiresAt: null })) },
+  // The testbed's deploy-testing skipped its newest run; the website's deployed.
+  deployRuns: {
+    newestTestingEnd: vi.fn(async (repoId: string) =>
+      repoId === 'repo-1'
+        ? { testingConclusion: 'skipped', detail: 'deploy-testing run 39836758586 was skipped' }
+        : { testingConclusion: 'success', detail: 'dispatching deploy-testing' },
+    ),
+  },
   issues: {
     boardCards: vi.fn(async () =>
       [...ISSUES, RETIRED].map((issue) => ({
@@ -490,5 +498,15 @@ describe('GET /v1/repos', () => {
   it('says how many rounds a review runs before it stops, for settings to say it', async () => {
     const body = (await (await fetch(`${bridgeUrl}/v1/repos`)).json()) as { maxReviewRounds: number | null };
     expect(body.maxReviewRounds).toBe(3);
+  });
+
+  // 620legal/OpenADLC's rules name deploy-testing, which skips: Settings said
+  // a merge runs it and a smoke, while every merge went to Done.
+  it('says why a repository’s newest testing deploy had nothing to deploy, for settings to say its merges ship by merging', async () => {
+    const body = (await (await fetch(`${bridgeUrl}/v1/repos`)).json()) as { repos: { name: string; deploysNothing: string | null }[] };
+    expect(body.repos.map((repo) => [repo.name, repo.deploysNothing])).toEqual([
+      ['openadlc-testbed', 'deploy-testing run 39836758586 was skipped'],
+      ['website', null],
+    ]);
   });
 });

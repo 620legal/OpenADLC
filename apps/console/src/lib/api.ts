@@ -891,6 +891,8 @@ export const api = {
         shipsByMerging?: boolean | null;
         /** How it ships, by its rules, and where they came from. Absent from an older bridge. */
         delivery?: RepoDelivery | null;
+        /** Why its newest testing deploy had nothing to deploy, so its merges ship by merging; null when it deployed. Absent from an older bridge. */
+        deploysNothing?: string | null;
       }[];
       /** How many rounds a review runs before it stops and asks. Absent from an older bridge. */
       maxReviewRounds?: number | null;

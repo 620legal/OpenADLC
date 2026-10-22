@@ -1234,7 +1234,9 @@ the Settings choice is not read: change the file by a pull request. Settings →
 Repositories shows which source the rules came from. OpenADLC does not read
 the `OPENADLC_DEPLOY_TESTING` Actions variable.
 In a repository that does have a testing deploy, a closed issue stays in Ship:
-GitHub closes the issue at `Closes #N` before the deploy has run.
+GitHub closes the issue at `Closes #N` before the deploy has run. One whose
+`deploy-testing` run was skipped, or ran no job, goes to Done all the same:
+that merge had nothing to deploy, and shipped by merging.
 
 A merge moves every issue the pull request finishes: the one its branch was cut
 for (`agent/<bot>/<issue>-…`) and each one it closes, as GitHub lists them — a
@@ -1569,10 +1571,13 @@ it was; otherwise it says why not, and that the sweep tries again.
   job did not run: the template's runs only where the repository sets the
   `OPENADLC_DEPLOY_TESTING` Actions variable to `true`. The bridge dispatches
   it all the same, since only the run says what a workflow did, and reads the
-  skip as a deploy of nothing ([below](#a-stacked-issue-waits-after-its-base-merged)).
-  If the repository has no testing environment, say so in its rules
+  skip as a deploy of nothing ([below](#a-stacked-issue-waits-after-its-base-merged)):
+  the merge ships by merging, and its card goes to Done, its timeline saying
+  `Moved to Done: merging shipped it`. Settings → Repositories says the same
+  of the repository while its newest testing deploy had nothing to deploy.
+  If the repository has no testing environment, say so in its rules too
   (`testing: on: none`, or Settings → Repositories → **No testing deploy**):
-  merging then ships, and its cards go to Done.
+  merging then ships without a dispatch.
 
 ## A stacked issue waits after its base merged
 
@@ -1596,15 +1601,20 @@ No deployment, no verification. So the lease is also let go when:
   ended (`testing_conclusion`) and why (`detail`), the audit log has
   `deploy.testing_deployed_nothing`, and the deploy sweep says `its testing
   deploy deployed nothing (…), so its lease was let go` instead of `a testing
-  deploy was already started (running)`. The card stays in Ship: move it to
-  Done, or turn the repository's testing deploy off as above. A run that
-  failed lets nothing go: it is filed as a failed deploy, and the deploy that
-  fixes it is verified as usual.
+  deploy was already started (running)`. A run that was skipped, or that
+  GitHub calls a success and ran no job, had nothing to deploy: its cards go
+  to Done (`deploy.shipped_by_merging` in the audit log, and the reason on the
+  stage move and in each card's timeline), and the deploy sweep moves any
+  still in Ship, settled before it did this. The rest keep the card in Ship:
+  move it to Done, or turn the repository's testing deploy off as above. A
+  run that failed lets nothing go: it is filed as a failed deploy, and the
+  deploy that fixes it is verified as usual.
 - **Not a cancelled run a later merge's deploy carries.** deploy-testing's
   concurrency group cancels a waiting run when a newer merge's queues, and the
   newer deploy finishes both. That run is recorded `superseded`, and its
   lease waits for the newer deploy's verification; if the newer deploy
-  deploys nothing too, both are let go then.
+  deploys nothing too, both are let go then, and if it had nothing to deploy,
+  both go to Done.
 - **The sweep waits on a run it cannot place.** A commit's run is found by the
   whole commit id in its name (`deploy-testing <sha>`). While any run of the
   workflow since the dispatch names none — a short id, or a workflow of the
@@ -1628,7 +1638,7 @@ Every reconcile pass (a quarter of an hour) tries them as well, for a lease
 let go where nothing looks at once.
 
 ```bash
-grep -E 'deployed nothing|released the lease|reached Done' "$(openadlc logs bridge)" | tail -n 20
+grep -E 'deployed nothing|released the lease|reached Done|merging shipped it' "$(openadlc logs bridge)" | tail -n 20
 ```
 
 ## Something is left after removing a repository

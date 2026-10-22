@@ -1,4 +1,4 @@
-import { audit, deployRuns, issues, leases, repos, type DeployRun } from '@openadlc/db';
+import { audit, deployRuns, issues, leases, repos, threads, type DeployRun } from '@openadlc/db';
 import type { DeliveryRules } from '@openadlc/shared';
 import type { EffectiveDelivery } from './delivery-rules.js';
 import type { SendBackResult } from './send-back.js';
@@ -47,8 +47,24 @@ export interface DeployPipelineDeps {
   client: (repoFullName: string) => Promise<DispatchClient | null>;
   /** Sends a change back to build; see `SendBack.fromBridge`. */
   sendBack: { fromBridge(input: { repoName: string; issueNumber: number; from: 'merged'; reason: string }): Promise<SendBackResult> } | null;
+  /**
+   * Moves a card, as `Automation.moveStage`: a merge whose testing deploy had
+   * nothing to deploy goes to Done (`shipByMerging`). Absent, its card stays
+   * in Ship for the deploy sweep to move.
+   */
+  moveStage?: MoveToDone;
   now?: () => number;
 }
+
+/** A card's move to Done, as `Automation.moveStage` takes it. */
+export type MoveToDone = (input: {
+  repoName: string;
+  issueNumber: number;
+  to: 'done';
+  actor: string;
+  reason: string;
+  prNumber: number;
+}) => Promise<{ moved: boolean; reason?: string }>;
 
 type Repo = { id: string; name: string; fullName: string; defaultBranch: string };
 
@@ -172,6 +188,94 @@ export const DEPLOYED_NOTHING: readonly string[] = ['skipped', 'cancelled', 'sta
 /** Whether a testing deploy's recorded conclusion is one that deployed nothing (`DEPLOYED_NOTHING`). */
 export function deployedNothing(conclusion: string | null | undefined): boolean {
   return Boolean(conclusion && DEPLOYED_NOTHING.includes(conclusion));
+}
+
+/**
+ * Whether a testing deploy had nothing to deploy: its workflow ran and chose
+ * to deploy nothing, every job skipped by its own condition. Recorded
+ * `skipped`, whether GitHub called the run skipped or a success that ran no
+ * job (`ranNoJob`). Such a merge ships by merging, and its card goes to Done
+ * (`shipByMerging`): 620legal/OpenADLC's deploy-testing skips, as the
+ * template's does where the repository sets no `OPENADLC_DEPLOY_TESTING`,
+ * and seven of its cards sat in Ship for days with nothing left to come.
+ *
+ * Not the rest of `DEPLOYED_NOTHING`. A run that never started is a broken
+ * workflow file, or a dispatch GitHub dropped, and one cancelled was stopped
+ * by a person or GitHub: the repository does deploy, and the card waits in
+ * Ship for the deploy that carries it.
+ */
+export function nothingToDeploy(conclusion: string | null | undefined): boolean {
+  return conclusion === 'skipped';
+}
+
+/**
+ * The cards a merge whose testing deploy had nothing to deploy finishes,
+ * moved to Done as a merge in a repository that deploys nothing is
+ * (`Webhooks.finishMerge`), each with why: on its stage move, in its
+ * timeline, and in the audit log. `issueNumbers` are its cards still in
+ * Ship. The ones it moved, and what it said.
+ */
+export async function shipByMerging(input: {
+  moveStage: MoveToDone;
+  repoName: string;
+  prNumber: number;
+  sha: string;
+  issueNumbers: readonly number[];
+  why: string;
+}): Promise<{ moved: number[]; lines: string[] }> {
+  const { repoName, prNumber, why } = input;
+  const moved: number[] = [];
+  const lines: string[] = [];
+  for (const issueNumber of input.issueNumbers) {
+    const ref = `${repoName}#${issueNumber}`;
+    try {
+      const result = await input.moveStage({ repoName, issueNumber, to: 'done', actor: 'bridge', reason: `merging shipped it: ${why}`, prNumber });
+      if (!result.moved) {
+        lines.push(`${ref}: not moved to Done (${result.reason ?? 'the move was refused'})`);
+        continue;
+      }
+    } catch (error) {
+      lines.push(`${ref}: not moved to Done (${error instanceof Error ? error.message.slice(0, 120) : String(error)})`);
+      continue;
+    }
+    moved.push(issueNumber);
+    await audit({ actor: 'bridge', action: 'deploy.shipped_by_merging', target: ref, payload: { prNumber, sha: input.sha, why } }).catch(() => undefined);
+    const said = await sayOnCard(
+      [ref, `${repoName}#${prNumber}`],
+      `Moved to Done: merging shipped it. Its testing deploy had nothing to deploy (${why}), so no deployment, smoke or promote follows its merge.`,
+      { stage: 'done', prNumber, sha: input.sha },
+    );
+    lines.push(`${ref} moved to Done: merging shipped it, since its testing deploy had nothing to deploy (${why})${said ? '' : '; no thread on it to say so in'}`);
+  }
+  return { moved, lines };
+}
+
+/**
+ * Says a line in a card's timeline: the newest thread on any of its subjects,
+ * which its work item reads as one conversation. False when it has none, or
+ * the write failed; the stage move keeps the reason all the same.
+ */
+async function sayOnCard(subjects: readonly string[], text: string, payload: Record<string, unknown>): Promise<boolean> {
+  try {
+    const thread = (await threads.listThreadsForSubjects(subjects)).at(-1);
+    if (!thread) return false;
+    await threads.addMessage({ threadId: thread.id, kind: 'sys', author: 'openadlc', text, payload });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Why a repository's newest testing deploy to end had nothing to deploy
+ * (`nothingToDeploy`), from its record, or null: Settings says such a
+ * repository's merges ship by merging. Its rules still name a testing deploy,
+ * so they said a merge waits on testing, over cards that went to Done.
+ */
+export async function deploysNothingHere(repoId: string): Promise<string | null> {
+  const newest = await (async () => deployRuns.newestTestingEnd(repoId))().catch(() => null);
+  if (!newest || !nothingToDeploy(newest.testingConclusion)) return null;
+  return newest.detail ?? 'its run was skipped';
 }
 
 /** A finished run of the testing deploy, as its `workflow_run` delivery or GitHub's list of runs has it. */
@@ -357,10 +461,31 @@ export class DeployPipeline {
             : `${which} never started (${conclusion})`;
       return this.settleNothingDeployed(repo, record, conclusion, why);
     }
+    // A success that ran no job deployed nothing either: every job was
+    // skipped by its `if`. Read as a deploy, its card waited in Ship for a
+    // deployment that never comes.
+    if (conclusion === 'success' && run.id !== null && (await this.ranNoJob(repo, run.id))) {
+      return this.settleNothingDeployed(repo, record, 'skipped', `${which} ran no job: every one was skipped`);
+    }
     // Its deployment, or the failure it reports, takes it from here. The
     // detail is left: a late delivery would overwrite what a later step said.
     await deployRuns.recordTesting(repo.id, record.sha, conclusion, null);
     return conclusion === 'success' ? null : `${repo.name}@${record.sha.slice(0, 7)}: ${which} ended ${conclusion.replace(/_/g, ' ')}`;
+  }
+
+  /**
+   * Whether a finished run ran no job: GitHub lists its jobs and every one
+   * was skipped. False when they cannot be read, or none are listed, which
+   * leaves the run to the deployment it may still report.
+   */
+  private async ranNoJob(repo: Repo, runId: number): Promise<boolean> {
+    const client = await this.deps.client(repo.fullName).catch(() => null);
+    if (!client) return false;
+    const jobs = await client
+      .request<{ jobs?: { conclusion?: string | null }[] }>('GET', `/repos/${repo.fullName}/actions/runs/${runId}/jobs`)
+      .then((answer) => answer.jobs ?? [])
+      .catch(() => []);
+    return jobs.length > 0 && jobs.every((job) => job.conclusion === 'skipped');
   }
 
   /**
@@ -373,7 +498,13 @@ export class DeployPipeline {
    *
    * The earlier runs cancelled for this one (`superseded`) were waiting on it
    * to carry them, and are settled with it, unless a deploy later still
-   * carries them.
+   * carries them. Carried by one that had nothing to deploy, they are
+   * recorded as it is, and ship by merging with it.
+   *
+   * One that had nothing to deploy (`nothingToDeploy`) also moves the
+   * merge's cards from Ship to Done, as a merge where the rules say testing
+   * is `none` does. Only its lease went, so 620legal/OpenADLC's cards sat in
+   * Ship for good once its skipped deploy-testing was settled.
    */
   private async settleNothingDeployed(repo: Repo, record: DeployRun, conclusion: string, why: string, carried = true): Promise<string> {
     const ref = `${repo.name}@${record.sha.slice(0, 7)}`;
@@ -389,6 +520,7 @@ export class DeployPipeline {
         ? await leases.releaseForPullRequest(repo.id, record.prNumber, `merged, and its testing deploy deployed nothing: ${why}`).catch(() => null)
         : null;
     await (async () => this.leaseListener?.(`${ref}: ${why}`))().catch(() => undefined);
+    const shipped = nothingToDeploy(conclusion) ? await this.shipMerge(repo, record, why) : [];
     const earlier: string[] = [];
     if (carried) {
       for (const waiting of await deployRuns.supersededBefore(repo.id, record.sha).catch(() => [])) {
@@ -397,7 +529,7 @@ export class DeployPipeline {
           await this.settleNothingDeployed(
             repo,
             waiting,
-            'cancelled',
+            nothingToDeploy(conclusion) ? conclusion : 'cancelled',
             `its run was cancelled for the testing deploy of ${record.sha.slice(0, 7)}, which deployed nothing either`,
             false,
           ),
@@ -409,7 +541,19 @@ export class DeployPipeline {
       : record.prNumber === null
         ? 'and no pull request is recorded for it, so no lease was let go'
         : `and no lease was held for #${record.prNumber}`;
-    return [`${ref}: ${why}; nothing reached testing to verify the merge on, ${lease}`, ...earlier].join('; ');
+    return [`${ref}: ${why}; nothing reached testing to verify the merge on, ${lease}`, ...shipped, ...earlier].join('; ');
+  }
+
+  /** The merge's cards still in Ship, moved to Done (`shipByMerging`); what was said. */
+  private async shipMerge(repo: Repo, record: DeployRun, why: string): Promise<string[]> {
+    const ref = `${repo.name}@${record.sha.slice(0, 7)}`;
+    if (record.prNumber === null) return [`${ref}: no pull request is recorded for it, so no card was moved to Done; the deploy sweep cannot find one either`];
+    if (!this.deps.moveStage) return [`${ref}: nothing here moves its cards; the deploy sweep moves them to Done`];
+    const prNumber = record.prNumber;
+    const board = await (async () => issues.listIssues(repo.name))().catch(() => null);
+    if (!board) return [`${ref}: the board could not be read, so its cards were not moved to Done; the deploy sweep moves them`];
+    const inShip = board.filter((issue) => issue.prNumber === prNumber && issue.stage === 'merged').map((issue) => issue.number);
+    return (await shipByMerging({ moveStage: this.deps.moveStage, repoName: repo.name, prNumber, sha: record.sha, issueNumbers: inShip, why })).lines;
   }
 
   /**

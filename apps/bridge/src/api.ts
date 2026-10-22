@@ -108,6 +108,7 @@ import { selfUpdateAttentionFromSettings } from './self-update.js';
 import { ATTENTION_WINDOW_DAYS, ClosedSubjects, registerAttentionRoutes, STOPPED_BY_A_PERSON, type HeldPromote } from './attention.js';
 import { asAutomation } from './automation-bot.js';
 import { DeployKnowledge, isTestingDeployChoice, testingDeployChoice, testingDeployStored } from './deploys.js';
+import { deploysNothingHere } from './deploy-pipeline.js';
 import { startBuild } from './build-start.js';
 import type { HealthRegistry } from './health/registry.js';
 import { registerHealthRoutes } from './health/routes.js';
@@ -1811,6 +1812,10 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
             // How it ships by its rules, and where they came from: its
             // `.github/openadlc.yml`, its row, or the choice above.
             delivery: deps.delivery ? await deps.delivery.get(repo).catch(() => null) : null,
+            // Why its newest testing deploy had nothing to deploy, or null.
+            // Its rules name a testing deploy all the same, and the page said
+            // a merge waits on testing while each went to Done.
+            deploysNothing: await deploysNothingHere(repo.id),
           };
         }),
       ),

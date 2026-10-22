@@ -180,6 +180,7 @@ vi.mock('@openadlc/db', async () => ({
   },
   threads: {
     ensureThread: vi.fn(async () => ({ id: 'thread-1' })),
+    listThreadsForSubjects: vi.fn(async (subjects: string[]) => (subjects.includes('openadlc#45') ? [{ id: 'thread-45', subject_ref: 'openadlc#45' }] : [])),
     addMessage: vi.fn(async (message: { text: string }) => {
       store.said.push(message.text);
     }),
@@ -752,24 +753,81 @@ describe('a whole deploy sweep', () => {
   });
 
   it('settles each dispatched testing deploy first, and says of one that deployed nothing what its record says', async () => {
-    const { scheduler } = sweeper();
+    const { scheduler, moves } = sweeper();
     const pipeline = {
-      checkTestingDeploys: vi.fn(async () => ['app@f00dcaf: deploy-testing run 9 was skipped: nothing reached testing; released the lease on #45']),
+      checkTestingDeploys: vi.fn(async () => ['app@f00dcaf: no run of deploy-testing appeared within 10 minutes of its dispatch; released the lease on #45']),
       checkRollbacks: vi.fn(async () => []),
       promoteDue: vi.fn(async () => []),
       sendBackDue: vi.fn(async () => []),
       retryUndispatched: vi.fn(async () => []),
     };
-    store.deployRuns = [{ prNumber: 145, testingDispatchedAt: '2026-10-22T16:57:00.000Z', testingConclusion: 'skipped', detail: 'deploy-testing run 9 was skipped' }];
+    const why = 'no run of deploy-testing appeared within 10 minutes of its dispatch';
+    store.deployRuns = [{ sha: 'f00dcafe', prNumber: 145, testingDispatchedAt: '2026-10-22T16:57:00.000Z', testingConclusion: 'not_started', detail: why }];
     scheduler.useDelivery(pipeline as never, { get: vi.fn(async () => ({ rules: DEFAULT_DELIVERY_RULES, readError: null })) } as never);
 
     const result = await scheduler.run('deploy');
 
-    expect(result.actions[0]).toBe('app@f00dcaf: deploy-testing run 9 was skipped: nothing reached testing; released the lease on #45');
+    expect(result.actions[0]).toBe(`app@f00dcaf: ${why}; released the lease on #45`);
     expect(result.actions).toContain(
-      'openadlc#145: its testing deploy deployed nothing (deploy-testing run 9 was skipped), so its lease was let go; it stays in Ship until a later deploy carries it or a person moves it to Done',
+      `openadlc#145: its testing deploy deployed nothing (${why}), so its lease was let go; it stays in Ship until a later deploy carries it or a person moves it to Done`,
     );
     expect(result.actions.some((line) => line.includes('already started'))).toBe(false);
+    // Never started is not nothing to deploy: the repository does deploy.
+    expect(moves).toEqual([]);
+  });
+
+  /**
+   * 620legal/OpenADLC's deploy-testing skips every run, and seven cards sat in
+   * Ship with their testing deploys settled as skipped: #84 let their leases
+   * go and moved nothing, so no later sweep did either.
+   */
+  it('moves to Done an issue whose testing deploy already settled as having nothing to deploy, with why', async () => {
+    const { scheduler, moves, open } = sweeper();
+    const pipeline = {
+      checkTestingDeploys: vi.fn(async () => []),
+      checkRollbacks: vi.fn(async () => []),
+      promoteDue: vi.fn(async () => []),
+      sendBackDue: vi.fn(async () => []),
+      retryUndispatched: vi.fn(async () => []),
+    };
+    store.deployRuns = [{ sha: 'fe6b790c', prNumber: 145, testingDispatchedAt: '2026-10-22T09:00:00.000Z', testingConclusion: 'skipped', detail: 'deploy-testing run 39836758586 was skipped' }];
+    scheduler.useDelivery(pipeline as never, { get: vi.fn(async () => ({ rules: DEFAULT_DELIVERY_RULES, readError: null })) } as never);
+
+    const result = await scheduler.run('deploy');
+
+    expect(moves).toEqual([
+      { repoName: 'openadlc', issueNumber: 45, to: 'done', actor: 'bridge', reason: 'merging shipped it: deploy-testing run 39836758586 was skipped', prNumber: 145 },
+    ]);
+    expect(result.actions).toEqual([
+      'openadlc#45 moved to Done: merging shipped it, since its testing deploy had nothing to deploy (deploy-testing run 39836758586 was skipped)',
+      'nothing merged is waiting on a testing deploy',
+    ]);
+    expect(store.said).toEqual([expect.stringContaining('Moved to Done: merging shipped it. Its testing deploy had nothing to deploy (deploy-testing run 39836758586 was skipped)')]);
+    expect(store.audits).toContainEqual(expect.objectContaining({ action: 'deploy.shipped_by_merging', target: 'openadlc#45' }));
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['still running', null],
+    ['failed', 'failure'],
+    ['cancelled with no later deploy to carry it', 'cancelled'],
+    ['re-run and deployed after a skip', 'success'],
+  ])('keeps in Ship an issue whose testing deploy is %s', async (_name, conclusion) => {
+    const { scheduler, moves } = sweeper();
+    const pipeline = {
+      checkTestingDeploys: vi.fn(async () => []),
+      checkRollbacks: vi.fn(async () => []),
+      promoteDue: vi.fn(async () => []),
+      sendBackDue: vi.fn(async () => []),
+      retryUndispatched: vi.fn(async () => []),
+    };
+    store.deployRuns = [{ sha: 'fe6b790c', prNumber: 145, testingDispatchedAt: '2026-10-22T09:00:00.000Z', testingConclusion: conclusion, detail: null }];
+    scheduler.useDelivery(pipeline as never, { get: vi.fn(async () => ({ rules: DEFAULT_DELIVERY_RULES, readError: null })) } as never);
+
+    const result = await scheduler.run('deploy');
+
+    expect(moves).toEqual([]);
+    expect(result.actions.some((line) => line.includes('moved to Done'))).toBe(false);
   });
 
   it('looks at each dispatched rollback’s run before it promotes or dispatches again', async () => {

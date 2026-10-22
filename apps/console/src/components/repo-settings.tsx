@@ -34,19 +34,30 @@ export interface RepoSettingsRepo {
   shipsByMerging?: boolean | null;
   /** How it ships, by its rules, and where they came from. Absent from an older bridge. */
   delivery?: RepoDelivery | null;
+  /** Why its newest testing deploy had nothing to deploy, so its merges ship by merging; null or absent when it deployed. */
+  deploysNothing?: string | null;
 }
 
 /**
  * How a repository ships, as lines a person reads: what happens after a
  * merge, what holds production, and where the rules came from. The rules
  * decide; OpenADLC dispatches and never approves an environment.
+ *
+ * `deploysNothing` is why the repository's newest testing deploy had nothing
+ * to deploy. Its merges then ship by merging, and go to Done, whatever the
+ * rules name: the page said a merge runs deploy-testing and a smoke over a
+ * repository whose deploy-testing skipped every merge.
  */
-export function deliveryLines(delivery: RepoDelivery): { rules: string[]; source: string; problem: string | null } {
+export function deliveryLines(
+  delivery: RepoDelivery,
+  deploysNothing: string | null = null,
+): { rules: string[]; source: string; problem: string | null } {
   const { testing, production } = delivery.rules;
   const rules: string[] = [];
   if (testing.on === 'none') {
     rules.push('Merging ships it: no testing deploy, nothing to promote.');
   } else {
+    if (deploysNothing) rules.push(`Merging ships it: ${testing.workflow} deploys nothing here (${deploysNothing}), so a merge goes to Done. Once it deploys:`);
     rules.push(`A merge runs ${testing.workflow}, then ${testing.smoke} on testing${delivery.testingUrl ? ` (${delivery.testingUrl})` : ''}.`);
     if (production.on === 'none') rules.push('Testing is as far as it goes.');
     else if (production.approval === 'reviewers')
@@ -81,9 +92,10 @@ const TESTING_DEPLOY: { mode: TestingDeployChoice; label: string }[] = [
   { mode: 'none', label: 'No testing deploy' },
 ];
 
-/** What Automatic found, under the control. */
-function testingDeployResolved(ships: boolean | null | undefined): string {
+/** What Automatic found, under the control, and whether that deploy deploys anything (`deploysNothing`). */
+function testingDeployResolved(ships: boolean | null | undefined, deploysNothing: string | null | undefined): string {
   if (ships === true) return 'No testing deploy for this repository. Merging ships it.';
+  if (ships === false && deploysNothing) return 'This repository has a deploy-testing workflow, and it deploys nothing here. Merging ships it.';
   if (ships === false) return 'This repository has a testing deploy.';
   return 'Could not tell whether a deploy-testing workflow exists.';
 }
@@ -433,11 +445,11 @@ export function RepoSettings({
           <Segmented label="Testing deploy" choices={TESTING_DEPLOY} value={deploy} onChoose={chooseDeploy} />
         </div>
         {deploy === 'automatic' && resolved !== undefined && (
-          <p className="text-[12px] leading-snug text-soft">{testingDeployResolved(resolved)}</p>
+          <p className="text-[12px] leading-snug text-soft">{testingDeployResolved(resolved, repo.deploysNothing)}</p>
         )}
         {repo.delivery && (
           <div className="flex flex-col gap-1 border-t border-well pt-2">
-            {deliveryLines(repo.delivery).rules.map((line) => (
+            {deliveryLines(repo.delivery, repo.deploysNothing ?? null).rules.map((line) => (
               <p key={line} className="text-[12px] leading-snug text-soft">
                 {line}
               </p>
