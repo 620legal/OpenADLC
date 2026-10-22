@@ -5,7 +5,7 @@ import { heldForPerson } from './merge-line.js';
 import { monthStart, parseCap, summarize as summarizeCi } from './ci-usage.js';
 import { readHolds } from './item-hold.js';
 import type { Attribution } from './attribution.js';
-import { abandonRequest } from './request-lifecycle.js';
+import { abandonRequest, moveRequest } from './request-lifecycle.js';
 import {
   acknowledgements,
   attachments,
@@ -480,6 +480,22 @@ export async function stopTask(
     leaseError = error instanceof Error ? error.message : String(error);
   }
 
+  // A console request whose triage a person stopped is over. Left in
+  // `questions` or `draft`, it left the board, which shows one only while a
+  // task works on it, and Needs you, which skips a task a person stopped, and
+  // the queue starts only a `queued` one: hidden, and never ended. The cost
+  // cap's Abandon ends it the same way (`gates.ts`). Not for `unfinished`:
+  // `abandonRequest` moves the request itself after its stops.
+  let requestAbandoned = false;
+  if (!options.unfinished) {
+    requestAbandoned = Boolean(
+      await moveRequest(task, 'abandoned').catch((error: unknown) => {
+        console.warn(`[bridge] could not abandon ${task.subjectRef}: ${error instanceof Error ? error.message : error}`);
+        return null;
+      }),
+    );
+  }
+
   // Written whatever happened to the lease: hostd has stopped the task already.
   const bot = await bots.getBotById(task.botId).catch(() => null);
   await audit({
@@ -494,6 +510,7 @@ export async function stopTask(
       reason,
       lease: releasing?.id ?? null,
       questionsClosed,
+      ...(requestAbandoned ? { requestAbandoned } : {}),
       ...(leaseError ? { leaseError } : {}),
       ...(questionError ? { questionError } : {}),
     },

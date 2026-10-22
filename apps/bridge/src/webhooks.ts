@@ -1690,16 +1690,16 @@ export class Webhooks {
   }
 
   /**
-   * The reviews still going on a pull request that has closed. A second
-   * review of a pull request the merge line had just merged ran on for
-   * minutes, spending, to post on something already in main.
+   * An issue closed with its build unfinished: its implement tasks stop, as
+   * resume and retry refuse them. Only queued and running ones: a paused one is
+   * `stopPausedOn`'s, which spares the closer's own and says so on the thread;
+   * a paused build stopped here first was gone before it could be named.
    */
-  /** An issue closed with its build unfinished: its implement tasks stop, as resume and retry refuse them. */
   private async stopBuildsOf(repoName: string, issueNumber: number): Promise<void> {
     if (!this.stopTask) return;
     const subjectRef = `${repoName}#${issueNumber}`;
     const going = (await tasks.listTasksForSubjects('implement', [subjectRef]).catch(() => [])).filter((task) =>
-      ['queued', 'running', 'paused'].includes(task.state),
+      ['queued', 'running'].includes(task.state),
     );
     for (const task of going) {
       await this.stopTask(task.id, 'bridge', alreadyLanded(subjectRef)).catch((error: unknown) =>
@@ -1708,10 +1708,16 @@ export class Webhooks {
     }
   }
 
+  /**
+   * The reviews still going on a pull request that has closed. A second
+   * review of a pull request the merge line had just merged ran on for
+   * minutes, spending, to post on something already in main. A paused one is
+   * `stopPausedOn`'s, as with `stopBuildsOf`.
+   */
   private async stopReviewsOf(repoName: string, prNumber: number, why: string): Promise<void> {
     if (!this.stopTask) return;
     const going = (await tasks.listTasksForSubjects('review', [`${repoName}#${prNumber}`]).catch(() => [])).filter((task) =>
-      ['queued', 'running', 'paused'].includes(task.state),
+      ['queued', 'running'].includes(task.state),
     );
     for (const task of going) {
       await this.stopTask(task.id, 'bridge', why).catch((error: unknown) =>

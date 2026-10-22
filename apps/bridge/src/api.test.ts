@@ -117,6 +117,10 @@ vi.mock('@openadlc/db', () => ({
       const found = stored.requests.find((one) => one.id === id);
       return found ? { ...found } : null;
     }),
+    findRequestByPrefix: vi.fn(async (prefix: string) => {
+      const found = stored.requests.find((one) => one.id.toLowerCase().startsWith(prefix.toLowerCase()));
+      return found ? { ...found } : null;
+    }),
     listRequests: vi.fn(async () => [...stored.requests].reverse().map((one) => ({ ...one }))),
     listQueued: vi.fn(async () => stored.requests.filter((one) => one.state === 'queued').map((one) => ({ ...one }))),
     // Nothing here is left claimed by a restart.
@@ -1008,10 +1012,36 @@ describe('stopping a task that could not finish', () => {
     );
   });
 
-  it('no longer has a refusal for a task waiting on a question', async () => {
-    const { readFile } = await import('node:fs/promises');
-    const source = await readFile(new URL('./api.ts', import.meta.url), 'utf8');
-    expect(source).not.toContain('waiting on a question');
+  it.each(['questions', 'draft'])('abandons a console request in %s whose triage a person stopped, which was left hidden and never ended', async (state) => {
+    // Stop on a request's question card ended the task and left the request in
+    // `questions`: off the board, out of Needs you, and never started again.
+    stored.requests = [{ id: 'a4b02784-0000-0000-0000-000000000000', state, createdAt: '2026-10-22T00:00:00.000Z' }];
+    task = { ...FAILED, state: 'paused', subjectRef: 'request:a4b02784', leaseId: null };
+    openGates = [{ taskId: 'task-81' }];
+    const response = await stop();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ questionsClosed: 1, stopped: true });
+    expect(stored.requests[0]!.state).toBe('abandoned');
+    expect(vi.mocked(audit)).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'task.stopped', payload: expect.objectContaining({ requestAbandoned: true }) }),
+    );
+  });
+
+  it('leaves a request alone when the stop is for unfinished work, which abandonRequest moves itself', async () => {
+    stored.requests = [{ id: 'a4b02784-0000-0000-0000-000000000000', state: 'questions', createdAt: '2026-10-22T00:00:00.000Z' }];
+    task = { ...FAILED, state: 'paused', subjectRef: 'request:a4b02784', leaseId: null };
+    const { stopTask } = await import('./api.js');
+    const result = await stopTask('task-81', 'bridge', 'its issue merged', { cancelTask: async () => undefined } as never, { unfinished: true });
+    expect(result.stopped).toBe(true);
+    expect(stored.requests[0]!.state).toBe('questions');
+  });
+
+  it('leaves an issue alone, which has no request to move', async () => {
+    task = { ...FAILED, state: 'paused' };
+    vi.mocked(requests.updateRequest).mockClear();
+    const response = await stop();
+    expect(response.status).toBe(200);
+    expect(vi.mocked(requests.updateRequest)).not.toHaveBeenCalled();
   });
 
   it('says so, and keeps the lease, when hostd answers but does not stop it', async () => {
