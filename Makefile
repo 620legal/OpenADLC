@@ -17,9 +17,34 @@ setup:
 	pnpm build
 	$(MAKE) migrate
 
-## ci: everything that has to be true before a pull request is opened.
-ci: typecheck test
+## ci: everything that has to be true before a pull request is opened: every
+## package's typecheck and unit tests.
+##
+## All of them at once, in one pnpm run, rather than the typecheck and then the
+## tests, each in dependency order. Neither reads what the other makes, and both
+## read only the builds of what they import, which `make setup` made. In
+## dependency order every app's tests waited for the slowest of
+## packages/engines', and make ci took 210 s on a 10-core Mac and 338 s in a
+## task's computer (#65). pnpm stops at the first failure and ends what is still
+## running, as it did before, so the end of the output, which is all openadlc-ci
+## keeps (apps/hostd/src/local-ci.ts), shows the failure.
+ci:
+	VITEST_MAX_WORKERS=$(CI_WORKERS) pnpm -r --no-sort --workspace-concurrency=$(CI_JOBS) run '/^(typecheck|test)$$/'
 	@echo "ci: green"
+
+# How much of it runs at once: a script for each CPU this computer gives make
+# ci, and two vitest workers in each. A task's computer is a container its
+# cgroup holds to two CPUs, which Node's availableParallelism counts and nproc
+# does not. Most scripts wait on git or a child process as much as they
+# compute: in a two-CPU task's computer two scripts of one worker took 159 s,
+# three 139 s and two of two 135 to 145 s, and on four CPUs four of one 84 s
+# and four of two 74 s. More is slower and flaky: each vitest left to itself
+# takes a worker for every CPU but one, and ten scripts of three workers on a
+# 10-core Mac timed tests out. On one CPU (the deploy seat's) it is one script
+# of one worker: two at once timed out a bridge test that streams a large body.
+# Either can be set: `make ci CI_JOBS=2 CI_WORKERS=1`.
+CI_JOBS ?= $(shell node -p 'require("os").availableParallelism()')
+CI_WORKERS ?= $(shell node -p 'Math.min(2, require("os").availableParallelism())')
 
 test:
 	pnpm test

@@ -25,9 +25,24 @@ short form of it.
 
 ```bash
 pnpm install          # also restores node-pty's execute bit (apps/hostd/scripts/node-pty-exec-bit.mjs); on Linux, compiles it
-pnpm build            # packages first, then apps: apps import @openadlc/* from their dist/
+pnpm build            # packages and the dispatcher first, then the other apps at once: apps import @openadlc/* from their dist/
 make ci               # typecheck and unit tests, what must be green before a pull request
 ```
+
+`make ci` runs every package's typecheck (`tsc --noEmit`, the root `tests/`
+included) and unit tests in one pnpm run, all at once, and stops at the first
+failure. They used to run one after the other, the typecheck and then the
+tests, each package after the ones it depends on, so every app's tests waited
+for the slowest of `packages/engines`'. It runs a script for each CPU the
+computer gives it, each vitest with two workers, and one script of one worker
+on a single CPU (`CI_JOBS` and `CI_WORKERS` in the Makefile; `make ci
+CI_JOBS=2` sets one for a run). It takes about 70 s on a 10-core Mac shared
+with other builds, 135 to 145 s in a task's computer (two CPUs and 6 GB) and
+334 s on one CPU, from 210 s, 338 s and 469 s before. No unit test calls a model:
+the engines' tests run the real `claude` and `codex` only when they are on
+PATH, each with a home of its own, a dummy key, and an API that is the test's
+own server and refuses every call (`refusingApi` in
+`packages/engines/src/engines.test.ts`).
 
 Two things trip everybody once:
 
@@ -177,11 +192,15 @@ docs alone included, has its commits scanned for secrets: gitleaks, at a pinned
 release, reads the commits the pull request adds (or the push brings) with
 `.gitleaks.toml`, which allows the tests' fake credentials by their values. A
 docs-only change runs the scope check and the tests that read docs. Anything
-else runs
-actionlint, the build (which is the typecheck), the scope check, unit tests,
-migrations on an empty database and the seed, and, except on a draft, the
-pipeline, terminal, kill-and-restart, concurrency and onboarding suites. The
-Terraform module runs when `infra/gcp/` changed. A pull request from an
+else runs two jobs side by side: `check`, with actionlint, the build of what
+the apps import (`pnpm build:imported`), the scope check and `make ci`; and
+`integration`, with the whole build
+(`tsc` for every app and `next build` for the console), migrations on an empty
+database and the seed, and, except on a draft, the pipeline, terminal,
+kill-and-restart, concurrency and onboarding suites. A run takes as long as
+the longer of the two, about two and a half minutes by its parts
+([U88](unverified.md)), where one job doing both took about four minutes. setup-node keeps pnpm's store between runs, keyed by the lockfile.
+The Terraform module runs when `infra/gcp/` changed. A pull request from an
 `agent/` branch runs once the merge line labels it `adlc:ci`, and a push to
 main whose tree already passed on its pull request runs nothing more.
 

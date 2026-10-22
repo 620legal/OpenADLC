@@ -37,7 +37,7 @@ make ci          # typecheck and unit tests: green before a pull request opens
   `pnpm build` before testing an app, or its tests run against the old package.
 - **vitest does not typecheck.** CI runs `tsc`. Run `pnpm build` after the last
   edit, test files included; the root `tests/` are not a package it builds, so
-  `make ci` (`pnpm typecheck`) is what checks theirs.
+  `make ci` (every package's `typecheck`, beside the tests) is what checks theirs.
 - One package: `pnpm --filter @openadlc/<name> test`; one test:
   `pnpm --filter @openadlc/<name> exec vitest run <file> -t '<name>'`.
 
