@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { activityOf, boardWork, FILED_SHOWN_MS, itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, type BoardLink } from './board-work.js';
+import { activityOf, boardWork, FILED_SHOWN_MS, itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, withItemPulls, type BoardLink } from './board-work.js';
 import type { IssueFacts, TaskFacts } from './work.js';
 
 /** What `readBoardWork` and `readBoardActivity` read, for the tests of them that read anything. */
@@ -334,6 +334,24 @@ describe('one card per work item', () => {
     expect(cards.map((one) => [one.ref, one.costUsd, one.assignees, one.gateOpen, (one as { active?: unknown[] }).active?.length ?? 0])).toEqual([
       ['api#12', 1.25, ['lead-reviewer'], true, 1],
       ['api#40', 0.5, ['security-reviewer'], false, 1],
+    ]);
+  });
+
+  it('sums a pull linked onto an item that is still only a request into the request’s card', () => {
+    linkId = 0;
+    const requestId = 'abcdef01-0000-4000-8000-000000000000';
+    const links = [link('w-9', 9, 'request', null, null, { requestId }), link('w-9', 9, 'pull', 'repo-1', 60)];
+    expect(lonePulls(links, REPOS)).toEqual([]);
+    const { requests } = itemCards({
+      cards: [],
+      members: [{ ref: 'api#60', repo: 'api', assignees: ['lead-reviewer'], gateOpen: true, costUsd: 0.5, active: [] }],
+      requests: [{ repo: 'api', ref: 'request:abcdef01', assignees: ['intake'], gateOpen: false, costUsd: 0.25, active: [] }],
+      links,
+      repos: REPOS,
+      keyOf,
+    });
+    expect(requests.map((one) => [one.ref, one.item?.key, one.costUsd, one.assignees, one.gateOpen])).toEqual([
+      ['request:abcdef01', 'acme-9', 0.75, ['intake', 'lead-reviewer'], true],
     ]);
   });
 
@@ -673,6 +691,60 @@ describe('reading the board’s work', () => {
       // The item with a link in api is on api's board, its card web#3's.
       expect((await readBoardActivity('api', NOW)).cards.map((card) => card.ref)).toEqual(['api#50', 'api#7', 'web#3']);
     } finally {
+      store.numbered = false;
+      store.links = [];
+    }
+  });
+
+  it('counts a pull unlinked from its issue on its own card, and no longer on the issue’s, though the issue still records it', () => {
+    const link = (id: number, itemId: string, kind: BoardLink['kind'], number: number): BoardLink => ({
+      id, itemId, itemNumber: id, kind, repoId: 'repo-1', number, requestId: null, title: `${kind} ${number}`, state: 'open', url: null, openedAt: minutesAgo(60),
+    });
+    // #12's row still has `prNumber: 31`; a person unlinked #31 into an item of its own.
+    const links = [link(1, 'w-1', 'issue', 12), link(2, 'w-2', 'pull', 31)];
+    const repos = [{ id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {} }];
+    const issues = withItemPulls([issue('api', 12, { prNumber: 31, stage: 'review' })], links, repos);
+    expect(issues[0]?.prNumber).toBeNull();
+    // While it is on #12's item, it stays #12's own.
+    expect(withItemPulls([issue('api', 12, { prNumber: 31 })], [link(1, 'w-1', 'issue', 12), link(2, 'w-1', 'pull', 31)], repos)[0]?.prNumber).toBe(31);
+
+    const loose = loosePulls(links, repos, issues);
+    expect(loose).toEqual([{ ref: 'api#31', number: 31 }]);
+    const work = boardWork({
+      issues,
+      tasks: [running('review-31', 'api#31', { kind: 'review', botId: 'bot-lead', costUsd: 0.5 })],
+      bots: [{ id: 'bot-lead', name: 'noraexampleco' }],
+      repos,
+      gates: [{ taskId: 'review-31' }],
+      stallEvents: [],
+      requests: [],
+      now: NOW,
+      pulls: loose,
+    });
+    expect(work.byRef.get('api#31')).toMatchObject({ costUsd: 0.5, gateOpen: true, assignees: ['noraexampleco'] });
+    expect(work.byRef.get('api#12')).toMatchObject({ costUsd: 0, prNumber: null, assignees: [] });
+  });
+
+  it('says a triage still running on its request as the card of the issue it was filed as', async () => {
+    install();
+    const { requests } = await import('@openadlc/db');
+    const filed = { id: 'abcdef01-0000-4000-8000-000000000000', repoId: 'repo-1', issueNumber: 9, text: 'Request', state: 'filed', createdAt: minutesAgo(30), updatedAt: minutesAgo(20) };
+    vi.mocked(requests.listRequests).mockResolvedValue([filed] as never);
+    store.numbered = true;
+    store.links = [
+      { id: 1, itemId: 'w-1', itemNumber: 1, kind: 'request', repoId: null, number: null, requestId: filed.id, title: 'Request', state: 'open', url: null, openedAt: minutesAgo(30) },
+      { id: 2, itemId: 'w-1', itemNumber: 1, kind: 'issue', repoId: 'repo-1', number: 9, requestId: null, title: 'Issue 9', state: 'open', url: null, openedAt: minutesAgo(20) },
+    ];
+    store.tasks.push(running('task-triage', 'request:abcdef01', { kind: 'intake', botId: 'bot-builder' }));
+    store.sessions.push({ id: 'session-triage', taskId: 'task-triage', lastLine: null });
+    store.panes['session-triage'] = ['[tool] Read: src/app.ts'];
+    try {
+      const all = await readBoardActivity(undefined, NOW);
+      // Said as request:abcdef01, it named a card the board had dropped once #9 was on it.
+      expect(all.cards.map((card) => card.ref)).toEqual(['api#7', 'api#9', 'web#3']);
+      expect(all.cards.find((card) => card.ref === 'api#9')?.active.map((task) => [task.state, task.activity])).toEqual([['running', 'reading the code']]);
+    } finally {
+      vi.mocked(requests.listRequests).mockResolvedValue([]);
       store.numbered = false;
       store.links = [];
     }

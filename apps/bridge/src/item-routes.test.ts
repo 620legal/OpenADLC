@@ -315,6 +315,35 @@ describe('a work item by its key', () => {
     }
   });
 
+  it('opens a pull unlinked from its issue as the pull alone, though the issue still records it, and refuses its controls', async () => {
+    // Issue 12's row still has `prNumber: 31`; a person unlinked pull 31 into an item of its own.
+    world.items.push({ id: 'w-132', number: 132, mergedInto: null });
+    world.links[2] = { ...world.links[2]!, itemId: 'w-132', linkedBy: 'jane@acme.test', url: 'https://github.com/acme/api/pull/31' };
+    for (const subject of ['132', 'api#31']) {
+      const { view } = await read(subject);
+      expect(view.key, subject).toBe('api#31');
+      expect(view.issue, subject).toBeNull();
+      expect(view.pullRequest, subject).toEqual({ number: 31, url: 'https://github.com/acme/api/pull/31' });
+      // Its own state, open, not issue 12's stage.
+      expect(view.stage, subject).toBe('review');
+      expect(view.links.map((one) => [one.ref, one.stage])).toEqual([['api#31', 'review']]);
+      expect(view.subjects, subject).toEqual(['api#31']);
+      expect(view.tasks.map((one) => one.id).sort(), subject).toEqual(['k-lead', 'k-second']);
+    }
+    // The control routes' resolve refuses it before any task is stopped (`main.ts`).
+    const { resolveItem, lonePullRefusal } = await import('./items.js');
+    const found = await resolveItem('api#31');
+    expect(found?.item.issue).toBeNull();
+    expect(lonePullRefusal(found!.item, false)).toMatch(/pull request with no issue/);
+    expect(lonePullRefusal(found!.item, true)).toMatch(/already merged/);
+
+    // Issue 12's item no longer counts the pull's work, nor shows it as its pull request.
+    const { view } = await read('api#12');
+    expect(view.pullRequest).toBeNull();
+    expect(view.subjects).not.toContain('api#31');
+    expect(view.tasks.map((one) => one.id)).toEqual(['k-15']);
+  });
+
   it('says no for a number never handed out, rather than guessing', async () => {
     expect((await read('W-999')).status).toBe(404);
   });

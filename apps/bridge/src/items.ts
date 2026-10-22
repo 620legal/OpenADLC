@@ -724,14 +724,34 @@ async function withWorkItem(
   const repoName = (id: string | null) => repoList.find((one) => one.id === id)?.name ?? null;
   const refOf = (link: workItemStore.Link) => (link.kind === 'request' ? requestSubject(link.requestId!) : `${repoName(link.repoId)}#${link.number}`);
   const first = rows.find((link) => link.kind === 'issue' && repoName(link.repoId)) ?? rows.find((link) => link.kind === 'request') ?? rows.find((link) => repoName(link.repoId));
-  const base = first ? await resolveBySubject(refOf(first), repoList) : null;
-  if (!base) return null;
+  if (!first) return null;
+  // An item with no issue and no request is its pull requests and nothing
+  // else. Resolved through its first pull's subject it took the issue an
+  // issue row records that pull on, even once the pull was unlinked from
+  // that issue's item: the page was issue 12's, and cancel acted on it.
+  const pullOnly = !rows.some((link) => link.kind === 'issue' || link.kind === 'request');
+  const base = pullOnly ? null : await resolveBySubject(refOf(first), repoList);
+  if (!pullOnly && !base) return null;
 
   const names = [...new Set(rows.map((link) => repoName(link.repoId)).filter((name): name is string => Boolean(name)))];
-  const issueRows = (await Promise.all(names.map((name) => issueStore.listIssues(name)))).flat();
+  // Only this item's issues: a pull stands with the issue that records it
+  // when that issue is linked here, not with one on another item.
+  const issueRows = (await Promise.all(names.map((name) => issueStore.listIssues(name))))
+    .flat()
+    .filter((issue) => rows.some((link) => link.kind === 'issue' && repoName(link.repoId) === issue.repoName && link.number === issue.number));
   const requests = await Promise.all(
     rows.map((link) => (link.kind === 'request' ? requestStore.getRequest(link.requestId!).catch(() => null) : Promise.resolve(null))),
   );
+  // An issue's pull request whose link a person moved to another item is
+  // that item's work now, not this one's: its tasks and costs are counted
+  // there, as the board counts them.
+  const elsewhere = new Set<string>();
+  for (const issue of issueRows) {
+    if (!issue.prNumber || rows.some((link) => link.kind === 'pull' && repoName(link.repoId) === issue.repoName && link.number === issue.prNumber)) continue;
+    const repo = repoList.find((one) => one.name === issue.repoName);
+    const owner = repo ? await workItemStore.itemOf({ repoId: repo.id, number: issue.prNumber }).catch(() => null) : null;
+    if (owner && owner.id !== workItem.id) elsewhere.add(`${issue.repoName}#${issue.prNumber}`);
+  }
   const links: ItemLink[] = rows.flatMap((link, index) => {
     const repo = repoName(link.repoId);
     if (link.kind !== 'request' && !repo) return [];
@@ -753,14 +773,7 @@ async function withWorkItem(
     const issue = link.kind === 'issue' ? issueRows.find((one) => one.repoName === link.repo && one.number === link.number) : undefined;
     return issue ? subjectsOf(issue) : [link.ref];
   });
-  // A pull request alone on its item read through `itemOf` as an issue of its
-  // number, which the page drew as "Issue #n" in Intake with cancel on it,
-  // and cancel's merged-work guard saw no pull request. It is the pull it is.
-  const lonePull = first?.kind === 'pull' && !base.item.issue && !base.item.request ? first : null;
-  const item: Item = {
-    ...base.item,
-    ...(lonePull ? { issue: null, pr: lonePull.number, refs: { request: null, issue: null, pullRequest: refOf(lonePull) } } : {}),
-    subjects: [...new Set([...base.item.subjects, ...linkSubjects])],
+  const numbered = {
     workItem: {
       id: workItem.id,
       number: workItem.number,
@@ -768,6 +781,32 @@ async function withWorkItem(
       mergedFrom: asked !== null && asked !== workItem.number ? asked : null,
     },
     links,
+  };
+  if (!base) {
+    // A pull request alone on its item: no issue to draw, hold or close, so
+    // its page has no pause, next or cancel, and the control routes refuse
+    // it (`lonePullRefusal`) before any of its work is stopped.
+    const ref = refOf(first);
+    const repo = repoList.find((one) => one.id === first.repoId) ?? null;
+    const item: Item = {
+      key: ref,
+      subjects: [...new Set(linkSubjects)],
+      request: null,
+      requests: [],
+      issue: null,
+      pr: first.number,
+      repo: repo?.name ?? null,
+      refs: { request: null, issue: null, pullRequest: ref },
+      ...numbered,
+    };
+    return { item, repo };
+  }
+  const prElsewhere = base.item.refs.pullRequest !== null && elsewhere.has(base.item.refs.pullRequest);
+  const item: Item = {
+    ...base.item,
+    ...(prElsewhere ? { pr: null, refs: { ...base.item.refs, pullRequest: null } } : {}),
+    subjects: [...new Set([...base.item.subjects, ...linkSubjects])].filter((subject) => !elsewhere.has(subject)),
+    ...numbered,
   };
   return { item, repo: base.repo };
 }

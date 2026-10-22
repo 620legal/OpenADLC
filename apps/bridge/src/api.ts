@@ -114,7 +114,7 @@ import { registerHealthRoutes } from './health/routes.js';
 import { registerSigningKeyRoutes } from './signing-key-routes.js';
 import { SubjectTitles } from './subject-titles.js';
 import { retryTask } from './task-retry.js';
-import { itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork } from './board-work.js';
+import { itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, withItemPulls } from './board-work.js';
 import { describeSubject } from './thread-view.js';
 import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
@@ -1013,7 +1013,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     // A table a release behind is an install not numbered, not a board that fails.
     const numbered = await (async () => workItems.isNumbered())().catch(() => false);
     const readFor = numbered ? undefined : repoName;
-    const [cards, crew, repoList, openGates, issueList, requestList, links, organization, activeSessions] = await Promise.all([
+    const [cards, crew, repoList, openGates, listed, requestList, links, organization, activeSessions] = await Promise.all([
       issues.boardCards(readFor),
       bots.listBots(),
       repos.listRepos(),
@@ -1026,7 +1026,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     ]);
     // Nor is an issue labelled `openadlc:ignore`, nor its pull request, nor
     // the request it was filed from: the board is the crew's work.
-    const ignored = ignoredSubjects(issueList);
+    const ignored = ignoredSubjects(listed);
+    // An issue's pull request a person linked to another item is that item's.
+    const issueList = withItemPulls(listed, links, repoList);
     const pulls = lonePulls(links, repoList).filter((pull) => !ignored.has(pull.ref));
     // Every pull whose work no issue's card counts, so an item's card sums
     // every link's, not only its issues' and their own pull requests'.

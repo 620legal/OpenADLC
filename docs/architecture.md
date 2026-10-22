@@ -609,8 +609,14 @@ back. A crew account that moves a stage label back is put back.
   every repository it has a link in. A pull request no issue claims is a
   card of its own (`lonePulls`), in Review while open and in Done once
   merged or closed; it has no issue, so nothing moves, holds, puts next or
-  cancels it, on the board or on its page (`lonePullRefusal`). A request
-  in intake carries its item's key until its item has an issue on the board.
+  cancels it, on the board or on its page (`lonePullRefusal`); an item with
+  no issue and no request opens as its pull, even where an issue row still
+  records that pull. An issue's pull request a person linked to another
+  item is that item's work, on its card and its page, and no longer the
+  issue's (`withItemPulls`). A request in intake carries its item's key,
+  and the work on any pull linked to it, until its item has an issue on the
+  board; a triage still running on the request once its issue is there is
+  that issue's card's.
   `/v1/items/:subject` takes a key in any case and with any prefix
   (`acme-128`, `W-128`, `128`) or any linked subject, follows a merge to
   the item it went into, and returns `workItem` and `links`; the item's
