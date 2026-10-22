@@ -855,6 +855,26 @@ export function doneSince(now: Date): Date {
 }
 
 /**
+ * The board's issues, the live ones and the week's (`issues.boardIssues`),
+ * with the row of every other issue of an item the board reads the links of
+ * (`boardLinks`): one that went to Done before the week. An item's card is
+ * its first issue's, in that issue's column (`itemCards`), and its pull
+ * requests and requests are that issue's (`withItemPulls`,
+ * `requestsOnCards`). Without the row, an item whose first issue shipped a
+ * month ago had its second issue's card in Build, while the poll, which
+ * reads its items' issues by row, said the first one's, and the console
+ * read the whole board again on every poll.
+ */
+export async function withItemIssues(listed: readonly issueStore.IssueRecord[], links: readonly BoardLink[]): Promise<issueStore.IssueRecord[]> {
+  const read = new Set(listed.map((issue) => `${issue.repoId}#${issue.number}`));
+  const missing = links.flatMap((link) =>
+    link.kind === 'issue' && link.repoId && link.number !== null && !read.has(`${link.repoId}#${link.number}`) ? [{ repoId: link.repoId, number: link.number }] : [],
+  );
+  if (missing.length === 0) return [...listed];
+  return [...listed, ...(await issueStore.getIssues(missing))].sort(issueStore.byNextFirst);
+}
+
+/**
  * Every linked pull request whose work no issue's card already counts: not
  * the pull request of an issue on the board (`cardWork` counts that one).
  * Given issues read through `withItemPulls`, so that is an issue of the

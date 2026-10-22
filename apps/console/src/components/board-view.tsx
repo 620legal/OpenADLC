@@ -145,7 +145,9 @@ export function BoardView({
   const columns = columnsWithMoves(board.columns, moves).map((column) =>
     filter.trim() ? { ...column, cards: column.cards.filter((card) => cardMatches(card, filter)) } : column,
   );
-  const empty = board.columns.every((column) => column.cards.length === 0);
+  // The first run's board, not a quiet one's: the bridge reads only a week of
+  // Done, and says whether anything went there before it.
+  const empty = board.columns.every((column) => column.cards.length === 0) && !board.doneBefore;
   // Every repository at once is the one view where a card has to say which it
   // is in. Showing one, it would say the same thing on every card.
   const showRepo = repo === 'all' && board.repos.length > 1;
@@ -466,18 +468,20 @@ interface CardHandlers {
  * first. The bridge lists every column in the order the dispatcher takes work
  * in, which is what Build is read by and says nothing about what shipped when:
  * Done showed something shipped just now between two that shipped hours before.
- * `shipped` is how many of the week's shipped and `older` how many shipped
- * before it: a card closed without merging is shown for the week and counted
- * in neither.
+ * `shipped` is how many of the week's shipped: a card closed without merging
+ * is shown for the week and not counted.
+ *
+ * Done said "and N shipped before this week", counted from every card that
+ * had ever shipped. The bridge reads only the week's now (`boardIssues`), so
+ * a count of the cards before it counted the few read for another reason.
  */
-function visibleCards(column: BoardColumn, now: string): { cards: BoardCard[]; shipped: number; older: number } {
-  if (column.stage !== 'done') return { cards: column.cards, shipped: column.cards.length, older: 0 };
+function visibleCards(column: BoardColumn, now: string): { cards: BoardCard[]; shipped: number } {
+  if (column.stage !== 'done') return { cards: column.cards, shipped: column.cards.length };
   const at = (card: BoardCard) => card.shippedAt ?? card.updatedAt;
   const recent = column.cards
     .filter((card) => within(at(card), DONE_DAYS, now))
     .sort((a, b) => Date.parse(at(b)) - Date.parse(at(a)));
-  const counted = (cards: readonly BoardCard[]) => cards.filter((card) => !abandoned(card)).length;
-  return { cards: recent, shipped: counted(recent), older: counted(column.cards) - counted(recent) };
+  return { cards: recent, shipped: recent.filter((card) => !abandoned(card)).length };
 }
 
 function Column({
@@ -502,7 +506,7 @@ function Column({
   cards: CardHandlers;
 }) {
   const stage = stageOf(column.stage);
-  const { cards: shown, shipped, older } = visibleCards(column, now);
+  const { cards: shown, shipped } = visibleCards(column, now);
 
   return (
     <section
@@ -538,7 +542,6 @@ function Column({
         ) : (
           shown.map((card) => <Card key={card.ref} card={card} stage={column.stage} handlers={cards} />)
         )}
-        {older > 0 && <p className="px-1 text-[11.5px] text-dim">and {older} shipped before this week</p>}
       </div>
     </section>
   );
@@ -802,7 +805,7 @@ function PhoneStages({ columns, now, cards }: { columns: BoardColumn[]; now: str
   const column = columns.find((one) => one.stage === chosen) ?? columns[0];
   if (!column) return null;
   const stage = stageOf(column.stage);
-  const { cards: shown, older } = visibleCards(column, now);
+  const { cards: shown } = visibleCards(column, now);
 
   return (
     <div className="flex flex-col gap-3.5 pb-4 pt-3 md:hidden">
@@ -839,7 +842,6 @@ function PhoneStages({ columns, now, cards }: { columns: BoardColumn[]; now: str
         ) : (
           shown.map((card) => <Card key={card.ref} card={card} stage={column.stage} handlers={cards} />)
         )}
-        {older > 0 && <p className="text-[12px] text-dim">and {older} shipped before this week</p>}
       </section>
     </div>
   );

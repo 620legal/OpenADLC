@@ -9,7 +9,7 @@ vi.mock('../client.js', () => ({
 }));
 
 import { query, queryOne } from '../client.js';
-import { boardCards, byNextFirst, getIssue, listBlockedIssues, listRoutableIssues, priorityRank, setIssueLabels, setVouched, upsertIssue, workInFlight, type IssueRecord } from './issues.js';
+import { anyDoneBefore, boardCards, boardIssues, byNextFirst, getIssue, getIssues, listBlockedIssues, listRoutableIssues, priorityRank, setIssueLabels, setVouched, upsertIssue, workInFlight, type IssueRecord } from './issues.js';
 
 /**
  * The order is a comparator rather than a `order by` clause so that it can be
@@ -216,18 +216,109 @@ describe('boardCards', () => {
   });
 
   it('leaves out an issue labelled openadlc:ignore, and keeps it once the label is off', async () => {
-    const row = (number: number, labels: string[]) => ({
-      id: `id-${number}`, repo_id: 'repo', repo_name: 'openadlc', number, title: `issue ${number}`, stage: 'build', labels,
+    const one = (number: number, labels: string[]) => issue({ number, repoName: 'openadlc', labels });
+
+    expect((await boardCards([one(1, ['adlc:build']), one(2, ['adlc:build', 'openadlc:ignore']), one(3, ['fleet:ignore'])])).map((card) => card.ref)).toEqual(['openadlc#1']);
+    expect((await boardCards([one(1, ['adlc:build']), one(2, ['adlc:build'])])).map((card) => card.ref).sort()).toEqual(['openadlc#1', 'openadlc#2']);
+  });
+
+  it('is the cards of the issues the board read, and reads no issue itself', async () => {
+    // It read every issue there had ever been, beside the board's own read of them all.
+    await boardCards([issue({ number: 1, repoName: 'openadlc' })]);
+    expect(vi.mocked(query).mock.calls.map(([sql]) => String(sql)).filter((sql) => sql.includes('from issues'))).toEqual([]);
+  });
+});
+
+/**
+ * The board's issues, from a database of three years of them: `query` here
+ * answers the two selections `boardIssues` makes as Postgres would, each by
+ * its own conditions, and refuses any other.
+ */
+describe('the issues the board reads', () => {
+  const day = 86_400_000;
+  const NOW = Date.parse('2026-10-22T12:00:00.000Z');
+  const since = new Date(NOW - 7 * day);
+  type Row = { id: string; repo_id: string; repo_name: string; number: number; title: string; stage: string; labels: string[]; declared_paths: string[]; pr_changed_paths: string[]; body: string; url: null; pr_number: null; updated_at: Date; created_at: Date };
+  let table: Row[] = [];
+  const put = (number: number, stage: string, updatedDaysAgo: number, repo = 'api') =>
+    table.push({
+      id: `i-${repo}-${number}`, repo_id: `repo-${repo}`, repo_name: repo, number, title: `#${number}`, stage, labels: [`adlc:${stage}`],
       declared_paths: [], pr_changed_paths: [], body: '', url: null, pr_number: null,
-      updated_at: new Date('2026-09-18T00:00:00Z'), created_at: new Date('2026-09-18T00:00:00Z'),
+      updated_at: new Date(NOW - updatedDaysAgo * day), created_at: new Date(NOW - 1100 * day),
     });
-    const read = (rows: ReturnType<typeof row>[]) =>
-      vi.mocked(query).mockImplementation((async (sql: string) => (sql.includes('from issues i join repos') ? rows : [])) as never);
+  const LIVE = /^where i\.stage <> 'done' and \(\$2::text is null or r\.name = \$2\)$/;
+  const WEEK = /^where i\.stage = 'done' and i\.updated_at >= \$1 and \(\$2::text is null or r\.name = \$2\)$/;
 
-    read([row(1, ['adlc:build']), row(2, ['adlc:build', 'openadlc:ignore']), row(3, ['fleet:ignore'])]);
-    expect((await boardCards()).map((card) => card.ref)).toEqual(['openadlc#1']);
+  beforeEach(() => {
+    table = [];
+    vi.mocked(query).mockReset();
+    vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
+      const [from, repoName] = params as [Date, string | null];
+      const arms = String(sql).split('union all').map((arm) => arm.replace(/\s+/g, ' ').trim());
+      return arms.flatMap((arm) => {
+        const where = arm.slice(arm.indexOf('where '));
+        const inRepo = (row: Row) => repoName === null || row.repo_name === repoName;
+        if (LIVE.test(where)) return table.filter((row) => row.stage !== 'done' && inRepo(row));
+        if (WEEK.test(where)) return table.filter((row) => row.stage === 'done' && row.updated_at.getTime() >= from.getTime() && inRepo(row));
+        throw new Error(`the fake database does not know: ${where}`);
+      });
+    }) as never);
+  });
 
-    read([row(1, ['adlc:build']), row(2, ['adlc:build'])]);
-    expect((await boardCards()).map((card) => card.ref).sort()).toEqual(['openadlc#1', 'openadlc#2']);
+  it('is the issues not in Done and those Done in the week, never the history before it', async () => {
+    // Three years of work shipped a day apart, nearly all of it long gone from Done.
+    for (let number = 1; number <= 1100; number += 1) put(number, 'done', 1100 - number);
+    put(2001, 'build', 40);
+    put(2002, 'review', 1);
+    put(2003, 'merged', 30);
+    put(2004, 'intake', 0, 'web');
+
+    const read = await boardIssues(since);
+    const numbers = read.map((one) => one.number).sort((a, b) => a - b);
+    // Done today and on each of the seven days before, the last at the week's first moment.
+    expect(numbers).toEqual([1093, 1094, 1095, 1096, 1097, 1098, 1099, 1100, 2001, 2002, 2003, 2004]);
+    expect(read).toHaveLength(12);
+    // In the order the board and the dispatcher share.
+    expect(read.map((one) => one.number)).toEqual([...read].sort(byNextFirst).map((one) => one.number));
+    expect(vi.mocked(query).mock.calls[0]?.[1]).toEqual([since, null]);
+
+    // A repository's board reads its own.
+    expect((await boardIssues(since, 'web')).map((one) => one.number)).toEqual([2004]);
+  });
+
+  it('lets a card go when it leaves the week, and has an issue back when it is reopened', async () => {
+    put(40, 'done', 6.9);
+    expect((await boardIssues(since)).map((one) => one.number)).toEqual([40]);
+    // A week and a little later: out of Done's week, and out of the read.
+    expect((await boardIssues(new Date(since.getTime() + 0.2 * day))).map((one) => one.number)).toEqual([]);
+    // Reopened a month on: out of Done, so read whatever its row last said of it.
+    table[0]!.stage = 'build';
+    table[0]!.updated_at = new Date(NOW - 30 * day);
+    expect((await boardIssues(since)).map((one) => one.number)).toEqual([40]);
+  });
+
+  it('reads the issues of the items it shows by their rows, and none for none', async () => {
+    vi.mocked(query).mockReset();
+    expect(await getIssues([])).toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+    await getIssues([{ repoId: 'repo-api', number: 4 }, { repoId: 'repo-web', number: 9 }]);
+    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
+    expect(String(sql)).toContain('join unnest($1::uuid[], $2::int[]) as t(repo_id, number) on t.repo_id = i.repo_id and t.number = i.number');
+    expect(params).toEqual([['repo-api', 'repo-web'], [4, 9]]);
+  });
+
+  it('asks each repository, not every issue, whether it had a card go to Done before the week', async () => {
+    vi.mocked(queryOne).mockReset();
+    vi.mocked(queryOne).mockResolvedValueOnce({ done: true } as never);
+    expect(await anyDoneBefore(since, 'api')).toBe(true);
+    const [sql, params] = vi.mocked(queryOne).mock.calls[0] ?? [];
+    const text = String(sql).replace(/\s+/g, ' ');
+    expect(text).toContain('select 1 from repos r where r.removed_at is null and ($2::text is null or r.name = $2) and exists (select 1 from issues i where i.repo_id = r.id');
+    expect(text).toContain("i.stage = 'done' and i.updated_at < $1");
+    expect(text).toContain("not (i.labels && array['openadlc:ignore', 'fleet:ignore']::text[])");
+    expect(params).toEqual([since, 'api']);
+    vi.mocked(queryOne).mockResolvedValueOnce({ done: false } as never);
+    expect(await anyDoneBefore(since)).toBe(false);
+    expect(vi.mocked(queryOne).mock.calls[1]?.[1]).toEqual([since, null]);
   });
 });

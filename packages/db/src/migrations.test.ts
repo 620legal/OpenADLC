@@ -312,3 +312,25 @@ describe('0144, which keeps each request’s eight-character subject its own', (
     expect(sql.filter((statement) => /set id\b|set id =/.test(statement))).toEqual([]);
   });
 });
+
+describe('0151, which indexes the issues the board reads', () => {
+  const sql = statements('0151_issues_on_the_board.sql');
+  const store = readFileSync(join(migrations, '..', 'src', 'store', 'issues.ts'), 'utf8');
+
+  it('indexes the issues not in Done, and those in Done by when they changed, without failing on an install that has them', () => {
+    expect(sql).toEqual([
+      "create index if not exists issues_live on issues (repo_id) where stage <> 'done'",
+      "create index if not exists issues_done on issues (repo_id, updated_at) where stage = 'done'",
+    ]);
+  });
+
+  it('has each predicate in the selection of `boardIssues` that reads it: Postgres reads a partial index only for a query whose conditions imply it', () => {
+    // Written as one `or`, the week's half implied neither index's condition,
+    // and the planner read every issue (on a scratch Postgres, 30,000 in Done).
+    const read = store.slice(store.indexOf('export async function boardIssues'), store.indexOf('export async function getIssues'));
+    const arms = read.slice(read.indexOf('`'), read.lastIndexOf('`')).split('union all');
+    expect(arms).toHaveLength(2);
+    expect(arms[0]).toContain("where i.stage <> 'done' and");
+    expect(arms[1]).toContain("where i.stage = 'done' and i.updated_at >= $1 and");
+  });
+});

@@ -74,6 +74,16 @@ vi.mock('@openadlc/db', () => {
     boardCards: vi.fn(async () => [
       { repo: 'api', ref: 'api#12', title: ISSUE_12.title, stage: ISSUE_12.stage, assignees: [], gateOpen: false, url: ISSUE_12.url, labels: ISSUE_12.labels, updatedAt: ISSUE_12.updatedAt },
     ]),
+    // What the board reads: the issues not in Done, and the week's.
+    boardIssues: vi.fn(async () => {
+      seen.issueReads.push('board');
+      return [ISSUE_12];
+    }),
+    getIssues: vi.fn(async (refs: readonly { repoId: string; number: number }[]) => {
+      seen.issueReads.push(...refs.map((ref) => `#${ref.number}`));
+      return refs.some((ref) => ref.repoId === ISSUE_12.repoId && ref.number === ISSUE_12.number) ? [ISSUE_12] : [];
+    }),
+    anyDoneBefore: vi.fn(async () => false),
   };
   const holding = (things: readonly ({ repoId: string; number: number } | { requestId: string })[]) => {
     const held = new Set(
@@ -342,12 +352,15 @@ describe('work items whose links and rows disagree', () => {
     expect(seen.issueReads).toEqual(['#12']);
   });
 
-  it('reads, for the board, only the links of work open or closed in the week Done shows', async () => {
-    const { workItems } = await import('@openadlc/db');
+  it('reads, for the board, only the links and the issues of work open or closed in the week Done shows', async () => {
+    const { issues, workItems } = await import('@openadlc/db');
     await board();
     expect(seen.linkReads).toEqual(['board']);
     const since = vi.mocked(workItems.boardLinks).mock.calls.at(-1)![0];
     expect(Date.now() - since.getTime()).toBeGreaterThan(7 * 86_400_000 - 60_000);
     expect(Date.now() - since.getTime()).toBeLessThan(7 * 86_400_000 + 60_000);
+    // The issues from the same moment, every repository's, and never all of them.
+    expect(seen.issueReads).toEqual(['board']);
+    expect(vi.mocked(issues.boardIssues).mock.calls.at(-1)).toEqual([since, undefined]);
   });
 });

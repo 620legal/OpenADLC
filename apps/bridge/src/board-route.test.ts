@@ -162,6 +162,11 @@ vi.mock('@openadlc/db', () => ({
       })),
     ),
     listIssues: vi.fn(async () => ISSUES),
+    // What the board reads: the issues not in Done and the week's (`boardIssues`).
+    boardIssues: vi.fn(async () => ISSUES),
+    getIssues: vi.fn(async () => []),
+    anyDoneBefore: vi.fn(async () => false),
+    byNextFirst: (a: { createdAt: string; number: number }, b: { createdAt: string; number: number }) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.number - b.number,
   },
   leases: {},
   listAudit: vi.fn(),
@@ -358,7 +363,7 @@ describe('GET /v1/board', () => {
     const entry = (prNumber: number) => ({ repoName: 'openadlc-testbed', prNumber, position: prNumber === 31 ? 1 : 2, state: 'queued', detail: null, enteredAt: '2026-09-24T11:00:00.000Z' });
     const read = async (labels: string[]) => {
       const labelled = ISSUES.map((one) => (one.number === 12 ? { ...one, labels } : one));
-      vi.mocked(issues.listIssues).mockResolvedValueOnce(labelled as never);
+      vi.mocked(issues.boardIssues).mockResolvedValueOnce(labelled as never);
       vi.mocked(mergeLines.line).mockResolvedValueOnce([entry(31), entry(40)] as never);
       const board = (await (await fetch(`${bridgeUrl}/v1/board`)).json()) as { columns: Column[]; mergeLine: { ref: string }[] };
       return { cards: board.columns.flatMap((column) => column.cards.map((card) => card.ref)), line: board.mergeLine.map((one) => one.ref) };
@@ -429,6 +434,140 @@ describe('GET /v1/board', () => {
     const board = (await (await fetch(`${bridgeUrl}/v1/board`)).json()) as { columns: Column[] };
     const review = board.columns.find((column) => column.stage === 'review');
     expect(review?.bots).toEqual([{ name: 'irisexampleco', displayName: 'second reviewer', working: true, waiting: false }]);
+  });
+
+  /**
+   * Three years of work shipped, one card a day, under the board's fifteen-
+   * second read: `boardIssues` here selects as the store does, and
+   * `listIssues` is every one of them. The board read them all, twice, with
+   * every task on each, for the console to show the week of Done.
+   */
+  describe('over a long history of Done', () => {
+    const day = 86_400_000;
+    const ago = (days: number) => new Date(Date.now() - days * day).toISOString();
+    type Row = (typeof ISSUES)[number];
+    const row = (number: number, stage: string, updatedAt: string, labels = [`adlc:${stage}`]): Row => ({
+      ...ISSUES[0]!, id: `issue-${number}`, number, title: `#${number}`, stage, labels, updatedAt, createdAt: ago(1200),
+      url: `https://github.com/janedoe/openadlc-testbed/issues/${number}`,
+    });
+    const HISTORY: Row[] = [
+      ...Array.from({ length: 1095 }, (_, index) => row(1000 + index, 'done', ago(7.01 + index))),
+      // Shipped by a deploy a day and a half ago; its row changed since.
+      row(20, 'done', ago(1)),
+      // On the week's first day.
+      row(21, 'done', ago(6.99)),
+      // Closed without merging two days ago: in the week, and counted with nothing.
+      row(22, 'done', ago(2), ['adlc:done', 'openadlc:abandoned']),
+      ...ISSUES,
+    ];
+    let later: Row[] = [];
+    const table = () => [...HISTORY, ...later];
+    const toCard = (issue: Row) => ({
+      repo: issue.repoName, ref: `${issue.repoName}#${issue.number}`, title: issue.title, stage: issue.stage, assignees: [] as string[],
+      gateOpen: false, url: issue.url, labels: issue.labels, updatedAt: issue.updatedAt,
+    });
+    const DEPLOY = { ...TASKS[2]!, id: 'task-deploy-20', botId: 'bot-intake', kind: 'deploy', subjectType: 'merge', subjectRef: 'openadlc-testbed#20', state: 'done', costUsd: 0.1, startedAt: ago(1.6), endedAt: ago(1.5), createdAt: ago(1.6) };
+    type Card = { ref: string; stage: string; updatedAt: string; shippedAt?: string | null; item?: { key: string } | null; active?: { kind: string }[] };
+    const read = async (query = '') => (await (await fetch(`${bridgeUrl}/v1/board${query}`)).json()) as { columns: { stage: string; cards: Card[] }[]; doneBefore?: boolean };
+    const inTheWeek = (at: string) => Date.now() - Date.parse(at) <= 7 * day;
+
+    beforeEach(async () => {
+      const { issues } = await import('@openadlc/db');
+      later = [];
+      TASKS.push(DEPLOY);
+      vi.mocked(issues.boardIssues).mockImplementation((async (since: Date, repoName?: string) =>
+        table().filter((one) => (one.stage !== 'done' || Date.parse(one.updatedAt) >= since.getTime()) && (!repoName || one.repoName === repoName))) as never);
+      vi.mocked(issues.getIssues).mockImplementation((async (refs: readonly { repoId: string; number: number }[]) =>
+        table().filter((one) => refs.some((ref) => ref.repoId === one.repoId && ref.number === one.number))) as never);
+      vi.mocked(issues.listIssues).mockImplementation((async () => table()) as never);
+      // The cards of the issues it is given; it read every issue itself before.
+      vi.mocked(issues.boardCards).mockImplementation((async (listed: unknown) => (Array.isArray(listed) ? (listed as Row[]) : table()).map(toCard)) as never);
+      vi.mocked(issues.listIssues).mockClear();
+      vi.mocked(issues.boardIssues).mockClear();
+    });
+
+    afterEach(async () => {
+      const { issues } = await import('@openadlc/db');
+      TASKS.splice(TASKS.indexOf(DEPLOY), 1);
+      vi.mocked(issues.boardIssues).mockImplementation((async () => ISSUES) as never);
+      vi.mocked(issues.getIssues).mockImplementation((async () => []) as never);
+      vi.mocked(issues.listIssues).mockImplementation((async () => ISSUES) as never);
+      vi.mocked(issues.boardCards).mockImplementation((async () => [...ISSUES, RETIRED].map((issue) => ({ ...toCard(issue), assignees: issue.number === 16 ? ['openadlc-atlas-janedoe'] : [] }))) as never);
+    });
+
+    it('reads only the issues not in Done and those Done in the week, and the tasks of those alone', async () => {
+      const { issues, tasks } = await import('@openadlc/db');
+      vi.mocked(tasks.listTasksOnSubjects).mockClear();
+      const board = await read();
+
+      expect(issues.listIssues).not.toHaveBeenCalled();
+      expect(issues.boardIssues).toHaveBeenCalledTimes(1);
+      const [since, repoName] = vi.mocked(issues.boardIssues).mock.calls[0]!;
+      expect(Math.abs(Date.now() - 7 * day - since.getTime())).toBeLessThan(60_000);
+      expect(repoName).toBeUndefined();
+      // Not one of the three years before the week, on the board or asked for its tasks.
+      const sent = board.columns.flatMap((column) => column.cards.map((card) => card.ref));
+      expect(sent.filter((ref) => Number(ref.split('#')[1]) >= 1000)).toEqual([]);
+      const asked = vi.mocked(tasks.listTasksOnSubjects).mock.calls.flatMap(([refs]) => [...refs]);
+      expect(asked.filter((ref) => Number(ref.split('#')[1]) >= 1000)).toEqual([]);
+      expect(sent).toEqual(expect.arrayContaining(['openadlc-testbed#16', 'openadlc-testbed#12']));
+    });
+
+    it('keeps in Done every card it shows this week, from when it shipped, as it was with every issue read', async () => {
+      const done = (await read()).columns.find((column) => column.stage === 'done')?.cards ?? [];
+      // What Done shows of the whole history: each issue in Done from its
+      // last deploy, or else when its row last changed, within the week.
+      const shipped = (one: Row) => (one.number === 20 ? DEPLOY.endedAt : one.updatedAt);
+      const shown = HISTORY.filter((one) => one.stage === 'done' && inTheWeek(shipped(one))).map((one) => `openadlc-testbed#${one.number}`);
+      expect(shown).toEqual(['openadlc-testbed#20', 'openadlc-testbed#21', 'openadlc-testbed#22']);
+      expect(done.filter((card) => inTheWeek(card.shippedAt ?? card.updatedAt)).map((card) => card.ref).sort()).toEqual(shown);
+      expect(done.find((card) => card.ref === 'openadlc-testbed#20')?.shippedAt).toBe(DEPLOY.endedAt);
+      expect(done).toHaveLength(3);
+    });
+
+    it('lets a card go once it leaves the week, and has it back when it is reopened', async () => {
+      const refs = async () => (await read()).columns.flatMap((column) => column.cards.map((card) => [column.stage, card.ref]));
+      later = [row(30, 'done', ago(6.9))];
+      expect(await refs()).toContainEqual(['done', 'openadlc-testbed#30']);
+      later = [row(30, 'done', ago(7.01))];
+      expect((await refs()).map(([, ref]) => ref)).not.toContain('openadlc-testbed#30');
+      // Reopened, and back in Build, however long ago it shipped.
+      later = [row(30, 'build', ago(7.01))];
+      expect(await refs()).toContainEqual(['build', 'openadlc-testbed#30']);
+    });
+
+    it('keeps an item’s card its first issue’s when that issue went to Done before the week, with the work of the rest', async () => {
+      const { issues, workItems } = await import('@openadlc/db');
+      const link = (id: number, number: number) => ({
+        id, itemId: 'w-9', itemNumber: 9, kind: 'issue', repoId: 'repo-1', number, requestId: null, linkedBy: id === 2 ? 'janedoe' : null,
+        title: `issue ${number}`, state: id === 1 ? 'closed' : 'open', url: null, openedAt: ago(40), closedAt: id === 1 ? ago(30) : null,
+      });
+      vi.mocked(workItems.isNumbered).mockResolvedValueOnce(true);
+      vi.mocked(workItems.boardLinks).mockResolvedValueOnce([link(1, 1010), link(2, 16)] as never);
+      const cards = (await read()).columns.flatMap((column) => column.cards.map((card) => ({ ...card, column: column.stage })));
+
+      // Its first issue's row, read by itself: the week's read has not got it.
+      expect(issues.getIssues).toHaveBeenCalledWith([{ repoId: 'repo-1', number: 1010 }]);
+      const card = cards.find((one) => one.item?.key === 'W-9');
+      expect(card).toMatchObject({ ref: 'openadlc-testbed#1010', column: 'done' });
+      expect(card?.active?.map((task) => task.kind)).toEqual(['implement']);
+      expect(cards.map((one) => one.ref)).not.toContain('openadlc-testbed#16');
+    });
+
+    it('says, of a board with nothing on it, whether anything went to Done before the week, and asks nothing of one with cards', async () => {
+      const { issues } = await import('@openadlc/db');
+      vi.mocked(issues.anyDoneBefore).mockClear();
+      expect((await read()).doneBefore).toBeUndefined();
+      expect(issues.anyDoneBefore).not.toHaveBeenCalled();
+
+      vi.mocked(issues.anyDoneBefore).mockResolvedValueOnce(true);
+      const quiet = await read('?repo=website');
+      expect(quiet.columns.every((column) => column.cards.length === 0)).toBe(true);
+      expect(quiet.doneBefore).toBe(true);
+      const [since, repoName] = vi.mocked(issues.anyDoneBefore).mock.calls[0]!;
+      expect(Math.abs(Date.now() - 7 * day - since.getTime())).toBeLessThan(60_000);
+      expect(repoName).toBe('website');
+    });
   });
 });
 
