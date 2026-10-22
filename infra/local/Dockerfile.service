@@ -2,7 +2,11 @@
 # The dispatcher is built into it as the library the bridge runs in-process
 # (`OPENADLC_DISPATCH_IN_BRIDGE=1`); no service runs it on its own.
 
-FROM node:22-bookworm-slim AS build
+# The base by digest, so a release's image is built on the bytes it was
+# reviewed with, not on whatever the tag names that day. To move it, take the
+# index digest `docker buildx imagetools inspect node:22-bookworm-slim` prints
+# (its first Digest line) into both FROM lines, in a reviewed change.
+FROM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS build
 WORKDIR /app
 # `pnpm prune` asks before it purges node_modules, and with no terminal to ask
 # it fails the build. CI=true is how pnpm is told nobody is there to answer.
@@ -40,7 +44,7 @@ RUN pnpm install --frozen-lockfile --ignore-scripts \
 # from an empty node_modules, so a build before it is thrown away), and loaded
 # once: a node-pty that does not load fails the build, not an attach.
 
-FROM node:22-bookworm-slim
+FROM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
 WORKDIR /app
 # git and tmux are what hostd uses to hold worktrees and sessions; docker-cli lets
 # it drive the bot containers through the mounted socket, and build the bot
@@ -48,6 +52,40 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates git tini tmux docker.io openssh-client \
     && rm -rf /var/lib/apt/lists/*
+# The GitHub CLI. On a cloud install the bridge checks a release image's
+# attestation with `gh attestation verify` before it deploys it
+# (apps/bridge/src/cloud-update.ts); without gh its self-update could only say
+# it cannot check one. From GitHub's signed apt repository, with its key, as
+# the bot image gets it (Dockerfile.bot). The key is checked against the
+# fingerprints GitHub publishes for it at the top of
+# https://github.com/cli/cli/blob/trunk/docs/install_linux.md: a keyring with
+# any other key fails the build. A new key there is added to the list below
+# in a reviewed change; it is not a build argument, so a build cannot widen it. That repository lists only its newest package, so a
+# GH_VERSION the build names must be that one, and none takes it. The build
+# fails unless its `attestation verify` has every flag the check uses, rather
+# than every update failing later.
+ARG GH_VERSION=
+RUN published="2C6106201985B60E6C7AC87323F3D4EA75716059 7F38BBB59D064DBCB3D84D725612B36462313325" \
+    && apt-get update && apt-get install -y --no-install-recommends curl gnupg \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && keys="$(GNUPGHOME="$(mktemp -d)" gpg --show-keys --with-colons /usr/share/keyrings/githubcli-archive-keyring.gpg \
+         | awk -F: '$1 == "pub" { primary = 1; next } primary && $1 == "fpr" { print $10; primary = 0 }')" \
+    && [ -n "$keys" ] \
+    && for key in $keys; do \
+         case " $published " in *" $key "*) ;; *) echo "the GitHub CLI's apt keyring holds $key, which is not a key cli/cli publishes" >&2; exit 1 ;; esac; \
+       done \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends "gh${GH_VERSION:+=${GH_VERSION}}" \
+    && apt-get purge -y --auto-remove curl gnupg \
+    && rm -rf /var/lib/apt/lists/* \
+    && help="$(gh attestation verify --help)" \
+    && for flag in --bundle --cert-identity --source-ref --source-digest --deny-self-hosted-runners; do \
+         printf '%s' "$help" | grep -q -- "$flag" || { echo "$(gh --version | head -n 1) has no gh attestation verify $flag" >&2; exit 1; }; \
+       done
 
 COPY --from=build /app /app
 # What the image is licensed under travels with it.

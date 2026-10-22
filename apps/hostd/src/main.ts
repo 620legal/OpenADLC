@@ -13,6 +13,7 @@ import { LoginService, moveSignInsIntoPlace, removeAdoptCopies } from './logins.
 import { SessionObserver } from './observer.js';
 import { isRefusal, RegistryCredentials } from './registry.js';
 import { createHostdServer } from './server.js';
+import { ImageRestart, imageFileFrom } from './restart-onto-image.js';
 import { TaskDatabases, existingTaskdbServer, taskdbBindAddress } from './task-db.js';
 import { WarmPool } from './warm-pool.js';
 import { repoKeyOf } from './drivers/base-env.js';
@@ -252,6 +253,21 @@ async function main(): Promise<void> {
   );
 
   const attachTokens = new AttachTokens();
+  // The file a cloud host's unit starts hostd's image from, which the
+  // bridge's self-update moves it on by; none on a laptop or under compose.
+  const imageFile = imageFileFrom(process.env);
+  const restartOntoImage = imageFile
+    ? new ImageRestart({
+        file: imageFile,
+        env: process.env,
+        // No task runs (the route refused otherwise), so there is nothing to
+        // drain; the moment is for the answer to leave.
+        exit: (code) => {
+          observer.stop();
+          setTimeout(() => process.exit(code), 250);
+        },
+      })
+    : undefined;
   const server = createHostdServer({
     config,
     driver,
@@ -263,6 +279,7 @@ async function main(): Promise<void> {
     logins,
     engineUpdates,
     localCi,
+    ...(restartOntoImage ? { restartOntoImage } : {}),
   });
 
   // Take-over rides on the same port: the console opens a socket at /terminal

@@ -1,7 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { RELEASE_IMAGES, releaseImageName } from '@openadlc/shared';
+import { afterAll, describe, expect, it } from 'vitest';
 
 /**
  * What `terraform validate` cannot tell you.
@@ -60,6 +63,108 @@ function withoutComments(block: string): string {
     .split('\n')
     .filter((line) => !line.trimStart().startsWith('#'))
     .join('\n');
+}
+
+/** The value an `env { name = "<name>" value = … }` block in `block` gives, as written. */
+function envValue(block: string, name: string): string | undefined {
+  return new RegExp(`env \\{\\s*name\\s*=\\s*"${name}"\\s*value\\s*=\\s*(.+)\\s*\\}`).exec(block)?.[1]?.trim();
+}
+
+/**
+ * What cloud-init writes at `path`, as the host gets it: the `content: |`
+ * block, its indent taken off. The block ends, as YAML ends it, at the first
+ * line indented less than it, which is the comment above the next file.
+ */
+function writtenFile(path: string): string {
+  const start = cloudInit.indexOf(`- path: ${path}\n`);
+  if (start < 0) return '';
+  const lines = cloudInit.slice(cloudInit.indexOf('content: |\n', start) + 'content: |\n'.length).split('\n');
+  const end = lines.findIndex((line) => line.trim() !== '' && !line.startsWith('      '));
+  return `${(end < 0 ? lines : lines.slice(0, end))
+    .map((line) => line.slice(6))
+    .join('\n')
+    .trimEnd()}\n`;
+}
+
+/** Terraform's templatefile, for the names given: `${name}` is the value, `$${` a literal `${`. */
+function rendered(template: string, values: Record<string, string>): string {
+  let out = template;
+  for (const [name, value] of Object.entries(values)) out = out.split(`\${${name}}`).join(value);
+  const left = /(?<!\$)\$\{([a-z_]+)\}/.exec(out);
+  if (left) throw new Error(`the template reads \${${left[1]}}, which this test does not give`);
+  return out.split('$${').join('${');
+}
+
+const scratch: string[] = [];
+afterAll(() => {
+  for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
+});
+
+const MIRROR = 'us-central1-docker.pkg.dev/acme-openadlc/openadlc-ghcr';
+const HOSTD_RELEASE = `${MIRROR}/620legal/openadlc/service`;
+const digest = (hex: string) => `sha256:${hex.repeat(64 / hex.length)}`;
+
+/**
+ * One start of `fleet-hostd`'s image step (`/etc/fleet/hostd-image.sh`), run
+ * for real by bash against a scratch directory in place of /var/lib/fleet and
+ * /run/fleet, with a docker that has `present` and fails to pull `unpullable`,
+ * and `hostdImage` as the module's hostd_image.
+ */
+function hostStart(
+  written: string | undefined,
+  docker: { present?: string[]; unpullable?: string[]; hostdImage?: string; started?: string } = {},
+): { status: number | null; said: string; hostd: string | null; docker: string[]; chowned: string[]; file: { text: string; mode: number } | null } {
+  const work = mkdtempSync(join(tmpdir(), 'openadlc-host-images-'));
+  scratch.push(work);
+  const root = join(work, 'var-lib-fleet');
+  const run = join(work, 'run-fleet');
+  const bin = join(work, 'bin');
+  mkdirSync(root, { recursive: true });
+  mkdirSync(bin);
+  if (written !== undefined) writeFileSync(join(root, 'hostd-image'), written);
+  if (docker.started !== undefined) writeFileSync(join(root, 'hostd-image.started'), docker.started);
+  const log = join(work, 'docker.log');
+  const present = join(work, 'present');
+  const unpullable = join(work, 'unpullable');
+  writeFileSync(log, '');
+  writeFileSync(present, (docker.present ?? []).map((image) => `${image}\n`).join(''));
+  writeFileSync(unpullable, (docker.unpullable ?? []).map((image) => `${image}\n`).join(''));
+  const stub = (name: string, body: string) => {
+    writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
+    chmodSync(join(bin, name), 0o755);
+  };
+  stub(
+    'docker',
+    `echo "$*" >> '${log}'
+case "$1" in
+  image) [ "$2" = inspect ] && grep -qxF -- "$3" '${present}' ;;
+  pull) if grep -qxF -- "$2" '${unpullable}'; then echo "pull $2: not found" >&2; exit 1; fi; echo "$2" >> '${present}' ;;
+  *) exit 2 ;;
+esac`,
+  );
+  stub('chown', `echo "$*" >> '${join(work, 'chown.log')}'`);
+  const script = rendered(writtenFile('/etc/fleet/hostd-image.sh'), {
+    hostd_release_image: HOSTD_RELEASE,
+    hostd_image: docker.hostdImage ?? 'registry/hostd:latest',
+  })
+    .split('/var/lib/fleet')
+    .join(root)
+    .split('/run/fleet')
+    .join(run);
+  writeFileSync(join(work, 'hostd-image.sh'), script);
+  const started = spawnSync('bash', [join(work, 'hostd-image.sh')], {
+    env: { PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}` },
+    encoding: 'utf8',
+  });
+  const read = (path: string) => (existsSync(path) ? readFileSync(path, 'utf8').trim() : null);
+  return {
+    status: started.status,
+    said: `${started.stdout}${started.stderr}`,
+    hostd: read(join(run, 'running-hostd-image')),
+    docker: readFileSync(log, 'utf8').split('\n').filter(Boolean),
+    chowned: (read(join(work, 'chown.log')) ?? '').split('\n').filter(Boolean),
+    file: existsSync(join(root, 'hostd-image')) ? { text: readFileSync(join(root, 'hostd-image'), 'utf8'), mode: statSync(join(root, 'hostd-image')).mode & 0o777 } : null,
+  };
 }
 
 /**
@@ -633,6 +738,8 @@ describe('a first apply on a new project', () => {
     ['google_service_account', 'bridge'],
     ['google_service_account', 'console'],
     ['google_project_iam_custom_role', 'secrets'],
+    ['google_project_iam_custom_role', 'self_update'],
+    ['google_artifact_registry_repository', 'ghcr'],
   ])('makes %s.%s only once its API is on', (type, name) => {
     // Nothing else orders them after the APIs: made in the same wave as the
     // enabling, they stopped the first apply with SERVICE_DISABLED.
@@ -997,5 +1104,380 @@ describe('the workflow allowed to deploy', () => {
     expect(rolesComment).toContain('the full GitHub App private key');
     const appKey = /variable "deployer_reads_app_key" \{[^}]*?description\s*=\s*"([^"]*)"/.exec(variablesTf)?.[1] ?? '';
     expect(appKey).toContain('the full key');
+  });
+});
+
+describe('the images a release publishes, through a mirror of ghcr.io', () => {
+  const mirror = resourceBlock('google_artifact_registry_repository', 'ghcr') ?? '';
+
+  it('mirrors ghcr.io in the install’s region, since Cloud Run cannot pull from ghcr.io itself', () => {
+    expect(mirror).toMatch(/repository_id\s*=\s*"\$\{var\.name_prefix\}-ghcr"/);
+    expect(mirror).toMatch(/location\s*=\s*var\.region/);
+    expect(mirror).toMatch(/format\s*=\s*"DOCKER"/);
+    expect(mirror).toMatch(/mode\s*=\s*"REMOTE_REPOSITORY"/);
+    expect(mirror).toMatch(/docker_repository \{\s*custom_repository \{\s*uri\s*=\s*"https:\/\/ghcr\.io"\s*\}/);
+    expect(mirror).toMatch(/depends_on\s*=\s*\[[^\]]*google_project_service\.enabled/);
+  });
+
+  it('names an image under the mirror as the shared contract names it on ghcr.io', () => {
+    // ghcr.io/620legal/openadlc/service@d is pulled as <mirror>/620legal/openadlc/service@d.
+    expect(mainTf).toContain(
+      'release_mirror     = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.ghcr.repository_id}"',
+    );
+    expect(mainTf).toContain('release_image_path = "${local.release_mirror}/${lower(var.release_repository)}"');
+    expect(releaseImageName('620legal/OpenADLC', 'service')).toBe('ghcr.io/620legal/openadlc/service');
+    const hostd = /hostd_release_image\s*=\s*"\$\{local\.release_image_path\}\/([a-z]+)"/.exec(mainTf)?.[1];
+    expect(hostd).toBe('service');
+    expect(RELEASE_IMAGES).toContain(hostd);
+    // No bot image: a release holds none, and the host keeps bot_image.
+    expect(RELEASE_IMAGES).not.toContain('bot');
+    expect(mainTf).not.toContain('bot_release_image');
+  });
+
+  it('lets Cloud Run’s service agent and the host read the mirror, and the bridge only to update', () => {
+    const reader = (name: string) => resourceBlock('google_artifact_registry_repository_iam_member', name) ?? '';
+    for (const name of ['ghcr_cloud_run', 'ghcr_host', 'ghcr_bridge']) {
+      expect(reader(name), name).toMatch(/repository\s*=\s*google_artifact_registry_repository\.ghcr\.name/);
+      expect(reader(name), name).toMatch(/role\s*=\s*"roles\/artifactregistry\.reader"/);
+    }
+    expect(mainTf).toMatch(/cloud_run_agent\s*=\s*"serviceAccount:service-\$\{data\.google_project\.this\.number\}@serverless-robot-prod\.iam\.gserviceaccount\.com"/);
+    expect(reader('ghcr_cloud_run')).toMatch(/member\s*=\s*local\.cloud_run_agent/);
+    expect(reader('ghcr_host')).toContain('google_service_account.host.email');
+    expect(reader('ghcr_host')).not.toMatch(/^\s*count\s*=/m);
+    expect(reader('ghcr_bridge')).toContain('google_service_account.bridge.email');
+    expect(reader('ghcr_bridge')).toMatch(/count\s*=\s*var\.self_update \? 1 : 0/);
+  });
+
+  it('makes neither service before its image can be pulled through the mirror', () => {
+    for (const name of ['bridge', 'console']) {
+      expect(resourceBlock('google_cloud_run_v2_service', name), name).toMatch(
+        /depends_on\s*=\s*\[[^\]]*google_artifact_registry_repository_iam_member\.ghcr_cloud_run/,
+      );
+    }
+  });
+});
+
+describe('an apply after an update', () => {
+  it('leaves the image each service runs to the update that rolled it, and makes a service with the variable’s', () => {
+    // The bridge rolls both services onto a release; an apply that set the
+    // image back would put the install on the release it was made with.
+    for (const [name, variable] of [
+      ['bridge', 'bridge_image'],
+      ['console', 'console_image'],
+    ] as const) {
+      const block = resourceBlock('google_cloud_run_v2_service', name) ?? '';
+      const ignored = /ignore_changes\s*=\s*\[(.*)\]\s*$/m.exec(block)?.[1] ?? '';
+      expect(ignored, name).toContain('template[0].containers[0].image');
+      expect(ignored, name).toMatch(/\bscaling\b[\s\S]*\bclient\b[\s\S]*\bclient_version\b/);
+      expect(block, name).toContain(`image = var.${variable}`);
+    }
+  });
+});
+
+describe('what the bridge is told about the install it updates', () => {
+  const bridge = resourceBlock('google_cloud_run_v2_service', 'bridge') ?? '';
+
+  it('names the cloud, the project and region, both services and the mirror', () => {
+    expect(envValue(bridge, 'OPENADLC_CLOUD')).toBe('"gcp"');
+    expect(envValue(bridge, 'OPENADLC_CLOUD_PROJECT')).toBe('var.project_id');
+    expect(envValue(bridge, 'OPENADLC_CLOUD_REGION')).toBe('var.region');
+    expect(envValue(bridge, 'OPENADLC_CLOUD_BRIDGE_SERVICE')).toBe('local.bridge_service');
+    expect(envValue(bridge, 'OPENADLC_CLOUD_CONSOLE_SERVICE')).toBe('local.console_service');
+    expect(envValue(bridge, 'OPENADLC_RELEASE_MIRROR')).toBe('local.release_mirror');
+    expect(envValue(bridge, 'OPENADLC_RELEASE_REPO')).toBe('var.release_repository');
+    expect(envValue(bridge, 'OPENADLC_SELF_UPDATE')).toBe('var.self_update ? "on" : "off"');
+    // The names it is told are the names the services have.
+    expect(bridge).toMatch(/^\s*name\s*=\s*local\.bridge_service$/m);
+    expect(resourceBlock('google_cloud_run_v2_service', 'console')).toMatch(/^\s*name\s*=\s*local\.console_service$/m);
+    expect(mainTf).toMatch(/bridge_service\s*=\s*"\$\{var\.name_prefix\}-bridge"/);
+    expect(mainTf).toMatch(/console_service\s*=\s*"\$\{var\.name_prefix\}-console"/);
+  });
+
+  it('takes 620legal/OpenADLC’s releases and updates itself unless told not to', () => {
+    const repo = /variable "release_repository" \{[\s\S]*?\n\}/.exec(variablesTf)?.[0] ?? '';
+    expect(repo).toMatch(/default\s*=\s*"620legal\/OpenADLC"/);
+    expect(repo).toContain('validation {');
+    const update = /variable "self_update" \{[\s\S]*?\n\}/.exec(variablesTf)?.[0] ?? '';
+    expect(update).toMatch(/type\s*=\s*bool/);
+    expect(update).toMatch(/default\s*=\s*true/);
+    expect(update).toContain('openadlc cloud update');
+  });
+});
+
+describe('what self-update hands the running bridge', () => {
+  const bridgeGrants = [...withoutComments(mainTf + deployerTf).matchAll(/^resource "(google_[a-z0-9_]*iam_[a-z_]*)" "([^"]+)" \{[\s\S]*?^\}/gm)].filter(
+    (match) => /member\s*=\s*"serviceAccount:\$\{google_service_account\.bridge\.email\}"/.test(match[0]),
+  );
+
+  it('rolls the two services, on those services alone, only with self_update, and cannot delete or make one', () => {
+    const deploys = resourceBlock('google_cloud_run_v2_service_iam_member', 'bridge_deploys') ?? '';
+    expect(deploys).toMatch(/for_each\s*=\s*var\.self_update \? \{/);
+    expect(deploys).toMatch(/bridge\s*=\s*google_cloud_run_v2_service\.bridge\.name/);
+    expect(deploys).toMatch(/console\s*=\s*google_cloud_run_v2_service\.console\.name/);
+    expect(deploys).toMatch(/name\s*=\s*each\.value/);
+    // run.developer could delete either service as well.
+    expect(withoutComments(mainTf)).not.toContain('roles/run.developer');
+    expect(deploys).toMatch(/role\s*=\s*google_project_iam_custom_role\.self_update\.name/);
+    const role = resourceBlock('google_project_iam_custom_role', 'self_update') ?? '';
+    const permissions = [...(/permissions\s*=\s*\[([^\]]*)\]/.exec(role)?.[1] ?? '').matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+    expect(permissions.sort()).toEqual(['run.operations.get', 'run.revisions.get', 'run.revisions.list', 'run.services.get', 'run.services.update']);
+    // Made whatever self_update says: Google keeps a deleted role's id for a
+    // week, and turning self_update off and on again would trip on it.
+    expect(role).not.toMatch(/^\s*count\s*=/m);
+  });
+
+  it('reads the two services always, so the System row can tell the release in use with self-update off', () => {
+    const reads = resourceBlock('google_cloud_run_v2_service_iam_member', 'bridge_reads') ?? '';
+    expect(reads).toMatch(/for_each\s*=\s*\{/);
+    expect(reads).not.toContain('self_update');
+    expect(reads).toMatch(/bridge\s*=\s*google_cloud_run_v2_service\.bridge\.name/);
+    expect(reads).toMatch(/console\s*=\s*google_cloud_run_v2_service\.console\.name/);
+    expect(reads).toMatch(/role\s*=\s*"roles\/run\.viewer"/);
+  });
+
+  it('acts as the two services’ own accounts and no other, only with self_update', () => {
+    const actsAs = resourceBlock('google_service_account_iam_member', 'bridge_acts_as') ?? '';
+    expect(actsAs).toMatch(/for_each\s*=\s*var\.self_update \? \{/);
+    expect(actsAs).toMatch(/bridge\s*=\s*google_service_account\.bridge\.name/);
+    expect(actsAs).toMatch(/console\s*=\s*google_service_account\.console\.name/);
+    expect(actsAs).not.toContain('google_service_account.host');
+    expect(actsAs).toMatch(/role\s*=\s*"roles\/iam\.serviceAccountUser"/);
+  });
+
+  it('holds nothing project-wide for it', () => {
+    const projectWide = bridgeGrants.filter((match) => match[1] === 'google_project_iam_member').map((match) => /role\s*=\s*(\S+)/.exec(match[0])?.[1]);
+    expect(projectWide.sort()).toEqual(['"roles/cloudsql.client"', 'google_project_iam_custom_role.secrets.name']);
+    // Everything else it holds is on one resource, and all of it but reading
+    // its two services is self-update's.
+    const rest = bridgeGrants.filter((match) => match[1] !== 'google_project_iam_member');
+    expect(rest.map((match) => `${match[1]}.${match[2]}`).sort()).toEqual([
+      'google_artifact_registry_repository_iam_member.ghcr_bridge',
+      'google_cloud_run_v2_service_iam_member.bridge_deploys',
+      'google_cloud_run_v2_service_iam_member.bridge_reads',
+      'google_service_account_iam_member.bridge_acts_as',
+    ]);
+    for (const match of rest.filter((one) => one[2] !== 'bridge_reads')) expect(match[0], match[2]).toMatch(/var\.self_update \?/);
+  });
+});
+
+describe('the host’s cloud-init as a template', () => {
+  it('reads no name main.tf does not give it', () => {
+    // `validate` passes with an unknown name in the template, and the apply
+    // then fails on it, or a misspelt one renders as nothing on the host.
+    const call = mainTf.slice(mainTf.indexOf('"${path.module}/cloud-init/host.yaml"'), mainTf.indexOf('\n  )', mainTf.indexOf('cloud-init/host.yaml')));
+    const given = [...call.matchAll(/^\s{6}([a-z_]+)\s*=/gm)].map((match) => match[1]!);
+    expect(given).toEqual(expect.arrayContaining(['hostd_release_image', 'release_mirror', 'release_repository']));
+    expect(() => rendered(cloudInit, Object.fromEntries(given.map((name) => [name, `<${name}>`])))).not.toThrow();
+  });
+});
+
+describe('the image hostd starts on', () => {
+  const unit = cloudInit.slice(cloudInit.indexOf('path: /etc/systemd/system/fleet-hostd.service'), cloudInit.indexOf('runcmd:'));
+  const prepare = writtenFile('/etc/fleet/prepare-hostd.sh');
+  const named = `${HOSTD_RELEASE}@${digest('a')}`;
+
+  it('is chosen before hostd is prepared, is the one that runs, and hostd is told where an update writes the next', () => {
+    const steps = [...unit.matchAll(/^\s*ExecStartPre=(.*)$/gm)].map((match) => match[1] ?? '');
+    const chooses = steps.indexOf('/bin/bash /etc/fleet/hostd-image.sh');
+    expect(chooses).toBeGreaterThan(-1);
+    expect(chooses).toBeLessThan(steps.indexOf('/bin/bash /etc/fleet/prepare-hostd.sh'));
+    // After the registry login, which the pull needs.
+    expect(steps.findIndex((step) => step.includes('docker-credential-gcr'))).toBeLessThan(chooses);
+    expect(steps.join('\n')).not.toContain('docker pull ${hostd_image}');
+    const start = unit.slice(unit.indexOf('ExecStart='), unit.indexOf('ExecStop='));
+    expect(start).toContain('-e OPENADLC_HOSTD_IMAGE_FILE=/var/lib/fleet/hostd-image');
+    expect(start).not.toContain('BOT_IMAGE_FILE');
+    // One read of the chosen image, both run and told to hostd, which reports it.
+    expect(start).toContain("ExecStart=/bin/sh -c 'image=$$(cat /run/fleet/running-hostd-image) && exec /usr/bin/docker run");
+    expect(start).toContain('-e OPENADLC_HOSTD_IMAGE="$$image"');
+    expect(start).toContain('"$$image" node apps/hostd/dist/main.js');
+    expect(start).not.toContain('${hostd_image}');
+    expect(unit).toMatch(/^\s*Restart=always$/m);
+  });
+
+  it('is what prepares the app tree and runs the migrations; the bots keep bot_image', () => {
+    expect(prepare).toContain('hostd_in_use=$(cat /run/fleet/running-hostd-image)');
+    expect(prepare).not.toContain('${hostd_image}');
+    expect(prepare).toContain(`docker image inspect -f '{{.Id}}' "$hostd_in_use"`);
+    expect(prepare).toContain('docker create --name fleet-app-source "$hostd_in_use"');
+    expect(prepare).toMatch(/-w "\$root\/app" "\$hostd_in_use" \\\n\s*sh -c 'node packages\/db\/dist\/cli\/migrate\.js/);
+    const env = /cat > "\$root\/hostd\.env" <<ENV\n([\s\S]*?)\nENV\n/.exec(prepare)?.[1] ?? '';
+    expect(env).toMatch(/^OPENADLC_BOT_IMAGE=\$\{bot_image\}$/m);
+    expect(env).toMatch(/^OPENADLC_RELEASE_MIRROR=\$\{release_mirror\}$/m);
+    expect(mainTf).toMatch(/release_mirror\s+=\s+local\.release_mirror/);
+    expect(cloudInit).not.toContain('bot-image');
+  });
+
+  it('is the module’s when no update has named one, its tag pulled at every start as before', () => {
+    const started = hostStart(undefined, { present: ['registry/hostd:latest'] });
+    expect(started.status, started.said).toBe(0);
+    expect(started.hostd).toBe('registry/hostd:latest');
+    expect(started.docker).toContain('pull registry/hostd:latest');
+    expect(started.said).not.toContain('passed over');
+    // A module image named by digest, as configure writes a release's, only when absent.
+    const pinned = hostStart(undefined, { hostdImage: named, present: [named] });
+    expect(pinned.status, pinned.said).toBe(0);
+    expect(pinned.docker.filter((call) => call.startsWith('pull'))).toEqual([]);
+  });
+
+  it('is the release an update named, pulled only when the host does not have it', () => {
+    const fresh = hostStart(`${named}\n`);
+    expect(fresh.status, fresh.said).toBe(0);
+    expect(fresh.hostd).toBe(named);
+    expect(fresh.docker).toContain(`pull ${named}`);
+    expect(fresh.docker.join('\n')).not.toContain('registry/');
+    // A digest names the same bytes for ever, so one the host has is not asked for again.
+    const again = hostStart(`${named}\n`, { present: [named] });
+    expect(again.status, again.said).toBe(0);
+    expect(again.docker.filter((call) => call.startsWith('pull'))).toEqual([]);
+    // And a file without its newline is the same file.
+    expect(hostStart(named).hostd).toBe(named);
+  });
+
+  it('is the module’s, quietly, for the empty file no update has written yet', () => {
+    const started = hostStart('');
+    expect(started.status, started.said).toBe(0);
+    expect(started.hostd).toBe('registry/hostd:latest');
+    expect(started.said).not.toContain('does not name');
+  });
+
+  it.each([
+    ['a tag, not a digest', `${HOSTD_RELEASE}:v0.2.0\n`],
+    ['a short digest', `${HOSTD_RELEASE}@sha256:${'a'.repeat(63)}\n`],
+    ['a digest in capitals', `${HOSTD_RELEASE}@sha256:${'A'.repeat(64)}\n`],
+    ['the console’s image', `${MIRROR}/620legal/openadlc/console@${digest('a')}\n`],
+    ['the image on ghcr.io itself, not through the mirror', `ghcr.io/620legal/openadlc/service@${digest('a')}\n`],
+    ['another package on ghcr.io, which the mirror would pull as readily', `${MIRROR}/someone/else/service@${digest('a')}\n`],
+    ['two lines', `${named}\n${HOSTD_RELEASE}@${digest('c')}\n`],
+    ['words for a shell', `${named}; reboot\n`],
+    ['half of one', `${HOSTD_RELEASE}@sha256:aaaa`],
+  ])('is the module’s, said, for a file that is %s', (_, written) => {
+    const started = hostStart(written);
+    expect(started.status, started.said).toBe(0);
+    expect(started.hostd).toBe('registry/hostd:latest');
+    expect(started.said).toContain('hostd-image does not name');
+    // Nothing the file said is pulled.
+    expect(started.docker.filter((call) => call.startsWith('pull'))).toEqual(['pull registry/hostd:latest']);
+  });
+
+  it('falls back to the image hostd last answered on before hostd_image, for a file emptied or cut short by a crash', () => {
+    // hostd writes the file in place: a crash between the truncate and the
+    // write leaves it empty or half written, and hostd_image is the release
+    // the install was made with, under a database newer ones migrated.
+    const last = `${HOSTD_RELEASE}@${digest('d')}`;
+    for (const written of ['', `${HOSTD_RELEASE}@sha256:dd`]) {
+      const started = hostStart(written, { started: `${last}\n`, present: [last] });
+      expect(started.status, started.said).toBe(0);
+      expect(started.hostd).toBe(last);
+      expect(started.docker.join('\n')).not.toContain('registry/hostd:latest');
+    }
+    // Only a release image by digest counts there too.
+    const odd = hostStart('', { started: 'registry/other:latest\n' });
+    expect(odd.hostd).toBe('registry/hostd:latest');
+    // And one that will not pull is passed over for hostd_image, said.
+    const gone = hostStart('', { started: `${last}\n`, unpullable: [last] });
+    expect(gone.status, gone.said).toBe(0);
+    expect(gone.hostd).toBe('registry/hostd:latest');
+    expect(gone.said).toContain(`could not pull ${last}`);
+  });
+
+  it('fails the start, for systemd to try again, when the release it names will not pull, rather than run an older one', () => {
+    const started = hostStart(named, { present: ['registry/hostd:latest'], unpullable: [named] });
+    expect(started.status).not.toBe(0);
+    expect(started.said).toContain(`could not pull ${named}`);
+    expect(started.hostd).toBeNull();
+    expect(started.docker.join('\n')).not.toContain('registry/hostd:latest');
+  });
+
+  it('fails the start when the module’s own image will not pull, as before', () => {
+    const started = hostStart(undefined, { unpullable: ['registry/hostd:latest'] });
+    expect(started.status).not.toBe(0);
+    expect(started.hostd).toBeNull();
+  });
+
+  it('makes the file, empty, and hostd’s (uid 1000), which writes it in place, and nothing else of the directory', () => {
+    const fresh = hostStart(undefined);
+    expect(fresh.file).toEqual({ text: '', mode: 0o644 });
+    expect(fresh.chowned).toEqual([expect.stringMatching(/^1000:1000 \S+var-lib-fleet\/hostd-image$/)]);
+    // A file an update wrote is kept as it is, and made hostd's again.
+    const written = hostStart(`${named}\n`);
+    expect(written.file?.text).toBe(`${named}\n`);
+    expect(written.chowned).toEqual([expect.stringMatching(/hostd-image$/)]);
+  });
+});
+
+describe('the image hostd last answered on', () => {
+  const unit = cloudInit.slice(cloudInit.indexOf('path: /etc/systemd/system/fleet-hostd.service'), cloudInit.indexOf('runcmd:'));
+
+  /** One run of `/etc/fleet/hostd-started.sh`, with a curl whose /healthz answers or not. */
+  function recorded(answers: boolean, before?: string): { status: number | null; started: string | null; said: string } {
+    const work = mkdtempSync(join(tmpdir(), 'openadlc-host-started-'));
+    scratch.push(work);
+    const root = join(work, 'var-lib-fleet');
+    const run = join(work, 'run-fleet');
+    const bin = join(work, 'bin');
+    for (const dir of [root, run, bin]) mkdirSync(dir, { recursive: true });
+    writeFileSync(join(run, 'running-hostd-image'), `${HOSTD_RELEASE}@${digest('a')}\n`);
+    if (before !== undefined) writeFileSync(join(root, 'hostd-image.started'), before);
+    for (const [name, body] of [
+      ['curl', answers ? 'case "$*" in *http://127.0.0.1:47312/healthz*) exit 0 ;; esac; exit 7' : 'exit 7'],
+      ['sleep', 'exit 0'],
+    ]) {
+      writeFileSync(join(bin, name!), `#!/bin/sh\n${body}\n`);
+      chmodSync(join(bin, name!), 0o755);
+    }
+    const script = rendered(writtenFile('/etc/fleet/hostd-started.sh'), { hostd_port: '47312' }).split('/var/lib/fleet').join(root).split('/run/fleet').join(run);
+    writeFileSync(join(work, 'hostd-started.sh'), script);
+    const done = spawnSync('bash', [join(work, 'hostd-started.sh')], { env: { PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}` }, encoding: 'utf8' });
+    const file = join(root, 'hostd-image.started');
+    return { status: done.status, started: existsSync(file) ? readFileSync(file, 'utf8') : null, said: `${done.stdout}${done.stderr}` };
+  }
+
+  it('is recorded once hostd answers on it, after it starts', () => {
+    expect(unit).toMatch(/^\s*ExecStartPost=-\/bin\/bash \/etc\/fleet\/hostd-started\.sh$/m);
+    expect(recorded(true).started).toBe(`${HOSTD_RELEASE}@${digest('a')}\n`);
+  });
+
+  it('is left as it was when hostd never answers, and never fails the start', () => {
+    const left = recorded(false, 'before\n');
+    expect(left.status).toBe(0);
+    expect(left.started).toBe('before\n');
+    expect(left.said).toContain('did not answer');
+  });
+
+  it('is root’s: hostd, which writes the other file, is given nothing of it', () => {
+    expect(writtenFile('/etc/fleet/hostd-image.sh')).not.toMatch(/chown[^\n]*started/);
+    expect(writtenFile('/etc/fleet/hostd-started.sh')).not.toContain('chown');
+  });
+
+  it('gives the pulls, the migrations and the wait for hostd longer than systemd’s default to start', () => {
+    const minutes = Number(/^\s*TimeoutStartSec=(\d+)min$/m.exec(unit)?.[1]);
+    expect(minutes).toBeGreaterThanOrEqual(10);
+  });
+});
+
+describe('what the docs say about a cloud install and its releases', () => {
+  const selfHosting = readFileSync(join(MODULE, '..', '..', 'docs', 'self-hosting.md'), 'utf8');
+  const section = (heading: string) => {
+    const start = selfHosting.indexOf(`\n## ${heading}\n`);
+    const end = selfHosting.indexOf('\n## ', start + 1);
+    return selfHosting.slice(start, end < 0 ? undefined : end).replace(/\s+/g, ' ');
+  };
+
+  it('installs from release images through the mirror, builds only with --build, and says the next apply resets the host', () => {
+    const installing = section('Installing on a cloud');
+    expect(installing).toContain('<name_prefix>-ghcr');
+    expect(installing).toContain('--build');
+    expect(installing).toContain('gh attestation verify');
+    expect(installing).toContain('resets the host');
+    expect(installing).toContain('self_update');
+  });
+
+  it('upgrades a cloud install one release at a time with openadlc cloud update', () => {
+    const upgrading = section('Upgrading');
+    expect(upgrading).toContain('openadlc cloud update');
+    expect(upgrading).toContain('--release');
+    expect(upgrading).toContain('one release at a time');
+    expect(upgrading).toContain('Settings → System');
   });
 });

@@ -11,9 +11,13 @@
 #      whose they are (another account than gcloud's is asked about), and that
 #      the project exists with billing on; offers to create it (--billing-account);
 #   2. clones the repository and builds the `openadlc` CLI;
-#   3. builds the four images on Cloud Build, as a service account of the
-#      install's own, into the project's Artifact Registry. Nothing is built on
-#      this machine and Docker is not needed;
+#   3. builds the bot image on Cloud Build, as a service account of the
+#      install's own, into the project's Artifact Registry: the bridge, hostd
+#      and the console run the newest release's images, which configure finds
+#      and checks with the GitHub CLI, but a release holds no bot image (it has
+#      Claude Code in it, which may not be redistributed). With --build, all
+#      four images, from this checkout. Nothing is built on this machine and
+#      Docker is not needed;
 #   4. runs `openadlc cloud configure`, which asks one thing: who may open the
 #      console to set the install up (you, by default — Enter confirms). The
 #      console is served on the install's own address under nip.io unless you
@@ -35,6 +39,7 @@
 #   --billing-account <id>   create the project if it does not exist, on this billing account
 #   --dir <path>             where the checkout goes (default ~/OpenADLC, or the checkout this script is in)
 #   --ref <branch>           the branch or tag to check out (default main)
+#   --build                  run images built from this checkout, not the newest release's
 #   --skip-images            the images are pushed already; do not build them
 #   --plan-only              stop after the plan
 #   --yes                    do not ask before creating the project or building; Terraform still asks before it applies
@@ -56,6 +61,7 @@ HELP='Installs OpenADLC on Google Cloud.
   --billing-account <id>   create the project if it does not exist, on this billing account
   --dir <path>             where the checkout goes (default ~/OpenADLC, or the checkout this script is in)
   --ref <branch>           the branch or tag to check out (default main)
+  --build                  run images built from this checkout, not the newest release'"'"'s
   --skip-images            the images are pushed already; do not build them
   --plan-only              stop after the plan
   --yes                    do not ask before creating the project or building; Terraform still asks before it applies
@@ -188,6 +194,7 @@ ensure_tools() {
     fi
   fi
   ensure_terraform
+  [ "$build" = 1 ] || ensure_gh
   if [ "$(node_major)" -lt "$min_node" ]; then
     # Cloud Shell has nvm, and a Node older than the CLI needs.
     if [ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]; then
@@ -212,6 +219,25 @@ ensure_tools() {
     fi
   fi
   ok "gcloud, Terraform, Node $(node_major) and pnpm"
+}
+
+# The GitHub CLI, for a release's images: configure lists the releases with
+# `gh api`, which needs a sign-in, and checks each image's attestation with
+# `gh attestation verify`. Not with --build, which takes no release.
+ensure_gh() {
+  if ! have gh; then
+    if [ "$(uname -s)" = Darwin ] && have brew; then
+      confirm "The GitHub CLI is missing. Install it with Homebrew?" || die "install the GitHub CLI (https://cli.github.com), or run with --build to build the images from this checkout"
+      run brew install gh
+    else
+      die "this needs the GitHub CLI to find the newest release's images and check them: https://cli.github.com. Or run with --build to build the images from this checkout instead"
+    fi
+  fi
+  if [ "$dry_run" = 0 ] && ! gh auth status >/dev/null 2>&1; then
+    note "gh reads the releases through GitHub's API, which needs a sign-in"
+    interactive gh auth login --hostname github.com --web --git-protocol https
+  fi
+  ok "the GitHub CLI"
 }
 
 # --- Google Cloud account and project ----------------------------------------
@@ -357,15 +383,24 @@ ensure_checkout() {
 
 # --- Images -------------------------------------------------------------------
 
+# All four images from this checkout with --build (cloudbuild.yaml), else the
+# bot image alone (cloudbuild-bot.yaml): the release has the others.
 build_images() {
   local registry="$region-docker.pkg.dev/$project/openadlc"
   local builder="openadlc-image-builder"
   local builder_email="$builder@$project.iam.gserviceaccount.com"
   local source_bucket="$project-openadlc-build"
+  local config=infra/gcp/cloudbuild-bot.yaml what="the bot image" minutes=ten
 
-  step "Building the images on Cloud Build"
-  say "  Into $registry: bridge, hostd, console and bot. About fifteen minutes, on Cloud Build's machines."
-  confirm "Build them now? (Cloud Build is billed by the minute; the first 2,500 minutes of e2 builds a month are free)" || die "not built. Build them yourself (docs/self-hosting.md#installing-on-a-cloud) and run this again with --skip-images"
+  if [ "$build" = 1 ]; then
+    config=infra/gcp/cloudbuild.yaml what="bridge, hostd, console and bot" minutes=fifteen
+    step "Building the images on Cloud Build"
+  else
+    step "Building the bot image on Cloud Build"
+    say "  A release holds no bot image: it has Claude Code in it, which may not be redistributed, so each install builds its own."
+  fi
+  say "  Into $registry: $what. About $minutes minutes, on Cloud Build's machines."
+  confirm "Build now? (Cloud Build is billed by the minute; the first 2,500 minutes of e2 builds a month are free)" || die "not built. Build it yourself (docs/self-hosting.md#installing-on-a-cloud) and run this again with --skip-images"
 
   run gcloud services enable artifactregistry.googleapis.com cloudbuild.googleapis.com iam.googleapis.com --project "$project"
 
@@ -404,11 +439,11 @@ build_images() {
   fi
 
   in_checkout gcloud builds submit . --project "$project" --region "$region" \
-    --config infra/gcp/cloudbuild.yaml --ignore-file infra/gcp/.gcloudignore \
+    --config "$config" --ignore-file infra/gcp/.gcloudignore \
     --substitutions "_REGISTRY=$registry" \
     --service-account "projects/$project/serviceAccounts/$builder_email" \
     --gcs-source-staging-dir "gs://$source_bucket/source"
-  ok "images pushed to $registry"
+  ok "$what pushed to $registry"
 }
 
 # --- Configure, plan, apply ---------------------------------------------------
@@ -512,7 +547,7 @@ main() {
   ref="${OPENADLC_REF:-main}"
   dir="${OPENADLC_DIR:-}"
   project='' region=us-central1 domain='' billing_account='' account='' existing=0
-  assume_yes=0 dry_run=0 skip_images=0 plan_only=0
+  assume_yes=0 dry_run=0 skip_images=0 plan_only=0 build=0
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -522,6 +557,7 @@ main() {
       --billing-account) billing_account="${2:?--billing-account needs an id}"; shift 2 ;;
       --dir) dir="${2:?--dir needs a path}"; shift 2 ;;
       --ref) ref="${2:?--ref needs a branch or tag}"; shift 2 ;;
+      --build) build=1; shift ;;
       --skip-images) skip_images=1; shift ;;
       --plan-only) plan_only=1; shift ;;
       --yes|-y) assume_yes=1; shift ;;
@@ -552,7 +588,11 @@ main() {
   export OPENADLC_CLOUD_PROJECT="$project" OPENADLC_CLOUD_REGION="$region"
   [ -z "$domain" ] || export OPENADLC_CLOUD_DOMAIN="$domain"
   [ -z "$account" ] || export OPENADLC_CLOUD_CONSOLE_MEMBERS="user:$account"
-  interactive node apps/cli/bin/openadlc.mjs cloud configure
+  if [ "$build" = 1 ]; then
+    interactive node apps/cli/bin/openadlc.mjs cloud configure --build
+  else
+    interactive node apps/cli/bin/openadlc.mjs cloud configure
+  fi
 
   step "Planning"
   interactive node apps/cli/bin/openadlc.mjs cloud plan
