@@ -121,6 +121,8 @@ the task's lease is released, the stop is audited (`task.stopped`), and the
 card goes (`POST /v1/tasks/:id/stop`). **Stop** works on a task waiting on a
 question too: its question is closed unanswered and leaves Needs you, and the
 bot is not resumed. The question's card offers **Stop** beside its answers.
+Stopping the triage of a console request abandons the request, as **Abandon**
+does: nothing starts it again.
 
 **Dismiss** takes the card off and leaves the work as it is: nothing is run
 again and nothing is stopped. It is kept in `acknowledgements` as
