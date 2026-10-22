@@ -101,6 +101,15 @@ export interface ItemControlDeps {
   pausePull?(repoFullName: string, prNumber: number): Promise<unknown>;
   /** A dispatch soon, after a change of order. */
   dispatchSoon?(reason: string): void;
+  /**
+   * Runs what a control need not wait for once it has answered (`Afterwards`
+   * in api.ts): holding a paused pull request's gate now, and starting what a
+   * hold kept back. The label is the hold, so it is on GitHub before the
+   * answer, and a pause GitHub refused says so; these were several more calls
+   * to GitHub, and a resume's sweeps, that the button waited for. Absent,
+   * they are done before the answer, as before.
+   */
+  later?(item: ControlledItem, what: string, work: () => Promise<unknown>): void;
   now?(): Date;
 }
 
@@ -227,9 +236,14 @@ export function registerItemControlRoutes(router: Router, deps: ItemControlDeps)
         if (!issue.labels.includes(PAUSED_LABEL)) await client.removeLabel(item.repoFullName, issue.number, PAUSED_LABEL).catch(() => undefined);
         throw error;
       });
-      await deps.pausePull?.(item.repoFullName, item.pr.number).catch((error: unknown) =>
-        console.warn(`[bridge] ${item.key} paused, but its pull request's gate was not held now: ${error instanceof Error ? error.message : error}`),
-      );
+      const pr = item.pr.number;
+      const holdPull = async (): Promise<unknown> => deps.pausePull?.(item.repoFullName, pr);
+      if (deps.later) deps.later(item, `Turning auto-merge off and holding review-gate on #${pr} now`, holdPull);
+      else {
+        await holdPull().catch((error: unknown) =>
+          console.warn(`[bridge] ${item.key} paused, but its pull request's gate was not held now: ${error instanceof Error ? error.message : error}`),
+        );
+      }
     }
     await deps.setLabels(item.repoId, issue.number, [...new Set([...issue.labels, PAUSED_LABEL])]);
     const held: ItemHold = { by: identity, at: (deps.now?.() ?? new Date()).toISOString(), why };
@@ -247,9 +261,13 @@ export function registerItemControlRoutes(router: Router, deps: ItemControlDeps)
     await deps.setLabels(item.repoId, issue.number, issue.labels.filter((label) => label !== PAUSED_LABEL));
     await recordHold(`${item.repoName}#${issue.number}`, null, identity);
     await deps.audit({ actor: identity, action: 'item.resumed', target: item.key });
-    await deps.resumed?.(item).catch((error: unknown) =>
-      console.warn(`[bridge] ${item.key} resumed, but what it held did not all start: ${error instanceof Error ? error.message : error}`),
-    );
+    const startHeld = async (): Promise<unknown> => deps.resumed?.(item);
+    if (deps.later) deps.later(item, `Starting what the hold on ${item.key} kept back`, startHeld);
+    else {
+      await startHeld().catch((error: unknown) =>
+        console.warn(`[bridge] ${item.key} resumed, but what it held did not all start: ${error instanceof Error ? error.message : error}`),
+      );
+    }
     return { subject: item.key, held: null };
   });
 

@@ -118,6 +118,26 @@ export async function releaseIfIdle(id: string): Promise<boolean> {
   return row !== null;
 }
 
+/**
+ * Releases the lease a person's Stop lets go, in one statement that checks
+ * nothing works under it now: held — leased, in a task, or paused on a
+ * question, with a pull request or not — and no task queued, running or
+ * paused under it. The console's Stop answers first and lets the lease go
+ * once hostd has ended the session, seconds later; a Try again in between
+ * reuses the lease (`retryTask`), and a release by id let it go under the new
+ * build. True when it was released.
+ */
+export async function releaseUnlessWorkedUnder(id: string): Promise<boolean> {
+  const row = await queryOne<{ id: string }>(
+    `update leases set state = 'released', updated_at = now()
+     where id = $1 and state in ('leased','in_task','paused')
+       and not exists (select 1 from tasks t where t.lease_id = $1 and t.state in ('queued','running','paused'))
+     returning id`,
+    [id],
+  );
+  return row !== null;
+}
+
 /** A lease with no PR expires; the issue returns to the board for the next run. */
 export async function expireStaleLeases(now = new Date()): Promise<Lease[]> {
   const rows = await query<LeaseRow>(
