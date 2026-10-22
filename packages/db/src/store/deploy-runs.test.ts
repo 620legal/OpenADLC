@@ -11,17 +11,21 @@ import {
   ensure,
   heldForPerson,
   holdForPerson,
+  laterTestingDeploy,
   holdPromote,
   oweRollback,
   recordRollback,
   recordSmoke,
+  recordTesting,
   releaseHeld,
   rollbackDidNotRun,
   rollbackOutstanding,
+  supersededBefore,
   unfinishedRollbacks,
   undispatchedPromotes,
   undispatchedRollbacks,
   undispatchedSince,
+  unsettledTesting,
 } from './deploy-runs.js';
 
 const row = {
@@ -218,5 +222,46 @@ describe('deploy runs', () => {
     const sql = String(vi.mocked(query).mock.calls[0]![0]).replace(/\s+/g, ' ');
     expect(sql).toContain('r.rollback_dispatched_at >= $1 and r.rollback_conclusion is null');
     expect(sql).toContain('n.promote_dispatched_at is not null');
+  });
+
+  // A testing deploy whose run skipped left its row dispatched and nothing
+  // else, so the deploy sweep said "already started (running)" for good.
+  it('records how a dispatched testing deploy ended once, and a run that deployed after one that did not', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ id: 'd1' }).mockResolvedValueOnce(null);
+    expect(await recordTesting('repo-1', row.sha, 'skipped', 'deploy-testing run 9 was skipped')).toBe(true);
+    expect(await recordTesting('repo-1', row.sha, 'skipped', 'deploy-testing run 9 was skipped')).toBe(false);
+    const sql = String(vi.mocked(queryOne).mock.calls[0]![0]).replace(/\s+/g, ' ');
+    expect(sql).toContain('set testing_conclusion = $3, testing_at = now(), detail = coalesce($4, detail)');
+    expect(sql).toContain('and testing_dispatched_at is not null');
+    expect(sql).toContain("and (testing_conclusion is null or testing_conclusion = 'superseded' or ($3 = 'success' and testing_conclusion <> 'success'))");
+    expect(vi.mocked(queryOne).mock.calls[0]![1]).toEqual(['repo-1', row.sha, 'skipped', 'deploy-testing run 9 was skipped']);
+  });
+
+  // A waiting run cancelled when a newer merge's queues is carried by that
+  // deploy: B's lease was let go before C's deploy verified B.
+  it('finds a later testing deploy of the repository still to end or deployed, which carries a cancelled one', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...row, sha: 'c'.repeat(40), testing_dispatched_at: new Date('2026-09-30T12:05:00Z') });
+    expect(await laterTestingDeploy('repo-1', row.sha)).toMatchObject({ sha: 'c'.repeat(40) });
+    const sql = String(vi.mocked(queryOne).mock.calls[0]![0]).replace(/\s+/g, ' ');
+    expect(sql).toContain('n.testing_dispatched_at > r.testing_dispatched_at');
+    expect(sql).toContain("(n.testing_conclusion is null or n.testing_conclusion = 'success')");
+    expect(vi.mocked(queryOne).mock.calls[0]![1]).toEqual(['repo-1', row.sha]);
+  });
+
+  it('lists the superseded testing deploys dispatched before a commit’s, oldest first', async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ ...row, testing_conclusion: 'superseded' }]);
+    expect(await supersededBefore('repo-1', 'c'.repeat(40))).toEqual([expect.objectContaining({ testingConclusion: 'superseded' })]);
+    const sql = String(vi.mocked(query).mock.calls[0]![0]).replace(/\s+/g, ' ');
+    expect(sql).toContain("r.testing_conclusion = 'superseded' and r.testing_dispatched_at < n.testing_dispatched_at");
+    expect(sql).toContain('order by r.testing_dispatched_at');
+  });
+
+  it('lists the testing deploys dispatched lately that nothing has seen end, nor smoked', async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ ...row, testing_dispatched_at: new Date('2026-09-30T12:01:00Z'), testing_conclusion: null }]);
+    expect(await unsettledTesting(new Date('2026-09-23T12:00:00Z'))).toEqual([
+      expect.objectContaining({ sha: row.sha, testingDispatchedAt: '2026-09-30T12:01:00.000Z', testingConclusion: null }),
+    ]);
+    const sql = String(vi.mocked(query).mock.calls[0]![0]).replace(/\s+/g, ' ');
+    expect(sql).toContain('testing_dispatched_at >= $1 and testing_conclusion is null and smoke_conclusion is null');
   });
 });

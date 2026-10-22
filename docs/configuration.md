@@ -323,7 +323,11 @@ once the Makefile's `deploy-testing` target is written, and
 `OPENADLC_SMOKE_TESTING = true` once its `smoke-testing` target is. Write the
 two together: the stub smoke refuses, and a red smoke reverts the change. A
 skipped smoke is neither green nor red, so it neither promotes nor reverts; a
-merged change waits on testing until the smoke is turned on.
+merged change waits on testing until the smoke is turned on. A skipped
+`deploy-testing` deployed nothing: the bridge lets the merged change's lease go
+and leaves its card in Ship, as it does for a run that never started, or was
+cancelled with no later deploy to carry it
+([troubleshooting](troubleshooting.md#a-stacked-issue-waits-after-its-base-merged)).
 
 The same file says which changes may be built side by side when their files
 overlap (`apps/dispatcher/src/overlap.ts`). The defaults, which a file that

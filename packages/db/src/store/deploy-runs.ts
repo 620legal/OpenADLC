@@ -11,6 +11,14 @@ export interface DeployRun {
   sha: string;
   prNumber: number | null;
   testingDispatchedAt: string | null;
+  /**
+   * How the dispatched testing deploy's run ended (`recordTesting`):
+   * `success`, `failure`, `superseded` (cancelled for a later merge's deploy,
+   * which carries it), or one that deployed nothing — `skipped`, `cancelled`,
+   * `startup_failure`, `not_started`. Null until it is seen to end.
+   */
+  testingConclusion: string | null;
+  testingAt: string | null;
   smokeConclusion: string | null;
   smokeAt: string | null;
   promoteAfter: string | null;
@@ -40,6 +48,8 @@ interface Row {
   sha: string;
   pr_number: number | null;
   testing_dispatched_at: Date | null;
+  testing_conclusion?: string | null;
+  testing_at?: Date | null;
   smoke_conclusion: string | null;
   smoke_at: Date | null;
   promote_after: Date | null;
@@ -67,6 +77,8 @@ function toRun(row: Row): DeployRun {
     sha: row.sha,
     prNumber: row.pr_number,
     testingDispatchedAt: iso(row.testing_dispatched_at),
+    testingConclusion: row.testing_conclusion ?? null,
+    testingAt: iso(row.testing_at ?? null),
     smokeConclusion: row.smoke_conclusion,
     smokeAt: iso(row.smoke_at),
     promoteAfter: iso(row.promote_after),
@@ -136,6 +148,70 @@ export async function claimPromote(repoId: string, sha: string, detail: string):
 /** Gives a claimed step back, when what it was claimed for did not happen. */
 export async function release(repoId: string, sha: string, step: Step, detail: string): Promise<void> {
   await query(`update deploy_runs set ${step} = null, detail = $3, updated_at = now() where repo_id = $1 and sha = $2`, [repoId, sha, detail]);
+}
+
+/**
+ * How the testing deploy dispatched for a commit ended, once: true when this
+ * call recorded it. A run that deployed may still follow one that did not —
+ * a skipped run re-run once the repository turned its testing deploy on — and
+ * is recorded over it. So is one `superseded`: a run cancelled for a later
+ * merge's deploy, which carries it, is settled again once that deploy is
+ * known to deploy nothing either. `detail` is kept when none is given, so a
+ * late delivery of a deploy that ran does not overwrite what a later step said.
+ */
+export async function recordTesting(repoId: string, sha: string, conclusion: string, detail: string | null): Promise<boolean> {
+  const row = await queryOne<{ id: string }>(
+    `update deploy_runs set testing_conclusion = $3, testing_at = now(), detail = coalesce($4, detail), updated_at = now()
+     where repo_id = $1 and sha = $2 and testing_dispatched_at is not null
+       and (testing_conclusion is null or testing_conclusion = 'superseded' or ($3 = 'success' and testing_conclusion <> 'success'))
+     returning id`,
+    [repoId, sha, conclusion, detail],
+  );
+  return row !== null;
+}
+
+/**
+ * The first testing deploy of the repository dispatched after this commit's
+ * that is still to end or deployed, or null. deploy-testing's concurrency
+ * group cancels a waiting run when a newer merge's queues, and that newer
+ * deploy carries the cancelled one's merge: its deployment finishes every
+ * pull request merged since what testing served before.
+ */
+export async function laterTestingDeploy(repoId: string, sha: string): Promise<DeployRun | null> {
+  const row = await queryOne<Row>(
+    `select n.* from deploy_runs r join deploy_runs n on n.repo_id = r.repo_id
+     where r.repo_id = $1 and r.sha = $2 and n.testing_dispatched_at > r.testing_dispatched_at
+       and (n.testing_conclusion is null or n.testing_conclusion = 'success')
+     order by n.testing_dispatched_at limit 1`,
+    [repoId, sha],
+  );
+  return row ? toRun(row) : null;
+}
+
+/** The repository's testing deploys recorded `superseded` that were dispatched before this commit's, oldest first. */
+export async function supersededBefore(repoId: string, sha: string): Promise<DeployRun[]> {
+  const rows = await query<Row>(
+    `select r.* from deploy_runs n join deploy_runs r on r.repo_id = n.repo_id
+     where n.repo_id = $1 and n.sha = $2 and r.testing_conclusion = 'superseded' and r.testing_dispatched_at < n.testing_dispatched_at
+     order by r.testing_dispatched_at`,
+    [repoId, sha],
+  );
+  return rows.map(toRun);
+}
+
+/**
+ * Testing deploys dispatched since `since` that nothing has seen end, and
+ * whose smoke has not run either, oldest first: what the deploy sweep looks
+ * up on GitHub, for a run whose delivery never came or that never started.
+ */
+export async function unsettledTesting(since: Date): Promise<DeployRun[]> {
+  const rows = await query<Row>(
+    `select * from deploy_runs
+     where testing_dispatched_at >= $1 and testing_conclusion is null and smoke_conclusion is null
+     order by testing_dispatched_at`,
+    [since],
+  );
+  return rows.map(toRun);
 }
 
 /**

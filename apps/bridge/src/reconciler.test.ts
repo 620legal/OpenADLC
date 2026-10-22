@@ -56,6 +56,8 @@ vi.mock('@openadlc/db', () => ({
     setLeaseState: vi.fn(async () => null),
     settlePausedLeases: vi.fn(async () => SETTLED),
     releaseIfIdle: vi.fn(async () => true),
+    releaseIdleForIssue: vi.fn(async () => null),
+    getActiveLease: vi.fn(async (_repoId: string, number: number) => ACTIVE_LEASES.find((lease) => lease.issueNumber === number) ?? null),
     getLease: vi.fn(async (id: string) => LEASES_BY_ID.get(id) ?? null),
   },
   hosts: { listHosts: vi.fn(async () => HOSTS) },
@@ -67,6 +69,8 @@ vi.mock('@openadlc/db', () => ({
     // Queued rows no host took, as the store picks them: opened before the cut-off.
     staleUnstarted: vi.fn(async (olderThan: Date) => UNSTARTED.filter((task) => Date.parse(task.createdAt) < olderThan.getTime())),
     failUnstarted: vi.fn(async (id: string) => UNSTARTED.find((task) => task.id === id) ?? null),
+    // Nothing still going on a pull request: no verification holds one's ground.
+    listTasksOnSubjects: vi.fn(async () => []),
     // The builder's build of issue #11, finished.
     listTasksForSubjects: vi.fn(async (kind: string, refs: readonly string[]) =>
       kind === 'implement' && refs.includes('openadlc#11')
@@ -275,7 +279,8 @@ async function reconciler(health: { ok: boolean } = { ok: true }) {
   const webhooks = new Webhooks(
     {} as never,
     { moveStage: async () => ({ moved: true }) } as never,
-    {} as never,
+    // No plan change is held on any path: every pass looks.
+    { applyHeld: async () => [] } as never,
     {} as never,
     {
       staff: async (input: { repoName: string; issueNumber: number; stage: string }) => {
@@ -867,6 +872,143 @@ describe('a closed issue', () => {
       ['lease-5', 'released'],
       ['lease-7', 'released'],
     ]);
+  });
+
+  // OpenADLC#71's card was moved to Done by its label after #72 merged, and
+  // reconcile put it there on the board ("the board said merged, GitHub says
+  // done"). The lease loop reads the board from before that repair, took the
+  // lease for one still owed its verification, and kept it; #27's plan change
+  // waited on its files through four approvals.
+  it('lets go of the lease of one moved to Done on GitHub, in the same pass, and resumes the plan change waiting on its files', async () => {
+    const { leases } = await import('@openadlc/db');
+    const { Reconciler } = await import('./reconciler.js');
+    const { Webhooks } = await import('./webhooks.js');
+    vi.mocked(leases.setLeaseState).mockClear();
+    vi.mocked(leases.releaseIdleForIssue).mockClear();
+    vi.mocked(leases.releaseIdleForIssue).mockResolvedValueOnce({ id: 'lease-71', issueNumber: 71, prNumber: 72, state: 'released' } as never);
+    ACTIVE_LEASES = [{ id: 'lease-71', issueNumber: 71, prNumber: 72, updatedAt: hoursAgo(1) }];
+    CACHED = [{ number: 71, stage: 'merged', declaredPaths: [], prNumber: 72, body: BODY, labels: ['adlc:merged'] }];
+    LIVE = [issue({ number: 71, state: 'closed', labels: ['adlc:done'] })];
+    const resume = vi.fn(async (_taskId: string) => undefined);
+    const webhooks = new Webhooks(
+      {} as never,
+      { moveStage: async () => ({ moved: true }) } as never,
+      { applyHeld: async () => ['task-27'] } as never,
+      { resume } as never,
+      { staff: async () => false } as never,
+      {} as never,
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const drift = await new Reconciler(
+      { automationBot: 'flow' } as never,
+      { asBot: async () => ({ listIssues, getIssue, ...pullLookups }) } as never,
+      { health: async () => ({ ok: true }) } as never,
+      webhooks,
+    ).run({ repair: true });
+    log.mockRestore();
+
+    expect(upserts).toEqual([expect.objectContaining({ number: 71, stage: 'done' })]);
+    expect(vi.mocked(leases.releaseIdleForIssue)).toHaveBeenCalledWith({
+      repoId: 'repo-1',
+      issueNumber: 71,
+      actor: 'reconciler',
+      reason: expect.stringContaining('moved to Done on GitHub'),
+    });
+    expect(resume).toHaveBeenCalledWith('task-27');
+    expect(drift.find((entry) => entry.subject === 'openadlc#71')).toMatchObject({
+      kind: 'stage_mismatch',
+      detail: 'the board said merged, GitHub says done; its lease was let go',
+      repaired: true,
+    });
+  });
+
+  // `adlc:done` on a card in Review, its pull request open, let the lease go
+  // and overlapping work start beside a change still being built.
+  it('keeps the lease of a card moved to Done on GitHub from Review until its pull request has merged', async () => {
+    const { leases } = await import('@openadlc/db');
+    const { Reconciler } = await import('./reconciler.js');
+    const { Webhooks } = await import('./webhooks.js');
+    const github = { listIssues, getIssue, ...pullLookups };
+    const webhooks = new Webhooks(
+      { automationBot: 'flow' } as never,
+      { moveStage: async () => ({ moved: true }), actors: { asBot: async () => github } } as never,
+      { applyHeld: async () => [] } as never,
+      {} as never,
+      { staff: async () => false } as never,
+      {} as never,
+    );
+    const run = () =>
+      new Reconciler({ automationBot: 'flow' } as never, { asBot: async () => github } as never, { health: async () => ({ ok: true }) } as never, webhooks).run({
+        repair: true,
+      });
+    vi.mocked(leases.releaseIdleForIssue).mockClear();
+    ACTIVE_LEASES = [{ id: 'lease-71', issueNumber: 71, prNumber: 72, updatedAt: hoursAgo(1) }];
+    CACHED = [{ number: 71, stage: 'review', declaredPaths: [], prNumber: 72, body: BODY, labels: ['adlc:review'] }];
+    LIVE = [issue({ number: 71, state: 'open', labels: ['adlc:done'] })];
+    PULLS.set(72, { merged: false, headRef: 'agent/openadlc-atlas-janedoe/71-issue-71' });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const open = await run();
+
+    expect(vi.mocked(leases.releaseIdleForIssue)).not.toHaveBeenCalled();
+    expect(open.find((entry) => entry.subject === 'openadlc#71')?.detail).toBe('the board said review, GitHub says done');
+
+    PULLS.set(72, { merged: true, headRef: 'agent/openadlc-atlas-janedoe/71-issue-71' });
+    vi.mocked(leases.releaseIdleForIssue).mockResolvedValueOnce({ id: 'lease-71', issueNumber: 71, prNumber: 72, state: 'released' } as never);
+    const merged = await run();
+    log.mockRestore();
+
+    expect(vi.mocked(leases.releaseIdleForIssue)).toHaveBeenCalledTimes(1);
+    expect(merged.find((entry) => entry.subject === 'openadlc#71')?.detail).toBe('the board said review, GitHub says done; its lease was let go');
+  });
+
+  // OpenADLC#71's lease was finally let go here, "the issue is closed or
+  // gone", and #27's approved plan change, held on its paths, was not tried
+  // again: only a merge, a close or an abandon did. A person approved it again.
+  it('tries the plan changes held on paths again once it has let go of a lease, and on every pass for one let go elsewhere', async () => {
+    const { leases } = await import('@openadlc/db');
+    const { Reconciler } = await import('./reconciler.js');
+    const { Webhooks } = await import('./webhooks.js');
+    vi.mocked(leases.setLeaseState).mockClear();
+    const applyHeld = vi.fn(async () => ['task-27']);
+    const resume = vi.fn(async (_taskId: string) => undefined);
+    const asked: string[] = [];
+    const webhooks = new Webhooks(
+      {} as never,
+      { moveStage: async () => ({ moved: true }) } as never,
+      { applyHeld } as never,
+      { resume } as never,
+      { staff: async () => false } as never,
+      {} as never,
+      null,
+      { soon: (reason: string) => asked.push(reason) },
+    );
+    const run = () =>
+      new Reconciler(
+        { automationBot: 'flow' } as never,
+        { asBot: async () => ({ listIssues, getIssue, ...pullLookups }) } as never,
+        { health: async () => ({ ok: true }) } as never,
+        webhooks,
+      ).run({ repair: true });
+    ACTIVE_LEASES = [{ id: 'lease-71', issueNumber: 71, prNumber: null, updatedAt: hoursAgo(1) }];
+    CACHED = [{ number: 71, stage: 'done', declaredPaths: [], prNumber: 72, body: BODY, labels: ['adlc:done'] }];
+    LIVE = [issue({ number: 71, state: 'closed', labels: ['adlc:done'] })];
+
+    await run();
+
+    expect(vi.mocked(leases.setLeaseState)).toHaveBeenCalledWith('lease-71', 'released');
+    expect(applyHeld).toHaveBeenCalledTimes(1);
+    expect(resume).toHaveBeenCalledWith('task-27');
+    expect(asked).toEqual(['reconcile let go of 1 lease']);
+
+    // The dispatcher's expiry, or the bridge's own move to Done, lets a lease
+    // go and looks at nothing: the next pass does, and asks no dispatch for it.
+    ACTIVE_LEASES = [];
+    await run();
+
+    expect(applyHeld).toHaveBeenCalledTimes(2);
+    expect(asked).toEqual(['reconcile let go of 1 lease']);
   });
 
   describe('whose merge was never delivered', () => {
