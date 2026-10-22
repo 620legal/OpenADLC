@@ -4,7 +4,7 @@ import { attachmentIds, claimableFor, claimWindowStart } from './attachment-rout
 import type { ApiDeps } from './api.js';
 import { readItem, resolveItem, routeItemMessage } from './items.js';
 import { HttpFailure, STREAMING, type Router } from './router.js';
-import { sendThreadMessage } from './thread-messages.js';
+import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 
 /**
  * A work item, as the console reads it, watches it and writes to it. See
@@ -40,7 +40,7 @@ function shown<T extends { item: { issue: object | null } }>(subject: string, re
   return read;
 }
 
-export function registerItemRoutes(router: Router, deps: Pick<ApiDeps, 'actors' | 'gates' | 'taskService' | 'threadStream'>): void {
+export function registerItemRoutes(router: Router, deps: Pick<ApiDeps, 'actors' | 'gates' | 'taskService' | 'threadStream' | 'afterwards'>): void {
   /**
    * One work item: the request, its issue and pull request, the whole
    * conversation about any of them labelled by role, the questions open on
@@ -134,12 +134,8 @@ export function registerItemRoutes(router: Router, deps: Pick<ApiDeps, 'actors' 
       // On the question's subject before the task resumes, so the resumed
       // session is briefed with them (`context.ts`).
       await keep(route.gate.subjectRef, null);
-      const answered = await deps.gates.answer({ gateId: route.gate.id, reply: text, answeredBy: identity, role: access, via: 'item' });
-      if (answered.taskId) {
-        await deps.taskService.resume(answered.taskId).catch((error: Error) => {
-          console.warn(`[bridge] resume after answer failed: ${error.message}`);
-        });
-      }
+      // Answered once the question is claimed; GitHub and the resume come after.
+      const answered = await answerFromConsole(deps, { gateId: route.gate.id, reply: text, answeredBy: identity, role: access, via: 'item' });
       return { answered: true, answer: answered.answer, gateId: route.gate.id, item: read.item.key };
     }
 

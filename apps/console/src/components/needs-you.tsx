@@ -28,6 +28,7 @@ import { cn } from '@/lib/cn';
 import { Markdown } from '@/components/markdown';
 import { RepoBadge } from '@/components/repo-badge';
 import { Dialog, DialogClose, DialogTitle, SheetContent } from '@/components/ui/dialog';
+import { safeAction } from '@/lib/safe-action';
 import { CHOICES_ON_CARD, alarming, faceActions, groupCounts, groupOf, hasMore, plainDetail, stripItems, waiting as waitingOf } from '@/lib/attention-card';
 import { IncidentSteps } from '@/components/incident-steps';
 import { standsOut } from '@/lib/thread';
@@ -324,10 +325,19 @@ function NeedsCard({
   /** From another repository than the one the board shows. */
   elsewhere: boolean;
 }) {
-  const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   /** The choice being sent, while it is. */
   const [chosen, setChosen] = useState<string | null>(null);
+  // Set at once, and cleared by the action's answer. A transition's pending
+  // was set only by the next render, so a quick second press went through,
+  // and it stayed set until the whole board had been read again: a press
+  // waited for every GitHub call behind it and then for the page, and the
+  // person pressed again (#76).
+  const [busy, setBusy] = useState(false);
+  const pressing = useRef(false);
+  /** What the press did, from its answer, said on the card until the board is read again without it. */
+  const [done, setDone] = useState<Done | null>(null);
+  const pending = busy || done?.final === true;
   const group = groupOf(item);
   const onOpenBot = openerFor(item.subject, item.bot, group, openBotPanel, onOpenItem);
   const alarm = alarming(item);
@@ -343,14 +353,21 @@ function NeedsCard({
   // Which of the card's buttons is running, so only that one says so: the card
   // has one pending state for all of them.
   const [active, setActive] = useState<string | null>(null);
-  const run = (work: () => Promise<{ ok: boolean; error?: string }>, key?: string): void => {
+  const run: Run = (work, key, said) => {
+    if (pressing.current) return;
+    pressing.current = true;
     setError(null);
     setActive(key ?? null);
-    startTransition(async () => {
-      const result = await work();
-      // Done means the item goes: the action revalidates the board, which reads
-      // "needs you" again without it.
-      if (!result.ok) setError(result.error ?? 'that did not go through');
+    setBusy(true);
+    void safeAction(work).then((result) => {
+      pressing.current = false;
+      setBusy(false);
+      if (!result.ok) return setError(result.error ?? 'that did not go through');
+      // Done means the item goes: the action revalidates the board, which
+      // reads "needs you" again without it. Until then the card says so.
+      setActive(null);
+      const outcome = said?.(result) ?? null;
+      if (outcome) setDone(outcome);
     });
   };
 
@@ -369,12 +386,17 @@ function NeedsCard({
     onOpenBot(bot, how);
   };
   const answer = (option: string) => {
+    if (pressing.current) return;
     setChosen(option);
-    run(async () => {
-      const result = await answerGate(gateId!, option);
-      if (!result.ok) setChosen(null);
-      return result;
-    });
+    run(
+      async () => {
+        const result = await answerGate(gateId!, option);
+        if (!result.ok) setChosen(null);
+        return result;
+      },
+      undefined,
+      answered(option),
+    );
   };
   const somethingElseButton = (openBot: OpenBot) =>
     somethingElse?.kind === 'answer' ? (
@@ -467,6 +489,7 @@ function NeedsCard({
             )}
           </div>
         )}
+        {done && <DoneLine done={done} />}
         {error && (
           <p role="status" className="text-[12px] text-alarm">
             {error}
@@ -573,6 +596,7 @@ function NeedsCard({
                 run={run}
               />
             )}
+            {done && <DoneLine done={done} />}
             {error && (
               <p role="status" className="text-[12px] text-alarm">
                 {error}
@@ -610,7 +634,7 @@ function MemberList({
   active: string | null;
   /** Each member opens its own work item, or its bot's panel. */
   onOpenBot: (member: AttentionMember) => OpenBot;
-  run: (work: () => Promise<{ ok: boolean; error?: string }>, key?: string) => void;
+  run: Run;
 }) {
   return (
     <ul aria-label="Affected" className="flex flex-col gap-2 rounded-md bg-surface px-2.5 py-2">
@@ -714,6 +738,47 @@ function QuestionChoices({
 const SOMETHING_ELSE =
   'inline-flex min-h-11 items-center rounded-md border border-dashed border-edge-strong px-3 py-2 text-left text-[12.5px] leading-snug text-muted transition-colors hover:border-dim hover:text-body focus-visible:outline-2 focus-visible:outline-link md:min-h-7 md:px-2.5 md:py-1';
 
+/** An action's answer, as the card reads it. */
+type Answered = { ok: boolean; error?: string; held?: boolean; ended?: boolean };
+/**
+ * What the card says a press did. `final` is a question answered: its choices
+ * stay off until the card goes. Anything else leaves the card's other buttons
+ * as they were, since a folded card's other members may still want them.
+ */
+type Done = { text: string; final: boolean };
+type Said = (result: Answered) => Done | null;
+/** Runs a press once at a time, and says what it did from its answer. */
+type Run = (work: () => Promise<Answered>, key?: string, said?: Said) => void;
+
+const said =
+  (text: string): Said =>
+  () => ({ text, final: false });
+
+/**
+ * An answer, said by what the bridge answered: one that stopped the task (a
+ * refusal, a hand-off or an abandon at the cost cap, work that had landed),
+ * one taken that waits, which the card keeps — a plan change approved while
+ * another lease holds its paths, a continue a spent monthly cap holds — or one
+ * the task goes on with.
+ */
+const answered =
+  (option: string): Said =>
+  (result) =>
+    result.ended
+      ? { text: `Answered: ${option}. The task is stopped; its thread says why.`, final: true }
+      : result.held
+        ? { text: 'Taken. It waits on other work before it goes on; its thread says what.', final: false }
+        : { text: `Answered: ${option}. It goes on from here.`, final: true };
+
+function DoneLine({ done }: { done: Done }) {
+  return (
+    <p role="status" data-done className="flex items-center gap-1.5 text-[12px] text-signal">
+      <CheckIcon size={12} />
+      {done.text}
+    </p>
+  );
+}
+
 const BUTTON = 'inline-flex h-11 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 text-[12.5px] md:h-7 md:px-2.5';
 const PRIMARY = `${BUTTON} flex-1 bg-body font-medium text-surface transition-colors hover:bg-soft disabled:opacity-60 md:flex-none`;
 const SECONDARY = `${BUTTON} border border-edge-strong text-soft transition-colors hover:border-dim hover:text-body disabled:opacity-60`;
@@ -761,7 +826,7 @@ function ActionButton({
   /** The card's button that is running, by `keyOf`: only it says what it is doing. */
   active?: string | null;
   onOpenBot: OpenBot;
-  run: (work: () => Promise<{ ok: boolean; error?: string }>, key?: string) => void;
+  run: Run;
   /** Opens the card's sheet, which What to do does. */
   onShowMore?: () => void;
 }) {
@@ -772,7 +837,7 @@ function ActionButton({
   // user them. A user still sees what is wrong, and whom it waits on.
   const admin = useRole() === 'admin';
   if (!admin && adminOnly(action)) return null;
-  const press = (work: () => Promise<{ ok: boolean; error?: string }>) => run(work, key);
+  const press = (work: () => Promise<Answered>, said?: Said) => run(work, key, said);
   const busy = pending && active === key;
 
   switch (action.kind) {
@@ -792,14 +857,14 @@ function ActionButton({
     case 'answer_gate':
     case 'approve':
       return (
-        <button type="button" className={style} disabled={pending} onClick={() => run(() => answerGate(action.gateId, action.answer))}>
-          {pending ? 'Sending…' : action.label}
+        <button type="button" className={style} disabled={pending} onClick={() => press(() => answerGate(action.gateId, action.answer), answered(action.answer))}>
+          {busy ? 'Sending…' : action.label}
         </button>
       );
     case 'retry_triage':
       return (
-        <button type="button" className={style} disabled={pending} onClick={() => run(() => retryTriage(action.requestId))}>
-          {pending ? 'Starting…' : action.label}
+        <button type="button" className={style} disabled={pending} onClick={() => press(() => retryTriage(action.requestId), said('Starting its triage again.'))}>
+          {busy ? 'Starting…' : action.label}
         </button>
       );
     case 'abandon_request':
@@ -810,7 +875,7 @@ function ActionButton({
           disabled={pending}
           onClick={() => {
             if (!window.confirm('Abandon this request? Its triage stops, and nothing starts it again.')) return;
-            press(() => abandonRequest(action.requestId));
+            press(() => abandonRequest(action.requestId), said('Abandoned.'));
           }}
         >
           {busy ? 'Abandoning…' : action.label}
@@ -818,7 +883,7 @@ function ActionButton({
       );
     case 'retry_task':
       return (
-        <button type="button" className={style} disabled={pending} onClick={() => press(() => retryTask(action.taskId))}>
+        <button type="button" className={style} disabled={pending} onClick={() => press(() => retryTask(action.taskId), said('Starting it again.'))}>
           {busy ? 'Starting…' : action.label}
         </button>
       );
@@ -828,14 +893,14 @@ function ActionButton({
           type="button"
           className={style}
           disabled={pending}
-          onClick={() => press(() => (action.taskIds && action.taskIds.length > 1 ? stopTasks(action.taskIds) : stopTask(action.taskId)))}
+          onClick={() => press(() => (action.taskIds && action.taskIds.length > 1 ? stopTasks(action.taskIds) : stopTask(action.taskId)), said('Stopped.'))}
         >
           {busy ? 'Stopping…' : action.label}
         </button>
       );
     case 'dismiss_task':
       return (
-        <button type="button" className={style} disabled={pending} onClick={() => press(() => dismissTasks(action.tasks))}>
+        <button type="button" className={style} disabled={pending} onClick={() => press(() => dismissTasks(action.tasks), said('Dismissed.'))}>
           {busy ? 'Dismissing…' : action.label}
         </button>
       );

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useId, useRef, useState, useTransition } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { sendItemMessage } from '@/app/actions';
 import { useRole } from '@/components/app-header';
 import { AttachmentDrop, type AttachmentState } from '@/components/attachment-drop';
@@ -87,7 +87,10 @@ export function ItemView({
   const [draft, setDraft] = useDraft(`item:${subject}`);
   const [picked, setPicked] = useState<string | null>(null);
   const [clock, setClock] = useState(now);
-  const [pending, startTransition] = useTransition();
+  // Set at once and cleared by the answer: a transition's pending stayed set
+  // until the whole page had been read again, after the item already showed
+  // the answer.
+  const [pending, setPending] = useState(false);
   const [files, setFiles] = useState<AttachmentState>({ ids: [], busy: false });
   const [filesKey, setFilesKey] = useState(0);
   // Set at once, where `pending` is set only by the next render: a second
@@ -157,7 +160,8 @@ export function ItemView({
     const attachments = withFiles ? files.ids : [];
     if ((!text.trim() && attachments.length === 0) || sending.current) return;
     sending.current = true;
-    startTransition(async () => {
+    setPending(true);
+    void (async () => {
       try {
         const result = await safeAction(() =>
           sendItemMessage(subject, { text, gateId, role, ...(attachments.length > 0 ? { attachments } : {}) }),
@@ -174,8 +178,9 @@ export function ItemView({
         }
       } finally {
         sending.current = false;
+        setPending(false);
       }
-    });
+    })();
   };
 
   // The box is one for every tab that talks, and stays drawn, hidden, on a

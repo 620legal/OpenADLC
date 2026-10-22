@@ -813,6 +813,12 @@ export class TaskService {
     baseRef?: string;
     /** A review whose caller has just read from GitHub that its pull request is open, so it is not asked again for each seat. */
     knownOpen?: boolean;
+    /**
+     * Told once the task's row exists, before its context is read and hostd
+     * starts it, which takes seconds: the row is what takes a failed card off
+     * the board, so the console's Try again answers then (`retryDepsFor`).
+     */
+    recorded?: (task: { taskId: string; bot: string }) => void;
   }): Promise<{ taskId: string; session: string | null; error?: string }> {
     // Before anything is read: a refused start leaves no row. Work only an
     // event starts is recorded with the restart's words instead, below.
@@ -921,6 +927,7 @@ export class TaskService {
     });
     if (opened instanceof RestartPendingError) return this.recordBlocked(found, repo, input, opened.message);
     const { bot, task } = opened;
+    input.recorded?.({ taskId: task.id, bot: bot.name });
 
     // Everything between the row and hostd. A throw here — a database error,
     // mostly — left the row queued for good: it held its seat, a host's room,

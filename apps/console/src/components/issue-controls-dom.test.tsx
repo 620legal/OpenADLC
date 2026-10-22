@@ -71,6 +71,31 @@ describe('an issue’s controls on its card', () => {
     expect(opened).toEqual([]);
   });
 
+  it('shows a pause at once from the answer, and takes a second press while it is on its way as nothing', async () => {
+    const { pauseItem } = await import('@/app/actions');
+    let answer: (value: { ok: boolean; held: { by: string; at: string; why: null } }) => void = () => undefined;
+    vi.mocked(pauseItem).mockImplementationOnce(
+      (...args: unknown[]) => (calls.push({ action: 'pause', args }), new Promise((resolve) => (answer = resolve))) as never,
+    );
+    await mount();
+    const pause = document.querySelector<HTMLButtonElement>('[aria-label="Pause #7"]')!;
+
+    await act(async () => {
+      pause.click();
+      pause.click();
+    });
+    expect(calls).toEqual([{ action: 'pause', args: ['web#7'] }]);
+    expect(pause.disabled).toBe(true);
+
+    await act(async () => {
+      answer({ ok: true, held: { by: 'janedoe', at: '2026-10-22T12:00:00.000Z', why: null } });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // From the answer, before the board is read again.
+    expect(document.querySelector('[aria-label="Resume #7"]')).not.toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('[aria-label="Do #7 next"]')!.disabled).toBe(true);
+  });
+
   it('a refusal is the bridge’s sentence on a line of its own, below the buttons, not beside them', async () => {
     const { pauseItem } = await import('@/app/actions');
     vi.mocked(pauseItem).mockResolvedValueOnce({ ok: false, error: 'GitHub would not put openadlc:paused on acme/web#7.' } as never);

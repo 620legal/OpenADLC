@@ -2,6 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { answerGate, retryTask } from '@/app/actions';
 import type { AttentionItem } from '@/lib/api';
 import { headerData } from '@/lib/header';
 import { NeedsYou } from './needs-you';
@@ -415,6 +416,116 @@ describe('a failed task card’s Dismiss and Stop all', () => {
     });
     const after = [...container.querySelectorAll('button')].map((button) => button.textContent?.trim());
     expect(after.filter((label) => label === 'Dismiss')).toHaveLength(2);
+  });
+});
+
+/**
+ * A press shows at once, goes once, and changes the card from the answer.
+ * #27's Approve answered after 30 seconds, and nothing on the card changed
+ * meanwhile, so the person pressed it again and again (#76).
+ */
+describe('a press on a card', () => {
+  const QUESTION: AttentionItem = {
+    ...FAILED,
+    id: 'question:g-27',
+    kind: 'question',
+    headline: 'The builder (irisexampleco) asks about #27',
+    detail: 'Per round or per task?',
+    raw: undefined,
+    question: { gateId: 'g-27', options: ['per round', 'per task'] },
+    actions: [{ kind: 'answer', label: 'Something else…', bot: 'irisexampleco' }],
+  };
+
+  /** An action that answers when the test says. */
+  function held<T>(): { promise: Promise<T>; answer: (value: T) => Promise<void> } {
+    let settle: (value: T) => void = () => undefined;
+    const promise = new Promise<T>((resolve) => (settle = resolve));
+    return {
+      promise,
+      answer: (value) =>
+        act(async () => {
+          settle(value);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }),
+    };
+  }
+
+  it('answers a question once, however often it is pressed while the answer is on its way', async () => {
+    const sent = held<{ ok: boolean }>();
+    vi.mocked(answerGate).mockClear().mockImplementationOnce(() => sent.promise);
+    await render([QUESTION]);
+    const card = container.querySelector('article')!;
+
+    // Two presses inside one event's turn: React has not drawn the first yet.
+    await act(async () => {
+      button('per round', card).click();
+      button('per round', card).click();
+      button('per task', card).click();
+    });
+
+    expect(vi.mocked(answerGate)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(answerGate)).toHaveBeenCalledWith('g-27', 'per round');
+    expect(button('per round', card).disabled).toBe(true);
+    expect(button('per round', card).getAttribute('aria-busy')).toBe('true');
+
+    await sent.answer({ ok: true });
+
+    // From the answer, before the board is read again without the card.
+    expect(card.querySelector('[data-done]')?.textContent).toBe('Answered: per round. It goes on from here.');
+    expect(button('per task', card).disabled).toBe(true);
+    expect(vi.mocked(answerGate)).toHaveBeenCalledTimes(1);
+  });
+
+  it('says an answer that stopped the task as stopped, not as going on', async () => {
+    vi.mocked(answerGate).mockClear().mockResolvedValueOnce({ ok: true, ended: true });
+    await render([{ ...QUESTION, question: { gateId: 'g-27', options: ['Approve', 'Refuse'] } }]);
+    const card = container.querySelector('article')!;
+
+    await click(button('Refuse', card));
+
+    expect(card.querySelector('[data-done]')?.textContent).toBe('Answered: Refuse. The task is stopped; its thread says why.');
+  });
+
+  it('says an answer that waits on other work, and leaves the choices to press', async () => {
+    vi.mocked(answerGate).mockClear().mockResolvedValueOnce({ ok: true, held: true });
+    await render([QUESTION]);
+    const card = container.querySelector('article')!;
+
+    await click(button('per round', card));
+
+    expect(card.querySelector('[data-done]')?.textContent).toContain('It waits on other work before it goes on');
+    expect(button('per task', card).disabled).toBe(false);
+  });
+
+  it('starts a task again once, however often Try again is pressed while it is on its way', async () => {
+    const started = held<{ ok: boolean }>();
+    vi.mocked(retryTask).mockClear().mockImplementationOnce(() => started.promise);
+    await render([{ ...FAILED, actions: [{ kind: 'retry_task', label: 'Try again', taskId: 'task-iris' }] }]);
+    const card = container.querySelector('article')!;
+
+    await act(async () => {
+      button('Try again', card).click();
+      button('Try again', card).click();
+    });
+
+    expect(vi.mocked(retryTask)).toHaveBeenCalledTimes(1);
+    expect(button('Starting…', card).disabled).toBe(true);
+
+    await started.answer({ ok: true });
+
+    expect(card.querySelector('[data-done]')?.textContent).toBe('Starting it again.');
+  });
+
+  it('says what the bridge refused, and lets it be pressed again', async () => {
+    vi.mocked(answerGate).mockClear().mockResolvedValueOnce({ ok: false, error: 'that question was answered already by janedoe: per task' } as never);
+    await render([QUESTION]);
+    const card = container.querySelector('article')!;
+
+    await click(button('per round', card));
+
+    expect(card.textContent).toContain('that question was answered already by janedoe: per task');
+    expect(card.querySelector('[data-done]')).toBeNull();
+    expect(button('per round', card).disabled).toBe(false);
   });
 });
 
