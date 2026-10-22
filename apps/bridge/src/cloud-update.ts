@@ -5,13 +5,20 @@ import { getSecretStore, internalSecretRef } from '@openadlc/github';
 import {
   attestationRunProblem,
   DEFAULT_PORTS,
+  IMAGE_DIGEST,
   imageAttestationCheckArgs,
   imageAttestationsUrl,
   ONE_RELEASE_AT_A_TIME,
+  RELEASE_CHECKSUMS,
+  RELEASE_IMAGE_DIGESTS,
   RELEASE_IMAGE_REGISTRY,
   RELEASE_IMAGES,
+  recordedImageDigests,
+  recordsImageDigests,
+  releaseAssetUrl,
   releaseImageName,
   releaseImageRef,
+  type MovedImageTag,
   type PublishedRelease,
   type ReleaseImage,
   type SelfUpdateRun,
@@ -35,17 +42,21 @@ import {
  *
  * - **What runs.** The release the install is on is the one whose `service`
  *   image is the digest the bridge's own revision runs, asked of Cloud Run,
- *   matched against each release's tag at the registry and checked as that
- *   release's. A cloud install takes
+ *   matched against the digest each release recorded (`images.json`), or its
+ *   tag at the registry for a release from before releases recorded them, and
+ *   checked as that release's. A cloud install takes
  *   only the next release after it (`nextRelease`): its bridge and its host
  *   each migrate the database as they start, so each release has to run beside
  *   the one before it, and only beside that one.
- * - **Preparing** is checking: each image's tag is resolved to a digest at the
- *   registry, anonymously, and the digest checked with `gh attestation verify`
- *   as the archive is (`imageAttestationCheckArgs`, against the bundles
- *   GitHub's attestations API keeps for it, and the run read back from
- *   `--format json`). Nothing rolls unless both check out, and only the digest is ever
- *   deployed, never the tag.
+ * - **Preparing** is checking: each image's digest is the one the release
+ *   recorded, checked against its `SHA256SUMS` and pulled by that digest at
+ *   the registry, anonymously, or, for a release from before releases
+ *   recorded them, its tag resolved there; and the digest checked with `gh
+ *   attestation verify` as the archive is (`imageAttestationCheckArgs`,
+ *   against the bundles GitHub's attestations API keeps for it, and the run
+ *   read back from `--format json`). Nothing rolls unless both check out, and
+ *   only the digest is ever deployed, never the tag. A tag pushed again since
+ *   the release, naming another digest now, is said, and changes nothing.
  * - **The apply**, once no task runs: (a) the console's Cloud Run service onto
  *   the console digest, waiting until its new revision serves; (b) hostd told
  *   to restart onto the service digest (`POST /internal/restart-onto-image`,
@@ -138,6 +149,8 @@ export interface CloudRunState {
   previous: CloudBefore | null;
   /** The parts on the release already, in the order they rolled. */
   rolled: CloudPart[];
+  /** The release's tags that named another digest than it recorded, when its images were checked. */
+  moved?: MovedImageTag[];
   /** The bridge service's generation its own update makes, once asked for. */
   generation?: number;
 }
@@ -352,6 +365,15 @@ export function imageCheckEnv(configDir: string, env: NodeJS.ProcessEnv = proces
 /** How big an image's attestations may be: a bundle is some kilobytes, and a digest has a few. */
 const ATTESTATIONS_LIMIT = 4 * 1024 * 1024;
 
+/** How big `SHA256SUMS` and `images.json` may be: a line a file, and two digests. */
+const RECORD_LIMIT = 64 * 1024;
+
+/** What `verify` found: the images to roll, and any tag of the release that names another digest now. */
+export interface CheckedImages {
+  images: CloudImages;
+  moved: MovedImageTag[];
+}
+
 /** hostd's refusal of a restart, or what it came back on: not hostd being away while it restarts. */
 class HostRefused extends Error {}
 
@@ -360,8 +382,14 @@ export class CloudUpdate {
   readonly missing: readonly string[];
   private readonly log: (line: string) => void;
   private accessToken: { value: string; until: number } | null = null;
-  /** Tag to digest, per image: a release's tags never move, so each is asked once. */
+  /**
+   * Tag to digest, per image, for a release that recorded no digests: as such
+   * a release was always taken, each is asked once. A release's tag can be
+   * pushed again, which is why a later release records its digests instead.
+   */
   private readonly digests = new Map<string, string>();
+  /** A release's `SHA256SUMS` and `images.json`, by tag: a release's files never change, so each is read once. */
+  private readonly records = new Map<string, { sums: string; file: Buffer }>();
 
   constructor(private readonly deps: CloudUpdateDeps) {
     this.install = deps.install;
@@ -381,15 +409,14 @@ export class CloudUpdate {
   }
 
   /**
-   * The digest a release's tag names at the registry, asked with an anonymous
-   * pull token, as for any public image, and taken from the manifest's own
-   * bytes: the header that also says it is the registry's word, and has to
-   * agree.
+   * The digest of the manifest at a reference, a tag or a digest, asked with
+   * an anonymous pull token, as for any public image, and taken from the
+   * manifest's own bytes: the header that also says it is the registry's
+   * word, and has to agree.
    */
-  async resolveDigest(repo: string, image: ReleaseImage, tag: string): Promise<string> {
-    const ref = releaseImageRef(repo, image, tag);
-    const known = this.digests.get(ref);
-    if (known) return known;
+  private async manifestDigest(repo: string, image: ReleaseImage, reference: string): Promise<string> {
+    const byDigest = IMAGE_DIGEST.test(reference);
+    const ref = byDigest ? `${releaseImageName(repo, image)}@${reference}` : releaseImageRef(repo, image, reference);
     const path = releaseImageName(repo, image).slice(RELEASE_IMAGE_REGISTRY.length + 1);
     const grant = await this.deps.fetch(`https://${RELEASE_IMAGE_REGISTRY}/token?service=${RELEASE_IMAGE_REGISTRY}&scope=${encodeURIComponent(`repository:${path}:pull`)}`, {
       headers: { 'user-agent': 'openadlc-self-update' },
@@ -400,7 +427,7 @@ export class CloudUpdate {
     }
     const { token } = (await grant.json()) as { token?: unknown };
     if (typeof token !== 'string' || !token) throw new Error(`${RELEASE_IMAGE_REGISTRY} answered no pull token for ${path}`);
-    const response = await this.deps.fetch(`https://${RELEASE_IMAGE_REGISTRY}/v2/${path}/manifests/${encodeURIComponent(tag)}`, {
+    const response = await this.deps.fetch(`https://${RELEASE_IMAGE_REGISTRY}/v2/${path}/manifests/${byDigest ? reference : encodeURIComponent(reference)}`, {
       headers: { accept: MANIFEST_TYPES.join(', '), authorization: `Bearer ${token}`, 'user-agent': 'openadlc-self-update' },
       signal: AbortSignal.timeout(30_000),
     });
@@ -410,27 +437,118 @@ export class CloudUpdate {
     const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
     const said = response.headers.get('docker-content-digest');
     if (said && said !== digest) throw new Error(`the registry says ${ref} is ${said}, and its manifest is ${digest}`);
+    return digest;
+  }
+
+  /** The digest a release's tag names at the registry now, asked every time: a tag can be pushed again. */
+  tagDigest(repo: string, image: ReleaseImage, tag: string): Promise<string> {
+    return this.manifestDigest(repo, image, tag);
+  }
+
+  /** The digest a release's tag names, for a release from before releases recorded their digests: asked once, as it always was. */
+  async resolveDigest(repo: string, image: ReleaseImage, tag: string): Promise<string> {
+    const ref = releaseImageRef(repo, image, tag);
+    const known = this.digests.get(ref);
+    if (known) return known;
+    const digest = await this.tagDigest(repo, image, tag);
     this.digests.set(ref, digest);
     return digest;
   }
 
   /**
-   * A release's images, checked, as mirror references: each tag resolved to
-   * its digest, each digest's attestation checked as the archive's is
-   * (`checkImage`). Throws at the first that does not check out, so nothing
-   * rolls unless every one does.
+   * That the registry serves a digest a release recorded, without a sign-in,
+   * as the install's mirror will fetch it: its manifest, whose bytes hash to
+   * it. A version deleted from the package since is refused here, before
+   * anything rolls, rather than by Cloud Run or the host mid-roll.
    */
-  async verify(repo: string, tag: string, commit: string): Promise<CloudImages> {
+  async pullable(repo: string, image: ReleaseImage, digest: string): Promise<void> {
+    const served = await this.manifestDigest(repo, image, digest);
+    if (served !== digest) throw new Error(`the registry served a manifest whose digest is ${served} for ${digest}`);
+  }
+
+  /** One small file of a release, from the release's own address, carrying no credential. */
+  private async releaseFile(repo: string, tag: string, name: string): Promise<Buffer> {
+    const url = releaseAssetUrl(repo, tag, name);
+    const response = await this.deps.fetch(url, { redirect: 'follow', headers: { 'user-agent': 'openadlc-self-update' }, signal: AbortSignal.timeout(60_000) });
+    if (!response.ok) throw new Error(`${url} answered ${response.status}`);
+    const declared = Number(response.headers.get('content-length') ?? '0');
+    if (declared > RECORD_LIMIT) throw new Error(`${url} is ${declared} bytes, more than a release's ${name} is`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length > RECORD_LIMIT) throw new Error(`${url} is more than ${RECORD_LIMIT} bytes, more than a release's ${name} is`);
+    return bytes;
+  }
+
+  /**
+   * The digests a release recorded of its images, from its `images.json` as
+   * its `SHA256SUMS` gives it (`recordedImageDigests`), and of `commit` when
+   * that is known. Throws when they cannot be read or taken: such a release is
+   * taken by its record or not at all, never by its tags.
+   */
+  async recordedDigests(repo: string, tag: string, commit?: string): Promise<Record<ReleaseImage, string>> {
+    let files = this.records.get(tag);
+    if (!files) {
+      const sums = (await this.releaseFile(repo, tag, RELEASE_CHECKSUMS)).toString('utf8');
+      const file = await this.releaseFile(repo, tag, RELEASE_IMAGE_DIGESTS);
+      files = { sums, file };
+    }
+    const read = recordedImageDigests({ tag, sums: files.sums, file: files.file, ...(commit === undefined ? {} : { commit }) });
+    if ('problem' in read) throw new Error(read.problem);
+    this.records.set(tag, files);
+    return read.images;
+  }
+
+  /**
+   * The tags of a release that recorded its digests which name another
+   * digest at the registry now. None for a release that recorded none, whose
+   * tags are what it is taken by. A tag that cannot be read is not compared:
+   * what is taken is the recorded digest either way.
+   */
+  async movedTags(repo: string, release: Pick<PublishedRelease, 'tag' | 'assets'>): Promise<MovedImageTag[]> {
+    if (!recordsImageDigests(release)) return [];
+    const recorded = await this.recordedDigests(repo, release.tag);
+    const moved: MovedImageTag[] = [];
+    for (const image of RELEASE_IMAGES) {
+      const now = await this.tagDigest(repo, image, release.tag).catch(() => null);
+      if (now && now !== recorded[image]) moved.push({ tag: release.tag, image, recorded: recorded[image], now });
+    }
+    return moved;
+  }
+
+  /**
+   * A release's images, checked, as mirror references: each the digest the
+   * release recorded, served by the registry, or, for a release from before
+   * releases recorded them, its tag resolved to a digest; each digest's
+   * attestation checked as the archive's is (`checkImage`). Throws at the
+   * first that does not check out, so nothing rolls unless every one does.
+   * A recorded digest is taken whatever its tag names now; a tag that names
+   * another is answered in `moved`, for the row and the audit log to say.
+   */
+  async verify(repo: string, release: Pick<PublishedRelease, 'tag' | 'assets'>, commit: string): Promise<CheckedImages> {
+    const tag = release.tag;
+    const recorded = recordsImageDigests(release)
+      ? await this.recordedDigests(repo, tag, commit).catch((error: unknown) => {
+          throw new Error(`could not read the digests ${tag} recorded of its images: ${message(error)}, so nothing is rolled`);
+        })
+      : null;
     const refs: Partial<CloudImages> = {};
     for (const image of RELEASE_IMAGES) {
-      const digest = await this.resolveDigest(repo, image, tag).catch((error: unknown) => {
-        throw new Error(`could not resolve ${releaseImageRef(repo, image, tag)} to a digest: ${message(error)}`);
-      });
+      let digest: string;
+      if (recorded) {
+        digest = recorded[image];
+        await this.pullable(repo, image, digest).catch((error: unknown) => {
+          throw new Error(`${releaseImageName(repo, image)}@${digest}, the ${image} image ${tag} recorded, cannot be pulled: ${message(error)}, so nothing is rolled`);
+        });
+      } else {
+        digest = await this.resolveDigest(repo, image, tag).catch((error: unknown) => {
+          throw new Error(`could not resolve ${releaseImageRef(repo, image, tag)} to a digest: ${message(error)}`);
+        });
+      }
       const problem = await this.checkImage(repo, image, digest, tag, commit);
       if (problem) throw new Error(`${problem}, so nothing is rolled`);
       refs[image] = this.mirrorRef(repo, image, digest);
     }
-    return refs as CloudImages;
+    const moved = recorded ? await this.movedTags(repo, release).catch(() => []) : [];
+    return { images: refs as CloudImages, moved };
   }
 
   /**
@@ -511,10 +629,20 @@ export class CloudUpdate {
     return (body.attestations ?? []).filter((one) => one && typeof one.bundle === 'object' && one.bundle !== null).map((one) => JSON.stringify(one.bundle));
   }
 
-  /** The release whose `service` image is this digest, among releases newest first, or null. */
+  /**
+   * The release whose `service` image is this digest, among releases newest
+   * first, or null: the digest it recorded, or what its tag names for one from
+   * before releases recorded them. A release that recorded its digests is
+   * never matched by its tag, which could name another release's image.
+   */
   async releaseOf(repo: string, digest: string, releases: readonly PublishedRelease[]): Promise<string | null> {
     for (const release of releases) {
-      const theirs = await this.resolveDigest(repo, 'service', release.tag).catch(() => null);
+      const theirs = recordsImageDigests(release)
+        ? await this.recordedDigests(repo, release.tag).then(
+            (images) => images.service,
+            () => null,
+          )
+        : await this.resolveDigest(repo, 'service', release.tag).catch(() => null);
       if (theirs === digest) return release.tag;
     }
     return null;

@@ -18,7 +18,9 @@ import { when } from '@/components/engine-updates';
  * On a Google Cloud install the row is the same, and a run rolls the
  * release's images instead of restarting a checkout: it checks them, waits
  * for the tasks, then moves the console, the host and the bridge in that
- * order, and takes only the next release after the one in use.
+ * order, and takes only the next release after the one in use. A release's
+ * images are taken by the digests the release recorded, and a tag of one
+ * pushed again since, naming another image, is said on the row.
  *
  * Self-contained, as `EngineUpdates` is: it reads and writes its own state
  * through `/api/self-update`.
@@ -80,6 +82,13 @@ export interface SelfUpdateView {
   running: SelfUpdateRunView | null;
   last: SelfUpdateLast | null;
   attention: { title: string; detail: string } | null;
+  /**
+   * On a cloud install, each tag of the release in use or the one it would
+   * take that names another image now than the release recorded, in words
+   * naming both digests. The recorded one is what runs and what is taken; a
+   * bridge from before says none.
+   */
+  movedTags?: string[];
 }
 
 const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const;
@@ -144,7 +153,7 @@ export function selfUpdateSentence(view: SelfUpdateView): { text: string; tone: 
         : 'rolls in a minute';
     switch (run.phase) {
       case 'preparing':
-        return { text: `Checking ${run.tag}'s images: each resolved to its digest at the registry and its attestation checked, while the install goes on as it is.`, tone: 'plain' };
+        return { text: `Checking ${run.tag}'s images: each by its digest at the registry and its attestation checked, while the install goes on as it is.`, tone: 'plain' };
       case 'waiting':
         return { text: `${run.tag}'s images check out, and it ${waiting}. No new task starts meanwhile.`, tone: 'plain' };
       case 'restarting':
@@ -304,6 +313,11 @@ export function SelfUpdateRow({
       <p className="text-[11.5px] leading-relaxed text-muted">{deploySentence(view)}</p>
       {view.backend === 'cloud' && <p className="text-[11.5px] leading-relaxed text-muted">{CLOUD_BOT_IMAGE}</p>}
       {!view.applicable && !view.running && <p className="text-[11.5px] leading-relaxed text-muted">{view.reason}</p>}
+      {(view.movedTags ?? []).map((words) => (
+        <p key={words} className="text-[11.5px] leading-relaxed text-attention">
+          {words}
+        </p>
+      ))}
       {view.backend === 'cloud' && view.running && (
         <ol aria-label="Where the roll is" className="flex flex-wrap items-center gap-x-1.5 text-[11.5px]">
           {cloudSteps(view.running).map((one, index) => (

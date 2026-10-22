@@ -27,8 +27,9 @@
 # releaser's, that the archive is the build's, attests it and checks the
 # attestation exactly as an install will, attests each image by the digest
 # `push` reports, checks each can be pulled and checked exactly as an install
-# will, with gh signed in nowhere, checks the tag has not moved, and only
-# then makes the release, which must come out immutable.
+# will, with gh signed in nowhere, records each image's digest in a file of
+# the release, checks the tag has not moved, and only then makes the release,
+# which must come out immutable.
 #
 # No bot image: it holds Claude Code, whose licence lets a person install it
 # for their own use but not redistribute it, so every install builds its own
@@ -378,14 +379,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
-      # Under the version tag and no other: an install resolves the tag to a
-      # digest at the registry and deploys the digest, so the digest handed on,
-      # and attested in `publish`, is the one the registry gives the tag, and
-      # must be the one the push made. If a push fails, or anything after it,
-      # there is no release, so no install looks for the images already
-      # pushed: installs take only a release's images, and check each against
-      # the release's commit. A re-run pushes its images over them under the
-      # same tag (docs/development.md#cutting-a-release).
+      # Under the version tag and no other. The digest handed on, attested in
+      # `publish` and recorded in the release, is the one the registry gives
+      # the tag, and must be the one the push made: an install takes the
+      # recorded digest, and one from before releases recorded them resolves
+      # the tag. If a push fails, or anything after it, there is no release,
+      # so no install looks for the images already pushed: installs take only
+      # a release's images, and check each against the release's commit. A
+      # re-run pushes its images over them under the same tag
+      # (docs/development.md#cutting-a-release).
       - name: push the images
         id: push
         run: |
@@ -625,6 +627,22 @@ jobs:
             fi
           done
 
+      # The digests just attested and checked, in a file of the release that
+      # SHA256SUMS lists beside the archive (RELEASE_IMAGE_DIGESTS,
+      # parseImageDigests): an install takes each image by its digest here,
+      # never by the tag, which anyone who can write the packages can push
+      # again, and every install would then refuse the release.
+      - name: the release records each image's digest
+        working-directory: out
+        env:
+          SERVICE_DIGEST: ${{ steps.images.outputs.service-digest }}
+          CONSOLE_DIGEST: ${{ steps.images.outputs.console-digest }}
+        run: |
+          jq -cn --arg tag "$TAG" --arg commit "$SHA" --arg service "$SERVICE_DIGEST" --arg console "$CONSOLE_DIGEST" \
+            '{format: 1, tag: $tag, commit: $commit, images: {service: $service, console: $console}}' > images.json
+          sha256sum images.json >> SHA256SUMS
+          sha256sum -c SHA256SUMS
+
       # The tag was checked before the images went up; pushing and signing
       # took minutes, so it is read once more, as GitHub has it now, and a tag
       # moved meanwhile does not get the checked commit's release.
@@ -652,7 +670,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$TAG" --repo "$REPO" --verify-tag --title "$TAG" --generate-notes \
-            "out/openadlc-$TAG.tar.gz" "out/openadlc-$TAG.tar.gz.sigstore.json" out/SHA256SUMS
+            "out/openadlc-$TAG.tar.gz" "out/openadlc-$TAG.tar.gz.sigstore.json" out/SHA256SUMS out/images.json
           immutable=$(gh api "repos/$REPO/releases/tags/$TAG" --jq '.immutable')
           if [ "$immutable" != true ]; then
             gh release delete "$TAG" --repo "$REPO" --yes

@@ -1,9 +1,15 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   applyingRefusal,
+  movedTagWords,
+  parseImageDigests,
+  RELEASE_IMAGE_DIGESTS,
+  recordedImageDigests,
+  recordsImageDigests,
   checkoutApplyingPath,
   archivePathAllowed,
   attestationCheckArgs,
@@ -477,6 +483,65 @@ describe('the images a release publishes', () => {
     // Everything after the subject is the archive's check, flag for flag, less the bundle the registry stands in for.
     const rest = (list: string[]) => list.slice(3).filter((_, i, all) => all[i] !== '--bundle' && all[i - 1] !== '--bundle');
     expect(rest(args)).toEqual(rest(archive));
+  });
+});
+
+describe('the digests a release records of its images', () => {
+  const DIGESTS = { service: `sha256:${'1'.repeat(64)}`, console: `sha256:${'2'.repeat(64)}` };
+  /** The file as publish writes it (`jq -c`), and SHA256SUMS with its line after the archive's. */
+  const file = (record: unknown = { format: 1, tag: 'v0.2.0', commit: COMMIT, images: DIGESTS }) => Buffer.from(`${JSON.stringify(record)}\n`);
+  const sums = (body: Buffer) => `${'f'.repeat(64)}  openadlc-v0.2.0.tar.gz\n${createHash('sha256').update(body).digest('hex')}  images.json\n`;
+
+  it('are in images.json, which a release lists beside its three files, and one from before does not', () => {
+    expect(RELEASE_IMAGE_DIGESTS).toBe('images.json');
+    const files = Object.values(releaseAssets('v0.2.0'));
+    expect(recordsImageDigests({ assets: [...files, 'images.json'] })).toBe(true);
+    // v0.1.2 to v0.1.4: their images are taken by their tags, as they always were.
+    expect(recordsImageDigests({ assets: files })).toBe(false);
+  });
+
+  it('are read only in the one form publish writes', () => {
+    expect(parseImageDigests(file().toString())).toEqual({ format: 1, tag: 'v0.2.0', commit: COMMIT, images: DIGESTS });
+    for (const record of [
+      { format: 2, tag: 'v0.2.0', commit: COMMIT, images: DIGESTS },
+      { format: 1, tag: 'latest', commit: COMMIT, images: DIGESTS },
+      { format: 1, tag: 'v0.2.0', commit: 'abc', images: DIGESTS },
+      { format: 1, tag: 'v0.2.0', commit: COMMIT, images: { service: DIGESTS.service } },
+      { format: 1, tag: 'v0.2.0', commit: COMMIT, images: { ...DIGESTS, bot: DIGESTS.service } },
+      { format: 1, tag: 'v0.2.0', commit: COMMIT, images: { ...DIGESTS, console: 'v0.2.0' } },
+      { format: 1, tag: 'v0.2.0', commit: COMMIT, images: { ...DIGESTS, console: `sha256:${'A'.repeat(64)}` } },
+      { format: 1, tag: 'v0.2.0', commit: COMMIT, images: DIGESTS, signed: true },
+      [DIGESTS],
+    ]) {
+      expect(parseImageDigests(JSON.stringify(record)), JSON.stringify(record)).toBeNull();
+    }
+    expect(parseImageDigests('not json')).toBeNull();
+  });
+
+  it('are taken only from the file SHA256SUMS gives, of this release and its commit', () => {
+    const body = file();
+    expect(recordedImageDigests({ tag: 'v0.2.0', commit: COMMIT, sums: sums(body), file: body })).toEqual({ images: DIGESTS });
+    // Which release's commit it is the caller says when it knows; the attestation checks it either way.
+    expect(recordedImageDigests({ tag: 'v0.2.0', sums: sums(body), file: body })).toEqual({ images: DIGESTS });
+    const refused = (input: Parameters<typeof recordedImageDigests>[0]) => {
+      const read = recordedImageDigests(input);
+      return 'problem' in read ? read.problem : '';
+    };
+    expect(refused({ tag: 'v0.2.0', sums: `${'f'.repeat(64)}  openadlc-v0.2.0.tar.gz\n`, file: body })).toMatch(/SHA256SUMS does not give one SHA-256 for images\.json/);
+    expect(refused({ tag: 'v0.2.0', sums: sums(body), file: file({ format: 1, tag: 'v0.2.0', commit: COMMIT, images: { ...DIGESTS, console: DIGESTS.service } }) })).toMatch(
+      /images\.json has SHA-256 [0-9a-f]{64}, and SHA256SUMS says/,
+    );
+    const other = file({ format: 1, tag: 'v0.1.0', commit: COMMIT, images: DIGESTS });
+    expect(refused({ tag: 'v0.2.0', sums: sums(other), file: other })).toBe("v0.2.0's images.json records the images of v0.1.0");
+    expect(refused({ tag: 'v0.2.0', commit: TREE, sums: sums(body), file: body })).toMatch(/records images built from a{40}, not from b{40}, the commit v0\.2\.0 is on/);
+    const garbled = Buffer.from('{"format":1}\n');
+    expect(refused({ tag: 'v0.2.0', sums: sums(garbled), file: garbled })).toMatch(/not a record of its images' digests/);
+  });
+
+  it('say a moved tag by both digests, and which one is taken', () => {
+    expect(movedTagWords('620legal/OpenADLC', { tag: 'v0.2.0', image: 'console', recorded: DIGESTS.console, now: `sha256:${'9'.repeat(64)}` })).toBe(
+      `ghcr.io/620legal/openadlc/console:v0.2.0 names sha256:${'9'.repeat(64)} now, not ${DIGESTS.console}, the digest v0.2.0 recorded: the tag was pushed again since the release, and the recorded digest is the one taken`,
+    );
   });
 });
 

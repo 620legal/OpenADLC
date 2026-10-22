@@ -942,6 +942,8 @@ const REPO = '620legal/OpenADLC';
 const MIRROR = 'us-central1-docker.pkg.dev/example-project/openadlc-ghcr';
 const sha = (hex: string) => `sha256:${hex.repeat(64 / hex.length)}`;
 const commitOf = (tag: string) => createHash('sha1').update(tag).digest('hex');
+/** A release from before releases recorded their images' digests, as v0.1.2 to v0.1.4 are: its three files only. */
+const unrecorded = (tag: string) => ({ tag, assets: Object.values(releaseAssets(tag)) });
 
 interface World {
   releases: { tag: string; draft?: boolean; immutable?: boolean; assets?: string[] }[];
@@ -955,6 +957,14 @@ interface World {
   unattested?: string[];
   /** ghcr.io does not answer at all. */
   offline?: boolean;
+  /** Releases that recorded their images' digests: images.json is listed beside their three files, and served. */
+  recorded?: string[];
+  /** Releases that list images.json, which their address does not serve. */
+  unserved?: string[];
+  /** `<tag>/<image>` whose tag was pushed again since the release, onto another image nothing attested. */
+  retagged?: string[];
+  /** `<tag>/<image>` whose recorded digest ghcr.io no longer serves: a version deleted from the package. */
+  deleted?: string[];
 }
 
 /**
@@ -974,6 +984,10 @@ function releaseWorld(world: World) {
   const byDigest = new Map<string, { tag: string; image: 'service' | 'console' }>();
   for (const { tag } of world.releases) for (const image of ['service', 'console'] as const) byDigest.set(digestOf(manifest(tag, image)), { tag, image });
   const digest = (tag: string, image: 'service' | 'console') => digestOf(manifest(tag, image));
+  /** What a tag pushed again names: another image, which no release attested. */
+  const again = (tag: string, image: 'service' | 'console') => digestOf(manifest(`${tag}+again`, image));
+  /** A release's images.json, as publish writes it. */
+  const recordOf = (tag: string) => Buffer.from(`${JSON.stringify({ format: 1, tag, commit: commitOf(tag), images: { service: digest(tag, 'service'), console: digest(tag, 'console') } })}\n`);
   const bundles = (key: string) => [{ mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json', of: key, n: 1 }, { mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json', of: key, n: 2 }];
   const runners: ReleaseRunners = {
     gh: async (args) => {
@@ -987,7 +1001,7 @@ function releaseWorld(world: World) {
           prerelease: false,
           published_at: '2026-10-01T00:00:00Z',
           immutable: release.immutable ?? true,
-          assets: (release.assets ?? Object.values(releaseAssets(release.tag))).map((name) => ({ name })),
+          assets: (release.assets ?? [...Object.values(releaseAssets(release.tag)), ...(world.recorded?.includes(release.tag) ? ['images.json'] : [])]).map((name) => ({ name })),
         }));
         return { code: 0, stdout: JSON.stringify(listed), stderr: '' };
       }
@@ -1020,17 +1034,31 @@ function releaseWorld(world: World) {
         if (!found || world.unattested?.includes(`${found.tag}/${found.image}`)) return { status: 404, body: Buffer.from('{"message":"Not Found"}') };
         return { status: 200, body: Buffer.from(JSON.stringify({ attestations: bundles(`${found.tag}/${found.image}`).map((bundle) => ({ bundle, repository_id: 1 })) })) };
       }
+      const download = /^https:\/\/github\.com\/620legal\/OpenADLC\/releases\/download\/(v[0-9.]+)\/(SHA256SUMS|images\.json)$/.exec(url);
+      if (download) {
+        const [, tag, name] = download as unknown as [string, string, string];
+        if (!world.recorded?.includes(tag) || (name === 'images.json' && world.unserved?.includes(tag))) return { status: 404, body: Buffer.from('Not Found') };
+        const record = recordOf(tag);
+        return { status: 200, body: name === 'images.json' ? record : Buffer.from(`${'f'.repeat(64)}  openadlc-${tag}.tar.gz\n${digestOf(record).slice(7)}  images.json\n`) };
+      }
       if (world.offline) throw new Error('could not reach ghcr.io: getaddrinfo ENOTFOUND ghcr.io');
       const token = /^https:\/\/ghcr\.io\/token\?scope=repository%3A(620legal%2Fopenadlc%2F[a-z]+)%3Apull&service=ghcr\.io$/.exec(url);
       if (token) return { status: 200, body: Buffer.from(JSON.stringify({ token: `anonymous-${decodeURIComponent(token[1]!)}` })) };
-      const wanted = /^https:\/\/ghcr\.io\/v2\/620legal\/openadlc\/(service|console)\/manifests\/(v[0-9.]+)$/.exec(url);
+      const wanted = /^https:\/\/ghcr\.io\/v2\/620legal\/openadlc\/(service|console)\/manifests\/(v[0-9.]+|sha256:[0-9a-f]{64})$/.exec(url);
       if (!wanted || headers.authorization !== `Bearer anonymous-620legal/openadlc/${wanted[1]}`) return { status: 401, body: Buffer.from('{}') };
-      if (!published(wanted[2]!) || world.hidden?.includes(`${wanted[2]}/${wanted[1]}`)) return { status: 404, body: Buffer.from('{}') };
-      return { status: 200, body: manifest(wanted[2]!, wanted[1]!) };
+      const image = wanted[1] as 'service' | 'console';
+      if (wanted[2]!.startsWith('sha256:')) {
+        const served = world.releases
+          .flatMap(({ tag }) => [{ tag, body: manifest(tag, image) }, { tag: `${tag}+again`, body: manifest(`${tag}+again`, image) }])
+          .find((one) => digestOf(one.body) === wanted[2] && !world.deleted?.includes(`${one.tag}/${image}`));
+        return served ? { status: 200, body: served.body } : { status: 404, body: Buffer.from('{}') };
+      }
+      if (!published(wanted[2]!) || world.hidden?.includes(`${wanted[2]}/${image}`)) return { status: 404, body: Buffer.from('{}') };
+      return { status: 200, body: manifest(world.retagged?.includes(`${wanted[2]}/${image}`) ? `${wanted[2]}+again` : wanted[2]!, image) };
     },
   };
   const mirrored = (tag: string, image: 'service' | 'console') => `${MIRROR}/620legal/openadlc/${image}@${digest(tag, image)}`;
-  return { runners, gh, verified, got, digest, mirrored };
+  return { runners, gh, verified, got, digest, again, mirrored };
 }
 
 describe('a release image as a cloud install pulls it', () => {
@@ -1107,9 +1135,34 @@ describe('the release images configure takes', () => {
     for (const args of verified) expect(args.slice(-2)).toEqual(['--format', 'json']);
   });
 
+  it('take a release that recorded its digests by them, and say a tag of it pushed again since', async () => {
+    const { runners, verified, mirrored, digest, again, got } = releaseWorld({ releases: [{ tag: 'v0.2.0' }], recorded: ['v0.2.0'], retagged: ['v0.2.0/console'] });
+    const chosen = await configuredImages({ build: false, region: 'us-central1', projectId: 'example-project', prefix: 'openadlc', repo: REPO }, runners);
+    expect(chosen.images).toMatchObject({ bridgeImage: mirrored('v0.2.0', 'service'), hostdImage: mirrored('v0.2.0', 'service'), consoleImage: mirrored('v0.2.0', 'console') });
+    expect('said' in chosen && chosen.said.join('\n')).toContain(
+      `ghcr.io/620legal/openadlc/console:v0.2.0 names ${again('v0.2.0', 'console')} now, not ${digest('v0.2.0', 'console')}, the digest v0.2.0 recorded`,
+    );
+    // Checked, and found at ghcr.io, by the digests the release recorded; the image the tag names now is never checked.
+    expect(verified.map((args) => args[2])).toEqual([`oci://ghcr.io/620legal/openadlc/service@${digest('v0.2.0', 'service')}`, `oci://ghcr.io/620legal/openadlc/console@${digest('v0.2.0', 'console')}`]);
+    expect(got.map((call) => call.url)).toContain(`https://ghcr.io/v2/620legal/openadlc/console/manifests/${digest('v0.2.0', 'console')}`);
+    // The record is the release's own two files, asked for with nothing of this machine's.
+    const files = got.filter((call) => call.url.startsWith('https://github.com/'));
+    expect(files.map((call) => call.url)).toEqual(['SHA256SUMS', 'images.json'].map((name) => `https://github.com/${REPO}/releases/download/v0.2.0/${name}`));
+    for (const call of files) expect(call.headers).toEqual({});
+  });
+
+  it('refuse a release whose recorded digests cannot be read or pulled, rather than take its tags', async () => {
+    const unserved = await checkedReleaseImages(REPO, { tag: 'v0.2.0', assets: [...Object.values(releaseAssets('v0.2.0')), 'images.json'] }, MIRROR, releaseWorld({ releases: [{ tag: 'v0.2.0' }], recorded: ['v0.2.0'], unserved: ['v0.2.0'] }).runners);
+    expect(!unserved.ok && unserved.reason).toBe("could not read the digests v0.2.0 recorded of its images: could not download v0.2.0's images.json (HTTP 404)");
+    const { runners, verified, digest } = releaseWorld({ releases: [{ tag: 'v0.2.0' }], recorded: ['v0.2.0'], deleted: ['v0.2.0/console'] });
+    const deleted = await checkedReleaseImages(REPO, { tag: 'v0.2.0', assets: [...Object.values(releaseAssets('v0.2.0')), 'images.json'] }, MIRROR, runners);
+    expect(!deleted.ok && deleted.reason).toMatch(new RegExp(`^console: ghcr\\.io/620legal/openadlc/console@${digest('v0.2.0', 'console')}, the digest v0\\.2\\.0 recorded, cannot be pulled: ghcr\\.io did not show .*HTTP 404`));
+    expect(verified.map((args) => args[2])).toEqual([`oci://ghcr.io/620legal/openadlc/service@${digest('v0.2.0', 'service')}`]);
+  });
+
   it('read the attestations from GitHub’s API with no sign-in, and leave no bundle file behind', async () => {
     const { runners, got, verified } = releaseWorld({ releases: [{ tag: 'v0.2.0' }] });
-    const checked = await checkedReleaseImages(REPO, 'v0.2.0', MIRROR, runners);
+    const checked = await checkedReleaseImages(REPO, unrecorded('v0.2.0'), MIRROR, runners);
     expect(checked.ok).toBe(true);
     const asked = got.filter((call) => call.url.startsWith('https://api.github.com/'));
     expect(asked).toHaveLength(2);
@@ -1119,14 +1172,14 @@ describe('the release images configure takes', () => {
 
   it('refuses an image GitHub has no attestation for', async () => {
     const { runners, verified } = releaseWorld({ releases: [{ tag: 'v0.2.0' }], unattested: ['v0.2.0/service'] });
-    const checked = await checkedReleaseImages(REPO, 'v0.2.0', MIRROR, runners);
+    const checked = await checkedReleaseImages(REPO, unrecorded('v0.2.0'), MIRROR, runners);
     expect(!checked.ok && checked.reason).toMatch(/service[\s\S]*no attestation/);
     expect(verified).toEqual([]);
   });
 
   it('refuses an image whose attestation came from a run the tag’s push did not start', async () => {
     const { runners } = releaseWorld({ releases: [{ tag: 'v0.2.0' }], dispatched: ['v0.2.0/console'] });
-    const checked = await checkedReleaseImages(REPO, 'v0.2.0', MIRROR, runners);
+    const checked = await checkedReleaseImages(REPO, unrecorded('v0.2.0'), MIRROR, runners);
     expect(checked.ok).toBe(false);
     expect(!checked.ok && checked.reason).toMatch(/console[\s\S]*workflow_dispatch/);
   });
@@ -1427,6 +1480,27 @@ describe('openadlc cloud update', () => {
     expect(await updateCommand(settings, 'v0.1.0', stray.runners)).toBe(1);
     expect(stray.ran).toEqual([]);
     expect(stray.printed.join('\n')).toMatch(/goes back|skips/);
+  });
+
+  it('rolls the digests a release recorded, saying a tag of it pushed again since by both digests', async () => {
+    // v0.1.0, which the install runs, is from before releases recorded them; v0.2.0 is after, and its console tag was pushed again.
+    const moved: World = { ...world, recorded: ['v0.2.0'], retagged: ['v0.2.0/console'] };
+    const { runners, ran, printed, saved, mirrored, digest, again } = install(moved, v010());
+    expect(await updateCommand(settings, undefined, runners)).toBe(0);
+    expect(ran.map((one) => one.step)).toEqual(['check', 'console', 'host', 'bridge']);
+    expect(ran[1]!.args).toContain(mirrored('v0.2.0', 'console'));
+    expect(saved).toEqual([{ ...settings, console_image: mirrored('v0.2.0', 'console'), hostd_image: mirrored('v0.2.0', 'service'), bridge_image: mirrored('v0.2.0', 'service') }]);
+    expect(printed.join('\n')).toContain(
+      `ghcr.io/620legal/openadlc/console:v0.2.0 names ${again('v0.2.0', 'console')} now, not ${digest('v0.2.0', 'console')}, the digest v0.2.0 recorded: the tag was pushed again since the release, and the recorded digest is the one taken`,
+    );
+  });
+
+  it('finds the release the install runs by the digest it recorded, with its tag pushed again since', async () => {
+    const moved: World = { ...world, recorded: ['v0.1.0', 'v0.2.0'], retagged: ['v0.1.0/service'] };
+    const { runners, ran, printed } = install(moved, v010());
+    expect(await updateCommand(settings, undefined, runners)).toBe(0);
+    expect(printed.join('\n')).toContain('the install runs v0.1.0');
+    expect(ran.map((one) => one.step)).toEqual(['check', 'console', 'host', 'bridge']);
   });
 
   it('finds the release the install runs a page or more down the list', async () => {

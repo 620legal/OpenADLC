@@ -10,17 +10,24 @@ import {
   imageAttestationCheckArgs,
   imageAttestationsUrl,
   isCommitId,
+  movedTagWords,
   nextRelease,
   nextReleaseRefused,
   readReleasePages,
+  RELEASE_CHECKSUMS,
+  RELEASE_IMAGE_DIGESTS,
   RELEASE_IMAGE_REGISTRY,
   RELEASE_IMAGES,
+  recordedImageDigests,
+  recordsImageDigests,
+  releaseAssetUrl,
   releaseImageName,
   releaseImageRef,
   releaseVersion,
   safeWords,
   takeableReleases,
   untakeableReason,
+  type MovedImageTag,
   type PublishedRelease,
   type ReleaseImage,
   type ReleaseVersion,
@@ -946,9 +953,11 @@ export async function afterTerraform(
 
 /**
  * A cloud install runs the images a release publishes, not images of its own:
- * ghcr.io/<repo>/{service,console} at the release's tag, each resolved to a
- * digest and taken only once `gh attestation verify` has checked the
- * release's own workflow built that digest from the tagged commit. It pulls
+ * ghcr.io/<repo>/{service,console}, each by the digest the release recorded
+ * in its images.json (or, for a release from before releases recorded them,
+ * its tag resolved to a digest), and taken only once `gh attestation verify`
+ * has checked the release's own workflow built that digest from the tagged
+ * commit. It pulls
  * them through the module's mirror of ghcr.io (infra/gcp/main.tf, `ghcr`),
  * since Cloud Run pulls from nowhere else, by that digest and never by the
  * tag. `--build` keeps the images infra/gcp/install.sh builds from a checkout
@@ -991,7 +1000,7 @@ export interface ReleaseRunners {
   gh: (args: string[]) => Promise<GcloudResult>;
   /** `gh attestation verify`, with no GitHub sign-in at all, its output kept. */
   verify: (args: string[]) => Promise<GcloudResult>;
-  /** An anonymous GET: ghcr.io's token and manifests, and GitHub's attestations API. */
+  /** An anonymous GET: ghcr.io's token and manifests, GitHub's attestations API, and a release's own files. */
   get: (url: string, headers: Record<string, string>) => Promise<HttpAnswer>;
 }
 
@@ -1014,17 +1023,18 @@ function said(answer: GcloudResult): string {
 }
 
 /**
- * The digest a release's tag names on ghcr.io, from the registry's own API:
- * an anonymous token, which ghcr.io hands anyone for a public package, then
- * the manifest, hashed here. So no docker, crane or registry sign-in is needed
- * where this runs (Cloud Shell has no Docker), and nothing of this machine's
- * goes with the requests. Nothing in the answer is trusted either: the
- * attestation is checked for this digest, and Cloud Run and `docker pull`
- * refuse bytes that do not hash to it.
+ * The digest of the manifest ghcr.io serves at a reference, a tag or a
+ * digest, from the registry's own API: an anonymous token, which ghcr.io
+ * hands anyone for a public package, then the manifest, hashed here. So no
+ * docker, crane or registry sign-in is needed where this runs (Cloud Shell
+ * has no Docker), and nothing of this machine's goes with the requests.
+ * Nothing in the answer is trusted either: the attestation is checked for
+ * the digest, and Cloud Run and `docker pull` refuse bytes that do not hash
+ * to it.
  */
-export async function releaseDigest(repo: string, image: ReleaseImage, tag: string, get: ReleaseRunners['get']): Promise<string> {
+async function manifestDigest(repo: string, image: ReleaseImage, reference: string, get: ReleaseRunners['get']): Promise<string> {
   const name = releaseImageName(repo, image).slice(RELEASE_IMAGE_REGISTRY.length + 1);
-  const ref = releaseImageRef(repo, image, tag);
+  const ref = DIGEST.test(reference) ? `${releaseImageName(repo, image)}@${reference}` : releaseImageRef(repo, image, reference);
   const issued = await get(`https://ghcr.io/token?scope=${encodeURIComponent(`repository:${name}:pull`)}&service=ghcr.io`, {});
   let token: unknown;
   try {
@@ -1033,13 +1043,37 @@ export async function releaseDigest(repo: string, image: ReleaseImage, tag: stri
     token = undefined;
   }
   if (issued.status !== 200 || typeof token !== 'string' || !token) throw new Error(`ghcr.io gave no token to read ${ref} (HTTP ${issued.status})`);
-  const manifest = await get(`https://ghcr.io/v2/${name}/manifests/${tag}`, { authorization: `Bearer ${token}`, accept: MANIFEST_TYPES });
+  const manifest = await get(`https://ghcr.io/v2/${name}/manifests/${reference}`, { authorization: `Bearer ${token}`, accept: MANIFEST_TYPES });
   if (manifest.status !== 200) {
     throw new Error(
       `ghcr.io did not show ${ref} without a sign-in (HTTP ${manifest.status}): a release's packages have to be public, which a person sets once on GitHub (docs/self-hosting.md#installing-on-a-cloud)`,
     );
   }
   return `sha256:${createHash('sha256').update(manifest.body).digest('hex')}`;
+}
+
+/** The digest a release's tag names on ghcr.io now (`manifestDigest`): what a release from before releases recorded digests is taken by. */
+export function releaseDigest(repo: string, image: ReleaseImage, tag: string, get: ReleaseRunners['get']): Promise<string> {
+  return manifestDigest(repo, image, tag, get);
+}
+
+/**
+ * The digests a release recorded of its images, from its images.json as its
+ * SHA256SUMS gives it (`recordedImageDigests`), and of `commit` when that is
+ * known; downloaded from the release's own address with no credential.
+ * Throws when they cannot be read or taken: such a release is taken by its
+ * record or not at all, never by its tags.
+ */
+async function recordedDigests(repo: string, tag: string, commit: string | undefined, get: ReleaseRunners['get']): Promise<Record<ReleaseImage, string>> {
+  const file = async (name: string): Promise<Buffer> => {
+    const answer = await get(releaseAssetUrl(repo, tag, name), {});
+    if (answer.status !== 200) throw new Error(`could not download ${tag}'s ${name} (HTTP ${answer.status})`);
+    return answer.body;
+  };
+  const sums = (await file(RELEASE_CHECKSUMS)).toString('utf8');
+  const read = recordedImageDigests({ tag, sums, file: await file(RELEASE_IMAGE_DIGESTS), ...(commit === undefined ? {} : { commit }) });
+  if ('problem' in read) throw new Error(read.problem);
+  return read.images;
 }
 
 const GH_MISSING =
@@ -1156,23 +1190,54 @@ export interface ReleaseImages {
   console: string;
 }
 
-/** A release's images, each resolved to its digest and its attestation checked, or why not. */
+/**
+ * A release's images, each checked, or why not: the digest the release
+ * recorded, which ghcr.io must still serve, or, for a release from before
+ * releases recorded them, the digest its tag names; and that digest's
+ * attestation. A recorded digest is taken whatever its tag names now, and a
+ * tag that names another is answered in `moved`, to be said.
+ */
 export async function checkedReleaseImages(
   repo: string,
-  tag: string,
+  release: Pick<PublishedRelease, 'tag' | 'assets'>,
   mirror: string,
   runners: ReleaseRunners,
-): Promise<{ ok: true; images: ReleaseImages } | { ok: false; reason: string }> {
+): Promise<{ ok: true; images: ReleaseImages; moved: MovedImageTag[] } | { ok: false; reason: string }> {
+  const tag = release.tag;
   try {
     const commit = await releaseCommit(repo, tag, runners.gh);
+    let recorded: Record<ReleaseImage, string> | null = null;
+    if (recordsImageDigests(release)) {
+      try {
+        recorded = await recordedDigests(repo, tag, commit, runners.get);
+      } catch (error) {
+        return { ok: false, reason: `could not read the digests ${tag} recorded of its images: ${message(error)}` };
+      }
+    }
     const pulled = {} as Record<ReleaseImage, string>;
+    const moved: MovedImageTag[] = [];
     for (const image of RELEASE_IMAGES) {
-      const digest = await releaseDigest(repo, image, tag, runners.get);
+      let digest: string;
+      if (recorded) {
+        digest = recorded[image];
+        const unpulled = await manifestDigest(repo, image, digest, runners.get).then(
+          (served) => (served === digest ? null : `ghcr.io served a manifest whose digest is ${served}`),
+          (error: unknown) => message(error),
+        );
+        if (unpulled) return { ok: false, reason: `${image}: ${releaseImageName(repo, image)}@${digest}, the digest ${tag} recorded, cannot be pulled: ${unpulled}` };
+      } else {
+        digest = await releaseDigest(repo, image, tag, runners.get);
+      }
       const problem = await attestationProblem(repo, image, tag, commit, digest, runners).catch((error: unknown) => message(error));
       if (problem) return { ok: false, reason: `${image}: ${problem}` };
+      if (recorded) {
+        // Only said: what is taken is the recorded digest, whatever the tag names, or whether it can be read.
+        const now = await releaseDigest(repo, image, tag, runners.get).catch(() => null);
+        if (now && now !== digest) moved.push({ tag, image, recorded: digest, now });
+      }
       pulled[image] = mirrorImage(mirror, repo, image, digest);
     }
-    return { ok: true, images: { tag, commit, service: pulled.service, console: pulled.console } };
+    return { ok: true, images: { tag, commit, service: pulled.service, console: pulled.console }, moved };
   } catch (error) {
     return { ok: false, reason: message(error) };
   }
@@ -1202,7 +1267,7 @@ export async function newestReleaseImages(
   repo: string,
   mirror: string,
   runners: ReleaseRunners,
-): Promise<{ images: ReleaseImages; passedOver: string[] } | { images: null; reasons: string[] }> {
+): Promise<{ images: ReleaseImages; passedOver: string[]; moved: MovedImageTag[] } | { images: null; reasons: string[] }> {
   let listed: PublishedRelease[];
   try {
     listed = await publishedReleases(repo, runners.gh);
@@ -1212,8 +1277,8 @@ export async function newestReleaseImages(
   const { releases, incomplete, mutable } = takeableReleases(listed);
   const passedOver: string[] = [];
   for (const release of releases.slice(0, CANDIDATES)) {
-    const checked = await checkedReleaseImages(repo, release.tag, mirror, runners);
-    if (checked.ok) return { images: checked.images, passedOver };
+    const checked = await checkedReleaseImages(repo, release, mirror, runners);
+    if (checked.ok) return { images: checked.images, passedOver, moved: checked.moved };
     passedOver.push(`${release.tag}: ${checked.reason}`);
   }
   return { images: null, reasons: releases.length > 0 ? passedOver : [noTakeable(repo, incomplete, mutable)] };
@@ -1283,6 +1348,7 @@ export async function configuredImages(
     said: [
       ...chosen.passedOver.map((reason) => `passed over ${reason}`),
       `images: ${input.repo} ${chosen.images.tag}'s, their attestations checked, by digest through ${mirror}`,
+      ...chosen.moved.map((moved) => movedTagWords(input.repo, moved)),
       bot,
     ],
   };
@@ -1528,11 +1594,16 @@ async function runningRelease(
     };
   }
   // Page by page until a release's service image is this digest: the
-  // release in use and every version above it are then read.
+  // release in use and every version above it are then read. A release that
+  // recorded its digests is matched by its record, never by its tag, which
+  // could have been pushed again onto any image.
   let found: string | null = null;
   const published = await publishedReleases(target.repo, runners.gh, async (got) => {
     for (const release of takeableReleases(got).releases) {
-      const theirs = await releaseDigest(target.repo, 'service', release.tag, runners.get).catch((error: unknown) => {
+      const read = recordsImageDigests(release)
+        ? recordedDigests(target.repo, release.tag, undefined, runners.get).then((images) => images.service)
+        : releaseDigest(target.repo, 'service', release.tag, runners.get);
+      const theirs = await read.catch((error: unknown) => {
         throw new Error(`could not tell which release the bridge runs: ${release.tag}'s service image could not be read (${message(error)})`);
       });
       if (theirs === digest) {
@@ -1593,7 +1664,13 @@ export async function updateCommand(settings: Record<string, unknown>, wanted: s
   }
 
   ui.step(`checking ${choice.take}'s service and console images`);
-  const checked = await checkedReleaseImages(target.repo, choice.take, target.mirror, runners);
+  // chooseUpdate takes only a release it can take; its files say whether it recorded its digests.
+  const release = takeable.find((one) => one.tag === choice.take);
+  if (!release) {
+    ui.fail(`${choice.take} is not among the releases read, so nothing was rolled`);
+    return 1;
+  }
+  const checked = await checkedReleaseImages(target.repo, release, target.mirror, runners);
   if (!checked.ok) {
     ui.fail(`${choice.take}'s images did not check out, so nothing was rolled: ${checked.reason}`);
     if (wanted === undefined) {
@@ -1604,6 +1681,7 @@ export async function updateCommand(settings: Record<string, unknown>, wanted: s
     return 1;
   }
   ui.ok(`${choice.take}'s images were built by ${target.repo}'s release workflow from ${checked.images.commit.slice(0, 12)}`);
+  for (const moved of checked.moved) ui.warn(movedTagWords(target.repo, moved));
 
   // What the rolls need, before any of them: the mirror the module makes, and
   // a host whose cloud-init chooses hostd's image from the file. A host from

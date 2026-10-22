@@ -18,6 +18,8 @@ import {
   RELEASE_WORKFLOW,
   RELEASE_IMAGE_PLATFORM,
   RELEASE_IMAGES,
+  RELEASE_IMAGE_DIGESTS,
+  recordedImageDigests,
   releaseAssets,
   releaseImageName,
   releaseImageRef,
@@ -917,6 +919,24 @@ describe('publish and build, run', () => {
     expect(run(found.run!, { ...verifyEnv, VERIFIED: JSON.stringify([certified()]), REFUSE: '1' }, { stubs }).status).not.toBe(0);
   });
 
+  it('publish records the digests it attested and checked in images.json, which SHA256SUMS lists beside the archive, as an install reads them', () => {
+    const found = stepNamed('publish', "the release records each image's digest");
+    // The digests are the ones `the digests push made` took in the form of a digest, and the steps since attested and checked.
+    expect(found['working-directory']).toBe('out');
+    expect(found.env).toEqual({ SERVICE_DIGEST: '${{ steps.images.outputs.service-digest }}', CONSOLE_DIGEST: '${{ steps.images.outputs.console-digest }}' });
+    const archive = 'the archive the build made';
+    const sums = `${createHash('sha256').update(archive).digest('hex')}  ${releaseAssets('v0.2.0').archive}\n`;
+    const shown = `${found.run!}\necho "=== ${RELEASE_IMAGE_DIGESTS}"; cat ${RELEASE_IMAGE_DIGESTS}; echo "=== ${RELEASE_CHECKSUMS}"; cat ${RELEASE_CHECKSUMS}\n`;
+    const recorded = run(shown, { SERVICE_DIGEST: DIGESTS.service, CONSOLE_DIGEST: DIGESTS.console }, { stubs: {}, files: { [releaseAssets('v0.2.0').archive]: archive, [RELEASE_CHECKSUMS]: sums } });
+    expect(recorded.status, recorded.said).toBe(0);
+    const [, file = '', after = ''] = recorded.said.split(new RegExp(`=== (?:${RELEASE_IMAGE_DIGESTS}|${RELEASE_CHECKSUMS})\\n`));
+    // What self-update and `openadlc cloud update` read back: the archive's line kept first, and the record's own.
+    expect(after.startsWith(sums)).toBe(true);
+    expect(recordedImageDigests({ tag: 'v0.2.0', commit: SHA, sums: after, file: Buffer.from(file) })).toEqual({ images: DIGESTS });
+    // And the whole file checks out, as a person's `sha256sum -c` will on the release's files.
+    expect(recorded.said).toContain(`${RELEASE_IMAGE_DIGESTS}: OK`);
+  });
+
   it('publish waits a little for the API to show an attestation just made, and no longer', () => {
     const found = stepNamed('publish', "each image's attestation passes the check every install makes");
     const env = { ...verifyEnv, VERIFIED: JSON.stringify([certified()]) };
@@ -982,7 +1002,9 @@ describe('publish and build, run', () => {
     expect(publish('sign out of ghcr.io')).toBe(Math.max(...attested) + 1);
     expect(publish('service and console can be pulled without signing in')).toBe(publish('sign out of ghcr.io') + 1);
     expect(publish("each image's attestation passes the check every install makes")).toBe(publish('service and console can be pulled without signing in') + 1);
-    expect(publish(tagCheck)).toBe(publish("each image's attestation passes the check every install makes") + 1);
+    // Only digests that passed the check are recorded, and the tag is read last of all.
+    expect(publish("the release records each image's digest")).toBe(publish("each image's attestation passes the check every install makes") + 1);
+    expect(publish(tagCheck)).toBe(publish("the release records each image's digest") + 1);
     expect(publish(tagCheck)).toBe(publish('the release') - 1);
   });
 });
@@ -1082,7 +1104,7 @@ describe('a release, as release-build.yml makes it and self-update takes it', ()
     expect(made).toContain(`'{"format":1,"tag":"%s","commit":"%s","tree":"%s"}\\n' "$TAG" "$SHA" "$TREE" > ${RELEASE_MANIFEST}`);
     expect(made).toContain(`-czf "out/${names.archive}" ${RELEASE_MANIFEST} $roots`);
     expect(scripts('publish')).toContain(
-      `gh release create "$TAG" --repo "$REPO" --verify-tag --title "$TAG" --generate-notes \\\n  "out/${names.archive}" "out/${names.bundle}" out/${RELEASE_CHECKSUMS}`,
+      `gh release create "$TAG" --repo "$REPO" --verify-tag --title "$TAG" --generate-notes \\\n  "out/${names.archive}" "out/${names.bundle}" out/${RELEASE_CHECKSUMS} out/${RELEASE_IMAGE_DIGESTS}`,
     );
   });
 
