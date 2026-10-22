@@ -2011,8 +2011,8 @@ newest is too young, the run takes the newest stable version that is old
 enough, if that is still newer than the one in use; otherwise it ends
 `current` and says which newer version is out and when it becomes eligible.
 A release a few days old has given the ecosystem time to notice a bad one and
-pull it. If npm does not say when a version was published, the run fails
-rather than taking it unchecked. It applies to the three engine CLIs only:
+pull it. If npm does not say when a version was published, that CLI stays
+where it is rather than taking it unchecked. It applies to the three engine CLIs only:
 Node and gh keep the lookups below.
 
 The apt repository lists only its newest gh, so an update reads the newest gh
@@ -2045,7 +2045,11 @@ What a run does, on hostd:
    on the image (an image built before the label, or before it named Node and
    gh, is asked with each command's `--version`), asks `npm view` for each
    engine's `dist-tags` and publish times, nodejs.org for Node and the GitHub
-   CLI's apt repository for `gh`.
+   CLI's apt repository for `gh`. A tool whose answer cannot be read stays on
+   the version in use, its row and a card in Needs you say why, and the others
+   go on
+   ([An engine CLI, gh or Node does not update](troubleshooting.md#an-engine-cli-gh-or-node-does-not-update));
+   the run fails only when no tool could be read.
 2. Nothing newer that is old enough: the run is `current`, and that is all.
 3. Otherwise builds one `openadlc-bot:candidate` for every tool that is due, with
    the same script, pinned to the newer versions of those tools and to the

@@ -931,6 +931,51 @@ To finish one by hand, or to update without it, see
 `$OPENADLC_HOME/self-update/` is removed when the next bridge records it;
 `git worktree prune` in the checkout clears a worktree whose folder is gone.
 
+## An engine CLI, gh or Node does not update
+
+**What it means.** Each tool's row in Settings → System says how its last run
+ended ([Engine updates](self-hosting.md#engine-updates)). A run asks npm for the
+three engine CLIs, nodejs.org for Node and the GitHub CLI's apt repository for
+gh which version is newest. A tool whose answer cannot be read stays on the
+version it has, and its row says `Failed` and why: which tool, which source,
+and for an answer that could not be read, its size and what the parser said,
+never the answer itself. The other tools still update, in the same candidate,
+and the run's own result ends with `codex was not checked: …`. Needs you has a
+card for it under System, titled with the tool and the version it stays on
+(`Codex's newest version could not be read; it stays on 0.155.1`), until a
+later run checks every tool it asks about. Only a run that could read no tool
+at all fails as a whole, and its card says the update did not go in (`newest`
+and `execute` in `apps/hostd/src/engine-updates.ts`, `engineUpdateAttention`
+in `apps/bridge/src/engine-updates.ts`).
+
+On 2026-10-22 every engine update failed, every row showing the tail of a JSON
+document as its reason: npm's answer about `@openai/codex` had grown to 337 KB
+(5,578 versions, most of them per-platform alphas), hostd kept only the last
+256 KB of a command's output, and that cut off `dist-tags` at its start.
+nodejs.org's index of releases, at 335 KB, was cut the same way. An answer that
+is parsed is now read whole from its start, up to 8 MB (`ANSWER_MAX`), and a
+command that goes on past that is stopped there; a build's log is still kept
+from its end, where it says why it failed.
+
+**What to do.** Read the row's reason, then ask the same source from the
+machine hostd runs on (on the cloud host, from the hostd container, through
+the egress proxy):
+
+| The row says | What to look at |
+|---|---|
+| `could not ask npm which <package> is newest: …` | npm's own error: the network, a proxy, the registry `.npmrc` names. `npm view <package> dist-tags --json` |
+| `could not read npm's answer about <package> (<size>) as JSON: …` | Something other than npm answered, such as a proxy's or a captive portal's page, or the answer stopped short. `npm view <package> dist-tags time --json \| head -c 300` |
+| `npm's answer about <package> (<size>) names no latest version` | The registry has no `latest` dist-tag for it: a mirror that is not npm's |
+| `could not read when npm published <package> <version>, …` | npm did not say, so that version is not taken without its minimum release age. The next run asks again |
+| `… is over the 8 MB hostd reads` | An answer some twenty times its size in 2026, or something else answering at length. Check it as above, and open an issue if it is the real answer |
+| `could not ask nodejs.org which Node is newest: …`, `could not read nodejs.org's index of Node releases …` | `curl -fsSL https://nodejs.org/dist/index.json \| head -c 300`; on the cloud host, `nodejs.org` in the egress allowlist |
+| `nodejs.org's index of Node releases (<size>) lists no stable Node <major>` | The index has no release of the major the image is on |
+| `could not ask the GitHub CLI's apt repository which gh is newest: …`, `… package index (<size>) lists no gh package` | `curl -fsSL https://cli.github.com/packages/dists/stable/main/binary-amd64/Packages \| head` (`binary-arm64` on an arm64 host); on the cloud host, `cli.github.com` in the egress allowlist |
+| `nothing was built: the image does not say which <tool> it has, …` | The image in use has no `openadlc.engines` label, its CLI did not say its version, and npm's newest could not be read either, so a candidate had nothing to pin it to. Fix the lookup, or rebuild the image with `infra/local/build-bot-image.sh` |
+
+A tool that was not checked is asked again at its next scheduled run, or when
+its **Update now** is pressed.
+
 ## The console is a blank page under a LAN name or a tunnel
 
 **What it means.** The console and the bridge answer only under names the

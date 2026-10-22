@@ -5,6 +5,7 @@ import {
   minReleaseAgeDaysFrom,
   SYSTEM_TOOLS,
   systemToolById,
+  uncheckedNote,
   type EngineUpdateResult,
   type EngineUpdateStart,
   type EngineUpdateStatus,
@@ -295,14 +296,29 @@ function toolKey(id: SystemToolId): string {
 /**
  * The tools a result is about, when nothing recorded which: a run asks a
  * registry only for the tools it may move (and the pins it reports), so the
- * keys of `latest` name them. A run that stopped before it asked names none,
+ * keys of `latest`, and of `unchecked` for those whose answer could not be
+ * read, name them. A run that stopped before it asked names none,
  * and is written against none — it said nothing about any one tool, and
  * marking every tool failed made each row claim a failure it did not have.
  * The run's own result still says what happened.
  */
 function toolsOfResult(result: EngineUpdateResult): SystemToolId[] {
-  const asked = result.latest ? Object.keys(result.latest) : [];
+  const asked = [...Object.keys(result.latest ?? {}), ...Object.keys(result.unchecked ?? {})];
   return TOOL_IDS.filter((id) => asked.includes(toolKey(id)));
+}
+
+/**
+ * A run's reason as the row of a tool it checked keeps it: without what it
+ * says of the tools whose newest could not be read, which is their own rows'
+ * news. On 2026-10-22 Codex's failed lookup was every row's reason.
+ */
+function checkedReason(result: EngineUpdateResult): string {
+  let reason = result.reason;
+  for (const [pkg, why] of Object.entries(result.unchecked ?? {})) {
+    const note = uncheckedNote(pkg, why);
+    reason = reason.includes(`; ${note}`) ? reason.replace(`; ${note}`, '') : reason.replace(note, '');
+  }
+  return reason;
 }
 
 /** The ids of some package keys; absent keys are the three engine CLIs, which is what hostd runs then. */
@@ -341,27 +357,55 @@ function toolIdsFrom(value: unknown): SystemToolId[] | null | undefined {
 
 // ------------------------------------------------------------------ attention
 
-/** A failed update, as the console's attention list shows it: something a person must see. */
+/** A failed update, or a tool one could not check, as the console's attention list shows it: something a person must see. */
 export interface EngineUpdateAttention {
-  kind: 'engine-update-failed';
+  /**
+   * `engine-update-failed`: nothing went in. `engine-update-unchecked`: the
+   * run went on, and a tool whose newest could not be read stayed where it was.
+   */
+  kind: 'engine-update-failed' | 'engine-update-unchecked';
   title: string;
   detail: string;
   at: string;
   href: string;
 }
 
+/** `Codex and Grok`, by the names Settings → System gives them. */
+function toolNames(keys: readonly string[]): string {
+  const names = keys.map((key) => SYSTEM_TOOLS.find((tool) => tool.key === key)?.name ?? key);
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
+
 /**
  * The attention item for the last result, or null when it needs nobody.
- * Only a failure does: the bots are still on the image they had, and the
- * reason is usually a credential or a model a person has to look at. It
- * stays until a later run ends otherwise.
+ * A failure does: the bots are still on the image they had, and the reason
+ * is usually a credential or a model a person has to look at. So does a tool
+ * whose newest could not be read: the run goes on without it, and a lookup
+ * that fails every week would otherwise leave it behind with nobody told
+ * but its row. It stays until a later run ends otherwise.
  */
 export function engineUpdateAttention(last: EngineUpdateResult | null): EngineUpdateAttention | null {
-  if (!last || last.state !== 'failed') return null;
+  if (!last) return null;
+  if (last.state === 'failed') {
+    return {
+      kind: 'engine-update-failed',
+      title: 'The engine update did not go in — the bots are still on the engines they had',
+      detail: last.reason,
+      at: last.finishedAt,
+      href: '/settings#engine-updates',
+    };
+  }
+  const unchecked = last.unchecked ?? {};
+  const keys = Object.keys(unchecked);
+  if (keys.length === 0) return null;
+  const installed = keys.length === 1 ? last.from[keys[0] as string] : null;
   return {
-    kind: 'engine-update-failed',
-    title: 'The engine update did not go in — the bots are still on the engines they had',
-    detail: last.reason,
+    kind: 'engine-update-unchecked',
+    title:
+      keys.length === 1
+        ? `${toolNames(keys)}'s newest version could not be read; it stays on ${installed ?? 'the version it has'}`
+        : `The newest versions of ${toolNames(keys)} could not be read; they stay on the versions they have`,
+    detail: Object.values(unchecked).join('; '),
     at: last.finishedAt,
     href: '/settings#engine-updates',
   };
@@ -598,7 +642,7 @@ export class EngineUpdates {
     return parse<EngineUpdateResult>(all[KEY.last]);
   }
 
-  /** The attention item for a failed update, or null. See `engineUpdateAttention`. */
+  /** The attention item for a failed update or a tool it could not check, or null. See `engineUpdateAttention`. */
   async attention(): Promise<EngineUpdateAttention | null> {
     return engineUpdateAttention(await this.lastResult());
   }
@@ -844,15 +888,19 @@ export class EngineUpdates {
     const persisted = parse<ToolRun>(stored.run);
     const inFlight = persisted && persisted.startedAt === result.startedAt ? persisted.tools : undefined;
     const about = result.state === 'rolled-back' ? [...TOOL_IDS] : (tools ?? inFlight ?? toolsOfResult(result));
+    const othersReason = checkedReason(result);
     for (const id of about) {
       const key = toolKey(id);
       const from = result.from[key];
       const to = result.to?.[key];
       const latest = result.latest?.[key];
+      // A tool whose newest could not be read stayed where it was, whatever
+      // the run did with the others: its row says why, as a failure to look at.
+      const unchecked = result.unchecked?.[key];
       toolLast[id] = {
-        state: result.state,
+        state: unchecked === undefined ? result.state : 'failed',
         finishedAt: result.finishedAt,
-        reason: result.reason,
+        reason: unchecked ?? othersReason,
         from: typeof from === 'string' ? from : null,
         to: typeof to === 'string' ? to : null,
         latest: typeof latest === 'string' ? latest : null,

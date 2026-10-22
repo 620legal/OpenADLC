@@ -6,6 +6,7 @@ import {
   DEFAULT_MIN_RELEASE_AGE_DAYS,
   ENGINE_PACKAGES,
   SYSTEM_TOOLS,
+  uncheckedNote,
   type AccountCheck,
   type EngineCli,
   type EngineName,
@@ -121,14 +122,50 @@ export function compareVersions(a: string, b: string): number {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** What `npm view <pkg> dist-tags time --json` printed, or null when it is not JSON. */
-function npmView(stdout: string): { 'dist-tags'?: { latest?: unknown }; time?: unknown } | null {
+/**
+ * JSON.parse, or why not in words that quote none of the text: V8's message
+ * carries a piece of it (`Unexpected token '<', "<html>" is not valid JSON`).
+ */
+function parseJson(text: string): { value: unknown } | { error: string } {
   try {
-    const parsed = JSON.parse(stdout) as unknown;
-    return parsed && typeof parsed === 'object' ? (parsed as { 'dist-tags'?: { latest?: unknown }; time?: unknown }) : null;
-  } catch {
-    return null;
+    return { value: JSON.parse(text) as unknown };
+  } catch (error) {
+    const said = error instanceof Error ? error.message : String(error);
+    return { error: said.replace(/,\s*(?:\.\.\.)?".*$/s, '') };
   }
+}
+
+/** `329 KB`: how big an answer was, for a reason that must not quote it. */
+function sizeOf(text: string): string {
+  const bytes = Buffer.byteLength(text);
+  if (bytes < 1024) return `${bytes} byte${bytes === 1 ? '' : 's'}`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Why an answer cut at `ANSWER_MAX` is not read at all. */
+function tooBig(what: string): string {
+  return `could not read ${what}: it is over the ${ANSWER_MAX / (1024 * 1024)} MB hostd reads`;
+}
+
+/**
+ * An answer's JSON, or why it could not be read, naming its source and size
+ * and never quoting it. A failed lookup's reason used to end with the last
+ * 400 characters of what came back: on 2026-10-22 that was the tail of npm's
+ * JSON about Codex, on every row of Settings → System.
+ */
+function readAnswer(what: string, asked: CommandResult): { value: unknown } | { reason: string } {
+  const parsed = parseJson(asked.stdout);
+  return 'error' in parsed ? { reason: `could not read ${what} (${sizeOf(asked.stdout)}) as JSON: ${parsed.error}` } : parsed;
+}
+
+/** npm's own line for a failed `npm view --json`, which prints `{"error":{"summary":…}}` on stdout beside its words on stderr. */
+function npmError(stdout: string): string | null {
+  const parsed = parseJson(stdout);
+  if (!('value' in parsed) || !parsed.value || typeof parsed.value !== 'object') return null;
+  const error = (parsed.value as { error?: { summary?: unknown } }).error;
+  const summary = typeof error?.summary === 'string' ? (error.summary.split('\n')[0] ?? '') : '';
+  return lastWords(summary) || null;
 }
 
 /**
@@ -315,15 +352,15 @@ export function describeChanges(from: EngineVersions, to: EngineVersions): strin
  * is what a fresh image's `NODE_MAJOR` is.
  */
 export function newestNodeVersion(body: string, installed?: string | null): string | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed)) return null;
+  const parsed = parseJson(body);
+  return 'value' in parsed ? newestNodeIn(parsed.value, installed) : null;
+}
+
+/** `newestNodeVersion` over an index already parsed, so a lookup parses it once. */
+function newestNodeIn(index: unknown, installed?: string | null): string | null {
+  if (!Array.isArray(index)) return null;
   const stable: { version: string; major: number; lts: boolean }[] = [];
-  for (const entry of parsed) {
+  for (const entry of index) {
     if (!entry || typeof entry !== 'object' || !('version' in entry)) continue;
     const version = String((entry as { version: unknown }).version).replace(/^v/, '');
     if (!/^\d+\.\d+\.\d+$/.test(version)) continue;
@@ -390,20 +427,45 @@ export interface CommandResult {
   code: number;
   stdout: string;
   stderr: string;
+  /**
+   * An answer's stdout ran past `ANSWER_MAX`: what is kept is its start, not
+   * the whole, and the command was stopped there, so `code` is not its own.
+   */
+  cut?: boolean;
 }
 
 export type CommandRunner = (
   command: string,
   args: string[],
-  options?: { env?: Record<string, string>; cwd?: string; timeoutMs?: number },
+  options?: {
+    env?: Record<string, string>;
+    cwd?: string;
+    timeoutMs?: number;
+    /** stdout is an answer to parse, not a log: kept from its start, whole up to `ANSWER_MAX`. */
+    answer?: boolean;
+  },
 ) => Promise<CommandResult>;
 
 /** How much of a command's output is kept, from the end: a build's log runs to megabytes. */
 const KEPT = 256 * 1024;
 
 /**
- * Runs a command and keeps the end of what it says. Never throws: a command
- * that could not start, or ran out of time, is a result like any other.
+ * How much of an answer is kept, from the start. npm's answer about Codex
+ * outgrew `KEPT` on 2026-10-22, at 337 KB (5,578 versions, most of them
+ * per-platform alphas), and nodejs.org's index of releases is 335 KB: kept
+ * from the end, each lost the start of its JSON, where `dist-tags` and the
+ * newest Node are, and every engine update failed. The largest answer is
+ * about 340 KB today, so 8 MB is room for twenty times that, and keeps what
+ * one lookup holds at once — the bytes, the text and the parsed answer, which
+ * for these took about twice the text's size of heap — to a few tens of MB.
+ */
+export const ANSWER_MAX = 8 * 1024 * 1024;
+
+/**
+ * Runs a command and keeps the end of what it says, or the start of an
+ * answer. Never throws: a command that could not start, ran out of time, or
+ * answered more than `ANSWER_MAX` (it is stopped there) is a result like any
+ * other.
  */
 export const runCommand: CommandRunner = (command, args, options = {}) =>
   new Promise((resolve) => {
@@ -415,9 +477,31 @@ export const runCommand: CommandRunner = (command, args, options = {}) =>
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    // An answer is kept as bytes and decoded once at the end: appending each
+    // chunk to a string copies everything kept so far, and a character split
+    // between two chunks would decode as two broken ones.
+    const answer: Buffer[] = [];
+    let answered = 0;
+    let cut = false;
     child.stdout.on('data', (chunk: Buffer) => {
-      stdout = (stdout + chunk.toString('utf8')).slice(-KEPT);
+      if (!options.answer) {
+        stdout = (stdout + chunk.toString('utf8')).slice(-KEPT);
+        return;
+      }
+      const room = ANSWER_MAX - answered;
+      if (chunk.length > room && !cut) {
+        // Nothing past the cut is read, so nothing is gained by letting the
+        // command go on printing it until the timeout.
+        cut = true;
+        child.kill('SIGTERM');
+      }
+      if (room <= 0) return;
+      const kept = chunk.length > room ? chunk.subarray(0, room) : chunk;
+      answer.push(kept);
+      answered += kept.length;
     });
+    const finish = (): Pick<CommandResult, 'stdout' | 'cut'> =>
+      options.answer ? { stdout: Buffer.concat(answer).toString('utf8'), ...(cut ? { cut } : {}) } : { stdout };
     child.stderr.on('data', (chunk: Buffer) => {
       stderr = (stderr + chunk.toString('utf8')).slice(-KEPT);
     });
@@ -430,12 +514,12 @@ export const runCommand: CommandRunner = (command, args, options = {}) =>
     timer?.unref?.();
     child.on('error', (error) => {
       if (timer) clearTimeout(timer);
-      resolve({ code: 127, stdout, stderr: `${stderr}${command} could not be started: ${error.message}\n` });
+      resolve({ code: 127, ...finish(), stderr: `${stderr}${command} could not be started: ${error.message}\n` });
     });
     child.on('close', (code) => {
       if (timer) clearTimeout(timer);
       const said = timedOut ? `${stderr}${command} did not finish within ${Math.round((options.timeoutMs ?? 0) / 1000)} s\n` : stderr;
-      resolve({ code: timedOut ? 124 : (code ?? 1), stdout, stderr: said });
+      resolve({ code: timedOut ? 124 : (code ?? 1), ...finish(), stderr: said });
     });
   });
 
@@ -738,7 +822,7 @@ export class EngineUpdater {
   private result(
     base: { trigger: string; requestedBy: string | null; startedAt: string },
     outcome: Pick<EngineUpdateResult, 'state' | 'from' | 'to' | 'latest' | 'checks' | 'reason'> &
-      Partial<Pick<EngineUpdateResult, 'refreshed' | 'deferred'>>,
+      Partial<Pick<EngineUpdateResult, 'refreshed' | 'deferred' | 'unchecked'>>,
   ): EngineUpdateResult {
     return { ...base, ...outcome, finishedAt: this.now().toISOString() };
   }
@@ -762,24 +846,56 @@ export class EngineUpdater {
     const latest: Record<string, string> = {};
     const eligible: Record<string, string> = {};
     const tooYoung: { pkg: string; version: string; published: string }[] = [];
+    // A tool whose newest cannot be read stays at the version in use, and the
+    // run goes on with the others. The first such tool used to end the run:
+    // on 2026-10-22 npm's answer about Codex could not be read, and nothing
+    // else updated either, on either install.
+    const unchecked: Record<string, string> = {};
     for (const pkg of ask) {
       const found = await this.newest(pkg, from[pkg] ?? null, minReleaseAgeDays);
       if (!found.version) {
-        return this.result(base, {
-          state: 'failed',
-          from,
-          to: null,
-          latest: null,
-          checks: [],
-          reason: found.reason,
-        });
+        unchecked[pkg] = found.reason;
+        continue;
       }
       latest[pkg] = found.version;
       if (found.eligible) eligible[pkg] = found.eligible;
       if (found.eligible !== found.version && found.published) tooYoung.push({ pkg, version: found.version, published: found.published });
     }
+    const missed = Object.keys(unchecked);
+    const asNoted = missed.length > 0 ? { unchecked } : {};
+    const noted = (reason: string): string =>
+      [reason, ...Object.entries(unchecked).map(([pkg, why]) => uncheckedNote(pkg, why))].filter(Boolean).join('; ');
+    if (missed.length > 0 && missed.length === ask.length) {
+      return this.result(base, {
+        state: 'failed',
+        from,
+        to: null,
+        latest: null,
+        checks: [],
+        reason: Object.values(unchecked).join('; '),
+        unchecked,
+      });
+    }
 
     const plan = planUpdate(from, eligible, hold, selection);
+    // An engine the candidate has no version for reaches the build script as
+    // `<package>@`, which the script refuses ("is not pinned to a version"),
+    // and the run would say only that the candidate did not build. One whose
+    // newest could not be read and whose version in use cannot be told is
+    // stopped here instead, with a reason that says which tool and why.
+    const unpinned = missed.filter((pkg) => PACKAGES.includes(pkg) && !plan.targets[pkg]);
+    if (plan.newer && unpinned.length > 0) {
+      const names = unpinned.map(shortName).join(', ');
+      return this.result(base, {
+        state: 'failed',
+        from,
+        to: null,
+        latest,
+        checks: [],
+        reason: noted(`nothing was built: the image does not say which ${names} it has, so a candidate could not keep it as it is`),
+        unchecked,
+      });
+    }
     if (!plan.newer) {
       const waiting = tooYoung
         .filter((one) => {
@@ -801,19 +917,22 @@ export class EngineUpdater {
         to: null,
         latest,
         checks: [],
-        reason: holding
-          ? `nothing newer to take: ${holding} is held back after a rollback`
-          : pinned
-            ? `nothing newer to take: ${pinned}`
-            : waiting
-              ? `nothing old enough to take: ${waiting}`
-              : alreadyNewest(ask),
+        reason: noted(
+          holding
+            ? `nothing newer to take: ${holding} is held back after a rollback`
+            : pinned
+              ? `nothing newer to take: ${pinned}`
+              : waiting
+                ? `nothing old enough to take: ${waiting}`
+                : alreadyNewest(ask.filter((pkg) => !missed.includes(pkg))),
+        ),
+        ...asNoted,
       });
     }
 
     const to: EngineVersions = { ...plan.targets };
     const failed = (reason: string, checks: EngineUpdateCheck[] = []): EngineUpdateResult =>
-      this.result(base, { state: 'failed', from, to, latest, checks, reason });
+      this.result(base, { state: 'failed', from, to, latest, checks, reason: noted(reason), ...asNoted });
 
     this.log(
       `[hostd] engine update: building ${tags.candidate} with ${plan.changes.map((one) => `${one.pkg}@${one.to}`).join(', ')}`,
@@ -857,9 +976,10 @@ export class EngineUpdater {
       to,
       latest,
       checks,
-      reason: describeChanges(from, to),
+      reason: noted(describeChanges(from, to)),
       refreshed: moved.refreshed,
       deferred: moved.deferred,
+      ...asNoted,
     });
   }
 
@@ -898,47 +1018,71 @@ export class EngineUpdater {
    * Newest version of one tool, from npm, nodejs.org or the GitHub CLI's apt
    * repository; and `eligible`, the one a run may take. For an npm engine CLI
    * that is the newest one old enough (`newestOldEnough`), with `published`
-   * the newest's publish time; for Node and gh it is the newest.
+   * the newest's publish time; for Node and gh it is the newest. No version:
+   * `reason` says why, naming the tool and the source.
    */
   private async newest(
     pkg: string,
     installed: string | null,
     minReleaseAgeDays: number = DEFAULT_MIN_RELEASE_AGE_DAYS,
   ): Promise<{ version: string | null; eligible?: string | null; published?: string; reason: string }> {
+    // A failed command's reason is its stderr, never its stdout: stdout is
+    // the answer, and here an answer that could not be read is described by
+    // its size and the parser's error. A cut answer is asked about first: the
+    // runner stopped the command there, so its exit code is not its own.
     const tool = SYSTEM_TOOLS.find((one) => one.key === pkg);
     if (tool?.source === 'nodejs') {
-      const asked = await this.run('curl', ['-fsSL', 'https://nodejs.org/dist/index.json'], { timeoutMs: 60_000 });
-      const version = asked.code === 0 ? newestNodeVersion(asked.stdout, installed) : null;
-      if (!version) {
-        const said = lastWords(`${asked.stderr}\n${asked.stdout}`) || `curl exited ${asked.code}`;
+      const asked = await this.run('curl', ['-fsSL', 'https://nodejs.org/dist/index.json'], { timeoutMs: 60_000, answer: true });
+      const what = "nodejs.org's index of Node releases";
+      if (asked.cut) return { version: null, reason: tooBig(what) };
+      if (asked.code !== 0) {
+        const said = lastWords(asked.stderr) || `curl exited ${asked.code}`;
         return { version: null, reason: `could not ask nodejs.org which Node is newest: ${said}` };
+      }
+      const read = readAnswer(what, asked);
+      if ('reason' in read) return { version: null, reason: read.reason };
+      const version = newestNodeIn(read.value, installed);
+      if (!version) {
+        const major = installed?.split('.')[0];
+        const wanted = major && /^\d+$/.test(major) ? `stable Node ${major}` : 'LTS Node';
+        return { version: null, reason: `${what} (${sizeOf(asked.stdout)}) lists no ${wanted}` };
       }
       return { version, eligible: version, reason: '' };
     }
     if (tool?.source === 'github') {
-      const asked = await this.run('curl', ['-fsSL', ghPackagesUrl()], { timeoutMs: 60_000 });
-      const version = asked.code === 0 ? newestGhVersion(asked.stdout) : null;
-      if (!version) {
-        const said = lastWords(`${asked.stderr}\n${asked.stdout}`) || `curl exited ${asked.code}`;
+      const asked = await this.run('curl', ['-fsSL', ghPackagesUrl()], { timeoutMs: 60_000, answer: true });
+      const what = "the GitHub CLI's apt repository's package index";
+      if (asked.cut) return { version: null, reason: tooBig(what) };
+      if (asked.code !== 0) {
+        const said = lastWords(asked.stderr) || `curl exited ${asked.code}`;
         return { version: null, reason: `could not ask the GitHub CLI's apt repository which gh is newest: ${said}` };
       }
+      const version = newestGhVersion(asked.stdout);
+      if (!version) return { version: null, reason: `${what} (${sizeOf(asked.stdout)}) lists no gh package` };
       return { version, eligible: version, reason: '' };
     }
-    const asked = await this.run('npm', ['view', pkg, 'dist-tags', 'time', '--json'], { timeoutMs: 60_000 });
-    const answer = asked.code === 0 ? npmView(asked.stdout) : null;
+    const asked = await this.run('npm', ['view', pkg, 'dist-tags', 'time', '--json'], { timeoutMs: 60_000, answer: true });
+    const what = `npm's answer about ${pkg}`;
+    if (asked.cut) return { version: null, reason: tooBig(what) };
+    if (asked.code !== 0) {
+      const said = npmError(asked.stdout) ?? (lastWords(asked.stderr) || `npm exited ${asked.code}`);
+      return { version: null, reason: `could not ask npm which ${pkg} is newest: ${said}` };
+    }
+    const read = readAnswer(what, asked);
+    if ('reason' in read) return { version: null, reason: read.reason };
+    const answer = read.value && typeof read.value === 'object' ? (read.value as { 'dist-tags'?: { latest?: unknown }; time?: unknown }) : null;
     const tag = answer?.['dist-tags']?.latest;
     const version = typeof tag === 'string' ? parseVersion(tag) : null;
     if (!version) {
-      const said = lastWords(`${asked.stderr}\n${asked.stdout}`) || `npm exited ${asked.code}`;
-      return { version: null, reason: `could not ask npm which ${pkg} is newest: ${said}` };
+      return { version: null, reason: `${what} (${sizeOf(asked.stdout)}) names no latest version` };
     }
     // Never the newest unchecked: a run that cannot tell how old a release is
-    // takes nothing.
+    // leaves that tool where it is.
     const time = answer?.time;
     const times = time && typeof time === 'object' && !Array.isArray(time) ? (time as Record<string, string>) : null;
     const published = times?.[version];
     if (minReleaseAgeDays > 0 && (!times || typeof published !== 'string' || !Number.isFinite(Date.parse(published)))) {
-      return { version: null, reason: `could not read when npm published ${pkg} ${version}, so nothing is taken without its minimum release age` };
+      return { version: null, reason: `could not read when npm published ${pkg} ${version}, so it is not taken without its minimum release age` };
     }
     const eligible = newestOldEnough(times ?? {}, version, minReleaseAgeDays, this.now());
     return { version, eligible, ...(typeof published === 'string' ? { published } : {}), reason: '' };

@@ -523,6 +523,30 @@ describe('a run a person starts', () => {
     expect(JSON.parse(data.systemToolRun ?? '{}').tools).toEqual(['claude', 'codex', 'grok']);
   });
 
+  it('writes a tool whose newest could not be read as failed on its own row, and the others without its error', async () => {
+    // On 2026-10-22 Codex's lookup was every row's reason in Settings → System.
+    const why = "could not read npm's answer about @openai/codex (256 KB) as JSON: No number after minus sign in JSON at position 1";
+    const run = result({
+      to: { ...PINS, [CLAUDE]: '2.1.290' },
+      latest: { [CLAUDE]: '2.1.290', '@xai-official/grok': '1.0.41' },
+      unchecked: { [CODEX]: why },
+      reason: `claude-code 2.1.282 → 2.1.290; codex was not checked: ${why}`,
+    });
+
+    for (const tools of [['claude', 'codex', 'grok'] as const, undefined]) {
+      const { service, data } = updates();
+      await service.record(run, 'openadlc', tools);
+
+      const last = JSON.parse(data.systemToolLast ?? '{}');
+      expect(Object.keys(last).sort()).toEqual(['claude', 'codex', 'grok']);
+      expect(last.codex).toMatchObject({ state: 'failed', reason: why, from: '0.155.1', to: '0.155.1', latest: null });
+      expect(last.claude).toMatchObject({ state: 'updated', reason: 'claude-code 2.1.282 → 2.1.290', from: '2.1.282', to: '2.1.290' });
+      expect(last.grok).toMatchObject({ state: 'updated', reason: 'claude-code 2.1.282 → 2.1.290' });
+      // The run's own result still says it all.
+      expect(JSON.parse(data.engineUpdateLast ?? '{}').reason).toBe(run.reason);
+    }
+  });
+
   it('writes a run that stopped before it asked about any tool against no tool', async () => {
     const { service, data } = updates();
     await service.record(
@@ -973,6 +997,40 @@ describe('what the console is shown', () => {
     expect(engineUpdateAttention(result())).toBeNull();
     expect(engineUpdateAttention(result({ state: 'current' }))).toBeNull();
     expect(engineUpdateAttention(result({ state: 'failed', reason: 'x' }))?.detail).toBe('x');
+  });
+
+  it('has a card of its own for a tool whose newest could not be read, which stayed where it was', async () => {
+    const why = "could not read npm's answer about @openai/codex (256 KB) as JSON: No number after minus sign in JSON at position 1";
+    const run = result({
+      to: { ...PINS, [CLAUDE]: '2.1.290' },
+      latest: { [CLAUDE]: '2.1.290', '@xai-official/grok': '1.0.41' },
+      unchecked: { [CODEX]: why },
+      reason: `claude-code 2.1.282 → 2.1.290; codex was not checked: ${why}`,
+    });
+
+    expect(engineUpdateAttention(run)).toEqual({
+      kind: 'engine-update-unchecked',
+      title: "Codex's newest version could not be read; it stays on 0.155.1",
+      detail: why,
+      at: run.finishedAt,
+      href: '/settings#engine-updates',
+    });
+    expect(
+      engineUpdateAttention(result({ state: 'current', to: null, unchecked: { [CODEX]: why, '@xai-official/grok': 'could not ask npm which @xai-official/grok is newest: E404' } })),
+    ).toMatchObject({
+      kind: 'engine-update-unchecked',
+      title: 'The newest versions of Codex and Grok could not be read; they stay on the versions they have',
+      detail: `${why}; could not ask npm which @xai-official/grok is newest: E404`,
+    });
+    // A run that did not go in says that, whatever else it could not check.
+    expect(engineUpdateAttention(result({ state: 'failed', reason: 'x', unchecked: { [CODEX]: why } }))?.kind).toBe('engine-update-failed');
+
+    // Recorded, it is what the attention list reads, until a run checks every tool again.
+    const { service } = updates();
+    await service.record(run, 'openadlc');
+    await expect(service.attention()).resolves.toMatchObject({ kind: 'engine-update-unchecked', detail: why });
+    await service.record(result({ startedAt: '2026-10-04T15:02:00.000Z', finishedAt: '2026-10-04T15:09:00.000Z' }), 'openadlc');
+    await expect(service.attention()).resolves.toBeNull();
   });
 });
 
