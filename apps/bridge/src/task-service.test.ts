@@ -76,9 +76,11 @@ vi.mock('@openadlc/db', () => ({
     addMessage: vi.fn(async () => undefined),
     listGatesForTasks: vi.fn(async () => []),
   },
+  // No pull request has a record of its own unless a test gives it one.
+  workItems: { itemOf: vi.fn(async () => null), linksOf: vi.fn(async () => []) },
 }));
 
-import { audit, costs, hosts, leases, recordEvent, repos, spendingLimits, tasks, threads } from '@openadlc/db';
+import { audit, costs, hosts, leases, recordEvent, repos, spendingLimits, tasks, threads, workItems } from '@openadlc/db';
 import type { BridgeConfig } from './config.js';
 import type { Context } from './context.js';
 import type { HostdClient } from './hostd-client.js';
@@ -446,6 +448,7 @@ describe('a review of a pull request that has closed', () => {
   it('is not started, and nothing is recorded, once GitHub says it closed or merged', async () => {
     const closed = vi.fn(async () => true);
     const { tasksService, startTask } = reviewing(closed);
+    vi.mocked(audit).mockClear();
 
     await expect(tasksService.open(REVIEW)).rejects.toThrow(SubjectClosedError);
     await expect(tasksService.open(REVIEW)).rejects.toThrow('openadlc#40 is closed, so no review of it is started');
@@ -453,6 +456,79 @@ describe('a review of a pull request that has closed', () => {
     expect(closed).toHaveBeenCalledWith('acme/openadlc', 40);
     expect(tasks.createTask).not.toHaveBeenCalled();
     expect(startTask).not.toHaveBeenCalled();
+    expect(audit).toHaveBeenCalledWith({
+      actor: 'bridge',
+      action: 'review.start_refused',
+      target: 'openadlc#40',
+      payload: { seat: 'builder', why: 'GitHub says it is closed', readFrom: 'github' },
+    });
+  });
+
+  describe('as the bridge recorded it', () => {
+    function recorded(state: 'open' | 'closed' | 'merged') {
+      vi.mocked(workItems.itemOf).mockResolvedValue({ id: 'item-7', number: 7, mergedInto: null });
+      vi.mocked(workItems.linksOf).mockResolvedValue([
+        { id: 1, itemId: 'item-7', kind: 'issue', repoId: 'repo-1', number: 39, requestId: null, linkedBy: null, title: 'An issue', state: 'open', url: null, openedAt: '2026-10-22T19:00:00Z', closedAt: null },
+        { id: 2, itemId: 'item-7', kind: 'pull', repoId: 'repo-1', number: 40, requestId: null, linkedBy: null, title: 'Its change', state, url: null, openedAt: '2026-10-22T19:03:21Z', closedAt: null },
+      ]);
+    }
+    afterEach(() => {
+      vi.mocked(workItems.itemOf).mockResolvedValue(null);
+      vi.mocked(workItems.linksOf).mockResolvedValue([]);
+    });
+
+    it('is not started once its merge is recorded, without asking GitHub, even when GitHub cannot be asked', async () => {
+      recorded('merged');
+      const closed = vi.fn(async () => Promise.reject(new Error('GitHub is down')));
+      const { tasksService, startTask } = reviewing(closed);
+      vi.mocked(audit).mockClear();
+
+      await expect(tasksService.open(REVIEW)).rejects.toThrow(SubjectClosedError);
+
+      expect(workItems.itemOf).toHaveBeenCalledWith({ repoId: 'repo-1', number: 40 });
+      expect(closed).not.toHaveBeenCalled();
+      expect(tasks.createTask).not.toHaveBeenCalled();
+      expect(startTask).not.toHaveBeenCalled();
+      expect(audit).toHaveBeenCalledWith({
+        actor: 'bridge',
+        action: 'review.start_refused',
+        target: 'openadlc#40',
+        payload: { seat: 'builder', why: 'the bridge recorded its merge', readFrom: 'record' },
+      });
+    });
+
+    it('asks GitHub when it is recorded closed but not merged, so a reopened one is still reviewed', async () => {
+      recorded('closed');
+      const closed = vi.fn(async () => false);
+      const { tasksService, startTask } = reviewing(closed);
+
+      await tasksService.open(REVIEW);
+
+      expect(closed).toHaveBeenCalledWith('acme/openadlc', 40);
+      expect(startTask).toHaveBeenCalledWith(expect.objectContaining({ kind: 'review', subjectRef: 'openadlc#40' }));
+    });
+
+    it('asks GitHub when it is recorded open: the merge’s delivery may not have been handled yet', async () => {
+      recorded('open');
+      const closed = vi.fn(async () => true);
+      const { tasksService, startTask } = reviewing(closed);
+
+      await expect(tasksService.open(REVIEW)).rejects.toThrow(SubjectClosedError);
+
+      expect(closed).toHaveBeenCalledWith('acme/openadlc', 40);
+      expect(startTask).not.toHaveBeenCalled();
+    });
+
+    it('asks GitHub when the record cannot be read', async () => {
+      vi.mocked(workItems.itemOf).mockRejectedValue(new Error('connection terminated'));
+      const closed = vi.fn(async () => false);
+      const { tasksService, startTask } = reviewing(closed);
+
+      await tasksService.open(REVIEW);
+
+      expect(closed).toHaveBeenCalledWith('acme/openadlc', 40);
+      expect(startTask).toHaveBeenCalled();
+    });
   });
 
   it('is started as before while it is open, or when GitHub cannot be asked', async () => {
@@ -473,16 +549,6 @@ describe('a review of a pull request that has closed', () => {
     await expect(tasksService.open(REVIEW)).rejects.toThrow(BotBusyError);
 
     expect(closed).not.toHaveBeenCalled();
-  });
-
-  it('is not asked again when the caller has just read that it is open, as a delivery’s round does for every seat', async () => {
-    const closed = vi.fn(async () => true);
-    const { tasksService, startTask } = reviewing(closed);
-
-    await tasksService.open({ ...REVIEW, knownOpen: true });
-
-    expect(closed).not.toHaveBeenCalled();
-    expect(startTask).toHaveBeenCalled();
   });
 
   it('is not a reason to hold back a deploy, whose work starts at the merge', async () => {

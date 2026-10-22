@@ -203,15 +203,21 @@ resumed, and ends the task as `already landed: <ref> is closed`. A resume for
 any other reason does the same: the bot is not started, the task is cleaned up,
 and no card results. **Try again**, and the retry after a check passes, are
 refused with `already landed`; a failed task the sweep finds refused this way
-is stopped as `already landed` too, so it is not asked about again. No review is started on a pull request GitHub
-says has closed or merged, whatever asked for it: a delivery the bridge works
-through late, a review posted after the merge, the gate sweep or the lead's
-turn. The bridge log says `<ref> is closed; <seat>'s review of it is not
-started`. A delivery worked through after its pull request closed opens no
-round at all: no reviewers are asked, no labels or gate are set, and the log
+is stopped as `already landed` too, so it is not asked about again. No review is started on a pull request that has
+closed or merged, whatever asked for it: a delivery the bridge works through
+late, a pull request merged while its round was being opened, a review posted
+after the merge, the gate sweep or the lead's turn. Each start reads it just
+before the task is recorded: the bridge's own record of the merge, which the
+merge's delivery writes first, and GitHub otherwise. The bridge log says `<ref>
+is closed; <seat>'s review of it is not started`, and the audit log has it as
+`review.start_refused`, with the seat, why, and whether the bridge's record or
+GitHub said so. A delivery worked through after its pull request closed opens no
+round at all: no reviewers are asked, no labels or gate are set, the log
 says `<owner/repo#n> has closed since this delivery was sent; no review round
-is opened`. Closing or merging one stops the reviews queued, running or paused
-on it. A task paused on a question stops itself when its issue closes: when an
+is opened`, and it is audited the same way, with the delivery in place of the
+seat. Closing or merging one stops the reviews queued, running or paused on it,
+a review whose task was recorded a moment before the close's delivery came
+included. A task paused on a question stops itself when its issue closes: when an
 issue or pull request closes, merged or not, heard by webhook or found by the
 reconciler after downtime, every task paused on it or on the issue's pull
 request is stopped, deploy and QA included. The exception is a task of the

@@ -213,7 +213,23 @@ vi.mock('@openadlc/db', () => ({
       ...store.qaTasks.filter((task) => refs.includes(task.subjectRef)),
       ...store.botTasks.filter((task) => task.kind === kind && refs.includes(task.subjectRef as string)),
     ]),
+    // What a real `TaskService.open` asks; only the tests that wire one reach them.
+    liveTaskOn: vi.fn(async () => null),
+    seatHasRoom: vi.fn(async () => true),
+    createTask: vi.fn(async (input: Record<string, unknown>) => {
+      const task = { id: `task-${store.botTasks.length + 1}`, state: 'queued', createdAt: new Date().toISOString(), ...input };
+      store.botTasks.push(task);
+      return task;
+    }),
+    discardUnstarted: vi.fn(async (id: string) => {
+      store.botTasks = store.botTasks.filter((task) => task.id !== id || task.state !== 'queued');
+    }),
+    updateTaskState: vi.fn(async () => null),
   },
+  costs: { currentPeriod: vi.fn(() => '2026-10') },
+  // No pull request has a record of its own here, as in a repository whose
+  // history is not numbered yet: a review's start asks GitHub.
+  workItems: { itemOf: vi.fn(async () => null), linksOf: vi.fn(async () => []) },
   stageMoves: { listForIssue: vi.fn(async () => store.moves) },
   threads: {
     listOpenGates: vi.fn(async () => [{ id: 'gate-1', taskId: 'task-1' }] as { id: string; taskId: string; createdAt?: string }[]),
@@ -5090,17 +5106,194 @@ describe('a pull request for an issue', () => {
       expect(vi.mocked(console.log)).toHaveBeenCalledWith(expect.stringContaining('janedoe/openadlc#2 has closed since this delivery was sent; no review round is opened'));
     });
 
-    it('asks GitHub once for the whole round while it is open, and tells each seat’s start it is open', async () => {
+    it('audits the round it did not open, and why', async () => {
+      const { audit } = await import('@openadlc/db');
+      vi.mocked(audit).mockClear();
+      const { receive } = delivered('closed');
+
+      await receive();
+
+      expect(audit).toHaveBeenCalledWith({
+        actor: 'bridge',
+        action: 'review.start_refused',
+        target: 'openadlc#2',
+        payload: { delivery: 'synchronize', why: 'GitHub says it is closed', readFrom: 'github' },
+      });
+    });
+
+    it('asks GitHub once for the round’s requests, labels and gate, and leaves each seat’s start to ask again', async () => {
+      // #88's round read open at its top and told each start so; it merged
+      // before the start, which read nothing more. The starts' own read is
+      // `TaskService`'s, shown in "a pull request merged while its round is opened".
       const { receive, getIssue, did, opened } = delivered('open');
 
       await receive();
 
       expect(getIssue).toHaveBeenCalledTimes(1);
       expect(did).toEqual(expect.arrayContaining(['requestReviewers', 'setReviewGate']));
-      expect(opened.map((input) => [input.bot, input.knownOpen])).toEqual([
-        ['openadlc-cipher-janedoe', true],
-        ['openadlc-vega-janedoe', true],
-      ]);
+      expect(opened.map((input) => input.bot)).toEqual(['openadlc-cipher-janedoe', 'openadlc-vega-janedoe']);
+    });
+  });
+
+  describe('a pull request merged while its round is opened', () => {
+    // #88 opened at 19:03:21Z and merged at 19:03:27Z. Its round read open at
+    // its top; the merge's delivery, handled while the round was still asking
+    // reviewers, found no review to stop; and at 19:03:34Z the round started
+    // the lead's review of what had already landed, which ran on for minutes.
+    function world() {
+      const github = { state: 'open' as 'open' | 'closed' };
+      const client = {
+        getIssue: vi.fn(async () => ({ number: 88, state: github.state })),
+        listEveryPullFile: async () => ({ files: [], complete: true, renamedFrom: [] }),
+        readFileIfPresent: async () => null,
+        // No deploy workflow: merging ships it.
+        request: async () => ({ workflows: [] }),
+        closingIssues: async () => [],
+        listPullFiles: async () => [],
+        comment: async () => null,
+        addLabels: async () => undefined,
+      };
+      const actors = { asBot: async () => client };
+      // Set by a test: what happens while the round asks for reviewers, and while hostd starts a task.
+      const during = { requesting: async (): Promise<void> => undefined, starting: async (): Promise<void> => undefined };
+      const startTask = vi.fn(async (input: { taskId: string }) => {
+        await during.starting();
+        const task = store.botTasks.find((one) => one.id === input.taskId);
+        // As hostd's start does: a task that ended while it started stays ended.
+        if (task?.state !== 'queued') throw new Error(`task ${input.taskId} had already ended by the time its session started`);
+        task.state = 'running';
+        return { session: 'pr-review-1' };
+      });
+      const taskService = new TaskService(
+        { automationBot: null, humans: [], costs: { perTaskCapUsd: 5, monthlyCapUsd: 100, onCap: 'stop' } } as never,
+        { startTask } as never,
+        { actors, forSubject: async () => [] } as never,
+      );
+      const webhooks = new Webhooks(
+        { automationBot: null, humans: [] } as never,
+        {
+          actors,
+          decideReviewers: () => ({ reviewers: ['lead-reviewer'], lead: 'lead-reviewer', reasons: {}, humanReviewRequired: false }),
+          requestReviewers: async () => during.requesting(),
+          humansRequiredFor: async () => ({ rules: null, required: [] }),
+          setHumanReviewLabels: async () => undefined,
+          dropUnneededHumanRequests: async () => undefined,
+          computeReviewGate: () => ({ state: 'pending', description: 'waiting on lead-reviewer' }),
+          cannotReviewHere: async () => new Map(),
+          setReviewGate: async () => undefined,
+        } as never,
+        {} as never,
+        taskService,
+        {} as never,
+        { leave: async () => undefined, advance: async () => null } as never,
+      );
+      const stopped: string[] = [];
+      webhooks.useStopTask(async (taskId) => {
+        stopped.push(taskId);
+        const task = store.botTasks.find((one) => one.id === taskId);
+        if (task) task.state = 'stopped';
+      });
+      const deliver = (action: 'opened' | 'closed' | 'reopened', merged = false) =>
+        webhooks.receive(
+          'pull_request',
+          {
+            action,
+            repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+            pull_request: {
+              author_association: 'COLLABORATOR',
+              number: 88,
+              draft: false,
+              merged,
+              state: action === 'closed' ? 'closed' : 'open',
+              head: { ref: 'settle-path-requests', sha: 'abc123', repo: { full_name: 'janedoe/openadlc' } },
+              base: { ref: 'main' },
+              labels: [],
+            },
+          } as never,
+          `delivery-88-${action}`,
+        );
+      const going = () => store.botTasks.filter((task) => task.subjectRef === 'openadlc#88' && ['queued', 'running'].includes(task.state as string));
+      return { github, client, startTask, during, deliver, stopped, going };
+    }
+
+    beforeEach(() => {
+      store.bots = [{ id: 'bot-lead', name: 'lead-reviewer', githubLogin: 'lead-reviewer', engine: 'claude', model: 'm', role: 'review' }];
+      vi.mocked(tasks.createTask).mockClear();
+      vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    });
+    afterEach(() => {
+      vi.mocked(console.log).mockRestore();
+      vi.mocked(console.warn).mockRestore();
+    });
+
+    it('starts no review once the merge is in, though the round read open at its top: nothing is queued, running or spent', async () => {
+      const { audit } = await import('@openadlc/db');
+      vi.mocked(audit).mockClear();
+      const { github, startTask, during, deliver, stopped, going } = world();
+      during.requesting = async () => {
+        github.state = 'closed';
+        await deliver('closed', true);
+      };
+
+      await deliver('opened');
+
+      // The merge's delivery came before any review existed, as #88's did.
+      expect(stopped).toEqual([]);
+      expect(going()).toEqual([]);
+      expect(startTask).not.toHaveBeenCalled();
+      expect(vi.mocked(tasks.createTask)).not.toHaveBeenCalledWith(expect.objectContaining({ subjectRef: 'openadlc#88' }));
+      expect(audit).toHaveBeenCalledWith({
+        actor: 'bridge',
+        action: 'review.start_refused',
+        target: 'openadlc#88',
+        payload: { seat: 'lead-reviewer', why: 'GitHub says it is closed', readFrom: 'github' },
+      });
+    });
+
+    it('stops a review whose task was recorded just before the merge’s delivery came, before it runs', async () => {
+      const { github, during, deliver, stopped, going } = world();
+      during.starting = async () => {
+        during.starting = async () => undefined;
+        github.state = 'closed';
+        await deliver('closed', true);
+      };
+
+      await deliver('opened');
+
+      const review = store.botTasks.find((task) => task.subjectRef === 'openadlc#88');
+      expect(review).toBeDefined();
+      expect(stopped).toEqual([review!.id]);
+      expect(review!.state).toBe('stopped');
+      expect(going()).toEqual([]);
+    });
+
+    it('stops a running review when the merge’s delivery comes', async () => {
+      const { github, startTask, deliver, stopped, going } = world();
+
+      await deliver('opened');
+      expect(startTask).toHaveBeenCalledTimes(1);
+      const [review] = going();
+
+      github.state = 'closed';
+      await deliver('closed', true);
+
+      expect(stopped).toEqual([review!.id]);
+      expect(going()).toEqual([]);
+    });
+
+    it('still starts the review of one reopened after it closed unmerged', async () => {
+      const { github, client, startTask, deliver } = world();
+      github.state = 'closed';
+      await deliver('closed');
+
+      github.state = 'open';
+      await deliver('reopened');
+
+      expect(startTask).toHaveBeenCalledTimes(1);
+      expect(startTask).toHaveBeenCalledWith(expect.objectContaining({ kind: 'review', subjectRef: 'openadlc#88', bot: 'lead-reviewer' }));
+      // The round's read, and the start's.
+      expect(client.getIssue).toHaveBeenCalledTimes(2);
     });
   });
 
