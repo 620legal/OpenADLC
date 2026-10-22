@@ -249,9 +249,10 @@ export class GitHubClient {
     await this.request('POST', `/repos/${repo}/issues/${issueNumber}/labels`, { labels });
   }
 
-  async removeLabel(repo: string, issueNumber: number, label: string): Promise<void> {
+  /** `timeoutMs` as `request` takes it, for a caller a person waits on. */
+  async removeLabel(repo: string, issueNumber: number, label: string, options: { timeoutMs?: number } = {}): Promise<void> {
     try {
-      await this.request('DELETE', `/repos/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`);
+      await this.request('DELETE', `/repos/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`, undefined, options);
     } catch (error) {
       // A label that is already gone is the desired state, not an error.
       if (!(error instanceof GitHubApiError && error.status === 404)) throw error;
@@ -371,6 +372,8 @@ export class GitHubClient {
   async getIssue(
     repo: string,
     issueNumber: number,
+    /** As `request` takes it, for a caller a person waits on. */
+    options: { timeoutMs?: number } = {},
   ): Promise<{
     number: number;
     title: string;
@@ -397,7 +400,7 @@ export class GitHubClient {
       updated_at: string;
       user?: { login: string } | null;
       author_association?: string;
-    }>('GET', `/repos/${repo}/issues/${issueNumber}`);
+    }>('GET', `/repos/${repo}/issues/${issueNumber}`, undefined, options);
 
     return {
       number: issue.number,

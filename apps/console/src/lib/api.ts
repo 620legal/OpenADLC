@@ -271,7 +271,8 @@ export interface GitHubAccountsView {
 /** What a person can do about something waiting on them. See `apps/bridge/src/attention.ts`. */
 export type AttentionAction =
   | { kind: 'answer'; label: string; bot: string }
-  | { kind: 'approve'; label: string; gateId: string; answer: string }
+  /** Answers a gate with `answer` from a button: Refuse on a plan change already approved. `approve` is an older bridge's. */
+  | { kind: 'answer_gate' | 'approve'; label: string; gateId: string; answer: string }
   | { kind: 'open_thread'; label: string; bot: string }
   | { kind: 'retry_triage'; label: string; requestId: string }
   /** Ends a request for good: its triage stops and nothing starts it again. */
@@ -328,7 +329,9 @@ export type AttentionKind =
   /** A blocked issue waits on one closed without merging: drop the dependency, or reopen it. */
   | 'dependency_abandoned'
   /** Answered work waiting for GitHub to answer the refresh of its bot's sign-in before it goes on. */
-  | 'resume_waiting';
+  | 'resume_waiting'
+  /** A plan change a person approved, waiting for other work to let go of its paths: nothing to answer on its face. */
+  | 'plan_change_waiting';
 
 /** One thing waiting on a person, as `GET /v1/attention` says it. */
 export interface AttentionItem {

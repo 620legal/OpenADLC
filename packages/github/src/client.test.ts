@@ -150,6 +150,15 @@ describe('a call GitHub never answers', () => {
     void client.viewer().catch(() => undefined);
     expect(seen.at(-1)).toBeInstanceOf(AbortSignal);
   });
+
+  it('is given up sooner when the caller says so, reading an issue or taking a label off', async () => {
+    // A person's Stop waits on both: at thirty seconds each it could hang for a minute and more.
+    const client = new GitHubClient({ token: 't', actingAs: 'openadlc-atlas-janedoe', fetchImpl: stalled([]) });
+    const started = Date.now();
+    await expect(client.getIssue('janedoe/openadlc-testbed', 74, { timeoutMs: 20 })).rejects.toThrow();
+    await expect(client.removeLabel('janedoe/openadlc-testbed', 74, 'needs-human', { timeoutMs: 20 })).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
 });
 
 describe('a client with a header', () => {

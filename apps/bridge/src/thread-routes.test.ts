@@ -15,7 +15,7 @@ const REVIEWER = { id: 'bot-second', name: 'irisexampleco', slot: 'second-review
 const world = vi.hoisted(() => ({
   threads: [] as { id: string; bot_id: string; repo_id: string | null; subject_ref: string }[],
   messages: [] as Record<string, unknown>[],
-  gates: [] as { id: string; taskId: string; threadId: string; question: string; options: string[] }[],
+  gates: [] as { id: string; taskId: string; threadId: string; question: string; options: string[]; held?: unknown }[],
   tasks: [] as { id: string; botId: string; subjectRef: string }[],
 }));
 
@@ -272,6 +272,26 @@ describe('every question a bot has open', () => {
       ['gate-req', 'request:a4b02784'],
     ]);
     expect(view.openGate?.id).toBe('gate-15');
+  });
+
+  it('offers no Approve on a plan change already approved that waits on other work', async () => {
+    // #27 on 2026-10-22: the thread offered Approve again, and it was approved three times.
+    world.gates = [
+      {
+        id: 'gate-15',
+        taskId: 'task-15',
+        threadId: 'thread-intake-15',
+        question: 'Add `packages/db/src/store/work-items.ts`?',
+        options: ['Approve', 'Refuse'],
+        held: { approvedBy: 'janedoe', blockedBy: [71] },
+      },
+    ];
+    const view = (await (await fetch(`${bridgeUrl}/v1/threads/ottoexampleco?subject=${encodeURIComponent('openadlc-testbed#15')}`)).json()) as {
+      openGate: { options: string[] } | null;
+      openGates: { options: string[]; held: unknown }[];
+    };
+    expect(view.openGate?.options).toEqual(['Refuse']);
+    expect(view.openGates).toEqual([expect.objectContaining({ options: ['Refuse'], held: { approvedBy: 'janedoe', blockedBy: [71] } })]);
   });
 });
 

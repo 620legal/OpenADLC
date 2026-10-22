@@ -148,6 +148,18 @@ describe('the item as the console shows it', () => {
     expect(view).toMatchObject({ key: 'api#12', title: 'Record the model per review', stage: 'review', costUsd: 1, pullRequest: { number: 31, url: 'https://github.com/acme/api/pull/31' } });
   });
 
+  it('offers no Approve on a plan change already approved that waits on other work, and offers it again once adding the paths failed', () => {
+    // #27 on 2026-10-22: the thread and the item view still offered Approve,
+    // and it was approved three times.
+    const planChange = { ...gate('g-lead', 't-lead'), options: ['Approve', 'Refuse'] };
+    const read = (held: { approvedBy: string; blockedBy: number[]; failed?: string } | null) =>
+      itemView({ item, repo: REPOS[0]!, bots: BOTS, threads, messages: [], gates: [{ ...planChange, held }], tasks: [] }).openGates[0];
+
+    expect(read({ approvedBy: 'janedoe', blockedBy: [71] })).toMatchObject({ options: ['Refuse'], held: { blockedBy: [71] } });
+    expect(read({ approvedBy: 'janedoe', blockedBy: [], failed: 'not connected' })?.options).toEqual(['Approve', 'Refuse']);
+    expect(read(null)?.options).toEqual(['Approve', 'Refuse']);
+  });
+
   it('takes the role from the thread, not the bot it is with now', () => {
     // A seat moved to another role keeps what it said in the old one.
     const moved = itemView({

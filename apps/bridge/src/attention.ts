@@ -1,4 +1,4 @@
-import { acknowledgements, bots, issues, listEventsOfType, mergeLines, modelAccounts, repos, requests, tasks, threads, type HealthRow } from '@openadlc/db';
+import { acknowledgements, bots, issues, leases, listEventsOfType, mergeLines, modelAccounts, repos, requests, tasks, threads, type HealthRow } from '@openadlc/db';
 import { rulesFileEditUrl } from './deploy-routes.js';
 import { heldForPerson } from './merge-line.js';
 import { readUnowned } from './unowned-issues.js';
@@ -9,6 +9,7 @@ import {
   hasAbandonedLabel,
   hasIgnoreLabel,
   parseDependencies,
+  PLAN_CHANGE_REFUSE,
   roleLabel,
   STAGE_COLUMN_TITLES,
   STAGE_KEYS,
@@ -98,7 +99,9 @@ export type AttentionKind =
   /** A blocked issue waits on one closed without merging, which will never ship: a person drops the dependency or reopens it. */
   | 'dependency_abandoned'
   /** Answered work waiting for GitHub to answer the refresh of its bot's sign-in before it goes on. */
-  | 'resume_waiting';
+  | 'resume_waiting'
+  /** A plan change a person approved, waiting for other work to let go of its paths: nothing to answer, Refuse behind Show more. */
+  | 'plan_change_waiting';
 
 /**
  * What a person can do about an item. The first is the one the console offers
@@ -123,6 +126,8 @@ export type AttentionKind =
  * - `dismiss_task` takes a failed task's card off without trying it again.
  * - `recheck` asks a failing health check again now, rather than on its schedule
  *   (`POST /v1/health/checks/:checkId/run`): for a person who has just fixed it.
+ * - `answer_gate` answers a gate with `answer` from a button
+ *   (`POST /v1/gates/:id/answer`): Refuse on a plan change already approved.
  */
 export type AttentionAction =
   | { kind: 'answer'; label: string; bot: string }
@@ -158,6 +163,7 @@ export type AttentionAction =
   /** Opens the steps for an incident the item carries (`incident`): what to do about a post OpenADLC did not sign. */
   | { kind: 'incident'; label: string }
   | { kind: 'recheck'; label: string; checkId: string }
+  | { kind: 'answer_gate'; label: string; gateId: string; answer: string }
   /**
    * A person's decision about issues OpenADLC will not take on its own
    * (`unowned-issues.ts`): send them to intake, mark them to ignore, or close
@@ -239,6 +245,7 @@ const GROUP: Record<AttentionKind, AttentionGroup> = {
   design_memory_superseded: 'work',
   dependency_abandoned: 'work',
   resume_waiting: 'work',
+  plan_change_waiting: 'work',
 };
 
 export function groupOf(kind: AttentionKind): AttentionGroup {
@@ -248,7 +255,7 @@ export function groupOf(kind: AttentionKind): AttentionGroup {
 export interface AttentionItem {
   /**
    * Stable across reads, by kind: `gate:…`, `merge:repo#pr`, `promote:repo@sha`,
-   * `unowned:repo`, `stall:repo#pr`, `sendback:repo#n`, `design-memory:…`,
+   * `unowned:repo`, `stall:repo#pr`, `sendback:repo#n`, `design-memory:…`, `plan-change:<gate>`,
    * `intake-stalled:repo#n`, `dependency-abandoned:repo#n`, `task:…`, `landed:…`, `request:…`,
    * `engine-update`, `check:…`, `fixed:…`, or `task-group:…`,
    * `triage-group:…` and `check-group:…` for a folded card.
@@ -357,6 +364,20 @@ interface RequestRow {
 type GateRow = Pick<Gate, 'id' | 'taskId' | 'question' | 'options' | 'githubCommentUrl' | 'createdAt' | 'context'>;
 type AskedGate = Pick<Gate, 'id' | 'taskId' | 'answer' | 'answeredAt' | 'createdAt'>;
 
+/**
+ * A plan change a person approved that waits for other work to let go of its
+ * paths (`Gates.approve`, `leases.listHeldPlanChanges`): its gate stays open,
+ * and `blockedBy` is the issues holding them. `failed` is why adding them
+ * failed once nothing held them, when it did.
+ */
+export interface HeldPlanChange {
+  gateId: string;
+  paths: string[];
+  approvedBy: string;
+  blockedBy: number[];
+  failed?: string;
+}
+
 /** Answered work whose resume waits for GitHub; see `RESUME_WAITS_ON_GITHUB`. */
 export interface ResumeWait {
   taskId: string;
@@ -387,6 +408,8 @@ export interface AttentionInput {
   intakeStalls?: readonly { at: string; payload: unknown }[];
   /** Answered work waiting for GitHub before it resumes (`TaskService.waitForGitHub`), while still owed that resume. Absent, none. */
   resumeWaits?: readonly ResumeWait[];
+  /** Approved plan changes whose gate stays open until other work lets go of their paths. Absent, none. */
+  heldPlanChanges?: readonly HeldPlanChange[];
   /** The last weekly engine update, when it failed. */
   engineUpdate?: EngineUpdateAttention | null;
   /** OpenADLC's last update of itself, when it failed. */
@@ -705,6 +728,16 @@ function endedBySessionKill(task: Pick<TaskFacts, 'state' | 'exitReason'>): bool
 
 const EMPTY_SUBJECT: AttentionSubject = { repo: null, number: null, title: null, ref: null, url: null };
 
+/** `a`, `a and b`, `a, b and c`. */
+function inWords(parts: readonly string[]): string {
+  return parts.length <= 1 ? (parts[0] ?? '') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
+}
+
+/** Paths as code, in words. */
+function pathsInWords(paths: readonly string[]): string {
+  return inWords(paths.map((path) => `\`${path}\``));
+}
+
 /**
  * A failure's sentence with the one bot it names taken out, so the same cause
  * on two bots reads the same and folds into one card. Without this, "GitHub no
@@ -925,8 +958,21 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
 
   const items: AttentionItem[] = [];
 
+  // A plan change already approved, waiting on another lease, is not asked
+  // again: its card comes last (below), once it can tell what it waits on.
+  const heldByGate = new Map((input.heldPlanChanges ?? []).map((held) => [held.gateId, held]));
+  const approvedAndWaiting: { gate: GateRow; held: HeldPlanChange }[] = [];
+
   // Open gates: a bot's question.
   for (const gate of input.gates) {
+    const held = heldByGate.get(gate.id);
+    if (held && !held.failed && held.blockedBy.length > 0) {
+      approvedAndWaiting.push({ gate, held });
+      continue;
+    }
+    // Approved, and nothing holds the paths, but adding them failed: asked
+    // again, with why, since Approve is what tries again.
+    const failed = held?.failed ? held : null;
     const task = gate.taskId ? tasksById.get(gate.taskId) : undefined;
     const bot = task ? botsById.get(task.botId) : undefined;
     const { subject } = task ? subjectOf(task.subjectRef) : { subject: EMPTY_SUBJECT };
@@ -943,11 +989,14 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     items.push({
       id: `gate:${gate.id}`,
       kind: 'question',
-      headline: `${botSaid(bot)} has a question`,
+      headline: failed ? `The paths ${failed.approvedBy} approved could not be added` : `${botSaid(bot)} has a question`,
       subject,
       bot: asAttentionBot(bot),
       since,
-      detail: gate.question,
+      detail: failed
+        ? `${failed.approvedBy} approved adding ${pathsInWords(failed.paths)}, and nothing holds them now, but adding them failed. ` +
+          `${failed.failed}${/[.!?]$/.test(failed.failed ?? '') ? '' : '.'} Approve again to try once more, or Refuse to stop the task.`
+        : gate.question,
       actions,
       question: { gateId: gate.id, options: gate.options },
       ...(gate.context?.trim() ? { context: gate.context.trim() } : {}),
@@ -1505,6 +1554,65 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
 
   items.push(...healthItems(input.health ?? [], input.bots, input.now, input.acknowledged));
 
+  // Approved plan changes that wait for other work to let go of their paths.
+  // #27's still showed as its question, Approve and Refuse on the card, and
+  // was approved three times on 2026-10-22 while #71 held its paths; the
+  // issue got the same comment each time. The card says what it waits on,
+  // that it goes on by itself, and what a person can do when it will not.
+  const waiting = approvedAndWaiting.map(({ gate, held }) => {
+    const task = gate.taskId ? tasksById.get(gate.taskId) : undefined;
+    return { gate, held, task, subject: task ? subjectOf(task.subjectRef).subject : EMPTY_SUBJECT };
+  });
+  const onHolder = (subject: AttentionSubject, repo: string | null, numbers: readonly number[]): boolean =>
+    subject.repo === repo && subject.number !== null && numbers.includes(subject.number);
+  const others = items.filter((item) => item.kind !== 'design_memory_superseded' && item.kind !== 'check_fixed');
+  for (const { gate, held, task, subject } of waiting) {
+    const bot = task ? botsById.get(task.botId) : undefined;
+    const repo = subject.repo ? reposByName.get(subject.repo) : undefined;
+    const holders = held.blockedBy.map((number) => {
+      const issue = input.issues.find((one) => one.repoName === subject.repo && one.number === number);
+      const pr = issue?.prNumber ?? null;
+      return {
+        number,
+        words: pr ? `#${number} (pull request #${pr})` : `#${number}`,
+        action: {
+          kind: 'open_url' as const,
+          label: pr ? `Open pull request #${pr}` : `Open #${number}`,
+          url: (pr && subject.repo ? pullUrl(subject.repo, pr) : null) ?? issue?.url ?? (repo ? `https://github.com/${repo.fullName}/issues/${number}` : ''),
+        },
+      };
+    });
+    const one = held.paths.length === 1;
+    // Two that each hold what the other asked for wait for good.
+    const eachOther = waiting.filter(
+      (other) => other.gate.id !== gate.id && onHolder(other.subject, subject.repo, held.blockedBy) && subject.number !== null && other.held.blockedBy.includes(subject.number),
+    );
+    const stuck = others.filter((item) => onHolder(item.subject, subject.repo, held.blockedBy));
+    const next =
+      eachOther.length > 0
+        ? `${inWords(eachOther.map((other) => `#${other.subject.number}`))} waits for this one to let go of paths too: the two wait on each other, and neither goes on until a person refuses one of the changes or changes its Expected paths.`
+        : stuck.length > 0
+          ? `${inWords([...new Set(stuck.map((item) => `#${item.subject.number}`))])} has its own card in Needs you: this goes on once that work does.`
+          : `It goes on by itself: once that work merges or lets go of ${one ? 'it' : 'them'}, the ${one ? 'path is' : 'paths are'} added and the task resumes.`;
+    const actions: AttentionAction[] = holders.filter((holder) => holder.action.url).map((holder) => holder.action);
+    if (bot) actions.push({ kind: 'open_thread', label: 'Open thread', bot: bot.name });
+    if (gate.githubCommentUrl) actions.push({ kind: 'open_url', label: 'On GitHub', url: gate.githubCommentUrl });
+    actions.push({ kind: 'answer_gate', label: 'Refuse', gateId: gate.id, answer: PLAN_CHANGE_REFUSE });
+    items.push({
+      id: `plan-change:${gate.id}`,
+      kind: 'plan_change_waiting',
+      headline: `${botSaid(bot)} waits for ${inWords(held.blockedBy.map((number) => `#${number}`))} to let go of the approved ${one ? 'path' : 'paths'}`,
+      subject,
+      bot: asAttentionBot(bot),
+      since: gate.createdAt ?? task?.startedAt ?? task?.createdAt ?? input.now.toISOString(),
+      detail:
+        `${held.approvedBy} approved adding ${pathsInWords(held.paths)}. ${inWords(holders.map((holder) => holder.words))} ` +
+        `${holders.length === 1 ? 'holds' : 'hold'} paths that overlap ${one ? 'it' : 'them'}, so the task stays paused. ${next} ` +
+        'Refusing drops the change and stops the task.',
+      actions,
+    });
+  }
+
   const leftOut = (ref: string | null | undefined): boolean => Boolean(ref) && (ignored.has(ref!) || abandoned.has(ref!));
   return items
     .filter((item) => !leftOut(item.subject.ref) && !leftOut(item.subject.item))
@@ -1933,6 +2041,25 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     return said.length > 0 ? waitingOnGitHub(said) : [];
   })().catch((): ResumeWait[] => []);
   const designMemoryEvents = await (async () => listEventsOfType(DESIGN_MEMORY_SUPERSEDED, since))().catch(() => []);
+  // Asked only when a gate is open. A read that fails holds nothing: the
+  // approved change shows as its question did.
+  const heldPlanChanges =
+    gates.length > 0
+      ? await (async () =>
+          (await leases.listHeldPlanChanges()).flatMap(({ gateId, request }) =>
+            request.held
+              ? [
+                  {
+                    gateId,
+                    paths: request.paths,
+                    approvedBy: request.held.approvedBy,
+                    blockedBy: request.held.blockedBy,
+                    ...(request.held.failed !== undefined ? { failed: request.held.failed } : {}),
+                  },
+                ]
+              : [],
+          ))().catch((): HeldPlanChange[] => [])
+      : [];
   // As the engine update's: a record that cannot be read is no failed update.
   const selfUpdate = deps.selfUpdate ? await deps.selfUpdate.attention().catch(() => null) : null;
 
@@ -2006,6 +2133,7 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     sendBackEvents,
     intakeStalls,
     resumeWaits,
+    heldPlanChanges,
     designMemoryEvents,
     engineUpdate,
     selfUpdate,

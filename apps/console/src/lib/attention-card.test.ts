@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AttentionItem } from './api';
-import { faceActions, groupOf, hasMore, plainDetail } from './attention-card';
+import { alarming, faceActions, groupOf, hasMore, plainDetail } from './attention-card';
 
 const ITEM: AttentionItem = {
   id: 'task:t-1',
@@ -59,6 +59,36 @@ describe('a promote held for a person', () => {
     };
     expect(faceActions(held).map((action) => action.label)).toEqual(['Release to production', 'Switch to automatic delivery']);
     expect(groupOf(held)).toBe('work');
+  });
+});
+
+describe('an approved plan change waiting on another lease', () => {
+  const waiting: AttentionItem = {
+    id: 'plan-change:gate-1',
+    kind: 'plan_change_waiting',
+    headline: 'The builder (janedoe-builds) waits for #71 to let go of the approved paths',
+    subject: { repo: 'api', number: 27, title: 'Show work items', ref: 'api#27', url: null },
+    bot: null,
+    since: '2026-10-22T16:24:00.000Z',
+    detail: 'janedoe approved adding `packages/db/src/store/work-items.ts`.',
+    actions: [
+      { kind: 'answer_gate', label: 'Refuse', gateId: 'gate-1', answer: 'Refuse' },
+      { kind: 'open_url', label: 'Open pull request #72', url: 'https://github.com/acme/api/pull/72' },
+      { kind: 'open_thread', label: 'Open thread', bot: 'janedoe-builds' },
+    ],
+  };
+
+  it('never has Refuse on its face, wherever the bridge puts it, and keeps it behind Show more', () => {
+    // Approved three times on 2026-10-22 from a card that still offered the
+    // choices: the face has what it waits on, and nothing that answers it.
+    expect(faceActions(waiting)).toEqual([{ kind: 'open_url', label: 'Open pull request #72', url: 'https://github.com/acme/api/pull/72' }]);
+    expect(hasMore(waiting)).toBe(true);
+  });
+
+  it('is work, and not an alarm', () => {
+    expect(groupOf(waiting)).toBe('work');
+    expect(groupOf({ kind: 'plan_change_waiting' })).toBe('work');
+    expect(alarming(waiting)).toBe(false);
   });
 });
 
