@@ -303,6 +303,8 @@ export class GitHubClient {
       perPage?: number;
       page?: number;
       sort?: 'created' | 'updated';
+      /** GitHub's own default, newest first, unless asked otherwise. */
+      direction?: 'asc' | 'desc';
       /** Only those updated at or after this moment, by GitHub's clock. */
       since?: string;
     } = {},
@@ -331,6 +333,7 @@ export class GitHubClient {
     if (params.labels?.length) search.set('labels', params.labels.join(','));
     if (params.page && params.page > 1) search.set('page', String(params.page));
     if (params.sort) search.set('sort', params.sort);
+    if (params.direction) search.set('direction', params.direction);
     if (params.since) search.set('since', params.since);
 
     const issues = await this.request<
@@ -738,6 +741,69 @@ export class GitHubClient {
     return new Map(paths.map((path) => [path, found.get(path) ?? '']));
   }
 
+  /**
+   * One page of a repository's pull requests, open and closed alike when
+   * asked for `all`. `page` counts from 1; a page shorter than `perPage` is
+   * the last. The history read of work items lists them oldest first, so a
+   * pull request opened mid-read lands on the last page and shifts none.
+   */
+  async listPullRequests(
+    repo: string,
+    params: {
+      state?: 'open' | 'closed' | 'all';
+      page?: number;
+      perPage?: number;
+      sort?: 'created' | 'updated' | 'popularity' | 'long-running';
+      direction?: 'asc' | 'desc';
+    } = {},
+  ): Promise<
+    {
+      number: number;
+      title: string;
+      body: string | null;
+      state: 'open' | 'closed';
+      merged: boolean;
+      htmlUrl: string;
+      /** When it was opened, by GitHub's clock. */
+      createdAt: string;
+      headRef: string;
+      /** The repository its head branch is in: another one's for a fork, null when that is gone. */
+      headRepoFullName: string | null;
+      baseRef: string;
+    }[]
+  > {
+    const search = new URLSearchParams({ state: params.state ?? 'open', per_page: String(params.perPage ?? 50) });
+    if (params.page && params.page > 1) search.set('page', String(params.page));
+    if (params.sort) search.set('sort', params.sort);
+    if (params.direction) search.set('direction', params.direction);
+    const pulls = await this.request<
+      {
+        number: number;
+        title: string;
+        body: string | null;
+        state: 'open' | 'closed';
+        merged_at?: string | null;
+        html_url: string;
+        created_at: string;
+        head: { ref: string; repo?: { full_name?: string } | null };
+        base: { ref: string };
+      }[]
+    >('GET', `/repos/${repo}/pulls?${search.toString()}`);
+    return pulls.map((pull) => ({
+      number: pull.number,
+      title: pull.title,
+      body: pull.body,
+      state: pull.state,
+      // The list carries no `merged`; a merge time says it.
+      merged: Boolean(pull.merged_at),
+      htmlUrl: pull.html_url,
+      createdAt: pull.created_at,
+      headRef: pull.head.ref,
+      headRepoFullName: pull.head.repo?.full_name ?? null,
+      baseRef: pull.base.ref,
+    }));
+  }
+
   /** What the line needs to decide: where the head is, and whether it may land. */
   async getPullRequest(
     repo: string,
@@ -881,6 +947,18 @@ export class GitHubClient {
    * repository is left out: the caller moves issues of this one.
    */
   async closingIssues(repo: string, prNumber: number): Promise<number[]> {
+    return (await this.closingIssueRefs(repo, prNumber))
+      .filter((ref) => ref.repo.toLowerCase() === repo.toLowerCase())
+      .map((ref) => ref.number);
+  }
+
+  /**
+   * Every issue a pull request closes as GitHub sees them, another
+   * repository's included, each by the repository GitHub names it in. A pull
+   * request's work item can belong to an issue in another managed repository;
+   * `closingIssues` is this, kept to the pull request's own.
+   */
+  async closingIssueRefs(repo: string, prNumber: number): Promise<{ repo: string; number: number }[]> {
     const [owner, name] = repo.split('/');
     const answer = await this.request<{
       data?: {
@@ -898,9 +976,7 @@ export class GitHubClient {
     const refused = answer.errors?.map((error) => error.message ?? 'refused').join('; ');
     if (refused) throw new GitHubApiError(422, '/graphql', `GitHub would not list the issues ${repo}#${prNumber} closes (${refused}).`);
     const nodes = answer.data?.repository?.pullRequest?.closingIssuesReferences?.nodes ?? [];
-    return nodes
-      .filter((node) => node && node.repository?.nameWithOwner?.toLowerCase() === repo.toLowerCase())
-      .map((node) => node!.number);
+    return nodes.flatMap((node) => (node?.repository?.nameWithOwner ? [{ repo: node.repository.nameWithOwner, number: node.number }] : []));
   }
 
   /**

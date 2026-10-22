@@ -260,6 +260,101 @@ describe('the issues a pull request closes', () => {
     const { client } = github({ errors: [{ message: 'Resource not accessible by integration' }] });
 
     await expect(client.closingIssues('janedoe/openadlc-testbed', 12)).rejects.toThrow(/would not list the issues janedoe\/openadlc-testbed#12 closes/);
+    await expect(client.closingIssueRefs('janedoe/openadlc-testbed', 12)).rejects.toThrow(/would not list the issues/);
+  });
+
+  it('lists every repository’s, each by the repository GitHub names, for a work item that spans repositories', async () => {
+    const { client } = github({
+      data: {
+        repository: {
+          pullRequest: {
+            closingIssuesReferences: {
+              nodes: [
+                { number: 229, repository: { nameWithOwner: 'janedoe/openadlc-testbed' } },
+                { number: 4, repository: { nameWithOwner: 'exampleco/elsewhere' } },
+                null,
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    expect(await client.closingIssueRefs('janedoe/openadlc-testbed', 12)).toEqual([
+      { repo: 'janedoe/openadlc-testbed', number: 229 },
+      { repo: 'exampleco/elsewhere', number: 4 },
+    ]);
+  });
+});
+
+describe('a repository’s history, read oldest first for its work items', () => {
+  function github(body: unknown) {
+    const asked: string[] = [];
+    const methods: string[] = [];
+    const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
+      const address = new URL(String(input));
+      asked.push(`${address.pathname}${address.search}`);
+      methods.push(init?.method ?? 'GET');
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    return { asked, methods, client: new GitHubClient({ token: 't', actingAs: 'openadlc-app', fetchImpl }) };
+  }
+
+  it('asks for issues in the order they were opened, and leaves the default order to callers that do not say', async () => {
+    const { asked, client } = github([]);
+    await client.listIssues('janedoe/openadlc-testbed', { state: 'all', sort: 'created', direction: 'asc', perPage: 100, page: 3 });
+    await client.listIssues('janedoe/openadlc-testbed', { state: 'all' });
+    expect(asked).toEqual([
+      '/repos/janedoe/openadlc-testbed/issues?state=all&per_page=100&page=3&sort=created&direction=asc',
+      '/repos/janedoe/openadlc-testbed/issues?state=all&per_page=50',
+    ]);
+  });
+
+  it('lists pull requests a page at a time, merged told from closed by when it merged', async () => {
+    const { asked, methods, client } = github([
+      {
+        number: 7,
+        title: 'Add a dark mode',
+        body: 'Closes #5',
+        state: 'closed',
+        merged_at: '2026-10-02T00:00:00Z',
+        html_url: 'https://github.com/janedoe/openadlc-testbed/pull/7',
+        created_at: '2026-10-01T00:00:00Z',
+        head: { ref: 'agent/builder/5-dark-mode', repo: { full_name: 'janedoe/openadlc-testbed' } },
+        base: { ref: 'main' },
+      },
+      {
+        number: 8,
+        title: 'From a fork that is gone',
+        body: null,
+        state: 'closed',
+        merged_at: null,
+        html_url: 'https://github.com/janedoe/openadlc-testbed/pull/8',
+        created_at: '2026-10-03T00:00:00Z',
+        head: { ref: 'patch-1', repo: null },
+        base: { ref: 'main' },
+      },
+    ]);
+
+    const pulls = await client.listPullRequests('janedoe/openadlc-testbed', { state: 'all', sort: 'created', direction: 'asc', perPage: 100, page: 2 });
+
+    expect(asked).toEqual(['/repos/janedoe/openadlc-testbed/pulls?state=all&per_page=100&page=2&sort=created&direction=asc']);
+    expect(methods).toEqual(['GET']);
+    expect(pulls).toEqual([
+      {
+        number: 7,
+        title: 'Add a dark mode',
+        body: 'Closes #5',
+        state: 'closed',
+        merged: true,
+        htmlUrl: 'https://github.com/janedoe/openadlc-testbed/pull/7',
+        createdAt: '2026-10-01T00:00:00Z',
+        headRef: 'agent/builder/5-dark-mode',
+        headRepoFullName: 'janedoe/openadlc-testbed',
+        baseRef: 'main',
+      },
+      expect.objectContaining({ number: 8, merged: false, headRepoFullName: null }),
+    ]);
   });
 });
 
