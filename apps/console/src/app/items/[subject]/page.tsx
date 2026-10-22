@@ -2,8 +2,9 @@ import { AppShell } from '@/components/app-header';
 import { BridgeDown } from '@/components/bridge-down';
 import { ItemView } from '@/components/item-view';
 import { api, type ItemView as ItemData } from '@/lib/api';
-import { subjectFrom } from '@/lib/item';
+import { itemAddress, subjectFrom } from '@/lib/item';
 import { readHeader } from '@/lib/read-header';
+import { redirect } from 'next/navigation';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,10 +23,16 @@ export default async function ItemPage({
   const { subject: raw } = await params;
   const { role } = await searchParams;
   const subject = subjectFrom(raw);
+  // An item the bridge does not know is said on the page itself, which reads
+  // again and says why; the header still draws.
+  const initial = await api.item(subject).catch((): ItemData | null => null);
+  // Any member's subject, an old key or another prefix opens the item at its
+  // key: the one address to keep or send. Outside the try below, whose catch
+  // would take the redirect for a bridge that is down.
+  const to = itemAddress(subject, initial, role ?? null);
+  if (to) redirect(to);
   try {
-    // An item the bridge does not know is said on the page itself, which reads
-    // again and says why; the header still draws.
-    const [initial, header] = await Promise.all([api.item(subject).catch((): ItemData | null => null), readHeader()]);
+    const header = await readHeader();
     return (
       <AppShell page="board" data={header} fill>
         <h1 className="sr-only">{initial?.title ?? subject}</h1>

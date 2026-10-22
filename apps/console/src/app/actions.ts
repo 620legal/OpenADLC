@@ -745,6 +745,39 @@ export async function resumeItem(subject: string): Promise<{ ok: boolean; error?
   }
 }
 
+/** An issue or pull request, `owner/repo#12`, linked to a work item by hand. An admin's, audited; nothing is written on GitHub. */
+export async function linkToItem(key: string, ref: string): Promise<{ ok: boolean; error?: string; from?: string | null }> {
+  try {
+    const linked = await call<{ from: string | null }>(`${itemPath(key)}/links`, 'POST', { ref: ref.trim() });
+    revalidatePath('/');
+    return { ok: true, from: linked.from };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'it was not linked' };
+  }
+}
+
+/** One link taken out of a work item, into a new item of its own: its key. */
+export async function unlinkFromItem(key: string, ref: string): Promise<{ ok: boolean; error?: string; key?: string }> {
+  try {
+    const unlinked = await call<{ key: string }>(`${itemPath(key)}/links/${encodeURIComponent(ref)}`, 'DELETE');
+    revalidatePath('/');
+    return { ok: true, key: unlinked.key };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'it was not unlinked' };
+  }
+}
+
+/** A work item merged into another: every link moves, and its key opens the other. */
+export async function mergeItem(key: string, into: string): Promise<{ ok: boolean; error?: string; into?: string }> {
+  try {
+    const merged = await call<{ into: string }>(`${itemPath(key)}/merge`, 'POST', { into: into.trim() });
+    revalidatePath('/');
+    return { ok: true, into: merged.into };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'they were not merged' };
+  }
+}
+
 /** One issue to the front of its repository's queue, or back to its place by priority. */
 export async function playItemNext(subject: string, on: boolean): Promise<{ ok: boolean; error?: string }> {
   try {

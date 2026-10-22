@@ -563,6 +563,28 @@ back. A crew account that moves a stage label back is put back.
   deliveries, request filing and the reconciler's sweep keep each link and
   its snapshot current, and a repository added later is read and numbered
   on its own. Nothing is written on GitHub.
+- **The board and the item page read work items** once the install is
+  numbered; before, they are what they were. The board has one card per
+  work item (`itemCards`, `board-work.ts`): its first-linked issue's card, in
+  that issue's column even when a later link stands elsewhere, with the
+  cost, people, tasks and open questions of every linked card, and `item`
+  and `repos` on it. An item is on the board of every repository it has a
+  link in. A pull request no issue claims is a card of its own (`lonePulls`),
+  in Review while open and in Done for 30 days after it was opened once
+  merged or closed; it has no issue, so nothing moves or holds it. A request
+  in intake carries its item's key until its item has an issue on the board.
+  `/v1/items/:subject` takes a key in any case and with any prefix
+  (`acme-128`, `W-128`, `128`) or any linked subject, follows a merge to
+  the item it went into, and returns `workItem` and `links`; the item's
+  subjects are every link's, so its conversation, tasks and costs span them
+  all (`items.ts`). The console's `/items/<anything>` redirects to
+  `/items/<key>`, and `/?item=<old subject>` still opens the sheet. An admin
+  links an issue or pull request of any managed repository by hand
+  (`POST /v1/items/:subject/links`, read from GitHub, never written), unlinks
+  one into an item of its own (`DELETE /v1/items/:subject/links/:ref`), or
+  merges two items (`POST /v1/items/:subject/merge`); each is audited
+  (`item.linked`, `item.unlinked`, `item.merged`), and no automatic pass
+  moves a link a person made.
 - **The scheduler** runs the rest on timers: the budget, the review-gate sweep,
   the merge line, stalled stages, credentials, engine updates, nightly QA.
 - **Health checks** (`apps/bridge/src/health/`) prove what a person was asked to
@@ -583,7 +605,7 @@ back. A crew account that moves a stage label back is put back.
 | **Send-back** | A stage returning its work to the stage before it, with a reason the receiving stage works from; recorded in `stage_moves` and on the issue |
 | **Task** | One bot's run of one skill on one subject, with a dollar cap: queued, running, paused, then done, failed or stopped |
 | **Design memory** | What the design stage is told a repository has decided: decisions, constraints, conventions and terms (`design_memory`, migration 0030), proposed only by the design task's own signed comment, accepted by a person's answer to it or the move to build, a supersede said on the issue and revertible, curated in Settings → Repositories. A summary of the repository's ADRs, which are the record ([ADR 0002](adr/0002-design-memory.md)) |
-| **Work item** | One piece of work as a person means it: a console request, the issue it became and that issue's pull request. Its key is `<repo>#<issue>` once the issue exists, `request:<id8>` before; any other subject (a deploy of a commit) is an item of its own. Its conversation is every thread about any of its subjects, each labelled by the role and seat it was with (kept on the thread when it was opened, migration 0028), so seats sharing one GitHub account are still told apart |
+| **Work item** | One piece of work as a person means it: the requests, issues and pull requests linked to it, from any managed repository. Its key is `<organization>-<n>` (`W-<n>` with no organization set), the number being the identity, and its page `/items/<key>`; before the install is numbered it is keyed `<repo>#<issue>` or `request:<id8>`, and any other subject (a deploy of a commit) is an item of its own. Its conversation is every thread about any of its subjects, each labelled by the role and seat it was with (kept on the thread when it was opened, migration 0028), so seats sharing one GitHub account are still told apart |
 | **Lease** | The record that an issue is being built by a bot, with the paths it may touch and an expiry |
 | **Gate** | A question that holds a task until a person answers. A **plan change** is one: a task asks to add paths to its lease, and a person approves or refuses ([development.md](development.md#plan-changes)) |
 | **Marker** | A line such as `<!-- openadlc:{"event":"review_posted"} -->` that ends a bot's comment, so the bridge learns what it did rather than guessing |

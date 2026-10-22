@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useId, useRef, useState, useTransition } from 'react';
-import { sendItemMessage } from '@/app/actions';
+import { linkToItem, mergeItem, sendItemMessage, unlinkFromItem } from '@/app/actions';
 import { useRole } from '@/components/app-header';
 import { AttachmentDrop, type AttachmentState } from '@/components/attachment-drop';
 import { CheckIcon, CloseIcon, ComputerIcon, ExternalIcon, TerminalIcon, WarningIcon } from '@/components/icons';
@@ -185,7 +185,7 @@ export function ItemView({
 
   const body = (
     <>
-      <ItemHeader view={view} subject={subject} variant={variant} onClose={onClose} />
+      <ItemHeader view={view} subject={subject} variant={variant} onClose={onClose} admin={admin} onChanged={() => void load()} />
       <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col">
         <div className="overflow-x-auto border-b border-edge px-5">
           <TabsList aria-label="What to see">
@@ -339,11 +339,17 @@ function ItemHeader({
   subject,
   variant,
   onClose,
+  admin = false,
+  onChanged = () => undefined,
 }: {
   view: ItemData | null;
   subject: string;
   variant: 'page' | 'sheet';
   onClose?: () => void;
+  /** Whether the person may link, unlink and merge: an admin's, as the bridge holds it. */
+  admin?: boolean;
+  /** Read the item again, after a link changed. */
+  onChanged?: () => void;
 }) {
   const stage = view?.stage ? stageOf(view.stage) : undefined;
   return (
@@ -351,6 +357,7 @@ function ItemHeader({
       <div className="flex items-start gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-dim">
+            {view?.workItem && <ItemKey workItem={view.workItem} />}
             {stage && <span className="rounded border border-edge px-1.5 py-px font-medium text-soft">{stage.title}</span>}
             {view?.repo && <RepoBadge name={view.repo} />}
             {view && view.costUsd > 0 && <span>{money(view.costUsd)} so far</span>}
@@ -359,7 +366,7 @@ function ItemHeader({
         </div>
         {variant === 'sheet' && (
           <div className="ml-auto flex shrink-0 items-center gap-1">
-            <Link href={itemHref(view?.key ?? subject)} className="rounded-md px-2 py-1 text-[12px] text-link hover:underline">
+            <Link href={itemHref(view?.workItem?.key ?? view?.key ?? subject)} className="rounded-md px-2 py-1 text-[12px] text-link hover:underline">
               Open as a page
             </Link>
             <button
@@ -399,12 +406,155 @@ function ItemHeader({
           )}
         </div>
       )}
+      {view?.workItem && (view.links ?? []).length > 0 && <WorkItemLinks view={view} admin={admin} onChanged={onChanged} />}
       {/* An issue's pause, play next and cancel, in words; a request has none until it is filed,
           and finished work none, as on the board: a shipped item's cancel would close its merged pull request. */}
       {view?.issue && !['merged', 'done'].includes(view.issue.stage) && (
         <IssueControls issue={{ subject: view.key, number: view.issue.number, held: view.held ?? null, next: view.next ?? false }} />
       )}
     </div>
+  );
+}
+
+/** The work item's key, and a button that copies the link to its page: the address to share. */
+function ItemKey({ workItem }: { workItem: NonNullable<ItemData['workItem']> }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span data-item-key className="font-medium text-soft" title={workItem.mergedFrom ? `${workItem.key}, which W-${workItem.mergedFrom} was merged into` : undefined}>
+        {workItem.key}
+      </span>
+      <button
+        type="button"
+        onClick={() => {
+          void navigator.clipboard?.writeText(`${window.location.origin}${itemHref(workItem.key)}`).then(() => setCopied(true));
+        }}
+        className="rounded px-1 text-link hover:underline focus-visible:outline-2 focus-visible:outline-link"
+      >
+        {copied ? 'Copied' : 'Copy link'}
+      </button>
+    </span>
+  );
+}
+
+const LINK_KIND: Record<string, string> = { issue: 'Issue', pull: 'Pull request', request: 'Request' };
+
+/**
+ * Everything the work item links, each with its repository, state and where
+ * it stands; and, for an admin, linking another issue or pull request by
+ * hand, unlinking one into an item of its own, and merging the item into
+ * another. Each is audited by the bridge, and none writes to GitHub.
+ */
+function WorkItemLinks({ view, admin, onChanged }: { view: ItemData; admin: boolean; onChanged: () => void }) {
+  const key = view.workItem!.key;
+  const [ref, setRef] = useState('');
+  const [into, setInto] = useState('');
+  const [said, setSaid] = useState<{ tone: 'ok' | 'alarm'; text: string } | null>(null);
+  const [pending, startTransition] = useTransition();
+  const run = <T extends { ok: boolean; error?: string }>(work: () => Promise<T>, done: (result: T) => string, after?: (result: T) => void) =>
+    startTransition(async () => {
+      const result = await safeAction(work);
+      if (!result.ok) {
+        setSaid({ tone: 'alarm', text: result.error ?? 'That did not go through.' });
+        return;
+      }
+      setSaid({ tone: 'ok', text: done(result) });
+      after?.(result);
+      onChanged();
+    });
+
+  return (
+    <section aria-label="Linked to this work item" className="flex flex-col gap-1.5 text-[12px]">
+      <ul className="flex flex-col gap-1">
+        {(view.links ?? []).map((link) => (
+          <li key={link.ref} data-link={link.ref} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-soft">
+            <span className="text-dim">{LINK_KIND[link.kind] ?? link.kind}</span>
+            {link.repo && <RepoBadge name={link.repo} />}
+            {link.url ? (
+              <a href={link.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-link hover:underline">
+                {link.number !== null ? `#${link.number} ` : ''}
+                {link.title}
+                <ExternalIcon size={11} />
+              </a>
+            ) : (
+              <span>{link.title}</span>
+            )}
+            <span className="text-dim">
+              {link.state}
+              {link.stage ? ` · ${stageOf(link.stage)?.title ?? link.stage}` : ''}
+              {link.linkedBy ? ` · linked by ${personName(link.linkedBy)}` : ''}
+            </span>
+            {admin && (view.links ?? []).length > 1 && link.kind !== 'request' && (
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => run(() => unlinkFromItem(key, link.ref), (result: { key?: string }) => `${link.ref} is ${result.key ?? 'an item of its own'} now.`)}
+                className="rounded px-1 text-link hover:underline disabled:opacity-50"
+              >
+                Unlink
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {admin && (
+        <div className="flex flex-wrap gap-2">
+          <form
+            className="flex items-center gap-1.5"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!ref.trim()) return;
+              run(() => linkToItem(key, ref), () => `${ref.trim()} is linked to ${key}.`, () => setRef(''));
+            }}
+          >
+            <label className="sr-only" htmlFor={`link-${key}`}>
+              Issue or pull request to link, as owner/repo#number
+            </label>
+            <input
+              id={`link-${key}`}
+              value={ref}
+              onChange={(event) => setRef(event.target.value)}
+              placeholder="owner/repo#number"
+              className="h-7 w-40 rounded-md border border-edge bg-panel px-2 text-body placeholder:text-dim"
+            />
+            <button type="submit" disabled={pending || !ref.trim()} className="rounded-md border border-edge px-2 py-0.5 text-soft hover:text-body disabled:opacity-50">
+              Link
+            </button>
+          </form>
+          <form
+            className="flex items-center gap-1.5"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!into.trim()) return;
+              run(
+                () => mergeItem(key, into),
+                (result: { into?: string }) => `${key} is merged into ${result.into ?? into.trim()}.`,
+                (result: { into?: string }) => window.location.assign(itemHref(result.into ?? into.trim())),
+              );
+            }}
+          >
+            <label className="sr-only" htmlFor={`merge-${key}`}>
+              Key of the work item to merge this one into
+            </label>
+            <input
+              id={`merge-${key}`}
+              value={into}
+              onChange={(event) => setInto(event.target.value)}
+              placeholder="Merge into key"
+              className="h-7 w-32 rounded-md border border-edge bg-panel px-2 text-body placeholder:text-dim"
+            />
+            <button type="submit" disabled={pending || !into.trim()} className="rounded-md border border-edge px-2 py-0.5 text-soft hover:text-body disabled:opacity-50">
+              Merge
+            </button>
+          </form>
+        </div>
+      )}
+      {said && (
+        <p role="status" className={cn('text-[11.5px]', said.tone === 'alarm' ? 'text-alarm' : 'text-soft')}>
+          {said.text}
+        </p>
+      )}
+    </section>
   );
 }
 
