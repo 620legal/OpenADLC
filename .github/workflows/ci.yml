@@ -181,7 +181,10 @@ jobs:
   # the run takes as long as the longer one.
   #
   # Its name is read: .github/scripts/release-check.mjs counts a run as having
-  # run the tests only when its `check` passed.
+  # run the tests only when its `check` passed. The suites count through `ci`:
+  # release-check takes only a run whose `ci` passed, and `ci`'s verdict fails
+  # a code change whose `integration` did not succeed. A verdict that let one
+  # through would let a release vouch for a tree whose suites never passed.
   check:
     name: check
     needs: changes
@@ -230,6 +233,10 @@ jobs:
       # The builds the apps' typecheck and tests read: the packages', and the
       # dispatcher's, which the bridge imports. The apps' own build, `next
       # build` among them, is `integration`'s.
+      #
+      # Built every run, not cached: only a key on the exact sources could
+      # never restore a build a change should have replaced, and a new commit
+      # never matches one.
       - name: build what the apps import
         run: pnpm build:imported
 
@@ -304,7 +311,8 @@ jobs:
 
       # `tsc` for every package and app, and `next build` for the console. It
       # is the only check of what `tsc --noEmit` does not report, a
-      # declaration that cannot be written among them.
+      # declaration that cannot be written among them. Not cached, as in
+      # `check`.
       - name: build
         run: pnpm build
 

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -77,6 +77,9 @@ describe('make ci', () => {
     // A script that waited for good gave up after ten seconds, and failed.
     expect(status, output).toBe(0);
     expect(output.trim().split('\n').at(-1)).toBe('ci: green');
+    // pnpm also exits 0 when no script matches the pattern: these say the
+    // scripts ran.
+    for (const ran of ['a-typecheck', 'a-test', 'b-test']) expect(existsSync(join(dir, ran)), `${ran} never ran`).toBe(true);
   });
 
   it.each([

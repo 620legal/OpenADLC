@@ -1395,12 +1395,16 @@ async function refusingApi(dummyKey: string) {
      */
     async run(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) {
       calls.length = 0;
+      const started = Date.now();
       const child = spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ['pipe', 'ignore', 'ignore'] });
       child.stdin.end('say hi');
       const timer = setTimeout(() => child.kill('SIGKILL'), 20_000);
       const signal = await new Promise<NodeJS.Signals | null>((resolve) => child.on('close', (_code, signal) => resolve(signal)));
       clearTimeout(timer);
       expect(signal, `${command} retried the refused call for 20 seconds: refuse it with a status it gives up on`).toBeNull();
+      // Ending by itself is not enough: Codex retried for 20 seconds a run
+      // and passed. A run that took this long is retrying something.
+      expect(Date.now() - started, `${command} took more than 10 seconds to give up on a refused call`).toBeLessThan(10_000);
       expect(calls).toContain('dummy');
       expect(calls).not.toContain('other');
     },

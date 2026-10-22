@@ -10,7 +10,10 @@ beforeEach(async () => {
   const router = new Router();
   router.get('/v1/bots/:name', async ({ params }) => ({ name: params.name }));
   router.post('/v1/notes', async ({ body }) => ({ got: await body() }));
-  router.post('/v1/large', async ({ body }) => ({ got: Object.keys(await body<object>({ limit: 8 * 1024 * 1024 })).length }));
+  // The length of the string the body parses to. It was Object.keys of it, a
+  // key for each of its five million characters: 2.5 s on an idle machine, and
+  // past the 5 s timeout in GitHub's check under make ci's parallel run (#65).
+  router.post('/v1/large', async ({ body }) => ({ got: (await body<string>({ limit: 8 * 1024 * 1024 })).length }));
   server = createServer((request, response) => void router.handle(request, response));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

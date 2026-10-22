@@ -38,12 +38,16 @@ async function run(...args: string[]): Promise<number | string | undefined> {
 }
 
 describe('a command the CLI does not have', () => {
+  // The first case here is the first to load the CLI, and pays for
+  // transforming all of it: 1.3 to 2 s alone, and past vitest's 5 s when make
+  // ci started every package's typecheck and tests at once (#65). The cases
+  // after it take 20 to 80 ms.
   it('fails with the usage code, so a script does not carry on', async () => {
     // Each printed ✗ and exited 0: `openadlc github chek && deploy` deployed.
     expect(await run('auth', 'logn')).toBe(2);
     expect(await run('github', 'chek')).toBe(2);
     expect(await run('attach')).toBe(2);
-  });
+  }, 20_000);
 });
 
 describe('a flag a sibling subcommand reads', () => {
