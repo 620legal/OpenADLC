@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { activityOf, boardWork, FILED_SHOWN_MS, readBoardActivity, readBoardWork } from './board-work.js';
+import { activityOf, boardWork, FILED_SHOWN_MS, itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, withItemPulls, type BoardLink } from './board-work.js';
 import type { IssueFacts, TaskFacts } from './work.js';
 
 /** What `readBoardWork` and `readBoardActivity` read, for the tests of them that read anything. */
@@ -14,11 +14,15 @@ const store = vi.hoisted(() => ({
   sinceReads: [] as string[][],
   since: {} as Record<string, string | null>,
   running: 0,
+  /** Whether the install is numbered, and its work items' links (`workItems.allLinks`). */
+  numbered: false,
+  links: [] as BoardLink[],
 }));
 vi.mock('@openadlc/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@openadlc/db')>()),
   listEventsOfType: vi.fn(async () => []),
   stageMoves: { sendBackCounts: vi.fn(async () => new Map()) },
+  workItems: { isNumbered: vi.fn(async () => store.numbered), allLinks: vi.fn(async () => store.links) },
   bots: { listBots: vi.fn(async () => [{ id: 'bot-builder', name: 'openadlc-atlas-janedoe' }, { id: 'bot-lead', name: 'noraexampleco' }]) },
   issues: { listIssues: vi.fn(async (repoName?: string) => store.issues.filter((issue) => !repoName || issue.repoName === repoName)) },
   repos: {
@@ -201,6 +205,174 @@ describe('an issue whose work was sent back', () => {
     });
     expect(work.byRef.get('api#7')?.sentBack).toBe(2);
     expect(work.byRef.get('api#8')?.sentBack).toBe(0);
+  });
+});
+
+describe('one card per work item', () => {
+  const REPOS = [
+    { id: 'repo-1', name: 'api' },
+    { id: 'repo-2', name: 'web' },
+  ];
+  let linkId = 0;
+  const link = (itemId: string, itemNumber: number, kind: BoardLink['kind'], repoId: string | null, number: number | null, extra: Partial<BoardLink> = {}): BoardLink => {
+    linkId += 1;
+    return { id: linkId, itemId, itemNumber, kind, repoId, number, requestId: null, title: `${kind} ${number}`, state: 'open', url: null, openedAt: minutesAgo(60), ...extra };
+  };
+  const card = (repo: string, number: number, stage: string, extra: Record<string, unknown> = {}) => ({
+    repo,
+    ref: `${repo}#${number}`,
+    stage,
+    assignees: [] as string[],
+    gateOpen: false,
+    costUsd: 1,
+    ...extra,
+  });
+  const keyOf = (number: number) => `acme-${number}`;
+
+  it('is the first-linked issue’s card, in its column, with the cost and people of every linked card', () => {
+    linkId = 0;
+    const links = [
+      link('w-7', 7, 'issue', 'repo-2', 3),
+      link('w-7', 7, 'issue', 'repo-1', 12),
+      link('w-7', 7, 'pull', 'repo-1', 31),
+      link('w-8', 8, 'issue', 'repo-1', 15),
+    ];
+    const { cards } = itemCards({
+      cards: [card('api', 12, 'review', { assignees: ['lead-reviewer'], gateOpen: true }), card('web', 3, 'build', { assignees: ['builder'] }), card('api', 15, 'spec')],
+      requests: [],
+      links,
+      repos: REPOS,
+      keyOf,
+    });
+    expect(cards.map((one) => [one.ref, one.stage, one.item?.key, one.repos, one.costUsd, one.assignees, one.gateOpen])).toEqual([
+      // #3 in web was linked first: its column stands, though #12 is in Review.
+      ['web#3', 'build', 'acme-7', ['web', 'api'], 2, ['builder', 'lead-reviewer'], true],
+      ['api#15', 'spec', 'acme-8', ['api'], 1, [], false],
+    ]);
+  });
+
+  it('keeps a request card in Intake with its key until its item has an issue on the board', () => {
+    linkId = 0;
+    const requestId = 'abcdef01-0000-4000-8000-000000000000';
+    const links = [link('w-9', 9, 'request', null, null, { requestId }), link('w-10', 10, 'request', null, null, { requestId: '12345678-0000-4000-8000-000000000000' }), link('w-10', 10, 'issue', 'repo-1', 20)];
+    const { requests } = itemCards({
+      cards: [card('api', 20, 'build')],
+      requests: [
+        { repo: 'api', ref: 'request:abcdef01' },
+        { repo: 'api', ref: 'request:12345678' },
+      ],
+      links,
+      repos: REPOS,
+      keyOf,
+    });
+    expect(requests).toEqual([{ repo: 'api', ref: 'request:abcdef01', item: { number: 9, key: 'acme-9' }, repos: ['api'] }]);
+  });
+
+  it('leaves a card as it was, with no key, where nothing is numbered yet', () => {
+    const { cards } = itemCards({ cards: [card('api', 12, 'build')], requests: [], links: [], repos: REPOS, keyOf });
+    expect(cards).toEqual([{ ...card('api', 12, 'build'), item: null, repos: ['api'] }]);
+  });
+
+  it('makes a pull request no issue claims a card in Review while open, and in Done once merged or closed, however long ago it was opened', () => {
+    linkId = 0;
+    const links = [
+      link('w-1', 1, 'pull', 'repo-1', 40, { title: 'A person’s fix' }),
+      link('w-2', 2, 'pull', 'repo-1', 41, { state: 'merged' }),
+      link('w-3', 3, 'pull', 'repo-1', 42, { state: 'closed', openedAt: new Date(NOW.getTime() - 400 * 86_400_000).toISOString(), closedAt: NOW.toISOString() }),
+      link('w-4', 4, 'issue', 'repo-1', 5),
+      link('w-4', 4, 'pull', 'repo-1', 43),
+      // Two pulls on one item: Done counts from the later close.
+      link('w-8', 8, 'pull', 'repo-1', 45, { state: 'merged', closedAt: '2026-10-01T00:00:00.000Z' }),
+      link('w-8', 8, 'pull', 'repo-1', 46, { state: 'closed', closedAt: '2026-10-03T00:00:00.000Z' }),
+    ];
+    expect(lonePulls(links, REPOS).map((pull) => [pull.ref, pull.stage, pull.title, pull.closedAt])).toEqual([
+      ['api#40', 'review', 'A person’s fix', null],
+      ['api#41', 'done', 'pull 41', null],
+      ['api#42', 'done', 'pull 42', NOW.toISOString()],
+      ['api#45', 'done', 'pull 45', '2026-10-03T00:00:00.000Z'],
+    ]);
+  });
+
+  it('sums into an item’s card the work on a pull linked beside its issue, and on a second pull of an item with none', () => {
+    linkId = 0;
+    const links = [
+      link('w-5', 5, 'issue', 'repo-1', 12),
+      link('w-5', 5, 'pull', 'repo-1', 31),
+      link('w-5', 5, 'pull', 'repo-2', 9),
+      link('w-6', 6, 'pull', 'repo-1', 40),
+      link('w-6', 6, 'pull', 'repo-1', 44),
+    ];
+    // #31 is #12's own pull request, which `cardWork` already counts on #12's card.
+    const loose = loosePulls(links, REPOS, [{ repoName: 'api', prNumber: 31 }]);
+    expect(loose.map((pull) => pull.ref)).toEqual(['web#9', 'api#40', 'api#44']);
+
+    const work = boardWork({
+      issues: [],
+      tasks: [
+        { ...triage('web#9', 'paused'), id: 'review-web', botId: 'bot-review', costUsd: 0.25 },
+        { ...triage('api#44', 'running'), id: 'review-44', botId: 'bot-security', costUsd: 0.5 },
+      ],
+      bots: [
+        { id: 'bot-review', name: 'lead-reviewer' },
+        { id: 'bot-security', name: 'security-reviewer' },
+      ],
+      repos: [{ id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {} }],
+      gates: [{ taskId: 'review-web' }],
+      stallEvents: [],
+      requests: [],
+      now: NOW,
+      pulls: loose,
+    });
+    const members = loose.map((pull) => {
+      const extras = work.byRef.get(pull.ref)!;
+      return { ref: pull.ref, repo: pull.ref.split('#')[0]!, assignees: extras.assignees, gateOpen: extras.gateOpen ?? false, costUsd: extras.costUsd, active: extras.active };
+    });
+    const { cards } = itemCards({
+      cards: [card('api', 12, 'build'), { ...card('api', 40, 'review', { costUsd: 0 }), pull: true }],
+      members,
+      requests: [],
+      links,
+      repos: REPOS,
+      keyOf,
+    });
+    expect(cards.map((one) => [one.ref, one.costUsd, one.assignees, one.gateOpen, (one as { active?: unknown[] }).active?.length ?? 0])).toEqual([
+      ['api#12', 1.25, ['lead-reviewer'], true, 1],
+      ['api#40', 0.5, ['security-reviewer'], false, 1],
+    ]);
+  });
+
+  it('sums a pull linked onto an item that is still only a request into the request’s card', () => {
+    linkId = 0;
+    const requestId = 'abcdef01-0000-4000-8000-000000000000';
+    const links = [link('w-9', 9, 'request', null, null, { requestId }), link('w-9', 9, 'pull', 'repo-1', 60)];
+    expect(lonePulls(links, REPOS)).toEqual([]);
+    const { requests } = itemCards({
+      cards: [],
+      members: [{ ref: 'api#60', repo: 'api', assignees: ['lead-reviewer'], gateOpen: true, costUsd: 0.5, active: [] }],
+      requests: [{ repo: 'api', ref: 'request:abcdef01', assignees: ['intake'], gateOpen: false, costUsd: 0.25, active: [] }],
+      links,
+      repos: REPOS,
+      keyOf,
+    });
+    expect(requests.map((one) => [one.ref, one.item?.key, one.costUsd, one.assignees, one.gateOpen])).toEqual([
+      ['request:abcdef01', 'acme-9', 0.75, ['intake', 'lead-reviewer'], true],
+    ]);
+  });
+
+  it('gives a lone pull request’s card the cost and people of its own tasks', () => {
+    const task = { ...triage('api#40', 'running'), botId: 'bot-intake', costUsd: 0.5 };
+    const work = boardWork({
+      issues: [],
+      tasks: [task],
+      bots: [{ id: 'bot-intake', name: 'lead-reviewer' }],
+      repos: [{ id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {} }],
+      gates: [],
+      stallEvents: [],
+      requests: [],
+      now: NOW,
+      pulls: [{ ref: 'api#40', number: 40 }],
+    });
+    expect(work.byRef.get('api#40')).toMatchObject({ number: 40, prNumber: 40, costUsd: 0.5, assignees: ['lead-reviewer'] });
   });
 });
 
@@ -494,5 +666,91 @@ describe('reading the board’s work', () => {
     expect(api.cards.map((card) => card.ref)).toEqual(['api#7']);
     expect(api.running).toBe(231);
     expect(store.lineReads).toEqual([['session-review']]);
+  });
+
+  it('says a running card by its work item’s card, as the board shows it, with the work on every link', async () => {
+    install();
+    const link = (id: number, itemId: string, kind: BoardLink['kind'], repoId: string, number: number): BoardLink => ({
+      id, itemId, itemNumber: id, kind, repoId, number, requestId: null, title: `${kind} ${number}`, state: 'open', url: null, openedAt: minutesAgo(60),
+    });
+    store.numbered = true;
+    store.links = [
+      link(1, 'w-1', 'issue', 'repo-2', 3),
+      link(2, 'w-1', 'issue', 'repo-1', 9),
+      // Linked by hand beside the issues: its review is the item's.
+      link(3, 'w-1', 'pull', 'repo-1', 40),
+      // Two pull requests and no issue: one card, the first's.
+      link(4, 'w-2', 'pull', 'repo-1', 50),
+      link(5, 'w-2', 'pull', 'repo-1', 51),
+    ];
+    store.tasks.push(running('task-40', 'api#40', { kind: 'review', botId: 'bot-lead' }), running('task-51', 'api#51', { kind: 'review', botId: 'bot-lead' }));
+    try {
+      const all = await readBoardActivity(undefined, NOW);
+      // Without grouping these were web#3, api#9's nothing, api#40 and api#51: refs the board does not show.
+      expect(all.cards.map((card) => [card.ref, card.active.map((task) => task.state)])).toEqual([
+        ['api#50', ['running']],
+        ['api#7', ['running', 'queued', 'paused']],
+        ['web#3', ['running', 'running']],
+      ]);
+      // The item with a link in api is on api's board, its card web#3's.
+      expect((await readBoardActivity('api', NOW)).cards.map((card) => card.ref)).toEqual(['api#50', 'api#7', 'web#3']);
+    } finally {
+      store.numbered = false;
+      store.links = [];
+    }
+  });
+
+  it('counts a pull unlinked from its issue on its own card, and no longer on the issue’s, though the issue still records it', () => {
+    const link = (id: number, itemId: string, kind: BoardLink['kind'], number: number): BoardLink => ({
+      id, itemId, itemNumber: id, kind, repoId: 'repo-1', number, requestId: null, title: `${kind} ${number}`, state: 'open', url: null, openedAt: minutesAgo(60),
+    });
+    // #12's row still has `prNumber: 31`; a person unlinked #31 into an item of its own.
+    const links = [link(1, 'w-1', 'issue', 12), link(2, 'w-2', 'pull', 31)];
+    const repos = [{ id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {} }];
+    const issues = withItemPulls([issue('api', 12, { prNumber: 31, stage: 'review' })], links, repos);
+    expect(issues[0]?.prNumber).toBeNull();
+    // While it is on #12's item, it stays #12's own.
+    expect(withItemPulls([issue('api', 12, { prNumber: 31 })], [link(1, 'w-1', 'issue', 12), link(2, 'w-1', 'pull', 31)], repos)[0]?.prNumber).toBe(31);
+
+    const loose = loosePulls(links, repos, issues);
+    expect(loose).toEqual([{ ref: 'api#31', number: 31 }]);
+    const work = boardWork({
+      issues,
+      tasks: [running('review-31', 'api#31', { kind: 'review', botId: 'bot-lead', costUsd: 0.5 })],
+      bots: [{ id: 'bot-lead', name: 'noraexampleco' }],
+      repos,
+      gates: [{ taskId: 'review-31' }],
+      stallEvents: [],
+      requests: [],
+      now: NOW,
+      pulls: loose,
+    });
+    expect(work.byRef.get('api#31')).toMatchObject({ costUsd: 0.5, gateOpen: true, assignees: ['noraexampleco'] });
+    expect(work.byRef.get('api#12')).toMatchObject({ costUsd: 0, prNumber: null, assignees: [] });
+  });
+
+  it('says a triage still running on its request as the card of the issue it was filed as', async () => {
+    install();
+    const { requests } = await import('@openadlc/db');
+    const filed = { id: 'abcdef01-0000-4000-8000-000000000000', repoId: 'repo-1', issueNumber: 9, text: 'Request', state: 'filed', createdAt: minutesAgo(30), updatedAt: minutesAgo(20) };
+    vi.mocked(requests.listRequests).mockResolvedValue([filed] as never);
+    store.numbered = true;
+    store.links = [
+      { id: 1, itemId: 'w-1', itemNumber: 1, kind: 'request', repoId: null, number: null, requestId: filed.id, title: 'Request', state: 'open', url: null, openedAt: minutesAgo(30) },
+      { id: 2, itemId: 'w-1', itemNumber: 1, kind: 'issue', repoId: 'repo-1', number: 9, requestId: null, title: 'Issue 9', state: 'open', url: null, openedAt: minutesAgo(20) },
+    ];
+    store.tasks.push(running('task-triage', 'request:abcdef01', { kind: 'intake', botId: 'bot-builder' }));
+    store.sessions.push({ id: 'session-triage', taskId: 'task-triage', lastLine: null });
+    store.panes['session-triage'] = ['[tool] Read: src/app.ts'];
+    try {
+      const all = await readBoardActivity(undefined, NOW);
+      // Said as request:abcdef01, it named a card the board had dropped once #9 was on it.
+      expect(all.cards.map((card) => card.ref)).toEqual(['api#7', 'api#9', 'web#3']);
+      expect(all.cards.find((card) => card.ref === 'api#9')?.active.map((task) => [task.state, task.activity])).toEqual([['running', 'reading the code']]);
+    } finally {
+      vi.mocked(requests.listRequests).mockResolvedValue([]);
+      store.numbered = false;
+      store.links = [];
+    }
   });
 });

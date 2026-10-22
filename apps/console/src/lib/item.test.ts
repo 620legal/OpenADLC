@@ -1,6 +1,44 @@
 import { describe, expect, it } from 'vitest';
 import type { ItemMessage, ItemView } from './api';
-import { itemEntries } from './item';
+import { cardMatches, exactKey, itemAddress, itemEntries, itemNumberOf, keyLike } from './item';
+
+describe('finding a card by its work item key', () => {
+  const card = { title: 'Record which model reviewed', ref: 'api#12', item: { number: 128, key: '620legal-128' } };
+  const plain = { title: 'Something else', ref: 'api#15', item: null };
+
+  it('reads a key in any case and with any prefix, or its number alone', () => {
+    for (const key of ['620legal-128', '620LEGAL-128', 'W-128', 'w-128', '128', 'old-name-128']) expect(itemNumberOf(key), key).toBe(128);
+    for (const other of ['api#12', 'request:a4b0', 'W-', '', 'dark mode']) expect(itemNumberOf(other), other).toBeNull();
+  });
+
+  it('names the item a merged one came from with the same prefix as its own key', () => {
+    expect(keyLike('620legal-128', 12)).toBe('620legal-12');
+    expect(keyLike('W-128', 12)).toBe('W-12');
+  });
+
+  it('keeps a card by its key in any case and with any prefix, or by words of its title', () => {
+    for (const query of ['W-128', 'w-128', '620legal-128', '128', 'model', '620LEGAL', '']) expect(cardMatches(card, query), query).toBe(true);
+    for (const query of ['W-129', 'dark mode']) expect(cardMatches(card, query), query).toBe(false);
+    expect(cardMatches(plain, '128')).toBe(false);
+  });
+
+  it('sends an old address, a member’s subject or another prefix to the item’s key, and stays on the key', () => {
+    const view = { workItem: { number: 128, key: '620legal-128', mergedFrom: null } };
+    expect(itemAddress('api#12', view, null)).toBe('/items/620legal-128');
+    expect(itemAddress('request:a4b02784', view, 'review_lead')).toBe('/items/620legal-128?role=review_lead');
+    expect(itemAddress('W-128', view, null)).toBe('/items/620legal-128');
+    expect(itemAddress('620legal-128', view, null)).toBeNull();
+    // Not numbered yet, or not found: the page shows what it was given.
+    expect(itemAddress('api#12', { workItem: null }, null)).toBeNull();
+    expect(itemAddress('api#12', null, null)).toBeNull();
+  });
+
+  it('names the key Enter opens only when the box holds one a card has', () => {
+    expect(exactKey([plain, card], 'w-128')).toBe('620legal-128');
+    expect(exactKey([plain, card], 'W-7')).toBeNull();
+    expect(exactKey([plain, card], 'model')).toBeNull();
+  });
+});
 
 const NOW = '2026-09-30T12:00:00.000Z';
 

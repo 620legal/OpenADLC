@@ -1,6 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import type { Gate, Message } from '@openadlc/shared';
-import { itemOf, itemView, messageRoutes, routeItemMessage, type ItemBot, type ItemTaskRow } from './items.js';
+import { itemKey, itemOf, itemView, linkStage, lonePullRefusal, messageRoutes, parseItemKey, routeItemMessage, type ItemBot, type ItemTaskRow } from './items.js';
+
+describe('a work item key', () => {
+  it('names the number whatever its prefix or case, and is display only', () => {
+    for (const key of ['620legal-128', 'W-128', 'w-128', '128', ' 620LEGAL-128 ', 'old-org-name-128']) expect(parseItemKey(key), key).toBe(128);
+    expect(itemKey(128, '620legal')).toBe('620legal-128');
+    expect(itemKey(128, null)).toBe('W-128');
+    expect(itemKey(128, '  ')).toBe('W-128');
+  });
+
+  it('is never a subject: a repository and number, a request, or a deploy of a commit', () => {
+    for (const subject of ['api#12', 'request:a4b02784', 'api@3f2c1a9', 'W-0', 'W-', 'testing', '', 'acme/api-12']) expect(parseItemKey(subject), subject).toBeNull();
+  });
+});
+
+describe('where a linked thing stands', () => {
+  const issues = [{ repoName: 'api', number: 12, prNumber: 31, stage: 'build' as const }];
+  it('is its issue’s stage, its pull request’s issue’s, else Review while open and Done once closed', () => {
+    expect(linkStage({ kind: 'issue', repo: 'api', number: 12, state: 'open' }, issues)).toBe('build');
+    expect(linkStage({ kind: 'pull', repo: 'api', number: 31, state: 'open' }, issues)).toBe('build');
+    expect(linkStage({ kind: 'pull', repo: 'web', number: 31, state: 'open' }, issues)).toBe('review');
+    expect(linkStage({ kind: 'pull', repo: 'api', number: 40, state: 'closed' }, issues)).toBe('done');
+    expect(linkStage({ kind: 'issue', repo: 'web', number: 3, state: 'open' }, issues)).toBe('intake');
+    expect(linkStage({ kind: 'request', repo: null, number: null, state: 'open' }, issues, { issueNumber: null, state: 'questions' })).toBe('intake');
+    expect(linkStage({ kind: 'request', repo: null, number: null, state: 'open' }, issues, { issueNumber: 12, state: 'filed' })).toBeNull();
+  });
+});
 
 /**
  * A work item is one request, the issue it became and that issue's pull
@@ -249,6 +275,32 @@ describe('where the item’s box says a message goes, before it is sent', () => 
   it('says why when nobody has worked on it, rather than naming a destination', () => {
     const routes = messageRoutes({ timeline: [], tasks: [], stage: null, openGates: [], roles: [] }, item, BOTS);
     expect(routes['']).toEqual({ kind: 'refused', error: expect.stringMatching(/nobody has worked on this item yet.*pick a role/) });
+  });
+});
+
+describe('holding, putting next or cancelling a pull request alone on its item', () => {
+  const pull = (state: 'open' | 'closed' | 'merged') => ({
+    key: 'api#40',
+    issue: null,
+    request: null,
+    pr: 40,
+    repo: 'api',
+    links: [{ kind: 'pull' as const, repo: 'api', number: 40, ref: 'api#40', title: 'A fix', state, stage: null, url: null, linkedBy: null }],
+  });
+
+  it('refuses a merged one as merged work, before anything is stopped, whether GitHub or the link says so', () => {
+    expect(lonePullRefusal(pull('open'), true)).toMatch(/already merged, so it cannot be cancelled/);
+    expect(lonePullRefusal(pull('merged'), null)).toMatch(/already merged/);
+  });
+
+  it('refuses an open one, which has no issue to hold or close', () => {
+    expect(lonePullRefusal(pull('open'), false)).toMatch(/pull request with no issue/);
+    expect(lonePullRefusal(pull('open'), null)).toMatch(/pull request with no issue/);
+  });
+
+  it('leaves an issue or a request alone', () => {
+    expect(lonePullRefusal({ ...pull('merged'), issue: { number: 12 } as never }, true)).toBeNull();
+    expect(lonePullRefusal({ ...pull('open'), pr: null }, null)).toBeNull();
   });
 });
 

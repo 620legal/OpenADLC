@@ -141,6 +141,11 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'POST /v1/items/:subject/next': 'admin',
   'GET /v1/items/:subject/cancel': 'admin',
   'POST /v1/items/:subject/cancel': 'admin',
+  // Which issues and pull requests are one piece of work: audited, and never
+  // moved back by an automatic pass (`item-routes.ts`).
+  'POST /v1/items/:subject/links': 'admin',
+  'DELETE /v1/items/:subject/links/:ref': 'admin',
+  'POST /v1/items/:subject/merge': 'admin',
   // A person's decision about issues OpenADLC will not take on its own.
   'POST /v1/repos/:repo/unowned/intake': 'admin',
   'POST /v1/repos/:repo/unowned/ignore': 'admin',

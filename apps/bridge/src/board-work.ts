@@ -7,11 +7,13 @@ import {
   sessions as sessionStore,
   stageMoves,
   tasks as taskStore,
+  workItems as workItemStore,
 } from '@openadlc/db';
 import type { Gate, Session } from '@openadlc/shared';
 import {
   asCardTask,
   cardWork,
+  ignoredSubjects,
   isActive,
   REVIEW_STALLED,
   shownIssues,
@@ -74,6 +76,8 @@ export interface BoardTask extends CardTask {
 }
 
 export interface CardExtras extends CardWork {
+  /** A question open on its work; set for a pull request's, the store says an issue's (`boardCards`). */
+  gateOpen?: boolean;
   /** Queued, running or paused, newest first; each running one with its step. */
   active: BoardTask[];
   /** Every bot on the card now, on the issue or its pull request. */
@@ -174,6 +178,12 @@ interface BoardWorkInput {
   now?: Date;
   /** Send-backs per issue, by `repoId#number` (`stageMoves.sendBackCounts`). */
   sendBacks?: ReadonlyMap<string, number>;
+  /**
+   * Pull requests no issue on the board has as its own (`loosePulls`), by
+   * subject: a card of their own, or one more link of an item whose card
+   * sums them in (`itemCards`).
+   */
+  pulls?: readonly { ref: string; number: number }[];
   /** Each running task's latest lines of output, oldest first, by its id: where its step is read from. */
   steps?: ReadonlyMap<string, readonly string[]>;
   /** When each running task last began running, by its id (`tasks.runningSince`); its start for one not in it. */
@@ -339,6 +349,28 @@ export function boardWork(input: BoardWorkInput): BoardWork {
       sentBack: input.sendBacks?.get(`${issue.repoId}#${issue.number}`) ?? 0,
     });
   }
+  // A pull request with no issue has no issue row for `cardWork`: its own
+  // tasks, a review's or a deploy's, are all its card has.
+  for (const pull of input.pulls ?? []) {
+    const mine = input.tasks.filter((task) => task.subjectRef === pull.ref).sort(newestFirst);
+    const active = mine.filter(isActive).map(onCard);
+    const ended = mine.find((task) => !isActive(task));
+    byRef.set(pull.ref, {
+      gateOpen: mine.some((task) => isActive(task) && gated.has(task.id)),
+      number: pull.number,
+      prNumber: pull.number,
+      costUsd: Math.round(mine.reduce((total, task) => total + task.costUsd, 0) * 10_000) / 10_000,
+      active,
+      last: ended ? asCardTask(ended, botName) : null,
+      reviewRound: null,
+      stalledAfterRounds: null,
+      reviewFailed: false,
+      shippedAt: null,
+      waitingOn: [],
+      assignees: [...new Set(active.map((task) => task.bot))],
+      sentBack: 0,
+    });
+  }
 
   // A request is on the board from when it is sent: waiting its turn
   // for intake, and while intake asks and writes it up. Once filed, its issue's
@@ -429,9 +461,9 @@ function onTheBoard(issues: readonly IssueFacts[], repos: BoardWorkInput['repos'
 
 const subjectOfRequest = (request: { id: string }): string => `request:${request.id.slice(0, 8)}`;
 
-/** The running tasks on the cards shown: on an issue or its pull request, or a request's triage. */
-function runningOn(tasks: readonly TaskFacts[], shown: readonly IssueFacts[], requests: readonly { id: string }[]): TaskFacts[] {
-  const subjects = new Set([...shown.flatMap(subjectsOf), ...requests.map(subjectOfRequest)]);
+/** The running tasks on the cards shown: on an issue or its pull request, a request's triage, or a pull request a work item links (`loosePulls`). */
+function runningOn(tasks: readonly TaskFacts[], shown: readonly IssueFacts[], requests: readonly { id: string }[], pulls: readonly { ref: string }[] = []): TaskFacts[] {
+  const subjects = new Set([...shown.flatMap(subjectsOf), ...requests.map(subjectOfRequest), ...pulls.map((pull) => pull.ref)]);
   return tasks.filter((task) => task.state === 'running' && subjects.has(task.subjectRef));
 }
 
@@ -482,8 +514,9 @@ export async function readBoardWork(
     .filter((request) => request.state !== 'abandoned')
     .filter((request) => request.issueNumber === null || now.getTime() - Date.parse(request.updatedAt ?? request.createdAt) < FILED_SHOWN_MS)
     .map((request) => `request:${request.id.slice(0, 8)}`);
+  const pullSubjects = (input.pulls ?? []).map((pull) => pull.ref);
   const [onCards, going, stallEvents, sendBacks, count] = await Promise.all([
-    taskStore.listTasksOnSubjects([...new Set([...subjects, ...requestSubjects, ...intakeSubjects])]),
+    taskStore.listTasksOnSubjects([...new Set([...subjects, ...requestSubjects, ...intakeSubjects, ...pullSubjects])]),
     taskStore.listTasks({ states: ['queued', 'running', 'paused'], limit: 200 }),
     listEventsOfType(REVIEW_STALLED, since),
     // A table not there yet is no send-backs, not a board that fails.
@@ -493,7 +526,7 @@ export async function readBoardWork(
 
   const seen = new Set(onCards.map((task) => task.id));
   const tasks = [...onCards, ...going.filter((task) => isActive(task) && !seen.has(task.id))];
-  const live = await readLive(runningOn(tasks, onTheBoard(input.issues, input.repos), input.requests), input.sessions ?? []);
+  const live = await readLive(runningOn(tasks, onTheBoard(input.issues, input.repos), input.requests, input.pulls), input.sessions ?? []);
   const { sessions: _sessions, ...facts } = input;
   return boardWork({ ...facts, tasks, stallEvents, now, sendBacks, ...live, runningTasks: count ?? undefined });
 }
@@ -517,35 +550,317 @@ export interface BoardActivity {
  * ones it shows running: one started, paused or ended.
  */
 export async function readBoardActivity(repoName: string | undefined, now = new Date()): Promise<BoardActivity> {
-  const [issueList, crew, repoList, requestList, runningNow, sessionList, count] = await Promise.all([
-    issueStore.listIssues(repoName),
+  // Numbered, the board's cards are work items' (`itemCards`), read across
+  // every repository and filtered after grouping; the poll says them the same
+  // way. Said by their own refs, a second issue's or a linked pull's running
+  // task named a card the board does not show, and the console read the
+  // whole board again every five seconds.
+  const numbered = await (async () => workItemStore.isNumbered())().catch(() => false);
+  const [listed, crew, repoList, requestList, runningNow, sessionList, count, links] = await Promise.all([
+    issueStore.listIssues(numbered ? undefined : repoName),
     botStore.listBots(),
     repoStore.listRepos(),
     requestStore.listRequests(200),
     taskStore.listTasks({ states: ['running'], limit: 200 }),
     sessionStore.listSessions(),
     countRunning(),
+    numbered ? (async () => workItemStore.allLinks())().catch(() => [] as BoardLink[]) : Promise.resolve([] as BoardLink[]),
   ]);
   const running = count ?? runningNow.length;
+  const issueList = withItemPulls(listed, links, repoList);
   // A request's card is on its repository's board, or on the board of all of them.
   const requests = repoName ? requestList.filter((request) => repoList.find((repo) => repo.id === request.repoId)?.name === repoName) : requestList;
-  const live = runningOn(runningNow, onTheBoard(issueList, repoList), requests);
+  const shown = onTheBoard(issueList, repoList);
+  const ignored = ignoredSubjects(issueList);
+  const loose = loosePulls(links, repoList, issueList).filter((pull) => !ignored.has(pull.ref));
+  const live = runningOn(runningNow, shown, requests, loose);
   if (live.length === 0) return { running, cards: [] };
 
   const liveSubjects = new Set(live.map((task) => task.subjectRef));
-  const issuesLive = onTheBoard(issueList, repoList).filter((issue) => subjectsOf(issue).some((subject) => liveSubjects.has(subject)));
-  const requestsLive = requests.filter((request) => liveSubjects.has(subjectOfRequest(request)));
+  let issuesLive = shown.filter((issue) => subjectsOf(issue).some((subject) => liveSubjects.has(subject)));
+  let pullsLive = loose.filter((pull) => liveSubjects.has(pull.ref));
+  let requestsLive = requests.filter((request) => liveSubjects.has(subjectOfRequest(request)));
+  const itemOf = itemsByRef(links, repoList);
+  if (numbered) {
+    // Every card of an item with work running, so its card is the one the
+    // board shows, carrying every task on the item. A triage still running
+    // on its request once the issue is filed is the issue's card's: said as
+    // the request's, it named a card the board had dropped.
+    const items = new Set(
+      [...issuesLive.map((issue) => `${issue.repoName}#${issue.number}`), ...pullsLive.map((pull) => pull.ref), ...requestsLive.map(subjectOfRequest)].map((ref) => itemOf.get(ref)),
+    );
+    const ofLiveItem = (ref: string) => {
+      const id = itemOf.get(ref);
+      return id !== undefined && items.has(id);
+    };
+    issuesLive = shown.filter((issue) => issuesLive.includes(issue) || ofLiveItem(`${issue.repoName}#${issue.number}`));
+    pullsLive = loose.filter((pull) => pullsLive.includes(pull) || ofLiveItem(pull.ref));
+    requestsLive = requests.filter((request) => requestsLive.includes(request) || ofLiveItem(subjectOfRequest(request)));
+  }
   const [onCards, { steps, since }] = await Promise.all([
-    taskStore.listTasksOnSubjects([...new Set([...issuesLive.flatMap(subjectsOf), ...requestsLive.map(subjectOfRequest)])]),
+    taskStore.listTasksOnSubjects([...new Set([...issuesLive.flatMap(subjectsOf), ...requestsLive.map(subjectOfRequest), ...pullsLive.map((pull) => pull.ref)])]),
     readLive(live, sessionList),
   ]);
-  const work = boardWork({ issues: issuesLive, tasks: onCards, bots: crew, repos: repoList, gates: [], stallEvents: [], requests: requestsLive, now, steps, since });
-  const cards = [
-    ...[...work.byRef].map(([ref, card]) => ({ ref, active: card.active })),
-    ...work.requests.map((card) => ({ ref: card.ref, active: card.active })),
-  ];
+  const work = boardWork({ issues: issuesLive, tasks: onCards, bots: crew, repos: repoList, gates: [], stallEvents: [], requests: requestsLive, now, steps, since, pulls: pullsLive });
+  let cards: { ref: string; active: BoardTask[] }[];
+  if (!numbered) {
+    cards = [
+      ...[...work.byRef].map(([ref, card]) => ({ ref, active: card.active })),
+      ...work.requests.map((card) => ({ ref: card.ref, active: card.active })),
+    ];
+  } else {
+    const lone = new Set(lonePulls(links, repoList).map((pull) => pull.ref));
+    const entry = (ref: string) => ({ ref, repo: ref.slice(0, ref.lastIndexOf('#')), assignees: [] as string[], gateOpen: false, active: work.byRef.get(ref)?.active ?? [] });
+    const grouped = itemCards({
+      cards: [...issuesLive.map((issue) => entry(`${issue.repoName}#${issue.number}`)), ...pullsLive.filter((pull) => lone.has(pull.ref)).map((pull) => entry(pull.ref))],
+      members: pullsLive.filter((pull) => !lone.has(pull.ref)).map((pull) => entry(pull.ref)),
+      requests: work.requests.map((card) => ({ ref: card.ref, repo: card.repo, active: card.active })),
+      links,
+      repos: repoList,
+      keyOf: String,
+    });
+    const shownHere = (card: { repo: string; repos: string[] }) => !repoName || card.repo === repoName || card.repos.includes(repoName);
+    cards = [
+      ...grouped.cards.filter(shownHere).map((card) => ({ ref: card.ref, active: card.active as BoardTask[] })),
+      ...grouped.requests.map((card) => ({ ref: card.ref, active: card.active })),
+    ];
+  }
   return {
     running,
     cards: cards.filter((card) => card.active.some((task) => task.state === 'running')).sort((a, b) => a.ref.localeCompare(b.ref)),
   };
+}
+
+/** The work item each linked subject is on, by `repo#n` and `request:<id8>`. */
+function itemsByRef(links: readonly BoardLink[], repos: readonly { id: string; name: string }[]): Map<string, string> {
+  const repoName = (id: string | null) => repos.find((repo) => repo.id === id)?.name ?? null;
+  const out = new Map<string, string>();
+  for (const link of links) {
+    const ref = subjectOfLink(link, repoName);
+    if (ref) out.set(ref, link.itemId);
+  }
+  return out;
+}
+
+/** A work item's link as the board groups by it (`workItems.allLinks`). */
+export interface BoardLink {
+  id: number;
+  itemId: string;
+  itemNumber?: number;
+  kind: 'issue' | 'pull' | 'request';
+  repoId: string | null;
+  number: number | null;
+  requestId: string | null;
+  title: string;
+  state: 'open' | 'closed' | 'merged';
+  url: string | null;
+  openedAt: string;
+  /** When it was last seen to close or merge; null while open, or for history nobody saw close. */
+  closedAt?: string | null;
+}
+
+/** What a card says of its work item: the key, and every repository it has a link in. */
+export interface ItemCardFields {
+  item: { number: number; key: string } | null;
+  repos: string[];
+}
+
+/** A pull request alone on its work item, as a card of its own. */
+export interface LonePull {
+  ref: string;
+  repo: string;
+  number: number;
+  title: string;
+  url: string | null;
+  stage: 'review' | 'done';
+  openedAt: string;
+  /**
+   * In Done, when its last pull closed, which the Done column counts its
+   * week from as an issue's card counts from when it shipped; null when none
+   * was seen to close, and the card falls back to when it opened.
+   */
+  closedAt: string | null;
+}
+
+function subjectOfLink(link: BoardLink, repoName: (id: string | null) => string | null): string | null {
+  if (link.kind === 'request') return link.requestId ? `request:${link.requestId.slice(0, 8).toLowerCase()}` : null;
+  const repo = repoName(link.repoId);
+  return repo && link.number !== null ? `${repo}#${link.number}` : null;
+}
+
+/**
+ * The pull requests that are a card of their own: their work item holds no
+ * issue and no request, as a person's pull request that closes nothing. In
+ * Review while open, and in Done once merged or closed (closed unmerged
+ * reads as abandoned), as long as an issue's card is: history is numbered
+ * whole, and a pull merged after a month open left the board the day it merged.
+ */
+export function lonePulls(links: readonly BoardLink[], repos: readonly { id: string; name: string }[]): LonePull[] {
+  const repoName = (id: string | null) => repos.find((repo) => repo.id === id)?.name ?? null;
+  const byItem = new Map<string, BoardLink[]>();
+  for (const link of links) byItem.set(link.itemId, [...(byItem.get(link.itemId) ?? []), link]);
+  const out: LonePull[] = [];
+  for (const members of byItem.values()) {
+    if (members.some((link) => link.kind !== 'pull')) continue;
+    const first = [...members].sort((a, b) => a.id - b.id).find((link) => repoName(link.repoId));
+    const repo = first ? repoName(first.repoId) : null;
+    if (!first || !repo || first.number === null) continue;
+    const open = members.some((link) => link.state === 'open');
+    const closes = members.flatMap((link) => (link.closedAt ? [link.closedAt] : [])).sort();
+    out.push({
+      ref: `${repo}#${first.number}`,
+      repo,
+      number: first.number,
+      title: first.title,
+      url: first.url,
+      stage: open ? 'review' : 'done',
+      openedAt: first.openedAt,
+      closedAt: open ? null : (closes.at(-1) ?? null),
+    });
+  }
+  return out;
+}
+
+/**
+ * The issues as their work items have them: an issue whose recorded pull
+ * request a person linked to another item no longer has it. `cardWork`
+ * follows `prNumber`, so the issue's card kept counting the review on a pull
+ * unlinked from it, and the pull's own card, left out of `loosePulls` as the
+ * issue's, counted nothing. A pull or an issue with no link keeps what the
+ * issue row says.
+ */
+export function withItemPulls<I extends { repoName: string; number: number; prNumber: number | null }>(
+  issues: readonly I[],
+  links: readonly BoardLink[],
+  repos: readonly { id: string; name: string }[],
+): I[] {
+  if (links.length === 0) return [...issues];
+  const itemOf = itemsByRef(links, repos);
+  return issues.map((issue) => {
+    if (!issue.prNumber) return issue;
+    const mine = itemOf.get(`${issue.repoName}#${issue.number}`);
+    const pulls = itemOf.get(`${issue.repoName}#${issue.prNumber}`);
+    return mine !== undefined && pulls !== undefined && mine !== pulls ? { ...issue, prNumber: null } : issue;
+  });
+}
+
+/**
+ * Every linked pull request whose work no issue's card already counts: not
+ * the pull request of an issue on the board (`cardWork` counts that one).
+ * Given issues read through `withItemPulls`, so that is an issue of the
+ * pull's own item.
+ * A pull linked by hand beside an issue, or a second pull on an item with
+ * none, had its review's cost and people left off the item's card.
+ */
+export function loosePulls(
+  links: readonly BoardLink[],
+  repos: readonly { id: string; name: string }[],
+  issues: readonly { repoName: string; prNumber: number | null }[],
+): { ref: string; number: number }[] {
+  const repoName = (id: string | null) => repos.find((repo) => repo.id === id)?.name ?? null;
+  const owned = new Set(issues.filter((issue) => issue.prNumber !== null).map((issue) => `${issue.repoName}#${issue.prNumber}`));
+  return links.flatMap((link) => {
+    const repo = repoName(link.repoId);
+    if (link.kind !== 'pull' || !repo || link.number === null) return [];
+    const ref = `${repo}#${link.number}`;
+    return owned.has(ref) ? [] : [{ ref, number: link.number }];
+  });
+}
+
+type GroupableCard = { ref: string; repo: string; assignees: string[]; gateOpen: boolean; costUsd?: number; active?: CardTask[] };
+
+/**
+ * One card per work item (docs/adr/0009-work-items.md).
+ *
+ * An item's card is its first issue's: the issue linked earliest that is on
+ * the board, so it stands in that issue's column and a move acts on it, even
+ * when a later issue or pull request stands elsewhere. Its cost, who is on
+ * it, its tasks and whether a question is open are summed over every card
+ * of the item. A request still in intake carries its item's key, and goes
+ * once its item has an issue on the board. A card whose subject has no link
+ * (an install not numbered yet) stays as it is, with no key.
+ */
+export function itemCards<C extends GroupableCard, R extends { ref: string; repo: string } & Partial<GroupableCard>>(input: {
+  cards: readonly C[];
+  /**
+   * Work on an item's other links that is no card of its own: a pull linked
+   * beside an issue, a second pull on an item with none. Summed into the
+   * item's card, never shown alone.
+   */
+  members?: readonly GroupableCard[];
+  requests: readonly R[];
+  links: readonly BoardLink[];
+  repos: readonly { id: string; name: string }[];
+  /** The key of a number, as the install shows it. */
+  keyOf: (number: number) => string;
+}): { cards: (C & ItemCardFields)[]; requests: (R & ItemCardFields)[] } {
+  const repoName = (id: string | null) => input.repos.find((repo) => repo.id === id)?.name ?? null;
+  const itemByRef = new Map<string, string>();
+  const order = new Map<string, number>();
+  const linksOf = new Map<string, BoardLink[]>();
+  for (const link of input.links) {
+    const ref = subjectOfLink(link, repoName);
+    if (ref) {
+      itemByRef.set(ref, link.itemId);
+      order.set(ref, link.kind === 'issue' ? link.id : Number.MAX_SAFE_INTEGER - 1);
+    }
+    linksOf.set(link.itemId, [...(linksOf.get(link.itemId) ?? []), link]);
+  }
+  const fields = (itemId: string, own: string): ItemCardFields => {
+    const links = linksOf.get(itemId) ?? [];
+    const number = links[0]?.itemNumber;
+    const names = links.map((link) => repoName(link.repoId)).filter((name): name is string => Boolean(name));
+    return { item: number !== undefined ? { number, key: input.keyOf(number) } : null, repos: [...new Set([own, ...names].filter(Boolean))] };
+  };
+
+  const groups = new Map<string, C[]>();
+  const cards: (C & ItemCardFields)[] = [];
+  for (const card of input.cards) {
+    const itemId = itemByRef.get(card.ref);
+    if (!itemId) {
+      cards.push({ ...card, item: null, repos: card.repo ? [card.repo] : [] });
+      continue;
+    }
+    groups.set(itemId, [...(groups.get(itemId) ?? []), card]);
+  }
+  const extra = new Map<string, GroupableCard[]>();
+  for (const member of input.members ?? []) {
+    const itemId = itemByRef.get(member.ref);
+    if (itemId) extra.set(itemId, [...(extra.get(itemId) ?? []), member]);
+  }
+  for (const [itemId, members] of groups) {
+    const rank = (card: C) => order.get(card.ref) ?? Number.MAX_SAFE_INTEGER;
+    const [first, ...rest] = [...members].sort((a, b) => rank(a) - rank(b));
+    if (!first) continue;
+    cards.push(summed({ ...first, ...fields(itemId, first.repo) }, [...rest, ...(extra.get(itemId) ?? []).filter((member) => !members.some((card) => card.ref === member.ref))]));
+  }
+
+  const onBoard = new Set(groups.keys());
+  const requests: (R & ItemCardFields)[] = [];
+  for (const card of input.requests) {
+    const itemId = itemByRef.get(card.ref);
+    if (itemId && onBoard.has(itemId)) continue;
+    if (!itemId) {
+      requests.push({ ...card, item: null, repos: card.repo ? [card.repo] : [] });
+      continue;
+    }
+    // A pull linked onto an item that is still only a request: its review
+    // was on no card, as the request's card was built without it.
+    requests.push(summed({ ...card, ...fields(itemId, card.repo) }, extra.get(itemId) ?? []));
+  }
+  return { cards, requests };
+}
+
+/** A card with the cost, people, tasks and open question of its item's other cards and links added in. */
+function summed<C extends Partial<GroupableCard>>(card: C, others: readonly GroupableCard[]): C {
+  if (others.length === 0) return card;
+  const all = [card, ...others];
+  const merged: C = { ...card };
+  merged.assignees = [...new Set(all.flatMap((one) => one.assignees ?? []))];
+  merged.gateOpen = all.some((one) => one.gateOpen);
+  if (all.some((one) => one.costUsd !== undefined)) {
+    merged.costUsd = Math.round(all.reduce((total, one) => total + (one.costUsd ?? 0), 0) * 10_000) / 10_000;
+  }
+  if (all.some((one) => one.active)) merged.active = all.flatMap((one) => one.active ?? []);
+  return merged;
 }

@@ -31,6 +31,60 @@ export function subjectFrom(raw: string): string {
   }
 }
 
+/**
+ * The number a work item key names, whatever its prefix or case: `acme-128`,
+ * `W-128` and `128` are all item 128, the prefix being for display only. The
+ * bridge reads keys the same way (`parseItemKey`). Null for anything else.
+ */
+export function itemNumberOf(text: string): number | null {
+  const trimmed = text.trim();
+  if (!trimmed || /[#:@\s/]/.test(trimmed)) return null;
+  const match = /^(?:[A-Za-z0-9][A-Za-z0-9_.-]*-)?(\d+)$/.exec(trimmed);
+  const number = match ? Number(match[1]) : NaN;
+  return Number.isSafeInteger(number) && number > 0 ? number : null;
+}
+
+/**
+ * Another number's key with the same prefix as `key`: the item a merged one
+ * went into is shown as `acme-12`, not `W-12`, on an install with an
+ * organization, since the bridge says the prefix and the console does not know it.
+ */
+export function keyLike(key: string, number: number): string {
+  return /\d+$/.test(key) ? key.replace(/\d+$/, String(number)) : `W-${number}`;
+}
+
+/**
+ * Whether a card is one the board's filter box keeps: its key, in any case
+ * and with any prefix, or words of its title. An empty box keeps every card.
+ */
+export function cardMatches(card: { title: string; ref: string; item?: { number: number; key: string } | null }, query: string): boolean {
+  const wanted = query.trim().toLowerCase();
+  if (!wanted) return true;
+  const number = itemNumberOf(wanted);
+  if (number !== null && card.item?.number === number) return true;
+  if (card.item?.key.toLowerCase().includes(wanted)) return true;
+  return card.title.toLowerCase().includes(wanted) || card.ref.toLowerCase() === wanted;
+}
+
+/**
+ * Where `/items/<subject>` goes when the subject is not the item's key — a
+ * member's `repo#12`, `request:<id8>`, another prefix, a merged item's key —
+ * so every link to a work item lands on the one address to share. Null when
+ * it is the key already, or the item has none yet.
+ */
+export function itemAddress(subject: string, view: Pick<ItemView, 'workItem'> | null, role: string | null): string | null {
+  const key = view?.workItem?.key;
+  if (!key || key === subject) return null;
+  return `/items/${encodeURIComponent(key)}${role ? `?role=${encodeURIComponent(role)}` : ''}`;
+}
+
+/** The key a filter names exactly, for Enter to open its page; null when it names no card's item. */
+export function exactKey(cards: readonly { item?: { number: number; key: string } | null }[], query: string): string | null {
+  const number = itemNumberOf(query);
+  if (number === null) return null;
+  return cards.find((card) => card.item?.number === number)?.item?.key ?? null;
+}
+
 /** A role in words, "lead reviewer"; a role this console does not know is said as it is. */
 export function roleWords(role: string | null | undefined): string {
   if (!role) return 'the crew';

@@ -39,7 +39,7 @@ import { APP_API, InvitationService } from './invitation-service.js';
 import { CrewAccessKeeper } from './crew-access.js';
 import { Reconciler } from './reconciler.js';
 import { JobTimer } from './job-timer.js';
-import { Router } from './router.js';
+import { HttpFailure, Router } from './router.js';
 import { REQUEST_SWEEP_MS, RequestQueue } from './request-queue.js';
 import { WatermarkStream } from './thread-stream.js';
 import { Scheduler, retryAfterRecovery } from './scheduler.js';
@@ -62,7 +62,7 @@ import { recordUnowned } from './unowned-issues.js';
 import { registerItemControlRoutes } from './item-controls.js';
 import { registerUnownedRoutes } from './unowned-routes.js';
 import { registerDeployRoutes } from './deploy-routes.js';
-import { resolveItem } from './items.js';
+import { lonePullRefusal, resolveItem } from './items.js';
 import { botNames, defaultChecks, settingUp } from './health/index.js';
 import { anythingDispatches, dispatchModeOf } from './health/checks/dispatcher.js';
 import { HealthRegistry } from './health/registry.js';
@@ -657,6 +657,8 @@ async function main(): Promise<void> {
       const { item, repo } = found;
       const client = await asAutomation(actors, config).catch(() => null);
       const pull = item.pr && client ? await client.getPullRequest(repo.fullName, item.pr).catch(() => null) : null;
+      const refused = lonePullRefusal(item, pull?.merged ?? null);
+      if (refused) throw new HttpFailure(409, refused);
       return {
         key: item.key,
         repoName: repo.name,

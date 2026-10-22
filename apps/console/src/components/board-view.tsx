@@ -19,6 +19,7 @@ import { withActivity, type BoardActivity } from '@/lib/board-activity';
 import { attemptMove, columnsWithMoves, movesBack, NO_MOVES, reconcile, type MoveState } from '@/lib/board-move';
 import { abandoned, cardBot, cardCost, cardStatus, nextUp, type CardContext, type CardStatus, type StatusTone } from '@/lib/card-status';
 import { cn } from '@/lib/cn';
+import { cardMatches, exactKey } from '@/lib/item';
 import { heldLine, IssueControls } from '@/components/issue-controls';
 import { boardHref, type HeaderData } from '@/lib/header';
 import { repoEdge, type RepoLook } from '@/lib/repo-colors';
@@ -139,7 +140,11 @@ export function BoardView({
     setMoves((state) => reconcile(state, read.columns));
   }, [read]);
 
-  const columns = columnsWithMoves(board.columns, moves);
+  // The filter box: a work item's key in any case and with any prefix, or words of a title.
+  const [filter, setFilter] = useState('');
+  const columns = columnsWithMoves(board.columns, moves).map((column) =>
+    filter.trim() ? { ...column, cards: column.cards.filter((card) => cardMatches(card, filter)) } : column,
+  );
   const empty = board.columns.every((column) => column.cards.length === 0);
   // Every repository at once is the one view where a card has to say which it
   // is in. Showing one, it would say the same thing on every card.
@@ -297,6 +302,30 @@ export function BoardView({
                 {showRepo && <Legend repositories={repositories} />}
               </div>
             )}
+            <form
+              role="search"
+              className="shrink-0 px-4 pt-3 md:px-6"
+              onSubmit={(event) => {
+                event.preventDefault();
+                // Enter on a key a card has opens its page, the address to share.
+                const key = exactKey(
+                  board.columns.flatMap((column) => column.cards),
+                  filter,
+                );
+                if (key) window.location.assign(`/items/${encodeURIComponent(key)}`);
+              }}
+            >
+              <label className="flex max-w-xs items-center gap-2 text-[12.5px] text-dim">
+                <span className="sr-only">Find a work item by its key or title</span>
+                <input
+                  type="search"
+                  value={filter}
+                  onChange={(event) => setFilter(event.target.value)}
+                  placeholder="Find by key or title"
+                  className="h-7 w-full rounded-md border border-edge bg-panel px-2 text-[12.5px] text-body placeholder:text-dim focus-visible:outline-2 focus-visible:outline-link"
+                />
+              </label>
+            </form>
             <section
               aria-label="Board"
               className="hidden min-h-[22rem] flex-1 gap-3 overflow-x-auto px-6 pb-6 pt-3 md:grid md:grid-cols-[repeat(6,minmax(12.5rem,1fr))]"
@@ -600,7 +629,8 @@ function Card({ card, stage, handlers }: { card: BoardCard; stage: string; handl
   // Only an issue has a stage to move out of, and only an admin moves one:
   // it changes what the crew builds next. The bridge refuses a user anyway.
   const admin = useRole() === 'admin';
-  const movable = !card.request && admin;
+  // A pull request no issue claims has no issue to move, nor to hold.
+  const movable = !card.request && !card.pull && admin;
   const people = [...new Set((card.active ?? []).map((task) => task.bot))];
   const title = stageOf(stage)?.title ?? stage;
 
@@ -625,6 +655,12 @@ function Card({ card, stage, handlers }: { card: BoardCard; stage: string; handl
     >
       <span className={cn('flex min-w-0 items-center gap-2 text-[12px] text-dim md:text-[11.5px]', handlers.showRepo && 'relative')}>
         {handlers.showRepo && card.repo && <RepoBadge name={card.repo} className="shrink" />}
+        {/* The work item's own key, the one its page and search go by. */}
+        {card.item && (
+          <span data-key className="shrink-0 font-medium text-soft">
+            {card.item.key}
+          </span>
+        )}
         {card.url ? (
           <a
             href={card.url}
@@ -732,7 +768,7 @@ function Card({ card, stage, handlers }: { card: BoardCard; stage: string; handl
           else), and not on finished work. Always there, on a row of their own:
           shown on hover in the top row they crowded the repository, the number,
           the cost and the move list, and could not be found until hovered. */}
-      {!card.request && !['merged', 'done'].includes(card.stage) ? (
+      {!card.request && !card.pull && !['merged', 'done'].includes(card.stage) ? (
         // Wraps so a refusal from the controls takes a line of its own below
         // the row, the card's width, rather than squeezing in beside them.
         <span className="flex flex-wrap items-end justify-between gap-x-2 gap-y-1">

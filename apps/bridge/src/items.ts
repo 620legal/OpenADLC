@@ -1,9 +1,22 @@
-import { attachments as attachmentStore, designMemory as designMemoryStore, bots as botStore, issues as issueStore, repos as repoStore, requests as requestStore, standingApprovals, tasks as taskStore, threads as threadStore } from '@openadlc/db';
+import {
+  attachments as attachmentStore,
+  designMemory as designMemoryStore,
+  bots as botStore,
+  issues as issueStore,
+  repos as repoStore,
+  requests as requestStore,
+  settings as settingsStore,
+  standingApprovals,
+  tasks as taskStore,
+  threads as threadStore,
+  workItems as workItemStore,
+} from '@openadlc/db';
 import type { leases } from '@openadlc/db';
 import { BOT_ROLES, PLAN_CHANGE_APPROVE, hasNextLabel, hasPausedLabel, roleLabel, type BotRole, type Gate, type Message, type StageKey, type TaskKind, type TaskState } from '@openadlc/shared';
 import { requestPrefixOf } from './request-context.js';
 import { readHolds } from './item-hold.js';
 import { isActive, issueForSubject, parseRef, subjectsOf, type IssueFacts } from './work.js';
+import { formatKey } from './work-items.js';
 
 /**
  * A work item: one request, the issue it became, and that issue's pull
@@ -63,6 +76,78 @@ export interface Item<I extends IssueRow = IssueRow, R extends RequestRow = Requ
   repo: string | null;
   /** Each member's subject, for routing a message to the one a role works on. */
   refs: { request: string | null; issue: string | null; pullRequest: string | null };
+  /** Its numbered work item, once the install is numbered (docs/adr/0009-work-items.md). */
+  workItem?: ItemWorkItem | null;
+  /** Everything linked to its work item, in the order it was linked. */
+  links?: ItemLink[];
+}
+
+/** A work item's number and key, and the item a merged one's key came from. */
+export interface ItemWorkItem {
+  id: string;
+  number: number;
+  /** `<organization>-<n>`, or `W-<n>` with no organization set: for display; the number is the identity. */
+  key: string;
+  /** The number asked for, when it was merged into this one. */
+  mergedFrom: number | null;
+}
+
+/** One issue, pull request or request linked to a work item, as its page lists it. */
+export interface ItemLink {
+  kind: 'issue' | 'pull' | 'request';
+  /** The repository, by name; null for a request. */
+  repo: string | null;
+  number: number | null;
+  /** What tasks and threads on it are filed under: `repo#n`, `request:<id8>`. */
+  ref: string;
+  title: string;
+  state: 'open' | 'closed' | 'merged';
+  /** Where it stands on the board; null for a request filed as an issue, which stands where its issue does. */
+  stage: StageKey | null;
+  url: string | null;
+  /** Who linked it by hand; null when OpenADLC did. */
+  linkedBy: string | null;
+}
+
+/**
+ * A work item's key, read from what a person typed or a link carried: the
+ * number, with any prefix and in any case (`acme-128`, `W-128`, `w-128`,
+ * `128`), the prefix being for display only. Null for a subject, which
+ * has `#`, `:` or `@` in it, or anything else.
+ */
+export function parseItemKey(subject: string): number | null {
+  const trimmed = subject.trim();
+  if (!trimmed || /[#:@\s/]/.test(trimmed)) return null;
+  const match = /^(?:[A-Za-z0-9][A-Za-z0-9_.-]*-)?(\d+)$/.exec(trimmed);
+  if (!match) return null;
+  const number = Number(match[1]);
+  return Number.isSafeInteger(number) && number > 0 ? number : null;
+}
+
+/** The key a number is shown as on this install. */
+export function itemKey(number: number, organization: string | null): string {
+  return formatKey(number, organization?.trim() || 'W');
+}
+
+/**
+ * Where a linked thing stands. An issue stands where its row says, or
+ * Intake before one is read, Done once closed. A pull request stands with
+ * the issue it is recorded on, else in Review while open and Done once
+ * merged or closed: closed unmerged reads as abandoned.
+ */
+export function linkStage(
+  link: Pick<workItemStore.Link, 'kind' | 'number' | 'state'> & { repo: string | null },
+  issues: readonly Pick<IssueFacts, 'repoName' | 'number' | 'prNumber' | 'stage'>[],
+  request?: { issueNumber: number | null; state: string } | null,
+): StageKey | null {
+  if (link.kind === 'request') return request && (request.issueNumber !== null || request.state === 'filed') ? null : 'intake';
+  const inRepo = issues.filter((issue) => issue.repoName === link.repo);
+  if (link.kind === 'issue') {
+    const row = inRepo.find((issue) => issue.number === link.number);
+    return row?.stage ?? (link.state === 'open' ? 'intake' : 'done');
+  }
+  const owner = inRepo.find((issue) => issue.prNumber === link.number);
+  return owner?.stage ?? (link.state === 'open' ? 'review' : 'done');
 }
 
 /**
@@ -254,6 +339,10 @@ export interface ItemView {
    * conversation, and each of `roles` by its role (`messageRoutes`).
    */
   routes?: Record<string, ItemRoutePreview>;
+  /** Its work item's number and key; null before the install is numbered. */
+  workItem: { number: number; key: string; mergedFrom: number | null } | null;
+  /** Every issue, pull request and request linked to it; empty before the install is numbered. */
+  links: ItemLink[];
   /**
    * The plan changes on it that no person approved — the designer did, or a
    * standing approval — which a person can still refuse, taking the paths
@@ -426,9 +515,10 @@ export function itemView(rows: ItemRows): ItemView {
   return {
     key: item.key,
     subjects: item.subjects,
-    title: issue?.title ?? (request ? firstLine(request.text) : item.key),
+    // A pull request alone on its item has no issue row: its link says what it is called and where it stands.
+    title: issue?.title ?? (request ? firstLine(request.text) : (item.links?.[0]?.title ?? item.key)),
     repo: item.repo,
-    stage: issue?.stage ?? (request ? 'intake' : null),
+    stage: issue?.stage ?? (request ? 'intake' : (item.links?.[0]?.stage ?? null)),
     costUsd: Math.round(tasks.reduce((total, task) => total + task.costUsd, 0) * 10_000) / 10_000,
     request: request
       ? {
@@ -454,7 +544,14 @@ export function itemView(rows: ItemRows): ItemView {
             return { number, title: request ? firstLine(request.text) : item.key, url: `https://github.com/${rows.repo.fullName}/issues/${number}`, stage: 'intake' as StageKey };
           })()
         : null,
-    pullRequest: item.pr ? { number: item.pr, url: pullUrl(rows.repo, issue?.url ?? null, item.pr) } : null,
+    pullRequest: item.pr
+      ? {
+          number: item.pr,
+          url:
+            item.links?.find((link) => link.kind === 'pull' && link.repo === item.repo && link.number === item.pr)?.url ??
+            pullUrl(rows.repo, issue?.url ?? null, item.pr),
+        }
+      : null,
     roles: [...roles.entries()]
       .sort(([a], [b]) => rank(a) - rank(b))
       .map(([role, seats]) => ({ role, label: labelOf(role), seats: [...seats.values()] })),
@@ -463,6 +560,8 @@ export function itemView(rows: ItemRows): ItemView {
     tasks: itemTasks,
     attachments: [...(rows.attachments ?? [])],
     designMemory: [...(rows.designMemory ?? [])],
+    workItem: item.workItem ? { number: item.workItem.number, key: item.workItem.key, mergedFrom: item.workItem.mergedFrom } : null,
+    links: [...(item.links ?? [])],
     settledPlanChanges: settledPlanChanges(timeline),
   };
 }
@@ -623,6 +722,154 @@ export function messageRoutes(
 export async function resolveItem(subject: string): Promise<{ item: Item; repo: RepoRow | null } | null> {
   const trimmed = subject.trim();
   const repoList = await repoStore.listRepos({ includeRemoved: true });
+  // Before the first numbering commits nothing reads the work items as
+  // authoritative, and every item resolves as it did before them. A table
+  // a release behind is the same.
+  if (await (async () => workItemStore.isNumbered())().catch(() => false)) {
+    const asked = parseItemKey(trimmed);
+    const found = await workItemFor(trimmed, asked, repoList);
+    if (found) return withWorkItem(found, asked, repoList);
+    if (asked !== null) return null;
+  }
+  return resolveBySubject(trimmed, repoList);
+}
+
+/** The work item a key or a linked subject names, merges followed; null when it names none. */
+async function workItemFor(subject: string, asked: number | null, repoList: readonly RepoRow[]): Promise<workItemStore.WorkItem | null> {
+  if (asked !== null) return workItemStore.byNumber(asked);
+  const prefix = requestPrefixOf(subject);
+  if (prefix) {
+    const request = await requestStore.findRequestByPrefix(prefix).catch(() => null);
+    return request ? workItemStore.itemOf({ requestId: request.id }) : null;
+  }
+  const parsed = parseRef(subject);
+  const repo = parsed ? repoList.find((one) => one.name === parsed.repo) : undefined;
+  return parsed && repo ? workItemStore.itemOf({ repoId: repo.id, number: parsed.number }) : null;
+}
+
+/**
+ * The item read through its work item: the conversation is its first
+ * issue's, else its request's, else its first pull request's, as before
+ * work items, and its subjects are every link's besides, so the tasks,
+ * threads and costs of a second repository's issue are on it too.
+ */
+async function withWorkItem(
+  workItem: workItemStore.WorkItem,
+  asked: number | null,
+  repoList: readonly RepoRow[],
+): Promise<{ item: Item; repo: RepoRow | null } | null> {
+  const [rows, organization] = await Promise.all([
+    workItemStore.linksOf(workItem.id),
+    settingsStore.getSetting('organization').catch(() => null),
+  ]);
+  const repoName = (id: string | null) => repoList.find((one) => one.id === id)?.name ?? null;
+  const refOf = (link: workItemStore.Link) => (link.kind === 'request' ? requestSubject(link.requestId!) : `${repoName(link.repoId)}#${link.number}`);
+  const first = rows.find((link) => link.kind === 'issue' && repoName(link.repoId)) ?? rows.find((link) => link.kind === 'request') ?? rows.find((link) => repoName(link.repoId));
+  if (!first) return null;
+  // An item with no issue and no request is its pull requests and nothing
+  // else. Resolved through its first pull's subject it took the issue an
+  // issue row records that pull on, even once the pull was unlinked from
+  // that issue's item: the page was issue 12's, and cancel acted on it.
+  const pullOnly = !rows.some((link) => link.kind === 'issue' || link.kind === 'request');
+  const base = pullOnly ? null : await resolveBySubject(refOf(first), repoList);
+  if (!pullOnly && !base) return null;
+
+  const names = [...new Set(rows.map((link) => repoName(link.repoId)).filter((name): name is string => Boolean(name)))];
+  // Only this item's issues: a pull stands with the issue that records it
+  // when that issue is linked here, not with one on another item.
+  const issueRows = (await Promise.all(names.map((name) => issueStore.listIssues(name))))
+    .flat()
+    .filter((issue) => rows.some((link) => link.kind === 'issue' && repoName(link.repoId) === issue.repoName && link.number === issue.number));
+  const requests = await Promise.all(
+    rows.map((link) => (link.kind === 'request' ? requestStore.getRequest(link.requestId!).catch(() => null) : Promise.resolve(null))),
+  );
+  // An issue's pull request whose link a person moved to another item is
+  // that item's work now, not this one's: its tasks and costs are counted
+  // there, as the board counts them.
+  const elsewhere = new Set<string>();
+  for (const issue of issueRows) {
+    if (!issue.prNumber || rows.some((link) => link.kind === 'pull' && repoName(link.repoId) === issue.repoName && link.number === issue.prNumber)) continue;
+    const repo = repoList.find((one) => one.name === issue.repoName);
+    const owner = repo ? await workItemStore.itemOf({ repoId: repo.id, number: issue.prNumber }).catch(() => null) : null;
+    if (owner && owner.id !== workItem.id) elsewhere.add(`${issue.repoName}#${issue.prNumber}`);
+  }
+  const links: ItemLink[] = rows.flatMap((link, index) => {
+    const repo = repoName(link.repoId);
+    if (link.kind !== 'request' && !repo) return [];
+    return [
+      {
+        kind: link.kind,
+        repo,
+        number: link.number,
+        ref: refOf(link),
+        title: link.title,
+        state: link.state,
+        stage: linkStage({ ...link, repo }, issueRows, requests[index]),
+        url: link.url,
+        linkedBy: link.linkedBy,
+      },
+    ];
+  });
+  const linkSubjects = links.flatMap((link) => {
+    const issue = link.kind === 'issue' ? issueRows.find((one) => one.repoName === link.repo && one.number === link.number) : undefined;
+    return issue ? subjectsOf(issue) : [link.ref];
+  });
+  const numbered = {
+    workItem: {
+      id: workItem.id,
+      number: workItem.number,
+      key: itemKey(workItem.number, organization),
+      mergedFrom: asked !== null && asked !== workItem.number ? asked : null,
+    },
+    links,
+  };
+  if (!base) {
+    // A pull request alone on its item: no issue to draw, hold or close, so
+    // its page has no pause, next or cancel, and the control routes refuse
+    // it (`lonePullRefusal`) before any of its work is stopped.
+    const ref = refOf(first);
+    const repo = repoList.find((one) => one.id === first.repoId) ?? null;
+    const item: Item = {
+      key: ref,
+      subjects: [...new Set(linkSubjects)],
+      request: null,
+      requests: [],
+      issue: null,
+      pr: first.number,
+      repo: repo?.name ?? null,
+      refs: { request: null, issue: null, pullRequest: ref },
+      ...numbered,
+    };
+    return { item, repo };
+  }
+  const prElsewhere = base.item.refs.pullRequest !== null && elsewhere.has(base.item.refs.pullRequest);
+  const item: Item = {
+    ...base.item,
+    ...(prElsewhere ? { pr: null, refs: { ...base.item.refs, pullRequest: null } } : {}),
+    subjects: [...new Set([...base.item.subjects, ...linkSubjects])].filter((subject) => !elsewhere.has(subject)),
+    ...numbered,
+  };
+  return { item, repo: base.repo };
+}
+
+/**
+ * Why a pull request alone on its item cannot be held, put next or
+ * cancelled from its page, or null for an item that can. It has no issue to
+ * label or close, as the board refuses to move it; and merged it is live, or
+ * on its way, so it is refused before any of its work is stopped. `merged`
+ * is GitHub's answer, and the link's own state when GitHub could not be asked.
+ */
+export function lonePullRefusal(item: Pick<Item, 'key' | 'issue' | 'request' | 'pr' | 'repo' | 'links'>, merged: boolean | null): string | null {
+  if (item.issue || item.request || item.pr === null) return null;
+  const link = item.links?.find((one) => one.kind === 'pull' && one.repo === item.repo && one.number === item.pr);
+  if (merged ?? link?.state === 'merged') {
+    return `${item.key} has already merged, so it cannot be cancelled. To take the change back, revert its pull request on GitHub`;
+  }
+  return `${item.key} is a pull request with no issue, so it cannot be held, put next or cancelled here; close it on GitHub, or link it to an issue's work item`;
+}
+
+/** An item by the subject of one of its members, as before work items. */
+async function resolveBySubject(trimmed: string, repoList: readonly RepoRow[]): Promise<{ item: Item; repo: RepoRow | null } | null> {
   let requestRows: requestStore.RequestRecord[] = [];
   let ref = trimmed;
 

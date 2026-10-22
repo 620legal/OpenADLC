@@ -3,7 +3,10 @@ import { BRIDGE_NOT_ANSWERING } from '@/lib/reach';
 import {
   answerGate,
   killSession,
+  linkToItem,
+  mergeItem,
   pauseWork,
+  unlinkFromItem,
   releasePromote,
   removeRepository,
   repositoryRemoval,
@@ -338,5 +341,38 @@ describe('restarting a task on a fresh computer', () => {
       ok: false,
       error: 'it was stopped, with its branch kept, but could not be started again: the bot is busy',
     });
+  });
+});
+
+describe('linking, unlinking and merging work items', () => {
+  function recording(status: number, body: unknown) {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push({ url: String(url), method: init.method ?? 'GET', body: init.body ? JSON.parse(String(init.body)) : undefined });
+        return new Response(JSON.stringify(body), { status });
+      }),
+    );
+    return calls;
+  }
+
+  it('links by the bridge’s route, and says where the link came from', async () => {
+    const calls = recording(200, { item: 'acme-128', ref: 'acme/web#7', kind: 'pull', from: 'acme-140' });
+    expect(await linkToItem('acme-128', ' acme/web#7 ')).toEqual({ ok: true, from: 'acme-140' });
+    expect(calls).toEqual([{ url: expect.stringMatching(/\/v1\/items\/acme-128\/links$/), method: 'POST', body: { ref: 'acme/web#7' } }]);
+  });
+
+  it('unlinks with the ref encoded as one segment, and gives the new key', async () => {
+    const calls = recording(200, { item: 'acme-128', ref: 'acme/api#31', key: 'acme-141' });
+    expect(await unlinkFromItem('acme-128', 'acme/api#31')).toEqual({ ok: true, key: 'acme-141' });
+    expect(calls[0]).toMatchObject({ method: 'DELETE', url: expect.stringMatching(/\/v1\/items\/acme-128\/links\/acme%2Fapi%2331$/) });
+  });
+
+  it('merges, and shows the bridge’s refusal in its own words', async () => {
+    recording(200, { item: 'acme-128', into: 'acme-131' });
+    expect(await mergeItem('acme-128', 'W-131')).toEqual({ ok: true, into: 'acme-131' });
+    recording(403, { error: 'this needs an admin' });
+    expect(await mergeItem('acme-128', 'W-131')).toEqual({ ok: false, error: 'this needs an admin' });
   });
 });

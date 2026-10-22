@@ -43,6 +43,12 @@ export interface BoardCard {
   url: string | null;
   labels: string[];
   updatedAt: string;
+  /** Its work item's number and key. Null before the install is numbered; absent from an older bridge. */
+  item?: { number: number; key: string } | null;
+  /** Every repository its work item has a link in, its own first. Absent from an older bridge. */
+  repos?: string[];
+  /** A pull request no issue claims, a card of its own: nothing to move or hold. */
+  pull?: boolean;
   /*
    * What the work on it is, from its tasks. Absent from a bridge older than
    * the redesigned board, which the card reads as nothing known.
@@ -585,10 +591,29 @@ export interface ItemView {
   next?: boolean;
   /** Where a message goes from each tab: `''` for the conversation, else by role. Absent from an older bridge. */
   routes?: Record<string, ItemRoute>;
+  /** Its work item: the key to share, and the number asked for when that item was merged into this one. Null before the install is numbered. */
+  workItem?: { number: number; key: string; mergedFrom: number | null } | null;
+  /** Every issue, pull request and request linked to it, in the order they were linked. */
+  links?: ItemLink[];
   /** Plan changes the designer or a standing approval approved, which a person can still refuse. Absent from an older bridge. */
   settledPlanChanges?: SettledPlanChange[];
   /** Approve all on its issue, while it is on. Absent from an older bridge. */
   standingApproval?: { issueNumber: number; setBy: string; setAt: string } | null;
+}
+
+/** One issue, pull request or request on a work item. */
+export interface ItemLink {
+  kind: 'issue' | 'pull' | 'request';
+  repo: string | null;
+  number: number | null;
+  /** `repo#12` or `request:<id8>`. */
+  ref: string;
+  title: string;
+  state: 'open' | 'closed' | 'merged';
+  stage: string | null;
+  url: string | null;
+  /** Who linked it by hand; null when OpenADLC did. */
+  linkedBy: string | null;
 }
 
 /** A plan change no person approved, as the item lists it. */

@@ -256,6 +256,26 @@ describe('the board’s columns', () => {
   });
 });
 
+describe('a work item on the board', () => {
+  const keyed = (cards: BoardCard[]): Board => ({ ...BOARD, columns: columns(cards) });
+
+  it('says its key on its card, and has a box that finds a card by key or title', () => {
+    const html = render(keyed(WORKING.map((one) => (one.ref === 'openadlc#16' ? { ...one, item: { number: 128, key: 'acme-128' }, repos: ['openadlc'] } : one))));
+    const build = column(html, 'Build');
+    expect(build.slice(0, build.indexOf('#17<'))).toContain('>acme-128</span>');
+    expect(html).toContain('role="search"');
+    expect(html).toContain('placeholder="Find by key or title"');
+  });
+
+  it('offers no move and no hold on a pull request that no issue claims', () => {
+    const pull = card({ ref: 'openadlc#50', stage: 'review', title: 'Fix a typo', pull: true, item: { number: 7, key: 'acme-7' } });
+    const review = column(render(keyed([pull])), 'Review');
+    expect(review).toContain('Fix a typo');
+    expect(review).toContain('>acme-7</span>');
+    expect(review).not.toContain('Move to…');
+  });
+});
+
 describe('a card', () => {
   it('says its number, what it has cost, who is on it and what is happening, in words', () => {
     const build = column(render(), 'Build');

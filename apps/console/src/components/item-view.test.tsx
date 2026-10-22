@@ -5,7 +5,7 @@ import { itemComposer, itemEntries, roleTabs, speakerLabel } from '@/lib/item';
 import { RoleProvider } from './app-header';
 import { ItemView } from './item-view';
 
-vi.mock('@/app/actions', () => ({ sendItemMessage: vi.fn(), answerGate: vi.fn(), retryTask: vi.fn(), sendMessage: vi.fn(), stopTask: vi.fn(), killSession: vi.fn(), restartBot: vi.fn() }));
+vi.mock('@/app/actions', () => ({ linkToItem: vi.fn(), unlinkFromItem: vi.fn(), mergeItem: vi.fn(), sendItemMessage: vi.fn(), answerGate: vi.fn(), retryTask: vi.fn(), sendMessage: vi.fn(), stopTask: vi.fn(), killSession: vi.fn(), restartBot: vi.fn() }));
 
 /**
  * A work item's view: one conversation for the request, its issue and its
@@ -101,6 +101,44 @@ describe('a work item’s view', () => {
 
   it('filters a role’s tab to what was said in that role', () => {
     expect(itemEntries(ITEM, { now: NOW, role: 'review_lead', timeZone: 'UTC' }).filter((entry) => entry.kind === 'bubble').map((entry) => entry.key)).toEqual(['m-2']);
+  });
+});
+
+describe('a work item’s key and links', () => {
+  const NUMBERED: ItemData = {
+    ...ITEM,
+    workItem: { number: 128, key: '620legal-128', mergedFrom: null },
+    links: [
+      { kind: 'request', repo: null, number: null, ref: 'request:a4b02784', title: 'Record which model reviewed', state: 'open', stage: null, url: null, linkedBy: null },
+      { kind: 'issue', repo: 'api', number: 12, ref: 'api#12', title: 'Record the model per review', state: 'open', stage: 'review', url: 'https://github.com/acme/api/issues/12', linkedBy: null },
+      { kind: 'pull', repo: 'web', number: 7, ref: 'web#7', title: 'Show the model on the page', state: 'merged', stage: 'done', url: 'https://github.com/acme/web/pull/7', linkedBy: 'jane@acme.test' },
+    ],
+  };
+
+  it('says the key with a link to copy, and every link with its repository, state and stage', () => {
+    const html = render('user', NUMBERED);
+    expect(html).toMatch(/data-item-key="true"[^>]*>620legal-128<\/span>/);
+    expect(html).toContain('Copy link');
+    const links = html.slice(html.indexOf('aria-label="Linked to this work item"'));
+    expect(links).toContain('data-link="web#7"');
+    expect(links).toContain('Show the model on the page');
+    expect(links).toMatch(/merged · Done · linked by/);
+    expect(links).toMatch(/open · Review/);
+  });
+
+  it('offers Link, Unlink and Merge to an admin only, and no Unlink on a request', () => {
+    const admin = render('admin', NUMBERED);
+    expect(admin).toContain('placeholder="owner/repo#number"');
+    expect(admin).toContain('placeholder="Merge into key"');
+    expect(admin.match(/>Unlink</g)).toHaveLength(2);
+    const user = render('user', NUMBERED);
+    for (const control of ['owner/repo#number', 'Merge into key', '>Unlink<']) expect(user).not.toContain(control);
+  });
+
+  it('shows no key or links before the install is numbered', () => {
+    const html = render('admin', ITEM);
+    expect(html).not.toContain('data-item-key');
+    expect(html).not.toContain('Linked to this work item');
   });
 });
 

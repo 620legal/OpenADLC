@@ -153,11 +153,23 @@ async function newItem(sql: Sql): Promise<WorkItem> {
   return toItem(row);
 }
 
-async function insertLink(sql: Sql, itemId: string, thing: Thing, snapshot: Snapshot, linkedBy: string | null = null): Promise<void> {
+/**
+ * `closedAt` is when a thing first linked already closed was seen so: now,
+ * for a delivery or a person's link; null for history, whose close time
+ * nobody read, so the board falls back to when it opened.
+ */
+async function insertLink(
+  sql: Sql,
+  itemId: string,
+  thing: Thing,
+  snapshot: Snapshot,
+  linkedBy: string | null = null,
+  closedAt: 'now' | null = 'now',
+): Promise<void> {
   const byRequest = 'requestId' in thing;
   await sql.query(
-    `insert into work_item_links (work_item_id, kind, repo_id, number, request_id, linked_by, title, state, url, opened_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    `insert into work_item_links (work_item_id, kind, repo_id, number, request_id, linked_by, title, state, url, opened_at, closed_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     [
       itemId,
       byRequest ? 'request' : thing.kind,
@@ -169,9 +181,21 @@ async function insertLink(sql: Sql, itemId: string, thing: Thing, snapshot: Snap
       snapshot.state,
       snapshot.url,
       snapshot.openedAt,
+      snapshot.state !== 'open' && closedAt === 'now' ? new Date().toISOString() : null,
     ],
   );
 }
+
+/**
+ * A link's close time as its state changes: set when it goes from open to
+ * closed or merged, cleared when it reopens, kept otherwise. `$3` is the new
+ * state; a merged link stays merged, as the `state` beside it says.
+ */
+const CLOSED_AT = `closed_at = case
+             when state = 'merged' then closed_at
+             when $3 = 'open' then null
+             when state = 'open' then now()
+             else closed_at end`;
 
 /**
  * An item whose last link moved away keeps its row and its number, and points
@@ -237,6 +261,7 @@ export async function ensureLink(thing: Thing, snapshot: Snapshot, claim: string
            title = $2,
            state = case when state = 'merged' then state else $3 end,
            url = coalesce($4, url),
+           ${CLOSED_AT},
            seen_at = now()
          where id = $1`,
         [link.id, snapshot.title, snapshot.state, snapshot.url],
@@ -461,7 +486,7 @@ export async function numberPending(plan: Plan): Promise<{ items: number; links:
           state: member.state,
           url: member.kind === 'request' ? null : member.url,
           openedAt: member.openedAt,
-        });
+        }, null, null);
         links += 1;
       }
       // Requests numbered live, filed as one issue while its repository was
@@ -478,6 +503,161 @@ export async function numberPending(plan: Plan): Promise<{ items: number; links:
        on conflict ((repo_id is null)) where repo_id is null do update set numbered_at = coalesce(work_item_backfill.numbered_at, excluded.numbered_at)`,
     );
     return { items, links, repos: ready };
+  });
+}
+
+/** A link as the board and an item's page read it. */
+export interface Link {
+  /** The order things were linked in: an item's first issue is its lowest. */
+  id: number;
+  itemId: string;
+  /** The item's number, when read with every link (`allLinks`). */
+  itemNumber?: number;
+  kind: 'issue' | 'pull' | 'request';
+  repoId: string | null;
+  number: number | null;
+  requestId: string | null;
+  linkedBy: string | null;
+  title: string;
+  state: LinkState;
+  url: string | null;
+  openedAt: string;
+  /** When it was last seen to close or merge; null while open, or when nobody saw it close (history). */
+  closedAt: string | null;
+}
+
+interface FullLinkRow {
+  id: string | number;
+  work_item_id: string;
+  item_number?: string | number;
+  kind: 'issue' | 'pull' | 'request';
+  repo_id: string | null;
+  number: number | null;
+  request_id: string | null;
+  linked_by: string | null;
+  title: string;
+  state: string;
+  url: string | null;
+  opened_at: Date | string;
+  closed_at: Date | string | null;
+}
+
+const isoOf = (at: Date | string): string => (at instanceof Date ? at.toISOString() : String(at));
+
+function toLink(row: FullLinkRow): Link {
+  return {
+    id: Number(row.id),
+    itemId: row.work_item_id,
+    ...(row.item_number !== undefined ? { itemNumber: Number(row.item_number) } : {}),
+    kind: row.kind,
+    repoId: row.repo_id,
+    number: row.number === null ? null : Number(row.number),
+    requestId: row.request_id,
+    linkedBy: row.linked_by,
+    title: row.title,
+    state: asState(row.state),
+    url: row.url,
+    openedAt: isoOf(row.opened_at),
+    closedAt: row.closed_at === null || row.closed_at === undefined ? null : isoOf(row.closed_at),
+  };
+}
+
+const LINK_COLUMNS = 'l.id, l.work_item_id, l.kind, l.repo_id, l.number, l.request_id, l.linked_by, l.title, l.state, l.url, l.opened_at, l.closed_at';
+
+/** The item numbered `number`, or the one it was merged into; null for a number never handed out. */
+export async function byNumber(number: number): Promise<WorkItem | null> {
+  const row = await queryOne<ItemRow>('select id, number, merged_into from work_items where number = $1', [number]);
+  return row ? resolve(pool, row.id) : null;
+}
+
+/** An item's links, in the order they were linked. */
+export async function linksOf(itemId: string): Promise<Link[]> {
+  const rows = await query<FullLinkRow>(`select ${LINK_COLUMNS} from work_item_links l where l.work_item_id = $1 order by l.id`, [itemId]);
+  return rows.map(toLink);
+}
+
+/**
+ * Every link, with its item's number, in the order they were linked: what
+ * the board groups its cards by. A link is always on an item not merged
+ * away, since a merge and an emptying move the links with them.
+ */
+export async function allLinks(): Promise<Link[]> {
+  const rows = await query<FullLinkRow>(
+    `select ${LINK_COLUMNS}, w.number as item_number from work_item_links l join work_items w on w.id = l.work_item_id order by l.id`,
+  );
+  return rows.map(toLink);
+}
+
+/**
+ * A person links a thing to an item. One linked elsewhere moves, whoever
+ * linked it, and the item it left, if now empty, points here. The link is
+ * theirs afterwards (`linked_by`): no automatic pass moves it back. The item
+ * it came from, or null for a thing with no link before.
+ */
+export async function linkByHand(itemId: string, thing: Thing, snapshot: Snapshot, by: string): Promise<{ item: WorkItem; from: WorkItem | null }> {
+  return locked(undefined, async (sql) => {
+    const item = await resolve(sql, itemId);
+    if (!item) throw new Error(`work item ${itemId} does not exist`);
+    const link = await linkOf(sql, thing);
+    if (!link) {
+      await insertLink(sql, item.id, thing, snapshot, by);
+      return { item, from: null };
+    }
+    const from = await resolve(sql, link.work_item_id);
+    // The snapshot the route just read from GitHub, refreshed as `ensureLink`
+    // refreshes it: a pull merged since its last delivery stayed in Review.
+    await sql.query(
+      `update work_item_links set
+         title = $2,
+         state = case when state = 'merged' then state else $3 end,
+         url = coalesce($4, url),
+         ${CLOSED_AT},
+         work_item_id = $5,
+         linked_by = $6,
+         seen_at = now()
+       where id = $1`,
+      [link.id, snapshot.title, snapshot.state, snapshot.url, item.id, by],
+    );
+    if (from && from.id !== item.id) await settleEmptied(sql, from.id, item.id);
+    return { item, from };
+  });
+}
+
+/**
+ * A person takes a thing out of an item: it gets a new item of its own,
+ * which it keeps (`linked_by`) against any automatic pass. Refused (null)
+ * when it is not linked to `itemId`, and refused with `only` when it is the
+ * item's one link: an item is never left empty by hand, it is merged.
+ */
+export async function unlinkByHand(itemId: string, thing: ThingRef, by: string): Promise<WorkItem | 'only' | null> {
+  return locked(undefined, async (sql) => {
+    const item = await resolve(sql, itemId);
+    const link = await linkOf(sql, thing);
+    if (!item || !link) return null;
+    const current = await resolve(sql, link.work_item_id);
+    if (current?.id !== item.id) return null;
+    const left = await one<{ links: number }>(sql, 'select count(*)::int as links from work_item_links where work_item_id = $1', [item.id]);
+    if (Number(left?.links ?? 0) <= 1) return 'only';
+    const fresh = await newItem(sql);
+    await sql.query('update work_item_links set work_item_id = $2, linked_by = $3 where id = $1', [link.id, fresh.id, by]);
+    return fresh;
+  });
+}
+
+/**
+ * A person merges one item into another: every link moves, and `from`
+ * points at `into`, so its key still resolves. Unlike `mergeInto`, nothing
+ * is refused: two issues in one item, or a person's links, are theirs to
+ * put together. Null when either is missing or they are one item already.
+ */
+export async function mergeByHand(from: string, into: string): Promise<WorkItem | null> {
+  return locked(undefined, async (sql) => {
+    const source = await resolve(sql, from);
+    const target = await resolve(sql, into);
+    if (!source || !target || source.id === target.id) return null;
+    await sql.query('update work_item_links set work_item_id = $2 where work_item_id = $1', [source.id, target.id]);
+    await sql.query('update work_items set merged_into = $2 where id = $1', [source.id, target.id]);
+    return target;
   });
 }
 
