@@ -233,8 +233,17 @@ export async function linkPull(
     baseRef: pull.baseRef,
     closes: keywordCloses(pull),
   };
-  const claiming = options.reclaim || !(await workItems.itemOf({ repoId: repo.id, number: pull.number }));
-  if (!claiming || !(await workItems.isNumbered())) return workItems.ensureLink(thing, snapshot, null);
+  const linked = await workItems.itemOf({ repoId: repo.id, number: pull.number });
+  if (!(await workItems.isNumbered())) return workItems.ensureLink(thing, snapshot, null);
+  if (linked && !options.reclaim) {
+    // Its branch's issue, once that has an item, wins over whatever it was
+    // given before: a pull request delivered before its issue was seen took
+    // an item of its own, and kept it until it was edited or reopened. This
+    // reads only the database, so it runs on every delivery.
+    const own = headInRepository(pull.headRepoFullName, pull.repoFullName) ? issueNumberFromBranch(pull.headRef) : null;
+    const ownItem = own !== null ? await workItems.itemOf({ repoId: repo.id, number: own }) : null;
+    return workItems.ensureLink(thing, snapshot, ownItem?.id ?? null);
+  }
   const closing = options.client
     ? await options.client.closingIssueRefs(pull.repoFullName, pull.number).catch((error: unknown) => {
         console.warn(
@@ -267,9 +276,24 @@ export async function linkFiled(
   const requestItem = await workItems.itemOf({ requestId: request.id });
   const known = await workItems.itemOf({ repoId: repo.id, number: issue.number });
   const issueItem = await linkIssue(repo, issue, false, known ? null : (requestItem?.id ?? null));
+  if (requestItem && !issueItem) return joinFiledBefore(request, repo, issue.number, requestItem);
   if (!requestItem || !issueItem || requestItem.id === issueItem.id) return issueItem ?? requestItem;
   const [into, from] = requestItem.number < issueItem.number ? [requestItem, issueItem] : [issueItem, requestItem];
   return (await workItems.mergeInto(from.id, into.id)) ? into : issueItem;
+}
+
+/**
+ * A request filed as an issue that has no item yet, its repository's history
+ * not numbered: the issue cannot carry the number until it is, so a second
+ * request filed as it kept the item it drew at create, and the two requests
+ * stayed on two numbers. It joins the earlier request's item now, the lower
+ * number kept, and the history numbering puts the issue there.
+ */
+async function joinFiledBefore(request: { id: string }, repo: { id: string }, issueNumber: number, requestItem: WorkItem): Promise<WorkItem> {
+  const first = await workItems.firstFiledItem(repo.id, issueNumber, request.id);
+  if (!first || first.id === requestItem.id) return requestItem;
+  const [into, from] = first.number < requestItem.number ? [first, requestItem] : [requestItem, first];
+  return (await workItems.mergeInto(from.id, into.id)) ? into : requestItem;
 }
 
 /** The repositories whose things are numbered live: their history has been numbered. */
@@ -305,7 +329,11 @@ export async function linkListed(
     return;
   }
   const thing = { repoId: repo.id, number: entry.number, kind: 'pull' as const };
-  if (await workItems.itemOf(thing)) {
+  // One linked already is refreshed from the listing, unless it is open and
+  // still alone, on an item of its own: its branch's issue may have been
+  // seen since, and nothing else would move it there without a delivery.
+  // The listing has no branch, so only that one is read in full.
+  if ((await workItems.itemOf(thing)) && !(entry.state === 'open' && (await workItems.standsAlone(thing)))) {
     await workItems.ensureLink(thing, { title: entry.title, state: entry.state, url: entry.htmlUrl, openedAt: entry.createdAt }, null);
     return;
   }

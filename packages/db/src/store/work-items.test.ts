@@ -189,6 +189,20 @@ const db = vi.hoisted(() => {
         else s.backfill.push({ id: s.backfill.length + 1, repo_id: null, issues_page: 1, pulls_page: 1, read_at: null, numbered_at: new Date(), caught_up_at: null, last_error: null });
         return { rows: [] };
       }
+      if (/^select l\.work_item_id from requests q join work_item_links l on l\.request_id = q\.id/.test(text)) {
+        const first = s.requests
+          .filter((request) => request.repo_id === p[0] && request.issue_number === p[1] && request.id !== p[2])
+          .sort((a, b) => a.created_at.getTime() - b.created_at.getTime() || a.id.localeCompare(b.id))
+          .map((request) => s.links.find((link) => link.request_id === request.id))
+          .find(Boolean);
+        return { rows: first ? [{ work_item_id: first.work_item_id }] : [] };
+      }
+      if (/^select l\.kind = 'pull' and l\.linked_by is null/.test(text)) {
+        const link = s.links.find((one) => one.repo_id === p[0] && one.number === p[1]);
+        if (!link) return { rows: [] };
+        const alone = link.kind === 'pull' && link.linked_by === null && !s.links.some((other) => other.work_item_id === link.work_item_id && other.kind === 'issue');
+        return { rows: [{ alone }] };
+      }
       throw new Error(`the fake database does not know: ${text}`);
     },
     async transaction<T>(fn: (client: { query: (text: string, params?: unknown[]) => Promise<{ rows: unknown[] }> }) => Promise<T>): Promise<T> {
@@ -217,12 +231,14 @@ vi.mock('../client.js', () => ({
 import { withTransaction } from '../client.js';
 import {
   ensureLink,
+  firstFiledItem,
   isNumbered,
   itemOf,
   markRead,
   mergeInto,
   numberPending,
   saveBackfillPage,
+  standsAlone,
   startBackfill,
   type Pending,
   type Plan,
@@ -335,6 +351,76 @@ describe('merging two items', () => {
     db.state.links.find((link) => link.request_id === 'req-1')!.linked_by = 'alex';
     expect(await mergeInto(request!.id, a!.id)).toBe(false);
     expect(db.state.items.every((item) => item.merged_into === null)).toBe(true);
+  });
+});
+
+describe('a repository added after the first numbering', () => {
+  const LATER = 'repo-later';
+  /** Every request with an item already, and the issue they were filed as, in one group: as the bridge's plan groups them. */
+  const together: Plan = (pending) => {
+    const earliest = pending
+      .filter((member): member is Extract<Pending, { kind: 'request' }> => member.kind === 'request' && member.itemId !== null)
+      .sort((a, b) => a.openedAt.localeCompare(b.openedAt))[0];
+    return [{ members: pending, claim: earliest?.itemId ?? null }];
+  };
+
+  beforeEach(() => {
+    numbered();
+    db.state.repos.push({ id: LATER, full_name: 'acme/later' });
+  });
+
+  it('puts two requests numbered live and filed as one of its issues on the earlier request’s item when it is numbered', async () => {
+    const first = await ensureLink({ requestId: 'req-1' }, snap('first'), null);
+    const second = await ensureLink({ requestId: 'req-2' }, snap('second'), null);
+    db.state.requests.push(
+      { id: 'req-1', repo_id: LATER, issue_number: 4, text: 'first', state: 'filed', created_at: new Date('2026-10-01T00:00:00.000Z') },
+      { id: 'req-2', repo_id: LATER, issue_number: 4, text: 'second', state: 'filed', created_at: new Date('2026-10-02T00:00:00.000Z') },
+    );
+    expect((await firstFiledItem(LATER, 4, 'req-2'))?.id).toBe(first!.id);
+    await startBackfill(LATER);
+    await saveBackfillPage(LATER, 'issues', 2, [{ number: 4, kind: 'issue', title: '#4', state: 'open', url: 'u4', openedAt: '2026-10-01T00:00:00.000Z' }]);
+    await markRead(LATER);
+
+    await numberPending(together);
+    expect((await itemOf({ requestId: 'req-1' }))?.id).toBe(first!.id);
+    expect((await itemOf({ requestId: 'req-2' }))?.id).toBe(first!.id);
+    expect((await itemOf({ repoId: LATER, number: 4 }))?.id).toBe(first!.id);
+    // The later request's item keeps its number, and points where it went.
+    expect(db.state.items.find((one) => one.id === second!.id)).toMatchObject({ number: 2, merged_into: first!.id });
+  });
+
+  it('leaves a request a person linked where they put it', async () => {
+    const first = await ensureLink({ requestId: 'req-1' }, snap('first'), null);
+    const second = await ensureLink({ requestId: 'req-2' }, snap('second'), null);
+    db.state.links.find((link) => link.request_id === 'req-2')!.linked_by = 'alex';
+    db.state.requests.push(
+      { id: 'req-1', repo_id: LATER, issue_number: 4, text: 'first', state: 'filed', created_at: new Date('2026-10-01T00:00:00.000Z') },
+      { id: 'req-2', repo_id: LATER, issue_number: 4, text: 'second', state: 'filed', created_at: new Date('2026-10-02T00:00:00.000Z') },
+    );
+    await startBackfill(LATER);
+    await saveBackfillPage(LATER, 'issues', 2, [{ number: 4, kind: 'issue', title: '#4', state: 'open', url: 'u4', openedAt: '2026-10-01T00:00:00.000Z' }]);
+    await markRead(LATER);
+
+    await numberPending(together);
+    expect((await itemOf({ repoId: LATER, number: 4 }))?.id).toBe(first!.id);
+    expect((await itemOf({ requestId: 'req-2' }))?.id).toBe(second!.id);
+  });
+});
+
+describe('a pull request standing alone', () => {
+  beforeEach(numbered);
+
+  it('is one whose automatic link is on an item with no issue', async () => {
+    await ensureLink({ repoId: REPO, number: 9, kind: 'pull' }, snap('pr'), null);
+    expect(await standsAlone({ repoId: REPO, number: 9 })).toBe(true);
+
+    const issue = await ensureLink({ repoId: REPO, number: 5, kind: 'issue' }, snap('#5'), null);
+    await ensureLink({ repoId: REPO, number: 10, kind: 'pull' }, snap('pr'), issue!.id);
+    expect(await standsAlone({ repoId: REPO, number: 10 })).toBe(false);
+
+    db.state.links.find((link) => link.number === 9)!.linked_by = 'alex';
+    expect(await standsAlone({ repoId: REPO, number: 9 })).toBe(false);
+    expect(await standsAlone({ repoId: REPO, number: 99 })).toBe(false);
   });
 });
 

@@ -63,11 +63,13 @@ export class WorkItemBackfill {
         await this.read(client, repo, state);
       } catch (error) {
         // A rate limit or anything else: kept for the next run, which
-        // resumes at the page saved, and this run ends here.
+        // resumes at the page saved. The reading stops here, and the
+        // catch-up below still runs: returning let a repository added later,
+        // rate-limited page after page, hold every numbered repository's.
         const reason = error instanceof Error ? error.message : String(error);
         await workItems.recordBackfillError(repo.id, reason);
         console.warn(`[bridge] work items: reading ${repo.fullName}'s history stopped, and resumes on the next run: ${reason}`);
-        return;
+        break;
       }
     }
 
@@ -87,8 +89,7 @@ export class WorkItemBackfill {
       const state = states.find((one) => one.repoId === repo.id);
       if (!state?.numberedAt || this.caughtUp.has(repo.id)) continue;
       try {
-        await this.catchUp(client, repo, state.caughtUpAt ?? state.numberedAt);
-        this.caughtUp.add(repo.id);
+        if (await this.catchUp(client, repo, state.caughtUpAt ?? state.numberedAt)) this.caughtUp.add(repo.id);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         await workItems.recordBackfillError(repo.id, reason);
@@ -133,15 +134,35 @@ export class WorkItemBackfill {
     await workItems.markRead(repo.id);
   }
 
-  /** What changed since `since` in a numbered repository, linked: deliveries lost while the bridge was down. */
-  private async catchUp(client: Reader, repo: { id: string; fullName: string; defaultBranch: string }, since: string): Promise<void> {
+  /**
+   * What changed since `since` in a numbered repository, linked: deliveries
+   * lost while the bridge was down. Whether it read to the end.
+   *
+   * The listing is oldest update first, so a read cut off at `MOST_PAGES`
+   * leaves out the newest: what was opened or closed while the bridge was
+   * down. Stamping the run's start recorded that as read, and once the tail
+   * was older than the slack no catch-up asked for it again. A read cut off
+   * records only as far as it got, the last entry's update, and the next run
+   * goes on from there.
+   */
+  private async catchUp(client: Reader, repo: { id: string; fullName: string; defaultBranch: string }, since: string): Promise<boolean> {
     const started = new Date();
     const from = new Date(Date.parse(since) - SINCE_SLACK_MS).toISOString();
+    let reached = from;
     for (let page = 1; page <= MOST_PAGES; page += 1) {
       const listed = await client.listIssues(repo.fullName, { state: 'all', since: from, sort: 'updated', direction: 'asc', perPage: PAGE, page });
       for (const entry of listed) await linkListed(repo, entry, client);
-      if (listed.length < PAGE) break;
+      if (listed.length < PAGE) {
+        await workItems.markCaughtUp(repo.id, started.toISOString());
+        return true;
+      }
+      reached = listed[listed.length - 1]!.updatedAt;
     }
-    await workItems.markCaughtUp(repo.id, started.toISOString());
+    // The next run takes the slack off again, so it asks from exactly the
+    // last update read: `since` counts that instant in, and what it reads
+    // twice is only refreshed.
+    await workItems.markCaughtUp(repo.id, new Date(Date.parse(reached) + SINCE_SLACK_MS).toISOString());
+    console.log(`[bridge] work items: caught ${repo.fullName} up as far as ${reached} in ${MOST_PAGES} pages; the next run goes on from there`);
+    return false;
   }
 }

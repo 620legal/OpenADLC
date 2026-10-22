@@ -132,6 +132,20 @@ export async function itemOf(thing: ThingRef, client?: Sql): Promise<WorkItem | 
   return link ? resolve(sql, link.work_item_id) : null;
 }
 
+/**
+ * Whether a pull request's link is automatic and its item holds no issue:
+ * the one whose claim can still change, once its branch's issue has an item.
+ */
+export async function standsAlone(thing: { repoId: string; number: number }): Promise<boolean> {
+  const row = await queryOne<{ alone: boolean }>(
+    `select l.kind = 'pull' and l.linked_by is null
+            and not exists (select 1 from work_item_links o where o.work_item_id = l.work_item_id and o.kind = 'issue') as alone
+       from work_item_links l where l.repo_id = $1 and l.number = $2`,
+    [thing.repoId, thing.number],
+  );
+  return Boolean(row?.alone);
+}
+
 /** A new item, with the next number. `nextval` never rolls back, so a number drawn by a transaction that failed is skipped, never handed out. */
 async function newItem(sql: Sql): Promise<WorkItem> {
   const row = await one<ItemRow>(sql, `insert into work_items (number) values (nextval('work_item_number_seq')) returning id, number, merged_into`, []);
@@ -249,25 +263,43 @@ export async function ensureLink(thing: Thing, snapshot: Snapshot, claim: string
  * issue that already had an item of its own.
  */
 export async function mergeInto(from: string, into: string, client?: Sql): Promise<boolean> {
-  return locked(client, async (sql) => {
-    const source = await resolve(sql, from);
-    const target = await resolve(sql, into);
-    if (!source || !target) return false;
-    if (source.id === target.id) return true;
-    const held = async (id: string) =>
-      (await one<{ issues: number; by_hand: number }>(
-        sql,
-        `select count(*) filter (where kind = 'issue')::int as issues, count(*) filter (where linked_by is not null)::int as by_hand
-         from work_item_links where work_item_id = $1`,
-        [id],
-      )) ?? { issues: 0, by_hand: 0 };
-    const [a, b] = [await held(source.id), await held(target.id)];
-    if (Number(a.by_hand) > 0) return false;
-    if (Number(a.issues) > 0 && Number(b.issues) > 0) return false;
-    await sql.query('update work_item_links set work_item_id = $2 where work_item_id = $1', [source.id, target.id]);
-    await sql.query('update work_items set merged_into = $2 where id = $1', [source.id, target.id]);
-    return true;
-  });
+  return locked(client, (sql) => merge(sql, from, into));
+}
+
+/** `mergeInto`, under the lock its caller holds. */
+async function merge(sql: Sql, from: string, into: string): Promise<boolean> {
+  const source = await resolve(sql, from);
+  const target = await resolve(sql, into);
+  if (!source || !target) return false;
+  if (source.id === target.id) return true;
+  const held = async (id: string) =>
+    (await one<{ issues: number; by_hand: number }>(
+      sql,
+      `select count(*) filter (where kind = 'issue')::int as issues, count(*) filter (where linked_by is not null)::int as by_hand
+       from work_item_links where work_item_id = $1`,
+      [id],
+    )) ?? { issues: 0, by_hand: 0 };
+  const [a, b] = [await held(source.id), await held(target.id)];
+  if (Number(a.by_hand) > 0) return false;
+  if (Number(a.issues) > 0 && Number(b.issues) > 0) return false;
+  await sql.query('update work_item_links set work_item_id = $2 where work_item_id = $1', [source.id, target.id]);
+  await sql.query('update work_items set merged_into = $2 where id = $1', [source.id, target.id]);
+  return true;
+}
+
+/**
+ * The item of the earliest request filed as an issue, other than `except`:
+ * what a later request filed as the same issue joins while the issue itself
+ * has no item, its repository not numbered yet. Null when there is none.
+ */
+export async function firstFiledItem(repoId: string, issueNumber: number, except: string): Promise<WorkItem | null> {
+  const row = await queryOne<{ work_item_id: string }>(
+    `select l.work_item_id from requests q join work_item_links l on l.request_id = q.id
+      where q.repo_id = $1 and q.issue_number = $2 and q.id <> $3
+      order by q.created_at, q.id limit 1`,
+    [repoId, issueNumber, except],
+  );
+  return row ? resolve(pool, row.work_item_id) : null;
 }
 
 /** Something without a link yet, as the history numbering sees it. */
@@ -417,7 +449,8 @@ export async function numberPending(plan: Plan): Promise<{ items: number; links:
     let links = 0;
     for (const group of plan(pending, linked)) {
       const unlinked = group.members.filter((member) => member.kind !== 'request' || !member.itemId);
-      if (unlinked.length === 0) continue;
+      const numbered = group.members.flatMap((member) => (member.kind === 'request' && member.itemId ? [member.itemId] : []));
+      if (unlinked.length === 0 && numbered.length < 2) continue;
       const claimed = group.claim ? await resolve(sql, group.claim) : null;
       const item = claimed ?? (await newItem(sql));
       if (!claimed) items += 1;
@@ -431,6 +464,12 @@ export async function numberPending(plan: Plan): Promise<{ items: number; links:
         });
         links += 1;
       }
+      // Requests numbered live, filed as one issue while its repository was
+      // still being read: each had drawn an item of its own at create, and
+      // only the issue joined the earliest's, leaving the later requests on
+      // numbers of their own. They join the group's item, on `mergeInto`'s
+      // terms: never a person's link moved, never two issues in one item.
+      for (const itemId of numbered) await merge(sql, itemId, item.id);
     }
     await sql.query('delete from work_item_backfill_rows where repo_id = any($1::uuid[])', [ready]);
     await sql.query('update work_item_backfill set numbered_at = now() where repo_id = any($1::uuid[])', [ready]);

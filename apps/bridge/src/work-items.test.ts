@@ -7,11 +7,13 @@ vi.mock('@openadlc/db', () => ({
     itemOf: vi.fn(async () => null),
     isNumbered: vi.fn(async () => true),
     mergeInto: vi.fn(async () => true),
+    firstFiledItem: vi.fn(async () => null),
+    standsAlone: vi.fn(async () => false),
   },
 }));
 
 import { repos, workItems, type WorkItem } from '@openadlc/db';
-import { claimForPull, formatKey, linkFiled, linkPull, parseKey, planBackfill, type PullFacts, type PullSighting } from './work-items.js';
+import { claimForPull, formatKey, linkFiled, linkListed, linkPull, parseKey, planBackfill, type PullFacts, type PullSighting } from './work-items.js';
 
 const APP = 'acme/app';
 const item = (number: number): WorkItem => ({ id: `item-${number}`, number, mergedInto: null });
@@ -129,7 +131,24 @@ describe('linking', () => {
     vi.mocked(workItems.itemOf).mockReset().mockResolvedValue(null);
     vi.mocked(workItems.mergeInto).mockReset().mockResolvedValue(true);
     vi.mocked(workItems.isNumbered).mockReset().mockResolvedValue(true);
+    vi.mocked(workItems.firstFiledItem).mockReset().mockResolvedValue(null);
+    vi.mocked(workItems.standsAlone).mockReset().mockResolvedValue(false);
     vi.mocked(repos.listRepos).mockResolvedValue([{ id: 'r1', fullName: APP }] as never);
+  });
+
+  it('puts a second request filed as an issue whose repository is not numbered yet in the earlier request’s item', async () => {
+    // The request has item 6; the issue none, and none drawn: its repository's history is still being read.
+    vi.mocked(workItems.itemOf).mockResolvedValueOnce(item(6)).mockResolvedValueOnce(null);
+    vi.mocked(workItems.firstFiledItem).mockResolvedValueOnce(item(3));
+    expect(await linkFiled({ id: 'req-2' }, { id: 'r1' }, { number: 12, title: 'x', htmlUrl: 'u' })).toEqual(item(3));
+    expect(workItems.firstFiledItem).toHaveBeenCalledWith('r1', 12, 'req-2');
+    expect(workItems.mergeInto).toHaveBeenCalledWith('item-6', 'item-3');
+  });
+
+  it('leaves the first request filed as an issue whose repository is not numbered yet on its own item', async () => {
+    vi.mocked(workItems.itemOf).mockResolvedValueOnce(item(3)).mockResolvedValueOnce(null);
+    expect(await linkFiled({ id: 'req-1' }, { id: 'r1' }, { number: 12, title: 'x', htmlUrl: 'u' })).toEqual(item(3));
+    expect(workItems.mergeInto).not.toHaveBeenCalled();
   });
 
   it('puts a filed issue in the request’s item when the filing comes before its delivery, drawing no number', async () => {
@@ -184,5 +203,42 @@ describe('linking', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     await linkPull({ id: 'r1' }, sighting({ body: 'Closes #5' }), { reclaim: true, client });
     expect(vi.mocked(workItems.ensureLink).mock.calls[0]?.[2]).toBe('item-2');
+  });
+
+  it('moves a known pull request to its branch’s issue once that has an item, on any delivery, without asking GitHub', async () => {
+    const client = { closingIssueRefs: vi.fn(async () => []) };
+    // Delivered before #12 was seen, it took item 9 of its own; #12 now has item 5.
+    vi.mocked(workItems.itemOf).mockImplementation(async (thing) => ('number' in thing ? (thing.number === 12 ? item(5) : item(9)) : null));
+    await linkPull({ id: 'r1' }, sighting({ headRef: 'agent/builder/12-dark-mode' }), { reclaim: false, client });
+    expect(vi.mocked(workItems.ensureLink).mock.calls[0]?.[2]).toBe('item-5');
+    expect(client.closingIssueRefs).not.toHaveBeenCalled();
+
+    // A fork's branch named the same is not #12's.
+    await linkPull({ id: 'r1' }, sighting({ headRef: 'agent/builder/12-dark-mode', headRepoFullName: 'stranger/app' }), { reclaim: false, client });
+    expect(vi.mocked(workItems.ensureLink).mock.calls[1]?.[2]).toBeNull();
+  });
+
+  it('has the sweep read in full an open pull request still alone on its own item, and only that one', async () => {
+    const client = {
+      getPullRequest: vi.fn(async () => ({ headRef: 'agent/builder/12-dark-mode', headRepoFullName: APP, baseRef: 'main', state: 'open', merged: false })),
+      closingIssueRefs: vi.fn(async () => []),
+    };
+    vi.mocked(workItems.itemOf).mockImplementation(async (thing) => ('number' in thing ? (thing.number === 12 ? item(5) : item(9)) : null));
+    const listed = { number: 40, title: 'Add a dark mode', body: null, htmlUrl: 'u', pullRequest: true, state: 'open' as const, createdAt: at(1) };
+    const repo = { id: 'r1', fullName: APP, defaultBranch: 'main' };
+
+    await linkListed(repo, listed, client as never);
+    expect(client.getPullRequest).not.toHaveBeenCalled();
+    expect(vi.mocked(workItems.ensureLink).mock.calls[0]?.[2]).toBeNull();
+
+    vi.mocked(workItems.standsAlone).mockResolvedValue(true);
+    await linkListed(repo, listed, client as never);
+    expect(client.getPullRequest).toHaveBeenCalledWith(APP, 40);
+    expect(vi.mocked(workItems.ensureLink).mock.calls[1]?.[2]).toBe('item-5');
+
+    // Closed, it is only refreshed.
+    client.getPullRequest.mockClear();
+    await linkListed(repo, { ...listed, state: 'closed' }, client as never);
+    expect(client.getPullRequest).not.toHaveBeenCalled();
   });
 });

@@ -58,12 +58,21 @@ The person's choices on #27:
 - **Automatic links.** A request gets its item when it is created, in the same
   transaction. The issue intake files from it joins that item: an issue that
   had an item of its own first is merged into the request's, and a second
-  request filed into the same issue is merged into the first one's. A pull
-  request joins its branch's issue (`ownIssueOf`; a person's in-repository
-  branch counts, a fork's never does). Failing that, it joins the
-  lowest-numbered item among the issues it closes; failing both, it gets an
-  item of its own. Its claim is worked out again when it opens, is reopened,
-  is edited or is marked ready. An issue nothing claims gets its own item.
+  request filed into the same issue is merged into the first one's. That holds
+  in a repository whose history is still being read too: the later request
+  joins the first one's item at filing, and the numbering puts the issue
+  there. A pull request joins its branch's issue (`ownIssueOf`; a person's
+  in-repository branch counts, a fork's never does). Failing that, it joins
+  the lowest-numbered item among the issues it closes; failing both, it gets
+  an item of its own. Its claim is worked out again when it opens, is
+  reopened, is edited or is marked ready. On any other delivery, and in the
+  sweep for an open one still alone on its own item, it moves to its branch's
+  issue once that has an item. An issue nothing claims gets its own item.
+- **Catching up only records what it read.** At each start, the bridge lists
+  what changed in each numbered repository since its last catch-up, oldest
+  update first, fifty pages at most. A read cut off there records the last
+  update it read, and the next run goes on from it. A repository whose
+  history read fails does not hold the others' catch-up.
 - **Automatic linking never overrides a person.** A link with `linked_by` set
   is never moved. Automatic linking never merges two items that each hold an
   issue, and never moves an issue's link.

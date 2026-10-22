@@ -94,6 +94,8 @@ vi.mock('@openadlc/db', () => ({
       WORK.links.set(key, item);
       return item;
     }),
+    // No pull request here waits on its branch's issue.
+    standsAlone: vi.fn(async () => false),
   },
 }));
 

@@ -112,7 +112,17 @@ const day = (n: number) => new Date(Date.UTC(2025, 0, 1) + n * 86_400_000).toISO
  * A GitHub with a history to read. Anything but the four reads it answers is
  * recorded and refused: the read never writes.
  */
-function github(history: Record<string, { issues: { number: number; createdAt: string }[]; pulls: { number: number; createdAt: string; headRef?: string; body?: string; merged?: boolean }[] }>) {
+function github(
+  history: Record<
+    string,
+    {
+      issues: { number: number; createdAt: string }[];
+      pulls: { number: number; createdAt: string; headRef?: string; body?: string; merged?: boolean }[];
+      /** What a catch-up's `since` listing finds, oldest update first. */
+      updates?: { number: number; updatedAt: string }[];
+    }
+  >,
+) {
   const asked: string[] = [];
   const refused: string[] = [];
   const failing = new Set<string>();
@@ -125,7 +135,13 @@ function github(history: Record<string, { issues: { number: number; createdAt: s
     listIssues: vi.fn(async (repo: string, params: { page?: number; perPage?: number; direction?: string; since?: string }) => {
       asked.push(`${repo} issues ${params.page ?? 1}${params.since ? ' since' : ''}`);
       if (failing.has(`${repo} issues ${params.page}`)) throw Object.assign(new Error('API rate limit exceeded'), { status: 403 });
-      if (params.since) return [];
+      if (params.since) {
+        const since = params.since;
+        return page((history[repo]!.updates ?? []).filter((entry) => entry.updatedAt >= since), params).map((entry) => ({
+          number: entry.number, title: `#${entry.number}`, body: null, labels: [], htmlUrl: `https://github.com/${repo}/issues/${entry.number}`,
+          pullRequest: false, state: 'open' as const, createdAt: entry.updatedAt, updatedAt: entry.updatedAt, author: null, association: null,
+        }));
+      }
       expect(params.direction).toBe('asc');
       return page(history[repo]!.issues, params).map((issue) => ({
         number: issue.number, title: `#${issue.number}`, body: null, labels: [], htmlUrl: `https://github.com/${repo}/issues/${issue.number}`,
@@ -235,5 +251,59 @@ describe('the history read of work items', () => {
     await new WorkItemBackfill(async () => gh.client as never).run();
     expect(store.state.progress.find((one) => one.repoId === 'r-app')?.readAt).not.toBeNull();
     expect(workItems.numberPending).not.toHaveBeenCalled();
+  });
+
+  it('records a catch-up cut off at fifty pages only as far as it read, and goes on from there', async () => {
+    store.state.repos = [{ id: 'r-app', name: 'app', fullName: 'acme/app', defaultBranch: 'main' }];
+    store.state.progress = [
+      { repoId: null, issuesPage: 1, pullsPage: 1, readAt: null, numberedAt: day(0), caughtUpAt: null, lastError: null },
+      { repoId: 'r-app', issuesPage: 2, pullsPage: 2, readAt: day(0), numberedAt: day(0), caughtUpAt: null, lastError: null },
+    ];
+    // More changed while the bridge was down than one catch-up reads: 5,050,
+    // a second apart, oldest first.
+    const at = (index: number) => new Date(Date.parse(day(10)) + index * 1000).toISOString();
+    const updates = Array.from({ length: 5050 }, (_, index) => ({ number: index + 1, updatedAt: at(index) }));
+    const gh = github({ 'acme/app': { issues: [], pulls: [], updates } });
+    vi.mocked(workItems.ensureLink).mockClear();
+    const linked = () => new Set(vi.mocked(workItems.ensureLink).mock.calls.map(([thing]) => (thing as { number: number }).number));
+
+    const backfill = new WorkItemBackfill(async () => gh.client as never);
+    await backfill.run();
+    expect(gh.asked.filter((line) => line.endsWith('since'))).toHaveLength(50);
+    expect(linked().size).toBe(5000);
+    // As far as the last update read, with the slack the next run takes off.
+    expect(store.state.progress.find((one) => one.repoId === 'r-app')!.caughtUpAt).toBe(new Date(Date.parse(at(4999)) + 10 * 60 * 1000).toISOString());
+
+    // The tail the first run left: the next run reads it, and only then is the repository caught up.
+    gh.asked.length = 0;
+    await backfill.run();
+    expect(gh.asked).toEqual(['acme/app issues 1 since']);
+    expect(linked().size).toBe(5050);
+    expect(Date.parse(store.state.progress.find((one) => one.repoId === 'r-app')!.caughtUpAt!)).toBeGreaterThan(Date.parse(at(5049)));
+
+    // Caught up once this start: not read again.
+    gh.asked.length = 0;
+    await backfill.run();
+    expect(gh.asked).toEqual([]);
+  });
+
+  it('catches numbered repositories up while another repository’s read is rate-limited', async () => {
+    store.state.repos = [
+      { id: 'r-new', name: 'new', fullName: 'acme/new', defaultBranch: 'main' },
+      { id: 'r-app', name: 'app', fullName: 'acme/app', defaultBranch: 'main' },
+    ];
+    store.state.progress = [
+      { repoId: null, issuesPage: 1, pullsPage: 1, readAt: null, numberedAt: day(0), caughtUpAt: null, lastError: null },
+      { repoId: 'r-app', issuesPage: 2, pullsPage: 2, readAt: day(0), numberedAt: day(0), caughtUpAt: null, lastError: null },
+    ];
+    const gh = github({
+      'acme/app': { issues: [], pulls: [], updates: [{ number: 7, updatedAt: day(10) }] },
+      'acme/new': { issues: [{ number: 1, createdAt: day(1) }], pulls: [] },
+    });
+    gh.failing.add('acme/new issues 1');
+    await new WorkItemBackfill(async () => gh.client as never).run();
+    expect(store.state.progress.find((one) => one.repoId === 'r-new')).toMatchObject({ readAt: null, lastError: 'API rate limit exceeded' });
+    expect(gh.asked).toContain('acme/app issues 1 since');
+    expect(store.state.progress.find((one) => one.repoId === 'r-app')!.caughtUpAt).not.toBeNull();
   });
 });
