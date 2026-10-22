@@ -12,6 +12,7 @@ import {
   compareVersions,
   isCommitId,
   latestRelease,
+  movedTagWords,
   nextRelease,
   nextReleaseRefused,
   ONE_RELEASE_AT_A_TIME,
@@ -22,6 +23,7 @@ import {
   otherInstallsRunning,
   processCommandLine,
   parseResultFile,
+  recordsImageDigests,
   releaseAssets,
   releaseAssetUrl,
   releaseInstallEnv,
@@ -30,6 +32,7 @@ import {
   selfUpdateAttention,
   selfUpdatePaths,
   type CheckoutInstall,
+  type MovedImageTag,
   type PublishedRelease,
   type SelfUpdateAttention,
   type SelfUpdateLast,
@@ -132,6 +135,8 @@ export interface SelfUpdateCandidate {
   checkedAt: string;
   /** On a cloud install, the newest release when it is further ahead than the next, which is what is taken. */
   newest?: string | null;
+  /** On a cloud install, the tags of the release in use and the next that name another digest now than the release recorded. */
+  moved?: MovedImageTag[];
 }
 
 export interface SelfUpdateView {
@@ -153,6 +158,13 @@ export interface SelfUpdateView {
   running: (CloudSelfUpdateRun & { waitingFor: LiveTask[] }) | null;
   last: SelfUpdateLast | null;
   attention: SelfUpdateAttention | null;
+  /**
+   * On a cloud install, each tag of the release in use, the next, or the one
+   * a run is taking that names another digest now than the release recorded,
+   * in words naming both (`movedTagWords`). The recorded one is what runs and
+   * what is taken; someone pushed the tag again, and a person should know.
+   */
+  movedTags: string[];
 }
 
 /** A task that holds a restart: queued or running. */
@@ -281,8 +293,8 @@ interface Choice {
   tag: string | null;
   sha: string | null;
   head: string | null;
-  /** The releases to try, newest first, each fetched and a fast-forward on main's own history. */
-  candidates: { tag: string; sha: string }[];
+  /** The releases to try, newest first, each fetched and a fast-forward on main's own history; a cloud install's names the files its release lists. */
+  candidates: { tag: string; sha: string; assets?: readonly string[] }[];
 }
 
 /** How many releases GitHub is asked for a page at a time. */
@@ -515,12 +527,15 @@ export class SelfUpdate {
           const commit = await this.githubJson<{ sha?: unknown; commit?: { committer?: { date?: unknown } } }>(`/repos/${repo}/commits/${encodeURIComponent(tag)}`);
           // An answer, not a fact: checked before it is kept as the commit in use.
           if (!isCommitId(commit.sha)) throw new Error(`GitHub gave no commit for ${tag}`);
-          // The registry's word that this digest is the tag's is checked as
-          // a release's images are: the release in use decides the next one,
-          // and an unchecked lookup would let it skip one.
+          // The record's word, or for a release from before records the
+          // registry's, that this digest is the release's is checked as a
+          // release's images are: the release in use decides the next one, and
+          // an unchecked lookup would let it skip one.
           const unchecked = await cloud.checkImage(repo, 'service', digest, tag, commit.sha);
           if (unchecked) {
-            problem = `the registry names the bridge's image ${tag}'s, but ${unchecked}, so which release it runs is not known: ${byHand}`;
+            const recorded = read.some((release) => release.tag === tag && recordsImageDigests(release));
+            const named = recorded ? `${tag} recorded the bridge's image as its own` : `the registry names the bridge's image ${tag}'s`;
+            problem = `${named}, but ${unchecked}, so which release it runs is not known: ${byHand}`;
           } else {
             const date = commit.commit?.committer?.date;
             this.cloudKnown = { sha: commit.sha, date: typeof date === 'string' ? date : null, tag };
@@ -732,11 +747,14 @@ export class SelfUpdate {
     const listed = await this.releasesThrough(repo, inUse);
     const { incomplete, mutable } = takeableReleases(listed);
     const { next, newest } = nextRelease(listed, inUse);
+    const why = next ? untakeableReason(next) : null;
+    // The release that runs, and the one a run would take: a tag of either pushed again since is said on the row.
+    const moved = await this.movedTags(repo, [listed.find((release) => release.tag === inUse), why ? null : next]);
+    const also = moved.length > 0 ? { moved } : {};
     if (!next) {
-      return { tag: null, sha: null, publishedAt: null, reason: listed.some((release) => release.tag === inUse) ? `on ${inUse}, the newest release` : noReleaseReason(repo, incomplete, mutable), checkedAt };
+      return { tag: null, sha: null, publishedAt: null, reason: listed.some((release) => release.tag === inUse) ? `on ${inUse}, the newest release` : noReleaseReason(repo, incomplete, mutable), checkedAt, ...also };
     }
-    const why = untakeableReason(next);
-    if (why) return { tag: null, sha: null, publishedAt: null, reason: nextReleaseRefused(next.tag, why, inUse), checkedAt };
+    if (why) return { tag: null, sha: null, publishedAt: null, reason: nextReleaseRefused(next.tag, why, inUse), checkedAt, ...also };
     const commit = await this.githubJson<{ sha: unknown }>(`/repos/${repo}/commits/${encodeURIComponent(next.tag)}`).catch(() => null);
     const further = newest && newest.tag !== next.tag ? newest.tag : null;
     return {
@@ -746,7 +764,15 @@ export class SelfUpdate {
       reason: further ? nextReleaseNote(next.tag, further) : `${next.tag} is the next release`,
       checkedAt,
       newest: further,
+      ...also,
     };
+  }
+
+  /** The tags of these releases that name another digest at the registry now than the release recorded. Never throws: one that cannot be read is not compared. */
+  private async movedTags(repo: string, releases: readonly (PublishedRelease | null | undefined)[]): Promise<MovedImageTag[]> {
+    const moved: MovedImageTag[] = [];
+    for (const release of releases) if (release) moved.push(...(await this.cloud!.movedTags(repo, release).catch(() => [])));
+    return moved;
   }
 
   // ------------------------------------------------------------------ the view
@@ -780,6 +806,7 @@ export class SelfUpdate {
       running: run ? { ...run, waitingFor: run.phase === 'waiting' ? this.waitingFor : [] } : null,
       last,
       attention: selfUpdateAttention(last),
+      movedTags: this.cloud ? movedTagsSaid(this.cloud.install.repo, [...(candidate?.moved ?? []), ...(run?.cloud?.moved ?? [])]) : [],
     };
   }
 
@@ -855,8 +882,8 @@ export class SelfUpdate {
    * that fails is passed over, in the audit log. Any later failure removes
    * what it made and records why.
    */
-  private async prepare(first: CloudSelfUpdateRun, repo: string, candidates: readonly { tag: string; sha: string }[]): Promise<void> {
-    if (this.cloud) return this.checkImages(this.cloud, first, repo);
+  private async prepare(first: CloudSelfUpdateRun, repo: string, candidates: Choice['candidates']): Promise<void> {
+    if (this.cloud) return this.checkImages(this.cloud, first, repo, candidates[0]?.assets ?? []);
     let run = first;
     const refused: StepFailed[] = [];
     let verified: { paths: ReturnType<typeof selfUpdatePaths>; archive: string } | null = null;
@@ -1286,19 +1313,34 @@ export class SelfUpdate {
       return nothing('failed', `could not read ${next.tag}'s commit from GitHub: ${message(error)}`, { step: 'releases', tag: next.tag });
     }
     if (newest && newest.tag !== next.tag) this.log(`self-update: ${nextReleaseNote(next.tag, newest.tag)}`);
-    return { take: true, reason: '', tag: next.tag, sha, head, candidates: [{ tag: next.tag, sha }] };
+    return { take: true, reason: '', tag: next.tag, sha, head, candidates: [{ tag: next.tag, sha, assets: next.assets }] };
   }
 
-  /** Phase one on a cloud install: the release's images, each resolved and checked, while tasks run and nothing changes. */
-  private async checkImages(cloud: CloudUpdate, run: CloudSelfUpdateRun, repo: string): Promise<void> {
-    let target;
+  /**
+   * Phase one on a cloud install: the release's images, each the digest it
+   * recorded (or its tag resolved, for a release from before records) and
+   * checked, while tasks run and nothing changes. A tag that names another
+   * digest now is said in the log, the audit log and the row, and the
+   * recorded digest is what rolls.
+   */
+  private async checkImages(cloud: CloudUpdate, run: CloudSelfUpdateRun, repo: string, assets: readonly string[]): Promise<void> {
+    let checked;
     try {
-      target = await cloud.verify(repo, run.tag, run.to);
+      checked = await cloud.verify(repo, { tag: run.tag, assets }, run.to);
     } catch (error) {
       await this.failRun(run, 'images', `${message(error)}; ${ONE_RELEASE_AT_A_TIME}, so it stays on ${run.cloud?.fromTag ?? 'its release'} until ${run.tag} checks out, or until it is rolled past ${run.tag} by hand (openadlc cloud update --release <tag>)`);
       return;
     }
-    await this.wait({ ...run, phase: 'waiting', cloud: { ...(run.cloud ?? { fromTag: '', step: 'images', previous: null, rolled: [] }), target } });
+    for (const moved of checked.moved) {
+      const words = movedTagWords(repo, moved);
+      this.log(`self-update: ${words}`);
+      await this.audit({ actor: 'openadlc', action: 'openadlc.release_tag_moved', target: 'openadlc', payload: { ...moved } }).catch(() => undefined);
+    }
+    await this.wait({
+      ...run,
+      phase: 'waiting',
+      cloud: { ...(run.cloud ?? { fromTag: '', step: 'images', previous: null, rolled: [] }), target: checked.images, ...(checked.moved.length > 0 ? { moved: checked.moved } : {}) },
+    });
   }
 
   /**
@@ -1593,6 +1635,11 @@ export class SelfUpdate {
     await this.audit({ actor, action: 'openadlc.schedule_changed', target: 'openadlc', payload: { mode: next.mode, day: next.day, time: next.time } });
     return this.view();
   }
+}
+
+/** Each moved tag once, in the words the row says it. */
+function movedTagsSaid(repo: string, moved: readonly MovedImageTag[]): string[] {
+  return [...new Set(moved.map((one) => movedTagWords(repo, one)))];
 }
 
 /** Why there is no release to take, naming the ones passed over. */

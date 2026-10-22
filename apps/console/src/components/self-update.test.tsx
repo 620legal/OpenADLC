@@ -149,7 +149,7 @@ describe('the OpenADLC row on a cloud install', () => {
     expect(html).toMatch(/<li aria-current="step"[^>]*>· bridge<\/li>/);
     expect(html).toContain('>· host ✓</li>');
     expect(selfUpdateSentence({ ...CLOUD, running: { ...RUN, phase: 'preparing' } }).text).toBe(
-      "Checking v0.2.0's images: each resolved to its digest at the registry and its attestation checked, while the install goes on as it is.",
+      "Checking v0.2.0's images: each by its digest at the registry and its attestation checked, while the install goes on as it is.",
     );
     expect(selfUpdateSentence({ ...CLOUD, running: { ...RUN, phase: 'waiting', waitingFor: [{ id: 't1', bot: 'builder', subjectRef: 'openadlc#12', kind: 'build' }] } }).text).toBe(
       "v0.2.0's images check out, and it rolls once this task ends: builder on openadlc#12. No new task starts meanwhile.",
@@ -159,6 +159,15 @@ describe('the OpenADLC row on a cloud install', () => {
     );
     // A checkout's row has no steps.
     expect(renderToStaticMarkup(<ul><SelfUpdateRow view={{ ...VIEW, running: { ...RUN, phase: 'waiting' } }} busy={null} error={null} /></ul>)).not.toContain('Where the roll is');
+  });
+
+  it('says a release tag pushed again since, naming both digests, beside the rest of the row', () => {
+    const words = `ghcr.io/620legal/openadlc/console:v0.2.0 names sha256:${'9'.repeat(64)} now, not sha256:${'2'.repeat(64)}, the digest v0.2.0 recorded: the tag was pushed again since the release, and the recorded digest is the one taken`;
+    const html = renderToStaticMarkup(<ul><SelfUpdateRow view={{ ...CLOUD, movedTags: [words] }} busy={null} error={null} /></ul>);
+    expect(html).toMatch(new RegExp(`<p class="[^"]*text-attention[^"]*">${words.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}</p>`));
+    // Nothing is said of tags without one, nor by a bridge from before that sends none.
+    expect(text({ ...CLOUD, movedTags: [] })).not.toContain('pushed again');
+    expect(text(CLOUD)).not.toContain('pushed again');
   });
 
   it('says where a failed roll stopped', () => {

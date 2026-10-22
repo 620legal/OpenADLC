@@ -54,7 +54,11 @@ export const RELEASE_CHECKSUMS = 'SHA256SUMS';
 /** What the attestation states: SLSA build provenance. */
 export const RELEASE_PREDICATE = 'https://slsa.dev/provenance/v1';
 
-/** The three files a release carries. */
+/**
+ * The three files every release carries. A release made since releases
+ * recorded their images' digests also carries `RELEASE_IMAGE_DIGESTS`, which
+ * one made before does not, so it is not one of these.
+ */
 export function releaseAssets(tag: string): { archive: string; bundle: string; checksums: string } {
   return {
     archive: `openadlc-${tag}.tar.gz`,
@@ -218,9 +222,113 @@ export function releaseImageName(repo: string, image: ReleaseImage): string {
   return `${RELEASE_IMAGE_REGISTRY}/${repo.toLowerCase()}/${image}`;
 }
 
-/** The name a release tags an image with. An install resolves it to a digest and deploys the digest, never the tag. */
+/**
+ * The name a release tags an image with. An install takes the digest the
+ * release recorded (`RELEASE_IMAGE_DIGESTS`) and deploys that, never the tag;
+ * only a release from before releases recorded them is resolved by its tag.
+ */
 export function releaseImageRef(repo: string, image: ReleaseImage, tag: string): string {
   return `${releaseImageName(repo, image)}:${tag}`;
+}
+
+/** An image's digest, in the one form ghcr.io and the attestations give it. */
+export const IMAGE_DIGEST = /^sha256:[0-9a-f]{64}$/;
+
+/**
+ * The release's file that records its images' digests: for each of
+ * `RELEASE_IMAGES`, the digest `push` pushed and `publish` attested and
+ * checked, written by `publish` and listed in `SHA256SUMS` beside the
+ * archive. An install takes each image by the digest recorded here. Taken by
+ * its tag, as v0.1.2 to v0.1.4 were, an image was whatever the tag named when
+ * the install looked, and the tag is a name on ghcr.io that anyone who can
+ * write the repository's packages can push again: every install would then
+ * have refused the release, whose attestations are of the digest the tag used
+ * to name. A release made before this has no such file, and its tags are
+ * resolved as they were.
+ */
+export const RELEASE_IMAGE_DIGESTS = 'images.json';
+
+/** What `images.json` holds: the release it records, and each image's digest. */
+export interface ReleaseImageDigests {
+  format: 1;
+  tag: string;
+  commit: string;
+  images: Record<ReleaseImage, string>;
+}
+
+/**
+ * `images.json`, or null for anything else. Strict, as the archive's
+ * manifest is: the workflow writes exactly these keys and these images.
+ */
+export function parseImageDigests(text: string): ReleaseImageDigests | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).sort().join(',') !== 'commit,format,images,tag') return null;
+  if (record.format !== 1) return null;
+  if (typeof record.tag !== 'string' || !RELEASE_TAG.test(record.tag)) return null;
+  if (typeof record.commit !== 'string' || !OBJECT_ID.test(record.commit)) return null;
+  const images = record.images;
+  if (!images || typeof images !== 'object' || Array.isArray(images)) return null;
+  if (Object.keys(images).sort().join(',') !== [...RELEASE_IMAGES].sort().join(',')) return null;
+  const digests = {} as Record<ReleaseImage, string>;
+  for (const image of RELEASE_IMAGES) {
+    const digest = (images as Record<string, unknown>)[image];
+    if (typeof digest !== 'string' || !IMAGE_DIGEST.test(digest)) return null;
+    digests[image] = digest;
+  }
+  return { format: 1, tag: record.tag, commit: record.commit, images: digests };
+}
+
+/** Whether a release recorded its images' digests: one from before releases did lists no `images.json`. */
+export function recordsImageDigests(release: Pick<PublishedRelease, 'assets'>): boolean {
+  return release.assets.includes(RELEASE_IMAGE_DIGESTS);
+}
+
+/**
+ * The digests a release recorded, from its `SHA256SUMS` and `images.json` as
+ * downloaded, or why they cannot be taken: the file must be the one
+ * `SHA256SUMS` gives, and record this release, and this commit when the
+ * caller knows it. Either is a refusal, never a fall back onto the tags: a
+ * release that records its digests is taken by them or not at all.
+ */
+export function recordedImageDigests(input: { tag: string; commit?: string; sums: string; file: Buffer }): { images: Record<ReleaseImage, string> } | { problem: string } {
+  const name = RELEASE_IMAGE_DIGESTS;
+  const stated = checksumOf(input.sums, name);
+  if (!stated) return { problem: `${input.tag}'s ${RELEASE_CHECKSUMS} does not give one SHA-256 for ${name}` };
+  const actual = createHash('sha256').update(input.file).digest('hex');
+  if (actual !== stated) return { problem: `${input.tag}'s ${name} has SHA-256 ${actual}, and ${RELEASE_CHECKSUMS} says ${stated}: the download is not the release's` };
+  const record = parseImageDigests(input.file.toString('utf8'));
+  if (!record) return { problem: `${input.tag}'s ${name} is not a record of its images' digests in the release's format` };
+  if (record.tag !== input.tag) return { problem: `${input.tag}'s ${name} records the images of ${record.tag}` };
+  if (input.commit !== undefined && record.commit !== input.commit) {
+    return { problem: `${input.tag}'s ${name} records images built from ${record.commit}, not from ${input.commit}, the commit ${input.tag} is on` };
+  }
+  return { images: record.images };
+}
+
+/** A release's tag on the registry that names another digest now than the one the release recorded. */
+export interface MovedImageTag {
+  tag: string;
+  image: ReleaseImage;
+  /** The digest the release recorded, which is the one taken. */
+  recorded: string;
+  /** The digest the tag names now. */
+  now: string;
+}
+
+/**
+ * A moved tag, as Settings → System's row and `openadlc cloud update` report
+ * it. Nothing an install takes changes with it, but someone who can write
+ * the packages pushed a release's tag again, and a person should know.
+ */
+export function movedTagWords(repo: string, moved: MovedImageTag): string {
+  return `${releaseImageRef(repo, moved.image, moved.tag)} names ${moved.now} now, not ${moved.recorded}, the digest ${moved.tag} recorded: the tag was pushed again since the release, and the recorded digest is the one taken`;
 }
 
 /**

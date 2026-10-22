@@ -36,7 +36,12 @@ const COMMITS: Record<string, string> = { 'v0.1.0': '1'.repeat(40), 'v0.2.0': '2
 function manifest(image: string, tag: string): Buffer {
   return Buffer.from(JSON.stringify({ schemaVersion: 2, mediaType: 'application/vnd.oci.image.manifest.v1+json', config: { digest: `${image}-${tag}` } }));
 }
-const digest = (image: string, tag: string) => `sha256:${createHash('sha256').update(manifest(image, tag)).digest('hex')}`;
+const hashOf = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
+const digest = (image: string, tag: string) => `sha256:${hashOf(manifest(image, tag))}`;
+/** The image a release's tag names once someone pushed it again, onto another image. */
+const again = (image: string, tag: string) => digest(image, `${tag}+again`);
+/** A release's images.json, as publish writes it: the digests its tags named when it was made. */
+const recordOf = (tag: string) => `${JSON.stringify({ format: 1, tag, commit: COMMITS[tag], images: { service: digest('service', tag), console: digest('console', tag) } })}\n`;
 const mirrorRef = (image: string, tag: string) => `${MIRROR}/620legal/openadlc/${image}@${digest(image, tag)}`;
 const TARGET = { service: mirrorRef('service', 'v0.2.0'), console: mirrorRef('console', 'v0.2.0') };
 
@@ -124,6 +129,17 @@ class World {
   /** Whether the bridge's service had settled each time the last result was written. */
   recordedWhileServing: boolean[] = [];
   registry: { anonymous: boolean[]; wrongDigest?: string } = { anonymous: [] };
+  /** Releases that recorded their images' digests: images.json is listed beside their three files. */
+  records = new Set<string>();
+  /** `<tag>/<image>` whose tag was pushed again since the release, onto another image. */
+  retagged = new Set<string>();
+  /** Digests the registry no longer serves: versions deleted from the package. */
+  deleted = new Set<string>();
+  /** A release's images.json as served, in place of the one its SHA256SUMS gives. */
+  servedRecord: Record<string, string> = {};
+  /** Each manifest asked for by digest, and each release file downloaded. */
+  byDigest: string[] = [];
+  downloads: string[] = [];
   denyCloudRun = false;
   services: Record<string, Service> = {
     'openadlc-console': service('openadlc-console', mirrorRef('console', 'v0.1.0')),
@@ -248,13 +264,29 @@ class World {
       this.registry.anonymous.push(!headers.has('authorization'));
       return Response.json({ token: 'anonymous-pull' });
     }
-    const pulled = /^https:\/\/ghcr\.io\/v2\/620legal\/openadlc\/(service|console)\/manifests\/(v[0-9.]+)$/.exec(url);
+    const pulled = /^https:\/\/ghcr\.io\/v2\/620legal\/openadlc\/(service|console)\/manifests\/(v[0-9.]+|sha256:[0-9a-f]{64})$/.exec(url);
     if (pulled) {
       if (headers.get('authorization') !== 'Bearer anonymous-pull') return new Response('', { status: 401 });
-      if (!COMMITS[pulled[2]!]) return new Response('', { status: 404 });
-      return new Response(manifest(pulled[1]!, pulled[2]!), {
-        headers: { 'content-type': 'application/vnd.oci.image.manifest.v1+json', 'docker-content-digest': this.registry.wrongDigest ?? digest(pulled[1]!, pulled[2]!) },
+      const [, image, reference] = pulled as unknown as [string, string, string];
+      let body: Buffer | undefined;
+      if (reference.startsWith('sha256:')) {
+        this.byDigest.push(reference);
+        const known = Object.keys(COMMITS).flatMap((tag) => [manifest(image, tag), manifest(image, `${tag}+again`)]);
+        body = this.deleted.has(reference) ? undefined : known.find((one) => `sha256:${hashOf(one)}` === reference);
+      } else if (COMMITS[reference]) {
+        body = manifest(image, this.retagged.has(`${reference}/${image}`) ? `${reference}+again` : reference);
+      }
+      if (!body) return new Response('', { status: 404 });
+      return new Response(body, {
+        headers: { 'content-type': 'application/vnd.oci.image.manifest.v1+json', 'docker-content-digest': this.registry.wrongDigest ?? `sha256:${hashOf(body)}` },
       });
+    }
+    const download = new RegExp(`^https://github\\.com/${REPO}/releases/download/(v[0-9.]+)/(SHA256SUMS|images\\.json)$`).exec(url);
+    if (download && this.records.has(download[1]!)) {
+      const [, tag, name] = download as unknown as [string, string, string];
+      this.downloads.push(`${tag}/${name}`);
+      if (name === 'images.json') return new Response(this.servedRecord[tag] ?? recordOf(tag));
+      return new Response(`${'f'.repeat(64)}  openadlc-${tag}.tar.gz\n${hashOf(recordOf(tag))}  images.json\n`);
     }
     const attestations = new RegExp(`^https://api\\.github\\.com/repos/${REPO}/attestations/(sha256%3A[0-9a-f]{64})$`).exec(url);
     if (attestations) {
@@ -270,7 +302,14 @@ class World {
     if (listing) {
       const page = Number(listing[1] ?? '1');
       this.pages.push(String(page));
-      const release = (tag: string, draft = false) => ({ tag_name: tag, draft, prerelease: false, immutable: !this.mutable.has(tag), published_at: '2026-10-18T12:00:00Z', assets: Object.values(releaseAssets(tag)).map((name) => ({ name })) });
+      const release = (tag: string, draft = false) => ({
+        tag_name: tag,
+        draft,
+        prerelease: false,
+        immutable: !this.mutable.has(tag),
+        published_at: '2026-10-18T12:00:00Z',
+        assets: [...Object.values(releaseAssets(tag)), ...(this.records.has(tag) ? ['images.json'] : [])].map((name) => ({ name })),
+      });
       const [newest, ...older] = Object.keys(COMMITS).reverse();
       const all = [release(newest!), ...older.slice(0, -1).map((tag) => release(tag)), ...Array.from({ length: this.drafts }, (_, n) => release(`v9.${n}.0`, true)), release(older.at(-1)!)];
       return Response.json(all.slice((page - 1) * 30, page * 30));
@@ -614,6 +653,89 @@ describe('checking the images', () => {
     await until(() => world.last() !== null);
     expect(world.last()).toMatchObject({ state: 'failed', step: 'images' });
     expect(world.last()?.reason).toMatch(/the registry says ghcr\.io\/620legal\/openadlc\/console:v0\.2\.0 is sha256:e{64}, and its manifest is sha256:/);
+    expect(world.events).toEqual([]);
+  });
+});
+
+describe('a release that recorded its images’ digests', () => {
+  // v0.1.0, which the install runs, is from before releases recorded them; v0.2.0 is after.
+  beforeEach(() => {
+    world.records.add('v0.2.0');
+  });
+  const task = { id: 't1', bot: 'builder', subjectRef: 'openadlc#12', kind: 'build' };
+
+  it('is taken by the digests it recorded, whatever its tags name now, and a tag pushed again is said, naming both digests', async () => {
+    world.retagged.add('v0.2.0/console');
+    // Pushed again by someone who can write the packages, with nothing to attest it: taken by its tag,
+    // the release would have been refused on every install.
+    world.unattested.add(again('console', 'v0.2.0'));
+    world.live = [task];
+    const update = world.updater();
+    const words = `ghcr.io/620legal/openadlc/console:v0.2.0 names ${again('console', 'v0.2.0')} now, not ${digest('console', 'v0.2.0')}, the digest v0.2.0 recorded`;
+    // The row says so before any run: it is the release a run would take.
+    await update.refreshCandidate(true);
+    expect((await update.view()).movedTags).toEqual([expect.stringContaining(words)]);
+
+    await update.start({ trigger: 'console', actor: 'jane@example.com' });
+    await until(() => world.run()?.phase === 'waiting');
+    expect(world.run()?.cloud?.target).toEqual(TARGET);
+    expect(world.run()?.cloud?.moved).toEqual([{ tag: 'v0.2.0', image: 'console', recorded: digest('console', 'v0.2.0'), now: again('console', 'v0.2.0') }]);
+    // Each checked by its recorded digest, which the registry still serves; the image the tag names now is never checked.
+    const checked = world.calls.filter((call) => call.command === 'gh' && call.args.includes('refs/tags/v0.2.0')).map((call) => call.args[2]);
+    expect(checked).toEqual([`oci://ghcr.io/620legal/openadlc/service@${digest('service', 'v0.2.0')}`, `oci://ghcr.io/620legal/openadlc/console@${digest('console', 'v0.2.0')}`]);
+    expect(world.byDigest).toEqual(expect.arrayContaining([digest('service', 'v0.2.0'), digest('console', 'v0.2.0')]));
+    expect(world.attestationReads.map((read) => read.digest)).not.toContain(again('console', 'v0.2.0'));
+    // The record is the release's own files, read once and with no credential.
+    expect(world.downloads).toEqual(['v0.2.0/SHA256SUMS', 'v0.2.0/images.json']);
+    expect(world.otherAuthorizations.filter((one) => one.url.startsWith('https://github.com/')).map((one) => one.authorization)).toEqual([null, null]);
+    // In the audit log, and still on the row, once, while the run waits.
+    expect(world.audits.filter((entry) => entry.action === 'openadlc.release_tag_moved')).toEqual([
+      expect.objectContaining({ actor: 'openadlc', payload: { tag: 'v0.2.0', image: 'console', recorded: digest('console', 'v0.2.0'), now: again('console', 'v0.2.0') } }),
+    ]);
+    expect((await update.view()).movedTags).toEqual([expect.stringContaining(words)]);
+  });
+
+  it('is found as the release in use by the digest it recorded, with its tag pushed again since', async () => {
+    world.records.add('v0.1.0');
+    world.retagged.add('v0.1.0/service');
+    const update = world.updater();
+    expect((await update.view()).inUse).toMatchObject({ tag: 'v0.1.0', sha: COMMITS['v0.1.0'] });
+    expect(await update.refreshCandidate(true)).toMatchObject({ tag: 'v0.2.0' });
+    expect((await update.view()).movedTags).toEqual([expect.stringContaining(`ghcr.io/620legal/openadlc/service:v0.1.0 names ${again('service', 'v0.1.0')} now, not ${digest('service', 'v0.1.0')}`)]);
+  });
+
+  it('says nothing of tags that still name what it recorded', async () => {
+    world.live = [task];
+    const update = world.updater();
+    await update.refreshCandidate(true);
+    await update.start({ trigger: 'console', actor: 'jane@example.com' });
+    await until(() => world.run()?.phase === 'waiting');
+    expect(world.run()?.cloud?.target).toEqual(TARGET);
+    expect(world.run()?.cloud?.moved).toBeUndefined();
+    expect((await update.view()).movedTags).toEqual([]);
+    expect(world.audits.filter((entry) => entry.action === 'openadlc.release_tag_moved')).toEqual([]);
+  });
+
+  it('rolls nothing when a digest it recorded is no longer served, rather than take what the tag names', async () => {
+    world.retagged.add('v0.2.0/console');
+    world.deleted.add(digest('console', 'v0.2.0'));
+    await world.updater().start({ trigger: 'console', actor: 'jane@example.com' });
+    await until(() => world.last() !== null);
+    expect(world.last()).toMatchObject({ state: 'failed', step: 'images', tag: 'v0.2.0', to: COMMITS['v0.1.0'] });
+    expect(world.last()?.reason).toMatch(
+      /^ghcr\.io\/620legal\/openadlc\/console@sha256:[0-9a-f]{64}, the console image v0\.2\.0 recorded, cannot be pulled: .*is not at the registry \(404\), so nothing is rolled; .*The install is as it was$/,
+    );
+    expect(world.calls.filter((call) => call.args[2]?.includes(again('console', 'v0.2.0')))).toEqual([]);
+    expect(world.events).toEqual([]);
+  });
+
+  it('rolls nothing when its images.json is not the one its SHA256SUMS gives', async () => {
+    world.servedRecord['v0.2.0'] = recordOf('v0.2.0').replace(digest('console', 'v0.2.0'), again('console', 'v0.2.0'));
+    await world.updater().start({ trigger: 'console', actor: 'jane@example.com' });
+    await until(() => world.last() !== null);
+    expect(world.last()).toMatchObject({ state: 'failed', step: 'images', tag: 'v0.2.0' });
+    expect(world.last()?.reason).toMatch(/^could not read the digests v0\.2\.0 recorded of its images: v0\.2\.0's images\.json has SHA-256 [0-9a-f]{64}, and SHA256SUMS says/);
+    expect(world.calls.filter((call) => call.args.includes('refs/tags/v0.2.0'))).toEqual([]);
     expect(world.events).toEqual([]);
   });
 });

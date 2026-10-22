@@ -14,6 +14,12 @@ or with `openadlc cloud update`. This is for when that stopped before the end.
 - The console, the bridge and the host report different releases: the row
   shows each part's image.
 
+The row, or `openadlc cloud update`, saying a release's tag "names sha256:… now, not
+sha256:…, the digest … recorded" is not a stop: the recorded digest is what
+is checked and rolled. Someone who can write the repository's packages pushed
+that tag again; find who on the package's page, and the audit log has
+`openadlc.release_tag_moved` for a run that saw it.
+
 ## What to check first
 
 1. **Which parts run which release.** The failure says it; or read each part.
@@ -31,7 +37,7 @@ or with `openadlc cloud update`. This is for when that stopped before the end.
 
    Each should be `<region>-docker.pkg.dev/<project>/<prefix>-ghcr/620legal/openadlc/<image>@sha256:…`.
 2. **Whether hostd is up.** `gcloud compute ssh <host> --zone <zone> --project <project> --tunnel-through-iap -- 'sudo systemctl status fleet-hostd --no-pager | head -20'`. A unit that keeps restarting with a pull error is a host that can't fetch the release's image: check the mirror (`gcloud artifacts repositories describe <prefix>-ghcr --location <region> --project <project>`) and that the release's packages are public.
-3. **Whether the release's images check out.** If the stop was at "checking images", the failure names the image and gh's reason. A release whose images fail the check is never taken; that's not something to work around.
+3. **Whether the release's images check out.** If the stop was at "checking images", the failure names the image and gh's reason. A release whose images fail the check is never taken; that's not something to work around. A release takes each image by the digest it recorded in its `images.json`, so a stop saying "the digest … recorded, cannot be pulled" is a version deleted from the package since (the package's page lists its versions): it can't be put back, so the way on is a later release, or `--release` past this one by hand. A release from before releases recorded their digests (v0.1.2 to v0.1.4) is taken by its tags, so for one of those a tag pushed again onto another image stops it at the check in the same way.
 
 ## What to do
 

@@ -358,8 +358,9 @@ each package's list of versions on its page.
 On a first release, and after a change to either workflow, look at the run:
 `publish` ran `gh attestation verify` on the release's own bundle and on each
 image before creating the release, and the release should be immutable, with
-exactly three files: the archive, its `.sigstore.json` bundle and
-`SHA256SUMS`; the packages page should show the two images at the tag. The
+exactly four files: the archive, its `.sigstore.json` bundle, `SHA256SUMS`
+and `images.json`, whose two digests are the ones the packages page shows at
+the tag. The
 first release with images stops after pushing them, at *service and console
 can be pulled without signing in*: a package a workflow creates starts out
 private. Change those two to public, as below, and re-run the workflow. A

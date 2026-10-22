@@ -2159,15 +2159,20 @@ leaves out the build, `--plan-only` stops before the apply.
 **The images are a release's.** The bridge, hostd and the console run the
 newest [release](#releases)'s `service` and `console` images, which the
 release workflow built and attested on ghcr.io. `configure` lists the
-releases with `gh api`, takes the newest one an install may take, resolves
-each image's tag to a digest at ghcr.io's own API (with the anonymous token
-ghcr.io gives anyone for a public package, so no registry sign-in and no
-Docker), and checks each digest with `gh attestation verify` before it writes
-anything, against the bundles GitHub's attestations API gives for that digest
-and with no GitHub sign-in: the same signer, source and runner as a release's
-archive, and the run that made it the push of the tag. A release whose images do not check out is passed over for the
-one before it, and said. Cloud Run pulls only from Artifact Registry, so the
-module makes a remote repository mirroring `https://ghcr.io`,
+releases with `gh api`, takes the newest one an install may take, reads
+each image's digest from the release's `images.json` (checked against its
+`SHA256SUMS`; a release from before releases recorded them, v0.1.2 to
+v0.1.4, has its tags resolved instead), finds that digest at ghcr.io's own
+API (with the anonymous token ghcr.io gives anyone for a public package, so
+no registry sign-in and no Docker), and checks it with `gh attestation
+verify` before it writes anything, against the bundles GitHub's attestations
+API gives for that digest and with no GitHub sign-in: the same signer, source
+and runner as a release's archive, and the run that made it the push of the
+tag. A release whose images do not check out is passed over for the one
+before it, and said. A tag of the release taken that names another digest now
+than the release recorded is said too, naming both, and changes nothing
+taken. Cloud Run pulls only from Artifact Registry, so the module makes a
+remote repository mirroring `https://ghcr.io`,
 `<name_prefix>-ghcr` in the install's region, and the services and the host
 pull through it, by digest: `ghcr.io/620legal/openadlc/service@sha256:…` is
 `<region>-docker.pkg.dev/<project>/<name_prefix>-ghcr/620legal/openadlc/service@sha256:…`.
@@ -2685,8 +2690,10 @@ the one an install checks. `release-build.yml`:
    Sigstore's public instance since the repository is public, and runs the
    check below on it; attests each image the same way, by the digest the push
    reported, and runs the check below on each, with `gh` signed in nowhere
-   as an install's is, once it has seen that anyone can pull it; reads the tag
-   again, and only then publishes the release, which must come out immutable.
+   as an install's is, once it has seen that anyone can pull it; records the
+   two digests in `images.json`, which `SHA256SUMS` lists beside the archive;
+   reads the tag again, and only then publishes the release, which must come
+   out immutable.
    Every job but `check` refuses a re-run by anyone but the person `check` let
    through, and the two that push and sign ask `RELEASERS` again. One release
    runs at a time, whatever the tag.
@@ -2708,8 +2715,9 @@ and the command under [Checking a release](#checking-a-release) use the same.
 | The tag | `vMAJOR.MINOR.PATCH`, three numbers without leading zeros and nothing after them: `v0.2.0`, above every earlier release. A release is never a draft or a prerelease, and is never replaced: it is an immutable release (GitHub's `immutable`), whose files and tag cannot change once it is published |
 | `openadlc-<tag>.tar.gz` | The archive (`openadlc-v0.2.0.tar.gz`): a gzip-compressed tar, in pax format, of the built output at the paths it has in the repository: each `packages/<name>/dist/` and `apps/<name>/dist/`, and `apps/console/.next/` without its `cache/`, beside `openadlc-release.json` at the top. Directories and regular files only: no link of any kind, no absolute path, no `..`, nothing else. No `node_modules`: whoever takes it runs `pnpm install --frozen-lockfile` against the same commit, which builds node-pty for their own OS and architecture |
 | `openadlc-release.json` | Inside the archive, one line naming what it was built from: `{"format":1,"tag":"v0.2.0","commit":"<40 hex>","tree":"<40 hex>"}`, the tagged commit and its tree |
-| `SHA256SUMS` | One line in `sha256sum`'s format: the archive's SHA-256 in lower-case hex, two spaces, and its name |
+| `SHA256SUMS` | A line a file in `sha256sum`'s format, the SHA-256 in lower-case hex, two spaces, and the name: the archive's, then `images.json`'s. A release from before releases recorded their images' digests (v0.1.2 to v0.1.4) has the archive's line alone |
 | `openadlc-<tag>.tar.gz.sigstore.json` | The archive's build provenance attestation (SLSA provenance v1) as a Sigstore bundle; GitHub keeps the same attestation under the repository's attestations |
+| `images.json` | The digest of each image below, as the release pushed, attested and checked it, on one line: `{"format":1,"tag":"v0.2.0","commit":"<40 hex>","images":{"service":"sha256:<64 hex>","console":"sha256:<64 hex>"}}`. What an install takes each image by. Not in a release from before it (v0.1.2 to v0.1.4) |
 
 Beside its files, a release publishes two container images, for an install
 that runs images rather than a checkout: [a cloud install](#installing-on-a-cloud)
@@ -2725,9 +2733,17 @@ under the repository's attestations. Each carries the licences of what it
 installs at `/usr/share/doc/openadlc/THIRD_PARTY_NOTICES`, read from the image
 as built by `infra/local/third-party-notices.sh`
 ([Third-party notices](#third-party-notices-for-an-image-you-publish)). An
-install resolves the tag to a digest at the registry, checks the attestation
-of that digest as [below](#checking-a-release), and deploys the digest, never
-the tag.
+install takes each image by the digest the release recorded in `images.json`,
+checks the attestation of that digest as [below](#checking-a-release), and
+deploys the digest, never the tag. The tag names that digest when the release
+is made, but anyone who can write the repository's packages can push it
+again, and an install that resolved it then would refuse the release on every
+try, since the attestation is of the digest it used to name: a tag that names
+another digest than the record is reported, on Settings → System's row and by
+`openadlc cloud update`, naming both, and the recorded one is still taken
+while ghcr.io serves it. A release from before releases recorded their
+digests (v0.1.2 to v0.1.4) has no `images.json`, and an install resolves its
+tags at the registry, as it always did.
 
 | Image | What it is |
 |---|---|
@@ -2742,10 +2758,11 @@ so a release cannot publish one: every install builds its own with
 and its weekly [engine update](#engine-updates) rebuilds it.
 
 The names are `releaseImageName` and `releaseImageRef` in
-`packages/shared/src/self-update.ts`, and the check is
-`imageAttestationCheckArgs` beside them; `tests/release-workflow.test.ts`
-runs the workflow's steps and checks they push, attest and check under those
-names, with that check.
+`packages/shared/src/self-update.ts`, the record is `RELEASE_IMAGE_DIGESTS`
+and `recordedImageDigests`, and the check is `imageAttestationCheckArgs`
+beside them; `tests/release-workflow.test.ts` runs the workflow's steps and
+checks they push, attest, check and record under those names, in that
+format, with that check.
 
 The built output serves any install whatever its path: the console's
 `.next/` was seen serving pages from a directory other than the one it was
@@ -2791,7 +2808,8 @@ the fork's `release.yml` calls it rather than this repository's: put the
 fork's name in place of `620legal/OpenADLC` in both places.
 
 An image is checked by its digest, against the same signer, source and
-runner. Resolve the tag to a digest at the registry, fetch that digest's
+runner. In the same directory, which `sha256sum -c` has checked
+`images.json` in, read each image's digest from it, fetch that digest's
 attestation bundles from GitHub, check the digest against them, and deploy
 the digest you checked:
 
@@ -2799,7 +2817,7 @@ the digest you checked:
 tag=v0.2.0
 commit=$(git rev-parse "$tag^{commit}")
 for image in service console; do
-  digest=$(docker buildx imagetools inspect "ghcr.io/620legal/openadlc/$image:$tag" --format '{{json .Manifest}}' | jq -r .digest)
+  digest=$(jq -r --arg image "$image" '.images[$image]' images.json)
   curl -fsS "https://api.github.com/repos/620legal/OpenADLC/attestations/sha256%3A${digest#sha256:}" \
     | jq -c '.attestations[].bundle' > "$image.sigstore.jsonl"
   gh attestation verify "oci://ghcr.io/620legal/openadlc/$image@$digest" \
@@ -2815,7 +2833,12 @@ done
 
 It passes only for the image at that digest which `release-build.yml`, as
 `main` had it, pushed and signed in the run for that tag's push onto that
-commit. Nothing in it signs in: both images are public, GitHub's
+commit. A release from before releases recorded their digests (v0.1.2 to
+v0.1.4) has no `images.json`: resolve its tag instead, `digest=$(docker
+buildx imagetools inspect "ghcr.io/620legal/openadlc/$image:$tag" --format
+'{{json .Manifest}}' | jq -r .digest)`. Don't for a later one: its tag
+names the recorded digest only until someone pushes it again. Nothing in it
+signs in: both images are public, GitHub's
 attestations API answers a public repository's without a token, and with
 `--bundle` `gh` reads Sigstore's root of trust rather than the GitHub API, as
 for the archive. The API gives every attestation the digest has, one bundle
@@ -3004,9 +3027,11 @@ above up to the restart (the releases, the schedule, the wait for the tasks
 with new work held, the audit entries, the card in Needs you), except here:
 
 - **What is in use.** The release whose `service` image is the digest the
-  bridge's own Cloud Run revision runs, found by resolving each release's tag
-  at ghcr.io, and then checked: that digest's attestation must pass the check
-  below for that tag, or the release in use is not known. A bridge on any
+  bridge's own Cloud Run revision runs, found by the digest each release
+  recorded in `images.json`, or by resolving its tag at ghcr.io for a release
+  from before releases recorded them, and then checked: that digest's
+  attestation must pass the check below for that tag, or the release in use
+  is not known. A bridge on any
   other image, one built from a checkout with `--build` or one deployed by
   tag, runs no release: the row says so, and it is moved onto one by hand with
   `openadlc cloud update --release <tag>`.
@@ -3020,9 +3045,15 @@ with new work held, the audit entries, the card in Needs you), except here:
   without its files) or whose images do not check out is not passed over, as
   a checkout passes over a bad one: the install stays where it is, and the row
   and the failure say why, until a person rolls it past that release by hand.
-- **Checking, in place of preparing.** For `service` and `console`, the tag is
-  resolved to a digest at ghcr.io with an anonymous pull token, taken from the
-  manifest's own bytes. The digest's attestations are read from GitHub's
+- **Checking, in place of preparing.** For `service` and `console`, the
+  digest is the one the release recorded: its `SHA256SUMS` and `images.json`
+  are downloaded from the release, with no credential, and the record must be
+  the file `SHA256SUMS` gives, of that tag and its commit; then ghcr.io must
+  serve the digest, asked with an anonymous pull token and checked against the
+  manifest's own bytes. A release that lists `images.json` is taken by it or
+  not at all, never by its tags. For a release from before releases recorded
+  their digests, the tag is resolved to a digest at ghcr.io the same way, as
+  it was. The digest's attestations are read from GitHub's
   attestations API (`GET /repos/<repo>/attestations/sha256:<digest>`), with
   the automation account's token on that request alone, since Cloud Run's
   egress shares Google's addresses and GitHub allows 60 requests an hour
@@ -3037,6 +3068,13 @@ with new work held, the audit entries, the card in Needs you), except here:
   and only the digest is ever deployed, as
   `<mirror>/620legal/openadlc/<image>@<digest>`, never the tag. The bridge's
   image carries the GitHub CLI for this (`infra/local/Dockerfile.service`).
+- **A tag pushed again.** A tag of the release in use or of the next that
+  names another digest at ghcr.io now than the release recorded is said on
+  the row, naming both, from the look at the releases every quarter hour and
+  from the run's own check, which also writes `openadlc.release_tag_moved` to
+  the audit log. It changes nothing taken: the recorded digest is checked and
+  rolled, and runs. Someone who can write the repository's packages pushed
+  the tag, and is worth finding.
 - **The roll, once no task runs.** First it reads what the console, the bridge
   and hostd run, and asks hostd whether a task is running or starting on the
   host (a task paused on a person is not); if one is, or any of it cannot be
@@ -3162,7 +3200,9 @@ openadlc cloud update --release v0.3.0 # or a release by name: the same one agai
 ```
 
 It reads which release the install runs from the bridge's serving revision,
-whose image is a release's `service` image by digest, and takes the next one,
+whose image is a release's `service` image by digest, the one the release
+recorded or, from before releases recorded them, its tag's, and takes the
+next one,
 counted over every published version tag as self-update counts it, never a
 later one: when the next one cannot be taken (not immutable, or without its
 files) or its images do not check out it stops with nothing rolled rather
@@ -3170,7 +3210,8 @@ than skip it, since the skipped release's migrations would run under code
 that never had them. An install whose bridge runs images
 built with `--build` names its first release with `--release`: the one after
 the commit it was built from. It checks the release's `service` and `console`
-images as `configure` does, asks, then:
+images as `configure` does, by the digests the release recorded, says any tag
+of it that names another digest now, with both, asks, then:
 
 1. updates the console's Cloud Run service onto the console image
    (`gcloud run services update <prefix>-console --image <digest>`);

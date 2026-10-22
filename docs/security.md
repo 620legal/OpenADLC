@@ -1372,7 +1372,8 @@ only in the form a digest has, attests each, signs out of the registry,
 checks each image can be pulled without signing in and its attestation
 checked by a `gh` with no token or login, as an install does (the job's token
 goes only with the request for the bundles, against the API's limit for
-shared runner addresses), reads the tag again, and creates the release.
+shared runner addresses), writes the two digests into `images.json` and its
+SHA-256 into `SHA256SUMS`, reads the tag again, and creates the release.
 A release that does not come out immutable is deleted again and the run
 fails: the workflow's token cannot read the repository's immutable-releases
 setting (that takes administration access), but it can read whether the
@@ -1391,12 +1392,20 @@ writes what it is not listed for. Every action is named by its commit
 to `main`, and the console image's base by its digest.
 
 **What pushing packages can do.** An account or workflow that can write the
-repository's packages can retag or delete the images, and so keep a cloud
-install from updating, but it cannot make one run anything else: an install
-deploys an image only by a digest whose attestation names this repository's
+repository's packages can push a release's tag again or delete an image's
+version, but it cannot make an install run anything else: an install deploys
+an image only by a digest whose attestation names this repository's
 `release-build.yml` at `main`, the tag's push through `release.yml`, and the
 release's own commit (`--source-digest`), and an image built anywhere else
-has no such attestation.
+has no such attestation. Nor can pushing a tag again keep an install from
+updating: a release records each image's digest in `images.json`, a file of
+the immutable release that its `SHA256SUMS` lists, and an install takes that
+digest, not what the tag names, and reports a tag that names another, with
+both digests. Deleting the recorded version from the package still stops
+it: a cloud install never skips a release, so it stays on the one before
+until a person rolls it past by hand. So does pushing again a tag of a
+release from before releases recorded their digests (v0.1.2 to v0.1.4),
+which is still taken by its tags.
 
 **What a check proves.** `gh attestation verify` with the flags in
 [Checking a release](self-hosting.md#checking-a-release) passes only for the
@@ -1547,8 +1556,10 @@ could also put code of their choosing on the two services and the host, as
 those accounts, and keep it there past a restart. What holds the bridge to
 releases is its own code, not the grant:
 
-- it deploys only a digest it resolved from a release's tag at ghcr.io itself
-  and checked with `gh attestation verify` exactly as an archive is checked
+- it deploys only the digest a release recorded in `images.json` (one from
+  before releases recorded them: the digest it resolved from the release's
+  tag at ghcr.io itself), never a tag, and only once that digest is checked
+  with `gh attestation verify` exactly as an archive is checked
   ([What a check proves](#releases)): signed by `release-build.yml@main`, for
   that tag and its commit, on a GitHub-hosted runner, in the run for the tag's
   push. The bundles come from GitHub's attestations API, read with the
@@ -1560,9 +1571,10 @@ releases is its own code, not the grant:
   the fingerprints cli/cli publishes, on a base pinned by digest;
 - only the next release after the one the bridge runs, never one further, and
   never a tag or a digest a response named. Which release it runs is itself
-  checked: the registry's word that the bridge's digest is a release's tag
-  counts only once that digest passes the same check for that tag, and a next
-  release that cannot be taken stops the install rather than being skipped;
+  checked: the record's word, or the registry's for a release from before
+  records, that the bridge's digest is a release's counts only once that
+  digest passes the same check for that tag, and a next release that cannot
+  be taken stops the install rather than being skipped;
 - only for an admin's Update now or the schedule an admin set, each run in the
   audit log, and hostd's restart there too.
 
