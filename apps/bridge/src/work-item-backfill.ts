@@ -149,9 +149,24 @@ export class WorkItemBackfill {
     const started = new Date();
     const from = new Date(Date.parse(since) - SINCE_SLACK_MS).toISOString();
     let reached = from;
-    for (let page = 1; page <= MOST_PAGES; page += 1) {
+    // Past `MOST_PAGES` only while the read has not moved off the instant it
+    // asked from: the next run would ask from that same instant, and with
+    // more than fifty pages updated in that one second it read the same fifty
+    // again on every run and never got past them.
+    for (let page = 1; page <= MOST_PAGES || Date.parse(reached) <= Date.parse(from); page += 1) {
       const listed = await client.listIssues(repo.fullName, { state: 'all', since: from, sort: 'updated', direction: 'asc', perPage: PAGE, page });
-      for (const entry of listed) await linkListed(repo, entry, client);
+      for (const entry of listed) {
+        // One thing's link holds nothing else: a pull request whose full read
+        // failed on every run kept the cursor where it was, and everything
+        // updated after it stayed unlinked, closed things the sweep never
+        // lists among them. An open one the sweep links later.
+        await linkListed(repo, entry, client).catch((error: unknown) =>
+          console.warn(
+            `[bridge] work items: ${repo.fullName}#${entry.number} was not linked while catching up, and the rest went on: ` +
+              `${error instanceof Error ? error.message : String(error)}`,
+          ),
+        );
+      }
       if (listed.length < PAGE) {
         await workItems.markCaughtUp(repo.id, started.toISOString());
         return true;

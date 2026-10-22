@@ -213,9 +213,11 @@ export interface PullSighting extends PullFacts {
 /**
  * A pull request's link, made or brought up to date. `reclaim` works out
  * again which item it belongs to, as on an edit that adds `Closes #5`, and
- * moves an automatic link there; otherwise only a pull request with no link
- * yet is claimed. GitHub's closing references are read only when a claim is
- * worked out; when they cannot be, the body's keywords stand in.
+ * moves an automatic link there. Otherwise a pull request with no link yet
+ * is claimed, and a linked one moves only to its in-repository branch's
+ * issue once that has an item, read from the database alone. GitHub's
+ * closing references are read only when a claim is worked out; when they
+ * cannot be, the body's keywords stand in.
  */
 export async function linkPull(
   repo: { id: string },
@@ -329,11 +331,13 @@ export async function linkListed(
     return;
   }
   const thing = { repoId: repo.id, number: entry.number, kind: 'pull' as const };
-  // One linked already is refreshed from the listing, unless it is open and
-  // still alone, on an item of its own: its branch's issue may have been
-  // seen since, and nothing else would move it there without a delivery.
-  // The listing has no branch, so only that one is read in full.
-  if ((await workItems.itemOf(thing)) && !(entry.state === 'open' && (await workItems.standsAlone(thing)))) {
+  // One linked already is refreshed from the listing, unless it is still
+  // alone, on an item of its own: its branch's issue may have been seen
+  // since, and nothing else would move it there without a delivery. Closed
+  // ones too: one merged before its issue had an item gets no delivery
+  // again, and a listing is the last that sees it. The listing has no
+  // branch, so only that one is read in full.
+  if ((await workItems.itemOf(thing)) && !(await workItems.standsAlone(thing))) {
     await workItems.ensureLink(thing, { title: entry.title, state: entry.state, url: entry.htmlUrl, openedAt: entry.createdAt }, null);
     return;
   }

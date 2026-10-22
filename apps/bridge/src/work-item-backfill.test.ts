@@ -119,7 +119,7 @@ function github(
       issues: { number: number; createdAt: string }[];
       pulls: { number: number; createdAt: string; headRef?: string; body?: string; merged?: boolean }[];
       /** What a catch-up's `since` listing finds, oldest update first. */
-      updates?: { number: number; updatedAt: string }[];
+      updates?: { number: number; updatedAt: string; pull?: boolean }[];
     }
   >,
 ) {
@@ -139,7 +139,7 @@ function github(
         const since = params.since;
         return page((history[repo]!.updates ?? []).filter((entry) => entry.updatedAt >= since), params).map((entry) => ({
           number: entry.number, title: `#${entry.number}`, body: null, labels: [], htmlUrl: `https://github.com/${repo}/issues/${entry.number}`,
-          pullRequest: false, state: 'open' as const, createdAt: entry.updatedAt, updatedAt: entry.updatedAt, author: null, association: null,
+          pullRequest: entry.pull ?? false, state: 'open' as const, createdAt: entry.updatedAt, updatedAt: entry.updatedAt, author: null, association: null,
         }));
       }
       expect(params.direction).toBe('asc');
@@ -285,6 +285,61 @@ describe('the history read of work items', () => {
     gh.asked.length = 0;
     await backfill.run();
     expect(gh.asked).toEqual([]);
+  });
+
+  it('gets past more than fifty pages updated in one second instead of reading them again on every run', async () => {
+    store.state.repos = [{ id: 'r-app', name: 'app', fullName: 'acme/app', defaultBranch: 'main' }];
+    store.state.progress = [
+      { repoId: null, issuesPage: 1, pullsPage: 1, readAt: null, numberedAt: day(0), caughtUpAt: null, lastError: null },
+      { repoId: 'r-app', issuesPage: 2, pullsPage: 2, readAt: day(0), numberedAt: day(0), caughtUpAt: null, lastError: null },
+    ];
+    // A label put on 5,050 things at once: one instant for them all.
+    const updates = Array.from({ length: 5050 }, (_, index) => ({ number: index + 1, updatedAt: day(10) }));
+    const gh = github({ 'acme/app': { issues: [], pulls: [], updates } });
+    vi.mocked(workItems.ensureLink).mockClear();
+    const linked = () => new Set(vi.mocked(workItems.ensureLink).mock.calls.map(([thing]) => (thing as { number: number }).number));
+
+    const backfill = new WorkItemBackfill(async () => gh.client as never);
+    await backfill.run();
+    // The first run moved from where it asked to that instant, and stopped.
+    expect(gh.asked.filter((line) => line.endsWith('since'))).toHaveLength(50);
+    expect(store.state.progress.find((one) => one.repoId === 'r-app')!.caughtUpAt).toBe(new Date(Date.parse(day(10)) + 10 * 60 * 1000).toISOString());
+
+    // The next asks from that instant: fifty pages would not move it, so it reads on to the end.
+    gh.asked.length = 0;
+    await backfill.run();
+    expect(gh.asked).toHaveLength(51);
+    expect(linked().size).toBe(5050);
+    expect(Date.parse(store.state.progress.find((one) => one.repoId === 'r-app')!.caughtUpAt!)).toBeGreaterThan(Date.parse(day(10)) + 10 * 60 * 1000);
+  });
+
+  it('links the rest of a catch-up when one pull request cannot be read, and moves the cursor on', async () => {
+    store.state.repos = [{ id: 'r-app', name: 'app', fullName: 'acme/app', defaultBranch: 'main' }];
+    store.state.progress = [
+      { repoId: null, issuesPage: 1, pullsPage: 1, readAt: null, numberedAt: day(0), caughtUpAt: null, lastError: null },
+      { repoId: 'r-app', issuesPage: 2, pullsPage: 2, readAt: day(0), numberedAt: day(0), caughtUpAt: null, lastError: null },
+    ];
+    const gh = github({
+      'acme/app': {
+        issues: [],
+        pulls: [],
+        updates: [
+          { number: 1, updatedAt: day(10) },
+          { number: 2, updatedAt: day(11), pull: true },
+          { number: 3, updatedAt: day(12) },
+        ],
+      },
+    });
+    gh.client.getPullRequest.mockRejectedValue(Object.assign(new Error('Server Error'), { status: 502 }));
+    vi.mocked(workItems.ensureLink).mockClear();
+
+    const started = Date.now();
+    await new WorkItemBackfill(async () => gh.client as never).run();
+    expect(gh.client.getPullRequest).toHaveBeenCalledWith('acme/app', 2);
+    expect(vi.mocked(workItems.ensureLink).mock.calls.map(([thing]) => (thing as { number: number }).number)).toEqual([1, 3]);
+    const progress = store.state.progress.find((one) => one.repoId === 'r-app')!;
+    expect(Date.parse(progress.caughtUpAt!)).toBeGreaterThanOrEqual(started);
+    expect(progress.lastError).toBeNull();
   });
 
   it('catches numbered repositories up while another repository’s read is rate-limited', async () => {

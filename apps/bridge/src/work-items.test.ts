@@ -218,7 +218,7 @@ describe('linking', () => {
     expect(vi.mocked(workItems.ensureLink).mock.calls[1]?.[2]).toBeNull();
   });
 
-  it('has the sweep read in full an open pull request still alone on its own item, and only that one', async () => {
+  it('has the sweep read in full a pull request still alone on its own item, open or merged, and only that one', async () => {
     const client = {
       getPullRequest: vi.fn(async () => ({ headRef: 'agent/builder/12-dark-mode', headRepoFullName: APP, baseRef: 'main', state: 'open', merged: false })),
       closingIssueRefs: vi.fn(async () => []),
@@ -236,9 +236,13 @@ describe('linking', () => {
     expect(client.getPullRequest).toHaveBeenCalledWith(APP, 40);
     expect(vi.mocked(workItems.ensureLink).mock.calls[1]?.[2]).toBe('item-5');
 
-    // Closed, it is only refreshed.
+    // Merged before its issue had an item, it gets no delivery again: the
+    // listing reads it in full too, and it moves to its issue, still merged.
     client.getPullRequest.mockClear();
+    client.getPullRequest.mockResolvedValue({ headRef: 'agent/builder/12-dark-mode', headRepoFullName: APP, baseRef: 'main', state: 'closed', merged: true });
     await linkListed(repo, { ...listed, state: 'closed' }, client as never);
-    expect(client.getPullRequest).not.toHaveBeenCalled();
+    expect(client.getPullRequest).toHaveBeenCalledWith(APP, 40);
+    expect(vi.mocked(workItems.ensureLink).mock.calls[2]?.[1]).toMatchObject({ state: 'merged' });
+    expect(vi.mocked(workItems.ensureLink).mock.calls[2]?.[2]).toBe('item-5');
   });
 });
