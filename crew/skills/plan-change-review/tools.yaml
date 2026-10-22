@@ -12,4 +12,8 @@ allow:
 
 deny:
   shell: [curl, wget, ssh, docker, sudo, gh]
-  github: ["pr merge", "pr review", "pr comment", "issue comment", "issue edit", "workflow run", "run rerun", "api"]
+  # `gh` is denied outright above, so it never runs. These are the commands
+  # OpenADLC's gh can refuse, kept in case a later edit lets `gh` back in:
+  # `pr comment` and `issue comment` were listed once, but nothing refuses them
+  # (apps/hostd/src/gh-shim.test.ts).
+  github: ["pr merge", "pr review", "issue edit", "workflow run", "run rerun", "api"]
