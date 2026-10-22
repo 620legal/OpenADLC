@@ -29,7 +29,7 @@ const db = vi.hoisted(() => {
     backfill: Backfill[];
     rows: BackfillRow[];
     repos: { id: string; full_name: string }[];
-    issues: { repo_id: string; number: number; title: string; stage: string; url: string | null; created_at: Date }[];
+    issues: { repo_id: string; number: number; title: string; stage: string; url: string | null; created_at: Date; updated_at?: Date }[];
     requests: { id: string; repo_id: string | null; issue_number: number | null; text: string; state: string; created_at: Date }[];
   };
   const empty = (): State => ({ items: [], links: [], backfill: [], rows: [], repos: [], issues: [], requests: [] });
@@ -220,7 +220,34 @@ const db = vi.hoisted(() => {
       if (/^select l\.id, l\.work_item_id, .* from work_item_links l where l\.work_item_id = \$1 order by l\.id$/.test(text)) {
         return { rows: s.links.filter((link) => link.work_item_id === p[0]).sort((a, b) => a.id - b.id).map((link) => ({ ...link })) };
       }
-      if (/^select l\.id, .*, w\.number as item_number from work_item_links l join work_items w/.test(text)) {
+      const withNumbers = (links: Link[]) =>
+        [...links].sort((a, b) => a.id - b.id).map((link) => ({ ...link, item_number: s.items.find((item) => item.id === link.work_item_id)!.number }));
+      if (/^select l\.id, .*, w\.number as item_number from work_item_links l join work_items w on w\.id = l\.work_item_id where l\.work_item_id in \( select k\.work_item_id from work_item_links k where k\.state = 'open' union/.test(text)) {
+        // `boardLinks`: as its three selections read, each item's links whole.
+        const since = (p[0] as Date).getTime();
+        const shown = new Set(
+          s.links
+            .filter((link) => {
+              if (link.state === 'open') return true;
+              if (Date.parse(link.closed_at ?? link.opened_at) >= since) return true;
+              const row = link.kind === 'issue' ? s.issues.find((issue) => issue.repo_id === link.repo_id && issue.number === link.number) : undefined;
+              return Boolean(row && (row.stage !== 'done' || (row.updated_at ?? row.created_at).getTime() >= since));
+            })
+            .map((link) => link.work_item_id),
+        );
+        return { rows: withNumbers(s.links.filter((link) => shown.has(link.work_item_id))) };
+      }
+      if (/^select l\.id, .*, w\.number as item_number from work_item_links l join work_items w on w\.id = l\.work_item_id where l\.work_item_id in \( select k\.work_item_id from work_item_links k join unnest\(\$1::uuid\[\], \$2::int\[\]\)/.test(text)) {
+        // `linksOfItemsHolding`: the items of these things, each item's links whole.
+        const [repoIds, numbers, requestIds] = p as [string[], number[], string[]];
+        const held = new Set(
+          s.links
+            .filter((link) => repoIds.some((repo, index) => link.repo_id === repo && link.number === numbers[index]) || (link.request_id !== null && requestIds.includes(link.request_id)))
+            .map((link) => link.work_item_id),
+        );
+        return { rows: withNumbers(s.links.filter((link) => held.has(link.work_item_id))) };
+      }
+      if (/^select l\.id, .*, w\.number as item_number from work_item_links l join work_items w on w\.id = l\.work_item_id order by l\.id$/.test(text)) {
         return {
           rows: [...s.links].sort((a, b) => a.id - b.id).map((link) => ({ ...link, item_number: s.items.find((item) => item.id === link.work_item_id)!.number })),
         };
@@ -257,10 +284,12 @@ vi.mock('../client.js', () => ({
 import { withTransaction } from '../client.js';
 import {
   allLinks,
+  boardLinks,
   byNumber,
   ensureLink,
   linkByHand,
   linksOf,
+  linksOfItemsHolding,
   mergeByHand,
   unlinkByHand,
   firstFiledItem,
@@ -564,5 +593,81 @@ describe('by hand', () => {
     expect((await linksOf(a!.id)).map((link) => link.number)).toEqual([5, 6]);
     expect(await mergeByHand(b!.id, a!.id)).toBeNull();
     expect(await byNumber(99)).toBeNull();
+  });
+});
+
+describe('what the board reads', () => {
+  const day = 86_400_000;
+  const ago = (days: number) => new Date(Date.now() - days * day).toISOString();
+  /** A link straight into the table, on an item of its own number. */
+  const put = (number: number, kind: 'issue' | 'pull' | 'request', thing: number | string, state: 'open' | 'closed' | 'merged', at: { opened: string; closed?: string | null }) => {
+    if (!db.state.items.some((item) => item.number === number)) db.state.items.push({ id: `item-${number}`, number, merged_into: null });
+    db.state.links.push({
+      id: db.state.links.length + 1,
+      work_item_id: `item-${number}`,
+      kind,
+      repo_id: kind === 'request' ? null : REPO,
+      number: kind === 'request' ? null : (thing as number),
+      request_id: kind === 'request' ? (thing as string) : null,
+      linked_by: null,
+      title: `${kind} ${thing}`,
+      state,
+      url: null,
+      opened_at: at.opened,
+      closed_at: at.closed ?? null,
+    });
+  };
+
+  it('is the links of the work open, or closed in the week Done shows, each item whole, and never the history before it', async () => {
+    // Open, with a pull closed long ago: read whole, so its card sums both.
+    put(1, 'issue', 10, 'open', { opened: ago(90) });
+    put(1, 'pull', 11, 'closed', { opened: ago(90), closed: ago(60) });
+    // Merged two days ago, opened a year ago: its week counts from the merge.
+    put(2, 'pull', 20, 'merged', { opened: ago(365), closed: ago(2) });
+    // Closed ten days ago: out of the week.
+    put(3, 'pull', 30, 'closed', { opened: ago(20), closed: ago(10) });
+    // From history, nobody saw them close: by when they opened.
+    put(4, 'pull', 40, 'closed', { opened: ago(400) });
+    put(5, 'pull', 50, 'closed', { opened: ago(3) });
+    // Closed a month ago and held in Ship since: its card is on the board.
+    put(6, 'issue', 60, 'closed', { opened: ago(40), closed: ago(30) });
+    db.state.issues.push({ repo_id: REPO, number: 60, title: '#60', stage: 'merged', url: null, created_at: new Date(ago(40)), updated_at: new Date(ago(30)) });
+    // Done a month ago, and changed since: in the week from when it changed.
+    put(7, 'issue', 70, 'closed', { opened: ago(40), closed: ago(30) });
+    db.state.issues.push({ repo_id: REPO, number: 70, title: '#70', stage: 'done', url: null, created_at: new Date(ago(40)), updated_at: new Date(ago(1)) });
+    // Done a month ago and not touched since: history.
+    put(8, 'issue', 80, 'closed', { opened: ago(40), closed: ago(30) });
+    db.state.issues.push({ repo_id: REPO, number: 80, title: '#80', stage: 'done', url: null, created_at: new Date(ago(40)), updated_at: new Date(ago(30)) });
+
+    const links = await boardLinks(new Date(Date.now() - 7 * day));
+    expect(links.map((link) => [link.itemNumber, link.number])).toEqual([
+      [1, 10],
+      [1, 11],
+      [2, 20],
+      [5, 50],
+      [6, 60],
+      [7, 70],
+    ]);
+  });
+
+  it('is, for the work running, every link of the items holding it and of no other', async () => {
+    put(1, 'request', 'a4b02784-3ae8-450b-abe9-0c93eb4d67dc', 'open', { opened: ago(3) });
+    put(2, 'issue', 12, 'open', { opened: ago(2) });
+    put(2, 'pull', 31, 'open', { opened: ago(1) });
+    put(3, 'issue', 15, 'open', { opened: ago(1) });
+    expect(await linksOfItemsHolding([])).toEqual([]);
+    expect((await linksOfItemsHolding([{ repoId: REPO, number: 31 }])).map((link) => [link.itemNumber, link.kind, link.number])).toEqual([
+      [2, 'issue', 12],
+      [2, 'pull', 31],
+    ]);
+    expect((await linksOfItemsHolding([{ requestId: 'a4b02784-3ae8-450b-abe9-0c93eb4d67dc' }, { repoId: REPO, number: 15 }])).map((link) => link.itemNumber)).toEqual([1, 3]);
+  });
+
+  it('knows a repository numbered on its own, apart from the install', async () => {
+    expect(await isNumbered(REPO)).toBe(false);
+    numbered();
+    expect(await isNumbered()).toBe(true);
+    expect(await isNumbered(REPO)).toBe(true);
+    expect(await isNumbered('repo-2')).toBe(false);
   });
 });

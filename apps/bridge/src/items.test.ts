@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Gate, Message } from '@openadlc/shared';
-import { itemKey, itemOf, itemView, linkStage, lonePullRefusal, messageRoutes, parseItemKey, routeItemMessage, type ItemBot, type ItemTaskRow } from './items.js';
+import { controlRefusal, itemKey, itemOf, itemView, linkStage, lonePullRefusal, messageRoutes, ownSubjects, parseItemKey, routeItemMessage, type ItemBot, type ItemTaskRow } from './items.js';
 
 describe('a work item key', () => {
   it('names the number whatever its prefix or case, and is display only', () => {
@@ -304,3 +304,22 @@ describe('holding, putting next or cancelling a pull request alone on its item',
   });
 });
 
+describe('what an item’s pause, next and cancel act on', () => {
+  it('is its own issue, its pull request and its requests, never a second link', () => {
+    const item = itemOf('api#12', FACTS)!;
+    const linked = { ...item, subjects: [...item.subjects, 'api#15', 'web#3'] };
+    expect(ownSubjects(linked).sort()).toEqual(['api#12', 'api#31', 'request:a4b02784']);
+    // A deploy of a commit is its own subject.
+    expect(ownSubjects(itemOf('api@3f2c1a9', FACTS)!)).toEqual(['api@3f2c1a9']);
+  });
+
+  it('is refused for an issue the board has no row for, though a pull is linked beside it', () => {
+    const link = (state: 'open' | 'closed') => ({ kind: 'issue' as const, repo: 'api', number: 77, ref: 'api#77', title: 'An old report', state, stage: null, url: null, linkedBy: null });
+    const item = { key: 'api#77', issue: null, request: null, pr: 40, repo: 'api', links: [], issueLink: link('closed') };
+    // Not "a pull request with no issue": it has one, which the board has not read.
+    expect(controlRefusal(item, false)).toMatch(/^api#77 was closed before OpenADLC read it/);
+    expect(controlRefusal({ ...item, issueLink: link('open') }, false)).toMatch(/^api#77 is not on the board yet/);
+    expect(controlRefusal({ ...item, issue: { number: 77 } as never }, false)).toBeNull();
+    expect(controlRefusal({ ...item, issueLink: null }, false)).toMatch(/pull request with no issue/);
+  });
+});

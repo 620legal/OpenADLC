@@ -70,12 +70,17 @@ vi.mock('@openadlc/db', () => ({
     getRequest: vi.fn(async (id: string) => [FILED, OPEN].find((one) => one.id === id) ?? null),
     listRequestsForIssue: vi.fn(async (repoId: string, number: number) => [FILED, OPEN].filter((one) => one.repoId === repoId && one.issueNumber === number)),
   },
-  issues: {
-    listIssues: vi.fn(async () => [
-      { id: 'i-12', repoId: 'repo-1', repoName: 'api', number: 12, title: 'Record the model per review', stage: 'review', url: 'https://github.com/acme/api/issues/12', prNumber: 31, labels: [] },
-      { id: 'i-15', repoId: 'repo-1', repoName: 'api', number: 15, title: 'Another piece of work', stage: 'build', url: null, prNumber: null, labels: [] },
-    ]),
-  },
+  issues: (() => {
+    const issues = {
+      listIssues: vi.fn(async () => [
+        { id: 'i-12', repoId: 'repo-1', repoName: 'api', number: 12, title: 'Record the model per review', stage: 'review', url: 'https://github.com/acme/api/issues/12', prNumber: 31, labels: [] },
+        { id: 'i-15', repoId: 'repo-1', repoName: 'api', number: 15, title: 'Another piece of work', stage: 'build', url: null, prNumber: null, labels: [] },
+      ]),
+      // One row, as the board has it: what `listIssues` lists, so a test that changes one changes both.
+      getIssue: vi.fn(async (repoId: string, number: number) => (await issues.listIssues()).find((one) => one.repoId === repoId && one.number === number) ?? null),
+    };
+    return issues;
+  })(),
   tasks: {
     listTasksOnSubjects: vi.fn(async (refs: readonly string[]) => world.tasks.filter((task) => refs.includes(String(task.subjectRef)))),
     getTask: vi.fn(async (id: string) => world.tasks.find((task) => task.id === id) ?? null),
@@ -342,6 +347,69 @@ describe('a work item by its key', () => {
     expect(view.pullRequest).toBeNull();
     expect(view.subjects).not.toContain('api#31');
     expect(view.tasks.map((one) => one.id)).toEqual(['k-15']);
+  });
+
+  it('opens an item with no issue link as its own request, never as the issue the request was filed as', async () => {
+    // A person unlinked the request from issue 12: its row still says it was filed as #12.
+    world.items.push({ id: 'w-133', number: 133, mergedInto: null });
+    world.links[0] = { ...world.links[0]!, itemId: 'w-133', linkedBy: 'jane@acme.test' };
+    for (const subject of ['133', 'request:a4b02784']) {
+      const { view } = await read(subject);
+      expect(view.key, subject).toBe('request:a4b02784');
+      expect(view.issue, subject).toBeNull();
+      expect(view.pullRequest, subject).toBeNull();
+      expect(view.subjects, subject).toEqual(['request:a4b02784']);
+      expect(view.title, subject).toBe('Record which model reviewed');
+      expect(view.stage, subject).toBe('intake');
+    }
+    // Its controls act on the request alone: issue 12 and its pull are W-128's.
+    const { resolveControlled } = await import('./items.js');
+    const controlled = await resolveControlled('request:a4b02784', { pull: async () => null, defaultBranch: async () => 'main' });
+    expect(controlled).toMatchObject({ key: 'request:a4b02784', issue: null, pr: null, request: { id: FILED.id }, subjects: ['request:a4b02784'] });
+
+    // And issue 12's item no longer has the request.
+    const { view } = await read('api#12');
+    expect(view.request).toBeNull();
+    expect(view.subjects).not.toContain('request:a4b02784');
+  });
+
+  it('holds, puts next and cancels its own issue and pull request only, though the page reads every link', async () => {
+    const { resolveControlled } = await import('./items.js');
+    const controlled = await resolveControlled('W-128', { pull: async () => ({ headRef: 'agent/builder/12-x', headRepoFullName: 'acme/api', merged: false, state: 'open' }), defaultBranch: async () => 'main' });
+    // Not api#15, linked by hand: cancelling W-128 stopped #15's build, and the dispatcher built it again.
+    expect(controlled).toMatchObject({ key: 'api#12', issue: { number: 12 }, pr: { number: 31, merged: false } });
+    expect(controlled?.subjects.sort()).toEqual(['api#12', 'api#31', 'request:a4b02784']);
+    expect((await read('W-128')).view.subjects).toContain('api#15');
+  });
+
+  it('draws an issue the board has no row for from its link, in the stage its state says, and refuses its controls', async () => {
+    world.items.push({ id: 'w-140', number: 140, mergedInto: null }, { id: 'w-141', number: 141, mergedInto: null });
+    world.links.push(
+      link(6, 'w-140', 'issue', 77, { title: 'An old report', state: 'closed', url: 'https://github.com/acme/api/issues/77' }),
+      link(7, 'w-141', 'issue', 78, { title: 'Not read yet' }),
+    );
+    const { view } = await read('W-140');
+    // It drew "api#77" in Intake, with the header saying Done.
+    expect(view).toMatchObject({ key: 'api#77', title: 'An old report', stage: 'done' });
+    expect(view.issue).toEqual({ number: 77, title: 'An old report', url: 'https://github.com/acme/api/issues/77', stage: 'done', onBoard: false });
+    expect((await read('api#78')).view.issue).toMatchObject({ number: 78, title: 'Not read yet', stage: 'intake', onBoard: false });
+
+    const { resolveControlled } = await import('./items.js');
+    const none = { pull: async () => null, defaultBranch: async () => 'main' };
+    await expect(resolveControlled('W-140', none)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/api#77 was closed before OpenADLC read it.*reopen it on GitHub/) });
+    await expect(resolveControlled('api#78', none)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/api#78 is not on the board yet/) });
+  });
+
+  it('opens a subject with no link as itself, never the issue whose row records it as its pull request', async () => {
+    // Pull 31 has no link yet; issue 12's row still records it.
+    world.links.splice(2, 1);
+    const { view } = await read('api#31');
+    expect(view.key).toBe('api#31');
+    expect(view.workItem).toBeNull();
+    expect(view.subjects).toEqual(['api#31']);
+    expect(view.issue).toBeNull();
+    expect(view.tasks.map((one) => one.id).sort()).toEqual(['k-lead', 'k-second']);
+    expect((view.timeline as { id: string }[]).map((one) => one.id)).toEqual(['m-2']);
   });
 
   it('says no for a number never handed out, rather than guessing', async () => {

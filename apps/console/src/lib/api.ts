@@ -576,7 +576,11 @@ export interface ItemView {
   stage: string | null;
   costUsd: number;
   request: { id: string; subject: string; text: string; context: string | null; requestedBy: string | null; state: string; createdAt: string | null } | null;
-  issue: { number: number; title: string; url: string | null; stage: string } | null;
+  /**
+   * `onBoard` false: an issue known only by its link, which the board has no
+   * row for, so nothing can hold, put next or cancel it. Absent from an older bridge.
+   */
+  issue: { number: number; title: string; url: string | null; stage: string; onBoard?: boolean } | null;
   pullRequest: { number: number; url: string | null } | null;
   roles: ItemRole[];
   timeline: ItemMessage[];

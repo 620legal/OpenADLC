@@ -190,7 +190,7 @@ vi.mock('@openadlc/db', () => ({
   },
   threads: { listOpenGates: vi.fn(async () => []) },
   // Not numbered: the board as it was before work items, unless a test numbers it.
-  workItems: { isNumbered: vi.fn(async () => false), allLinks: vi.fn(async () => []) },
+  workItems: { isNumbered: vi.fn(async () => false), boardLinks: vi.fn(async () => []) },
 }));
 
 let bridge: Server;
@@ -272,7 +272,7 @@ describe('GET /v1/board', () => {
     ];
     const read = async (repo: string) => {
       vi.mocked(workItems.isNumbered).mockResolvedValueOnce(true);
-      vi.mocked(workItems.allLinks).mockResolvedValueOnce(links as never);
+      vi.mocked(workItems.boardLinks).mockResolvedValueOnce(links as never);
       const board = (await (await fetch(`${bridgeUrl}/v1/board?repo=${repo}`)).json()) as { columns: { stage: string; cards: { ref: string; item?: { key: string } | null; repos?: string[] }[] }[] };
       return board.columns.flatMap((column) => column.cards.map((card) => [column.stage, card.ref, card.item?.key ?? null, card.repos ?? []]));
     };
@@ -297,7 +297,7 @@ describe('GET /v1/board', () => {
     TASKS.push(review);
     try {
       vi.mocked(workItems.isNumbered).mockResolvedValueOnce(true);
-      vi.mocked(workItems.allLinks).mockResolvedValueOnce([link(1, 'w-5', 5, 'issue', 'repo-1', 12), link(2, 'w-5', 5, 'pull', 'repo-1', 31), link(3, 'w-5', 5, 'pull', 'repo-2', 9)] as never);
+      vi.mocked(workItems.boardLinks).mockResolvedValueOnce([link(1, 'w-5', 5, 'issue', 'repo-1', 12), link(2, 'w-5', 5, 'pull', 'repo-1', 31), link(3, 'w-5', 5, 'pull', 'repo-2', 9)] as never);
       vi.mocked(threads.listOpenGates).mockResolvedValueOnce([{ taskId: 'task-website' }] as never);
       const board = (await (await fetch(`${bridgeUrl}/v1/board`)).json()) as { columns: Column[] };
       const card = board.columns.flatMap((column) => column.cards).find((one) => one.ref === 'openadlc-testbed#12');
@@ -318,7 +318,7 @@ describe('GET /v1/board', () => {
       id, itemId: `w-${id}`, itemNumber: id, kind: 'pull', repoId: 'repo-2', number, requestId: null, linkedBy: null, title: `pull ${number}`, url: null, ...extra,
     });
     vi.mocked(workItems.isNumbered).mockResolvedValueOnce(true);
-    vi.mocked(workItems.allLinks).mockResolvedValueOnce([
+    vi.mocked(workItems.boardLinks).mockResolvedValueOnce([
       pull(1, 60, { state: 'merged', openedAt: opened, closedAt }),
       // Closed before anything recorded when: its week counts from when it opened.
       pull(2, 61, { state: 'closed', openedAt: opened, closedAt: null }),

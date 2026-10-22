@@ -106,9 +106,16 @@ async function numberedFor(sql: Sql, thing: ThingRef): Promise<boolean> {
   return Boolean(row?.numbered_at);
 }
 
-/** Whether the install's first numbering has committed: before it, nothing is numbered live. */
-export async function isNumbered(): Promise<boolean> {
-  const row = await queryOne<{ numbered_at: Date | null }>('select numbered_at from work_item_backfill where repo_id is null');
+/**
+ * Whether the install's first numbering has committed: before it, nothing is
+ * numbered live. With `repoId`, whether that repository's history has been
+ * numbered: one added later is read and numbered on its own, and until then
+ * its things have no links.
+ */
+export async function isNumbered(repoId?: string): Promise<boolean> {
+  const row = repoId
+    ? await queryOne<{ numbered_at: Date | null }>('select numbered_at from work_item_backfill where repo_id = $1', [repoId])
+    : await queryOne<{ numbered_at: Date | null }>('select numbered_at from work_item_backfill where repo_id is null');
   return Boolean(row?.numbered_at);
 }
 
@@ -511,7 +518,7 @@ export interface Link {
   /** The order things were linked in: an item's first issue is its lowest. */
   id: number;
   itemId: string;
-  /** The item's number, when read with every link (`allLinks`). */
+  /** The item's number, when read for the board (`boardLinks`, `linksOfItemsHolding`). */
   itemNumber?: number;
   kind: 'issue' | 'pull' | 'request';
   repoId: string | null;
@@ -577,13 +584,67 @@ export async function linksOf(itemId: string): Promise<Link[]> {
 }
 
 /**
- * Every link, with its item's number, in the order they were linked: what
- * the board groups its cards by. A link is always on an item not merged
- * away, since a merge and an emptying move the links with them.
+ * Every link, with its item's number, in the order they were linked. A link
+ * is always on an item not merged away, since a merge and an emptying move
+ * the links with them. Every issue and pull request ever seen: the board
+ * reads `boardLinks`, and the activity poll `linksOfItemsHolding`.
  */
 export async function allLinks(): Promise<Link[]> {
   const rows = await query<FullLinkRow>(
     `select ${LINK_COLUMNS}, w.number as item_number from work_item_links l join work_items w on w.id = l.work_item_id order by l.id`,
+  );
+  return rows.map(toLink);
+}
+
+/**
+ * Every link of the items the board can show, with its item's number, in the
+ * order they were linked: an item with a link still open, or one closed or
+ * merged since `since` (opened since, for one nobody saw close), or with an
+ * issue the board has a card for outside Done or changed since then (an
+ * issue held in Ship for a week has every link closed). `since` is the start
+ * of the week Done shows. Each item's links are read whole, so its card sums
+ * all of them.
+ *
+ * The board read every link there had ever been, every fifteen seconds for
+ * each person looking, and sent every closed lone pull request ever, for the
+ * console to drop all but a week of them.
+ */
+export async function boardLinks(since: Date): Promise<Link[]> {
+  const rows = await query<FullLinkRow>(
+    `select ${LINK_COLUMNS}, w.number as item_number
+       from work_item_links l join work_items w on w.id = l.work_item_id
+      where l.work_item_id in (
+              select k.work_item_id from work_item_links k where k.state = 'open'
+              union
+              select k.work_item_id from work_item_links k where coalesce(k.closed_at, k.opened_at) >= $1
+              union
+              select k.work_item_id from work_item_links k join issues i on i.repo_id = k.repo_id and i.number = k.number
+               where k.kind = 'issue' and (i.stage <> 'done' or i.updated_at >= $1))
+      order by l.id`,
+    [since],
+  );
+  return rows.map(toLink);
+}
+
+/**
+ * Every link of the items that hold any of `things`, with its item's
+ * number, in the order they were linked: what the board's activity poll
+ * reads for the work running now, and nothing else.
+ */
+export async function linksOfItemsHolding(things: readonly ThingRef[]): Promise<Link[]> {
+  const refs = things.filter((thing): thing is { repoId: string; number: number } => 'repoId' in thing);
+  const requests = things.flatMap((thing) => ('requestId' in thing ? [thing.requestId] : []));
+  if (refs.length === 0 && requests.length === 0) return [];
+  const rows = await query<FullLinkRow>(
+    `select ${LINK_COLUMNS}, w.number as item_number
+       from work_item_links l join work_items w on w.id = l.work_item_id
+      where l.work_item_id in (
+              select k.work_item_id from work_item_links k
+                join unnest($1::uuid[], $2::int[]) as t(repo_id, number) on k.repo_id = t.repo_id and k.number = t.number
+              union
+              select k.work_item_id from work_item_links k where k.request_id = any($3::uuid[]))
+      order by l.id`,
+    [refs.map((thing) => thing.repoId), refs.map((thing) => thing.number), requests],
   );
   return rows.map(toLink);
 }

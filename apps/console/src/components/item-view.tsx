@@ -414,8 +414,9 @@ function ItemHeader({
       )}
       {view?.workItem && (view.links ?? []).length > 0 && <WorkItemLinks view={view} admin={admin} onChanged={onChanged} />}
       {/* An issue's pause, play next and cancel, in words; a request has none until it is filed,
-          and finished work none, as on the board: a shipped item's cancel would close its merged pull request. */}
-      {view?.issue && !['merged', 'done'].includes(view.issue.stage) && (
+          and finished work none, as on the board: a shipped item's cancel would close its merged pull request.
+          Nor an issue known only by its link: they act on the board's row, and the bridge refuses them. */}
+      {view?.issue && view.issue.onBoard !== false && !['merged', 'done'].includes(view.issue.stage) && (
         <IssueControls issue={{ subject: view.key, number: view.issue.number, held: view.held ?? null, next: view.next ?? false }} />
       )}
       {view && (view.standingApproval || (view.settledPlanChanges ?? []).length > 0) && (

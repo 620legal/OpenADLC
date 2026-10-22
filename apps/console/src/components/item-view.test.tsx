@@ -152,6 +152,16 @@ describe('an item’s pause, play next and cancel', () => {
       expect(finished).not.toContain('Cancel work');
     }
   });
+
+  it('are not offered on an issue known only by its link, which the board has no row for, though it is drawn', () => {
+    // `W-140`'s api#77, open on GitHub before OpenADLC read it: the bridge refuses its controls.
+    const linkOnly = render('admin', { ...ITEM, stage: 'intake', issue: { number: 77, title: 'An old report', url: 'https://github.com/acme/api/issues/77', stage: 'intake', onBoard: false } });
+    expect(linkOnly).toContain('Issue #77');
+    expect(linkOnly).not.toContain('data-issue-controls');
+    expect(linkOnly).not.toContain('Cancel work');
+    // An older bridge says nothing of it: the issue is the board's.
+    expect(render('admin', { ...ITEM, issue: { ...ITEM.issue!, onBoard: undefined } })).toContain('data-issue-controls');
+  });
 });
 
 describe('where the item’s box sends a message', () => {
