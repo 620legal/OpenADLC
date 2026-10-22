@@ -141,10 +141,16 @@ async function main() {
     body: '{}',
   });
 
+  // hostd stops the task before the kill answers (`TaskRunner.stoppedByKill`).
+  // It used to be left to the observer, which stops a task only once three
+  // listings in a row have missed its session: twenty to thirty seconds after
+  // the kill, against the thirty this waited, so the check passed or failed on
+  // when the third look came. Ten is room for a slow runner, and short of
+  // anything the observer could do, so a kill that stops nothing again fails here.
   const settled = await waitFor(async () => {
     const current = await tasks.getTask(taskId);
     return current && current.state !== 'running' && current.state !== 'queued' ? current : null;
-  }, 30_000);
+  }, 10_000);
 
   check('the task no longer claims to be running', Boolean(settled), settled ? settled.state : 'still running');
   check(

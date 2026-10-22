@@ -429,12 +429,13 @@ describe('killing a session through hostd', () => {
       sessionOf: () => null,
       stoppingByPerson: vi.fn(async () => 'task-1'),
       notStoppedAfterAll: vi.fn(async () => undefined),
+      stoppedByKill: vi.fn(async () => true),
     };
     const driver = { kind: 'local', loginPath: (id: string) => join(loginRoot, id), killSession: vi.fn(kill) };
     return { runner, driver };
   }
 
-  it('records that a person stopped the task running in it, then kills it', async () => {
+  it('records that a person stopped the task running in it, kills it, then stops the task', async () => {
     const { runner, driver } = killable(async () => undefined);
     server = await start(undefined, { runner, driver });
 
@@ -443,7 +444,23 @@ describe('killing a session through hostd', () => {
     expect(response.status).toBe(200);
     expect(runner.stoppingByPerson).toHaveBeenCalledWith('atlas', 'implement', expect.any(String));
     expect(driver.killSession).toHaveBeenCalledWith('atlas', 'implement');
+    expect(runner.stoppedByKill).toHaveBeenCalledWith('task-1', 'atlas', 'implement');
+    expect(vi.mocked(driver.killSession).mock.invocationCallOrder[0]).toBeLessThan(runner.stoppedByKill.mock.invocationCallOrder[0] ?? 0);
     expect(runner.notStoppedAfterAll).not.toHaveBeenCalled();
+  });
+
+  it('still answers that the session was killed when stopping its task fails, which the observer does later', async () => {
+    const { runner, driver } = killable(async () => undefined);
+    runner.stoppedByKill.mockRejectedValue(new Error('connection reset'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    server = await start(undefined, { runner, driver });
+
+    const response = await server.call('POST', '/bots/atlas/sessions/implement/kill');
+
+    expect(response.status).toBe(200);
+    expect(vi.mocked(audit)).toHaveBeenCalledWith(expect.objectContaining({ action: 'session.kill' }));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('left for the observer to stop: connection reset'));
+    warn.mockRestore();
   });
 
   it('takes the note back when the kill does not land, so a later crash still reads as an interruption', async () => {
@@ -456,6 +473,7 @@ describe('killing a session through hostd', () => {
 
     expect(response.status).toBe(500);
     expect(runner.notStoppedAfterAll).toHaveBeenCalledWith('task-1');
+    expect(runner.stoppedByKill).not.toHaveBeenCalled();
   });
 });
 

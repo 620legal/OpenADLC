@@ -68,6 +68,42 @@ export interface RunningTasks {
   dropFinishedTaskRefs?(isOver: (taskId: string) => Promise<boolean | { branch: string | null }>): Promise<number>;
 }
 
+/**
+ * Ends, in the database, a running task whose session is gone: the row is
+ * stopped (`stopIfRunning`, which keeps the reason of a person who killed it),
+ * its lease is let go unless a pull request still holds it, and the stop is
+ * audited with `how`. What hostd holds for it goes on the observer's next look
+ * (`forgetFinishedTasks`).
+ *
+ * Null when the task was no longer running: whatever ended it first — its own
+ * report, a kill, the observer — keeps that ending, and the lease is that
+ * ending's to settle.
+ */
+export async function stopForGoneSession(taskId: string, how: string): Promise<TaskRow | null> {
+  const stopped = await tasks.stopIfRunning(taskId, 'the session was killed; the branch and the issue are untouched');
+  if (!stopped) return null;
+
+  // A lease with a pull request outlives the task that opened it. The
+  // change is still in flight until that pull request closes unmerged or
+  // merges and its verification finishes, and releasing here would let a
+  // second, overlapping issue go out while the first is in review.
+  if (stopped.leaseId) {
+    const lease = await leases.getLease(stopped.leaseId).catch(() => null);
+    if (lease?.prNumber) {
+      console.log(`[hostd] keeping the lease on ${stopped.subjectRef}: #${lease.prNumber} is still open`);
+    } else {
+      await leases.setLeaseState(stopped.leaseId, 'released');
+    }
+  }
+  await audit({
+    actor: 'hostd',
+    action: 'task.stopped',
+    target: stopped.subjectRef,
+    payload: { reason: how, branch: stopped.branch },
+  });
+  return stopped;
+}
+
 /** How often the reaper runs, in observer ticks: once a minute at the usual ten seconds. */
 export const REAP_EVERY = 6;
 
@@ -293,30 +329,7 @@ export class SessionObserver {
           }
           this.misses.delete(task.id);
 
-          const stopped = await tasks.stopIfRunning(
-            task.id,
-            'the session was killed; the branch and the issue are untouched',
-          );
-          if (!stopped) continue;
-
-          // A lease with a pull request outlives the task that opened it. The
-          // change is still in flight until that pull request closes unmerged or
-          // merges and its verification finishes, and releasing here would let a
-          // second, overlapping issue go out while the first is in review.
-          if (task.leaseId) {
-            const lease = await leases.getLease(task.leaseId).catch(() => null);
-            if (lease?.prNumber) {
-              console.log(`[hostd] keeping the lease on ${task.subjectRef}: #${lease.prNumber} is still open`);
-            } else {
-              await leases.setLeaseState(task.leaseId, 'released');
-            }
-          }
-          await audit({
-            actor: 'hostd',
-            action: 'task.stopped',
-            target: task.subjectRef,
-            payload: { reason: 'session disappeared', branch: task.branch },
-          });
+          if (!(await stopForGoneSession(task.id, 'session disappeared'))) continue;
           console.log(`[hostd] ${bot.name}: session ${sessionName} is gone; stopped its task on ${task.subjectRef}`);
         }
       }

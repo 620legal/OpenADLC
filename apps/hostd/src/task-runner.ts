@@ -17,6 +17,7 @@ import { ensureLoginDir, loginFor } from './logins.js';
 import { resolveTaskModel, subscriptionModels, type SessionModel, type TaskModelAccount } from './model-resolution.js';
 import { reachableFromTask } from './reachable.js';
 import { SessionEnvMinter } from './session-env.js';
+import { stopForGoneSession } from './observer.js';
 import type { TokenClient } from './token-client.js';
 import { BRANCH_GONE, BranchGoneError, setAsideBrief, stoppedForGoneBranch, Worktrees, type LegacyTask } from './worktree.js';
 import { ROLES_IN_CONTAINER } from './drivers/docker.js';
@@ -956,6 +957,35 @@ export class TaskRunner {
   /** The kill `stoppingByPerson` announced failed; the task was not stopped after all. */
   async notStoppedAfterAll(taskId: string): Promise<void> {
     await tasks.forgetStoppedByPerson(taskId).catch(() => undefined);
+  }
+
+  /**
+   * The kill `stoppingByPerson` announced has been carried out: the task is
+   * stopped now, with the person's reason, and its lease let go, as the
+   * observer stops a task whose session went away (`stopForGoneSession`).
+   *
+   * Nothing else settles the row: the session the kill took cannot report how
+   * it ended, and one that ended by itself just before may not have either.
+   * Left to the observer, which stops a task only once three listings in a
+   * row have missed its session (`MISSES_BEFORE_STOP`), a killed task said
+   * `running` for twenty to thirty seconds, and kill-and-restart.mjs, waiting
+   * thirty, failed on CI when the third look came late. Whichever ends the
+   * task first keeps its ending: one the session reported before leaves
+   * nothing running to stop, and one it reports after is refused.
+   *
+   * Only a task this hostd runs in that session, and only once a listing
+   * that answered no longer has it. A task on another host sharing the
+   * database has a session this one cannot see, which would read as gone,
+   * and tmux says nothing of a kill it did not carry out (`Tmux.killSession`).
+   * Anything else is left to the observer as before. True when the task was
+   * stopped here.
+   */
+  async stoppedByKill(taskId: string, bot: string, session: string): Promise<boolean> {
+    const held = this.sessionOf(taskId);
+    if (held?.bot !== bot || held.session !== session) return false;
+    const listed = await this.driver.listSessions(bot).catch(() => null);
+    if (!listed || listed.some((one) => one.name === session)) return false;
+    return (await stopForGoneSession(taskId, 'session killed')) !== null;
   }
 
   activeTaskIds(): string[] {
