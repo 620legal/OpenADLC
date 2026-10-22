@@ -1,10 +1,11 @@
-# Checks, builds, signs and publishes a release of OpenADLC. Only release.yml
-# calls it, always as release-build.yml@main, for a pushed version tag; the
-# release it makes is docs/self-hosting.md#what-a-release-holds.
+# Checks, builds, signs and publishes a release of OpenADLC: the archive and
+# the two container images beside it. Only release.yml calls it, always as
+# release-build.yml@main, for a pushed version tag; the release it makes is
+# docs/self-hosting.md#what-a-release-holds.
 #
 # This file is what makes a release trustworthy, so it is always main's: a
-# reviewed version, run with the context of the tag's run. Its attestation
-# names release-build.yml@refs/heads/main as the signer, and that is the
+# reviewed version, run with the context of the tag's run. Its attestations
+# name release-build.yml@refs/heads/main as the signer, and that is the
 # identity every install and the docs' check verify. A tagged commit that
 # carried its own release.yml, signing whatever it liked, signs as that file
 # instead, and is refused everywhere.
@@ -17,12 +18,21 @@
 # parents; a version that is not above every release this workflow made, or
 # whose newest is not behind it on main; and a commit whose own run of ci.yml
 # on main did not pass with its tests run. `build` runs the tagged commit's
-# install and build with a read-only token and nothing that can sign.
-# `publish` signs and publishes, and runs nothing from the repository or from
-# what the build made: it checks the run is still the releaser's, that the
-# archive is the build's, attests it, checks the attestation exactly as an
-# install will, checks the tag has not moved, and only then makes the release,
-# which must come out immutable.
+# install and build, and `images` its two image builds, each with a
+# read-only token and nothing that can push or sign. `push` reads the images
+# into docker and pushes them, holding only what any branch's workflow may
+# ask for: reading the repository and writing packages. `publish` signs and
+# publishes, and runs nothing from the repository or from what the builds
+# made, and never reads the images' files: it checks the run is still the
+# releaser's, that the archive is the build's, attests it and checks the
+# attestation exactly as an install will, attests each image by the digest
+# `push` reports, checks each can be pulled and checked exactly as an install
+# will, with gh signed in nowhere, checks the tag has not moved, and only
+# then makes the release, which must come out immutable.
+#
+# No bot image: it holds Claude Code, whose licence lets a person install it
+# for their own use but not redistribute it, so every install builds its own
+# with infra/local/build-bot-image.sh, as it always has.
 name: release-build
 
 on:
@@ -165,21 +175,255 @@ jobs:
           # Only `publish` reads it; the release keeps the archive.
           retention-days: 1
 
+  images:
+    name: images
+    needs: check
+    runs-on: ubuntu-24.04
+    # Two image builds one after the other; the service's compiles node-pty.
+    timeout-minutes: 40
+    # As in `build`: the tagged commit's Dockerfiles run here, and whatever
+    # their installs fetch. Nothing in this job can push or sign; the images
+    # leave it as files, and `push` pushes them.
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.ref_name }}
+      SHA: ${{ needs.check.outputs.sha }}
+      REPO: ${{ github.repository }}
+      # The one platform the images are for (RELEASE_IMAGE_PLATFORM in
+      # packages/shared/src/self-update.ts): Cloud Run and the host run
+      # linux/amd64 only. The runner is amd64 too; this makes it what the
+      # builds are asked for rather than what the machine happens to be.
+      DOCKER_DEFAULT_PLATFORM: linux/amd64
+      # No provenance of buildx's own: with Docker's containerd image store it
+      # wraps each image in an index with an `unknown/unknown` entry, and the
+      # attestation an install checks is the one `publish` makes.
+      BUILDX_NO_DEFAULT_ATTESTATIONS: '1'
+    steps:
+      # As in `build`.
+      - name: the run is still the releaser's
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+          CHECKED: ${{ needs.check.outputs.actor }}
+        run: |
+          if [ -z "$CHECKED" ] || [ "$ACTOR" != "$CHECKED" ]; then
+            echo "this run was started or re-run by $ACTOR, not by ${CHECKED:-the releaser check let through}. Nothing is published"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+          persist-credentials: false
+
+      # The same Dockerfiles as a laptop and Cloud Build
+      # (infra/gcp/cloudbuild.yaml), from the repository's root, so a release's
+      # images are what an install would have built from that commit. Each is
+      # named as self-update takes it (releaseImageRef):
+      # ghcr.io/<owner>/<repository, lower case>/<image>:<tag>, and no other tag.
+      #
+      # A published image ships the licences of what it installs
+      # (docs/self-hosting.md#third-party-notices-for-an-image-you-publish).
+      # third-party-notices.sh reads them from the image as built, by running
+      # it once with no network, and one more layer puts the list inside it at
+      # /usr/share/doc/openadlc/THIRD_PARTY_NOTICES, so it travels with the
+      # image to every install rather than beside the release's files.
+      - name: the images
+        run: |
+          [ "$(git rev-parse HEAD)" = "$SHA" ] || { echo "the checkout is at $(git rev-parse HEAD), not $SHA"; exit 1; }
+          prefix="ghcr.io/$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')"
+          # Both before anything is written into the checkout, their build
+          # context: the first image's tarball would be sent with the second.
+          for image in service console; do
+            docker build -f "infra/local/Dockerfile.$image" -t "openadlc-release/$image:built" .
+          done
+          mkdir -p images
+          for image in service console; do
+            built="openadlc-release/$image:built"
+            platform=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$built")
+            if [ "$platform" != "$DOCKER_DEFAULT_PLATFORM" ]; then
+              echo "$image was built for $platform, not $DOCKER_DEFAULT_PLATFORM"
+              exit 1
+            fi
+            mkdir -p "notices/$image"
+            infra/local/third-party-notices.sh "$built" "notices/$image/THIRD_PARTY_NOTICES"
+            printf 'FROM %s\nCOPY THIRD_PARTY_NOTICES /usr/share/doc/openadlc/THIRD_PARTY_NOTICES\n' "$built" |
+              docker build -f - -t "$prefix/$image:$TAG" "notices/$image"
+            docker save --output "images/$image.tar" "$prefix/$image:$TAG"
+          done
+          (cd images && sha256sum service.tar console.tar > SHA256SUMS)
+          cat images/SHA256SUMS
+          ls -l images
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: images
+          path: images/
+          if-no-files-found: error
+          # Only `push` reads it; the registry keeps the images.
+          retention-days: 1
+
+  push:
+    name: push
+    needs: [check, images]
+    runs-on: ubuntu-24.04
+    # Most of it is reading in and pushing two images of most of a gigabyte each.
+    timeout-minutes: 30
+    # Reading the images in is docker's daemon, as root, unpacking a gigabyte
+    # or so of tar that `images` made after running third-party install code.
+    # So it is done here, in a job that holds nothing any branch's workflow
+    # could not ask for, and not in `publish`, which can sign: this one can
+    # read the repository (the tag and its releases) and write packages, and
+    # nothing else. It runs nothing from the repository and nothing the build
+    # made, and hands `publish` two digests, which `publish` checks.
+    permissions:
+      contents: read
+      packages: write
+    env:
+      TAG: ${{ github.ref_name }}
+      SHA: ${{ needs.check.outputs.sha }}
+      REPO: ${{ github.repository }}
+    outputs:
+      service-digest: ${{ steps.push.outputs.service-digest }}
+      console-digest: ${{ steps.push.outputs.console-digest }}
+    steps:
+      # As in `publish`: a re-run of this job alone pushes under the tag.
+      - name: the run is still a releaser's
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+          CHECKED: ${{ needs.check.outputs.actor }}
+        run: |
+          if [ -z "$CHECKED" ] || [ "$ACTOR" != "$CHECKED" ]; then
+            echo "this run was started or re-run by $ACTOR, not by ${CHECKED:-the releaser check let through}. Nothing is published"
+            exit 1
+          fi
+          # Not `actor`: beside ACTOR, shellcheck reads it as a misspelling
+          # (SC2153) and actionlint fails the workflow.
+          pusher=$(printf '%s' "$ACTOR" | tr '[:upper:]' '[:lower:]')
+          releaser=false
+          for login in $(printf '%s' "$RELEASERS" | tr ',' ' ' | tr '[:upper:]' '[:lower:]'); do
+            if [ "${login#@}" = "$pusher" ]; then releaser=true; fi
+          done
+          if [ "$releaser" != true ]; then
+            echo "$ACTOR is not one of RELEASERS ($RELEASERS). Nothing is published"
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: images
+          path: images
+
+      # Read in before this job holds a registry credential, and only as data:
+      # `docker load` unpacks a tarball into the daemon's store and runs
+      # nothing in it. Each tarball must hold the one image its name says,
+      # under the name it is pushed as, so nothing the build saved can be
+      # pushed under another image's name.
+      - name: the images are the ones the build made
+        working-directory: images
+        run: |
+          if [ "$(sha256sum -c SHA256SUMS)" != "$(printf '%s.tar: OK\n' service console)" ]; then
+            echo "SHA256SUMS does not give the two images the build saved, or one differs from it. Nothing is published"
+            exit 1
+          fi
+          prefix="ghcr.io/$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')"
+          for image in service console; do
+            loaded=$(docker load --quiet --input "$image.tar")
+            if [ "$loaded" != "Loaded image: $prefix/$image:$TAG" ]; then
+              echo "$image.tar holds \"$loaded\", not the one image $prefix/$image:$TAG. Nothing is published"
+              exit 1
+            fi
+            platform=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$prefix/$image:$TAG")
+            if [ "$platform" != linux/amd64 ]; then
+              echo "$prefix/$image:$TAG is for $platform, not linux/amd64, the one platform installs run. Nothing is published"
+              exit 1
+            fi
+          done
+
+      # The tag was checked minutes ago; it is read again, as GitHub has it
+      # now, so a tag moved meanwhile does not get the checked commit's images
+      # under its name. `publish` reads it once more before the release.
+      - name: the tag is still on the commit that was checked
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          read -r type sha < <(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '"\(.object.type) \(.object.sha)"')
+          while [ "$type" = tag ]; do
+            read -r type sha < <(gh api "repos/$REPO/git/tags/$sha" --jq '"\(.object.type) \(.object.sha)"')
+          done
+          if [ "$type" != commit ] || [ "$sha" != "$SHA" ]; then
+            echo "$TAG is on $sha now, not on $SHA, which was checked and built. Nothing is published"
+            exit 1
+          fi
+
+      # `check` refused a tag with a release, but this job can be re-run on
+      # its own after the release is made, and would then push over the
+      # images that release names. A release is never replaced, and neither
+      # are its images.
+      - name: the tag has no release yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          released=$(gh api --paginate "repos/$REPO/releases?per_page=100" --jq '.[].tag_name')
+          while read -r name; do
+            if [ "$name" = "$TAG" ]; then
+              echo "$TAG already has a release, so nothing is pushed under its tag. A release is never replaced: tag a higher version"
+              exit 1
+            fi
+          done <<<"$released"
+
+      # The token is this job's, and ends with it.
+      - name: sign in to ghcr.io
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      # Under the version tag and no other: an install resolves the tag to a
+      # digest at the registry and deploys the digest, so the digest handed on,
+      # and attested in `publish`, is the one the registry gives the tag, and
+      # must be the one the push made. If a push fails, or anything after it,
+      # there is no release, so no install looks for the images already
+      # pushed: installs take only a release's images, and check each against
+      # the release's commit. A re-run pushes its images over them under the
+      # same tag (docs/development.md#cutting-a-release).
+      - name: push the images
+        id: push
+        run: |
+          prefix="ghcr.io/$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')"
+          for image in service console; do
+            name="$prefix/$image"
+            docker push --quiet "$name:$TAG"
+            pushed=""
+            while read -r ref; do
+              if [ "${ref%@*}" = "$name" ]; then pushed=${ref#*@}; fi
+            done < <(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$name:$TAG")
+            tagged=$(docker buildx imagetools inspect "$name:$TAG" --format '{{json .Manifest}}' | jq -r .digest)
+            if ! [[ "$pushed" =~ ^sha256:[0-9a-f]{64}$ ]] || [ "$tagged" != "$pushed" ]; then
+              echo "$name:$TAG was pushed as ${pushed:-a digest docker did not record}, and ghcr.io has the tag as ${tagged:-nothing}. Nothing is released"
+              exit 1
+            fi
+            echo "$image-digest=$pushed" >> "$GITHUB_OUTPUT"
+          done
+
   publish:
     name: publish
-    needs: [check, build]
+    needs: [check, build, push]
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     # Nothing from the repository is checked out or run in this job, and
-    # nothing the build made is run either: its files are only hashed, signed
-    # and uploaded.
+    # nothing the builds made is run either: the archive is only hashed,
+    # signed and uploaded, and the images' files are never read here. Their
+    # digests come from `push`, are checked to be digests, and are signed.
     permissions:
       # The release and its files.
       contents: write
-      # The OIDC token the attestation's certificate is issued for.
+      # The OIDC token the attestations' certificates are issued for.
       id-token: write
-      # The attestation, kept with the repository as well as in the release.
+      # The attestations, kept with the repository as well as in the release
+      # and the registry.
       attestations: write
+      # The images' attestations, pushed to the registry beside them.
+      packages: write
     env:
       TAG: ${{ github.ref_name }}
       SHA: ${{ needs.check.outputs.sha }}
@@ -241,8 +485,149 @@ jobs:
             --deny-self-hosted-runners \
             --predicate-type https://slsa.dev/provenance/v1
 
-      # The tag was checked minutes ago; it is read again, as GitHub has it
-      # now, so a tag moved meanwhile does not get the checked commit's release.
+      # `push` hands over two digests and nothing else. The names are this
+      # job's own, as self-update makes them (releaseImageName), and a digest
+      # is taken only in the one form a digest has.
+      - name: the digests push made
+        id: images
+        env:
+          SERVICE_DIGEST: ${{ needs.push.outputs.service-digest }}
+          CONSOLE_DIGEST: ${{ needs.push.outputs.console-digest }}
+        run: |
+          prefix="ghcr.io/$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')"
+          for pair in "service $SERVICE_DIGEST" "console $CONSOLE_DIGEST"; do
+            read -r image digest <<<"$pair"
+            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "push gave $image the digest \"$digest\", which is not a digest. Nothing is released"
+              exit 1
+            fi
+            echo "$image-name=$prefix/$image" >> "$GITHUB_OUTPUT"
+            echo "$image-digest=$digest" >> "$GITHUB_OUTPUT"
+          done
+
+      # For the attest action, which pushes each attestation to the registry
+      # beside its image with what docker keeps in ~/.docker/config.json.
+      - name: sign in to ghcr.io
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      # Each image's digest, signed as the archive is, by the same action under
+      # the same workflow identity, and pushed to the registry beside it as
+      # well as kept with the repository. No storage record: that is a listing
+      # on the organization's Linked artifacts page, which takes
+      # `artifact-metadata: write`, and nothing reads it.
+      - name: attest service
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.images.outputs.service-name }}
+          subject-digest: ${{ steps.images.outputs.service-digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: attest console
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.images.outputs.console-name }}
+          subject-digest: ${{ steps.images.outputs.console-digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      # Nothing after this pushes, so the credential goes.
+      - name: sign out of ghcr.io
+        run: docker logout ghcr.io
+
+      # A cloud install pulls `service` and `console` without signing in:
+      # Cloud Run and the host pull through the install's mirror of ghcr.io,
+      # which has no GitHub account. A package a workflow pushes first starts
+      # out private, so the first release with images stops here until a
+      # maintainer changes the two to public and re-runs it
+      # (docs/development.md#once-per-repository). ghcr.io hands anyone a pull
+      # token for a public package and refuses one for a private or missing
+      # one, and the token must then reach the digest just pushed.
+      - name: service and console can be pulled without signing in
+        env:
+          SERVICE: ${{ steps.images.outputs.service-name }}@${{ steps.images.outputs.service-digest }}
+          CONSOLE: ${{ steps.images.outputs.console-name }}@${{ steps.images.outputs.console-digest }}
+        run: |
+          for subject in "$SERVICE" "$CONSOLE"; do
+            repository=${subject#ghcr.io/}
+            repository=${repository%@*}
+            package=${repository#*/}
+            if ! token=$(curl -fsS "https://ghcr.io/token?scope=repository:$repository:pull&service=ghcr.io" | jq -er .token); then
+              echo "ghcr.io will not let anyone pull ghcr.io/$repository without signing in, so no cloud install can take it. Change the package to public: https://github.com/$REPO/pkgs/container/${package//\//%2F}, then Package settings, Danger Zone, Change visibility. Then re-run this workflow"
+              exit 1
+            fi
+            if ! curl -fsS --head --output /dev/null \
+              --header "Authorization: Bearer $token" \
+              --header "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+              "https://ghcr.io/v2/$repository/manifests/${subject#*@}"; then
+              echo "ghcr.io/$repository is public, but anyone pulling it does not get ${subject#*@}, the digest just pushed. Nothing is released"
+              exit 1
+            fi
+          done
+
+      # What an install runs on an image before it deploys it, run the way an
+      # install runs it: the bundles read from GitHub's attestations API
+      # (imageAttestationsUrl in packages/shared/src/self-update.ts), one JSON
+      # line per bundle, then imageAttestationCheckArgs with --format json,
+      # with no gh token or login and no registry login, and what it then
+      # reads back (attestationRunProblem): the run behind every attestation
+      # was the push of this tag, started by this repository's release.yml at
+      # it. So gh proves the path installs take. The API can take a moment to
+      # show an attestation just made, so it is asked a few times. Images
+      # that would fail the check on every install are not released.
+      #
+      # The API answers a public repository's attestations without a token,
+      # and an install asks from its own address without one. But it allows
+      # 60 such requests an hour to an address, and runners share theirs, so
+      # a throttle here could stop a release after its images went up. So
+      # that one request carries the job's token, under a name gh does not
+      # read (not GH_TOKEN or GITHUB_TOKEN), and nothing else in the step does.
+      - name: each image's attestation passes the check every install makes
+        env:
+          ATTESTATIONS_TOKEN: ${{ github.token }}
+          GH_CONFIG_DIR: ${{ runner.temp }}/no-gh-login
+          DOCKER_CONFIG: ${{ runner.temp }}/no-registry-login
+          SERVICE: ${{ steps.images.outputs.service-name }}@${{ steps.images.outputs.service-digest }}
+          CONSOLE: ${{ steps.images.outputs.console-name }}@${{ steps.images.outputs.console-digest }}
+        run: |
+          for subject in "$SERVICE" "$CONSOLE"; do
+            image=${subject%@*}
+            image=${image##*/}
+            digest=${subject#*@}
+            bundle="$RUNNER_TEMP/$image.sigstore.jsonl"
+            for attempt in 1 2 3 4 5 6; do
+              if curl -fsS --header "Authorization: Bearer $ATTESTATIONS_TOKEN" "https://api.github.com/repos/$REPO/attestations/sha256%3A${digest#sha256:}" |
+                jq -c '.attestations[].bundle' > "$bundle" && [ -s "$bundle" ]; then
+                break
+              fi
+              if [ "$attempt" -eq 6 ]; then
+                echo "the attestations API of GitHub gives no attestation of $subject, so no install could check it. Nothing is released"
+                exit 1
+              fi
+              sleep 10
+            done
+            verified=$(gh attestation verify "oci://$subject" \
+              --bundle "$bundle" \
+              --repo "$REPO" \
+              --cert-identity "https://github.com/$REPO/.github/workflows/release-build.yml@refs/heads/main" \
+              --source-ref "refs/tags/$TAG" \
+              --source-digest "$SHA" \
+              --deny-self-hosted-runners \
+              --predicate-type https://slsa.dev/provenance/v1 \
+              --format json)
+            if ! CALLER="https://github.com/$REPO/.github/workflows/release.yml@refs/tags/$TAG" jq -e \
+              'length > 0 and all(.[]; .verificationResult.signature.certificate | .buildTrigger == "push" and .buildConfigURI == env.CALLER)' \
+              <<<"$verified" > /dev/null; then
+              echo "an attestation of $subject was not made by the push of $TAG through release.yml, so every install would refuse it. Nothing is released"
+              exit 1
+            fi
+          done
+
+      # The tag was checked before the images went up; pushing and signing
+      # took minutes, so it is read once more, as GitHub has it now, and a tag
+      # moved meanwhile does not get the checked commit's release.
       - name: the tag is still on the commit that was checked
         env:
           GH_TOKEN: ${{ github.token }}

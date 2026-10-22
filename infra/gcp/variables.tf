@@ -52,14 +52,18 @@ variable "host_cloud_init" {
 }
 
 variable "hostd_image" {
-  description = "The hostd image the host runs. Build and push it from infra/local/Dockerfile.service."
+  description = "The hostd image the host runs until an update names another in /var/lib/fleet/hostd-image, and whenever that file names nothing it can take. `openadlc cloud configure` writes the release's `service` image by digest through the mirror; with --build, the one infra/gcp/install.sh --build pushed from infra/local/Dockerfile.service, which the host pulls again at every start."
   type        = string
 }
 
 variable "bot_image" {
   description = <<-EOT
     The image each bot's container runs, built by infra/local/build-bot-image.sh
-    and pushed to a registry this host can reach.
+    and pushed to a registry this host can reach: infra/gcp/install.sh builds
+    it on Cloud Build, release install or not. A release holds no bot image:
+    it has Claude Code in it, whose licence lets a person install it for their
+    own use but not redistribute it. The host pulls it once, and its weekly
+    engine update rebuilds it there.
 
     Before this variable, nothing provisioned it: hostd was started with the
     docker driver and no bot image was ever pulled or named, so every task on a
@@ -118,13 +122,34 @@ variable "database_deletion_protection" {
 # ---------------------------------------------------------------- images
 
 variable "bridge_image" {
-  description = "Image built from infra/local/Dockerfile.service."
+  description = "The image the bridge's Cloud Run service is made with: the release's `service` image by digest through the mirror, as `openadlc cloud configure` writes it, or with --build one built from infra/local/Dockerfile.service. Read only when the service is made: from then on it runs what the last update rolled, and an apply leaves that alone."
   type        = string
 }
 
 variable "console_image" {
-  description = "Image built from infra/local/Dockerfile.console."
+  description = "The image the console's Cloud Run service is made with: the release's `console` image by digest through the mirror, or with --build one built from infra/local/Dockerfile.console. Read only when the service is made, as bridge_image is."
   type        = string
+}
+
+# ---------------------------------------------------------------- releases
+
+variable "release_repository" {
+  description = "The GitHub repository (owner/name) whose releases this install runs. Their images are ghcr.io/<owner>/<name in lower case>/service and …/console, pulled through the mirror this module makes, and an update takes the next of its releases. Another only for a fork that publishes releases of its own."
+  type        = string
+  default     = "620legal/OpenADLC"
+
+  # It is put into the bridge's environment and into the image names the host
+  # accepts, so it is the shape of a repository name and nothing more.
+  validation {
+    condition     = can(regex("^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$", var.release_repository))
+    error_message = "release_repository is owner/name, such as 620legal/OpenADLC."
+  }
+}
+
+variable "self_update" {
+  description = "Let the running bridge update the install onto the next release itself, from Settings → System, on a schedule or with Update now. For that the bridge's account gets updating the two Cloud Run services (a role of the module's own, which cannot create or delete one), acting as their two service accounts, and read on the mirror, each on that resource alone. False takes those away, and the System row says to run `openadlc cloud update` from a machine with this install's settings instead. Reading the two services stays either way, so the row still shows the release in use."
+  type        = bool
+  default     = true
 }
 
 # ---------------------------------------------------------------- github

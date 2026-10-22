@@ -1,5 +1,8 @@
-# The four images a Google Cloud install runs, built on Cloud Build and pushed
-# to the install's own Artifact Registry. infra/gcp/install.sh submits it:
+# The four images a Google Cloud install runs, built from a checkout on Cloud
+# Build and pushed to the install's own Artifact Registry, for one that is not
+# a release: `infra/gcp/install.sh --build` submits it, and configure --build
+# names them. Without --build an install runs a release's images and builds
+# only its bot image (cloudbuild-bot.yaml). install.sh --build runs:
 #
 #   gcloud builds submit --config infra/gcp/cloudbuild.yaml \
 #     --ignore-file infra/gcp/.gcloudignore \

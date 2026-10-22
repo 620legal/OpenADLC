@@ -8,6 +8,13 @@ import {
   archivePathAllowed,
   attestationCheckArgs,
   attestationRunProblem,
+  imageAttestationCheckArgs,
+  imageAttestationsUrl,
+  readReleasePages,
+  RELEASE_IMAGES,
+  RELEASE_IMAGE_PLATFORM,
+  releaseImageName,
+  releaseImageRef,
   builtRootOf,
   checksumOf,
   compareVersions,
@@ -450,3 +457,46 @@ describe('a restart cut short', () => {
     }
   });
 });
+
+describe('the images a release publishes', () => {
+  it('names each under the registry in lower case, tagged with the release and nothing else', () => {
+    // No bot: it holds Claude Code, which an install may use but a release may not redistribute.
+    expect(RELEASE_IMAGES).toEqual(['service', 'console']);
+    expect(releaseImageName('620legal/OpenADLC', 'service')).toBe('ghcr.io/620legal/openadlc/service');
+    expect(releaseImageRef('620legal/OpenADLC', 'console', 'v0.1.2')).toBe('ghcr.io/620legal/openadlc/console:v0.1.2');
+    expect(RELEASE_IMAGE_PLATFORM).toBe('linux/amd64');
+  });
+
+  it('checks an image by its digest with the archive’s signer, source and runner', () => {
+    const args = imageAttestationCheckArgs({ repo: '620legal/OpenADLC', image: 'console', digest: 'sha256:' + 'a'.repeat(64), tag: 'v0.1.2', commit: 'c'.repeat(40), bundle: 'console.sigstore.json' });
+    expect(args.slice(0, 3)).toEqual(['attestation', 'verify', `oci://ghcr.io/620legal/openadlc/console@sha256:${'a'.repeat(64)}`]);
+    // From a bundle file, so checking needs no GitHub sign-in, as for the archive.
+    expect(args.slice(3, 5)).toEqual(['--bundle', 'console.sigstore.json']);
+    expect(imageAttestationsUrl('620legal/OpenADLC', 'sha256:' + 'a'.repeat(64))).toBe(`https://api.github.com/repos/620legal/OpenADLC/attestations/sha256%3A${'a'.repeat(64)}`);
+    const archive = attestationCheckArgs({ archive: 'a.tar.gz', bundle: 'a.json', repo: '620legal/OpenADLC', tag: 'v0.1.2', commit: 'c'.repeat(40) });
+    // Everything after the subject is the archive's check, flag for flag, less the bundle the registry stands in for.
+    const rest = (list: string[]) => list.slice(3).filter((_, i, all) => all[i] !== '--bundle' && all[i - 1] !== '--bundle');
+    expect(rest(args)).toEqual(rest(archive));
+  });
+});
+
+describe('reading the releases page by page', () => {
+  const release = (tag: string) => ({ tag, draft: false, prerelease: false, publishedAt: null, assets: [], immutable: true });
+  const pages = [['v0.5.0', 'v0.4.0'], ['v0.3.0', 'v0.2.0'], ['v0.1.0']].map((tags) => tags.map(release));
+
+  it('reads on until what is wanted is in, or the list ends', async () => {
+    const asked: number[] = [];
+    const page = async (n: number) => {
+      asked.push(n);
+      return pages[n - 1] ?? [];
+    };
+    expect((await readReleasePages(page, (_, all) => all.some((one) => one.tag === 'v0.3.0'), { perPage: 2 })).map((one) => one.tag)).toEqual(['v0.5.0', 'v0.4.0', 'v0.3.0', 'v0.2.0']);
+    expect(asked).toEqual([1, 2]);
+    asked.length = 0;
+    expect(await readReleasePages(page, () => false, { perPage: 2 })).toHaveLength(5);
+    expect(asked).toEqual([1, 2, 3]);
+    asked.length = 0;
+    expect(await readReleasePages(page, () => false, { perPage: 2, maxPages: 1 })).toHaveLength(2);
+  });
+});
+

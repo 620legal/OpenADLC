@@ -1,10 +1,32 @@
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openadlcHome } from '@openadlc/github';
+import {
+  attestationRunProblem,
+  compareVersions,
+  imageAttestationCheckArgs,
+  imageAttestationsUrl,
+  isCommitId,
+  nextRelease,
+  nextReleaseRefused,
+  readReleasePages,
+  RELEASE_IMAGE_REGISTRY,
+  RELEASE_IMAGES,
+  releaseImageName,
+  releaseImageRef,
+  releaseVersion,
+  safeWords,
+  takeableReleases,
+  untakeableReason,
+  type PublishedRelease,
+  type ReleaseImage,
+  type ReleaseVersion,
+} from '@openadlc/shared';
 import type { InstallConfig } from '../install.js';
-import { prompt, ui } from '../ui.js';
+import { confirm, prompt, ui } from '../ui.js';
 import { checkBucket, pullSettings } from './cloud-bucket.js';
 import { explainTerraformFailure, findLeftovers, leftoversMessage, ownedAddresses, type GcloudResult } from './cloud-leftovers.js';
 
@@ -600,9 +622,9 @@ async function run(command: string, args: string[], cwd?: string): Promise<numbe
 }
 
 /** A command's output, kept rather than shown: what `gcloud` answers to a question. */
-async function capture(command: string, args: string[], cwd?: string): Promise<GcloudResult> {
+async function capture(command: string, args: string[], cwd?: string, env?: NodeJS.ProcessEnv): Promise<GcloudResult> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], ...(env ? { env } : {}) });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
@@ -920,10 +942,873 @@ export async function afterTerraform(
   }
 }
 
+// ------------------------------------------------------------------ release images
+
+/**
+ * A cloud install runs the images a release publishes, not images of its own:
+ * ghcr.io/<repo>/{service,console} at the release's tag, each resolved to a
+ * digest and taken only once `gh attestation verify` has checked the
+ * release's own workflow built that digest from the tagged commit. It pulls
+ * them through the module's mirror of ghcr.io (infra/gcp/main.tf, `ghcr`),
+ * since Cloud Run pulls from nowhere else, by that digest and never by the
+ * tag. `--build` keeps the images infra/gcp/install.sh builds from a checkout
+ * on Cloud Build, for one that is not a release.
+ *
+ * The bot image is never a release's: it holds Claude Code, whose licence
+ * lets a person install it for their own use but not redistribute it. Every
+ * install builds its own (install.sh, on Cloud Build), and the host's weekly
+ * engine update rebuilds it there.
+ */
+export const DEFAULT_RELEASE_REPOSITORY = '620legal/OpenADLC';
+
+/** The mirror up to and including its name, as the module makes it and the bridge is told it (OPENADLC_RELEASE_MIRROR). */
+export function releaseMirror(region: string, projectId: string, prefix: string): string {
+  return `${region}-docker.pkg.dev/${projectId}/${prefix}-ghcr`;
+}
+
+/** A release image as the install pulls it: ghcr.io/620legal/openadlc/service@d is <mirror>/620legal/openadlc/service@d. */
+export function mirrorImage(mirror: string, repo: string, image: ReleaseImage, digest: string): string {
+  return `${mirror}/${releaseImageName(repo, image).slice(RELEASE_IMAGE_REGISTRY.length + 1)}@${digest}`;
+}
+
+const DIGEST = /^sha256:[0-9a-f]{64}$/;
+
+/** The digest `ref` names when it is that release image through that mirror, or null for any other reference. */
+export function mirrorDigest(ref: string, mirror: string, repo: string, image: ReleaseImage): string | null {
+  const at = ref.lastIndexOf('@');
+  const digest = ref.slice(at + 1);
+  return at > 0 && DIGEST.test(digest) && ref === mirrorImage(mirror, repo, image, digest) ? digest : null;
+}
+
+export interface HttpAnswer {
+  status: number;
+  body: Buffer;
+}
+
+/** What choosing a release runs, passed in so a test can stand in for each. */
+export interface ReleaseRunners {
+  /** `gh api`, as the person here is signed in, its output kept: the releases and a tag's commit. */
+  gh: (args: string[]) => Promise<GcloudResult>;
+  /** `gh attestation verify`, with no GitHub sign-in at all, its output kept. */
+  verify: (args: string[]) => Promise<GcloudResult>;
+  /** An anonymous GET: ghcr.io's token and manifests, and GitHub's attestations API. */
+  get: (url: string, headers: Record<string, string>) => Promise<HttpAnswer>;
+}
+
+/** Every form a release image's tag may name, an index of platforms or the one platform's manifest. */
+const MANIFEST_TYPES = [
+  'application/vnd.oci.image.index.v1+json',
+  'application/vnd.oci.image.manifest.v1+json',
+  'application/vnd.docker.distribution.manifest.list.v2+json',
+  'application/vnd.docker.distribution.manifest.v2+json',
+].join(', ');
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** What a command said, short and safe to print. */
+function said(answer: GcloudResult): string {
+  const words = (answer.stderr.trim() || answer.stdout.trim() || `exit ${answer.code}`).replace(/\s+/g, ' ');
+  return safeWords(words.length > 300 ? `${words.slice(0, 300)}…` : words);
+}
+
+/**
+ * The digest a release's tag names on ghcr.io, from the registry's own API:
+ * an anonymous token, which ghcr.io hands anyone for a public package, then
+ * the manifest, hashed here. So no docker, crane or registry sign-in is needed
+ * where this runs (Cloud Shell has no Docker), and nothing of this machine's
+ * goes with the requests. Nothing in the answer is trusted either: the
+ * attestation is checked for this digest, and Cloud Run and `docker pull`
+ * refuse bytes that do not hash to it.
+ */
+export async function releaseDigest(repo: string, image: ReleaseImage, tag: string, get: ReleaseRunners['get']): Promise<string> {
+  const name = releaseImageName(repo, image).slice(RELEASE_IMAGE_REGISTRY.length + 1);
+  const ref = releaseImageRef(repo, image, tag);
+  const issued = await get(`https://ghcr.io/token?scope=${encodeURIComponent(`repository:${name}:pull`)}&service=ghcr.io`, {});
+  let token: unknown;
+  try {
+    token = (JSON.parse(issued.body.toString('utf8')) as { token?: unknown }).token;
+  } catch {
+    token = undefined;
+  }
+  if (issued.status !== 200 || typeof token !== 'string' || !token) throw new Error(`ghcr.io gave no token to read ${ref} (HTTP ${issued.status})`);
+  const manifest = await get(`https://ghcr.io/v2/${name}/manifests/${tag}`, { authorization: `Bearer ${token}`, accept: MANIFEST_TYPES });
+  if (manifest.status !== 200) {
+    throw new Error(
+      `ghcr.io did not show ${ref} without a sign-in (HTTP ${manifest.status}): a release's packages have to be public, which a person sets once on GitHub (docs/self-hosting.md#installing-on-a-cloud)`,
+    );
+  }
+  return `sha256:${createHash('sha256').update(manifest.body).digest('hex')}`;
+}
+
+const GH_MISSING =
+  'the GitHub CLI is not installed here. It reads the releases and checks their images’ attestations: install it (https://cli.github.com) and sign in with gh auth login, or run images built from this checkout with --build';
+
+/** A repository's releases as `gh api` lists them, reduced to what choosing one reads. */
+/** How many releases `gh api` is asked for a page at a time. */
+const RELEASES_PER_PAGE = 100;
+
+/**
+ * The repository's releases, newest first: the first page, which holds the
+ * newest `configure` takes, or, given `enough`, page after page until it says
+ * the pages read hold what is wanted (`readReleasePages`): an update needs the
+ * release the install runs, which can be a page or more down.
+ */
+export async function publishedReleases(
+  repo: string,
+  gh: ReleaseRunners['gh'],
+  enough: Parameters<typeof readReleasePages>[1] = () => true,
+): Promise<PublishedRelease[]> {
+  return readReleasePages(
+    async (page) => {
+      const answer = await gh(['api', `repos/${repo}/releases?per_page=${RELEASES_PER_PAGE}${page > 1 ? `&page=${page}` : ''}`]);
+      if (answer.code === 127) throw new Error(GH_MISSING);
+      if (answer.code !== 0) throw new Error(`gh could not read ${repo}'s releases (${said(answer)}); sign in with gh auth login`);
+      let listed: unknown;
+      try {
+        listed = JSON.parse(answer.stdout);
+      } catch {
+        listed = null;
+      }
+      if (!Array.isArray(listed)) throw new Error(`gh api did not answer with ${repo}'s releases`);
+      return listed.map((entry: Record<string, unknown>) => ({
+        tag: typeof entry.tag_name === 'string' ? entry.tag_name : '',
+        draft: entry.draft === true,
+        prerelease: entry.prerelease === true,
+        publishedAt: typeof entry.published_at === 'string' ? entry.published_at : null,
+        assets: Array.isArray(entry.assets) ? entry.assets.map((asset: { name?: unknown }) => (typeof asset?.name === 'string' ? asset.name : '')) : [],
+        immutable: entry.immutable === true,
+      }));
+    },
+    enough,
+    { perPage: RELEASES_PER_PAGE },
+  );
+}
+
+/** The commit a release's tag is on, which the attestation's source digest must be. */
+async function releaseCommit(repo: string, tag: string, gh: ReleaseRunners['gh']): Promise<string> {
+  const answer = await gh(['api', `repos/${repo}/commits/${encodeURIComponent(tag)}`, '--jq', '.sha']);
+  if (answer.code === 127) throw new Error(GH_MISSING);
+  const commit = answer.stdout.trim();
+  // An answer, not a fact: checked before gh is given it back.
+  if (answer.code !== 0 || !isCommitId(commit)) throw new Error(`could not read the commit ${tag} is on (${said(answer)})`);
+  return commit;
+}
+
+/**
+ * Every attestation bundle GitHub's attestations API has for a digest, one
+ * JSON line each, as `gh attestation verify --bundle` reads them. The API
+ * answers a public repository's without a sign-in; `gh` asked for them itself,
+ * or read from the registry with --bundle-from-oci, wants one.
+ */
+async function attestationBundles(repo: string, image: ReleaseImage, digest: string, get: ReleaseRunners['get']): Promise<string> {
+  const subject = `${releaseImageName(repo, image)}@${digest}`;
+  const answer = await get(imageAttestationsUrl(repo, digest), { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' });
+  let listed: unknown;
+  try {
+    listed = (JSON.parse(answer.body.toString('utf8')) as { attestations?: unknown }).attestations;
+  } catch {
+    listed = undefined;
+  }
+  const bundles = Array.isArray(listed)
+    ? listed.map((entry: { bundle?: unknown }) => entry?.bundle).filter((bundle): bundle is object => Boolean(bundle) && typeof bundle === 'object')
+    : [];
+  if (answer.status !== 200 || bundles.length === 0) throw new Error(`GitHub has no attestation for ${subject} (HTTP ${answer.status})`);
+  return `${bundles.map((bundle) => JSON.stringify(bundle)).join('\n')}\n`;
+}
+
+/**
+ * Why an image's attestation does not hold, or null: the contract's check
+ * (`imageAttestationCheckArgs`, the archive's signer, source and runner)
+ * against the API's bundles, then what it verified read back, as the bridge
+ * reads the archive's: the run behind it was the push of this tag, started by
+ * this repository's release.yml. The bundles sit in a directory of their own,
+ * removed after.
+ */
+async function attestationProblem(
+  repo: string,
+  image: ReleaseImage,
+  tag: string,
+  commit: string,
+  digest: string,
+  runners: ReleaseRunners,
+): Promise<string | null> {
+  const lines = await attestationBundles(repo, image, digest, runners.get);
+  const dir = mkdtempSync(join(tmpdir(), 'openadlc-attestations-'));
+  try {
+    const bundle = join(dir, `${image}.jsonl`);
+    writeFileSync(bundle, lines, { mode: 0o600 });
+    const answer = await runners.verify([...imageAttestationCheckArgs({ repo, image, digest, tag, commit, bundle }), '--format', 'json']);
+    if (answer.code === 127) return GH_MISSING;
+    if (answer.code !== 0) return `gh attestation verify refused ${releaseImageName(repo, image)}@${digest}: ${said(answer)}`;
+    return attestationRunProblem(answer.stdout, { repo, tag });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** A release's images as the install pulls them, each checked. */
+export interface ReleaseImages {
+  tag: string;
+  commit: string;
+  service: string;
+  console: string;
+}
+
+/** A release's images, each resolved to its digest and its attestation checked, or why not. */
+export async function checkedReleaseImages(
+  repo: string,
+  tag: string,
+  mirror: string,
+  runners: ReleaseRunners,
+): Promise<{ ok: true; images: ReleaseImages } | { ok: false; reason: string }> {
+  try {
+    const commit = await releaseCommit(repo, tag, runners.gh);
+    const pulled = {} as Record<ReleaseImage, string>;
+    for (const image of RELEASE_IMAGES) {
+      const digest = await releaseDigest(repo, image, tag, runners.get);
+      const problem = await attestationProblem(repo, image, tag, commit, digest, runners).catch((error: unknown) => message(error));
+      if (problem) return { ok: false, reason: `${image}: ${problem}` };
+      pulled[image] = mirrorImage(mirror, repo, image, digest);
+    }
+    return { ok: true, images: { tag, commit, service: pulled.service, console: pulled.console } };
+  } catch (error) {
+    return { ok: false, reason: message(error) };
+  }
+}
+
+/** Why a repository has no release to take, from what `takeableReleases` passed over. */
+function noTakeable(repo: string, incomplete: readonly string[], mutable: readonly string[]): string {
+  const why = [
+    ...(incomplete.length > 0 ? [`${incomplete.join(', ')} ${incomplete.length === 1 ? 'is a release' : 'are releases'} without all three files`] : []),
+    ...(mutable.length > 0
+      ? [`${mutable.join(', ')} ${mutable.length === 1 ? 'is not an immutable release' : 'are not immutable releases'}, so the files could still be replaced`]
+      : []),
+  ];
+  return `${repo} has no release an install may take${why.length > 0 ? `: ${why.join('; ')}` : ''}`;
+}
+
+/** How many releases, newest first, configure tries, as the bridge's self-update does. */
+const CANDIDATES = 5;
+
+/**
+ * The newest release whose images check out, for a new install. A
+ * newer one that does not is passed over and said: a new install has no
+ * database another release migrated, so taking an older release skips
+ * nothing, and the updates after it go one release at a time.
+ */
+export async function newestReleaseImages(
+  repo: string,
+  mirror: string,
+  runners: ReleaseRunners,
+): Promise<{ images: ReleaseImages; passedOver: string[] } | { images: null; reasons: string[] }> {
+  let listed: PublishedRelease[];
+  try {
+    listed = await publishedReleases(repo, runners.gh);
+  } catch (error) {
+    return { images: null, reasons: [message(error)] };
+  }
+  const { releases, incomplete, mutable } = takeableReleases(listed);
+  const passedOver: string[] = [];
+  for (const release of releases.slice(0, CANDIDATES)) {
+    const checked = await checkedReleaseImages(repo, release.tag, mirror, runners);
+    if (checked.ok) return { images: checked.images, passedOver };
+    passedOver.push(`${release.tag}: ${checked.reason}`);
+  }
+  return { images: null, reasons: releases.length > 0 ? passedOver : [noTakeable(repo, incomplete, mutable)] };
+}
+
+/** The four image settings an install is made with. */
+export type InstallImages = Pick<CloudConfig, 'bridgeImage' | 'consoleImage' | 'hostdImage' | 'botImage'>;
+
+/**
+ * The images infra/gcp/install.sh pushes from a checkout: all four with
+ * --build, and otherwise the bot image alone. That is built by
+ * infra/local/build-bot-image.sh, which is also what a laptop builds from —
+ * the pinned engine CLIs live there, in one place, so the two installs cannot
+ * end up running different bots.
+ */
+export function cloudBuildImages(region: string, projectId: string): InstallImages {
+  const registry = `${region}-docker.pkg.dev/${projectId}/openadlc`;
+  return {
+    bridgeImage: `${registry}/bridge:latest`,
+    consoleImage: `${registry}/console:latest`,
+    hostdImage: `${registry}/hostd:latest`,
+    botImage: `${registry}/bot:latest`,
+  };
+}
+
+/**
+ * The images `configure` writes. On an install that has images, the ones it
+ * has, with --build too, as configure always kept them: the services and the
+ * host run what the last update rolled, which an apply leaves alone, so
+ * changing the settings' images here would move nothing, and moving an
+ * install onto a release is `openadlc cloud update`, which writes what it
+ * rolled back here. For a new install with --build, the checkout's, from
+ * Cloud Build; otherwise the newest release's, checked: `service` for the
+ * bridge and for hostd, which run one image, and `console`. The bot image is
+ * the install's own either way: the one it has, or the name
+ * infra/gcp/install.sh builds it under on Cloud Build.
+ */
+export async function configuredImages(
+  input: { build: boolean; existing?: Record<string, unknown>; region: string; projectId: string; prefix: string; repo: string },
+  runners: ReleaseRunners,
+): Promise<{ images: InstallImages; said: string[] } | { images: null; reasons: string[] }> {
+  const keptBot = shown(input.existing, 'bot_image');
+  const botImage = keptBot ?? cloudBuildImages(input.region, input.projectId).botImage;
+  const bot = keptBot ? `the bot image: ${botImage}, the install's own, kept` : `the bot image: ${botImage}, which infra/gcp/install.sh builds on Cloud Build (a release holds none: it has Claude Code in it)`;
+  const kept = {
+    bridgeImage: shown(input.existing, 'bridge_image'),
+    consoleImage: shown(input.existing, 'console_image'),
+    hostdImage: shown(input.existing, 'hostd_image'),
+  };
+  if (kept.bridgeImage && kept.consoleImage && kept.hostdImage) {
+    return {
+      images: { bridgeImage: kept.bridgeImage, consoleImage: kept.consoleImage, hostdImage: kept.hostdImage, botImage },
+      said: ['images: the ones this install has are kept; openadlc cloud update moves it onto the next release', bot],
+    };
+  }
+  if (input.build) {
+    return {
+      images: { ...cloudBuildImages(input.region, input.projectId), botImage },
+      said: [`images: this checkout's, as infra/gcp/install.sh --build pushes them to ${input.region}-docker.pkg.dev/${input.projectId}/openadlc`],
+    };
+  }
+  const mirror = releaseMirror(input.region, input.projectId, input.prefix);
+  const chosen = await newestReleaseImages(input.repo, mirror, runners);
+  if (!chosen.images) return { images: null, reasons: chosen.reasons };
+  return {
+    images: { bridgeImage: chosen.images.service, hostdImage: chosen.images.service, consoleImage: chosen.images.console, botImage },
+    said: [
+      ...chosen.passedOver.map((reason) => `passed over ${reason}`),
+      `images: ${input.repo} ${chosen.images.tag}'s, their attestations checked, by digest through ${mirror}`,
+      bot,
+    ],
+  };
+}
+
+// ------------------------------------------------------------------ cloud update
+
+/** What an update takes: a release, and the releases between it and the install's, when --release skips any. */
+export type UpdateChoice = { take: string; skips: string[] } | { stop: string; code: number };
+
+/**
+ * The release `openadlc cloud update` takes. Without --release, the next one
+ * after the release the install runs, never a later one: the bridge and the
+ * host each apply a release's migrations as they start, so a skipped
+ * release's migrations would run under code that never had them, which
+ * docs/self-hosting.md#upgrading warns against. The next is counted over
+ * every published version tag, as the bridge's self-update counts it
+ * (`nextRelease`): one it cannot take stops the update with why, rather than
+ * the one after it being taken. When the CLI counted only what it could take,
+ * it rolled an install past a release the bridge had stopped at. --release
+ * names one, the same again included (it puts each part not on it back on
+ * it), never an older one: migrations only go forward.
+ */
+export function chooseUpdate(current: string | null, published: readonly PublishedRelease[], wanted?: string): UpdateChoice {
+  const takeable = takeableReleases(published).releases.map((release) => release.tag);
+  const ordered = published
+    .filter((release) => !release.draft && !release.prerelease)
+    .map((release) => ({ tag: release.tag, version: releaseVersion(release.tag) }))
+    .filter((one): one is { tag: string; version: ReleaseVersion } => one.version !== null)
+    .sort((a, b) => compareVersions(a.version, b.version));
+  const now = current ? releaseVersion(current) : null;
+  if (wanted !== undefined) {
+    const version = releaseVersion(wanted);
+    if (!version) return { stop: `--release takes a release's version tag, such as v0.2.0, not ${wanted ? `"${wanted}"` : 'nothing'}`, code: 2 };
+    if (!takeable.includes(wanted)) {
+      return { stop: `${wanted} is not a release this install can take: not published, a draft or a prerelease, without its three files, or not immutable`, code: 1 };
+    }
+    if (!now) return { take: wanted, skips: [] };
+    if (compareVersions(version, now) < 0) {
+      return { stop: `the install runs ${current}, and going back to ${wanted} is not supported: migrations only go forward, and ${current}'s have run`, code: 1 };
+    }
+    const skips = ordered.filter((one) => compareVersions(one.version, now) > 0 && compareVersions(one.version, version) < 0).map((one) => one.tag);
+    return { take: wanted, skips };
+  }
+  if (!now || !current) {
+    return {
+      stop: 'which release comes next cannot be told, so name it: openadlc cloud update --release <tag>, the release after the one the install’s images were built from',
+      code: 1,
+    };
+  }
+  const { next } = nextRelease(published, current);
+  if (!next) return { stop: `the install runs ${current}, the newest release`, code: 0 };
+  const why = untakeableReason(next);
+  if (why) return { stop: nextReleaseRefused(next.tag, why, current), code: 1 };
+  return { take: next.tag, skips: [] };
+}
+
+/** The install an update rolls, from its settings. */
+export interface UpdateTarget {
+  projectId: string;
+  region: string;
+  zone: string;
+  prefix: string;
+  repo: string;
+  mirror: string;
+}
+
+/** The install an update rolls, or why the settings do not name one. */
+export function updateTarget(settings: Record<string, unknown>): UpdateTarget | string {
+  const projectId = shown(settings, 'project_id') ?? '';
+  // The module's defaults, for settings that never named them.
+  const region = shown(settings, 'region') ?? 'us-central1';
+  const zone = shown(settings, 'zone') ?? 'us-central1-a';
+  const prefix = shown(settings, 'name_prefix') ?? NAME_PREFIX;
+  const repo = shown(settings, 'release_repository') ?? DEFAULT_RELEASE_REPOSITORY;
+  if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)) return `the settings name no project (project_id: ${projectId || 'none'})`;
+  if (!/^[a-z0-9-]+$/.test(region) || !/^[a-z0-9-]+$/.test(zone)) return `the settings' region and zone (${region}, ${zone}) are not ones Google Cloud has`;
+  if (!/^[a-z][a-z0-9-]*$/.test(prefix) || !INSTANCE_NAME.test(`${prefix}-host-1`)) return `the settings' name_prefix (${prefix}) is not one the module's names can have`;
+  if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(repo)) return `the settings' release_repository (${repo}) is not owner/name`;
+  return { projectId, region, zone, prefix, repo, mirror: releaseMirror(region, projectId, prefix) };
+}
+
+/** One roll of an update: a gcloud command, what to say of it, and the setting it moves. */
+export interface RollStep {
+  name: 'console' | 'host' | 'bridge';
+  doing: string;
+  done: string;
+  args: string[];
+  setting: 'console_image' | 'hostd_image' | 'bridge_image';
+  image: string;
+}
+
+/** Where the host's unit reads the hostd image an update names (infra/gcp/cloud-init/host.yaml, hostd-image.sh). */
+const HOSTD_IMAGE_FILE = '/var/lib/fleet/hostd-image';
+/** Where it records the image hostd last started on and answered from, root's alone. */
+const HOSTD_STARTED_FILE = '/var/lib/fleet/hostd-image.started';
+/** What only a host whose cloud-init knows hostd-image has. */
+const HOST_UNIT_CHECK = 'test -x /etc/fleet/hostd-image.sh';
+
+/**
+ * The three rolls, in order: the console, then hostd, then the bridge, which
+ * is last because it is what an update runs from, and the release it runs is
+ * how the next `cloud update` knows where the install is. hostd's is the
+ * unit's own way in. The image is pulled first, so a pull that fails changes
+ * nothing on the host (`HOME` where the unit has docker-credential-gcr's
+ * login); then the file written, a new one moved over the old after a sync;
+ * then hostd restarted, whose unit runs it; then a look at the image the unit
+ * recorded once hostd answered on it. The bot image is left alone: it is no
+ * release's, and the host's weekly engine update owns it. Every reference is
+ * checked to be a release image by digest through the mirror before it is put
+ * on a command line, and one that runs a shell on the host.
+ */
+export function rollSteps(target: UpdateTarget, images: ReleaseImages): RollStep[] {
+  for (const image of RELEASE_IMAGES) {
+    if (!mirrorDigest(images[image], target.mirror, target.repo, image)) {
+      throw new Error(`${images[image]} is not ${target.repo}'s ${image} image by digest through ${target.mirror}`);
+    }
+  }
+  const where = ['--region', target.region, '--project', target.projectId, '--quiet'];
+  const host = `${target.prefix}-host-1`;
+  const remote = [
+    'set -e',
+    `HOME=/var/lib/fleet/home docker pull ${images.service}`,
+    `echo ${images.service} > ${HOSTD_IMAGE_FILE}.next`,
+    'sync',
+    `mv -f ${HOSTD_IMAGE_FILE}.next ${HOSTD_IMAGE_FILE}`,
+    'sync',
+    'systemctl restart fleet-hostd',
+    `grep -qxF ${images.service} ${HOSTD_STARTED_FILE}`,
+  ].join('; ');
+  return [
+    {
+      name: 'console',
+      doing: `the console: ${target.prefix}-console onto ${images.tag}'s console image`,
+      done: `the console runs ${images.tag}`,
+      args: ['run', 'services', 'update', `${target.prefix}-console`, '--image', images.console, ...where],
+      setting: 'console_image',
+      image: images.console,
+    },
+    {
+      name: 'host',
+      doing: `hostd: ${host} pulls ${images.tag}'s service image over IAP, then its hostd image file is written and hostd restarted onto it`,
+      done: `hostd runs ${images.tag}`,
+      args: ['compute', 'ssh', host, '--zone', target.zone, '--project', target.projectId, '--tunnel-through-iap', '--', `sudo sh -c "${remote}"`],
+      setting: 'hostd_image',
+      image: images.service,
+    },
+    {
+      name: 'bridge',
+      doing: `the bridge: ${target.prefix}-bridge onto ${images.tag}'s service image`,
+      done: `the bridge runs ${images.tag}`,
+      args: ['run', 'services', 'update', `${target.prefix}-bridge`, '--image', images.service, ...where],
+      setting: 'bridge_image',
+      image: images.service,
+    },
+  ];
+}
+
+/** A command as a person would type it into a shell. */
+function shellLine(command: string, args: readonly string[]): string {
+  return [command, ...args].map((arg) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`)).join(' ');
+}
+
+/** What `cloud update` runs, passed in so a test can stand in for each. */
+export interface UpdateRunners extends ReleaseRunners {
+  /** gcloud, its output kept: which revision of the bridge serves and its image, and whether the mirror is there. */
+  gcloud: (args: string[]) => Promise<GcloudResult>;
+  /** gcloud with its output shown as it comes, for the host's check and each roll, and the exit code it left. */
+  run: (command: string, args: string[]) => Promise<number>;
+  confirm: (question: string) => Promise<boolean>;
+  /** Writes the settings on this machine and saves them to the bucket, as `cloud push` does; its exit code. */
+  saveSettings: (vars: Record<string, unknown>) => Promise<number>;
+}
+
+/**
+ * The image a service's serving revision runs. Not the service's template:
+ * a roll whose revision never became ready leaves the template on the new
+ * image while the old revision still serves.
+ */
+async function servingImage(target: UpdateTarget, part: 'bridge' | 'console', gcloud: UpdateRunners['gcloud']): Promise<string> {
+  const where = ['--region', target.region, '--project', target.projectId];
+  const service = await gcloud(['run', 'services', 'describe', `${target.prefix}-${part}`, ...where, '--format', 'value(status.latestReadyRevisionName)']);
+  const revision = service.stdout.trim();
+  if (service.code !== 0 || !/^[a-z0-9-]+$/.test(revision)) throw new Error(`could not read which revision of ${target.prefix}-${part} serves (${said(service)})`);
+  const described = await gcloud(['run', 'revisions', 'describe', revision, ...where, '--format', 'value(spec.containers[0].image)']);
+  const image = described.stdout.trim();
+  if (described.code !== 0 || !image) throw new Error(`could not read the image ${revision} runs (${said(described)})`);
+  return image;
+}
+
+/**
+ * The image hostd last started on and answered from, as the host recorded it
+ * (`hostd-image.started`, root's), over IAP; null when it cannot be read. It
+ * is what the host falls back to when the image file names nothing it takes.
+ */
+async function hostStartedImage(target: UpdateTarget, gcloud: UpdateRunners['gcloud']): Promise<string | null> {
+  const read = await gcloud(['compute', 'ssh', `${target.prefix}-host-1`, '--zone', target.zone, '--project', target.projectId, '--tunnel-through-iap', '--quiet', '--', `cat ${HOSTD_STARTED_FILE}`]);
+  const image = read.stdout.trim();
+  return read.code === 0 && image && !/\s/.test(image) ? image : null;
+}
+
+/**
+ * How a part goes back onto what it ran before an update, as a command. A
+ * service by its image; the host by its image file when that is a release
+ * image the unit takes, and otherwise by removing it and the record of what
+ * hostd last started on, since the unit falls back to that before the
+ * module's hostd_image.
+ */
+export function goBackCommand(target: UpdateTarget, part: RollStep['name'], previous: string): string {
+  if (part !== 'host') return shellLine('gcloud', ['run', 'services', 'update', `${target.prefix}-${part}`, '--image', previous, '--region', target.region, '--project', target.projectId, '--quiet']);
+  const remote = mirrorDigest(previous, target.mirror, target.repo, 'service')
+    ? `sudo sh -c "echo ${previous} > ${HOSTD_IMAGE_FILE}" && sudo systemctl restart fleet-hostd`
+    : `sudo rm -f ${HOSTD_IMAGE_FILE} ${HOSTD_STARTED_FILE} && sudo systemctl restart fleet-hostd`;
+  return shellLine('gcloud', ['compute', 'ssh', `${target.prefix}-host-1`, '--zone', target.zone, '--project', target.projectId, '--tunnel-through-iap', '--', remote]);
+}
+
+/**
+ * The release the bridge runs: the one whose service image has the digest
+ * its revision runs. The bridge is rolled last, so an update that stopped
+ * partway still reads as the release before it, and running the update again
+ * finishes the same release.
+ *
+ * None only for a bridge that runs no release's image at all, one built with
+ * --build or from before releases had images, which --release then names.
+ * Anything else that cannot be told throws: a digest ghcr.io would not give,
+ * or a release image no takeable release has. Read as "none", either let
+ * --release through without the checks that keep an update from going back
+ * or skipping a release.
+ */
+async function runningRelease(
+  image: string,
+  target: UpdateTarget,
+  runners: Pick<ReleaseRunners, 'gh' | 'get'>,
+  wanted: string | undefined,
+): Promise<{ published: PublishedRelease[]; running: { tag: string } | { tag: null; reason: string } }> {
+  const digest = mirrorDigest(image, target.mirror, target.repo, 'service');
+  if (!digest) {
+    // No release in use: --release names one, which is read through.
+    const published = await publishedReleases(target.repo, runners.gh, (_, all) => wanted === undefined || all.some((one) => one.tag === wanted));
+    return {
+      published,
+      running: { tag: null, reason: `the bridge runs ${image}, which is no release's service image through this install's mirror: an install built with --build, or made before releases had images` },
+    };
+  }
+  // Page by page until a release's service image is this digest: the
+  // release in use and every version above it are then read.
+  let found: string | null = null;
+  const published = await publishedReleases(target.repo, runners.gh, async (got) => {
+    for (const release of takeableReleases(got).releases) {
+      const theirs = await releaseDigest(target.repo, 'service', release.tag, runners.get).catch((error: unknown) => {
+        throw new Error(`could not tell which release the bridge runs: ${release.tag}'s service image could not be read (${message(error)})`);
+      });
+      if (theirs === digest) {
+        found = release.tag;
+        return true;
+      }
+    }
+    return false;
+  });
+  if (found) return { published, running: { tag: found } };
+  throw new Error(
+    `the bridge runs ${target.repo}'s service image ${digest}, which no release this install can take has (one deleted since, or no longer immutable), so whether a release goes back or skips one cannot be told, and nothing is rolled`,
+  );
+}
+
+/**
+ * `openadlc cloud update [--release vX]`, returning its exit code: the
+ * verified rollout self-update does from Settings → System, from an
+ * operator's machine. For an install with `self_update = false`, and for the
+ * first move of an install that predates release images. Nothing is rolled
+ * until the release's images have checked out; a roll that stops
+ * partway says what runs what, and the exact commands that are left.
+ */
+export async function updateCommand(settings: Record<string, unknown>, wanted: string | undefined, runners: UpdateRunners): Promise<number> {
+  const target = updateTarget(settings);
+  if (typeof target === 'string') {
+    ui.fail(target);
+    return 1;
+  }
+  ui.heading(`Update the install in ${target.projectId} from ${target.repo}'s releases`);
+
+  let published: PublishedRelease[];
+  let takeable: PublishedRelease[];
+  let bridgeImage: string;
+  let running: Awaited<ReturnType<typeof runningRelease>>['running'];
+  try {
+    bridgeImage = await servingImage(target, 'bridge', runners.gcloud);
+    ({ published, running } = await runningRelease(bridgeImage, target, runners, wanted));
+    takeable = takeableReleases(published).releases;
+  } catch (error) {
+    ui.fail(message(error));
+    ui.note('nothing was changed');
+    return 1;
+  }
+  if ('reason' in running) ui.note(running.reason);
+  else ui.step(`the install runs ${running.tag}: its bridge does, which an update rolls last`);
+
+  const choice = chooseUpdate(running.tag, published, wanted);
+  if ('stop' in choice) {
+    if (choice.code === 0) ui.ok(choice.stop);
+    else ui.fail(choice.stop);
+    return choice.code;
+  }
+  if (choice.skips.length > 0) {
+    ui.warn(
+      `this skips ${choice.skips.join(', ')}: the bridge and the host apply a release's migrations as they start, so the skipped ones' run under code that never had them (docs/self-hosting.md#upgrading)`,
+    );
+  }
+
+  ui.step(`checking ${choice.take}'s service and console images`);
+  const checked = await checkedReleaseImages(target.repo, choice.take, target.mirror, runners);
+  if (!checked.ok) {
+    ui.fail(`${choice.take}'s images did not check out, so nothing was rolled: ${checked.reason}`);
+    if (wanted === undefined) {
+      ui.note(
+        `The release after it is not taken instead. That would skip ${choice.take}, and the bridge and the host apply a release's migrations as they start, so ${choice.take}'s would run under code that never had them (docs/self-hosting.md#upgrading). Run this again once ${choice.take} checks out, or name a later release with --release to skip it on purpose.`,
+      );
+    }
+    return 1;
+  }
+  ui.ok(`${choice.take}'s images were built by ${target.repo}'s release workflow from ${checked.images.commit.slice(0, 12)}`);
+
+  // What the rolls need, before any of them: the mirror the module makes, and
+  // a host whose cloud-init chooses hostd's image from the file. A host from
+  // before release images would restart on its old image, whatever the file
+  // said, after the console had already moved.
+  const mirror = await runners.gcloud([
+    'artifacts',
+    'repositories',
+    'describe',
+    `${target.prefix}-ghcr`,
+    '--location',
+    target.region,
+    '--project',
+    target.projectId,
+    '--format',
+    'value(name)',
+  ]);
+  if (mirror.code !== 0) {
+    ui.fail(`the mirror ${target.prefix}-ghcr is not in ${target.projectId} (${said(mirror)}), so nothing was rolled: openadlc cloud apply makes it`);
+    return 1;
+  }
+  const host = `${target.prefix}-host-1`;
+  if ((await runners.run('gcloud', ['compute', 'ssh', host, '--zone', target.zone, '--project', target.projectId, '--tunnel-through-iap', '--', HOST_UNIT_CHECK])) !== 0) {
+    ui.fail(
+      `${host} has no /etc/fleet/hostd-image.sh, or could not be reached over IAP, so nothing was rolled: a host whose cloud-init predates release images would restart on its old image. openadlc cloud apply resets it onto the new one (ending the tasks running there)`,
+    );
+    return 1;
+  }
+
+  // What each part runs now: a part already on the release is not rolled
+  // again, so running this again after a stop restarts hostd, which ends the
+  // host's tasks, only when hostd is not on it yet; and a stop can say what
+  // each rolled part ran before. One that cannot be read is rolled.
+  const before: Record<RollStep['name'], string | null> = {
+    console: await servingImage(target, 'console', runners.gcloud).catch(() => null),
+    host: await hostStartedImage(target, runners.gcloud),
+    bridge: bridgeImage,
+  };
+  const steps = rollSteps(target, checked.images);
+  const already = (step: RollStep) => before[step.name] === step.image;
+  ui.plain();
+  ui.heading(`Rolling ${choice.take}, in this order`);
+  for (const step of steps) ui.step(already(step) ? `${step.name === 'host' ? 'hostd' : `the ${step.name}`}: already on ${choice.take}, left as it is` : step.doing);
+  if (!steps.filter((step) => step.name === 'host').every(already)) {
+    ui.warn('restarting hostd ends the tasks running on the host: pause work first (Settings → Pause work), and resume it once this is done');
+  }
+  if (!(await runners.confirm(`Roll the install onto ${choice.take} now?`))) {
+    ui.note('nothing was changed');
+    return 1;
+  }
+
+  // What rolled goes back into the settings, so an apply, a service made
+  // again or a configure run after this starts from the release in use.
+  const next: Record<string, unknown> = { ...settings };
+  const saved = async (): Promise<boolean> => {
+    if (steps.every((step) => next[step.setting] === settings[step.setting])) return true;
+    if ((await runners.saveSettings(next)) === 0) return true;
+    ui.fail('the settings were not saved with the images now in use: run openadlc cloud push once the bucket can be reached');
+    return false;
+  };
+  const from = running.tag ?? 'what it ran before';
+  for (const [index, step] of steps.entries()) {
+    if (already(step)) {
+      next[step.setting] = step.image;
+      continue;
+    }
+    ui.plain();
+    ui.step(step.doing);
+    const code = await runners.run('gcloud', step.args);
+    if (code === 0) {
+      ui.ok(step.done);
+      next[step.setting] = step.image;
+      continue;
+    }
+    ui.fail(`${step.name === 'host' ? 'hostd' : `the ${step.name}`} did not come up on ${choice.take} (gcloud exited ${code})`);
+    const named = (one: RollStep) => (one.name === 'host' ? 'hostd' : `the ${one.name}`);
+    const rolled = steps.slice(0, index).map(named);
+    const left = steps.slice(index).map(named);
+    ui.note(
+      rolled.length > 0
+        ? `${rolled.join(' and ')} ${rolled.length === 1 ? 'runs' : 'run'} ${choice.take}; ${left.join(' and ')} ${left.length === 1 ? 'is' : 'are'} still on ${from}`
+        : `nothing was rolled: the install is on ${from} (Cloud Run keeps the revision that served until a new one is ready)`,
+    );
+    ui.plain('  What is left, in order:');
+    for (const rest of steps.slice(index)) if (!already(rest)) ui.code(shellLine('gcloud', rest.args));
+    const back = steps.slice(0, index).filter((one) => !already(one));
+    if (back.length > 0) {
+      ui.plain(`  Or to go back, what ${back.length === 1 ? 'that part' : 'each rolled part'} ran before (only if nothing of ${choice.take} has migrated the database: hostd and the bridge migrate as they start):`);
+      for (const one of back) {
+        const previous = before[one.name];
+        if (previous) ui.code(goBackCommand(target, one.name, previous));
+        else ui.note(`${named(one)}: what it ran before could not be read`);
+      }
+    }
+    if (step.name === 'host') {
+      ui.note(
+        `why hostd did not come back: ${shellLine('gcloud', ['compute', 'ssh', `${target.prefix}-host-1`, '--zone', target.zone, '--project', target.projectId, '--tunnel-through-iap', '--', 'sudo journalctl -u fleet-hostd -n 200 --no-pager'])}`,
+      );
+    }
+    ui.note(
+      `or run openadlc cloud update${wanted === undefined ? '' : ` --release ${wanted}`} again: it reads the release from the bridge, which is rolled last, and rolls what is not on ${choice.take} yet`,
+    );
+    await saved();
+    return 1;
+  }
+
+  ui.plain();
+  ui.ok(`the install runs ${choice.take}: the console, hostd and the bridge`);
+  if (!(await saved())) return 1;
+  if (next.hostd_image !== settings.hostd_image) {
+    ui.note('the settings name those images now; the next openadlc cloud apply resets the host once, since hostd_image is in its cloud-init, and it comes back on the same image');
+  }
+  const taken = releaseVersion(choice.take);
+  const later = takeable.filter((release) => {
+    const version = releaseVersion(release.tag);
+    return version && taken && compareVersions(version, taken) > 0;
+  });
+  if (later.length > 0) ui.note(`${later.map((release) => release.tag).join(', ')} ${later.length === 1 ? 'is' : 'are'} out too: run openadlc cloud update again for each, one release at a time`);
+  if (settings.self_update !== false) ui.note('with self_update on, Settings → System takes the next release by itself');
+  return 0;
+}
+
+/** What reading the images in use moved in the settings, and what it could not read. */
+export interface ImagesInUse {
+  vars: Record<string, unknown>;
+  changed: { setting: 'console_image' | 'bridge_image' | 'hostd_image'; from: unknown; to: string }[];
+  notes: string[];
+}
+
+/**
+ * The release images the install runs, read into its settings before a plan
+ * or an apply. A self-update from Settings → System rolls the console, hostd
+ * and the bridge without this machine, and the services ignore their image
+ * once made, so the settings went on naming the release the install was made
+ * with: a service made again, or a host made again (which falls back to
+ * hostd_image when its disk is new), would have started on that, under a
+ * database newer releases had migrated. Read from each service's serving
+ * revision, and from the image hostd last started on, over IAP, only when the
+ * services show a roll the settings have not seen. Only a release image by
+ * digest through the mirror is written; an install built with --build keeps
+ * its own.
+ */
+export async function imagesInUse(settings: Record<string, unknown>, gcloud: UpdateRunners['gcloud']): Promise<ImagesInUse> {
+  const vars: Record<string, unknown> = { ...settings };
+  const changed: ImagesInUse['changed'] = [];
+  const target = updateTarget(settings);
+  if (typeof target === 'string') return { vars, changed, notes: [] };
+  let bridge: string;
+  let console: string;
+  try {
+    bridge = await servingImage(target, 'bridge', gcloud);
+    console = await servingImage(target, 'console', gcloud);
+  } catch (error) {
+    return { vars, changed, notes: [`the images the services run could not be read (${message(error)}), so the settings keep the ones they name`] };
+  }
+  const set = (setting: ImagesInUse['changed'][number]['setting'], image: string): void => {
+    if (vars[setting] === image) return;
+    changed.push({ setting, from: vars[setting], to: image });
+    vars[setting] = image;
+  };
+  if (mirrorDigest(console, target.mirror, target.repo, 'console')) set('console_image', console);
+  const bridgeRelease = mirrorDigest(bridge, target.mirror, target.repo, 'service') !== null;
+  if (bridgeRelease) set('bridge_image', bridge);
+  const notes: string[] = [];
+  if (changed.length > 0 || (bridgeRelease && settings.hostd_image !== bridge)) {
+    const host = await hostStartedImage(target, gcloud);
+    if (host && mirrorDigest(host, target.mirror, target.repo, 'service')) set('hostd_image', host);
+    else if (!host) notes.push(`which image hostd last started on could not be read over IAP, so hostd_image stays ${String(settings.hostd_image ?? 'unset')}: a host made again would start on that`);
+  }
+  return { vars, changed, notes };
+}
+
+/** The runners `configure` and `update` use for real. */
+function releaseRunners(): ReleaseRunners {
+  const quiet = { GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1' };
+  return {
+    gh: (args) => capture('gh', args, undefined, { ...process.env, ...quiet }),
+    // No GitHub sign-in reaches the check: no token, and a gh configuration of
+    // its own, empty, so an image that passes here passes for the bridge on
+    // Cloud Run, which is signed in to nothing.
+    verify: async (args) => {
+      const config = mkdtempSync(join(tmpdir(), 'openadlc-gh-'));
+      try {
+        const env: NodeJS.ProcessEnv = { ...process.env, ...quiet, GH_CONFIG_DIR: config };
+        for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) delete env[name];
+        return await capture('gh', args, undefined, env);
+      } finally {
+        rmSync(config, { recursive: true, force: true });
+      }
+    },
+    get: async (url, headers) => {
+      try {
+        const response = await fetch(url, { headers, signal: AbortSignal.timeout(30_000) });
+        return { status: response.status, body: Buffer.from(await response.arrayBuffer()) };
+      } catch (error) {
+        throw new Error(`could not reach ${new URL(url).host}: ${message(error)}`);
+      }
+    },
+  };
+}
+
 export async function cloud(
   config: InstallConfig,
   action: string | undefined,
-  options: { provider?: string; bucket?: string; prefix?: string; rest?: string[]; noApply?: boolean } & ConfigureFlags,
+  options: { provider?: string; bucket?: string; prefix?: string; rest?: string[]; noApply?: boolean; build?: boolean; release?: string } & ConfigureFlags,
 ): Promise<void> {
   const provider = (options.provider ?? 'gcp') as Provider;
   if (!PROVIDERS.includes(provider)) {
@@ -989,15 +1874,27 @@ export async function cloud(
       const adminEmails = existing ? list(shown(existing, 'admin_emails') ?? '') : consoleUsers(consoleMembers);
       const operators = existing ? list(shown(existing, 'operators') ?? '') : defaultOperators(consoleMembers);
 
-      const registry = `${region}-docker.pkg.dev/${projectId}/openadlc`;
-      // The registry infra/gcp/install.sh just pushed to. The bot image is
-      // built by infra/local/build-bot-image.sh, which is also what a laptop
-      // builds from — the pinned engine CLIs live there, in one place, so the
-      // two installs cannot end up running different bots.
-      const bridgeImage = shown(existing, 'bridge_image') ?? `${registry}/bridge:latest`;
-      const consoleImage = shown(existing, 'console_image') ?? `${registry}/console:latest`;
-      const hostdImage = shown(existing, 'hostd_image') ?? `${registry}/hostd:latest`;
-      const botImage = shown(existing, 'bot_image') ?? `${registry}/bot:latest`;
+      // Before the bucket is made or anything written: a release whose images
+      // do not check out stops here with nothing changed.
+      const chosenImages = await configuredImages(
+        {
+          build: Boolean(options.build),
+          ...(existing ? { existing } : {}),
+          region,
+          projectId,
+          prefix: existing ? String(pinNamePrefix(existing).vars.name_prefix) : NAME_PREFIX,
+          repo: shown(existing, 'release_repository') ?? DEFAULT_RELEASE_REPOSITORY,
+        },
+        releaseRunners(),
+      );
+      if (!chosenImages.images) {
+        ui.fail('no release’s images could be used, so nothing was written');
+        for (const reason of chosenImages.reasons) ui.note(reason);
+        ui.note('to run this checkout instead, build its images with infra/gcp/install.sh --build, which configures with --build');
+        process.exitCode = 1;
+        return;
+      }
+      const { bridgeImage, consoleImage, hostdImage, botImage } = chosenImages.images;
 
       // Only `--deployer` touches the deployer settings; without it an
       // install's existing ones carry over untouched through configuredVars.
@@ -1039,6 +1936,7 @@ export async function cloud(
           : 'console domain: the install’s own address under nip.io — set one of your own with --domain, or later in the settings',
       );
       ui.step('GitHub organization and app: the console’s walkthrough sets them up once the install is running');
+      for (const line of chosenImages.said) ui.step(line);
 
       const bucket = options.bucket ?? saved?.bucket ?? `${projectId}-openadlc-tfstate`;
       // An install pulled from before the rename keeps its state under `fleet`.
@@ -1143,7 +2041,9 @@ export async function cloud(
         return;
       }
 
-      const { vars: settled, pinned } = pinNamePrefix(JSON.parse(readFileSync(tfVarsPath(), 'utf8')) as Record<string, unknown>);
+      const pinnedPrefix = pinNamePrefix(JSON.parse(readFileSync(tfVarsPath(), 'utf8')) as Record<string, unknown>);
+      let settled = pinnedPrefix.vars;
+      const pinned = pinnedPrefix.pinned;
       if (pinned) {
         writePrivate(tfVarsPath(), `${JSON.stringify(settled, null, 2)}\n`);
         ui.note(`these settings predate FleetADLC: pinned name_prefix = "${LEGACY_NAME_PREFIX}" so the resources keep their names`);
@@ -1173,6 +2073,27 @@ export async function cloud(
         return;
       }
 
+      // The images the install runs now, which a self-update may have moved
+      // since these settings were saved (`imagesInUse`). Only for an install
+      // that has a host: a fresh one has no services to read.
+      if (await outputValue('host_name', dir)) {
+        const read = await imagesInUse(settled, (args) => capture('gcloud', args));
+        for (const note of read.notes) ui.note(note);
+        if (read.changed.length > 0) {
+          settled = read.vars;
+          writePrivate(tfVarsPath(), `${JSON.stringify(settled, null, 2)}\n`);
+          ui.note(
+            `the settings now name the images the install runs, read from its services and its host (${read.changed.map((one) => one.setting).join(', ')}), so a service or a host made again starts on them`,
+          );
+          if (read.changed.some((one) => one.setting === 'hostd_image')) {
+            ui.warn(
+              `hostd_image is in the host's cloud-init, so ${action === 'apply' ? 'this apply resets' : 'the next apply resets'} the host once, ending the tasks running there (pause work first), and it comes back on the same image`,
+            );
+          }
+          await push(backend);
+        }
+      }
+
       const before: HostBeforeApply =
         action === 'apply'
           ? { host: await outputValue('host_name', dir), rollout: await outputValue('host_rollout', dir) }
@@ -1197,6 +2118,28 @@ export async function cloud(
         push: () => push(backend),
       });
       process.exitCode = code;
+      return;
+    }
+
+    case 'update': {
+      const backend = readBackend();
+      const settings = backend ? await existingSettings('so there is no install to update from here') : undefined;
+      if (!backend || !settings) {
+        ui.fail('this machine has no cloud configuration');
+        ui.note('openadlc cloud pull --bucket <name> for the install to update');
+        process.exitCode = 1;
+        return;
+      }
+      process.exitCode = await updateCommand(pinNamePrefix(settings).vars, options.release, {
+        ...releaseRunners(),
+        gcloud: (args) => capture('gcloud', args),
+        run,
+        confirm,
+        saveSettings: async (vars) => {
+          writePrivate(tfVarsPath(), `${JSON.stringify(vars, null, 2)}\n`);
+          return push(backend);
+        },
+      });
       return;
     }
 
@@ -1230,7 +2173,7 @@ export async function cloud(
 
     default:
       ui.fail(`unknown cloud command: ${action ?? '(none)'}`);
-      ui.note('try: openadlc cloud configure | pull | push | plan | apply | output | validate | members');
+      ui.note('try: openadlc cloud configure | pull | push | plan | apply | update | output | validate | members');
       process.exitCode = 1;
   }
 }

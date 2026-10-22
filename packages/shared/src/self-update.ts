@@ -193,6 +193,77 @@ export function attestationCheckArgs(input: { archive: string; bundle: string; r
   ];
 }
 
+/**
+ * The container images a release publishes beside its archive, for an
+ * install that runs images rather than a checkout (a Google Cloud install).
+ * `service` is `infra/local/Dockerfile.service`, which the bridge and hostd
+ * both run; `console` is `infra/local/Dockerfile.console`. Each is tagged
+ * with the release's version tag and nothing else: a moving tag would let
+ * what an install runs change under a name it already checked.
+ *
+ * The bot image is not one of them. It holds Claude Code, whose licence lets
+ * a person install it for their own use but not redistribute it, so every
+ * install builds its own (`infra/local/build-bot-image.sh`, which says the
+ * same), and its weekly engine update rebuilds it.
+ */
+export const RELEASE_IMAGES = ['service', 'console'] as const;
+export type ReleaseImage = (typeof RELEASE_IMAGES)[number];
+
+/** Where the images are pushed, and the one platform they are built for: Cloud Run and the host run linux/amd64 only. */
+export const RELEASE_IMAGE_REGISTRY = 'ghcr.io';
+export const RELEASE_IMAGE_PLATFORM = 'linux/amd64';
+
+/** An image's name, without tag or digest: the registry takes repository names in lower case only. */
+export function releaseImageName(repo: string, image: ReleaseImage): string {
+  return `${RELEASE_IMAGE_REGISTRY}/${repo.toLowerCase()}/${image}`;
+}
+
+/** The name a release tags an image with. An install resolves it to a digest and deploys the digest, never the tag. */
+export function releaseImageRef(repo: string, image: ReleaseImage, tag: string): string {
+  return `${releaseImageName(repo, image)}:${tag}`;
+}
+
+/**
+ * Where an image's attestation bundles are read: GitHub's attestations API,
+ * which answers a public repository's without a sign-in. `gh` with
+ * `--bundle-from-oci` was tried first and still asks for a GitHub sign-in
+ * (and, given a dummy token, says it was denied), so the bridge on Cloud Run,
+ * which has none, could not have checked an image at all.
+ */
+export function imageAttestationsUrl(repo: string, digest: string): string {
+  return `https://api.github.com/repos/${repo}/attestations/${encodeURIComponent(digest)}`;
+}
+
+/**
+ * The check an image must pass before an install runs it: the same signer,
+ * source and runner as the archive's (`attestationCheckArgs`), for the image
+ * at that digest, against the bundles read from `imageAttestationsUrl` and
+ * written one per line to a file (the API returns every attestation of the
+ * digest; gh takes the one with `--predicate-type`'s predicate). With
+ * `--bundle` gh needs no sign-in, as for the archive: checked on 2026-10-22
+ * with gh 2.100.0, an empty config and no token, against v0.1.1's archive.
+ */
+export function imageAttestationCheckArgs(input: { repo: string; image: ReleaseImage; digest: string; tag: string; commit: string; bundle: string }): string[] {
+  return [
+    'attestation',
+    'verify',
+    `oci://${releaseImageName(input.repo, input.image)}@${input.digest}`,
+    '--bundle',
+    input.bundle,
+    '--repo',
+    input.repo,
+    '--cert-identity',
+    releaseSignerIdentity(input.repo),
+    '--source-ref',
+    `refs/tags/${input.tag}`,
+    '--source-digest',
+    input.commit,
+    '--deny-self-hosted-runners',
+    '--predicate-type',
+    RELEASE_PREDICATE,
+  ];
+}
+
 /** The flags of `gh attestation verify` that check needs, which an older GitHub CLI does not have. */
 export const ATTESTATION_FLAGS = ['--bundle', '--cert-identity', '--source-ref', '--source-digest', '--deny-self-hosted-runners'] as const;
 
@@ -250,6 +321,69 @@ export function takeableReleases(releases: readonly PublishedRelease[]): { relea
   }
   takeable.sort((a, b) => compareVersions(b.version, a.version));
   return { releases: takeable.map((one) => one.release), incomplete, mutable };
+}
+
+/**
+ * A repository's releases, page by page as GitHub lists them (newest first),
+ * until `enough` says the pages read hold what is wanted, a page comes back
+ * short (the list's end), or `maxPages` were read. A cloud install needs the
+ * release it runs and every version above it, and each release's version is
+ * above every one before it, so those are all on the pages up to the one in
+ * use. Reading one page of 30 or 100 took an install whose release had
+ * fallen off it for one that runs no release at all. `enough` is told the
+ * page just read and everything read so far.
+ */
+export async function readReleasePages(
+  page: (n: number) => Promise<PublishedRelease[]>,
+  enough: (got: readonly PublishedRelease[], all: readonly PublishedRelease[]) => boolean | Promise<boolean>,
+  options: { perPage: number; maxPages?: number },
+): Promise<PublishedRelease[]> {
+  const all: PublishedRelease[] = [];
+  for (let n = 1; n <= (options.maxPages ?? 50); n += 1) {
+    const got = await page(n);
+    all.push(...got);
+    if (await enough(got, all)) break;
+    if (got.length < options.perPage) break;
+  }
+  return all;
+}
+
+// ------------------------------------------------------------------ one release at a time
+
+/** Why a cloud install never skips a release, as the row and the records say it. */
+export const ONE_RELEASE_AT_A_TIME = 'a cloud install takes one release at a time, since its bridge and its host each migrate the database as they start';
+
+/**
+ * The next release after the one in use, and the newest: the release a cloud
+ * install takes is the first above it, whatever is newer. Counted over every
+ * published version tag, takeable or not, so one that cannot be taken stops
+ * the install where it is (`untakeableReason`) rather than being jumped over.
+ * Null for both when nothing is ahead of it. The bridge's self-update and
+ * `openadlc cloud update` both choose with it: when each counted its own way,
+ * the CLI took a release past one the bridge stopped at.
+ */
+export function nextRelease(releases: readonly PublishedRelease[], inUse: string): { next: PublishedRelease | null; newest: PublishedRelease | null } {
+  const current = releaseVersion(inUse);
+  if (!current) return { next: null, newest: null };
+  const ahead = releases
+    .filter((release) => !release.draft && !release.prerelease)
+    .map((release) => ({ release, version: releaseVersion(release.tag) }))
+    .filter((one): one is { release: PublishedRelease; version: NonNullable<ReturnType<typeof releaseVersion>> } => one.version !== null && compareVersions(one.version, current) > 0)
+    .sort((a, b) => compareVersions(a.version, b.version));
+  return { next: ahead[0]?.release ?? null, newest: ahead.at(-1)?.release ?? null };
+}
+
+/** Why a release cannot be taken, as `takeableReleases` judges it, or null when it can. */
+export function untakeableReason(release: PublishedRelease): string | null {
+  const { releases, incomplete } = takeableReleases([release]);
+  if (releases.length > 0) return null;
+  if (incomplete.length > 0) return 'is a release without all three files';
+  return 'is not an immutable release, so its files could still be replaced (docs/development.md#once-per-repository)';
+}
+
+/** What a cloud install says when the next release is one it cannot take: it stays, and takes no later one. */
+export function nextReleaseRefused(next: string, why: string, inUse: string): string {
+  return `the next release, ${next}, ${why}; ${ONE_RELEASE_AT_A_TIME}, so it stays on ${inUse} and takes no later one: roll it past ${next} by hand with openadlc cloud update --release <tag> if that is meant`;
 }
 
 const SHA = /^[0-9a-f]{40}$/;

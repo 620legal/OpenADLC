@@ -17,6 +17,7 @@ import { HostFull, type ReviewMode, type TaskRunner } from './task-runner.js';
 import { readEngineCredential } from './session-env.js';
 import { isWorktreeRefusal, readWorktree } from './worktree-files.js';
 import { LocalCiRefused, type LocalCi } from './local-ci.js';
+import type { ImageRestart } from './restart-onto-image.js';
 import { ATTACH_SUBPROTOCOL_PREFIX } from './terminal-gateway.js';
 
 async function readBody(request: IncomingMessage): Promise<Record<string, unknown>> {
@@ -104,8 +105,27 @@ export function createHostdServer(input: {
   engineUpdates?: Pick<EngineUpdater, 'status' | 'update' | 'rollback'>;
   /** Runs a task's checks on its head for the bridge (`local-ci.ts`). Absent, its routes say so. */
   localCi?: Pick<LocalCi, 'start' | 'get'>;
+  /** Moves this hostd onto a release's image on a cloud host (`restart-onto-image.ts`). Absent, its route says why. */
+  restartOntoImage?: ImageRestart;
 }): Server {
   const { config, driver, runner, attachTokens } = input;
+
+  /**
+   * The tasks a restart would cut off: those starting here, and those held
+   * here that the database has running or queued. A paused task keeps its
+   * computer for a while but waits on a person, and the bridge's wait does not
+   * count it either: counted here, every roll would stop at hostd after the
+   * console had rolled, for as long as a question stayed open. A task the
+   * database cannot be asked about counts.
+   */
+  async function busyTasks(): Promise<string[]> {
+    const starting = runner.startingTaskIds();
+    const held = runner.activeTaskIds().filter((taskId) => !starting.includes(taskId));
+    const states = await Promise.all(
+      held.map(async (taskId) => ({ taskId, state: await tasks.getTask(taskId).then((task) => task?.state ?? 'gone', () => 'unknown') })),
+    );
+    return [...starting, ...states.filter(({ state }) => state === 'running' || state === 'queued' || state === 'unknown').map(({ taskId }) => taskId)];
+  }
 
   return createServer((request, response) => {
     void handle(request, response).catch((error) => {
@@ -220,6 +240,61 @@ export function createHostdServer(input: {
         error: `${method} ${path} needs the install's internal secret`,
         remedy: 'only the bridge and `openadlc attach` call hostd; they read it from the secret store',
       });
+    }
+
+    /**
+     * Restarting onto a release's `service` image, for the bridge's
+     * self-update on a cloud install (`apps/bridge/src/cloud-update.ts`):
+     * what this process runs and whether a task holds it, and the move onto
+     * the next. Only with no task running or starting here, since the exit
+     * ends every session on the host; the bridge has held new work and
+     * waited for the same tasks before it asks, and asks this before it
+     * rolls anything.
+     */
+    if (path === '/internal/restart-onto-image') {
+      const restart = input.restartOntoImage;
+      if (!restart) {
+        return send(response, 501, {
+          error: 'this hostd was not started from an image file (OPENADLC_HOSTD_IMAGE_FILE), so it cannot restart onto an image; only a cloud host is',
+        });
+      }
+      if (method === 'GET') return send(response, 200, { ...restart.inUse(), busy: await busyTasks() });
+      if (method === 'POST') {
+        const body = await readBody(request).catch(() => null);
+        const asked = restart.asked(body);
+        if ('problem' in asked) return send(response, 400, { error: asked.problem });
+        const busy = await busyTasks();
+        if (busy.length > 0) {
+          return send(response, 409, {
+            error: `${busy.length === 1 ? 'a task is' : `${busy.length} tasks are`} running here (${busy.join(', ')}), and a restart would end ${busy.length === 1 ? 'it' : 'them'}`,
+            remedy: 'ask again once no task runs on this host',
+          });
+        }
+        restart.write(asked.service);
+        restart.accepted = true;
+        console.log(`[hostd] restarting onto ${asked.service}`);
+        // The answer first, then the audit entry and the exit: an exit before
+        // the answer is flushed reads to the bridge as hostd going away, not
+        // as hostd agreeing to, and a slow database is no reason to keep it
+        // waiting. The entry gets a few seconds before the process goes.
+        response.writeHead(202, { 'content-type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({ restarting: true, service: asked.service }, null, 2), () => {
+          const written = audit({
+            actor: auditActor(caller),
+            action: 'hostd.restart_onto_image',
+            target: config.hostName,
+            payload: { ...assertion(caller), service: asked.service },
+          }).catch((error: unknown) => console.warn(`[hostd] could not write the restart onto ${asked.service} to the audit log: ${error instanceof Error ? error.message : error}`));
+          void Promise.race([written, new Promise((resolve) => setTimeout(resolve, 3_000))]).finally(() => restart.exit());
+        });
+        return;
+      }
+    }
+
+    // Between the answer above and the exit, a start would come up only to
+    // be ended with the process.
+    if (input.restartOntoImage?.accepted && method === 'POST' && (path === '/tasks' || /^\/tasks\/[^/]+\/resume$/.test(path))) {
+      return send(response, 503, { error: 'hostd is restarting onto a new image; try again once it is back' });
     }
 
     /**

@@ -72,3 +72,22 @@ describe('what the workflows run', () => {
     }
   });
 });
+
+/**
+ * The base images of an image a release publishes, by digest. The release
+ * attests what it built from a commit; a tag moved under `FROM` would change
+ * that, between two builds of the same commit, with nothing in the
+ * repository saying so. Dockerfile.service is pinned in the part of #73 that
+ * changes it, and joins this list there.
+ */
+const PUBLISHED_DOCKERFILES = ['infra/local/Dockerfile.console'];
+
+describe('what a published image is built from', () => {
+  it.each(PUBLISHED_DOCKERFILES)('%s names each base image by a digest', (file) => {
+    const text = readFileSync(join(ROOT, file), 'utf8');
+    const stages = new Set([...text.matchAll(/^FROM\s+\S+\s+AS\s+(\S+)/gim)].map((match) => match[1]!.toLowerCase()));
+    const bases = [...text.matchAll(/^FROM\s+(\S+)/gim)].map((match) => match[1]!).filter((image) => !stages.has(image.toLowerCase()));
+    expect(bases.length, file).toBeGreaterThan(0);
+    for (const image of bases) expect(image, file).toMatch(/^[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}$/);
+  });
+});

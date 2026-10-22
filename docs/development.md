@@ -315,29 +315,59 @@ A refused tag publishes nothing; delete it
 (`git push origin :refs/tags/v0.2.0`, which the tag ruleset below lets only
 you do) and tag again, or re-run the workflow once `ci` has passed. Versions
 only go up, three numbers with no suffix: there are no prereleases.
-**A tag is a deploy to every install**: each one that updates itself takes the
-newest release at its next scheduled run, within a week by default
+**A tag is a deploy to every install**: each one that updates itself takes a
+release at its next scheduled run, within a week by default: an install that
+runs from a checkout the newest, a cloud install the next after the one it
+runs, one release at a time
 ([self-hosting](self-hosting.md#updating-openadlc)).
 
+A release also publishes two container images, `service` and `console`, as
+packages of the repository on ghcr.io under the version tag
+([self-hosting](self-hosting.md#what-a-release-holds) names them), and that
+is what [a cloud install](self-hosting.md#installing-on-a-cloud) deploys.
+There is no bot image: it holds Claude Code, which a release may not
+redistribute, so every install builds its own. `images` builds the two from
+the tagged commit with a read-only token, and puts the licences of what each
+installs inside it (`infra/local/third-party-notices.sh`). `push`, a job that
+can write packages and nothing else, loads them, reads the tag again, refuses
+a tag that already has a release, and pushes them. `publish` takes the two
+digests `push` reports, attests each, checks that `service` and `console`
+can be pulled without signing in, and runs on each the check a cloud install
+runs, with `gh` signed in nowhere, all before it creates the release. If any image
+fails to build, nothing is pushed. If one fails to push, or a check after
+the push fails, there is no release, but the
+images already pushed stay under the tag. That is harmless: no release names
+them, an install takes only a release's images and checks each against the
+release's own commit, and a re-run of the workflow pushes its images over
+them under the same tag. To clear them anyway, delete those versions from
+each package's list of versions on its page.
+
 On a first release, and after a change to either workflow, look at the run:
-`publish` ran `gh attestation verify` on the release's own bundle before
-creating it, and the release should be immutable, with exactly three files:
-the archive, its `.sigstore.json` bundle and `SHA256SUMS`. A change to
-`release-build.yml` or `.github/scripts/release-check.mjs` takes effect for
-the next tag once it is on `main`; a change to `release.yml` only for tags on
-commits that have it. `tests/release-check.test.ts` runs each of the checks'
-refusals, and `tests/release-workflow.test.ts` checks the triggers and
-permissions, that `release.yml` only calls `release-build.yml@main`, runs the
-steps of `build` and `publish` that refuse, checks that the job that signs
-runs nothing it should not, that the attestation check is the same wherever
-it is written, that the workflows and the docs name the files and run the
-check exactly as self-update does (`packages/shared/src/self-update.ts`), and
-that `ci.yml` stays read-only; nothing short of a pushed tag runs either
-workflow.
+`publish` ran `gh attestation verify` on the release's own bundle and on each
+image before creating the release, and the release should be immutable, with
+exactly three files: the archive, its `.sigstore.json` bundle and
+`SHA256SUMS`; the packages page should show the two images at the tag. The
+first release with images stops after pushing them, at *service and console
+can be pulled without signing in*: a package a workflow creates starts out
+private. Change those two to public, as below, and re-run the workflow. A
+change to `release-build.yml` or `.github/scripts/release-check.mjs` takes
+effect for the next tag once it is on `main`; a change to `release.yml` only
+for tags on commits that have it. A tag on a commit whose `release.yml` does
+not grant `packages: write` fails before any job starts and publishes
+nothing, so tag a commit after the one that added it.
+`tests/release-check.test.ts` runs each of the checks' refusals, and
+`tests/release-workflow.test.ts` checks the triggers and permissions, that
+`release.yml` only calls `release-build.yml@main`, runs the steps of `build`,
+`images`, `push` and `publish` that refuse, build, push and check, checks
+that the jobs that push and sign run nothing they should not, that the
+attestation checks are the same wherever they are written, that the
+workflows and the docs name the files and the images and run the checks
+exactly as self-update does (`packages/shared/src/self-update.ts`), and that
+`ci.yml` stays read-only; nothing short of a pushed tag runs either workflow.
 
 ### Once per repository
 
-Two settings the workflows cannot make for themselves, done once by a
+Three settings the workflows cannot make for themselves, done once by a
 repository admin:
 
 - **Immutable releases.** Settings → General → Releases → enable release
@@ -352,6 +382,18 @@ repository admin:
   person who releases (a role or team no crew account has). Then a crew
   account cannot even push a version tag, let alone release one, which the
   workflow refuses anyway.
+- **Public `service` and `console` images.** A cloud install pulls them
+  through a mirror of ghcr.io that has no GitHub account, so they must be
+  public, and a package a workflow creates starts out private. After the
+  first release with images has pushed them, open each package from the
+  repository's Packages list (`https://github.com/620legal/OpenADLC/pkgs/container/openadlc%2Fservice`,
+  and `openadlc%2Fconsole`), then Package settings, Danger Zone, Change
+  visibility, Public, and re-run the release. An organization that limits
+  package visibility (Organization settings, Packages) has to allow public
+  ones. The workflow proves it by its effect: before every release `publish`
+  asks ghcr.io for a pull token without signing in and fetches the pushed
+  digest with it, and fails, naming the package page, while either is
+  refused.
 
 ## Plan changes
 

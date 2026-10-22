@@ -34,7 +34,11 @@ concurrency:
 jobs:
   release:
     name: release
-    # What release-build.yml's jobs may have, at most; each takes less.
+    # What release-build.yml's jobs may have, at most; each takes less. A
+    # called workflow's job gets no more than this, so a tag on a commit whose
+    # release.yml lacks `packages: write` fails before any job starts, with
+    # nothing published: push pushes the release's images with it, and
+    # publish pushes their attestations beside them.
     permissions:
       contents: write
       actions: read
@@ -42,4 +46,5 @@ jobs:
       issues: read
       id-token: write
       attestations: write
+      packages: write
     uses: 620legal/OpenADLC/.github/workflows/release-build.yml@main

@@ -1,7 +1,8 @@
-import { randomBytes } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { imageAttestationCheckArgs, releaseAssets } from '@openadlc/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   configureDefaults,
@@ -10,17 +11,26 @@ import {
   askRequired,
   backendArgs,
   canonicalRepository,
+  checkedReleaseImages,
+  chooseUpdate,
+  cloudBuildImages,
+  configuredImages,
   configuredVars,
   consoleUsers,
   DEFAULT_DEPLOYER_WORKFLOW,
   defaultOperators,
+  goBackCommand,
   hostNeedsReset,
   hostResetArgs,
+  imagesInUse,
   INSTANCE_NAME,
   invalidMember,
   LEGACY_NAME_PREFIX,
   memberArguments,
   membersCommand,
+  mirrorDigest,
+  mirrorImage,
+  newestReleaseImages,
   type MembersRunners,
   NAME_PREFIX,
   noAdminWarning,
@@ -28,13 +38,19 @@ import {
   outputAnswer,
   pinNamePrefix,
   postApplySteps,
+  releaseDigest,
+  releaseMirror,
   remoteTfVars,
+  rollSteps,
   settledAnswers,
   terraformProblem,
   tfVars,
+  updateCommand,
   withAddedMembers,
   writeCloudFiles,
   type CloudConfig,
+  type ReleaseRunners,
+  type UpdateRunners,
 } from './cloud.js';
 
 const cloud: CloudConfig = {
@@ -917,5 +933,613 @@ describe('the terraform a plan or an apply runs', () => {
   it('refuses a Terraform older than the module needs, and says when there is none', () => {
     expect(terraformProblem(answer(0, '{"terraform_version":"1.5.7"}'))).toMatch(/Terraform 1\.5\.7/);
     expect(terraformProblem(answer(127, ''))).toMatch(/not installed/);
+  });
+});
+
+// ------------------------------------------------------------------ release images
+
+const REPO = '620legal/OpenADLC';
+const MIRROR = 'us-central1-docker.pkg.dev/example-project/openadlc-ghcr';
+const sha = (hex: string) => `sha256:${hex.repeat(64 / hex.length)}`;
+const commitOf = (tag: string) => createHash('sha1').update(tag).digest('hex');
+
+interface World {
+  releases: { tag: string; draft?: boolean; immutable?: boolean; assets?: string[] }[];
+  /** `<tag>/<image>` whose attestation gh refuses, with what it says. */
+  refused?: Record<string, string>;
+  /** `<tag>/<image>` whose attestation was made by another trigger than the tag's push. */
+  dispatched?: string[];
+  /** `<tag>/<image>` ghcr.io does not show without a sign-in. */
+  hidden?: string[];
+  /** `<tag>/<image>` GitHub's attestations API has nothing for. */
+  unattested?: string[];
+  /** ghcr.io does not answer at all. */
+  offline?: boolean;
+}
+
+/**
+ * GitHub and ghcr.io, stood in for: the releases `gh api` lists, the commits
+ * their tags are on, each image's manifest (its digest is the manifest's
+ * hash), the attestations API's bundles for each digest, and `gh attestation
+ * verify`, which accepts only the arguments the shared contract gives, with
+ * the file of exactly those bundles, and answers as `--format json` does.
+ */
+function releaseWorld(world: World) {
+  const gh: string[][] = [];
+  const verified: string[][] = [];
+  const got: { url: string; headers: Record<string, string> }[] = [];
+  const manifest = (tag: string, image: string) => Buffer.from(JSON.stringify({ schemaVersion: 2, mediaType: 'application/vnd.oci.image.index.v1+json', tag, image }));
+  const digestOf = (body: Buffer) => `sha256:${createHash('sha256').update(body).digest('hex')}`;
+  const published = (tag: string) => world.releases.some((release) => release.tag === tag);
+  const byDigest = new Map<string, { tag: string; image: 'service' | 'console' }>();
+  for (const { tag } of world.releases) for (const image of ['service', 'console'] as const) byDigest.set(digestOf(manifest(tag, image)), { tag, image });
+  const digest = (tag: string, image: 'service' | 'console') => digestOf(manifest(tag, image));
+  const bundles = (key: string) => [{ mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json', of: key, n: 1 }, { mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json', of: key, n: 2 }];
+  const runners: ReleaseRunners = {
+    gh: async (args) => {
+      gh.push(args);
+      const listing = /^repos\/620legal\/OpenADLC\/releases\?per_page=100(?:&page=(\d+))?$/.exec(args[1] ?? '');
+      if (args[0] === 'api' && listing) {
+        const page = Number(listing[1] ?? '1');
+        const listed = world.releases.slice((page - 1) * 100, page * 100).map((release) => ({
+          tag_name: release.tag,
+          draft: release.draft ?? false,
+          prerelease: false,
+          published_at: '2026-10-01T00:00:00Z',
+          immutable: release.immutable ?? true,
+          assets: (release.assets ?? Object.values(releaseAssets(release.tag))).map((name) => ({ name })),
+        }));
+        return { code: 0, stdout: JSON.stringify(listed), stderr: '' };
+      }
+      const commit = /^repos\/620legal\/OpenADLC\/commits\/(v[0-9.]+)$/.exec(args[1] ?? '');
+      if (args[0] === 'api' && commit && published(commit[1]!)) return { code: 0, stdout: `${commitOf(commit[1]!)}\n`, stderr: '' };
+      return { code: 1, stdout: '', stderr: `gh ${args.join(' ')}: not stood in for` };
+    },
+    verify: async (args) => {
+      verified.push(args);
+      const subject = /^oci:\/\/ghcr\.io\/620legal\/openadlc\/(service|console)@(sha256:[0-9a-f]{64})$/.exec(args[2] ?? '');
+      const found = subject ? byDigest.get(subject[2]!) : undefined;
+      if (!subject || !found || found.image !== subject[1]) return { code: 1, stdout: '', stderr: 'no attestations found' };
+      const bundle = args[args.indexOf('--bundle') + 1] ?? '';
+      const expected = [...imageAttestationCheckArgs({ repo: REPO, image: found.image, digest: subject[2]!, tag: found.tag, commit: commitOf(found.tag), bundle }), '--format', 'json'];
+      if (JSON.stringify(args) !== JSON.stringify(expected)) return { code: 1, stdout: '', stderr: `unexpected arguments: ${args.join(' ')}` };
+      const key = `${found.tag}/${found.image}`;
+      // The file holds every bundle the API gave, one JSON line each.
+      const lines = readFileSync(bundle, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as unknown);
+      if (JSON.stringify(lines) !== JSON.stringify(bundles(key))) return { code: 1, stdout: '', stderr: `the bundle file is not the API's: ${JSON.stringify(lines)}` };
+      if (world.refused?.[key]) return { code: 1, stdout: '', stderr: world.refused[key]! };
+      const trigger = world.dispatched?.includes(key) ? 'workflow_dispatch' : 'push';
+      const certificate = { buildTrigger: trigger, buildConfigURI: `https://github.com/${REPO}/.github/workflows/release.yml@refs/tags/${found.tag}` };
+      return { code: 0, stdout: JSON.stringify([{ verificationResult: { signature: { certificate } } }]), stderr: '' };
+    },
+    get: async (url, headers) => {
+      got.push({ url, headers });
+      const attestations = /^https:\/\/api\.github\.com\/repos\/620legal\/OpenADLC\/attestations\/sha256%3A([0-9a-f]{64})$/.exec(url);
+      if (attestations) {
+        const found = byDigest.get(`sha256:${attestations[1]}`);
+        if (!found || world.unattested?.includes(`${found.tag}/${found.image}`)) return { status: 404, body: Buffer.from('{"message":"Not Found"}') };
+        return { status: 200, body: Buffer.from(JSON.stringify({ attestations: bundles(`${found.tag}/${found.image}`).map((bundle) => ({ bundle, repository_id: 1 })) })) };
+      }
+      if (world.offline) throw new Error('could not reach ghcr.io: getaddrinfo ENOTFOUND ghcr.io');
+      const token = /^https:\/\/ghcr\.io\/token\?scope=repository%3A(620legal%2Fopenadlc%2F[a-z]+)%3Apull&service=ghcr\.io$/.exec(url);
+      if (token) return { status: 200, body: Buffer.from(JSON.stringify({ token: `anonymous-${decodeURIComponent(token[1]!)}` })) };
+      const wanted = /^https:\/\/ghcr\.io\/v2\/620legal\/openadlc\/(service|console)\/manifests\/(v[0-9.]+)$/.exec(url);
+      if (!wanted || headers.authorization !== `Bearer anonymous-620legal/openadlc/${wanted[1]}`) return { status: 401, body: Buffer.from('{}') };
+      if (!published(wanted[2]!) || world.hidden?.includes(`${wanted[2]}/${wanted[1]}`)) return { status: 404, body: Buffer.from('{}') };
+      return { status: 200, body: manifest(wanted[2]!, wanted[1]!) };
+    },
+  };
+  const mirrored = (tag: string, image: 'service' | 'console') => `${MIRROR}/620legal/openadlc/${image}@${digest(tag, image)}`;
+  return { runners, gh, verified, got, digest, mirrored };
+}
+
+describe('a release image as a cloud install pulls it', () => {
+  it('is the image on ghcr.io, through the install’s mirror, by digest', () => {
+    const mirror = releaseMirror('us-central1', 'example-project', 'openadlc');
+    expect(mirror).toBe(MIRROR);
+    expect(mirrorImage(mirror, REPO, 'service', sha('a'))).toBe(`${MIRROR}/620legal/openadlc/service@${sha('a')}`);
+  });
+
+  it('is told apart from any other image the bridge could run', () => {
+    expect(mirrorDigest(`${MIRROR}/620legal/openadlc/service@${sha('a')}`, MIRROR, REPO, 'service')).toBe(sha('a'));
+    for (const other of [
+      `${MIRROR}/620legal/openadlc/console@${sha('a')}`,
+      `${MIRROR}/620legal/openadlc/service:v0.2.0`,
+      `ghcr.io/620legal/openadlc/service@${sha('a')}`,
+      `us-central1-docker.pkg.dev/example-project/openadlc/bridge:latest`,
+      `${MIRROR}/620legal/openadlc/service@sha256:${'a'.repeat(63)}`,
+    ]) {
+      expect(mirrorDigest(other, MIRROR, REPO, 'service'), other).toBeNull();
+    }
+  });
+});
+
+describe('the digest a release tag names', () => {
+  it('is the hash of the manifest ghcr.io serves under an anonymous token, with no sign-in', async () => {
+    const { runners, got, digest } = releaseWorld({ releases: [{ tag: 'v0.2.0' }] });
+    expect(await releaseDigest(REPO, 'console', 'v0.2.0', runners.get)).toBe(digest('v0.2.0', 'console'));
+    expect(got.map((call) => call.url)).toEqual([
+      'https://ghcr.io/token?scope=repository%3A620legal%2Fopenadlc%2Fconsole%3Apull&service=ghcr.io',
+      'https://ghcr.io/v2/620legal/openadlc/console/manifests/v0.2.0',
+    ]);
+    // Nothing of this machine's goes with it: only the token ghcr.io handed out.
+    expect(got[0]!.headers).toEqual({});
+    expect(Object.keys(got[1]!.headers).sort()).toEqual(['accept', 'authorization']);
+    for (const type of [
+      'application/vnd.oci.image.index.v1+json',
+      'application/vnd.oci.image.manifest.v1+json',
+      'application/vnd.docker.distribution.manifest.list.v2+json',
+      'application/vnd.docker.distribution.manifest.v2+json',
+    ]) {
+      expect(got[1]!.headers.accept).toContain(type);
+    }
+  });
+
+  it('is refused, saying the packages may not be public yet, when ghcr.io will not show it', async () => {
+    const { runners } = releaseWorld({ releases: [{ tag: 'v0.2.0' }], hidden: ['v0.2.0/console'] });
+    await expect(releaseDigest(REPO, 'console', 'v0.2.0', runners.get)).rejects.toThrow(/ghcr\.io\/620legal\/openadlc\/console:v0\.2\.0[\s\S]*public/);
+  });
+});
+
+describe('the release images configure takes', () => {
+  it('are the newest release whose images’ attestations check out, as mirror digests', async () => {
+    const { runners, verified, mirrored, digest } = releaseWorld({
+      releases: [
+        { tag: 'v0.1.0' },
+        { tag: 'v0.4.0', assets: ['SHA256SUMS'] },
+        { tag: 'v0.3.0', draft: true },
+        { tag: 'v0.2.1', immutable: false },
+        { tag: 'v0.2.0' },
+      ],
+      refused: { 'v0.2.0/console': 'verifying with issuer "sigstore.dev": no matching attestation' },
+    });
+    const chosen = await newestReleaseImages(REPO, MIRROR, runners);
+    expect(chosen.images).toEqual({
+      tag: 'v0.1.0',
+      commit: commitOf('v0.1.0'),
+      service: mirrored('v0.1.0', 'service'),
+      console: mirrored('v0.1.0', 'console'),
+    });
+    // v0.2.0 was tried first and passed over for its console image, and said.
+    expect('passedOver' in chosen && chosen.passedOver.join('\n')).toMatch(/v0\.2\.0[\s\S]*console[\s\S]*no matching attestation/);
+    // Each image was checked with the contract's arguments, against the API's bundles, and --format json.
+    expect(verified.map((args) => args[2])).toContain(`oci://ghcr.io/620legal/openadlc/console@${digest('v0.1.0', 'console')}`);
+    for (const args of verified) expect(args.slice(-2)).toEqual(['--format', 'json']);
+  });
+
+  it('read the attestations from GitHub’s API with no sign-in, and leave no bundle file behind', async () => {
+    const { runners, got, verified } = releaseWorld({ releases: [{ tag: 'v0.2.0' }] });
+    const checked = await checkedReleaseImages(REPO, 'v0.2.0', MIRROR, runners);
+    expect(checked.ok).toBe(true);
+    const asked = got.filter((call) => call.url.startsWith('https://api.github.com/'));
+    expect(asked).toHaveLength(2);
+    for (const call of asked) expect(Object.keys(call.headers).map((name) => name.toLowerCase())).not.toContain('authorization');
+    for (const args of verified) expect(existsSync(args[args.indexOf('--bundle') + 1]!)).toBe(false);
+  });
+
+  it('refuses an image GitHub has no attestation for', async () => {
+    const { runners, verified } = releaseWorld({ releases: [{ tag: 'v0.2.0' }], unattested: ['v0.2.0/service'] });
+    const checked = await checkedReleaseImages(REPO, 'v0.2.0', MIRROR, runners);
+    expect(!checked.ok && checked.reason).toMatch(/service[\s\S]*no attestation/);
+    expect(verified).toEqual([]);
+  });
+
+  it('refuses an image whose attestation came from a run the tag’s push did not start', async () => {
+    const { runners } = releaseWorld({ releases: [{ tag: 'v0.2.0' }], dispatched: ['v0.2.0/console'] });
+    const checked = await checkedReleaseImages(REPO, 'v0.2.0', MIRROR, runners);
+    expect(checked.ok).toBe(false);
+    expect(!checked.ok && checked.reason).toMatch(/console[\s\S]*workflow_dispatch/);
+  });
+
+  it('are none, with every reason, when no release checks out', async () => {
+    const { runners } = releaseWorld({ releases: [{ tag: 'v0.2.0' }], hidden: ['v0.2.0/service'] });
+    const chosen = await newestReleaseImages(REPO, MIRROR, runners);
+    expect(chosen.images).toBeNull();
+    expect('reasons' in chosen && chosen.reasons.join('\n')).toMatch(/v0\.2\.0[\s\S]*public/);
+    const none = await newestReleaseImages(REPO, MIRROR, releaseWorld({ releases: [{ tag: 'v0.2.0', immutable: false }] }).runners);
+    expect('reasons' in none && none.reasons.join('\n')).toMatch(/v0\.2\.0[\s\S]*immutable/);
+  });
+
+  it('write the release’s service image for the bridge and for hostd, and its console image', async () => {
+    const { runners, mirrored } = releaseWorld({ releases: [{ tag: 'v0.2.0' }] });
+    const chosen = await configuredImages({ build: false, region: 'us-central1', projectId: 'example-project', prefix: 'openadlc', repo: REPO }, runners);
+    expect(chosen.images).toEqual({
+      bridgeImage: mirrored('v0.2.0', 'service'),
+      hostdImage: mirrored('v0.2.0', 'service'),
+      consoleImage: mirrored('v0.2.0', 'console'),
+      // A release holds no bot image (it has Claude Code in it): the install
+      // builds its own, under the name install.sh's Cloud Build pushes.
+      botImage: cloudBuildImages('us-central1', 'example-project').botImage,
+    });
+    expect('said' in chosen && chosen.said.join('\n')).toContain('Claude Code');
+  });
+
+  it('keep the bot image an install already has, whatever else they take', async () => {
+    const { runners, mirrored } = releaseWorld({ releases: [{ tag: 'v0.2.0' }] });
+    const existing = { bot_image: 'europe-docker.pkg.dev/p/openadlc/bot:2026-09-21' };
+    const chosen = await configuredImages({ build: false, existing, region: 'us-central1', projectId: 'example-project', prefix: 'openadlc', repo: REPO }, runners);
+    expect(chosen.images).toEqual({
+      bridgeImage: mirrored('v0.2.0', 'service'),
+      hostdImage: mirrored('v0.2.0', 'service'),
+      consoleImage: mirrored('v0.2.0', 'console'),
+      botImage: 'europe-docker.pkg.dev/p/openadlc/bot:2026-09-21',
+    });
+  });
+
+  it('are the install’s own registry’s with --build, as install.sh --build pushes them, asking GitHub nothing', async () => {
+    const { runners, gh } = releaseWorld({ releases: [{ tag: 'v0.2.0' }] });
+    const chosen = await configuredImages({ build: true, region: 'us-central1', projectId: 'example-project', prefix: 'openadlc', repo: REPO }, runners);
+    expect(chosen.images).toEqual(cloudBuildImages('us-central1', 'example-project'));
+    expect(cloudBuildImages('us-central1', 'example-project')).toEqual({
+      bridgeImage: 'us-central1-docker.pkg.dev/example-project/openadlc/bridge:latest',
+      hostdImage: 'us-central1-docker.pkg.dev/example-project/openadlc/hostd:latest',
+      consoleImage: 'us-central1-docker.pkg.dev/example-project/openadlc/console:latest',
+      botImage: 'us-central1-docker.pkg.dev/example-project/openadlc/bot:latest',
+    });
+    expect(gh).toEqual([]);
+  });
+
+  it.each([false, true])('are the ones an install already has, with --build %s too, which only an update moves', async (build) => {
+    const { runners, gh } = releaseWorld({ releases: [{ tag: 'v0.2.0' }] });
+    const existing = { bridge_image: 'a', console_image: 'b', hostd_image: 'c', bot_image: 'd' };
+    const chosen = await configuredImages({ build, existing, region: 'us-central1', projectId: 'example-project', prefix: 'openadlc', repo: REPO }, runners);
+    expect(chosen.images).toEqual({ bridgeImage: 'a', consoleImage: 'b', hostdImage: 'c', botImage: 'd' });
+    expect(gh).toEqual([]);
+  });
+});
+
+describe('the release an update takes', () => {
+  const published = (tag: string, extra: { immutable?: boolean; assets?: string[] } = {}) => ({
+    tag,
+    draft: false,
+    prerelease: false,
+    publishedAt: '2026-10-01T00:00:00Z',
+    assets: extra.assets ?? Object.values(releaseAssets(tag)),
+    immutable: extra.immutable ?? true,
+  });
+  const takeable = ['v0.4.0', 'v0.3.0', 'v0.2.0', 'v0.1.0'].map((tag) => published(tag));
+
+  it('is the next one after the release the install runs, never a later one', () => {
+    expect(chooseUpdate('v0.2.0', takeable)).toEqual({ take: 'v0.3.0', skips: [] });
+  });
+
+  it('is none when the install runs the newest', () => {
+    expect(chooseUpdate('v0.4.0', takeable)).toMatchObject({ code: 0, stop: expect.stringContaining('newest') });
+  });
+
+  it('is the one --release names, saying which it skips', () => {
+    expect(chooseUpdate('v0.1.0', takeable, 'v0.4.0')).toEqual({ take: 'v0.4.0', skips: ['v0.2.0', 'v0.3.0'] });
+    // The same release again puts each part not on it back on it.
+    expect(chooseUpdate('v0.2.0', takeable, 'v0.2.0')).toEqual({ take: 'v0.2.0', skips: [] });
+  });
+
+  it('never goes back, since migrations only go forward', () => {
+    const back = chooseUpdate('v0.3.0', takeable, 'v0.2.0');
+    expect(back).toMatchObject({ code: 1 });
+    expect('stop' in back && back.stop).toMatch(/forward/);
+  });
+
+  it('needs --release when the install runs no release’s images, and says why', () => {
+    const unknown = chooseUpdate(null, takeable);
+    expect(unknown).toMatchObject({ code: 1 });
+    expect('stop' in unknown && unknown.stop).toContain('--release');
+    expect(chooseUpdate(null, takeable, 'v0.3.0')).toEqual({ take: 'v0.3.0', skips: [] });
+  });
+
+  it('refuses a --release that is no version tag, or no release it can take', () => {
+    expect(chooseUpdate('v0.1.0', takeable, 'latest')).toMatchObject({ code: 2 });
+    expect(chooseUpdate('v0.1.0', takeable, '')).toMatchObject({ code: 2 });
+    expect(chooseUpdate('v0.1.0', takeable, 'v0.9.0')).toMatchObject({ code: 1 });
+  });
+
+  it('stops at a next release it cannot take, as the bridge does, rather than take the one after it', () => {
+    for (const next of [published('v0.2.0', { immutable: false }), published('v0.2.0', { assets: [] })]) {
+      const releases = [published('v0.3.0'), next, published('v0.1.0')];
+      const choice = chooseUpdate('v0.1.0', releases);
+      expect(choice).toMatchObject({ code: 1 });
+      expect('stop' in choice && choice.stop).toMatch(/^the next release, v0\.2\.0, is .*so it stays on v0\.1\.0 and takes no later one: roll it past v0\.2\.0 by hand with openadlc cloud update --release <tag>/);
+      // Named, a later one is still taken, saying what it skips.
+      expect(chooseUpdate('v0.1.0', releases, 'v0.3.0')).toEqual({ take: 'v0.3.0', skips: ['v0.2.0'] });
+    }
+    // A draft is no release at all, and is not waited for.
+    expect(chooseUpdate('v0.1.0', [published('v0.3.0'), { ...published('v0.2.0'), draft: true }, published('v0.1.0')])).toEqual({ take: 'v0.3.0', skips: [] });
+  });
+});
+
+describe('openadlc cloud update', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const settings = { project_id: 'example-project', region: 'us-central1', zone: 'us-central1-b', name_prefix: 'openadlc', bridge_image: 'old-bridge', console_image: 'old-console', hostd_image: 'old-hostd', bot_image: 'bot' };
+  const hostCheck = 'test -x /etc/fleet/hostd-image.sh';
+
+  /** The install, stood in for: the bridge's ready revision runs `running`, and each roll exits as `codes` says. */
+  function install(
+    world: World,
+    running: string,
+    options: {
+      codes?: Partial<Record<'console' | 'host' | 'bridge' | 'check', number>>;
+      confirm?: boolean;
+      mirror?: boolean;
+      saved?: number;
+      /** What the console's serving revision runs, and what hostd last started on; unreadable when absent. */
+      consoleOn?: string;
+      hostStarted?: string;
+    } = {},
+  ) {
+    const released = releaseWorld(world);
+    const ran: { step: string; command: string; args: string[] }[] = [];
+    const printed: string[] = [];
+    const saved: Record<string, unknown>[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line?: unknown) => void printed.push(String(line ?? '')));
+    const runners: UpdateRunners = {
+      ...released.runners,
+      gcloud: async (args) => {
+        const where = ['--region', 'us-central1', '--project', 'example-project'];
+        if (JSON.stringify(args) === JSON.stringify(['run', 'services', 'describe', 'openadlc-bridge', ...where, '--format', 'value(status.latestReadyRevisionName)'])) {
+          return { code: 0, stdout: 'openadlc-bridge-00007-abc\n', stderr: '' };
+        }
+        if (JSON.stringify(args) === JSON.stringify(['run', 'revisions', 'describe', 'openadlc-bridge-00007-abc', ...where, '--format', 'value(spec.containers[0].image)'])) {
+          return { code: 0, stdout: `${running}\n`, stderr: '' };
+        }
+        if (options.consoleOn && JSON.stringify(args) === JSON.stringify(['run', 'services', 'describe', 'openadlc-console', ...where, '--format', 'value(status.latestReadyRevisionName)'])) {
+          return { code: 0, stdout: 'openadlc-console-00003-xyz\n', stderr: '' };
+        }
+        if (options.consoleOn && JSON.stringify(args) === JSON.stringify(['run', 'revisions', 'describe', 'openadlc-console-00003-xyz', ...where, '--format', 'value(spec.containers[0].image)'])) {
+          return { code: 0, stdout: `${options.consoleOn}\n`, stderr: '' };
+        }
+        if (
+          options.hostStarted &&
+          JSON.stringify(args) ===
+            JSON.stringify(['compute', 'ssh', 'openadlc-host-1', '--zone', 'us-central1-b', '--project', 'example-project', '--tunnel-through-iap', '--quiet', '--', 'cat /var/lib/fleet/hostd-image.started'])
+        ) {
+          return { code: 0, stdout: `${options.hostStarted}\n`, stderr: '' };
+        }
+        if (JSON.stringify(args) === JSON.stringify(['artifacts', 'repositories', 'describe', 'openadlc-ghcr', '--location', 'us-central1', '--project', 'example-project', '--format', 'value(name)'])) {
+          return options.mirror === false ? { code: 1, stdout: '', stderr: 'NOT_FOUND: Requested entity was not found.' } : { code: 0, stdout: 'projects/example-project/locations/us-central1/repositories/openadlc-ghcr\n', stderr: '' };
+        }
+        return { code: 1, stdout: '', stderr: `gcloud ${args.join(' ')}: not stood in for` };
+      },
+      run: async (command, args) => {
+        const step = args.at(-1) === hostCheck ? 'check' : args[0] === 'compute' ? 'host' : args[3] === 'openadlc-console' ? 'console' : args[3] === 'openadlc-bridge' ? 'bridge' : 'other';
+        ran.push({ step, command, args });
+        return options.codes?.[step as 'console'] ?? 0;
+      },
+      confirm: async () => options.confirm ?? true,
+      saveSettings: async (vars) => {
+        saved.push(vars);
+        return options.saved ?? 0;
+      },
+    };
+    return { ...released, runners, ran, printed, saved };
+  }
+
+  const world: World = { releases: [{ tag: 'v0.1.0' }, { tag: 'v0.2.0' }, { tag: 'v0.3.0' }] };
+  const v010 = () => releaseWorld(world).mirrored('v0.1.0', 'service');
+
+  it('checks the mirror and the host’s unit, then rolls the console, then hostd, then the bridge, last; never the bot image', async () => {
+    const { runners, ran, printed, mirrored } = install(world, v010());
+    expect(await updateCommand(settings, undefined, runners)).toBe(0);
+    expect(ran.map((one) => one.step)).toEqual(['check', 'console', 'host', 'bridge']);
+    expect(ran[0]!.args).toEqual(['compute', 'ssh', 'openadlc-host-1', '--zone', 'us-central1-b', '--project', 'example-project', '--tunnel-through-iap', '--', hostCheck]);
+    const where = ['--region', 'us-central1', '--project', 'example-project', '--quiet'];
+    expect(ran[1]).toEqual({ step: 'console', command: 'gcloud', args: ['run', 'services', 'update', 'openadlc-console', '--image', mirrored('v0.2.0', 'console'), ...where] });
+    expect(ran[3]).toEqual({ step: 'bridge', command: 'gcloud', args: ['run', 'services', 'update', 'openadlc-bridge', '--image', mirrored('v0.2.0', 'service'), ...where] });
+    const host = ran[2]!.args;
+    expect(host.slice(0, -1)).toEqual(['compute', 'ssh', 'openadlc-host-1', '--zone', 'us-central1-b', '--project', 'example-project', '--tunnel-through-iap', '--']);
+    const remote = host.at(-1) ?? '';
+    expect(remote).toMatch(/^sudo sh -c "[^"$`\\]*"$/);
+    const service = mirrored('v0.2.0', 'service');
+    // Pulled first, so a pull that fails changes nothing on the host.
+    const pull = remote.indexOf(`HOME=/var/lib/fleet/home docker pull ${service}`);
+    expect(pull).toBeGreaterThan(remote.indexOf('set -e'));
+    expect(pull).toBeLessThan(remote.indexOf(`echo ${service} > /var/lib/fleet/hostd-image.next`));
+    expect(remote).toContain('mv -f /var/lib/fleet/hostd-image.next /var/lib/fleet/hostd-image');
+    // On disk before hostd restarts onto it, and checked by what started after.
+    expect(remote.indexOf('sync')).toBeLessThan(remote.indexOf('systemctl restart fleet-hostd'));
+    expect(remote.indexOf('systemctl restart fleet-hostd')).toBeLessThan(remote.indexOf(`grep -qxF ${service} /var/lib/fleet/hostd-image.started`));
+    // The bot image is the host's own, which its weekly engine update moves.
+    expect(ran.flatMap((one) => one.args).join(' ')).not.toContain('/bot');
+    const said = printed.join('\n');
+    expect(said).toContain('v0.1.0');
+    expect(said).toMatch(/runs v0\.2\.0/);
+    // One at a time: the release after it is for the next run.
+    expect(said).toContain('v0.3.0');
+  });
+
+  it('writes what it rolled into the settings, and saves them to the bucket, so an apply or a new service takes the release', async () => {
+    const { runners, saved, mirrored } = install(world, v010());
+    expect(await updateCommand(settings, undefined, runners)).toBe(0);
+    expect(saved).toEqual([
+      { ...settings, console_image: mirrored('v0.2.0', 'console'), hostd_image: mirrored('v0.2.0', 'service'), bridge_image: mirrored('v0.2.0', 'service') },
+    ]);
+  });
+
+  it('refuses to skip a release whose images do not check out, and rolls nothing', async () => {
+    const { runners, ran, printed, saved } = install({ ...world, refused: { 'v0.2.0/console': 'no matching attestation' } }, v010());
+    expect(await updateCommand(settings, undefined, runners)).toBe(1);
+    expect(ran).toEqual([]);
+    expect(saved).toEqual([]);
+    const said = printed.join('\n');
+    expect(said).toContain('v0.2.0');
+    expect(said).toContain('no matching attestation');
+    expect(said).toMatch(/migrat/);
+    expect(said).toContain('--release');
+  });
+
+  it('says what is left, with the exact commands, when a roll stops partway, and saves only what rolled', async () => {
+    const { runners, ran, printed, saved, mirrored } = install(world, v010(), { codes: { host: 1 } });
+    expect(await updateCommand(settings, undefined, runners)).toBe(1);
+    expect(ran.map((one) => one.step)).toEqual(['check', 'console', 'host']);
+    const said = printed.join('\n');
+    expect(said).toMatch(/console runs v0\.2\.0/);
+    expect(said).toContain(`gcloud run services update openadlc-bridge --image ${mirrored('v0.2.0', 'service')} --region us-central1 --project example-project --quiet`);
+    expect(said).toContain("gcloud compute ssh openadlc-host-1 --zone us-central1-b --project example-project --tunnel-through-iap -- 'sudo sh -c \"");
+    expect(said).toContain('journalctl -u fleet-hostd');
+    expect(said).toContain('openadlc cloud update');
+    expect(saved).toEqual([{ ...settings, console_image: mirrored('v0.2.0', 'console') }]);
+  });
+
+  it.each([
+    ['the mirror is not there', { mirror: false }, 'openadlc cloud apply'],
+    ['the host’s unit predates release images', { codes: { check: 1 } }, 'openadlc cloud apply'],
+  ] as const)('rolls nothing when %s', async (_, options, said) => {
+    const { runners, ran, printed, saved } = install(world, v010(), options);
+    expect(await updateCommand(settings, undefined, runners)).toBe(1);
+    expect(ran.filter((one) => one.step !== 'check')).toEqual([]);
+    expect(saved).toEqual([]);
+    expect(printed.join('\n')).toContain(said);
+  });
+
+  it('changes nothing when the person does not confirm', async () => {
+    const { runners, ran, saved } = install(world, v010(), { confirm: false });
+    expect(await updateCommand(settings, undefined, runners)).toBe(1);
+    expect(ran.map((one) => one.step)).toEqual(['check']);
+    expect(saved).toEqual([]);
+  });
+
+  it('needs --release for an install whose bridge runs images it built, then rolls the one named', async () => {
+    const built = 'us-central1-docker.pkg.dev/example-project/openadlc/bridge:latest';
+    const refused = install(world, built);
+    expect(await updateCommand(settings, undefined, refused.runners)).toBe(1);
+    expect(refused.ran).toEqual([]);
+    expect(refused.printed.join('\n')).toContain('--release');
+    vi.restoreAllMocks();
+
+    const named = install(world, built);
+    expect(await updateCommand(settings, 'v0.1.0', named.runners)).toBe(0);
+    expect(named.ran.map((one) => one.step)).toEqual(['check', 'console', 'host', 'bridge']);
+  });
+
+  it('stops with nothing rolled, --release or not, when it cannot tell which release the bridge runs', async () => {
+    // ghcr.io not answering is not "no release": with --release it would
+    // have let an older release, or a skip, through unchecked.
+    for (const wanted of [undefined, 'v0.1.0']) {
+      const offline = install({ ...world, offline: true }, releaseWorld(world).mirrored('v0.2.0', 'service'));
+      expect(await updateCommand(settings, wanted, offline.runners)).toBe(1);
+      expect(offline.ran).toEqual([]);
+      expect(offline.printed.join('\n')).toContain('could not reach ghcr.io');
+      vi.restoreAllMocks();
+    }
+    // Nor is a release image no takeable release has.
+    const stray = install(world, `${MIRROR}/620legal/openadlc/service@${sha('e')}`);
+    expect(await updateCommand(settings, 'v0.1.0', stray.runners)).toBe(1);
+    expect(stray.ran).toEqual([]);
+    expect(stray.printed.join('\n')).toMatch(/goes back|skips/);
+  });
+
+  it('finds the release the install runs a page or more down the list', async () => {
+    // v0.3.0 and v0.2.0, then 98 drafts: v0.1.0 is the first of page 2.
+    const paged: World = { releases: [{ tag: 'v0.3.0' }, { tag: 'v0.2.0' }, ...Array.from({ length: 98 }, (_, n) => ({ tag: `v9.${n}.0`, draft: true })), { tag: 'v0.1.0' }] };
+    const { runners, ran, printed, gh } = install(paged, releaseWorld(paged).mirrored('v0.1.0', 'service'));
+    expect(await updateCommand(settings, undefined, runners)).toBe(0);
+    expect(printed.join('\n')).toContain('the install runs v0.1.0');
+    expect(ran.map((one) => one.step)).toEqual(['check', 'console', 'host', 'bridge']);
+    expect(gh.filter((args) => args[1]?.includes('/releases?')).map((args) => args[1])).toEqual([`repos/${REPO}/releases?per_page=100`, `repos/${REPO}/releases?per_page=100&page=2`]);
+  });
+
+  it('does nothing on the newest release', async () => {
+    const { runners, ran, printed } = install(world, releaseWorld(world).mirrored('v0.3.0', 'service'));
+    expect(await updateCommand(settings, undefined, runners)).toBe(0);
+    expect(ran).toEqual([]);
+    expect(printed.join('\n')).toContain('newest');
+  });
+
+  it('rolls only what is not on the release already, so running it again after a stop restarts hostd only when it must', async () => {
+    const at = releaseWorld(world).mirrored;
+    // Stopped at the host: the console is on v0.2.0, hostd and the bridge are not.
+    const host = install(world, v010(), { consoleOn: at('v0.2.0', 'console'), hostStarted: at('v0.1.0', 'service') });
+    expect(await updateCommand(settings, 'v0.2.0', host.runners)).toBe(0);
+    expect(host.ran.map((one) => one.step)).toEqual(['check', 'host', 'bridge']);
+    expect(host.printed.join('\n')).toContain('the console: already on v0.2.0, left as it is');
+    expect(host.saved).toEqual([{ ...settings, console_image: at('v0.2.0', 'console'), hostd_image: at('v0.2.0', 'service'), bridge_image: at('v0.2.0', 'service') }]);
+    vi.restoreAllMocks();
+
+    // Stopped at the bridge: hostd is left running, and its tasks with it.
+    const bridge = install(world, v010(), { consoleOn: at('v0.2.0', 'console'), hostStarted: at('v0.2.0', 'service') });
+    expect(await updateCommand(settings, 'v0.2.0', bridge.runners)).toBe(0);
+    expect(bridge.ran.map((one) => one.step)).toEqual(['check', 'bridge']);
+    expect(bridge.printed.join('\n')).not.toContain('restarting hostd ends the tasks');
+  });
+
+  it('names what each rolled part ran before when a roll stops, with the command that puts it back', async () => {
+    const at = releaseWorld(world).mirrored;
+    const built = 'us-central1-docker.pkg.dev/example-project/openadlc/hostd:latest';
+    const { runners, printed } = install(world, v010(), { consoleOn: at('v0.1.0', 'console'), hostStarted: built, codes: { bridge: 1 } });
+    expect(await updateCommand(settings, undefined, runners)).toBe(1);
+    const said = printed.join('\n');
+    expect(said).toContain(`gcloud run services update openadlc-console --image ${at('v0.1.0', 'console')} --region us-central1 --project example-project --quiet`);
+    // A host that ran the module's hostd_image goes back only once both files are gone: the unit falls back to the second first.
+    expect(said).toContain('sudo rm -f /var/lib/fleet/hostd-image /var/lib/fleet/hostd-image.started && sudo systemctl restart fleet-hostd');
+  });
+
+  it('says so, and fails, when the rolled settings could not be saved', async () => {
+    const { runners, printed } = install(world, v010(), { saved: 1 });
+    expect(await updateCommand(settings, undefined, runners)).toBe(1);
+    expect(printed.join('\n')).toContain('openadlc cloud push');
+  });
+});
+
+describe('the images in use, read into the settings before a plan or an apply', () => {
+  const release = (image: 'service' | 'console', c: string) => `${MIRROR}/620legal/openadlc/${image}@${sha(c)}`;
+  const settings = { project_id: 'example-project', region: 'us-central1', zone: 'us-central1-b', name_prefix: 'openadlc', console_image: release('console', '1'), bridge_image: release('service', '1'), hostd_image: release('service', '1') };
+
+  function gcloud(on: { console: string; bridge: string; host?: string | null }) {
+    const asked: string[][] = [];
+    const run = async (args: string[]) => {
+      asked.push(args);
+      const where = ['--region', 'us-central1', '--project', 'example-project'];
+      for (const part of ['console', 'bridge'] as const) {
+        if (JSON.stringify(args) === JSON.stringify(['run', 'services', 'describe', `openadlc-${part}`, ...where, '--format', 'value(status.latestReadyRevisionName)'])) return { code: 0, stdout: `openadlc-${part}-00009-abc\n`, stderr: '' };
+        if (JSON.stringify(args) === JSON.stringify(['run', 'revisions', 'describe', `openadlc-${part}-00009-abc`, ...where, '--format', 'value(spec.containers[0].image)'])) return { code: 0, stdout: `${on[part]}\n`, stderr: '' };
+      }
+      if (args[0] === 'compute' && args[1] === 'ssh') return on.host ? { code: 0, stdout: `${on.host}\n`, stderr: '' } : { code: 255, stdout: '', stderr: 'ERROR: (gcloud.compute.ssh) could not connect' };
+      return { code: 1, stdout: '', stderr: 'not stood in for' };
+    };
+    return { run, asked };
+  }
+
+  it('takes what a self-update rolled, from the serving revisions and the image hostd last started on', async () => {
+    const { run } = gcloud({ console: release('console', '2'), bridge: release('service', '2'), host: release('service', '2') });
+    const read = await imagesInUse(settings, run);
+    expect(read.vars).toEqual({ ...settings, console_image: release('console', '2'), bridge_image: release('service', '2'), hostd_image: release('service', '2') });
+    expect(read.changed.map((one) => one.setting)).toEqual(['console_image', 'bridge_image', 'hostd_image']);
+  });
+
+  it('asks the host nothing when the services show no roll the settings have not seen', async () => {
+    const { run, asked } = gcloud({ console: release('console', '1'), bridge: release('service', '1') });
+    expect(await imagesInUse(settings, run)).toEqual({ vars: settings, changed: [], notes: [] });
+    expect(asked.filter((args) => args[1] === 'ssh')).toEqual([]);
+  });
+
+  it('keeps hostd_image, saying so, when the host cannot be read; and writes nothing that is no release image by digest', async () => {
+    const unread = await imagesInUse(settings, gcloud({ console: release('console', '2'), bridge: release('service', '2'), host: null }).run);
+    expect(unread.vars.hostd_image).toBe(settings.hostd_image);
+    expect(unread.notes.join(' ')).toMatch(/hostd_image stays .*a host made again would start on that/);
+    const built = await imagesInUse(settings, gcloud({ console: 'us-central1-docker.pkg.dev/example-project/openadlc/console:latest', bridge: 'us-central1-docker.pkg.dev/example-project/openadlc/bridge:latest' }).run);
+    expect(built.changed).toEqual([]);
+  });
+});
+
+describe('the way back onto what a part ran', () => {
+  const target = { projectId: 'example-project', region: 'us-central1', zone: 'us-central1-b', prefix: 'openadlc', repo: REPO, mirror: MIRROR };
+  it('writes a release image into the host’s file, and removes both files for anything else', () => {
+    const release = `${MIRROR}/620legal/openadlc/service@${sha('a')}`;
+    expect(goBackCommand(target, 'host', release)).toBe(
+      `gcloud compute ssh openadlc-host-1 --zone us-central1-b --project example-project --tunnel-through-iap -- 'sudo sh -c "echo ${release} > /var/lib/fleet/hostd-image" && sudo systemctl restart fleet-hostd'`,
+    );
+    expect(goBackCommand(target, 'host', 'us-central1-docker.pkg.dev/example-project/openadlc/hostd:latest')).toContain('sudo rm -f /var/lib/fleet/hostd-image /var/lib/fleet/hostd-image.started');
+    expect(goBackCommand(target, 'bridge', release)).toBe(`gcloud run services update openadlc-bridge --image ${release} --region us-central1 --project example-project --quiet`);
+  });
+});
+
+describe('the commands an update rolls with', () => {
+  it('never put a reference that is not a release image by digest on a command line', () => {
+    const target = { projectId: 'example-project', region: 'us-central1', zone: 'us-central1-b', prefix: 'openadlc', repo: REPO, mirror: MIRROR };
+    const good = { tag: 'v0.2.0', commit: commitOf('v0.2.0'), service: `${MIRROR}/620legal/openadlc/service@${sha('a')}`, console: `${MIRROR}/620legal/openadlc/console@${sha('b')}` };
+    expect(rollSteps(target, good).map((step) => step.name)).toEqual(['console', 'host', 'bridge']);
+    expect(() => rollSteps(target, { ...good, service: `${MIRROR}/620legal/openadlc/service@${sha('a')}; reboot` })).toThrow();
+    expect(() => rollSteps(target, { ...good, console: `${MIRROR}/620legal/openadlc/service@${sha('b')}` })).toThrow();
   });
 });

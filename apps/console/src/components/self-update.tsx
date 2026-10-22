@@ -15,6 +15,11 @@ import { when } from '@/components/engine-updates';
  * the next one is, with the same Schedule or Manual choice and Update now as
  * an engine's row. While a run waits for the tasks to end, it says which.
  *
+ * On a Google Cloud install the row is the same, and a run rolls the
+ * release's images instead of restarting a checkout: it checks them, waits
+ * for the tasks, then moves the console, the host and the bridge in that
+ * order, and takes only the next release after the one in use.
+ *
  * Self-contained, as `EngineUpdates` is: it reads and writes its own state
  * through `/api/self-update`.
  */
@@ -26,8 +31,13 @@ export interface LiveTask {
   kind: string;
 }
 
+/** Where a cloud install's roll is: the images checked, then each part in turn. */
+export type CloudStep = 'images' | 'console' | 'host' | 'bridge';
+
 export interface SelfUpdateRunView {
   phase: 'preparing' | 'waiting' | 'restarting';
+  /** On a cloud install, the part being rolled. */
+  cloud?: { step: CloudStep; rolled: string[] };
   tag: string;
   from: string;
   to: string;
@@ -53,9 +63,12 @@ export interface SelfUpdateLast {
 }
 
 export interface SelfUpdateView {
+  /** A checkout, or a cloud install's images; a bridge from before says neither, and is a checkout. */
+  backend?: 'checkout' | 'cloud';
   repository: string | null;
   inUse: { sha: string; date: string | null; tag: string | null } | null;
-  candidate: { tag: string; sha: string | null; publishedAt: string | null } | null;
+  /** `newest`, on a cloud install, when a later release than the one it takes is out. */
+  candidate: { tag: string; sha: string | null; publishedAt: string | null; newest?: string } | null;
   candidateReason: string;
   checkedAt: string | null;
   schedule: { mode: 'schedule' | 'manual'; day: string; time: string };
@@ -95,7 +108,24 @@ export function inUseText(view: SelfUpdateView): string {
 export function wouldTakeText(view: SelfUpdateView): string {
   if (!view.candidate) return view.candidateReason;
   const published = view.candidate.publishedAt ? `, published ${when(view.candidate.publishedAt, view.timeZone)}` : '';
-  return `would take ${view.candidate.tag}${published}`;
+  // A cloud install never skips one: each release's bridge and host migrate as they start.
+  const next = view.candidate.newest ? `: it takes the next release, not ${view.candidate.newest}, one at a time` : '';
+  return `would take ${view.candidate.tag}${published}${next}`;
+}
+
+const CLOUD_STEPS: { step: CloudStep | 'waiting'; name: string }[] = [
+  { step: 'images', name: 'checking images' },
+  { step: 'waiting', name: 'waiting' },
+  { step: 'console', name: 'console' },
+  { step: 'host', name: 'host' },
+  { step: 'bridge', name: 'bridge' },
+];
+
+/** A cloud run's steps in order, each done, the current one, or still to come. */
+export function cloudSteps(run: SelfUpdateRunView): { name: string; state: 'done' | 'current' | 'next' }[] {
+  const at = run.phase === 'preparing' ? 'images' : run.phase === 'waiting' ? 'waiting' : (run.cloud?.step ?? 'console');
+  const index = CLOUD_STEPS.findIndex((one) => one.step === at);
+  return CLOUD_STEPS.map((one, i) => ({ name: one.name, state: i < index ? 'done' : i === index ? 'current' : 'next' }));
 }
 
 /** "builder on openadlc#12, reviewer on openadlc#14 and 1 more". */
@@ -107,6 +137,27 @@ function tasksInWords(tasks: readonly LiveTask[]): string {
 /** The run in flight, or how the last one ended, in one sentence, and how loudly. */
 export function selfUpdateSentence(view: SelfUpdateView): { text: string; tone: 'good' | 'warn' | 'plain' } {
   const run = view.running;
+  if (run && view.backend === 'cloud') {
+    const waiting =
+      run.waitingFor.length > 0
+        ? `rolls once ${run.waitingFor.length === 1 ? 'this task ends' : `these ${run.waitingFor.length} tasks end`}: ${tasksInWords(run.waitingFor)}`
+        : 'rolls in a minute';
+    switch (run.phase) {
+      case 'preparing':
+        return { text: `Checking ${run.tag}'s images: each resolved to its digest at the registry and its attestation checked, while the install goes on as it is.`, tone: 'plain' };
+      case 'waiting':
+        return { text: `${run.tag}'s images check out, and it ${waiting}. No new task starts meanwhile.`, tone: 'plain' };
+      case 'restarting':
+        switch (run.cloud?.step) {
+          case 'host':
+            return { text: `Rolling ${run.tag}: the console is on it, and hostd is restarting onto it; the bridge is last.`, tone: 'plain' };
+          case 'bridge':
+            return { text: `Rolling ${run.tag}: the console and the host are on it, and the bridge is being replaced; the row is back once the new one serves.`, tone: 'plain' };
+          default:
+            return { text: `Rolling ${run.tag}: the console first, then the host, then the bridge.`, tone: 'plain' };
+        }
+    }
+  }
   if (run) {
     switch (run.phase) {
       case 'preparing':
@@ -144,9 +195,17 @@ export function selfUpdateSentence(view: SelfUpdateView): { text: string; tone: 
  */
 export function deploySentence(view: SelfUpdateView): string {
   const where = view.repository ? ` on ${view.repository}` : '';
+  if (view.backend === 'cloud') {
+    if (view.schedule.mode === 'manual') return `A release${where} is rolled out here, the next after the one in use, only when somebody presses Update now.`;
+    return `Every release tagged${where} is rolled out here, one at a time, at the next scheduled run, without anyone pressing anything.`;
+  }
   if (view.schedule.mode === 'manual') return `A release${where} is taken here only when somebody presses Update now.`;
   return `Every release tagged${where} is deployed here at the next scheduled run, without anyone pressing anything.`;
 }
+
+/** On a cloud install, what a release does not carry: the bots' image, which holds Claude Code. */
+export const CLOUD_BOT_IMAGE =
+  "The bots' image is not part of a release: it holds Claude Code, which a release may not redistribute, so it is built on the host and kept current by the engine updates below.";
 
 /** Why Update now cannot be pressed, or null when it can. */
 export function updateNowRefusal(view: SelfUpdateView): string | null {
@@ -243,7 +302,22 @@ export function SelfUpdateRow({
         </div>
       ) : null}
       <p className="text-[11.5px] leading-relaxed text-muted">{deploySentence(view)}</p>
+      {view.backend === 'cloud' && <p className="text-[11.5px] leading-relaxed text-muted">{CLOUD_BOT_IMAGE}</p>}
       {!view.applicable && !view.running && <p className="text-[11.5px] leading-relaxed text-muted">{view.reason}</p>}
+      {view.backend === 'cloud' && view.running && (
+        <ol aria-label="Where the roll is" className="flex flex-wrap items-center gap-x-1.5 text-[11.5px]">
+          {cloudSteps(view.running).map((one, index) => (
+            <li
+              key={one.name}
+              aria-current={one.state === 'current' ? 'step' : undefined}
+              className={cn(one.state === 'current' ? 'font-medium text-soft' : one.state === 'done' ? 'text-dim' : 'text-muted')}
+            >
+              {index > 0 ? '· ' : ''}
+              {one.state === 'done' ? `${one.name} ✓` : one.name}
+            </li>
+          ))}
+        </ol>
+      )}
       <p
         className={cn(
           'text-[11.5px] leading-relaxed',
