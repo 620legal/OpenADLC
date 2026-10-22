@@ -801,6 +801,37 @@ describe('what needs a person', () => {
     });
   });
 
+  it('says which tool an engine update could not check, in its own words rather than as an update that did not go in', async () => {
+    const { attentionItems } = await load();
+    const [item] = attentionItems({
+      now: NOW,
+      gates: [],
+      tasks: [],
+      bots: BOTS,
+      repos: REPOS,
+      issues: ISSUES,
+      requests: [],
+      stallEvents: [],
+      engineUpdate: {
+        kind: 'engine-update-unchecked',
+        title: "Codex's newest version could not be read; it stays on 0.155.1",
+        detail: "could not read npm's answer about @openai/codex (256 KB) as JSON: No number after minus sign in JSON at position 1",
+        at: minutesAgo(90),
+        href: '/settings#engine-updates',
+      },
+    });
+
+    expect(item).toMatchObject({
+      id: 'engine-update',
+      kind: 'engine_update_failed',
+      headline: "Codex's newest version could not be read; it stays on 0.155.1",
+      subject: { title: 'The other tools were checked as usual' },
+      since: minutesAgo(90),
+      detail: "Could not read npm's answer about @openai/codex (256 KB) as JSON: No number after minus sign in JSON at position 1",
+      actions: [{ kind: 'open_page', label: 'See the engine updates', href: '/settings#engine-updates' }],
+    });
+  });
+
   it('says an OpenADLC update that did not go in, in System, until a later run goes in', async () => {
     const { attentionItems } = await load();
     const input = {

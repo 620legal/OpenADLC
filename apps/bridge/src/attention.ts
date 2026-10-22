@@ -1465,13 +1465,21 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
 
   // The weekly engine update. The bots are still on the engines they had, so
   // nothing is broken — but the reason is usually a credential or a model a
-  // person has to look at, and it stays until a later run goes in.
+  // person has to look at, and it stays until a later run goes in. A run that
+  // went in without a tool it could not check says which, in its own title.
   if (input.engineUpdate) {
+    const unchecked = input.engineUpdate.kind === 'engine-update-unchecked';
     items.push({
       id: 'engine-update',
       kind: 'engine_update_failed',
-      headline: 'The engine update did not go in',
-      subject: { repo: null, number: null, title: 'The bots are still on the engines they had', ref: null, url: null },
+      headline: unchecked ? input.engineUpdate.title : 'The engine update did not go in',
+      subject: {
+        repo: null,
+        number: null,
+        title: unchecked ? 'The other tools were checked as usual' : 'The bots are still on the engines they had',
+        ref: null,
+        url: null,
+      },
       bot: null,
       since: input.engineUpdate.at,
       detail: shortReason(input.engineUpdate.detail),
