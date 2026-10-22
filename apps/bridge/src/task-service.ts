@@ -86,6 +86,15 @@ export class RestartPendingError extends BotBusyError {
   }
 }
 
+/**
+ * Whether the task was stopped so that an answer must not start it again: a
+ * person stopped it, or an answer of theirs ended it (`wasRefused`). A task
+ * stopped for another reason is resumed as before.
+ */
+function endedOnPurpose(task: { state: string; exitReason?: string | null }): boolean {
+  return task.state === 'stopped' && (Boolean(task.exitReason?.startsWith(tasks.STOPPED_BY_PERSON)) || wasRefused(task.exitReason));
+}
+
 /** Whether hostd refused a start or a resume for want of room (`HostFull`, answered 503). */
 function hostWasFull(error: unknown): boolean {
   const status = (error as { status?: number } | null)?.status;
@@ -1154,7 +1163,12 @@ export class TaskService {
     // A refused plan change, or "hand to a person" or "abandon" at the cost
     // cap, answers its gate like any other, and every caller resumes the task
     // that asked. It was stopped by the answer, so what is left is its worktree.
-    if (task && task.state === 'stopped' && wasRefused(task.exitReason)) {
+    // A person's Stop is taken on a task waiting on a question, and so is a
+    // close's (`stopTask`, `stopPausedOn`): one that lands after an answer
+    // claimed the question, while its GitHub writes run, found the task here
+    // stopped, and hostd's resume does not look at the state, so the bot ran
+    // again with its lease let go. It is cleaned up the same way.
+    if (task && endedOnPurpose(task)) {
       await this.hostd.cleanupTask(task.id, task.exitReason ?? 'plan change refused').catch(() => undefined);
       return;
     }
@@ -1212,8 +1226,14 @@ export class TaskService {
       // Read again: a file sent while it waited on a question goes with it.
       const files = task ? await attachmentsForTask(task.subjectRef) : [];
       // Asked again just before hostd is: the reads above can straddle a restart's looks.
-      const resume = () => {
-        if (task?.state === 'paused' && this.restartPending()) return Promise.resolve(null);
+      // And the stop above too: the reads take long enough for one to land in.
+      const resume = async () => {
+        if (task?.state === 'paused' && this.restartPending()) return null;
+        const now = task ? await tasks.getTask(task.id).catch(() => null) : null;
+        if (now && endedOnPurpose(now)) {
+          await this.hostd.cleanupTask(now.id, now.exitReason ?? 'stopped').catch(() => undefined);
+          return null;
+        }
         return this.hostd.resumeTask(taskId, context, postHeader, files, reviewMode, reviewLens);
       };
       if (task) {

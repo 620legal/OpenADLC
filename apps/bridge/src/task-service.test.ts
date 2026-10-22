@@ -57,6 +57,7 @@ vi.mock('@openadlc/db', () => ({
   settings: { getSetting: vi.fn(async () => JSON.stringify({ 'api#1': { by: 'janedoe', at: '2026-10-02T10:00:00Z', why: 'waiting on design' } })) },
   repos: { listRepos: vi.fn(async () => []), getRepoByName: vi.fn(async () => null) },
   tasks: {
+    STOPPED_BY_PERSON: 'stopped by a person',
     getTask: vi.fn(),
     addTaskCost: vi.fn(async (_id: string, costUsd: number) => 14 + costUsd),
     updateTaskState: vi.fn(async () => null),
@@ -294,6 +295,63 @@ describe('resuming a task whose plan change was refused', () => {
     await service({ resumeTask, cleanupTask }).resume('task-1');
 
     expect(resumeTask).toHaveBeenCalled();
+    expect(cleanupTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('an answer to a task a person stopped while the answer was on its way', () => {
+  const paused = {
+    id: 'task-1',
+    botId: 'bot-1',
+    repoId: null,
+    kind: 'intake',
+    subjectRef: 'openadlc#46',
+    skill: 'triage',
+    state: 'paused',
+  };
+  const stopped = { ...paused, state: 'stopped', exitReason: 'stopped by a person from the console (janedoe)' };
+
+  it('cleans it up and starts nothing when the stop landed before the resume read the task', async () => {
+    vi.mocked(tasks.getTask).mockResolvedValueOnce(stopped as never);
+    const resumeTask = vi.fn(async () => ({ session: 'intake/triage' }));
+    const cleanupTask = vi.fn(async () => undefined);
+
+    await service({ resumeTask, cleanupTask }).resume('task-1');
+
+    expect(resumeTask).not.toHaveBeenCalled();
+    expect(cleanupTask).toHaveBeenCalledWith('task-1', stopped.exitReason);
+    expect(tasks.updateTaskState).not.toHaveBeenCalled();
+  });
+
+  it('starts nothing when the stop landed while the resume gathered what the bot is given', async () => {
+    vi.mocked(tasks.getTask).mockResolvedValueOnce(paused as never).mockResolvedValueOnce(stopped as never);
+    const resumeTask = vi.fn(async () => ({ session: 'intake/triage' }));
+    const cleanupTask = vi.fn(async () => undefined);
+
+    await service({ resumeTask, cleanupTask }).resume('task-1');
+
+    expect(resumeTask).not.toHaveBeenCalled();
+    expect(cleanupTask).toHaveBeenCalledWith('task-1', stopped.exitReason);
+  });
+
+  it('starts nothing when a close stopped it in that window', async () => {
+    const landed = { ...paused, state: 'stopped', exitReason: 'already landed: openadlc#46 is closed, so the work it was for is finished' };
+    vi.mocked(tasks.getTask).mockResolvedValueOnce(paused as never).mockResolvedValueOnce(landed as never);
+    const resumeTask = vi.fn(async () => ({ session: 'intake/triage' }));
+
+    await service({ resumeTask, cleanupTask: vi.fn(async () => undefined) }).resume('task-1');
+
+    expect(resumeTask).not.toHaveBeenCalled();
+  });
+
+  it('resumes a task still paused when hostd is asked', async () => {
+    vi.mocked(tasks.getTask).mockResolvedValueOnce(paused as never).mockResolvedValueOnce(paused as never);
+    const resumeTask = vi.fn(async () => ({ session: 'intake/triage' }));
+    const cleanupTask = vi.fn();
+
+    await service({ resumeTask, cleanupTask }).resume('task-1');
+
+    expect(resumeTask).toHaveBeenCalledTimes(1);
     expect(cleanupTask).not.toHaveBeenCalled();
   });
 });

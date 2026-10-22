@@ -111,8 +111,9 @@ export type AttentionKind =
  * - `retry_triage` starts the intake bot on a request again.
  * - `abandon_request` ends a request for good: its triage stops and it is
  *   never started again (`POST /v1/requests/:id/abandon`).
- * - `stop_task` stops a failed or stopped task for good: its session, its
- *   lease and its card go (`POST /v1/tasks/:id/stop`).
+ * - `stop_task` stops a failed, stopped or paused task for good: its session,
+ *   its lease and its card go, and a question it asked is closed unanswered
+ *   (`POST /v1/tasks/:id/stop`).
  * - `retry_task` runs a failed or stopped task again: the same work, by the
  *   same bot, on the same subject.
  * - `open_url` is GitHub: the pull request, the issue, the question's comment.
@@ -935,6 +936,10 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     const actions: AttentionAction[] = [];
     if (bot) actions.push({ kind: 'answer', label: gate.options.length > 0 ? 'Something else…' : 'Answer', bot: bot.name });
     if (gate.githubCommentUrl) actions.push({ kind: 'open_url', label: 'On GitHub', url: gate.githubCommentUrl });
+    // A question nobody means to answer, such as one left after its issue
+    // merged, had no way off the board but answering it, and its task's
+    // computer ran on meanwhile.
+    if (gate.taskId) actions.push({ kind: 'stop_task', label: 'Stop', taskId: gate.taskId });
     items.push({
       id: `gate:${gate.id}`,
       kind: 'question',

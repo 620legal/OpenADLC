@@ -118,8 +118,14 @@ press besides **Try again**, and the reason as it arrived behind **Details**
 **Stop**, beside **Try again** on the card and in the bot's thread, ends the
 work for good instead: hostd's cancel ends whatever is left of its session,
 the task's lease is released, the stop is audited (`task.stopped`), and the
-card goes (`POST /v1/tasks/:id/stop`). A task paused on a question is answered
-instead, and is not stopped this way.
+card goes (`POST /v1/tasks/:id/stop`). **Stop** works on a task waiting on a
+question too: its question is closed unanswered and leaves Needs you, the
+bot is not resumed (an answer already on its way when the stop lands resumes
+nothing), and `needs-human` comes off its issue or pull request as an answer
+would take it off. The question's card offers **Stop**: on the card itself
+for a question with no choices, and under **Show more** for one with choices,
+whose face holds the choices. Stopping the triage of a console request abandons the request, as **Abandon**
+does: nothing starts it again.
 
 **Dismiss** takes the card off and leaves the work as it is: nothing is run
 again and nothing is stopped. It is kept in `acknowledgements` as
@@ -185,7 +191,17 @@ started`. A delivery worked through after its pull request closed opens no
 round at all: no reviewers are asked, no labels or gate are set, and the log
 says `<owner/repo#n> has closed since this delivery was sent; no review round
 is opened`. Closing or merging one stops the reviews queued, running or paused
-on it. A stage move of a closed issue is refused too,
+on it. A task paused on a question stops itself when its issue closes: when an
+issue or pull request closes, merged or not, heard by webhook or found by the
+reconciler after downtime, every task paused on it or on the issue's pull
+request is stopped, deploy and QA included. The exception is a task of the
+account that closed it. Its question closes, its computer is taken down, and
+the thread says so once, as a merge only when GitHub could say it merged;
+nothing is written on an issue labelled `openadlc:ignore`. A deploy or QA task
+started *after* the close is not stopped, even by a delivery that arrives late
+or is sent again: the merge is where its work starts. A task left paused on an
+issue that closed before this existed is not swept; stop it from its question's
+card. A stage move of a closed issue is refused too,
 except to Merged or Done, which is how a merge records itself. The bot's
 thread card shows such work as landed: a last task that failed, or was stopped
 by anything but a person, on an intake, design, build, fix or review whose
