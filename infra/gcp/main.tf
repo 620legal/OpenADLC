@@ -158,6 +158,13 @@ locals {
       # The certificate authority the database URL's `sslrootcert` names; the
       # prepare script writes it where the URL looks for it.
       database_ca_secret = google_secret_manager_secret.database_ca.secret_id
+      # What an update may name in the host's image file: this install's
+      # release `service` image (RELEASE_IMAGES in
+      # packages/shared/src/self-update.ts) through its own mirror, and
+      # nothing else on ghcr.io, which the mirror would pull as readily.
+      hostd_release_image = "${local.release_image_path}/service"
+      release_mirror      = local.release_mirror
+      release_repository  = var.release_repository
     }
   )
 
@@ -406,6 +413,11 @@ resource "google_project_iam_member" "host_logging" {
   member  = "serviceAccount:${google_service_account.host.email}"
 }
 
+# Every repository in the project, for the `openadlc` one that
+# infra/gcp/install.sh pushes the bot image to (a release holds none) and, with
+# --build, the checkout's images, and that this module does not make. The
+# mirror of ghcr.io has a grant of its own (`ghcr_host`), so narrowing this one
+# leaves the host able to pull a release.
 resource "google_project_iam_member" "host_images" {
   project = var.project_id
   role    = "roles/artifactregistry.reader"
@@ -458,7 +470,8 @@ resource "google_compute_instance" "host" {
   }
 
   allow_stopping_for_update = true
-  depends_on                = [google_compute_router_nat.fleet]
+  # The mirror's grant too: hostd's first start pulls its image through it.
+  depends_on = [google_compute_router_nat.fleet, google_artifact_registry_repository_iam_member.ghcr_host]
 }
 
 # ---------------------------------------------------------------- database
@@ -588,6 +601,160 @@ resource "google_secret_manager_secret_version" "database_ca" {
   secret_data = google_sql_database_instance.fleet.server_ca_cert[0].cert
 }
 
+# ---------------------------------------------------------------- release images
+# A release publishes its images on ghcr.io, ghcr.io/<owner>/<repo>/{service,
+# console}, and Cloud Run cannot pull from ghcr.io: it takes images from
+# Artifact Registry. So the module mirrors ghcr.io in a remote repository, and
+# the two services and hostd pull a release through it, always by digest:
+#
+#   ghcr.io/620legal/openadlc/service@sha256:…
+#   <region>-docker.pkg.dev/<project>/<name_prefix>-ghcr/620legal/openadlc/service@sha256:…
+#
+# A digest names the same bytes through either, so the image whose attestation
+# `gh attestation verify` checked on ghcr.io is the one that runs. The mirror
+# fetches a digest from ghcr.io the first time it is asked for, anonymously,
+# since a release's packages are public, and keeps it. The bot image is no
+# release's: it holds Claude Code, which may not be redistributed, so each
+# install builds its own (bot_image).
+
+locals {
+  # The mirror up to and including its name, as the bridge is told it
+  # (OPENADLC_RELEASE_MIRROR) and `openadlc cloud` works it out.
+  release_mirror     = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.ghcr.repository_id}"
+  release_image_path = "${local.release_mirror}/${lower(var.release_repository)}"
+
+  # Written out rather than read from the services, which name themselves
+  # with them: the bridge is told both names, and its own would be a cycle.
+  bridge_service  = "${var.name_prefix}-bridge"
+  console_service = "${var.name_prefix}-console"
+
+  # Cloud Run's own service agent, which pulls a service's image when a
+  # revision is made.
+  cloud_run_agent = "serviceAccount:service-${data.google_project.this.number}@serverless-robot-prod.iam.gserviceaccount.com"
+}
+
+resource "google_artifact_registry_repository" "ghcr" {
+  repository_id = "${var.name_prefix}-ghcr"
+  location      = var.region
+  format        = "DOCKER"
+  mode          = "REMOTE_REPOSITORY"
+  description   = "ghcr.io, for the images OpenADLC's releases publish"
+
+  remote_repository_config {
+    description = "ghcr.io"
+    docker_repository {
+      custom_repository {
+        uri = "https://ghcr.io"
+      }
+    }
+  }
+
+  depends_on = [google_project_service.enabled]
+}
+
+# Reading the mirror. Cloud Run's agent can already read every repository in
+# its own project by its default role; this says so on the mirror itself, so a
+# project whose defaults were narrowed still starts a revision.
+resource "google_artifact_registry_repository_iam_member" "ghcr_cloud_run" {
+  location   = google_artifact_registry_repository.ghcr.location
+  repository = google_artifact_registry_repository.ghcr.name
+  role       = "roles/artifactregistry.reader"
+  member     = local.cloud_run_agent
+}
+
+resource "google_artifact_registry_repository_iam_member" "ghcr_host" {
+  location   = google_artifact_registry_repository.ghcr.location
+  repository = google_artifact_registry_repository.ghcr.name
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.host.email}"
+}
+
+# ------------------------------------------------- what self-update may do
+# With self_update, the bridge rolls a release out itself: the console's
+# service onto the release's console image, then hostd (through hostd's own
+# API, which needs nothing here), then its own service; never the bot image,
+# which is the host's own. For that it gets updating those two services
+# (`self_update`, below), acting as the two accounts they run as (Cloud Run
+# refuses an update by anyone who may not), and read on the mirror: each on
+# that one resource, nothing on the project.
+#
+# What that hands the running bridge: it can put any image under either
+# service, as either account, the console included, which everyone IAP
+# admits trusts, and with it the rest of a service's revision: its
+# environment, its secrets, its scaling and its ingress, which set to all
+# would answer on the run.app URLs with no IAP in front. It held every secret
+# and the database already, so a bridge taken over could do as much harm
+# without this; what this adds is the console and those settings. An apply
+# no longer puts a rolled image back, so after a compromised bridge the way
+# back is `openadlc cloud update --release <a known good release>`.
+# self_update = false takes all three away (docs/security.md).
+#
+# Reading the two services stays either way: the bridge tells which release
+# the install runs from its own revision's image, and Settings → System shows
+# it, with self-update on or off.
+resource "google_cloud_run_v2_service_iam_member" "bridge_reads" {
+  for_each = {
+    bridge  = google_cloud_run_v2_service.bridge.name
+    console = google_cloud_run_v2_service.console.name
+  }
+
+  location = var.region
+  name     = each.value
+  role     = "roles/run.viewer"
+  member   = "serviceAccount:${google_service_account.bridge.email}"
+}
+
+# Rolling a service onto a new image and watching the revision come up, and
+# nothing more: run.developer also deletes a service, and makes new ones.
+# Made whatever self_update says, since it grants nothing by itself, and
+# Google keeps a deleted role's id for a week: turning self_update off and on
+# again would have tripped on it.
+resource "google_project_iam_custom_role" "self_update" {
+  project     = var.project_id
+  role_id     = "${replace(var.name_prefix, "-", "_")}_self_update"
+  title       = "OpenADLC self-update"
+  description = "Roll a Cloud Run service onto a new image and read how it went; no create, no delete, no IAM."
+  permissions = [
+    "run.operations.get",
+    "run.revisions.get",
+    "run.revisions.list",
+    "run.services.get",
+    "run.services.update",
+  ]
+  depends_on = [google_project_service.enabled]
+}
+
+resource "google_cloud_run_v2_service_iam_member" "bridge_deploys" {
+  for_each = var.self_update ? {
+    bridge  = google_cloud_run_v2_service.bridge.name
+    console = google_cloud_run_v2_service.console.name
+  } : {}
+
+  location = var.region
+  name     = each.value
+  role     = google_project_iam_custom_role.self_update.name
+  member   = "serviceAccount:${google_service_account.bridge.email}"
+}
+
+resource "google_service_account_iam_member" "bridge_acts_as" {
+  for_each = var.self_update ? {
+    bridge  = google_service_account.bridge.name
+    console = google_service_account.console.name
+  } : {}
+
+  service_account_id = each.value
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.bridge.email}"
+}
+
+resource "google_artifact_registry_repository_iam_member" "ghcr_bridge" {
+  count      = var.self_update ? 1 : 0
+  location   = google_artifact_registry_repository.ghcr.location
+  repository = google_artifact_registry_repository.ghcr.name
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.bridge.email}"
+}
+
 # ---------------------------------------------------------------- services
 # The bridge and the console. The console is a view of the bridge and holds no
 # database of its own: it reaches the VPC only on its way to the bridge's
@@ -642,13 +809,19 @@ resource "google_secret_manager_secret_version" "webhook" {
 }
 
 resource "google_cloud_run_v2_service" "bridge" {
-  name = "${var.name_prefix}-bridge"
+  name = local.bridge_service
 
   # The API fills in a service-level `scaling` block of zeros that this module
   # never sets, and every plan offered to remove it; `gcloud run services
   # update` (how a new image is rolled out) leaves its own name in `client`.
+  #
+  # And the image: bridge_image makes the service, and from then on what it
+  # runs is the release the last update rolled, by self-update or `openadlc
+  # cloud update`. An apply that set it back to the variable would move the
+  # install back onto the release it was made with, under a database the
+  # newer one has migrated.
   lifecycle {
-    ignore_changes = [scaling, client, client_version]
+    ignore_changes = [scaling, client, client_version, template[0].containers[0].image]
   }
   location = var.region
   ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
@@ -793,6 +966,51 @@ resource "google_cloud_run_v2_service" "bridge" {
         value = "1"
       }
 
+      # What self-update needs to update this install from its releases: that
+      # it runs on Google Cloud, where, the two services it rolls, the mirror
+      # it names their images through, whose releases it takes, and whether it
+      # may (self_update; off, the System row says to run `openadlc cloud
+      # update` instead).
+      env {
+        name  = "OPENADLC_CLOUD"
+        value = "gcp"
+      }
+
+      env {
+        name  = "OPENADLC_CLOUD_PROJECT"
+        value = var.project_id
+      }
+
+      env {
+        name  = "OPENADLC_CLOUD_REGION"
+        value = var.region
+      }
+
+      env {
+        name  = "OPENADLC_CLOUD_BRIDGE_SERVICE"
+        value = local.bridge_service
+      }
+
+      env {
+        name  = "OPENADLC_CLOUD_CONSOLE_SERVICE"
+        value = local.console_service
+      }
+
+      env {
+        name  = "OPENADLC_RELEASE_MIRROR"
+        value = local.release_mirror
+      }
+
+      env {
+        name  = "OPENADLC_RELEASE_REPO"
+        value = var.release_repository
+      }
+
+      env {
+        name  = "OPENADLC_SELF_UPDATE"
+        value = var.self_update ? "on" : "off"
+      }
+
       volume_mounts {
         name       = "database-ca"
         mount_path = local.database_ca_dir
@@ -831,17 +1049,20 @@ resource "google_cloud_run_v2_service" "bridge" {
     google_secret_manager_secret_version.database_ca,
     google_secret_manager_secret_version.webhook,
     google_project_iam_member.bridge_secrets,
+    # The first revision pulls bridge_image through the mirror.
+    google_artifact_registry_repository_iam_member.ghcr_cloud_run,
   ]
 }
 
 resource "google_cloud_run_v2_service" "console" {
-  name = "${var.name_prefix}-console"
+  name = local.console_service
 
   # The API fills in a service-level `scaling` block of zeros that this module
   # never sets, and every plan offered to remove it; `gcloud run services
   # update` (how a new image is rolled out) leaves its own name in `client`.
+  # The image is the last update's, not the variable's, as the bridge's is.
   lifecycle {
-    ignore_changes = [scaling, client, client_version]
+    ignore_changes = [scaling, client, client_version, template[0].containers[0].image]
   }
   location = var.region
   # Only through the load balancer, which is where IAP is. `INGRESS_TRAFFIC_ALL`
@@ -914,6 +1135,9 @@ resource "google_cloud_run_v2_service" "console" {
       }
     }
   }
+
+  # The first revision pulls console_image through the mirror.
+  depends_on = [google_artifact_registry_repository_iam_member.ghcr_cloud_run]
 }
 
 # ------------------------------------------------------- the way in

@@ -136,6 +136,47 @@ describe('holding one piece of work', () => {
     expect(JSON.parse(stored.value ?? '{}')['testbed#7']).toBeUndefined();
   });
 
+  describe('what it need not wait for', () => {
+    // A pause waited for four more calls to GitHub after its labels, and a
+    // resume for the stage sweep, the review gates and the merge line, while
+    // the button showed nothing. The label is the hold, and stays first.
+    function afterwards() {
+      const left: { what: string; work: () => Promise<unknown> }[] = [];
+      return { left, later: vi.fn((_item: ControlledItem, what: string, work: () => Promise<unknown>) => void left.push({ what, work })) };
+    }
+
+    it('answers a pause once both labels are on, and holds the pull request’s gate after', async () => {
+      const pausePull = vi.fn(async () => undefined);
+      const { left, later } = afterwards();
+      const { router, calls } = world({ pausePull, later });
+
+      const paused = await call(router, 'POST', at(ITEM.key, 'pause'));
+
+      expect(paused.status).toBe(200);
+      expect(calls).toEqual(expect.arrayContaining(['label #7 +openadlc:paused', 'label #9 +openadlc:paused', 'audit item.paused']));
+      expect(pausePull).not.toHaveBeenCalled();
+      expect(left.map((one) => one.what)).toEqual(['Turning auto-merge off and holding review-gate on #9 now']);
+
+      await left[0]!.work();
+      expect(pausePull).toHaveBeenCalledWith('exampleco/testbed', 9);
+    });
+
+    it('answers a resume once the labels are off, and starts what the hold kept back after', async () => {
+      stored.value = JSON.stringify({ 'testbed#7': { why: 'x', by: 'a', at: '2026-10-02T09:00:00.000Z' } });
+      const { left, later } = afterwards();
+      const { router, calls } = world({ later });
+
+      const resumed = await call(router, 'POST', at(ITEM.key, 'resume'));
+
+      expect(resumed.status).toBe(200);
+      expect(calls).toEqual(expect.arrayContaining(['label #7 -openadlc:paused', 'label #9 -openadlc:paused', 'audit item.resumed']));
+      expect(calls).not.toContain('resumed');
+
+      await left[0]!.work();
+      expect(calls).toContain('resumed');
+    });
+  });
+
   it('makes the label first when the repository has none, as the app, and then puts it on', async () => {
     // `testbed`#3: the label came after the repository was set up, and
     // the triage account may not make one, which GitHub says as this 403.

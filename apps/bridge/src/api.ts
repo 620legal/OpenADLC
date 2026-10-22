@@ -58,6 +58,8 @@ import {
   type BotRole,
   type CrewColor,
   type StageKey,
+  type Lease,
+  type Task,
   type TaskState,
 } from '@openadlc/shared';
 import type { Actors } from './actors.js';
@@ -114,7 +116,7 @@ import { SubjectTitles } from './subject-titles.js';
 import { retryTask } from './task-retry.js';
 import { itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork } from './board-work.js';
 import { describeSubject } from './thread-view.js';
-import { sendThreadMessage } from './thread-messages.js';
+import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
 import { defaultItemLinkDeps, registerItemLinkRoutes, registerItemRoutes } from './item-routes.js';
 import { itemKey, itemOf, offeredGate, requestSubject } from './items.js';
@@ -166,6 +168,104 @@ export interface ApiDeps {
   sendBack?: SendBack;
   /** Each repository's delivery rules, and where they came from; see `delivery-rules.ts`. Absent, the testing-deploy choice alone. */
   delivery?: DeliveryKnowledge;
+  /**
+   * What the console's routes leave running once they have answered; `main.ts`
+   * gives one, which a shutdown drains. Absent, a route does all of it before
+   * it answers, as before.
+   */
+  afterwards?: Afterwards;
+}
+
+/** Where what runs after an answer belongs: the task it was for, or else a subject's thread. */
+export interface AfterWhere {
+  taskId?: string | null;
+  subjectRef?: string | null;
+}
+
+/**
+ * What a console route leaves running once it has answered.
+ *
+ * A route used to answer once everything behind its button was done. An
+ * answer to #27's builder on a live install answered after 30 seconds
+ * (2026-10-22): the plan change applied, the answer posted on the issue, the
+ * task's computer started again. Stop waited for hostd to end the session and
+ * for GitHub to take `needs-human` off; Try again for the task's context to be
+ * read and hostd to start it. Seeing nothing change, the person pressed again.
+ * A route now answers once its decision is in the database — the claimed
+ * question, the recorded stop, the new task's row — and hands the rest to
+ * this: GitHub's comments and labels, and hostd's resume, start and stop.
+ * Refusals are still made before the answer.
+ *
+ * Nobody is waiting on the answer to hear a failure here, so it is said on the
+ * thread of the work it was for, and logged; `run` never rejects. A shutdown
+ * waits for what is still running (`drain`). What a crash cuts off is picked
+ * up where it always was: an answered task by the sweep of answered tasks
+ * (`resumeAnswered`), and a stopped task's computer by hostd's observer, which
+ * ends what it holds for a task whose row has ended. A stopped task's lease is
+ * let go by the rule for its kind: the idle-lease check for one leased or in
+ * a task, the reconciler for one paused on a question, and nothing while it
+ * has an open pull request (`whatLetsGo`).
+ */
+export class Afterwards {
+  private readonly running = new Set<Promise<void>>();
+
+  /**
+   * Work that did not finish and a person may ask for again, by key: a Stop
+   * whose cancel hostd did not take (`stop:<task>`). In memory: after a
+   * restart, hostd's observer ends the session of a task whose row has ended.
+   */
+  readonly undone = new Set<string>();
+
+  /** Runs `work` once the route has answered; what it throws is said where `where` points. */
+  run(where: AfterWhere, what: string, work: () => Promise<unknown>): void {
+    const done: Promise<void> = new Promise<void>((resolve) => setImmediate(resolve))
+      .then(work)
+      .then(
+        () => undefined,
+        (error: unknown) => this.say(where, `${what} did not finish`, error),
+      )
+      .finally(() => {
+        this.running.delete(done);
+      });
+    this.running.add(done);
+  }
+
+  /** Says on the thread of the work `where` points to what did not happen, with why; logged too, and never rejects. */
+  async say(where: AfterWhere, text: string, error: unknown): Promise<void> {
+    const why = error instanceof Error ? error.message : String(error);
+    console.error(`[bridge] ${where.subjectRef ?? where.taskId ?? 'a console action'}: ${text}: ${why}`);
+    try {
+      const threadId = await threadOf(where);
+      if (threadId) await threads.addMessage({ threadId, kind: 'sys', author: 'openadlc', text, note: why });
+    } catch (failure) {
+      console.error(`[bridge] could not say so in the thread either: ${failure instanceof Error ? failure.message : failure}`);
+    }
+  }
+
+  /** Resolves once nothing is left running, counting what started meanwhile. */
+  async settled(): Promise<void> {
+    while (this.running.size > 0) await Promise.allSettled([...this.running]);
+  }
+
+  /** Waits for what is still running, for at most `timeoutMs`. */
+  async drain(timeoutMs: number): Promise<void> {
+    if (this.running.size === 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const waited = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+      timer.unref?.();
+    });
+    await Promise.race([this.settled(), waited]);
+    clearTimeout(timer);
+  }
+}
+
+/** The task's own thread, or the newest one about the subject; null when there is neither. */
+async function threadOf(where: AfterWhere): Promise<string | null> {
+  const task = where.taskId ? await tasks.getTask(where.taskId) : null;
+  if (task) return (await threads.ensureThread({ botId: task.botId, repoId: task.repoId, subjectRef: task.subjectRef })).id;
+  if (!where.subjectRef) return null;
+  return (await threads.listThreadsForSubject(where.subjectRef)).at(-1)?.id ?? null;
 }
 
 /**
@@ -287,13 +387,31 @@ export async function startTriage(deps: Pick<ApiDeps, 'taskService' | 'requestQu
  */
 export function retryDepsFor(
   deps: Pick<ApiDeps, 'taskService' | 'automation' | 'requestQueue' | 'dispatchGate'>,
+  /** Told once the new task's row exists (`TaskService.open`): the console's Try again answers then. */
+  recorded?: (task: { taskId: string; bot: string }) => void,
 ): Parameters<typeof retryTask>[2] {
+  const opening = (told?: (task: { taskId: string; bot: string }) => void): Pick<TaskService, 'open'> =>
+    told ? { open: (input) => deps.taskService.open({ ...input, recorded: told }) } : deps.taskService;
   return {
-    taskService: deps.taskService,
+    taskService: opening(recorded),
     paused: (repo) => deps.dispatchGate?.paused(repo) ?? null,
     startBuild: async (input) => {
+      // A build's own record is written before the answer, since a crash
+      // after it must not lose it: the lease is in a task, and a build gone
+      // on from its branch has had the second try the sweep gives it
+      // (`claimAutoRetry`), or the sweep would give it a third. Both are
+      // written again once it starts, which changes nothing.
+      const told = recorded
+        ? (row: { taskId: string; bot: string }) =>
+            void (async () => {
+              await leases.setLeaseState(input.leaseId, 'in_task').catch((error: unknown) =>
+                console.warn(`[bridge] lease ${input.leaseId} is not marked in a task yet: ${error instanceof Error ? error.message : error}`),
+              );
+              if (input.continueBranch) await tasks.claimAutoRetry(row.taskId).catch(() => false);
+            })().finally(() => recorded(row))
+        : undefined;
       try {
-        return await startBuild(deps, input);
+        return await startBuild({ ...deps, taskService: opening(told) }, input);
       } catch (error) {
         const lease = await leases.getLease(input.leaseId).catch(() => null);
         if (lease?.state === 'leased') await leases.setLeaseState(lease.id, 'released').catch(() => undefined);
@@ -379,9 +497,11 @@ export interface StoppedTask {
 }
 
 /**
- * How long each GitHub call a person's Stop makes may take. The route waits on
- * up to three in a row, and at the client's thirty seconds each a Stop could
- * hang for a minute and a half before it answered.
+ * How long each GitHub call a person's Stop makes may take. It makes up to
+ * three in a row, and at the client's thirty seconds each a Stop could hang
+ * for a minute and a half: before it answered, where a route has no
+ * `Afterwards`, and otherwise after the answer, past the ten seconds a
+ * shutdown waits for it (`main.ts`).
  */
 const STOP_GITHUB_MS = 5_000;
 
@@ -473,6 +593,102 @@ function personOwes(labels: readonly string[]): boolean {
   return labels.some((label) => label.startsWith('do:') && label !== 'do:ai');
 }
 
+/** Stopped by a person's Stop already, which a second press does not make again. */
+function stoppedFromTheConsole(task: { state: string; exitReason?: string | null }): boolean {
+  return task.state === 'stopped' && (task.exitReason ?? '').startsWith(STOPPED_BY_A_PERSON);
+}
+
+/**
+ * Which rule lets a lease go that a stop kept, said as it is. The idle-lease
+ * check passes over a paused lease and one with a pull request
+ * (`health/checks/leases.ts`); the reconciler settles a paused lease whose
+ * task has ended (`leases.settlePausedLeases`), back in a task when it has a
+ * pull request; nothing lets one go while its pull request is open.
+ */
+function whatLetsGo(lease: Pick<Lease, 'state' | 'prNumber'>): string {
+  if (lease.prNumber) return `it stays while pull request #${lease.prNumber} is open, as any lease with one does`;
+  if (lease.state === 'paused') return "otherwise the reconciler lets it go on its next pass, within 15 minutes, unless the issue's pull request holds it";
+  return 'otherwise the idle-lease check lets it go about 15 minutes after the stop';
+}
+
+/**
+ * The lease a stop lets go: the task's own, or, for a build that recorded
+ * none, the one its bot holds on the issue — what the dispatcher would
+ * otherwise wait on until the idle-lease check let it go. Not one another
+ * unfinished task works under, on whatever subject: a patch task works on the
+ * pull request's ref, not the issue's, and a retry reuses the lease it
+ * retries. Null when there is none to let go.
+ */
+async function leaseToLetGo(task: Task, others: readonly Task[]): Promise<Lease | null> {
+  let lease = task.leaseId ? await leases.getLease(task.leaseId) : null;
+  if (!lease && task.repoId && task.kind === 'implement') {
+    const parsed = parseRef(task.subjectRef);
+    const held = parsed ? await leases.getActiveLease(task.repoId, parsed.number) : null;
+    if (held?.botId === task.botId) lease = held;
+  }
+  if (!lease || !HELD_LEASE.includes(lease.state)) return null;
+  const underLease = (await tasks.listTasks({ states: [...UNFINISHED], limit: 500 })).some(
+    (other) => other.id !== task.id && other.leaseId === lease.id,
+  );
+  return underLease || others.some((other) => other.botId === lease.botId) ? null : lease;
+}
+
+/**
+ * The console Stop's part after the answer: hostd ends the session, then the
+ * lease goes, then `needs-human` comes off. hostd's cancel is what keeps the
+ * session's unpushed commits and gives its computer back, so the lease waits
+ * for it, as it always did: a build leased the issue before that would start
+ * without them. A cancel hostd does not take keeps the lease and is
+ * remembered (`Afterwards.undone`), so a second Stop asks again. A person's
+ * stop takes the card away, so that Stop is a stale tab's or the API's; what
+ * ends the session otherwise is hostd's observer, which ends what it holds
+ * for a task whose row has ended, and the lease goes by `whatLetsGo`'s rule.
+ */
+function stopAfterAnswer(
+  afterwards: Afterwards,
+  hostd: Pick<HostdClient, 'cancelTask'>,
+  input: { task: Task; actor: string; reason: string; lease: Lease | null; untag?: () => Promise<boolean> },
+): void {
+  const { task, actor, reason, lease, untag } = input;
+  const where = { taskId: task.id, subjectRef: task.subjectRef };
+  const key = `stop:${task.id}`;
+  afterwards.run(where, 'Stopping it', async () => {
+    const cancelled = await hostd.cancelTask(task.id, reason).then(
+      () => true,
+      async (error: unknown) => {
+        afterwards.undone.add(key);
+        await afterwards.say(
+          where,
+          lease
+            ? 'It is stopped, but hostd did not end its session, so its lease is kept: what the session had not pushed is kept only as it ends, ' +
+                `which hostd does on its own once it sees the task has ended. A Stop sent again asks hostd again and lets the lease go; ${whatLetsGo(lease)}`
+            : 'It is stopped, but hostd did not end its session; hostd ends it on its own once it sees the task has ended, and a Stop sent again asks it again',
+          error,
+        );
+        return false;
+      },
+    );
+    if (cancelled) afterwards.undone.delete(key);
+    if (lease && cancelled) {
+      // Not by id: a Try again since the answer works under this lease now.
+      const released = await leases.releaseUnlessWorkedUnder(lease.id).catch(async (error: unknown) => {
+        await afterwards.say(where, `It is stopped, but its lease could not be let go; ${whatLetsGo(lease)}`, error);
+        return false;
+      });
+      if (released) {
+        await audit({ actor, action: 'lease.released', target: task.subjectRef, payload: { leaseId: lease.id, task: task.id, reason } }).catch(
+          (error: unknown) => console.warn(`[bridge] ${task.subjectRef}: its lease was let go, but the audit row was not written: ${error instanceof Error ? error.message : error}`),
+        );
+      }
+    }
+    if (untag) {
+      await untag().catch((error: unknown) =>
+        afterwards.say(where, `It is stopped, but needs-human is still on ${task.subjectRef}: take it off on GitHub, or the dispatcher will not lease it again`, error),
+      );
+    }
+  });
+}
+
 /**
  * Ends a task for good, as a person decided: hostd's cancel ends whatever
  * is left of its session and marks it stopped with the reason, its lease is
@@ -519,18 +735,47 @@ function personOwes(labels: readonly string[]): boolean {
  * and its thread still offers Stop: asked, the timeline named the task's own
  * account, the label came off, and the dispatcher leased the issue again to
  * ask for the same paths.
+ *
+ * `afterwards` is a card's Stop, which answers once the stop is recorded:
+ * the bridge writes the task `stopped` itself, closes its questions and
+ * audits it, and hostd's cancel, the lease and the label come after the
+ * answer (`stopAfterAnswer`). Whether `untag` is asked is decided before the
+ * answer, from the questions as they were; GitHub is asked only after it.
+ * `releasedLease` is then null: it names only a lease this call has let go.
+ * A stop a person already made is not made again: a second press, or a
+ * stale tab, gets `stopped: false`, unless hostd did not take the first
+ * one's cancel, which it asks again.
+ *
+ * Either way the lease goes in one statement that refuses while a task works
+ * under it (`releaseUnlessWorkedUnder`): the checks here are reads, and a Try
+ * again can reuse the lease in between.
  */
 export async function stopTask(
   taskId: string,
   actor: string,
   note: string,
   hostd: Pick<HostdClient, 'cancelTask'>,
-  options: { unfinished?: boolean; untag?: (task: StoppedTask, ours: boolean) => Promise<boolean> } = {},
+  options: {
+    unfinished?: boolean;
+    untag?: (task: StoppedTask, ours: boolean) => Promise<boolean>;
+    afterwards?: Afterwards;
+  } = {},
 ): Promise<{ task: string; state: string; releasedLease: string | null; questionsClosed: number; stopped: boolean }> {
   const task = await tasks.getTask(taskId);
   if (!task) throw new HttpFailure(404, 'there is no such task');
   const ended = (state: string): boolean => Boolean(options.unfinished) && !UNFINISHED.includes(state as TaskState);
   if (ended(task.state)) return { task: task.id, state: task.state, releasedLease: null, questionsClosed: 0, stopped: false };
+  if (!options.unfinished && stoppedFromTheConsole(task)) {
+    // The first Stop's cancel hostd did not take: asked again, with the lease after it.
+    const afterwards = options.afterwards;
+    if (afterwards?.undone.has(`stop:${task.id}`)) {
+      const others = (await tasks.listTasksOnSubjects([task.subjectRef])).filter((other) => other.id !== task.id && UNFINISHED.includes(other.state));
+      const lease = await leaseToLetGo(task, others);
+      stopAfterAnswer(afterwards, hostd, { task, actor, reason: task.exitReason ?? STOPPED_BY_A_PERSON, lease });
+      return { task: task.id, state: task.state, releasedLease: null, questionsClosed: 0, stopped: true };
+    }
+    return { task: task.id, state: task.state, releasedLease: null, questionsClosed: 0, stopped: false };
+  }
   const refuse = (state: string): void => {
     if (options.unfinished) return;
     if (!STOPPABLE.includes(state)) {
@@ -558,10 +803,22 @@ export async function stopTask(
   refuse(now?.state ?? task.state);
 
   const reason = `${STOPPED_BY_A_PERSON} (${actor})${note ? `: ${note}` : ''}`;
-  try {
-    await hostd.cancelTask(task.id, reason);
-  } catch (error) {
-    throw new HttpFailure(502, `hostd did not stop it: ${error instanceof Error ? error.message : String(error)}`);
+  const afterwards = options.afterwards;
+  if (afterwards) {
+    // In one statement, which never moves a task that ended `done`; hostd's
+    // observer gives back what it holds for a task whose row has ended, if
+    // the cancel after the answer does not.
+    const recorded = await tasks.updateTaskState(task.id, 'stopped', { exitReason: reason });
+    if (!recorded) {
+      const latest = await tasks.getTask(task.id).catch(() => null);
+      throw new HttpFailure(409, `that task is ${latest?.state ?? 'gone'} now, so there is nothing to stop`);
+    }
+  } else {
+    try {
+      await hostd.cancelTask(task.id, reason);
+    } catch (error) {
+      throw new HttpFailure(502, `hostd did not stop it: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   // A question the task was waiting on is one nobody can act on now: an answer
@@ -571,6 +828,7 @@ export async function stopTask(
   let questionsClosed = 0;
   let questionError: string | null = null;
   let labelTakenOff = false;
+  let untagAfter: (() => Promise<boolean>) | null = null;
   try {
     // Read first: once closed, which of them put `needs-human` on is not asked again.
     const waiting = options.untag ? await threads.listOpenGatesOnSubject(task.subjectRef) : [];
@@ -581,41 +839,27 @@ export async function stopTask(
     const ours = waiting.some((gate) => closed.includes(gate.id) && gate.addedNeedsHuman !== false);
     const othersWait = waiting.some((gate) => !closed.includes(gate.id));
     const timeline = asked !== null && !wasRefused(task.exitReason) && !asked.some((gate) => gate.addedNeedsHuman !== false);
-    if (options.untag && !othersWait && (ours || timeline)) {
-      labelTakenOff = await options.untag(task, ours).catch((error: unknown) => {
-        console.warn(`[bridge] needs-human is still on ${task.subjectRef}: ${error instanceof Error ? error.message : error}`);
-        return false;
-      });
+    const untag = options.untag;
+    if (untag && !othersWait && (ours || timeline)) {
+      if (afterwards) untagAfter = () => untag(task, ours);
+      else {
+        labelTakenOff = await untag(task, ours).catch((error: unknown) => {
+          console.warn(`[bridge] needs-human is still on ${task.subjectRef}: ${error instanceof Error ? error.message : error}`);
+          return false;
+        });
+      }
     }
   } catch (error) {
     questionError = error instanceof Error ? error.message : String(error);
   }
 
-  // The task's own lease, or, for a build that recorded none, the one its bot
-  // holds on the issue: what the dispatcher would otherwise wait on until the
-  // idle-lease check let it go. Not one another unfinished task works under.
-  let releasing: { id: string } | null = null;
+  // Let go now, or after the answer; see `leaseToLetGo`.
+  let toLetGo: Lease | null = null;
+  let released: Lease | null = null;
   let leaseError: string | null = null;
   try {
-    let lease = task.leaseId ? await leases.getLease(task.leaseId) : null;
-    if (!lease && task.repoId && task.kind === 'implement') {
-      const parsed = parseRef(task.subjectRef);
-      const held = parsed ? await leases.getActiveLease(task.repoId, parsed.number) : null;
-      if (held?.botId === task.botId) lease = held;
-    }
-    // Any unfinished task under the same lease, on whatever subject: a patch
-    // task works on the pull request's ref, not the issue's, and a retry
-    // reuses the lease it retries.
-    const underLease = lease
-      ? (await tasks.listTasks({ states: [...UNFINISHED], limit: 500 })).some(
-          (other) => other.id !== task.id && other.leaseId === lease.id,
-        )
-      : false;
-    const heldElsewhere = lease && (underLease || others.some((other) => other.botId === lease.botId));
-    if (lease && HELD_LEASE.includes(lease.state) && !heldElsewhere) {
-      await leases.setLeaseState(lease.id, 'released');
-      releasing = lease;
-    }
+    toLetGo = await leaseToLetGo(task, others);
+    if (toLetGo && !afterwards && (await leases.releaseUnlessWorkedUnder(toLetGo.id))) released = toLetGo;
   } catch (error) {
     leaseError = error instanceof Error ? error.message : String(error);
   }
@@ -636,7 +880,7 @@ export async function stopTask(
     );
   }
 
-  // Written whatever happened to the lease: hostd has stopped the task already.
+  // Written whatever happened to the lease: the task is stopped already.
   const bot = await bots.getBotById(task.botId).catch(() => null);
   await audit({
     actor,
@@ -648,25 +892,35 @@ export async function stopTask(
       kind: task.kind,
       was: task.state,
       reason,
-      lease: releasing?.id ?? null,
+      lease: released?.id ?? null,
       questionsClosed,
       ...(labelTakenOff ? { needsHumanRemoved: true } : {}),
       ...(requestAbandoned ? { requestAbandoned } : {}),
       ...(leaseError ? { leaseError } : {}),
       ...(questionError ? { questionError } : {}),
+      // What is done after the answer: said in the thread if it fails, and
+      // the lease's release audited as `lease.released` when it happens.
+      ...(afterwards
+        ? { afterAnswer: { cancel: true, lease: toLetGo?.id ?? null, needsHuman: untagAfter !== null } }
+        : {}),
     },
   });
+  if (afterwards) stopAfterAnswer(afterwards, hostd, { task, actor, reason, lease: toLetGo, ...(untagAfter ? { untag: untagAfter } : {}) });
   // A removal goes on to release what is left of the repository's leases and
   // close what is left of its questions, and says what it could not; a
   // person's Stop has nothing after it.
   if (leaseError && !options.unfinished) {
-    throw new HttpFailure(500, `it is stopped, but its lease could not be released: ${leaseError}. The idle-lease check lets it go within minutes`);
+    throw new HttpFailure(
+      500,
+      `it is stopped, but its lease could not be released: ${leaseError}. The idle-lease check lets one in a task go about 15 minutes after the stop, ` +
+        'and the reconciler one paused on a question; one with an open pull request stays while it is open',
+    );
   }
-  return { task: task.id, state: 'stopped', releasedLease: releasing?.id ?? null, questionsClosed, stopped: true };
+  return { task: task.id, state: 'stopped', releasedLease: released?.id ?? null, questionsClosed, stopped: true };
 }
 
 export function registerConsoleApi(router: Router, deps: ApiDeps): void {
-  const { config, hostd } = deps;
+  const { config, hostd, afterwards } = deps;
   const removal =
     deps.removal ??
     new RepoRemoval({
@@ -1159,9 +1413,12 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
 
   router.get('/v1/gates', async () => ({ gates: await threads.listOpenGates() }));
 
+  // Answered once the question is claimed; its GitHub writes and the resume
+  // come after (`answerFromConsole`).
   router.post('/v1/gates/:id/answer', async ({ params, body, identity, role }) => {
     const input = await body<{ answer: string }>();
-    const result = await deps.gates.answer({
+    // Audited where the gate is claimed (`Gates.answer`), as every route's answer is.
+    return answerFromConsole(deps, {
       gateId: params.id ?? '',
       reply: input.answer,
       answeredBy: identity,
@@ -1169,13 +1426,6 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       role,
       via: 'console-gate',
     });
-    if (result.taskId) {
-      await deps.taskService.resume(result.taskId).catch((error) => {
-        console.warn(`[bridge] resume after answer failed: ${error.message}`);
-      });
-    }
-    // Audited where the gate is claimed (`Gates.answer`), as every route's answer is.
-    return result;
   });
 
   router.get('/v1/sessions/:bot', async ({ params }) => {
@@ -1327,12 +1577,34 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
    * same bot, on the same subject. See `task-retry.ts`.
    */
   router.post('/v1/tasks/:id/retry', async ({ params, identity, role }) => {
+    const id = params.id ?? '';
+    // Answered once the new task's row exists, which is what takes the card
+    // off; reading its context and hostd's start take seconds, and come
+    // after. Everything that refuses comes before the row.
+    let recorded: (task: { taskId: string; bot: string }) => void = () => undefined;
+    const started = new Promise<{ taskId: string; bot: string }>((resolve) => (recorded = resolve));
     // A user may try a task again, but only an admin's Try again lets a revert
     // past a spending cap; see `retryTask`.
-    const retried = await retryTask(params.id ?? '', identity, retryDepsFor({ ...deps, requestQueue: queue }), { byAdmin: role === 'admin' });
-    deps.health?.runSoon(['idle-lease']);
-    // A request's triage tried again while intake is busy waits its turn.
-    return retried.queued ? new WithStatus(202, retried) : retried;
+    const retrying = retryTask(id, identity, retryDepsFor({ ...deps, requestQueue: queue }, afterwards ? recorded : undefined), {
+      byAdmin: role === 'admin',
+    });
+    const first = await Promise.race([retrying.then((retried) => ({ retried })), started.then((row) => ({ row }))]);
+    // Without an Afterwards nothing is told the row, and the start is waited for.
+    if ('retried' in first || !afterwards) {
+      const retried = 'retried' in first ? first.retried : await retrying;
+      deps.health?.runSoon(['idle-lease']);
+      // A request's triage tried again while intake is busy waits its turn.
+      return retried.queued ? new WithStatus(202, retried) : retried;
+    }
+    // Said on the thread of the task tried again, which is the new one's: the
+    // same seat, on the same subject.
+    afterwards.run({ taskId: id }, 'Starting it again', async () => {
+      // A start hostd refuses fails the new task with why, on its card and
+      // in its thread (`TaskService.open`); what is thrown is said here.
+      await retrying;
+      deps.health?.runSoon(['idle-lease']);
+    });
+    return { retried: id, task: { taskId: first.row.taskId, session: null }, bot: first.row.bot, starting: true };
   });
 
   /**
@@ -1364,7 +1636,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       await client.removeLabel(repo.fullName, parsed.number, 'needs-human', { timeoutMs: STOP_GITHUB_MS });
       return true;
     };
-    const stopped = await stopTask(params.id ?? '', identity, (input.reason ?? '').trim().slice(0, 300), hostd, { untag });
+    // Answered once the stop is recorded; hostd's cancel, the lease and the
+    // label come after (`stopTask`).
+    const stopped = await stopTask(params.id ?? '', identity, (input.reason ?? '').trim().slice(0, 300), hostd, { untag, afterwards });
     deps.health?.runSoon(['idle-lease']);
     return stopped;
   });

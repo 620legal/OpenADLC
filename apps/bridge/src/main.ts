@@ -6,7 +6,7 @@ import { registerPauseRoutes, restorePause } from './pause-work.js';
 import { accountOf, appPrivateKeyRef, appVisibility, ensureAlertsSecret, ensureConsoleSecret, ensureInternalSecret, getSecretStore, installationTokenFor, openadlcHome, redeliverFailedSince } from '@openadlc/github';
 import { sameLogin } from '@openadlc/shared';
 import { Actors } from './actors.js';
-import { registerConsoleApi, retryDepsFor, stopTask } from './api.js';
+import { Afterwards, registerConsoleApi, retryDepsFor, stopTask } from './api.js';
 import { SendBack } from './send-back.js';
 import { DeliveryKnowledge } from './delivery-rules.js';
 import { DeployPipeline } from './deploy-pipeline.js';
@@ -594,7 +594,10 @@ async function main(): Promise<void> {
     void workItemBackfill.run().catch((error: unknown) => console.warn(`[bridge] work items: ${error instanceof Error ? error.message : error}`));
   backfillWorkItems();
   setInterval(backfillWorkItems, BACKFILL_EVERY_MS).unref();
+  // What the console's routes do after they have answered; a shutdown waits for it.
+  const afterwards = new Afterwards();
   const deps = {
+    afterwards,
     requestQueue,
     config,
     hostd,
@@ -723,6 +726,7 @@ async function main(): Promise<void> {
     },
     dispatchSoon: (reason) => dispatchRuns?.soon(reason),
     pausePull: (repoFullName, prNumber) => automation.pausePull(repoFullName, prNumber),
+    later: (item, what, work) => afterwards.run({ subjectRef: item.key }, what, work),
   });
   // Issues OpenADLC will not take on its own, decided by a person from Needs
   // you (`unowned-routes.ts`). Sent to intake, one goes as an opened issue goes.
@@ -875,6 +879,8 @@ async function main(): Promise<void> {
     await webhookSetup.shutdown();
     // A start cut off between its row and hostd left the row queued for good.
     await taskService.drain(10_000);
+    // An answer's GitHub comment, a Stop's cancel: what the console was told is under way.
+    await afterwards.drain(10_000);
     await closePool();
     process.exit(0);
   };

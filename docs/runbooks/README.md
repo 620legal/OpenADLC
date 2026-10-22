@@ -14,3 +14,4 @@ a runbook that is wrong is worse than one that is missing.
 | Runbook | When |
 |---|---|
 | [unsigned-post.md](unsigned-post.md) | A post on GitHub claims a seat's header or tag and carries no signature that checks |
+| [cloud-update-stopped.md](cloud-update-stopped.md) | A Google Cloud install's update stopped between its parts, or a part runs another release |

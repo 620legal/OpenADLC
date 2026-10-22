@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { useEffect, useState, useTransition } from 'react';
+import { useEffect, useRef, useState, useTransition } from 'react';
 import {
   cancelItem,
   pauseItem,
@@ -15,6 +15,7 @@ import { useRole } from '@/components/app-header';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/cn';
+import { safeAction } from '@/lib/safe-action';
 import { CancelIcon, NextIcon, PauseIcon, PlayIcon } from '@/components/icons';
 
 /** What an issue's controls need to know about it. */
@@ -36,18 +37,30 @@ export interface IssueControlsFor {
  */
 export function IssueControls({ issue, compact = false }: { issue: IssueControlsFor; compact?: boolean }) {
   const admin = useRole() === 'admin';
-  const [pending, start] = useTransition();
+  // Set at once and cleared by the answer: a transition's pending let a quick
+  // second press through and stayed set until the board was read again.
+  const [pending, setPending] = useState(false);
+  const pressing = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  // What the bridge answered, shown until the board, read again, says it too.
+  const [answered, setAnswered] = useState<{ held?: IssueControlsFor['held']; next?: boolean }>({});
+  useEffect(() => setAnswered({}), [issue.held?.at, Boolean(issue.held), issue.next]);
   if (!admin) return null;
 
-  const run = (work: () => Promise<{ ok: boolean; error?: string }>) => {
+  const run = (work: () => Promise<{ ok: boolean; error?: string; held?: IssueControlsFor['held']; next?: boolean }>) => {
+    if (pressing.current) return;
+    pressing.current = true;
     setError(null);
-    start(async () => {
-      const result = await work();
-      if (!result.ok) setError(result.error ?? 'that did not go through');
+    setPending(true);
+    void safeAction(work).then((result) => {
+      pressing.current = false;
+      setPending(false);
+      if (!result.ok) return setError(result.error ?? 'that did not go through');
+      setAnswered({ ...('held' in result ? { held: result.held } : {}), ...('next' in result ? { next: result.next } : {}) });
     });
   };
+  issue = { ...issue, ...answered };
   const paused = Boolean(issue.held);
   const pauseLabel = paused ? `Resume #${issue.number}` : `Pause #${issue.number}`;
   const nextLabel = issue.next ? `Take #${issue.number} out of the front of the queue` : `Do #${issue.number} next`;

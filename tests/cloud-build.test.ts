@@ -6,10 +6,12 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 /**
- * `infra/gcp/install.sh` builds a Google Cloud install's images on Cloud Build
- * (`infra/gcp/cloudbuild.yaml`) and then runs the CLI's configure, plan and
- * apply. What it uploads, what it builds, and the order it does things in are
- * checked here; the build itself, and an apply, need a real project.
+ * `infra/gcp/install.sh` builds a Google Cloud install's bot image on Cloud
+ * Build (`infra/gcp/cloudbuild-bot.yaml`), or with --build all four images
+ * from the checkout (`infra/gcp/cloudbuild.yaml`), and then runs the CLI's
+ * configure, plan and apply. What it uploads, what it builds, and the order it
+ * does things in are checked here; the build itself, and an apply, need a real
+ * project.
  */
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const GCP = join(ROOT, 'infra', 'gcp');
@@ -47,6 +49,21 @@ describe('what Cloud Build builds', () => {
     expect(build).toContain("'-f', 'infra/local/Dockerfile.console'");
     expect(build).toContain("args: ['infra/local/build-bot-image.sh']");
   });
+
+  it('builds the bot image alone, for an install on a release, with the same step and under the same name', () => {
+    // A release holds no bot image (it has Claude Code in it), so every
+    // install builds its own, and configure names it as --build does.
+    const bot = readFileSync(join(GCP, 'cloudbuild-bot.yaml'), 'utf8');
+    const step = (file: string) =>
+      (/- id: bot\n([\s\S]*?)\n(?:  - id:|images:)/.exec(file)?.[1] ?? '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith('#') && !line.startsWith('waitFor:'));
+    expect(step(bot).length).toBeGreaterThan(2);
+    expect(step(bot)).toEqual(step(build));
+    expect(bot.slice(bot.indexOf('images:'))).toMatch(/^images:\n  - '\$\{_REGISTRY\}\/bot:\$\{_TAG\}'\n[a-z]/);
+    expect(bot).toMatch(/_TAG: latest/);
+  });
 });
 
 describe('infra/gcp/install.sh', () => {
@@ -74,6 +91,7 @@ exit 0`,
     );
     stub('terraform', 'echo "Terraform v1.9.8"');
     stub('pnpm');
+    stub('gh');
     // Its version, and the real Node for the one-liners the script runs.
     stub('node', `case "$1" in -p) echo 22 ;; *) exec "${process.execPath}" "$@" ;; esac`);
   });
@@ -99,8 +117,30 @@ exit 0`,
     return { status: run.status, out: `${run.stdout}${run.stderr}` };
   }
 
-  it('builds as its own account, from a bucket of its own, then configures, plans and applies, in that order', () => {
+  it('builds the bot image alone and configures the newest release for the rest', () => {
     const { status, out } = install(['--project', 'acme-openadlc']);
+    expect(status, out).toBe(0);
+    const submit = out.split('\n').find((line) => line.includes('gcloud builds submit')) ?? '';
+    expect(submit).toContain('--config infra/gcp/cloudbuild-bot.yaml');
+    expect(out).toContain('Claude Code');
+    const configure = out.split('\n').find((line) => line.includes('cloud configure')) ?? '';
+    expect(configure).not.toContain('--build');
+    expect(out.indexOf('gcloud builds submit')).toBeLessThan(out.indexOf('cloud configure'));
+  });
+
+  it('needs the GitHub CLI to take a release, and not with --build', () => {
+    rmSync(join(bin, 'gh'));
+    const release = install(['--project', 'acme-openadlc', '--plan-only']);
+    expect(release.status).not.toBe(0);
+    expect(release.out).toContain('https://cli.github.com');
+    expect(release.out).toContain('--build');
+    expect(release.out).not.toContain('cloud configure');
+    const built = install(['--project', 'acme-openadlc', '--plan-only', '--build']);
+    expect(built.status, built.out).toBe(0);
+  });
+
+  it('with --build, builds the four images as its own account, from a bucket of its own, then configures, plans and applies, in that order', () => {
+    const { status, out } = install(['--project', 'acme-openadlc', '--build']);
     expect(status, out).toBe(0);
 
     const submit = out.split('\n').find((line) => line.includes('gcloud builds submit')) ?? '';
@@ -110,7 +150,7 @@ exit 0`,
     expect(submit).toContain('--service-account projects/acme-openadlc/serviceAccounts/openadlc-image-builder@acme-openadlc.iam.gserviceaccount.com');
     expect(submit).toContain('--gcs-source-staging-dir gs://acme-openadlc-openadlc-build/source');
 
-    const order = ['gcloud builds submit', 'cloud configure', 'cloud plan', 'cloud apply'].map((step) => out.indexOf(step));
+    const order = ['gcloud builds submit', 'cloud configure --build', 'cloud plan', 'cloud apply'].map((step) => out.indexOf(step));
     expect(order.every((at) => at >= 0), out).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });

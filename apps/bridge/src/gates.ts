@@ -150,10 +150,12 @@ export type GateChannel = 'console-gate' | 'item' | 'thread' | 'github' | 'held'
 /** What an answer granted, as its audit row records it. */
 export type GateGrant = 'plan_change_approved' | 'plan_change_refused' | 'cap_raised' | 'stopped' | null;
 
-/** How an answer that claims its gate is audited. */
+/** How an answer that claims its gate is audited, and whether its GitHub writes are left to the caller. */
 interface AnswerRecord {
   via: GateChannel;
   grant: GateGrant;
+  /** See `deferGitHub` on `answer`. */
+  deferGitHub?: boolean;
 }
 
 /**
@@ -414,8 +416,20 @@ export class Gates {
     role?: Role;
     /** Where the answer came from, for its audit row. A caller that names none is audited as 'unknown'. */
     via?: GateChannel;
-  }): Promise<{ answer: string; taskId: string | null; held?: boolean }> {
+    /**
+     * Leave what an answer writes on GitHub once it has claimed the gate — the
+     * answer's comment, `needs-human` taken off, why the task stopped — to the
+     * caller, as `github`, rather than writing it here. A console route
+     * answers the person first and writes it after (`answerFromConsole`): an
+     * answer to #27's builder took 30 seconds on a live install, and the
+     * person pressed Approve again while it ran. The caller runs it before it
+     * resumes the task, since a resumed session reads the answer from the
+     * issue. Never rejects: what it could not write is said in the thread.
+     */
+    deferGitHub?: boolean;
+  }): Promise<{ answer: string; taskId: string | null; held?: boolean; github?: () => Promise<void> }> {
     const via = input.via ?? 'unknown';
+    const record = (grant: GateGrant): AnswerRecord => ({ via, grant, ...(input.deferGitHub ? { deferGitHub: true } : {}) });
     const gate = await threads.getGate(input.gateId);
     if (!gate) throw new Error('unknown gate');
     if (gate.state !== 'open') throw new Error('gate is no longer open');
@@ -432,13 +446,13 @@ export class Gates {
         input.answeredBy,
         alreadyLanded(landed),
         `**${publicNameOf(input.answeredBy)} answered:** ${inertMarkup(answer)}\n\n${landed} is closed, so the task is not resumed: the work it asked about is finished.`,
-        { via, grant: null },
+        record(null),
       );
     }
 
     const request = await this.planChangeOf(gate);
 
-    if (request && answer === PLAN_CHANGE_REFUSE) return this.refuse(gate, input.answeredBy, via);
+    if (request && answer === PLAN_CHANGE_REFUSE) return this.refuse(gate, input.answeredBy, record('plan_change_refused'));
 
     // A person already approved this, and it waits on another lease. Closing the
     // gate on a stray comment ("any news?") would resume the task without the
@@ -461,14 +475,14 @@ export class Gates {
       // Applied only by the answer that claims the gate. Two answers at once (a
       // console click and a reply on the issue) both read the gate open, and
       // both edited the issue and widened the lease before one of them lost.
-      return this.applyApproval(gate, request, input.answeredBy, via, approved.apply);
+      return this.applyApproval(gate, request, input.answeredBy, record('plan_change_approved'), approved.apply);
     }
 
     // The cost-cap gate. "continue" resumed the task with the cap where it
     // was, so the session stopped again on its first headroom check;
     // the other two resumed it as well, only for it to ask the same question.
     const atCap = costCapAnswer(answer, gate.options);
-    if (atCap && 'end' in atCap) return this.endAtCap(gate, atCap.end, input.answeredBy, via);
+    if (atCap && 'end' in atCap) return this.endAtCap(gate, atCap.end, input.answeredBy, record('stopped'));
     const taskId = gate.taskId;
     if (atCap && taskId) {
       // Raised only once this answer has claimed the gate: two answers at once
@@ -497,13 +511,13 @@ export class Gates {
         }
         return { answer, taskId: null, held: true };
       }
-      return this.close(gate, answer, input.answeredBy, null, { via, grant: 'cap_raised' }, async () => {
+      return this.close(gate, answer, input.answeredBy, null, record('cap_raised'), async () => {
         const cap = await tasks.raiseCostCap(taskId, step);
         if (cap !== null && overCap) await this.recordBypass(gate, taskId, input.answeredBy, overCap);
         return cap === null ? null : `The task's cap is now $${cap}.`;
       });
     }
-    return this.close(gate, answer, input.answeredBy, null, { via, grant: null });
+    return this.close(gate, answer, input.answeredBy, null, record(null));
   }
 
   /**
@@ -583,7 +597,13 @@ export class Gates {
         if (!gate || gate.state !== 'open' || !request.held) continue;
         const approved = await this.approve(gate, request, request.held.approvedBy);
         if (approved.held) continue;
-        const done = await this.applyApproval(gate, request, request.held.approvedBy, 'held', approved.apply);
+        const done = await this.applyApproval(
+          gate,
+          request,
+          request.held.approvedBy,
+          { via: 'held', grant: 'plan_change_approved' },
+          approved.apply,
+        );
         if (done.taskId) resume.push(done.taskId);
       } catch (error) {
         console.warn(`[bridge] could not apply the plan change on gate ${gateId}: ${error instanceof Error ? error.message : error}`);
@@ -604,11 +624,11 @@ export class Gates {
     gate: GateRef,
     request: leases.PlanChangeRecord,
     approvedBy: string,
-    via: GateChannel,
+    record: AnswerRecord,
     apply: () => Promise<string>,
-  ): Promise<{ answer: string; taskId: string | null }> {
+  ): Promise<{ answer: string; taskId: string | null; github?: () => Promise<void> }> {
     try {
-      return await this.close(gate, PLAN_CHANGE_APPROVE, approvedBy, null, { via, grant: 'plan_change_approved' }, apply);
+      return await this.close(gate, PLAN_CHANGE_APPROVE, approvedBy, null, record, apply);
     } catch (error) {
       if (request.held) await this.notApplied(gate, request.held, approvedBy, error).catch(() => undefined);
       throw error;
@@ -740,7 +760,11 @@ export class Gates {
     }
   }
 
-  /** The tail every answer shares: record it, tell the issue, and hand back what to resume. */
+  /**
+   * The tail every answer shares: record it, tell the issue, and hand back what
+   * to resume. With `deferGitHub`, telling the issue is handed back too, as
+   * `github`, and the answer is in the thread before it.
+   */
   private async close(
     gate: GateRef,
     answer: string,
@@ -753,7 +777,7 @@ export class Gates {
      * gate can be answered again to finish it.
      */
     afterClaim?: () => Promise<string | null>,
-  ): Promise<{ answer: string; taskId: string | null }> {
+  ): Promise<{ answer: string; taskId: string | null; github?: () => Promise<void> }> {
     const answered = await threads.answerGate(gate.id, answer, answeredBy);
     if (!answered) throw new Error('gate is no longer open');
     await this.audited(gate, answer, answeredBy, record);
@@ -798,14 +822,21 @@ export class Gates {
         takeOff = false;
       }
     }
-    await this.onIssue(gate, takeOff ? 'the answer, and taking needs-human off' : 'the answer', async (client, repoFullName, issueNumber) => {
-      // Posted as the task's bot: a marker in a person's answer would read as
-      // the bot's own (`inertMarkup`).
-      await client
-        .comment(repoFullName, issueNumber, `**${publicNameOf(answeredBy)} answered:** ${inertMarkup(answer)}${note ? `\n\n${note}` : ''}\n\nResuming.`)
-        .catch(failed('the answer was not posted'));
-      if (takeOff) await client.removeLabel(repoFullName, issueNumber, 'needs-human').catch(failed('needs-human is still on'));
-    }).catch(failed('nothing was written'));
+    const write = () =>
+      this.onIssue(gate, takeOff ? 'the answer, and taking needs-human off' : 'the answer', async (client, repoFullName, issueNumber) => {
+        // Posted as the task's bot: a marker in a person's answer would read as
+        // the bot's own (`inertMarkup`).
+        await client
+          .comment(repoFullName, issueNumber, `**${publicNameOf(answeredBy)} answered:** ${inertMarkup(answer)}${note ? `\n\n${note}` : ''}\n\nResuming.`)
+          .catch(failed('the answer was not posted'));
+        if (takeOff) await client.removeLabel(repoFullName, issueNumber, 'needs-human').catch(failed('needs-human is still on'));
+      }).catch(failed('nothing was written'));
+    const sayWhatWasLeft = async () => {
+      if (left.length > 0) {
+        await this.notOnGitHub(gate, task?.subjectRef ?? null, `${left.join(', and ')}. The answer stands and the task goes on`, why);
+      }
+    };
+    if (!record.deferGitHub) await write();
 
     if (gate.threadId) {
       await threads.addMessage({
@@ -816,14 +847,16 @@ export class Gates {
         payload: { gateId: gate.id },
       });
     }
-    if (left.length > 0) {
-      await this.notOnGitHub(gate, task?.subjectRef ?? null, `${left.join(', and ')}. The answer stands and the task goes on`, why);
-    }
+    if (!record.deferGitHub) await sayWhatWasLeft();
 
     // Back to triage, which the caller resumes with the answer in `request.md`.
     if (task) await moveRequest(task, 'draft').catch((error: unknown) => requestNotMoved(task.subjectRef, error));
 
-    return { answer, taskId: gate.taskId };
+    const github = async (): Promise<void> => {
+      await write();
+      await sayWhatWasLeft();
+    };
+    return { answer, taskId: gate.taskId, ...(record.deferGitHub ? { github } : {}) };
   }
 
   /**
@@ -966,7 +999,7 @@ export class Gates {
   }
 
   /** A refusal ends the task; `TaskService.resume` cleans it up instead of starting it. */
-  private refuse(gate: GateRef, refusedBy: string, via: GateChannel): Promise<{ answer: string; taskId: string | null }> {
+  private refuse(gate: GateRef, refusedBy: string, record: AnswerRecord): Promise<{ answer: string; taskId: string | null; github?: () => Promise<void> }> {
     // `needs-human` stays: taking it off would hand the issue back to the
     // dispatcher, which would lease it again and ask for the same paths.
     return this.stop(
@@ -976,12 +1009,17 @@ export class Gates {
       `${REFUSED} by ${refusedBy}`,
       `**${publicNameOf(refusedBy)} refused** the plan change. The task is stopped and its lease released. ` +
         '`needs-human` stays on the issue until a person changes its Expected paths or the plan.',
-      { via, grant: 'plan_change_refused' },
+      record,
     );
   }
 
   /** Handing off or abandoning at the cap ends the task as a refusal does, and keeps `needs-human` for the same reason. */
-  private async endAtCap(gate: GateRef, answer: string, answeredBy: string, via: GateChannel): Promise<{ answer: string; taskId: string | null }> {
+  private async endAtCap(
+    gate: GateRef,
+    answer: string,
+    answeredBy: string,
+    record: AnswerRecord,
+  ): Promise<{ answer: string; taskId: string | null; github?: () => Promise<void> }> {
     const what = answer === COST_CAP_ABANDON ? 'abandoned the task' : 'took the task over';
     const stopped = await this.stop(
       gate,
@@ -990,7 +1028,7 @@ export class Gates {
       `${STOPPED_AT_CAP}: ${answer} (${answeredBy})`,
       `**${publicNameOf(answeredBy)} ${what}** at its cost cap. The task is stopped and its lease released. ` +
         '`needs-human` stays on the issue until a person picks it up.',
-      { via, grant: 'stopped' },
+      record,
     );
     // A console request has no issue to carry `needs-human`. Left in
     // `questions`, it waited for good on an answer already given.
@@ -1007,12 +1045,13 @@ export class Gates {
     exitReason: string,
     comment: string,
     record: AnswerRecord,
-  ): Promise<{ answer: string; taskId: string | null }> {
+  ): Promise<{ answer: string; taskId: string | null; github?: () => Promise<void> }> {
     const answered = await threads.answerGate(gate.id, answer, answeredBy);
     if (!answered) throw new Error('gate is no longer open');
     await this.audited(gate, answer, answeredBy, record);
 
     const task = gate.taskId ? await tasks.getTask(gate.taskId) : null;
+    let github: (() => Promise<void>) | undefined;
     if (task) {
       await tasks.updateTaskState(task.id, 'stopped', { exitReason });
       if (task.leaseId) {
@@ -1022,11 +1061,14 @@ export class Gates {
 
       // The task is stopped already: a comment that fails must not skip the
       // caller's clean-up of its worktree.
-      const why = await this.say(gate, comment).then(
-        () => null,
-        (error: unknown) => (error instanceof Error ? error.message : String(error)),
-      );
-      if (why !== null) await this.notOnGitHub(gate, task.subjectRef, 'why the task stopped was not said. The task is stopped all the same', why);
+      github = async () => {
+        const why = await this.say(gate, comment).then(
+          () => null,
+          (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        );
+        if (why !== null) await this.notOnGitHub(gate, task.subjectRef, 'why the task stopped was not said. The task is stopped all the same', why);
+      };
+      if (!record.deferGitHub) await github();
     }
 
     if (gate.threadId) {
@@ -1038,7 +1080,7 @@ export class Gates {
         payload: { gateId: gate.id },
       });
     }
-    return { answer, taskId: gate.taskId };
+    return { answer, taskId: gate.taskId, ...(record.deferGitHub && github ? { github } : {}) };
   }
 
   /**

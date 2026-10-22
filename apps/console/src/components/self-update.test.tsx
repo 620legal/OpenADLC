@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EngineUpdatesPanel, type EngineUpdatesView } from './engine-updates';
-import { SelfUpdate, SelfUpdateRow, selfUpdateSentence, updateNowRefusal, wouldTakeText, type SelfUpdateView } from './self-update';
+import { cloudSteps, SelfUpdate, SelfUpdateRow, selfUpdateSentence, updateNowRefusal, wouldTakeText, type SelfUpdateView } from './self-update';
 
 /**
  * OpenADLC's own row in Settings → System: the commit in use, the release an
@@ -108,6 +108,64 @@ describe('the OpenADLC row', () => {
     const list = html.slice(html.indexOf('<ul'), html.indexOf('</ul>'));
     expect(list.indexOf('OpenADLC')).toBeGreaterThan(-1);
     expect(list.indexOf('OpenADLC')).toBeLessThan(list.indexOf('GitHub CLI'));
+  });
+});
+
+describe('the OpenADLC row on a cloud install', () => {
+  const CLOUD: SelfUpdateView = {
+    ...VIEW,
+    backend: 'cloud',
+    candidate: { tag: 'v0.2.0', sha: 'b'.repeat(40), publishedAt: '2026-10-20T12:00:00.000Z', newest: 'v0.3.0' },
+    candidateReason: 'takes the next release, v0.2.0, not v0.3.0',
+  };
+
+  it('is the same row: the release in use, the next one it takes and why not the newest, the schedule and Update now', () => {
+    const row = text(CLOUD);
+    expect(row).toContain('a1b2c3d (v0.1.0), Oct 18, 09:12');
+    expect(row).toContain('would take v0.2.0, published Oct 20, 12:00: it takes the next release, not v0.3.0, one at a time');
+    expect(row).toContain('next Oct 25, 18:00');
+    expect(row).toContain('Every release tagged on 620legal/OpenADLC is rolled out here, one at a time, at the next scheduled run, without anyone pressing anything.');
+    // A release carries no bots' image: the host builds its own.
+    expect(row).toContain('image is not part of a release: it holds Claude Code, which a release may not redistribute, so it is built on the host and kept current by the engine updates below.');
+    const html = renderToStaticMarkup(<ul><SelfUpdateRow view={CLOUD} busy={null} error={null} onUpdate={() => undefined} onSchedule={() => undefined} /></ul>);
+    expect(html).toMatch(/<button[^>]*aria-label="Update OpenADLC now"(?![^>]*disabled)/);
+    expect(html).toContain('aria-label="When OpenADLC updates"');
+    expect(text({ ...CLOUD, candidate: null, candidateReason: 'on v0.3.0, the newest release' })).toContain('on v0.3.0, the newest release');
+  });
+
+  it('says self-update is off, and how to roll by hand', () => {
+    const off = { ...CLOUD, applicable: false, reason: 'self-update is off on this install (the cloud module’s self_update is false), so the bridge does not deploy its own services: roll it onto a release by hand with openadlc cloud update --release <tag>' };
+    expect(text(off)).toContain('roll it onto a release by hand with openadlc cloud update --release');
+    expect(updateNowRefusal(off)).toBe(off.reason);
+  });
+
+  it('names each step of a run as it goes: checking images, waiting, console, host, bridge', () => {
+    const steps = (running: NonNullable<SelfUpdateView['running']>) => cloudSteps(running).map((one) => `${one.name}:${one.state}`);
+    expect(steps({ ...RUN, phase: 'preparing' })).toEqual(['checking images:current', 'waiting:next', 'console:next', 'host:next', 'bridge:next']);
+    expect(steps({ ...RUN, phase: 'waiting' })).toEqual(['checking images:done', 'waiting:current', 'console:next', 'host:next', 'bridge:next']);
+    expect(steps({ ...RUN, phase: 'restarting', cloud: { step: 'host', rolled: ['console'] } })).toEqual(['checking images:done', 'waiting:done', 'console:done', 'host:current', 'bridge:next']);
+
+    const html = renderToStaticMarkup(<ul><SelfUpdateRow view={{ ...CLOUD, running: { ...RUN, phase: 'restarting', cloud: { step: 'bridge', rolled: ['console', 'host'] } } }} busy={null} error={null} /></ul>);
+    expect(html).toMatch(/<li aria-current="step"[^>]*>· bridge<\/li>/);
+    expect(html).toContain('>· host ✓</li>');
+    expect(selfUpdateSentence({ ...CLOUD, running: { ...RUN, phase: 'preparing' } }).text).toBe(
+      "Checking v0.2.0's images: each resolved to its digest at the registry and its attestation checked, while the install goes on as it is.",
+    );
+    expect(selfUpdateSentence({ ...CLOUD, running: { ...RUN, phase: 'waiting', waitingFor: [{ id: 't1', bot: 'builder', subjectRef: 'openadlc#12', kind: 'build' }] } }).text).toBe(
+      "v0.2.0's images check out, and it rolls once this task ends: builder on openadlc#12. No new task starts meanwhile.",
+    );
+    expect(selfUpdateSentence({ ...CLOUD, running: { ...RUN, phase: 'restarting', cloud: { step: 'host', rolled: ['console'] } } }).text).toBe(
+      'Rolling v0.2.0: the console is on it, and hostd is restarting onto it; the bridge is last.',
+    );
+    // A checkout's row has no steps.
+    expect(renderToStaticMarkup(<ul><SelfUpdateRow view={{ ...VIEW, running: { ...RUN, phase: 'waiting' } }} busy={null} error={null} /></ul>)).not.toContain('Where the roll is');
+  });
+
+  it('says where a failed roll stopped', () => {
+    const last = { trigger: 'schedule' as const, actor: 'schedule', from: 'a'.repeat(40), to: 'b'.repeat(40), tag: 'v0.2.0', startedAt: 't', finishedAt: '2026-10-25T18:20:00.000Z' };
+    expect(selfUpdateSentence({ ...CLOUD, last: { ...last, state: 'failed', step: 'host', reason: 'hostd refused. The console runs v0.2.0; the host and the bridge are still on v0.1.0. To finish: openadlc cloud update --release v0.2.0' } }).text).toBe(
+      'Failed Oct 25, 18:20 at host: hostd refused. The console runs v0.2.0; the host and the bridge are still on v0.1.0. To finish: openadlc cloud update --release v0.2.0.',
+    );
   });
 });
 

@@ -692,6 +692,22 @@ describe('approving a plan change', () => {
     expect(client.removeLabel).toHaveBeenCalledWith('acme/openadlc', 78, 'needs-human');
   });
 
+  it('with deferGitHub, widens first and hands back the comment and needs-human for after the answer', async () => {
+    // A console Approve answers once the gate is claimed (`answerFromConsole`).
+    // The widen is the decision, and a failure there reopens the question.
+    const answered = await gates.answer({ gateId: 'gate-1', reply: '1', answeredBy: 'alexsmith', deferGitHub: true });
+
+    expect(answered).toMatchObject({ answer: 'Approve', taskId: 'task-1', github: expect.any(Function) });
+    expect(leases.widenPaths).toHaveBeenCalledWith('lease-1', ['apps/hostd/src/skill-runner.ts']);
+    expect(client.updateIssueBody).toHaveBeenCalled();
+    expect(client.comment).not.toHaveBeenCalled();
+    expect(client.removeLabel).not.toHaveBeenCalled();
+
+    await answered.github?.();
+    expect(String((client.comment.mock.calls[0] as unknown[])[2])).toContain('**alexsmith answered:** Approve');
+    expect(client.removeLabel).toHaveBeenCalledWith('acme/openadlc', 78, 'needs-human');
+  });
+
   it('writes the paths into the text a person vouched for, not a stranger’s later edit, and keeps that as the vouched text', async () => {
     // The author widened Expected paths after a maintainer took the issue up.
     store.vouched = { title: 'Do the thing', body: ISSUE_BODY, by: 'janedoe', at: '2026-10-01T10:00:00.000Z' };

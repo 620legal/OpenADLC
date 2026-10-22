@@ -132,7 +132,12 @@ The script runs the image once, as root and with no network, and reads
 LICENCE, COPYING and NOTICE files of every npm package in it, global ones,
 corepack's pnpm and an app's `node_modules` included; it says which package each
 engine CLI comes from. Nothing is added to the image. Run it again for every
-image you publish: each build can install different versions. Run against an
+image you publish: each build can install different versions. A release's
+`service` and `console` images are published this way: the release workflow
+runs the script on each image it built and adds its output, as one more
+layer, at `/usr/share/doc/openadlc/THIRD_PARTY_NOTICES`, so the list travels
+with the image (`docker run --rm --entrypoint cat <image>
+/usr/share/doc/openadlc/THIRD_PARTY_NOTICES` prints it). Run against an
 image that holds Claude Code, the list quotes its licence as the package ships
 it; that is a notice, not permission to pass the image on. An image you build
 and run yourself, and do not pass on, needs none of this.
@@ -2140,21 +2145,64 @@ there is none (checked against the release's SHA256SUMS; Cloud Shell's own
 to choose the version, or Homebrew installs it on a Mac), creates the
 project on a billing account if asked (`--billing-account`), turns on the two
 APIs Terraform needs before it can turn on the module's own (Cloud Resource
-Manager and Service Usage), builds the four
-images on Cloud Build ([`cloudbuild.yaml`](../infra/gcp/cloudbuild.yaml)), as a
-service account of the install's own that may push to the `openadlc`
-repository and read its own source bucket and nothing else, then runs
-`openadlc cloud configure`, `plan` and, when you say so, `apply`. It asks
-before anything that costs money or cannot be undone, and it is safe to run
-again. In a new Cloud Shell session it waits for you to click Authorize on
-Cloud Shell's prompt rather than sign you in again. `--skip-images` leaves out the build, `--plan-only` stops before the
-apply.
+Manager and Service Usage), builds the bot image on Cloud Build
+([`cloudbuild-bot.yaml`](../infra/gcp/cloudbuild-bot.yaml)), as a service
+account of the install's own that may push to the `openadlc` repository and
+read its own source bucket and nothing else, then runs `openadlc cloud
+configure`, `plan` and, when you say so, `apply`. It asks before anything that
+costs money or cannot be undone, and it is safe to run again. In a new Cloud
+Shell session it waits for you to click Authorize on Cloud Shell's prompt
+rather than sign you in again. It needs the GitHub CLI, signed in (it signs
+you in if not), to find the release's images and check them. `--skip-images`
+leaves out the build, `--plan-only` stops before the apply.
+
+**The images are a release's.** The bridge, hostd and the console run the
+newest [release](#releases)'s `service` and `console` images, which the
+release workflow built and attested on ghcr.io. `configure` lists the
+releases with `gh api`, takes the newest one an install may take, resolves
+each image's tag to a digest at ghcr.io's own API (with the anonymous token
+ghcr.io gives anyone for a public package, so no registry sign-in and no
+Docker), and checks each digest with `gh attestation verify` before it writes
+anything, against the bundles GitHub's attestations API gives for that digest
+and with no GitHub sign-in: the same signer, source and runner as a release's
+archive, and the run that made it the push of the tag. A release whose images do not check out is passed over for the
+one before it, and said. Cloud Run pulls only from Artifact Registry, so the
+module makes a remote repository mirroring `https://ghcr.io`,
+`<name_prefix>-ghcr` in the install's region, and the services and the host
+pull through it, by digest: `ghcr.io/620legal/openadlc/service@sha256:…` is
+`<region>-docker.pkg.dev/<project>/<name_prefix>-ghcr/620legal/openadlc/service@sha256:…`.
+A tag is never what is deployed. The bot image is the exception: it holds
+Claude Code, whose licence lets a person install it for their own use but not
+redistribute it, so a release holds none, and every install builds its own,
+as a laptop does; the host's weekly engine update rebuilds it there.
+
+`infra/gcp/install.sh --build` instead builds all four images from the
+checkout on Cloud Build ([`cloudbuild.yaml`](../infra/gcp/cloudbuild.yaml)),
+as it did before releases had images, and runs `openadlc cloud configure
+--build`, which names them: for a checkout that is not a release.
+
+The settings' images are what the services and the host are made with. From
+then on they run what the last update rolled: the two Cloud Run services
+ignore a change to their image after they are made, so an apply never puts
+the install back on the release it was made with, and hostd runs the image
+`/var/lib/fleet/hostd-image` names, which an update writes. When that file is
+empty, as the host makes it, or does not name this install's release image by
+digest (a crash while hostd wrote it, say), it runs the image hostd last
+started on and answered from, which the host records itself, and only then
+`hostd_image`. An update is self-update from Settings → System
+while `self_update` is on (the default), and `openadlc cloud update` by hand
+([Upgrading](#upgrading)). For it the module gives the bridge's account
+updating the two Cloud Run services (a role of the module's own, which cannot
+create or delete one), acting as their two service accounts, and read on the
+mirror, each on that resource alone ([security](security.md#what-self-update-on-a-cloud-install-grants)); `"self_update": false`
+in the settings and an apply take all three away.
 
 `configure` asks one question: who may open the console to set the install up,
 offered as the signed-in gcloud account — Enter confirms. Everything else is
 answered before it is asked: the project and region from the script's flags or
 gcloud's own configuration, the zone from the region, the images from the
-registry the script just pushed to, the first admins and operators from that
+newest release (the bot image from the registry the script just pushed it to,
+and all four from there with `--build`), the first admins and operators from that
 one IAP user, and the state bucket from the project id. The GitHub organization
 and App are deliberately not asked at all: the console's walkthrough collects
 the organization and creates the App once the install is up, and the bridge
@@ -2177,8 +2225,10 @@ console is unreachable on the new name until it is.
 
 By hand, it is:
 
-Build and push the images first. `configure` uses
-`<region>-docker.pkg.dev/<project>/openadlc/{bridge,hostd,console,bot}:latest`
+Build and push the bot image first, and with `--build` the other three too.
+`configure` uses `<region>-docker.pkg.dev/<project>/openadlc/bot:latest` for
+the bot, and with `--build`
+`<region>-docker.pkg.dev/<project>/openadlc/{bridge,hostd,console,bot}:latest`,
 as their names unless the settings already name others, and nothing creates that Artifact Registry repository for you:
 the module enables the API only during its apply, and Cloud Run needs the
 images before then. Cloud Run and the host run `linux/amd64` only, so build for
@@ -2191,17 +2241,19 @@ gcloud services enable artifactregistry.googleapis.com --project <project>
 gcloud artifacts repositories create openadlc --repository-format=docker --location=<region> --project <project>
 gcloud auth configure-docker <region>-docker.pkg.dev
 REGISTRY=<region>-docker.pkg.dev/<project>/openadlc
+DOCKER_DEFAULT_PLATFORM=linux/amd64 IMAGE="$REGISTRY/bot:latest" infra/local/build-bot-image.sh
+docker push "$REGISTRY/bot:latest"
+# only for --build:
 docker buildx build --platform linux/amd64 -f infra/local/Dockerfile.service \
   -t "$REGISTRY/bridge:latest" -t "$REGISTRY/hostd:latest" --push .
 docker buildx build --platform linux/amd64 -f infra/local/Dockerfile.console -t "$REGISTRY/console:latest" --push .
-DOCKER_DEFAULT_PLATFORM=linux/amd64 IMAGE="$REGISTRY/bot:latest" infra/local/build-bot-image.sh
-docker push "$REGISTRY/bot:latest"
 ```
 
 Then:
 
 ```bash
-openadlc cloud configure     # asks who may open the console; the rest defaults, or comes from flags (--project, --region, --domain, …)
+gh auth login                # gh lists the releases (not needed with --build)
+openadlc cloud configure     # asks who may open the console; the rest defaults, or comes from flags (--project, --region, --domain, --build, …)
 openadlc cloud plan          # read it before you apply it
 openadlc cloud apply
 openadlc cloud output        # the console IP and URL, and the exact webhook URL
@@ -2236,6 +2288,21 @@ the apply failed. The bridge rolls to a new revision in the same apply.
 The first apply that turns the instance's TLS requirement on leaves the bridge
 and the host without the database for the short while until both are back on
 the new settings; they reconnect by themselves.
+
+**An install made before release images.** The first apply after release
+images came in resets the host: it changes the host's cloud-init (hostd's
+image is chosen at each start now, from `/var/lib/fleet/hostd-image`), and the
+reset ends the tasks running there, so pause work first (Settings → Pause
+work). The same apply makes the mirror and the bridge's grants, and gives the
+bridge its `OPENADLC_CLOUD*`, `OPENADLC_RELEASE_*` and `OPENADLC_SELF_UPDATE`
+settings, which rolls it to a new revision on the image it already runs. The
+install still runs the images it was built with, and its first move onto a
+release is by hand, with `openadlc cloud update --release <tag>`
+([Upgrading](#upgrading)), which writes the file over IAP and restarts
+`fleet-hostd`. Self-update cannot make that move: it asks hostd to restart
+onto the release (`POST /internal/restart-onto-image`), which a hostd from
+before this does not have, so the bridge refuses and changes nothing. From
+then on self-update takes each next release.
 
 When `host_rollout` cannot be read back after the apply (an apply that ends in
 an error writes no outputs, and `terraform output` then prints a warning where
@@ -2496,6 +2563,14 @@ steps:
   # Both the bridge and the host migrate as they start: see Upgrading before a release that drops anything.
 ```
 
+A host whose `/var/lib/fleet/hostd-image` names a release image, because an
+update wrote it, runs that rather than `hostd_image`, and so does one whose
+`/var/lib/fleet/hostd-image.started` does: the host falls back to the image
+hostd last started on before `hostd_image`. Such a workflow removes both
+(`sudo rm -f /var/lib/fleet/hostd-image /var/lib/fleet/hostd-image.started`)
+before it restarts hostd, and turns `self_update` off, or the next
+self-update moves the install back onto a release.
+
 Moving an existing local install onto the cloud: stop the laptop's services,
 `openadlc backup` on the laptop, then restore the archive in the cloud
 console's walkthrough (its first step, "Start fresh or restore a backup"),
@@ -2599,14 +2674,22 @@ the one an install checks. `release-build.yml`:
    rebased pull request are, but have no run of `ci` on `main` of their own,
    so they are refused too;
 2. builds that commit (`pnpm install --frozen-lockfile`, `pnpm build`) with a
-   read-only token and no cache, and packs the built output;
-3. attests the archive with GitHub's artifact attestations, signed through
-   Sigstore's public instance since the repository is public, runs the check
-   below on it, reads the tag again to see it has not moved, and only then
-   publishes the release, which must come out immutable. `build` and
-   `publish` each refuse a re-run by anyone but the person `check` let
-   through, and `publish` asks `RELEASERS` again. One release runs at a time,
-   whatever the tag.
+   read-only token and no cache, and packs the built output; and, in a job of
+   its own with the same read-only token, builds the two images below from
+   the same commit, puts the licences of what each installs inside it, and
+   saves them as files;
+3. in a job that can write packages and nothing that signs, reads the images
+   in, reads the tag again to see it has not moved, refuses a tag that
+   already has a release, and pushes them to ghcr.io;
+4. attests the archive with GitHub's artifact attestations, signed through
+   Sigstore's public instance since the repository is public, and runs the
+   check below on it; attests each image the same way, by the digest the push
+   reported, and runs the check below on each, with `gh` signed in nowhere
+   as an install's is, once it has seen that anyone can pull it; reads the tag
+   again, and only then publishes the release, which must come out immutable.
+   Every job but `check` refuses a re-run by anyone but the person `check` let
+   through, and the two that push and sign ask `RELEASERS` again. One release
+   runs at a time, whatever the tag.
 
 A tag that is refused publishes nothing, and the run says why. Cutting one is
 in [development.md](development.md#cutting-a-release), and what the chain
@@ -2627,6 +2710,42 @@ and the command under [Checking a release](#checking-a-release) use the same.
 | `openadlc-release.json` | Inside the archive, one line naming what it was built from: `{"format":1,"tag":"v0.2.0","commit":"<40 hex>","tree":"<40 hex>"}`, the tagged commit and its tree |
 | `SHA256SUMS` | One line in `sha256sum`'s format: the archive's SHA-256 in lower-case hex, two spaces, and its name |
 | `openadlc-<tag>.tar.gz.sigstore.json` | The archive's build provenance attestation (SLSA provenance v1) as a Sigstore bundle; GitHub keeps the same attestation under the repository's attestations |
+
+Beside its files, a release publishes two container images, for an install
+that runs images rather than a checkout: [a cloud install](#installing-on-a-cloud)
+deploys them. They are not files of the release but packages of the
+repository on GitHub's container registry, named
+`ghcr.io/<owner>/<repository in lower case>/<image>` and tagged with the
+release's version tag and nothing else: no `latest`, nothing that moves. Each
+is built for linux/amd64, the one platform Cloud Run and the host run, from
+the tagged commit, by the same Dockerfiles an install would use, and its
+digest has a build provenance attestation (SLSA provenance v1) from
+the same workflow as the archive's, pushed to the registry beside it and kept
+under the repository's attestations. Each carries the licences of what it
+installs at `/usr/share/doc/openadlc/THIRD_PARTY_NOTICES`, read from the image
+as built by `infra/local/third-party-notices.sh`
+([Third-party notices](#third-party-notices-for-an-image-you-publish)). An
+install resolves the tag to a digest at the registry, checks the attestation
+of that digest as [below](#checking-a-release), and deploys the digest, never
+the tag.
+
+| Image | What it is |
+|---|---|
+| `ghcr.io/620legal/openadlc/service:<tag>` | The image the bridge and hostd both run, from `infra/local/Dockerfile.service`. Public |
+| `ghcr.io/620legal/openadlc/console:<tag>` | The console's image, from `infra/local/Dockerfile.console`. Public |
+
+There is no bot image in a release. The image each bot's container runs
+holds Claude Code, whose licence lets you install it for your own use, not
+redistribute it ([Third-party notices](#third-party-notices-for-an-image-you-publish)),
+so a release cannot publish one: every install builds its own with
+`infra/local/build-bot-image.sh`, as in [Building the bot image](#building-the-bot-image),
+and its weekly [engine update](#engine-updates) rebuilds it.
+
+The names are `releaseImageName` and `releaseImageRef` in
+`packages/shared/src/self-update.ts`, and the check is
+`imageAttestationCheckArgs` beside them; `tests/release-workflow.test.ts`
+runs the workflow's steps and checks they push, attest and check under those
+names, with that check.
 
 The built output serves any install whatever its path: the console's
 `.next/` was seen serving pages from a directory other than the one it was
@@ -2671,15 +2790,64 @@ whose `gh attestation verify --help` lists `--source-digest` and
 the fork's `release.yml` calls it rather than this repository's: put the
 fork's name in place of `620legal/OpenADLC` in both places.
 
+An image is checked by its digest, against the same signer, source and
+runner. Resolve the tag to a digest at the registry, fetch that digest's
+attestation bundles from GitHub, check the digest against them, and deploy
+the digest you checked:
+
+```bash
+tag=v0.2.0
+commit=$(git rev-parse "$tag^{commit}")
+for image in service console; do
+  digest=$(docker buildx imagetools inspect "ghcr.io/620legal/openadlc/$image:$tag" --format '{{json .Manifest}}' | jq -r .digest)
+  curl -fsS "https://api.github.com/repos/620legal/OpenADLC/attestations/sha256%3A${digest#sha256:}" \
+    | jq -c '.attestations[].bundle' > "$image.sigstore.jsonl"
+  gh attestation verify "oci://ghcr.io/620legal/openadlc/$image@$digest" \
+    --bundle "$image.sigstore.jsonl" \
+    --repo 620legal/OpenADLC \
+    --cert-identity "https://github.com/620legal/OpenADLC/.github/workflows/release-build.yml@refs/heads/main" \
+    --source-ref "refs/tags/$tag" \
+    --source-digest "$commit" \
+    --deny-self-hosted-runners \
+    --predicate-type https://slsa.dev/provenance/v1
+done
+```
+
+It passes only for the image at that digest which `release-build.yml`, as
+`main` had it, pushed and signed in the run for that tag's push onto that
+commit. Nothing in it signs in: both images are public, GitHub's
+attestations API answers a public repository's without a token, and with
+`--bundle` `gh` reads Sigstore's root of trust rather than the GitHub API, as
+for the archive. The API gives every attestation the digest has, one bundle
+a line in the file, and `gh` checks the one `--predicate-type` names. The
+same attestations are in the registry beside each image, where the release
+also pushed them. An install runs the same command with `--format json`, and
+also reads back that the run behind every attestation was the push of the
+tag (`buildTrigger` is `push`) started by `release.yml` at it
+(`buildConfigURI` is `https://github.com/620legal/OpenADLC/.github/workflows/release.yml@refs/tags/<tag>`),
+which `publish` checks too before the release exists, with `gh` signed in
+nowhere, as an install's is. GitHub allows 60 requests an hour without a token
+to an address, and both runners and Cloud Run share theirs, so a throttle
+there would stop a release after its images were pushed, or a cloud install's
+self-update at its check. So `publish` sends its job's token with the one
+request for the bundles, and the bridge sends the token it reads GitHub with
+(the automation account's); `gh` itself is given none in either. `openadlc
+cloud configure` and `cloud update` ask from the operator's own address,
+without one.
+
 ### How long releases are kept
 
 Every release is kept. Each is about 6 MB, most of it the console's `.next/`,
 and GitHub does not count release files against a repository's storage or
 bill for them, nor limit their downloads. The archive also passes from the
 build to the job that publishes it as a workflow artifact, kept for one day,
-which counts toward the repository's Actions storage for that day. A release
-cannot be changed once it is published; one that should not be taken is
-followed by a higher version, which every install takes over it.
+which counts toward the repository's Actions storage for that day, and so do
+the two images, which pass from `images` to `publish` as files the same way.
+Each image is kept as a version of its package, one a release, and GitHub
+does not charge for a public package's storage or downloads. A release cannot
+be changed once it is
+published; one that should not be taken is followed by a higher version,
+which every install takes over it.
 
 Anyone who can push to the repository can push a tag, and a tag push runs
 whatever `release.yml` the tagged commit has. What a person relies on is that
@@ -2706,6 +2874,10 @@ Only an admin can press Update now or change the schedule (`GET`, `POST` and
 owner tags is taken by every install that updates itself at its next run,
 within the week, with nobody there pressing anything; the row says so. Set it
 to *Only when I press Update* to choose when.
+
+What follows is an install that runs from a git checkout. A Google Cloud
+install updates from the same releases, by rolling their images instead:
+[Updating a cloud install](#updating-a-cloud-install).
 
 It takes only [releases](#releases): the newest version of the checkout's
 `origin` (as GitHub spells its name, which the certificate carries, whatever
@@ -2818,11 +2990,102 @@ Schedule or Manual choice, the day and the time, and leaves out the slot, the
 run in flight, the last result and the last look at the releases. Why it works
 this way is [ADR 0007](adr/0007-self-update-follows-verified-releases.md).
 
+### Updating a cloud install
+
+A Google Cloud install ([Installing on a cloud](#installing-on-a-cloud)) runs
+no checkout. Its bridge and console are Cloud Run services and hostd runs on
+the host, each from a release's image by digest, pulled through the install's
+mirror of ghcr.io. The cloud module tells the bridge so (`OPENADLC_CLOUD=gcp`,
+with the project, the region, the two services' names, the mirror and
+`OPENADLC_RELEASE_REPO`), and the same row in Settings → System updates it:
+the release in use, the release a run would take or why there is none, the
+schedule, Update now, the run in flight and the last result. A run is the one
+above up to the restart (the releases, the schedule, the wait for the tasks
+with new work held, the audit entries, the card in Needs you), except here:
+
+- **What is in use.** The release whose `service` image is the digest the
+  bridge's own Cloud Run revision runs, found by resolving each release's tag
+  at ghcr.io, and then checked: that digest's attestation must pass the check
+  below for that tag, or the release in use is not known. A bridge on any
+  other image, one built from a checkout with `--build` or one deployed by
+  tag, runs no release: the row says so, and it is moved onto one by hand with
+  `openadlc cloud update --release <tag>`.
+- **The next release, never a skip.** A cloud install takes the first release
+  above the one in use, whatever is newer. Its bridge and its host each
+  migrate the database as they start ([Upgrading](#upgrading)), so each
+  release has to run beside the one before it, and only that one. When the
+  newest is further ahead the row says it takes the next release, not the
+  newest, and the run after takes the one after. The next is counted over
+  every published version tag, so one it cannot take (not immutable, or
+  without its files) or whose images do not check out is not passed over, as
+  a checkout passes over a bad one: the install stays where it is, and the row
+  and the failure say why, until a person rolls it past that release by hand.
+- **Checking, in place of preparing.** For `service` and `console`, the tag is
+  resolved to a digest at ghcr.io with an anonymous pull token, taken from the
+  manifest's own bytes. The digest's attestations are read from GitHub's
+  attestations API (`GET /repos/<repo>/attestations/sha256:<digest>`), with
+  the automation account's token on that request alone, since Cloud Run's
+  egress shares Google's addresses and GitHub allows 60 requests an hour
+  without one to an address (one GitHub refuses is dropped for an anonymous
+  ask); written one bundle a line
+  to a file under `$OPENADLC_HOME/self-update/<tag>/`, and checked with `gh
+  attestation verify oci://ghcr.io/620legal/openadlc/<image>@<digest> --bundle
+  <that file>` and the flags of [Checking a release](#checking-a-release),
+  with `--format json` read back as for the archive. gh runs with no GitHub
+  credential and an empty config of its own; `--bundle-from-oci` would have
+  needed a sign-in. Nothing rolls unless both check out,
+  and only the digest is ever deployed, as
+  `<mirror>/620legal/openadlc/<image>@<digest>`, never the tag. The bridge's
+  image carries the GitHub CLI for this (`infra/local/Dockerfile.service`).
+- **The roll, once no task runs.** First it reads what the console, the bridge
+  and hostd run, and asks hostd whether a task is running or starting on the
+  host (a task paused on a person is not); if one is, or any of it cannot be
+  read, it stops with nothing changed. (a) The console's Cloud Run service,
+  read as it is and sent back with only its image changed, naming the
+  revision template as the one field it sets, and with its etag, so a
+  change made meanwhile refuses the update; the run waits until the new
+  revision is ready and takes the traffic. A revision that fails is noticed
+  from the service's Ready condition, not waited out. (b) hostd, asked to
+  restart onto the `service` digest (`POST /internal/restart-onto-image`, with
+  the install's secret): it refuses while a task runs, takes only
+  `<mirror>/<repository>/service@sha256:…`, writes it to
+  `/var/lib/fleet/hostd-image`, flushed, answers, and exits with code 75; the
+  host's `fleet-hostd` unit pulls and starts the image the file names, or its
+  own `hostd_image` when the file is missing or malformed, and tells hostd
+  which as `OPENADLC_HOSTD_IMAGE`. The run waits up to half an hour for a
+  hostd that started since to report the new image. On a fresh install the
+  host runs `hostd_image` by tag, which is what it would go back to. (c) The
+  bridge's own service, last. The run is written down first, since this
+  bridge is replaced: the bridge that comes up on the release records the
+  result and the audit entry, from that record and the image it runs, once
+  its own revision serves; the one it replaced holds new work until it goes,
+  or records the failure if the new revision never serves. The two services
+  ignore later changes to their image, so an `openadlc cloud apply` does not
+  put back what a roll deployed.
+- **Where it stops.** A failure before (a) changes nothing, and says so. A
+  service whose new revision fails is put back on the image it ran, so the
+  install is as it was and the next run sends a real update. A failure after
+  a step records which parts run the release and which do not, `openadlc cloud
+  update --release <tag>` to finish, and the image each rolled part ran
+  before, with how to put it back. A bridge that restarts partway through a
+  roll waits for the tasks again and goes on from the part it had reached,
+  rolling none twice.
+- **The bots' image is not a release's.** It holds Claude Code, which a release
+  may not redistribute, so the host builds its own and the weekly
+  [engine update](#engine-updates) keeps it current, as on any install; the row
+  says so.
+- **Turning it off.** `self_update = false` in the cloud module sets
+  `OPENADLC_SELF_UPDATE=off` and gives the bridge none of the rights a roll
+  needs. The row then says self-update is off, and that `openadlc cloud update
+  --release <tag>` rolls the install by hand. What the bridge holds while it is
+  on is in [security.md](security.md#what-self-update-on-a-cloud-install-grants).
+
 ## Upgrading
 
 An install that runs from a git checkout of `main` updates itself from
-releases ([Updating OpenADLC](#updating-openadlc)). By hand, or on any other
-install, it is the steps below.
+releases ([Updating OpenADLC](#updating-openadlc)), and so does a cloud
+install that runs release images, below. By hand, or on any other install, it
+is the steps below.
 
 An install made before the rename to OpenADLC (its state in `~/.fleet`, its
 command `fleet`): follow [upgrading-from-fleet.md](upgrading-from-fleet.md)
@@ -2877,3 +3140,75 @@ something is safe only when no release still running reads it. The first is
 that no longer reads or writes that column runs on both the bridge and the host. Skipping straight to it from an older release leaves one side
 failing every query that names the column until it is replaced. `openadlc up` on one
 machine restarts everything together and needs nothing extra.
+
+A cloud install that runs release images ([installing on a
+cloud](#installing-on-a-cloud)) updates itself from Settings → System's
+OpenADLC row while the module's `self_update` is on, which is the default: it
+takes the next release, checks its images, and rolls the console, then hostd,
+then the bridge. With `"self_update": false` in the settings, and always for
+the first move of an install made before releases had images (its hostd has
+no way yet to be told to restart onto a release, so self-update refuses and
+changes nothing), the same rollout runs from a machine with the install's
+settings:
+
+```bash
+git pull && pnpm install && pnpm build # this checkout's CLI and module, as the release has them
+gh auth login                          # the CLI lists the releases with gh
+openadlc cloud apply                   # the first move only: the mirror, and a host that reads the image file
+# Settings → Pause work, and wait for the running tasks to end
+openadlc cloud update                  # the release after the one the bridge runs
+openadlc cloud update --release v0.3.0 # or a release by name: the same one again, never an older one
+# Settings → Resume work
+```
+
+It reads which release the install runs from the bridge's serving revision,
+whose image is a release's `service` image by digest, and takes the next one,
+counted over every published version tag as self-update counts it, never a
+later one: when the next one cannot be taken (not immutable, or without its
+files) or its images do not check out it stops with nothing rolled rather
+than skip it, since the skipped release's migrations would run under code
+that never had them. An install whose bridge runs images
+built with `--build` names its first release with `--release`: the one after
+the commit it was built from. It checks the release's `service` and `console`
+images as `configure` does, asks, then:
+
+1. updates the console's Cloud Run service onto the console image
+   (`gcloud run services update <prefix>-console --image <digest>`);
+2. on the host, over IAP (`gcloud compute ssh <host> --tunnel-through-iap`,
+   which needs OS Login's admin role, as Owner has), pulls the service image,
+   so a pull that fails changes nothing, then writes
+   `/var/lib/fleet/hostd-image` and restarts `fleet-hostd`, whose unit
+   migrates and starts hostd on it, and checks hostd answered on it;
+   restarting hostd ends the tasks running there, so pause work first
+   (Settings → Pause work);
+3. updates the bridge's service onto the service image, last.
+
+Before the first of them it checks the mirror is there and the host's
+cloud-init knows the file, and stops with nothing rolled when either is
+missing: `openadlc cloud apply` makes both. It also reads what the console's
+serving revision runs and the image hostd last started on, and leaves a part
+already on the release as it is, so hostd is restarted, and its tasks ended,
+only when it is not on it yet. What it rolled it writes back into the
+settings (`console_image`, `hostd_image`, `bridge_image`) and saves them to
+the bucket, so a service made again, or `configure` run again, starts from
+the release in use; the next `openadlc cloud apply` then resets the host once,
+since `hostd_image` is in its cloud-init, and it comes back on the same
+image.
+
+A roll from Settings → System moves the same three without this machine.
+`openadlc cloud plan` and `apply` read the images the install runs into the
+settings before Terraform runs, and say so: each service's serving revision,
+and, when those show a roll the settings have not seen, the image hostd last
+started on over IAP. Only a release image by digest is written. When the host
+cannot be read, the note says so and `hostd_image` stays what it was: a host
+made again (a new disk has no record of what hostd ran) would then start on
+that older release, under a database newer ones have migrated, until
+`openadlc cloud update --release <tag>` moves it.
+
+The bot image is left alone: it is no release's, and the host's weekly engine
+update rebuilds it. A roll that stops partway says which parts run which
+release, prints the commands that are left, and the image each rolled part ran
+before with the command that puts it back; running `openadlc cloud update`
+again finishes the same release, because the bridge, which it reads the
+release from, is rolled last. One release at a time: when several are out, run
+it once for each.

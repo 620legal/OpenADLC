@@ -18,6 +18,7 @@ import {
   releaseForRepo,
   releaseIdleForIssue,
   releaseIfIdle,
+  releaseUnlessWorkedUnder,
   settlePausedLeases,
   widenPaths,
 } from './leases.js';
@@ -376,6 +377,24 @@ describe('letting an idle lease go', () => {
 
     vi.mocked(queryOne).mockResolvedValueOnce(null);
     expect(await releaseIfIdle('lease-1')).toBe(false);
+  });
+});
+
+describe('the lease a person’s Stop lets go', () => {
+  it('is released whatever holds it, paused or with a pull request, only while no task works under it', async () => {
+    // Stop lets it go once hostd has ended the session; a Try again in
+    // between reuses the lease, and a release by id let it go under that.
+    vi.mocked(queryOne).mockResolvedValueOnce({ id: 'lease-1' });
+    expect(await releaseUnlessWorkedUnder('lease-1')).toBe(true);
+    const [sql, params] = vi.mocked(queryOne).mock.calls[0] ?? [];
+    const text = String(sql).replace(/\s+/g, ' ');
+    expect(text).toContain("where id = $1 and state in ('leased','in_task','paused') and not exists");
+    expect(text).not.toContain('pr_number');
+    expect(text).toContain("not exists (select 1 from tasks t where t.lease_id = $1 and t.state in ('queued','running','paused'))");
+    expect(params).toEqual(['lease-1']);
+
+    vi.mocked(queryOne).mockResolvedValueOnce(null);
+    expect(await releaseUnlessWorkedUnder('lease-1')).toBe(false);
   });
 });
 

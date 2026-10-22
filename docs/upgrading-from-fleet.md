@@ -88,7 +88,9 @@ before applying. Roll the release out with work paused, as the last rename
 did, because the bridge and the host refuse each other's old headers until
 both run it: press **Settings → Pause work**, wait for running tasks as
 above, update the bridge's and the console's Cloud Run services to the new
-release's images, `docker pull` the new bot image on the host, and restart
+release's images, rebuild the bot image and `docker pull` it on the host (a
+release carries none: it holds Claude Code, so each install builds its own,
+on Cloud Build with `infra/gcp/cloudbuild-bot.yaml`), and restart
 the host's hostd unit — still named `fleet-hostd`, on purpose
 (`gcloud compute ssh <host> --tunnel-through-iap -- sudo systemctl restart fleet-hostd`).
 Then press **Resume work**. [Deploying from GitHub
@@ -244,9 +246,11 @@ update the bridge's and the console's Cloud Run services to the new release's
 images, and restart the host's `fleet-hostd` service, which pulls its new
 image as it starts
 (`gcloud compute ssh <host> --tunnel-through-iap -- sudo systemctl restart fleet-hostd`).
-Before that restart, `docker pull` the new release's bot image on the host as
-well: a restart does not pull it once the host has one, and a bot image built
-before the rename installs packages with the old header. Then press **Resume
+Before that restart, rebuild the bot image from the new release's checkout and
+`docker pull` it on the host as well (a release carries no bot image: each
+install builds its own, on Cloud Build with `infra/gcp/cloudbuild-bot.yaml`):
+a restart does not pull it once the host has one, and a bot image built before
+the rename installs packages with the old header. Then press **Resume
 work**. [Deploying from GitHub
 Actions](self-hosting.md#deploying-from-github-actions) has the commands for
 the services and the restart.

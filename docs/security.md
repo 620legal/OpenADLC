@@ -1343,28 +1343,60 @@ them. Nothing runs for a pull request.
 
 **What each job holds.** Both workflows grant nothing by default; `release.yml`
 hands the reusable workflow at most `contents: write`, `actions: read`,
-`id-token: write` and `attestations: write`, and each of its jobs takes less.
-The job that checks reads the contents and the Actions runs. The job that
-builds runs the tagged commit's `pnpm install --frozen-lockfile` and `pnpm
-build`, and so its dependencies' install scripts, with a token that reads the
-contents and nothing more, and nothing that can sign; it installs from the
-registry against the lockfile's hashes, with no cache another run could have
-written. Only the job that publishes holds `contents: write`, `id-token:
-write` and `attestations: write`, and it runs nothing from the repository and
-nothing the build made: it checks the archive against the build's SHA-256,
-attests it, runs the same `gh attestation verify` an install runs, reads the
-tag again from GitHub to see it is still on the checked commit, and creates
-the release. A release that does not come out immutable is deleted again and
-the run fails: the workflow's token cannot read the repository's
-immutable-releases setting (that takes administration access), but it can
-read whether the release it made is immutable. `ci.yml`, which runs for every
-pull request, a fork's among them, keeps `contents: read` and grants no job
-anything of its own. `tests/release-workflow.test.ts` fails if any of this
-changes: if `release.yml` does anything but call `release-build.yml@main`, if
-the job that signs runs any program but the few it needs, or if any workflow
-has no permissions block or writes what it is not listed for. Every action is
-named by its commit ([action-pins.test.ts](../tests/action-pins.test.ts)),
-except that one call to `main`.
+`id-token: write`, `attestations: write` and `packages: write`, and each of
+its jobs takes less. The job that checks reads the contents and the Actions
+runs. The job that builds runs the tagged commit's `pnpm install
+--frozen-lockfile` and `pnpm build`, and so its dependencies' install scripts,
+with a token that reads the contents and nothing more, and nothing that can
+sign; it installs from the registry against the lockfile's hashes, with no
+cache another run could have written. The job that builds the images runs the
+tagged commit's two Dockerfiles, and `third-party-notices.sh` on what they
+built, with the same read-only token, and hands the images on as files.
+Neither can push a package or sign.
+
+Reading those files in is docker's daemon, as root, unpacking a gigabyte or
+so of tar that a job running third-party install code made, so it happens in
+a job of its own, `push`, which holds only what any branch's workflow could
+ask for: reading the contents and writing packages. It checks the files
+against the build's SHA-256, reads each into docker as data, checks each holds
+the one image its name says, reads the tag again from GitHub, refuses a tag
+that already has a release (so re-running `push` alone after a release cannot
+push over its images), and pushes the two under their names and the tag
+alone, handing on only the digests. Only the job that publishes holds
+`contents: write`, `id-token: write`, `attestations: write` and
+`packages: write` (to push the attestations beside the images), and it runs
+nothing from the repository and nothing the builds made, and never reads the
+images' files: it checks the archive against the build's SHA-256, attests it,
+runs the same `gh attestation verify` an install runs, takes the two digests
+only in the form a digest has, attests each, signs out of the registry,
+checks each image can be pulled without signing in and its attestation
+checked by a `gh` with no token or login, as an install does (the job's token
+goes only with the request for the bundles, against the API's limit for
+shared runner addresses), reads the tag again, and creates the release.
+A release that does not come out immutable is deleted again and the run
+fails: the workflow's token cannot read the repository's immutable-releases
+setting (that takes administration access), but it can read whether the
+release it made is immutable. `ci.yml`, which runs for every pull request, a
+fork's among them, keeps `contents: read` and grants no job anything of its
+own. `tests/release-workflow.test.ts` fails if any of this changes: if
+`release.yml` does anything but call `release-build.yml@main`; if `push` or
+`publish` uses an action but the two they need, names a shell, sets an
+environment that runs a file first, writes the next steps' `PATH` or
+environment, copies anywhere but into `out/`, or runs any program but the few
+they need (docker only to load, inspect, sign in and push, gh only to read
+GitHub's API, check an attestation and make the release); if any job but
+those two can push a package; or if any workflow has no permissions block or
+writes what it is not listed for. Every action is named by its commit
+([action-pins.test.ts](../tests/action-pins.test.ts)), except that one call
+to `main`, and the console image's base by its digest.
+
+**What pushing packages can do.** An account or workflow that can write the
+repository's packages can retag or delete the images, and so keep a cloud
+install from updating, but it cannot make one run anything else: an install
+deploys an image only by a digest whose attestation names this repository's
+`release-build.yml` at `main`, the tag's push through `release.yml`, and the
+release's own commit (`--source-digest`), and an image built anywhere else
+has no such attestation.
 
 **What a check proves.** `gh attestation verify` with the flags in
 [Checking a release](self-hosting.md#checking-a-release) passes only for the
@@ -1457,6 +1489,86 @@ bridge's log and a card, only from its standard error, and only after
 or `password=` value. The `openadlc up` the restart runs does not print its
 console sign-in link, which works for an hour, since its output goes to
 `run/self-update.log`.
+
+### What self-update on a cloud install grants
+
+A Google Cloud install runs a release's `service` and `console` images, by
+digest through the module's mirror of ghcr.io, each taken only after `gh
+attestation verify` has checked it with no GitHub sign-in, against the
+bundles GitHub's attestations API gives for that digest
+([self-hosting](self-hosting.md#installing-on-a-cloud)). To roll one out
+itself, the bridge's service account holds, while the module's
+`self_update` is on (the default), and each on that resource alone:
+
+- a role of the module's own on the two Cloud Run services, the bridge's and
+  the console's: `run.services.get` and `run.services.update`, and reading
+  revisions and operations. Not `run.developer`, which also deletes a
+  service. Updating a service is still more than its image: it can change
+  the revision's environment, its secrets, its scaling and its ingress, and
+  ingress set to all would answer on the services' `run.app` URLs with no
+  IAP in front of them. The bridge's own updates name `template`, the
+  revision template, as the one field they set (an update mask, which the API
+  leaves optional), and the role leaves out
+  `run.services.setIamPolicy`, which changing either service's
+  `invoker_iam_disabled` takes; that an update leaving it as it is needs no
+  more is [U89](unverified.md#open);
+- `iam.serviceAccountUser` on the bridge's and the console's accounts,
+  without which Cloud Run refuses the update. With it the bridge can also run
+  the console as the bridge's own account, which reads every secret and the
+  database;
+- read on the mirror.
+
+It reads its two services (`roles/run.viewer`) whether self-update is on or
+not, to tell which release it runs. The bridge already held every secret and
+the database, so a bridge taken over could do as much harm without any of
+this; what it adds is the console, which everyone IAP admits trusts, and
+those settings of both services. `"self_update": false` and an apply take
+all three away, and the install is then updated by hand with `openadlc cloud
+update`, from a machine with its settings.
+
+An apply no longer puts a rolled image back: both services ignore a change
+to their image once they are made, so that an apply never moves an install
+back onto the release it was made with. So after a bridge that was taken
+over, the way back is `openadlc cloud update --release <the release it
+should run>`, the one it runs again included, which checks that release's
+images and puts each part not running them back onto them. That is the
+images only: what else of either service was changed (its environment, its
+ingress) is read with `gcloud run services describe` and put back by hand.
+Then rotate what the bridge held.
+
+It also asks hostd, with the install's internal secret, to restart onto a new
+image, and so to run it on the host as hostd, with the Docker socket. hostd
+takes only exactly `<mirror>/<repository>/service@sha256:…`, and only while no
+task runs or starts there; the host's unit refuses a file not of that form.
+
+That is a lot to hand a process that parses webhooks from the internet.
+Whoever took over the bridge could already read what it reads; with this they
+could also put code of their choosing on the two services and the host, as
+those accounts, and keep it there past a restart. What holds the bridge to
+releases is its own code, not the grant:
+
+- it deploys only a digest it resolved from a release's tag at ghcr.io itself
+  and checked with `gh attestation verify` exactly as an archive is checked
+  ([What a check proves](#releases)): signed by `release-build.yml@main`, for
+  that tag and its commit, on a GitHub-hosted runner, in the run for the tag's
+  push. The bundles come from GitHub's attestations API, read with the
+  bridge's own GitHub token on that request alone (Cloud Run shares its
+  addresses, and an anonymous limit with them), and count only as far as gh
+  verifies them against Sigstore's root; gh runs with no GitHub credential and
+  an empty config. The bridge's image has
+  that gh from GitHub's apt repository, whose key the build checks against
+  the fingerprints cli/cli publishes, on a base pinned by digest;
+- only the next release after the one the bridge runs, never one further, and
+  never a tag or a digest a response named. Which release it runs is itself
+  checked: the registry's word that the bridge's digest is a release's tag
+  counts only once that digest passes the same check for that tag, and a next
+  release that cannot be taken stops the install rather than being skipped;
+- only for an admin's Update now or the schedule an admin set, each run in the
+  audit log, and hostd's restart there too.
+
+A bridge that is no longer running OpenADLC's code is held only by the grant:
+to those two services, those two accounts and the mirror, and through hostd to
+the host.
 
 ## Who OpenADLC acts for
 

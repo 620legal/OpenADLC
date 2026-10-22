@@ -678,25 +678,32 @@ function NowCard({
  * the card away. The crew list is read again on the page's next refresh.
  */
 function FailedTaskControls({ taskId, canStop = true }: { taskId: string; canStop?: boolean }) {
-  const [pending, startTransition] = useTransition();
+  // Set at once and cleared by the answer, as a Needs-you card's: a
+  // transition's pending let a quick second press through, and stayed set
+  // until the page had been read again.
   const [doing, setDoing] = useState<'retry' | 'stop' | null>(null);
+  const pressing = useRef(false);
+  const pending = doing !== null;
   const [said, setSaid] = useState<{ tone: 'error' | 'done'; text: string } | null>(null);
   const act = (which: 'retry' | 'stop') => {
+    if (pressing.current) return;
+    pressing.current = true;
     setDoing(which);
     setSaid(null);
-    startTransition(async () => {
-      if (which === 'retry') {
-        const result = await safeAction(() => retryTask(taskId));
-        setSaid(result.ok ? { tone: 'done', text: 'Started again.' } : { tone: 'error', text: result.error ?? 'that did not go through' });
-        return;
+    void (async () => {
+      try {
+        if (which === 'retry') {
+          const result = await safeAction(() => retryTask(taskId));
+          setSaid(result.ok ? { tone: 'done', text: 'Starting it again.' } : { tone: 'error', text: result.error ?? 'that did not go through' });
+          return;
+        }
+        const result = await safeAction(() => stopTask(taskId));
+        setSaid(result.ok ? { tone: 'done', text: 'Stopped.' } : { tone: 'error', text: result.error ?? 'that did not go through' });
+      } finally {
+        pressing.current = false;
+        setDoing(null);
       }
-      const result = await safeAction(() => stopTask(taskId));
-      setSaid(
-        result.ok
-          ? { tone: 'done', text: result.releasedLease ? 'Stopped, and its lease let go.' : 'Stopped.' }
-          : { tone: 'error', text: result.error ?? 'that did not go through' },
-      );
-    });
+    })();
   };
   return (
     <div className="flex flex-wrap items-center gap-2 pt-0.5">

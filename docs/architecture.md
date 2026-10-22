@@ -623,6 +623,33 @@ back. A crew account that moves a stage label back is put back.
   merges two items (`POST /v1/items/:subject/merge`); each is audited
   (`item.linked`, `item.unlinked`, `item.merged`), and no automatic pass
   moves a link a person made.
+- **Console actions answer once the decision is recorded.** A button's route
+  answers as soon as what it decided is in the database, and does GitHub's and
+  hostd's part after (`Afterwards`, `apps/bridge/src/api.ts`). An answer is
+  taken once its question is claimed and in the thread; its comment and
+  `needs-human` follow on GitHub, then the task resumes, in that order, since
+  a resumed session reads the answer from the issue. Stop writes the task
+  stopped, closes its questions and audits it, then hostd ends the session,
+  then the lease goes, in one statement that refuses while a task works
+  under it (a Try again may have taken it up meanwhile), and the label comes
+  off. A cancel hostd does not take keeps the lease and says so in the
+  thread; hostd ends the session once it sees the task has ended, and a Stop
+  sent again asks it again. Try again answers once the new task's
+  row exists, before its context is read and hostd starts it; a build's lease
+  is marked in a task, and a continued build's one retry claimed, first. Pause's
+  labels stay before the answer, because the label is the hold; turning
+  auto-merge off and, on Resume, starting what the hold kept back come
+  after. Refusals (a gate already answered by someone else, a task still
+  working, a busy seat, a closed subject) are still made first. A
+  failure after the answer is said on the work's thread and logged; a
+  shutdown waits for what is still running, and what a crash cuts off is
+  picked up as before: the sweep of answered tasks, hostd's observer, and for
+  a lease the idle-lease check, or the reconciler for one paused on a
+  question; a lease with an open pull request stays while it is open. The
+  same answer pressed twice, or Stop on a task a person has already stopped,
+  changes nothing; a second Try again is refused as already running. The console shows a pressed button busy at once,
+  ignores another press while it waits, and changes the card from the
+  route's answer, before the page is read again.
 - **The scheduler** runs the rest on timers: the budget, the review-gate sweep,
   the merge line, stalled stages, credentials, engine updates, nightly QA.
 - **Health checks** (`apps/bridge/src/health/`) prove what a person was asked to

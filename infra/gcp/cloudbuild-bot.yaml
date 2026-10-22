@@ -1,0 +1,25 @@
+# The bot image alone, for an install that runs a release's images
+# (`openadlc cloud configure` without --build). A release publishes no bot
+# image: it holds Claude Code, whose licence lets a person install it for their
+# own use but not redistribute it, so every install builds its own, as a
+# laptop does. infra/gcp/install.sh submits it the way it submits
+# cloudbuild.yaml, whose `bot` step this is; tests/cloud-build.test.ts holds
+# the two to the same step.
+steps:
+  - id: bot
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    # It builds with Docker's own builder and then runs the image to check the
+    # pinned engine CLIs are in it, as it does on a laptop.
+    args: ['infra/local/build-bot-image.sh']
+    env: ['IMAGE=${_REGISTRY}/bot:${_TAG}']
+images:
+  - '${_REGISTRY}/bot:${_TAG}'
+substitutions:
+  _TAG: latest
+options:
+  machineType: E2_HIGHCPU_8
+  # The build runs as a service account of the install's own (install.sh makes
+  # it), and Cloud Build then needs to be told where its logs go.
+  logging: CLOUD_LOGGING_ONLY
+timeout: 3600s

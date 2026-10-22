@@ -116,9 +116,14 @@ press besides **Try again**, and the reason as it arrived behind **Details**
 (`apps/bridge/src/failure-words.ts`).
 
 **Stop**, beside **Try again** on the card and in the bot's thread, ends the
-work for good instead: hostd's cancel ends whatever is left of its session,
-the task's lease is released, the stop is audited (`task.stopped`), and the
-card goes (`POST /v1/tasks/:id/stop`). **Stop** works on a task waiting on a
+work for good instead: the task is recorded stopped, the stop is audited
+(`task.stopped`), and the card goes (`POST /v1/tasks/:id/stop`); then hostd's
+cancel ends whatever is left of its session and the task's lease is released.
+If hostd does not answer, the thread says so and the lease is kept, since
+what the session had not pushed is kept only as it ends; hostd ends it on its
+own once it sees the task has ended. The idle-lease check then lets the lease
+go (the reconciler, for a task that was waiting on a question; a lease with an
+open pull request stays while it is open). **Stop** works on a task waiting on a
 question too: its question is closed unanswered and leaves Needs you, the
 bot is not resumed (an answer already on its way when the stop lands resumes
 nothing), and `needs-human` comes off its issue or pull request as an answer

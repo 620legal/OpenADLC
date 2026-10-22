@@ -1,7 +1,8 @@
 import { repos, tasks, threads, type Role } from '@openadlc/db';
-import { botAtStart, botInWords, type Bot, type Message } from '@openadlc/shared';
+import { botAtStart, botInWords, resolveAnswer, type Bot, type Message } from '@openadlc/shared';
 import type { Actors } from './actors.js';
-import type { Gates } from './gates.js';
+import type { Afterwards } from './api.js';
+import type { GateChannel, Gates } from './gates.js';
 import { HttpFailure } from './router.js';
 import type { TaskService } from './task-service.js';
 import { consoleMessageBody, gateToAnswer } from './thread-view.js';
@@ -30,7 +31,7 @@ import { parseRef } from './work.js';
  * message reaches GitHub, or is refused, the same way from either.
  */
 export async function sendThreadMessage(
-  deps: { actors: Actors; gates: Gates; taskService: TaskService },
+  deps: { actors: Actors; gates: Gates; taskService: TaskService; afterwards?: Afterwards },
   input: {
     bot: Bot;
     subject: string | null;
@@ -53,18 +54,13 @@ export async function sendThreadMessage(
   const gate = gateToAnswer(withTasks, bot.id, subject);
 
   if (gate) {
-    const answered = await deps.gates.answer({
+    const answered = await answerFromConsole(deps, {
       gateId: gate.id,
       reply: input.text,
       answeredBy: identity,
       role: input.role,
       via: 'thread',
     });
-    if (answered.taskId) {
-      await deps.taskService.resume(answered.taskId).catch((error) => {
-        console.warn(`[bridge] resume after answer failed: ${error.message}`);
-      });
-    }
     return { answered: true, answer: answered.answer };
   }
 
@@ -128,4 +124,63 @@ function refusedWords(error: unknown, bot: Bot, where: string): string {
   }
   if (typeof status !== 'number') return `GitHub did not answer (${said}), so it was not sent. Try again in a minute`;
   return `GitHub did not take it (${said}). Try again`;
+}
+
+/**
+ * A person's answer to a question from the console — a card, a work item, a
+ * bot's panel — answered once the question is claimed.
+ *
+ * With `afterwards`, what is left is done after the answer, in this order: the
+ * answer's GitHub writes (`deferGitHub` on `Gates.answer`), then the resume,
+ * since a resumed session reads the answer from the issue. A resume hostd
+ * refuses fails the task with why, on its card and in its thread
+ * (`TaskService.resume`); one that never ran is owed by the answer, which the
+ * sweep of answered tasks reads (`resumeAnswered`). Without it, as before,
+ * all of it is done first.
+ *
+ * The same answer from the same person to a question it already answered is
+ * that answer again — a second press, a second tab — and changes nothing.
+ * Anybody else's, or other words, is refused as a question already answered.
+ *
+ * `ended` is an answer that stopped its task — a refused plan change, a hand
+ * off or an abandon at the cost cap, work that had already landed — so the
+ * console does not say it goes on.
+ */
+export async function answerFromConsole(
+  deps: { gates: Gates; taskService: Pick<TaskService, 'resume'>; afterwards?: Afterwards },
+  input: { gateId: string; reply: string; answeredBy: string; role?: Role; via: GateChannel },
+): Promise<{ answer: string; taskId: string | null; held?: boolean; again?: true; ended?: true }> {
+  const { afterwards } = deps;
+  const result = await deps.gates.answer({ ...input, ...(afterwards ? { deferGitHub: true } : {}) }).catch(async (error: unknown) => {
+    // Only a question that was not open to this answer, as `Gates.answer`
+    // says it. One its own answer closed and could not carry out is that
+    // answer's failure, and is said as it is.
+    if (!(error instanceof Error) || error.message !== 'gate is no longer open') throw error;
+    const gate = await threads.getGate(input.gateId).catch(() => null);
+    if (!gate || gate.state === 'open') throw error;
+    if (gate.state === 'answered' && gate.answeredBy === input.answeredBy && gate.answer === resolveAnswer(input.reply, gate.options)) {
+      return { answer: gate.answer, taskId: null, again: true as const };
+    }
+    throw new HttpFailure(
+      409,
+      gate.state === 'answered'
+        ? `that question was answered already${gate.answeredBy ? ` by ${gate.answeredBy}` : ''}: ${gate.answer ?? ''}`
+        : 'that question is closed: the work that asked it has ended',
+    );
+  });
+  const { github, ...answered } = result as typeof result & { github?: () => Promise<void> };
+  const after = async (): Promise<void> => {
+    await github?.();
+    if (answered.taskId) {
+      await deps.taskService.resume(answered.taskId).catch((error: Error) => {
+        console.warn(`[bridge] resume after answer failed: ${error.message}`);
+      });
+    }
+  };
+  // Read before the resume, which cleans a stopped task up; `Gates` wrote it.
+  const taskId = answered.taskId;
+  const ended = taskId ? (await Promise.resolve().then(() => tasks.getTask(taskId)).catch(() => null))?.state === 'stopped' : false;
+  if (!afterwards) await after();
+  else if (github || answered.taskId) afterwards.run({ taskId: answered.taskId }, 'Going on after the answer', after);
+  return ended ? { ...answered, ended: true } : answered;
 }

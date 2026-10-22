@@ -109,11 +109,21 @@ openadlc — a crew of agents that takes a request to a reviewed, deployed chang
                                     --deployer-owner-id). Without --domain the console
                                     is served on the install's own address under
                                     nip.io; GitHub is set up later, in the console's
-                                    walkthrough
+                                    walkthrough. A new install runs the newest
+                                    release's images, their attestations checked
+                                    with gh; --build runs this checkout's, which
+                                    infra/gcp/install.sh --build builds
   openadlc cloud pull --bucket B [--prefix P]
                                     take over a cloud install's settings on this machine
   openadlc cloud push              save this machine's cloud settings back to the bucket
   openadlc cloud plan | apply      stand the install up on that cloud
+  openadlc cloud update [--release vX]
+                                    roll the install onto the next release after the
+                                    one its bridge runs, its images checked first: the
+                                    console, then hostd (ending its tasks), then the
+                                    bridge. One release at a time; --release names
+                                    one, never an older one. Self-update does the same
+                                    from Settings → System while self_update is on
   openadlc cloud output            the console and webhook URLs
   openadlc cloud members           who IAP admits to the console (console_members)
   openadlc cloud members add EMAIL [EMAIL…] [--no-apply]
@@ -303,6 +313,8 @@ async function main(): Promise<void> {
       const deployerOwnerId = flag('deployer-owner-id');
       const channels = flag('channels');
       const noApply = has('no-apply');
+      const build = has('build');
+      const release = flag('release');
       return cloud(config, subcommand, {
         ...(provider ? { provider } : {}),
         ...(bucket ? { bucket } : {}),
@@ -320,6 +332,9 @@ async function main(): Promise<void> {
         ...(deployerId ? { deployerId } : {}),
         ...(deployerOwnerId ? { deployerOwnerId } : {}),
         ...(channels !== undefined ? { channels } : {}),
+        ...(build ? { build } : {}),
+        // `--release` with no tag is refused by name, not taken as none.
+        ...(release !== undefined ? { release } : {}),
         // What follows `cloud members`: the verb and the members to admit.
         ...(subcommand === 'members' ? { rest: memberArguments(process.argv.slice(4)), ...(noApply ? { noApply } : {}) } : {}),
       });

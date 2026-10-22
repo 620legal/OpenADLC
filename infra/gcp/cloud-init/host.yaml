@@ -160,6 +160,104 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
+  # Which hostd image this start runs, pulled before anything needs it. An
+  # update names it in /var/lib/fleet/hostd-image, one image reference: hostd
+  # writes it when the bridge asks it to restart onto a release (POST
+  # /internal/restart-onto-image), and `openadlc cloud update` over IAP. The
+  # bot image is not a release's, and stays bot_image (see the unit).
+  #
+  # The file counts only when it names this install's own release image by
+  # digest through its mirror, exactly ${hostd_release_image}@sha256:<64 hex>
+  # (<mirror>/<owner>/<repo in lower case>/service at a digest). Empty, as this
+  # makes it, is no update yet. Anything else, a tag, another package on
+  # ghcr.io (which the mirror would pull as readily), or a line cut short by a
+  # crash between hostd's truncate and its write, is logged and passed over: a
+  # file that cannot be read must never keep hostd from starting.
+  #
+  # What it is passed over for is the image hostd last started on and
+  # answered from, which hostd-started.sh records in a file of root's, held to
+  # the same form; then hostd_image. hostd_image alone would be the release
+  # the install was made with, under a database newer ones have migrated. A
+  # file that does name a release image which will not pull fails the start
+  # instead, and systemd tries again ten seconds later, for the same reason.
+  - path: /etc/fleet/hostd-image.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -uo pipefail
+      root=/var/lib/fleet
+      file=$root/hostd-image
+      started=$root/hostd-image.started
+      want='${hostd_release_image}'
+      mkdir -p "$root" /run/fleet
+
+      say() { echo "[fleet-hostd] $*" >&2; }
+
+      # hostd writes the file in place, as uid 1000, and $root is root's: so
+      # the file is made here, empty, and made hostd's at every start, also
+      # after `openadlc cloud update` has moved a root-owned one over it. Only
+      # that file: hostd gets no say over anything else in $root, the record
+      # of what last started included.
+      [ -e "$file" ] || : > "$file"
+      chown 1000:1000 "$file" && chmod 0644 "$file" || say "could not give hostd $file: an update cannot write it"
+
+      # The image a file names, when it is `want` at a digest.
+      named() {
+        local ref digest
+        [ -f "$1" ] || return 1
+        ref=$(head -c 512 "$1") || return 1
+        digest=$(printf '%s' "$ref" | sed -n 's/^.*@sha256:\([0-9a-f]\{64\}\)$/\1/p')
+        [ -n "$digest" ] && [ "$ref" = "$want@sha256:$digest" ] || return 1
+        printf '%s' "$ref"
+      }
+
+      # A digest is the same bytes for ever, so one this host has is the one
+      # asked for. A tag is pulled at every start, as before: whoever pushed
+      # a new build under it meant it to run.
+      ensure() {
+        case "$1" in
+          *@sha256:*) docker image inspect "$1" >/dev/null 2>&1 || docker pull "$1" >&2 ;;
+          *) docker pull "$1" >&2 ;;
+        esac
+      }
+
+      if image=$(named "$file"); then
+        ensure "$image" || { say "could not pull $image, which $file names; systemd starts hostd again in ten seconds"; exit 1; }
+      else
+        [ ! -s "$file" ] || say "$file does not name $want@sha256:<64 hex>, so it is passed over"
+        image=
+        if last=$(named "$started"); then
+          if ensure "$last"; then image=$last; else say "could not pull $last, which hostd last started on"; fi
+        fi
+        if [ -z "$image" ]; then
+          image='${hostd_image}'
+          ensure "$image" || { say "could not pull hostd_image, $image"; exit 1; }
+        fi
+      fi
+      # What prepare-hostd.sh and the unit's ExecStart run.
+      printf '%s\n' "$image" > /run/fleet/running-hostd-image
+      say "hostd runs $image"
+
+  # What hostd-image.sh falls back to: the image this start ran, once hostd
+  # answers on it. Only then, so an image that never came up is never the
+  # fallback. A new file moved over the old, both root's. It never fails the
+  # start (ExecStartPost=-): a hostd slow to answer just leaves the last record.
+  - path: /etc/fleet/hostd-started.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -uo pipefail
+      image=$(cat /run/fleet/running-hostd-image) || exit 0
+      for _ in $(seq 1 60); do
+        if curl -sf -o /dev/null --max-time 2 http://127.0.0.1:${hostd_port}/healthz; then
+          printf '%s\n' "$image" > /var/lib/fleet/hostd-image.started.next &&
+            mv -f /var/lib/fleet/hostd-image.started.next /var/lib/fleet/hostd-image.started
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "[fleet-hostd] hostd did not answer on $image within a few minutes, so it is not recorded as the image to fall back to" >&2
+
   # What hostd needs that cannot be written here: the database URL carries a
   # generated password, so it is read from Secret Manager at each start rather
   # than baked into metadata anyone with compute.instances.get can read.
@@ -176,6 +274,8 @@ write_files:
       #!/bin/bash
       set -euo pipefail
       root=/var/lib/fleet
+      # The image hostd-image.sh chose for this start.
+      hostd_in_use=$(cat /run/fleet/running-hostd-image)
       mkdir -p "$root/home" "$root/work" "$root/logins"
       # hostd runs as the bots' uid (see the unit), so what it makes — worktrees,
       # sign-in folders — is theirs inside the containers too. Created by root,
@@ -221,6 +321,8 @@ write_files:
       OPENADLC_BRIDGE_URL=${bridge_url}
       OPENADLC_CONSOLE_URL=https://${console_domain}
       OPENADLC_BOT_IMAGE=${bot_image}
+      OPENADLC_RELEASE_MIRROR=${release_mirror}
+      OPENADLC_RELEASE_REPO=${release_repository}
       OPENADLC_BOT_EGRESS_PROXY=http://host.docker.internal:3128
       OPENADLC_HOME=$root/home
       OPENADLC_WORK_ROOT=$root/work
@@ -260,11 +362,11 @@ write_files:
       # where it is: those directories are refilled, the runner is written
       # over, and the rest, which no computer mounts, is replaced. Nothing is
       # restarted: restarting a computer ends the session in it.
-      image_id=$(docker image inspect -f '{{.Id}}' ${hostd_image})
+      image_id=$(docker image inspect -f '{{.Id}}' "$hostd_in_use")
       if [ ! -d "$root/app" ] || [ "$(cat "$root/app.image" 2>/dev/null)" != "$image_id" ]; then
         rm -rf "$root/app.next"
         docker rm -f fleet-app-source >/dev/null 2>&1 || true
-        docker create --name fleet-app-source ${hostd_image} >/dev/null
+        docker create --name fleet-app-source "$hostd_in_use" >/dev/null
         docker cp fleet-app-source:/app "$root/app.next"
         docker rm fleet-app-source >/dev/null
         if [ ! -d "$root/app" ]; then
@@ -307,7 +409,7 @@ write_files:
       # and never clears, and as a failure it held the only host in a restart
       # loop with no hostd at all.
       docker run --rm --network host --env-file "$root/hostd.env" \
-        -v "$root:$root" -w "$root/app" ${hostd_image} \
+        -v "$root:$root" -w "$root/app" "$hostd_in_use" \
         sh -c 'node packages/db/dist/cli/migrate.js && { node packages/db/dist/cli/seed.js || echo "[prepare-hostd] the seed reported a problem; hostd starts anyway" >&2; }'
 
   - path: /etc/systemd/system/fleet-hostd.service
@@ -336,7 +438,8 @@ write_files:
       # the bots at the next restart, with nothing recorded. To seed a host
       # with a newer registry image, `docker pull` it by hand.
       ExecStartPre=/bin/sh -c '/usr/bin/docker image inspect ${bot_image} >/dev/null 2>&1 || exec /usr/bin/docker pull ${bot_image}'
-      ExecStartPre=/usr/bin/docker pull ${hostd_image}
+      # hostd's own image, chosen and pulled (hostd-image.sh).
+      ExecStartPre=/bin/bash /etc/fleet/hostd-image.sh
       ExecStartPre=/bin/bash /etc/fleet/prepare-hostd.sh
       ExecStartPre=-/usr/bin/docker rm -f fleet-hostd
       # hostd itself goes through the proxy too. It is the thing that talks to
@@ -356,16 +459,27 @@ write_files:
       # Linux does not, and everything hostd made as root was unwritable to the
       # bot that had to use it. `%%g` because systemd reads `%g` as its own
       # specifier (the manager's group) and hostd got root's group, not docker's.
-      ExecStart=/bin/sh -c 'exec /usr/bin/docker run --rm --name fleet-hostd \
+      #
+      # The image is the one hostd-image.sh chose: what the file names when it
+      # is exactly ${hostd_release_image}@sha256:<64 hex> (<mirror>/<owner>/
+      # <repo in lower case>/service at a digest), else hostd_image. hostd is
+      # told that reference (OPENADLC_HOSTD_IMAGE) and reports it, so the
+      # bridge confirms a roll by what started rather than by what the file
+      # says. The file is where hostd writes the next one when it is asked to
+      # restart onto a release; it then exits, and Restart=always brings it
+      # back on that.
+      ExecStart=/bin/sh -c 'image=$$(cat /run/fleet/running-hostd-image) && exec /usr/bin/docker run --rm --name fleet-hostd \
         --network host \
         --user 1000:1000 \
         --group-add $$(stat -c %%g /var/run/docker.sock) \
         -e HOME=/var/lib/fleet/home \
+        -e OPENADLC_HOSTD_IMAGE="$$image" \
+        -e OPENADLC_HOSTD_IMAGE_FILE=/var/lib/fleet/hostd-image \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -v /var/lib/fleet:/var/lib/fleet \
         -w /var/lib/fleet/app \
         --env-file /var/lib/fleet/hostd.env \
-        ${hostd_image} node apps/hostd/dist/main.js'
+        "$$image" node apps/hostd/dist/main.js'
 
       # hostd ends each running task on SIGTERM: a few docker execs, a git
       # harvest and a docker rm for every one, which docker stop's default 10
@@ -373,6 +487,15 @@ write_files:
       # than docker does, so it never kills the stop itself.
       ExecStop=/usr/bin/docker stop -t 300 fleet-hostd
       TimeoutStopSec=330
+
+      # The image hostd answered on, recorded for hostd-image.sh to fall back
+      # to (hostd-started.sh), never failing the start.
+      ExecStartPost=-/bin/bash /etc/fleet/hostd-started.sh
+      # A start is the pulls, the app copied out, the migrations and the wait
+      # for hostd to answer, and systemd's default of 90 seconds for all of it
+      # would stop one partway through a release's first pull through the
+      # mirror. `openadlc cloud update`'s restart waits for the whole of it.
+      TimeoutStartSec=15min
 
       [Install]
       WantedBy=multi-user.target

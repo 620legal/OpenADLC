@@ -49,11 +49,19 @@ class BridgeRefusal extends Error {
   }
 }
 
-export async function answerGate(gateId: string, answer: string): Promise<{ ok: boolean; error?: string }> {
+/**
+ * Answers a question. The bridge answers once the question is claimed, and
+ * posts on GitHub and resumes the task after. `held` is an answer taken that
+ * waits on other work (a plan change another lease holds paths of, a continue
+ * a spent monthly cap holds), so the card that asked stays; `ended` is one
+ * that stopped the task (a refusal, a hand-off or an abandon at the cost cap,
+ * work that had landed), which does not go on.
+ */
+export async function answerGate(gateId: string, answer: string): Promise<{ ok: boolean; error?: string; held?: boolean; ended?: boolean }> {
   try {
-    await call(`/v1/gates/${encodeURIComponent(gateId)}/answer`, 'POST', { answer });
+    const result = await call<{ held?: boolean; ended?: boolean }>(`/v1/gates/${encodeURIComponent(gateId)}/answer`, 'POST', { answer });
     revalidatePath('/');
-    return { ok: true };
+    return { ok: true, ...(result.held ? { held: true } : {}), ...(result.ended ? { ended: true } : {}) };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'could not answer' };
   }
@@ -713,12 +721,19 @@ export interface CancelOutcome {
 /** A work item's address on the bridge: `testbed#7`, one path segment. */
 const itemPath = (subject: string) => `/v1/items/${encodeURIComponent(subject)}`;
 
-/** One issue held: the step it is on finishes, and nothing new starts on it until it is resumed. */
-export async function pauseItem(subject: string, reason?: string): Promise<{ ok: boolean; error?: string }> {
+/** Who holds an item, as the bridge answers a pause; null once it is resumed. */
+export type ItemHeld = { by: string; at: string; why: string | null } | null;
+
+/**
+ * One issue held: the step it is on finishes, and nothing new starts on it
+ * until it is resumed. `held` is the hold as the bridge recorded it, which the
+ * card shows at once, before the page is read again.
+ */
+export async function pauseItem(subject: string, reason?: string): Promise<{ ok: boolean; error?: string; held?: ItemHeld }> {
   try {
-    await call(`${itemPath(subject)}/pause`, 'POST', reason ? { reason } : {});
+    const result = await call<{ held?: ItemHeld }>(`${itemPath(subject)}/pause`, 'POST', reason ? { reason } : {});
     revalidatePath('/');
-    return { ok: true };
+    return { ok: true, ...(result.held !== undefined ? { held: result.held } : {}) };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'could not pause it' };
   }
@@ -735,11 +750,11 @@ export async function setCiCap(minutes: number | null): Promise<{ ok: boolean; e
   }
 }
 
-export async function resumeItem(subject: string): Promise<{ ok: boolean; error?: string }> {
+export async function resumeItem(subject: string): Promise<{ ok: boolean; error?: string; held?: ItemHeld }> {
   try {
     await call(`${itemPath(subject)}/resume`, 'POST', {});
     revalidatePath('/');
-    return { ok: true };
+    return { ok: true, held: null };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'could not resume it' };
   }
@@ -779,11 +794,11 @@ export async function mergeItem(key: string, into: string): Promise<{ ok: boolea
 }
 
 /** One issue to the front of its repository's queue, or back to its place by priority. */
-export async function playItemNext(subject: string, on: boolean): Promise<{ ok: boolean; error?: string }> {
+export async function playItemNext(subject: string, on: boolean): Promise<{ ok: boolean; error?: string; next?: boolean }> {
   try {
     await call(`${itemPath(subject)}/next`, 'POST', { on });
     revalidatePath('/');
-    return { ok: true };
+    return { ok: true, next: on };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'could not move it in the queue' };
   }

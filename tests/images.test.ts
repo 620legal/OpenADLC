@@ -107,6 +107,24 @@ describe('what the service image carries for the weekly engine update', () => {
   it('has a docker CLI to build with', () => {
     expect(runtime).toMatch(/\b(?:docker\.io|docker-ce-cli)\b/);
   });
+
+  it('has a GitHub CLI from its signed apt repository that can check a release image, or does not build', () => {
+    // A cloud bridge checks each release image's attestation with it before it deploys one.
+    expect(runtime).toContain('signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main');
+    expect(runtime).toContain('apt-get install -y --no-install-recommends "gh${GH_VERSION:+=${GH_VERSION}}"');
+    const checked = /for flag in ([^;]+); do/.exec(runtime)?.[1]?.split(/\s+/) ?? [];
+    for (const flag of ['--bundle', '--cert-identity', '--source-ref', '--source-digest', '--deny-self-hosted-runners']) expect(checked).toContain(flag);
+    // Its apt key, by the fingerprints cli/cli publishes, in the file and not a build argument.
+    expect(runtime).toContain('gpg --show-keys --with-colons /usr/share/keyrings/githubcli-archive-keyring.gpg');
+    expect(runtime).toMatch(/published="2C6106201985B60E6C7AC87323F3D4EA75716059 7F38BBB59D064DBCB3D84D725612B36462313325"/);
+    expect(runtime).not.toMatch(/^ARG GH_KEYS/m);
+  });
+
+  it('builds on its base by digest, in both stages', () => {
+    const froms = service.split('\n').filter((line) => line.startsWith('FROM '));
+    expect(froms).toHaveLength(2);
+    for (const line of froms) expect(line).toMatch(/^FROM node:22-bookworm-slim@sha256:[0-9a-f]{64}(?: AS build)?$/);
+  });
 });
 
 /**
