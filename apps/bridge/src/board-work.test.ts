@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boardWork, FILED_SHOWN_MS, itemCards, LONE_PULL_DONE_DAYS, lonePulls, type BoardLink } from './board-work.js';
+import { boardWork, FILED_SHOWN_MS, itemCards, lonePulls, loosePulls, type BoardLink } from './board-work.js';
 import type { TaskFacts } from './work.js';
 
 /**
@@ -225,18 +225,67 @@ describe('one card per work item', () => {
     expect(cards).toEqual([{ ...card('api', 12, 'build'), item: null, repos: ['api'] }]);
   });
 
-  it('makes a pull request no issue claims a card in Review while open, and in Done for a while once merged or closed', () => {
+  it('makes a pull request no issue claims a card in Review while open, and in Done once merged or closed, however long ago it was opened', () => {
     linkId = 0;
     const links = [
       link('w-1', 1, 'pull', 'repo-1', 40, { title: 'A person’s fix' }),
       link('w-2', 2, 'pull', 'repo-1', 41, { state: 'merged' }),
-      link('w-3', 3, 'pull', 'repo-1', 42, { state: 'closed', openedAt: new Date(NOW.getTime() - (LONE_PULL_DONE_DAYS + 1) * 86_400_000).toISOString() }),
+      link('w-3', 3, 'pull', 'repo-1', 42, { state: 'closed', openedAt: new Date(NOW.getTime() - 400 * 86_400_000).toISOString() }),
       link('w-4', 4, 'issue', 'repo-1', 5),
       link('w-4', 4, 'pull', 'repo-1', 43),
     ];
-    expect(lonePulls(links, REPOS, NOW).map((pull) => [pull.ref, pull.stage, pull.title])).toEqual([
+    expect(lonePulls(links, REPOS).map((pull) => [pull.ref, pull.stage, pull.title])).toEqual([
       ['api#40', 'review', 'A person’s fix'],
       ['api#41', 'done', 'pull 41'],
+      ['api#42', 'done', 'pull 42'],
+    ]);
+  });
+
+  it('sums into an item’s card the work on a pull linked beside its issue, and on a second pull of an item with none', () => {
+    linkId = 0;
+    const links = [
+      link('w-5', 5, 'issue', 'repo-1', 12),
+      link('w-5', 5, 'pull', 'repo-1', 31),
+      link('w-5', 5, 'pull', 'repo-2', 9),
+      link('w-6', 6, 'pull', 'repo-1', 40),
+      link('w-6', 6, 'pull', 'repo-1', 44),
+    ];
+    // #31 is #12's own pull request, which `cardWork` already counts on #12's card.
+    const loose = loosePulls(links, REPOS, [{ repoName: 'api', prNumber: 31 }]);
+    expect(loose.map((pull) => pull.ref)).toEqual(['web#9', 'api#40', 'api#44']);
+
+    const work = boardWork({
+      issues: [],
+      tasks: [
+        { ...triage('web#9', 'paused'), id: 'review-web', botId: 'bot-review', costUsd: 0.25 },
+        { ...triage('api#44', 'running'), id: 'review-44', botId: 'bot-security', costUsd: 0.5 },
+      ],
+      bots: [
+        { id: 'bot-review', name: 'lead-reviewer' },
+        { id: 'bot-security', name: 'security-reviewer' },
+      ],
+      repos: [{ id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {} }],
+      gates: [{ taskId: 'review-web' }],
+      stallEvents: [],
+      requests: [],
+      now: NOW,
+      pulls: loose,
+    });
+    const members = loose.map((pull) => {
+      const extras = work.byRef.get(pull.ref)!;
+      return { ref: pull.ref, repo: pull.ref.split('#')[0]!, assignees: extras.assignees, gateOpen: extras.gateOpen ?? false, costUsd: extras.costUsd, active: extras.active };
+    });
+    const { cards } = itemCards({
+      cards: [card('api', 12, 'build'), { ...card('api', 40, 'review', { costUsd: 0 }), pull: true }],
+      members,
+      requests: [],
+      links,
+      repos: REPOS,
+      keyOf,
+    });
+    expect(cards.map((one) => [one.ref, one.costUsd, one.assignees, one.gateOpen, (one as { active?: unknown[] }).active?.length ?? 0])).toEqual([
+      ['api#12', 1.25, ['lead-reviewer'], true, 1],
+      ['api#40', 0.5, ['security-reviewer'], false, 1],
     ]);
   });
 

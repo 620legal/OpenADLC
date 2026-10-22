@@ -488,7 +488,14 @@ export function itemView(rows: ItemRows): ItemView {
             return { number, title: request ? firstLine(request.text) : item.key, url: `https://github.com/${rows.repo.fullName}/issues/${number}`, stage: 'intake' as StageKey };
           })()
         : null,
-    pullRequest: item.pr ? { number: item.pr, url: pullUrl(rows.repo, issue?.url ?? null, item.pr) } : null,
+    pullRequest: item.pr
+      ? {
+          number: item.pr,
+          url:
+            item.links?.find((link) => link.kind === 'pull' && link.repo === item.repo && link.number === item.pr)?.url ??
+            pullUrl(rows.repo, issue?.url ?? null, item.pr),
+        }
+      : null,
     roles: [...roles.entries()]
       .sort(([a], [b]) => rank(a) - rank(b))
       .map(([role, seats]) => ({ role, label: labelOf(role), seats: [...seats.values()] })),
@@ -730,8 +737,13 @@ async function withWorkItem(
     const issue = link.kind === 'issue' ? issueRows.find((one) => one.repoName === link.repo && one.number === link.number) : undefined;
     return issue ? subjectsOf(issue) : [link.ref];
   });
+  // A pull request alone on its item read through `itemOf` as an issue of its
+  // number, which the page drew as "Issue #n" in Intake with cancel on it,
+  // and cancel's merged-work guard saw no pull request. It is the pull it is.
+  const lonePull = first?.kind === 'pull' && !base.item.issue && !base.item.request ? first : null;
   const item: Item = {
     ...base.item,
+    ...(lonePull ? { issue: null, pr: lonePull.number, refs: { request: null, issue: null, pullRequest: refOf(lonePull) } } : {}),
     subjects: [...new Set([...base.item.subjects, ...linkSubjects])],
     workItem: {
       id: workItem.id,
@@ -742,6 +754,22 @@ async function withWorkItem(
     links,
   };
   return { item, repo: base.repo };
+}
+
+/**
+ * Why a pull request alone on its item cannot be held, put next or
+ * cancelled from its page, or null for an item that can. It has no issue to
+ * label or close, as the board refuses to move it; and merged it is live, or
+ * on its way, so it is refused before any of its work is stopped. `merged`
+ * is GitHub's answer, and the link's own state when GitHub could not be asked.
+ */
+export function lonePullRefusal(item: Pick<Item, 'key' | 'issue' | 'request' | 'pr' | 'repo' | 'links'>, merged: boolean | null): string | null {
+  if (item.issue || item.request || item.pr === null) return null;
+  const link = item.links?.find((one) => one.kind === 'pull' && one.repo === item.repo && one.number === item.pr);
+  if (merged ?? link?.state === 'merged') {
+    return `${item.key} has already merged, so it cannot be cancelled. To take the change back, revert its pull request on GitHub`;
+  }
+  return `${item.key} is a pull request with no issue, so it cannot be held, put next or cancelled here; close it on GitHub, or link it to an issue's work item`;
 }
 
 /** An item by the subject of one of its members, as before work items. */

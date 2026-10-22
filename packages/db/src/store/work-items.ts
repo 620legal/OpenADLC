@@ -573,7 +573,19 @@ export async function linkByHand(itemId: string, thing: Thing, snapshot: Snapsho
       return { item, from: null };
     }
     const from = await resolve(sql, link.work_item_id);
-    await sql.query('update work_item_links set work_item_id = $2, linked_by = $3 where id = $1', [link.id, item.id, by]);
+    // The snapshot the route just read from GitHub, refreshed as `ensureLink`
+    // refreshes it: a pull merged since its last delivery stayed in Review.
+    await sql.query(
+      `update work_item_links set
+         work_item_id = $2,
+         linked_by = $3,
+         title = $4,
+         state = case when state = 'merged' then state else $5 end,
+         url = coalesce($6, url),
+         seen_at = now()
+       where id = $1`,
+      [link.id, item.id, by, snapshot.title, snapshot.state, snapshot.url],
+    );
     if (from && from.id !== item.id) await settleEmptied(sql, from.id, item.id);
     return { item, from };
   });

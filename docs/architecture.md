@@ -567,11 +567,13 @@ back. A crew account that moves a stage label back is put back.
   numbered; before, they are what they were. The board has one card per
   work item (`itemCards`, `board-work.ts`): its first-linked issue's card, in
   that issue's column even when a later link stands elsewhere, with the
-  cost, people, tasks and open questions of every linked card, and `item`
-  and `repos` on it. An item is on the board of every repository it has a
-  link in. A pull request no issue claims is a card of its own (`lonePulls`),
-  in Review while open and in Done for 30 days after it was opened once
-  merged or closed; it has no issue, so nothing moves or holds it. A request
+  cost, people, tasks and open questions of every link, a pull request
+  linked beside its issue or a second pull on an item with none included
+  (`loosePulls`), and `item` and `repos` on it. An item is on the board of
+  every repository it has a link in. A pull request no issue claims is a
+  card of its own (`lonePulls`), in Review while open and in Done once
+  merged or closed; it has no issue, so nothing moves, holds, puts next or
+  cancels it, on the board or on its page (`lonePullRefusal`). A request
   in intake carries its item's key until its item has an issue on the board.
   `/v1/items/:subject` takes a key in any case and with any prefix
   (`acme-128`, `W-128`, `128`) or any linked subject, follows a merge to

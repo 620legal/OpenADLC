@@ -29,6 +29,8 @@ import { stillTried } from './request-queue.js';
 const STALL_WINDOW_DAYS = 30;
 
 export interface CardExtras extends CardWork {
+  /** A question open on its work; set for a pull request's, the store says an issue's (`boardCards`). */
+  gateOpen?: boolean;
   /** Every bot on the card now, on the issue or its pull request. */
   assignees: string[];
   /** How many times its work was sent back to an earlier stage; the card says "sent back ×N". */
@@ -125,7 +127,11 @@ interface BoardWorkInput {
   now?: Date;
   /** Send-backs per issue, by `repoId#number` (`stageMoves.sendBackCounts`). */
   sendBacks?: ReadonlyMap<string, number>;
-  /** Pull requests that are a card of their own, their item holding no issue (`itemCards`), by subject. */
+  /**
+   * Pull requests no issue on the board has as its own (`loosePulls`), by
+   * subject: a card of their own, or one more link of an item whose card
+   * sums them in (`itemCards`).
+   */
   pulls?: readonly { ref: string; number: number }[];
 }
 
@@ -159,6 +165,7 @@ export function boardWork(input: BoardWorkInput): BoardWork {
     const active = mine.filter(isActive).map((task) => asCardTask(task, botName));
     const ended = mine.find((task) => !isActive(task));
     byRef.set(pull.ref, {
+      gateOpen: mine.some((task) => isActive(task) && gated.has(task.id)),
       number: pull.number,
       prNumber: pull.number,
       costUsd: Math.round(mine.reduce((total, task) => total + task.costUsd, 0) * 10_000) / 10_000,
@@ -297,13 +304,6 @@ export interface ItemCardFields {
   repos: string[];
 }
 
-/**
- * How long a pull request with no issue, merged or closed, stays in Done by
- * when it was opened. Every pull request ever opened has a work item, and
- * without a bound the column would hold a repository's whole history.
- */
-export const LONE_PULL_DONE_DAYS = 30;
-
 /** A pull request alone on its work item, as a card of its own. */
 export interface LonePull {
   ref: string;
@@ -325,13 +325,13 @@ function subjectOfLink(link: BoardLink, repoName: (id: string | null) => string 
  * The pull requests that are a card of their own: their work item holds no
  * issue and no request, as a person's pull request that closes nothing. In
  * Review while open, and in Done once merged or closed (closed unmerged
- * reads as abandoned), for `LONE_PULL_DONE_DAYS` after it was opened.
+ * reads as abandoned), as long as an issue's card is: history is numbered
+ * whole, and a pull merged after a month open left the board the day it merged.
  */
-export function lonePulls(links: readonly BoardLink[], repos: readonly { id: string; name: string }[], now = new Date()): LonePull[] {
+export function lonePulls(links: readonly BoardLink[], repos: readonly { id: string; name: string }[]): LonePull[] {
   const repoName = (id: string | null) => repos.find((repo) => repo.id === id)?.name ?? null;
   const byItem = new Map<string, BoardLink[]>();
   for (const link of links) byItem.set(link.itemId, [...(byItem.get(link.itemId) ?? []), link]);
-  const since = now.getTime() - LONE_PULL_DONE_DAYS * 24 * 60 * 60 * 1000;
   const out: LonePull[] = [];
   for (const members of byItem.values()) {
     if (members.some((link) => link.kind !== 'pull')) continue;
@@ -339,10 +339,30 @@ export function lonePulls(links: readonly BoardLink[], repos: readonly { id: str
     const repo = first ? repoName(first.repoId) : null;
     if (!first || !repo || first.number === null) continue;
     const open = members.some((link) => link.state === 'open');
-    if (!open && Date.parse(first.openedAt) < since) continue;
     out.push({ ref: `${repo}#${first.number}`, repo, number: first.number, title: first.title, url: first.url, stage: open ? 'review' : 'done', openedAt: first.openedAt });
   }
   return out;
+}
+
+/**
+ * Every linked pull request whose work no issue's card already counts: not
+ * the pull request of an issue on the board (`cardWork` counts that one).
+ * A pull linked by hand beside an issue, or a second pull on an item with
+ * none, had its review's cost and people left off the item's card.
+ */
+export function loosePulls(
+  links: readonly BoardLink[],
+  repos: readonly { id: string; name: string }[],
+  issues: readonly { repoName: string; prNumber: number | null }[],
+): { ref: string; number: number }[] {
+  const repoName = (id: string | null) => repos.find((repo) => repo.id === id)?.name ?? null;
+  const owned = new Set(issues.filter((issue) => issue.prNumber !== null).map((issue) => `${issue.repoName}#${issue.prNumber}`));
+  return links.flatMap((link) => {
+    const repo = repoName(link.repoId);
+    if (link.kind !== 'pull' || !repo || link.number === null) return [];
+    const ref = `${repo}#${link.number}`;
+    return owned.has(ref) ? [] : [{ ref, number: link.number }];
+  });
 }
 
 type GroupableCard = { ref: string; repo: string; assignees: string[]; gateOpen: boolean; costUsd?: number; active?: CardTask[] };
@@ -360,6 +380,12 @@ type GroupableCard = { ref: string; repo: string; assignees: string[]; gateOpen:
  */
 export function itemCards<C extends GroupableCard, R extends { ref: string; repo: string }>(input: {
   cards: readonly C[];
+  /**
+   * Work on an item's other links that is no card of its own: a pull linked
+   * beside an issue, a second pull on an item with none. Summed into the
+   * item's card, never shown alone.
+   */
+  members?: readonly GroupableCard[];
   requests: readonly R[];
   links: readonly BoardLink[];
   repos: readonly { id: string; name: string }[];
@@ -395,13 +421,18 @@ export function itemCards<C extends GroupableCard, R extends { ref: string; repo
     }
     groups.set(itemId, [...(groups.get(itemId) ?? []), card]);
   }
+  const extra = new Map<string, GroupableCard[]>();
+  for (const member of input.members ?? []) {
+    const itemId = itemByRef.get(member.ref);
+    if (itemId) extra.set(itemId, [...(extra.get(itemId) ?? []), member]);
+  }
   for (const [itemId, members] of groups) {
     const rank = (card: C) => order.get(card.ref) ?? Number.MAX_SAFE_INTEGER;
     const [first, ...rest] = [...members].sort((a, b) => rank(a) - rank(b));
     if (!first) continue;
-    const all = [first, ...rest];
+    const all: GroupableCard[] = [first, ...rest, ...(extra.get(itemId) ?? []).filter((member) => !members.some((card) => card.ref === member.ref))];
     const merged: C & ItemCardFields = { ...first, ...fields(itemId, first.repo) };
-    if (rest.length > 0) {
+    if (all.length > 1) {
       merged.assignees = [...new Set(all.flatMap((card) => card.assignees))];
       merged.gateOpen = all.some((card) => card.gateOpen);
       if (all.some((card) => card.costUsd !== undefined)) {

@@ -45,6 +45,15 @@ export function itemNumberOf(text: string): number | null {
 }
 
 /**
+ * Another number's key with the same prefix as `key`: the item a merged one
+ * went into is shown as `acme-12`, not `W-12`, on an install with an
+ * organization, since the bridge says the prefix and the console does not know it.
+ */
+export function keyLike(key: string, number: number): string {
+  return /\d+$/.test(key) ? key.replace(/\d+$/, String(number)) : `W-${number}`;
+}
+
+/**
  * Whether a card is one the board's filter box keeps: its key, in any case
  * and with any prefix, or words of its title. An empty box keeps every card.
  */

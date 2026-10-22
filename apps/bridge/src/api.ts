@@ -111,7 +111,7 @@ import { registerHealthRoutes } from './health/routes.js';
 import { registerSigningKeyRoutes } from './signing-key-routes.js';
 import { SubjectTitles } from './subject-titles.js';
 import { retryTask } from './task-retry.js';
-import { itemCards, lonePulls, readBoardWork } from './board-work.js';
+import { itemCards, lonePulls, loosePulls, readBoardWork } from './board-work.js';
 import { describeSubject } from './thread-view.js';
 import { sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
@@ -653,6 +653,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     // the request it was filed from: the board is the crew's work.
     const ignored = ignoredSubjects(issueList);
     const pulls = lonePulls(links, repoList).filter((pull) => !ignored.has(pull.ref));
+    // Every pull whose work no issue's card counts, so an item's card sums
+    // every link's, not only its issues' and their own pull requests'.
+    const loose = loosePulls(links, repoList, issueList).filter((pull) => !ignored.has(pull.ref));
 
     // What each card has cost and who is on it now, and which bots are working
     // or waiting on a person: what a card and a column say in words.
@@ -663,7 +666,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       gates: openGates,
       // Each queued request's place as the queue walks it: one source for the number the 202 gave.
       requests: await withPositions(requestList),
-      pulls,
+      pulls: loose,
     });
 
     // What is waiting to land, and what the bridge is doing about it. A person
@@ -707,8 +710,14 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       next: false,
       pull: true as const,
     }));
+    const members = loose.flatMap((pull) => {
+      const extras = work.byRef.get(pull.ref);
+      const repo = pull.ref.slice(0, pull.ref.lastIndexOf('#'));
+      return extras ? [{ ref: pull.ref, repo, assignees: extras.assignees, gateOpen: extras.gateOpen ?? false, costUsd: extras.costUsd, active: extras.active }] : [];
+    });
     const grouped = itemCards({
       cards: [...issueCards, ...pullCards],
+      members,
       requests: work.requests.filter((card) => !(card.issueNumber !== null && ignored.has(`${card.repo}#${card.issueNumber}`))),
       links,
       repos: repoList,

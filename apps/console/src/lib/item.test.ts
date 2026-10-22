@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ItemMessage, ItemView } from './api';
-import { cardMatches, exactKey, itemAddress, itemEntries, itemNumberOf } from './item';
+import { cardMatches, exactKey, itemAddress, itemEntries, itemNumberOf, keyLike } from './item';
 
 describe('finding a card by its work item key', () => {
   const card = { title: 'Record which model reviewed', ref: 'api#12', item: { number: 128, key: '620legal-128' } };
@@ -9,6 +9,11 @@ describe('finding a card by its work item key', () => {
   it('reads a key in any case and with any prefix, or its number alone', () => {
     for (const key of ['620legal-128', '620LEGAL-128', 'W-128', 'w-128', '128', 'old-name-128']) expect(itemNumberOf(key), key).toBe(128);
     for (const other of ['api#12', 'request:a4b0', 'W-', '', 'dark mode']) expect(itemNumberOf(other), other).toBeNull();
+  });
+
+  it('names the item a merged one came from with the same prefix as its own key', () => {
+    expect(keyLike('620legal-128', 12)).toBe('620legal-12');
+    expect(keyLike('W-128', 12)).toBe('W-12');
   });
 
   it('keeps a card by its key in any case and with any prefix, or by words of its title', () => {

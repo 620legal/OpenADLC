@@ -288,6 +288,28 @@ describe('GET /v1/board', () => {
     ]);
   });
 
+  it('sums into an item’s card the work on a pull request linked by hand in a second repository', async () => {
+    const { workItems, threads } = await import('@openadlc/db');
+    const link = (id: number, itemId: string, itemNumber: number, kind: string, repoId: string, number: number) => ({
+      id, itemId, itemNumber, kind, repoId, number, requestId: null, linkedBy: null, title: `${kind} ${number}`, state: 'open', url: null, openedAt: new Date().toISOString(),
+    });
+    const review = { ...TASKS[1]!, id: 'task-website', botId: 'bot-intake', repoId: 'repo-2', subjectRef: 'website#9', state: 'paused', costUsd: 0.5 };
+    TASKS.push(review);
+    try {
+      vi.mocked(workItems.isNumbered).mockResolvedValueOnce(true);
+      vi.mocked(workItems.allLinks).mockResolvedValueOnce([link(1, 'w-5', 5, 'issue', 'repo-1', 12), link(2, 'w-5', 5, 'pull', 'repo-1', 31), link(3, 'w-5', 5, 'pull', 'repo-2', 9)] as never);
+      vi.mocked(threads.listOpenGates).mockResolvedValueOnce([{ taskId: 'task-website' }] as never);
+      const board = (await (await fetch(`${bridgeUrl}/v1/board`)).json()) as { columns: Column[] };
+      const card = board.columns.flatMap((column) => column.cards).find((one) => one.ref === 'openadlc-testbed#12');
+      // 1.36 on the issue and its own pull request, and the review of website#9 besides.
+      expect(card).toMatchObject({ costUsd: 1.86, gateOpen: true });
+      expect(card?.assignees).toEqual(expect.arrayContaining(['irisexampleco', 'ottoexampleco']));
+      expect(board.columns.flatMap((column) => column.cards).map((one) => one.ref)).not.toContain('website#9');
+    } finally {
+      TASKS.pop();
+    }
+  });
+
   it('names each repository with the colour it is told apart by', async () => {
     const board = (await (await fetch(`${bridgeUrl}/v1/board`)).json()) as { repos: string[]; repositories: unknown[] };
     expect(board.repos).toEqual(['openadlc-testbed', 'website']);

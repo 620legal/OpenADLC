@@ -20,6 +20,7 @@ import { IssueControls } from '@/components/issue-controls';
 import {
   itemComposer,
   itemEntries,
+  keyLike,
   liveTasks,
   questionsFor,
   roleTabs,
@@ -421,7 +422,7 @@ function ItemKey({ workItem }: { workItem: NonNullable<ItemData['workItem']> }) 
   const [copied, setCopied] = useState(false);
   return (
     <span className="inline-flex items-center gap-1">
-      <span data-item-key className="font-medium text-soft" title={workItem.mergedFrom ? `${workItem.key}, which W-${workItem.mergedFrom} was merged into` : undefined}>
+      <span data-item-key className="font-medium text-soft" title={workItem.mergedFrom ? `${workItem.key}, which ${keyLike(workItem.key, workItem.mergedFrom)} was merged into` : undefined}>
         {workItem.key}
       </span>
       <button

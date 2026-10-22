@@ -214,6 +214,12 @@ const db = vi.hoisted(() => {
           rows: [...s.links].sort((a, b) => a.id - b.id).map((link) => ({ ...link, item_number: s.items.find((item) => item.id === link.work_item_id)!.number })),
         };
       }
+      if (/^update work_item_links set work_item_id = \$2, linked_by = \$3, title = \$4/.test(text)) {
+        const link = s.links.find((one) => one.id === p[0])!;
+        Object.assign(link, { work_item_id: p[1], linked_by: p[2], title: p[3], url: p[5] ?? link.url });
+        if (link.state !== 'merged') link.state = p[4];
+        return { rows: [] };
+      }
       if (text === 'update work_item_links set work_item_id = $2, linked_by = $3 where id = $1') {
         Object.assign(s.links.find((one) => one.id === p[0])!, { work_item_id: p[1], linked_by: p[2] });
         return { rows: [] };
@@ -489,6 +495,13 @@ describe('by hand', () => {
       ['issue', 5, null],
       ['pull', 9, 'ada'],
     ]);
+  });
+
+  it('a link moved by hand keeps the snapshot it was linked with, so a pull merged since its last delivery reads merged', async () => {
+    const issue = await ensureLink({ repoId: REPO, number: 5, kind: 'issue' }, snap('#5'), null);
+    await ensureLink({ repoId: REPO, number: 9, kind: 'pull' }, snap('an old title'), null);
+    await linkByHand(issue!.id, { repoId: REPO, number: 9, kind: 'pull' }, snap('the new title', undefined, 'merged'), 'ada');
+    expect((await linksOf(issue!.id)).find((link) => link.number === 9)).toMatchObject({ title: 'the new title', state: 'merged', linkedBy: 'ada' });
   });
 
   it('a link of a thing seen nowhere yet is made, and is the person who made it', async () => {

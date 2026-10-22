@@ -304,9 +304,15 @@ describe('a work item by its key', () => {
   });
 
   it('opens a pull request alone on its item under its own title, in Done once merged', async () => {
-    const { view } = await read('130');
-    expect(view.title).toBe('A person’s fix');
-    expect(view.stage).toBe('done');
+    world.links[4] = { ...world.links[4]!, url: 'https://github.com/acme/api/pull/40' };
+    for (const subject of ['130', 'api#40']) {
+      const { view } = await read(subject);
+      expect(view.title, subject).toBe('A person’s fix');
+      expect(view.stage, subject).toBe('done');
+      // No issue is made up for it: the page drew "Issue #40" in Intake, with cancel on it.
+      expect(view.issue, subject).toBeNull();
+      expect(view.pullRequest, subject).toEqual({ number: 40, url: 'https://github.com/acme/api/pull/40' });
+    }
   });
 
   it('says no for a number never handed out, rather than guessing', async () => {

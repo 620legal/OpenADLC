@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Gate, Message } from '@openadlc/shared';
-import { itemKey, itemOf, itemView, linkStage, messageRoutes, parseItemKey, routeItemMessage, type ItemBot, type ItemTaskRow } from './items.js';
+import { itemKey, itemOf, itemView, linkStage, lonePullRefusal, messageRoutes, parseItemKey, routeItemMessage, type ItemBot, type ItemTaskRow } from './items.js';
 
 describe('a work item key', () => {
   it('names the number whatever its prefix or case, and is display only', () => {
@@ -236,6 +236,32 @@ describe('where the item’s box says a message goes, before it is sent', () => 
   it('says why when nobody has worked on it, rather than naming a destination', () => {
     const routes = messageRoutes({ timeline: [], tasks: [], stage: null, openGates: [], roles: [] }, item, BOTS);
     expect(routes['']).toEqual({ kind: 'refused', error: expect.stringMatching(/nobody has worked on this item yet.*pick a role/) });
+  });
+});
+
+describe('holding, putting next or cancelling a pull request alone on its item', () => {
+  const pull = (state: 'open' | 'closed' | 'merged') => ({
+    key: 'api#40',
+    issue: null,
+    request: null,
+    pr: 40,
+    repo: 'api',
+    links: [{ kind: 'pull' as const, repo: 'api', number: 40, ref: 'api#40', title: 'A fix', state, stage: null, url: null, linkedBy: null }],
+  });
+
+  it('refuses a merged one as merged work, before anything is stopped, whether GitHub or the link says so', () => {
+    expect(lonePullRefusal(pull('open'), true)).toMatch(/already merged, so it cannot be cancelled/);
+    expect(lonePullRefusal(pull('merged'), null)).toMatch(/already merged/);
+  });
+
+  it('refuses an open one, which has no issue to hold or close', () => {
+    expect(lonePullRefusal(pull('open'), false)).toMatch(/pull request with no issue/);
+    expect(lonePullRefusal(pull('open'), null)).toMatch(/pull request with no issue/);
+  });
+
+  it('leaves an issue or a request alone', () => {
+    expect(lonePullRefusal({ ...pull('merged'), issue: { number: 12 } as never }, true)).toBeNull();
+    expect(lonePullRefusal({ ...pull('open'), pr: null }, null)).toBeNull();
   });
 });
 
