@@ -40,6 +40,9 @@ const store = vi.hoisted(() => ({
   messages: [] as Record<string, unknown>[],
 }));
 
+// Filing joins the issue to the request's work item; `work-items.test.ts` tests how.
+vi.mock('./work-items.js', () => ({ linkFiled: vi.fn(async () => null) }));
+
 vi.mock('@openadlc/db', () => ({
   spendingLimits: {
     SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
@@ -132,6 +135,7 @@ import type { Actors } from './actors.js';
 import { Gates } from './gates.js';
 import { REQUEST_DOCUMENT, requestLineFor } from './request-context.js';
 import { RequestFiling, abandonRequest, carriesRequestLine, requestPrefixIn } from './request-lifecycle.js';
+import { linkFiled } from './work-items.js';
 
 interface ListedIssue {
   number: number;
@@ -577,6 +581,20 @@ describe('an issue that names the request it was filed for', () => {
     expect(store.messages).toContainEqual(
       expect.objectContaining({ kind: 'sys', text: 'Filed as janedoe/openadlc-testbed#7', payload: expect.objectContaining({ taskId: 'task-1', issue: 7 }) }),
     );
+  });
+
+  it('joins the issue to the request’s work item, and files it even when that fails', async () => {
+    vi.mocked(linkFiled).mockClear();
+    expect(await filing().issueOpened(TESTBED, opened('OpenADLC request: request:a4b02784'))).toBe(true);
+    expect(linkFiled).toHaveBeenCalledWith(expect.objectContaining({ id: REQUEST_ID }), { id: 'repo-1' }, expect.objectContaining({ number: 7, title: 'Add hello-world3.html' }));
+
+    store.request.state = 'draft';
+    vi.mocked(linkFiled).mockRejectedValueOnce(new Error('the database is gone'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(await filing().issueOpened(TESTBED, opened('OpenADLC request: request:a4b02784'))).toBe(true);
+    expect(store.request).toMatchObject({ state: 'filed', issueNumber: 7 });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('did not join its work item: the database is gone'));
+    warn.mockRestore();
   });
 
   it('keeps the repository it was filed in, for a request that named none', async () => {

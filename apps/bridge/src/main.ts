@@ -45,6 +45,7 @@ import { Scheduler, retryAfterRecovery } from './scheduler.js';
 import { StageHandoff } from './stage-handoff.js';
 import { TaskService } from './task-service.js';
 import { Webhooks } from './webhooks.js';
+import { BACKFILL_EVERY_MS, WorkItemBackfill } from './work-item-backfill.js';
 import { TUNNEL_WATCH_MS, WebhookSetup, afterRevival } from './webhook-setup.js';
 import { RepoSetup } from './repo-setup.js';
 import { Attribution } from './attribution.js';
@@ -585,6 +586,14 @@ async function main(): Promise<void> {
   const requestQueue = new RequestQueue({ taskService, paused: (repo) => dispatchGate.paused(repo), seatPaused: (seat) => seatPausedReason(seat) });
   void requestQueue.drain();
   setInterval(() => void requestQueue.drain(), REQUEST_SWEEP_MS).unref();
+  // Work items: every issue, pull request and request numbered. The first
+  // start after the upgrade reads each repository's history, resumably, and
+  // the timer picks it up again after a rate limit or a repository added.
+  const workItemBackfill = new WorkItemBackfill(() => asAutomation(actors, config));
+  const backfillWorkItems = () =>
+    void workItemBackfill.run().catch((error: unknown) => console.warn(`[bridge] work items: ${error instanceof Error ? error.message : error}`));
+  backfillWorkItems();
+  setInterval(backfillWorkItems, BACKFILL_EVERY_MS).unref();
   const deps = {
     requestQueue,
     config,

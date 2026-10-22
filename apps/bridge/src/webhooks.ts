@@ -89,6 +89,7 @@ const APP_CLIENT_MS = 10 * 60 * 1000;
 const STARTS_WORK = new Set(['issues', 'pull_request', 'deployment_status']);
 import { PAUSED_LABEL } from '@openadlc/shared';
 import { forgetHold } from './item-hold.js';
+import { linkIssue, linkPull } from './work-items.js';
 
 /** Why an app's reply is not an answer. */
 const APP_ACCOUNT = 'it is an app’s account, not a person';
@@ -136,6 +137,8 @@ interface WebhookPayload {
     state?: string;
     /** When it closed, by GitHub's clock: the same on a late or resent delivery. */
     closed_at?: string | null;
+    /** When it was opened, by GitHub's clock: its work item's place in line. */
+    created_at?: string;
     /** `id` is the account's, which a login in `humans` is pinned to (`human-ids.ts`). */
     user?: { login: string; id?: number };
     author_association?: string;
@@ -155,6 +158,10 @@ interface WebhookPayload {
     merged_by?: { login: string } | null;
     /** When it closed or merged, by GitHub's clock: the same on a late or resent delivery. */
     closed_at?: string | null;
+    /** Set once merged, whatever `merged` a delivery carries. */
+    merged_at?: string | null;
+    state?: string;
+    created_at?: string;
     labels: { name: string }[];
     html_url: string;
     user?: { login: string; id?: number };
@@ -224,6 +231,13 @@ type MergedPull = { number: number; head: { ref: string; repo?: { full_name?: st
  * stage's bot. Reconcile, which has no action, may too.
  */
 const LEARNING_ACTIONS = new Set(['opened', 'reopened', 'labeled', 'unlabeled', 'edited']);
+
+/**
+ * The pull request actions after which which work item it belongs to is
+ * worked out again: it opening, and its body or readiness changing. On any
+ * other, its link is only brought up to date.
+ */
+const RECLAIM_ACTIONS = new Set(['opened', 'reopened', 'edited', 'ready_for_review']);
 
 /**
  * The bridge's event loop. Handlers re-derive what should be true from the
@@ -675,7 +689,7 @@ export class Webhooks {
    */
   async learnIssue(
     repo: { id: string; name: string; fullName?: string },
-    issue: { number: number; title: string; body: string | null; htmlUrl: string; labels: readonly string[]; state?: string; closedAt?: string | null },
+    issue: { number: number; title: string; body: string | null; htmlUrl: string; labels: readonly string[]; state?: string; closedAt?: string | null; createdAt?: string | null },
     action?: string,
     /** Who changed it, from the delivery; reconcile has nobody to name. */
     sender?: string | null,
@@ -684,6 +698,13 @@ export class Webhooks {
     /** The one label a `labeled` or `unlabeled` delivery is about. */
     label?: string | null,
   ): Promise<void> {
+    // Its work item, on every delivery and before anything below returns:
+    // made when first seen, its title and state kept current. Deleted or
+    // transferred, the link stays, closed, and keeps its number for the
+    // record. Never in the way of the rest.
+    await linkIssue(repo, issue, action === 'deleted' || action === 'transferred').catch((error: unknown) =>
+      console.warn(`[bridge] ${repo.name}#${issue.number}: its work item was not brought up to date: ${error instanceof Error ? error.message : error}`),
+    );
     // Gone from this repository: nothing of it is kept to staff.
     if (action === 'deleted' || action === 'transferred') {
       await issues.forget(repo.id, issue.number);
@@ -1334,6 +1355,7 @@ export class Webhooks {
         labels: issue.labels.map((label) => label.name),
         ...(issue.state ? { state: issue.state } : {}),
         ...(issue.closed_at ? { closedAt: issue.closed_at } : {}),
+        ...(issue.created_at ? { createdAt: issue.created_at } : {}),
       },
       payload.action,
       payload.sender?.login ?? null,
@@ -1860,6 +1882,33 @@ export class Webhooks {
     }
   }
 
+  private async linkPullRequest(
+    repo: { id: string; defaultBranch: string },
+    repoFullName: string,
+    pr: NonNullable<WebhookPayload['pull_request']>,
+    reclaim: boolean,
+  ): Promise<void> {
+    const client = reclaim ? await asAutomation(this.automation['actors'], this.config).catch(() => null) : null;
+    await linkPull(
+      repo,
+      {
+        number: pr.number,
+        repoFullName,
+        headRef: pr.head.ref,
+        headRepoFullName: pr.head.repo?.full_name ?? null,
+        baseRef: pr.base?.ref ?? null,
+        defaultBranch: repo.defaultBranch,
+        body: pr.body ?? null,
+        title: pr.title,
+        htmlUrl: pr.html_url,
+        state: (pr.state ?? (pr.closed_at ? 'closed' : 'open')) === 'closed' ? 'closed' : 'open',
+        merged: Boolean(pr.merged || pr.merged_at),
+        createdAt: pr.created_at ?? null,
+      },
+      { reclaim, client },
+    );
+  }
+
   private async onPullRequest(payload: WebhookPayload): Promise<void> {
     const pr = payload.pull_request;
     const repoName = payload.repository?.name;
@@ -1874,6 +1923,14 @@ export class Webhooks {
     // on `agent/builder/42-x` took #42's lease, moved it to Review and had
     // reviewers read the stranger's text.
     const fork = fromFork(pr, repoFullName);
+
+    // Its work item, on every action: which item it joins is worked out again
+    // only when what decides it can have changed (its body, or it opening);
+    // otherwise its title and state are brought up to date. Never in the way
+    // of the rest.
+    await this.linkPullRequest(repo, repoFullName, pr, RECLAIM_ACTIONS.has(payload.action ?? '')).catch((error: unknown) =>
+      console.warn(`[bridge] ${repoFullName}#${pr.number}: its work item was not brought up to date: ${error instanceof Error ? error.message : error}`),
+    );
 
     // Which pull request the issue's change is in, from the moment it opens —
     // a draft too. Nothing wrote it: the board could not tie a pull request's
