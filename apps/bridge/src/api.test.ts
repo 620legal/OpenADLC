@@ -167,7 +167,12 @@ vi.mock('@openadlc/db', () => ({
     listTasks: vi.fn(async () => []),
     listTasksOnSubjects: vi.fn(async () => []),
   },
-  threads: { listOpenGates: vi.fn(async () => []), listOpenGatesOnSubject: vi.fn(async () => []), expireGatesOfTask: vi.fn(async () => []) },
+  threads: {
+    listOpenGates: vi.fn(async () => []),
+    listOpenGatesOnSubject: vi.fn(async () => []),
+    listGatesForTasks: vi.fn(async () => []),
+    expireGatesOfTask: vi.fn(async () => []),
+  },
 }));
 
 import { acknowledgements, audit, bots, costs, credentials, issues, leases, modelAccounts, repos, requests, sessions, settings, tasks, threads, withAdvisoryLock } from '@openadlc/db';
@@ -1033,7 +1038,7 @@ describe('stopping a task that could not finish', () => {
       vi.mocked(threads.listOpenGatesOnSubject).mockResolvedValue([{ id: 'gate-0', taskId: 'task-81', addedNeedsHuman: true }] as never);
       expect((await stop()).status).toBe(200);
       expect(asBot).toHaveBeenCalledWith('intake');
-      expect(removeLabel).toHaveBeenCalledWith('janedoe/openadlc', 81, 'needs-human');
+      expect(removeLabel).toHaveBeenCalledWith('janedoe/openadlc', 81, 'needs-human', { timeoutMs: 5_000 });
       expect(vi.mocked(audit)).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'task.stopped', payload: expect.objectContaining({ needsHumanRemoved: true }) }),
       );
@@ -1067,6 +1072,178 @@ describe('stopping a task that could not finish', () => {
       const response = await stop();
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ questionsClosed: 1, stopped: true });
+    });
+  });
+
+  /**
+   * A `needs-human` no question recorded as its own: a bot put it on itself,
+   * and the question it asked after found it on. On 2026-10-22 a person's Stop
+   * on #74's intake closed its question and left the label on: the dispatcher
+   * would not lease the issue again, and no card said why. GitHub's timeline
+   * says who put it on and when.
+   */
+  describe('needs-human the task’s own account put on while it ran', () => {
+    const BOT_LOGIN = 'fleet-atlas-orzelig';
+    let labels: string[];
+    let labelled: { actor: { login: string } | null; createdAt: string; label: { name: string } }[];
+    const removeLabel = vi.fn(async () => undefined);
+    const request = vi.fn(async (_method: string, _path: string, _body?: unknown): Promise<unknown> => ({
+      data: { repository: { issueOrPullRequest: { timelineItems: { nodes: labelled } } } },
+    }));
+    const by = (login: string, createdAt: string, name = 'needs-human', databaseId?: number) => ({
+      actor: { login, ...(databaseId !== undefined ? { databaseId } : {}) },
+      createdAt,
+      label: { name },
+    });
+    const getIssue = vi.fn(async (_repo: string, _number: number, _options?: unknown) => ({ labels }));
+
+    beforeEach(() => {
+      task = { ...FAILED, state: 'paused', createdAt: '2026-10-22T16:32:00.000Z', startedAt: '2026-10-22T16:32:52.000Z' };
+      openGates = [{ taskId: 'task-81' }];
+      labels = ['needs-human', 'adlc:intake', 'do:ai'];
+      labelled = [by('orzelig-fleet-flow', '2026-10-22T16:32:51Z', 'adlc:intake'), by(BOT_LOGIN, '2026-10-22T16:33:55Z')];
+      removeLabel.mockClear();
+      request.mockClear();
+      vi.mocked(repos.listRepos).mockImplementation((async () => [{ id: 'repo-openadlc', name: 'openadlc', fullName: 'janedoe/openadlc' }]) as never);
+      vi.mocked(bots.getBotById).mockImplementation(async () => ({ id: 'bot-intake', name: 'intake', role: 'intake', githubLogin: BOT_LOGIN }) as never);
+      vi.mocked(bots.listBots).mockImplementation(async () =>
+        [
+          { id: 'bot-flow', name: 'janedoe-openadlc-flow', role: 'automation', githubLogin: 'orzelig-fleet-flow' },
+          { id: 'bot-intake', name: 'intake', role: 'intake', githubLogin: BOT_LOGIN },
+        ] as never,
+      );
+      // The label was on when the question was asked, so the question did not
+      // record it as its own.
+      vi.mocked(threads.listOpenGatesOnSubject).mockResolvedValue([{ id: 'gate-0', taskId: 'task-81', addedNeedsHuman: false }] as never);
+      vi.mocked(threads.listGatesForTasks).mockResolvedValue([{ id: 'gate-0', taskId: 'task-81', addedNeedsHuman: false }] as never);
+      asBot.mockReset().mockImplementation(async () => ({ getIssue, removeLabel, request }));
+      getIssue.mockClear();
+    });
+
+    afterEach(() => {
+      vi.mocked(bots.listBots).mockImplementation(async () => DEFAULT_CREW as never);
+      vi.mocked(threads.listGatesForTasks).mockResolvedValue([] as never);
+      delete (credentials as Record<string, unknown>).getCredential;
+    });
+
+    it('comes off when the newest labelling is the task’s own account’s, since the task started', async () => {
+      expect((await stop()).status).toBe(200);
+      // Each of the Stop's GitHub calls is bounded: a person is waiting on it.
+      expect(getIssue).toHaveBeenCalledWith('janedoe/openadlc', 81, { timeoutMs: 5_000 });
+      expect(request).toHaveBeenCalledWith(
+        'POST',
+        '/graphql',
+        expect.objectContaining({ variables: { owner: 'janedoe', name: 'openadlc', number: 81 } }),
+        { timeoutMs: 5_000 },
+      );
+      expect(removeLabel).toHaveBeenCalledWith('janedoe/openadlc', 81, 'needs-human', { timeoutMs: 5_000 });
+      expect(vi.mocked(audit)).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'task.stopped', payload: expect.objectContaining({ needsHumanRemoved: true }) }),
+      );
+    });
+
+    it('comes off a task that asked nothing, which put it on itself and failed', async () => {
+      task = { ...FAILED, createdAt: '2026-10-22T16:32:00.000Z', startedAt: '2026-10-22T16:32:52.000Z' };
+      openGates = [];
+      vi.mocked(threads.listOpenGatesOnSubject).mockResolvedValue([] as never);
+      expect((await stop()).status).toBe(200);
+      expect(removeLabel).toHaveBeenCalledWith('janedoe/openadlc', 81, 'needs-human', { timeoutMs: 5_000 });
+    });
+
+    it('stays when a person put it on last', async () => {
+      labelled = [by(BOT_LOGIN, '2026-10-22T16:33:55Z'), by('janedoe', '2026-10-22T16:40:00Z')];
+      expect((await stop()).status).toBe(200);
+      expect(removeLabel).not.toHaveBeenCalled();
+    });
+
+    it('stays when another crew account put it on, as the automation account does to hold work for a person', async () => {
+      // "Hold this PR", a send-back past its limit, an unreviewed merge: each
+      // labels as the automation account, on purpose.
+      labelled = [by('orzelig-fleet-flow', '2026-10-22T16:40:00Z')];
+      expect((await stop()).status).toBe(200);
+      expect(removeLabel).not.toHaveBeenCalled();
+    });
+
+    it('stays when the task’s account is the automation account’s too, whose labels hold work on purpose', async () => {
+      // The fixture's logins must be one account for this to mean anything.
+      vi.mocked(bots.getBotById).mockImplementation(async () => ({ id: 'bot-intake', name: 'intake', role: 'intake', githubLogin: 'orzelig-fleet-flow' }) as never);
+      vi.mocked(bots.listBots).mockImplementation(async () =>
+        [
+          { id: 'bot-flow', name: 'janedoe-openadlc-flow', role: 'automation', githubLogin: 'orzelig-fleet-flow' },
+          { id: 'bot-intake', name: 'intake', role: 'intake', githubLogin: 'orzelig-fleet-flow' },
+        ] as never,
+      );
+      labelled = [by('orzelig-fleet-flow', '2026-10-22T16:40:00Z')];
+      expect((await stop()).status).toBe(200);
+      expect(removeLabel).not.toHaveBeenCalled();
+    });
+
+    it('compares accounts by the id GitHub gives, so a renamed account is still the task’s and a reused login is not', async () => {
+      Object.assign(credentials, {
+        getCredential: vi.fn(async (botId: string) => ({ githubUserId: botId === 'bot-intake' ? 501 : 900 })),
+      });
+      labelled = [by('fleet-atlas-renamed', '2026-10-22T16:33:55Z', 'needs-human', 501)];
+      expect((await stop()).status).toBe(200);
+      expect(removeLabel).toHaveBeenCalledTimes(1);
+
+      removeLabel.mockClear();
+      task = { ...FAILED, state: 'paused', createdAt: '2026-10-22T16:32:00.000Z', startedAt: '2026-10-22T16:32:52.000Z' };
+      labelled = [by(BOT_LOGIN, '2026-10-22T16:33:55Z', 'needs-human', 777)];
+      expect((await stop()).status).toBe(200);
+      expect(removeLabel).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a refused plan change', 'plan change refused by janedoe'],
+      ['a hand-off at the cost cap', 'stopped at the cost cap: hand it to a person (janedoe)'],
+    ])('stays on a task %s ended, which kept the label so the issue is not leased again', async (_what, exitReason) => {
+      // The thread still offers Stop on it, and the timeline names the task's
+      // own account: the question that put the label on was answered.
+      task = { ...FAILED, state: 'stopped', exitReason, createdAt: '2026-10-22T16:32:00.000Z', startedAt: '2026-10-22T16:32:52.000Z' };
+      openGates = [];
+      vi.mocked(threads.listOpenGatesOnSubject).mockResolvedValue([] as never);
+      vi.mocked(threads.listGatesForTasks).mockResolvedValue([] as never);
+      expect((await stop()).status).toBe(200);
+      expect(request).not.toHaveBeenCalled();
+      expect(removeLabel).not.toHaveBeenCalled();
+    });
+
+    it('stays when a question the task asked, answered since, recorded putting it on: that question’s rule decides', async () => {
+      openGates = [];
+      vi.mocked(threads.listOpenGatesOnSubject).mockResolvedValue([] as never);
+      vi.mocked(threads.listGatesForTasks).mockResolvedValue([{ id: 'gate-old', taskId: 'task-81', state: 'answered', addedNeedsHuman: true }] as never);
+      expect((await stop()).status).toBe(200);
+      expect(request).not.toHaveBeenCalled();
+      expect(removeLabel).not.toHaveBeenCalled();
+    });
+
+    it('stays when it was put on before the task started', async () => {
+      labelled = [by(BOT_LOGIN, '2026-10-22T16:00:00Z')];
+      expect((await stop()).status).toBe(200);
+      expect(removeLabel).not.toHaveBeenCalled();
+    });
+
+    it.each(['do:legal', 'do:human', 'do:product'])('stays on a %s issue, which triage gives it on purpose because a person owes the work', async (owed) => {
+      labels = ['needs-human', owed];
+      expect((await stop()).status).toBe(200);
+      expect(removeLabel).not.toHaveBeenCalled();
+    });
+
+    it('stays when another question still waits on the subject', async () => {
+      vi.mocked(threads.listOpenGatesOnSubject).mockResolvedValue([
+        { id: 'gate-0', taskId: 'task-81', addedNeedsHuman: false },
+        { id: 'gate-other', taskId: 'task-90', addedNeedsHuman: true },
+      ] as never);
+      expect((await stop()).status).toBe(200);
+      expect(removeLabel).not.toHaveBeenCalled();
+    });
+
+    it('stays, and the stop stands, when GitHub’s timeline cannot be read', async () => {
+      request.mockRejectedValueOnce(new Error('GitHub 502'));
+      const response = await stop();
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ stopped: true });
+      expect(removeLabel).not.toHaveBeenCalled();
     });
   });
 

@@ -50,6 +50,9 @@ export function faceActions(item: AttentionItem): AttentionAction[] {
   if (item.kind === 'promote_held') return item.actions;
   // Drop the dependency, or reopen what it waits on: either settles it.
   if (item.kind === 'dependency_abandoned') return item.actions;
+  // Approved already, and waiting: what it waits on, and nothing that answers
+  // it. A card that still offered the choices was approved three times.
+  if (item.kind === 'plan_change_waiting') return item.actions.filter((action) => action.kind !== 'answer_gate').slice(0, 1);
   // A signing key OpenADLC did not register: revoke it, or say it is used
   // elsewhere — both on the card for the first key; more keys and the undos
   // are in the sheet.
@@ -108,6 +111,7 @@ const GROUP: Record<AttentionItem['kind'], AttentionGroup> = {
   design_memory_superseded: 'work',
   dependency_abandoned: 'work',
   resume_waiting: 'work',
+  plan_change_waiting: 'work',
 };
 
 export function groupOf(item: Pick<AttentionItem, 'kind' | 'group'>): AttentionGroup {

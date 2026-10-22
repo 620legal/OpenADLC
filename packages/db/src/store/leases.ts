@@ -467,32 +467,48 @@ export async function widenPaths(leaseId: string, paths: readonly string[]): Pro
   return row ? toLease(row) : null;
 }
 
+/**
+ * A person's approval of a plan change that could not be carried out when it
+ * was given: `blockedBy` names the issues holding a path it asked for, and
+ * `failed` says why adding the paths failed once nothing held them.
+ */
+export interface PlanChangeHold {
+  approvedBy: string;
+  blockedBy: number[];
+  failed?: string;
+}
+
 /** A plan-change request as its gate holds it. */
 export interface PlanChangeRecord {
   paths: string[];
   reason: string;
-  /** Approved, but waiting for another lease to let go of a path it asked for. */
-  held: { approvedBy: string; blockedBy: number[] } | null;
+  /** Approved, but waiting for another lease to let go of a path it asked for, or failed once none did. */
+  held: PlanChangeHold | null;
 }
 
 interface PlanChangePayload {
   planChange?: { paths?: unknown; reason?: unknown };
-  held?: { approvedBy?: unknown; blockedBy?: unknown };
+  held?: unknown;
+}
+
+/** A hold as `holdPlanChange` wrote it, or null for anything else. */
+export function toHold(raw: unknown): PlanChangeHold | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const held = raw as { approvedBy?: unknown; blockedBy?: unknown; failed?: unknown };
+  return {
+    approvedBy: typeof held.approvedBy === 'string' ? held.approvedBy : '',
+    blockedBy: Array.isArray(held.blockedBy) ? held.blockedBy.filter((n): n is number => typeof n === 'number') : [],
+    ...(typeof held.failed === 'string' ? { failed: held.failed } : {}),
+  };
 }
 
 function toPlanChange(payload: PlanChangePayload | null): PlanChangeRecord | null {
   const request = payload?.planChange;
   if (!request || !Array.isArray(request.paths)) return null;
-  const held = payload?.held;
   return {
     paths: request.paths.filter((path): path is string => typeof path === 'string'),
     reason: typeof request.reason === 'string' ? request.reason : '',
-    held: held
-      ? {
-          approvedBy: typeof held.approvedBy === 'string' ? held.approvedBy : '',
-          blockedBy: Array.isArray(held.blockedBy) ? held.blockedBy.filter((n): n is number => typeof n === 'number') : [],
-        }
-      : null,
+    held: toHold(payload?.held),
   };
 }
 
@@ -509,13 +525,20 @@ export async function planChangeOfGate(gateId: string): Promise<PlanChangeRecord
   return toPlanChange(row?.payload ?? null);
 }
 
-/** Remembers that a person approved a request that another lease is holding up. */
-export async function holdPlanChange(gateId: string, held: { approvedBy: string; blockedBy: number[] }): Promise<void> {
-  await query(
+/**
+ * Remembers that a person approved a request that another lease is holding
+ * up, or that adding its paths failed, only while the hold is still `was`:
+ * false when another write got there first. Two approvals at once both read
+ * no hold, and both told the issue what the approval waited on.
+ */
+export async function holdPlanChange(gateId: string, held: PlanChangeHold, was: PlanChangeHold | null): Promise<boolean> {
+  const rows = await query<{ id: string }>(
     `update messages set payload = payload || jsonb_build_object('held', $2::jsonb)
-      where kind = 'gate' and payload->>'gateId' = $1`,
-    [gateId, JSON.stringify(held)],
+      where kind = 'gate' and payload->>'gateId' = $1 and (payload->'held') is not distinct from $3::jsonb
+      returning id`,
+    [gateId, JSON.stringify(held), was ? JSON.stringify(was) : null],
   );
+  return rows.length > 0;
 }
 
 /** The open gates whose request was approved and is waiting on another lease, oldest first. */

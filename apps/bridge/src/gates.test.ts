@@ -93,9 +93,14 @@ vi.mock('@openadlc/db', () => ({
       store.lease ? { ...store.lease, declaredPaths: [...(store.lease.declaredPaths as string[]), ...paths] } : null,
     ),
     setLeaseState: vi.fn(async () => null),
-    planChangeOfGate: vi.fn(async () => store.planChange),
-    holdPlanChange: vi.fn(async (_gateId: string, held: { approvedBy: string; blockedBy: number[] }) => {
+    // A copy, as a read of the row is: two answers at once each have their own.
+    planChangeOfGate: vi.fn(async () => (store.planChange ? { ...store.planChange } : null)),
+    // Written only while the hold is still the one the writer read, as the
+    // statement's compare-and-set does.
+    holdPlanChange: vi.fn(async (_gateId: string, held: Record<string, unknown>, was: Record<string, unknown> | null) => {
+      if (JSON.stringify(store.planChange?.held ?? null) !== JSON.stringify(was ?? null)) return false;
       store.planChange = { ...store.planChange, held };
+      return true;
     }),
     listHeldPlanChanges: vi.fn(async () =>
       store.planChange?.held ? [{ gateId: 'gate-1', request: store.planChange }] : [],
@@ -1031,7 +1036,7 @@ describe('a path another lease holds', () => {
     expect(answered).toEqual({ answer: 'Approve', taskId: null, held: true });
     expect(leases.widenPaths).not.toHaveBeenCalled();
     expect(client.updateIssueBody).not.toHaveBeenCalled();
-    expect(leases.holdPlanChange).toHaveBeenCalledWith('gate-1', { approvedBy: 'alexsmith', blockedBy: [80] });
+    expect(leases.holdPlanChange).toHaveBeenCalledWith('gate-1', { approvedBy: 'alexsmith', blockedBy: [80] }, null);
     expect(threads.answerGate).not.toHaveBeenCalled();
     expect(store.gate).toMatchObject({ state: 'open' });
     expect(client.removeLabel).not.toHaveBeenCalled();
@@ -1045,7 +1050,7 @@ describe('a path another lease holds', () => {
     const answered = await gates.answer({ gateId: 'gate-1', reply: '1', answeredBy: 'alexsmith' });
 
     expect(answered).toMatchObject({ taskId: null, held: true });
-    expect(leases.holdPlanChange).toHaveBeenCalledWith('gate-1', { approvedBy: 'alexsmith', blockedBy: [81] });
+    expect(leases.holdPlanChange).toHaveBeenCalledWith('gate-1', { approvedBy: 'alexsmith', blockedBy: [81] }, null);
   });
 
   it('names every issue that holds one, once each and in order', async () => {
@@ -1054,7 +1059,7 @@ describe('a path another lease holds', () => {
 
     await gates.answer({ gateId: 'gate-1', reply: '1', answeredBy: 'alexsmith' });
 
-    expect(leases.holdPlanChange).toHaveBeenCalledWith('gate-1', { approvedBy: 'alexsmith', blockedBy: [80, 90] });
+    expect(leases.holdPlanChange).toHaveBeenCalledWith('gate-1', { approvedBy: 'alexsmith', blockedBy: [80, 90] }, null);
   });
 
   it('is not held by the issue’s own lease or work, nor by paths that do not overlap', async () => {
@@ -1082,6 +1087,55 @@ describe('a path another lease holds', () => {
     expect(leases.widenPaths).toHaveBeenCalledWith('lease-1', ['apps/hostd/src/skill-runner.ts']);
   });
 
+  it('posts nothing new when it is approved again while the same work holds the paths', async () => {
+    // #27 on 2026-10-22: approved three times while #71 held the paths, and
+    // the issue got the same comment each time.
+    store.otherLeases = [{ issueNumber: 80, declaredPaths: ['apps/hostd/'] }];
+    await gates.answer({ gateId: 'gate-1', reply: '1', answeredBy: 'alexsmith' });
+    expect(client.comment).toHaveBeenCalledTimes(1);
+    client.comment.mockClear();
+    vi.mocked(threads.addMessage).mockClear();
+    vi.mocked(leases.holdPlanChange).mockClear();
+
+    for (const [reply, by] of [['Approve', 'janedoe'], ['1', 'alexsmith']] as const) {
+      expect(await gates.answer({ gateId: 'gate-1', reply, answeredBy: by })).toEqual({ answer: 'Approve', taskId: null, held: true });
+    }
+
+    expect(client.comment).not.toHaveBeenCalled();
+    expect(client.addLabels).not.toHaveBeenCalled();
+    expect(threads.addMessage).not.toHaveBeenCalled();
+    expect(leases.holdPlanChange).not.toHaveBeenCalled();
+    expect(threads.answerGate).not.toHaveBeenCalled();
+    expect(store.planChange).toMatchObject({ held: { approvedBy: 'alexsmith', blockedBy: [80] } });
+  });
+
+  it('says so once when two people approve it at once, though both read it unapproved', async () => {
+    store.otherLeases = [{ issueNumber: 80, declaredPaths: ['apps/hostd/'] }];
+
+    const both = await Promise.all([
+      gates.answer({ gateId: 'gate-1', reply: 'Approve', answeredBy: 'alexsmith' }),
+      gates.answer({ gateId: 'gate-1', reply: 'Approve', answeredBy: 'janedoe' }),
+    ]);
+
+    expect(both.map((answered) => answered.held)).toEqual([true, true]);
+    expect(leases.holdPlanChange).toHaveBeenCalledTimes(2);
+    expect(client.comment).toHaveBeenCalledTimes(1);
+    expect(store.messages.filter((message) => message.kind === 'sys')).toHaveLength(1);
+  });
+
+  it('says so once more when it is approved again and other work now holds the paths', async () => {
+    store.otherLeases = [{ issueNumber: 80, declaredPaths: ['apps/hostd/'] }];
+    await gates.answer({ gateId: 'gate-1', reply: '1', answeredBy: 'alexsmith' });
+    client.comment.mockClear();
+    store.otherLeases = [{ issueNumber: 84, declaredPaths: ['apps/hostd/'] }];
+
+    expect(await gates.answer({ gateId: 'gate-1', reply: 'Approve', answeredBy: 'janedoe' })).toMatchObject({ held: true });
+
+    expect(client.comment).toHaveBeenCalledTimes(1);
+    expect(String((client.comment.mock.calls[0] as unknown[])[2])).toContain('#84 holds paths');
+    expect(leases.holdPlanChange).toHaveBeenLastCalledWith('gate-1', { approvedBy: 'janedoe', blockedBy: [84] }, { approvedBy: 'alexsmith', blockedBy: [80] });
+  });
+
   it('is not lost to a comment that is not a choice: the gate stays open and the issue says so', async () => {
     store.otherLeases = [{ issueNumber: 80, declaredPaths: ['apps/hostd/'] }];
     await gates.answer({ gateId: 'gate-1', reply: '1', answeredBy: 'alexsmith' });
@@ -1096,6 +1150,9 @@ describe('a path another lease holds', () => {
     const said = String((client.comment.mock.calls[0] as unknown[])[2]);
     expect(said).toContain('alexsmith');
     expect(said).toContain('#80');
+    // It goes on by itself: approving again is not what to do.
+    expect(said).not.toContain('Approve');
+    expect(said).toContain('reply `Refuse` to stop the task instead');
   });
 
   it('can still be refused while it waits', async () => {
@@ -1149,7 +1206,7 @@ describe('approved requests waiting for a path to be let go', () => {
 
     await gates.applyHeld();
 
-    expect(leases.holdPlanChange).toHaveBeenCalledWith('gate-1', { approvedBy: 'alexsmith', blockedBy: [84] });
+    expect(leases.holdPlanChange).toHaveBeenCalledWith('gate-1', { approvedBy: 'alexsmith', blockedBy: [84] }, { approvedBy: 'alexsmith', blockedBy: [80] });
     expect(client.comment).toHaveBeenCalledTimes(1);
     expect(String((client.comment.mock.calls[0] as unknown[])[2])).toContain('#84');
   });
@@ -1186,6 +1243,52 @@ describe('approved requests waiting for a path to be let go', () => {
 
     expect(await gates.applyHeld()).toEqual(['task-1']);
     warn.mockRestore();
+  });
+
+  it('say why when the paths are free but adding them fails, so the card stops saying it waits, once for each reason', async () => {
+    // The gate is open again with the hold that named #80: its card went on
+    // saying it would go on by itself, and the failure was only in the log.
+    actors.asBot.mockImplementation(async () => null as never);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    expect(await gates.applyHeld()).toEqual([]);
+    expect(await gates.applyHeld()).toEqual([]);
+
+    expect(store.gate).toMatchObject({ state: 'open' });
+    expect(store.planChange).toMatchObject({
+      held: { approvedBy: 'alexsmith', blockedBy: [], failed: expect.stringContaining('not connected to GitHub, so the Expected paths of openadlc#78 cannot be updated. Run: openadlc auth login --bot builder') },
+    });
+    const said = store.messages.filter((message) => message.kind === 'sys' && String(message.text).includes('adding them failed'));
+    expect(said).toHaveLength(1);
+    expect(said[0]).toMatchObject({ text: expect.stringContaining('Approve again'), note: expect.stringContaining('not connected') });
+
+    // Fixed, and tried again: granted as the person approved.
+    actors.asBot.mockImplementation(async () => client as never);
+    expect(await gates.applyHeld()).toEqual(['task-1']);
+    expect(threads.answerGate).toHaveBeenLastCalledWith('gate-1', 'Approve', 'alexsmith');
+    warn.mockRestore();
+  });
+
+  it('wait again, and say so, when other work takes the paths after adding them failed', async () => {
+    store.planChange = { ...REQUEST, held: { approvedBy: 'alexsmith', blockedBy: [], failed: 'not connected' } };
+    store.otherLeases = [{ issueNumber: 84, declaredPaths: ['apps/hostd/'] }];
+
+    expect(await gates.applyHeld()).toEqual([]);
+
+    expect(store.planChange).toEqual({ ...REQUEST, held: { approvedBy: 'alexsmith', blockedBy: [84] } });
+    expect(String((client.comment.mock.calls[0] as unknown[])[2])).toContain('#84 holds paths');
+  });
+
+  it('answer a comment on one that failed with what to do, not with what it waits on', async () => {
+    store.planChange = { ...REQUEST, held: { approvedBy: 'alexsmith', blockedBy: [], failed: 'not connected' } };
+
+    expect(await gates.answer({ gateId: 'gate-1', reply: 'any news?', answeredBy: 'janedoe' })).toMatchObject({ held: true });
+
+    const said = String((client.comment.mock.calls[0] as unknown[])[2]);
+    expect(said).toContain('adding the paths failed');
+    expect(said).toContain('Reply `Approve` to try again');
+    // The reason stays in the console: it is the install's, not the issue's.
+    expect(said).not.toContain('not connected');
   });
 });
 
@@ -1698,7 +1801,7 @@ describe('an answer from a console person signed in by email', () => {
     await gates.answer({ gateId: 'gate-1', reply: 'Approve', answeredBy: JANE });
     await gates.answer({ gateId: 'gate-1', reply: 'any news?', answeredBy: 'accounts.google.com:sam@example.com' });
 
-    expect(leases.holdPlanChange).toHaveBeenCalledWith('gate-1', { approvedBy: JANE, blockedBy: [80] });
+    expect(leases.holdPlanChange).toHaveBeenCalledWith('gate-1', { approvedBy: JANE, blockedBy: [80] }, null);
     expect(everythingSaid()).toContain('**jane approved**');
     expect(everythingSaid()).toContain("**sam commented**, which changes nothing: jane's approval");
     expect(everythingSaid()).not.toContain('@example.com');

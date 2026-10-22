@@ -226,6 +226,10 @@ auto-merge off. Take the label off to let the work go on. Answering a bot's
 question takes the label off only when that question put it on and no other
 question on the same issue or pull request is still open: a person's hold, or
 a label that was on before the question, stays until a person takes it off.
+A person's **Stop** takes it off by the same rule, and also when GitHub's
+timeline says the stopped task's own account put it on while the task ran,
+except on work a person owes (a `do:` other than `do:ai`), which triage
+labels on purpose ([troubleshooting.md](troubleshooting.md#how-a-problem-reaches-you)).
 
 ### .github/openadlc.yml — how a repository ships
 

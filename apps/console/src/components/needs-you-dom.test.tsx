@@ -231,6 +231,40 @@ describe('a Needs-you card', () => {
   });
 });
 
+describe('an approved plan change waiting on another lease', () => {
+  // #27 on 2026-10-22: approved, then shown with Approve and Refuse as if it
+  // had not been, and approved twice more.
+  const WAITING: AttentionItem = {
+    id: 'plan-change:gate-27',
+    kind: 'plan_change_waiting',
+    headline: 'The builder (openadlc-atlas-janedoe) waits for #71 to let go of the approved paths',
+    subject: { repo: 'openadlc', number: 27, title: 'Show work items', ref: 'openadlc#27', url: null },
+    bot: { name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', roleLabel: 'builder', githubLogin: 'openadlc-atlas-janedoe' },
+    since: '2026-09-24T11:40:00.000Z',
+    detail: 'janedoe approved adding `packages/db/src/store/work-items.ts`. #71 (pull request #72) holds paths that overlap it, so the task stays paused.',
+    actions: [
+      { kind: 'open_url', label: 'Open pull request #72', url: 'https://github.com/janedoe/openadlc/pull/72' },
+      { kind: 'open_thread', label: 'Open thread', bot: 'openadlc-atlas-janedoe' },
+      { kind: 'answer_gate', label: 'Refuse', gateId: 'gate-27', answer: 'Refuse' },
+    ],
+  };
+
+  it('has what it waits on on its face and nothing that answers it, and refuses only from its sheet', async () => {
+    const { answerGate } = await import('@/app/actions');
+    vi.mocked(answerGate).mockClear();
+    await render([WAITING]);
+    const card = container.querySelector('article')!;
+    expect([...card.querySelectorAll('a')].map((link) => link.textContent)).toEqual(['Open pull request #72']);
+    expect(() => button('Approve', card)).toThrow();
+    expect(() => button('Refuse', card)).toThrow();
+
+    await click(button('Show more', card));
+    expect(() => button('Approve', sheet()!)).toThrow();
+    await click(button('Refuse', sheet()!));
+    expect(vi.mocked(answerGate)).toHaveBeenCalledWith('gate-27', 'Refuse');
+  });
+});
+
 describe('a failed triage’s Dismiss and Abandon', () => {
   // Only Try again and Open thread: a request nobody wanted any more stood in
   // Needs you for a week, or was started again from the queue.

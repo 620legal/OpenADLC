@@ -127,12 +127,31 @@ describe('the plan change a gate asked for', () => {
     });
   });
 
-  it('remembers an approval on the gate’s message, beside the request', async () => {
-    await holdPlanChange('gate-1', { approvedBy: 'alexsmith', blockedBy: [12] });
+  it('remembers an approval on the gate’s message, beside the request, only while the hold is the one read', async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ id: 'message-1' }]);
+    await expect(holdPlanChange('gate-1', { approvedBy: 'alexsmith', blockedBy: [12] }, null)).resolves.toBe(true);
 
     const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
     expect(String(sql)).toMatch(/update messages set payload = payload \|\| jsonb_build_object\('held'/);
-    expect(params).toEqual(['gate-1', JSON.stringify({ approvedBy: 'alexsmith', blockedBy: [12] })]);
+    // Two approvals at once both read no hold, and both told the issue.
+    expect(String(sql)).toMatch(/\(payload->'held'\) is not distinct from \$3::jsonb/);
+    expect(params).toEqual(['gate-1', JSON.stringify({ approvedBy: 'alexsmith', blockedBy: [12] }), null]);
+
+    vi.mocked(query).mockResolvedValueOnce([]);
+    const was = { approvedBy: 'alexsmith', blockedBy: [12] };
+    await expect(holdPlanChange('gate-1', { approvedBy: 'alexsmith', blockedBy: [], failed: 'not connected' }, was)).resolves.toBe(false);
+    expect(vi.mocked(query).mock.calls[1]?.[1]).toEqual([
+      'gate-1',
+      JSON.stringify({ approvedBy: 'alexsmith', blockedBy: [], failed: 'not connected' }),
+      JSON.stringify(was),
+    ]);
+  });
+
+  it('says why adding the paths failed, once nothing held them', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({
+      payload: { planChange: { paths: ['a.ts'], reason: 'r' }, held: { approvedBy: 'alexsmith', blockedBy: [], failed: 'not connected' } },
+    });
+    await expect(planChangeOfGate('gate-1')).resolves.toMatchObject({ held: { approvedBy: 'alexsmith', blockedBy: [], failed: 'not connected' } });
   });
 
   it('lists the open gates whose approval is waiting, oldest first, and not one that was never approved', async () => {

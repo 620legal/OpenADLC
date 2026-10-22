@@ -789,6 +789,7 @@ function ActionButton({
           {action.label}
         </button>
       );
+    case 'answer_gate':
     case 'approve':
       return (
         <button type="button" className={style} disabled={pending} onClick={() => run(() => answerGate(action.gateId, action.answer))}>
