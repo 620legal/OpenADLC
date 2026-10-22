@@ -13,6 +13,7 @@ import {
   holdForPerson,
   laterTestingDeploy,
   holdPromote,
+  newestTestingEnd,
   oweRollback,
   recordRollback,
   recordSmoke,
@@ -263,5 +264,19 @@ describe('deploy runs', () => {
     ]);
     const sql = String(vi.mocked(query).mock.calls[0]![0]).replace(/\s+/g, ' ');
     expect(sql).toContain('testing_dispatched_at >= $1 and testing_conclusion is null and smoke_conclusion is null');
+  });
+
+  // Settings said a repository's merges wait on testing while its
+  // deploy-testing skipped every one: the newest that ended is what it reads.
+  it('reads the repository’s newest testing deploy whose end is recorded, leaving out one a later deploy superseded', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...row, testing_dispatched_at: new Date('2026-10-22T16:57:00Z'), testing_conclusion: 'skipped', detail: 'deploy-testing run 9 was skipped' });
+    expect(await newestTestingEnd('repo-1')).toMatchObject({ testingConclusion: 'skipped', detail: 'deploy-testing run 9 was skipped' });
+    const sql = String(vi.mocked(queryOne).mock.calls[0]![0]).replace(/\s+/g, ' ');
+    expect(sql).toContain("repo_id = $1 and testing_dispatched_at is not null and testing_conclusion is not null and testing_conclusion <> 'superseded'");
+    expect(sql).toContain('order by testing_dispatched_at desc limit 1');
+    expect(vi.mocked(queryOne).mock.calls[0]![1]).toEqual(['repo-1']);
+
+    vi.mocked(queryOne).mockResolvedValueOnce(null);
+    expect(await newestTestingEnd('repo-1')).toBeNull();
   });
 });

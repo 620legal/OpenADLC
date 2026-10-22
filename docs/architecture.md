@@ -469,6 +469,11 @@ none yet, says its kind of work instead ("writing the change").
    is cancelled with no later deploy to carry it, deployed nothing, and the
    merge's lease is let go then, since no verification on testing will come (`DeployPipeline.onTestingRun`, and the
    deploy sweep's `checkTestingDeploys` for a run whose delivery never came).
+   One that had nothing to deploy — its run skipped, or a success that ran no
+   job — ships by merging: its cards go to Done, with why on the move and in
+   their timelines, and the deploy sweep moves any still in Ship
+   (`nothingToDeploy`). One still running, failed, never started or cancelled
+   keeps its cards in Ship.
 8. **Done.** The issue is closed, the lease is let go, and its files are free
    for the next change.
 

@@ -17,13 +17,26 @@ const world = {
   audits: [] as Record<string, unknown>[],
   /** The leases let go, by the pull request they were held for. */
   released: [] as { repoId: string; prNumber: number; why: string }[],
+  /** The board, as `issues.listIssues` reads it; the send-back's own issue when null. */
+  board: null as { number: number; prNumber: number | null; stage: string }[] | null,
+  /** The threads on each subject, as `threads.listThreadsForSubjects` finds them. */
+  threads: [] as { id: string; subject_ref: string }[],
+  /** What was said in a thread. */
+  said: [] as { threadId: string; kind: string; text: string; payload?: Record<string, unknown> }[],
 };
 
 vi.mock('@openadlc/db', () => ({
   audit: vi.fn(async (entry: Record<string, unknown>) => {
     world.audits.push(entry);
   }),
-  issues: { listIssues: vi.fn(async () => [{ number: 12, prNumber: 40 }]) },
+  issues: { listIssues: vi.fn(async () => world.board ?? [{ number: 12, prNumber: 40 }]) },
+  threads: {
+    listThreadsForSubjects: vi.fn(async (subjects: string[]) => world.threads.filter((thread) => subjects.includes(thread.subject_ref))),
+    addMessage: vi.fn(async (message: { threadId: string; kind: string; text: string; payload?: Record<string, unknown> }) => {
+      world.said.push(message);
+      return message;
+    }),
+  },
   // A lease held for each pull request until it is let go once.
   leases: {
     releaseForPullRequest: vi.fn(async (repoId: string, prNumber: number, why: string) => {
@@ -125,6 +138,12 @@ vi.mock('@openadlc/db', () => ({
         .sort((a, b) => String(a.testing_dispatched_at).localeCompare(String(b.testing_dispatched_at)))[0];
       return later ? { sha: later.sha } : null;
     }),
+    newestTestingEnd: vi.fn(async () => {
+      const ended = [...world.runs.values()]
+        .filter((run) => run.testing_dispatched_at && run.testingConclusion && run.testingConclusion !== 'superseded')
+        .sort((a, b) => String(b.testing_dispatched_at).localeCompare(String(a.testing_dispatched_at)))[0];
+      return ended ? { sha: ended.sha, testingConclusion: ended.testingConclusion, detail: ended.detail ?? null } : null;
+    }),
     supersededBefore: vi.fn(async (_repo: string, sha: string) => {
       const at = String(world.runs.get(sha)?.testing_dispatched_at ?? '');
       return [...world.runs.values()]
@@ -193,7 +212,7 @@ vi.mock('@openadlc/db', () => ({
   },
 }));
 
-import { DeployPipeline, promoteFailure, rollbackSaid, TESTING_APPEARS_MS, workflowFile } from './deploy-pipeline.js';
+import { DeployPipeline, deploysNothingHere, promoteFailure, rollbackSaid, TESTING_APPEARS_MS, workflowFile } from './deploy-pipeline.js';
 
 function rules(input: unknown): DeliveryRules {
   return deliveryRulesSchema.parse({ version: 1, ...(input as object) });
@@ -209,8 +228,10 @@ function pipeline(
     now?: number;
     pulls?: () => Promise<{ number: number; headRef: string }[]>;
     sendBack?: () => Promise<unknown>;
-    /** The promote run's jobs, as `GET …/actions/runs/{id}/jobs` answers. */
-    jobs?: { steps: { name: string; status: string; conclusion: string | null }[] }[];
+    /** The run's jobs, as `GET …/actions/runs/{id}/jobs` answers. */
+    jobs?: { conclusion?: string | null; steps: { name: string; status: string; conclusion: string | null }[] }[];
+    /** Whether a card's move is refused, as `Automation.moveStage` refuses one; nothing moves cards at all when `none`. */
+    moveStage?: 'moves' | 'refused' | 'none';
     /** Why the rules could not be read; `given` is then only the fallback. */
     readError?: () => string | null;
     /** The promote runs GitHub lists, as `promote-production.yml` names them. */
@@ -230,6 +251,7 @@ function pipeline(
   const dispatched: { path: string; body: unknown }[] = [];
   const cancelled: string[] = [];
   const sentBack: Record<string, unknown>[] = [];
+  const moves: Record<string, unknown>[] = [];
   const client = {
     ...(options.actingAs ? { actingAs: options.actingAs } : {}),
     request: vi.fn(async (method: string, path: string, body?: unknown) => {
@@ -266,6 +288,17 @@ function pipeline(
         return { sent: true as const, to: 'build' as const, count: 1 };
       }),
     } as never,
+    ...(options.moveStage === 'none'
+      ? {}
+      : {
+          moveStage: vi.fn(async (input: Record<string, unknown>) => {
+            if (options.moveStage === 'refused') return { moved: false, reason: `app#${String(input.issueNumber)} is labelled openadlc:ignore, which the crew leaves alone` };
+            moves.push(input);
+            const card = world.board?.find((issue) => issue.number === input.issueNumber);
+            if (card) card.stage = 'done';
+            return { moved: true };
+          }),
+        }),
     now: () => now,
   });
   return {
@@ -273,6 +306,7 @@ function pipeline(
     dispatched,
     cancelled,
     sentBack,
+    moves,
     client,
     advance: (ms: number) => (now += ms),
     setRules: (next: DeliveryRules) => {
@@ -289,6 +323,9 @@ beforeEach(() => {
   world.limits = null;
   world.audits = [];
   world.released = [];
+  world.board = null;
+  world.threads = [];
+  world.said = [];
 });
 
 describe('a merge', () => {
@@ -1154,9 +1191,26 @@ describe('a testing deploy that deployed nothing', () => {
       const said = await line.onTestingRun(REPO, LATER, { id: 6, conclusion: 'skipped' });
 
       expect(world.released.map((one) => one.prNumber)).toEqual([74, 72]);
-      expect(world.runs.get(SHA)).toMatchObject({ testingConclusion: 'cancelled', detail: expect.stringContaining('for the testing deploy of c0ffee0, which deployed nothing either') });
+      // Recorded as the deploy that carried it ended: it had nothing to
+      // deploy either, so its merge ships by merging with that one's.
+      expect(world.runs.get(SHA)).toMatchObject({ testingConclusion: 'skipped', detail: expect.stringContaining('for the testing deploy of c0ffee0, which deployed nothing either') });
       expect(said).toContain('released the lease on #71');
       expect(released).toHaveBeenCalledTimes(2);
+    });
+
+    it('stays cancelled, and its card in Ship, when the deploy that carried it never started', async () => {
+      dispatched();
+      later();
+      world.board = [{ number: 71, prNumber: 72, stage: 'merged' }];
+      const { line, moves } = pipeline(DEFAULT_DELIVERY_RULES);
+      await line.onTestingRun(REPO, SHA, { id: 5, conclusion: 'cancelled' });
+
+      await line.onTestingRun(REPO, LATER, { id: 6, conclusion: 'startup_failure' });
+
+      expect(world.runs.get(SHA)?.testingConclusion).toBe('cancelled');
+      expect(world.released.map((one) => one.prNumber)).toEqual([74, 72]);
+      expect(moves).toEqual([]);
+      expect(world.board[0]?.stage).toBe('merged');
     });
 
     it('lets its lease go at once when the later deploy has already deployed nothing', async () => {
@@ -1275,6 +1329,166 @@ describe('a testing deploy that deployed nothing', () => {
     ]);
     expect(world.runs.get(SHA)?.testingConclusion).toBeUndefined();
     expect(world.released).toEqual([]);
+  });
+});
+
+/**
+ * A merge whose testing deploy had nothing to deploy. 620legal/OpenADLC's
+ * rules name deploy-testing, which skips every run there: the merge's lease
+ * was let go (#84), and the card stayed in Ship for good, since no
+ * deployment, smoke or promote was ever coming. #16, #18, #44, #45, #46, #66
+ * and #27 sat there, some for two days.
+ */
+describe('a merge whose testing deploy had nothing to deploy', () => {
+  const SHA = 'fe6b790aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const DISPATCHED_AT = '2026-10-22T09:00:00.000Z';
+  const dispatched = () => world.runs.set(SHA, { sha: SHA, prNumber: 88, testing_dispatched_at: DISPATCHED_AT });
+  const deployRuns = (runs: Record<string, unknown>[]) => (path: string) => (path.includes('/deploy-testing.yml/') ? runs : []);
+  const at = (ms: number) => Date.parse(DISPATCHED_AT) + ms;
+  /** #87 is the branch's issue, #86 one it closes, #85 sent back after the merge, #84 another pull request's. */
+  const board = () => {
+    world.board = [
+      { number: 87, prNumber: 88, stage: 'merged' },
+      { number: 86, prNumber: 88, stage: 'merged' },
+      { number: 85, prNumber: 88, stage: 'build' },
+      { number: 84, prNumber: 83, stage: 'merged' },
+    ];
+    world.threads = [
+      { id: 'thread-builder', subject_ref: 'app#87' },
+      { id: 'thread-lead', subject_ref: 'app#88' },
+    ];
+  };
+
+  it('moves its cards in Ship to Done, as a merge that ships by merging, with why on the move, in the timeline and in the audit log', async () => {
+    dispatched();
+    board();
+    const { line, moves } = pipeline(DEFAULT_DELIVERY_RULES);
+
+    const said = await line.onTestingRun(REPO, SHA, { id: 39836758586, conclusion: 'skipped' });
+
+    const why = 'merging shipped it: deploy-testing run 39836758586 was skipped';
+    expect(moves).toEqual([
+      { repoName: 'app', issueNumber: 87, to: 'done', actor: 'bridge', reason: why, prNumber: 88 },
+      { repoName: 'app', issueNumber: 86, to: 'done', actor: 'bridge', reason: why, prNumber: 88 },
+    ]);
+    expect(world.board?.map((issue) => [issue.number, issue.stage])).toEqual([
+      [87, 'done'],
+      [86, 'done'],
+      [85, 'build'],
+      [84, 'merged'],
+    ]);
+    // The newest thread on either of its subjects: its work item's timeline.
+    expect(world.said).toEqual([
+      expect.objectContaining({ threadId: 'thread-lead', kind: 'sys', text: expect.stringContaining('Moved to Done: merging shipped it') }),
+      expect.objectContaining({ threadId: 'thread-lead', kind: 'sys', text: expect.stringContaining('deploy-testing run 39836758586 was skipped') }),
+    ]);
+    expect(world.audits).toContainEqual(
+      expect.objectContaining({ action: 'deploy.shipped_by_merging', target: 'app#87', payload: expect.objectContaining({ prNumber: 88, sha: SHA }) }),
+    );
+    expect(said).toContain('app#87 moved to Done: merging shipped it, since its testing deploy had nothing to deploy (deploy-testing run 39836758586 was skipped)');
+    expect(said).toContain('app#86 moved to Done');
+    expect(world.released.map((one) => one.prNumber)).toEqual([88]);
+  });
+
+  it('counts a run GitHub calls a success that ran no job, every one skipped', async () => {
+    dispatched();
+    board();
+    const { line, moves } = pipeline(DEFAULT_DELIVERY_RULES, { jobs: [{ conclusion: 'skipped', steps: [] }] });
+
+    await line.onTestingRun(REPO, SHA, { id: 9, conclusion: 'success' });
+
+    expect(world.runs.get(SHA)).toMatchObject({ testingConclusion: 'skipped', detail: 'deploy-testing run 9 ran no job: every one was skipped' });
+    expect(world.released.map((one) => one.prNumber)).toEqual([88]);
+    expect(moves.map((move) => move.issueNumber)).toEqual([87, 86]);
+  });
+
+  it('finds one whose delivery never came on the deploy sweep, and moves its cards then', async () => {
+    dispatched();
+    board();
+    const { line, moves } = pipeline(DEFAULT_DELIVERY_RULES, {
+      now: at(3_600_000),
+      runsFor: deployRuns([{ id: 39836758586, status: 'completed', conclusion: 'skipped', display_title: `deploy-testing ${SHA}`, created_at: '2026-10-22T09:00:10Z' }]),
+    });
+
+    const [said] = await line.checkTestingDeploys();
+
+    expect(moves.map((move) => move.issueNumber)).toEqual([87, 86]);
+    expect(said).toContain('app#87 moved to Done');
+  });
+
+  it.each([
+    ['a success whose job ran', 'success', [{ conclusion: 'success', steps: [] }]],
+    ['a success whose jobs cannot be read', 'success', undefined],
+    ['a failure', 'failure', undefined],
+    ['a run that never started', 'startup_failure', undefined],
+    ['a run cancelled with no later deploy to carry it', 'cancelled', undefined],
+  ])('keeps its cards in Ship after %s', async (_name, conclusion, jobs) => {
+    dispatched();
+    board();
+    const { line, moves } = pipeline(DEFAULT_DELIVERY_RULES, jobs ? { jobs } : {});
+
+    await line.onTestingRun(REPO, SHA, { id: 9, conclusion });
+
+    expect(moves).toEqual([]);
+    expect(world.said).toEqual([]);
+    expect(world.board?.filter((issue) => issue.stage === 'merged').map((issue) => issue.number)).toEqual([87, 86, 84]);
+  });
+
+  it('keeps its cards in Ship while its run is slow, and when no run of it appeared at all', async () => {
+    dispatched();
+    board();
+    const queued = pipeline(DEFAULT_DELIVERY_RULES, {
+      now: at(3_600_000),
+      runsFor: deployRuns([{ id: 9, status: 'queued', conclusion: null, display_title: `deploy-testing ${SHA}`, created_at: '2026-10-22T09:00:10Z' }]),
+    });
+    await queued.line.checkTestingDeploys();
+    expect(queued.moves).toEqual([]);
+
+    const none = pipeline(DEFAULT_DELIVERY_RULES, { now: at(3_600_000), runsFor: deployRuns([]) });
+    await none.line.checkTestingDeploys();
+    expect(world.runs.get(SHA)?.testingConclusion).toBe('not_started');
+    expect(none.moves).toEqual([]);
+    expect(world.board?.filter((issue) => issue.stage === 'merged').map((issue) => issue.number)).toEqual([87, 86, 84]);
+  });
+
+  it('moves the cards of an earlier merge its run was cancelled for, recorded as that one ended', async () => {
+    const EARLIER = 'b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0';
+    world.runs.set(EARLIER, { sha: EARLIER, prNumber: 83, testing_dispatched_at: '2026-10-22T08:59:00.000Z', testingConclusion: 'superseded' });
+    dispatched();
+    board();
+    const { line, moves } = pipeline(DEFAULT_DELIVERY_RULES);
+
+    await line.onTestingRun(REPO, SHA, { id: 39836758586, conclusion: 'skipped' });
+
+    expect(world.runs.get(EARLIER)?.testingConclusion).toBe('skipped');
+    expect(moves.map((move) => move.issueNumber)).toEqual([87, 86, 84]);
+    expect(moves.at(-1)).toMatchObject({ prNumber: 83, reason: expect.stringContaining('cancelled for the testing deploy of fe6b790, which deployed nothing either') });
+  });
+
+  it('says a move that was refused, and moves nothing where nothing here moves cards', async () => {
+    dispatched();
+    board();
+    const refused = pipeline(DEFAULT_DELIVERY_RULES, { moveStage: 'refused' });
+    const said = await refused.line.onTestingRun(REPO, SHA, { id: 1, conclusion: 'skipped' });
+    expect(said).toContain('app#87: not moved to Done (app#87 is labelled openadlc:ignore, which the crew leaves alone)');
+    expect(world.said).toEqual([]);
+    expect(world.audits.filter((entry) => entry.action === 'deploy.shipped_by_merging')).toEqual([]);
+
+    world.runs.clear();
+    dispatched();
+    const unwired = pipeline(DEFAULT_DELIVERY_RULES, { moveStage: 'none' });
+    expect(await unwired.line.onTestingRun(REPO, SHA, { id: 1, conclusion: 'skipped' })).toContain('nothing here moves its cards; the deploy sweep moves them to Done');
+  });
+
+  it('is what Settings reads: the repository’s newest testing deploy to end had nothing to deploy', async () => {
+    expect(await deploysNothingHere('repo-1')).toBeNull();
+    world.runs.set('a'.repeat(40), { sha: 'a'.repeat(40), testing_dispatched_at: '2026-10-22T08:00:00.000Z', testingConclusion: 'success' });
+    world.runs.set(SHA, { sha: SHA, testing_dispatched_at: DISPATCHED_AT, testingConclusion: 'skipped', detail: 'deploy-testing run 39836758586 was skipped' });
+    expect(await deploysNothingHere('repo-1')).toBe('deploy-testing run 39836758586 was skipped');
+
+    // Turned on, and the next one deployed.
+    world.runs.set('c'.repeat(40), { sha: 'c'.repeat(40), testing_dispatched_at: '2026-10-22T10:00:00.000Z', testingConclusion: 'success' });
+    expect(await deploysNothingHere('repo-1')).toBeNull();
   });
 });
 

@@ -253,6 +253,8 @@ async function main(): Promise<void> {
     delivery,
     client: async (repoFullName) => (await appGate.client(repoFullName).catch(() => null)) ?? (await asAutomation(actors, config).catch(() => null)),
     sendBack,
+    // A merge whose testing deploy had nothing to deploy goes to Done.
+    moveStage: (input) => automation.moveStage(input),
   });
   const webhooks = new Webhooks(
     config,

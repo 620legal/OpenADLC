@@ -474,6 +474,28 @@ describe('the delivery rules, in words', () => {
       'Merging ships it: no testing deploy, nothing to promote.',
     ]);
   });
+
+  // 620legal/OpenADLC's file names deploy-testing, which skips every run
+  // there: the page said a merge runs it and a smoke, over cards that went
+  // straight to Done.
+  it('says merging ships it where the testing deploy deploys nothing, and what happens once it does', () => {
+    const said = deliveryLines({ source: 'file', rules, testingUrl: null, fileError: null }, 'deploy-testing run 39836758586 was skipped');
+    expect(said.rules[0]).toBe('Merging ships it: deploy-testing deploys nothing here (deploy-testing run 39836758586 was skipped), so a merge goes to Done. Once it deploys:');
+    expect(said.rules[1]).toBe('A merge runs deploy-testing, then smoke-testing on testing.');
+    expect(deliveryLines({ source: 'file', rules, testingUrl: null, fileError: null }, null).rules[0]).toBe('A merge runs deploy-testing, then smoke-testing on testing.');
+  });
+
+  it('says so on the page, beside what Automatic found', () => {
+    const html = settings({
+      ...REPO,
+      shipsByMerging: false,
+      deploysNothing: 'deploy-testing run 39836758586 was skipped',
+      delivery: { source: 'file', rules, testingUrl: null, fileError: null },
+    });
+    expect(html).toContain('This repository has a deploy-testing workflow, and it deploys nothing here. Merging ships it.');
+    expect(html).toContain('Merging ships it: deploy-testing deploys nothing here (deploy-testing run 39836758586 was skipped), so a merge goes to Done.');
+    expect(html).not.toContain('This repository has a testing deploy.');
+  });
 });
 
 describe('saving a repository’s settings while other saves are in flight', () => {

@@ -16,7 +16,7 @@ import { DEPLOY_PATH_BRANCH_PREFIX, REVIEW_ROUND_OPENED, endedBySendingBack, hea
 import { asAutomation, automationBotName, findOwnOpenIssue } from './automation-bot.js';
 import { effectiveConfig } from './effective-config.js';
 import { shipsByMerging, testingDeployChoice, type TestingDeployChoice } from './deploys.js';
-import { deployedNothing, type DeployPipeline } from './deploy-pipeline.js';
+import { deployedNothing, nothingToDeploy, shipByMerging, type DeployPipeline } from './deploy-pipeline.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
 import { PULL_REQUEST_GRACE_MS, continuesBranch, nothingPushed, noPullRequest, readBranch, type BranchFacts } from './build-left.js';
 import type { BridgeConfig } from './config.js';
@@ -1392,7 +1392,9 @@ export class Scheduler {
    * issue already in Ship is moved to Done here. That is what clears one left
    * behind after a merge, open or closed: GitHub closes the issue at
    * `Closes #N` before a deploy, and a repository that does have a testing
-   * deploy is left in Ship for that reason.
+   * deploy is left in Ship for that reason. An issue whose merge's testing
+   * deploy ran and had nothing to deploy (`nothingToDeploy`) is moved to Done
+   * here too: that merge shipped by merging.
    *
    * So the sweep looks, and then either says there is nothing to do, or
    * dispatches the testing deploy of the newest merge, when that merge has no
@@ -1424,7 +1426,14 @@ export class Scheduler {
     const inShip = board
       .filter((issue) => issue.stage === 'merged')
       .map((issue) => ({ repo: issue.repoName, number: issue.number, prNumber: issue.prNumber }));
-    const { waiting: kept, moved } = await this.shippedByMerging(inShip);
+    const { waiting: byRules, moved: movedByRules } = await this.shippedByMerging(inShip);
+    // And one whose own testing deploy had nothing to deploy, settled by its
+    // delivery, by the check above, or before its move to Done was made there:
+    // the cards 620legal/OpenADLC's skipped deploy-testing left in Ship.
+    const { waiting: kept, moved: movedByDeploy } = this.pipeline
+      ? await this.nothingToDeployMoved(byRules)
+      : { waiting: byRules, moved: [] as string[] };
+    const moved = [...movedByRules, ...movedByDeploy];
     const stays = new Set(kept.map((item) => `${item.repo}#${item.number}`));
     const waiting = found.filter((item) => stays.has(`${item.repo}#${item.number}`));
     // With the pipeline, the testing deploy is dispatched as the app (or the
@@ -1557,6 +1566,41 @@ export class Scheduler {
       }
     }
     return { waiting, moved };
+  }
+
+  /**
+   * Issues in Ship whose merge's testing deploy had nothing to deploy
+   * (`nothingToDeploy`), moved to Done with why (`shipByMerging`), and the
+   * rest. By each pull request's newest record: a re-run that deployed is
+   * recorded over a skipped one, and keeps its card on the deploy path. A
+   * deploy that is still running, failed, never started or was cancelled
+   * moves nothing.
+   */
+  private async nothingToDeployMoved(found: readonly AwaitingDeploy[]): Promise<{ waiting: AwaitingDeploy[]; moved: string[] }> {
+    const shipped = new Set<string>();
+    const moved: string[] = [];
+    for (const name of new Set(found.map((item) => item.repo))) {
+      const repo = await repos.getRepoByName(name).catch(() => null);
+      if (!repo) continue;
+      const mine = found.filter((item) => item.repo === name && item.prNumber);
+      const numbers = [...new Set(mine.map((item) => item.prNumber as number))];
+      const records = await (async () => deployRuns.forPullRequests(repo.id, numbers))().catch(() => []);
+      for (const prNumber of numbers) {
+        const record = records.find((run) => run.prNumber === prNumber && run.testingDispatchedAt);
+        if (!record || !nothingToDeploy(record.testingConclusion)) continue;
+        const result = await shipByMerging({
+          moveStage: (input) => this.automation.moveStage(input),
+          repoName: name,
+          prNumber,
+          sha: record.sha,
+          issueNumbers: mine.filter((item) => item.prNumber === prNumber).map((item) => item.number),
+          why: record.detail ?? 'its run was skipped',
+        });
+        for (const number of result.moved) shipped.add(`${name}#${number}`);
+        moved.push(...result.lines);
+      }
+    }
+    return { waiting: found.filter((item) => !shipped.has(`${item.repo}#${item.number}`)), moved };
   }
 
   /** True when this repository ships by merging; null when automatic could not be asked. */

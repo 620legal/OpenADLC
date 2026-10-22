@@ -328,10 +328,13 @@ once the Makefile's `deploy-testing` target is written, and
 two together: the stub smoke refuses, and a red smoke reverts the change. A
 skipped smoke is neither green nor red, so it neither promotes nor reverts; a
 merged change waits on testing until the smoke is turned on. A skipped
-`deploy-testing` deployed nothing: the bridge lets the merged change's lease go
-and leaves its card in Ship, as it does for a run that never started, or was
-cancelled with no later deploy to carry it
-([troubleshooting](troubleshooting.md#a-stacked-issue-waits-after-its-base-merged)).
+`deploy-testing`, or one GitHub calls a success that ran no job, had nothing to
+deploy: the merge ships by merging. The bridge lets the merged change's lease
+go and moves its card to Done, saying why in its timeline, and Settings →
+Repositories says that repository's merges ship by merging while its newest
+testing deploy had nothing to deploy. A run that never started, or was cancelled
+with no later deploy to carry it, lets the lease go and leaves the card in
+Ship ([troubleshooting](troubleshooting.md#a-stacked-issue-waits-after-its-base-merged)).
 
 The same file says which changes may be built side by side when their files
 overlap (`apps/dispatcher/src/overlap.ts`). The defaults, which a file that

@@ -15,7 +15,10 @@ export interface DeployRun {
    * How the dispatched testing deploy's run ended (`recordTesting`):
    * `success`, `failure`, `superseded` (cancelled for a later merge's deploy,
    * which carries it), or one that deployed nothing — `skipped`, `cancelled`,
-   * `startup_failure`, `not_started`. Null until it is seen to end.
+   * `startup_failure`, `not_started`. A success that ran no job is recorded
+   * `skipped`, as is a run cancelled for a later deploy that was skipped:
+   * each had nothing to deploy, and its merge ships by merging. Null until it
+   * is seen to end.
    */
   testingConclusion: string | null;
   testingAt: string | null;
@@ -197,6 +200,22 @@ export async function supersededBefore(repoId: string, sha: string): Promise<Dep
     [repoId, sha],
   );
   return rows.map(toRun);
+}
+
+/**
+ * The repository's testing deploy dispatched last whose end is recorded, or
+ * null: what Settings reads to say whether its testing deploy deploys
+ * anything. One `superseded` is left out: it ended for a later deploy, whose
+ * end says what happened to both.
+ */
+export async function newestTestingEnd(repoId: string): Promise<DeployRun | null> {
+  const row = await queryOne<Row>(
+    `select * from deploy_runs
+     where repo_id = $1 and testing_dispatched_at is not null and testing_conclusion is not null and testing_conclusion <> 'superseded'
+     order by testing_dispatched_at desc limit 1`,
+    [repoId],
+  );
+  return row ? toRun(row) : null;
 }
 
 /**
