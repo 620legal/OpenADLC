@@ -106,6 +106,7 @@ import { onAccountsWorkedIn, registerAppReachRoutes, repositoryFrom, type AppRea
 import { engineUpdatesFor, registerEngineUpdateRoutes } from './engine-updates.js';
 import { selfUpdateAttentionFromSettings } from './self-update.js';
 import { ATTENTION_WINDOW_DAYS, ClosedSubjects, registerAttentionRoutes, STOPPED_BY_A_PERSON, type HeldPromote } from './attention.js';
+import { bridgeStopReason, stoppedByTheBridge, THE_BRIDGE } from './bridge-stops.js';
 import { asAutomation } from './automation-bot.js';
 import { DeployKnowledge, isTestingDeployChoice, testingDeployChoice, testingDeployStored } from './deploys.js';
 import { deploysNothingHere } from './deploy-pipeline.js';
@@ -614,9 +615,12 @@ function personOwes(labels: readonly string[]): boolean {
   return labels.some((label) => label.startsWith('do:') && label !== 'do:ai');
 }
 
-/** Stopped by a person's Stop already, which a second press does not make again. */
+/**
+ * Stopped by a person's Stop already, or by the bridge once its work was
+ * over, which a second press does not make again.
+ */
 function stoppedFromTheConsole(task: { state: string; exitReason?: string | null }): boolean {
-  return task.state === 'stopped' && (task.exitReason ?? '').startsWith(STOPPED_BY_A_PERSON);
+  return task.state === 'stopped' && ((task.exitReason ?? '').startsWith(STOPPED_BY_A_PERSON) || stoppedByTheBridge(task));
 }
 
 /**
@@ -714,7 +718,10 @@ function stopAfterAnswer(
  * Ends a task for good, as a person decided: hostd's cancel ends whatever
  * is left of its session and marks it stopped with the reason, its lease is
  * released, and the stop is audited. The reason starts with
- * `STOPPED_BY_A_PERSON`, which is what takes its card off the board.
+ * `STOPPED_BY_A_PERSON`, which is what takes its card off the board; or,
+ * when the bridge stops it because its work is over (`actor` is `bridge`),
+ * with `STOPPED_BY_THE_BRIDGE` (`bridge-stops.ts`), which takes it off as well
+ * and does not say a person did it.
  *
  * A retry reuses the lease of the task it retries (`task-retry.ts`), and the
  * dispatcher may lease the issue to the same bot again, so a stale card in
@@ -823,7 +830,7 @@ export async function stopTask(
   if (now && ended(now.state)) return { task: task.id, state: now.state, releasedLease: null, questionsClosed: 0, stopped: false };
   refuse(now?.state ?? task.state);
 
-  const reason = `${STOPPED_BY_A_PERSON} (${actor})${note ? `: ${note}` : ''}`;
+  const reason = actor === THE_BRIDGE ? bridgeStopReason(note) : `${STOPPED_BY_A_PERSON} (${actor})${note ? `: ${note}` : ''}`;
   const afterwards = options.afterwards;
   if (afterwards) {
     // In one statement, which never moves a task that ended `done`; hostd's
@@ -1270,7 +1277,11 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
         // The thread's Stop acts on it by id, and offers it for a task a
         // person did not stop already.
         id: task.id,
-        stoppedByAPerson: task.state === 'stopped' && Boolean(task.exitReason?.startsWith(STOPPED_BY_A_PERSON)),
+        // A review a merge stopped read as a person's stop; rows from before
+        // the bridge said its own stops say `(bridge)` as the person.
+        stoppedByAPerson: task.state === 'stopped' && Boolean(task.exitReason?.startsWith(STOPPED_BY_A_PERSON)) && !stoppedByTheBridge(task),
+        // The bridge's: its pull request merged or closed, its issue closed.
+        stoppedByTheBridge: stoppedByTheBridge(task),
         // A build that ended `done` with no pull request: the thread offers
         // Try again for it, which goes on from its branch.
         endedWithoutPullRequest: endedWithoutPullRequest(task, issue),

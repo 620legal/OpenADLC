@@ -1,6 +1,7 @@
 import { audit, bots, costs, hasEventOfType, health, hosts, lastEventAt, leases, recordEvent, repos, spendingLimits, tasks, threads, workItems } from '@openadlc/db';
 import { githubDidNotAnswer } from '@openadlc/github';
 import { attachmentsForTask } from './attachment-routes.js';
+import { stoppedByTheBridge } from './bridge-stops.js';
 import { botAtStart, headerFor, leaseExpiryFrom, maxTasksOf, resolveBotRef, type ContextDocument, type Task, type TaskKind } from '@openadlc/shared';
 import type { BridgeConfig } from './config.js';
 import type { Context } from './context.js';
@@ -88,11 +89,12 @@ export class RestartPendingError extends BotBusyError {
 
 /**
  * Whether the task was stopped so that an answer must not start it again: a
- * person stopped it, or an answer of theirs ended it (`wasRefused`). A task
+ * person stopped it, an answer of theirs ended it (`wasRefused`), or the
+ * bridge stopped it because its work was over (`stoppedByTheBridge`). A task
  * stopped for another reason is resumed as before.
  */
 function endedOnPurpose(task: { state: string; exitReason?: string | null }): boolean {
-  return task.state === 'stopped' && (Boolean(task.exitReason?.startsWith(tasks.STOPPED_BY_PERSON)) || wasRefused(task.exitReason));
+  return task.state === 'stopped' && (Boolean(task.exitReason?.startsWith(tasks.STOPPED_BY_PERSON)) || wasRefused(task.exitReason) || stoppedByTheBridge(task));
 }
 
 /** Whether hostd refused a start or a resume for want of room (`HostFull`, answered 503). */

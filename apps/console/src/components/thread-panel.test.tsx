@@ -81,6 +81,16 @@ describe('a bot’s last task, when it could not finish', () => {
     for (const label of ['Try again', 'Stop']) expect(buttons(byAPerson)).not.toContain(label);
   });
 
+  it('offers neither for a task the bridge stopped because its pull request closed: no person stopped it, and its work is over', () => {
+    const byTheBridge = panel({
+      ...REVIEWER,
+      task: null,
+      lastTask: { ...REVIEWER.task!, id: 'task-31', state: 'stopped', stoppedByAPerson: false, stoppedByTheBridge: true, endedAt: '2026-09-24T10:50:00.000Z' },
+    });
+    expect(byTheBridge).toContain('Stopped work on');
+    for (const label of ['Try again', 'Stop']) expect(buttons(byTheBridge)).not.toContain(label);
+  });
+
   it('offers neither for work that finished, or for a task going now', () => {
     for (const html of [failed('done'), panel(REVIEWER)]) {
       for (const label of ['Try again', 'Stop']) expect(buttons(html)).not.toContain(label);

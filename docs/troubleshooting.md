@@ -189,6 +189,15 @@ since a failure that old is no longer a card.
   one that says to go on ("don't stop", "keep going", "try again") is not one.
   A task that failed on an error of its own keeps its card whatever the answer
   said.
+- **The bridge ended it.** When a pull request merges or closes, or an issue
+  closes or is abandoned, the bridge stops the work left on it itself. Its reason says so and why (`stopped by the bridge: its
+  pull request merged`), and the audit log has it as `task.stopped` by
+  `bridge`, never as a person's Stop. Nothing starts it again: no answer
+  resumes it and the deploy sweep leaves it. The bot's thread on the crew page
+  reads **Stopped work on #N** and offers neither **Try again** nor **Stop**,
+  as for a person's; but `GET /v1/bots` says `stoppedByTheBridge`, not
+  `stoppedByAPerson`. A row recorded before the bridge said its own stops,
+  `stopped by a person from the console (bridge): …`, is read as the bridge's too.
 - **The cause has gone, and the work moved on.** A failure on the model account
   (a spend limit, a sign-in, a key) is fixed once another task on the same
   account has started since, unless that task failed the same way. A failure on
@@ -230,7 +239,7 @@ issue that closed before this existed is not swept; stop it from its question's
 card. A stage move of a closed issue is refused too,
 except to Merged or Done, which is how a merge records itself. The bot's
 thread card shows such work as landed: a last task that failed, or was stopped
-by anything but a person, on an intake, design, build, fix or review whose
+by anything but a person or the bridge, on an intake, design, build, fix or review whose
 issue is at Merged or Done or that ended `already landed`, reads
 **Landed #N …** with its links and cost, and offers neither **Try again** nor
 **Stop** (`landed` on `GET /v1/bots`). A deploy or QA task on a merged issue
@@ -525,7 +534,12 @@ says each seat's pause as `seatPaused`.
 
 ### Holding, putting next, or cancelling one piece of work
 
-A work item's page has its own controls, each an admin's and audited.
+A work item's page has its own controls, each an admin's and audited. Each
+is audited under the item's key (`W-4`, or `<organization>-4`), as linking,
+unlinking and merging are, with the subjects it acted on as `subjects` in the
+payload: the issue and its pull request for a pause or a resume, the issue and
+the one it took next from, every subject of the item for a cancel. Before the
+install is numbered there is no key, and the item's subject (`api#12`) is used.
 
 - **Pause work** (`POST /v1/items/:subject/pause { reason? }`, `item.paused`) puts
   `openadlc:paused` on the issue and its pull request. What is running

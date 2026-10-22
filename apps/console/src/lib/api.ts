@@ -146,6 +146,8 @@ export interface TaskSummary {
   id?: string;
   /** Whether a person stopped it from the console, which is no failure to act on. */
   stoppedByAPerson?: boolean;
+  /** Whether the bridge stopped it because its work was over: its pull request merged or closed, its issue closed. No person's, and no failure either. Absent from an older bridge. */
+  stoppedByTheBridge?: boolean;
   /** A build that ended `done` without opening its pull request, which Try again goes on with. Absent from an older bridge. */
   endedWithoutPullRequest?: boolean;
   /** The work it was for has landed: its issue is merged or done, or it was stopped as `already landed`. Absent from an older bridge. */
@@ -601,7 +603,11 @@ export interface ItemView {
   held?: { by: string; at: string; why: string | null } | null;
   /** Its issue put first in its repository's queue. Absent from an older bridge. */
   next?: boolean;
-  /** Where a message goes from each tab: `''` for the conversation, else by role. Absent from an older bridge. */
+  /**
+   * Where a message goes from each tab: `''` for the conversation, else by
+   * role; while nobody has worked on it, each other role of the crew too, to
+   * pick (`writeToRoles`). Absent from an older bridge.
+   */
   routes?: Record<string, ItemRoute>;
   /** Its work item: the key to share, and the number asked for when that item was merged into this one. Null before the install is numbered. */
   workItem?: { number: number; key: string; mergedFrom: number | null } | null;

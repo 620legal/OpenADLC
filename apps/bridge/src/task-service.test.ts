@@ -280,6 +280,17 @@ describe('resuming a task whose plan change was refused', () => {
     await expect(service({ resumeTask: vi.fn(), cleanupTask }).resume('task-1')).resolves.toBeUndefined();
   });
 
+  it('starts nothing for a task the bridge stopped when its subject closed, as for one a person stopped', async () => {
+    vi.mocked(tasks.getTask).mockResolvedValueOnce({ ...refused, exitReason: 'stopped by the bridge: its pull request closed' } as never);
+    const resumeTask = vi.fn(async () => ({ session: 'builder/implement' }));
+    const cleanupTask = vi.fn(async () => undefined);
+
+    await service({ resumeTask, cleanupTask }).resume('task-1');
+
+    expect(resumeTask).not.toHaveBeenCalled();
+    expect(cleanupTask).toHaveBeenCalledWith('task-1', 'stopped by the bridge: its pull request closed');
+  });
+
   it('is not what a task stopped for another reason gets: that one is resumed as before', async () => {
     vi.mocked(tasks.getTask).mockResolvedValueOnce({ ...refused, exitReason: 'stopped by an operator' } as never);
     const resumeTask = vi.fn(async () => ({ session: 'builder/implement' }));

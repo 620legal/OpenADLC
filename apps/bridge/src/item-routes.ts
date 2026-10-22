@@ -3,7 +3,7 @@ import type { GitHubClient } from '@openadlc/github';
 import { hasIgnoreLabel } from '@openadlc/shared';
 import { attachmentIds, claimableFor, claimWindowStart } from './attachment-routes.js';
 import type { ApiDeps } from './api.js';
-import { readItem, resolveItem, routeItemMessage, type Item } from './items.js';
+import { readItem, requestSubject, resolveItem, routeItemMessage, type Item } from './items.js';
 import { requestPrefixOf } from './request-context.js';
 import { HttpFailure, STREAMING, type Router } from './router.js';
 import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
@@ -204,8 +204,10 @@ function keyLike(item: Item, number: number): string {
 
 /**
  * Linking, unlinking and merging work items by hand (docs/adr/0009-work-items.md):
- * admin-only (`roles.ts`), each audited, and none of them writes to GitHub.
- * A person's link is theirs: no automatic pass moves it afterwards.
+ * admin-only (`roles.ts`), each audited under the item's key with the subjects
+ * it moved, as pause, next and cancel are (`item-controls.ts`), and none of
+ * them writes to GitHub. A person's link is theirs: no automatic pass moves it
+ * afterwards.
  */
 export function registerItemLinkRoutes(router: Router, deps: ItemLinkDeps): void {
   const numbered = async (subject: string): Promise<Item & { workItem: NonNullable<Item['workItem']> }> => {
@@ -240,7 +242,7 @@ export function registerItemLinkRoutes(router: Router, deps: ItemLinkDeps): void
       identity,
     );
     const from = moved.from && moved.from.id !== item.workItem.id ? keyLike(item, moved.from.number) : null;
-    await deps.audit({ actor: identity, action: 'item.linked', target: item.workItem.key, payload: { ref, from } });
+    await deps.audit({ actor: identity, action: 'item.linked', target: item.workItem.key, payload: { ref, subjects: [`${repo.name}#${parsed.number}`], from } });
     return { item: item.workItem.key, ref, kind: found.pullRequest ? 'pull' : 'issue', from };
   });
 
@@ -249,22 +251,25 @@ export function registerItemLinkRoutes(router: Router, deps: ItemLinkDeps): void
     const item = await numbered(params.subject ?? '');
     const raw = (params.ref ?? '').trim();
     let thing: workItems.ThingRef;
+    let subject: string;
     const prefix = requestPrefixOf(raw);
     if (prefix) {
       const request = await deps.findRequest(prefix).catch(() => null);
       if (!request) throw new HttpFailure(404, `${raw} is not a request this install knows`);
       thing = { requestId: request.id };
+      subject = requestSubject(request.id);
     } else {
       const parsed = parseLinkRef(raw);
       const repo = parsed ? managedRepo(await deps.repos(), parsed.repo) : null;
       if (!parsed || !repo) throw new HttpFailure(400, `${raw || 'that'} is not an issue or pull request of a repository this install manages: name it as owner/repo#number`);
       thing = { repoId: repo.id, number: parsed.number };
+      subject = `${repo.name}#${parsed.number}`;
     }
     const result = await deps.unlinkByHand(item.workItem.id, thing, identity);
     if (result === 'only') throw new HttpFailure(409, `${raw} is the only thing on ${item.workItem.key}: merge it into another item instead`);
     if (!result) throw new HttpFailure(404, `${raw} is not linked to ${item.workItem.key}`);
     const key = keyLike(item, result.number);
-    await deps.audit({ actor: identity, action: 'item.unlinked', target: item.workItem.key, payload: { ref: raw, to: key } });
+    await deps.audit({ actor: identity, action: 'item.unlinked', target: item.workItem.key, payload: { ref: raw, subjects: [subject], to: key } });
     return { item: item.workItem.key, ref: raw, key };
   });
 
@@ -277,7 +282,7 @@ export function registerItemLinkRoutes(router: Router, deps: ItemLinkDeps): void
     if (target.workItem.id === item.workItem.id) throw new HttpFailure(409, `${item.workItem.key} and ${into} are one item already`);
     const merged = await deps.mergeByHand(item.workItem.id, target.workItem.id);
     if (!merged) throw new HttpFailure(409, `${item.workItem.key} could not be merged into ${target.workItem.key}: one of them was merged elsewhere meanwhile; reload and try again`);
-    await deps.audit({ actor: identity, action: 'item.merged', target: item.workItem.key, payload: { into: target.workItem.key } });
+    await deps.audit({ actor: identity, action: 'item.merged', target: item.workItem.key, payload: { into: target.workItem.key, subjects: item.subjects } });
     return { item: item.workItem.key, into: target.workItem.key };
   });
 }

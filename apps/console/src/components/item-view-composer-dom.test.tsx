@@ -169,3 +169,64 @@ describe('sending from an item', () => {
     expect(composer().value).toBe('Half of a thought');
   });
 });
+
+describe('writing on an item nobody has worked on yet', () => {
+  // The box said "pick a role to write to", and an item with no role yet had no role tab to pick.
+  const NOBODY = 'nobody has worked on this item yet, so there is no one to send it to; pick a role to write to';
+  const FRESH: ItemData = {
+    ...ITEM,
+    stage: null,
+    roles: [],
+    timeline: [],
+    routes: {
+      '': { kind: 'refused', error: NOBODY },
+      spec: { kind: 'post', bot: 'designer', role: 'spec', handle: 'acme-crew', subject: 'api#12', on: 'issue', number: 12 },
+      implement: { kind: 'post', bot: 'builder', role: 'implement', handle: 'acme-crew', subject: 'api#12', on: 'issue', number: 12 },
+    },
+  };
+
+  async function open(item: ItemData): Promise<void> {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(item)));
+    const { ItemView } = await import('./item-view');
+    await act(async () => root.render(<ItemView subject="api#12" initial={item} now="2026-09-30T12:00:00.000Z" />));
+    await settle();
+  }
+
+  const picker = () => container.querySelector('[data-role-picker]');
+  const pick = (label: string) => [...(picker()?.querySelectorAll('button') ?? [])].find((one) => one.textContent === label)!;
+  const helper = () => container.querySelector('[data-composer-helper]')?.textContent;
+
+  it('offers the crew’s roles to pick, and sends to the one picked', async () => {
+    await open(FRESH);
+    expect(container.querySelectorAll('[data-role-tab]')).toHaveLength(0);
+    expect(composer().disabled).toBe(true);
+    expect(helper()).toContain('pick a role to write to');
+    expect([...picker()!.querySelectorAll('button')].map((one) => [one.textContent, one.getAttribute('aria-pressed')])).toEqual([
+      ['system engineer', 'false'],
+      ['builder', 'false'],
+    ]);
+
+    await act(async () => pick('builder').click());
+    expect(pick('builder').getAttribute('aria-pressed')).toBe('true');
+    expect(composer().disabled).toBe(false);
+    expect(container.querySelector('label')?.textContent).toBe('Message the builder');
+    expect(helper()).toBe('To the builder (acme-crew), posted on #12 as a comment');
+
+    await type('Keep the old column too.');
+    await commandEnter();
+    await settle();
+    expect(sending.sent).toEqual([expect.objectContaining({ text: 'Keep the old column too.', role: 'implement' })]);
+  });
+
+  it('asks for no role when there is none to pick, and offers no picker once someone is there to write to', async () => {
+    const none = 'nobody has worked on this item yet, and the crew has no seat that reads a message; add one in Settings → Crew';
+    await open({ ...FRESH, routes: { '': { kind: 'refused', error: none } } });
+    expect(picker()).toBeNull();
+    expect(helper()).not.toContain('pick a role');
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    await open(ITEM);
+    expect(picker()).toBeNull();
+  });
+});

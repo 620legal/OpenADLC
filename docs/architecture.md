@@ -144,7 +144,11 @@ none yet, says its kind of work instead ("writing the change").
    thread before there is an issue, and kept in OpenADLC, not posted, for a
    subject GitHub has no page for (a deploy of a commit). The item's view
    carries that route for each tab (`routes`), worked out by the same
-   function, and the line above the message box says it. When it has everything, it shows the person the issue
+   function, and the line above the message box says it. An item nobody has
+   worked on yet has no one to write to from its conversation: its view
+   carries a route for each other role the crew has, and the box offers those
+   roles to pick, sending to the one picked; with no seat that reads a
+   message, it asks for none and says to add one. When it has everything, it shows the person the issue
    it would file and asks them to agree to it; then it files it — outcome,
    acceptance criteria, priority, expected paths, dependencies, verification,
    the files by name and a link to the item in the console, never the files —
@@ -656,7 +660,9 @@ back. A crew account that moves a stage label back is put back.
   one into an item of its own (`DELETE /v1/items/:subject/links/:ref`), or
   merges two items (`POST /v1/items/:subject/merge`); each is audited
   (`item.linked`, `item.unlinked`, `item.merged`), and no automatic pass
-  moves a link a person made.
+  moves a link a person made. Every control on an item, these and pause,
+  next and cancel, is audited under the item's key, with the subjects it
+  acted on in the payload (`subjects`).
 - **The board reads the issues it can show**, numbered or not: those not in
   Done, and those in Done whose row changed in the week Done shows
   (`boardIssues`, indexed by migration 0151), and of the tasks only theirs

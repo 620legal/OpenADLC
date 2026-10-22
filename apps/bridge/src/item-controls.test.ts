@@ -102,6 +102,36 @@ async function call(router: Router, method: 'GET' | 'POST', path: string, body?:
 
 const at = (subject: string, action: string) => `/v1/items/${encodeURIComponent(subject)}/${action}`;
 
+describe('what the audit log files each control under', () => {
+  const entries = (deps: Deps) =>
+    vi.mocked(deps.audit).mock.calls.map(([entry]) => ({ action: entry.action, target: entry.target, subjects: entry.payload?.subjects }));
+
+  it('files pause, resume, next and cancel under the item’s key, with the subjects each acted on, as link, unlink and merge are', async () => {
+    // Cancel on W-4 was audited under its issue, scripted#44, and link, unlink and merge under W-4.
+    const numbered: ControlledItem = { ...ITEM, itemKey: 'W-4' };
+    const { router, deps } = world({ resolve: async (subject) => (subject === ITEM.key ? structuredClone(numbered) : null) });
+
+    await call(router, 'POST', at(ITEM.key, 'pause'), { reason: 'waiting for the design' });
+    await call(router, 'POST', at(ITEM.key, 'resume'));
+    await call(router, 'POST', at(ITEM.key, 'next'));
+    await call(router, 'POST', at(ITEM.key, 'cancel'), { reason: 'not wanted after all' });
+
+    expect(entries(deps)).toEqual([
+      { action: 'item.paused', target: 'W-4', subjects: ['testbed#7', 'testbed#9'] },
+      { action: 'item.resumed', target: 'W-4', subjects: ['testbed#7', 'testbed#9'] },
+      // And the one next was taken from.
+      { action: 'item.next', target: 'W-4', subjects: ['testbed#7', 'testbed#4'] },
+      { action: 'item.cancelled', target: 'W-4', subjects: ['testbed#7', 'testbed#9'] },
+    ]);
+  });
+
+  it('files them under its subject before the install is numbered, which has no item key yet', async () => {
+    const { router, deps } = world();
+    await call(router, 'POST', at(ITEM.key, 'pause'));
+    expect(entries(deps)).toEqual([{ action: 'item.paused', target: 'testbed#7', subjects: ['testbed#7', 'testbed#9'] }]);
+  });
+});
+
 describe('holding one piece of work', () => {
   it('labels the issue and its pull request, puts it on the board at once, and keeps who and why', async () => {
     stored.value = null;

@@ -350,7 +350,8 @@ export interface ItemView {
   next?: boolean;
   /**
    * Where a message written on it would go, by tab: `''` for the
-   * conversation, and each of `roles` by its role (`messageRoutes`).
+   * conversation, and each of `roles` by its role (`messageRoutes`); and,
+   * while nobody has worked on it, each other role of the crew, to pick.
    */
   routes?: Record<string, ItemRoutePreview>;
   /** Its work item's number and key; null before the install is numbered. */
@@ -602,6 +603,16 @@ function rank(role: string): number {
 /** Roles that work on the pull request rather than the issue. */
 const ON_THE_PULL_REQUEST = new Set(['review_lead', 'review_second', 'review_security']);
 
+/**
+ * The roles a message can be written to: every one but the automation
+ * account's, which labels issues and thinks with no model.
+ */
+function writableRoles(bots: readonly Pick<ItemBot, 'role'>[]): string[] {
+  return [...new Set(bots.map((bot) => bot.role).filter((role) => role !== 'automation'))].sort(
+    (a, b) => ROLE_ORDER.indexOf(a) - ROLE_ORDER.indexOf(b),
+  );
+}
+
 /** Who works a stage, for an item nobody has spoken on yet. */
 const STAGE_ROLE: Partial<Record<StageKey, BotRole>> = {
   intake: 'intake',
@@ -689,7 +700,9 @@ export function routeItemMessage(
       status: 409,
       error: role
         ? `no ${labelOf(role)} is in the crew to send it to; add one in Settings → Crew`
-        : 'nobody has worked on this item yet, so there is no one to send it to; pick a role to write to',
+        : writableRoles(bots).length > 0
+          ? 'nobody has worked on this item yet, so there is no one to send it to; pick a role to write to'
+          : 'nobody has worked on this item yet, and the crew has no seat that reads a message; add one in Settings → Crew',
     };
   }
 
@@ -707,6 +720,11 @@ export function routeItemMessage(
  *
  * Open questions are left out: the console answers the one open, or asks
  * which, from `openGates` itself, and says so in its own words.
+ *
+ * When the conversation has no one to write to, because nobody has worked on
+ * the item yet, every role the crew has that no tab names is here too, for the
+ * box to offer as a pick. It asked to "pick a role to write to", and an item
+ * nobody had worked on had no role tab to pick.
  */
 export function messageRoutes(
   view: Pick<ItemView, 'openGates' | 'timeline' | 'tasks' | 'stage' | 'roles'>,
@@ -715,7 +733,10 @@ export function messageRoutes(
 ): Record<string, ItemRoutePreview> {
   const quiet = { ...view, openGates: [] };
   const routes: Record<string, ItemRoutePreview> = {};
-  for (const role of ['', ...view.roles.map((one) => one.role)]) {
+  const tabs = ['', ...view.roles.map((one) => one.role)];
+  const nobody = routeItemMessage(quiet, item, bots, { role: null }).kind === 'refused';
+  const picks = nobody ? writableRoles(bots).filter((role) => !tabs.includes(role)) : [];
+  for (const role of [...tabs, ...picks]) {
     const route = routeItemMessage(quiet, item, bots, { role: role || null });
     if (route.kind === 'refused') {
       routes[role] = { kind: 'refused', error: route.error };
@@ -955,6 +976,7 @@ export async function resolveControlled(
 export function controlledItem(item: Item, repo: RepoRow, pull: ControlPull | null, defaultBranch: string | null): ControlledItem {
   return {
     key: item.key,
+    itemKey: item.workItem?.key ?? null,
     repoName: repo.name,
     repoFullName: repo.fullName,
     repoId: repo.id,

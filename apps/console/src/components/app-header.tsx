@@ -47,8 +47,15 @@ function useNav(): typeof NAV {
  * (docker)") and a chip that said "running unattended" whether or not anything
  * was, which told a person nothing they could act on.
  *
- * Below 768px it is two rows with touch-sized controls, and the page's own
- * navigation moves to a bar at the bottom (`BottomNav`).
+ * From 768px up it is one row, and nothing in it wraps: at 800px the badge
+ * of what needs you broke into four lines inside its pill, "New request"
+ * into two, and the row ran past the window. Each part keeps its words on
+ * one line and its width; the gaps and the links' padding are tighter until
+ * 1280px, the button says "New" until 1024px, and the repository's name is
+ * what gives way, cut short with an ellipsis. Below 768px it is two rows with
+ * touch-sized controls, the second wrapping between its parts, never inside
+ * one, and the page's own navigation moves to a bar at the bottom
+ * (`BottomNav`).
  */
 export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: string; data: HeaderData }) {
   const labelOf = (name: string) => labelIn(data.crew, name);
@@ -60,22 +67,22 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
 
   return (
     <>
-      <header className="hidden h-14 shrink-0 items-center gap-6 border-b border-edge bg-panel px-6 md:flex">
-        <div className="flex items-center gap-2.5">
-          <Link href={boardHref(repo)} className="text-[15px] font-semibold tracking-tight text-body">
+      <header data-wide-header className="hidden h-14 shrink-0 items-center gap-3 whitespace-nowrap border-b border-edge bg-panel px-4 md:flex lg:gap-4 xl:gap-6 xl:px-6">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <Link href={boardHref(repo)} className="shrink-0 text-[15px] font-semibold tracking-tight text-body">
             OpenADLC
           </Link>
           <RepoSwitcher repos={data.repos} colors={data.repoColors} current={repo} />
         </div>
 
-        <nav aria-label="Console" className="flex items-center gap-0.5">
+        <nav aria-label="Console" className="flex shrink-0 items-center gap-0.5">
           {nav.map((item) => (
             <Link
               key={item.page}
               href={item.href(repo)}
               aria-current={item.page === page ? 'page' : undefined}
               className={cn(
-                'flex h-8 items-center rounded-md px-3 text-[13px] transition-colors',
+                'flex h-8 items-center rounded-md px-2 text-[13px] transition-colors lg:px-2.5 xl:px-3',
                 item.page === page ? 'bg-well font-medium text-body' : 'text-muted hover:text-body',
               )}
             >
@@ -84,7 +91,7 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
           ))}
         </nav>
 
-        <div className="ml-auto flex items-center gap-[18px]">
+        <div className="ml-auto flex shrink-0 items-center gap-2.5 lg:gap-3 xl:gap-[18px]">
           <span className="hidden items-center gap-[7px] text-[12.5px] text-soft xl:flex">
             <StatusDot working={working} ready={ready} />
             {crewLine(data.counts)}
@@ -97,7 +104,8 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
               className="inline-flex h-8 items-center gap-1.5 rounded-md bg-body px-3 text-[13px] font-medium text-surface transition-colors hover:bg-soft focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-link"
             >
               <PlusIcon />
-              New request
+              {/* Said in full to a screen reader whatever the width. */}
+              New<span className="sr-only lg:not-sr-only"> request</span>
             </button>
           </IntakeDialog>
         </div>
@@ -119,7 +127,7 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
             </button>
           </IntakeDialog>
         </div>
-        <p className="mt-1 flex flex-wrap items-center gap-x-[7px] text-[12.5px] text-muted">
+        <p className="mt-1 flex flex-wrap items-center gap-x-[7px] whitespace-nowrap text-[12.5px] text-muted">
           <StatusDot working={working} ready={ready} />
           <span>{crewLine(data.counts)}</span>
           {data.spend && (
@@ -269,8 +277,10 @@ function RepoSwitcher({
         aria-expanded={open}
         aria-controls={list}
         onClick={() => setOpen((shown) => !shown)}
+        // Held to its box, so a narrow header cuts the name short rather than
+        // drawing the button over the navigation beside it.
         className={cn(
-          'flex min-w-0 items-center gap-1.5 text-soft focus-visible:outline-2 focus-visible:outline-link',
+          'flex min-w-0 max-w-full items-center gap-1.5 text-soft focus-visible:outline-2 focus-visible:outline-link',
           compact
             ? 'h-11 pl-1.5 pr-1 text-[13px]'
             : 'h-7 rounded-md border border-edge bg-panel pl-2.5 pr-2 text-[12.5px] hover:border-edge-strong',

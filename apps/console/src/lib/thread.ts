@@ -304,9 +304,12 @@ export interface PinnedTask {
   cost: string | null;
 }
 
-/** What its card on the board offers "Try again" and "Stop" for: failed, or stopped by anything but a person. */
-export function couldNotFinish(task: Pick<TaskSummary, 'state' | 'stoppedByAPerson'>): boolean {
-  return task.state === 'failed' || (task.state === 'stopped' && !task.stoppedByAPerson);
+/**
+ * What its card on the board offers "Try again" and "Stop" for: failed, or
+ * stopped by anything but a person, or the bridge once its work was over.
+ */
+export function couldNotFinish(task: Pick<TaskSummary, 'state' | 'stoppedByAPerson' | 'stoppedByTheBridge'>): boolean {
+  return task.state === 'failed' || (task.state === 'stopped' && !task.stoppedByAPerson && !task.stoppedByTheBridge);
 }
 
 /**
@@ -318,7 +321,7 @@ export function couldNotFinish(task: Pick<TaskSummary, 'state' | 'stoppedByAPers
  * ended without its pull request is never `landed`: the bridge says that of
  * one only while its issue is at Build or before.
  */
-export function landedAnyway(task: Pick<TaskSummary, 'state' | 'stoppedByAPerson' | 'landed'>): boolean {
+export function landedAnyway(task: Pick<TaskSummary, 'state' | 'stoppedByAPerson' | 'stoppedByTheBridge' | 'landed'>): boolean {
   return Boolean(task.landed) && couldNotFinish(task);
 }
 

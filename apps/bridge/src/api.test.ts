@@ -1556,6 +1556,23 @@ describe('stopping a task that could not finish', () => {
       expect(vi.mocked(audit)).not.toHaveBeenCalled();
     });
 
+    it('says a stop the bridge made is the bridge’s, with why, and not a person’s', async () => {
+      // A review its pull request's merge stopped (`Webhooks.stopReviewsOf`)
+      // was recorded "stopped by a person from the console (bridge): its pull
+      // request merged", and the crew page counted it as a person's stop.
+      task = { ...FAILED, state: 'running' };
+      const { stopTask } = await import('./api.js');
+      expect(await stopTask('task-81', 'bridge', 'its pull request merged', cancelling, { unfinished: true })).toMatchObject({ state: 'stopped', stopped: true });
+      expect(cancelled).toEqual([{ id: 'task-81', reason: 'stopped by the bridge: its pull request merged' }]);
+      expect(vi.mocked(audit)).toHaveBeenCalledWith(
+        expect.objectContaining({ actor: 'bridge', action: 'task.stopped', payload: expect.objectContaining({ reason: 'stopped by the bridge: its pull request merged' }) }),
+      );
+      const { STOPPED_BY_A_PERSON } = await import('./attention.js');
+      const { stoppedByTheBridge } = await import('./bridge-stops.js');
+      expect(cancelled[0]!.reason.startsWith(STOPPED_BY_A_PERSON)).toBe(false);
+      expect(stoppedByTheBridge({ state: 'stopped', exitReason: cancelled[0]!.reason })).toBe(true);
+    });
+
     it('says so when hostd does not stop it, and closes nothing', async () => {
       task = { ...FAILED, state: 'paused' };
       cancelling.cancelTask.mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
@@ -2500,6 +2517,66 @@ describe('whether a bot’s last task landed, as the crew list says it for its t
 
   it('says a deploy that failed on a merged issue has not, since the merge is where its work starts', async () => {
     expect((await lastTasks())['openadlc-sre-janedoe']).toMatchObject({ kind: 'deploy', state: 'failed', issue: { number: 18 }, landed: false });
+  });
+});
+
+describe('who stopped a bot’s last task, as the crew list says it for its thread', () => {
+  const CREW = [
+    { id: 'bot-lead', name: 'openadlc-lead-janedoe', slot: 'lead-reviewer', role: 'review_lead' },
+    { id: 'bot-second', name: 'openadlc-second-janedoe', slot: 'second-reviewer', role: 'review_second' },
+    { id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement' },
+  ];
+  const stopped = (botId: string, exitReason: string) => ({
+    id: `task-${botId}`,
+    botId,
+    repoId: 'repo-1',
+    kind: 'review',
+    subjectRef: 'openadlc-testbed#19',
+    state: 'stopped',
+    exitReason,
+    branch: null,
+    round: 1,
+    costUsd: 0.2,
+    createdAt: '2026-10-22T09:00:00Z',
+    startedAt: '2026-10-22T09:01:00Z',
+    endedAt: '2026-10-22T09:30:00Z',
+  });
+  const LAST = [
+    stopped('bot-lead', 'stopped by the bridge: its pull request merged'),
+    // As a bridge before it recorded its own stops.
+    stopped('bot-second', 'stopped by a person from the console (bridge): its pull request closed'),
+    stopped('bot-builder', 'stopped by a person from the console (janedoe@example.com): taking it over'),
+  ];
+
+  beforeEach(() => {
+    vi.mocked(bots.listBots).mockResolvedValueOnce(CREW as never);
+    vi.mocked(issues.listIssues).mockResolvedValue([] as never);
+    vi.mocked(tasks.listTasks).mockImplementation((async (filter: { botId?: string; states?: string[] }) =>
+      LAST.filter((task) => task.botId === filter.botId && (filter.states ?? []).includes(task.state))) as never);
+    // A review's summary counts the fixes its round answers.
+    Object.assign(tasks, { listTasksForSubjects: vi.fn(async () => []) });
+    Object.assign(sessions, { listSessions: vi.fn(async () => []) });
+    Object.assign(credentials, { getCredential: vi.fn(async () => ({ status: 'active', tokenExpiresAt: null })) });
+  });
+
+  afterEach(() => {
+    vi.mocked(issues.listIssues).mockReset();
+    delete (tasks as { listTasksForSubjects?: unknown }).listTasksForSubjects;
+  });
+
+  async function lastTasks(): Promise<Record<string, { stoppedByAPerson?: boolean; stoppedByTheBridge?: boolean } | null>> {
+    const body = (await (await fetch(`${bridgeUrl}/v1/bots`)).json()) as { bots: { name: string; lastTask: { stoppedByAPerson?: boolean } | null }[] };
+    return Object.fromEntries(body.bots.map((bot) => [bot.name, bot.lastTask]));
+  }
+
+  it('does not count a stop the bridge made, when a pull request merged or closed, as a person’s', async () => {
+    const last = await lastTasks();
+    expect(last['openadlc-lead-janedoe']).toMatchObject({ state: 'stopped', stoppedByAPerson: false, stoppedByTheBridge: true });
+    expect(last['openadlc-second-janedoe']).toMatchObject({ state: 'stopped', stoppedByAPerson: false, stoppedByTheBridge: true });
+  });
+
+  it('still counts a person’s Stop as theirs', async () => {
+    expect((await lastTasks())['openadlc-atlas-janedoe']).toMatchObject({ state: 'stopped', stoppedByAPerson: true, stoppedByTheBridge: false });
   });
 });
 

@@ -25,12 +25,20 @@ import { issueNumberFromBranch } from './work.js';
  *   not become an issue is abandoned, so the request queue never starts it
  *   again.
  *
- * All four are an admin's (`roles.ts`), and all four are audited.
+ * All four are an admin's (`roles.ts`), and all four are audited under the
+ * item's key, as linking, unlinking and merging are (`item-routes.ts`), with
+ * the subjects each acted on in the payload.
  */
 
 /** A work item as these routes need it (`controlledItem` in items.ts, which `main.ts` resolves it with). */
 export interface ControlledItem {
   key: string;
+  /**
+   * Its work item's key, `W-4`, once the install is numbered: what the audit
+   * log files its controls under. Cancel on W-4 was filed under its issue,
+   * `scripted#44`, while link, unlink and merge on it were filed under W-4.
+   */
+  itemKey?: string | null;
   repoName: string;
   repoFullName: string;
   repoId: string;
@@ -165,6 +173,16 @@ export function gitHubFailure(error: unknown, item: { key: string; repoFullName:
   return new HttpFailure(status === 401 || status === null ? 503 : 409, sentence);
 }
 
+/** What an item's controls are audited under: its work item's key, or its subject before the install is numbered. */
+function auditedAs(item: ControlledItem): string {
+  return item.itemKey ?? item.key;
+}
+
+/** The subjects a control changed on GitHub: the issue, and its pull request when it has one. */
+function labelled(item: ControlledItem, issue: { number: number }): string[] {
+  return [`${item.repoName}#${issue.number}`, ...(item.pr ? [`${item.repoName}#${item.pr.number}`] : [])];
+}
+
 /**
  * The branch Cancel deletes, or null when it deletes none. Only the crew's own
  * branch for this issue (`agent/<bot>/<issue>-…`) in the issue's repository:
@@ -252,7 +270,7 @@ export function registerItemControlRoutes(router: Router, deps: ItemControlDeps)
     await deps.setLabels(item.repoId, issue.number, [...new Set([...issue.labels, PAUSED_LABEL])]);
     const held: ItemHold = { by: identity, at: (deps.now?.() ?? new Date()).toISOString(), why };
     await recordHold(`${item.repoName}#${issue.number}`, held, identity);
-    await deps.audit({ actor: identity, action: 'item.paused', target: item.key, payload: { why } });
+    await deps.audit({ actor: identity, action: 'item.paused', target: auditedAs(item), payload: { why, subjects: labelled(item, issue) } });
     return { subject: item.key, held };
   });
 
@@ -264,7 +282,7 @@ export function registerItemControlRoutes(router: Router, deps: ItemControlDeps)
     if (item.pr) await takeLabel(client, item, item.pr.number, PAUSED_LABEL);
     await deps.setLabels(item.repoId, issue.number, issue.labels.filter((label) => label !== PAUSED_LABEL));
     await recordHold(`${item.repoName}#${issue.number}`, null, identity);
-    await deps.audit({ actor: identity, action: 'item.resumed', target: item.key });
+    await deps.audit({ actor: identity, action: 'item.resumed', target: auditedAs(item), payload: { subjects: labelled(item, issue) } });
     const startHeld = async (): Promise<unknown> => deps.resumed?.(item);
     if (deps.later) deps.later(item, `Starting what the hold on ${item.key} kept back`, startHeld);
     else {
@@ -296,7 +314,12 @@ export function registerItemControlRoutes(router: Router, deps: ItemControlDeps)
       await takeLabel(client, item, issue.number, NEXT_LABEL);
       await deps.setLabels(item.repoId, issue.number, issue.labels.filter((label) => label !== NEXT_LABEL));
     }
-    await deps.audit({ actor: identity, action: on ? 'item.next' : 'item.not_next', target: item.key, payload: { tookFrom: moved } });
+    await deps.audit({
+      actor: identity,
+      action: on ? 'item.next' : 'item.not_next',
+      target: auditedAs(item),
+      payload: { subjects: [`${item.repoName}#${issue.number}`, ...moved.map((number) => `${item.repoName}#${number}`)], tookFrom: moved },
+    });
     deps.dispatchSoon?.(`${item.key} ${on ? 'was put next' : 'is no longer next'}`);
     return { subject: item.key, next: on, tookFrom: moved };
   });
@@ -430,7 +453,7 @@ export function registerItemControlRoutes(router: Router, deps: ItemControlDeps)
       await forgetHold(`${item.repoName}#${issue.number}`, identity).catch(() => undefined);
     }
 
-    await deps.audit({ actor: identity, action: 'item.cancelled', target: item.key, payload: { reason, steps } });
+    await deps.audit({ actor: identity, action: 'item.cancelled', target: auditedAs(item), payload: { reason, subjects: item.subjects, steps } });
     return {
       subject: item.key,
       cancelled: steps.every((one) => one.done),

@@ -1,5 +1,6 @@
 import { attachments, audit, bots, costs, credentials, deployRuns, health, issues, lastEventAt, lastGithubDelivery, leases, mergeLines, pruneGithubDeliveries, recordEvent, repos, settings, spendingLimits, tasks, threads } from '@openadlc/db';
 import { claimWindowStart } from './attachment-routes.js';
+import { stoppedByTheBridge } from './bridge-stops.js';
 import { sweepDesignMemory } from './design-memory.js';
 import { leadOnlyResolutionTo, resolutionCheckBrief } from './conflict-round.js';
 import type { Stacking } from './stacking.js';
@@ -598,14 +599,16 @@ export interface PriorDeploy {
 /**
  * Whether a task ended because a person meant it to: they killed its session
  * (`tasks.stoppedByPerson`), or refused the plan change it asked for. Either is
- * a decision about the work, and starting it again would overrule it. A task
- * whose session went away on its own — a crash, a host that stopped — was
- * interrupted, which is what the sweep is a backstop for.
+ * a decision about the work, and starting it again would overrule it; so is
+ * the bridge stopping it because the subject it was paused on closed
+ * (`stoppedByTheBridge`). A task whose session went away on its own — a crash,
+ * a host that stopped — was interrupted, which is what the sweep is a backstop
+ * for.
  */
 export function stoppedOnPurpose(task: PriorDeploy): boolean {
   return (
     task.state === 'stopped' &&
-    (tasks.stoppedByPerson({ state: task.state, exitReason: task.exitReason ?? null }) || wasRefused(task.exitReason))
+    (tasks.stoppedByPerson({ state: task.state, exitReason: task.exitReason ?? null }) || wasRefused(task.exitReason) || stoppedByTheBridge(task))
   );
 }
 

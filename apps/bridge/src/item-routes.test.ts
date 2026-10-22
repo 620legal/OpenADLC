@@ -378,6 +378,8 @@ describe('a work item by its key', () => {
     const controlled = await resolveControlled('W-128', { pull: async () => ({ headRef: 'agent/builder/12-x', headRepoFullName: 'acme/api', merged: false, state: 'open' }), defaultBranch: async () => 'main' });
     // Not api#15, linked by hand: cancelling W-128 stopped #15's build, and the dispatcher built it again.
     expect(controlled).toMatchObject({ key: 'api#12', issue: { number: 12 }, pr: { number: 31, merged: false } });
+    // What its controls are audited under, as link, unlink and merge are.
+    expect(controlled?.itemKey).toBe('620legal-128');
     expect(controlled?.subjects.sort()).toEqual(['api#12', 'api#31', 'request:a4b02784']);
     expect((await read('W-128')).view.subjects).toContain('api#15');
   });
@@ -430,7 +432,9 @@ describe('linking, unlinking and merging work items by hand', () => {
   const githubReads: string[] = [];
   const ITEM: { id: string; number: number; mergedInto: null } = { id: 'w-128', number: 128, mergedInto: null };
   const OTHER: { id: string; number: number; mergedInto: null } = { id: 'w-131', number: 131, mergedInto: null };
-  const itemFor = (id: string, number: number) => ({ item: { key: 'api#12', workItem: { id, number, key: `620legal-${number}`, mergedFrom: null }, issue: null } });
+  const itemFor = (id: string, number: number) => ({
+    item: { key: 'api#12', subjects: ['api#12', 'api#31'], workItem: { id, number, key: `620legal-${number}`, mergedFrom: null }, issue: null },
+  });
 
   beforeEach(async () => {
     audits.length = 0;
@@ -488,7 +492,7 @@ describe('linking, unlinking and merging work items by hand', () => {
     expect(calls).toEqual([
       ['link', 'w-128', { repoId: 'repo-2', number: 7, kind: 'pull' }, { title: 'Fix 7', state: 'merged', url: 'https://github.com/acme/web/pull/7', openedAt: '2026-10-01T00:00:00.000Z' }, 'ada@acme.test'],
     ]);
-    expect(audits).toEqual([{ actor: 'ada@acme.test', action: 'item.linked', target: '620legal-128', payload: { ref: 'acme/web#7', from: '620legal-140' } }]);
+    expect(audits).toEqual([{ actor: 'ada@acme.test', action: 'item.linked', target: '620legal-128', payload: { ref: 'acme/web#7', subjects: ['web#7'], from: '620legal-140' } }]);
   });
 
   it('refuses a repository the install does not manage, and a number GitHub does not have, linking nothing', async () => {
@@ -507,7 +511,7 @@ describe('linking, unlinking and merging work items by hand', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ item: '620legal-128', ref: 'acme/api#31', key: '620legal-141' });
     expect(calls).toEqual([['unlink', 'w-128', { repoId: 'repo-1', number: 31 }, 'ada@acme.test']]);
-    expect(audits).toEqual([{ actor: 'ada@acme.test', action: 'item.unlinked', target: '620legal-128', payload: { ref: 'acme/api#31', to: '620legal-141' } }]);
+    expect(audits).toEqual([{ actor: 'ada@acme.test', action: 'item.unlinked', target: '620legal-128', payload: { ref: 'acme/api#31', subjects: ['api#31'], to: '620legal-141' } }]);
 
     const only = await call('DELETE', `/v1/items/128/links/${encodeURIComponent('api#12')}`);
     expect(only.status).toBe(409);
@@ -520,7 +524,7 @@ describe('linking, unlinking and merging work items by hand', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ item: '620legal-128', into: '620legal-131' });
     expect(calls).toEqual([['merge', 'w-128', 'w-131']]);
-    expect(audits).toEqual([{ actor: 'ada@acme.test', action: 'item.merged', target: '620legal-128', payload: { into: '620legal-131' } }]);
+    expect(audits).toEqual([{ actor: 'ada@acme.test', action: 'item.merged', target: '620legal-128', payload: { into: '620legal-131', subjects: ['api#12', 'api#31'] } }]);
     expect((await call('POST', '/v1/items/128/merge', { into: '128' })).status).toBe(409);
   });
 

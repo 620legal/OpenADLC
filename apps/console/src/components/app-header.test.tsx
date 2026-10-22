@@ -65,7 +65,8 @@ describe('the header', () => {
     // From every page, the count leads to the page that lists them all.
     expect(html).toMatch(/<a [^>]*href="\/needs-you"[^>]*>3 need you<\/a>/);
     expect(wide(header('board'))).toMatch(/<a [^>]*href="\/needs-you"[^>]*>3 need you<\/a>/);
-    expect(html).toMatch(/<button[^>]*>.*New request<\/button>/);
+    // "New" alone below 1024px, and "New request" to a screen reader at every width.
+    expect(html).toMatch(/<button[^>]*>.*New<span class="sr-only lg:not-sr-only"> request<\/span><\/button>/);
   });
 
   it('says the crew is ready when nothing is working, and that nothing needs you when nothing does', () => {

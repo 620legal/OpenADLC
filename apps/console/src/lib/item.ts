@@ -116,6 +116,22 @@ export function roleTabs(view: Pick<ItemView, 'roles'>): { value: string; role: 
   }));
 }
 
+/**
+ * The roles the conversation's box offers to write to while nobody has worked
+ * on the item: the bridge has no one to send its message to, asks for a role,
+ * and names where each of the crew's would go (`routes`). An item nobody had
+ * worked on has no role tab, and the box asked to "pick a role to write to"
+ * with nothing to pick. Empty once the conversation has someone to write to,
+ * and from a bridge that names no role beyond the tabs.
+ */
+export function writeToRoles(view: Pick<ItemView, 'roles' | 'routes'>): { role: string; label: string }[] {
+  if (view.routes?.['']?.kind !== 'refused') return [];
+  const tabs = new Set(view.roles.map((one) => one.role));
+  return Object.entries(view.routes)
+    .filter(([role, route]) => role !== '' && !tabs.has(role) && route.kind === 'post')
+    .map(([role]) => ({ role, label: roleWords(role) }));
+}
+
 /** A task whose computer is worth looking at: going now, in a session of its own. */
 export function liveTasks(view: Pick<ItemView, 'tasks'>): ItemTask[] {
   return view.tasks.filter((task) => (task.state === 'running' || task.state === 'paused') && Boolean(task.tmuxSession));
