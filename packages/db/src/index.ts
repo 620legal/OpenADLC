@@ -6,6 +6,8 @@ export * as attributions from './store/attributions.js';
 export * as repos from './store/repos.js';
 export * as issues from './store/issues.js';
 export * as leases from './store/leases.js';
+export * as standingApprovals from './store/standing-approvals.js';
+export type { StandingApproval } from './store/standing-approvals.js';
 export * as tasks from './store/tasks.js';
 export * as sessions from './store/sessions.js';
 export * as threads from './store/threads.js';

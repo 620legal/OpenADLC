@@ -1,0 +1,15 @@
+# What the design seat may do while it judges one plan change (#77): read the
+# repository and the context it is given, and nothing more. It writes no file,
+# so its write scope is empty and the file tools stay off, and it has no `gh`:
+# its verdict is the marker that ends its message, which the bridge reads from
+# the session, with the task's token, and acts on (`plan-changes.ts`).
+# docs/security.md says, engine by engine, what holds.
+
+allow:
+  shell: [rg, cat, ls, git log, git show, git ls-files, git grep, git diff]
+  files:
+    write_within: []
+
+deny:
+  shell: [curl, wget, ssh, docker, sudo, gh]
+  github: ["pr merge", "pr review", "pr comment", "issue comment", "issue edit", "workflow run", "run rerun", "api"]

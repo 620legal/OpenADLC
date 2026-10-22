@@ -118,7 +118,8 @@ import { describeSubject } from './thread-view.js';
 import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
 import { registerItemRoutes } from './item-routes.js';
-import { itemOf, offeredGate, requestSubject } from './items.js';
+import { itemOf, offeredGate, requestSubject, resolveItem } from './items.js';
+import { PlanChanges, registerPlanChangeRoutes } from './plan-changes.js';
 import { readSeatPauses } from './seat-pause.js';
 import type { HealthAction } from '@openadlc/shared';
 import { attachmentIds, claimableFor, claimWindowStart, registerAttachmentRoutes } from './attachment-routes.js';
@@ -173,6 +174,8 @@ export interface ApiDeps {
    * it answers, as before.
    */
   afterwards?: Afterwards;
+  /** Approve all, the designer's judgement and a refusal after the fact (`plan-changes.ts`); one is made where none is given. */
+  planChanges?: PlanChanges;
 }
 
 /** Where what runs after an answer belongs: the task it was for, or else a subject's thread. */
@@ -265,6 +268,23 @@ async function threadOf(where: AfterWhere): Promise<string | null> {
   if (task) return (await threads.ensureThread({ botId: task.botId, repoId: task.repoId, subjectRef: task.subjectRef })).id;
   if (!where.subjectRef) return null;
   return (await threads.listThreadsForSubject(where.subjectRef)).at(-1)?.id ?? null;
+}
+
+/** The plan-change controls, wired to this bridge's gates, tasks, rules and signing keys. */
+export function planChangesFor(deps: ApiDeps): PlanChanges {
+  return (
+    deps.planChanges ??
+    new PlanChanges({
+      gates: deps.gates,
+      taskService: deps.taskService,
+      actors: deps.actors,
+      humanReviewRules: (repoFullName, baseRef) => deps.automation.humanReviewRules(repoFullName, baseRef),
+      ...(deps.attribution ? { keyring: () => deps.attribution!.keyring() } : {}),
+      stopTask: (taskId, actor, note) => stopTask(taskId, actor, note, deps.hostd, { unfinished: true }),
+      answerAsPerson: (input) => answerFromConsole(deps, input),
+      ...(deps.afterwards ? { later: (what: string, work: () => Promise<unknown>) => deps.afterwards!.run({}, what, work) } : {}),
+    })
+  );
 }
 
 /**
@@ -1362,6 +1382,11 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
   });
 
   registerItemRoutes(router, deps);
+  registerPlanChangeRoutes(router, planChangesFor(deps), async (subject) => {
+    const found = await resolveItem(subject);
+    const number = found?.item.issue?.number ?? (found?.item.refs.issue ? parseRef(found.item.refs.issue)?.number : null);
+    return found?.item.repo && number ? { repo: found.item.repo, issueNumber: number } : null;
+  });
   registerAttachmentRoutes(router);
   registerDesignMemoryRoutes(router);
 

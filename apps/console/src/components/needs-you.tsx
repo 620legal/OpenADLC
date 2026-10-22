@@ -7,6 +7,9 @@ import {
   abandonRequest,
   acknowledgeNotice,
   answerGate,
+  approveAll,
+  askDesigner,
+  turnOffApproveAll,
   decideUnowned,
   dismissNotice,
   dismissSigningKey,
@@ -474,7 +477,9 @@ function NeedsCard({
               <ActionButton
                 key={`${action.kind}-${index}`}
                 action={action}
-                primary={index === 0}
+                // Beside a question's choices nothing is the one to press:
+                // approving the rest of the work is not made the easy click.
+                primary={index === 0 && choices.length === 0}
                 pending={pending}
                 active={active}
                 onOpenBot={onOpenBot}
@@ -808,6 +813,7 @@ export function keyOf(action: AttentionAction): string {
   if ('sha' in action) return `${action.kind}:${action.repo}@${action.sha}`;
   if ('keyId' in action) return `${action.kind}:${action.login}:${action.keyId}`;
   if (action.kind === 'abandon_request') return `${action.kind}:${action.requestId}`;
+  if ('gateId' in action) return `${action.kind}:${action.gateId}`;
   return 'taskId' in action ? `${action.kind}:${action.taskId}` : action.kind;
 }
 
@@ -859,6 +865,31 @@ function ActionButton({
       return (
         <button type="button" className={style} disabled={pending} onClick={() => press(() => answerGate(action.gateId, action.answer), answered(action.answer))}>
           {busy ? 'Sending…' : action.label}
+        </button>
+      );
+    case 'approve_all':
+      // Approving one request leaves approve all on for the rest of the work.
+      return (
+        <button
+          type="button"
+          className={style}
+          disabled={pending}
+          title="Approves this request, and the builder's later requests on this issue as it asks them, except paths under Human review, until its pull request merges or closes"
+          onClick={() => press(() => approveAll(action.gateId))}
+        >
+          {busy ? 'Approving…' : action.label}
+        </button>
+      );
+    case 'ask_designer':
+      return (
+        <button type="button" className={style} disabled={pending} onClick={() => press(() => askDesigner(action.gateId))}>
+          {busy ? 'Asking…' : action.label}
+        </button>
+      );
+    case 'approve_all_off':
+      return (
+        <button type="button" className={style} disabled={pending} onClick={() => press(() => turnOffApproveAll(action.subject))}>
+          {busy ? 'Turning off…' : action.label}
         </button>
       );
     case 'retry_triage':

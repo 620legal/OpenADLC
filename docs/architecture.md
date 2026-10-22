@@ -275,7 +275,9 @@ none yet, says its kind of work instead ("writing the change").
    Before it lands a crew pull request, the bridge compares every file it
    changes, a rename's old name included, with the paths OpenADLC's lease for
    its issue declared (widened only by an approved plan change, never by an
-   edit of the issue), plus `tests/`, `docs/`, `AGENTS.md` and tests beside
+   edit of the issue; a person, a standing approval of the issue's plan
+   changes, or the designer within its limits approves one, and never one
+   under Human review without a person), plus `tests/`, `docs/`, `AGENTS.md` and tests beside
    declared modules (`mergeDecision`). One that strays leaves the line and goes
    back to build with the stray files named; its patch round is briefed with
    the lease's paths alone. `scope:cross-cutting` lets it through only when the
@@ -648,7 +650,7 @@ back. A crew account that moves a stage label back is put back.
 | **Design memory** | What the design stage is told a repository has decided: decisions, constraints, conventions and terms (`design_memory`, migration 0030), proposed only by the design task's own signed comment, accepted by a person's answer to it or the move to build, a supersede said on the issue and revertible, curated in Settings → Repositories. A summary of the repository's ADRs, which are the record ([ADR 0002](adr/0002-design-memory.md)) |
 | **Work item** | One piece of work as a person means it: a console request, the issue it became and that issue's pull request. Its key is `<repo>#<issue>` once the issue exists, `request:<id8>` before; any other subject (a deploy of a commit) is an item of its own. Its conversation is every thread about any of its subjects, each labelled by the role and seat it was with (kept on the thread when it was opened, migration 0028), so seats sharing one GitHub account are still told apart |
 | **Lease** | The record that an issue is being built by a bot, with the paths it may touch and an expiry |
-| **Gate** | A question that holds a task until a person answers. A **plan change** is one: a task asks to add paths to its lease, and a person approves or refuses ([development.md](development.md#plan-changes)) |
+| **Gate** | A question that holds a task until a person answers. A **plan change** is one: a task asks to add paths to its lease, and a person approves or refuses, or settles it in one step: approve all for the rest of the issue's build, or ask the designer, whose approval counts within the design. A path under Human review always asks a person ([development.md](development.md#plan-changes)) |
 | **Marker** | A line such as `<!-- openadlc:{"event":"review_posted"} -->` that ends a bot's comment, so the bridge learns what it did rather than guessing |
 | **review-gate** | The gate the bridge publishes on a pull request's head: a check run by OpenADLC's App when it holds Checks: write (what `openadlc github apply` pins), with a commit status of the same name beside it. It is green once every seat asked has reviewed this diff, the lead last; the lead and every blocking seat have approved; each person `AGENTS.md` names for the touched paths has approved the head; and neither `needs-human` nor `openadlc:paused` is on the pull request |
 | **Lead reviewer** | The seat that reviews last: it reads every other seat's review and decides for the round; the others are advisory unless marked `blocking` |

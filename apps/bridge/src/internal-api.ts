@@ -26,7 +26,7 @@ import {
   stepNamed,
   unreadablePathLines,
 } from '@openadlc/shared';
-import type { ApiDeps } from './api.js';
+import { planChangesFor, type ApiDeps } from './api.js';
 import { asAutomation, automationBotName, automationLogin, findOwnOpenIssue } from './automation-bot.js';
 import { subjectClosed } from './gates.js';
 import { startBuild } from './build-start.js';
@@ -159,6 +159,9 @@ export function registerInternalApi(
 
   // A file a task is given, fetched by hostd as it starts the task.
   registerInternalAttachmentRoutes(router, (raw) => requireInternalSecret(raw, deps.internalSecret));
+
+  // The designer's verdict on a plan change reaches the bridge here, from its own session (`plan-changes.ts`).
+  const planChanges = planChangesFor(deps);
 
   /**
    * Registers a route a task's own session may reach, about itself.
@@ -385,6 +388,19 @@ export function registerInternalApi(
     }
     const ended = task;
 
+    // A question settled as it was asked — a plan change a standing approval
+    // approved in `Gates.open` — leaves nobody to answer it, so the task goes
+    // on once its session says it has stopped, which is now: resumed while
+    // the session ran, the usage it still had to report would be cut off.
+    if (state === 'paused') {
+      const owed = await (async () => (await tasks.pausedWithAnswer()).some((row) => row.id === ended.id))().catch(() => false);
+      if (owed) {
+        void deps.taskService
+          .resume(ended.id)
+          .catch((error: Error) => console.warn(`[bridge] ${ended.subjectRef}: resume after its settled question failed: ${error.message}`));
+      }
+    }
+
     // An intake task that ended or waits on a person frees intake for the
     // next request in line; see `request-queue.ts`. A question is `paused`
     // here, posted once the session has stopped. Starting the next triage when
@@ -426,7 +442,7 @@ export function registerInternalApi(
       if (ended.kind === 'implement') deps.scheduler.afterBuildEnded?.();
 
       await deps.stages
-        .onTaskDone({ kind: ended.kind, subjectRef: ended.subjectRef, taskId: ended.id, branch: ended.branch })
+        .onTaskDone({ kind: ended.kind, subjectRef: ended.subjectRef, taskId: ended.id, branch: ended.branch, skill: ended.skill })
         .catch((error: unknown) =>
           console.warn(`[bridge] no handoff for ${ended.subjectRef}: ${error instanceof Error ? error.message : error}`),
         );
@@ -696,6 +712,14 @@ export function registerInternalApi(
     });
     if (event) {
       await recordEvent({ source: 'platform', type: event, payload: { taskId: task.id, bot: bot.name } });
+    }
+    // The designer's answer to the plan change it was asked to judge. Only
+    // here, from the session's own output with its task's token: a marker in
+    // a comment on GitHub is never a verdict.
+    if (event === 'plan_change_verdict') {
+      await planChanges
+        .verdict(task, input.text)
+        .catch((error: unknown) => console.warn(`[bridge] ${task.subjectRef}: the designer's verdict was not acted on: ${error instanceof Error ? error.message : error}`));
     }
     return { message };
   });

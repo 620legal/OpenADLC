@@ -24,6 +24,7 @@ import { loadBridgeConfig } from './config.js';
 import { Context } from './context.js';
 import { DispatchGate } from './dispatch-gate.js';
 import { Gates, subjectClosed } from './gates.js';
+import { standingCoverFor } from './plan-changes.js';
 import { readDefaultBranch, syncDefaultBranches } from './default-branch.js';
 import { Notifier } from './notify.js';
 import { identityFromConfig } from './identity.js';
@@ -137,6 +138,9 @@ async function main(): Promise<void> {
   sayDesignMemoryWith((repoFullName, issueNumber, body) => automation.comment(repoFullName, issueNumber, body));
   const notifier = new Notifier(config);
   const gates = new Gates(actors, notifier, config.consoleUrl, config.costs.perTaskCapUsd, config.costs);
+  // A standing approval on an issue settles its builder's later plan changes,
+  // never one with a path under Human review on the base branch (#77).
+  gates.useStandingApprovals(standingCoverFor({ humanReviewRules: (repoFullName, baseRef) => automation.humanReviewRules(repoFullName, baseRef) }));
   const context = new Context(actors, config);
   // The one routine that renames a bot: when an account connects it takes
   // that account's handle, and everything named after it moves with it.

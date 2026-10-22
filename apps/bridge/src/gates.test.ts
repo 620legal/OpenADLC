@@ -105,6 +105,9 @@ vi.mock('@openadlc/db', () => ({
     listHeldPlanChanges: vi.fn(async () =>
       store.planChange?.held ? [{ gateId: 'gate-1', request: store.planChange }] : [],
     ),
+    notePlanChange: vi.fn(async (_gateId: string, note: string, value: unknown) => {
+      store.planChange = { ...store.planChange, [note]: value };
+    }),
   },
   repos: {
     listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'openadlc', fullName: 'acme/openadlc' }]),
@@ -1696,6 +1699,8 @@ describe('the audit row of a gate answer', () => {
           answer: 'Approve',
           grant: 'plan_change_approved',
           channel: 'item',
+          paths: ['apps/hostd/src/skill-runner.ts'],
+          decidedBy: 'person',
         },
       },
     ]);
@@ -1838,5 +1843,149 @@ describe('an answer from a console person signed in by email', () => {
     await gates.answer({ gateId: 'gate-1', reply: 'p1', answeredBy: 'local operator' });
 
     expect(everythingSaid()).toContain('**a person in the OpenADLC console answered:**');
+  });
+});
+
+/**
+ * A person can settle a builder's requests in one step (#77): a standing
+ * approval on the issue approves later ones as they are asked, and the
+ * designer's approval counts within its limits. Neither is a person
+ * answering, so each says on the issue and in the audit log who decided.
+ */
+describe('a plan change settled by no person answering it', () => {
+  const answers = () => vi.mocked(audit).mock.calls.map(([entry]) => entry).filter((entry) => entry.action === 'gate.answer');
+  const said = () => client.comment.mock.calls.map((call) => String((call as unknown[])[2]));
+  const notifier = { send: vi.fn(async () => undefined) };
+  const covered = vi.fn(async () => ({ covers: true, setBy: 'orzelig', setAt: '2026-10-22T10:00:00.000Z', humanReview: [] as string[] }));
+  const standing = new Gates(actors as never, notifier as never);
+  standing.useStandingApprovals(covered);
+  const ask = (paths = ['apps/hostd/src/skill-runner.ts']) => {
+    // What the gate's message keeps once it is written, as the store reads it.
+    store.planChange = { paths, reason: 'the runner drops the field', held: null };
+    return standing.open({
+      taskId: 'task-1',
+      question: 'Add these to this issue\'s Expected paths?',
+      options: ['Approve', 'Refuse'],
+      planChange: { paths, reason: 'the runner drops the field' },
+    });
+  };
+
+  beforeEach(() => {
+    covered.mockReset();
+    covered.mockImplementation(async () => ({ covers: true, setBy: 'orzelig', setAt: '2026-10-22T10:00:00.000Z', humanReview: [] }));
+  });
+
+  it('is approved as it is asked under a standing approval, with one record on the issue and nobody asked', async () => {
+    const opened = await ask();
+
+    expect(opened.gateId).toBe('gate-1');
+    expect(covered).toHaveBeenCalledWith({ repoId: 'repo-1', repoFullName: 'acme/openadlc', issueNumber: 78, paths: ['apps/hostd/src/skill-runner.ts'] });
+    expect(store.gate).toMatchObject({ state: 'answered', answer: 'Approve', answeredBy: 'orzelig' });
+    expect(leases.widenPaths).toHaveBeenCalledWith('lease-1', ['apps/hostd/src/skill-runner.ts']);
+    // One comment: the record, which names the approval and who set it, and no question.
+    expect(said()).toHaveLength(1);
+    expect(said()[0]).toContain('**Approved under the standing approval** orzelig set for #78');
+    expect(said()[0]).toContain('the runner drops the field');
+    expect(said()[0]).toContain('Added to Expected paths: `apps/hostd/src/skill-runner.ts`.');
+    expect(client.addLabels).not.toHaveBeenCalled();
+    expect(client.removeLabel).not.toHaveBeenCalled();
+    expect(notifier.send).not.toHaveBeenCalled();
+    expect(answers()).toEqual([
+      expect.objectContaining({
+        actor: 'orzelig',
+        payload: expect.objectContaining({
+          grant: 'plan_change_approved',
+          channel: 'standing',
+          decidedBy: 'standing_approval',
+          paths: ['apps/hostd/src/skill-runner.ts'],
+          standingApproval: { setBy: 'orzelig', setAt: '2026-10-22T10:00:00.000Z' },
+        }),
+      }),
+    ]);
+    expect(leases.notePlanChange).toHaveBeenCalledWith('gate-1', 'decided', expect.objectContaining({ by: 'standing_approval', setBy: 'orzelig' }));
+    // The thread says it in OpenADLC's words, not as words the person typed.
+    expect(store.messages.at(-1)).toMatchObject({ kind: 'sys', author: 'openadlc' });
+  });
+
+  it('approves each later request the same way, every one recorded', async () => {
+    await ask(['apps/hostd/src/skill-runner.ts']);
+    openGate();
+    store.planChange = null;
+    await ask(['apps/hostd/src/task-runner.ts']);
+
+    expect(vi.mocked(leases.widenPaths).mock.calls.map((call) => call[1])).toEqual([['apps/hostd/src/skill-runner.ts'], ['apps/hostd/src/task-runner.ts']]);
+    expect(answers().map((entry) => entry.payload?.decidedBy)).toEqual(['standing_approval', 'standing_approval']);
+    expect(said().filter((body) => body.includes('Approved under the standing approval'))).toHaveLength(2);
+  });
+
+  it('still asks a person for a path under Human review, and says why on the question', async () => {
+    covered.mockImplementation(async () => ({ covers: false, setBy: 'orzelig', setAt: '2026-10-22T10:00:00.000Z', humanReview: ['apps/bridge/src/gates.ts'] }));
+
+    await ask(['apps/hostd/src/skill-runner.ts', 'apps/bridge/src/gates.ts']);
+
+    expect(store.gate).toMatchObject({ state: 'open' });
+    expect(leases.widenPaths).not.toHaveBeenCalled();
+    expect(said()[0]).toContain('1. Approve\n2. Refuse');
+    expect(said()[0]).toContain('Approve all is on for #78, but `apps/bridge/src/gates.ts` is under Human review in AGENTS.md, so a person decides.');
+    expect(client.addLabels).toHaveBeenCalledWith('acme/openadlc', 78, ['needs-human']);
+    expect(notifier.send).toHaveBeenCalledWith(expect.objectContaining({ event: 'gate_opened' }));
+    expect(store.messages.find((message) => message.kind === 'gate')).toMatchObject({
+      payload: { standing: { setBy: 'orzelig', humanReview: ['apps/bridge/src/gates.ts'] } },
+    });
+    expect(answers()).toEqual([]);
+  });
+
+  it('asks a person as before when no standing approval is on', async () => {
+    covered.mockImplementation(async () => null as never);
+    await ask();
+    expect(store.gate).toMatchObject({ state: 'open' });
+    expect(notifier.send).toHaveBeenCalled();
+  });
+
+  it('leaves the question for a person when the standing approval cannot be applied, and says so', async () => {
+    client.updateIssueBody.mockRejectedValueOnce(new Error('GitHub is down'));
+    vi.spyOn(console, 'warn').mockImplementationOnce(() => undefined);
+
+    await ask();
+
+    expect(store.gate).toMatchObject({ state: 'open' });
+    expect(notifier.send).toHaveBeenCalledWith(expect.objectContaining({ event: 'gate_opened' }));
+    expect(store.messages.some((message) => String(message.text).includes('could not be applied'))).toBe(true);
+  });
+
+  it('is approved by the designer, as the designer’s, with its reason and who asked it', async () => {
+    openGate();
+    store.planChange = { ...REQUEST };
+
+    const done = await gates.answer({
+      gateId: 'gate-1',
+      reply: 'Approve',
+      answeredBy: 'architect',
+      via: 'designer',
+      decided: { by: 'designer', seat: 'architect', taskId: 'task-9', askedBy: 'orzelig', reason: 'The design names the runner.' },
+    });
+
+    expect(done.taskId).toBe('task-1');
+    expect(answers()).toEqual([
+      expect.objectContaining({
+        actor: 'architect',
+        payload: expect.objectContaining({ channel: 'designer', decidedBy: 'designer', designer: { seat: 'architect', taskId: 'task-9', askedBy: 'orzelig' } }),
+      }),
+    ]);
+    expect(said()[0]).toContain('**The designer (architect) approved** it, asked by orzelig: The design names the runner.');
+    expect(said()[0]).toContain('refuse it from the item in the console');
+  });
+
+  it('is never anything but an approval of a plan change', async () => {
+    openGate({ question: 'Which table?', options: [] });
+    await expect(
+      gates.answer({ gateId: 'gate-1', reply: 'the second', answeredBy: 'architect', via: 'designer', decided: { by: 'designer', seat: 'architect', taskId: 't', askedBy: 'x', reason: 'r' } }),
+    ).rejects.toThrow(/only a plan change's approval/);
+    openGate();
+    store.planChange = { ...REQUEST };
+    await expect(
+      gates.answer({ gateId: 'gate-1', reply: 'Refuse', answeredBy: 'architect', via: 'designer', decided: { by: 'designer', seat: 'architect', taskId: 't', askedBy: 'x', reason: 'r' } }),
+    ).rejects.toThrow(/only a plan change's approval/);
+    expect(store.gate).toMatchObject({ state: 'open' });
   });
 });

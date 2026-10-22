@@ -59,6 +59,7 @@ import { isPinnedHuman } from './human-ids.js';
 import { asAutomation, automationBotName, findOwnOpenIssue } from './automation-bot.js';
 import type { BridgeConfig } from './config.js';
 import { alreadyLanded, subjectClosed, type Gates } from './gates.js';
+import { endStandingApproval } from './plan-changes.js';
 import { askedForCi, type MergeLine } from './merge-line.js';
 import { itemLink, type Notifier } from './notify.js';
 import { recordDesignMemory, type CommentSignature } from './design-memory.js';
@@ -794,6 +795,10 @@ export class Webhooks {
     // to Done as abandoned. A merge or a commit that may still be on its way
     // leaves it where it is, as does a close GitHub cannot say more about: the
     // reconciler asks again.
+    if (action === 'closed') {
+      // Its work is over, and with it any standing approval of its plan changes (#77).
+      await endStandingApproval({ repoId: repo.id, issueNumber: issue.number, why: 'the issue closed', subject: `${repo.name}#${issue.number}` });
+    }
     if (action === 'closed' || issue.state === 'closed') {
       const finished = (stage: string | null | undefined) => stage === 'merged' || stage === 'done';
       const known = await (async () => issues.getIssue(repo.id, issue.number))().catch(() => null);
@@ -2057,6 +2062,16 @@ export class Webhooks {
     }
 
     if (payload.action === 'closed') {
+      // Merged or closed, the work a standing approval of its plan changes
+      // was for is over: the next build of the issue asks a person again (#77).
+      if (forIssue) {
+        await endStandingApproval({
+          repoId: repo.id,
+          issueNumber: forIssue,
+          why: pr.merged ? `#${pr.number} merged` : `#${pr.number} closed unmerged`,
+          subject: `${repo.name}#${forIssue}`,
+        });
+      }
       // Merged or abandoned, it no longer holds a place, and whatever is behind
       // it is now at the front.
       await this.mergeLine.leave(repo.name, pr.number);

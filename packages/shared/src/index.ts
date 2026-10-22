@@ -10,6 +10,7 @@ export * from './authorship.js';
 export * from './stamp.js';
 export * from './checks.js';
 export * from './human-review.js';
+export * from './plan-change-review.js';
 export * from './dependencies.js';
 export * from './readiness.js';
 export * from './app-manifest.js';

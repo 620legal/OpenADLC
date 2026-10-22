@@ -1,0 +1,10 @@
+name: judges the request and ends with its verdict, writing nothing
+covers: verdict
+given:
+  declaredPaths: []
+script:
+  say:
+    - "The design's step 2 writes the field in apps/hostd/src/skill-runner.ts, which the Expected paths left off.\n<!-- openadlc:{\"event\":\"plan_change_verdict\",\"verdict\":\"approve\",\"reason\":\"The design names the file.\"} -->"
+expect:
+  stops: false
+  reason: complete

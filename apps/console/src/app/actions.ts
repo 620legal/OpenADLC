@@ -68,6 +68,57 @@ export async function answerGate(gateId: string, answer: string): Promise<{ ok: 
 }
 
 /**
+ * "Approve, and any more paths for #N" on a plan-change card: approves this
+ * request, and the builder's later ones on the issue as they are asked,
+ * except a path under Human review, until its pull request merges or closes.
+ */
+export async function approveAll(gateId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await call(`/v1/gates/${encodeURIComponent(gateId)}/approve-all`, 'POST', {});
+    revalidatePath('/');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not approve it' };
+  }
+}
+
+/** "Ask the designer" on a plan-change card: the design seat judges it against the issue's design. */
+export async function askDesigner(gateId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await call(`/v1/gates/${encodeURIComponent(gateId)}/ask-designer`, 'POST', {});
+    revalidatePath('/');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not ask the designer' };
+  }
+}
+
+/** Turns approve all off for an issue, from its card or its item: the next plan change asks a person. */
+export async function turnOffApproveAll(subject: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await call(`${itemPath(subject)}/approve-all/off`, 'POST', {});
+    revalidatePath('/');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not turn it off' };
+  }
+}
+
+/**
+ * Refuses a plan change the designer or a standing approval approved: the
+ * paths come out of the lease and the issue, and the task stops.
+ */
+export async function refuseSettledPlanChange(gateId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await call(`/v1/gates/${encodeURIComponent(gateId)}/take-back`, 'POST', {});
+    revalidatePath('/');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not refuse it' };
+  }
+}
+
+/**
  * Starts the intake bot on a request whose triage failed, the "Try again" on
  * what needs you. The bridge refuses one already filed or abandoned, and says so.
  */
