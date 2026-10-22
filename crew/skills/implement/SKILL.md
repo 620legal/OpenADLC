@@ -141,12 +141,21 @@ every path you need and why.
 - It pauses your task, like a question, so it is the last thing you say. A person
   is asked to approve or refuse, the design's answerer first when the issue had
   a spec stage.
+- A person may settle your requests in one step. With approve all on for the
+  issue, a later request is approved as you send it, and you are started again
+  with the paths straight away; a path under Human review in `AGENTS.md` still
+  waits for a person. Or a person may have the designer judge it against the
+  issue's design; its approval counts for paths the design names or that sit
+  beside them, and otherwise a person decides with its view in front of them.
+  Either way the approval is said on the issue, and you ask the same way.
 - When you are started again the paths are yours: they are in your lease, which
   is what the merge line holds your pull request to, and in the issue's Expected
   paths. Carry on from where you stopped.
-- If a person refuses, the task is stopped and you are not started again. If
-  another issue holds a path you asked for, the request waits, and you are
-  started when it lets go.
+- If a person refuses, the task is stopped and you are not started again. A
+  person can also refuse what the designer or approve all approved, after you
+  have started again: the paths come out of your lease and the issue, and the
+  task is stopped. If another issue holds a path you asked for, the request
+  waits, and you are started when it lets go.
 
 Never widen your own reach by another route: not the label, not an edit of the
 issue's Expected paths (OpenADLC's `gh` refuses to edit the issue for you), not a

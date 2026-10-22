@@ -59,6 +59,7 @@ vi.mock('@openadlc/db', () => ({
   },
   tasks: {
     getTask: vi.fn(async (id: string) => (id === 'task-gone' ? null : { id, state: id === 'task-done' ? 'done' : id === 'task-paused' ? 'paused' : 'running', kind: id === 'task-review' ? 'review' : id === 'task-qa' ? 'qa' : id === 'task-spec' ? 'spec' : id === 'task-deploy' ? 'deploy' : 'implement', repoId: 'repo-1', branch: 'agent/builder/78-issue-78', subjectRef: 'openadlc#78' })),
+    pausedWithAnswer: vi.fn(async () => []),
     updateTaskState: vi.fn(async (id: string, state: string, extra: { exitReason: string | null }) => ({
       id,
       botId: 'bot-builder',
@@ -112,6 +113,7 @@ const tokenFor = vi.fn(async (name: string, options: { repository?: string }) =>
 }));
 const recordUsage = vi.fn(async (_input: { taskId: string }) => ({ stop: false, spent: 1.25, cap: 15, stepUsd: 15 }));
 const localCiRun = vi.fn(async (taskId: string, runId: string) => ({ run: { id: runId, taskId, state: 'passed', headSha: 'a'.repeat(40) } }));
+const verdict = vi.fn(async (_task: unknown, _text: string) => null);
 
 
 let bridge: Server;
@@ -143,6 +145,7 @@ beforeEach(async () => {
     names: { settled: async () => undefined } as never,
     dispatchRuns: { soon: () => undefined },
     requestQueue: { drain } as never,
+    planChanges: { verdict } as never,
   });
   bridge = createServer((request, response) => void router.handle(request, response));
   await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
@@ -1115,5 +1118,32 @@ describe('an alerts secret that is not set', () => {
     expect(() => requireAlertsSecret(request({ 'x-openadlc-alerts-secret': '' }), '', SECRET)).toThrow(/alerts secret/);
     expect(() => requireAlertsSecret(request({}), '', SECRET)).toThrow(/alerts secret/);
     expect(() => requireAlertsSecret(request({ 'x-openadlc-internal-secret': SECRET }), '', SECRET)).not.toThrow();
+  });
+});
+
+describe('a plan change settled as it was asked (#77)', () => {
+  it('resumes its task once the session says it paused, and not a task whose question still waits', async () => {
+    const { tasks } = await import('@openadlc/db');
+    vi.mocked(tasks.pausedWithAnswer).mockResolvedValueOnce([{ id: 'task-1' }] as never);
+
+    expect((await post('/internal/tasks/task-1/state', { state: 'paused', reason: 'waiting on a person' })).status).toBe(200);
+    expect(resume).toHaveBeenCalledWith('task-1');
+
+    resume.mockClear();
+    await post('/internal/tasks/task-1/state', { state: 'paused', reason: 'waiting on a person' });
+    expect(resume).not.toHaveBeenCalled();
+  });
+});
+
+describe('the designer’s verdict on a plan change', () => {
+  it('is acted on from its own session’s message, and from nothing else it says', async () => {
+    const text = 'I read the design.\n<!-- openadlc:{"event":"plan_change_verdict","verdict":"approve","reason":"named"} -->';
+
+    expect((await post('/internal/tasks/task-1/message', { kind: 'bot', text, event: 'plan_change_verdict' })).status).toBe(200);
+    expect(verdict).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-1' }), text);
+
+    verdict.mockClear();
+    await post('/internal/tasks/task-1/message', { kind: 'bot', text: 'Still reading.' });
+    expect(verdict).not.toHaveBeenCalled();
   });
 });

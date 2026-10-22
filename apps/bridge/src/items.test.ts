@@ -175,6 +175,33 @@ describe('the item as the console shows it', () => {
   });
 });
 
+describe('the plan changes on an item that no person approved (#77)', () => {
+  const item = itemOf('api#12', FACTS)!;
+  const threads = [{ id: 't-lead', bot_id: 'b-lead', subject_ref: 'api#31', role: 'review_lead', seat: 'lead-reviewer' }];
+  const asked = (id: string, payload: Record<string, unknown>) => ({ ...message(id, 't-lead', '2026-09-30T10:02:00Z'), kind: 'gate' as const, payload: { gateId: `g-${id}`, ...payload } });
+
+  it('lists each one the designer or a standing approval approved, for a person to refuse, and not one taken back', () => {
+    const view = itemView({
+      item,
+      repo: REPOS[0]!,
+      bots: BOTS,
+      threads,
+      messages: [
+        asked('m1', { planChange: { paths: ['a/b.ts'], reason: 'r' }, decided: { by: 'designer', seat: 'architect', reason: 'named', at: '2026-09-30T10:03:00Z' } }),
+        asked('m2', { planChange: { paths: ['a/c.ts'], reason: 'r' }, decided: { by: 'standing_approval', setBy: 'orzelig', reason: 'r', at: '2026-09-30T10:04:00Z' } }),
+        asked('m3', { planChange: { paths: ['a/d.ts'], reason: 'r' }, decided: { by: 'designer', seat: 'architect', at: 't' }, takenBack: { by: 'orzelig', at: 't' } }),
+        asked('m4', { planChange: { paths: ['a/e.ts'], reason: 'r' } }),
+      ],
+      gates: [],
+      tasks: [],
+    });
+    expect(view.settledPlanChanges).toEqual([
+      { gateId: 'g-m1', paths: ['a/b.ts'], decidedBy: 'designer', by: 'architect', at: '2026-09-30T10:03:00Z' },
+      { gateId: 'g-m2', paths: ['a/c.ts'], decidedBy: 'standing_approval', by: 'orzelig', at: '2026-09-30T10:04:00Z' },
+    ]);
+  });
+});
+
 describe('where a message written on an item goes', () => {
   const item = itemOf('api#12', FACTS)!;
   const base = { timeline: [], tasks: [], stage: 'review' as const };

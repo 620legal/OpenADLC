@@ -179,3 +179,30 @@ describe('a detail built to be slow', () => {
     expect(performance.now() - started).toBeLessThan(200);
   });
 });
+
+describe('a builder asking for more paths (#77)', () => {
+  const asking: AttentionItem = {
+    ...ITEM,
+    id: 'gate:g-1',
+    kind: 'question',
+    headline: 'The builder (janedoe-builds) has a question',
+    detail: 'Add `apps/hostd/src/x.ts` to this issue’s Expected paths?',
+    question: { gateId: 'g-1', options: ['Approve', 'Refuse'] },
+    actions: [
+      { kind: 'approve_all', label: 'Approve, and any more paths for #16', gateId: 'g-1' },
+      { kind: 'ask_designer', label: 'Ask the designer', gateId: 'g-1' },
+      { kind: 'answer', label: 'Something else…', bot: 'janedoe-builds' },
+      { kind: 'stop_task', label: 'Stop', taskId: 't-1' },
+      { kind: 'approve_all_off', label: 'Turn off approve all for #16', subject: 'api#16' },
+    ],
+  };
+
+  it('offers approve all and the designer on its face, beside Approve and Refuse', () => {
+    expect(faceActions(asking).map((action) => action.label)).toEqual(['Approve, and any more paths for #16', 'Ask the designer']);
+  });
+
+  it('keeps turning approve all off, and stopping, in its sheet', () => {
+    expect(hasMore(asking)).toBe(true);
+    expect(faceActions(asking).map((action) => action.kind)).not.toContain('approve_all_off');
+  });
+});

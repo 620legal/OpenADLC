@@ -68,6 +68,7 @@ integration suites import it. The console does not; it asks the bridge.
 - `src/store/bots.ts` — bots by name, seat and id; model assignments; the row half of a rename.
 - `src/store/issues.ts` — the board's issues, what is routable (`listRoutableIssues`) and what is in flight (`workInFlight`).
 - `src/store/leases.ts`, `src/store/tasks.ts` — leases and their expiry; tasks and their states.
+- `src/store/standing-approvals.ts` — a person's standing approval of one issue's plan changes, while it is on (migration 0148).
 - `src/store/threads.ts` — threads (each keeping the role and seat it was opened with), messages and gates; a work item's threads and its watermark.
 - `src/store/design-memory.ts` — a repository's design memory: proposed, accepted, superseded and retired entries, and the ADR each decision is recorded in.
 - `src/store/attachments.ts` — files given to the crew and images read from issues, bytes in the row; nothing else reads `content`, so a bucket can stand behind it later.

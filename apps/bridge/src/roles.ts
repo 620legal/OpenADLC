@@ -55,6 +55,13 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'POST /v1/tasks/:id/stop': 'user',
   'POST /v1/tasks/:id/dismiss': 'user',
   'POST /v1/gates/:id/answer': 'user',
+  // A plan change settled in one step (`plan-changes.ts`): approve it and the
+  // rest of the work's, ask the designer, refuse what no person approved, or
+  // turn approve all off. Each is an answer to the crew's question, as above.
+  'POST /v1/gates/:id/approve-all': 'user',
+  'POST /v1/gates/:id/ask-designer': 'user',
+  'POST /v1/gates/:id/take-back': 'user',
+  'POST /v1/items/:subject/approve-all/off': 'user',
   'POST /v1/threads/:bot/messages': 'user',
   'POST /v1/items/:subject/messages': 'user',
   // A file given with a request or a message, and looking at one.

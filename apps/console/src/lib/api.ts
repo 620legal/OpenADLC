@@ -303,7 +303,14 @@ export type AttentionAction =
   /** A person's decision about issues OpenADLC will not take on its own: to intake, ignored, or closed. */
   | { kind: 'unowned_intake' | 'unowned_ignore' | 'unowned_close'; label: string; repo: string; numbers: number[] }
   /** A promote held for a person: released to production, or its repository switched to automatic delivery. */
-  | { kind: 'promote_release' | 'promote_automatic'; label: string; repo: string; sha: string };
+  | { kind: 'promote_release' | 'promote_automatic'; label: string; repo: string; sha: string }
+  /**
+   * A plan change settled in one step: approve it and the rest of its issue's
+   * requests (`approve_all`), have the designer judge it (`ask_designer`), or
+   * turn approve all off for the issue `subject` names. Absent from an older bridge.
+   */
+  | { kind: 'approve_all' | 'ask_designer'; label: string; gateId: string }
+  | { kind: 'approve_all_off'; label: string; subject: string };
 
 export type AttentionKind =
   | 'question'
@@ -588,6 +595,10 @@ export interface ItemView {
   workItem?: { number: number; key: string; mergedFrom: number | null } | null;
   /** Every issue, pull request and request linked to it, in the order they were linked. */
   links?: ItemLink[];
+  /** Plan changes the designer or a standing approval approved, which a person can still refuse. Absent from an older bridge. */
+  settledPlanChanges?: SettledPlanChange[];
+  /** Approve all on its issue, while it is on. Absent from an older bridge. */
+  standingApproval?: { issueNumber: number; setBy: string; setAt: string } | null;
 }
 
 /** One issue, pull request or request on a work item. */
@@ -603,6 +614,16 @@ export interface ItemLink {
   url: string | null;
   /** Who linked it by hand; null when OpenADLC did. */
   linkedBy: string | null;
+}
+
+/** A plan change no person approved, as the item lists it. */
+export interface SettledPlanChange {
+  gateId: string;
+  paths: string[];
+  decidedBy: 'designer' | 'standing_approval';
+  /** The designer's seat, or who set the standing approval. */
+  by: string;
+  at: string;
 }
 
 export interface WorktreeEntry {

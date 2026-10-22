@@ -21,6 +21,8 @@ vi.mock('@/app/actions', () => ({
   stopTask: vi.fn(),
   killSession: vi.fn(),
   restartBot: vi.fn(),
+  turnOffApproveAll: vi.fn(async () => ({ ok: true })),
+  refuseSettledPlanChange: vi.fn(async () => ({ ok: true })),
 }));
 
 function gate(id: string, role: string, bot: string, question: string) {
@@ -214,5 +216,40 @@ describe('the item’s stream, after the bridge restarts', () => {
     await settle();
     expect(reads).toBe(2);
     expect(container.textContent).not.toContain('Not updating on its own right now');
+  });
+});
+
+describe('the item’s plan changes no person approved (#77)', () => {
+  it('says approve all is on, and turns it off', async () => {
+    const { turnOffApproveAll } = await import('@/app/actions');
+    item = { ...ITEM, standingApproval: { issueNumber: 12, setBy: 'orzelig', setAt: '2026-09-30T10:00:00.000Z' } };
+    await mount();
+
+    const section = container.querySelector('[data-plan-changes]')!;
+    expect(section.textContent).toContain('Approve all is on for #12, set by orzelig');
+    await act(async () => button('Turn off', section).click());
+    await settle();
+    expect(turnOffApproveAll).toHaveBeenCalledWith('api#12');
+  });
+
+  it('lists what the designer approved, with a way to refuse it that takes the paths back', async () => {
+    const { refuseSettledPlanChange } = await import('@/app/actions');
+    vi.stubGlobal('confirm', vi.fn(() => true));
+    item = {
+      ...ITEM,
+      settledPlanChanges: [{ gateId: 'g-9', paths: ['apps/hostd/src/x.ts'], decidedBy: 'designer', by: 'architect', at: '2026-09-30T10:05:00.000Z' }],
+    };
+    await mount();
+
+    const section = container.querySelector('[data-plan-changes]')!;
+    expect(section.textContent).toContain('The designer (architect) approved apps/hostd/src/x.ts');
+    await act(async () => button('Refuse', section).click());
+    await settle();
+    expect(refuseSettledPlanChange).toHaveBeenCalledWith('g-9');
+  });
+
+  it('shows nothing when neither is there', async () => {
+    await mount();
+    expect(container.querySelector('[data-plan-changes]')).toBeNull();
   });
 });

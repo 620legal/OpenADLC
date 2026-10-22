@@ -240,6 +240,12 @@ vi.mock('./design-memory.js', async (importOriginal) => {
   return { ...actual, recordDesignMemory: vi.fn(actual.recordDesignMemory) };
 });
 
+// A standing approval of an issue's plan changes ends with its work; `plan-changes.test.ts` tests what that does.
+vi.mock('./plan-changes.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./plan-changes.js')>()),
+  endStandingApproval: vi.fn(async () => undefined),
+}));
+
 // Work items are linked through these; `work-items.test.ts` tests what they do.
 vi.mock('./work-items.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./work-items.js')>();
@@ -1525,6 +1531,21 @@ describe('an issue or pull request closed without a merge', () => {
 
     expect(moves.at(-1)).toEqual(expect.objectContaining({ issueNumber: 11, to: 'done', recordsOutcome: true }));
     expect(vi.mocked(leases.releaseForPullRequest)).toHaveBeenCalledWith('repo-1', 31, 'merged, and the repository deploys nothing');
+  });
+
+  it('turns off a standing approval of the issue’s plan changes when its pull request merges or closes', async () => {
+    const { endStandingApproval } = await import('./plan-changes.js');
+    store.issue = { number: 11, stage: 'review', labels: ['adlc:review'], prNumber: 31 };
+    const { webhooks, world } = harness({ live: { state: 'closed', labels: ['adlc:review'] } });
+    world.pulls.set(31, { merged: true, headRef: BRANCH });
+
+    await webhooks.receive('pull_request', pullDelivery(31, { merged: true }), 'delivery-merged-standing');
+    expect(endStandingApproval).toHaveBeenCalledWith({ repoId: 'repo-1', issueNumber: 11, why: '#31 merged', subject: 'openadlc#11' });
+
+    vi.mocked(endStandingApproval).mockClear();
+    world.pulls.set(32, { merged: false, headRef: BRANCH });
+    await webhooks.receive('pull_request', pullDelivery(32), 'delivery-closed-standing');
+    expect(endStandingApproval).toHaveBeenCalledWith(expect.objectContaining({ issueNumber: 11, why: '#32 closed unmerged' }));
   });
 
   it('takes the label off another issue the merge closes, and moves it on as well', async () => {

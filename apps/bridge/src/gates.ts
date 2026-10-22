@@ -124,12 +124,34 @@ const LEASE_GONE = 'Nothing was added: the lease this task asked to widen is no 
  * scope check never looks, and the round went back to build over and over.
  * 0 when there is none.
  */
-async function issueOfTask(task: { kind: TaskKind; subjectRef: string; leaseId: string | null; branch: string | null }): Promise<number> {
+export async function issueOfTask(task: { kind: TaskKind; subjectRef: string; leaseId: string | null; branch: string | null }): Promise<number> {
   const lease = task.leaseId ? await leases.getLease(task.leaseId).catch(() => null) : null;
   if (lease) return lease.issueNumber;
   const fromBranch = issueNumberFromBranch(task.branch ?? '');
   if (fromBranch) return fromBranch;
   return task.kind === 'patch' ? 0 : Number(task.subjectRef.split('#')[1] ?? '0');
+}
+
+/**
+ * How an approval no person typed is said: on the issue, as the record of what
+ * was asked and who approved it, and in the thread as a line of OpenADLC's.
+ */
+function decidedWords(decided: GateDecider, gate: GateRef): { comment: string; line: string } {
+  const why = decided.reason.trim() ? inertMarkup(decided.reason.trim()) : '';
+  if (decided.by === 'standing_approval') {
+    return {
+      comment:
+        `**Approved under the standing approval** ${publicNameOf(decided.setBy)} set for #${decided.issue} on ${decided.setAt.slice(0, 10)}.` +
+        `${why ? ` The builder asked for it because: ${why}` : ''}`,
+      line: `approved under ${decided.setBy}'s standing approval (gate ${gate.id.slice(0, 8)})`,
+    };
+  }
+  return {
+    comment:
+      `**The designer (${decided.seat}) approved** it, asked by ${publicNameOf(decided.askedBy)}: ${why || 'no reason given'}\n\n` +
+      'A person can still refuse it from the item in the console, which takes the paths back and stops the task.',
+    line: `${decided.seat}, the designer, approved the plan change ${decided.askedBy} asked it to judge`,
+  };
 }
 
 interface GateRef {
@@ -142,13 +164,25 @@ interface GateRef {
 
 /**
  * Where an answer came from: the console's gate route, the item view's
- * composer, a bot's thread panel, a comment on GitHub, or an approval that
- * waited on another lease and was applied once the paths were free.
+ * composer, a bot's thread panel, a comment on GitHub, an approval that
+ * waited on another lease and was applied once the paths were free, a
+ * person's standing approval of the issue's plan changes, or the design
+ * seat's judgement (`plan-changes.ts`).
  */
-export type GateChannel = 'console-gate' | 'item' | 'thread' | 'github' | 'held' | 'unknown';
+export type GateChannel = 'console-gate' | 'item' | 'thread' | 'github' | 'held' | 'standing' | 'designer' | 'unknown';
 
 /** What an answer granted, as its audit row records it. */
 export type GateGrant = 'plan_change_approved' | 'plan_change_refused' | 'cap_raised' | 'stopped' | null;
+
+/**
+ * Who approved a plan change when no person answered it (#77): a standing
+ * approval a person left on for the issue, or the design seat's judgement
+ * within its limits. Said on the issue and in the audit row, which otherwise
+ * read as the person or the seat having typed `Approve`.
+ */
+export type GateDecider =
+  | { by: 'standing_approval'; setBy: string; setAt: string; reason: string; issue: number }
+  | { by: 'designer'; seat: string; taskId: string; askedBy: string; reason: string };
 
 /** How an answer that claims its gate is audited, and whether its GitHub writes are left to the caller. */
 interface AnswerRecord {
@@ -156,7 +190,23 @@ interface AnswerRecord {
   grant: GateGrant;
   /** See `deferGitHub` on `answer`. */
   deferGitHub?: boolean;
+  /** A plan change's paths, so the audit log says what each decision covered. */
+  paths?: readonly string[];
+  decided?: GateDecider;
 }
+
+/**
+ * Whether a standing approval on the work a plan change widens covers it.
+ * Null when none is on. `covers` is false when a path is under Human review
+ * (or the rules could not be read), and `humanReview` says which: those
+ * always ask a person.
+ */
+export type StandingCover = (input: {
+  repoId: string;
+  repoFullName: string;
+  issueNumber: number;
+  paths: readonly string[];
+}) => Promise<{ covers: boolean; setBy: string; setAt: string; humanReview: readonly string[] } | null>;
 
 /**
  * A gate is the only thing that demands a person. It is written to GitHub first
@@ -230,6 +280,16 @@ export class Gates {
     this.leaseReleased = listener;
   }
 
+  private standing: StandingCover | null = null;
+
+  /**
+   * How a plan change is checked against a standing approval on its issue
+   * (`plan-changes.ts`). Without one, every plan change asks a person.
+   */
+  useStandingApprovals(cover: StandingCover): void {
+    this.standing = cover;
+  }
+
   async open(input: {
     taskId: string;
     question: string;
@@ -277,10 +337,24 @@ export class Gates {
     // own number is text, and is not what is granted.
     const step = await spendingLimits.effectiveTaskCap(task.repoId, this.perTaskCapUsd);
     const options = request ? [PLAN_CHANGE_APPROVE, PLAN_CHANGE_REFUSE] : this.capOffer(input.options, step);
+    // A standing approval on the work settles the request as it is asked,
+    // unless a path is under Human review: that one is a person's, always.
+    // One that cannot be read is not on, and the person is asked as before.
+    const standing =
+      request && repo && this.standing
+        ? await this.standing({ repoId: repo.id, repoFullName: repo.fullName, issueNumber: leaseIssue, paths: request.paths }).catch((error: unknown) => {
+            console.warn(`[bridge] ${repo.name}#${leaseIssue}: the standing approval could not be read, so a person is asked: ${error instanceof Error ? error.message : error}`);
+            return null;
+          })
+        : null;
+    const settles = standing?.covers ? standing : null;
     const context = request
       ? [
           input.context?.trim(),
           `Approve adds ${request.paths.length === 1 ? 'it' : 'them'} to ${leaseIssue === issueNumber ? "this issue's" : `#${leaseIssue}'s`} Expected paths and to the task's lease, and the task goes on. Refuse stops the task.`,
+          standing && !standing.covers
+            ? `Approve all is on for #${leaseIssue}, but ${pathList([...standing.humanReview])} ${standing.humanReview.length === 1 ? 'is' : 'are'} under Human review in AGENTS.md, so a person decides.`
+            : '',
         ]
           .filter(Boolean)
           .join('\n\n')
@@ -307,7 +381,9 @@ export class Gates {
       // after the issue was labelled to be left alone. The question stays in
       // the thread, where the person can answer it or stop the task.
       ignored = client ? await this.labelledIgnore(client, repo, issueNumber) : false;
-      if (client && !ignored) {
+      // A request the standing approval settles asks nobody: its record on
+      // the issue is the answer's comment, which says what was asked and why.
+      if (client && !ignored && !settles) {
         const body = renderGateComment({
           bot: bot.displayName,
           taskId: task.id,
@@ -360,20 +436,29 @@ export class Gates {
 
     // The one moment a person is genuinely being waited on. Answering produces
     // no notification: the work resumes, which is the point, and telling
-    // somebody their own answer landed is noise.
-    await this.notifier?.send({
-      event: 'gate_opened',
-      to: addressedTo,
-      text: `${botAtStart(bot)} is waiting on an answer about ${task.subjectRef}: ${input.question}`,
-      link: itemLink(this.consoleUrl, task.subjectRef),
-    });
+    // somebody their own answer landed is noise. Nor does a request a standing
+    // approval settles: nobody is waited on, unless applying it fails below.
+    const notify = () =>
+      this.notifier?.send({
+        event: 'gate_opened',
+        to: addressedTo,
+        text: `${botAtStart(bot)} is waiting on an answer about ${task.subjectRef}: ${input.question}`,
+        link: itemLink(this.consoleUrl, task.subjectRef),
+      });
+    if (!settles) await notify();
 
     await threads.addMessage({
       threadId: thread.id,
       kind: 'gate',
       author: bot.name,
       text: input.question,
-      payload: { options, gateId: gate.id, ...(request ? { planChange: request } : {}) },
+      payload: {
+        options,
+        gateId: gate.id,
+        ...(request ? { planChange: request } : {}),
+        // What kept a standing approval from settling it, for the card to say.
+        ...(standing && !standing.covers ? { standing: { setBy: standing.setBy, humanReview: [...standing.humanReview] } } : {}),
+      },
       githubUrl: commentUrl,
     });
     if (ignored) {
@@ -391,7 +476,49 @@ export class Gates {
     // A console request has no issue to carry `needs-human`, so the request
     // itself says it is waiting on the person who asked.
     await moveRequest(task, 'questions').catch((error: unknown) => requestNotMoved(task.subjectRef, error));
+    if (settles && request) await this.settleByStanding(gate, request, settles, leaseIssue, notify);
     return { gateId: gate.id, commentUrl };
+  }
+
+  /**
+   * Approves a request a standing approval covers, as it is asked: the same
+   * approval a person's answer is, recorded as the standing approval's. The
+   * task's resume waits for its session to stop (`/internal/tasks/:id/state`,
+   * once it reports itself paused). One that cannot be applied leaves the
+   * question open, and the person is asked after all.
+   */
+  private async settleByStanding(
+    gate: GateRef,
+    request: PlanChangeRequest,
+    standing: { setBy: string; setAt: string },
+    issueNumber: number,
+    notify: () => Promise<unknown> | undefined,
+  ): Promise<void> {
+    try {
+      await this.answer({
+        gateId: gate.id,
+        reply: PLAN_CHANGE_APPROVE,
+        answeredBy: standing.setBy,
+        via: 'standing',
+        decided: { by: 'standing_approval', setBy: standing.setBy, setAt: standing.setAt, reason: request.reason, issue: issueNumber },
+      });
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      console.warn(`[bridge] gate ${gate.id}: the standing approval on #${issueNumber} could not be applied, so a person is asked: ${why}`);
+      if (gate.threadId) {
+        await threads
+          .addMessage({
+            threadId: gate.threadId,
+            kind: 'sys',
+            author: 'openadlc',
+            text: `${standing.setBy}'s standing approval for #${issueNumber} could not be applied, so a person answers this one`,
+            note: why,
+            payload: { gateId: gate.id },
+          })
+          .catch(() => undefined);
+      }
+      await notify();
+    }
   }
 
   /**
@@ -427,6 +554,12 @@ export class Gates {
      * issue. Never rejects: what it could not write is said in the thread.
      */
     deferGitHub?: boolean;
+    /**
+     * An approval no person gave: a standing approval's, or the designer's
+     * (`plan-changes.ts`, which holds each to its limits). Only a plan
+     * change's `Approve` is ever given this way.
+     */
+    decided?: GateDecider;
   }): Promise<{ answer: string; taskId: string | null; held?: boolean; github?: () => Promise<void> }> {
     const via = input.via ?? 'unknown';
     const record = (grant: GateGrant): AnswerRecord => ({ via, grant, ...(input.deferGitHub ? { deferGitHub: true } : {}) });
@@ -451,8 +584,15 @@ export class Gates {
     }
 
     const request = await this.planChangeOf(gate);
+    // Nothing else is decided on a person's behalf: not a refusal, which
+    // stops the work, and not an answer to any other question.
+    if (input.decided && !(request && answer === PLAN_CHANGE_APPROVE)) {
+      throw new Error(`only a plan change's approval is given without a person answering; this gate was answered "${answer}"`);
+    }
+    // A person already approved it and it waits on another lease: nothing is left to decide.
+    if (input.decided && request?.held) return { answer, taskId: null, held: true };
 
-    if (request && answer === PLAN_CHANGE_REFUSE) return this.refuse(gate, input.answeredBy, record('plan_change_refused'));
+    if (request && answer === PLAN_CHANGE_REFUSE) return this.refuse(gate, input.answeredBy, { ...record('plan_change_refused'), paths: request.paths });
 
     // A person already approved this, and it waits on another lease. Closing the
     // gate on a stray comment ("any news?") would resume the task without the
@@ -475,7 +615,13 @@ export class Gates {
       // Applied only by the answer that claims the gate. Two answers at once (a
       // console click and a reply on the issue) both read the gate open, and
       // both edited the issue and widened the lease before one of them lost.
-      return this.applyApproval(gate, request, input.answeredBy, record('plan_change_approved'), approved.apply);
+      return this.applyApproval(
+        gate,
+        request,
+        input.answeredBy,
+        { ...record('plan_change_approved'), paths: request.paths, ...(input.decided ? { decided: input.decided } : {}) },
+        approved.apply,
+      );
     }
 
     // The cost-cap gate. "continue" resumed the task with the cap where it
@@ -601,7 +747,7 @@ export class Gates {
           gate,
           request,
           request.held.approvedBy,
-          { via: 'held', grant: 'plan_change_approved' },
+          { via: 'held', grant: 'plan_change_approved', paths: request.paths },
           approved.apply,
         );
         if (done.taskId) resume.push(done.taskId);
@@ -753,6 +899,14 @@ export class Gates {
           answer,
           grant: record.grant,
           channel: record.via,
+          ...(record.paths ? { paths: [...record.paths] } : {}),
+          // Who decided a plan change: a person, the designer or a standing
+          // approval, with the seat or the person who left it on.
+          ...(record.grant === 'plan_change_approved' || record.grant === 'plan_change_refused' ? { decidedBy: record.decided?.by ?? 'person' } : {}),
+          ...(record.decided?.by === 'standing_approval' ? { standingApproval: { setBy: record.decided.setBy, setAt: record.decided.setAt } } : {}),
+          ...(record.decided?.by === 'designer'
+            ? { designer: { seat: record.decided.seat, taskId: record.decided.taskId, askedBy: record.decided.askedBy } }
+            : {}),
         },
       });
     } catch (error) {
@@ -822,12 +976,19 @@ export class Gates {
         takeOff = false;
       }
     }
+    // An approval no person typed says who gave it, and what was asked.
+    const decided = record.decided ? decidedWords(record.decided, gate) : null;
+    if (record.decided) {
+      await leases
+        .notePlanChange(gate.id, 'decided', { ...record.decided, at: new Date().toISOString() })
+        .catch((error: unknown) => console.warn(`[bridge] gate ${gate.id}: who decided it was not noted: ${error instanceof Error ? error.message : error}`));
+    }
     const write = () =>
       this.onIssue(gate, takeOff ? 'the answer, and taking needs-human off' : 'the answer', async (client, repoFullName, issueNumber) => {
         // Posted as the task's bot: a marker in a person's answer would read as
         // the bot's own (`inertMarkup`).
         await client
-          .comment(repoFullName, issueNumber, `**${publicNameOf(answeredBy)} answered:** ${inertMarkup(answer)}${note ? `\n\n${note}` : ''}\n\nResuming.`)
+          .comment(repoFullName, issueNumber, `${decided?.comment ?? `**${publicNameOf(answeredBy)} answered:** ${inertMarkup(answer)}`}${note ? `\n\n${note}` : ''}\n\nResuming.`)
           .catch(failed('the answer was not posted'));
         if (takeOff) await client.removeLabel(repoFullName, issueNumber, 'needs-human').catch(failed('needs-human is still on'));
       }).catch(failed('nothing was written'));
@@ -841,9 +1002,9 @@ export class Gates {
     if (gate.threadId) {
       await threads.addMessage({
         threadId: gate.threadId,
-        kind: 'you',
-        author: answeredBy,
-        text: answer,
+        kind: decided ? 'sys' : 'you',
+        author: decided ? 'openadlc' : answeredBy,
+        text: decided?.line ?? answer,
         payload: { gateId: gate.id },
       });
     }

@@ -19,6 +19,7 @@ import {
   passphraseRefusal,
   passphraseWarning,
   planRestore,
+  TEST_KEY_COST,
   withoutRefreshTokens,
   type ArchivedBot,
   type BackupContents,
@@ -569,8 +570,11 @@ describe('what an archive says it holds', () => {
   });
 
   it('says what a new archive chose, as well as how much it holds', async () => {
-    const sealed = await encryptBackup(buildContents(archiveInstall, MADE_AT), 'a passphrase');
-    const said = describeManifest((await decryptBackup(sealed, 'a passphrase')).manifest).join('\n');
+    // At the tests' key cost: at a backup's own, the two derivations timed
+    // this out under load.
+    const atTestCost = { keyCost: TEST_KEY_COST };
+    const sealed = await encryptBackup(buildContents(archiveInstall, MADE_AT), 'a passphrase', atTestCost);
+    const said = describeManifest((await decryptBackup(sealed, 'a passphrase', atTestCost)).manifest).join('\n');
 
     expect(said).toContain('format version 3');
     expect(said).toContain('GitHub sign-ins included; history left out');

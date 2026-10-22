@@ -6,6 +6,7 @@ import {
   repos as repoStore,
   requests as requestStore,
   settings as settingsStore,
+  standingApprovals,
   tasks as taskStore,
   threads as threadStore,
   workItems as workItemStore,
@@ -342,6 +343,45 @@ export interface ItemView {
   workItem: { number: number; key: string; mergedFrom: number | null } | null;
   /** Every issue, pull request and request linked to it; empty before the install is numbered. */
   links: ItemLink[];
+  /**
+   * The plan changes on it that no person approved — the designer did, or a
+   * standing approval — which a person can still refuse, taking the paths
+   * back (`plan-changes.ts`, #77). Absent before it was read.
+   */
+  settledPlanChanges?: SettledPlanChange[];
+  /** Approve all on its issue, while it is on; null when it is not. Absent before it was read. */
+  standingApproval?: { issueNumber: number; setBy: string; setAt: string } | null;
+}
+
+/** A plan change approved by the designer or a standing approval, as the item lists it. */
+export interface SettledPlanChange {
+  gateId: string;
+  paths: string[];
+  decidedBy: 'designer' | 'standing_approval';
+  /** The designer's seat, or who set the standing approval. */
+  by: string;
+  at: string;
+}
+
+/** From the gates' own messages: each approved by no person, and not refused since. */
+function settledPlanChanges(messages: readonly Message[]): SettledPlanChange[] {
+  return messages.flatMap((message) => {
+    const payload = message.kind === 'gate' ? message.payload : null;
+    const request = payload?.planChange as { paths?: unknown } | undefined;
+    const decided = payload?.decided as { by?: unknown; seat?: unknown; setBy?: unknown; at?: unknown } | undefined;
+    if (!payload || !request || !Array.isArray(request.paths) || !decided || payload.takenBack) return [];
+    if (decided.by !== 'designer' && decided.by !== 'standing_approval') return [];
+    const by = decided.by === 'designer' ? decided.seat : decided.setBy;
+    return [
+      {
+        gateId: String(payload.gateId ?? ''),
+        paths: request.paths.filter((path): path is string => typeof path === 'string'),
+        decidedBy: decided.by,
+        by: typeof by === 'string' ? by : 'OpenADLC',
+        at: typeof decided.at === 'string' ? decided.at : message.at,
+      },
+    ];
+  });
 }
 
 export interface ItemRows {
@@ -522,6 +562,7 @@ export function itemView(rows: ItemRows): ItemView {
     designMemory: [...(rows.designMemory ?? [])],
     workItem: item.workItem ? { number: item.workItem.number, key: item.workItem.key, mergedFrom: item.workItem.mergedFrom } : null,
     links: [...(item.links ?? [])],
+    settledPlanChanges: settledPlanChanges(timeline),
   };
 }
 
@@ -887,5 +928,9 @@ export async function readItem(subject: string): Promise<{ item: Item; view: Ite
   view.held = holdKey && hasPausedLabel(labels) ? (holds[holdKey] ?? { by: 'a person on GitHub', at: '', why: null }) : null;
   view.next = hasNextLabel(labels);
   view.routes = messageRoutes(view, item, crew);
+  // Approve all on its issue, which the item shows with a way to turn it off.
+  const issueNumber = item.issue?.number ?? null;
+  const standing = repo && issueNumber ? await (async () => standingApprovals.activeFor(repo.id, issueNumber))().catch(() => null) : null;
+  view.standingApproval = standing ? { issueNumber: standing.issueNumber, setBy: standing.setBy, setAt: standing.setAt } : null;
   return { item, view, repo };
 }

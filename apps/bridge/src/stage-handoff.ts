@@ -1,6 +1,6 @@
 import { audit, bots, issues, listEventsOfType, recordEvent, repos, stageMoves, tasks, withAdvisoryLock } from '@openadlc/db';
 import { acceptOnStage } from './design-memory.js';
-import { leadReviewer, REPO_DEFAULTS, type StageKey, type StageMode } from '@openadlc/shared';
+import { leadReviewer, PLAN_CHANGE_REVIEW_SKILL, REPO_DEFAULTS, type StageKey, type StageMode } from '@openadlc/shared';
 import type { Automation } from './automation.js';
 import type { DispatchGate } from './dispatch-gate.js';
 import type { TaskService } from './task-service.js';
@@ -188,7 +188,13 @@ export class StageHandoff {
   }
 
   /** Moves the issue on when the stage's own task finishes. */
-  async onTaskDone(input: { kind: string; subjectRef: string; taskId?: string; branch?: string | null }): Promise<StageKey | null> {
+  async onTaskDone(input: { kind: string; subjectRef: string; taskId?: string; branch?: string | null; skill?: string | null }): Promise<StageKey | null> {
+    // The designer judging a builder's plan change runs on the design seat as
+    // a spec task, on an issue already in Build or Review: its end is no
+    // design finishing, and handing the issue to Build from Review would undo
+    // a stage (#77).
+    if (input.skill === PLAN_CHANGE_REVIEW_SKILL) return null;
+
     // A task that sent its work back did not finish its stage, and handing the
     // issue on would undo the send-back. The stage it went back to is started
     // instead, now that this task is out of the way: started while it ran, it
