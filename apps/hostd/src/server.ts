@@ -656,6 +656,14 @@ export function createHostdServer(input: {
         if (stopping) await runner.notStoppedAfterAll(stopping);
         throw error;
       }
+      // Settled before the answer, not on the observer's third look
+      // (`stoppedByKill`). The kill has landed, so a failure here does not
+      // say otherwise: the observer stops the task later, as it did before.
+      if (stopping) {
+        await runner.stoppedByKill(stopping, killMatch[1], killMatch[2]).catch((error: unknown) => {
+          console.warn(`[hostd] killed ${killMatch[1]}/${killMatch[2]}, but its task is left for the observer to stop: ${error instanceof Error ? error.message : error}`);
+        });
+      }
       await audit({
         actor: auditActor(caller),
         action: 'session.kill',
