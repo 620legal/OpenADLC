@@ -10,11 +10,13 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseQuestion, parseYamlFile } from '@openadlc/shared';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ClaudeEngine } from './claude.js';
 import { CodexEngine, GET_ON_WITH_IT } from './codex.js';
 import { GrokEngine } from './grok.js';
@@ -917,10 +919,12 @@ describe('the codex engine', () => {
   const codexOnPath = spawnSync('sh', ['-c', 'command -v codex'], { stdio: 'ignore' }).status === 0;
 
   it.skipIf(!codexOnPath)('spawns no MCP server from the worktree, with the real codex', async () => {
-    // Never with real credentials: a config home of its own, a dummy key, and
-    // an API address nothing answers. Codex starts a project's MCP servers
-    // before its first call, so the call failing is expected; only the marker
-    // says what ran.
+    // Never with real credentials and never a model: a config home of its
+    // own, a dummy key, and an API that is this test's own (refusingApi).
+    // Codex starts a project's MCP servers before its first call, so the call
+    // failing is expected; only the marker says what ran.
+    const api = await refusingApi('sk-dummy-not-a-key');
+    onTestFinished(() => api.close());
     const home = join(dir, 'codex-home');
     const worktree = join(dir, 'repo');
     const marker = join(dir, 'mcp-ran');
@@ -929,7 +933,9 @@ describe('the codex engine', () => {
     spawnSync('git', ['init', '-q', worktree]);
     writeFileSync(
       join(worktree, '.codex', 'config.toml'),
-      `[mcp_servers.planted]\ncommand = "sh"\nargs = ["-c", ${JSON.stringify(`touch ${JSON.stringify(marker)}; sleep 30`)}]\n`,
+      // It never answers MCP's handshake, which Codex waits for before its
+      // first call: for a second, not its default ten.
+      `[mcp_servers.planted]\ncommand = "sh"\nargs = ["-c", ${JSON.stringify(`touch ${JSON.stringify(marker)}; sleep 30`)}]\nstartup_timeout_sec = 1\n`,
     );
     const record = join(dir, 'args.json');
     await runAll(new CodexEngine(fakeCodex(dir, []), { contained: true }), {
@@ -939,25 +945,31 @@ describe('the codex engine', () => {
       env: { FAKE_CODEX_RECORD: record },
     });
     const args = JSON.parse(readFileSync(record, 'utf8')) as string[];
+    // Codex 0.155 reads its address from `openai_base_url`, not
+    // OPENAI_BASE_URL, and its key from CODEX_API_KEY (apps/hostd/src/key-env.ts):
+    // given only the old two, it called api.openai.com, with no key.
     const env = {
       PATH: process.env.PATH ?? '',
       HOME: home,
       CODEX_HOME: home,
       OPENAI_API_KEY: 'sk-dummy-not-a-key',
-      OPENAI_BASE_URL: 'http://127.0.0.1:9',
+      CODEX_API_KEY: 'sk-dummy-not-a-key',
+      OPENAI_BASE_URL: `${api.url}/v1`,
     };
-    const codex = (withArgs: string[]) => {
+    const local = ['-c', `openai_base_url=${JSON.stringify(`${api.url}/v1`)}`];
+    const codex = async (withArgs: string[]) => {
       rmSync(marker, { force: true });
-      spawnSync('codex', withArgs, { cwd: worktree, env, input: 'say hi', timeout: 20_000, stdio: ['pipe', 'ignore', 'ignore'] });
+      // Before the `-` that names stdin as the prompt.
+      await api.run('codex', [...withArgs.slice(0, -1), ...local, ...withArgs.slice(-1)], { cwd: worktree, env });
       return existsSync(marker);
     };
 
-    expect(codex(args)).toBe(false);
+    expect(await codex(args)).toBe(false);
 
     // The same run without the override starts the server, so this proves it.
     const at = args.findIndex((arg) => arg.startsWith('projects='));
-    expect(codex(args.filter((_arg, index) => index !== at && index !== at - 1))).toBe(true);
-  }, 90_000);
+    expect(await codex(args.filter((_arg, index) => index !== at && index !== at - 1))).toBe(true);
+  }, 60_000);
 
   it('gives Codex its prompt on stdin, so a long one is not refused as too big for one argument', async () => {
     // Linux caps one argument at 128 KiB. A review whose context carried a
@@ -1206,12 +1218,15 @@ describe('what Claude may run', () => {
   });
 
   const claudeOnPath = spawnSync('sh', ['-c', 'command -v claude'], { stdio: 'ignore' }).status === 0;
+  const DUMMY_KEY = 'sk-ant-dummy-not-a-key';
 
   it.skipIf(!claudeOnPath)('runs no hook from the worktree, with the real claude', async () => {
-    // Never with real credentials: a home of its own, a dummy key, and an API
-    // address nothing answers. A SessionStart hook runs before any call, so
-    // the call failing is expected; only the marker says what ran.
+    // Never with real credentials and never a model: a home of its own, a
+    // dummy key, and an API that is this test's own (refusingApi). A
+    // SessionStart hook runs before any call, so the call failing is
+    // expected; only the marker says what ran.
     const dir = mkdtempSync(join(tmpdir(), 'openadlc-claude-hooks-'));
+    const api = await refusingApi(DUMMY_KEY);
     try {
       const home = join(dir, 'home');
       const worktree = join(dir, 'repo');
@@ -1227,9 +1242,11 @@ describe('what Claude may run', () => {
       const env = {
         PATH: process.env.PATH ?? '',
         HOME: home,
-        ANTHROPIC_API_KEY: 'sk-ant-dummy-not-a-key',
-        ANTHROPIC_BASE_URL: 'http://127.0.0.1:9',
+        ANTHROPIC_API_KEY: DUMMY_KEY,
+        ANTHROPIC_BASE_URL: api.url,
         DISABLE_AUTOUPDATER: '1',
+        // Nor anything else off this computer: no telemetry, no error reports.
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       };
       const record = join(dir, 'call.json');
       const result = { type: 'result', subtype: 'success', is_error: false, result: 'ok', usage: {}, total_cost_usd: 0 };
@@ -1238,20 +1255,20 @@ describe('what Claude may run', () => {
         env: { FAKE_GROK_RECORD: record },
       });
       const args = readCall(record).args;
-      const claude = (withArgs: string[]) =>
-        spawnSync('claude', withArgs, { cwd: worktree, env, input: 'say hi', timeout: 60_000, stdio: ['pipe', 'ignore', 'ignore'] });
+      const claude = (withArgs: string[]) => api.run('claude', withArgs, { cwd: worktree, env });
 
-      claude(args);
+      await claude(args);
       expect(existsSync(marker)).toBe(false);
 
       // The same run without the two flags runs the hook, so this proves them.
       const without = args.filter((arg, index) => arg !== '--strict-mcp-config' && arg !== '--setting-sources' && args[index - 1] !== '--setting-sources');
-      claude(without);
+      await claude(without);
       expect(existsSync(marker)).toBe(true);
     } finally {
+      await api.close();
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 150_000);
+  }, 60_000);
 
   it('turns its self-updater off, whatever the session was handed', async () => {
     // It updated itself inside a task's computer, into a prefix the bot can
@@ -1343,6 +1360,60 @@ describe('the files given with the work', () => {
     }
   });
 });
+
+/**
+ * A model API on this computer for the tests that run a real CLI: it refuses
+ * every call at once, and notes which credential each came with (the dummy
+ * key, none, or another), never the credential itself.
+ *
+ * The CLIs were pointed at an address nothing answers. Claude Code retries a
+ * call it could not make for a minute a run, so its test took 120 of the
+ * engines' 130 seconds; Codex no longer read the address, and retried
+ * api.openai.com, with no key, until each run's 20 seconds were up. Neither
+ * retries a 400, and a run ends within a second or two, with no network at all.
+ */
+async function refusingApi(dummyKey: string) {
+  const calls: ('none' | 'dummy' | 'other')[] = [];
+  const server = createServer((request, response) => {
+    // Some versions ask `HEAD /api/hello` first, with no key.
+    const sent = [request.headers['x-api-key'], request.headers.authorization].filter((value) => value !== undefined);
+    calls.push(sent.length === 0 ? 'none' : sent.every((value) => value === dummyKey || value === `Bearer ${dummyKey}`) ? 'dummy' : 'other');
+    request.resume();
+    request.on('end', () => {
+      response.writeHead(400, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'no model answers here', code: null } }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    /**
+     * Runs a real CLI to its end. Not spawnSync: the server answering it is
+     * in this process. It must end by itself, having reached a call with the
+     * dummy key, and send no key or sign-in of this computer's.
+     */
+    async run(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) {
+      calls.length = 0;
+      const started = Date.now();
+      const child = spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ['pipe', 'ignore', 'ignore'] });
+      child.stdin.end('say hi');
+      const timer = setTimeout(() => child.kill('SIGKILL'), 20_000);
+      const signal = await new Promise<NodeJS.Signals | null>((resolve) => child.on('close', (_code, signal) => resolve(signal)));
+      clearTimeout(timer);
+      expect(signal, `${command} retried the refused call for 20 seconds: refuse it with a status it gives up on`).toBeNull();
+      // Ending by itself is not enough: Codex retried for 20 seconds a run
+      // and passed. A run that took this long is retrying something.
+      expect(Date.now() - started, `${command} took more than 10 seconds to give up on a refused call`).toBeLessThan(10_000);
+      expect(calls).toContain('dummy');
+      expect(calls).not.toContain('other');
+    },
+    close: () => {
+      server.closeAllConnections();
+      return new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
 
 /**
  * A stand-in for the `grok` CLI, like `scriptEngine`, that also writes down how

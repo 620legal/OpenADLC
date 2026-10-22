@@ -17,9 +17,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "pnpm -r --filter \"./packages/**\" build && pnpm -r --filter \"./apps/**\" build",
-    "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
+    "build": "pnpm build:imported && pnpm -r --filter \"./apps/**\" --filter \"!@openadlc/dispatcher\" build",
+    "build:imported": "pnpm -r --filter \"./packages/**\" --filter @openadlc/dispatcher build",
+    "typecheck": "pnpm -r --no-sort typecheck",
+    "test": "pnpm -r --no-sort test",
     "db:migrate": "pnpm --filter @openadlc/db migrate",
     "db:seed": "pnpm --filter @openadlc/db seed",
     "openadlc": "node apps/cli/bin/openadlc.mjs",
