@@ -1,4 +1,4 @@
-import { generateKeyPairSync, randomBytes } from 'node:crypto';
+import { createCipheriv, generateKeyPairSync, randomBytes, scrypt } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,11 +14,12 @@ import {
   PASSPHRASE_ADVISED_LENGTH,
   readManifest,
   readPlain,
+  TEST_KEY_COST,
   writePlain,
   type BackupContents,
 } from './index.js';
 import type { ArchivedWorkItem } from './archive.js';
-import { HISTORY } from './test-fixtures.js';
+import { HISTORY, open, seal } from './test-fixtures.js';
 
 /**
  * An install is a crew of seats on one or more GitHub accounts, a GitHub App
@@ -34,8 +35,11 @@ import { HISTORY } from './test-fixtures.js';
  *
  * Nothing here reads or writes `~/.openadlc`. Every secret below is invented, and
  * the one case that needs a real file uses a temporary directory it removes
- * afterwards. The suite is deliberately slow — each encrypt and each decrypt pays
- * the full scrypt cost on purpose, because that cost is the protection.
+ * afterwards. Archives are sealed and opened at the tests' key cost (`seal` and
+ * `open`, `TEST_KEY_COST`): at a backup's own, each encrypt and each decrypt
+ * took about 0.3 s on a laptop and seconds under load, and the suite timed out
+ * while other builds ran. The one test that pays a backup's cost, on purpose,
+ * is under "the cost a key is derived at".
  */
 
 const PASSPHRASE = 'correct horse battery staple — with an ø in it';
@@ -87,8 +91,8 @@ let archive: Buffer;
 let restored: BackupContents;
 
 beforeAll(async () => {
-  archive = await encryptBackup(install, PASSPHRASE);
-  restored = await decryptBackup(archive, PASSPHRASE);
+  archive = await seal(install, PASSPHRASE);
+  restored = await open(archive, PASSPHRASE);
 });
 
 /**
@@ -149,8 +153,8 @@ describe('an archive round-trips an install exactly', () => {
     expect(restored.bots[1]?.model).toBeNull();
   });
 
-  it('gives back the manifest it wrote', () => {
-    expect(restored.manifest).toEqual(install.manifest);
+  it('gives back the manifest it wrote, with the cost its key was derived at', () => {
+    expect(restored.manifest).toEqual({ ...install.manifest, scrypt: TEST_KEY_COST });
   });
 });
 
@@ -159,7 +163,7 @@ describe('the cleartext manifest describes the file, not the caller', () => {
     // The manifest is the one part nobody has to prove anything to read, so it
     // must not be able to claim an install that is not in the file. The counts
     // are taken from the payload; these wrong ones are ignored.
-    const lying = await encryptBackup({ ...install, manifest: { ...install.manifest, counts: { secrets: 0, settings: 0, bots: 99 } } }, PASSPHRASE);
+    const lying = await seal({ ...install, manifest: { ...install.manifest, counts: { secrets: 0, settings: 0, bots: 99 } } }, PASSPHRASE);
 
     expect(readManifest(lying).counts).toEqual({ secrets: 4, settings: 4, bots: 4 });
   });
@@ -218,7 +222,7 @@ describe('when an archive says it was made', () => {
 
 describe('a wrong passphrase is refused rather than approximated', () => {
   it('says what went wrong in words an operator can act on', async () => {
-    const error = await refusal(() => decryptBackup(archive, 'not the passphrase'));
+    const error = await refusal(() => open(archive, 'not the passphrase'));
 
     expect(error).toBeInstanceOf(BackupError);
     expect(error.message).toContain('that passphrase does not open this archive');
@@ -235,7 +239,7 @@ describe('a wrong passphrase is refused rather than approximated', () => {
 
     await expect(
       (async () => {
-        produced = await decryptBackup(archive, 'not the passphrase either');
+        produced = await open(archive, 'not the passphrase either');
       })(),
     ).rejects.toThrow(BackupError);
 
@@ -255,7 +259,7 @@ describe('an archive too large to write says what to leave out', () => {
   it('refuses to seal it with a BackupError naming history, not a bare RangeError', async () => {
     const spy = tooLong();
     try {
-      const error = await refusal(() => encryptBackup(install, PASSPHRASE));
+      const error = await refusal(() => seal(install, PASSPHRASE));
       expect(error).toBeInstanceOf(BackupError);
       expect(error.message).toContain('too large');
       expect(error.message).toContain('without history');
@@ -292,7 +296,7 @@ describe('a tampered archive does not open', () => {
     const offsets = [start, Math.floor((start + archive.length) / 2), archive.length - 1];
 
     for (const offset of offsets) {
-      expect(await refusal(() => decryptBackup(flip(archive, offset), PASSPHRASE))).toBeInstanceOf(BackupError);
+      expect(await refusal(() => open(flip(archive, offset), PASSPHRASE))).toBeInstanceOf(BackupError);
     }
   });
 
@@ -301,7 +305,7 @@ describe('a tampered archive does not open', () => {
     // editing them is how you would try to make one archive decrypt as another.
     const start = bodyStart(archive);
     for (const offset of [start, start + 16, start + 28]) {
-      expect(await refusal(() => decryptBackup(flip(archive, offset), PASSPHRASE))).toBeInstanceOf(BackupError);
+      expect(await refusal(() => open(flip(archive, offset), PASSPHRASE))).toBeInstanceOf(BackupError);
     }
   });
 
@@ -319,17 +323,17 @@ describe('a tampered archive does not open', () => {
     // type: this edit also contradicts the payload, so a counts cross-check would
     // refuse it too, and then the test would pass with the AAD removed. The
     // authentication failure is the thing being pinned here.
-    expect((await refusal(() => decryptBackup(edited, PASSPHRASE))).message).toContain('has been altered');
+    expect((await refusal(() => open(edited, PASSPHRASE))).message).toContain('has been altered');
   });
 
   it('catches a createdAt that was backdated after the fact', async () => {
     const edited = Buffer.from(archive.toString('latin1').replace('2026-09-21', '2019-01-01'), 'latin1');
 
-    expect(await refusal(() => decryptBackup(edited, PASSPHRASE))).toBeInstanceOf(BackupError);
+    expect(await refusal(() => open(edited, PASSPHRASE))).toBeInstanceOf(BackupError);
   });
 
   it('catches an archive that lost its last byte in transit', async () => {
-    expect(await refusal(() => decryptBackup(archive.subarray(0, archive.length - 1), PASSPHRASE))).toBeInstanceOf(
+    expect(await refusal(() => open(archive.subarray(0, archive.length - 1), PASSPHRASE))).toBeInstanceOf(
       BackupError,
     );
   });
@@ -337,8 +341,97 @@ describe('a tampered archive does not open', () => {
   it('says a header with no contents behind it is truncated, before asking for a key', async () => {
     const headerOnly = archive.subarray(0, bodyStart(archive) + 20);
 
-    expect((await refusal(() => decryptBackup(headerOnly, PASSPHRASE))).message).toContain('truncated');
+    expect((await refusal(() => open(headerOnly, PASSPHRASE))).message).toContain('truncated');
   });
+});
+
+describe('the cost a key is derived at', () => {
+  /** The archive with the cost its header records written over, the rest as it was. */
+  const recording = (cost: string): Buffer =>
+    Buffer.from(archive.toString('latin1').replace('"scrypt":{"N":1024,"r":8,"p":1}', `"scrypt":${cost}`), 'latin1');
+
+  it('is recorded in the manifest, where it can be read without the passphrase', () => {
+    expect(TEST_KEY_COST).toEqual({ N: 1024, r: 8, p: 1 });
+    expect(readManifest(archive).scrypt).toEqual({ N: 1024, r: 8, p: 1 });
+  });
+
+  it('is refused below a backup’s when sealing, unless a test hands over the tests’ own', async () => {
+    // A copy with the same numbers is refused too: the only way to the tests'
+    // cost is to name it, which tests/backup-key-cost.test.ts allows a test alone.
+    for (const keyCost of [{ N: 2 ** 10, r: 8, p: 1 }, { ...TEST_KEY_COST }, { N: 2 ** 16, r: 8, p: 1 }, { N: 2 ** 17, r: 4, p: 1 }]) {
+      const error = await refusal(() => encryptBackup(install, PASSPHRASE, { keyCost }));
+      expect(error.message).toContain('below the scrypt N=131072, r=8, p=1 every backup is sealed at');
+    }
+  });
+
+  it('is refused when sealing at one no backup is sealed at', async () => {
+    const costs = [
+      { N: 2 ** 21, r: 8, p: 1 },
+      { N: 3 * 2 ** 17, r: 8, p: 1 },
+      { N: 2 ** 17, r: 16, p: 1 },
+      { N: 2 ** 17, r: 8, p: 2 },
+      { N: Number.NaN, r: 8, p: 1 },
+    ];
+    for (const keyCost of costs) {
+      expect((await refusal(() => encryptBackup(install, PASSPHRASE, { keyCost }))).message).toContain('a backup is sealed at an N that is a power of two from 131072 to 1048576');
+    }
+  });
+
+  it('of a test’s archive is refused on opening, before any key is tried, unless a test opens it', async () => {
+    const error = await refusal(() => decryptBackup(archive, PASSPHRASE));
+    expect(error.message).toContain('below the scrypt N=131072, r=8, p=1 OpenADLC seals every backup at');
+    expect(error.message).toContain('Restore from a backup one of them made');
+    // The same answer for a wrong passphrase: neither was tried.
+    expect((await refusal(() => decryptBackup(archive, 'not the passphrase'))).message).toBe(error.message);
+
+    expect((await open(archive, PASSPHRASE)).secrets).toEqual(install.secrets);
+  });
+
+  it('that a header claims past what this version derives at is refused, not attempted', async () => {
+    // Read before anything vouches for it: 2^21 at r = 8 would have a restore
+    // allocate 2 GiB for a file that then fails its tag check.
+    for (const cost of ['{"N":2097152,"r":8,"p":1}', '{"N":131073,"r":8,"p":1}', '{"N":131072,"r":8,"p":64}']) {
+      expect((await refusal(() => open(recording(cost), PASSPHRASE))).message).toContain(
+        'which this version of OpenADLC does not derive keys at. Upgrade OpenADLC, then restore again',
+      );
+    }
+  });
+
+  it('that is not three whole numbers is not read at all', async () => {
+    for (const cost of ['{"N":"1024","r":8,"p":1}', '{"N":1024,"r":8}', '{"N":1024.5,"r":8,"p":1}', '{"N":-1024,"r":8,"p":1}', '"cheap"']) {
+      expect((await refusal(() => readManifest(recording(cost)))).message).toMatch(/^this backup's (manifest has no scrypt [Nrp]|key cost must be an object)$/);
+    }
+  });
+
+  /**
+   * The one test that pays a backup's own cost: four derivations at
+   * N = 2^17, about 0.3 s each on a laptop and seconds each in a two-CPU
+   * task's computer while other suites run, so a minute, not vitest's 5 s.
+   */
+  it('is a backup’s own unless a test says otherwise, and one sealed before it was recorded opens at what it was sealed at', async () => {
+    const sealed = await encryptBackup(install, PASSPHRASE);
+    expect(readManifest(sealed).scrypt).toEqual({ N: 2 ** 17, r: 8, p: 1 });
+    expect((await decryptBackup(sealed, PASSPHRASE)).secrets).toEqual(install.secrets);
+
+    // Sealed as every archive was before the cost was recorded: a manifest
+    // with no `scrypt`, and a key derived at N = 2^17, r = 8, p = 1.
+    const header = Buffer.from(`FLEETBAK1\n${JSON.stringify(install.manifest)}\n`, 'utf8');
+    const salt = randomBytes(16);
+    const iv = randomBytes(12);
+    const key = await new Promise<Buffer>((resolve, reject) => {
+      scrypt(PASSPHRASE.normalize('NFC'), salt, 32, { N: 2 ** 17, r: 8, p: 1, maxmem: 256 * 1024 * 1024 }, (error, derived) =>
+        error ? reject(error) : resolve(derived),
+      );
+    });
+    const cipher = createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
+    cipher.setAAD(header);
+    const { manifest: _manifest, ...payload } = install;
+    const body = Buffer.concat([cipher.update(JSON.stringify(payload), 'utf8'), cipher.final()]);
+    const before = Buffer.concat([header, salt, iv, cipher.getAuthTag(), body]);
+
+    expect(readManifest(before)).not.toHaveProperty('scrypt');
+    expect(await decryptBackup(before, PASSPHRASE)).toEqual(install);
+  }, 60_000);
 });
 
 describe('a file that is not an OpenADLC backup fails as a file, not as a cipher', () => {
@@ -404,8 +497,8 @@ describe('two backups of the same install are two different files', () => {
   let second: Buffer;
 
   beforeAll(async () => {
-    first = await encryptBackup(install, PASSPHRASE);
-    second = await encryptBackup(install, PASSPHRASE);
+    first = await seal(install, PASSPHRASE);
+    second = await seal(install, PASSPHRASE);
   });
 
   it('draws a fresh salt and IV for each', () => {
@@ -420,17 +513,17 @@ describe('two backups of the same install are two different files', () => {
   });
 
   it('opens both with the one passphrase, so only the nonces differ', async () => {
-    expect(await decryptBackup(first, PASSPHRASE)).toEqual(await decryptBackup(second, PASSPHRASE));
+    expect(await open(first, PASSPHRASE)).toEqual(await open(second, PASSPHRASE));
   });
 });
 
 describe('an empty passphrase is not a passphrase', () => {
   it('refuses to write an archive that needs no secret to open', async () => {
-    expect((await refusal(() => encryptBackup(install, ''))).message).toContain('empty');
+    expect((await refusal(() => seal(install, ''))).message).toContain('empty');
   });
 
   it('refuses to read with one, instead of pretending to try', async () => {
-    expect(await refusal(() => decryptBackup(archive, ''))).toBeInstanceOf(BackupError);
+    expect(await refusal(() => open(archive, ''))).toBeInstanceOf(BackupError);
   });
 });
 
@@ -453,8 +546,8 @@ describe('a short passphrase is warned about, never refused', () => {
   });
 
   it('still seals and opens an archive with a one-character passphrase', async () => {
-    const sealed = await encryptBackup(install, 'a');
-    expect(await decryptBackup(sealed, 'a')).toEqual(install);
+    const sealed = await seal(install, 'a');
+    expect(await open(sealed, 'a')).toEqual({ ...install, manifest: { ...install.manifest, scrypt: TEST_KEY_COST } });
   });
 
   it('offers a generated one: long, random, and from an alphabet without look-alikes', () => {
@@ -483,14 +576,14 @@ describe('an archive survives the trip through a file', () => {
   it('decrypts after being written and read back as bytes', async () => {
     // The whole point of the package is a file that outlives the machine, so at
     // least once the bytes should make the trip rather than staying in a Buffer.
-    expect((await decryptBackup(readFileSync(path), PASSPHRASE)).secrets).toEqual(install.secrets);
+    expect((await open(readFileSync(path), PASSPHRASE)).secrets).toEqual(install.secrets);
   });
 
   it('identifies itself in its first two lines, which is all `head` needs', () => {
     const [magic, manifest] = readFileSync(path, 'latin1').split('\n');
 
     expect(magic).toBe('FLEETBAK1');
-    expect(JSON.parse(manifest ?? '')).toEqual(install.manifest);
+    expect(JSON.parse(manifest ?? '')).toEqual({ ...install.manifest, scrypt: { N: 1024, r: 8, p: 1 } });
   });
 });
 
@@ -563,7 +656,7 @@ describe('the unencrypted form', () => {
 
   it('is told apart from a sealed archive without a passphrase', async () => {
     expect(formatOf(writePlain(install))).toBe('plain');
-    expect(formatOf(await encryptBackup(install, 'a passphrase'))).toBe('sealed');
+    expect(formatOf(await seal(install, 'a passphrase'))).toBe('sealed');
   });
 
   it('is not confused by JSON that is not ours', () => {
@@ -575,7 +668,7 @@ describe('the unencrypted form', () => {
   it('refuses a sealed archive rather than returning nonsense', async () => {
     // A restore picks its path from `formatOf`, but the readers have to hold the
     // line themselves — a mixed-up call must fail, not half-succeed.
-    const sealed = await encryptBackup(install, 'a passphrase');
+    const sealed = await seal(install, 'a passphrase');
 
     expect(() => readPlain(sealed)).toThrow(BackupError);
   });
@@ -594,7 +687,7 @@ describe('a bot’s seat', () => {
       manifest: { ...install.manifest, counts: { ...install.manifest.counts, bots: 2 } },
     };
 
-    const back = await decryptBackup(await encryptBackup(seated, PASSPHRASE), PASSPHRASE);
+    const back = await open(await seal(seated, PASSPHRASE), PASSPHRASE);
 
     expect(back.bots).toEqual(seated.bots);
     expect(back.bots[1]).not.toHaveProperty('slot');

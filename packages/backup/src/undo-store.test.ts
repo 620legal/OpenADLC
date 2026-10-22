@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SecretStore } from '@openadlc/github';
+import { TEST_KEY_COST } from './archive.js';
 import { buildBackup, classifySecret } from './contents.js';
 import { EVERYTHING } from './selection.js';
 import { VALUES, sourceInstall } from './test-fixtures.js';
@@ -47,7 +48,7 @@ describe('the backup an undo puts back', () => {
     const root = join(mkdtempSync(join(tmpdir(), 'openadlc-undo-')), 'restore-undo');
     made.push(join(root, '..'));
     const store = memoryStore();
-    const undo = fileUndoStore({ root, store });
+    const undo = fileUndoStore({ root, store, keyCost: TEST_KEY_COST });
     const snapshot = buildBackup(sourceInstall(), { ...EVERYTHING, history: true }, new Date(JOURNAL.restoredAt)).contents;
 
     await undo.begin(snapshot, JOURNAL);
@@ -69,7 +70,7 @@ describe('the backup an undo puts back', () => {
     const root = join(mkdtempSync(join(tmpdir(), 'openadlc-undo-')), 'restore-undo');
     made.push(join(root, '..'));
     const store = memoryStore();
-    const undo = fileUndoStore({ root, store });
+    const undo = fileUndoStore({ root, store, keyCost: TEST_KEY_COST });
     await undo.begin(buildBackup(sourceInstall(), EVERYTHING, new Date()).contents, JOURNAL);
 
     await undo.clear();
@@ -84,7 +85,7 @@ describe('the backup an undo puts back', () => {
     const root = join(mkdtempSync(join(tmpdir(), 'openadlc-undo-')), 'restore-undo');
     made.push(join(root, '..'));
     const store = memoryStore();
-    const undo = fileUndoStore({ root, store });
+    const undo = fileUndoStore({ root, store, keyCost: TEST_KEY_COST });
     await undo.begin(buildBackup(sourceInstall(), EVERYTHING, new Date()).contents, JOURNAL);
     const key = store.data.get(UNDO_KEY_REF);
 

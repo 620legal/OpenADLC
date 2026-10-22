@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { openadlcHome, getSecretStore, type SecretStore } from '@openadlc/github';
-import { BackupError, decryptBackup, encryptBackup, type BackupContents } from './archive.js';
+import { BackupError, decryptBackup, encryptBackup, type BackupContents, type KeyCostOption } from './archive.js';
 import type { RestoreJournal } from './undo.js';
 
 /**
@@ -35,9 +35,14 @@ function writePrivate(path: string, bytes: Buffer | string): void {
   renameSync(next, path);
 }
 
-export function fileUndoStore(options: { root?: string; store?: SecretStore } = {}): UndoStore {
+/**
+ * `keyCost` is for the tests, which seal at the cost `KeyCostOption` names;
+ * the bridge leaves it out, and the undo's backup is sealed as any backup is.
+ */
+export function fileUndoStore(options: { root?: string; store?: SecretStore } & KeyCostOption = {}): UndoStore {
   const root = options.root ?? join(openadlcHome(), 'restore-undo');
   const store = (): SecretStore => options.store ?? getSecretStore();
+  const sealing: KeyCostOption = { keyCost: options.keyCost };
   const journalPath = join(root, 'journal.json');
   const backupPath = join(root, 'backup.fleetbak');
 
@@ -58,7 +63,7 @@ export function fileUndoStore(options: { root?: string; store?: SecretStore } = 
       // Sealed before the key is replaced: a snapshot that cannot be sealed
       // used to leave the earlier restore's backup behind a key that no
       // longer opened it, so that restore's Undo was lost too.
-      const sealed = await encryptBackup(snapshot, passphrase);
+      const sealed = await encryptBackup(snapshot, passphrase, sealing);
       await store().set(UNDO_KEY_REF, passphrase);
       writePrivate(backupPath, sealed);
       writePrivate(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
@@ -73,7 +78,7 @@ export function fileUndoStore(options: { root?: string; store?: SecretStore } = 
       const journal = readJournal();
       const passphrase = await store().get(UNDO_KEY_REF);
       if (!journal || !passphrase || !existsSync(backupPath)) return null;
-      return { journal, snapshot: await decryptBackup(readFileSync(backupPath), passphrase) };
+      return { journal, snapshot: await decryptBackup(readFileSync(backupPath), passphrase, sealing) };
     },
 
     journal: async () => readJournal(),
