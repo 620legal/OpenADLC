@@ -19,6 +19,7 @@ const db = vi.hoisted(() => {
     state: string;
     url: string | null;
     opened_at: string;
+    closed_at: string | null;
   };
   type Backfill = { id: number; repo_id: string | null; issues_page: number; pulls_page: number; read_at: Date | null; numbered_at: Date | null; caught_up_at: Date | null; last_error: string | null };
   type BackfillRow = { repo_id: string; number: number; kind: string; title: string; state: string; url: string; opened_at: string; head_ref: string | null; head_repo: string | null; base_ref: string | null; closes: number[] };
@@ -44,6 +45,10 @@ const db = vi.hoisted(() => {
       fake.linkSeq = 0;
       fake.sent = [];
       fake.tail = Promise.resolve();
+    },
+    /** The database's `now()`, as the fake's statements record it. */
+    now(): string {
+      return new Date().toISOString();
     },
     unique(constraint: string): Error {
       return Object.assign(new Error(`duplicate key value violates unique constraint "${constraint}"`), { code: '23505', constraint });
@@ -85,18 +90,24 @@ const db = vi.hoisted(() => {
         return { rows: [{ ...item, number: String(item.number) }] };
       }
       if (/^insert into work_item_links/.test(text)) {
-        const [work_item_id, kind, repo_id, number, request_id, linked_by, title, state, url, opened_at] = p;
+        const [work_item_id, kind, repo_id, number, request_id, linked_by, title, state, url, opened_at, closed_at] = p;
         if (repo_id !== null && s.links.some((link) => link.repo_id === repo_id && link.number === number)) throw fake.unique('work_item_links_thing');
         if (request_id !== null && s.links.some((link) => link.request_id === request_id)) throw fake.unique('work_item_links_request');
         fake.linkSeq += 1;
-        s.links.push({ id: fake.linkSeq, work_item_id, kind, repo_id, number, request_id, linked_by, title, state, url, opened_at });
+        s.links.push({ id: fake.linkSeq, work_item_id, kind, repo_id, number, request_id, linked_by, title, state, url, opened_at, closed_at });
         return { rows: [] };
       }
       if (/^update work_item_links set title = \$2/.test(text)) {
         const link = s.links.find((one) => one.id === p[0])!;
         link.title = p[1];
-        if (link.state !== 'merged') link.state = p[2];
+        if (link.state !== 'merged') {
+          if (p[2] === 'open') link.closed_at = null;
+          else if (link.state === 'open') link.closed_at = fake.now();
+          link.state = p[2];
+        }
         link.url = p[3] ?? link.url;
+        // A move by hand sets the item and the person beside the snapshot.
+        if (/work_item_id = \$5, linked_by = \$6/.test(text)) Object.assign(link, { work_item_id: p[4], linked_by: p[5] });
         return { rows: [] };
       }
       if (text === 'update work_item_links set work_item_id = $2 where id = $1') {
@@ -213,12 +224,6 @@ const db = vi.hoisted(() => {
         return {
           rows: [...s.links].sort((a, b) => a.id - b.id).map((link) => ({ ...link, item_number: s.items.find((item) => item.id === link.work_item_id)!.number })),
         };
-      }
-      if (/^update work_item_links set work_item_id = \$2, linked_by = \$3, title = \$4/.test(text)) {
-        const link = s.links.find((one) => one.id === p[0])!;
-        Object.assign(link, { work_item_id: p[1], linked_by: p[2], title: p[3], url: p[5] ?? link.url });
-        if (link.state !== 'merged') link.state = p[4];
-        return { rows: [] };
       }
       if (text === 'update work_item_links set work_item_id = $2, linked_by = $3 where id = $1') {
         Object.assign(s.links.find((one) => one.id === p[0])!, { work_item_id: p[1], linked_by: p[2] });
@@ -355,6 +360,25 @@ describe('a link', () => {
     expect(db.state.links[0]?.state).toBe('merged');
   });
 
+  it('records when it closed: set as it goes from open, kept by the sweep after, and cleared when it reopens', async () => {
+    const thing = { repoId: REPO, number: 4, kind: 'pull' } as const;
+    await ensureLink(thing, snap('pr', '2025-01-01T00:00:00.000Z'), null);
+    expect(db.state.links[0]?.closed_at).toBeNull();
+    await ensureLink(thing, snap('pr', undefined, 'merged'), null);
+    const closedAt = db.state.links[0]?.closed_at;
+    expect(closedAt).toEqual(expect.any(String));
+    db.state.links[0]!.closed_at = '2026-10-01T00:00:00.000Z';
+    // The sweep reads a merged pull as closed, on every pass; its close stays when it was.
+    await ensureLink(thing, snap('pr', undefined, 'closed'), null);
+    expect((await allLinks())[0]?.closedAt).toBe('2026-10-01T00:00:00.000Z');
+
+    const issue = { repoId: REPO, number: 5, kind: 'issue' } as const;
+    await ensureLink(issue, snap('#5', undefined, 'closed'), null);
+    expect(db.state.links[1]?.closed_at).toEqual(expect.any(String));
+    await ensureLink(issue, snap('#5'), null);
+    expect(db.state.links[1]?.closed_at).toBeNull();
+  });
+
   it('a person made is never moved, and an issue’s never moves automatically', async () => {
     const target = await ensureLink({ repoId: REPO, number: 5, kind: 'issue' }, snap('#5'), null);
     const own = await ensureLink({ repoId: REPO, number: 9, kind: 'pull' }, snap('pr'), null);
@@ -474,6 +498,8 @@ describe('before the first numbering', () => {
     expect((await itemOf({ requestId: 'req-1' }))?.number).toBe(2);
     expect((await itemOf({ repoId: REPO, number: 7 }))?.number).toBe(3);
     expect(db.state.links.find((link) => link.request_id === 'req-1')?.title).toBe('Add a dark mode');
+    // Nobody saw #1 close: the board falls back to when it opened.
+    expect(db.state.links.find((link) => link.number === 1)?.closed_at).toBeNull();
     expect(db.state.rows).toEqual([]);
   });
 });
@@ -501,7 +527,12 @@ describe('by hand', () => {
     const issue = await ensureLink({ repoId: REPO, number: 5, kind: 'issue' }, snap('#5'), null);
     await ensureLink({ repoId: REPO, number: 9, kind: 'pull' }, snap('an old title'), null);
     await linkByHand(issue!.id, { repoId: REPO, number: 9, kind: 'pull' }, snap('the new title', undefined, 'merged'), 'ada');
-    expect((await linksOf(issue!.id)).find((link) => link.number === 9)).toMatchObject({ title: 'the new title', state: 'merged', linkedBy: 'ada' });
+    expect((await linksOf(issue!.id)).find((link) => link.number === 9)).toMatchObject({
+      title: 'the new title',
+      state: 'merged',
+      linkedBy: 'ada',
+      closedAt: expect.any(String),
+    });
   });
 
   it('a link of a thing seen nowhere yet is made, and is the person who made it', async () => {

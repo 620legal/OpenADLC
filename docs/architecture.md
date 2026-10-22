@@ -608,7 +608,8 @@ back. A crew account that moves a stage label back is put back.
   (`loosePulls`), and `item` and `repos` on it. An item is on the board of
   every repository it has a link in. A pull request no issue claims is a
   card of its own (`lonePulls`), in Review while open and in Done once
-  merged or closed; it has no issue, so nothing moves, holds, puts next or
+  merged or closed, for the week from when its link closed (`closed_at`,
+  or when it opened for one closed before that was recorded); it has no issue, so nothing moves, holds, puts next or
   cancels it, on the board or on its page (`lonePullRefusal`); an item with
   no issue and no request opens as its pull, even where an issue row still
   records that pull. An issue's pull request a person linked to another

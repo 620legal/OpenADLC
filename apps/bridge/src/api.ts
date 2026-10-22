@@ -1083,7 +1083,10 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       gateOpen: false,
       url: pull.url,
       labels: [] as string[],
-      updatedAt: pull.openedAt,
+      // Done shows a week from `shippedAt ?? updatedAt`, and a pull's work
+      // has no `shippedAt`: from when it closed, or a pull opened eight days
+      // ago left Done the day it merged.
+      updatedAt: pull.closedAt ?? pull.openedAt,
       ...work.byRef.get(pull.ref),
       held: null,
       next: false,

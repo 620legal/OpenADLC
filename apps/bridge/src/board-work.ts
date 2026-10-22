@@ -655,6 +655,8 @@ export interface BoardLink {
   state: 'open' | 'closed' | 'merged';
   url: string | null;
   openedAt: string;
+  /** When it was last seen to close or merge; null while open, or for history nobody saw close. */
+  closedAt?: string | null;
 }
 
 /** What a card says of its work item: the key, and every repository it has a link in. */
@@ -672,6 +674,12 @@ export interface LonePull {
   url: string | null;
   stage: 'review' | 'done';
   openedAt: string;
+  /**
+   * In Done, when its last pull closed, which the Done column counts its
+   * week from as an issue's card counts from when it shipped; null when none
+   * was seen to close, and the card falls back to when it opened.
+   */
+  closedAt: string | null;
 }
 
 function subjectOfLink(link: BoardLink, repoName: (id: string | null) => string | null): string | null {
@@ -698,7 +706,17 @@ export function lonePulls(links: readonly BoardLink[], repos: readonly { id: str
     const repo = first ? repoName(first.repoId) : null;
     if (!first || !repo || first.number === null) continue;
     const open = members.some((link) => link.state === 'open');
-    out.push({ ref: `${repo}#${first.number}`, repo, number: first.number, title: first.title, url: first.url, stage: open ? 'review' : 'done', openedAt: first.openedAt });
+    const closes = members.flatMap((link) => (link.closedAt ? [link.closedAt] : [])).sort();
+    out.push({
+      ref: `${repo}#${first.number}`,
+      repo,
+      number: first.number,
+      title: first.title,
+      url: first.url,
+      stage: open ? 'review' : 'done',
+      openedAt: first.openedAt,
+      closedAt: open ? null : (closes.at(-1) ?? null),
+    });
   }
   return out;
 }

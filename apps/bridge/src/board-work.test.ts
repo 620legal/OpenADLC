@@ -278,14 +278,18 @@ describe('one card per work item', () => {
     const links = [
       link('w-1', 1, 'pull', 'repo-1', 40, { title: 'A person’s fix' }),
       link('w-2', 2, 'pull', 'repo-1', 41, { state: 'merged' }),
-      link('w-3', 3, 'pull', 'repo-1', 42, { state: 'closed', openedAt: new Date(NOW.getTime() - 400 * 86_400_000).toISOString() }),
+      link('w-3', 3, 'pull', 'repo-1', 42, { state: 'closed', openedAt: new Date(NOW.getTime() - 400 * 86_400_000).toISOString(), closedAt: NOW.toISOString() }),
       link('w-4', 4, 'issue', 'repo-1', 5),
       link('w-4', 4, 'pull', 'repo-1', 43),
+      // Two pulls on one item: Done counts from the later close.
+      link('w-8', 8, 'pull', 'repo-1', 45, { state: 'merged', closedAt: '2026-10-01T00:00:00.000Z' }),
+      link('w-8', 8, 'pull', 'repo-1', 46, { state: 'closed', closedAt: '2026-10-03T00:00:00.000Z' }),
     ];
-    expect(lonePulls(links, REPOS).map((pull) => [pull.ref, pull.stage, pull.title])).toEqual([
-      ['api#40', 'review', 'A person’s fix'],
-      ['api#41', 'done', 'pull 41'],
-      ['api#42', 'done', 'pull 42'],
+    expect(lonePulls(links, REPOS).map((pull) => [pull.ref, pull.stage, pull.title, pull.closedAt])).toEqual([
+      ['api#40', 'review', 'A person’s fix', null],
+      ['api#41', 'done', 'pull 41', null],
+      ['api#42', 'done', 'pull 42', NOW.toISOString()],
+      ['api#45', 'done', 'pull 45', '2026-10-03T00:00:00.000Z'],
     ]);
   });
 

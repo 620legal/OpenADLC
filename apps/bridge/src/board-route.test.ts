@@ -310,6 +310,25 @@ describe('GET /v1/board', () => {
     }
   });
 
+  it('keeps a lone pull request in Done for the week from when it closed, however long it was open', async () => {
+    const { workItems } = await import('@openadlc/db');
+    const closedAt = new Date().toISOString();
+    const opened = new Date(Date.now() - 400 * 86_400_000).toISOString();
+    const pull = (id: number, number: number, extra: Record<string, unknown>) => ({
+      id, itemId: `w-${id}`, itemNumber: id, kind: 'pull', repoId: 'repo-2', number, requestId: null, linkedBy: null, title: `pull ${number}`, url: null, ...extra,
+    });
+    vi.mocked(workItems.isNumbered).mockResolvedValueOnce(true);
+    vi.mocked(workItems.allLinks).mockResolvedValueOnce([
+      pull(1, 60, { state: 'merged', openedAt: opened, closedAt }),
+      // Closed before anything recorded when: its week counts from when it opened.
+      pull(2, 61, { state: 'closed', openedAt: opened, closedAt: null }),
+    ] as never);
+    const board = (await (await fetch(`${bridgeUrl}/v1/board`)).json()) as { columns: { stage: string; cards: { ref: string; updatedAt: string }[] }[] };
+    const done = board.columns.find((column) => column.stage === 'done')?.cards ?? [];
+    expect(done.find((card) => card.ref === 'website#60')?.updatedAt).toBe(closedAt);
+    expect(done.find((card) => card.ref === 'website#61')?.updatedAt).toBe(opened);
+  });
+
   it('names each repository with the colour it is told apart by', async () => {
     const board = (await (await fetch(`${bridgeUrl}/v1/board`)).json()) as { repos: string[]; repositories: unknown[] };
     expect(board.repos).toEqual(['openadlc-testbed', 'website']);
