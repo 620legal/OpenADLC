@@ -165,8 +165,11 @@ vi.mock('@openadlc/db', () => ({
 import { audit, bots, leases, requests, spendingLimits, tasks, threads } from '@openadlc/db';
 import { GitHubClient } from '@openadlc/github';
 import { designMemoryProposals, newSigningKey, parseMarker, parseMarkers, signBody, verifyBody, withHeader, withSeat } from '@openadlc/shared';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { Gates, wasRefused } from './gates.js';
-import { sendThreadMessage } from './thread-messages.js';
+import { Router } from './router.js';
+import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 
 /** What GitHub says about who filed the issue, unless a test queues something else. */
 async function filedByAStranger(): Promise<unknown> {
@@ -678,6 +681,41 @@ describe('approving a plan change', () => {
     store.planChange = { ...REQUEST };
   });
 
+  it('answers the console a conflict that says what to do when the builder is not connected, and leaves it open', async () => {
+    // Approve with the builder signed out answered 500 on 2026-10-22: the
+    // right words, said as the bridge failing.
+    actors.asBot.mockImplementation(async () => null as never);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const router = new Router();
+    router.post('/v1/gates/:id/answer', async ({ params, body, identity }) =>
+      answerFromConsole({ gates, taskService: { resume: vi.fn(async () => undefined) } as never }, {
+        gateId: params.id ?? '',
+        reply: (await body<{ answer: string }>()).answer,
+        answeredBy: identity,
+        via: 'console-gate',
+      }),
+    );
+    const server = createServer((request, response) => void router.handle(request, response));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/gates/gate-1/answer`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ answer: 'Approve' }),
+      });
+      expect(response.status).toBe(409);
+      expect(((await response.json()) as { error: string }).error).toBe(
+        'The builder is not connected to GitHub, so the Expected paths of openadlc#78 cannot be updated. Run: openadlc auth login --bot builder',
+      );
+      expect(error).not.toHaveBeenCalledWith(expect.stringContaining('failed:'), expect.anything());
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      error.mockRestore();
+    }
+    expect(store.gate).toMatchObject({ state: 'open' });
+    expect(leases.widenPaths).not.toHaveBeenCalled();
+  });
+
   it('widens the lease, writes the paths into the issue’s Expected paths, and lets the task go on', async () => {
     const answered = await gates.answer({ gateId: 'gate-1', reply: '1', answeredBy: 'alexsmith' });
 
@@ -906,6 +944,8 @@ describe('approving a plan change', () => {
       );
       expect(leases.widenPaths).not.toHaveBeenCalled();
       expect(store.gate).toMatchObject({ state: 'open' });
+      // A person's to fix, so a conflict, not the bridge failing.
+      await expect(gates.answer({ gateId: 'gate-1', reply: '1', answeredBy: 'alexsmith' })).rejects.toMatchObject({ status: 409 });
     });
 
     it('produces an edit whose signature verifies, checked with a real client and signer', async () => {
@@ -1933,6 +1973,24 @@ describe('a plan change settled by no person answering it', () => {
       payload: { standing: { setBy: 'orzelig', humanReview: ['apps/bridge/src/gates.ts'] } },
     });
     expect(answers()).toEqual([]);
+  });
+
+  it('says the Human-review rules could not be read, and what to do, never that a path is under Human review', async () => {
+    // On 2026-10-22 the question said `apps/probe60-more/util.ts` was under
+    // Human review, in a repository whose AGENTS.md had no such section.
+    const unread =
+      'OpenADLC could not read the Human-review rules in AGENTS.md on `main`, so it does not cover this one and a person decides. ' +
+      'Add a `## Human review` section to AGENTS.md on `main`, or fix the line of it OpenADLC cannot read';
+    covered.mockImplementation(async () => ({ covers: false, setBy: 'orzelig', setAt: '2026-10-22T10:00:00.000Z', humanReview: [], rulesUnread: unread }));
+
+    await ask(['apps/probe60-more/util.ts']);
+
+    expect(store.gate).toMatchObject({ state: 'open' });
+    expect(said()[0]).toContain(`Approve all is on for #78, but ${unread}.`);
+    expect(said()[0]).not.toContain('under Human review');
+    expect(store.messages.find((message) => message.kind === 'gate')).toMatchObject({
+      payload: { standing: { setBy: 'orzelig', humanReview: [], rulesUnread: unread } },
+    });
   });
 
   it('asks a person as before when no standing approval is on', async () => {

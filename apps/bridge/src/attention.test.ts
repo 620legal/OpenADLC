@@ -135,6 +135,19 @@ describe('a builder asking for more paths', () => {
     expect(item?.actions).toContainEqual({ kind: 'approve_all_off', label: 'Turn off approve all for #16', subject: 'openadlc-testbed#16' });
   });
 
+  it('says the Human-review rules could not be read, and what to do, when that kept it for a person, never Human review', async () => {
+    // On 2026-10-22 the card said `apps/probe60-more/util.ts` was under Human
+    // review, in a repository whose AGENTS.md had no such section.
+    const unread = 'OpenADLC could not read the Human-review rules in AGENTS.md on `main`, so it does not cover this one and a person decides. Add a `## Human review` section';
+    const item = await read({
+      planChanges: new Map([['gate-p', { ...plan, standing: { setBy: 'orzelig', humanReview: [], rulesUnread: unread } }]]),
+      standing: [{ repoId: 'repo-1', issueNumber: 16, setBy: 'orzelig', setAt: minutesAgo(30) }],
+    });
+    expect(item?.context).toContain(`Approve all is on for #16, set by orzelig, but ${unread}.`);
+    expect(item?.context).not.toContain('under Human review');
+    expect(item?.actions).toContainEqual({ kind: 'approve_all_off', label: 'Turn off approve all for #16', subject: 'openadlc-testbed#16' });
+  });
+
   it('says the designer is judging it while it is, and offers nothing to ask again', async () => {
     const judging = task({ id: 'task-d', botId: 'bot-architect', kind: 'spec', subjectRef: 'openadlc-testbed#16', state: 'running', skill: 'plan-change-review' });
     const item = await read({ planChanges: new Map([['gate-p', { ...plan, designer: { taskId: 'task-d', askedBy: 'orzelig', at: minutesAgo(1) } }]]) }, [build(), judging]);
@@ -2133,6 +2146,27 @@ describe('an approved plan change that waits on another lease', () => {
     expect(item?.actions).toContainEqual({ kind: 'answer_gate', label: 'Refuse', gateId: 'gate-pc', answer: 'Refuse' });
     expect(item?.actions.some((action) => 'answer' in action && action.answer === 'Approve')).toBe(false);
     expect(item?.actions.map((action) => action.kind)).not.toContain('answer');
+  });
+
+  it('offers to turn approve all off while it is on, as the question’s card does, and says what it waits on for the board', async () => {
+    const { attentionItems } = await load();
+    const read = (standing: unknown[]) =>
+      attentionItems({
+        ...base,
+        gates: [planGate('gate-pc', 'task-pc')],
+        tasks: [building('task-pc', 'openadlc-testbed#16')],
+        heldPlanChanges: [{ gateId: 'gate-pc', paths: PATHS, approvedBy: 'orzelig', blockedBy: [11] }],
+        standing,
+      } as never)[0];
+
+    const on = read([{ repoId: 'repo-1', issueNumber: 16, setBy: 'orzelig', setAt: minutesAgo(40) }]);
+    expect(on?.kind).toBe('plan_change_waiting');
+    expect(on?.actions).toContainEqual({ kind: 'approve_all_off', label: 'Turn off approve all for #16', subject: 'openadlc-testbed#16' });
+    expect(on?.heldApproval).toEqual({ blockedBy: [11], paths: PATHS });
+
+    expect(read([])?.actions.map((action) => action.kind)).not.toContain('approve_all_off');
+    // Another issue's approve all is not this one's.
+    expect(read([{ repoId: 'repo-1', issueNumber: 11, setBy: 'orzelig', setAt: minutesAgo(40) }])?.actions.map((action) => action.kind)).not.toContain('approve_all_off');
   });
 
   it('links an issue with no pull request yet, and names every holder', async () => {

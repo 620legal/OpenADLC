@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Board, CrewMember } from '@/lib/api';
+import type { AttentionItem, Board, CrewMember } from '@/lib/api';
 
 /**
  * A card whose task runs, drawn in a browser: its dot pulses unless the
@@ -191,5 +191,63 @@ describe('a running card’s line, between reads of the whole board', () => {
       await vi.advanceTimersByTimeAsync(12_000);
     });
     expect(activityCalls(fetchMock)).toEqual([]);
+  });
+});
+
+/**
+ * A plan change approved while other work holds its paths keeps its question
+ * open. The card said "Waiting for your answer" while Needs you said the
+ * builder waited for #44 to let go of the approved path (#100).
+ */
+describe('a card whose approved plan change waits on other work', () => {
+  const asking: Board = {
+    ...BOARD,
+    running: 0,
+    columns: BOARD.columns.map((column) => ({
+      ...column,
+      cards: column.cards.map((card) => ({
+        ...card,
+        ref: 'openadlc#60',
+        number: 60,
+        gateOpen: true,
+        active: [{ ...card.active![0]!, state: 'paused' as const, activity: null }],
+      })),
+    })),
+  };
+  const waiting: AttentionItem = {
+    id: 'plan-change:gate-60',
+    kind: 'plan_change_waiting',
+    headline: 'The builder (openadlc-atlas-janedoe) waits for #44 to let go of the approved path',
+    subject: { repo: 'openadlc', number: 60, title: 'Let the board filter by label', ref: 'openadlc#60', url: null, item: 'openadlc#60' },
+    bot: null,
+    since: NOW,
+    detail: 'orzelig approved adding `apps/probe60-more/util.ts`.',
+    actions: [{ kind: 'answer_gate', label: 'Refuse', gateId: 'gate-60', answer: 'Refuse' }],
+    heldApproval: { blockedBy: [44], paths: ['apps/probe60-more/util.ts'] },
+  };
+  const question: AttentionItem = {
+    ...waiting,
+    id: 'gate:gate-61',
+    kind: 'question',
+    headline: 'The builder has a question',
+    question: { gateId: 'gate-61', options: ['p1', 'p2'] },
+    actions: [],
+  };
+  const statusWith = async (attention: AttentionItem[]): Promise<string | null | undefined> => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ running: 0, cards: [] }) })));
+    const { BoardView } = await import('./board-view');
+    const { headerData } = await import('@/lib/header');
+    const header = headerData({ repos: ['openadlc'], crew: [BUILDER], budget: null, needsYou: attention.length });
+    await act(async () => root.render(<BoardView board={asking} crew={[BUILDER]} repo="all" header={header} attention={attention} now={NOW} />));
+    return container.querySelector('[aria-label="Board"] [data-status]')?.textContent;
+  };
+
+  it('says it waits for that work, as Needs you does, not for the person’s answer', async () => {
+    expect(await statusWith([waiting])).toBe('Approved · waits for #44 to let go of the path');
+  });
+
+  it('still waits for the person when a question of its own is open beside it', async () => {
+    expect(await statusWith([waiting, question])).toBe('Waiting for your answer');
+    expect(await statusWith([])).toBe('Waiting for your answer');
   });
 });

@@ -3,6 +3,9 @@ import { parseHumanReviewPaths } from './human-review.js';
 import { headlineFor, messageKindFor, OPENADLC_EVENTS } from './markers.js';
 import {
   designerLimits,
+  keepsForPerson,
+  keptForPerson,
+  outsideInWords,
   parsePlanChangeVerdict,
   pathsNamedIn,
   underHumanReview,
@@ -31,10 +34,21 @@ describe('the paths of a plan change that only a person may approve', () => {
     ).toEqual(['config/review.yaml', 'apps/bridge/src/', 'crew/skills/qa/tools.yaml', 'infra/main.tf']);
   });
 
-  it('are every path when the rules could not be read', () => {
+  it('are every path when the rules could not be read, said as that and never as Human review', () => {
     // Unknown holds: a section the parser could not read covers nothing it
     // meant to, and a standing approval or the designer would have granted it.
-    expect(underHumanReview(['apps/hostd/src/x.ts'], null)).toEqual(['apps/hostd/src/x.ts']);
+    // On 2026-10-22 the card said `apps/probe60-more/util.ts` was under Human
+    // review, in a repository whose AGENTS.md had no such section.
+    const kept = keptForPerson(['apps/probe60-more/util.ts'], null, 'main');
+    expect(kept.humanReview).toEqual([]);
+    expect(kept.rulesUnread?.what).toBe('OpenADLC could not read the Human-review rules in AGENTS.md on `main`');
+    expect(kept.rulesUnread?.fix).toContain('Add a `## Human review` section to AGENTS.md on `main`, or fix the line of it OpenADLC cannot read');
+    expect(keepsForPerson(kept)).toBe(true);
+    expect(keptForPerson(['apps/x.ts'], null, null).rulesUnread?.what).toContain('on the default branch');
+
+    const read = keptForPerson(['config/review.yaml', 'apps/x.ts'], RULES, 'main');
+    expect(read).toEqual({ humanReview: ['config/review.yaml'], rulesUnread: null });
+    expect(keepsForPerson(keptForPerson(['apps/x.ts'], RULES, 'main'))).toBe(false);
   });
 });
 
@@ -82,6 +96,17 @@ describe('what the designer’s approval counts for', () => {
     const limits = designerLimits({ paths: ['apps/hostd/src/skill-runner.ts'], designPaths: design, humanReview: ['apps/hostd/src/skill-runner.ts'] });
     expect(limits.counts).toBe(false);
     expect(limits.outside[0]?.why).toMatch(/Human review/);
+  });
+
+  it('does not count, for any path, when the Human-review rules could not be read, and says that once', () => {
+    const rulesUnread = keptForPerson([], null, 'main').rulesUnread;
+    const limits = designerLimits({ paths: ['apps/hostd/src/skill-runner.ts', 'packages/shared/src/markers.ts'], designPaths: design, humanReview: [], rulesUnread });
+    expect(limits.counts).toBe(false);
+    expect(limits.outside.map((entry) => entry.path)).toEqual(['apps/hostd/src/skill-runner.ts', 'packages/shared/src/markers.ts']);
+    for (const entry of limits.outside) expect(entry.why).not.toMatch(/under Human review/);
+    const said = outsideInWords(limits.outside);
+    expect(said.startsWith('`apps/hostd/src/skill-runner.ts`, `packages/shared/src/markers.ts`: OpenADLC could not read the Human-review rules in AGENTS.md on `main`')).toBe(true);
+    expect(said.match(/could not read/g)).toHaveLength(1);
   });
 
   it('does not count where the issue had no design to judge against', () => {

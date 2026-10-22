@@ -16,6 +16,8 @@ const store = vi.hoisted(() => ({
   issue: null as Record<string, unknown> | null,
   messages: [] as Record<string, unknown>[],
   notes: [] as [string, string, Record<string, unknown>][],
+  /** What the designer said in its own thread, as the store lists it. */
+  designerSaid: [] as Record<string, unknown>[],
 }));
 
 vi.mock('@openadlc/db', () => ({
@@ -71,12 +73,17 @@ vi.mock('@openadlc/db', () => ({
       store.messages.push(input);
       return input;
     }),
+    listThreadsForSubject: vi.fn(async () => [
+      { id: 'thread-builder', bot_id: 'bot-builder', subject_ref: 'openadlc#77' },
+      { id: 'thread-architect', bot_id: 'bot-architect', subject_ref: 'openadlc#77' },
+    ]),
+    listMessages: vi.fn(async (ids: string[]) => (ids.includes('thread-architect') ? store.designerSaid : [])),
   },
 }));
 
 import { audit, leases, standingApprovals } from '@openadlc/db';
 import { newSigningKey, signBody } from '@openadlc/shared';
-import { endStandingApproval, PlanChanges, standingCoverFor } from './plan-changes.js';
+import { endStandingApproval, NO_VERDICT, PlanChanges, standingCoverFor } from './plan-changes.js';
 
 const RULES = [{ path: 'apps/bridge/src/gates.ts', logins: ['orzelig'] }, { path: 'config/', logins: ['orzelig'] }];
 const KEY = newSigningKey();
@@ -129,6 +136,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   store.messages = [];
   store.notes = [];
+  store.designerSaid = [];
   store.standing = null;
   store.task = { id: 'task-1', botId: 'bot-builder', repoId: 'repo-1', kind: 'implement', subjectRef: 'openadlc#77', leaseId: 'lease-1', branch: 'agent/builder/77-x', state: 'paused' };
   store.tasks = {
@@ -184,6 +192,29 @@ describe('approve all for this work', () => {
     await expect(cover({ repoId: 'repo-1', repoFullName: 'acme/openadlc', issueNumber: 77, paths: ['apps/hostd/src/x.ts'] })).resolves.toBeNull();
   });
 
+  it('says the rules could not be read, and what to do, when they cannot be: never that a path is under Human review', async () => {
+    // On 2026-10-22 the card said `apps/probe60-more/util.ts` was under Human
+    // review, in a repository whose AGENTS.md had no such section.
+    store.standing = { id: 'standing-1', repoId: 'repo-1', issueNumber: 77, setBy: 'orzelig', setAt: '2026-10-22T10:00:00.000Z' };
+    humanReviewRules.mockResolvedValueOnce(null as never);
+
+    const cover = await standingCoverFor({ humanReviewRules })({ repoId: 'repo-1', repoFullName: 'acme/openadlc', issueNumber: 77, paths: ['apps/probe60-more/util.ts'] });
+
+    expect(cover).toMatchObject({ covers: false, humanReview: [] });
+    expect(cover?.rulesUnread).toBe(
+      'OpenADLC could not read the Human-review rules in AGENTS.md on `main`, so it does not cover this one and a person decides. ' +
+        'Add a `## Human review` section to AGENTS.md on `main`, or fix the line of it OpenADLC cannot read (the repository’s card in Needs you names it); ' +
+        'until then a person approves every path',
+    );
+    // A read that throws is the same: unknown holds.
+    humanReviewRules.mockRejectedValueOnce(new Error('GitHub is down'));
+    await expect(standingCoverFor({ humanReviewRules })({ repoId: 'repo-1', repoFullName: 'acme/openadlc', issueNumber: 77, paths: ['a/b/c.ts'] })).resolves.toMatchObject({
+      covers: false,
+      humanReview: [],
+      rulesUnread: expect.stringContaining('could not read the Human-review rules'),
+    });
+  });
+
   it('turns off when its pull request merges, saying why', async () => {
     store.standing = { id: 'standing-1', repoId: 'repo-1', issueNumber: 77, setBy: 'orzelig', setAt: '2026-10-22T10:00:00.000Z' };
     await endStandingApproval({ repoId: 'repo-1', issueNumber: 77, why: '#80 merged' });
@@ -228,6 +259,15 @@ describe('asking the designer', () => {
     expect(brief.content).toContain('`config/review.yaml` is under Human review');
     expect(store.notes).toContainEqual(['gate-1', 'designer', expect.objectContaining({ taskId: 'task-9', askedBy: 'orzelig' })]);
     expect(store.messages.at(-1)).toMatchObject({ threadId: 'thread-1', kind: 'sys', text: expect.stringContaining('orzelig asked architect, the designer') });
+  });
+
+  it('tells the designer the rules could not be read, not that the paths are under Human review, when they cannot be', async () => {
+    humanReviewRules.mockResolvedValueOnce(null as never);
+    await planChanges.askDesigner({ gateId: 'gate-1', identity: 'orzelig' });
+
+    const brief = ((taskService.open.mock.calls[0] as unknown as [Record<string, unknown>])[0].extraContext as { content: string }[])[0]!;
+    expect(brief.content).toContain('OpenADLC could not read the Human-review rules in AGENTS.md on `main`, so only a person approves these paths');
+    expect(brief.content).not.toContain('under Human review in AGENTS.md');
   });
 
   it('is not asked twice while it is judging, nor of a gate already answered', async () => {
@@ -286,6 +326,22 @@ describe('asking the designer', () => {
     expect(store.notes.at(-1)?.[2]).toMatchObject({ outside: [{ path: 'apps/bridge/src/gates.ts', why: expect.stringMatching(/Human review/) }] });
   });
 
+  it('is advice when the Human-review rules could not be read, and says so once, never as Human review', async () => {
+    openPlanChange(['apps/hostd/src/skill-runner.ts', 'apps/hostd/src/task-runner.ts']);
+    await planChanges.askDesigner({ gateId: 'gate-1', identity: 'orzelig' });
+    humanReviewRules.mockResolvedValueOnce(null as never);
+
+    await expect(planChanges.verdict(store.tasks['task-9'] as never, verdict('approve'))).resolves.toEqual({ counted: false });
+
+    expect(gates.answer).not.toHaveBeenCalled();
+    const comment = String((client.comment.mock.calls.at(-1) as unknown[])[2]);
+    expect(comment).toContain(
+      'That does not settle it: `apps/hostd/src/skill-runner.ts`, `apps/hostd/src/task-runner.ts`: OpenADLC could not read the Human-review rules in AGENTS.md on `main`, so the designer’s approval is advice.',
+    );
+    expect(comment.match(/could not read/g)).toHaveLength(1);
+    expect(comment).not.toContain('under Human review');
+  });
+
   it('reads only a design signed for the issue’s own design task, not a crew comment that claims to be one', async () => {
     openPlanChange(['packages/engines/src/claude.ts']);
     const planted = `${DESIGN.replace('apps/console/src/lib/attention-card.ts', 'packages/engines/src/claude.ts')}`;
@@ -314,6 +370,69 @@ describe('asking the designer', () => {
     gates.answer.mockClear();
     await expect(planChanges.verdict(store.tasks['task-9'] as never, verdict('approve'))).resolves.toBeNull();
     expect(gates.answer).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A designer's task that ended with no verdict read "done", and only Needs
+ * you said it had no answer; the builder's thread, where the question waits,
+ * said nothing. A review that leaves no review is failed, and so is this.
+ */
+describe('a designer that ends without its verdict', () => {
+  const asked = async () => {
+    await planChanges.askDesigner({ gateId: 'gate-1', identity: 'orzelig' });
+    store.tasks['task-9'] = { ...store.tasks['task-9'], startedAt: '2026-10-22T10:00:00.000Z' };
+    return store.tasks['task-9'] as never;
+  };
+  const said = (text: string, extra: Record<string, unknown> = {}) => ({ author: 'architect', kind: 'bot', text, at: '2026-10-22T10:02:00.000Z', payload: null, ...extra });
+
+  it('failed, with what it last said', async () => {
+    const task = await asked();
+    store.designerSaid = [said('I could not find the design comment on #77.')];
+    await expect(planChanges.missingVerdict(task)).resolves.toBe(`${NO_VERDICT}. It said: “I could not find the design comment on #77.”`);
+    store.designerSaid = [];
+    await expect(planChanges.missingVerdict(task)).resolves.toBe(NO_VERDICT);
+  });
+
+  it('did not fail when it gave one, noted or only said, nor when it was not asked to judge one', async () => {
+    const task = await asked();
+    // Said, though not acted on yet: the note comes once the verdict is.
+    store.designerSaid = [said('<!-- openadlc:{"event":"plan_change_verdict","verdict":"refuse","reason":"no"} -->', { kind: 'sys', payload: { event: 'plan_change_verdict', taskId: 'task-9' } })];
+    await expect(planChanges.missingVerdict(task)).resolves.toBeNull();
+
+    store.designerSaid = [];
+    store.planChange = { ...store.planChange, designer: { ...(store.planChange?.designer as object), verdict: 'approve' } };
+    await expect(planChanges.missingVerdict(task)).resolves.toBeNull();
+
+    await expect(planChanges.missingVerdict({ ...store.tasks['task-spec'], startedAt: null } as never)).resolves.toBeNull();
+    // A task asked before the person asked again is not the one the card waits on.
+    await expect(planChanges.missingVerdict({ ...store.tasks['task-9'], id: 'task-old' } as never)).resolves.toBeNull();
+  });
+
+  it('is said in the builder’s thread, and the designer can be asked again', async () => {
+    const task = await asked();
+    store.tasks['task-9'] = { ...store.tasks['task-9'], state: 'failed' };
+
+    await planChanges.designerEnded(task, NO_VERDICT);
+
+    expect(store.messages.at(-1)).toMatchObject({
+      threadId: 'thread-1',
+      kind: 'sys',
+      text: 'architect, the designer, ended without an answer, so nothing is settled. Ask the designer again from the card, or answer it yourself',
+      note: NO_VERDICT,
+    });
+    taskService.open.mockResolvedValueOnce({ taskId: 'task-10', session: 'architect-2' });
+    await expect(planChanges.askDesigner({ gateId: 'gate-1', identity: 'orzelig' })).resolves.toEqual({ taskId: 'task-10', designer: 'architect' });
+  });
+
+  it('is not said once the question has been answered, or for a designer that gave its verdict', async () => {
+    const task = await asked();
+    store.gate = { ...store.gate, state: 'answered' };
+    await planChanges.designerEnded(task, NO_VERDICT);
+    store.gate = { ...store.gate, state: 'open' };
+    store.planChange = { ...store.planChange, designer: { ...(store.planChange?.designer as object), verdict: 'refuse' } };
+    await planChanges.designerEnded(task, NO_VERDICT);
+    expect(store.messages.filter((message) => String(message.text).includes('ended without an answer'))).toEqual([]);
   });
 });
 

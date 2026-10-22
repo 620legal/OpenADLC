@@ -456,6 +456,16 @@ describe('what was decided about a plan change, beside its request (#77)', () =>
     });
   });
 
+  it('reads why a standing approval did not cover it when the Human-review rules could not be read', async () => {
+    // Not a Human-review path: the card said one was, in a repository whose
+    // AGENTS.md had no `## Human review` section (#100).
+    const why = 'OpenADLC could not read the Human-review rules in AGENTS.md on `main`, so it does not cover this one';
+    vi.mocked(queryOne).mockResolvedValueOnce({ payload: { planChange: { paths: ['a.ts'], reason: 'r' }, standing: { setBy: 'orzelig', humanReview: [], rulesUnread: why } } });
+    await expect(planChangeOfGate('gate-1')).resolves.toMatchObject({ standing: { setBy: 'orzelig', humanReview: [], rulesUnread: why } });
+    vi.mocked(queryOne).mockResolvedValueOnce({ payload: { planChange: { paths: ['a.ts'], reason: 'r' }, standing: { setBy: 'orzelig', humanReview: [], rulesUnread: 7 } } });
+    expect((await planChangeOfGate('gate-1'))?.standing).toEqual({ setBy: 'orzelig', humanReview: [] });
+  });
+
   it('writes a note on the gate’s message, one key at a time, beside what is there', async () => {
     await notePlanChange('gate-1', 'designer', { taskId: 'task-9', askedBy: 'orzelig' });
     const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];

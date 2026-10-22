@@ -16,13 +16,52 @@ export const PLAN_CHANGE_REVIEW_SKILL = 'plan-change-review';
 
 /**
  * The paths of a request that a Human-review rule covers, or that hold a file
- * one covers: asking for `apps/bridge/src/` asks for `gates.ts` with it. With
- * no rules (the section could not be read) every path is a person's: unknown
- * holds, as the merge gate holds it.
+ * one covers: asking for `apps/bridge/src/` asks for `gates.ts` with it.
  */
-export function underHumanReview(paths: readonly string[], rules: readonly HumanReviewRule[] | null): string[] {
-  if (!rules) return [...paths];
+export function underHumanReview(paths: readonly string[], rules: readonly HumanReviewRule[]): string[] {
   return paths.filter((path) => rules.some((rule) => ruleMatches(rule.path, path) || pathsOverlap([path], [rule.path])));
+}
+
+/**
+ * What a card and the issue say when a repository's Human-review rules could
+ * not be read: `what` could not be, and the `fix`, each without its full
+ * stop. The bridge cannot tell which way they failed (`readFileAtRef` answers
+ * null for a file that is missing and for one it could not read, the parser
+ * null for no section and for a line it cannot read), so the fix names both.
+ */
+export function rulesUnreadWords(base: string | null): { what: string; fix: string } {
+  const on = base && base !== 'HEAD' ? `on \`${base}\`` : 'on the default branch';
+  return {
+    what: `OpenADLC could not read the Human-review rules in AGENTS.md ${on}`,
+    fix:
+      `Add a \`## Human review\` section to AGENTS.md ${on}, or fix the line of it OpenADLC cannot read ` +
+      '(the repository’s card in Needs you names it); until then a person approves every path',
+  };
+}
+
+/**
+ * What keeps a plan change for a person, whatever approve all or the designer
+ * would give it: the paths under Human review, or the rules that could not be
+ * read. Unknown holds, as the merge gate holds it, so with no rules every path
+ * is a person's, but none is said to be under Human review: on 2026-10-22 a
+ * card said `apps/probe60-more/util.ts` was, in a repository whose AGENTS.md
+ * could not be read for its rules.
+ */
+export interface KeptForPerson {
+  humanReview: string[];
+  /** Set when the rules could not be read (`rulesUnreadWords`); every path is a person's then. */
+  rulesUnread: { what: string; fix: string } | null;
+}
+
+/** What keeps these paths for a person, from the rules on `base`, or null rules when they could not be read. */
+export function keptForPerson(paths: readonly string[], rules: readonly HumanReviewRule[] | null, base: string | null): KeptForPerson {
+  if (!rules) return { humanReview: [], rulesUnread: rulesUnreadWords(base) };
+  return { humanReview: underHumanReview(paths, rules), rulesUnread: null };
+}
+
+/** Whether anything keeps a plan change for a person. */
+export function keepsForPerson(kept: KeptForPerson): boolean {
+  return kept.rulesUnread !== null || kept.humanReview.length > 0;
 }
 
 /** A token a design writes that reads as a repository path: a folder, then a name. */
@@ -124,16 +163,20 @@ export interface OutsideTheDesign {
  * same package, its tests, the docs) and none is under Human review; otherwise
  * it is advice, the question stays for a person, and `outside` says which
  * paths kept it there and why. `designPaths` null is an issue with no design
- * to judge against: the designer's view is advice then too.
+ * to judge against: the designer's view is advice then too, as it is for
+ * every path when the Human-review rules could not be read (`rulesUnread`).
  */
 export function designerLimits(input: {
   paths: readonly string[];
   designPaths: readonly string[] | null;
   humanReview: readonly string[];
+  rulesUnread?: { what: string; fix: string } | null;
 }): { counts: boolean; outside: OutsideTheDesign[] } {
   const outside: OutsideTheDesign[] = [];
   for (const path of input.paths) {
-    if (input.humanReview.includes(path)) {
+    if (input.rulesUnread) {
+      outside.push({ path, why: `${input.rulesUnread.what}, so the designer’s approval is advice. ${input.rulesUnread.fix}` });
+    } else if (input.humanReview.includes(path)) {
       outside.push({ path, why: 'it is under Human review in AGENTS.md, which only a person approves' });
     } else if (input.designPaths === null) {
       outside.push({ path, why: 'the issue has no design to judge it against' });
@@ -142,6 +185,17 @@ export function designerLimits(input: {
     }
   }
   return { counts: outside.length === 0 && input.paths.length > 0, outside };
+}
+
+/**
+ * What kept the designer's approval from settling a request, as the issue and
+ * the card say it: the paths that share a reason named together, before it,
+ * so a reason every path has (rules that could not be read) is said once.
+ */
+export function outsideInWords(outside: readonly OutsideTheDesign[]): string {
+  const byWhy = new Map<string, string[]>();
+  for (const entry of outside) byWhy.set(entry.why, [...(byWhy.get(entry.why) ?? []), entry.path]);
+  return [...byWhy].map(([why, paths]) => `${paths.map((path) => `\`${path}\``).join(', ')}: ${why}`).join('; ');
 }
 
 /** The design seat's answer to a plan change, as its message ends. */

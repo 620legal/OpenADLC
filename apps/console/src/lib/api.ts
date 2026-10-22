@@ -375,6 +375,8 @@ export interface AttentionItem {
   members?: AttentionMember[];
   /** An unsigned crew post, for the steps in its sheet. Absent from an older bridge. */
   incident?: UnsignedIncident;
+  /** An approved plan change's, while it waits (`plan_change_waiting`): the issues holding its paths, and the paths. Absent from an older bridge. */
+  heldApproval?: { blockedBy: number[]; paths: string[] };
 }
 
 /** What an unsigned crew post was, where, and whether it counted; `health/checks/attribution.ts` in the bridge. */

@@ -58,13 +58,14 @@ vi.mock('@openadlc/db', () => ({
     sendBackOfTask: vi.fn(async (taskId: string) => (taskId === 'task-sent' ? { repoId: 'repo-1', issueNumber: 78, from: 'build', to: 'spec', kind: 'send_back' } : null)),
   },
   tasks: {
-    getTask: vi.fn(async (id: string) => (id === 'task-gone' ? null : { id, state: id === 'task-done' ? 'done' : id === 'task-paused' ? 'paused' : 'running', kind: id === 'task-review' ? 'review' : id === 'task-qa' ? 'qa' : id === 'task-spec' ? 'spec' : id === 'task-deploy' ? 'deploy' : 'implement', repoId: 'repo-1', branch: 'agent/builder/78-issue-78', subjectRef: 'openadlc#78' })),
+    getTask: vi.fn(async (id: string) => (id === 'task-gone' ? null : { id, state: id === 'task-done' ? 'done' : id === 'task-paused' ? 'paused' : 'running', kind: id === 'task-review' ? 'review' : id === 'task-qa' ? 'qa' : id === 'task-spec' || id === 'task-judge' ? 'spec' : id === 'task-deploy' ? 'deploy' : 'implement', skill: id === 'task-judge' ? 'plan-change-review' : null, repoId: 'repo-1', branch: 'agent/builder/78-issue-78', subjectRef: 'openadlc#78' })),
     pausedWithAnswer: vi.fn(async () => []),
     updateTaskState: vi.fn(async (id: string, state: string, extra: { exitReason: string | null }) => ({
       id,
       botId: 'bot-builder',
       repoId: 'repo-1',
-      kind: 'implement',
+      kind: id === 'task-judge' ? 'spec' : 'implement',
+      skill: id === 'task-judge' ? 'plan-change-review' : null,
       subjectType: 'issue',
       subjectRef: 'openadlc#78',
       leaseId: 'lease-78',
@@ -114,6 +115,8 @@ const tokenFor = vi.fn(async (name: string, options: { repository?: string }) =>
 const recordUsage = vi.fn(async (_input: { taskId: string }) => ({ stop: false, spent: 1.25, cap: 15, stepUsd: 15 }));
 const localCiRun = vi.fn(async (taskId: string, runId: string) => ({ run: { id: runId, taskId, state: 'passed', headSha: 'a'.repeat(40) } }));
 const verdict = vi.fn(async (_task: unknown, _text: string) => null);
+const missingVerdict = vi.fn(async (_task: unknown): Promise<string | null> => null);
+const designerEnded = vi.fn(async (_task: unknown, _reason: string | null) => undefined);
 
 
 let bridge: Server;
@@ -145,7 +148,7 @@ beforeEach(async () => {
     names: { settled: async () => undefined } as never,
     dispatchRuns: { soon: () => undefined },
     requestQueue: { drain } as never,
-    planChanges: { verdict } as never,
+    planChanges: { verdict, missingVerdict, designerEnded } as never,
   });
   bridge = createServer((request, response) => void router.handle(request, response));
   await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
@@ -1132,6 +1135,30 @@ describe('a plan change settled as it was asked (#77)', () => {
     resume.mockClear();
     await post('/internal/tasks/task-1/state', { state: 'paused', reason: 'waiting on a person' });
     expect(resume).not.toHaveBeenCalled();
+  });
+});
+
+describe('a designer’s task that ends without its verdict', () => {
+  it('is failed with why, and the builder’s thread is told, as a review that left no review is', async () => {
+    const { tasks } = await import('@openadlc/db');
+    missingVerdict.mockResolvedValueOnce('ended without its verdict on the plan change. It said: “No design.”');
+
+    expect((await post('/internal/tasks/task-judge/state', { state: 'done', reason: 'complete' })).status).toBe(200);
+
+    expect(missingVerdict).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-judge', skill: 'plan-change-review' }));
+    expect(tasks.updateTaskState).toHaveBeenCalledWith('task-judge', 'failed', { exitReason: 'ended without its verdict on the plan change. It said: “No design.”' });
+    expect(designerEnded).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-judge' }), 'ended without its verdict on the plan change. It said: “No design.”');
+    expect(onTaskDone).not.toHaveBeenCalled();
+  });
+
+  it('stays done when it gave one, and no other task is asked', async () => {
+    const { tasks } = await import('@openadlc/db');
+    expect((await post('/internal/tasks/task-judge/state', { state: 'done', reason: 'complete' })).status).toBe(200);
+    expect(tasks.updateTaskState).toHaveBeenCalledWith('task-judge', 'done', { exitReason: 'complete' });
+    expect(designerEnded).not.toHaveBeenCalled();
+
+    await post('/internal/tasks/task-1/state', { state: 'done', reason: 'complete' });
+    expect(missingVerdict).toHaveBeenCalledTimes(1);
   });
 });
 
