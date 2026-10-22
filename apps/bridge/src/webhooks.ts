@@ -69,7 +69,7 @@ import { retakeLease, SendBack } from './send-back.js';
 import { chooseIssueText, editNotTaken } from './vouched-text.js';
 import { workflowFile, type DeployPipeline, type RevertOutcome } from './deploy-pipeline.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
-import { BotBusyError, REVERT_BRANCH_PREFIX, type TaskService } from './task-service.js';
+import { BotBusyError, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, SubjectClosedError, type TaskService } from './task-service.js';
 import { FORBIDDEN_PUSH, ciKeysChanged, contentChanged, fastPathOf, forbiddenPushGate, reviewSample } from './automation.js';
 import { continuesBranch } from './build-left.js';
 import { DEPLOY_PATH_BRANCH_PREFIX, headInRepository, issueNumberFromBranch, issuesMergedBy, ownIssueOf, REVIEW_ROUND_OPENED, REVIEW_STALLED, scopeLabelAcceptedFrom } from './work.js';
@@ -2196,16 +2196,24 @@ export class Webhooks {
 
     if (!readyForReview || fork) return;
 
-    // GitHub is asked, not the payload, and once for the whole round. A
-    // delivery from before #40 merged, worked through twelve minutes after it,
-    // said open: its round requested reviewers, labelled who must review,
-    // published a gate, recorded a round and started a review on the deleted
-    // branch. A read that fails goes on, as `subjectClosed` answers.
+    // GitHub is asked, not the payload, once for the round's requests, labels
+    // and gate. A delivery from before #40 merged, worked through twelve
+    // minutes after it, said open: its round requested reviewers, labelled who
+    // must review, published a gate, recorded a round and started a review on
+    // the deleted branch. Each seat's start below reads it again: the round
+    // takes seconds, and #88 merged within them. A read that fails goes on, as
+    // `subjectClosed` answers.
     const closedNow = await asAutomation(this.automation['actors'], this.config)
       .then((client) => (client ? subjectClosed(client, repoFullName, pr.number) : false))
       .catch(() => false);
     if (closedNow) {
       console.log(`[bridge] ${repoFullName}#${pr.number} has closed since this delivery was sent; no review round is opened`);
+      await audit({
+        actor: 'bridge',
+        action: REVIEW_START_REFUSED,
+        target: `${repo.name}#${pr.number}`,
+        payload: { delivery: payload.action ?? null, why: 'GitHub says it is closed', readFrom: 'github' },
+      }).catch(() => undefined);
       return;
     }
 
@@ -2490,8 +2498,8 @@ export class Webhooks {
       () => undefined,
     );
     for (const reviewer of first.length > 0 ? first : [decision.lead]) {
-      await this.taskService
-        .open({
+      try {
+        await this.taskService.open({
           bot: reviewer,
           repo: repo.name,
           kind: 'review',
@@ -2503,10 +2511,13 @@ export class Webhooks {
           // change has to be reviewed against.
           issueNumber,
           checkoutExistingBranch: true,
-          // Read above, for every seat at once.
-          knownOpen: true,
-        })
-        .catch((error) => console.warn(`[bridge] review task for ${reviewer} not started: ${error.message}`));
+        });
+      } catch (error) {
+        // Merged or closed since the read above, which the start said and
+        // audited: no other seat is asked either.
+        if (error instanceof SubjectClosedError) break;
+        console.warn(`[bridge] review task for ${reviewer} not started: ${error instanceof Error ? error.message : error}`);
+      }
     }
   }
 

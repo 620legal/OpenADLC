@@ -1,4 +1,4 @@
-import { audit, bots, costs, hasEventOfType, health, hosts, lastEventAt, leases, recordEvent, repos, spendingLimits, tasks, threads } from '@openadlc/db';
+import { audit, bots, costs, hasEventOfType, health, hosts, lastEventAt, leases, recordEvent, repos, spendingLimits, tasks, threads, workItems } from '@openadlc/db';
 import { githubDidNotAnswer } from '@openadlc/github';
 import { attachmentsForTask } from './attachment-routes.js';
 import { botAtStart, headerFor, leaseExpiryFrom, maxTasksOf, resolveBotRef, type ContextDocument, type Task, type TaskKind } from '@openadlc/shared';
@@ -296,6 +296,25 @@ const UNQUEUED: BotQueue = { withBot: (_botId, fn) => fn() };
 /** Whether GitHub says an issue or pull request is closed; see `subjectClosed`. */
 export type SubjectClosed = (repoFullName: string, number: number) => Promise<boolean>;
 
+/** The audit action of a review not started because its pull request had merged or closed. */
+export const REVIEW_START_REFUSED = 'review.start_refused';
+
+/**
+ * What the bridge last recorded of a pull request on its work item: `merged`,
+ * `closed` or `open`, as each delivery about it wrote it (`linkPull`). Null
+ * with none — its repository's history not numbered yet — or none readable.
+ */
+async function recordedPullState(repoId: string, number: number): Promise<workItems.LinkState | null> {
+  try {
+    const item = await workItems.itemOf({ repoId, number });
+    if (!item) return null;
+    const link = (await workItems.linksOf(item.id)).find((one) => one.kind === 'pull' && one.repoId === repoId && one.number === number);
+    return link?.state ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * When a lease put back in task should expire if no pull request is linked to
  * it: as long from now as the dispatcher leases an issue for
@@ -398,6 +417,23 @@ export class TaskService {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Why a pull request's review is not to start, and where that was read; null
+   * while it is open, or when nothing can say. The bridge's own record first:
+   * a merge is for good, and the first thing its delivery does is write it on
+   * the pull request's work item (once the repository's history is numbered),
+   * so a start after that is refused without asking GitHub, and even when
+   * GitHub cannot be asked. A close is not for good: a reopen undoes it, and
+   * one whose write failed would leave the record refusing the review the
+   * reopen should start. So for anything short of a recorded merge, and where
+   * there is no record, GitHub is asked (`subjectIsClosed`).
+   */
+  private async reviewRefusal(repo: { id: string; fullName: string }, number: number): Promise<{ why: string; readFrom: 'record' | 'github' } | null> {
+    if ((await recordedPullState(repo.id, number)) === 'merged') return { why: 'the bridge recorded its merge', readFrom: 'record' };
+    if (await this.subjectIsClosed(repo.fullName, number)) return { why: 'GitHub says it is closed', readFrom: 'github' };
+    return null;
   }
 
   /**
@@ -811,8 +847,6 @@ export class TaskService {
     extraContext?: ContextDocument[];
     /** The branch a new branch starts from, as `refs/heads/<name>`; the default branch when absent. A stacked build's is the work it depends on. */
     baseRef?: string;
-    /** A review whose caller has just read from GitHub that its pull request is open, so it is not asked again for each seat. */
-    knownOpen?: boolean;
     /**
      * Told once the task's row exists, before its context is read and hostd
      * starts it, which takes seconds: the row is what takes a failed card off
@@ -874,14 +908,21 @@ export class TaskService {
     // refused it on every pass.
     const restart = this.restartPending();
     if (restart) return this.recordBlocked(found, repo, input, new RestartPendingError(found.name, restart).message);
-    // GitHub is asked, not the delivery: one from before #40 merged, worked
-    // through after it, said open, and its review started on a deleted branch.
-    // Every review is started through here, by a delivery, a review that came
-    // in after the merge, the gate sweep or the lead's turn. Asked once the
-    // seat and a host have room, so a busy seat the sweep comes back for costs
-    // no read, and not when the caller has just read it. A read that fails
-    // starts it, as a resume does (`subjectIsClosed`).
-    const reviewed = input.kind === 'review' && repo && !input.knownOpen ? parseRef(input.subjectRef) : null;
+    // Whether the pull request is still open is read here, not taken from the
+    // delivery: one from before #40 merged, worked through after it, said
+    // open, and its review started on a deleted branch. Every review is
+    // started through here, by a delivery, a review that came in after the
+    // merge, the gate sweep or the lead's turn, and each start reads it just
+    // before its row, whatever its caller read before. #88's round read open
+    // at its top and told its start so; #88 merged while the round asked
+    // reviewers, labelled and set its gate, and seven seconds after the merge
+    // the round started the lead's review of what had landed. The merge's
+    // delivery, handled in between, had found no review to stop. Read once
+    // the seat and a host have room, so a busy seat the sweep comes back for
+    // costs no read. A read of GitHub that fails starts it, as a resume does
+    // (`subjectIsClosed`), unless the bridge has recorded the merge itself
+    // (`reviewRefusal`).
+    const reviewed = input.kind === 'review' && repo ? parseRef(input.subjectRef) : null;
     const opened = await this.names.withBot(found.id, async () => {
       // Read again: a rename this waited for has given the bot another name.
       const bot = (await bots.getBotById(found.id)) ?? found;
@@ -891,8 +932,15 @@ export class TaskService {
       if (!(await tasks.seatHasRoom(bot.id))) throw new BotBusyError(bot.name, maxTasksOf(bot));
       const room = await hosts.taskRoom();
       if (room !== null && room <= 0) throw new HostFullError(bot.name);
-      if (reviewed && repo && (await this.subjectIsClosed(repo.fullName, reviewed.number))) {
+      const refused = reviewed && repo ? await this.reviewRefusal(repo, reviewed.number) : null;
+      if (refused) {
         console.log(`[bridge] ${input.subjectRef} is closed; ${bot.name}'s review of it is not started`);
+        await audit({
+          actor: 'bridge',
+          action: REVIEW_START_REFUSED,
+          target: input.subjectRef,
+          payload: { seat: bot.name, why: refused.why, readFrom: refused.readFrom },
+        }).catch((error: unknown) => console.warn(`[bridge] could not audit the review not started: ${error instanceof Error ? error.message : error}`));
         throw new SubjectClosedError(input.subjectRef);
       }
       // Again, last, with nothing awaited between this and the row: a restart
