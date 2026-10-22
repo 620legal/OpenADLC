@@ -23,3 +23,4 @@ only where it changed a decision the table already had (0003, from D5 and D12;
 - [0006](0006-abandoned-is-a-label.md): an issue closed without merging is Done, labelled `openadlc:abandoned`, and not shipped
 - [0007](0007-self-update-follows-verified-releases.md): self-update takes only verified releases, prepared beside the install, and the checkout stays the install
 - [0008](0008-a-close-stops-the-tasks-paused-on-it.md): a close stops every task paused on the issue or its pull request, at the close only, and a person's Stop ends a task waiting on a question
+- [0009](0009-work-items.md): every issue, pull request and request gets a work item number of the install's own, never reused, numbered in opened order from history and linked automatically
