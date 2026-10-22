@@ -1,4 +1,5 @@
-import { query, queryOne } from '../client.js';
+import { query, queryOne, withTransaction } from '../client.js';
+import { ensureLink, requestTitle } from './work-items.js';
 
 export interface RequestRecord {
   id: string;
@@ -78,13 +79,27 @@ export async function createRequest(input: {
   // The id is the column's default, so the same insert again draws a fresh one.
   for (let attempt = 1; ; attempt += 1) {
     try {
-      const row = await queryOne<RequestRow>(
-        `insert into requests (text, context, repo_id, kind, requested_by, state)
-         values ($1,$2,$3,$4,$5,$6)
-         returning ${COLUMNS}`,
-        [input.text, input.context, input.repoId, input.kind, input.requestedBy, input.state ?? 'draft'],
-      );
-      if (!row) throw new Error('failed to create request');
+      // Its work item in the same transaction, so a request is never seen
+      // without its number once numbering has begun; before then the history
+      // numbering gives it one (`numberPending`).
+      const row = await withTransaction(async (client) => {
+        const inserted = (
+          await client.query<RequestRow>(
+            `insert into requests (text, context, repo_id, kind, requested_by, state)
+             values ($1,$2,$3,$4,$5,$6)
+             returning ${COLUMNS}`,
+            [input.text, input.context, input.repoId, input.kind, input.requestedBy, input.state ?? 'draft'],
+          )
+        ).rows[0];
+        if (!inserted) throw new Error('failed to create request');
+        await ensureLink(
+          { requestId: inserted.id },
+          { title: requestTitle(inserted.text), state: 'open', url: null, openedAt: inserted.created_at.toISOString() },
+          null,
+          client,
+        );
+        return inserted;
+      });
       return toRequest(row);
     } catch (error) {
       if (attempt >= ID8_ATTEMPTS || !sharesId8(error)) throw error;
@@ -178,6 +193,10 @@ export async function updateRequest(
      returning ${COLUMNS}`,
     [id, patch.state ?? null, patch.issueNumber ?? null, patch.repoId ?? null],
   );
+  // An abandoned request's work item shows it closed.
+  if (row && patch.state === 'abandoned') {
+    await query(`update work_item_links set state = 'closed', seen_at = now() where request_id = $1`, [id]);
+  }
   return row ? toRequest(row) : null;
 }
 
