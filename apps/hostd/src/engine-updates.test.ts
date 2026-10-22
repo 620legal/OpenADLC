@@ -10,6 +10,7 @@ vi.mock('@openadlc/db', () => ({
 }));
 
 import {
+  ANSWER_MAX,
   EngineUpdateRefused,
   EngineUpdater,
   ENGINES_LABEL,
@@ -23,8 +24,10 @@ import {
   planUpdate,
   presentCredential,
   readEnginesLabel,
+  runCommand,
   type CandidateCredential,
   type CommandResult,
+  type CommandRunner,
   type CrewBot,
   type EngineUpdaterOptions,
 } from './engine-updates.js';
@@ -80,7 +83,11 @@ class World {
   nodeIndex = '[{"version":"v22.20.0"},{"version":"v22.19.0"}]';
   /** The gh apt repository's index, which lists only its newest package. */
   ghPackages = 'Package: gh\nVersion: 2.79.0\nArchitecture: amd64\nFilename: pool/main/g/gh/gh_2.79.0_amd64.deb\n';
+  /** What curl answers for nodejs.org or the gh index instead of `nodeIndex` and `ghPackages`. */
+  curlAnswers: Partial<Record<'node' | 'gh', CommandResult>> = {};
   npmFails = false;
+  /** What npm answers for a package instead of the answer made up from `npm` and `npmTimes`. */
+  npmAnswers: Record<string, CommandResult> = {};
   /** When npm says each version was published; any version not named here is years old. */
   npmTimes: Record<string, Record<string, string>> = {};
   buildFails = false;
@@ -111,14 +118,16 @@ class World {
 
     if (command === 'curl') {
       const url = args.at(-1) ?? '';
-      if (url.includes('nodejs.org')) return ok(`${this.nodeIndex}\n`);
-      if (url.startsWith('https://cli.github.com/packages/dists/stable/main/binary-')) return ok(`${this.ghPackages}\n`);
+      if (url.includes('nodejs.org')) return this.curlAnswers.node ?? ok(`${this.nodeIndex}\n`);
+      if (url.startsWith('https://cli.github.com/packages/dists/stable/main/binary-')) return this.curlAnswers.gh ?? ok(`${this.ghPackages}\n`);
       return no(`curl ${url}: not faked`);
     }
 
     if (command === 'npm') {
       if (this.npmFails) return { code: 1, stdout: '', stderr: 'npm error network request failed, reason: getaddrinfo ENOTFOUND registry.npmjs.org' };
       const pkg = args[1] ?? '';
+      const answer = this.npmAnswers[pkg];
+      if (answer) return answer;
       const latest = this.npm[pkg] ?? '';
       if (!args.includes('--json')) return ok(`${latest}\n`);
       const times = { created: '2019-01-01T00:00:00.000Z', modified: '2026-09-27T00:00:00.000Z', [latest]: '2020-01-01T00:00:00.000Z', ...this.npmTimes[pkg] };
@@ -497,17 +506,24 @@ describe('a run with a release younger than the minimum age', () => {
     expect(world.calls.find((call) => call.command === 'bash')?.env).toMatchObject({ CODEX_CLI: '@openai/codex@0.156.1' });
   });
 
-  it('fails, rather than taking the newest unchecked, when npm does not say when it was published', async () => {
+  it('leaves it where it is, rather than taking the newest unchecked, when npm does not say when it was published', async () => {
     const { world } = pinnedHost();
     world.npm[CODEX] = '0.156.1';
     world.npmTimes[CODEX] = { '0.156.1': 'not a date' };
+    world.npm[CLAUDE] = '2.1.290';
     const { service } = updater(world);
 
     const result = await service.updateAndWait({ trigger: 'schedule' });
 
-    expect(result.state).toBe('failed');
-    expect(result.reason).toContain('could not read when npm published @openai/codex 0.156.1');
-    expect(world.calls.some((call) => call.command === 'bash')).toBe(false);
+    expect(result.state).toBe('updated');
+    expect(world.calls.find((call) => call.command === 'bash')?.env).toMatchObject({
+      CLAUDE_CLI: '@anthropic-ai/claude-code@2.1.290',
+      CODEX_CLI: '@openai/codex@0.155.1',
+    });
+    expect(result.unchecked).toEqual({
+      [CODEX]: 'could not read when npm published @openai/codex 0.156.1, so it is not taken without its minimum release age',
+    });
+    expect(result.reason).toContain('codex was not checked: could not read when npm published @openai/codex 0.156.1');
   });
 });
 
@@ -932,6 +948,9 @@ describe('where there is nothing to update', () => {
 
     expect(result.state).toBe('failed');
     expect(result.reason).toMatch(/^could not ask npm which @anthropic-ai\/claude-code is newest: .*ENOTFOUND/s);
+    // Each tool's row says its own.
+    expect(Object.keys(result.unchecked ?? {})).toEqual([CLAUDE, CODEX, GROK]);
+    expect(result.unchecked?.[GROK]).toMatch(/^could not ask npm which @xai-official\/grok is newest: .*ENOTFOUND/s);
     expect(world.tags.get('openadlc-bot:latest')).toBe(latest);
   });
 
@@ -943,6 +962,225 @@ describe('where there is nothing to update', () => {
     const result = await service.updateAndWait({ trigger: 'schedule', hold: { [CLAUDE]: '2.1.290' } });
 
     expect(result).toMatchObject({ state: 'current', reason: 'nothing newer to take: claude-code 2.1.290 is held back after a rollback' });
+  });
+});
+
+// ------------------------------------------------------------------ lookups
+
+/**
+ * npm's answer about @openai/codex in the shape it had on 2026-10-22, when it
+ * was 337 KB: `dist-tags` first, then a publish time for each version, most
+ * of them per-platform alphas.
+ */
+function codexAnswer(latest: string, published: string): string {
+  const platforms = ['linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64', 'win32-x64'];
+  const time: Record<string, string> = { created: '2025-04-16T00:00:00.000Z', modified: '2026-10-22T02:11:09.000Z' };
+  for (let minor = 100; minor < 160; minor += 1) {
+    for (let alpha = 1; alpha <= 18; alpha += 1) {
+      for (const platform of platforms) time[`0.${minor}.0-alpha.${alpha}-${platform}`] = '2026-01-01T00:00:00.000Z';
+    }
+  }
+  time[latest] = published;
+  const tags = { latest, beta: '0.1.2505172116', 'release-0.159.0-alpha.12-linux-x64': '0.159.0-alpha.12-linux-x64' };
+  return `${JSON.stringify({ 'dist-tags': tags, time }, null, 2)}\n`;
+}
+
+/** What hostd kept of that answer: its last 256 KB, which start in the middle of `time`. */
+const CODEX_TAIL =
+  '-alpha.12-linux-x64": "2026-10-21T19:04:11.000Z",\n  "0.159.0-alpha.12-darwin-arm64": "2026-10-21T19:04:12.000Z",\n  "modified": "2026-10-22T02:11:09.000Z"\n }\n}\n';
+
+describe('what a command’s output keeps', () => {
+  const print = (script: string, options: Parameters<CommandRunner>[2] = {}) => runCommand(process.execPath, ['-e', script], options);
+
+  it('is the end of a log, and the whole of an answer from its start, cut only past ANSWER_MAX', async () => {
+    const log = await print('process.stdout.write("x".repeat(300 * 1024) + "END")');
+    expect(log.stdout).toHaveLength(256 * 1024);
+    expect(log.stdout.endsWith('END')).toBe(true);
+
+    const answer = await print('process.stdout.write("START" + "x".repeat(300 * 1024))', { answer: true });
+    expect(answer.stdout).toHaveLength(5 + 300 * 1024);
+    expect(answer.stdout.startsWith('START')).toBe(true);
+    expect(answer.cut).toBeUndefined();
+
+    // A command that would go on printing, or hang, past the cut is stopped there, not at its timeout.
+    const started = Date.now();
+    const huge = await print(`process.stdout.write("START" + "x".repeat(${ANSWER_MAX + 1024 * 1024})); setInterval(() => {}, 1000)`, {
+      answer: true,
+      timeoutMs: 60_000,
+    });
+    expect(huge.cut).toBe(true);
+    expect(huge.code).not.toBe(0);
+    expect(Date.now() - started).toBeLessThan(4_000);
+    expect(huge.stdout.startsWith('START')).toBe(true);
+    expect(huge.stdout).toHaveLength(ANSWER_MAX);
+  });
+});
+
+describe('a tool’s newest version', () => {
+  it('is read however long npm’s answer is: past 256 KB, dist-tags first, as Codex’s was on 2026-10-22', async () => {
+    const { world } = pinnedHost();
+    const answer = codexAnswer('0.156.1', '2026-09-20T00:00:00.000Z');
+    expect(Buffer.byteLength(answer)).toBeGreaterThan(256 * 1024);
+    const file = join(scratch, 'codex.json');
+    writeFileSync(file, answer);
+    // npm, as far as hostd can tell: a process whose stdout is that answer, read by the real runner.
+    const run: CommandRunner = (command, args, options) =>
+      command === 'npm' && args[1] === CODEX
+        ? runCommand(process.execPath, ['-e', 'process.stdout.write(require("node:fs").readFileSync(process.argv[1]))', file], options)
+        : world.run(command, args, options);
+    const { service } = updater(world, { run });
+
+    const result = await service.updateAndWait({ trigger: 'schedule' });
+
+    expect(result.state).toBe('updated');
+    expect(result.latest?.[CODEX]).toBe('0.156.1');
+    expect(result.unchecked).toBeUndefined();
+    expect(world.calls.find((call) => call.command === 'bash')?.env).toMatchObject({ CODEX_CLI: '@openai/codex@0.156.1' });
+  });
+
+  it('stays at the version in use when it cannot be read, while the others update, and the run says so', async () => {
+    const { world } = pinnedHost();
+    world.npm[CLAUDE] = '2.1.290';
+    world.npmAnswers[CODEX] = { code: 0, stdout: CODEX_TAIL, stderr: '' };
+    const { service } = updater(world);
+
+    const result = await service.updateAndWait({ trigger: 'schedule' });
+
+    expect(result.state).toBe('updated');
+    expect(world.calls.find((call) => call.command === 'bash')?.env).toMatchObject({
+      CLAUDE_CLI: '@anthropic-ai/claude-code@2.1.290',
+      CODEX_CLI: '@openai/codex@0.155.1',
+      GROK_CLI: '@xai-official/grok@1.0.41',
+    });
+    expect(result.to).toEqual({ ...PINS, [CLAUDE]: '2.1.290' });
+    expect(result.latest).toEqual({ [CLAUDE]: '2.1.290', [GROK]: '1.0.41' });
+    expect(Object.keys(result.unchecked ?? {})).toEqual([CODEX]);
+    const why = result.unchecked?.[CODEX] ?? '';
+    expect(why).toMatch(/^could not read npm's answer about @openai\/codex \(\d+ bytes\) as JSON: /);
+    expect(result.reason).toBe(`claude-code 2.1.282 → 2.1.290; codex was not checked: ${why}`);
+    expect(world.tags.has('openadlc-bot:candidate')).toBe(false);
+  });
+
+  it('leaves the run current when nothing else is newer, saying it was not checked', async () => {
+    const { world, latest } = pinnedHost();
+    world.npmAnswers[CODEX] = { code: 0, stdout: CODEX_TAIL, stderr: '' };
+    const { service } = updater(world);
+
+    const result = await service.updateAndWait({ trigger: 'schedule' });
+
+    expect(result.state).toBe('current');
+    expect(result.reason).toBe(`claude-code, grok are already the newest version; codex was not checked: ${result.unchecked?.[CODEX]}`);
+    expect(world.calls.some((call) => call.command === 'bash')).toBe(false);
+    expect(world.tags.get('openadlc-bot:latest')).toBe(latest);
+  });
+
+  it('builds nothing when the image does not say which version it has either, since no candidate could keep it', async () => {
+    // The build script would stop on `@openai/codex@` ("is not pinned to a
+    // version"); the run stops before building, and says which and why.
+    const world = new World();
+    const id = world.image(PINS, false);
+    delete (world.images.get(id) as Image).says.codex;
+    world.tags.set('openadlc-bot:latest', id);
+    world.npm[CLAUDE] = '2.1.290';
+    world.npmAnswers[CODEX] = { code: 0, stdout: CODEX_TAIL, stderr: '' };
+    const { service } = updater(world);
+
+    const result = await service.updateAndWait({ trigger: 'schedule' });
+
+    expect(result.state).toBe('failed');
+    expect(result.reason).toMatch(/^nothing was built: the image does not say which codex it has, /);
+    expect(result.reason).toContain(`codex was not checked: ${result.unchecked?.[CODEX]}`);
+    expect(world.calls.some((call) => call.command === 'bash')).toBe(false);
+  });
+
+  it('that cannot be read says which tool, which source and how big the answer was, and never what it said', async () => {
+    const answers: { only: string[]; set: (world: World) => void; says: RegExp; never: string[] }[] = [
+      {
+        only: [CODEX],
+        set: (world) => void (world.npmAnswers[CODEX] = { code: 0, stdout: CODEX_TAIL, stderr: '' }),
+        says: /^could not read npm's answer about @openai\/codex \(\d+ bytes\) as JSON: No number after minus sign in JSON at position 1\b/,
+        never: ['2026-10-21', 'modified', 'alpha'],
+      },
+      {
+        // npm --json prints its error as JSON on stdout, beside its words on stderr.
+        only: [CODEX],
+        set: (world) =>
+          void (world.npmAnswers[CODEX] = {
+            code: 1,
+            stdout: JSON.stringify({
+              error: {
+                code: 'E404',
+                summary: 'Not Found - GET https://registry.npmjs.org/@openai%2fcodex - Not found',
+                detail: "The requested resource '@openai/codex@*' could not be found or you do not have permission to access it.",
+              },
+            }),
+            stderr: 'npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/@openai%2fcodex - Not found\n',
+          }),
+        says: /^could not ask npm which @openai\/codex is newest: Not Found - GET https:\/\/registry\.npmjs\.org\/@openai%2fcodex - Not found$/,
+        never: ['requested resource', 'E404'],
+      },
+      {
+        // A captive portal or a proxy's refusal, answered with 200.
+        only: ['node'],
+        set: (world) => void (world.nodeIndex = '<!doctype html><html><body>{"blocked": "nodejs.org"}</body></html>'),
+        says: /^could not read nodejs\.org's index of Node releases \(\d+ bytes\) as JSON: Unexpected token '<'$/,
+        never: ['doctype', 'blocked', 'body'],
+      },
+      {
+        only: ['gh'],
+        set: (world) => void (world.ghPackages = '{"message": "Not Found", "documentation_url": "https://docs.github.com"}'),
+        says: /^the GitHub CLI's apt repository's package index \(\d+ bytes\) lists no gh package$/,
+        never: ['message', 'documentation_url'],
+      },
+    ];
+
+    for (const answer of answers) {
+      const { world } = pinnedHost();
+      answer.set(world);
+      const { service } = updater(world);
+
+      const result = await service.updateAndWait({ trigger: 'console', only: answer.only });
+
+      expect(result.state).toBe('failed');
+      expect(result.reason).toMatch(answer.says);
+      expect(result.reason).not.toMatch(/[{}"]/);
+      for (const words of answer.never) expect(result.reason).not.toContain(words);
+    }
+  });
+
+  it('that ran past ANSWER_MAX is not read at all, though its start might parse, and the stopped command is not blamed', async () => {
+    // What the runner hands back once it has stopped a command at the cut:
+    // the start of the answer, and the exit code of a killed process.
+    const cut = (stdout: string): CommandResult => ({ code: 1, stdout, stderr: '', cut: true });
+    const answers: { only: string[]; set: (world: World) => void; says: string }[] = [
+      {
+        only: [CODEX],
+        set: (world) => void (world.npmAnswers[CODEX] = cut(codexAnswer('0.156.1', '2026-09-20T00:00:00.000Z'))),
+        says: "could not read npm's answer about @openai/codex: it is over the 8 MB hostd reads",
+      },
+      {
+        only: ['node'],
+        set: (world) => void (world.curlAnswers.node = cut('[{"version":"v22.20.0","lts":"Jod"}]')),
+        says: "could not read nodejs.org's index of Node releases: it is over the 8 MB hostd reads",
+      },
+      {
+        // A Packages index is read line by line: its start alone names a gh to install.
+        only: ['gh'],
+        set: (world) => void (world.curlAnswers.gh = cut('Package: gh\nVersion: 2.79.0\nArchitecture: amd64\n')),
+        says: "could not read the GitHub CLI's apt repository's package index: it is over the 8 MB hostd reads",
+      },
+    ];
+
+    for (const answer of answers) {
+      const { world } = pinnedHost();
+      answer.set(world);
+      const { service } = updater(world);
+
+      const result = await service.updateAndWait({ trigger: 'console', only: answer.only });
+
+      expect(result).toMatchObject({ state: 'failed', reason: answer.says });
+      expect(world.calls.some((call) => call.command === 'bash')).toBe(false);
+    }
   });
 });
 

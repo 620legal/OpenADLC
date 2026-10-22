@@ -145,6 +145,23 @@ export interface EngineUpdateResult {
   refreshed?: string[];
   /** Bots that were working, and take the new image at their next task start. */
   deferred?: string[];
+  /**
+   * Tools whose newest version could not be read, by package, with why in a
+   * person's words. Each stayed at the version in use and the run went on
+   * without it; `reason` ends with an `uncheckedNote` for each.
+   */
+  unchecked?: Record<string, string>;
+}
+
+/**
+ * What a run's reason says of a tool whose newest version could not be read:
+ * `codex was not checked: …`. hostd ends the reason with one per tool, and the
+ * bridge takes them out again for the rows of the tools that were checked.
+ * One tool's failed lookup used to fail the whole run, and on 2026-10-22
+ * Codex's error was every row's in Settings → System.
+ */
+export function uncheckedNote(pkg: string, reason: string): string {
+  return `${pkg.slice(pkg.lastIndexOf('/') + 1)} was not checked: ${reason}`;
 }
 
 /** What hostd says about the engines it runs, and the update it may be running. */
