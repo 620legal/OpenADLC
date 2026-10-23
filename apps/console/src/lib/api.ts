@@ -990,6 +990,32 @@ export interface TaskPostgresView {
   env: string;
 }
 
+/**
+ * One server the repository's Compose file starts, as the form is filled with
+ * it (`packages/shared/src/task-postgres-compose.ts`); nothing of it is saved
+ * until a person presses Save.
+ */
+export interface TaskPostgresComposeServer {
+  /** The Compose service it is. */
+  service: string;
+  /** The host side of its port mapping; null when the file publishes none. */
+  port: number | null;
+  superuser: string;
+  password: string;
+  database: string;
+  /** As the file writes it: a digest only where the file pins one. */
+  image: string;
+  /** What was taken as a default, or is still to be given, by the field it is about (null for the server). */
+  notes: { field: keyof TaskPostgresServer | null; text: string }[];
+  /** What Save would say of its image, outside the allowlist; null when allowed. */
+  refusal: string | null;
+}
+
+/** What the repository's Compose file on its default branch would fill the form with (`GET /v1/repos/:name/task-postgres/compose`, an admin's). */
+export type TaskPostgresCompose =
+  | { ok: true; file: string; branch: string; servers: TaskPostgresComposeServer[]; notes: string[] }
+  | { ok: false; file: string | null; branch: string | null; why: string };
+
 /** How long settings waits for a section it could also leave to read its own. */
 export const SECTION_READ_MS = 1_500;
 

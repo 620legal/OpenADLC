@@ -1,7 +1,16 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { BRIDGE_URL, type DesignMemoryEntry, type RemovalChoices, type RemovalPreview, type RemovalReport, type TaskPostgresServer, type TaskPostgresView } from '@/lib/api';
+import {
+  BRIDGE_URL,
+  type DesignMemoryEntry,
+  type RemovalChoices,
+  type RemovalPreview,
+  type RemovalReport,
+  type TaskPostgresCompose,
+  type TaskPostgresServer,
+  type TaskPostgresView,
+} from '@/lib/api';
 import { stillFailing, type CheckState } from '@/lib/health-recheck';
 import type { RepoAccess } from '@/lib/crew-access';
 import { identityHeaders } from '@/lib/identity';
@@ -626,6 +635,19 @@ export async function saveTaskPostgres(
     return { ok: true, view };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'could not save' };
+  }
+}
+
+/**
+ * What the repository's Compose file on its default branch would fill its
+ * Postgres-for-its-tasks form with. A read: the bridge saves nothing from it.
+ */
+export async function readTaskPostgresCompose(repo: string): Promise<{ ok: boolean; error?: string; compose?: TaskPostgresCompose }> {
+  try {
+    const compose = await call<TaskPostgresCompose>(`/v1/repos/${encodeURIComponent(repo)}/task-postgres/compose`, 'GET');
+    return { ok: true, compose };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not read it' };
   }
 }
 
