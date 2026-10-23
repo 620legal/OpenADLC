@@ -496,6 +496,45 @@ describe('the delivery rules, in words', () => {
     expect(html).toContain('Merging ships it: deploy-testing deploys nothing here (deploy-testing run 39836758586 was skipped), so a merge goes to Done.');
     expect(html).not.toContain('This repository has a testing deploy.');
   });
+
+  // On a scratch install GitHub was not asked whether the workflow exists, and
+  // the page said "Could not tell whether a deploy-testing workflow exists."
+  // right above "Merging ships it: deploy-testing deploys nothing here…".
+  it('says one thing about the deploy when GitHub did not say whether the workflow exists but its newest testing deploy deployed nothing', async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root: Root = createRoot(container);
+    try {
+      await act(async () => {
+        root.render(
+          <RepoSettings
+            repo={{
+              ...REPO,
+              shipsByMerging: null,
+              deploysNothing: 'deploy-testing run 39836758586 was skipped',
+              delivery: { source: 'file', rules, testingUrl: null, fileError: null },
+            }}
+            owner={BUILDER}
+            builders={1}
+            reviewers={3}
+            maxReviewRounds={3}
+          />,
+        );
+      });
+      const section = container.querySelector<HTMLElement>('section[aria-labelledby="openadlc-testbed-deploy"]')!;
+      const lines = [...section.querySelectorAll('p')].map((line) => line.textContent ?? '');
+      expect(lines.slice(0, 2)).toEqual([
+        'This repository has a deploy-testing workflow, and it deploys nothing here. Merging ships it.',
+        'Merging ships it: deploy-testing deploys nothing here (deploy-testing run 39836758586 was skipped), so a merge goes to Done. Once it deploys:',
+      ]);
+      expect(section.textContent).not.toContain('Could not tell');
+      expect(section.textContent).not.toContain('This repository has a testing deploy.');
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
 });
 
 describe('saving a repository’s settings while other saves are in flight', () => {

@@ -661,8 +661,10 @@ back. A crew account that moves a stage label back is put back.
   merges two items (`POST /v1/items/:subject/merge`); each is audited
   (`item.linked`, `item.unlinked`, `item.merged`), and no automatic pass
   moves a link a person made. Every control on an item, these and pause,
-  next and cancel, is audited under the item's key, with the subjects it
-  acted on in the payload (`subjects`).
+  next and cancel, and approve all, asking the designer and a refusal after
+  the fact on its plan changes, is audited under the item's key, with the
+  subjects it acted on in the payload (`subjects`); pause, resume, next and
+  cancel answer with the key as `item`.
 - **The board reads the issues it can show**, numbered or not: those not in
   Done, and those in Done whose row changed in the week Done shows
   (`boardIssues`, indexed by migration 0151), and of the tasks only theirs

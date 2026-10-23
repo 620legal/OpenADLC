@@ -78,9 +78,10 @@ vi.mock('@openadlc/db', () => ({
   },
   // No pull request has a record of its own unless a test gives it one.
   workItems: { itemOf: vi.fn(async () => null), linksOf: vi.fn(async () => []) },
+  withAdvisoryLock: vi.fn(async (_key: string, fn: () => Promise<unknown>) => fn()),
 }));
 
-import { audit, costs, hosts, leases, recordEvent, repos, spendingLimits, tasks, threads, workItems } from '@openadlc/db';
+import { audit, costs, hosts, leases, recordEvent, repos, spendingLimits, tasks, threads, withAdvisoryLock, workItems } from '@openadlc/db';
 import type { BridgeConfig } from './config.js';
 import type { Context } from './context.js';
 import type { HostdClient } from './hostd-client.js';
@@ -549,6 +550,53 @@ describe('a review of a pull request that has closed', () => {
       await tasksService.open(REVIEW);
 
       expect(startTask).toHaveBeenCalledWith(expect.objectContaining({ kind: 'review', subjectRef: 'openadlc#40' }));
+    }
+  });
+
+  it('is read and recorded under the pull request’s lock, which the merge’s stop of its reviews takes, and let go before hostd', async () => {
+    const order: string[] = [];
+    vi.mocked(withAdvisoryLock).mockImplementationOnce(async (key: string, fn: () => Promise<unknown>) => {
+      order.push(`take ${key}`);
+      try {
+        return (await fn()) as never;
+      } finally {
+        order.push(`let go of ${key}`);
+      }
+    });
+    vi.mocked(tasks.createTask).mockImplementationOnce(async (input: { botId: string }) => {
+      order.push('row');
+      return { id: 'task-2', ...input } as never;
+    });
+    const closed = vi.fn(async () => {
+      order.push('GitHub');
+      return false;
+    });
+    const { tasksService, startTask } = reviewing(closed);
+    startTask.mockImplementationOnce(async () => {
+      order.push('hostd');
+      return { session: 'reviewer/review', worktree: 'w' };
+    });
+
+    await tasksService.open(REVIEW);
+
+    expect(order).toEqual(['take review-start:openadlc#40', 'GitHub', 'row', 'let go of review-start:openadlc#40', 'hostd']);
+  });
+
+  it('is not handed to hostd once its row was stopped while its context was read, as a merge’s stop does', async () => {
+    const { tasksService, startTask } = reviewing(vi.fn(async () => false));
+    vi.mocked(tasks.getTask).mockResolvedValue({ id: 'task-2', state: 'stopped', exitReason: 'its pull request merged' } as never);
+    const quiet = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    try {
+      const opened = await tasksService.open(REVIEW);
+
+      expect(startTask).not.toHaveBeenCalled();
+      expect(opened).toEqual({ taskId: 'task-2', session: null, error: 'it was stopped before hostd was asked to start it: its pull request merged' });
+      expect(threads.addMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'pr-review was not started: it was stopped before hostd was asked to start it: its pull request merged' }),
+      );
+    } finally {
+      quiet.mockRestore();
     }
   });
 

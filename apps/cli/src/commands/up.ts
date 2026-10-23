@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -179,6 +180,132 @@ export async function publishedPostgresPort(
   return bindings[0]?.HostPort ?? '';
 }
 
+/** Runs `docker` with these arguments, and what it printed: `execFile` outside the tests. */
+export type DockerRun = (args: string[], options?: { env?: NodeJS.ProcessEnv }) => Promise<{ stdout: string }>;
+
+const runDocker: DockerRun = (args, options) => run('docker', args, { ...options, timeout: 15_000 });
+
+/**
+ * Where a container is configured to publish Postgres, and where it publishes
+ * it now: undefined when there is no such container.
+ *
+ * Two different things. `HostConfig.PortBindings` is what the container was
+ * created with, and it stays whether or not the container ever got the port;
+ * `NetworkSettings.Ports` is what Docker holds for it, nothing while it is
+ * stopped or when its start found the port taken. A scratch install's
+ * `scratch-db`, left by another run and configured for 57432, was read by its
+ * configuration as the server on 57432 while `openadlc-scratch-db` was the one
+ * answering there, and `up` changed that one's password (#111).
+ */
+export async function databaseContainerPorts(
+  name: string,
+  docker: DockerRun = runDocker,
+): Promise<{ configured: string; serving: string[] } | undefined> {
+  type Bindings = Record<string, PortBinding[] | null> | null;
+  let ports: { configured: Bindings; serving: Bindings };
+  try {
+    const { stdout } = await docker([
+      'inspect',
+      '--type',
+      'container',
+      '--format',
+      '{"configured":{{json .HostConfig.PortBindings}},"serving":{{json .NetworkSettings.Ports}}}',
+      name,
+    ]);
+    ports = JSON.parse(stdout.trim()) as typeof ports;
+  } catch {
+    return undefined;
+  }
+  const hostPorts = (bindings: Bindings) => (bindings?.['5432/tcp'] ?? []).map((binding) => binding.HostPort ?? '').filter(Boolean);
+  return { configured: hostPorts(ports.configured)[0] ?? '', serving: [...new Set(hostPorts(ports.serving))] };
+}
+
+/** The running containers that publish this host port, by name, as `docker ps` lists them. */
+export async function containersPublishing(port: number, docker: DockerRun = runDocker): Promise<string[]> {
+  try {
+    const { stdout } = await docker(['ps', '--format', '{{.Names}}\t{{.Ports}}']);
+    return stdout.split('\n').flatMap((line) => {
+      const [name = '', ports = ''] = line.trim().split('\t');
+      return name && ports.includes(`:${port}->`) ? [name] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+/** Which server a connection is on: the install's container, another one, or not known, and why. */
+export type SessionServer = { on: 'container' } | { on: 'elsewhere' } | { on: 'unknown'; reason: string };
+
+/**
+ * Whether the connection whose `application_name` is `marker` is on the
+ * container `name`: asked of the server inside it, through `docker exec`, never
+ * over the install's port, since what answers on the port is the question. A
+ * container whose server holds that connection is the server it reached;
+ * nothing else can have a session of that name.
+ *
+ * The password goes in the environment of `docker exec`, as a bare `-e`, so
+ * it is not in the host's process list. Connected to `postgres`, which every
+ * cluster has, because `pg_stat_activity` is the whole server's.
+ */
+export async function sessionServer(name: string, marker: string, databaseUrl: string, docker: DockerRun = runDocker): Promise<SessionServer> {
+  const credentials = databaseCredentials(databaseUrl);
+  if (!/^[a-z0-9-]+$/.test(marker) || !credentials) return { on: 'unknown', reason: 'the connection could not be named for it to look for' };
+  try {
+    const { stdout } = await docker(
+      [
+        'exec',
+        '-e',
+        'PGPASSWORD',
+        name,
+        'psql',
+        '-X',
+        '-A',
+        '-t',
+        '-U',
+        credentials.user || 'postgres',
+        '-d',
+        'postgres',
+        '-c',
+        `select count(*) from pg_stat_activity where application_name = '${marker}'`,
+      ],
+      { env: { ...process.env, PGPASSWORD: credentials.password } },
+    );
+    return Number(stdout.trim()) > 0 ? { on: 'container' } : { on: 'elsewhere' };
+  } catch (error) {
+    const said = stderrOf(error).split('\n').map((line) => line.trim()).find(Boolean) ?? 'docker exec failed and said nothing';
+    return { on: 'unknown', reason: credentials.password ? said.split(credentials.password).join('***') : said };
+  }
+}
+
+/** Thrown by `rotateDatabasePassword` when the server it reached is not shown to be the install's container. */
+export class DatabaseServerUnconfirmed extends Error {
+  constructor(readonly found: Exclude<SessionServer, { on: 'container' }>) {
+    super(found.on === 'unknown' ? found.reason : 'the server that answered is not the install’s container');
+  }
+}
+
+/**
+ * What `up` says, and stops on, when the server on the install's port is not
+ * the install's own container: which one answers, when Docker can say, and
+ * the two ways out, since only a person knows which of the two holds this
+ * install's data.
+ */
+export function databaseServerMismatch(
+  name: string,
+  port: number,
+  others: readonly string[],
+  why: string,
+): { fail: string; notes: string[] } {
+  const answering = others.length > 0 ? others.join(' and ') : 'another server';
+  return {
+    fail: `${why}: ${answering} answers there, so up stopped and changed no password`,
+    notes: [
+      `if ${name} holds this install's database: stop ${others.length > 0 ? answering : `whatever else listens on 127.0.0.1:${port}`}, then run openadlc up again`,
+      `if ${others.length > 0 ? answering : 'that server'} holds it instead: move ${name} aside, keeping its data (docker rename ${name} ${name}-old), then run openadlc up again`,
+    ],
+  };
+}
+
 /**
  * What the default install's database container was called under the names
  * before this one, newest first; docs/upgrading-from-fleet.md. Neither has a
@@ -228,8 +355,10 @@ export function addressesInstallDatabase(databaseUrl: string, port: number): boo
  *
  * - `generate`: nothing is listening and there is no container yet, so the one
  *   about to be created gets a password of the install's own.
- * - `rotate`: the install's own container answers to the published password,
- *   so the password is changed in place and the data stays where it is.
+ * - `rotate`: the install's own container publishes the port now, and what
+ *   answers there takes the published password, so the password is changed in
+ *   place and the data stays where it is. `rotateDatabasePassword` changes it
+ *   only once the container's own server holds the connection it made.
  *   `POSTGRES_PASSWORD` is read only when the image initialises an empty data
  *   directory, so recreating the container would be the only other way, and
  *   a container made before `databaseRunArgs` named its volume keeps its data
@@ -237,19 +366,23 @@ export function addressesInstallDatabase(databaseUrl: string, port: number): boo
  * - `keep`: anything else. A server that is not this install's container —
  *   `tests/scratch.sh`'s `openadlc-scratch-db`, which it starts itself with
  *   the published password and hands to the integration suites, or an external
- *   one — is never altered; `openadlc doctor` says what to do about it.
+ *   one — is never altered; `openadlc doctor` says what to do about it. Nor is
+ *   one that answers while the install's container is only configured for the
+ *   port: that is another container's server (#111).
  */
 export function databasePasswordStep(input: {
   databaseUrl: string;
   port: number;
-  /** The host port the install's container publishes; undefined when there is no container. */
+  /** The host port the install's container is configured to publish; undefined when there is no container. */
   published: string | undefined;
+  /** Whether that container publishes the port now, as Docker holds it, not only as it was configured. */
+  serving: boolean;
   /** What connecting with the url did: answered, found nothing listening, or anything else. */
   connection: 'answers' | 'nothing' | 'refused';
 }): 'generate' | 'rotate' | 'keep' {
   if (!hasPublishedDatabasePassword(input.databaseUrl)) return 'keep';
   if (!addressesInstallDatabase(input.databaseUrl, input.port)) return 'keep';
-  if (input.published === String(input.port)) return input.connection === 'answers' ? 'rotate' : 'keep';
+  if (input.published === String(input.port)) return input.connection === 'answers' && input.serving ? 'rotate' : 'keep';
   if (input.published === undefined && input.connection === 'nothing') return 'generate';
   return 'keep';
 }
@@ -314,11 +447,19 @@ interface DatabaseSession {
  * reason. The returned config carries the new url; `DATABASE_URL` is moved to
  * it when it held the old one, because this process's own pool reads it.
  * No error says the new password.
+ *
+ * Nothing is altered until `serverOf` finds the connection, by a name given
+ * to it here, on the install's container. Whatever answers on the port
+ * answers this connection, and a container configured for the port is not
+ * always what holds it: `up` changed the password of another install's
+ * database that way (#111). Throws `DatabaseServerUnconfirmed` when it is not.
  */
 export async function rotateDatabasePassword(
   config: InstallConfig,
   deps: {
     connect: (databaseUrl: string) => Promise<DatabaseSession>;
+    /** Which server holds the connection named `marker`: `sessionServer` for the install's container. */
+    serverOf: (marker: string) => Promise<SessionServer>;
     save: (config: InstallConfig) => unknown;
     env?: NodeJS.ProcessEnv;
   },
@@ -336,6 +477,10 @@ export async function rotateDatabasePassword(
   try {
     const session = await deps.connect(config.databaseUrl);
     try {
+      const marker = `openadlc-up-${randomBytes(8).toString('hex')}`;
+      await session.query(`set application_name to '${marker}'`);
+      const found = await deps.serverOf(marker);
+      if (found.on !== 'container') throw new DatabaseServerUnconfirmed(found);
       await session.query(alter(after.password));
       try {
         deps.save(next);
@@ -347,6 +492,7 @@ export async function rotateDatabasePassword(
       await session.end().catch(() => undefined);
     }
   } catch (error) {
+    if (error instanceof DatabaseServerUnconfirmed) throw error;
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(message.split(after.password).join('***'));
   }
@@ -362,6 +508,76 @@ export async function rotateDatabasePassword(
  */
 function adoptDatabaseUrl(previous: string, next: string, env: NodeJS.ProcessEnv = process.env): void {
   if (!env.DATABASE_URL || env.DATABASE_URL === previous) env.DATABASE_URL = next;
+}
+
+/**
+ * What `up` does once the install's database url answers, under Docker: goes
+ * on with it, gives the install's container a password of its own when it
+ * still takes the published one, or stops (null) when it does and what answers
+ * is not the container named `name`.
+ *
+ * The container is the install's by its name, and checked by what Docker
+ * holds for it now, never by the port it was configured with, which another
+ * container can share: `up` once took a stale `scratch-db` configured for
+ * 57432 for the server there, and changed the password of
+ * `openadlc-scratch-db`, which was the one answering (#111). The same on a
+ * machine with a real install would change the real database's password.
+ */
+export async function settleDatabase(
+  current: InstallConfig,
+  name: string,
+  deps: {
+    connect: (databaseUrl: string) => Promise<DatabaseSession>;
+    save: (config: InstallConfig) => unknown;
+    docker?: DockerRun;
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<InstallConfig | null> {
+  const docker = deps.docker ?? runDocker;
+  const port = current.ports.postgres;
+  // Held to this only when a password would be changed: a url with one of
+  // the install's own changes nothing, and what takes that password is this
+  // install's database whatever a stale container is configured for.
+  if (!hasPublishedDatabasePassword(current.databaseUrl) || !addressesInstallDatabase(current.databaseUrl, port)) return current;
+  const container = await databaseContainerPorts(name, docker);
+  const serving = container?.serving.includes(String(port)) ?? false;
+  const stop = async (why: string) => {
+    const said = databaseServerMismatch(name, port, (await containersPublishing(port, docker)).filter((other) => other !== name), why);
+    ui.fail(said.fail);
+    for (const note of said.notes) ui.note(note);
+    return null;
+  };
+
+  if (container?.configured === String(port) && !serving) {
+    return stop(`${name} is configured for port ${port} but does not publish it now`);
+  }
+
+  // An install from before each had a password of its own, on its own
+  // container, is given one once its database answers.
+  const step = databasePasswordStep({ databaseUrl: current.databaseUrl, port, published: container?.configured, serving, connection: 'answers' });
+  if (step !== 'rotate') return current;
+  try {
+    const rotated = await rotateDatabasePassword(current, {
+      connect: deps.connect,
+      serverOf: (marker) => sessionServer(name, marker, current.databaseUrl, docker),
+      save: deps.save,
+      env: deps.env,
+    });
+    ui.ok(`${name} has a password of this install’s own now, kept in ${configPath()}`);
+    return rotated;
+  } catch (error) {
+    if (error instanceof DatabaseServerUnconfirmed && error.found.on === 'elsewhere') {
+      return stop(`${name} publishes port ${port}, but the connection up made there is not on it`);
+    }
+    if (error instanceof DatabaseServerUnconfirmed) {
+      ui.warn(`${name} still takes the password published with OpenADLC: up could not ask it whether it is the server on port ${port} (${error.message})`);
+      ui.note(`anything that reaches its port can log in as its superuser; run \`openadlc up\` again once docker exec ${name} psql answers`);
+      return current;
+    }
+    ui.warn(`${name} still takes the password published with OpenADLC: ${error instanceof Error ? error.message : error}`);
+    ui.note('anything that reaches its port can log in as its superuser; run `openadlc up` again');
+    return current;
+  }
 }
 
 /**
@@ -389,33 +605,19 @@ async function ensureDatabase(config: InstallConfig): Promise<InstallConfig | nu
   const name = docker ? await existingDatabaseContainer(config) : databaseContainer();
   const published = docker ? await publishedPostgresPort(name) : undefined;
 
-  // An install from before each had a password of its own, on its own
-  // container, is given one once its database answers.
-  const settled = async (current: InstallConfig): Promise<InstallConfig> => {
-    const step = databasePasswordStep({
-      databaseUrl: current.databaseUrl,
-      port: current.ports.postgres,
-      published,
-      connection: 'answers',
-    });
-    if (step !== 'rotate') return current;
-    try {
-      const rotated = await rotateDatabasePassword(current, {
-        connect: async (databaseUrl) => {
-          const client = new Client({ connectionString: databaseUrl, connectionTimeoutMillis: 1500 });
-          await client.connect();
-          return client;
-        },
-        save: saveConfig,
-      });
-      ui.ok(`${name} has a password of this install’s own now, kept in ${configPath()}`);
-      return rotated;
-    } catch (error) {
-      ui.warn(`${name} still takes the password published with OpenADLC: ${error instanceof Error ? error.message : error}`);
-      ui.note('anything that reaches its port can log in as its superuser; run `openadlc up` again');
-      return current;
-    }
-  };
+  // Without Docker there is no container of the install's, and nothing to
+  // give a password of its own.
+  const settled = async (current: InstallConfig): Promise<InstallConfig | null> =>
+    docker
+      ? settleDatabase(current, name, {
+          connect: async (databaseUrl) => {
+            const client = new Client({ connectionString: databaseUrl, connectionTimeoutMillis: 1500 });
+            await client.connect();
+            return client;
+          },
+          save: saveConfig,
+        })
+      : current;
 
   let current = config;
   const first = await connect(current.databaseUrl);
@@ -447,7 +649,8 @@ async function ensureDatabase(config: InstallConfig): Promise<InstallConfig | nu
     } else {
       let container: { args: string[]; env: Record<string, string> };
       try {
-        const step = databasePasswordStep({ databaseUrl: current.databaseUrl, port: current.ports.postgres, published, connection: first });
+        // Nothing answers yet, so nothing is rotated here, whatever the container publishes.
+        const step = databasePasswordStep({ databaseUrl: current.databaseUrl, port: current.ports.postgres, published, serving: false, connection: first });
         // A daemon that is not running answers "no container" too. Generating
         // then would leave an older install's url with a password its container,
         // found once the daemon is back, has never had.

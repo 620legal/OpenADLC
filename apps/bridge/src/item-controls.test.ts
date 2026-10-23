@@ -130,6 +130,21 @@ describe('what the audit log files each control under', () => {
     await call(router, 'POST', at(ITEM.key, 'pause'));
     expect(entries(deps)).toEqual([{ action: 'item.paused', target: 'testbed#7', subjects: ['testbed#7', 'testbed#9'] }]);
   });
+
+  it('names the item in each answer, beside the subject it acted on, as linking and merging do', async () => {
+    // Cancel on W-4 answered `"subject": "scripted#44"` and nothing else of W-4.
+    const numbered: ControlledItem = { ...ITEM, itemKey: 'W-4' };
+    const { router } = world({ resolve: async (subject) => (subject === ITEM.key ? structuredClone(numbered) : null) });
+
+    expect((await call(router, 'POST', at(ITEM.key, 'pause'))).body).toMatchObject({ item: 'W-4', subject: 'testbed#7' });
+    expect((await call(router, 'POST', at(ITEM.key, 'resume'))).body).toMatchObject({ item: 'W-4', subject: 'testbed#7' });
+    expect((await call(router, 'POST', at(ITEM.key, 'next'))).body).toMatchObject({ item: 'W-4', subject: 'testbed#7' });
+    expect((await call(router, 'POST', at(ITEM.key, 'cancel'), { reason: 'not wanted after all' })).body).toMatchObject({ item: 'W-4', subject: 'testbed#7' });
+
+    // Before numbering it has no key, and its subject is the item.
+    const before = world();
+    expect((await call(before.router, 'POST', at(ITEM.key, 'cancel'), { reason: 'not wanted after all' })).body).toMatchObject({ item: 'testbed#7', subject: 'testbed#7' });
+  });
 });
 
 describe('holding one piece of work', () => {

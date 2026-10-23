@@ -72,8 +72,8 @@ export interface RunningTasks {
  * Ends, in the database, a running task whose session is gone: the row is
  * stopped (`stopIfRunning`, which keeps the reason of a person who killed it),
  * its lease is let go unless a pull request still holds it, and the stop is
- * audited with `how`. What hostd holds for it goes on the observer's next look
- * (`forgetFinishedTasks`).
+ * audited with `how`. What hostd holds for it is not touched here; whoever
+ * stopped it gives that back next (`forgetIfOver`).
  *
  * Null when the task was no longer running: whatever ended it first — its own
  * report, a kill, the observer — keeps that ending, and the lease is that
@@ -102,6 +102,35 @@ export async function stopForGoneSession(taskId: string, how: string): Promise<T
     payload: { reason: how, branch: stopped.branch },
   });
   return stopped;
+}
+
+/**
+ * Gives back what hostd still holds for a task the database has finished
+ * with: its place against the host's `OPENADLC_HOST_CAPACITY_TASKS`
+ * (`computersHeld`), its session and its computer, through `end`. True when
+ * something held was given back here.
+ *
+ * The database is the authority, not what hostd holds. An id with no row, or
+ * a row in a terminal state, is not running whatever hostd remembers. One the
+ * database could not be asked about is left held.
+ *
+ * The observer's look runs it for every task held (`forgetFinishedTasks`) and
+ * a kill for the task it stopped (`TaskRunner.stoppedByKill`), and either may
+ * be in the middle of it when the other starts. Whether the task is still held
+ * is asked after the lookup, which the other can overtake, and `end` lets go of
+ * its entry before it awaits anything, so only the first gives it back and
+ * says so.
+ */
+export async function forgetIfOver(runner: Pick<RunningTasks, 'activeTaskIds' | 'end'>, taskId: string): Promise<boolean> {
+  const lookup = await lookUp(taskId);
+  if (!isOver(lookup) || !runner.activeTaskIds().includes(taskId)) return false;
+
+  const why = lookup.kind === 'row' ? `the task is ${lookup.task.state}` : 'the task row is gone';
+  // `end` is what releases the worktree and the session too, which is the
+  // rest of what leaked.
+  await runner.end(taskId, why).catch(() => undefined);
+  console.log(`[hostd] released what was held for ${taskId}: ${why}`);
+  return true;
 }
 
 /** How often the reaper runs, in observer ticks: once a minute at the usual ten seconds. */
@@ -189,25 +218,12 @@ export class SessionObserver {
    * against the host's `OPENADLC_HOST_CAPACITY_TASKS`: a leaked one held a
    * place no task used, and once enough leaked, the host refused every start as
    * full until hostd restarted. The dispatcher counts the database's rows and
-   * did not notice.
-   *
-   * The database is the authority here, not this map. An id with no row, or a
-   * row in a terminal state, is not running whatever hostd remembers. One the
-   * database could not be asked about is left held.
+   * did not notice. What decides it is `forgetIfOver`.
    */
   private async forgetFinishedTasks(): Promise<void> {
     if (!this.runner) return;
 
-    for (const taskId of this.runner.activeTaskIds()) {
-      const lookup = await lookUp(taskId);
-      if (!isOver(lookup)) continue;
-
-      const why = lookup.kind === 'row' ? `the task is ${lookup.task.state}` : 'the task row is gone';
-      // `end` is what releases the worktree and the session too, which is the
-      // rest of what leaked.
-      await this.runner.end(taskId, why).catch(() => undefined);
-      console.log(`[hostd] released what was held for ${taskId}: ${why}`);
-    }
+    for (const taskId of this.runner.activeTaskIds()) await forgetIfOver(this.runner, taskId);
   }
 
   /**

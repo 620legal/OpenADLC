@@ -124,6 +124,7 @@ import { checkConsoleLogo, checkConsoleName, decodeLogo, LOGO_POLICY, logoMediaT
 import { defaultItemLinkDeps, registerItemLinkRoutes, registerItemRoutes } from './item-routes.js';
 import { itemKey, itemOf, offeredGate, requestSubject, resolveItem } from './items.js';
 import { PlanChanges, registerPlanChangeRoutes } from './plan-changes.js';
+import { humanReviewReader } from './human-review-read.js';
 import { readSeatPauses } from './seat-pause.js';
 import type { HealthAction } from '@openadlc/shared';
 import { attachmentIds, claimableFor, claimWindowStart, registerAttachmentRoutes } from './attachment-routes.js';
@@ -282,7 +283,7 @@ export function planChangesFor(deps: ApiDeps): PlanChanges {
       gates: deps.gates,
       taskService: deps.taskService,
       actors: deps.actors,
-      humanReviewRules: (repoFullName, baseRef) => deps.automation.humanReviewRules(repoFullName, baseRef),
+      humanReviewRules: humanReviewReader(deps.actors, deps.config),
       ...(deps.attribution ? { keyring: () => deps.attribution!.keyring() } : {}),
       stopTask: (taskId, actor, note) => stopTask(taskId, actor, note, deps.hostd, { unfinished: true }),
       answerAsPerson: (input) => answerFromConsole(deps, input),
