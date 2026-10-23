@@ -13,9 +13,13 @@ import {
   databaseName,
   databasePasswordStep,
   databaseRunArgs,
+  DatabaseServerUnconfirmed,
   dockerRunFailure,
   NO_CLIENT_ID_NOTE,
   rotateDatabasePassword,
+  settleDatabase,
+  type DockerRun,
+  type SessionServer,
 } from './up.js';
 
 const PUBLISHED_URL = 'postgres://openadlc:openadlc@127.0.0.1:47432/openadlc_db';
@@ -171,18 +175,27 @@ describe('the database container `openadlc up` creates', () => {
 
 describe('what `openadlc up` does about the published database password', () => {
   const step = (input: Partial<Parameters<typeof databasePasswordStep>[0]>) =>
-    databasePasswordStep({ databaseUrl: PUBLISHED_URL, port: 47432, published: undefined, connection: 'nothing', ...input });
+    databasePasswordStep({ databaseUrl: PUBLISHED_URL, port: 47432, published: undefined, serving: false, connection: 'nothing', ...input });
 
   it('generates one for a new install, before its container exists', () => {
     expect(step({})).toBe('generate');
   });
 
   it('rotates it on the install’s own container once it answers, so the data stays', () => {
-    expect(step({ published: '47432', connection: 'answers' })).toBe('rotate');
+    expect(step({ published: '47432', serving: true, connection: 'answers' })).toBe('rotate');
     // An install from before the rename: user and password both `fleet`, on fleet-db.
-    expect(step({ databaseUrl: 'postgres://fleet:fleet@127.0.0.1:47432/fleet_db', published: '47432', connection: 'answers' })).toBe('rotate');
+    expect(step({ databaseUrl: 'postgres://fleet:fleet@127.0.0.1:47432/fleet_db', published: '47432', serving: true, connection: 'answers' })).toBe('rotate');
     // Stopped: started first, then rotated.
     expect(step({ published: '47432', connection: 'nothing' })).toBe('keep');
+  });
+
+  // A stale `scratch-db`, configured for 57432, was taken for the server there
+  // while `openadlc-scratch-db` answered, and that one's password was changed.
+  it('leaves what answers alone while the install’s container is only configured for the port', () => {
+    expect(step({ published: '47432', serving: false, connection: 'answers' })).toBe('keep');
+    expect(
+      step({ databaseUrl: 'postgres://openadlc:openadlc@127.0.0.1:57432/openadlc_db', port: 57432, published: '57432', serving: false, connection: 'answers' }),
+    ).toBe('keep');
   });
 
   it('leaves a database it does not own alone', () => {
@@ -193,15 +206,15 @@ describe('what `openadlc up` does about the published database password', () => 
     expect(step({ connection: 'answers' })).toBe('keep');
     expect(step({ connection: 'refused' })).toBe('keep');
     // A container of this name on another port.
-    expect(step({ published: '5432', connection: 'answers' })).toBe('keep');
+    expect(step({ published: '5432', serving: true, connection: 'answers' })).toBe('keep');
     // An external server.
-    expect(step({ databaseUrl: 'postgres://openadlc:openadlc@db.internal:47432/openadlc_db', published: '47432', connection: 'answers' })).toBe('keep');
+    expect(step({ databaseUrl: 'postgres://openadlc:openadlc@db.internal:47432/openadlc_db', published: '47432', serving: true, connection: 'answers' })).toBe('keep');
   });
 
   it('does nothing to a password the install already has', () => {
     const databaseUrl = `postgres://openadlc:${OWN_PASSWORD}@127.0.0.1:47432/openadlc_db`;
     expect(step({ databaseUrl })).toBe('keep');
-    expect(step({ databaseUrl, published: '47432', connection: 'answers' })).toBe('keep');
+    expect(step({ databaseUrl, published: '47432', serving: true, connection: 'answers' })).toBe('keep');
   });
 
   it('counts loopback on the install’s port as its own address, and nothing else', () => {
@@ -215,19 +228,23 @@ describe('what `openadlc up` does about the published database password', () => 
 });
 
 describe('rotating an older install’s database password', () => {
-  function fake(options: { failSave?: boolean; failAlter?: boolean } = {}) {
+  function fake(options: { failSave?: boolean; failAlter?: boolean; server?: SessionServer } = {}) {
     const events: string[] = [];
     const saved: InstallConfig[] = [];
     return {
       events,
       saved,
       deps: {
+        serverOf: async (marker: string) => {
+          events.push(`ask the container for ${marker}`);
+          return options.server ?? { on: 'container' as const };
+        },
         connect: async (url: string) => {
           events.push(`connect ${url}`);
           return {
             query: async (text: string) => {
               events.push(text);
-              if (options.failAlter) throw new Error(`syntax error at or near "${text}"`);
+              if (options.failAlter && text.startsWith('alter')) throw new Error(`syntax error at or near "${text}"`);
             },
             end: async () => {
               events.push('end');
@@ -251,12 +268,12 @@ describe('rotating an older install’s database password', () => {
     const next = await rotateDatabasePassword(config, { ...deps, env: {} });
 
     const password = new URL(next.databaseUrl).password;
-    expect(events[1]).toBe(`alter role "fleet" password '${password}'`);
+    expect(events[3]).toBe(`alter role "fleet" password '${password}'`);
     expect(new URL(next.databaseUrl).username).toBe('fleet');
     expect(password).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('alters the role over the old url, saves the new url straight after, and hands it on', async () => {
+  it('alters the role over the old url, once the container holds that connection, saves the new url straight after, and hands it on', async () => {
     const config = defaultConfig('/repo');
     const env: NodeJS.ProcessEnv = { DATABASE_URL: PUBLISHED_URL };
     const { events, saved, deps } = fake();
@@ -265,7 +282,16 @@ describe('rotating an older install’s database password', () => {
 
     const password = new URL(next.databaseUrl).password;
     expect(password).toMatch(/^[0-9a-f]{64}$/);
-    expect(events).toEqual([`connect ${PUBLISHED_URL}`, `alter role "openadlc" password '${password}'`, 'save', 'end']);
+    const marker = /^set application_name to '(openadlc-up-[0-9a-f]{16})'$/.exec(events[1] ?? '')?.[1];
+    expect(marker).toBeDefined();
+    expect(events).toEqual([
+      `connect ${PUBLISHED_URL}`,
+      `set application_name to '${marker}'`,
+      `ask the container for ${marker}`,
+      `alter role "openadlc" password '${password}'`,
+      'save',
+      'end',
+    ]);
     expect(saved).toEqual([next]);
     // This process's pool, and every service up starts, connect with it.
     expect(env.DATABASE_URL).toBe(next.databaseUrl);
@@ -294,11 +320,199 @@ describe('rotating an older install’s database password', () => {
     expect(error.message).not.toMatch(/[0-9a-f]{64}/);
   });
 
+  // Whatever answers on the port answers the connection, and the container
+  // configured for it is not always what does (#111).
+  it('alters nothing on a server the container does not show to be its own, and says which way it is not', async () => {
+    for (const server of [{ on: 'elsewhere' as const }, { on: 'unknown' as const, reason: 'Error response from daemon: container is not running' }]) {
+      const env: NodeJS.ProcessEnv = { DATABASE_URL: PUBLISHED_URL };
+      const { events, saved, deps } = fake({ server });
+
+      const error = (await rotateDatabasePassword(defaultConfig('/repo'), { ...deps, env }).catch((caught: unknown) => caught)) as DatabaseServerUnconfirmed;
+
+      expect(error).toBeInstanceOf(DatabaseServerUnconfirmed);
+      expect(error.found).toEqual(server);
+      expect(events.some((event) => event.startsWith('alter'))).toBe(false);
+      expect(events.at(-1)).toBe('end');
+      expect(saved).toEqual([]);
+      expect(env.DATABASE_URL).toBe(PUBLISHED_URL);
+    }
+  });
+
   it('refuses a role name it would have to quote', async () => {
     const { events, deps } = fake();
     const config = { ...defaultConfig('/repo'), databaseUrl: 'postgres://a%22b:openadlc@127.0.0.1:47432/openadlc_db' };
     await expect(rotateDatabasePassword(config, { ...deps, env: {} })).rejects.toThrow(/plain role/);
     expect(events).toEqual([]);
+  });
+});
+
+/**
+ * Testing v0.1.5 on a scratch install, a `scratch-db` left by another run was
+ * configured for 57432 while `openadlc-scratch-db` answered there. `up` took
+ * the configured one for the server on the port and changed the password of
+ * the one answering, and the suites' `DATABASE_URL` stopped working (#111).
+ */
+describe('the server `openadlc up` changes a database password on', () => {
+  const SCRATCH_URL = 'postgres://openadlc:openadlc@127.0.0.1:57432/openadlc_db';
+  const scratch = (): InstallConfig => ({
+    ...defaultConfig('/repo'),
+    databaseUrl: SCRATCH_URL,
+    ports: { ...defaultConfig('/repo').ports, postgres: 57432 },
+  });
+
+  /**
+   * Docker and Postgres as `up` meets them: each container's configured port,
+   * the port Docker holds for it now (none while it is stopped), and its
+   * server, which keeps the names of the connections made to it. The url
+   * reaches `answering`, whatever the containers are configured with.
+   */
+  function machine(containers: Record<string, { configured: number; serving?: number }>, options: { answering: string; exec?: 'fails' }) {
+    const sessions = new Map(Object.keys(containers).map((name) => [name, new Set<string>()]));
+    const queries: string[] = [];
+    const execs: { args: string[]; env?: NodeJS.ProcessEnv }[] = [];
+    const bindings = (port?: number) => (port ? { '5432/tcp': [{ HostIp: '127.0.0.1', HostPort: String(port) }] } : {});
+    const docker: DockerRun = async (args, run) => {
+      const [command] = args;
+      if (command === 'inspect') {
+        const container = containers[args.at(-1) ?? ''];
+        if (!container) throw Object.assign(new Error('docker inspect failed'), { stderr: `Error: No such container: ${args.at(-1)}\n` });
+        return { stdout: `${JSON.stringify({ configured: bindings(container.configured), serving: bindings(container.serving) })}\n` };
+      }
+      if (command === 'ps') {
+        const running = Object.entries(containers).filter(([, container]) => container.serving);
+        return { stdout: running.map(([name, container]) => `${name}\t127.0.0.1:${container.serving}->5432/tcp\n`).join('') };
+      }
+      if (command === 'exec') {
+        execs.push({ args, env: run?.env });
+        const name = args[3] ?? '';
+        if (options.exec === 'fails' || !containers[name]?.serving) {
+          throw Object.assign(new Error('docker exec failed'), { stderr: `Error response from daemon: container ${name} is not running\n` });
+        }
+        const marker = /application_name = '([^']+)'/.exec(args.at(-1) ?? '')?.[1] ?? '';
+        return { stdout: `${sessions.get(name)?.has(marker) ? 1 : 0}\n` };
+      }
+      throw new Error(`docker ${args.join(' ')} was not expected`);
+    };
+    const connect = async () => ({
+      query: async (text: string) => {
+        queries.push(text);
+        const named = /^set application_name to '([^']+)'$/.exec(text)?.[1];
+        if (named) sessions.get(options.answering)?.add(named);
+      },
+      end: async () => undefined,
+    });
+    return { docker, connect, queries, execs };
+  }
+
+  async function settling(config: InstallConfig, name: string, world: ReturnType<typeof machine>) {
+    const printed: string[] = [];
+    const saved: InstallConfig[] = [];
+    const env: NodeJS.ProcessEnv = { DATABASE_URL: config.databaseUrl };
+    const log = vi.spyOn(console, 'log').mockImplementation((line: string) => void printed.push(String(line)));
+    try {
+      const result = await settleDatabase(config, name, { docker: world.docker, connect: world.connect, save: (next) => void saved.push(next), env });
+      return { result, saved, env, said: printed.join('\n') };
+    } finally {
+      log.mockRestore();
+    }
+  }
+
+  it('changes nothing when two containers are configured for the port and the other one serves it, and says why', async () => {
+    const world = machine({ 'scratch-db': { configured: 57432 }, 'openadlc-scratch-db': { configured: 57432, serving: 57432 } }, { answering: 'openadlc-scratch-db' });
+
+    const { result, saved, env, said } = await settling(scratch(), 'scratch-db', world);
+
+    expect(result).toBeNull();
+    expect(world.queries).toEqual([]);
+    expect(saved).toEqual([]);
+    expect(env.DATABASE_URL).toBe(SCRATCH_URL);
+    expect(said).toContain('scratch-db is configured for port 57432 but does not publish it now: openadlc-scratch-db answers there, so up stopped and changed no password');
+    expect(said).toContain("if scratch-db holds this install's database: stop openadlc-scratch-db, then run openadlc up again");
+    expect(said).toContain('if openadlc-scratch-db holds it instead: move scratch-db aside, keeping its data (docker rename scratch-db scratch-db-old), then run openadlc up again');
+  });
+
+  it('changes nothing when Docker says the container publishes the port but the connection reaches another server', async () => {
+    const world = machine({ 'openadlc-db': { configured: 47432, serving: 47432 }, 'other-db': { configured: 47432, serving: 47432 } }, { answering: 'other-db' });
+
+    const { result, saved, env, said } = await settling(defaultConfig('/repo'), 'openadlc-db', world);
+
+    expect(result).toBeNull();
+    expect(world.queries.some((query) => query.startsWith('alter'))).toBe(false);
+    expect(saved).toEqual([]);
+    expect(env.DATABASE_URL).toBe(PUBLISHED_URL);
+    expect(said).toContain('openadlc-db publishes port 47432, but the connection up made there is not on it: other-db answers there, so up stopped and changed no password');
+  });
+
+  it('gives the install’s own container a password of its own, asked inside it, without the password in its arguments', async () => {
+    const world = machine({ 'openadlc-db': { configured: 47432, serving: 47432 } }, { answering: 'openadlc-db' });
+
+    const { result, saved, env, said } = await settling(defaultConfig('/repo'), 'openadlc-db', world);
+
+    const password = new URL(result?.databaseUrl ?? 'postgres://x').password;
+    expect(password).toMatch(/^[0-9a-f]{64}$/);
+    expect(world.queries.at(-1)).toBe(`alter role "openadlc" password '${password}'`);
+    expect(saved).toEqual([result]);
+    expect(env.DATABASE_URL).toBe(result?.databaseUrl);
+    expect(said).toContain('openadlc-db has a password of this install’s own now');
+    const [exec] = world.execs;
+    expect(exec?.args.slice(0, 5)).toEqual(['exec', '-e', 'PGPASSWORD', 'openadlc-db', 'psql']);
+    expect(exec?.env?.PGPASSWORD).toBe('openadlc');
+    expect(exec?.args.some((arg) => arg.startsWith('PGPASSWORD='))).toBe(false);
+  });
+
+  it('goes on with the published password, unchanged, when the container cannot be asked', async () => {
+    const world = machine({ 'openadlc-db': { configured: 47432, serving: 47432 } }, { answering: 'openadlc-db', exec: 'fails' });
+
+    const { result, saved, said } = await settling(defaultConfig('/repo'), 'openadlc-db', world);
+
+    expect(result).toEqual(defaultConfig('/repo'));
+    expect(world.queries.some((query) => query.startsWith('alter'))).toBe(false);
+    expect(saved).toEqual([]);
+    expect(said).toContain('openadlc-db still takes the password published with OpenADLC: up could not ask it whether it is the server on port 47432');
+  });
+
+  it('goes on with a server that is not the install’s container when none of that name exists, as tests/scratch.sh starts it', async () => {
+    const world = machine({ 'openadlc-scratch-db': { configured: 57432, serving: 57432 } }, { answering: 'openadlc-scratch-db' });
+
+    const { result, saved, said } = await settling(scratch(), 'scratch-db', world);
+
+    expect(result).toEqual(scratch());
+    expect(world.queries).toEqual([]);
+    expect(saved).toEqual([]);
+    expect(said).toBe('');
+  });
+
+  it('goes on with a url that has a password of the install’s own, which nothing changes, whatever a stale container is configured for', async () => {
+    const own = { ...defaultConfig('/repo'), databaseUrl: `postgres://openadlc:${OWN_PASSWORD}@127.0.0.1:47432/openadlc_db` };
+    const world = machine({ 'openadlc-db': { configured: 47432 }, 'openadlc-db-new': { configured: 47432, serving: 47432 } }, { answering: 'openadlc-db-new' });
+
+    const { result, said } = await settling(own, 'openadlc-db', world);
+
+    expect(result).toEqual(own);
+    expect(world.queries).toEqual([]);
+    expect(said).toBe('');
+  });
+});
+
+describe('where a container publishes postgres', () => {
+  const inspecting = (stdout: string): DockerRun => async () => ({ stdout });
+
+  it('is what Docker holds for it now, beside what it was configured with', async () => {
+    const { databaseContainerPorts } = await import('./up.js');
+    const configured = '{"5432/tcp":[{"HostIp":"127.0.0.1","HostPort":"57432"}]}';
+    // Stopped, or its start found the port taken: configured for it, holding nothing.
+    expect(await databaseContainerPorts('scratch-db', inspecting(`{"configured":${configured},"serving":{}}\n`))).toEqual({ configured: '57432', serving: [] });
+    expect(await databaseContainerPorts('scratch-db', inspecting(`{"configured":${configured},"serving":null}\n`))).toEqual({ configured: '57432', serving: [] });
+    const both = '{"5432/tcp":[{"HostIp":"127.0.0.1","HostPort":"47432"},{"HostIp":"::1","HostPort":"47432"}]}';
+    expect(await databaseContainerPorts('openadlc-db', inspecting(`{"configured":${both},"serving":${both}}\n`))).toEqual({ configured: '47432', serving: ['47432'] });
+  });
+
+  it('is nothing for a container that is not there', async () => {
+    const { databaseContainerPorts } = await import('./up.js');
+    const missing: DockerRun = async () => {
+      throw new Error('Error: No such container: scratch-db');
+    };
+    expect(await databaseContainerPorts('scratch-db', missing)).toBeUndefined();
   });
 });
 

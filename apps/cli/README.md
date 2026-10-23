@@ -48,8 +48,13 @@ node apps/cli/bin/openadlc.mjs logs hostd      # where a service writes its log
   database in `databaseUrl`. The password is generated per install and saved
   to `install.json` before the container is made; an older install's
   `openadlc` is changed with `ALTER ROLE` on its own container, which keeps its
-  data (`databasePasswordStep`, `rotateDatabasePassword`). A server `up` did not
-  make is never altered.
+  data (`databasePasswordStep`, `rotateDatabasePassword`): the container of the
+  install's name, only while Docker holds the port for it (not only configured
+  it), and only once its own server, asked through `docker exec`, holds the
+  connection the change is made on. A server `up` did not make is never
+  altered: when the url still has the published password, and another server
+  answers on the port the install's container is configured for, `up` stops,
+  says which, and changes nothing (`settleDatabase`).
 - **No demo mode.** A command refuses any flag it does not read (`src/flags.ts`),
   so `openadlc up --demo` stops and points at docs/development.md rather than
   starting the real install. `OPENADLC_SCRIPTED_ENGINES=1`, exported by hand, is the
