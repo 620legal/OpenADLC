@@ -40,6 +40,17 @@ export const REVIEW_STALLED = 'review.stalled';
 export const REVIEW_ROUND_OPENED = 'review.round_opened';
 
 /**
+ * The merge line's update of a pull request's branch from its base:
+ * `{ subjectRef, from, to? }`, all strings. `from` is the head the update was
+ * made on, and `to` the commit it made, when GitHub answered with it (a
+ * stacked update's). The line updates as the branch's builder, so the push's
+ * sender cannot tell it from the builder's own; this is what does
+ * (`Webhooks.lineUpdated`). Not the line's entry: its head is the next pass's
+ * by the time the push's delivery is worked through.
+ */
+export const BRANCH_UPDATED_BY_LINE = 'merge_line.branch_updated';
+
+/**
  * A review the bridge dismissed itself, a superseded approval:
  * `{ repo, pr, reviewId }` (the repository's full name; all strings),
  * recorded before GitHub is asked. It dismisses as the automation account,

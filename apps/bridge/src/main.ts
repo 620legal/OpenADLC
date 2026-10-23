@@ -155,10 +155,19 @@ async function main(): Promise<void> {
   const dispatchGate = new DispatchGate();
   // The sweep of answered tasks leaves a paused install or repository paused.
   taskService.workPaused = (repo) => dispatchGate.paused(repo);
-  const stages = new StageHandoff(automation, taskService, dispatchGate, null, (fullName, number) =>
-    asAutomation(actors, config)
-      .then((client) => (client ? subjectClosed(client, fullName, number) : false))
-      .catch(() => false),
+  const stages = new StageHandoff(
+    automation,
+    taskService,
+    dispatchGate,
+    null,
+    (fullName, number) =>
+      asAutomation(actors, config)
+        .then((client) => (client ? subjectClosed(client, fullName, number) : false))
+        .catch(() => false),
+    (fullName, number) =>
+      asAutomation(actors, config)
+        .then((client) => (client ? client.getPullRequest(fullName, number) : null))
+        .catch(() => null),
   );
   const mergeLine = new MergeLine(config, actors, taskService, automation);
   // The dispatcher, run here — where an issue changing or a task ending

@@ -1,4 +1,4 @@
-import { audit, bots, issues, mergeLines, repos } from '@openadlc/db';
+import { audit, bots, issues, mergeLines, recordEvent, repos } from '@openadlc/db';
 import type { Actors } from './actors.js';
 import { mergeDecision, type Automation, type LandedApproval } from './automation.js';
 import { asAutomation, automationBotName } from './automation-bot.js';
@@ -8,7 +8,7 @@ import type { GitHubClient } from '@openadlc/github';
 import { CI_LABEL, REQUIRED_CHECK, REVIEW_GATE_CHECK } from '@openadlc/shared';
 import type { ConflictRounds } from './conflict-round.js';
 import type { Stacking } from './stacking.js';
-import { issueNumberFromBranch } from './work.js';
+import { BRANCH_UPDATED_BY_LINE, issueNumberFromBranch } from './work.js';
 import type { TaskService } from './task-service.js';
 
 /**
@@ -336,6 +336,22 @@ export class MergeLine {
   private readonly advancing = new Map<string, Promise<unknown>>();
 
   /**
+   * Records an update of a branch the line made, by the head it was made on
+   * (`BRANCH_UPDATED_BY_LINE`). Made as the builder, an update whose base had
+   * changed the same files was held to the builder's local CI as the
+   * builder's own push: the pull request went back to Build and no reviewer
+   * was asked about the new diff (#118). Not recorded, its push is held so.
+   */
+  private async updated(repoName: string, prNumber: number, from: string, to: string | null): Promise<void> {
+    const payload = { subjectRef: `${repoName}#${prNumber}`, from, ...(to ? { to } : {}) };
+    await (async () => recordEvent({ source: 'platform', type: BRANCH_UPDATED_BY_LINE, payload }))().catch((error: unknown) =>
+      console.warn(
+        `[bridge] ${repoName}#${prNumber}: the update from ${from.slice(0, 7)} was not recorded, so its push is held to the builder's local CI: ${error instanceof Error ? error.message : error}`,
+      ),
+    );
+  }
+
+  /**
    * Merges the base into a stacked pull request's branch and records what it
    * made: the commit's SHA when its first parent is the head the line read,
    * otherwise none, so no push is taken for this update. Answers as
@@ -349,6 +365,7 @@ export class MergeLine {
   ): Promise<{ updated: boolean; conflict: boolean; message: string }> {
     const made = await client.mergeIntoBranch(repo.fullName, pull.headRef, pull.baseRef);
     const ours = made.merged && made.sha !== null && made.parents[0] === pull.headSha;
+    if (made.merged && made.sha && made.parents[0]) await this.updated(repo.name, prNumber, made.parents[0], made.sha);
     await this.stacks?.made({ repoName: repo.name, prNumber, from: pull.headSha, to: ours ? made.sha : null }).catch(() => undefined);
     if (made.merged && !ours) return { updated: true, conflict: false, message: `${made.message}, onto a head that had moved: reviewed as any push` };
     return { updated: made.merged, conflict: made.conflict, message: made.message };
@@ -461,6 +478,10 @@ export class MergeLine {
       const result = stacked
         ? await this.stackedUpdate(client, repo, entry.prNumber, pull)
         : await client.updateBranch(repo.fullName, entry.prNumber, pull.headSha);
+      // First, since the push it makes may be delivered at once. GitHub makes
+      // it on exactly this head (`expected_head_sha`); a stacked one records
+      // its own, with the commit it made.
+      if (result.updated && !stacked) await this.updated(repo.name, entry.prNumber, pull.headSha, null);
 
       if (result.conflict) {
         // Only the branch's owner can resolve this, so it leaves the line. A
