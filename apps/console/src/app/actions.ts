@@ -824,6 +824,21 @@ export async function setCiCap(minutes: number | null): Promise<{ ok: boolean; e
   }
 }
 
+/**
+ * Starts now what would start this work when it comes round: Needs you's
+ * Start it now, on work stuck with its seat free. `started` is what the
+ * bridge started, in its words; none when nothing could start yet.
+ */
+export async function startItem(subject: string): Promise<{ ok: boolean; error?: string; started?: string[] }> {
+  try {
+    const result = await call<{ started?: string[] }>(`${itemPath(subject)}/start`, 'POST', {});
+    revalidatePath('/');
+    return { ok: true, started: result.started ?? [] };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not start it' };
+  }
+}
+
 export async function resumeItem(subject: string): Promise<{ ok: boolean; error?: string; held?: ItemHeld }> {
   try {
     await call(`${itemPath(subject)}/resume`, 'POST', {});

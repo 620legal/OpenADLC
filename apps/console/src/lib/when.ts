@@ -33,6 +33,22 @@ export function duration(since: string | null | undefined, now: Moment): string 
   return days === 1 ? '1 day' : `${days} days`;
 }
 
+/**
+ * How long until something comes, from now: "in 24 min", "in 1 h 5 min",
+ * "in under a minute" for one due or just past. Null when it is not a time.
+ */
+export function untilIn(at: string | null | undefined, now: Moment): string | null {
+  if (!at) return null;
+  const left = Date.parse(at) - ms(now);
+  if (!Number.isFinite(left)) return null;
+  if (left < MINUTE) return 'in under a minute';
+  const minutes = Math.ceil(left / MINUTE);
+  if (minutes < 60) return `in ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest > 0 ? `in ${hours} h ${rest} min` : `in ${hours} h`;
+}
+
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /** When something happened, from now: "just now", "2 min ago", "2 hours ago", "yesterday", "on 12 Sep". */

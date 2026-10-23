@@ -1,4 +1,4 @@
-import { NEXT_LABEL, PAUSED_LABEL, hasNextLabel, inertMarkup } from '@openadlc/shared';
+import { NEXT_LABEL, PAUSED_LABEL, hasNextLabel, hasPausedLabel, inertMarkup } from '@openadlc/shared';
 import { forgetHold, type ItemHold, recordHold } from './item-hold.js';
 import { HttpFailure, type Router } from './router.js';
 import { publicNameOf } from './thread-view.js';
@@ -25,7 +25,12 @@ import { issueNumberFromBranch } from './work.js';
  *   not become an issue is abandoned, so the request queue never starts it
  *   again.
  *
- * All four are an admin's (`roles.ts`), and all four are audited under the
+ * - **Start** runs now what would start it when it comes round — the stage
+ *   sweep for intake and design, a dispatch for a build — for work Needs you
+ *   says is stuck with its seat free (`waiting.ts`). A user's, as Try again
+ *   is: it starts nothing the crew would not start anyway.
+ *
+ * The first four are an admin's (`roles.ts`), and all are audited under the
  * item's key, as linking, unlinking and merging are (`item-routes.ts`), with
  * the subjects each acted on in the payload. Each answers with that key as
  * `item`, beside the `subject` it acted on, as linking and merging do.
@@ -115,6 +120,13 @@ export interface ItemControlDeps {
   pausePull?(repoFullName: string, prNumber: number): Promise<unknown>;
   /** A dispatch soon, after a change of order. */
   dispatchSoon?(reason: string): void;
+  /**
+   * Runs now what starts this work when it comes round: the stage sweep for
+   * an issue in intake or design, a dispatch for one in Build. What it
+   * started, in words; none when nothing could. Absent, nothing is started
+   * from here.
+   */
+  startNow?(item: ControlledItem): Promise<string[]>;
   /**
    * Runs what a control need not wait for once it has answered (`Afterwards`
    * in api.ts): holding a paused pull request's gate now, and starting what a
@@ -293,6 +305,24 @@ export function registerItemControlRoutes(router: Router, deps: ItemControlDeps)
       );
     }
     return { item: auditedAs(item), subject: item.key, held: null };
+  });
+
+  // Needs you's Start it now, on work stuck with its seat free and nothing
+  // started: nothing a person could press asked the sweep or the dispatcher
+  // to look sooner than they came round.
+  router.post('/v1/items/:subject/start', async ({ params, identity }) => {
+    const item = await itemOf(params.subject);
+    if (!item.issue) throw new HttpFailure(409, `${item.key} has no issue yet; a request is started by its line in Intake`);
+    if (hasPausedLabel(item.issue.labels)) throw new HttpFailure(409, `${item.key} is held, so nothing starts on it: resume it to let it start`);
+    if (!deps.startNow) throw new HttpFailure(503, 'this bridge does not start work from the console; it starts on the next sweep');
+    const started = await deps.startNow(item);
+    await deps.audit({
+      actor: identity,
+      action: 'item.started',
+      target: auditedAs(item),
+      payload: { subjects: [`${item.repoName}#${item.issue.number}`], stage: item.issue.stage, started },
+    });
+    return { item: auditedAs(item), subject: item.key, started };
   });
 
   router.post('/v1/items/:subject/next', async ({ params, body, identity }) => {

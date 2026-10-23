@@ -330,6 +330,37 @@ describe('holding one piece of work', () => {
   });
 });
 
+/**
+ * Needs you's Start it now, on work that waited with its seat free and
+ * nothing started: a start refused while the seat was busy waited for the
+ * hourly sweep, and nothing a person pressed asked it sooner (#144).
+ */
+describe('starting one now', () => {
+  const design: ControlledItem = { ...ITEM, issue: { ...ITEM.issue!, labels: ['adlc:spec'], stage: 'spec' }, pr: null, subjects: ['testbed#7'] };
+
+  it('runs what starts it, says what started, and audits who asked', async () => {
+    const startNow = vi.fn(async () => ['started spec on testbed#7: it was waiting with nobody on it']);
+    const { router, deps } = world({ resolve: async () => structuredClone(design), startNow });
+    const answer = await call(router, 'POST', at(ITEM.key, 'start'), {}, { 'x-openadlc-user': 'or@example.com' });
+    expect(answer).toEqual({ status: 200, body: { item: 'testbed#7', subject: 'testbed#7', started: ['started spec on testbed#7: it was waiting with nobody on it'] } });
+    expect(startNow).toHaveBeenCalledWith(expect.objectContaining({ key: 'testbed#7', issue: expect.objectContaining({ stage: 'spec' }) }));
+    expect(vi.mocked(deps.audit).mock.calls.map(([entry]) => [entry.action, entry.target, entry.payload])).toEqual([
+      ['item.started', 'testbed#7', { subjects: ['testbed#7'], stage: 'spec', started: ['started spec on testbed#7: it was waiting with nobody on it'] }],
+    ]);
+  });
+
+  it('refuses one a person holds, one with no issue yet, and on a bridge that starts nothing from here', async () => {
+    const startNow = vi.fn(async () => []);
+    const held = world({ resolve: async () => structuredClone({ ...design, issue: { ...design.issue!, labels: ['adlc:spec', 'openadlc:paused'] } }), startNow });
+    expect(await call(held.router, 'POST', at(ITEM.key, 'start'))).toMatchObject({ status: 409, body: { error: expect.stringContaining('resume it to let it start') } });
+    const request = world({ resolve: async () => structuredClone({ ...design, issue: null }), startNow });
+    expect((await call(request.router, 'POST', at(ITEM.key, 'start'))).status).toBe(409);
+    expect(startNow).not.toHaveBeenCalled();
+    const none = world({ resolve: async () => structuredClone(design) });
+    expect((await call(none.router, 'POST', at(ITEM.key, 'start'))).status).toBe(503);
+  });
+});
+
 describe('putting one next', () => {
   it('takes next off any other issue in the repository, so there is one, and asks for a dispatch', async () => {
     const { router, calls } = world();

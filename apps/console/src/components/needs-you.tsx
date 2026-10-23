@@ -19,6 +19,7 @@ import {
   retryTask,
   retryTriage,
   revokeSigningKey,
+  startItem,
   stopTask,
   stopTasks,
   switchToAutomatic,
@@ -775,6 +776,12 @@ const answered =
         ? { text: 'Taken. It waits on other work before it goes on; its thread says what.', final: false }
         : { text: `Answered: ${option}. It goes on from here.`, final: true };
 
+/** What Start it now did: started it, or asked and nothing could start it yet. */
+const startSaid: Said = (result) =>
+  ((result as { started?: string[] }).started ?? []).length > 0
+    ? { text: 'Started.', final: false }
+    : { text: 'Asked, and it did not start yet; the bridge’s log says why.', final: false };
+
 function DoneLine({ done }: { done: Done }) {
   return (
     <p role="status" data-done className="flex items-center gap-1.5 text-[12px] text-signal">
@@ -813,6 +820,7 @@ export function keyOf(action: AttentionAction): string {
   if ('sha' in action) return `${action.kind}:${action.repo}@${action.sha}`;
   if ('keyId' in action) return `${action.kind}:${action.login}:${action.keyId}`;
   if (action.kind === 'abandon_request') return `${action.kind}:${action.requestId}`;
+  if (action.kind === 'start_work') return `${action.kind}:${action.subject}`;
   if ('gateId' in action) return `${action.kind}:${action.gateId}`;
   return 'taskId' in action ? `${action.kind}:${action.taskId}` : action.kind;
 }
@@ -910,6 +918,12 @@ function ActionButton({
           }}
         >
           {busy ? 'Abandoning…' : action.label}
+        </button>
+      );
+    case 'start_work':
+      return (
+        <button type="button" className={style} disabled={pending} onClick={() => press(() => startItem(action.subject), startSaid)}>
+          {busy ? 'Starting…' : action.label}
         </button>
       );
     case 'retry_task':

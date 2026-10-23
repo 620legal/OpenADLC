@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_PATH_POLICY } from '@openadlc/shared';
 import { activityOf, boardWork, FILED_SHOWN_MS, itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, requestsOnCards, withItemPulls, type BoardLink } from './board-work.js';
 import type { IssueFacts, TaskFacts } from './work.js';
 
@@ -21,6 +22,11 @@ const store = vi.hoisted(() => ({
   issueReads: [] as string[],
   /** Each read of links: `all`, or the things the poll asked for the items of. */
   linkReads: [] as string[],
+  /** The settings and the month's budget, for what a waiting card waits on. */
+  settings: {} as Record<string, string>,
+  budget: null as { period: string; capUsd: number; spentUsd: number; state: 'ok' | 'warning' | 'stopped' } | null,
+  /** Each read of a repository's work in flight, by its id. */
+  flightReads: [] as string[],
 }));
 vi.mock('@openadlc/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@openadlc/db')>()),
@@ -44,7 +50,13 @@ vi.mock('@openadlc/db', async (importOriginal) => ({
     }),
   },
   bots: { listBots: vi.fn(async () => [{ id: 'bot-builder', name: 'openadlc-atlas-janedoe' }, { id: 'bot-lead', name: 'noraexampleco' }]) },
+  costs: { currentPeriod: () => '2026-09', getBudget: vi.fn(async () => store.budget) },
+  settings: { getSetting: vi.fn(async (key: string) => store.settings[key] ?? null) },
   issues: {
+    workInFlight: vi.fn(async (repoId: string) => {
+      store.flightReads.push(repoId);
+      return [{ number: 44, paths: ['src/prices.ts'], building: true }];
+    }),
     listIssues: vi.fn(async (repoName?: string) => {
       store.issueReads.push(repoName ?? '*');
       return store.issues.filter((issue) => !repoName || issue.repoName === repoName);
@@ -864,5 +876,111 @@ describe('reading the board’s work', () => {
       store.numbered = false;
       store.links = [];
     }
+  });
+});
+
+/**
+ * A card with nothing running on it says why it waits, since when, and on
+ * what; a build paused on a question says it holds one of its repository's
+ * builds while cards wait for one (#144). #141 said "Waiting for a design
+ * pass" for half an hour, and nothing said what it waited on.
+ */
+describe('a card with nothing going on it', () => {
+  const card = (number: number, stage: IssueFacts['stage'], extra: Partial<IssueFacts> = {}): IssueFacts => ({
+    repoId: 'repo-1',
+    repoName: 'api',
+    number,
+    title: `Issue ${number}`,
+    stage,
+    url: null,
+    prNumber: null,
+    labels: [`adlc:${stage}`],
+    updatedAt: minutesAgo(20),
+    ...extra,
+  });
+  const crew = [
+    { id: 'bot-spec', name: 'system-engineer', role: 'spec', maxTasks: 1 },
+    { id: 'bot-builder', name: 'openadlc-atlas-janedoe', role: 'implement', maxTasks: 2 },
+  ];
+  const repos = [{ id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {}, defaultBranch: 'main', concurrency: 1 }];
+  const designing = { ...triage('api#137', 'running'), id: 'task-design', botId: 'bot-spec', kind: 'spec' } as TaskFacts;
+  const asking = { ...triage('api#40', 'paused'), id: 'task-asking', botId: 'bot-builder', kind: 'implement' } as TaskFacts;
+  const read = (waiting?: Parameters<typeof boardWork>[0]['waiting']) =>
+    boardWork({
+      issues: [card(137, 'spec'), card(141, 'spec'), card(40, 'build', { labels: ['adlc:build', 'start:now'] }), card(160, 'build', { labels: ['adlc:build', 'start:now'] })],
+      tasks: [designing, asking],
+      bots: crew,
+      repos,
+      gates: [{ taskId: 'task-asking' }],
+      stallEvents: [],
+      requests: [],
+      now: NOW,
+      ...(waiting ? { waiting } : {}),
+    });
+
+  it('says the seat it waits for and the task on it, and on a paused build that it holds its repository’s one build', () => {
+    const work = read({ nextSweepAt: '2026-09-29T12:24:00.000Z' });
+    expect(work.byRef.get('api#141')?.waiting).toEqual({
+      reason: {
+        kind: 'seat',
+        seat: { name: 'system-engineer', role: 'spec', maxTasks: 1 },
+        seats: 1,
+        holders: [{ ref: 'api#137', number: 137, kind: 'spec', state: 'running', waitingOnYou: false }],
+      },
+      since: minutesAgo(20),
+      stuck: false,
+    });
+    expect(work.byRef.get('api#160')?.waiting?.reason).toEqual({
+      kind: 'concurrency',
+      limit: 1,
+      holders: [{ ref: 'api#40', number: 40, kind: 'implement', state: 'paused', waitingOnYou: true }],
+    });
+    expect(work.byRef.get('api#40')?.active[0]?.holds).toEqual({ repo: 'api', limit: 1, waiting: 1 });
+    // Work is going on #137 and #40, so they wait for nothing.
+    expect(work.byRef.get('api#137')?.waiting).toBeNull();
+    expect(work.byRef.get('api#40')?.waiting).toBeNull();
+  });
+
+  it('says nothing of waiting where nothing was asked to work it out: the activity poll', () => {
+    const work = read();
+    expect(work.byRef.get('api#141')).not.toHaveProperty('waiting');
+    expect(work.byRef.get('api#40')?.active[0]).not.toHaveProperty('holds');
+  });
+
+  it('reads what a waiting card waits on, and a repository’s work in flight only where a build could start', async () => {
+    store.issues = [card(141, 'spec'), card(160, 'build', { labels: ['adlc:build', 'start:now'], declaredPaths: ['src/prices.ts'] })];
+    store.tasks = [];
+    store.sessions = [];
+    store.flightReads = [];
+    store.settings = { workPausedSeats: JSON.stringify({ 'system-engineer': { by: 'orzelig', at: minutesAgo(30), why: 'changing its model' } }) };
+    store.budget = null;
+    const work = await readBoardWork(
+      {
+        issues: store.issues,
+        bots: crew,
+        repos,
+        gates: [],
+        requests: [],
+        waiting: { nextSweepAt: () => new Date('2026-09-29T12:24:00.000Z'), pathPolicy: async () => DEFAULT_PATH_POLICY },
+      },
+      NOW,
+    );
+    expect(store.flightReads).toEqual(['repo-1']);
+    expect(work.byRef.get('api#141')?.waiting?.reason).toEqual({
+      kind: 'seat_paused',
+      seat: { name: 'system-engineer', role: 'spec', maxTasks: 1 },
+      words: 'system-engineer is paused by orzelig: changing its model',
+    });
+    expect(work.byRef.get('api#160')?.waiting?.reason).toEqual({ kind: 'lease', on: [44], paths: ['src/prices.ts'] });
+
+    // At the month's cap, nothing new starts, and the card says so.
+    store.settings = {};
+    store.budget = { period: '2026-09', capUsd: 500, spentUsd: 512.5, state: 'stopped' };
+    const capped = await readBoardWork({ issues: [card(141, 'spec')], bots: crew, repos, gates: [], requests: [], waiting: {} }, NOW);
+    expect(capped.byRef.get('api#141')?.waiting?.reason).toEqual({ kind: 'cap', words: "this month's spend is $512.50 of the $500.00 monthly cap" });
+    // Unless the costs file lets work go on past it.
+    const past = await readBoardWork({ issues: [card(141, 'spec')], bots: crew, repos, gates: [], requests: [], waiting: { stopLeasing: false } }, NOW);
+    expect(past.byRef.get('api#141')?.waiting?.reason.kind).toBe('free');
+    store.budget = null;
   });
 });

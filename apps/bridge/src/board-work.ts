@@ -27,6 +27,7 @@ import {
   type TaskFacts,
 } from './work.js';
 import { stillTried } from './request-queue.js';
+import { buildCandidates, readWaitingContext, waitingCards, waitingOf, type CardWaiting, type BuildHold, type WaitingContext, type WaitingReads } from './waiting.js';
 
 /**
  * What the board needs beyond the issues: for each card, what it has cost and
@@ -80,6 +81,12 @@ export interface BoardTask extends CardTask {
    * when it is not running, or resumed at a time nothing records.
    */
   since: string | null;
+  /**
+   * For a build paused on a question, the repository build it takes while
+   * other builds wait for one (`waitingOf`). Absent when it holds nobody
+   * up, and from a read that works out no waiting.
+   */
+  holds?: BuildHold | null;
 }
 
 export interface CardExtras extends CardWork {
@@ -91,6 +98,13 @@ export interface CardExtras extends CardWork {
   assignees: string[];
   /** How many times its work was sent back to an earlier stage; the card says "sent back ×N". */
   sentBack: number;
+  /**
+   * With nothing going on it, why it waits, since when, and on what
+   * (`waitingOf`); null when it does not wait for a seat — work is going, or
+   * its stage is one review or shipping starts. Absent from a read that
+   * works out no waiting: the activity poll's.
+   */
+  waiting?: CardWaiting | null;
 }
 
 /**
@@ -159,8 +173,17 @@ interface BoardWorkInput {
   issues: readonly IssueFacts[];
   /** Tasks on the cards' subjects, and every task still going anywhere. */
   tasks: readonly TaskFacts[];
-  bots: readonly { id: string; name: string }[];
-  repos: readonly { id: string; name: string; fullName?: string; stageModes: Partial<Record<string, string>> }[];
+  /** With each seat's role and tasks at once, for what a card waits on; a bot read without them staffs nothing. */
+  bots: readonly { id: string; name: string; role?: string; maxTasks?: number | null }[];
+  repos: readonly {
+    id: string;
+    name: string;
+    fullName?: string;
+    stageModes: Partial<Record<string, string>>;
+    /** How many builds it runs at once; absent, as many as there are builders. */
+    concurrency?: number;
+    defaultBranch?: string;
+  }[];
   gates: readonly Pick<Gate, 'taskId'>[];
   stallEvents: readonly { at: string; payload: unknown }[];
   /**
@@ -205,6 +228,12 @@ interface BoardWorkInput {
   since?: ReadonlyMap<string, string | null>;
   /** Tasks running across the install, counted by the database; counted from `tasks` when absent. */
   runningTasks?: number;
+  /**
+   * What a card with nothing going on it waits on beyond its tasks: the
+   * pauses, the cap, the checks, the next sweep (`readWaitingContext`).
+   * Absent, no card says why it waits, as the activity poll's do not.
+   */
+  waiting?: WaitingContext;
 }
 
 /**
@@ -338,22 +367,41 @@ export function boardWork(input: BoardWorkInput): BoardWork {
   const gated = new Set(input.gates.map((gate) => gate.taskId).filter((id): id is string => Boolean(id)));
   const stalls = standingStalls(input.stallEvents, input.issues, input.tasks);
   const newestFirst = (a: TaskFacts, b: TaskFacts): number => Date.parse(b.createdAt) - Date.parse(a.createdAt);
+  const stepOf = (task: Pick<TaskFacts, 'id'>) => activityOf(input.steps?.get(task.id) ?? []);
+  const requestSubjectsOf = (issue: IssueFacts): readonly string[] =>
+    input.itemRequests?.get(`${issue.repoName}#${issue.number}`) ??
+    input.requests
+      .filter((request) => request.repoId === issue.repoId && request.issueNumber === issue.number)
+      .map((request) => `request:${request.id.slice(0, 8)}`);
+  // What each card with nothing going on it waits on: the cards the board
+  // shows, in the order the crew takes them, against every task going.
+  const waits = input.waiting
+    ? waitingOf({
+        ...input.waiting,
+        now: input.now ?? new Date(),
+        cards: waitingCards(onTheBoard(input.issues, input.repos), input.tasks, requestSubjectsOf),
+        issues: input.issues,
+        live: input.tasks.filter(isActive),
+        bots: input.bots,
+        repos: input.repos,
+        gated,
+        activity: (id) => stepOf({ id }),
+      })
+    : null;
   const onCard = (task: TaskFacts): BoardTask => {
     const running = task.state === 'running';
+    const holds = waits?.holds.get(task.id);
     return {
       ...asCardTask(task, botName),
-      activity: running ? activityOf(input.steps?.get(task.id) ?? []) : null,
+      activity: running ? stepOf(task) : null,
       since: !running ? null : input.since?.has(task.id) ? (input.since.get(task.id) ?? null) : task.startedAt,
+      ...(holds ? { holds } : {}),
     };
   };
 
   const byRef = new Map<string, CardExtras>();
   for (const issue of input.issues) {
-    const requestSubjects =
-      input.itemRequests?.get(`${issue.repoName}#${issue.number}`) ??
-      input.requests
-        .filter((request) => request.repoId === issue.repoId && request.issueNumber === issue.number)
-        .map((request) => `request:${request.id.slice(0, 8)}`);
+    const requestSubjects = requestSubjectsOf(issue);
     const work = cardWork(issue, { tasks: input.tasks, botName, stalls, requestSubjects });
     // `cardWork`'s own active tasks, chosen and ordered as it chooses them,
     // with each running one's step: a card task carries no id to find it by.
@@ -364,6 +412,7 @@ export function boardWork(input: BoardWorkInput): BoardWork {
       active,
       assignees: [...new Set(active.map((task) => task.bot))],
       sentBack: input.sendBacks?.get(`${issue.repoId}#${issue.number}`) ?? 0,
+      ...(waits ? { waiting: waits.cards.get(`${issue.repoName}#${issue.number}`) ?? null } : {}),
     });
   }
   // A pull request with no issue has no issue row for `cardWork`: its own
@@ -514,9 +563,11 @@ function countRunning(): Promise<number | null> {
 
 /** Reads what `boardWork` needs beyond what the board route already has. */
 export async function readBoardWork(
-  input: Omit<BoardWorkInput, 'tasks' | 'stallEvents' | 'steps'> & {
+  input: Omit<BoardWorkInput, 'tasks' | 'stallEvents' | 'steps' | 'waiting'> & {
     /** The sessions the route read, each with the task it runs: where a running task's step is. */
     sessions?: readonly Pick<Session, 'id' | 'taskId'>[];
+    /** Where what a waiting card waits on is read from; absent, no card says why it waits. */
+    waiting?: WaitingReads;
   },
   now = new Date(),
 ): Promise<BoardWork> {
@@ -544,9 +595,17 @@ export async function readBoardWork(
 
   const seen = new Set(onCards.map((task) => task.id));
   const tasks = [...onCards, ...going.filter((task) => isActive(task) && !seen.has(task.id))];
-  const live = await readLive(runningOn(tasks, onTheBoard(input.issues, input.repos), input.requests, input.pulls), input.sessions ?? []);
-  const { sessions: _sessions, ...facts } = input;
-  return boardWork({ ...facts, tasks, stallEvents, now, sendBacks, ...live, runningTasks: count ?? undefined });
+  const shown = onTheBoard(input.issues, input.repos);
+  // A build's work in flight is read only for a repository with a build
+  // that could start, one read each.
+  const candidates = input.waiting ? buildCandidates(waitingCards(shown, tasks)) : new Set<string>();
+  const buildRepos = input.repos.filter((repo) => candidates.has(repo.name)).map((repo) => ({ id: repo.id, name: repo.name, fullName: repo.fullName ?? repo.name, defaultBranch: repo.defaultBranch ?? 'main' }));
+  const [live, waiting] = await Promise.all([
+    readLive(runningOn(tasks, shown, input.requests, input.pulls), input.sessions ?? []),
+    input.waiting ? readWaitingContext(input.waiting, { buildRepos }) : Promise.resolve(undefined),
+  ]);
+  const { sessions: _sessions, waiting: _reads, ...facts } = input;
+  return boardWork({ ...facts, tasks, stallEvents, now, sendBacks, ...live, runningTasks: count ?? undefined, ...(waiting ? { waiting } : {}) });
 }
 
 /** What the board polls for every few seconds while a card it shows is running. */

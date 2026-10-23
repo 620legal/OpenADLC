@@ -147,6 +147,9 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'POST /v1/items/:subject/pause': 'admin',
   'POST /v1/items/:subject/resume': 'admin',
   'POST /v1/items/:subject/next': 'admin',
+  // Starting now what would start work stuck with its seat free, from Needs
+  // you: what the next sweep does anyway, sooner, as Try again is a user's.
+  'POST /v1/items/:subject/start': 'user',
   'GET /v1/items/:subject/cancel': 'admin',
   'POST /v1/items/:subject/cancel': 'admin',
   // Which issues and pull requests are one piece of work: audited, and never
