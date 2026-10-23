@@ -170,7 +170,7 @@ export async function readHistory(): Promise<ArchivedHistory> {
          from work_item_links l left join repos r on r.id = l.repo_id
         order by l.id`,
     ).catch((error: unknown) => onlyWithoutTable(error, null)),
-    // Every issue each request was filed as, from migration 0153: null on a
+    // Every issue each request was filed as, from migration 0155: null on a
     // database from before it, so its requests carry only `issueNumber`.
     query<Record<string, unknown>>(
       `select ri.request_id, r.name as repo, ri.issue_number, ri.filed_at
@@ -931,7 +931,7 @@ export function restoreDb(sql: Sql): UndoDb {
         counts.requests += row.rowCount ?? 0;
         for (const added of row.rows) ids.requests.push(String(added.id));
         // Its issues, only for a request this restore added: undo removes them
-        // with it, by cascade. An archive from before migration 0153 has its
+        // with it, by cascade. An archive from before migration 0155 has its
         // one issue in `issueNumber`, as the migration backfilled it.
         if (row.rows.length === 0) continue;
         for (const issue of issuesOfRequest(request)) {

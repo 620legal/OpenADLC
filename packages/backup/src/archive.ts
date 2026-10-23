@@ -256,7 +256,7 @@ export interface ArchivedRequest {
   updatedAt: string;
   /**
    * Every issue it was filed as, its repository by name like `repo`
-   * (`request_issues`, migration 0153). An archive written before has none,
+   * (`request_issues`, migration 0155). An archive written before has none,
    * and is restored with `issueNumber` in `repo` as its one issue.
    */
   issues?: ArchivedRequestIssue[];

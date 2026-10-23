@@ -193,7 +193,7 @@ none yet, says its kind of work instead ("writing the change").
    issue in each, asking first before it files anywhere other than the one the
    person chose; the drafts are confirmed with one question, and the siblings
    name each other as `owner/name#N`, under `Dependencies` where one must ship
-   first. A request's issues are rows of `request_issues` (migration 0153):
+   first. A request's issues are rows of `request_issues` (migration 0155):
    an issue carrying the request's line joins it in any managed repository
    while its triage runs (or was opened while it ran, delivered late), and
    after that only as its first issue, in its own repository; each is handed to Design or Build when the triage ends, and the

@@ -13,7 +13,7 @@ export interface RequestRecord {
   issueNumber: number | null;
   /**
    * Every issue it was filed as, oldest first, in whichever managed
-   * repositories intake filed it (`request_issues`, migration 0153).
+   * repositories intake filed it (`request_issues`, migration 0155).
    */
   issues: RequestIssue[];
   /**

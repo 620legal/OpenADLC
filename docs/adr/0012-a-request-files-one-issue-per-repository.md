@@ -24,7 +24,7 @@ an array column.
 
 ## Decision
 
-- **A request's issues are rows of `request_issues`** (migration 0153): one
+- **A request's issues are rows of `request_issues`** (migration 0155): one
   row per issue `(request_id, repo_id, issue_number, filed_at)`, across
   repositories, read with every request as `RequestRecord.issues`. The
   migration backfills one row per filed request. `requests.repo_id` stays the
