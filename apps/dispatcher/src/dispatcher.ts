@@ -1,6 +1,6 @@
 import { audit, bots, costs, health, hosts, issues, leases, listEventsOfType, recordEvent, repos, settings, spendingLimits, tasks } from '@openadlc/db';
 import { fetchJson, maxTasksOf, type CostsConfig, hasIgnoreLabel, hasNextLabel, hasPausedLabel } from '@openadlc/shared';
-import { DEFAULT_PATH_POLICY, deliveryRulesFrom, dependencyIsSatisfied, missingForRouting, onlyExpectedPathsUnreadable, parseDependencies, UNREADABLE_PATH_LINE, tooManyAttempts, type PathPolicy } from '@openadlc/shared';
+import { DEFAULT_PATH_POLICY, deliveryRulesFrom, dependencyIsSatisfied, formatDependencyRef, missingForRouting, namesRepository, onlyExpectedPathsUnreadable, parseDependencyRefs, UNREADABLE_PATH_LINE, tooManyAttempts, type PathPolicy } from '@openadlc/shared';
 import { overlapKind, pathsOverlap } from './overlap.js';
 
 export { overlapKind, pathMatches } from './overlap.js';
@@ -371,20 +371,24 @@ export class Dispatcher {
    * The dispatcher decides; the bridge acts. Every label the platform writes is
    * written by the automation account through the bridge, and a second component
    * with a GitHub client would be a second place that rule could be broken.
+   *
+   * A dependency may be in another repository the install manages, and is
+   * read from its row there; one in a repository it does not manage never
+   * ships, so what waits on it stays blocked.
    */
-  private async unblockWhatHasShipped(repo: { id: string; name: string }): Promise<DispatchDecision[]> {
+  private async unblockWhatHasShipped(repo: { id: string; name: string; fullName: string }): Promise<DispatchDecision[]> {
     const decisions: DispatchDecision[] = [];
 
     for (const issue of await issues.listBlockedIssues(repo.id)) {
       // The list leaves these out; a row read before the label arrived is
       // still not the crew's to unblock.
       if (hasIgnoreLabel(issue.labels)) continue;
-      const dependencies = parseDependencies(issue.body);
-      if (dependencies.length === 0) continue;
+      const refs = parseDependencyRefs(issue.body);
+      if (refs.length === 0) continue;
 
-      const resolved = await Promise.all(dependencies.map((number) => issues.getIssue(repo.id, number)));
-      const outstanding = dependencies.filter((_, index) => !dependencyIsSatisfied(resolved[index] ?? null));
-      if (outstanding.length > 0) continue;
+      const resolved = await Promise.all(refs.map((ref) => issues.resolveDependency(repo, ref)));
+      if (resolved.some((one) => !dependencyIsSatisfied(one.issue))) continue;
+      const dependencies = refs.map(formatDependencyRef);
 
       try {
         await fetchJson(`${this.options.bridgeUrl}/internal/issues/${repo.name}/${issue.number}/unblock`, {
@@ -397,7 +401,7 @@ export class Dispatcher {
           issue: issue.number,
           bot: null,
           action: 'unblocked',
-          reason: `everything it waited for has shipped: ${dependencies.map((n) => `#${n}`).join(', ')}`,
+          reason: `everything it waited for has shipped: ${dependencies.join(', ')}`,
         });
       } catch (error) {
         decisions.push({
@@ -584,10 +588,19 @@ export class Dispatcher {
         }
 
         // Waiting on another issue that has not shipped, whatever its labels say.
-        const dependencies = parseDependencies(issue.body);
+        // One in this repository is read from where the board has it now; one
+        // in another is read from that repository's row.
+        const resolved = await Promise.all(
+          parseDependencyRefs(issue.body).map(async (ref) => ({
+            ref,
+            ...(namesRepository(ref, repo.fullName)
+              ? { managed: true, issue: known.get(ref.number) ?? null }
+              : await issues.resolveDependency(repo, ref)),
+          })),
+        );
         // Said, not skipped in silence: an issue read as waiting on one that
         // would never ship — closed as superseded — sat with nothing in the log.
-        const waitingOn = dependencies.filter((number) => !dependencyIsSatisfied(known.get(number) ?? null));
+        const waitingOn = resolved.filter((one) => !dependencyIsSatisfied(one.issue));
         if (waitingOn.length > 0) {
           decisions.push({
             repo: repo.name,
@@ -595,9 +608,10 @@ export class Dispatcher {
             bot: null,
             action: 'skipped',
             reason: `waits on ${waitingOn
-              .map((number) => {
-                const dependency = known.get(number);
-                return dependency ? `#${number}, not shipped yet` : `#${number}, which OpenADLC has not seen`;
+              .map(({ ref, managed, issue: dependency }) => {
+                const named = formatDependencyRef(ref);
+                if (!managed) return `${named}, in a repository this install does not manage`;
+                return dependency ? `${named}, not shipped yet` : `${named}, which OpenADLC has not seen`;
               })
               .join(', ')}`,
           });

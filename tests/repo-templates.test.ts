@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_DELIVERY_RULES, declaredPathsFrom, missingForRouting, parseDeliveryRules, parseDependencies, parseYamlFile, REQUIRED_CHECK } from '@openadlc/shared';
+import { DEFAULT_DELIVERY_RULES, declaredPathsFrom, missingForRouting, parseDeliveryRules, parseDependencyRefs, parseYamlFile, REQUIRED_CHECK } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -84,14 +84,17 @@ describe('an issue filed from the task form', () => {
 
   it('produces dependencies the platform can hold the issue on', () => {
     const withDependency = rendered(task.body, { dependencies: '- #42\n- #51' });
-    expect(parseDependencies(withDependency)).toEqual([42, 51]);
+    expect(parseDependencyRefs(withDependency)).toEqual([
+      { repo: null, number: 42 },
+      { repo: null, number: 51 },
+    ]);
   });
 
   it('is still routable when the optional fields are left alone', () => {
     // GitHub writes `_No response_` for an untouched optional field, and an
     // issue with no dependencies is the ordinary case.
     const untouched = rendered(task.body, { dependencies: '_No response_' });
-    expect(parseDependencies(untouched)).toEqual([]);
+    expect(parseDependencyRefs(untouched)).toEqual([]);
     expect(
       missingForRouting({
         labels: ['adlc:build', 'start:now', 'priority:p1', 'area:bridge', 'do:ai'],

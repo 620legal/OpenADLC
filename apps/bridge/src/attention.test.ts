@@ -1406,6 +1406,27 @@ describe('an issue closed without merging', () => {
       ['dependency-abandoned:openadlc-testbed#20', '#20 waits on #11 and #12, which were closed without merging', ['Edit #20', 'Reopen #11', 'Reopen #12']],
     ]);
   });
+
+  it('names one in another repository the install manages as owner/name#N', async () => {
+    // `#7` alone would send a person to this repository's #7, which is not it.
+    const { attentionItems } = await load();
+    const shop = { ...REPOS[0]!, id: 'repo-2', name: 'a', fullName: 'owner/a' };
+    const seven = { ...issue(7, 'Ship the token service', 'done'), repoId: 'repo-2', repoName: 'a', url: 'https://github.com/owner/a/issues/7', labels: ['adlc:done', 'openadlc:abandoned'] };
+    // This repository's own #7 is not abandoned, and is not the one named.
+    const ownSeven = { ...issue(7, 'Something here', 'build'), labels: ['adlc:build'] };
+    const waiting = { ...issue(3, 'Use the token service', 'build'), labels: ['adlc:build', 'blocked'], body: '## Dependencies\n\n- owner/a#7\n' };
+    const items = attentionItems({ now: NOW, gates: [], tasks: [], bots: BOTS, repos: [...REPOS, shop], requests: [], stallEvents: [], issues: [...ISSUES, ownSeven, seven, waiting] });
+    expect(items.filter((item) => item.kind === 'dependency_abandoned').map((item) => [item.headline, item.detail, item.actions.map((action) => [action.label, 'url' in action ? action.url : null])])).toEqual([
+      [
+        '#3 waits on owner/a#7, which was closed without merging',
+        'Drop or change owner/a#7 in its Dependencies, or reopen owner/a#7.',
+        [
+          ['Edit #3', 'https://github.com/janedoe/openadlc-testbed/issues/3'],
+          ['Reopen owner/a#7', 'https://github.com/owner/a/issues/7'],
+        ],
+      ],
+    ]);
+  });
 });
 
 describe('work sent back to a person', () => {

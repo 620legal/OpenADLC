@@ -1030,7 +1030,9 @@ export function registerInternalApi(
    * because an issue becoming routable is a thing somebody may need to explain.
    */
   post('/internal/issues/:repo/:number/unblock', async ({ params, body }) => {
-    const input = await body<{ dependencies?: number[] }>();
+    // Each as written, `#N` or `owner/name#N`: the dispatcher runs in this
+    // process, so nothing still sends the numbers this took before.
+    const input = await body<{ dependencies?: string[] }>();
     const repo = await repos.getRepoByName(params.repo ?? '');
     if (!repo) throw new HttpFailure(404, `no repository named ${params.repo ?? ''}`);
 
@@ -1049,7 +1051,7 @@ export function registerInternalApi(
     // webhook comes back — the same as a stage move.
     await issues.setBlockedLabel(repo.id, number, false);
 
-    const waited = (input.dependencies ?? []).map((entry) => `#${entry}`).join(', ');
+    const waited = (input.dependencies ?? []).join(', ');
     await audit({
       actor: await automationBotName(deps.config),
       action: 'issue.unblocked',

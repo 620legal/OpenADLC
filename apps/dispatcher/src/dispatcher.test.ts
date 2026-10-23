@@ -27,7 +27,10 @@ const store = vi.hoisted(() => ({
   triagedAt: new Map<number, number>(),
 }));
 
-vi.mock('@openadlc/db', () => ({
+vi.mock('@openadlc/db', () => {
+  const getIssue = vi.fn(async (_repoId: string, _number: number): Promise<unknown> => null);
+  const getRepoByName = vi.fn(async (_name: string): Promise<{ id: string } | null> => null);
+  return {
   audit: vi.fn(async () => undefined),
   bots: { getBotById: vi.fn(async () => builder), listBots: vi.fn(async () => [builder]) },
   costs: {
@@ -40,7 +43,14 @@ vi.mock('@openadlc/db', () => ({
     listRoutableIssues: vi.fn(async (repoId: string) => [issue(repoId, repoId === 'repo-api' ? 1 : 2)]),
     listIssues: vi.fn(async () => []),
     workInFlight: vi.fn(async () => []),
-    getIssue: vi.fn(async () => null),
+    getIssue,
+    // As the store resolves one: its own repository by `#N` or its full name,
+    // another through `getRepoByName`, and none for one the install lacks.
+    resolveDependency: vi.fn(async (own: { id: string; fullName: string }, ref: { repo: string | null; number: number }) => {
+      if (ref.repo === null || ref.repo.toLowerCase() === own.fullName.toLowerCase()) return { managed: true, issue: await getIssue(own.id, ref.number) };
+      const repo = await getRepoByName(ref.repo);
+      return repo ? { managed: true, issue: await getIssue(repo.id, ref.number) } : { managed: false, issue: null };
+    }),
   },
   leases: {
     expireStaleLeases: vi.fn(async () => []),
@@ -69,12 +79,13 @@ vi.mock('@openadlc/db', () => ({
     }),
   },
   health: { listHealth: vi.fn(async () => []) },
-  repos: { listRepos: vi.fn(async () => [ACTIVE, REMOVED]) },
+  repos: { listRepos: vi.fn(async () => [ACTIVE, REMOVED]), getRepoByName },
   settings: { getSetting: vi.fn(async () => null) },
   tasks: { countSeatSlotsInUse: vi.fn(async () => 0), countUnfinishedImplementTasks: vi.fn(async () => 0) },
   // No host has registered: their room is not counted.
   hosts: { taskRoom: vi.fn(async () => null) },
-}));
+  };
+});
 
 import { costs, health, issues, leases, repos, settings, spendingLimits } from '@openadlc/db';
 import { blockingOverlaps, Dispatcher, INSTALL_PAUSE_UNREAD, overlapReason, PAUSES_UNREAD, pausedRepoNames } from './dispatcher.js';
@@ -238,6 +249,102 @@ describe('a blocked issue whose dependencies have shipped', () => {
       vi.mocked(issues.getIssue).mockResolvedValue(null);
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('a dependency in another repository the install manages', () => {
+  const ELSEWHERE = { id: 'repo-shop', fullName: 'owner/a' };
+  const WAITING = `${BODY}\n\n### Dependencies\n\n- owner/a#1`;
+
+  function answering() {
+    const posted: { url: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: { body?: string }) => {
+        posted.push({ url, body: init?.body ? JSON.parse(init.body) : null });
+        return new Response('{"changed":true}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    return posted;
+  }
+
+  function dependencyIn(stage: string, labels: string[]) {
+    vi.mocked(repos.getRepoByName).mockImplementation(async (name: string) => (name.toLowerCase() === 'owner/a' ? (ELSEWHERE as never) : null));
+    vi.mocked(issues.getIssue).mockImplementation(async (repoId: string, number: number) =>
+      repoId === ELSEWHERE.id && number === 1 ? ({ repoId, number, stage, labels } as never) : null,
+    );
+  }
+
+  afterEach(() => {
+    vi.mocked(issues.listBlockedIssues).mockImplementation(async () => []);
+    vi.mocked(issues.listRoutableIssues).mockImplementation(async (repoId: string) => [issue(repoId, repoId === 'repo-api' ? 1 : 2)] as never);
+    vi.mocked(issues.getIssue).mockImplementation(async () => null);
+    vi.mocked(repos.getRepoByName).mockImplementation(async () => null);
+    vi.unstubAllGlobals();
+  });
+
+  describe('holds a blocked issue until it ships', () => {
+    beforeEach(() => {
+      vi.mocked(issues.listBlockedIssues).mockImplementation(async (repoId: string) =>
+        repoId === 'repo-api' ? ([{ repoId, number: 12, labels: ['blocked', 'adlc:build'], body: WAITING, declaredPaths: [] }] as never) : [],
+      );
+    });
+
+    it('is not unblocked while it is in review', async () => {
+      // It was read as waiting on nothing and built before that work shipped.
+      const posted = answering();
+      dependencyIn('review', ['adlc:review']);
+      await dispatcher().runOnce();
+      expect(posted.filter((one) => one.url.includes('/unblock'))).toEqual([]);
+    });
+
+    it('is unblocked once it is done, and says which one it waited for', async () => {
+      const posted = answering();
+      dependencyIn('done', ['adlc:done']);
+      const decisions = await dispatcher().runOnce();
+      expect(posted.filter((one) => one.url.includes('/unblock'))).toEqual([
+        { url: 'http://127.0.0.1:1/internal/issues/api/12/unblock', body: { dependencies: ['owner/a#1'] } },
+      ]);
+      expect(decisions.find((one) => one.action === 'unblocked')?.reason).toBe('everything it waited for has shipped: owner/a#1');
+    });
+
+    it('is not unblocked by one closed without merging', async () => {
+      const posted = answering();
+      dependencyIn('done', ['adlc:done', 'openadlc:abandoned']);
+      await dispatcher().runOnce();
+      expect(posted.filter((one) => one.url.includes('/unblock'))).toEqual([]);
+    });
+  });
+
+  describe('keeps an issue marked start:now from being leased', () => {
+    const waiting = (body: string) =>
+      vi.mocked(issues.listRoutableIssues).mockImplementation(async (repoId: string) =>
+        repoId === 'repo-api' ? ([{ ...issue(repoId, 1), body }] as never) : [],
+      );
+
+    it('while it has not shipped', async () => {
+      dependencyIn('build', ['adlc:build']);
+      waiting(WAITING);
+      const decisions = await dispatcher().runOnce();
+      expect(decisions.find((one) => one.issue === 1 && one.action === 'skipped')?.reason).toContain('waits on owner/a#1, not shipped yet');
+      expect(decisions.some((one) => one.action === 'leased' && one.issue === 1)).toBe(false);
+    });
+
+    it('when its repository is not the install’s', async () => {
+      dependencyIn('done', ['adlc:done']);
+      waiting(`${BODY}\n\n### Dependencies\n\n- nobody/x#1`);
+      const decisions = await dispatcher().runOnce();
+      expect(decisions.find((one) => one.issue === 1 && one.action === 'skipped')?.reason).toBe(
+        'waits on nobody/x#1, in a repository this install does not manage',
+      );
+    });
+
+    it('when its repository is the install’s and that number is not', async () => {
+      dependencyIn('done', ['adlc:done']);
+      waiting(`${BODY}\n\n### Dependencies\n\n- owner/a#99`);
+      const decisions = await dispatcher().runOnce();
+      expect(decisions.find((one) => one.issue === 1 && one.action === 'skipped')?.reason).toBe('waits on owner/a#99, which OpenADLC has not seen');
+    });
   });
 });
 

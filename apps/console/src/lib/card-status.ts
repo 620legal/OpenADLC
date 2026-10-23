@@ -207,7 +207,8 @@ function waitingLine(card: BoardCard, waiting: CardWaiting, context: CardContext
       if (reason.on.length === 0) return line(['Blocked by another issue']);
       const named = reason.on.map((on) => {
         const doing = dependencyDoing(on, context);
-        return doing ? `#${on.number} (${doing})` : `#${on.number}`;
+        const named = on.ref ?? `#${on.number}`;
+        return doing ? `${named} (${doing})` : named;
       });
       return line([`Waiting on ${someInWords(named)}`]);
     }
@@ -420,7 +421,7 @@ export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
       return inLine(card, context.mergeLine) ?? { text: 'Waiting for the reviewers', tone: 'muted', mark: null };
     case 'build': {
       if (card.labels.includes('blocked')) {
-        const on = (card.waitingOn ?? []).map((number) => `#${number}`);
+        const on = card.waitingOn ?? [];
         const which = on.length > 1 ? `${on.slice(0, -1).join(', ')} and ${on[on.length - 1]}` : on[0];
         return { text: which ? `Waiting on ${which}` : 'Blocked by another issue', tone: 'muted', mark: null };
       }

@@ -58,6 +58,8 @@ export interface SeatHolder {
 
 /** An issue a card depends on, and what is happening on it now. */
 export interface DependencyNow {
+  /** `#N`, or `owner/name#N` for an issue in another repository. Absent from an older bridge, which named `#N` only. */
+  ref?: string;
   number: number;
   stage: string | null;
   abandoned: boolean;
@@ -132,8 +134,8 @@ export interface BoardCard {
   /** Whether the question open on it is a stage waiting for an OK. */
   approval?: boolean;
   shippedAt?: string | null;
-  /** What a blocked card waits on, by issue number. Absent from an older bridge. */
-  waitingOn?: number[];
+  /** `#N`, or `owner/name#N` for an issue in another repository. */
+  waitingOn?: string[];
   /**
    * With nothing going on it, why it waits, since when, and whether it is
    * stuck. Null when it waits for no seat; absent from an older bridge, and

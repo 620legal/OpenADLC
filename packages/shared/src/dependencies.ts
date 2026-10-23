@@ -19,27 +19,44 @@ import { hasAbandonedLabel } from './stages.js';
  *
  * Nothing in this repository defined that section before, so the format is a
  * decision. Bare `#42` on its own line works too; anything after the number is
- * for a person.
+ * for a person. `- owner/name#42` names issue 42 in another repository this
+ * install manages; one it does not manage never ships.
  */
 
 const HEADING = /^#{1,6}\s+dependencies\s*$/i;
 const ANY_HEADING = /^#{1,6}\s+/;
 
 /**
- * Issue numbers this one waits for, in the order written, without repeats.
+ * One dependency as written: `repo` is `owner/name` as the line spells it, or
+ * null for `#N`, which names an issue in this issue's own repository.
+ */
+export interface DependencyRef {
+  repo: string | null;
+  number: number;
+}
+
+/**
+ * The issues this one waits for, in the order written, without repeats.
  *
  * An empty list and "no Dependencies section" are the same answer here, unlike
  * the human-review rules: an issue that names no dependency is not waiting for
  * anything, which is a complete answer rather than a missing one.
+ *
+ * This replaced a parser that returned numbers only. It read `- #N` and skipped
+ * `- owner/name#N`, so an issue waiting on work in another managed repository
+ * was given `start:now` and built before that work shipped. Nothing kept the
+ * numbers-only parser alive beside this one: a caller that picked it would drop
+ * a cross-repository line again, with nothing to catch it.
  */
-export function parseDependencies(body: string | null): number[] {
+export function parseDependencyRefs(body: string | null): DependencyRef[] {
   if (!body) return [];
 
   const lines = body.split('\n');
   const start = lines.findIndex((line) => HEADING.test(line.trim()));
   if (start < 0) return [];
 
-  const numbers: number[] = [];
+  const refs: DependencyRef[] = [];
+  const seen = new Set<string>();
   for (const line of lines.slice(start + 1)) {
     const trimmed = line.trim();
     if (ANY_HEADING.test(trimmed)) break;
@@ -50,13 +67,34 @@ export function parseDependencies(body: string | null): number[] {
     // A reference inside a sentence is prose: intake wrote "None. This
     // supersedes #3, which is closed as superseded; it is not a dependency",
     // and the issue waited for #3, which would never ship, without a word.
-    const match = /^(?:[-*+]\s+|\d+[.)]\s+)?#(\d+)\b/.exec(trimmed);
-    if (!match?.[1]) continue;
-    const number = Number(match[1]);
-    if (Number.isFinite(number) && !numbers.includes(number)) numbers.push(number);
+    const match = /^(?:[-*+]\s+|\d+[.)]\s+)?(?:([A-Za-z0-9-]+\/[A-Za-z0-9._-]+))?#(\d+)\b/.exec(trimmed);
+    if (!match?.[2]) continue;
+    const number = Number(match[2]);
+    if (!Number.isFinite(number)) continue;
+    const repo = match[1] ?? null;
+    // GitHub ignores case in a repository's name, so `A/B#3` repeats `a/b#3`.
+    // The first spelling is kept.
+    const key = `${repo?.toLowerCase() ?? ''}#${number}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push({ repo, number });
   }
 
-  return numbers;
+  return refs;
+}
+
+/** `#N`, or `owner/name#N` as written: how a dependency is shown and audited. */
+export function formatDependencyRef(ref: DependencyRef): string {
+  return ref.repo ? `${ref.repo}#${ref.number}` : `#${ref.number}`;
+}
+
+/**
+ * Whether the ref names the repository `fullName`: it names no repository, or
+ * names this one in any case. A ref that spells out its own repository is a
+ * same-repository dependency everywhere, stacking included.
+ */
+export function namesRepository(ref: DependencyRef, fullName: string): boolean {
+  return ref.repo === null || ref.repo.toLowerCase() === fullName.toLowerCase();
 }
 
 /**

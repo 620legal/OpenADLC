@@ -182,8 +182,9 @@ describe('a card’s status line', () => {
     );
     expect(cardStatus(card({ labels: ['adlc:build', 'blocked'] }), CONTEXT).text).toBe('Blocked by another issue');
     // Named, when the bridge says which: a person should not have to open the issue to find out.
-    expect(cardStatus(card({ labels: ['adlc:build', 'blocked'], waitingOn: [1] }), CONTEXT).text).toBe('Waiting on #1');
-    expect(cardStatus(card({ labels: ['adlc:build', 'blocked'], waitingOn: [1, 4, 7] }), CONTEXT).text).toBe('Waiting on #1, #4 and #7');
+    expect(cardStatus(card({ labels: ['adlc:build', 'blocked'], waitingOn: ['#1'] }), CONTEXT).text).toBe('Waiting on #1');
+    expect(cardStatus(card({ labels: ['adlc:build', 'blocked'], waitingOn: ['#1', '#4', '#7'] }), CONTEXT).text).toBe('Waiting on #1, #4 and #7');
+    expect(cardStatus(card({ labels: ['adlc:build', 'blocked'], waitingOn: ['#1', 'owner/a#2'] }), CONTEXT).text).toBe('Waiting on #1 and owner/a#2');
   });
 
   it('says where an approved pull request is in the line to merge', () => {
@@ -414,7 +415,7 @@ describe('a card on a bridge without the dispatcher', () => {
 
   it('lets a repository’s pause win, and leaves other statuses as they were', () => {
     expect(cardStatus(card(), { ...OFF, pausedRepos: ['openadlc'] }).text).toBe('Waiting until openadlc is resumed');
-    expect(cardStatus(card({ labels: ['adlc:build', 'blocked'], waitingOn: [1] }), OFF).text).toBe('Waiting on #1');
+    expect(cardStatus(card({ labels: ['adlc:build', 'blocked'], waitingOn: ['#1'] }), OFF).text).toBe('Waiting on #1');
     expect(cardStatus(card({ labels: ['adlc:build'] }), OFF).text).toBe('Not ready to build yet');
     expect(cardStatus(card({ labels: ['adlc:build', 'start:now', 'needs-triage'] }), OFF).text).toBe('Waiting for triage');
     const writing = card({ active: [task({ kind: 'implement', state: 'running', startedAt: minutesAgo(12) })] });
@@ -489,6 +490,14 @@ describe('a card waiting with nothing going on it', () => {
       'Waiting on #141 (closed without merging) and #404 (not on the board) · 32 min',
     );
     expect(waits({ kind: 'dependency', on: [] }, {}, build).text).toBe('Blocked by another issue · 32 min');
+  });
+
+  it('names a dependency in another repository as the bridge wrote it', () => {
+    const build = { stage: 'build', labels: ['adlc:build', 'blocked'] };
+    const on = (extra: Record<string, unknown>) => ({ number: 2, stage: 'build', abandoned: false, task: null, waits: null, ...extra });
+    expect(waits({ kind: 'dependency', on: [on({ ref: '#1', number: 1 }), on({ ref: 'owner/a#2', stage: null })] }, {}, build).text).toBe(
+      'Waiting on #1 and owner/a#2 (not on the board) · 32 min',
+    );
   });
 
   it('says each other thing it waits on, and for how long', () => {

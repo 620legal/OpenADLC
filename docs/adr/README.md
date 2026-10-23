@@ -26,3 +26,4 @@ only where it changed a decision the table already had (0003, from D5 and D12;
 - [0009](0009-work-items.md): every issue, pull request and request gets a work item number of the install's own, never reused, numbered in opened order from history and linked automatically
 - [0010](0010-console-name-and-logo.md): the console's name and logo are two settings, the logo a checked data URL kept out of every request's read, read by every role and drawn only through `<img>`, served sandboxed
 - [0011](0011-a-request-is-answered-once-saved.md): a console request is answered once it is saved, with a prediction (`starting`, or its place in line), and its triage starts after; a failed start is said on its thread
+- [0013](0013-dependencies-across-repositories.md): a dependency may name an issue in another managed repository as `owner/name#N`; `parseDependencyRefs` replaced `parseDependencies`, one outside the install never ships, and stacking stays same-repository

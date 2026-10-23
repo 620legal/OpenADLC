@@ -65,7 +65,9 @@ What makes an issue routable is `listRoutableIssues` in `packages/db/src/store/i
 but `do:ai` (`do:human`, `do:product`, `do:legal`), `openadlc:ignore`;
 `openadlc:next` first);
 whether it says enough is `missingForRouting` in `packages/shared/src/readiness.ts`;
-what it waits on is `parseDependencies` in `packages/shared/src/dependencies.ts`.
+what it waits on is `parseDependencyRefs` in `packages/shared/src/dependencies.ts`
+(`#N` in its own repository, `owner/name#N` in another the install manages),
+looked up by `resolveDependency` in `packages/db/src/store/issues.ts`.
 
 An issue's Expected paths are read by `declaredPathsFrom` in
 `packages/shared/src/checks.ts`, every path on a line: several backticked
