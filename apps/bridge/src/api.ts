@@ -80,7 +80,7 @@ import {
   rulesAppliedPayload,
   type GitHubClient,
 } from '@openadlc/github';
-import { REPO_DEFAULTS, buildAppManifest, hasIgnoreLabel, hasNextLabel, hasPausedLabel, isGitHubLogin, loginCandidates, manifestPostUrl, sameLogin } from '@openadlc/shared';
+import { REPO_DEFAULTS, buildAppManifest, hasIgnoreLabel, hasNextLabel, hasPausedLabel, isGitHubLogin, loginCandidates, manifestPostUrl, sameLogin, shipsByRelease } from '@openadlc/shared';
 import { refuseWhilePaused } from './pause-work.js';
 import { HttpFailure, Router, STREAMING, WithStatus } from './router.js';
 import { readyNow, RequestQueue, stillTried, withPositions } from './request-queue.js';
@@ -110,6 +110,7 @@ import { bridgeStopReason, stoppedByTheBridge, THE_BRIDGE } from './bridge-stops
 import { asAutomation } from './automation-bot.js';
 import { DeployKnowledge, isTestingDeployChoice, testingDeployChoice, testingDeployStored } from './deploys.js';
 import { deploysNothingHere } from './deploy-pipeline.js';
+import { releaseEventsOf } from './health/checks/ships-by-release.js';
 import { startBuild } from './build-start.js';
 import type { HealthRegistry } from './health/registry.js';
 import { registerHealthRoutes } from './health/routes.js';
@@ -1191,6 +1192,13 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
         .filter((issue) => issue.stage === 'merged' && issue.prNumber === null && !byMergingIn.get(issue.repoName))
         .map((issue) => `${issue.repoName}#${issue.number}`),
     );
+    // In Ship where the repository ships by release: no deploy is coming for
+    // it, and the card says it waits for the next release.
+    const releasing = new Set<string>();
+    const shipping = new Set(listed.filter((issue) => issue.stage === 'merged').map((issue) => issue.repoName));
+    for (const entry of deps.delivery ? repoList.filter((one) => shipping.has(one.name)) : []) {
+      if (shipsByRelease((await deps.delivery!.get(entry).catch(() => null))?.rules)) releasing.add(entry.name);
+    }
     const issueCards = cards
       .filter((card) => workedIn.has(card.repo) && !ignored.has(card.ref))
       .map((card) => {
@@ -1200,6 +1208,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
           held: hasPausedLabel(card.labels) ? (holds[card.ref] ?? { by: 'a person on GitHub', at: '', why: null }) : null,
           next: hasNextLabel(card.labels),
           ...(noMerge.has(card.ref) ? { noMerge: true as const } : {}),
+          ...(card.stage === 'merged' && releasing.has(card.repo) && !noMerge.has(card.ref) ? { shipsByRelease: true as const } : {}),
         };
         // Who is on it now, the pull request's reviewers included; the store
         // only knew the tasks filed under the issue itself.
@@ -1926,6 +1935,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     const repoList = await repos.listRepos();
     const crew = await bots.listBots();
     const testingDeploy = (await settings.allSettings().catch(() => null))?.testingDeploy ?? null;
+    // A table not there yet is no checks, not a page that fails.
+    const checks = await (async () => (deps.health ? deps.health.rows() : []))().catch(() => []);
     return {
       repos: await Promise.all(
         repoList.map(async (repo) => {
@@ -1947,6 +1958,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
             // Its rules name a testing deploy all the same, and the page said
             // a merge waits on testing while each went to Done.
             deploysNothing: await deploysNothingHere(repo.id),
+            // Whether the app hears a release published, for one that ships
+            // by release: without it the deploy sweep finds the release, late.
+            releaseEvents: releaseEventsOf(checks, repo.fullName),
           };
         }),
       ),

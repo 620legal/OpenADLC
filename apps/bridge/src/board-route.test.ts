@@ -725,3 +725,89 @@ describe('GET /v1/repos', () => {
     ]);
   });
 });
+
+/**
+ * A repository that ships by release: 620legal/OpenADLC, whose installs take
+ * a change only from a release. Its merged card waits in Ship for the next
+ * one, and says so rather than "Merged · waiting to deploy" over a deploy
+ * that never comes; Settings says whether the app hears a release published.
+ */
+describe('a repository that ships by release', () => {
+  let server: Server;
+  let url: string;
+  const IN_SHIP = { ...ISSUES[0]!, id: 'issue-45', number: 45, title: 'A merged change', stage: 'merged', labels: ['adlc:merged'], prNumber: 145 };
+  const NO_PULL = { ...IN_SHIP, id: 'issue-44', number: 44, prNumber: null };
+
+  beforeEach(async () => {
+    const { registerConsoleApi } = await import('./api.js');
+    const { Router } = await import('./router.js');
+    const { DEFAULT_DELIVERY_RULES } = await import('@openadlc/shared');
+    const router = new Router();
+    const byRelease = { ...DEFAULT_DELIVERY_RULES, testing: { ...DEFAULT_DELIVERY_RULES.testing, on: 'release' as const } };
+    registerConsoleApi(router, {
+      config: { gitHubClientId: '', webhookSecret: '', humans: [], review: { maxRounds: 3 } } as never,
+      hostd: {} as never,
+      actors: {} as never,
+      invitations: {} as never,
+      automation: {} as never,
+      gates: {} as never,
+      taskService: {} as never,
+      threadStream: { subscribe: () => () => undefined, watching: 0 } as never,
+      onboarding: {} as never,
+      webhookSetup: {} as never,
+      repoSetup: {} as never,
+      // The testbed ships by release; the website deploys on merge.
+      delivery: {
+        get: async (repo: { name: string }) => ({
+          rules: repo.name === 'openadlc-testbed' ? byRelease : DEFAULT_DELIVERY_RULES,
+          source: 'repository',
+          testingUrl: null,
+          fileError: null,
+        }),
+        forget: () => undefined,
+      } as never,
+      // The app made before OpenADLC asked for Release events.
+      health: {
+        rows: async () => [
+          {
+            checkId: 'ships-by-release',
+            subject: 'janedoe/openadlc-testbed',
+            state: 'failing',
+            action: { label: 'Open the app’s permissions and events', url: 'https://github.com/settings/apps/openadlc-janedoe/permissions' },
+            facts: {},
+          },
+        ],
+      } as never,
+    });
+    server = createServer((request, response) => void router.handle(request, response));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('marks its cards in Ship as shipping with the next release, and not one with no merge to match a release to', async () => {
+    const { issues } = await import('@openadlc/db');
+    const rows = [IN_SHIP, NO_PULL];
+    vi.mocked(issues.boardIssues).mockResolvedValueOnce(rows as never);
+    vi.mocked(issues.boardCards).mockResolvedValueOnce(
+      rows.map((issue) => ({ repo: issue.repoName, ref: `openadlc-testbed#${issue.number}`, title: issue.title, stage: issue.stage, assignees: [], gateOpen: false, url: issue.url, labels: issue.labels, updatedAt: issue.updatedAt })) as never,
+    );
+    const board = (await (await fetch(`${url}/v1/board`)).json()) as { columns: { stage: string; cards: { ref: string; shipsByRelease?: boolean; noMerge?: boolean }[] }[] };
+    const ship = board.columns.find((column) => column.stage === 'merged')?.cards ?? [];
+    expect(ship.map((card) => [card.ref, card.shipsByRelease ?? false, card.noMerge ?? false])).toEqual([
+      ['openadlc-testbed#45', true, false],
+      ['openadlc-testbed#44', false, true],
+    ]);
+  });
+
+  it('says on GET /v1/repos whether the app hears a release published, for Settings to say', async () => {
+    const body = (await (await fetch(`${url}/v1/repos`)).json()) as { repos: { name: string; releaseEvents: unknown; delivery: { rules: { testing: { on: string } } } }[] };
+    expect(body.repos.map((repo) => [repo.name, repo.delivery.rules.testing.on, repo.releaseEvents])).toEqual([
+      ['openadlc-testbed', 'release', { subscribed: false, url: 'https://github.com/settings/apps/openadlc-janedoe/permissions' }],
+      ['website', 'merge', null],
+    ]);
+  });
+});

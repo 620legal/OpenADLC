@@ -10,6 +10,7 @@ import { Afterwards, registerConsoleApi, retryDepsFor, stopTask } from './api.js
 import { SendBack } from './send-back.js';
 import { DeliveryKnowledge } from './delivery-rules.js';
 import { DeployPipeline } from './deploy-pipeline.js';
+import { ReleaseShipping } from './release-shipping.js';
 import { isPrerequisiteRow } from './health/checks/crew.js';
 import { retryTask } from './task-retry.js';
 import { AppReach } from './app-reach.js';
@@ -279,12 +280,17 @@ async function main(): Promise<void> {
   // the pipeline that dispatches its deploys as the app. OPENADLC_TESTING_URL is
   // read only as the deprecated fallback for a repository whose rules name no URL.
   const delivery = new DeliveryKnowledge(() => asAutomation(actors, config), config.testingUrl);
+  const deployClient = async (repoFullName: string) =>
+    (await appGate.client(repoFullName).catch(() => null)) ?? (await asAutomation(actors, config).catch(() => null));
   const pipeline = new DeployPipeline({
     delivery,
-    client: async (repoFullName) => (await appGate.client(repoFullName).catch(() => null)) ?? (await asAutomation(actors, config).catch(() => null)),
+    client: deployClient,
     sendBack,
     // A merge whose testing deploy had nothing to deploy goes to Done.
     moveStage: (input) => automation.moveStage(input),
+    // A repository that ships by release: its cards go to Done when a
+    // published release contains their merge (`release-shipping.ts`).
+    releases: new ReleaseShipping({ delivery, client: deployClient, moveStage: (input) => automation.moveStage(input) }),
   });
   const webhooks = new Webhooks(
     config,
@@ -779,6 +785,9 @@ async function main(): Promise<void> {
     pipeline,
     delivery,
     setRules: (repoId, rules) => repos.setDelivery(repoId, { deliveryRules: rules }),
+    storedRules: async (repoId) => (await repos.getDelivery(repoId)).deliveryRules,
+    clearRules: (repoId) => repos.setDelivery(repoId, { deliveryRules: null }),
+    recheck: () => health.runSoon(['ships-by-release']),
     recordChoice: (repoId, choice) => repos.setProductionChoice(repoId, choice),
     held: (repoId) => deployRuns.heldForPerson(repoId),
     soak: (repoId, sha, after, detail) => deployRuns.holdPromote(repoId, sha, after, detail),

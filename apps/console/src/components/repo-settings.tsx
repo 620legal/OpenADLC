@@ -4,14 +4,14 @@ import { useRouter } from 'next/navigation';
 import { DesignMemorySection } from '@/components/design-memory';
 import { TaskPostgresSection } from '@/components/task-postgres';
 import { Fragment, useEffect, useRef, useState, useTransition, type ReactNode } from 'react';
-import { pauseWork, removeRepository, repositoryRemoval, resumeWork, updateRepoSettings } from '@/app/actions';
+import { pauseWork, removeRepository, repositoryRemoval, resumeWork, setShipsByRelease, updateRepoSettings } from '@/app/actions';
 import { BotAvatar } from '@/components/avatar';
 import { ColorChoice, REPO_SWATCHES } from '@/components/color-choice';
 import { CheckIcon, ExternalIcon } from '@/components/icons';
 import { RepoDot } from '@/components/repo-badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import type { DesignMemoryEntry, CrewMember, RemovalChoices, RemovalPreview, RemovalReport, RepoDelivery, TaskPostgresView, WorkPause } from '@/lib/api';
+import type { DesignMemoryEntry, CrewMember, ReleaseEvents, RemovalChoices, RemovalPreview, RemovalReport, RepoDelivery, TaskPostgresView, WorkPause } from '@/lib/api';
 import { pauseLine } from '@/components/pause-work';
 import { botLabel } from '@/lib/bot-label';
 import { cn } from '@/lib/cn';
@@ -37,7 +37,12 @@ export interface RepoSettingsRepo {
   delivery?: RepoDelivery | null;
   /** Why its newest testing deploy had nothing to deploy, so its merges ship by merging; null or absent when it deployed. */
   deploysNothing?: string | null;
+  /** Whether the app hears a release published, where it ships by release; null or absent when not known. */
+  releaseEvents?: ReleaseEvents | null;
 }
+
+/** What the page says of a repository that ships by release (`testing.on: release`). */
+export const SHIPS_BY_RELEASE_LINE = 'Ships by release: cards reach Done when a published release contains their merge.';
 
 /**
  * How a repository ships, as lines a person reads: what happens after a
@@ -55,7 +60,12 @@ export function deliveryLines(
 ): { rules: string[]; source: string; problem: string | null } {
   const { testing, production } = delivery.rules;
   const rules: string[] = [];
-  if (testing.on === 'none') {
+  if (testing.on === 'release') {
+    // Nothing reaches testing, so nothing is promoted either: the production
+    // lines would describe a deploy that never runs.
+    rules.push(SHIPS_BY_RELEASE_LINE);
+    rules.push('A merge runs no testing deploy: its card waits in Ship until a release that is not a draft or a prerelease contains it, then goes to Done saying which.');
+  } else if (testing.on === 'none') {
     rules.push('Merging ships it: no testing deploy, nothing to promote.');
   } else {
     if (deploysNothing) rules.push(`Merging ships it: ${testing.workflow} deploys nothing here (${deploysNothing}), so a merge goes to Done. Once it deploys:`);
@@ -468,6 +478,7 @@ export function RepoSettings({
             {repo.delivery.fileError && <p className="text-[12px] leading-snug text-alarm">{repo.delivery.fileError}</p>}
           </div>
         )}
+        {repo.delivery && <ShipsByRelease repo={repo.name} delivery={repo.delivery} releaseEvents={repo.releaseEvents ?? null} />}
       </section>
 
       {taskPostgres && <TaskPostgresSection repo={repo.name} initial={taskPostgres} />}
@@ -496,6 +507,80 @@ export function RepoSettings({
           <RemoveRepository name={repo.name} fullName={repo.fullName ?? null} />
         </div>
       </section>
+    </div>
+  );
+}
+
+/**
+ * Whether the repository ships by release, which a person sets here: its
+ * merged cards then wait in Ship until a published release contains their
+ * merge, and no testing deploy is dispatched. Saved as it is ticked, into the
+ * repository's stored rules; one whose rules come from `.github/openadlc.yml`
+ * is changed by a pull request, and the box says so. Where it ships by
+ * release and the app hears no release published, the page says what to
+ * tick: the deploy sweep still finds each release, only later.
+ */
+export function ShipsByRelease({ repo, delivery, releaseEvents }: { repo: string; delivery: RepoDelivery; releaseEvents: ReleaseEvents | null }) {
+  const stored = delivery.rules.testing.on === 'release';
+  const [on, setOn] = useState(stored);
+  // Taken from each read of the page, as the other controls are.
+  const [seen, setSeen] = useState(stored);
+  if (seen !== stored) {
+    setSeen(stored);
+    setOn(stored);
+  }
+  const [refused, setRefused] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const byFile = delivery.source === 'file';
+  const id = `${repo}-ships-by-release`;
+  const toggle = (next: boolean): void => {
+    setOn(next);
+    setRefused(null);
+    startTransition(async () => {
+      const result = await safeAction(() => setShipsByRelease(repo, next));
+      if (!result.ok) {
+        setOn(!next);
+        setRefused(result.error ?? 'the bridge refused it');
+      }
+    });
+  };
+  return (
+    <div className="flex flex-col gap-1 border-t border-well pt-2">
+      <label className="inline-flex items-center gap-2 text-[12.5px] font-medium text-body">
+        {/* autoComplete off: a browser restores a box's tick on reload, which
+            would show a setting the bridge does not hold. */}
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={pending || byFile}
+          autoComplete="off"
+          aria-describedby={`${id}-line`}
+          onChange={(event) => toggle(event.target.checked)}
+        />
+        Ships by release
+      </label>
+      <p id={`${id}-line`} className="pl-6 text-[11.5px] leading-snug text-dim">
+        {byFile
+          ? 'Set by testing.on in .github/openadlc.yml, which always wins over a setting here: change it there by a pull request.'
+          : 'Cards reach Done when a published release contains their merge, and a merge runs no testing deploy.'}
+      </p>
+      {on && releaseEvents && !releaseEvents.subscribed && (
+        <p className="pl-6 text-[11.5px] leading-snug text-attention">
+          The OpenADLC app is not subscribed to Release events, so a release moves its cards at the next deploy sweep rather than as it is published.{' '}
+          {releaseEvents.url ? (
+            <a href={releaseEvents.url} target="_blank" rel="noreferrer" className="text-link hover:underline">
+              Tick “Release” on the app’s Permissions &amp; events page
+            </a>
+          ) : (
+            'Tick “Release” on the app’s Permissions & events page.'
+          )}
+        </p>
+      )}
+      {refused && (
+        <p role="alert" className="pl-6 text-[11.5px] leading-snug text-alarm">
+          Not saved: {refused}
+        </p>
+      )}
     </div>
   );
 }

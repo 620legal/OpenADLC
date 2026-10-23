@@ -35,7 +35,9 @@ version: 1
 
 testing:
   # `merge`: each merge dispatches the testing deploy. `none`: merging is
-  # shipping — no testing deploy, nothing to promote.
+  # shipping — no testing deploy, nothing to promote. `release`: a published
+  # release is — no testing deploy, and a merged card waits in Ship until a
+  # release that is not a draft or a prerelease contains it.
   on: merge
   # Where testing is served, for the QA bot's journeys.
   # url: https://testing.example.com

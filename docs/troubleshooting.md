@@ -1261,6 +1261,7 @@ question open on it, its place in the line to merge — never from a setting
 | Waiting until `<repo>` is resumed | The repository is paused | Settings → Pause work |
 | Merged · waiting to deploy | No `deployed:testing` yet, in a repository that has a testing deploy | Settings → Repositories: how it ships, and where the rules came from; the bridge log's `dispatched deploy-testing` or `not dispatched` line |
 | No merge to deploy · move it to Done by hand | In Ship, and its issue records no pull request, in a repository that has a testing deploy: no deploy carries it, and nothing that finishes a merge moves it. Move it to Done once its change has shipped, or back to the stage its work is in | The deploy sweep's `is merged with no pull request recorded` line |
+| Merged · ships with the next release | The repository ships by release (`testing: on: release`): no deploy is coming, and the card goes to Done when a published release, not a draft or a prerelease, contains its merge | Settings → Repositories → Ships by release; the deploy sweep's `in Ship until a published release contains` line; the `ships-by-release` card, when the app is not subscribed to Release events |
 | Abandoned … (in Done) | Closed without merging: it is labelled `openadlc:abandoned`, nothing shipped, and it is not in "N this week" | The issue on GitHub; see [Closed, but still on the board or in Needs you](#closed-but-still-on-the-board-or-in-needs-you) |
 
 A repository whose delivery rules say `testing: on: none` does not sit on that
@@ -1622,7 +1623,17 @@ it was; otherwise it says why not, and that the sweep tries again.
   of the repository while its newest testing deploy had nothing to deploy.
   If the repository has no testing environment, say so in its rules too
   (`testing: on: none`, or Settings → Repositories → **No testing deploy**):
-  merging then ships without a dispatch.
+  merging then ships without a dispatch. If it ships as a release instead,
+  tick Settings → Repositories → **Ships by release** (`testing: on: release`):
+  its cards then wait in Ship for the release that contains them.
+- **A release was published and its cards are still in Ship** — the release
+  is a draft or a prerelease, which ship nothing; or its tag's commit does not
+  contain their merge (it was cut before they merged); or no `release`
+  delivery came, and the deploy sweep moves them at its next run, saying
+  `moved to Done: released in vX.Y.Z`. The `ships-by-release` card says when
+  the app is not subscribed to **Release** events: tick it on the app's
+  Permissions & events page, and releases move cards as they are published. A
+  card with no pull request recorded has no merge to compare: move it by hand.
 
 ## A stacked issue waits after its base merged
 
@@ -1691,7 +1702,7 @@ Every reconcile pass (a quarter of an hour) tries them as well, for a lease
 let go where nothing looks at once.
 
 ```bash
-grep -E 'deployed nothing|released the lease|reached Done|merging shipped it' "$(openadlc logs bridge)" | tail -n 20
+grep -E 'deployed nothing|released the lease|reached Done|merging shipped it|released in' "$(openadlc logs bridge)" | tail -n 20
 ```
 
 ## Something is left after removing a repository

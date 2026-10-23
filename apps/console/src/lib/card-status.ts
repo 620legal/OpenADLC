@@ -408,6 +408,9 @@ export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
       return { text: when ? `Shipped ${when}` : 'Shipped', tone: 'muted', mark: 'check' };
     }
     case 'merged':
+      // No deploy is coming where a release ships it: "waiting to deploy"
+      // would say one was.
+      if (card.shipsByRelease) return { text: 'Merged · ships with the next release', tone: 'muted', mark: null };
       if (card.labels.includes('deployed:testing')) return { text: 'Live on testing · waiting for production', tone: 'muted', mark: null };
       // No pull request recorded, so no deploy will ever carry it: "waiting
       // to deploy" sat on such a card for good, with nobody told.
