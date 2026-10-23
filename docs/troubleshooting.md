@@ -1002,6 +1002,14 @@ is parsed is now read whole from its start, up to 8 MB (`ANSWER_MAX`), and a
 command that goes on past that is stopped there; a build's log is still kept
 from its end, where it says why it failed.
 
+On 2026-10-23 the cloud host's Node and gh rows said `spawn curl ENOENT`: hostd
+asked nodejs.org and the GitHub CLI's apt repository with curl, and a release's
+service image has none (`Dockerfile.service` purges it once gh is installed).
+hostd now asks both with Node's own fetch, through the install's proxy
+(`NODE_USE_ENV_PROXY`), within 60 s and up to the same 8 MB; a failure says
+`HTTP <status>`, why the connection failed, or that the source did not answer
+in time.
+
 **What to do.** Read the row's reason, then ask the same source from the
 machine hostd runs on (on the cloud host, from the hostd container, through
 the egress proxy):
@@ -1013,9 +1021,9 @@ the egress proxy):
 | `npm's answer about <package> (<size>) names no latest version` | The registry has no `latest` dist-tag for it: a mirror that is not npm's |
 | `could not read when npm published <package> <version>, …` | npm did not say, so that version is not taken without its minimum release age. The next run asks again |
 | `… is over the 8 MB hostd reads` | An answer some twenty times its size in 2026, or something else answering at length. Check it as above, and open an issue if it is the real answer |
-| `could not ask nodejs.org which Node is newest: …`, `could not read nodejs.org's index of Node releases …` | `curl -fsSL https://nodejs.org/dist/index.json \| head -c 300`; on the cloud host, `nodejs.org` in the egress allowlist |
+| `could not ask nodejs.org which Node is newest: …`, `could not read nodejs.org's index of Node releases …` | `curl -fsSL https://nodejs.org/dist/index.json \| head -c 300`; on the cloud host, where the hostd container has no curl, `docker exec fleet-hostd node -e 'fetch(process.argv[1]).then(async (r) => console.log(r.status, (await r.text()).slice(0, 300)))' https://nodejs.org/dist/index.json`, and `nodejs.org` in the egress allowlist |
 | `nodejs.org's index of Node releases (<size>) lists no stable Node <major>` | The index has no release of the major the image is on |
-| `could not ask the GitHub CLI's apt repository which gh is newest: …`, `… package index (<size>) lists no gh package` | `curl -fsSL https://cli.github.com/packages/dists/stable/main/binary-amd64/Packages \| head` (`binary-arm64` on an arm64 host); on the cloud host, `cli.github.com` in the egress allowlist |
+| `could not ask the GitHub CLI's apt repository which gh is newest: …`, `… package index (<size>) lists no gh package` | `curl -fsSL https://cli.github.com/packages/dists/stable/main/binary-amd64/Packages \| head` (`binary-arm64` on an arm64 host); on the cloud host, the `docker exec fleet-hostd node -e …` above with that address, and `cli.github.com` in the egress allowlist |
 | `nothing was built: the image does not say which <tool> it has, …` | The image in use has no `openadlc.engines` label, its CLI did not say its version, and npm's newest could not be read either, so a candidate had nothing to pin it to. Fix the lookup, or rebuild the image with `infra/local/build-bot-image.sh` |
 
 A tool that was not checked is asked again at its next scheduled run, or when

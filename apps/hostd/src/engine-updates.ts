@@ -154,9 +154,9 @@ function tooBig(what: string): string {
  * 400 characters of what came back: on 2026-10-22 that was the tail of npm's
  * JSON about Codex, on every row of Settings → System.
  */
-function readAnswer(what: string, asked: CommandResult): { value: unknown } | { reason: string } {
-  const parsed = parseJson(asked.stdout);
-  return 'error' in parsed ? { reason: `could not read ${what} (${sizeOf(asked.stdout)}) as JSON: ${parsed.error}` } : parsed;
+function readAnswer(what: string, answer: string): { value: unknown } | { reason: string } {
+  const parsed = parseJson(answer);
+  return 'error' in parsed ? { reason: `could not read ${what} (${sizeOf(answer)}) as JSON: ${parsed.error}` } : parsed;
 }
 
 /** npm's own line for a failed `npm view --json`, which prints `{"error":{"summary":…}}` on stdout beside its words on stderr. */
@@ -523,6 +523,72 @@ export const runCommand: CommandRunner = (command, args, options = {}) =>
     });
   });
 
+/** What an address answered, from its start and whole up to `ANSWER_MAX`; `cut` past it; or why it did not answer. */
+export type Fetched = { body: string } | { cut: true } | { failed: string };
+
+/** How long nodejs.org or the gh repository may take to answer, as curl was given. */
+const LOOKUP_TIMEOUT_MS = 60_000;
+
+/**
+ * Asks an address with Node's own fetch, which leaves through the install's
+ * proxy when `NODE_USE_ENV_PROXY` is set, as the cloud host's hostd.env sets
+ * it. The lookups for Node and gh spawned curl, and a release's service image
+ * has none — Dockerfile.service installs it for gh's keyring and purges it —
+ * so on the GCP install at v0.1.6 both said "spawn curl ENOENT" while the npm
+ * engines updated. Kept and cut as `runCommand` keeps an answer, and stopped
+ * reading at the cut. Never throws.
+ */
+export async function fetchAnswer(url: string, options: { fetch?: typeof fetch; timeoutMs?: number } = {}): Promise<Fetched> {
+  const timeoutMs = options.timeoutMs ?? LOOKUP_TIMEOUT_MS;
+  const signal = AbortSignal.timeout(timeoutMs);
+  try {
+    const response = await (options.fetch ?? fetch)(url, { signal });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      return { failed: `HTTP ${response.status}` };
+    }
+    const kept: Buffer[] = [];
+    let size = 0;
+    const reader = response.body?.getReader();
+    for (;;) {
+      const read = await reader?.read();
+      if (!read || read.done) break;
+      size += read.value.length;
+      if (size > ANSWER_MAX) {
+        await reader?.cancel().catch(() => undefined);
+        return { cut: true };
+      }
+      kept.push(Buffer.from(read.value));
+    }
+    return { body: Buffer.concat(kept).toString('utf8') };
+  } catch (error) {
+    // The signal's own reason reads "The operation was aborted due to
+    // timeout", and arrives from fetch or from the body, whichever was waiting.
+    if (signal.aborted) return { failed: `${new URL(url).host} did not answer within ${timeoutMs / 1000} s` };
+    return { failed: lastWords(fetchFailure(error)) || 'no answer' };
+  }
+}
+
+/**
+ * Why fetch got no answer. Its own message is `fetch failed` whatever went
+ * wrong; what did is the deepest cause that says something: `getaddrinfo
+ * ENOTFOUND nodejs.org` one down, or, from the egress proxy refusing a host,
+ * `Proxy response (403) !== 200 when HTTP Tunneling` under a "Request was
+ * cancelled." For a connection tried on every address, the cause's first error.
+ */
+function fetchFailure(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  let why = '';
+  let cause = error.cause;
+  for (let depth = 0; cause && depth < 5; depth += 1) {
+    const one = cause as { message?: unknown; code?: unknown; errors?: { message?: unknown }[]; cause?: unknown };
+    const said = [one.message, one.errors?.[0]?.message, one.code].find((text): text is string => typeof text === 'string' && text !== '');
+    if (said) why = said;
+    cause = one.cause;
+  }
+  return why && why !== error.message ? `${error.message}: ${why}` : error.message;
+}
+
 // ------------------------------------------------------------------ the crew
 
 export interface CrewBot {
@@ -655,6 +721,10 @@ export interface EngineUpdaterOptions {
   containerPrefix?: string;
   /** Runs docker, npm and the build script. A test answers for all three. */
   run?: CommandRunner;
+  /** Asks nodejs.org and the gh repository; see `fetchAnswer`. A test answers for both. */
+  fetch?: typeof fetch;
+  /** How long either may take to answer. 60 s. */
+  lookupTimeoutMs?: number;
   crew: () => Promise<CrewBot[]>;
   account: (id: string) => Promise<AccountRow | null>;
   /** How a task would resolve its model on this image; see `candidateModels`. */
@@ -1026,39 +1096,36 @@ export class EngineUpdater {
     installed: string | null,
     minReleaseAgeDays: number = DEFAULT_MIN_RELEASE_AGE_DAYS,
   ): Promise<{ version: string | null; eligible?: string | null; published?: string; reason: string }> {
-    // A failed command's reason is its stderr, never its stdout: stdout is
-    // the answer, and here an answer that could not be read is described by
-    // its size and the parser's error. A cut answer is asked about first: the
-    // runner stopped the command there, so its exit code is not its own.
+    // A failed lookup's reason is npm's stderr or why fetch got no answer,
+    // never the answer itself: an answer that could not be read is described
+    // by its size and the parser's error. A cut answer is asked about first:
+    // the runner stopped the command there, so its exit code is not its own.
     const tool = SYSTEM_TOOLS.find((one) => one.key === pkg);
+    const lookup = { fetch: this.options.fetch, timeoutMs: this.options.lookupTimeoutMs };
     if (tool?.source === 'nodejs') {
-      const asked = await this.run('curl', ['-fsSL', 'https://nodejs.org/dist/index.json'], { timeoutMs: 60_000, answer: true });
+      const asked = await fetchAnswer('https://nodejs.org/dist/index.json', lookup);
       const what = "nodejs.org's index of Node releases";
-      if (asked.cut) return { version: null, reason: tooBig(what) };
-      if (asked.code !== 0) {
-        const said = lastWords(asked.stderr) || `curl exited ${asked.code}`;
-        return { version: null, reason: `could not ask nodejs.org which Node is newest: ${said}` };
-      }
-      const read = readAnswer(what, asked);
+      if ('cut' in asked) return { version: null, reason: tooBig(what) };
+      if ('failed' in asked) return { version: null, reason: `could not ask nodejs.org which Node is newest: ${asked.failed}` };
+      const read = readAnswer(what, asked.body);
       if ('reason' in read) return { version: null, reason: read.reason };
       const version = newestNodeIn(read.value, installed);
       if (!version) {
         const major = installed?.split('.')[0];
         const wanted = major && /^\d+$/.test(major) ? `stable Node ${major}` : 'LTS Node';
-        return { version: null, reason: `${what} (${sizeOf(asked.stdout)}) lists no ${wanted}` };
+        return { version: null, reason: `${what} (${sizeOf(asked.body)}) lists no ${wanted}` };
       }
       return { version, eligible: version, reason: '' };
     }
     if (tool?.source === 'github') {
-      const asked = await this.run('curl', ['-fsSL', ghPackagesUrl()], { timeoutMs: 60_000, answer: true });
+      const asked = await fetchAnswer(ghPackagesUrl(), lookup);
       const what = "the GitHub CLI's apt repository's package index";
-      if (asked.cut) return { version: null, reason: tooBig(what) };
-      if (asked.code !== 0) {
-        const said = lastWords(asked.stderr) || `curl exited ${asked.code}`;
-        return { version: null, reason: `could not ask the GitHub CLI's apt repository which gh is newest: ${said}` };
+      if ('cut' in asked) return { version: null, reason: tooBig(what) };
+      if ('failed' in asked) {
+        return { version: null, reason: `could not ask the GitHub CLI's apt repository which gh is newest: ${asked.failed}` };
       }
-      const version = newestGhVersion(asked.stdout);
-      if (!version) return { version: null, reason: `${what} (${sizeOf(asked.stdout)}) lists no gh package` };
+      const version = newestGhVersion(asked.body);
+      if (!version) return { version: null, reason: `${what} (${sizeOf(asked.body)}) lists no gh package` };
       return { version, eligible: version, reason: '' };
     }
     const asked = await this.run('npm', ['view', pkg, 'dist-tags', 'time', '--json'], { timeoutMs: 60_000, answer: true });
@@ -1068,7 +1135,7 @@ export class EngineUpdater {
       const said = npmError(asked.stdout) ?? (lastWords(asked.stderr) || `npm exited ${asked.code}`);
       return { version: null, reason: `could not ask npm which ${pkg} is newest: ${said}` };
     }
-    const read = readAnswer(what, asked);
+    const read = readAnswer(what, asked.stdout);
     if ('reason' in read) return { version: null, reason: read.reason };
     const answer = read.value && typeof read.value === 'object' ? (read.value as { 'dist-tags'?: { latest?: unknown }; time?: unknown }) : null;
     const tag = answer?.['dist-tags']?.latest;
