@@ -44,6 +44,15 @@ const STAFFING: Partial<Record<StageKey, { role: string; skill: string; kind: 'i
   spec: { role: 'spec', skill: 'spec', kind: 'spec' },
 };
 
+/** What `backToLead` reads of a pull request to work out who has reviewed its diff; `getPullRequest` answers with it. */
+export interface OpenPull {
+  draft: boolean;
+  headSha: string;
+  headRef: string;
+  baseRef: string;
+  labels: string[];
+}
+
 /** How many times intake tries an issue that stays in intake, and over how long, before a person decides. */
 export const INTAKE_TRIES = 2;
 export const INTAKE_TRIES_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -83,6 +92,12 @@ export class StageHandoff {
      * fails answers open, as `subjectClosed` does. Absent, nothing is closed.
      */
     private readonly closed: ((repoFullName: string, number: number) => Promise<boolean>) | null = null,
+    /**
+     * The pull request as GitHub has it now, for which seats have reviewed
+     * its diff when a patch round pushed nothing (`backToLead`). Absent, or a
+     * read that fails, and only the lead is asked, as before.
+     */
+    private readonly pullOf: ((repoFullName: string, number: number) => Promise<OpenPull | null>) | null = null,
   ) {}
 
   private async alreadyWorking(subjectRef: string): Promise<boolean> {
@@ -337,13 +352,21 @@ export class StageHandoff {
   }
 
   /**
-   * A patch round that pushed nothing answered the lead in words. The lead's
-   * request for changes still stands on the same head, so nothing counts a
-   * lead review as due, and the pull request sat in Review with no task and
-   * nobody told. The lead is asked to read the replies and decide again; when
-   * that cannot start, the pull request is a Needs-you card instead.
+   * A patch round that pushed nothing: it answered the lead in words, or the
+   * local-CI rule sent it back and the checks then passed on the head as it
+   * was. No push opens a round, so nothing asks a seat: the lead's request
+   * for changes still stands on the same head, nothing counts a lead review
+   * as due, and the pull request sat in Review with no task and nobody told.
+   *
+   * Every seat before the lead with no review of this diff is asked first
+   * (`reviewStanding`, `openMissingReviews`), and the lead's turn comes when
+   * they have posted (`onReview`). Asked only the lead, a pull request the
+   * local-CI rule had held when its diff changed waited on its second
+   * reviewer for good (#118). With them all in, the lead is asked to read the
+   * replies and decide again; when that cannot start, the pull request is a
+   * Needs-you card instead.
    */
-  private async backToLead(repo: { name: string }, prNumber: number, branch: string, issueNumber: number): Promise<void> {
+  private async backToLead(repo: { name: string; fullName: string }, prNumber: number, branch: string, issueNumber: number): Promise<void> {
     const subjectRef = `${repo.name}#${prNumber}`;
     // Now, so the lead's earlier review — the one this round answered — is
     // not taken for this one.
@@ -351,8 +374,19 @@ export class StageHandoff {
     const crew = await bots.listBots().catch(() => []);
     let seat: string | null = null;
     try {
-      seat = leadReviewer(this.automation.reviewRules(crew)).seat;
-      if (await this.taskService.openLeadReview({ repo, prNumber, branch, issueNumber, seat, since })) return;
+      const standing = await this.standingOf(repo.fullName, prNumber);
+      seat = standing?.decision.lead ?? leadReviewer(this.automation.reviewRules(crew)).seat;
+      // The seats the gate waits on before the lead, as it names them
+      // (`computeReviewGate`): one that cannot be asked here is not among them.
+      const named = /^waiting on (.+)$/.exec(standing?.gate.description ?? '')?.[1]?.split(', ') ?? [];
+      const before = named.filter((name) => name !== seat && !name.startsWith('@'));
+      if (before.length > 0) {
+        await this.taskService.openMissingReviews({ repo, prNumber, branch, issueNumber, waitingOn: before });
+        return;
+      }
+      // Due on this diff since its others posted; a lead that has posted on
+      // it already wrote the review this round answered, so from now.
+      if (await this.taskService.openLeadReview({ repo, prNumber, branch, issueNumber, seat, since: standing?.leadDue?.since ?? since })) return;
     } catch (error) {
       console.warn(`[bridge] the lead was not asked to review ${subjectRef} again: ${error instanceof Error ? error.message : error}`);
     }
@@ -370,6 +404,21 @@ export class StageHandoff {
       type: REVIEW_STALLED,
       payload: { repo: repo.name, pr: prNumber, issue: issueNumber, rounds: 0, bot: seat, botId: lead?.id ?? null },
     }).catch(() => undefined);
+  }
+
+  /** The reviews on a pull request's diff as they stand, or null when it or they cannot be read. */
+  private async standingOf(repoFullName: string, prNumber: number): Promise<Awaited<ReturnType<Automation['reviewStanding']>> | null> {
+    const pull = this.pullOf ? await this.pullOf(repoFullName, prNumber).catch(() => null) : null;
+    if (!pull) return null;
+    return this.automation
+      .reviewStanding(repoFullName, {
+        number: prNumber,
+        draft: pull.draft,
+        labels: pull.labels.map((name) => ({ name })),
+        head: { sha: pull.headSha, ref: pull.headRef },
+        baseRef: pull.baseRef,
+      })
+      .catch(() => null);
   }
 
   /** Records, once per issue and pause, that a stage was not staffed because work is paused. */

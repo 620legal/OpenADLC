@@ -71,6 +71,8 @@ const store = vi.hoisted(() => ({
   entered: [] as number[],
   /** The stage of the issue the front pull request is for, as the board has it. */
   issueStage: 'review' as string,
+  /** The events the line recorded. */
+  events: [] as { type: string; payload: unknown }[],
 }));
 
 // The install's settings as the bridge reads them; failing, as a database
@@ -107,6 +109,7 @@ vi.mock('@openadlc/db', () => ({
     if (store.auditFails) throw new Error('the audit table refused the row');
     store.audits.push(entry);
   }),
+  recordEvent: vi.fn(async (event: { type: string; payload: unknown }) => (store.events.push(event), 'event-1')),
   bots: { listBots: vi.fn(async () => []), getBotById: vi.fn(async () => null) },
   mergeLines: {
     head: vi.fn(async () => ({ ...store.entry })),
@@ -244,6 +247,7 @@ describe('the front of the line, green and up to date', () => {
     store.settingsRead = true;
     store.entry = { id: 'line-1', prNumber: 31, state: 'testing', detail: null, headSha: null };
     store.issueStage = 'review';
+    store.events = [];
     decide.mockReset();
   });
 
@@ -423,6 +427,62 @@ describe('the front of the line, green and up to date', () => {
     expect(github.updateBranch).toHaveBeenCalledWith('janedoe/openadlc', 31, HEAD);
     expect(github.mergeIntoBranch).not.toHaveBeenCalled();
     expect(made).not.toHaveBeenCalled();
+  });
+
+  describe('what the line records of an update it made', () => {
+    // It updates as the builder, so the push's sender is the builder's own;
+    // the head it updated from is what tells its push from the builder's.
+    const updates = () => store.events.filter((event) => event.type === 'merge_line.branch_updated').map((event) => event.payload);
+
+    it('records the head it updated from, and keeps it once the next pass moves the entry on to the head the update made', async () => {
+      const { line: merge, github } = line();
+      github.behindBy.mockResolvedValue(2);
+
+      await merge.advance('openadlc');
+      expect(updates()).toEqual([{ subjectRef: 'openadlc#31', from: HEAD }]);
+
+      // The update landed as MADE; the next pass, a check's delivery say,
+      // reads it up to date and asks for CI on it, and the entry says MADE.
+      github.getPullRequest.mockResolvedValue({ ...(await github.getPullRequest()), headSha: MADE });
+      github.behindBy.mockResolvedValue(0);
+      github.checksFor.mockResolvedValue([green(REVIEW_GATE_CHECK)]);
+      await merge.advance('openadlc');
+
+      expect(store.entry.headSha).toBe(MADE);
+      expect(updates()).toEqual([{ subjectRef: 'openadlc#31', from: HEAD }]);
+    });
+
+    it('records nothing for an update GitHub did not make', async () => {
+      const { line: merge, github } = line();
+      github.behindBy.mockResolvedValue(2);
+      merge.useSendBack(vi.fn(async () => undefined));
+      merge.useConflictRounds({ start: vi.fn(async () => 'resolving' as const), unstarted: vi.fn(async () => null) });
+
+      github.updateBranch.mockResolvedValue({ updated: false, conflict: true, message: 'merge conflict' });
+      await merge.advance('openadlc');
+      github.updateBranch.mockResolvedValue({ updated: false, conflict: false, message: 'the head moved to 0ther00 since it was read' });
+      await merge.advance('openadlc');
+
+      // The builder's resolution is pushed from this very head next.
+      expect(updates()).toEqual([]);
+    });
+
+    it('records a stacked update by the commit it made, on the head it was made on', async () => {
+      const { line: merge, github } = line();
+      github.behindBy.mockResolvedValue(1);
+      merge.useStacking({ waitingOn: vi.fn(async () => null), updating: vi.fn(async () => true), made: vi.fn(async () => undefined) });
+
+      await merge.advance('openadlc');
+      // Onto a head that had moved since it was read: that head is the push's `before`.
+      github.mergeIntoBranch.mockResolvedValue({ merged: true, conflict: false, sha: MADE, parents: ['0ther000', 'main0000'], message: 'merged' });
+      store.entry = { ...store.entry, state: 'testing', headSha: null };
+      await merge.advance('openadlc');
+
+      expect(updates()).toEqual([
+        { subjectRef: 'openadlc#31', from: HEAD, to: MADE },
+        { subjectRef: 'openadlc#31', from: '0ther000', to: MADE },
+      ]);
+    });
   });
 
   it('is merged by the app, audited with the approvals it landed on, and said on the pull request', async () => {

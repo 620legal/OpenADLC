@@ -211,7 +211,11 @@ none yet, says its kind of work instead ("writing the change").
    refuses to open or ready a pull request on one; the builder opens it ready,
    never as a draft, and never turns auto-merge on. Those are guards: the
    bridge itself reviews nothing a crew account pushed with no pass on its
-   head — `review-gate` says so, and the work goes back to build.
+   head — `review-gate` says so, and the work goes back to build. The merge
+   line's own update of the branch from the base is not the builder's push,
+   though it is sent as the builder's account: it is known by the head the
+   line recorded updating from (`merge_line.branch_updated`), never by its
+   sender.
 5. **Review.** The bridge asks the reviewer seats `config/review.yaml` lists
    and triggers — a second reviewer on another model, the security reviewer by
    label, path or sample, the SRE for workflow, runbook and infrastructure
@@ -222,8 +226,13 @@ none yet, says its kind of work instead ("writing the change").
    other seat asked has posted on this diff, the lead is asked, with all of
    their reviews in front of it, and decides: approve, or one request for
    changes with every finding that stands. Each round of reviews records
-   `review.round_opened` `{subjectRef, sha}` before any seat is asked, and
-   that is when the diff began. A seat that was busy, or could not work, when
+   `review.round_opened` `{subjectRef, sha}` as soon as a push is known to
+   have changed the diff, before anything can hold the work — a push held for
+   its local CI too — and that is when the diff began. A patch round that
+   pushes nothing — it answered the lead in words, or the local CI it was
+   sent back for passed on the head as it was — opens no round of its own:
+   every seat before the lead with no review of this diff is asked then, and
+   the lead once they have posted. A seat that was busy, or could not work, when
    a round opened is started by the gate sweep once it can: only a review
    under way or one opened since the round began counts as its review of this
    diff, never one from an earlier round. The lead likewise: a lead task under
@@ -264,7 +273,14 @@ none yet, says its kind of work instead ("writing the change").
 6. **Merge.** A pull request whose `review-gate` passes joins the **merge line**:
    one repository at a time, the bridge brings the front one up to date with
    the base branch, with the builder's credential, and waits for `ci` and
-   `review-gate` on the new head. GitHub's CI on a crew pull request (an
+   `review-gate` on the new head. It records each update it made,
+   `merge_line.branch_updated` `{subjectRef, from, to?}` (the head it was made
+   on, and the commit it made when GitHub said), and its push is told from the
+   builder's by that. An update that changes no diff keeps the approvals and
+   opens no round. One that does — the base changed the same files — is
+   reviewed as any push is: the approvals are dismissed and every seat is
+   asked again, the lead last, with no local CI asked of the builder for it.
+   GitHub's CI on a crew pull request (an
    `agent/` branch) runs only with `adlc:ci` on it (`.github/workflows/ci.yml`
    and the template's): once the front one is up to date with no `ci` run, the
    bridge puts the label on as its app and audits `ci.requested`, and puts it

@@ -14,6 +14,7 @@ import { BotBusyError, TaskService } from './task-service.js';
 import { DispatchGate } from './dispatch-gate.js';
 import { alreadyLanded } from './gates.js';
 import { StageHandoff } from './stage-handoff.js';
+import { MergeLine } from './merge-line.js';
 import { DeployPipeline } from './deploy-pipeline.js';
 import { CONFLICT_RESOLVED, CONFLICT_RESOLVING, ConflictRounds } from './conflict-round.js';
 import { STACK_MADE, STACK_UPDATED, STACK_UPDATING, Stacking } from './stacking.js';
@@ -67,6 +68,8 @@ const store = vi.hoisted(() => ({
   planLimits: null as { limits: { name: string; detail: string }[] } | null,
   /** The issue's recorded stage moves, oldest first. */
   moves: [] as { from: string | null; to: string }[],
+  /** The merge line's row, for a test that runs the real line. */
+  lineEntry: null as Record<string, unknown> | null,
 }));
 
 beforeEach(() => {
@@ -85,6 +88,7 @@ beforeEach(() => {
   store.humanIds = null;
   store.planLimits = null;
   store.moves = [];
+  store.lineEntry = null;
 });
 
 vi.mock('@openadlc/db', () => ({
@@ -153,7 +157,7 @@ vi.mock('@openadlc/db', () => ({
     if (event) event.processed = true;
   }),
   recordEvent: vi.fn(async (event: { type: string; payload: unknown }) => {
-    if (['deploy.testing_live', 'issue.edit_not_read', 'pr.forbidden_push', 'review.dismissed_by_bridge', 'review.asked_again'].includes(event.type)) {
+    if (['deploy.testing_live', 'issue.edit_not_read', 'pr.forbidden_push', 'review.dismissed_by_bridge', 'review.asked_again', 'merge_line.branch_updated'].includes(event.type)) {
       store.events.push(event);
     }
     if (event.type !== 'deploy.promote_queued') return 'event-1';
@@ -231,6 +235,15 @@ vi.mock('@openadlc/db', () => ({
   // history is not numbered yet: a review's start asks GitHub.
   workItems: { itemOf: vi.fn(async () => null), linksOf: vi.fn(async () => []) },
   stageMoves: { listForIssue: vi.fn(async () => store.moves) },
+  mergeLines: {
+    head: vi.fn(async () => (store.lineEntry ? { ...store.lineEntry } : null)),
+    setState: vi.fn(async (_id: string, state: string, patch: { headSha?: string | null; detail?: string | null } = {}) => {
+      if (store.lineEntry) store.lineEntry = { ...store.lineEntry, state, headSha: patch.headSha ?? store.lineEntry.headSha, detail: patch.detail ?? null };
+      return store.lineEntry;
+    }),
+    leave: vi.fn(async () => undefined),
+    enter: vi.fn(async () => undefined),
+  },
   threads: {
     listOpenGates: vi.fn(async () => [{ id: 'gate-1', taskId: 'task-1' }] as { id: string; taskId: string; createdAt?: string }[]),
     claimGateReply: vi.fn(async () => true),
@@ -8355,6 +8368,301 @@ describe('a crew pull request with no local CI pass on its head', () => {
     await opened(webhooks).catch(() => undefined);
 
     expect(automation.decideReviewers).toHaveBeenCalled();
+  });
+});
+
+describe('a push that changed the diff, whoever made it', () => {
+  // #118: the merge line merged main into the branch as the builder's account,
+  // and main had changed the same files, so the diff changed. Its push was
+  // held to the builder's local CI as the builder's own, before any round was
+  // recorded for the new diff or any seat asked. The builder's checks then
+  // passed and it pushed nothing, only the lead was asked, and the gate
+  // waited on the second reviewer for good.
+  const EARLIER = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1';
+  const BUILT = 'b789079'.padEnd(40, '0');
+  const UPDATED = '692cd1f'.padEnd(40, '0');
+  const BRANCH = 'agent/openadlc-atlas-janedoe/108-issue-108';
+  const BUILDER = { id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'openadlc-atlas-janedoe' };
+  const SECOND = { id: 'bot-second', name: 'openadlc-vega-janedoe', slot: 'second-reviewer', role: 'review_second', githubLogin: 'openadlc-vega-janedoe' };
+  const LEAD = { id: 'bot-lead', name: 'openadlc-sydney-janedoe', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'openadlc-sydney-janedoe' };
+  const FILES = ['apps/bridge/src/api.ts', 'docs/configuration.md'];
+  const CONFIG = { automationBot: null, humans: [], review: { maxRounds: 3 } };
+  const HELD = 'no local CI pass for 692cd1f: the builder runs openadlc-ci on it and pushes again';
+
+  /** Every event recorded, with when: the rounds are read back from it, as the store would. */
+  const log: { type: string; payload: Record<string, unknown>; at: string }[] = [];
+  /** What the bridge did, in order: events recorded, gates set, tasks started. */
+  const order: string[] = [];
+  let restore: () => void = () => undefined;
+
+  beforeEach(async () => {
+    const db = await import('@openadlc/db');
+    log.length = 0;
+    order.length = 0;
+    const record = vi.mocked(db.recordEvent).getMockImplementation()!;
+    vi.mocked(db.recordEvent).mockImplementation(async (event) => {
+      log.push({ type: event.type, payload: event.payload as Record<string, unknown>, at: new Date().toISOString() });
+      order.push(`event ${event.type}`);
+      return record(event);
+    });
+    vi.mocked(db.lastEventAt).mockImplementation(
+      async (type, fields) =>
+        [...log].reverse().find((event) => event.type === type && Object.entries(fields).every(([key, value]) => event.payload[key] === value))?.at ?? null,
+    );
+    restore = () => {
+      vi.mocked(db.recordEvent).mockImplementation(record);
+      vi.mocked(db.lastEventAt).mockImplementation(async () => null);
+    };
+    store.bots = [BUILDER, SECOND, LEAD];
+    store.lease = { id: 'lease-108', botId: BUILDER.id, prNumber: 118, declaredPaths: FILES };
+    store.issue = { number: 108, stage: 'review', labels: ['adlc:review'] };
+    store.botTasks = [];
+    store.localCiPasses = new Set([EARLIER, BUILT]);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-23T01:16:07.000Z'));
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    restore();
+    store.issue = null;
+    store.lease = null;
+    vi.useRealTimers();
+    vi.mocked(console.log).mockRestore();
+    vi.mocked(console.warn).mockRestore();
+  });
+
+  function bridge(options: { sameDiff?: boolean } = {}) {
+    const gates: { sha: string; state: string; description: string }[] = [];
+    const github = {
+      diffFingerprint: async (_repo: string, _base: string, sha: string) => (options.sameDiff ? 'the diff as it was approved' : `the diff at ${sha}`),
+      listPullFiles: async () => FILES,
+      listPullFilesAsNamed: async () => FILES,
+      listEveryPullFile: async () => ({ files: FILES, complete: true, renamedFrom: [] }),
+      readFileIfPresent: async () => null,
+    };
+    const automation = {
+      actors: { asBot: async () => github },
+      reviewGateFor: vi.fn(async () => ({ state: 'success', description: 'every requested review has been posted' })),
+      setReviewGate: vi.fn(async (input: { sha: string; state: string; description: string }) => {
+        gates.push({ sha: input.sha, state: input.state, description: input.description });
+        order.push(`gate ${input.description}`);
+        return input;
+      }),
+      dismissStaleApprovals: vi.fn(async () => [LEAD.name]),
+      moveStage: vi.fn(async () => ({ moved: true })),
+      comment: vi.fn(async () => 'https://github.test/c/1'),
+      decideReviewers: vi.fn(() => ({ reviewers: [SECOND.name, LEAD.name], lead: LEAD.name, approvers: [LEAD.name], reasons: {}, humanReviewRequired: false })),
+      requestReviewers: vi.fn(async () => []),
+      humansRequiredFor: vi.fn(async () => ({ rules: [], required: [] })),
+      setHumanReviewLabels: vi.fn(async () => undefined),
+      dropUnneededHumanRequests: vi.fn(async () => undefined),
+      computeReviewGate: vi.fn(() => ({ state: 'pending', description: `waiting on ${SECOND.name}` })),
+      cannotReviewHere: vi.fn(async () => new Map()),
+    };
+    // Each start writes the task's row, as the real one does: which seat was
+    // asked on which diff is read back from them.
+    const open = vi.fn(async (input: { bot: string; kind: string; subjectRef: string }) => {
+      const id = `task-${store.botTasks.length + 1}`;
+      store.botTasks.push({ id, botId: store.bots.find((bot) => bot.name === input.bot)?.id, kind: input.kind, subjectRef: input.subjectRef, state: 'running', createdAt: new Date().toISOString() });
+      order.push(`start ${input.kind} ${input.bot}`);
+      return { taskId: id, session: id };
+    });
+    const taskService = taskServiceOpening(open as never);
+    taskService.seatPauses = async () => ({});
+    const webhooks = new Webhooks(CONFIG as never, automation as never, {} as never, taskService, {} as never, { leave: async () => undefined } as never);
+    return { webhooks, automation, taskService, open, gates };
+  }
+
+  async function pushed(webhooks: Webhooks, before: string, after: string) {
+    await webhooks.receive(
+      'pull_request',
+      {
+        action: 'synchronize',
+        before,
+        pull_request: {
+          author_association: 'COLLABORATOR',
+          number: 118,
+          title: 'Say which reviews count',
+          draft: false,
+          head: { sha: after, ref: BRANCH, repo: { full_name: 'janedoe/openadlc' } },
+          base: { ref: 'main' },
+          labels: [],
+          html_url: 'https://github.test/janedoe/openadlc/pull/118',
+          user: { login: BUILDER.name },
+        },
+        repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+        // The line updates as the builder: its push says the builder sent it.
+        sender: { login: BUILDER.name },
+      } as never,
+      `delivery-${before.slice(0, 7)}-${after.slice(0, 7)}`,
+    );
+  }
+
+  /** What the line records of an update it made (`MergeLine.updated`). */
+  const lineUpdated = (from: string, to?: string) =>
+    store.events.push({ type: 'merge_line.branch_updated', payload: { subjectRef: 'openadlc#118', from, ...(to ? { to } : {}) } });
+  const rounds = () => log.filter((event) => event.type === 'review.round_opened').map((event) => ({ sha: event.payload.sha, at: event.at }));
+  const reviewsBy = (bot: { id: string }) => store.botTasks.filter((task) => task.kind === 'review' && task.botId === bot.id).map((task) => task.createdAt);
+  const at = (time: string) => vi.setSystemTime(new Date(`2026-10-23T${time}.000Z`));
+  const done = () => store.botTasks.forEach((task) => (task.state = 'done'));
+
+  it('asks every seat before the lead again on the merge line’s update that changed the diff, and records the round for it', async () => {
+    const { webhooks, open, gates } = bridge();
+    lineUpdated(BUILT);
+
+    await pushed(webhooks, BUILT, UPDATED);
+
+    expect(reviewsBy(SECOND)).toEqual(['2026-10-23T01:16:07.000Z']);
+    expect(open).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'patch' }));
+    expect(gates).toEqual([{ sha: UPDATED, state: 'pending', description: `waiting on ${SECOND.name}` }]);
+    expect(rounds()).toEqual([{ sha: UPDATED, at: '2026-10-23T01:16:07.000Z' }]);
+  });
+
+  it('opens no round on the merge line’s update that changed no diff', async () => {
+    const { webhooks, open, gates, automation } = bridge({ sameDiff: true });
+    lineUpdated(BUILT);
+
+    await pushed(webhooks, BUILT, UPDATED);
+
+    expect(rounds()).toEqual([]);
+    expect(open).not.toHaveBeenCalled();
+    expect(automation.dismissStaleApprovals).not.toHaveBeenCalled();
+    expect(gates).toEqual([{ sha: UPDATED, state: 'success', description: 'every requested review has been posted' }]);
+  });
+
+  it('still sends a builder’s own push with no local CI pass back to build, whatever the line updated', async () => {
+    const { webhooks, open, gates } = bridge();
+    // The line updated from another head, and from this one made another commit.
+    lineUpdated(EARLIER);
+    lineUpdated(BUILT, 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3');
+
+    await pushed(webhooks, BUILT, UPDATED);
+
+    expect(gates).toEqual([{ sha: UPDATED, state: 'pending', description: HELD }]);
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ kind: 'patch', bot: BUILDER.name }));
+    expect(reviewsBy(SECOND)).toEqual([]);
+  });
+
+  it('records the round for a push it holds for its local CI before holding it, so the round is the new diff’s', async () => {
+    const { webhooks } = bridge();
+
+    await pushed(webhooks, BUILT, UPDATED);
+
+    expect(rounds()).toEqual([{ sha: UPDATED, at: '2026-10-23T01:16:07.000Z' }]);
+    expect(order.indexOf('event review.round_opened')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('event review.round_opened')).toBeLessThan(order.indexOf(`gate ${HELD}`));
+    expect(order.indexOf('event review.round_opened')).toBeLessThan(order.indexOf(`start patch ${BUILDER.name}`));
+  });
+
+  it('replays #118: the line’s update as the builder, which changed the diff, has the second reviewer asked again, and nothing goes back to build', async () => {
+    const db = await import('@openadlc/db');
+    const { webhooks, open, gates, automation } = bridge();
+
+    // 01:01:28, the builder's push of b789079 with its checks passed: its
+    // round, and the second reviewer, who reviews it.
+    at('01:01:28');
+    await pushed(webhooks, EARLIER, BUILT);
+    expect(reviewsBy(SECOND)).toEqual(['2026-10-23T01:01:28.000Z']);
+    done();
+
+    // 01:15:48, the lead has approved b789079, and the line, behind main
+    // after #117, brings the branch up to date as the repository's builder.
+    at('01:15:48');
+    store.lineEntry = { id: 'line-118', repoId: 'repo-1', repoName: 'openadlc', prNumber: 118, position: 1, state: 'waiting', headSha: BUILT, detail: null };
+    const github = {
+      getPullRequest: vi.fn(async () => ({
+        number: 118,
+        draft: false,
+        merged: false,
+        state: 'open',
+        headRef: BRANCH,
+        headSha: BUILT,
+        baseRef: 'main',
+        labels: [],
+        mergeableState: 'behind',
+        autoMerge: false,
+        headRepoFullName: 'janedoe/openadlc',
+        requestedReviewers: [],
+        requestedTeams: [],
+      })),
+      behindBy: vi.fn(async () => 1),
+      updateBranch: vi.fn(async () => ({ updated: true, conflict: false, message: 'updated from the base branch' })),
+    };
+    const repoOf = vi.mocked(db.repos.getRepoByName).getMockImplementation()!;
+    vi.mocked(db.repos.getRepoByName).mockImplementation(async (name: string) => ({ ...(await repoOf(name)), ownerBotId: BUILDER.id }) as never);
+    try {
+      const line = new MergeLine(CONFIG as never, { asBot: async () => github } as never, {} as never, {} as never);
+      expect(await line.advance('openadlc')).toMatchObject({ state: 'updating', detail: `brought up to date with main as ${BUILDER.name}` });
+    } finally {
+      vi.mocked(db.repos.getRepoByName).mockImplementation(repoOf);
+    }
+    expect(github.updateBranch).toHaveBeenCalledWith('janedoe/openadlc', 118, BUILT);
+
+    // 01:16:07, its push: sent as the builder, with no local CI pass on it,
+    // and a diff that changed, since #117 touched the same files.
+    at('01:16:07');
+    await pushed(webhooks, BUILT, UPDATED);
+
+    expect(gates.at(-1)).toEqual({ sha: UPDATED, state: 'pending', description: `waiting on ${SECOND.name}` });
+    expect(reviewsBy(SECOND)).toEqual(['2026-10-23T01:01:28.000Z', '2026-10-23T01:16:07.000Z']);
+    expect(rounds()).toEqual([
+      { sha: BUILT, at: '2026-10-23T01:01:28.000Z' },
+      { sha: UPDATED, at: '2026-10-23T01:16:07.000Z' },
+    ]);
+    expect(open).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'patch' }));
+    expect(automation.moveStage).not.toHaveBeenCalledWith(expect.objectContaining({ to: 'build' }));
+  });
+
+  it('replays #118 held for its local CI all the same: the patch that pushed nothing asks the second reviewer again, and the lead after it', async () => {
+    const { webhooks, open, gates, taskService } = bridge();
+
+    at('01:01:28');
+    await pushed(webhooks, EARLIER, BUILT);
+    done();
+
+    // 01:16:07, a push from b789079 the line has no record of making (v0.1.5
+    // kept none), sent as the builder, with no local CI pass: held.
+    at('01:16:07');
+    await pushed(webhooks, BUILT, UPDATED);
+    expect(gates.at(-1)).toEqual({ sha: UPDATED, state: 'pending', description: HELD });
+    expect(reviewsBy(SECOND)).toEqual(['2026-10-23T01:01:28.000Z']);
+    const patch = store.botTasks.find((task) => task.kind === 'patch');
+    expect(patch).toBeDefined();
+
+    // 01:20, the patch records a local CI pass on 692cd1f and pushes nothing.
+    at('01:20:00');
+    store.localCiPasses.add(UPDATED);
+    done();
+    store.issue = { number: 108, stage: 'build', labels: ['adlc:build'] };
+    // The reviews on 692cd1f's diff: none, since b789079's is another diff.
+    const reviewStanding = vi.fn(async () => ({
+      gate: { state: 'pending', description: `waiting on ${SECOND.name}` },
+      decision: { reviewers: [SECOND.name, LEAD.name], lead: LEAD.name, approvers: [LEAD.name], reasons: {}, humanReviewRequired: false },
+      posted: [],
+      approved: [],
+      changesRequested: [],
+      securityAsks: null,
+      leadDue: null,
+    }));
+    const stages = new StageHandoff(
+      { moveStage: vi.fn(async () => ({ moved: true })), reviewRules: () => ({ reviewers: [{ seat: LEAD.name, lead: true }, { seat: SECOND.name }] }), reviewStanding } as never,
+      taskService,
+      null,
+      null,
+      null,
+      async () => ({ draft: false, headSha: UPDATED, headRef: BRANCH, baseRef: 'main', labels: [] }),
+    );
+
+    expect(await stages.onTaskDone({ kind: 'patch', subjectRef: 'openadlc#118', taskId: patch!.id as string, branch: BRANCH })).toBe('review');
+
+    expect(reviewStanding).toHaveBeenCalledWith('janedoe/openadlc', expect.objectContaining({ number: 118, head: { sha: UPDATED, ref: BRANCH } }));
+    expect(reviewsBy(SECOND)).toEqual(['2026-10-23T01:01:28.000Z', '2026-10-23T01:20:00.000Z']);
+    // The lead's turn comes once the second reviewer has posted (`onReview`).
+    expect(reviewsBy(LEAD)).toEqual([]);
+    expect(open).not.toHaveBeenCalledWith(expect.objectContaining({ bot: LEAD.name }));
+    expect(log.some((event) => event.type === 'review.stalled')).toBe(false);
   });
 });
 
