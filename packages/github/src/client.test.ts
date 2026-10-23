@@ -1005,6 +1005,26 @@ describe('what a merge reads about a pull request’s files and history', () => 
     expect(history?.[2]).not.toHaveProperty('at');
   });
 
+  it('names which review a reviewed entry is, among the commits pushed before and after it', async () => {
+    // Its place among the commits is the head it was submitted on: GitHub
+    // moves a review's own commit_id onto a later head (620legal/OpenADLC#124).
+    const client = answering(() => ({
+      status: 200,
+      body: [
+        { event: 'committed', sha: 'a'.repeat(40) },
+        { event: 'reviewed', id: 5622816949, user: { login: 'janedoe' }, commit_id: 'b'.repeat(40) },
+        { event: 'committed', sha: 'b'.repeat(40) },
+      ],
+    }));
+
+    const history = await client.listPullHistory('janedoe/openadlc-testbed', 7);
+    expect(history?.map((entry) => [entry.event, entry.sha, entry.reviewId])).toEqual([
+      ['committed', 'a'.repeat(40), undefined],
+      ['reviewed', null, 5622816949],
+      ['committed', 'b'.repeat(40), undefined],
+    ]);
+  });
+
   it('names which review was dismissed, what it said, and who dismissed it', async () => {
     const client = answering(() => ({
       status: 200,

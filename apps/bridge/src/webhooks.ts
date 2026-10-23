@@ -70,10 +70,10 @@ import { retakeLease, SendBack } from './send-back.js';
 import { chooseIssueText, editNotTaken } from './vouched-text.js';
 import { workflowFile, type DeployPipeline, type RevertOutcome } from './deploy-pipeline.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
-import { BotBusyError, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, reviewStartLock, SubjectClosedError, type TaskService } from './task-service.js';
+import { askPeopleAgain, BotBusyError, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, reviewStartLock, SubjectClosedError, type TaskService } from './task-service.js';
 import { FORBIDDEN_PUSH, ciKeysChanged, contentChanged, fastPathOf, forbiddenPushGate, reviewSample } from './automation.js';
 import { continuesBranch } from './build-left.js';
-import { BRANCH_UPDATED_BY_LINE, DEPLOY_PATH_BRANCH_PREFIX, headInRepository, issueNumberFromBranch, issuesMergedBy, madeByLineUpdate, ownIssueOf, REVIEW_ROUND_OPENED, REVIEW_STALLED, scopeLabelAcceptedFrom } from './work.js';
+import { BRANCH_UPDATED_BY_LINE, DEPLOY_PATH_BRANCH_PREFIX, headInRepository, issueNumberFromBranch, issuesMergedBy, madeByLineUpdate, ownIssueOf, REVIEW_ROUND_OPENED, REVIEW_STALLED, REVIEW_SUBMITTED_ON, scopeLabelAcceptedFrom } from './work.js';
 import { shipsByMerging, testingDeployChoice } from './deploys.js';
 import type { RequestFiling } from './request-lifecycle.js';
 
@@ -3116,6 +3116,14 @@ export class Webhooks {
 
     const crew = await bots.listBots();
 
+    // A person's review is of the commit it was submitted on, and only this
+    // delivery says which: GitHub moves a review's `commit_id` onto a later
+    // head, one whose diff the person never saw included, and sends `edited`
+    // with the new one (620legal/OpenADLC#118). A crew review's signature
+    // names its head; a person's carries nothing, so the merge and the gate
+    // count it by this record (`asOfSubmittedHeads`).
+    if (payload.action === 'submitted') await recordSubmittedOn(repoName, pr.number, review, crew);
+
     // A bot dismissing a review is an incident, not a workflow step. The
     // bridge's own dismissal of a superseded approval, made as the automation
     // account and recorded as it is made, is the one that is not.
@@ -3215,6 +3223,10 @@ export class Webhooks {
         });
       }
     }
+    // A person the rules name whose approval GitHub shows counts for nothing
+    // on this diff is asked again, in Needs you: GitHub goes on showing them
+    // as having approved, and the gate waited on them with nobody telling them.
+    if (repo) await askPeopleAgain({ repoName: repo.name, prNumber: pr.number, issue: ownIssueOf(pr, repoFullName) }, standing.peopleNotCounted);
 
     // The lead approved this diff while a blocking seat still asks for changes
     // on it: the merge is held until that seat approves, and nothing sends the
@@ -4775,6 +4787,32 @@ function reviewReason(review: { body?: string | null; html_url?: string }): stri
   const said = withoutMarker(review.body ?? '').replace(/<!--[\s\S]*?-->/g, '').trim();
   const short = said.length > 600 ? `${said.slice(0, 599).trimEnd()}…` : said;
   return [short || 'changes were requested', review.html_url ? `The review: ${review.html_url}` : ''].filter(Boolean).join('\n\n');
+}
+
+/**
+ * Records the commit a person's review was submitted on, from its `submitted`
+ * delivery (`REVIEW_SUBMITTED_ON`); a crew review's signature names its own.
+ * Once for each review: a redelivery says the same. A record that cannot be
+ * written is said, and the approval is then read from the pull request's
+ * timeline, which counts it for no head but the one it was submitted on.
+ */
+async function recordSubmittedOn(
+  repoName: string,
+  prNumber: number,
+  review: { id?: number; state: string; user: { login: string }; commit_id?: string },
+  crew: Parameters<typeof whoWrote>[1],
+): Promise<void> {
+  const reviewId = review.id;
+  if (reviewId === undefined || !review.commit_id || whoWrote(review.user.login, crew).kind !== 'person') return;
+  const subjectRef = `${repoName}#${prNumber}`;
+  const kept = await (async () => listEventsOfTypeWith(REVIEW_SUBMITTED_ON, { subjectRef, reviewId }))().catch(() => []);
+  if (kept.length > 0) return;
+  const payload = { subjectRef, reviewId, login: review.user.login, commit: review.commit_id, state: review.state.toLowerCase() };
+  await (async () => recordEvent({ source: 'platform', type: REVIEW_SUBMITTED_ON, payload }))().catch((error: unknown) =>
+    console.warn(
+      `[bridge] ${subjectRef}: the commit @${review.user.login}'s review ${reviewId} was submitted on was not recorded, so it is read from the timeline: ${error instanceof Error ? error.message : error}`,
+    ),
+  );
 }
 
 /**
