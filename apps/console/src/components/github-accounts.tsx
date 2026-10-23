@@ -7,22 +7,12 @@ import { addSeat, removeSeat } from '@/app/actions';
 import { BotAvatar } from '@/components/avatar';
 import { accountIds } from '@/components/model-accounts-card';
 import { Button } from '@/components/ui/button';
+import { Chip } from '@/components/ui/chip';
 import type { CrewMember, GitHubAccountsView, ModelAccountRef } from '@/lib/api';
 import { botLabel } from '@/lib/bot-label';
 import { cn } from '@/lib/cn';
-import { ACCOUNT_GROUP_TEXT, byAccountGroup, roleTitle } from '@/lib/crew';
-import {
-  NO_MODEL_COPY,
-  assignmentPath,
-  isAccountKind,
-  isProvider,
-  listModelsFor,
-  modelChoices,
-  modelFor,
-  readBridgeError,
-  tierOf,
-  type AccountListing,
-} from '@/lib/model-onboarding';
+import { ACCOUNT_GROUP_TEXT, accountGroupOf, byAccountGroup, modelPicks, readPick, roleTitle, type ModelPick } from '@/lib/crew';
+import { NO_MODEL_COPY, assignmentPath, isAccountKind, listModelsFor, readBridgeError, type AccountListing } from '@/lib/model-onboarding';
 import { safeAction } from '@/lib/safe-action';
 import { accountState } from '@/lib/settings';
 
@@ -38,6 +28,9 @@ interface Saving {
   error?: string;
 }
 
+/** Bot, GitHub account, Model: the model gets the most, so its select shows a whole `Newest Opus · claude-…` label. */
+const COLUMNS = 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,2fr)]';
+
 const SELECT =
   'h-11 w-full min-w-0 rounded-md border border-edge bg-panel px-2 text-[12.5px] text-body disabled:opacity-50 md:h-8';
 
@@ -52,8 +45,10 @@ function addedSeat(bot: Pick<CrewMember, 'role' | 'slot'>): string | null {
 
 /**
  * The crew, a row per bot: the GitHub account it acts as and the model it
- * thinks with, each changed where it is shown. Grouped by the account each
- * group signs in as, since that is the rule the account choice follows.
+ * thinks with, each changed where it is shown. One list, the crew account's
+ * seats first, each marked with the account group it signs in as, since that
+ * is the rule the account choice follows; what each group means is said under
+ * the table.
  *
  * The GitHub account choices are the bridge's — every account OpenADLC holds,
  * with the reason one is refused (a reviewer on the account the crew opens
@@ -61,7 +56,7 @@ function addedSeat(bot: Pick<CrewMember, 'role' | 'slot'>): string | null {
  * refuses the same when asked anyway. Taking a bot off an account, or moving
  * it to another, is asked once more, and the bridge refuses it while the bot
  * has work in flight; it leaves the account connected, listed under GitHub as
- * used by no bot. The model is saved
+ * used by no bot. The model account and model are one choice, saved together
  * through the route the walkthrough's assignment step uses, which checks it
  * against the account; the walkthrough is still where accounts are added and
  * where the whole crew is proposed at once.
@@ -87,8 +82,6 @@ export function CrewTable({
   const [saving, setSaving] = useState<Saving | null>(null);
   /** What each model account offers, once asked; until then a row offers the model it has. */
   const [listings, setListings] = useState<Record<string, AccountListing> | null>(null);
-  /** A row moved to an account with no model chosen for it yet. */
-  const [drafts, setDrafts] = useState<Record<string, { accountId: string; model: string }>>({});
   /**
    * A seat about to be taken off its account, asked once more as Remove is: a
    * misclick in the select used to post at once and break the seat's work.
@@ -142,170 +135,138 @@ export function CrewTable({
     assign(bot, login);
   };
 
-  const think = async (bot: CrewMember, accountId: string, model: string): Promise<void> => {
-    if (!model) {
-      setDrafts((current) => ({ ...current, [bot.name]: { accountId, model: '' } }));
-      return;
-    }
-    const saved = await run(bot.name, 'model', () =>
+  /** One choice is a whole pair, account and model, so one request saves both. */
+  const think = (bot: CrewMember, accountId: string, model: string): void => {
+    if (accountId === bot.modelAccountId && model === bot.model) return;
+    void run(bot.name, 'model', () =>
       fetch(assignmentPath(bot.name), {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ model, modelAccountId: accountId }),
       }),
     );
-    if (saved) setDrafts(({ [bot.name]: _done, ...rest }) => rest);
   };
 
-  /** The model a bot moves to with its account: what that account offers for its kind of work. */
-  const modelOn = (bot: CrewMember, accountId: string): string => {
-    const account = accounts.find((one) => one.id === accountId);
-    if (!account || !isProvider(account.provider)) return '';
-    if (accountId === bot.modelAccountId) return bot.model;
-    return modelFor(account.provider, tierOf({ model: bot.model, role: bot.role }), listings?.[accountId]) ?? '';
-  };
-
+  const seats = byAccountGroup(crew).flatMap(({ seats: inGroup }) => inGroup);
   return (
-    <div role="table" aria-label="The crew" className="flex flex-col">
-      <div
-        role="row"
-        className="hidden gap-3 pb-1.5 text-[11px] uppercase tracking-wider text-dim md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)_minmax(0,1.7fr)]"
-      >
-        <span role="columnheader">Bot</span>
-        <span role="columnheader">GitHub account</span>
-        <span role="columnheader">Model</span>
-      </div>
-      {byAccountGroup(crew).map(({ group, seats }) => (
-        <div key={group} role="rowgroup" className="flex flex-col">
-          <div className="border-t border-well pb-2 pt-3">
-            <p className="text-[12.5px] font-medium text-body">{ACCOUNT_GROUP_TEXT[group].label}</p>
-            <p className="text-[12px] leading-normal text-muted">{ACCOUNT_GROUP_TEXT[group].blurb}</p>
-          </div>
-          {seats.map((bot) => {
-            const seat = github?.bots.find((one) => one.name === bot.name || (bot.slot ? one.slot === bot.slot : false)) ?? null;
-            const mine = saving?.bot === bot.name ? saving : null;
-            const draft = drafts[bot.name] ?? null;
-            const move = moving?.bot === bot.name ? moving : null;
-            return (
-              <div key={bot.name} role="row" className="flex flex-col border-t border-well py-[9px] last:pb-0">
-                <div className="grid grid-cols-1 items-center gap-x-3 gap-y-1.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)_minmax(0,1.7fr)]">
-                  <span role="cell" className="flex min-w-0 items-center gap-2.5 text-[13px]">
-                    <BotAvatar bot={bot} size="md" />
-                    <span className="min-w-0 truncate font-medium text-body">
-                      {roleTitle(bot)}
-                      {addedSeat(bot) && <span className="font-normal text-muted"> · {addedSeat(bot)}</span>}
-                    </span>
-                    {addedSeat(bot) &&
-                      (crewSeats.confirming === addedSeat(bot) ? (
-                        <span className="ml-auto flex shrink-0 items-center gap-1">
-                          <Button
-                            variant="danger"
-                            size="sm"
-                            className="h-11 px-2 md:h-7"
-                            disabled={crewSeats.pending}
-                            onClick={() => crewSeats.remove(addedSeat(bot) ?? bot.name)}
-                          >
-                            Remove {addedSeat(bot)}
-                          </Button>
-                          <Button variant="ghost" size="sm" className="h-11 px-2 md:h-7" disabled={crewSeats.pending} onClick={crewSeats.cancel}>
-                            Keep
-                          </Button>
-                        </span>
-                      ) : (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="ml-auto h-11 shrink-0 px-2 md:h-7"
-                          disabled={crewSeats.pending}
-                          onClick={() => crewSeats.ask(addedSeat(bot) ?? bot.name)}
-                        >
-                          Remove
-                        </Button>
-                      ))}
+    <div className="flex flex-col">
+      <div role="table" aria-label="The crew" className="flex flex-col">
+        <div role="row" className={cn('hidden gap-3 pb-1.5 text-[11px] uppercase tracking-wider text-dim md:grid', COLUMNS)}>
+          <span role="columnheader">Bot</span>
+          <span role="columnheader">GitHub account</span>
+          <span role="columnheader">Model</span>
+        </div>
+        {seats.map((bot) => {
+          const seat = github?.bots.find((one) => one.name === bot.name || (bot.slot ? one.slot === bot.slot : false)) ?? null;
+          const mine = saving?.bot === bot.name ? saving : null;
+          const move = moving?.bot === bot.name ? moving : null;
+          const group = accountGroupOf(bot.role);
+          return (
+            <div key={bot.name} role="row" className="flex flex-col border-t border-well py-[9px]">
+              <div className={cn('grid grid-cols-1 items-center gap-x-3 gap-y-1.5', COLUMNS)}>
+                <span role="cell" className="flex min-w-0 items-center gap-2.5 text-[13px]">
+                  <BotAvatar bot={bot} size="md" />
+                  <span className="min-w-0 truncate font-medium text-body">
+                    {roleTitle(bot)}
+                    {addedSeat(bot) && <span className="font-normal text-muted"> · {addedSeat(bot)}</span>}
                   </span>
-                  <span role="cell" className="flex min-w-0 flex-col gap-1">
-                    <GitHubAccountSelect
-                      bot={bot}
-                      seat={seat}
-                      disabled={Boolean(mine?.working) || move !== null}
-                      onChange={(login) => choose(bot, seat, login)}
-                    />
-                    {move && seat?.login && (
-                      <span className="flex flex-wrap items-center gap-1">
-                        <span className="text-[12px] text-attention">
-                          {move.login ? `Move it from ${seat.login} to ${move.login}?` : `Take it off ${seat.login}?`}
-                        </span>
+                  <span aria-describedby={`crew-account-${group}`} className="shrink-0">
+                    <Chip title={ACCOUNT_GROUP_TEXT[group].blurb}>{ACCOUNT_GROUP_TEXT[group].label}</Chip>
+                  </span>
+                  {addedSeat(bot) &&
+                    (crewSeats.confirming === addedSeat(bot) ? (
+                      <span className="ml-auto flex shrink-0 items-center gap-1">
                         <Button
                           variant="danger"
                           size="sm"
                           className="h-11 px-2 md:h-7"
-                          onClick={() => {
-                            setMoving(null);
-                            assign(bot, move.login);
-                          }}
+                          disabled={crewSeats.pending}
+                          onClick={() => crewSeats.remove(addedSeat(bot) ?? bot.name)}
                         >
-                          Confirm
+                          Remove {addedSeat(bot)}
                         </Button>
-                        <Button variant="ghost" size="sm" className="h-11 px-2 md:h-7" onClick={() => setMoving(null)}>
-                          Cancel
+                        <Button variant="ghost" size="sm" className="h-11 px-2 md:h-7" disabled={crewSeats.pending} onClick={crewSeats.cancel}>
+                          Keep
                         </Button>
                       </span>
-                    )}
-                  </span>
-                  <span role="cell" className="flex min-w-0 flex-col gap-1.5 sm:flex-row">
-                    {bot.engine === 'none' ? (
-                      <span className="text-[12.5px] text-muted">{NO_MODEL_COPY.charAt(0).toUpperCase() + NO_MODEL_COPY.slice(1)}</span>
                     ) : (
-                      <>
-                        <select
-                          aria-label={`Model account for the ${botLabel(bot).role}`}
-                          value={draft?.accountId ?? bot.modelAccountId ?? ''}
-                          disabled={Boolean(mine?.working) || accounts.length === 0}
-                          onChange={(event) => void think(bot, event.target.value, modelOn(bot, event.target.value))}
-                          className={SELECT}
-                        >
-                          {!bot.modelAccountId && !draft && (
-                            <option value="" disabled>
-                              {accounts.length === 0 ? 'No model account yet' : 'Choose an account'}
-                            </option>
-                          )}
-                          {accounts.map((account) => (
-                            <option key={account.id} value={account.id}>
-                              {account.label}
-                            </option>
-                          ))}
-                        </select>
-                        <ModelSelect
-                          bot={bot}
-                          listing={listings?.[draft?.accountId ?? bot.modelAccountId ?? '']}
-                          value={draft ? draft.model : bot.model}
-                          disabled={Boolean(mine?.working) || !(draft?.accountId ?? bot.modelAccountId)}
-                          onChange={(model) => void think(bot, draft?.accountId ?? bot.modelAccountId ?? '', model)}
-                        />
-                      </>
-                    )}
-                  </span>
-                </div>
-                {mine?.working && <p className="mt-1.5 text-[12px] text-muted">Saving…</p>}
-                {mine?.error && <p className="mt-1.5 text-[12px] text-alarm">{mine.error}</p>}
-                {draft && !draft.model && !mine && <p className="mt-1.5 text-[12px] text-attention">Choose a model on that account to save it.</p>}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="ml-auto h-11 shrink-0 px-2 md:h-7"
+                        disabled={crewSeats.pending}
+                        onClick={() => crewSeats.ask(addedSeat(bot) ?? bot.name)}
+                      >
+                        Remove
+                      </Button>
+                    ))}
+                </span>
+                <span role="cell" className="flex min-w-0 flex-col gap-1">
+                  <GitHubAccountSelect
+                    bot={bot}
+                    seat={seat}
+                    disabled={Boolean(mine?.working) || move !== null}
+                    onChange={(login) => choose(bot, seat, login)}
+                  />
+                  {move && seat?.login && (
+                    <span className="flex flex-wrap items-center gap-1">
+                      <span className="text-[12px] text-attention">
+                        {move.login ? `Move it from ${seat.login} to ${move.login}?` : `Take it off ${seat.login}?`}
+                      </span>
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        className="h-11 px-2 md:h-7"
+                        onClick={() => {
+                          setMoving(null);
+                          assign(bot, move.login);
+                        }}
+                      >
+                        Confirm
+                      </Button>
+                      <Button variant="ghost" size="sm" className="h-11 px-2 md:h-7" onClick={() => setMoving(null)}>
+                        Cancel
+                      </Button>
+                    </span>
+                  )}
+                </span>
+                <span role="cell" className="flex min-w-0 flex-col">
+                  {bot.engine === 'none' ? (
+                    <span className="text-[12.5px] text-muted">{NO_MODEL_COPY.charAt(0).toUpperCase() + NO_MODEL_COPY.slice(1)}</span>
+                  ) : (
+                    <ModelSelect
+                      bot={bot}
+                      accounts={accounts}
+                      listings={listings}
+                      disabled={Boolean(mine?.working) || accounts.length === 0}
+                      onChange={(pick) => think(bot, pick.accountId, pick.model)}
+                    />
+                  )}
+                </span>
               </div>
-            );
-          })}
-          {group === 'crew' && (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-well py-[9px] last:pb-0">
-              <Button size="sm" className="h-11 shrink-0 px-3 md:h-7" disabled={crewSeats.pending} onClick={crewSeats.add}>
-                {crewSeats.pending ? 'Working…' : 'Add a builder'}
-              </Button>
-              <span className="min-w-0 flex-1 text-[12px] leading-snug text-muted">
-                A second builder lets a repository run more tasks at once, as raising a builder’s tasks at once
-                does. Put it on the crew account; it needs no sign-in of its own.
-              </span>
-              {crewSeats.error && <p className="w-full text-[12px] text-alarm">{crewSeats.error}</p>}
+              {mine?.working && <p className="mt-1.5 text-[12px] text-muted">Saving…</p>}
+              {mine?.error && <p className="mt-1.5 text-[12px] text-alarm">{mine.error}</p>}
             </div>
-          )}
-        </div>
-      ))}
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-well py-[9px]">
+        <Button size="sm" className="h-11 shrink-0 px-3 md:h-7" disabled={crewSeats.pending} onClick={crewSeats.add}>
+          {crewSeats.pending ? 'Working…' : 'Add a builder'}
+        </Button>
+        <span className="min-w-0 flex-1 text-[12px] leading-snug text-muted">
+          Adds another builder seat on the crew account, so a repository runs more tasks at once. It needs no sign-in of its own.
+        </span>
+        {crewSeats.error && <p className="w-full text-[12px] text-alarm">{crewSeats.error}</p>}
+      </div>
+      {/* A badge's title is reached by no keyboard and no touch; this is, and each badge points to its line. */}
+      <p className="border-t border-well pt-2 text-[12px] leading-normal text-muted">
+        {(['crew', 'reviewers'] as const).map((group) => (
+          <span key={group} id={`crew-account-${group}`} className="block">
+            {ACCOUNT_GROUP_TEXT[group].label}: {ACCOUNT_GROUP_TEXT[group].blurb}
+          </span>
+        ))}
+      </p>
     </div>
   );
 }
@@ -403,32 +364,49 @@ function GitHubAccountSelect({
   );
 }
 
-/** The models a bot's account offers; before the account has said, the one it has. */
+/**
+ * A bot's model account and model as one choice: every account's models
+ * under its name, so what is chosen is always a pair the bridge can save. See
+ * `modelPicks`.
+ */
 function ModelSelect({
   bot,
-  listing,
-  value,
+  accounts,
+  listings,
   disabled,
   onChange,
 }: {
   bot: CrewMember;
-  listing: AccountListing | undefined;
-  value: string;
+  accounts: readonly ModelAccountRef[];
+  listings: Record<string, AccountListing> | null;
   disabled: boolean;
-  onChange: (model: string) => void;
+  onChange: (pick: ModelPick) => void;
 }) {
-  const options = modelChoices(listing, value);
+  const picks = modelPicks(bot, accounts, listings);
   return (
-    <select aria-label={`Model for the ${botLabel(bot).role}`} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className={SELECT}>
-      {!value && (
+    <select
+      aria-label={`Model for the ${botLabel(bot).role}`}
+      value={picks.value}
+      disabled={disabled}
+      onChange={(event) => {
+        const pick = readPick(event.target.value);
+        if (pick) onChange(pick);
+      }}
+      className={SELECT}
+    >
+      {picks.placeholder && (
         <option value="" disabled>
-          Choose a model
+          {picks.placeholder}
         </option>
       )}
-      {options.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
+      {picks.groups.map((group) => (
+        <optgroup key={group.key} label={group.label}>
+          {group.options.map((option) => (
+            <option key={option.value} value={option.value} disabled={option.disabled}>
+              {option.label}
+            </option>
+          ))}
+        </optgroup>
       ))}
     </select>
   );
