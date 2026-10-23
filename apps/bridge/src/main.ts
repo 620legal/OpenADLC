@@ -25,6 +25,7 @@ import { Context } from './context.js';
 import { DispatchGate } from './dispatch-gate.js';
 import { Gates, subjectClosed } from './gates.js';
 import { standingCoverFor } from './plan-changes.js';
+import { humanReviewReader } from './human-review-read.js';
 import { readDefaultBranch, syncDefaultBranches } from './default-branch.js';
 import { Notifier } from './notify.js';
 import { identityFromConfig } from './identity.js';
@@ -139,8 +140,9 @@ async function main(): Promise<void> {
   const notifier = new Notifier(config);
   const gates = new Gates(actors, notifier, config.consoleUrl, config.costs.perTaskCapUsd, config.costs);
   // A standing approval on an issue settles its builder's later plan changes,
-  // never one with a path under Human review on the base branch (#77).
-  gates.useStandingApprovals(standingCoverFor({ humanReviewRules: (repoFullName, baseRef) => automation.humanReviewRules(repoFullName, baseRef) }));
+  // never one with a path under Human review on the base branch (#77); the
+  // read says why when the rules cannot be read, which the card then says.
+  gates.useStandingApprovals(standingCoverFor({ humanReviewRules: humanReviewReader(actors, config) }));
   const context = new Context(actors, config);
   // The one routine that renames a bot: when an account connects it takes
   // that account's handle, and everything named after it moves with it.

@@ -332,7 +332,9 @@ merged change waits on testing until the smoke is turned on. A skipped
 deploy: the merge ships by merging. The bridge lets the merged change's lease
 go and moves its card to Done, saying why in its timeline, and Settings →
 Repositories says that repository's merges ship by merging while its newest
-testing deploy had nothing to deploy. A run that never started, or was cancelled
+testing deploy had nothing to deploy, and what Automatic found says the same:
+a testing deploy that ran is one the repository has, even when GitHub did not
+answer whether its workflow exists. A run that never started, or was cancelled
 with no later deploy to carry it, lets the lease go and leaves the card in
 Ship ([troubleshooting](troubleshooting.md#a-stacked-issue-waits-after-its-base-merged)).
 

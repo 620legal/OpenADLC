@@ -491,9 +491,13 @@ A task that needs to write outside its lease's paths ends a message with a
     under `## Human review` in `AGENTS.md` on the base branch is never
     approved this way, and neither is anything when those rules cannot be
     read: the question is asked as before, and says why. Rules that cannot be
-    read (the file, its section, or a line of it) are said as that, with what
-    to do (`keptForPerson`, `packages/shared/src/plan-change-review.ts`), and
-    never as a path under Human review. The standing approval
+    read are said as that, never as a path under Human review, with why and
+    what to do (`keptForPerson`, `packages/shared/src/plan-change-review.ts`):
+    the account the bridge reads GitHub with is not connected, or GitHub
+    refused it; there is no AGENTS.md, or no `## Human review` section in it;
+    a line of the section cannot be read, named by its number; or GitHub
+    failed (`readHumanReviewRules`, `apps/bridge/src/human-review-read.ts`).
+    The words point at no card. The standing approval
     ends when the issue's pull request merges or closes, the issue closes, or a
     person turns it off, from the question's card, the waiting card or the
     item.
@@ -528,7 +532,9 @@ A task that needs to write outside its lease's paths ends a message with a
   the person who set the standing approval, and the paths. Turning a standing
   approval on or off, asking the designer and a refusal after the fact are
   audited as `plan_change.standing_on`, `plan_change.standing_off`,
-  `plan_change.designer_asked` and `plan_change.refused_after`.
+  `plan_change.designer_asked` and `plan_change.refused_after`, under the
+  item's key once the install is numbered (the issue before), with the issue
+  in `subjects`, as an item's own controls are.
 
 ## Expected paths decide what runs together
 

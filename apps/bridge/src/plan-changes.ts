@@ -1,4 +1,4 @@
-import { audit, bots, issues, leases, repos, standingApprovals, tasks, threads, type Role, type StandingApproval } from '@openadlc/db';
+import { audit, bots, issues, leases, repos, settings, standingApprovals, tasks, threads, workItems, type Role, type StandingApproval } from '@openadlc/db';
 import type { GitHubClient } from '@openadlc/github';
 import {
   PLAN_CHANGE_APPROVE,
@@ -18,12 +18,13 @@ import {
   withoutExpectedPaths,
   withoutMarker,
   type ContextDocument,
-  type HumanReviewRule,
   type KeptForPerson,
   type SigningKey,
 } from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import { issueOfTask, type GateChannel, type Gates, type StandingCover } from './gates.js';
+import type { HumanReviewRead } from './human-review-read.js';
+import { itemKey } from './items.js';
 import { HttpFailure, type Router } from './router.js';
 import type { TaskService } from './task-service.js';
 import { publicNameOf } from './thread-view.js';
@@ -54,6 +55,9 @@ import { publicNameOf } from './thread-view.js';
  * The designer is a task, not a call to a model from the bridge: engines run
  * only in hostd, where the ledger is written before their output is acted
  * on, and a task is how a seat's spend is held to its caps.
+ *
+ * Each is audited under the item's key once the install is numbered, with the
+ * issue in `subjects`, as an item's controls are (`item-controls.ts`).
  */
 
 export interface PlanChangeDeps {
@@ -67,8 +71,8 @@ export interface PlanChangeDeps {
   later?: (what: string, work: () => Promise<unknown>) => void;
   taskService: Pick<TaskService, 'open' | 'resume'>;
   actors: Pick<Actors, 'asBot'>;
-  /** The Human-review rules on a repository's base branch; null when they cannot be read (`Automation.humanReviewRules`). */
-  humanReviewRules(repoFullName: string, baseRef: string): Promise<HumanReviewRule[] | null>;
+  /** The Human-review rules on a repository's base branch, or why they cannot be read (`readHumanReviewRules`). */
+  humanReviewRules(repoFullName: string, baseRef: string): Promise<HumanReviewRead>;
   /** The keys a crew post is signed with, which a design comment is checked against; absent where nothing is signed. */
   keyring?: () => Promise<SigningKey[]>;
   /** Stops a task for good, its lease with it (`stopTask` in api.ts). */
@@ -88,7 +92,8 @@ function warn(what: string): (error: unknown) => void {
 
 /**
  * What keeps these paths for a person: those under Human review on the base
- * branch, or every one when the rules cannot be read, which is said as that.
+ * branch, or every one when the rules cannot be read, which is said as that,
+ * with why when the read says.
  */
 async function keptFor(
   read: PlanChangeDeps['humanReviewRules'],
@@ -96,8 +101,28 @@ async function keptFor(
   paths: readonly string[],
 ): Promise<KeptForPerson> {
   const base = repo.defaultBranch || 'HEAD';
-  const rules = await read(repo.fullName, base).catch(() => null);
-  return keptForPerson(paths, rules, repo.defaultBranch || null);
+  const found = await read(repo.fullName, base).catch(() => null);
+  return keptForPerson(paths, found?.rules ?? null, repo.defaultBranch || null, found?.unread ?? null);
+}
+
+/**
+ * What a plan change's audit row is filed under: its item's key (`W-14`)
+ * once the install is numbered, the issue before, with the issue in
+ * `subjects` either way. Approve all on and off, asking the designer and a
+ * refusal after the fact were filed under the issue, `scripted#60`, even when
+ * turned off from `W-14`, while the item's own controls were under `W-14`.
+ * Never in the way of the audit: a key that cannot be read is the issue's.
+ */
+async function auditedUnder(repo: { id: string; name: string }, issueNumber: number): Promise<{ target: string; subjects: string[] }> {
+  const subject = `${repo.name}#${issueNumber}`;
+  try {
+    const item = await workItems.itemOf({ repoId: repo.id, number: issueNumber });
+    if (!item) return { target: subject, subjects: [subject] };
+    const organization = await settings.getSetting('organization').catch(() => null);
+    return { target: itemKey(item.number, organization), subjects: [subject] };
+  } catch {
+    return { target: subject, subjects: [subject] };
+  }
 }
 
 /**
@@ -129,11 +154,15 @@ export async function endStandingApproval(input: { repoId: string; issueNumber: 
   try {
     const ended = await standingApprovals.turnOff({ repoId: input.repoId, issueNumber: input.issueNumber, by: input.by ?? 'openadlc', why: input.why });
     if (!ended) return;
+    const repo = (await repos.listRepos().catch(() => [])).find((one) => one.id === input.repoId);
+    const under = repo
+      ? await auditedUnder(repo, input.issueNumber)
+      : { target: input.subject ?? `#${input.issueNumber}`, subjects: input.subject ? [input.subject] : [] };
     await audit({
       actor: input.by ?? 'openadlc',
       action: 'plan_change.standing_off',
-      target: input.subject ?? `#${input.issueNumber}`,
-      payload: { standingId: ended.id, setBy: ended.setBy, why: input.why },
+      target: under.target,
+      payload: { standingId: ended.id, setBy: ended.setBy, why: input.why, subjects: under.subjects },
     }).catch(warn(`the end of the standing approval on #${input.issueNumber} was not audited`));
   } catch (error) {
     warn(`the standing approval on #${input.issueNumber} was not turned off (${input.why})`)(error);
@@ -231,9 +260,13 @@ export class PlanChanges {
       throw error;
     }
     if (!before) {
-      await audit({ actor: input.identity, action: 'plan_change.standing_on', target: subject, payload: { standingId: standing.id, gateId: work.gate.id } }).catch(
-        warn(`${subject}: the standing approval was not audited`),
-      );
+      const under = await auditedUnder(work.repo, work.issueNumber);
+      await audit({
+        actor: input.identity,
+        action: 'plan_change.standing_on',
+        target: under.target,
+        payload: { standingId: standing.id, gateId: work.gate.id, subjects: under.subjects },
+      }).catch(warn(`${subject}: the standing approval was not audited`));
       await this.line(work.gate.threadId, work.gate.id, `${input.identity} turned on approve all for #${work.issueNumber}`);
       const sayIt = () =>
         this.say(
@@ -257,9 +290,13 @@ export class PlanChanges {
     const ended = await standingApprovals.turnOff({ repoId: repo.id, issueNumber: input.issueNumber, by: input.identity, why: 'turned off by a person' });
     if (!ended) throw new HttpFailure(404, `approve all is not on for #${input.issueNumber}`);
     const subject = `${repo.name}#${input.issueNumber}`;
-    await audit({ actor: input.identity, action: 'plan_change.standing_off', target: subject, payload: { standingId: ended.id, setBy: ended.setBy, why: 'turned off by a person' } }).catch(
-      warn(`${subject}: turning approve all off was not audited`),
-    );
+    const under = await auditedUnder(repo, input.issueNumber);
+    await audit({
+      actor: input.identity,
+      action: 'plan_change.standing_off',
+      target: under.target,
+      payload: { standingId: ended.id, setBy: ended.setBy, why: 'turned off by a person', subjects: under.subjects },
+    }).catch(warn(`${subject}: turning approve all off was not audited`));
     const lease = await leases.latestLease(repo.id, input.issueNumber).catch(() => null);
     const bot =
       (lease ? await bots.getBotById(lease.botId).catch(() => null) : null) ?? (await bots.listBots().catch(() => [])).find((one) => one.role === 'implement') ?? null;
@@ -337,11 +374,12 @@ export class PlanChanges {
 
     await leases.notePlanChange(work.gate.id, 'designer', { taskId: opened.taskId, askedBy: input.identity, at: new Date().toISOString() });
     await this.line(work.gate.threadId, work.gate.id, `${input.identity} asked ${designer.name}, the designer, to judge this plan change`);
+    const under = await auditedUnder(work.repo, work.issueNumber);
     await audit({
       actor: input.identity,
       action: 'plan_change.designer_asked',
-      target: subject,
-      payload: { gateId: work.gate.id, taskId: opened.taskId, designer: designer.name, paths: work.request.paths },
+      target: under.target,
+      payload: { gateId: work.gate.id, taskId: opened.taskId, designer: designer.name, paths: work.request.paths, subjects: under.subjects },
     }).catch(warn(`${subject}: asking the designer was not audited`));
     return { taskId: opened.taskId, designer: designer.name };
   }
@@ -527,11 +565,12 @@ export class PlanChanges {
         'The task is stopped and its lease released. `needs-human` stays on the issue until a person changes its Expected paths or the plan.',
     );
     await this.line(gate.threadId, gate.id, `${input.identity} refused the plan change ${who} approved, and took ${pathList(request.paths)} back`, left.join('; ') || undefined);
+    const under = await auditedUnder(repo, issueNumber);
     await audit({
       actor: input.identity,
       action: 'plan_change.refused_after',
-      target: subject,
-      payload: { gateId: gate.id, taskId: task.id, paths: request.paths, decidedBy: request.decided.by },
+      target: under.target,
+      payload: { gateId: gate.id, taskId: task.id, paths: request.paths, decidedBy: request.decided.by, subjects: under.subjects },
     }).catch(warn(`${subject}: the refusal was not audited`));
     return { paths: request.paths };
   }

@@ -23,20 +23,74 @@ export function underHumanReview(paths: readonly string[], rules: readonly Human
 }
 
 /**
+ * Why a repository's Human-review rules could not be read, as the bridge
+ * read them (`readHumanReviewRules`, apps/bridge/src/human-review-read.ts):
+ *
+ * - `no-account`: the account it reads GitHub with, `account`, is not connected;
+ * - `no-access`: GitHub would not let that account read the repository
+ *   (`status` 401 for a sign-in it no longer accepts, else 403 or 404);
+ * - `no-file`: the repository has no AGENTS.md on the branch;
+ * - `no-section`: AGENTS.md has no `## Human review` section;
+ * - `unreadable-line`: a line of the section the parser cannot read, counting
+ *   from 1 in the file;
+ * - `read-failed`: GitHub answered something else, `status` null with no answer.
+ */
+export type RulesUnreadCause =
+  | { cause: 'no-account'; account: string }
+  | { cause: 'no-access'; account: string; status: number }
+  | { cause: 'no-file' }
+  | { cause: 'no-section' }
+  | { cause: 'unreadable-line'; line: number; reason: string }
+  | { cause: 'read-failed'; status: number | null };
+
+/**
  * What a card and the issue say when a repository's Human-review rules could
  * not be read: `what` could not be, and the `fix`, each without its full
- * stop. The bridge cannot tell which way they failed (`readFileAtRef` answers
- * null for a file that is missing and for one it could not read, the parser
- * null for no section and for a line it cannot read), so the fix names both.
+ * stop, said for the `cause` when the bridge knows it. It always said to add
+ * a `## Human review` section and that "the repository’s card in Needs you"
+ * named the line, and when no account could read AGENTS.md both were wrong
+ * and there was no such card: with no cause, the fix names what it may be and
+ * points at no card.
  */
-export function rulesUnreadWords(base: string | null): { what: string; fix: string } {
+export function rulesUnreadWords(base: string | null, cause: RulesUnreadCause | null = null): { what: string; fix: string } {
   const on = base && base !== 'HEAD' ? `on \`${base}\`` : 'on the default branch';
-  return {
-    what: `OpenADLC could not read the Human-review rules in AGENTS.md ${on}`,
-    fix:
-      `Add a \`## Human review\` section to AGENTS.md ${on}, or fix the line of it OpenADLC cannot read ` +
-      '(the repository’s card in Needs you names it); until then a person approves every path',
-  };
+  const until = 'until then a person approves every path';
+  const readFor = `OpenADLC could not read AGENTS.md ${on} for its Human-review rules`;
+  // Each `what` follows "but" on the card ("Approve all is on for #44, but …"),
+  // so each begins with a name: "There is no AGENTS.md" read "but There is".
+  switch (cause?.cause) {
+    case 'no-account':
+      return {
+        what: `${readFor}: ${cause.account}, the account it reads GitHub with, is not connected`,
+        fix: `Until it is, a person approves every path. Run: openadlc auth login --bot ${cause.account}`,
+      };
+    case 'no-access':
+      return cause.status === 401
+        ? {
+            what: `${readFor}: GitHub no longer accepts ${cause.account}’s sign-in`,
+            fix: `Until it is reconnected, a person approves every path. Run: openadlc auth login --bot ${cause.account}`,
+          }
+        : { what: `${readFor}: GitHub would not let ${cause.account} read the repository`, fix: `Give ${cause.account} read access to the repository on GitHub; ${until}` };
+    case 'no-file':
+      return { what: `OpenADLC found no AGENTS.md ${on} to read the Human-review rules from`, fix: `Add AGENTS.md with a \`## Human review\` section ${on}; ${until}` };
+    case 'no-section':
+      return { what: `AGENTS.md ${on} has no \`## Human review\` section to read the rules from`, fix: `Add a \`## Human review\` section to AGENTS.md ${on}; ${until}` };
+    case 'unreadable-line':
+      return {
+        what: `OpenADLC cannot read line ${cause.line} of AGENTS.md ${on}, a Human-review rule: ${cause.reason}`,
+        fix: `Write line ${cause.line} as one path or glob, then the logins who must approve it; ${until}`,
+      };
+    case 'read-failed':
+      return {
+        what: `${readFor}: ${cause.status === null ? 'GitHub did not answer' : `GitHub answered ${cause.status}`}`,
+        fix: `It is read again for the next plan change; ${until}`,
+      };
+    default:
+      return {
+        what: `OpenADLC could not read the Human-review rules in AGENTS.md ${on}`,
+        fix: `Add a \`## Human review\` section to AGENTS.md ${on}, or fix the line of it OpenADLC cannot read; ${until}`,
+      };
+  }
 }
 
 /**
@@ -53,9 +107,17 @@ export interface KeptForPerson {
   rulesUnread: { what: string; fix: string } | null;
 }
 
-/** What keeps these paths for a person, from the rules on `base`, or null rules when they could not be read. */
-export function keptForPerson(paths: readonly string[], rules: readonly HumanReviewRule[] | null, base: string | null): KeptForPerson {
-  if (!rules) return { humanReview: [], rulesUnread: rulesUnreadWords(base) };
+/**
+ * What keeps these paths for a person, from the rules on `base`, or null rules
+ * when they could not be read, and why when that is known (`cause`).
+ */
+export function keptForPerson(
+  paths: readonly string[],
+  rules: readonly HumanReviewRule[] | null,
+  base: string | null,
+  cause: RulesUnreadCause | null = null,
+): KeptForPerson {
+  if (!rules) return { humanReview: [], rulesUnread: rulesUnreadWords(base, cause) };
   return { humanReview: underHumanReview(paths, rules), rulesUnread: null };
 }
 

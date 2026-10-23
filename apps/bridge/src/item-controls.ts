@@ -27,7 +27,8 @@ import { issueNumberFromBranch } from './work.js';
  *
  * All four are an admin's (`roles.ts`), and all four are audited under the
  * item's key, as linking, unlinking and merging are (`item-routes.ts`), with
- * the subjects each acted on in the payload.
+ * the subjects each acted on in the payload. Each answers with that key as
+ * `item`, beside the `subject` it acted on, as linking and merging do.
  */
 
 /** A work item as these routes need it (`controlledItem` in items.ts, which `main.ts` resolves it with). */
@@ -35,8 +36,9 @@ export interface ControlledItem {
   key: string;
   /**
    * Its work item's key, `W-4`, once the install is numbered: what the audit
-   * log files its controls under. Cancel on W-4 was filed under its issue,
-   * `scripted#44`, while link, unlink and merge on it were filed under W-4.
+   * log files its controls under, and what each answers as `item`. Cancel on
+   * W-4 was filed under its issue, `scripted#44`, while link, unlink and merge
+   * on it were filed under W-4, and its answer named only `scripted#44`.
    */
   itemKey?: string | null;
   repoName: string;
@@ -173,7 +175,7 @@ export function gitHubFailure(error: unknown, item: { key: string; repoFullName:
   return new HttpFailure(status === 401 || status === null ? 503 : 409, sentence);
 }
 
-/** What an item's controls are audited under: its work item's key, or its subject before the install is numbered. */
+/** What an item's controls are audited under and answer as `item`: its work item's key, or its subject before the install is numbered. */
 function auditedAs(item: ControlledItem): string {
   return item.itemKey ?? item.key;
 }
@@ -271,7 +273,7 @@ export function registerItemControlRoutes(router: Router, deps: ItemControlDeps)
     const held: ItemHold = { by: identity, at: (deps.now?.() ?? new Date()).toISOString(), why };
     await recordHold(`${item.repoName}#${issue.number}`, held, identity);
     await deps.audit({ actor: identity, action: 'item.paused', target: auditedAs(item), payload: { why, subjects: labelled(item, issue) } });
-    return { subject: item.key, held };
+    return { item: auditedAs(item), subject: item.key, held };
   });
 
   router.post('/v1/items/:subject/resume', async ({ params, identity }) => {
@@ -290,7 +292,7 @@ export function registerItemControlRoutes(router: Router, deps: ItemControlDeps)
         console.warn(`[bridge] ${item.key} resumed, but what it held did not all start: ${error instanceof Error ? error.message : error}`),
       );
     }
-    return { subject: item.key, held: null };
+    return { item: auditedAs(item), subject: item.key, held: null };
   });
 
   router.post('/v1/items/:subject/next', async ({ params, body, identity }) => {
@@ -321,7 +323,7 @@ export function registerItemControlRoutes(router: Router, deps: ItemControlDeps)
       payload: { subjects: [`${item.repoName}#${issue.number}`, ...moved.map((number) => `${item.repoName}#${number}`)], tookFrom: moved },
     });
     deps.dispatchSoon?.(`${item.key} ${on ? 'was put next' : 'is no longer next'}`);
-    return { subject: item.key, next: on, tookFrom: moved };
+    return { item: auditedAs(item), subject: item.key, next: on, tookFrom: moved };
   });
 
   router.get('/v1/items/:subject/cancel', async ({ params }) => {
@@ -455,6 +457,7 @@ export function registerItemControlRoutes(router: Router, deps: ItemControlDeps)
 
     await deps.audit({ actor: identity, action: 'item.cancelled', target: auditedAs(item), payload: { reason, subjects: item.subjects, steps } });
     return {
+      item: auditedAs(item),
       subject: item.key,
       cancelled: steps.every((one) => one.done),
       steps,

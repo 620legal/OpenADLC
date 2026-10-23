@@ -42,13 +42,66 @@ describe('the paths of a plan change that only a person may approve', () => {
     const kept = keptForPerson(['apps/probe60-more/util.ts'], null, 'main');
     expect(kept.humanReview).toEqual([]);
     expect(kept.rulesUnread?.what).toBe('OpenADLC could not read the Human-review rules in AGENTS.md on `main`');
-    expect(kept.rulesUnread?.fix).toContain('Add a `## Human review` section to AGENTS.md on `main`, or fix the line of it OpenADLC cannot read');
+    expect(kept.rulesUnread?.fix).toBe('Add a `## Human review` section to AGENTS.md on `main`, or fix the line of it OpenADLC cannot read; until then a person approves every path');
     expect(keepsForPerson(kept)).toBe(true);
     expect(keptForPerson(['apps/x.ts'], null, null).rulesUnread?.what).toContain('on the default branch');
 
     const read = keptForPerson(['config/review.yaml', 'apps/x.ts'], RULES, 'main');
     expect(read).toEqual({ humanReview: ['config/review.yaml'], rulesUnread: null });
     expect(keepsForPerson(keptForPerson(['apps/x.ts'], RULES, 'main'))).toBe(false);
+  });
+
+  // On a scratch install no GitHub account could read AGENTS.md, and the
+  // message said to add a `## Human review` section and that "the
+  // repository’s card in Needs you names it": neither was true, and there
+  // was no such card.
+  it('says why the rules could not be read when that is known, and points at no card', () => {
+    const unread = (cause: Parameters<typeof keptForPerson>[3]) => keptForPerson(['apps/x.ts'], null, 'main', cause).rulesUnread!;
+
+    expect(unread({ cause: 'no-account', account: 'openadlc-flow' })).toEqual({
+      what: 'OpenADLC could not read AGENTS.md on `main` for its Human-review rules: openadlc-flow, the account it reads GitHub with, is not connected',
+      fix: 'Until it is, a person approves every path. Run: openadlc auth login --bot openadlc-flow',
+    });
+    expect(unread({ cause: 'no-access', account: 'openadlc-flow', status: 401 })).toEqual({
+      what: 'OpenADLC could not read AGENTS.md on `main` for its Human-review rules: GitHub no longer accepts openadlc-flow’s sign-in',
+      fix: 'Until it is reconnected, a person approves every path. Run: openadlc auth login --bot openadlc-flow',
+    });
+    expect(unread({ cause: 'no-access', account: 'openadlc-flow', status: 404 })).toEqual({
+      what: 'OpenADLC could not read AGENTS.md on `main` for its Human-review rules: GitHub would not let openadlc-flow read the repository',
+      fix: 'Give openadlc-flow read access to the repository on GitHub; until then a person approves every path',
+    });
+    expect(unread({ cause: 'no-file' })).toEqual({
+      what: 'OpenADLC found no AGENTS.md on `main` to read the Human-review rules from',
+      fix: 'Add AGENTS.md with a `## Human review` section on `main`; until then a person approves every path',
+    });
+    expect(unread({ cause: 'no-section' })).toEqual({
+      what: 'AGENTS.md on `main` has no `## Human review` section to read the rules from',
+      fix: 'Add a `## Human review` section to AGENTS.md on `main`; until then a person approves every path',
+    });
+    expect(unread({ cause: 'unreadable-line', line: 12, reason: 'it names two paths; give each its own line' })).toEqual({
+      what: 'OpenADLC cannot read line 12 of AGENTS.md on `main`, a Human-review rule: it names two paths; give each its own line',
+      fix: 'Write line 12 as one path or glob, then the logins who must approve it; until then a person approves every path',
+    });
+    expect(unread({ cause: 'read-failed', status: 502 }).what).toBe('OpenADLC could not read AGENTS.md on `main` for its Human-review rules: GitHub answered 502');
+    expect(unread({ cause: 'read-failed', status: null }).what).toBe('OpenADLC could not read AGENTS.md on `main` for its Human-review rules: GitHub did not answer');
+
+    const all = [
+      { cause: 'no-account', account: 'openadlc-flow' },
+      { cause: 'no-access', account: 'openadlc-flow', status: 403 },
+      { cause: 'no-file' },
+      { cause: 'no-section' },
+      { cause: 'unreadable-line', line: 3, reason: 'it names no path before the logins' },
+      { cause: 'read-failed', status: 500 },
+      null,
+    ] as const;
+    for (const cause of all) {
+      const said = unread(cause);
+      expect(`${said.what} ${said.fix}`).not.toMatch(/Needs you|card/);
+      // Each follows "but" on the card, so none starts with a word of its own.
+      expect(said.what).toMatch(/^(OpenADLC|AGENTS\.md) /);
+      // Only a section that is missing is one to add.
+      if (cause?.cause !== 'no-section' && cause?.cause !== 'no-file' && cause !== null) expect(said.fix).not.toContain('Add a `## Human review` section');
+    }
   });
 });
 
