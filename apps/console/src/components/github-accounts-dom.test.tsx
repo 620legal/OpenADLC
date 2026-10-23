@@ -33,17 +33,20 @@ const BUILDER: CrewMember = {
   sessions: [],
 };
 
-const account = (id: string): ModelAccountRef => ({ id, provider: 'anthropic', kind: 'key', label: id });
+const account = (id: string, label = id): ModelAccountRef => ({ id, provider: 'anthropic', kind: 'key', label });
 
 let root: Root;
 let container: HTMLElement;
 let asked: string[];
 let sent: { url: string; method: string; body: unknown }[];
+/** What each account lists, by id; an account not here fails to list. */
+let lists: Record<string, string[]>;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   asked = [];
   sent = [];
+  lists = {};
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -52,6 +55,9 @@ beforeEach(() => {
         return Response.json({ error: 'a2 does not offer that model to this bot' }, { status: 409 });
       }
       asked.push(url);
+      const id = decodeURIComponent(/^\/api\/model-accounts\/([^/]+)\/models$/.exec(url)?.[1] ?? '');
+      const models = lists[id];
+      if (models) return Response.json({ models: models.map((model) => ({ id: model, createdAt: null })) });
       return Response.json({ error: 'the provider refused the key' }, { status: 502 });
     }),
   );
@@ -94,23 +100,48 @@ describe('the crew table’s one model select', () => {
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
   }
 
-  it('saves the account and the model of one choice in one request, and shows the bridge’s refusal', async () => {
-    await act(async () => root.render(<CrewTable crew={[{ ...BUILDER, modelAccountId: 'a1' }]} accounts={[account('a1'), account('a2')]} />));
+  async function drawSaved(accounts: ModelAccountRef[]): Promise<void> {
+    await act(async () => root.render(<CrewTable crew={[{ ...BUILDER, modelAccountId: 'a1' }]} accounts={accounts} />));
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+  }
 
-    const other = container.querySelector<HTMLOptGroupElement>('optgroup[label="a2"]')!.querySelector('option')!;
-    await choose(other.value);
+  const options = (group: Element) => [...group.querySelectorAll('option')].map((option) => option.value);
+
+  it('saves the account and the model of one choice in one request, and shows the bridge’s refusal', async () => {
+    lists = { a2: ['claude-opus-5-5', 'claude-haiku-5'] };
+    await drawSaved([account('a1'), account('a2')]);
+
+    // Not the bot's own model and not what a move to a2 would propose, so a
+    // request carrying either of those in place of the choice fails here.
+    const chosen = JSON.stringify(['a2', 'claude-haiku-5']);
+    expect(options(container.querySelector('optgroup[label="a2"]')!)).toContain(chosen);
+    await choose(chosen);
 
     expect(sent).toEqual([
-      { url: '/api/bots/openadlc-atlas-janedoe/assignment', method: 'PATCH', body: { model: 'claude-sonnet-5', modelAccountId: 'a2' } },
+      { url: '/api/bots/openadlc-atlas-janedoe/assignment', method: 'PATCH', body: { model: 'claude-haiku-5', modelAccountId: 'a2' } },
     ]);
     expect(container.textContent).toContain('a2 does not offer that model to this bot');
   });
 
   it('sends nothing for the choice already saved', async () => {
-    await act(async () => root.render(<CrewTable crew={[{ ...BUILDER, modelAccountId: 'a1' }]} accounts={[account('a1'), account('a2')]} />));
+    await drawSaved([account('a1'), account('a2')]);
     await choose(JSON.stringify(['a1', 'claude-sonnet-5']));
     expect(sent).toEqual([]);
+  });
+
+  it('keeps both groups of two accounts that share a label once their lists arrive', async () => {
+    lists = { a1: ['claude-opus-5-5'], a2: ['claude-haiku-5'] };
+    // React keeps one child per key and says so; what it keeps of two groups
+    // under one key is not defined, so the warning is the failure.
+    const warned = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await drawSaved([account('a1', 'Anthropic — API key'), account('a2', 'Anthropic — API key')]);
+    expect(warned.mock.calls.map((call) => String(call[0]))).not.toContainEqual(expect.stringContaining('same key'));
+    warned.mockRestore();
+
+    const groups = [...container.querySelectorAll('select[aria-label="Model for the builder"] optgroup')];
+    expect(groups.map((group) => group.getAttribute('label'))).toEqual(['Anthropic — API key', 'Anthropic — API key']);
+    expect(options(groups[0]!)).toContain(JSON.stringify(['a1', 'claude-opus-5-5']));
+    expect(options(groups[1]!)).toEqual([JSON.stringify(['a2', 'claude-haiku-5'])]);
   });
 });
 

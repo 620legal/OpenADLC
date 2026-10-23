@@ -159,8 +159,13 @@ export interface ModelPicks {
   value: string;
   /** What the select starts on when `value` is '': disabled, never sent. */
   placeholder: string | null;
-  /** One per model account, in the order given, each under its label. */
-  groups: { label: string; options: PickOption[] }[];
+  /**
+   * One per model account, in the order given, each under its label. `key` is
+   * the account's id: two accounts can share a label (`defaultAccountLabel`
+   * gives one per provider and kind), and a list keyed on the label let React
+   * keep one of the two groups once their lists arrived.
+   */
+  groups: { key: string; label: string; options: PickOption[] }[];
 }
 
 /**
@@ -193,11 +198,13 @@ export function modelPicks(
     if (options.length === 0) {
       options.push({ value: pickValue({ accountId: account.id, model: '' }), label: listing?.error || 'Nothing listed yet', disabled: true });
     }
-    return { label: account.label, options };
+    return { key: account.id, label: account.label, options };
   });
   if (saved && bot.model && !accounts.some((account) => account.id === saved)) {
     const model = isAlias(bot.model) ? aliasTitle(bot.model) : bot.model;
+    // The saved id is in no group above, so it keys this one apart from them.
     groups.push({
+      key: saved,
       label: 'No longer connected',
       options: [{ value: pickValue({ accountId: saved, model: bot.model }), label: `${model} · ${saved} is no longer connected` }],
     });
@@ -207,7 +214,7 @@ export function modelPicks(
   return { value, placeholder, groups };
 }
 
-export type CrewState ='working' | 'waiting' | 'attention' | 'idle' | 'on-duty' | 'not-connected';
+export type CrewState = 'working' | 'waiting' | 'attention' | 'idle' | 'on-duty' | 'not-connected';
 
 /**
  * Whether a bot needs the person before it can do its next piece of work: its

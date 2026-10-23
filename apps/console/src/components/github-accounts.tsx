@@ -400,7 +400,7 @@ function ModelSelect({
         </option>
       )}
       {picks.groups.map((group) => (
-        <optgroup key={group.label} label={group.label}>
+        <optgroup key={group.key} label={group.label}>
           {group.options.map((option) => (
             <option key={option.value} value={option.value} disabled={option.disabled}>
               {option.label}

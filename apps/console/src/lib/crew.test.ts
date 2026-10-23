@@ -256,6 +256,13 @@ describe('modelPicks', () => {
     expect(values(picks, 0)).toEqual([{ accountId: 'max', model: 'newest:opus' }]);
   });
 
+  it('keys each group on its account, since two accounts can share a label', () => {
+    const second: ModelAccountRef = { ...MAX, id: 'max-2' };
+    const picks = modelPicks(builder({ modelAccountId: 'old-key' }), [MAX, second], null);
+    expect(picks.groups.map((group) => group.label)).toEqual(['Anthropic — Max', 'Anthropic — Max', 'No longer connected']);
+    expect(picks.groups.map((group) => group.key)).toEqual(['max', 'max-2', 'old-key']);
+  });
+
   it('offers another account the model a move there would propose, before its list arrives', () => {
     const picks = modelPicks(builder(), [MAX, OPENAI], null);
     expect(values(picks, 1)).toEqual([{ accountId: 'oa', model: 'gpt-5-codex' }]);
@@ -286,6 +293,7 @@ describe('modelPicks', () => {
     const picks = modelPicks(builder({ modelAccountId: 'old-key' }), [MAX], null);
     expect(picks.value).toBe(pickValue({ accountId: 'old-key', model: 'newest:opus' }));
     expect(picks.groups.at(-1)).toEqual({
+      key: 'old-key',
       label: 'No longer connected',
       options: [{ value: picks.value, label: 'Newest Opus · old-key is no longer connected' }],
     });
