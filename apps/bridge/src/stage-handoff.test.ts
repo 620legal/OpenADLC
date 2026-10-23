@@ -333,6 +333,81 @@ describe('a task that ended by sending its work back', () => {
       ]);
     });
 
+    describe('read against the reviews of its diff', () => {
+      const BRANCH = 'agent/builder/11-issue-11';
+      const LEAD = 'openadlc-lead-janedoe';
+      const SECOND = 'openadlc-vega-janedoe';
+      const pull = async () => ({ draft: false, headSha: 'c1c1c1c1', headRef: BRANCH, baseRef: 'main', labels: ['area:bridge'] });
+      const standing = (description: string, leadDue: { seat: string; since: string | null } | null = null) =>
+        vi.fn(async () => ({
+          gate: { state: 'pending', description },
+          decision: { reviewers: [SECOND, LEAD], lead: LEAD, approvers: [LEAD] },
+          posted: [],
+          leadDue,
+        }));
+      const handoff = (reviewStanding: ReturnType<typeof standing>) => {
+        const openLeadReview = vi.fn(async () => 'openadlc#31: started the lead’s review');
+        const openMissingReviews = vi.fn(async () => [`openadlc#31: started ${SECOND}’s review`]);
+        const stages = new StageHandoff(
+          { moveStage: async () => ({ moved: true }), reviewRules, reviewStanding } as never,
+          { openLeadReview, openMissingReviews } as never,
+          null,
+          null,
+          null,
+          pull,
+        );
+        return { stages, openLeadReview, openMissingReviews };
+      };
+
+      it('asks every seat before the lead that has not reviewed this diff, and not the lead yet', async () => {
+        // Sent back for its local CI after its diff changed, the round pushed
+        // nothing once the checks passed. Asked only the lead, the pull
+        // request waited on the second reviewer for good (#118).
+        const reviewStanding = standing(`waiting on ${SECOND}`);
+        const { stages, openLeadReview, openMissingReviews } = handoff(reviewStanding);
+
+        expect(await stages.onTaskDone({ kind: 'patch', subjectRef: 'openadlc#31', taskId: 'task-patch', branch: BRANCH })).toBe('review');
+
+        expect(reviewStanding).toHaveBeenCalledWith('janedoe/openadlc', {
+          number: 31,
+          draft: false,
+          labels: [{ name: 'area:bridge' }],
+          head: { sha: 'c1c1c1c1', ref: BRANCH },
+          baseRef: 'main',
+        });
+        expect(openMissingReviews).toHaveBeenCalledWith({
+          repo: expect.objectContaining({ name: 'openadlc' }),
+          prNumber: 31,
+          branch: BRANCH,
+          issueNumber: 11,
+          waitingOn: [SECOND],
+        });
+        expect(openLeadReview).not.toHaveBeenCalled();
+        expect(board.events).toEqual([]);
+      });
+
+      it('asks the lead once every other seat has posted on this diff, from when its turn came', async () => {
+        const { stages, openLeadReview, openMissingReviews } = handoff(standing(`waiting on ${LEAD}`, { seat: LEAD, since: '2026-10-23T01:30:00.000Z' }));
+
+        expect(await stages.onTaskDone({ kind: 'patch', subjectRef: 'openadlc#31', taskId: 'task-patch', branch: BRANCH })).toBe('review');
+
+        expect(openMissingReviews).not.toHaveBeenCalled();
+        expect(openLeadReview).toHaveBeenCalledWith(expect.objectContaining({ seat: LEAD, since: '2026-10-23T01:30:00.000Z' }));
+      });
+
+      it('asks the lead to decide again, from now, when its request for changes on this diff is what the round answered', async () => {
+        const { stages, openLeadReview, openMissingReviews } = handoff(standing(`changes requested by ${LEAD}`));
+        const ended = new Date().toISOString();
+
+        expect(await stages.onTaskDone({ kind: 'patch', subjectRef: 'openadlc#31', taskId: 'task-patch', branch: BRANCH })).toBe('review');
+
+        expect(openMissingReviews).not.toHaveBeenCalled();
+        const [{ seat, since }] = openLeadReview.mock.calls[0] as unknown as [{ seat: string; since: string }];
+        expect(seat).toBe(LEAD);
+        expect(Date.parse(since)).toBeGreaterThanOrEqual(Date.parse(ended));
+      });
+    });
+
     it('opens nothing more for a round that pushed, which moved the card already', async () => {
       board.issues = [{ number: 11, repoName: 'openadlc', stage: 'review', labels: ['adlc:review'], createdAt: '2026-09-29T09:00:00.000Z' }];
       const openLeadReview = vi.fn(async () => null);

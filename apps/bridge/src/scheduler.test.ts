@@ -16,6 +16,7 @@ import {
 } from './scheduler.js';
 import { TaskService } from './task-service.js';
 import { CHECKS_FAILED } from './merge-line.js';
+import { Automation } from './automation.js';
 
 /**
  * The store is a fake so a whole deploy sweep can be run. Everything above the
@@ -55,6 +56,8 @@ const store = vi.hoisted(() => ({
   humanIds: null as string | null,
   /** What the deploy pipeline recorded of each merged commit (`deployRuns.forPullRequests`). */
   deployRuns: [] as Record<string, unknown>[],
+  /** When each event `recordEvent` took was recorded. */
+  recordedAt: new WeakMap<object, string>(),
 }));
 
 // The status job's report reads the whole store; which issue it lands on is what is tested here.
@@ -112,7 +115,14 @@ vi.mock('@openadlc/db', async () => ({
   },
   leases: { expireStaleLeases: vi.fn(async () => []) },
   deployRuns: { forPullRequests: vi.fn(async () => store.deployRuns) },
-  lastEventAt: vi.fn(async () => store.roundAt),
+  // A seat's asking again as recorded here (`review.asked_again`), or the round's start as the test sets it.
+  lastEventAt: vi.fn(async (type: string, fields: Record<string, unknown> = {}) => {
+    const asked = store.events.filter((event) => event.type === type && type === 'review.asked_again' && Object.entries(fields).every(([key, value]) => event.payload[key] === value));
+    return asked.length > 0 ? (store.recordedAt.get(asked.at(-1)!) ?? null) : store.roundAt;
+  }),
+  hasEventOfType: vi.fn(async (type: string, _since: Date, fields: Record<string, unknown>) =>
+    store.events.some((event) => event.type === type && Object.entries(fields).every(([key, value]) => event.payload[key] === value)),
+  ),
   listEventsOfTypeWith: vi.fn(async (type: string, fields: Record<string, unknown>) =>
     store.events
       .filter((event) => event.type === type && Object.entries(fields).every(([key, value]) => event.payload[key] === value))
@@ -120,6 +130,7 @@ vi.mock('@openadlc/db', async () => ({
   ),
   recordEvent: vi.fn(async (event: { type: string; payload: Record<string, unknown> }) => {
     store.events.push(event);
+    store.recordedAt.set(event, new Date().toISOString());
     return 'event-1';
   }),
   repos: {
@@ -501,6 +512,20 @@ describe('the deploy sweep decides before it acts', () => {
     if (plan.kind !== 'work') return;
     expect(plan.start).toBeNull();
     expect(plan.hold[0]).toContain('no pull request recorded');
+    // And what to do: nothing that finishes a merge moves it.
+    expect(plan.hold[0]).toContain('it has no merge to deploy, and no deploy will move it to Done; move it there by hand');
+  });
+
+  it('says the older merges stay in Ship once the newest merge’s deploy deployed nothing, not that it carries them', () => {
+    const older: AwaitingDeploy = { repo: 'openadlc', number: 44, prNumber: 144 };
+    const plan = planDeploySweep({
+      ...ready,
+      waiting: [older, waiting],
+      priorDeploys: [{ subjectRef: 'openadlc#145', state: 'running', nothing: 'no run of deploy-testing appeared within 10 minutes of its dispatch' }],
+    });
+    expect(plan.kind === 'work' && plan.hold[0]).toBe(
+      'openadlc#144: older than openadlc#145, the newest merge, whose testing deploy deployed nothing (no run of deploy-testing appeared within 10 minutes of its dispatch); they stay in Ship until a later deploy carries them or a person moves them to Done',
+    );
   });
 
   it('names the missing deploy bot rather than starting a task as nobody', () => {
@@ -837,6 +862,161 @@ describe('a whole deploy sweep', () => {
 
     expect(moves).toEqual([]);
     expect(result.actions.some((line) => line.includes('moved to Done'))).toBe(false);
+  });
+
+  /**
+   * 620legal/OpenADLC#45 and #46 had no testing-deploy record of their own.
+   * The newest merge's run was skipped, and they stayed in Ship "older than
+   * OpenADLC#107, the newest merge, whose deploy carries them", with no
+   * deploy left to come: only each merge's own record was read.
+   */
+  describe('the older merges the newest merge’s deploy carries', () => {
+    /** The newest merge, #145 at the tip of main, has no card left in Ship: it went to Done with its own skipped run. */
+    const carrier = (testingConclusion: string | null, detail: string | null = 'deploy-testing run 39836758586 was skipped') => ({
+      sha: 'f00dcafe',
+      prNumber: 145,
+      testingDispatchedAt: '2026-10-22T09:00:00.000Z',
+      testingConclusion,
+      detail,
+    });
+    const delivering = (scheduler: Scheduler) =>
+      scheduler.useDelivery(
+        {
+          checkTestingDeploys: vi.fn(async () => []),
+          checkRollbacks: vi.fn(async () => []),
+          promoteDue: vi.fn(async () => []),
+          sendBackDue: vi.fn(async () => []),
+          retryUndispatched: vi.fn(async () => []),
+        } as never,
+        { get: vi.fn(async () => ({ rules: DEFAULT_DELIVERY_RULES, readError: null })) } as never,
+      );
+    beforeEach(() => {
+      store.issues = [
+        { ...merged, number: 45, prNumber: 143 },
+        { ...merged, number: 46, prNumber: 144 },
+      ];
+    });
+
+    it('moves them to Done with it when it had nothing to deploy, each saying the run that carried it', async () => {
+      store.deployRuns = [carrier('skipped')];
+      const { scheduler, moves, open } = sweeper();
+      delivering(scheduler);
+
+      const result = await scheduler.run('deploy');
+
+      const why = 'carried by the testing deploy of openadlc#145, the newest merge: deploy-testing run 39836758586 was skipped';
+      expect(moves).toEqual([
+        { repoName: 'openadlc', issueNumber: 45, to: 'done', actor: 'bridge', reason: `merging shipped it: ${why}`, prNumber: 143 },
+        { repoName: 'openadlc', issueNumber: 46, to: 'done', actor: 'bridge', reason: `merging shipped it: ${why}`, prNumber: 144 },
+      ]);
+      expect(result.actions).toEqual([
+        `openadlc#45 moved to Done: merging shipped it, since its testing deploy had nothing to deploy (${why})`,
+        `openadlc#46 moved to Done: merging shipped it, since its testing deploy had nothing to deploy (${why}); no thread on it to say so in`,
+        'nothing merged is waiting on a testing deploy',
+      ]);
+      expect(store.said).toEqual([expect.stringContaining(`Moved to Done: merging shipped it. Its testing deploy had nothing to deploy (${why})`)]);
+      expect(store.audits).toContainEqual(
+        expect.objectContaining({ action: 'deploy.shipped_by_merging', target: 'openadlc#46', payload: expect.objectContaining({ prNumber: 144, sha: 'f00dcafe', why }) }),
+      );
+      expect(open).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['was cancelled for a later deploy', 'superseded'],
+      ['never started', 'not_started'],
+      ['was cancelled with nothing later to carry it then', 'cancelled'],
+    ])('moves one whose own run %s, which a later deploy was to carry', async (_name, own) => {
+      store.deployRuns = [carrier('skipped'), { sha: 'beefcafe', prNumber: 143, testingDispatchedAt: '2026-10-22T08:00:00.000Z', testingConclusion: own, detail: null }];
+      const { scheduler, moves } = sweeper();
+      delivering(scheduler);
+
+      await scheduler.run('deploy');
+
+      expect(moves.map((move) => move.issueNumber)).toEqual([45, 46]);
+    });
+
+    it.each([
+      ['is still running', null],
+      ['failed', 'failure'],
+      ['deployed', 'success'],
+    ])('leaves in Ship one whose own deploy %s, for that run to decide', async (_name, own) => {
+      store.deployRuns = [carrier('skipped'), { sha: 'beefcafe', prNumber: 143, testingDispatchedAt: '2026-10-22T08:00:00.000Z', testingConclusion: own, detail: null }];
+      const { scheduler, moves } = sweeper();
+      delivering(scheduler);
+
+      const result = await scheduler.run('deploy');
+
+      expect(moves.map((move) => move.issueNumber)).toEqual([46]);
+      expect(result.actions).toContain(
+        'openadlc#143: older than openadlc#145, the newest merge, whose testing deploy deployed nothing (deploy-testing run 39836758586 was skipped); they stay in Ship until a later deploy carries them or a person moves them to Done',
+      );
+    });
+
+    it.each([
+      ['is still running', carrier(null, null), 'whose deploy carries them'],
+      ['failed', carrier('failure', null), 'whose deploy carries them'],
+      ['never started', carrier('not_started', 'no run of deploy-testing appeared within 10 minutes of its dispatch'), 'whose testing deploy deployed nothing (no run of deploy-testing appeared within 10 minutes of its dispatch); they stay in Ship until a later deploy carries them or a person moves them to Done'],
+      ['was cancelled', carrier('cancelled', 'deploy-testing run 9 was cancelled before it deployed, and no later testing deploy carries it'), 'whose testing deploy deployed nothing (deploy-testing run 9 was cancelled before it deployed, and no later testing deploy carries it); they stay'],
+    ])('moves none of them while the deploy that carries them %s', async (_name, record, said) => {
+      store.deployRuns = [record];
+      const { scheduler, moves } = sweeper();
+      delivering(scheduler);
+
+      const result = await scheduler.run('deploy');
+
+      expect(moves).toEqual([]);
+      expect(result.actions).toEqual([expect.stringContaining(`openadlc#143, openadlc#144: older than openadlc#145, the newest merge, ${said}`)]);
+    });
+
+    it('moves none of them while the newest merge has no testing deploy recorded at all', async () => {
+      const { scheduler, moves } = sweeper();
+      delivering(scheduler);
+
+      const result = await scheduler.run('deploy');
+
+      expect(moves).toEqual([]);
+      expect(result.actions).toEqual(['openadlc#143, openadlc#144: older than openadlc#145, the newest merge, whose deploy carries them']);
+    });
+  });
+
+  /**
+   * A card in Ship with no pull request has no merge for a deploy to carry, and
+   * nothing that finishes a merge moves it. The sweep said "not deploying it",
+   * and nothing said what to do.
+   */
+  it('says a card in Ship with no pull request has no merge to deploy, and to move it to Done by hand, where merging does not ship', async () => {
+    store.issues = [{ ...merged, number: 44, prNumber: null }];
+    store.deployRuns = [{ sha: 'f00dcafe', prNumber: 145, testingDispatchedAt: '2026-10-22T09:00:00.000Z', testingConclusion: 'skipped', detail: 'deploy-testing run 9 was skipped' }];
+    const { scheduler, moves } = sweeper();
+    scheduler.useDelivery(
+      {
+        checkTestingDeploys: vi.fn(async () => []),
+        checkRollbacks: vi.fn(async () => []),
+        promoteDue: vi.fn(async () => []),
+        sendBackDue: vi.fn(async () => []),
+        retryUndispatched: vi.fn(async () => []),
+      } as never,
+      { get: vi.fn(async () => ({ rules: DEFAULT_DELIVERY_RULES, readError: null })) } as never,
+    );
+
+    const result = await scheduler.run('deploy');
+
+    // Even beside a newest merge that had nothing to deploy: no merge of its own says it shipped.
+    expect(moves).toEqual([]);
+    expect(result.actions).toEqual([
+      'openadlc#44 is merged with no pull request recorded: it has no merge to deploy, and no deploy will move it to Done; move it there by hand once its change has shipped',
+    ]);
+  });
+
+  it('moves a card in Ship with no pull request to Done where the repository ships by merging, as every card there', async () => {
+    store.testingDeploy = JSON.stringify({ openadlc: 'none' });
+    store.issues = [{ ...merged, number: 44, prNumber: null }];
+    const { scheduler, moves } = sweeper();
+
+    const result = await scheduler.run('deploy');
+
+    expect(moves).toEqual([{ repoName: 'openadlc', issueNumber: 44, to: 'done', actor: 'bridge' }]);
+    expect(result.actions[0]).toBe('openadlc#44 moved to Done: no testing deploy for this repository');
   });
 
   it('looks at each dispatched rollback’s run before it promotes or dispatches again', async () => {
@@ -1831,6 +2011,207 @@ describe('the lead’s review, asked again by the sweep', () => {
     store.reviewTasks.push({ subjectRef: 'openadlc-testbed#2', state: 'running', botId: LEAD.id, createdAt: '2026-10-01T10:05:00.000Z' });
     await scheduler.settleGates();
     expect(opened).toHaveLength(1);
+  });
+});
+
+describe('a lead approval that counts for nothing on the diff, at the sweep', () => {
+  // A pull request the lead approved before reviews were signed with their
+  // head, sitting there at the upgrade: the approval names no head, so it is
+  // no approval of this diff, and the lead task behind it, opened in this
+  // round, read as the lead's review of it. Nothing asked the lead again, no
+  // delivery was coming, and it waited on the lead for good.
+  const BRANCH = 'agent/openadlc-atlas-janedoe/1-issue-1';
+  const LEAD = { id: 'bot-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'openadlc-sydney-janedoe' };
+  const HEAD = 'c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2';
+  const WHY = 'waiting on lead-reviewer (its approval names no head it reviewed)';
+
+  function sweeping() {
+    store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
+    store.issues = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
+    store.bots = [LEAD];
+    // The round began at nine; the lead's task that approved, at ten.
+    store.roundAt = '2026-10-01T09:00:00.000Z';
+    store.reviewTasks = [{ subjectRef: 'openadlc-testbed#2', state: 'done', botId: LEAD.id, createdAt: '2026-10-01T10:00:00.000Z' }];
+    const opened: { bot: string; subjectRef: string }[] = [];
+    const taskService = new TaskService({} as never, {} as never, {} as never);
+    taskService.open = (async (input: { bot: string; subjectRef: string }) => {
+      opened.push(input);
+      return { taskId: 'task-new', session: 'review-1' };
+    }) as never;
+    const published: { state: string; description: string }[] = [];
+    const github = {
+      request: async (_method: string, path: string) =>
+        path.includes('/pulls?state=open')
+          ? [
+              {
+                number: 2,
+                draft: false,
+                head: { ref: BRANCH, sha: HEAD, repo: { full_name: 'janedoe/openadlc-testbed' } },
+                base: { ref: 'main' },
+                labels: [],
+                user: { login: 'openadlc-atlas-janedoe' },
+                author_association: 'COLLABORATOR',
+              },
+            ]
+          : // Green, as the bridge before the upgrade published it.
+            { statuses: [{ context: 'review-gate', state: 'success', description: 'every requested review has been posted' }] },
+      listEveryPullFile: async () => ({ files: ['src/app.ts'], complete: true, renamedFrom: [] }),
+      listReviews: async () => [
+        { id: 77, user: LEAD.githubLogin, state: 'APPROVED', body: 'Approved.\n\n<!-- openadlc-seat:lead-reviewer -->', submittedAt: '2026-10-01T10:05:00Z', commitId: HEAD },
+      ],
+      readFileIfPresent: async () => null,
+      readFileAtRef: async () => '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n',
+      diffFingerprint: async () => 'the diff',
+    };
+    // As `Attribution.reviewsThatCount` gives back an approval whose signature
+    // checks and names no head: as of none.
+    const attribution = {
+      countable: async (posts: unknown[]) => [...posts],
+      reviewsThatCount: async (_repo: string, _n: number, posts: { id: number }[]) => posts.map((post) => ({ ...post, commitId: null })),
+    };
+    const config = { automationBot: 'flow', review: { reviewers: [{ seat: 'lead-reviewer', lens: 'lead', lead: true, blocking: false, trigger: 'always' }], maxRounds: 3 } };
+    const reading = new Automation(config as never, { asBot: async () => github, attribution } as never);
+    const scheduler = new Scheduler(
+      config as never,
+      {} as never,
+      {
+        actors: { asBot: async () => github },
+        reviewStanding: reading.reviewStanding.bind(reading),
+        setReviewGate: async (input: { state: string; description: string }) => (published.push(input), input),
+      } as never,
+      {} as never,
+      {} as never,
+      { enter: async () => undefined } as never,
+      taskService as never,
+    );
+    return { scheduler, opened, published };
+  }
+
+  it('asks the lead once, and the gate says why it waits', async () => {
+    const { scheduler, opened, published } = sweeping();
+    const quiet = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    try {
+      await scheduler.settleGates();
+      expect(published).toEqual([expect.objectContaining({ state: 'pending', description: WHY })]);
+      expect(opened).toEqual([expect.objectContaining({ bot: LEAD.name, subjectRef: 'openadlc-testbed#2' })]);
+
+      // The next sweeps find it under way, and then done: not asked twice for the diff.
+      store.reviewTasks.push({ subjectRef: 'openadlc-testbed#2', state: 'running', botId: LEAD.id, createdAt: new Date().toISOString() });
+      await scheduler.settleGates();
+      store.reviewTasks[1]!.state = 'failed';
+      await scheduler.settleGates();
+    } finally {
+      quiet.mockRestore();
+    }
+    expect(opened).toHaveLength(1);
+  });
+});
+
+describe('a person’s approval that counts for nothing on the diff, at the sweep', () => {
+  // 620legal/OpenADLC#124: a pull request sitting there at the upgrade, whose
+  // named person's approval GitHub had moved onto the merge line's update of
+  // the branch. The bridge kept no record of the head it was submitted on, and
+  // the timeline says it was another, so it counts for none; no delivery is
+  // coming, and only the sweep asks the person again.
+  const BRANCH = 'agent/openadlc-atlas-janedoe/1-issue-1';
+  const LEAD = { id: 'bot-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'openadlc-sydney-janedoe' };
+  const BEFORE = 'b7890794b365dd3ec75b81f761f1889dfb11674a';
+  const HEAD = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const WHY = 'waiting on @janedoe (their approval is not known to be of 692cd1f)';
+
+  function sweeping() {
+    store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
+    store.issues = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
+    store.bots = [LEAD];
+    store.roundAt = '2026-10-01T09:00:00.000Z';
+    store.reviewTasks = [{ subjectRef: 'openadlc-testbed#2', state: 'done', botId: LEAD.id, createdAt: '2026-10-01T10:00:00.000Z' }];
+    const taskService = new TaskService({} as never, {} as never, {} as never);
+    taskService.open = (async () => ({ taskId: 'task-new', session: 'review-1' })) as never;
+    const published: { state: string; description: string }[] = [];
+    const github = {
+      request: async (_method: string, path: string) =>
+        path.includes('/pulls?state=open')
+          ? [
+              {
+                number: 2,
+                draft: false,
+                head: { ref: BRANCH, sha: HEAD, repo: { full_name: 'janedoe/openadlc-testbed' } },
+                base: { ref: 'main' },
+                labels: [],
+                user: { login: 'openadlc-atlas-janedoe' },
+                author_association: 'COLLABORATOR',
+              },
+            ]
+          : path.endsWith('/permission')
+            ? { permission: 'admin' }
+            : path.startsWith('/users/')
+              ? { login: 'janedoe', type: 'User' }
+              : // Green, as the bridge before the upgrade published it.
+                { statuses: [{ context: 'review-gate', state: 'success', description: 'every requested review has been posted' }] },
+      listEveryPullFile: async () => ({ files: ['config/bots.yaml'], complete: true, renamedFrom: [] }),
+      listReviews: async () => [
+        { id: 77, user: LEAD.githubLogin, state: 'APPROVED', body: 'Approved.\n\n<!-- openadlc-seat:lead-reviewer -->', submittedAt: '2026-10-01T10:05:00Z', commitId: HEAD },
+        { id: 78, user: 'janedoe', state: 'APPROVED', body: 'Looks right.', submittedAt: '2026-10-01T10:04:00Z', commitId: HEAD },
+      ],
+      // Her review sits before the merge line's update of the branch.
+      listPullHistory: async () => [
+        { event: 'committed', actor: null, viaApp: false, sha: BEFORE },
+        { event: 'reviewed', actor: 'janedoe', viaApp: false, sha: null, reviewId: 78 },
+        { event: 'committed', actor: null, viaApp: false, sha: HEAD },
+      ],
+      readFileIfPresent: async () => null,
+      readFileAtRef: async () => '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n',
+      diffFingerprint: async (_repo: string, _base: string, sha: string) => (sha === HEAD ? 'the diff with main’s changes' : 'the diff she approved'),
+    };
+    // The lead's approval checks, signed for this head; a person's is not a crew review.
+    const attribution = {
+      countable: async (posts: unknown[]) => [...posts],
+      reviewsThatCount: async (_repo: string, _n: number, posts: { id: number; user: string }[]) =>
+        posts.filter((post) => post.user === LEAD.githubLogin).map((post) => ({ ...post, commitId: HEAD })),
+    };
+    const config = { automationBot: 'flow', review: { reviewers: [{ seat: 'lead-reviewer', lens: 'lead', lead: true, blocking: false, trigger: 'always' }], maxRounds: 3 } };
+    const reading = new Automation(config as never, { asBot: async () => github, attribution } as never);
+    const scheduler = new Scheduler(
+      config as never,
+      {} as never,
+      {
+        actors: { asBot: async () => github },
+        reviewStanding: reading.reviewStanding.bind(reading),
+        setReviewGate: async (input: { state: string; description: string }) => (published.push(input), input),
+      } as never,
+      {} as never,
+      {} as never,
+      { enter: async () => undefined } as never,
+      taskService as never,
+    );
+    return { scheduler, published };
+  }
+
+  it('asks the person once, on the head, and the gate says why it waits', async () => {
+    const { scheduler, published } = sweeping();
+    const quiet = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const actions = await scheduler.settleGates();
+      expect(published).toEqual([expect.objectContaining({ state: 'pending', description: WHY })]);
+      expect(actions).toContain('openadlc-testbed#2: asked @janedoe to approve 692cd1f again (their approval is not known to be of 692cd1f)');
+      await scheduler.settleGates();
+    } finally {
+      quiet.mockRestore();
+    }
+    expect(store.events.filter((event) => event.type === 'review.person_asked_again').map((event) => event.payload)).toEqual([
+      {
+        subjectRef: 'openadlc-testbed#2',
+        login: 'janedoe',
+        head: HEAD,
+        repo: 'openadlc-testbed',
+        pr: 2,
+        issue: 1,
+        approvedOn: null,
+        shownOn: HEAD,
+        why: 'their approval is not known to be of 692cd1f',
+      },
+    ]);
   });
 });
 

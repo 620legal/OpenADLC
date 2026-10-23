@@ -211,7 +211,11 @@ none yet, says its kind of work instead ("writing the change").
    refuses to open or ready a pull request on one; the builder opens it ready,
    never as a draft, and never turns auto-merge on. Those are guards: the
    bridge itself reviews nothing a crew account pushed with no pass on its
-   head — `review-gate` says so, and the work goes back to build.
+   head — `review-gate` says so, and the work goes back to build. The merge
+   line's own update of the branch from the base is not the builder's push,
+   though it is sent as the builder's account: it is known by the head the
+   line recorded updating from (`merge_line.branch_updated`), never by its
+   sender.
 5. **Review.** The bridge asks the reviewer seats `config/review.yaml` lists
    and triggers — a second reviewer on another model, the security reviewer by
    label, path or sample, the SRE for workflow, runbook and infrastructure
@@ -222,13 +226,32 @@ none yet, says its kind of work instead ("writing the change").
    other seat asked has posted on this diff, the lead is asked, with all of
    their reviews in front of it, and decides: approve, or one request for
    changes with every finding that stands. Each round of reviews records
-   `review.round_opened` `{subjectRef, sha}` before any seat is asked, and
-   that is when the diff began. A seat that was busy, or could not work, when
+   `review.round_opened` `{subjectRef, sha}` as soon as a push is known to
+   have changed the diff, before anything can hold the work — a push held for
+   its local CI too — and that is when the diff began. A patch round that
+   pushes nothing — it answered the lead in words, or the local CI it was
+   sent back for passed on the head as it was — opens no round of its own:
+   every seat before the lead with no review of this diff is asked then, and
+   the lead once they have posted. A seat that was busy, or could not work, when
    a round opened is started by the gate sweep once it can: only a review
    under way or one opened since the round began counts as its review of this
    diff, never one from an earlier round. The lead likewise: a lead task under
    way, or one opened since the later of the round's start and the last other
-   seat's post, is that review; otherwise the sweep asks the lead again. A
+   seat's post, is that review; otherwise the sweep asks the lead again. An
+   approval of the lead's or a blocking seat's that GitHub shows but that
+   counts for nothing on this diff — its signature names no head, names a
+   head with another diff, or does not check — is no review of it either:
+   `review-gate` says why beside the seat, and the seat is asked again when
+   its turn comes, once for each head (`review.asked_again`
+   `{subjectRef, seat, head, why}`), though the task behind that approval
+   was opened in this round. A person's approval, which has no signature, is
+   of the head it was submitted on, recorded from GitHub's `submitted`
+   delivery (`review.submitted_on` `{subjectRef, reviewId, login, commit,
+   state}`), or, with no record, of GitHub's commit only when the timeline
+   lists that commit as the head then; one GitHub shows that counts for
+   nothing on this diff is said beside the person, and Needs you asks them to
+   approve the head again, once for each head (`review.person_asked_again`),
+   until they give a verdict on it. A
    pull request only the lead reviews (a revert no other seat's trigger asks
    for) gets the
    lead's review in every round this way. The sweep, on the merge job's
@@ -263,8 +286,22 @@ none yet, says its kind of work instead ("writing the change").
    as a stalled review.
 6. **Merge.** A pull request whose `review-gate` passes joins the **merge line**:
    one repository at a time, the bridge brings the front one up to date with
-   the base branch, with the builder's credential, and waits for `ci` and
-   `review-gate` on the new head. GitHub's CI on a crew pull request (an
+   the base branch, with the builder's credential (the automation account's
+   where no bot owns the repository), and waits for `ci` and `review-gate` on
+   the new head. It records each update it made, `merge_line.branch_updated`
+   `{subjectRef, from, to?}` (the head it was made on, and the commit it made
+   when GitHub said), and its push is told from the builder's by that. Made
+   as the automation account, which never authors, the update is neither a
+   forbidden push nor that account's authoring: its push is the automation
+   account's from a recorded head, of a merge commit GitHub says that account
+   wrote, whose parents are that head and a commit the base has, and which is
+   the recorded commit when GitHub named one (`Automation.lineMerge`). Any
+   other push by it that changes the diff, and any other commit it wrote,
+   still fails `review-gate`. An update that changes no diff keeps the
+   approvals and opens no round. One that does — the base changed the same files — is
+   reviewed as any push is: the approvals are dismissed and every seat is
+   asked again, the lead last, with no local CI asked of the builder for it.
+   GitHub's CI on a crew pull request (an
    `agent/` branch) runs only with `adlc:ci` on it (`.github/workflows/ci.yml`
    and the template's): once the front one is up to date with no `ci` run, the
    bridge puts the label on as its app and audits `ci.requested`, and puts it
@@ -477,7 +514,15 @@ none yet, says its kind of work instead ("writing the change").
    job — ships by merging: its cards go to Done, with why on the move and in
    their timelines, and the deploy sweep moves any still in Ship
    (`nothingToDeploy`). One still running, failed, never started or cancelled
-   keeps its cards in Ship.
+   keeps its cards in Ship. The newest merge, the tip of the default branch,
+   carries every merge before it: when its deploy had nothing to deploy, the
+   sweep moves the older merges in Ship to Done with it, each saying the run
+   that carried it (`carriedMoved`), unless a deploy of their own is still
+   running, failed or deployed. A card in Ship whose issue records no pull
+   request has no merge for any deploy to carry: in a repository that ships
+   by merging the sweep moves it with the rest, and elsewhere the sweep and
+   the card (`No merge to deploy · move it to Done by hand`) say a person
+   moves it.
 8. **Done.** The issue is closed, the lease is let go, and its files are free
    for the next change.
 

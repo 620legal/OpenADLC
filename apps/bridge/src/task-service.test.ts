@@ -1691,6 +1691,25 @@ describe('a bot that must be able to work before a task starts', () => {
       expect(open).not.toHaveBeenCalled();
     });
 
+    it('are started again for a seat whose approval GitHub shows counts for nothing on this diff', async () => {
+      // A blocking seat's approval of another diff: the task behind it was opened
+      // since the round began, and read as its review of this one.
+      store.reviewTasks = [{ botId: SECURITY.id, subjectRef: 'openadlc#2', state: 'done', createdAt: '2026-10-01T10:00:05.000Z' } as never];
+      store.roundAt = '2026-10-01T10:00:00.000Z';
+      const { tasksService } = readyService();
+      const open = vi.spyOn(tasksService, 'open').mockResolvedValue({ taskId: 'task-2', session: 's' });
+      const notCounted = [{ seat: SECURITY.name, reviewId: 9, head: 'c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00', why: 'its approval is of b789079 and this diff is another' }];
+
+      await tasksService.openMissingReviews({ ...input, waitingOn: [SECURITY.name] });
+      expect(open).not.toHaveBeenCalled();
+      await tasksService.openMissingReviews({ ...input, waitingOn: [SECURITY.name], notCounted });
+      store.reviewTasks.push({ botId: SECURITY.id, subjectRef: 'openadlc#2', state: 'running', createdAt: new Date().toISOString() } as never);
+      await tasksService.openMissingReviews({ ...input, waitingOn: [SECURITY.name], notCounted });
+
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(open).toHaveBeenCalledWith(expect.objectContaining({ bot: SECURITY.name, subjectRef: 'openadlc#2' }));
+    });
+
     it('leave a seat whose review ran and failed to its card', async () => {
       store.reviewTasks = [{ botId: SECURITY.id, subjectRef: 'openadlc#2', state: 'failed' }];
       const { tasksService } = readyService();
@@ -1768,6 +1787,34 @@ describe('a bot that must be able to work before a task starts', () => {
       const { tasksService } = readyService();
       vi.spyOn(tasksService, 'open').mockRejectedValue(new BotBusyError(LEAD.name));
       expect(await tasksService.openLeadReview(input)).toBeNull();
+    });
+
+    it('is asked again, once for the diff, when its approval GitHub shows counts for nothing on it', async () => {
+      // Its task, opened after the others posted, approved before reviews were
+      // signed with their head: read as the lead's review of this diff, it was
+      // never asked again, and the gate waited on it for good.
+      const HEAD = 'c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00';
+      const notCounted = [{ seat: LEAD.name, reviewId: 77, head: HEAD, why: 'its approval names no head it reviewed' }];
+      store.reviewTasks = [{ botId: LEAD.id, subjectRef: 'openadlc#2', state: 'done', createdAt: '2026-09-30T10:01:00Z' } as never];
+      const { tasksService } = readyService();
+      const open = vi.spyOn(tasksService, 'open').mockResolvedValue({ taskId: 'task-2', session: 's' });
+      const quiet = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+      try {
+        expect(await tasksService.openLeadReview(input)).toBeNull();
+        expect(await tasksService.openLeadReview({ ...input, notCounted })).toMatch(/the lead’s, last/);
+        // Not twice for the diff: while that review runs, nor once it is done.
+        store.reviewTasks.push({ botId: LEAD.id, subjectRef: 'openadlc#2', state: 'running', createdAt: new Date().toISOString() } as never);
+        expect(await tasksService.openLeadReview({ ...input, notCounted })).toBeNull();
+        store.reviewTasks[1]!.state = 'failed';
+        expect(await tasksService.openLeadReview({ ...input, notCounted })).toBeNull();
+      } finally {
+        quiet.mockRestore();
+      }
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(store.askedAgain).toEqual([
+        expect.objectContaining({ payload: { subjectRef: 'openadlc#2', seat: LEAD.name, head: HEAD, why: 'its approval names no head it reviewed' } }),
+      ]);
     });
   });
 

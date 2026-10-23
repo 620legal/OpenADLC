@@ -12,6 +12,7 @@ import {
   parseDependencies,
   PLAN_CHANGE_REFUSE,
   roleLabel,
+  sameLogin,
   STAGE_COLUMN_TITLES,
   STAGE_KEYS,
   type StageKey,
@@ -40,8 +41,10 @@ import {
   issueForSubject,
   issueNumberFromBranch,
   parseRef,
+  PERSON_ASKED_AGAIN,
   RESUME_WAITS_ON_GITHUB,
   REVIEW_STALLED,
+  REVIEW_SUBMITTED_ON,
   SEND_BACK_STALLED,
   SEND_BACK_TO_PERSON,
   stageOfTask,
@@ -91,7 +94,12 @@ export type AttentionKind =
   | 'check_failed'
   /** A check that was failing passes, or OpenADLC fixed something itself: said once, until dismissed. */
   | 'check_fixed'
-  /** A pull request green and at the front of the merge line that only a person can land. */
+  /**
+   * A pull request green and at the front of the merge line that only a
+   * person can land; or one whose merge waits for a person the repository
+   * names to approve it again, their approval counting for nothing on its
+   * diff (`PERSON_ASKED_AGAIN`).
+   */
   | 'merge_waiting'
   /** Open unlabeled issues OpenADLC will not take on its own, one item per repository. */
   | 'unowned_issues'
@@ -266,7 +274,7 @@ export function groupOf(kind: AttentionKind): AttentionGroup {
 
 export interface AttentionItem {
   /**
-   * Stable across reads, by kind: `gate:…`, `merge:repo#pr`, `promote:repo@sha`,
+   * Stable across reads, by kind: `gate:…`, `merge:repo#pr`, `approve-again:repo#pr@login`, `promote:repo@sha`,
    * `unowned:repo`, `stall:repo#pr`, `sendback:repo#n`, `design-memory:…`, `plan-change:<gate>`,
    * `intake-stalled:repo#n`, `dependency-abandoned:repo#n`, `task:…`, `landed:…`, `request:…`,
    * `engine-update`, `check:…`, `fixed:…`, or `task-group:…`,
@@ -442,6 +450,14 @@ export interface AttentionInput {
    * green pull request waited with nobody told.
    */
   heldMerges?: readonly { repo: string; prNumber: number; reason: string; since: string }[];
+  /**
+   * The people asked to approve a pull request again (`PERSON_ASKED_AGAIN`),
+   * and the reviews people submitted (`REVIEW_SUBMITTED_ON`), in the window.
+   * GitHub showed a person's approval that counted for nothing on the diff,
+   * and the merge waited on them with nobody telling them. Absent, none.
+   */
+  personAsks?: readonly { at: string; payload: unknown }[];
+  personReviews?: readonly { at: string; payload: unknown }[];
   /**
    * Open unlabeled issues OpenADLC will not take on its own, by repository
    * name (`unowned-issues.ts`): skipped in silence, they sat unbuilt and in the
@@ -999,6 +1015,91 @@ function turnOffWhileOn(task: Pick<TaskFacts, 'kind' | 'subjectRef' | 'repoId'> 
   return on ? turnOff(widens.repo, widens.issueNumber) : null;
 }
 
+/** A person asked to approve a pull request again (`PERSON_ASKED_AGAIN`), as its card reads it. */
+export interface PersonAsk {
+  repo: string;
+  pr: number;
+  issue: number | null;
+  login: string;
+  /** The head they are asked to approve. */
+  head: string;
+  /** The head their approval was submitted on, when that is known. */
+  approvedOn: string | null;
+  /** The commit GitHub shows their approval on. */
+  shownOn: string | null;
+  at: string;
+}
+
+function personAskFrom(event: { at: string; payload: unknown }): PersonAsk | null {
+  const payload = (event.payload ?? {}) as Record<string, unknown>;
+  const { repo, pr, login, head } = payload;
+  if (typeof repo !== 'string' || typeof pr !== 'number' || typeof login !== 'string' || typeof head !== 'string') return null;
+  const commit = (value: unknown): string | null => (typeof value === 'string' && value ? value : null);
+  return {
+    repo,
+    pr,
+    issue: typeof payload.issue === 'number' ? payload.issue : null,
+    login,
+    head,
+    approvedOn: commit(payload.approvedOn),
+    shownOn: commit(payload.shownOn),
+    at: event.at,
+  };
+}
+
+/**
+ * The people still asked to approve a pull request again, by `repo#pr` and
+ * login: the newest ask of each, while the pull request's issue is in Review
+ * when the board has it, and the person has given no verdict on it since — an
+ * approval, which counts, or a request for changes (`REVIEW_SUBMITTED_ON`). A
+ * pull request that closed is the caller's to leave out.
+ */
+export function standingPersonAsks(
+  asks: readonly { at: string; payload: unknown }[],
+  reviews: readonly { at: string; payload: unknown }[],
+  issues: readonly Pick<IssueFacts, 'repoName' | 'number' | 'prNumber' | 'stage'>[],
+): Map<string, PersonAsk> {
+  const newest = new Map<string, PersonAsk>();
+  for (const event of asks) {
+    const ask = personAskFrom(event);
+    if (!ask) continue;
+    const key = `${ask.repo}#${ask.pr}@${ask.login.toLowerCase()}`;
+    const seen = newest.get(key);
+    if (!seen || Date.parse(ask.at) > Date.parse(seen.at)) newest.set(key, ask);
+  }
+  const standing = new Map<string, PersonAsk>();
+  for (const [key, ask] of newest) {
+    const issue = (ask.issue !== null ? issues.find((one) => one.repoName === ask.repo && one.number === ask.issue) : undefined) ?? issueForSubject(`${ask.repo}#${ask.pr}`, issues);
+    if (issue && issue.stage !== 'review') continue;
+    const answered = reviews.some((event) => {
+      const payload = (event.payload ?? {}) as Record<string, unknown>;
+      return (
+        payload.subjectRef === `${ask.repo}#${ask.pr}` &&
+        typeof payload.login === 'string' &&
+        sameLogin(payload.login, ask.login) &&
+        (payload.state === 'approved' || payload.state === 'changes_requested') &&
+        Date.parse(event.at) > Date.parse(ask.at)
+      );
+    });
+    if (!answered) standing.set(key, { ...ask, issue: issue?.number ?? ask.issue });
+  }
+  return standing;
+}
+
+/** What a person's ask to approve again says happened to their approval. */
+function approvalCountsForNothing(ask: PersonAsk): string {
+  const short = (sha: string) => sha.slice(0, 7);
+  const who = `@${ask.login}`;
+  if (ask.approvedOn && ask.shownOn && ask.approvedOn !== ask.shownOn) {
+    return `GitHub shows ${who}'s approval on ${short(ask.shownOn)}, but it was given on ${short(ask.approvedOn)}, whose diff is another, so it counts for nothing.`;
+  }
+  if (ask.approvedOn) return `${who} approved ${short(ask.approvedOn)}, and the diff has changed since, so that approval counts for nothing.`;
+  if (ask.shownOn) {
+    return `GitHub shows ${who}'s approval on ${short(ask.shownOn)}, but nothing says it was given there, and GitHub moves an approval onto later commits, so it counts for nothing.`;
+  }
+  return `${who}'s approval names no commit, so it counts for nothing.`;
+}
+
 export function attentionItems(given: AttentionInput): AttentionItem[] {
   const { input: kept, ignored } = withoutIgnored(withoutRemoved(given));
   const { input, abandoned } = withoutAbandoned(kept);
@@ -1140,6 +1241,27 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
       since: held.since,
       detail: `Its reviews passed and CI is green. OpenADLC did not merge it, because ${held.reason}.`,
       actions: url ? [{ kind: 'open_url', label: 'Merge it on GitHub', url }] : [],
+    });
+  }
+
+  // A person the repository names whose approval GitHub shows counts for
+  // nothing on the diff: the merge waits on them, and GitHub says they approved.
+  for (const ask of standingPersonAsks(input.personAsks ?? [], input.personReviews ?? [], input.issues).values()) {
+    const ref = `${ask.repo}#${ask.pr}`;
+    if (input.closed?.has(ref)) continue;
+    const fullName = reposByName.get(ask.repo)?.fullName;
+    if (!fullName) continue;
+    const { subject } = subjectOf(ask.issue ? `${ask.repo}#${ask.issue}` : ref);
+    const url = `https://github.com/${fullName}/pull/${ask.pr}`;
+    items.push({
+      id: `approve-again:${ref}@${ask.login.toLowerCase()}`,
+      kind: 'merge_waiting',
+      headline: `Pull request #${ask.pr} needs @${ask.login}'s approval again, on ${ask.head.slice(0, 7)}`,
+      subject: { ...subject, url: subject.url ?? url },
+      bot: null,
+      since: ask.at,
+      detail: `${approvalCountsForNothing(ask)} OpenADLC does not merge it until @${ask.login} approves ${ask.head.slice(0, 7)}.`,
+      actions: [{ kind: 'open_url', label: 'Review it on GitHub', url: `${url}/files` }],
     });
   }
 
@@ -2167,6 +2289,9 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     return said.length > 0 ? waitingOnGitHub(said) : [];
   })().catch((): ResumeWait[] => []);
   const designMemoryEvents = await (async () => listEventsOfType(DESIGN_MEMORY_SUPERSEDED, since))().catch(() => []);
+  // The reviews people submitted are read only when someone was asked to approve again this week.
+  const personAsks = await (async () => listEventsOfType(PERSON_ASKED_AGAIN, since))().catch(() => []);
+  const personReviews = personAsks.some((event) => personAskFrom(event)) ? await (async () => listEventsOfType(REVIEW_SUBMITTED_ON, since))().catch(() => []) : [];
   // Asked only when a gate is open. A read that fails holds nothing: the
   // approved change shows as its question did.
   const heldPlanChanges =
@@ -2268,6 +2393,8 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     engineUpdate,
     selfUpdate,
     heldMerges,
+    personAsks,
+    personReviews,
     unowned,
     heldPromotes,
     health: checks,
@@ -2295,7 +2422,11 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
   const unboarded = [...standingStalls(present.stallEvents, present.issues, present.tasks)]
     .filter(([, stall]) => !present.issues.some((one) => one.repoName === stall.repo && one.number === stall.issue))
     .map(([key]) => key);
-  const endable = [...new Set([...failedTaskCandidates(present).map((task) => task.subjectRef), ...unboarded].filter((ref) => parseRef(ref)))];
+  // So are the pull requests a person was asked to approve again that name no issue on the board.
+  const unboardedAsks = [...standingPersonAsks(personAsks, personReviews, present.issues).values()]
+    .filter((ask) => !present.issues.some((one) => one.repoName === ask.repo && one.number === ask.issue))
+    .map((ask) => `${ask.repo}#${ask.pr}`);
+  const endable = [...new Set([...failedTaskCandidates(present).map((task) => task.subjectRef), ...unboarded, ...unboardedAsks].filter((ref) => parseRef(ref)))];
   const closed = deps.closed && endable.length > 0 ? await deps.closed(endable).catch(() => new Set<string>()) : new Set<string>();
   return { ...read, closed };
 }

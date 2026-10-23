@@ -203,6 +203,21 @@ describe('a card’s status line', () => {
     expect(cardStatus(approved, { ...CONTEXT, mergeLine: line })).toMatchObject({ text: 'Approved · waiting for you to merge it', tone: 'attention' });
   });
 
+  // No pull request is recorded for it, so no deploy carries it to Done: it
+  // said "Merged · waiting to deploy" for good.
+  it('says a card in Ship with no merge to deploy is for the person to move to Done', () => {
+    expect(cardStatus(card({ stage: 'merged', labels: ['adlc:merged'], noMerge: true }), CONTEXT)).toEqual({
+      text: 'No merge to deploy · move it to Done by hand',
+      tone: 'attention',
+      mark: 'dot',
+    });
+    expect(cardStatus(card({ stage: 'merged', labels: ['adlc:merged'], prNumber: 52 }), CONTEXT).text).toBe('Merged · waiting to deploy');
+    // A card names no pull request linked to another item, one closing two
+    // issues say, nor does an older bridge's: only the bridge's word counts.
+    expect(cardStatus(card({ stage: 'merged', labels: ['adlc:merged'], prNumber: null }), CONTEXT).text).toBe('Merged · waiting to deploy');
+    expect(cardStatus(card({ stage: 'merged', labels: ['adlc:merged', 'deployed:testing'], noMerge: true }), CONTEXT).text).toBe('Live on testing · waiting for production');
+  });
+
   it('says when a finished card shipped, with a tick', () => {
     const shipped = card({ stage: 'done', shippedAt: minutesAgo(120) });
     expect(cardStatus(shipped, CONTEXT)).toEqual({ text: 'Shipped 2 hours ago', tone: 'muted', mark: 'check' });

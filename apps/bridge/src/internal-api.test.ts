@@ -730,20 +730,42 @@ describe('signing what a task’s session posts', () => {
 });
 
 describe('a task signing what it posts', () => {
+  const HEAD = 'b7890794b365dd3ec75b81f761f1889dfb11674a';
+
   it('signs a review only of the pull request its review task is on', async () => {
     // task-review reviews openadlc#78.
-    const own = await post('/internal/tasks/task-review/stamp', { body: 'Approved.', kind: 'review', number: 78 });
+    const own = await post('/internal/tasks/task-review/stamp', { body: 'Approved.', kind: 'review', number: 78, head: HEAD });
     expect(own.status).toBe(200);
     expect(sign).toHaveBeenCalledWith('Approved.', expect.objectContaining({ kind: 'review', n: 78, repo: 'exampleco/openadlc' }));
 
     sign.mockClear();
-    const another = await post('/internal/tasks/task-review/stamp', { body: 'Approved.', kind: 'review', number: 5 });
+    const another = await post('/internal/tasks/task-review/stamp', { body: 'Approved.', kind: 'review', number: 5, head: HEAD });
     expect(another.status).toBe(403);
     expect(sign).not.toHaveBeenCalled();
   });
 
+  it('signs a review with the head it is of, and refuses one that names none', async () => {
+    // The merge counts an approval for the head its signature names: GitHub's
+    // commit for a review is GitHub's to move, and on 620legal/OpenADLC#118 it
+    // moved the lead's approval onto a head whose diff the lead never read.
+    expect((await post('/internal/tasks/task-review/stamp', { body: 'Approved.', kind: 'review', number: 78, head: HEAD.toUpperCase() })).status).toBe(200);
+    expect(sign).toHaveBeenCalledWith('Approved.', expect.objectContaining({ kind: 'review', n: 78, head: HEAD }));
+
+    sign.mockClear();
+    for (const head of [undefined, '', 'b789079', 42]) {
+      const refused = await post('/internal/tasks/task-review/stamp', { body: 'Approved.', kind: 'review', number: 78, head });
+      expect(refused.status).toBe(400);
+      expect(await refused.text()).toContain('gh pr review runs in the worktree you reviewed');
+    }
+    expect(sign).not.toHaveBeenCalled();
+
+    // Nothing else a task posts is of a head.
+    expect((await post('/internal/tasks/task-review/stamp', { body: 'Noted.', kind: 'comment', number: 78, head: HEAD })).status).toBe(200);
+    expect(sign).toHaveBeenCalledWith('Noted.', expect.not.objectContaining({ head: expect.anything() }));
+  });
+
   it('signs no review for a task that is not a review', async () => {
-    const response = await post('/internal/tasks/task-1/stamp', { body: 'Approved.', kind: 'review', number: 78 });
+    const response = await post('/internal/tasks/task-1/stamp', { body: 'Approved.', kind: 'review', number: 78, head: HEAD });
     expect(response.status).toBe(403);
     expect(sign).not.toHaveBeenCalled();
   });

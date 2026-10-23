@@ -40,6 +40,32 @@ export const REVIEW_STALLED = 'review.stalled';
 export const REVIEW_ROUND_OPENED = 'review.round_opened';
 
 /**
+ * The merge line's update of a pull request's branch from its base:
+ * `{ subjectRef, from, to? }`, all strings. `from` is the head the update was
+ * made on, and `to` the commit it made, when GitHub answered with it (a
+ * stacked update's). The line updates as the branch's builder, so the push's
+ * sender cannot tell it from the builder's own; this is what does
+ * (`Webhooks.lineUpdated`). Not the line's entry: its head is the next pass's
+ * by the time the push's delivery is worked through. In a repository with no
+ * owner bot it updates as the automation account, which never authors: this
+ * is also what tells its push and its merge commit from that account's own
+ * (`Automation.lineMerge`).
+ */
+export const BRANCH_UPDATED_BY_LINE = 'merge_line.branch_updated';
+
+/**
+ * Whether the line's updates from one head (`BRANCH_UPDATED_BY_LINE`) made
+ * `commit`: one GitHub named no commit for (`updateBranch` answers with
+ * none), or the one it named.
+ */
+export function madeByLineUpdate(updates: readonly { payload: unknown }[], commit: string): boolean {
+  return updates.some((update) => {
+    const to = (update.payload as { to?: unknown } | null)?.to;
+    return typeof to !== 'string' || to === commit;
+  });
+}
+
+/**
  * A review the bridge dismissed itself, a superseded approval:
  * `{ repo, pr, reviewId }` (the repository's full name; all strings),
  * recorded before GitHub is asked. It dismisses as the automation account,
@@ -55,6 +81,26 @@ export const REVIEW_DISMISSED_BY_BRIDGE = 'review.dismissed_by_bridge';
  * seat was busy; and one dismissal asks once, however often it is delivered.
  */
 export const REVIEW_ASKED_AGAIN = 'review.asked_again';
+
+/**
+ * The commit a person's review was submitted on, from its `submitted`
+ * delivery, the one thing that says it: `{ subjectRef, reviewId, login,
+ * commit, state }`, the id a number and the rest strings. GitHub moves a
+ * review's `commit_id` onto a later head, one with another diff included, and
+ * a person's approval carries no signature naming its head, so the merge and
+ * the gate count it by this (`asOfSubmittedHeads`).
+ */
+export const REVIEW_SUBMITTED_ON = 'review.submitted_on';
+
+/**
+ * A person the repository names asked to approve again: their approval,
+ * which GitHub shows, counts for nothing on the head (`peopleNotCounted`).
+ * `{ subjectRef, repo, pr, issue, login, head, approvedOn, shownOn, why }`,
+ * `pr` a number and `issue` one or null, `approvedOn` and `shownOn` a commit
+ * or null, the rest strings. Recorded once for each head; Needs you shows the
+ * newest for each person until they review it again (`attention.ts`).
+ */
+export const PERSON_ASKED_AGAIN = 'review.person_asked_again';
 
 /**
  * Answered work whose resume GitHub did not answer the sign-in's refresh for,

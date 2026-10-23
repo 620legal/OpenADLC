@@ -625,9 +625,14 @@ export function registerInternalApi(
    * only while it works. A body whose end names another seat is refused, not
    * signed: the signature would be the task's seat's and the tag another's, and
    * on an account the reviewers share the tag is what says whose review it is.
+   *
+   * A review is signed with the head it is of, which OpenADLC's `gh` reads from
+   * the session's worktree (`head`): the merge counts an approval for that head
+   * and a later one with the same diff, never for the commit GitHub shows it
+   * on, which GitHub moves (`SignedFields.head`). One with no head is refused.
    */
   taskPost('/internal/tasks/:id/stamp', async ({ params, body }) => {
-    const input = await body<{ body?: string; kind?: string; number?: number | null }>();
+    const input = await body<{ body?: string; kind?: string; number?: number | null; head?: unknown }>();
     if (typeof input.body !== 'string') throw new HttpFailure(400, 'no body to sign');
     // GitHub holds no longer post, and a long enough one kept the bridge busy
     // reading it; verifying reads a longer body as unsigned in any case.
@@ -653,9 +658,14 @@ export function registerInternalApi(
     // lead. The gh shim reads the number from the command line; only this
     // route can hold it to the task.
     const subject = parseRef(task.subjectRef);
+    let head: string | null = null;
     if (kind === 'review') {
       if (task.kind !== 'review' || !subject || n !== subject.number) {
         throw new HttpFailure(403, `a ${task.kind} task on ${task.subjectRef} may sign a review only of the pull request it reviews`);
+      }
+      head = typeof input.head === 'string' && /^[0-9a-f]{40}$/i.test(input.head.trim()) ? input.head.trim().toLowerCase() : null;
+      if (!head) {
+        throw new HttpFailure(400, 'a review is signed with the head it is of: give the full commit, { "head": "<40 hex characters>" }; OpenADLC\'s gh sends HEAD when gh pr review runs in the worktree you reviewed');
       }
     } else if (n !== null && n !== subject?.number && !(await targetsOfTask(task, subject, repo?.name ?? null)).includes(n)) {
       throw new HttpFailure(403, `a task on ${task.subjectRef} may sign a post only on its own issue or pull request, not #${n}`);
@@ -666,6 +676,7 @@ export function registerInternalApi(
       repo: repo?.fullName ?? null,
       kind,
       n,
+      ...(head ? { head } : {}),
     });
     return { body: signed };
   });

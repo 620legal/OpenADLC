@@ -312,6 +312,76 @@ describe('what needs a person', () => {
     });
   });
 
+  describe('a person asked to approve a pull request again', () => {
+    // 620legal/OpenADLC#124: GitHub moves a review's commit onto a later head,
+    // and goes on showing the person as having approved one whose diff they
+    // never saw. Their approval counts for nothing there, and the merge waits.
+    const A = 'b7890794b365dd3ec75b81f761f1889dfb11674a';
+    const B = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+    const C = 'c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00';
+    const asked = (at: string, payload: Record<string, unknown> = {}) => ({
+      at,
+      payload: { subjectRef: 'openadlc-testbed#29', repo: 'openadlc-testbed', pr: 29, issue: 11, login: 'janedoe', head: B, approvedOn: A, shownOn: B, why: 'their approval is of b789079 and this diff is another', ...payload },
+    });
+    const reviewed = (at: string, state: string, login = 'JaneDoe') => ({ at, payload: { subjectRef: 'openadlc-testbed#29', reviewId: 7, login, commit: B, state } });
+    const base = { now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] };
+
+    it('says whose approval is needed again, on which head, and why theirs counts for nothing', async () => {
+      const { attentionItems } = await load();
+      const items = attentionItems({ ...base, personAsks: [asked(minutesAgo(10))], personReviews: [reviewed(minutesAgo(30), 'approved')] });
+
+      expect(items).toEqual([
+        expect.objectContaining({
+          id: 'approve-again:openadlc-testbed#29@janedoe',
+          kind: 'merge_waiting',
+          group: 'work',
+          headline: "Pull request #29 needs @janedoe's approval again, on 692cd1f",
+          subject: expect.objectContaining({ repo: 'openadlc-testbed', number: 11, title: 'Rate-limit the webhook route' }),
+          since: minutesAgo(10),
+          detail:
+            "GitHub shows @janedoe's approval on 692cd1f, but it was given on b789079, whose diff is another, so it counts for nothing. OpenADLC does not merge it until @janedoe approves 692cd1f.",
+          actions: [{ kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc-testbed/pull/29/files' }],
+        }),
+      ]);
+      // One given before the bridge kept the head each was submitted on.
+      const [unknown] = attentionItems({ ...base, personAsks: [asked(minutesAgo(10), { approvedOn: null, why: 'their approval is not known to be of 692cd1f' })] });
+      expect(unknown?.detail).toBe(
+        "GitHub shows @janedoe's approval on 692cd1f, but nothing says it was given there, and GitHub moves an approval onto later commits, so it counts for nothing. OpenADLC does not merge it until @janedoe approves 692cd1f.",
+      );
+    });
+
+    it('names only the newest head they were asked about', async () => {
+      const { attentionItems } = await load();
+      const items = attentionItems({ ...base, personAsks: [asked(minutesAgo(5), { head: C, approvedOn: A, shownOn: A }), asked(minutesAgo(10))] });
+
+      expect(items.map((item) => item.headline)).toEqual(["Pull request #29 needs @janedoe's approval again, on c0ffee0"]);
+      expect(items[0]?.detail).toBe('@janedoe approved b789079, and the diff has changed since, so that approval counts for nothing. OpenADLC does not merge it until @janedoe approves c0ffee0.');
+    });
+
+    it('goes once they approve or ask for changes, but not for a comment, nor for a review from before it', async () => {
+      const { attentionItems } = await load();
+      const after = (personReviews: ReturnType<typeof reviewed>[]) => attentionItems({ ...base, personAsks: [asked(minutesAgo(10))], personReviews });
+
+      expect(after([reviewed(minutesAgo(2), 'approved')])).toEqual([]);
+      expect(after([reviewed(minutesAgo(2), 'changes_requested')])).toEqual([]);
+      expect(after([reviewed(minutesAgo(2), 'commented')])).toHaveLength(1);
+      expect(after([reviewed(minutesAgo(20), 'approved')])).toHaveLength(1);
+      expect(after([reviewed(minutesAgo(2), 'approved', 'someone-else')])).toHaveLength(1);
+    });
+
+    it('goes when its issue leaves Review, or its pull request closed', async () => {
+      const { attentionItems } = await load();
+      const ask = [asked(minutesAgo(10))];
+
+      expect(attentionItems({ ...base, issues: ISSUES.map((one) => (one.number === 11 ? { ...one, stage: 'build' as never } : one)), personAsks: ask })).toEqual([]);
+      expect(attentionItems({ ...base, personAsks: ask, closed: new Set(['openadlc-testbed#29']) })).toEqual([]);
+      // A pull request of no issue on the board stands on its own.
+      expect(attentionItems({ ...base, personAsks: [asked(minutesAgo(10), { subjectRef: 'openadlc-testbed#40', pr: 40, issue: null })] })).toEqual([
+        expect.objectContaining({ id: 'approve-again:openadlc-testbed#40@janedoe', subject: expect.objectContaining({ ref: 'openadlc-testbed#40' }) }),
+      ]);
+    });
+  });
+
   it('asks a person about issues OpenADLC will not take on its own, one card per repository', async () => {
     // Filed by an old crew account with no access, they were skipped in silence.
     const { attentionItems } = await load();
@@ -2105,7 +2175,17 @@ describe('GET /v1/attention', () => {
     // And the send-backs a person has to take, the issues intake stopped
     // trying, and the design memory a design superseded, which this store has
     // none of.
-    expect(store.eventTypes).toEqual(['review.stalled', 'send_back.stalled', 'send_back.to_person', 'intake.stalled', 'task.resume_waits_on_github', 'design_memory.superseded']);
+    // And who was asked to approve a pull request again; the reviews people
+    // submitted are read only when one of those was read.
+    expect(store.eventTypes).toEqual([
+      'review.stalled',
+      'send_back.stalled',
+      'send_back.to_person',
+      'intake.stalled',
+      'task.resume_waits_on_github',
+      'design_memory.superseded',
+      'review.person_asked_again',
+    ]);
     expect(body.items.map((item) => item.id)).toEqual(['stall:openadlc-testbed#29', 'gate:gate-old']);
     // A gate older than the week is still a gate: its task is read on its own.
     expect(body.items[1]).toMatchObject({ kind: 'question', bot: { name: 'ottoexampleco' } });

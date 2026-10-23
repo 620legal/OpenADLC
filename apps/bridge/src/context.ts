@@ -459,10 +459,11 @@ export class Context {
    * enforced, a crew review counts as a seat's only when the merge gate would
    * count it (`reviewsThatCount`: signed for a review on this pull request,
    * its nonce its own), headed by the seat its signature names rather than
-   * the login seats share; the rest of the crew's are set apart. Calling it
-   * here binds nothing new: a nonce is bound to the review's own id, as the
-   * gate binds it. A check that cannot run sets every crew review apart.
-   * People's reviews, and every review in audit mode, are as they were.
+   * the login seats share, and as of the head that signature names, which
+   * says whether it is of this round; the rest of the crew's are set apart.
+   * Calling it here binds nothing new: a nonce is bound to the review's own
+   * id, as the gate binds it. A check that cannot run sets every crew review
+   * apart. People's reviews, and every review in audit mode, are as they were.
    */
   private async sortReviews<R extends Review>(
     enforcing: Attribution | null,
@@ -471,13 +472,14 @@ export class Context {
     crew: readonly { githubLogin: string | null }[],
   ): Promise<{ counted: (R & { seat?: string | null })[]; unsigned: R[] }> {
     if (!enforcing) return { counted: [...reviews], unsigned: [] };
-    const kept = new Set<R>(await enforcing.reviewsThatCount(input.repoFullName, input.subjectNumber, reviews, crew).catch(() => []));
+    const kept = new Map((await enforcing.reviewsThatCount(input.repoFullName, input.subjectNumber, reviews, crew).catch(() => [])).map((review) => [review.id, review]));
     const keys = await enforcing.keyring().catch(() => []);
     const counted: (R & { seat?: string | null })[] = [];
     const unsigned: R[] = [];
     for (const review of reviews) {
+      const signed = kept.get(review.id);
       if (!isFleetLogin(crew, review.user)) counted.push(review);
-      else if (kept.has(review)) counted.push({ ...review, seat: verifyBody(review.body, keys).payload?.seat ?? null });
+      else if (signed) counted.push({ ...review, commitId: signed.commitId, seat: verifyBody(review.body, keys).payload?.seat ?? null });
       else unsigned.push(review);
     }
     return { counted, unsigned };

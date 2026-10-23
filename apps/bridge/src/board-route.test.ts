@@ -342,6 +342,63 @@ describe('GET /v1/board', () => {
     expect(done.find((card) => card.ref === 'website#61')?.updatedAt).toBe(opened);
   });
 
+  /**
+   * A card in Ship whose issue records no pull request has no merge for a
+   * deploy to carry, and nothing that finishes a merge moves it: it said
+   * "Merged · waiting to deploy" for good.
+   */
+  describe('a card in Ship with no merge recorded', () => {
+    type Row = (typeof ISSUES)[number];
+    const inShip = (number: number, prNumber: number | null): Row => ({
+      ...ISSUES[0]!, id: `issue-${number}`, number, title: `#${number}`, stage: 'merged', labels: ['adlc:merged'], prNumber,
+      url: `https://github.com/janedoe/openadlc-testbed/issues/${number}`,
+    });
+    const ROWS = [inShip(44, null), inShip(43, 52)];
+    const read = async () => {
+      const { issues } = await import('@openadlc/db');
+      vi.mocked(issues.boardIssues).mockResolvedValueOnce(ROWS as never);
+      vi.mocked(issues.boardCards).mockResolvedValueOnce(
+        ROWS.map((issue) => ({ repo: issue.repoName, ref: `openadlc-testbed#${issue.number}`, title: issue.title, stage: issue.stage, assignees: [], gateOpen: false, url: issue.url, labels: issue.labels, updatedAt: issue.updatedAt })) as never,
+      );
+      const board = (await (await fetch(`${bridgeUrl}/v1/board`)).json()) as { columns: Column[] };
+      return board.columns.find((column) => column.stage === 'merged')?.cards.map((card) => [card.ref, card.prNumber ?? null, card.noMerge ?? false]);
+    };
+
+    it('says so, from the issue’s row, and not of one whose pull request is another work item’s', async () => {
+      expect(await read()).toEqual([
+        ['openadlc-testbed#44', null, true],
+        ['openadlc-testbed#43', 52, false],
+      ]);
+
+      // Pull request #52 closes #43 and #44, and is linked to #43's item:
+      // #44's card names no pull request, though its row records #52.
+      const { workItems } = await import('@openadlc/db');
+      const link = (id: number, itemId: string, kind: string, number: number) => ({
+        id, itemId, itemNumber: id, kind, repoId: 'repo-1', number, requestId: null, linkedBy: null, title: `${kind} ${number}`, state: 'open', url: null, openedAt: new Date().toISOString(),
+      });
+      ROWS[0] = inShip(44, 52);
+      try {
+        vi.mocked(workItems.isNumbered).mockResolvedValueOnce(true);
+        vi.mocked(workItems.boardLinks).mockResolvedValueOnce([link(1, 'w-1', 'issue', 43), link(2, 'w-1', 'pull', 52), link(3, 'w-2', 'issue', 44)] as never);
+        expect(await read()).toEqual([
+          ['openadlc-testbed#44', null, false],
+          ['openadlc-testbed#43', 52, false],
+        ]);
+      } finally {
+        ROWS[0] = inShip(44, null);
+      }
+    });
+
+    it('says nothing of it where merging ships, since the deploy sweep moves it to Done', async () => {
+      const { settings } = await import('@openadlc/db');
+      vi.mocked(settings.allSettings).mockResolvedValueOnce({ testingDeploy: JSON.stringify({ 'openadlc-testbed': 'none' }) } as never);
+      expect(await read()).toEqual([
+        ['openadlc-testbed#44', null, false],
+        ['openadlc-testbed#43', 52, false],
+      ]);
+    });
+  });
+
   it('names each repository with the colour it is told apart by', async () => {
     const board = (await (await fetch(`${bridgeUrl}/v1/board`)).json()) as { repos: string[]; repositories: unknown[] };
     expect(board.repos).toEqual(['openadlc-testbed', 'website']);

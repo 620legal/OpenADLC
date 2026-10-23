@@ -88,6 +88,12 @@ export interface BoardCard {
   held?: { by: string; at: string; why: string | null } | null;
   /** Put first in its repository's queue by a person. Absent from an older bridge. */
   next?: boolean;
+  /**
+   * In Ship, and its issue records no pull request, where merging does not
+   * ship: no deploy carries it, so a person moves it to Done. Absent
+   * otherwise, and from an older bridge.
+   */
+  noMerge?: boolean;
 }
 
 export interface BoardColumn {

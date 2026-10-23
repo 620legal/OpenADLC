@@ -248,9 +248,11 @@ export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
       return { text: when ? `Shipped ${when}` : 'Shipped', tone: 'muted', mark: 'check' };
     }
     case 'merged':
-      return card.labels.includes('deployed:testing')
-        ? { text: 'Live on testing · waiting for production', tone: 'muted', mark: null }
-        : { text: 'Merged · waiting to deploy', tone: 'muted', mark: null };
+      if (card.labels.includes('deployed:testing')) return { text: 'Live on testing · waiting for production', tone: 'muted', mark: null };
+      // No pull request recorded, so no deploy will ever carry it: "waiting
+      // to deploy" sat on such a card for good, with nobody told.
+      if (card.noMerge) return { text: 'No merge to deploy · move it to Done by hand', tone: 'attention', mark: 'dot' };
+      return { text: 'Merged · waiting to deploy', tone: 'muted', mark: null };
     case 'review':
       return inLine(card, context.mergeLine) ?? { text: 'Waiting for the reviewers', tone: 'muted', mark: null };
     case 'build': {

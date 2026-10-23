@@ -8,6 +8,7 @@ import {
   lastAudit,
   leases,
   listEventsOfType,
+  listEventsOfTypeWith,
   localCiRuns,
   listUnprocessedEventsOfType,
   markEventProcessed,
@@ -69,10 +70,10 @@ import { retakeLease, SendBack } from './send-back.js';
 import { chooseIssueText, editNotTaken } from './vouched-text.js';
 import { workflowFile, type DeployPipeline, type RevertOutcome } from './deploy-pipeline.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
-import { BotBusyError, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, reviewStartLock, SubjectClosedError, type TaskService } from './task-service.js';
+import { askPeopleAgain, BotBusyError, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, reviewStartLock, SubjectClosedError, type TaskService } from './task-service.js';
 import { FORBIDDEN_PUSH, ciKeysChanged, contentChanged, fastPathOf, forbiddenPushGate, reviewSample } from './automation.js';
 import { continuesBranch } from './build-left.js';
-import { DEPLOY_PATH_BRANCH_PREFIX, headInRepository, issueNumberFromBranch, issuesMergedBy, ownIssueOf, REVIEW_ROUND_OPENED, REVIEW_STALLED, scopeLabelAcceptedFrom } from './work.js';
+import { BRANCH_UPDATED_BY_LINE, DEPLOY_PATH_BRANCH_PREFIX, headInRepository, issueNumberFromBranch, issuesMergedBy, madeByLineUpdate, ownIssueOf, REVIEW_ROUND_OPENED, REVIEW_STALLED, REVIEW_SUBMITTED_ON, scopeLabelAcceptedFrom } from './work.js';
 import { shipsByMerging, testingDeployChoice } from './deploys.js';
 import type { RequestFiling } from './request-lifecycle.js';
 
@@ -2242,6 +2243,8 @@ export class Webhooks {
     // moved, and only that dismisses an approval and asks for another round.
     // A conflict resolution the lead re-checks alone, when this push is one.
     let resolution: { before: string; files: string[]; at: string } | null = null;
+    // Whether this push is the merge line's update from the base.
+    let lineUpdate = false;
     if (payload.action === 'synchronize') {
       const before = String((payload as { before?: unknown }).before ?? '');
       const client = await asAutomation(this.automation['actors'], this.config);
@@ -2311,14 +2314,22 @@ export class Webhooks {
         }
       }
 
+      // The merge line's update changes the diff too, when the base changed
+      // the files this pull request does. It is made as the builder, or the
+      // automation account where the repository has no owner bot
+      // (`updaterFor`), so its sender is that account: it is known by the
+      // head the line recorded making it on.
+      lineUpdate = await this.lineUpdated(repo.name, pr.number, before, pr.head.sha);
+
       // A reviewer or the automation account changed the diff. The commits can
       // name the builder as their author, since whoever commits types that; the
       // pusher is GitHub's to say. Recorded, so the gate fails on this head
-      // whenever it is set again (`checkAuthors`), not only now. A push that
-      // left the diff alone is the merge line's update and never reaches here.
+      // whenever it is set again (`checkAuthors`), not only now. The line's
+      // own update, made as the automation account where the repository has
+      // no owner bot, is not one (`pushedByLine`).
       const pusher = payload.sender?.login ?? null;
       const barred = changed && pusher ? accountsThatNeverAuthor(await bots.listBots()).find((account) => sameLogin(account.login, pusher)) : undefined;
-      if (barred) {
+      if (barred && !(lineUpdate && (await this.pushedByLine(client, repoFullName, pr.number, { pusher, before, after: pr.head.sha })))) {
         const push = { repo: repoFullName.toLowerCase(), pr: String(pr.number), sha: pr.head.sha, login: barred.login, why: barred.why };
         await recordEvent({ source: 'platform', type: FORBIDDEN_PUSH, payload: push }).catch((error: unknown) =>
           console.warn(`[bridge] ${repoFullName}#${pr.number}: forbidden push not recorded: ${error instanceof Error ? error.message : error}`),
@@ -2332,15 +2343,30 @@ export class Webhooks {
       }
     }
 
+    // This diff's round begins here, before anything below can hold the work,
+    // and a seat busy now is started by the gate sweep, which counts only the
+    // reviews opened since. Recorded once the seats were being asked, a push
+    // held below for its local CI left the round at the diff before it: when
+    // the builder's checks then passed and it pushed nothing, every review of
+    // that earlier diff was taken for one of this, and no seat but the lead
+    // was asked again (#118). A resolution the lead re-checks alone is no new
+    // round; the other approvals stand.
+    if (!resolution) {
+      await recordEvent({ source: 'platform', type: REVIEW_ROUND_OPENED, payload: { subjectRef: `${repo.name}#${pr.number}`, sha: pr.head.sha } }).catch(
+        () => undefined,
+      );
+    }
+
     // The builder's checks on this exact head are what the reviewers review on
     // top of: GitHub's CI runs only after the lead approves. OpenADLC's `gh` and
     // `git` refuse to open or push without a recorded pass, but a session holds
     // a token that can do either without them, so a crew account's change with
     // no pass on its head is not reviewed: the gate says why, and the work goes
-    // back to build to run `openadlc-ci`. A person's push is theirs; a merge
-    // line update changes no diff and never reaches here.
+    // back to build to run `openadlc-ci`. A person's push is theirs, and the
+    // merge line's update the line's: no builder ran anything on it, and
+    // GitHub's CI runs on it once the lead approves it again.
     const crewSender = payload.sender?.login ? isFleetLogin(await bots.listBots().catch(() => []), payload.sender.login) : false;
-    if (crewSender && forIssue) {
+    if (crewSender && forIssue && !lineUpdate) {
       const pass = await (async () => localCiRuns.passFor(repo.id, pr.head.sha))().catch(() => undefined);
       if (pass === null) {
         const short = pr.head.sha.slice(0, 7);
@@ -2510,11 +2536,6 @@ export class Webhooks {
     // have all posted (`onReview`). A revert that no other seat's trigger
     // asks for has only the lead, which is asked at once.
     const first = decision.reviewers.filter((reviewer) => reviewer !== decision.lead);
-    // When this round began, before any seat is asked: a seat busy now is
-    // started by the gate sweep, which counts only reviews opened since.
-    await recordEvent({ source: 'platform', type: REVIEW_ROUND_OPENED, payload: { subjectRef: `${repo.name}#${pr.number}`, sha: pr.head.sha } }).catch(
-      () => undefined,
-    );
     for (const reviewer of first.length > 0 ? first : [decision.lead]) {
       try {
         await this.taskService.open({
@@ -2536,6 +2557,46 @@ export class Webhooks {
         if (error instanceof SubjectClosedError) break;
         console.warn(`[bridge] review task for ${reviewer} not started: ${error instanceof Error ? error.message : error}`);
       }
+    }
+  }
+
+  /**
+   * Whether a push is the merge line's update of the branch from its base:
+   * from a head the line recorded updating on, and to the commit it made
+   * where it knows which (`BRANCH_UPDATED_BY_LINE`). Not the sender, which is
+   * the builder's account or the automation account's, nor the line's entry,
+   * whose head the line's next pass has moved on by now. A record that cannot
+   * be read is no update of the line's, and the push is held as a builder's
+   * would be.
+   */
+  private async lineUpdated(repoName: string, prNumber: number, before: string, after: string): Promise<boolean> {
+    if (!before) return false;
+    const made = await (async () => listEventsOfTypeWith(BRANCH_UPDATED_BY_LINE, { subjectRef: `${repoName}#${prNumber}`, from: before }))().catch(() => []);
+    return madeByLineUpdate(made, after);
+  }
+
+  /**
+   * Whether a push by an account that never authors is the merge line's
+   * update of the branch, which it makes as the automation account where the
+   * repository has no owner bot (`updaterFor`): sent by that account, and its
+   * head the merge commit the line made on the push's `before`
+   * (`Automation.lineMerge`). Taken for a forbidden push, its head failed the
+   * gate for good, and the line could not bring such a pull request up to
+   * date (#123). Any other push, a read that fails included, is not the
+   * line's: the record alone names a head, not who pushed from it.
+   */
+  private async pushedByLine(
+    client: GitHubClient | null,
+    repoFullName: string,
+    prNumber: number,
+    push: { pusher: string | null; before: string; after: string },
+  ): Promise<boolean> {
+    if (!client || !sameLogin(push.pusher, await this.automationLogin())) return false;
+    try {
+      const head = (await client.listPullCommits(repoFullName, prNumber)).find((commit) => commit.sha === push.after);
+      return Boolean(head && head.parents[0] === push.before && (await this.automation.lineMerge(client, repoFullName, prNumber, head)));
+    } catch {
+      return false;
     }
   }
 
@@ -2625,7 +2686,9 @@ export class Webhooks {
    * `review_posted` marker says `"scope":"cross-cutting"`) puts
    * `scope:cross-cutting` on, as the app. Only once the review's signature
    * checks: on a shared account any seat could write a lead-tagged body, so
-   * without a signature check nothing is added and a person decides.
+   * without a signature check nothing is added and a person decides. The head
+   * it approved is the one its signature names: GitHub moves a review's
+   * `commit_id` to a later head (`asOfSignedHeads`).
    */
   private async acceptScopeFromLead(
     repo: { name: string },
@@ -2636,19 +2699,22 @@ export class Webhooks {
     lead: string | null,
   ): Promise<void> {
     if (review.state.toLowerCase() !== 'approved' || !acceptsCrossCutting(review.body)) return;
-    if (review.id === undefined || (review.commit_id && review.commit_id !== pr.head.sha)) return;
+    if (review.id === undefined) return;
     if (pr.labels.some((label) => label.name === CROSS_CUTTING_LABEL)) return;
     const author = whoWrote(review.user.login, crew, { bot: seatOf(review.body ?? '') });
     if (author.kind !== 'openadlc' || !lead || author.bot?.name !== lead) return;
     const target = `${repoFullName}#${pr.number}`;
     const attribution = this.automation['actors'].attribution;
     const signed = attribution
-      ? await attribution.reviewsThatCount(repoFullName, pr.number, [{ id: review.id, user: review.user.login, body: review.body ?? null }], crew).catch(() => [])
+      ? await attribution
+          .reviewsThatCount(repoFullName, pr.number, [{ id: review.id, user: review.user.login, body: review.body ?? null, state: review.state, commitId: review.commit_id ?? null }], crew)
+          .catch(() => [])
       : [];
     if (signed.length === 0) {
       console.log(`[bridge] ${target}: the lead accepted a widening of scope, but its signature ${attribution ? 'does not check' : 'cannot be checked'}; ${CROSS_CUTTING_LABEL} is left to a person`);
       return;
     }
+    if (signed[0]?.commitId !== pr.head.sha) return;
     scopeAccepted.add(`${repoFullName.toLowerCase()}#${pr.number}`);
     const as = await this.automation.setPullLabel(repoFullName, pr.number, CROSS_CUTTING_LABEL, true).catch((error: unknown) => {
       console.warn(`[bridge] ${target}: could not put ${CROSS_CUTTING_LABEL} on for the lead: ${error instanceof Error ? error.message : error}`);
@@ -3050,6 +3116,14 @@ export class Webhooks {
 
     const crew = await bots.listBots();
 
+    // A person's review is of the commit it was submitted on, and only this
+    // delivery says which: GitHub moves a review's `commit_id` onto a later
+    // head, one whose diff the person never saw included, and sends `edited`
+    // with the new one (620legal/OpenADLC#118). A crew review's signature
+    // names its head; a person's carries nothing, so the merge and the gate
+    // count it by this record (`asOfSubmittedHeads`).
+    if (payload.action === 'submitted') await recordSubmittedOn(repoName, pr.number, review, crew);
+
     // A bot dismissing a review is an incident, not a workflow step. The
     // bridge's own dismissal of a superseded approval, made as the automation
     // account and recorded as it is made, is the one that is not.
@@ -3121,6 +3195,7 @@ export class Webhooks {
     if (repo && !fork) {
       // The lead goes last: once every other seat has posted on this diff, it
       // is asked, with all of their reviews in front of it (`context.ts`).
+      // Asked again when its approval GitHub shows counts for nothing here.
       if (standing.leadDue) {
         await this.taskService.openLeadReview({
           repo,
@@ -3129,6 +3204,7 @@ export class Webhooks {
           issueNumber: ownIssueOf(pr, repoFullName),
           seat: standing.leadDue.seat,
           since: standing.leadDue.since,
+          notCounted: standing.notCounted,
         });
       }
       // A reviewer the gate waits on with nothing in hand would be waited on
@@ -3143,9 +3219,14 @@ export class Webhooks {
           branch: pr.head.ref,
           issueNumber: ownIssueOf(pr, repoFullName),
           waitingOn: decision.reviewers.filter((name) => name !== decision.lead && !posted.includes(name)),
+          notCounted: standing.notCounted,
         });
       }
     }
+    // A person the rules name whose approval GitHub shows counts for nothing
+    // on this diff is asked again, in Needs you: GitHub goes on showing them
+    // as having approved, and the gate waited on them with nobody telling them.
+    if (repo) await askPeopleAgain({ repoName: repo.name, prNumber: pr.number, issue: ownIssueOf(pr, repoFullName) }, standing.peopleNotCounted);
 
     // The lead approved this diff while a blocking seat still asks for changes
     // on it: the merge is held until that seat approves, and nothing sends the
@@ -4706,6 +4787,32 @@ function reviewReason(review: { body?: string | null; html_url?: string }): stri
   const said = withoutMarker(review.body ?? '').replace(/<!--[\s\S]*?-->/g, '').trim();
   const short = said.length > 600 ? `${said.slice(0, 599).trimEnd()}…` : said;
   return [short || 'changes were requested', review.html_url ? `The review: ${review.html_url}` : ''].filter(Boolean).join('\n\n');
+}
+
+/**
+ * Records the commit a person's review was submitted on, from its `submitted`
+ * delivery (`REVIEW_SUBMITTED_ON`); a crew review's signature names its own.
+ * Once for each review: a redelivery says the same. A record that cannot be
+ * written is said, and the approval is then read from the pull request's
+ * timeline, which counts it for no head but the one it was submitted on.
+ */
+async function recordSubmittedOn(
+  repoName: string,
+  prNumber: number,
+  review: { id?: number; state: string; user: { login: string }; commit_id?: string },
+  crew: Parameters<typeof whoWrote>[1],
+): Promise<void> {
+  const reviewId = review.id;
+  if (reviewId === undefined || !review.commit_id || whoWrote(review.user.login, crew).kind !== 'person') return;
+  const subjectRef = `${repoName}#${prNumber}`;
+  const kept = await (async () => listEventsOfTypeWith(REVIEW_SUBMITTED_ON, { subjectRef, reviewId }))().catch(() => []);
+  if (kept.length > 0) return;
+  const payload = { subjectRef, reviewId, login: review.user.login, commit: review.commit_id, state: review.state.toLowerCase() };
+  await (async () => recordEvent({ source: 'platform', type: REVIEW_SUBMITTED_ON, payload }))().catch((error: unknown) =>
+    console.warn(
+      `[bridge] ${subjectRef}: the commit @${review.user.login}'s review ${reviewId} was submitted on was not recorded, so it is read from the timeline: ${error instanceof Error ? error.message : error}`,
+    ),
+  );
 }
 
 /**

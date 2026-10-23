@@ -18,17 +18,20 @@ function pullWithCommits(total: number) {
     const body = Array.from({ length: count }, (_, offset) => {
       const index = first + offset;
       const sha = index.toString(16).padStart(40, '0');
-      // The first commit's address is one GitHub could not tie to an account.
+      // The first commit's address is one GitHub could not tie to an account,
+      // and the last is a merge of the base into the branch.
       return index === 0
         ? {
             sha,
             author: null,
             commit: { author: { name: 'openadlc-sydney-janedoe', email: 'openadlc-sydney-janedoe@users.noreply.github.com' } },
+            parents: [{ sha: 'f'.repeat(40) }],
           }
         : {
             sha,
             author: { login: 'openadlc-atlas-janedoe' },
             commit: { author: { name: 'openadlc-atlas-janedoe', email: '12+openadlc-atlas-janedoe@users.noreply.github.com' } },
+            parents: [{ sha: (index - 1).toString(16).padStart(40, '0') }, ...(index === total - 1 ? [{ sha: 'b'.repeat(40) }] : [])],
           };
     });
     return new Response(JSON.stringify(body), { status: 200 });
@@ -54,8 +57,11 @@ describe('the commits on a pull request, and who wrote them', () => {
       authorLogin: null,
       authorEmail: 'openadlc-sydney-janedoe@users.noreply.github.com',
       authorName: 'openadlc-sydney-janedoe',
+      parents: ['f'.repeat(40)],
     });
     expect(commits[129]?.authorLogin).toBe('openadlc-atlas-janedoe');
+    // What a merge of the base is told by: the head it was made on, then the base's.
+    expect(commits[129]?.parents).toEqual([(128).toString(16).padStart(40, '0'), 'b'.repeat(40)]);
   });
 
   it('refuses a list GitHub stopped at 250, rather than returning it short', async () => {
@@ -997,6 +1003,26 @@ describe('what a merge reads about a pull request’s files and history', () => 
     expect(history?.[0]).toMatchObject({ event: 'base_ref_changed', actor: 'janedoe', at: '2026-10-16T16:34:01Z' });
     expect(history?.[1]).toMatchObject({ event: 'automatic_base_change_succeeded', at: '2026-10-17T09:00:00Z' });
     expect(history?.[2]).not.toHaveProperty('at');
+  });
+
+  it('names which review a reviewed entry is, among the commits pushed before and after it', async () => {
+    // Its place among the commits is the head it was submitted on: GitHub
+    // moves a review's own commit_id onto a later head (620legal/OpenADLC#124).
+    const client = answering(() => ({
+      status: 200,
+      body: [
+        { event: 'committed', sha: 'a'.repeat(40) },
+        { event: 'reviewed', id: 5622816949, user: { login: 'janedoe' }, commit_id: 'b'.repeat(40) },
+        { event: 'committed', sha: 'b'.repeat(40) },
+      ],
+    }));
+
+    const history = await client.listPullHistory('janedoe/openadlc-testbed', 7);
+    expect(history?.map((entry) => [entry.event, entry.sha, entry.reviewId])).toEqual([
+      ['committed', 'a'.repeat(40), undefined],
+      ['reviewed', null, 5622816949],
+      ['committed', 'b'.repeat(40), undefined],
+    ]);
   });
 
   it('names which review was dismissed, what it said, and who dismissed it', async () => {

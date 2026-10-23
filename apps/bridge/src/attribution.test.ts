@@ -240,6 +240,40 @@ describe('the reviews a merge may count', () => {
     expect((await attribution.reviewsThatCount('exampleco/api', 7, [approval(31, body)], crew)).map((one) => one.id)).toEqual([31]);
     expect((await attribution.reviewsThatCount('exampleco/api', 7, [approval(31, body), approval(32, body)], crew)).map((one) => one.id)).toEqual([31]);
   });
+
+  it('gives each crew review as of the head its signature names, never the commit GitHub shows it on', async () => {
+    // On 620legal/OpenADLC#118 GitHub moved the lead's approval of b789079
+    // onto 692cd1f, the merge line's update, whose diff the lead never read.
+    const A = 'b7890794b365dd3ec75b81f761f1889dfb11674a';
+    const B = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+    const attribution = new Attribution(memoryStore());
+    const lead = await attribution.sign(withSeat('Approved.', 'lead-reviewer'), { seat: 'lead-reviewer', task: 't-1', repo: 'exampleco/api', kind: 'review', n: 7, head: A });
+    const older = await attribution.sign(withSeat('Approved.', 'second-reviewer'), { seat: 'second-reviewer', task: 't-2', repo: 'exampleco/api', kind: 'review', n: 7 });
+    const comment = await attribution.sign(withSeat('Findings.', 'second-reviewer'), { seat: 'second-reviewer', task: 't-3', repo: 'exampleco/api', kind: 'review', n: 7 });
+
+    const kept = await attribution.reviewsThatCount(
+      'exampleco/api',
+      7,
+      [
+        { ...approval(41, lead), commitId: B },
+        { ...approval(42, older), commitId: B },
+        { ...approval(44, comment), state: 'COMMENTED', commitId: A },
+        { id: 43, user: 'janedoe', body: 'LGTM', state: 'APPROVED', commitId: B },
+      ],
+      crew,
+    );
+
+    // An approval signed before reviews named their head is of none. Another
+    // review signed then keeps GitHub's commit, which GitHub moved for the
+    // approval on #118 and not for the comment: taken as of none, every
+    // advisory review open at the upgrade stopped counting.
+    expect(kept.map((one) => [one.id, one.commitId])).toEqual([
+      [41, A],
+      [42, null],
+      [44, A],
+      [43, B],
+    ]);
+  });
 });
 
 describe('a recorded post, read again', () => {

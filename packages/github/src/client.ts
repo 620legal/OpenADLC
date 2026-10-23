@@ -81,6 +81,12 @@ export interface PullCommit {
   authorLogin: string | null;
   authorEmail: string;
   authorName: string;
+  /**
+   * The commits it was made on, first parent first. The merge line's merge
+   * of the base into a branch is told by them (`Automation.lineMerge`): made
+   * as the automation account, it was refused as that account's authoring.
+   */
+  parents: string[];
 }
 
 /** The most a GitHub list endpoint returns in one page. */
@@ -147,6 +153,12 @@ export interface PullHistoryEntry {
   dismissedState?: string | null;
   /** On `labeled` and `unlabeled`: the label's name. Who put `scope:cross-cutting` on decides whether it counts. */
   label?: string | null;
+  /**
+   * On `reviewed`: the review's id. Where it sits among the `committed`
+   * entries says which head it was submitted on, which GitHub's `commit_id`
+   * for it no longer does once GitHub moves it to a later head.
+   */
+  reviewId?: number;
   /**
    * On a change of base (`base_ref_changed`, `automatic_base_change_succeeded`):
    * when GitHub made it. A `ci` run made before it ran against the old base.
@@ -522,8 +534,10 @@ export class GitHubClient {
       state: review.state,
       body: review.body ?? '',
       submittedAt: review.submitted_at,
-      // Which head was approved. An approval of an earlier commit is not an
-      // approval of what would land now.
+      // The commit GitHub shows it on, which GitHub moves: on
+      // 620legal/OpenADLC#118 it moved the lead's approval onto a later head
+      // with another diff. A crew review is of the head its signature names
+      // (`Attribution.reviewsThatCount` in the bridge), not of this.
       commitId: review.commit_id ?? null,
       association: review.author_association ?? null,
     }));
@@ -998,6 +1012,8 @@ export class GitHubClient {
       const events = await this.request<
         {
           event?: string;
+          /** On `reviewed`: the review's own id. */
+          id?: number;
           actor?: { login?: string } | null;
           user?: { login?: string } | null;
           performed_via_github_app?: unknown;
@@ -1025,6 +1041,7 @@ export class GitHubClient {
             ? { dismissedReviewId: entry.dismissed_review?.review_id ?? null, dismissedState: entry.dismissed_review?.state ?? null }
             : {}),
           ...(entry.event === 'labeled' || entry.event === 'unlabeled' ? { label: entry.label?.name ?? null } : {}),
+          ...(entry.event === 'reviewed' && typeof entry.id === 'number' ? { reviewId: entry.id } : {}),
           ...(BASE_CHANGES.has(entry.event) ? { at: entry.created_at ?? null } : {}),
         });
       }
@@ -1390,6 +1407,7 @@ export class GitHubClient {
           sha: string;
           author: { login: string } | null;
           commit: { author: { name?: string | null; email?: string | null } | null };
+          parents?: { sha: string }[];
         }[]
       >('GET', `/repos/${repo}/pulls/${prNumber}/commits?per_page=${PAGE}&page=${page}`);
 
@@ -1399,6 +1417,7 @@ export class GitHubClient {
           authorLogin: entry.author?.login ?? null,
           authorEmail: entry.commit.author?.email ?? '',
           authorName: entry.commit.author?.name ?? '',
+          parents: (entry.parents ?? []).map((parent) => parent.sha),
         });
       }
       if (listed.length < PAGE) break;
