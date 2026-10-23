@@ -246,6 +246,12 @@ export async function fileIssue(
        returning issue_number`,
       [requestId, repoId, issueNumber],
     );
+    // A row already there changes nothing: a redelivered `opened` event that
+    // touched `updated_at` started the filed card's window on the board again.
+    if (inserted.rows.length === 0) {
+      const unchanged = (await client.query<RequestRow>(`select ${COLUMNS} from requests where id = $1`, [requestId])).rows[0];
+      return unchanged ? { request: toRequest(unchanged), added: false } : null;
+    }
     const row = (
       await client.query<RequestRow>(
         `update requests set
@@ -262,7 +268,7 @@ export async function fileIssue(
       )
     ).rows[0];
     if (!row) return null;
-    return { request: toRequest(row), added: inserted.rows.length > 0 };
+    return { request: toRequest(row), added: true };
   });
 }
 

@@ -117,6 +117,9 @@ function filedAs(request: requests.RequestRecord, repoFullName: string | null): 
  * The repositories triage chooses among, when there is a choice: a request
  * that spans repositories is filed as one issue in each.
  */
+/** A repository's description on one line: one with a newline in it broke the list, and the rest of `request.md`. */
+const oneLine = (text: string | null): string => (text ?? '').replace(/\s+/g, ' ').trim();
+
 function repositoriesSection(repositories: readonly ManagedRepository[], chosen: string | null): string[] {
   if (repositories.length < 2) return [];
   return [
@@ -128,7 +131,7 @@ function repositoriesSection(repositories: readonly ManagedRepository[], chosen:
     ...repositories.map((repo) => {
       const mark = chosen && repo.fullName.toLowerCase() === chosen.toLowerCase() ? ' (chosen by the person)' : '';
       const description =
-        repo.description === undefined ? '_its description could not be read_' : repo.description?.trim() || '_no description on GitHub_';
+        repo.description === undefined ? '_its description could not be read_' : oneLine(repo.description) || '_no description on GitHub_';
       return `- \`${repo.fullName}\`${mark} — ${description}`;
     }),
   ];
@@ -487,7 +490,7 @@ async function openWorkAcross(
     name: OPEN_WORK_DOCUMENT,
     title: 'Open issues in each managed repository, with their Expected paths',
     content: [
-      'This install manages several repositories, so each has its own section. Check a draft against the section of the repository it is filed in: its open issues, and its own Design or Build rule.',
+      'This install manages several repositories, so each has its own section. Check a draft against the section of the repository it is filed in: its open issues, and its own Design or Build rule. A #N in a section is that repository\'s issue: name it as owner/name#N, and pass --repo to gh for it.',
       '',
       sections.join('\n\n'),
     ].join('\n'),

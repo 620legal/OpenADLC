@@ -491,6 +491,12 @@ describe('a request on an install that manages several repositories', () => {
     expect(request?.content).toContain('- `janedoe/web` — The shop front.');
   });
 
+  it('puts a description written over several lines on one', async () => {
+    const [request] = await openTriage(described({ 'janedoe/openadlc-testbed': 'The pricing API.\n\n## Not a heading', 'janedoe/web': '  The shop\r\nfront.  ' }));
+
+    expect(request?.content).toContain('- `janedoe/openadlc-testbed` (chosen by the person) — The pricing API. ## Not a heading\n- `janedoe/web` — The shop front.\n');
+  });
+
   it('is still briefed when the automation account cannot be reached at all', async () => {
     const [request] = await openTriage();
     expect(request?.content).toContain('- `janedoe/web` — _its description could not be read_');

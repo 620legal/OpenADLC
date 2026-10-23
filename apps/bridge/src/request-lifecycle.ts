@@ -119,6 +119,12 @@ export function requestPrefixIn(body: string | null): string | null {
 /** How far back a finished triage is looked for: one page, newest first. */
 const RECENT = 100;
 
+/**
+ * How far past its triage's end an issue's GitHub `created_at` may be and
+ * still be one the triage filed: GitHub's clock and the bridge's differ.
+ */
+const CLOCK_SKEW_MS = 30_000;
+
 /** An issue a request was filed as, as the filing reads it. */
 interface FiledIssue {
   repo: string;
@@ -182,8 +188,9 @@ export class RequestFiling {
    * had filed nothing. The delivery carries the body, and arrives first.
    *
    * In any managed repository while the request's triage runs, since intake
-   * files a request that spans repositories as one issue in each. After that,
-   * only as its first issue and in the repository it named: an issue somebody
+   * files a request that spans repositories as one issue in each, and after
+   * it ends for an issue GitHub says was opened while it ran. Otherwise only
+   * as its first issue and in the repository it named: an issue somebody
    * opens later quoting the line is not one triage filed. True when the issue
    * is the request's.
    */
@@ -202,10 +209,30 @@ export class RequestFiling {
     );
     const triaging = onSubject.some((task) => task.kind === 'intake' && ['queued', 'running', 'paused'].includes(task.state));
     const first = request.issues.length === 0 && (!request.repoId || request.repoId === repo.id);
-    if (!triaging && !first && !hasIssue(request, repo.id, issue.number)) return false;
+    if (!triaging && !first && !hasIssue(request, repo.id, issue.number) && !(await this.openedDuringTriage(repo, issue.number, onSubject))) {
+      return false;
+    }
 
     await this.file(request, { repo: repo.fullName, repoId: repo.id, number: issue.number, title: issue.title, htmlUrl: issue.htmlUrl }, onSubject[0] ?? null);
     return true;
+  }
+
+  /**
+   * Whether GitHub says the issue was opened while one of the request's
+   * triages ran. The task is written `done` before its ending looks for the
+   * issues, and the `opened` delivery of the last one intake files can arrive
+   * after both: the ending's list did not have it yet, and the delivery found
+   * no triage running, so a request's second issue was dropped. Read only on
+   * that refusal; an issue opened after the triage ended still joins nothing.
+   */
+  private async openedDuringTriage(repo: { fullName: string }, number: number, onSubject: readonly Task[]): Promise<boolean> {
+    const ran = onSubject.filter((task) => task.kind === 'intake' && task.startedAt && task.endedAt);
+    if (ran.length === 0) return false;
+    const client = await asAutomation(this.actors, this.config);
+    const opened = client ? await client.getIssue(repo.fullName, number).catch(() => null) : null;
+    if (!opened) return false;
+    const at = Date.parse(opened.createdAt);
+    return ran.some((task) => Date.parse(task.startedAt!) <= at && at <= Date.parse(task.endedAt!) + CLOCK_SKEW_MS);
   }
 
   /**
@@ -224,11 +251,15 @@ export class RequestFiling {
     const candidates = await repos.listRepos();
     const client = await asAutomation(this.actors, this.config);
     let found = client ? await filedIn(client, candidates, task.subjectRef) : [];
-    if (found.length === 0 && request.issues.length === 0 && client) {
-      // Once more, a moment later: the list can lag an issue filed just now,
-      // and the issue's own delivery may file the request in the meantime.
+    // Once more, a moment later: the list can lag an issue filed just now,
+    // and the issue's own delivery may file the request in the meantime.
+    // With several repositories, also when some were found or recorded: the
+    // last issue intake files, in another repository, is the one most likely
+    // missing, and the others say nothing about it.
+    if (client && ((found.length === 0 && request.issues.length === 0) || candidates.length > 1)) {
       await new Promise((resolve) => setTimeout(resolve, this.options.lookAgainAfterMs ?? 3000));
-      found = await filedIn(client, candidates, task.subjectRef);
+      const again = await filedIn(client, candidates, task.subjectRef);
+      found = [...found, ...again.filter((one) => !found.some((seen) => seen.repoId === one.repoId && seen.number === one.number))];
     }
 
     // Read again: a delivery may have recorded some of them meanwhile.

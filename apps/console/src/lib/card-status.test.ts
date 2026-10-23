@@ -374,6 +374,11 @@ describe('a request’s card', () => {
     const filed = request({ requestState: 'filed', issueNumber: 42, url: 'https://github.com/exampleco/api/issues/42', issues: [{ repo: 'api', number: 42, url: 'https://github.com/exampleco/api/issues/42' }] });
     expect(say(filed)).toMatchObject({ text: 'Filed #42' });
   });
+
+  it('names one issue by its repository when it is not the card’s, as for “use web instead of api”', () => {
+    const filed = request({ requestState: 'filed', issueNumber: 4, url: 'https://github.com/exampleco/web/issues/4', issues: [{ repo: 'web', number: 4, url: 'https://github.com/exampleco/web/issues/4' }] });
+    expect(say(filed)).toEqual({ text: 'Filed web#4', tone: 'muted', mark: 'check', href: 'https://github.com/exampleco/web/issues/4' });
+  });
 });
 
 describe('a card in a repository a person paused', () => {

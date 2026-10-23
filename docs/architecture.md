@@ -166,8 +166,8 @@ none yet, says its kind of work instead ("writing the change").
    name each other as `owner/name#N`, under `Dependencies` where one must ship
    first. A request's issues are rows of `request_issues` (migration 0153):
    an issue carrying the request's line joins it in any managed repository
-   while its triage runs, and after that only as its first issue, in its own
-   repository; each is handed to Design or Build when the triage ends, and the
+   while its triage runs (or was opened while it ran, delivered late), and
+   after that only as its first issue, in its own repository; each is handed to Design or Build when the triage ends, and the
    board's request card, its thread and `intake.md` name every one
    ([ADR 0012](adr/0012-a-request-files-one-issue-per-repository.md)).
    When it has everything, it shows the person the issue

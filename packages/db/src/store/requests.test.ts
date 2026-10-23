@@ -215,6 +215,10 @@ describe('a request filed', () => {
       .mockResolvedValueOnce(filedRow([]));
 
     expect(await fileIssue(ID, 'repo-1', 7)).toMatchObject({ added: false });
+    // Nor touches the request, whose `updated_at` times its filed card.
+    const sql = vi.mocked(queryOne).mock.calls.map((call) => String(call[0]));
+    expect(sql[2]).toMatch(/^select /);
+    expect(sql.join('\n')).not.toContain('update requests');
   });
 
   it('is refused for an abandoned request, which nothing files again', async () => {

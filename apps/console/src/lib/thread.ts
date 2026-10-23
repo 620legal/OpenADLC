@@ -1,4 +1,4 @@
-import type { CrewMember, Gate, ModelAccountRef, TaskSummary, ThreadMessage, ThreadTopic, ThreadView } from './api';
+import type { CrewMember, FiledIssue, Gate, ModelAccountRef, TaskSummary, ThreadMessage, ThreadTopic, ThreadView } from './api';
 import { botLabel, type BotFacts } from './bot-label';
 import { withoutComments } from './comments';
 import { taskRepo, thinksWithNothing } from './crew';
@@ -84,6 +84,15 @@ function commitOf(ref: string): string | null {
 /** The repository a subject is in: what the bridge says, or what its address does. */
 export function topicRepo(topic: Pick<ThreadTopic, 'repo' | 'ref'>): string | null {
   return topic.repo ?? repoOfRef(topic.ref);
+}
+
+/**
+ * A request's one issue when it is in another repository than the request's
+ * own: "use web instead of api" was said as `#4` on api's thread.
+ */
+function elsewhereOf(request: { issues?: readonly FiledIssue[] }, repo: string | null): FiledIssue | null {
+  const only = request.issues?.length === 1 ? request.issues[0]! : null;
+  return only && only.repo && repo && only.repo !== repo ? only : null;
 }
 
 /** Subjects in one repository, or in none. */
@@ -354,6 +363,10 @@ export function pinnedTask(
   if (several) {
     // A request filed in several repositories links each of its issues, by repository.
     for (const issue of several) if (issue.url) links.push({ label: `Issue ${issue.repo}#${issue.number}`, url: issue.url });
+  } else if (request && topic && elsewhereOf(request, topicRepo(topic))?.url) {
+    // Filed only in a repository other than the one the person named: said by repository.
+    const only = elsewhereOf(request, topicRepo(topic))!;
+    links.push({ label: `Issue ${only.repo}#${only.number}`, url: only.url! });
   } else if (topic?.issue?.url) links.push({ label: `Issue #${topic.issue.number}`, url: topic.issue.url });
 
   const spent = task.costUsd ?? 0;
@@ -447,13 +460,16 @@ export function composerTarget(input: {
       return { mode: 'send', subject, helper: `Posted on pull request #${topic.pullRequest?.number ?? '?'} as a comment` };
     case 'request': {
       const several = topic.request?.issues && topic.request.issues.length > 1 ? topic.request.issues : null;
+      const elsewhere = topic.request ? elsewhereOf(topic.request, topicRepo(topic)) : null;
       const filed = topic.request?.issueNumber ?? topic.issue?.number ?? null;
       return {
         mode: 'send',
         subject,
         helper: several
           ? `Added to the request’s thread. It is filed as ${andList(several.map((issue) => `${issue.repo}#${issue.number}`))} now.`
-          : filed !== null
+          : elsewhere
+            ? `Added to the request’s thread. It is filed as ${elsewhere.repo}#${elsewhere.number} now.`
+            : filed !== null
             ? `Added to the request’s thread. It is filed as #${filed} now.`
             : 'Added to the request’s thread',
       };

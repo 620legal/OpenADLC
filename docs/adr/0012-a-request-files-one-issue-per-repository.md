@@ -37,9 +37,12 @@ an array column.
   first issue in its own repository.** In any managed repository while an
   intake task on the request is queued, running or paused, and at that task's
   end, when every managed repository is searched for issues that carry the
-  line. After that, only as the request's first issue, in the repository it
-  named (or any, when it named none): this is the delivery that arrives after
-  the task ended. Each recorded issue is handed to Design or Build by its own
+  line, twice a few seconds apart when there are several, since GitHub's list
+  can lag the issue filed last. After that, for an issue GitHub says was
+  opened while the triage ran, whose delivery came after the task ended; or
+  as the request's first issue, in the repository it named (or any, when it
+  named none). An issue opened later quoting the line joins nothing. Each
+  recorded issue is handed to Design or Build by its own
   repository's rule.
 - **A request task signs for the managed repository it posts to, and only on
   its request's issues.** OpenADLC's `gh` sends `--repo`. For a `request:`

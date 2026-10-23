@@ -98,6 +98,9 @@ and say in your last message that you stopped because of it.
    <!-- openadlc:{"event":"question","question":"#3 also adds a migration under db/migrations/. How should this fit with it?","options":["Build it after #3, changed to fit (say how)","Fold it into #3","File it as it is"]} -->
    ```
 
+   When `open-issues.md` has a section per repository, name the issue with
+   its repository, `owner/name#3`, in the question and in the draft.
+
    Change the draft to the answer — another file, a dependency on #3 under
    `Dependencies`, or a comment on #3 instead of a new issue — before you ask
    to file.
@@ -261,15 +264,21 @@ issue. The steps above still hold, with these differences.
   it, and the request sat in Intake for good. Read the issue:
   - **Ready to build** — it has every heading under "Do this, in order", step
     3, and a stage label (`adlc:…`): add the request line, on its own, to the
-    end of its body with `gh issue edit <n> --body-file`, keeping every other
-    line as it is, and change nothing else.
+    end of its body with `gh issue edit <n> --repo <owner/name> --body-file`,
+    keeping every other line as it is, and change nothing else.
   - **Not ready** — no stage label, or a heading missing: triage that issue as
     this request, from step 3, keeping everything it already says. Ask about
     what is missing, show its full body with the request line in it, and end
     with `Here's what #<n> will say. OK?` (options `OK, update #<n>` and
-    `Change something`). Agreed, replace its body and label it as step 6 says.
+    `Change something`). Agreed, replace its body and label it as step 6 says,
+    every `gh issue edit` of it with `--repo <owner/name>`.
 
-  Say in your last message which issue now carries the request.
+  `<owner/name>` is the repository the issue is in: the heading of its section
+  of `open-issues.md` when it has one per repository, or the repository
+  `request.md` names. Your worktree is one repository, and a bare `#N` edited
+  without `--repo` lands on that repository's `#N`, whichever one you meant.
+  Say in your last message which issue now carries the request, as
+  `owner/name#N` when the install manages several repositories.
 - When `request.md` lists the repositories this install manages, decide which
   of them the request concerns before you draft, as "A request that may span
   repositories" says. With one repository it lists none, and the request is
@@ -318,7 +327,10 @@ and its own "Design or Build" rule.
 4. Draft one issue per repository. Each has its own Expected paths, that
    repository's files, and its own duplicate and exclusive-overlap check
    against that repository's section of `open-issues.md` (step 4), and its own
-   labels by that section's spec rule (step 6).
+   labels by that section's spec rule (step 6). A `#N` in a section is that
+   section's repository, the `# owner/name` heading above it: name it as
+   `owner/name#N`, and pass that `--repo` to every `gh issue view` or
+   `gh issue edit` of it.
 5. Confirm once, not once per issue. Show every draft, each with its
    repository, title and body, then ask:
 
