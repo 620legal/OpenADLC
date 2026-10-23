@@ -131,7 +131,7 @@ import { readSeatPauses, seatPausedReason } from './seat-pause.js';
 import type { HealthAction } from '@openadlc/shared';
 import { attachmentIds, claimableFor, claimWindowStart, registerAttachmentRoutes } from './attachment-routes.js';
 import { registerDesignMemoryRoutes } from './design-memory.js';
-import { registerTaskPostgresRoutes } from './task-postgres-routes.js';
+import { liveTaskPostgresDeps, registerTaskPostgresRoutes } from './task-postgres-routes.js';
 import { ignoredSubjects, issueForSubject, parseRef, taskSummary } from './work.js';
 import { endedWithoutPullRequest, readBranch, workLanded } from './build-left.js';
 import { SpendingLimitRejected, applySpendingLimits, spendingView } from './spending-limits.js';
@@ -1558,7 +1558,14 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
   registerAttachmentRoutes(router);
   registerDesignMemoryRoutes(router);
   // A repository's own Postgres servers for its tasks, a person's to set (`task-postgres-routes.ts`).
-  registerTaskPostgresRoutes(router);
+  // Its Compose file is read as the account the bridge reads GitHub with.
+  registerTaskPostgresRoutes(
+    router,
+    liveTaskPostgresDeps(async () => ({
+      account: await automationBotName(config),
+      client: await asAutomation(deps.actors, config).catch(() => null),
+    })),
+  );
 
   router.get('/v1/gates', async () => ({ gates: await threads.listOpenGates() }));
 

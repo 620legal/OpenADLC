@@ -135,6 +135,8 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // task there, so a person's, and the read shows their passwords.
   'GET /v1/repos/:name/task-postgres': 'admin',
   'PUT /v1/repos/:name/task-postgres': 'admin',
+  // What the repository's Compose file would fill that form with, passwords included.
+  'GET /v1/repos/:name/task-postgres/compose': 'admin',
   'PATCH /v1/bots/:name/assignment': 'admin',
   // A bot's colour, from Settings → Appearance.
   'PATCH /v1/crew/:bot': 'admin',

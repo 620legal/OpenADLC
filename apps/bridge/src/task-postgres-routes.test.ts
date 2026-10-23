@@ -5,11 +5,24 @@ import type { Role } from '@openadlc/db';
 import { Identity } from './identity.js';
 import { authorize, type RoleLookup } from './roles.js';
 import { Router } from './router.js';
-import { registerTaskPostgresRoutes, taskPostgresSupport, type TaskPostgresRouteDeps } from './task-postgres-routes.js';
+import { registerTaskPostgresRoutes, taskPostgresSupport, type TaskPostgresGitHub, type TaskPostgresRouteDeps } from './task-postgres-routes.js';
+
+/** 620legal/core's docker-compose.yml on main, as it is (2026-10-23). */
+const CORE_COMPOSE = `services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment: { POSTGRES_USER: core, POSTGRES_PASSWORD: core, POSTGRES_DB: core_db }
+    ports: ['55432:5432']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U core -d core_db']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+`;
 
 /** 620legal/core's local Postgres, as its docker-compose.yml and Makefile name it. */
 const CORE = { port: 55432, superuser: 'core', password: 'core', database: 'core_db', image: 'pgvector/pgvector:pg16' };
-const REPO = { id: 'repo-core', name: 'core', fullName: '620legal/core' };
+const REPO = { id: 'repo-core', name: 'core', fullName: '620legal/core', defaultBranch: 'main' };
 const NOW = Date.parse('2026-10-23T12:00:00Z');
 const seen = (secondsAgo: number) => new Date(NOW - secondsAgo * 1000).toISOString();
 
@@ -55,11 +68,11 @@ async function call(
   method: 'GET' | 'PUT',
   body?: unknown,
   headers: Record<string, string> = { 'x-openadlc-identity': 'or@example.com' },
-  options: Parameters<typeof serve>[1] = {},
+  options: Parameters<typeof serve>[1] & { path?: string } = {},
 ) {
   const { url, close } = await serve(deps, options);
   try {
-    const response = await fetch(`${url}/v1/repos/core/task-postgres`, {
+    const response = await fetch(`${url}${options.path ?? '/v1/repos/core/task-postgres'}`, {
       method,
       headers: { 'content-type': 'application/json', ...headers },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -202,5 +215,129 @@ describe('whether this install can give a task a server of its own', () => {
 
     expect(saved.status).toBe(200);
     expect(saved.body.supported).toMatchObject({ ok: false });
+  });
+});
+
+describe('the shared-database box, as the bridge answers it', () => {
+  it('is off for a repository with nothing set, and for a stored row with no servers whatever it says', async () => {
+    expect((await call(world().deps, 'GET')).body).toMatchObject({ taskPostgres: null, unreadable: null });
+    // A row written by hand: no servers is no setting, so nothing ticks the box.
+    expect((await call(world({}, { servers: [], sharedDatabase: true }).deps, 'GET')).body).toMatchObject({ taskPostgres: null, unreadable: null });
+    expect((await call(world({}, { servers: [CORE], sharedDatabase: true }).deps, 'GET')).body).toMatchObject({ taskPostgres: { sharedDatabase: true } });
+  });
+});
+
+describe('filling the form from the repository’s Compose file', () => {
+  /** GitHub as the automation account reads it: the files on each ref, and what it throws for one. */
+  function github(files: Record<string, string>, throws: Record<string, Error> = {}) {
+    const asked: { repo: string; path: string; ref: string }[] = [];
+    const client: TaskPostgresGitHub['client'] = {
+      readFileIfPresent: async (repo, path, ref) => {
+        asked.push({ repo, path, ref });
+        if (throws[path]) throw throws[path];
+        return files[`${ref}:${path}`] ?? null;
+      },
+    };
+    return { asked, github: async (): Promise<TaskPostgresGitHub> => ({ account: 'flow-orzelig', client }) };
+  }
+  const compose = (deps: TaskPostgresRouteDeps, headers?: Record<string, string>, options: Parameters<typeof serve>[1] = {}) =>
+    call(deps, 'GET', undefined, headers, { ...options, path: '/v1/repos/core/task-postgres/compose' });
+
+  it('reads core’s docker-compose.yml from its default branch and suggests its server, saving and auditing nothing', async () => {
+    const reads = github({ 'main:docker-compose.yml': CORE_COMPOSE });
+    const { deps, store, audited } = world({ github: reads.github });
+
+    const read = await compose(deps);
+
+    expect(read.status).toBe(200);
+    expect(read.body).toEqual({
+      ok: true,
+      file: 'docker-compose.yml',
+      branch: 'main',
+      servers: [{ service: 'postgres', ...CORE, notes: [], refusal: null }],
+      notes: [],
+    });
+    expect(reads.asked.map((one) => `${one.repo}@${one.ref}:${one.path}`)).toEqual([
+      '620legal/core@main:compose.yaml',
+      '620legal/core@main:compose.yml',
+      '620legal/core@main:docker-compose.yml',
+      '620legal/core@main:docker-compose.yaml',
+    ]);
+    expect(deps.write).not.toHaveBeenCalled();
+    expect(store.value).toBeNull();
+    expect(audited).toEqual([]);
+  });
+
+  it('reads the branch GitHub says is the default, and the file Compose prefers there', async () => {
+    const reads = github({
+      'trunk:compose.yaml': CORE_COMPOSE.replace('55432:5432', '55440:5432'),
+      'trunk:docker-compose.yml': CORE_COMPOSE,
+      'main:compose.yaml': CORE_COMPOSE.replace('55432:5432', '1:5432'),
+    });
+    const { deps } = world({ github: reads.github, repo: async () => ({ ...REPO, defaultBranch: 'trunk' }) });
+
+    const read = await compose(deps);
+
+    expect(read.body).toMatchObject({ ok: true, file: 'compose.yaml', branch: 'trunk', servers: [{ port: 55440 }] });
+  });
+
+  it('suggests an image outside the allowlist with the refusal a save would give', async () => {
+    const reads = github({ 'main:docker-compose.yml': CORE_COMPOSE.replace('pgvector/pgvector:pg16', 'ankane/pgvector:latest') });
+    const { deps } = world({ github: reads.github });
+
+    const read = await compose(deps);
+    const saved = await call(deps, 'PUT', { servers: [{ ...CORE, image: 'ankane/pgvector:latest' }] });
+
+    expect(read.body).toMatchObject({ ok: true, servers: [{ image: 'ankane/pgvector:latest' }] });
+    expect((read.body.servers as { refusal: string }[])[0]?.refusal).toBe(saved.body.error);
+  });
+
+  it('says a file with no Postgres service has none', async () => {
+    const reads = github({ 'main:docker-compose.yml': 'services:\n  cache:\n    image: redis:7\n' });
+    const read = await compose(world({ github: reads.github }).deps);
+    expect(read.body).toEqual({
+      ok: false,
+      file: 'docker-compose.yml',
+      branch: 'main',
+      why: 'docker-compose.yml has no Postgres service: none of its services runs pgvector/pgvector or postgres (cache (redis:7))',
+    });
+  });
+
+  it('says a file that does not read cannot be filled from', async () => {
+    const reads = github({ 'main:docker-compose.yml': 'services:\n  db: [unclosed\n' });
+    const read = await compose(world({ github: reads.github }).deps);
+    expect(read.body).toMatchObject({ ok: false, file: 'docker-compose.yml', branch: 'main' });
+    expect(String(read.body.why)).toMatch(/^docker-compose\.yml does not read as YAML: /);
+  });
+
+  it('says a file GitHub would not give could not be read, rather than taking one Compose prefers less', async () => {
+    const reads = github({ 'main:docker-compose.yml': CORE_COMPOSE }, { 'compose.yaml': new Error('GitHub answered 502') });
+    const read = await compose(world({ github: reads.github }).deps);
+    expect(read.body).toEqual({ ok: false, file: 'compose.yaml', branch: 'main', why: 'compose.yaml on main could not be read from GitHub (GitHub answered 502): try again' });
+  });
+
+  it('says a repository with no Compose file has none', async () => {
+    const read = await compose(world({ github: github({}).github }).deps);
+    expect(read.body).toEqual({
+      ok: false,
+      file: null,
+      branch: 'main',
+      why: '620legal/core has no Compose file on main: none of compose.yaml, compose.yml, docker-compose.yml, docker-compose.yaml',
+    });
+  });
+
+  it('says what to run when the account the bridge reads GitHub with is not connected', async () => {
+    const read = await compose(world({ github: async () => ({ account: 'flow-orzelig', client: null }) }).deps);
+    expect(read.body).toMatchObject({
+      ok: false,
+      why: "flow-orzelig is not connected to GitHub, so the repository's Compose file cannot be read. Run: openadlc auth login --bot flow-orzelig",
+    });
+  });
+
+  it('is an admin’s, since it shows the file’s passwords', async () => {
+    const reads = github({ 'main:docker-compose.yml': CORE_COMPOSE });
+    const refused = await compose(world({ github: reads.github }).deps, { 'x-openadlc-identity': 'jane@example.com' }, { people: { 'jane@example.com': 'user' } });
+    expect(refused.status).toBe(403);
+    expect(reads.asked).toEqual([]);
   });
 });

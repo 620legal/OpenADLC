@@ -82,12 +82,43 @@ export function isTaskPostgresImage(image: string): boolean {
   const [named, digest, ...more] = image.split('@');
   if (more.length > 0 || !named) return false;
   if (digest !== undefined && !DIGEST.test(digest)) return false;
-  const colon = named.lastIndexOf(':');
-  const repository = colon > named.lastIndexOf('/') ? named.slice(0, colon) : named;
-  const tag = colon > named.lastIndexOf('/') ? named.slice(colon + 1) : null;
-  if (!(repository in TASK_POSTGRES_REPOSITORIES)) return false;
+  const { repository, tag } = nameAndTag(named);
+  if (!Object.hasOwn(TASK_POSTGRES_REPOSITORIES, repository)) return false;
   if (tag === null) return digest !== undefined;
   return TAG.test(tag);
+}
+
+/** An image's repository and tag, its digest left off: `pgvector/pgvector:pg16` is `pgvector/pgvector` at `pg16`. */
+function nameAndTag(image: string): { repository: string; tag: string | null } {
+  const named = image.split('@')[0] ?? '';
+  const colon = named.lastIndexOf(':');
+  if (colon > named.lastIndexOf('/')) return { repository: named.slice(0, colon), tag: named.slice(colon + 1) };
+  return { repository: named, tag: null };
+}
+
+/**
+ * Which allowed repository an image is from, whatever its tag: `postgres` for
+ * `docker.io/library/postgres:16`, null for one outside the allowlist. Read
+ * from a repository's Compose file, `postgres` with no tag is still Docker's
+ * Postgres, which `isTaskPostgresImage` refuses until it has one.
+ */
+export function taskPostgresRepositoryOf(image: string): string | null {
+  const { repository } = nameAndTag(image.trim());
+  return Object.hasOwn(TASK_POSTGRES_REPOSITORIES, repository) ? (TASK_POSTGRES_REPOSITORIES[repository] ?? null) : null;
+}
+
+/**
+ * What a save says of an image a task's server may not run, naming it as
+ * `named` (the image, or which server's image it is when it is empty); null
+ * for one it may run. The Compose reader says the same of an image it found,
+ * so a person sees the refusal before pressing Save, not after.
+ */
+export function taskPostgresImageRefusal(image: string, named: string = image): string | null {
+  if (isTaskPostgresImage(image)) return null;
+  return (
+    `${named} is not an image a task's server may run: use ${TASK_POSTGRES_IMAGES.join(' or ')}, ` +
+    'such as pgvector/pgvector:pg16, and pin it by adding @sha256:<digest> (docker buildx imagetools inspect <image> prints it)'
+  );
 }
 
 /** A Postgres name a server can be made with unquoted: what `POSTGRES_USER` and `POSTGRES_DB` are. */
@@ -165,14 +196,8 @@ export function parseTaskPostgres(input: unknown): TaskPostgresRead {
     }
     if (missing('image', server.image)) return none('image');
     const image = typeof server.image === 'string' ? server.image.trim() : '';
-    if (!isTaskPostgresImage(image)) {
-      return {
-        ok: false,
-        error:
-          `${image || `${which}'s image`} is not an image a task's server may run: use ${TASK_POSTGRES_IMAGES.join(' or ')}, ` +
-          'such as pgvector/pgvector:pg16, and pin it by adding @sha256:<digest> (docker buildx imagetools inspect <image> prints it)',
-      };
-    }
+    const refused = taskPostgresImageRefusal(image, image || `${which}'s image`);
+    if (refused) return { ok: false, error: refused };
     servers.push({ port, superuser: (server.superuser as string).trim(), password: server.password, database: (server.database as string).trim(), image });
   }
   if (servers.length === 0) return { ok: true, setting: null };

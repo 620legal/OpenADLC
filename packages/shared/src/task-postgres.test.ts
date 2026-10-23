@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { isTaskPostgresImage, parseTaskPostgres, taskPostgresAddresses, TASK_POSTGRES_MAX_SERVERS, withoutPasswords } from './task-postgres.js';
+import {
+  isTaskPostgresImage,
+  parseTaskPostgres,
+  taskPostgresAddresses,
+  taskPostgresImageRefusal,
+  taskPostgresRepositoryOf,
+  TASK_POSTGRES_MAX_SERVERS,
+  withoutPasswords,
+} from './task-postgres.js';
 
 /** 620legal/core's local Postgres, as its docker-compose.yml and Makefile name it. */
 const CORE = { port: 55432, superuser: 'core', password: 'core', database: 'core_db', image: 'pgvector/pgvector:pg16' };
@@ -64,6 +72,22 @@ describe('a repository’s Postgres servers for its tasks', () => {
     ]) {
       expect(isTaskPostgresImage(image), image).toBe(false);
     }
+  });
+
+  it('refuses a name every object answers to, which is no repository the allowlist names', () => {
+    // `in` found these on Object.prototype, and let them through at any tag.
+    for (const image of ['constructor:16', 'toString:1', 'hasOwnProperty:pg16', '__proto__:16']) {
+      expect(isTaskPostgresImage(image), image).toBe(false);
+      expect(taskPostgresRepositoryOf(image), image).toBeNull();
+    }
+  });
+
+  it('says which allowed repository an image is from whatever its tag, and what a save says of one it refuses', () => {
+    expect(taskPostgresRepositoryOf('docker.io/library/postgres:16')).toBe('postgres');
+    expect(taskPostgresRepositoryOf('pgvector/pgvector')).toBe('pgvector/pgvector');
+    expect(taskPostgresRepositoryOf('bitnami/postgresql:16')).toBeNull();
+    expect(taskPostgresImageRefusal('pgvector/pgvector:pg16')).toBeNull();
+    expect(taskPostgresImageRefusal('bitnami/postgresql:16')).toBe(refusal({ servers: [{ ...CORE, image: 'bitnami/postgresql:16' }] }));
   });
 
   it('refuses a port outside 1024–65535, or two servers on one port', () => {
