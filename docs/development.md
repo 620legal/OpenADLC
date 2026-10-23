@@ -430,7 +430,9 @@ repository admin):
    resource owner `620legal`; **Only select repositories**,
    `620legal/OpenADLC`; repository permission **Contents: Read and write**,
    which brings Metadata: Read-only, and nothing else; an expiry of 90 days
-   or less. If the organization requires approval for these tokens, it is
+   or less, chosen on the form: the link fills in everything but the
+   expiry, which GitHub leaves at "No expiration" whatever the link asks
+   (seen on 2026-10-23). If the organization requires approval for these tokens, it is
    pending until an owner approves it (an owner's own is approved at once).
    It can do with the repository's contents what you can, pushing a version
    tag `release-build.yml` takes among it, so it goes nowhere but the
