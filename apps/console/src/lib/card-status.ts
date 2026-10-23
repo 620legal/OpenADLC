@@ -260,6 +260,24 @@ function waitingLine(card: BoardCard, waiting: CardWaiting, context: CardContext
       const paths = reason.paths.length > 1 ? `${reason.paths[0]} and ${reason.paths.length - 1} more` : (reason.paths[0] ?? 'its files');
       return line([`Waiting for ${someInWords(reason.on.map((number) => `#${number}`))} to let go of ${paths}`]);
     }
+    case 'leased': {
+      // What its own lease waits for: the dispatcher leases nothing a lease
+      // holds, and "Next up · the builder is free" sat on such a card, then
+      // "Stuck", while no builder would ever take it (#153).
+      const what =
+        reason.state === 'leased'
+          ? 'its build hasn’t started'
+          : reason.state === 'paused'
+            ? 'paused after its task ended'
+            : reason.pr !== null
+              ? reason.merged
+                ? `held by merged #${reason.pr} until its verification ends`
+                : `held for pull request #${reason.pr}`
+              : 'its build ended, waiting for its pull request';
+      return line([`Leased to ${context.said(reason.bot)}`, what]);
+    }
+    case 'host':
+      return line([`Waiting for a host with room (${reason.running} of ${reason.capacity} running)`]);
     case 'free': {
       const seat = context.said(reason.seat.name);
       // When it starts: work its seat turned away as soon as the seat has

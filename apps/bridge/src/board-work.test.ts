@@ -27,6 +27,11 @@ const store = vi.hoisted(() => ({
   budget: null as { period: string; capUsd: number; spentUsd: number; state: 'ok' | 'warning' | 'stopped' } | null,
   /** Each read of a repository's work in flight, by its id. */
   flightReads: [] as string[],
+  /** The leases held now, and the live hosts' load, with how many times each was read. */
+  leases: [] as { id: string; repoId: string; issueNumber: number; botId: string; declaredPaths: string[]; state: string; expiresAt: string | null; prNumber: number | null; pullMerged: boolean; updatedAt?: string }[],
+  hostLoad: null as { capacity: number; used: number } | null,
+  leaseReads: 0,
+  hostReads: 0,
 }));
 vi.mock('@openadlc/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@openadlc/db')>()),
@@ -73,6 +78,18 @@ vi.mock('@openadlc/db', async (importOriginal) => ({
     ]),
   },
   requests: { listRequests: vi.fn(async () => []) },
+  leases: {
+    heldLeases: vi.fn(async () => {
+      store.leaseReads += 1;
+      return store.leases;
+    }),
+  },
+  hosts: {
+    taskLoad: vi.fn(async () => {
+      store.hostReads += 1;
+      return store.hostLoad;
+    }),
+  },
   tasks: {
     listTasksOnSubjects: vi.fn(async (refs: readonly string[]) => store.tasks.filter((task) => refs.includes(task.subjectRef))),
     listTasks: vi.fn(async (filter: { states?: string[] }) => store.tasks.filter((task) => !filter.states || filter.states.includes(task.state))),
@@ -1051,5 +1068,29 @@ describe('a card with nothing going on it', () => {
     const past = await readBoardWork({ issues: [card(141, 'spec')], bots: crew, repos, gates: [], requests: [], waiting: { stopLeasing: false } }, NOW);
     expect(past.byRef.get('api#141')?.waiting?.reason.kind).toBe('free');
     store.budget = null;
+  });
+
+  it('reads the leases held and the hosts’ load once each, for a build its own lease holds and work only the hosts hold back (#153)', async () => {
+    store.issues = [card(141, 'spec'), card(160, 'build', { labels: ['adlc:build', 'start:now'] })];
+    store.tasks = [];
+    store.sessions = [];
+    store.settings = {};
+    store.budget = null;
+    store.leases = [
+      { id: 'lease-160', repoId: 'repo-1', issueNumber: 160, botId: 'bot-builder', declaredPaths: [], state: 'in_task', expiresAt: null, prNumber: 57, pullMerged: true, updatedAt: minutesAgo(12) },
+    ];
+    store.hostLoad = { capacity: 4, used: 4 };
+    store.leaseReads = 0;
+    store.hostReads = 0;
+    const work = await readBoardWork({ issues: store.issues, bots: crew, repos, gates: [], requests: [], waiting: {} }, NOW);
+    expect([store.leaseReads, store.hostReads]).toEqual([1, 1]);
+    expect(work.byRef.get('api#160')?.waiting).toEqual({
+      reason: { kind: 'leased', bot: 'openadlc-atlas-janedoe', state: 'in_task', pr: 57, merged: true },
+      since: minutesAgo(12),
+      stuck: false,
+    });
+    expect(work.byRef.get('api#141')?.waiting).toEqual({ reason: { kind: 'host', running: 4, capacity: 4 }, since: minutesAgo(20), stuck: false });
+    store.leases = [];
+    store.hostLoad = null;
   });
 });

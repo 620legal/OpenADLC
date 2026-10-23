@@ -65,7 +65,7 @@ own webhook. The trust boundaries are in [docs/security.md](../../docs/security.
 - `src/gates.ts`, `src/notify.ts` — a question as a GitHub comment and a thread row, and who is told.
 - `src/stage-handoff.ts`, `src/merge-line.ts` — who staffs a stage and where an issue goes next; the order pull requests land in.
 - `src/stage-runner.ts`, `src/seat-waits.ts` — starting what a busy seat turned away as soon as it has room, and the `stage.waiting_on_seat` record of that wait the board reads.
-- `src/waiting.ts` — why a card with nothing going on it waits, since when and on what (a busy seat and the task holding it, a dependency, a pause, the cap, a lease, the next sweep), and which waiting card is stuck; the board's cards and Needs you's stuck work read it.
+- `src/waiting.ts` — why a card with nothing going on it waits, since when and on what (a busy seat and the task holding it, a dependency, a pause, the cap, a lease, the card's own lease, full hosts, the next sweep), and which waiting card is stuck; the board's cards and Needs you's stuck work read it.
 - `src/scheduler.ts`, `src/job-timer.ts` — the recurring jobs and their intervals (`OPENADLC_JOB_<NAME>_MINUTES`; 0 turns one off).
 - `src/reconciler.ts` — GitHub against the board, and the deliveries that never came.
 - `src/dispatch-runner.ts`, `src/dispatch-gate.ts` — when the dispatcher runs, and the pause a restore holds.

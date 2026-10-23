@@ -547,6 +547,23 @@ describe('a card waiting with nothing going on it', () => {
     );
   });
 
+  // A Build card its own lease holds, with nothing running, read as "Next up"
+  // and then "Stuck", though the dispatcher never leases an issue a lease
+  // holds; and one only the hosts held back read the same (#153).
+  it('says what its own lease waits for, and that the hosts are full, never as stuck', () => {
+    const build = { stage: 'build', labels: ['adlc:build', 'start:now'] };
+    const leased = (state: string, pr: number | null = null, merged = false): WaitingReason => ({ kind: 'leased', bot: 'openadlc-atlas-janedoe', state, pr, merged });
+    const lines: [WaitingReason, string][] = [
+      [leased('leased'), 'Leased to openadlc-atlas-janedoe · its build hasn’t started · 32 min'],
+      [leased('paused'), 'Leased to openadlc-atlas-janedoe · paused after its task ended · 32 min'],
+      [leased('in_task', 57), 'Leased to openadlc-atlas-janedoe · held for pull request #57 · 32 min'],
+      [leased('in_task', 57, true), 'Leased to openadlc-atlas-janedoe · held by merged #57 until its verification ends · 32 min'],
+      [leased('in_task'), 'Leased to openadlc-atlas-janedoe · its build ended, waiting for its pull request · 32 min'],
+      [{ kind: 'host', running: 4, capacity: 4 }, 'Waiting for a host with room (4 of 4 running) · 32 min'],
+    ];
+    for (const [reason, text] of lines) expect(waits(reason, {}, build), text).toEqual({ text, tone: 'muted', mark: null });
+  });
+
   it('says on a build paused on a question that it holds its repository’s build while others wait for one', () => {
     const asking = task({ kind: 'implement', state: 'paused', holds: { repo: 'openadlc', limit: 1, waiting: 2 } });
     expect(cardStatus(card({ gateOpen: true, active: [asking] }), CONTEXT).text).toBe('Waiting for your answer · holds openadlc’s build slot (2 waiting)');

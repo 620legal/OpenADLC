@@ -85,6 +85,10 @@ export type WaitingReason =
   | { kind: 'concurrency'; limit: number; holders: SeatHolder[] }
   | { kind: 'turn'; seat: WaitingSeat; after: string[] }
   | { kind: 'lease'; on: number[]; paths: string[] }
+  /** Its own issue's lease holds it with nothing running: `leased` before its build starts, `paused`, or `in_task` for its pull request, `merged` once that has. */
+  | { kind: 'leased'; bot: string; state: string; pr: number | null; merged: boolean }
+  /** Nothing else holds it, and the live hosts run all the tasks they have room for. */
+  | { kind: 'host'; running: number; capacity: number }
   | { kind: 'free'; seat: WaitingSeat; by: 'runner' | 'sweep' | 'dispatcher'; nextAt?: string | null };
 
 export interface CardWaiting {

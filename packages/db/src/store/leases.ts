@@ -42,6 +42,38 @@ export async function listActiveLeases(repoId?: string): Promise<Lease[]> {
   return rows.map(toLease);
 }
 
+/** A lease still holding an issue, and whether the pull request it is linked to has merged. */
+export interface HeldLease extends Lease {
+  pullMerged: boolean;
+}
+
+/**
+ * Every lease still holding an issue, each with whether its pull request has
+ * merged, for the board: the dispatcher never leases an issue a lease holds,
+ * and a Build card held by one with nothing running read as free, then
+ * stuck, with a Start it now that could not move it (#153). A merged one
+ * waits for the verification after its merge, not for a builder.
+ *
+ * Merged as the merge line recorded it, or the pull request's link: the
+ * line lands every crew pull request, and the link hears a merge made by
+ * hand on an install whose work is numbered. One read, the size of the work
+ * leased now.
+ */
+export async function heldLeases(): Promise<HeldLease[]> {
+  const rows = await query<LeaseRow & { pull_merged: boolean }>(
+    `select l.id, l.repo_id, l.issue_number, l.bot_id, l.declared_paths, l.state, l.expires_at, l.pr_number, l.updated_at,
+            (l.pr_number is not null and (
+              exists (select 1 from merge_lines m where m.repo_id = l.repo_id and m.pr_number = l.pr_number and m.state = 'merged')
+              or exists (select 1 from work_item_links w where w.kind = 'pull' and w.repo_id = l.repo_id and w.number = l.pr_number and w.state = 'merged')
+            )) as pull_merged
+       from leases l
+      where l.state = any($1)
+      order by l.created_at`,
+    [ACTIVE],
+  );
+  return rows.map((row) => ({ ...toLease(row), pullMerged: row.pull_merged === true }));
+}
+
 export async function getActiveLease(repoId: string, issueNumber: number): Promise<Lease | null> {
   const row = await queryOne<LeaseRow>(
     `${SELECT} where repo_id = $1 and issue_number = $2 and state = any($3)`,

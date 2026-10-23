@@ -97,6 +97,17 @@ export async function heartbeat(name: string): Promise<void> {
  * no room for.
  */
 export async function taskRoom(): Promise<number | null> {
+  const load = await taskLoad();
+  return load === null ? null : load.capacity - load.used;
+}
+
+/**
+ * What `taskRoom` is the difference of: the live hosts' `capacity_tasks`
+ * summed, and the tasks holding a computer now. The board says both of a
+ * card that waits only for a host's room ("4 of 4 running"): told the room
+ * alone, it could say only that there was none. Null while no host is live.
+ */
+export async function taskLoad(): Promise<{ capacity: number; used: number } | null> {
   const live = `status <> 'down' and last_seen_at > now() - interval '2 minutes'`;
   const row = await queryOne<{ hosts: string; capacity: string; used: string }>(
     `select (select count(*) from hosts where ${live})::text as hosts,
@@ -105,7 +116,7 @@ export async function taskRoom(): Promise<number | null> {
               where state in ('queued','running') or (state = 'paused' and host_id is not null))::text as used`,
   );
   if (!row || Number(row.hosts) === 0) return null;
-  return Number(row.capacity) - Number(row.used);
+  return { capacity: Number(row.capacity), used: Number(row.used) };
 }
 
 export async function listHosts(): Promise<HostRecord[]> {
