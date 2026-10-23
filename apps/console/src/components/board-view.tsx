@@ -597,8 +597,11 @@ function Staff({
  * the 3:1 a mark has to have to be seen (WCAG 1.4.11). The bot's avatar, in
  * its colour, is in the row above the line.
  */
-function StatusDot({ tone, live }: { tone: StatusTone; live: boolean }) {
+function StatusDot({ tone, live, stuck = false }: { tone: StatusTone; live: boolean; stuck?: boolean }) {
   const reduced = usePrefersReducedMotion();
+  // Stuck never moves, whatever the person's motion setting: nothing is
+  // happening on it. Its words say "Stuck", which a screen reader reads.
+  if (stuck) return <span aria-hidden data-stuck className={cn('size-1.5 shrink-0 rounded-full', DOT.alarm)} />;
   if (!live) return <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', DOT[tone])} />;
   return <span role="img" aria-label="working" data-live className={cn('size-1.5 shrink-0 rounded-full', DOT[tone], !reduced && 'working-dot')} />;
 }
@@ -609,7 +612,7 @@ function StatusLine({ status }: { status: CardStatus }) {
       data-status
       className={cn('flex items-center gap-1.5 text-[11.5px] leading-snug', status.mark === 'check' ? 'text-muted' : TONE[status.tone])}
     >
-      {status.mark === 'dot' && <StatusDot tone={status.tone} live={Boolean(status.live)} />}
+      {status.mark === 'dot' && <StatusDot tone={status.tone} live={Boolean(status.live)} stuck={Boolean(status.stuck)} />}
       {status.mark === 'check' && <CheckIcon size={12} className="shrink-0 text-signal" />}
       {status.href ? (
         <a href={status.href} target="_blank" rel="noreferrer" className="relative z-10 hover:text-link hover:underline">

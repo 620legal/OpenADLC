@@ -484,11 +484,22 @@ function refWords(ref: string): string {
   return ref;
 }
 
-/** "1 running · 2 queued · next: #12 Retry the webhook", or null from a bridge that does not say. */
-export function queueLine(queue: SeatQueue | undefined): string | null {
+/**
+ * "1 running · 2 queued · next: #12 Retry the webhook", or null from a bridge
+ * that does not say. A seat running more than `atOnce` says so, and which
+ * tasks an answer resumed to take it there — "2 running, 1 at once: #137
+ * resumed after an answer" — since a task waiting on a person does not hold
+ * its seat and goes on when answered, whatever took the seat meanwhile.
+ */
+export function queueLine(queue: SeatQueue | undefined, atOnce?: number): string | null {
   if (!queue) return null;
+  const resumed = queue.resumed ?? [];
+  const over = atOnce !== undefined && queue.running > atOnce;
+  const running = over
+    ? `${queue.running} running, ${atOnce} at once${resumed.length > 0 ? `: ${resumed.map((task) => refWords(task.ref)).join(', ')} resumed after an answer` : ''}`
+    : `${queue.running} running`;
   const parts = [
-    queue.running > 0 ? `${queue.running} running` : null,
+    queue.running > 0 ? running : null,
     queue.waiting > 0 ? `${queue.waiting} waiting for you` : null,
     queue.queued > 0 ? `${queue.queued} queued` : null,
   ].filter((part): part is string => Boolean(part));

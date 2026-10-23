@@ -115,6 +115,8 @@ const GROUP: Record<AttentionItem['kind'], AttentionGroup> = {
   dependency_abandoned: 'work',
   resume_waiting: 'work',
   plan_change_waiting: 'work',
+  // Nothing about the work is wrong: what starts it did not come round.
+  work_stuck: 'system',
 };
 
 export function groupOf(item: Pick<AttentionItem, 'kind' | 'group'>): AttentionGroup {

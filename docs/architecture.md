@@ -56,6 +56,27 @@ avatar, too faint for a dot; the avatar is beside the line.) A card waiting on
 a person keeps a still dot and says "Waiting for your answer", a queued task
 says "Queued", and nothing moves on a card nothing runs on.
 
+A card in Intake, Design or Build with nothing going on it says why, on what,
+and for how long (`waitingOf` in `apps/bridge/src/waiting.ts`, sent as each
+card's `waiting`): "Waiting for system-engineer · busy with #137 · 32 min",
+"Not started · system-engineer is free · next sweep in 24 min", "Waiting on
+#141 (system engineer writing the design)". It is worked out on each read from
+what is live — the tasks going in the install and the slots they take on each
+seat (`bots.max_tasks`: queued and running ones; a task paused on a person's
+answer takes none), the crew, the card's own row and tasks, the
+install's, repository's and seat's pauses, the month's budget, the checks
+holding a seat back, a build's overlap with the work in flight, and the
+stage sweep's next run (`JobTimer.nextRun`) — and from the record of a start a
+full seat turned away (`stage.waiting_on_seat`), which says since when. A build
+paused on a question still takes one of its repository's builds at once, and
+while builds wait for one its card says so ("Waiting for your answer · holds
+api's build slot"). A card that has waited
+three minutes (`STUCK_AFTER_MS`) with its seat free and nothing started is
+stuck: its line says so in the alarm colour beside a still dot, and Needs you
+has a system card naming the seat, why nothing started it, and Start it now
+(`POST /v1/items/:subject/start`, the stage sweep or a dispatch). The card
+goes when the work starts, as it is made from the same live state.
+
 What the bot is doing comes from the skill runner's own lines, `[tool] Bash:
 pnpm test` or `[wrote] src/prices.ts`, which hostd stores from the session's
 pane every ten seconds (`session_log`). For the running tasks on the cards
@@ -138,7 +159,15 @@ none yet, says its kind of work instead ("writing the change").
    what it should look like, data, verification, what is out of scope — one
    question at a time, the most decisive first. A question opens a
    **gate**: the task pauses, and the question waits in Needs you (and on the
-   issue, for an issue). The answer resumes the task. Each request is a **work
+   issue, for an issue). The answer resumes the task. A paused task does not
+   count against its seat's tasks at once (`tasks.seatHasRoom`), so the seat
+   goes on to other work while the question waits; its computer, while kept,
+   still counts against its host's room (`hosts.taskRoom`), and the seat
+   starts nothing on the same subject beside it (`tasks.liveTaskOn`). The
+   answer resumes it whatever its seat runs by then, since a resume is the
+   same task going on, not a new start; only a host with no room makes the
+   resume wait. The Crew page says a seat that is running past its tasks at
+   once, and which task an answer resumed. Each request is a **work
    item** of its own (`apps/bridge/src/items.ts`): the conversation about it is
    every thread about the request, the issue it becomes and that issue's pull
    request, whichever seat said it, labelled by the role that said it

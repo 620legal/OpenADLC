@@ -1164,6 +1164,27 @@ describe('opening a task on a seat that runs several at once', () => {
       vi.useRealTimers();
     }
   });
+
+  it('resumes a task its answer let go though its seat has filled since, as the same task going on', async () => {
+    // A task waiting on a person no longer holds its seat
+    // (`tasks.seatHasRoom`), so the seat took other work while the question
+    // waited. The answer is not a new start: asked for room, the seat would
+    // have kept it paused behind the work that took its place.
+    vi.mocked(tasks.getTask).mockResolvedValue({ id: 'task-1', botId: 'bot-1', repoId: null, kind: 'spec', subjectRef: 'openadlc#137', skill: 'spec', state: 'paused' } as never);
+    vi.mocked(tasks.seatHasRoom).mockResolvedValue(false);
+    vi.mocked(tasks.liveTaskOn).mockResolvedValue({ id: 'task-1', state: 'paused' } as never);
+    vi.mocked(hosts.taskRoom).mockResolvedValue(1);
+    const resumeTask = vi.fn(async () => ({ session: 'system-engineer/spec-task1' }));
+    const tasksService = service({ resumeTask, cleanupTask: vi.fn(async () => undefined) });
+
+    await tasksService.resume('task-1');
+
+    expect(resumeTask).toHaveBeenCalledTimes(1);
+    expect(resumeTask).toHaveBeenCalledWith('task-1', [], expect.anything(), [], undefined, undefined);
+    expect(tasks.seatHasRoom).not.toHaveBeenCalled();
+    expect(tasks.liveTaskOn).not.toHaveBeenCalled();
+    expect(tasks.updateTaskState).not.toHaveBeenCalled();
+  });
 });
 
 describe('a start that breaks between its row and hostd', () => {

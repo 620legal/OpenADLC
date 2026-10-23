@@ -21,9 +21,11 @@ import {
   listTasks,
   listTasksOnSubjects,
   releaseComputer,
+  resumedAfterAnswer,
   seatHasRoom,
   staleUnstarted,
   listTasksSince,
+  liveTaskOn,
   noteStoppedByPerson,
   pausedWithAnswer,
   raiseCostCap,
@@ -106,15 +108,30 @@ describe('room for one more task', () => {
 
   beforeEach(() => vi.mocked(queryOne).mockReset());
 
-  it('is a seat holding fewer computers than its tasks at once, a paused task’s kept one included, counting what the caller started this pass', async () => {
+  it('is a seat running fewer than its tasks at once, counting what the caller started this pass', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce({ room: true });
 
     expect(await seatHasRoom('bot-1', 2)).toBe(true);
 
     expect(sql()).toContain(
-      "(select count(*) from tasks where bot_id = $1 and (state in ('queued','running') or (state = 'paused' and host_id is not null))) + $2 < b.max_tasks as room",
+      "(select count(*) from tasks where bot_id = $1 and state in ('queued','running')) + $2 < b.max_tasks as room",
     );
     expect(vi.mocked(queryOne).mock.calls.at(-1)?.[1]).toEqual(['bot-1', 2]);
+  });
+
+  it('does not count a task paused on a person’s answer, even one that keeps its computer', async () => {
+    // A design paused on a question at 06:00, answered at 13:38, held its
+    // seat's one place all day while its computer was kept, and every other
+    // design waited.
+    vi.mocked(queryOne).mockResolvedValue({ room: true });
+
+    await seatHasRoom('bot-1');
+    expect(sql()).not.toContain('paused');
+
+    vi.mocked(queryOne).mockResolvedValue({ count: '1' });
+    expect(await countSeatSlotsInUse('bot-1')).toBe(1);
+    expect(sql()).toContain("where bot_id = $1 and state in ('queued','running')");
+    expect(sql()).not.toContain('paused');
   });
 
   it('is none for a seat that is not there', async () => {
@@ -122,17 +139,42 @@ describe('room for one more task', () => {
     expect(await seatHasRoom('gone')).toBe(false);
   });
 
-  it('counts a paused task against its seat and the hosts only while its computer is kept', async () => {
+  it('still counts a paused build against its repository, whether or not it has a computer', async () => {
     vi.mocked(queryOne).mockResolvedValue({ count: '2' });
 
-    expect(await countSeatSlotsInUse('bot-1')).toBe(2);
-    expect(sql()).toContain("state in ('queued','running') or (state = 'paused' and host_id is not null)");
-    // A repository's concurrency counts a paused build whether or not it has a computer.
     expect(await countUnfinishedImplementTasks('repo-1')).toBe(2);
     expect(sql()).toContain("kind = 'implement' and state in ('queued','running','paused')");
   });
 
-  it('gives a paused task’s place back when its computer goes, and takes back only a start that never ran', async () => {
+  it('finds the same work on a seat while it is paused on an answer, so it is not started beside itself', async () => {
+    // With paused tasks off the seat's count, a second review or design of
+    // the same subject would have started beside the paused one, and the
+    // index, which covers queued and running only, would have refused the
+    // paused one's resume instead.
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, state: 'paused' });
+
+    expect(await liveTaskOn('bot-1', 'openadlc#31')).toMatchObject({ id: 'task-1', state: 'paused' });
+    expect(sql()).toContain("where bot_id = $1 and subject_ref = $2 and state in ('queued','running','paused')");
+    expect(vi.mocked(queryOne).mock.calls.at(-1)?.[1]).toEqual(['bot-1', 'openadlc#31']);
+
+    vi.mocked(queryOne).mockResolvedValueOnce(null);
+    expect(await liveTaskOn('bot-1', 'openadlc#32')).toBeNull();
+  });
+
+  it('names the running tasks a person’s answer resumed, which alone take a seat past its tasks at once', async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ id: 'task-1' }]);
+
+    expect(await resumedAfterAnswer(['task-1', 'task-2'])).toEqual(new Set(['task-1']));
+    const asked = String(vi.mocked(query).mock.calls.at(-1)?.[0] ?? '').replace(/\s+/g, ' ');
+    expect(asked).toContain("t.state = 'running' and t.paused_at is not null");
+    expect(asked).toContain('exists (select 1 from gates g where g.task_id = t.id and g.answered_at > t.paused_at)');
+
+    vi.mocked(query).mockClear();
+    expect(await resumedAfterAnswer([])).toEqual(new Set());
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('gives a paused task’s place on its host back when its computer goes, and takes back only a start that never ran', async () => {
     vi.mocked(query).mockResolvedValue([]);
 
     await releaseComputer('task-1');

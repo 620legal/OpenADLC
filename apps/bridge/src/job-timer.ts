@@ -94,6 +94,8 @@ const MAX_DELAY = 2_147_483_647;
 export class JobTimer {
   /** Each job's pending timeout. One per job, replaced every time it re-arms. */
   private readonly pending = new Map<Job, ReturnType<typeof setTimeout>>();
+  /** When each armed job fires next, in ms since the epoch. */
+  private readonly due = new Map<Job, number>();
 
   constructor(
     private readonly scheduler: Pick<Scheduler, 'run'>,
@@ -124,6 +126,18 @@ export class JobTimer {
   stop(): void {
     for (const handle of this.pending.values()) clearTimeout(handle);
     this.pending.clear();
+    this.due.clear();
+  }
+
+  /**
+   * When a job fires next, or null when it is off or this timer was never
+   * started. The board says it: a design waiting with its seat free starts
+   * on the stage sweep, and "Waiting for a design pass" for half an hour
+   * said nothing of when that would be.
+   */
+  nextRun(job: string): Date | null {
+    const at = this.due.get(job as Job);
+    return at === undefined ? null : new Date(at);
   }
 
   /**
@@ -136,6 +150,7 @@ export class JobTimer {
    */
   private arm(job: Job, wait: number, period: number): void {
     const step = Math.min(wait, MAX_DELAY);
+    this.due.set(job, Date.now() + wait);
     const handle = setTimeout(() => {
       if (wait > step) {
         this.arm(job, wait - step, period);

@@ -1222,8 +1222,8 @@ export class TaskRunner {
     await this.driver.release(taskId, 'paused past the time its computer is kept').catch((error: unknown) => {
       console.warn(`[hostd] ${entry.bot}: could not release the computer of paused task ${taskId}: ${error instanceof Error ? error.message : error}`);
     });
-    // On no host now: it stops counting against its seat and the hosts'
-    // capacity until its answer resumes it.
+    // On no host now: it stops counting against the hosts' capacity until
+    // its answer resumes it. Its seat stopped counting it when it paused.
     await tasks.releaseComputer(taskId).catch(() => undefined);
     console.log(`[hostd] ${entry.bot}: released the computer of paused task ${taskId}; its work is on ${entry.branch ?? 'no branch yet'}`);
   }

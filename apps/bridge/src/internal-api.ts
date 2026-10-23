@@ -503,6 +503,13 @@ export function registerInternalApi(
       }
     }
 
+    // Its seat has room again, and what it turned away while it was full
+    // starts now (`StageRunner`), rather than on the hourly sweep: a design
+    // refused while the design seat ran another waited up to an hour after
+    // that one ended. Asked after the handoff above, so the issue this task
+    // finished has been moved on before anything looks at its stage.
+    if (['done', 'failed', 'stopped'].includes(state)) deps.stageRuns?.seatFreed(ended.botId, `${ended.kind} task ${state}`);
+
     // Work that ended may have been holding a path an approved plan change
     // asked for, so the ones waiting on it look again.
     if (['done', 'failed', 'stopped'].includes(state)) {

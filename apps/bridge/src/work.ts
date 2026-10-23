@@ -141,6 +141,10 @@ export interface IssueFacts {
   updatedAt: string;
   /** Where its Dependencies are written, for saying what a blocked card waits on. */
   body?: string | null;
+  /** When it was filed: its place in the line a seat takes work from (`issues.byNextFirst`). */
+  createdAt?: string;
+  /** The files it said it would touch, which another change's can hold it back from building (`blockingOverlaps`). */
+  declaredPaths?: string[];
 }
 
 export const ACTIVE_STATES: readonly TaskState[] = ['queued', 'running', 'paused'];
