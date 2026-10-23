@@ -207,6 +207,8 @@ const open = vi.fn(async (_input: Record<string, unknown>) => ({ taskId: 'task-1
 const asBot = vi.fn(async (_bot: string): Promise<unknown> => null);
 /** What the console's routes leave running once they have answered; a test waits for it. */
 let afterwards: import('./api.js').Afterwards;
+/** What the bridge's console API was built with; a test builds another from it. */
+let apiDeps: import('./api.js').ApiDeps;
 
 beforeEach(async () => {
   const { HostdClient } = await import('./hostd-client.js');
@@ -270,7 +272,7 @@ beforeEach(async () => {
 
   const router = new Router();
   pauseGate = new (await import('./dispatch-gate.js')).DispatchGate();
-  registerConsoleApi(router, {
+  apiDeps = {
     afterwards,
     dispatchGate: pauseGate,
     config: {} as never,
@@ -284,7 +286,8 @@ beforeEach(async () => {
     onboarding: {} as never,
     webhookSetup: {} as never,
     repoSetup: {} as never,
-  });
+  };
+  registerConsoleApi(router, apiDeps);
   bridge = createServer((request, response) => void router.handle(request, response));
   await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
   bridgeUrl = `http://127.0.0.1:${(bridge.address() as AddressInfo).port}`;
@@ -499,6 +502,7 @@ describe('a request for a bot that cannot start yet', () => {
     expect(response.status).toBe(200);
     expect(assertReady).toHaveBeenCalledWith(expect.objectContaining({ name: 'ottoexampleco' }), 'openadlc-testbed');
     expect(requests.createRequest).toHaveBeenCalledTimes(1);
+    await afterwards.settled();
     expect(open).toHaveBeenCalledWith(expect.objectContaining({ bot: 'ottoexampleco', kind: 'intake' }));
   });
 
@@ -511,6 +515,7 @@ describe('a request for a bot that cannot start yet', () => {
     expect(first.status).toBe(202);
     expect(await first.json()).toMatchObject({ request: { id: 'req-1', state: 'queued', queuePosition: 1 }, queued: true, position: 1, bot: 'ottoexampleco' });
     expect(await second.json()).toMatchObject({ queued: true, position: 2 });
+    await afterwards.settled();
     expect(open).not.toHaveBeenCalled();
 
     // The list the console reads says the same.
@@ -533,6 +538,7 @@ describe('a request for a bot that cannot start yet', () => {
       position: 1,
       paused: expect.stringMatching(/^work is paused, by janedoe/),
     });
+    await afterwards.settled();
     expect(open).not.toHaveBeenCalled();
   });
 
@@ -552,11 +558,15 @@ describe('a request for a bot that cannot start yet', () => {
         queued: true,
         paused: expect.stringMatching(/^work is paused in openadlc-testbed, by janedoe/),
       });
+      await afterwards.settled();
       expect(open).not.toHaveBeenCalled();
 
-      // Behind it in line, and started all the same: the paused one keeps its place.
+      // Behind it in line, and started all the same: the paused one keeps its
+      // place, and is not counted ahead of it in the answer either.
       const other = await ask('openadlc-other');
       expect(other.status).toBe(200);
+      expect(await other.json()).toMatchObject({ starting: true });
+      await afterwards.settled();
       expect(open).toHaveBeenCalledTimes(1);
       expect(open.mock.calls[0]?.[0]).toMatchObject({ repo: 'openadlc-other', subjectRef: 'request:req-2' });
       expect(stored.requests.find((one) => one.id === 'req-1')?.state).toBe('queued');
@@ -577,30 +587,106 @@ describe('a request for a bot that cannot start yet', () => {
     expect(open).not.toHaveBeenCalled();
   });
 
-  it('is saved and waits for the sweep when starting the queue fails, rather than answering 500', async () => {
-    // A 500 after the row was written told the person it was not filed, and
-    // the one they sent again was a second request.
-    const { withAdvisoryLock } = await import('@openadlc/db');
-    vi.mocked(withAdvisoryLock).mockRejectedValueOnce(new Error('the database blinked'));
-    const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  it('answers once it is saved, before intake’s triage has started', async () => {
+    // The dialog sat on "Sending…" while intake's session was prepared and
+    // started: the answer waited for the drain, and the drain for the start.
+    let started: (task: { taskId: string; session: string }) => void = () => undefined;
+    open.mockImplementationOnce(() => new Promise((resolve) => (started = resolve)));
 
-    try {
-      const response = await ask();
-
-      expect(response.status).toBe(202);
-      expect(await response.json()).toMatchObject({ request: { id: 'req-1', state: 'queued' }, queued: true, position: 1 });
-      expect(warned).toHaveBeenCalledWith(expect.stringContaining('starting the queue failed, and the sweep will'));
-    } finally {
-      warned.mockRestore();
-    }
-  });
-
-  it('starts at once, as before, when intake is free and nothing waits ahead of it', async () => {
     const response = await ask();
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ request: { id: 'req-1', state: 'draft' }, task: { taskId: 'task-1' }, bot: 'ottoexampleco' });
+    expect(await response.json()).toMatchObject({
+      request: { id: 'req-1', state: 'queued' },
+      subject: 'request:req-1',
+      bot: 'ottoexampleco',
+      task: null,
+      starting: true,
+    });
+    // Asked for after the answer, and still not started when it was given.
+    await vi.waitFor(() => expect(open).toHaveBeenCalledTimes(1));
+    started({ taskId: 'task-1', session: 's' });
+    await afterwards.settled();
+    expect(open).toHaveBeenCalledTimes(1);
     expect(open).toHaveBeenCalledWith(expect.objectContaining({ subjectRef: 'request:req-1', kind: 'intake', skill: 'triage' }));
+  });
+
+  it('says on the request’s own thread when its triage could not start after the answer, and stays in line', async () => {
+    vi.mocked(withAdvisoryLock).mockRejectedValueOnce(new Error('the database blinked'));
+    vi.mocked(threads.ensureThread).mockClear();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const told = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    try {
+      const response = await ask();
+      expect(response.ok).toBe(true);
+      await afterwards.settled();
+
+      expect(requests.createRequest).toHaveBeenCalledTimes(1);
+      expect(stored.requests.find((one) => one.id === 'req-1')?.state).toBe('queued');
+      expect(open).not.toHaveBeenCalled();
+      expect(logged).toHaveBeenCalledWith(expect.stringContaining('starting its triage failed'));
+      // A brand-new request has no thread yet: the one its triage writes to is made for it.
+      expect(threads.ensureThread).toHaveBeenCalledWith({ botId: 'bot-intake', repoId: 'repo-1', subjectRef: 'request:req-1' });
+      expect(threads.addMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ threadId: 'thread-1', kind: 'sys', text: expect.stringContaining('starting its triage failed'), note: 'the database blinked' }),
+      );
+    } finally {
+      logged.mockRestore();
+      told.mockRestore();
+    }
+  });
+
+  describe('on a bridge with nothing to run after the answer', () => {
+    let plain: Server;
+    let plainUrl: string;
+
+    beforeEach(async () => {
+      const { registerConsoleApi } = await import('./api.js');
+      const { Router } = await import('./router.js');
+      const router = new Router();
+      const { afterwards: _none, ...rest } = apiDeps;
+      registerConsoleApi(router, rest);
+      plain = createServer((request, response) => void router.handle(request, response));
+      await new Promise<void>((resolve) => plain.listen(0, '127.0.0.1', resolve));
+      plainUrl = `http://127.0.0.1:${(plain.address() as AddressInfo).port}`;
+    });
+
+    afterEach(async () => {
+      await new Promise<void>((resolve) => plain.close(() => resolve()));
+    });
+
+    const send = () =>
+      fetch(`${plainUrl}/v1/requests`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: 'Add a hello world page', repo: 'openadlc-testbed' }),
+      });
+
+    it('is saved and waits for the sweep when starting the queue fails, rather than answering 500', async () => {
+      // A 500 after the row was written told the person it was not filed, and
+      // the one they sent again was a second request.
+      vi.mocked(withAdvisoryLock).mockRejectedValueOnce(new Error('the database blinked'));
+      const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      try {
+        const response = await send();
+
+        expect(response.status).toBe(202);
+        expect(await response.json()).toMatchObject({ request: { id: 'req-1', state: 'queued' }, queued: true, position: 1 });
+        expect(warned).toHaveBeenCalledWith(expect.stringContaining('starting the queue failed, and the sweep will'));
+      } finally {
+        warned.mockRestore();
+      }
+    });
+
+    it('starts at once, as before, when intake is free and nothing waits ahead of it', async () => {
+      const response = await send();
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ request: { id: 'req-1', state: 'draft' }, task: { taskId: 'task-1' }, bot: 'ottoexampleco' });
+      expect(open).toHaveBeenCalledWith(expect.objectContaining({ subjectRef: 'request:req-1', kind: 'intake', skill: 'triage' }));
+    });
   });
 
   it('is refused before it is written, so no draft is left that nothing will triage', async () => {

@@ -106,7 +106,15 @@ none yet, says its kind of work instead ("writing the change").
    request's id, and it is unique per install: the database refuses a second
    request with the same eight (migration 0144), and the store draws a fresh
    id. Two requests that shared them before that migration stay ambiguous;
-   their triage is told to have the request sent again. A request sent while the intake bot is
+   their triage is told to have the request sent again. `POST /v1/requests`
+   answers once the request is saved and its files are claimed, not once its
+   triage has started ([ADR 0011](adr/0011-a-request-is-answered-once-saved.md)).
+   It answers 202 with its place when it will wait, and otherwise 200 with
+   `starting: true`, which the dialog says as "Intake is starting on it". The
+   queue is drained after the answer. A start that fails then is said on the
+   request's thread and in the log, and the request stays in line for the
+   sweep. A refusal (no text, no intake bot, intake not ready, a file that
+   cannot be claimed) still comes before the request is written. A request sent while the intake bot is
    running another triage is `queued` (`POST /v1/requests` answers 202 with
    its place in line) and starts by itself, oldest first, when intake ends
    that triage or pauses it on a question (`apps/bridge/src/request-queue.ts`).

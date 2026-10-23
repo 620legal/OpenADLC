@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BRIDGE_NOT_ANSWERING } from '@/lib/reach';
 import {
   answerGate,
+  fileRequest,
   killSession,
   linkToItem,
   mergeItem,
@@ -87,6 +88,38 @@ describe('trying a failed triage again', () => {
       ok: false,
       error: 'that request is already issue #15',
     });
+  });
+});
+
+describe('sending a new request', () => {
+  it('says it is starting when the bridge answered before intake’s task existed', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json({ request: { id: 'a4b02784', state: 'queued' }, subject: 'request:a4b02784', bot: 'ottoexampleco', task: null, starting: true }),
+      ),
+    );
+    expect(await fileRequest({ text: 'Add a hello world page' })).toEqual({
+      ok: true,
+      bot: 'ottoexampleco',
+      subject: 'request:a4b02784',
+      queued: false,
+      position: null,
+      starting: true,
+    });
+  });
+
+  it('passes on its place in line when the bridge queued it', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json(
+          { request: { id: 'a4b02784', state: 'queued' }, subject: 'request:a4b02784', bot: 'ottoexampleco', queued: true, position: 2, paused: 'work is paused' },
+          { status: 202 },
+        ),
+      ),
+    );
+    expect(await fileRequest({ text: 'Add a hello world page' })).toMatchObject({ ok: true, queued: true, position: 2, paused: 'work is paused', starting: false });
   });
 });
 

@@ -346,11 +346,16 @@ export async function fileRequest(input: {
   kind?: string;
   /** Ids the upload route answered with, sent with the request. */
   attachments?: string[];
-}): Promise<{ ok: boolean; error?: string; bot?: string; subject?: string; queued?: boolean; position?: number | null; paused?: string }> {
+}): Promise<{ ok: boolean; error?: string; bot?: string; subject?: string; queued?: boolean; position?: number | null; paused?: string; starting?: boolean }> {
   try {
     // 202 when it waits its turn: `queued`, with its place in line, and why
-    // when work is paused.
-    const result = await call<{ bot: string; subject?: string; queued?: boolean; position?: number | null; paused?: string }>('/v1/requests', 'POST', input);
+    // when work is paused. Otherwise `starting`: the bridge answers once the
+    // request is saved, before intake's task exists.
+    const result = await call<{ bot: string; subject?: string; queued?: boolean; position?: number | null; paused?: string; starting?: boolean }>(
+      '/v1/requests',
+      'POST',
+      input,
+    );
     revalidatePath('/');
     return {
       ok: true,
@@ -360,6 +365,7 @@ export async function fileRequest(input: {
       queued: result.queued === true,
       position: result.position ?? null,
       ...(result.paused ? { paused: result.paused } : {}),
+      starting: result.starting === true,
     };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'could not file the request' };

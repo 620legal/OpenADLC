@@ -21,6 +21,8 @@ interface SentRequest {
   queued: boolean;
   position: number | null;
   paused?: string;
+  /** Answered before intake's task was started: it is starting, not yet on it. */
+  starting?: boolean;
 }
 
 /** The first line of what was asked, as the request's title; the bridge titles its card the same. */
@@ -29,9 +31,13 @@ export function requestTitle(text: string): string {
   return line.length > 80 ? `${line.slice(0, 79).trimEnd()}…` : line;
 }
 
-/** "Intake is on it", or its place in line when the bridge queued it. */
-function whatNext(sent: Pick<SentRequest, 'queued' | 'position' | 'paused'>): string {
-  if (!sent.queued) return 'Intake is on it';
+/**
+ * "Intake is starting on it", or its place in line when the bridge queued it.
+ * The bridge answers once the request is saved, before the task exists, so it
+ * says "starting"; "on it" is for an older bridge, which answered with the task.
+ */
+export function whatNext(sent: Pick<SentRequest, 'queued' | 'position' | 'paused' | 'starting'>): string {
+  if (!sent.queued) return sent.starting ? 'Intake is starting on it' : 'Intake is on it';
   const place = sent.position ? `Queued (#${sent.position})` : 'Queued';
   return sent.paused ? `${place}: work is paused, so it starts when work resumes` : place;
 }
@@ -99,6 +105,7 @@ export function IntakeDialog({
           queued: response.queued === true,
           position: response.position ?? null,
           ...(response.paused ? { paused: response.paused } : {}),
+          ...(response.starting ? { starting: true } : {}),
         };
         clear();
         if (andAnother) setAdded(what);
