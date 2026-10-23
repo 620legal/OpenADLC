@@ -4024,6 +4024,24 @@ describe('a merge', () => {
     expect(moves).toEqual([{ issueNumber: 5, to: 'done' }]);
   });
 
+  /**
+   * 620legal/OpenADLC ships as a release: a merge goes to Ship and stays
+   * there for the release that contains it, with no testing deploy and no
+   * deploy task, and its lease goes where the pipeline records the merge.
+   */
+  it('keeps the card in Ship where the rules say a release ships it, and leaves the merge to the pipeline', async () => {
+    const onMerged = vi.fn(async () => 'app#12: merged; openadlc ships by release');
+    const byRelease = { ...DEFAULT_DELIVERY_RULES, testing: { ...DEFAULT_DELIVERY_RULES.testing, on: 'release' as const } };
+    const { delivered, moves, opened } = merge([{ name: 'deploy-testing', path: '.github/workflows/deploy-testing.yml' }], { pipeline: { onMerged }, rules: byRelease });
+    await delivered;
+
+    expect(moves).toEqual([{ issueNumber: 5, to: 'merged' }]);
+    expect(onMerged).toHaveBeenCalledWith(expect.objectContaining({ name: 'openadlc' }), 12, 'fed9876');
+    expect(opened).toEqual([]);
+    // Not "the repository deploys nothing": the pipeline lets it go, saying it ships by release.
+    expect(vi.mocked(leases.releaseForPullRequest)).not.toHaveBeenCalled();
+  });
+
   it('stays on the deploy path when GitHub cannot say what the repository runs', async () => {
     const { delivered, moves, opened } = merge(new Error('GitHub answered 502'));
     await delivered;
@@ -10282,5 +10300,58 @@ describe('the work item of an issue or pull request a delivery is about', () => 
     );
     expect(vi.mocked(linkIssue).mock.calls[1]?.[1]).toMatchObject({ number: 10, createdAt: '2026-10-02T00:00:00Z' });
     expect(vi.mocked(linkIssue).mock.calls[1]?.[2]).toBe(false);
+  });
+});
+
+/**
+ * A release published in a repository that ships by release: what moves its
+ * cards in Ship to Done is the pipeline's (`ReleaseShipping.onPublished`);
+ * the delivery only hands the release over.
+ */
+describe('a release delivery', () => {
+  function delivering() {
+    const onPublished = vi.fn(async () => ['openadlc#45 moved to Done: released in v0.2.0']);
+    const webhooks = new Webhooks({} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
+    webhooks.useDelivery({ releases: { onPublished } } as never, { get: async () => ({ rules: DEFAULT_DELIVERY_RULES }), forget: () => undefined } as never);
+    const receive = (action: string, repository = { name: 'openadlc', full_name: 'janedoe/openadlc' }) =>
+      webhooks.receive(
+        'release',
+        {
+          action,
+          repository,
+          release: { tag_name: 'v0.2.0', name: 'v0.2.0', draft: false, prerelease: false, published_at: '2026-10-21T10:00:00Z', html_url: 'https://github.com/janedoe/openadlc/releases/tag/v0.2.0' },
+        } as never,
+        `delivery-release-${action}`,
+      );
+    return { onPublished, receive };
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.mocked(console.log).mockRestore();
+  });
+
+  it('hands a published release to what ships by release, as the release it is', async () => {
+    const { onPublished, receive } = delivering();
+    await receive('published');
+    expect(onPublished).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'repo-1', fullName: 'janedoe/openadlc' }),
+      expect.objectContaining({ tag: 'v0.2.0', draft: false, prerelease: false, publishedAt: '2026-10-21T10:00:00Z' }),
+    );
+  });
+
+  it('hands over nothing else: `released` comes with `published` for the same release, and a draft created or edited ships nothing', async () => {
+    const { onPublished, receive } = delivering();
+    for (const action of ['released', 'created', 'edited', 'prereleased', 'deleted']) await receive(action);
+    expect(onPublished).not.toHaveBeenCalled();
+  });
+
+  it('hands over nothing for a repository by the same name under another owner', async () => {
+    const { onPublished, receive } = delivering();
+    await receive('published', { name: 'openadlc', full_name: 'someone-else/openadlc' });
+    expect(onPublished).not.toHaveBeenCalled();
   });
 });

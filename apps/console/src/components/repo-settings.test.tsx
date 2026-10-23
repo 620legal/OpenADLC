@@ -8,6 +8,8 @@ import type { CrewMember, RemovalChoices, RemovalPreview, RemovalReport } from '
 
 const saved = vi.hoisted(() => ({
   answer: { ok: true as boolean, shipsByMerging: undefined as boolean | null | undefined },
+  /** What setting a repository to ship by release answers; as asked when null. */
+  release: null as { ok: boolean; error?: string } | null,
 }));
 
 vi.mock('@/app/actions', () => ({
@@ -16,11 +18,12 @@ vi.mock('@/app/actions', () => ({
   resumeWork: vi.fn(async () => ({ ok: true })),
   removeRepository: vi.fn(async () => ({ ok: true })),
   repositoryRemoval: vi.fn(async () => ({ ok: true, removal: null })),
+  setShipsByRelease: vi.fn(async (_repo: string, on: boolean) => saved.release ?? { ok: true, shipsByRelease: on }),
 }));
 // Removing a repository refreshes the page it is on; there is no page here.
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => undefined }) }));
-import { updateRepoSettings } from '@/app/actions';
-import { REMOVAL_DEFAULTS, RemovalOutcome, RemovalReview, RepoSettings, deliveryLines, type RepoSettingsRepo } from './repo-settings';
+import { setShipsByRelease, updateRepoSettings } from '@/app/actions';
+import { REMOVAL_DEFAULTS, RemovalOutcome, RemovalReview, RepoSettings, SHIPS_BY_RELEASE_LINE, ShipsByRelease, deliveryLines, type RepoSettingsRepo } from './repo-settings';
 
 const REPO: RepoSettingsRepo = {
   name: 'openadlc-testbed',
@@ -621,5 +624,89 @@ describe('saving a repository’s settings while other saves are in flight', () 
     // Another admin chose Always; the page's next read says so.
     await draw({ ...REPO, stageModes: { ...REPO.stageModes, spec: 'autonomous' } });
     expect(chosen('Design')?.textContent).toBe('Always');
+  });
+});
+
+/**
+ * Settings → Repositories, for a repository that ships by release:
+ * 620legal/OpenADLC, whose installs take a change only from a release. A
+ * person sets it here, and the page says what a merge then does and whether
+ * the app hears a release published.
+ */
+describe('a repository that ships by release, in its settings', () => {
+  const RULES = {
+    testing: { on: 'release' as const, workflow: 'deploy-testing', smoke: 'smoke-testing' },
+    production: { on: 'after-testing' as const, approval: 'auto' as const, soakMinutes: 30, workflow: 'promote-production', rollback: 'rollback-production' },
+  };
+  const DELIVERY = { source: 'repository' as const, rules: RULES, testingUrl: null, fileError: null };
+
+  it('says cards reach Done when a published release contains their merge, and nothing of a testing deploy or a promote', () => {
+    const said = deliveryLines(DELIVERY);
+    expect(said.rules).toEqual([
+      'Ships by release: cards reach Done when a published release contains their merge.',
+      'A merge runs no testing deploy: its card waits in Ship until a release that is not a draft or a prerelease contains it, then goes to Done saying which.',
+    ]);
+    expect(SHIPS_BY_RELEASE_LINE).toBe(said.rules[0]);
+    // Whatever an earlier deploy-testing run did.
+    expect(deliveryLines(DELIVERY, 'deploy-testing run 39836758586 was skipped').rules[0]).toBe(SHIPS_BY_RELEASE_LINE);
+  });
+
+  it('shows the line and a ticked box a person can change, and where the app is not subscribed, says so with where to tick it', () => {
+    const page = 'https://github.com/organizations/620legal/settings/apps/openadlc-620legal/permissions';
+    const box = (html: string) => /<input type="checkbox"[^>]*aria-describedby="openadlc-testbed-ships-by-release-line"[^>]*\/>/.exec(html)?.[0] ?? '';
+    const html = settings({ ...REPO, delivery: DELIVERY, releaseEvents: { subscribed: false, url: page } });
+    expect(html).toContain(SHIPS_BY_RELEASE_LINE);
+    expect(box(html)).toContain('checked=""');
+    expect(box(html)).not.toContain('disabled=""');
+    expect(html).toContain('The OpenADLC app is not subscribed to Release events, so a release moves its cards at the next deploy sweep rather than as it is published.');
+    expect(html).toContain(`href="${page}"`);
+
+    const heard = settings({ ...REPO, delivery: DELIVERY, releaseEvents: { subscribed: true, url: null } });
+    expect(heard).not.toContain('not subscribed to Release events');
+    // Off, it is a box to tick, and nothing is said of the app.
+    const off = settings({ ...REPO, delivery: { ...DELIVERY, rules: { ...RULES, testing: { ...RULES.testing, on: 'merge' } } }, releaseEvents: { subscribed: false, url: page } });
+    expect(box(off)).not.toBe('');
+    expect(box(off)).not.toContain('checked=""');
+    expect(off).not.toContain(SHIPS_BY_RELEASE_LINE);
+    expect(off).not.toContain('not subscribed to Release events');
+  });
+
+  it('cannot be changed here where .github/openadlc.yml sets the rules, and says where it is changed', () => {
+    const html = renderToStaticMarkup(<ShipsByRelease repo="openadlc-testbed" delivery={{ ...DELIVERY, source: 'file' }} releaseEvents={null} />);
+    expect(html).toMatch(/<input type="checkbox"[^>]*disabled=""/);
+    expect(html).toContain('Set by testing.on in .github/openadlc.yml, which always wins over a setting here: change it there by a pull request.');
+  });
+
+  it('saves a tick as it is made, and puts the box back with why when the bridge refuses', async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root: Root = createRoot(container);
+    const off = { ...DELIVERY, rules: { ...RULES, testing: { ...RULES.testing, on: 'merge' as const } } };
+    try {
+      await act(async () => {
+        root.render(<ShipsByRelease repo="openadlc-testbed" delivery={off} releaseEvents={null} />);
+      });
+      const box = () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+      await act(async () => {
+        box().click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(vi.mocked(setShipsByRelease)).toHaveBeenLastCalledWith('openadlc-testbed', true);
+      expect(box().checked).toBe(true);
+
+      saved.release = { ok: false, error: 'the rules could not be read' };
+      await act(async () => {
+        box().click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(vi.mocked(setShipsByRelease)).toHaveBeenLastCalledWith('openadlc-testbed', false);
+      expect(box().checked).toBe(true);
+      expect(container.textContent).toContain('Not saved: the rules could not be read');
+    } finally {
+      saved.release = null;
+      act(() => root.unmount());
+      container.remove();
+    }
   });
 });

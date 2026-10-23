@@ -49,6 +49,7 @@ import { repoOwnerCheck } from './checks/repo-owner.js';
 import { rulesCheck, skippedByLastApply } from './checks/repository.js';
 import { webhookCheck } from './checks/webhook.js';
 import { deliveryCheck, productionEnvironmentOf } from './checks/delivery.js';
+import { shipsByReleaseCheck } from './checks/ships-by-release.js';
 import { effectiveDelivery, type DeliveryKnowledge } from '../delivery-rules.js';
 import type { HealthCheck } from './types.js';
 
@@ -338,6 +339,19 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
       // A crew that could not be read is no answer, not an empty crew: read as
       // nobody, no reviewer matched it and every repository passed.
       crewLogins: async () => (await bots.listBots()).map((bot) => bot.githubLogin).filter((login): login is string => Boolean(login)),
+    }),
+    shipsByReleaseCheck({
+      repos: async () => (await repos.listRepos()).map((repo) => ({ name: repo.name, fullName: repo.fullName })),
+      // Rules that could not be read are only a fallback: not known either way.
+      rules: async (repo) => {
+        const record = await repos.getRepoByName(repo.name);
+        if (!record) return null;
+        const delivery = wiring.delivery
+          ? await wiring.delivery.get(record)
+          : await effectiveDelivery({ repo: record, client: await asAutomation(actors, config).catch(() => null) });
+        return delivery.readError ? null : delivery.rules;
+      },
+      appEvents: () => app.events(),
     }),
     leaseCheck({
       leases: () => leases.listActiveLeases(),

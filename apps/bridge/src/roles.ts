@@ -165,6 +165,8 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // switched to automatic delivery instead (`deploy-routes.ts`).
   'POST /v1/repos/:repo/deploys/:sha/release': 'admin',
   'POST /v1/repos/:repo/delivery/automatic': 'admin',
+  // Whether the repository ships by release: its stored rules, as Settings changes them.
+  'POST /v1/repos/:repo/delivery/ships-by-release': 'admin',
   'POST /v1/crew/seats': 'admin',
   'POST /v1/crew/seats/:seat/remove': 'admin',
   'POST /v1/model-accounts': 'admin',

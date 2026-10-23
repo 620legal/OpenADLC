@@ -358,6 +358,34 @@ describe('a merge', () => {
     expect(dispatched).toEqual([]);
   });
 
+  /**
+   * 620legal/OpenADLC ships as a release. Its skipped deploy-testing sent
+   * each card to Done at the next sweep, saying shipped while no install had
+   * the change.
+   */
+  it('dispatches nothing where the repository ships by release, and leaves the merge to what ships by release', async () => {
+    const { line, dispatched } = pipeline(rules({ testing: { on: 'release' } }));
+    expect(await line.onMerged(REPO, 40, 'abc1234def')).toBe('app#40: app ships by release, and nothing here records its merge; the deploy sweep finds it');
+    expect(await line.deployTesting(REPO, 'abc1234def', 40)).toBe('app@abc1234: app ships by release, so no testing deploy is dispatched');
+    expect(dispatched).toEqual([]);
+    expect(world.runs.size).toBe(0);
+
+    const merged = vi.fn(async () => 'app#40: merged; app ships by release');
+    const onLeaseReleased = vi.fn();
+    const shipping = new DeployPipeline({
+      delivery: { get: async () => ({ rules: rules({ testing: { on: 'release' } }), source: 'repository', testingUrl: null, fileError: null }) },
+      client: async () => null,
+      sendBack: null,
+      releases: { merged, onLeaseReleased } as never,
+      now: () => Date.parse('2026-10-20T09:00:00Z'),
+    });
+    const listener = () => undefined;
+    shipping.onLeaseReleased(listener);
+    expect(onLeaseReleased).toHaveBeenCalledWith(listener);
+    expect(await shipping.onMerged(REPO, 40, 'abc1234def')).toBe('app#40: merged; app ships by release');
+    expect(merged).toHaveBeenCalledWith(REPO, 40, 'abc1234def', new Date('2026-10-20T09:00:00Z'));
+  });
+
   it('gives the step back when GitHub refuses, so the sweep tries again', async () => {
     const { line } = pipeline(DEFAULT_DELIVERY_RULES, { refuse: true });
     expect(await line.onMerged(REPO, 40, 'abc1234def')).toContain('the deploy sweep tries again');
@@ -1358,6 +1386,20 @@ describe('a merge whose testing deploy had nothing to deploy', () => {
       { id: 'thread-lead', subject_ref: 'app#88' },
     ];
   };
+
+  it('moves none of its cards where the repository ships by release now, and still lets its lease go', async () => {
+    // Dispatched before 620legal/OpenADLC was set to ship by release, skipped after.
+    dispatched();
+    board();
+    const { line, moves } = pipeline(rules({ testing: { on: 'release' } }));
+
+    const said = await line.onTestingRun(REPO, SHA, { id: 39836758586, conclusion: 'skipped' });
+
+    expect(moves).toEqual([]);
+    expect(world.audits.some((entry) => entry.action === 'deploy.shipped_by_merging')).toBe(false);
+    expect(said).toContain('app@fe6b790: app ships by release, so its cards wait in Ship for a published release that contains it');
+    expect(world.released.map((one) => one.prNumber)).toEqual([88]);
+  });
 
   it('moves its cards in Ship to Done, as a merge that ships by merging, with why on the move, in the timeline and in the audit log', async () => {
     dispatched();

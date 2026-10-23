@@ -163,6 +163,12 @@ export interface BoardCard {
    * otherwise, and from an older bridge.
    */
   noMerge?: boolean;
+  /**
+   * In Ship, where its repository ships by release: no deploy is coming for
+   * it, and it goes to Done when a published release contains its merge.
+   * Absent otherwise, and from an older bridge.
+   */
+  shipsByRelease?: boolean;
 }
 
 export interface BoardColumn {
@@ -1048,6 +1054,13 @@ export const api = {
         delivery?: RepoDelivery | null;
         /** Why its newest testing deploy had nothing to deploy, so its merges ship by merging; null when it deployed. Absent from an older bridge. */
         deploysNothing?: string | null;
+        /**
+         * Whether the app is subscribed to Release events, for a repository
+         * that ships by release, and where to tick them when it is not. Null
+         * before that is known, or where it does not ship that way. Absent
+         * from an older bridge.
+         */
+        releaseEvents?: ReleaseEvents | null;
       }[];
       /** How many rounds a review runs before it stops and asks. Absent from an older bridge. */
       maxReviewRounds?: number | null;
@@ -1058,11 +1071,18 @@ export const api = {
 export interface RepoDelivery {
   source: 'file' | 'repository' | 'setting';
   rules: {
-    testing: { on: 'merge' | 'none'; url?: string; workflow: string; smoke: string };
+    testing: { on: 'merge' | 'none' | 'release'; url?: string; workflow: string; smoke: string };
     production: { on: 'after-testing' | 'none'; approval: 'reviewers' | 'auto'; soakMinutes: number; workflow: string; rollback: string };
   };
   testingUrl: string | null;
   fileError: string | null;
+}
+
+/** Whether the OpenADLC app hears a release published: what a repository that ships by release waits on. */
+export interface ReleaseEvents {
+  subscribed: boolean;
+  /** The app's Permissions & events page, where Release is ticked, when it is not. */
+  url: string | null;
 }
 
 /** A person's pause of new work, across the install or in one repository. */

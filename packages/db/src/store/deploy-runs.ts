@@ -43,6 +43,12 @@ export interface DeployRun {
   sentBackAt: string | null;
   detail: string | null;
   createdAt: string;
+  /**
+   * When its merge was made, where the merge's row was written knowing it
+   * (`ensure`): the release a repository ships by is looked for from then.
+   * Absent or null, `createdAt` stands for it.
+   */
+  mergedAt?: string | null;
 }
 
 interface Row {
@@ -69,6 +75,7 @@ interface Row {
   sent_back_at: Date | null;
   detail: string | null;
   created_at: Date;
+  merged_at?: Date | null;
 }
 
 const iso = (value: Date | null): string | null => (value ? value.toISOString() : null);
@@ -98,6 +105,7 @@ function toRun(row: Row): DeployRun {
     sentBackAt: iso(row.sent_back_at),
     detail: row.detail,
     createdAt: row.created_at.toISOString(),
+    mergedAt: iso(row.merged_at ?? null),
   };
 }
 
@@ -106,13 +114,15 @@ export async function get(repoId: string, sha: string): Promise<DeployRun | null
   return row ? toRun(row) : null;
 }
 
-/** The commit's row, made when there is none. */
-export async function ensure(repoId: string, sha: string, prNumber: number | null): Promise<DeployRun> {
+/** The commit's row, made when there is none; `mergedAt`, when its merge was made, kept where the row has none. */
+export async function ensure(repoId: string, sha: string, prNumber: number | null, mergedAt: Date | null = null): Promise<DeployRun> {
   const row = await queryOne<Row>(
-    `insert into deploy_runs (repo_id, sha, pr_number) values ($1, $2, $3)
-     on conflict (repo_id, sha) do update set pr_number = coalesce(deploy_runs.pr_number, excluded.pr_number)
+    `insert into deploy_runs (repo_id, sha, pr_number, merged_at) values ($1, $2, $3, $4)
+     on conflict (repo_id, sha) do update set
+       pr_number = coalesce(deploy_runs.pr_number, excluded.pr_number),
+       merged_at = coalesce(deploy_runs.merged_at, excluded.merged_at)
      returning *`,
-    [repoId, sha, prNumber],
+    [repoId, sha, prNumber, mergedAt],
   );
   if (!row) throw new Error(`could not record the deploy of ${sha}`);
   return toRun(row);

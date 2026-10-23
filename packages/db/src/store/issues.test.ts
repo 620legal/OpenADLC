@@ -9,7 +9,7 @@ vi.mock('../client.js', () => ({
 }));
 
 import { query, queryOne } from '../client.js';
-import { anyDoneBefore, boardCards, boardIssues, byNextFirst, getIssue, getIssues, listBlockedIssues, listRoutableIssues, priorityRank, resolveDependency, setIssueLabels, setVouched, upsertIssue, workInFlight, type IssueRecord } from './issues.js';
+import { anyDoneBefore, boardCards, boardIssues, byNextFirst, getIssue, getIssues, listBlockedIssues, listRoutableIssues, priorityRank, resolveDependency, setIssueLabels, setIssueStage, setShippedAt, setVouched, upsertIssue, workInFlight, type IssueRecord } from './issues.js';
 
 /**
  * The order is a comparator rather than a `order by` clause so that it can be
@@ -375,5 +375,59 @@ describe('the issue a dependency names', () => {
     vi.mocked(queryOne).mockResolvedValueOnce(repoRow as never);
     vi.mocked(query).mockResolvedValueOnce([] as never);
     expect(await resolveDependency(OWN, { repo: 'owner/a', number: 99 })).toEqual({ managed: true, issue: null });
+  });
+});
+
+/**
+ * When a card shipped, where its move to Done says: a release's publish time
+ * for a repository that ships by release. The board read it from the card's
+ * last deploy task, else from when its row changed, which for a release the
+ * deploy sweep found later is the sweep.
+ */
+describe('when a card in Done shipped', () => {
+  beforeEach(() => {
+    vi.mocked(query).mockReset();
+    vi.mocked(query).mockImplementation((async () => []) as never);
+    vi.mocked(queryOne).mockReset();
+  });
+
+  it('is written only on a card in Done, without marking its row changed', async () => {
+    const at = new Date('2026-10-20T09:00:00.000Z');
+    await setShippedAt('repo-1', 12, at);
+    const [sql, params] = vi.mocked(query).mock.calls[0]!;
+    expect(sql).toContain('set shipped_at = $3');
+    expect(sql).toContain("stage = 'done'");
+    expect(sql).not.toContain('updated_at');
+    expect(params).toEqual(['repo-1', 12, at]);
+  });
+
+  it('is read with the issue, and cleared when the card leaves Done', async () => {
+    vi.mocked(query).mockResolvedValueOnce([
+      {
+        id: 'i1',
+        repo_id: 'repo-1',
+        repo_name: 'openadlc',
+        number: 12,
+        title: 'A change',
+        stage: 'done',
+        labels: [],
+        declared_paths: [],
+        pr_changed_paths: [],
+        body: '',
+        url: null,
+        pr_number: 40,
+        updated_at: new Date('2026-10-22T09:00:00.000Z'),
+        created_at: new Date('2026-10-01T09:00:00.000Z'),
+        shipped_at: new Date('2026-10-20T09:00:00.000Z'),
+      },
+    ] as never);
+    expect((await getIssue('repo-1', 12))?.shippedAt).toBe('2026-10-20T09:00:00.000Z');
+    expect(String(vi.mocked(query).mock.calls[0]![0])).toContain('i.shipped_at');
+
+    await setIssueStage('repo-1', 12, 'build');
+    expect(String(vi.mocked(query).mock.calls[1]![0])).toContain("shipped_at = case when $3 = 'done' then shipped_at end");
+    vi.mocked(queryOne).mockResolvedValueOnce(null);
+    await upsertIssue({ repoId: 'repo-1', number: 12, title: 'A change', stage: 'review', labels: [], declaredPaths: [], url: null, prNumber: 40 }).catch(() => undefined);
+    expect(String(vi.mocked(queryOne).mock.calls.at(-1)![0])).toContain("shipped_at = case when excluded.stage = 'done' then issues.shipped_at end");
   });
 });

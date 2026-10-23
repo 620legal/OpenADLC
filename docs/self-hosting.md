@@ -625,7 +625,11 @@ Settings → Developer settings → GitHub Apps → New GitHub App.
   app is the outer bound and the account's role on the repository is the real
   limit.
 - **Subscribe to events:** issues, issue comment, pull request, pull request
-  review, workflow run and deployment status.
+  review, workflow run, deployment status and release. Release is what moves
+  the cards of a repository that ships by release
+  ([configuration](configuration.md#shipping-by-release)) as a release is
+  published; without it the deploy sweep finds the release later, and the
+  `ships-by-release` check says so only where a repository ships that way.
 - Install the app on the repositories the crew works in — on each account they
   belong to, when that is more than one (below).
 

@@ -405,6 +405,18 @@ describe('the app’s permissions, compared with what this OpenADLC asks for', (
     expect(results.find((result) => result.subject === 'event:issues')).toMatchObject({ ok: true });
   });
 
+  it('blocks nothing on an app not subscribed to Release events, which only a repository that ships by release needs', async () => {
+    // Said by `ships-by-release`, as a warning, where a repository ships that way.
+    const reader = appReader({ events: ALL_EVENTS.filter((event) => event !== 'release') });
+    const results = await appChecks(reader).permissions.run(NOW);
+    expect(results.find((result) => result.subject === 'event:release')).toBeUndefined();
+    expect(results.some((result) => result.ok === false)).toBe(false);
+    expect(await appChecks(reader).events()).toEqual({
+      events: ALL_EVENTS.filter((event) => event !== 'release'),
+      page: 'https://github.com/settings/apps/openadlc-janedoe/permissions',
+    });
+  });
+
   it('passes an app subscribed to every event the bridge acts on', async () => {
     const results = await appChecks(appReader({})).permissions.run(NOW);
     expect(results.filter((result) => (result.subject ?? '').startsWith('event:') && result.ok !== true)).toEqual([]);

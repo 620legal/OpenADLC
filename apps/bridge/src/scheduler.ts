@@ -1438,7 +1438,11 @@ export class Scheduler {
    * here too: that merge shipped by merging. So is one whose merge is older
    * than the newest, when the newest merge's deploy, which carries it, had
    * nothing to deploy (`carriedMoved`). One with no pull request recorded has
-   * no merge for either to read, and the sweep says to move it by hand.
+   * no merge for either to read, and the sweep says to move it by hand. In a
+   * repository that ships by release nothing is deployed: an issue in Ship
+   * goes to Done once a published release contains its merge, found here from
+   * the repository's releases when the release's delivery never came
+   * (`ReleaseShipping.sweep`).
    *
    * So the sweep looks, and then either says there is nothing to do, or
    * dispatches the testing deploy of the newest merge, when that merge has no
@@ -1471,12 +1475,22 @@ export class Scheduler {
       .filter((issue) => issue.stage === 'merged')
       .map((issue) => ({ repo: issue.repoName, number: issue.number, prNumber: issue.prNumber }));
     const { waiting: byRules, moved: movedByRules } = await this.shippedByMerging(inShip);
+    // A repository that ships by release dispatches no testing deploy: its
+    // cards go to Done once a published release contains their merge, found
+    // here from its releases when the release's delivery never came, and
+    // none of them is left for the plan below.
+    const releases = this.pipeline?.releases;
+    const { waiting: notByRelease, moved: movedByRelease } = releases
+      ? await releases
+          .sweep(byRules)
+          .catch((error: unknown) => ({ waiting: byRules, moved: [`the releases could not be looked at: ${error instanceof Error ? error.message : String(error)}`] }))
+      : { waiting: byRules, moved: [] as string[] };
     // And one whose own testing deploy had nothing to deploy, settled by its
     // delivery, by the check above, or before its move to Done was made there:
     // the cards 620legal/OpenADLC's skipped deploy-testing left in Ship.
     const { waiting: kept, moved: movedByDeploy } = this.pipeline
-      ? await this.nothingToDeployMoved(byRules)
-      : { waiting: byRules, moved: [] as string[] };
+      ? await this.nothingToDeployMoved(notByRelease)
+      : { waiting: notByRelease, moved: [] as string[] };
     const stays = new Set(kept.map((item) => `${item.repo}#${item.number}`));
     const unplaced = found.filter((item) => stays.has(`${item.repo}#${item.number}`));
     // With the pipeline, the testing deploy is dispatched as the app (or the
@@ -1496,7 +1510,7 @@ export class Scheduler {
     const { waiting, moved: movedByCarrier } = this.pipeline
       ? await this.carriedMoved(unplaced, newest)
       : { waiting: unplaced, moved: [] as string[] };
-    const moved = [...movedByRules, ...movedByDeploy, ...movedByCarrier];
+    const moved = [...movedByRules, ...movedByRelease, ...movedByDeploy, ...movedByCarrier];
     const priorDeploys = this.pipeline
       ? await this.dispatchedDeploys(waiting, newest)
       : await tasks.listTasksForSubjects(
