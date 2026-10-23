@@ -7,7 +7,20 @@ vi.mock('../client.js', () => ({
 }));
 
 import { query, queryOne } from '../client.js';
-import { RepoNameTaken, addRepo, getProductionChoice, getRepoByName, listRepos, removeRepo, setDefaultBranch, setProductionChoice, updateRepoSettings, upsertRepo } from './repos.js';
+import {
+  RepoNameTaken,
+  addRepo,
+  getProductionChoice,
+  getRepoByName,
+  getTaskPostgres,
+  listRepos,
+  removeRepo,
+  setDefaultBranch,
+  setProductionChoice,
+  setTaskPostgres,
+  updateRepoSettings,
+  upsertRepo,
+} from './repos.js';
 
 function row(extra: Record<string, unknown> = {}) {
   return {
@@ -379,5 +392,30 @@ describe('how a repository’s production ships', () => {
     await setProductionChoice('repo-1', { approval: 'auto', soakMinutes: 30, reviewers: [] });
     expect(String(vi.mocked(query).mock.calls[0]![0])).toContain('production_approval = $2, production_soak_minutes = $3, production_reviewers = $4');
     expect(vi.mocked(query).mock.calls[0]![1]).toEqual(['repo-1', 'auto', 30, []]);
+  });
+});
+
+describe('a repository’s Postgres servers for its tasks', () => {
+  const SETTING = { servers: [{ port: 55432, superuser: 'core', password: 'core', database: 'core_db', image: 'pgvector/pgvector:pg16' }], sharedDatabase: false };
+
+  it('reads the setting off its own column, and none as null', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ task_postgres: SETTING }).mockResolvedValueOnce({ task_postgres: null }).mockResolvedValueOnce(null);
+
+    expect(await getTaskPostgres('repo-1')).toEqual(SETTING);
+    expect(await getTaskPostgres('repo-1')).toBeNull();
+    expect(await getTaskPostgres('gone')).toBeNull();
+    expect(sent()[0]).toEqual({ sql: 'select task_postgres from repos where id = $1', params: ['repo-1'] });
+  });
+
+  it('writes the whole setting as JSON, or clears it, and touches no other column', async () => {
+    vi.mocked(query).mockResolvedValue([]);
+
+    await setTaskPostgres('repo-1', SETTING);
+    await setTaskPostgres('repo-1', null);
+
+    expect(sent()).toEqual([
+      { sql: 'update repos set task_postgres = $2, updated_at = now() where id = $1', params: ['repo-1', JSON.stringify(SETTING)] },
+      { sql: 'update repos set task_postgres = $2, updated_at = now() where id = $1', params: ['repo-1', null] },
+    ]);
   });
 });

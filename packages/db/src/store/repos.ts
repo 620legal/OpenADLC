@@ -450,6 +450,26 @@ export async function setDelivery(repoId: string, input: { deliveryRules?: unkno
 }
 
 /**
+ * The Postgres servers a person gave the repository's tasks, as its row holds
+ * them (`migrations/0152_repo_task_postgres.sql`); null for none. Read as
+ * stored: whoever acts on it checks it with `parseTaskPostgres` first, as
+ * hostd does at every task start.
+ */
+export async function getTaskPostgres(repoId: string): Promise<unknown | null> {
+  const row = await queryOne<{ task_postgres: unknown | null }>('select task_postgres from repos where id = $1', [repoId]);
+  return row?.task_postgres ?? null;
+}
+
+/**
+ * Replaces them, all of them; null takes them away. Only the bridge's admin
+ * route writes it (`task-postgres-routes.ts`), after `parseTaskPostgres`, so
+ * what a person typed is what is kept.
+ */
+export async function setTaskPostgres(repoId: string, setting: unknown | null): Promise<void> {
+  await query('update repos set task_postgres = $2, updated_at = now() where id = $1', [repoId, setting === null ? null : JSON.stringify(setting)]);
+}
+
+/**
  * How a repository's production ships, as recorded when it was set up; see
  * `migrations/0047_repo_production_choice.sql`. `approval` is null while
  * nobody has been asked. It fills what the delivery rules leave out.

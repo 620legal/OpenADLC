@@ -163,10 +163,13 @@ down() {
   eval "$(exports)"
   if [ -f "$home/install.json" ]; then node "$root/apps/cli/bin/openadlc.mjs" down || true; fi
   tmux -L "$tmux_socket" kill-server 2> /dev/null || true
-  docker rm -f "$database" > /dev/null 2>&1 || true
+  # With their anonymous volumes: without -v the database's data, the task
+  # database server's and each task Postgres server's stayed on the daemon,
+  # unnamed, after every down.
+  docker rm -f -v "$database" > /dev/null 2>&1 || true
   # What the docker driver made for its tasks: only what carries this install's label.
   if command -v docker > /dev/null 2>&1; then
-    docker ps -aq --filter "label=openadlc.install=$install_id" | xargs docker rm -f > /dev/null 2>&1 || true
+    docker ps -aq --filter "label=openadlc.install=$install_id" | xargs docker rm -f -v > /dev/null 2>&1 || true
     docker network ls -q --filter "label=openadlc.install=$install_id" | xargs docker network rm > /dev/null 2>&1 || true
     docker network rm "$install_id-tasks" > /dev/null 2>&1 || true
     docker volume ls -q --filter "label=openadlc.install=$install_id" | xargs docker volume rm > /dev/null 2>&1 || true

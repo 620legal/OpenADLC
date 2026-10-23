@@ -1,3 +1,4 @@
+import type { TaskPostgresServer } from '@openadlc/shared';
 import type { PnpmFill } from '../pnpm-store.js';
 
 export interface SessionHandle {
@@ -37,8 +38,16 @@ export interface TaskComputerSpec {
   login: { accountId: string; provider: 'openai' | 'xai' } | null;
   cpus: number;
   memoryGb: number;
-  /** Whether the task gets a database of its own (`bots.sidecar_db`). */
+  /** Whether the task gets a database of its own on the host's task database server (`bots.sidecar_db`). */
   database: boolean;
+  /**
+   * Postgres servers of the task's own, from its repository's setting
+   * (`TaskPostgresSetting`): each made in the computer's network namespace,
+   * on loopback at its port, and taken down with the computer. Empty or
+   * absent for none; a driver that cannot give a task one ignores it, and
+   * says so by leaving `TaskComputer.postgres` unset.
+   */
+  postgres?: TaskPostgresServer[];
 }
 
 /** A task's computer, as the driver made it. */
@@ -60,6 +69,12 @@ export interface TaskComputer {
   cacheDir?: string | null;
   /** The repository it was made for (`repoKeyOf`), whose pnpm store it reads; null for none. */
   repoKey?: string | null;
+  /**
+   * Where its own Postgres servers listen, as the task reaches them
+   * (`127.0.0.1:<port>`), each taking connections. Empty for none, and unset
+   * under a driver that has no way to give a task one (`local`).
+   */
+  postgres?: string[];
 }
 
 /** A computer found on the host, whatever hostd remembers of it; what the reaper decides about. */
@@ -110,6 +125,11 @@ export interface ExecDriver {
   adopt?(found: FoundComputer): Promise<TaskComputer | null>;
   /** Removes a found computer nothing holds and no task needs. */
   discard?(name: string): Promise<void>;
+  /**
+   * Removes what a computer had beside it once the computer itself is gone —
+   * a task's own Postgres servers — and answers the names it removed.
+   */
+  sweepOrphans?(): Promise<string[]>;
   /** Whether a container is a warm computer the pool holds, unclaimed (`WarmPool`). */
   isWarm?(name: string): boolean;
   /** Brings the warm pool to its targets, where there is one. */

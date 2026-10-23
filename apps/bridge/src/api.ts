@@ -129,6 +129,7 @@ import { readSeatPauses, seatPausedReason } from './seat-pause.js';
 import type { HealthAction } from '@openadlc/shared';
 import { attachmentIds, claimableFor, claimWindowStart, registerAttachmentRoutes } from './attachment-routes.js';
 import { registerDesignMemoryRoutes } from './design-memory.js';
+import { registerTaskPostgresRoutes } from './task-postgres-routes.js';
 import { ignoredSubjects, issueForSubject, parseRef, taskSummary } from './work.js';
 import { endedWithoutPullRequest, readBranch, workLanded } from './build-left.js';
 import { SpendingLimitRejected, applySpendingLimits, spendingView } from './spending-limits.js';
@@ -1518,6 +1519,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
   });
   registerAttachmentRoutes(router);
   registerDesignMemoryRoutes(router);
+  // A repository's own Postgres servers for its tasks, a person's to set (`task-postgres-routes.ts`).
+  registerTaskPostgresRoutes(router);
 
   router.get('/v1/gates', async () => ({ gates: await threads.listOpenGates() }));
 

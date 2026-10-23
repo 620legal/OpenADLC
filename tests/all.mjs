@@ -73,6 +73,15 @@ const suites = [
     needs: 'dockerComputers',
   },
   {
+    // The same: a task's own Postgres server is a container in its computer's
+    // namespace, and only a real daemon says who can reach it.
+    name: 'task postgres',
+    command: process.execPath,
+    args: [join(here, 'task-postgres.mjs')],
+    cwd: root,
+    needs: 'dockerComputers',
+  },
+  {
     name: 'github (live)',
     command: process.execPath,
     args: [join(here, 'github-live.mjs')],

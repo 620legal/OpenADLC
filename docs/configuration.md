@@ -99,7 +99,7 @@ So does each bot's avatar color, chosen in Settings → Appearance
 | `role` | `intake`, `spec`, `implement`, `review_lead`, `review_second`, `review_security`, `deploy`, `qa` or `automation` |
 | `engine` | `claude`, `codex`, `grok` or `none` |
 | `model` | A model id, or `newest:<family>` to follow a family |
-| `sidecarDb` | Whether each of the seat's tasks gets a database of its own, for `make setup`, on the host's task database server (docker driver) |
+| `sidecarDb` | Whether each of the seat's tasks gets a database of its own, for `make setup`, on the host's task database server (docker driver); in a repository given Postgres servers of its own for its tasks, those instead ([self-hosting](self-hosting.md#a-postgres-server-of-the-tasks-own)) |
 | `cpus`, `memoryGb` | What each of the seat's task computers is given (docker driver); default 1 and 2. Stored on the row at every `openadlc up` |
 | `maxTasks` | How many tasks the seat runs at once, 1 to 16, each in a computer of its own and all as its one account. Left out, the row keeps what it has — 1 for a new seat, or what a person set in Crew → "tasks at once" (`PATCH /v1/crew/:bot/tasks-at-once`, admin only, audited); written here, the file wins at every `openadlc up`. Keep a seat on an OpenAI or xAI subscription at 1: its CLI refreshes one sign-in for every task on it |
 

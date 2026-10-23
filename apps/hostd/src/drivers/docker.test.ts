@@ -98,9 +98,15 @@ function docker(
       return ok();
     }
     if (args[0] === 'ps') {
-      const install = args.find((arg) => arg.startsWith('label=openadlc.install='))?.split('=')[2];
+      // Every `label=<key>=<value>` filter holds, as Docker's do.
+      const wanted = args
+        .filter((arg) => arg.startsWith('label='))
+        .map((arg) => {
+          const [key, ...value] = arg.slice('label='.length).split('=');
+          return [key!, value.join('=')] as const;
+        });
       const names = Object.entries(containers)
-        .filter(([, found]) => found.labels?.['openadlc.kind'] === 'computer' && found.labels?.['openadlc.install'] === install)
+        .filter(([, found]) => wanted.every(([key, value]) => found.labels?.[key] === value))
         .map(([name]) => name);
       return ok(`${names.join('\n')}\n`);
     }
@@ -1198,8 +1204,9 @@ describe('a Docker daemon that does not answer', () => {
     expect(timeoutOf((args) => args[0] === 'run')).toEqual([undefined]);
     expect(timeoutOf((args) => args.includes('make'))).toEqual([undefined]);
     expect(timeoutOf((args) => args.includes('tmux') && args.includes('list-sessions'))).toEqual([30_000]);
-    // Two listings: the reaper looks under the new label keys and FleetADLC's.
-    expect(timeoutOf((args) => args[0] === 'ps')).toEqual([30_000, 30_000]);
+    // Two listings: the reaper looks under the new label keys and FleetADLC's;
+    // and a third, the discarded computer's own Postgres servers.
+    expect(timeoutOf((args) => args[0] === 'ps')).toEqual([30_000, 30_000, 30_000]);
     expect(timeoutOf((args) => args[0] === 'rm')).toEqual([30_000]);
   });
 });

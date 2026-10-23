@@ -334,3 +334,11 @@ describe('0151, which indexes the issues the board reads', () => {
     expect(arms[1]).toContain("where i.stage = 'done' and i.updated_at >= $1 and");
   });
 });
+
+describe('0152, where a person gives a repository Postgres servers of its own for its tasks', () => {
+  const sql = statements('0152_repo_task_postgres.sql');
+
+  it('adds the setting as a column that starts empty, so no repository has servers it was not given', () => {
+    expect(sql).toEqual(['alter table repos add column if not exists task_postgres jsonb']);
+  });
+});

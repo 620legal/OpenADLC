@@ -15,8 +15,8 @@ beside the code in each package; `pnpm test` runs all of them, these
 > machine that has one. They run under plain `node`, not through `openadlc`, so the
 > ports and database in a scratch install's `install.json` do not reach them.
 > They clear tables to start from a known state: `pipeline.mjs`,
-> `concurrency.mjs`, `kill-and-restart.mjs` and `docker-computers.mjs` delete
-> every task and lease; `pipeline.mjs` and `concurrency.mjs` also delete every
+> `concurrency.mjs`, `kill-and-restart.mjs`, `docker-computers.mjs` and
+> `task-postgres.mjs` delete every task and lease; `pipeline.mjs` and `concurrency.mjs` also delete every
 > gate and session; `pipeline.mjs` also deletes ledger, merge-line and audit
 > rows, cancels every task hostd holds and rewrites the month's budget cap.
 > **Run them only against a scratch install, with the variables
@@ -55,8 +55,8 @@ tests' `check`, is the reference setup: an empty Postgres, `OPENADLC_HOME` and
 a testbed under `.ci/`, the scripted seed, and hostd, the bridge and the
 console started directly, so its bridge does not dispatch on its own. It runs
 `pipeline`, `terminal`, `kill-and-restart`, `concurrency` and `onboarding`
-(not on a draft pull request), and never the live suites or
-`docker-computers`.
+(not on a draft pull request), and never the live suites,
+`docker-computers` or `task-postgres`.
 
 ## The suites
 
@@ -67,6 +67,7 @@ console started directly, so its bridge does not dispatch on its own. It runs
 | `kill-and-restart.mjs` | Killing a session leaves the branch and the issue and returns the work to the board; restarting a bot cancels its tasks, gives their computers back and keeps the repository's mirror | a scripted install; deletes every task and lease |
 | `concurrency.mjs` | Concurrency 2 is one builder with room for two taking two issues, each in a computer of its own, or two builder seats; a third issue waits rather than going past what the builders run between them | a scripted install; sets the owner's tasks at once and puts it back; adds a `<seat>-2` builder unless one exists, and retires only one it added |
 | `docker-computers.mjs` | Under the docker driver, each task gets a container of its own on the install's task network (`scratch-tasks` on a scratch install), mounting only its own folder; two tasks cannot reach each other; the task database server is reachable from a task; container, folder and database go when the task ends; and how long a cold start takes | a scripted install on the docker driver, and `OPENADLC_DOCKER_COMPUTERS=1` for `all.mjs` to run it: it starts real containers |
+| `task-postgres.mjs` | A repository a person gave a Postgres server of its own (`PUT /v1/repos/:name/task-postgres`, refused without the console secret and for an image outside the allowlist) gets one in each task's computer's network namespace, publishing nothing; the task is told `OPENADLC_TASK_POSTGRES` and given no `DATABASE_URL`, reaches it at `127.0.0.1:55432` as the configured superuser, makes server-wide roles there, and a wrong password is refused; a second task at once has its own, cannot reach the first's and makes the same roles; each server goes with its computer, and one whose computer went otherwise is swept by the reaper. It holds each scripted session still (SIGSTOP inside the computer) while it looks, since a scripted run ends its task in a second | a scripted install on the docker driver, and `OPENADLC_DOCKER_COMPUTERS=1` for `all.mjs` to run it: it starts real containers, sets the first repository's setting and its owner's seat and puts both back |
 | `onboarding.mjs` | The walkthrough tells the truth about accounts, connections and steps; the device flow starts, or is refused without a client id, and no token reaches the browser | bridge, console and database; starts a device flow for the `intake` seat when a client id is set |
 | `github-live.mjs` | The GitHub write path as a real account: file an issue, move its stage label, assign it, open and answer a gate comment, write `review-gate`; then close it (`--keep` leaves it) | a connected automation bot; writes to the first repository in the install's database |
 | `github-live-pr.mjs` | Clone with a brokered token, branch under `agent/`, commit signed, push, open a pull request, and have GitHub refuse an unknown reviewer on it; then close it and delete the branch (`--keep` leaves them) | a bot with push access (`OPENADLC_LIVE_BUILDER`, else the automation bot) and `ssh-agent`; stores a signing key if the bot has none |

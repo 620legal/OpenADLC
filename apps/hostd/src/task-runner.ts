@@ -7,7 +7,19 @@ import { sweepTaskHomes } from '@openadlc/backup';
 import { bots, leases, modelAccounts, repos, tasks } from '@openadlc/db';
 import { listProviderModels, modelListCache, type AvailableModel, type ModelListCache } from '@openadlc/engines';
 import { engineKeyRef, getSecretStore, modelAccountRef } from '@openadlc/github';
-import { ATTACHMENTS_ENV, leaseExpiryFrom, type Bot, type BotRole, type ContextDocument, type TaskAttachment, type TaskKind } from '@openadlc/shared';
+import {
+  ATTACHMENTS_ENV,
+  leaseExpiryFrom,
+  parseTaskPostgres,
+  TASK_POSTGRES_ENV,
+  taskPostgresAddresses,
+  type Bot,
+  type BotRole,
+  type ContextDocument,
+  type TaskAttachment,
+  type TaskKind,
+  type TaskPostgresSetting,
+} from '@openadlc/shared';
 import { AttachmentClient, prepareAttachments, writeAttachments } from './task-attachments.js';
 import { DEFAULT_SETUP_TIMEOUT_MINUTES, type HostdConfig } from './config.js';
 import type { ExecDriver, TaskComputer } from './drivers/types.js';
@@ -98,6 +110,12 @@ interface ActiveTask {
    * for a computer adopted after a restart, the same URL rebuilt (`adopt`).
    */
   databaseUrl: string | null;
+  /**
+   * Where its own Postgres servers listen in its computer (`127.0.0.1:<port>`),
+   * which `make setup` and `make ci` are told as `OPENADLC_TASK_POSTGRES`;
+   * empty for none.
+   */
+  postgres: string[];
   repoHome: string;
   /** The repository's read-only pnpm store it installs from, or null for a store of its own in its home. */
   pnpmStore: string | null;
@@ -377,14 +395,14 @@ export class TaskRunner {
   }
 
   /**
-   * The repository's own setup target, against the bot's fresh database. A
-   * repository with no Makefile or no such target needs nothing done, so a
-   * missing target is not a failure.
+   * The repository's own setup target, against the task's fresh database or
+   * its own Postgres servers. A repository with no Makefile or no such target
+   * needs nothing done, so a missing target is not a failure.
    */
   private async prepare(
     computer: TaskComputer,
     worktree: string,
-    databaseUrl: string,
+    databaseUrl: string | null,
     repoHome: string,
     cache: Record<string, string> = {},
   ): Promise<void> {
@@ -396,7 +414,7 @@ export class TaskRunner {
     const result = await this.driver
       .exec(computer, ['make', '-s', 'setup'], {
         cwd: worktree,
-        env: { DATABASE_URL: databaseUrl, OPENADLC_REPO_HOME: repoHome, ...cache },
+        env: { ...(databaseUrl ? { DATABASE_URL: databaseUrl } : {}), OPENADLC_REPO_HOME: repoHome, ...cache },
         timeoutMs: minutes * 60_000,
       })
       .catch(() => null);
@@ -482,6 +500,14 @@ export class TaskRunner {
     // Found even once it is removed from OpenADLC: nothing new is started in one,
     // so this is a paused task in it being resumed, and it resumes where it was.
     const repo = input.repo ? await repos.getRepoByName(input.repo, { includeRemoved: true }) : null;
+    // Its repository's own Postgres servers, read at each start as the bot row
+    // is, so a change in Settings → Repositories applies to the next task. A
+    // seat that runs checks gets them in place of its database on the shared
+    // server, unless the repository asks for both: that database's URL would
+    // override the Makefile's own defaults, with a role that cannot make roles.
+    // Not read for a seat that runs no checks, which gets neither.
+    const taskPostgres = repo && bot.sidecarDb ? await this.taskPostgresOf(repo) : null;
+    const servers = taskPostgres?.servers ?? [];
 
     // The login this task's account needs, from the same resolution as its
     // model. A bot on a key or on another seat is given none, and a container
@@ -505,7 +531,8 @@ export class TaskRunner {
       login,
       cpus: bot.cpus ?? DEFAULT_CPUS,
       memoryGb: bot.memoryGb ?? DEFAULT_MEMORY_GB,
-      database: bot.sidecarDb,
+      database: bot.sidecarDb && (servers.length === 0 || taskPostgres?.sharedDatabase === true),
+      postgres: servers,
     });
     this.stopIfCancelled(input.taskId);
 
@@ -571,6 +598,18 @@ export class TaskRunner {
     // Its own database, emptied: a task's checks run against fixtures it owns,
     // never against what the task before it left behind.
     const databaseUrl = computer.databaseUrl;
+    // Its own Postgres servers, taking connections. A driver with no way to
+    // make one (`local`) leaves `postgres` unset; the task is told it has
+    // none rather than finding out at its first connection.
+    const postgres = computer.postgres ?? [];
+    if (servers.length > 0 && computer.postgres === undefined) {
+      console.warn(
+        `[hostd] ${bot.name}: ${repo?.fullName ?? 'its repository'} asks for a Postgres server of each task's own (${taskPostgresAddresses(servers).join(', ')}), ` +
+          `which the ${this.config.driver} driver cannot give: task ${input.taskId} starts without one. Run hostd with the docker driver`,
+      );
+      notes.push({ name: 'task-postgres.md', title: 'No Postgres server of this task’s own', content: noTaskPostgresBrief(repo?.fullName ?? null, servers, this.config.driver) });
+    }
+    const postgresEnv: Record<string, string> = postgres.length > 0 ? { [TASK_POSTGRES_ENV]: postgres.join(',') } : {};
 
     // Its own home, in its own directory and gone with it, and its
     // repository's npm cache. See `withRepoHome`.
@@ -593,7 +632,7 @@ export class TaskRunner {
     // which hostd would run outside the skill's tools, with the task token
     // and the sidecar database. A branch this task writes is its own.
     const ownTree = !input.checkoutExistingBranch || WRITES_THE_BRANCH.has(input.kind);
-    if (databaseUrl && ownTree) await this.prepare(computer, worktree, databaseUrl, repoHome, { ...cache, ...installEnv });
+    if ((databaseUrl || postgres.length > 0) && ownTree) await this.prepare(computer, worktree, databaseUrl, repoHome, { ...cache, ...postgresEnv, ...installEnv });
     this.stopIfCancelled(input.taskId);
 
     // The files its work item carries: text as documents, every file beside
@@ -687,6 +726,7 @@ export class TaskRunner {
       env: {
         ...minted.env,
         ...cache,
+        ...postgresEnv,
         OPENADLC_SKILLS_ROOT: this.config.driver === 'docker' ? '/skills' : this.config.skillsRoot,
         ...(attached.binaries.length > 0 ? { [ATTACHMENTS_ENV]: attached.binaries.join(',') } : {}),
       },
@@ -710,6 +750,7 @@ export class TaskRunner {
       repoFullName: repo?.fullName ?? null,
       branch,
       databaseUrl,
+      postgres,
       repoHome,
       pnpmStore,
       installEnv,
@@ -756,12 +797,28 @@ export class TaskRunner {
       branch: entry.branch,
       env: {
         ...(entry.databaseUrl ? { DATABASE_URL: entry.databaseUrl } : {}),
+        ...(entry.postgres.length > 0 ? { [TASK_POSTGRES_ENV]: entry.postgres.join(',') } : {}),
         OPENADLC_REPO_HOME: entry.repoHome,
         ...(entry.computer.cacheDir ? { OPENADLC_CACHE_DIR: entry.computer.cacheDir } : {}),
         ...(entry.pnpmStore ? { OPENADLC_PNPM_STORE: entry.pnpmStore } : {}),
         ...entry.installEnv,
       },
     };
+  }
+
+  /**
+   * A repository's Postgres servers for its tasks, as a person set them; null
+   * for none. A stored setting that no longer reads — written by hand, or by
+   * a bridge that allowed what this one does not — fails the start with what
+   * to correct: started without its server, a builder spends its task asking
+   * how to reach it.
+   */
+  private async taskPostgresOf(repo: { id: string; name: string }): Promise<TaskPostgresSetting | null> {
+    const read = parseTaskPostgres(await repos.getTaskPostgres(repo.id));
+    if (!read.ok) {
+      throw new Error(`${repo.name}'s Postgres servers for its tasks no longer read: ${read.error}. Correct them in Settings → Repositories → ${repo.name}`);
+    }
+    return read.setting;
   }
 
   /** Where a task reaches hostd: under the docker driver its computer has no route to the host's loopback. */
@@ -1204,6 +1261,8 @@ export class TaskRunner {
       // install's secret and the task id (`TaskDatabases.urlFor`), so local CI
       // runs against the task's own database; null when it has none.
       databaseUrl: computer.databaseUrl,
+      // Its servers kept running beside it; the driver found them again.
+      postgres: computer.postgres ?? [],
       repoHome: join(computer.slotDir, 'home'),
       pnpmStore: readPnpmStoreChoice(computer.slotDir),
       // The token is read from the secret store, which this cannot wait for.
@@ -1257,6 +1316,22 @@ export class TaskRunner {
     const entry = this.active.get(taskId);
     return entry && !entry.released ? entry.worktree : null;
   }
+}
+
+/**
+ * What a task is told when its repository asks for a Postgres server of its
+ * own and its driver cannot give one, so it does not spend itself finding out.
+ */
+export function noTaskPostgresBrief(repoFullName: string | null, servers: readonly { port: number }[], driver: string): string {
+  const where = taskPostgresAddresses(servers).join(', ');
+  return [
+    `${repoFullName ?? 'This repository'} asks for a Postgres server of each task's own, at ${where}, and this install runs the ${driver} driver, ` +
+      'which has no containers to make one in. This task has none, and `OPENADLC_TASK_POSTGRES` is not set.',
+    '',
+    'Whatever the Makefile does without it (its `db` target) is what there is. If the checks cannot pass without that server, say so ' +
+      'in Needs you rather than working round it: the install has to run hostd with the docker driver ' +
+      '(`openadlc init --driver docker`, then `openadlc down && openadlc up`).',
+  ].join('\n');
 }
 
 /**

@@ -12,6 +12,7 @@
     "kill-restart": "node kill-and-restart.mjs",
     "concurrency": "node concurrency.mjs",
     "docker-computers": "node docker-computers.mjs",
+    "task-postgres": "node task-postgres.mjs",
     "github-live": "node github-live.mjs",
     "github-live-pr": "node github-live-pr.mjs",
     "onboarding": "node onboarding.mjs",
