@@ -48,7 +48,7 @@ vi.mock('@openadlc/db', () => ({
   requests: {
     listRequestsForIssue: async (_repoId: string, number: number) =>
       number === 42
-        ? [{ id: 'c0ffee00-1111-4222-8333-944445555666', text: 'Cache the prices', context: 'The pricing page is slow on mobile.', repoId: 'repo-1', kind: 'feature', requestedBy: 'jane@acme.test', issueNumber: 42, state: 'filed', createdAt: '2026-09-17T09:00:00Z' }]
+        ? [{ id: 'c0ffee00-1111-4222-8333-944445555666', text: 'Cache the prices', context: 'The pricing page is slow on mobile.', repoId: 'repo-1', kind: 'feature', requestedBy: 'jane@acme.test', issueNumber: 42, issues: [{ repoId: 'repo-1', repoFullName: 'acme/widgets', number: 42, filedAt: '2026-09-17T09:30:00Z' }, { repoId: 'repo-2', repoFullName: 'acme/web', number: 4, filedAt: '2026-09-17T09:31:00Z' }], state: 'filed', createdAt: '2026-09-17T09:00:00Z' }]
         : [],
   },
   threads: {
@@ -445,6 +445,8 @@ describe('what design is given that a build is not', () => {
     expect(intake?.content).toContain('**Answer:** an hour');
     expect(intake?.content).toContain('- slow-page.png (image/png, 4 kB)');
     expect(intake?.content).toContain('http://console.test/?item=request%3Ac0ffee00');
+    // A request filed in two repositories: the design of one reads what its sibling is.
+    expect(intake?.content).toContain('- **Filed as:** acme/widgets#42, acme/web#4');
     // And what the repository decided before, which only design is given.
     const memory = documents.find((one) => one.name === 'design-memory.md');
     expect(memory?.content).toContain('### Prices are cached for an hour');

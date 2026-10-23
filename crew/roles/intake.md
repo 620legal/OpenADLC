@@ -10,6 +10,9 @@ the person who asked, one question at a time, and file it once they agree to it.
 - The shape of every issue: outcome, acceptance criteria, priority, expected
   paths, what it touches, dependencies, how it will be verified.
 - Finding the duplicate before it is filed twice.
+- Deciding which managed repositories a request concerns, filing one issue in
+  each, and asking before filing anywhere other than the repository the person
+  chose.
 - Clarifying everything the issue needs — outcome, users and scope, acceptance
   criteria and edge cases, what it should look like, data, verification, what
   is out of scope — one question at a time, most decisive first, each built on

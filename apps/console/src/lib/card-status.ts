@@ -62,13 +62,28 @@ export function requestStatus(card: BoardCard, pausedRepos: readonly string[] = 
       return { text: 'Intake working', tone: 'signal', mark: 'dot' };
     case 'waiting':
       return { text: 'Waiting for you', tone: 'attention', mark: 'dot' };
-    case 'filed':
+    case 'filed': {
+      // A request that spans repositories was filed as one issue in each:
+      // named by repository, and linked to the first. One issue is named by
+      // repository too when it is not the card's: "use web instead of api"
+      // read as api's "Filed #4" while it linked to web's.
+      const issues = card.issues ?? [];
+      const only = issues.length === 1 ? issues[0]! : null;
+      const filed =
+        issues.length > 1
+          ? `Filed as ${issues.map((issue) => `${issue.repo}#${issue.number}`).join(', ')}`
+          : only && only.repo && card.repo && only.repo !== card.repo
+            ? `Filed ${only.repo}#${only.number}`
+            : card.issueNumber
+              ? `Filed #${card.issueNumber}`
+              : 'Filed';
       return {
-        text: `${card.issueNumber ? `Filed #${card.issueNumber}` : 'Filed'}${paused ? ` · waits until ${card.repo} is resumed` : ''}`,
+        text: `${filed}${paused ? ` · waits until ${card.repo} is resumed` : ''}`,
         tone: 'muted',
         mark: 'check',
         ...(card.url ? { href: card.url } : {}),
       };
+    }
     default:
       return null;
   }

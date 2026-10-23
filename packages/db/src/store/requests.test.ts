@@ -15,7 +15,20 @@ vi.mock('./work-items.js', () => ({
 
 import { query, queryOne, withTransaction } from '../client.js';
 import { ensureLink } from './work-items.js';
-import { AmbiguousRequestPrefix, claimQueued, createRequest, findRequestByPrefix, listQueued, queueAgain, requeue, updateRequest } from './requests.js';
+import {
+  AmbiguousRequestPrefix,
+  claimQueued,
+  createRequest,
+  fileIssue,
+  findRequestByPrefix,
+  getRequest,
+  listQueued,
+  listRequestsForIssue,
+  queueAgain,
+  RequestAbandoned,
+  requeue,
+  updateRequest,
+} from './requests.js';
 
 const row = (id: string) => ({
   id,
@@ -171,13 +184,81 @@ describe('the queue of requests waiting for intake', () => {
 });
 
 describe('a request filed', () => {
-  it('keeps the repository it was filed in when it named none, and never replaces one it named', async () => {
-    vi.mocked(queryOne).mockResolvedValueOnce({ ...row('a4b02784-3ae8-450b-abe9-0c93eb4d67dc'), state: 'filed', issue_number: 7 });
-    await updateRequest('a4b02784-3ae8-450b-abe9-0c93eb4d67dc', { state: 'filed', issueNumber: 7, repoId: 'repo-2' });
-    const [sql, params] = vi.mocked(queryOne).mock.calls.at(-1)!;
-    expect(String(sql)).toContain('repo_id = coalesce(repo_id, $4)');
-    expect(params).toEqual(['a4b02784-3ae8-450b-abe9-0c93eb4d67dc', 'filed', 7, 'repo-2']);
-    expect(query).not.toHaveBeenCalled();
+  const ID = 'a4b02784-3ae8-450b-abe9-0c93eb4d67dc';
+  const filedRow = (issues: unknown[]) => ({ ...row(ID), state: 'filed', issue_number: 7, issues });
+
+  it('records the issue and marks the request filed, in one transaction', async () => {
+    vi.mocked(queryOne)
+      .mockResolvedValueOnce({ state: 'draft' })
+      .mockResolvedValueOnce({ issue_number: 7 })
+      .mockResolvedValueOnce(filedRow([{ repoId: 'repo-1', repoFullName: 'exampleco/api', number: 7, filedAt: '2026-10-23T13:00:00+00:00' }]));
+
+    const filed = await fileIssue(ID, 'repo-1', 7);
+
+    expect(withTransaction).toHaveBeenCalled();
+    expect(filed).toMatchObject({
+      added: true,
+      request: { state: 'filed', issueNumber: 7, issues: [{ repoId: 'repo-1', repoFullName: 'exampleco/api', number: 7, filedAt: '2026-10-23T13:00:00.000Z' }] },
+    });
+    const sql = vi.mocked(queryOne).mock.calls.map((call) => String(call[0]));
+    expect(sql[1]).toMatch(/insert into request_issues \(request_id, repo_id, issue_number\) values \(\$1, \$2, \$3\)\s+on conflict do nothing/);
+    // The repository the person named is kept; the first issue is set only in it, and only once.
+    expect(sql[2]).toContain('repo_id = coalesce(repo_id, $2::uuid)');
+    expect(sql[2]).toMatch(/when issue_number is null and coalesce\(repo_id, \$2::uuid\) = \$2::uuid then \$3::integer/);
+    expect(vi.mocked(queryOne).mock.calls[2]?.[1]).toEqual([ID, 'repo-1', 7]);
+  });
+
+  it('says it added nothing when the issue was recorded already, so a redelivery says nothing twice', async () => {
+    vi.mocked(queryOne)
+      .mockResolvedValueOnce({ state: 'filed' })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(filedRow([]));
+
+    expect(await fileIssue(ID, 'repo-1', 7)).toMatchObject({ added: false });
+    // Nor touches the request, whose `updated_at` times its filed card.
+    const sql = vi.mocked(queryOne).mock.calls.map((call) => String(call[0]));
+    expect(sql[2]).toMatch(/^select /);
+    expect(sql.join('\n')).not.toContain('update requests');
+  });
+
+  it('is refused for an abandoned request, which nothing files again', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ state: 'abandoned' });
+
+    await expect(fileIssue(ID, 'repo-1', 7)).rejects.toBeInstanceOf(RequestAbandoned);
+    expect(queryOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('is nothing for a request that is not there', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce(null);
+    expect(await fileIssue(ID, 'repo-1', 7)).toBeNull();
+  });
+
+  it('is read with every issue it was filed as, oldest first', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce(
+      filedRow([
+        { repoId: 'repo-1', repoFullName: 'exampleco/api', number: 7, filedAt: '2026-10-23T13:00:00+00:00' },
+        { repoId: 'repo-2', repoFullName: 'exampleco/web', number: 4, filedAt: '2026-10-23T13:01:00+00:00' },
+      ]),
+    );
+
+    const request = await getRequest(ID);
+
+    expect(request?.issues.map((issue) => `${issue.repoFullName}#${issue.number}`)).toEqual(['exampleco/api#7', 'exampleco/web#4']);
+    expect(String(vi.mocked(queryOne).mock.calls[0]?.[0])).toMatch(/json_agg\(.*order by ri\.filed_at, ri\.issue_number\).*from request_issues ri/s);
+  });
+
+  it('reads a request with no issues as none, not as null', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce(row(ID));
+    expect((await getRequest(ID))?.issues).toEqual([]);
+  });
+
+  it('is found from any of its issues, not only the first', async () => {
+    vi.mocked(query).mockResolvedValueOnce([filedRow([])]);
+
+    expect(await listRequestsForIssue('repo-2', 4)).toMatchObject([{ id: ID }]);
+    const [sql, params] = vi.mocked(query).mock.calls[0]!;
+    expect(String(sql)).toMatch(/exists \(\s*select 1 from request_issues ri where ri\.request_id = requests\.id and ri\.repo_id = \$1 and ri\.issue_number = \$2/);
+    expect(params).toEqual(['repo-2', 4]);
   });
 });
 

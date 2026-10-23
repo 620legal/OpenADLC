@@ -254,6 +254,19 @@ export interface ArchivedRequest {
   state: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Every issue it was filed as, its repository by name like `repo`
+   * (`request_issues`, migration 0155). An archive written before has none,
+   * and is restored with `issueNumber` in `repo` as its one issue.
+   */
+  issues?: ArchivedRequestIssue[];
+}
+
+/** An issue a request was filed as. */
+export interface ArchivedRequestIssue {
+  repo: string;
+  number: number;
+  filedAt: string;
 }
 
 /**
@@ -925,6 +938,18 @@ function asHistory(value: unknown): ArchivedHistory | null {
         state: asString(row.state, `request ${index} state`),
         createdAt: asString(row.createdAt, `request ${index} createdAt`),
         updatedAt: asString(row.updatedAt, `request ${index} updatedAt`),
+        ...(row.issues === undefined
+          ? {}
+          : {
+              issues: asArray(row.issues, `request ${index} issues`).map((issue, at) => {
+                const one = asObject(issue, `request ${index} issue ${at}`);
+                return {
+                  repo: asString(one.repo, `request ${index} issue ${at} repo`),
+                  number: asNumber(one.number, `request ${index} issue ${at} number`),
+                  filedAt: asString(one.filedAt, `request ${index} issue ${at} filedAt`),
+                };
+              }),
+            }),
       };
     }),
     ...(history.attachments === undefined

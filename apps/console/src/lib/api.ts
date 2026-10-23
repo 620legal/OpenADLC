@@ -151,8 +151,10 @@ export interface BoardCard {
   requestState?: 'queued' | 'working' | 'waiting' | 'filed';
   /** A queued request's place in line, 1 being next. */
   queuePosition?: number | null;
-  /** The issue a filed request became. */
+  /** The issue a filed request became: the first, when it became several. */
   issueNumber?: number | null;
+  /** Every issue a filed request became, one in each repository it concerns. Absent from an older bridge. */
+  issues?: FiledIssue[];
   /** A person holding this issue: the step it is on finishes and nothing new starts. Absent from an older bridge. */
   held?: { by: string; at: string; why: string | null } | null;
   /** Put first in its repository's queue by a person. Absent from an older bridge. */
@@ -544,10 +546,21 @@ export interface ThreadTopic {
   title: string | null;
   issue: { number: number; url: string | null } | null;
   pullRequest: { number: number; url: string | null } | null;
-  /** What a console request asked for, and the issue it became once filed. */
-  request: { text: string; issueNumber: number | null; state: string } | null;
+  /**
+   * What a console request asked for, and the issues it became once filed:
+   * one in each repository it concerns. `issues` is absent from an older bridge.
+   */
+  request: { text: string; issueNumber: number | null; state: string; issues?: FiledIssue[] } | null;
   /** The work item it is part of: a request, its issue and its pull request are one. Absent from an older bridge. */
   item?: string | null;
+}
+
+/** An issue a console request was filed as. */
+export interface FiledIssue {
+  /** The repository, by name. */
+  repo: string;
+  number: number;
+  url: string | null;
 }
 
 export interface Gate {

@@ -198,6 +198,75 @@ describe('a request in Intake', () => {
     expect(work.byRef.get('api#42')?.costUsd).toBe(0.4);
   });
 
+  it('filed in two repositories, stays filed until both issues are on the board, naming each', () => {
+    const TWO = [
+      { id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {} },
+      { id: 'repo-2', name: 'web', fullName: 'exampleco/web', stageModes: {} },
+    ];
+    const card = (issue: { repoId: string; repoName: string; number: number }) => ({ ...issue, title: 'x', stage: 'build' as const, url: null, prNumber: null, labels: ['adlc:build'], updatedAt: minutesAgo(1) });
+    const filed = request('eeeeeeee', 'filed', {
+      issueNumber: 12,
+      updatedAt: minutesAgo(2),
+      issues: [{ repoId: 'repo-1', number: 12 }, { repoId: 'repo-2', number: 4 }],
+    });
+    const shown = (issues: ReturnType<typeof card>[]) =>
+      boardWork({ issues, tasks: [], bots: [], repos: TWO, gates: [], stallEvents: [], requests: [filed], now: NOW });
+
+    const firstOnly = shown([card({ repoId: 'repo-1', repoName: 'api', number: 12 })]);
+    expect(firstOnly.requests).toEqual([
+      expect.objectContaining({
+        requestState: 'filed',
+        issueNumber: 12,
+        url: 'https://github.com/exampleco/api/issues/12',
+        issues: [
+          { repo: 'api', number: 12, url: 'https://github.com/exampleco/api/issues/12' },
+          { repo: 'web', number: 4, url: 'https://github.com/exampleco/web/issues/4' },
+        ],
+      }),
+    ]);
+    expect(shown([card({ repoId: 'repo-1', repoName: 'api', number: 12 }), card({ repoId: 'repo-2', repoName: 'web', number: 4 })]).requests).toEqual([]);
+  });
+
+  it('filed only in a repository other than the one it named, links that issue', () => {
+    // "Use web instead of api": the request keeps the repository the person named, and no issue in it.
+    const cards = boardWork({
+      issues: [],
+      tasks: [],
+      bots: [],
+      repos: [
+        { id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {} },
+        { id: 'repo-2', name: 'web', fullName: 'exampleco/web', stageModes: {} },
+      ],
+      gates: [],
+      stallEvents: [],
+      requests: [request('eeeeeeee', 'filed', { issueNumber: null, updatedAt: minutesAgo(2), issues: [{ repoId: 'repo-2', number: 4 }] })],
+      now: NOW,
+    }).requests;
+    expect(cards).toEqual([expect.objectContaining({ requestState: 'filed', issueNumber: 4, url: 'https://github.com/exampleco/web/issues/4' })]);
+  });
+
+  it('counts its triage on each of its issues’ cards', () => {
+    const triaged = { ...triage('request:eeeeeeee', 'done'), costUsd: 0.4 };
+    const work = boardWork({
+      issues: [
+        { repoId: 'repo-1', repoName: 'api', number: 12, title: 'x', stage: 'build', url: null, prNumber: null, labels: ['adlc:build'], updatedAt: minutesAgo(5) },
+        { repoId: 'repo-2', repoName: 'web', number: 4, title: 'y', stage: 'build', url: null, prNumber: null, labels: ['adlc:build'], updatedAt: minutesAgo(5) },
+      ],
+      tasks: [triaged],
+      bots: [{ id: 'bot-intake', name: 'ottoexampleco' }],
+      repos: [
+        { id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {} },
+        { id: 'repo-2', name: 'web', fullName: 'exampleco/web', stageModes: {} },
+      ],
+      gates: [],
+      stallEvents: [],
+      requests: [request('eeeeeeee', 'filed', { issueNumber: 12, updatedAt: minutesAgo(30), issues: [{ repoId: 'repo-1', number: 12 }, { repoId: 'repo-2', number: 4 }] })],
+      now: NOW,
+    });
+    expect(work.byRef.get('api#12')?.costUsd).toBe(0.4);
+    expect(work.byRef.get('web#4')?.costUsd).toBe(0.4);
+  });
+
   it('is gone when its triage ended without filing it, or it was abandoned', () => {
     const ended = triage('request:ffffffff', 'failed');
     expect(read([request('ffffffff', 'draft'), request('abababab', 'abandoned')], [ended])).toEqual([]);

@@ -154,6 +154,33 @@ describe('the task pinned at the top', () => {
     });
   });
 
+  it('links each issue a console request was filed as, by repository, when it spans several', () => {
+    const triage: TaskSummary = { ...REVIEWING, kind: 'intake', subjectRef: 'request:a4b02784', issue: null, round: null, maxRounds: null, costUsd: 0 };
+    const spanning: ThreadTopic = {
+      ...REQUEST,
+      issue: { number: 12, url: 'https://github.com/janedoe/api/issues/12' },
+      request: {
+        ...REQUEST.request!,
+        issueNumber: 12,
+        state: 'filed',
+        issues: [
+          { repo: 'api', number: 12, url: 'https://github.com/janedoe/api/issues/12' },
+          { repo: 'web', number: 4, url: 'https://github.com/janedoe/web/issues/4' },
+        ],
+      },
+    };
+    expect(pinnedTask({ task: triage }, [spanning], NOW)?.links).toEqual([
+      { label: 'Issue api#12', url: 'https://github.com/janedoe/api/issues/12' },
+      { label: 'Issue web#4', url: 'https://github.com/janedoe/web/issues/4' },
+    ]);
+    // One issue is linked as it always was.
+    const one: ThreadTopic = { ...spanning, repo: 'api', request: { ...spanning.request!, issues: [spanning.request!.issues![0]!] } };
+    expect(pinnedTask({ task: triage }, [one], NOW)?.links).toEqual([{ label: 'Issue #12', url: 'https://github.com/janedoe/api/issues/12' }]);
+    // One in another repository than the request's is linked by repository.
+    const instead: ThreadTopic = { ...spanning, repo: 'api', issue: null, request: { ...spanning.request!, issueNumber: null, issues: [spanning.request!.issues![1]!] } };
+    expect(pinnedTask({ task: triage }, [instead], NOW)?.links).toEqual([{ label: 'Issue web#4', url: 'https://github.com/janedoe/web/issues/4' }]);
+  });
+
   it('is the last thing the bot did, when nothing is going', () => {
     const done = { ...REVIEWING, state: 'done', startedAt: minutesAgo(130), endedAt: minutesAgo(120) };
     expect(pinnedTask({ task: null, lastTask: done }, [PULL], NOW)).toMatchObject({ current: false, did: 'Reviewed', when: '2 hours ago' });
@@ -222,6 +249,25 @@ describe('where a message goes', () => {
     const filed = { ...REQUEST, request: { ...REQUEST.request!, issueNumber: 16, state: 'filed' } };
     expect(composerTarget({ openGate: null, selected: 'request:a4b02784', task: null, topics: [filed], said }).helper).toBe(
       'Added to the request’s thread. It is filed as #16 now.',
+    );
+    const spanning = {
+      ...REQUEST,
+      request: {
+        ...REQUEST.request!,
+        issueNumber: 12,
+        state: 'filed',
+        issues: [
+          { repo: 'api', number: 12, url: null },
+          { repo: 'web', number: 4, url: null },
+        ],
+      },
+    };
+    expect(composerTarget({ openGate: null, selected: 'request:a4b02784', task: null, topics: [spanning], said }).helper).toBe(
+      'Added to the request’s thread. It is filed as api#12 and web#4 now.',
+    );
+    const instead = { ...spanning, repo: 'api', request: { ...spanning.request, issueNumber: null, issues: [{ repo: 'web', number: 4, url: null }] } };
+    expect(composerTarget({ openGate: null, selected: 'request:a4b02784', task: null, topics: [instead], said }).helper).toBe(
+      'Added to the request’s thread. It is filed as web#4 now.',
     );
   });
 

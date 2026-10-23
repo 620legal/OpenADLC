@@ -12,8 +12,9 @@ import { linkFiled } from './work-items.js';
  *
  * `queued` while it waits for the intake bot to be free (`request-queue.ts`
  * starts it, and it is `draft` from then on), `draft` while triage works on it, `questions` while it waits on the person
- * who asked, and `filed` once it is an issue — with that issue's number, which
- * is the only link between the two. Nothing moved a request before: it was a
+ * who asked, and `filed` once it is an issue — one in each repository it
+ * concerns, recorded in `request_issues` (`requests.fileIssue`), which is the
+ * only link between the two. Nothing moved a request before: it was a
  * draft for good, and the issue triage filed from it was an issue nobody could
  * trace back to what was asked.
  */
@@ -118,12 +119,31 @@ export function requestPrefixIn(body: string | null): string | null {
 /** How far back a finished triage is looked for: one page, newest first. */
 const RECENT = 100;
 
-/** The newest issue in these repositories that carries the request's line. */
+/**
+ * How far past its triage's end an issue's GitHub `created_at` may be and
+ * still be one the triage filed: GitHub's clock and the bridge's differ.
+ */
+const CLOCK_SKEW_MS = 30_000;
+
+/** An issue a request was filed as, as the filing reads it. */
+interface FiledIssue {
+  repo: string;
+  repoId: string;
+  number: number;
+  title: string;
+  htmlUrl: string;
+}
+
+/**
+ * Every issue in these repositories that carries the request's line: intake
+ * files a request that spans repositories as one issue in each.
+ */
 async function filedIn(
   client: Pick<GitHubClient, 'listIssues'>,
-  candidates: readonly { fullName: string }[],
+  candidates: readonly { id: string; fullName: string }[],
   subjectRef: string,
-): Promise<{ repo: string; number: number; title: string; htmlUrl: string } | null> {
+): Promise<FiledIssue[]> {
+  const found: FiledIssue[] = [];
   for (const repo of candidates) {
     // By when each last changed: a request resolved by an existing issue —
     // "use #5 instead" — writes its line into that issue, which can be far
@@ -133,12 +153,18 @@ async function filedIn(
       return [];
     });
     // The issues endpoint lists pull requests too, and a pull request that
-    // quotes the line is not the issue that was filed.
-    const issue = recent.find((entry) => !entry.pullRequest && carriesRequestLine(entry.body, subjectRef));
-    if (issue) return { repo: repo.fullName, number: issue.number, title: issue.title, htmlUrl: issue.htmlUrl };
+    // quotes the line is not the issue that was filed. Oldest first, the
+    // order intake filed them in.
+    for (const issue of recent.filter((entry) => !entry.pullRequest && carriesRequestLine(entry.body, subjectRef)).reverse()) {
+      found.push({ repo: repo.fullName, repoId: repo.id, number: issue.number, title: issue.title, htmlUrl: issue.htmlUrl });
+    }
   }
-  return null;
+  return found;
 }
+
+/** Whether the request already has this issue. */
+const hasIssue = (request: requests.RequestRecord, repoId: string, number: number): boolean =>
+  request.issues.some((issue) => issue.repoId === repoId && issue.number === number);
 
 export class RequestFiling {
   constructor(
@@ -160,6 +186,13 @@ export class RequestFiling {
    * filed openadlc-testbed#7 four seconds before its task ended, the list did not
    * have it yet, and the request was left a draft, its thread saying triage
    * had filed nothing. The delivery carries the body, and arrives first.
+   *
+   * In any managed repository while the request's triage runs, since intake
+   * files a request that spans repositories as one issue in each, and after
+   * it ends for an issue GitHub says was opened while it ran. Otherwise only
+   * as its first issue and in the repository it named: an issue somebody
+   * opens later quoting the line is not one triage filed. True when the issue
+   * is the request's.
    */
   async issueOpened(
     repo: { id: string; fullName: string },
@@ -169,47 +202,69 @@ export class RequestFiling {
     if (!prefix) return false;
     const subjectRef = `request:${prefix}`;
     const request = await requestFor(subjectRef);
-    if (!request || request.state === 'filed' || request.state === 'abandoned') return false;
-    // Filed where it was asked for: an issue in another repository that quotes
-    // the line is not the one triage filed.
-    if (request.repoId && request.repoId !== repo.id) return false;
+    if (!request || request.state === 'abandoned') return false;
 
-    const [triage] = (await tasks.listTasksOnSubjects([subjectRef])).sort(
+    const onSubject = (await tasks.listTasksOnSubjects([subjectRef])).sort(
       (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
     );
-    await this.file(request, { repo: repo.fullName, repoId: repo.id, number: issue.number, title: issue.title, htmlUrl: issue.htmlUrl }, triage ?? null);
+    const triaging = onSubject.some((task) => task.kind === 'intake' && ['queued', 'running', 'paused'].includes(task.state));
+    const first = request.issues.length === 0 && (!request.repoId || request.repoId === repo.id);
+    if (!triaging && !first && !hasIssue(request, repo.id, issue.number) && !(await this.openedDuringTriage(repo, issue.number, onSubject))) {
+      return false;
+    }
+
+    await this.file(request, { repo: repo.fullName, repoId: repo.id, number: issue.number, title: issue.title, htmlUrl: issue.htmlUrl }, onSubject[0] ?? null);
     return true;
   }
 
   /**
-   * A request's triage ended `done`: find the issue it filed and file the
-   * request as that issue, or say in the thread that nothing was filed.
-   *
-   * The issue is found by the line the triage skill writes in its body, among
-   * the repository's recent issues. A request that named no repository was
-   * filed wherever triage decided, so every repository this install manages is
-   * looked through.
+   * Whether GitHub says the issue was opened while one of the request's
+   * triages ran. The task is written `done` before its ending looks for the
+   * issues, and the `opened` delivery of the last one intake files can arrive
+   * after both: the ending's list did not have it yet, and the delivery found
+   * no triage running, so a request's second issue was dropped. Read only on
+   * that refusal; an issue opened after the triage ended still joins nothing.
    */
-  async triageEnded(task: Task): Promise<{ repo: string; issue: number } | null> {
-    const request = await requestFor(task.subjectRef);
-    // Filed already: the same ending reported twice links nothing twice.
-    if (!request || request.state === 'filed' || request.state === 'abandoned') return null;
-
-    const repoList = await repos.listRepos();
-    const named = repoList.find((repo) => repo.id === request.repoId);
-    const candidates = named ? [named] : repoList;
-
+  private async openedDuringTriage(repo: { fullName: string }, number: number, onSubject: readonly Task[]): Promise<boolean> {
+    const ran = onSubject.filter((task) => task.kind === 'intake' && task.startedAt && task.endedAt);
+    if (ran.length === 0) return false;
     const client = await asAutomation(this.actors, this.config);
-    let found = client ? await filedIn(client, candidates, task.subjectRef) : null;
-    if (!found && client) {
-      // Once more, a moment later: the list can lag an issue filed just now,
-      // and the issue's own delivery may file the request in the meantime.
+    const opened = client ? await client.getIssue(repo.fullName, number).catch(() => null) : null;
+    if (!opened) return false;
+    const at = Date.parse(opened.createdAt);
+    return ran.some((task) => Date.parse(task.startedAt!) <= at && at <= Date.parse(task.endedAt!) + CLOCK_SKEW_MS);
+  }
+
+  /**
+   * A request's triage ended `done`: find every issue it filed and file the
+   * request as each, or say in the thread that nothing was filed.
+   *
+   * The issues are found by the line the triage skill writes in their bodies,
+   * among each managed repository's recent issues: intake decides which
+   * repositories a request concerns, the one the person named among them or
+   * not, and files one issue in each.
+   */
+  async triageEnded(task: Task): Promise<{ repo: string; issue: number }[]> {
+    const request = await requestFor(task.subjectRef);
+    if (!request || request.state === 'abandoned') return [];
+
+    const candidates = await repos.listRepos();
+    const client = await asAutomation(this.actors, this.config);
+    let found = client ? await filedIn(client, candidates, task.subjectRef) : [];
+    // Once more, a moment later: the list can lag an issue filed just now,
+    // and the issue's own delivery may file the request in the meantime.
+    // With several repositories, also when some were found or recorded: the
+    // last issue intake files, in another repository, is the one most likely
+    // missing, and the others say nothing about it.
+    if (client && ((found.length === 0 && request.issues.length === 0) || candidates.length > 1)) {
       await new Promise((resolve) => setTimeout(resolve, this.options.lookAgainAfterMs ?? 3000));
-      if ((await requestFor(task.subjectRef))?.state === 'filed') return null;
-      found = await filedIn(client, candidates, task.subjectRef);
+      const again = await filedIn(client, candidates, task.subjectRef);
+      found = [...found, ...again.filter((one) => !found.some((seen) => seen.repoId === one.repoId && seen.number === one.number))];
     }
 
-    if (!found) {
+    // Read again: a delivery may have recorded some of them meanwhile.
+    const now = (await requestFor(task.subjectRef)) ?? request;
+    if (found.length === 0 && now.issues.length === 0) {
       const thread = await threads.ensureThread({
         botId: task.botId,
         repoId: task.repoId,
@@ -226,34 +281,40 @@ export class RequestFiling {
           : 'the automation account is not connected, so GitHub could not be read for the issue',
         payload: { taskId: task.id, requestId: request.id },
       });
-      return null;
+      return [];
     }
 
-    await this.file(request, { ...found, repoId: candidates.find((repo) => repo.fullName === found.repo)?.id }, task);
-    return { repo: found.repo, issue: found.number };
+    const filed: { repo: string; issue: number }[] = [];
+    for (const issue of found) {
+      if (hasIssue(now, issue.repoId, issue.number)) continue;
+      if (await this.file(now, issue, task)) filed.push({ repo: issue.repo, issue: issue.number });
+    }
+    return filed;
   }
 
-  /** The request, filed as the issue; its triage's thread says which. */
+  /**
+   * The request, filed as the issue; its triage's thread says which. False
+   * when the issue was recorded already, which says nothing twice, or the
+   * request was abandoned meanwhile.
+   */
   private async file(
     request: requests.RequestRecord,
-    found: { repo: string; repoId?: string; number: number; title: string; htmlUrl: string },
+    found: FiledIssue,
     task: Pick<Task, 'id' | 'botId' | 'repoId' | 'subjectRef'> | null,
-  ): Promise<void> {
+  ): Promise<boolean> {
     // A request that named no repository was filed where intake chose: kept,
     // so its card in Intake can link the issue.
-    await requests.updateRequest(request.id, {
-      state: 'filed',
-      issueNumber: found.number,
-      ...(!request.repoId && found.repoId ? { repoId: found.repoId } : {}),
+    const recorded = await requests.fileIssue(request.id, found.repoId, found.number).catch((error: unknown) => {
+      if (error instanceof requests.RequestAbandoned) return null;
+      throw error;
     });
+    if (!recorded?.added) return false;
     // The issue joins the request's work item, so it carries the number the
-    // request had before intake started. Never in the way of the filing.
-    const repoId = found.repoId ?? request.repoId;
-    if (repoId) {
-      await linkFiled(request, { id: repoId }, found).catch((error: unknown) =>
-        console.warn(`[bridge] ${found.repo}#${found.number} was filed for request ${request.id.slice(0, 8)}, and did not join its work item: ${error instanceof Error ? error.message : error}`),
-      );
-    }
+    // request had before intake started, and a request's second issue, in
+    // another repository, joins the first. Never in the way of the filing.
+    await linkFiled(request, { id: found.repoId }, found).catch((error: unknown) =>
+      console.warn(`[bridge] ${found.repo}#${found.number} was filed for request ${request.id.slice(0, 8)}, and did not join its work item: ${error instanceof Error ? error.message : error}`),
+    );
     if (task) {
       const thread = await threads.ensureThread({ botId: task.botId, repoId: task.repoId, subjectRef: task.subjectRef });
       await threads.addMessage({
@@ -271,5 +332,6 @@ export class RequestFiling {
       type: 'request.filed',
       payload: { requestId: request.id, repo: found.repo, issue: found.number },
     }).catch(() => undefined);
+    return true;
   }
 }

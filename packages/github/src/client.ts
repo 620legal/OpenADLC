@@ -1318,6 +1318,16 @@ export class GitHubClient {
    * `author_association` says: an organization member whose membership is
    * private reads as a contributor to a token outside the organization.
    */
+  /**
+   * What a repository says it is for, as its GitHub description; null when it
+   * has none. A console request's triage reads it to decide which managed
+   * repositories a request concerns (`request.md`).
+   */
+  async repoDescription(repo: string, options: { timeoutMs?: number } = {}): Promise<string | null> {
+    const answer = await this.request<{ description?: string | null }>('GET', `/repos/${repo}`, undefined, options);
+    return answer.description?.trim() || null;
+  }
+
   async permissionOf(repo: string, login: string): Promise<string> {
     const answer = await this.request<{ permission?: string; role_name?: string }>(
       'GET',

@@ -28,6 +28,9 @@ import { intakeDocument, openWorkDocument, openWorkDocumentFor, requestDocument 
 /** Long conversations cost more than they inform; the recent turns carry the thread. */
 const MAX_COMMENTS = 20;
 
+/** How long a repository's description is waited for in a request's briefing, which a person's request waits on. */
+const DESCRIPTION_TIMEOUT_MS = 5_000;
+
 /**
  * The work that reads the images in its issue: intake, which asks about what
  * the page should look like; design, which describes it; the build, which
@@ -530,7 +533,14 @@ export class Context {
    * `request-context.ts`.
    */
   async forRequest(subjectRef: string): Promise<ContextDocument[]> {
-    const document = await requestDocument(subjectRef, { consoleUrl: this.config.consoleUrl ?? null });
+    // Each managed repository's description, for triage to tell which ones the
+    // request concerns. Read as the automation account, briefly: a description
+    // that cannot be read is said, and the briefing goes on without it.
+    const client = await asAutomation(this.actors, this.config).catch(() => null);
+    const document = await requestDocument(subjectRef, {
+      consoleUrl: this.config.consoleUrl ?? null,
+      ...(client ? { describe: (repoFullName: string) => client.repoDescription(repoFullName, { timeoutMs: DESCRIPTION_TIMEOUT_MS }) } : {}),
+    });
     if (!document) return [];
     // The repository's open work, for the overlap check before filing. Not
     // having it does not hold the triage: the skill can read issues with gh.

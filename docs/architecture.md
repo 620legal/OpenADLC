@@ -185,7 +185,21 @@ none yet, says its kind of work instead ("writing the change").
    worked on yet has no one to write to from its conversation: its view
    carries a route for each other role the crew has, and the box offers those
    roles to pick, sending to the one picked; with no seat that reads a
-   message, it asks for none and says to add one. When it has everything, it shows the person the issue
+   message, it asks for none and says to add one. On an install that manages
+   several repositories, a console request's `request.md` lists them, each
+   with its GitHub description and the one the person chose marked, and
+   `open-issues.md` has a section per repository with its own spec rule.
+   Intake decides which repositories the request concerns and drafts one
+   issue in each, asking first before it files anywhere other than the one the
+   person chose; the drafts are confirmed with one question, and the siblings
+   name each other as `owner/name#N`, under `Dependencies` where one must ship
+   first. A request's issues are rows of `request_issues` (migration 0155):
+   an issue carrying the request's line joins it in any managed repository
+   while its triage runs (or was opened while it ran, delivered late), and
+   after that only as its first issue, in its own repository; each is handed to Design or Build when the triage ends, and the
+   board's request card, its thread and `intake.md` name every one
+   ([ADR 0012](adr/0012-a-request-files-one-issue-per-repository.md)).
+   When it has everything, it shows the person the issue
    it would file and asks them to agree to it; then it files it — outcome,
    acceptance criteria, priority, expected paths, dependencies, verification,
    the files by name and a link to the item in the console, never the files —
