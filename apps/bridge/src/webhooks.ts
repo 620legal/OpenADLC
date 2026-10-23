@@ -2660,7 +2660,9 @@ export class Webhooks {
    * `review_posted` marker says `"scope":"cross-cutting"`) puts
    * `scope:cross-cutting` on, as the app. Only once the review's signature
    * checks: on a shared account any seat could write a lead-tagged body, so
-   * without a signature check nothing is added and a person decides.
+   * without a signature check nothing is added and a person decides. The head
+   * it approved is the one its signature names: GitHub moves a review's
+   * `commit_id` to a later head (`asOfSignedHeads`).
    */
   private async acceptScopeFromLead(
     repo: { name: string },
@@ -2671,19 +2673,22 @@ export class Webhooks {
     lead: string | null,
   ): Promise<void> {
     if (review.state.toLowerCase() !== 'approved' || !acceptsCrossCutting(review.body)) return;
-    if (review.id === undefined || (review.commit_id && review.commit_id !== pr.head.sha)) return;
+    if (review.id === undefined) return;
     if (pr.labels.some((label) => label.name === CROSS_CUTTING_LABEL)) return;
     const author = whoWrote(review.user.login, crew, { bot: seatOf(review.body ?? '') });
     if (author.kind !== 'openadlc' || !lead || author.bot?.name !== lead) return;
     const target = `${repoFullName}#${pr.number}`;
     const attribution = this.automation['actors'].attribution;
     const signed = attribution
-      ? await attribution.reviewsThatCount(repoFullName, pr.number, [{ id: review.id, user: review.user.login, body: review.body ?? null }], crew).catch(() => [])
+      ? await attribution
+          .reviewsThatCount(repoFullName, pr.number, [{ id: review.id, user: review.user.login, body: review.body ?? null, state: review.state, commitId: review.commit_id ?? null }], crew)
+          .catch(() => [])
       : [];
     if (signed.length === 0) {
       console.log(`[bridge] ${target}: the lead accepted a widening of scope, but its signature ${attribution ? 'does not check' : 'cannot be checked'}; ${CROSS_CUTTING_LABEL} is left to a person`);
       return;
     }
+    if (signed[0]?.commitId !== pr.head.sha) return;
     scopeAccepted.add(`${repoFullName.toLowerCase()}#${pr.number}`);
     const as = await this.automation.setPullLabel(repoFullName, pr.number, CROSS_CUTTING_LABEL, true).catch((error: unknown) => {
       console.warn(`[bridge] ${target}: could not put ${CROSS_CUTTING_LABEL} on for the lead: ${error instanceof Error ? error.message : error}`);
@@ -3156,6 +3161,7 @@ export class Webhooks {
     if (repo && !fork) {
       // The lead goes last: once every other seat has posted on this diff, it
       // is asked, with all of their reviews in front of it (`context.ts`).
+      // Asked again when its approval GitHub shows counts for nothing here.
       if (standing.leadDue) {
         await this.taskService.openLeadReview({
           repo,
@@ -3164,6 +3170,7 @@ export class Webhooks {
           issueNumber: ownIssueOf(pr, repoFullName),
           seat: standing.leadDue.seat,
           since: standing.leadDue.since,
+          notCounted: standing.notCounted,
         });
       }
       // A reviewer the gate waits on with nothing in hand would be waited on
@@ -3178,6 +3185,7 @@ export class Webhooks {
           branch: pr.head.ref,
           issueNumber: ownIssueOf(pr, repoFullName),
           waitingOn: decision.reviewers.filter((name) => name !== decision.lead && !posted.includes(name)),
+          notCounted: standing.notCounted,
         });
       }
     }

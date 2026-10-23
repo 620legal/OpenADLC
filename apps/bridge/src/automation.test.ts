@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GitHubApiError, ReviewerStandings, type PullCommit } from '@openadlc/github';
-import { Automation, BLOCKED_READ_TIMEOUT_MS, CI_RUN_LAG_MS, CI_RUN_READ_TIMEOUT_MS, COMMITS_LISTED, FORBIDDEN_PUSH, LABEL_READ_BACKOFF_MS, ciKeysChanged, contentChanged, fastPathOf, mergeDecision, requestsTakenAway, reviewSample, standingApprovals, type BlockedFacts, type MergeFacts } from './automation.js';
+import { Automation, BLOCKED_READ_TIMEOUT_MS, CI_RUN_LAG_MS, CI_RUN_READ_TIMEOUT_MS, COMMITS_LISTED, FORBIDDEN_PUSH, LABEL_READ_BACKOFF_MS, ciKeysChanged, contentChanged, dismissalRefused, fastPathOf, mergeDecision, requestsTakenAway, reviewSample, seatsWaitedOn, standingApprovals, type BlockedFacts, type MergeFacts } from './automation.js';
+import { Attribution } from './attribution.js';
 import type { BridgeConfig } from './config.js';
 import { ConflictRounds } from './conflict-round.js';
 import { WAITING_FOR_PERSON, heldForPerson } from './merge-line.js';
@@ -28,6 +29,8 @@ const world = vi.hoisted(() => ({
 }));
 
 vi.mock('@openadlc/db', () => ({
+  // A review's nonce, bound to it the first time it is read (`Attribution.reviewsThatCount`).
+  attributions: { bindNonce: vi.fn(async () => true) },
   audit: vi.fn(async (entry: Record<string, unknown>) => {
     world.audited.push(entry);
   }),
@@ -1798,6 +1801,22 @@ describe('whether the bridge may merge a pull request', () => {
   });
 
   describe('approvals', () => {
+    it('says so when a seat’s signature names a head GitHub does not show its approval on, or names none', () => {
+      // `commitId` is the head a signed review is of, as `mergeFacts` reads it
+      // from its signature; `githubCommitId` is where GitHub shows it.
+      const moved = { ...by('openadlc-sydney-janedoe', 'APPROVED', EARLIER), githubCommitId: HEAD };
+      expect(mergeDecision(facts({ reviews: [moved, by('openadlc-vega-janedoe', 'APPROVED')] }))).toMatchObject({
+        land: false,
+        reason: `openadlc-sydney-janedoe's signature says it approved \`${EARLIER.slice(0, 7)}\`, an earlier version whose diff is not known to be this one, though GitHub shows the approval on \`${HEAD.slice(0, 7)}\``,
+      });
+
+      const headless = { ...by('openadlc-sydney-janedoe', 'APPROVED'), commitId: null, githubCommitId: HEAD };
+      expect(mergeDecision(facts({ reviews: [headless, by('openadlc-vega-janedoe', 'APPROVED')] }))).toMatchObject({
+        land: false,
+        reason: expect.stringContaining("openadlc-sydney-janedoe's approval names no head in its OpenADLC signature"),
+      });
+    });
+
     it('may not on an approval of an earlier head whose diff was different, or could not be compared', () => {
       const decision = mergeDecision(facts({ reviews: [by('openadlc-sydney-janedoe', 'APPROVED'), by('openadlc-vega-janedoe', 'APPROVED', EARLIER)] }));
       expect(decision).toMatchObject({ land: false, reason: 'openadlc-vega-janedoe approved an earlier version whose diff is not known to be this one' });
@@ -3528,5 +3547,218 @@ describe('the per-person review labels', () => {
     } finally {
       people.forgetRepoAccess();
     }
+  });
+});
+
+describe('an approval GitHub moved onto a later head (620legal/OpenADLC#118)', () => {
+  // The lead approved b789079 in a review whose signature names that head. The
+  // merge line brought the branch up to date as 692cd1f, which brought in
+  // main's changes to two files the pull request changes too: another diff.
+  // GitHub then sent an `edited` delivery, the body unchanged, that moved the
+  // approval's `commit_id` onto 692cd1f, and refused the bridge's dismissal of
+  // it with a 403. Read from GitHub, the approval counted for 692cd1f, whose
+  // diff the lead never read; only the lead reviewing again kept it from merging.
+  const A = 'b7890794b365dd3ec75b81f761f1889dfb11674a';
+  const B = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const LOGIN = 'exampleco-review';
+  const marker = (lens: string) => `<!-- openadlc:{"event":"review_posted","verdict":"approve","lens":"${lens}"} -->`;
+
+  function memoryStore() {
+    const values = new Map<string, string>();
+    return {
+      get: async (ref: string) => values.get(ref) ?? null,
+      set: async (ref: string, value: string) => void values.set(ref, value),
+      delete: async (ref: string) => void values.delete(ref),
+      list: async () => [...values.keys()],
+    };
+  }
+
+  async function replay(options: { sameDiff?: boolean; leadSignedWith?: string | null } = {}) {
+    // The lead and the second reviewer on one account, as on #118.
+    world.crew = [
+      { id: 'b-flow', name: 'automation', slot: 'automation', role: 'automation', githubLogin: 'exampleco-crew' },
+      { id: 'b-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: LOGIN },
+      { id: 'b-second', name: 'second-reviewer', slot: 'second-reviewer', role: 'review_second', githubLogin: LOGIN },
+    ];
+    const attribution = new Attribution(memoryStore() as never);
+    const signed = (seat: string, lens: string, head: string | null) =>
+      attribution.sign(`Findings.\n\n${marker(lens)}\n\n<!-- openadlc-seat:${seat} -->`, { seat, task: `t-${seat}`, repo: 'exampleco/app', kind: 'review', n: 118, ...(head ? { head } : {}) });
+    const github = {
+      head: A,
+      reviews: [
+        { id: 5622803245, user: LOGIN, state: 'COMMENTED', body: await signed('second-reviewer', 'second', A), submittedAt: '2026-10-23T01:13:20Z', commitId: A },
+        {
+          id: 5622816949,
+          user: LOGIN,
+          state: 'APPROVED',
+          body: await signed('lead-reviewer', 'lead', options.leadSignedWith === undefined ? A : options.leadSignedWith),
+          submittedAt: '2026-10-23T01:15:48Z',
+          commitId: A,
+        },
+      ],
+      listEveryPullFile: vi.fn(async () => ({ files: ['apps/bridge/src/api.ts', 'docs/configuration.md'], complete: true })),
+      listReviews: vi.fn(async () => github.reviews.map((review) => ({ ...review }))),
+      permissionOf: vi.fn(async () => 'write'),
+      readFileIfPresent: vi.fn(async () => null),
+      listPullHistory: vi.fn(async () => []),
+      checkRunsFor: vi.fn(async (_repo: string, sha: string) => [{ name: 'ci', status: 'completed', conclusion: 'success', app: 'github-actions', headSha: sha, suiteId: sha === A ? 1 : 2 }]),
+      statusesFor: vi.fn(async () => []),
+      workflowRunOfSuite: vi.fn(async (_repo: string, suite: number) => ({
+        name: 'ci',
+        headSha: suite === 1 ? A : B,
+        path: '.github/workflows/ci.yml',
+        event: 'pull_request',
+        headBranch: 'feature',
+        headRepoFullName: 'exampleco/app',
+        createdAt: '2026-10-23T01:16:30Z',
+      })),
+      pullsFromBranch: vi.fn(async () => [{ number: 118, baseRef: 'main', headSha: github.head, createdAt: '2026-10-23T00:58:00Z', closedAt: null }]),
+      readFileAtRef: vi.fn(async () => '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n'),
+      listPullFiles: vi.fn(async () => ['apps/bridge/src/api.ts', 'docs/configuration.md']),
+      diffFingerprint: vi.fn(async (_repo: string, _base: string, sha: string) =>
+        sha === A || options.sameDiff ? 'the diff b789079 proposes' : 'the diff with main’s changes to api.ts and configuration.md',
+      ),
+      dismissReview: vi.fn(async (repo: string, pr: number, id: number) => {
+        throw new GitHubApiError(403, `/repos/${repo}/pulls/${pr}/reviews/${id}/dismissals`, '{"message":"Resource not accessible by integration","status":"403"}');
+      }),
+    };
+    // review-gate on the new head as the bridge published it at 01:16:06,
+    // counting the moved approval: green.
+    const appGate = { standing: vi.fn(async () => ({ state: 'success', description: 'every requested review has been posted' })), appId: vi.fn(async () => 7) };
+    const automation = new Automation(config, { asBot: vi.fn(async () => github), attribution } as never, appGate as never);
+    const repo = { fullName: 'exampleco/app', defaultBranch: 'main' };
+    const pull = () => ({
+      number: 118,
+      draft: false,
+      headSha: github.head,
+      headRef: 'feature',
+      baseRef: 'main',
+      labels: [],
+      mergeableState: 'clean',
+      headRepoFullName: 'exampleco/app',
+      requestedReviewers: [],
+      requestedTeams: [],
+    });
+    const decide = async () => mergeDecision((await automation.mergeFacts(repo, pull()))!);
+    const gate = () => automation.reviewStanding('exampleco/app', { number: 118, draft: false, labels: [], head: { sha: github.head, ref: 'feature' }, baseRef: 'main' });
+    // The merge line's update of the branch, then GitHub's `edited` delivery
+    // moving the lead's approval onto it, then the bridge's dismissal, refused.
+    const updated = async () => {
+      github.head = B;
+      github.reviews[1]!.commitId = B;
+      const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const dismissed = await automation.dismissStaleApprovals({ repoFullName: 'exampleco/app', prNumber: 118, reason: 'superseded by new commits' });
+        return { dismissed, warned: warned.mock.calls.map((call) => String(call[0])) };
+      } finally {
+        warned.mockRestore();
+      }
+    };
+    return { automation, github, signed, decide, gate, updated };
+  }
+
+  it('merges on the lead’s approval of the head its signature names', async () => {
+    const { decide } = await replay();
+
+    expect(await decide()).toMatchObject({ land: true, approvals: [{ reviewer: 'lead-reviewer', commitId: A, ofHead: true }] });
+  });
+
+  it('does not merge once GitHub moved that approval onto a head with another diff, though its dismissal was refused', async () => {
+    const { decide, github, updated } = await replay();
+    const { dismissed, warned } = await updated();
+    expect(github.dismissReview).toHaveBeenCalledWith('exampleco/app', 118, 5622816949, 'superseded by new commits');
+    expect(dismissed).toEqual([]);
+    expect(warned.join('\n')).toContain('Nothing waits on that');
+
+    expect(await decide()).toEqual({
+      land: false,
+      reason: `lead-reviewer's signature says it approved \`b789079\`, an earlier version whose diff is not known to be this one, though GitHub shows the approval on \`692cd1f\``,
+      approvals: [],
+    });
+  });
+
+  it('keeps review-gate pending on the new head, and says why beside the lead', async () => {
+    const { gate, github, signed, updated } = await replay();
+    await updated();
+
+    const moved = await gate();
+    expect(moved.approved).toEqual([]);
+    expect(moved.posted).toEqual([]);
+    expect(moved.gate).toEqual({ state: 'pending', description: 'waiting on second-reviewer' });
+
+    // The second reviewer reviews the new diff; the lead's turn comes, and
+    // the gate says why the approval GitHub shows is not the lead's on it.
+    github.reviews.push({ id: 5622852000, user: LOGIN, state: 'COMMENTED', body: await signed('second-reviewer', 'second', B), submittedAt: '2026-10-23T01:20:00Z', commitId: B });
+    const due = await gate();
+    expect(due.gate).toEqual({ state: 'pending', description: 'waiting on lead-reviewer (its approval is of b789079 and this diff is another)' });
+    expect(due.leadDue?.seat).toBe('lead-reviewer');
+    // What asks the lead again: the task behind that approval is no review of this diff.
+    expect(due.notCounted).toEqual([{ seat: 'lead-reviewer', reviewId: 5622816949, head: B, why: 'its approval is of b789079 and this diff is another' }]);
+  });
+
+  it('counts the approval for a later head with the same diff', async () => {
+    const { decide, gate, updated } = await replay({ sameDiff: true });
+    await updated();
+
+    expect(await decide()).toMatchObject({ land: true, approvals: [{ reviewer: 'lead-reviewer', commitId: A, ofHead: false }] });
+    expect((await gate()).gate).toEqual({ state: 'success', description: 'every requested review has been posted' });
+  });
+
+  it('counts no approval whose signature names no head, and says so', async () => {
+    // Signed before reviews were signed with their head: GitHub's commit for
+    // it is all that says which head it is of, and that is GitHub's to move.
+    const { decide, gate } = await replay({ leadSignedWith: null });
+
+    expect(await decide()).toMatchObject({ land: false, reason: expect.stringContaining("lead-reviewer's approval names no head in its OpenADLC signature") });
+    const standing = await gate();
+    expect(standing.gate).toEqual({ state: 'pending', description: 'waiting on lead-reviewer (its approval names no head it reviewed)' });
+    expect(standing.leadDue?.seat).toBe('lead-reviewer');
+    expect(standing.notCounted).toEqual([{ seat: 'lead-reviewer', reviewId: 5622816949, head: A, why: 'its approval names no head it reviewed' }]);
+  });
+
+  it('counts no lead approval whose signature does not check, in audit mode and on an account of its own too, and says so', async () => {
+    // The merge never counts it; counted by the gate, it went green, the merge
+    // line refused it, and nobody asked the lead again.
+    const { gate, github } = await replay();
+    world.crew = [
+      { id: 'b-flow', name: 'automation', slot: 'automation', role: 'automation', githubLogin: 'exampleco-crew' },
+      { id: 'b-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'exampleco-lead' },
+      { id: 'b-second', name: 'second-reviewer', slot: 'second-reviewer', role: 'review_second', githubLogin: LOGIN },
+    ];
+    github.reviews[1] = { ...github.reviews[1]!, user: 'exampleco-lead', body: 'Approved.\n\n<!-- openadlc-seat:lead-reviewer -->' };
+
+    const standing = await gate();
+    expect(standing.approved).toEqual([]);
+    expect(standing.gate).toEqual({ state: 'pending', description: 'waiting on lead-reviewer (its approval is not signed by OpenADLC)' });
+    expect(standing.notCounted).toEqual([{ seat: 'lead-reviewer', reviewId: 5622816949, head: A, why: 'its approval is not signed by OpenADLC' }]);
+  });
+});
+
+describe('the seats review-gate says it waits on', () => {
+  it('are read back without the note on an approval that counts for nothing', () => {
+    expect(seatsWaitedOn('waiting on lead-reviewer (its approval is of b789079 and this diff is another)')).toEqual(['lead-reviewer']);
+    expect(seatsWaitedOn('waiting on second-reviewer, sre (its approval names no head it reviewed)')).toEqual(['second-reviewer', 'sre']);
+    expect(seatsWaitedOn('changes requested by lead-reviewer')).toEqual([]);
+  });
+});
+
+describe('a stale approval GitHub will not dismiss', () => {
+  const refused = new GitHubApiError(403, '/repos/exampleco/app/pulls/118/reviews/41/dismissals', '{"message":"Resource not accessible by integration","status":"403"}');
+
+  it('is reported with what to do, and that nothing waits on it', () => {
+    const words = dismissalRefused('exampleco-review', 'exampleco/app', 'exampleco-crew', refused);
+
+    expect(words).toContain('GitHub refused it (403 Resource not accessible by integration)');
+    expect(words).toContain('Nothing waits on that');
+    expect(words).toContain('the automation account, exampleco-crew, needs write access to exampleco/app');
+    expect(words).toContain('“Pull requests: Read and write”');
+  });
+
+  it('says what GitHub answered for anything else, with nothing to grant', () => {
+    const words = dismissalRefused('exampleco-review', 'exampleco/app', null, new Error('fetch failed'));
+
+    expect(words).toContain('GitHub answered: fetch failed');
+    expect(words).toContain('Nothing waits on that');
+    expect(words).not.toContain('write access');
   });
 });

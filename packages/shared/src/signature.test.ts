@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { withHeader, withSeat } from './stamp.js';
-import { bodyHash, newSigningKey, normalizeBody, SIGNED_BODY_MAX, signBody, verifyBody } from './signature.js';
+import { bodyHash, newSigningKey, normalizeBody, SIGNED_BODY_MAX, signBody, signedHead, verifyBody } from './signature.js';
 
 const key = newSigningKey();
 const fields = { seat: 'lead-reviewer', task: 't-1', repo: 'exampleco/api', kind: 'review', n: 7 };
@@ -47,6 +47,42 @@ describe('a signed post', () => {
 
   it('hashes the body without its signature', () => {
     expect(bodyHash(signBody(post, fields, key))).toBe(bodyHash(post));
+  });
+});
+
+describe('a signed review’s head', () => {
+  // `h` is a hash of the body, not a commit: until a review was signed with
+  // its head, nothing in it said which head it was of but GitHub's
+  // `commit_id`, which GitHub moved onto a later head on 620legal/OpenADLC#118.
+  const A = 'b7890794b365dd3ec75b81f761f1889dfb11674a';
+  const B = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+
+  it('is the one it was signed with, under the signature', () => {
+    const verdict = verifyBody(signBody(post, { ...fields, head: A }, key), [key]);
+    expect(verdict.ok).toBe(true);
+    if (verdict.ok) {
+      expect(verdict.payload.head).toBe(A);
+      expect(verdict.payload.h).toBe(bodyHash(post));
+      expect(signedHead(verdict.payload)).toBe(A);
+    }
+  });
+
+  it('does not check once the head is changed', () => {
+    const signed = signBody(post, { ...fields, head: A }, key);
+    const [, payload] = /openadlc-sig:v1\.[a-z0-9]+\.([A-Za-z0-9_-]+)\./.exec(signed)!;
+    const said = JSON.parse(Buffer.from(payload!, 'base64url').toString()) as Record<string, unknown>;
+    expect(said.head).toBe(A);
+    const moved = Buffer.from(JSON.stringify({ ...said, head: B })).toString('base64url');
+    expect(verifyBody(signed.replace(payload!, moved), [key])).toMatchObject({ ok: false, reason: 'bad-mac' });
+  });
+
+  it('is none for a review signed without one, or a head that is no commit', () => {
+    const verdict = verifyBody(signBody(post, fields, key), [key]);
+    expect(verdict.ok && 'head' in verdict.payload).toBe(false);
+    expect(signedHead(verdict.payload)).toBeNull();
+    expect(signedHead({ head: 'head' })).toBeNull();
+    expect(signedHead({ head: A.toUpperCase() })).toBeNull();
+    expect(signedHead(null)).toBeNull();
   });
 });
 

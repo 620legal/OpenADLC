@@ -237,7 +237,14 @@ none yet, says its kind of work instead ("writing the change").
    under way or one opened since the round began counts as its review of this
    diff, never one from an earlier round. The lead likewise: a lead task under
    way, or one opened since the later of the round's start and the last other
-   seat's post, is that review; otherwise the sweep asks the lead again. A
+   seat's post, is that review; otherwise the sweep asks the lead again. An
+   approval of the lead's or a blocking seat's that GitHub shows but that
+   counts for nothing on this diff — its signature names no head, names a
+   head with another diff, or does not check — is no review of it either:
+   `review-gate` says why beside the seat, and the seat is asked again when
+   its turn comes, once for each head (`review.asked_again`
+   `{subjectRef, seat, head, why}`), though the task behind that approval
+   was opened in this round. A
    pull request only the lead reviews (a revert no other seat's trigger asks
    for) gets the
    lead's review in every round this way. The sweep, on the merge job's

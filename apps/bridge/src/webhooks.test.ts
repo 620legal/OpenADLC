@@ -9216,6 +9216,147 @@ describe('the lead accepting a widening of scope in its approval', () => {
 
     expect(automation.setPullLabel).not.toHaveBeenCalled();
   });
+
+  it('puts nothing on for an approval whose signature names an earlier head, though GitHub shows it on this one', async () => {
+    // GitHub moves a review's commit: on 620legal/OpenADLC#118 it moved the
+    // lead's approval onto the merge line's update of the branch.
+    const { webhooks, automation, attribution } = bridge(true);
+    attribution!.reviewsThatCount.mockImplementation(async (_repo: string, _n: number, reviews: unknown[]) =>
+      reviews.map((review) => ({ ...(review as object), commitId: 'abad1deaabad1deaabad1deaabad1deaabad1dea' })),
+    );
+
+    await webhooks.receive('pull_request_review', approved() as never, 'delivery-lead-scope-earlier');
+
+    expect(automation.setPullLabel).not.toHaveBeenCalled();
+  });
+});
+
+describe('an approval GitHub moves onto the merge line’s update of the branch', () => {
+  // 620legal/OpenADLC#118: the lead approved b789079 in a review signed with
+  // that head. The merge line brought the branch up to date as 692cd1f, which
+  // brought in main's changes to two files the pull request changes too, and
+  // GitHub sent an `edited` delivery, its body unchanged, that moved the
+  // approval's `commit_id` onto 692cd1f. Read from GitHub, the approval was of
+  // the new head, and the gate went green on a diff the lead never read.
+  const A = 'b7890794b365dd3ec75b81f761f1889dfb11674a';
+  const B = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const LEAD = 'openadlc-cipher-janedoe';
+  const BODY = 'Lead review: approve.\n\n<!-- openadlc:{"event":"review_posted","verdict":"approve","lens":"lead"} -->\n\n<!-- openadlc-seat:lead-reviewer -->';
+  // Only the lead reviews here, so its approval is the whole of the gate.
+  const config = {
+    automationBot: null,
+    humans: [],
+    review: { reviewers: [{ seat: 'lead-reviewer', lens: 'lead', lead: true, blocking: false, trigger: 'always' }], maxRounds: 3 },
+  };
+
+  /** Every event recorded, with when: the round and the asking again are read back from it, as the store would. */
+  const log: { type: string; payload: Record<string, unknown>; at: string }[] = [];
+  let restore: () => void = () => undefined;
+
+  beforeEach(async () => {
+    store.bots = [
+      { id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'openadlc-atlas-janedoe' },
+      { id: 'bot-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: LEAD },
+    ];
+    // The round began at 01:00; the lead's task that approved b789079 was opened in it.
+    store.botTasks = [{ id: 'task-lead', kind: 'review', subjectRef: 'openadlc#118', botId: 'bot-lead', state: 'done', createdAt: '2026-10-23T01:13:30.000Z' }];
+    const db = await import('@openadlc/db');
+    log.length = 0;
+    log.push({ type: 'review.round_opened', payload: { subjectRef: 'openadlc#118', sha: A }, at: '2026-10-23T01:00:00.000Z' });
+    const record = vi.mocked(db.recordEvent).getMockImplementation()!;
+    vi.mocked(db.recordEvent).mockImplementation(async (event) => {
+      log.push({ type: event.type, payload: event.payload as Record<string, unknown>, at: new Date().toISOString() });
+      return record(event);
+    });
+    vi.mocked(db.lastEventAt).mockImplementation(
+      async (type, fields) =>
+        [...log].reverse().find((event) => event.type === type && Object.entries(fields ?? {}).every(([key, value]) => event.payload[key] === value))?.at ?? null,
+    );
+    restore = () => {
+      vi.mocked(db.recordEvent).mockImplementation(record);
+      vi.mocked(db.lastEventAt).mockImplementation(async () => null);
+    };
+  });
+
+  afterEach(() => restore());
+
+  function bridge(diffs: Record<string, string>) {
+    const statuses: { sha: string; state: string; description: string }[] = [];
+    const github = {
+      listPullCommits: vi.fn(async () => []),
+      setCommitStatus: vi.fn(async (_repo: string, sha: string, status: { state: string; description: string }) => void statuses.push({ sha, state: status.state, description: status.description })),
+      listEveryPullFile: vi.fn(async () => ({ files: ['apps/bridge/src/api.ts', 'docs/configuration.md'], complete: true, renamedFrom: [] })),
+      // As GitHub lists it after the `edited` delivery: on the new head.
+      listReviews: vi.fn(async () => [{ id: 5622816949, user: LEAD, state: 'APPROVED', body: BODY, submittedAt: '2026-10-23T01:15:48Z', commitId: B }]),
+      readFileAtRef: vi.fn(async () => '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n'),
+      diffFingerprint: vi.fn(async (_repo: string, _base: string, sha: string) => diffs[sha] ?? null),
+      getPullRequest: vi.fn(async () => ({ labels: [] })),
+    };
+    // What `Attribution.reviewsThatCount` gives back: the review as of the head its signature names.
+    const attribution = {
+      countable: vi.fn(async (posts: unknown[]) => [...posts]),
+      reviewsThatCount: vi.fn(async (_repo: string, _n: number, posts: { id: number }[]) => posts.map((post) => ({ ...post, commitId: A }))),
+    };
+    const automation = new Automation(config as never, { asBot: vi.fn(async () => github), attribution } as never);
+    // The real asking, with a start that records the task as the store would.
+    const open = vi.fn(async (input: Record<string, unknown>) => {
+      store.botTasks.push({ id: `task-${store.botTasks.length + 1}`, kind: 'review', subjectRef: input.subjectRef, botId: input.botId, state: 'running', createdAt: new Date().toISOString() });
+      return { taskId: 'task-again', session: 'review-again' };
+    });
+    const taskService = taskServiceOpening(open as never);
+    const mergeLine = { enter: vi.fn(async () => undefined), advance: vi.fn(async () => null), leave: vi.fn(async () => undefined) };
+    const webhooks = new Webhooks(config as never, automation, {} as never, taskService as never, {} as never, mergeLine as never);
+    return { webhooks, statuses, mergeLine, open };
+  }
+
+  const edited = {
+    action: 'edited',
+    changes: {},
+    sender: { login: LEAD },
+    review: { id: 5622816949, author_association: 'COLLABORATOR', state: 'approved', body: BODY, user: { login: LEAD }, commit_id: B },
+    pull_request: {
+      number: 118,
+      draft: false,
+      user: { login: 'openadlc-atlas-janedoe' },
+      head: { sha: B, ref: 'agent/openadlc-atlas-janedoe/108-issue-108', repo: { full_name: 'janedoe/openadlc' } },
+      base: { ref: 'main' },
+      labels: [],
+    },
+    repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+  };
+
+  async function deliver(webhooks: Webhooks) {
+    const quiet = [vi.spyOn(console, 'warn').mockImplementation(() => undefined), vi.spyOn(console, 'log').mockImplementation(() => undefined)];
+    try {
+      await webhooks.receive('pull_request_review', edited as never, 'delivery-edited-118');
+    } finally {
+      for (const spy of quiet) spy.mockRestore();
+    }
+  }
+
+  it('leaves the gate pending on the new head, saying why, asks the lead again, and puts nothing in the merge line', async () => {
+    const { webhooks, statuses, mergeLine, open } = bridge({ [A]: 'the diff b789079 proposes', [B]: 'the diff with main’s changes to api.ts' });
+
+    await deliver(webhooks);
+
+    expect(statuses).toEqual([{ sha: B, state: 'pending', description: 'waiting on lead-reviewer (its approval is of b789079 and this diff is another)' }]);
+    expect(mergeLine.enter).not.toHaveBeenCalled();
+    // The lead's task that approved b789079 was opened in this round, and
+    // read as its review of this diff: it is asked again, once.
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ bot: 'lead-reviewer', subjectRef: 'openadlc#118', kind: 'review' }));
+    await deliver(webhooks);
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts it on the new head when that head’s diff is the one approved', async () => {
+    const { webhooks, statuses, mergeLine } = bridge({ [A]: 'the diff b789079 proposes', [B]: 'the diff b789079 proposes' });
+
+    await deliver(webhooks);
+
+    expect(statuses).toEqual([{ sha: B, state: 'success', description: 'every requested review has been posted' }]);
+    expect(mergeLine.enter).toHaveBeenCalledWith(expect.objectContaining({ prNumber: 118, headSha: B }));
+  });
 });
 
 describe('the issues a revert after a red smoke reopens', () => {

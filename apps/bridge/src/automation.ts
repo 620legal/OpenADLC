@@ -1,7 +1,7 @@
 import { permissionOn, theApp } from './people.js';
 import { audit, bots, hasEventOfType, issues, lastEventAt, leases, listEventsOfTypeWith, recordEvent, repos, stageMoves } from '@openadlc/db';
 import { REVIEW_DISMISSED_BY_BRIDGE, REVIEW_ROUND_OPENED, issueNumberFromBranch, scopeLabelAcceptedFrom } from './work.js';
-import { BASE_CHANGES, ReviewerStandings, isTemplatePlaceholder, reviewRequestRefusal, reviewerStandingOf, type GitHubClient, type PullCommit, type ReviewerStanding, type SuiteWorkflowRun } from '@openadlc/github';
+import { BASE_CHANGES, GitHubApiError, ReviewerStandings, isTemplatePlaceholder, reviewRequestRefusal, reviewerStandingOf, type GitHubClient, type PullCommit, type ReviewerStanding, type SuiteWorkflowRun } from '@openadlc/github';
 import {
   STAGE_LABELS,
   isBackwardMove,
@@ -186,8 +186,13 @@ export interface MergeFacts {
   /** The people the repository's AGENTS.md, on its default branch, names for the paths it touches. */
   humansRequired: readonly string[];
   humanRulesUnknown: boolean;
-  /** Its reviews, every page, oldest first, those that count only (`countableReviews`). */
-  reviews: readonly { id: number; user: string; state: string; body?: string | null; commitId: string | null; association?: string | null }[];
+  /**
+   * Its reviews, every page, oldest first, those that count only (`countableReviews`).
+   * `commitId` is the head each is of (`asOfSignedHeads`): for a crew review
+   * whose signature checked, the one that signature names, null when it names
+   * none; GitHub's commit for it is `githubCommitId`.
+   */
+  reviews: readonly { id: number; user: string; state: string; body?: string | null; commitId: string | null; githubCommitId?: string | null; association?: string | null }[];
   /**
    * What each person whose latest verdict asks for changes, and each person
    * the rules require, may do here, by lower-cased login: GitHub's answer, or
@@ -208,8 +213,9 @@ export interface MergeFacts {
    * nothing here can check one. A change to how CI runs lands on the security
    * reviewer's verdict from these only, and a required seat on an account
    * other seats use too is that seat's only from these (`checkedForSharedSeats`).
+   * Each as of the head its signature names, as `reviews` are.
    */
-  checkedReviews: readonly { id: number; user: string; state: string; body?: string | null; commitId: string | null }[] | null;
+  checkedReviews: readonly { id: number; user: string; state: string; body?: string | null; commitId: string | null; githubCommitId?: string | null }[] | null;
   /** Who merges a change to how CI runs here: OpenADLC once the security reviewer approves (the default), or a person. */
   ciMergedBy: 'openadlc' | 'person';
   /** The seat that reviews for security, by bot name, or null when the rules name none. */
@@ -525,6 +531,94 @@ export function checkedForSharedSeats<R extends { id: number; user: string | nul
     if (author.kind !== 'openadlc' || !author.shared || !author.bot || !seats.includes(author.bot.name)) return true;
     return ids.has(review.id);
   });
+}
+
+/**
+ * The reviews, each as of the head it is of: for a crew review whose signature
+ * checked (`checked`, from `Attribution.reviewsThatCount`), the head that
+ * signature names, null when it names none; for the rest, the commit GitHub
+ * shows it on, which is also kept as `githubCommitId`.
+ *
+ * Not GitHub's commit for a signed review: GitHub moves it. On
+ * 620legal/OpenADLC#118 an `edited` delivery, its body unchanged, moved the
+ * lead's approval of b789079 onto 692cd1f, the merge line's update of the
+ * branch, which brought in the base's changes to two files the pull request
+ * changes too, so its diff was not the one approved. Read from GitHub, the
+ * approval counted for the new head; only the lead reviewing again kept it
+ * from merging.
+ */
+export function asOfSignedHeads<R extends { id: number; commitId: string | null }>(
+  reviews: readonly R[],
+  checked: readonly { id: number; commitId?: string | null }[] | null,
+): (R & { githubCommitId: string | null })[] {
+  const signed = new Map((checked ?? []).map((review) => [review.id, review.commitId ?? null]));
+  return reviews.map((review) => ({
+    ...review,
+    commitId: signed.has(review.id) ? (signed.get(review.id) ?? null) : review.commitId,
+    githubCommitId: review.commitId,
+  }));
+}
+
+/** An approval GitHub shows that counts for nothing on this diff (`approvalsNotCounted`). */
+export interface NotCounted {
+  seat: string;
+  reviewId: number;
+  /** The head the pull request is at: the diff it counts for nothing on. */
+  head: string;
+  /** Why, as `review-gate` says it beside the seat: no comma, since the gate's seats are read back split on them (`seatsWaitedOn`). */
+  why: string;
+}
+
+/**
+ * The approvals of `seats` that have no review of this diff, though each one's
+ * latest verdict is an approval GitHub shows, with why it counts for nothing
+ * here: its signature names no head, the head it names has another diff, or
+ * its signature does not check, so the merge would not count it either. With
+ * no check that ran (`signed` null) nothing can say, and none is listed.
+ *
+ * The gate says why beside the seat, and the seat is asked again
+ * (`TaskService.openLeadReview`, `openMissingReviews`): the task behind that
+ * approval read as the seat's review of this diff, so nothing asked it again,
+ * and a pull request whose lead approved before reviews were signed with
+ * their head sat at "waiting on lead-reviewer" for good.
+ */
+export function approvalsNotCounted(
+  reviews: readonly { id: number; user: string | null; state: string; body?: string | null; commitId: string | null }[],
+  signed: readonly { id: number }[] | null,
+  crew: readonly { name: string; slot?: string; githubLogin: string | null }[],
+  seats: readonly string[],
+  posted: readonly string[],
+  head: string,
+): NotCounted[] {
+  if (!signed) return [];
+  const latest = new Map<string, (typeof reviews)[number]>();
+  for (const review of reviews) {
+    const state = review.state.toUpperCase();
+    if (state === 'COMMENTED' || state === 'PENDING') continue;
+    const author = whoWrote(review.user, crew, { bot: seatOf(review.body) });
+    if (author.kind === 'openadlc' && author.bot && seats.includes(author.bot.name)) latest.set(author.bot.name, review);
+  }
+  const checked = new Set(signed.map((review) => review.id));
+  const off: NotCounted[] = [];
+  for (const [seat, review] of latest) {
+    if (review.state.toUpperCase() !== 'APPROVED' || posted.includes(seat)) continue;
+    const why = !checked.has(review.id)
+      ? 'its approval is not signed by OpenADLC'
+      : review.commitId
+        ? `its approval is of ${review.commitId.slice(0, 7)} and this diff is another`
+        : 'its approval names no head it reviewed';
+    off.push({ seat, reviewId: review.id, head, why });
+  }
+  return off;
+}
+
+/**
+ * The seats `review-gate` says it waits on, read back from what it says
+ * (`computeReviewGate`), each without the note on why an approval of its
+ * counts for nothing here.
+ */
+export function seatsWaitedOn(description: string): string[] {
+  return (/^waiting on (.+)$/.exec(description)?.[1]?.split(', ') ?? []).map((name) => name.replace(/ \([^()]*\)$/, ''));
 }
 
 /** When the last of `seats` posted among these reviews, or null when none did. */
@@ -1132,7 +1226,7 @@ export function mergeDecision(facts: MergeFacts): {
         review.state === 'APPROVED' && seat === facts.leadRechecks && review.commitId && facts.carriedFrom.has(review.commitId)
           ? `${seat} re-checks the resolution of a conflict, and has approved only the version before it`
           : review.state === 'APPROVED'
-            ? `${seat} approved an earlier version whose diff is not known to be this one`
+            ? approvedAnother(seat, review, signed.has(review.id))
             : `${seat}'s latest verdict is ${review.state.toLowerCase().replace('_', ' ')}`,
       );
     }
@@ -1162,6 +1256,23 @@ export function mergeDecision(facts: MergeFacts): {
   }
   if (approvals.length === 0) return refuse('nobody was asked to review it');
   return { land: true, reason: 'every requested reviewer approved this version, and its checks are green', approvals };
+}
+
+/**
+ * Why a seat's approval is not of the version that would land. A signed one
+ * is of the head its signature names, whatever commit GitHub shows it on
+ * (`asOfSignedHeads`), so the refusal names both when they differ; one whose
+ * signature names no head is of none.
+ */
+function approvedAnother(seat: string, review: { commitId: string | null; githubCommitId?: string | null }, signed: boolean): string {
+  if (signed && !review.commitId) {
+    return `${seat}'s approval names no head in its OpenADLC signature, so it is of no version this can count; ${seat} reviews it again with OpenADLC's gh, which signs the head it reviewed`;
+  }
+  const shown = review.githubCommitId ?? null;
+  if (signed && review.commitId && shown && shown !== review.commitId) {
+    return `${seat}'s signature says it approved \`${review.commitId.slice(0, 7)}\`, an earlier version whose diff is not known to be this one, though GitHub shows the approval on \`${shown.slice(0, 7)}\``;
+  }
+  return `${seat} approved an earlier version whose diff is not known to be this one`;
 }
 
 /** A run of the CI workflow, as the review loop reads it. */
@@ -1261,6 +1372,40 @@ function askedByDefault(entry: ReviewerSeat, input: { labels: readonly string[];
  */
 export function fastPathOf(labels: readonly string[], headRef: string | null | undefined): boolean {
   return labels.includes('revert') && Boolean(headRef?.startsWith(REVERT_BRANCH_PREFIX));
+}
+
+/**
+ * What the bridge says when GitHub will not dismiss an approval a push made
+ * stale. On 620legal/OpenADLC#118 it answered 403 "Resource not accessible by
+ * integration": the automation account, which dismisses, holds triage there,
+ * and dismissing a review takes write. The line said only that, cut at 120
+ * characters, and GitHub's own review decision went on showing the pull
+ * request approved. Nothing waits on the dismissal: an approval counts only for
+ * the head its signature names, or a later head with the same diff
+ * (`asOfSignedHeads`), so a stale one counts for nothing on the new diff,
+ * dismissed or not. What to do is only for GitHub's own view to match.
+ */
+export function dismissalRefused(user: string, repoFullName: string, automationLogin: string | null, error: unknown): string {
+  const refused = error instanceof GitHubApiError && error.status === 403;
+  const said = refused ? `GitHub refused it (403 ${githubMessage(error.body)})` : `GitHub answered: ${(error instanceof Error ? error.message : String(error)).slice(0, 160)}`;
+  const fix = refused
+    ? ` For GitHub to show it dismissed too, ${automationLogin ? `the automation account, ${automationLogin},` : 'the automation account'} needs write access to ${repoFullName}, ` +
+      'and the OpenADLC app “Pull requests: Read and write”: dismissing a review takes both.'
+    : '';
+  return (
+    `could not dismiss ${user}'s stale approval: ${said}. Nothing waits on that: the gate and the merge count an approval only for the head its ` +
+    `signature names, or a later head with the same diff, so this one counts for nothing now; only GitHub's own review decision still shows it.${fix}`
+  );
+}
+
+/** GitHub's own message out of the body of a refusal, or the body as it came. */
+function githubMessage(body: string): string {
+  try {
+    const message = (JSON.parse(body) as { message?: unknown }).message;
+    return typeof message === 'string' && message ? message.slice(0, 160) : body.slice(0, 160);
+  } catch {
+    return body.slice(0, 160);
+  }
 }
 
 /**
@@ -1424,6 +1569,8 @@ export class Automation {
      * outage never changes the gate's words.
      */
     cannotReview?: ReadonlyMap<string, string>;
+    /** Seats whose approval GitHub shows counts for nothing on this diff, with why (`approvalsNotCounted`). */
+    approvalsOff?: ReadonlyMap<string, string>;
   }): ReviewGate {
     if (input.draft) return { state: 'pending', description: 'pull request is still a draft' };
 
@@ -1432,10 +1579,12 @@ export class Automation {
     // A seat GitHub refused to ask is not waited on: "waiting on" someone who
     // can never review was a gate that never finished and said nothing why.
     const waiting = outstanding.filter((reviewer) => !never(reviewer));
+    const named = (reviewers: string[]) =>
+      fitStatus(`waiting on ${reviewers.map((reviewer) => (input.approvalsOff?.get(reviewer) ? `${reviewer} (${input.approvalsOff.get(reviewer)})` : reviewer)).join(', ')}`);
     // The others first: the lead's review is the one that reads theirs.
     const before = input.lead ? waiting.filter((reviewer) => reviewer !== input.lead) : waiting;
-    if (before.length > 0) return { state: 'pending', description: `waiting on ${before.join(', ')}` };
-    if (waiting.length > 0) return { state: 'pending', description: `waiting on ${waiting.join(', ')}` };
+    if (before.length > 0) return { state: 'pending', description: named(before) };
+    if (waiting.length > 0) return { state: 'pending', description: named(waiting) };
 
     // Posted is not approved. Every review in, with one asking for changes, is
     // a pull request that is not done — and where no ruleset holds the merge,
@@ -1589,6 +1738,12 @@ export class Automation {
      */
     securityAsks: string | null;
     leadDue: { seat: string; since: string | null } | null;
+    /**
+     * Approvers with no review of this diff whose approval GitHub shows counts
+     * for nothing on it: each is asked again when its turn comes, the task
+     * behind that approval not being one of this diff (`approvalsNotCounted`).
+     */
+    notCounted: NotCounted[];
   }> {
     const client = await this.automationClient();
     const labels = pr.labels.map((label) => label.name);
@@ -1605,13 +1760,24 @@ export class Automation {
         filesUnknown = true;
       }
     }
-    const reviews = client ? await client.listReviews(repoFullName, pr.number).catch(() => []) : [];
+    const onGitHub = client ? await client.listReviews(repoFullName, pr.number).catch(() => []) : [];
     // As `mergeFacts` reads them, so the gate waits on whom the merge will.
     const ciKeys = client
       ? await ciKeysChanged(changedFiles, (path, ref) => client.readFileIfPresent(repoFullName, path, ref), { base: pr.baseRef, head: pr.head.sha })
       : undefined;
 
     const crew = await bots.listBots();
+    // Whatever the attribution mode: on a shared account, a lead-tagged post
+    // that is not checked is neither the lead's review nor a reason not to ask
+    // the lead for one. A check that could not run holds rather than counts.
+    // A checked review is of the head its signature names, as the merge reads
+    // it (`asOfSignedHeads`), not of the commit GitHub moved it to.
+    const signedOnes = this.actors.attribution
+      ? await this.actors.attribution.reviewsThatCount(repoFullName, pr.number, onGitHub, crew).catch(() => null)
+      : null;
+    const reviews = asOfSignedHeads(onGitHub, signedOnes);
+    const signedIds = new Set((signedOnes ?? []).map((review) => review.id));
+    const checked = signedOnes ? reviews.filter((review) => signedIds.has(review.id)) : null;
     const decision = this.decideReviewers(
       {
         labels,
@@ -1636,12 +1802,6 @@ export class Automation {
     const standing = reviews.filter((review) => review.state.toUpperCase() !== 'DISMISSED');
     const counted = await this.countableReviews(standing, crew);
     const carried = await this.carriedTo(repoFullName, pr.number, pr.head.sha);
-    // Whatever the attribution mode: on a shared account, a lead-tagged post
-    // that is not checked is neither the lead's review nor a reason not to ask
-    // the lead for one. A check that could not run holds rather than counts.
-    const checked = this.actors.attribution
-      ? await this.actors.attribution.reviewsThatCount(repoFullName, pr.number, reviews, crew).catch(() => null)
-      : null;
     const resolution = await this.resolvedAt(repoFullName, pr.number, pr.head.sha);
     let reviewed = client ? await this.onThisDiff(client, repoFullName, pr.baseRef, pr.head.sha, counted, carried) : counted;
     if (client && resolution.rechecks && carried.size > 0) {
@@ -1651,10 +1811,19 @@ export class Automation {
         return own.has(review) || author.kind !== 'openadlc' || author.bot?.name !== decision.lead;
       });
     }
-    const onDiff = checkedForSharedSeats(reviewed, checked, crew, decision.approvers);
+    // An approval of the lead's or a blocking seat's whose signature does not
+    // check is no review of this diff, on any account and in audit mode too:
+    // the merge never counts it, and counted here it turned the gate green on
+    // an approval the merge line then refused, with nobody asked again.
+    const onDiff = checkedForSharedSeats(reviewed, checked, crew, decision.approvers).filter((review) => {
+      if (!checked || review.state.toUpperCase() !== 'APPROVED' || signedIds.has(review.id)) return true;
+      const author = whoWrote(review.user, crew, { bot: seatOf(review.body) });
+      return author.kind !== 'openadlc' || !author.bot || !decision.approvers.includes(author.bot.name);
+    });
     const posted = seatsThatPosted(onDiff, crew, asked);
     const asking = seatsAskingForChanges(onDiff, crew, decision.approvers);
     const approving = seatsApproving(onDiff, crew, decision.approvers);
+    const notCounted = approvalsNotCounted(standing, checked, crew, decision.approvers, posted, pr.head.sha);
 
     const { rules, required } = await this.humansRequiredFor(repoFullName, pr.baseRef, pr.head.sha, changedFiles);
     const cannot = await this.cannotReviewHere(repoFullName, { seats: asked, humans: required });
@@ -1682,6 +1851,7 @@ export class Automation {
       humanRulesUnknown: rules === null,
       filesUnknown,
       cannotReview: cannot,
+      approvalsOff: new Map(notCounted.map((entry) => [entry.seat, entry.why])),
     });
     // An advisory security seat is not an approver: its gh refuses --approve,
     // and the gate used to go green on the lead's approval whatever that
@@ -1712,7 +1882,7 @@ export class Automation {
     const leadDue = due
       ? { seat: decision.lead, since: await this.leadAskedSince(repoFullName, pr.number, lastPostedBy(onDiff, crew, others), resolution.at) }
       : null;
-    return { gate, decision, posted, approved: approving, changesRequested: asking, securityAsks, leadDue };
+    return { gate, decision, posted, approved: approving, changesRequested: asking, securityAsks, leadDue, notCounted };
   }
 
   /**
@@ -1929,7 +2099,7 @@ export class Automation {
     const client = await this.automationClient();
     if (!client) return null;
     const repoFullName = repo.fullName;
-    const [files, reviews, runs, statuses, crew, gate, mode] = await Promise.all([
+    const [files, onGitHub, runs, statuses, crew, gate, mode] = await Promise.all([
       client.listEveryPullFile(repoFullName, pull.number),
       client.listReviews(repoFullName, pull.number),
       client.checkRunsFor(repoFullName, pull.headSha),
@@ -1967,8 +2137,13 @@ export class Automation {
     const attribution = this.actors.attribution;
     const signaturesEnforced = mode === 'enforce' && Boolean(attribution);
     // Checked whether or not they are enforced: a change to how CI runs lands
-    // on the security reviewer's verdict, and only a checked one.
-    const checked = attribution ? await attribution.reviewsThatCount(repoFullName, pull.number, reviews, crew) : null;
+    // on the security reviewer's verdict, and only a checked one. And each
+    // checked review is of the head its signature names, not of the commit
+    // GitHub shows it on (`asOfSignedHeads`).
+    const signedOnes = attribution ? await attribution.reviewsThatCount(repoFullName, pull.number, onGitHub, crew) : null;
+    const reviews = asOfSignedHeads(onGitHub, signedOnes);
+    const signedIds = new Set((signedOnes ?? []).map((review) => review.id));
+    const checked = signedOnes ? reviews.filter((review) => signedIds.has(review.id)) : null;
 
     const writers = new Map<string, boolean>();
     for (const entry of history ?? []) {
@@ -2297,9 +2472,10 @@ export class Automation {
       await client
         .dismissReview(input.repoFullName, input.prNumber, review.id, input.reason)
         .then(() => dismissed.push(review.user))
-        .catch((error: Error) => {
+        .catch(async (error: Error) => {
           this.ownDismissals.delete(review.id);
-          console.warn(`[bridge] could not dismiss ${review.user}'s approval: ${error.message.slice(0, 120)}`);
+          const login = await automationBot(this.config).then((bot) => bot?.githubLogin ?? null, () => null);
+          console.warn(`[bridge] ${input.repoFullName}#${input.prNumber}: ${dismissalRefused(review.user, input.repoFullName, login, error)}`);
         });
     }
     return dismissed;

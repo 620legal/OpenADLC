@@ -273,8 +273,10 @@ still told apart. The tag alone is the account's word: any seat's session holds
 the account's token and could write the lead's. So the lead's approval and a
 blocking seat's count toward the merge only when the signature checks, names
 that seat and was made for that pull request and that review (`mergeDecision`,
-`apps/bridge/src/automation.ts`), on any account; and on an account more than
-one seat uses, toward the gate and the lead's turn as well
+`apps/bridge/src/automation.ts`), on any account; and toward the gate and the
+lead's turn as well, which ask that seat again for one that does not
+(`approvalsNotCounted`). On an account more than one seat uses, any review
+tagged as one of those seats is that seat's only when its signature checks
 (`checkedForSharedSeats`). That holds in audit mode as well as in enforce. OpenADLC's `gh` and the bridge's signing endpoint also refuse to put
 another seat's tag on what a session posts.
 
@@ -410,7 +412,18 @@ can answer the crew's questions, and is audited as `github.account_allowed`.
     that review, in either attribution mode: an approval written around
     OpenADLC's `gh` with the account's own token lands nothing, and with
     nothing to check signatures the bridge does not merge. On a GitHub account
-    more than one seat uses, an unsigned review there is nobody's;
+    more than one seat uses, an unsigned review there is nobody's. The version
+    a signed review is of is the head its signature names, the one its task's
+    worktree had checked out, never the commit GitHub shows it on: GitHub
+    moves that (on 620legal/OpenADLC#118 an `edited` delivery moved the lead's
+    approval onto the merge line's update of the branch, a different diff),
+    and an approval whose signature names no head counts for none, which
+    `review-gate` says beside the seat it waits on, asking that seat to review
+    again. When a push changes the
+    diff the bridge also dismisses the approvals it made stale, but nothing
+    waits on that: GitHub refuses it where the automation account has less
+    than write access, the bridge logs what to grant, and the approval counts
+    for nothing on the new diff either way;
   - the people named for its paths have approved it, each from an account
     GitHub says has write access or more to the repository (an approval from a
     login that lacks it, or whose permission GitHub did not give, counts for
@@ -789,7 +802,10 @@ at all. What does hold, whatever a session runs:
   nowhere else: when a `gh pr comment`, `pr review` or `pr edit` names no
   number, OpenADLC's `gh` asks the real one for the pull request it acts on
   (the current branch's, or the branch or URL given) and signs for that; if
-  the lookup fails the post goes out signed with no number. A new issue or
+  the lookup fails the post goes out signed with no number. A review is also
+  signed with the head it is of: OpenADLC's `gh` sends the worktree's HEAD
+  with it and refuses a `gh pr review` where it cannot read one, and the
+  bridge signs no review without one. A new issue or
   pull request has no number yet: its signature is tied to the first place it
   is seen, and refused on any other. Where the install enforces signatures, a crew review written around it
   counts for nobody; in either mode, an approval from the lead or a blocking

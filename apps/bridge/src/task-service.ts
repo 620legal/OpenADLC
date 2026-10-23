@@ -10,7 +10,7 @@ import { asAutomation } from './automation-bot.js';
 import { alreadyLanded, endsWithSubject, subjectClosed, wasRefused } from './gates.js';
 import { blockersOf, waitingOnBlocked, type Blocker } from './health/checks/crew.js';
 import type { HostdClient, ReviewMode } from './hostd-client.js';
-import { reviewRulesOf } from './automation.js';
+import { reviewRulesOf, type NotCounted } from './automation.js';
 import { requestPrefixOf } from './request-context.js';
 import { readSeatPauses, seatPausedWords, type SeatPause } from './seat-pause.js';
 import { heldWords } from './item-hold.js';
@@ -578,6 +578,8 @@ export class TaskService {
     issueNumber: number | null;
     /** The seats the gate waits on. */
     waitingOn: readonly string[];
+    /** Approvals GitHub shows that count for nothing on this diff (`ReviewStanding.notCounted`): their seats are asked again. */
+    notCounted?: readonly NotCounted[];
   }): Promise<string[]> {
     const subjectRef = `${input.repo.name}#${input.prNumber}`;
     const had = await tasks.listTasksForSubjects('review', [subjectRef]).catch(() => null);
@@ -589,10 +591,14 @@ export class TaskService {
     const waiting = input.waitingOn
       .map((name) => crew.find((entry) => entry.name === name))
       .filter((bot): bot is (typeof crew)[number] => Boolean(bot?.githubLogin));
-    // A seat asked again after a bot dismissed its review: its task from
-    // before that is the review that was dismissed.
+    // A seat asked again after a bot dismissed its review, or after its
+    // approval was found to count for nothing on this diff: its task from
+    // before that is the review that was dismissed, or that approval's.
     const askedAgain = new Map<string, string | null>();
-    for (const bot of waiting) askedAgain.set(bot.id, await lastAskedAgain(subjectRef, bot.name));
+    for (const bot of waiting) {
+      await notOfThisDiff(subjectRef, bot.name, input.notCounted);
+      askedAgain.set(bot.id, await lastAskedAgain(subjectRef, bot.name));
+    }
     const asked = (bot: { id: string }) => {
       const since = [round, askedAgain.get(bot.id) ?? null].filter((at): at is string => Boolean(at)).map((at) => Date.parse(at));
       return had.some(
@@ -649,7 +655,9 @@ export class TaskService {
    * `since`, is that review already. With no `since`, only a task under way
    * is: taking it for "any lead task ever" left the lead unasked on every
    * round after its first, since it always had an earlier one. A lead that
-   * cannot work yet is left until it can.
+   * cannot work yet is left until it can. A lead whose approval GitHub shows
+   * counts for nothing on this diff (`notCounted`) is asked again: the task
+   * behind that approval is no review of it.
    */
   async openLeadReview(input: {
     repo: { name: string };
@@ -661,14 +669,18 @@ export class TaskService {
     since: string | null;
     /** What the lead is to look at, beyond the review: only a conflict's resolution (`resolutionCheckBrief`). */
     extraContext?: ContextDocument[];
+    /** Approvals GitHub shows that count for nothing on this diff (`ReviewStanding.notCounted`). */
+    notCounted?: readonly NotCounted[];
   }): Promise<string | null> {
     const subjectRef = `${input.repo.name}#${input.prNumber}`;
     const lead = (await bots.listBots().catch(() => [])).find((bot) => bot.name === input.seat);
     if (!lead?.githubLogin) return null;
     const had = await tasks.listTasksForSubjects('review', [subjectRef]).catch(() => null);
     if (!had) return null;
-    // A lead asked again after a bot dismissed its review: its task from
-    // before that is the review that was dismissed.
+    // A lead asked again after a bot dismissed its review, or after its
+    // approval was found to count for nothing on this diff: its task from
+    // before that is the review that was dismissed, or that approval's.
+    await notOfThisDiff(subjectRef, lead.name, input.notCounted);
     const again = await lastAskedAgain(subjectRef, lead.name);
     const cutoffs = [input.since, again].filter((at): at is string => Boolean(at)).map((at) => Date.parse(at));
     const since = cutoffs.length > 0 ? Math.max(...cutoffs) : null;
@@ -1536,4 +1548,27 @@ const ASKED_AGAIN_WINDOW_MS = 7 * 24 * 60 * 60_000;
 /** When `seat` was last asked to review this pull request again (`REVIEW_ASKED_AGAIN`), or null. */
 async function lastAskedAgain(subjectRef: string, seat: string): Promise<string | null> {
   return lastEventAt(REVIEW_ASKED_AGAIN, { subjectRef, seat }).catch(() => null);
+}
+
+/**
+ * Records that `seat`'s review tasks on this pull request until now are no
+ * review of its diff, when `notCounted` lists an approval of that seat's: the
+ * approval they posted counts for nothing on it (`approvalsNotCounted`). It is
+ * the asking again `lastAskedAgain` reads, so the next task opened is this
+ * diff's review. Without it the task behind that approval read as the seat
+ * already asked, by `openLeadReview` and `openMissingReviews` alike, and a lead
+ * that approved before reviews were signed with their head was never asked
+ * again. Once for each head: recorded on every sweep, it would move past the
+ * review it had just started, and the lead would be asked twice for one diff
+ * while that review ran. Not knowing whether it was recorded records nothing,
+ * and the gate sweep asks again.
+ */
+async function notOfThisDiff(subjectRef: string, seat: string, notCounted: readonly NotCounted[] | undefined): Promise<void> {
+  const mine = notCounted?.find((entry) => entry.seat === seat);
+  if (!mine) return;
+  const fields = { subjectRef, seat, head: mine.head };
+  if (await hasEventOfType(REVIEW_ASKED_AGAIN, new Date(Date.now() - ASKED_AGAIN_WINDOW_MS), fields).catch(() => true)) return;
+  await recordEvent({ source: 'platform', type: REVIEW_ASKED_AGAIN, payload: { ...fields, why: mine.why } }).catch((error: unknown) =>
+    console.warn(`[bridge] ${subjectRef}: ${seat} could not be asked again, ${mine.why}: ${error instanceof Error ? error.message : error}`),
+  );
 }

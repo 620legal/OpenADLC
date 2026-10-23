@@ -1,7 +1,7 @@
 import { audit, bots, issues, listEventsOfType, recordEvent, repos, stageMoves, tasks, withAdvisoryLock } from '@openadlc/db';
 import { acceptOnStage } from './design-memory.js';
 import { leadReviewer, PLAN_CHANGE_REVIEW_SKILL, REPO_DEFAULTS, type StageKey, type StageMode } from '@openadlc/shared';
-import type { Automation } from './automation.js';
+import { seatsWaitedOn, type Automation } from './automation.js';
 import type { DispatchGate } from './dispatch-gate.js';
 import type { TaskService } from './task-service.js';
 import { dependencyIsSatisfied, hasIgnoreLabel, parseDependencies } from '@openadlc/shared';
@@ -378,15 +378,16 @@ export class StageHandoff {
       seat = standing?.decision.lead ?? leadReviewer(this.automation.reviewRules(crew)).seat;
       // The seats the gate waits on before the lead, as it names them
       // (`computeReviewGate`): one that cannot be asked here is not among them.
-      const named = /^waiting on (.+)$/.exec(standing?.gate.description ?? '')?.[1]?.split(', ') ?? [];
+      const named = seatsWaitedOn(standing?.gate.description ?? '');
       const before = named.filter((name) => name !== seat && !name.startsWith('@'));
+      const notCounted = standing?.notCounted;
       if (before.length > 0) {
-        await this.taskService.openMissingReviews({ repo, prNumber, branch, issueNumber, waitingOn: before });
+        await this.taskService.openMissingReviews({ repo, prNumber, branch, issueNumber, waitingOn: before, notCounted });
         return;
       }
       // Due on this diff since its others posted; a lead that has posted on
       // it already wrote the review this round answered, so from now.
-      if (await this.taskService.openLeadReview({ repo, prNumber, branch, issueNumber, seat, since: standing?.leadDue?.since ?? since })) return;
+      if (await this.taskService.openLeadReview({ repo, prNumber, branch, issueNumber, seat, since: standing?.leadDue?.since ?? since, notCounted })) return;
     } catch (error) {
       console.warn(`[bridge] the lead was not asked to review ${subjectRef} again: ${error instanceof Error ? error.message : error}`);
     }

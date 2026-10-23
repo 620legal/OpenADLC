@@ -16,6 +16,7 @@ import {
 } from './scheduler.js';
 import { TaskService } from './task-service.js';
 import { CHECKS_FAILED } from './merge-line.js';
+import { Automation } from './automation.js';
 
 /**
  * The store is a fake so a whole deploy sweep can be run. Everything above the
@@ -55,6 +56,8 @@ const store = vi.hoisted(() => ({
   humanIds: null as string | null,
   /** What the deploy pipeline recorded of each merged commit (`deployRuns.forPullRequests`). */
   deployRuns: [] as Record<string, unknown>[],
+  /** When each event `recordEvent` took was recorded. */
+  recordedAt: new WeakMap<object, string>(),
 }));
 
 // The status job's report reads the whole store; which issue it lands on is what is tested here.
@@ -112,7 +115,14 @@ vi.mock('@openadlc/db', async () => ({
   },
   leases: { expireStaleLeases: vi.fn(async () => []) },
   deployRuns: { forPullRequests: vi.fn(async () => store.deployRuns) },
-  lastEventAt: vi.fn(async () => store.roundAt),
+  // A seat's asking again as recorded here (`review.asked_again`), or the round's start as the test sets it.
+  lastEventAt: vi.fn(async (type: string, fields: Record<string, unknown> = {}) => {
+    const asked = store.events.filter((event) => event.type === type && type === 'review.asked_again' && Object.entries(fields).every(([key, value]) => event.payload[key] === value));
+    return asked.length > 0 ? (store.recordedAt.get(asked.at(-1)!) ?? null) : store.roundAt;
+  }),
+  hasEventOfType: vi.fn(async (type: string, _since: Date, fields: Record<string, unknown>) =>
+    store.events.some((event) => event.type === type && Object.entries(fields).every(([key, value]) => event.payload[key] === value)),
+  ),
   listEventsOfTypeWith: vi.fn(async (type: string, fields: Record<string, unknown>) =>
     store.events
       .filter((event) => event.type === type && Object.entries(fields).every(([key, value]) => event.payload[key] === value))
@@ -120,6 +130,7 @@ vi.mock('@openadlc/db', async () => ({
   ),
   recordEvent: vi.fn(async (event: { type: string; payload: Record<string, unknown> }) => {
     store.events.push(event);
+    store.recordedAt.set(event, new Date().toISOString());
     return 'event-1';
   }),
   repos: {
@@ -1999,6 +2010,100 @@ describe('the lead’s review, asked again by the sweep', () => {
     // Opened once: the next sweep finds it under way.
     store.reviewTasks.push({ subjectRef: 'openadlc-testbed#2', state: 'running', botId: LEAD.id, createdAt: '2026-10-01T10:05:00.000Z' });
     await scheduler.settleGates();
+    expect(opened).toHaveLength(1);
+  });
+});
+
+describe('a lead approval that counts for nothing on the diff, at the sweep', () => {
+  // A pull request the lead approved before reviews were signed with their
+  // head, sitting there at the upgrade: the approval names no head, so it is
+  // no approval of this diff, and the lead task behind it, opened in this
+  // round, read as the lead's review of it. Nothing asked the lead again, no
+  // delivery was coming, and it waited on the lead for good.
+  const BRANCH = 'agent/openadlc-atlas-janedoe/1-issue-1';
+  const LEAD = { id: 'bot-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'openadlc-sydney-janedoe' };
+  const HEAD = 'c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2';
+  const WHY = 'waiting on lead-reviewer (its approval names no head it reviewed)';
+
+  function sweeping() {
+    store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
+    store.issues = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
+    store.bots = [LEAD];
+    // The round began at nine; the lead's task that approved, at ten.
+    store.roundAt = '2026-10-01T09:00:00.000Z';
+    store.reviewTasks = [{ subjectRef: 'openadlc-testbed#2', state: 'done', botId: LEAD.id, createdAt: '2026-10-01T10:00:00.000Z' }];
+    const opened: { bot: string; subjectRef: string }[] = [];
+    const taskService = new TaskService({} as never, {} as never, {} as never);
+    taskService.open = (async (input: { bot: string; subjectRef: string }) => {
+      opened.push(input);
+      return { taskId: 'task-new', session: 'review-1' };
+    }) as never;
+    const published: { state: string; description: string }[] = [];
+    const github = {
+      request: async (_method: string, path: string) =>
+        path.includes('/pulls?state=open')
+          ? [
+              {
+                number: 2,
+                draft: false,
+                head: { ref: BRANCH, sha: HEAD, repo: { full_name: 'janedoe/openadlc-testbed' } },
+                base: { ref: 'main' },
+                labels: [],
+                user: { login: 'openadlc-atlas-janedoe' },
+                author_association: 'COLLABORATOR',
+              },
+            ]
+          : // Green, as the bridge before the upgrade published it.
+            { statuses: [{ context: 'review-gate', state: 'success', description: 'every requested review has been posted' }] },
+      listEveryPullFile: async () => ({ files: ['src/app.ts'], complete: true, renamedFrom: [] }),
+      listReviews: async () => [
+        { id: 77, user: LEAD.githubLogin, state: 'APPROVED', body: 'Approved.\n\n<!-- openadlc-seat:lead-reviewer -->', submittedAt: '2026-10-01T10:05:00Z', commitId: HEAD },
+      ],
+      readFileIfPresent: async () => null,
+      readFileAtRef: async () => '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n',
+      diffFingerprint: async () => 'the diff',
+    };
+    // As `Attribution.reviewsThatCount` gives back an approval whose signature
+    // checks and names no head: as of none.
+    const attribution = {
+      countable: async (posts: unknown[]) => [...posts],
+      reviewsThatCount: async (_repo: string, _n: number, posts: { id: number }[]) => posts.map((post) => ({ ...post, commitId: null })),
+    };
+    const config = { automationBot: 'flow', review: { reviewers: [{ seat: 'lead-reviewer', lens: 'lead', lead: true, blocking: false, trigger: 'always' }], maxRounds: 3 } };
+    const reading = new Automation(config as never, { asBot: async () => github, attribution } as never);
+    const scheduler = new Scheduler(
+      config as never,
+      {} as never,
+      {
+        actors: { asBot: async () => github },
+        reviewStanding: reading.reviewStanding.bind(reading),
+        setReviewGate: async (input: { state: string; description: string }) => (published.push(input), input),
+      } as never,
+      {} as never,
+      {} as never,
+      { enter: async () => undefined } as never,
+      taskService as never,
+    );
+    return { scheduler, opened, published };
+  }
+
+  it('asks the lead once, and the gate says why it waits', async () => {
+    const { scheduler, opened, published } = sweeping();
+    const quiet = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    try {
+      await scheduler.settleGates();
+      expect(published).toEqual([expect.objectContaining({ state: 'pending', description: WHY })]);
+      expect(opened).toEqual([expect.objectContaining({ bot: LEAD.name, subjectRef: 'openadlc-testbed#2' })]);
+
+      // The next sweeps find it under way, and then done: not asked twice for the diff.
+      store.reviewTasks.push({ subjectRef: 'openadlc-testbed#2', state: 'running', botId: LEAD.id, createdAt: new Date().toISOString() });
+      await scheduler.settleGates();
+      store.reviewTasks[1]!.state = 'failed';
+      await scheduler.settleGates();
+    } finally {
+      quiet.mockRestore();
+    }
     expect(opened).toHaveLength(1);
   });
 });

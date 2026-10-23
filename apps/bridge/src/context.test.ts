@@ -658,7 +658,9 @@ describe('crew reviews, with signatures enforced', () => {
   // Three seats on one login. A session holds that account's token, so it can
   // post around OpenADLC's gh with any seat's tag.
   const LOGIN = 'acme-reviews';
-  const HEAD = 'head';
+  // A review is signed with the head it is of, which only a full commit is.
+  const HEAD = 'beadfeedbeadfeedbeadfeedbeadfeedbeadfeed';
+  const SHORT = HEAD.slice(0, 7);
 
   afterEach(() => {
     crewNow.splice(0, crewNow.length);
@@ -680,8 +682,8 @@ describe('crew reviews, with signatures enforced', () => {
     settingsNow.attributionMode = mode;
     noncesNow.clear();
     const attribution = new Attribution(secretStore());
-    const signed = (seat: string, body: string, n = 31) =>
-      attribution.sign(`${body}\n\n<!-- openadlc-seat:${seat} -->`, { seat, task: 't-1', repo: 'acme/widgets', kind: 'review', n });
+    const signed = (seat: string, body: string, n = 31, head = HEAD) =>
+      attribution.sign(`${body}\n\n<!-- openadlc-seat:${seat} -->`, { seat, task: 't-1', repo: 'acme/widgets', kind: 'review', n, head });
     const quality = await signed('quality', 'The cache key misses the region.\n\n<!-- openadlc:{"event":"review_posted","verdict":"request_changes","lens":"quality"} -->');
     const reviews = [
       { id: 1, user: LOGIN, state: 'COMMENTED', body: quality, submittedAt: '2026-09-30T09:00:00Z', commitId: HEAD, association: 'MEMBER' },
@@ -704,7 +706,7 @@ describe('crew reviews, with signatures enforced', () => {
     (actors as unknown as { attribution: Attribution }).attribution = attribution;
     const client = await (actors as unknown as { asBot: () => Promise<Record<string, unknown>> }).asBot();
     client.getPullRequest = async () => ({ headSha: HEAD, headRef: 'agent/builder/31-cache-the-price-list' });
-    return { context: new Context(actors, CONFIG), attribution, reviews };
+    return { context: new Context(actors, CONFIG), attribution, reviews, signed, actors };
   }
 
   it('shows the lead an unsigned review naming a seat only apart, as no seat’s verdict', async () => {
@@ -716,12 +718,29 @@ describe('crew reviews, with signatures enforced', () => {
 
     expect(thisRound).toContain('# This round');
     // Headed by the seat its signature names, not by the login the seats share.
-    expect(thisRound).toContain(`## quality (${LOGIN}) — COMMENTED on head`);
-    expect(thisRound).toContain('## janedoe — COMMENTED on head');
+    expect(thisRound).toContain(`## quality (${LOGIN}) — COMMENTED on ${SHORT}`);
+    expect(thisRound).toContain(`## janedoe — COMMENTED on ${SHORT}`);
     expect(thisRound).not.toContain('No findings.');
     expect(thisRound).not.toContain('"verdict":"approve"');
     expect(apart).toContain('None of these is any seat’s verdict');
-    expect(apart).toContain(`## ${LOGIN} — COMMENTED on head\n\nNo findings.`);
+    expect(apart).toContain(`## ${LOGIN} — COMMENTED on ${SHORT}\n\nNo findings.`);
+  });
+
+  it('shows the lead a signed review under the round of the head its signature names, not the one GitHub moved it to', async () => {
+    // GitHub moves a review's commit: on 620legal/OpenADLC#118 it moved the
+    // lead's approval onto the merge line's update, a diff it never read.
+    const { context, reviews, signed } = await world('enforce');
+    const EARLIER = 'abad1deaabad1deaabad1deaabad1deaabad1dea';
+    reviews.splice(0, reviews.length, {
+      ...reviews[0]!,
+      body: await signed('quality', 'The cache key misses the region.\n\n<!-- openadlc:{"event":"review_posted","verdict":"request_changes","lens":"quality"} -->', 31, EARLIER),
+    });
+
+    const documents = await context.forSubject({ kind: 'review', repoFullName: 'acme/widgets', subjectNumber: 31, lead: true });
+    const [thisRound, earlier] = (documents.find((document) => document.name === 'reviews.md')?.content ?? '').split('# Earlier rounds');
+
+    expect(thisRound).toContain('_No other seat has reviewed this head._');
+    expect(earlier).toContain(`## quality (${LOGIN}) — COMMENTED on ${EARLIER.slice(0, 7)}`);
   });
 
   it('leaves the review to the gate to count after the lead’s context has read it', async () => {
@@ -753,7 +772,7 @@ describe('crew reviews, with signatures enforced', () => {
     const lead = await context.forSubject({ kind: 'review', repoFullName: 'acme/widgets', subjectNumber: 31, lead: true });
     const content = lead.find((document) => document.name === 'reviews.md')?.content ?? '';
     expect(content).not.toContain('Not signed by OpenADLC');
-    expect(content).toContain(`## ${LOGIN} — COMMENTED on head\n\nNo findings.`);
+    expect(content).toContain(`## ${LOGIN} — COMMENTED on ${SHORT}\n\nNo findings.`);
     expect(content).not.toContain('quality (');
 
     const patch = await context.forSubject({ kind: 'patch', repoFullName: 'acme/widgets', subjectNumber: 31, issueNumber: null });
