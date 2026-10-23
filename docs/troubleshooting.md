@@ -544,6 +544,7 @@ unlinking and merging are, with the subjects it acted on as `subjects` in the
 payload: the issue and its pull request for a pause or a resume, the issue and
 the one it took next from, every subject of the item for a cancel. Before the
 install is numbered there is no key, and the item's subject (`api#12`) is used.
+Each answers with that key as `item`, beside the `subject` it acted on.
 
 - **Pause work** (`POST /v1/items/:subject/pause { reason? }`, `item.paused`) puts
   `openadlc:paused` on the issue and its pull request. What is running

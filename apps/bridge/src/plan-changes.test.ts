@@ -18,6 +18,8 @@ const store = vi.hoisted(() => ({
   notes: [] as [string, string, Record<string, unknown>][],
   /** What the designer said in its own thread, as the store lists it. */
   designerSaid: [] as Record<string, unknown>[],
+  /** The work item the issue is linked to; null before the install is numbered. */
+  workItem: null as { id: string; number: number } | null,
 }));
 
 vi.mock('@openadlc/db', () => ({
@@ -51,6 +53,9 @@ vi.mock('@openadlc/db', () => ({
   repos: {
     listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'openadlc', fullName: 'acme/openadlc', defaultBranch: 'main' }]),
   },
+  settings: {
+    getSetting: vi.fn(async () => null),
+  },
   standingApprovals: {
     activeFor: vi.fn(async () => store.standing),
     turnOn: vi.fn(async (input: Record<string, unknown>) => {
@@ -67,6 +72,9 @@ vi.mock('@openadlc/db', () => ({
   tasks: {
     getTask: vi.fn(async (id: string) => (id === 'task-1' ? { ...store.task } : (store.tasks[id] ?? null))),
   },
+  workItems: {
+    itemOf: vi.fn(async () => store.workItem),
+  },
   threads: {
     getGate: vi.fn(async () => store.gate),
     addMessage: vi.fn(async (input: Record<string, unknown>) => {
@@ -81,8 +89,9 @@ vi.mock('@openadlc/db', () => ({
   },
 }));
 
-import { audit, leases, standingApprovals } from '@openadlc/db';
+import { audit, leases, settings, standingApprovals } from '@openadlc/db';
 import { newSigningKey, signBody } from '@openadlc/shared';
+import type { HumanReviewRead } from './human-review-read.js';
 import { endStandingApproval, NO_VERDICT, PlanChanges, standingCoverFor } from './plan-changes.js';
 
 const RULES = [{ path: 'apps/bridge/src/gates.ts', logins: ['orzelig'] }, { path: 'config/', logins: ['orzelig'] }];
@@ -102,7 +111,9 @@ const taskService = {
   resume: vi.fn(async () => undefined),
 };
 const stopTask = vi.fn(async () => ({ stopped: true }));
-const humanReviewRules = vi.fn(async () => RULES as never);
+const humanReviewRules = vi.fn(async (): Promise<HumanReviewRead> => ({ rules: RULES, unread: null }));
+/** Rules that could not be read, for no reason the bridge could tell. */
+const UNREAD: HumanReviewRead = { rules: null, unread: null };
 
 const answerAsPerson = vi.fn(async () => ({ answer: 'Approve', taskId: 'task-1' }));
 const planChanges = new PlanChanges({
@@ -138,6 +149,7 @@ beforeEach(() => {
   store.notes = [];
   store.designerSaid = [];
   store.standing = null;
+  store.workItem = null;
   store.task = { id: 'task-1', botId: 'bot-builder', repoId: 'repo-1', kind: 'implement', subjectRef: 'openadlc#77', leaseId: 'lease-1', branch: 'agent/builder/77-x', state: 'paused' };
   store.tasks = {
     'task-spec': { id: 'task-spec', botId: 'bot-architect', kind: 'spec', skill: 'spec', subjectRef: 'openadlc#77' },
@@ -146,7 +158,7 @@ beforeEach(() => {
   store.lease = { id: 'lease-1', repoId: 'repo-1', issueNumber: 77, botId: 'bot-builder', declaredPaths: ['apps/hostd/src/skill-runner.ts', 'apps/console/src/'], state: 'in_task' };
   store.issue = { number: 77, labels: [], declaredPaths: ['apps/console/src/'], body: '## Expected paths\n\n- apps/console/src/\n- apps/hostd/src/skill-runner.ts\n', vouched: null };
   client.listComments.mockResolvedValue([designComment()]);
-  humanReviewRules.mockResolvedValue(RULES as never);
+  humanReviewRules.mockResolvedValue({ rules: RULES, unread: null });
   openPlanChange();
 });
 
@@ -185,7 +197,7 @@ describe('approve all for this work', () => {
       humanReview: ['config/review.yaml'],
     });
     // Rules that cannot be read cover nothing: a person is asked.
-    humanReviewRules.mockResolvedValueOnce(null as never);
+    humanReviewRules.mockResolvedValueOnce(UNREAD);
     await expect(cover({ repoId: 'repo-1', repoFullName: 'acme/openadlc', issueNumber: 77, paths: ['apps/hostd/src/x.ts'] })).resolves.toMatchObject({ covers: false });
 
     store.standing = null;
@@ -196,15 +208,14 @@ describe('approve all for this work', () => {
     // On 2026-10-22 the card said `apps/probe60-more/util.ts` was under Human
     // review, in a repository whose AGENTS.md had no such section.
     store.standing = { id: 'standing-1', repoId: 'repo-1', issueNumber: 77, setBy: 'orzelig', setAt: '2026-10-22T10:00:00.000Z' };
-    humanReviewRules.mockResolvedValueOnce(null as never);
+    humanReviewRules.mockResolvedValueOnce(UNREAD);
 
     const cover = await standingCoverFor({ humanReviewRules })({ repoId: 'repo-1', repoFullName: 'acme/openadlc', issueNumber: 77, paths: ['apps/probe60-more/util.ts'] });
 
     expect(cover).toMatchObject({ covers: false, humanReview: [] });
     expect(cover?.rulesUnread).toBe(
       'OpenADLC could not read the Human-review rules in AGENTS.md on `main`, so it does not cover this one and a person decides. ' +
-        'Add a `## Human review` section to AGENTS.md on `main`, or fix the line of it OpenADLC cannot read (the repository’s card in Needs you names it); ' +
-        'until then a person approves every path',
+        'Add a `## Human review` section to AGENTS.md on `main`, or fix the line of it OpenADLC cannot read; until then a person approves every path',
     );
     // A read that throws is the same: unknown holds.
     humanReviewRules.mockRejectedValueOnce(new Error('GitHub is down'));
@@ -262,7 +273,7 @@ describe('asking the designer', () => {
   });
 
   it('tells the designer the rules could not be read, not that the paths are under Human review, when they cannot be', async () => {
-    humanReviewRules.mockResolvedValueOnce(null as never);
+    humanReviewRules.mockResolvedValueOnce(UNREAD);
     await planChanges.askDesigner({ gateId: 'gate-1', identity: 'orzelig' });
 
     const brief = ((taskService.open.mock.calls[0] as unknown as [Record<string, unknown>])[0].extraContext as { content: string }[])[0]!;
@@ -329,7 +340,7 @@ describe('asking the designer', () => {
   it('is advice when the Human-review rules could not be read, and says so once, never as Human review', async () => {
     openPlanChange(['apps/hostd/src/skill-runner.ts', 'apps/hostd/src/task-runner.ts']);
     await planChanges.askDesigner({ gateId: 'gate-1', identity: 'orzelig' });
-    humanReviewRules.mockResolvedValueOnce(null as never);
+    humanReviewRules.mockResolvedValueOnce(UNREAD);
 
     await expect(planChanges.verdict(store.tasks['task-9'] as never, verdict('approve'))).resolves.toEqual({ counted: false });
 
@@ -467,5 +478,69 @@ describe('a person refusing after the fact', () => {
     approvedByTheDesigner();
     await planChanges.takeBack({ gateId: 'gate-1', identity: 'orzelig' });
     await expect(planChanges.takeBack({ gateId: 'gate-1', identity: 'orzelig' })).rejects.toThrow(/already refused/);
+  });
+});
+
+describe('what the audit log files a plan change under', () => {
+  const entries = () =>
+    vi
+      .mocked(audit)
+      .mock.calls.map(([entry]) => ({ action: entry.action, target: entry.target, subjects: (entry.payload as { subjects?: string[] } | undefined)?.subjects }));
+
+  it('files approve all on and off, asking the designer and a refusal after the fact under the item’s key, with the issue in subjects', async () => {
+    // Turned off from W-14, and still filed under its issue, scripted#60, while
+    // pause, next and cancel on W-14 were filed under W-14 (#106).
+    store.workItem = { id: 'w-14', number: 14 };
+
+    await planChanges.approveAll({ gateId: 'gate-1', identity: 'orzelig', role: 'user' });
+    await planChanges.turnOff({ repoName: 'openadlc', issueNumber: 77, identity: 'janedoe' });
+    await planChanges.askDesigner({ gateId: 'gate-1', identity: 'orzelig' });
+    store.gate = { ...store.gate, state: 'answered', answer: 'Approve', answeredBy: 'architect' };
+    store.planChange = { ...store.planChange, decided: { by: 'designer', seat: 'architect', at: '2026-10-22T10:05:00.000Z' } };
+    await planChanges.takeBack({ gateId: 'gate-1', identity: 'orzelig' });
+    store.standing = { id: 'standing-2', repoId: 'repo-1', issueNumber: 77, setBy: 'orzelig', setAt: '2026-10-22T10:00:00.000Z' };
+    await endStandingApproval({ repoId: 'repo-1', issueNumber: 77, why: '#80 merged', subject: 'openadlc#77' });
+
+    expect(entries()).toEqual([
+      { action: 'plan_change.standing_on', target: 'W-14', subjects: ['openadlc#77'] },
+      { action: 'plan_change.standing_off', target: 'W-14', subjects: ['openadlc#77'] },
+      { action: 'plan_change.designer_asked', target: 'W-14', subjects: ['openadlc#77'] },
+      { action: 'plan_change.refused_after', target: 'W-14', subjects: ['openadlc#77'] },
+      { action: 'plan_change.standing_off', target: 'W-14', subjects: ['openadlc#77'] },
+    ]);
+  });
+
+  it('files them under the issue before the install is numbered, and under the install’s own prefix once it is', async () => {
+    await planChanges.approveAll({ gateId: 'gate-1', identity: 'orzelig', role: 'user' });
+    expect(entries()).toEqual([{ action: 'plan_change.standing_on', target: 'openadlc#77', subjects: ['openadlc#77'] }]);
+
+    vi.mocked(audit).mockClear();
+    store.workItem = { id: 'w-14', number: 14 };
+    vi.mocked(settings.getSetting).mockResolvedValueOnce('acme');
+    await planChanges.turnOff({ repoName: 'openadlc', issueNumber: 77, identity: 'orzelig' });
+    expect(entries()).toEqual([{ action: 'plan_change.standing_off', target: 'acme-14', subjects: ['openadlc#77'] }]);
+  });
+});
+
+describe('why the Human-review rules could not be read', () => {
+  it('is said on the card and to the designer when the read knows it, pointing at no card that is not there', async () => {
+    // No GitHub account could read AGENTS.md on a scratch install, and the
+    // card said to add a section and that the repository's card in Needs you
+    // named the line: neither was true, and there was no such card.
+    store.standing = { id: 'standing-1', repoId: 'repo-1', issueNumber: 77, setBy: 'orzelig', setAt: '2026-10-22T10:00:00.000Z' };
+    humanReviewRules.mockResolvedValueOnce({ rules: null, unread: { cause: 'no-account', account: 'openadlc-flow' } });
+    const cover = await standingCoverFor({ humanReviewRules })({ repoId: 'repo-1', repoFullName: 'acme/openadlc', issueNumber: 77, paths: ['apps/x.ts'] });
+
+    expect(cover).toMatchObject({ covers: false, humanReview: [] });
+    expect(cover?.rulesUnread).toBe(
+      'OpenADLC could not read AGENTS.md on `main` for its Human-review rules: openadlc-flow, the account it reads GitHub with, is not connected, ' +
+        'so it does not cover this one and a person decides. Until it is, a person approves every path. Run: openadlc auth login --bot openadlc-flow',
+    );
+    expect(cover?.rulesUnread).not.toMatch(/Needs you|## Human review/);
+
+    humanReviewRules.mockResolvedValueOnce({ rules: null, unread: { cause: 'no-section' } });
+    await planChanges.askDesigner({ gateId: 'gate-1', identity: 'orzelig' });
+    const brief = ((taskService.open.mock.calls[0] as unknown as [Record<string, unknown>])[0].extraContext as { content: string }[])[0]!;
+    expect(brief.content).toContain('AGENTS.md on `main` has no `## Human review` section to read the rules from, so only a person approves these paths');
   });
 });

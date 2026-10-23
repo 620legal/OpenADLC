@@ -92,10 +92,16 @@ const TESTING_DEPLOY: { mode: TestingDeployChoice; label: string }[] = [
   { mode: 'none', label: 'No testing deploy' },
 ];
 
-/** What Automatic found, under the control, and whether that deploy deploys anything (`deploysNothing`). */
+/**
+ * What Automatic found, under the control, and whether that deploy deploys
+ * anything (`deploysNothing`). A testing deploy that ran and deployed nothing
+ * is one the repository has, whether or not GitHub answered the look for its
+ * workflow: "Could not tell whether a deploy-testing workflow exists" stood
+ * right above "Merging ships it: deploy-testing deploys nothing here".
+ */
 function testingDeployResolved(ships: boolean | null | undefined, deploysNothing: string | null | undefined): string {
   if (ships === true) return 'No testing deploy for this repository. Merging ships it.';
-  if (ships === false && deploysNothing) return 'This repository has a deploy-testing workflow, and it deploys nothing here. Merging ships it.';
+  if (deploysNothing) return 'This repository has a deploy-testing workflow, and it deploys nothing here. Merging ships it.';
   if (ships === false) return 'This repository has a testing deploy.';
   return 'Could not tell whether a deploy-testing workflow exists.';
 }
