@@ -1370,6 +1370,26 @@ reads from `main` rather than running the tagged commit's copy, and
 a stand-in for GitHub's API. One release runs at a time, whatever the tag, so
 two tags cannot both pass the version check against the same newest release.
 
+**The release button.** `cut-release.yml`
+([development](development.md#the-cut-release-button)) pushes a version tag
+as the releaser, with a fine-grained token of his, `RELEASE_TAG_TOKEN`,
+holding Contents read and write on this repository alone, so that
+`release.yml` runs for the push exactly as for one from his clone: a tag
+pushed with a workflow's own token starts no workflow. The token is a secret
+of the `release` environment, not of the repository, and GitHub gives it only
+to a job of a run on `main`, once one of the environment's required
+reviewers, each one of `RELEASERS`, has approved that run; a workflow on any
+other branch, which anyone who can push could write, never gets it. Before it
+asks, the run refuses what `release-build.yml` would, with
+`release-check.mjs`'s own checks (`.github/scripts/cut-release-check.mjs`),
+and checks the environment is set up so. The one step that reads the token
+asks GitHub whose it is and refuses one that is not the releaser's who ran
+it, runs no action and nothing from the checkout, only `gh`, `git` and the
+shell's own tools, and hands it to git in that command's environment, never
+on a command line or in the log (`tests/cut-release.test.ts`). Whoever holds
+the token can push a tag `release-build.yml` takes, so it expires within
+months and is kept nowhere else.
+
 A commit of `main` reached it through the merge line or a person's merge, with
 the reviews [the platform](#the-platform) holds a merge to and the people
 [Human review](../AGENTS.md#human-review) names, `.github/workflows/` among
