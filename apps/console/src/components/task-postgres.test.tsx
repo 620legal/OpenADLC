@@ -115,6 +115,60 @@ describe('a repository’s Postgres servers for its tasks, in its settings', () 
     expect(container.textContent).toContain('Saved: its tasks have no server of their own.');
   });
 
+  it('starts an added server empty, with examples that say they are examples, and sends what is empty as empty', async () => {
+    const refusal = "server 1 has no port: give the port the repository's Makefile reaches it on";
+    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: false, error: refusal });
+    await act(async () => root.render(<TaskPostgresSection repo="core" initial={view()} />));
+
+    await act(async () => button('Add a server').click());
+    const field = (name: string) => container.querySelector<HTMLInputElement>(`input[aria-label="Server 1 ${name}"]`)!;
+    for (const name of ['port', 'superuser', 'password', 'database']) {
+      expect(field(name).value, name).toBe('');
+      expect(field(name).placeholder, name).toMatch(/^e\.g\. \S/);
+    }
+    expect(field('port').placeholder).toBe('e.g. 55432');
+    // The image starts as a value the person can see and edit, and its placeholder, once cleared, is an example too.
+    expect(field('image').value).toBe('pgvector/pgvector:pg16');
+    await act(async () => type('Server 1 image', ''));
+    expect(field('image').placeholder).toBe('e.g. pgvector/pgvector:pg16');
+    await act(async () => type('Server 1 image', 'pgvector/pgvector:pg16'));
+
+    await act(async () => button('Save').click());
+    expect(saveTaskPostgres).toHaveBeenCalledWith('core', {
+      servers: [{ port: '', superuser: '', password: '', database: '', image: 'pgvector/pgvector:pg16' }],
+      sharedDatabase: false,
+    });
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(`Not saved: ${refusal}`);
+  });
+
+  it('starts the shared-database box unticked for a new setting, and says a DATABASE_URL takes the place of the Makefile’s default', async () => {
+    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [CORE], sharedDatabase: false } }) });
+    await act(async () => root.render(<TaskPostgresSection repo="core" initial={view()} />));
+    await act(async () => button('Add a server').click());
+
+    const box = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(box.closest('label')?.textContent).toContain('Also give each task its database on the shared server, as DATABASE_URL');
+    expect(box.checked).toBe(false);
+    // A tick a browser restores on reload is one React keeps when it hydrates, whatever the setting holds.
+    expect(box.getAttribute('autocomplete')).toBe('off');
+    const said = document.getElementById(box.getAttribute('aria-describedby') ?? '')?.textContent ?? '';
+    expect(said).toContain('a DATABASE_URL takes the place of the Makefile’s own default (DATABASE_URL ?= …)');
+    expect(said).toContain('Leave it off when the repository’s Makefile defaults its own');
+
+    await act(async () => {
+      type('Server 1 port', '55432');
+      type('Server 1 superuser', 'core');
+      type('Server 1 password', 'core');
+      type('Server 1 database', 'core_db');
+    });
+    await act(async () => button('Save').click());
+    expect(saveTaskPostgres).toHaveBeenCalledWith('core', { servers: [CORE], sharedDatabase: false });
+
+    // A saved setting that holds it is shown as it holds it.
+    expect(html(view({ taskPostgres: { servers: [CORE], sharedDatabase: true } }))).toMatch(/<input type="checkbox"[^>]* checked=""/);
+    expect(html(view({ taskPostgres: { servers: [CORE], sharedDatabase: false } }))).not.toMatch(/<input type="checkbox"[^>]* checked=""/);
+  });
+
   it('sends a port that is not digits as typed, for the bridge to refuse with what to do', () => {
     const rows = [{ key: 1, ...CORE, port: 'five' }];
     expect(settingOf(rows, false).servers[0]?.port).toBe('five');
