@@ -1,6 +1,6 @@
 import type { CrewMember, ModelAccountRef, SeatHealth, SeatOutcome, SeatQueue, SeatResult, TaskSummary } from './api';
 import { botLabel, type BotFacts } from './bot-label';
-import { modelName } from './model-onboarding';
+import { aliasTitle, isAlias, isProvider, modelChoices, modelFor, modelName, offers, tierOf, type AccountListing } from './model-onboarding';
 import { repoOfRef } from './repo-colors';
 import { ago, duration, money } from './when';
 
@@ -121,7 +121,93 @@ export function byAccountGroup<T extends { role: string }>(crew: readonly T[]): 
     .filter((entry) => entry.seats.length > 0);
 }
 
-export type CrewState = 'working' | 'waiting' | 'attention' | 'idle' | 'on-duty' | 'not-connected';
+/** A bot's model as Settings → Crew chooses it: the account and the model on it, always together. */
+export interface ModelPick {
+  accountId: string;
+  model: string;
+}
+
+/**
+ * A pick as an option's value. JSON rather than `account:model`, since model
+ * ids and aliases already hold a colon (`newest:opus`).
+ */
+export function pickValue(pick: ModelPick): string {
+  return JSON.stringify([pick.accountId, pick.model]);
+}
+
+/** The pick an option's value names; null for the placeholder, a half pair or anything else. */
+export function readPick(value: string): ModelPick | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || parsed.length !== 2) return null;
+    const [accountId, model] = parsed as unknown[];
+    if (typeof accountId !== 'string' || typeof model !== 'string' || !accountId || !model) return null;
+    return { accountId, model };
+  } catch {
+    return null;
+  }
+}
+
+export interface PickOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
+
+export interface ModelPicks {
+  /** The saved pair's value, or '' for a bot on no account yet. */
+  value: string;
+  /** What the select starts on when `value` is '': disabled, never sent. */
+  placeholder: string | null;
+  /** One per model account, in the order given, each under its label. */
+  groups: { label: string; options: PickOption[] }[];
+}
+
+/**
+ * Every model a bot could think with, as one select grouped by account: the
+ * saved account offers its list with the saved model kept in it, any other
+ * account offers its list with the model a move there would propose, so a row
+ * can move to an account before its list arrives. Two selects let a row move
+ * account with no model on it, which saved nothing.
+ *
+ * What is saved and no longer there is still shown and selected, marked, and
+ * never swapped for something else: a saved account no longer connected used
+ * to show as the first account in the list, which a person could read as
+ * where the bot runs.
+ */
+export function modelPicks(
+  bot: Pick<CrewMember, 'role' | 'model' | 'modelAccountId'>,
+  accounts: readonly ModelAccountRef[],
+  listings: Record<string, AccountListing> | null,
+): ModelPicks {
+  const saved = bot.modelAccountId ?? null;
+  const groups: ModelPicks['groups'] = accounts.map((account) => {
+    const listing = listings?.[account.id];
+    const mine = account.id === saved;
+    const proposed = mine || !isProvider(account.provider) ? null : modelFor(account.provider, tierOf(bot), listing);
+    const gone = mine && listing !== undefined && !listing.error && Boolean(bot.model) && !offers(listing, bot.model);
+    const options: PickOption[] = modelChoices(listing, mine ? bot.model : '', proposed).map((choice) => ({
+      value: pickValue({ accountId: account.id, model: choice.value }),
+      label: gone && choice.value === bot.model ? `${choice.label} · no longer offered` : choice.label,
+    }));
+    if (options.length === 0) {
+      options.push({ value: pickValue({ accountId: account.id, model: '' }), label: listing?.error || 'Nothing listed yet', disabled: true });
+    }
+    return { label: account.label, options };
+  });
+  if (saved && bot.model && !accounts.some((account) => account.id === saved)) {
+    const model = isAlias(bot.model) ? aliasTitle(bot.model) : bot.model;
+    groups.push({
+      label: 'No longer connected',
+      options: [{ value: pickValue({ accountId: saved, model: bot.model }), label: `${model} · ${saved} is no longer connected` }],
+    });
+  }
+  const value = saved && bot.model ? pickValue({ accountId: saved, model: bot.model }) : '';
+  const placeholder = value ? null : accounts.length === 0 ? 'No model account yet' : 'Choose a model';
+  return { value, placeholder, groups };
+}
+
+export type CrewState ='working' | 'waiting' | 'attention' | 'idle' | 'on-duty' | 'not-connected';
 
 /**
  * Whether a bot needs the person before it can do its next piece of work: its

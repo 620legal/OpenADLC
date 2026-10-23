@@ -38,13 +38,19 @@ const account = (id: string): ModelAccountRef => ({ id, provider: 'anthropic', k
 let root: Root;
 let container: HTMLElement;
 let asked: string[];
+let sent: { url: string; method: string; body: unknown }[];
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   asked = [];
+  sent = [];
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (url: string) => {
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        sent.push({ url, method: init.method, body: JSON.parse(String(init.body)) });
+        return Response.json({ error: 'a2 does not offer that model to this bot' }, { status: 409 });
+      }
       asked.push(url);
       return Response.json({ error: 'the provider refused the key' }, { status: 502 });
     }),
@@ -75,6 +81,36 @@ describe('the crew table’s model accounts', () => {
     expect(asked).toHaveLength(1);
     await draw([account('a1'), account('a2')]);
     expect(asked).toHaveLength(3);
+  });
+});
+
+describe('the crew table’s one model select', () => {
+  async function choose(value: string): Promise<void> {
+    await act(async () => {
+      const select = container.querySelector<HTMLSelectElement>('select[aria-label="Model for the builder"]')!;
+      select.value = value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+  }
+
+  it('saves the account and the model of one choice in one request, and shows the bridge’s refusal', async () => {
+    await act(async () => root.render(<CrewTable crew={[{ ...BUILDER, modelAccountId: 'a1' }]} accounts={[account('a1'), account('a2')]} />));
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+
+    const other = container.querySelector<HTMLOptGroupElement>('optgroup[label="a2"]')!.querySelector('option')!;
+    await choose(other.value);
+
+    expect(sent).toEqual([
+      { url: '/api/bots/openadlc-atlas-janedoe/assignment', method: 'PATCH', body: { model: 'claude-sonnet-5', modelAccountId: 'a2' } },
+    ]);
+    expect(container.textContent).toContain('a2 does not offer that model to this bot');
+  });
+
+  it('sends nothing for the choice already saved', async () => {
+    await act(async () => root.render(<CrewTable crew={[{ ...BUILDER, modelAccountId: 'a1' }]} accounts={[account('a1'), account('a2')]} />));
+    await choose(JSON.stringify(['a1', 'claude-sonnet-5']));
+    expect(sent).toEqual([]);
   });
 });
 

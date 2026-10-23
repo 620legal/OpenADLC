@@ -1150,7 +1150,7 @@ After setup, **Settings → AI models** (`/settings#models`) is where an account
 is added, signed in again, checked and removed, with the models each one
 offers; it is the model accounts step itself, so nothing needs the walkthrough run
 again. Which bot uses which account and model is chosen on its row under
-**Settings → Crew**. Removing an account a bot still uses is refused, naming
+**Settings → Crew**, in one select, grouped by account. Removing an account a bot still uses is refused, naming
 those bots.
 
 The key lives in the secret store under the account. To put it there by hand
