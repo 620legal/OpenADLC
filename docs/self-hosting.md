@@ -2014,6 +2014,17 @@ A webhook that never arrived, a bot that was busy at the time, and a label appli
 while the bridge was down all look the same from here, so an issue sitting in
 Intake or Spec costs an hour rather than waiting for someone to notice.
 
+A busy bot does not wait for the sweep. An issue its seat turned away, running
+all the tasks it may at once, is recorded as waiting on that seat (a
+`stage.waiting_on_seat` event), and starts as soon as the seat has room: when
+one of its tasks ends (done, failed, stopped or cancelled), when its tasks at
+once go up, or when its pause ends. Two waiting on one seat start by priority,
+then oldest first, one each time it has room. The bridge also looks every
+minute at the seats work waits on, for one that freed up without saying so,
+such as a paused task's computer given back. Only what a seat turned away
+starts this way: a design a person stopped, or one that failed, is left for
+the sweep.
+
 The deploy sweep looks for merged work that never received `deployed:testing`.
 Every repository has delivery rules: its `.github/openadlc.yml`, else its
 stored rules, else the Settings → Repositories choice. For each repository

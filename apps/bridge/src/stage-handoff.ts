@@ -1,12 +1,13 @@
 import { audit, bots, issues, listEventsOfType, recordEvent, repos, stageMoves, tasks, withAdvisoryLock } from '@openadlc/db';
 import { acceptOnStage } from './design-memory.js';
-import { leadReviewer, PLAN_CHANGE_REVIEW_SKILL, REPO_DEFAULTS, type StageKey, type StageMode } from '@openadlc/shared';
+import { leadReviewer, maxTasksOf, PLAN_CHANGE_REVIEW_SKILL, REPO_DEFAULTS, type StageKey, type StageMode } from '@openadlc/shared';
 import { seatsWaitedOn, type Automation } from './automation.js';
 import type { DispatchGate } from './dispatch-gate.js';
 import type { TaskService } from './task-service.js';
 import { dependencyIsSatisfied, hasIgnoreLabel, parseDependencies } from '@openadlc/shared';
 import { isActive, issueNumberFromBranch, REVIEW_STALLED } from './work.js';
 import { INTAKE_STALLED } from './intake-events.js';
+import { SEAT_WAIT_WINDOW_MS, STAGE_WAITING_ON_SEAT, standingSeatWaits, type SeatWait, type SeatWaitPayload } from './seat-waits.js';
 
 /**
  * Where an issue goes once intake has shaped it: to Design, unless the
@@ -44,6 +45,22 @@ const STAFFING: Partial<Record<StageKey, { role: string; skill: string; kind: 'i
   spec: { role: 'spec', skill: 'spec', kind: 'spec' },
 };
 
+/** The stages a seat of this role staffs: intake's, design's, or none. */
+export function stagesStaffedBy(role: string): StageKey[] {
+  return (Object.keys(STAFFING) as StageKey[]).filter((stage) => STAFFING[stage]?.role === role);
+}
+
+/**
+ * Whether a start was refused because its seat runs all the tasks it may at
+ * once, and for nothing else. A full host, the same work already running and
+ * a restart owed are refused as busy too (`HostFullError`, `SubjectBusyError`,
+ * `RestartPendingError`, each a `BotBusyError`), and none of them ends when
+ * the seat has room. Read by name, which each of them sets to its own.
+ */
+function seatWasFull(error: unknown): boolean {
+  return error instanceof Error && error.name === 'BotBusyError';
+}
+
 /** What `backToLead` reads of a pull request to work out who has reviewed its diff; `getPullRequest` answers with it. */
 export interface OpenPull {
   draft: boolean;
@@ -72,6 +89,13 @@ export class StageHandoff {
   private readonly deferred = new Set<string>();
   /** Issues intake gave up on that this process has already said so for. */
   private readonly said = new Set<string>();
+  /**
+   * Issues a seat turned away because it was running all it may at once, by
+   * `<repo>#<number>:<stage>`: what `StageRunner` starts when that seat has
+   * room. Each is said once as a `stage.waiting_on_seat` event, which is what
+   * the board reads, and read back from those at start (`restoreWaits`).
+   */
+  private readonly waiting = new Map<string, SeatWait>();
 
   constructor(
     private readonly automation: Automation,
@@ -136,6 +160,12 @@ export class StageHandoff {
    * Starts the bot that staffs a stage. Called on the webhook that put the issue
    * there and again by the sweep, so a missed delivery costs an hour, not the issue.
    *
+   * A seat running all it may at once turns the start away, and the issue
+   * waits on that seat (`waitingOnSeats`) until it has room: when one of the
+   * seat's tasks ends or its tasks at once go up, the `StageRunner` starts
+   * what it turned away. The catch below used to say "the sweep comes back
+   * for this issue", and it came back an hour later.
+   *
    * While work is paused nothing is started: the issue stays in its stage, the
    * deferral is audited, and the resume's sweep starts it. Only `followOn` — the
    * next stage of an issue whose own task just finished — goes ahead, as the
@@ -151,6 +181,14 @@ export class StageHandoff {
     const repo = await repos.getRepoByName(input.repoName);
     if (!repo) return false;
 
+    const subjectRef = `${repo.name}#${input.issueNumber}`;
+    // It waits on its seat after this only if the seat turns it away again,
+    // below. Whatever else this comes to — started, ignored, closed, already
+    // being worked on, held by a pause — the wait is over.
+    const key = `${subjectRef}:${input.stage}`;
+    const waited = this.waiting.get(key);
+    this.waiting.delete(key);
+
     // `openadlc:ignore` is one issue, not the install. The pause still stops
     // every repository; this returns before that check, so a resume does not
     // staff it either. Taking the label off is what lets the next sweep in.
@@ -162,7 +200,6 @@ export class StageHandoff {
     const mode = repo.stageModes[input.stage];
     if (mode === 'untouched') return false;
 
-    const subjectRef = `${repo.name}#${input.issueNumber}`;
     if (await this.alreadyWorking(subjectRef)) return false;
     if (input.stage === 'intake' && (await this.intakeGaveUp(subjectRef))) return false;
 
@@ -182,7 +219,7 @@ export class StageHandoff {
     // Open again, whatever opened it — a person's Resume, a restore letting go
     // of its hold, a pause read back as cleared — so a later pause audits this
     // issue afresh rather than taking it for one already said.
-    this.deferred.delete(`${subjectRef}:${input.stage}`);
+    this.deferred.delete(key);
 
     const started = await this.taskService
       .open({
@@ -193,8 +230,21 @@ export class StageHandoff {
         subjectRef,
         skill: staffing.skill,
       })
-      .catch((error: unknown) => {
-        // A busy bot is not a failure: the sweep comes back for this issue.
+      .catch(async (error: unknown) => {
+        // A busy bot is not a failure. The issue waits on its seat, and starts
+        // when the seat has room (`StageRunner`); the sweep comes back for
+        // anything that misses.
+        if (seatWasFull(error)) {
+          await this.waitOnSeat(key, waited, {
+            subjectRef,
+            repo: repo.name,
+            issue: input.issueNumber,
+            stage: input.stage,
+            seat: bot.name,
+            botId: bot.id,
+            maxTasks: maxTasksOf(bot),
+          });
+        }
         console.warn(`[bridge] ${input.stage} not staffed for ${subjectRef}: ${error instanceof Error ? error.message : error}`);
         return null;
       });
@@ -244,14 +294,12 @@ export class StageHandoff {
     const known = await issues.getIssue(repo.id, issueNumber);
     if (hasIgnoreLabel(known?.labels)) return null;
 
-    if (input.kind === 'intake') {
-      const to = await this.afterIntake({ repoName: repo.name, issueNumber });
-      // The intake bot is free again, and one triage runs at a time: the next
-      // issue waiting on it — the backlog a pause left, say — starts now rather
-      // than on the hourly sweep.
-      if (to) await this.sweep({ stage: 'intake' });
-      return to;
-    }
+    // The seat this task ran on has room again, and what it turned away — the
+    // backlog a pause left, say — is started by the `StageRunner` the task's
+    // end asks, whatever the seat, once this has handed the issue on. Swept
+    // here, after intake alone, a design that waited on a busy design seat
+    // waited for the hourly sweep.
+    if (input.kind === 'intake') return this.afterIntake({ repoName: repo.name, issueNumber });
 
     const to = stageAfterTask(input.kind);
     if (!to) return null;
@@ -434,8 +482,8 @@ export class StageHandoff {
   /**
    * Work resumed: what waited through the pause starts, next first, through
    * the same `staff` a delivery uses — so a pause taken again meanwhile holds
-   * it. One bot runs one task, so the first issue starts now and each one
-   * after it as the triage before it ends (`onTaskDone`), or on the sweep.
+   * it. One bot runs one task, so the first issue starts now, the seat turns
+   * the rest away, and each starts as the task before it ends (`StageRunner`).
    *
    * What is let go is what the gate no longer holds: resuming one repository
    * leaves another's issues deferred, and they are not audited a second time
@@ -460,30 +508,109 @@ export class StageHandoff {
    * The hourly walk. A webhook that never arrived, a bot that was busy at the
    * time, or a stage entered while the bridge was down all look the same from
    * here: an issue sitting in a staffed stage with nobody on it.
+   *
+   * Given `stages`, only those are walked: a seat's pause ending walks the
+   * stages it staffs. Given `seats`, only the issues those seats turned away
+   * (`waitingOnSeats`) are started, which is what `StageRunner` asks for when
+   * one of them may have room. Not everything in their stages: an issue whose
+   * design a person stopped, or whose triage failed, sits there with nobody
+   * on it too, and started again the moment its own task ended it would undo
+   * the Stop, or fail again for as long as whatever failed it lasts. The
+   * hourly walk is what comes back for those, as before.
    */
-  async sweep(options: { stage?: StageKey } = {}): Promise<string[]> {
+  async sweep(options: { stages?: readonly StageKey[]; seats?: readonly string[] } = {}): Promise<string[]> {
+    const turnedAway = (): Set<string> | null =>
+      options.seats ? new Set([...this.waiting].filter(([, wait]) => options.seats!.includes(wait.botId)).map(([key]) => key)) : null;
+    // Nothing waits on these seats: nothing to walk, and no lock to wait for.
+    if (turnedAway()?.size === 0) return [];
+
     return (this.exclusive ?? withAdvisoryLock)(STAGE_SWEEP_LOCK, async () => {
       const actions: string[] = [];
+      // Read again under the lock: a start that held it may have taken one.
+      const only = turnedAway();
 
       // In the order the board and the dispatcher use, across repositories:
       // priority, then the longest waiting. After a pause, a p0 filed during
-      // it is triaged before a p3 filed earlier.
+      // it is triaged before a p3 filed earlier, and of two issues a busy seat
+      // turned away, the next one is the first it takes when it has room.
+      const walked = new Set<string>();
       const waiting: issues.IssueRecord[] = [];
       for (const repo of await repos.listRepos()) {
         for (const issue of await issues.listIssues(repo.name)) {
-          if (!STAFFING[issue.stage] || (options.stage && issue.stage !== options.stage)) continue;
+          if (!STAFFING[issue.stage] || (options.stages && !options.stages.includes(issue.stage))) continue;
+          const key = `${repo.name}#${issue.number}:${issue.stage}`;
+          walked.add(key);
+          if (only && !only.has(key)) continue;
           waiting.push({ ...issue, repoName: repo.name });
         }
       }
       waiting.sort(issues.byNextFirst);
 
       for (const issue of waiting) {
+        const wait = this.waiting.get(`${issue.repoName}#${issue.number}:${issue.stage}`);
         if (await this.staff({ repoName: issue.repoName, issueNumber: issue.number, stage: issue.stage })) {
-          actions.push(`started ${issue.stage} on ${issue.repoName}#${issue.number}: it was waiting with nobody on it`);
+          actions.push(
+            wait
+              ? `started ${issue.stage} on ${issue.repoName}#${issue.number}: ${wait.seat} turned it away at ${wait.since}, running all it may at once, and has room now`
+              : `started ${issue.stage} on ${issue.repoName}#${issue.number}: it was waiting with nobody on it`,
+          );
         }
+      }
+
+      // A wait whose issue is not in that stage any more — moved on, closed,
+      // its repository gone — is over: nothing would start it, and the
+      // runner's look for seats with room would keep finding it.
+      for (const [key, wait] of this.waiting) {
+        if (!walked.has(key) && (!options.stages || options.stages.includes(wait.stage))) this.waiting.delete(key);
       }
 
       return actions;
     });
+  }
+
+  /**
+   * What the busy seats turned away and nobody has started yet, first turned
+   * away first. `StageRunner` reads it for the seats to look at; the board
+   * reads the same waits from their events (`standingSeatWaits`).
+   */
+  waitingOnSeats(): SeatWait[] {
+    return [...this.waiting.values()].sort((a, b) => Date.parse(a.since) - Date.parse(b.since));
+  }
+
+  /**
+   * Reads back the waits that stood when the bridge last stopped, from their
+   * events. Kept only in this process, they went with every restart, and an
+   * issue a seat had turned away waited for the hourly sweep again — after
+   * each release OpenADLC updates itself onto. Says how many it read.
+   */
+  async restoreWaits(now = Date.now()): Promise<number> {
+    const events = await listEventsOfType(STAGE_WAITING_ON_SEAT, new Date(now - SEAT_WAIT_WINDOW_MS));
+    if (events.length === 0) return 0;
+    const subjects = [...new Set(events.map((event) => (event.payload as { subjectRef?: unknown } | null)?.subjectRef).filter((ref): ref is string => typeof ref === 'string'))];
+    const repoNames = new Set(subjects.map((ref) => ref.slice(0, ref.lastIndexOf('#'))));
+    const onBoard: issues.IssueRecord[] = [];
+    for (const repo of await repos.listRepos()) {
+      if (!repoNames.has(repo.name)) continue;
+      for (const issue of await issues.listIssues(repo.name)) onBoard.push({ ...issue, repoName: repo.name });
+    }
+    const standing = standingSeatWaits(events, onBoard, await tasks.listTasksOnSubjects(subjects));
+    for (const wait of standing.values()) {
+      const key = `${wait.subjectRef}:${wait.stage}`;
+      if (!this.waiting.has(key)) this.waiting.set(key, wait);
+    }
+    return standing.size;
+  }
+
+  /**
+   * Records that a seat turned an issue away: said once as an event, while it
+   * keeps turning it away, and kept with when it first did.
+   */
+  private async waitOnSeat(key: string, waited: SeatWait | undefined, wait: SeatWaitPayload): Promise<void> {
+    if (waited && waited.botId === wait.botId) {
+      this.waiting.set(key, { ...wait, since: waited.since });
+      return;
+    }
+    this.waiting.set(key, { ...wait, since: new Date().toISOString() });
+    await recordEvent({ source: 'platform', type: STAGE_WAITING_ON_SEAT, payload: wait }).catch(() => undefined);
   }
 }
