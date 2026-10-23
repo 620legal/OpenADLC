@@ -499,7 +499,9 @@ export class Dispatcher {
 
       // The repository's concurrency counts its builds that have not finished,
       // paused ones too: a build waiting on a person is still its work in
-      // flight. A seat counts a paused task only while its computer is kept.
+      // flight. A seat counts none of its paused tasks (`countSeatSlotsInUse`),
+      // so it builds something else while a question waits; a paused task's
+      // kept computer still takes a host's room (`hostRoom`).
       const unfinished = await tasks.countUnfinishedImplementTasks(repo.id);
       const room = Math.max(0, repo.concurrency - unfinished);
       const free = new Map<string, number>();

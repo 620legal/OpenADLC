@@ -61,6 +61,18 @@ describe('the room the hosts have', () => {
     );
   });
 
+  it('counts a paused task’s computer while it is kept, though its seat no longer counts the task', async () => {
+    // A task paused on a person's answer stopped holding its seat's tasks at
+    // once (`tasks.seatHasRoom`); its container, memory and database are still
+    // on the host until its computer is given back.
+    vi.mocked(queryOne).mockResolvedValueOnce({ hosts: '1', capacity: '4', used: '4' });
+
+    expect(await taskRoom()).toBe(0);
+    expect(flat(vi.mocked(queryOne).mock.calls[0]?.[0])).toContain(
+      "(select count(*) from tasks where state in ('queued','running') or (state = 'paused' and host_id is not null))::text as used",
+    );
+  });
+
   it('is unknown while no host is live', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce({ hosts: '0', capacity: '0', used: '0' });
     expect(await taskRoom()).toBeNull();

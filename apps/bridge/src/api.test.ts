@@ -2798,6 +2798,64 @@ describe('what intake does next, on the crew page', () => {
   });
 });
 
+describe('a seat running past its tasks at once, on the crew page', () => {
+  const task = (id: string, subjectRef: string, state: string, createdAt: string) => ({ id, subjectRef, state, createdAt });
+  const titles: Record<string, string> = { 'openadlc#137': 'Design the task database', 'openadlc#141': 'Design the board filter' };
+  const titleOf = (ref: string) => titles[ref] ?? null;
+
+  afterEach(() => {
+    delete (tasks as { resumedAfterAnswer?: unknown }).resumedAfterAnswer;
+  });
+
+  it('names the task a person’s answer resumed beside the work that took the seat while it waited', async () => {
+    // system-engineer, one at once: #137's design paused on a question, #141
+    // started beside it, and the answer resumed #137 with the seat full.
+    const { queueOf } = await import('./api.js');
+    const resumedAfterAnswer = vi.fn(async () => new Set(['task-137']));
+    Object.assign(tasks, { resumedAfterAnswer });
+
+    const queue = await queueOf(
+      { role: 'spec', maxTasks: 1 },
+      [task('task-141', 'openadlc#141', 'running', '2026-10-23T13:46:00Z'), task('task-137', 'openadlc#137', 'running', '2026-10-23T05:50:00Z')],
+      new Set(),
+      titleOf,
+    );
+
+    expect(queue).toMatchObject({ running: 2, waiting: 0, queued: 0, resumed: [{ ref: 'openadlc#137', title: 'Design the task database' }] });
+    expect(resumedAfterAnswer).toHaveBeenCalledWith(['task-141', 'task-137']);
+  });
+
+  it('asks nothing of a seat within its tasks at once, where a paused task waiting on a person is not running', async () => {
+    const { queueOf } = await import('./api.js');
+    const resumedAfterAnswer = vi.fn(async () => new Set(['task-137']));
+    Object.assign(tasks, { resumedAfterAnswer });
+
+    const queue = await queueOf(
+      { role: 'spec', maxTasks: 1 },
+      [task('task-141', 'openadlc#141', 'running', '2026-10-23T13:46:00Z'), task('task-137', 'openadlc#137', 'paused', '2026-10-23T05:50:00Z')],
+      new Set(['task-137']),
+      titleOf,
+    );
+
+    expect(queue).toMatchObject({ running: 1, waiting: 1, resumed: [] });
+    expect(resumedAfterAnswer).not.toHaveBeenCalled();
+  });
+
+  it('names none when what resumed them cannot be read', async () => {
+    const { queueOf } = await import('./api.js');
+    Object.assign(tasks, { resumedAfterAnswer: vi.fn(async () => Promise.reject(new Error('Connection terminated'))) });
+
+    const queue = await queueOf(
+      { role: 'implement', maxTasks: 1 },
+      [task('task-1', 'openadlc#1', 'running', '2026-10-23T10:00:00Z'), task('task-2', 'openadlc#2', 'running', '2026-10-23T11:00:00Z')],
+      new Set(),
+      titleOf,
+    );
+
+    expect(queue).toMatchObject({ running: 2, resumed: [] });
+  });
+});
+
 describe('rotating the key the crew’s posts are signed with', () => {
   const rotate = vi.fn(async (options: { dropOld?: boolean }) => ({
     kid: 'newkid01',
