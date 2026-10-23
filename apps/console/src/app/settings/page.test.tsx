@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
+import { ACCOUNT_GROUP_TEXT } from '@/lib/crew';
 import { headerData } from '@/lib/header';
 
 /**
@@ -379,16 +380,21 @@ describe('the settings page', () => {
     const html = await page();
     const crew = html.slice(html.indexOf('id="crew"'), html.indexOf('id="engine-updates"'));
     const said = section(html, 'crew');
-    expect(said).toContain('Bot GitHub account Model');
-    expect(said.indexOf('Crew account')).toBeLessThan(said.indexOf('Reviewer account'));
+    expect(said.match(/Bot GitHub account Model/g)).toHaveLength(1);
+    // One list: each row badged with the account it signs in as, not a section per account.
+    expect(said).toContain('Builder Crew account');
+    expect(said).toMatch(/Lead reviewer Reviewer account/i);
+    expect(crew).toContain(`title="${ACCOUNT_GROUP_TEXT.reviewers.blurb}"`);
     expect(crew).toMatch(/aria-label="GitHub account for the builder"[\s\S]*?<option value="openadlc-atlas-janedoe" selected="">openadlc-atlas-janedoe<\/option>/);
     expect(crew).toMatch(/aria-label="GitHub account for the lead reviewer"[\s\S]*?<option value="" selected="">Not connected<\/option>/);
     // What a bot may not use is there, disabled, with the bridge's reason.
     expect(crew).toContain(
       '<option value="openadlc-atlas-janedoe" disabled="">openadlc-atlas-janedoe — used by the builder — reviewers need their own account</option>',
     );
-    expect(crew).toMatch(/aria-label="Model account for the builder"[\s\S]*?<option value="max" selected="">Anthropic — Max<\/option>/);
-    expect(crew).toMatch(/aria-label="Model for the builder"[\s\S]*?<option value="newest:opus" selected="">/);
+    expect(crew).not.toContain('Model account for the');
+    expect(crew).toMatch(
+      /aria-label="Model for the builder"[\s\S]*?<optgroup label="Anthropic — Max"><option value="\[&quot;max&quot;,&quot;newest:opus&quot;\]" selected="">/,
+    );
     expect(said).toContain('Automation');
     expect(said).toContain('No model, and that is correct');
     expect(html).not.toContain('openadlc auth login');

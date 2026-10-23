@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CrewMember, TaskSummary } from './api';
+import type { CrewMember, ModelAccountRef, TaskSummary } from './api';
 import {
   countWords,
   crewCounts,
@@ -11,6 +11,9 @@ import {
   needsYouLine,
   nowLine,
   thinksWith,
+  modelPicks,
+  pickValue,
+  readPick,
 } from './crew';
 
 const NOW = '2026-09-24T12:00:00.000Z';
@@ -215,5 +218,108 @@ describe('the crew in order', () => {
       member({ name: 'builder-b', role: 'implement' }),
     ];
     expect(inPipelineOrder(shuffled).map((bot) => bot.name)).toEqual(['intake', 'builder-a', 'builder-b', 'lead', 'flow']);
+  });
+});
+
+describe('a model pick', () => {
+  it('goes through an option value and back, a colon in the model included', () => {
+    for (const pick of [
+      { accountId: 'max', model: 'newest:opus' },
+      { accountId: 'a:b', model: 'ft:gpt-5:org' },
+    ]) {
+      expect(readPick(pickValue(pick))).toEqual(pick);
+    }
+  });
+
+  it('is nothing for the placeholder, half a pair or anything else', () => {
+    expect(readPick('')).toBeNull();
+    expect(readPick('max:newest:opus')).toBeNull();
+    expect(readPick(pickValue({ accountId: 'max', model: '' }))).toBeNull();
+    expect(readPick('["max"]')).toBeNull();
+    expect(readPick('[1,2]')).toBeNull();
+  });
+});
+
+/** Settings → Crew's one model select: an account and a model chosen together. */
+describe('modelPicks', () => {
+  const MAX: ModelAccountRef = { id: 'max', provider: 'anthropic', kind: 'subscription', label: 'Anthropic — Max' };
+  const OPENAI: ModelAccountRef = { id: 'oa', provider: 'openai', kind: 'key', label: 'OpenAI — API key' };
+  const XAI: ModelAccountRef = { id: 'grok', provider: 'xai', kind: 'subscription', label: 'xAI — subscription' };
+  const builder = (extra: Partial<CrewMember> = {}) => member({ name: 'builder', modelAccountId: 'max', ...extra });
+  const values = (picks: ReturnType<typeof modelPicks>, group: number) => picks.groups[group]!.options.map((option) => readPick(option.value));
+
+  it('groups every account’s models under its label, in the order given, the saved pair selected', () => {
+    const picks = modelPicks(builder(), [MAX, OPENAI], null);
+    expect(picks.groups.map((group) => group.label)).toEqual(['Anthropic — Max', 'OpenAI — API key']);
+    expect(picks.value).toBe(pickValue({ accountId: 'max', model: 'newest:opus' }));
+    expect(picks.placeholder).toBeNull();
+    expect(values(picks, 0)).toEqual([{ accountId: 'max', model: 'newest:opus' }]);
+  });
+
+  it('keys each group on its account, since two accounts can share a label', () => {
+    const second: ModelAccountRef = { ...MAX, id: 'max-2' };
+    const picks = modelPicks(builder({ modelAccountId: 'old-key' }), [MAX, second], null);
+    expect(picks.groups.map((group) => group.label)).toEqual(['Anthropic — Max', 'Anthropic — Max', 'No longer connected']);
+    expect(picks.groups.map((group) => group.key)).toEqual(['max', 'max-2', 'old-key']);
+  });
+
+  it('offers another account the model a move there would propose, before its list arrives', () => {
+    const picks = modelPicks(builder(), [MAX, OPENAI], null);
+    expect(values(picks, 1)).toEqual([{ accountId: 'oa', model: 'gpt-5-codex' }]);
+    expect(picks.groups[1]!.options[0]!.label).toContain('· proposed');
+  });
+
+  it('offers a listed account its whole list', () => {
+    const listings = {
+      oa: { models: [{ id: 'gpt-5-codex', createdAt: null }, { id: 'gpt-5.5', createdAt: null }], aliases: [], error: null },
+    };
+    expect(values(modelPicks(builder(), [MAX, OPENAI], listings), 1)).toEqual([
+      { accountId: 'oa', model: 'gpt-5-codex' },
+      { accountId: 'oa', model: 'gpt-5.5' },
+    ]);
+  });
+
+  it('says an account with nothing to offer has nothing, disabled, in its own words when its list failed', () => {
+    expect(modelPicks(builder(), [MAX, XAI], null).groups[1]!.options).toEqual([
+      expect.objectContaining({ label: 'Nothing listed yet', disabled: true }),
+    ]);
+    const failed = { grok: { models: [], aliases: [], error: 'xAI refused the login' } };
+    expect(modelPicks(builder(), [MAX, XAI], failed).groups[1]!.options).toEqual([
+      expect.objectContaining({ label: 'xAI refused the login', disabled: true }),
+    ]);
+  });
+
+  it('keeps a saved account that is no longer connected selected, marked, rather than showing the first account', () => {
+    const picks = modelPicks(builder({ modelAccountId: 'old-key' }), [MAX], null);
+    expect(picks.value).toBe(pickValue({ accountId: 'old-key', model: 'newest:opus' }));
+    expect(picks.groups.at(-1)).toEqual({
+      key: 'old-key',
+      label: 'No longer connected',
+      options: [{ value: picks.value, label: 'Newest Opus · old-key is no longer connected' }],
+    });
+  });
+
+  it('keeps a saved model its account’s list no longer offers selected, marked', () => {
+    const listings = { max: { models: [{ id: 'claude-opus-5-5', createdAt: '2026-09-01' }], aliases: [], error: null } };
+    const picks = modelPicks(builder({ model: 'claude-sonnet-4' }), [MAX], listings);
+    expect(picks.value).toBe(pickValue({ accountId: 'max', model: 'claude-sonnet-4' }));
+    const saved = picks.groups[0]!.options.find((option) => option.value === picks.value)!;
+    expect(saved.label).toMatch(/^claude-sonnet-4.* · no longer offered$/);
+    expect(picks.groups[0]!.options.filter((option) => option.label.includes('no longer offered'))).toHaveLength(1);
+  });
+
+  it('marks nothing while the list is unknown or failed', () => {
+    const failed = { max: { models: [], aliases: [], error: 'the provider is down' } };
+    for (const listings of [null, failed]) {
+      const picks = modelPicks(builder({ model: 'claude-sonnet-4' }), [MAX], listings);
+      expect(picks.groups[0]!.options.some((option) => option.label.includes('no longer offered'))).toBe(false);
+    }
+  });
+
+  it('starts a bot on no account on a placeholder that says why', () => {
+    expect(modelPicks(builder({ modelAccountId: null }), [], null)).toEqual({ value: '', placeholder: 'No model account yet', groups: [] });
+    const picks = modelPicks(builder({ modelAccountId: null }), [MAX], null);
+    expect(picks.value).toBe('');
+    expect(picks.placeholder).toBe('Choose a model');
   });
 });

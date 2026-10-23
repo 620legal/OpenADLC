@@ -3,7 +3,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CrewMember, GitHubAccountsView } from '@/lib/api';
+import type { CrewMember, GitHubAccountsView, ModelAccountRef } from '@/lib/api';
+import { ACCOUNT_GROUP_TEXT } from '@/lib/crew';
 import { CrewTable } from './github-accounts';
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => undefined }) }));
@@ -34,16 +35,67 @@ describe('adding and removing a builder in the crew table', () => {
     member('lead-reviewer', 'lead-reviewer', 'review_lead', 'Lead reviewer'),
   ];
 
-  it('offers "Add a builder" with the crew account’s seats, not the reviewers’', () => {
+  it('offers "Add a builder" once, after the last row, with what it does', () => {
     const html = renderToStaticMarkup(<CrewTable crew={crew} />);
     expect(html.match(/Add a builder/g)).toHaveLength(1);
-    expect(html.indexOf('Add a builder')).toBeLessThan(html.indexOf('Reviewer account'));
+    expect(html.indexOf('Add a builder')).toBeGreaterThan(html.lastIndexOf('role="row"'));
+    expect(html).toContain('Adds another builder seat on the crew account');
   });
 
   it('names an added seat on its row, since two rows reading “Builder” say nothing, and offers to remove only that one', () => {
     const html = renderToStaticMarkup(<CrewTable crew={crew} />);
     expect(html).toContain(' · builder-2');
     expect(html.match(/>Remove</g)).toHaveLength(1);
+  });
+});
+
+/** Settings → Crew as one list: a badge for each row's account group, one model select per row. */
+describe('the crew table', () => {
+  const accounts: ModelAccountRef[] = [
+    { id: 'max', provider: 'anthropic', kind: 'subscription', label: 'Anthropic — Max' },
+    { id: 'oa', provider: 'openai', kind: 'key', label: 'OpenAI — API key' },
+  ];
+  const crew = [
+    { ...member('lead-reviewer', 'lead-reviewer', 'review_lead', 'Lead reviewer'), modelAccountId: 'max' },
+    { ...member('builder', 'builder', 'implement', 'Builder'), modelAccountId: 'max' },
+    { ...member('flow', 'automation', 'automation', 'Automation'), engine: 'none', model: 'none' },
+  ];
+  const html = renderToStaticMarkup(<CrewTable crew={crew} accounts={accounts} />);
+  const dom = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
+  const table = dom.querySelector('[role="table"]')!;
+  const rows = [...table.querySelectorAll(':scope > [role="row"]')].slice(1);
+
+  it('is one table under one header, the reviewers rows beside the builder’s, crew first', () => {
+    expect(dom.querySelectorAll('[role="table"]')).toHaveLength(1);
+    expect(table.querySelectorAll('[role="columnheader"]')).toHaveLength(3);
+    expect(dom.querySelector('[role="rowgroup"]')).toBeNull();
+    expect(rows.map((row) => row.querySelector('[role="cell"]')!.textContent)).toEqual([
+      'BuilderCrew account',
+      'AutomationCrew account',
+      'Lead reviewerReviewer account',
+    ].map((text) => expect.stringContaining(text)));
+  });
+
+  it('badges each row with its account group, the group’s blurb its title and in the footnote it points to', () => {
+    for (const [index, group] of [[0, 'crew'], [2, 'reviewers']] as const) {
+      const badge = rows[index]!.querySelector(`[title="${ACCOUNT_GROUP_TEXT[group].blurb}"]`)!;
+      expect(badge.textContent).toBe(ACCOUNT_GROUP_TEXT[group].label);
+      const described = badge.closest('[aria-describedby]')!.getAttribute('aria-describedby')!;
+      expect(dom.getElementById(described)!.textContent).toBe(`${ACCOUNT_GROUP_TEXT[group].label}: ${ACCOUNT_GROUP_TEXT[group].blurb}`);
+    }
+  });
+
+  it('gives each row with a model one select, grouped by model account, and no separate account select', () => {
+    expect(html).not.toContain('Model account for the');
+    const select = dom.querySelector<HTMLSelectElement>('select[aria-label="Model for the builder"]')!;
+    expect([...select.querySelectorAll('optgroup')].map((group) => group.label)).toEqual(['Anthropic — Max', 'OpenAI — API key']);
+    expect(rows[0]!.querySelectorAll('select[aria-label^="Model for"]')).toHaveLength(1);
+    expect(select.querySelector('option[selected]')!.getAttribute('value')).toBe(JSON.stringify(['max', 'claude-sonnet-5']));
+  });
+
+  it('shows Automation’s model as none, on purpose, with no select', () => {
+    expect(rows[1]!.textContent).toContain('No model, and that is correct');
+    expect(rows[1]!.querySelector('select[aria-label^="Model for"]')).toBeNull();
   });
 });
 
