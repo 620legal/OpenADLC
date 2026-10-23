@@ -1,6 +1,6 @@
 import { permissionOn, theApp } from './people.js';
 import { audit, bots, hasEventOfType, issues, lastEventAt, leases, listEventsOfTypeWith, recordEvent, repos, stageMoves } from '@openadlc/db';
-import { REVIEW_DISMISSED_BY_BRIDGE, REVIEW_ROUND_OPENED, issueNumberFromBranch, scopeLabelAcceptedFrom } from './work.js';
+import { BRANCH_UPDATED_BY_LINE, REVIEW_DISMISSED_BY_BRIDGE, REVIEW_ROUND_OPENED, issueNumberFromBranch, madeByLineUpdate, scopeLabelAcceptedFrom } from './work.js';
 import { BASE_CHANGES, GitHubApiError, ReviewerStandings, isTemplatePlaceholder, reviewRequestRefusal, reviewerStandingOf, type GitHubClient, type PullCommit, type ReviewerStanding, type SuiteWorkflowRun } from '@openadlc/github';
 import {
   STAGE_LABELS,
@@ -2739,7 +2739,25 @@ export class Automation {
       return { state: 'pending', description: fitStatus(`commit authors could not be checked; ${gate.description}`) };
     }
 
-    const findings = findForbiddenAuthors(commits, forbidden);
+    // The merge line's merge of the base into the branch is let through, and
+    // nothing else of the automation account's (`lineMerge`). The line makes
+    // it as that account where the repository has no owner bot, and refused,
+    // it failed the gate on every head after it: such a pull request could
+    // never be brought up to date and land (#123).
+    const found = findForbiddenAuthors(commits, forbidden);
+    const findings: typeof found = [];
+    try {
+      for (const finding of found) {
+        const commit = commits.find((one) => one.sha === finding.sha);
+        if (!commit || !(await this.lineMerge(client, repoFullName, prNumber, commit))) findings.push(finding);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[bridge] ${repoFullName}#${prNumber}: review-gate held; could not tell the merge line's merge of the base from the automation account's own commit: ${message.slice(0, 200)}`,
+      );
+      return { state: 'pending', description: fitStatus(`commit authors could not be checked; ${gate.description}`) };
+    }
     const first = findings[0];
     if (!first) return gate;
 
@@ -2754,6 +2772,34 @@ export class Automation {
       state: 'failure',
       description: fitStatus(named.length + more.length <= STATUS_DESCRIPTION_MAX ? `${named}${more}` : named),
     };
+  }
+
+  /**
+   * Whether a commit on a pull request is the merge line's merge of the base
+   * into its branch, made as the automation account: the line updates a
+   * branch as that account where the repository has no owner bot
+   * (`MergeLine.updaterFor`), and the account authors nothing else.
+   *
+   * Told strictly, since what this lets through is a commit by an account
+   * that never authors. GitHub matched its author to the automation account
+   * (an address alone is whatever the committer typed). It has two parents:
+   * a head the line recorded updating from (`BRANCH_UPDATED_BY_LINE`), and
+   * this commit is the one the line made there when GitHub named it; then a
+   * commit the base has, its head when the line merged it and behind it once
+   * the base moves on, so nothing the base does not hold came in by it. A
+   * read that fails throws, and the caller holds rather than guesses.
+   */
+  async lineMerge(client: GitHubClient, repoFullName: string, prNumber: number, commit: PullCommit): Promise<boolean> {
+    if (!sameLogin(commit.authorLogin, (await automationBot(this.config))?.githubLogin)) return false;
+    const [from, base, ...more] = commit.parents;
+    if (!from || !base || more.length > 0) return false;
+    const repo = await repos.getRepoByName(repoFullName);
+    if (!repo) return false;
+    const updates = await listEventsOfTypeWith(BRANCH_UPDATED_BY_LINE, { subjectRef: `${repo.name}#${prNumber}`, from });
+    if (!madeByLineUpdate(updates, commit.sha)) return false;
+    const { baseRef } = await client.getPullRequest(repoFullName, prNumber);
+    // Compared from that parent to the base: what the parent has that the base does not.
+    return (await client.behindBy(repoFullName, base, baseRef)) === 0;
   }
 
   /**

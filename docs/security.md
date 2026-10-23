@@ -291,7 +291,8 @@ account's role is the widest its seats need:
 - an automation account of its own is invited with `triage` where the
   repository's owner is an organization, so it cannot push even by accident. On
   the shared crew account, or a repository a person owns, it has write access,
-  and what keeps it from pushing is that it never authors commits;
+  and what keeps it from pushing is that it never authors commits but the
+  merge line's merge of the base into a branch no bot owns;
 - builders are asked to write only inside the paths their lease declared, and
   are held to them only where the repository's CI runs the scope check (see
   [A skill's `tools.yaml`](#a-skills-toolsyaml)).
@@ -763,8 +764,14 @@ at all. What does hold, whatever a session runs:
   a pull request's diff fails it on that head, naming the account, however the
   commits name their author: who pushed is GitHub's to say, the author is
   whatever the committer typed (`pr.forbidden_push`,
-  `apps/bridge/src/webhooks.ts`). The merge line's update of a branch changes
-  no diff and is not one.
+  `apps/bridge/src/webhooks.ts`). The merge line's update of a branch is not
+  one, though it changes the diff when the base changed the same files, and
+  is made as the automation account where no bot owns the repository: that
+  account's push from a head the line recorded (`merge_line.branch_updated`),
+  of a merge commit GitHub says it wrote, whose parents are that head and a
+  commit the base has (`Automation.lineMerge`). That merge commit is not
+  refused as the automation account's authoring either; any other commit it
+  wrote is.
 - **Commit signing per seat.** Each session signs commits with its bot's own
   key, through an agent that signs for it and never hands the key over, and
   the base branch requires signed commits where a ruleset can be set. A

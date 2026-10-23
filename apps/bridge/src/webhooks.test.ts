@@ -2683,6 +2683,7 @@ describe('a commit by an account that never authors, on every path that sets the
     authorLogin: 'openadlc-atlas-janedoe',
     authorEmail: 'openadlc-atlas-janedoe@users.noreply.github.com',
     authorName: 'openadlc-atlas-janedoe',
+    parents: ['0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a'],
   };
   // What a reviewer's session commits as — its handle and its no-reply address
   // — here with GitHub not having tied the address to the account.
@@ -2691,6 +2692,7 @@ describe('a commit by an account that never authors, on every path that sets the
     authorLogin: null,
     authorEmail: 'openadlc-sydney-janedoe@users.noreply.github.com',
     authorName: 'openadlc-sydney-janedoe',
+    parents: ['a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'],
   };
   const REFUSED = 'deadbee was authored by openadlc-sydney-janedoe — a reviewer must never author what it reviews';
 
@@ -3060,6 +3062,138 @@ describe('a commit by an account that never authors, on every path that sets the
 
       expect(statuses.filter((status) => status.state === 'failure')).toEqual([]);
       expect(store.events.filter((event) => event.type === 'pr.forbidden_push')).toEqual([]);
+    });
+
+    describe('the merge line’s update, which it makes as the automation account where no bot owns the repository', () => {
+      // `updaterFor` falls back to the automation account. Its push was taken
+      // for a forbidden one and its merge commit for that account's
+      // authoring, so the gate failed on it for good and the pull request
+      // could never be brought up to date and land (#123).
+      const FLOW = 'janedoe-openadlc-flow';
+      const MAIN = 'e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1';
+      const LINE_MERGE: PullCommit = {
+        sha: HEAD,
+        authorLogin: FLOW,
+        authorEmail: `${FLOW}@users.noreply.github.com`,
+        authorName: FLOW,
+        parents: [BUILDER_COMMIT.sha, MAIN],
+      };
+      const FLOW_PUSHED = `${FLOW} pushed c0ffee0, which changed the diff — the automation account sets labels and statuses; it never authors commits`;
+      /** What the line records of an update it made (`MergeLine.updated`). */
+      const lineUpdated = (from = BUILDER_COMMIT.sha) => store.events.push({ type: 'merge_line.branch_updated', payload: { subjectRef: 'openadlc#12', from } });
+      /** A push of HEAD, from the builder's commit. */
+      const pushFrom = (login: string) => ({ ...pushBy(login), before: BUILDER_COMMIT.sha });
+      const forbidden = () => store.events.filter((event) => event.type === 'pr.forbidden_push').map((event) => (event.payload as { login: string }).login);
+
+      /** The bridge over a branch with these commits, on a `main` that has `MAIN`. */
+      function onBranch(commits: PullCommit[], diffChanged = true) {
+        const wired = pushed(diffChanged);
+        wired.github.listPullCommits.mockResolvedValue(commits);
+        Object.assign(wired.github, {
+          getPullRequest: vi.fn(async () => ({
+            number: 12,
+            draft: false,
+            merged: false,
+            state: 'open',
+            headRef: PULL.head.ref,
+            headSha: BUILDER_COMMIT.sha,
+            baseRef: 'main',
+            labels: [] as string[],
+            mergeableState: 'behind',
+            autoMerge: false,
+            headRepoFullName: 'janedoe/openadlc',
+            requestedReviewers: [],
+            requestedTeams: [],
+          })),
+          // The branch is behind main; and from a commit main has, main has all of it.
+          behindBy: vi.fn(async (_repo: string, base: string, head: string) => (base === 'main' ? 1 : base === MAIN && head === 'main' ? 0 : 2)),
+          updateBranch: vi.fn(async () => ({ updated: true, conflict: false, message: 'updated from the base branch' })),
+        });
+        return wired as typeof wired & { github: { updateBranch: ReturnType<typeof vi.fn> } };
+      }
+
+      it('is no forbidden push: every seat is asked about the new diff, and the gate goes green once their reviews are in', async () => {
+        lineUpdated();
+        const { webhooks, statuses, taskService, mergeLine } = onBranch([BUILDER_COMMIT, LINE_MERGE]);
+
+        await deliver(webhooks, 'pull_request', pushFrom(FLOW));
+
+        expect(forbidden()).toEqual([]);
+        expect(statuses).toEqual([{ sha: HEAD, context: 'review-gate', state: 'pending', description: expect.stringMatching(/^waiting on /) }]);
+        expect(taskService.open).toHaveBeenCalledWith(expect.objectContaining({ kind: 'review', subjectRef: 'openadlc#12' }));
+
+        await deliver(webhooks, 'pull_request_review', lastReview);
+        expect(statuses.at(-1)).toEqual({ sha: HEAD, context: 'review-gate', state: 'success', description: 'every requested review has been posted' });
+        expect(mergeLine.enter).toHaveBeenCalledWith(expect.objectContaining({ prNumber: 12, headSha: HEAD }));
+      });
+
+      it('keeps the gate as the approvals make it on an update that changed no diff', async () => {
+        lineUpdated();
+        const { webhooks, statuses } = onBranch([BUILDER_COMMIT, LINE_MERGE], false);
+
+        await deliver(webhooks, 'pull_request', pushFrom(FLOW));
+
+        expect(statuses).toEqual([{ sha: HEAD, context: 'review-gate', state: 'success', description: 'every requested review has been posted' }]);
+      });
+
+      it('replays it from the line: the update made as the automation account is reviewed, and lands', async () => {
+        const { webhooks, github, statuses, mergeLine } = onBranch([BUILDER_COMMIT, LINE_MERGE]);
+        store.lineEntry = { id: 'line-12', repoId: 'repo-1', repoName: 'openadlc', prNumber: 12, position: 1, state: 'waiting', headSha: BUILDER_COMMIT.sha, detail: null };
+
+        // No owner bot on the repository: the line updates as the automation account.
+        const line = new MergeLine(config as never, { asBot: async () => github } as never, {} as never, {} as never);
+        expect(await line.advance('openadlc')).toMatchObject({ state: 'updating', detail: `brought up to date with main as ${FLOW}` });
+        expect(github.updateBranch).toHaveBeenCalledWith('janedoe/openadlc', 12, BUILDER_COMMIT.sha);
+
+        await deliver(webhooks, 'pull_request', pushFrom(FLOW));
+        await deliver(webhooks, 'pull_request_review', lastReview);
+
+        expect(forbidden()).toEqual([]);
+        expect(statuses.filter((status) => status.state === 'failure')).toEqual([]);
+        expect(statuses.at(-1)).toMatchObject({ sha: HEAD, state: 'success' });
+        expect(mergeLine.enter).toHaveBeenCalled();
+      });
+
+      it.each([
+        ['a reviewer’s push from the head the line updated from', 'openadlc-sydney-janedoe', [BUILDER_COMMIT, LINE_MERGE], PUSHED],
+        [
+          'the automation account’s push, from that head, of a commit that is not the line’s merge',
+          FLOW,
+          [BUILDER_COMMIT, { ...BUILDER_COMMIT, sha: HEAD, parents: [BUILDER_COMMIT.sha] }],
+          FLOW_PUSHED,
+        ],
+        ['the automation account’s push of a merge of a commit main does not have', FLOW, [BUILDER_COMMIT, { ...LINE_MERGE, parents: [BUILDER_COMMIT.sha, 'badbadbadbadbadbadbadbadbadbadbadbadbadb'] }], FLOW_PUSHED],
+        ['the automation account’s push of a head GitHub does not list on the pull request', FLOW, [BUILDER_COMMIT], FLOW_PUSHED],
+      ] as [string, string, PullCommit[], string][])('still fails it on %s', async (_what, login, commits, description) => {
+        lineUpdated();
+        const { webhooks, statuses } = onBranch(commits);
+
+        await deliver(webhooks, 'pull_request', pushFrom(login));
+
+        expect(forbidden()).toEqual([login]);
+        expect(statuses[0]).toEqual({ sha: HEAD, context: 'review-gate', state: 'failure', description });
+      });
+
+      it('still fails it on the automation account’s push from a head the line never updated from', async () => {
+        lineUpdated('0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b');
+        const { webhooks, statuses } = onBranch([BUILDER_COMMIT, LINE_MERGE]);
+
+        await deliver(webhooks, 'pull_request', pushFrom(FLOW));
+
+        expect(forbidden()).toEqual([FLOW]);
+        expect(statuses[0]).toEqual({ sha: HEAD, context: 'review-gate', state: 'failure', description: FLOW_PUSHED });
+      });
+
+      it('still fails it when the commits cannot be read to tell', async () => {
+        lineUpdated();
+        const { webhooks, github, statuses } = onBranch([BUILDER_COMMIT, LINE_MERGE]);
+        github.listPullCommits.mockRejectedValue(new Error('/repos/janedoe/openadlc/pulls/12/commits → 502: bad gateway'));
+
+        await deliver(webhooks, 'pull_request', pushFrom(FLOW));
+
+        expect(forbidden()).toEqual([FLOW]);
+        expect(statuses[0]).toMatchObject({ state: 'failure', description: FLOW_PUSHED });
+      });
     });
   });
 

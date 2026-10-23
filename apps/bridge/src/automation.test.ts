@@ -745,6 +745,7 @@ describe('the review gate refuses a commit by an account that never authors', ()
     authorLogin: 'openadlc-atlas-janedoe',
     authorEmail: 'openadlc-atlas-janedoe@users.noreply.github.com',
     authorName: 'openadlc-atlas-janedoe',
+    parents: ['0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a'],
   };
 
   beforeEach(() => {
@@ -791,6 +792,7 @@ describe('the review gate refuses a commit by an account that never authors', ()
         authorLogin: 'openadlc-sydney-janedoe',
         authorEmail: 'sydney@example.com',
         authorName: 'Sydney',
+        parents: [builderCommit.sha],
       },
     ]);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -817,6 +819,7 @@ describe('the review gate refuses a commit by an account that never authors', ()
         authorLogin: null,
         authorEmail: 'janedoe-openadlc-flow@users.noreply.github.com',
         authorName: 'Flow',
+        parents: [builderCommit.sha],
       },
     ]);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -840,6 +843,7 @@ describe('the review gate refuses a commit by an account that never authors', ()
         authorLogin: 'janedoe',
         authorEmail: 'janedoe@example.test',
         authorName: 'janedoe',
+        parents: [builderCommit.sha],
       },
     ]);
 
@@ -928,7 +932,7 @@ describe('the review gate refuses a commit by an account that never authors', ()
     const login = 'janedoes-openadlc-flow-with-a-long-hand';
     expect(login).toHaveLength(39);
     world.crew = [{ name: login, slot: 'automation', role: 'automation', githubLogin: login }];
-    const byFlow = (sha: string): PullCommit => ({ sha, authorLogin: login, authorEmail: '', authorName: login });
+    const byFlow = (sha: string): PullCommit => ({ sha, authorLogin: login, authorEmail: '', authorName: login, parents: [builderCommit.sha] });
     const { automation } = github([byFlow('abcdef0123456789'), byFlow('bcdef01234567890')]);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
@@ -963,6 +967,111 @@ describe('the review gate refuses a commit by an account that never authors', ()
 
     expect(await setGate(automation)).toEqual(REVIEWS_IN);
     expect(client.listPullCommits).not.toHaveBeenCalled();
+  });
+
+  describe('the merge line’s merge of the base, which it makes as the automation account where no bot owns the repository', () => {
+    // The line updates a branch as the automation account when the repository
+    // has no owner bot (`updaterFor`). Its merge commit was refused as that
+    // account's authoring, on every head after it, so such a pull request
+    // could never land (#123).
+    const FROM = builderCommit.sha;
+    const MAIN = 'e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1';
+    const lineMerge: PullCommit = {
+      sha: HEAD,
+      authorLogin: 'janedoe-openadlc-flow',
+      authorEmail: 'janedoe-openadlc-flow@users.noreply.github.com',
+      authorName: 'janedoe-openadlc-flow',
+      parents: [FROM, MAIN],
+    };
+    const FLOW_REFUSED = 'c0ffee0 was authored by janedoe-openadlc-flow — the automation account sets labels and statuses; it never authors commits';
+    /** What the line records of an update it made (`MergeLine.updated`). */
+    const updated = (payload: Record<string, string> = {}) => ({ type: 'merge_line.branch_updated', payload: { subjectRef: 'openadlc-testbed#12', from: FROM, ...payload } });
+    let restore: () => void = () => undefined;
+
+    beforeEach(async () => {
+      const { listEventsOfTypeWith, repos } = await import('@openadlc/db');
+      const named = vi.mocked(repos.getRepoByName).getMockImplementation()!;
+      const listed = vi.mocked(listEventsOfTypeWith).getMockImplementation()!;
+      vi.mocked(repos.getRepoByName).mockImplementation(async () => ({ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }) as never);
+      restore = () => {
+        vi.mocked(repos.getRepoByName).mockImplementation(named);
+        vi.mocked(listEventsOfTypeWith).mockImplementation(listed);
+      };
+      world.events = [updated()];
+    });
+
+    afterEach(() => restore());
+
+    /** The automation account's GitHub, where `main` has `MAIN` and what came before it. */
+    function lineGitHub(commits: PullCommit[]) {
+      const wired = github(commits);
+      const client = Object.assign(wired.client, {
+        getPullRequest: vi.fn(async () => ({ labels: [] as string[], baseRef: 'main' })),
+        // What `base` has that `head` does not: nothing, from a commit main has to main.
+        behindBy: vi.fn(async (_repo: string, base: string, head: string) => (base === MAIN && head === 'main' ? 0 : 2)),
+      });
+      return { ...wired, client };
+    }
+
+    it('lets it through: the gate is the reviews’', async () => {
+      const { automation, client, published } = lineGitHub([builderCommit, lineMerge]);
+
+      expect(await setGate(automation)).toEqual(REVIEWS_IN);
+      expect(published).toEqual([{ sha: HEAD, context: 'review-gate', ...REVIEWS_IN }]);
+      // Its second parent was asked of the base, the base as GitHub has it.
+      expect(client.behindBy).toHaveBeenCalledWith('janedoe/openadlc-testbed', MAIN, 'main');
+    });
+
+    it('lets through a stacked update’s, by the commit the line recorded making', async () => {
+      world.events = [updated({ to: HEAD })];
+      const { automation } = lineGitHub([builderCommit, lineMerge]);
+
+      expect(await setGate(automation)).toEqual(REVIEWS_IN);
+    });
+
+    it.each([
+      ['a commit of its own, not a merge', { ...lineMerge, parents: [FROM] }, [updated()], FLOW_REFUSED],
+      ['a merge from a head the line never updated from', { ...lineMerge, parents: ['0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b', MAIN] }, [updated()], FLOW_REFUSED],
+      ['a merge of a commit the base does not have', { ...lineMerge, parents: [FROM, 'badbadbadbadbadbadbadbadbadbadbadbadbadb'] }, [updated()], FLOW_REFUSED],
+      ['a merge of three heads', { ...lineMerge, parents: [FROM, MAIN, '0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c'] }, [updated()], FLOW_REFUSED],
+      ['a merge only its address ties to the account', { ...lineMerge, authorLogin: null }, [updated()], FLOW_REFUSED],
+      ['a merge other than the one a stacked update recorded making', lineMerge, [updated({ to: 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3' })], FLOW_REFUSED],
+      ['a merge the line recorded for another pull request', lineMerge, [updated({ subjectRef: 'openadlc-testbed#13' })], FLOW_REFUSED],
+      ['the merge with no update recorded', lineMerge, [], FLOW_REFUSED],
+      [
+        'the same merge authored by a reviewer',
+        { ...lineMerge, authorLogin: 'openadlc-sydney-janedoe' },
+        [updated()],
+        'c0ffee0 was authored by OpenADLC-Sydney-Janedoe — a reviewer must never author what it reviews',
+      ],
+    ] as [string, PullCommit, { type: string; payload: Record<string, string> }[], string][])('still refuses %s', async (_what, commit, events, description) => {
+      world.events = events;
+      const { automation } = lineGitHub([builderCommit, commit]);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      const gate = await setGate(automation);
+      warn.mockRestore();
+
+      expect(gate).toEqual({ state: 'failure', description });
+    });
+
+    it('holds the gate when what tells it from the account’s own commit cannot be read', async () => {
+      const { listEventsOfTypeWith } = await import('@openadlc/db');
+      const listed = vi.mocked(listEventsOfTypeWith).getMockImplementation()!;
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const held = { state: 'pending', description: 'commit authors could not be checked; every requested review has been posted' };
+
+      const unread = lineGitHub([builderCommit, lineMerge]);
+      unread.client.behindBy.mockRejectedValue(new Error('/repos/janedoe/openadlc-testbed/compare → 502: bad gateway'));
+      expect(await setGate(unread.automation)).toEqual(held);
+
+      vi.mocked(listEventsOfTypeWith).mockImplementation(async (type, fields) => {
+        if (type === 'merge_line.branch_updated') throw new Error('the events table is locked');
+        return listed(type, fields);
+      });
+      expect(await setGate(lineGitHub([builderCommit, lineMerge]).automation)).toEqual(held);
+      warn.mockRestore();
+    });
   });
 });
 
