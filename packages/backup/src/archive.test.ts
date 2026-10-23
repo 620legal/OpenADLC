@@ -694,6 +694,40 @@ describe('a bot’s seat', () => {
   });
 });
 
+describe('the issues a request in a history was filed as', () => {
+  const current = {
+    ...install,
+    manifest: {
+      ...install.manifest,
+      version: 3,
+      includes: { install: true, repositories: true, bots: 'all', botSignIns: false, accounts: 'none', accountSignIns: false, history: true },
+    },
+  } as BackupContents;
+  const spanning = {
+    ...HISTORY.requests[0]!,
+    issues: [
+      { repo: 'openadlc-testbed', number: 12, filedAt: '2026-09-01T09:40:00.000Z' },
+      { repo: 'web', number: 4, filedAt: '2026-09-01T09:41:00.000Z' },
+    ],
+  };
+
+  it('round-trip, each in its repository', () => {
+    const back = readPlain(writePlain({ ...current, history: { ...HISTORY, requests: [spanning] } }));
+    expect(back.history?.requests).toEqual([spanning]);
+  });
+
+  it('are absent from an archive written before them, whose request keeps its one issue number', () => {
+    const back = readPlain(writePlain({ ...current, history: HISTORY }));
+    expect(back.history?.requests[0]).not.toHaveProperty('issues');
+    expect(back.history?.requests[0]).toMatchObject({ repo: 'openadlc-testbed', issueNumber: 12 });
+  });
+
+  it('refuse one with no number', async () => {
+    const odd = { ...spanning, issues: [{ repo: 'web', number: 'four', filedAt: '2026-09-01T09:41:00.000Z' }] };
+    expect((await refusal(() => readPlain(writePlain({ ...current, history: { ...HISTORY, requests: [odd as never] } })))).message).toContain('request 0 issue 0 number');
+  });
+});
+
 describe('the work items in a history', () => {
   // History is in archives from version 2 on.
   const current = {

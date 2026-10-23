@@ -22,6 +22,7 @@ const store = vi.hoisted(() => ({
     kind: 'feature',
     requestedBy: 'janedoe',
     issueNumber: null as number | null,
+    issues: [] as { repoId: string; repoFullName: string | null; number: number; filedAt: string }[],
     state: 'draft' as string,
     createdAt: '2026-09-24T20:44:22.945Z',
   },
@@ -38,6 +39,10 @@ const store = vi.hoisted(() => ({
   } as Record<string, unknown>,
   gate: null as Record<string, unknown> | null,
   messages: [] as Record<string, unknown>[],
+}));
+
+const { RequestAbandoned } = vi.hoisted(() => ({
+  RequestAbandoned: class RequestAbandoned extends Error {},
 }));
 
 // Filing joins the issue to the request's work item; `work-items.test.ts` tests how.
@@ -85,16 +90,27 @@ vi.mock('@openadlc/db', () => ({
     ]),
   },
   requests: {
-    getRequest: vi.fn(async (id: string) => (id === store.request.id ? { ...store.request } : null)),
+    RequestAbandoned,
+    getRequest: vi.fn(async (id: string) => (id === store.request.id ? { ...store.request, issues: [...store.request.issues] } : null)),
     findRequestByPrefix: vi.fn(async (prefix: string) =>
-      store.request.id.startsWith(prefix) ? { ...store.request } : null,
+      store.request.id.startsWith(prefix) ? { ...store.request, issues: [...store.request.issues] } : null,
     ),
-    updateRequest: vi.fn(async (id: string, patch: { state?: string; issueNumber?: number | null; repoId?: string | null }) => {
+    updateRequest: vi.fn(async (id: string, patch: { state?: string }) => {
       if (id !== store.request.id) return null;
       if (patch.state) store.request.state = patch.state;
-      if (patch.repoId && !store.request.repoId) store.request.repoId = patch.repoId;
-      if (patch.issueNumber !== undefined && patch.issueNumber !== null) store.request.issueNumber = patch.issueNumber;
       return { ...store.request };
+    }),
+    // As the store files one: the repository the request named is kept, and
+    // `issueNumber` is the first issue in it.
+    fileIssue: vi.fn(async (id: string, repoId: string, number: number) => {
+      if (id !== store.request.id) return null;
+      if (store.request.state === 'abandoned') throw new RequestAbandoned(id);
+      const added = !store.request.issues.some((one) => one.repoId === repoId && one.number === number);
+      if (added) store.request.issues.push({ repoId, repoFullName: null, number, filedAt: '2026-09-25T22:10:00.000Z' });
+      store.request.state = 'filed';
+      store.request.repoId ??= repoId;
+      if (store.request.issueNumber === null && store.request.repoId === repoId) store.request.issueNumber = number;
+      return { request: { ...store.request, issues: [...store.request.issues] }, added };
     }),
   },
   sessions: {},
@@ -190,6 +206,7 @@ beforeEach(() => {
   store.request.state = 'draft';
   store.request.issueNumber = null;
   store.request.repoId = 'repo-1';
+  store.request.issues = [];
   store.task.state = 'running';
   store.gate = null;
   store.messages = [];
@@ -198,6 +215,7 @@ beforeEach(() => {
   github.actingAs = [];
   github.comments = [];
   vi.mocked(requests.updateRequest).mockClear();
+  vi.mocked(requests.fileIssue).mockClear();
   vi.mocked(requests.findRequestByPrefix).mockClear();
 });
 
@@ -383,14 +401,18 @@ describe('a request whose triage finished', () => {
 
     expect((await done()).status).toBe(200);
 
-    expect(requests.updateRequest).toHaveBeenCalledWith(REQUEST_ID, { state: 'filed', issueNumber: 16 });
+    expect(requests.fileIssue).toHaveBeenCalledWith(REQUEST_ID, 'repo-1', 16);
     expect(store.request).toMatchObject({ state: 'filed', issueNumber: 16 });
     // And then sent to Design or Build by the repository's spec rule.
     expect(handedOn).toEqual([{ repoName: 'openadlc-testbed', issueNumber: 16 }]);
     // Read as the automation account, over the repository's recently changed
     // issues: a request resolved by an older issue writes its line into it.
     expect(github.actingAs).toEqual(['janedoe-openadlc-flow']);
-    expect(github.asked).toEqual([{ repo: 'janedoe/openadlc-testbed', params: { state: 'all', perPage: 100, sort: 'updated' } }]);
+    // Every managed repository: intake decides which ones a request concerns.
+    expect(github.asked).toEqual([
+      { repo: 'janedoe/openadlc-testbed', params: { state: 'all', perPage: 100, sort: 'updated' } },
+      { repo: 'janedoe/OpenADLC', params: { state: 'all', perPage: 100, sort: 'updated' } },
+    ]);
     expect(store.messages).toContainEqual({
       threadId: 'thread-1',
       kind: 'sys',
@@ -407,13 +429,13 @@ describe('a request whose triage finished', () => {
 
     expect((await done()).status).toBe(200);
 
-    expect(requests.updateRequest).not.toHaveBeenCalled();
+    expect(requests.fileIssue).not.toHaveBeenCalled();
     expect(store.request.state).toBe('draft');
     expect(store.messages).toContainEqual(
       expect.objectContaining({
         kind: 'sys',
         text: 'Triage of request:a4b02784 ended without filing anything',
-        note: 'no recent issue in janedoe/openadlc-testbed carries “OpenADLC request: request:a4b02784”',
+        note: 'no recent issue in janedoe/openadlc-testbed, janedoe/OpenADLC carries “OpenADLC request: request:a4b02784”',
       }),
     );
   });
@@ -425,6 +447,7 @@ describe('a request whose triage finished', () => {
     let looks = 0;
     fakeClient.listIssues.mockImplementation(async (repo: string, params: Record<string, unknown>) => {
       github.asked.push({ repo, params });
+      if (repo !== 'janedoe/openadlc-testbed') return [];
       looks += 1;
       return looks === 1 ? [] : [filed];
     });
@@ -450,14 +473,17 @@ describe('a request whose triage finished', () => {
       if (looks === 1) {
         store.request.state = 'filed';
         store.request.issueNumber = 7;
+        store.request.issues = [{ repoId: 'repo-1', repoFullName: 'janedoe/openadlc-testbed', number: 7, filedAt: '2026-09-25T22:10:00.000Z' }];
       }
       return [];
     });
     try {
       expect((await done()).status).toBe(200);
 
-      expect(requests.updateRequest).not.toHaveBeenCalled();
+      expect(requests.fileIssue).not.toHaveBeenCalled();
       expect(store.messages.filter((message) => String(message.text).startsWith('Triage of'))).toEqual([]);
+      // And it still goes to Design or Build.
+      expect(handedOn).toEqual([{ repoName: 'openadlc-testbed', issueNumber: 7 }]);
     } finally {
       fakeClient.listIssues.mockImplementation(async (repo: string, params: Record<string, unknown>) => {
         github.asked.push({ repo, params });
@@ -478,7 +504,7 @@ describe('a request whose triage finished', () => {
       await done();
 
       expect(github.asked.map((call) => call.repo)).toEqual(['janedoe/openadlc-testbed', 'janedoe/OpenADLC']);
-      expect(requests.updateRequest).toHaveBeenCalledWith(REQUEST_ID, expect.objectContaining({ repoId: 'repo-2' }));
+      expect(requests.fileIssue).toHaveBeenCalledWith(REQUEST_ID, 'repo-2', 16);
       expect(store.request).toMatchObject({ state: 'filed', issueNumber: 16, repoId: 'repo-2' });
     } finally {
       fakeClient.listIssues.mockImplementation(async (repo: string, params: Record<string, unknown>) => {
@@ -494,7 +520,7 @@ describe('a request whose triage finished', () => {
     await done();
     await done();
 
-    expect(requests.updateRequest).toHaveBeenCalledTimes(1);
+    expect(requests.fileIssue).toHaveBeenCalledTimes(1);
     expect(store.messages.filter((message) => String(message.text).startsWith('Filed as'))).toHaveLength(1);
   });
 });
@@ -589,6 +615,7 @@ describe('an issue that names the request it was filed for', () => {
     expect(linkFiled).toHaveBeenCalledWith(expect.objectContaining({ id: REQUEST_ID }), { id: 'repo-1' }, expect.objectContaining({ number: 7, title: 'Add hello-world3.html' }));
 
     store.request.state = 'draft';
+    store.request.issues = [];
     vi.mocked(linkFiled).mockRejectedValueOnce(new Error('the database is gone'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     expect(await filing().issueOpened(TESTBED, opened('OpenADLC request: request:a4b02784'))).toBe(true);
@@ -600,19 +627,123 @@ describe('an issue that names the request it was filed for', () => {
   it('keeps the repository it was filed in, for a request that named none', async () => {
     store.request.repoId = null;
     expect(await filing().issueOpened({ id: 'repo-2', fullName: 'janedoe/OpenADLC' }, opened('OpenADLC request: request:a4b02784'))).toBe(true);
-    expect(requests.updateRequest).toHaveBeenCalledWith(REQUEST_ID, { state: 'filed', issueNumber: 7, repoId: 'repo-2' });
+    expect(requests.fileIssue).toHaveBeenCalledWith(REQUEST_ID, 'repo-2', 7);
     expect(store.request).toMatchObject({ state: 'filed', issueNumber: 7, repoId: 'repo-2' });
   });
 
-  it('files nothing for an issue that names no request, another repository’s request, or one already filed', async () => {
+  it('files nothing for an issue that names no request', async () => {
     expect(await filing().issueOpened(TESTBED, opened('An issue a person filed.'))).toBe(false);
-    expect(await filing().issueOpened({ id: 'repo-2', fullName: 'janedoe/OpenADLC' }, opened('OpenADLC request: request:a4b02784'))).toBe(false);
-    store.request.state = 'filed';
-    store.request.issueNumber = 5;
-    expect(await filing().issueOpened(TESTBED, opened('OpenADLC request: request:a4b02784'))).toBe(false);
+    expect(requests.fileIssue).not.toHaveBeenCalled();
+  });
 
-    expect(requests.updateRequest).not.toHaveBeenCalled();
-    expect(store.request.issueNumber).toBe(5);
+  it('records a second issue, in a second repository, while the request’s triage runs', async () => {
+    // Intake files a request that spans repositories as one issue in each;
+    // the first marks it filed, and the second used to be turned away.
+    expect(await filing().issueOpened(TESTBED, opened('OpenADLC request: request:a4b02784'))).toBe(true);
+    const second = { number: 4, title: 'Show the price on the web page', body: 'OpenADLC request: request:a4b02784', htmlUrl: 'https://github.com/janedoe/OpenADLC/issues/4' };
+    expect(await filing().issueOpened({ id: 'repo-2', fullName: 'janedoe/OpenADLC' }, second)).toBe(true);
+
+    expect(store.request.issues.map((one) => `${one.repoId}#${one.number}`)).toEqual(['repo-1#7', 'repo-2#4']);
+    // The first issue in the repository the person named stays the request's own.
+    expect(store.request).toMatchObject({ state: 'filed', repoId: 'repo-1', issueNumber: 7 });
+    expect(store.messages.map((message) => message.text)).toEqual(['Filed as janedoe/openadlc-testbed#7', 'Filed as janedoe/OpenADLC#4']);
+  });
+
+  it('once its triage has ended, records only a first issue, in the repository it named', async () => {
+    store.task.state = 'done';
+    // Another repository's issue quoting the line is not one triage filed.
+    expect(await filing().issueOpened({ id: 'repo-2', fullName: 'janedoe/OpenADLC' }, opened('OpenADLC request: request:a4b02784'))).toBe(false);
+    // Its own repository's first one is: the delivery that arrives after the task ended.
+    expect(await filing().issueOpened(TESTBED, opened('OpenADLC request: request:a4b02784'))).toBe(true);
+    // A later one, anywhere, joins nothing.
+    expect(await filing().issueOpened(TESTBED, { ...opened('OpenADLC request: request:a4b02784'), number: 9 })).toBe(false);
+    expect(await filing().issueOpened({ id: 'repo-2', fullName: 'janedoe/OpenADLC' }, { ...opened('OpenADLC request: request:a4b02784'), number: 3 })).toBe(false);
+
+    expect(store.request.issues.map((one) => `${one.repoId}#${one.number}`)).toEqual(['repo-1#7']);
+  });
+
+  it('says nothing twice when the same issue is delivered again', async () => {
+    await filing().issueOpened(TESTBED, opened('OpenADLC request: request:a4b02784'));
+    expect(await filing().issueOpened(TESTBED, opened('OpenADLC request: request:a4b02784'))).toBe(true);
+    expect(store.messages.filter((message) => String(message.text).startsWith('Filed as'))).toHaveLength(1);
+  });
+
+  it('files nothing for an abandoned request', async () => {
+    store.request.state = 'abandoned';
+    expect(await filing().issueOpened(TESTBED, opened('OpenADLC request: request:a4b02784'))).toBe(false);
+    expect(store.request.issues).toEqual([]);
+  });
+});
+
+describe('a request filed as an issue in each repository it concerns', () => {
+  const both = (repo: string): ListedIssue[] =>
+    repo === 'janedoe/openadlc-testbed'
+      ? [issue(12, 'OpenADLC request: request:a4b02784', { title: 'Serve the price' })]
+      : [{ ...issue(4, 'OpenADLC request: request:a4b02784', { title: 'Show the price' }), htmlUrl: 'https://github.com/janedoe/OpenADLC/issues/4' }];
+
+  beforeEach(async () => {
+    handedOn = [];
+    fakeClient.listIssues.mockImplementation(async (repo: string, params: Record<string, unknown>) => {
+      github.asked.push({ repo, params });
+      return both(repo);
+    });
+    const { registerInternalApi } = await import('./internal-api.js');
+    const { Router } = await import('./router.js');
+    const router = new Router();
+    registerInternalApi(router, {
+      config: { automationBot: null } as never,
+      stages: { onTaskDone: async () => null, afterIntake: async (input: unknown) => (handedOn.push(input), null) } as never,
+      internalSecret: SECRET,
+      hostd: { cleanupTask: async () => undefined } as never,
+      actors,
+      gates: {} as never,
+      requestFiling: new RequestFiling(actors, { automationBot: null } as never, { lookAgainAfterMs: 0 }),
+    } as never);
+    bridge = createServer((request, response) => void router.handle(request, response));
+    await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
+    bridgeUrl = `http://127.0.0.1:${(bridge.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => bridge.close(() => resolve()));
+    fakeClient.listIssues.mockImplementation(async (repo: string, params: Record<string, unknown>) => {
+      github.asked.push({ repo, params });
+      return repo === 'janedoe/openadlc-testbed' ? github.issues : [];
+    });
+  });
+
+  const done = () =>
+    fetch(`${bridgeUrl}/internal/tasks/task-1/state`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-openadlc-internal-secret': SECRET },
+      body: JSON.stringify({ state: 'done', reason: 'complete' }),
+    });
+
+  it('records every issue that carries its line, says each once, and hands each to Design or Build', async () => {
+    expect((await done()).status).toBe(200);
+
+    expect(store.request.issues.map((one) => `${one.repoId}#${one.number}`)).toEqual(['repo-1#12', 'repo-2#4']);
+    expect(store.messages.map((message) => message.text)).toEqual(['Filed as janedoe/openadlc-testbed#12', 'Filed as janedoe/OpenADLC#4']);
+    expect(handedOn).toEqual([
+      { repoName: 'openadlc-testbed', issueNumber: 12 },
+      { repoName: 'OpenADLC', issueNumber: 4 },
+    ]);
+
+    // The same ending again records nothing and says nothing.
+    await done();
+    expect(store.messages.filter((message) => String(message.text).startsWith('Filed as'))).toHaveLength(2);
+  });
+
+  it('records the ones a delivery has not, when the delivery recorded the first', async () => {
+    store.request.state = 'filed';
+    store.request.issueNumber = 12;
+    store.request.issues = [{ repoId: 'repo-1', repoFullName: 'janedoe/openadlc-testbed', number: 12, filedAt: '2026-09-25T22:09:00.000Z' }];
+
+    await done();
+
+    expect(requests.fileIssue).toHaveBeenCalledTimes(1);
+    expect(requests.fileIssue).toHaveBeenCalledWith(REQUEST_ID, 'repo-2', 4);
+    expect(store.messages.map((message) => message.text)).toEqual(['Filed as janedoe/OpenADLC#4']);
   });
 });
 

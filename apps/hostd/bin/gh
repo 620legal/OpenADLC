@@ -158,13 +158,33 @@ export function targetNumber(args, ask, env = process.env) {
 }
 
 /**
+ * The repository a command names with `-R`/`--repo`, or null when it names
+ * none and gh acts on the worktree's. A console request's triage files one
+ * issue in each repository a request concerns, and the bridge signs its post
+ * for the one named here when the install manages it.
+ */
+export function repoArg(args) {
+  let named = null;
+  for (let i = 0; i < args.length; i++) {
+    if ((args[i] === '-R' || args[i] === '--repo') && args[i + 1] !== undefined) {
+      named = args[i + 1];
+      i++;
+    } else if (args[i].startsWith('--repo=')) {
+      named = args[i].slice('--repo='.length);
+    }
+  }
+  return named && named.trim() ? named.trim() : null;
+}
+
+/**
  * The body signed by the bridge as this task's seat, or null when it could not
  * be: no task to sign for, or a bridge that did not answer. The post then goes
  * out unsigned, and says so on stderr — the bridge records it as unattributed,
  * and an install that enforces signatures does not count it. A review is
- * signed with `head`, the commit it is of (`reviewHeadRefusal`).
+ * signed with `head`, the commit it is of (`reviewHeadRefusal`), and a post is
+ * sent with the repository the command names (`repoArg`).
  */
-export async function stamp(text, kind, number, env = process.env, fetchImpl = globalThis.fetch, head = null) {
+export async function stamp(text, kind, number, env = process.env, fetchImpl = globalThis.fetch, head = null, repo = null) {
   const bridge = env.OPENADLC_BRIDGE_URL;
   const task = env.OPENADLC_TASK_ID;
   if (!bridge || !task || !fetchImpl) return null;
@@ -175,7 +195,7 @@ export async function stamp(text, kind, number, env = process.env, fetchImpl = g
         'content-type': 'application/json',
         ...(env.OPENADLC_TASK_TOKEN ? { 'x-openadlc-task-token': env.OPENADLC_TASK_TOKEN } : {}),
       },
-      body: JSON.stringify({ body: text, kind, number, ...(head ? { head } : {}) }),
+      body: JSON.stringify({ body: text, kind, number, ...(head ? { head } : {}), ...(repo ? { repo } : {}) }),
     });
     if (!response.ok) {
       process.stderr.write(`gh: OpenADLC could not sign this post (${response.status}); it goes out unsigned\n`);
@@ -854,7 +874,7 @@ async function main() {
       const asked = spawnSync(gh, lookup, { encoding: 'utf8' });
       return asked.status === 0 ? asked.stdout : null;
     });
-    const signed = await stamp(written.text, kind, number, process.env, globalThis.fetch, head);
+    const signed = await stamp(written.text, kind, number, process.env, globalThis.fetch, head, repoArg(argv));
     if (signed) writeFileSync(written.file, signed);
   }
   const run = spawnSync(gh, args, { stdio: 'inherit' });

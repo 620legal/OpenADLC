@@ -824,7 +824,17 @@ at all. What does hold, whatever a session runs:
   with it and refuses a `gh pr review` where it cannot read one, and the
   bridge signs no review without one. A new issue or
   pull request has no number yet: its signature is tied to the first place it
-  is seen, and refused on any other. Where the install enforces signatures, a crew review written around it
+  is seen, and refused on any other. A console request's triage is the one
+  task signed for another repository than its own, because it files one issue
+  in each managed repository the request concerns: OpenADLC's `gh` sends the
+  repository its `--repo` names, and the bridge signs for it only when the
+  install manages it (else for the task's own, as for any task). It signs a
+  number only for an issue the request was filed as: one recorded
+  (`request_issues`), or one whose body on GitHub, read as the automation
+  account, carries the request's `OpenADLC request:` line, which files it
+  first. Anything else is refused, never a review, and every other task signs
+  as before ([ADR 0012](adr/0012-a-request-files-one-issue-per-repository.md)).
+  Where the install enforces signatures, a crew review written around it
   counts for nobody; in either mode, an approval from the lead or a blocking
   seat written around it lands no merge. With signatures enforced it is not
   shown as anybody's either: the lead's `reviews.md` lists a crew review as a

@@ -54,13 +54,22 @@ export function requestStatus(card: BoardCard, pausedRepos: readonly string[] = 
       return { text: 'Intake working', tone: 'signal', mark: 'dot' };
     case 'waiting':
       return { text: 'Waiting for you', tone: 'attention', mark: 'dot' };
-    case 'filed':
+    case 'filed': {
+      // A request that spans repositories was filed as one issue in each:
+      // named by repository, and linked to the first.
+      const several = (card.issues ?? []).length > 1;
+      const filed = several
+        ? `Filed as ${card.issues!.map((issue) => `${issue.repo}#${issue.number}`).join(', ')}`
+        : card.issueNumber
+          ? `Filed #${card.issueNumber}`
+          : 'Filed';
       return {
-        text: `${card.issueNumber ? `Filed #${card.issueNumber}` : 'Filed'}${paused ? ` · waits until ${card.repo} is resumed` : ''}`,
+        text: `${filed}${paused ? ` · waits until ${card.repo} is resumed` : ''}`,
         tone: 'muted',
         mark: 'check',
         ...(card.url ? { href: card.url } : {}),
       };
+    }
     default:
       return null;
   }

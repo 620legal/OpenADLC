@@ -123,8 +123,13 @@ export interface RequestCard {
   requestState: RequestCardState;
   /** Its place in line while `queued`, 1 being next. */
   queuePosition: number | null;
-  /** The issue it became, once `filed`. */
+  /** The issue it became, once `filed`: the first, when it became several. */
   issueNumber: number | null;
+  /**
+   * Every issue it became, once `filed`, by repository name: a request that
+   * spans repositories is filed as one issue in each. Empty before.
+   */
+  issues: { repo: string; number: number; url: string | null }[];
   costUsd: number;
   active: BoardTask[];
   last: CardTask | null;
@@ -180,6 +185,8 @@ interface BoardWorkInput {
     queuePosition?: number | null;
     /** Starts the queue was refused; one it gave up on is in Needs you, not on the board (`stillTried`). */
     queueAttempts?: number;
+    /** Every issue it was filed as (`RequestRecord.issues`); `repoId` and `issueNumber` are the first, for a caller without it. */
+    issues?: readonly { repoId: string; number: number }[];
   }[];
   /** Now, for how long a filed request stays; the time of the read. */
   now?: Date;
@@ -327,6 +334,15 @@ export function activityOf(lines: readonly string[]): string | null {
   return TOOLS.find(([pattern]) => pattern.test(name))?.[1] ?? null;
 }
 
+/**
+ * Every issue a request was filed as: its `issues`, or, from a caller that
+ * has only the first, that one.
+ */
+function issuesOf(request: BoardWorkInput['requests'][number]): readonly { repoId: string; number: number }[] {
+  if (request.issues && request.issues.length > 0) return request.issues;
+  return request.issueNumber !== null && request.repoId ? [{ repoId: request.repoId, number: request.issueNumber }] : [];
+}
+
 /** The first line of what was asked, as a card's title. */
 function requestTitle(text: string): string {
   const line = text.split('\n').map((one) => one.trim()).find(Boolean) ?? 'A request';
@@ -352,7 +368,7 @@ export function boardWork(input: BoardWorkInput): BoardWork {
     const requestSubjects =
       input.itemRequests?.get(`${issue.repoName}#${issue.number}`) ??
       input.requests
-        .filter((request) => request.repoId === issue.repoId && request.issueNumber === issue.number)
+        .filter((request) => issuesOf(request).some((one) => one.repoId === issue.repoId && one.number === issue.number))
         .map((request) => `request:${request.id.slice(0, 8)}`);
     const work = cardWork(issue, { tasks: input.tasks, botName, stalls, requestSubjects });
     // `cardWork`'s own active tasks, chosen and ordered as it chooses them,
@@ -393,8 +409,8 @@ export function boardWork(input: BoardWorkInput): BoardWork {
   // for intake, and while intake asks and writes it up. Once filed, its issue's
   // card is the work's one card, and it moves from column to column: the
   // request stayed in Intake for a day saying "Filed #N" beside that card, so
-  // every piece of work was on the board twice. It stays only until its issue
-  // is on the board. One whose triage ended without filing is in the intake
+  // every piece of work was on the board twice. It stays only until its issues
+  // are on the board: every one, when it was filed in several repositories. One whose triage ended without filing is in the intake
   // bot's thread, which says why.
   const onBoard = new Set(input.issues.map((issue) => `${issue.repoId}#${issue.number}`));
   const now = (input.now ?? new Date()).getTime();
@@ -405,6 +421,7 @@ export function boardWork(input: BoardWorkInput): BoardWork {
     const active = mine.filter(isActive);
     const ended = mine.filter((task) => !isActive(task));
     const repo = input.repos.find((one) => one.id === request.repoId);
+    const filedAs = issuesOf(request);
     let state: RequestCardState;
     if (request.state === 'queued') {
       // Given up on, it is a card in Needs you with Try again: said here as
@@ -416,12 +433,19 @@ export function boardWork(input: BoardWorkInput): BoardWork {
       state = active.some((task) => gated.has(task.id)) ? 'waiting' : 'working';
     } else if (
       request.state === 'filed' &&
-      request.issueNumber !== null &&
-      !onBoard.has(`${request.repoId}#${request.issueNumber}`) &&
+      filedAs.length > 0 &&
+      filedAs.some((one) => !onBoard.has(`${one.repoId}#${one.number}`)) &&
       now - Date.parse(request.updatedAt ?? request.createdAt) < FILED_SHOWN_MS
     ) {
       state = 'filed';
     } else continue;
+    const issues =
+      state === 'filed'
+        ? filedAs.map((one) => {
+            const where = input.repos.find((entry) => entry.id === one.repoId);
+            return { repo: where?.name ?? '', number: one.number, url: where?.fullName ? `https://github.com/${where.fullName}/issues/${one.number}` : null };
+          })
+        : [];
     requests.push({
       repo: repo?.name ?? '',
       ref: subject,
@@ -429,13 +453,14 @@ export function boardWork(input: BoardWorkInput): BoardWork {
       stage: 'intake',
       assignees: [...new Set(active.map((task) => botName(task.botId)))],
       gateOpen: state === 'waiting',
-      url: state === 'filed' && repo?.fullName ? `https://github.com/${repo.fullName}/issues/${request.issueNumber}` : null,
+      url: issues[0]?.url ?? null,
       labels: [],
       updatedAt: mine[0]?.createdAt ?? request.updatedAt ?? request.createdAt,
       request: true,
       requestState: state,
       queuePosition: state === 'queued' ? (request.queuePosition ?? null) : null,
-      issueNumber: state === 'filed' ? request.issueNumber : null,
+      issueNumber: issues[0]?.number ?? null,
+      issues,
       costUsd: Math.round(mine.reduce((total, task) => total + task.costUsd, 0) * 10_000) / 10_000,
       active: active.map(onCard),
       last: ended[0] ? asCardTask(ended[0], botName) : null,
@@ -522,14 +547,14 @@ export async function readBoardWork(
 ): Promise<BoardWork> {
   const subjects = input.issues.flatMap(subjectsOf);
   const requestSubjects = input.requests
-    .filter((request) => request.issueNumber !== null)
+    .filter((request) => issuesOf(request).length > 0)
     .map((request) => `request:${request.id.slice(0, 8)}`);
   const since = new Date(now.getTime() - STALL_WINDOW_DAYS * 24 * 60 * 60 * 1000);
 
   // A request still in intake, or filed in the last few minutes, is a card of its own, on its triage's tasks.
   const intakeSubjects = input.requests
     .filter((request) => request.state !== 'abandoned')
-    .filter((request) => request.issueNumber === null || now.getTime() - Date.parse(request.updatedAt ?? request.createdAt) < FILED_SHOWN_MS)
+    .filter((request) => issuesOf(request).length === 0 || now.getTime() - Date.parse(request.updatedAt ?? request.createdAt) < FILED_SHOWN_MS)
     .map((request) => `request:${request.id.slice(0, 8)}`);
   const pullSubjects = (input.pulls ?? []).map((pull) => pull.ref);
   const linkedRequests = [...(input.itemRequests?.values() ?? [])].flat();

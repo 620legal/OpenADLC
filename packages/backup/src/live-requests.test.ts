@@ -38,16 +38,26 @@ function request(id: string, state: string): ArchivedRequest {
  * attachment's `(select id from requests where id = $4)` finds one only if
  * it was written.
  */
-function fakeDatabase() {
+function fakeDatabase(options: { present?: string[] } = {}) {
   const requests = new Map<string, unknown[]>();
   const attachments: { id: unknown; requestId: unknown }[] = [];
+  const requestIssues: unknown[][] = [];
   const sent: string[] = [];
   const sql = {
     query: vi.fn(async (text: string, params: unknown[] = []) => {
       sent.push(text);
+      if (/select id, name from repos/.test(text)) {
+        return { rows: [{ id: 'repo-api', name: 'api' }, { id: 'repo-web', name: 'web' }], rowCount: 2 };
+      }
       if (/insert into requests/.test(text)) {
+        // One already here is left as it is.
+        if (options.present?.includes(String(params[0]))) return { rows: [], rowCount: 0 };
         requests.set(String(params[0]), params);
         return { rows: [{ id: params[0] }], rowCount: 1 };
+      }
+      if (/insert into request_issues/.test(text)) {
+        requestIssues.push(params);
+        return { rows: [], rowCount: 1 };
       }
       if (/insert into attachments/.test(text)) {
         attachments.push({ id: params[0], requestId: requests.has(String(params[3])) ? params[3] : null });
@@ -56,7 +66,7 @@ function fakeDatabase() {
       return { rows: [], rowCount: 0 };
     }),
   };
-  return { sql, requests, attachments, sent };
+  return { sql, requests, attachments, requestIssues, sent };
 }
 
 describe('restoring the requests in a history backup', () => {
@@ -113,5 +123,53 @@ describe('restoring the requests in a history backup', () => {
     });
     expect(counts.requests).toBe(1);
     expect([...db.requests.keys()]).toEqual([DRAFT]);
+  });
+});
+
+describe('restoring the issues a request was filed as', () => {
+  const HISTORY = { threads: [], messages: [], audit: [], ledger: [] };
+
+  it('brings back every one, in each repository, by name', async () => {
+    const db = fakeDatabase();
+    await restoreDb(db.sql).putHistory({
+      ...HISTORY,
+      requests: [
+        {
+          ...request(DRAFT, 'filed'),
+          repo: 'api',
+          issueNumber: 12,
+          issues: [
+            { repo: 'api', number: 12, filedAt: '2026-09-01T09:40:00.000Z' },
+            { repo: 'web', number: 4, filedAt: '2026-09-01T09:41:00.000Z' },
+            // A repository this install does not have is left out, not guessed.
+            { repo: 'gone', number: 9, filedAt: '2026-09-01T09:42:00.000Z' },
+          ],
+        },
+      ],
+    });
+    expect(db.requestIssues).toEqual([
+      [DRAFT, 'repo-api', 12, '2026-09-01T09:40:00.000Z'],
+      [DRAFT, 'repo-web', 4, '2026-09-01T09:41:00.000Z'],
+    ]);
+    // After the request each belongs to.
+    expect(db.sent.findIndex((text) => /insert into request_issues/.test(text))).toBeGreaterThan(db.sent.findIndex((text) => /insert into requests/.test(text)));
+  });
+
+  it('restores an archive from before them with its one issue, as the migration did', async () => {
+    const db = fakeDatabase();
+    await restoreDb(db.sql).putHistory({ ...HISTORY, requests: [{ ...request(DRAFT, 'filed'), repo: 'api', issueNumber: 12 }] });
+    expect(db.requestIssues).toEqual([[DRAFT, 'repo-api', 12, '2026-09-01T09:40:00.000Z']]);
+  });
+
+  it('adds none to a request already here, which undo would leave behind', async () => {
+    const db = fakeDatabase({ present: [DRAFT] });
+    await restoreDb(db.sql).putHistory({ ...HISTORY, requests: [{ ...request(DRAFT, 'filed'), repo: 'api', issueNumber: 12 }] });
+    expect(db.requestIssues).toEqual([]);
+  });
+
+  it('adds none for a request never filed', async () => {
+    const db = fakeDatabase();
+    await restoreDb(db.sql).putHistory({ ...HISTORY, requests: [request(DRAFT, 'draft')] });
+    expect(db.requestIssues).toEqual([]);
   });
 });

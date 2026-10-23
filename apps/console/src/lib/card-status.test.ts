@@ -356,6 +356,24 @@ describe('a request’s card', () => {
   it('reads as before from an older bridge, which says no state', () => {
     expect(say(request({ gateOpen: true }))).toMatchObject({ text: 'Waiting for your answer' });
   });
+
+  it('names each issue by its repository when it was filed in several, and links the first', () => {
+    const filed = request({
+      requestState: 'filed',
+      issueNumber: 12,
+      url: 'https://github.com/exampleco/api/issues/12',
+      issues: [
+        { repo: 'api', number: 12, url: 'https://github.com/exampleco/api/issues/12' },
+        { repo: 'web', number: 4, url: 'https://github.com/exampleco/web/issues/4' },
+      ],
+    });
+    expect(say(filed)).toEqual({ text: 'Filed as api#12, web#4', tone: 'muted', mark: 'check', href: 'https://github.com/exampleco/api/issues/12' });
+  });
+
+  it('says one issue as it always did', () => {
+    const filed = request({ requestState: 'filed', issueNumber: 42, url: 'https://github.com/exampleco/api/issues/42', issues: [{ repo: 'api', number: 42, url: 'https://github.com/exampleco/api/issues/42' }] });
+    expect(say(filed)).toMatchObject({ text: 'Filed #42' });
+  });
 });
 
 describe('a card in a repository a person paused', () => {

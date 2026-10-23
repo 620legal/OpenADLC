@@ -904,6 +904,26 @@ describe('statuses and access, read to their end', () => {
   });
 });
 
+describe('what a repository says it is for', () => {
+  it('is its GitHub description, read from the repository itself', async () => {
+    const asked: string[] = [];
+    const fetchImpl = (async (url: string | URL) => {
+      asked.push(new URL(String(url)).pathname);
+      return new Response(JSON.stringify({ full_name: 'exampleco/api', description: '  The pricing API.  ' }), { status: 200 });
+    }) as typeof fetch;
+
+    expect(await new GitHubClient({ token: 't', actingAs: 'janedoe-openadlc-flow', fetchImpl }).repoDescription('exampleco/api')).toBe('The pricing API.');
+    expect(asked).toEqual(['/repos/exampleco/api']);
+  });
+
+  it('is nothing for a repository with no description, or an empty one', async () => {
+    for (const description of [null, '', '   ']) {
+      const fetchImpl = (async () => new Response(JSON.stringify({ description }), { status: 200 })) as typeof fetch;
+      expect(await new GitHubClient({ token: 't', actingAs: 'janedoe-openadlc-flow', fetchImpl }).repoDescription('exampleco/api')).toBeNull();
+    }
+  });
+});
+
 describe('a renamed file', () => {
   it('is listed under both its names, so moving it out of a protected path is still a change to that path', async () => {
     const fetchImpl = (async () =>

@@ -46,7 +46,7 @@ vi.mock('@openadlc/db', () => ({
     getRepoByName: vi.fn(async () => null),
     listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'openadlc', fullName: 'exampleco/openadlc' }]),
   },
-  requests: { findRequestByPrefix: vi.fn(async () => null) },
+  requests: { findRequestByPrefix: vi.fn(async () => null), fileIssue: vi.fn(async () => null), RequestAbandoned: class extends Error {} },
   sessions: {},
   settings: { allSettings: vi.fn(async () => ({})) },
   localCiRuns: {
@@ -58,7 +58,8 @@ vi.mock('@openadlc/db', () => ({
     sendBackOfTask: vi.fn(async (taskId: string) => (taskId === 'task-sent' ? { repoId: 'repo-1', issueNumber: 78, from: 'build', to: 'spec', kind: 'send_back' } : null)),
   },
   tasks: {
-    getTask: vi.fn(async (id: string) => (id === 'task-gone' ? null : { id, state: id === 'task-done' ? 'done' : id === 'task-paused' ? 'paused' : 'running', kind: id === 'task-review' ? 'review' : id === 'task-qa' ? 'qa' : id === 'task-spec' || id === 'task-judge' ? 'spec' : id === 'task-deploy' ? 'deploy' : 'implement', skill: id === 'task-judge' ? 'plan-change-review' : null, repoId: 'repo-1', branch: 'agent/builder/78-issue-78', subjectRef: 'openadlc#78' })),
+    getTask: vi.fn(async (id: string) => (id === 'task-gone' ? null : { id, state: id === 'task-done' ? 'done' : id === 'task-paused' ? 'paused' : 'running', kind: id === 'task-review' ? 'review' : id === 'task-qa' ? 'qa' : id === 'task-spec' || id === 'task-judge' ? 'spec' : id === 'task-deploy' ? 'deploy' : id === 'task-request' ? 'intake' : 'implement', skill: id === 'task-judge' ? 'plan-change-review' : null, repoId: 'repo-1', branch: 'agent/builder/78-issue-78', subjectRef: id === 'task-request' ? 'request:aaaaaaaa' : 'openadlc#78' })),
+    listTasksOnSubjects: vi.fn(async () => []),
     pausedWithAnswer: vi.fn(async () => []),
     updateTaskState: vi.fn(async (id: string, state: string, extra: { exitReason: string | null }) => ({
       id,
@@ -392,7 +393,7 @@ describe('the end of a console request’s triage', () => {
   it('hands the issue it filed to Design or Build by the spec rule, whichever delivery linked it', async () => {
     const { requests, tasks } = await import('@openadlc/db');
     // Linked already by the issue's own `opened` delivery, so `triageEnded` answers nothing.
-    vi.mocked(requests.findRequestByPrefix).mockResolvedValue({ id: 'aaaaaaaa-1', state: 'filed', repoId: 'repo-1', issueNumber: 12 } as never);
+    vi.mocked(requests.findRequestByPrefix).mockResolvedValue({ id: 'aaaaaaaa-1', state: 'filed', repoId: 'repo-1', issueNumber: 12, issues: [{ repoId: 'repo-1', number: 12 }] } as never);
     vi.mocked(tasks.updateTaskState).mockResolvedValueOnce({ id: 'task-9', botId: 'bot-intake', repoId: null, kind: 'intake', subjectType: 'request', subjectRef: 'request:aaaaaaaa', state: 'done', exitReason: null } as never);
     try {
       expect((await post('/internal/tasks/task-9/state', { state: 'done' })).status).toBe(200);
@@ -400,6 +401,30 @@ describe('the end of a console request’s triage', () => {
       expect(afterIntake).toHaveBeenCalledWith({ repoName: 'openadlc', issueNumber: 12 });
     } finally {
       vi.mocked(requests.findRequestByPrefix).mockResolvedValue(null);
+    }
+  });
+
+  it('hands each issue it filed on, each by its own repository', async () => {
+    const { repos, requests, tasks } = await import('@openadlc/db');
+    vi.mocked(repos.listRepos).mockResolvedValue([
+      { id: 'repo-1', name: 'openadlc', fullName: 'exampleco/openadlc' },
+      { id: 'repo-2', name: 'web', fullName: 'exampleco/web' },
+    ] as never);
+    vi.mocked(requests.findRequestByPrefix).mockResolvedValue({
+      id: 'aaaaaaaa-1',
+      state: 'filed',
+      repoId: 'repo-1',
+      issueNumber: 12,
+      issues: [{ repoId: 'repo-1', number: 12 }, { repoId: 'repo-2', number: 4 }],
+    } as never);
+    vi.mocked(tasks.updateTaskState).mockResolvedValueOnce({ id: 'task-9', botId: 'bot-intake', repoId: null, kind: 'intake', subjectType: 'request', subjectRef: 'request:aaaaaaaa', state: 'done', exitReason: null } as never);
+    try {
+      await post('/internal/tasks/task-9/state', { state: 'done' });
+
+      expect(afterIntake.mock.calls).toEqual([[{ repoName: 'openadlc', issueNumber: 12 }], [{ repoName: 'web', issueNumber: 4 }]]);
+    } finally {
+      vi.mocked(requests.findRequestByPrefix).mockResolvedValue(null);
+      vi.mocked(repos.listRepos).mockResolvedValue([{ id: 'repo-1', name: 'openadlc', fullName: 'exampleco/openadlc' }] as never);
     }
   });
 
@@ -797,6 +822,115 @@ describe('a task signing what it posts', () => {
 
     expect((await post('/internal/tasks/task-1/stamp', { body: 'Elsewhere.', kind: 'comment', number: 12 })).status).toBe(403);
     expect(sign).toHaveBeenCalledTimes(3);
+  });
+
+  it('signs an issue task’s post with its own repository, whatever repository gh names', async () => {
+    const { repos } = await import('@openadlc/db');
+    vi.mocked(repos.listRepos).mockResolvedValue([
+      { id: 'repo-1', name: 'openadlc', fullName: 'exampleco/openadlc' },
+      { id: 'repo-2', name: 'web', fullName: 'exampleco/web' },
+    ] as never);
+    try {
+      expect((await post('/internal/tasks/task-1/stamp', { body: 'A new one.', kind: 'issue', number: null, repo: 'exampleco/web' })).status).toBe(200);
+      expect(sign).toHaveBeenCalledWith('A new one.', expect.objectContaining({ repo: 'exampleco/openadlc' }));
+    } finally {
+      vi.mocked(repos.listRepos).mockResolvedValue([{ id: 'repo-1', name: 'openadlc', fullName: 'exampleco/openadlc' }] as never);
+    }
+  });
+});
+
+describe('a console request’s triage signing what it files', () => {
+  // task-request triages request:aaaaaaaa, named for exampleco/openadlc. The
+  // install also manages exampleco/web; exampleco/elsewhere it does not.
+  const REQUEST = {
+    id: 'aaaaaaaa-0000-4000-8000-000000000000',
+    state: 'filed',
+    repoId: 'repo-1',
+    issueNumber: 12,
+    issues: [{ repoId: 'repo-1', repoFullName: 'exampleco/openadlc', number: 12, filedAt: '2026-10-23T13:00:00.000Z' }],
+  };
+  const onGitHub = new Map<string, { number: number; title: string; body: string | null; htmlUrl: string; pullRequest: boolean }>();
+
+  beforeEach(async () => {
+    const { recordEvent, repos, requests, tasks } = await import('@openadlc/db');
+    vi.mocked(recordEvent).mockResolvedValue('event-1' as never);
+    vi.mocked(repos.listRepos).mockResolvedValue([
+      { id: 'repo-1', name: 'openadlc', fullName: 'exampleco/openadlc' },
+      { id: 'repo-2', name: 'web', fullName: 'exampleco/web' },
+    ] as never);
+    vi.mocked(requests.findRequestByPrefix).mockResolvedValue({ ...REQUEST, issues: [...REQUEST.issues] } as never);
+    vi.mocked(requests.fileIssue).mockImplementation(async (_id: string, repoId: string, number: number) => ({
+      request: { ...REQUEST, issues: [...REQUEST.issues, { repoId, repoFullName: null, number, filedAt: '2026-10-23T13:05:00.000Z' }] },
+      added: true,
+    }) as never);
+    vi.mocked(tasks.listTasksOnSubjects).mockResolvedValue([{ id: 'task-request', kind: 'intake', state: 'running', botId: 'bot-builder', repoId: 'repo-1', subjectRef: 'request:aaaaaaaa', createdAt: '2026-10-23T12:59:00.000Z' }] as never);
+    onGitHub.clear();
+    onGitHub.set('exampleco/web#4', { number: 4, title: 'Show the price', body: 'OpenADLC request: request:aaaaaaaa', htmlUrl: 'https://github.com/exampleco/web/issues/4', pullRequest: false });
+    onGitHub.set('exampleco/web#5', { number: 5, title: 'Something else', body: 'A person filed this.', htmlUrl: 'https://github.com/exampleco/web/issues/5', pullRequest: false });
+    automationGithub = {
+      getIssue: vi.fn(async (repo: string, number: number) => {
+        const found = onGitHub.get(`${repo}#${number}`);
+        if (!found) throw new Error('Not Found');
+        return found;
+      }),
+    };
+  });
+
+  afterEach(async () => {
+    const { repos, requests, tasks } = await import('@openadlc/db');
+    vi.mocked(repos.listRepos).mockResolvedValue([{ id: 'repo-1', name: 'openadlc', fullName: 'exampleco/openadlc' }] as never);
+    vi.mocked(requests.findRequestByPrefix).mockResolvedValue(null);
+    vi.mocked(requests.fileIssue).mockResolvedValue(null);
+    vi.mocked(tasks.listTasksOnSubjects).mockResolvedValue([]);
+  });
+
+  it('signs a new issue for the managed repository gh names, so it is not read as another repository’s', async () => {
+    expect((await post('/internal/tasks/task-request/stamp', { body: 'The web half.', kind: 'issue', number: null, repo: 'ExampleCo/Web' })).status).toBe(200);
+    expect(sign).toHaveBeenCalledWith('The web half.', expect.objectContaining({ repo: 'exampleco/web', kind: 'issue', n: null }));
+  });
+
+  it('signs for its own repository when gh names one this install does not manage, or none', async () => {
+    await post('/internal/tasks/task-request/stamp', { body: 'Elsewhere.', kind: 'issue', number: null, repo: 'exampleco/elsewhere' });
+    await post('/internal/tasks/task-request/stamp', { body: 'Here.', kind: 'issue', number: null });
+    expect(sign.mock.calls.map(([, fields]) => (fields as unknown as { repo: string }).repo)).toEqual(['exampleco/openadlc', 'exampleco/openadlc']);
+  });
+
+  it('signs an edit of an issue its request was filed as', async () => {
+    expect((await post('/internal/tasks/task-request/stamp', { body: 'Names its sibling.', kind: 'issue-edit', number: 12, repo: 'exampleco/openadlc' })).status).toBe(200);
+    expect(sign).toHaveBeenCalledWith('Names its sibling.', expect.objectContaining({ repo: 'exampleco/openadlc', n: 12 }));
+  });
+
+  it('files an issue that carries its line before its delivery has, and then signs for it', async () => {
+    const { requests } = await import('@openadlc/db');
+    expect((await post('/internal/tasks/task-request/stamp', { body: 'Names its sibling.', kind: 'issue-edit', number: 4, repo: 'exampleco/web' })).status).toBe(200);
+    expect(requests.fileIssue).toHaveBeenCalledWith(REQUEST.id, 'repo-2', 4);
+    expect(sign).toHaveBeenCalledWith('Names its sibling.', expect.objectContaining({ repo: 'exampleco/web', n: 4 }));
+  });
+
+  it('refuses an issue that does not carry its line, one GitHub has not got, and a pull request', async () => {
+    const { requests } = await import('@openadlc/db');
+    onGitHub.set('exampleco/web#6', { number: 6, title: 'A pull request', body: 'OpenADLC request: request:aaaaaaaa', htmlUrl: 'https://github.com/exampleco/web/pull/6', pullRequest: true });
+    for (const number of [5, 99, 6]) {
+      const refused = await post('/internal/tasks/task-request/stamp', { body: 'Hijack.', kind: 'comment', number, repo: 'exampleco/web' });
+      expect(refused.status).toBe(403);
+      expect(await refused.text()).toContain(`exampleco/web#${number} is not one`);
+    }
+    // Its own repository's issue numbers are no different.
+    expect((await post('/internal/tasks/task-request/stamp', { body: 'Hijack.', kind: 'comment', number: 13 })).status).toBe(403);
+    expect(requests.fileIssue).not.toHaveBeenCalled();
+    expect(sign).not.toHaveBeenCalled();
+  });
+
+  it('refuses a number in a repository this install does not manage, which is read as its own repository’s', async () => {
+    // exampleco/elsewhere is not managed, so #4 is exampleco/openadlc#4, which is not the request's.
+    expect((await post('/internal/tasks/task-request/stamp', { body: 'Hijack.', kind: 'comment', number: 4, repo: 'exampleco/elsewhere' })).status).toBe(403);
+    expect(sign).not.toHaveBeenCalled();
+  });
+
+  it('signs no review', async () => {
+    const response = await post('/internal/tasks/task-request/stamp', { body: 'Approved.', kind: 'review', number: 12, head: 'b'.repeat(40), repo: 'exampleco/openadlc' });
+    expect(response.status).toBe(403);
+    expect(sign).not.toHaveBeenCalled();
   });
 });
 

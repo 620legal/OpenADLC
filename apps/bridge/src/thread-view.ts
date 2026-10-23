@@ -31,8 +31,17 @@ export interface ThreadTopic {
   title: string | null;
   issue: { number: number; url: string | null } | null;
   pullRequest: { number: number; url: string | null } | null;
-  /** What a console request asked for, and the issue it became once filed. */
-  request: { text: string; issueNumber: number | null; state: string } | null;
+  /**
+   * What a console request asked for, and the issues it became once filed:
+   * one in each repository it concerns. `issueNumber` is the first in the
+   * repository it named, for an older console.
+   */
+  request: {
+    text: string;
+    issueNumber: number | null;
+    state: string;
+    issues: { repo: string; number: number; url: string | null }[];
+  } | null;
 }
 
 interface RepoFacts {
@@ -47,6 +56,8 @@ interface RequestFacts {
   repoId: string | null;
   issueNumber: number | null;
   state: string;
+  /** Every issue it was filed as (`RequestRecord.issues`), oldest first. */
+  issues?: readonly { repoId: string; number: number }[];
 }
 
 /** An issue's page, for an issue the store has no link for. GitHub sends a pull request's number there on to the pull request. */
@@ -103,14 +114,24 @@ export function describeSubject(
   const request = requestNamed(ref, facts.requests);
   if (request) {
     const repo = facts.repos.find((one) => one.id === request.repoId);
+    const filed =
+      request.issues && request.issues.length > 0
+        ? request.issues
+        : request.issueNumber !== null && request.repoId
+          ? [{ repoId: request.repoId, number: request.issueNumber }]
+          : [];
+    const issues = filed.map((one) => {
+      const where = facts.repos.find((entry) => entry.id === one.repoId);
+      return { repo: where?.name ?? '', number: one.number, url: issueUrl(where, one.number) };
+    });
     return {
       ref,
       kind: 'request',
       repo: repo?.name ?? null,
       title: null,
-      issue: request.issueNumber !== null ? { number: request.issueNumber, url: issueUrl(repo, request.issueNumber) } : null,
+      issue: issues[0] ? { number: issues[0].number, url: issues[0].url } : null,
       pullRequest: null,
-      request: { text: request.text, issueNumber: request.issueNumber, state: request.state },
+      request: { text: request.text, issueNumber: request.issueNumber, state: request.state, issues },
     };
   }
 

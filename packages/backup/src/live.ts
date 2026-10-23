@@ -1,7 +1,7 @@
 import { bots, credentials, identities, modelAccounts, query, repos, settings, spendingLimits, withTransaction } from '@openadlc/db';
 import { appPrivateKeyRef, credentialKind, getSecretStore, modelAccountRef, signingKeyRef, webhookSecretRef, type SecretStore } from '@openadlc/github';
 import { MESSAGE_KINDS, holdsCredential, isRepoColor, nextRepoColor } from '@openadlc/shared';
-import { archiveSpendingLimit, BackupError, resolveSpendingLimits, type ArchivedAccount, type ArchivedCredential, type ArchivedHistory, type ArchivedRepository, type ArchivedWorkItem, type ArchivedWorkItemLink, type ArchivedSpendingLimit, type LoginFiles } from './archive.js';
+import { archiveSpendingLimit, BackupError, resolveSpendingLimits, type ArchivedAccount, type ArchivedCredential, type ArchivedHistory, type ArchivedRepository, type ArchivedRequest, type ArchivedRequestIssue, type ArchivedWorkItem, type ArchivedWorkItemLink, type ArchivedSpendingLimit, type LoginFiles } from './archive.js';
 import type { HistoryIds, RestoreDb, RestoreTarget } from './apply.js';
 import type { InstallFacts } from './clean.js';
 import {
@@ -118,13 +118,19 @@ function toAccount(account: Awaited<ReturnType<typeof modelAccounts.list>>[numbe
  * none, so a statement timeout made a "with history" backup that carried no
  * attachments and said it had succeeded.
  */
+/** Every issue an archived request was filed as: its `issues`, or, in an older archive, `issueNumber` in `repo`. */
+export function issuesOfRequest(request: ArchivedRequest): ArchivedRequestIssue[] {
+  if (request.issues) return request.issues;
+  return request.issueNumber !== null && request.repo ? [{ repo: request.repo, number: request.issueNumber, filedAt: request.updatedAt }] : [];
+}
+
 function onlyWithoutTable<T>(error: unknown, none: T): T {
   if ((error as { code?: unknown } | null)?.code === '42P01') return none;
   throw error;
 }
 
 export async function readHistory(): Promise<ArchivedHistory> {
-  const [threads, messages, audit, ledger, requests, files, items, links] = await Promise.all([
+  const [threads, messages, audit, ledger, requests, files, items, links, requestIssues] = await Promise.all([
     query<Record<string, unknown>>(
       `select t.id, b.slot as seat, r.name as repo, t.subject_ref, t.created_at, t.updated_at
          from threads t join bots b on b.id = t.bot_id left join repos r on r.id = t.repo_id
@@ -164,7 +170,19 @@ export async function readHistory(): Promise<ArchivedHistory> {
          from work_item_links l left join repos r on r.id = l.repo_id
         order by l.id`,
     ).catch((error: unknown) => onlyWithoutTable(error, null)),
+    // Every issue each request was filed as, from migration 0153: null on a
+    // database from before it, so its requests carry only `issueNumber`.
+    query<Record<string, unknown>>(
+      `select ri.request_id, r.name as repo, ri.issue_number, ri.filed_at
+         from request_issues ri join repos r on r.id = ri.repo_id
+        order by ri.filed_at, ri.issue_number`,
+    ).catch((error: unknown) => onlyWithoutTable(error, null)),
   ]);
+  const issuesOf = new Map<string, ArchivedRequestIssue[]>();
+  for (const row of requestIssues ?? []) {
+    const requestId = String(row.request_id);
+    issuesOf.set(requestId, [...(issuesOf.get(requestId) ?? []), { repo: String(row.repo), number: Number(row.issue_number), filedAt: iso(row.filed_at) }]);
+  }
   const linksOf = new Map<string, ArchivedWorkItemLink[]>();
   for (const row of links ?? []) {
     const itemId = String(row.work_item_id);
@@ -232,6 +250,7 @@ export async function readHistory(): Promise<ArchivedHistory> {
       state: String(row.state),
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
+      ...(requestIssues ? { issues: issuesOf.get(String(row.id)) ?? [] } : {}),
     })),
     attachments: files.map((row) => ({
       id: String(row.id),
@@ -911,6 +930,19 @@ export function restoreDb(sql: Sql): UndoDb {
         );
         counts.requests += row.rowCount ?? 0;
         for (const added of row.rows) ids.requests.push(String(added.id));
+        // Its issues, only for a request this restore added: undo removes them
+        // with it, by cascade. An archive from before migration 0153 has its
+        // one issue in `issueNumber`, as the migration backfilled it.
+        if (row.rows.length === 0) continue;
+        for (const issue of issuesOfRequest(request)) {
+          const repoId = repoIds.get(issue.repo);
+          if (!repoId) continue;
+          await sql.query(
+            `insert into request_issues (request_id, repo_id, issue_number, filed_at) values ($1, $2, $3, $4)
+             on conflict do nothing`,
+            [request.id, repoId, issue.number, issue.filedAt],
+          );
+        }
       }
 
       // After the requests and messages they belong to. One already here — by

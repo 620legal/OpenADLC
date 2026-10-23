@@ -5,10 +5,17 @@ export interface RequestRecord {
   id: string;
   text: string;
   context: string | null;
+  /** The repository the person named, or, when they named none, the first one it was filed in. */
   repoId: string | null;
   kind: string | null;
   requestedBy: string;
+  /** The first issue filed in `repoId`; null while there is none there. `issues` has every one. */
   issueNumber: number | null;
+  /**
+   * Every issue it was filed as, oldest first, in whichever managed
+   * repositories intake filed it (`request_issues`, migration 0153).
+   */
+  issues: RequestIssue[];
   /**
    * `queued` while it waits for the intake bot to be free, `draft` while
    * triage works on it, `questions` while it waits on its person, and then
@@ -24,6 +31,15 @@ export interface RequestRecord {
   updatedAt: string;
 }
 
+/** One issue a request was filed as. */
+export interface RequestIssue {
+  repoId: string;
+  /** `owner/name`; null for a repository no longer on record. */
+  repoFullName: string | null;
+  number: number;
+  filedAt: string;
+}
+
 interface RequestRow {
   id: string;
   text: string;
@@ -37,9 +53,19 @@ interface RequestRow {
   queue_attempts: number;
   queue_reason: string | null;
   updated_at: Date;
+  issues?: { repoId: string; repoFullName: string | null; number: number; filedAt: string }[] | null;
 }
 
-const COLUMNS = 'id, text, context, repo_id, kind, requested_by, issue_number, state, created_at, queue_attempts, queue_reason, updated_at';
+/** Its issues, read with the row, in a select or a `returning`. */
+const ISSUES = `(
+  select coalesce(json_agg(json_build_object(
+           'repoId', ri.repo_id, 'repoFullName', r.full_name, 'number', ri.issue_number, 'filedAt', ri.filed_at
+         ) order by ri.filed_at, ri.issue_number), '[]'::json)
+    from request_issues ri left join repos r on r.id = ri.repo_id
+   where ri.request_id = requests.id
+) as issues`;
+
+const COLUMNS = `id, text, context, repo_id, kind, requested_by, issue_number, state, created_at, queue_attempts, queue_reason, updated_at, ${ISSUES}`;
 
 const SELECT = `
   select ${COLUMNS} from requests
@@ -54,6 +80,13 @@ function toRequest(row: RequestRow): RequestRecord {
     kind: row.kind,
     requestedBy: row.requested_by,
     issueNumber: row.issue_number,
+    issues: (row.issues ?? []).map((issue) => ({
+      repoId: issue.repoId,
+      repoFullName: issue.repoFullName ?? null,
+      number: Number(issue.number),
+      // json_agg writes a timestamp as Postgres prints it, with an offset rather than a Z.
+      filedAt: new Date(issue.filedAt).toISOString(),
+    })),
     state: row.state,
     createdAt: row.created_at.toISOString(),
     queueAttempts: row.queue_attempts ?? 0,
@@ -164,34 +197,92 @@ export async function listRequests(limit = 50): Promise<RequestRecord[]> {
 /**
  * The console requests filed as one issue, oldest first: what a work item
  * started as. Usually one; a request sent twice and filed into the same issue
- * is two, and both are the item's.
+ * is two, and both are the item's. Read from every issue a request was filed
+ * as, so the design of a request's second issue, in another repository, is
+ * given the request too.
  */
 export async function listRequestsForIssue(repoId: string, issueNumber: number): Promise<RequestRecord[]> {
-  const rows = await query<RequestRow>(`${SELECT} where repo_id = $1 and issue_number = $2 order by created_at`, [repoId, issueNumber]);
+  const rows = await query<RequestRow>(
+    `${SELECT} where exists (
+       select 1 from request_issues ri where ri.request_id = requests.id and ri.repo_id = $1 and ri.issue_number = $2
+     ) order by created_at`,
+    [repoId, issueNumber],
+  );
   return rows.map(toRequest);
 }
 
+/** Filing a request that was abandoned: nothing files it again. */
+export class RequestAbandoned extends Error {
+  constructor(readonly requestId: string) {
+    super(`request ${requestId.slice(0, 8)} was abandoned, so no issue is filed for it`);
+    this.name = 'RequestAbandoned';
+  }
+}
+
+/**
+ * Records an issue a request was filed as, in one transaction, and marks the
+ * request `filed`. `added` is false when that issue was recorded already, so a
+ * redelivery says nothing twice.
+ *
+ * The request keeps the repository the person named, or takes this one when
+ * they named none; `issue_number` is the first issue in that repository, and
+ * stays null when intake filed only elsewhere ("use b instead of a"), so the
+ * readers that join on the pair keep their meaning.
+ */
+export async function fileIssue(
+  requestId: string,
+  repoId: string,
+  issueNumber: number,
+): Promise<{ request: RequestRecord; added: boolean } | null> {
+  return withTransaction(async (client) => {
+    const current = (
+      await client.query<{ state: RequestRecord['state'] }>('select state from requests where id = $1 for update', [requestId])
+    ).rows[0];
+    if (!current) return null;
+    if (current.state === 'abandoned') throw new RequestAbandoned(requestId);
+    const inserted = await client.query(
+      `insert into request_issues (request_id, repo_id, issue_number) values ($1, $2, $3)
+       on conflict do nothing
+       returning issue_number`,
+      [requestId, repoId, issueNumber],
+    );
+    const row = (
+      await client.query<RequestRow>(
+        `update requests set
+           state = 'filed',
+           repo_id = coalesce(repo_id, $2::uuid),
+           issue_number = case
+             when issue_number is null and coalesce(repo_id, $2::uuid) = $2::uuid then $3::integer
+             else issue_number
+           end,
+           updated_at = now()
+         where id = $1
+         returning ${COLUMNS}`,
+        [requestId, repoId, issueNumber],
+      )
+    ).rows[0];
+    if (!row) return null;
+    return { request: toRequest(row), added: inserted.rows.length > 0 };
+  });
+}
+
+/**
+ * A request's state. Filing goes through `fileIssue`, which records the issue
+ * with it.
+ */
 export async function updateRequest(
   id: string,
   patch: {
     state?: RequestRecord['state'];
-    issueNumber?: number | null;
-    /**
-     * The repository it was filed in, for a request that named none: intake
-     * chose it. A repository the request already names is kept.
-     */
-    repoId?: string | null;
   },
 ): Promise<RequestRecord | null> {
   const row = await queryOne<RequestRow>(
     `update requests set
        state = coalesce($2, state),
-       issue_number = coalesce($3, issue_number),
-       repo_id = coalesce(repo_id, $4),
        updated_at = now()
      where id = $1
      returning ${COLUMNS}`,
-    [id, patch.state ?? null, patch.issueNumber ?? null, patch.repoId ?? null],
+    [id, patch.state ?? null],
   );
   // An abandoned request's work item shows it closed.
   if (row && patch.state === 'abandoned') {

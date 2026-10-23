@@ -350,7 +350,11 @@ export function pinnedTask(
 
   const links: { label: string; url: string }[] = [];
   if (topic?.pullRequest?.url) links.push({ label: `Pull request #${topic.pullRequest.number}`, url: topic.pullRequest.url });
-  if (topic?.issue?.url) links.push({ label: `Issue #${topic.issue.number}`, url: topic.issue.url });
+  const several = request?.issues && request.issues.length > 1 ? request.issues : null;
+  if (several) {
+    // A request filed in several repositories links each of its issues, by repository.
+    for (const issue of several) if (issue.url) links.push({ label: `Issue ${issue.repo}#${issue.number}`, url: issue.url });
+  } else if (topic?.issue?.url) links.push({ label: `Issue #${topic.issue.number}`, url: topic.issue.url });
 
   const spent = task.costUsd ?? 0;
   const did = current
@@ -442,16 +446,26 @@ export function composerTarget(input: {
     case 'pull_request':
       return { mode: 'send', subject, helper: `Posted on pull request #${topic.pullRequest?.number ?? '?'} as a comment` };
     case 'request': {
-      const filed = topic.request?.issueNumber ?? null;
+      const several = topic.request?.issues && topic.request.issues.length > 1 ? topic.request.issues : null;
+      const filed = topic.request?.issueNumber ?? topic.issue?.number ?? null;
       return {
         mode: 'send',
         subject,
-        helper: filed !== null ? `Added to the request’s thread. It is filed as #${filed} now.` : 'Added to the request’s thread',
+        helper: several
+          ? `Added to the request’s thread. It is filed as ${andList(several.map((issue) => `${issue.repo}#${issue.number}`))} now.`
+          : filed !== null
+            ? `Added to the request’s thread. It is filed as #${filed} now.`
+            : 'Added to the request’s thread',
       };
     }
     default:
       return { mode: 'send', subject, helper: 'Kept in this thread; it is not posted anywhere' };
   }
+}
+
+/** `a`, `a and b`, `a, b and c`. */
+function andList(items: readonly string[]): string {
+  return items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
 }
 
 /**

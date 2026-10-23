@@ -93,6 +93,45 @@ export interface RequestBriefing {
   files?: readonly { name: string; mediaType: string; sizeBytes: number }[];
   /** Its work item in the console, which the filed issue links to instead of to any file. */
   itemLink?: string | null;
+  /**
+   * Every repository the install manages, for triage to decide which ones the
+   * request concerns; listed in `request.md` only when there are several.
+   */
+  repositories?: readonly ManagedRepository[];
+}
+
+/** A managed repository as `request.md` lists it. */
+export interface ManagedRepository {
+  fullName: string;
+  /** Its GitHub description; null when it has none, undefined when it could not be read. */
+  description: string | null | undefined;
+}
+
+/** `owner/a#12, owner/b#4`: the issues a request was filed as. */
+function filedAs(request: requests.RequestRecord, repoFullName: string | null): string[] {
+  if (request.issues.length > 0) return request.issues.map((issue) => `${issue.repoFullName ?? 'its repository'}#${issue.number}`);
+  return request.issueNumber !== null ? [`${repoFullName ?? 'its repository'}#${request.issueNumber}`] : [];
+}
+
+/**
+ * The repositories triage chooses among, when there is a choice: a request
+ * that spans repositories is filed as one issue in each.
+ */
+function repositoriesSection(repositories: readonly ManagedRepository[], chosen: string | null): string[] {
+  if (repositories.length < 2) return [];
+  return [
+    '',
+    '## The repositories this install manages',
+    '',
+    'Decide which of these the request concerns, and file one issue in each: the triage skill says how, and when to ask first.',
+    '',
+    ...repositories.map((repo) => {
+      const mark = chosen && repo.fullName.toLowerCase() === chosen.toLowerCase() ? ' (chosen by the person)' : '';
+      const description =
+        repo.description === undefined ? '_its description could not be read_' : repo.description?.trim() || '_no description on GitHub_';
+      return `- \`${repo.fullName}\`${mark} — ${description}`;
+    }),
+  ];
 }
 
 /** The request as triage reads it (`request.md`), or as design reads it once filed (`intake.md`). */
@@ -120,6 +159,7 @@ export function renderRequest(input: RequestBriefing, reading: RequestReading = 
       : '_None._',
   ];
   const linkLine = input.itemLink ? [`- **Work item in the console:** ${input.itemLink}`] : [];
+  const issues = filedAs(request, input.repoFullName);
   if (reading === 'design') {
     return {
       name: INTAKE_DOCUMENT,
@@ -133,6 +173,9 @@ export function renderRequest(input: RequestBriefing, reading: RequestReading = 
         `- **Asked by:** ${request.requestedBy}, at ${request.createdAt}`,
         `- **Kind:** ${request.kind?.trim() || '_not given_'}`,
         `- **Repository:** ${input.repoFullName ?? '_none named_'}`,
+        // A request that spans repositories was filed as one issue in each,
+        // and the design of one reads what its siblings are.
+        ...(issues.length > 0 ? [`- **Filed as:** ${issues.join(', ')}`] : []),
         ...linkLine,
         '',
         '## What they asked for',
@@ -153,12 +196,11 @@ export function renderRequest(input: RequestBriefing, reading: RequestReading = 
   }
 
   const filed =
-    request.issueNumber !== null
-      ? [
-          '',
-          `It has already been filed as ${input.repoFullName ?? 'its repository'}#${request.issueNumber}. Do not file it again.`,
-        ]
-      : [];
+    issues.length === 1
+      ? ['', `It has already been filed as ${issues[0]}. Do not file it again.`]
+      : issues.length > 1
+        ? ['', `It has already been filed as ${issues.join(', ')}. Do not file those again.`]
+        : [];
 
   return {
     name: REQUEST_DOCUMENT,
@@ -188,6 +230,7 @@ export function renderRequest(input: RequestBriefing, reading: RequestReading = 
       request.context?.trim() || '_None._',
       '',
       ...filesSection,
+      ...repositoriesSection(input.repositories ?? [], input.repoFullName),
       '',
       '## The conversation so far',
       '',
@@ -221,7 +264,7 @@ export function itemLinkFor(consoleUrl: string | null | undefined, subjectRef: s
  */
 export async function requestDocument(
   subjectRef: string,
-  options: { consoleUrl?: string | null } = {},
+  options: BriefingOptions = {},
 ): Promise<ContextDocument | null> {
   let request: requests.RequestRecord | null;
   try {
@@ -273,20 +316,40 @@ export async function intakeDocument(
   return briefingDocument(request, `request:${request.id.slice(0, 8)}`, options, 'design');
 }
 
+/** How a request's briefing is read. */
+export interface BriefingOptions {
+  consoleUrl?: string | null;
+  /**
+   * A repository's GitHub description, read as the automation account; one
+   * that fails, or no reader at all, is said in `request.md` and never holds it.
+   */
+  describe?: (repoFullName: string) => Promise<string | null>;
+}
+
 async function briefingDocument(
   request: requests.RequestRecord,
   subjectRef: string,
-  options: { consoleUrl?: string | null },
+  options: BriefingOptions,
   reading: RequestReading,
 ): Promise<ContextDocument> {
   const [repoList, gates, subjectThreads, files] = await Promise.all([
-    request.repoId ? repos.listRepos() : Promise.resolve([]),
+    repos.listRepos(),
     threads.listGatesForSubject(subjectRef),
     threads.listThreadsForSubject(subjectRef),
     // A database a release behind has no table yet; the request is still read.
     (async () => attachments.listForSubjects([subjectRef]))().catch(() => [] as attachments.AttachmentMeta[]),
   ]);
   const messages = await threads.listMessages(subjectThreads.map((thread) => thread.id));
+  // Only a triage chooses among repositories, and only when there are several.
+  const repositories: ManagedRepository[] =
+    reading === 'triage' && repoList.length > 1
+      ? await Promise.all(
+          repoList.map(async (repo) => ({
+            fullName: repo.fullName,
+            description: options.describe ? await options.describe(repo.fullName).catch(() => undefined) : undefined,
+          })),
+        )
+      : [];
 
   const answered = gates.filter((gate) => gate.state === 'answered');
   // An answer is written into the thread as well as onto its gate. It is shown
@@ -305,6 +368,7 @@ async function briefingDocument(
       messages: written,
       files,
       itemLink: itemLinkFor(options.consoleUrl, subjectRef),
+      repositories,
     },
     reading,
   );
@@ -387,13 +451,47 @@ export function renderOpenWork(
   };
 }
 
-/** `open-issues.md` for a request's repository, or null when it names none. */
+/**
+ * `open-issues.md` for a request: its repository's open work, or null when it
+ * names none. When the install manages several repositories, every one's, a
+ * section each with its own spec rule: intake files one issue in each
+ * repository the request concerns, and checks each draft against its own.
+ */
 export async function openWorkDocument(subjectRef: string, unownedStore: UnownedStore = settingsStore): Promise<ContextDocument | null> {
   const request = await requestFor(subjectRef);
-  if (!request?.repoId) return null;
-  const repo = (await repos.listRepos()).find((one) => one.id === request.repoId);
+  if (!request) return null;
+  const repoList = await repos.listRepos();
+  if (repoList.length > 1) return openWorkAcross(repoList, unownedStore);
+  if (!request.repoId) return null;
+  const repo = repoList.find((one) => one.id === request.repoId);
   if (!repo) return null;
   return openWorkDocumentFor(repo, { unownedStore });
+}
+
+/** `open-issues.md` with one section per managed repository. */
+async function openWorkAcross(
+  repoList: readonly Parameters<typeof openWorkDocumentFor>[0][],
+  unownedStore: UnownedStore,
+): Promise<ContextDocument> {
+  const sections = await Promise.all(
+    repoList.map(async (repo) => {
+      // One repository that cannot be read does not take the others with it.
+      const document = await openWorkDocumentFor(repo, { unownedStore }).catch((error: unknown) => {
+        console.warn(`[bridge] ${repo.fullName}: the open issues could not be read: ${error instanceof Error ? error.message : error}`);
+        return null;
+      });
+      return [`# ${repo.fullName}`, '', document?.content ?? '_Its open issues could not be read: list them with gh before you file here._'].join('\n');
+    }),
+  );
+  return {
+    name: OPEN_WORK_DOCUMENT,
+    title: 'Open issues in each managed repository, with their Expected paths',
+    content: [
+      'This install manages several repositories, so each has its own section. Check a draft against the section of the repository it is filed in: its open issues, and its own Design or Build rule.',
+      '',
+      sections.join('\n\n'),
+    ].join('\n'),
+  };
 }
 
 /**

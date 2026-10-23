@@ -34,7 +34,7 @@ import { startBuild } from './build-start.js';
 import { effectiveConfig } from './effective-config.js';
 import { requestFor, requestPrefixOf } from './request-context.js';
 import { missingReview } from './review-left.js';
-import { RequestFiling } from './request-lifecycle.js';
+import { carriesRequestLine, RequestFiling } from './request-lifecycle.js';
 import { NotOurRepository, worksIn } from './invitation-service.js';
 import { HttpFailure, readBytes, Router, type Handler } from './router.js';
 import { Scheduler } from './scheduler.js';
@@ -210,6 +210,23 @@ export function registerInternalApi(
 
   /** Links a console request to the issue its triage filed. */
   const filing = deps.requestFiling ?? new RequestFiling(deps.actors, deps.config);
+
+  /**
+   * Whether a request's triage may sign a post on `repo#n`: an issue its
+   * request was filed as, or one whose body on GitHub carries the request's
+   * line, which is filed now — its `opened` delivery may not have arrived yet
+   * when intake edits it to name the issues filed after it.
+   */
+  const requestIssue = async (task: Task, repo: { id: string; fullName: string } | null, n: number): Promise<boolean> => {
+    if (!repo) return false;
+    const request = await requestFor(task.subjectRef).catch(() => null);
+    if (!request) return false;
+    if (request.issues.some((issue) => issue.repoId === repo.id && issue.number === n)) return true;
+    const client = await asAutomation(deps.actors, deps.config).catch(() => null);
+    const issue = client ? await client.getIssue(repo.fullName, n).catch(() => null) : null;
+    if (!issue || issue.pullRequest || !carriesRequestLine(issue.body, task.subjectRef)) return false;
+    return filing.issueOpened(repo, issue);
+  };
 
   router.post('/webhooks/github', async ({ raw }) => {
     const signature = (raw.headers['x-hub-signature-256'] as string | undefined) ?? null;
@@ -487,17 +504,19 @@ export function registerInternalApi(
           .catch((error: unknown) =>
             console.warn(`[bridge] could not link ${ended.subjectRef} to an issue: ${error instanceof Error ? error.message : error}`),
           );
-        // Then the issue it filed goes to Design or Build by the spec rule, as
-        // an issue opened on GitHub does when its triage ends. Read from the
-        // request: the issue's own delivery may have linked it first, and then
-        // `triageEnded` answers nothing.
+        // Then each issue it filed goes to Design or Build by its own
+        // repository's spec rule, as an issue opened on GitHub does when its
+        // triage ends. Read from the request: an issue's own delivery may have
+        // linked it first, and then `triageEnded` does not name it.
         const filed = await requestFor(ended.subjectRef).catch(() => null);
-        const repoName = filed?.issueNumber && filed.repoId ? (await repos.listRepos()).find((repo) => repo.id === filed.repoId)?.name : undefined;
-        if (filed?.issueNumber && repoName) {
+        const repoList = filed?.issues.length ? await repos.listRepos() : [];
+        for (const issue of filed?.issues ?? []) {
+          const repoName = repoList.find((repo) => repo.id === issue.repoId)?.name;
+          if (!repoName) continue;
           await deps.stages
-            .afterIntake({ repoName, issueNumber: filed.issueNumber })
+            .afterIntake({ repoName, issueNumber: issue.number })
             .catch((error: unknown) =>
-              console.warn(`[bridge] no handoff for ${repoName}#${filed.issueNumber}: ${error instanceof Error ? error.message : error}`),
+              console.warn(`[bridge] no handoff for ${repoName}#${issue.number}: ${error instanceof Error ? error.message : error}`),
             );
         }
       }
@@ -630,9 +649,17 @@ export function registerInternalApi(
    * the session's worktree (`head`): the merge counts an approval for that head
    * and a later one with the same diff, never for the commit GitHub shows it
    * on, which GitHub moves (`SignedFields.head`). One with no head is refused.
+   *
+   * A console request's triage files one issue in each managed repository the
+   * request concerns, so it alone signs for the repository OpenADLC's `gh`
+   * names (`repo`, from `--repo`) when this install manages it, and for a
+   * number only when that issue is one of its request's: recorded, or carrying
+   * the request's line on GitHub, which files it first. Signed with its own
+   * repository, its issue in another read as `wrong-target`; with no issue on
+   * its subject, its edit naming a sibling went out unsigned.
    */
   taskPost('/internal/tasks/:id/stamp', async ({ params, body }) => {
-    const input = await body<{ body?: string; kind?: string; number?: number | null; head?: unknown }>();
+    const input = await body<{ body?: string; kind?: string; number?: number | null; head?: unknown; repo?: unknown }>();
     if (typeof input.body !== 'string') throw new HttpFailure(400, 'no body to sign');
     // GitHub holds no longer post, and a long enough one kept the bridge busy
     // reading it; verifying reads a longer body as unsigned in any case.
@@ -649,9 +676,21 @@ export function registerInternalApi(
     if (tagged && tagged !== bot.name.toLowerCase()) {
       throw new HttpFailure(400, `this body is tagged as ${tagged}, and this task is ${bot.name}'s; a task signs only as its own seat, so end it with <!-- openadlc-seat:${bot.name.toLowerCase()} --> or no tag`);
     }
-    const repo = task.repoId ? (await repos.listRepos({ includeRemoved: true })).find((entry) => entry.id === task.repoId) : null;
+    let repo = task.repoId ? (await repos.listRepos({ includeRemoved: true })).find((entry) => entry.id === task.repoId) : null;
     const kind = typeof input.kind === 'string' ? input.kind.slice(0, 20) : 'post';
     const n = typeof input.number === 'number' && input.number > 0 ? input.number : null;
+    const forRequest = requestPrefixOf(task.subjectRef) !== null && kind !== 'review';
+    if (forRequest) {
+      const named = typeof input.repo === 'string' ? input.repo.trim().toLowerCase() : '';
+      const managed = named ? (await repos.listRepos()).find((entry) => entry.fullName.toLowerCase() === named) : undefined;
+      repo = managed ?? repo;
+      if (n !== null && !(await requestIssue(task, repo ?? null, n))) {
+        throw new HttpFailure(
+          403,
+          `a triage of ${task.subjectRef} may sign a post only on an issue its request was filed as, and ${repo?.fullName ?? 'its repository'}#${n} is not one: file it with the line “OpenADLC request: ${task.subjectRef}” first`,
+        );
+      }
+    }
     // The target is the task's too. A signed review for a number the caller
     // named is the seat's verdict on that pull request (attribution.ts), so a
     // reviewer led astray on one pull request could approve another as the
@@ -667,7 +706,7 @@ export function registerInternalApi(
       if (!head) {
         throw new HttpFailure(400, 'a review is signed with the head it is of: give the full commit, { "head": "<40 hex characters>" }; OpenADLC\'s gh sends HEAD when gh pr review runs in the worktree you reviewed');
       }
-    } else if (n !== null && n !== subject?.number && !(await targetsOfTask(task, subject, repo?.name ?? null)).includes(n)) {
+    } else if (!forRequest && n !== null && n !== subject?.number && !(await targetsOfTask(task, subject, repo?.name ?? null)).includes(n)) {
       throw new HttpFailure(403, `a task on ${task.subjectRef} may sign a post only on its own issue or pull request, not #${n}`);
     }
     const signed = await deps.attribution.sign(input.body, {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * What a console request's triage is given to read, when it starts and when it
@@ -14,10 +14,11 @@ const store = vi.hoisted(() => ({
     id: 'a4b02784-3ae8-450b-abe9-0c93eb4d67dc',
     text: 'Create html hello world and a readme file.',
     context: 'Keep it to one page; no framework.',
-    repoId: 'repo-1',
+    repoId: 'repo-1' as string | null,
     kind: 'feature',
     requestedBy: 'janedoe',
     issueNumber: null as number | null,
+    issues: [] as { repoId: string; repoFullName: string | null; number: number; filedAt: string }[],
     state: 'draft',
     createdAt: '2026-09-24T20:44:22.945Z',
   },
@@ -119,9 +120,11 @@ import { TaskService } from './task-service.js';
 const startTask = vi.fn(async (_input: { context: ContextDocument[] }) => ({ session: 'ottoexampleco/triage' }));
 const resumeTask = vi.fn(async (_taskId: string, _context: ContextDocument[]) => ({ session: 'ottoexampleco/triage' }));
 
-function service(): TaskService {
-  // GitHub is never asked: a request has nothing there to read.
-  const actors = { asBot: vi.fn(async () => Promise.reject(new Error('GitHub was asked'))) } as unknown as Actors;
+function service(
+  // GitHub is never asked for the request, which has nothing there to read;
+  // only for the repositories' descriptions, when there are several.
+  actors = { asBot: vi.fn(async () => Promise.reject(new Error('GitHub was asked'))) } as unknown as Actors,
+): TaskService {
   return new TaskService(
     { costs: { perTaskCapUsd: 15 } } as BridgeConfig,
     { startTask, resumeTask } as unknown as HostdClient,
@@ -129,8 +132,8 @@ function service(): TaskService {
   );
 }
 
-async function openTriage(): Promise<ContextDocument[]> {
-  await service().open({
+async function openTriage(actors?: Actors): Promise<ContextDocument[]> {
+  await service(actors).open({
     bot: 'ottoexampleco',
     repo: 'openadlc-testbed',
     kind: 'intake',
@@ -155,6 +158,8 @@ beforeEach(() => {
   store.messages = [];
   store.prefixes = [];
   store.request.issueNumber = null;
+  store.request.issues = [];
+  store.request.repoId = 'repo-1';
   startTask.mockClear();
   resumeTask.mockClear();
 });
@@ -369,5 +374,154 @@ describe('the files given with a request', () => {
   it('are said to be none when there are none', async () => {
     const [document] = await openTriage();
     expect(document?.content).toMatch(/## Files given with it\n\n_None._/);
+  });
+});
+
+describe('a request on an install that manages one repository', () => {
+  it('is briefed exactly as before requests could span repositories', async () => {
+    // Both documents, byte for byte as they were before #137.
+    store.issues = [{ number: 3, title: 'Add a hello page', stage: 'build', labels: [], declaredPaths: ['index.html'], body: '' }];
+    store.request.issueNumber = 9;
+    store.request.issues = [{ repoId: 'repo-1', repoFullName: 'janedoe/openadlc-testbed', number: 9, filedAt: '2026-09-24T21:00:00.000Z' }];
+
+    const [request, open] = await openTriage();
+
+    expect(request?.content).toMatchInlineSnapshot(`
+      "# request:a4b02784: a request from the console
+
+      Somebody filed this from the console. There is no issue for it yet; it becomes one when you file it.
+
+      - **Asked by:** janedoe, at 2026-09-24T20:44:22.945Z
+      - **Kind:** feature
+      - **Repository:** janedoe/openadlc-testbed
+      - **Request id:** a4b02784-3ae8-450b-abe9-0c93eb4d67dc
+      - **Work item in the console:** http://console.test/?item=request%3Aa4b02784
+
+      It has already been filed as janedoe/openadlc-testbed#9. Do not file it again.
+
+      The issue you file carries this line in its body, exactly as written, so the request can be linked to it:
+
+          OpenADLC request: request:a4b02784
+
+      ## What they asked for
+
+      Create html hello world and a readme file.
+
+      ## The context they added
+
+      Keep it to one page; no framework.
+
+      ## Files given with it
+
+      _None._
+
+      ## The conversation so far
+
+      _Nothing yet: no question has been answered, and nobody has written in this thread._"
+    `);
+    expect(open?.content).toMatchInlineSnapshot(`
+      "The open issues in janedoe/openadlc-testbed and the files each will touch, as their Expected paths say.
+      Before you ask to file, compare your draft's Expected paths with these: the triage skill says what to do when they overlap.
+      A path marked (exclusive) is one two changes in flight break each other on: overlap there is worth asking about. A path marked (shared) never holds work back, and any other overlap holds it back only while the other change is being built: say those, do not ask.
+
+      - **#3** Add a hello page (build): \`index.html\`
+
+      ## Design or Build
+
+      Spec mode: \`autonomous\`. The labels that send an issue to Design: _none_.
+      Put on each of those labels that fits the issue. Every issue in this repository goes to Design before it is built: label it \`adlc:spec\`.
+      When your task ends the bridge sets the stage from these labels by this rule, whatever stage label you chose."
+    `);
+  });
+});
+
+describe('a request on an install that manages several repositories', () => {
+  const TWO = [
+    { id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', stageModes: { spec: 'untouched' } },
+    { id: 'repo-2', name: 'web', fullName: 'janedoe/web', stageModes: { spec: 'conditional' }, specRequiredLabels: ['touches:schema'] },
+  ];
+  const described = (descriptions: Record<string, string | null | Error>) =>
+    ({
+      asBot: vi.fn(async () => ({
+        repoDescription: vi.fn(async (repo: string) => {
+          const description = descriptions[repo];
+          if (description instanceof Error) throw description;
+          return description ?? null;
+        }),
+      })),
+    }) as unknown as Actors;
+
+  beforeEach(async () => {
+    const { issues, repos } = await import('@openadlc/db');
+    vi.mocked(repos.listRepos).mockResolvedValue(TWO as never);
+    vi.mocked(issues.listIssues).mockImplementation((async (repo: string) =>
+      repo === 'web'
+        ? [{ number: 4, title: 'Show the price', stage: 'build', labels: [], declaredPaths: ['src/price.tsx'], body: '' }]
+        : [{ number: 3, title: 'Add a hello page', stage: 'build', labels: [], declaredPaths: ['index.html'], body: '' }]) as never);
+  });
+
+  afterEach(async () => {
+    const { issues, repos } = await import('@openadlc/db');
+    vi.mocked(repos.listRepos).mockResolvedValue([{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }] as never);
+    vi.mocked(issues.listIssues).mockImplementation((async () => store.issues) as never);
+  });
+
+  it('lists each one with what it is for, the one the person chose marked, for triage to decide which it concerns', async () => {
+    const [request] = await openTriage(described({ 'janedoe/openadlc-testbed': 'The pricing API.', 'janedoe/web': null }));
+
+    expect(request?.content).toContain(
+      [
+        '## The repositories this install manages',
+        '',
+        'Decide which of these the request concerns, and file one issue in each: the triage skill says how, and when to ask first.',
+        '',
+        '- `janedoe/openadlc-testbed` (chosen by the person) — The pricing API.',
+        '- `janedoe/web` — _no description on GitHub_',
+      ].join('\n'),
+    );
+  });
+
+  it('marks none chosen when the person named none, and says a description it could not read', async () => {
+    store.request.repoId = null;
+    const [request] = await openTriage(described({ 'janedoe/openadlc-testbed': new Error('GitHub is down'), 'janedoe/web': 'The shop front.' }));
+
+    expect(request?.content).toContain('**Repository:** _none named_');
+    expect(request?.content).not.toContain('(chosen by the person)');
+    expect(request?.content).toContain('- `janedoe/openadlc-testbed` — _its description could not be read_');
+    expect(request?.content).toContain('- `janedoe/web` — The shop front.');
+  });
+
+  it('is still briefed when the automation account cannot be reached at all', async () => {
+    const [request] = await openTriage();
+    expect(request?.content).toContain('- `janedoe/web` — _its description could not be read_');
+  });
+
+  it('names every issue it was filed as, so a resumed triage files none of them again', async () => {
+    store.request.issueNumber = 12;
+    store.request.issues = [
+      { repoId: 'repo-1', repoFullName: 'janedoe/openadlc-testbed', number: 12, filedAt: '2026-09-24T21:00:00.000Z' },
+      { repoId: 'repo-2', repoFullName: 'janedoe/web', number: 4, filedAt: '2026-09-24T21:01:00.000Z' },
+    ];
+    const [request] = await openTriage();
+    expect(request?.content).toContain('It has already been filed as janedoe/openadlc-testbed#12, janedoe/web#4. Do not file those again.');
+  });
+
+  it('gives the open work of each, a section each with its own spec rule, whichever the person named', async () => {
+    for (const repoId of ['repo-1', null]) {
+      store.request.repoId = repoId;
+      const open = (await openTriage()).find((one) => one.name === OPEN_WORK_DOCUMENT);
+      const content = open?.content ?? '';
+
+      const testbed = content.indexOf('# janedoe/openadlc-testbed');
+      const web = content.indexOf('# janedoe/web');
+      expect(testbed).toBeGreaterThanOrEqual(0);
+      expect(web).toBeGreaterThan(testbed);
+      const [first, second] = [content.slice(testbed, web), content.slice(web)];
+      expect(first).toContain('- **#3** Add a hello page (build): `index.html`');
+      expect(first).toContain('Spec mode: `untouched`.');
+      expect(first).not.toContain('#4');
+      expect(second).toContain('- **#4** Show the price (build): `src/price.tsx`');
+      expect(second).toContain('Spec mode: `conditional`. The labels that send an issue to Design: `touches:schema`.');
+    }
   });
 });

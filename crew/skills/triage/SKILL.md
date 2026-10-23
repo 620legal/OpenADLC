@@ -270,9 +270,14 @@ issue. The steps above still hold, with these differences.
     `Change something`). Agreed, replace its body and label it as step 6 says.
 
   Say in your last message which issue now carries the request.
-- When the issue is complete, file it in the repository `request.md` names, as
-  "Filing the issue" says. The body carries this line on its own, exactly, with
-  the subject you were given:
+- When `request.md` lists the repositories this install manages, decide which
+  of them the request concerns before you draft, as "A request that may span
+  repositories" says. With one repository it lists none, and the request is
+  that repository's.
+- When the issue is complete, file it in the repository `request.md` names, or
+  in each repository you and the person settled on, as "Filing the issue" says.
+  Each body carries this line on its own, exactly, with the subject you were
+  given:
 
   ```
   OpenADLC request: request:<id8>
@@ -281,8 +286,60 @@ issue. The steps above still hold, with these differences.
   It is the only thing that links the request to its issue. Apply the labels and
   set the stage exactly as step 6 says for any issue.
 - Then post the receipt as your last message, ending with the `plan_posted`
-  marker: what you filed, the issue's URL, and what happens next. It is not
+  marker: what you filed, each issue's URL, and what happens next. It is not
   also a comment on the issue.
+
+## A request that may span repositories
+
+When the install manages several repositories, `request.md` lists them under
+"The repositories this install manages", each with what its GitHub description
+says it is for, and marks the one the person chose `(chosen by the person)`.
+`open-issues.md` then has a section for each repository, with its open issues
+and its own "Design or Build" rule.
+
+1. Decide which repositories the request concerns, from the request, each
+   repository's description, its `AGENTS.md` and its code. Only your worktree's
+   repository is checked out; read the others with
+   `gh api repos/<owner/name>/contents/<path>` and
+   `gh api 'repos/<owner/name>/git/trees/HEAD?recursive=1'`.
+2. **None chosen:** the request goes to each repository it concerns, one issue
+   in each. When none of them fits, ask; that is the stop "You cannot tell
+   which repository owns the change".
+3. **One chosen:** start from it. When the request also needs another, or
+   needs another instead, ask once before you draft for it, naming each
+   repository and why:
+
+   ```
+   <!-- openadlc:{"event":"question","question":"This also needs exampleco/web, for the price on the page. Where should it go?","options":["Add exampleco/web as well","Use exampleco/web instead of exampleco/api","Only exampleco/api"]} -->
+   ```
+
+   Never file outside the chosen repository, or leave it out, without that
+   answer.
+4. Draft one issue per repository. Each has its own Expected paths, that
+   repository's files, and its own duplicate and exclusive-overlap check
+   against that repository's section of `open-issues.md` (step 4), and its own
+   labels by that section's spec rule (step 6).
+5. Confirm once, not once per issue. Show every draft, each with its
+   repository, title and body, then ask:
+
+   ```
+   <!-- openadlc:{"event":"question","question":"Here's what I'll file: 2 issues, in exampleco/api and exampleco/web. OK?","options":["OK, file them all","Change something"]} -->
+   ```
+
+6. File them in order, an issue the others depend on first, each with
+   `gh issue create --repo <owner/name>`. Each one names its siblings as
+   `owner/name#N`, so a reader of one finds the others:
+   - under `## Dependencies`, as `- owner/name#N`, when it must wait for that
+     issue to ship. It then gets `blocked`, not `start:now` (step 6);
+   - otherwise under `## What it touches`, as
+     `Filed with owner/name#N from the same request`.
+
+   After the last one is filed, edit each earlier issue to name the ones filed
+   after it, with `gh issue edit <n> --repo <owner/name> --body-file`, changing
+   nothing else in it.
+7. Every issue carries the `OpenADLC request: request:<id8>` line and the work
+   item line. Each issue that relies on a file given with the request names
+   it ("Files given with the work"). The receipt lists every issue.
 
 ## Files given with the work
 

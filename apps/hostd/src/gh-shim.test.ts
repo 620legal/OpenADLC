@@ -152,9 +152,33 @@ describe('OpenADLC’s gh asking the bridge to sign', () => {
       env: Record<string, string>,
       fetchImpl: (url: string, init: { headers: Record<string, string>; body: string }) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>,
       head?: string | null,
+      repo?: string | null,
     ) => Promise<string | null>;
     reviewHeadRefusal: (kind: string, head: string | null, env: Record<string, string>) => string | null;
+    repoArg: (args: string[]) => string | null;
   };
+
+  it('sends the repository the command names, so a request’s triage is signed for the repository it files in', async () => {
+    // Signed with the task's own repository, intake's issue in a second
+    // repository read as another repository's (`wrong-target`).
+    expect(signing.repoArg(['issue', 'create', '--repo', 'exampleco/web', '--title', 'x'])).toBe('exampleco/web');
+    expect(signing.repoArg(['issue', 'edit', '4', '-R', 'exampleco/web'])).toBe('exampleco/web');
+    expect(signing.repoArg(['issue', 'edit', '4', '--repo=exampleco/web'])).toBe('exampleco/web');
+    expect(signing.repoArg(['issue', 'create', '--title', 'x'])).toBeNull();
+
+    const sent: unknown[] = [];
+    const fetchImpl = async (_url: string, init: { body: string }) => {
+      sent.push(JSON.parse(init.body));
+      return { ok: true, status: 200, json: async () => ({ body: 'signed' }) };
+    };
+    const env = { OPENADLC_BRIDGE_URL: 'http://bridge', OPENADLC_TASK_ID: 't-1' };
+    await signing.stamp('The web half.', 'issue', null, env, fetchImpl, null, 'exampleco/web');
+    await signing.stamp('Here.', 'issue', null, env, fetchImpl, null, null);
+    expect(sent).toEqual([
+      { body: 'The web half.', kind: 'issue', number: null, repo: 'exampleco/web' },
+      { body: 'Here.', kind: 'issue', number: null },
+    ]);
+  });
 
   it('names what is being posted, and where', () => {
     expect(signing.postKind(['pr', 'review', '7', '--approve'])).toBe('review');
