@@ -226,7 +226,11 @@ says `<owner/repo#n> has closed since this delivery was sent; no review round
 is opened`, and it is audited the same way, with the delivery in place of the
 seat. Closing or merging one stops the reviews queued, running or paused on it,
 a review whose task was recorded a moment before the close's delivery came
-included. A task paused on a question stops itself when its issue closes: when an
+included. A start's read and its task are one step the close's stop waits for,
+however close behind the `opened` delivery the `closed` one comes: the stop
+finds the task, or the start reads the merge. A review stopped while its
+context is read is not started on a host; its thread says `pr-review was not
+started: it was stopped before hostd was asked to start it`. A task paused on a question stops itself when its issue closes: when an
 issue or pull request closes, merged or not, heard by webhook or found by the
 reconciler after downtime, every task paused on it or on the issue's pull
 request is stopped, deploy and QA included. The exception is a task of the

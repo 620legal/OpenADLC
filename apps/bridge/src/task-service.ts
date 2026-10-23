@@ -1,4 +1,4 @@
-import { audit, bots, costs, hasEventOfType, health, hosts, lastEventAt, leases, recordEvent, repos, spendingLimits, tasks, threads, workItems } from '@openadlc/db';
+import { audit, bots, costs, hasEventOfType, health, hosts, lastEventAt, leases, recordEvent, repos, spendingLimits, tasks, threads, withAdvisoryLock, workItems } from '@openadlc/db';
 import { githubDidNotAnswer } from '@openadlc/github';
 import { attachmentsForTask } from './attachment-routes.js';
 import { stoppedByTheBridge } from './bridge-stops.js';
@@ -300,6 +300,20 @@ export type SubjectClosed = (repoFullName: string, number: number) => Promise<bo
 
 /** The audit action of a review not started because its pull request had merged or closed. */
 export const REVIEW_START_REFUSED = 'review.start_refused';
+
+/**
+ * The advisory lock on a pull request's review starts. A start holds it from
+ * its read of whether the pull request is still open to its task's row, and a
+ * close holds it while it looks for the reviews to stop (`stopReviewsOf`), so
+ * the close finds the row or the start reads the close. Without it a start
+ * read the pull request and recorded its row with awaits between: on a
+ * scratch install, in 2 of 12 replays of `opened` with a merging `closed`
+ * 45 ms behind it, the merge's delivery looked for reviews in between, found
+ * none, and a review ran to the end on the merged pull request.
+ */
+export function reviewStartLock(repoName: string, number: number): string {
+  return `review-start:${repoName}#${number}`;
+}
 
 /**
  * What the bridge last recorded of a pull request on its work item: `merged`,
@@ -923,7 +937,10 @@ export class TaskService {
     // the seat and a host have room, so a busy seat the sweep comes back for
     // costs no read. A read of GitHub that fails starts it, as a resume does
     // (`subjectIsClosed`), unless the bridge has recorded the merge itself
-    // (`reviewRefusal`).
+    // (`reviewRefusal`). The read and the row are made under the pull
+    // request's lock, which its close's stop takes too (`reviewStartLock`):
+    // the close either comes first, and is what the read finds, or finds the
+    // row and stops it.
     const reviewed = input.kind === 'review' && repo ? parseRef(input.subjectRef) : null;
     const opened = await this.names.withBot(found.id, async () => {
       // Read again: a rename this waited for has given the bot another name.
@@ -934,42 +951,45 @@ export class TaskService {
       if (!(await tasks.seatHasRoom(bot.id))) throw new BotBusyError(bot.name, maxTasksOf(bot));
       const room = await hosts.taskRoom();
       if (room !== null && room <= 0) throw new HostFullError(bot.name);
-      const refused = reviewed && repo ? await this.reviewRefusal(repo, reviewed.number) : null;
-      if (refused) {
-        console.log(`[bridge] ${input.subjectRef} is closed; ${bot.name}'s review of it is not started`);
-        await audit({
-          actor: 'bridge',
-          action: REVIEW_START_REFUSED,
-          target: input.subjectRef,
-          payload: { seat: bot.name, why: refused.why, readFrom: refused.readFrom },
-        }).catch((error: unknown) => console.warn(`[bridge] could not audit the review not started: ${error instanceof Error ? error.message : error}`));
-        throw new SubjectClosedError(input.subjectRef);
-      }
-      // Again, last, with nothing awaited between this and the row: a restart
-      // the reads above waited through would otherwise count this start in
-      // neither of its two looks.
-      const restarting = this.restartPending();
-      if (restarting) throw new RestartPendingError(bot.name, restarting);
-      const task = await tasks.createTask({
-        botId: bot.id,
-        repoId: repo?.id ?? null,
-        kind: input.kind,
-        subjectType: input.subjectType,
-        subjectRef: input.subjectRef,
-        leaseId: input.leaseId ?? null,
-        skill: input.skill,
-        branch: input.branch ?? null,
-        costCapUsd: cap,
-        round: input.round ?? 0,
-        // A stacked build's base and its brief, which hostd gives it again
-        // when it resumes; without them it resumed on the default branch.
-        ...(input.baseRef ? { baseRef: input.baseRef, baseContext: input.extraContext ?? [] } : {}),
-      }).catch((error: unknown) => {
-        // Two starts of the same work at once, both past the check above.
-        if (sameWorkTwice(error)) throw new SubjectBusyError(bot.name, input.subjectRef);
-        throw error;
-      });
-      return { bot, task };
+      const record = async () => {
+        const refused = reviewed && repo ? await this.reviewRefusal(repo, reviewed.number) : null;
+        if (refused) {
+          console.log(`[bridge] ${input.subjectRef} is closed; ${bot.name}'s review of it is not started`);
+          await audit({
+            actor: 'bridge',
+            action: REVIEW_START_REFUSED,
+            target: input.subjectRef,
+            payload: { seat: bot.name, why: refused.why, readFrom: refused.readFrom },
+          }).catch((error: unknown) => console.warn(`[bridge] could not audit the review not started: ${error instanceof Error ? error.message : error}`));
+          throw new SubjectClosedError(input.subjectRef);
+        }
+        // Again, last, with nothing awaited between this and the row: a restart
+        // the reads above waited through would otherwise count this start in
+        // neither of its two looks.
+        const restarting = this.restartPending();
+        if (restarting) throw new RestartPendingError(bot.name, restarting);
+        const task = await tasks.createTask({
+          botId: bot.id,
+          repoId: repo?.id ?? null,
+          kind: input.kind,
+          subjectType: input.subjectType,
+          subjectRef: input.subjectRef,
+          leaseId: input.leaseId ?? null,
+          skill: input.skill,
+          branch: input.branch ?? null,
+          costCapUsd: cap,
+          round: input.round ?? 0,
+          // A stacked build's base and its brief, which hostd gives it again
+          // when it resumes; without them it resumed on the default branch.
+          ...(input.baseRef ? { baseRef: input.baseRef, baseContext: input.extraContext ?? [] } : {}),
+        }).catch((error: unknown) => {
+          // Two starts of the same work at once, both past the check above.
+          if (sameWorkTwice(error)) throw new SubjectBusyError(bot.name, input.subjectRef);
+          throw error;
+        });
+        return { bot, task };
+      };
+      return reviewed ? withAdvisoryLock(reviewStartLock(reviewed.repo, reviewed.number), record) : record();
     }).catch((error: unknown) => {
       // The restart became owed while this waited: recorded, as above, outside the bot's lock.
       if (error instanceof RestartPendingError && input.whenBlocked === 'record') return error;
@@ -1038,6 +1058,27 @@ export class TaskService {
       throw error;
     });
 
+    // What the session's own posts to GitHub start with, which its `gh`
+    // puts first: the install and this seat's stage.
+    const postHeader = headerFor((await effectiveConfig(this.config).catch(() => null))?.installName ?? 'OpenADLC', bot.role);
+
+    // The row is read again, last before hostd: a close stops a task while it
+    // is queued, and the seconds of context above are when it comes. A
+    // review's start lets go of its pull request's lock once the row exists,
+    // and the merge's stop that waited on it stops the row then
+    // (`reviewStartLock`). hostd asked anyway built the computer and started
+    // the session before its own look at the row refused the task. A read
+    // that fails goes on to hostd, whose look is still there.
+    const now = await (async () => tasks.getTask(task.id))().catch(() => null);
+    if (now && ['done', 'failed', 'stopped'].includes(now.state)) {
+      const why = `it was ${now.state} before hostd was asked to start it${now.exitReason ? `: ${now.exitReason}` : ''}`;
+      console.log(`[bridge] ${input.subjectRef}: ${bot.name}'s ${input.skill} is not started; ${why}`);
+      await threads
+        .addMessage({ threadId: thread.id, kind: 'sys', author: 'openadlc', text: `${input.skill} was not started: ${why}` })
+        .catch(() => undefined);
+      return { taskId: task.id, session: null, error: why };
+    }
+
     try {
       const started = await this.hostd.startTask({
         taskId: task.id,
@@ -1054,9 +1095,7 @@ export class TaskService {
         costCapUsd: cap,
         checkoutExistingBranch: input.checkoutExistingBranch ?? false,
         ...(input.startFromBaseIfMissing ? { startFromBaseIfMissing: true } : {}),
-        // What the session's own posts to GitHub start with, which its `gh`
-        // puts first: the install and this seat's stage.
-        postHeader: headerFor((await effectiveConfig(this.config).catch(() => null))?.installName ?? 'OpenADLC', bot.role),
+        postHeader,
         ...(reviewMode ? { reviewMode } : {}),
         ...(reviewLens ? { reviewLens } : {}),
       });

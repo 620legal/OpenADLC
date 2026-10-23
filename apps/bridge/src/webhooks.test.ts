@@ -5154,8 +5154,13 @@ describe('a pull request for an issue', () => {
         addLabels: async () => undefined,
       };
       const actors = { asBot: async () => client };
-      // Set by a test: what happens while the round asks for reviewers, and while hostd starts a task.
-      const during = { requesting: async (): Promise<void> => undefined, starting: async (): Promise<void> => undefined };
+      // Set by a test: what happens while the round asks for reviewers, while
+      // a start reads its review's context, and while hostd starts a task.
+      const during = {
+        requesting: async (): Promise<void> => undefined,
+        reading: async (): Promise<void> => undefined,
+        starting: async (): Promise<void> => undefined,
+      };
       const startTask = vi.fn(async (input: { taskId: string }) => {
         await during.starting();
         const task = store.botTasks.find((one) => one.id === input.taskId);
@@ -5167,7 +5172,13 @@ describe('a pull request for an issue', () => {
       const taskService = new TaskService(
         { automationBot: null, humans: [], costs: { perTaskCapUsd: 5, monthlyCapUsd: 100, onCap: 'stop' } } as never,
         { startTask } as never,
-        { actors, forSubject: async () => [] } as never,
+        {
+          actors,
+          forSubject: async () => {
+            await during.reading();
+            return [];
+          },
+        } as never,
       );
       const webhooks = new Webhooks(
         { automationBot: null, humans: [] } as never,
@@ -5216,13 +5227,42 @@ describe('a pull request for an issue', () => {
       return { github, client, startTask, during, deliver, stopped, going };
     }
 
-    beforeEach(() => {
+    // Locks as Postgres keeps them, one holder of a key at a time, and who
+    // has waited on one that was held; and each task's row as it is now.
+    const waited: string[] = [];
+    let waiting: (key: string) => void = () => undefined;
+    beforeEach(async () => {
+      const { withAdvisoryLock } = await import('@openadlc/db');
+      const held = new Map<string, Promise<unknown>>();
+      waited.length = 0;
+      waiting = () => undefined;
+      vi.mocked(withAdvisoryLock).mockImplementation(async (key: string, fn: () => Promise<unknown>) => {
+        const before = held.get(key);
+        if (before) {
+          waited.push(key);
+          waiting(key);
+        }
+        const mine = (before ?? Promise.resolve()).then(fn, fn);
+        const done = mine.then(
+          () => undefined,
+          () => undefined,
+        );
+        held.set(key, done);
+        void done.then(() => {
+          if (held.get(key) === done) held.delete(key);
+        });
+        return mine as never;
+      });
+      vi.mocked(tasks.getTask).mockImplementation(async (id: string) => (store.botTasks.find((task) => task.id === id) ?? null) as never);
       store.bots = [{ id: 'bot-lead', name: 'lead-reviewer', githubLogin: 'lead-reviewer', engine: 'claude', model: 'm', role: 'review' }];
       vi.mocked(tasks.createTask).mockClear();
       vi.spyOn(console, 'log').mockImplementation(() => undefined);
       vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     });
-    afterEach(() => {
+    afterEach(async () => {
+      const { withAdvisoryLock } = await import('@openadlc/db');
+      vi.mocked(withAdvisoryLock).mockReset();
+      vi.mocked(tasks.getTask).mockReset();
       vi.mocked(console.log).mockRestore();
       vi.mocked(console.warn).mockRestore();
     });
@@ -5280,6 +5320,59 @@ describe('a pull request for an issue', () => {
 
       expect(stopped).toEqual([review!.id]);
       expect(going()).toEqual([]);
+    });
+
+    it('starts no review when the merge’s delivery comes between the start’s read and its row', async () => {
+      // v0.1.5 on a scratch install, `closed` (merged) 45 ms behind `opened`:
+      // in 2 of 12 replays the merge's delivery looked for reviews to stop
+      // after a start had read the pull request open and before its row
+      // existed, found none, and the review ran to the end on what had merged.
+      const { github, client, startTask, during, deliver, stopped, going } = world();
+      const gate = () => {
+        let open!: () => void;
+        const shut = new Promise<void>((resolve) => (open = resolve));
+        return { shut, open };
+      };
+      const asked = gate();
+      const answered = gate();
+      const merged = gate();
+      const lockWaitedOn = gate();
+      during.requesting = async () => {
+        // The round's own read is behind it: the next is the start's, which
+        // GitHub answers open and which is on its way back while #88 merges.
+        client.getIssue.mockImplementationOnce(async () => {
+          const said = { number: 88, state: github.state };
+          asked.open();
+          await answered.shut;
+          return said;
+        });
+      };
+      // The context takes seconds to read; nothing about it is held up but
+      // its end, so a stop that comes while it is read has come before hostd.
+      during.reading = () => merged.shut;
+      waiting = (key) => {
+        if (key === 'review-start:openadlc#88') lockWaitedOn.open();
+      };
+
+      const opening = deliver('opened');
+      await asked.shut;
+      github.state = 'closed';
+      const merging = deliver('closed', true);
+      // As far as the merge's delivery goes while the start's read is out: to
+      // its end, or to the lock that start holds.
+      await Promise.race([merging, lockWaitedOn.shut]);
+      answered.open();
+      await merging;
+      merged.open();
+      await opening;
+
+      expect(going()).toEqual([]);
+      expect(startTask).not.toHaveBeenCalled();
+      // The merge's stop waited for the start's row, and found it.
+      const review = store.botTasks.find((task) => task.subjectRef === 'openadlc#88');
+      expect(waited).toContain('review-start:openadlc#88');
+      expect(stopped).toEqual([review!.id]);
+      expect(review!.state).toBe('stopped');
     });
 
     it('still starts the review of one reopened after it closed unmerged', async () => {
