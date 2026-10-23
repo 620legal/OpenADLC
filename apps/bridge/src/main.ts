@@ -247,13 +247,17 @@ async function main(): Promise<void> {
     client: () => asAutomation(actors, config),
   });
   // A branch the merge line cannot bring up to date goes back to build.
-  mergeLine.useSendBack((input) => sendBack.backToBuild(input));
+  mergeLine.useSendBack(async (input) => {
+    await sendBack.backToBuild(input);
+  });
   // A conflict at the front of the line gets a short resolution round, and
   // one in shared files is re-checked by the lead alone (`conflict-round.ts`).
   const conflictRounds = new ConflictRounds({
     taskService,
     client: () => asAutomation(actors, config),
-    backToBuild: (input) => sendBack.backToBuild(input),
+    backToBuild: async (input) => {
+      await sendBack.backToBuild(input);
+    },
   });
   mergeLine.useConflictRounds(conflictRounds);
   // An issue that depends on one in review starts from its branch, and lands
@@ -264,6 +268,10 @@ async function main(): Promise<void> {
     // A stacked build is new work: the dispatcher's gate holds it as it holds a lease.
     paused: (repo) => dispatchGate.paused(repo),
     dispatching: () => anythingDispatches(dispatchMode),
+    // A held one goes once what it was built on is approved again or merges,
+    // to its builder first when that changed its files.
+    gate: (repoFullName, sha) => automation.publishedGate(repoFullName, sha),
+    rebuild: (input) => sendBack.backToBuild(input),
   });
   mergeLine.useStacking(stacking);
   // Approvals stand across a lead-only resolution and a stacked update; after

@@ -86,3 +86,13 @@ export async function listStacks(repoId: string): Promise<Stack[]> {
 export async function markPaused(repoId: string, issue: number): Promise<void> {
   await query('update stacks set paused_at = now() where repo_id = $1 and issue_number = $2 and paused_at is null', [repoId, issue]);
 }
+
+/**
+ * A hold let go by itself, once what the issue was built on was approved
+ * again or merged (`Stacking`): the stack is on `onHeadSha` from now on, the
+ * head its builder brings it up to date with, and a later send-back holds it
+ * again. A hold a person resumed stays marked: they decided.
+ */
+export async function markLetGo(repoId: string, issue: number, onHeadSha: string | null): Promise<void> {
+  await query('update stacks set paused_at = null, on_head_sha = coalesce($3, on_head_sha) where repo_id = $1 and issue_number = $2', [repoId, issue, onHeadSha]);
+}

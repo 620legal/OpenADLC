@@ -1,7 +1,7 @@
 import { leases } from '@openadlc/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { startBuild } from './build-start.js';
-import { STACK_MADE, STACK_PAUSED, STACK_STARTED, STACK_UPDATED, STACK_UPDATING, Stacking } from './stacking.js';
+import { STACK_LET_GO, STACK_MADE, STACK_PAUSED, STACK_STARTED, STACK_UPDATED, STACK_UPDATING, Stacking, heldStacks } from './stacking.js';
 
 const REPO = { id: 'repo-1', name: 'shop', fullName: 'janedoe/shop', defaultBranch: 'main', concurrency: 2 };
 const OTHER = { id: 'repo-2', name: 'mill', fullName: 'janedoe/mill', defaultBranch: 'main', concurrency: 2 };
@@ -16,6 +16,9 @@ const world = vi.hoisted(() => ({
   released: [] as string[],
   labels: [] as { number: number; labels: string[] }[],
   holds: [] as { subject: string; why: string | null }[],
+  /** The holds as `heldItems` keeps them, by subject. */
+  holdRecords: {} as Record<string, { by: string; at: string; why: string | null; needsPerson?: string }>,
+  forgotten: [] as string[],
   /** The `stacks` table, by stacked issue. */
   stacks: new Map<number, Record<string, unknown> & { issue: number; onIssue: number; pausedAt: string | null }>(),
   stackWriteFails: false,
@@ -70,14 +73,24 @@ vi.mock('@openadlc/db', () => ({
       const stack = world.stacks.get(issue);
       if (stack && !stack.pausedAt) stack.pausedAt = new Date().toISOString();
     }),
+    markLetGo: vi.fn(async (_repo: string, issue: number, onHeadSha: string | null) => {
+      const stack = world.stacks.get(issue);
+      if (stack) Object.assign(stack, { pausedAt: null, onHeadSha: onHeadSha ?? stack.onHeadSha });
+    }),
   },
   recordEvent: vi.fn(async () => undefined),
   listEventsOfType: vi.fn(async () => []),
 }));
 
 vi.mock('./item-hold.js', () => ({
-  recordHold: vi.fn(async (subject: string, hold: { why: string | null }) => {
+  recordHold: vi.fn(async (subject: string, hold: { by: string; at: string; why: string | null; needsPerson?: string }) => {
     world.holds.push({ subject, why: hold.why });
+    world.holdRecords[subject] = hold;
+  }),
+  readHolds: vi.fn(async () => ({ ...world.holdRecords })),
+  forgetHold: vi.fn(async (subject: string) => {
+    world.forgotten.push(subject);
+    delete world.holdRecords[subject];
   }),
 }));
 
@@ -87,6 +100,8 @@ function stacking(
     sleep?: (ms: number) => Promise<void>;
     paused?: (repo?: string) => string | null;
     dispatching?: () => boolean;
+    gate?: (repoFullName: string, sha: string) => Promise<'pending' | 'success' | 'failure' | null>;
+    rebuild?: (input: { repoName: string; prNumber: number; reason: string }) => Promise<string | null>;
   } = {},
 ) {
   const events: { type: string; payload: Record<string, unknown>; at: string }[] = [];
@@ -97,14 +112,22 @@ function stacking(
     comment: vi.fn(async () => null),
     addLabels: vi.fn(async () => undefined),
     removeLabel: vi.fn(async () => undefined),
-    changedFilesBetween: vi.fn(async (): Promise<string[] | null> => ['src/a.ts', 'src/b.ts']),
+    changedFilesBetween: vi.fn(async (_repo: string, _from: string, _head: string): Promise<string[] | null> => ['src/a.ts', 'src/b.ts']),
   };
   const build = vi.fn(async () => ({ taskId: 'task-5', session: 's' }));
+  /** What was said in the cards' timelines, by their subjects. */
+  const said: { subjects: readonly string[]; text: string }[] = [];
   const subject = new Stacking({
     client: async () => client as never,
     startBuild: build,
     paused: options.paused ?? (() => null),
     dispatching: options.dispatching ?? (() => true),
+    ...(options.gate ? { gate: options.gate } : {}),
+    ...(options.rebuild ? { rebuild: options.rebuild } : {}),
+    say: async (subjects, text) => {
+      said.push({ subjects, text });
+      return true;
+    },
     record: async ({ type, payload }) => {
       events.push({ type, payload: payload as Record<string, unknown>, at: new Date(clock).toISOString() });
     },
@@ -114,7 +137,7 @@ function stacking(
     now: () => (clock += 1000),
     sleep: options.sleep ?? (async () => undefined),
   });
-  return { subject, client, build, events, later: (ms: number) => (clock += ms) };
+  return { subject, client, build, events, said, later: (ms: number) => (clock += ms) };
 }
 
 const dependsOn4 = [
@@ -138,6 +161,8 @@ describe('an issue that depends on one in review', () => {
     world.released = [];
     world.labels = [];
     world.holds = [];
+    world.holdRecords = {};
+    world.forgotten = [];
     world.stacks = new Map();
     world.stackWriteFails = false;
     world.stackReadFails = false;
@@ -364,7 +389,8 @@ describe('an issue that depends on one in review', () => {
     await subject.sweep();
 
     for (const said of [
-      'Resume it from its card in OpenADLC once #4 is settled',
+      'It goes on by itself once #4 is approved again or merges',
+      'To let it go sooner, resume it from its card in OpenADLC',
       'take the `openadlc:paused` label off this issue and its pull request',
       'cancel it from its card and file the work again as a new issue',
     ]) {
@@ -473,6 +499,150 @@ describe('an issue that depends on one in review', () => {
     expect(await second.subject.sweep()).toEqual([]);
     expect(world.stacks.has(5)).toBe(false);
     expect(world.released).toEqual(['lease-5', 'lease-5']);
+  });
+
+  describe('once what it was built on is settled', () => {
+    // OpenADLC#137's pull request #154 was held when #141 went back to build
+    // for a patch round, and stayed held after #141's #150 was approved again
+    // and merged: nothing let it go but a Resume nobody was asked for.
+    const B_BRANCH = 'agent/atlas/5-issue-5';
+    const pulls =
+      (base: { headSha: string; merged?: boolean; state?: 'open' | 'closed' }) =>
+      async (repo: string, number?: number) =>
+        number === 30
+          ? { number: 30, state: base.state ?? (base.merged ? 'closed' : 'open'), merged: base.merged ?? false, headRef: A_BRANCH, headSha: base.headSha, baseRef: 'main', headRepoFullName: repo }
+          : { number: 31, state: 'open' as const, merged: false, headRef: B_BRANCH, headSha: 'b1', baseRef: 'main', headRepoFullName: repo };
+    /** #4 changed only its own file since #5 was built on it, and #5 only its own. */
+    const apart = async (_repo: string, _from: string, head: string) => (head === 'b1' ? ['src/b.ts'] : ['src/a.ts']);
+
+    async function heldOn4(options: Parameters<typeof stacking>[0] = {}) {
+      const stacked = stacking(options);
+      stacked.client.getPullRequest.mockImplementation(pulls({ headSha: 'a1' }));
+      await stacked.subject.sweep();
+      world.leases.set(5, { id: 'lease-5' });
+      world.issues.set(4, { ...world.issues.get(4)!, stage: 'build' });
+      expect(await stacked.subject.sweep()).toEqual(['shop#5: held, #4 was sent back']);
+      // As GitHub and the board then have it: #5 in review with its pull request, labelled.
+      world.issues.set(5, { ...world.issues.get(5)!, stage: 'review', prNumber: 31, labels: ['adlc:review', 'openadlc:paused'] });
+      world.labels = [];
+      stacked.client.comment.mockClear();
+      return stacked;
+    }
+
+    it('lets it go by itself when that one is approved again on a new head, says why, and leaves its reviews to start', async () => {
+      const gate = vi.fn(async (_repo: string, sha: string) => (sha === 'a2' ? ('success' as const) : ('pending' as const)));
+      const rebuild = vi.fn(async () => null);
+      const { subject, client, events, said } = await heldOn4({ gate, rebuild });
+      client.changedFilesBetween.mockImplementation(apart);
+
+      // Patched, and back in review, but not approved yet: still held.
+      client.getPullRequest.mockImplementation(pulls({ headSha: 'a2' }));
+      world.issues.set(4, { ...world.issues.get(4)!, stage: 'review' });
+      gate.mockResolvedValueOnce('pending');
+      expect(await subject.sweep()).toEqual([]);
+      expect(client.removeLabel).not.toHaveBeenCalled();
+
+      expect(await subject.sweep()).toEqual(['shop#5: let go, #4, which this was built on, was approved again at a2; its reviews start now']);
+      expect(gate).toHaveBeenCalledWith('janedoe/shop', 'a2');
+      expect(client.removeLabel).toHaveBeenCalledWith('janedoe/shop', 31, 'openadlc:paused');
+      expect(client.removeLabel).toHaveBeenCalledWith('janedoe/shop', 5, 'openadlc:paused');
+      // Off the board's labels too, which is what a review's start reads (`heldWords`).
+      expect(world.labels).toEqual([{ number: 5, labels: ['adlc:review'] }]);
+      expect(world.forgotten).toEqual(['shop#5']);
+      expect(said).toEqual([{ subjects: ['shop#5', 'shop#31'], text: 'Let go by itself: #4, which this was built on, was approved again at a2. Its reviews start now.' }]);
+      expect(client.comment).toHaveBeenCalledWith('janedoe/shop', 5, expect.stringContaining('**Let go.** #4, which this was built on, was approved again at a2'));
+      expect(events.at(-1)).toMatchObject({ type: STACK_LET_GO, payload: { repo: 'shop', issue: 5, on: 4, onHead: 'a2', merged: false, redo: null } });
+      // Its files and #4's are apart: nothing for the builder to redo.
+      expect(rebuild).not.toHaveBeenCalled();
+      // Built on #4's new head from now on, and held again if #4 is sent back again.
+      expect(world.stacks.get(5)).toMatchObject({ pausedAt: null, onHeadSha: 'a2' });
+    });
+
+    it('lets it go by itself when that one merges', async () => {
+      const { subject, client, said } = await heldOn4();
+      client.changedFilesBetween.mockImplementation(apart);
+      client.getPullRequest.mockImplementation(pulls({ headSha: 'a2', merged: true }));
+      world.issues.set(4, { ...world.issues.get(4)!, stage: 'done', labels: ['adlc:done'] });
+
+      expect(await subject.sweep()).toEqual(['shop#5: let go, #4, which this was built on, merged; its reviews start now']);
+      expect(client.removeLabel).toHaveBeenCalledWith('janedoe/shop', 5, 'openadlc:paused');
+      expect(world.forgotten).toEqual(['shop#5']);
+      expect(said.map((one) => one.text)).toEqual(['Let go by itself: #4, which this was built on, merged. Its reviews start now.']);
+      // Once: it is not let go again, nor held again for a dependency that shipped.
+      world.issues.set(5, { ...world.issues.get(5)!, labels: ['adlc:review'] });
+      expect(await subject.sweep()).toEqual([]);
+    });
+
+    it('hands it to its builder to bring up to date when that one changed its files, not to a person', async () => {
+      const rebuild = vi.fn(async (_input: { repoName: string; prNumber: number; reason: string }) => null);
+      const { subject, client, said } = await heldOn4({ rebuild });
+      // #4's patch touched src/b.ts, which #5 changes too.
+      client.changedFilesBetween.mockImplementation(async (_repo: string, _from: string, head: string) => (head === 'b1' ? ['src/b.ts'] : ['src/a.ts', 'src/b.ts']));
+      client.getPullRequest.mockImplementation(pulls({ headSha: 'a2', merged: true }));
+      world.issues.set(4, { ...world.issues.get(4)!, stage: 'done', labels: ['adlc:done'] });
+
+      expect(await subject.sweep()).toEqual(['shop#5: let go, #4, which this was built on, merged; its builder brings it up to date first']);
+      expect(rebuild).toHaveBeenCalledWith({ repoName: 'shop', prNumber: 31, reason: expect.stringContaining('`src/b.ts`') });
+      expect(rebuild.mock.calls[0]![0].reason).toContain('Bring this branch up to date with `main`, which #4 merged into');
+      // The hold is off before the round is asked for, or the round's start is refused as held.
+      expect(world.forgotten).toEqual(['shop#5']);
+      expect(world.holdRecords['shop#5']).toBeUndefined();
+      expect(said.map((one) => one.text)).toEqual([expect.stringContaining('the builder brings it up to date first')]);
+    });
+
+    it('holds it for a person, with why, when its builder cannot take it, and does not try again', async () => {
+      const rebuild = vi.fn(async () => 'the builder that held #5 is no longer in the crew');
+      const { subject, client, said } = await heldOn4({ rebuild });
+      client.getPullRequest.mockImplementation(pulls({ headSha: 'a2', merged: true }));
+      world.issues.set(4, { ...world.issues.get(4)!, stage: 'done', labels: ['adlc:done'] });
+
+      expect(await subject.sweep()).toEqual([
+        'shop#5: held for a person, #4, which this was built on, merged and its builder could not bring it up to date: the builder that held #5 is no longer in the crew',
+      ]);
+      expect(client.addLabels).toHaveBeenCalledWith('janedoe/shop', 5, ['openadlc:paused']);
+      expect(client.addLabels).toHaveBeenCalledWith('janedoe/shop', 31, ['openadlc:paused']);
+      expect(world.holdRecords['shop#5']).toMatchObject({ by: 'openadlc', needsPerson: 'the builder that held #5 is no longer in the crew' });
+      expect(client.comment).toHaveBeenCalledWith('janedoe/shop', 5, expect.stringContaining('**Held for a person.**'));
+      expect(said.map((one) => one.text)).toEqual([expect.stringContaining('Held for a person')]);
+      // A person decides now: not let go, and not handed over, every sweep.
+      expect(await subject.sweep()).toEqual([]);
+      expect(rebuild).toHaveBeenCalledTimes(1);
+    });
+
+    it('is read for Needs you while OpenADLC holds it, with what a person is to decide', async () => {
+      const rebuild = vi.fn(async () => 'the builder that held #5 is no longer in the crew');
+      const { subject, client } = await heldOn4({ rebuild });
+      const labelled = [{ repoId: 'repo-1', repoName: 'shop', number: 5 }];
+
+      expect(await heldStacks(labelled)).toEqual([
+        { repo: 'shop', issue: 5, on: 4, onPr: 30, since: expect.any(String), why: expect.stringContaining('#4, which this was built on, was sent back to build'), needsPerson: null },
+      ]);
+
+      client.getPullRequest.mockImplementation(pulls({ headSha: 'a2', merged: true }));
+      world.issues.set(4, { ...world.issues.get(4)!, stage: 'done', labels: ['adlc:done'] });
+      await subject.sweep();
+      expect(await heldStacks(labelled)).toEqual([expect.objectContaining({ issue: 5, needsPerson: 'the builder that held #5 is no longer in the crew' })]);
+
+      // A person's hold is theirs, and no card of OpenADLC's.
+      world.holdRecords['shop#5'] = { by: 'janedoe', at: '2026-10-02T12:00:00Z', why: null };
+      expect(await heldStacks(labelled)).toEqual([]);
+    });
+
+    it('leaves a hold a person put on, or one GitHub would not take off, as it is', async () => {
+      const gate = vi.fn(async () => 'success' as const);
+      const { subject, client } = await heldOn4({ gate });
+      client.getPullRequest.mockImplementation(pulls({ headSha: 'a2' }));
+      world.issues.set(4, { ...world.issues.get(4)!, stage: 'review' });
+
+      world.holdRecords['shop#5'] = { by: 'janedoe', at: '2026-10-02T12:00:00Z', why: 'wait for the launch' };
+      expect(await subject.sweep()).toEqual([]);
+      expect(client.removeLabel).not.toHaveBeenCalled();
+
+      world.holdRecords['shop#5'] = { by: 'openadlc', at: '2026-10-02T12:00:00Z', why: '#4, which this was built on, was sent back to build: what it was built on is changing' };
+      client.removeLabel.mockRejectedValueOnce(new Error('GitHub answered 502'));
+      expect(await subject.sweep()).toEqual([expect.stringContaining('shop#5: not let go, though #4, which this was built on, was approved again at a2')]);
+      expect(world.forgotten).toEqual([]);
+    });
   });
 });
 

@@ -8,6 +8,7 @@ import {
   botInWords,
   hasAbandonedLabel,
   hasIgnoreLabel,
+  hasPausedLabel,
   formatDependencyRef,
   namesRepository,
   outsideInWords,
@@ -36,6 +37,7 @@ import { failingIds, isWaiting, showsNotice, unconfirmedOf } from './health/stat
 import { itemOf, requestSubject } from './items.js';
 import { stillTried } from './request-queue.js';
 import { readWaitingContext, STUCK_AFTER_MS, waitingCards, waitingOf, buildCandidates, type WaitingContext, type WaitingReads } from './waiting.js';
+import { heldStacks, type HeldStack } from './stacking.js';
 import { ACCOUNTS_STEP, RECONNECT } from './health/words.js';
 import type { Router } from './router.js';
 import type { SubjectTitle } from './subject-titles.js';
@@ -121,7 +123,13 @@ export type AttentionKind =
    * nothing started (`waitingOf`). Made from live state and stored nowhere,
    * so it goes once the work starts.
    */
-  | 'work_stuck';
+  | 'work_stuck'
+  /**
+   * A stacked change OpenADLC holds that only a person can let go: what it
+   * was built on was closed without merging, or its builder could not bring
+   * it up to date (`Stacking`). Goes with the hold.
+   */
+  | 'stack_held';
 
 /**
  * What a person can do about an item. The first is the one the console offers
@@ -210,7 +218,9 @@ export type AttentionAction =
    * it next comes round (`POST /v1/items/:subject/start`): the stage sweep
    * for intake and design, a dispatch for a build.
    */
-  | { kind: 'start_work'; label: string; subject: string };
+  | { kind: 'start_work'; label: string; subject: string }
+  /** Lets go of the hold on the work `subject` names, as its card's Resume does (`POST /v1/items/:subject/resume`). */
+  | { kind: 'resume_item'; label: string; subject: string };
 
 export interface HeldPromote {
   repo: string;
@@ -283,6 +293,7 @@ const GROUP: Record<AttentionKind, AttentionGroup> = {
   plan_change_waiting: 'work',
   // Nothing about the work is wrong: what starts it did not come round.
   work_stuck: 'system',
+  stack_held: 'work',
 };
 
 export function groupOf(kind: AttentionKind): AttentionGroup {
@@ -293,7 +304,7 @@ export interface AttentionItem {
   /**
    * Stable across reads, by kind: `gate:…`, `merge:repo#pr`, `approve-again:repo#pr@login`, `promote:repo@sha`,
    * `unowned:repo`, `stall:repo#pr`, `sendback:repo#n`, `design-memory:…`, `plan-change:<gate>`,
-   * `intake-stalled:repo#n`, `dependency-abandoned:repo#n`, `task:…`, `landed:…`, `request:…`,
+   * `intake-stalled:repo#n`, `dependency-abandoned:repo#n`, `stack-hold:repo#n`, `task:…`, `landed:…`, `request:…`,
    * `engine-update`, `check:…`, `fixed:…`, or `task-group:…`,
    * `triage-group:…` and `check-group:…` for a folded card.
    */
@@ -546,6 +557,8 @@ export interface AttentionInput {
   removed?: readonly { id: string; name: string }[];
   /** What work waits on beyond its tasks (`readWaitingContext`), for the work that is stuck. Absent, none is said to be. */
   waiting?: WaitingContext;
+  /** The stacked changes OpenADLC holds (`heldStacks`), for those only a person can let go. Absent, none. */
+  heldStacks?: readonly HeldStack[];
 }
 
 /**
@@ -1535,6 +1548,39 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     });
   }
 
+  // A stacked change OpenADLC holds that only a person can let go. One that
+  // waits on its dependency's new round goes by itself
+  // (`Stacking.letGoWhatIsSettled`) and is no card: Needs you said nothing
+  // either way, and OpenADLC#137 waited on a Resume nobody was told about.
+  // Made from the hold and the issues, so it goes when the hold does.
+  for (const held of input.heldStacks ?? []) {
+    const key = `${held.repo}#${held.issue}`;
+    const issue = input.issues.find((one) => one.repoName === held.repo && one.number === held.issue);
+    if (!issue || !hasPausedLabel(issue.labels) || issue.stage === 'merged' || issue.stage === 'done') continue;
+    const base = input.issues.find((one) => one.repoId === issue.repoId && one.number === held.on);
+    // Gone from the board is closed without merging too: one that merged is let go.
+    const wontLand = !base || hasAbandonedLabel(base.labels);
+    if (!held.needsPerson && !wontLand) continue;
+    const on = `#${held.on}`;
+    const actions: AttentionAction[] = [{ kind: 'resume_item', label: 'Resume', subject: key }];
+    if (base?.url) actions.push({ kind: 'open_url', label: `Open ${on}`, url: base.url });
+    items.push({
+      id: `stack-hold:${key}`,
+      kind: 'stack_held',
+      headline: held.needsPerson
+        ? `#${held.issue} is held: its builder could not bring it up to date with ${on}`
+        : `#${held.issue} is held: ${on}, which it was built on, ${base ? 'was closed without merging' : 'is gone from the board'}`,
+      subject: subjectOf(key).subject,
+      bot: null,
+      since: held.since,
+      // The builder's refusal is its own sentence: a full stop of its own would be doubled.
+      detail: held.needsPerson
+        ? `${held.needsPerson.replace(/[.!?]+\s*$/, '')}. Bring its branch up to date with what ${on} became, then press Resume; or cancel #${held.issue} from its card and file the work again.`
+        : `Its branch has ${on}'s work in it, which will not land. Press Resume once that work lands another way, or reopen ${on}: approved again, it lets this go by itself. Or cancel #${held.issue} from its card and file the work again.`,
+      actions,
+    });
+  }
+
   items.push(...stuckItems(input, stalledIntake, subjectOf, botsById));
 
   const windowStart = input.now.getTime() - ATTENTION_WINDOW_DAYS * DAY_MS;
@@ -2384,6 +2430,9 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     })().catch(() => []),
   ]);
   const intakeStalls = await (async () => listEventsOfType(INTAKE_STALLED, since))().catch(() => []);
+  // OpenADLC's own holds on stacked changes, read only while something is held.
+  const paused = issueList.filter((issue) => hasPausedLabel(issue.labels));
+  const stackHolds = paused.length > 0 ? await heldStacks(paused).catch((): HeldStack[] => []) : [];
   // Asked for only when one waited this week: the board reads this every fifteen seconds.
   const resumeWaits = await (async () => {
     const said = await listEventsOfType(RESUME_WAITS_ON_GITHUB, since);
@@ -2494,6 +2543,7 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     engineUpdate,
     selfUpdate,
     heldMerges,
+    heldStacks: stackHolds,
     personAsks,
     personReviews,
     unowned,

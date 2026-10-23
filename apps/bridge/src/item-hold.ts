@@ -16,6 +16,13 @@ export interface ItemHold {
   by: string;
   at: string;
   why: string | null;
+  /**
+   * Why OpenADLC's own hold waits on a person rather than on what the work
+   * was built on: its builder could not bring a stacked change up to date
+   * (`Stacking`). Such a hold is not let go by itself again, and Needs you
+   * says it. Absent on every other hold.
+   */
+  needsPerson?: string;
 }
 
 /** Every hold recorded, by issue subject (`repo#n`). Unreadable is none. */

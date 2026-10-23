@@ -2397,6 +2397,71 @@ describe('an approved plan change that waits on another lease', () => {
   });
 });
 
+describe('a stacked change OpenADLC holds', () => {
+  // OpenADLC#137 was held on #141 and waited on a Resume while Needs you was
+  // empty: the only place that said so was the bridge's log.
+  const held = (extra: Record<string, unknown> = {}) => ({
+    repo: 'openadlc-testbed',
+    issue: 20,
+    on: 11,
+    onPr: 29,
+    since: minutesAgo(30),
+    why: '#11, which this was built on, was sent back to build: what it was built on is changing',
+    needsPerson: null,
+    ...extra,
+  });
+  const stacked = { ...issue(20, 'Show the limit on the card', 'review', 40), labels: ['adlc:review', 'openadlc:paused'] };
+  const base = { now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, requests: [], stallEvents: [] };
+  const cards = async (input: Record<string, unknown>) => {
+    const { attentionItems } = await load();
+    return attentionItems({ ...base, ...input } as never).filter((item) => item.kind === 'stack_held');
+  };
+
+  it('is no card while it waits on what it was built on, which lets it go by itself', async () => {
+    expect(await cards({ issues: [...ISSUES, stacked], heldStacks: [held()] })).toEqual([]);
+  });
+
+  it('names what it was built on and what to press when its builder could not bring it up to date, and goes with the hold', async () => {
+    const needsPerson = 'the builder that held #20 is no longer in the crew';
+    expect(await cards({ issues: [...ISSUES, stacked], heldStacks: [held({ needsPerson })] })).toEqual([
+      {
+        id: 'stack-hold:openadlc-testbed#20',
+        kind: 'stack_held',
+        group: 'work',
+        headline: '#20 is held: its builder could not bring it up to date with #11',
+        subject: expect.objectContaining({ repo: 'openadlc-testbed', number: 20, ref: 'openadlc-testbed#20', item: 'openadlc-testbed#20' }),
+        bot: null,
+        since: minutesAgo(30),
+        detail:
+          'the builder that held #20 is no longer in the crew. Bring its branch up to date with what #11 became, then press Resume; or cancel #20 from its card and file the work again.',
+        actions: [
+          { kind: 'resume_item', label: 'Resume', subject: 'openadlc-testbed#20' },
+          { kind: 'open_url', label: 'Open #11', url: 'https://github.com/janedoe/openadlc-testbed/issues/11' },
+        ],
+      },
+    ]);
+
+    // Resumed, or let go: the label is off, and the card goes with it.
+    const resumed = { ...stacked, labels: ['adlc:review'] };
+    expect(await cards({ issues: [...ISSUES, resumed], heldStacks: [held({ needsPerson })] })).toEqual([]);
+    expect(await cards({ issues: [...ISSUES, stacked], heldStacks: [] })).toEqual([]);
+  });
+
+  it('says so when what it was built on was closed without merging, or is gone from the board', async () => {
+    const abandoned = { ...issue(11, 'Rate-limit the webhook route', 'done', 29), labels: ['adlc:done', 'openadlc:abandoned'] };
+    const others = ISSUES.filter((one) => one.number !== 11);
+
+    const [card] = await cards({ issues: [...others, abandoned, stacked], heldStacks: [held()] });
+    expect(card?.headline).toBe('#20 is held: #11, which it was built on, was closed without merging');
+    expect(card?.detail).toContain('Press Resume once that work lands another way, or reopen #11');
+    expect(card?.actions[0]).toEqual({ kind: 'resume_item', label: 'Resume', subject: 'openadlc-testbed#20' });
+
+    const [gone] = await cards({ issues: [...others, stacked], heldStacks: [held()] });
+    expect(gone?.headline).toBe('#20 is held: #11, which it was built on, is gone from the board');
+    expect(gone?.actions.map((action) => action.kind)).toEqual(['resume_item']);
+  });
+});
+
 describe('a design that superseded what a repository had decided', () => {
   it('is a notice on the issue: what replaced what, links to the comment and to Settings, and nothing to do', async () => {
     const { attentionItems } = await load();
@@ -2477,6 +2542,7 @@ describe('which group an item is in', () => {
     expect(['question', 'review_stalled', 'task_failed', 'triage_failed'].map((kind) => groupOf(kind as never))).toEqual(['work', 'work', 'work', 'work']);
     expect(['check_failed', 'check_fixed', 'engine_update_failed'].map((kind) => groupOf(kind as never))).toEqual(['system', 'system', 'system']);
     expect(groupOf('dependency_abandoned')).toBe('work');
+    expect(groupOf('stack_held')).toBe('work');
 
     const failed = task({ id: 'task-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'failed', endedAt: minutesAgo(40), exitReason: 'engine exited 1' });
     const items = attentionItems({

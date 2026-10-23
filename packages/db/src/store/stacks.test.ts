@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../client.js', () => ({ query: vi.fn(), queryOne: vi.fn() }));
 
 import { query, queryOne } from '../client.js';
-import { listStacks, markPaused, recordStack, removeStack, stackOf } from './stacks.js';
+import { listStacks, markLetGo, markPaused, recordStack, removeStack, stackOf } from './stacks.js';
 
 const row = {
   repo_id: 'repo-1',
@@ -59,5 +59,14 @@ describe('a stack', () => {
     await markPaused('repo-1', 5);
     expect(String(vi.mocked(query).mock.calls[1]![0])).toContain('delete from stacks');
     expect(String(vi.mocked(query).mock.calls[2]![0])).toContain('and paused_at is null');
+  });
+
+  it('is held again by a later send-back once its hold was let go, on the head it is now built on', async () => {
+    vi.mocked(query).mockResolvedValue([]);
+    await markLetGo('repo-1', 5, 'b'.repeat(40));
+    const [sql, params] = vi.mocked(query).mock.calls[0]!;
+    expect(String(sql)).toContain('paused_at = null');
+    expect(String(sql)).toContain('on_head_sha = coalesce($3, on_head_sha)');
+    expect(params).toEqual(['repo-1', 5, 'b'.repeat(40)]);
   });
 });
