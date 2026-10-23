@@ -384,6 +384,9 @@ export class SessionObserver {
    * - discarded, when it says nothing about whose it is;
    * - left alone, when the database could not say what its task is.
    *
+   * What a computer had beside it — a task's own Postgres servers — is
+   * removed once that computer is gone, however it went.
+   *
    * Then a paused task's computer is given back once it has been paused
    * longer than it is kept (`releasePausedPast`), task folders nothing holds
    * are cleared with their branches kept, and the kept branches of tasks that
@@ -443,6 +446,12 @@ export class SessionObserver {
         : null;
       runner.adopt(task, computer, repoFullName);
       console.log(`[hostd] took back ${found.name} for ${task.state} task ${task.id} (${task.subjectRef})`);
+    }
+
+    // What the computers just removed left beside them is gone with them;
+    // this is what a computer that went without hostd left (`sweepOrphans`).
+    for (const name of (await this.driver.sweepOrphans?.().catch(() => [])) ?? []) {
+      console.log(`[hostd] removed ${name}: the computer it served is gone`);
     }
 
     await runner.releasePausedPast?.(this.pausedKeepMs, async (taskId) => {

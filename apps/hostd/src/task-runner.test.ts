@@ -10,7 +10,7 @@ import type { HostdConfig } from './config.js';
 
 vi.mock('@openadlc/db', () => ({
   bots: { getBotByName: vi.fn(), getBotById: vi.fn() },
-  repos: { getRepoByName: vi.fn(), listRepos: vi.fn(async () => []) },
+  repos: { getRepoByName: vi.fn(), listRepos: vi.fn(async () => []), getTaskPostgres: vi.fn(async () => null) },
   tasks: { updateTaskState: vi.fn(), getTask: vi.fn(), releaseComputer: vi.fn(async () => undefined) },
   modelAccounts: { get: vi.fn() },
   leases: { getLease: vi.fn(async () => null), settlePausedLeases: vi.fn(async () => ({ released: [], held: [] })) },
@@ -1507,3 +1507,136 @@ function memory(initial: Record<string, string> = {}): SecretStore {
     list: async (prefix = '') => [...data.keys()].filter((ref) => ref.startsWith(prefix)),
   };
 }
+
+/** 620legal/core's local Postgres, as its docker-compose.yml and Makefile name it. */
+const CORE_POSTGRES = { port: 55432, superuser: 'core', password: 'core', database: 'core_db', image: 'pgvector/pgvector:pg16' };
+
+/**
+ * A task in a repository a person gave Postgres servers of its own
+ * (`TaskPostgresSetting`), with its clone stood in for. `computer` is what
+ * the driver answers: the servers it brought up, or, unset, a driver with no
+ * way to make one.
+ */
+async function startingWithPostgres(
+  stored: unknown,
+  computer: { postgres?: string[]; databaseUrl?: string | null } = { postgres: ['127.0.0.1:55432'] },
+  seat: Partial<Bot> = { sidecarDb: true },
+) {
+  const repo = { id: 'repo-core', name: 'core', fullName: '620legal/core', defaultBranch: 'main' };
+  const worktree = join(loginRoot, 'clone');
+  mkdirSync(worktree, { recursive: true });
+  const { writeFileSync } = await import('node:fs');
+  writeFileSync(join(worktree, 'Makefile'), 'setup: install db migrate\n');
+  vi.mocked(bots.getBotByName).mockResolvedValue(crew(seat));
+  vi.mocked(repos.getRepoByName).mockResolvedValue(repo as never);
+  vi.mocked(repos.getTaskPostgres).mockResolvedValue(stored);
+  const mint = vi.spyOn(SessionEnvMinter.prototype, 'mint').mockResolvedValue({ env: {}, cleanup: async () => undefined });
+  const exec = driver();
+  const acquire = exec.acquire;
+  exec.acquire = vi.fn(async (spec: TaskComputerSpec) => ({
+    ...(await acquire(spec)),
+    databaseUrl: computer.databaseUrl ?? null,
+    repoKey: '620legal__core',
+    ...(computer.postgres ? { postgres: computer.postgres } : {}),
+  }));
+  const runner = new TaskRunner({ ...config(), workRoot: loginRoot }, exec, null, async () => ({ model: 'claude-opus-5', modelAlias: null, account: null }));
+  const internals = runner as unknown as { remoteFor: () => Promise<string | null>; worktrees: { create: unknown } };
+  vi.spyOn(internals, 'remoteFor').mockResolvedValue('https://github.com/620legal/core.git');
+  internals.worktrees.create = vi.fn(async () => ({ path: worktree, mirror: '/mirrors/620legal__core.git', branch: 'agent/atlas/5-issue-5', setAside: null }));
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  let failure: unknown = null;
+  // Read before the spies are restored, which forgets their calls.
+  let contextFiles: string[] = [];
+  let warned: string[] = [];
+  try {
+    await runner.start({ ...START, repo: 'core' });
+  } catch (error) {
+    failure = error;
+  } finally {
+    contextFiles = mint.mock.calls[0]?.[0].contextFiles ?? [];
+    warned = warn.mock.calls.map((call) => String(call[0]));
+    mint.mockRestore();
+    warn.mockRestore();
+    vi.mocked(repos.getRepoByName).mockReset();
+    vi.mocked(repos.getTaskPostgres).mockReset().mockResolvedValue(null);
+  }
+  const spec = vi.mocked(exec.acquire).mock.calls[0]?.[0];
+  const setup = vi.mocked(exec.exec).mock.calls.find(([, command]) => command.includes('setup'));
+  const sessionEnv = vi.mocked(exec.startSession).mock.calls[0]?.[0].env ?? {};
+  const ciEnv = runner.localCiTarget('task-1')?.env ?? {};
+  return { runner, exec, spec, setup, setupEnv: setup?.[2]?.env ?? {}, sessionEnv, ciEnv, contextFiles, warned, failure };
+}
+
+/**
+ * A repository whose checks need a Postgres server of their own — server-wide
+ * roles under fixed names, at the port its Makefile defaults to — gets one
+ * per task from its setting, and its tasks are told where (#136).
+ */
+describe('a task in a repository with Postgres servers of its own', () => {
+  it('asks the driver for the repository’s servers, and for no database on the shared server unless the repository asks', async () => {
+    const plain = await startingWithPostgres({ servers: [CORE_POSTGRES] });
+    expect(plain.spec).toMatchObject({ postgres: [CORE_POSTGRES], database: false });
+
+    const both = await startingWithPostgres({ servers: [CORE_POSTGRES], sharedDatabase: true });
+    expect(both.spec).toMatchObject({ postgres: [CORE_POSTGRES], database: true });
+  });
+
+  it('keeps the shared database, and asks for no server, where the repository has none', async () => {
+    const { spec } = await startingWithPostgres(null, { databaseUrl: 'postgres://t' });
+    expect(spec).toMatchObject({ postgres: [], database: true });
+  });
+
+  it('gives a seat that runs no checks no server, as it gets no database, and does not read the setting for it', async () => {
+    const { spec, failure } = await startingWithPostgres({ servers: [{ ...CORE_POSTGRES, image: 'someone/postgres:16' }] }, { postgres: [] }, { sidecarDb: false });
+    expect(failure).toBeNull();
+    expect(spec).toMatchObject({ postgres: [], database: false });
+  });
+
+  it('runs make setup with no shared database, told where its servers are, and tells the session and local CI the same', async () => {
+    const { setup, setupEnv, sessionEnv, ciEnv } = await startingWithPostgres({ servers: [CORE_POSTGRES] });
+
+    // Without a DATABASE_URL from OpenADLC, the Makefile's own `?=` defaults
+    // (postgres://core:core@127.0.0.1:55432/core_db) are what it connects with.
+    expect(setup).toBeDefined();
+    for (const env of [setupEnv, sessionEnv, ciEnv]) {
+      expect(env.OPENADLC_TASK_POSTGRES).toBe('127.0.0.1:55432');
+      expect(env).not.toHaveProperty('DATABASE_URL');
+    }
+  });
+
+  it('says every server, in the order the setting lists them', async () => {
+    const second = { ...CORE_POSTGRES, port: 55499 };
+    const { sessionEnv } = await startingWithPostgres({ servers: [CORE_POSTGRES, second] }, { postgres: ['127.0.0.1:55432', '127.0.0.1:55499'] });
+    expect(sessionEnv.OPENADLC_TASK_POSTGRES).toBe('127.0.0.1:55432,127.0.0.1:55499');
+  });
+
+  it('tells a task whose driver cannot make a server that it has none, rather than ignoring the setting', async () => {
+    const { contextFiles, sessionEnv, warned } = await startingWithPostgres({ servers: [CORE_POSTGRES] }, {});
+
+    expect(sessionEnv).not.toHaveProperty('OPENADLC_TASK_POSTGRES');
+    const brief = contextFiles.find((file) => file.endsWith('task-postgres.md'));
+    expect(brief).toBeDefined();
+    const said = readFileSync(brief!, 'utf8');
+    expect(said).toContain('620legal/core asks for a Postgres server of each task\'s own, at 127.0.0.1:55432, and this install runs the local driver');
+    expect(said).toContain('openadlc init --driver docker');
+    expect(warned.some((line) => line.includes('which the local driver cannot give: task task-1 starts without one'))).toBe(true);
+  });
+
+  it('fails the start with what to correct when the stored setting no longer reads', async () => {
+    const { failure, exec } = await startingWithPostgres({ servers: [{ ...CORE_POSTGRES, image: 'someone/postgres:16' }] });
+
+    expect(String(failure)).toContain("core's Postgres servers for its tasks no longer read: someone/postgres:16 is not an image");
+    expect(String(failure)).toContain('Correct them in Settings → Repositories → core');
+    expect(exec.acquire).not.toHaveBeenCalled();
+  });
+
+  it('keeps telling local CI where the servers are for a computer taken back after hostd restarts', () => {
+    const runner = new TaskRunner(config(), driver(), null);
+    runner.adopt(
+      { id: 'task-9', kind: 'implement', branch: 'agent/atlas/5-issue-5', tmuxSession: 'atlas/implement-task9' },
+      { taskId: 'task-9', bot: 'atlas', container: 'task-task9', databaseUrl: null, slotDir: join(scratch, 'slot'), postgres: ['127.0.0.1:55432'] },
+      '620legal/core',
+    );
+    expect(runner.localCiTarget('task-9')?.env.OPENADLC_TASK_POSTGRES).toBe('127.0.0.1:55432');
+  });
+});

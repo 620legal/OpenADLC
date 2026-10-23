@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { BRIDGE_URL, type DesignMemoryEntry, type RemovalChoices, type RemovalPreview, type RemovalReport } from '@/lib/api';
+import { BRIDGE_URL, type DesignMemoryEntry, type RemovalChoices, type RemovalPreview, type RemovalReport, type TaskPostgresServer, type TaskPostgresView } from '@/lib/api';
 import { stillFailing, type CheckState } from '@/lib/health-recheck';
 import type { RepoAccess } from '@/lib/crew-access';
 import { identityHeaders } from '@/lib/identity';
@@ -607,6 +607,23 @@ export async function updateDesignMemory(
   try {
     const saved = await call<{ entry: DesignMemoryEntry }>(`/v1/repos/${encodeURIComponent(repo)}/design-memory`, 'PATCH', patch);
     return { ok: true, entry: saved.entry };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not save' };
+  }
+}
+
+/**
+ * A repository's Postgres servers for its tasks, all of them, replacing what
+ * was there; no servers takes them away. An admin's, checked whole and
+ * audited by the bridge, which answers what it now holds.
+ */
+export async function saveTaskPostgres(
+  repo: string,
+  setting: { servers: TaskPostgresServer[]; sharedDatabase: boolean },
+): Promise<{ ok: boolean; error?: string; view?: TaskPostgresView }> {
+  try {
+    const view = await call<TaskPostgresView>(`/v1/repos/${encodeURIComponent(repo)}/task-postgres`, 'PUT', setting);
+    return { ok: true, view };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'could not save' };
   }

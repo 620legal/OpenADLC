@@ -131,9 +131,10 @@ The ports, the directory and the container's name can be changed with
 its bots' sessions run on, `openadlc-scratch` by default).
 `OPENADLC_SCRATCH_DRIVER=docker` runs it on the docker driver instead, a
 container per task as a real install has them, under names and an install
-label of its own (`scratch-task-…`, `scratch-tasks`, `scratch-taskdb`) that
-`down` removes; `tests/docker-computers.mjs` is the suite for it. `up` refuses a port that is taken rather
-than sharing it.
+label of its own (`scratch-task-…`, `scratch-tasks`, `scratch-taskdb`, a
+task's own Postgres servers `scratch-task-…-pg<port>`) that `down` removes
+with their volumes; `tests/docker-computers.mjs` and `tests/task-postgres.mjs`
+are the suites for it. `up` refuses a port that is taken rather than sharing it.
 
 The scratch console at http://127.0.0.1:57300 opens on onboarding, as a new
 install does, once you have signed in with the link `up` prints (or

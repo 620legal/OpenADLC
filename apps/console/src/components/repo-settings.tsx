@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { DesignMemorySection } from '@/components/design-memory';
+import { TaskPostgresSection } from '@/components/task-postgres';
 import { Fragment, useEffect, useRef, useState, useTransition, type ReactNode } from 'react';
 import { pauseWork, removeRepository, repositoryRemoval, resumeWork, updateRepoSettings } from '@/app/actions';
 import { BotAvatar } from '@/components/avatar';
@@ -10,7 +11,7 @@ import { CheckIcon, ExternalIcon } from '@/components/icons';
 import { RepoDot } from '@/components/repo-badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import type { DesignMemoryEntry, CrewMember, RemovalChoices, RemovalPreview, RemovalReport, RepoDelivery, WorkPause } from '@/lib/api';
+import type { DesignMemoryEntry, CrewMember, RemovalChoices, RemovalPreview, RemovalReport, RepoDelivery, TaskPostgresView, WorkPause } from '@/lib/api';
 import { pauseLine } from '@/components/pause-work';
 import { botLabel } from '@/lib/bot-label';
 import { cn } from '@/lib/cn';
@@ -151,6 +152,7 @@ export function RepoSettings({
   pause = null,
   installPaused = false,
   designMemory,
+  taskPostgres,
 }: {
   repo: RepoSettingsRepo;
   /** The bot the repository is built by, from the crew. */
@@ -166,6 +168,8 @@ export function RepoSettings({
   installPaused?: boolean;
   /** What the design stage remembers about it; absent where the page did not read it. */
   designMemory?: readonly DesignMemoryEntry[];
+  /** Its Postgres servers for its tasks; absent where the page could not read them, from a bridge without them. */
+  taskPostgres?: TaskPostgresView | null;
 }) {
   const [modes, setModes] = useState<Record<string, string>>(repo.stageModes ?? {});
   const [concurrency, setConcurrency] = useState(repo.concurrency);
@@ -465,6 +469,8 @@ export function RepoSettings({
           </div>
         )}
       </section>
+
+      {taskPostgres && <TaskPostgresSection repo={repo.name} initial={taskPostgres} />}
 
       {designMemory && <DesignMemorySection repo={repo.name} entries={designMemory} />}
 

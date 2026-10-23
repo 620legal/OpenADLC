@@ -639,6 +639,20 @@ describe('the egress allowlist the security model promises', () => {
     expect(firewall.indexOf('iptables -F OPENADLC_HOSTD')).toBeLessThan(firewall.indexOf('iptables -A OPENADLC_HOSTD'));
   });
 
+  it('lets the host’s Docker daemon pull a task’s own Postgres image, as it pulls the task database server’s', () => {
+    // hostd asks the daemon over the socket to pull pgvector/pgvector or
+    // postgres from Docker Hub (apps/hostd/src/drivers/task-postgres.ts). The
+    // daemon is root: only hostd's uid is held on OUTPUT, the VPC lets 443
+    // out, and Docker Hub's names are on the allowlist besides. A rule on
+    // OUTPUT for every uid, or Docker Hub taken off the list, would leave a
+    // repository's tasks without their server.
+    const firewall = withoutComments(cloudInit);
+    const output = [...firewall.matchAll(/iptables -[AI] OUTPUT\b[^;\\'\n]*/g)].map((match) => match[0].trim());
+    expect(output).toEqual(['iptables -I OUTPUT 1 -m owner --uid-owner 1000 -j OPENADLC_HOSTD']);
+    expect(resourceBlock('google_compute_firewall', 'egress_web')).toContain('"443"');
+    for (const name of ['auth.docker.io', 'registry-1.docker.io', 'production.cloudflare.docker.com']) expect(mainTf).toContain(`"${name}"`);
+  });
+
   it('closes the ports the proxy does not use', () => {
     // There were no EGRESS rules in the module at all. A firewall cannot hold
     // domain names, but it can stop a process that ignores the proxy opening

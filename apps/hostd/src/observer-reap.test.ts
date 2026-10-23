@@ -301,3 +301,27 @@ describe('a computer whose task is over', () => {
     expect(driver.discard).not.toHaveBeenCalled();
   });
 });
+
+describe('what a computer had beside it', () => {
+  it('is swept on each reap once the computer is gone, and the removal is said', async () => {
+    // A task's own Postgres server outlives the computer whose network
+    // namespace it shares: one released while hostd was down stays running.
+    const { driver, observer } = host([]);
+    const sweepOrphans = vi.fn(async () => ['task-3f2a9c1e-pg55432']);
+    Object.assign(driver, { sweepOrphans });
+
+    await observer.reapComputers();
+
+    expect(sweepOrphans).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(console.log).mock.calls.map((call) => String(call[0]))).toContain('[hostd] removed task-3f2a9c1e-pg55432: the computer it served is gone');
+  });
+
+  it('does not stop the reap when the sweep fails', async () => {
+    const { driver, runner, observer } = host([]);
+    Object.assign(driver, { sweepOrphans: vi.fn(async () => Promise.reject(new Error('docker did not answer'))) });
+
+    await observer.reapComputers();
+
+    expect(runner.pruneAbandonedSlots).toHaveBeenCalled();
+  });
+});

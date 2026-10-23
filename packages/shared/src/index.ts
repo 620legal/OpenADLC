@@ -30,3 +30,4 @@ export * from './path-policy.js';
 // `pathMatches` here is a policy pattern's; human-review.ts has its own of that name.
 export { overlapKind, pathsOverlap, pathMatches as policyPathMatches, type OverlapKind } from './path-overlap.js';
 export * from './self-update.js';
+export * from './task-postgres.js';

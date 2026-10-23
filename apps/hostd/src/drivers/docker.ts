@@ -25,6 +25,7 @@ import type {
 import { KILL_AFTER_MS } from './types.js';
 import { stateFromPane } from './local.js';
 import { CONTAINER_PNPM_STORE, PnpmStore, pnpmStoreVolume, type PnpmFill } from '../pnpm-store.js';
+import { TASK_POSTGRES_KIND, TaskPostgres } from './task-postgres.js';
 
 /** Where a task's container sees the role playbooks, mounted read-only. */
 export const ROLES_IN_CONTAINER = '/roles';
@@ -285,6 +286,8 @@ export interface DockerDriverOptions {
   registry?: () => Promise<{ host: string; token: string } | null>;
   /** How Docker is asked. A test answers for it; everything else uses the CLI. */
   docker?: DockerRunner;
+  /** How long a wait for a task's Postgres server to come up is; a test passes one that does not wait. */
+  wait?: (ms: number) => Promise<void>;
 }
 
 /** A task's computer as hostd holds it, with the sessions seen in it. */
@@ -295,6 +298,8 @@ interface Held {
 
 /** What `docker container inspect` says, as far as a computer goes. */
 interface Inspected {
+  /** Its full id, which a container in its network namespace names it by. */
+  id: string | null;
   name: string;
   running: boolean;
   labels: Record<string, string>;
@@ -322,7 +327,9 @@ export function loginMounts(loginDir: string, slotDir: string, provider: DeviceP
  * its repository's pnpm store at `/pnpm-store` read-only, the skills,
  * playbooks, runner and `gh` read-only, and its account's login
  * when it needs one. Its database is a database of its own on the host's
- * task database server (`TaskDatabases`).
+ * task database server (`TaskDatabases`), and a repository that needs a
+ * Postgres server of its own gets one per task in the computer's network
+ * namespace (`TaskPostgres`).
  */
 export class DockerDriver implements ExecDriver {
   readonly kind = 'docker' as const;
@@ -333,9 +340,18 @@ export class DockerDriver implements ExecDriver {
   /** Computers made ahead of their task; see `WarmPool`. None unless `usePool` was called. */
   private pool: WarmPool | null = null;
   private pnpmStore: PnpmStore | null = null;
+  /** Each task's own Postgres servers, beside its computer; see `TaskPostgres`. */
+  private readonly postgres: TaskPostgres;
 
   constructor(private readonly options: DockerDriverOptions) {
     this.docker = options.docker ?? docker;
+    const install = options.installId ?? DEFAULT_INSTALL;
+    this.postgres = new TaskPostgres({
+      docker: this.docker,
+      labels: [`${INSTALL_LABEL}=${install}`, `${KIND_LABEL}=${TASK_POSTGRES_KIND}`],
+      filters: [`label=${INSTALL_LABEL}=${install}`, `label=${KIND_LABEL}=${TASK_POSTGRES_KIND}`],
+      ...(options.wait ? { wait: options.wait } : {}),
+    });
   }
 
   /**
@@ -415,12 +431,14 @@ export class DockerDriver implements ExecDriver {
     if (result.code !== 0) return null;
     try {
       const [entry] = JSON.parse(result.stdout) as Array<{
+        Id?: string;
         Name?: string;
         State?: { Status?: string };
         Config?: { Labels?: Record<string, string> | null };
         Image?: string;
       }>;
       return {
+        id: entry?.Id ?? null,
         name: (entry?.Name ?? name).replace(/^\//, ''),
         running: entry?.State?.Status === 'running',
         labels: entry?.Config?.Labels ?? {},
@@ -503,6 +521,9 @@ export class DockerDriver implements ExecDriver {
       // the task's to write, and could name any task.
       const record = slot ? readSlotTask(slot) : null;
       if (record && !record.inDirectory && record.taskId === taskId) {
+        // Its servers first: they are in its namespace, and would otherwise
+        // be left listening in one that has nothing else.
+        await this.postgres.removeFor(name);
         await this.docker(['rm', '-f', '-v', name]);
         return name;
       }
@@ -730,10 +751,26 @@ export class DockerDriver implements ExecDriver {
   /**
    * What a computer needs before its task: its cache volume made writable by
    * the bot (Docker creates a new volume's mount point as root, and the image
-   * has no `/cache` to copy the owner from), and its database.
+   * has no `/cache` to copy the owner from), its own Postgres servers taking
+   * connections, and its database.
+   *
+   * A server that cannot be brought up fails the start, with the computer
+   * taken down: its repository's checks need it, and a builder started
+   * without it spent its task asking how to reach 127.0.0.1:55432. Before the
+   * database, so there is nothing to drop when it fails.
    */
   protected async prepare(spec: TaskComputerSpec, name: string): Promise<TaskComputer> {
     if (spec.repoKey) await this.docker(['exec', '-u', '0', name, 'chown', 'bot:bot', CONTAINER_CACHE]);
+    let postgres: string[] = [];
+    if (spec.postgres && spec.postgres.length > 0) {
+      try {
+        postgres = await this.postgres.start({ computer: name, taskId: spec.taskId, servers: spec.postgres, why: `task ${spec.taskId}'s` });
+      } catch (error) {
+        await this.postgres.removeFor(name).catch(() => undefined);
+        await this.docker(['rm', '-f', '-v', name]).catch(() => undefined);
+        throw error;
+      }
+    }
     let databaseUrl: string | null = null;
     if (spec.database && this.options.databases) {
       // A task whose database could not be made runs without one: its checks
@@ -751,13 +788,15 @@ export class DockerDriver implements ExecDriver {
       slotDir: spec.slotDir,
       cacheDir: spec.repoKey ? CONTAINER_CACHE : null,
       repoKey: spec.repoKey,
+      postgres,
     };
   }
 
   /**
    * The task's container removed — its sessions, its signing agent and
-   * whatever it ran go with it — its database dropped, and its directory
-   * removed, once. Only a directory under the work root is ever removed.
+   * whatever it ran go with it — its own Postgres servers with it, its
+   * database dropped, and its directory removed, once. Only a directory under
+   * the work root is ever removed.
    */
   async release(taskId: string, reason?: string): Promise<void> {
     void reason;
@@ -767,6 +806,9 @@ export class DockerDriver implements ExecDriver {
     const slotDir = held.computer.slotDir;
     if (held.computer.container) {
       await this.assertOurs(held.computer.container);
+      // Before the computer: a server outlives the namespace it shares, and
+      // `sweepOrphans` would otherwise be what found it.
+      await this.postgres.removeFor(held.computer.container);
       // `-v`: the image declares /work a volume, and a container removed
       // without it leaves an anonymous volume behind for every task.
       const removed = await this.docker(['rm', '-f', '-v', held.computer.container]);
@@ -854,6 +896,9 @@ export class DockerDriver implements ExecDriver {
       slotDir: found.slotDir,
       cacheDir: found.repoKey ? CONTAINER_CACHE : null,
       repoKey: found.repoKey,
+      // Its own servers ran beside it while hostd was down; local CI and the
+      // release are told of them again.
+      postgres: await this.postgres.adopt(found.name, (await this.inspect(found.name, QUICK).catch(() => null))?.id ?? null),
     };
     const sessions = new Set<string>();
     if (found.running) {
@@ -872,12 +917,22 @@ export class DockerDriver implements ExecDriver {
     if (!name.startsWith(this.taskPrefix) && !name.startsWith(this.warmPrefix)) return;
     await this.assertOurs(name, QUICK);
     const slotDir = labelOf((await this.inspect(name, QUICK).catch(() => null))?.labels, SLOT_LABEL);
+    await this.postgres.removeFor(name);
     await this.docker(['rm', '-f', '-v', name], undefined, undefined, QUICK);
     // The home is not in the slot, so the leftover-slot sweep does not reach
     // it. An earlier build also left a copy of the token under `.running`.
     if (slotDir) forgetTaskLogin(this.options.loginRoot, slotDir);
     // A warm computer's folder is named after it, and nothing else removes it.
     if (name.startsWith(this.warmPrefix)) removeSlot(resolve(this.options.workRoot, 'slots', name));
+  }
+
+  /**
+   * Task Postgres servers whose computer is gone, removed: a computer
+   * released while hostd was down, or removed by hand, leaves its servers
+   * running with nothing to serve. The reaper asks after each pass.
+   */
+  sweepOrphans(): Promise<string[]> {
+    return this.postgres.sweep();
   }
 
   /**

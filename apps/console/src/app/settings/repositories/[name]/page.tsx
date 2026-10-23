@@ -5,7 +5,7 @@ import { BridgeDown } from '@/components/bridge-down';
 import { ChevronLeftIcon } from '@/components/icons';
 import { AdminsOnly } from '@/components/not-a-user';
 import { RepoSettings } from '@/components/repo-settings';
-import { api, readMe, type DesignMemoryEntry, type WorkPauses } from '@/lib/api';
+import { api, readMe, type DesignMemoryEntry, type TaskPostgresView, type WorkPauses } from '@/lib/api';
 import { findBot } from '@/lib/bot-label';
 import { colorMapOf } from '@/lib/repo-colors';
 import { readHeader } from '@/lib/read-header';
@@ -31,13 +31,15 @@ export default async function RepositorySettingsPage({ params }: { params: Promi
     return <AdminsOnly email={me.email} identityMode={me.identityMode} what="Repository settings need" doing="changes a repository’s settings" />;
   let read;
   try {
-    const [repos, crew, costs, pauses, memory] = await Promise.all([
+    const [repos, crew, costs, pauses, memory, taskPostgres] = await Promise.all([
       api.repos(),
       api.crew(),
       api.costs().catch(() => null),
       api.workPauses().catch((): WorkPauses => ({ paused: null, repos: {} })),
       // A bridge a release behind has no design memory: the page still draws.
       (async () => api.designMemory(wanted))().catch((): DesignMemoryEntry[] => []),
+      // Nor its Postgres servers for its tasks: the section is left out.
+      (async () => api.taskPostgres(wanted))().catch((): TaskPostgresView | null => null),
     ]);
     const header = await readHeader({
       repos: repos.repos.map((one) => one.name),
@@ -45,12 +47,12 @@ export default async function RepositorySettingsPage({ params }: { params: Promi
       crew: crew.bots,
       costs,
     });
-    read = { repos, crew, header, pauses, memory };
+    read = { repos, crew, header, pauses, memory, taskPostgres };
   } catch (error) {
     return <BridgeDown error={error} />;
   }
 
-  const { repos, crew, header, pauses, memory } = read;
+  const { repos, crew, header, pauses, memory, taskPostgres } = read;
   const repo = repos.repos.find((one) => one.name === wanted);
   // A repository taken out of OpenADLC, or a link with a name that never was one.
   if (!repo) notFound();
@@ -77,6 +79,7 @@ export default async function RepositorySettingsPage({ params }: { params: Promi
             pause={pauses.repos[repo.name] ?? null}
             installPaused={Boolean(pauses.paused)}
             designMemory={memory}
+            taskPostgres={taskPostgres}
           />
           {/* The seed writes what config/repos.yaml sets at every start, over a change made here. */}
           <p className="mt-2.5 text-[12.5px] text-muted">

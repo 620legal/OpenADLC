@@ -1378,7 +1378,7 @@ Give a managed repository these targets, because the platform calls them by name
 
 | Target | When |
 |---|---|
-| `setup` | At task start, against the task's own empty database, for a task that has one (the `docker` driver, a `sidecarDb: true` seat) and whose tree is its own. A review that checks out a pull request does not run it: that Makefile is the pull request's, and hostd would run it outside the skill's tools with the task token. Under the `local` driver, or when the database could not be made, it does not run; a failing `setup` is logged and does not stop the task |
+| `setup` | At task start, against the task's own empty database or its own Postgres servers (below), for a task that has either (the `docker` driver, a `sidecarDb: true` seat) and whose tree is its own. A review that checks out a pull request does not run it: that Makefile is the pull request's, and hostd would run it outside the skill's tools with the task token. Under the `local` driver, or when the database could not be made, it does not run; a failing `setup` is logged and does not stop the task |
 | `ci` | What the implement skill gets green before opening a pull request |
 | `test`, `migrate` | Called by the two above; useful on their own |
 
@@ -1392,6 +1392,73 @@ Bots that never run a suite — intake, the automation account — should leave
 The `local` driver has no containers and so no task database. A task there gets no
 `DATABASE_URL` at all, deliberately: the alternative is inheriting hostd's, which
 points at the platform's own database.
+
+### A Postgres server of the task's own
+
+A database on the shared server is a plain role and one database. That is not
+enough for a repository whose checks need a server of their own: migrations
+that create server-wide roles through an admin connection, roles with fixed
+names (two tasks making `core_rw` on one server collide), or a Makefile that
+defaults to its own port. Such a repository gets one per task instead, which a
+person sets in **Settings → Repositories → the repository → Postgres for its
+tasks** (or `PUT /v1/repos/<name>/task-postgres`, an admin's): one or more
+servers, each a port, a superuser, its password, a database and an image.
+Give the repository's local-development defaults — 620legal/core's are
+`55432`, `core`, `core`, `core_db` and `pgvector/pgvector:pg16`, as its
+`docker-compose.yml` says — since only that task can reach the server. It is
+never a file in the repository: whatever it names runs beside every task.
+
+| Use | When |
+|---|---|
+| `sidecarDb` alone (the shared server's database, as `DATABASE_URL`) | The repository's checks need a database and nothing of the server's: no roles of their own, no superuser, any port |
+| Postgres for its tasks | They make roles, need a superuser, or connect where the Makefile's defaults say (`127.0.0.1:55432`) |
+
+What a task of a `sidecarDb: true` seat in that repository gets, under the
+`docker` driver:
+
+- Each server is a container in the task's computer's network namespace,
+  listening on loopback (`127.0.0.1` and `::1`) at its port, so the task
+  reaches it at `127.0.0.1:<port>` and nothing else can: it publishes no port
+  and joins no network, and another task's loopback is its own. Its password is
+  asked for on loopback too, as it is through the published port in the
+  repository's own CI, so a wrong one in its URLs fails here as well. It has
+  its own limits (1 CPU, 1 GB, 512 processes) beside the seat's, an image Docker's
+  official `postgres` or `pgvector/pgvector` at a tag, a digest or both
+  (`pgvector/pgvector:pg16@sha256:…` pins it; anything else is refused), and
+  its data goes with it. It is removed with the task's computer, taken back
+  with it when hostd restarts, and removed by the reaper if its computer went
+  some other way.
+- hostd starts each one and waits until it takes connections before
+  `make setup`. One that cannot be pulled or brought up fails the task's start
+  with what to do.
+- The task is told where they are as `OPENADLC_TASK_POSTGRES`
+  (`127.0.0.1:55432`, comma-separated for more than one), in `make setup`, the
+  session and `make ci`.
+- It gets no `DATABASE_URL` from OpenADLC unless the setting asks for that as
+  well, so the Makefile's own `?=` defaults apply.
+
+A repository's `db` target should start nothing when the server is there:
+
+```make
+db:
+ifdef OPENADLC_TASK_POSTGRES
+	@echo "Postgres is OpenADLC's: $(OPENADLC_TASK_POSTGRES)"
+else
+	docker compose up -d --wait postgres
+endif
+```
+
+There is no Docker inside a task's computer, so a `db` target that always runs
+`docker compose` fails there; with the server already listening where the
+compose file would have put it, the rest of `setup`, `migrate` and `test` run
+as they do on a laptop.
+
+The `local` driver has no containers to make one in. There the setting page
+says so, hostd logs it at each task start, and the task is told it has no
+server of its own rather than finding out at its first connection.
+
+On the cloud host the image is pulled by the host's Docker daemon from Docker
+Hub, as `openadlc-taskdb`'s is (`infra/gcp/cloud-init/host.yaml`).
 
 ### Installing from a private package registry
 

@@ -879,6 +879,32 @@ async function get<T>(path: string, init: { signal?: AbortSignal } = {}): Promis
   return (await response.json()) as T;
 }
 
+/**
+ * One of a repository's Postgres servers for its tasks; see
+ * `packages/shared/src/task-postgres.ts`, which the bridge checks a save with.
+ */
+export interface TaskPostgresServer {
+  port: number;
+  superuser: string;
+  password: string;
+  database: string;
+  image: string;
+}
+
+/** A repository's Postgres servers for its tasks, as the bridge answers them (`GET /v1/repos/:name/task-postgres`, an admin's). */
+export interface TaskPostgresView {
+  /** Null for none. */
+  taskPostgres: { servers: TaskPostgresServer[]; sharedDatabase: boolean } | null;
+  /** Why what is stored no longer reads; hostd refuses a task on it until it is corrected. */
+  unreadable: string | null;
+  /** Whether this install's hosts can give a task one: false under the local driver, null when no host is live. */
+  supported: { ok: boolean | null; why: string | null };
+  /** The images a server may run, in words: `pgvector/pgvector:<tag>`, `postgres:<tag>`. */
+  images: string[];
+  /** What the task is told: `OPENADLC_TASK_POSTGRES`. */
+  env: string;
+}
+
 /** How long settings waits for a section it could also leave to read its own. */
 export const SECTION_READ_MS = 1_500;
 
@@ -888,6 +914,7 @@ export const api = {
   item: (subject: string) => get<ItemView>(`/v1/items/${encodeURIComponent(subject)}`),
   designMemory: (repo: string) =>
     get<{ entries: DesignMemoryEntry[] }>(`/v1/repos/${encodeURIComponent(repo)}/design-memory`).then((body) => body.entries),
+  taskPostgres: (repo: string) => get<TaskPostgresView>(`/v1/repos/${encodeURIComponent(repo)}/task-postgres`),
   costs: () => get<CostsView>('/v1/costs'),
   insights: (options: { repo?: string | null; days: 7 | 30 }) =>
     get<InsightsView>(`/v1/insights?days=${options.days}${options.repo ? `&repo=${encodeURIComponent(options.repo)}` : ''}`),
