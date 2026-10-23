@@ -319,6 +319,10 @@ git tag v0.2.0 origin/main        # or an earlier first-parent commit of main, a
 git push origin v0.2.0
 ```
 
+or, with no clone, from GitHub's page on a phone as well,
+[the cut release button](#the-cut-release-button), which pushes the same tag
+as you.
+
 `release.yml` calls `release-build.yml` as `main` has it, which does the rest
 or refuses and says why: a tag pushed by anyone else, a commit that is not
 one of `main`'s first parents, a commit whose own `ci` run on `main` failed,
@@ -379,6 +383,84 @@ attestation checks are the same wherever they are written, that the
 workflows and the docs name the files and the images and run the checks
 exactly as self-update does (`packages/shared/src/self-update.ts`), and that
 `ci.yml` stays read-only; nothing short of a pushed tag runs either workflow.
+
+### The cut release button
+
+**Actions → cut release → Run workflow**, on `main`, with a version such as
+`0.2.0`, or none for the next patch after the newest release; then approve
+the run's `release` job (on the run's page, or from the notification:
+**Review deployments**, **Approve and deploy**). It works from a phone's
+browser. `.github/workflows/cut-release.yml`:
+
+1. `check`, with the run's read-only token and no secret, runs
+   `.github/scripts/cut-release-check.mjs`, which refuses, saying why on the
+   run's page: a run on anything but `main`; a run started or re-run by
+   anyone not in `RELEASERS`, read from `release-build.yml` as `main` has it;
+   a `release` environment not set up as below; a version that is not three
+   numbers, or already has a tag or a release; and, with
+   `release-check.mjs`'s own version and `ci` checks, whatever
+   `release-build.yml` would refuse: a version not above the newest release,
+   a commit whose `ci` did not pass. The commit is `main`'s head, but a head
+   that changed only docs (its `ci` ran the docs job and built nothing, so
+   `release-build.yml` would refuse it) gives way to the commit before it,
+   which builds the same release.
+2. `tag` runs in the `release` environment, so GitHub holds it until you
+   approve it, and only then gives it the environment's secret
+   `RELEASE_TAG_TOKEN`. It asks GitHub whose token that is and refuses one
+   that is not the person's who ran it, makes the annotated tag `vX.Y.Z` on
+   the commit `check` named, pushes it with the token, and links the
+   `release` run the push started.
+
+It pushes with your token, not the run's, because a tag pushed with a
+workflow's `GITHUB_TOKEN` starts no other workflow
+([GitHub](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow)),
+and a release built by the button's own run would be signed for
+`refs/heads/main`, which every install refuses. With your token the push is
+yours: the tag ruleset below lets it create the tag as it lets you,
+`release.yml` runs for it with you as the run's actor, and
+`release-build.yml` checks and builds it exactly as a tag you pushed from a
+clone.
+
+Once, to set it up (the token is the releaser's; the environment takes a
+repository admin):
+
+1. **The token.** Your Settings → Developer settings → Personal access tokens
+   → Fine-grained tokens → Generate new token
+   ([filled in](https://github.com/settings/personal-access-tokens/new?name=OpenADLC+cut+release&description=Pushes+release+tags+from+cut-release.yml&target_name=620legal&expires_in=90&contents=write)):
+   resource owner `620legal`; **Only select repositories**,
+   `620legal/OpenADLC`; repository permission **Contents: Read and write**,
+   which brings Metadata: Read-only, and nothing else; an expiry of 90 days
+   or less. If the organization requires approval for these tokens, it is
+   pending until an owner approves it (an owner's own is approved at once).
+   It can do with the repository's contents what you can, pushing a version
+   tag `release-build.yml` takes among it, so it goes nowhere but the
+   environment below: never a repository secret, which a workflow on any
+   branch can read.
+2. **The environment.** The repository's Settings → Environments → New
+   environment, named `release`:
+   - **Required reviewers**: you, and only people in `RELEASERS`. Leave
+     **Prevent self-review** off: you approve the runs you start.
+   - **Deployment branches and tags**: **Selected branches and tags**, with
+     one rule: ref type **Branch**, name `main`.
+   - **Environment secrets**, **Add secret**: `RELEASE_TAG_TOKEN`, the token.
+
+   A job that names an environment that does not exist creates it with no
+   protection, so `check` reads the environment back on every run and
+   refuses, naming what to change, one with no required reviewer, a reviewer
+   who is not one of `RELEASERS`, self-review prevented, or deployments from
+   anything but the branch `main`.
+
+**When the token expires**, or is revoked, `tag` stops at the step that
+reads it, saying GitHub no longer takes it, and nothing is tagged. Make a new
+one as above, put it in place of the secret's value (Settings →
+Environments → `release` → `RELEASE_TAG_TOKEN`), and run the button again.
+A tag pushed from a clone works all the while.
+
+`tests/cut-release.test.ts` runs each of `check`'s refusals against a real
+repository and a stand-in for GitHub's API, checks the workflow's trigger,
+permissions and environment and that the secret is read in the one step that
+pushes, and runs that step with stand-ins for `gh` and `git`, to see the
+token reach git's environment and nothing else: no command line, no log.
 
 ### Once per repository
 
