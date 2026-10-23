@@ -83,8 +83,10 @@ class World {
   nodeIndex = '[{"version":"v22.20.0"},{"version":"v22.19.0"}]';
   /** The gh apt repository's index, which lists only its newest package. */
   ghPackages = 'Package: gh\nVersion: 2.79.0\nArchitecture: amd64\nFilename: pool/main/g/gh/gh_2.79.0_amd64.deb\n';
-  /** What curl answers for nodejs.org or the gh index instead of `nodeIndex` and `ghPackages`. */
-  curlAnswers: Partial<Record<'node' | 'gh', CommandResult>> = {};
+  /** What nodejs.org or the gh index answers instead of `nodeIndex` and `ghPackages`. */
+  fetchAnswers: Partial<Record<'node' | 'gh', (init?: RequestInit) => Promise<Response>>> = {};
+  /** Every address fetched, in order. */
+  readonly fetched: string[] = [];
   npmFails = false;
   /** What npm answers for a package instead of the answer made up from `npm` and `npmTimes`. */
   npmAnswers: Record<string, CommandResult> = {};
@@ -116,12 +118,8 @@ class World {
     const ok = (stdout = ''): CommandResult => ({ code: 0, stdout, stderr: '' });
     const no = (stderr: string): CommandResult => ({ code: 1, stdout: '', stderr });
 
-    if (command === 'curl') {
-      const url = args.at(-1) ?? '';
-      if (url.includes('nodejs.org')) return this.curlAnswers.node ?? ok(`${this.nodeIndex}\n`);
-      if (url.startsWith('https://cli.github.com/packages/dists/stable/main/binary-')) return this.curlAnswers.gh ?? ok(`${this.ghPackages}\n`);
-      return no(`curl ${url}: not faked`);
-    }
+    // As in a release's service image, which purges curl once gh is installed.
+    if (command === 'curl') return { code: 127, stdout: '', stderr: 'curl could not be started: spawn curl ENOENT\n' };
 
     if (command === 'npm') {
       if (this.npmFails) return { code: 1, stdout: '', stderr: 'npm error network request failed, reason: getaddrinfo ENOTFOUND registry.npmjs.org' };
@@ -196,6 +194,16 @@ class World {
     return no(`docker ${args.join(' ')}: not faked`);
   };
 
+  fetch: typeof fetch = async (input, init) => {
+    const url = String(input);
+    this.fetched.push(url);
+    if (url === 'https://nodejs.org/dist/index.json') return (await this.fetchAnswers.node?.(init)) ?? new Response(`${this.nodeIndex}\n`);
+    if (url.startsWith('https://cli.github.com/packages/dists/stable/main/binary-')) {
+      return (await this.fetchAnswers.gh?.(init)) ?? new Response(`${this.ghPackages}\n`);
+    }
+    return new Response(`${url}: not faked`, { status: 404 });
+  };
+
   /** Every docker call that changes which image a tag names. */
   retags(): string[][] {
     return this.calls.filter((call) => call.command === 'docker' && call.args[0] === 'tag').map((call) => call.args);
@@ -256,6 +264,7 @@ function updater(
     image: 'openadlc-bot:latest',
     buildScript: script,
     run: world.run,
+    fetch: world.fetch,
     crew: async () => crew ?? [bot()],
     account: async (id) => ACCOUNTS[id] ?? null,
     chooseModelFor: () => async (crewBot) => resolveAsTask(crewBot),
@@ -618,7 +627,7 @@ describe('a run with a newer engine', () => {
       IMAGE: 'openadlc-bot:candidate',
     });
     // Nothing asked where gh or Node could come from: neither is moving.
-    expect(world.calls.filter((call) => call.command === 'curl')).toEqual([]);
+    expect(world.fetched).toEqual([]);
     expect(result.to).toMatchObject({ gh: '2.67.0', node: '22.14.0', [CLAUDE]: '2.1.290' });
   });
 
@@ -633,8 +642,7 @@ describe('a run with a newer engine', () => {
     const result = await service.updateAndWait({ trigger: 'console', only: ['gh'] });
 
     expect(result.state).toBe('updated');
-    const asked = world.calls.filter((call) => call.command === 'curl').map((call) => call.args.at(-1));
-    expect(asked).toEqual([ghPackagesUrl()]);
+    expect(world.fetched).toEqual([ghPackagesUrl()]);
     const build = world.calls.find((call) => call.command === 'bash');
     expect(build?.env).toMatchObject({ GH_VERSION: '2.79.0', NODE_VERSION: '22.14.0' });
     expect(build?.env).not.toHaveProperty('GH_FROM');
@@ -1151,36 +1159,133 @@ describe('a tool’s newest version', () => {
   it('that ran past ANSWER_MAX is not read at all, though its start might parse, and the stopped command is not blamed', async () => {
     // What the runner hands back once it has stopped a command at the cut:
     // the start of the answer, and the exit code of a killed process.
-    const cut = (stdout: string): CommandResult => ({ code: 1, stdout, stderr: '', cut: true });
-    const answers: { only: string[]; set: (world: World) => void; says: string }[] = [
-      {
-        only: [CODEX],
-        set: (world) => void (world.npmAnswers[CODEX] = cut(codexAnswer('0.156.1', '2026-09-20T00:00:00.000Z'))),
-        says: "could not read npm's answer about @openai/codex: it is over the 8 MB hostd reads",
-      },
-      {
-        only: ['node'],
-        set: (world) => void (world.curlAnswers.node = cut('[{"version":"v22.20.0","lts":"Jod"}]')),
-        says: "could not read nodejs.org's index of Node releases: it is over the 8 MB hostd reads",
-      },
-      {
-        // A Packages index is read line by line: its start alone names a gh to install.
-        only: ['gh'],
-        set: (world) => void (world.curlAnswers.gh = cut('Package: gh\nVersion: 2.79.0\nArchitecture: amd64\n')),
-        says: "could not read the GitHub CLI's apt repository's package index: it is over the 8 MB hostd reads",
-      },
-    ];
+    const { world } = pinnedHost();
+    world.npmAnswers[CODEX] = { code: 1, stdout: codexAnswer('0.156.1', '2026-09-20T00:00:00.000Z'), stderr: '', cut: true };
+    const { service } = updater(world);
 
-    for (const answer of answers) {
-      const { world } = pinnedHost();
-      answer.set(world);
-      const { service } = updater(world);
+    const result = await service.updateAndWait({ trigger: 'console', only: [CODEX] });
 
-      const result = await service.updateAndWait({ trigger: 'console', only: answer.only });
+    expect(result).toMatchObject({ state: 'failed', reason: "could not read npm's answer about @openai/codex: it is over the 8 MB hostd reads" });
+    expect(world.calls.some((call) => call.command === 'bash')).toBe(false);
+  });
+});
 
-      expect(result).toMatchObject({ state: 'failed', reason: answer.says });
-      expect(world.calls.some((call) => call.command === 'bash')).toBe(false);
-    }
+/** A host whose image says which Node and gh it has, so a lookup of either can move it. */
+function toolHost(): World {
+  const { world } = pinnedHost();
+  const image = world.images.get(world.tags.get('openadlc-bot:latest') as string) as Image;
+  image.labels = { [ENGINES_LABEL]: JSON.stringify({ ...PINS, node: '22.14.0', gh: '2.67.0' }) };
+  image.says = { ...image.says, node: 'v22.14.0', gh: 'gh version 2.67.0 (2025-02-11)' };
+  return world;
+}
+
+describe('asking nodejs.org and the GitHub CLI’s apt repository', () => {
+  const encode = (text: string) => new TextEncoder().encode(text);
+  const lookups = [
+    {
+      tool: 'node' as const,
+      host: 'nodejs.org',
+      start: '[{"version":"v22.20.0","lts":"Jod"},',
+      pin: { NODE_VERSION: '22.20.0' },
+      asks: 'could not ask nodejs.org which Node is newest',
+      what: "nodejs.org's index of Node releases",
+    },
+    {
+      // A Packages index is read line by line: its start alone names a gh to install.
+      tool: 'gh' as const,
+      host: 'cli.github.com',
+      start: 'Package: gh\nVersion: 2.79.0\nArchitecture: amd64\n',
+      pin: { GH_VERSION: '2.79.0' },
+      asks: "could not ask the GitHub CLI's apt repository which gh is newest",
+      what: "the GitHub CLI's apt repository's package index",
+    },
+  ];
+
+  /** A failed lookup fails the run that asked only for it, with the lookup's reason, and builds nothing. */
+  async function failsWith(world: World, tool: 'node' | 'gh', reason: string, options: Pick<EngineUpdaterOptions, 'lookupTimeoutMs'> = {}) {
+    const { service } = updater(world, options);
+    const result = await service.updateAndWait({ trigger: 'console', only: [tool] });
+    expect(result).toMatchObject({ state: 'failed', reason });
+    expect(world.calls.some((call) => call.command === 'bash')).toBe(false);
+  }
+
+  it.each(lookups)('asks for $tool with Node’s own fetch, within 60 s, and never spawns curl, which a release’s service image does not have', async ({ tool, pin }) => {
+    const world = toolHost();
+    let given: RequestInit | undefined;
+    world.fetchAnswers[tool] = async (init?: RequestInit) => ((given = init), new Response(tool === 'node' ? world.nodeIndex : world.ghPackages));
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    const { service } = updater(world);
+
+    const result = await service.updateAndWait({ trigger: 'console', only: [tool] });
+
+    const timeouts = timeout.mock.calls.map(([ms]) => ms);
+    timeout.mockRestore();
+    expect(result.state).toBe('updated');
+    expect(world.calls.filter((call) => call.command === 'curl')).toEqual([]);
+    expect(world.fetched).toEqual([tool === 'node' ? 'https://nodejs.org/dist/index.json' : ghPackagesUrl()]);
+    expect(given?.signal).toBeInstanceOf(AbortSignal);
+    expect(timeouts).toEqual([60_000]);
+    expect(world.calls.find((call) => call.command === 'bash')?.env).toMatchObject(pin);
+  });
+
+  it.each(lookups)('says the status when $host answers with a failure', async ({ tool, asks }) => {
+    const world = toolHost();
+    world.fetchAnswers[tool] = async () => new Response('<html><body>Service Unavailable</body></html>', { status: 503 });
+    await failsWith(world, tool, `${asks}: HTTP 503`);
+  });
+
+  it.each(lookups)('says what went wrong when $host cannot be reached, not just that fetch failed', async ({ tool, host, asks }) => {
+    const unknown = toolHost();
+    unknown.fetchAnswers[tool] = async () => {
+      throw new TypeError('fetch failed', { cause: Object.assign(new Error(`getaddrinfo ENOTFOUND ${host}`), { code: 'ENOTFOUND' }) });
+    };
+    await failsWith(unknown, tool, `${asks}: fetch failed: getaddrinfo ENOTFOUND ${host}`);
+
+    // What Node 25's fetch threw when a proxy refused the CONNECT, as the egress proxy refuses a host not on its list.
+    const refused = toolHost();
+    refused.fetchAnswers[tool] = async () => {
+      const tunnel = Object.assign(new Error('Proxy response (403) !== 200 when HTTP Tunneling'), { code: 'UND_ERR_ABORTED' });
+      throw new TypeError('fetch failed', { cause: Object.assign(new DOMException('Request was cancelled.'), { cause: tunnel }) });
+    };
+    await failsWith(refused, tool, `${asks}: fetch failed: Proxy response (403) !== 200 when HTTP Tunneling`);
+  });
+
+  it.each(lookups)('stops reading $host past ANSWER_MAX, though its start might parse', async ({ tool, start, what }) => {
+    const world = toolHost();
+    let pulled = 0;
+    let cancelled = false;
+    // An answer that never ends: the run finishing at all is the cap holding.
+    world.fetchAnswers[tool] = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start: (controller) => controller.enqueue(encode(start)),
+          pull: (controller) => void ((pulled += 1), controller.enqueue(new Uint8Array(1024 * 1024).fill(0x20))),
+          cancel: () => void (cancelled = true),
+        }),
+      );
+    await failsWith(world, tool, `could not read ${what}: it is over the 8 MB hostd reads`);
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThanOrEqual(ANSWER_MAX / (1024 * 1024) + 2);
+  });
+
+  it.each(lookups)('gives up on $host at the timeout, before it answers and while its answer is still arriving', async ({ tool, host, start, asks }) => {
+    const late = `${asks}: ${host} did not answer within 0.05 s`;
+    const silent = toolHost();
+    silent.fetchAnswers[tool] = (init?: RequestInit) =>
+      new Promise((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal?.reason)));
+    await failsWith(silent, tool, late, { lookupTimeoutMs: 50 });
+
+    const stalled = toolHost();
+    stalled.fetchAnswers[tool] = async (init?: RequestInit) =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start: (controller) => {
+            controller.enqueue(encode(start));
+            init?.signal?.addEventListener('abort', () => controller.error(init.signal?.reason));
+          },
+        }),
+      );
+    await failsWith(stalled, tool, late, { lookupTimeoutMs: 50 });
   });
 });
 
