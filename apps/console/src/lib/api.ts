@@ -407,7 +407,9 @@ export type AttentionAction =
   | { kind: 'approve_all' | 'ask_designer'; label: string; gateId: string }
   | { kind: 'approve_all_off'; label: string; subject: string }
   /** Starts now what would start the work `subject` names when it comes round: the stage sweep, or a dispatch. */
-  | { kind: 'start_work'; label: string; subject: string };
+  | { kind: 'start_work'; label: string; subject: string }
+  /** Lets go of the hold on the work `subject` names, as its card's Resume does. Absent from an older bridge. */
+  | { kind: 'resume_item'; label: string; subject: string };
 
 export type AttentionKind =
   | 'question'
@@ -437,7 +439,9 @@ export type AttentionKind =
   /** A plan change a person approved, waiting for other work to let go of its paths: nothing to answer on its face. */
   | 'plan_change_waiting'
   /** Work that waited past the limit with its seat free and nothing started; it goes once the work starts. */
-  | 'work_stuck';
+  | 'work_stuck'
+  /** A stacked change OpenADLC holds that only a person can let go: what it was built on will not land, or its builder could not bring it up to date. */
+  | 'stack_held';
 
 /** One thing waiting on a person, as `GET /v1/attention` says it. */
 export interface AttentionItem {

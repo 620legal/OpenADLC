@@ -368,6 +368,10 @@ export class SendBack {
    * review loop has always opened, now with the card where the work is. A
    * push that changes the diff moves it on to Review again (`onPullRequest`).
    * At `maxRounds` the loop stops and asks a person, and nothing moves.
+   *
+   * Null once the round is with the builder; else why it is not, for a caller
+   * that has a person to give the work to instead (`Stacking`), which could
+   * otherwise read that only from the log.
    */
   async reviewRound(input: {
     repo: { id: string; name: string };
@@ -380,7 +384,7 @@ export class SendBack {
     reason: string;
     /** Brief the round with the lease's paths alone, not the files in its diff: it was sent back for straying outside them. */
     leasePathsOnly?: boolean;
-  }): Promise<void> {
+  }): Promise<string | null> {
     const { repo, repoFullName, pr } = input;
     const issueNumber = issueNumberFromBranch(pr.head.ref);
     let found = issueNumber ? await leases.getActiveLease(repo.id, issueNumber) : null;
@@ -409,10 +413,10 @@ export class SendBack {
       }
       if (input.crew.some((bot) => bot.name === input.by)) await this.nobodyToSendTo({ ...input, issue: issueNumber, why });
       else if (issueNumber && !(await this.stallSaid(repo.name, pr))) await this.recordStall({ repo, pr, issue: issueNumber, why });
-      return;
+      return why ?? `no builder holds \`${pr.head.ref}\``;
     }
     const round = await this.nextRound({ repo, repoFullName, pr, issueNumber, lease, builder });
-    if (round === null) return;
+    if (round === null) return `its review rounds have not converged, and the loop stopped for a person`;
 
     if (issueNumber) {
       const commentUrl = await this.deps.automation
@@ -422,7 +426,7 @@ export class SendBack {
         .moveStage({ repoName: repo.name, issueNumber, to: 'build', actor: input.by, direction: 'send_back', reason: input.reason, prNumber: pr.number, commentUrl })
         .catch((error: unknown) => console.warn(`[bridge] ${repo.name}#${issueNumber} was not moved back to build: ${error instanceof Error ? error.message : error}`));
     }
-    await this.openPatch({ ...input, issueNumber, lease, builder, round });
+    return this.openPatch({ ...input, issueNumber, lease, builder, round });
   }
 
   /**
@@ -570,16 +574,19 @@ export class SendBack {
   /**
    * Review to build from the merge line or CI, which know only the pull
    * request: a branch that conflicts with the base, or CI that failed again
-   * after the lead approved. The same round as a request for changes.
+   * after the lead approved. The same round as a request for changes, and
+   * the same answer: null once it is with the builder, else why not.
    */
-  async backToBuild(input: { repoName: string; prNumber: number; reason: string; leasePathsOnly?: boolean }): Promise<void> {
+  async backToBuild(input: { repoName: string; prNumber: number; reason: string; leasePathsOnly?: boolean }): Promise<string | null> {
     const repo = await repos.getRepoByName(input.repoName);
     const client = (await this.deps.client?.().catch(() => null)) ?? null;
-    if (!repo || !client) return;
+    if (!repo) return `${input.repoName} is not a repository OpenADLC works in`;
+    if (!client) return 'the automation account is not connected, so the pull request cannot be read';
     const pull = await client.getPullRequest(repo.fullName, input.prNumber).catch(() => null);
-    if (!pull || pull.state !== 'open') return;
+    if (!pull) return `GitHub did not answer for #${input.prNumber}`;
+    if (pull.state !== 'open') return `#${input.prNumber} is ${pull.state}`;
     const crew = await bots.listBots();
-    await this.reviewRound({
+    return this.reviewRound({
       repo,
       repoFullName: repo.fullName,
       pr: { number: input.prNumber, head: { ref: pull.headRef, sha: pull.headSha } },
@@ -601,7 +608,7 @@ export class SendBack {
     builder: { id: string; name: string };
     round: number;
     leasePathsOnly?: boolean;
-  }): Promise<void> {
+  }): Promise<string | null> {
     // What the round may write: the lease's paths, and every file the
     // pull request already changes — a widening a person approved is in
     // the diff, not the lease. With neither, the round could write only
@@ -613,7 +620,9 @@ export class SendBack {
     const inDiff =
       input.client && !input.leasePathsOnly ? await input.client.listPullFilesAsNamed(input.repoFullName, input.pr.number).catch(() => []) : [];
     const declaredPaths = [...new Set([...(input.lease.declaredPaths ?? []), ...inDiff])];
-    await this.deps.taskService
+    // A round the builder cannot start yet is recorded, and is still its: a
+    // card says why, and the recovery runs it. Only a refusal is not.
+    return this.deps.taskService
       .open({
         bot: input.builder.name,
         repo: input.repo.name,
@@ -633,7 +642,14 @@ export class SendBack {
         // do yet is recorded, for the recovery to run once it can.
         whenBlocked: 'record',
       })
-      .catch((error) => console.warn(`[bridge] patch round not started: ${error.message}`));
+      .then(
+        () => null,
+        (error: unknown) => {
+          const why = error instanceof Error ? error.message : String(error);
+          console.warn(`[bridge] patch round not started: ${why}`);
+          return why;
+        },
+      );
   }
 
   /**

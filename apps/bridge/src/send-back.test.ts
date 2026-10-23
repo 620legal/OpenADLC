@@ -41,7 +41,10 @@ vi.mock('@openadlc/db', () => ({
       .map((event, id) => ({ id, at: '2026-10-04T00:00:00.000Z', payload: event.payload })),
   ),
   deployRuns: { forPullRequests: vi.fn(async () => world.deployRuns) },
-  bots: { getBotById: vi.fn(async (id: string) => ({ id, name: id === 'bot-deploy' ? 'sre' : id === 'bot-spec' ? 'system-engineer' : 'builder' })) },
+  bots: {
+    getBotById: vi.fn(async (id: string) => ({ id, name: id === 'bot-deploy' ? 'sre' : id === 'bot-spec' ? 'system-engineer' : 'builder' })),
+    listBots: vi.fn(async () => [{ id: 'bot-builder', name: 'builder' }]),
+  },
   issues: {
     getIssue: vi.fn(async () => world.issue),
     listIssues: vi.fn(async () => (world.issue ? [world.issue] : [])),
@@ -341,6 +344,32 @@ describe('a review sending the work back to build', () => {
     expect((automation.comment.mock.calls[0] as unknown as [string, number, string])[2]).toContain('**Sent back to Build** from #31 by lead-reviewer (review round 1)');
     expect(taskService.open).toHaveBeenCalledWith(expect.objectContaining({ kind: 'patch', round: 1, leaseId: 'lease-7', branch: pr.head.ref }));
     expect(leases.setLeaseState).not.toHaveBeenCalled();
+  });
+
+  it('answers whether the round is with the builder, and why not, for a caller with a person to hand it to instead', async () => {
+    // A held stacked change is handed to its builder to be brought up to date
+    // (`Stacking`); one the builder could not take went nowhere, said only in the log.
+    world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
+    const { service, taskService, client } = sendBack();
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(await service.backToBuild({ repoName: REPO.name, prNumber: 31, reason: 'bring it up to date' })).toBeNull();
+
+      taskService.open.mockRejectedValueOnce(new Error('builder is already working on openadlc-testbed#31; it is not started twice'));
+      expect(await service.backToBuild({ repoName: REPO.name, prNumber: 31, reason: 'bring it up to date' })).toBe(
+        'builder is already working on openadlc-testbed#31; it is not started twice',
+      );
+
+      world.lease = null;
+      expect(await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr, crew, client: null, by: 'openadlc', reason: 'x' })).toBe(
+        'no lease on #7 was ever linked to #31',
+      );
+
+      client.getPullRequest.mockResolvedValueOnce({ state: 'closed', headRef: pr.head.ref });
+      expect(await service.backToBuild({ repoName: REPO.name, prNumber: 31, reason: 'x' })).toBe('#31 is closed');
+    } finally {
+      warned.mockRestore();
+    }
   });
 
   it('briefs a round with the diff’s files too, and one sent back for straying with its lease’s paths alone', async () => {

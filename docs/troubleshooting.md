@@ -1444,19 +1444,27 @@ behaves like this:
   resolution round like any other. The builder's resolution is reviewed as
   that round says (above): by the lead alone, or by every reviewer again.
 - **It is held (`openadlc:paused`) with a note.** The dependency was sent back
-  to build, so what it was built on is changing. Resume it from its card once
-  the dependency is settled, or cancel it and let it be built again from main.
-  The note says instead that the dependency **was closed without merging**
-  when its issue was closed with its pull request unmerged: the dependency's
-  commits are in this branch and will not land, so redo it from main, or
-  resume it once that work lands another way. A dependency that merged is
-  never a reason to hold it.
+  to build, so what it was built on is changing. It goes on by itself once the
+  dependency is approved again (its gate green on its new head) or merges:
+  the issue and its timeline say `Let go`, and its reviews start on that
+  sweep. If the dependency's change touched files this one changes, its
+  builder first brings it up to date with a patch round. While it waits on
+  the dependency, the gate sweep says once that its reviews wait for the hold,
+  rather than trying them every ten minutes. To let it go sooner, resume it
+  from its card, or cancel it and let it be built again from main.
+- **It is held for a person, with a card in Needs you.** Its builder could
+  not take the patch round (the card says why), or the dependency **was
+  closed without merging**: its commits are in this branch and will not land.
+  Bring the branch up to date yourself and press Resume, resume it once that
+  work lands another way, or cancel it and redo it from main. A dependency
+  reopened and approved lets it go by itself; one that merged is never a
+  reason to hold it.
 - **Turning it off.** Set `stacking: false` in the repository's
   `.github/openadlc.yml`; the issue then waits for its dependency to ship, as
   before.
 
 ```bash
-grep -E 'resolution round|waits for #|stacked on' "$(openadlc logs bridge)" | tail -n 20
+grep -E 'resolution round|waits for #|stacked on|let go|held for a person|once the hold goes' "$(openadlc logs bridge)" | tail -n 20
 ```
 
 ## An approved plan change waits on another issue

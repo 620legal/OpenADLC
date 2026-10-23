@@ -1731,6 +1731,35 @@ describe('a bot that must be able to work before a task starts', () => {
       expect(open).toHaveBeenCalledWith(expect.objectContaining({ bot: SECURITY.name, subjectRef: 'openadlc#2' }));
     });
 
+    it('are not started while the work is held, which is said once, and are started once the hold goes', async () => {
+      // OpenADLC#154 waited on two seats while #137 was held: every ten
+      // minutes the sweep logged starting each review, and the hold refusing it.
+      store.issues = [{ repoName: 'openadlc', number: 1, prNumber: 2, labels: ['adlc:review', 'openadlc:paused'] }];
+      const { tasksService } = readyService();
+      const open = vi.spyOn(tasksService, 'open').mockResolvedValue({ taskId: 'task-2', session: 's' });
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      try {
+        expect(await tasksService.openMissingReviews(input)).toEqual([]);
+        expect(await tasksService.openMissingReviews(input)).toEqual([]);
+        expect(await tasksService.openLeadReview({ ...input, seat: LEAD.name, since: null })).toBeNull();
+        expect(open).not.toHaveBeenCalled();
+        expect(warn).not.toHaveBeenCalled();
+        expect(log.mock.calls.map(([line]) => String(line))).toEqual([
+          `[bridge] openadlc#2: the gate waits on ${LEAD.name}, ${SECURITY.name}, whose reviews start once the hold goes: openadlc#1 is held (openadlc:paused); resume it on its card`,
+        ]);
+
+        store.issues = [{ repoName: 'openadlc', number: 1, prNumber: 2, labels: ['adlc:review'] }];
+        expect(await tasksService.openMissingReviews(input)).toHaveLength(2);
+        expect(open).toHaveBeenCalledWith(expect.objectContaining({ bot: SECURITY.name, kind: 'review', subjectRef: 'openadlc#2' }));
+      } finally {
+        store.issues = [];
+        log.mockRestore();
+        warn.mockRestore();
+      }
+    });
+
     it('leave a seat whose review ran and failed to its card', async () => {
       store.reviewTasks = [{ botId: SECURITY.id, subjectRef: 'openadlc#2', state: 'failed' }];
       const { tasksService } = readyService();

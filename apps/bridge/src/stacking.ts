@@ -19,7 +19,8 @@ import {
   type ContextDocument,
 } from '@openadlc/shared';
 import type { Started } from './build-start.js';
-import { recordHold } from './item-hold.js';
+import { sayOnCard } from './deploy-pipeline.js';
+import { forgetHold, readHolds, recordHold, type ItemHold } from './item-hold.js';
 
 /**
  * An issue that waits on one that is in review starts from that one's branch,
@@ -35,8 +36,17 @@ import { recordHold } from './item-hold.js';
  * the same head that touches the same files is still not the line's, since
  * the builder holds a token that can push anything, and a conflicted update
  * goes to a resolution round with its own re-review. If A is sent back to
- * build, what B was built on is changing, so B is held, with a note on it,
- * for a person to resume or redo; and so it is if A is closed without merging.
+ * build, what B was built on is changing, so B is held, with a note on it;
+ * and so it is if A is closed without merging.
+ *
+ * The hold goes by itself once A is settled: approved again, its gate green
+ * on the head it is at, or merged (`letGoWhatIsSettled`). It waited for a
+ * person's Resume, which nothing asked for: OpenADLC#137 sat held for hours
+ * after #141 was approved and merged, Needs you said nothing, and the gate
+ * sweep logged its refused reviews every ten minutes. When A's change since
+ * B was built touches B's own files, B's builder brings B up to date first,
+ * by the patch path; only when that cannot start, or A will not land, does a
+ * person decide, and Needs you says so (`heldStacks`).
  *
  * Which issue B was built on is a row of its own (`stacks`), written before
  * B's build starts, which does not start without it. It was only an event,
@@ -54,6 +64,8 @@ export const STACK_UPDATING = 'stack.updating';
 export const STACK_MADE = 'stack.made';
 export const STACK_UPDATED = 'stack.updated';
 export const STACK_PAUSED = 'stack.paused';
+/** A hold let go by itself, and why: what it was built on was approved again, or merged. */
+export const STACK_LET_GO = 'stack.let_go';
 
 /**
  * How a held stacked issue is started again from the base. "Redo it from the
@@ -115,6 +127,11 @@ interface UpdatedPayload {
 
 type Client = Pick<GitHubClient, 'getPullRequest' | 'readFileIfPresent' | 'comment' | 'addLabels' | 'removeLabel' | 'changedFilesBetween'>;
 
+/** Whether a hold is one `holdWhatWasSentBack` put on and still waits on what it was built on, not on a person. */
+function waitsOnBase(hold: ItemHold | undefined): boolean {
+  return hold?.by === 'openadlc' && !hold.needsPerson;
+}
+
 export interface StackingDeps {
   client: () => Promise<Client | null>;
   /** `build-start.ts`'s `startBuild`, which assigns, comments and marks the lease. */
@@ -136,6 +153,20 @@ export interface StackingDeps {
   paused: (repo?: string) => string | null;
   /** Whether anything dispatches on this install. Where nothing leases, nothing stacks either. */
   dispatching: () => boolean;
+  /**
+   * The review gate OpenADLC published on a commit
+   * (`Automation.publishedGate`), or null when none is known: how a
+   * dependency approved again is told. Absent, only its merge lets a hold go.
+   */
+  gate?: (repoFullName: string, sha: string) => Promise<'pending' | 'success' | 'failure' | null>;
+  /**
+   * Hands a held change whose dependency changed its files under it to its
+   * builder, to bring it up to date (`SendBack.backToBuild`): null once the
+   * round is with the builder, else why not. Absent, a person is asked.
+   */
+  rebuild?: (input: { repoName: string; prNumber: number; reason: string }) => Promise<string | null>;
+  /** Says a line in a card's timeline (`sayOnCard`). */
+  say?: (subjects: readonly string[], text: string, payload: Record<string, unknown>) => Promise<boolean>;
   record?: (input: { type: string; payload: unknown }) => Promise<unknown>;
   events?: (type: string, since: Date) => Promise<{ at: string; payload: unknown }[]>;
   now?: () => number;
@@ -226,6 +257,9 @@ export class Stacking {
         if (starting && policy.stacking && !this.deps.paused(repo.name)) done.push(...(await this.startStacked(client, repo, policy.paths)));
       }
       done.push(...(await this.holdWhatWasSentBack(client, repo)));
+      // Before the gate sweep of the same job (`Scheduler`), so a change let
+      // go here has its reviews started in that pass.
+      done.push(...(await this.letGoWhatIsSettled(client, repo)));
     }
     return done;
   }
@@ -376,11 +410,12 @@ export class Stacking {
         : `#${on}, which this was built on, was closed without merging`;
       const note = sentBack
         ? `**Held.** This was started from #${on}'s branch while #${on} was in review, and #${on} has been sent back to ${sentBack.stage}. ` +
-          `Resume it from its card in OpenADLC once #${on} is settled (or take the \`${PAUSED_LABEL}\` label off this issue and its pull request); ` +
-          `its pull request is then brought up to date with the base before it merges. ${START_OVER}`
+          `It goes on by itself once #${on} is approved again or merges: its reviews start then, and if #${on} changed files this changes too, ` +
+          `its builder first brings it up to date. To let it go sooner, resume it from its card in OpenADLC (or take the \`${PAUSED_LABEL}\` label ` +
+          `off this issue and its pull request); its pull request is then brought up to date with the base before it merges. ${START_OVER}`
         : `**Held.** This was started from #${on}'s branch while #${on} was in review, and #${on} was closed without merging, so its work is in this ` +
           `branch but will not land. Decide whether this still stands: resume it from its card in OpenADLC once that work lands another way ` +
-          `(or take the \`${PAUSED_LABEL}\` label off this issue and its pull request). ${START_OVER}`;
+          `(or take the \`${PAUSED_LABEL}\` label off this issue and its pull request). It goes on by itself if #${on} is reopened and approved. ${START_OVER}`;
       await client.addLabels(repo.fullName, issue.number, [PAUSED_LABEL]).catch(() => undefined);
       if (issue.prNumber) await client.addLabels(repo.fullName, issue.prNumber, [PAUSED_LABEL]).catch(() => undefined);
       await issues.setIssueLabels(repo.id, issue.number, [...new Set([...issue.labels, PAUSED_LABEL])]).catch(() => undefined);
@@ -391,6 +426,162 @@ export class Stacking {
       done.push(`${repo.name}#${issue.number}: held, #${on} ${sentBack ? 'was sent back' : 'was closed without merging'}`);
     }
     return done;
+  }
+
+  /**
+   * Lets go of each hold `holdWhatWasSentBack` put on once what it was built
+   * on is settled: the dependency back in Review with its gate green on the
+   * head it is at, or merged. Why goes on the issue, in the change's
+   * timeline, and in the stack's record, which is held again by a later
+   * send-back. A change whose dependency changed its files since it was
+   * built goes to its builder to be brought up to date first; one whose
+   * builder cannot take it is held again for a person, with why, and stays
+   * held until a person resumes it. A hold a person put on is theirs.
+   */
+  private async letGoWhatIsSettled(client: Client, repo: { id: string; name: string; fullName: string }): Promise<string[]> {
+    const done: string[] = [];
+    const held = (await stacks.listStacks(repo.id).catch((): Stack[] => [])).filter((stack) => stack.pausedAt);
+    if (held.length === 0) return done;
+    const holds = await readHolds();
+    for (const stack of held) {
+      const key = `${repo.name}#${stack.issue}`;
+      if (!waitsOnBase(holds[key])) continue;
+      const issue = await issues.getIssue(repo.id, stack.issue).catch(() => null);
+      if (!issue || !hasPausedLabel(issue.labels) || issue.stage === 'merged' || issue.stage === 'done') continue;
+      // Undefined when it could not be read, which says nothing; null when it is gone.
+      const dependency = await issues.getIssue(repo.id, stack.onIssue).catch(() => undefined);
+      if (dependency === undefined) continue;
+      // The dependency's pull request now: a new one if it was opened again.
+      const base = await client.getPullRequest(repo.fullName, dependency?.prNumber ?? stack.onPr).catch(() => null);
+      if (!base) continue;
+      const approved =
+        !base.merged &&
+        base.state === 'open' &&
+        dependency?.stage === 'review' &&
+        !hasAbandonedLabel(dependency.labels) &&
+        (await this.deps.gate?.(repo.fullName, base.headSha).catch(() => null)) === 'success';
+      if (!base.merged && !approved) continue;
+
+      const on = stack.onIssue;
+      const short = base.headSha.slice(0, 7);
+      const settled = base.merged ? `#${on}, which this was built on, merged` : `#${on}, which this was built on, was approved again at ${short}`;
+      // Its own pull request, read now: undefined when GitHub did not answer.
+      const own = issue.prNumber ? await client.getPullRequest(repo.fullName, issue.prNumber).catch(() => undefined) : null;
+      if (own === undefined) continue;
+      const open = own && own.state === 'open' ? own : null;
+      const redo = open ? await this.changedUnder(client, repo.fullName, stack.onHeadSha, base.headSha, open.headSha) : null;
+      if (redo === undefined) continue;
+
+      // Its pull request first: an issue let go with its pull request still
+      // labelled would be passed by on every sweep after, and the merge line
+      // would hold the pull request for good.
+      try {
+        if (issue.prNumber) await client.removeLabel(repo.fullName, issue.prNumber, PAUSED_LABEL);
+        await client.removeLabel(repo.fullName, issue.number, PAUSED_LABEL);
+      } catch (error) {
+        const why = error instanceof Error ? error.message.slice(0, 120) : String(error);
+        done.push(`${key}: not let go, though ${settled}: GitHub kept the ${PAUSED_LABEL} label (${why})`);
+        continue;
+      }
+      await issues.setIssueLabels(repo.id, issue.number, issue.labels.filter((label) => label !== PAUSED_LABEL)).catch(() => undefined);
+      await forgetHold(key, 'openadlc').catch(() => undefined);
+      await stacks.markLetGo(repo.id, issue.number, base.headSha).catch(() => undefined);
+      await this.record(STACK_LET_GO, {
+        repo: repo.name,
+        issue: issue.number,
+        on,
+        onHead: base.headSha,
+        merged: base.merged,
+        redo: redo?.files ?? null,
+        at: this.at(),
+      });
+      const subjects = [key, ...(issue.prNumber ? [`${repo.name}#${issue.prNumber}`] : [])];
+      const say = this.deps.say ?? sayOnCard;
+
+      if (!open || !redo) {
+        const next = open ? 'its reviews start now' : 'it goes on where it was';
+        await client.comment(repo.fullName, issue.number, `**Let go.** ${settled}, so this goes on: ${next}.`).catch(() => undefined);
+        await say(subjects, `Let go by itself: ${settled}. ${open ? 'Its reviews start now.' : 'It goes on where it was.'}`, {
+          stack: { on, onHead: base.headSha },
+        }).catch(() => false);
+        done.push(`${key}: let go, ${settled}; ${next}`);
+        continue;
+      }
+
+      // What it was built on changed under it: its builder brings it up to
+      // date, by the round a send-back opens, with this as its reason.
+      const onto = base.merged ? `\`${open.baseRef}\`, which #${on} merged into` : `#${on}'s branch \`${base.headRef}\` at ${short}`;
+      const changed =
+        redo.files.length > 0
+          ? `files this changes too since this was built on it: ${redo.files.map((file) => `\`${file}\``).join(', ')}`
+          : `since this was built on it (${redo.why})`;
+      const reason =
+        `${settled}, and changed ${changed}. Bring this branch up to date with ${onto}: merge it in, resolve what conflicts, ` +
+        `and make this change work on what #${on} became. Then push; it is reviewed again.`;
+      const refused = this.deps.rebuild
+        ? await this.deps
+            .rebuild({ repoName: repo.name, prNumber: open.number, reason })
+            .catch((error: unknown) => (error instanceof Error ? error.message : String(error)))
+        : 'nothing here hands work to a builder';
+      if (!refused) {
+        await client
+          .comment(repo.fullName, issue.number, `**Let go.** ${settled}, and changed what this was built on, so its builder brings this up to date with it first; then it is reviewed.`)
+          .catch(() => undefined);
+        await say(subjects, `Let go by itself: ${settled}. It changed what this was built on, so the builder brings it up to date first.`, {
+          stack: { on, onHead: base.headSha },
+        }).catch(() => false);
+        done.push(`${key}: let go, ${settled}; its builder brings it up to date first`);
+        continue;
+      }
+
+      // The builder cannot take it: held again, for a person this time.
+      const why = `${settled}, and changed what this was built on; its builder could not bring it up to date: ${refused}`;
+      await client.addLabels(repo.fullName, issue.number, [PAUSED_LABEL]).catch(() => undefined);
+      await client.addLabels(repo.fullName, open.number, [PAUSED_LABEL]).catch(() => undefined);
+      await issues.setIssueLabels(repo.id, issue.number, [...new Set([...issue.labels, PAUSED_LABEL])]).catch(() => undefined);
+      await recordHold(key, { by: 'openadlc', at: this.at(), why, needsPerson: refused }, 'openadlc').catch(() => undefined);
+      await stacks.markPaused(repo.id, issue.number).catch(() => undefined);
+      await this.record(STACK_PAUSED, { repo: repo.name, issue: issue.number, on, at: this.at(), needsPerson: refused });
+      await client
+        .comment(
+          repo.fullName,
+          issue.number,
+          `**Held for a person.** ${why}. Bring this branch up to date with ${onto}, then resume it from its card in OpenADLC (or take the \`${PAUSED_LABEL}\` label off this issue and its pull request). ${START_OVER}`,
+        )
+        .catch(() => undefined);
+      await say(subjects, `Held for a person: ${why}.`, { stack: { on, onHead: base.headSha } }).catch(() => false);
+      done.push(`${key}: held for a person, ${settled} and its builder could not bring it up to date: ${refused}`);
+    }
+    return done;
+  }
+
+  /**
+   * Whether what a stacked change was built on changed its files since:
+   * the files the dependency changed from the head the change started on to
+   * where it is now, against the files the change made on top of it. Null
+   * when they share none, or the dependency did not move; the shared files,
+   * or why it cannot be told, when it must be brought up to date; undefined
+   * when GitHub did not answer, to be asked on the next sweep.
+   */
+  private async changedUnder(
+    client: Client,
+    repoFullName: string,
+    builtOn: string | null,
+    baseHead: string,
+    head: string,
+  ): Promise<{ files: string[]; why?: string } | null | undefined> {
+    if (builtOn === baseHead) return null;
+    if (!builtOn) return { files: [], why: 'the head it was built on was not recorded' };
+    try {
+      const theirs = await client.changedFilesBetween(repoFullName, builtOn, baseHead);
+      const mine = await client.changedFilesBetween(repoFullName, builtOn, head);
+      if (!theirs || !mine) return { files: [], why: 'too many files changed to compare' };
+      const own = new Set(mine);
+      const shared = theirs.filter((file) => own.has(file));
+      return shared.length > 0 ? { files: shared } : null;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -511,6 +702,49 @@ export class Stacking {
     }
     return carried;
   }
+}
+
+/** A stacked change OpenADLC holds, as Needs you reads it (`heldStacks`). */
+export interface HeldStack {
+  repo: string;
+  issue: number;
+  /** The issue it was built on, and that one's pull request when it was stacked. */
+  on: number;
+  onPr: number;
+  /** When it was held, and why, as the hold was recorded. */
+  since: string;
+  why: string | null;
+  /** Why it waits on a person rather than on what it was built on (`ItemHold.needsPerson`); null while it waits on that. */
+  needsPerson: string | null;
+}
+
+/**
+ * The stacked changes OpenADLC holds among `held`, the issues labelled
+ * `openadlc:paused`: one read of the holds, and one of the stacks of each
+ * repository they are in. A hold a person put on, or took over, is not one.
+ */
+export async function heldStacks(held: readonly { repoId: string; repoName: string; number: number }[]): Promise<HeldStack[]> {
+  if (held.length === 0) return [];
+  const holds = await readHolds();
+  const found: HeldStack[] = [];
+  for (const repoId of new Set(held.map((one) => one.repoId))) {
+    const inRepo = held.filter((one) => one.repoId === repoId);
+    for (const stack of await stacks.listStacks(repoId)) {
+      const issue = inRepo.find((one) => one.number === stack.issue);
+      const hold = issue ? holds[`${issue.repoName}#${issue.number}`] : undefined;
+      if (!issue || !stack.pausedAt || hold?.by !== 'openadlc') continue;
+      found.push({
+        repo: issue.repoName,
+        issue: issue.number,
+        on: stack.onIssue,
+        onPr: stack.onPr,
+        since: hold.at || stack.pausedAt,
+        why: hold.why,
+        needsPerson: hold.needsPerson ?? null,
+      });
+    }
+  }
+  return found;
 }
 
 /** What a stacked build is told about where it starts. */

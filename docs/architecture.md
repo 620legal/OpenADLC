@@ -510,13 +510,24 @@ none yet, says its kind of work instead ("writing the change").
      that it made nothing, and the builder's resolution goes to a resolution
      round with that round's re-review.
    - If the dependency is sent back to build, or closed without merging, the
-     stacked issue is held (`openadlc:paused`) with a note, for a person to
-     resume or redo, once per stacking (`stacks.paused_at`).
+     stacked issue is held (`openadlc:paused`) with a note, once per stacking
+     (`stacks.paused_at`). The hold goes by itself once the dependency is
+     settled: back in Review with its gate green on the head it is at, or
+     merged. Why is said on the issue and in the card's timeline, the
+     stack is on the dependency's new head from then on (so a later
+     send-back holds it again), and the gate sweep of the same job starts
+     its reviews. When the files the dependency changed since the issue was
+     built on it overlap the issue's own, its builder first brings it up to
+     date, by the patch round a send-back opens (`SendBack.backToBuild`).
+     Only when that round cannot start, or the dependency will not land, does
+     the hold wait on a person (`ItemHold.needsPerson`), with a Needs you card
+     (`stack_held`) whose Resume lets it go; a hold a person put on is theirs.
    - It is one level only, and on unless the repository sets
      `stacking: false`. It records `stack.started`, `stack.updating` (the
      head about to be updated), `stack.made` `{repo, pr, from, to, at}` (the
      commit the update made, `to: null` when it conflicted, failed or landed
-     on a head that had moved), `stack.updated` and `stack.paused`.
+     on a head that had moved), `stack.updated`, `stack.paused` and
+     `stack.let_go` `{repo, issue, on, onHead, merged, redo, at}`.
 7. **Ship.** By the repository's rules, `.github/openadlc.yml` on its default
    branch (`apps/bridge/src/delivery-rules.ts`): a merge dispatches the testing
    deploy as the app (or as the automation account where the app cannot act
