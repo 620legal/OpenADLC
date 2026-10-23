@@ -480,6 +480,14 @@ describe('a card waiting with nothing going on it', () => {
     expect(waits({ kind: 'dependency', on: [] }, {}, build).text).toBe('Blocked by another issue · 32 min');
   });
 
+  it('names a dependency in another repository as the bridge wrote it', () => {
+    const build = { stage: 'build', labels: ['adlc:build', 'blocked'] };
+    const on = (extra: Record<string, unknown>) => ({ number: 2, stage: 'build', abandoned: false, task: null, waits: null, ...extra });
+    expect(waits({ kind: 'dependency', on: [on({ ref: '#1', number: 1 }), on({ ref: 'owner/a#2', stage: null })] }, {}, build).text).toBe(
+      'Waiting on #1 and owner/a#2 (not on the board) · 32 min',
+    );
+  });
+
   it('says each other thing it waits on, and for how long', () => {
     const lines: [WaitingReason, string, string?][] = [
       [{ kind: 'turn', seat: DESIGNER, after: ['openadlc#141', 'web#3'] }, 'Waiting its turn, after #141 and web#3 · 32 min'],

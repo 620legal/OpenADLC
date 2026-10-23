@@ -196,7 +196,7 @@ describe('a card waiting on another issue', () => {
     const waiting = read([blocked(141), issue(141, 'spec'), issue(99, 'spec', { labels: ['adlc:spec'] })], [designing]);
     expect(waiting.cards.get('OpenADLC#137')?.reason).toEqual({
       kind: 'dependency',
-      on: [{ number: 141, stage: 'spec', abandoned: false, task: null, waits: { kind: 'seat', seat: 'system-engineer' } }],
+      on: [{ ref: '#141', number: 141, stage: 'spec', abandoned: false, task: null, waits: { kind: 'seat', seat: 'system-engineer' } }],
     });
   });
 
@@ -205,7 +205,7 @@ describe('a card waiting on another issue', () => {
     const waiting = read([blocked(141), issue(141, 'spec')], [designing], { activity: (id) => (id === designing.id ? 'editing files' : null) });
     expect(waiting.cards.get('OpenADLC#137')?.reason).toEqual({
       kind: 'dependency',
-      on: [{ number: 141, stage: 'spec', abandoned: false, task: { bot: 'system-engineer', kind: 'spec', state: 'running', waitingOnYou: false, activity: 'editing files' }, waits: null }],
+      on: [{ ref: '#141', number: 141, stage: 'spec', abandoned: false, task: { bot: 'system-engineer', kind: 'spec', state: 'running', waitingOnYou: false, activity: 'editing files' }, waits: null }],
     });
   });
 
@@ -215,7 +215,7 @@ describe('a card waiting on another issue', () => {
       issue(120, 'done', { labels: ['adlc:done'] }),
       issue(121, 'done', { labels: ['adlc:done', 'openadlc:abandoned'] }),
     ]);
-    expect(waiting.cards.get('OpenADLC#137')?.reason).toEqual({ kind: 'dependency', on: [expect.objectContaining({ number: 121, stage: 'done', abandoned: true })] });
+    expect(waiting.cards.get('OpenADLC#137')?.reason).toEqual({ kind: 'dependency', on: [expect.objectContaining({ ref: '#121', number: 121, stage: 'done', abandoned: true })] });
   });
 
   it('does not wait on a dependency that shipped before the week the board reads, once the dispatcher took the label off', () => {
@@ -225,7 +225,41 @@ describe('a card waiting on another issue', () => {
 
   it('says it waits on one the board does not know', () => {
     const waiting = read([blocked(404)]);
-    expect(waiting.cards.get('OpenADLC#137')?.reason).toEqual({ kind: 'dependency', on: [{ number: 404, stage: null, abandoned: false, task: null, waits: null }] });
+    expect(waiting.cards.get('OpenADLC#137')?.reason).toEqual({ kind: 'dependency', on: [{ ref: '#404', number: 404, stage: null, abandoned: false, task: null, waits: null }] });
+  });
+
+  describe('in another repository', () => {
+    const repos = [
+      { ...REPOS[0]!, fullName: '620legal/OpenADLC' },
+      { id: 'repo-2', name: 'a', fullName: 'owner/a', stageModes: {} as Record<string, string> },
+    ];
+    const blockedOn = (body: string) => issue(137, 'build', { labels: ['adlc:build', 'blocked'], body });
+
+    it('names it as written, and keeps waiting on it after this repository’s issue of the same number shipped', () => {
+      const theirs = issue(2, 'build', { repoId: 'repo-2', repoName: 'a', labels: ['adlc:build'] });
+      const building = task('a#2', 'bot-builder', 'implement', 'running', { repoId: 'repo-2' });
+      const waiting = read([blockedOn('## Dependencies\n\n- owner/a#2\n'), issue(2, 'done', { labels: ['adlc:done'] }), theirs], [building], { repos });
+      expect(waiting.cards.get('OpenADLC#137')?.reason).toEqual({
+        kind: 'dependency',
+        on: [{ ref: 'owner/a#2', number: 2, stage: 'build', abandoned: false, task: expect.objectContaining({ bot: 'openadlc-atlas-janedoe', kind: 'implement' }), waits: null }],
+      });
+    });
+
+    it('does not wait on it once it shipped', () => {
+      const waiting = read([blockedOn('## Dependencies\n\n- owner/a#2\n- #5\n'), issue(2, 'done', { repoId: 'repo-2', repoName: 'a', labels: ['adlc:done'] })], [], { repos });
+      expect(waiting.cards.get('OpenADLC#137')?.reason).toEqual({ kind: 'dependency', on: [expect.objectContaining({ ref: '#5', number: 5 })] });
+    });
+
+    it('names one in a repository the install does not manage, or that spells out its own', () => {
+      const waiting = read([blockedOn('## Dependencies\n\n- other/b#3\n- 620legal/openadlc#4\n'), issue(4, 'review')], [], { repos });
+      expect(waiting.cards.get('OpenADLC#137')?.reason).toEqual({
+        kind: 'dependency',
+        on: [
+          { ref: 'other/b#3', number: 3, stage: null, abandoned: false, task: null, waits: null },
+          expect.objectContaining({ ref: '#4', number: 4, stage: 'review' }),
+        ],
+      });
+    });
   });
 });
 

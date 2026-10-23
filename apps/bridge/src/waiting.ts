@@ -7,7 +7,10 @@ import {
   hasNextLabel,
   hasPausedLabel,
   maxTasksOf,
-  parseDependencies,
+  formatDependencyRef,
+  namesRepository,
+  parseDependencyRefs,
+  type DependencyRef,
   type PathPolicy,
   type StageKey,
   type TaskKind,
@@ -74,6 +77,8 @@ export interface SeatHolder {
 
 /** An issue a card depends on, and what is happening on it now. */
 export interface DependencyNow {
+  /** As the card names it: `#N` in its own repository, `owner/name#N` in another. */
+  ref: string;
   number: number;
   /** Its stage, or null when the board has no row for it. */
   stage: StageKey | null;
@@ -200,7 +205,8 @@ export interface WaitingInput extends WaitingContext {
   /** Every task going in the install: queued, running or paused. */
   live: readonly TaskFacts[];
   bots: readonly { id: string; name: string; role?: string; maxTasks?: number | null }[];
-  repos: readonly { id: string; name: string; stageModes: Partial<Record<string, string>>; concurrency?: number }[];
+  /** `fullName` (`owner/name`) finds a dependency written as `owner/name#N`; without it only `#N` is found. */
+  repos: readonly { id: string; name: string; fullName?: string; stageModes: Partial<Record<string, string>>; concurrency?: number }[];
   /** The tasks waiting on a question nobody has answered, by id. */
   gated: ReadonlySet<string>;
   /** What a running task is doing, by id, for the line of a card that depends on it (`activityOf`). */
@@ -286,7 +292,6 @@ export function waitingOf(input: WaitingInput): Waiting {
     const all = input.bots.filter((bot) => bot.role === role).map(seat);
     return stage === 'build' ? all : all.slice(0, 1);
   };
-  const issueIn = (repoName: string, number: number) => issues.find((issue) => issue.repoName === repoName && issue.number === number) ?? null;
 
   const holdOf = (card: WaitingCard): Hold | null => {
     const { issue } = card;
@@ -412,14 +417,28 @@ export function waitingOf(input: WaitingInput): Waiting {
   const botName = (id: string) => input.bots.find((bot) => bot.id === id)?.name ?? 'a bot';
   const seatOfReason = (reason: WaitingReason | undefined): string | null =>
     reason && 'seat' in reason ? reason.seat.name : null;
-  const dependencyNow = (repoName: string, number: number): DependencyNow => {
-    const issue = issueIn(repoName, number);
-    const ref = `${repoName}#${number}`;
-    const subjects = new Set(issue ? subjectsOf(issue) : [ref]);
-    const going = (byRef.get(ref)?.active ?? input.live.filter((task) => subjects.has(task.subjectRef) && isActive(task))).filter(isActive);
+  // A dependency in another repository the install manages is found there by
+  // its full name and named as written. Read as a number it was this
+  // repository's #N: once that one shipped, the card said "Blocked by another
+  // issue" while it still waited on the other repository's.
+  const resolveRef = (card: WaitingCard, ref: DependencyRef) => {
+    const repo =
+      ref.repo === null
+        ? { id: card.issue.repoId, name: card.issue.repoName }
+        : input.repos.find((one) => one.fullName !== undefined && namesRepository(ref, one.fullName));
+    const issue = repo ? (issues.find((one) => one.repoId === repo.id && one.number === ref.number) ?? null) : null;
+    const shown = repo?.id === card.issue.repoId ? `#${ref.number}` : formatDependencyRef(ref);
+    return { repoName: repo?.name ?? null, number: ref.number, issue, shown };
+  };
+  const dependencyNow = ({ repoName, number, issue, shown }: ReturnType<typeof resolveRef>): DependencyNow => {
+    // One in a repository the install does not manage has nothing going on it that the board sees.
+    const ref = repoName === null ? null : `${repoName}#${number}`;
+    const subjects = new Set(issue ? subjectsOf(issue) : ref ? [ref] : []);
+    const going = ((ref ? byRef.get(ref)?.active : undefined) ?? input.live.filter((task) => subjects.has(task.subjectRef) && isActive(task))).filter(isActive);
     const leading = going.find((task) => task.state === 'running') ?? going[0];
-    const own = reasons.get(ref);
+    const own = ref ? reasons.get(ref) : undefined;
     return {
+      ref: shown,
       number,
       stage: issue?.stage ?? null,
       abandoned: hasAbandonedLabel(issue?.labels),
@@ -440,11 +459,10 @@ export function waitingOf(input: WaitingInput): Waiting {
     if (reason?.kind !== 'dependency') continue;
     // One not read is named too: with the label still on, the dispatcher
     // has not found it shipped.
-    const unshipped = parseDependencies(card.issue.body ?? null).filter((number) => {
-      const dependency = issueIn(card.issue.repoName, number);
-      return !dependency || !dependencyIsSatisfied(dependency);
-    });
-    reasons.set(card.ref, { kind: 'dependency', on: unshipped.map((number) => dependencyNow(card.issue.repoName, number)) });
+    const unshipped = parseDependencyRefs(card.issue.body ?? null)
+      .map((ref) => resolveRef(card, ref))
+      .filter((found) => !found.issue || !dependencyIsSatisfied(found.issue));
+    reasons.set(card.ref, { kind: 'dependency', on: unshipped.map(dependencyNow) });
   }
 
   // When a seat last finished something, among the tasks read: a seat that

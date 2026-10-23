@@ -207,7 +207,8 @@ function waitingLine(card: BoardCard, waiting: CardWaiting, context: CardContext
       if (reason.on.length === 0) return line(['Blocked by another issue']);
       const named = reason.on.map((on) => {
         const doing = dependencyDoing(on, context);
-        return doing ? `#${on.number} (${doing})` : `#${on.number}`;
+        const named = on.ref ?? `#${on.number}`;
+        return doing ? `${named} (${doing})` : named;
       });
       return line([`Waiting on ${someInWords(named)}`]);
     }
