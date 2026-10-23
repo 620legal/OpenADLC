@@ -83,7 +83,7 @@ import {
 import { REPO_DEFAULTS, buildAppManifest, hasIgnoreLabel, hasNextLabel, hasPausedLabel, isGitHubLogin, loginCandidates, manifestPostUrl, sameLogin } from '@openadlc/shared';
 import { refuseWhilePaused } from './pause-work.js';
 import { HttpFailure, Router, STREAMING, WithStatus } from './router.js';
-import { RequestQueue, stillTried, withPositions } from './request-queue.js';
+import { readyNow, RequestQueue, stillTried, withPositions } from './request-queue.js';
 import type { Started } from './build-start.js';
 import { effectiveConfig, storeWebhookSecret } from './effective-config.js';
 import { automationBotName } from './automation-bot.js';
@@ -125,7 +125,7 @@ import { defaultItemLinkDeps, registerItemLinkRoutes, registerItemRoutes } from 
 import { itemKey, itemOf, offeredGate, requestSubject, resolveItem } from './items.js';
 import { PlanChanges, registerPlanChangeRoutes } from './plan-changes.js';
 import { humanReviewReader } from './human-review-read.js';
-import { readSeatPauses } from './seat-pause.js';
+import { readSeatPauses, seatPausedReason } from './seat-pause.js';
 import type { HealthAction } from '@openadlc/shared';
 import { attachmentIds, claimableFor, claimWindowStart, registerAttachmentRoutes } from './attachment-routes.js';
 import { registerDesignMemoryRoutes } from './design-memory.js';
@@ -187,6 +187,12 @@ export interface ApiDeps {
 export interface AfterWhere {
   taskId?: string | null;
   subjectRef?: string | null;
+  /**
+   * Whose thread the subject's is, when it may not have one yet: a request
+   * answered before its triage started has none, and a failed start said
+   * only in the log never reached the person who sent it.
+   */
+  thread?: { botId: string; repoId: string | null };
 }
 
 /**
@@ -267,12 +273,17 @@ export class Afterwards {
   }
 }
 
-/** The task's own thread, or the newest one about the subject; null when there is neither. */
+/**
+ * The task's own thread, or the newest one about the subject, or the one
+ * `thread` says it has when it has none yet; null when there is none of these.
+ */
 async function threadOf(where: AfterWhere): Promise<string | null> {
   const task = where.taskId ? await tasks.getTask(where.taskId) : null;
   if (task) return (await threads.ensureThread({ botId: task.botId, repoId: task.repoId, subjectRef: task.subjectRef })).id;
   if (!where.subjectRef) return null;
-  return (await threads.listThreadsForSubject(where.subjectRef)).at(-1)?.id ?? null;
+  const newest = (await threads.listThreadsForSubject(where.subjectRef)).at(-1)?.id ?? null;
+  if (newest || !where.thread) return newest;
+  return (await threads.ensureThread({ ...where.thread, subjectRef: where.subjectRef })).id;
 }
 
 /** The plan-change controls, wired to this bridge's gates, tasks, rules and signing keys. */
@@ -340,6 +351,26 @@ async function triageFromQueue(queue: RequestQueue, requestId: string, bot: stri
   if (started) return { request, task: started.task, bot: started.bot };
   if (request.state !== 'queued') return { request, task: null, bot };
   return { request, queued: true, position: request.queuePosition, bot };
+}
+
+/**
+ * Whether the queue's walk would start another request before this one: one
+ * ahead of it that is ready now and not in a paused repository, as
+ * `RequestQueue.startQueued` passes over the rest. Its place in line counted
+ * them all, and a request behind one held by its repository's pause was told
+ * it waits while it started at once.
+ */
+async function startsAhead(requestId: string, gate: ApiDeps['dispatchGate']): Promise<boolean> {
+  const queued = await requests.listQueued();
+  const ahead = queued.slice(0, Math.max(queued.findIndex((one) => one.id === requestId), 0));
+  if (ahead.length === 0) return false;
+  const now = Date.now();
+  const repoList = await repos.listRepos();
+  return ahead.some((one) => {
+    if (!readyNow(one, now)) return false;
+    const repo = one.repoId ? repoList.find((candidate) => candidate.id === one.repoId) : null;
+    return !(repo && gate?.paused(repo.name));
+  });
 }
 
 /**
@@ -1627,7 +1658,33 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
 
     // While work is paused, across the install or in its repository, it is
     // kept and waits in line, started when work resumes.
-    return answered(await triageFromQueue(queue, record.id, intake.name), deps.dispatchGate?.paused(repo?.name) ?? null);
+    const paused = deps.dispatchGate?.paused(repo?.name) ?? null;
+    if (!afterwards) return answered(await triageFromQueue(queue, record.id, intake.name), paused);
+
+    // Answered once it is saved. Waiting for the drain kept the dialog on
+    // "Sending…" while intake's session was prepared and started, which takes
+    // seconds. The answer is a prediction, read before the drain: it may say
+    // a request waits that then starts at once, never that a task exists.
+    const [request] = await withPositions([record]);
+    const waits =
+      Boolean(paused) ||
+      Boolean(await seatPausedReason(intake.name).catch(() => null)) ||
+      !(await tasks.seatHasRoom(intake.id)) ||
+      (await startsAhead(record.id, deps.dispatchGate));
+    const subject = requestSubject(record.id);
+    const where: AfterWhere = { subjectRef: subject, thread: { botId: intake.id, repoId: repo?.id ?? null } };
+    afterwards.run(where, 'Starting its triage', async () => {
+      // `queue.drain()` itself, not `triageFromQueue`, which swallows what
+      // it throws. The request stays queued, or claimed and put back by the
+      // next drain's `recover`, and the sweep starts it.
+      await queue.drain().catch((error: unknown) =>
+        afterwards.say(where, 'It is saved and waits in line; starting its triage failed, and the queue tries again within a minute', error),
+      );
+    });
+    if (waits) {
+      return new WithStatus(202, { request, subject, queued: true, position: request!.queuePosition, bot: intake.name, ...(paused ? { paused } : {}) });
+    }
+    return { request, subject, task: null, bot: intake.name, starting: true };
   });
 
   router.post('/v1/requests/:id/triage', async ({ params }) => answered(await startTriage({ ...deps, requestQueue: queue }, params.id ?? '')));
