@@ -365,6 +365,12 @@ an app made by hand, or before it was kept, has one pasted in Settings → GitHu
 can**, as before; tasks still run, hostd logs that the token is not scoped, and
 the `app-client-secret` check is a card on the board until a secret is given.
 The bridge's own calls use the account's token either way.
+A console request's triage (subject `request:<id8>`) is the one task that is
+not narrowed, even when the person named a repository: intake may file an
+issue in another managed repository the request also needs (ADR 0012), which a
+token narrowed to the named one could not. It reaches every repository the
+crew account can, as a request naming no repository always did; its skill's
+tool denials (no `pr create`, `pr merge` or `pr review`) are unchanged.
 
 Narrowing tokens does not separate what a crew account itself can reach. Keep
 repositories with different confidentiality apart: give them separate crew

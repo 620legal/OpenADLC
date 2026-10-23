@@ -148,6 +148,17 @@ export function sessionNameFor(skill: string, taskId: string): string {
   return `${skill.replace(/[:.]/g, '-')}-${taskId.replace(/[^A-Za-z0-9]/g, '').slice(0, 8)}`;
 }
 
+/**
+ * The repository a task's GitHub token is narrowed to. A console request's
+ * triage is not narrowed: it may file an issue in another managed repository
+ * than the one the person named (ADR 0012), and a token narrowed to the named
+ * one had GitHub refuse that `gh issue create --repo`. A request that named
+ * none already ran with the account's token, so this is the same reach.
+ */
+export function tokenRepoOf(subjectRef: string, repoFullName: string | null): string | null {
+  return subjectRef.startsWith('request:') ? null : repoFullName;
+}
+
 async function storedSecret(ref: string): Promise<string | null> {
   const stored = (await getSecretStore().get(ref))?.trim() ?? '';
   return stored.length > 0 ? stored : null;
@@ -517,7 +528,7 @@ export class TaskRunner {
     if (login) ensureLoginDir(this.config.loginRoot, login.accountId);
     // Its GitHub token, before a computer or a worktree: a bridge that cannot
     // mint one fails the start with its reason. A resumption asked already.
-    const token = prepared ? prepared.githubToken : await this.githubTokenFor(bot, repo?.fullName ?? null);
+    const token = prepared ? prepared.githubToken : await this.githubTokenFor(bot, tokenRepoOf(input.subjectRef, repo?.fullName ?? null));
     // The task's own computer, sized as its seat says (config/bots.yaml: it was
     // parsed and never passed, so every computer had the driver's default),
     // with its own database emptied and its own directory. Its clone goes in
@@ -887,7 +898,7 @@ export class TaskRunner {
     // resume the bridge tries again later (`TaskService.resumeAnswered`).
     // Asked after `end`, such a refusal left the paused task's computer given
     // back while its row still named one, which counted against its seat.
-    const githubToken = await this.githubTokenFor(bot, repo?.fullName ?? null);
+    const githubToken = await this.githubTokenFor(bot, tokenRepoOf(task.subjectRef, repo?.fullName ?? null));
 
     await this.end(taskId, 'resuming');
 

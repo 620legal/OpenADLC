@@ -47,6 +47,12 @@ an array column.
   for the task's own repository otherwise. It signs a number only for one of
   the request's issues, or for an issue whose body on GitHub carries the
   request's line, which is filed first. Every other task signs as before.
+- **A request's triage runs with a token that is not narrowed to one
+  repository.** A task's token is otherwise scoped to its repository, so a
+  request that named one could not file in a second. It reaches every
+  repository the crew account can, as a request naming no repository already
+  did. Narrowing it to exactly the managed repositories would change the token
+  broker, and is left for its own issue.
 - **Intake confirms every draft once, and asks before filing outside the
   chosen repository.** `request.md` lists the managed repositories with their
   GitHub descriptions, and `open-issues.md` has a section per repository, but

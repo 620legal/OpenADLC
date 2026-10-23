@@ -360,6 +360,24 @@ describe('the GitHub token a task is given', () => {
     }
   });
 
+  it('is not narrowed for a console request’s triage, which may file in another managed repository', async () => {
+    // Narrowed to the repository the person named, `gh issue create --repo` in
+    // the second repository intake was told to add was refused by GitHub.
+    vi.mocked(bots.getBotByName).mockResolvedValue(crew({ githubLogin: 'atlas-janedoe' }));
+    vi.mocked(repos.getRepoByName).mockResolvedValue({ id: 'repo-widgets', name: 'widgets', fullName: 'exampleco/widgets', defaultBranch: 'main' } as never);
+    const tokenForTask = vi.fn(async (_bot: string, _repository: string | null) => {
+      throw new Error('stop here: only what was asked matters');
+    });
+    const runner = new TaskRunner(config(), driver(), { tokenForTask } as never, async () => ({ model: 'claude-opus-5', modelAlias: null, account: null }));
+
+    try {
+      await expect(runner.start({ ...START, repo: 'widgets', kind: 'intake', skill: 'triage', subjectRef: 'request:9058c5b8' })).rejects.toThrow(/stop here/);
+      expect(tokenForTask.mock.calls).toEqual([['atlas', null]]);
+    } finally {
+      vi.mocked(repos.getRepoByName).mockReset();
+    }
+  });
+
   it('fails the start with the bridge’s reason when none can be minted, before a computer is taken', async () => {
     // It used to start with no token: a private clone failed with git's
     // "could not read Username", and a public one ran a whole session first.
