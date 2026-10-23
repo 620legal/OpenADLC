@@ -101,7 +101,7 @@ So does each bot's avatar color, chosen in Settings → Appearance
 | `model` | A model id, or `newest:<family>` to follow a family |
 | `sidecarDb` | Whether each of the seat's tasks gets a database of its own, for `make setup`, on the host's task database server (docker driver); in a repository given Postgres servers of its own for its tasks, those instead ([self-hosting](self-hosting.md#a-postgres-server-of-the-tasks-own)) |
 | `cpus`, `memoryGb` | What each of the seat's task computers is given (docker driver); default 1 and 2. Stored on the row at every `openadlc up` |
-| `maxTasks` | How many tasks the seat runs at once, 1 to 16, each in a computer of its own and all as its one account. Left out, the row keeps what it has — 1 for a new seat, or what a person set in Crew → "tasks at once" (`PATCH /v1/crew/:bot/tasks-at-once`, admin only, audited); written here, the file wins at every `openadlc up`. Keep a seat on an OpenAI or xAI subscription at 1: its CLI refreshes one sign-in for every task on it |
+| `maxTasks` | How many tasks the seat runs at once, 1 to 16, each in a computer of its own and all as its one account. Left out, the row keeps what it has — 1 for a new seat, or what a person set in Crew → "tasks at once" (`PATCH /v1/crew/:bot/tasks-at-once`, admin only, audited); written here, the file wins at every `openadlc up`. Counted are its queued and running tasks; a task paused on a person's answer is not, so the seat goes on to other work while the question waits. The answer resumes the paused task even when the seat has filled since — it is the same task going on, not a new start — and the Crew page says so ("2 running, 1 at once: #137 resumed after an answer"). A paused task's computer, while it is kept (`OPENADLC_PAUSED_KEEP_MINUTES`), still counts against its host's room, and a resume waits for a host with room; the seat never starts the same work on a subject beside its paused task. Keep a seat on an OpenAI or xAI subscription at 1: its CLI refreshes one sign-in for every task on it (at 1, only such a resume runs a second task beside the first) |
 
 Read but not used: `skills` (the skill follows the task). There is no `teams`
 key any more: a bot's repository role comes from the collaborator invitation
@@ -262,7 +262,8 @@ workflow as the OpenADLC app:
 ```yaml
 version: 1
 testing:
-  on: merge                    # or none: merging is shipping, straight to Done
+  on: merge                    # or none: merging is shipping, straight to Done;
+                               # or release: Done when a published release has it
   url: https://testing.example.com   # where the QA bot points; no default
   workflow: deploy-testing     # dispatched with the merge commit as `sha`
   smoke: smoke-testing         # green promotes; red reverts and sends back to build
@@ -354,6 +355,40 @@ with no later deploy to carry it, lets the lease go and leaves the card in
 Ship ([troubleshooting](troubleshooting.md#a-stacked-issue-waits-after-its-base-merged)).
 When the newest merge's testing deploy had nothing to deploy, the older merges
 it carries go to Done with it, those whose own deploy never ran included.
+
+#### Shipping by release
+
+`testing: on: release` is a repository that ships as a release, as OpenADLC
+itself does: its installs take a change only from a `v*` release, so Done means
+"in a release" there, not "merged". A merge then dispatches no testing deploy,
+nothing is promoted, and the merged change's lease is let go as for a merge
+that deploys nothing. Its card stays in Ship, saying **Merged · ships with the
+next release**, and its timeline says it waits for one. A published release,
+not a draft or a prerelease, whose tag's commit contains the merge (GitHub's
+comparison of the merge with the tag is `ahead` or `identical`) moves every
+such card to Done at once (`apps/bridge/src/release-shipping.ts`): `released in
+vX.Y.Z` on the stage move and in the card's timeline, `deploy.shipped_by_release`
+in the audit log, and the card's shipped time is the release's publish time. A
+merge made after the release was published, or one its tag does not contain,
+stays for the next.
+
+A release is heard from its `release` delivery (`published`), and from the
+deploy sweep, which lists the repository's releases published since the oldest
+merge in Ship (at most five pages of a hundred) and compares each merge with
+each of them once per pass, the oldest first. So a missed delivery, a
+prerelease later made a release, or an app not subscribed to **Release** events
+still moves the cards, at the next sweep. The app's manifest asks for the
+event; an app made before it did is told so by the `ships-by-release` check (a
+warning, only where a repository ships by release) and on Settings →
+Repositories, with the app's Permissions & events page to tick it on.
+
+Settings → Repositories has a **Ships by release** box for a repository whose
+rules are not in `.github/openadlc.yml`. Ticked, it writes `testing.on:
+release` into the repository's stored rules (`repos.delivery_rules`), or, where
+there were none, a row saying only that; unticked, that row is removed and the
+Testing deploy choice is read again, and other stored rules get `testing.on:
+merge` back. 620legal/OpenADLC's stored rules are set to ship by release
+(migration `0154`), and the box changes them.
 
 The same file says which changes may be built side by side when their files
 overlap (`apps/dispatcher/src/overlap.ts`). The defaults, which a file that

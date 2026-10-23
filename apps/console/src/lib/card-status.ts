@@ -1,5 +1,6 @@
-import type { AttentionItem, BoardCard, BoardColumn, CardTask, MergeLineEntry } from './api';
-import { ago, duration, ordinal } from './when';
+import type { AttentionItem, BoardCard, BoardColumn, CardTask, CardWaiting, DependencyNow, MergeLineEntry, SeatHolder } from './api';
+import { stageOf } from './stages';
+import { ago, duration, ordinal, untilIn } from './when';
 
 /**
  * What a card says about itself, in a line a person reads without knowing how
@@ -36,6 +37,13 @@ export interface CardStatus {
   live?: boolean;
   /** Where the line goes, when it names something that can be opened: the issue a request became. */
   href?: string;
+  /**
+   * It has waited past the bridge's limit with its seat free and nothing
+   * started: a still mark in the alarm colour, read as "stuck". A card that
+   * said "Waiting for a design pass" for half an hour looked no different
+   * from one that had waited a minute.
+   */
+  stuck?: boolean;
 }
 
 /**
@@ -141,6 +149,152 @@ export function heldApprovalsOf(attention: readonly AttentionItem[]): ReadonlyMa
   return held;
 }
 
+/** `#11`, `#11 (waiting for your answer)`, `a request`: who holds a seat, in words. */
+function holderInWords(holder: SeatHolder): string {
+  const what = holder.ref.startsWith('request:') ? 'a request' : holder.number !== null ? `#${holder.number}` : holder.ref;
+  return holder.waitingOnYou ? `${what} (waiting for your answer)` : what;
+}
+
+/** At most three, then how many more: a seat that runs sixteen at once is not a line of sixteen numbers. */
+function someInWords(parts: readonly string[]): string {
+  const shown = parts.length > 3 ? [...parts.slice(0, 2), `${parts.length - 2} more`] : [...parts];
+  return shown.length > 1 ? `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}` : (shown[0] ?? '');
+}
+
+/** A card's ref as its own board says it: `#141` in its own repository, `web#12` in another. */
+function refInWords(ref: string, repo: string): string {
+  const at = ref.lastIndexOf('#');
+  return at > 0 && ref.slice(0, at) === repo ? ref.slice(at) : ref;
+}
+
+/** What a waiting card's dependency is doing now, in a few words, or nothing when the board does not know. */
+function dependencyDoing(on: DependencyNow, context: CardContext): string | null {
+  const task = on.task;
+  if (task) {
+    if (task.state === 'running') return `${context.role?.(task.bot) || context.said(task.bot)} ${task.activity || WORKING[task.kind] || 'working'}`;
+    if (task.waitingOnYou) return 'waiting for your answer';
+    return task.state === 'queued' ? 'queued' : 'paused';
+  }
+  if (on.abandoned) return 'closed without merging';
+  switch (on.waits?.kind) {
+    case 'seat':
+      return on.waits.seat ? `waiting for ${context.said(on.waits.seat)}` : 'waiting for its seat';
+    case 'free':
+      return 'not started';
+    case 'turn':
+      return 'waiting its turn';
+    case 'dependency':
+      return 'waiting on another issue';
+    case 'lease':
+      return 'waiting for files another change holds';
+    case undefined:
+      break;
+    default:
+      return 'waiting';
+  }
+  if (on.stage === null) return 'not on the board';
+  if (on.stage === 'review') return 'in review';
+  if (on.stage === 'merged') return 'merged, not shipped yet';
+  return null;
+}
+
+/**
+ * A card with nothing going on it says why, on what, and for how long, from
+ * the bridge (`waitingOf`): "Waiting for system-engineer · busy with #137 ·
+ * 32 min", "Not started · system-engineer is free · next sweep in 24 min ·
+ * 41 min". It used to say its stage's line,
+ * "Waiting for a design pass", for half an hour, and a person could not tell
+ * waiting from stuck.
+ */
+function waitingLine(card: BoardCard, waiting: CardWaiting, context: CardContext): CardStatus {
+  const age = duration(waiting.since, context.now);
+  const line = (parts: (string | null | undefined)[], tone: StatusTone = 'muted', mark: CardStatus['mark'] = null): CardStatus => ({
+    text: [...parts, age].filter(Boolean).join(' · '),
+    tone,
+    mark,
+  });
+  const reason = waiting.reason;
+  const title = stageOf(card.stage)?.title ?? card.stage;
+  switch (reason.kind) {
+    case 'held':
+      return line(['On hold']);
+    case 'dependency': {
+      if (reason.on.length === 0) return line(['Blocked by another issue']);
+      const named = reason.on.map((on) => {
+        const doing = dependencyDoing(on, context);
+        const named = on.ref ?? `#${on.number}`;
+        return doing ? `${named} (${doing})` : named;
+      });
+      return line([`Waiting on ${someInWords(named)}`]);
+    }
+    case 'triage':
+      return line(['Waiting for triage']);
+    case 'not_ready':
+      return line(['Not ready to build yet']);
+    case 'for_person':
+      return line(['Left for a person']);
+    case 'paused':
+      return line([context.pausedRepos?.includes(card.repo) ? `Waiting until ${card.repo} is resumed` : 'Waiting until work is resumed']);
+    case 'not_staffed':
+      return line([`${title} is left to a person in ${card.repo}`, 'move it on by hand']);
+    case 'no_seat':
+      return line([`Nobody staffs ${title}`, 'add a seat on Crew'], 'attention', 'dot');
+    case 'cap':
+      return line(['Held at the spending cap'], 'attention', 'dot');
+    case 'seat_paused':
+      return line([`Waiting for ${context.said(reason.seat.name)}`, 'paused on Crew']);
+    case 'blocked':
+      return line([`Waiting: ${reason.why}`], 'attention', 'dot');
+    case 'no_dispatcher':
+      return line(['Waiting: the dispatcher isn’t running'], 'attention');
+    case 'seat': {
+      const who = `${context.said(reason.seat.name)}${reason.seats > 1 ? ` and ${reason.seats - 1} more` : ''}`;
+      const busy = reason.holders.length > 0 ? `busy with ${someInWords(reason.holders.map(holderInWords))}` : 'busy';
+      return line([`Waiting for ${who}`, busy]);
+    }
+    case 'concurrency':
+      return line([`Waiting: ${card.repo} builds ${reason.limit} at a time`, reason.holders.length > 0 ? `busy with ${someInWords(reason.holders.map(holderInWords))}` : null]);
+    case 'turn':
+      return line([`Waiting its turn, after ${someInWords(reason.after.map((ref) => refInWords(ref, card.repo)))}`]);
+    case 'lease': {
+      const paths = reason.paths.length > 1 ? `${reason.paths[0]} and ${reason.paths.length - 1} more` : (reason.paths[0] ?? 'its files');
+      return line([`Waiting for ${someInWords(reason.on.map((number) => `#${number}`))} to let go of ${paths}`]);
+    }
+    case 'free': {
+      const seat = context.said(reason.seat.name);
+      // When it starts: work its seat turned away as soon as the seat has
+      // room, other intake and design on the sweep, a build on the
+      // dispatcher's next look.
+      const when =
+        reason.by === 'runner'
+          ? 'starts within a minute'
+          : reason.by === 'sweep'
+            ? reason.nextAt === null
+              ? 'no sweep is scheduled'
+              : reason.nextAt
+                ? `next sweep ${untilIn(reason.nextAt, context.now)}`
+                : null
+            : null;
+      if (waiting.stuck) {
+        return { ...line([`Stuck · ${seat} is free and nothing started it`, when], 'alarm', 'dot'), stuck: true };
+      }
+      return line([reason.by === 'dispatcher' ? 'Next up' : 'Not started', `${seat} is free`, when]);
+    }
+  }
+}
+
+/**
+ * " · holds openadlc's build slot", for a build paused on a question while
+ * other builds wait for its repository's builds at once: a paused task takes
+ * no slot of its seat, but still one of its repository's builds.
+ */
+function holdsWords(active: readonly CardTask[]): string {
+  const holds = active.find((task) => task.holds)?.holds;
+  if (!holds) return '';
+  const slot = holds.limit === 1 ? `${holds.repo}’s build slot` : `one of ${holds.repo}’s ${holds.limit} build slots`;
+  return ` · holds ${slot}${holds.waiting > 1 ? ` (${holds.waiting} waiting)` : ''}`;
+}
+
 /** What a running task is doing, by its kind, for one that has not said a step yet. */
 const WORKING: Record<string, string> = {
   intake: 'shaping the issue',
@@ -237,7 +391,10 @@ export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
         mark: null,
       };
     }
-    return { text: 'Waiting for your answer', tone: 'attention', mark: 'dot' };
+    // What its question holds up: a paused build takes one of its
+    // repository's builds at once, and the builds behind it wait on the
+    // answer as much as it does.
+    return { text: `Waiting for your answer${holdsWords(active)}`, tone: 'attention', mark: 'dot' };
   }
 
   // A reviewer's review failed and nothing has run it again: nothing is
@@ -250,11 +407,15 @@ export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
   if (task?.state === 'running') return runningLine(card, task, active, context);
   if (task?.state === 'queued') return { text: 'Queued', tone: 'muted', mark: null };
   // Paused with no question open: answered, and not started again yet.
-  if (task?.state === 'paused') return { text: 'Paused', tone: 'muted', mark: null };
+  if (task?.state === 'paused') return { text: `Paused${holdsWords(active)}`, tone: 'muted', mark: null };
 
   if (card.last?.state === 'failed' && card.stage !== 'done') {
     return { text: 'Could not finish · needs you', tone: 'alarm', mark: 'dot' };
   }
+
+  // Why nothing is going on it, as the bridge worked it out; an older
+  // bridge says nothing, and the card says its stage's line below.
+  if (card.waiting) return waitingLine(card, card.waiting, context);
 
   switch (card.stage) {
     case 'done': {
@@ -263,6 +424,9 @@ export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
       return { text: when ? `Shipped ${when}` : 'Shipped', tone: 'muted', mark: 'check' };
     }
     case 'merged':
+      // No deploy is coming where a release ships it: "waiting to deploy"
+      // would say one was.
+      if (card.shipsByRelease) return { text: 'Merged · ships with the next release', tone: 'muted', mark: null };
       if (card.labels.includes('deployed:testing')) return { text: 'Live on testing · waiting for production', tone: 'muted', mark: null };
       // No pull request recorded, so no deploy will ever carry it: "waiting
       // to deploy" sat on such a card for good, with nobody told.

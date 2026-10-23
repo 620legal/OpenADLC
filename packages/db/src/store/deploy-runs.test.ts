@@ -65,6 +65,19 @@ describe('deploy runs', () => {
     expect(sql).toContain('coalesce(deploy_runs.pr_number, excluded.pr_number)');
   });
 
+  it('keeps when a merge was made, the first time it is told, for the releases that may contain it', async () => {
+    const at = new Date('2026-10-20T08:00:00Z');
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...row, merged_at: at });
+    expect(await ensure('repo-1', row.sha, 40, at)).toMatchObject({ mergedAt: '2026-10-20T08:00:00.000Z' });
+    const [sql, params] = vi.mocked(queryOne).mock.calls[0]!;
+    expect(String(sql)).toContain('merged_at = coalesce(deploy_runs.merged_at, excluded.merged_at)');
+    expect(params).toEqual(['repo-1', row.sha, 40, at]);
+    // Not told, it is left as it is.
+    vi.mocked(queryOne).mockResolvedValueOnce(row);
+    expect(await ensure('repo-1', row.sha, 40)).toMatchObject({ mergedAt: null });
+    expect(vi.mocked(queryOne).mock.calls[1]![1]).toEqual(['repo-1', row.sha, 40, null]);
+  });
+
   it('takes a step once: the second claim of it is refused', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce({ id: 'd1' }).mockResolvedValueOnce(null);
     expect(await claim('repo-1', row.sha, 'promote_dispatched_at', 'dispatching')).toBe(true);

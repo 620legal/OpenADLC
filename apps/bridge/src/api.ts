@@ -80,7 +80,7 @@ import {
   rulesAppliedPayload,
   type GitHubClient,
 } from '@openadlc/github';
-import { REPO_DEFAULTS, buildAppManifest, hasIgnoreLabel, hasNextLabel, hasPausedLabel, isGitHubLogin, loginCandidates, manifestPostUrl, sameLogin } from '@openadlc/shared';
+import { REPO_DEFAULTS, buildAppManifest, hasIgnoreLabel, hasNextLabel, hasPausedLabel, isGitHubLogin, loginCandidates, manifestPostUrl, sameLogin, shipsByRelease } from '@openadlc/shared';
 import { refuseWhilePaused } from './pause-work.js';
 import { HttpFailure, Router, STREAMING, WithStatus } from './router.js';
 import { readyNow, RequestQueue, stillTried, withPositions } from './request-queue.js';
@@ -110,6 +110,7 @@ import { bridgeStopReason, stoppedByTheBridge, THE_BRIDGE } from './bridge-stops
 import { asAutomation } from './automation-bot.js';
 import { DeployKnowledge, isTestingDeployChoice, testingDeployChoice, testingDeployStored } from './deploys.js';
 import { deploysNothingHere } from './deploy-pipeline.js';
+import { releaseEventsOf } from './health/checks/ships-by-release.js';
 import { startBuild } from './build-start.js';
 import type { HealthRegistry } from './health/registry.js';
 import { registerHealthRoutes } from './health/routes.js';
@@ -117,6 +118,7 @@ import { registerSigningKeyRoutes } from './signing-key-routes.js';
 import { SubjectTitles } from './subject-titles.js';
 import { retryTask } from './task-retry.js';
 import { doneSince, itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, requestsOnCards, withItemIssues, withItemPulls } from './board-work.js';
+import type { WaitingReads } from './waiting.js';
 import { describeSubject } from './thread-view.js';
 import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
@@ -129,12 +131,13 @@ import { readSeatPauses, seatPausedReason } from './seat-pause.js';
 import type { HealthAction } from '@openadlc/shared';
 import { attachmentIds, claimableFor, claimWindowStart, registerAttachmentRoutes } from './attachment-routes.js';
 import { registerDesignMemoryRoutes } from './design-memory.js';
-import { registerTaskPostgresRoutes } from './task-postgres-routes.js';
+import { liveTaskPostgresDeps, registerTaskPostgresRoutes } from './task-postgres-routes.js';
 import { ignoredSubjects, issueForSubject, parseRef, taskSummary } from './work.js';
 import { endedWithoutPullRequest, readBranch, workLanded } from './build-left.js';
 import { SpendingLimitRejected, applySpendingLimits, spendingView } from './spending-limits.js';
 import { DEFAULT_REMOVAL, RepoRemoval, appOnRepository, appStanding, configuredLabelNames } from './repo-removal.js';
 import type { SendBack } from './send-back.js';
+import type { StageRunner } from './stage-runner.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
 
 export interface ApiDeps {
@@ -182,6 +185,20 @@ export interface ApiDeps {
   afterwards?: Afterwards;
   /** Approve all, the designer's judgement and a refusal after the fact (`plan-changes.ts`); one is made where none is given. */
   planChanges?: PlanChanges;
+  /**
+   * Told when a seat may have room — a task of its ended, its tasks at once
+   * went up — so what it turned away while full starts now (`StageRunner`).
+   * Absent, the hourly stage sweep starts it.
+   */
+  stageRuns?: Pick<StageRunner, 'seatFreed'> | null;
+  /**
+   * When a scheduled job fires next (`JobTimer.nextRun`): the board says
+   * when the stage sweep starts a design waiting with its seat free. Absent,
+   * the board does not say.
+   */
+  nextRun?: (job: string) => Date | null;
+  /** Whether anything leases a build (`anythingDispatches`); absent is read as yes. */
+  dispatching?: boolean;
 }
 
 /** Where what runs after an answer belongs: the task it was for, or else a subject's thread. */
@@ -994,6 +1011,17 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       labelNames: () => configuredLabelNames(config.repoRoot),
     });
   const queue = deps.requestQueue ?? new RequestQueue({ taskService: deps.taskService, paused: (repo) => deps.dispatchGate?.paused(repo) ?? null });
+  // What a card with nothing going on it waits on, beyond its tasks: read
+  // alike for the board's cards and for Needs you's stuck work.
+  const waitingReads: WaitingReads = {
+    paused: (repo) => deps.dispatchGate?.paused(repo) ?? null,
+    ...(deps.nextRun ? { nextSweepAt: () => deps.nextRun!('stages') } : {}),
+    ...(deps.dispatching !== undefined ? { dispatching: deps.dispatching } : {}),
+    // A config built by hand, a test's, may have no costs: the file's default stops.
+    stopLeasing: config?.costs?.onCap?.stopLeasing ?? true,
+    ...(deps.health ? { health: () => deps.health!.rows() } : {}),
+    ...(deps.delivery ? { pathPolicy: async (repo) => (await deps.delivery!.get(repo)).rules.paths } : {}),
+  };
   // Which repositories ship by merging, for the Ship column; see `deploys.ts`.
   const deploys = new DeployKnowledge(() => asAutomation(deps.actors, config));
   // hostd signs a subscription in and checks an account, where the bots think.
@@ -1019,6 +1047,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     fullName: async (name) => (await repos.getRepoByName(name))?.fullName ?? null,
   });
   registerAttentionRoutes(router, {
+    waiting: waitingReads,
     engineUpdates: engineUpdatesFor(hostd),
     selfUpdate: { attention: () => selfUpdateAttentionFromSettings() },
     ...(deps.health ? { health: deps.health } : {}),
@@ -1124,6 +1153,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       pulls: loose,
       itemRequests,
       sessions: activeSessions,
+      waiting: waitingReads,
     });
 
     // What is waiting to land, and what the bridge is doing about it. A person
@@ -1162,6 +1192,13 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
         .filter((issue) => issue.stage === 'merged' && issue.prNumber === null && !byMergingIn.get(issue.repoName))
         .map((issue) => `${issue.repoName}#${issue.number}`),
     );
+    // In Ship where the repository ships by release: no deploy is coming for
+    // it, and the card says it waits for the next release.
+    const releasing = new Set<string>();
+    const shipping = new Set(listed.filter((issue) => issue.stage === 'merged').map((issue) => issue.repoName));
+    for (const entry of deps.delivery ? repoList.filter((one) => shipping.has(one.name)) : []) {
+      if (shipsByRelease((await deps.delivery!.get(entry).catch(() => null))?.rules)) releasing.add(entry.name);
+    }
     const issueCards = cards
       .filter((card) => workedIn.has(card.repo) && !ignored.has(card.ref))
       .map((card) => {
@@ -1171,6 +1208,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
           held: hasPausedLabel(card.labels) ? (holds[card.ref] ?? { by: 'a person on GitHub', at: '', why: null }) : null,
           next: hasNextLabel(card.labels),
           ...(noMerge.has(card.ref) ? { noMerge: true as const } : {}),
+          ...(card.stage === 'merged' && releasing.has(card.repo) && !noMerge.has(card.ref) ? { shipsByRelease: true as const } : {}),
         };
         // Who is on it now, the pull request's reviewers included; the store
         // only knew the tasks filed under the issue itself.
@@ -1520,7 +1558,14 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
   registerAttachmentRoutes(router);
   registerDesignMemoryRoutes(router);
   // A repository's own Postgres servers for its tasks, a person's to set (`task-postgres-routes.ts`).
-  registerTaskPostgresRoutes(router);
+  // Its Compose file is read as the account the bridge reads GitHub with.
+  registerTaskPostgresRoutes(
+    router,
+    liveTaskPostgresDeps(async () => ({
+      account: await automationBotName(config),
+      client: await asAutomation(deps.actors, config).catch(() => null),
+    })),
+  );
 
   router.get('/v1/gates', async () => ({ gates: await threads.listOpenGates() }));
 
@@ -1777,6 +1822,11 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     // label come after (`stopTask`).
     const stopped = await stopTask(params.id ?? '', identity, (input.reason ?? '').trim().slice(0, 300), hostd, { untag, afterwards });
     deps.health?.runSoon(['idle-lease']);
+    // A paused task held its seat; stopped, the seat has room for what it turned away.
+    if (stopped.stopped) {
+      const seat = (await tasks.getTask(stopped.task).catch(() => null))?.botId;
+      if (seat) deps.stageRuns?.seatFreed(seat, 'a task was stopped');
+    }
     return stopped;
   });
 
@@ -1892,6 +1942,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     const repoList = await repos.listRepos();
     const crew = await bots.listBots();
     const testingDeploy = (await settings.allSettings().catch(() => null))?.testingDeploy ?? null;
+    // A table not there yet is no checks, not a page that fails.
+    const checks = await (async () => (deps.health ? deps.health.rows() : []))().catch(() => []);
     return {
       repos: await Promise.all(
         repoList.map(async (repo) => {
@@ -1913,6 +1965,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
             // Its rules name a testing deploy all the same, and the page said
             // a merge waits on testing while each went to Done.
             deploysNothing: await deploysNothingHere(repo.id),
+            // Whether the app hears a release published, for one that ships
+            // by release: without it the deploy sweep finds the release, late.
+            releaseEvents: releaseEventsOf(checks, repo.fullName),
           };
         }),
       ),
@@ -3254,6 +3309,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     const updated = await bots.setMaxTasks(bot.id, maxTasks);
     if (!updated) throw new HttpFailure(404, `unknown bot ${params.bot ?? ''}`);
     await audit({ actor: identity, action: 'bot.max_tasks_changed', target: bot.name, payload: { maxTasks, previous: maxTasksOf(bot) } });
+    // Raised, the seat has room for what it turned away while it was full.
+    if (maxTasks > maxTasksOf(bot)) deps.stageRuns?.seatFreed(bot.id, `${bot.name}'s tasks at once went up to ${maxTasks}`);
     return { bot: updated };
   });
 
@@ -3409,16 +3466,29 @@ async function outcomeOf(task: { id: string; state: string }): Promise<'done' | 
 }
 
 /**
- * A seat's work in hand: running (a task paused with its computer kept is
- * still in hand), waiting on a person, and queued. Next is its oldest queued
- * task, or for intake the oldest request in line when it has none.
+ * A seat's work in hand: running (a task paused with no question open, owed
+ * its resume, with them), waiting on a person, and queued. Next is its oldest
+ * queued task, or for intake the oldest request in line when it has none.
+ *
+ * A task waiting on a person's answer does not hold its seat
+ * (`tasks.seatHasRoom`), so the seat takes other work meanwhile, and the
+ * answer resumes it whatever the seat is running by then. A seat running more
+ * than its tasks at once is that, and `resumed` names the tasks an answer
+ * resumed, so "2 running" on a seat of one says why rather than looking like
+ * a limit that did not hold.
  */
 export async function queueOf(
-  bot: { role: string },
+  bot: { role: string; maxTasks?: number | null },
   unfinished: readonly { id: string; state: string; subjectRef: string; createdAt: string }[],
   gated: ReadonlySet<string>,
   titleOf: (subjectRef: string) => string | null,
-): Promise<{ running: number; waiting: number; queued: number; next: { ref: string; title: string | null } | null }> {
+): Promise<{
+  running: number;
+  waiting: number;
+  queued: number;
+  next: { ref: string; title: string | null } | null;
+  resumed: { ref: string; title: string | null }[];
+}> {
   const waiting = unfinished.filter((task) => task.state === 'paused' && gated.has(task.id)).length;
   const queued = unfinished.filter((task) => task.state === 'queued');
   const running = unfinished.length - waiting - queued.length;
@@ -3430,7 +3500,16 @@ export async function queueOf(
     const first = line.find(stillTried);
     if (first) next = { ref: requestSubject(first.id), title: (first.text.split('\n')[0] ?? '').slice(0, 120) || null };
   }
-  return { running, waiting, queued: queued.length, next };
+  // Asked only of a seat past its tasks at once, by what is running in fact.
+  // A record that cannot be read names none, not a failed crew page.
+  const live = unfinished.filter((task) => task.state === 'running');
+  const over = live.length > maxTasksOf(bot);
+  const answered = over ? await (async () => tasks.resumedAfterAnswer(live.map((task) => task.id)))().catch(() => new Set<string>()) : new Set<string>();
+  const resumed = [...live]
+    .filter((task) => answered.has(task.id))
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+    .map((task) => ({ ref: task.subjectRef, title: titleOf(task.subjectRef) }));
+  return { running, waiting, queued: queued.length, next, resumed };
 }
 
 /** One state for a seat's health, from its failing checks, with each reason and where it is fixed. */

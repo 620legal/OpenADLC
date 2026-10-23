@@ -264,6 +264,26 @@ describe('what a card says beyond what it is doing', () => {
     expect(cardOf(page([BUSY]), 'openadlc-atlas-janedoe')).toContain('1 running · 1 waiting for you · 2 queued · next: #20 Retry the webhook');
   });
 
+  it('says a seat runs past its tasks at once, and which task an answer resumed to take it there', () => {
+    // A task waiting on a person does not hold its seat, so #141 started
+    // while #137 waited; the answer resumed #137 beside it.
+    const resumed = member({
+      name: 'openadlc-atlas-janedoe',
+      maxTasks: 1,
+      task: task({ kind: 'implement', state: 'running', startedAt: minutesAgo(3) }),
+      queue: { running: 2, waiting: 0, queued: 1, next: { ref: 'openadlc#20', title: 'Retry the webhook' }, resumed: [{ ref: 'openadlc#137', title: 'Design the task database' }] },
+    });
+    const line = '2 running, 1 at once: #137 resumed after an answer · 1 queued · next: #20 Retry the webhook';
+
+    expect(cardOf(page([resumed]), 'openadlc-atlas-janedoe')).toContain(line);
+    expect(
+      renderToStaticMarkup(<SeatTable crew={[resumed]} accounts={ACCOUNTS} listings={null} byBot={[]} now={NOW} showRepo={false} onOpen={() => undefined} />).replace(/<!-- -->/g, ''),
+    ).toContain(line);
+    // Within its tasks at once, or from a bridge that names nothing, it says the count alone.
+    expect(cardOf(page([{ ...resumed, maxTasks: 2 }]), 'openadlc-atlas-janedoe')).toContain('2 running · 1 queued');
+    expect(cardOf(page([{ ...resumed, queue: { running: 2, waiting: 0, queued: 0, next: null } }]), 'openadlc-atlas-janedoe')).toContain('2 running, 1 at once<');
+  });
+
   it('lists the last three it finished, each marked and opening its item on the seat’s role', () => {
     const card = cardOf(page([BUSY]), 'openadlc-atlas-janedoe');
     expect(card).toContain('aria-label="done"');

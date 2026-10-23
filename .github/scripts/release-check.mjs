@@ -27,6 +27,10 @@
  * run, counts. A pull request into another branch runs that branch's ci.yml,
  * which anyone who can push could have written, and could vouch for anything.
  *
+ * cut-release.yml's check (.github/scripts/cut-release-check.mjs) imports
+ * `checkVersion` and `checkCi` and applies them to the commit it would tag, so
+ * a tag the button pushes is one `check` here takes.
+ *
  * Runs with the workflow's read-only token and no secrets. Its git and GitHub
  * are passed in (`tools`), so tests/release-check.test.ts can run each refusal.
  */
@@ -91,15 +95,12 @@ export function checkCommit(ctx, tools) {
 }
 
 /**
- * Versions only go up, along main, counted from the releases this workflow
- * made: each immutable release, newest first, until one passes the
- * attestation check an install makes.
+ * The newest release this workflow made, and the commit its tag is on: each
+ * immutable release, newest first, until one passes the attestation check an
+ * install makes; null when there is none. cut-release.yml counts the next
+ * patch from it (.github/scripts/cut-release-check.mjs).
  */
-export function checkVersion(ctx, tools, sha) {
-  const releases = tools.api(`repos/${ctx.repo}/releases?per_page=100`, { paginate: true });
-  if (releases.some((release) => release.tag_name === ctx.tag)) {
-    throw new Refusal(`${ctx.tag} already has a release, which is never replaced; tag the next version`);
-  }
+export function newestRelease(ctx, tools, releases = tools.api(`repos/${ctx.repo}/releases?per_page=100`, { paginate: true })) {
   const counted = releases
     .filter((release) => !release.draft && !release.prerelease && release.immutable === true && versionOf(release.tag_name))
     .sort((a, b) => compareVersions(versionOf(b.tag_name), versionOf(a.tag_name)));
@@ -120,6 +121,16 @@ export function checkVersion(ctx, tools, sha) {
     passedOver.push(release.tag_name);
   }
   if (passedOver.length > 0) tools.say(`not counted, as releases this workflow did not make: ${passedOver.join(', ')}`);
+  return newest;
+}
+
+/** Versions only go up, along main, counted from the newest release this workflow made. */
+export function checkVersion(ctx, tools, sha) {
+  const releases = tools.api(`repos/${ctx.repo}/releases?per_page=100`, { paginate: true });
+  if (releases.some((release) => release.tag_name === ctx.tag)) {
+    throw new Refusal(`${ctx.tag} already has a release, which is never replaced; tag the next version`);
+  }
+  const newest = newestRelease(ctx, tools, releases);
   if (!newest) return null;
   if (compareVersions(versionOf(ctx.tag), versionOf(newest.tag)) <= 0) {
     throw new Refusal(`${ctx.tag} is not above ${newest.tag}, the newest release; tag a higher version`);

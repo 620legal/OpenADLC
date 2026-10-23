@@ -102,6 +102,7 @@ const sendBackRequest = vi.fn(async (_input: unknown) => ({ sent: true, from: 'b
 const fromBridge = vi.fn(async (_input: unknown): Promise<unknown> => ({ sent: true, from: 'build', to: 'intake', staffed: true, round: 1, commentUrl: null }));
 const sendToTriage = vi.fn(async (_repo: string, _number: number, _reason: string) => undefined);
 const onTaskDone = vi.fn(async (_input: unknown) => undefined);
+const seatFreed = vi.fn((_seat: string, _reason: string) => undefined);
 const afterIntake = vi.fn(async (_input: unknown) => 'build');
 const startLocalCi = vi.fn(async (taskId: string) => ({ run: { id: 'run-1', taskId, state: 'running', headSha: null } }));
 const sign = vi.fn(async (body: string, fields: { seat: string }) => `${body}\n\n<!-- signed as ${fields.seat} -->`);
@@ -148,6 +149,7 @@ beforeEach(async () => {
     repoSetup: { ensureLabel } as never,
     names: { settled: async () => undefined } as never,
     dispatchRuns: { soon: () => undefined },
+    stageRuns: { seatFreed },
     requestQueue: { drain } as never,
     planChanges: { verdict, missingVerdict, designerEnded } as never,
   });
@@ -235,6 +237,25 @@ describe('a task ending, which may let go of paths a plan change was waiting for
     expect(resume.mock.calls.map((call) => call[0])).toEqual(['task-7', 'task-8']);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('hostd refused'));
     warn.mockRestore();
+  });
+});
+
+describe('a task ending, which may give its seat room for what it turned away', () => {
+  it.each(['done', 'failed', 'stopped'])('asks for the seat’s turned-away work once a task is %s, after its issue is handed on', async (state) => {
+    // #141's design was refused while #137's ran on the design seat, and
+    // nothing came back for it when #137's ended.
+    const response = await post('/internal/tasks/task-1/state', { state });
+
+    expect(response.status).toBe(200);
+    expect(seatFreed).toHaveBeenCalledTimes(1);
+    expect(seatFreed).toHaveBeenCalledWith('bot-builder', `implement task ${state}`);
+    if (state === 'done') expect(onTaskDone.mock.invocationCallOrder[0]!).toBeLessThan(seatFreed.mock.invocationCallOrder[0]!);
+  });
+
+  it('asks nothing while the task holds its seat', async () => {
+    for (const state of ['running', 'paused']) await post('/internal/tasks/task-1/state', { state });
+
+    expect(seatFreed).not.toHaveBeenCalled();
   });
 });
 

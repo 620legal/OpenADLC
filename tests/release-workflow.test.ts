@@ -104,6 +104,8 @@ function writes(permissions: Permissions): string[] {
 /** What each workflow may write, all its jobs together. Anything else is a new decision, made here. */
 const ALLOWED_WRITES: Record<string, string[]> = {
   'ci.yml': [],
+  // Its one write, the tag, is the releaser's own token's (tests/cut-release.test.ts).
+  'cut-release.yml': [],
   'deploy-testing.yml': ['deployments'],
   'promote-production.yml': ['deployments'],
   'rollback-production.yml': [],

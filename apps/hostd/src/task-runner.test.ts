@@ -841,7 +841,7 @@ describe('a task paused on a person', () => {
     expect(runner.isReleased('task-1')).toBe(true);
     expect(runner.sessionOf('task-1')).toBeNull();
     expect(runner.computersHeld()).toBe(0);
-    // On no host now, so it stops counting against its seat and the hosts.
+    // On no host now, so it stops counting against the hosts' room.
     expect(tasks.releaseComputer).toHaveBeenCalledWith('task-1');
 
     // The answer resumes it on a computer of its own again.
@@ -862,6 +862,44 @@ describe('a task paused on a person', () => {
     expect(exec.acquire).toHaveBeenCalledTimes(2);
     expect(exec.release).toHaveBeenCalledTimes(1);
     expect(runner.isReleased('task-1')).toBe(false);
+    mint.mockRestore();
+  });
+
+  it('still takes its place on the host while it keeps its computer, and its resume needs no place more', async () => {
+    // Its seat no longer counts it (`tasks.seatHasRoom`), so the seat starts
+    // other work beside it; its container, memory and database are still
+    // here, and the host's room still counts them.
+    vi.mocked(bots.getBotByName).mockResolvedValue(crew());
+    vi.mocked(bots.getBotById).mockResolvedValue(crew());
+    const mint = vi.spyOn(SessionEnvMinter.prototype, 'mint').mockResolvedValue({ env: {}, cleanup: async () => undefined });
+    const exec = driver();
+    const runner = new TaskRunner({ ...config(), capacityTasks: 2 }, exec, null, RESOLVED);
+    await runner.start(START);
+    await runner.start({ ...START, taskId: 'task-2', subjectRef: 'openadlc#156' });
+    // task-1 is paused on a person, within the time its computer is kept.
+    expect(await runner.releasePausedPast(15 * 60_000, async (taskId) => taskId === 'task-1', 1_000)).toEqual([]);
+    expect(runner.computersHeld()).toBe(2);
+
+    const third = runner.start({ ...START, taskId: 'task-3', subjectRef: 'openadlc#157' });
+    await expect(third).rejects.toBeInstanceOf(HostFull);
+
+    // Its answer resumes it on the full host: its old computer goes first.
+    vi.mocked(tasks.getTask).mockResolvedValue({
+      id: 'task-1',
+      botId: 'bot-1',
+      repoId: null,
+      kind: 'implement',
+      subjectRef: 'openadlc#155',
+      branch: null,
+      skill: 'implement',
+      costCapUsd: 15,
+      leaseId: null,
+      state: 'paused',
+      exitReason: null,
+    } as never);
+    await runner.resume('task-1', []);
+    expect(runner.computersHeld()).toBe(2);
+    expect(runner.sessionOf('task-1')).not.toBeNull();
     mint.mockRestore();
   });
 

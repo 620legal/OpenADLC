@@ -30,6 +30,69 @@ export interface CardTask {
    * time nothing records; absent from an older bridge, which said only its start.
    */
   since?: string | null;
+  /**
+   * A build paused on a question that takes one of its repository's builds
+   * at once while cards wait for one: which repository, its builds at once,
+   * and how many wait. Absent when it holds nobody up, and from an older bridge.
+   */
+  holds?: { repo: string; limit: number; waiting: number } | null;
+}
+
+/** A seat a card waits for, as the bridge names it. */
+export interface WaitingSeat {
+  name: string;
+  role: string;
+  maxTasks: number;
+}
+
+/** A task taking a seat's slot, or its repository's build: what keeps the card behind it waiting. */
+export interface SeatHolder {
+  ref: string;
+  /** The issue whose card it is on; null for a request. */
+  number: number | null;
+  kind: string;
+  state: string;
+  /** Paused on a question nobody has answered. */
+  waitingOnYou: boolean;
+}
+
+/** An issue a card depends on, and what is happening on it now. */
+export interface DependencyNow {
+  /** `#N`, or `owner/name#N` for an issue in another repository. Absent from an older bridge, which named `#N` only. */
+  ref?: string;
+  number: number;
+  stage: string | null;
+  abandoned: boolean;
+  task: { bot: string; kind: string; state: string; waitingOnYou: boolean; activity: string | null } | null;
+  waits: { kind: string; seat: string | null } | null;
+}
+
+/** Why a card with nothing going on it waits (`waitingOf` in the bridge's waiting.ts). */
+export type WaitingReason =
+  | { kind: 'held' }
+  | { kind: 'dependency'; on: DependencyNow[] }
+  | { kind: 'triage' }
+  | { kind: 'not_ready' }
+  | { kind: 'for_person' }
+  | { kind: 'paused'; words: string }
+  | { kind: 'not_staffed' }
+  | { kind: 'no_seat'; role: string }
+  | { kind: 'cap'; words: string }
+  | { kind: 'seat_paused'; seat: WaitingSeat; words: string }
+  | { kind: 'blocked'; seat: WaitingSeat; why: string; instruction: string }
+  | { kind: 'no_dispatcher' }
+  | { kind: 'seat'; seat: WaitingSeat; seats: number; holders: SeatHolder[] }
+  | { kind: 'concurrency'; limit: number; holders: SeatHolder[] }
+  | { kind: 'turn'; seat: WaitingSeat; after: string[] }
+  | { kind: 'lease'; on: number[]; paths: string[] }
+  | { kind: 'free'; seat: WaitingSeat; by: 'runner' | 'sweep' | 'dispatcher'; nextAt?: string | null };
+
+export interface CardWaiting {
+  reason: WaitingReason;
+  /** Since when it has waited. */
+  since: string;
+  /** Waited past the bridge's limit with its seat free and nothing started. */
+  stuck: boolean;
 }
 
 export interface BoardCard {
@@ -71,9 +134,14 @@ export interface BoardCard {
   /** Whether the question open on it is a stage waiting for an OK. */
   approval?: boolean;
   shippedAt?: string | null;
-  /** What a blocked card waits on, by issue number. Absent from an older bridge. */
   /** `#N`, or `owner/name#N` for an issue in another repository. */
   waitingOn?: string[];
+  /**
+   * With nothing going on it, why it waits, since when, and whether it is
+   * stuck. Null when it waits for no seat; absent from an older bridge, and
+   * the card says its stage's line.
+   */
+  waiting?: CardWaiting | null;
   /**
    * A console request intake is still asking about or writing up: not an issue
    * yet, so it has no number and nowhere to be moved. Its ref is `request:<id8>`.
@@ -97,6 +165,12 @@ export interface BoardCard {
    * otherwise, and from an older bridge.
    */
   noMerge?: boolean;
+  /**
+   * In Ship, where its repository ships by release: no deploy is coming for
+   * it, and it goes to Done when a published release contains its merge.
+   * Absent otherwise, and from an older bridge.
+   */
+  shipsByRelease?: boolean;
 }
 
 export interface BoardColumn {
@@ -234,6 +308,12 @@ export interface SeatQueue {
   waiting: number;
   queued: number;
   next: { ref: string; title: string | null } | null;
+  /**
+   * The running tasks a person's answer resumed, named only while the seat
+   * runs more than its tasks at once: a task waiting on an answer does not
+   * hold its seat, and its resume does not wait for one. Absent from an older bridge.
+   */
+  resumed?: { ref: string; title: string | null }[];
 }
 
 export type SeatOutcome = 'done' | 'sent_back' | 'failed' | 'stopped';
@@ -327,7 +407,11 @@ export type AttentionAction =
    * turn approve all off for the issue `subject` names. Absent from an older bridge.
    */
   | { kind: 'approve_all' | 'ask_designer'; label: string; gateId: string }
-  | { kind: 'approve_all_off'; label: string; subject: string };
+  | { kind: 'approve_all_off'; label: string; subject: string }
+  /** Starts now what would start the work `subject` names when it comes round: the stage sweep, or a dispatch. */
+  | { kind: 'start_work'; label: string; subject: string }
+  /** Lets go of the hold on the work `subject` names, as its card's Resume does. Absent from an older bridge. */
+  | { kind: 'resume_item'; label: string; subject: string };
 
 export type AttentionKind =
   | 'question'
@@ -355,7 +439,11 @@ export type AttentionKind =
   /** Answered work waiting for GitHub to answer the refresh of its bot's sign-in before it goes on. */
   | 'resume_waiting'
   /** A plan change a person approved, waiting for other work to let go of its paths: nothing to answer on its face. */
-  | 'plan_change_waiting';
+  | 'plan_change_waiting'
+  /** Work that waited past the limit with its seat free and nothing started; it goes once the work starts. */
+  | 'work_stuck'
+  /** A stacked change OpenADLC holds that only a person can let go: what it was built on will not land, or its builder could not bring it up to date. */
+  | 'stack_held';
 
 /** One thing waiting on a person, as `GET /v1/attention` says it. */
 export interface AttentionItem {
@@ -919,6 +1007,32 @@ export interface TaskPostgresView {
   env: string;
 }
 
+/**
+ * One server the repository's Compose file starts, as the form is filled with
+ * it (`packages/shared/src/task-postgres-compose.ts`); nothing of it is saved
+ * until a person presses Save.
+ */
+export interface TaskPostgresComposeServer {
+  /** The Compose service it is. */
+  service: string;
+  /** The host side of its port mapping; null when the file publishes none. */
+  port: number | null;
+  superuser: string;
+  password: string;
+  database: string;
+  /** As the file writes it: a digest only where the file pins one. */
+  image: string;
+  /** What was taken as a default, or is still to be given, by the field it is about (null for the server). */
+  notes: { field: keyof TaskPostgresServer | null; text: string }[];
+  /** What Save would say of its image, outside the allowlist; null when allowed. */
+  refusal: string | null;
+}
+
+/** What the repository's Compose file on its default branch would fill the form with (`GET /v1/repos/:name/task-postgres/compose`, an admin's). */
+export type TaskPostgresCompose =
+  | { ok: true; file: string; branch: string; servers: TaskPostgresComposeServer[]; notes: string[] }
+  | { ok: false; file: string | null; branch: string | null; why: string };
+
 /** How long settings waits for a section it could also leave to read its own. */
 export const SECTION_READ_MS = 1_500;
 
@@ -983,6 +1097,13 @@ export const api = {
         delivery?: RepoDelivery | null;
         /** Why its newest testing deploy had nothing to deploy, so its merges ship by merging; null when it deployed. Absent from an older bridge. */
         deploysNothing?: string | null;
+        /**
+         * Whether the app is subscribed to Release events, for a repository
+         * that ships by release, and where to tick them when it is not. Null
+         * before that is known, or where it does not ship that way. Absent
+         * from an older bridge.
+         */
+        releaseEvents?: ReleaseEvents | null;
       }[];
       /** How many rounds a review runs before it stops and asks. Absent from an older bridge. */
       maxReviewRounds?: number | null;
@@ -993,11 +1114,18 @@ export const api = {
 export interface RepoDelivery {
   source: 'file' | 'repository' | 'setting';
   rules: {
-    testing: { on: 'merge' | 'none'; url?: string; workflow: string; smoke: string };
+    testing: { on: 'merge' | 'none' | 'release'; url?: string; workflow: string; smoke: string };
     production: { on: 'after-testing' | 'none'; approval: 'reviewers' | 'auto'; soakMinutes: number; workflow: string; rollback: string };
   };
   testingUrl: string | null;
   fileError: string | null;
+}
+
+/** Whether the OpenADLC app hears a release published: what a repository that ships by release waits on. */
+export interface ReleaseEvents {
+  subscribed: boolean;
+  /** The app's Permissions & events page, where Release is ticked, when it is not. */
+  url: string | null;
 }
 
 /** A person's pause of new work, across the install or in one repository. */

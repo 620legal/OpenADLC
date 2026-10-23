@@ -179,6 +179,14 @@ describe('what a card says about the work on it', () => {
     expect(cardWork(done, { tasks: [], botName, stalls: new Map() }).shippedAt).toBe(minutesAgo(5));
   });
 
+  it('says a card shipped by a release shipped when the release was published, not when the sweep found it', () => {
+    const released = issue({ number: 10, stage: 'done', prNumber: 30, updatedAt: minutesAgo(5), shippedAt: minutesAgo(300) });
+    const deployed = task({ kind: 'deploy', subjectRef: 'openadlc#30', state: 'done', endedAt: minutesAgo(120) });
+    expect(cardWork(released, { tasks: [deployed], botName, stalls: new Map() }).shippedAt).toBe(minutesAgo(300));
+    // Out of Done, nothing shipped.
+    expect(cardWork({ ...released, stage: 'merged' }, { tasks: [], botName, stalls: new Map() }).shippedAt).toBeNull();
+  });
+
   it('names what a blocked card waits on, from its Dependencies', () => {
     const blocked = issue({
       number: 3,

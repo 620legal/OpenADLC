@@ -1,7 +1,16 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { BRIDGE_URL, type DesignMemoryEntry, type RemovalChoices, type RemovalPreview, type RemovalReport, type TaskPostgresServer, type TaskPostgresView } from '@/lib/api';
+import {
+  BRIDGE_URL,
+  type DesignMemoryEntry,
+  type RemovalChoices,
+  type RemovalPreview,
+  type RemovalReport,
+  type TaskPostgresCompose,
+  type TaskPostgresServer,
+  type TaskPostgresView,
+} from '@/lib/api';
 import { stillFailing, type CheckState } from '@/lib/health-recheck';
 import type { RepoAccess } from '@/lib/crew-access';
 import { identityHeaders } from '@/lib/identity';
@@ -630,6 +639,19 @@ export async function saveTaskPostgres(
 }
 
 /**
+ * What the repository's Compose file on its default branch would fill its
+ * Postgres-for-its-tasks form with. A read: the bridge saves nothing from it.
+ */
+export async function readTaskPostgresCompose(repo: string): Promise<{ ok: boolean; error?: string; compose?: TaskPostgresCompose }> {
+  try {
+    const compose = await call<TaskPostgresCompose>(`/v1/repos/${encodeURIComponent(repo)}/task-postgres/compose`, 'GET');
+    return { ok: true, compose };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not read it' };
+  }
+}
+
+/**
  * Undoes a supersede a design made: the entry it replaced is in effect again,
  * and this one is retired. An admin's, audited by the bridge.
  */
@@ -824,6 +846,21 @@ export async function setCiCap(minutes: number | null): Promise<{ ok: boolean; e
   }
 }
 
+/**
+ * Starts now what would start this work when it comes round: Needs you's
+ * Start it now, on work stuck with its seat free. `started` is what the
+ * bridge started, in its words; none when nothing could start yet.
+ */
+export async function startItem(subject: string): Promise<{ ok: boolean; error?: string; started?: string[] }> {
+  try {
+    const result = await call<{ started?: string[] }>(`${itemPath(subject)}/start`, 'POST', {});
+    revalidatePath('/');
+    return { ok: true, started: result.started ?? [] };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not start it' };
+  }
+}
+
 export async function resumeItem(subject: string): Promise<{ ok: boolean; error?: string; held?: ItemHeld }> {
   try {
     await call(`${itemPath(subject)}/resume`, 'POST', {});
@@ -925,6 +962,24 @@ export async function switchToAutomatic(repo: string): Promise<{ ok: boolean; er
     return { ok: true };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'the repository was not switched' };
+  }
+}
+
+/**
+ * Sets whether a repository ships by release: its merged cards wait in Ship
+ * until a published release contains their merge, and no testing deploy is
+ * dispatched. Written in the repository's stored rules; one whose rules come
+ * from `.github/openadlc.yml` is refused, with the file to change.
+ */
+export async function setShipsByRelease(repo: string, on: boolean): Promise<{ ok: boolean; shipsByRelease?: boolean; error?: string }> {
+  try {
+    const answer = await call<{ shipsByRelease: boolean }>(`/v1/repos/${encodeURIComponent(repo)}/delivery/ships-by-release`, 'POST', { on });
+    revalidatePath('/');
+    revalidatePath('/settings');
+    revalidatePath(`/settings/repositories/${encodeURIComponent(repo)}`);
+    return { ok: true, shipsByRelease: answer.shipsByRelease };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'the setting was not saved' };
   }
 }
 

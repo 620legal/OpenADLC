@@ -215,7 +215,8 @@ change in review, or two on a shared path, may, and the merge line's conflict
 round settles what clashes. Two tasks in two computers never stopped two builds
 from editing one file; the check did. The dispatcher fills the owner's room first, then each other
 builder's in seat order; a paused build counts against its repository always,
-and against its seat only while its computer is kept. If the configured
+against its host only while its computer is kept, and never against its seat,
+which its answer resumes it on whatever the seat is running. If the configured
 concurrency outruns what the builders can run between them it says so —
 "combined maxTasks is M" — rather than quietly running fewer. A second builder
 seat is how a repository gets a second account, not a second computer.

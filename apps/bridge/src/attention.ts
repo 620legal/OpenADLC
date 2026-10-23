@@ -8,6 +8,7 @@ import {
   botInWords,
   hasAbandonedLabel,
   hasIgnoreLabel,
+  hasPausedLabel,
   formatDependencyRef,
   namesRepository,
   outsideInWords,
@@ -35,6 +36,8 @@ import { endsWithSubject, subjectClosed, wasRefused } from './gates.js';
 import { failingIds, isWaiting, showsNotice, unconfirmedOf } from './health/state.js';
 import { itemOf, requestSubject } from './items.js';
 import { stillTried } from './request-queue.js';
+import { readWaitingContext, STUCK_AFTER_MS, waitingCards, waitingOf, buildCandidates, type WaitingContext, type WaitingReads } from './waiting.js';
+import { heldStacks, type HeldStack } from './stacking.js';
 import { ACCOUNTS_STEP, RECONNECT } from './health/words.js';
 import type { Router } from './router.js';
 import type { SubjectTitle } from './subject-titles.js';
@@ -114,7 +117,19 @@ export type AttentionKind =
   /** Answered work waiting for GitHub to answer the refresh of its bot's sign-in before it goes on. */
   | 'resume_waiting'
   /** A plan change a person approved, waiting for other work to let go of its paths: nothing to answer, Refuse behind Show more. */
-  | 'plan_change_waiting';
+  | 'plan_change_waiting'
+  /**
+   * Work that has waited past `STUCK_AFTER_MS` with its seat free and
+   * nothing started (`waitingOf`). Made from live state and stored nowhere,
+   * so it goes once the work starts.
+   */
+  | 'work_stuck'
+  /**
+   * A stacked change OpenADLC holds that only a person can let go: what it
+   * was built on was closed without merging, or its builder could not bring
+   * it up to date (`Stacking`). Goes with the hold.
+   */
+  | 'stack_held';
 
 /**
  * What a person can do about an item. The first is the one the console offers
@@ -197,7 +212,15 @@ export type AttentionAction =
    * issue `subject` names (`POST /v1/items/:subject/approve-all/off`).
    */
   | { kind: 'approve_all' | 'ask_designer'; label: string; gateId: string }
-  | { kind: 'approve_all_off'; label: string; subject: string };
+  | { kind: 'approve_all_off'; label: string; subject: string }
+  /**
+   * Starts what would start the work `subject` names now, rather than when
+   * it next comes round (`POST /v1/items/:subject/start`): the stage sweep
+   * for intake and design, a dispatch for a build.
+   */
+  | { kind: 'start_work'; label: string; subject: string }
+  /** Lets go of the hold on the work `subject` names, as its card's Resume does (`POST /v1/items/:subject/resume`). */
+  | { kind: 'resume_item'; label: string; subject: string };
 
 export interface HeldPromote {
   repo: string;
@@ -268,6 +291,9 @@ const GROUP: Record<AttentionKind, AttentionGroup> = {
   dependency_abandoned: 'work',
   resume_waiting: 'work',
   plan_change_waiting: 'work',
+  // Nothing about the work is wrong: what starts it did not come round.
+  work_stuck: 'system',
+  stack_held: 'work',
 };
 
 export function groupOf(kind: AttentionKind): AttentionGroup {
@@ -278,7 +304,7 @@ export interface AttentionItem {
   /**
    * Stable across reads, by kind: `gate:…`, `merge:repo#pr`, `approve-again:repo#pr@login`, `promote:repo@sha`,
    * `unowned:repo`, `stall:repo#pr`, `sendback:repo#n`, `design-memory:…`, `plan-change:<gate>`,
-   * `intake-stalled:repo#n`, `dependency-abandoned:repo#n`, `task:…`, `landed:…`, `request:…`,
+   * `intake-stalled:repo#n`, `dependency-abandoned:repo#n`, `stack-hold:repo#n`, `task:…`, `landed:…`, `request:…`,
    * `engine-update`, `check:…`, `fixed:…`, or `task-group:…`,
    * `triage-group:…` and `check-group:…` for a folded card.
    */
@@ -356,6 +382,8 @@ interface BotRow {
   githubLogin: string | null;
   /** The model account it thinks with, which a failure's words name. */
   modelAccountId?: string | null;
+  /** How many tasks it runs at once, for whether work waiting on it has room (`waitingOf`). */
+  maxTasks?: number;
 }
 
 /** A model account, as the words for a failure on it name it. */
@@ -373,6 +401,8 @@ interface RepoRow {
   stageModes: Partial<Record<string, string>>;
   /** What a pull request from a build's branch would go into. */
   defaultBranch?: string;
+  /** How many builds it runs at once. */
+  concurrency?: number;
 }
 
 interface RequestRow {
@@ -525,6 +555,10 @@ export interface AttentionInput {
    * on any more, so none of its questions, failures or stalls is an item.
    */
   removed?: readonly { id: string; name: string }[];
+  /** What work waits on beyond its tasks (`readWaitingContext`), for the work that is stuck. Absent, none is said to be. */
+  waiting?: WaitingContext;
+  /** The stacked changes OpenADLC holds (`heldStacks`), for those only a person can let go. Absent, none. */
+  heldStacks?: readonly HeldStack[];
 }
 
 /**
@@ -1514,6 +1548,41 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     });
   }
 
+  // A stacked change OpenADLC holds that only a person can let go. One that
+  // waits on its dependency's new round goes by itself
+  // (`Stacking.letGoWhatIsSettled`) and is no card: Needs you said nothing
+  // either way, and OpenADLC#137 waited on a Resume nobody was told about.
+  // Made from the hold and the issues, so it goes when the hold does.
+  for (const held of input.heldStacks ?? []) {
+    const key = `${held.repo}#${held.issue}`;
+    const issue = input.issues.find((one) => one.repoName === held.repo && one.number === held.issue);
+    if (!issue || !hasPausedLabel(issue.labels) || issue.stage === 'merged' || issue.stage === 'done') continue;
+    const base = input.issues.find((one) => one.repoId === issue.repoId && one.number === held.on);
+    // Gone from the board is closed without merging too: one that merged is let go.
+    const wontLand = !base || hasAbandonedLabel(base.labels);
+    if (!held.needsPerson && !wontLand) continue;
+    const on = `#${held.on}`;
+    const actions: AttentionAction[] = [{ kind: 'resume_item', label: 'Resume', subject: key }];
+    if (base?.url) actions.push({ kind: 'open_url', label: `Open ${on}`, url: base.url });
+    items.push({
+      id: `stack-hold:${key}`,
+      kind: 'stack_held',
+      headline: held.needsPerson
+        ? `#${held.issue} is held: its builder could not bring it up to date with ${on}`
+        : `#${held.issue} is held: ${on}, which it was built on, ${base ? 'was closed without merging' : 'is gone from the board'}`,
+      subject: subjectOf(key).subject,
+      bot: null,
+      since: held.since,
+      // The builder's refusal is its own sentence: a full stop of its own would be doubled.
+      detail: held.needsPerson
+        ? `${held.needsPerson.replace(/[.!?]+\s*$/, '')}. Bring its branch up to date with what ${on} became, then press Resume; or cancel #${held.issue} from its card and file the work again.`
+        : `Its branch has ${on}'s work in it, which will not land. Press Resume once that work lands another way, or reopen ${on}: approved again, it lets this go by itself. Or cancel #${held.issue} from its card and file the work again.`,
+      actions,
+    });
+  }
+
+  items.push(...stuckItems(input, stalledIntake, subjectOf, botsById));
+
   const windowStart = input.now.getTime() - ATTENTION_WINDOW_DAYS * DAY_MS;
   const endedAt = taskEndedAt;
   const occurrenceOf = taskOccurrence;
@@ -1879,6 +1948,72 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
 }
 
 /**
+ * Work that has waited past `STUCK_AFTER_MS` with its seat free and nothing
+ * started, as a card naming the seat, why nothing started it, and Start it
+ * now. A start refused while the seat was busy waited for the hourly sweep,
+ * and nobody was told; since #143 such work starts once the seat has room,
+ * and work that sits past that has something wrong. One intake gave up on
+ * has its own card, which says what to do instead.
+ */
+function stuckItems(
+  input: AttentionInput,
+  stalledIntake: ReadonlyMap<string, unknown>,
+  subjectOf: (subjectRef: string) => { subject: AttentionSubject },
+  botsById: ReadonlyMap<string, BotRow>,
+): AttentionItem[] {
+  if (!input.waiting) return [];
+  const workedIn = new Set(input.repos.map((repo) => repo.name));
+  const gated = new Set(input.gates.map((gate) => gate.taskId).filter((id): id is string => Boolean(id)));
+  const { cards } = waitingOf({
+    ...input.waiting,
+    now: input.now,
+    // Only the stages a seat staffs are cards here; every issue says what a dependency is.
+    cards: waitingCards(input.issues.filter((issue) => workedIn.has(issue.repoName) && ['intake', 'spec', 'build'].includes(issue.stage)), input.tasks),
+    issues: input.issues,
+    live: input.tasks.filter((task) => LIVE.includes(task.state)),
+    bots: input.bots,
+    repos: input.repos,
+    gated,
+  });
+  const items: AttentionItem[] = [];
+  for (const [ref, waiting] of cards) {
+    const reason = waiting.reason;
+    if (!waiting.stuck || reason.kind !== 'free' || stalledIntake.has(ref)) continue;
+    const bot = [...botsById.values()].find((one) => one.name === reason.seat.name);
+    const issue = input.issues.find((one) => `${one.repoName}#${one.number}` === ref);
+    const minutes = Math.max(1, Math.round((input.now.getTime() - Date.parse(waiting.since)) / 60_000));
+    const work = issue?.stage === 'intake' ? 'its triage' : issue?.stage === 'spec' ? 'its design pass' : 'its build';
+    const nextAt = reason.nextAt ? Date.parse(reason.nextAt) : null;
+    const when =
+      reason.by === 'dispatcher'
+        ? 'The dispatcher looks every few minutes and whenever something changes, and has passed it over; the bridge’s log says why.'
+        : reason.by === 'runner'
+          ? 'The seat turned it away while it was full, and work a seat turned away starts within a minute of the seat having room, so something has kept this one back; the bridge’s log says what.'
+          : nextAt !== null
+            ? `Nothing has tried it since the seat had room, so the stage sweep starts it, in ${Math.max(1, Math.round((nextAt - input.now.getTime()) / 60_000))} min.`
+            : reason.nextAt === null
+              ? 'Nothing has tried it since the seat had room, and the stage sweep that would is off on this bridge (OPENADLC_JOB_STAGES_MINUTES=0).'
+              : 'Nothing has tried it since the seat had room, so the stage sweep starts it when it comes round.';
+    const actions: AttentionAction[] = [{ kind: 'start_work', label: 'Start it now', subject: ref }];
+    if (bot) actions.push({ kind: 'open_thread', label: 'Open thread', bot: bot.name });
+    if (issue?.url) actions.push({ kind: 'open_url', label: 'Open the issue', url: issue.url });
+    items.push({
+      id: `stuck:${ref}`,
+      kind: 'work_stuck',
+      headline: `Nothing has started ${ref} for ${minutes} min, and ${botInWords(bot)} is free`,
+      subject: subjectOf(ref).subject,
+      bot: asAttentionBot(bot),
+      since: waiting.since,
+      detail:
+        `${ref} waits for ${work}, ${botInWords(bot)} has room for it, and nothing has started it in over ${Math.round(STUCK_AFTER_MS / 60_000)} minutes. ` +
+        `${when} Start it now; if it still does not start, its thread says what it last did.`,
+      actions,
+    });
+  }
+  return items;
+}
+
+/**
  * Whether a failed task was tried again: a later task of the same kind on the
  * same subject. For a review, by the same reviewer — the reviewers of a pull
  * request are opened one after another, so another reviewer's later task is
@@ -2182,6 +2317,8 @@ export interface AttentionDeps {
   gatesFor?: (taskIds: readonly string[]) => Promise<readonly AskedGate[]>;
   /** The promotes held for a person; see `AttentionInput.heldPromotes`. Absent, none. */
   heldPromotes?: () => Promise<readonly HeldPromote[]>;
+  /** Where what work waits on is read from (`readWaitingContext`), for the work that is stuck. Absent, none is said to be. */
+  waiting?: WaitingReads;
 }
 
 /**
@@ -2293,6 +2430,9 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     })().catch(() => []),
   ]);
   const intakeStalls = await (async () => listEventsOfType(INTAKE_STALLED, since))().catch(() => []);
+  // OpenADLC's own holds on stacked changes, read only while something is held.
+  const paused = issueList.filter((issue) => hasPausedLabel(issue.labels));
+  const stackHolds = paused.length > 0 ? await heldStacks(paused).catch((): HeldStack[] => []) : [];
   // Asked for only when one waited this week: the board reads this every fifteen seconds.
   const resumeWaits = await (async () => {
     const said = await listEventsOfType(RESUME_WAITS_ON_GITHUB, since);
@@ -2403,6 +2543,7 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     engineUpdate,
     selfUpdate,
     heldMerges,
+    heldStacks: stackHolds,
     personAsks,
     personReviews,
     unowned,
@@ -2438,7 +2579,18 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     .map((ask) => `${ask.repo}#${ask.pr}`);
   const endable = [...new Set([...failedTaskCandidates(present).map((task) => task.subjectRef), ...unboarded, ...unboardedAsks].filter((ref) => parseRef(ref)))];
   const closed = deps.closed && endable.length > 0 ? await deps.closed(endable).catch(() => new Set<string>()) : new Set<string>();
-  return { ...read, closed };
+  // What work waits on beyond its tasks, read as the board reads it; one
+  // that cannot be read says nothing is stuck rather than lose the list.
+  const waiting = deps.waiting
+    ? await (async () => {
+        const live = present.issues.filter((issue) => repoList.some((repo) => repo.name === issue.repoName));
+        const candidates = buildCandidates(waitingCards(live, present.tasks));
+        const buildRepos = repoList.filter((repo) => candidates.has(repo.name));
+        // The checks are read above already.
+        return readWaitingContext({ ...deps.waiting!, health: async () => checks }, { buildRepos });
+      })().catch(() => undefined)
+    : undefined;
+  return { ...read, closed, ...(waiting ? { waiting } : {}) };
 }
 
 export function registerAttentionRoutes(router: Router, deps: AttentionDeps = {}): void {

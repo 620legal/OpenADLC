@@ -552,6 +552,32 @@ export class TaskService {
     return waitingOnBlocked(description, await this.blocked(seats, repoName)) ?? description;
   }
 
+  /**
+   * The pull requests the gate sweep found held, with the words it said for
+   * each: said once a hold, not every sweep. OpenADLC#154's gate waited on two
+   * seats while #137 was held, and every ten minutes the sweep logged starting
+   * each review, then the hold refusing it.
+   */
+  private readonly heldSaid = new Map<string, string>();
+
+  /**
+   * Whether the work a pull request is part of is held, so no review on it
+   * starts (`openNow` refuses every one): said once for each hold, and
+   * forgotten once it goes, so a later hold is said again.
+   */
+  private async reviewsHeld(subjectRef: string, seats: readonly string[]): Promise<boolean> {
+    const held = await heldWords(subjectRef).catch(() => null);
+    if (!held) {
+      this.heldSaid.delete(subjectRef);
+      return false;
+    }
+    if (this.heldSaid.get(subjectRef) !== held) {
+      this.heldSaid.set(subjectRef, held);
+      console.log(`[bridge] ${subjectRef}: the gate waits on ${seats.join(', ')}, whose reviews start once the hold goes: ${held}`);
+    }
+    return true;
+  }
+
   /** Throws `PrerequisiteNotReadyError` when this bot cannot do a task in the repository yet. */
   async assertReady(bot: { id: string; name: string }, repoName: string | null): Promise<void> {
     const blockers = (await this.blocked([bot], repoName)).get(bot.name);
@@ -610,6 +636,10 @@ export class TaskService {
       );
     };
     const candidates = waiting.filter((bot) => !asked(bot));
+    if (candidates.length === 0) return [];
+    // A held piece of work starts no review: asked every sweep, each start
+    // was refused, and said so, for as long as the hold stood.
+    if (await this.reviewsHeld(subjectRef, candidates.map((bot) => bot.name))) return [];
     const blocked = await this.blocked(candidates, input.repo.name);
 
     const started: string[] = [];
@@ -689,6 +719,7 @@ export class TaskService {
         task.botId === lead.id && (['queued', 'running', 'paused'].includes(task.state) || (since !== null && Date.parse(task.createdAt) >= since)),
     );
     if (already) return null;
+    if (await this.reviewsHeld(subjectRef, [lead.name])) return null;
     try {
       const opened = await this.open({
         bot: lead.name,

@@ -175,7 +175,7 @@ describe('where to create the app', () => {
 });
 
 describe('the webhook subscribes to what the bridge acts on', () => {
-  it('names the six events and nothing else', () => {
+  it('names the seven events and nothing else', () => {
     expect([...WEBHOOK_EVENTS]).toEqual([
       'issues',
       'issue_comment',
@@ -184,12 +184,15 @@ describe('the webhook subscribes to what the bridge acts on', () => {
       'workflow_run',
       // What labels a change deployed; the bridge handled it before the app asked for it.
       'deployment_status',
+      // What moves the cards of a repository that ships by release to Done.
+      'release',
     ]);
   });
 
   it('names each event as the app’s page does, so a person told to tick one can find it', () => {
     for (const event of WEBHOOK_EVENTS) expect(WEBHOOK_EVENT_NAMES[event]).toBeTruthy();
     expect(WEBHOOK_EVENT_NAMES.deployment_status).toBe('Deployment status');
+    expect(WEBHOOK_EVENT_NAMES.release).toBe('Release');
   });
 });
 

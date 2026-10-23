@@ -28,6 +28,8 @@ const pressed = vi.hoisted(() => ({
   keysDismissed: [] as string[],
   keysUndone: [] as string[],
   settled: [] as string[],
+  started: [] as string[],
+  resumed: [] as string[],
 }));
 vi.mock('@/app/actions', () => ({
   answerGate: vi.fn(async () => ({ ok: true })),
@@ -52,6 +54,8 @@ vi.mock('@/app/actions', () => ({
   approveAll: vi.fn(async (gateId: string) => (pressed.settled.push(`approve-all:${gateId}`), { ok: true })),
   askDesigner: vi.fn(async (gateId: string) => (pressed.settled.push(`designer:${gateId}`), { ok: true })),
   turnOffApproveAll: vi.fn(async (subject: string) => (pressed.settled.push(`off:${subject}`), { ok: true })),
+  startItem: vi.fn(async (subject: string) => (pressed.started.push(subject), { ok: true, started: [`started spec on ${subject}`] })),
+  resumeItem: vi.fn(async (subject: string) => (pressed.resumed.push(subject), { ok: true, held: null })),
 }));
 const navigated = vi.hoisted(() => [] as string[]);
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => undefined, replace: (to: string) => void navigated.push(to) }) }));
@@ -233,6 +237,68 @@ describe('a Needs-you card', () => {
 
     await click(button('Check again', opened));
     expect(pressed.rechecked).toEqual(['model-account']);
+  });
+});
+
+/**
+ * Work that waited past the limit with its seat free and nothing started is
+ * a system card that says why, and starts it from its face (#144).
+ */
+describe('work stuck with its seat free', () => {
+  const STUCK: AttentionItem = {
+    id: 'stuck:OpenADLC#141',
+    kind: 'work_stuck',
+    group: 'system',
+    headline: 'Nothing has started OpenADLC#141 for 41 min, and the system engineer (system-engineer) is free',
+    subject: { repo: 'OpenADLC', number: 141, title: 'Say on a waiting card who it waits for', ref: 'OpenADLC#141', url: null, item: 'OpenADLC#141' },
+    bot: { name: 'system-engineer', slot: 'system-engineer', role: 'spec', roleLabel: 'system engineer', githubLogin: null },
+    since: '2026-09-24T11:19:00.000Z',
+    detail: 'OpenADLC#141 waits for its design pass, the system engineer has room for it, and nothing has started it in over 3 minutes.',
+    actions: [
+      { kind: 'start_work', label: 'Start it now', subject: 'OpenADLC#141' },
+      { kind: 'open_thread', label: 'Open thread', bot: 'system-engineer' },
+    ],
+  };
+
+  it('says why on its face, and Start it now starts it and says so', async () => {
+    pressed.started.length = 0;
+    await render([STUCK]);
+    const card = container.querySelector('article')!;
+    expect(card.textContent).toContain('Nothing has started OpenADLC#141 for 41 min');
+    await click(button('Start it now', card));
+    expect(pressed.started).toEqual(['OpenADLC#141']);
+    expect(card.querySelector('[data-done]')?.textContent).toBe('Started.');
+  });
+});
+
+/**
+ * A stacked change OpenADLC holds that only a person can let go names what it
+ * was built on, and resumes it from its face (#157).
+ */
+describe('a stacked change held for a person', () => {
+  const HELD: AttentionItem = {
+    id: 'stack-hold:OpenADLC#137',
+    kind: 'stack_held',
+    group: 'work',
+    headline: '#137 is held: its builder could not bring it up to date with #141',
+    subject: { repo: 'OpenADLC', number: 137, title: 'File a console request as one issue in each repository', ref: 'OpenADLC#137', url: null, item: 'OpenADLC#137' },
+    bot: null,
+    since: '2026-09-24T11:19:00.000Z',
+    detail: 'the builder that held #137 is no longer in the crew. Bring its branch up to date with what #141 became, then press Resume; or cancel #137 from its card and file the work again.',
+    actions: [
+      { kind: 'resume_item', label: 'Resume', subject: 'OpenADLC#137' },
+      { kind: 'open_url', label: 'Open #141', url: 'https://github.com/620legal/OpenADLC/issues/141' },
+    ],
+  };
+
+  it('resumes it from its face, and says so', async () => {
+    pressed.resumed.length = 0;
+    await render([HELD]);
+    const card = container.querySelector('article')!;
+    expect(card.textContent).toContain('#137 is held: its builder could not bring it up to date with #141');
+    await click(button('Resume', card));
+    expect(pressed.resumed).toEqual(['OpenADLC#137']);
+    expect(card.querySelector('[data-done]')?.textContent).toBe('Resumed.');
   });
 });
 

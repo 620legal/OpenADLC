@@ -1,6 +1,7 @@
 import { audit, deployRuns, issues, leases, repos, threads, type DeployRun } from '@openadlc/db';
-import type { DeliveryRules } from '@openadlc/shared';
+import { shipsByRelease, type DeliveryRules } from '@openadlc/shared';
 import type { EffectiveDelivery } from './delivery-rules.js';
+import type { ReleaseShipping } from './release-shipping.js';
 import type { SendBackResult } from './send-back.js';
 import { issueNumberFromBranch } from './work.js';
 
@@ -53,6 +54,13 @@ export interface DeployPipelineDeps {
    * in Ship for the deploy sweep to move.
    */
   moveStage?: MoveToDone;
+  /**
+   * A repository that ships by release (`testing.on: release`): what a merge
+   * records, and what moves its cards when a release contains them; see
+   * `release-shipping.ts`. Absent, such a merge dispatches nothing and is
+   * left for the deploy sweep.
+   */
+  releases?: ReleaseShipping;
   now?: () => number;
 }
 
@@ -255,7 +263,7 @@ export async function shipByMerging(input: {
  * which its work item reads as one conversation. False when it has none, or
  * the write failed; the stage move keeps the reason all the same.
  */
-async function sayOnCard(subjects: readonly string[], text: string, payload: Record<string, unknown>): Promise<boolean> {
+export async function sayOnCard(subjects: readonly string[], text: string, payload: Record<string, unknown>): Promise<boolean> {
   try {
     const thread = (await threads.listThreadsForSubjects(subjects)).at(-1);
     if (!thread) return false;
@@ -305,17 +313,30 @@ export class DeployPipeline {
    */
   onLeaseReleased(listener: (why: string) => unknown): void {
     this.leaseListener = listener;
+    // A merge in a repository that ships by release lets its lease go there.
+    this.deps.releases?.onLeaseReleased(listener);
+  }
+
+  /** What moves the cards of a repository that ships by release; null where nothing does. */
+  get releases(): ReleaseShipping | null {
+    return this.deps.releases ?? null;
   }
 
   /**
    * A pull request merged. Merging is shipping where the rules say testing is
-   * `none`; otherwise the testing deploy is dispatched for the merge commit.
+   * `none`; a release is where they say `release`, and nothing is dispatched;
+   * otherwise the testing deploy is dispatched for the merge commit.
    */
   async onMerged(repo: Repo, prNumber: number, mergeSha: string | null): Promise<string> {
     const rules = await this.rulesOf(repo, `${repo.name}#${prNumber}`);
     if (typeof rules === 'string') return rules;
     if (rules.testing.on === 'none') return `${repo.name}#${prNumber}: merging is shipping here`;
     if (!mergeSha) return `${repo.name}#${prNumber}: merged with no merge commit named; the deploy sweep finds it`;
+    if (rules.testing.on === 'release') {
+      return this.deps.releases
+        ? this.deps.releases.merged(repo, prNumber, mergeSha, new Date(this.now()))
+        : `${repo.name}#${prNumber}: ${repo.name} ships by release, and nothing here records its merge; the deploy sweep finds it`;
+    }
     return this.deployTesting(repo, mergeSha, prNumber, rules);
   }
 
@@ -336,6 +357,9 @@ export class DeployPipeline {
     const rules = given ?? (await this.rulesOf(repo, `${repo.name}@${sha.slice(0, 7)}`));
     if (typeof rules === 'string') return rules;
     if (rules.testing.on === 'none') return `${repo.name}@${sha.slice(0, 7)}: no testing deploy in this repository's rules`;
+    // A release ships it, and no testing deploy is ever dispatched: the
+    // sweep's plan never reaches here for one, and a caller that does is told.
+    if (rules.testing.on === 'release') return `${repo.name}@${sha.slice(0, 7)}: ${repo.name} ships by release, so no testing deploy is dispatched`;
     await deployRuns.ensure(repo.id, sha, prNumber);
     const workflow = rules.testing.workflow;
     if (!(await deployRuns.claim(repo.id, sha, 'testing_dispatched_at', `dispatching ${workflow}`))) {
@@ -544,9 +568,18 @@ export class DeployPipeline {
     return [`${ref}: ${why}; nothing reached testing to verify the merge on, ${lease}`, ...shipped, ...earlier].join('; ');
   }
 
-  /** The merge's cards still in Ship, moved to Done (`shipByMerging`); what was said. */
+  /**
+   * The merge's cards still in Ship, moved to Done (`shipByMerging`); what
+   * was said. Not where the repository ships by release now: a deploy-testing
+   * dispatched before 620legal/OpenADLC was set so, settling skipped after,
+   * would have said its merge shipped while no release had it.
+   */
   private async shipMerge(repo: Repo, record: DeployRun, why: string): Promise<string[]> {
     const ref = `${repo.name}@${record.sha.slice(0, 7)}`;
+    const delivery = await this.deps.delivery.get(repo).catch(() => null);
+    if (delivery && !delivery.readError && shipsByRelease(delivery.rules)) {
+      return [`${ref}: ${repo.name} ships by release, so its cards wait in Ship for a published release that contains it`];
+    }
     if (record.prNumber === null) return [`${ref}: no pull request is recorded for it, so no card was moved to Done; the deploy sweep cannot find one either`];
     if (!this.deps.moveStage) return [`${ref}: nothing here moves its cards; the deploy sweep moves them to Done`];
     const prNumber = record.prNumber;

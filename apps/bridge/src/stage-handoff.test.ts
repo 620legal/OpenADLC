@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DispatchGate } from './dispatch-gate.js';
-import { StageHandoff, stageAfterIntake, stageAfterTask } from './stage-handoff.js';
+import { StageHandoff, stageAfterIntake, stageAfterTask, stagesStaffedBy } from './stage-handoff.js';
+import { StageRunner } from './stage-runner.js';
+import { BotBusyError, HostFullError, RestartPendingError, SubjectBusyError } from './task-service.js';
 
 const board = vi.hoisted(() => ({
   issues: [] as Record<string, unknown>[],
@@ -526,7 +528,7 @@ describe('staffing a stage while work is paused', () => {
     expect(board.locked).toEqual(['openadlc:stage-sweep', 'openadlc:stage-sweep']);
   });
 
-  it('starts what is waiting when work is not paused, and a finished triage starts the next', async () => {
+  it('starts what is waiting when work is not paused, and a finished triage hands its issue on', async () => {
     const { gate, stages, started } = handoff();
     gate.pauseWork(null);
 
@@ -543,7 +545,9 @@ describe('staffing a stage while work is paused', () => {
 
     await quietly(() => stages.onTaskDone({ kind: 'intake', subjectRef: 'openadlc#5' }));
 
-    expect(started).toEqual(['spec openadlc#5', 'intake openadlc#7']);
+    // The next triage is the `StageRunner`'s to start, for what the intake
+    // seat turned away: see "work a busy seat turned away" below.
+    expect(started).toEqual(['spec openadlc#5']);
     expect(board.audited).toEqual([]);
   });
 
@@ -828,5 +832,226 @@ describe('the end of intake, on either intake path', () => {
       warn.mockRestore();
       vi.mocked(repos.getRepoByName).mockImplementation((async () => ({ id: 'repo-1', name: 'openadlc', fullName: 'janedoe/openadlc', stageModes: {}, specRequiredLabels: ['touches:schema'] })) as never);
     }
+  });
+});
+
+describe('work a busy seat turned away', () => {
+  // On the live install: #141 reached Design while the design seat ran #137's
+  // design, and was refused; #137's task ended a minute later, and nothing
+  // started #141 until the hourly sweep.
+  const SPEC_SEAT = 'bot-spec';
+  const WAITING_ON_SEAT = 'stage.waiting_on_seat';
+
+  beforeEach(() => {
+    board.events = [];
+    board.locked = [];
+    board.onSubject = {};
+    board.issues = [{ number: 141, repoName: 'openadlc', stage: 'spec', labels: ['priority:p1'], createdAt: '2026-10-23T13:46:00.000Z' }];
+  });
+
+  /** A design seat with one task at once, running `running` of them, and what it was asked to start. */
+  function seat(open: { refuse?: () => Error } = {}) {
+    const world = { running: 1, started: [] as string[], asked: 0 };
+    const stages = new StageHandoff(
+      { moveStage: async () => ({ moved: true }) } as never,
+      {
+        open: async (input: { bot: string; kind: string; subjectRef: string }) => {
+          world.asked += 1;
+          if (open.refuse) throw open.refuse();
+          if (world.running >= 1) throw new BotBusyError(input.bot, 1);
+          world.running += 1;
+          world.started.push(`${input.kind} ${input.subjectRef}`);
+          return { taskId: `task-${world.started.length}`, session: null };
+        },
+      } as never,
+    );
+    const runs: string[][] = [];
+    const runner = new StageRunner(
+      {
+        start: async (seats) => (runs.push([...seats]), stages.sweep({ seats })),
+        waitedOn: () => stages.waitingOnSeats().map((wait) => wait.botId),
+        hasRoom: async () => world.running < 1,
+      },
+      { delayMs: 0, log: () => undefined },
+    );
+    return { world, stages, runner, runs };
+  }
+
+  async function quietly<T>(fn: () => Promise<T>): Promise<T> {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      return await fn();
+    } finally {
+      warn.mockRestore();
+    }
+  }
+
+  const waits = () => board.events.filter((event) => event.type === WAITING_ON_SEAT);
+
+  it('is recorded as waiting on that seat, said once however often it is turned away', async () => {
+    const { stages } = seat();
+
+    expect(await quietly(() => stages.staff({ repoName: 'openadlc', issueNumber: 141, stage: 'spec', followOn: true }))).toBe(false);
+    await quietly(() => stages.sweep());
+
+    expect(stages.waitingOnSeats()).toEqual([
+      {
+        subjectRef: 'openadlc#141',
+        repo: 'openadlc',
+        issue: 141,
+        stage: 'spec',
+        seat: 'openadlc-sage-janedoe',
+        botId: SPEC_SEAT,
+        maxTasks: 1,
+        since: expect.any(String),
+      },
+    ]);
+    expect(waits()).toEqual([
+      {
+        source: 'platform',
+        type: WAITING_ON_SEAT,
+        payload: { subjectRef: 'openadlc#141', repo: 'openadlc', issue: 141, stage: 'spec', seat: 'openadlc-sage-janedoe', botId: SPEC_SEAT, maxTasks: 1 },
+      },
+    ]);
+  });
+
+  it('starts when the seat’s task ends, without the hourly sweep, and is no longer waiting', async () => {
+    const { world, stages, runner } = seat();
+    await quietly(() => stages.staff({ repoName: 'openadlc', issueNumber: 141, stage: 'spec', followOn: true }));
+
+    // #137's design ends: its seat has room, and the task's end says so.
+    world.running = 0;
+    runner.seatFreed(SPEC_SEAT, 'spec task done');
+
+    await vi.waitFor(() => expect(world.started).toEqual(['spec openadlc#141']));
+    expect(stages.waitingOnSeats()).toEqual([]);
+    expect(board.locked).toEqual(['openadlc:stage-sweep']);
+  });
+
+  it('starts two waiting issues next first, one each time the seat has room', async () => {
+    board.issues = [
+      { number: 20, repoName: 'openadlc', stage: 'spec', labels: ['priority:p3'], createdAt: '2026-10-23T09:00:00.000Z' },
+      { number: 21, repoName: 'openadlc', stage: 'spec', labels: ['priority:p1'], createdAt: '2026-10-23T12:00:00.000Z' },
+    ];
+    const { world, stages, runner } = seat();
+    await quietly(() => stages.staff({ repoName: 'openadlc', issueNumber: 20, stage: 'spec' }));
+    await quietly(() => stages.staff({ repoName: 'openadlc', issueNumber: 21, stage: 'spec' }));
+    const firstSince = stages.waitingOnSeats().find((wait) => wait.issue === 20)?.since;
+
+    world.running = 0;
+    runner.seatFreed(SPEC_SEAT, 'spec task done');
+    await vi.waitFor(() => expect(world.started).toEqual(['spec openadlc#21']));
+    // Turned away again by the start just made, and still waiting from when it first was.
+    await vi.waitFor(() => expect(stages.waitingOnSeats().map((wait) => [wait.issue, wait.since])).toEqual([[20, firstSince]]));
+
+    world.running = 0;
+    runner.seatFreed(SPEC_SEAT, 'spec task done');
+    await vi.waitFor(() => expect(world.started).toEqual(['spec openadlc#21', 'spec openadlc#20']));
+    expect(stages.waitingOnSeats()).toEqual([]);
+    expect(waits().map((event) => (event.payload as { issue: number }).issue)).toEqual([20, 21]);
+  });
+
+  it('is started once, however many asks arrive, and not again once it has started', async () => {
+    const { world, stages, runner, runs } = seat();
+    await quietly(() => stages.staff({ repoName: 'openadlc', issueNumber: 141, stage: 'spec' }));
+
+    // Two tasks end at once, and its tasks at once go up meanwhile.
+    world.running = 0;
+    runner.seatFreed(SPEC_SEAT, 'spec task done');
+    runner.seatFreed(SPEC_SEAT, 'spec task failed');
+    runner.seatFreed(SPEC_SEAT, 'its tasks at once went up');
+    await vi.waitFor(() => expect(world.started).toEqual(['spec openadlc#141']));
+    expect(runs).toEqual([[SPEC_SEAT]]);
+
+    // Its task ends too, before the board has moved it: it was not waiting
+    // any more, and nothing starts it a second time.
+    world.running = 0;
+    runner.seatFreed(SPEC_SEAT, 'spec task done');
+    await runner.now();
+    await quietly(() => stages.sweep({ seats: [SPEC_SEAT] }));
+
+    expect(world.started).toEqual(['spec openadlc#141']);
+    expect(world.asked).toBe(2);
+  });
+
+  it('does not start a design in its stage that its seat did not turn away: one a person stopped, or one that failed', async () => {
+    // Started again the moment its own task ended, a Stop would be undone,
+    // and a design that fails would fail again and again.
+    const { world, stages, runner } = seat();
+    world.running = 0;
+
+    runner.seatFreed(SPEC_SEAT, 'spec task stopped');
+    await runner.now();
+    await stages.sweep({ seats: [SPEC_SEAT] });
+
+    expect(world.asked).toBe(0);
+    expect(board.locked).toEqual([]);
+  });
+
+  it('is over once its issue has left the stage, and starts nothing there', async () => {
+    const { world, stages } = seat();
+    await quietly(() => stages.staff({ repoName: 'openadlc', issueNumber: 141, stage: 'spec' }));
+    // A person moved it on to Build meanwhile.
+    board.issues = [{ number: 141, repoName: 'openadlc', stage: 'build', labels: ['priority:p1'], createdAt: '2026-10-23T13:46:00.000Z' }];
+    world.running = 0;
+
+    await stages.sweep({ seats: [SPEC_SEAT] });
+
+    expect(world.asked).toBe(1);
+    expect(stages.waitingOnSeats()).toEqual([]);
+  });
+
+  it.each([
+    ['a full host', () => new HostFullError('openadlc-sage-janedoe')],
+    ['the same work already running', () => new SubjectBusyError('openadlc-sage-janedoe', 'openadlc#141')],
+    ['a restart owed', () => new RestartPendingError('openadlc-sage-janedoe', 'OpenADLC restarts onto v0.2.0')],
+  ])('is not waiting on the seat when the start was refused for %s', async (_why, refuse) => {
+    const { stages } = seat({ refuse });
+
+    await quietly(() => stages.staff({ repoName: 'openadlc', issueNumber: 141, stage: 'spec' }));
+
+    expect(stages.waitingOnSeats()).toEqual([]);
+    expect(waits()).toEqual([]);
+  });
+
+  it('reads the waits back after a restart, starts them when the seat has room, and does not say them again', async () => {
+    board.events = [
+      { type: WAITING_ON_SEAT, payload: { subjectRef: 'openadlc#141', repo: 'openadlc', issue: 141, stage: 'spec', seat: 'openadlc-sage-janedoe', botId: SPEC_SEAT, maxTasks: 1 } },
+      // Started since, by an earlier run: not waiting.
+      { type: WAITING_ON_SEAT, payload: { subjectRef: 'openadlc#140', repo: 'openadlc', issue: 140, stage: 'spec', seat: 'openadlc-sage-janedoe', botId: SPEC_SEAT, maxTasks: 1 } },
+    ];
+    board.issues = [
+      ...board.issues,
+      { number: 140, repoName: 'openadlc', stage: 'spec', labels: [], createdAt: '2026-10-01T00:00:00.000Z' },
+    ];
+    board.onSubject = { 'openadlc#140': [{ subjectRef: 'openadlc#140', kind: 'spec', state: 'running', createdAt: '2026-10-02T00:05:00.000Z' }] };
+    const { world, stages, runner } = seat();
+
+    expect(await stages.restoreWaits(Date.parse('2026-10-03T00:00:00.000Z'))).toBe(1);
+    expect(stages.waitingOnSeats()).toEqual([expect.objectContaining({ subjectRef: 'openadlc#141', since: '2026-10-02T00:00:00.000Z' })]);
+    await quietly(() => stages.staff({ repoName: 'openadlc', issueNumber: 141, stage: 'spec' }));
+    expect(waits()).toHaveLength(2);
+
+    // Found by the runner's look: nothing asked when the seat freed.
+    world.running = 0;
+    await runner.look();
+
+    await vi.waitFor(() => expect(world.started).toEqual(['spec openadlc#141']));
+  });
+
+  it('walks only the stages it is given, as a seat’s resume does', async () => {
+    board.issues = [
+      { number: 7, repoName: 'openadlc', stage: 'intake', labels: [], createdAt: '2026-10-23T09:00:00.000Z' },
+      { number: 141, repoName: 'openadlc', stage: 'spec', labels: [], createdAt: '2026-10-23T09:00:00.000Z' },
+    ];
+    const { world, stages } = seat();
+    world.running = 0;
+
+    await stages.sweep({ stages: stagesStaffedBy('spec') });
+
+    expect(stagesStaffedBy('spec')).toEqual(['spec']);
+    expect(stagesStaffedBy('intake')).toEqual(['intake']);
+    expect(stagesStaffedBy('implement')).toEqual([]);
+    expect(world.started).toEqual(['spec openadlc#141']);
   });
 });

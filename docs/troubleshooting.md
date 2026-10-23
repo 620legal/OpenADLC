@@ -1237,11 +1237,21 @@ question open on it, its place in the line to merge — never from a setting
 | Waiting for your answer | A bot asked | **Needs you**, or the question's comment on GitHub |
 | Could not finish · needs you · Review failed · needs you | The last task failed and nothing ran it again | Its **Needs you** card, and the bot's thread |
 | Stopped after N rounds · needs you | Reviews did not converge within `maxRounds` (`config/review.yaml`) | The pull request: a person decides |
-| Waiting for intake · Waiting for a design pass | Nobody is on it yet | The hourly stage sweep; the bridge log |
+| Waiting for `<seat>` · busy with #N · 32 min | Every slot of the seat that staffs its stage (`bots.max_tasks`, Crew → tasks at once) is taken by the queued or running tasks it names; a task paused on a person's answer takes none. Since when: when the seat turned it away (a `stage.waiting_on_seat` event), or when its row or last task last changed | The task it names; or raise the seat's tasks at once on Crew |
+| Not started · `<seat>` is free · starts within a minute | Its seat turned it away while full and has room now; it starts within about a minute (`StageRunner`) | Nothing to do; if it turns to Stuck, the bridge log's `stages,` lines |
+| Not started · `<seat>` is free · next sweep in 24 min | The seat has room and nothing tried it since: a webhook that never came, or a task that was stopped or failed. The hourly stage sweep starts it | The bridge log; Start it now from its Needs you card once it is stuck |
+| Next up · `<builder>` is free | Ready to build and first in line; the dispatcher leases it on its next look | The bridge log's dispatch lines |
+| Waiting its turn, after #N | Its seat has room, and the cards before it in line take it | The card it names |
+| Waiting for #N to let go of `<path>` | Another change in flight holds a file it declared (`paths:` in `.github/openadlc.yml`) | That card |
+| Waiting: `<repo>` builds 1 at a time · busy with #N (waiting for your answer) | The repository's concurrency is reached. A build paused on a person counts, and its card says "Waiting for your answer · holds `<repo>`'s build slot" | Answer that build's question; or Settings → Repositories |
+| Waiting for `<seat>` · paused on Crew · Waiting: `<seat>` cannot sign in to GitHub | Its seat is paused, or a check holds it back | Crew; the check's card in **Needs you** |
+| Held at the spending cap · Nobody staffs `<stage>` · `<stage>` is left to a person in `<repo>` | The month's cap stops new work; no bot has the role; the repository's stage mode is `untouched` | Settings → Spending limits; Crew; Settings → Repositories |
+| Stuck · `<seat>` is free and nothing started it | It has waited three minutes (`STUCK_AFTER_MS` in `apps/bridge/src/waiting.ts`) with its seat free and nothing started. Its dot is the alarm colour and still, and **Needs you** has a system card, "Nothing has started #N for … min, and `<seat>` is free", which says why and goes once the work starts | That card's **Start it now** (the stage sweep for intake and design, a dispatch for a build); then the seat's thread and the bridge log |
+| Waiting for intake · Waiting for a design pass | From a bridge older than the waiting reasons: nobody is on it yet | The hourly stage sweep; the bridge log |
 | Not ready to build yet | No `start:now` label | The issue's labels |
 | Waiting for triage | Sent back: it lacks a priority, an area, one `do:` label, one of its four sections or an expected path, or three builds ran and produced no pull request. Only builds that started and ended on their own count: a lease the bridge refused, one whose task never started, and a build that was stopped (by a person, or by its host going away) do not. Once the issue says what it wants, take `needs-triage` off and put `start:now` back: it gets three fresh attempts | The issue, and its "Not routable yet" comment |
-| Waiting on #N | A dependency named in the issue has not shipped | That issue |
-| Next up · Waiting its turn | Routable, and no builder has taken it | The bridge log's dispatch lines |
+| Waiting on #N (what #N is doing) | A dependency named in the issue has not shipped; in brackets, what is happening on it now: its bot and step, "waiting for your answer", what it waits for itself | That issue |
+| Next up · Waiting its turn (no time after it) | From a bridge older than the waiting reasons: routable, and no builder has taken it | The bridge log's dispatch lines |
 | Waiting: the dispatcher isn’t running | Routable, but the bridge was started without `OPENADLC_DISPATCH_IN_BRIDGE=1`, so nothing leases it | The `dispatcher` card on the board; see [Stopping new work while you look](#stopping-new-work-while-you-look) |
 | Approved · 2nd in line to merge · Catching up with main… | The merge line | A `repo-rules` card, if nothing lands |
 | Approved · waiting for you to merge it | Only a person can land it | Its **Needs you** card says why; see [A green pull request waits for a person](#a-green-pull-request-waits-for-a-person) |
@@ -1251,6 +1261,7 @@ question open on it, its place in the line to merge — never from a setting
 | Waiting until `<repo>` is resumed | The repository is paused | Settings → Pause work |
 | Merged · waiting to deploy | No `deployed:testing` yet, in a repository that has a testing deploy | Settings → Repositories: how it ships, and where the rules came from; the bridge log's `dispatched deploy-testing` or `not dispatched` line |
 | No merge to deploy · move it to Done by hand | In Ship, and its issue records no pull request, in a repository that has a testing deploy: no deploy carries it, and nothing that finishes a merge moves it. Move it to Done once its change has shipped, or back to the stage its work is in | The deploy sweep's `is merged with no pull request recorded` line |
+| Merged · ships with the next release | The repository ships by release (`testing: on: release`): no deploy is coming, and the card goes to Done when a published release, not a draft or a prerelease, contains its merge | Settings → Repositories → Ships by release; the deploy sweep's `in Ship until a published release contains` line; the `ships-by-release` card, when the app is not subscribed to Release events |
 | Abandoned … (in Done) | Closed without merging: it is labelled `openadlc:abandoned`, nothing shipped, and it is not in "N this week" | The issue on GitHub; see [Closed, but still on the board or in Needs you](#closed-but-still-on-the-board-or-in-needs-you) |
 
 A repository whose delivery rules say `testing: on: none` does not sit on that
@@ -1433,19 +1444,27 @@ behaves like this:
   resolution round like any other. The builder's resolution is reviewed as
   that round says (above): by the lead alone, or by every reviewer again.
 - **It is held (`openadlc:paused`) with a note.** The dependency was sent back
-  to build, so what it was built on is changing. Resume it from its card once
-  the dependency is settled, or cancel it and let it be built again from main.
-  The note says instead that the dependency **was closed without merging**
-  when its issue was closed with its pull request unmerged: the dependency's
-  commits are in this branch and will not land, so redo it from main, or
-  resume it once that work lands another way. A dependency that merged is
-  never a reason to hold it.
+  to build, so what it was built on is changing. It goes on by itself once the
+  dependency is approved again (its gate green on its new head) or merges:
+  the issue and its timeline say `Let go`, and its reviews start on that
+  sweep. If the dependency's change touched files this one changes, its
+  builder first brings it up to date with a patch round. While it waits on
+  the dependency, the gate sweep says once that its reviews wait for the hold,
+  rather than trying them every ten minutes. To let it go sooner, resume it
+  from its card, or cancel it and let it be built again from main.
+- **It is held for a person, with a card in Needs you.** Its builder could
+  not take the patch round (the card says why), or the dependency **was
+  closed without merging**: its commits are in this branch and will not land.
+  Bring the branch up to date yourself and press Resume, resume it once that
+  work lands another way, or cancel it and redo it from main. A dependency
+  reopened and approved lets it go by itself; one that merged is never a
+  reason to hold it.
 - **Turning it off.** Set `stacking: false` in the repository's
   `.github/openadlc.yml`; the issue then waits for its dependency to ship, as
   before.
 
 ```bash
-grep -E 'resolution round|waits for #|stacked on' "$(openadlc logs bridge)" | tail -n 20
+grep -E 'resolution round|waits for #|stacked on|let go|held for a person|once the hold goes' "$(openadlc logs bridge)" | tail -n 20
 ```
 
 ## An approved plan change waits on another issue
@@ -1612,7 +1631,17 @@ it was; otherwise it says why not, and that the sweep tries again.
   of the repository while its newest testing deploy had nothing to deploy.
   If the repository has no testing environment, say so in its rules too
   (`testing: on: none`, or Settings → Repositories → **No testing deploy**):
-  merging then ships without a dispatch.
+  merging then ships without a dispatch. If it ships as a release instead,
+  tick Settings → Repositories → **Ships by release** (`testing: on: release`):
+  its cards then wait in Ship for the release that contains them.
+- **A release was published and its cards are still in Ship** — the release
+  is a draft or a prerelease, which ship nothing; or its tag's commit does not
+  contain their merge (it was cut before they merged); or no `release`
+  delivery came, and the deploy sweep moves them at its next run, saying
+  `moved to Done: released in vX.Y.Z`. The `ships-by-release` card says when
+  the app is not subscribed to **Release** events: tick it on the app's
+  Permissions & events page, and releases move cards as they are published. A
+  card with no pull request recorded has no merge to compare: move it by hand.
 
 ## A stacked issue waits after its base merged
 
@@ -1681,7 +1710,7 @@ Every reconcile pass (a quarter of an hour) tries them as well, for a lease
 let go where nothing looks at once.
 
 ```bash
-grep -E 'deployed nothing|released the lease|reached Done|merging shipped it' "$(openadlc logs bridge)" | tail -n 20
+grep -E 'deployed nothing|released the lease|reached Done|merging shipped it|released in' "$(openadlc logs bridge)" | tail -n 20
 ```
 
 ## Something is left after removing a repository

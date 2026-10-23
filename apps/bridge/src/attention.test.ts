@@ -2206,6 +2206,8 @@ describe('GET /v1/attention', () => {
       'task.resume_waits_on_github',
       'design_memory.superseded',
       'review.person_asked_again',
+      // The starts a full seat turned away, for the work stuck behind none.
+      'stage.waiting_on_seat',
     ]);
     expect(body.items.map((item) => item.id)).toEqual(['stall:openadlc-testbed#29', 'gate:gate-old']);
     // A gate older than the week is still a gate: its task is read on its own.
@@ -2395,6 +2397,71 @@ describe('an approved plan change that waits on another lease', () => {
   });
 });
 
+describe('a stacked change OpenADLC holds', () => {
+  // OpenADLC#137 was held on #141 and waited on a Resume while Needs you was
+  // empty: the only place that said so was the bridge's log.
+  const held = (extra: Record<string, unknown> = {}) => ({
+    repo: 'openadlc-testbed',
+    issue: 20,
+    on: 11,
+    onPr: 29,
+    since: minutesAgo(30),
+    why: '#11, which this was built on, was sent back to build: what it was built on is changing',
+    needsPerson: null,
+    ...extra,
+  });
+  const stacked = { ...issue(20, 'Show the limit on the card', 'review', 40), labels: ['adlc:review', 'openadlc:paused'] };
+  const base = { now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, requests: [], stallEvents: [] };
+  const cards = async (input: Record<string, unknown>) => {
+    const { attentionItems } = await load();
+    return attentionItems({ ...base, ...input } as never).filter((item) => item.kind === 'stack_held');
+  };
+
+  it('is no card while it waits on what it was built on, which lets it go by itself', async () => {
+    expect(await cards({ issues: [...ISSUES, stacked], heldStacks: [held()] })).toEqual([]);
+  });
+
+  it('names what it was built on and what to press when its builder could not bring it up to date, and goes with the hold', async () => {
+    const needsPerson = 'the builder that held #20 is no longer in the crew';
+    expect(await cards({ issues: [...ISSUES, stacked], heldStacks: [held({ needsPerson })] })).toEqual([
+      {
+        id: 'stack-hold:openadlc-testbed#20',
+        kind: 'stack_held',
+        group: 'work',
+        headline: '#20 is held: its builder could not bring it up to date with #11',
+        subject: expect.objectContaining({ repo: 'openadlc-testbed', number: 20, ref: 'openadlc-testbed#20', item: 'openadlc-testbed#20' }),
+        bot: null,
+        since: minutesAgo(30),
+        detail:
+          'the builder that held #20 is no longer in the crew. Bring its branch up to date with what #11 became, then press Resume; or cancel #20 from its card and file the work again.',
+        actions: [
+          { kind: 'resume_item', label: 'Resume', subject: 'openadlc-testbed#20' },
+          { kind: 'open_url', label: 'Open #11', url: 'https://github.com/janedoe/openadlc-testbed/issues/11' },
+        ],
+      },
+    ]);
+
+    // Resumed, or let go: the label is off, and the card goes with it.
+    const resumed = { ...stacked, labels: ['adlc:review'] };
+    expect(await cards({ issues: [...ISSUES, resumed], heldStacks: [held({ needsPerson })] })).toEqual([]);
+    expect(await cards({ issues: [...ISSUES, stacked], heldStacks: [] })).toEqual([]);
+  });
+
+  it('says so when what it was built on was closed without merging, or is gone from the board', async () => {
+    const abandoned = { ...issue(11, 'Rate-limit the webhook route', 'done', 29), labels: ['adlc:done', 'openadlc:abandoned'] };
+    const others = ISSUES.filter((one) => one.number !== 11);
+
+    const [card] = await cards({ issues: [...others, abandoned, stacked], heldStacks: [held()] });
+    expect(card?.headline).toBe('#20 is held: #11, which it was built on, was closed without merging');
+    expect(card?.detail).toContain('Press Resume once that work lands another way, or reopen #11');
+    expect(card?.actions[0]).toEqual({ kind: 'resume_item', label: 'Resume', subject: 'openadlc-testbed#20' });
+
+    const [gone] = await cards({ issues: [...others, stacked], heldStacks: [held()] });
+    expect(gone?.headline).toBe('#20 is held: #11, which it was built on, is gone from the board');
+    expect(gone?.actions.map((action) => action.kind)).toEqual(['resume_item']);
+  });
+});
+
 describe('a design that superseded what a repository had decided', () => {
   it('is a notice on the issue: what replaced what, links to the comment and to Settings, and nothing to do', async () => {
     const { attentionItems } = await load();
@@ -2475,6 +2542,7 @@ describe('which group an item is in', () => {
     expect(['question', 'review_stalled', 'task_failed', 'triage_failed'].map((kind) => groupOf(kind as never))).toEqual(['work', 'work', 'work', 'work']);
     expect(['check_failed', 'check_fixed', 'engine_update_failed'].map((kind) => groupOf(kind as never))).toEqual(['system', 'system', 'system']);
     expect(groupOf('dependency_abandoned')).toBe('work');
+    expect(groupOf('stack_held')).toBe('work');
 
     const failed = task({ id: 'task-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'failed', endedAt: minutesAgo(40), exitReason: 'engine exited 1' });
     const items = attentionItems({
@@ -3108,5 +3176,85 @@ describe('a start GitHub did not answer for', () => {
 
     expect(items.map((item) => item.id)).toEqual(['task:task-last']);
     expect(items[0]?.detail).toMatch(/and OpenADLC has stopped trying on its own\. Try again once GitHub answers\.$/);
+  });
+});
+
+/**
+ * Work that has waited past the limit with its seat free and nothing started
+ * is a system card in Needs you, naming the seat, why nothing started it, and
+ * Start it now; it goes once the work starts (#144). On 2026-10-23 #141 sat
+ * in Design for over half an hour and nobody was told.
+ */
+describe('work stuck with its seat free', () => {
+  const designer = { id: 'bot-spec', name: 'system-engineer', slot: 'system-engineer', role: 'spec', githubLogin: null, maxTasks: 1 };
+  const design = { ...issue(141, 'Say on a waiting card who it waits for', 'spec'), updatedAt: minutesAgo(41), body: '', labels: ['adlc:spec'] };
+  const nextSweep = new Date(NOW.getTime() + 24 * 60_000).toISOString();
+  const items = async (extra: Record<string, unknown> = {}) => {
+    const { attentionItems } = await load();
+    return attentionItems({
+      now: NOW,
+      gates: [],
+      tasks: [],
+      bots: [...BOTS, designer],
+      repos: REPOS,
+      issues: [design],
+      requests: [],
+      stallEvents: [],
+      waiting: { nextSweepAt: nextSweep },
+      ...extra,
+    } as never).filter((item) => item.kind === 'work_stuck');
+  };
+
+  it('is a system card naming the seat, why nothing started it, and Start it now', async () => {
+    const [stuck, ...more] = await items();
+    expect(more).toEqual([]);
+    expect(stuck).toMatchObject({
+      id: 'stuck:openadlc-testbed#141',
+      kind: 'work_stuck',
+      group: 'system',
+      since: minutesAgo(41),
+      subject: { repo: 'openadlc-testbed', number: 141, ref: 'openadlc-testbed#141' },
+      bot: { name: 'system-engineer', role: 'spec' },
+      headline: 'Nothing has started openadlc-testbed#141 for 41 min, and the system engineer is free',
+    });
+    expect(stuck?.detail).toBe(
+      'openadlc-testbed#141 waits for its design pass, the system engineer has room for it, and nothing has started it in over 3 minutes. ' +
+        'Nothing has tried it since the seat had room, so the stage sweep starts it, in 24 min. ' +
+        'Start it now; if it still does not start, its thread says what it last did.',
+    );
+    expect(stuck?.actions).toEqual([
+      { kind: 'start_work', label: 'Start it now', subject: 'openadlc-testbed#141' },
+      { kind: 'open_thread', label: 'Open thread', bot: 'system-engineer' },
+      { kind: 'open_url', label: 'Open the issue', url: 'https://github.com/janedoe/openadlc-testbed/issues/141' },
+    ]);
+  });
+
+  it('clears once work starts on it', async () => {
+    const designing = task({ botId: 'bot-spec', kind: 'spec', subjectRef: 'openadlc-testbed#141', state: 'running' });
+    expect(await items({ tasks: [designing] })).toEqual([]);
+  });
+
+  it('is not said before the limit, for work waiting on a busy seat, or where intake has a card of its own', async () => {
+    expect(await items({ issues: [{ ...design, updatedAt: minutesAgo(2) }] })).toEqual([]);
+    const elsewhere = task({ botId: 'bot-spec', kind: 'spec', subjectRef: 'openadlc-testbed#99', state: 'running' });
+    expect(await items({ tasks: [elsewhere] })).toEqual([]);
+    const triage = { ...design, stage: 'intake' as never, labels: ['adlc:intake'] };
+    expect((await items({ issues: [triage] })).map((item) => item.id)).toEqual(['stuck:openadlc-testbed#141']);
+    expect(await items({ issues: [triage], intakeStalls: [{ at: minutesAgo(30), payload: { subjectRef: 'openadlc-testbed#141', tries: 2 } }] })).toEqual([]);
+  });
+
+  it('says when no sweep will come', async () => {
+    const [stuck] = await items({ waiting: { nextSweepAt: null } });
+    expect(stuck?.detail).toContain('the stage sweep that would is off on this bridge (OPENADLC_JOB_STAGES_MINUTES=0)');
+  });
+
+  it('says what kept back work its seat turned away, which starts within a minute of the seat having room', async () => {
+    const turnedAway = { at: minutesAgo(41), payload: { subjectRef: 'openadlc-testbed#141', repo: 'openadlc-testbed', issue: 141, stage: 'spec', seat: 'system-engineer', botId: 'bot-spec', maxTasks: 1 } };
+    const [stuck] = await items({ waiting: { nextSweepAt: nextSweep, seatWaitEvents: [turnedAway] } });
+    expect(stuck?.detail).toContain('The seat turned it away while it was full, and work a seat turned away starts within a minute of the seat having room');
+  });
+
+  it('says nothing is stuck where nothing said what work waits on', async () => {
+    expect(await items({ waiting: undefined })).toEqual([]);
   });
 });

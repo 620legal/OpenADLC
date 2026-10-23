@@ -10,6 +10,7 @@ import { Afterwards, registerConsoleApi, retryDepsFor, stopTask } from './api.js
 import { SendBack } from './send-back.js';
 import { DeliveryKnowledge } from './delivery-rules.js';
 import { DeployPipeline } from './deploy-pipeline.js';
+import { ReleaseShipping } from './release-shipping.js';
 import { isPrerequisiteRow } from './health/checks/crew.js';
 import { retryTask } from './task-retry.js';
 import { AppReach } from './app-reach.js';
@@ -44,7 +45,8 @@ import { Router } from './router.js';
 import { REQUEST_SWEEP_MS, RequestQueue } from './request-queue.js';
 import { WatermarkStream } from './thread-stream.js';
 import { Scheduler, retryAfterRecovery } from './scheduler.js';
-import { StageHandoff } from './stage-handoff.js';
+import { StageHandoff, stagesStaffedBy } from './stage-handoff.js';
+import { StageRunner } from './stage-runner.js';
 import { TaskService } from './task-service.js';
 import { Webhooks } from './webhooks.js';
 import { BACKFILL_EVERY_MS, WorkItemBackfill } from './work-item-backfill.js';
@@ -169,6 +171,24 @@ async function main(): Promise<void> {
         .then((client) => (client ? client.getPullRequest(fullName, number) : null))
         .catch(() => null),
   );
+  // What a seat running all it may at once turned away starts once the seat
+  // may have room: a task of its ending, its tasks at once raised, or found
+  // with room by the runner's look every minute (`stage-runner.ts`).
+  const stageRuns = new StageRunner({
+    start: (seats) => stages.sweep({ seats }),
+    waitedOn: () => stages.waitingOnSeats().map((wait) => wait.botId),
+    hasRoom: (seat) => tasks.seatHasRoom(seat),
+  });
+  // A task stopped from outside its own session — a card's Cancel, its pull
+  // request closing, a send-back — frees its seat as one that ended does.
+  const stopFreeing = async (taskId: string, actor: string, note: string) => {
+    const stopped = await stopTask(taskId, actor, note, hostd, { unfinished: true });
+    if (stopped.stopped) {
+      const seat = (await tasks.getTask(taskId).catch(() => null))?.botId;
+      if (seat) stageRuns.seatFreed(seat, 'a task was stopped');
+    }
+    return stopped;
+  };
   const mergeLine = new MergeLine(config, actors, taskService, automation);
   // The dispatcher, run here — where an issue changing or a task ending
   // arrives — as soon as either could let work start, and every five minutes
@@ -223,17 +243,21 @@ async function main(): Promise<void> {
     taskService,
     stages,
     dispatchRuns,
-    stopTask: (taskId, actor, note) => stopTask(taskId, actor, note, hostd, { unfinished: true }),
+    stopTask: stopFreeing,
     client: () => asAutomation(actors, config),
   });
   // A branch the merge line cannot bring up to date goes back to build.
-  mergeLine.useSendBack((input) => sendBack.backToBuild(input));
+  mergeLine.useSendBack(async (input) => {
+    await sendBack.backToBuild(input);
+  });
   // A conflict at the front of the line gets a short resolution round, and
   // one in shared files is re-checked by the lead alone (`conflict-round.ts`).
   const conflictRounds = new ConflictRounds({
     taskService,
     client: () => asAutomation(actors, config),
-    backToBuild: (input) => sendBack.backToBuild(input),
+    backToBuild: async (input) => {
+      await sendBack.backToBuild(input);
+    },
   });
   mergeLine.useConflictRounds(conflictRounds);
   // An issue that depends on one in review starts from its branch, and lands
@@ -244,6 +268,10 @@ async function main(): Promise<void> {
     // A stacked build is new work: the dispatcher's gate holds it as it holds a lease.
     paused: (repo) => dispatchGate.paused(repo),
     dispatching: () => anythingDispatches(dispatchMode),
+    // A held one goes once what it was built on is approved again or merges,
+    // to its builder first when that changed its files.
+    gate: (repoFullName, sha) => automation.publishedGate(repoFullName, sha),
+    rebuild: (input) => sendBack.backToBuild(input),
   });
   mergeLine.useStacking(stacking);
   // Approvals stand across a lead-only resolution and a stacked update; after
@@ -260,12 +288,17 @@ async function main(): Promise<void> {
   // the pipeline that dispatches its deploys as the app. OPENADLC_TESTING_URL is
   // read only as the deprecated fallback for a repository whose rules name no URL.
   const delivery = new DeliveryKnowledge(() => asAutomation(actors, config), config.testingUrl);
+  const deployClient = async (repoFullName: string) =>
+    (await appGate.client(repoFullName).catch(() => null)) ?? (await asAutomation(actors, config).catch(() => null));
   const pipeline = new DeployPipeline({
     delivery,
-    client: async (repoFullName) => (await appGate.client(repoFullName).catch(() => null)) ?? (await asAutomation(actors, config).catch(() => null)),
+    client: deployClient,
     sendBack,
     // A merge whose testing deploy had nothing to deploy goes to Done.
     moveStage: (input) => automation.moveStage(input),
+    // A repository that ships by release: its cards go to Done when a
+    // published release contains their merge (`release-shipping.ts`).
+    releases: new ReleaseShipping({ delivery, client: deployClient, moveStage: (input) => automation.moveStage(input) }),
   });
   const webhooks = new Webhooks(
     config,
@@ -285,7 +318,7 @@ async function main(): Promise<void> {
   // A QA task's testing.md names the URL these rules resolve to; see `Context.forQa`.
   context.useDelivery(delivery);
   // A closed pull request's reviews stop the way a card's Stop stops them.
-  webhooks.useStopTask((taskId, actor, note) => stopTask(taskId, actor, note, hostd, { unfinished: true }));
+  webhooks.useStopTask(stopFreeing);
   webhooks.useConflictRounds(conflictRounds);
   webhooks.useStacking(stacking);
   // GitHub Actions minutes: each completed run's, read from its jobs as the
@@ -636,6 +669,11 @@ async function main(): Promise<void> {
     attribution,
     sendBack,
     delivery,
+    stageRuns,
+    // When the stage sweep comes round, and whether anything leases a build:
+    // what a card waiting with nothing going on it says.
+    nextRun: (job: string) => jobs.nextRun(job),
+    dispatching: anythingDispatches(dispatchMode),
   };
   registerConsoleApi(router, deps);
   // One seat paused from Crew takes no new work; resuming it starts what that
@@ -651,6 +689,13 @@ async function main(): Promise<void> {
       for (const line of await scheduler.settleGates()) console.log(`[bridge] resumed: ${line}`);
       const bot = await bots.getBotByName(seat);
       if (!bot) return;
+      // The stages it staffs: their starts were refused with the pause's
+      // words, not as busy, so they are walked whole, as the install's resume
+      // walks every stage.
+      const staffed = stagesStaffedBy(bot.role);
+      if (staffed.length > 0) {
+        for (const line of await stages.sweep({ stages: staffed })) console.log(`[bridge] resumed ${seat}: ${line}`);
+      }
       const held = heldBySeatPause(await tasks.listTasks({ botId: bot.id, limit: 50 }));
       for (const task of held) {
         await retryTask(task.id, 'seat-resumed', retryDepsFor(deps)).catch((error: unknown) =>
@@ -672,7 +717,7 @@ async function main(): Promise<void> {
       });
     },
     abandonRequest: async (requestId, actor, note) => {
-      const done = await abandonRequest({ requestId, actor, note, stop: (taskId, by, why) => stopTask(taskId, by, why, hostd, { unfinished: true }) });
+      const done = await abandonRequest({ requestId, actor, note, stop: stopFreeing });
       if (done.outcome === 'unknown') throw new Error('there is no such request');
       if (done.outcome === 'finished') {
         if (done.state === 'abandoned') return 'it was already abandoned';
@@ -694,7 +739,7 @@ async function main(): Promise<void> {
       const ids = new Set((await tasks.listTasksOnSubjects(subjects)).map((task) => task.id));
       return (await threadStore.listOpenGates()).filter((gate) => gate.taskId && ids.has(gate.taskId)).length;
     },
-    stop: (taskId, actor, note) => stopTask(taskId, actor, note, hostd, { unfinished: true }),
+    stop: stopFreeing,
     closeQuestions: async (taskId, actor, reason) => (await threadStore.expireGatesOfTask(taskId, actor, reason)).length,
     leaveMergeLine: (repoName, prNumber) => mergeLine.leave(repoName, prNumber),
     releaseLease: async (repoId, issueNumber, reason) => {
@@ -712,6 +757,17 @@ async function main(): Promise<void> {
       await mergeLine.advance(item.repoName).catch(() => null);
     },
     dispatchSoon: (reason) => dispatchRuns?.soon(reason),
+    // The stage sweep for that stage, which starts the cards waiting on it
+    // in their order, or a dispatch for a build: what comes round anyway.
+    startNow: async (item) => {
+      const stage = item.issue?.stage;
+      if (stage === 'intake' || stage === 'spec') return stages.sweep({ stages: [stage] });
+      if (stage === 'build' && dispatchRuns) {
+        dispatchRuns.soon(`${item.key} was asked to start`);
+        return [`asked the dispatcher to look at ${item.key} now`];
+      }
+      return [];
+    },
     pausePull: (repoFullName, prNumber) => automation.pausePull(repoFullName, prNumber),
     later: (item, what, work) => afterwards.run({ subjectRef: item.key }, what, work),
   });
@@ -737,6 +793,9 @@ async function main(): Promise<void> {
     pipeline,
     delivery,
     setRules: (repoId, rules) => repos.setDelivery(repoId, { deliveryRules: rules }),
+    storedRules: async (repoId) => (await repos.getDelivery(repoId)).deliveryRules,
+    clearRules: (repoId) => repos.setDelivery(repoId, { deliveryRules: null }),
+    recheck: () => health.runSoon(['ships-by-release']),
     recordChoice: (repoId, choice) => repos.setProductionChoice(repoId, choice),
     held: (repoId) => deployRuns.heldForPerson(repoId),
     soak: (repoId, sha, after, detail) => deployRuns.holdPromote(repoId, sha, after, detail),
@@ -843,6 +902,15 @@ async function main(): Promise<void> {
     health.start();
     // After listening, because a dispatch reaches this bridge's own routes.
     dispatchRuns?.start();
+    // The issues busy seats had turned away when the bridge last stopped,
+    // read back so they start when their seat has room, not at the next sweep.
+    void stages
+      .restoreWaits()
+      .then((count) => {
+        if (count > 0) console.log(`[bridge] ${count} issue(s) wait on a busy seat; each starts when its seat has room`);
+      })
+      .catch((error: unknown) => console.warn(`[bridge] could not read which issues wait on a busy seat: ${error instanceof Error ? error.message : error}`));
+    stageRuns.start();
     console.log(`[bridge] listening on :${config.port}`);
     console.log(`[bridge] hostd at ${config.hostdUrl}`);
     console.log(`[bridge] identity: ${identity.describe()}`);
@@ -857,6 +925,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     dispatchRuns?.stop();
+    stageRuns.stop();
     names.stop();
     health.stop();
     server.close();

@@ -1,0 +1,183 @@
+# The release button: cuts a release of OpenADLC from GitHub's web page, a
+# phone's included. Actions, then "cut release", then Run workflow, on main,
+# with a version or none for the next patch; then approve the `release`
+# environment's job. It pushes the version tag as the releaser, and the push
+# starts release.yml exactly as a tag he pushed himself would
+# (docs/development.md#the-cut-release-button).
+#
+# Why it pushes with his token. Installs check a release's signature for
+# `--source-ref refs/tags/<tag>` (imageAttestationCheckArgs in
+# packages/shared/src/self-update.ts), which holds only for a run of
+# release.yml on a tag push, and release-build.yml refuses a tag unless the
+# run's triggering actor, the person whose credential pushed it, is one of
+# RELEASERS. A tag pushed with this run's GITHUB_TOKEN starts no workflow at
+# all ("events triggered by the GITHUB_TOKEN ... will not create a new
+# workflow run"), and a release built from this run would be signed for
+# refs/heads/main, which every install refuses. So the tag is pushed with a
+# fine-grained token of the releaser's own, `RELEASE_TAG_TOKEN`, a secret of
+# the `release` environment, and the release path is the one it always was.
+#
+# `check` holds no secret and refuses, saying why
+# (.github/scripts/cut-release-check.mjs): a run not on main, a run started or
+# re-run by anyone not in RELEASERS, a `release` environment not set up as the
+# docs say, a version that is not new and above every release, and a commit
+# whose ci did not pass, with release-build's own checks. Only then does `tag`
+# ask for the environment's approval. What keeps the token from everyone else
+# is the environment, not `check`: GitHub gives its secret only to a job of a
+# run on main, once one of its required reviewers, each a releaser, approved
+# it, and a run on any other branch is that branch's copy of this file, which
+# could skip `check`. In `tag` one step reads the token, and that step runs
+# no action and nothing from the checkout: gh, git and the shell's own tools.
+name: cut release
+run-name: cut release ${{ inputs.version || '(next patch)' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version to release, such as 0.2.0; empty for the next patch after the newest release
+        required: false
+        type: string
+        default: ''
+
+# Nothing by default; each job names what it needs. Neither writes with the
+# run's token: the one write, the tag, is the releaser's.
+permissions: {}
+
+# One at a time: two runs would count the same next patch.
+concurrency:
+  group: cut-release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: a releaser's run on main, for a new version, on a commit whose ci passed
+    runs-on: ubuntu-24.04
+    # As release-build's check: most of it can be waiting for ci on a commit
+    # merged just before.
+    timeout-minutes: 40
+    permissions:
+      # The history, the tags and the releases' files.
+      contents: read
+      # ci.yml's runs, their jobs and artifacts, and the release environment.
+      actions: read
+      # The pull request a run tested, and whether its base ever changed.
+      pull-requests: read
+      issues: read
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      sha: ${{ steps.check.outputs.sha }}
+      actor: ${{ steps.check.outputs.actor }}
+    steps:
+      # Full history and the tags: where main's first parents and the newest
+      # release are, and RELEASERS as main has it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: the run is a releaser's, on main, for a new version of a commit whose ci passed
+        id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          REPO: ${{ github.repository }}
+          REPO_ID: ${{ github.repository_id }}
+          MAIN_HEAD: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/cut-release-check.mjs
+
+  tag:
+    name: push the tag
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # GitHub holds this job until a required reviewer approves it, and gives
+    # it the environment's secret only then, and only in a run on main
+    # (docs/development.md#the-cut-release-button sets that up).
+    environment: release
+    permissions:
+      # The checked commit, to tag it. The push is the releaser's token's.
+      contents: read
+      # The run of release.yml the push starts, to link it.
+      actions: read
+    env:
+      TAG: ${{ needs.check.outputs.tag }}
+      SHA: ${{ needs.check.outputs.sha }}
+      REPO: ${{ github.repository }}
+    steps:
+      # Re-running this job alone reuses `check`'s result: whoever re-runs it
+      # must be who `check` let through.
+      - name: the run is still the releaser's
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+          CHECKED: ${{ needs.check.outputs.actor }}
+        run: |
+          if [ -z "$CHECKED" ] || [ "$ACTOR" != "$CHECKED" ]; then
+            echo "this run was started or re-run by $ACTOR, not by ${CHECKED:-the releaser check let through}. Nothing is tagged"
+            exit 1
+          fi
+
+      # The commit alone, with no credential left in the checkout: the push
+      # below names its own.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+          persist-credentials: false
+
+      # The one step that reads the token. It asks GitHub whose the token is
+      # and refuses one that is not the releaser's who ran this, since the tag
+      # is pushed as its owner and release-build reads that as who released;
+      # an expired or revoked one is refused there too, before anything is
+      # made. The tag is annotated, by its owner, and pushed with git, the
+      # credential in the environment of that one git command
+      # (GIT_CONFIG_COUNT), never on a command line or in the log.
+      - name: push the tag as the releaser
+        env:
+          RELEASE_TAG_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}
+          ACTOR: ${{ github.triggering_actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$RELEASE_TAG_TOKEN" ]; then
+            echo "the release environment has no secret RELEASE_TAG_TOKEN, so nothing can be pushed as $ACTOR: add it as docs/development.md#the-cut-release-button says. Nothing is tagged"
+            exit 1
+          fi
+          if ! read -r login id < <(GH_TOKEN="$RELEASE_TAG_TOKEN" gh api user --jq '"\(.login) \(.id)"'); then
+            echo "GitHub does not take RELEASE_TAG_TOKEN: it has expired or been revoked. Make a new one and replace the secret, as docs/development.md#the-cut-release-button says. Nothing is tagged"
+            exit 1
+          fi
+          if [ "$(printf '%s' "$login" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$ACTOR" | tr '[:upper:]' '[:lower:]')" ]; then
+            echo "RELEASE_TAG_TOKEN is $login's, not $ACTOR's, so the tag would be pushed as someone other than the releaser who ran this. Nothing is tagged"
+            exit 1
+          fi
+          git -c user.name="$login" -c user.email="$id+$login@users.noreply.github.com" \
+            tag -a "$TAG" "$SHA" -m "$TAG" -m "Cut by $login with $RUN_URL"
+          basic=$(printf '%s:%s' "$login" "$RELEASE_TAG_TOKEN" | base64 | tr -d '\n')
+          if ! GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $basic" git push origin "refs/tags/$TAG:refs/tags/$TAG"; then
+            echo "GitHub refused the push of $TAG as $login, for the reason above. Nothing is released"
+            exit 1
+          fi
+          echo "pushed $TAG on $SHA as $login"
+
+      # With the run's own token, which reads Actions. The push's own run
+      # takes a few seconds to appear.
+      - name: link the release run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            url=$(gh api "repos/$REPO/actions/workflows/release.yml/runs?event=push&branch=$TAG&per_page=1" --jq '.workflow_runs[0].html_url // empty')
+            if [ -n "$url" ]; then
+              echo "the release of $TAG: $url"
+              echo "The release of $TAG is running: $url" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            if [ "$attempt" -lt 12 ]; then sleep 10; fi
+          done
+          echo "$TAG is pushed, but no run of release.yml for it appeared in two minutes: look for it at $GITHUB_SERVER_URL/$REPO/actions/workflows/release.yml"
+          exit 1

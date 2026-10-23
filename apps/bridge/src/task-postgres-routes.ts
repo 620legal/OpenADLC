@@ -1,5 +1,14 @@
 import { audit, hosts, repos } from '@openadlc/db';
-import { parseTaskPostgres, TASK_POSTGRES_ENV, TASK_POSTGRES_IMAGES, withoutPasswords, type TaskPostgresSetting } from '@openadlc/shared';
+import {
+  COMPOSE_FILES,
+  parseTaskPostgres,
+  postgresFromCompose,
+  TASK_POSTGRES_ENV,
+  TASK_POSTGRES_IMAGES,
+  withoutPasswords,
+  type ComposePostgresServer,
+  type TaskPostgresSetting,
+} from '@openadlc/shared';
 import { HttpFailure, type Router } from './router.js';
 
 /**
@@ -45,26 +54,83 @@ export function taskPostgresSupport(
   return { ok: null, why: 'No host has checked in for two minutes, so whether one can give a task a server of its own is not known: start hostd, and this says.' };
 }
 
+/**
+ * What the repository's Compose file starts, for the form to be filled with
+ * (`GET /v1/repos/:name/task-postgres/compose`): the file it was read from,
+ * on which branch, and the servers; or why there are none to suggest.
+ */
+export type TaskPostgresCompose =
+  | { ok: true; file: string; branch: string; servers: ComposePostgresServer[]; notes: string[] }
+  | { ok: false; file: string | null; branch: string | null; why: string };
+
+/** Reading a repository's files on GitHub, as the account the bridge reads GitHub with. */
+export interface TaskPostgresGitHub {
+  /** Who it reads as, to name in what to do when it cannot. */
+  account: string;
+  /** A file on a ref, null when it is not there; anything else GitHub answers is thrown. Null when the account is not connected. */
+  client: { readFileIfPresent(repo: string, path: string, ref: string): Promise<string | null> } | null;
+}
+
 export interface TaskPostgresRouteDeps {
-  repo(name: string): Promise<{ id: string; name: string; fullName: string } | null>;
+  repo(name: string): Promise<{ id: string; name: string; fullName: string; defaultBranch: string } | null>;
   read(repoId: string): Promise<unknown | null>;
   write(repoId: string, setting: TaskPostgresSetting | null): Promise<void>;
   hosts(): Promise<{ name: string; driver: 'docker' | 'local'; status: string; lastSeenAt: string | null }[]>;
   audit(entry: { actor: string; action: string; target: string; payload?: Record<string, unknown> }): Promise<void>;
+  /** GitHub, for the Compose file; absent where nothing asks it, and the form is then told so. */
+  github?: () => Promise<TaskPostgresGitHub>;
   now?: () => number;
 }
 
-function liveDeps(): TaskPostgresRouteDeps {
+/** The routes' store, hosts and audit log, and GitHub as `github` reads it. */
+export function liveTaskPostgresDeps(github?: () => Promise<TaskPostgresGitHub>): TaskPostgresRouteDeps {
   return {
     repo: (name) => repos.getRepoByName(name),
     read: (repoId) => repos.getTaskPostgres(repoId),
     write: (repoId, setting) => repos.setTaskPostgres(repoId, setting),
     hosts: () => hosts.listHosts(),
     audit: (entry) => audit(entry),
+    ...(github ? { github } : {}),
   };
 }
 
-export function registerTaskPostgresRoutes(router: Router, deps: TaskPostgresRouteDeps = liveDeps()): void {
+/**
+ * The servers a repository's Compose file starts, read from its default
+ * branch: what a laptop runs for it, where Compose looks, in the order it
+ * prefers. The names are read at once; a file that could not be read is said,
+ * rather than passed over for one Compose would take only after it.
+ */
+export async function composeSuggestion(
+  repo: { fullName: string; defaultBranch: string },
+  github: TaskPostgresGitHub | null,
+): Promise<TaskPostgresCompose> {
+  const branch = repo.defaultBranch;
+  if (!github?.client) {
+    const account = github?.account ?? 'automation';
+    return {
+      ok: false,
+      file: null,
+      branch,
+      why: `${account} is not connected to GitHub, so the repository's Compose file cannot be read. Run: openadlc auth login --bot ${account}`,
+    };
+  }
+  const client = github.client;
+  const reads = await Promise.allSettled(COMPOSE_FILES.map((path) => client.readFileIfPresent(repo.fullName, path, branch)));
+  for (const [index, path] of COMPOSE_FILES.entries()) {
+    const read = reads[index];
+    if (!read) continue;
+    if (read.status === 'rejected') {
+      const said = read.reason instanceof Error ? read.reason.message : String(read.reason);
+      return { ok: false, file: path, branch, why: `${path} on ${branch} could not be read from GitHub (${said.slice(0, 200)}): try again` };
+    }
+    if (read.value === null) continue;
+    const found = postgresFromCompose(read.value, path);
+    return found.ok ? { ok: true, file: path, branch, servers: found.servers, notes: found.notes } : { ok: false, file: path, branch, why: found.why };
+  }
+  return { ok: false, file: null, branch, why: `${repo.fullName} has no Compose file on ${branch}: none of ${COMPOSE_FILES.join(', ')}` };
+}
+
+export function registerTaskPostgresRoutes(router: Router, deps: TaskPostgresRouteDeps = liveTaskPostgresDeps()): void {
   const view = async (repoId: string) => {
     const stored = await deps.read(repoId);
     const read = parseTaskPostgres(stored);
@@ -86,6 +152,16 @@ export function registerTaskPostgresRoutes(router: Router, deps: TaskPostgresRou
   };
 
   router.get('/v1/repos/:name/task-postgres', async ({ params }) => view((await repoNamed(params.name)).id));
+
+  /**
+   * What the repository's Compose file would fill the form with. Read-only:
+   * it saves nothing and audits nothing, and what it suggests reaches a task
+   * only when a person saves it through the PUT, checked as anything typed is.
+   */
+  router.get('/v1/repos/:name/task-postgres/compose', async ({ params }) => {
+    const repo = await repoNamed(params.name);
+    return composeSuggestion(repo, deps.github ? await deps.github().catch(() => null) : null);
+  });
 
   /**
    * The whole setting, replacing what was there: `{ servers: [] }` (or null)

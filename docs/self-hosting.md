@@ -625,7 +625,11 @@ Settings → Developer settings → GitHub Apps → New GitHub App.
   app is the outer bound and the account's role on the repository is the real
   limit.
 - **Subscribe to events:** issues, issue comment, pull request, pull request
-  review, workflow run and deployment status.
+  review, workflow run, deployment status and release. Release is what moves
+  the cards of a repository that ships by release
+  ([configuration](configuration.md#shipping-by-release)) as a release is
+  published; without it the deploy sweep finds the release later, and the
+  `ships-by-release` check says so only where a repository ships that way.
 - Install the app on the repositories the crew works in — on each account they
   belong to, when that is more than one (below).
 
@@ -1408,6 +1412,26 @@ Give the repository's local-development defaults — 620legal/core's are
 `docker-compose.yml` says — since only that task can reach the server. It is
 never a file in the repository: whatever it names runs beside every task.
 
+The form fills itself in from the repository's own Compose file, for a person
+to check rather than type: a repository with nothing set starts filled, and
+**Fill from docker-compose.yml** fills it again. The bridge reads the file
+Compose would take on the default branch (`compose.yaml`, `compose.yml`,
+`docker-compose.yml` or `docker-compose.yaml`, in that order) as the
+automation account, through `GET /v1/repos/<name>/task-postgres/compose`, an
+admin's, which saves nothing. Each service whose image is `pgvector/pgvector`
+or `postgres` is one server: its image as the file writes it, the host side
+of its port mapping to 5432, and its `POSTGRES_USER`, `POSTGRES_PASSWORD` and
+`POSTGRES_DB`, with the image's defaults where the file sets none (`postgres`,
+and the superuser's name for the database; a password has none). Variables
+are read as unset, so `${PG_PORT:-55432}` is `55432`; the shell, `.env` and
+an `env_file` are not read, and a value only they give is left empty with a
+note saying so. The image is not pinned, since the bridge does not know what
+the host already has: pinning it by digest is optional. A Postgres image the
+allowlist refuses is still suggested, with the refusal Save would give.
+Nothing is saved until a person presses Save, which checks the form as it
+checks anything typed. A file that does not read, or that starts no Postgres
+service, is said on the form.
+
 | Use | When |
 |---|---|
 | `sidecarDb` alone (the shared server's database, as `DATABASE_URL`) | The repository's checks need a database and nothing of the server's: no roles of their own, no superuser, any port |
@@ -2013,6 +2037,17 @@ The stage sweep starts the bot a staffed stage belongs to when nobody is on it.
 A webhook that never arrived, a bot that was busy at the time, and a label applied
 while the bridge was down all look the same from here, so an issue sitting in
 Intake or Spec costs an hour rather than waiting for someone to notice.
+
+A busy bot does not wait for the sweep. An issue its seat turned away, running
+all the tasks it may at once, is recorded as waiting on that seat (a
+`stage.waiting_on_seat` event), and starts as soon as the seat has room: when
+one of its tasks ends (done, failed, stopped or cancelled), when its tasks at
+once go up, or when its pause ends. Two waiting on one seat start by priority,
+then oldest first, one each time it has room. The bridge also looks every
+minute at the seats work waits on, for one that freed up without saying so,
+such as a paused task's computer given back. Only what a seat turned away
+starts this way: a design a person stopped, or one that failed, is left for
+the sweep.
 
 The deploy sweep looks for merged work that never received `deployed:testing`.
 Every repository has delivery rules: its `.github/openadlc.yml`, else its

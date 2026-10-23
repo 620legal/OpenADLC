@@ -141,6 +141,12 @@ export interface IssueFacts {
   updatedAt: string;
   /** Where its Dependencies are written, for saying what a blocked card waits on. */
   body?: string | null;
+  /** When it was filed: its place in the line a seat takes work from (`issues.byNextFirst`). */
+  createdAt?: string;
+  /** The files it said it would touch, which another change's can hold it back from building (`blockingOverlaps`). */
+  declaredPaths?: string[];
+  /** When a card in Done shipped, where its move there said: the release that contained its merge (`issues.setShippedAt`). */
+  shippedAt?: string | null;
 }
 
 export const ACTIVE_STATES: readonly TaskState[] = ['queued', 'running', 'paused'];
@@ -341,7 +347,10 @@ export interface CardWork {
    * reviewers" over two reviews that had failed, which nothing was waiting for.
    */
   reviewFailed: boolean;
-  /** When a finished card shipped: its last deploy, or failing that when it last changed. */
+  /**
+   * When a finished card shipped: what its move to Done recorded (a
+   * release's publish time), else its last deploy, else when it last changed.
+   */
   shippedAt: string | null;
   /**
    * What a blocked card waits on, from its Dependencies: the card said
@@ -407,7 +416,9 @@ export function cardWork(
     reviewRound: prRef ? reviewRound(onPullRequest) : null,
     stalledAfterRounds: stall ? stall.rounds : null,
     reviewFailed: issue.stage === 'review' && reviewFailedOn(onPullRequest),
-    shippedAt: issue.stage === 'done' ? (lastDeploy?.endedAt ?? issue.updatedAt) : null,
+    // A release the deploy sweep found an hour late shipped when it was
+    // published, not when the card's row changed.
+    shippedAt: issue.stage === 'done' ? (issue.shippedAt ?? lastDeploy?.endedAt ?? issue.updatedAt) : null,
     waitingOn: issue.labels.includes('blocked') ? parseDependencyRefs(issue.body ?? '').map(formatDependencyRef) : [],
   };
 }

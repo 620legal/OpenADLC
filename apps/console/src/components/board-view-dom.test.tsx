@@ -251,3 +251,142 @@ describe('a card whose approved plan change waits on other work', () => {
     expect(await statusWith([])).toBe('Waiting for your answer');
   });
 });
+
+/**
+ * A card with nothing going on it, drawn: why it waits, on what and for how
+ * long, and a stuck one looks stuck, with a mark that never moves and words
+ * a screen reader reads (#144). #141 said "Waiting for a design pass" for
+ * half an hour, and nobody could tell whether anything was happening.
+ */
+describe('a card waiting with nothing going on it', () => {
+  const DESIGNER = { name: 'system-engineer', role: 'spec', maxTasks: 1 };
+  const waitingCard = (number: number, waiting: NonNullable<Board['columns'][number]['cards'][number]['waiting']>, extra: Partial<Board['columns'][number]['cards'][number]> = {}) => ({
+    repo: 'openadlc',
+    ref: `openadlc#${number}`,
+    title: `Issue ${number}`,
+    stage: 'spec',
+    assignees: [],
+    gateOpen: false,
+    url: null,
+    labels: ['adlc:spec'],
+    updatedAt: NOW,
+    number,
+    active: [],
+    last: null,
+    waiting,
+    ...extra,
+  });
+  const since = (minutes: number) => new Date(Date.parse(NOW) - minutes * 60_000).toISOString();
+  const boardOf = (cards: Board['columns'][number]['cards']): Board => ({
+    ...BOARD,
+    running: 0,
+    columns: BOARD.columns.map((column) => ({ ...column, cards: column.stage === 'spec' ? cards : [] })),
+  });
+  async function drawn(board: Board): Promise<Element[]> {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ running: 0, cards: [] }) })));
+    const { BoardView } = await import('./board-view');
+    const { headerData } = await import('@/lib/header');
+    const header = headerData({ repos: ['openadlc'], crew: [BUILDER], budget: null, needsYou: 0 });
+    await act(async () => root.render(<BoardView board={board} crew={[BUILDER]} repo="all" header={header} attention={[]} now={NOW} />));
+    return [...container.querySelectorAll('[aria-label="Board"] article')];
+  }
+  const line = (card: Element) => card.querySelector('[data-status]')?.textContent;
+
+  it('says the seat it waits for and the task on it', async () => {
+    const [waiting] = await drawn(
+      boardOf([
+        waitingCard(141, {
+          reason: { kind: 'seat', seat: DESIGNER, seats: 1, holders: [{ ref: 'openadlc#137', number: 137, kind: 'spec', state: 'running', waitingOnYou: false }] },
+          since: since(32),
+          stuck: false,
+        }),
+      ]),
+    );
+    expect(line(waiting!)).toBe('Waiting for the system engineer · busy with #137 · 32 min');
+    expect(waiting!.querySelector('[data-stuck]')).toBeNull();
+  });
+
+  it('says a build waits for its repository’s build slot, held by a build waiting for your answer, and that build says it holds it', async () => {
+    const board = boardOf([]);
+    const waiting = waitingCard(
+      160,
+      { reason: { kind: 'concurrency', limit: 1, holders: [{ ref: 'openadlc#40', number: 40, kind: 'implement', state: 'paused', waitingOnYou: true }] }, since: since(32), stuck: false },
+      { stage: 'build', labels: ['adlc:build', 'start:now'] },
+    );
+    const holding = waitingCard(40, null as never, {
+      stage: 'build',
+      labels: ['adlc:build', 'start:now'],
+      waiting: null,
+      gateOpen: true,
+      active: [{ bot: 'openadlc-atlas-janedoe', kind: 'implement', state: 'paused', round: 0, startedAt: since(200), endedAt: null, exitReason: null, holds: { repo: 'openadlc', limit: 1, waiting: 1 } }],
+    });
+    board.columns = board.columns.map((column) => (column.stage === 'build' ? { ...column, cards: [waiting, holding] } : column));
+    const [behind, asking] = await drawn(board);
+    expect(line(behind!)).toBe('Waiting: openadlc builds 1 at a time · busy with #40 (waiting for your answer) · 32 min');
+    expect(line(asking!)).toBe('Waiting for your answer · holds openadlc’s build slot');
+  });
+
+  it('says what starts a card whose seat is free, and when', async () => {
+    const [card] = await drawn(
+      boardOf([waitingCard(141, { reason: { kind: 'free', seat: DESIGNER, by: 'sweep', nextAt: new Date(Date.parse(NOW) + 24 * 60_000).toISOString() }, since: since(2), stuck: false })]),
+    );
+    expect(line(card!)).toBe('Not started · the system engineer is free · next sweep in 24 min · 2 min');
+    expect(card!.querySelector('[data-stuck]')).toBeNull();
+  });
+
+  it('says what the issue it depends on is doing', async () => {
+    const board = boardOf([]);
+    const blocked = waitingCard(
+      137,
+      { reason: { kind: 'dependency', on: [{ number: 141, stage: 'spec', abandoned: false, task: null, waits: { kind: 'seat', seat: 'system-engineer' } }] }, since: since(32), stuck: false },
+      { stage: 'build', labels: ['adlc:build', 'blocked'] },
+    );
+    // In Build, where a blocked card stands.
+    board.columns = board.columns.map((column) => (column.stage === 'build' ? { ...column, cards: [blocked] } : column));
+    const [card] = await drawn(board);
+    expect(line(card!)).toBe('Waiting on #141 (waiting for the system engineer) · 32 min');
+  });
+
+  it('draws each other reason as a line of its own, with how long', async () => {
+    const reasons = [
+      [{ kind: 'turn', seat: DESIGNER, after: ['openadlc#141'] }, 'Waiting its turn, after #141 · 32 min'],
+      [{ kind: 'lease', on: [44], paths: ['apps/bridge/src/api.ts'] }, 'Waiting for #44 to let go of apps/bridge/src/api.ts · 32 min'],
+      [{ kind: 'paused', words: 'work is paused' }, 'Waiting until work is resumed · 32 min'],
+      [{ kind: 'seat_paused', seat: DESIGNER, words: 'paused' }, 'Waiting for the system engineer · paused on Crew · 32 min'],
+      [{ kind: 'blocked', seat: DESIGNER, why: 'system-engineer cannot sign in to GitHub', instruction: '' }, 'Waiting: system-engineer cannot sign in to GitHub · 32 min'],
+      [{ kind: 'cap', words: 'at the cap' }, 'Held at the spending cap · 32 min'],
+      [{ kind: 'no_seat', role: 'spec' }, 'Nobody staffs Design · add a seat on Crew · 32 min'],
+      [{ kind: 'not_staffed' }, 'Design is left to a person in openadlc · move it on by hand · 32 min'],
+    ] as const;
+    const cards = await drawn(boardOf(reasons.map(([reason], index) => waitingCard(200 + index, { reason: reason as never, since: since(32), stuck: false }))));
+    expect(cards.map(line)).toEqual(reasons.map(([, text]) => text));
+  });
+
+  describe('a stuck card', () => {
+    const stuck = () =>
+      boardOf([
+        waitingCard(141, { reason: { kind: 'free', seat: DESIGNER, by: 'runner' }, since: since(41), stuck: true }),
+      ]);
+
+    it('looks stuck: its line says so, in the alarm colour, its border too, and its mark is still', async () => {
+      const [card] = await drawn(stuck());
+      expect(line(card!)).toBe('Stuck · the system engineer is free and nothing started it · starts within a minute · 41 min');
+      expect(card!.querySelector('[data-status]')?.className).toContain('text-alarm');
+      expect(card!.className).toContain('border-alarm/40');
+      const mark = card!.querySelector('[data-stuck]')!;
+      expect(mark.classList.contains('bg-alarm')).toBe(true);
+      expect(mark.classList.contains('working-dot')).toBe(false);
+      // Its words carry it to a screen reader; the mark is not read twice, nor as working.
+      expect(mark.getAttribute('aria-hidden')).toBe('true');
+      expect(card!.querySelector('[aria-label="working"]')).toBeNull();
+    });
+
+    it('is the same under prefers-reduced-motion: nothing on it moves either way', async () => {
+      reduced = true;
+      const [card] = await drawn(stuck());
+      expect(card!.querySelector('[data-stuck]')?.classList.contains('bg-alarm')).toBe(true);
+      expect(card!.innerHTML).not.toContain('working-dot');
+      expect(line(card!)).toContain('Stuck');
+    });
+  });
+});

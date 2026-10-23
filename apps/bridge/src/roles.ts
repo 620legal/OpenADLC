@@ -135,6 +135,8 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // task there, so a person's, and the read shows their passwords.
   'GET /v1/repos/:name/task-postgres': 'admin',
   'PUT /v1/repos/:name/task-postgres': 'admin',
+  // What the repository's Compose file would fill that form with, passwords included.
+  'GET /v1/repos/:name/task-postgres/compose': 'admin',
   'PATCH /v1/bots/:name/assignment': 'admin',
   // A bot's colour, from Settings → Appearance.
   'PATCH /v1/crew/:bot': 'admin',
@@ -147,6 +149,9 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'POST /v1/items/:subject/pause': 'admin',
   'POST /v1/items/:subject/resume': 'admin',
   'POST /v1/items/:subject/next': 'admin',
+  // Starting now what would start work stuck with its seat free, from Needs
+  // you: what the next sweep does anyway, sooner, as Try again is a user's.
+  'POST /v1/items/:subject/start': 'user',
   'GET /v1/items/:subject/cancel': 'admin',
   'POST /v1/items/:subject/cancel': 'admin',
   // Which issues and pull requests are one piece of work: audited, and never
@@ -162,6 +167,8 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // switched to automatic delivery instead (`deploy-routes.ts`).
   'POST /v1/repos/:repo/deploys/:sha/release': 'admin',
   'POST /v1/repos/:repo/delivery/automatic': 'admin',
+  // Whether the repository ships by release: its stored rules, as Settings changes them.
+  'POST /v1/repos/:repo/delivery/ships-by-release': 'admin',
   'POST /v1/crew/seats': 'admin',
   'POST /v1/crew/seats/:seat/remove': 'admin',
   'POST /v1/model-accounts': 'admin',

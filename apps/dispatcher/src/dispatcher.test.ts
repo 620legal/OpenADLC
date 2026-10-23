@@ -338,6 +338,13 @@ describe('a dependency in another repository the install manages', () => {
         'waits on nobody/x#1, in a repository this install does not manage',
       );
     });
+
+    it('when its repository is the install’s and that number is not', async () => {
+      dependencyIn('done', ['adlc:done']);
+      waiting(`${BODY}\n\n### Dependencies\n\n- owner/a#99`);
+      const decisions = await dispatcher().runOnce();
+      expect(decisions.find((one) => one.issue === 1 && one.action === 'skipped')?.reason).toBe('waits on owner/a#99, which OpenADLC has not seen');
+    });
   });
 });
 

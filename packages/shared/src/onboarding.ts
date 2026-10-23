@@ -615,6 +615,12 @@ export const REQUIRED_APP_PERMISSIONS = [
  * manifest never sends it; the `app-permissions` check says what to tick. Not
  * `deployment`: a deployment being created is not one that worked, and the
  * bridge ignores it.
+ *
+ * `release` is what moves the cards of a repository that ships by release
+ * (`testing.on: release`) to Done when a release containing their merge is
+ * published. Only such a repository needs it, and the deploy sweep lists its
+ * releases besides, so an app without it is said only where one ships that
+ * way (`ships-by-release` in the bridge's health checks), and as a warning.
  */
 export const WEBHOOK_EVENTS = [
   'issues',
@@ -623,7 +629,11 @@ export const WEBHOOK_EVENTS = [
   'pull_request_review',
   'workflow_run',
   'deployment_status',
+  'release',
 ] as const;
+
+/** The event only a repository that ships by release needs; see `WEBHOOK_EVENTS`. */
+export const RELEASE_EVENT = 'release' as const;
 
 /**
  * Each event as the app's "Permissions & events" page names it under
@@ -637,4 +647,5 @@ export const WEBHOOK_EVENT_NAMES: Record<(typeof WEBHOOK_EVENTS)[number], string
   pull_request_review: 'Pull request review',
   workflow_run: 'Workflow run',
   deployment_status: 'Deployment status',
+  release: 'Release',
 };

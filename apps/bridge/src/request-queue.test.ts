@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * The requests table and intake's tasks as the queue reads them. `running` is
  * intake's queued or running tasks, which is what makes it busy: a task paused
- * on a person's answer is not counted, as `countActiveTasksForBot` does not.
+ * on a person's answer is not counted, as `tasks.seatHasRoom` does not.
  */
 interface Row {
   id: string;
