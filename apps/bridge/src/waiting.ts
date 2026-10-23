@@ -1,4 +1,4 @@
-import { costs, issues as issueStore, listEventsOfType, type HealthRow } from '@openadlc/db';
+import { costs, hosts as hostStore, issues as issueStore, leases as leaseStore, listEventsOfType, type HealthRow } from '@openadlc/db';
 import { blockingOverlaps, type WorkInFlight } from '@openadlc/dispatcher';
 import {
   DEFAULT_PATH_POLICY,
@@ -11,6 +11,7 @@ import {
   namesRepository,
   parseDependencyRefs,
   type DependencyRef,
+  type LeaseState,
   type PathPolicy,
   type StageKey,
   type TaskKind,
@@ -31,7 +32,8 @@ import { isActive, issueForSubject, parseRef, subjectsOf, type IssueFacts, type 
  * and asked.
  *
  * Worked out from what is live — the tasks going now, the crew, the card's
- * own row and tasks, the pauses, the cap, the checks, the next sweep — and
+ * own row and tasks, the leases held, the hosts' room, the pauses, the cap,
+ * the checks, the next sweep — and
  * the one record of a wait the bridge keeps, a seat turning a start away
  * (`stage.waiting_on_seat`, #143), so the board's read stays the size of the
  * work in flight, not of its history (#94).
@@ -124,6 +126,21 @@ export type WaitingReason =
   /** Another change holds files it declared (`blockingOverlaps`). */
   | { kind: 'lease'; on: number[]; paths: string[] }
   /**
+   * In Build, its own issue holds a lease with nothing running under it,
+   * and the dispatcher never leases an issue a lease holds: `leased` before
+   * its build has started, `paused` on a question after its task ended,
+   * `in_task` for its pull request (`pr`), or once its build ended with none
+   * linked yet. `merged` when that pull request has merged, and the lease
+   * waits for the verification after it.
+   */
+  | { kind: 'leased'; bot: string; state: LeaseState; pr: number | null; merged: boolean }
+  /**
+   * Nothing else holds it: its seat has room, it is first in line, and the
+   * live hosts run all the tasks they have room for (`hosts.taskLoad`), so a
+   * start is refused until one ends (`HostFullError`).
+   */
+  | { kind: 'host'; running: number; capacity: number }
+  /**
    * Its seat has room, it is first in line, and nothing has started it. One
    * its seat turned away while full starts within a minute of the seat
    * having room (`runner`, `StageRunner`); other intake and design the stage
@@ -163,6 +180,19 @@ export interface BuildHold {
   waiting: number;
 }
 
+/** A lease still holding an issue (`leases.heldLeases`). */
+export interface LeaseFacts {
+  repoId: string;
+  issueNumber: number;
+  botId: string;
+  state: LeaseState;
+  prNumber: number | null;
+  /** The pull request it is linked to has merged. */
+  pullMerged?: boolean;
+  /** When it last changed state. */
+  updatedAt?: string;
+}
+
 /** What the reasons are read from beyond the tasks and the cards; each part absent holds nothing back. */
 export interface WaitingContext {
   /** Why new work may not start in a repository now (`DispatchGate.paused`), or null. */
@@ -185,6 +215,14 @@ export interface WaitingContext {
    * from them and the cards' tasks (`standingSeatWaits`). Absent, none.
    */
   seatWaitEvents?: readonly { at: string; payload: unknown }[];
+  /** Every lease still holding an issue, for a Build card one holds with nothing running. Absent, none. */
+  leases?: readonly LeaseFacts[];
+  /**
+   * How many tasks the live hosts hold a computer for, and have room for in
+   * all (`hosts.taskLoad`): every seat's tasks go to them alike. Null while
+   * no host is live, when a start finds hostd's own answer; absent, not read.
+   */
+  hosts?: { running: number; capacity: number } | null;
 }
 
 /** A card the reasons are worked out for. */
@@ -226,6 +264,9 @@ export interface Waiting {
 }
 
 const STAFFED: readonly StageKey[] = ['intake', 'spec', 'build'];
+
+/** A lease in one of these holds its issue (`leases.listActiveLeases`). */
+const HELD_LEASE: readonly LeaseState[] = ['leased', 'in_task', 'paused'];
 
 /**
  * Takes a slot on its seat: queued or running (`tasks.seatHasRoom`). One
@@ -285,6 +326,13 @@ export function waitingOf(input: WaitingInput): Waiting {
       const bot = botByName.get(one.name);
       return bot ? slotsOf(bot.id) : [];
     });
+  // The lease holding each issue, by its card's ref.
+  const repoNameById = new Map(input.repos.map((repo) => [repo.id, repo.name]));
+  const leaseOf = new Map<string, LeaseFacts>(
+    (input.leases ?? [])
+      .filter((lease) => HELD_LEASE.includes(lease.state) && repoNameById.has(lease.repoId))
+      .map((lease) => [`${repoNameById.get(lease.repoId)}#${lease.issueNumber}`, lease] as const),
+  );
   // The intake and design seats are the first bot of the role, as staffing
   // picks one; a build goes to any builder with room.
   const seatsFor = (stage: StageKey): WaitingSeat[] => {
@@ -300,6 +348,20 @@ export function waitingOf(input: WaitingInput): Waiting {
     // person, which its card and Needs you already say.
     if (card.tasks.some((task) => input.gated.has(task.id))) return null;
     if (hasPausedLabel(issue.labels)) return { kind: 'held' };
+    // Its own lease, with nothing running under it: the dispatcher passes an
+    // issue a lease holds before anything else, so no builder having room
+    // starts it. Read as free, it turned stuck after three minutes, and Start
+    // it now asked the dispatcher for what it would never do (#153).
+    const lease = issue.stage === 'build' ? leaseOf.get(card.ref) : undefined;
+    if (lease) {
+      return {
+        kind: 'leased',
+        bot: input.bots.find((bot) => bot.id === lease.botId)?.name ?? 'a bot',
+        state: lease.state,
+        pr: lease.prNumber,
+        merged: lease.prNumber !== null && lease.pullMerged === true,
+      };
+    }
     if (issue.stage === 'build') {
       // By the label the dispatcher keeps, not by the Dependencies alone: a
       // dependency that shipped before the week the board reads is not
@@ -348,6 +410,10 @@ export function waitingOf(input: WaitingInput): Waiting {
     lines.set(key, [...(lines.get(key) ?? []), { card, seats: hold.seats }]);
   }
 
+  // The hosts' room left, shared by every seat's line: a host runs whoever's
+  // task it is given. Full, a card with nothing else in its way read as
+  // free, then stuck, and no Start it now could start it (#153).
+  let hostRoom = input.hosts ? input.hosts.capacity - input.hosts.running : Number.POSITIVE_INFINITY;
   for (const [stage, line] of lines) {
     const seats = line[0]!.seats;
     let room = seats.reduce((sum, one) => sum + roomOf(one), 0);
@@ -402,6 +468,13 @@ export function waitingOf(input: WaitingInput): Waiting {
         repoRoom.set(repo.id, repoRoom.get(repo.id)! - 1);
         repoTaken.set(repo.id, [...(repoTaken.get(repo.id) ?? []), card.ref]);
       }
+      // Next in its seat's line, and no host to run it on: the cards behind
+      // it wait their turn after it.
+      if (hostRoom <= 0 && input.hosts) {
+        reasons.set(card.ref, { kind: 'host', running: input.hosts.running, capacity: input.hosts.capacity });
+        continue;
+      }
+      hostRoom -= 1;
       const by = stage === 'build' ? 'dispatcher' : seatWaits.has(card.ref) ? 'runner' : 'sweep';
       reasons.set(card.ref, {
         kind: 'free',
@@ -479,11 +552,10 @@ export function waitingOf(input: WaitingInput): Waiting {
   for (const card of input.cards) {
     const reason = reasons.get(card.ref);
     if (!reason) continue;
-    // Turned away by its seat, it has waited since then; else since it last changed.
-    const since =
-      seatWaits.get(card.ref)?.since ??
-      latest([card.issue.updatedAt, ...card.tasks.filter((task) => !isActive(task)).map((task) => task.endedAt ?? task.createdAt)]) ??
-      card.issue.updatedAt;
+    // Turned away by its seat, it has waited since then; else since it last
+    // changed, or its lease did.
+    const changed = latest([card.issue.updatedAt, ...card.tasks.filter((task) => !isActive(task)).map((task) => task.endedAt ?? task.createdAt)]) ?? card.issue.updatedAt;
+    const since = seatWaits.get(card.ref)?.since ?? (reason.kind === 'leased' ? (latest([changed, leaseOf.get(card.ref)?.updatedAt]) ?? changed) : changed);
     let stuck = false;
     if (reason.kind === 'free') {
       const bot = botByName.get(reason.seat.name);
@@ -538,8 +610,9 @@ export interface WaitingReads {
 
 /**
  * The context for `waitingOf`, read: the seats paused from Crew, the month's
- * budget, the checks, and — only for a repository with a build that could
- * start — its work in flight and path policy. A part that cannot be read
+ * budget, the checks, the leases held and the hosts' load, and — only for a
+ * repository with a build that could start — its work in flight and path
+ * policy. A part that cannot be read
  * holds nothing back, as a check that cannot be read does not.
  */
 export async function readWaitingContext(
@@ -554,7 +627,7 @@ export async function readWaitingContext(
     ]);
     return [repo.id, { work, policy }];
   };
-  const [seatPauses, budget, health, inFlight, seatWaitEvents] = await Promise.all([
+  const [seatPauses, budget, health, inFlight, seatWaitEvents, held, load] = await Promise.all([
     readSeatPauses(),
     // The cap the dispatcher stops leasing at, and every start too
     // (`spendingLimits.refusal`), as the budget job last wrote it.
@@ -562,6 +635,9 @@ export async function readWaitingContext(
     reads.health ? (async () => reads.health!())().catch((): readonly HealthRow[] => []) : Promise.resolve([] as readonly HealthRow[]),
     Promise.all(candidates.buildRepos.map((repo) => flightOf(repo).catch(() => null))),
     (async () => listEventsOfType(STAGE_WAITING_ON_SEAT, new Date(Date.now() - SEAT_WAIT_WINDOW_MS)))().catch(() => []),
+    // The leases held now and the hosts' load: each the size of the work in flight, no history.
+    (async () => leaseStore.heldLeases())().catch(() => undefined),
+    (async () => hostStore.taskLoad())().catch(() => undefined),
   ]);
   const next = reads.nextSweepAt?.();
   return {
@@ -573,6 +649,8 @@ export async function readWaitingContext(
     ...(reads.dispatching !== undefined ? { dispatching: reads.dispatching } : {}),
     inFlight: new Map(inFlight.filter((entry): entry is [string, Flight] => entry !== null)),
     seatWaitEvents,
+    ...(held ? { leases: held } : {}),
+    ...(load !== undefined ? { hosts: load ? { running: load.used, capacity: load.capacity } : null } : {}),
   };
 }
 

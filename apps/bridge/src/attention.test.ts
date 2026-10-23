@@ -3257,4 +3257,16 @@ describe('work stuck with its seat free', () => {
   it('says nothing is stuck where nothing said what work waits on', async () => {
     expect(await items({ waiting: undefined })).toEqual([]);
   });
+
+  // Start it now asks the dispatcher or the sweep to look, and neither starts
+  // an issue its own lease holds, or anything while every host is full: the
+  // card offered it where it could not move the work (#153).
+  it('offers no Start it now for a build its own lease holds, or for work waiting only for a host’s room', async () => {
+    const build = { ...issue(160, 'Say why a leased card waits', 'build'), updatedAt: minutesAgo(41), body: '', labels: ['adlc:build', 'start:now'] };
+    // Unheld, the build is stuck as the design is.
+    expect((await items({ issues: [design, build] })).map((item) => item.id)).toEqual(['stuck:openadlc-testbed#141', 'stuck:openadlc-testbed#160']);
+    const leased = { repoId: 'repo-1', issueNumber: 160, botId: 'bot-builder', state: 'in_task', prNumber: 57, pullMerged: true, updatedAt: minutesAgo(41) };
+    expect((await items({ issues: [design, build], waiting: { nextSweepAt: nextSweep, leases: [leased] } })).map((item) => item.id)).toEqual(['stuck:openadlc-testbed#141']);
+    expect(await items({ issues: [design, build], waiting: { nextSweepAt: nextSweep, hosts: { running: 4, capacity: 4 } } })).toEqual([]);
+  });
 });

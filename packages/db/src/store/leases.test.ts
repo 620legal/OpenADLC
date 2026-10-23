@@ -8,6 +8,7 @@ vi.mock('../client.js', () => ({
 import { query, queryOne } from '../client.js';
 import {
   attemptsWithoutPullRequest,
+  heldLeases,
   holdPlanChange,
   lastForPullRequest,
   latestLease,
@@ -56,6 +57,29 @@ describe('the lease an issue was granted', () => {
     expect(String(sql)).not.toMatch(/issues/);
     expect(params).toEqual(['repo-1', 78, ['leased', 'in_task', 'paused']]);
     expect(lease).toMatchObject({ issueNumber: 78, state: 'released', declaredPaths: ROW.declared_paths });
+  });
+});
+
+describe('the leases the board reads', () => {
+  it('are every one still holding an issue, each saying whether its pull request merged, in one read (#153)', async () => {
+    vi.mocked(query).mockResolvedValueOnce([
+      { ...ROW, state: 'in_task', pr_number: 57, pull_merged: true },
+      { ...ROW, id: 'lease-2', issue_number: 79, state: 'leased', pull_merged: false },
+    ]);
+
+    const held = await heldLeases();
+
+    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
+    const flat = String(sql).replace(/\s+/g, ' ');
+    expect(flat).toContain('from leases l where l.state = any($1)');
+    // Merged as the merge line or the pull request's link heard it.
+    expect(flat).toContain("exists (select 1 from merge_lines m where m.repo_id = l.repo_id and m.pr_number = l.pr_number and m.state = 'merged')");
+    expect(flat).toContain("exists (select 1 from work_item_links w where w.kind = 'pull' and w.repo_id = l.repo_id and w.number = l.pr_number and w.state = 'merged')");
+    expect(params).toEqual([['leased', 'in_task', 'paused']]);
+    expect(held).toEqual([
+      expect.objectContaining({ id: 'lease-1', issueNumber: 78, state: 'in_task', prNumber: 57, pullMerged: true }),
+      expect.objectContaining({ id: 'lease-2', issueNumber: 79, state: 'leased', prNumber: null, pullMerged: false }),
+    ]);
   });
 });
 

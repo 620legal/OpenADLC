@@ -6,7 +6,7 @@ vi.mock('../client.js', () => ({
 }));
 
 import { query, queryOne } from '../client.js';
-import { ensureHost, registerHost, taskRoom } from './hosts.js';
+import { ensureHost, registerHost, taskLoad, taskRoom } from './hosts.js';
 
 const flat = (sql: unknown) => String(sql).replace(/\s+/g, ' ');
 
@@ -76,5 +76,24 @@ describe('the room the hosts have', () => {
   it('is unknown while no host is live', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce({ hosts: '0', capacity: '0', used: '0' });
     expect(await taskRoom()).toBeNull();
+  });
+});
+
+describe('what the hosts hold', () => {
+  it('is their room and the tasks holding a computer, counted as the room is, for a card that waits for a host (#153)', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ hosts: '2', capacity: '8', used: '8' });
+
+    expect(await taskLoad()).toEqual({ capacity: 8, used: 8 });
+
+    const sql = flat(vi.mocked(queryOne).mock.calls[0]?.[0]);
+    expect(sql).toContain(
+      "(select coalesce(sum(capacity_tasks), 0) from hosts where status <> 'down' and last_seen_at > now() - interval '2 minutes')",
+    );
+    expect(sql).toContain("(select count(*) from tasks where state in ('queued','running') or (state = 'paused' and host_id is not null))::text as used");
+  });
+
+  it('is unknown while no host is live', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ hosts: '0', capacity: '0', used: '0' });
+    expect(await taskLoad()).toBeNull();
   });
 });

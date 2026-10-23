@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PATH_POLICY } from '@openadlc/shared';
-import { buildCandidates, STUCK_AFTER_MS, waitingCards, waitingOf, type WaitingInput } from './waiting.js';
+import { buildCandidates, STUCK_AFTER_MS, waitingCards, waitingOf, type LeaseFacts, type WaitingInput } from './waiting.js';
 import { isActive, type IssueFacts, type TaskFacts } from './work.js';
 
 /**
@@ -381,5 +381,93 @@ describe('a card that is not waiting for a seat', () => {
     const cards = waitingCards([issue(15, 'intake')], [triage], () => ['request:abcd1234']);
     const waiting = waitingOf({ now: NOW, cards, live: [triage], bots: CREW, repos: REPOS, gated: new Set() });
     expect(waiting.cards.has('OpenADLC#15')).toBe(false);
+  });
+});
+
+/**
+ * A Build card whose issue holds a lease with nothing running under it: the
+ * dispatcher never leases an issue a lease holds, so it read as free, was
+ * marked stuck after three minutes, and Needs you offered Start it now, which
+ * could not move it (#153).
+ */
+describe('a Build card its own lease holds with nothing running', () => {
+  const lease = (number: number, extra: Partial<LeaseFacts> = {}): LeaseFacts => ({
+    repoId: 'repo-1',
+    issueNumber: number,
+    botId: 'bot-builder',
+    state: 'leased',
+    prNumber: null,
+    pullMerged: false,
+    updatedAt: ago(40),
+    ...extra,
+  });
+
+  it('says its lease is taken and its build not started, and is not stuck however long it waits', () => {
+    const waiting = read([ready(160, { updatedAt: ago(60) })], [], { leases: [lease(160)] });
+    expect(waiting.cards.get('OpenADLC#160')).toEqual({
+      reason: { kind: 'leased', bot: 'openadlc-atlas-janedoe', state: 'leased', pr: null, merged: false },
+      // Since the lease last changed, which is later than the row.
+      since: ago(40),
+      stuck: false,
+    });
+  });
+
+  it('says a lease paused after its task ended, one for its open pull request, and one held by a merged pull request', () => {
+    const waiting = read([ready(160), ready(161), ready(162), ready(163)], [], {
+      leases: [
+        lease(160, { state: 'paused' }),
+        lease(161, { state: 'in_task', prNumber: 57 }),
+        lease(162, { state: 'in_task', prNumber: 58, pullMerged: true }),
+        lease(163, { state: 'in_task' }),
+      ],
+    });
+    expect(waiting.cards.get('OpenADLC#160')).toMatchObject({ reason: { kind: 'leased', state: 'paused', pr: null, merged: false }, stuck: false });
+    expect(waiting.cards.get('OpenADLC#161')).toMatchObject({ reason: { kind: 'leased', state: 'in_task', pr: 57, merged: false }, stuck: false });
+    expect(waiting.cards.get('OpenADLC#162')).toMatchObject({ reason: { kind: 'leased', state: 'in_task', pr: 58, merged: true }, stuck: false });
+    expect(waiting.cards.get('OpenADLC#163')).toMatchObject({ reason: { kind: 'leased', state: 'in_task', pr: null, merged: false }, stuck: false });
+  });
+
+  it('takes no builder’s room: the next card is the one the dispatcher leases', () => {
+    const waiting = read([ready(160), ready(161)], [], { leases: [lease(160)] });
+    expect(waiting.cards.get('OpenADLC#160')?.reason.kind).toBe('leased');
+    expect(waiting.cards.get('OpenADLC#161')).toMatchObject({ reason: { kind: 'free', by: 'dispatcher' }, stuck: true });
+  });
+
+  it('is not said of a card with its build going, of a lease let go, or of a card in another stage', () => {
+    const building = task('OpenADLC#160', 'bot-builder', 'implement', 'running');
+    const waiting = read([ready(160), ready(161), issue(141, 'spec')], [building], {
+      leases: [lease(160, { state: 'in_task' }), lease(161, { state: 'released' }), lease(141)],
+      bots: [INTAKE, DESIGNER, { ...BUILDER, maxTasks: 2 }],
+    });
+    expect(waiting.cards.has('OpenADLC#160')).toBe(false);
+    expect(waiting.cards.get('OpenADLC#161')?.reason.kind).toBe('free');
+    expect(waiting.cards.get('OpenADLC#141')?.reason.kind).toBe('free');
+  });
+});
+
+/**
+ * A card with nothing else in its way and every live host running all it has
+ * room for waits for a host, said with the hosts' count, and is not stuck:
+ * every start is refused until a task ends (#153).
+ */
+describe('a card waiting only for a host’s room', () => {
+  it('says the hosts are full, how full, and is not stuck while they are', () => {
+    const waiting = read([ready(160, { updatedAt: ago(30) })], [], { hosts: { running: 4, capacity: 4 } });
+    expect(waiting.cards.get('OpenADLC#160')).toEqual({ reason: { kind: 'host', running: 4, capacity: 4 }, since: ago(30), stuck: false });
+  });
+
+  it('shares what room the hosts have across every seat, and the cards behind wait their turn', () => {
+    const waiting = read([issue(141, 'spec'), ready(160), ready(161)], [], { hosts: { running: 3, capacity: 4 }, bots: [INTAKE, DESIGNER, { ...BUILDER, maxTasks: 2 }] });
+    // The design takes the last room; the first build waits for a host, and the next behind it.
+    expect(waiting.cards.get('OpenADLC#141')?.reason.kind).toBe('free');
+    expect(waiting.cards.get('OpenADLC#160')?.reason).toEqual({ kind: 'host', running: 3, capacity: 4 });
+    expect(waiting.cards.get('OpenADLC#161')?.reason).toEqual({ kind: 'host', running: 3, capacity: 4 });
+  });
+
+  it('is only what is left: a busy seat is said first, and hosts nobody knows hold nothing back', () => {
+    const designing = task('OpenADLC#137', 'bot-spec', 'spec', 'running');
+    expect(read([issue(141, 'spec')], [designing], { hosts: { running: 4, capacity: 4 } }).cards.get('OpenADLC#141')?.reason.kind).toBe('seat');
+    expect(read([ready(160)], [], { hosts: null }).cards.get('OpenADLC#160')?.reason.kind).toBe('free');
+    expect(read([ready(160)], [], { hosts: { running: 3, capacity: 4 } }).cards.get('OpenADLC#160')?.reason.kind).toBe('free');
   });
 });

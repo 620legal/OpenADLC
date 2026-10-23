@@ -362,6 +362,34 @@ describe('a card waiting with nothing going on it', () => {
     expect(cards.map(line)).toEqual(reasons.map(([, text]) => text));
   });
 
+  it('says what a Build card’s own lease waits for, and when only a host’s room holds a card, with no stuck mark (#153)', async () => {
+    const board = boardOf([]);
+    const build = { stage: 'build', labels: ['adlc:build', 'start:now'] };
+    const leased = (number: number, state: string, pr: number | null, merged: boolean) =>
+      waitingCard(number, { reason: { kind: 'leased', bot: 'openadlc-atlas-janedoe', state, pr, merged }, since: since(32), stuck: false }, build);
+    board.columns = board.columns.map((column) =>
+      column.stage === 'build'
+        ? {
+            ...column,
+            cards: [
+              leased(160, 'leased', null, false),
+              leased(161, 'paused', null, false),
+              leased(162, 'in_task', 57, true),
+              waitingCard(163, { reason: { kind: 'host', running: 4, capacity: 4 }, since: since(32), stuck: false }, build),
+            ],
+          }
+        : column,
+    );
+    const cards = await drawn(board);
+    expect(cards.map(line)).toEqual([
+      'Leased to the builder (openadlc-atlas-janedoe) · its build hasn’t started · 32 min',
+      'Leased to the builder (openadlc-atlas-janedoe) · paused after its task ended · 32 min',
+      'Leased to the builder (openadlc-atlas-janedoe) · held by merged #57 until its verification ends · 32 min',
+      'Waiting for a host with room (4 of 4 running) · 32 min',
+    ]);
+    for (const card of cards) expect(card.querySelector('[data-stuck]')).toBeNull();
+  });
+
   describe('a stuck card', () => {
     const stuck = () =>
       boardOf([

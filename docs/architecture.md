@@ -65,9 +65,15 @@ what is live — the tasks going in the install and the slots they take on each
 seat (`bots.max_tasks`: queued and running ones; a task paused on a person's
 answer takes none), the crew, the card's own row and tasks, the
 install's, repository's and seat's pauses, the month's budget, the checks
-holding a seat back, a build's overlap with the work in flight, and the
+holding a seat back, a build's overlap with the work in flight, the leases
+held (`leases.heldLeases`), the live hosts' load (`hosts.taskLoad`), and the
 stage sweep's next run (`JobTimer.nextRun`) — and from the record of a start a
-full seat turned away (`stage.waiting_on_seat`), which says since when. A build
+full seat turned away (`stage.waiting_on_seat`), which says since when. A Build
+card its own lease holds with nothing running says what the lease waits for
+("Leased to the builder · held by merged #57 until its verification ends"),
+since the dispatcher leases nothing a lease holds; a card nothing else holds
+while every live host runs all it has room for says "Waiting for a host with
+room (4 of 4 running)". Neither is ever stuck for it. A build
 paused on a question still takes one of its repository's builds at once, and
 while builds wait for one its card says so ("Waiting for your answer · holds
 api's build slot"). A card that has waited
