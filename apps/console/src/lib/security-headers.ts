@@ -19,12 +19,13 @@ export const X_FRAME_OPTIONS = { key: 'X-Frame-Options', value: 'DENY' } as cons
 export const FRAME_POLICY = { key: 'Content-Security-Policy', value: FRAME_ANCESTORS } as const;
 
 /**
- * Every path but one file's, `/api/attachments/:id`, which sets a policy of
- * its own (`attachmentPolicy`). Next keeps a header the config set and drops
- * the route's, so a policy set here on that path would have taken away the
- * bridge's `sandbox`, and a file could run as a console page.
+ * Every path but a file's, `/api/attachments/:id` and the console's logo at
+ * `/api/brand/logo`, which set a policy of their own (`attachmentPolicy`).
+ * Next keeps a header the config set and drops the route's, so a policy set
+ * here on either path would have taken away the bridge's `sandbox`, and a file
+ * or an SVG logo could run as a console page.
  */
-const ALL_BUT_A_FILE = '/:path((?!api/attachments/[^/]+$).*)';
+const ALL_BUT_A_FILE = '/:path((?!api/attachments/[^/]+$|api/brand/logo$).*)';
 
 /** The routes next.config.ts gives `headers()`. */
 export const CONSOLE_HEADERS = [

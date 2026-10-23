@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CrewMember } from '@/lib/api';
 import { headerData } from '@/lib/header';
-import { AppHeader } from './app-header';
+import { AppHeader, BrandProvider } from './app-header';
 
 /**
  * The header in a narrow window. At 800px the badge of what needs you broke
@@ -100,5 +100,42 @@ describe('the header below 768px', () => {
     const line = phone.querySelector('p')!;
     expect(classes(line)).toEqual(expect.arrayContaining(['flex', 'flex-wrap', 'whitespace-nowrap']));
     expect(line.textContent).toContain('3 need you · 10 system');
+  });
+});
+
+describe('the console’s name and logo, at their longest', () => {
+  const NAME = 'Acme Legal and Associates of Springfield';
+
+  beforeEach(async () => {
+    await act(async () =>
+      root.render(
+        <BrandProvider brand={{ name: NAME, logoUrl: '/api/brand/logo?v=0123456789ab' }}>
+          <AppHeader page="crew" repo="all" data={DATA} />
+        </BrandProvider>,
+      ),
+    );
+  });
+
+  it('keeps the wide header on one line, the name cut short with the whole of it in its title', () => {
+    expect(NAME).toHaveLength(40);
+    const wide = container.querySelector('[data-wide-header]')!;
+    expect(classes(wide)).toContain('whitespace-nowrap');
+    const link = wide.querySelector('a')!;
+    expect(classes(link)).toEqual(expect.arrayContaining(['flex', 'min-w-0', 'shrink', 'items-center']));
+    const name = link.querySelector('[data-brand-name]')!;
+    expect(name.textContent).toBe(NAME);
+    expect(name.getAttribute('title')).toBe(NAME);
+    expect(classes(name)).toEqual(expect.arrayContaining(['truncate', 'max-w-[9rem]', 'lg:max-w-[14rem]']));
+    const logo = link.querySelector<HTMLImageElement>('img[data-brand-logo]')!;
+    expect(logo.getAttribute('src')).toBe('/api/brand/logo?v=0123456789ab');
+    expect(classes(logo)).toEqual(expect.arrayContaining(['h-7', 'w-auto', 'max-w-[7rem]', 'object-contain', 'shrink-0']));
+  });
+
+  it('draws both in the phone’s header too', () => {
+    const phone = [...container.querySelectorAll('header')].find((one) => classes(one).includes('md:hidden'))!;
+    const link = phone.querySelector('a')!;
+    expect(link.querySelector('img[data-brand-logo]')).not.toBeNull();
+    expect(classes(link.querySelector('[data-brand-name]'))).toContain('truncate');
+    expect(link.textContent).toBe(NAME);
   });
 });

@@ -1,9 +1,9 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { RoleProvider } from '../components/app-header';
+import { BrandProvider, RoleProvider } from '../components/app-header';
 import { EarlyClicks } from '../components/early-clicks';
 import { NoAdmin, NotAUser } from '../components/not-a-user';
-import { readMe } from '../lib/api';
+import { readBrand, readMe } from '../lib/api';
 import { EARLY_CLICKS_SCRIPT } from '../lib/early-clicks';
 import { THEME_SCRIPT } from '../lib/theme';
 import './globals.css';
@@ -19,7 +19,10 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   // someone the install does not know gets the one page they can use. The
   // bridge refuses them either way; this is what they see instead of a board
   // of errors. A bridge that did not answer leaves each page to say so.
-  const me = await readMe();
+  //
+  // The console's name and logo beside it, for every page with a header, read
+  // fresh on each request: a change shows on the next page load.
+  const [me, brand] = await Promise.all([readMe(), readBrand()]);
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -45,7 +48,9 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         {me && !me.known ? (
           me.noAdmin ? <NoAdmin email={me.email} /> : <NotAUser email={me.email} admins={me.admins} />
         ) : (
-          <RoleProvider role={me?.role ?? 'admin'}>{children}</RoleProvider>
+          <RoleProvider role={me?.role ?? 'admin'}>
+            <BrandProvider brand={brand}>{children}</BrandProvider>
+          </RoleProvider>
         )}
         <EarlyClicks />
       </body>

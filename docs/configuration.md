@@ -9,7 +9,7 @@ commands, [cli.md](cli.md).
 | Place | Holds | Written by |
 |---|---|---|
 | `$OPENADLC_HOME/install.json` | This machine's install: driver, database, ports, the App's client id, the humans, the webhook secret | `openadlc init`, `openadlc up` (the database password), or by hand. The console's walkthrough writes the settings table instead |
-| The `settings` table | What the console set: organization, client id, automation bot, humans, operator email, public URL, install name, the engine update schedules and time zone, OpenADLC's own update (`selfUpdateSchedule`, and what the bridge records of it: `selfUpdateRun`, `selfUpdateLast`, `selfUpdateCandidate`), attribution mode, which repositories a person merges for (`bridgeMergeOff`, `ciMergeByPerson`), testing deploys, the CI minutes cap, pauses and holds. The closed list is `SETTING_KEYS` in `packages/db/src/store/settings.ts`. No credential: the webhook secret, the App's private key and its client secret, set through the console, go to the secret store | the console |
+| The `settings` table | What the console set: organization, client id, automation bot, humans, operator email, public URL, install name, the engine update schedules and time zone, OpenADLC's own update (`selfUpdateSchedule`, and what the bridge records of it: `selfUpdateRun`, `selfUpdateLast`, `selfUpdateCandidate`), attribution mode, which repositories a person merges for (`bridgeMergeOff`, `ciMergeByPerson`), testing deploys, the CI minutes cap, pauses and holds, and the console's name and logo (`consoleName`, `consoleLogo`). The closed list is `SETTING_KEYS` in `packages/db/src/store/settings.ts`. No credential: the webhook secret, the App's private key and its client secret, set through the console, go to the secret store | the console |
 | `config/*.yaml` | The crew, the repositories to seed, the caps, the review rules | you, in git |
 | Environment variables | Everything else, per service | you, or `openadlc up` |
 | `$OPENADLC_HOME/secrets/` | Refresh tokens, signing keys, model keys, the App's private key and client secret, the webhook secret, the internal secret | OpenADLC, never by hand |
@@ -33,6 +33,21 @@ What wins:
   reads a `.env` beside the compose file. Keep those files absent, or treat
   them as configuration. The environment variables a service reads are the
   tables on this page.
+
+**The console's name and logo** (Settings → Appearance → Console name and
+logo, an admin's) are what the top left of every page says, for everyone
+using the console, in place of "OpenADLC". They are not the install name
+(`installName`), which heads OpenADLC's posts on GitHub, and neither changes
+the browser tab's title. The name is one line of at most 40 characters,
+stored trimmed. The logo is a PNG, JPG, SVG or WebP of at most 256 KB, whose
+bytes must be the type it says; an SVG with a DOCTYPE or an entity is
+refused. It is kept in the settings table as a data URL, left out of what the
+bridge reads on every request (`allSettings({ large: true })` reads it, as a
+backup does), and served from `GET /v1/brand/logo` and the console's
+`/api/brand/logo` with `nosniff` and a sandboxed policy with no script source.
+The header draws it only through an `<img>`. Removing either goes back to the
+default; a change shows on the next page load. See
+[ADR 0010](adr/0010-console-name-and-logo.md).
 
 `OPENADLC_HOME` itself defaults to `~/.openadlc`, and every `openadlc` command reads it.
 Setting it is how a second install lives on the same machine; see

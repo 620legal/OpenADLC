@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../client.js', () => ({ query: vi.fn(async () => []) }));
 
 import { query } from '../client.js';
-import { mergeSettingJson, removeSettingJsonKey, setSettings } from './settings.js';
+import { allSettings, mergeSettingJson, removeSettingJsonKey, setSettings, settingDigest } from './settings.js';
 
 beforeEach(() => {
   vi.mocked(query).mockClear();
@@ -46,5 +46,33 @@ describe('settings that say one thing together', () => {
     const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
     expect(String(sql)).toContain('delete from settings where key = any($1::text[])');
     expect(params).toEqual([['publicUrl', 'webhookMode'], [], [], 'openadlc']);
+  });
+});
+
+describe('settings too large to read on every request', () => {
+  it('are left out of every setting unless asked for, as a backup does', async () => {
+    await allSettings();
+    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
+    expect(String(sql)).toContain('not (key = any($1::text[]))');
+    expect(params).toEqual([['consoleLogo']]);
+
+    vi.mocked(query).mockClear();
+    vi.mocked(query).mockResolvedValueOnce([
+      { key: 'consoleName', value: 'Acme Legal' },
+      { key: 'consoleLogo', value: 'data:image/png;base64,iVBORw0KGgo=' },
+    ] as never);
+    expect(await allSettings({ large: true })).toEqual({ consoleName: 'Acme Legal', consoleLogo: 'data:image/png;base64,iVBORw0KGgo=' });
+    expect(String(vi.mocked(query).mock.calls[0]?.[0])).toBe('select key, value from settings');
+  });
+
+  it('are told apart by a digest and their first characters, read in one statement without the value', async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ digest: 'abc123', head: 'data:image/svg+xml;base64,PHN2Zy' }] as never);
+    expect(await settingDigest('consoleLogo')).toEqual({ digest: 'abc123', head: 'data:image/svg+xml;base64,PHN2Zy' });
+    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
+    expect(String(sql)).toContain('md5(value)');
+    expect(String(sql)).toContain('left(value, 40)');
+    expect(params).toEqual(['consoleLogo']);
+
+    expect(await settingDigest('consoleLogo')).toBeNull();
   });
 });

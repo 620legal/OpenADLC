@@ -104,6 +104,14 @@ describe('every console route says who may call it', () => {
       expect(ROUTE_ROLES[key], key).toBe('admin');
     }
   });
+
+  it('lets everyone read the console’s name and logo, and only an admin change them', () => {
+    // Every person using the console sees them in its header.
+    expect(ROUTE_ROLES['GET /v1/brand']).toBe('user');
+    expect(ROUTE_ROLES['GET /v1/brand/logo']).toBe('user');
+    expect(ROUTE_ROLES['PATCH /v1/install']).toBe('admin');
+    expect(ROUTE_ROLES['GET /v1/install']).toBe('admin');
+  });
 });
 
 describe('the bridge enforces the role on every route', () => {

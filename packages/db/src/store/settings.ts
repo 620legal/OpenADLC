@@ -108,6 +108,12 @@ export const SETTING_KEYS = [
   // month, as a whole number; absent, no cap. At it, the merge line asks for no
   // more CI runs until it is raised or the month turns. See the bridge's `ci-usage.ts`.
   'ciMinutesCap',
+  // What the top left of the console says, for everyone using it; absent, "OpenADLC".
+  // Not `installName`, which heads OpenADLC's posts on GitHub. See the bridge's `brand.ts`.
+  'consoleName',
+  // The console's logo beside it, as a checked `data:<type>;base64,…` of at most
+  // 256 KB. Large, so `allSettings` leaves it out unless asked.
+  'consoleLogo',
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -116,8 +122,18 @@ export function isSettingKey(key: string): key is SettingKey {
   return (SETTING_KEYS as readonly string[]).includes(key);
 }
 
-export async function allSettings(): Promise<Partial<Record<SettingKey, string>>> {
-  const rows = await query<{ key: string; value: string }>('select key, value from settings');
+/**
+ * Settings too large to read on every request. `effectiveConfig` reads every
+ * setting on most requests and on every webhook delivery, and a logo is about
+ * 350 KB of base64 that none of them needs.
+ */
+export const LARGE_SETTING_KEYS: readonly SettingKey[] = ['consoleLogo'];
+
+/** Every setting stored, without the large ones unless `large` asks for them, as a backup does. */
+export async function allSettings(options: { large?: boolean } = {}): Promise<Partial<Record<SettingKey, string>>> {
+  const rows = options.large
+    ? await query<{ key: string; value: string }>('select key, value from settings')
+    : await query<{ key: string; value: string }>('select key, value from settings where not (key = any($1::text[]))', [LARGE_SETTING_KEYS]);
   const out: Partial<Record<SettingKey, string>> = {};
   for (const row of rows) if (isSettingKey(row.key)) out[row.key] = row.value;
   return out;
@@ -126,6 +142,16 @@ export async function allSettings(): Promise<Partial<Record<SettingKey, string>>
 export async function getSetting(key: SettingKey): Promise<string | null> {
   const rows = await query<{ value: string }>('select value from settings where key = $1', [key]);
   return rows[0]?.value ?? null;
+}
+
+/**
+ * A digest of one setting and its first 40 characters, without reading the
+ * whole value out: what says a large one changed, and what it starts with
+ * (a logo's media type), on every page load. Null when it is not set.
+ */
+export async function settingDigest(key: SettingKey): Promise<{ digest: string; head: string } | null> {
+  const rows = await query<{ digest: string; head: string }>('select md5(value) as digest, left(value, 40) as head from settings where key = $1', [key]);
+  return rows[0] ?? null;
 }
 
 /**

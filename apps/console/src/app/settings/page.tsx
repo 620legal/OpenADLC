@@ -14,7 +14,7 @@ import { SpendingSummary } from '@/components/spending-limits';
 import { AppearanceSection, SettingsCard } from '@/components/settings-sections';
 import { AdminsOnly } from '@/components/not-a-user';
 import { UsersSection } from '@/components/users-section';
-import { api, readMe, type WorkPauses } from '@/lib/api';
+import { api, readBrand, readMe, type WorkPauses } from '@/lib/api';
 import { accountsFrom } from '@/lib/model-onboarding';
 import { colorMapOf } from '@/lib/repo-colors';
 import { readHeader } from '@/lib/read-header';
@@ -32,7 +32,7 @@ export const dynamic = 'force-dynamic';
  * caps, summarised, with the amounts edited on their own page; a backup of the
  * install; pausing new work, across the install or in
  * chosen repositories; who may use the console; and how it looks: the color
- * mode, and each repository's and crew member's color.
+ * mode, the console's name and logo, and each repository's and crew member's color.
  */
 export default async function SettingsPage() {
   // Settings are an admin's: a user has no link here, and the bridge refuses
@@ -67,7 +67,7 @@ export default async function SettingsPage() {
       api.backup().catch(() => null),
       api.workPauses().catch((): WorkPauses => ({ paused: null, repos: {} })),
     ]);
-    const users = await api.users().catch(() => null);
+    const [users, brand] = await Promise.all([api.users().catch(() => null), readBrand()]);
     const header = await readHeader({
       repos: repos.repos.map((repo) => repo.name),
       colors: colorMapOf(repos.repos),
@@ -128,7 +128,7 @@ export default async function SettingsPage() {
 
             <UsersSection initial={users} me={me?.known ? me.email : ''} identityMode={me?.known ? me.identityMode : undefined} />
 
-            <AppearanceSection repositories={repos.repos} crew={crew.bots} />
+            <AppearanceSection repositories={repos.repos} crew={crew.bots} brand={brand} />
           </main>
         </div>
       </AppShell>

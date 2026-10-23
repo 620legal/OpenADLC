@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { AppHeader, AppShell } from './app-header';
+import { AppHeader, AppShell, BrandProvider } from './app-header';
 
 // What keeps a page current runs only in a browser; here it only has to be there.
 vi.mock('@/components/live-refresh', () => ({ LiveRefresh: () => <meta name="live-refresh" /> }));
@@ -167,5 +167,57 @@ describe('the header’s count of what needs you', () => {
     expect(needsLine(10, { work: 0, system: 10 })).toBe('10 system');
     expect(needsLine(3, { work: 3, system: 0 })).toBe('3 need you');
     expect(needsLine(3, null)).toBe('3 need you');
+  });
+});
+
+describe('the console’s name and logo at the top left', () => {
+  const branded = (brand: { name: string | null; logoUrl: string | null }, repo?: string): string => {
+    const data = headerData({ repos: ['api', 'website'], crew: CREW, budget: null, needsYou: 0 });
+    return renderToStaticMarkup(
+      <BrandProvider brand={brand}>
+        <AppHeader page="crew" repo={repo} data={data} />
+      </BrandProvider>,
+    ).replace(/<!-- -->/g, '');
+  };
+  /** The link at the top left of each header, wide and compact: its href, its image's src, and its text. */
+  const marks = (html: string) =>
+    html.split('</header>').slice(0, 2).map((part) => {
+      const link = /<a ([^>]*)>(.*?)<\/a>/.exec(part)!;
+      return {
+        href: /href="([^"]+)"/.exec(link[1]!)?.[1],
+        img: /<img [^>]*src="([^"]+)"/.exec(link[2]!)?.[1] ?? null,
+        text: link[2]!.replace(/<[^>]+>/g, ''),
+      };
+    });
+
+  it('says OpenADLC and draws no image when neither is set, in both headers', () => {
+    expect(marks(branded({ name: null, logoUrl: null }))).toEqual([
+      { href: '/?board=1', img: null, text: 'OpenADLC' },
+      { href: '/?board=1', img: null, text: 'OpenADLC' },
+    ]);
+    expect(marks(header('crew'))[0]).toEqual({ href: '/?board=1', img: null, text: 'OpenADLC' });
+  });
+
+  it('draws either, both or neither, and the link still goes to the board', () => {
+    const logo = '/api/brand/logo?v=0123456789ab';
+    expect(marks(branded({ name: 'Acme Legal', logoUrl: null }))).toEqual(Array(2).fill({ href: '/?board=1', img: null, text: 'Acme Legal' }));
+    expect(marks(branded({ name: null, logoUrl: logo }))).toEqual(Array(2).fill({ href: '/?board=1', img: logo, text: 'OpenADLC' }));
+    expect(marks(branded({ name: 'Acme Legal', logoUrl: logo }, 'api'))).toEqual(Array(2).fill({ href: '/?board=1&amp;repo=api', img: logo, text: 'Acme Legal' }));
+  });
+
+  it('draws the logo as a decorative image the link’s name stands for, held to the row without stretching', () => {
+    const html = branded({ name: 'Acme Legal', logoUrl: '/api/brand/logo?v=1' });
+    const images = [...html.matchAll(/<img ([^>]*)>/g)].map((match) => match[1]!);
+    expect(images).toHaveLength(2);
+    for (const image of images) {
+      expect(image).toContain('alt=""');
+      expect(image).toMatch(/class="[^"]*\bh-7\b[^"]*\bw-auto\b[^"]*\bobject-contain\b/);
+    }
+  });
+
+  it('draws a name as the text it is, never as markup', () => {
+    const html = branded({ name: '<b>x</b>', logoUrl: null });
+    expect(html).not.toContain('<b>');
+    expect(marks(html)[0]?.text).toBe('&lt;b&gt;x&lt;/b&gt;');
   });
 });
