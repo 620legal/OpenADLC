@@ -198,10 +198,12 @@ async function main() {
   );
   check(
     'subscribes the webhook to the events the bridge acts on',
-    data.webhookEvents.length === 6 &&
+    data.webhookEvents.length === 7 &&
       data.webhookEvents.includes('pull_request_review') &&
       // What labels a change deployed and finishes a promoted one.
-      data.webhookEvents.includes('deployment_status'),
+      data.webhookEvents.includes('deployment_status') &&
+      // What moves a repository's cards to Done when it ships by release (#146).
+      data.webhookEvents.includes('release'),
     data.webhookEvents.join(', '),
   );
   check('gives the exact webhook url', data.webhookUrl.endsWith('/webhooks/github'), data.webhookUrl);
