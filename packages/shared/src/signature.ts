@@ -9,8 +9,8 @@ import { seatOf } from './stamp.js';
  * several seats share they are the only thing that does — but anything that can
  * post as the account can write them. So each post also carries
  * `<!-- openadlc-sig:v1.<kid>.<payload>.<mac> -->`: an HMAC, under a key only the
- * bridge holds, of the seat, the task, the repository, what kind of post it is
- * and a hash of the body. The bridge signs its own posts, and a session's `gh`
+ * bridge holds, of the seat, the task, the repository, what kind of post it is,
+ * a hash of the body and, for a review, the head it is of. The bridge signs its own posts, and a session's `gh`
  * asks the bridge to sign its (`/internal/tasks/:id/stamp`), which signs only
  * for that task's seat. A post whose body was changed after signing, copied
  * from another, or written around `gh` has no signature that checks.
@@ -35,6 +35,15 @@ export interface SignedFields {
   kind: string;
   /** The issue or pull request number it was posted to, when that was known when signing. */
   n?: number | null;
+  /**
+   * For a review, the commit it is of: the head its task's worktree had
+   * checked out when it posted. GitHub's `commit_id` for a review is not that.
+   * GitHub moves it: on 620legal/OpenADLC#118 an `edited` delivery moved the
+   * lead's approval of b789079 onto 692cd1f, the merge line's update of the
+   * branch, whose diff the lead never read, and the gate counted it for the
+   * new head. Absent on every other post, and on reviews signed before this.
+   */
+  head?: string | null;
 }
 
 export interface SignaturePayload extends SignedFields {
@@ -114,6 +123,7 @@ export function signBody(
     repo: fields.repo,
     kind: fields.kind,
     ...(fields.n ? { n: fields.n } : {}),
+    ...(fields.head ? { head: fields.head } : {}),
     h: bodyHash(bare),
     iat: Math.floor(now.getTime() / 1000),
     nonce,
@@ -152,6 +162,16 @@ export function verifyBody(body: string | null | undefined, keys: readonly Signi
   const tagged = seatOf(body);
   if (tagged && tagged !== payload.seat) return { ok: false, reason: 'seat-mismatch', payload };
   return { ok: true, payload, kid: kid! };
+}
+
+/**
+ * The head a checked signature says its review is of, or null when it names
+ * none: a review signed before reviews carried one, or a post that is not a
+ * review. Only a full commit id is one; anything else is no head to compare.
+ */
+export function signedHead(payload: Pick<SignaturePayload, 'head'> | null | undefined): string | null {
+  const head = payload?.head;
+  return typeof head === 'string' && /^[0-9a-f]{40}$/.test(head) ? head : null;
 }
 
 /** What each reason means, for a card and the audit log. */

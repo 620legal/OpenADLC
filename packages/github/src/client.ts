@@ -522,8 +522,10 @@ export class GitHubClient {
       state: review.state,
       body: review.body ?? '',
       submittedAt: review.submitted_at,
-      // Which head was approved. An approval of an earlier commit is not an
-      // approval of what would land now.
+      // The commit GitHub shows it on, which GitHub moves: on
+      // 620legal/OpenADLC#118 it moved the lead's approval onto a later head
+      // with another diff. A crew review is of the head its signature names
+      // (`Attribution.reviewsThatCount` in the bridge), not of this.
       commitId: review.commit_id ?? null,
       association: review.author_association ?? null,
     }));

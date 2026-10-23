@@ -151,7 +151,9 @@ describe('OpenADLC’s gh asking the bridge to sign', () => {
       number: number | null,
       env: Record<string, string>,
       fetchImpl: (url: string, init: { headers: Record<string, string>; body: string }) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>,
+      head?: string | null,
     ) => Promise<string | null>;
+    reviewHeadRefusal: (kind: string, head: string | null, env: Record<string, string>) => string | null;
   };
 
   it('names what is being posted, and where', () => {
@@ -178,6 +180,34 @@ describe('OpenADLC’s gh asking the bridge to sign', () => {
     );
     expect(calls).toEqual([{ url: 'http://bridge/internal/tasks/t-1/stamp', token: 'tok', body: { body: 'Looks right.', kind: 'review', number: 7 } }]);
     expect(signed).toBe('Looks right.\n\n<!-- openadlc-sig:v1.x.y.z -->');
+  });
+
+  it('sends a review’s head, the worktree’s HEAD, to be signed with it', async () => {
+    // GitHub's own commit for a review is GitHub's to move: on
+    // 620legal/OpenADLC#118 it moved the lead's approval onto a later head.
+    const sent: unknown[] = [];
+    const head = 'b7890794b365dd3ec75b81f761f1889dfb11674a';
+    await signing.stamp(
+      'Approved.',
+      'review',
+      7,
+      { OPENADLC_BRIDGE_URL: 'http://bridge', OPENADLC_TASK_ID: 't-1' },
+      async (_url, init) => {
+        sent.push(JSON.parse(init.body));
+        return { ok: true, status: 200, json: async () => ({ body: 'signed' }) };
+      },
+      head,
+    );
+    expect(sent).toEqual([{ body: 'Approved.', kind: 'review', number: 7, head }]);
+  });
+
+  it('refuses a review it would sign when HEAD cannot be read, and nothing else', () => {
+    const SESSION = { OPENADLC_BRIDGE_URL: 'http://bridge', OPENADLC_TASK_ID: 't-1' };
+    expect(signing.reviewHeadRefusal('review', null, SESSION)).toMatch(/run gh pr review from the worktree you reviewed/);
+    expect(signing.reviewHeadRefusal('review', 'b7890794b365dd3ec75b81f761f1889dfb11674a', SESSION)).toBeNull();
+    expect(signing.reviewHeadRefusal('comment', null, SESSION)).toBeNull();
+    // Outside a task nothing is signed, so nothing needs a head.
+    expect(signing.reviewHeadRefusal('review', null, {})).toBeNull();
   });
 
   it('posts unsigned rather than not at all when the bridge refuses or there is no task', async () => {

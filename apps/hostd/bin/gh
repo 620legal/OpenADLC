@@ -161,9 +161,10 @@ export function targetNumber(args, ask, env = process.env) {
  * The body signed by the bridge as this task's seat, or null when it could not
  * be: no task to sign for, or a bridge that did not answer. The post then goes
  * out unsigned, and says so on stderr — the bridge records it as unattributed,
- * and an install that enforces signatures does not count it.
+ * and an install that enforces signatures does not count it. A review is
+ * signed with `head`, the commit it is of (`reviewHeadRefusal`).
  */
-export async function stamp(text, kind, number, env = process.env, fetchImpl = globalThis.fetch) {
+export async function stamp(text, kind, number, env = process.env, fetchImpl = globalThis.fetch, head = null) {
   const bridge = env.OPENADLC_BRIDGE_URL;
   const task = env.OPENADLC_TASK_ID;
   if (!bridge || !task || !fetchImpl) return null;
@@ -174,7 +175,7 @@ export async function stamp(text, kind, number, env = process.env, fetchImpl = g
         'content-type': 'application/json',
         ...(env.OPENADLC_TASK_TOKEN ? { 'x-openadlc-task-token': env.OPENADLC_TASK_TOKEN } : {}),
       },
-      body: JSON.stringify({ body: text, kind, number }),
+      body: JSON.stringify({ body: text, kind, number, ...(head ? { head } : {}) }),
     });
     if (!response.ok) {
       process.stderr.write(`gh: OpenADLC could not sign this post (${response.status}); it goes out unsigned\n`);
@@ -186,6 +187,22 @@ export async function stamp(text, kind, number, env = process.env, fetchImpl = g
     process.stderr.write(`gh: OpenADLC could not sign this post (${error instanceof Error ? error.message : error}); it goes out unsigned\n`);
     return null;
   }
+}
+
+/**
+ * Why a review that is about to be signed may not go to GitHub: HEAD could not
+ * be read. A review is signed with the head it is of, the worktree's HEAD,
+ * and the merge counts an approval only for that head or a later one with the
+ * same diff: GitHub's own commit for a review is GitHub's to move, and on
+ * 620legal/OpenADLC#118 it moved the lead's approval onto a head whose diff
+ * the lead never read. The bridge refuses to sign a review with none, and an
+ * approval posted unsigned lands nothing, so it is stopped here, where the
+ * session can still run it from the worktree. Null when there is nothing to
+ * sign for (no bridge or task) or HEAD was read.
+ */
+export function reviewHeadRefusal(kind, head, env = process.env) {
+  if (kind !== 'review' || head || !env.OPENADLC_BRIDGE_URL || !env.OPENADLC_TASK_ID) return null;
+  return 'could not read HEAD, the head this review is of, which OpenADLC signs it with: run gh pr review from the worktree you reviewed';
 }
 
 /**
@@ -781,11 +798,12 @@ async function main() {
     process.stderr.write(`gh: not running — ${advisory}\n`);
     process.exit(1);
   }
+  const readHead = () => {
+    const read = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });
+    return read.status === 0 ? read.stdout.trim() : null;
+  };
   const unchecked = await localCiRefusal(process.argv.slice(2), {
-    head: () => {
-      const read = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });
-      return read.status === 0 ? read.stdout.trim() : null;
-    },
+    head: readHead,
     passed: (sha) => bridgePassed(sha),
   });
   if (unchecked) {
@@ -825,11 +843,18 @@ async function main() {
     },
   }, process.env.OPENADLC_BOT ?? '');
   if (written) {
+    const kind = postKind(argv);
+    const head = kind === 'review' ? readHead() : null;
+    const headless = reviewHeadRefusal(kind, head);
+    if (headless) {
+      process.stderr.write(`gh: not running — ${headless}\n`);
+      process.exit(1);
+    }
     const number = targetNumber(argv, (lookup) => {
       const asked = spawnSync(gh, lookup, { encoding: 'utf8' });
       return asked.status === 0 ? asked.stdout : null;
     });
-    const signed = await stamp(written.text, postKind(argv), number);
+    const signed = await stamp(written.text, kind, number, process.env, globalThis.fetch, head);
     if (signed) writeFileSync(written.file, signed);
   }
   const run = spawnSync(gh, args, { stdio: 'inherit' });

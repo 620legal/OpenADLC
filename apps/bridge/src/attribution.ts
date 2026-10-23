@@ -6,6 +6,7 @@ import {
   isFleetLogin,
   newSigningKey,
   signBody,
+  signedHead,
   verifyBody,
   type SignedFields,
   type SigningKey,
@@ -108,8 +109,18 @@ export class Attribution {
    * could satisfy by posting another seat's signed text — from a comment on any
    * pull request — as an approval here. The review id binds the verdict too:
    * a copy is another review, and its nonce is already someone else's.
+   *
+   * Each crew review comes back as of the head its signature names
+   * (`commitId`), never GitHub's `commit_id`: GitHub moves that to a later
+   * head, and an approval of one diff was counted for another
+   * (`SignedFields.head`). An approval whose signature names none is of no
+   * head. Any other review signed before reviews named their head keeps
+   * GitHub's commit: on #118 GitHub moved the approval and left the second
+   * reviewer's comment where it was, and taken as of no head, every advisory
+   * review of a pull request open at the upgrade stopped counting, with its
+   * seat's task read as already asked. A person's review is as GitHub gave it.
    */
-  async reviewsThatCount<R extends { id: number; user: string | null; body?: string | null }>(
+  async reviewsThatCount<R extends { id: number; user: string | null; body?: string | null; state?: string; commitId?: string | null }>(
     repo: string,
     prNumber: number,
     reviews: readonly R[],
@@ -133,7 +144,7 @@ export class Attribution {
       const key = canonicalRepo(repo);
       const boundTo = `${key}:review:${review.id}`;
       const mine = await attributions.bindNonce({ nonce: payload.nonce, seat: payload.seat, taskId: payload.task, repo: key, kind: 'review', boundTo });
-      if (mine) kept.push(review);
+      if (mine) kept.push({ ...review, commitId: signedHead(payload) ?? (review.state?.toUpperCase() === 'APPROVED' ? null : (review.commitId ?? null)) });
     }
     return kept;
   }

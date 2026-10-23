@@ -11,7 +11,7 @@ import { blockingOverlaps, type WorkInFlight } from '@openadlc/dispatcher';
 import { githubDidNotAnswer, type GitHubClient } from '@openadlc/github';
 import { ATTENTION_WINDOW_DAYS, GITHUB_RETRY_CLAIM_MS, githubRetry, triedAgain } from './attention.js';
 import { ALREADY_LANDED, alreadyLanded, subjectClosed, wasRefused } from './gates.js';
-import { fastPathOf, type Automation } from './automation.js';
+import { fastPathOf, seatsWaitedOn, type Automation } from './automation.js';
 import { causeOfFailure, isPrerequisiteRow } from './health/checks/crew.js';
 import { DEPLOY_PATH_BRANCH_PREFIX, REVIEW_ROUND_OPENED, endedBySendingBack, headInRepository, issueForSubject, issueNumberFromBranch, parseRef, stageOfTask } from './work.js';
 import { asAutomation, automationBotName, findOwnOpenIssue } from './automation-bot.js';
@@ -1146,7 +1146,7 @@ export class Scheduler {
             // connected after the pull request opened, or it could not work when
             // the review was asked for — is started once it can. No event is
             // coming for it: the account's coming back is not one GitHub sends.
-            const waitingOn = /^waiting on (.+)$/.exec(computed.description)?.[1]?.split(', ') ?? [];
+            const waitingOn = seatsWaitedOn(computed.description);
             actions.push(
               ...(await this.taskService.openMissingReviews({
                 repo,
@@ -1154,10 +1154,13 @@ export class Scheduler {
                 branch: opened.head.ref,
                 issueNumber,
                 waitingOn: waitingOn.filter((seat) => seat !== reviewed.decision.lead),
+                notCounted: reviewed.notCounted,
               })),
             );
             // The lead's turn, when the review that completed the others found
-            // it busy: no other event is coming for it.
+            // it busy: no other event is coming for it. Nor for a lead whose
+            // approval GitHub shows counts for nothing on this diff, one made
+            // before reviews were signed with their head among them.
             if (reviewed.leadDue && !resolution) {
               const line = await this.taskService.openLeadReview({
                 repo,
@@ -1166,6 +1169,7 @@ export class Scheduler {
                 issueNumber,
                 seat: reviewed.leadDue.seat,
                 since: reviewed.leadDue.since,
+                notCounted: reviewed.notCounted,
               });
               if (line) actions.push(line);
             }

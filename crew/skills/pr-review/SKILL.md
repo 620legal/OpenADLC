@@ -52,7 +52,10 @@ has not run.
    used. Trace a claim to the code that makes it true: a rendering change to
    the component that renders it, a migration to the migration check, an
    authorization change to the test that proves the denial.
-4. Post one review on the pull request, as your part says (below). Its body has:
+4. Post one review on the pull request, as your part says (below), from the
+   worktree you reviewed: OpenADLC's `gh` signs it with that worktree's HEAD,
+   the head your review is of, and refuses a review where it cannot read one.
+   Its body has:
    - a verdict: approve, or changes requested;
    - findings as `[severity] file:line — what is wrong; the rule; what to change`;
    - what you verified by reading, and where (`file:line`);

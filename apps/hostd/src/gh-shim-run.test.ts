@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
 /**
@@ -21,12 +21,23 @@ mkdirSync(fakeBin);
 writeFileSync(join(fakeBin, 'gh'), `#!/bin/sh\necho "$@" >> "${reached}"\nexit 0\n`);
 chmodSync(join(fakeBin, 'gh'), 0o755);
 
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+// A worktree to review in: a review is signed with its HEAD. And somewhere
+// that is not one.
+const worktree = join(dir, 'worktree');
+const nowhere = mkdtempSync(join(tmpdir(), 'openadlc-gh-run-nowhere-'));
+mkdirSync(worktree);
+spawnSync('git', ['init', '-q'], { cwd: worktree });
+spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '--allow-empty', '-m', 'x'], { cwd: worktree });
 
-function gh(args: string[], env: Record<string, string> = {}) {
+afterAll(() => {
+  rmSync(dir, { recursive: true, force: true });
+  rmSync(nowhere, { recursive: true, force: true });
+});
+
+function gh(args: string[], env: Record<string, string> = {}, cwd = dir) {
   rmSync(reached, { force: true });
   const run = spawnSync(process.execPath, [SHIM, ...args], {
-    cwd: dir,
+    cwd,
     encoding: 'utf8',
     env: {
       PATH: [fakeBin, '/usr/bin', '/bin'].join(delimiter),
@@ -49,16 +60,29 @@ function file(name: string, text: string): string {
 
 describe('signing a review that names no pull request, end to end', () => {
   it('asks the real gh for the current branch’s pull request before it posts', () => {
-    const run = gh(['pr', 'review', '--approve', '--body', 'ok'], {
-      OPENADLC_BOT: 'lead',
-      OPENADLC_TASK_ID: 'task-1',
-      // Nothing answers here: the post goes out unsigned, as before.
-      OPENADLC_BRIDGE_URL: 'http://127.0.0.1:1',
-    });
+    const run = gh(
+      ['pr', 'review', '--approve', '--body', 'ok'],
+      {
+        OPENADLC_BOT: 'lead',
+        OPENADLC_TASK_ID: 'task-1',
+        // Nothing answers here: the post goes out unsigned, as before.
+        OPENADLC_BRIDGE_URL: 'http://127.0.0.1:1',
+      },
+      worktree,
+    );
     expect(run.status).toBe(0);
     const calls = (run.reachedGh ?? '').split('\n');
     expect(calls[0]).toBe('pr view --json number --jq .number');
     expect(calls[1]).toMatch(/^pr review --approve --body-file /);
+  });
+
+  it('posts no review it would sign from where HEAD cannot be read, the head it would be signed with', () => {
+    // Not a repository above it either, wherever the temporary folder is.
+    const alone = { GIT_CEILING_DIRECTORIES: dirname(nowhere) };
+    const run = gh(['pr', 'review', '7', '--approve', '--body', 'ok'], { OPENADLC_BOT: 'lead', OPENADLC_TASK_ID: 'task-1', OPENADLC_BRIDGE_URL: 'http://127.0.0.1:1', ...alone }, nowhere);
+    expect(run.status).toBe(1);
+    expect(run.stderr).toMatch(/run gh pr review from the worktree you reviewed/);
+    expect(run.reachedGh).toBeNull();
   });
 
   it('asks nothing outside a task', () => {
