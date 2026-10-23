@@ -23,7 +23,7 @@ const world = vi.hoisted(() => ({
   recorded: [] as { type: string; payload: Record<string, string> }[],
   calls: [] as string[],
   /** Platform events, as `listEventsOfTypeWith` finds them. */
-  events: [] as { type: string; payload: Record<string, string> }[],
+  events: [] as { type: string; payload: Record<string, string | number> }[],
   /** Stage moves as `stageMoves.record` stored them. */
   moves: [] as { from: string | null; to: string; kind: string }[],
 }));
@@ -685,9 +685,21 @@ describe('an approval counts for the head it approved', () => {
 describe('review-gate and a named person’s approval of an earlier head', () => {
   const lead = { id: 1, user: 'exampleco-lead', state: 'APPROVED', body: 'Approved.\n\n<!-- openadlc-seat:lead-reviewer -->', submittedAt: null, commitId: 'head' };
 
-  /** The gate on a change to config/, which AGENTS.md says @janedoe approves. */
-  async function gateWith(person: Record<string, unknown>, fingerprints: Record<string, string>, carried: string[] = []) {
+  /**
+   * The gate on a change to config/, which AGENTS.md says @janedoe approves.
+   * Her review was recorded from its `submitted` delivery as given on
+   * `submittedOn` — by default the commit GitHub shows it on — or not at all
+   * (null), when the timeline (`history`) is all there is to say.
+   */
+  async function gateWith(
+    person: { id: number; user: string; commitId: string | null } & Record<string, unknown>,
+    fingerprints: Record<string, string>,
+    { carried = [], submittedOn = person.commitId, history = [] }: { carried?: string[]; submittedOn?: string | null; history?: unknown[] | null } = {},
+  ) {
     world.crew = [{ id: 'b-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'exampleco-lead' }];
+    world.events = submittedOn
+      ? [{ type: 'review.submitted_on', payload: { subjectRef: 'app#70', reviewId: person.id, login: person.user, commit: submittedOn, state: 'approved' } }]
+      : [];
     const github = {
       listPullFiles: vi.fn(async () => ['config/bots.yaml']),
       listEveryPullFile: vi.fn(async () => ({ files: ['config/bots.yaml'], complete: true, renamedFrom: [] })),
@@ -695,11 +707,13 @@ describe('review-gate and a named person’s approval of an earlier head', () =>
       readFileAtRef: vi.fn(async () => '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n'),
       diffFingerprint: vi.fn(async (_repo: string, _base: string, sha: string) => fingerprints[sha] ?? null),
       permissionOf: vi.fn(async () => 'write'),
+      listPullHistory: vi.fn(async () => history),
     };
     const only = { ...config, review: reviewRulesSchema.parse({ reviewers: [{ seat: 'lead-reviewer', lens: 'lead', lead: true }] }) } as BridgeConfig;
     const reading = new Automation(only, { asBot: vi.fn(async () => github) } as never);
     reading.useCarriedHeads(async () => new Set(carried));
-    return (await reading.reviewStanding('exampleco/app', { number: 70, draft: false, labels: [], head: { sha: 'head' }, baseRef: 'main' })).gate;
+    const standing = await reading.reviewStanding('exampleco/app', { number: 70, draft: false, labels: [], head: { sha: 'head' }, baseRef: 'main' });
+    return Object.assign(standing.gate, { people: standing.peopleNotCounted, history: github.listPullHistory });
   }
   const janedoe = (commitId: string | null) => ({ id: 2, user: 'janedoe', state: 'APPROVED', body: '', submittedAt: null, commitId });
 
@@ -707,16 +721,20 @@ describe('review-gate and a named person’s approval of an earlier head', () =>
     const gate = await gateWith(janedoe('before-update'), { head: 'the diff', 'before-update': 'the diff' });
     expect(gate.description).not.toContain('@janedoe');
     expect(gate.state).toBe('success');
+    expect(gate.people).toEqual([]);
+    // Recorded, so the timeline is not read for it.
+    expect(gate.history).not.toHaveBeenCalled();
   });
 
-  it('does not count it when the diff is another one', async () => {
+  it('does not count it when the diff is another one, and says why beside her', async () => {
     const gate = await gateWith(janedoe('before-a-fix'), { head: 'the diff', 'before-a-fix': 'another diff' });
-    expect(gate).toMatchObject({ state: 'pending', description: 'waiting on @janedoe' });
+    expect(gate).toMatchObject({ state: 'pending', description: 'waiting on @janedoe (their approval is of before- and this diff is another)' });
+    expect(gate.people).toEqual([{ login: 'janedoe', reviewId: 2, head: 'head', approvedOn: 'before-a-fix', shownOn: 'before-a-fix', why: 'their approval is of before- and this diff is another' }]);
   });
 
   it('does not count a head a lead-only conflict resolution carried, which the person never saw', async () => {
-    const gate = await gateWith(janedoe('before-resolution'), { head: 'the diff', 'before-resolution': 'the diff before it' }, ['before-resolution']);
-    expect(gate).toMatchObject({ state: 'pending', description: 'waiting on @janedoe' });
+    const gate = await gateWith(janedoe('before-resolution'), { head: 'the diff', 'before-resolution': 'the diff before it' }, { carried: ['before-resolution'] });
+    expect(gate).toMatchObject({ state: 'pending', description: 'waiting on @janedoe (their approval is of before- and this diff is another)' });
   });
 
   it('counts the head itself, whatever the case of the login GitHub reports', async () => {
@@ -726,7 +744,47 @@ describe('review-gate and a named person’s approval of an earlier head', () =>
 
   it('does not count a review with no commit recorded', async () => {
     const gate = await gateWith(janedoe(null), { head: 'the diff' });
-    expect(gate).toMatchObject({ state: 'pending', description: 'waiting on @janedoe' });
+    expect(gate).toMatchObject({ state: 'pending', description: 'waiting on @janedoe (their approval names no commit)' });
+  });
+
+  // 620legal/OpenADLC#124: GitHub moves a review's commit_id onto a later
+  // head, as it moved the lead's approval on #118 onto the merge line's
+  // update, whose diff was another. A person's approval has no signature to
+  // say which head it was of: it is of the one it was submitted on.
+  it('does not count it on the head GitHub moved it to, when it was submitted on another diff', async () => {
+    const gate = await gateWith(janedoe('head'), { head: 'the diff with main’s changes', 'before-update': 'the diff she approved' }, { submittedOn: 'before-update' });
+    expect(gate).toMatchObject({ state: 'pending', description: 'waiting on @janedoe (their approval is of before- and this diff is another)' });
+    expect(gate.people).toEqual([{ login: 'janedoe', reviewId: 2, head: 'head', approvedOn: 'before-update', shownOn: 'head', why: 'their approval is of before- and this diff is another' }]);
+  });
+
+  it('counts it on the head GitHub moved it to when the head it was submitted on has the same diff', async () => {
+    const gate = await gateWith(janedoe('head'), { head: 'the diff', 'before-update': 'the diff' }, { submittedOn: 'before-update' });
+    expect(gate.state).toBe('success');
+  });
+
+  it('with no record, counts GitHub’s commit when the timeline says it was the head she approved', async () => {
+    const history = [
+      { event: 'committed', actor: null, viaApp: false, sha: 'head' },
+      { event: 'reviewed', actor: 'janedoe', viaApp: false, sha: null, reviewId: 2 },
+    ];
+    const gate = await gateWith(janedoe('head'), { head: 'the diff' }, { submittedOn: null, history });
+    expect(gate.state).toBe('success');
+  });
+
+  it('with no record, counts it for none when the timeline says another head was the head she approved', async () => {
+    // Given before the bridge recorded heads: the commit after it in the
+    // timeline is the merge line's update, which GitHub moved it to.
+    const history = [
+      { event: 'committed', actor: null, viaApp: false, sha: 'before-update' },
+      { event: 'reviewed', actor: 'janedoe', viaApp: false, sha: null, reviewId: 2 },
+      { event: 'committed', actor: null, viaApp: false, sha: 'head' },
+    ];
+    const gate = await gateWith(janedoe('head'), { head: 'the diff with main’s changes', 'before-update': 'the diff she approved' }, { submittedOn: null, history });
+    expect(gate).toMatchObject({ state: 'pending', description: 'waiting on @janedoe (their approval is not known to be of head)' });
+    expect(gate.people).toEqual([{ login: 'janedoe', reviewId: 2, head: 'head', approvedOn: null, shownOn: 'head', why: 'their approval is not known to be of head' }]);
+    // And when the timeline cannot be read, or does not list the review.
+    expect((await gateWith(janedoe('head'), { head: 'the diff' }, { submittedOn: null, history: null })).state).toBe('pending');
+    expect((await gateWith(janedoe('head'), { head: 'the diff' }, { submittedOn: null, history: history.slice(0, 1) })).state).toBe('pending');
   });
 });
 
@@ -3840,6 +3898,133 @@ describe('an approval GitHub moved onto a later head (620legal/OpenADLC#118)', (
     expect(standing.approved).toEqual([]);
     expect(standing.gate).toEqual({ state: 'pending', description: 'waiting on lead-reviewer (its approval is not signed by OpenADLC)' });
     expect(standing.notCounted).toEqual([{ seat: 'lead-reviewer', reviewId: 5622816949, head: A, why: 'its approval is not signed by OpenADLC' }]);
+  });
+});
+
+describe('a person’s approval GitHub moved onto a later head (620legal/OpenADLC#124)', () => {
+  // As on #118, where GitHub moved the lead's approval of b789079 onto
+  // 692cd1f, the merge line's update of the branch, whose diff was another.
+  // A person's approval carries no signature to say which head it was of, so
+  // the same move counted it, by GitHub's commit_id, for a diff they never saw.
+  const A = 'b7890794b365dd3ec75b81f761f1889dfb11674a';
+  const B = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const REVIEW = 5622816990;
+
+  function replay(options: { sameDiff?: boolean; recorded?: boolean; history?: unknown[] | null } = {}) {
+    world.crew = [{ id: 'b-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'exampleco-lead' }];
+    // What the bridge recorded from her review's `submitted` delivery.
+    world.events =
+      options.recorded === false ? [] : [{ type: 'review.submitted_on', payload: { subjectRef: 'app#118', reviewId: REVIEW, login: 'janedoe', commit: A, state: 'approved' } }];
+    const github = {
+      head: A,
+      reviews: [
+        { id: 5622816900, user: 'exampleco-lead', state: 'APPROVED', body: 'Approved.\n\n<!-- openadlc-seat:lead-reviewer -->', submittedAt: '2026-10-23T01:15:30Z', commitId: A },
+        { id: REVIEW, user: 'janedoe', state: 'APPROVED', body: 'Looks right.', submittedAt: '2026-10-23T01:15:48Z', commitId: A },
+      ],
+      listEveryPullFile: vi.fn(async () => ({ files: ['config/bots.yaml'], complete: true })),
+      listReviews: vi.fn(async () => github.reviews.map((review) => ({ ...review }))),
+      permissionOf: vi.fn(async () => 'write'),
+      readFileIfPresent: vi.fn(async () => null),
+      listPullHistory: vi.fn(async () => (options.history === undefined ? [] : options.history)),
+      checkRunsFor: vi.fn(async (_repo: string, sha: string) => [{ name: 'ci', status: 'completed', conclusion: 'success', app: 'github-actions', headSha: sha, suiteId: sha === A ? 1 : 2 }]),
+      statusesFor: vi.fn(async () => []),
+      workflowRunOfSuite: vi.fn(async (_repo: string, suite: number) => ({
+        name: 'ci',
+        headSha: suite === 1 ? A : B,
+        path: '.github/workflows/ci.yml',
+        event: 'pull_request',
+        headBranch: 'feature',
+        headRepoFullName: 'exampleco/app',
+        createdAt: '2026-10-23T01:16:30Z',
+      })),
+      pullsFromBranch: vi.fn(async () => [{ number: 118, baseRef: 'main', headSha: github.head, createdAt: '2026-10-23T00:58:00Z', closedAt: null }]),
+      readFileAtRef: vi.fn(async () => '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n'),
+      listPullFiles: vi.fn(async () => ['config/bots.yaml']),
+      diffFingerprint: vi.fn(async (_repo: string, _base: string, sha: string) =>
+        sha === A || options.sameDiff ? 'the diff b789079 proposes' : 'the diff with main’s changes to config/bots.yaml',
+      ),
+    };
+    // The lead's signature checks, and names whichever head it re-approved.
+    const attribution = {
+      reviewsThatCount: vi.fn(async (_repo: string, _n: number, reviews: { user: string }[]) =>
+        reviews.filter((review) => review.user === 'exampleco-lead').map((review) => ({ ...review, commitId: github.head })),
+      ),
+      countable: vi.fn(async (posts: unknown[]) => [...posts]),
+    };
+    // review-gate on the head as published, green: the merge decides alone.
+    const appGate = { standing: vi.fn(async () => ({ state: 'success', description: 'every requested review has been posted' })), appId: vi.fn(async () => 7) };
+    const only = { ...config, review: reviewRulesSchema.parse({ reviewers: [{ seat: 'lead-reviewer', lens: 'lead', lead: true }] }) } as BridgeConfig;
+    const automation = new Automation(only, { asBot: vi.fn(async () => github), attribution } as never, appGate as never);
+    const pull = () => ({
+      number: 118,
+      draft: false,
+      headSha: github.head,
+      headRef: 'feature',
+      baseRef: 'main',
+      labels: [],
+      mergeableState: 'clean',
+      headRepoFullName: 'exampleco/app',
+      requestedReviewers: [],
+      requestedTeams: [],
+    });
+    const decide = async () => mergeDecision((await automation.mergeFacts({ fullName: 'exampleco/app', defaultBranch: 'main' }, pull()))!);
+    const standing = () => automation.reviewStanding('exampleco/app', { number: 118, draft: false, labels: [], head: { sha: github.head, ref: 'feature' }, baseRef: 'main' });
+    // The merge line's update of the branch, then GitHub's `edited` delivery moving her approval onto it.
+    const updated = () => {
+      github.head = B;
+      github.reviews[1]!.commitId = B;
+    };
+    return { github, decide, standing, updated };
+  }
+
+  it('merges on her approval of the head it was submitted on', async () => {
+    const { decide } = replay();
+
+    expect(await decide()).toMatchObject({ land: true, approvals: [{ reviewer: 'lead-reviewer' }, { reviewer: 'janedoe', person: true, commitId: A, ofHead: true }] });
+  });
+
+  it('does not merge once GitHub moved it onto a head with another diff, and asks her to approve that head', async () => {
+    const { decide, standing, updated } = replay();
+    updated();
+
+    expect(await decide()).toEqual({
+      land: false,
+      reason: '@janedoe approved `b789079`, an earlier version whose diff is not known to be this one, though GitHub shows the approval on `692cd1f`; @janedoe approves `692cd1f` again',
+      approvals: [],
+    });
+    const now = await standing();
+    expect(now.gate).toEqual({ state: 'pending', description: 'waiting on @janedoe (their approval is of b789079 and this diff is another)' });
+    expect(now.peopleNotCounted).toEqual([{ login: 'janedoe', reviewId: REVIEW, head: B, approvedOn: A, shownOn: B, why: 'their approval is of b789079 and this diff is another' }]);
+  });
+
+  it('counts it for a later head with the same diff', async () => {
+    const { decide, standing, updated } = replay({ sameDiff: true });
+    updated();
+
+    expect(await decide()).toMatchObject({ land: true, approvals: [{ reviewer: 'lead-reviewer' }, { reviewer: 'janedoe', commitId: A, ofHead: false }] });
+    expect((await standing()).peopleNotCounted).toEqual([]);
+  });
+
+  it('with no record, reads GitHub’s commit only when the timeline says it was the head she approved', async () => {
+    // Given before the bridge recorded heads, or its delivery never came: the
+    // timeline lists it before the merge line's update, the head GitHub moved it to.
+    const history = [
+      { event: 'committed', actor: null, viaApp: false, sha: A },
+      { event: 'reviewed', actor: 'janedoe', viaApp: false, sha: null, reviewId: REVIEW },
+      { event: 'committed', actor: null, viaApp: false, sha: B },
+    ];
+    const before = replay({ recorded: false, history: history.slice(0, 2) });
+    expect(await before.decide()).toMatchObject({ land: true, approvals: [{ reviewer: 'lead-reviewer' }, { reviewer: 'janedoe', commitId: A, ofHead: true }] });
+
+    const moved = replay({ recorded: false, history });
+    moved.updated();
+    expect(await moved.decide()).toMatchObject({
+      land: false,
+      reason: "GitHub shows @janedoe's approval on `692cd1f`, and nothing says it was submitted there, so it counts for none; @janedoe approves `692cd1f` again",
+    });
+    expect((await moved.standing()).peopleNotCounted).toEqual([
+      { login: 'janedoe', reviewId: REVIEW, head: B, approvedOn: null, shownOn: B, why: 'their approval is not known to be of 692cd1f' },
+    ]);
   });
 });
 

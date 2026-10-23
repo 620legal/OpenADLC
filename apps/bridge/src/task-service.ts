@@ -10,11 +10,11 @@ import { asAutomation } from './automation-bot.js';
 import { alreadyLanded, endsWithSubject, subjectClosed, wasRefused } from './gates.js';
 import { blockersOf, waitingOnBlocked, type Blocker } from './health/checks/crew.js';
 import type { HostdClient, ReviewMode } from './hostd-client.js';
-import { reviewRulesOf, type NotCounted } from './automation.js';
+import { reviewRulesOf, type NotCounted, type PersonNotCounted } from './automation.js';
 import { requestPrefixOf } from './request-context.js';
 import { readSeatPauses, seatPausedWords, type SeatPause } from './seat-pause.js';
 import { heldWords } from './item-hold.js';
-import { RESUME_WAITS_ON_GITHUB, REVIEW_ASKED_AGAIN, REVIEW_ROUND_OPENED, parseRef } from './work.js';
+import { PERSON_ASKED_AGAIN, RESUME_WAITS_ON_GITHUB, REVIEW_ASKED_AGAIN, REVIEW_ROUND_OPENED, parseRef } from './work.js';
 
 /**
  * A seat running all the tasks it may at once (`bots.max_tasks`, Crew →
@@ -1571,4 +1571,38 @@ async function notOfThisDiff(subjectRef: string, seat: string, notCounted: reado
   await recordEvent({ source: 'platform', type: REVIEW_ASKED_AGAIN, payload: { ...fields, why: mine.why } }).catch((error: unknown) =>
     console.warn(`[bridge] ${subjectRef}: ${seat} could not be asked again, ${mine.why}: ${error instanceof Error ? error.message : error}`),
   );
+}
+
+/**
+ * Asks each person the rules name whose approval GitHub shows, but which
+ * counts for nothing on this head (`peopleNotCounted`), to approve it again:
+ * recorded as `PERSON_ASKED_AGAIN`, which Needs you shows until they review
+ * it again (`attention.ts`). GitHub moves a review's commit onto a later head,
+ * one with another diff included, and goes on showing the person as having
+ * approved; the gate waited on them, and nothing told them. Once for each
+ * head, as a seat is asked again (`notOfThisDiff`): the gate sweep and every
+ * review delivery read the same standing. Not knowing whether it was recorded
+ * records nothing, and the next sweep asks again. Says each one it asked.
+ */
+export async function askPeopleAgain(
+  subject: { repoName: string; prNumber: number; issue: number | null },
+  people: readonly PersonNotCounted[] | undefined,
+): Promise<string[]> {
+  const subjectRef = `${subject.repoName}#${subject.prNumber}`;
+  const asked: string[] = [];
+  for (const person of people ?? []) {
+    const fields = { subjectRef, login: person.login, head: person.head };
+    const had = await (async () => hasEventOfType(PERSON_ASKED_AGAIN, new Date(Date.now() - ASKED_AGAIN_WINDOW_MS), fields))().catch(() => true);
+    if (had) continue;
+    const payload = { ...fields, repo: subject.repoName, pr: subject.prNumber, issue: subject.issue, approvedOn: person.approvedOn, shownOn: person.shownOn, why: person.why };
+    const recorded = await (async () => recordEvent({ source: 'platform', type: PERSON_ASKED_AGAIN, payload }))().then(
+      () => true,
+      (error: unknown) => {
+        console.warn(`[bridge] ${subjectRef}: @${person.login} could not be asked to approve ${person.head.slice(0, 7)} again, ${person.why}: ${error instanceof Error ? error.message : error}`);
+        return false;
+      },
+    );
+    if (recorded) asked.push(`${subjectRef}: asked @${person.login} to approve ${person.head.slice(0, 7)} again (${person.why})`);
+  }
+  return asked;
 }

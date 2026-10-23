@@ -2108,6 +2108,113 @@ describe('a lead approval that counts for nothing on the diff, at the sweep', ()
   });
 });
 
+describe('a person’s approval that counts for nothing on the diff, at the sweep', () => {
+  // 620legal/OpenADLC#124: a pull request sitting there at the upgrade, whose
+  // named person's approval GitHub had moved onto the merge line's update of
+  // the branch. The bridge kept no record of the head it was submitted on, and
+  // the timeline says it was another, so it counts for none; no delivery is
+  // coming, and only the sweep asks the person again.
+  const BRANCH = 'agent/openadlc-atlas-janedoe/1-issue-1';
+  const LEAD = { id: 'bot-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'openadlc-sydney-janedoe' };
+  const BEFORE = 'b7890794b365dd3ec75b81f761f1889dfb11674a';
+  const HEAD = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const WHY = 'waiting on @janedoe (their approval is not known to be of 692cd1f)';
+
+  function sweeping() {
+    store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
+    store.issues = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
+    store.bots = [LEAD];
+    store.roundAt = '2026-10-01T09:00:00.000Z';
+    store.reviewTasks = [{ subjectRef: 'openadlc-testbed#2', state: 'done', botId: LEAD.id, createdAt: '2026-10-01T10:00:00.000Z' }];
+    const taskService = new TaskService({} as never, {} as never, {} as never);
+    taskService.open = (async () => ({ taskId: 'task-new', session: 'review-1' })) as never;
+    const published: { state: string; description: string }[] = [];
+    const github = {
+      request: async (_method: string, path: string) =>
+        path.includes('/pulls?state=open')
+          ? [
+              {
+                number: 2,
+                draft: false,
+                head: { ref: BRANCH, sha: HEAD, repo: { full_name: 'janedoe/openadlc-testbed' } },
+                base: { ref: 'main' },
+                labels: [],
+                user: { login: 'openadlc-atlas-janedoe' },
+                author_association: 'COLLABORATOR',
+              },
+            ]
+          : path.endsWith('/permission')
+            ? { permission: 'admin' }
+            : path.startsWith('/users/')
+              ? { login: 'janedoe', type: 'User' }
+              : // Green, as the bridge before the upgrade published it.
+                { statuses: [{ context: 'review-gate', state: 'success', description: 'every requested review has been posted' }] },
+      listEveryPullFile: async () => ({ files: ['config/bots.yaml'], complete: true, renamedFrom: [] }),
+      listReviews: async () => [
+        { id: 77, user: LEAD.githubLogin, state: 'APPROVED', body: 'Approved.\n\n<!-- openadlc-seat:lead-reviewer -->', submittedAt: '2026-10-01T10:05:00Z', commitId: HEAD },
+        { id: 78, user: 'janedoe', state: 'APPROVED', body: 'Looks right.', submittedAt: '2026-10-01T10:04:00Z', commitId: HEAD },
+      ],
+      // Her review sits before the merge line's update of the branch.
+      listPullHistory: async () => [
+        { event: 'committed', actor: null, viaApp: false, sha: BEFORE },
+        { event: 'reviewed', actor: 'janedoe', viaApp: false, sha: null, reviewId: 78 },
+        { event: 'committed', actor: null, viaApp: false, sha: HEAD },
+      ],
+      readFileIfPresent: async () => null,
+      readFileAtRef: async () => '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n',
+      diffFingerprint: async (_repo: string, _base: string, sha: string) => (sha === HEAD ? 'the diff with main’s changes' : 'the diff she approved'),
+    };
+    // The lead's approval checks, signed for this head; a person's is not a crew review.
+    const attribution = {
+      countable: async (posts: unknown[]) => [...posts],
+      reviewsThatCount: async (_repo: string, _n: number, posts: { id: number; user: string }[]) =>
+        posts.filter((post) => post.user === LEAD.githubLogin).map((post) => ({ ...post, commitId: HEAD })),
+    };
+    const config = { automationBot: 'flow', review: { reviewers: [{ seat: 'lead-reviewer', lens: 'lead', lead: true, blocking: false, trigger: 'always' }], maxRounds: 3 } };
+    const reading = new Automation(config as never, { asBot: async () => github, attribution } as never);
+    const scheduler = new Scheduler(
+      config as never,
+      {} as never,
+      {
+        actors: { asBot: async () => github },
+        reviewStanding: reading.reviewStanding.bind(reading),
+        setReviewGate: async (input: { state: string; description: string }) => (published.push(input), input),
+      } as never,
+      {} as never,
+      {} as never,
+      { enter: async () => undefined } as never,
+      taskService as never,
+    );
+    return { scheduler, published };
+  }
+
+  it('asks the person once, on the head, and the gate says why it waits', async () => {
+    const { scheduler, published } = sweeping();
+    const quiet = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const actions = await scheduler.settleGates();
+      expect(published).toEqual([expect.objectContaining({ state: 'pending', description: WHY })]);
+      expect(actions).toContain('openadlc-testbed#2: asked @janedoe to approve 692cd1f again (their approval is not known to be of 692cd1f)');
+      await scheduler.settleGates();
+    } finally {
+      quiet.mockRestore();
+    }
+    expect(store.events.filter((event) => event.type === 'review.person_asked_again').map((event) => event.payload)).toEqual([
+      {
+        subjectRef: 'openadlc-testbed#2',
+        login: 'janedoe',
+        head: HEAD,
+        repo: 'openadlc-testbed',
+        pr: 2,
+        issue: 1,
+        approvedOn: null,
+        shownOn: HEAD,
+        why: 'their approval is not known to be of 692cd1f',
+      },
+    ]);
+  });
+});
+
 describe('a person’s pull request, settled by the sweep too', () => {
   // A person's branch is not cut for an issue, so no issue in Review stands
   // for it, and the sweep passed it by. #15, #19 and #25 sat "waiting on" a

@@ -8,6 +8,7 @@ import { GitHubApiError, type PullCommit } from '@openadlc/github';
 import { DEFAULT_DELIVERY_RULES, MERGE_IS_SHIPPING, isForwardMove, renderGateComment, type StageKey } from '@openadlc/shared';
 import { deployRuns, hasEventOfType, issues, leases, listEventsOfType, repos, spendingLimits, tasks } from '@openadlc/db';
 import { Automation, mergeDecision, type MergeFacts } from './automation.js';
+import { attentionItems } from './attention.js';
 import { recordDesignMemory } from './design-memory.js';
 import { linkIssue, linkPull } from './work-items.js';
 import { BotBusyError, TaskService } from './task-service.js';
@@ -9490,6 +9491,244 @@ describe('an approval GitHub moves onto the merge line’s update of the branch'
 
     expect(statuses).toEqual([{ sha: B, state: 'success', description: 'every requested review has been posted' }]);
     expect(mergeLine.enter).toHaveBeenCalledWith(expect.objectContaining({ prNumber: 118, headSha: B }));
+  });
+});
+
+describe('a person’s approval GitHub moves onto the merge line’s update of the branch', () => {
+  // 620legal/OpenADLC#124. As on #118, where GitHub moved the lead's approval
+  // of b789079 onto 692cd1f, the merge line's update of the branch, which
+  // brought in main's changes to files the pull request changes too: another
+  // diff. A person's approval carries no signature to name its head, so read
+  // from GitHub's commit_id it counted for that diff, which they never saw.
+  const A = 'b7890794b365dd3ec75b81f761f1889dfb11674a';
+  const B = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const LEAD = 'openadlc-cipher-janedoe';
+  const LEAD_BODY = 'Lead review: approve.\n\n<!-- openadlc:{"event":"review_posted","verdict":"approve","lens":"lead"} -->\n\n<!-- openadlc-seat:lead-reviewer -->';
+  const HERS = 5622816990;
+  const config = {
+    automationBot: null,
+    humans: [],
+    review: { reviewers: [{ seat: 'lead-reviewer', lens: 'lead', lead: true, blocking: false, trigger: 'always' }], maxRounds: 3 },
+  };
+
+  /** The events the person's review and its asking again were recorded as, each a second after the last. */
+  const log: { type: string; payload: Record<string, unknown>; at: string }[] = [];
+  let restore: () => void = () => undefined;
+
+  beforeEach(async () => {
+    store.bots = [{ id: 'bot-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: LEAD }];
+    log.length = 0;
+    const db = await import('@openadlc/db');
+    const record = vi.mocked(db.recordEvent).getMockImplementation()!;
+    vi.mocked(db.recordEvent).mockImplementation(async (event) => {
+      if (event.type === 'review.submitted_on' || event.type === 'review.person_asked_again') {
+        store.events.push(event);
+        log.push({ type: event.type, payload: event.payload as Record<string, unknown>, at: new Date(Date.UTC(2026, 9, 23, 1, 15, 48) + log.length * 1000).toISOString() });
+      }
+      return record(event);
+    });
+    restore = () => vi.mocked(db.recordEvent).mockImplementation(record);
+  });
+
+  afterEach(() => restore());
+
+  function bridge(diffs: Record<string, string>) {
+    const statuses: { sha: string; state: string; description: string }[] = [];
+    const github = {
+      head: A,
+      // The commit GitHub shows her approval on, and the reviews she gave since.
+      hers: A,
+      later: [] as { id: number; user: string; state: string; body: string; submittedAt: string; commitId: string }[],
+      viewer: vi.fn(async () => ({ login: 'janedoe-openadlc-flow' })),
+      listPullCommits: vi.fn(async () => []),
+      setCommitStatus: vi.fn(async (_repo: string, sha: string, status: { state: string; description: string }) => void statuses.push({ sha, state: status.state, description: status.description })),
+      // The gate as the bridge published it, and @janedoe, who may approve here.
+      request: vi.fn(async (_method: string, path: string) =>
+        path.endsWith('/status')
+          ? { statuses: statuses.filter((one) => path.includes(one.sha)).slice(-1).map((one) => ({ context: 'review-gate', state: one.state, creator: { login: 'janedoe-openadlc-flow' } })) }
+          : path.endsWith('/permission')
+            ? { permission: 'admin' }
+            : path.startsWith('/users/')
+              ? { login: 'janedoe', type: 'User' }
+              : {},
+      ),
+      listEveryPullFile: vi.fn(async () => ({ files: ['config/bots.yaml'], complete: true, renamedFrom: [] })),
+      listReviews: vi.fn(async () => [
+        // The lead re-approved the new head, in a review signed for it.
+        { id: 5622816900, user: LEAD, state: 'APPROVED', body: LEAD_BODY, submittedAt: '2026-10-23T01:15:30Z', commitId: github.head },
+        { id: HERS, user: 'janedoe', state: 'APPROVED', body: 'Looks right.', submittedAt: '2026-10-23T01:15:48Z', commitId: github.hers },
+        ...github.later,
+      ]),
+      readFileAtRef: vi.fn(async () => '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n'),
+      readFileIfPresent: vi.fn(async () => null),
+      diffFingerprint: vi.fn(async (_repo: string, _base: string, sha: string) => diffs[sha] ?? null),
+      getPullRequest: vi.fn(async () => ({ labels: [] })),
+      permissionOf: vi.fn(async () => 'admin'),
+      listPullHistory: vi.fn(async () => []),
+      checkRunsFor: vi.fn(async (_repo: string, sha: string) => [{ name: 'ci', status: 'completed', conclusion: 'success', app: 'github-actions', headSha: sha, suiteId: sha === A ? 1 : 2 }]),
+      statusesFor: vi.fn(async () => []),
+      workflowRunOfSuite: vi.fn(async (_repo: string, suite: number) => ({
+        name: 'ci',
+        headSha: suite === 1 ? A : B,
+        path: '.github/workflows/ci.yml',
+        event: 'pull_request',
+        headBranch: 'feature',
+        headRepoFullName: 'janedoe/openadlc',
+        createdAt: '2026-10-23T01:16:30Z',
+      })),
+      pullsFromBranch: vi.fn(async () => [{ number: 118, baseRef: 'main', headSha: github.head, createdAt: '2026-10-23T00:58:00Z', closedAt: null }]),
+    };
+    // A crew review comes back as of the head its signature names; a person's is not one.
+    const attribution = {
+      countable: vi.fn(async (posts: unknown[]) => [...posts]),
+      reviewsThatCount: vi.fn(async (_repo: string, _n: number, posts: { user: string }[]) =>
+        posts.filter((post) => post.user === LEAD).map((post) => ({ ...post, commitId: github.head })),
+      ),
+    };
+    const automation = new Automation(config as never, { asBot: vi.fn(async () => github), attribution } as never);
+    const taskService = taskServiceOpening(vi.fn(async () => ({ taskId: 'task-again', session: 'review-again' })) as never);
+    const mergeLine = { enter: vi.fn(async () => undefined), advance: vi.fn(async () => null), leave: vi.fn(async () => undefined) };
+    const webhooks = new Webhooks(config as never, automation, {} as never, taskService as never, {} as never, mergeLine as never);
+    // What the merge line lands on, at the head as it is.
+    const decide = async (overrides: Partial<MergeFacts> = {}) => {
+      const facts = await automation.mergeFacts(
+        { fullName: 'janedoe/openadlc', defaultBranch: 'main' },
+        {
+          number: 118,
+          draft: false,
+          headSha: github.head,
+          headRef: 'feature',
+          baseRef: 'main',
+          labels: [],
+          mergeableState: 'clean',
+          headRepoFullName: 'janedoe/openadlc',
+          requestedReviewers: [],
+          requestedTeams: [],
+        },
+      );
+      return mergeDecision({ ...facts!, ...overrides });
+    };
+    return { webhooks, github, statuses, mergeLine, decide };
+  }
+
+  function delivery(action: 'submitted' | 'edited', github: { head: string; hers: string }, review = HERS) {
+    return {
+      action,
+      ...(action === 'edited' ? { changes: {} } : {}),
+      sender: { login: 'janedoe' },
+      review: { id: review, author_association: 'OWNER', state: 'approved', body: 'Looks right.', user: { login: 'janedoe' }, commit_id: github.hers },
+      pull_request: {
+        number: 118,
+        draft: false,
+        user: { login: 'janedoe' },
+        head: { sha: github.head, ref: 'feature', repo: { full_name: 'janedoe/openadlc' } },
+        base: { ref: 'main' },
+        labels: [],
+      },
+      repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+    };
+  }
+
+  async function deliver(webhooks: Webhooks, action: 'submitted' | 'edited', github: { head: string; hers: string }, id: string, review = HERS) {
+    const quiet = [vi.spyOn(console, 'warn').mockImplementation(() => undefined), vi.spyOn(console, 'log').mockImplementation(() => undefined)];
+    try {
+      await webhooks.receive('pull_request_review', delivery(action, github, review) as never, id);
+    } finally {
+      for (const spy of quiet) spy.mockRestore();
+    }
+  }
+
+  /** Needs you, from what was recorded. */
+  const needsYou = () =>
+    attentionItems({
+      now: new Date('2026-10-23T02:00:00Z'),
+      gates: [],
+      tasks: [],
+      bots: [],
+      repos: [{ id: 'repo-1', name: 'openadlc', fullName: 'janedoe/openadlc', defaultBranch: 'main' }] as never,
+      issues: [],
+      requests: [],
+      stallEvents: [],
+      personAsks: log.filter((event) => event.type === 'review.person_asked_again'),
+      personReviews: log.filter((event) => event.type === 'review.submitted_on'),
+    });
+
+  it('records the head her approval was submitted on, and counts it there', async () => {
+    const { webhooks, github, statuses, mergeLine, decide } = bridge({ [A]: 'the diff b789079 proposes', [B]: 'the diff with main’s changes to config/bots.yaml' });
+
+    await deliver(webhooks, 'submitted', github, 'delivery-submitted-118');
+
+    expect(log.map((event) => [event.type, event.payload])).toEqual([
+      ['review.submitted_on', { subjectRef: 'openadlc#118', reviewId: HERS, login: 'janedoe', commit: A, state: 'approved' }],
+    ]);
+    expect(statuses).toEqual([{ sha: A, state: 'success', description: 'every requested review has been posted' }]);
+    expect(mergeLine.enter).toHaveBeenCalledWith(expect.objectContaining({ prNumber: 118, headSha: A }));
+    expect(await decide()).toMatchObject({ land: true, approvals: [{ reviewer: 'lead-reviewer' }, { reviewer: 'janedoe', person: true, commitId: A, ofHead: true }] });
+    expect(needsYou()).toEqual([]);
+  });
+
+  it('does not merge once an edited delivery moves it onto a head with another diff, and Needs you asks her again, on that head', async () => {
+    const { webhooks, github, statuses, mergeLine, decide } = bridge({ [A]: 'the diff b789079 proposes', [B]: 'the diff with main’s changes to config/bots.yaml' });
+    await deliver(webhooks, 'submitted', github, 'delivery-submitted-118');
+    mergeLine.enter.mockClear();
+    statuses.length = 0;
+
+    // The merge line's update of the branch, and GitHub's `edited` delivery moving her approval onto it.
+    github.head = B;
+    github.hers = B;
+    await deliver(webhooks, 'edited', github, 'delivery-edited-118');
+
+    expect(statuses).toEqual([{ sha: B, state: 'pending', description: 'waiting on @janedoe (their approval is of b789079 and this diff is another)' }]);
+    expect(mergeLine.enter).not.toHaveBeenCalled();
+    // The merge line refuses it too, on the gate as published and, were the
+    // gate green, on her approval itself.
+    expect(await decide()).toMatchObject({ land: false, reason: 'review-gate as OpenADLC published it is not green on the head' });
+    expect(await decide({ gate: 'success' })).toMatchObject({
+      land: false,
+      reason: '@janedoe approved `b789079`, an earlier version whose diff is not known to be this one, though GitHub shows the approval on `692cd1f`; @janedoe approves `692cd1f` again',
+    });
+
+    // Asked once for this head, however often it is delivered.
+    await deliver(webhooks, 'edited', github, 'delivery-edited-118-again');
+    const asks = log.filter((event) => event.type === 'review.person_asked_again');
+    expect(asks.map((event) => event.payload)).toEqual([
+      { subjectRef: 'openadlc#118', login: 'janedoe', head: B, repo: 'openadlc', pr: 118, issue: null, approvedOn: A, shownOn: B, why: 'their approval is of b789079 and this diff is another' },
+    ]);
+    const [card, ...more] = needsYou();
+    expect(more).toEqual([]);
+    expect(card).toMatchObject({
+      id: 'approve-again:openadlc#118@janedoe',
+      kind: 'merge_waiting',
+      group: 'work',
+      headline: "Pull request #118 needs @janedoe's approval again, on 692cd1f",
+      subject: { repo: 'openadlc', number: 118 },
+      since: asks[0]!.at,
+      actions: [{ kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc/pull/118/files' }],
+    });
+    expect(card?.detail).toBe(
+      "GitHub shows @janedoe's approval on 692cd1f, but it was given on b789079, whose diff is another, so it counts for nothing. OpenADLC does not merge it until @janedoe approves 692cd1f.",
+    );
+
+    // She approves the new head, in a review of its own: it counts, and Needs you no longer asks.
+    statuses.length = 0;
+    github.later.push({ id: HERS + 1, user: 'janedoe', state: 'APPROVED', body: 'Still right.', submittedAt: '2026-10-23T01:30:00Z', commitId: B });
+    await deliver(webhooks, 'submitted', github, 'delivery-submitted-118-again', HERS + 1);
+    expect(statuses).toEqual([{ sha: B, state: 'success', description: 'every requested review has been posted' }]);
+    expect(needsYou()).toEqual([]);
+  });
+
+  it('counts it on the new head when that head’s diff is the one she approved, and asks nobody', async () => {
+    const { webhooks, github, statuses, mergeLine } = bridge({ [A]: 'the diff b789079 proposes', [B]: 'the diff b789079 proposes' });
+    await deliver(webhooks, 'submitted', github, 'delivery-submitted-118');
+    statuses.length = 0;
+
+    github.head = B;
+    github.hers = B;
+    await deliver(webhooks, 'edited', github, 'delivery-edited-118');
+
+    expect(statuses).toEqual([{ sha: B, state: 'success', description: 'every requested review has been posted' }]);
+    expect(mergeLine.enter).toHaveBeenCalledWith(expect.objectContaining({ prNumber: 118, headSha: B }));
+    expect(log.filter((event) => event.type === 'review.person_asked_again')).toEqual([]);
   });
 });
 

@@ -83,6 +83,26 @@ export const REVIEW_DISMISSED_BY_BRIDGE = 'review.dismissed_by_bridge';
 export const REVIEW_ASKED_AGAIN = 'review.asked_again';
 
 /**
+ * The commit a person's review was submitted on, from its `submitted`
+ * delivery, the one thing that says it: `{ subjectRef, reviewId, login,
+ * commit, state }`, the id a number and the rest strings. GitHub moves a
+ * review's `commit_id` onto a later head, one with another diff included, and
+ * a person's approval carries no signature naming its head, so the merge and
+ * the gate count it by this (`asOfSubmittedHeads`).
+ */
+export const REVIEW_SUBMITTED_ON = 'review.submitted_on';
+
+/**
+ * A person the repository names asked to approve again: their approval,
+ * which GitHub shows, counts for nothing on the head (`peopleNotCounted`).
+ * `{ subjectRef, repo, pr, issue, login, head, approvedOn, shownOn, why }`,
+ * `pr` a number and `issue` one or null, `approvedOn` and `shownOn` a commit
+ * or null, the rest strings. Recorded once for each head; Needs you shows the
+ * newest for each person until they review it again (`attention.ts`).
+ */
+export const PERSON_ASKED_AGAIN = 'review.person_asked_again';
+
+/**
  * Answered work whose resume GitHub did not answer the sign-in's refresh for,
  * and which waits paused for it (`TaskService.resume`): `{ taskId, subjectRef,
  * answeredAt, until }`, all strings. Needs you reads it for a card while the

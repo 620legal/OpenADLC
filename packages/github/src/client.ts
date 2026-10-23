@@ -154,6 +154,12 @@ export interface PullHistoryEntry {
   /** On `labeled` and `unlabeled`: the label's name. Who put `scope:cross-cutting` on decides whether it counts. */
   label?: string | null;
   /**
+   * On `reviewed`: the review's id. Where it sits among the `committed`
+   * entries says which head it was submitted on, which GitHub's `commit_id`
+   * for it no longer does once GitHub moves it to a later head.
+   */
+  reviewId?: number;
+  /**
    * On a change of base (`base_ref_changed`, `automatic_base_change_succeeded`):
    * when GitHub made it. A `ci` run made before it ran against the old base.
    */
@@ -1006,6 +1012,8 @@ export class GitHubClient {
       const events = await this.request<
         {
           event?: string;
+          /** On `reviewed`: the review's own id. */
+          id?: number;
           actor?: { login?: string } | null;
           user?: { login?: string } | null;
           performed_via_github_app?: unknown;
@@ -1033,6 +1041,7 @@ export class GitHubClient {
             ? { dismissedReviewId: entry.dismissed_review?.review_id ?? null, dismissedState: entry.dismissed_review?.state ?? null }
             : {}),
           ...(entry.event === 'labeled' || entry.event === 'unlabeled' ? { label: entry.label?.name ?? null } : {}),
+          ...(entry.event === 'reviewed' && typeof entry.id === 'number' ? { reviewId: entry.id } : {}),
           ...(BASE_CHANGES.has(entry.event) ? { at: entry.created_at ?? null } : {}),
         });
       }

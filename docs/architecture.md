@@ -244,7 +244,14 @@ none yet, says its kind of work instead ("writing the change").
    `review-gate` says why beside the seat, and the seat is asked again when
    its turn comes, once for each head (`review.asked_again`
    `{subjectRef, seat, head, why}`), though the task behind that approval
-   was opened in this round. A
+   was opened in this round. A person's approval, which has no signature, is
+   of the head it was submitted on, recorded from GitHub's `submitted`
+   delivery (`review.submitted_on` `{subjectRef, reviewId, login, commit,
+   state}`), or, with no record, of GitHub's commit only when the timeline
+   lists that commit as the head then; one GitHub shows that counts for
+   nothing on this diff is said beside the person, and Needs you asks them to
+   approve the head again, once for each head (`review.person_asked_again`),
+   until they give a verdict on it. A
    pull request only the lead reviews (a revert no other seat's trigger asks
    for) gets the
    lead's review in every round this way. The sweep, on the merge job's

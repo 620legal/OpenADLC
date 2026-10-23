@@ -431,7 +431,17 @@ can answer the crew's questions, and is audited as `github.account_allowed`.
     nothing: anyone can review a public repository, and a freed login can be
     registered by someone else), nobody asked for a
     review on GitHub is still to give one, and nobody who can write to the
-    repository still asks for changes;
+    repository still asks for changes. A person's approval has no signature,
+    and is of the head it was submitted on, which the bridge records from
+    GitHub's `submitted` delivery (`review.submitted_on`), or a later head
+    with the same diff; never the commit GitHub moves it to (620legal/OpenADLC#124).
+    One with no record — given before the bridge kept them, or whose delivery
+    never came — is read from GitHub's commit only when the pull request's
+    timeline lists that commit as the head it was submitted on, and otherwise
+    counts for none. One that counts for nothing on the head while GitHub
+    still shows it is said beside the person in `review-gate`, and Needs you
+    asks them to approve that head again (`review.person_asked_again`), once
+    for each head, until they give a verdict on it;
   - `ci` is GitHub Actions' own check run of the `ci` workflow on that head,
     since a commit status named `ci` can be set by any token that may write
     statuses and is refused, and it is from this pull request's own run of

@@ -1,6 +1,6 @@
 import { permissionOn, theApp } from './people.js';
 import { audit, bots, hasEventOfType, issues, lastEventAt, leases, listEventsOfTypeWith, recordEvent, repos, stageMoves } from '@openadlc/db';
-import { BRANCH_UPDATED_BY_LINE, REVIEW_DISMISSED_BY_BRIDGE, REVIEW_ROUND_OPENED, issueNumberFromBranch, madeByLineUpdate, scopeLabelAcceptedFrom } from './work.js';
+import { BRANCH_UPDATED_BY_LINE, REVIEW_DISMISSED_BY_BRIDGE, REVIEW_ROUND_OPENED, REVIEW_SUBMITTED_ON, issueNumberFromBranch, madeByLineUpdate, scopeLabelAcceptedFrom } from './work.js';
 import { BASE_CHANGES, GitHubApiError, ReviewerStandings, isTemplatePlaceholder, reviewRequestRefusal, reviewerStandingOf, type GitHubClient, type PullCommit, type ReviewerStanding, type SuiteWorkflowRun } from '@openadlc/github';
 import {
   STAGE_LABELS,
@@ -190,7 +190,8 @@ export interface MergeFacts {
    * Its reviews, every page, oldest first, those that count only (`countableReviews`).
    * `commitId` is the head each is of (`asOfSignedHeads`): for a crew review
    * whose signature checked, the one that signature names, null when it names
-   * none; GitHub's commit for it is `githubCommitId`.
+   * none; for a person's, the one it was submitted on, null when that is not
+   * known (`asOfSubmittedHeads`). GitHub's commit for it is `githubCommitId`.
    */
   reviews: readonly { id: number; user: string; state: string; body?: string | null; commitId: string | null; githubCommitId?: string | null; association?: string | null }[];
   /**
@@ -619,6 +620,123 @@ export function approvalsNotCounted(
  */
 export function seatsWaitedOn(description: string): string[] {
   return (/^waiting on (.+)$/.exec(description)?.[1]?.split(', ') ?? []).map((name) => name.replace(/ \([^()]*\)$/, ''));
+}
+
+/**
+ * The people's reviews, each as of the head it was submitted on: the commit
+ * the bridge recorded from its `submitted` delivery (`submitted`, from
+ * `REVIEW_SUBMITTED_ON`), or, for an approval with no record — given before
+ * the bridge kept them, or whose delivery never came — GitHub's commit only
+ * when the timeline says that was the head it was submitted on
+ * (`headWhenSubmitted`), and none otherwise. GitHub's commit is kept as
+ * `githubCommitId`. A crew review is left as it is: it is of the head its
+ * signature names (`asOfSignedHeads`).
+ *
+ * Not GitHub's commit alone: GitHub moves it. On 620legal/OpenADLC#118 an
+ * `edited` delivery moved the lead's approval of b789079 onto 692cd1f, the
+ * merge line's update of the branch, whose diff was another (#121). A
+ * person's approval carries no signature to say which head it was of, so
+ * the same move counted it for a diff the person never saw (#124).
+ */
+export function asOfSubmittedHeads<R extends { id: number; user: string; state: string; commitId: string | null; githubCommitId?: string | null }>(
+  reviews: readonly R[],
+  crew: readonly { githubLogin: string | null }[],
+  submitted: ReadonlyMap<number, { login: string; commit: string | null }>,
+  history: readonly { event: string; sha: string | null; reviewId?: number }[] | null,
+): (R & { githubCommitId: string | null })[] {
+  return reviews.map((review) => {
+    const shown = review.githubCommitId !== undefined ? review.githubCommitId : review.commitId;
+    if (crew.some((bot) => sameLogin(bot.githubLogin, review.user))) return { ...review, githubCommitId: shown };
+    const record = submitted.get(review.id);
+    if (record && sameLogin(record.login, review.user)) return { ...review, commitId: record.commit, githubCommitId: shown };
+    if (review.state.toUpperCase() !== 'APPROVED') return { ...review, githubCommitId: shown };
+    const then = headWhenSubmitted(history, review.id);
+    return { ...review, commitId: then !== null && then === shown ? shown : null, githubCommitId: shown };
+  });
+}
+
+/**
+ * The head a review was submitted on, as the pull request's timeline says:
+ * the last commit it lists before the review. Null when it lists none before
+ * it, does not list the review, or could not be read to its end.
+ */
+export function headWhenSubmitted(history: readonly { event: string; sha: string | null; reviewId?: number }[] | null, reviewId: number): string | null {
+  if (!history) return null;
+  let head: string | null = null;
+  for (const entry of history) {
+    if (entry.event === 'committed' && entry.sha) head = entry.sha;
+    if (entry.event === 'reviewed' && entry.reviewId === reviewId) return head;
+  }
+  return null;
+}
+
+/**
+ * The heads the people's reviews of a pull request were submitted on, by
+ * review id, as the bridge recorded them from GitHub's `submitted` deliveries
+ * (`REVIEW_SUBMITTED_ON`). Two records of one review that disagree make it of
+ * no head. A read that fails is no record: each approval is then read from
+ * the timeline (`asOfSubmittedHeads`), which counts it for no other head.
+ */
+async function submittedHeads(repoFullName: string, prNumber: number): Promise<Map<number, { login: string; commit: string | null }>> {
+  const name = repoFullName.split('/')[1] ?? repoFullName;
+  const events = await (async () => listEventsOfTypeWith(REVIEW_SUBMITTED_ON, { subjectRef: `${name}#${prNumber}` }))().catch(() => []);
+  const heads = new Map<number, { login: string; commit: string | null }>();
+  for (const event of events) {
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    if (typeof payload.reviewId !== 'number' || typeof payload.login !== 'string' || typeof payload.commit !== 'string') continue;
+    const seen = heads.get(payload.reviewId);
+    const agrees = !seen || (seen.commit === payload.commit && sameLogin(seen.login, payload.login));
+    heads.set(payload.reviewId, agrees ? { login: payload.login, commit: payload.commit } : { login: seen.login, commit: null });
+  }
+  return heads;
+}
+
+/** A named person's approval GitHub shows that counts for nothing on this diff (`peopleNotCounted`). */
+export interface PersonNotCounted {
+  login: string;
+  reviewId: number;
+  /** The head the pull request is at: the one they are asked to approve. */
+  head: string;
+  /** The head their approval was submitted on, when that is known (`asOfSubmittedHeads`). */
+  approvedOn: string | null;
+  /** The commit GitHub shows it on. */
+  shownOn: string | null;
+  /** Why, as `review-gate` says it beside them: no comma, since the gate's names are read back split on them (`seatsWaitedOn`). */
+  why: string;
+}
+
+/**
+ * Of the people the rules require, those whose latest verdict is an approval
+ * that counts for nothing on this diff (`approved` is who it counts for, as
+ * `approvedTheHead` says): of a head with another diff, or not known to be of
+ * the commit GitHub shows it on. Not one GitHub will not ask (`cannot`): the
+ * gate fails on that. Each is asked again (`askPeopleAgain`, Needs you):
+ * GitHub goes on showing them as having approved, and the gate waited on
+ * them with nobody telling them.
+ */
+export function peopleNotCounted(
+  required: readonly string[],
+  reviews: readonly { id: number; user: string; state: string; commitId: string | null; githubCommitId?: string | null }[],
+  approved: readonly string[],
+  cannot: ReadonlyMap<string, string>,
+  head: string,
+): PersonNotCounted[] {
+  const latest = new Map<string, (typeof reviews)[number]>();
+  for (const review of reviews) {
+    const state = review.state.toUpperCase();
+    if (state !== 'COMMENTED' && state !== 'PENDING') latest.set(review.user.toLowerCase(), review);
+  }
+  return required.flatMap((login) => {
+    const review = latest.get(login.toLowerCase());
+    if (review?.state.toUpperCase() !== 'APPROVED' || approved.includes(login) || cannot.has(login.toLowerCase())) return [];
+    const shownOn = review.githubCommitId !== undefined ? review.githubCommitId : review.commitId;
+    const why = review.commitId
+      ? `their approval is of ${review.commitId.slice(0, 7)} and this diff is another`
+      : shownOn
+        ? `their approval is not known to be of ${shownOn.slice(0, 7)}`
+        : 'their approval names no commit';
+    return [{ login, reviewId: review.id, head, approvedOn: review.commitId, shownOn, why }];
+  });
 }
 
 /** When the last of `seats` posted among these reviews, or null when none did. */
@@ -1243,7 +1361,7 @@ export function mergeDecision(facts: MergeFacts): {
   for (const login of facts.humansRequired) {
     const review = byPerson.get(login.toLowerCase());
     const of = approved(review, null);
-    if (!review || !of) return refuse(`@${login} has not approved this version`);
+    if (!review || !of) return refuse(review?.state === 'APPROVED' ? personApprovedAnother(login, review, facts.headSha) : `@${login} has not approved this version`);
     // A login is only a name, free for anyone to register once its account is
     // renamed or deleted, and anyone can review a public repository. So the
     // approval counts only from an account GitHub says can write here, the
@@ -1273,6 +1391,22 @@ function approvedAnother(seat: string, review: { commitId: string | null; github
     return `${seat}'s signature says it approved \`${review.commitId.slice(0, 7)}\`, an earlier version whose diff is not known to be this one, though GitHub shows the approval on \`${shown.slice(0, 7)}\``;
   }
   return `${seat} approved an earlier version whose diff is not known to be this one`;
+}
+
+/**
+ * Why a named person's approval is not of the version that would land. It is
+ * of the head it was submitted on (`asOfSubmittedHeads`), whatever commit
+ * GitHub shows it on, so where the two differ the refusal names both, and
+ * the head they approve again. No "because " in it: `heldForPerson` splits
+ * the merge line's detail on the first.
+ */
+function personApprovedAnother(login: string, review: { commitId: string | null; githubCommitId?: string | null }, head: string): string {
+  const shown = review.githubCommitId ?? null;
+  if (!shown || shown === review.commitId) return `@${login} has not approved this version`;
+  const again = `@${login} approves \`${head.slice(0, 7)}\` again`;
+  return review.commitId
+    ? `@${login} approved \`${review.commitId.slice(0, 7)}\`, an earlier version whose diff is not known to be this one, though GitHub shows the approval on \`${shown.slice(0, 7)}\`; ${again}`
+    : `GitHub shows @${login}'s approval on \`${shown.slice(0, 7)}\`, and nothing says it was submitted there, so it counts for none; ${again}`;
 }
 
 /** A run of the CI workflow, as the review loop reads it. */
@@ -1569,7 +1703,10 @@ export class Automation {
      * outage never changes the gate's words.
      */
     cannotReview?: ReadonlyMap<string, string>;
-    /** Seats whose approval GitHub shows counts for nothing on this diff, with why (`approvalsNotCounted`). */
+    /**
+     * Seats whose approval GitHub shows counts for nothing on this diff, with
+     * why (`approvalsNotCounted`), and people as `@login` (`peopleNotCounted`).
+     */
     approvalsOff?: ReadonlyMap<string, string>;
   }): ReviewGate {
     if (input.draft) return { state: 'pending', description: 'pull request is still a draft' };
@@ -1636,8 +1773,9 @@ export class Automation {
     }
     if (waitingOn.length > 0) {
       // Naming them is the point: `waiting on a human reviewer` is what let one
-      // person's approval stand in for another's.
-      return { state: 'pending', description: `waiting on ${waitingOn.map((login) => `@${login}`).join(', ')}` };
+      // person's approval stand in for another's. And why, beside one whose
+      // approval GitHub shows: it counts for nothing on this diff.
+      return { state: 'pending', description: named(waitingOn.map((login) => `@${login}`)) };
     }
 
     return { state: 'success', description: 'every requested review has been posted' };
@@ -1744,6 +1882,11 @@ export class Automation {
      * behind that approval not being one of this diff (`approvalsNotCounted`).
      */
     notCounted: NotCounted[];
+    /**
+     * The people the rules require whose approval GitHub shows counts for
+     * nothing on this diff: each is asked again (`peopleNotCounted`).
+     */
+    peopleNotCounted: PersonNotCounted[];
   }> {
     const client = await this.automationClient();
     const labels = pr.labels.map((label) => label.name);
@@ -1830,13 +1973,23 @@ export class Automation {
     // The named people's reviews of this diff, compared from the reviews
     // themselves: not `reviewed`, which a lead-only conflict resolution
     // carried to this head without the person having seen it. With no client
-    // to compare with, only the head counts.
-    const theirs = reviews.filter((review) => required.some((login) => sameLogin(login, review.user)));
+    // to compare with, only the head counts. Each is of the head it was
+    // submitted on, as the merge reads it (`asOfSubmittedHeads`), not of the
+    // commit GitHub moved it to.
+    const theirs = await this.asSubmitted(
+      client,
+      repoFullName,
+      pr.number,
+      reviews.filter((review) => required.some((login) => sameLogin(login, review.user))),
+      crew,
+    );
     const peopleOnDiff = new Set(
       client && theirs.length > 0
         ? (await this.onThisDiff(client, repoFullName, pr.baseRef, pr.head.sha, theirs)).flatMap((review) => (review.commitId ? [review.commitId] : []))
         : [],
     );
+    const humansApproved = this.approvedTheHead(required, theirs, pr.head.sha, peopleOnDiff, cannot);
+    const people = peopleNotCounted(required, theirs, humansApproved, cannot, pr.head.sha);
 
     let gate = this.computeReviewGate({
       draft: pr.draft,
@@ -1847,11 +2000,11 @@ export class Automation {
       changesRequestedBy: asking,
       approvedBy: approving,
       humansRequired: required,
-      humansApproved: this.approvedTheHead(required, reviews, pr.head.sha, peopleOnDiff, cannot),
+      humansApproved,
       humanRulesUnknown: rules === null,
       filesUnknown,
       cannotReview: cannot,
-      approvalsOff: new Map(notCounted.map((entry) => [entry.seat, entry.why])),
+      approvalsOff: new Map([...notCounted.map((entry) => [entry.seat, entry.why] as const), ...people.map((entry) => [`@${entry.login}`, entry.why] as const)]),
     });
     // An advisory security seat is not an approver: its gh refuses --approve,
     // and the gate used to go green on the lead's approval whatever that
@@ -1882,7 +2035,26 @@ export class Automation {
     const leadDue = due
       ? { seat: decision.lead, since: await this.leadAskedSince(repoFullName, pr.number, lastPostedBy(onDiff, crew, others), resolution.at) }
       : null;
-    return { gate, decision, posted, approved: approving, changesRequested: asking, securityAsks, leadDue, notCounted };
+    return { gate, decision, posted, approved: approving, changesRequested: asking, securityAsks, leadDue, notCounted, peopleNotCounted: people };
+  }
+
+  /**
+   * These people's reviews as of the heads they were submitted on
+   * (`asOfSubmittedHeads`). The timeline is read only for an approval the
+   * bridge has no record of, and not at all with no client, when such an
+   * approval counts for none.
+   */
+  private async asSubmitted<R extends { id: number; user: string; state: string; commitId: string | null; githubCommitId?: string | null }>(
+    client: Pick<GitHubClient, 'listPullHistory'> | null,
+    repoFullName: string,
+    prNumber: number,
+    reviews: readonly R[],
+    crew: readonly { githubLogin: string | null }[],
+  ): Promise<(R & { githubCommitId: string | null })[]> {
+    const submitted = reviews.length > 0 ? await submittedHeads(repoFullName, prNumber) : new Map<number, { login: string; commit: string | null }>();
+    const unrecorded = reviews.some((review) => review.state.toUpperCase() === 'APPROVED' && !submitted.has(review.id));
+    const history = unrecorded && client ? await (async () => client.listPullHistory(repoFullName, prNumber))().catch(() => null) : null;
+    return asOfSubmittedHeads(reviews, crew, submitted, history);
   }
 
   /**
@@ -2139,9 +2311,10 @@ export class Automation {
     // Checked whether or not they are enforced: a change to how CI runs lands
     // on the security reviewer's verdict, and only a checked one. And each
     // checked review is of the head its signature names, not of the commit
-    // GitHub shows it on (`asOfSignedHeads`).
+    // GitHub shows it on (`asOfSignedHeads`); a person's, of the head it was
+    // submitted on (`asOfSubmittedHeads`).
     const signedOnes = attribution ? await attribution.reviewsThatCount(repoFullName, pull.number, onGitHub, crew) : null;
-    const reviews = asOfSignedHeads(onGitHub, signedOnes);
+    const reviews = asOfSubmittedHeads(asOfSignedHeads(onGitHub, signedOnes), crew, await submittedHeads(repoFullName, pull.number), history);
     const signedIds = new Set((signedOnes ?? []).map((review) => review.id));
     const checked = signedOnes ? reviews.filter((review) => signedIds.has(review.id)) : null;
 

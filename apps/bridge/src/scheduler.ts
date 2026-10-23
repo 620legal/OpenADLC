@@ -27,7 +27,7 @@ import { buildStatus, renderStatusMarkdown, statusDrift, statusIssueTarget } fro
 import { CHECKS_FAILED, verdictFor, type MergeLine } from './merge-line.js';
 import type { StageHandoff } from './stage-handoff.js';
 import type { HostdClient } from './hostd-client.js';
-import { heldAtCap, heldForRestart, type TaskService } from './task-service.js';
+import { askPeopleAgain, heldAtCap, heldForRestart, type TaskService } from './task-service.js';
 import type { Notifier } from './notify.js';
 import type { EngineUpdates } from './engine-updates.js';
 import type { SelfUpdate } from './self-update.js';
@@ -1100,6 +1100,12 @@ export class Scheduler {
               actions.push(`${repo.name}#${pull.number}: review gate is ${published.state} (${published.description})`);
             }
           }
+
+          // A person whose approval GitHub shows counts for nothing on this
+          // diff is asked again, as a review delivery would ask them: one
+          // GitHub moved before the bridge kept the head each was submitted
+          // on has no delivery coming.
+          actions.push(...(await askPeopleAgain({ repoName: repo.name, prNumber: pull.number, issue: issueNumber }, reviewed.peopleNotCounted)));
 
           // A lead-only conflict resolution pushed as this head is the lead's to
           // re-check, whatever the gate says: a lead busy at the push is asked
