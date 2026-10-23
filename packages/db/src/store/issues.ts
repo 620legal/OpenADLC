@@ -1,5 +1,6 @@
-import { hasIgnoreLabel, type BoardCard, type StageKey } from '@openadlc/shared';
+import { hasIgnoreLabel, namesRepository, type BoardCard, type DependencyRef, type StageKey } from '@openadlc/shared';
 import { query, queryOne } from '../client.js';
+import { getRepoByName } from './repos.js';
 
 interface IssueRow {
   id: string;
@@ -441,6 +442,25 @@ export async function listBlockedIssues(repoId: string): Promise<IssueRecord[]> 
 export async function getIssue(repoId: string, number: number): Promise<IssueRecord | null> {
   const rows = await query<IssueRow>(`${SELECT} where i.repo_id = $1 and i.number = $2`, [repoId, number]);
   return rows[0] ? toIssue(rows[0]) : null;
+}
+
+/**
+ * The issue a dependency names, read from the repository whose issue lists it.
+ *
+ * A ref that spells out its own repository's full name is that repository's,
+ * so it resolves, and stacks, as `#N` does. Another repository is looked up by
+ * its full name, ignoring case as GitHub does. A removed one is left out, the
+ * same as one nobody added: `managed` is false and there is no issue, so the
+ * dependency never ships and the issue waits for a person to look.
+ */
+export async function resolveDependency(
+  own: { id: string; fullName: string },
+  ref: DependencyRef,
+): Promise<{ managed: boolean; issue: IssueRecord | null }> {
+  if (namesRepository(ref, own.fullName)) return { managed: true, issue: await getIssue(own.id, ref.number) };
+  const repo = await getRepoByName(ref.repo!);
+  if (!repo) return { managed: false, issue: null };
+  return { managed: true, issue: await getIssue(repo.id, ref.number) };
 }
 
 /**

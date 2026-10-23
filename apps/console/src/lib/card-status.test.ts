@@ -182,8 +182,9 @@ describe('a card’s status line', () => {
     );
     expect(cardStatus(card({ labels: ['adlc:build', 'blocked'] }), CONTEXT).text).toBe('Blocked by another issue');
     // Named, when the bridge says which: a person should not have to open the issue to find out.
-    expect(cardStatus(card({ labels: ['adlc:build', 'blocked'], waitingOn: [1] }), CONTEXT).text).toBe('Waiting on #1');
-    expect(cardStatus(card({ labels: ['adlc:build', 'blocked'], waitingOn: [1, 4, 7] }), CONTEXT).text).toBe('Waiting on #1, #4 and #7');
+    expect(cardStatus(card({ labels: ['adlc:build', 'blocked'], waitingOn: ['#1'] }), CONTEXT).text).toBe('Waiting on #1');
+    expect(cardStatus(card({ labels: ['adlc:build', 'blocked'], waitingOn: ['#1', '#4', '#7'] }), CONTEXT).text).toBe('Waiting on #1, #4 and #7');
+    expect(cardStatus(card({ labels: ['adlc:build', 'blocked'], waitingOn: ['#1', 'owner/a#2'] }), CONTEXT).text).toBe('Waiting on #1 and owner/a#2');
   });
 
   it('says where an approved pull request is in the line to merge', () => {
@@ -402,7 +403,7 @@ describe('a card on a bridge without the dispatcher', () => {
 
   it('lets a repository’s pause win, and leaves other statuses as they were', () => {
     expect(cardStatus(card(), { ...OFF, pausedRepos: ['openadlc'] }).text).toBe('Waiting until openadlc is resumed');
-    expect(cardStatus(card({ labels: ['adlc:build', 'blocked'], waitingOn: [1] }), OFF).text).toBe('Waiting on #1');
+    expect(cardStatus(card({ labels: ['adlc:build', 'blocked'], waitingOn: ['#1'] }), OFF).text).toBe('Waiting on #1');
     expect(cardStatus(card({ labels: ['adlc:build'] }), OFF).text).toBe('Not ready to build yet');
     expect(cardStatus(card({ labels: ['adlc:build', 'start:now', 'needs-triage'] }), OFF).text).toBe('Waiting for triage');
     const writing = card({ active: [task({ kind: 'implement', state: 'running', startedAt: minutesAgo(12) })] });

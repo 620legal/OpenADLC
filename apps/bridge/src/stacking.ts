@@ -5,6 +5,7 @@ import {
   DELIVERY_RULES_PATH,
   readDeliveryRulesFile,
   dependencyIsSatisfied,
+  namesRepository,
   hasAbandonedLabel,
   hasIgnoreLabel,
   hasPausedLabel,
@@ -12,7 +13,7 @@ import {
   leaseExpiryFrom,
   missingForRouting,
   PAUSED_LABEL,
-  parseDependencies,
+  parseDependencyRefs,
   resolutionPolicy,
   tooManyAttempts,
   type ContextDocument,
@@ -248,9 +249,15 @@ export class Stacking {
       if (tooManyAttempts(await leases.attemptsWithoutPullRequest(repo.id, issue.number).catch(() => Infinity))) continue;
 
       const outstanding: { number: number; stage: string; prNumber: number | null }[] = [];
-      for (const number of parseDependencies(issue.body)) {
-        const dependency = await issues.getIssue(repo.id, number).catch(() => null);
-        if (!dependencyIsSatisfied(dependency)) outstanding.push(dependency ?? { number, stage: 'unknown', prNumber: null });
+      for (const ref of parseDependencyRefs(issue.body)) {
+        // A branch cannot sit on another repository's branch: one there is
+        // outstanding, and never the one this stacks on.
+        if (!namesRepository(ref, repo.fullName)) {
+          outstanding.push({ number: ref.number, stage: 'other-repository', prNumber: null });
+          continue;
+        }
+        const dependency = await issues.getIssue(repo.id, ref.number).catch(() => null);
+        if (!dependencyIsSatisfied(dependency)) outstanding.push(dependency ?? { number: ref.number, stage: 'unknown', prNumber: null });
       }
       // Only one thing outstanding, and that in review with its pull request.
       const [on] = outstanding;

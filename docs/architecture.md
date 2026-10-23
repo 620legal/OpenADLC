@@ -575,7 +575,9 @@ columns work is in, and the label says nothing shipped.
   (`hasShipped`, `dependencyIsSatisfied`): an issue with it under
   `## Dependencies` stays `blocked`, and Needs you has a
   `dependency_abandoned` card saying which dependency it waits on, with links
-  to edit the issue or reopen the dependency. A pull request stacked on it
+  to edit the issue or reopen the dependency. A dependency in another managed
+  repository is named `owner/name#N`, and holds the issue back the same way.
+  A pull request stacked on it
   stays out of the merge line and is held. Design memory it proposed is not
   accepted.
 - **Needs you.** The issue's and its pull request's questions, failed tasks,
@@ -789,7 +791,7 @@ back. A crew account that moves a stage label back is put back.
 | **Lead reviewer** | The seat that reviews last: it reads every other seat's review and decides for the round; the others are advisory unless marked `blocking` |
 | **Merge line** | The order approved pull requests are brought up to date and landed in |
 | **Expected paths** | The files an issue says its change touches; the lease is granted them, and the merge line holds a crew pull request to the lease's paths, sending one that strays back to build |
-| **Dependencies** | An issue's `### Dependencies` section; it does not start until those have shipped |
+| **Dependencies** | An issue's `### Dependencies` section; it does not start until those have shipped. A line is `- #N` in its own repository, or `- owner/name#N` in another the install manages; one in a repository outside the install never ships ([ADR 0013](adr/0013-dependencies-across-repositories.md)) |
 | **Abandoned** | An issue in Done whose change never merged: closed by a person, or its pull request closed unmerged. It carries `openadlc:abandoned` and is not shipped |
 | **Model account** | An engine credential, a key or a subscription, that bots are assigned to |
 | **Driver** | How hostd gives a task a computer: `docker` or `local` |

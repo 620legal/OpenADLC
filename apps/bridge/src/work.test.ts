@@ -184,9 +184,10 @@ describe('what a card says about the work on it', () => {
       number: 3,
       stage: 'build',
       labels: ['adlc:build', 'blocked'],
-      body: '### Outcome\n\nA second page.\n\n### Dependencies\n\n- #1\n\n### Priority\n\np1',
+      body: '### Outcome\n\nA second page.\n\n### Dependencies\n\n- #1\n- owner/a#2\n\n### Priority\n\np1',
     });
-    expect(cardWork(blocked, { tasks: [], botName, stalls: new Map() }).waitingOn).toEqual([1]);
+    // One in another repository is named with it; `#2` alone would be this one's.
+    expect(cardWork(blocked, { tasks: [], botName, stalls: new Map() }).waitingOn).toEqual(['#1', 'owner/a#2']);
     // Not blocked, nothing to wait on, whatever its body says.
     expect(cardWork({ ...blocked, labels: ['adlc:build'] }, { tasks: [], botName, stalls: new Map() }).waitingOn).toEqual([]);
   });

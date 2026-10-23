@@ -4,6 +4,7 @@ import { StageHandoff, stageAfterIntake, stageAfterTask } from './stage-handoff.
 
 const board = vi.hoisted(() => ({
   issues: [] as Record<string, unknown>[],
+  elsewhere: [] as { fullName: string; number: number; stage: string; labels: string[] }[],
   audited: [] as Record<string, unknown>[],
   /** The locks a sweep was run under, in order. */
   locked: [] as string[],
@@ -47,6 +48,11 @@ vi.mock('@openadlc/db', async (importOriginal) => ({
   issues: {
     listIssues: vi.fn(async () => board.issues),
     getIssue: vi.fn(async (_repoId: string, number: number) => board.issues.find((entry) => entry.number === number) ?? null),
+    // Another repository's issues, as the store resolves them by full name.
+    resolveDependency: vi.fn(async (_own: unknown, ref: { repo: string | null; number: number }) => {
+      const issue = board.elsewhere.find((entry) => entry.fullName === ref.repo?.toLowerCase() && entry.number === ref.number);
+      return { managed: true, issue: issue ?? null };
+    }),
     byNextFirst: (await importOriginal<typeof import('@openadlc/db')>()).issues.byNextFirst,
   },
   repos: {
@@ -747,6 +753,27 @@ describe('the end of intake, on either intake path', () => {
     await withRepo({ spec: 'conditional' }, () => stages.afterIntake({ repoName: 'openadlc', issueNumber: 10 }));
 
     expect(readiness).toEqual([{ issueNumber: 9, blocked: true }]);
+  });
+
+  it('ends in Build with blocked while a dependency in another repository has not shipped, and start:now once it has', async () => {
+    // Read as waiting on nothing, it was given start:now and built before
+    // the work in the other repository shipped.
+    const { stages, readiness } = handoff();
+    try {
+      board.issues = [{ number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:build'], body: '### Dependencies\n\n- owner/a#1\n' }];
+      board.elsewhere = [{ fullName: 'owner/a', number: 1, stage: 'build', labels: ['adlc:build'] }];
+      await withRepo({ spec: 'conditional' }, () => stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 }));
+
+      board.elsewhere = [{ fullName: 'owner/a', number: 1, stage: 'done', labels: ['adlc:done'] }];
+      await withRepo({ spec: 'conditional' }, () => stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 }));
+
+      expect(readiness).toEqual([
+        { issueNumber: 9, blocked: true },
+        { issueNumber: 9, blocked: false },
+      ]);
+    } finally {
+      board.elsewhere = [];
+    }
   });
 
   it('sends an issue triage labelled adlc:spec to Build on a repository that does not design', async () => {

@@ -9,7 +9,7 @@ vi.mock('../client.js', () => ({
 }));
 
 import { query, queryOne } from '../client.js';
-import { anyDoneBefore, boardCards, boardIssues, byNextFirst, getIssue, getIssues, listBlockedIssues, listRoutableIssues, priorityRank, setIssueLabels, setVouched, upsertIssue, workInFlight, type IssueRecord } from './issues.js';
+import { anyDoneBefore, boardCards, boardIssues, byNextFirst, getIssue, getIssues, listBlockedIssues, listRoutableIssues, priorityRank, resolveDependency, setIssueLabels, setVouched, upsertIssue, workInFlight, type IssueRecord } from './issues.js';
 
 /**
  * The order is a comparator rather than a `order by` clause so that it can be
@@ -320,5 +320,60 @@ describe('the issues the board reads', () => {
     vi.mocked(queryOne).mockResolvedValueOnce({ done: false } as never);
     expect(await anyDoneBefore(since)).toBe(false);
     expect(vi.mocked(queryOne).mock.calls[1]?.[1]).toEqual([since, null]);
+  });
+});
+
+describe('the issue a dependency names', () => {
+  const OWN = { id: 'repo-b', fullName: 'owner/b' };
+  const issueRow = (repoId: string, number: number) => ({
+    id: `i-${number}`,
+    repo_id: repoId,
+    repo_name: repoId,
+    number,
+    title: 'x',
+    stage: 'done',
+    labels: [],
+    declared_paths: [],
+    pr_changed_paths: [],
+    body: '',
+    url: null,
+    pr_number: null,
+    updated_at: new Date('2026-10-01T10:00:00Z'),
+    created_at: new Date('2026-10-01T09:00:00Z'),
+  });
+  const repoRow = { id: 'repo-a', name: 'a', full_name: 'owner/a', owner_bot_id: null, concurrency: 1, stage_modes: {}, spec_required_labels: [], human_review_paths: [], default_branch: 'main', color: 'blue', removed_at: null };
+
+  beforeEach(() => {
+    vi.mocked(query).mockReset();
+    vi.mocked(queryOne).mockReset();
+    vi.mocked(query).mockImplementation((async (_sql: string, params: [string, number]) => [issueRow(params[0], params[1])]) as never);
+  });
+
+  it('reads its own repository for #N, or its own full name in any case, without looking for another', async () => {
+    expect(await resolveDependency(OWN, { repo: null, number: 3 })).toMatchObject({ managed: true, issue: { repoId: 'repo-b', number: 3 } });
+    expect(await resolveDependency(OWN, { repo: 'Owner/B', number: 4 })).toMatchObject({ managed: true, issue: { repoId: 'repo-b', number: 4 } });
+    expect(queryOne).not.toHaveBeenCalled();
+  });
+
+  it('reads another managed repository by its full name', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce(repoRow as never);
+    expect(await resolveDependency(OWN, { repo: 'OWNER/a', number: 7 })).toMatchObject({ managed: true, issue: { repoId: 'repo-a', number: 7 } });
+    const [sql, params] = vi.mocked(queryOne).mock.calls[0] ?? [];
+    expect(String(sql)).toContain('lower(full_name) = lower($1)');
+    expect(String(sql)).toContain('removed_at is null');
+    expect(params).toEqual(['OWNER/a']);
+  });
+
+  it('is no issue in a repository the install does not manage, or has removed', async () => {
+    // An issue waiting on work there would otherwise be read as waiting on nothing.
+    vi.mocked(queryOne).mockResolvedValueOnce(null as never);
+    expect(await resolveDependency(OWN, { repo: 'nobody/x', number: 1 })).toEqual({ managed: false, issue: null });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('is no issue for a number the platform has never seen', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce(repoRow as never);
+    vi.mocked(query).mockResolvedValueOnce([] as never);
+    expect(await resolveDependency(OWN, { repo: 'owner/a', number: 99 })).toEqual({ managed: true, issue: null });
   });
 });

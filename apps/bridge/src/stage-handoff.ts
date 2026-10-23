@@ -4,7 +4,7 @@ import { leadReviewer, PLAN_CHANGE_REVIEW_SKILL, REPO_DEFAULTS, type StageKey, t
 import { seatsWaitedOn, type Automation } from './automation.js';
 import type { DispatchGate } from './dispatch-gate.js';
 import type { TaskService } from './task-service.js';
-import { dependencyIsSatisfied, hasIgnoreLabel, parseDependencies } from '@openadlc/shared';
+import { dependencyIsSatisfied, hasIgnoreLabel, namesRepository, parseDependencyRefs } from '@openadlc/shared';
 import { isActive, issueNumberFromBranch, REVIEW_STALLED } from './work.js';
 import { INTAKE_STALLED } from './intake-events.js';
 
@@ -324,17 +324,27 @@ export class StageHandoff {
     return to;
   }
 
-  /** `start:now` when every issue under its Dependencies has shipped, `blocked` otherwise; nothing when it carries either. */
+  /**
+   * `start:now` when every issue under its Dependencies has shipped, `blocked`
+   * otherwise; nothing when it carries either. One in another repository is
+   * read from that repository's row: skipped, it was `start:now` and built
+   * before the work it waited on had shipped.
+   */
   private async markReadiness(
-    repo: { name: string; fullName: string },
+    repo: { id: string; name: string; fullName: string },
     issueNumber: number,
     known: { labels: string[]; body: string | null },
   ): Promise<void> {
     if (known.labels.includes('start:now') || known.labels.includes('blocked')) return;
     const inRepo = await issues.listIssues(repo.name);
-    const waiting = parseDependencies(known.body).some(
-      (number) => !dependencyIsSatisfied(inRepo.find((issue) => issue.number === number) ?? null),
+    const resolved = await Promise.all(
+      parseDependencyRefs(known.body).map(async (ref) =>
+        namesRepository(ref, repo.fullName)
+          ? (inRepo.find((issue) => issue.number === ref.number) ?? null)
+          : (await issues.resolveDependency(repo, ref)).issue,
+      ),
     );
+    const waiting = resolved.some((dependency) => !dependencyIsSatisfied(dependency));
     await this.automation.setBlocked(repo.fullName, issueNumber, waiting);
   }
 

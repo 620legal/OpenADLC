@@ -425,18 +425,31 @@ describe('unblocking an issue whose dependencies shipped', () => {
   it('swaps blocked for start:now on an issue the crew works on', async () => {
     const setBlockedLabel = await stored(['blocked', 'adlc:build']);
 
-    const response = await post('/internal/issues/openadlc/12/unblock', { dependencies: [11] });
+    const response = await post('/internal/issues/openadlc/12/unblock', { dependencies: ['#11'] });
 
     expect(await response.json()).toMatchObject({ changed: true });
     expect(setBlocked).toHaveBeenCalledWith('janedoe/openadlc', 12, false);
     expect(setBlockedLabel).toHaveBeenCalledWith('repo-1', 12, false);
   });
 
+  it('records each dependency as it was written, in this repository or another', async () => {
+    await stored(['blocked', 'adlc:build']);
+    const db = await import('@openadlc/db');
+    vi.mocked(db.audit).mockClear();
+
+    const response = await post('/internal/issues/openadlc/12/unblock', { dependencies: ['#1', 'owner/a#2'] });
+
+    expect(await response.json()).toMatchObject({ changed: true, waitedFor: '#1, owner/a#2' });
+    expect(db.audit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'issue.unblocked', target: 'openadlc#12', payload: { dependencies: ['#1', 'owner/a#2'] } }),
+    );
+  });
+
   it('leaves an issue labelled openadlc:ignore blocked, and adds no start:now', async () => {
     // Unblocking adds start:now: the crew changing an issue it was told to leave alone.
     const setBlockedLabel = await stored(['blocked', 'adlc:build', 'openadlc:ignore']);
 
-    const response = await post('/internal/issues/openadlc/12/unblock', { dependencies: [11] });
+    const response = await post('/internal/issues/openadlc/12/unblock', { dependencies: ['#11'] });
 
     expect(await response.json()).toMatchObject({ changed: false });
     expect(setBlocked).not.toHaveBeenCalled();

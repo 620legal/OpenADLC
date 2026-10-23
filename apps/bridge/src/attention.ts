@@ -8,8 +8,10 @@ import {
   botInWords,
   hasAbandonedLabel,
   hasIgnoreLabel,
+  formatDependencyRef,
+  namesRepository,
   outsideInWords,
-  parseDependencies,
+  parseDependencyRefs,
   PLAN_CHANGE_REFUSE,
   roleLabel,
   sameLogin,
@@ -1482,23 +1484,31 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
   // nowhere, so it goes once the dependency is dropped or reopened.
   for (const waiting of input.issues) {
     if (!waiting.labels.includes('blocked') || waiting.stage === 'merged' || waiting.stage === 'done') continue;
-    const on = parseDependencies(waiting.body ?? null)
-      .map((number) => input.issues.find((one) => one.repoId === waiting.repoId && one.number === number))
-      .filter((one): one is IssueFacts => one !== undefined && one.stage === 'done' && hasAbandonedLabel(one.labels));
+    // One in another repository the install manages is found there and named
+    // as written, `owner/name#N`: `#N` alone would point at this repository.
+    const own = input.repos.find((repo) => repo.id === waiting.repoId);
+    const on = parseDependencyRefs(waiting.body ?? null)
+      .map((ref) => {
+        const repoId = ref.repo === null ? waiting.repoId : input.repos.find((repo) => namesRepository(ref, repo.fullName))?.id;
+        const issue = repoId === undefined ? undefined : input.issues.find((one) => one.repoId === repoId && one.number === ref.number);
+        const shown = own && namesRepository(ref, own.fullName) ? `#${ref.number}` : formatDependencyRef(ref);
+        return issue ? { issue, shown } : null;
+      })
+      .filter((one): one is { issue: IssueFacts; shown: string } => one !== null && one.issue.stage === 'done' && hasAbandonedLabel(one.issue.labels));
     if (on.length === 0) continue;
     const key = `${waiting.repoName}#${waiting.number}`;
-    const refs = on.map((one) => `#${one.number}`);
+    const refs = on.map((one) => one.shown);
     const named = refs.length > 1 ? `${refs.slice(0, -1).join(', ')} and ${refs[refs.length - 1]}` : refs[0]!;
     const actions: AttentionAction[] = [];
     if (waiting.url) actions.push({ kind: 'open_url', label: `Edit #${waiting.number}`, url: waiting.url });
-    for (const one of on) if (one.url) actions.push({ kind: 'open_url', label: `Reopen #${one.number}`, url: one.url });
+    for (const one of on) if (one.issue.url) actions.push({ kind: 'open_url', label: `Reopen ${one.shown}`, url: one.issue.url });
     items.push({
       id: `dependency-abandoned:${key}`,
       kind: 'dependency_abandoned',
       headline: `#${waiting.number} waits on ${named}, which ${on.length > 1 ? 'were' : 'was'} closed without merging`,
       subject: subjectOf(key).subject,
       bot: null,
-      since: on.map((one) => one.updatedAt).sort().at(-1) ?? input.now.toISOString(),
+      since: on.map((one) => one.issue.updatedAt).sort().at(-1) ?? input.now.toISOString(),
       detail: `Drop or change ${named} in its Dependencies, or reopen ${on.length > 1 ? 'them' : named}.`,
       actions,
     });

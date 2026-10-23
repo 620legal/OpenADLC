@@ -1,4 +1,4 @@
-import { closingKeywords, hasIgnoreLabel, isFleetLogin, parseDependencies, sameLogin, type StageKey, type StageMode, type TaskKind, type TaskState } from '@openadlc/shared';
+import { closingKeywords, formatDependencyRef, hasIgnoreLabel, isFleetLogin, parseDependencyRefs, sameLogin, type StageKey, type StageMode, type TaskKind, type TaskState } from '@openadlc/shared';
 
 /**
  * What the crew is doing to each piece of work, read from the rows the bridge
@@ -346,8 +346,9 @@ export interface CardWork {
   /**
    * What a blocked card waits on, from its Dependencies: the card said
    * "Blocked by another issue" and left a person to open it to find out which.
+   * Each as written, `#N` or `owner/name#N` for one in another repository.
    */
-  waitingOn: number[];
+  waitingOn: string[];
 }
 
 export function asCardTask(task: TaskFacts, botName: (botId: string) => string): CardTask {
@@ -407,7 +408,7 @@ export function cardWork(
     stalledAfterRounds: stall ? stall.rounds : null,
     reviewFailed: issue.stage === 'review' && reviewFailedOn(onPullRequest),
     shippedAt: issue.stage === 'done' ? (lastDeploy?.endedAt ?? issue.updatedAt) : null,
-    waitingOn: issue.labels.includes('blocked') ? parseDependencies(issue.body ?? '') : [],
+    waitingOn: issue.labels.includes('blocked') ? parseDependencyRefs(issue.body ?? '').map(formatDependencyRef) : [],
   };
 }
 

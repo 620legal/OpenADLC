@@ -72,7 +72,8 @@ export interface BoardCard {
   approval?: boolean;
   shippedAt?: string | null;
   /** What a blocked card waits on, by issue number. Absent from an older bridge. */
-  waitingOn?: number[];
+  /** `#N`, or `owner/name#N` for an issue in another repository. */
+  waitingOn?: string[];
   /**
    * A console request intake is still asking about or writing up: not an issue
    * yet, so it has no number and nowhere to be moved. Its ref is `request:<id8>`.

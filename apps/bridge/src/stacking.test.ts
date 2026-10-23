@@ -200,6 +200,25 @@ describe('an issue that depends on one in review', () => {
     expect(build).toHaveBeenCalledWith(expect.objectContaining({ repo: cart }));
   });
 
+  it('stacks on one named by its own repository’s full name, as on #4', async () => {
+    world.issues.set(5, { ...world.issues.get(5)!, body: dependsOn4.replace('- #4', '- JaneDoe/Shop#4') });
+    const { subject } = stacking();
+
+    expect(await subject.sweep()).toEqual([`shop#5: stacked on #4, from ${A_BRANCH}`]);
+  });
+
+  it('does not stack on one in another repository, even in review with its pull request', async () => {
+    // A branch cannot sit on another repository's branch.
+    world.issues.set(5, { ...world.issues.get(5)!, body: dependsOn4.replace('- #4', '- janedoe/mill#4') });
+    const { issues } = await import('@openadlc/db');
+    vi.mocked(issues.getIssue).mockClear();
+    const { subject, build } = stacking();
+
+    expect(await subject.sweep()).toEqual([]);
+    expect(build).not.toHaveBeenCalled();
+    expect(issues.getIssue).not.toHaveBeenCalledWith(expect.anything(), 4);
+  });
+
   it('waits as before while the one it depends on is still being built', async () => {
     world.issues.set(4, { ...world.issues.get(4)!, stage: 'build', prNumber: null });
     const { subject, build } = stacking();

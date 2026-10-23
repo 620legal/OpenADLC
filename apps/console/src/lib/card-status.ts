@@ -257,7 +257,7 @@ export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
       return inLine(card, context.mergeLine) ?? { text: 'Waiting for the reviewers', tone: 'muted', mark: null };
     case 'build': {
       if (card.labels.includes('blocked')) {
-        const on = (card.waitingOn ?? []).map((number) => `#${number}`);
+        const on = card.waitingOn ?? [];
         const which = on.length > 1 ? `${on.slice(0, -1).join(', ')} and ${on[on.length - 1]}` : on[0];
         return { text: which ? `Waiting on ${which}` : 'Blocked by another issue', tone: 'muted', mark: null };
       }
