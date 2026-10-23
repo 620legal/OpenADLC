@@ -28,6 +28,7 @@ const pressed = vi.hoisted(() => ({
   keysDismissed: [] as string[],
   keysUndone: [] as string[],
   settled: [] as string[],
+  started: [] as string[],
 }));
 vi.mock('@/app/actions', () => ({
   answerGate: vi.fn(async () => ({ ok: true })),
@@ -52,6 +53,7 @@ vi.mock('@/app/actions', () => ({
   approveAll: vi.fn(async (gateId: string) => (pressed.settled.push(`approve-all:${gateId}`), { ok: true })),
   askDesigner: vi.fn(async (gateId: string) => (pressed.settled.push(`designer:${gateId}`), { ok: true })),
   turnOffApproveAll: vi.fn(async (subject: string) => (pressed.settled.push(`off:${subject}`), { ok: true })),
+  startItem: vi.fn(async (subject: string) => (pressed.started.push(subject), { ok: true, started: [`started spec on ${subject}`] })),
 }));
 const navigated = vi.hoisted(() => [] as string[]);
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => undefined, replace: (to: string) => void navigated.push(to) }) }));
@@ -233,6 +235,37 @@ describe('a Needs-you card', () => {
 
     await click(button('Check again', opened));
     expect(pressed.rechecked).toEqual(['model-account']);
+  });
+});
+
+/**
+ * Work that waited past the limit with its seat free and nothing started is
+ * a system card that says why, and starts it from its face (#144).
+ */
+describe('work stuck with its seat free', () => {
+  const STUCK: AttentionItem = {
+    id: 'stuck:OpenADLC#141',
+    kind: 'work_stuck',
+    group: 'system',
+    headline: 'Nothing has started OpenADLC#141 for 41 min, and the system engineer (system-engineer) is free',
+    subject: { repo: 'OpenADLC', number: 141, title: 'Say on a waiting card who it waits for', ref: 'OpenADLC#141', url: null, item: 'OpenADLC#141' },
+    bot: { name: 'system-engineer', slot: 'system-engineer', role: 'spec', roleLabel: 'system engineer', githubLogin: null },
+    since: '2026-09-24T11:19:00.000Z',
+    detail: 'OpenADLC#141 waits for its design pass, the system engineer has room for it, and nothing has started it in over 3 minutes.',
+    actions: [
+      { kind: 'start_work', label: 'Start it now', subject: 'OpenADLC#141' },
+      { kind: 'open_thread', label: 'Open thread', bot: 'system-engineer' },
+    ],
+  };
+
+  it('says why on its face, and Start it now starts it and says so', async () => {
+    pressed.started.length = 0;
+    await render([STUCK]);
+    const card = container.querySelector('article')!;
+    expect(card.textContent).toContain('Nothing has started OpenADLC#141 for 41 min');
+    await click(button('Start it now', card));
+    expect(pressed.started).toEqual(['OpenADLC#141']);
+    expect(card.querySelector('[data-done]')?.textContent).toBe('Started.');
   });
 });
 

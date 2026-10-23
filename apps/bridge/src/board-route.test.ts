@@ -269,6 +269,25 @@ describe('GET /v1/board', () => {
     });
   });
 
+  it('says why a card with nothing going on it waits, since when, and that it is stuck, and nothing of waiting on a card with work going', async () => {
+    // A design nothing has started since it arrived, with the design seat free.
+    const design = { ...ISSUES[0]!, id: 'issue-141', number: 141, title: 'Say on a waiting card who it waits for', stage: 'spec', labels: ['adlc:spec'] };
+    ISSUES.push(design);
+    CREW.push({ id: 'bot-spec', name: 'system-engineer', slot: 'system-engineer', displayName: 'system engineer', role: 'spec', status: 'stopped' });
+    try {
+      const board = (await (await fetch(`${bridgeUrl}/v1/board`)).json()) as { columns: Column[] };
+      const card = board.columns.find((column) => column.stage === 'spec')?.cards[0];
+      expect(card).toMatchObject({
+        ref: 'openadlc-testbed#141',
+        waiting: { reason: { kind: 'free', seat: { name: 'system-engineer', role: 'spec', maxTasks: 1 }, by: 'sweep' }, since: '2026-09-24T11:00:00.000Z', stuck: true },
+      });
+      expect(board.columns.find((column) => column.stage === 'build')?.cards[0]).toMatchObject({ ref: 'openadlc-testbed#16', waiting: null });
+    } finally {
+      ISSUES.pop();
+      CREW.pop();
+    }
+  });
+
   it('shows one card per work item, on the board of every repository it has a link in and once on all of them', async () => {
     const { workItems } = await import('@openadlc/db');
     const link = (id: number, itemId: string, itemNumber: number, kind: string, repoId: string, number: number, extra: Record<string, unknown> = {}) => ({

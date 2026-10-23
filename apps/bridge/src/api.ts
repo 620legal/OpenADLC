@@ -117,6 +117,7 @@ import { registerSigningKeyRoutes } from './signing-key-routes.js';
 import { SubjectTitles } from './subject-titles.js';
 import { retryTask } from './task-retry.js';
 import { doneSince, itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, requestsOnCards, withItemIssues, withItemPulls } from './board-work.js';
+import type { WaitingReads } from './waiting.js';
 import { describeSubject } from './thread-view.js';
 import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
@@ -189,6 +190,14 @@ export interface ApiDeps {
    * Absent, the hourly stage sweep starts it.
    */
   stageRuns?: Pick<StageRunner, 'seatFreed'> | null;
+  /**
+   * When a scheduled job fires next (`JobTimer.nextRun`): the board says
+   * when the stage sweep starts a design waiting with its seat free. Absent,
+   * the board does not say.
+   */
+  nextRun?: (job: string) => Date | null;
+  /** Whether anything leases a build (`anythingDispatches`); absent is read as yes. */
+  dispatching?: boolean;
 }
 
 /** Where what runs after an answer belongs: the task it was for, or else a subject's thread. */
@@ -1001,6 +1010,17 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       labelNames: () => configuredLabelNames(config.repoRoot),
     });
   const queue = deps.requestQueue ?? new RequestQueue({ taskService: deps.taskService, paused: (repo) => deps.dispatchGate?.paused(repo) ?? null });
+  // What a card with nothing going on it waits on, beyond its tasks: read
+  // alike for the board's cards and for Needs you's stuck work.
+  const waitingReads: WaitingReads = {
+    paused: (repo) => deps.dispatchGate?.paused(repo) ?? null,
+    ...(deps.nextRun ? { nextSweepAt: () => deps.nextRun!('stages') } : {}),
+    ...(deps.dispatching !== undefined ? { dispatching: deps.dispatching } : {}),
+    // A config built by hand, a test's, may have no costs: the file's default stops.
+    stopLeasing: config?.costs?.onCap?.stopLeasing ?? true,
+    ...(deps.health ? { health: () => deps.health!.rows() } : {}),
+    ...(deps.delivery ? { pathPolicy: async (repo) => (await deps.delivery!.get(repo)).rules.paths } : {}),
+  };
   // Which repositories ship by merging, for the Ship column; see `deploys.ts`.
   const deploys = new DeployKnowledge(() => asAutomation(deps.actors, config));
   // hostd signs a subscription in and checks an account, where the bots think.
@@ -1026,6 +1046,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     fullName: async (name) => (await repos.getRepoByName(name))?.fullName ?? null,
   });
   registerAttentionRoutes(router, {
+    waiting: waitingReads,
     engineUpdates: engineUpdatesFor(hostd),
     selfUpdate: { attention: () => selfUpdateAttentionFromSettings() },
     ...(deps.health ? { health: deps.health } : {}),
@@ -1131,6 +1152,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       pulls: loose,
       itemRequests,
       sessions: activeSessions,
+      waiting: waitingReads,
     });
 
     // What is waiting to land, and what the bridge is doing about it. A person

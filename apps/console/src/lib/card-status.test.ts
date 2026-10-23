@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { BoardCard, CardTask } from './api';
+import type { BoardCard, CardTask, CardWaiting, WaitingReason } from './api';
 import { cardBot, cardCost, cardStatus, heldApprovalsOf, nextUp, type CardContext } from './card-status';
-import { ago, duration, money, ordinal } from './when';
+import { ago, duration, money, ordinal, untilIn } from './when';
 
 const NOW = '2026-09-24T12:00:00.000Z';
 const minutesAgo = (minutes: number): string => new Date(Date.parse(NOW) - minutes * 60_000).toISOString();
@@ -407,5 +407,108 @@ describe('a card on a bridge without the dispatcher', () => {
     expect(cardStatus(card({ labels: ['adlc:build', 'start:now', 'needs-triage'] }), OFF).text).toBe('Waiting for triage');
     const writing = card({ active: [task({ kind: 'implement', state: 'running', startedAt: minutesAgo(12) })] });
     expect(cardStatus(writing, OFF).text).toBe('Builder · writing the change · 12 min');
+  });
+});
+
+/**
+ * A card with nothing going on it says why it waits, on what, and for how
+ * long, from what the bridge worked out (#144). #141 said "Waiting for a
+ * design pass" for half an hour, and nothing said what it waited on.
+ */
+describe('a card waiting with nothing going on it', () => {
+  const DESIGNER = { name: 'system-engineer', role: 'spec', maxTasks: 1 };
+  const BUILDER = { name: 'openadlc-atlas-janedoe', role: 'implement', maxTasks: 1 };
+  const inAWhile = (minutes: number) => new Date(Date.parse(NOW) + minutes * 60_000).toISOString();
+  const waits = (reason: WaitingReason, extra: Partial<CardWaiting> = {}, on: Partial<BoardCard> = {}) =>
+    cardStatus(card({ stage: 'spec', labels: ['adlc:spec'], waiting: { reason, since: minutesAgo(32), stuck: false, ...extra }, ...on }), CONTEXT);
+
+  it('names the busy seat and what is on it', () => {
+    expect(waits({ kind: 'seat', seat: DESIGNER, seats: 1, holders: [{ ref: 'openadlc#137', number: 137, kind: 'spec', state: 'running', waitingOnYou: false }] })).toEqual({
+      text: 'Waiting for system-engineer · busy with #137 · 32 min',
+      tone: 'muted',
+      mark: null,
+    });
+    const holders = [
+      { ref: 'openadlc#12', number: 12, kind: 'implement', state: 'running', waitingOnYou: false },
+      { ref: 'openadlc#14', number: 14, kind: 'implement', state: 'running', waitingOnYou: false },
+      { ref: 'request:abcd1234', number: null, kind: 'intake', state: 'running', waitingOnYou: false },
+      { ref: 'openadlc#15', number: 15, kind: 'implement', state: 'queued', waitingOnYou: false },
+    ];
+    expect(waits({ kind: 'seat', seat: BUILDER, seats: 2, holders }).text).toBe('Waiting for openadlc-atlas-janedoe and 1 more · busy with #12, #14 and 2 more · 32 min');
+  });
+
+  it('says what starts it when its seat is free: the sweep, and when, or the seat’s room, or the dispatcher', () => {
+    expect(untilIn(inAWhile(24), NOW)).toBe('in 24 min');
+    expect(waits({ kind: 'free', seat: DESIGNER, by: 'sweep', nextAt: inAWhile(24) }).text).toBe('Not started · system-engineer is free · next sweep in 24 min · 32 min');
+    expect(waits({ kind: 'free', seat: DESIGNER, by: 'sweep', nextAt: null }).text).toBe('Not started · system-engineer is free · no sweep is scheduled · 32 min');
+    expect(waits({ kind: 'free', seat: DESIGNER, by: 'runner' }, { since: minutesAgo(2) }).text).toBe('Not started · system-engineer is free · starts within a minute · 2 min');
+    expect(waits({ kind: 'free', seat: BUILDER, by: 'dispatcher' }, {}, { stage: 'build' }).text).toBe('Next up · openadlc-atlas-janedoe is free · 32 min');
+  });
+
+  it('looks stuck once it has waited past the limit with its seat free', () => {
+    expect(waits({ kind: 'free', seat: DESIGNER, by: 'sweep', nextAt: inAWhile(24) }, { since: minutesAgo(41), stuck: true })).toEqual({
+      text: 'Stuck · system-engineer is free and nothing started it · next sweep in 24 min · 41 min',
+      tone: 'alarm',
+      mark: 'dot',
+      stuck: true,
+    });
+    // What needs the person still comes first, and an older bridge's card says its stage's line.
+    const free: CardWaiting = { reason: { kind: 'free', seat: DESIGNER, by: 'sweep', nextAt: null }, since: minutesAgo(32), stuck: true };
+    expect(cardStatus(card({ stage: 'spec', waiting: free, last: task({ kind: 'spec', state: 'failed' }) }), CONTEXT).text).toBe('Could not finish · needs you');
+    expect(cardStatus(card({ stage: 'spec', waiting: free, gateOpen: true }), CONTEXT).text).toBe('Waiting for your answer');
+    expect(cardStatus(card({ stage: 'spec' }), CONTEXT).text).toBe('Waiting for a design pass');
+    expect(cardStatus(card({ stage: 'spec', waiting: null }), CONTEXT).text).toBe('Waiting for a design pass');
+  });
+
+  it('says what the issue it depends on is doing now', () => {
+    const on = (extra: Record<string, unknown>) => ({ number: 141, stage: 'spec', abandoned: false, task: null, waits: null, ...extra });
+    const build = { stage: 'build', labels: ['adlc:build', 'blocked'] };
+    expect(waits({ kind: 'dependency', on: [on({ task: { bot: 'system-engineer', kind: 'spec', state: 'running', waitingOnYou: false, activity: null } })] }, {}, build).text).toBe(
+      'Waiting on #141 (system-engineer writing the design) · 32 min',
+    );
+    expect(waits({ kind: 'dependency', on: [on({ task: { bot: 'openadlc-atlas-janedoe', kind: 'implement', state: 'running', waitingOnYou: false, activity: 'running tests' } })] }, {}, build).text).toBe(
+      'Waiting on #141 (builder running tests) · 32 min',
+    );
+    expect(waits({ kind: 'dependency', on: [on({ waits: { kind: 'seat', seat: 'system-engineer' } })] }, {}, build).text).toBe('Waiting on #141 (waiting for system-engineer) · 32 min');
+    expect(waits({ kind: 'dependency', on: [on({ task: { bot: 'system-engineer', kind: 'spec', state: 'paused', waitingOnYou: true, activity: null } }), on({ number: 150, stage: 'review' })] }, {}, build).text).toBe(
+      'Waiting on #141 (waiting for your answer) and #150 (in review) · 32 min',
+    );
+    expect(waits({ kind: 'dependency', on: [on({ stage: 'done', abandoned: true }), on({ number: 404, stage: null })] }, {}, build).text).toBe(
+      'Waiting on #141 (closed without merging) and #404 (not on the board) · 32 min',
+    );
+    expect(waits({ kind: 'dependency', on: [] }, {}, build).text).toBe('Blocked by another issue · 32 min');
+  });
+
+  it('says each other thing it waits on, and for how long', () => {
+    const lines: [WaitingReason, string, string?][] = [
+      [{ kind: 'turn', seat: DESIGNER, after: ['openadlc#141', 'web#3'] }, 'Waiting its turn, after #141 and web#3 · 32 min'],
+      [{ kind: 'lease', on: [44], paths: ['apps/bridge/src/api.ts', 'README.md'] }, 'Waiting for #44 to let go of apps/bridge/src/api.ts and 1 more · 32 min'],
+      [{ kind: 'concurrency', limit: 1, holders: [{ ref: 'openadlc#40', number: 40, kind: 'implement', state: 'paused', waitingOnYou: true }] }, 'Waiting: openadlc builds 1 at a time · busy with #40 (waiting for your answer) · 32 min'],
+      [{ kind: 'paused', words: 'work is paused by orzelig' }, 'Waiting until work is resumed · 32 min'],
+      [{ kind: 'seat_paused', seat: DESIGNER, words: 'system-engineer is paused by orzelig' }, 'Waiting for system-engineer · paused on Crew · 32 min'],
+      [{ kind: 'blocked', seat: DESIGNER, why: 'system-engineer cannot sign in to GitHub', instruction: 'Reconnect it.' }, 'Waiting: system-engineer cannot sign in to GitHub · 32 min', 'attention'],
+      [{ kind: 'cap', words: "this month's spend is $500.00 of the $500.00 monthly cap" }, 'Held at the spending cap · 32 min', 'attention'],
+      [{ kind: 'held' }, 'On hold · 32 min'],
+      [{ kind: 'no_seat', role: 'spec' }, 'Nobody staffs Design · add a seat on Crew · 32 min', 'attention'],
+      [{ kind: 'not_staffed' }, 'Design is left to a person in openadlc · move it on by hand · 32 min'],
+      [{ kind: 'triage' }, 'Waiting for triage · 32 min'],
+      [{ kind: 'not_ready' }, 'Not ready to build yet · 32 min'],
+      [{ kind: 'for_person' }, 'Left for a person · 32 min'],
+      [{ kind: 'no_dispatcher' }, 'Waiting: the dispatcher isn’t running · 32 min', 'attention'],
+    ];
+    for (const [reason, text, tone] of lines) expect(waits(reason), reason.kind).toMatchObject({ text, tone: tone ?? 'muted' });
+    // A repository a person paused on its own is named.
+    expect(cardStatus(card({ stage: 'spec', waiting: { reason: { kind: 'paused', words: 'x' }, since: minutesAgo(32), stuck: false } }), { ...CONTEXT, pausedRepos: ['openadlc'] }).text).toBe(
+      'Waiting until openadlc is resumed · 32 min',
+    );
+  });
+
+  it('says on a build paused on a question that it holds its repository’s build while others wait for one', () => {
+    const asking = task({ kind: 'implement', state: 'paused', holds: { repo: 'openadlc', limit: 1, waiting: 2 } });
+    expect(cardStatus(card({ gateOpen: true, active: [asking] }), CONTEXT).text).toBe('Waiting for your answer · holds openadlc’s build slot (2 waiting)');
+    expect(cardStatus(card({ gateOpen: true, active: [{ ...asking, holds: { repo: 'openadlc', limit: 3, waiting: 1 } }] }), CONTEXT).text).toBe(
+      'Waiting for your answer · holds one of openadlc’s 3 build slots',
+    );
+    expect(cardStatus(card({ gateOpen: true, active: [{ ...asking, holds: null }] }), CONTEXT).text).toBe('Waiting for your answer');
   });
 });

@@ -656,6 +656,10 @@ async function main(): Promise<void> {
     sendBack,
     delivery,
     stageRuns,
+    // When the stage sweep comes round, and whether anything leases a build:
+    // what a card waiting with nothing going on it says.
+    nextRun: (job: string) => jobs.nextRun(job),
+    dispatching: anythingDispatches(dispatchMode),
   };
   registerConsoleApi(router, deps);
   // One seat paused from Crew takes no new work; resuming it starts what that
@@ -739,6 +743,17 @@ async function main(): Promise<void> {
       await mergeLine.advance(item.repoName).catch(() => null);
     },
     dispatchSoon: (reason) => dispatchRuns?.soon(reason),
+    // The stage sweep for that stage, which starts the cards waiting on it
+    // in their order, or a dispatch for a build: what comes round anyway.
+    startNow: async (item) => {
+      const stage = item.issue?.stage;
+      if (stage === 'intake' || stage === 'spec') return stages.sweep({ stages: [stage] });
+      if (stage === 'build' && dispatchRuns) {
+        dispatchRuns.soon(`${item.key} was asked to start`);
+        return [`asked the dispatcher to look at ${item.key} now`];
+      }
+      return [];
+    },
     pausePull: (repoFullName, prNumber) => automation.pausePull(repoFullName, prNumber),
     later: (item, what, work) => afterwards.run({ subjectRef: item.key }, what, work),
   });

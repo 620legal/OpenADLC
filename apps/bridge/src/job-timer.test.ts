@@ -138,6 +138,21 @@ describe('firing the recurring jobs', () => {
     await vi.advanceTimersByTimeAsync(43_200 * 60_000 * 3);
     expect(fired).toEqual([]);
   });
+
+  it('says when a job fires next, for the board to say when a waiting design starts', async () => {
+    vi.setSystemTime(new Date('2026-10-23T13:00:00.000Z'));
+    const timer = new JobTimer(scheduler as never, { ...Object.fromEntries(SCHEDULED_JOBS.map((job) => [job, 0])), stages: 60 } as never);
+    expect(timer.nextRun('stages')).toBeNull();
+    timer.start();
+    expect(timer.nextRun('stages')?.toISOString()).toBe('2026-10-23T14:00:00.000Z');
+    // Off is never.
+    expect(timer.nextRun('deps')).toBeNull();
+    await vi.advanceTimersByTimeAsync(60 * 60_000 + 1);
+    expect(fired).toEqual(['stages']);
+    expect(timer.nextRun('stages')?.toISOString()).toBe('2026-10-23T15:00:00.000Z');
+    timer.stop();
+    expect(timer.nextRun('stages')).toBeNull();
+  });
 });
 
 describe('how often each job runs', () => {

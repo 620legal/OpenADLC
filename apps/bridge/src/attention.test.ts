@@ -2185,6 +2185,8 @@ describe('GET /v1/attention', () => {
       'task.resume_waits_on_github',
       'design_memory.superseded',
       'review.person_asked_again',
+      // The starts a full seat turned away, for the work stuck behind none.
+      'stage.waiting_on_seat',
     ]);
     expect(body.items.map((item) => item.id)).toEqual(['stall:openadlc-testbed#29', 'gate:gate-old']);
     // A gate older than the week is still a gate: its task is read on its own.
@@ -3087,5 +3089,85 @@ describe('a start GitHub did not answer for', () => {
 
     expect(items.map((item) => item.id)).toEqual(['task:task-last']);
     expect(items[0]?.detail).toMatch(/and OpenADLC has stopped trying on its own\. Try again once GitHub answers\.$/);
+  });
+});
+
+/**
+ * Work that has waited past the limit with its seat free and nothing started
+ * is a system card in Needs you, naming the seat, why nothing started it, and
+ * Start it now; it goes once the work starts (#144). On 2026-10-23 #141 sat
+ * in Design for over half an hour and nobody was told.
+ */
+describe('work stuck with its seat free', () => {
+  const designer = { id: 'bot-spec', name: 'system-engineer', slot: 'system-engineer', role: 'spec', githubLogin: null, maxTasks: 1 };
+  const design = { ...issue(141, 'Say on a waiting card who it waits for', 'spec'), updatedAt: minutesAgo(41), body: '', labels: ['adlc:spec'] };
+  const nextSweep = new Date(NOW.getTime() + 24 * 60_000).toISOString();
+  const items = async (extra: Record<string, unknown> = {}) => {
+    const { attentionItems } = await load();
+    return attentionItems({
+      now: NOW,
+      gates: [],
+      tasks: [],
+      bots: [...BOTS, designer],
+      repos: REPOS,
+      issues: [design],
+      requests: [],
+      stallEvents: [],
+      waiting: { nextSweepAt: nextSweep },
+      ...extra,
+    } as never).filter((item) => item.kind === 'work_stuck');
+  };
+
+  it('is a system card naming the seat, why nothing started it, and Start it now', async () => {
+    const [stuck, ...more] = await items();
+    expect(more).toEqual([]);
+    expect(stuck).toMatchObject({
+      id: 'stuck:openadlc-testbed#141',
+      kind: 'work_stuck',
+      group: 'system',
+      since: minutesAgo(41),
+      subject: { repo: 'openadlc-testbed', number: 141, ref: 'openadlc-testbed#141' },
+      bot: { name: 'system-engineer', role: 'spec' },
+      headline: 'Nothing has started openadlc-testbed#141 for 41 min, and the system engineer is free',
+    });
+    expect(stuck?.detail).toBe(
+      'openadlc-testbed#141 waits for its design pass, the system engineer has room for it, and nothing has started it in over 3 minutes. ' +
+        'Nothing has tried it since the seat had room, so the stage sweep starts it, in 24 min. ' +
+        'Start it now; if it still does not start, its thread says what it last did.',
+    );
+    expect(stuck?.actions).toEqual([
+      { kind: 'start_work', label: 'Start it now', subject: 'openadlc-testbed#141' },
+      { kind: 'open_thread', label: 'Open thread', bot: 'system-engineer' },
+      { kind: 'open_url', label: 'Open the issue', url: 'https://github.com/janedoe/openadlc-testbed/issues/141' },
+    ]);
+  });
+
+  it('clears once work starts on it', async () => {
+    const designing = task({ botId: 'bot-spec', kind: 'spec', subjectRef: 'openadlc-testbed#141', state: 'running' });
+    expect(await items({ tasks: [designing] })).toEqual([]);
+  });
+
+  it('is not said before the limit, for work waiting on a busy seat, or where intake has a card of its own', async () => {
+    expect(await items({ issues: [{ ...design, updatedAt: minutesAgo(2) }] })).toEqual([]);
+    const elsewhere = task({ botId: 'bot-spec', kind: 'spec', subjectRef: 'openadlc-testbed#99', state: 'running' });
+    expect(await items({ tasks: [elsewhere] })).toEqual([]);
+    const triage = { ...design, stage: 'intake' as never, labels: ['adlc:intake'] };
+    expect((await items({ issues: [triage] })).map((item) => item.id)).toEqual(['stuck:openadlc-testbed#141']);
+    expect(await items({ issues: [triage], intakeStalls: [{ at: minutesAgo(30), payload: { subjectRef: 'openadlc-testbed#141', tries: 2 } }] })).toEqual([]);
+  });
+
+  it('says when no sweep will come', async () => {
+    const [stuck] = await items({ waiting: { nextSweepAt: null } });
+    expect(stuck?.detail).toContain('the stage sweep that would is off on this bridge (OPENADLC_JOB_STAGES_MINUTES=0)');
+  });
+
+  it('says what kept back work its seat turned away, which starts within a minute of the seat having room', async () => {
+    const turnedAway = { at: minutesAgo(41), payload: { subjectRef: 'openadlc-testbed#141', repo: 'openadlc-testbed', issue: 141, stage: 'spec', seat: 'system-engineer', botId: 'bot-spec', maxTasks: 1 } };
+    const [stuck] = await items({ waiting: { nextSweepAt: nextSweep, seatWaitEvents: [turnedAway] } });
+    expect(stuck?.detail).toContain('The seat turned it away while it was full, and work a seat turned away starts within a minute of the seat having room');
+  });
+
+  it('says nothing is stuck where nothing said what work waits on', async () => {
+    expect(await items({ waiting: undefined })).toEqual([]);
   });
 });
