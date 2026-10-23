@@ -69,6 +69,10 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'GET /v1/attachments/:id': 'user',
   // Removing one for good is an admin's, and audited.
   'DELETE /v1/attachments/:id': 'admin',
+  // The console's name and logo, which every person using it sees; an admin
+  // changes them through PATCH /v1/install.
+  'GET /v1/brand': 'user',
+  'GET /v1/brand/logo': 'user',
 
   // Moving a card between stages.
   'POST /v1/board/move': 'admin',

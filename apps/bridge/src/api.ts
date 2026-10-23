@@ -120,6 +120,7 @@ import { doneSince, itemCards, lonePulls, loosePulls, readBoardActivity, readBoa
 import { describeSubject } from './thread-view.js';
 import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
+import { checkConsoleLogo, checkConsoleName, decodeLogo, LOGO_POLICY, logoMediaType } from './brand.js';
 import { defaultItemLinkDeps, registerItemLinkRoutes, registerItemRoutes } from './item-routes.js';
 import { itemKey, itemOf, offeredGate, requestSubject, resolveItem } from './items.js';
 import { PlanChanges, registerPlanChangeRoutes } from './plan-changes.js';
@@ -2485,6 +2486,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     return {
       organization: live.organization,
       installName: live.installName,
+      // The logo is left out: it is up to 350 KB, and `GET /v1/brand` says whether one is set.
+      consoleName: stored.consoleName ?? '',
       attributionMode: live.attributionMode,
       githubClientId: live.gitHubClientId,
       // The bot that is the automation account now — its handle once one is
@@ -2505,6 +2508,42 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       storedKeys: Object.keys(stored),
       webhookUrl: `${live.publicUrl || 'https://your-bridge.example.com'}/webhooks/github`,
     };
+  });
+
+  /**
+   * The console's name and logo, for everyone using it: the root layout reads
+   * it on every page load. Only a digest of the logo, so a 350 KB image is not
+   * read out on each one; its version changes with it, which is what lets the
+   * console cache the image under its address (`brand.ts`).
+   */
+  router.get('/v1/brand', async () => {
+    const [name, logo] = await Promise.all([settings.getSetting('consoleName'), settings.settingDigest('consoleLogo')]);
+    const mediaType = logo ? logoMediaType(logo.head) : null;
+    return {
+      name: name || null,
+      logo: logo && mediaType ? { mediaType, version: logo.digest.slice(0, 12) } : null,
+    };
+  });
+
+  /**
+   * The logo itself, served as the type it was checked to be, never sniffed
+   * again, and sandboxed with no script source: an SVG opened on its own runs
+   * nothing, and the console only draws it through an `<img>`.
+   */
+  router.get('/v1/brand/logo', async ({ res }) => {
+    const stored = await settings.getSetting('consoleLogo');
+    const logo = stored ? decodeLogo(stored) : null;
+    if (!logo) throw new HttpFailure(404, 'no logo is set for the console; an admin sets one in Settings → Appearance');
+    res.writeHead(200, {
+      'content-type': logo.mediaType,
+      'content-length': String(logo.bytes.length),
+      'content-disposition': 'inline',
+      'x-content-type-options': 'nosniff',
+      'content-security-policy': LOGO_POLICY,
+      'cache-control': 'private, max-age=300',
+    });
+    res.end(logo.bytes);
+    return STREAMING;
   });
 
   /**
@@ -2918,6 +2957,17 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
   router.patch('/v1/install', async ({ body, identity }) => {
     const input = await body<Record<string, unknown>>();
     const written: string[] = [];
+    // Checked before anything is written, so a refused name or logo leaves
+    // every other key in the request unwritten as well.
+    const checked = new Map<string, string>();
+    for (const [key, check] of [['consoleName', checkConsoleName], ['consoleLogo', checkConsoleLogo]] as const) {
+      if (!(key in input)) continue;
+      const value = input[key];
+      if (typeof value !== 'string') throw new HttpFailure(400, `${key} must be a string`);
+      const result = check(value);
+      if (!result.ok) throw new HttpFailure(400, result.error);
+      checked.set(key, result.value);
+    }
 
     for (const [key, value] of Object.entries(input)) {
       if (!settings.isSettingKey(key)) throw new HttpFailure(400, `${key} is not a setting`);
@@ -2978,6 +3028,13 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
         const trimmed = value.trim();
         if (trimmed.length === 0) await getSecretStore().delete(appClientSecretRef());
         else await getSecretStore().set(appClientSecretRef(), trimmed);
+        written.push(key);
+        continue;
+      }
+
+      const normalised = checked.get(key);
+      if (normalised !== undefined) {
+        await settings.setSetting(key, normalised, identity);
         written.push(key);
         continue;
       }

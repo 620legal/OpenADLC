@@ -82,8 +82,9 @@ function isoOrNull(value: unknown): string | null {
   return value === null || value === undefined ? null : iso(value);
 }
 
-async function storedSettings(): Promise<Record<string, string>> {
-  const all = await settings.allSettings();
+export async function storedSettings(): Promise<Record<string, string>> {
+  // The large ones too: a backup without them would restore an install without its logo.
+  const all = await settings.allSettings({ large: true });
   return Object.fromEntries(Object.entries(all).filter((entry): entry is [string, string] => entry[1] !== undefined));
 }
 

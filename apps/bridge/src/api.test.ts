@@ -160,6 +160,12 @@ vi.mock('@openadlc/db', () => ({
       }
     }),
     allSettings: vi.fn(async () => ({ ...stored.settings })),
+    settingDigest: vi.fn(async (key: string) => {
+      const value = stored.settings[key];
+      if (value === undefined) return null;
+      const { createHash } = await import('node:crypto');
+      return { digest: createHash('md5').update(value).digest('hex'), head: value.slice(0, 40) };
+    }),
   },
   tasks: {
     STOPPED_BY_PERSON: 'stopped by a person',
@@ -1786,6 +1792,83 @@ describe('the organization, written through PATCH /v1/install', () => {
       expect(((await response.json()) as { error: string }).error).toContain('is not a GitHub login');
     }
     expect(vi.mocked(settings.setSetting)).not.toHaveBeenCalled();
+  });
+});
+
+describe('the console’s name and logo', () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+  const SVG = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+  const dataUrl = (type: string, bytes: Buffer) => `data:${type};base64,${bytes.toString('base64')}`;
+  const patch = (body: Record<string, unknown>) =>
+    fetch(`${bridgeUrl}/v1/install`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const brand = async () => (await fetch(`${bridgeUrl}/v1/brand`)).json() as Promise<{ name: string | null; logo: { mediaType: string; version: string } | null }>;
+
+  beforeEach(() => {
+    vi.mocked(audit).mockClear();
+  });
+
+  it('stores a name trimmed and a logo as checked, audits the keys and never the values, and clears each with an empty value', async () => {
+    expect(await brand()).toEqual({ name: null, logo: null });
+
+    // The answer is read from the effective config, which this test's bridge
+    // has none of; what matters is the store.
+    await patch({ consoleName: '  Acme Legal  ', consoleLogo: dataUrl('image/png', PNG) });
+    expect(stored.settings.consoleName).toBe('Acme Legal');
+    expect(stored.settings.consoleLogo).toBe(dataUrl('image/png', PNG));
+    const entry = vi.mocked(audit).mock.calls.find(([one]) => (one as { action: string }).action === 'install.configured')?.[0] as { payload: unknown };
+    expect(entry.payload).toEqual({ keys: ['consoleName', 'consoleLogo'] });
+    expect(JSON.stringify(entry)).not.toContain('Acme Legal');
+
+    const first = await brand();
+    expect(first).toMatchObject({ name: 'Acme Legal', logo: { mediaType: 'image/png' } });
+    expect(first.logo?.version).toMatch(/^[0-9a-f]{12}$/);
+
+    await patch({ consoleLogo: dataUrl('image/svg+xml', SVG) });
+    const second = await brand();
+    expect(second.logo).toMatchObject({ mediaType: 'image/svg+xml' });
+    expect(second.logo?.version).not.toBe(first.logo?.version);
+
+    await patch({ consoleName: '', consoleLogo: '' });
+    expect(stored.settings).toEqual({});
+    expect(await brand()).toEqual({ name: null, logo: null });
+  });
+
+  it('refuses a name or a logo that does not check, and writes nothing else in the request', async () => {
+    stored.settings = { consoleName: 'Acme' };
+    for (const body of [
+      { operatorEmail: 'ops@example.test', consoleName: 'a'.repeat(41) },
+      { operatorEmail: 'ops@example.test', consoleName: '   ' },
+      { operatorEmail: 'ops@example.test', consoleLogo: dataUrl('image/png', Buffer.from('just some text')) },
+      { operatorEmail: 'ops@example.test', consoleLogo: dataUrl('image/gif', Buffer.from('GIF89a')) },
+      { consoleLogo: 42 },
+    ]) {
+      const response = await patch(body);
+      expect(response.status, JSON.stringify(body).slice(0, 80)).toBe(400);
+    }
+    const refused = await patch({ consoleLogo: dataUrl('image/png', Buffer.concat([PNG, Buffer.alloc(300 * 1024)])) });
+    expect(((await refused.json()) as { error: string }).error).toContain('PNG, JPG, SVG or WebP image of at most 256 KB');
+    expect(vi.mocked(settings.setSetting)).not.toHaveBeenCalled();
+    expect(stored.settings).toEqual({ consoleName: 'Acme' });
+  });
+
+  it('serves the logo as the type it was checked to be, never sniffed, and sandboxed with no script source', async () => {
+    expect((await fetch(`${bridgeUrl}/v1/brand/logo`)).status).toBe(404);
+
+    stored.settings.consoleLogo = dataUrl('image/svg+xml', SVG);
+    const response = await fetch(`${bridgeUrl}/v1/brand/logo`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/svg+xml');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    const policy = response.headers.get('content-security-policy') ?? '';
+    expect(policy).toContain('sandbox');
+    expect(policy).toContain("default-src 'none'");
+    expect(policy).not.toContain('script-src');
+    expect(policy).not.toContain('allow-scripts');
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(SVG);
   });
 });
 

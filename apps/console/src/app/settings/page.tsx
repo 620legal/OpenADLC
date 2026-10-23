@@ -32,7 +32,7 @@ export const dynamic = 'force-dynamic';
  * caps, summarised, with the amounts edited on their own page; a backup of the
  * install; pausing new work, across the install or in
  * chosen repositories; who may use the console; and how it looks: the color
- * mode, and each repository's and crew member's color.
+ * mode, the console's name and logo, and each repository's and crew member's color.
  */
 export default async function SettingsPage() {
   // Settings are an admin's: a user has no link here, and the bridge refuses
@@ -128,7 +128,8 @@ export default async function SettingsPage() {
 
             <UsersSection initial={users} me={me?.known ? me.email : ''} identityMode={me?.known ? me.identityMode : undefined} />
 
-            <AppearanceSection repositories={repos.repos} crew={crew.bots} />
+            {/* The console's name and logo, as the root layout read them for the header. */}
+            <AppearanceSection repositories={repos.repos} crew={crew.bots} withBrand />
           </main>
         </div>
       </AppShell>

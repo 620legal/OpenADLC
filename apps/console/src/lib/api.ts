@@ -840,6 +840,35 @@ export const readMe = cache(async (): Promise<Me | null> => {
   }
 });
 
+/** The console's name and logo at the top left of every page; null for either means OpenADLC's own. */
+export interface Brand {
+  name: string | null;
+  /** The console's own address for the image, versioned so a new logo is never an old one from the cache. */
+  logoUrl: string | null;
+}
+
+export const NO_BRAND: Brand = { name: null, logoUrl: null };
+
+/**
+ * The brand, once per page, read fresh on every request: a change shows on
+ * the next page load with nothing restarted. A bridge that did not answer
+ * leaves the header saying "OpenADLC", as it did before there was one.
+ */
+export const readBrand = cache(async (): Promise<Brand> => {
+  try {
+    const response = await fetch(`${BRIDGE_URL}/v1/brand`, { cache: 'no-store', headers: await identityHeaders(), signal: AbortSignal.timeout(ME_READ_MS) });
+    if (!response.ok) return NO_BRAND;
+    const body = (await response.json()) as { name?: string | null; logo?: { version?: string } | null };
+    const version = body.logo?.version;
+    return {
+      name: typeof body.name === 'string' && body.name.trim() ? body.name : null,
+      logoUrl: version ? `/api/brand/logo?v=${encodeURIComponent(version)}` : null,
+    };
+  } catch {
+    return NO_BRAND;
+  }
+});
+
 async function get<T>(path: string, init: { signal?: AbortSignal } = {}): Promise<T> {
   const response = await fetch(`${BRIDGE_URL}${path}`, {
     cache: 'no-store',

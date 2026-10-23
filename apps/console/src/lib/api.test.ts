@@ -12,6 +12,8 @@ vi.mock('./identity', () => ({ identityHeaders: async () => ({}) }));
 let bridge: Server;
 /** What `/v1/me` adds for the mode it runs in; nothing, as a bridge older than the console does. */
 let mode: Record<string, string> = {};
+/** What `/v1/brand` answers: a status and a body. */
+let brand: { status: number; body: unknown } = { status: 200, body: { name: null, logo: null } };
 
 beforeAll(async () => {
   // Answers nothing, ever: GitHub hanging behind the bridge. Except who is
@@ -21,6 +23,10 @@ beforeAll(async () => {
     if (request.url === '/v1/costs') {
       response.writeHead(500, { 'content-type': 'application/json' });
       return response.end(JSON.stringify({ error: 'the database is not answering' }, null, 2));
+    }
+    if (request.url === '/v1/brand') {
+      response.writeHead(brand.status, { 'content-type': 'application/json' });
+      return response.end(JSON.stringify(brand.body));
     }
     if (request.url !== '/v1/me') return;
     setTimeout(() => response.end(JSON.stringify({ email: 'bob@exampleco.com', role: 'user', ...mode })), 2_000);
@@ -69,5 +75,27 @@ describe('a read the bridge answered with an error', () => {
     const error = await api.costs().catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(BridgeAnswered);
     expect(error).toMatchObject({ status: 500, said: 'the database is not answering', message: 'the bridge answered 500 to /v1/costs: the database is not answering' });
+  });
+});
+
+describe('the console’s name and logo, read for the layout', () => {
+  it('gives the name, and the logo’s address with its version, so a new logo is never an old one from the cache', async () => {
+    const { readBrand } = await import('./api');
+    brand = { status: 200, body: { name: 'Acme Legal', logo: { mediaType: 'image/png', version: '0123456789ab' } } };
+    expect(await readBrand()).toEqual({ name: 'Acme Legal', logoUrl: '/api/brand/logo?v=0123456789ab' });
+    brand = { status: 200, body: { name: null, logo: null } };
+    expect(await readBrand()).toEqual({ name: null, logoUrl: null });
+  });
+
+  it('gives neither when the bridge refuses or answers nothing it can read, so the header still says OpenADLC', async () => {
+    const { readBrand } = await import('./api');
+    try {
+      brand = { status: 500, body: { error: 'the database is not answering' } };
+      expect(await readBrand()).toEqual({ name: null, logoUrl: null });
+      brand = { status: 200, body: 'not json at all' };
+      expect(await readBrand()).toEqual({ name: null, logoUrl: null });
+    } finally {
+      brand = { status: 200, body: { name: null, logo: null } };
+    }
   });
 });

@@ -9,7 +9,7 @@ import { RepoColorsProvider, RepoDot } from '@/components/repo-badge';
 import { labelIn } from '@/lib/bot-label';
 import { cn } from '@/lib/cn';
 import { crewLine, needsYouLine } from '@/lib/crew';
-import type { Role } from '@/lib/api';
+import type { Brand, Role } from '@/lib/api';
 import { boardHref, NAV, spendLevel, type HeaderData, type Page } from '@/lib/header';
 import type { RepoColorMap } from '@/lib/repo-colors';
 import { money } from '@/lib/when';
@@ -29,6 +29,46 @@ export function RoleProvider({ role, children }: { role: Role; children: ReactNo
 
 export function useRole(): Role {
   return useContext(RoleContext);
+}
+
+/**
+ * The console's name and logo, read by the root layout once per page, for
+ * everyone. Nothing, when nothing says otherwise — a bridge that did not
+ * answer, a component drawn in a test — is the header as it always was.
+ */
+const BrandContext = createContext<Brand>({ name: null, logoUrl: null });
+
+export function BrandProvider({ brand, children }: { brand: Brand; children: ReactNode }) {
+  return <BrandContext.Provider value={brand}>{children}</BrandContext.Provider>;
+}
+
+export function useBrand(): Brand {
+  return useContext(BrandContext);
+}
+
+/**
+ * The top left of both headers: the logo, when one is set, and the name.
+ *
+ * The logo is only ever an `<img>`, which never runs a script whatever an SVG
+ * holds, held to the row's height and never stretched. It is decorative: the
+ * link's text is the name, so a screen reader hears it once. The name is
+ * text, never markup, and cut short with an ellipsis rather than pushing the
+ * wide header onto a second line at 768px.
+ */
+function BrandMark({ compact = false }: { compact?: boolean }) {
+  const { name, logoUrl } = useBrand();
+  const shown = name ?? 'OpenADLC';
+  return (
+    <>
+      {logoUrl && (
+        // eslint-disable-next-line @next/next/no-img-element -- next/image would fetch it through its optimiser, which does not take an SVG
+        <img data-brand-logo src={logoUrl} alt="" className="h-7 w-auto max-w-[7rem] shrink-0 object-contain" />
+      )}
+      <span data-brand-name title={name ?? undefined} className={cn('truncate', compact ? 'max-w-[11rem]' : 'max-w-[9rem] lg:max-w-[14rem]')}>
+        {shown}
+      </span>
+    </>
+  );
 }
 
 /** The navigation this person has: Settings is an admin's. */
@@ -69,8 +109,8 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
     <>
       <header data-wide-header className="hidden h-14 shrink-0 items-center gap-3 whitespace-nowrap border-b border-edge bg-panel px-4 md:flex lg:gap-4 xl:gap-6 xl:px-6">
         <div className="flex min-w-0 items-center gap-2.5">
-          <Link href={boardHref(repo)} className="shrink-0 text-[15px] font-semibold tracking-tight text-body">
-            OpenADLC
+          <Link href={boardHref(repo)} className="flex min-w-0 shrink items-center gap-2 text-[15px] font-semibold tracking-tight text-body">
+            <BrandMark />
           </Link>
           <RepoSwitcher repos={data.repos} colors={data.repoColors} current={repo} />
         </div>
@@ -113,8 +153,8 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
 
       <header className="shrink-0 border-b border-edge bg-panel px-4 py-2.5 md:hidden">
         <div className="flex items-center gap-2.5">
-          <Link href={boardHref(repo)} className="text-base font-semibold tracking-tight text-body">
-            OpenADLC
+          <Link href={boardHref(repo)} className="flex min-w-0 shrink items-center gap-2 text-base font-semibold tracking-tight text-body">
+            <BrandMark compact />
           </Link>
           <RepoSwitcher repos={data.repos} colors={data.repoColors} current={repo} compact />
           <IntakeDialog repos={data.repos} labelOf={labelOf} defaultRepo={repo}>

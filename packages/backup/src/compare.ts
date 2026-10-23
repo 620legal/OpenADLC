@@ -117,6 +117,8 @@ const SETTING_LABELS: Record<string, string> = {
   unownedIssues: 'The issues waiting on a person',
   heldItems: 'The work items held',
   testingDeploy: 'Which repositories have a testing deploy',
+  consoleName: 'The console’s name',
+  consoleLogo: 'The console’s logo',
 };
 
 /** Labelled, but a JSON value nobody reads by eye, so only said to differ. */
@@ -130,6 +132,8 @@ const STRUCTURED_SETTINGS = new Set([
   'unownedIssues',
   'heldItems',
   'testingDeploy',
+  // A data URL of up to 350 KB, which says nothing to a person printed twice.
+  'consoleLogo',
 ]);
 
 /** The App's parts, which are taken or kept together: one app's client id with another's key is neither. */

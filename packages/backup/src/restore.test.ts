@@ -553,6 +553,27 @@ describe('how each bot looks, in a backup and a restore', () => {
   });
 });
 
+describe('the console’s name and logo, compared with a backup’s', () => {
+  it('names both, shows the name by value, and only says the logo differs rather than printing two data URLs', () => {
+    const contents = archive();
+    contents.settings.consoleName = 'Acme Legal';
+    contents.settings.consoleLogo = 'data:image/png;base64,iVBORw0KGgoAAAA=';
+    const install = memoryInstall({ settings: { consoleName: 'Acme', consoleLogo: 'data:image/png;base64,iVBORw0KGgoBBBB=' } });
+    const items = itemsOf(compareInstall({ contents, here: install.view(), signIns: [], historyHere: null }));
+
+    expect(items.find((one) => one.key === 'setting:consoleName')).toMatchObject({
+      label: 'The console’s name',
+      state: 'different',
+      differences: ['Acme here, Acme Legal in the backup'],
+    });
+    expect(items.find((one) => one.key === 'setting:consoleLogo')).toMatchObject({
+      label: 'The console’s logo',
+      state: 'different',
+      differences: ['the backup’s is another one'],
+    });
+  });
+});
+
 describe('a history backup restored into the install it came from', () => {
   it('restoring a history backup into its own install adds nothing', async () => {
     // The archive keeps each audit line's and cost's time to the millisecond;
