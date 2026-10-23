@@ -22,6 +22,7 @@ import {
   seatHealth,
   sharesAccountWith,
   taskItem,
+  tasksAtOnce,
   thinksWithNothing,
 } from '@/lib/crew';
 import type { AccountListing } from '@/lib/model-onboarding';
@@ -81,7 +82,7 @@ export function SeatTable({
             const fix = state === 'not-connected' ? null : reconnectLink(health);
             const current = bot.task ? taskItem(bot.task) : null;
             const repo = showRepo ? nowRepo(bot) : null;
-            const queue = queueLine(bot.queue);
+            const queue = queueLine(bot.queue, tasksAtOnce(bot));
             const sharing = sharesAccountWith(bot, crew);
             return (
               <tr

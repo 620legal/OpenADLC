@@ -231,6 +231,12 @@ export interface SeatQueue {
   waiting: number;
   queued: number;
   next: { ref: string; title: string | null } | null;
+  /**
+   * The running tasks a person's answer resumed, named only while the seat
+   * runs more than its tasks at once: a task waiting on an answer does not
+   * hold its seat, and its resume does not wait for one. Absent from an older bridge.
+   */
+  resumed?: { ref: string; title: string | null }[];
 }
 
 export type SeatOutcome = 'done' | 'sent_back' | 'failed' | 'stopped';

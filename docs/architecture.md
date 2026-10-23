@@ -138,7 +138,15 @@ none yet, says its kind of work instead ("writing the change").
    what it should look like, data, verification, what is out of scope — one
    question at a time, the most decisive first. A question opens a
    **gate**: the task pauses, and the question waits in Needs you (and on the
-   issue, for an issue). The answer resumes the task. Each request is a **work
+   issue, for an issue). The answer resumes the task. A paused task does not
+   count against its seat's tasks at once (`tasks.seatHasRoom`), so the seat
+   goes on to other work while the question waits; its computer, while kept,
+   still counts against its host's room (`hosts.taskRoom`), and the seat
+   starts nothing on the same subject beside it (`tasks.liveTaskOn`). The
+   answer resumes it whatever its seat runs by then, since a resume is the
+   same task going on, not a new start; only a host with no room makes the
+   resume wait. The Crew page says a seat that is running past its tasks at
+   once, and which task an answer resumed. Each request is a **work
    item** of its own (`apps/bridge/src/items.ts`): the conversation about it is
    every thread about the request, the issue it becomes and that issue's pull
    request, whichever seat said it, labelled by the role that said it

@@ -3423,16 +3423,29 @@ async function outcomeOf(task: { id: string; state: string }): Promise<'done' | 
 }
 
 /**
- * A seat's work in hand: running (a task paused with its computer kept is
- * still in hand), waiting on a person, and queued. Next is its oldest queued
- * task, or for intake the oldest request in line when it has none.
+ * A seat's work in hand: running (a task paused with no question open, owed
+ * its resume, with them), waiting on a person, and queued. Next is its oldest
+ * queued task, or for intake the oldest request in line when it has none.
+ *
+ * A task waiting on a person's answer does not hold its seat
+ * (`tasks.seatHasRoom`), so the seat takes other work meanwhile, and the
+ * answer resumes it whatever the seat is running by then. A seat running more
+ * than its tasks at once is that, and `resumed` names the tasks an answer
+ * resumed, so "2 running" on a seat of one says why rather than looking like
+ * a limit that did not hold.
  */
 export async function queueOf(
-  bot: { role: string },
+  bot: { role: string; maxTasks?: number | null },
   unfinished: readonly { id: string; state: string; subjectRef: string; createdAt: string }[],
   gated: ReadonlySet<string>,
   titleOf: (subjectRef: string) => string | null,
-): Promise<{ running: number; waiting: number; queued: number; next: { ref: string; title: string | null } | null }> {
+): Promise<{
+  running: number;
+  waiting: number;
+  queued: number;
+  next: { ref: string; title: string | null } | null;
+  resumed: { ref: string; title: string | null }[];
+}> {
   const waiting = unfinished.filter((task) => task.state === 'paused' && gated.has(task.id)).length;
   const queued = unfinished.filter((task) => task.state === 'queued');
   const running = unfinished.length - waiting - queued.length;
@@ -3444,7 +3457,16 @@ export async function queueOf(
     const first = line.find(stillTried);
     if (first) next = { ref: requestSubject(first.id), title: (first.text.split('\n')[0] ?? '').slice(0, 120) || null };
   }
-  return { running, waiting, queued: queued.length, next };
+  // Asked only of a seat past its tasks at once, by what is running in fact.
+  // A record that cannot be read names none, not a failed crew page.
+  const live = unfinished.filter((task) => task.state === 'running');
+  const over = live.length > maxTasksOf(bot);
+  const answered = over ? await (async () => tasks.resumedAfterAnswer(live.map((task) => task.id)))().catch(() => new Set<string>()) : new Set<string>();
+  const resumed = [...live]
+    .filter((task) => answered.has(task.id))
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+    .map((task) => ({ ref: task.subjectRef, title: titleOf(task.subjectRef) }));
+  return { running, waiting, queued: queued.length, next, resumed };
 }
 
 /** One state for a seat's health, from its failing checks, with each reason and where it is fixed. */

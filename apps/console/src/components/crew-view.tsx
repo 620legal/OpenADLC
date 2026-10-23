@@ -26,6 +26,7 @@ import {
   storeCrewLayout,
   storedCrewLayout,
   taskItem,
+  tasksAtOnce,
   thinksWith,
   thinksWithNothing,
   type CrewLayout,
@@ -197,7 +198,7 @@ function CrewCard({
   const thinks = !thinksWithNothing(bot);
   const health = seatHealth(bot);
   const fix = state === 'not-connected' ? null : reconnectLink(health);
-  const queue = queueLine(bot.queue);
+  const queue = queueLine(bot.queue, tasksAtOnce(bot));
   const results = recentResults(bot);
 
   return (

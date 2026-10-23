@@ -239,12 +239,22 @@ export async function runningSince(ids: readonly string[]): Promise<Map<string, 
 }
 
 /**
- * Whether a seat may start one more task: it holds fewer computers than its
- * `bots.max_tasks` (Crew → "tasks at once"), counting `alsoStarting` the
+ * Whether a seat may start one more task: it has fewer queued or running than
+ * its `bots.max_tasks` (Crew → "tasks at once"), counting `alsoStarting` the
  * caller has started in this pass and not yet seen in the table. A seat that
- * is not there has no room. A paused task that kept its computer counts, as in
- * `countSeatSlotsInUse`: without it a review paused on a question was given a
- * second computer beside it, and both ran once the first resumed.
+ * is not there has no room.
+ *
+ * A task paused on a person's answer is not counted, whether or not it keeps
+ * its computer. Counted while it kept one, a design paused on a question at
+ * 06:00 and answered at 13:38 held its seat's one place all day, and every
+ * other design on the install was turned away as busy. Its computer still
+ * counts against its host's room (`hosts.taskRoom`), and its answer resumes it
+ * even when the seat has filled since (`TaskService.resume`): a resume is the
+ * same task going on, not a new start. It was counted because a review paused
+ * on a question was given a second computer beside it, and both ran once the
+ * first resumed: the same work is now never started beside a paused task
+ * (`liveTaskOn`), and other work beside it is what the seat is for, which the
+ * Crew page names when the resume takes the seat past its number.
  *
  * Every caller that asked "has this bot anything running" asked it because a
  * bot ran one task at a time. With several, the question is whether it has
@@ -253,35 +263,58 @@ export async function runningSince(ids: readonly string[]): Promise<Map<string, 
 export async function seatHasRoom(botId: string, alsoStarting = 0): Promise<boolean> {
   const row = await queryOne<{ room: boolean }>(
     `select (select count(*) from tasks
-              where bot_id = $1 and (state in ('queued','running') or (state = 'paused' and host_id is not null))) + $2 < b.max_tasks as room
+              where bot_id = $1 and state in ('queued','running')) + $2 < b.max_tasks as room
      from bots b where b.id = $1`,
     [botId, alsoStarting],
   );
   return row?.room === true;
 }
 
-/** The task this seat is already running on this subject, if any; see `tasks_one_live_per_bot_subject`. */
+/**
+ * The task this seat already has on this subject, if any: queued, running, or
+ * paused on a person's answer. A paused one is the same work, which its answer
+ * resumes. Once a paused task stopped holding its seat (`seatHasRoom`), a
+ * start beside it would have been the same review or design twice, and the
+ * index (`tasks_one_live_per_bot_subject`, queued and running only) would
+ * have refused the paused one's resume, not the new start.
+ */
 export async function liveTaskOn(botId: string, subjectRef: string): Promise<TaskRecord | null> {
   const row = await queryOne<TaskRow>(
-    `${SELECT} where bot_id = $1 and subject_ref = $2 and state in ('queued','running') order by created_at desc limit 1`,
+    `${SELECT} where bot_id = $1 and subject_ref = $2 and state in ('queued','running','paused') order by created_at desc limit 1`,
     [botId, subjectRef],
   );
   return row ? toTask(row) : null;
 }
 
 /**
- * How many of a seat's tasks hold a computer: queued or running, and paused
- * while its computer is kept (`host_id` set). A paused task whose computer was
- * given back holds nothing until its answer resumes it, so it does not keep
- * its seat from other work.
+ * How many of a seat's tasks at once are taken: its queued and running tasks.
+ * A paused one takes none, as in `seatHasRoom`, though its computer, while
+ * kept, still takes its host's room.
  */
 export async function countSeatSlotsInUse(botId: string): Promise<number> {
   const row = await queryOne<{ count: string }>(
     `select count(*)::text as count from tasks
-     where bot_id = $1 and (state in ('queued','running') or (state = 'paused' and host_id is not null))`,
+     where bot_id = $1 and state in ('queued','running')`,
     [botId],
   );
   return Number(row?.count ?? 0);
+}
+
+/**
+ * Which of these tasks are running again after a person answered the question
+ * they paused on: the answer came after their latest pause. What the Crew page
+ * names when a seat runs more than its tasks at once, which only a resume
+ * takes it past (`seatHasRoom`).
+ */
+export async function resumedAfterAnswer(ids: readonly string[]): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const rows = await query<{ id: string }>(
+    `select t.id from tasks t
+     where t.id = any($1::uuid[]) and t.state = 'running' and t.paused_at is not null
+       and exists (select 1 from gates g where g.task_id = t.id and g.answered_at > t.paused_at)`,
+    [ids],
+  );
+  return new Set(rows.map((row) => row.id));
 }
 
 /**
@@ -299,7 +332,7 @@ export async function countUnfinishedImplementTasks(repoId: string): Promise<num
 
 /**
  * A paused task's computer was given back: it is on no host until it resumes,
- * so it no longer counts against its seat or the hosts' capacity.
+ * so it no longer counts against the hosts' capacity.
  */
 export async function releaseComputer(id: string): Promise<void> {
   await query(`update tasks set host_id = null, container = null, updated_at = now() where id = $1 and state = 'paused'`, [id]);

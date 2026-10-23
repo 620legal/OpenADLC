@@ -11,9 +11,9 @@ import { BotBusyError, PrerequisiteNotReadyError, SpendingCapError, heldAtCap, t
  * task ends or pauses, on a sweep every minute, and when the bridge starts.
  *
  * Free is what `TaskService.open` means by it: the intake seat has room for
- * another task, fewer holding a computer than its `max_tasks` (Crew → "tasks
- * at once", `tasks.seatHasRoom`). A task paused on a person's answer counts
- * only while it keeps its computer.
+ * another task, fewer queued or running than its `max_tasks` (Crew → "tasks
+ * at once", `tasks.seatHasRoom`). A triage paused on a person's answer does
+ * not count, so the next request starts while the question waits.
  *
  * One start at a time: in this process by a chain, across processes — two
  * bridges during a rollout — by an advisory lock, and each request is claimed

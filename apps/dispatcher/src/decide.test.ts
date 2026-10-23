@@ -317,8 +317,8 @@ describe('which builders are free', () => {
     expect(started(await pass())).toEqual([]);
   });
 
-  it('counts a paused build against the repository even once its computer is given back, but not against its seat', async () => {
-    // Paused, its computer released: the seat has room, the repository does not.
+  it('counts a paused build against the repository whether or not it keeps its computer, but not against its seat', async () => {
+    // Paused on a person: the seat has room (`countSeatSlotsInUse`), the repository does not.
     world.unfinished = 0;
     world.inRepo = 1;
 
