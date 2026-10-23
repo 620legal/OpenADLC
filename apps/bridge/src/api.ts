@@ -135,6 +135,7 @@ import { endedWithoutPullRequest, readBranch, workLanded } from './build-left.js
 import { SpendingLimitRejected, applySpendingLimits, spendingView } from './spending-limits.js';
 import { DEFAULT_REMOVAL, RepoRemoval, appOnRepository, appStanding, configuredLabelNames } from './repo-removal.js';
 import type { SendBack } from './send-back.js';
+import type { StageRunner } from './stage-runner.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
 
 export interface ApiDeps {
@@ -182,6 +183,12 @@ export interface ApiDeps {
   afterwards?: Afterwards;
   /** Approve all, the designer's judgement and a refusal after the fact (`plan-changes.ts`); one is made where none is given. */
   planChanges?: PlanChanges;
+  /**
+   * Told when a seat may have room — a task of its ended, its tasks at once
+   * went up — so what it turned away while full starts now (`StageRunner`).
+   * Absent, the hourly stage sweep starts it.
+   */
+  stageRuns?: Pick<StageRunner, 'seatFreed'> | null;
 }
 
 /** Where what runs after an answer belongs: the task it was for, or else a subject's thread. */
@@ -1777,6 +1784,11 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     // label come after (`stopTask`).
     const stopped = await stopTask(params.id ?? '', identity, (input.reason ?? '').trim().slice(0, 300), hostd, { untag, afterwards });
     deps.health?.runSoon(['idle-lease']);
+    // A paused task held its seat; stopped, the seat has room for what it turned away.
+    if (stopped.stopped) {
+      const seat = (await tasks.getTask(stopped.task).catch(() => null))?.botId;
+      if (seat) deps.stageRuns?.seatFreed(seat, 'a task was stopped');
+    }
     return stopped;
   });
 
@@ -3254,6 +3266,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     const updated = await bots.setMaxTasks(bot.id, maxTasks);
     if (!updated) throw new HttpFailure(404, `unknown bot ${params.bot ?? ''}`);
     await audit({ actor: identity, action: 'bot.max_tasks_changed', target: bot.name, payload: { maxTasks, previous: maxTasksOf(bot) } });
+    // Raised, the seat has room for what it turned away while it was full.
+    if (maxTasks > maxTasksOf(bot)) deps.stageRuns?.seatFreed(bot.id, `${bot.name}'s tasks at once went up to ${maxTasks}`);
     return { bot: updated };
   });
 

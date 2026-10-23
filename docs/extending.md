@@ -279,11 +279,16 @@ worked by a new kind of task also needs `TASK_KINDS` in
 A staffed stage needs its bot started when an issue arrives there, and again by
 the hourly sweep, because a webhook that never came, a busy bot and a label
 applied while the bridge was down all look the same. Intake and Design were once
-columns work went into and never left, because nothing staffed them.
+columns work went into and never left, because nothing staffed them. A start its
+seat refused for being full is recorded as waiting on that seat
+(`apps/bridge/src/seat-waits.ts`), and `apps/bridge/src/stage-runner.ts` starts
+it when the seat has room, so a new stage's role gets that for nothing once it
+is in `STAFFING`.
 
 **Tests.** `packages/shared/src/stages.test.ts` (the forward moves, and where a send-back goes),
 `apps/console/src/lib/stages.test.ts` (the copy matches, in order),
 `apps/bridge/src/stage-handoff.test.ts`,
+`apps/bridge/src/stage-runner.test.ts`,
 `apps/console/src/lib/card-status.test.ts` and
 `packages/db/src/migrations.test.ts`.
 

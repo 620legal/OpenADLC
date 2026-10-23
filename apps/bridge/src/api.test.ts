@@ -205,6 +205,8 @@ const assertReady = vi.fn(async (_bot: unknown, _repo: unknown): Promise<void> =
 const open = vi.fn(async (_input: Record<string, unknown>) => ({ taskId: 'task-1', session: 's' }));
 /** The GitHub client a bot acts through; a test gives one. */
 const asBot = vi.fn(async (_bot: string): Promise<unknown> => null);
+/** Told when a seat may have room for what it turned away (`StageRunner`). */
+const seatFreed = vi.fn((_seat: string, _reason: string) => undefined);
 /** What the console's routes leave running once they have answered; a test waits for it. */
 let afterwards: import('./api.js').Afterwards;
 /** What the bridge's console API was built with; a test builds another from it. */
@@ -286,7 +288,9 @@ beforeEach(async () => {
     onboarding: {} as never,
     webhookSetup: {} as never,
     repoSetup: {} as never,
+    stageRuns: { seatFreed },
   };
+  seatFreed.mockClear();
   registerConsoleApi(router, apiDeps);
   bridge = createServer((request, response) => void router.handle(request, response));
   await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
@@ -1143,6 +1147,23 @@ describe('stopping a task that could not finish', () => {
     expect(vi.mocked(audit)).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'task.stopped', payload: expect.objectContaining({ was: 'paused', questionsClosed: 1 }) }),
     );
+  });
+
+  it('gives its seat room for what it turned away, as a task that ended does', async () => {
+    // Paused with its computer, it held one of its seat's tasks at once.
+    task = { ...FAILED, state: 'paused' };
+
+    await stop('its issue merged');
+
+    expect(seatFreed).toHaveBeenCalledWith('bot-intake', 'a task was stopped');
+  });
+
+  it('gives no seat room for a stop it refused', async () => {
+    task = { ...FAILED, state: 'running' };
+
+    await stop();
+
+    expect(seatFreed).not.toHaveBeenCalled();
   });
 
   describe('needs-human, which the question put on its issue', () => {
@@ -2413,6 +2434,17 @@ describe('how many tasks a seat runs at once, from Crew', () => {
     expect(vi.mocked(audit)).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'bot.max_tasks_changed', target: 'openadlc-atlas-janedoe', payload: { maxTasks: 3, previous: 1 } }),
     );
+  });
+
+  it('starts what the seat turned away while it was full once it is raised, and not when it is lowered', async () => {
+    await patch({ maxTasks: 2 });
+    expect(seatFreed).toHaveBeenCalledWith('bot-1', 'openadlc-atlas-janedoe\'s tasks at once went up to 2');
+
+    seatFreed.mockClear();
+    vi.mocked(bots.getBotByName).mockImplementation(async (name: string) => (name === BUILDER.name ? ({ ...BUILDER, maxTasks: 3 } as never) : null));
+    await patch({ maxTasks: 2 });
+    await patch({ maxTasks: 3 });
+    expect(seatFreed).not.toHaveBeenCalled();
   });
 
   it('refuses anything but a whole number from 1 to 16, storing nothing', async () => {
