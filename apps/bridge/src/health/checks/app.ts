@@ -2,6 +2,7 @@ import { DeviceAuthError, GitHubApiError, appJwt, type AppApi, type AppCredentia
 import {
   MANIFEST_PERMISSIONS,
   PERMISSION_NAMES,
+  RELEASE_EVENT,
   REQUIRED_APP_PERMISSIONS,
   WEBHOOK_EVENTS,
   WEBHOOK_EVENT_NAMES,
@@ -200,6 +201,11 @@ export interface AppChecks {
   selection: HealthCheck;
   /** Whether GitHub says the app lacks a permission, by its API name. False when it cannot be asked. */
   lacks(permission: string): Promise<boolean>;
+  /**
+   * The events GitHub says the app is subscribed to, and the page where they
+   * are ticked; null without the app's key. Throws when GitHub could not be asked.
+   */
+  events(): Promise<{ events: string[]; page: string } | null>;
 }
 
 export function appChecks(reader: AppReader): AppChecks {
@@ -355,6 +361,10 @@ export function appChecks(reader: AppReader): AppChecks {
       // deployed and no promote moved a card to Done. Unlike a permission, a
       // subscription needs no installation to accept it.
       for (const event of WEBHOOK_EVENTS) {
+        // Only a repository that ships by release needs it, and the deploy
+        // sweep finds a release without it: said there, where one does
+        // (`ships-by-release`), not here as blocking every install.
+        if (event === RELEASE_EVENT) continue;
         const named = WEBHOOK_EVENT_NAMES[event];
         if (facts.events.includes(event)) {
           results.push({ subject: `event:${event}`, ok: true, fixed: `The OpenADLC app is subscribed to “${named}” now` });
@@ -618,7 +628,12 @@ export function appChecks(reader: AppReader): AppChecks {
     },
   };
 
-  return { installed, permissions, deviceFlow, tokenExpiry, clientSecret, selection, lacks };
+  const events = async (): Promise<{ events: string[]; page: string } | null> => {
+    const facts = await app();
+    return facts ? { events: facts.events, page: appPermissionsUrl(facts.slug, facts.organization) } : null;
+  };
+
+  return { installed, permissions, deviceFlow, tokenExpiry, clientSecret, selection, lacks, events };
 }
 
 /** A repository's row from what the app's reach says about it: the card names the step and links to where it is done. */

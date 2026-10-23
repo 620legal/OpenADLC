@@ -944,6 +944,24 @@ export async function switchToAutomatic(repo: string): Promise<{ ok: boolean; er
 }
 
 /**
+ * Sets whether a repository ships by release: its merged cards wait in Ship
+ * until a published release contains their merge, and no testing deploy is
+ * dispatched. Written in the repository's stored rules; one whose rules come
+ * from `.github/openadlc.yml` is refused, with the file to change.
+ */
+export async function setShipsByRelease(repo: string, on: boolean): Promise<{ ok: boolean; shipsByRelease?: boolean; error?: string }> {
+  try {
+    const answer = await call<{ shipsByRelease: boolean }>(`/v1/repos/${encodeURIComponent(repo)}/delivery/ships-by-release`, 'POST', { on });
+    revalidatePath('/');
+    revalidatePath('/settings');
+    revalidatePath(`/settings/repositories/${encodeURIComponent(repo)}`);
+    return { ok: true, shipsByRelease: answer.shipsByRelease };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'the setting was not saved' };
+  }
+}
+
+/**
  * A person's decision about open issues OpenADLC will not take on its own
  * (their author has no access): sent to intake, marked to ignore, or closed.
  * Each issue is its own step; what was not done comes back with why.

@@ -342,3 +342,29 @@ describe('0152, where a person gives a repository Postgres servers of its own fo
     expect(sql).toEqual(['alter table repos add column if not exists task_postgres jsonb']);
   });
 });
+
+describe('0153, for a repository that ships by release', () => {
+  const sql = statements('0153_ships_by_release.sql');
+
+  it('adds when a card shipped and when a merge was made, as columns that start empty', () => {
+    expect(sql).toEqual([
+      'alter table issues add column if not exists shipped_at timestamptz',
+      'alter table deploy_runs add column if not exists merged_at timestamptz',
+    ]);
+  });
+});
+
+describe('0154, which sets 620legal/OpenADLC to ship by release', () => {
+  const sql = statements('0154_openadlc_ships_by_release.sql');
+
+  it('writes testing.on: release into that repository’s stored rules alone, keeping what they already say', () => {
+    expect(sql).toHaveLength(1);
+    const [update] = sql;
+    expect(update).toMatch(/^update repos set delivery_rules = /);
+    expect(update).toContain(`where lower(full_name) = lower('620legal/openadlc')`);
+    // Rules already stored are merged into, the testing block too; none stored start from version 1.
+    expect(update).toContain(`coalesce(delivery_rules, '{"version": 1}'::jsonb) ||`);
+    expect(update).toContain(`coalesce(delivery_rules -> 'testing', '{}'::jsonb) || '{"on": "release"}'::jsonb`);
+    expect(update).not.toMatch(/\bdelete\b|\bdrop\b/);
+  });
+});

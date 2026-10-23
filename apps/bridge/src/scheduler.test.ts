@@ -17,6 +17,7 @@ import {
 import { TaskService } from './task-service.js';
 import { CHECKS_FAILED } from './merge-line.js';
 import { Automation } from './automation.js';
+import { ReleaseShipping } from './release-shipping.js';
 
 /**
  * The store is a fake so a whole deploy sweep can be run. Everything above the
@@ -110,6 +111,7 @@ vi.mock('@openadlc/db', async () => ({
   credentials: {},
   issues: {
     listIssues: vi.fn(async () => store.issues),
+    setShippedAt: vi.fn(async () => undefined),
     setPullRequestNumber: vi.fn(async () => undefined),
     workInFlight: vi.fn(async () => store.inFlight),
   },
@@ -1017,6 +1019,67 @@ describe('a whole deploy sweep', () => {
 
     expect(moves).toEqual([{ repoName: 'openadlc', issueNumber: 44, to: 'done', actor: 'bridge' }]);
     expect(result.actions[0]).toBe('openadlc#44 moved to Done: no testing deploy for this repository');
+  });
+
+  /**
+   * 620legal/OpenADLC ships as a release. Its app was made before OpenADLC
+   * asked for Release events, so no `release` delivery comes: the sweep
+   * lists the releases itself.
+   */
+  it('moves to Done a card whose merge a release contains, where the repository ships by release and its delivery never came, and dispatches nothing', async () => {
+    store.issues = [
+      { ...merged, number: 45, prNumber: 145 },
+      { ...merged, number: 46, prNumber: 146 },
+    ];
+    store.deployRuns = [
+      { sha: 'aaaa4450000', prNumber: 145, createdAt: '2026-10-20T09:00:00.000Z' },
+      { sha: 'aaaa4460000', prNumber: 146, createdAt: '2026-10-22T09:00:00.000Z' },
+    ];
+    const asked: string[] = [];
+    const client = {
+      request: vi.fn(async (_method: string, path: string) => {
+        asked.push(path);
+        if (path.includes('/releases?')) {
+          return [{ tag_name: 'v0.2.0', draft: false, prerelease: false, published_at: '2026-10-21T10:00:00Z', created_at: '2026-10-21T10:00:00Z', html_url: null }];
+        }
+        if (path.includes('/compare/')) return { status: path.includes('aaaa4450000') ? 'ahead' : 'behind' };
+        throw new Error(`${path}: not faked`);
+      }),
+    };
+    const byRelease = { get: vi.fn(async () => ({ rules: { ...DEFAULT_DELIVERY_RULES, testing: { ...DEFAULT_DELIVERY_RULES.testing, on: 'release' } }, readError: null })) };
+    const { scheduler, moves } = sweeper();
+    const releases = new ReleaseShipping({
+      delivery: byRelease as never,
+      client: async () => client as never,
+      moveStage: async (input) => (moves.push(input), { moved: true }),
+    });
+    const pipeline = {
+      releases,
+      checkTestingDeploys: vi.fn(async () => []),
+      checkRollbacks: vi.fn(async () => []),
+      promoteDue: vi.fn(async () => []),
+      sendBackDue: vi.fn(async () => []),
+      retryUndispatched: vi.fn(async () => []),
+      deployTesting: vi.fn(async () => 'dispatched deploy-testing'),
+    };
+    scheduler.useDelivery(pipeline as never, byRelease as never);
+
+    const result = await scheduler.run('deploy');
+
+    expect(moves).toEqual([{ repoName: 'openadlc', issueNumber: 45, to: 'done', actor: 'bridge', reason: 'released in v0.2.0', prNumber: 145 }]);
+    expect(result.actions).toEqual([
+      'openadlc#45 moved to Done: released in v0.2.0, which contains its merge (aaaa445)',
+      'openadlc#46: in Ship until a published release contains its merge; openadlc ships by release',
+      'nothing merged is waiting on a testing deploy',
+    ]);
+    expect(store.said).toEqual(['Moved to Done: released in v0.2.0. The release, published 2026-10-21T10:00:00Z, contains its merge (aaaa445).']);
+    expect(store.audits).toContainEqual(expect.objectContaining({ action: 'deploy.shipped_by_release', target: 'openadlc#45' }));
+    // Not a testing deploy, nor the tip of main to choose one by.
+    expect(pipeline.deployTesting).not.toHaveBeenCalled();
+    expect(asked).toEqual([
+      '/repos/janedoe/openadlc/releases?per_page=100&page=1',
+      '/repos/janedoe/openadlc/compare/aaaa4450000...v0.2.0?per_page=1',
+    ]);
   });
 
   it('looks at each dispatched rollback’s run before it promotes or dispatches again', async () => {

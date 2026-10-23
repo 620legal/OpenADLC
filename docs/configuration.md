@@ -262,7 +262,8 @@ workflow as the OpenADLC app:
 ```yaml
 version: 1
 testing:
-  on: merge                    # or none: merging is shipping, straight to Done
+  on: merge                    # or none: merging is shipping, straight to Done;
+                               # or release: Done when a published release has it
   url: https://testing.example.com   # where the QA bot points; no default
   workflow: deploy-testing     # dispatched with the merge commit as `sha`
   smoke: smoke-testing         # green promotes; red reverts and sends back to build
@@ -354,6 +355,40 @@ with no later deploy to carry it, lets the lease go and leaves the card in
 Ship ([troubleshooting](troubleshooting.md#a-stacked-issue-waits-after-its-base-merged)).
 When the newest merge's testing deploy had nothing to deploy, the older merges
 it carries go to Done with it, those whose own deploy never ran included.
+
+#### Shipping by release
+
+`testing: on: release` is a repository that ships as a release, as OpenADLC
+itself does: its installs take a change only from a `v*` release, so Done means
+"in a release" there, not "merged". A merge then dispatches no testing deploy,
+nothing is promoted, and the merged change's lease is let go as for a merge
+that deploys nothing. Its card stays in Ship, saying **Merged · ships with the
+next release**, and its timeline says it waits for one. A published release,
+not a draft or a prerelease, whose tag's commit contains the merge (GitHub's
+comparison of the merge with the tag is `ahead` or `identical`) moves every
+such card to Done at once (`apps/bridge/src/release-shipping.ts`): `released in
+vX.Y.Z` on the stage move and in the card's timeline, `deploy.shipped_by_release`
+in the audit log, and the card's shipped time is the release's publish time. A
+merge made after the release was published, or one its tag does not contain,
+stays for the next.
+
+A release is heard from its `release` delivery (`published`), and from the
+deploy sweep, which lists the repository's releases published since the oldest
+merge in Ship (at most five pages of a hundred) and compares each merge with
+each of them once per pass, the oldest first. So a missed delivery, a
+prerelease later made a release, or an app not subscribed to **Release** events
+still moves the cards, at the next sweep. The app's manifest asks for the
+event; an app made before it did is told so by the `ships-by-release` check (a
+warning, only where a repository ships by release) and on Settings →
+Repositories, with the app's Permissions & events page to tick it on.
+
+Settings → Repositories has a **Ships by release** box for a repository whose
+rules are not in `.github/openadlc.yml`. Ticked, it writes `testing.on:
+release` into the repository's stored rules (`repos.delivery_rules`), or, where
+there were none, a row saying only that; unticked, that row is removed and the
+Testing deploy choice is read again, and other stored rules get `testing.on:
+merge` back. 620legal/OpenADLC's stored rules are set to ship by release
+(migration `0154`), and the box changes them.
 
 The same file says which changes may be built side by side when their files
 overlap (`apps/dispatcher/src/overlap.ts`). The defaults, which a file that

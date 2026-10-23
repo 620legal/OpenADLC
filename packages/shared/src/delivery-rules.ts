@@ -89,7 +89,7 @@ export const DEFAULT_PATH_POLICY: PathPolicy = pathPolicySchema.parse({});
  *
  *     version: 1
  *     testing:
- *       on: merge                    # or none: merging is shipping
+ *       on: merge                    # or none: merging is shipping; or release: a published release is
  *       url: https://testing.example.com
  *       workflow: deploy-testing
  *       smoke: smoke-testing
@@ -111,7 +111,17 @@ export const deliveryRulesSchema = z.object({
   paths: pathPolicySchema.default({ shared: [...DEFAULT_SHARED_PATHS], exclusive: [...DEFAULT_EXCLUSIVE_PATHS] }),
   testing: z
     .object({
-      on: z.enum(['merge', 'none']).default('merge'),
+      /**
+       * What ships a merge. `merge`: the testing deploy it dispatches, and the
+       * promote after it. `none`: merging is shipping, and its card goes to
+       * Done. `release`: a published release is, as for OpenADLC itself,
+       * whose installs take a change only from a release (`v*` tags): no
+       * testing deploy is dispatched, and a merged card waits in Ship until
+       * a release that is not a draft or a prerelease contains its merge
+       * (`release-shipping.ts` in the bridge). Read as `none`, its cards went
+       * to Done at the merge and said shipped while no install had them.
+       */
+      on: z.enum(['merge', 'none', 'release']).default('merge'),
       /**
        * Where testing is served. Without one the bridge opens no QA run, and
        * with one it names it in what it reports. http(s) only, as the console's
@@ -157,6 +167,11 @@ export const DEFAULT_DELIVERY_RULES: DeliveryRules = deliveryRulesSchema.parse({
 
 /** Rules that ship by merging: no testing deploy, nothing to promote. */
 export const MERGE_IS_SHIPPING: DeliveryRules = deliveryRulesSchema.parse({ version: 1, testing: { on: 'none' }, production: { on: 'none' } });
+
+/** Whether the rules ship by release (`testing.on: release`): a merge waits in Ship for a published release that contains it. */
+export function shipsByRelease(rules: Pick<DeliveryRules, 'testing'> | null | undefined): boolean {
+  return rules?.testing.on === 'release';
+}
 
 /**
  * The rules a `.github/openadlc.yml` holds, or why it holds none.

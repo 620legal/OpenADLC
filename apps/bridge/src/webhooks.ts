@@ -69,6 +69,7 @@ import { stageAfterIntake, type StageHandoff } from './stage-handoff.js';
 import { retakeLease, SendBack } from './send-back.js';
 import { chooseIssueText, editNotTaken } from './vouched-text.js';
 import { workflowFile, type DeployPipeline, type RevertOutcome } from './deploy-pipeline.js';
+import { releaseOf, type GitHubRelease } from './release-shipping.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
 import { askPeopleAgain, BotBusyError, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, reviewStartLock, SubjectClosedError, type TaskService } from './task-service.js';
 import { FORBIDDEN_PUSH, ciKeysChanged, contentChanged, fastPathOf, forbiddenPushGate, reviewSample } from './automation.js';
@@ -87,8 +88,11 @@ const scopeAccepted = new Set<string>();
 /** How long an app client is kept for a repository; its installation token lasts an hour. */
 const APP_CLIENT_MS = 10 * 60 * 1000;
 
-/** The deliveries that can change what may start, each of which asks for a dispatch. */
-const STARTS_WORK = new Set(['issues', 'pull_request', 'deployment_status']);
+/**
+ * The deliveries that can change what may start, each of which asks for a
+ * dispatch: a release moves the cards it ships to Done, as a deployment does.
+ */
+const STARTS_WORK = new Set(['issues', 'pull_request', 'deployment_status', 'release']);
 import { PAUSED_LABEL } from '@openadlc/shared';
 import { forgetHold } from './item-hold.js';
 import { linkIssue, linkPull } from './work-items.js';
@@ -216,6 +220,8 @@ interface WebhookPayload {
     triggering_actor?: { login: string; type?: string; id?: number } | null;
   };
   deployment?: { sha?: string; ref?: string; environment?: string };
+  /** On `release`: the release published, drafted or edited. */
+  release?: GitHubRelease;
   deployment_status?: {
     state?: string;
     environment?: string;
@@ -707,6 +713,8 @@ export class Webhooks {
         return;
       case 'deployment_status':
         return this.onDeploymentStatus(payload);
+      case 'release':
+        return this.onRelease(payload);
       case 'installation':
       case 'installation_repositories':
         return this.onInstallation(payload);
@@ -4054,6 +4062,31 @@ export class Webhooks {
       .request<{ name?: string; display_title?: string | null }>('GET', `/repos/${repoFullName}/actions/runs/${run.id}`)
       .then((fetched) => testedCandidate(fetched, 'deploy-testing'))
       .catch(() => null);
+  }
+
+  /**
+   * A release published. In a repository that ships by release
+   * (`testing.on: release`), the cards in Ship whose merge its tag contains
+   * go to Done, saying which release (`ReleaseShipping.onPublished`); a
+   * draft or a prerelease moves nothing.
+   *
+   * Only `published`. GitHub sends `released` too for the same release, and
+   * the two, handled at once, would each move a card to Done, saying so
+   * twice in its timeline and the audit log. A prerelease made a release
+   * later, which sends only `released`, is the deploy sweep's to find, as is
+   * every release whose delivery never came: it lists the repository's
+   * releases as well.
+   */
+  private async onRelease(payload: WebhookPayload): Promise<void> {
+    if (payload.action !== 'published' || !payload.release || !payload.repository) return;
+    const repo = await repos.getRepoByName(payload.repository.name).catch(() => null);
+    if (!repo || repo.fullName.toLowerCase() !== payload.repository.full_name.toLowerCase()) return;
+    const releases = this.pipeline?.releases;
+    if (!releases) return;
+    const lines = await releases
+      .onPublished(repo, releaseOf(payload.release))
+      .catch((error: unknown) => [`${repo.name}: a published release moved no card: ${error instanceof Error ? error.message : String(error)}`]);
+    for (const line of lines) console.log(`[bridge] ${line}`);
   }
 
   /**

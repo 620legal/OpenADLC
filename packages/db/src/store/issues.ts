@@ -20,12 +20,13 @@ interface IssueRow {
   vouched_body?: string | null;
   vouched_by?: string | null;
   vouched_at?: Date | null;
+  shipped_at?: Date | null;
 }
 
 const SELECT = `
   select i.id, i.repo_id, r.name as repo_name, i.number, i.title, i.stage, i.labels,
          i.declared_paths, i.pr_changed_paths, i.body, i.url, i.pr_number, i.updated_at, i.created_at,
-         i.vouched_title, i.vouched_body, i.vouched_by, i.vouched_at
+         i.vouched_title, i.vouched_body, i.vouched_by, i.vouched_at, i.shipped_at
   from issues i join repos r on r.id = i.repo_id
 `;
 
@@ -62,6 +63,12 @@ export interface IssueRecord {
   createdAt: string;
   /** The text vouched for, on a stranger's issue; null on every other (`setVouched`). */
   vouched?: VouchedText | null;
+  /**
+   * When a card in Done shipped, where its move to Done said (`setShippedAt`):
+   * the release that contained its merge was published then. Null on every
+   * other, and once it leaves Done.
+   */
+  shippedAt?: string | null;
 }
 
 function toIssue(row: IssueRow): IssueRecord {
@@ -84,6 +91,7 @@ function toIssue(row: IssueRow): IssueRecord {
       row.vouched_at && row.vouched_title !== null && row.vouched_title !== undefined
         ? { title: row.vouched_title, body: row.vouched_body ?? '', by: row.vouched_by ?? '', at: row.vouched_at.toISOString() }
         : null,
+    shippedAt: row.shipped_at ? row.shipped_at.toISOString() : null,
   };
 }
 
@@ -149,12 +157,14 @@ export async function upsertIssue(input: {
          -- Absent leaves what is stored: a caller that does not know the body
          -- must not erase it.
          body = coalesce($9, issues.body),
+         -- When it shipped is said only of a card in Done.
+         shipped_at = case when excluded.stage = 'done' then issues.shipped_at end,
          updated_at = now()
        returning *
      )
      select u.id, u.repo_id, r.name as repo_name, u.number, u.title, u.stage, u.labels,
             u.declared_paths, u.pr_changed_paths, u.body, u.url, u.pr_number, u.updated_at, u.created_at,
-            u.vouched_title, u.vouched_body, u.vouched_by, u.vouched_at
+            u.vouched_title, u.vouched_body, u.vouched_by, u.vouched_at, u.shipped_at
      from upserted u join repos r on r.id = u.repo_id`,
     [
       input.repoId,
@@ -345,10 +355,22 @@ export async function setIssueStage(repoId: string, number: number, stage: Stage
                                     'sdlc:intake','sdlc:spec','sdlc:build','sdlc:review','sdlc:merged','sdlc:done')),
          $4
        ),
+       -- When it shipped is said only of a card in Done: one reopened and
+       -- shipped again by a deploy kept the release it left with.
+       shipped_at = case when $3 = 'done' then shipped_at end,
        updated_at = now()
      where repo_id = $1 and number = $2`,
     [repoId, number, stage, `adlc:${stage}`],
   );
+}
+
+/**
+ * When a card in Done shipped, as what moved it there says: the publish time
+ * of the release that contained its merge. Only on a card in Done, and its
+ * row is not marked changed: the move to Done was.
+ */
+export async function setShippedAt(repoId: string, number: number, at: Date): Promise<void> {
+  await query(`update issues set shipped_at = $3 where repo_id = $1 and number = $2 and stage = 'done'`, [repoId, number, at]);
 }
 
 /** Drops an issue from the read model; GitHub remains its record. */

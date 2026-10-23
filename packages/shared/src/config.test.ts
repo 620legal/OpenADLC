@@ -15,7 +15,7 @@ import {
   reposFileSchema,
   reviewRulesSchema,
 } from './config.js';
-import { DEFAULT_DELIVERY_RULES, deliveryRulesFrom, parseDeliveryRules } from './delivery-rules.js';
+import { DEFAULT_DELIVERY_RULES, MERGE_IS_SHIPPING, deliveryRulesFrom, parseDeliveryRules, shipsByRelease, storedDeliveryRules } from './delivery-rules.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -111,6 +111,22 @@ describe('delivery rules', () => {
     expect(parseDeliveryRules('version: 1\nproduction:\n  approval: nobody\n')).toMatchObject({ error: expect.stringMatching(/production\.approval/) });
     expect(parseDeliveryRules('version: 2\n')).toMatchObject({ error: expect.stringMatching(/version/) });
     expect(parseDeliveryRules('testing: [')).toMatchObject({ error: expect.stringMatching(/not YAML/) });
+  });
+
+  /**
+   * 620legal/OpenADLC ships as a release, and installs take a change only
+   * from one: read as merge, a skipped deploy-testing sent each card to Done
+   * at the merge, saying shipped while no install had it.
+   */
+  it('reads a repository that ships by release, from the file and from stored rules alike', () => {
+    const parsed = parseDeliveryRules('version: 1\ntesting:\n  on: release\n');
+    expect(parsed).toMatchObject({ rules: { testing: { on: 'release', workflow: 'deploy-testing' } } });
+    expect('rules' in parsed && shipsByRelease(parsed.rules)).toBe(true);
+    expect(storedDeliveryRules({ version: 1, testing: { on: 'release' } })?.testing.on).toBe('release');
+    expect(deliveryRulesFrom(null, { version: 1, testing: { on: 'release' } }).testing.on).toBe('release');
+    expect(shipsByRelease(DEFAULT_DELIVERY_RULES)).toBe(false);
+    expect(shipsByRelease(MERGE_IS_SHIPPING)).toBe(false);
+    expect(parseDeliveryRules('version: 1\ntesting:\n  on: tag\n')).toMatchObject({ error: expect.stringMatching(/testing\.on/) });
   });
 
   it('takes testing.url only as an http(s) address, as the console does', () => {
