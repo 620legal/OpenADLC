@@ -501,6 +501,20 @@ describe('the deploy sweep decides before it acts', () => {
     if (plan.kind !== 'work') return;
     expect(plan.start).toBeNull();
     expect(plan.hold[0]).toContain('no pull request recorded');
+    // And what to do: nothing that finishes a merge moves it.
+    expect(plan.hold[0]).toContain('it has no merge to deploy, and no deploy will move it to Done; move it there by hand');
+  });
+
+  it('says the older merges stay in Ship once the newest merge’s deploy deployed nothing, not that it carries them', () => {
+    const older: AwaitingDeploy = { repo: 'openadlc', number: 44, prNumber: 144 };
+    const plan = planDeploySweep({
+      ...ready,
+      waiting: [older, waiting],
+      priorDeploys: [{ subjectRef: 'openadlc#145', state: 'running', nothing: 'no run of deploy-testing appeared within 10 minutes of its dispatch' }],
+    });
+    expect(plan.kind === 'work' && plan.hold[0]).toBe(
+      'openadlc#144: older than openadlc#145, the newest merge, whose testing deploy deployed nothing (no run of deploy-testing appeared within 10 minutes of its dispatch); they stay in Ship until a later deploy carries them or a person moves them to Done',
+    );
   });
 
   it('names the missing deploy bot rather than starting a task as nobody', () => {
@@ -837,6 +851,161 @@ describe('a whole deploy sweep', () => {
 
     expect(moves).toEqual([]);
     expect(result.actions.some((line) => line.includes('moved to Done'))).toBe(false);
+  });
+
+  /**
+   * 620legal/OpenADLC#45 and #46 had no testing-deploy record of their own.
+   * The newest merge's run was skipped, and they stayed in Ship "older than
+   * OpenADLC#107, the newest merge, whose deploy carries them", with no
+   * deploy left to come: only each merge's own record was read.
+   */
+  describe('the older merges the newest merge’s deploy carries', () => {
+    /** The newest merge, #145 at the tip of main, has no card left in Ship: it went to Done with its own skipped run. */
+    const carrier = (testingConclusion: string | null, detail: string | null = 'deploy-testing run 39836758586 was skipped') => ({
+      sha: 'f00dcafe',
+      prNumber: 145,
+      testingDispatchedAt: '2026-10-22T09:00:00.000Z',
+      testingConclusion,
+      detail,
+    });
+    const delivering = (scheduler: Scheduler) =>
+      scheduler.useDelivery(
+        {
+          checkTestingDeploys: vi.fn(async () => []),
+          checkRollbacks: vi.fn(async () => []),
+          promoteDue: vi.fn(async () => []),
+          sendBackDue: vi.fn(async () => []),
+          retryUndispatched: vi.fn(async () => []),
+        } as never,
+        { get: vi.fn(async () => ({ rules: DEFAULT_DELIVERY_RULES, readError: null })) } as never,
+      );
+    beforeEach(() => {
+      store.issues = [
+        { ...merged, number: 45, prNumber: 143 },
+        { ...merged, number: 46, prNumber: 144 },
+      ];
+    });
+
+    it('moves them to Done with it when it had nothing to deploy, each saying the run that carried it', async () => {
+      store.deployRuns = [carrier('skipped')];
+      const { scheduler, moves, open } = sweeper();
+      delivering(scheduler);
+
+      const result = await scheduler.run('deploy');
+
+      const why = 'carried by the testing deploy of openadlc#145, the newest merge: deploy-testing run 39836758586 was skipped';
+      expect(moves).toEqual([
+        { repoName: 'openadlc', issueNumber: 45, to: 'done', actor: 'bridge', reason: `merging shipped it: ${why}`, prNumber: 143 },
+        { repoName: 'openadlc', issueNumber: 46, to: 'done', actor: 'bridge', reason: `merging shipped it: ${why}`, prNumber: 144 },
+      ]);
+      expect(result.actions).toEqual([
+        `openadlc#45 moved to Done: merging shipped it, since its testing deploy had nothing to deploy (${why})`,
+        `openadlc#46 moved to Done: merging shipped it, since its testing deploy had nothing to deploy (${why}); no thread on it to say so in`,
+        'nothing merged is waiting on a testing deploy',
+      ]);
+      expect(store.said).toEqual([expect.stringContaining(`Moved to Done: merging shipped it. Its testing deploy had nothing to deploy (${why})`)]);
+      expect(store.audits).toContainEqual(
+        expect.objectContaining({ action: 'deploy.shipped_by_merging', target: 'openadlc#46', payload: expect.objectContaining({ prNumber: 144, sha: 'f00dcafe', why }) }),
+      );
+      expect(open).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['was cancelled for a later deploy', 'superseded'],
+      ['never started', 'not_started'],
+      ['was cancelled with nothing later to carry it then', 'cancelled'],
+    ])('moves one whose own run %s, which a later deploy was to carry', async (_name, own) => {
+      store.deployRuns = [carrier('skipped'), { sha: 'beefcafe', prNumber: 143, testingDispatchedAt: '2026-10-22T08:00:00.000Z', testingConclusion: own, detail: null }];
+      const { scheduler, moves } = sweeper();
+      delivering(scheduler);
+
+      await scheduler.run('deploy');
+
+      expect(moves.map((move) => move.issueNumber)).toEqual([45, 46]);
+    });
+
+    it.each([
+      ['is still running', null],
+      ['failed', 'failure'],
+      ['deployed', 'success'],
+    ])('leaves in Ship one whose own deploy %s, for that run to decide', async (_name, own) => {
+      store.deployRuns = [carrier('skipped'), { sha: 'beefcafe', prNumber: 143, testingDispatchedAt: '2026-10-22T08:00:00.000Z', testingConclusion: own, detail: null }];
+      const { scheduler, moves } = sweeper();
+      delivering(scheduler);
+
+      const result = await scheduler.run('deploy');
+
+      expect(moves.map((move) => move.issueNumber)).toEqual([46]);
+      expect(result.actions).toContain(
+        'openadlc#143: older than openadlc#145, the newest merge, whose testing deploy deployed nothing (deploy-testing run 39836758586 was skipped); they stay in Ship until a later deploy carries them or a person moves them to Done',
+      );
+    });
+
+    it.each([
+      ['is still running', carrier(null, null), 'whose deploy carries them'],
+      ['failed', carrier('failure', null), 'whose deploy carries them'],
+      ['never started', carrier('not_started', 'no run of deploy-testing appeared within 10 minutes of its dispatch'), 'whose testing deploy deployed nothing (no run of deploy-testing appeared within 10 minutes of its dispatch); they stay in Ship until a later deploy carries them or a person moves them to Done'],
+      ['was cancelled', carrier('cancelled', 'deploy-testing run 9 was cancelled before it deployed, and no later testing deploy carries it'), 'whose testing deploy deployed nothing (deploy-testing run 9 was cancelled before it deployed, and no later testing deploy carries it); they stay'],
+    ])('moves none of them while the deploy that carries them %s', async (_name, record, said) => {
+      store.deployRuns = [record];
+      const { scheduler, moves } = sweeper();
+      delivering(scheduler);
+
+      const result = await scheduler.run('deploy');
+
+      expect(moves).toEqual([]);
+      expect(result.actions).toEqual([expect.stringContaining(`openadlc#143, openadlc#144: older than openadlc#145, the newest merge, ${said}`)]);
+    });
+
+    it('moves none of them while the newest merge has no testing deploy recorded at all', async () => {
+      const { scheduler, moves } = sweeper();
+      delivering(scheduler);
+
+      const result = await scheduler.run('deploy');
+
+      expect(moves).toEqual([]);
+      expect(result.actions).toEqual(['openadlc#143, openadlc#144: older than openadlc#145, the newest merge, whose deploy carries them']);
+    });
+  });
+
+  /**
+   * A card in Ship with no pull request has no merge for a deploy to carry, and
+   * nothing that finishes a merge moves it. The sweep said "not deploying it",
+   * and nothing said what to do.
+   */
+  it('says a card in Ship with no pull request has no merge to deploy, and to move it to Done by hand, where merging does not ship', async () => {
+    store.issues = [{ ...merged, number: 44, prNumber: null }];
+    store.deployRuns = [{ sha: 'f00dcafe', prNumber: 145, testingDispatchedAt: '2026-10-22T09:00:00.000Z', testingConclusion: 'skipped', detail: 'deploy-testing run 9 was skipped' }];
+    const { scheduler, moves } = sweeper();
+    scheduler.useDelivery(
+      {
+        checkTestingDeploys: vi.fn(async () => []),
+        checkRollbacks: vi.fn(async () => []),
+        promoteDue: vi.fn(async () => []),
+        sendBackDue: vi.fn(async () => []),
+        retryUndispatched: vi.fn(async () => []),
+      } as never,
+      { get: vi.fn(async () => ({ rules: DEFAULT_DELIVERY_RULES, readError: null })) } as never,
+    );
+
+    const result = await scheduler.run('deploy');
+
+    // Even beside a newest merge that had nothing to deploy: no merge of its own says it shipped.
+    expect(moves).toEqual([]);
+    expect(result.actions).toEqual([
+      'openadlc#44 is merged with no pull request recorded: it has no merge to deploy, and no deploy will move it to Done; move it there by hand once its change has shipped',
+    ]);
+  });
+
+  it('moves a card in Ship with no pull request to Done where the repository ships by merging, as every card there', async () => {
+    store.testingDeploy = JSON.stringify({ openadlc: 'none' });
+    store.issues = [{ ...merged, number: 44, prNumber: null }];
+    const { scheduler, moves } = sweeper();
+
+    const result = await scheduler.run('deploy');
+
+    expect(moves).toEqual([{ repoName: 'openadlc', issueNumber: 44, to: 'done', actor: 'bridge' }]);
+    expect(result.actions[0]).toBe('openadlc#44 moved to Done: no testing deploy for this repository');
   });
 
   it('looks at each dispatched rollback’s run before it promotes or dispatches again', async () => {
