@@ -17,7 +17,7 @@ import { ensureLoginDir, loginFor } from './logins.js';
 import { resolveTaskModel, subscriptionModels, type SessionModel, type TaskModelAccount } from './model-resolution.js';
 import { reachableFromTask } from './reachable.js';
 import { SessionEnvMinter } from './session-env.js';
-import { stopForGoneSession } from './observer.js';
+import { forgetIfOver, stopForGoneSession } from './observer.js';
 import type { TokenClient } from './token-client.js';
 import { BRANCH_GONE, BranchGoneError, setAsideBrief, stoppedForGoneBranch, Worktrees, type LegacyTask } from './worktree.js';
 import { ROLES_IN_CONTAINER } from './drivers/docker.js';
@@ -962,7 +962,9 @@ export class TaskRunner {
   /**
    * The kill `stoppingByPerson` announced has been carried out: the task is
    * stopped now, with the person's reason, and its lease let go, as the
-   * observer stops a task whose session went away (`stopForGoneSession`).
+   * observer stops a task whose session went away (`stopForGoneSession`);
+   * then what this host holds for it is given back, as the observer gives it
+   * back (`forgetIfOver`).
    *
    * Nothing else settles the row: the session the kill took cannot report how
    * it ended, and one that ended by itself just before may not have either.
@@ -972,6 +974,13 @@ export class TaskRunner {
    * thirty, failed on CI when the third look came late. Whichever ends the
    * task first keeps its ending: one the session reported before leaves
    * nothing running to stop, and one it reports after is refused.
+   *
+   * Nor did anything else give back its place on the host. With the row
+   * stopped, the task was still held here, counted in `computersHeld` until
+   * the observer's next look, up to ten seconds on: four tasks killed on a
+   * host with room for four, the next start was refused as `HostFull`.
+   * Ended either way — stopped here, or by a report that came first — it is
+   * given back before the kill answers.
    *
    * Only a task this hostd runs in that session, and only once a listing
    * that answered no longer has it. A task on another host sharing the
@@ -985,7 +994,9 @@ export class TaskRunner {
     if (held?.bot !== bot || held.session !== session) return false;
     const listed = await this.driver.listSessions(bot).catch(() => null);
     if (!listed || listed.some((one) => one.name === session)) return false;
-    return (await stopForGoneSession(taskId, 'session killed')) !== null;
+    const stopped = (await stopForGoneSession(taskId, 'session killed')) !== null;
+    await forgetIfOver(this, taskId);
+    return stopped;
   }
 
   activeTaskIds(): string[] {
