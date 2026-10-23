@@ -69,7 +69,7 @@ import { retakeLease, SendBack } from './send-back.js';
 import { chooseIssueText, editNotTaken } from './vouched-text.js';
 import { workflowFile, type DeployPipeline, type RevertOutcome } from './deploy-pipeline.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
-import { BotBusyError, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, SubjectClosedError, type TaskService } from './task-service.js';
+import { BotBusyError, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, reviewStartLock, SubjectClosedError, type TaskService } from './task-service.js';
 import { FORBIDDEN_PUSH, ciKeysChanged, contentChanged, fastPathOf, forbiddenPushGate, reviewSample } from './automation.js';
 import { continuesBranch } from './build-left.js';
 import { DEPLOY_PATH_BRANCH_PREFIX, headInRepository, issueNumberFromBranch, issuesMergedBy, ownIssueOf, REVIEW_ROUND_OPENED, REVIEW_STALLED, scopeLabelAcceptedFrom } from './work.js';
@@ -1840,17 +1840,35 @@ export class Webhooks {
    * review of a pull request the merge line had just merged ran on for
    * minutes, spending, to post on something already in main. A paused one is
    * `stopPausedOn`'s, as with `stopBuildsOf`.
+   *
+   * Looked for under the pull request's review lock, which a review's start
+   * holds from its read of the pull request to its row (`reviewStartLock`):
+   * looked for in between, none was found, and the start went on to record a
+   * review of what had merged. A lock that cannot be had still stops what it
+   * finds, as before there was one.
    */
   private async stopReviewsOf(repoName: string, prNumber: number, why: string): Promise<void> {
-    if (!this.stopTask) return;
-    const going = (await tasks.listTasksForSubjects('review', [`${repoName}#${prNumber}`]).catch(() => [])).filter((task) =>
-      ['queued', 'running'].includes(task.state),
-    );
-    for (const task of going) {
-      await this.stopTask(task.id, 'bridge', why).catch((error: unknown) =>
-        console.warn(`[bridge] review ${task.id} on ${repoName}#${prNumber} not stopped: ${error instanceof Error ? error.message : error}`),
+    const stopTask = this.stopTask;
+    if (!stopTask) return;
+    const stop = async (): Promise<void> => {
+      const going = (await tasks.listTasksForSubjects('review', [`${repoName}#${prNumber}`]).catch(() => [])).filter((task) =>
+        ['queued', 'running'].includes(task.state),
       );
-    }
+      for (const task of going) {
+        await stopTask(task.id, 'bridge', why).catch((error: unknown) =>
+          console.warn(`[bridge] review ${task.id} on ${repoName}#${prNumber} not stopped: ${error instanceof Error ? error.message : error}`),
+        );
+      }
+    };
+    let looked = false;
+    await withAdvisoryLock(reviewStartLock(repoName, prNumber), () => {
+      looked = true;
+      return stop();
+    }).catch((error: unknown) => {
+      if (looked) return;
+      console.warn(`[bridge] ${repoName}#${prNumber}: its reviews are stopped without the lock on their starts: ${error instanceof Error ? error.message : error}`);
+      return stop();
+    });
   }
 
   /**
