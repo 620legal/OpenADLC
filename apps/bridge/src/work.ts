@@ -46,9 +46,24 @@ export const REVIEW_ROUND_OPENED = 'review.round_opened';
  * stacked update's). The line updates as the branch's builder, so the push's
  * sender cannot tell it from the builder's own; this is what does
  * (`Webhooks.lineUpdated`). Not the line's entry: its head is the next pass's
- * by the time the push's delivery is worked through.
+ * by the time the push's delivery is worked through. In a repository with no
+ * owner bot it updates as the automation account, which never authors: this
+ * is also what tells its push and its merge commit from that account's own
+ * (`Automation.lineMerge`).
  */
 export const BRANCH_UPDATED_BY_LINE = 'merge_line.branch_updated';
+
+/**
+ * Whether the line's updates from one head (`BRANCH_UPDATED_BY_LINE`) made
+ * `commit`: one GitHub named no commit for (`updateBranch` answers with
+ * none), or the one it named.
+ */
+export function madeByLineUpdate(updates: readonly { payload: unknown }[], commit: string): boolean {
+  return updates.some((update) => {
+    const to = (update.payload as { to?: unknown } | null)?.to;
+    return typeof to !== 'string' || to === commit;
+  });
+}
 
 /**
  * A review the bridge dismissed itself, a superseded approval:

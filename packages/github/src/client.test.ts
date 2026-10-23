@@ -18,17 +18,20 @@ function pullWithCommits(total: number) {
     const body = Array.from({ length: count }, (_, offset) => {
       const index = first + offset;
       const sha = index.toString(16).padStart(40, '0');
-      // The first commit's address is one GitHub could not tie to an account.
+      // The first commit's address is one GitHub could not tie to an account,
+      // and the last is a merge of the base into the branch.
       return index === 0
         ? {
             sha,
             author: null,
             commit: { author: { name: 'openadlc-sydney-janedoe', email: 'openadlc-sydney-janedoe@users.noreply.github.com' } },
+            parents: [{ sha: 'f'.repeat(40) }],
           }
         : {
             sha,
             author: { login: 'openadlc-atlas-janedoe' },
             commit: { author: { name: 'openadlc-atlas-janedoe', email: '12+openadlc-atlas-janedoe@users.noreply.github.com' } },
+            parents: [{ sha: (index - 1).toString(16).padStart(40, '0') }, ...(index === total - 1 ? [{ sha: 'b'.repeat(40) }] : [])],
           };
     });
     return new Response(JSON.stringify(body), { status: 200 });
@@ -54,8 +57,11 @@ describe('the commits on a pull request, and who wrote them', () => {
       authorLogin: null,
       authorEmail: 'openadlc-sydney-janedoe@users.noreply.github.com',
       authorName: 'openadlc-sydney-janedoe',
+      parents: ['f'.repeat(40)],
     });
     expect(commits[129]?.authorLogin).toBe('openadlc-atlas-janedoe');
+    // What a merge of the base is told by: the head it was made on, then the base's.
+    expect(commits[129]?.parents).toEqual([(128).toString(16).padStart(40, '0'), 'b'.repeat(40)]);
   });
 
   it('refuses a list GitHub stopped at 250, rather than returning it short', async () => {

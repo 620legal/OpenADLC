@@ -73,7 +73,7 @@ import type { DeliveryKnowledge } from './delivery-rules.js';
 import { BotBusyError, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, reviewStartLock, SubjectClosedError, type TaskService } from './task-service.js';
 import { FORBIDDEN_PUSH, ciKeysChanged, contentChanged, fastPathOf, forbiddenPushGate, reviewSample } from './automation.js';
 import { continuesBranch } from './build-left.js';
-import { BRANCH_UPDATED_BY_LINE, DEPLOY_PATH_BRANCH_PREFIX, headInRepository, issueNumberFromBranch, issuesMergedBy, ownIssueOf, REVIEW_ROUND_OPENED, REVIEW_STALLED, scopeLabelAcceptedFrom } from './work.js';
+import { BRANCH_UPDATED_BY_LINE, DEPLOY_PATH_BRANCH_PREFIX, headInRepository, issueNumberFromBranch, issuesMergedBy, madeByLineUpdate, ownIssueOf, REVIEW_ROUND_OPENED, REVIEW_STALLED, scopeLabelAcceptedFrom } from './work.js';
 import { shipsByMerging, testingDeployChoice } from './deploys.js';
 import type { RequestFiling } from './request-lifecycle.js';
 
@@ -2315,18 +2315,21 @@ export class Webhooks {
       }
 
       // The merge line's update changes the diff too, when the base changed
-      // the files this pull request does. It is made as the builder
-      // (`updaterFor`), so its sender is the builder's: it is known by the
+      // the files this pull request does. It is made as the builder, or the
+      // automation account where the repository has no owner bot
+      // (`updaterFor`), so its sender is that account: it is known by the
       // head the line recorded making it on.
       lineUpdate = await this.lineUpdated(repo.name, pr.number, before, pr.head.sha);
 
       // A reviewer or the automation account changed the diff. The commits can
       // name the builder as their author, since whoever commits types that; the
       // pusher is GitHub's to say. Recorded, so the gate fails on this head
-      // whenever it is set again (`checkAuthors`), not only now.
+      // whenever it is set again (`checkAuthors`), not only now. The line's
+      // own update, made as the automation account where the repository has
+      // no owner bot, is not one (`pushedByLine`).
       const pusher = payload.sender?.login ?? null;
       const barred = changed && pusher ? accountsThatNeverAuthor(await bots.listBots()).find((account) => sameLogin(account.login, pusher)) : undefined;
-      if (barred) {
+      if (barred && !(lineUpdate && (await this.pushedByLine(client, repoFullName, pr.number, { pusher, before, after: pr.head.sha })))) {
         const push = { repo: repoFullName.toLowerCase(), pr: String(pr.number), sha: pr.head.sha, login: barred.login, why: barred.why };
         await recordEvent({ source: 'platform', type: FORBIDDEN_PUSH, payload: push }).catch((error: unknown) =>
           console.warn(`[bridge] ${repoFullName}#${pr.number}: forbidden push not recorded: ${error instanceof Error ? error.message : error}`),
@@ -2561,17 +2564,40 @@ export class Webhooks {
    * Whether a push is the merge line's update of the branch from its base:
    * from a head the line recorded updating on, and to the commit it made
    * where it knows which (`BRANCH_UPDATED_BY_LINE`). Not the sender, which is
-   * the builder's account, nor the line's entry, whose head the line's next
-   * pass has moved on by now. A record that cannot be read is no update of
-   * the line's, and the push is held as a builder's would be.
+   * the builder's account or the automation account's, nor the line's entry,
+   * whose head the line's next pass has moved on by now. A record that cannot
+   * be read is no update of the line's, and the push is held as a builder's
+   * would be.
    */
   private async lineUpdated(repoName: string, prNumber: number, before: string, after: string): Promise<boolean> {
     if (!before) return false;
     const made = await (async () => listEventsOfTypeWith(BRANCH_UPDATED_BY_LINE, { subjectRef: `${repoName}#${prNumber}`, from: before }))().catch(() => []);
-    return made.some((event) => {
-      const to = (event.payload as { to?: unknown } | null)?.to;
-      return typeof to !== 'string' || to === after;
-    });
+    return madeByLineUpdate(made, after);
+  }
+
+  /**
+   * Whether a push by an account that never authors is the merge line's
+   * update of the branch, which it makes as the automation account where the
+   * repository has no owner bot (`updaterFor`): sent by that account, and its
+   * head the merge commit the line made on the push's `before`
+   * (`Automation.lineMerge`). Taken for a forbidden push, its head failed the
+   * gate for good, and the line could not bring such a pull request up to
+   * date (#123). Any other push, a read that fails included, is not the
+   * line's: the record alone names a head, not who pushed from it.
+   */
+  private async pushedByLine(
+    client: GitHubClient | null,
+    repoFullName: string,
+    prNumber: number,
+    push: { pusher: string | null; before: string; after: string },
+  ): Promise<boolean> {
+    if (!client || !sameLogin(push.pusher, await this.automationLogin())) return false;
+    try {
+      const head = (await client.listPullCommits(repoFullName, prNumber)).find((commit) => commit.sha === push.after);
+      return Boolean(head && head.parents[0] === push.before && (await this.automation.lineMerge(client, repoFullName, prNumber, head)));
+    } catch {
+      return false;
+    }
   }
 
   /**

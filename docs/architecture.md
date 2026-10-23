@@ -279,12 +279,19 @@ none yet, says its kind of work instead ("writing the change").
    as a stalled review.
 6. **Merge.** A pull request whose `review-gate` passes joins the **merge line**:
    one repository at a time, the bridge brings the front one up to date with
-   the base branch, with the builder's credential, and waits for `ci` and
-   `review-gate` on the new head. It records each update it made,
-   `merge_line.branch_updated` `{subjectRef, from, to?}` (the head it was made
-   on, and the commit it made when GitHub said), and its push is told from the
-   builder's by that. An update that changes no diff keeps the approvals and
-   opens no round. One that does — the base changed the same files — is
+   the base branch, with the builder's credential (the automation account's
+   where no bot owns the repository), and waits for `ci` and `review-gate` on
+   the new head. It records each update it made, `merge_line.branch_updated`
+   `{subjectRef, from, to?}` (the head it was made on, and the commit it made
+   when GitHub said), and its push is told from the builder's by that. Made
+   as the automation account, which never authors, the update is neither a
+   forbidden push nor that account's authoring: its push is the automation
+   account's from a recorded head, of a merge commit GitHub says that account
+   wrote, whose parents are that head and a commit the base has, and which is
+   the recorded commit when GitHub named one (`Automation.lineMerge`). Any
+   other push by it that changes the diff, and any other commit it wrote,
+   still fails `review-gate`. An update that changes no diff keeps the
+   approvals and opens no round. One that does — the base changed the same files — is
    reviewed as any push is: the approvals are dismissed and every seat is
    asked again, the lead last, with no local CI asked of the builder for it.
    GitHub's CI on a crew pull request (an

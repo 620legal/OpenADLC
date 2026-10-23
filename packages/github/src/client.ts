@@ -81,6 +81,12 @@ export interface PullCommit {
   authorLogin: string | null;
   authorEmail: string;
   authorName: string;
+  /**
+   * The commits it was made on, first parent first. The merge line's merge
+   * of the base into a branch is told by them (`Automation.lineMerge`): made
+   * as the automation account, it was refused as that account's authoring.
+   */
+  parents: string[];
 }
 
 /** The most a GitHub list endpoint returns in one page. */
@@ -1392,6 +1398,7 @@ export class GitHubClient {
           sha: string;
           author: { login: string } | null;
           commit: { author: { name?: string | null; email?: string | null } | null };
+          parents?: { sha: string }[];
         }[]
       >('GET', `/repos/${repo}/pulls/${prNumber}/commits?per_page=${PAGE}&page=${page}`);
 
@@ -1401,6 +1408,7 @@ export class GitHubClient {
           authorLogin: entry.author?.login ?? null,
           authorEmail: entry.commit.author?.email ?? '',
           authorName: entry.commit.author?.name ?? '',
+          parents: (entry.parents ?? []).map((parent) => parent.sha),
         });
       }
       if (listed.length < PAGE) break;
