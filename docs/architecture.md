@@ -477,7 +477,15 @@ none yet, says its kind of work instead ("writing the change").
    job — ships by merging: its cards go to Done, with why on the move and in
    their timelines, and the deploy sweep moves any still in Ship
    (`nothingToDeploy`). One still running, failed, never started or cancelled
-   keeps its cards in Ship.
+   keeps its cards in Ship. The newest merge, the tip of the default branch,
+   carries every merge before it: when its deploy had nothing to deploy, the
+   sweep moves the older merges in Ship to Done with it, each saying the run
+   that carried it (`carriedMoved`), unless a deploy of their own is still
+   running, failed or deployed. A card in Ship whose issue records no pull
+   request has no merge for any deploy to carry: in a repository that ships
+   by merging the sweep moves it with the rest, and elsewhere the sweep and
+   the card (`No merge to deploy · move it to Done by hand`) say a person
+   moves it.
 8. **Done.** The issue is closed, the lease is let go, and its files are free
    for the next change.
 

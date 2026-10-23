@@ -337,6 +337,8 @@ a testing deploy that ran is one the repository has, even when GitHub did not
 answer whether its workflow exists. A run that never started, or was cancelled
 with no later deploy to carry it, lets the lease go and leaves the card in
 Ship ([troubleshooting](troubleshooting.md#a-stacked-issue-waits-after-its-base-merged)).
+When the newest merge's testing deploy had nothing to deploy, the older merges
+it carries go to Done with it, those whose own deploy never ran included.
 
 The same file says which changes may be built side by side when their files
 overlap (`apps/dispatcher/src/overlap.ts`). The defaults, which a file that

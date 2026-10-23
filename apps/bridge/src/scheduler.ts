@@ -1,4 +1,4 @@
-import { attachments, audit, bots, costs, credentials, deployRuns, health, issues, lastEventAt, lastGithubDelivery, leases, mergeLines, pruneGithubDeliveries, recordEvent, repos, settings, spendingLimits, tasks, threads } from '@openadlc/db';
+import { attachments, audit, bots, costs, credentials, deployRuns, health, issues, lastEventAt, lastGithubDelivery, leases, mergeLines, pruneGithubDeliveries, recordEvent, repos, settings, spendingLimits, tasks, threads, type DeployRun } from '@openadlc/db';
 import { claimWindowStart } from './attachment-routes.js';
 import { stoppedByTheBridge } from './bridge-stops.js';
 import { sweepDesignMemory } from './design-memory.js';
@@ -597,6 +597,21 @@ export interface PriorDeploy {
 }
 
 /**
+ * Whether a merge's own testing-deploy record leaves it for a later merge's
+ * deploy to carry: none (no deploy of its own was dispatched), one cancelled
+ * for a later deploy (`superseded`), or one that deployed nothing and was
+ * left in Ship until a later deploy carries it (`deployedNothing`). Not one
+ * still running, failed or deployed, which its own run decides, nor one that
+ * had nothing to deploy itself, which went to Done on its own record
+ * (`nothingToDeploy`) or was refused that move.
+ */
+function leftToALaterDeploy(record: Pick<DeployRun, 'testingDispatchedAt' | 'testingConclusion'> | null | undefined): boolean {
+  if (!record?.testingDispatchedAt) return true;
+  const conclusion = record.testingConclusion;
+  return conclusion === 'superseded' || (deployedNothing(conclusion) && !nothingToDeploy(conclusion));
+}
+
+/**
  * Whether a task ended because a person meant it to: they killed its session
  * (`tasks.stoppedByPerson`), or refused the plan change it asked for. Either is
  * a decision about the work, and starting it again would overrule it; so is
@@ -632,6 +647,9 @@ function howItEnded(task: PriorDeploy): string {
  * the newest is live; they are reported as carried and never deployed. That is
  * why "newest" is the branch tip and not the newest of the waiting ones: once
  * the tip is labelled, the next waiting one is older than what testing has.
+ * Where the newest merge's deploy had nothing to deploy, the sweep has moved
+ * the older ones to Done before it plans (`carriedMoved`), and those still
+ * here are said to stay in Ship, not to be carried.
  *
  * A start also needs a testing URL and no deploy task on that pull request that
  * is still going or finished: the sweep is the backstop for a merge webhook
@@ -661,8 +679,13 @@ export function planDeploySweep(input: {
   let start: (DeploySweepPlan & { kind: 'work' })['start'] = null;
   const hold: string[] = [];
   for (const item of input.waiting) {
+    // No merge is known for it, so no deploy carries it, and nothing that
+    // finishes a merge ever moves it: the sweep said only "not deploying it",
+    // on every firing, over a card left in Ship for good.
     if (!item.prNumber) {
-      hold.push(`${item.repo}#${item.number} is merged with no pull request recorded; not deploying it`);
+      hold.push(
+        `${item.repo}#${item.number} is merged with no pull request recorded: it has no merge to deploy, and no deploy will move it to Done; move it there by hand once its change has shipped`,
+      );
     }
   }
 
@@ -678,15 +701,20 @@ export function planDeploySweep(input: {
       );
       continue;
     }
-    const older = recorded.filter((item) => item.prNumber !== newest);
-    if (older.length > 0) {
-      hold.push(`${refs(older)}: older than ${repo}#${newest}, the newest merge, whose deploy carries them`);
-    }
-    if (older.length === recorded.length) continue;
-
     const subjectRef = `${repo}#${newest}`;
     const prior = input.priorDeploys.filter((task) => task.subjectRef === subjectRef);
     const live = prior.find((task) => !taskGaveUp(task.state));
+    const older = recorded.filter((item) => item.prNumber !== newest);
+    // Once the newest merge's deploy has deployed nothing, "whose deploy
+    // carries them" said a deploy was coming for them that never would.
+    if (older.length > 0) {
+      hold.push(
+        live?.nothing
+          ? `${refs(older)}: older than ${subjectRef}, the newest merge, whose testing deploy deployed nothing (${live.nothing}); they stay in Ship until a later deploy carries them or a person moves them to Done`
+          : `${refs(older)}: older than ${subjectRef}, the newest merge, whose deploy carries them`,
+      );
+    }
+    if (older.length === recorded.length) continue;
     // One that deployed nothing is said as such: OpenADLC#72's skipped run
     // was "already started (running)" on every sweep until its lease ran out.
     if (live?.nothing) {
@@ -1397,7 +1425,10 @@ export class Scheduler {
    * `Closes #N` before a deploy, and a repository that does have a testing
    * deploy is left in Ship for that reason. An issue whose merge's testing
    * deploy ran and had nothing to deploy (`nothingToDeploy`) is moved to Done
-   * here too: that merge shipped by merging.
+   * here too: that merge shipped by merging. So is one whose merge is older
+   * than the newest, when the newest merge's deploy, which carries it, had
+   * nothing to deploy (`carriedMoved`). One with no pull request recorded has
+   * no merge for either to read, and the sweep says to move it by hand.
    *
    * So the sweep looks, and then either says there is nothing to do, or
    * dispatches the testing deploy of the newest merge, when that merge has no
@@ -1436,26 +1467,32 @@ export class Scheduler {
     const { waiting: kept, moved: movedByDeploy } = this.pipeline
       ? await this.nothingToDeployMoved(byRules)
       : { waiting: byRules, moved: [] as string[] };
-    const moved = [...movedByRules, ...movedByDeploy];
     const stays = new Set(kept.map((item) => `${item.repo}#${item.number}`));
-    const waiting = found.filter((item) => stays.has(`${item.repo}#${item.number}`));
+    const unplaced = found.filter((item) => stays.has(`${item.repo}#${item.number}`));
     // With the pipeline, the testing deploy is dispatched as the app (or the
     // automation account) by the repository's rules, and what was dispatched is `deploy_runs`; without
     // it, the deploy bot's tasks, against the install's testing URL, as before.
     const deployBot = this.pipeline ? null : ((await bots.listBots()).find((bot) => bot.role === 'deploy') ?? null);
-    const priorDeploys = this.pipeline
-      ? await this.dispatchedDeploys(waiting)
-      : await tasks.listTasksForSubjects(
-          'deploy',
-          waiting.flatMap((item) => (item.prNumber ? [`${item.repo}#${item.prNumber}`] : [])),
-        );
     const testingUrl = this.pipeline ? 'the repository’s rules' : this.config.testingUrl;
     const dispatcher = this.pipeline ? 'the OpenADLC app' : (deployBot?.name ?? null);
     // The tip of the default branch is asked only when a deploy could start,
     // so an install with no testing target costs nothing but the board read.
     // Whether the repository ships by merging was already asked, above.
-    const couldStart = waiting.length > 0 && testingUrl.trim().length > 0 && dispatcher !== null;
-    const newest = couldStart ? await this.newestMerges([...new Set(waiting.map((item) => item.repo))]) : {};
+    const couldStart = unplaced.length > 0 && testingUrl.trim().length > 0 && dispatcher !== null;
+    const newest = couldStart ? await this.newestMerges([...new Set(unplaced.map((item) => item.repo))]) : {};
+    // And the older merges the newest one's testing deploy carries, when that
+    // deploy had nothing to deploy: a merge with no record of its own among
+    // them, which the step above cannot place.
+    const { waiting, moved: movedByCarrier } = this.pipeline
+      ? await this.carriedMoved(unplaced, newest)
+      : { waiting: unplaced, moved: [] as string[] };
+    const moved = [...movedByRules, ...movedByDeploy, ...movedByCarrier];
+    const priorDeploys = this.pipeline
+      ? await this.dispatchedDeploys(waiting, newest)
+      : await tasks.listTasksForSubjects(
+          'deploy',
+          waiting.flatMap((item) => (item.prNumber ? [`${item.repo}#${item.prNumber}`] : [])),
+        );
     const plan = planDeploySweep({
       waiting,
       testingUrl,
@@ -1606,6 +1643,57 @@ export class Scheduler {
     return { waiting: found.filter((item) => !shipped.has(`${item.repo}#${item.number}`)), moved };
   }
 
+  /**
+   * Older merges in Ship that the newest merge's testing deploy carries,
+   * moved to Done with why (`shipByMerging`) when that deploy had nothing to
+   * deploy (`nothingToDeploy`), and the rest. The newest merge is the tip of
+   * the default branch (`newestMerges`), so every other merge into it is in
+   * the commit its deploy ran for, and a deploy of nothing there ships them
+   * all by merging. `nothingToDeployMoved` reads each merge's own record
+   * only: 620legal/OpenADLC#45 and #46 had none of their own, and stayed in
+   * Ship "older than OpenADLC#107, the newest merge, whose deploy carries
+   * them" after #107's run was skipped, with nothing left to come.
+   *
+   * Only a merge left to a later deploy moves (`leftToALaterDeploy`). A
+   * carrying deploy that is still running, failed, never started or was
+   * cancelled moves none of them: Done would say they shipped.
+   */
+  private async carriedMoved(
+    found: readonly AwaitingDeploy[],
+    newest: Readonly<Record<string, number | null>>,
+  ): Promise<{ waiting: AwaitingDeploy[]; moved: string[] }> {
+    const shipped = new Set<string>();
+    const moved: string[] = [];
+    for (const name of new Set(found.map((item) => item.repo))) {
+      const tip = newest[name] ?? null;
+      if (tip === null) continue;
+      const older = found.filter((item) => item.repo === name && item.prNumber && item.prNumber !== tip);
+      if (older.length === 0) continue;
+      const repo = await repos.getRepoByName(name).catch(() => null);
+      if (!repo) continue;
+      const numbers = [...new Set(older.map((item) => item.prNumber as number))];
+      const records = await (async () => deployRuns.forPullRequests(repo.id, [tip, ...numbers]))().catch(() => []);
+      const own = (prNumber: number) => records.find((run) => run.prNumber === prNumber && run.testingDispatchedAt);
+      const carrier = own(tip);
+      if (!carrier || !nothingToDeploy(carrier.testingConclusion)) continue;
+      const why = `carried by the testing deploy of ${name}#${tip}, the newest merge: ${carrier.detail ?? 'its run was skipped'}`;
+      for (const prNumber of numbers) {
+        if (!leftToALaterDeploy(own(prNumber))) continue;
+        const result = await shipByMerging({
+          moveStage: (input) => this.automation.moveStage(input),
+          repoName: name,
+          prNumber,
+          sha: carrier.sha,
+          issueNumbers: older.filter((item) => item.prNumber === prNumber).map((item) => item.number),
+          why,
+        });
+        for (const number of result.moved) shipped.add(`${name}#${number}`);
+        moved.push(...result.lines);
+      }
+    }
+    return { waiting: found.filter((item) => !shipped.has(`${item.repo}#${item.number}`)), moved };
+  }
+
   /** True when this repository ships by merging; null when automatic could not be asked. */
   private async repoShipsByMerging(repoName: string, choice: TestingDeployChoice): Promise<boolean | null> {
     if (choice !== 'automatic') return shipsByMerging(null, '', choice);
@@ -1615,13 +1703,20 @@ export class Scheduler {
     return shipsByMerging(client, repo.fullName, 'automatic');
   }
 
-  /** The testing deploys the pipeline dispatched for these pull requests, as the sweep's plan weighs prior deploys. */
-  private async dispatchedDeploys(waiting: readonly AwaitingDeploy[]): Promise<PriorDeploy[]> {
+  /**
+   * The testing deploys the pipeline dispatched for these pull requests, and
+   * for each repository's newest merge (`newest`), whose deploy carries the
+   * rest, as the sweep's plan weighs prior deploys.
+   */
+  private async dispatchedDeploys(waiting: readonly AwaitingDeploy[], newest: Readonly<Record<string, number | null>>): Promise<PriorDeploy[]> {
     const prior: PriorDeploy[] = [];
     for (const name of new Set(waiting.map((item) => item.repo))) {
       const repo = await repos.getRepoByName(name);
       if (!repo) continue;
-      const numbers = waiting.filter((item) => item.repo === name && item.prNumber).map((item) => item.prNumber as number);
+      const tip = newest[name] ?? null;
+      const numbers = [
+        ...new Set([...waiting.filter((item) => item.repo === name && item.prNumber).map((item) => item.prNumber as number), ...(tip === null ? [] : [tip])]),
+      ];
       for (const run of await deployRuns.forPullRequests(repo.id, numbers).catch(() => [])) {
         if (!run.testingDispatchedAt) continue;
         prior.push({

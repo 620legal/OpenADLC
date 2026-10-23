@@ -1242,6 +1242,7 @@ question open on it, its place in the line to merge — never from a setting
 | Live on testing · waiting for production | The production environment's required reviewer, or its soak timer | The repository's deployments page; Settings → Repositories |
 | Waiting until `<repo>` is resumed | The repository is paused | Settings → Pause work |
 | Merged · waiting to deploy | No `deployed:testing` yet, in a repository that has a testing deploy | Settings → Repositories: how it ships, and where the rules came from; the bridge log's `dispatched deploy-testing` or `not dispatched` line |
+| No merge to deploy · move it to Done by hand | In Ship, and its issue records no pull request, in a repository that has a testing deploy: no deploy carries it, and nothing that finishes a merge moves it. Move it to Done once its change has shipped, or back to the stage its work is in | The deploy sweep's `is merged with no pull request recorded` line |
 | Abandoned … (in Done) | Closed without merging: it is labelled `openadlc:abandoned`, nothing shipped, and it is not in "N this week" | The issue on GitHub; see [Closed, but still on the board or in Needs you](#closed-but-still-on-the-board-or-in-needs-you) |
 
 A repository whose delivery rules say `testing: on: none` does not sit on that
@@ -1255,7 +1256,12 @@ the `OPENADLC_DEPLOY_TESTING` Actions variable.
 In a repository that does have a testing deploy, a closed issue stays in Ship:
 GitHub closes the issue at `Closes #N` before the deploy has run. One whose
 `deploy-testing` run was skipped, or ran no job, goes to Done all the same:
-that merge had nothing to deploy, and shipped by merging.
+that merge had nothing to deploy, and shipped by merging. So does an older
+merge the newest one's skipped run carries, whether or not a deploy of its own
+was ever dispatched. One whose issue records no pull request stays, and its
+card says to move it to Done by hand: OpenADLC cannot tell what merged for it,
+so no deploy says it shipped. Where merging ships, the sweep moves it with the
+rest.
 
 A merge moves every issue the pull request finishes: the one its branch was cut
 for (`agent/<bot>/<issue>-…`) and each one it closes, as GitHub lists them — a
@@ -1626,10 +1632,18 @@ No deployment, no verification. So the lease is also let go when:
   GitHub calls a success and ran no job, had nothing to deploy: its cards go
   to Done (`deploy.shipped_by_merging` in the audit log, and the reason on the
   stage move and in each card's timeline), and the deploy sweep moves any
-  still in Ship, settled before it did this. The rest keep the card in Ship:
-  move it to Done, or turn the repository's testing deploy off as above. A
-  run that failed lets nothing go: it is filed as a failed deploy, and the
-  deploy that fixes it is verified as usual.
+  still in Ship, settled before it did this. That run, when it is the newest
+  merge's (the tip of the default branch), carries every older merge still in
+  Ship, and the sweep moves those too, each with `merging shipped it: carried
+  by the testing deploy of <repo>#<pr>, the newest merge: …`: one with no
+  testing deploy of its own (a merge whose delivery never came), or one whose
+  own run was cancelled or never started. One whose own deploy is still
+  running, failed or deployed stays, and the sweep says the older merges
+  `stay in Ship until a later deploy carries them or a person moves them to
+  Done`. Any other run that deployed nothing keeps its card in Ship: move it
+  to Done, or turn the repository's testing deploy off as above. A run that
+  failed lets nothing go: it is filed as a failed deploy, and the deploy that
+  fixes it is verified as usual.
 - **Not a cancelled run a later merge's deploy carries.** deploy-testing's
   concurrency group cancels a waiting run when a newer merge's queues, and the
   newer deploy finishes both. That run is recorded `superseded`, and its

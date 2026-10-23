@@ -1103,7 +1103,32 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     const landing = (await mergeLines.line(named?.id)).filter(
       (entry) => workedIn.has(entry.repoName) && !ignored.has(`${entry.repoName}#${entry.prNumber}`),
     );
+    // Ship is skipped where merging is shipping: the column says so, rather
+    // than "Deploys what was approved · waits for you" over a stage that never
+    // happens. Only when every repository in view deploys nothing.
+    const inView = repoName ? repoList.filter((entry) => entry.name === repoName) : repoList;
+    const testingDeploy = (await settings.allSettings().catch(() => null))?.testingDeploy ?? null;
+    const byMerging = await Promise.all(
+      inView.map(async (entry) =>
+        deps.delivery
+          ? (await deps.delivery.get(entry)).rules.testing.on === 'none'
+          : deploys.shipsByMerging(entry.fullName, testingDeployChoice(testingDeploy, entry.name)),
+      ),
+    );
+    const shipsByMerging = inView.length > 0 && byMerging.every((answer) => answer === true);
+
     const holds = await readHolds();
+    // In Ship with no pull request on its row, where merging does not ship:
+    // no deploy carries it and nothing that finishes a merge moves it, so the
+    // card says to move it to Done by hand. Read from the row, not the card:
+    // a pull request that closes two issues is on one of their work items,
+    // and the other's card names no pull request though it merged.
+    const byMergingIn = new Map(inView.map((entry, index) => [entry.name, byMerging[index] === true]));
+    const noMerge = new Set(
+      listed
+        .filter((issue) => issue.stage === 'merged' && issue.prNumber === null && !byMergingIn.get(issue.repoName))
+        .map((issue) => `${issue.repoName}#${issue.number}`),
+    );
     const issueCards = cards
       .filter((card) => workedIn.has(card.repo) && !ignored.has(card.ref))
       .map((card) => {
@@ -1112,6 +1137,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
         const marks = {
           held: hasPausedLabel(card.labels) ? (holds[card.ref] ?? { by: 'a person on GitHub', at: '', why: null }) : null,
           next: hasNextLabel(card.labels),
+          ...(noMerge.has(card.ref) ? { noMerge: true as const } : {}),
         };
         // Who is on it now, the pull request's reviewers included; the store
         // only knew the tasks filed under the issue itself.
@@ -1169,20 +1195,6 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     const working = new Set(
       activeSessions.filter((session) => session.state === 'working').map((session) => session.botId),
     );
-
-    // Ship is skipped where merging is shipping: the column says so, rather
-    // than "Deploys what was approved · waits for you" over a stage that never
-    // happens. Only when every repository in view deploys nothing.
-    const inView = repoName ? repoList.filter((entry) => entry.name === repoName) : repoList;
-    const testingDeploy = (await settings.allSettings().catch(() => null))?.testingDeploy ?? null;
-    const byMerging = await Promise.all(
-      inView.map(async (entry) =>
-        deps.delivery
-          ? (await deps.delivery.get(entry)).rules.testing.on === 'none'
-          : deploys.shipsByMerging(entry.fullName, testingDeployChoice(testingDeploy, entry.name)),
-      ),
-    );
-    const shipsByMerging = inView.length > 0 && byMerging.every((answer) => answer === true);
 
     const columns = STAGE_KEYS.map((stage) => ({
       stage,
