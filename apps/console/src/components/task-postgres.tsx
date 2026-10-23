@@ -32,13 +32,20 @@ interface Row {
 }
 
 const NEW_SERVER = { port: '', superuser: '', password: '', database: '', image: 'pgvector/pgvector:pg16' };
+/**
+ * Each placeholder says it is an example. Bare, in grey, 620legal/core's
+ * values read as a server already filled in: a person pressed Save on an
+ * added row with nothing typed in it, and the bridge refused a port that
+ * was not there (v0.1.9).
+ */
 const FIELDS: { field: keyof Omit<Row, 'key'>; label: string; placeholder: string }[] = [
-  { field: 'port', label: 'Port', placeholder: '55432' },
-  { field: 'superuser', label: 'Superuser', placeholder: 'core' },
-  { field: 'password', label: 'Password', placeholder: 'core' },
-  { field: 'database', label: 'Database', placeholder: 'core_db' },
-  { field: 'image', label: 'Image', placeholder: 'pgvector/pgvector:pg16' },
+  { field: 'port', label: 'Port', placeholder: 'e.g. 55432' },
+  { field: 'superuser', label: 'Superuser', placeholder: 'e.g. core' },
+  { field: 'password', label: 'Password', placeholder: 'e.g. core' },
+  { field: 'database', label: 'Database', placeholder: 'e.g. core_db' },
+  { field: 'image', label: 'Image', placeholder: 'e.g. pgvector/pgvector:pg16' },
 ];
+const IMAGE = FIELDS.find(({ field }) => field === 'image')!;
 
 let nextKey = 1;
 function rowsOf(view: TaskPostgresView): Row[] {
@@ -130,11 +137,11 @@ export function TaskPostgresSection({ repo, initial }: { repo: string; initial: 
               </div>
               <div className="flex flex-wrap items-end gap-2">
                 <label className="flex min-w-[14rem] flex-1 flex-col gap-1 text-[11.5px] text-muted">
-                  Image
+                  {IMAGE.label}
                   <input
                     aria-label={`Server ${index + 1} image`}
                     value={row.image}
-                    placeholder="pgvector/pgvector:pg16"
+                    placeholder={IMAGE.placeholder}
                     list={`${id}-images`}
                     autoComplete="off"
                     spellCheck={false}
@@ -163,13 +170,22 @@ export function TaskPostgresSection({ repo, initial }: { repo: string; initial: 
         Images: {view.images.join(' or ')}, pinned by adding @sha256:&lt;digest&gt; if you want the same server on every task.
       </p>
 
-      <label className="inline-flex items-center gap-2 text-[12.5px] text-soft">
-        <input type="checkbox" checked={shared} disabled={pending} onChange={(event) => {
-            setSaid(null);
-            setShared(event.target.checked);
-          }} />
-        Also give each task its database on the shared server, as DATABASE_URL
-      </label>
+      <div className="flex flex-col gap-1">
+        <label className="inline-flex items-center gap-2 text-[12.5px] text-soft">
+          {/* autoComplete off: a browser restores a box's tick on reload or Back, and
+              React keeps the tick it finds when it hydrates, so a tick never saved
+              would show as though the setting held it, while Save sent false. */}
+          <input type="checkbox" checked={shared} disabled={pending} autoComplete="off" aria-describedby={`${id}-shared`} onChange={(event) => {
+              setSaid(null);
+              setShared(event.target.checked);
+            }} />
+          Also give each task its database on the shared server, as DATABASE_URL
+        </label>
+        <p id={`${id}-shared`} className="pl-6 text-[11.5px] leading-snug text-dim">
+          Leave it off when the repository’s Makefile defaults its own: a DATABASE_URL takes the place of the
+          Makefile’s own default (DATABASE_URL ?= …), and what reads it reaches the shared server, not the servers above.
+        </p>
+      </div>
 
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" disabled={pending} onClick={() => {

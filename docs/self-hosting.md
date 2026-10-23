@@ -1435,7 +1435,10 @@ What a task of a `sidecarDb: true` seat in that repository gets, under the
   (`127.0.0.1:55432`, comma-separated for more than one), in `make setup`, the
   session and `make ci`.
 - It gets no `DATABASE_URL` from OpenADLC unless the setting asks for that as
-  well, so the Makefile's own `?=` defaults apply.
+  well, so the Makefile's own `?=` defaults apply. The form's "Also give each
+  task its database on the shared server" box, unticked until a person ticks
+  it, asks for it, and then that `DATABASE_URL` takes the place of the
+  Makefile's own default.
 
 A repository's `db` target should start nothing when the server is there:
 

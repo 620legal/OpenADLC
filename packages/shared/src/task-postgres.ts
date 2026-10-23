@@ -95,6 +95,26 @@ const IDENTIFIER = /^[a-z_][a-z0-9_]{0,62}$/;
 /** Printable ASCII: it is passed to the image as an environment variable, and typed into URLs. */
 const PASSWORD = /^[\x20-\x7e]{1,100}$/;
 
+/**
+ * What to give for a field left empty. An empty field is refused as empty:
+ * one refused as out of range read as though something had been typed, and
+ * a person who took the form's examples for values pressed Save on a port
+ * that was not there (620legal/core, v0.1.9).
+ */
+const MISSING: Readonly<Record<keyof TaskPostgresServer, string>> = {
+  port: "give the port the repository's Makefile reaches it on",
+  superuser: "give the superuser the repository's own database URLs log in as",
+  password: "give its superuser's password, as the repository's own database URLs give it",
+  database: "give the database the repository's own database URLs name",
+  image: `use ${TASK_POSTGRES_IMAGES.join(' or ')}, such as pgvector/pgvector:pg16`,
+};
+
+/** Nothing given: absent, or what an empty field sends. A password is not trimmed, so only `''` is empty there. */
+function missing(field: keyof TaskPostgresServer, value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  return typeof value === 'string' && (field === 'password' ? value === '' : value.trim() === '');
+}
+
 export type TaskPostgresRead = { ok: true; setting: TaskPostgresSetting | null } | { ok: false; error: string };
 
 /**
@@ -123,6 +143,8 @@ export function parseTaskPostgres(input: unknown): TaskPostgresRead {
     const which = `server ${index + 1}`;
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return { ok: false, error: `${which} is { port, superuser, password, database, image }` };
     const server = entry as Record<string, unknown>;
+    const none = (field: keyof TaskPostgresServer): TaskPostgresRead => ({ ok: false, error: `${which} has no ${field}: ${MISSING[field]}` });
+    if (missing('port', server.port)) return none('port');
     const port = typeof server.port === 'string' && /^\d+$/.test(server.port.trim()) ? Number(server.port.trim()) : server.port;
     if (typeof port !== 'number' || !Number.isInteger(port) || port < 1024 || port > 65535) {
       return { ok: false, error: `${which}'s port is a whole number from 1024 to 65535: the port the repository's Makefile reaches it on (55432 for 620legal/core)` };
@@ -132,19 +154,22 @@ export function parseTaskPostgres(input: unknown): TaskPostgresRead {
     }
     for (const field of ['superuser', 'database'] as const) {
       const value = server[field];
+      if (missing(field, value)) return none(field);
       if (typeof value !== 'string' || !IDENTIFIER.test(value.trim())) {
         return { ok: false, error: `${which}'s ${field} is a Postgres name: lower-case letters, digits and _, starting with a letter or _, at most 63 of them` };
       }
     }
+    if (missing('password', server.password)) return none('password');
     if (typeof server.password !== 'string' || !PASSWORD.test(server.password)) {
       return { ok: false, error: `${which} needs its superuser's password, as the repository's own database URLs give it: 1 to 100 printable characters` };
     }
+    if (missing('image', server.image)) return none('image');
     const image = typeof server.image === 'string' ? server.image.trim() : '';
     if (!isTaskPostgresImage(image)) {
       return {
         ok: false,
         error:
-          `${image ? `${image} is not an image a task's server may run` : `${which} names no image`}: use ${TASK_POSTGRES_IMAGES.join(' or ')}, ` +
+          `${image || `${which}'s image`} is not an image a task's server may run: use ${TASK_POSTGRES_IMAGES.join(' or ')}, ` +
           'such as pgvector/pgvector:pg16, and pin it by adding @sha256:<digest> (docker buildx imagetools inspect <image> prints it)',
       };
     }

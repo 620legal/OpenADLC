@@ -76,12 +76,31 @@ describe('a repository’s Postgres servers for its tasks', () => {
 
   it('refuses a superuser or database that is not a plain Postgres name', () => {
     expect(refusal({ servers: [{ ...CORE, superuser: 'Core; drop' }] })).toMatch(/server 1's superuser is a Postgres name/);
-    expect(refusal({ servers: [{ ...CORE, database: '' }] })).toMatch(/server 1's database is a Postgres name/);
+    expect(refusal({ servers: [{ ...CORE, database: 'core-db' }] })).toMatch(/server 1's database is a Postgres name/);
   });
 
-  it('refuses a missing password, or one that would not survive the environment', () => {
-    expect(refusal({ servers: [{ ...CORE, password: '' }] })).toMatch(/needs its superuser's password/);
-    expect(refusal({ servers: [{ ...CORE, password: 'two\nlines' }] })).toMatch(/printable characters/);
+  it('refuses a password that would not survive the environment', () => {
+    expect(refusal({ servers: [{ ...CORE, password: 'two\nlines' }] })).toMatch(/needs its superuser's password.*printable characters/);
+    expect(refusal({ servers: [{ ...CORE, password: 'x'.repeat(101) }] })).toMatch(/1 to 100 printable characters/);
+  });
+
+  it('says an empty field is empty, apart from a value it refuses, as the form sends a server it added', () => {
+    // What the form sends for a server added and saved with nothing typed:
+    // every field empty but the image it starts with.
+    const added = { port: '', superuser: '', password: '', database: '', image: 'pgvector/pgvector:pg16' };
+    expect(refusal({ servers: [added] })).toBe("server 1 has no port: give the port the repository's Makefile reaches it on");
+    expect(refusal({ servers: [{ ...CORE, port: '  ' }] })).toBe("server 1 has no port: give the port the repository's Makefile reaches it on");
+    expect(refusal({ servers: [{ ...CORE, port: undefined }] })).toMatch(/^server 1 has no port: /);
+    expect(refusal({ servers: [{ ...CORE, superuser: '' }] })).toBe("server 1 has no superuser: give the superuser the repository's own database URLs log in as");
+    expect(refusal({ servers: [{ ...CORE, password: '' }] })).toBe("server 1 has no password: give its superuser's password, as the repository's own database URLs give it");
+    expect(refusal({ servers: [{ ...CORE, database: ' ' }] })).toBe("server 1 has no database: give the database the repository's own database URLs name");
+    expect(refusal({ servers: [{ ...CORE, image: '' }] })).toBe('server 1 has no image: use pgvector/pgvector:<tag> or postgres:<tag>, such as pgvector/pgvector:pg16');
+    expect(refusal({ servers: [CORE, { ...CORE, port: 55433, database: null }] })).toMatch(/^server 2 has no database: /);
+
+    // A value that is there and wrong is still said as that.
+    expect(refusal({ servers: [{ ...CORE, port: '80' }] })).toMatch(/^server 1's port is a whole number from 1024 to 65535/);
+    expect(refusal({ servers: [{ ...CORE, port: 'five' }] })).toMatch(/^server 1's port is a whole number/);
+    expect(refusal({ servers: [{ ...CORE, superuser: 'Core' }] })).toMatch(/^server 1's superuser is a Postgres name/);
   });
 
   it(`refuses more than ${TASK_POSTGRES_MAX_SERVERS} servers, and a shape it cannot read`, () => {
