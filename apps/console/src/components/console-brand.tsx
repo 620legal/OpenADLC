@@ -2,10 +2,9 @@
 
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
-import { useRole } from '@/components/app-header';
+import { useBrand, useRole } from '@/components/app-header';
 import { SettingsPart } from '@/components/settings-sections';
 import { Button } from '@/components/ui/button';
-import type { Brand } from '@/lib/api';
 import { readBridgeError } from '@/lib/model-onboarding';
 
 export const CONSOLE_NAME_MAX = 40;
@@ -41,9 +40,11 @@ const IDLE: Status = { busy: false, error: null, saved: null };
  * Settings → Appearance: what the top left of the console says, and the logo
  * beside it, for everyone using it. An admin's: nothing is drawn for anyone
  * else, and the bridge refuses their change whatever the page offered. Not the
- * install name, which heads OpenADLC's posts on GitHub.
+ * install name, which heads OpenADLC's posts on GitHub. What is set now is
+ * what the root layout read for the header, so the two never disagree.
  */
-export function ConsoleBrandPart({ brand }: { brand: Brand }) {
+export function ConsoleBrandPart() {
+  const brand = useBrand();
   const role = useRole();
   const router = useRouter();
   const [name, setName] = useState(brand.name ?? '');

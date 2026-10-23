@@ -14,7 +14,7 @@ import { SpendingSummary } from '@/components/spending-limits';
 import { AppearanceSection, SettingsCard } from '@/components/settings-sections';
 import { AdminsOnly } from '@/components/not-a-user';
 import { UsersSection } from '@/components/users-section';
-import { api, readBrand, readMe, type WorkPauses } from '@/lib/api';
+import { api, readMe, type WorkPauses } from '@/lib/api';
 import { accountsFrom } from '@/lib/model-onboarding';
 import { colorMapOf } from '@/lib/repo-colors';
 import { readHeader } from '@/lib/read-header';
@@ -67,7 +67,7 @@ export default async function SettingsPage() {
       api.backup().catch(() => null),
       api.workPauses().catch((): WorkPauses => ({ paused: null, repos: {} })),
     ]);
-    const [users, brand] = await Promise.all([api.users().catch(() => null), readBrand()]);
+    const users = await api.users().catch(() => null);
     const header = await readHeader({
       repos: repos.repos.map((repo) => repo.name),
       colors: colorMapOf(repos.repos),
@@ -128,7 +128,8 @@ export default async function SettingsPage() {
 
             <UsersSection initial={users} me={me?.known ? me.email : ''} identityMode={me?.known ? me.identityMode : undefined} />
 
-            <AppearanceSection repositories={repos.repos} crew={crew.bots} brand={brand} />
+            {/* The console's name and logo, as the root layout read them for the header. */}
+            <AppearanceSection repositories={repos.repos} crew={crew.bots} withBrand />
           </main>
         </div>
       </AppShell>

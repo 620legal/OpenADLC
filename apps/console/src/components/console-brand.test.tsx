@@ -8,7 +8,7 @@ import type { Brand, Role } from '@/lib/api';
 
 const router = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
-import { RoleProvider } from './app-header';
+import { BrandProvider, RoleProvider } from './app-header';
 import { ConsoleBrandPart, logoFileProblem } from './console-brand';
 
 let root: Root;
@@ -43,7 +43,9 @@ async function mount(brand: Brand, role: Role = 'admin'): Promise<void> {
   await act(async () =>
     root.render(
       <RoleProvider role={role}>
-        <ConsoleBrandPart brand={brand} />
+        <BrandProvider brand={brand}>
+          <ConsoleBrandPart />
+        </BrandProvider>
       </RoleProvider>,
     ),
   );

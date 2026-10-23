@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { CrewColors, RepositoryColors } from '@/components/color-choice';
 import { ConsoleBrandPart } from '@/components/console-brand';
 import { ThemeToggle } from '@/components/theme-toggle';
-import type { Brand, CrewMember } from '@/lib/api';
+import type { CrewMember } from '@/lib/api';
 
 /** One section of settings, as a card with its heading and a line saying what it is. */
 export function SettingsCard({
@@ -76,17 +76,18 @@ export function SettingsPart({
  * repository's color and each crew member's. The two lists are the place to
  * change every color at once; a repository's own page offers its color too. A
  * page that has neither list to give, onboarding or a bridge that did not
- * answer, shows the mode alone. The name and logo are drawn only with the
- * brand given, and only for an admin (`ConsoleBrandPart`).
+ * answer, shows the mode alone. The name and logo are drawn only when the
+ * page asks for them, and only for an admin (`ConsoleBrandPart`).
  */
 export function AppearanceSection({
   repositories,
   crew,
-  brand,
+  withBrand = false,
 }: {
   repositories?: readonly { name: string; color?: string | null }[];
   crew?: readonly CrewMember[];
-  brand?: Brand;
+  /** Draw the console's name and logo, as Settings does and onboarding does not. */
+  withBrand?: boolean;
 } = {}) {
   return (
     <SettingsCard id="appearance" title="Appearance">
@@ -97,7 +98,7 @@ export function AppearanceSection({
         </div>
         <ThemeToggle />
       </div>
-      {brand && <ConsoleBrandPart brand={brand} />}
+      {withBrand && <ConsoleBrandPart />}
       {repositories && (
         <SettingsPart id="repository-colors" title="Repository colors" line="How the board tells repositories apart, always beside the name.">
           <RepositoryColors repositories={repositories} />

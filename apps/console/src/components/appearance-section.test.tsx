@@ -23,7 +23,7 @@ vi.mock('@/app/actions', () => ({
   }),
 }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => undefined }) }));
-import { RoleProvider } from './app-header';
+import { BrandProvider, RoleProvider } from './app-header';
 import { AppearanceSection } from './settings-sections';
 
 const REPOS = [
@@ -258,15 +258,21 @@ describe('crew colors, in Appearance', () => {
 describe('the console’s name and logo, in Appearance', () => {
   const BRAND = { name: 'Acme Legal', logoUrl: '/api/brand/logo?v=1' };
 
-  it('is the first part after the color mode, for an admin, when the page gives the brand', async () => {
-    await act(async () => root.render(<AppearanceSection repositories={REPOS} crew={CREW} brand={BRAND} />));
+  it('is the first part after the color mode, for an admin, when the page asks for it, with what the layout read', async () => {
+    await act(async () =>
+      root.render(
+        <BrandProvider brand={BRAND}>
+          <AppearanceSection repositories={REPOS} crew={CREW} withBrand />
+        </BrandProvider>,
+      ),
+    );
     const parts = [...container.querySelectorAll('[role="group"]')].map((one) => one.id);
     expect(parts).toEqual(['console-brand', 'repository-colors', 'crew-colors']);
     expect(container.textContent).toContain('Console name and logo');
     expect(container.querySelector<HTMLInputElement>('#console-brand input[type="text"]')?.value).toBe('Acme Legal');
   });
 
-  it('is not drawn without the brand, as onboarding draws Appearance', async () => {
+  it('is not drawn unless the page asks for it, as onboarding draws Appearance', async () => {
     await mount();
     expect(container.querySelector('#console-brand')).toBeNull();
   });
@@ -275,7 +281,9 @@ describe('the console’s name and logo, in Appearance', () => {
     await act(async () =>
       root.render(
         <RoleProvider role="user">
-          <AppearanceSection repositories={REPOS} crew={CREW} brand={BRAND} />
+          <BrandProvider brand={BRAND}>
+            <AppearanceSection repositories={REPOS} crew={CREW} withBrand />
+          </BrandProvider>
         </RoleProvider>,
       ),
     );
