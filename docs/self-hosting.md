@@ -407,11 +407,20 @@ Keep each account's email private: signed in as the account, open
 my email addresses private** and **Block command line pushes that expose my
 email**. The bots' own commits use the account's noreply address, but the commits
 GitHub writes for the crew — the squash merge of each pull request, and the
-merges that bring a branch up to date — use the account's default commit email.
+merges that bring a branch up to date — carry the account's primary email
+unless the setting is on when GitHub writes them; then they carry its noreply
+address ([GitHub's docs](https://docs.github.com/en/account-and-profile/how-tos/email-preferences/setting-your-commit-email-address)).
 Without the setting, every crew pull request merged in a public repository
-publishes your address, and its `+openadlc-<seat>` tag says what it is for. The
-`commit-email` check reads the newest commit GitHub wrote for each account and
-raises a warning card when it carries the account's own address.
+publishes your address, and its `+openadlc-<seat>` tag says what it is for. A
+commit keeps the address it was written with, so ticking the setting later
+does not take it off the ones already merged. The `commit-email` check reads
+the newest commit GitHub wrote for each account and raises a warning card,
+naming the commit and when it was written, when it carries the account's own
+address; it cannot read the setting itself, so it does not say the setting is
+off. The card clears by itself once GitHub writes a newer commit for the
+account with its noreply address. Should one written after the setting was
+ticked still carry the address, make the account's primary email an address
+that is fine to publish, which is the one GitHub writes otherwise.
 
 Worth knowing before you create the accounts:
 

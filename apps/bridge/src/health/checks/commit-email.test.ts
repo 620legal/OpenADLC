@@ -6,7 +6,8 @@ import type { RepoRef } from './crew.js';
 /**
  * Whether GitHub publishes a crew account's own email on the commits it
  * writes for it: the squash merges and update-branch merges of every crew
- * pull request.
+ * pull request. The setting that decides it cannot be read, so the card says
+ * only what the commit proves (#128).
  */
 
 const LEAKED = 'janedoe+openadlc-builder@example.com';
@@ -69,7 +70,26 @@ describe('the commit-email check', () => {
       },
     });
 
-    expect(await subject.run(new Date())).toEqual([expect.objectContaining({ subject: 'exampleco-crew', ok: true })]);
+    expect(await subject.run(new Date())).toEqual([
+      expect.objectContaining({
+        subject: 'exampleco-crew',
+        ok: true,
+        fixed: 'The newest commit GitHub wrote for exampleco-crew carries its noreply address',
+      }),
+    ]);
+  });
+
+  it('clears by itself once the newest commit GitHub wrote is clean, whichever repository the older one is in', async () => {
+    const { subject } = check({
+      crew: [bot('b-builder', 'exampleco-crew')],
+      repositories: [repo('api'), repo('web')],
+      commits: {
+        '/repos/exampleco/api/commits': [commit('ccc3333', LEAKED, '2026-09-01T10:00:00Z')],
+        '/repos/exampleco/web/commits': [commit('aaa1111', PRIVATE, '2026-09-30T10:00:00Z')],
+      },
+    });
+
+    expect(await subject.run(new Date())).toEqual([expect.objectContaining({ ok: true, facts: expect.objectContaining({ sha: 'aaa1111' }) })]);
   });
 
   it('warns when it carries the account’s own address, naming the commit but never the address', async () => {
@@ -97,6 +117,31 @@ describe('the commit-email check', () => {
     });
     expect(JSON.stringify(result)).not.toContain('example.com');
     expect(JSON.stringify(result)).toContain('exampleco/web');
+  });
+
+  // The account's setting was already on, and the card said to turn it on: a
+  // commit proves the address it carries and when it was written, not the
+  // setting now (#128).
+  it('says what the commit proves, and what to do whether or not the setting is already on', async () => {
+    const { subject } = check({
+      crew: [bot('b-builder', 'exampleco-crew')],
+      commits: { '/repos/exampleco/api/commits': [commit('ccc3333', LEAKED, '2026-09-30T10:00:00Z')] },
+    });
+
+    const [result] = await subject.run(new Date());
+    if (result?.ok !== false) throw new Error('expected a card');
+
+    expect(result.title).toBe('exampleco-crew’s own email address is on commit ccc3333 in exampleco/api');
+    expect(result.detail).toContain('GitHub wrote commit ccc3333 for exampleco-crew on 2026-09-30 10:00 UTC');
+    // Why: GitHub uses the noreply address only while the box is ticked, and
+    // never rewrites a commit.
+    expect(result.detail).toContain('only while “Keep my email addresses private” is ticked');
+    expect(result.detail).toContain('a commit keeps the address it was written with');
+    // What to do, either way, and what works when ticking it did not.
+    expect(result.detail).toContain('If the box is not ticked, tick it');
+    expect(result.detail).toContain('If it is already ticked, Dismiss this card: it clears by itself');
+    expect(result.detail).toContain('make the account’s primary email one that is fine to publish');
+    expect(result.title + result.detail).not.toMatch(/is public|not private|is off|open its email settings, and tick/);
   });
 
   it('judges only commits GitHub wrote, not the bot’s own pushes', async () => {
