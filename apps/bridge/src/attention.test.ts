@@ -905,6 +905,28 @@ describe('what needs a person', () => {
     expect(item?.detail).not.toContain('The reviewers still ask for changes');
   });
 
+  it('names the failing check when CI sent the work back and nothing can take it', async () => {
+    // The merge line keeps a red head out until it changes or its checks run
+    // again, so with no builder to take it the card is all that says why it waits.
+    const { attentionItems } = await load();
+    const check = '`ci` failed on `733ccb2` after its rerun: the `check` job, at its step “the diff stays inside what the issue declared”';
+    const nobody = {
+      at: minutesAgo(10),
+      payload: { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 0, bot: null, botId: null, reason: 'the builder that held #11 is no longer in the crew', check },
+    };
+    const atCap = { at: minutesAgo(10), payload: { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 3, bot: 'openadlc-atlas-janedoe', botId: 'bot-builder', check } };
+
+    const [stopped] = attentionItems({ now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [nobody] });
+    expect(stopped).toMatchObject({ id: 'stall:openadlc-testbed#29', kind: 'review_stalled', headline: 'CI failed after the lead approved, and nothing can take it' });
+    expect(stopped?.detail).toContain(`${check}. It was sent back to build, but nothing could take it: the builder that held #11 is no longer in the crew.`);
+    expect(stopped?.detail).toContain('until it changes or its checks run again');
+
+    const [capped] = attentionItems({ now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [atCap] });
+    expect(capped).toMatchObject({ headline: 'CI failed after the lead approved, and the review loop stopped after 3 rounds' });
+    expect(capped?.detail).toContain(check);
+    expect(capped?.detail).not.toContain('The reviewers still ask for changes');
+  });
+
   it('says a console request’s own question, naming the request, and answers it in the bot’s thread', async () => {
     const { attentionItems } = await load();
     // Triage asks what is missing through a gate, and the request waits in `questions`.

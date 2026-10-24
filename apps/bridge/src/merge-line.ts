@@ -57,6 +57,13 @@ export interface BackToBuild {
   leasePathsOnly?: boolean;
 }
 
+/** A head the line found red, for CI's handler (`MergeLine.useRedChecks`). */
+export interface RedHead {
+  repoName: string;
+  prNumber: number;
+  headSha: string;
+}
+
 /**
  * How long after `adlc:ci` was put on a head the line waits for a `ci` run to
  * appear before it takes the label off and puts it back: a `labeled` delivery
@@ -232,6 +239,22 @@ export class MergeLine {
     this.stacks = stacks;
   }
 
+  /**
+   * CI's own handler, handed a head the line found red; set once the webhooks
+   * exist (`main.ts`). Found live on 620legal/core#7: the line left a red head
+   * to `onCiRun`, which acted only on a `workflow_run` delivery, and both of
+   * that run's had come before the lead approved. Nothing else was coming for
+   * it, so nothing sent the work back.
+   */
+  private redChecks: ((head: RedHead) => Promise<void>) | null = null;
+
+  useRedChecks(handle: (head: RedHead) => Promise<void>): void {
+    this.redChecks = handle;
+  }
+
+  /** The heads kept out on red checks that the line has said so of, by `repo#n@sha`. */
+  private readonly saidRed = new Set<string>();
+
   /** The heads `adlc:ci` was put on, and when, by `repo#n@sha`. */
   private readonly ciAsked = new Map<string, number>();
 
@@ -285,6 +308,7 @@ export class MergeLine {
       console.log(`[bridge] ${repo.name}#${input.prNumber}: approved, and waits for #${waitingOn}, which it was built on, to merge`);
       return;
     }
+    if (input.headSha && (await this.stillRed(repo, input.prNumber, input.headSha))) return;
     await mergeLines.enter({
       repoId: repo.id,
       prNumber: input.prNumber,
@@ -293,9 +317,65 @@ export class MergeLine {
     });
   }
 
+  /**
+   * Whether the line let this pull request go on red checks at this very
+   * head, and they are red there still. Found live on 620legal/core#7: the
+   * gate sweep put the approved pull request back every ten minutes, the line
+   * found the same red head each time and said "Leaving the merge line" on it
+   * again, for thirteen hours. It stays out until its head changes or its
+   * checks run again (a rerun's are pending, then green or red anew), and the
+   * log says so once. CI's handler is asked again each time: no delivery may
+   * have come for a rerun's own failure, and that is what sends it back.
+   *
+   * Checks that cannot be read keep it out. GitHub's client answers an empty
+   * list for a read that failed, and a head the line found red has checks.
+   */
+  private async stillRed(repo: { id: string; name: string; fullName: string }, prNumber: number, headSha: string): Promise<boolean> {
+    const left = await mergeLines.entryFor(repo.id, prNumber).catch(() => null);
+    if (left?.state !== 'failed' || left.detail !== CHECKS_FAILED || left.headSha !== headSha) return false;
+    const automation = await asAutomation(this.actors, this.config).catch(() => null);
+    const checks = automation ? await automation.checksFor(repo.fullName, headSha).catch(() => []) : [];
+    if (checks.length > 0 && verdictFor(checks) !== 'red') return false;
+    const key = `${repo.fullName.toLowerCase()}#${prNumber}@${headSha}`;
+    if (!this.saidRed.has(key)) {
+      this.saidRed.add(key);
+      console.log(
+        `[bridge] ${repo.name}#${prNumber}: approved, and stays out of the merge line: its checks failed on ${headSha.slice(0, 7)}, ` +
+          'and it is taken in again once its head changes or its checks run again',
+      );
+    }
+    await this.handRed({ repoName: repo.name, prNumber, headSha });
+    return true;
+  }
+
+  /** Hands a red head to CI's handler (`useRedChecks`); what goes wrong there is said, and holds the line up nowhere. */
+  private async handRed(head: RedHead): Promise<void> {
+    if (!this.redChecks) return;
+    await this.redChecks(head).catch((error: unknown) =>
+      console.warn(
+        `[bridge] ${head.repoName}#${head.prNumber}: its red checks on ${head.headSha.slice(0, 7)} were not handed to CI's handler: ${error instanceof Error ? error.message : error}`,
+      ),
+    );
+  }
+
   async leave(repoName: string, prNumber: number): Promise<void> {
     const repo = await repos.getRepoByName(repoName);
     if (repo) await mergeLines.leave(repo.id, prNumber);
+  }
+
+  /**
+   * Takes a pull request out of the line on red checks at this head, as the
+   * line does when it finds them: its row stays, failed there, so neither the
+   * gate sweep nor another review takes that head in again (`stillRed`).
+   * `onCiRun` used `leave`, which dropped the row, and where nothing could
+   * take the work back the sweep put the same red head straight back in.
+   */
+  async failOnRed(repoName: string, prNumber: number, headSha: string): Promise<void> {
+    const repo = await repos.getRepoByName(repoName);
+    if (!repo) return;
+    const entry = await mergeLines.entryFor(repo.id, prNumber);
+    if (!entry || entry.state === 'merged') return;
+    await mergeLines.setState(entry.id, 'failed', { headSha, detail: CHECKS_FAILED });
   }
 
   /**
@@ -536,8 +616,17 @@ export class MergeLine {
 
     if (verdict === 'red') {
       // CI's own failure is `onCiRun`'s: run again once, then back to build.
-      await mergeLines.setState(entry.id, 'failed', { detail: CHECKS_FAILED });
-      await this.leaveFor(repo.name, entry.prNumber, 'the checks failed once the branch was up to date', false);
+      // It is handed the head (`handRed`), since no delivery may be coming
+      // for it, and the row keeps the head, which stays out until it changes
+      // or its checks run again (`stillRed`).
+      await mergeLines.setState(entry.id, 'failed', { headSha: pull.headSha, detail: CHECKS_FAILED });
+      await this.leaveFor(
+        repo.name,
+        entry.prNumber,
+        'the checks failed once the branch was up to date. It is taken in again once its head changes or its checks run again',
+        false,
+      );
+      await this.handRed({ repoName: repo.name, prNumber: entry.prNumber, headSha: pull.headSha });
       return {
         repo: repo.name,
         prNumber: entry.prNumber,

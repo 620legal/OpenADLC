@@ -148,7 +148,7 @@ describe('what a card says about the work on it', () => {
 
   it('says when the review loop stopped', () => {
     const inReview = issue({ number: 12, stage: 'review', prNumber: 31 });
-    const stall = { repo: 'openadlc', pr: 31, issue: 12, rounds: 3, botId: null, bot: null, heldBy: [], reason: null, at: minutesAgo(10) };
+    const stall = { repo: 'openadlc', pr: 31, issue: 12, rounds: 3, botId: null, bot: null, heldBy: [], reason: null, check: null, at: minutesAgo(10) };
     expect(
       cardWork(inReview, { tasks: [], botName, stalls: new Map([['openadlc#31', stall]]) })
         .stalledAfterRounds,

@@ -69,6 +69,8 @@ const store = vi.hoisted(() => ({
   settingsRead: true,
   entry: { id: 'line-1', prNumber: 31, state: 'testing', detail: null as string | null, headSha: null as string | null },
   entered: [] as number[],
+  /** The pull request's row whatever its state, as `entryFor` reads it: one the line let go of keeps its row. */
+  left: null as { id: string; prNumber: number; state: string; detail: string | null; headSha: string | null } | null,
   /** The stage of the issue the front pull request is for, as the board has it. */
   issueStage: 'review' as string,
   /** The events the line recorded. */
@@ -119,6 +121,7 @@ vi.mock('@openadlc/db', () => ({
     }),
     leave: vi.fn(async () => undefined),
     enter: vi.fn(async (input: { prNumber: number }) => void store.entered.push(input.prNumber)),
+    entryFor: vi.fn(async () => (store.left ? { ...store.left } : null)),
   },
   issues: {
     listIssues: vi.fn(async () => [{ number: 11, prNumber: 31 }]),
@@ -868,5 +871,134 @@ describe('a pull request whose resolution round has not started', () => {
     await merge.enter({ repoName: 'openadlc', prNumber: 31, headSha: 'abc' });
 
     expect(store.entered).toEqual([31]);
+  });
+});
+
+describe('a head the line found red', () => {
+  // 620legal/core#7: CI failed, its one rerun failed, and both deliveries came
+  // before the lead approved. The approval put it in the line, the line found
+  // the head red and left it to `onCiRun`, which nothing reached again; the
+  // gate sweep put it back every ten minutes, and the line said "Leaving the
+  // merge line" on it each time, for thirteen hours.
+  const HEAD = '733ccb26c6ba43cc43ddd10f1fd425f405d003f3';
+  const pull = {
+    number: 7,
+    draft: false,
+    merged: false,
+    state: 'open',
+    headRef: 'agent/openadlc-atlas-janedoe/5-issue-5',
+    headSha: HEAD,
+    baseRef: 'main',
+    labels: [],
+    mergeableState: 'clean',
+    autoMerge: false,
+    headRepoFullName: 'janedoe/openadlc',
+  };
+
+  function line(checks: { name: string; status: string; conclusion: string | null; id?: number }[]) {
+    const github = {
+      getPullRequest: vi.fn(async () => ({ ...pull })),
+      behindBy: vi.fn(async () => 0),
+      checksFor: vi.fn(async () => checks),
+      comment: vi.fn(async () => null),
+    };
+    const merge = new MergeLine({ automationBot: null } as never, { asBot: async () => github } as never, {} as never, null);
+    const handed = vi.fn(async (_head: unknown) => undefined);
+    merge.useRedChecks(handed);
+    return { merge, github, handed };
+  }
+
+  const leaving = (github: { comment: ReturnType<typeof vi.fn> }) =>
+    github.comment.mock.calls.filter(([, , body]) => String(body).startsWith('Leaving the merge line')).map(([, , body]) => body);
+
+  beforeEach(async () => {
+    store.states = [];
+    store.entered = [];
+    store.issueStage = 'review';
+    store.entry = { id: 'line-7', prNumber: 7, state: 'waiting', detail: null, headSha: 'an-older-head' };
+    store.left = null;
+    const { mergeLines } = await import('@openadlc/db');
+    vi.mocked(mergeLines.enter).mockClear();
+  });
+
+  it('lets it go at that head, says once why it waits, and hands the head to CI’s handler', async () => {
+    const { merge, github, handed } = line([red(REQUIRED_CHECK), green(REVIEW_GATE_CHECK)]);
+
+    expect(await merge.advance('openadlc')).toMatchObject({ state: 'failed', detail: 'checks failed on the updated head' });
+
+    // The row keeps the head it found red, not the one it entered with.
+    expect(store.entry).toMatchObject({ state: 'failed', headSha: HEAD, detail: 'checks failed on the updated head' });
+    expect(leaving(github)).toEqual([
+      'Leaving the merge line: the checks failed once the branch was up to date. It is taken in again once its head changes or its checks run again.',
+    ]);
+    expect(handed).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 7, headSha: HEAD });
+  });
+
+  it('keeps that head out while its checks are red there, says so once, and hands it on each time', async () => {
+    const { merge, github, handed } = line([red(REQUIRED_CHECK), green(REVIEW_GATE_CHECK)]);
+    store.left = { id: 'line-7', prNumber: 7, state: 'failed', detail: 'checks failed on the updated head', headSha: HEAD };
+    const said = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    try {
+      // The gate sweep, every ten minutes.
+      for (let sweep = 0; sweep < 3; sweep += 1) await merge.enter({ repoName: 'openadlc', prNumber: 7, headSha: HEAD });
+
+      expect(store.entered).toEqual([]);
+      expect(leaving(github)).toEqual([]);
+      expect(said.mock.calls.filter(([text]) => String(text).includes('stays out of the merge line'))).toHaveLength(1);
+      expect(handed).toHaveBeenCalledTimes(3);
+    } finally {
+      said.mockRestore();
+    }
+  });
+
+  it('keeps it out when the checks cannot be read, as they were found', async () => {
+    // GitHub's client answers no checks for a read that failed.
+    const { merge } = line([]);
+    store.left = { id: 'line-7', prNumber: 7, state: 'failed', detail: 'checks failed on the updated head', headSha: HEAD };
+    const quiet = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    try {
+      await merge.enter({ repoName: 'openadlc', prNumber: 7, headSha: HEAD });
+    } finally {
+      quiet.mockRestore();
+    }
+
+    expect(store.entered).toEqual([]);
+  });
+
+  it('takes it in again once its checks run again, or its head changes', async () => {
+    store.left = { id: 'line-7', prNumber: 7, state: 'failed', detail: 'checks failed on the updated head', headSha: HEAD };
+    // CI's one rerun is under way: the newest run of `ci` is the rerun's.
+    const rerun = line([{ id: 1, name: REQUIRED_CHECK, status: 'completed', conclusion: 'failure' }, { id: 2, name: REQUIRED_CHECK, status: 'queued', conclusion: null }, green(REVIEW_GATE_CHECK)]);
+    await rerun.merge.enter({ repoName: 'openadlc', prNumber: 7, headSha: HEAD });
+    expect(store.entered).toEqual([7]);
+    expect(rerun.handed).not.toHaveBeenCalled();
+
+    const pushed = line([red(REQUIRED_CHECK), green(REVIEW_GATE_CHECK)]);
+    await pushed.merge.enter({ repoName: 'openadlc', prNumber: 7, headSha: 'the-fix-pushed-since' });
+    expect(store.entered).toEqual([7, 7]);
+  });
+
+  it('keeps out only a head it let go of on red checks: a conflict is the resolution round’s', async () => {
+    const { merge } = line([red(REQUIRED_CHECK), green(REVIEW_GATE_CHECK)]);
+    store.left = { id: 'line-7', prNumber: 7, state: 'failed', detail: 'conflicts with main', headSha: HEAD };
+
+    await merge.enter({ repoName: 'openadlc', prNumber: 7, headSha: HEAD });
+
+    expect(store.entered).toEqual([7]);
+  });
+
+  it('is let go of at a head CI’s handler found red, its row kept, so the sweep cannot take it straight back', async () => {
+    const { mergeLines } = await import('@openadlc/db');
+    vi.mocked(mergeLines.leave).mockClear();
+    const { merge } = line([red(REQUIRED_CHECK), green(REVIEW_GATE_CHECK)]);
+    store.left = { id: 'line-7', prNumber: 7, state: 'testing', detail: 'waiting for the checks on the updated head', headSha: HEAD };
+
+    await merge.failOnRed('openadlc', 7, HEAD);
+
+    expect(store.states).toEqual([{ state: 'failed', detail: 'checks failed on the updated head' }]);
+    expect(vi.mocked(mergeLines.setState)).toHaveBeenLastCalledWith('line-7', 'failed', { headSha: HEAD, detail: 'checks failed on the updated head' });
+    expect(mergeLines.leave).not.toHaveBeenCalled();
   });
 });

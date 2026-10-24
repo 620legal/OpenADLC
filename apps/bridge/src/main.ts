@@ -315,6 +315,9 @@ async function main(): Promise<void> {
     sendBack,
   );
   webhooks.useDelivery(pipeline, delivery);
+  // A head the merge line finds red is CI's handler's: run again once, then
+  // back to build, whether or not a delivery of the run is still coming.
+  mergeLine.useRedChecks((head) => webhooks.ciRedAt(head));
   // A QA task's testing.md names the URL these rules resolve to; see `Context.forQa`.
   context.useDelivery(delivery);
   // A closed pull request's reviews stop the way a card's Stop stops them.

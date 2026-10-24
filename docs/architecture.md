@@ -332,7 +332,11 @@ none yet, says its kind of work instead ("writing the change").
    (below): the card moves to Build and a patch round opens for the builder,
    up to `maxRounds`; a loop that does not agree stops and asks a person. A
    failed `ci` run is run again once, as the app (it needs "Actions: write");
-   a second failure after the lead approved sends the work back to build too.
+   a second failure after the lead approved sends the work back to build too,
+   naming the job and the step that failed. One that failed before the lead
+   approved waits for the approval, which puts the pull request in the merge
+   line; the line finds the head red and hands it back to CI's handler, which
+   sends it then, with no delivery of the run still to come.
    Only a crew branch (`agent/…`: a build, a QA suite change, an ADR) needs a
    recorded local CI pass for the lead to approve it. Any other pull request —
    the SRE's revert, a person's own branch — has no crew author to run one:
@@ -366,7 +370,14 @@ none yet, says its kind of work instead ("writing the change").
    head that lands, after the lead approved; a branch update re-runs it while
    the label stays. A failed run is run again once; a second failure takes the
    label off, takes the pull request out of the line and sends the work back
-   to build with the run. `adlc:ci` put on by anyone else but a person who can
+   to build with the run and the job and step that failed, whether its
+   delivery came, before the lead approved or after, or the line found the
+   head red itself. A head the line let go of on red checks stays out — the
+   gate sweep and a later review take it in again only once the head changes
+   or its checks run again — and the line says so once, on the pull request.
+   Where nothing can take the work back (no lease or builder, or the review
+   loop at its limit), `review.stalled` carries the failing check, and Needs
+   you names it. `adlc:ci` put on by anyone else but a person who can
    write is taken off and audited. A person's pull request runs CI as it
    always did.
 

@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GitHubApiError, type PullCommit } from '@openadlc/github';
 import { DEFAULT_DELIVERY_RULES, MERGE_IS_SHIPPING, isForwardMove, renderGateComment, type StageKey } from '@openadlc/shared';
-import { deployRuns, hasEventOfType, issues, leases, listEventsOfType, repos, spendingLimits, tasks } from '@openadlc/db';
+import { deployRuns, hasEventOfType, issues, leases, listEventsOfType, mergeLines, repos, spendingLimits, tasks } from '@openadlc/db';
 import { Automation, mergeDecision, type MergeFacts } from './automation.js';
 import { attentionItems } from './attention.js';
 import { recordDesignMemory } from './design-memory.js';
@@ -22,6 +22,7 @@ import { STACK_MADE, STACK_UPDATED, STACK_UPDATING, Stacking } from './stacking.
 import {
   deployFailedOnTesting,
   deploymentOutcome,
+  failedAt,
   ownWords,
   promotedCandidate,
   promoteOverridden,
@@ -244,6 +245,7 @@ vi.mock('@openadlc/db', () => ({
     }),
     leave: vi.fn(async () => undefined),
     enter: vi.fn(async () => undefined),
+    entryFor: vi.fn(async () => (store.lineEntry ? { ...store.lineEntry } : null)),
   },
   threads: {
     listOpenGates: vi.fn(async () => [{ id: 'gate-1', taskId: 'task-1' }] as { id: string; taskId: string; createdAt?: string }[]),
@@ -6876,9 +6878,14 @@ describe('a pull request’s CI finishing', () => {
     };
   }
 
-  function bridge(options: { reviews?: Record<string, unknown>[]; live?: Record<string, unknown>; pull?: Record<string, unknown>; app?: boolean } = {}) {
+  function bridge(
+    options: { reviews?: Record<string, unknown>[]; live?: Record<string, unknown>; pull?: Record<string, unknown>; app?: boolean; line?: boolean } = {},
+  ) {
     const github = {
       getPullRequest: vi.fn(async () => ({ number: 31, state: 'open', draft: false, labels: [], baseRef: 'main', headSha: HEAD, headRef: 'agent/openadlc-atlas-janedoe/11-issue-11', ...options.pull })),
+      // What the merge line reads at the front: up to date, and the checks on the head.
+      behindBy: vi.fn(async () => 0),
+      checksFor: vi.fn(async (): Promise<{ id?: number; name: string; status: string; conclusion: string | null }[]> => []),
       listReviews: vi.fn(async () => options.reviews ?? []),
       readFileAtRef: vi.fn(async () => '# Agent notes\n'),
       diffFingerprint: vi.fn(async () => 'the diff'),
@@ -6903,9 +6910,13 @@ describe('a pull request’s CI finishing', () => {
     const attribution = { countable: vi.fn(async (posts: unknown[]) => [...posts]), reviewsThatCount: vi.fn(async (_repo: string, _n: number, posts: unknown[]) => [...posts]) };
     const automation = new Automation(config as never, { asBot: vi.fn(async () => github), attribution } as never, appGate as never);
     const taskService = { open: vi.fn(async () => ({ taskId: 'task-review', session: 'review-1' })) };
-    const mergeLine = { leave: vi.fn(async () => undefined) };
-    const webhooks = new Webhooks(config as never, automation, {} as never, taskService as never, {} as never, mergeLine as never);
-    return { webhooks, app, taskService, github, mergeLine };
+    const mergeLine = { leave: vi.fn(async () => undefined), failOnRed: vi.fn(async () => undefined) };
+    // The real line, for a replay that takes the pull request through it: it
+    // hands a head it finds red to CI's handler, as `main.ts` wires it.
+    const line = options.line ? new MergeLine(config as never, { asBot: async () => github } as never, {} as never, null) : null;
+    const webhooks = new Webhooks(config as never, automation, {} as never, taskService as never, {} as never, (line ?? mergeLine) as never);
+    line?.useRedChecks((head) => webhooks.ciRedAt(head));
+    return { webhooks, app, taskService, github, mergeLine, line };
   }
 
   /** Delivers a run, quietly; what was warned is returned, so a step that failed in a log line is seen. */
@@ -7053,7 +7064,8 @@ describe('a pull request’s CI finishing', () => {
       expect(warned.filter((line) => /not moved/.test(line))).toEqual([]);
       expect(app.request).not.toHaveBeenCalled();
       expect(taskService.open).toHaveBeenCalledWith(expect.objectContaining({ bot: 'openadlc-atlas-janedoe', kind: 'patch', round: 2 }));
-      expect(mergeLine.leave).toHaveBeenCalledWith('openadlc', 31);
+      // Out of the line at that head, its row kept so nothing takes it straight back in.
+      expect(mergeLine.failOnRed).toHaveBeenCalledWith('openadlc', 31, HEAD);
       // Off, so the fix's push runs no CI until the lead approves it.
       expect(app.removeLabel).toHaveBeenCalledWith('janedoe/openadlc', 31, 'adlc:ci');
     });
@@ -7067,7 +7079,9 @@ describe('a pull request’s CI finishing', () => {
       await deliver(webhooks, run('failure', 2));
 
       expect(github.comment).toHaveBeenCalledWith('janedoe/openadlc', 31, expect.stringContaining('3 review rounds have not converged'));
-      expect(vi.mocked(recordEvent).mock.calls.some(([event]) => event.type === 'review.stalled')).toBe(true);
+      // The card names the check, since the merge line keeps that red head out.
+      const stalls = vi.mocked(recordEvent).mock.calls.map(([event]) => event).filter((event) => event.type === 'review.stalled');
+      expect(stalls).toEqual([expect.objectContaining({ payload: expect.objectContaining({ rounds: 3, check: '`ci` failed on `feed00f` after its rerun' }) })]);
     });
 
     it('leaves a real failure before the lead has approved to the lead’s review', async () => {
@@ -7079,6 +7093,287 @@ describe('a pull request’s CI finishing', () => {
       await deliver(webhooks, run('failure', 2));
 
       expect(taskService.open).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * 620legal/core#7, replayed. CI failed at its scope check; the bridge ran
+   * its failed jobs again, once, and the rerun failed the same way; both
+   * deliveries came before the lead approved, and `onCiRun` left them to the
+   * lead's decision. The approval put the pull request in the merge line,
+   * the line found the head red and left it to `onCiRun`, and nothing reached
+   * that again: for thirteen hours the gate sweep put it back every ten
+   * minutes, the line said "Leaving the merge line" on it each time, and the
+   * work never went back to its builder.
+   */
+  describe('where it failed, as the builder is told', () => {
+    const job = (name: string, conclusion: string, steps: [string, string][] = []) => ({
+      name,
+      conclusion,
+      steps: steps.map(([step, said]) => ({ name: step, conclusion: said })),
+    });
+
+    it('names each failed job and the first of its steps that failed, past one that only gathers the others', () => {
+      expect(
+        failedAt([
+          job('check', 'failure', [['install', 'success'], ['scope check', 'failure'], ['make ci', 'skipped']]),
+          job('lint', 'success', [['eslint', 'success']]),
+          job('ci', 'failure', [['gather', 'failure']]),
+        ]),
+      ).toBe('the `check` job, at its step “scope check”');
+      expect(failedAt([job('unit', 'failure', [['test', 'failure']]), job('e2e', 'timed_out', [['playwright', 'timed_out']])])).toBe(
+        'the `unit` job, at its step “test”; the `e2e` job, at its step “playwright”',
+      );
+    });
+
+    it('names the `ci` job when it is all that failed, as the template’s single job is, and a job no step of which failed', () => {
+      expect(failedAt([job('ci', 'failure', [['make ci', 'failure']])])).toBe('the `ci` job, at its step “make ci”');
+      expect(failedAt([job('check', 'failure')])).toBe('the `check` job');
+    });
+
+    it('names nothing when no job failed', () => {
+      expect(failedAt([job('ci', 'cancelled'), job('check', 'success')])).toBeNull();
+      expect(failedAt([])).toBeNull();
+    });
+  });
+
+  describe('that stays red after its one rerun', () => {
+    const STEP = 'the diff stays inside what the issue declared (scope:cross-cutting is accepted)';
+    // The run's jobs as GitHub listed core#7's: `check` did the work and
+    // failed at its scope check; `ci` only gathers it, and failed because it had.
+    const JOBS = [
+      {
+        name: 'check',
+        status: 'completed',
+        conclusion: 'failure',
+        started_at: '2026-10-24T01:24:56Z',
+        completed_at: '2026-10-24T01:25:29Z',
+        steps: [
+          { name: 'Run pnpm install --frozen-lockfile', conclusion: 'success' },
+          { name: STEP, conclusion: 'failure' },
+          { name: 'make ci', conclusion: 'skipped' },
+        ],
+      },
+      {
+        name: 'ci',
+        status: 'completed',
+        conclusion: 'failure',
+        started_at: '2026-10-24T01:25:32Z',
+        completed_at: '2026-10-24T01:25:35Z',
+        steps: [{ name: 'Run if [ "failure" != "success" ]; then echo "checks did not pass: failure"; exit 1; fi', conclusion: 'failure' }],
+      },
+    ];
+    const OPEN = ['waiting', 'updating', 'testing', 'merging'];
+    type Requested = (method: string, path: string) => Promise<unknown>;
+    let restore: () => void = () => undefined;
+
+    // The line's row as the store keeps it: one that failed or merged keeps
+    // its row and its head until it enters again, and only an open one is
+    // ever at the front.
+    beforeEach(() => {
+      const enter = vi.mocked(mergeLines.enter).getMockImplementation();
+      const head = vi.mocked(mergeLines.head).getMockImplementation();
+      vi.mocked(mergeLines.enter).mockImplementation(async (input: { prNumber: number; headSha: string | null }) => {
+        const was = store.lineEntry;
+        const back = !was || was.state === 'failed' || was.state === 'merged';
+        store.lineEntry = back
+          ? { id: 'line-31', repoId: 'repo-1', repoName: 'openadlc', prNumber: input.prNumber, position: 1, state: 'waiting', headSha: input.headSha, detail: null }
+          : { ...was, headSha: input.headSha };
+        return store.lineEntry as never;
+      });
+      vi.mocked(mergeLines.head).mockImplementation(async () => (store.lineEntry && OPEN.includes(String(store.lineEntry.state)) ? ({ ...store.lineEntry } as never) : null));
+      restore = () => {
+        if (enter) vi.mocked(mergeLines.enter).mockImplementation(enter);
+        if (head) vi.mocked(mergeLines.head).mockImplementation(head);
+      };
+    });
+    afterEach(() => restore());
+
+    /** The line's steps and the bridge's words, quietly. */
+    async function quietly<T>(step: () => Promise<T>): Promise<T> {
+      const quiet = [vi.spyOn(console, 'log').mockImplementation(() => undefined), vi.spyOn(console, 'warn').mockImplementation(() => undefined)];
+      try {
+        return await step();
+      } finally {
+        for (const spy of quiet) spy.mockRestore();
+      }
+    }
+
+    /**
+     * The pull request, its one `ci` run and the checks that run leaves on the
+     * head: each attempt's own check run, the newest last, as GitHub keeps them.
+     */
+    function replay(options: { reviews?: Record<string, unknown>[]; pull?: Record<string, unknown> } = {}) {
+      const wired = bridge({ line: true, pull: { merged: false, headRepoFullName: 'janedoe/openadlc', ...options.pull } });
+      const ci = { attempt: 1, status: 'in_progress', conclusion: null as string | null, reviews: options.reviews ?? [] };
+      const run = () => ({ id: 4242, name: 'ci', run_attempt: ci.attempt, status: ci.status, conclusion: ci.conclusion });
+      wired.github.listReviews.mockImplementation(async () => ci.reviews);
+      wired.github.checksFor.mockImplementation(async () => [
+        ...Array.from({ length: ci.attempt - 1 }, (_, attempt) => ({ id: attempt + 1, name: 'ci', status: 'completed', conclusion: 'failure' })),
+        { id: ci.attempt, name: 'ci', status: ci.status, conclusion: ci.conclusion },
+        { name: 'review-gate', status: 'completed', conclusion: 'success' },
+      ]);
+      vi.mocked(wired.github.request as unknown as Requested).mockImplementation(async (_method, path) => {
+        if (path.includes('/attempts/')) return { total_count: JOBS.length, jobs: JOBS };
+        if (path.includes('/actions/runs?head_sha=')) return { workflow_runs: [run()] };
+        return run();
+      });
+      // The rerun GitHub queues once asked: the same run, its second attempt.
+      vi.mocked(wired.app.request as unknown as Requested).mockImplementation(async (_method, path) => {
+        if (path.endsWith('/rerun-failed-jobs')) Object.assign(ci, { attempt: 2, status: 'queued', conclusion: null });
+        return {};
+      });
+      const comments = () => wired.github.comment.mock.calls as unknown as [string, number, string][];
+      return {
+        ...wired,
+        line: wired.line!,
+        ci,
+        /** The attempt under way ends. */
+        fails: () => Object.assign(ci, { status: 'completed', conclusion: 'failure' }),
+        /** What the gate sweep does every ten minutes for an approved pull request whose issue is in review, then the merge job. */
+        sweep: async (times: number) => {
+          for (let sweep = 0; sweep < times; sweep += 1) {
+            await quietly(() => wired.line!.enter({ repoName: 'openadlc', prNumber: 31, headSha: HEAD }));
+            await quietly(() => wired.line!.advance('openadlc'));
+          }
+        },
+        rerunsAsked: () => wired.app.request.mock.calls.filter((call) => String((call as unknown[])[1]).endsWith('/rerun-failed-jobs')).length,
+        rounds: () => wired.taskService.open.mock.calls.filter((call) => (call as unknown[])[0] && ((call as unknown[])[0] as { kind?: string }).kind === 'patch'),
+        leaving: () => comments().filter(([, number, body]) => number === 31 && body.startsWith('Leaving the merge line')),
+        /** What the issue was told when its card went back to build. */
+        toldOnIssue: () => comments().filter(([, number]) => number === 11).map(([, , body]) => body).join('\n'),
+      };
+    }
+
+    it('replays core#7 — failed, ran once again, failed again, then the lead approved — and sends it back once, with the job and step', async () => {
+      store.botTasks = [];
+      const pr = replay();
+
+      // 01:24:52: the first attempt failed, before the lead had reviewed.
+      pr.fails();
+      await deliver(pr.webhooks, run('failure', 1));
+      expect(pr.rerunsAsked()).toBe(1);
+
+      // 01:25:36: the rerun failed the same way. The lead has not decided, so it waits.
+      pr.fails();
+      await deliver(pr.webhooks, run('failure', 2));
+      expect(pr.rounds()).toEqual([]);
+
+      // 01:28:41: the lead approves. Its review puts the pull request in the
+      // line and moves the line on, as `onReview` does once the gate is green.
+      pr.ci.reviews = [APPROVAL];
+      await quietly(() => pr.line.enter({ repoName: 'openadlc', prNumber: 31, headSha: HEAD }));
+      expect(await quietly(() => pr.line.advance('openadlc'))).toMatchObject({ state: 'failed', detail: 'checks failed on the updated head' });
+
+      expect(pr.rounds()).toHaveLength(1);
+      expect(pr.rounds()[0]).toEqual([expect.objectContaining({ bot: 'openadlc-atlas-janedoe', kind: 'patch', subjectRef: 'openadlc#31' })]);
+      expect(pr.github.setLabels).toHaveBeenCalledWith('janedoe/openadlc', 11, ['priority:p2', 'adlc:build']);
+      expect(pr.toldOnIssue()).toContain(`CI failed again on feed00f after its rerun, after the lead approved: the \`check\` job, at its step “${STEP}”.`);
+      expect(pr.toldOnIssue()).not.toContain('the `ci` job');
+
+      // From 01:37, every ten minutes: nothing goes in and out again.
+      await pr.sweep(3);
+      expect(pr.leaving()).toHaveLength(1);
+      expect(pr.leaving()[0]?.[2]).toBe(
+        'Leaving the merge line: the checks failed once the branch was up to date. It is taken in again once its head changes or its checks run again.',
+      );
+      expect(pr.rounds()).toHaveLength(1);
+      expect(pr.rerunsAsked()).toBe(1);
+    });
+
+    it('sends it back once, with the job and step, when the lead approved first and the line asked for CI on the head that lands', async () => {
+      store.botTasks = [];
+      const pr = replay({ reviews: [APPROVAL], pull: { labels: ['adlc:ci'] } });
+
+      // Approved and in the line; CI is under way on the head.
+      await quietly(() => pr.line.enter({ repoName: 'openadlc', prNumber: 31, headSha: HEAD }));
+      expect(await quietly(() => pr.line.advance('openadlc'))).toMatchObject({ state: 'testing' });
+
+      // The first attempt fails. The check's delivery moves the line first,
+      // which lets the red head go and hands it on; the run's own delivery
+      // after it asks for no second rerun.
+      pr.fails();
+      expect(await quietly(() => pr.line.advance('openadlc'))).toMatchObject({ state: 'failed' });
+      await deliver(pr.webhooks, run('failure', 1));
+      expect(pr.rerunsAsked()).toBe(1);
+      expect(pr.rounds()).toEqual([]);
+
+      // The rerun's checks are pending at that head: the sweep takes it in again, and it waits on them.
+      await quietly(() => pr.line.enter({ repoName: 'openadlc', prNumber: 31, headSha: HEAD }));
+      expect(await quietly(() => pr.line.advance('openadlc'))).toMatchObject({ state: 'testing' });
+
+      // The rerun fails: its delivery, and the line's next pass.
+      pr.fails();
+      await deliver(pr.webhooks, run('failure', 2));
+      await quietly(() => pr.line.advance('openadlc'));
+
+      expect(pr.rounds()).toHaveLength(1);
+      expect(pr.toldOnIssue()).toContain(`the \`check\` job, at its step “${STEP}”`);
+      expect(pr.app.removeLabel).toHaveBeenCalledWith('janedoe/openadlc', 31, 'adlc:ci');
+
+      await pr.sweep(3);
+      expect(pr.leaving()).toHaveLength(1);
+      expect(pr.rounds()).toHaveLength(1);
+      expect(pr.rerunsAsked()).toBe(1);
+    });
+
+    it('sends it back from the merge line and the sweep alone when no delivery of the run comes at all', async () => {
+      store.botTasks = [];
+      const pr = replay({ reviews: [APPROVAL] });
+      await quietly(() => pr.line.enter({ repoName: 'openadlc', prNumber: 31, headSha: HEAD }));
+      await quietly(() => pr.line.advance('openadlc'));
+
+      // The first attempt fails, and its delivery is lost: the line runs it again.
+      pr.fails();
+      await quietly(() => pr.line.advance('openadlc'));
+      expect(pr.rerunsAsked()).toBe(1);
+
+      // The rerun runs and fails between two sweeps, its delivery lost too.
+      pr.fails();
+      await pr.sweep(1);
+
+      expect(pr.rounds()).toHaveLength(1);
+      expect(pr.toldOnIssue()).toContain(`the \`check\` job, at its step “${STEP}”`);
+      await pr.sweep(3);
+      expect(pr.rounds()).toHaveLength(1);
+      expect(pr.leaving()).toHaveLength(1);
+    });
+
+    it('puts a card in Needs you naming the failing check when no builder can take it, and still keeps the head out', async () => {
+      // #11 is in Review, nothing holds it any more, and no lease was ever linked to #31.
+      store.lease = null;
+      store.botTasks = [];
+      store.issue = { number: 11, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
+      const { recordEvent } = await import('@openadlc/db');
+      vi.mocked(recordEvent).mockClear();
+      const pr = replay({ reviews: [APPROVAL] });
+      Object.assign(pr.ci, { attempt: 2, status: 'completed', conclusion: 'failure' });
+
+      try {
+        await pr.sweep(4);
+      } finally {
+        store.issue = null;
+      }
+
+      const stalls = vi.mocked(recordEvent).mock.calls.map(([event]) => event).filter((event) => event.type === 'review.stalled');
+      expect(stalls).toHaveLength(1);
+      expect(stalls[0]?.payload).toMatchObject({ repo: 'openadlc', pr: 31, issue: 11, head: HEAD, check: expect.stringContaining(`at its step “${STEP}”`) });
+      expect(pr.rounds()).toEqual([]);
+      expect(pr.leaving()).toHaveLength(1);
+
+      const [card] = attentionItems({
+        now: new Date(),
+        gates: [],
+        tasks: [],
+        bots: [],
+        repos: [{ id: 'repo-1', name: 'openadlc', fullName: 'janedoe/openadlc', defaultBranch: 'main' }] as never,
+        issues: [],
+        requests: [],
+        stallEvents: stalls.map((event) => ({ at: new Date().toISOString(), payload: event.payload })),
+      });
+      expect(card).toMatchObject({ kind: 'review_stalled', headline: 'CI failed after the lead approved, and nothing can take it' });
+      expect(card?.detail).toContain(`\`ci\` failed on \`feed00f\` after its rerun: the \`check\` job, at its step “${STEP}”.`);
+      expect(card?.detail).toContain('no lease on #11 was ever linked to #31');
     });
   });
 
