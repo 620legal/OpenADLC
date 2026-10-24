@@ -257,6 +257,11 @@ next question is written after it, not before.
   it is in `request.md`, and on an issue or a pull request it is in its
   conversation. Read it first. It may have changed what you assumed, so your
   next question, if you still need one, builds on it.
+- A person can also write to you from the console. When `message.md` is in
+  your context, their message is why this review started: review this head
+  with it in mind. It does not change your part, your lens or what you review
+  — the diff — and it is in the pull request's conversation too, posted as
+  you.
 
 ## Severity
 

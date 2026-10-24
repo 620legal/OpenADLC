@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { ItemView as ItemData } from '@/lib/api';
-import { itemComposer, itemEntries, roleTabs, speakerLabel } from '@/lib/item';
+import { addressedRole, itemComposer, itemEntries, roleTabs, speakerLabel, writeToRoles } from '@/lib/item';
 import { RoleProvider } from './app-header';
 import { ItemView } from './item-view';
 
@@ -189,6 +189,24 @@ describe('where the item’s box sends a message', () => {
   it('says the lead reviewer and the pull request while the builder’s patch runs, when the reviewer spoke last', () => {
     const lead = { ...ITEM, openGates: [], routes: { '': ITEM.routes!['review_lead']! } };
     expect(itemComposer(lead, {}).helper).toBe('To the lead reviewer (acme-reviewer), posted on pull request #31 as a comment');
+  });
+
+  it('says what sending it starts, or that it starts nothing and why, after where it goes', () => {
+    const builder = { kind: 'post' as const, bot: 'builder', role: 'implement', handle: 'acme-crew', subject: 'api#12', on: 'issue' as const, number: 12 };
+    const starting = { openGates: [], routes: { '': { ...builder, start: { kind: 'starts' as const, what: 'a patch round on pull request #31' } } } };
+    expect(itemComposer(starting, {}).helper).toBe('To the builder (acme-crew), posted on #12 as a comment; starts a patch round on pull request #31');
+    const held = { openGates: [], routes: { '': { ...builder, start: { kind: 'nothing' as const, why: 'api#12 is held by jane; resume it on its card to let work start' } } } };
+    expect(itemComposer(held, {}).helper).toBe('To the builder (acme-crew), posted on #12 as a comment; nothing starts: api#12 is held by jane; resume it on its card to let work start');
+  });
+
+  it('names whom the conversation writes to, and offers the other roles the bridge names in pipeline order', () => {
+    // The role that acts next comes last in the routes when no tab names it.
+    const routes = { ...ITEM.routes!, '': { kind: 'post' as const, bot: 'builder', role: 'implement', handle: 'acme-crew', subject: 'api#12', on: 'issue' as const, number: 12 }, implement: { kind: 'post' as const, bot: 'builder', role: 'implement', handle: 'acme-crew', subject: 'api#12', on: 'issue' as const, number: 12 } };
+    expect(addressedRole({ routes })).toBe('implement');
+    expect(writeToRoles({ ...ITEM, routes }).map((one) => one.label)).toEqual(['intake', 'builder', 'lead reviewer', 'second reviewer']);
+    // One role to write to is said by the box's label, with nothing to pick.
+    expect(writeToRoles({ ...ITEM, routes: { '': routes[''], implement: routes.implement } })).toEqual([]);
+    expect(addressedRole({ routes: { '': { kind: 'refused', error: 'nobody' } } })).toBeNull();
   });
 
   it('says a message on a deploy of a commit is kept in OpenADLC, not posted on GitHub', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Gate, Message } from '@openadlc/shared';
-import { controlRefusal, itemKey, itemOf, itemView, linkStage, lonePullRefusal, messageRoutes, ownSubjects, parseItemKey, routeItemMessage, type ItemBot, type ItemTaskRow } from './items.js';
+import { actsNext, controlRefusal, itemKey, itemOf, itemView, linkStage, lonePullRefusal, messageRoutes, ownSubjects, parseItemKey, routeItemMessage, type ItemBot, type ItemTaskRow } from './items.js';
 
 describe('a work item key', () => {
   it('names the number whatever its prefix or case, and is display only', () => {
@@ -233,6 +233,53 @@ describe('where a message written on an item goes', () => {
   it('goes to the request before the issue exists', () => {
     const request = itemOf('request:c0ffee00', FACTS)!;
     expect(routeItemMessage({ timeline: [], tasks: [], stage: 'intake', openGates: [] }, request, BOTS, {})).toMatchObject({ kind: 'post', bot: 'intake', subject: 'request:c0ffee00' });
+  });
+});
+
+describe('whom a message from the conversation goes to', () => {
+  // core#5 on 2026-10-24: #7's CI was red, the fix was the builder's, and the
+  // conversation's message went to the lead reviewer, who had spoken last.
+  const item = itemOf('api#12', FACTS)!;
+  const lead = { ...message('m2', 't-lead', '2026-09-30T10:02:00Z'), subjectRef: 'api#31', role: 'review_lead', seat: 'lead-reviewer', bot: 'lead-reviewer' };
+
+  it('is the builder on a pull request in Review whose CI is red, though the lead reviewer spoke last', () => {
+    const view = { timeline: [lead], tasks: [], stage: 'review' as const, openGates: [], ciRed: true };
+    expect(actsNext(view, BOTS)).toBe('implement');
+    expect(routeItemMessage(view, item, BOTS, {})).toMatchObject({ kind: 'post', bot: 'builder', role: 'implement', subject: 'api#12' });
+    // Green, or not known, it is the lead's, as the stage's role.
+    expect(routeItemMessage({ ...view, ciRed: false }, item, BOTS, {})).toMatchObject({ kind: 'post', bot: 'lead-reviewer', subject: 'api#31' });
+    expect(routeItemMessage({ ...view, ciRed: null }, item, BOTS, {})).toMatchObject({ kind: 'post', bot: 'lead-reviewer' });
+  });
+
+  it('is the role that works the stage, not the role that last spoke', () => {
+    const view = { timeline: [lead], tasks: [], stage: 'build' as const, openGates: [] };
+    expect(routeItemMessage(view, item, BOTS, {})).toMatchObject({ kind: 'post', bot: 'builder', role: 'implement', subject: 'api#12' });
+    // A stage nobody works, or whose role the crew has no seat in: whoever last spoke, as before.
+    expect(routeItemMessage({ ...view, stage: 'done' }, item, BOTS, {})).toMatchObject({ kind: 'post', bot: 'lead-reviewer' });
+    expect(actsNext({ stage: 'spec' }, BOTS)).toBeNull();
+  });
+
+  it('is offered by its role beside the tabs’, with what sending it starts', () => {
+    const roles = [{ role: 'review_lead', label: 'lead reviewer', seats: [] }];
+    const view = { timeline: [lead], tasks: [], stage: 'review' as const, openGates: [], roles, ciRed: true };
+    const said: { role: string; bot: string }[] = [];
+    const routes = messageRoutes(view, item, BOTS, (route) => {
+      said.push(route);
+      return route.role === 'implement' ? { kind: 'starts', what: 'a patch round on pull request #31' } : { kind: 'nothing', why: 'its review is already under way' };
+    });
+    expect(Object.keys(routes)).toEqual(['', 'review_lead', 'implement']);
+    expect(routes['']).toEqual({
+      kind: 'post',
+      bot: 'builder',
+      role: 'implement',
+      handle: 'acme-crew',
+      subject: 'api#12',
+      on: 'issue',
+      number: 12,
+      start: { kind: 'starts', what: 'a patch round on pull request #31' },
+    });
+    expect(routes['review_lead']).toMatchObject({ bot: 'lead-reviewer', start: { kind: 'nothing', why: 'its review is already under way' } });
+    expect(said).toContainEqual({ role: 'implement', bot: 'builder' });
   });
 });
 

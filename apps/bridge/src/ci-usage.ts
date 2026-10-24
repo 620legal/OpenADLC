@@ -1,4 +1,5 @@
 import type { CiUsageRow } from '@openadlc/db';
+import { REQUIRED_CHECK } from '@openadlc/shared';
 
 /**
  * The GitHub Actions minutes the crew's work costs a repository, counted as
@@ -53,6 +54,30 @@ export function runnerKind(job: Pick<RunJob, 'labels' | 'runner_group_name'>): '
   if ((job.labels ?? []).some((label) => label.toLowerCase() === 'self-hosted')) return 'self-hosted';
   if (job.runner_group_name && job.runner_group_name !== STANDARD_RUNNER_GROUP) return 'larger';
   return 'standard';
+}
+
+/** Conclusions of a CI run that failed, rather than said nothing. */
+export const CI_FAILED: ReadonlySet<string> = new Set(['failure', 'timed_out']);
+
+/**
+ * The newest run of the CI workflow on a commit, as it stands now: a rerun
+ * is the same run at a later attempt. Null when there is none. A read that
+ * fails throws, for the caller to say. CI's handler reads it for a head the
+ * merge line found red (`Webhooks.ciRedAt`), and a work item for whom acts
+ * next on its pull request (`MessageStarts`).
+ */
+export async function newestCiRun(
+  client: { request<T>(method: string, path: string): Promise<T> },
+  repoFullName: string,
+  sha: string,
+): Promise<{ id: number; attempt: number; status: string; conclusion: string | null } | null> {
+  const listed = await client.request<{ workflow_runs?: { id: number; name?: string | null; run_attempt?: number; status: string; conclusion: string | null }[] }>(
+    'GET',
+    `/repos/${repoFullName}/actions/runs?head_sha=${sha}&per_page=100`,
+  );
+  const runs = (listed.workflow_runs ?? []).filter((run) => (run.name ?? '').toLowerCase() === REQUIRED_CHECK);
+  const newest = runs.reduce<(typeof runs)[number] | null>((best, run) => (!best || run.id > best.id ? run : best), null);
+  return newest ? { id: newest.id, attempt: newest.run_attempt ?? 1, status: newest.status, conclusion: newest.conclusion } : null;
 }
 
 /**

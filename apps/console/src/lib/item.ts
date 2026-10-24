@@ -117,19 +117,43 @@ export function roleTabs(view: Pick<ItemView, 'roles'>): { value: string; role: 
 }
 
 /**
- * The roles the conversation's box offers to write to while nobody has worked
- * on the item: the bridge has no one to send its message to, asks for a role,
- * and names where each of the crew's would go (`routes`). An item nobody had
- * worked on has no role tab, and the box asked to "pick a role to write to"
- * with nothing to pick. Empty once the conversation has someone to write to,
- * and from a bridge that names no role beyond the tabs.
+ * The roles the conversation's box offers to write to.
+ *
+ * While nobody has worked on the item, the bridge has no one to send its
+ * message to, asks for a role, and names where each of the crew's would go
+ * (`routes`): those the tabs do not name. An item nobody had worked on has no
+ * role tab, and the box asked to "pick a role to write to" with nothing to
+ * pick.
+ *
+ * Once it has someone to write to, the role a message goes to by default
+ * (`addressedRole`) and every other the routes name, in pipeline order, so a
+ * person sees who it is to and can send it to another without leaving the
+ * conversation: on core#5 the box sent to the lead reviewer a message meant
+ * for the builder. None when there is only the one, or from a bridge that
+ * names no role beyond the tabs.
  */
 export function writeToRoles(view: Pick<ItemView, 'roles' | 'routes'>): { role: string; label: string }[] {
-  if (view.routes?.['']?.kind !== 'refused') return [];
-  const tabs = new Set(view.roles.map((one) => one.role));
-  return Object.entries(view.routes)
-    .filter(([role, route]) => role !== '' && !tabs.has(role) && route.kind === 'post')
-    .map(([role]) => ({ role, label: roleWords(role) }));
+  const conversation = view.routes?.[''];
+  if (!view.routes || !conversation) return [];
+  const posted = Object.entries(view.routes).filter(([role, route]) => role !== '' && route.kind === 'post');
+  if (conversation.kind === 'refused') {
+    const tabs = new Set(view.roles.map((one) => one.role));
+    return posted.filter(([role]) => !tabs.has(role)).map(([role]) => ({ role, label: roleWords(role) }));
+  }
+  const order = Object.keys(BY_ROLE);
+  const rank = (role: string) => (order.includes(role) ? order.indexOf(role) : order.length);
+  const offered = posted.map(([role]) => role).sort((a, b) => rank(a) - rank(b));
+  return offered.length > 1 ? offered.map((role) => ({ role, label: roleWords(role) })) : [];
+}
+
+/**
+ * The role a message from the conversation goes to when none is picked: the
+ * one the bridge routes it to (`routes['']`), the role that acts next on the
+ * item. Null while there is nobody to write to, and from an older bridge.
+ */
+export function addressedRole(view: Pick<ItemView, 'routes'>): string | null {
+  const route = view.routes?.[''];
+  return route?.kind === 'post' ? route.role : null;
 }
 
 /** A task whose computer is worth looking at: going now, in a session of its own. */
@@ -247,6 +271,17 @@ export interface ItemComposer {
   helper: string;
 }
 
+/**
+ * "; starts a patch round on pull request #31", or "; nothing starts: …":
+ * what sending it does beyond where it goes, said before it is sent. A
+ * message to a role used to be a comment and nothing else, and a person read
+ * "posted on pull request #7" as the role having heard it.
+ */
+function startOf(route: Extract<ItemRoute, { kind: 'post' }>): string {
+  if (!route.start) return '';
+  return route.start.kind === 'starts' ? `; starts ${route.start.what}` : `; nothing starts: ${route.start.why}`;
+}
+
 /** "posted on pull request #31 as a comment": where the bridge puts a message. */
 function placeOf(route: Extract<ItemRoute, { kind: 'post' }>): string {
   switch (route.on) {
@@ -295,5 +330,5 @@ export function itemComposer(
     // "Nobody has worked on this item yet…; pick a role to write to": the tabs are above.
     return { mode: 'pick', gateId: null, helper: `${route.error.charAt(0).toUpperCase()}${route.error.slice(1)}.` };
   }
-  return { mode: 'send', gateId: null, helper: `To the ${roleWords(route.role)} (${route.handle ?? route.bot}), ${placeOf(route)}` };
+  return { mode: 'send', gateId: null, helper: `To the ${roleWords(route.role)} (${route.handle ?? route.bot}), ${placeOf(route)}${startOf(route)}` };
 }

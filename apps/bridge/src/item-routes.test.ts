@@ -26,6 +26,7 @@ const world = vi.hoisted(() => ({
   tasks: [] as Record<string, unknown>[],
   /** Uploads: `subjectRef` null until sent with something. */
   files: [] as { id: string; name: string; sizeBytes: number; uploadedBy: string; subjectRef: string | null; messageId: string | null }[],
+  events: [] as Record<string, unknown>[],
   /** Work items: none until a test numbers the install. */
   numbered: false,
   organization: null as string | null,
@@ -50,6 +51,7 @@ vi.mock('@openadlc/db', () => ({
     }),
   },
   bots: { listBots: vi.fn(async () => CREW) },
+  recordEvent: vi.fn(async (event: Record<string, unknown>) => void world.events.push(event)),
   workItems: {
     isNumbered: vi.fn(async () => world.numbered),
     byNumber: vi.fn(async (number: number) => world.resolve(world.items.find((one) => one.number === number)?.id)),
@@ -136,6 +138,7 @@ beforeEach(async () => {
   world.tasks = [task('k-lead', 'b-lead', 'api#31', 'done'), task('k-second', 'b-second', 'api#31', 'paused'), task('k-15', 'b-builder', 'api#15', 'paused')];
   world.gates = [];
   world.files = [];
+  world.events = [];
   world.numbered = false;
   world.organization = null;
   world.items = [];
@@ -618,5 +621,163 @@ describe('files sent with a message on a work item', () => {
     const response = await send('api#31', { text: 'And this.', role: 'review_lead', attachments: ['f-3'] });
     expect(response.status).toBe(413);
     expect(((await response.json()) as { error: string }).error).toMatch(/20 files/);
+  });
+});
+
+describe('a message that starts its role’s work on the item', () => {
+  // The GCP install, 2026-10-24: a person meant core#5's builder to fix #7's
+  // scope check; the box sent it to the lead reviewer, who had spoken last,
+  // it was posted on #7, and nothing started.
+  let server: Server;
+  let base: string;
+  const fromMessage: Record<string, unknown>[] = [];
+  const opened: Record<string, unknown>[] = [];
+  const ci = { conclusion: 'failure' as string | null };
+
+  beforeEach(async () => {
+    fromMessage.length = 0;
+    opened.length = 0;
+    ci.conclusion = 'failure';
+    const { registerItemRoutes } = await import('./item-routes.js');
+    const { MessageStarts } = await import('./message-starts.js');
+    const { Router } = await import('./router.js');
+    const router = new Router(undefined, undefined, undefined, async () => 'user');
+    const messageStarts = new MessageStarts({
+      client: async () =>
+        ({
+          getPullRequest: async () => ({ state: 'open', merged: false, headRef: 'agent/builder/12-model', headSha: 'abc1234' }),
+          request: async () => ({ workflow_runs: [{ id: 9, name: 'ci', run_attempt: 2, status: 'completed', conclusion: ci.conclusion }] }),
+        }) as never,
+      taskService: { open: async (input: Record<string, unknown>) => (opened.push(input), { taskId: 'k-new', session: 's' }) } as never,
+      sendBack: {
+        fromMessage: async (input: Record<string, unknown>) => {
+          fromMessage.push(input);
+          return { started: true as const, round: 2 };
+        },
+      } as never,
+      stages: { staffing: async () => ({ started: true, why: null }) } as never,
+      triage: async () => ({ queued: false }),
+      rebuild: async () => undefined,
+      paused: () => null,
+      seatPauses: async () => ({}),
+    });
+    registerItemRoutes(router, {
+      actors: {
+        asBot: async (name: string) => ({
+          comment: async (repo: string, number: number, body: string) => {
+            comments.push({ repo, number, body, as: name });
+            return { id: 1, body, htmlUrl: `https://github.com/${repo}/issues/${number}#issuecomment-1`, user: name };
+          },
+        }),
+      } as never,
+      gates: {
+        answer: async (input: Record<string, unknown>) => {
+          answered.push(input);
+          return { answer: String(input.reply), taskId: world.gates.find((one) => one.id === input.gateId)?.taskId ?? null };
+        },
+      } as never,
+      taskService: { resume: async (taskId: string) => void resumed.push(taskId) } as never,
+      threadStream: { subscribe: () => () => undefined, watching: 0 } as never,
+      messageStarts,
+    });
+    server = createServer((request, response) => void router.handle(request, response));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  const read = async (subject: string) =>
+    (await (await fetch(`${base}/v1/items/${encodeURIComponent(subject)}`)).json()) as { routes: Record<string, Record<string, unknown>>; ciRed: boolean | null };
+  const write = (subject: string, body: Record<string, unknown>) =>
+    fetch(`${base}/v1/items/${encodeURIComponent(subject)}/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-openadlc-identity': 'jane@acme.test' },
+      body: JSON.stringify(body),
+    });
+
+  it('goes to the builder from the conversation of a pull request in Review whose CI is red, and starts its patch round with the message', async () => {
+    const view = await read('api#12');
+    expect(view.ciRed).toBe(true);
+    // Said before it is sent: whom it is to, where it goes, what it starts.
+    expect(view.routes['']).toEqual({
+      kind: 'post',
+      bot: 'builder',
+      role: 'implement',
+      handle: 'acme-crew',
+      subject: 'api#12',
+      on: 'issue',
+      number: 12,
+      start: { kind: 'starts', what: 'a patch round on pull request #31' },
+    });
+
+    const response = await write('api#12', { text: 'Make the scope check accept any heading level, in this PR.' });
+    expect(await response.json()).toMatchObject({
+      answered: false,
+      bot: 'builder',
+      subject: 'api#12',
+      start: { kind: 'starts', what: 'patch round 2 on pull request #31' },
+    });
+    expect(comments).toEqual([expect.objectContaining({ repo: 'acme/api', number: 12, as: 'builder' })]);
+    expect(fromMessage).toEqual([
+      expect.objectContaining({
+        repoName: 'api',
+        prNumber: 31,
+        actor: 'jane@acme.test',
+        reason: 'Make the scope check accept any heading level, in this PR.',
+        brief: expect.objectContaining({ name: 'message.md', content: expect.stringContaining('# jane wrote to the builder in the OpenADLC console') }),
+        commentUrl: 'https://github.com/acme/api/issues/12#issuecomment-1',
+      }),
+    ]);
+  });
+
+  it('starts a reviewer’s review again from its tab, briefed with the message, once no other seat’s review waits', async () => {
+    ci.conclusion = 'success';
+    // The second reviewer's review waits on an answer: the lead, who decides last, does not start beside it.
+    const waits = await write('api#12', { text: 'Look at the edge case again.', role: 'review_lead' });
+    expect(await waits.json()).toMatchObject({
+      start: { kind: 'nothing', why: expect.stringMatching(/^the lead reviews last, and the second reviewer’s review of pull request #31 is paused/) },
+    });
+    expect(opened).toEqual([]);
+
+    world.tasks = world.tasks.map((one) => (one.id === 'k-second' ? { ...one, state: 'done' } : one));
+    const response = await write('api#12', { text: 'Look at the edge case again.', role: 'review_lead' });
+    expect(await response.json()).toMatchObject({ bot: 'lead-reviewer', subject: 'api#31', start: { kind: 'starts', what: 'its review of pull request #31 again' } });
+    expect(opened).toEqual([expect.objectContaining({ bot: 'lead-reviewer', kind: 'review', subjectRef: 'api#31', extraContext: [expect.objectContaining({ name: 'message.md' })] })]);
+    expect(world.events).toEqual([expect.objectContaining({ type: 'review.asked_again', payload: expect.objectContaining({ subjectRef: 'api#31', seat: 'lead-reviewer' }) })]);
+  });
+
+  it('says before it is sent, and on the timeline once it is, that nothing starts on a held item', async () => {
+    const { issues } = await import('@openadlc/db');
+    const listed = await issues.listIssues();
+    const held = listed.map((one) => (one.number === 12 ? { ...one, labels: ['openadlc:paused'] } : one));
+    vi.mocked(issues.listIssues).mockImplementation(async () => held as never);
+    try {
+      const view = await read('api#12');
+      expect(view.routes['implement']).toMatchObject({
+        start: { kind: 'nothing', why: 'api#12 is held by a person on GitHub; resume it on its card to let work start' },
+      });
+
+      const response = await write('api#12', { text: 'Fix the scope check.', role: 'implement' });
+      expect(await response.json()).toMatchObject({ bot: 'builder', start: { kind: 'nothing', why: expect.stringMatching(/^api#12 is held/) } });
+      expect(fromMessage).toEqual([]);
+      // Posted all the same, and the timeline says it started nothing.
+      expect(comments).toEqual([expect.objectContaining({ number: 12, as: 'builder' })]);
+      const timeline = ((await (await fetch(`${base}/v1/items/${encodeURIComponent('api#12')}`)).json()) as { timeline: { kind: string; text: string; role: string }[] }).timeline;
+      expect(timeline.at(-1)).toMatchObject({ kind: 'sys', role: 'implement', text: 'posted as a comment; nothing starts: api#12 is held by a person on GitHub; resume it on its card to let work start' });
+    } finally {
+      vi.mocked(issues.listIssues).mockImplementation(async () => listed as never);
+    }
+  });
+
+  it('resumes a task waiting on an answer, as an answer, and starts nothing beside it', async () => {
+    world.gates = [gate('g-second', 't-second', 'k-second')];
+    const response = await write('api#12', { text: 'Per round.', role: 'review_second' });
+    expect(await response.json()).toMatchObject({ answered: true, answer: 'Per round.', gateId: 'g-second' });
+    expect(resumed).toEqual(['k-second']);
+    expect(opened).toEqual([]);
+    expect(fromMessage).toEqual([]);
   });
 });

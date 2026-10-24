@@ -1,6 +1,6 @@
 import { audit, bots, issues, listEventsOfType, recordEvent, repos, stageMoves, tasks, withAdvisoryLock } from '@openadlc/db';
 import { acceptOnStage } from './design-memory.js';
-import { leadReviewer, maxTasksOf, PLAN_CHANGE_REVIEW_SKILL, REPO_DEFAULTS, type StageKey, type StageMode } from '@openadlc/shared';
+import { leadReviewer, maxTasksOf, PLAN_CHANGE_REVIEW_SKILL, REPO_DEFAULTS, type ContextDocument, type StageKey, type StageMode } from '@openadlc/shared';
 import { seatsWaitedOn, type Automation } from './automation.js';
 import type { DispatchGate } from './dispatch-gate.js';
 import type { TaskService } from './task-service.js';
@@ -172,14 +172,34 @@ export class StageHandoff {
    * rest of a piece of work already under way does.
    */
   async staff(input: { repoName: string; issueNumber: number; stage: StageKey; followOn?: boolean }): Promise<boolean> {
+    return (await this.staffing(input)).started;
+  }
+
+  /**
+   * `staff`, saying why nothing started, for a person who asked for it: a
+   * message to the stage's role on its item (`MessageStarts`), whose brief
+   * the task starts from. A seat running all it may at once is `later`: the
+   * issue waits on that seat, as above, and starts when it has room. A
+   * person's message is the decision intake's tries wait for once it gave up
+   * on an issue (`intakeGaveUp`), so with a brief it is tried again.
+   */
+  async staffing(input: {
+    repoName: string;
+    issueNumber: number;
+    stage: StageKey;
+    followOn?: boolean;
+    /** What a person asked of the stage, beside its usual context. */
+    brief?: ContextDocument[];
+  }): Promise<{ started: boolean; why: string | null; later?: boolean }> {
+    const no = (why: string, later = false) => ({ started: false, why, ...(later ? { later: true } : {}) });
     // An issue past design has had its design taken: what it proposed for the
     // repository to remember is accepted (`design-memory.ts`).
     if (input.stage === 'build') await acceptOnStage(input.repoName, input.issueNumber, input.stage).catch(() => 0);
     const staffing = STAFFING[input.stage];
-    if (!staffing) return false;
+    if (!staffing) return no(`no seat staffs ${input.stage}`);
 
     const repo = await repos.getRepoByName(input.repoName);
-    if (!repo) return false;
+    if (!repo) return no(`${input.repoName} is not a repository OpenADLC works in`);
 
     const subjectRef = `${repo.name}#${input.issueNumber}`;
     // It waits on its seat after this only if the seat turns it away again,
@@ -195,32 +215,34 @@ export class StageHandoff {
     // It reads the stored labels, so a label whose delivery has not been
     // processed yet does not stop it; `moveStage` keeps that label on GitHub.
     const known = await issues.getIssue(repo.id, input.issueNumber);
-    if (hasIgnoreLabel(known?.labels)) return false;
+    if (hasIgnoreLabel(known?.labels)) return no(`${subjectRef} is labelled openadlc:ignore`);
 
     const mode = repo.stageModes[input.stage];
-    if (mode === 'untouched') return false;
+    if (mode === 'untouched') return no(`${repo.name} leaves ${input.stage} to people (its stage mode is untouched)`);
 
-    if (await this.alreadyWorking(subjectRef)) return false;
-    if (input.stage === 'intake' && (await this.intakeGaveUp(subjectRef))) return false;
+    if (await this.alreadyWorking(subjectRef)) return no(`work on ${subjectRef} is already under way`);
+    if (input.stage === 'intake' && !input.brief && (await this.intakeGaveUp(subjectRef))) return no(`intake has had its tries at ${subjectRef}; a person decides now`);
 
     const bot = (await bots.listBots()).find((entry) => entry.role === staffing.role);
-    if (!bot) return false;
+    if (!bot) return no(`the crew has no ${staffing.role} seat`);
 
     // Asked of GitHub last, as the one check here that costs a call.
-    if (this.closed && (await this.closed(repo.fullName, input.issueNumber).catch(() => false))) return false;
+    if (this.closed && (await this.closed(repo.fullName, input.issueNumber).catch(() => false))) return no(`${subjectRef} is closed`);
 
     // Asked about this repository: one a person paused on its own holds its
     // issues in intake as the install's pause holds every one.
     const paused = input.followOn ? null : this.gate?.paused(repo.name);
     if (paused) {
       await this.defer(subjectRef, input.stage, paused);
-      return false;
+      return no(paused);
     }
     // Open again, whatever opened it — a person's Resume, a restore letting go
     // of its hold, a pause read back as cleared — so a later pause audits this
     // issue afresh rather than taking it for one already said.
     this.deferred.delete(key);
 
+    // Why it was turned away, when it was, for the person who asked.
+    const refusal: { why?: string; later?: boolean } = {};
     const started = await this.taskService
       .open({
         bot: bot.name,
@@ -229,12 +251,14 @@ export class StageHandoff {
         subjectType: 'issue',
         subjectRef,
         skill: staffing.skill,
+        ...(input.brief && input.brief.length > 0 ? { extraContext: input.brief } : {}),
       })
       .catch(async (error: unknown) => {
         // A busy bot is not a failure. The issue waits on its seat, and starts
         // when the seat has room (`StageRunner`); the sweep comes back for
         // anything that misses.
-        if (seatWasFull(error)) {
+        const full = seatWasFull(error);
+        if (full) {
           await this.waitOnSeat(key, waited, {
             subjectRef,
             repo: repo.name,
@@ -245,11 +269,15 @@ export class StageHandoff {
             maxTasks: maxTasksOf(bot),
           });
         }
-        console.warn(`[bridge] ${input.stage} not staffed for ${subjectRef}: ${error instanceof Error ? error.message : error}`);
+        const why = error instanceof Error ? error.message : String(error);
+        refusal.why = why;
+        refusal.later = full;
+        console.warn(`[bridge] ${input.stage} not staffed for ${subjectRef}: ${why}`);
         return null;
       });
 
-    return Boolean(started && !started.error);
+    if (started && !started.error) return { started: true, why: null };
+    return no(refusal.why ?? started?.error ?? `${staffing.skill} on ${subjectRef} did not start`, refusal.later ?? false);
   }
 
   /** Moves the issue on when the stage's own task finishes. */

@@ -18,6 +18,7 @@ import { botLabel } from '@/lib/bot-label';
 import { cn } from '@/lib/cn';
 import { IssueControls } from '@/components/issue-controls';
 import {
+  addressedRole,
   itemComposer,
   itemEntries,
   keyLike,
@@ -88,7 +89,7 @@ export function ItemView({
   // console restarted under the tab loads it afresh.
   const [draft, setDraft] = useDraft(`item:${subject}`);
   const [picked, setPicked] = useState<string | null>(null);
-  // The role picked to write to from the conversation, while nobody has worked on the item.
+  // The role picked to write to from the conversation.
   const [writeTo, setWriteTo] = useState<string | null>(null);
   const [clock, setClock] = useState(now);
   // Set at once and cleared by the answer: a transition's pending stayed set
@@ -158,11 +159,17 @@ export function ItemView({
 
   const role = tab.startsWith('role:') ? tab.slice(5) : null;
   const questions = view ? questionsFor(view, role) : [];
-  // Nobody has worked on it: the box asks for a role, and offers the crew's.
+  // The roles the conversation's box offers: the crew's while nobody has
+  // worked on it, else the one it goes to and the others it could.
   const picks = view && !role ? writeToRoles(view) : [];
   // Who the box writes to: the tab's role, or the one picked here while it still is one to pick.
   const to = role ?? (writeTo && picks.some((one) => one.role === writeTo) ? writeTo : null);
   const target = view ? itemComposer(view, { role: to, picked }) : null;
+  // And who that is when nobody picked: the role whose question it answers,
+  // nobody while it asks which question, else the role that acts next, as
+  // the bridge routes it.
+  const answering = target?.gateId ? view?.openGates.find((gate) => gate.id === target.gateId) : undefined;
+  const addressed = to ?? (target?.mode === 'answer' ? (answering?.role ?? null) : target?.mode === 'pick' ? null : view ? addressedRole(view) : null);
 
   const send = (text: string, gateId: string | null, withFiles = false): void => {
     const attachments = withFiles ? files.ids : [];
@@ -274,7 +281,7 @@ export function ItemView({
             className="flex flex-col gap-2 border-t border-edge px-5 pb-4 pt-3"
           >
             <label htmlFor={composerId} className="text-[12px] font-medium text-soft">
-              {target.mode === 'answer' ? 'Your answer' : to ? `Message the ${roleWords(to)}` : 'Message the crew about this'}
+              {target.mode === 'answer' ? 'Your answer' : addressed ? `Message the ${roleWords(addressed)}` : 'Message the crew about this'}
             </label>
             {picks.length > 0 && (
               <div role="group" aria-label="Who to write to" data-role-picker className="flex flex-wrap items-center gap-1.5">
@@ -282,11 +289,11 @@ export function ItemView({
                   <button
                     key={one.role}
                     type="button"
-                    aria-pressed={to === one.role}
+                    aria-pressed={addressed === one.role}
                     onClick={() => setWriteTo(one.role)}
                     className={cn(
                       'inline-flex h-10 items-center rounded-full border px-3 text-[12.5px] transition-colors focus-visible:outline-2 focus-visible:outline-link md:h-7 md:px-2.5',
-                      to === one.role ? 'border-body bg-body font-medium text-surface' : 'border-edge bg-panel text-soft hover:border-edge-strong hover:text-body',
+                      addressed === one.role ? 'border-body bg-body font-medium text-surface' : 'border-edge bg-panel text-soft hover:border-edge-strong hover:text-body',
                     )}
                   >
                     {one.label}

@@ -96,7 +96,7 @@ const STARTS_WORK = new Set(['issues', 'pull_request', 'deployment_status', 'rel
 import { PAUSED_LABEL } from '@openadlc/shared';
 import { forgetHold } from './item-hold.js';
 import { linkIssue, linkPull } from './work-items.js';
-import { everyJob, type RunJob } from './ci-usage.js';
+import { CI_FAILED, everyJob, newestCiRun, type RunJob } from './ci-usage.js';
 
 /** How many heads' real CI failures are remembered as sent back (`Webhooks.redSentBack`). */
 const RED_SENT_BACK_KEPT = 500;
@@ -5371,9 +5371,6 @@ export function deployFailedOnTesting(
 /** What became of a first failure's one rerun: asked, cannot be had, or not yet known. */
 type RerunOutcome = 'rerun' | 'unavailable' | 'waiting';
 
-/** Conclusions of a CI run that failed, rather than said nothing. */
-const CI_FAILED = new Set(['failure', 'timed_out']);
-
 /** A pull request's CI run that finished, as `onCiRun` reads it. */
 interface CiRunOutcome {
   runId: number;
@@ -5381,25 +5378,6 @@ interface CiRunOutcome {
   attempt: number;
   outcome: 'passed' | 'failed';
   pullRequests: number[];
-}
-
-/**
- * The newest run of the CI workflow on a commit, as it stands now: a rerun
- * is the same run at a later attempt. Null when there is none. A read that
- * fails throws, for the caller to say.
- */
-async function newestCiRun(
-  client: Pick<GitHubClient, 'request'>,
-  repoFullName: string,
-  sha: string,
-): Promise<{ id: number; attempt: number; status: string; conclusion: string | null } | null> {
-  const listed = await client.request<{ workflow_runs?: { id: number; name?: string | null; run_attempt?: number; status: string; conclusion: string | null }[] }>(
-    'GET',
-    `/repos/${repoFullName}/actions/runs?head_sha=${sha}&per_page=100`,
-  );
-  const runs = (listed.workflow_runs ?? []).filter((run) => (run.name ?? '').toLowerCase() === REQUIRED_CHECK);
-  const newest = runs.reduce<(typeof runs)[number] | null>((best, run) => (!best || run.id > best.id ? run : best), null);
-  return newest ? { id: newest.id, attempt: newest.run_attempt ?? 1, status: newest.status, conclusion: newest.conclusion } : null;
 }
 
 /**
