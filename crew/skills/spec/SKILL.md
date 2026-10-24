@@ -89,6 +89,9 @@ next question is written after it, not before.
   it is in `request.md`, and on an issue or a pull request it is in its
   conversation. Read it first. It may have changed what you assumed, so your
   next question, if you still need one, builds on it.
+- A person can also write to you from the console. When `message.md` is in
+  your context, their message is why this design pass started: design with it
+  in mind. It is in the issue's conversation too, posted as you.
 
 ## Remembering
 

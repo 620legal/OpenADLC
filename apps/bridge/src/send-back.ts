@@ -1,12 +1,14 @@
-import { audit, bots, deployRuns, issues, leases, listEventsOfTypeWith, recordEvent, repos, stageMoves, tasks, threads } from '@openadlc/db';
+import { audit, bots, deployRuns, issues, leases, listEventsOfTypeWith, mergeLines, recordEvent, repos, stageMoves, tasks, threads } from '@openadlc/db';
 import type { GitHubClient } from '@openadlc/github';
 import {
+  CI_LABEL,
   STAGE_COLUMN_TITLES,
   STAGE_KEYS,
   pathsOverlap,
   previousStage,
   inertMarkup,
   renderMarker,
+  type ContextDocument,
   type Lease,
   type StageKey,
   type TaskKind,
@@ -452,18 +454,8 @@ export class SendBack {
   }): Promise<number | null> {
     const { repo, repoFullName, pr, builder } = input;
     const maxRounds = reviewLimits(this.deps.config.review).maxRounds;
-    // Rounds that ran. One that never began changed nothing, and counting
-    // it spent the builder's last round on a live pull request before it had written
-    // a line. Never began is `startedAt` unset — a round that ran and was
-    // then refused a resume did run, and counts.
-    // Every round on the pull request, however long ago and by whichever bot:
-    // the builder's twenty newest tasks lost earlier rounds once it was busy
-    // elsewhere, and the limit never came; a handover does not reset it
-    // either. A conflict resolution is a patch no review asked for, and two
-    // of them used up the budget before the next request for changes.
-    const round = (await tasks.listTasksForSubjects('patch', [`${repo.name}#${pr.number}`])).filter(
-      (task) => task.skill !== 'resolve-conflict' && !(task.state === 'failed' && !task.startedAt),
-    ).length;
+    // The rounds that ran, and only those (`roundsRun`).
+    const round = await roundsRun(repo.name, pr.number);
     if (round < maxRounds) return round + 1;
 
     await this.deps.automation.comment(
@@ -613,7 +605,17 @@ export class SendBack {
     });
   }
 
-  private async openPatch(input: {
+  private async openPatch(input: Parameters<SendBack['openPatchRound']>[0]): Promise<string | null> {
+    // Only a refusal is why not: a round recorded because the builder cannot
+    // start it yet is still its, and the recovery runs it.
+    return (await this.openPatchRound(input)).refused;
+  }
+
+  /**
+   * Opens a patch round: what was refused (thrown), and what the start said
+   * went wrong (`error`: recorded for the recovery, or refused by hostd).
+   */
+  private async openPatchRound(input: {
     repo: { id: string; name: string };
     repoFullName: string;
     pr: { number: number; head: { ref: string } };
@@ -623,7 +625,9 @@ export class SendBack {
     builder: { id: string; name: string };
     round: number;
     leasePathsOnly?: boolean;
-  }): Promise<string | null> {
+    /** What a person asked of the round, beside the reviews (`fromMessage`). */
+    brief?: ContextDocument[];
+  }): Promise<{ refused: string | null; error: string | null }> {
     // What the round may write: the lease's paths, and every file the
     // pull request already changes — a widening a person approved is in
     // the diff, not the lease. With neither, the round could write only
@@ -656,15 +660,125 @@ export class SendBack {
         // Only this review starts a patch round: one the builder cannot
         // do yet is recorded, for the recovery to run once it can.
         whenBlocked: 'record',
+        ...(input.brief && input.brief.length > 0 ? { extraContext: input.brief } : {}),
       })
       .then(
-        () => null,
+        (opened) => ({ refused: null, error: opened.error ?? null }),
         (error: unknown) => {
           const why = error instanceof Error ? error.message : String(error);
           console.warn(`[bridge] patch round not started: ${why}`);
-          return why;
+          return { refused: why, error: why };
         },
       );
+  }
+
+  /**
+   * A person's message to the builder on an item whose pull request is open
+   * (`MessageStarts`): a patch round on its branch, briefed with the message
+   * (`message.md`). It used to be posted as a comment and nothing else, and
+   * the builder read it only when something else next started it: on
+   * 620legal/core#5 a person asked the builder to fix the scope check on
+   * #7, and ten minutes later the merge line was still dropping #7.
+   *
+   * The same round a request for changes opens (`reviewRound`): the lease
+   * taken again where it still can be, the files in the diff added to its
+   * paths. A card in Review goes back to Build first, out of the merge line
+   * and with `adlc:ci` off, as a person's move from Review does
+   * (`backFromReview`), so an approved head does not land while the builder
+   * changes it; a push moves it to Review again. The move is the person's,
+   * with the message as its reason and the message's comment as where it
+   * was said. A failed row the line keeps for a head it found red stays:
+   * leaving the line there let the sweep take that head in again (#162).
+   * The round is counted, but a person asking is the decision `maxRounds`
+   * stops for, so it does not stop this one. One round at a time: a second
+   * beside one under way would race it.
+   */
+  async fromMessage(input: {
+    repoName: string;
+    prNumber: number;
+    /** Who wrote it, as the console names them: the move keeps who it was. */
+    actor: string;
+    reason: string;
+    brief: ContextDocument;
+    /** The message as it was posted on GitHub, which the move links to. */
+    commentUrl?: string | null;
+  }): Promise<{ started: true; round: number } | { started: false; why: string }> {
+    const no = (why: string) => ({ started: false as const, why });
+    const repo = await repos.getRepoByName(input.repoName);
+    if (!repo) return no(`${input.repoName} is not a repository OpenADLC works in`);
+    const client = (await this.deps.client?.().catch(() => null)) ?? null;
+    if (!client) return no('the automation account is not connected, so the pull request cannot be read');
+    const pull = await client.getPullRequest(repo.fullName, input.prNumber).catch(() => null);
+    if (!pull) return no(`GitHub did not answer for #${input.prNumber}`);
+    if (pull.state !== 'open') return no(`pull request #${input.prNumber} is ${pull.merged ? 'merged' : 'closed'}`);
+    const issueNumber = issueNumberFromBranch(pull.headRef);
+    if (!issueNumber) return no(`no builder holds \`${pull.headRef}\`, which is not a crew branch`);
+
+    const crew = await bots.listBots();
+    let found = await leases.getActiveLease(repo.id, issueNumber).catch(() => null);
+    let why: string | null = null;
+    if (!found) {
+      const retaken = await retakeLease({ repo, issueNumber, prNumber: input.prNumber, crew, reason: `${publicNameOf(input.actor)} wrote to the builder on #${input.prNumber}` });
+      found = retaken.lease;
+      why = retaken.why;
+    }
+    // A lease is for the pull request it records, as `reviewRound` holds it.
+    const lease = found && (found.prNumber === null || found.prNumber === undefined || found.prNumber === input.prNumber) ? found : null;
+    const builder = lease ? crew.find((bot) => bot.id === lease.botId) : undefined;
+    if (!lease || !builder) {
+      return no(
+        why ?? (!lease ? `the lease on #${issueNumber} is for #${found?.prNumber}, not #${input.prNumber}` : `the builder that held #${issueNumber} is no longer in the crew`),
+      );
+    }
+
+    const subjectRef = `${repo.name}#${input.prNumber}`;
+    const going = (await tasks.listTasksOnSubjects([subjectRef]).catch(() => [])).find(
+      (task) => task.kind === 'patch' && ['queued', 'running', 'paused'].includes(task.state),
+    );
+    if (going) return no(`its patch round on #${input.prNumber} is already ${going.state === 'paused' ? 'paused' : 'under way'}`);
+    // Asked before the card moves: a builder turned away for want of room
+    // would leave it in Build with no round on it.
+    if (!(await (async () => tasks.seatHasRoom(builder.id))().catch(() => true))) {
+      return no(`${builder.name} is running all the tasks it may at once; write again once one of them ends`);
+    }
+
+    const issue = await issues.getIssue(repo.id, issueNumber).catch(() => null);
+    if (issue?.stage === 'review') {
+      const entry = await (async () => mergeLines.entryFor(repo.id, input.prNumber))().catch(() => null);
+      if (entry?.state !== 'failed') await this.deps.mergeLine.leave(repo.name, input.prNumber).catch(() => undefined);
+      if (pull.labels.includes(CI_LABEL)) {
+        await this.deps.automation.setCiLabel(repo.fullName, input.prNumber, false).catch((error: unknown) =>
+          console.warn(`[bridge] ${subjectRef}: adlc:ci was not taken off: ${error instanceof Error ? error.message : error}`),
+        );
+      }
+      const moved = await this.deps.automation
+        .moveStage({
+          repoName: repo.name,
+          issueNumber,
+          to: 'build',
+          actor: input.actor,
+          direction: 'person',
+          reason: input.reason.trim().slice(0, 4000),
+          prNumber: input.prNumber,
+          commentUrl: input.commentUrl ?? null,
+        })
+        .catch((error: unknown) => ({ moved: false, reason: error instanceof Error ? error.message : String(error) }));
+      if (!moved.moved) return no(moved.reason ?? `#${issueNumber} could not be moved back to Build`);
+    }
+
+    const round = (await roundsRun(repo.name, input.prNumber)) + 1;
+    const opened = await this.openPatchRound({
+      repo,
+      repoFullName: repo.fullName,
+      pr: { number: input.prNumber, head: { ref: pull.headRef } },
+      client,
+      issueNumber,
+      lease,
+      builder,
+      round,
+      brief: [input.brief],
+    });
+    return opened.error ? no(opened.error) : { started: true, round };
   }
 
   /**
@@ -756,6 +870,23 @@ export class SendBack {
     }).catch(() => undefined);
     return { sent: true, from, to: input.to, staffed, round: 0, commentUrl };
   }
+}
+
+/**
+ * The patch rounds that ran on a pull request. One that never began changed
+ * nothing, and counting it spent the builder's last round on a live pull
+ * request before it had written a line. Never began is `startedAt` unset — a
+ * round that ran and was then refused a resume did run, and counts. Every
+ * round on the pull request, however long ago and by whichever bot: the
+ * builder's twenty newest tasks lost earlier rounds once it was busy
+ * elsewhere, and the limit never came; a handover does not reset it either. A
+ * conflict resolution is a patch no review asked for, and two of them used up
+ * the budget before the next request for changes.
+ */
+async function roundsRun(repoName: string, prNumber: number): Promise<number> {
+  return (await tasks.listTasksForSubjects('patch', [`${repoName}#${prNumber}`])).filter(
+    (task) => task.skill !== 'resolve-conflict' && !(task.state === 'failed' && !task.startedAt),
+  ).length;
 }
 
 /** The issue a task's work is about: its subject, or for a pull request's task the issue the pull request is for. */

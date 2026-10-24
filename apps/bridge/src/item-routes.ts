@@ -42,7 +42,9 @@ function shown<T extends { item: { issue: object | null } }>(subject: string, re
   return read;
 }
 
-export function registerItemRoutes(router: Router, deps: Pick<ApiDeps, 'actors' | 'gates' | 'taskService' | 'threadStream' | 'afterwards'>): void {
+export function registerItemRoutes(router: Router, deps: Pick<ApiDeps, 'actors' | 'gates' | 'taskService' | 'threadStream' | 'afterwards' | 'messageStarts'>): void {
+  // What a message would start, and whom it goes to by default, as the item is read.
+  const starts = deps.messageStarts ?? null;
   /**
    * One work item: the request, its issue and pull request, the whole
    * conversation about any of them labelled by role, the questions open on
@@ -51,7 +53,7 @@ export function registerItemRoutes(router: Router, deps: Pick<ApiDeps, 'actors' 
    */
   router.get('/v1/items/:subject', async ({ params }) => {
     const subject = params.subject ?? '';
-    return shown(subject, await readItem(subject)).view;
+    return shown(subject, await readItem(subject, { starts })).view;
   });
 
   /**
@@ -99,14 +101,17 @@ export function registerItemRoutes(router: Router, deps: Pick<ApiDeps, 'actors' 
 
   /**
    * A person writing on a work item: an answer to one of its questions, or a
-   * message to the seat working on it. `routeItemMessage` decides which; the
-   * message itself goes the way a bot panel's does (`sendThreadMessage`).
+   * message to a role on it. `routeItemMessage` decides which; the message
+   * itself goes the way a bot panel's does (`sendThreadMessage`), and then
+   * starts that role's work on the item with it as the brief, or says on the
+   * item's timeline why it starts nothing (`MessageStarts`). The answer says
+   * which as `start`.
    */
   router.post('/v1/items/:subject/messages', async ({ params, body, identity, role: access }) => {
     const subject = params.subject ?? '';
     const input = await body<{ text?: unknown; gateId?: unknown; role?: unknown; attachments?: unknown }>();
     const files = attachmentIds(input.attachments);
-    const read = shown(subject, await readItem(subject));
+    const read = shown(subject, await readItem(subject, { starts }));
     // Checked before anything is sent: a message whose files cannot go with
     // it is refused whole.
     const claimed = await claimableFor(files, { identity, itemSubjects: read.item.subjects });
@@ -145,7 +150,19 @@ export function registerItemRoutes(router: Router, deps: Pick<ApiDeps, 'actors' 
     if (!bot) throw new HttpFailure(409, `${route.bot} is no longer in the crew; pick another role to write to`);
     const sent = await sendThreadMessage(deps, { bot, subject: route.subject, text, identity, role: access });
     await keep(route.subject, sent.answered ? null : sent.message.id);
-    return { ...sent, bot: bot.name, subject: route.subject, item: read.item.key };
+    // Once it is posted, and its files are with it: the task it starts is briefed from both.
+    const start =
+      starts && !sent.answered
+        ? await starts.start({
+            route: { bot: bot.name, botId: bot.id, role: route.role, subject: route.subject },
+            read,
+            text,
+            identity,
+            access,
+            message: { id: sent.message.id, githubUrl: sent.message.githubUrl ?? null },
+          })
+        : null;
+    return { ...sent, bot: bot.name, subject: route.subject, item: read.item.key, ...(start ? { start } : {}) };
   });
 }
 

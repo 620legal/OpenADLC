@@ -210,6 +210,55 @@ describe('an issue labelled openadlc:ignore', () => {
   });
 });
 
+describe('a stage staffed for a person’s message', () => {
+  // A message to design or intake on its item starts that stage's work, with
+  // the message as its brief, or says why not (`MessageStarts`).
+  const brief = [{ name: 'message.md', title: 'What jane asked of you', content: 'Keep the old column.' }];
+
+  it('starts the stage’s task with the message beside its context, and says why when it does not', async () => {
+    board.issues = [{ number: 9, repoName: 'openadlc', stage: 'spec', labels: ['adlc:spec'], createdAt: '2026-09-29T09:00:00.000Z' }];
+    const open = vi.fn(async () => ({ taskId: 'task-1', session: null }));
+    const stages = new StageHandoff({} as never, { open } as never, null, async (_key, fn) => fn());
+
+    expect(await stages.staffing({ repoName: 'openadlc', issueNumber: 9, stage: 'spec', brief })).toEqual({ started: true, why: null });
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ kind: 'spec', subjectRef: 'openadlc#9', skill: 'spec', extraContext: brief }));
+
+    board.issues = [{ ...board.issues[0]!, labels: ['adlc:spec', 'openadlc:ignore'] }];
+    expect(await stages.staffing({ repoName: 'openadlc', issueNumber: 9, stage: 'spec', brief })).toEqual({ started: false, why: 'openadlc#9 is labelled openadlc:ignore' });
+
+    board.issues = [{ ...board.issues[0]!, labels: ['adlc:spec'] }];
+    open.mockRejectedValueOnce(Object.assign(new Error('openadlc-sage-janedoe is running a task, all it may run at once'), { name: 'BotBusyError' }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(await stages.staffing({ repoName: 'openadlc', issueNumber: 9, stage: 'spec', brief })).toEqual({
+        started: false,
+        why: 'openadlc-sage-janedoe is running a task, all it may run at once',
+        later: true,
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('tries intake again on an issue it gave up on: a person’s message is the decision the tries wait for', async () => {
+    const now = new Date().toISOString();
+    board.issues = [{ number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:intake'], createdAt: '2026-09-29T09:00:00.000Z' }];
+    board.onSubject = { 'openadlc#9': [{ kind: 'intake', state: 'done', createdAt: now }, { kind: 'intake', state: 'done', createdAt: now }] };
+    board.events = [];
+    const open = vi.fn(async () => ({ taskId: 'task-1', session: null }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const stages = new StageHandoff({} as never, { open } as never, null, async (_key, fn) => fn());
+      expect(await stages.staffing({ repoName: 'openadlc', issueNumber: 9, stage: 'intake' })).toEqual({ started: false, why: 'intake has had its tries at openadlc#9; a person decides now' });
+      expect(await stages.staffing({ repoName: 'openadlc', issueNumber: 9, stage: 'intake', brief })).toEqual({ started: true, why: null });
+      expect(open).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+      board.onSubject = {};
+    }
+  });
+});
+
 describe('an issue that is closed on GitHub', () => {
   const opening = (started: string[]) =>
     ({ open: vi.fn(async (input: { subjectRef: string }) => (started.push(input.subjectRef), { taskId: 'task-1', session: null })) }) as never;

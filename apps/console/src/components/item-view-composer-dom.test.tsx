@@ -218,7 +218,7 @@ describe('writing on an item nobody has worked on yet', () => {
     expect(sending.sent).toEqual([expect.objectContaining({ text: 'Keep the old column too.', role: 'implement' })]);
   });
 
-  it('asks for no role when there is none to pick, and offers no picker once someone is there to write to', async () => {
+  it('asks for no role when there is none to pick, and offers no picker from a bridge that names no routes', async () => {
     const none = 'nobody has worked on this item yet, and the crew has no seat that reads a message; add one in Settings → Crew';
     await open({ ...FRESH, routes: { '': { kind: 'refused', error: none } } });
     expect(picker()).toBeNull();
@@ -228,5 +228,102 @@ describe('writing on an item nobody has worked on yet', () => {
     root = createRoot(container);
     await open(ITEM);
     expect(picker()).toBeNull();
+  });
+});
+
+describe('writing from the conversation of an item someone works on', () => {
+  // core#5 on 2026-10-24: #7's CI was red and the fix was the builder's; the
+  // box sent the message to the lead reviewer, who had spoken last, said only
+  // where it was posted, and nothing started.
+  const PATCH = { kind: 'starts' as const, what: 'a patch round on pull request #31' };
+  const UNDER_WAY = { kind: 'nothing' as const, why: 'its review of pull request #31 is already under way' };
+  const RED: ItemData = {
+    ...ITEM,
+    ciRed: true,
+    roles: [
+      { role: 'implement', label: 'builder', seats: [{ bot: 'builder', slot: 'builder', githubLogin: 'acme-crew', sharedAccount: false }] },
+      ...ITEM.roles,
+    ],
+    routes: {
+      '': { kind: 'post', bot: 'builder', role: 'implement', handle: 'acme-crew', subject: 'api#12', on: 'issue', number: 12, start: PATCH },
+      review_lead: { kind: 'post', bot: 'lead-reviewer', role: 'review_lead', handle: 'acme-reviewer', subject: 'api#31', on: 'pull_request', number: 31, start: UNDER_WAY },
+      implement: { kind: 'post', bot: 'builder', role: 'implement', handle: 'acme-crew', subject: 'api#12', on: 'issue', number: 12, start: PATCH },
+    },
+  };
+
+  async function open(item: ItemData): Promise<void> {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(item)));
+    const { ItemView } = await import('./item-view');
+    await act(async () => root.render(<ItemView subject="api#12" initial={item} now="2026-09-30T12:00:00.000Z" />));
+    await settle();
+  }
+
+  const chips = () => [...(container.querySelector('[data-role-picker]')?.querySelectorAll('button') ?? [])];
+  const chip = (label: string) => chips().find((one) => one.textContent === label)!;
+  const helper = () => container.querySelector('[data-composer-helper]')?.textContent;
+  const label = () => container.querySelector('label')?.textContent;
+
+  it('is addressed to the role that acts next, says so, and says what sending it starts', async () => {
+    await open(RED);
+    expect(label()).toBe('Message the builder');
+    expect(chips().map((one) => [one.textContent, one.getAttribute('aria-pressed')])).toEqual([
+      ['builder', 'true'],
+      ['lead reviewer', 'false'],
+    ]);
+    expect(helper()).toBe('To the builder (acme-crew), posted on #12 as a comment; starts a patch round on pull request #31');
+
+    await type('Make the scope check accept any heading level, in this PR.');
+    await commandEnter();
+    await settle();
+    // Left to the bridge, which routes it to the same role by the same rule.
+    expect(sending.sent).toEqual([expect.objectContaining({ text: 'Make the scope check accept any heading level, in this PR.', gateId: null, role: null })]);
+  });
+
+  it('says before it is sent that a message to another role starts nothing, and why', async () => {
+    await open(RED);
+    await act(async () => chip('lead reviewer').click());
+    expect(label()).toBe('Message the lead reviewer');
+    expect(chip('lead reviewer').getAttribute('aria-pressed')).toBe('true');
+    expect(chip('builder').getAttribute('aria-pressed')).toBe('false');
+    expect(helper()).toBe(
+      'To the lead reviewer (acme-reviewer), posted on pull request #31 as a comment; nothing starts: its review of pull request #31 is already under way',
+    );
+
+    await type('Look again.');
+    await commandEnter();
+    await settle();
+    expect(sending.sent).toEqual([expect.objectContaining({ text: 'Look again.', role: 'review_lead' })]);
+  });
+
+  it('answers the question of the role picked, whose task waits on it, rather than writing to it', async () => {
+    const asks = (id: string, role: string, bot: string, question: string) => ({
+      id,
+      question,
+      options: [],
+      addressedTo: null,
+      githubCommentUrl: null,
+      subjectRef: role === 'implement' ? 'api#12' : 'api#31',
+      role,
+      seat: bot,
+      bot,
+    });
+    const waiting: ItemData = {
+      ...RED,
+      openGates: [asks('g-lead', 'review_lead', 'lead-reviewer', 'Per round?'), asks('g-builder', 'implement', 'builder', 'Which heading levels?')],
+    };
+    await open(waiting);
+    // Two questions open and none picked: the bridge would not guess, and the box is to nobody yet.
+    expect(composer().disabled).toBe(true);
+    expect(chips().map((one) => one.getAttribute('aria-pressed'))).toEqual(['false', 'false']);
+
+    await act(async () => chip('builder').click());
+    expect(chip('builder').getAttribute('aria-pressed')).toBe('true');
+    expect(label()).toBe('Your answer');
+    expect(helper()).toBe('Answers the builder’s question: “Which heading levels?”');
+    await type('Any of them.');
+    await commandEnter();
+    await settle();
+    // The answer resumes the builder's task; nothing new is started beside it.
+    expect(sending.sent).toEqual([expect.objectContaining({ text: 'Any of them.', gateId: 'g-builder', role: 'implement' })]);
   });
 });

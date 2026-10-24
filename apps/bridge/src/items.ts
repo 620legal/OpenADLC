@@ -19,6 +19,7 @@ import { requestPrefixOf } from './request-context.js';
 import { readHolds } from './item-hold.js';
 import { isActive, issueForSubject, parseRef, subjectsOf, type IssueFacts } from './work.js';
 import { formatKey } from './work-items.js';
+import type { MessageStart, StartFacts } from './message-starts.js';
 
 /**
  * A work item: one request, the issue it became, and that issue's pull
@@ -350,10 +351,18 @@ export interface ItemView {
   next?: boolean;
   /**
    * Where a message written on it would go, by tab: `''` for the
-   * conversation, and each of `roles` by its role (`messageRoutes`); and,
-   * while nobody has worked on it, each other role of the crew, to pick.
+   * conversation, and each of `roles` by its role (`messageRoutes`), with the
+   * role the conversation writes to when no tab names it; and, while nobody
+   * has worked on it, each other role of the crew, to pick.
    */
   routes?: Record<string, ItemRoutePreview>;
+  /**
+   * Whether CI's newest run on its pull request's head failed, for a pull
+   * request in Review; null when not known, absent when not read. With it red
+   * the builder acts next, and a message from the conversation goes to it
+   * (`actsNext`).
+   */
+  ciRed?: boolean | null;
   /** Its work item's number and key; null before the install is numbered. */
   workItem: { number: number; key: string; mergedFrom: number | null } | null;
   /** Every issue, pull request and request linked to it; empty before the install is numbered. */
@@ -613,7 +622,7 @@ function writableRoles(bots: readonly Pick<ItemBot, 'role'>[]): string[] {
   );
 }
 
-/** Who works a stage, for an item nobody has spoken on yet. */
+/** Who works a stage. */
 const STAGE_ROLE: Partial<Record<StageKey, BotRole>> = {
   intake: 'intake',
   spec: 'spec',
@@ -621,6 +630,22 @@ const STAGE_ROLE: Partial<Record<StageKey, BotRole>> = {
   review: 'review_lead',
   merged: 'deploy',
 };
+
+/**
+ * The role that acts next on an item, by where it stands: the role that
+ * works its stage, and on a pull request in Review whose CI is red the
+ * builder, whose work that is. Null for a stage nobody works, or one whose
+ * role the crew has no seat in.
+ *
+ * A message from the conversation went to the role that last spoke on it.
+ * On core#5 (2026-10-24) that was the lead reviewer, while #7's CI was red
+ * and the fix was the builder's; the person meant the builder, and the
+ * message started nothing.
+ */
+export function actsNext(view: Pick<ItemView, 'stage' | 'ciRed'>, bots: readonly Pick<ItemBot, 'role'>[]): string | null {
+  const role = view.stage === 'review' && view.ciRed ? 'implement' : view.stage ? STAGE_ROLE[view.stage] : undefined;
+  return role && bots.some((bot) => bot.role === role) ? role : null;
+}
 
 /** Where a person's message on an item goes. */
 export type ItemRoute =
@@ -644,6 +669,8 @@ export type ItemRoutePreview =
       subject: string;
       on: 'issue' | 'pull_request' | 'request' | 'openadlc';
       number: number | null;
+      /** What sending it starts, or why it starts nothing (`whatStarts`); absent from a read that did not ask. */
+      start?: MessageStart;
     }
   | { kind: 'refused'; error: string };
 
@@ -657,13 +684,15 @@ export type ItemRoutePreview =
  * - Otherwise, the one question open on the item (or the role's, with
  *   `role`) is answered. Two or more is refused: guessing which of two
  *   questions a reply answers resumed the wrong task.
- * - Otherwise it is posted to the role's seat that last spoke on the item,
- *   else the seat whose task is on it, else the seat that staffs its stage;
- *   about the pull request for a reviewer, the issue for anyone else, and
- *   the request before the issue exists.
+ * - Otherwise it is posted to a role: the one named, else the role that acts
+ *   next on the item (`actsNext`), else the role of whoever last spoke on it
+ *   or works on it now. It goes to that role's seat that last spoke on the
+ *   item, else its seat whose task is on it, else the first seat of that
+ *   role; about the pull request for a reviewer, the issue for anyone else,
+ *   and the request before the issue exists.
  */
 export function routeItemMessage(
-  view: Pick<ItemView, 'openGates' | 'timeline' | 'tasks' | 'stage'>,
+  view: Pick<ItemView, 'openGates' | 'timeline' | 'tasks' | 'stage' | 'ciRed'>,
   item: Pick<Item, 'key' | 'refs' | 'subjects'>,
   bots: readonly ItemBot[],
   input: { gateId?: string | null; role?: string | null; gate?: ItemGate | null },
@@ -685,15 +714,20 @@ export function routeItemMessage(
   }
 
   const byName = new Map(bots.map((bot) => [bot.name, bot]));
-  const spoke = [...view.timeline]
-    .reverse()
-    .find((message) => (message.kind === 'bot' || message.kind === 'gate') && message.bot && (!role || message.role === role));
-  const working = view.tasks.find((task) => isActive(task) && (!role || task.role === role));
-  const staffing = role ?? (view.stage ? STAGE_ROLE[view.stage] : undefined) ?? null;
+  const spokeAs = (wanted: string | null) =>
+    [...view.timeline]
+      .reverse()
+      .find((message) => (message.kind === 'bot' || message.kind === 'gate') && message.bot && (!wanted || message.role === wanted));
+  const workingAs = (wanted: string | null) => view.tasks.find((task) => isActive(task) && (!wanted || task.role === wanted));
+  // The role it is to: the one named, else the one that acts next, else
+  // whoever last spoke or works on it now.
+  const to = role ?? actsNext(view, bots) ?? spokeAs(null)?.role ?? workingAs(null)?.role ?? null;
+  const spoke = spokeAs(to);
+  const working = workingAs(to);
   const bot =
     (spoke?.bot ? byName.get(spoke.bot) : undefined) ??
     (working ? byName.get(working.bot) : undefined) ??
-    (staffing ? bots.find((one) => one.role === staffing) : undefined);
+    (to ? bots.find((one) => one.role === to) : undefined);
   if (!bot) {
     return {
       kind: 'refused',
@@ -706,7 +740,7 @@ export function routeItemMessage(
     };
   }
 
-  const actingRole = role ?? bot.role;
+  const actingRole = to ?? bot.role;
   const subject =
     (ON_THE_PULL_REQUEST.has(actingRole) ? item.refs.pullRequest : null) ?? item.refs.issue ?? item.refs.request ?? item.key;
   return { kind: 'post', bot: bot.name, botId: bot.id, role: actingRole, subject };
@@ -724,19 +758,27 @@ export function routeItemMessage(
  * When the conversation has no one to write to, because nobody has worked on
  * the item yet, every role the crew has that no tab names is here too, for the
  * box to offer as a pick. It asked to "pick a role to write to", and an item
- * nobody had worked on had no role tab to pick.
+ * nobody had worked on had no role tab to pick. The role the conversation
+ * writes to is here by its role too when no tab names it, so the box can
+ * offer it beside the tabs' roles.
+ *
+ * With `starts`, each route says what sending it would start, or why it
+ * starts nothing (`whatStarts`), so the box says that before it is sent.
  */
 export function messageRoutes(
-  view: Pick<ItemView, 'openGates' | 'timeline' | 'tasks' | 'stage' | 'roles'>,
+  view: Pick<ItemView, 'openGates' | 'timeline' | 'tasks' | 'stage' | 'roles' | 'ciRed'>,
   item: Pick<Item, 'key' | 'refs' | 'subjects'>,
   bots: readonly ItemBot[],
+  starts?: (route: { role: string; bot: string }) => MessageStart,
 ): Record<string, ItemRoutePreview> {
   const quiet = { ...view, openGates: [] };
   const routes: Record<string, ItemRoutePreview> = {};
   const tabs = ['', ...view.roles.map((one) => one.role)];
-  const nobody = routeItemMessage(quiet, item, bots, { role: null }).kind === 'refused';
+  const first = routeItemMessage(quiet, item, bots, { role: null });
+  const nobody = first.kind === 'refused';
+  const next = first.kind === 'post' && !tabs.includes(first.role) ? [first.role] : [];
   const picks = nobody ? writableRoles(bots).filter((role) => !tabs.includes(role)) : [];
-  for (const role of [...tabs, ...picks]) {
+  for (const role of [...tabs, ...next, ...picks]) {
     const route = routeItemMessage(quiet, item, bots, { role: role || null });
     if (route.kind === 'refused') {
       routes[role] = { kind: 'refused', error: route.error };
@@ -756,6 +798,7 @@ export function messageRoutes(
             ? 'request'
             : 'openadlc',
         number: onGitHub?.number ?? null,
+        ...(starts ? { start: starts({ role: route.role, bot: route.bot }) } : {}),
       };
     }
   }
@@ -1073,8 +1116,24 @@ async function resolveBySubject(trimmed: string, repoList: readonly RepoRow[]): 
   return { item, repo: repoList.find((one) => one.name === item.repo) ?? null };
 }
 
-/** Reads an item's view, or null when the subject names no item. */
-export async function readItem(subject: string): Promise<{ item: Item; view: ItemView; repo: RepoRow | null } | null> {
+/**
+ * What a message on an item would start, as `MessageStarts` works it out:
+ * the facts only the bridge can read, and the decision from them.
+ */
+export interface ItemStarts {
+  facts(read: { item: Item; view: ItemView; repo: RepoRow | null }): Promise<StartFacts>;
+  preview(input: { role: string; bot: string; read: { item: Item; view: ItemView }; facts: StartFacts }): MessageStart;
+}
+
+/**
+ * Reads an item's view, or null when the subject names no item. With
+ * `starts`, its routes say what a message would start, and whether its pull
+ * request's CI is red is read for whom a message goes to (`actsNext`).
+ */
+export async function readItem(
+  subject: string,
+  options: { starts?: ItemStarts | null } = {},
+): Promise<{ item: Item; view: ItemView; repo: RepoRow | null; facts?: StartFacts } | null> {
   const resolved = await resolveItem(subject);
   if (!resolved) return null;
   const { item, repo } = resolved;
@@ -1098,10 +1157,13 @@ export async function readItem(subject: string): Promise<{ item: Item; view: Ite
   const holds = holdKey && hasPausedLabel(labels) ? await readHolds() : {};
   view.held = holdKey && hasPausedLabel(labels) ? (holds[holdKey] ?? { by: 'a person on GitHub', at: '', why: null }) : null;
   view.next = hasNextLabel(labels);
-  view.routes = messageRoutes(view, item, crew);
+  const starts = options.starts ?? null;
+  const facts = starts ? await starts.facts({ item, view, repo }).catch(() => null) : null;
+  if (facts) view.ciRed = facts.ciRed ?? null;
+  view.routes = messageRoutes(view, item, crew, starts && facts ? (route) => starts.preview({ ...route, read: { item, view }, facts }) : undefined);
   // Approve all on its issue, which the item shows with a way to turn it off.
   const issueNumber = item.issue?.number ?? null;
   const standing = repo && issueNumber ? await (async () => standingApprovals.activeFor(repo.id, issueNumber))().catch(() => null) : null;
   view.standingApproval = standing ? { issueNumber: standing.issueNumber, setBy: standing.setBy, setAt: standing.setAt } : null;
-  return { item, view, repo };
+  return { item, view, repo, ...(facts ? { facts } : {}) };
 }

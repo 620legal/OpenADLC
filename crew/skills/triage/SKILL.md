@@ -233,6 +233,10 @@ next question is written after it, not before.
   it is in `request.md`, and on an issue or a pull request it is in its
   conversation. Read it first. It may have changed what you assumed, so your
   next question, if you still need one, builds on it.
+- A person can also write to you from the console. When `message.md` is in
+  your context, their message is why this triage started: take it as the
+  person's word on the issue. It is in the issue's conversation too, posted as
+  you. On a console request their message is in `request.md` instead.
 
 On an issue, ask the same way: end your own message with the marker, and do not
 post the question as a comment yourself. The bridge posts it on the issue, a

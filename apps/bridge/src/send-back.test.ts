@@ -545,6 +545,71 @@ describe('a review sending the work back to build', () => {
   });
 });
 
+describe('a person’s message to the builder on a pull request', () => {
+  // core#5 on 2026-10-24: a person asked the builder to fix #7's scope check,
+  // the message was a comment and nothing else, and #7 stayed red.
+  const brief = { name: 'message.md', title: 'What jane asked of you', content: 'Accept any heading level.' };
+  const ask = { repoName: REPO.name, prNumber: 31, actor: 'jane@acme.test', reason: 'Accept any heading level.', brief, commentUrl: 'https://github.test/c/1' };
+  const open = (labels: string[] = []) => ({ state: 'open', merged: false, headRef: 'agent/builder/7-issue-7', headSha: 'abc1234', labels });
+
+  it('takes the card in Review back to Build as the person’s move, out of the merge line, and opens a patch round briefed with it', async () => {
+    world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
+    const { service, automation, mergeLine, taskService, client } = sendBack();
+    client.getPullRequest.mockResolvedValue(open(['adlc:ci']) as never);
+
+    expect(await service.fromMessage(ask)).toEqual({ started: true, round: 1 });
+
+    expect(mergeLine.leave).toHaveBeenCalledWith('openadlc-testbed', 31);
+    expect(automation.setCiLabel).toHaveBeenCalledWith('janedoe/openadlc-testbed', 31, false);
+    expect(automation.moveStage).toHaveBeenCalledWith({
+      repoName: 'openadlc-testbed',
+      issueNumber: 7,
+      to: 'build',
+      actor: 'jane@acme.test',
+      direction: 'person',
+      reason: 'Accept any heading level.',
+      prNumber: 31,
+      commentUrl: 'https://github.test/c/1',
+    });
+    // The message itself is the comment: nothing else is said on the issue.
+    expect(automation.comment).not.toHaveBeenCalled();
+    expect(taskService.open).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'patch', round: 1, leaseId: 'lease-7', branch: 'agent/builder/7-issue-7', declaredPaths: ['src/app.ts'], extraContext: [brief] }),
+    );
+    expect(automation.moveStage.mock.invocationCallOrder[0]).toBeLessThan(taskService.open.mock.invocationCallOrder[0]!);
+  });
+
+  it('opens the round on a card already in Build without moving it, and past the round limit: a person asking is that decision', async () => {
+    world.issue = { number: 7, stage: 'build', prNumber: 31, labels: ['adlc:build'] };
+    world.botTasks = [1, 2, 3].map((round) => ({ id: `p${round}`, subjectRef: 'openadlc-testbed#31', kind: 'patch', state: 'done', startedAt: 'x' }));
+    const { service, automation, mergeLine, taskService, client } = sendBack();
+    client.getPullRequest.mockResolvedValue(open() as never);
+
+    expect(await service.fromMessage(ask)).toEqual({ started: true, round: 4 });
+    expect(automation.moveStage).not.toHaveBeenCalled();
+    expect(mergeLine.leave).not.toHaveBeenCalled();
+    expect(automation.comment).not.toHaveBeenCalled();
+    expect(world.events).not.toContainEqual(expect.objectContaining({ type: 'review.stalled' }));
+    expect(taskService.open).toHaveBeenCalledWith(expect.objectContaining({ kind: 'patch', round: 4, extraContext: [brief] }));
+  });
+
+  it('opens no second round beside one under way, and none on a pull request no builder holds, saying why', async () => {
+    world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
+    world.onSubjects = [{ id: 'p1', kind: 'patch', state: 'running', subjectRef: 'openadlc-testbed#31' }];
+    const { service, automation, taskService, client } = sendBack();
+    client.getPullRequest.mockResolvedValue(open() as never);
+
+    expect(await service.fromMessage(ask)).toEqual({ started: false, why: 'its patch round on #31 is already under way' });
+    world.onSubjects = [];
+    world.lease = null;
+    expect(await service.fromMessage(ask)).toEqual({ started: false, why: 'no lease on #7 was ever linked to #31' });
+    client.getPullRequest.mockResolvedValue({ ...open(), state: 'closed', merged: true } as never);
+    expect(await service.fromMessage(ask)).toEqual({ started: false, why: 'pull request #31 is merged' });
+    expect(automation.moveStage).not.toHaveBeenCalled();
+    expect(taskService.open).not.toHaveBeenCalled();
+  });
+});
+
 describe('the bridge sending a deployed change back', () => {
   it('moves a merged change to Build with the deploy as its reason, under the same limits', async () => {
     // A red smoke on testing, or a failed production deploy: nobody's task

@@ -179,15 +179,35 @@ none yet, says its kind of work instead ("writing the change").
    request, whichever seat said it, labelled by the role that said it
    (`GET /v1/items/:subject`, any member's subject opening the same item). A
    message written on an item answers the question the person picked, or the
-   one question open on it; never a question about another item. Otherwise it
-   goes to the seat that last spoke on the item (in the role of the tab it was
-   written on), else the seat whose task is running on it, else the seat that
-   staffs its stage, and is posted as that seat's GitHub account: on the pull
-   request for a reviewer, on the issue for anyone else, in the request's
-   thread before there is an issue, and kept in OpenADLC, not posted, for a
-   subject GitHub has no page for (a deploy of a commit). The item's view
-   carries that route for each tab (`routes`), worked out by the same
-   function, and the line above the message box says it. An item nobody has
+   one question open on it — a task waiting on an answer is resumed by it,
+   never started again beside itself; never a question about another item.
+   Otherwise it goes to a role: the tab's, or the one picked; from the
+   conversation, the role that acts next on the item (`actsNext`): the one
+   that works its stage, and on a pull request in Review whose CI's newest run
+   on its head failed, the builder — not the role that last spoke. It goes to
+   that role's seat that last spoke on the item, else its seat whose task is
+   running on it, else the first seat of the role, and is posted as that
+   seat's GitHub account: on the pull request for a reviewer, on the issue for
+   anyone else, in the request's thread before there is an issue, and kept in
+   OpenADLC, not posted, for a subject GitHub has no page for (a deploy of a
+   commit). Then it starts that role's work on the item, with the message as
+   its brief (`message.md`; `apps/bridge/src/message-starts.ts`): the
+   builder's patch round on an issue in Build or its pull request in Review
+   (a card in Review goes back to Build first, out of the merge line, as the
+   person's move, and the round is counted but not stopped at `maxRounds`),
+   or its build again from its branch on an issue in Build whose build ended
+   without its pull request or failed; a reviewer's review of a pull request
+   in Review again (the lead's only while no other seat's review is under
+   way, since the lead decides last); design's pass on an issue in Design;
+   intake's triage of a request, or of an issue in Intake. Anything else
+   starts nothing, nor does a held item, a paused seat or paused work. The
+   item's view carries that route for each tab (`routes`), worked out by the
+   same function, with what sending it starts or why it starts nothing, and
+   the line above the message box says both ("posted as a comment; nothing
+   starts: …") before it is sent; the item's timeline says the same once it
+   is. From the conversation the box names who it is to and offers the other
+   roles the routes name. Only a person signed in to the console sends one,
+   and only their words brief the task. An item nobody has
    worked on yet has no one to write to from its conversation: its view
    carries a route for each other role the crew has, and the box offers those
    roles to pick, sending to the one picked; with no seat that reads a

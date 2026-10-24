@@ -139,6 +139,7 @@ import { DEFAULT_REMOVAL, RepoRemoval, appOnRepository, appStanding, configuredL
 import type { SendBack } from './send-back.js';
 import type { StageRunner } from './stage-runner.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
+import type { MessageStarts } from './message-starts.js';
 
 export interface ApiDeps {
   config: BridgeConfig;
@@ -199,6 +200,12 @@ export interface ApiDeps {
   nextRun?: (job: string) => Date | null;
   /** Whether anything leases a build (`anythingDispatches`); absent is read as yes. */
   dispatching?: boolean;
+  /**
+   * What a person's message to a role on a work item starts there, with the
+   * message as its brief (`message-starts.ts`). Absent, a message is posted
+   * and starts nothing, as before.
+   */
+  messageStarts?: MessageStarts | null;
 }
 
 /** Where what runs after an answer belongs: the task it was for, or else a subject's thread. */

@@ -614,9 +614,16 @@ export interface ItemRole {
 }
 
 /**
+ * What a message to a role starts on an item, or why it starts nothing, as
+ * the bridge decides it (`whatStarts` in apps/bridge/src/message-starts.ts).
+ */
+export type ItemStart = { kind: 'starts'; what: string } | { kind: 'nothing'; why: string };
+
+/**
  * Where a message written on an item would go, as the bridge routes it
  * (`messageRoutes` in apps/bridge/src/items.ts): the seat, the account it
- * posts as, and the place — or why it would be refused.
+ * posts as, and the place — or why it would be refused — and what sending
+ * it starts.
  */
 export type ItemRoute =
   | {
@@ -627,6 +634,8 @@ export type ItemRoute =
       subject: string;
       on: 'issue' | 'pull_request' | 'request' | 'openadlc';
       number: number | null;
+      /** What sending it starts, or why it starts nothing. Absent from an older bridge. */
+      start?: ItemStart;
     }
   | { kind: 'refused'; error: string };
 
@@ -716,11 +725,14 @@ export interface ItemView {
   /** Its issue put first in its repository's queue. Absent from an older bridge. */
   next?: boolean;
   /**
-   * Where a message goes from each tab: `''` for the conversation, else by
-   * role; while nobody has worked on it, each other role of the crew too, to
-   * pick (`writeToRoles`). Absent from an older bridge.
+   * Where a message goes from each tab: `''` for the conversation, to the
+   * role that acts next on the item, else by role, that role included when
+   * no tab names it; while nobody has worked on it, each other role of the
+   * crew too, to pick (`writeToRoles`). Absent from an older bridge.
    */
   routes?: Record<string, ItemRoute>;
+  /** Whether CI's newest run on its pull request's head failed, for one in Review; null when not known. Absent from an older bridge. */
+  ciRed?: boolean | null;
   /** Its work item: the key to share, and the number asked for when that item was merged into this one. Null before the install is numbered. */
   workItem?: { number: number; key: string; mergedFrom: number | null } | null;
   /** Every issue, pull request and request linked to it, in the order they were linked. */

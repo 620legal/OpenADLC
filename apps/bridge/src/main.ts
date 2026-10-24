@@ -6,7 +6,8 @@ import { registerPauseRoutes, restorePause } from './pause-work.js';
 import { accountOf, appPrivateKeyRef, appVisibility, ensureAlertsSecret, ensureConsoleSecret, ensureInternalSecret, getSecretStore, installationTokenFor, openadlcHome, redeliverFailedSince } from '@openadlc/github';
 import { sameLogin } from '@openadlc/shared';
 import { Actors } from './actors.js';
-import { Afterwards, registerConsoleApi, retryDepsFor, stopTask } from './api.js';
+import { Afterwards, registerConsoleApi, retryDepsFor, startTriage, stopTask } from './api.js';
+import { MessageStarts } from './message-starts.js';
 import { SendBack } from './send-back.js';
 import { DeliveryKnowledge } from './delivery-rules.js';
 import { DeployPipeline } from './deploy-pipeline.js';
@@ -649,8 +650,24 @@ async function main(): Promise<void> {
   setInterval(backfillWorkItems, BACKFILL_EVERY_MS).unref();
   // What the console's routes do after they have answered; a shutdown waits for it.
   const afterwards = new Afterwards();
+  // A person's message to a role on a work item starts that role's work
+  // there, briefed with it, or says why it does not (`message-starts.ts`).
+  const messageStarts = new MessageStarts({
+    client: () => asAutomation(actors, config),
+    taskService,
+    sendBack,
+    stages,
+    triage: async (requestId) => {
+      const started = await startTriage({ taskService, requestQueue, dispatchGate }, requestId);
+      return started.queued ? { queued: true, position: started.position } : { queued: false };
+    },
+    rebuild: continueBuild,
+    paused: (repo) => dispatchGate.paused(repo),
+    afterwards,
+  });
   const deps = {
     afterwards,
+    messageStarts,
     requestQueue,
     config,
     hostd,
