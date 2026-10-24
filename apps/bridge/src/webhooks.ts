@@ -96,6 +96,10 @@ const STARTS_WORK = new Set(['issues', 'pull_request', 'deployment_status', 'rel
 import { PAUSED_LABEL } from '@openadlc/shared';
 import { forgetHold } from './item-hold.js';
 import { linkIssue, linkPull } from './work-items.js';
+import { everyJob, type RunJob } from './ci-usage.js';
+
+/** How many heads' real CI failures are remembered as sent back (`Webhooks.redSentBack`). */
+const RED_SENT_BACK_KEPT = 500;
 
 /** Why an app's reply is not an answer. */
 const APP_ACCOUNT = 'it is an app’s account, not a person';
@@ -3597,9 +3601,13 @@ export class Webhooks {
     // reviewers reviewed without CI; once the lead has approved, CI is what is
     // left, and its failure sends the work back to build — or, at the cap,
     // stops the loop and gives a person the card. Before the lead decides, a
-    // red run waits for that decision.
+    // red run waits for that decision: the lead's approval puts the pull
+    // request in the merge line, which finds the head red and hands it back
+    // here (`ciRedAt`), since no delivery of this run is coming again.
     const crew = await bots.listBots();
     for (const pull of pulls) {
+      const key = `${repo.fullName.toLowerCase()}#${pull.number}@${ci.sha}`;
+      if (this.redSentBack.has(key)) continue;
       const full = await client.getPullRequest(repo.fullName, pull.number).catch(() => null);
       if (!full) continue;
       const standing = await this.automation.reviewStanding(repo.fullName, {
@@ -3609,18 +3617,89 @@ export class Webhooks {
         head: { sha: ci.sha, ref: full.headRef },
         baseRef: full.baseRef,
       });
-      if (!standing.approved.includes(standing.decision.lead)) continue;
-      console.log(`[bridge] ${repo.name}#${pull.number}: CI failed again on ${ci.sha.slice(0, 7)} after the lead approved; back to build`);
-      // Out of the line, and no CI until the lead approves the fix: the label
-      // goes, and the next push runs nothing on GitHub.
-      await this.mergeLine.leave(repo.name, pull.number).catch(() => undefined);
-      if (full.labels.includes(CI_LABEL)) await this.automation.setCiLabel(repo.fullName, pull.number, false).catch(() => null);
-      await this.patchRound(repo, repo.fullName, { number: pull.number, head: { ref: pull.headRef } }, crew, client, {
-        by: 'openadlc',
-        reason: `CI failed again on ${ci.sha.slice(0, 7)} after its rerun, after the lead approved: https://github.com/${repo.fullName}/actions/runs/${ci.runId}`,
+      if (!standing.approved.includes(standing.decision.lead)) {
+        console.log(
+          `[bridge] ${repo.name}#${pull.number}: CI failed on ${ci.sha.slice(0, 7)}${ci.attempt > 1 ? ' after its rerun' : ''} before the lead approved; ` +
+            'it waits for the lead, and goes back to build if the lead approves',
+        );
+        continue;
+      }
+      // Once for each head: the run's delivery and the merge line finding the
+      // same head red both come here, and each opened a round of its own.
+      if (this.redSentBack.has(key)) continue;
+      const sending = this.sendBackRed(repo, { number: pull.number, headRef: full.headRef, labels: full.labels }, ci, crew, client);
+      this.redSentBack.set(key, sending);
+      const oldest = this.redSentBack.keys().next().value;
+      if (this.redSentBack.size > RED_SENT_BACK_KEPT && oldest !== undefined) this.redSentBack.delete(oldest);
+      // One that failed is let go, so the next event, or the line, tries again.
+      void sending.catch(() => {
+        if (this.redSentBack.get(key) === sending) this.redSentBack.delete(key);
       });
+      await sending;
     }
   }
+
+  /**
+   * The merge line found a pull request's head red and took it out
+   * (`MergeLine.useRedChecks`). Found live on 620legal/core#7: CI failed, its
+   * one rerun failed too, and both deliveries came before the lead approved,
+   * which `onCiRun` leaves to the lead's decision. The approval put the pull
+   * request in the line, the line found the head red and left it to
+   * `onCiRun`, and no delivery was coming to reach it: the line took it in
+   * and out every ten minutes for thirteen hours, and the work never went
+   * back. So the newest `ci` run on the head is read here and taken as its
+   * delivery would have been: a first failure is run again once, a second,
+   * once the lead has approved, goes back to build.
+   */
+  async ciRedAt(head: { repoName: string; prNumber: number; headSha: string }): Promise<void> {
+    const found = await repos.getRepoByName(head.repoName);
+    if (!found) return;
+    if (this.redSentBack.has(`${found.fullName.toLowerCase()}#${head.prNumber}@${head.headSha}`)) return;
+    const client = await asAutomation(this.automation['actors'], this.config);
+    if (!client) return;
+    const run = await newestCiRun(client, found.fullName, head.headSha);
+    if (!run || run.status !== 'completed' || !CI_FAILED.has(run.conclusion ?? '')) return;
+    await this.onCiRun(found.name, found.fullName, { runId: run.id, sha: head.headSha, attempt: run.attempt, outcome: 'failed', pullRequests: [head.prNumber] });
+  }
+
+  /**
+   * Sends a pull request whose CI failed for real back to build, with the
+   * job and the step that failed: "CI failed again" and a link left the
+   * builder to find which of the run's jobs it was before it could start.
+   */
+  private async sendBackRed(
+    repo: { id: string; name: string; fullName: string },
+    pull: { number: number; headRef: string; labels: string[] },
+    ci: CiRunOutcome,
+    crew: Awaited<ReturnType<typeof bots.listBots>>,
+    client: GitHubClient,
+  ): Promise<void> {
+    const short = ci.sha.slice(0, 7);
+    const failed = ci.attempt > 1 ? `failed again on ${short} after its rerun` : `failed on ${short} and could not be run again`;
+    console.log(`[bridge] ${repo.name}#${pull.number}: CI ${failed}, after the lead approved; back to build`);
+    // Out of the line at this head, and no CI until the lead approves the
+    // fix: the label goes, and the next push runs nothing on GitHub.
+    await this.mergeLine.failOnRed(repo.name, pull.number, ci.sha).catch(() => undefined);
+    if (pull.labels.includes(CI_LABEL)) await this.automation.setCiLabel(repo.fullName, pull.number, false).catch(() => null);
+    const jobs = await everyJob(client, repo.fullName, ci.runId, ci.attempt).catch(() => null);
+    const where = jobs ? failedAt(jobs) : null;
+    const check = `\`${REQUIRED_CHECK}\` failed on \`${short}\`${ci.attempt > 1 ? ' after its rerun' : ', and could not be run again'}${where ? `: ${where}` : ''}`;
+    await this.sendBack.reviewRound({
+      repo,
+      repoFullName: repo.fullName,
+      pr: { number: pull.number, head: { ref: pull.headRef, sha: ci.sha } },
+      crew,
+      client,
+      by: 'openadlc',
+      reason:
+        `CI ${failed}, after the lead approved${where ? `: ${where}` : jobs ? '' : ' (its jobs could not be read)'}. ` +
+        `https://github.com/${repo.fullName}/actions/runs/${ci.runId}`,
+      check,
+    });
+  }
+
+  /** Each head whose real CI failure went back to build, or is going, by `owner/repo#n@sha`. */
+  private readonly redSentBack = new Map<string, Promise<void>>();
 
   /**
    * Runs a first failure's failed jobs again, once. Once is by run and
@@ -5302,6 +5381,46 @@ interface CiRunOutcome {
   attempt: number;
   outcome: 'passed' | 'failed';
   pullRequests: number[];
+}
+
+/**
+ * The newest run of the CI workflow on a commit, as it stands now: a rerun
+ * is the same run at a later attempt. Null when there is none. A read that
+ * fails throws, for the caller to say.
+ */
+async function newestCiRun(
+  client: Pick<GitHubClient, 'request'>,
+  repoFullName: string,
+  sha: string,
+): Promise<{ id: number; attempt: number; status: string; conclusion: string | null } | null> {
+  const listed = await client.request<{ workflow_runs?: { id: number; name?: string | null; run_attempt?: number; status: string; conclusion: string | null }[] }>(
+    'GET',
+    `/repos/${repoFullName}/actions/runs?head_sha=${sha}&per_page=100`,
+  );
+  const runs = (listed.workflow_runs ?? []).filter((run) => (run.name ?? '').toLowerCase() === REQUIRED_CHECK);
+  const newest = runs.reduce<(typeof runs)[number] | null>((best, run) => (!best || run.id > best.id ? run : best), null);
+  return newest ? { id: newest.id, attempt: newest.run_attempt ?? 1, status: newest.status, conclusion: newest.conclusion } : null;
+}
+
+/**
+ * Where a failed CI run stopped, as a builder starts from it: each job that
+ * failed and the first of its steps that did. On 620legal/core#7 the run's
+ * `check` job failed at its scope check and its `ci` job, which only gathers
+ * the others, failed because `check` had: the gathering job is named only
+ * when it is all that failed, as the template's single `ci` job is. Null
+ * when no job failed.
+ */
+export function failedAt(jobs: readonly Pick<RunJob, 'name' | 'conclusion' | 'steps'>[]): string | null {
+  const failed = jobs.filter((job) => CI_FAILED.has(job.conclusion ?? ''));
+  const ownWork = failed.filter((job) => (job.name ?? '').toLowerCase() !== REQUIRED_CHECK);
+  const named = (ownWork.length > 0 ? ownWork : failed).slice(0, 3);
+  if (named.length === 0) return null;
+  return named
+    .map((job) => {
+      const step = (job.steps ?? []).find((one) => CI_FAILED.has(one.conclusion ?? ''));
+      return `the \`${job.name ?? 'unnamed'}\` job${step ? `, at its step “${step.name}”` : ''}`;
+    })
+    .join('; ');
 }
 
 /**

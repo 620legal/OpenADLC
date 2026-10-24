@@ -257,6 +257,12 @@ export interface Stall {
   heldBy: string[];
   /** Why the loop could not go on, when it stopped for want of a lease or a builder rather than a verdict. */
   reason: string | null;
+  /**
+   * The check that failed, when CI sent the work back: the merge line keeps
+   * that red head out, so with nothing to take it the card is all that says
+   * why it waits.
+   */
+  check: string | null;
   at: string;
 }
 
@@ -274,6 +280,7 @@ export function stallFrom(event: { at: string; payload: unknown }): Stall | null
     bot: typeof payload.bot === 'string' ? payload.bot : null,
     heldBy: Array.isArray(payload.heldBy) ? payload.heldBy.filter((seat): seat is string => typeof seat === 'string') : [],
     reason: typeof payload.reason === 'string' && payload.reason.trim() ? payload.reason.trim() : null,
+    check: typeof payload.check === 'string' && payload.check.trim() ? payload.check.trim() : null,
     at: event.at,
   };
 }

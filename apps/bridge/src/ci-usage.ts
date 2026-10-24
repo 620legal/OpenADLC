@@ -34,6 +34,9 @@ export interface RunJob {
   labels?: string[];
   /** "GitHub Actions" for GitHub's standard runners; a larger runner's or a self-hosted one's group otherwise. */
   runner_group_name?: string | null;
+  /** The job's name and steps: what a send-back on a red run names (`failedAt` in webhooks.ts). */
+  name?: string;
+  steps?: { name: string; conclusion: string | null }[] | null;
 }
 
 /** GitHub's own group for its standard hosted runners. */

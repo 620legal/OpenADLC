@@ -1368,23 +1368,31 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     if (prUrl) actions.push({ kind: 'open_url', label: 'Decide on GitHub', url: prUrl });
     if (bot) actions.push({ kind: 'open_thread', label: 'Open thread', bot: bot.name });
     const held = stall.heldBy.length > 0 ? stall.heldBy.join(' and ') : null;
+    // CI failed after the lead approved, and nothing can take it back: the
+    // merge line keeps the red head out, so the card names the check.
+    const red = !held && stall.check ? stall.check : null;
     items.push({
       id: `stall:${key}`,
       kind: 'review_stalled',
       headline: held
         ? `Review stopped: ${held} still ${stall.heldBy.length === 1 ? 'asks' : 'ask'} for changes`
-        : stall.rounds > 0
-          ? `Review stopped after ${stall.rounds} ${stall.rounds === 1 ? 'round' : 'rounds'}`
-          : 'Review stopped without agreeing',
+        : red
+          ? `CI failed after the lead approved, and ${stall.rounds > 0 ? `the review loop stopped after ${stall.rounds} ${stall.rounds === 1 ? 'round' : 'rounds'}` : 'nothing can take it'}`
+          : stall.rounds > 0
+            ? `Review stopped after ${stall.rounds} ${stall.rounds === 1 ? 'round' : 'rounds'}`
+            : 'Review stopped without agreeing',
       subject,
       bot: asAttentionBot(bot),
       since: stall.at,
       detail: held
         ? `${held} ${stall.heldBy.length === 1 ? 'is' : 'are'} blocking and still ${stall.heldBy.length === 1 ? 'asks' : 'ask'} for changes; the lead approved. ` +
           'Nothing sends the work back, so it waits for you: answer its findings, ask it to review again, or dismiss its review on GitHub.'
-        : stall.reason
-          ? `It was sent back to build, but nothing could take it: ${stall.reason}. Fix it on the branch, dismiss the review on GitHub, or move the card.`
-          : 'The reviewers still ask for changes. Merge it anyway, send it back to design, or take the branch yourself.',
+        : red
+          ? `${red}. ${stall.reason ? `It was sent back to build, but nothing could take it: ${stall.reason}.` : 'Its review rounds ran out, so it was not sent back to build again.'} ` +
+            'The merge line keeps this head out until it changes or its checks run again: fix it on the branch, run the checks again, or move the card.'
+          : stall.reason
+            ? `It was sent back to build, but nothing could take it: ${stall.reason}. Fix it on the branch, dismiss the review on GitHub, or move the card.`
+            : 'The reviewers still ask for changes. Merge it anyway, send it back to design, or take the branch yourself.',
       actions,
     });
   }

@@ -384,6 +384,12 @@ export class SendBack {
     reason: string;
     /** Brief the round with the lease's paths alone, not the files in its diff: it was sent back for straying outside them. */
     leasePathsOnly?: boolean;
+    /**
+     * The check that failed, when CI sent it back: what a card says when
+     * nothing can take the work, since the merge line keeps that red head out
+     * and nothing else on the board would say why it waits.
+     */
+    check?: string;
   }): Promise<string | null> {
     const { repo, repoFullName, pr } = input;
     const issueNumber = issueNumberFromBranch(pr.head.ref);
@@ -412,10 +418,10 @@ export class SendBack {
         console.warn(`[bridge] ${repoFullName}#${pr.number}: not sent back to build: ${why}`);
       }
       if (input.crew.some((bot) => bot.name === input.by)) await this.nobodyToSendTo({ ...input, issue: issueNumber, why });
-      else if (issueNumber && !(await this.stallSaid(repo.name, pr))) await this.recordStall({ repo, pr, issue: issueNumber, why });
+      else if (issueNumber && !(await this.stallSaid(repo.name, pr))) await this.recordStall({ repo, pr, issue: issueNumber, why, check: input.check ?? null });
       return why ?? `no builder holds \`${pr.head.ref}\``;
     }
-    const round = await this.nextRound({ repo, repoFullName, pr, issueNumber, lease, builder });
+    const round = await this.nextRound({ repo, repoFullName, pr, issueNumber, lease, builder, check: input.check ?? null });
     if (round === null) return `its review rounds have not converged, and the loop stopped for a person`;
 
     if (issueNumber) {
@@ -441,6 +447,8 @@ export class SendBack {
     issueNumber: number | null;
     lease: { botId: string };
     builder: { id: string; name: string };
+    /** The check that failed, when CI sent it back (`reviewRound`). */
+    check?: string | null;
   }): Promise<number | null> {
     const { repo, repoFullName, pr, builder } = input;
     const maxRounds = reviewLimits(this.deps.config.review).maxRounds;
@@ -470,7 +478,7 @@ export class SendBack {
     await recordEvent({
       source: 'platform',
       type: REVIEW_STALLED,
-      payload: { repo: repo.name, pr: pr.number, issue: input.issueNumber, rounds: round, bot: builder.name, botId: builder.id },
+      payload: { repo: repo.name, pr: pr.number, issue: input.issueNumber, rounds: round, bot: builder.name, botId: builder.id, ...(input.check ? { check: input.check } : {}) },
     }).catch(() => undefined);
     return null;
   }
@@ -553,7 +561,13 @@ export class SendBack {
    * The review loop stopped for want of a lease or a builder: an event the
    * board shows as a stopped review, with why, until something moves.
    */
-  private async recordStall(input: { repo: { name: string }; pr: { number: number; head: { sha?: string } }; issue: number | null; why: string | null }): Promise<void> {
+  private async recordStall(input: {
+    repo: { name: string };
+    pr: { number: number; head: { sha?: string } };
+    issue: number | null;
+    why: string | null;
+    check?: string | null;
+  }): Promise<void> {
     const { repo, pr } = input;
     await recordEvent({
       source: 'platform',
@@ -566,6 +580,7 @@ export class SendBack {
         bot: null,
         botId: null,
         ...(input.why ? { reason: input.why } : {}),
+        ...(input.check ? { check: input.check } : {}),
         ...(pr.head.sha ? { head: pr.head.sha } : {}),
       },
     }).catch(() => undefined);
