@@ -5,7 +5,7 @@ import type { InstallationsView } from './app-reach';
 import type { BackupInventory } from './backup';
 import type { RepoAccess } from './crew-access';
 import { cache } from 'react';
-import { bridgeAnswered } from './bridge-answered';
+import { bridgeAnswered, databaseDownLine, DatabaseDown } from './bridge-answered';
 import { identityHeaders } from './identity';
 export const BRIDGE_URL = process.env.OPENADLC_BRIDGE_URL ?? 'http://127.0.0.1:47311';
 
@@ -987,13 +987,25 @@ export const readBrand = cache(async (): Promise<Brand> => {
   }
 });
 
+/**
+ * What the bridge's `/healthz` says of its database, once per page however
+ * many reads failed: the board's page reads five things at once.
+ */
+const databaseDown = cache(() => databaseDownLine(BRIDGE_URL));
+
 async function get<T>(path: string, init: { signal?: AbortSignal } = {}): Promise<T> {
   const response = await fetch(`${BRIDGE_URL}${path}`, {
     cache: 'no-store',
     headers: await identityHeaders(),
     ...(init.signal ? { signal: init.signal } : {}),
   });
-  if (!response.ok) throw await bridgeAnswered(path, response);
+  if (!response.ok) {
+    const answered = await bridgeAnswered(path, response);
+    // A bridge whose database is down fails every read with the driver's
+    // words for it; `/healthz` says which database, and how to start it.
+    const database = response.status >= 500 ? await databaseDown() : null;
+    throw database ? new DatabaseDown(path, response.status, database) : answered;
+  }
   return (await response.json()) as T;
 }
 

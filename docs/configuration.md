@@ -574,6 +574,7 @@ them.
 | Variable | Default | What it controls | openadlc up |
 |---|---|---|---|
 | `DATABASE_URL` | `databaseUrl` from `install.json`, with the install's own password | The platform database | ✔ |
+| `OPENADLC_DATABASE_CONTAINER` | empty | The container that holds the platform database, which `/healthz` and the console name, with the `docker start` that brings it back, while it does not answer. Empty names none | ✔, empty when the database is not one of the install's containers |
 | `OPENADLC_HOME` | `~/.openadlc` | Where secrets are stored | |
 | `OPENADLC_CONFIG_ROOT` | `<cwd>/config` | Where the YAML above is read | ✔ |
 | `OPENADLC_REPO_ROOT` | cwd | The checkout labels and templates come from | |

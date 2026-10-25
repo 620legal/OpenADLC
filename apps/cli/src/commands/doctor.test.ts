@@ -15,6 +15,7 @@ import {
   webhookSecretMismatch,
   webhookTrustGap,
 } from './doctor.js';
+import type { DockerRun } from './up.js';
 
 const SECRET = 'not-printed-0123456789abcdef';
 
@@ -70,6 +71,53 @@ describe('openadlc doctor when only the database is down', () => {
     expect(clientIdLine({ clientId: 'Iv1.0123456789abc', storedRead: false, staticOnly: 0 })).toMatchObject({ kind: 'ok' });
     expect(webhookSecretLine({ installSecret: '', environmentSecret: undefined, storedSecret: null })).toMatchObject({ kind: 'fail' });
     expect(webhookSecretLine({ installSecret: SECRET, environmentSecret: undefined, storedSecret: undefined })).toMatchObject({ kind: 'ok' });
+  });
+});
+
+/**
+ * After OrbStack restarted, `openadlc-db` stayed down, and doctor said only
+ * `cannot reach postgres`, with the url it tried.
+ */
+describe('openadlc doctor when the install’s database container is stopped', () => {
+  const ports = { ports: { postgres: 47432 } } as const;
+  const URL_HERE = 'postgres://openadlc:install-secret@127.0.0.1:47432/openadlc_db';
+  type Container = { status: string; restart: string; configured: number };
+
+  /** Docker, for the two things doctor asks of it: where a container publishes postgres, and its state. */
+  function docker(containers: Record<string, Container>): DockerRun {
+    const bindings = (port: number) => ({ '5432/tcp': [{ HostIp: '127.0.0.1', HostPort: String(port) }] });
+    return async (args) => {
+      const container = containers[args.at(-1) ?? ''];
+      if (args[0] !== 'inspect' || !container) throw Object.assign(new Error('docker failed'), { stderr: `Error: No such container: ${args.at(-1)}\n` });
+      if (args.includes('{{json .HostConfig.PortBindings}}')) return { stdout: `${JSON.stringify(bindings(container.configured))}\n` };
+      return { stdout: `${JSON.stringify({ status: container.status, restart: container.restart, configured: bindings(container.configured), serving: {} })}\n` };
+    };
+  }
+
+  it('says the bridge’s words for it, that the container is stopped, and the command that starts it', async () => {
+    const { stoppedDatabase } = await import('./doctor.js');
+    const said = await stoppedDatabase(ports, URL_HERE, docker({ 'openadlc-db': { status: 'exited', restart: 'unless-stopped', configured: 47432 } }), {});
+    expect(said).toEqual({
+      message: "the install's database (openadlc-db) isn't answering on 127.0.0.1:47432: openadlc-db is stopped",
+      remedy: 'start it with `docker start openadlc-db`, or run `openadlc up`',
+    });
+    expect(JSON.stringify(said)).not.toContain('install-secret');
+  });
+
+  it('adds that `openadlc up` has one with no restart policy come back by itself, and names an older install’s fleet-db', async () => {
+    const { stoppedDatabase } = await import('./doctor.js');
+    const said = await stoppedDatabase(ports, URL_HERE, docker({ 'fleet-db': { status: 'exited', restart: 'no', configured: 47432 } }), {});
+    expect(said?.message).toBe("the install's database (fleet-db) isn't answering on 127.0.0.1:47432: fleet-db is stopped");
+    expect(said?.remedy).toBe('start it with `docker start fleet-db`, or run `openadlc up`; `openadlc up` also has it come back by itself when Docker restarts');
+  });
+
+  it('leaves `cannot reach postgres` for a running container, one on another port, none at all, or a server elsewhere', async () => {
+    const { stoppedDatabase } = await import('./doctor.js');
+    expect(await stoppedDatabase(ports, URL_HERE, docker({ 'openadlc-db': { status: 'running', restart: '', configured: 47432 } }), {})).toBeNull();
+    expect(await stoppedDatabase(ports, URL_HERE, docker({ 'openadlc-db': { status: 'exited', restart: '', configured: 5432 } }), {})).toBeNull();
+    expect(await stoppedDatabase(ports, URL_HERE, docker({}), {})).toBeNull();
+    const elsewhere = docker({ 'openadlc-db': { status: 'exited', restart: '', configured: 47432 } });
+    expect(await stoppedDatabase(ports, 'postgres://u:p@db.example.com:5432/openadlc_db', elsewhere, {})).toBeNull();
   });
 });
 

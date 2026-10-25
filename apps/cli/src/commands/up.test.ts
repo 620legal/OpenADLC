@@ -171,6 +171,96 @@ describe('the database container `openadlc up` creates', () => {
       /databaseUrl in .*install\.json is not a postgres url/,
     );
   });
+
+  // With no policy, OrbStack restarting brought `openadlc-taskdb` back and
+  // left `openadlc-db` down, and the bridge refused every request.
+  it('comes back by itself when Docker or the machine restarts', () => {
+    const { args } = databaseRunArgs('openadlc-db', defaultConfig('/repo'));
+    expect(args.join(' ')).toContain('--restart unless-stopped');
+    // An option of `run`, before the image: after it, it would be the container's command.
+    expect(args.indexOf('--restart')).toBeLessThan(args.indexOf('pgvector/pgvector:pg16'));
+  });
+});
+
+describe('a database container made before `openadlc up` gave it a restart policy', () => {
+  /**
+   * Docker as `keepRestarting` meets it: each container's state, policy,
+   * configured port and the port Docker holds for it now. `docker update`
+   * changes the policy, or fails the way the daemon would.
+   */
+  function machine(containers: Record<string, { restart: string; configured: number; serving?: number }>, options: { update?: 'fails' } = {}) {
+    const calls: string[][] = [];
+    const bindings = (port?: number) => (port ? { '5432/tcp': [{ HostIp: '127.0.0.1', HostPort: String(port) }] } : {});
+    const docker: DockerRun = async (args) => {
+      calls.push(args);
+      const container = containers[args.at(-1) ?? ''];
+      if (!container) throw Object.assign(new Error('docker failed'), { stderr: `Error: No such container: ${args.at(-1)}\n` });
+      if (args[0] === 'inspect') {
+        const status = container.serving ? 'running' : 'exited';
+        return { stdout: `${JSON.stringify({ status, restart: container.restart, configured: bindings(container.configured), serving: bindings(container.serving) })}\n` };
+      }
+      if (args[0] === 'update') {
+        if (options.update === 'fails') throw Object.assign(new Error('docker update failed'), { stderr: 'Error response from daemon: Cannot update container: permission denied\n' });
+        container.restart = args[args.indexOf('--restart') + 1] ?? '';
+        return { stdout: `${args.at(-1)}\n` };
+      }
+      throw new Error(`docker ${args.join(' ')} was not expected`);
+    };
+    return { docker, calls, updates: () => calls.filter((args) => args[0] === 'update') };
+  }
+
+  async function keeping(name: string, port: number, docker: DockerRun) {
+    const { keepRestarting } = await import('./up.js');
+    const printed: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((line: string) => void printed.push(String(line)));
+    try {
+      return { serves: await keepRestarting(name, port, docker), said: printed.join('\n') };
+    } finally {
+      log.mockRestore();
+    }
+  }
+
+  it('gives the install’s container `--restart unless-stopped`, and says so the one time it does', async () => {
+    for (const none of ['', 'no']) {
+      const world = machine({ 'openadlc-db': { restart: none, configured: 47432, serving: 47432 } });
+
+      const first = await keeping('openadlc-db', 47432, world.docker);
+      const second = await keeping('openadlc-db', 47432, world.docker);
+
+      expect(world.updates()).toEqual([['update', '--restart', 'unless-stopped', 'openadlc-db']]);
+      expect(first).toEqual({ serves: true, said: expect.stringContaining('openadlc-db now comes back by itself when Docker or this machine restarts (--restart unless-stopped)') });
+      expect(second).toEqual({ serves: true, said: '' });
+    }
+  });
+
+  it('keeps a policy somebody chose', async () => {
+    for (const restart of ['always', 'on-failure', 'unless-stopped']) {
+      const world = machine({ 'openadlc-db': { restart, configured: 47432, serving: 47432 } });
+      expect(await keeping('openadlc-db', 47432, world.docker)).toEqual({ serves: true, said: '' });
+      expect(world.updates()).toEqual([]);
+    }
+  });
+
+  it('leaves a container that does not serve the install’s port now, or is not there, as it is', async () => {
+    // The stale `scratch-db` of #111, given a policy, would race the real server for the port at Docker's next start.
+    const world = machine({ 'scratch-db': { restart: '', configured: 57432 }, 'openadlc-scratch-db': { restart: '', configured: 57432, serving: 57432 } });
+
+    expect(await keeping('scratch-db', 57432, world.docker)).toEqual({ serves: false, said: '' });
+    expect(await keeping('openadlc-db', 47432, world.docker)).toEqual({ serves: false, said: '' });
+    expect(world.updates()).toEqual([]);
+  });
+
+  it('says what Docker said, and the command to run, when it cannot give it one', async () => {
+    const world = machine({ 'openadlc-db': { restart: '', configured: 47432, serving: 47432 } }, { update: 'fails' });
+
+    const { serves, said } = await keeping('openadlc-db', 47432, world.docker);
+
+    expect(serves).toBe(true);
+    expect(said).toContain(
+      'openadlc-db has no restart policy, so it stays down after Docker or this machine restarts: docker update said Error response from daemon: Cannot update container: permission denied',
+    );
+    expect(said).toContain('docker update --restart unless-stopped openadlc-db');
+  });
 });
 
 describe('what `openadlc up` does about the published database password', () => {
@@ -545,6 +635,20 @@ describe('what `openadlc up` starts each service with', () => {
     expect(specs.bridge.health).toBe(`http://127.0.0.1:${config.ports.bridge}/healthz`);
     expect(healthUrl('console', 57300)).toBe('http://127.0.0.1:57300/signin');
     expect(healthUrl('hostd', 57312)).toBe('http://127.0.0.1:57312/healthz');
+  });
+
+  // The bridge runs no Docker, so only `up` can tell it which `docker start` brings its database back.
+  it('tells the bridge which container holds the database, and names none for a server that is not one', async () => {
+    const { serviceSpecs } = await import('./up.js');
+    const { defaultConfig, serviceEnv } = await import('../install.js');
+    const config = defaultConfig('/repo');
+    const specs = (databaseContainer: string | null) =>
+      serviceSpecs(config, serviceEnv(config), { consoleSecret: 'c'.repeat(64), scripted: false, node: 'node', databaseContainer });
+
+    expect(specs('openadlc-db').bridge.env.OPENADLC_DATABASE_CONTAINER).toBe('openadlc-db');
+    expect(specs('fleet-db').bridge.env.OPENADLC_DATABASE_CONTAINER).toBe('fleet-db');
+    // Empty, not left out: one exported in the shell would be named for a server it is not.
+    expect(specs(null).bridge.env.OPENADLC_DATABASE_CONTAINER).toBe('');
   });
 });
 

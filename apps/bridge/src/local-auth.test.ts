@@ -45,6 +45,8 @@ vi.mock('@openadlc/db', () => ({
   requests: {},
   sessions: {},
   settings: { allSettings: vi.fn(async () => ({})) },
+  // The health check asks the database first.
+  query: vi.fn(async () => [{ answers: 1 }]),
   // A task token speaks only for a task that is running; see internal-api.ts.
   tasks: { getTask: vi.fn(async (id: string) => ({ id, state: 'running' })) },
   threads: {},

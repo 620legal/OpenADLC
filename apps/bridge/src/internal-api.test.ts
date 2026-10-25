@@ -9,77 +9,85 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * holding may have been let go.
  */
 
-vi.mock('@openadlc/db', () => ({
-  spendingLimits: {
-    SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
-    GLOBAL_SCOPE: 'global',
-    seedGlobal: vi.fn(async () => false),
-    effectiveTaskCap: vi.fn(async (_repoId: string | null, fallback: number) => fallback),
-    amountOf: vi.fn(async () => null),
-    refusal: vi.fn(async () => null),
-    listLimits: vi.fn(async () => []),
-    setLimit: vi.fn(async () => undefined),
-    dollars: (amount: number) => (Number.isInteger(amount) ? `$${amount}` : `$${amount.toFixed(2)}`),
-    botKind: (id: string) => `month_bot:${id}`,
-    providerKind: (provider: string) => `month_provider:${provider}`,
-    repoScope: (id: string) => `repo:${id}`,
-    repoIdOf: (scope: string) => (scope.startsWith('repo:') ? scope.slice(5) : null),
-  },
+vi.mock('@openadlc/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@openadlc/db')>();
+  return {
+    // What /healthz says while the database does not answer is the real wording.
+    databaseAddress: actual.databaseAddress,
+    databaseNotAnswering: actual.databaseNotAnswering,
+    databaseUrl: actual.databaseUrl,
+    query: vi.fn(async () => [{ answers: 1 }]),
+    spendingLimits: {
+      SPENDING_PROVIDERS: ['anthropic', 'openai', 'xai'],
+      GLOBAL_SCOPE: 'global',
+      seedGlobal: vi.fn(async () => false),
+      effectiveTaskCap: vi.fn(async (_repoId: string | null, fallback: number) => fallback),
+      amountOf: vi.fn(async () => null),
+      refusal: vi.fn(async () => null),
+      listLimits: vi.fn(async () => []),
+      setLimit: vi.fn(async () => undefined),
+      dollars: (amount: number) => (Number.isInteger(amount) ? `$${amount}` : `$${amount.toFixed(2)}`),
+      botKind: (id: string) => `month_bot:${id}`,
+      providerKind: (provider: string) => `month_provider:${provider}`,
+      repoScope: (id: string) => `repo:${id}`,
+      repoIdOf: (scope: string) => (scope.startsWith('repo:') ? scope.slice(5) : null),
+    },
 
-  audit: vi.fn(async () => undefined),
-  bots: {
-    getBotById: vi.fn(async () => ({ id: 'bot-builder', name: 'builder', displayName: 'Builder', engine: 'codex' })),
-    getBotByName: vi.fn(async () => null),
-    listBots: vi.fn(async () => [{ id: 'bot-builder', name: 'builder', slot: 'builder', githubLogin: null }]),
-  },
-  costs: { currentPeriod: vi.fn(() => '2026-09') },
-  credentials: {},
-  issues: {},
-  leases: {
-    releaseForPullRequest: vi.fn(async () => null),
-    settlePausedLeases: vi.fn(async () => ({ released: [], held: [] })),
-  },
-  listAudit: vi.fn(),
-  mergeLines: {},
-  recordEvent: vi.fn(),
-  repos: {
-    getRepoByName: vi.fn(async () => null),
-    listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'openadlc', fullName: 'exampleco/openadlc' }]),
-  },
-  requests: { findRequestByPrefix: vi.fn(async () => null), fileIssue: vi.fn(async () => null), RequestAbandoned: class extends Error {} },
-  sessions: {},
-  settings: { allSettings: vi.fn(async () => ({})) },
-  localCiRuns: {
-    record: vi.fn(async (input: Record<string, unknown>) => ({ id: 'row-1', ...input })),
-    latestFor: vi.fn(async () => ({ runId: 'run-1', ok: true, createdAt: '2026-09-30T10:00:00.000Z' })),
-    passFor: vi.fn(async (_repo: string, sha: string) => (sha === 'a'.repeat(40) ? { runId: 'run-1', ok: true, createdAt: '2026-09-30T10:00:00.000Z' } : null)),
-  },
-  stageMoves: {
-    sendBackOfTask: vi.fn(async (taskId: string) => (taskId === 'task-sent' ? { repoId: 'repo-1', issueNumber: 78, from: 'build', to: 'spec', kind: 'send_back' } : null)),
-  },
-  tasks: {
-    getTask: vi.fn(async (id: string) => (id === 'task-gone' ? null : { id, state: id === 'task-done' ? 'done' : id === 'task-paused' ? 'paused' : 'running', kind: id === 'task-review' ? 'review' : id === 'task-qa' ? 'qa' : id === 'task-spec' || id === 'task-judge' ? 'spec' : id === 'task-deploy' ? 'deploy' : id === 'task-request' ? 'intake' : 'implement', skill: id === 'task-judge' ? 'plan-change-review' : null, repoId: 'repo-1', branch: 'agent/builder/78-issue-78', subjectRef: id === 'task-request' ? 'request:aaaaaaaa' : 'openadlc#78' })),
-    listTasksOnSubjects: vi.fn(async () => []),
-    pausedWithAnswer: vi.fn(async () => []),
-    updateTaskState: vi.fn(async (id: string, state: string, extra: { exitReason: string | null }) => ({
-      id,
-      botId: 'bot-builder',
-      repoId: 'repo-1',
-      kind: id === 'task-judge' ? 'spec' : 'implement',
-      skill: id === 'task-judge' ? 'plan-change-review' : null,
-      subjectType: 'issue',
-      subjectRef: 'openadlc#78',
-      leaseId: 'lease-78',
-      state,
-      exitReason: extra.exitReason,
-    })),
-  },
-  threads: {
-    ensureThread: vi.fn(async () => ({ id: 'thread-1' })),
-    addMessage: vi.fn(async () => ({ id: 'message-1' })),
-    listMessages: vi.fn(async () => []),
-  },
-}));
+    audit: vi.fn(async () => undefined),
+    bots: {
+      getBotById: vi.fn(async () => ({ id: 'bot-builder', name: 'builder', displayName: 'Builder', engine: 'codex' })),
+      getBotByName: vi.fn(async () => null),
+      listBots: vi.fn(async () => [{ id: 'bot-builder', name: 'builder', slot: 'builder', githubLogin: null }]),
+    },
+    costs: { currentPeriod: vi.fn(() => '2026-09') },
+    credentials: {},
+    issues: {},
+    leases: {
+      releaseForPullRequest: vi.fn(async () => null),
+      settlePausedLeases: vi.fn(async () => ({ released: [], held: [] })),
+    },
+    listAudit: vi.fn(),
+    mergeLines: {},
+    recordEvent: vi.fn(),
+    repos: {
+      getRepoByName: vi.fn(async () => null),
+      listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'openadlc', fullName: 'exampleco/openadlc' }]),
+    },
+    requests: { findRequestByPrefix: vi.fn(async () => null), fileIssue: vi.fn(async () => null), RequestAbandoned: class extends Error {} },
+    sessions: {},
+    settings: { allSettings: vi.fn(async () => ({})) },
+    localCiRuns: {
+      record: vi.fn(async (input: Record<string, unknown>) => ({ id: 'row-1', ...input })),
+      latestFor: vi.fn(async () => ({ runId: 'run-1', ok: true, createdAt: '2026-09-30T10:00:00.000Z' })),
+      passFor: vi.fn(async (_repo: string, sha: string) => (sha === 'a'.repeat(40) ? { runId: 'run-1', ok: true, createdAt: '2026-09-30T10:00:00.000Z' } : null)),
+    },
+    stageMoves: {
+      sendBackOfTask: vi.fn(async (taskId: string) => (taskId === 'task-sent' ? { repoId: 'repo-1', issueNumber: 78, from: 'build', to: 'spec', kind: 'send_back' } : null)),
+    },
+    tasks: {
+      getTask: vi.fn(async (id: string) => (id === 'task-gone' ? null : { id, state: id === 'task-done' ? 'done' : id === 'task-paused' ? 'paused' : 'running', kind: id === 'task-review' ? 'review' : id === 'task-qa' ? 'qa' : id === 'task-spec' || id === 'task-judge' ? 'spec' : id === 'task-deploy' ? 'deploy' : id === 'task-request' ? 'intake' : 'implement', skill: id === 'task-judge' ? 'plan-change-review' : null, repoId: 'repo-1', branch: 'agent/builder/78-issue-78', subjectRef: id === 'task-request' ? 'request:aaaaaaaa' : 'openadlc#78' })),
+      listTasksOnSubjects: vi.fn(async () => []),
+      pausedWithAnswer: vi.fn(async () => []),
+      updateTaskState: vi.fn(async (id: string, state: string, extra: { exitReason: string | null }) => ({
+        id,
+        botId: 'bot-builder',
+        repoId: 'repo-1',
+        kind: id === 'task-judge' ? 'spec' : 'implement',
+        skill: id === 'task-judge' ? 'plan-change-review' : null,
+        subjectType: 'issue',
+        subjectRef: 'openadlc#78',
+        leaseId: 'lease-78',
+        state,
+        exitReason: extra.exitReason,
+      })),
+    },
+    threads: {
+      ensureThread: vi.fn(async () => ({ id: 'thread-1' })),
+      addMessage: vi.fn(async () => ({ id: 'message-1' })),
+      listMessages: vi.fn(async () => []),
+    },
+  };
+});
 
 // The build a lease starts; what it does is `build-start.test.ts`'s.
 const startBuild = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ taskId: 'task-build', session: 'build-1' })));
@@ -1242,6 +1250,45 @@ describe('a task’s session reporting its usage', () => {
 });
 
 describe('/healthz', () => {
+  // After OrbStack restarted and left `openadlc-db` down, this answered 500
+  // with `connect ECONNREFUSED 127.0.0.1:47432`, and the console showed that.
+  it('says, in words, that the install’s database is not answering, which container it is and how to start it', async () => {
+    const { query } = await import('@openadlc/db');
+    const refused = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:47432'), { code: 'ECONNREFUSED' });
+    vi.mocked(query).mockRejectedValue(refused);
+    vi.stubEnv('DATABASE_URL', 'postgres://openadlc:not-printed@127.0.0.1:47432/openadlc_db');
+    vi.stubEnv('OPENADLC_DATABASE_CONTAINER', 'openadlc-db');
+    try {
+      const response = await fetch(`${bridgeUrl}/healthz`);
+      const body = (await response.json()) as Record<string, unknown>;
+
+      expect(response.status).toBe(503);
+      const line = "the install's database (openadlc-db) isn't answering on 127.0.0.1:47432: start it with `docker start openadlc-db`, or run `openadlc up`";
+      expect(body).toMatchObject({ ok: false, database: line, error: line, scripted: false });
+      expect(JSON.stringify(body)).not.toContain('not-printed');
+    } finally {
+      vi.mocked(query).mockResolvedValue([{ answers: 1 }]);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('names no container `openadlc up` did not say holds the database, and still says where and what to do', async () => {
+    const { query } = await import('@openadlc/db');
+    vi.mocked(query).mockRejectedValue(new Error('getaddrinfo ENOTFOUND db.internal'));
+    vi.stubEnv('DATABASE_URL', 'postgres://openadlc:not-printed@db.internal:5432/openadlc_db');
+    vi.stubEnv('OPENADLC_DATABASE_CONTAINER', '');
+    try {
+      const response = await fetch(`${bridgeUrl}/healthz`);
+      expect(response.status).toBe(503);
+      expect(((await response.json()) as { database: string }).database).toBe(
+        "the install's database isn't answering on db.internal:5432: check that the server DATABASE_URL names is running and that this machine can reach it",
+      );
+    } finally {
+      vi.mocked(query).mockResolvedValue([{ answers: 1 }]);
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('says how to get a client id when neither the environment nor the console has one', async () => {
     const body = (await (await fetch(`${bridgeUrl}/healthz`)).json()) as { github: string };
     expect(body.github).toBe('no GitHub App client id: create the app on the “Create the app” step of the console walkthrough, or set OPENADLC_GITHUB_CLIENT_ID');
