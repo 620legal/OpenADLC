@@ -27,3 +27,32 @@ export async function bridgeAnswered(path: string, response: Response): Promise<
   }
   return new BridgeAnswered(path, response.status, said);
 }
+
+/**
+ * The bridge answered with an error because its database does not answer:
+ * `said` is the bridge's line for it from `/healthz`, which names the
+ * database, and the container and `docker start` when there is one. After
+ * OrbStack restarted and left `openadlc-db` down, every page said only
+ * `connect ECONNREFUSED 127.0.0.1:47432`.
+ */
+export class DatabaseDown extends BridgeAnswered {
+  constructor(path: string, status: number, said: string) {
+    super(path, status, said);
+    this.name = 'DatabaseDown';
+  }
+}
+
+/**
+ * The bridge's `/healthz` line about its database, or null when it says
+ * nothing is wrong with it, cannot be asked, or is older than the line.
+ */
+export async function databaseDownLine(bridgeUrl: string, timeoutMs = 3_000): Promise<string | null> {
+  try {
+    const response = await fetch(`${bridgeUrl}/healthz`, { cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
+    if (response.status !== 503) return null;
+    const body = (await response.json()) as { database?: unknown };
+    return typeof body.database === 'string' && body.database.trim() ? body.database.trim() : null;
+  } catch {
+    return null;
+  }
+}

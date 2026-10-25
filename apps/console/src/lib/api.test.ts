@@ -14,6 +14,8 @@ let bridge: Server;
 let mode: Record<string, string> = {};
 /** What `/v1/brand` answers: a status and a body. */
 let brand: { status: number; body: unknown } = { status: 200, body: { name: null, logo: null } };
+/** What `/healthz` answers: a status and a body. */
+let health: { status: number; body: unknown } = { status: 200, body: { ok: true } };
 
 beforeAll(async () => {
   // Answers nothing, ever: GitHub hanging behind the bridge. Except who is
@@ -23,6 +25,10 @@ beforeAll(async () => {
     if (request.url === '/v1/costs') {
       response.writeHead(500, { 'content-type': 'application/json' });
       return response.end(JSON.stringify({ error: 'the database is not answering' }, null, 2));
+    }
+    if (request.url === '/healthz') {
+      response.writeHead(health.status, { 'content-type': 'application/json' });
+      return response.end(JSON.stringify(health.body));
     }
     if (request.url === '/v1/brand') {
       response.writeHead(brand.status, { 'content-type': 'application/json' });
@@ -75,6 +81,39 @@ describe('a read the bridge answered with an error', () => {
     const error = await api.costs().catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(BridgeAnswered);
     expect(error).toMatchObject({ status: 500, said: 'the database is not answering', message: 'the bridge answered 500 to /v1/costs: the database is not answering' });
+  });
+
+  // After OrbStack restarted and left `openadlc-db` down, every page said only
+  // what the driver said, `connect ECONNREFUSED 127.0.0.1:47432`.
+  it('carries the bridge’s line from /healthz when its database is down, which names it and how to start it', async () => {
+    const { api } = await import('./api');
+    const { BridgeAnswered, DatabaseDown } = await import('./bridge-answered');
+    const line = "the install's database (openadlc-db) isn't answering on 127.0.0.1:47432: start it with `docker start openadlc-db`, or run `openadlc up`";
+    health = { status: 503, body: { ok: false, error: line, database: line } };
+    try {
+      const error = await api.costs().catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(DatabaseDown);
+      // Still the bridge answering, for everything that tells that apart from no answer.
+      expect(error).toBeInstanceOf(BridgeAnswered);
+      expect(error).toMatchObject({ status: 500, said: line });
+    } finally {
+      health = { status: 200, body: { ok: true } };
+    }
+  });
+
+  it('keeps the bridge’s own words when /healthz says nothing of the database, or cannot be read', async () => {
+    const { api } = await import('./api');
+    const { DatabaseDown } = await import('./bridge-answered');
+    try {
+      for (const answer of [{ status: 200, body: { ok: true } }, { status: 503, body: { ok: false } }, { status: 503, body: 'not json' }]) {
+        health = answer;
+        const error = await api.costs().catch((cause: unknown) => cause);
+        expect(error).not.toBeInstanceOf(DatabaseDown);
+        expect(error).toMatchObject({ status: 500, said: 'the database is not answering' });
+      }
+    } finally {
+      health = { status: 200, body: { ok: true } };
+    }
   });
 });
 

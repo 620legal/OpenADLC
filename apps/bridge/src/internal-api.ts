@@ -32,11 +32,12 @@ import { asAutomation, automationBotName, automationLogin, findOwnOpenIssue } fr
 import { subjectClosed } from './gates.js';
 import { startBuild } from './build-start.js';
 import { effectiveConfig } from './effective-config.js';
+import { databaseProblem } from './database-health.js';
 import { requestFor, requestPrefixOf } from './request-context.js';
 import { missingReview } from './review-left.js';
 import { carriesRequestLine, RequestFiling } from './request-lifecycle.js';
 import { NotOurRepository, worksIn } from './invitation-service.js';
-import { HttpFailure, readBytes, Router, type Handler } from './router.js';
+import { HttpFailure, readBytes, Router, WithStatus, type Handler } from './router.js';
 import { Scheduler } from './scheduler.js';
 import { WEBHOOK_BODY_MAX } from './webhook-gateway.js';
 import { settleLeaseAfter, usageProblem } from './task-service.js';
@@ -1190,6 +1191,14 @@ export function registerInternalApi(
   });
 
   router.get('/healthz', async () => {
+    const scripted = process.env.OPENADLC_SCRIPTED_ENGINES === '1';
+    // Asked first, since the account below is read from it: with the database
+    // down this route was a 500 saying `connect ECONNREFUSED 127.0.0.1:47432`,
+    // and nothing said which database that was or how to start it. 503, so a
+    // monitor sees a bridge that cannot work; the console shows `database`.
+    const database = await databaseProblem();
+    if (database) return new WithStatus(503, { ok: false, error: database, database, scripted, hostd: await deps.hostd.health() });
+
     // Report what the platform can actually do as an account, not what is configured.
     const automation = await automationBotName(deps.config);
     const acting = await deps.actors.asBot(automation);
@@ -1197,7 +1206,7 @@ export function registerInternalApi(
       ok: true,
       // Whether the engines are scripted: the integration suites run only
       // against an install that says so, since they write into its board.
-      scripted: process.env.OPENADLC_SCRIPTED_ENGINES === '1',
+      scripted,
       hostd: await deps.hostd.health(),
       // Decided on the client id, the console's stored one included. It was
       // `Actors.configured`, which is true on every install, so a missing

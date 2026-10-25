@@ -183,7 +183,10 @@ gateway (Linux).
 
 The database container `openadlc up` makes, `openadlc-db`, is published on
 127.0.0.1 only, and its password is generated for the install and kept in
-`databaseUrl` in `install.json`. An install from before that had `openadlc`
+`databaseUrl` in `install.json`. It runs with `--restart unless-stopped`, so it
+comes back by itself when Docker or the machine restarts; `openadlc up` gives
+one made before that the same policy, and says so once
+([troubleshooting](troubleshooting.md#the-installs-database-isnt-answering)). An install from before that had `openadlc`
 as its password, which is printed in this repository, and its container
 published on every address. An install from before the rename still has the
 older superuser, user and password both `fleet`, on `fleet-db`. The next

@@ -18,11 +18,45 @@ export function describeDatabase(url: string): string | null {
   try {
     const parsed = new URL(url);
     const name = decodeURIComponent(parsed.pathname.replace(/^\//, '')) || 'the default database';
-    const host = parsed.hostname || parsed.searchParams.get('host') || 'localhost';
-    return `${name} on ${host}:${parsed.port || parsed.searchParams.get('port') || '5432'}`;
+    return `${name} on ${databaseAddress(url)}`;
   } catch {
     return null;
   }
+}
+
+/** The `host:port` a database URL points at, never its user or password; null when the URL cannot be read. */
+export function databaseAddress(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname || parsed.searchParams.get('host') || 'localhost';
+    return `${host}:${parsed.port || parsed.searchParams.get('port') || '5432'}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What the bridge's `/healthz`, the console and `openadlc doctor` say when the
+ * install's database does not answer: where, and how to start it.
+ * `container` is the one `openadlc up` keeps it in, when there is one.
+ *
+ * After OrbStack restarted, `openadlc-db` stayed down, and the bridge
+ * answered every request, `/healthz` included, with a bare
+ * `connect ECONNREFUSED 127.0.0.1:47432`; the console showed nothing useful
+ * until somebody thought of `docker start openadlc-db`.
+ */
+export function databaseNotAnswering(url: string, container: string | null): { message: string; remedy: string } {
+  const where = databaseAddress(url) ?? 'the address in DATABASE_URL';
+  if (container) {
+    return { message: `the install's database (${container}) isn't answering on ${where}`, remedy: `start it with \`docker start ${container}\`, or run \`openadlc up\`` };
+  }
+  const local = /^(127\.0\.0\.1|localhost|\[::1\]):/.test(where);
+  return {
+    message: `the install's database isn't answering on ${where}`,
+    // A server somebody else runs, a cloud install's or the compose stack's,
+    // is not one `openadlc up` starts.
+    remedy: local ? 'start the Postgres server there, or run `openadlc up`' : 'check that the server DATABASE_URL names is running and that this machine can reach it',
+  };
 }
 
 /**

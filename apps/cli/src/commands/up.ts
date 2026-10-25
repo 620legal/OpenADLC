@@ -160,9 +160,9 @@ export interface PortBinding {
 }
 
 /** Where a container publishes Postgres: undefined when there is no such container, [] when it publishes nothing. */
-export async function postgresBindings(name: string): Promise<PortBinding[] | undefined> {
+export async function postgresBindings(name: string, docker: DockerRun = runDocker): Promise<PortBinding[] | undefined> {
   try {
-    const { stdout } = await run('docker', ['inspect', '--format', '{{json .HostConfig.PortBindings}}', name]);
+    const { stdout } = await docker(['inspect', '--format', '{{json .HostConfig.PortBindings}}', name]);
     const bindings = JSON.parse(stdout.trim() || 'null') as Record<string, PortBinding[] | null> | null;
     return bindings?.['5432/tcp'] ?? [];
   } catch {
@@ -185,39 +185,94 @@ export type DockerRun = (args: string[], options?: { env?: NodeJS.ProcessEnv }) 
 
 const runDocker: DockerRun = (args, options) => run('docker', args, { ...options, timeout: 15_000 });
 
+/** A database container as Docker holds it now. */
+export interface DatabaseContainerState {
+  /** `running`, `exited`, `created`, `paused`, `restarting` or `dead`. */
+  status: string;
+  /** Its restart policy: `unless-stopped`, `always`, `on-failure`, or `no` or '' for none. */
+  restart: string;
+  /** The host port it was created to publish Postgres on; '' for none. */
+  configured: string;
+  /** The host ports Docker holds for it now. */
+  serving: string[];
+}
+
 /**
- * Where a container is configured to publish Postgres, and where it publishes
- * it now: undefined when there is no such container.
+ * A database container's state, its restart policy, and where it is
+ * configured to publish Postgres and publishes it now: undefined when there
+ * is no such container.
  *
- * Two different things. `HostConfig.PortBindings` is what the container was
- * created with, and it stays whether or not the container ever got the port;
- * `NetworkSettings.Ports` is what Docker holds for it, nothing while it is
- * stopped or when its start found the port taken. A scratch install's
- * `scratch-db`, left by another run and configured for 57432, was read by its
- * configuration as the server on 57432 while `openadlc-scratch-db` was the one
- * answering there, and `up` changed that one's password (#111).
+ * The two ports are different things. `HostConfig.PortBindings` is what the
+ * container was created with, and it stays whether or not the container ever
+ * got the port; `NetworkSettings.Ports` is what Docker holds for it, nothing
+ * while it is stopped or when its start found the port taken. A scratch
+ * install's `scratch-db`, left by another run and configured for 57432, was
+ * read by its configuration as the server on 57432 while
+ * `openadlc-scratch-db` was the one answering there, and `up` changed that
+ * one's password (#111).
  */
-export async function databaseContainerPorts(
-  name: string,
-  docker: DockerRun = runDocker,
-): Promise<{ configured: string; serving: string[] } | undefined> {
+export async function databaseContainerState(name: string, docker: DockerRun = runDocker): Promise<DatabaseContainerState | undefined> {
   type Bindings = Record<string, PortBinding[] | null> | null;
-  let ports: { configured: Bindings; serving: Bindings };
+  let state: { status?: string; restart?: string; configured: Bindings; serving: Bindings };
   try {
     const { stdout } = await docker([
       'inspect',
       '--type',
       'container',
       '--format',
-      '{"configured":{{json .HostConfig.PortBindings}},"serving":{{json .NetworkSettings.Ports}}}',
+      '{"status":{{json .State.Status}},"restart":{{json .HostConfig.RestartPolicy.Name}},"configured":{{json .HostConfig.PortBindings}},"serving":{{json .NetworkSettings.Ports}}}',
       name,
     ]);
-    ports = JSON.parse(stdout.trim()) as typeof ports;
+    state = JSON.parse(stdout.trim()) as typeof state;
   } catch {
     return undefined;
   }
   const hostPorts = (bindings: Bindings) => (bindings?.['5432/tcp'] ?? []).map((binding) => binding.HostPort ?? '').filter(Boolean);
-  return { configured: hostPorts(ports.configured)[0] ?? '', serving: [...new Set(hostPorts(ports.serving))] };
+  return {
+    status: state.status ?? '',
+    restart: state.restart ?? '',
+    configured: hostPorts(state.configured)[0] ?? '',
+    serving: [...new Set(hostPorts(state.serving))],
+  };
+}
+
+/** Where a container is configured to publish Postgres, and where it publishes it now (`databaseContainerState`). */
+export async function databaseContainerPorts(
+  name: string,
+  docker: DockerRun = runDocker,
+): Promise<{ configured: string; serving: string[] } | undefined> {
+  const state = await databaseContainerState(name, docker);
+  return state && { configured: state.configured, serving: state.serving };
+}
+
+/**
+ * Gives the install's database container `--restart unless-stopped` when it
+ * has no restart policy, saying so the one time it does, so it comes back by
+ * itself when Docker or the machine restarts. Every container `up` made before
+ * `databaseRunArgs` named a policy has none: after OrbStack restarted, hostd's
+ * `openadlc-taskdb` came back and `openadlc-db` did not.
+ *
+ * Only the container that serves the install's port now, as Docker holds it,
+ * once its database has answered: a stale one only configured for the port,
+ * like the `scratch-db` of #111, given a policy, would race the real server
+ * for the port at Docker's next start. A policy a person chose is kept.
+ *
+ * Returns whether `name` is that container, which is what the bridge is told
+ * to name when the database stops answering.
+ */
+export async function keepRestarting(name: string, port: number, docker: DockerRun = runDocker): Promise<boolean> {
+  const state = await databaseContainerState(name, docker);
+  if (!state?.serving.includes(String(port))) return false;
+  if (state.restart && state.restart !== 'no') return true;
+  try {
+    await docker(['update', '--restart', 'unless-stopped', name]);
+    ui.ok(`${name} now comes back by itself when Docker or this machine restarts (--restart unless-stopped)`);
+  } catch (error) {
+    const said = stderrOf(error).split('\n').map((line) => line.trim()).find(Boolean) ?? 'docker update failed and said nothing';
+    ui.warn(`${name} has no restart policy, so it stays down after Docker or this machine restarts: docker update said ${said}`);
+    ui.note(`docker update --restart unless-stopped ${name}`);
+  }
+  return true;
 }
 
 /** The running containers that publish this host port, by name, as `docker ps` lists them. */
@@ -404,6 +459,12 @@ export function databasePasswordStep(input: {
  * `docker system prune --volumes` while it was stopped lost the leases, the
  * ledger and the audit trail, and the next `up` started an empty database.
  * A container made before this keeps its anonymous volume: it is only started.
+ *
+ * `--restart unless-stopped`, as hostd starts `openadlc-taskdb`: with no
+ * policy, OrbStack restarting brought the task database back and left this
+ * one down, and the bridge answered every request with ECONNREFUSED until
+ * somebody ran `docker start`. One made before this is given the policy
+ * (`keepRestarting`).
  */
 export function databaseRunArgs(
   name: string,
@@ -417,6 +478,8 @@ export function databaseRunArgs(
       '-d',
       '--name',
       name,
+      '--restart',
+      'unless-stopped',
       '-e',
       `POSTGRES_USER=${credentials.user || 'openadlc'}`,
       '-e',
@@ -583,9 +646,10 @@ export async function settleDatabase(
 /**
  * Brings Postgres up however this machine can: a container, or an existing
  * server. Returns the config to go on with, whose url carries the install's own
- * password when this gave it one, or null when there is no database.
+ * password when this gave it one, and the container that serves it when it is
+ * one of the install's; or null when there is no database.
  */
-async function ensureDatabase(config: InstallConfig): Promise<InstallConfig | null> {
+async function ensureDatabase(config: InstallConfig): Promise<{ config: InstallConfig; container: string | null } | null> {
   const { Client } = (await import('pg')) as typeof import('pg');
   const connect = async (databaseUrl: string): Promise<'answers' | 'nothing' | 'refused'> => {
     const client = new Client({ connectionString: databaseUrl, connectionTimeoutMillis: 1500 });
@@ -606,18 +670,20 @@ async function ensureDatabase(config: InstallConfig): Promise<InstallConfig | nu
   const published = docker ? await publishedPostgresPort(name) : undefined;
 
   // Without Docker there is no container of the install's, and nothing to
-  // give a password of its own.
-  const settled = async (current: InstallConfig): Promise<InstallConfig | null> =>
-    docker
-      ? settleDatabase(current, name, {
-          connect: async (databaseUrl) => {
-            const client = new Client({ connectionString: databaseUrl, connectionTimeoutMillis: 1500 });
-            await client.connect();
-            return client;
-          },
-          save: saveConfig,
-        })
-      : current;
+  // give a password of its own or a restart policy.
+  const settled = async (current: InstallConfig): Promise<{ config: InstallConfig; container: string | null } | null> => {
+    if (!docker) return { config: current, container: null };
+    const next = await settleDatabase(current, name, {
+      connect: async (databaseUrl) => {
+        const client = new Client({ connectionString: databaseUrl, connectionTimeoutMillis: 1500 });
+        await client.connect();
+        return client;
+      },
+      save: saveConfig,
+    });
+    if (!next) return null;
+    return { config: next, container: (await keepRestarting(name, next.ports.postgres)) ? name : null };
+  };
 
   let current = config;
   const first = await connect(current.databaseUrl);
@@ -705,7 +771,7 @@ async function ensureDatabase(config: InstallConfig): Promise<InstallConfig | nu
   const created = await createDatabase(current).catch(() => false);
   if (created) {
     ui.ok(`created ${databaseName(current.databaseUrl)} on a server that was already running`);
-    return current;
+    return { config: current, container: null };
   }
 
   const where = describeDatabase(current.databaseUrl);
@@ -846,11 +912,18 @@ export function healthUrl(service: (typeof SERVICES)[number], port: number): str
  * What each service is started with. The console secret goes to the console
  * alone, never into `serviceEnv`: hostd is started with that environment, and
  * a bot's session is started by hostd.
+ *
+ * The bridge is told which container holds the database
+ * (`OPENADLC_DATABASE_CONTAINER`), so that while it does not answer,
+ * `/healthz` and the console name the `docker start` that brings it back:
+ * the bridge runs no Docker of its own, and only `up` knows whether the
+ * install's database is a container, and which. Empty for a server that is
+ * not, so one exported in the shell is not named for it.
  */
 export function serviceSpecs(
   effective: InstallConfig,
   env: Record<string, string>,
-  options: { consoleSecret: string; scripted: boolean; node?: string },
+  options: { consoleSecret: string; scripted: boolean; node?: string; databaseContainer?: string | null },
 ): Record<(typeof SERVICES)[number], ServiceSpec> {
   const node = options.node ?? process.execPath;
   return {
@@ -870,7 +943,11 @@ export function serviceSpecs(
       command: [node, join(effective.repoRoot, 'apps/bridge/dist/main.js')],
       cwd: effective.repoRoot,
       // The bridge dispatches (see `RETIRED`), except beside the suites.
-      env: { ...env, OPENADLC_DISPATCH_IN_BRIDGE: bridgeDispatches(options.scripted) ? '1' : '0' },
+      env: {
+        ...env,
+        OPENADLC_DISPATCH_IN_BRIDGE: bridgeDispatches(options.scripted) ? '1' : '0',
+        OPENADLC_DATABASE_CONTAINER: options.databaseContainer ?? '',
+      },
       health: healthUrl('bridge', effective.ports.bridge),
     },
     console: {
@@ -971,7 +1048,7 @@ export async function up(config: InstallConfig, options: { skipSeed?: boolean; p
     return;
   }
   // Carries a password `ensureDatabase` generated or rotated to every service.
-  effective = withDatabase;
+  effective = withDatabase.config;
 
   // hostd starts before the bridge, and hostd refuses every caller it cannot
   // authenticate. The bridge generates the shared secret, so establishing it
@@ -1007,7 +1084,7 @@ export async function up(config: InstallConfig, options: { skipSeed?: boolean; p
       .catch((error: Error) => ui.warn(`seed reported: ${error.message.slice(0, 200)}`));
   }
 
-  const specs = serviceSpecs(effective, env, { consoleSecret, scripted: SCRIPTED_ENGINES, node });
+  const specs = serviceSpecs(effective, env, { consoleSecret, scripted: SCRIPTED_ENGINES, node, databaseContainer: withDatabase.container });
 
   // Which installs run from this checkout, so one updating itself refuses to
   // change the files under another's running services (`otherInstallsRunning`).

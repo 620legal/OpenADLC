@@ -1,4 +1,4 @@
-import { BridgeAnswered } from '@/lib/bridge-answered';
+import { BridgeAnswered, DatabaseDown } from '@/lib/bridge-answered';
 
 /**
  * What a page shows when it could not read the bridge: the console holds no
@@ -8,9 +8,25 @@ import { BridgeAnswered } from '@/lib/bridge-answered';
  * reach the bridge … start the stack with openadlc up", which sent a person
  * whose bridge was up, and had said why, to start it again — and on a cloud
  * install there is no `openadlc up` to run.
+ *
+ * A bridge whose database is down is said apart again, in the bridge's own
+ * line from `/healthz`: which database, and how to start it. That page read
+ * `connect ECONNREFUSED 127.0.0.1:47432` and sent people to the bridge's log.
  */
 export function BridgeDown({ error }: { error: unknown }) {
   const message = error instanceof Error ? error.message : 'unknown error';
+  if (error instanceof DatabaseDown) {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-xl flex-col justify-center px-6">
+        <h1 className="text-lg font-semibold">The install’s database isn’t answering</h1>
+        <p className="mt-2 text-[13px] leading-relaxed text-muted">
+          The bridge is running, but it cannot reach its database, so there is nothing to show. The bridge says which
+          database it is and how to start it; once it answers, reload.
+        </p>
+        <pre className="pane mt-4 overflow-x-auto whitespace-pre-wrap rounded-md border border-edge bg-panel p-3 text-muted">{error.said}</pre>
+      </main>
+    );
+  }
   if (error instanceof BridgeAnswered) {
     return (
       <main className="mx-auto flex min-h-screen max-w-xl flex-col justify-center px-6">

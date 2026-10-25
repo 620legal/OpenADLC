@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { bots, closePool, costs, credentials, describeDatabase, hosts, lastGithubDelivery, settings, waitForDatabase } from '@openadlc/db';
+import { bots, closePool, costs, credentials, databaseNotAnswering, describeDatabase, hosts, lastGithubDelivery, settings, waitForDatabase } from '@openadlc/db';
 import { credentialKind, openadlcHome, getSecretStore, webhookSecretRef, type SecretStore } from '@openadlc/github';
 import { actionTarget, stepNamed, type HealthView } from '@openadlc/shared';
 import { githubClientId } from '../client-id.js';
@@ -10,7 +10,18 @@ import { bridgeHeaders } from '../console-link.js';
 import { healthUrl } from './up.js';
 import { LOCAL_DRIVER_NOTES, LOCAL_DRIVER_WARNING, dockerProbe, hasPublishedDatabasePassword, homeIsOpen, type InstallConfig } from '../install.js';
 import { keeperPid } from '../processes.js';
-import { DOCKER_NOT_RUNNING, START_DOCKER, addressesInstallDatabase, existingDatabaseContainer, postgresBindings, publishedPostgresPort, upDriver, type PortBinding } from './up.js';
+import {
+  DOCKER_NOT_RUNNING,
+  START_DOCKER,
+  addressesInstallDatabase,
+  databaseContainerState,
+  existingDatabaseContainer,
+  postgresBindings,
+  publishedPostgresPort,
+  upDriver,
+  type DockerRun,
+  type PortBinding,
+} from './up.js';
 import { ui } from '../ui.js';
 
 const run = promisify(execFile);
@@ -133,6 +144,32 @@ export async function databaseContainerGaps(
     addressesInstallDatabase(databaseUrl, config.ports.postgres) &&
     (bindings ?? []).some((binding) => binding.HostPort === String(config.ports.postgres));
   return { password: databasePasswordGap(databaseUrl, managed), exposed: databaseBindingGap(container, bindings) };
+}
+
+/**
+ * What doctor says when postgres does not answer and the install's container
+ * is stopped: the bridge's own words for it, and the command that starts it.
+ * Null when the url is not the install's container's address, or the
+ * container is not there, is running, or is configured for another port,
+ * which `docker start` does not mend; doctor then says `cannot reach
+ * postgres`, as it did for every one of these. That was all it said after
+ * OrbStack restarted and left `openadlc-db` down.
+ */
+export async function stoppedDatabase(
+  config: { ports: Pick<InstallConfig['ports'], 'postgres'> },
+  databaseUrl: string,
+  docker?: DockerRun,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{ message: string; remedy: string } | null> {
+  const port = String(config.ports.postgres);
+  if (!addressesInstallDatabase(databaseUrl, config.ports.postgres)) return null;
+  const name = await existingDatabaseContainer(config, env, (each) => publishedPostgresPort(each, (one) => postgresBindings(one, docker)));
+  const state = await databaseContainerState(name, docker);
+  if (!state || state.configured !== port || !['exited', 'created'].includes(state.status)) return null;
+  const said = databaseNotAnswering(databaseUrl, name);
+  // `docker start` brings it back once; with no policy it is down again after the next restart.
+  const again = !state.restart || state.restart === 'no' ? '; `openadlc up` also has it come back by itself when Docker restarts' : '';
+  return { message: `${said.message}: ${name} is stopped`, remedy: `${said.remedy}${again}` };
 }
 
 export interface HealthLine {
@@ -552,7 +589,9 @@ export async function doctor(config: InstallConfig): Promise<void> {
     reachable = true;
     ui.ok('postgres answers');
   } catch {
-    fail('cannot reach postgres', unreachableDatabaseHint(databaseInUse(config)));
+    const stopped = await stoppedDatabase(config, databaseInUse(config));
+    if (stopped) fail(stopped.message, stopped.remedy);
+    else fail('cannot reach postgres', unreachableDatabaseHint(databaseInUse(config)));
   }
 
   // install.json alone says nothing under the compose stack.

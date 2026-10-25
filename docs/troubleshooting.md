@@ -921,6 +921,43 @@ only while its command line is that service's keeper (`keep.js bridge …`); any
 other pid file is removed, never signalled, and `openadlc down` says so with
 this line. Nothing needs doing: `openadlc up` starts the service as usual.
 
+## The install's database isn't answering
+
+**What you see.** Every console page says **The install's database isn't
+answering**, with the bridge's line for it; `/healthz` answers 503 with the
+same line in `database`; `openadlc doctor` fails with it and says the
+container is stopped:
+
+```
+the install's database (openadlc-db) isn't answering on 127.0.0.1:47432: start it with `docker start openadlc-db`, or run `openadlc up`
+✗ the install's database (openadlc-db) isn't answering on 127.0.0.1:47432: openadlc-db is stopped
+```
+
+**What it means.** The bridge keeps everything in Postgres, so it can do
+nothing without it. Locally that is the container `openadlc up` keeps
+(`openadlc-db`, or `fleetadlc-db` and `fleet-db` from before the renames).
+`openadlc up` creates it with `--restart unless-stopped`, so it comes back by
+itself when Docker or the machine restarts, and gives one made before that
+the same policy (`docker update`), saying so once. A container that has never
+been through a newer `openadlc up` has no policy: after OrbStack or Docker
+Desktop restarts it stays down, while hostd's `openadlc-taskdb` comes back.
+The bridge names the container only when `openadlc up` told it which one it is
+(`OPENADLC_DATABASE_CONTAINER`); otherwise the line says where it looked, and
+for a server on another machine, to check that it is running.
+
+**What to do.** Start it, then reload the console. `openadlc up` does the same
+and gives the container its restart policy:
+
+```bash
+docker start openadlc-db
+openadlc up
+```
+
+A line that says the database `answered the bridge with an error` is a server
+that is running and refused: a password it does not take, or a database it
+does not have. Starting it again changes nothing; `openadlc doctor` and the
+bridge's log say more.
+
 ## OpenADLC does not update itself
 
 **What it means.** The OpenADLC row in Settings → System says why in its own

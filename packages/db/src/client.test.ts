@@ -281,3 +281,22 @@ describe('where a database URL points, as a log line says it', () => {
     expect(db.describeDatabase('not a url: secret')).toBeNull();
   });
 });
+
+describe('what is said when the install’s database does not answer', () => {
+  it('names the container `openadlc up` keeps it in, the address, and how to start it', () => {
+    const said = db.databaseNotAnswering('postgres://openadlc:s3cret@127.0.0.1:47432/openadlc_db', 'openadlc-db');
+    expect(`${said.message}: ${said.remedy}`).toBe(
+      "the install's database (openadlc-db) isn't answering on 127.0.0.1:47432: start it with `docker start openadlc-db`, or run `openadlc up`",
+    );
+    expect(JSON.stringify(said)).not.toContain('s3cret');
+  });
+
+  it('sends nobody to `openadlc up` for a server it does not start, and names no container it does not know', () => {
+    expect(db.databaseNotAnswering('postgres://openadlc:s3cret@db.example.com:6543/openadlc_db', null)).toEqual({
+      message: "the install's database isn't answering on db.example.com:6543",
+      remedy: 'check that the server DATABASE_URL names is running and that this machine can reach it',
+    });
+    expect(db.databaseNotAnswering('postgres://openadlc:s3cret@localhost:5432/openadlc_db', null).remedy).toBe('start the Postgres server there, or run `openadlc up`');
+    expect(db.databaseNotAnswering('not a url: secret', null).message).toBe("the install's database isn't answering on the address in DATABASE_URL");
+  });
+});
