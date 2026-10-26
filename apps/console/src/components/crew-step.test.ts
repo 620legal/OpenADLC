@@ -116,20 +116,20 @@ describe('an account named for a seat', () => {
     // filled in for any seat.
     const bots = [...GITHUB.bots, seat('security-reviewer', 'review_security', 'security reviewer', 'reviewers')];
     const accounts = [
-      { login: 'fleet-atlas-janedoe', signIn: 'signed-in', group: null, connectedAt: '2026-10-01T19:20:00Z' },
-      { login: 'fleet-cipher-janedoe', signIn: 'signed-in', group: null, connectedAt: '2026-10-01T19:22:00Z' },
-      { login: 'janedoe-fleet-flow', signIn: 'signed-in', group: null, connectedAt: '2026-10-01T19:17:00Z' },
+      { login: 'acme-atlas-janedoe', signIn: 'signed-in', group: null, connectedAt: '2026-10-01T19:20:00Z' },
+      { login: 'acme-cipher-janedoe', signIn: 'signed-in', group: null, connectedAt: '2026-10-01T19:22:00Z' },
+      { login: 'janedoe-acme-flow', signIn: 'signed-in', group: null, connectedAt: '2026-10-01T19:17:00Z' },
     ];
     const { byBot, crewLogin, reviewLogin } = prefillGitHubAccounts(bots, accounts);
-    expect(crewLogin).toBe('fleet-atlas-janedoe');
-    expect(reviewLogin).toBe('fleet-cipher-janedoe');
+    expect(crewLogin).toBe('acme-atlas-janedoe');
+    expect(reviewLogin).toBe('acme-cipher-janedoe');
     expect(byBot).toEqual({
-      automation: 'janedoe-fleet-flow',
-      builder: 'fleet-atlas-janedoe',
-      intake: 'fleet-atlas-janedoe',
-      'lead-reviewer': 'fleet-cipher-janedoe',
-      'second-reviewer': 'fleet-cipher-janedoe',
-      'security-reviewer': 'fleet-cipher-janedoe',
+      automation: 'janedoe-acme-flow',
+      builder: 'acme-atlas-janedoe',
+      intake: 'acme-atlas-janedoe',
+      'lead-reviewer': 'acme-cipher-janedoe',
+      'second-reviewer': 'acme-cipher-janedoe',
+      'security-reviewer': 'acme-cipher-janedoe',
     });
   });
 

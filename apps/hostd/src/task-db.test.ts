@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { DockerResult } from './drivers/docker.js';
 import { TASK_TEMPLATE, TaskDatabases, taskDatabaseName, taskdbBindAddress } from './task-db.js';
@@ -150,8 +149,6 @@ describe('a task’s database', () => {
     const passwordOf = (s: ReturnType<typeof server>) => s.clientEnv.get(s.calls.find((args) => args[0] === 'run')!)!.POSTGRES_PASSWORD;
     expect(passwordOf(first)).toMatch(/^[0-9a-f]{48}$/);
     expect(passwordOf(first)).not.toBe(passwordOf(second));
-    const theOldDefault = createHash('sha256').update(['fleet', 'local', 'sidecar'].join('-') + ':taskdb').digest('hex').slice(0, 32);
-    expect([passwordOf(first), passwordOf(second)]).not.toContain(theOldDefault);
   });
 
   it('is its own role’s alone, from the template, with a limit on its connections, and handed back as a URL the container reaches', async () => {
