@@ -2,6 +2,7 @@ import {
   fetchJson,
   type AccountCheck,
   type ContextDocument,
+  type EgressReport,
   type EngineUpdateResult,
   type EngineUpdateStart,
   type EngineUpdateStatus,
@@ -105,6 +106,15 @@ export const START_TIMEOUT_MS = 40 * 60_000;
 export const LOCAL_CI_TIMEOUT_MS = 15_000;
 
 export const HOSTD_NOT_ANSWERING = 'hostd is not answering. It may be restarting; try again in a moment.';
+
+/**
+ * How long the bridge waits on hostd to ask the egress proxy about a few
+ * names. hostd gives each CONNECT ten seconds, all at once.
+ */
+export const EGRESS_TIMEOUT_MS = 20_000;
+
+export const HOSTD_NOT_ANSWERING_FOR_EGRESS =
+  'hostd is not answering, so the egress proxy could not be asked or given the list. It may be restarting; it puts the list on the proxy when it starts.';
 
 export const HOSTD_NOT_ANSWERING_FOR_ATTACH =
   'hostd is not answering, so there is no terminal to attach to. It may be restarting; try again in a moment.';
@@ -340,7 +350,7 @@ export class HostdClient {
    * not answering, with a gateway's status.
    */
   private async call<T>(
-    method: 'GET' | 'POST' | 'DELETE',
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     path: string,
     options: { body?: unknown; identity?: string; timeoutMs?: number; notAnswering?: string } = {},
   ): Promise<T> {
@@ -365,6 +375,22 @@ export class HostdClient {
       });
     }
     return body as T;
+  }
+
+  /**
+   * What the host's egress proxy says of each name: whether a task's request
+   * to it gets past the allowlist (hostd's `egress.ts`), and whether the
+   * proxy reads Settings' list. `proxied: false` where tasks leave through
+   * no proxy at all.
+   */
+  async egress(hosts: readonly string[]): Promise<EgressReport> {
+    const query = hosts.map((host) => `host=${encodeURIComponent(host)}`).join('&');
+    return this.call('GET', `/egress${query ? `?${query}` : ''}`, { timeoutMs: EGRESS_TIMEOUT_MS, notAnswering: HOSTD_NOT_ANSWERING_FOR_EGRESS });
+  }
+
+  /** Puts the names an admin allowed in Settings on the host's egress proxy; what hostd wrote. */
+  async applyEgressHosts(hosts: readonly string[]): Promise<{ hosts: string[] }> {
+    return this.call('PUT', '/egress/hosts', { body: { hosts }, timeoutMs: EGRESS_TIMEOUT_MS, notAnswering: HOSTD_NOT_ANSWERING_FOR_EGRESS });
   }
 
   /**

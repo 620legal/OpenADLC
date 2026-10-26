@@ -1092,6 +1092,21 @@ export type TaskPostgresCompose =
 /** How long settings waits for a section it could also leave to read its own. */
 export const SECTION_READ_MS = 1_500;
 
+/**
+ * Settings → Egress, as the bridge answers it (`GET /v1/egress/hosts`, an
+ * admin's): the names a cloud host's tasks may reach beyond its own list, and
+ * whether its proxy reads them. See the bridge's `egress-routes.ts`.
+ */
+export interface EgressHostsView {
+  hosts: string[];
+  /** Whether tasks leave through an egress proxy here; the section is hidden only when false. Null when hostd could not be asked. */
+  proxied: boolean | null;
+  /** Whether the proxy reads this list; false on a cloud host whose cloud-init is from before it. */
+  settingsList: boolean | null;
+  /** Why the list cannot be saved now, when it cannot. */
+  reason: string | null;
+}
+
 export const api = {
   board: (repo: string) => get<Board>(`/v1/board?repo=${encodeURIComponent(repo)}`),
   crew: () => get<{ bots: CrewMember[] }>('/v1/bots'),
@@ -1118,6 +1133,7 @@ export const api = {
   engineUpdates: () => get<EngineUpdatesView>('/v1/engines/updates', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
   selfUpdate: () => get<SelfUpdateView>('/v1/self-update', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
   backup: () => get<BackupInventory>('/v1/backup', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
+  egressHosts: () => get<EgressHostsView>('/v1/egress/hosts', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
   users: () => get<{ users: ConsoleUser[] }>('/v1/users').then((body) => body.users),
   /** Whether a person has paused new work from Settings; see `pause-work.ts` in the bridge. */
   workPauses: () =>

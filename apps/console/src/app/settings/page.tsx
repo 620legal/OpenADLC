@@ -1,6 +1,7 @@
 import { AppShell } from '@/components/app-header';
 import { BackupCard } from '@/components/backup-card';
 import { BridgeDown } from '@/components/bridge-down';
+import { EgressHosts } from '@/components/egress-hosts';
 import { EngineUpdates } from '@/components/engine-updates';
 import { SelfUpdate } from '@/components/self-update';
 import { GitHubCard } from '@/components/github-card';
@@ -28,13 +29,15 @@ export const dynamic = 'force-dynamic';
  * posts are headed with, and the accounts OpenADLC signs in as; AI models — the
  * accounts the crew thinks with, set up before the table that picks one; the
  * crew — which GitHub account and which model each bot uses; System, the
- * weekly updates of OpenADLC itself and of the tools it runs; the spending
+ * weekly updates of OpenADLC itself and of the tools it runs; on a cloud
+ * install, Egress, the names its tasks may reach beyond the host's own list,
+ * with a host a check found refused offered by `?allow-host=`; the spending
  * caps, summarised, with the amounts edited on their own page; a backup of the
  * install; pausing new work, across the install or in
  * chosen repositories; who may use the console; and how it looks: the color
  * mode, the console's name and logo, and each repository's and crew member's color.
  */
-export default async function SettingsPage() {
+export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ 'allow-host'?: string | string[] }> }) {
   // Settings are an admin's: a user has no link here, and the bridge refuses
   // every change they could make. Someone who types the address is told so
   // rather than shown a page of sections that could not be read.
@@ -53,7 +56,7 @@ export default async function SettingsPage() {
     // drawn at the height it keeps; a section the bridge does not answer here
     // within `SECTION_READ_MS` still reads its own, so a slow GitHub costs the
     // page at most that.
-    const [repos, crew, costs, spending, accounts, github, installations, install, engineUpdates, selfUpdate, backup, paused] = await Promise.all([
+    const [repos, crew, costs, spending, accounts, github, installations, install, engineUpdates, selfUpdate, backup, paused, egress] = await Promise.all([
       api.repos(),
       api.crew(),
       api.costs().catch(() => null),
@@ -66,8 +69,17 @@ export default async function SettingsPage() {
       api.selfUpdate().catch(() => null),
       api.backup().catch(() => null),
       api.workPauses().catch((): WorkPauses => ({ paused: null, repos: {} })),
+      // Shown only where tasks leave through an egress proxy: a laptop has no list to widen.
+      api.egressHosts().catch(() => null),
     ]);
     const users = await api.users().catch(() => null);
+    const asked = (await searchParams)['allow-host'];
+    const offered = typeof asked === 'string' && asked.trim() ? asked.trim().toLowerCase() : null;
+    // Hidden only where the bridge says tasks leave through no proxy. When
+    // hostd could not be asked (`proxied` null) the section stays, with why
+    // and no way to save: hiding it looked like a laptop, and the card's
+    // `#egress` link landed nowhere.
+    const showEgress = egress !== null && egress.proxied !== false;
     const header = await readHeader({
       repos: repos.repos.map((repo) => repo.name),
       colors: colorMapOf(repos.repos),
@@ -78,7 +90,7 @@ export default async function SettingsPage() {
     return (
       <AppShell page="settings" data={header}>
         <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-5 px-4 py-6 md:flex-row md:gap-10 md:px-6 md:py-7">
-          <SettingsNav />
+          <SettingsNav omit={showEgress ? [] : ['egress']} />
 
           <main className="flex min-w-0 max-w-[820px] flex-1 flex-col gap-[18px]">
             <h1 className="sr-only">Settings</h1>
@@ -119,6 +131,12 @@ export default async function SettingsPage() {
 
             {/* OpenADLC itself is the first row of System, above the tools it runs. */}
             <EngineUpdates initial={engineUpdates} extra={<SelfUpdate initial={selfUpdate} />} />
+
+            {showEgress && egress && (
+              <SettingsCard id="egress" title="Egress" line="The names this install’s tasks may reach beyond the cloud host’s own list.">
+                <EgressHosts initial={egress} offered={offered} />
+              </SettingsCard>
+            )}
 
             <SpendingSummary initial={spending} />
 

@@ -1,10 +1,12 @@
 import { join } from 'node:path';
-import { bots, closePool, hosts, modelAccounts, repos, tasks, waitForDatabase } from '@openadlc/db';
+import { bots, closePool, hosts, modelAccounts, repos, settings, tasks, waitForDatabase } from '@openadlc/db';
 import { getSecretStore, internalSecretRef } from '@openadlc/github';
+import { parseEgressHosts } from '@openadlc/shared';
 import { AttachTokens } from './attach-tokens.js';
 import { DEFAULT_LOCAL_CI_TIMEOUT_MINUTES, loadHostdConfig } from './config.js';
 import { TerminalGateway } from './terminal-gateway.js';
 import { DockerDriver, docker } from './drivers/docker.js';
+import { EgressList, EgressProbe, egressProxyToAsk } from './egress.js';
 import { EngineUpdater, candidateCredential, candidateModels } from './engine-updates.js';
 import { LocalDriver } from './drivers/local.js';
 import type { ExecDriver } from './drivers/types.js';
@@ -254,6 +256,30 @@ async function main(): Promise<void> {
         },
       })
     : undefined;
+  // The names an admin allowed in Settings, which the cloud host's proxy reads
+  // from a file hostd writes (`egress.ts`). Put there at every start from
+  // what Settings holds, so a host made again, or a list saved while hostd
+  // was down, lets through what Settings says; the bridge writes it again on
+  // every save, and a save that lands while this is read is newer and wins
+  // (`applyStored`). None on a laptop, whose tasks have no proxy.
+  const egressList = new EgressList({
+    file: process.env.OPENADLC_EGRESS_HOSTS_FILE || null,
+    container: process.env.OPENADLC_EGRESS_PROXY_CONTAINER || null,
+  });
+  if (egressList.available) {
+    void egressList
+      .applyStored(async () => parseEgressHosts(await settings.getSetting('egressExtraHosts')))
+      .then(
+        (written) =>
+          console.log(
+            written
+              ? `[hostd] the egress proxy lets through ${written.length} more name(s) from Settings`
+              : '[hostd] a save from Settings reached the egress proxy first; the list read at start was not written over it',
+          ),
+        (error: unknown) => console.warn(`[hostd] Settings' egress names are not on the proxy: ${error instanceof Error ? error.message : error}`),
+      );
+  }
+
   const server = createHostdServer({
     config,
     driver,
@@ -266,6 +292,7 @@ async function main(): Promise<void> {
     engineUpdates,
     localCi,
     ...(restartOntoImage ? { restartOntoImage } : {}),
+    egress: { probe: new EgressProbe(egressProxyToAsk()), list: egressList },
   });
 
   // Take-over rides on the same port: the console opens a socket at /terminal

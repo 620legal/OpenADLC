@@ -115,6 +115,7 @@ describe('the sections of settings', () => {
       'models',
       'crew',
       'system',
+      'egress',
       'spending-limits',
       'backup',
       'pause',
