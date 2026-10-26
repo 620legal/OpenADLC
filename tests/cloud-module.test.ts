@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { RELEASE_IMAGES, releaseImageName } from '@openadlc/shared';
+import { PROJECT_REPOSITORY, RELEASE_IMAGES, releaseImageName } from '@openadlc/shared';
 import { afterAll, describe, expect, it } from 'vitest';
 
 /**
@@ -1207,9 +1207,14 @@ describe('what the bridge is told about the install it updates', () => {
     expect(mainTf).toMatch(/console_service\s*=\s*"\$\{var\.name_prefix\}-console"/);
   });
 
-  it('takes 620legal/OpenADLC’s releases and updates itself unless told not to', () => {
+  it('takes the project’s releases and updates itself unless told not to', () => {
+    // Terraform reads no TypeScript, so the module keeps its own copy of the
+    // repository the bridge, hostd and the CLI default to (PROJECT_REPOSITORY).
+    // Apart, settings that never name one would have `openadlc cloud update`
+    // choose one repository's releases while the module mirrors, and the host
+    // accepts, another's images.
     const repo = /variable "release_repository" \{[\s\S]*?\n\}/.exec(variablesTf)?.[0] ?? '';
-    expect(repo).toMatch(/default\s*=\s*"620legal\/OpenADLC"/);
+    expect(/default\s*=\s*"([^"]*)"/.exec(repo)?.[1]).toBe(PROJECT_REPOSITORY);
     expect(repo).toContain('validation {');
     const update = /variable "self_update" \{[\s\S]*?\n\}/.exec(variablesTf)?.[0] ?? '';
     expect(update).toMatch(/type\s*=\s*bool/);

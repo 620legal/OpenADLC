@@ -136,7 +136,9 @@ variable "console_image" {
 variable "release_repository" {
   description = "The GitHub repository (owner/name) whose releases this install runs. Their images are ghcr.io/<owner>/<name in lower case>/service and …/console, pulled through the mirror this module makes, and an update takes the next of its releases. Another only for a fork that publishes releases of its own."
   type        = string
-  default     = "620legal/OpenADLC"
+  # PROJECT_REPOSITORY (packages/shared/src/project.ts), which the CLI takes
+  # for settings that name none; tests/cloud-module.test.ts holds the two equal.
+  default = "620legal/OpenADLC"
 
   # It is put into the bridge's environment and into the image names the host
   # accepts, so it is the shape of a repository name and nothing more.

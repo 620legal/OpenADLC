@@ -9,6 +9,7 @@ import {
   imageAttestationCheckArgs,
   imageAttestationsUrl,
   ONE_RELEASE_AT_A_TIME,
+  PROJECT_REPOSITORY,
   RELEASE_CHECKSUMS,
   RELEASE_IMAGE_DIGESTS,
   RELEASE_IMAGE_REGISTRY,
@@ -88,9 +89,6 @@ export interface CloudInstall {
   revision: string | null;
 }
 
-/** The repository a cloud install takes releases from unless the module names another. */
-export const DEFAULT_RELEASE_REPO = '620legal/OpenADLC';
-
 /** What the module sets for the apply; one missing is a module older than the bridge. */
 const REQUIRED = ['OPENADLC_CLOUD_PROJECT', 'OPENADLC_CLOUD_REGION', 'OPENADLC_CLOUD_BRIDGE_SERVICE', 'OPENADLC_CLOUD_CONSOLE_SERVICE', 'OPENADLC_RELEASE_MIRROR'] as const;
 
@@ -109,7 +107,8 @@ export function cloudInstallFrom(env: NodeJS.ProcessEnv): { install: CloudInstal
       bridgeService: value('OPENADLC_CLOUD_BRIDGE_SERVICE'),
       consoleService: value('OPENADLC_CLOUD_CONSOLE_SERVICE'),
       mirror: value('OPENADLC_RELEASE_MIRROR').replace(/\/+$/, ''),
-      repo: value('OPENADLC_RELEASE_REPO') || DEFAULT_RELEASE_REPO,
+      // The module's own default is the same repository (infra/gcp, `release_repository`).
+      repo: value('OPENADLC_RELEASE_REPO') || PROJECT_REPOSITORY,
       // Only `on` deploys: a module from before the variable granted the
       // bridge nothing to deploy with.
       selfUpdate: value('OPENADLC_SELF_UPDATE') === 'on',

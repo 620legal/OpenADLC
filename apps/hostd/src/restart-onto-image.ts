@@ -1,5 +1,5 @@
 import { closeSync, existsSync, fsyncSync, openSync, rmSync, writeSync } from 'node:fs';
-import { writeFileDurably } from '@openadlc/shared';
+import { PROJECT_REPOSITORY, writeFileDurably } from '@openadlc/shared';
 
 /**
  * hostd moving onto a release's image, on a Google Cloud host.
@@ -33,9 +33,6 @@ const DIGEST = /^sha256:[0-9a-f]{64}$/;
 /** An Artifact Registry remote repository mirroring ghcr.io, as the cloud module makes it: `<region>-docker.pkg.dev/<project>/<name_prefix>-ghcr`. */
 const MIRROR = /^[a-z0-9-]+-docker\.pkg\.dev\/[a-z][a-z0-9-]*[a-z0-9]\/[a-z0-9][a-z0-9-]*-ghcr$/;
 
-/** The repository releases come from unless the module names another, as the bridge has it. */
-const DEFAULT_RELEASE_REPO = '620legal/OpenADLC';
-
 /** The install's mirror and release repository, as the module gives them to the host. */
 export interface ReleaseSource {
   /** `OPENADLC_RELEASE_MIRROR`; null when the host was not given it. */
@@ -47,7 +44,8 @@ export interface ReleaseSource {
 export function releaseSourceFrom(env: NodeJS.ProcessEnv): ReleaseSource {
   return {
     mirror: env.OPENADLC_RELEASE_MIRROR?.trim().replace(/\/+$/, '') || null,
-    repo: (env.OPENADLC_RELEASE_REPO?.trim() || DEFAULT_RELEASE_REPO).toLowerCase(),
+    // The repository releases come from unless the module names another, as the bridge has it.
+    repo: (env.OPENADLC_RELEASE_REPO?.trim() || PROJECT_REPOSITORY).toLowerCase(),
   };
 }
 

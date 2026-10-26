@@ -7,16 +7,6 @@
 [extend]
 useDefault = true
 
-# Two commits from before the fixtures were rewritten still carry the old ones:
-# a fake private key too short to parse, a JWT of `{"sub":"1234567890"}`,
-# base64 of `{"tokens":"zzz"}` and RFC 6455's sample nonce.
-[[allowlists]]
-description = "Fake credential-shaped test fixtures in commits made before they were rewritten"
-commits = [
-  "a8ae258365201bad6245d426207c432dfccfdaf6",
-  "ab036ac444b0ac9cc2593caff44de8843e5a561d",
-]
-
 # The tests of the redaction, the attachment check and the key handling need
 # something shaped like a credential to work on. Each fake below is allowed by
 # its own value, so a real credential beside it, in the same file, is still a

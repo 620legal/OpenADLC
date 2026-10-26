@@ -63,9 +63,10 @@ openadlc cloud configure # Google Cloud: then openadlc cloud plan, then openadlc
 
 Local Docker Compose and a local-process driver work today. A Google Cloud
 module (`infra/gcp`, with the installer interface multi-provider from the start)
-has been applied once, on 2026-09-26, with the open items listed in
-[`unverified.md`](unverified.md); AWS and Azure come after the platform is
-complete.
+was first applied on 2026-09-26 and has been applied again since: on
+2026-10-23 its install moved to release images, and it has run v0.1.5 through
+v0.1.12. Its open items are listed in [`unverified.md`](unverified.md); AWS and
+Azure come after the platform is complete.
 
 ## 4. GitHub identity and authorization
 
@@ -333,11 +334,11 @@ See [security.md](security.md) for the full model.
 | Phase | Deliverable | State |
 |---|---|---|
 | P0 | Monorepo, `openadlc_db`, engine adapters, hostd with both drivers, bridge, dispatcher, console, CLI, skills | **built** |
-| P1 | Real GitHub loop: webhooks, device-flow tokens, issue → lease → pull request | **mechanism built and proven against a live repository**; needs a crew of real accounts on a real organization |
-| P2 | Review lenses on three engines, deploy and revert, caps exercised under load | caps and the budget stop are **built and tested** (`tests/pipeline.mjs`); the merge line is **built and tested** (`apps/bridge/src/merge-line.test.ts`); the deploy path is **built and untried** — four workflows, two environments and the bridge's handling of `deployment_status`, of which **no deployment has ever been created**, so every claim about what GitHub does with it is a row in [`unverified.md`](unverified.md); a red smoke on testing reverts the change and sends it back to build, and a failed deploy files an issue instead |
+| P1 | Real GitHub loop: webhooks, device-flow tokens, issue → lease → pull request | **mechanism built and proven against a live repository**; a crew of real accounts on a real organization runs it, on a local install and on a Google Cloud one |
+| P2 | Review lenses on three engines, deploy and revert, caps exercised under load | caps and the budget stop are **built and tested** (`tests/pipeline.mjs`); the merge line is **built and tested** (`apps/bridge/src/merge-line.test.ts`); the deploy path is **built and untried** — four workflows, two environments and the bridge's handling of `deployment_status`, of which **no deployment to either environment has ever been created**, so every claim about what GitHub does with one is a row in [`unverified.md`](unverified.md); a red smoke on testing reverts the change and sends it back to build, and a failed deploy files an issue instead. OpenADLC's own repository has deployments only on its `release` environment, from 2026-10-23: one per run of `.github/workflows/cut-release.yml`, whose tag-pushing job names that environment, and the bridge does not act on them |
 | P3 | Console: board, threads, gates, intake, crew, costs, repository settings | **built**; defects from real use are tracked as issues |
 | P4 | Terminal gateway in the browser, session take-over, full audit | **built and tested**: a WebSocket to a PTY, xterm.js, single-use attach tokens, audit on attach, detach, kill and restart |
-| P5 | Cloud module, egress allowlist, reconciliation, `concurrency: 2`, two weeks of self-driving PRs, then public | reconciliation and concurrency are **built and tested** (`tests/concurrency.mjs`, `apps/hostd/src/observer.test.ts`); the cloud module is **written, structurally checked** (`terraform validate`, `tests/cloud-module.test.ts`) **and applied once**, on 2026-09-26: the firewall, the egress allowlist and the restricted ingress were seen working, and what is still unseen — IAP refusing a stranger, the stream through the load balancer, mTLS to hostd — is a row in [`docs/unverified.md`](unverified.md); OpenADLC was published as open source before the two-week window, which is still to run and needs a live organization |
+| P5 | Cloud module, egress allowlist, reconciliation, `concurrency: 2`, two weeks of self-driving PRs, then public | reconciliation and concurrency are **built and tested** (`tests/concurrency.mjs`, `apps/hostd/src/observer.test.ts`); the cloud module is **written, structurally checked** (`terraform validate`, `tests/cloud-module.test.ts`) **and applied**: first on 2026-09-26, when the firewall, the egress allowlist and the restricted ingress were seen working, and again since, its install moving to release images on 2026-10-23 and running v0.1.5 through v0.1.12. What is still unseen — IAP refusing a stranger, the stream through the load balancer, mTLS to hostd — is a row in [`docs/unverified.md`](unverified.md); OpenADLC was published as open source before the two-week window, which is still to run |
 
 ### What is proven, and how
 
@@ -358,7 +359,7 @@ See [security.md](security.md) for the full model.
 | The onboarding walkthrough tells the truth about accounts, access and the app, and does not invent GitHub answers when it cannot ask | `tests/onboarding.mjs` |
 | The cloud module is valid against the provider schema | `terraform validate` in `tests/all.mjs`. **Valid is not working**: a module whose firewall denies the only caller that matters, or whose IAP binding names a resource that does not exist, validates cleanly. `tests/cloud-module.test.ts` is what checks the things `validate` has no opinion about |
 | A skill's stopping conditions are exercised without running a model | `tests/skills.test.ts` |
-| The bridge does the right thing with a deploy's outcome, and the deploy workflows are the ones it and the deploy skill name | `apps/bridge/src/webhooks.test.ts`, `tests/deploy-path.test.ts`, `tests/pipeline.mjs`. **Nothing has ever deployed**: what is proven is the decision from a synthetic `deployment_status`, the shape of the workflows, and a red testing run producing a revert task — not that GitHub creates the deployment in the first place |
+| The bridge does the right thing with a deploy's outcome, and the deploy workflows are the ones it and the deploy skill name | `apps/bridge/src/webhooks.test.ts`, `tests/deploy-path.test.ts`, `tests/pipeline.mjs`. **Nothing has deployed to testing or production**: what is proven is the decision from a synthetic `deployment_status`, the shape of the workflows, and a red testing run producing a revert task — not that a deploy workflow's run creates the deployment, nor that the bridge acts on a real one. OpenADLC's `release` environment has had deployments since 2026-10-23, from `.github/workflows/cut-release.yml`, which the bridge leaves alone |
 | hostd refuses a caller that does not hold the install's secret, and a task cannot act for another task | `apps/hostd/src/auth.test.ts`, `apps/hostd/src/registry-route.test.ts` |
 | The console's identity assertion is verified rather than trusted | `apps/bridge/src/identity.test.ts` |
 

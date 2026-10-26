@@ -17,8 +17,12 @@ maintained by a small team; there is no service level attached to this policy.
 
 ## Supported versions
 
-Fixes land on `main`. There are no releases yet; once there are, the latest
-release is supported.
+Releases are version tags of `main`, v0.1.0 the first. Fixes land on `main`
+and ship in the next release. Only the newest release is supported, and no fix
+is made to an older one: an install's self-update takes the newest release it
+may take (a Google Cloud install steps through each release after its own to
+reach it), so an install that keeps updating has a fix once it is released
+([Updating OpenADLC](../docs/self-hosting.md#updating-openadlc)).
 
 ## What is in scope
 
