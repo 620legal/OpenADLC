@@ -1,3 +1,5 @@
+import { isStaleAction } from './console-updated';
+
 /**
  * Keeping a page current without a reload.
  *
@@ -53,4 +55,27 @@ export function refreshWhileVisible(
     stop();
     page.removeEventListener('visibilitychange', onVisibility);
   };
+}
+
+/**
+ * One read of the page, unless the console was updated since it loaded.
+ *
+ * Once a read reaches a new build of the console, Next reloads the whole page
+ * by itself, without a word, and until that read every action of the page is
+ * refused (`lib/console-updated.ts`): a person who pressed Pause work in the
+ * seconds between got Next's raw "Server Action … was not found on the
+ * server", and the work was not paused. So `probe`, an action that does
+ * nothing, goes first. Refused that way, the page is not read (the read would
+ * reload it under whoever is on it) and the answer is `updated`, for the page
+ * to say so and offer the reload. Any other failure, such as no answer while
+ * the console restarts, is left to the read, which meets it as it did before.
+ */
+export async function readUnlessUpdated(probe: () => Promise<unknown>, read: () => void): Promise<'read' | 'updated'> {
+  try {
+    await probe();
+  } catch (error) {
+    if (isStaleAction(error)) return 'updated';
+  }
+  read();
+  return 'read';
 }

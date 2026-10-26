@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import { BrandProvider, RoleProvider } from '../components/app-header';
+import { ConsoleUpdatedNotice } from '../components/console-updated';
 import { EarlyClicks } from '../components/early-clicks';
 import { NoAdmin, NotAUser } from '../components/not-a-user';
 import { readBrand, readMe } from '../lib/api';
@@ -53,6 +54,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           </RoleProvider>
         )}
         <EarlyClicks />
+        {/*
+          Outside every page's error boundary: an action the console refused
+          because it was updated since the page loaded, or the page's own
+          check, says so here with a reload, whatever the page is.
+        */}
+        <ConsoleUpdatedNotice />
       </body>
     </html>
   );

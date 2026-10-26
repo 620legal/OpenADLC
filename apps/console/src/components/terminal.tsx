@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { requestAttachToken } from '@/app/actions';
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
+import { isStaleAction, staleActionRefusal } from '@/lib/console-updated';
 import { socketFailure, terminalBase } from '@/lib/terminal-url';
 
 type Phase = 'idle' | 'connecting' | 'attached' | 'detached' | 'error';
@@ -70,11 +71,15 @@ export function Terminal({
 
     // A server action that gets no answer rejects rather than returning an
     // error, and a rejection here left the tab saying "attaching" for good.
-    const grant = await requestAttachToken(bot, session).catch(() => ({
+    // One the console refused because it was updated since the page loaded
+    // is not helped by trying again in a moment; a reload is.
+    const grant = await requestAttachToken(bot, session).catch((failure: unknown) => ({
       ok: false as const,
       token: undefined,
       url: undefined,
-      error: 'the console is not answering, so it cannot ask for a terminal. Try again in a moment.',
+      error: isStaleAction(failure)
+        ? staleActionRefusal().error
+        : 'the console is not answering, so it cannot ask for a terminal. Try again in a moment.',
     }));
     if (!grant.ok || !grant.token) {
       setError(grant.error ?? 'could not mint an attach token');

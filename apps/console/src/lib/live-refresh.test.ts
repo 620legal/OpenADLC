@@ -1,5 +1,6 @@
+import { UnrecognizedActionError } from 'next/dist/client/components/unrecognized-action-error';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { REFRESH_EVERY_MS, refreshWhileVisible, type Visibility } from './live-refresh';
+import { readUnlessUpdated, REFRESH_EVERY_MS, refreshWhileVisible, type Visibility } from './live-refresh';
 
 /** A tab, which can be put in the background and brought back. */
 function tab(initially: 'visible' | 'hidden' = 'visible') {
@@ -73,5 +74,34 @@ describe('keeping a page current', () => {
     vi.advanceTimersByTime(REFRESH_EVERY_MS * 2);
     expect(refresh).not.toHaveBeenCalled();
     expect(page.listening()).toBe(0);
+  });
+});
+
+describe('a read of a page the console may have been updated under', () => {
+  it('is made once the console answers the page\'s own action', async () => {
+    const read = vi.fn();
+    expect(await readUnlessUpdated(async () => ({ ok: true }), read)).toBe('read');
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not made once the console refuses that action as one it does not have', async () => {
+    // Made, it reached the new build, and Next reloaded the page under
+    // whoever was on it, without a word.
+    const read = vi.fn();
+    const outcome = await readUnlessUpdated(async () => {
+      throw new UnrecognizedActionError('Server Action "7f3a9c" was not found on the server. \nRead more: https://nextjs.org/docs/messages/failed-to-find-server-action');
+    }, read);
+    expect(outcome).toBe('updated');
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('is made as before when the action fails some other way, such as no answer while the console restarts', async () => {
+    const read = vi.fn();
+    expect(
+      await readUnlessUpdated(async () => {
+        throw new TypeError('Failed to fetch');
+      }, read),
+    ).toBe('read');
+    expect(read).toHaveBeenCalledTimes(1);
   });
 });
