@@ -32,6 +32,11 @@ const store = vi.hoisted(() => ({
   hostLoad: null as { capacity: number; used: number } | null,
   leaseReads: 0,
   hostReads: 0,
+  /** The console requests the poll reads. */
+  requests: [] as { id: string; repoId: string | null; issueNumber: number | null; text: string; state: string; createdAt: string }[],
+  /** Rows only a read of issues by ref finds (`getIssues`), and each such read, by `repoId#n`. */
+  elsewhere: [] as IssueFacts[],
+  batchReads: [] as string[][],
 }));
 vi.mock('@openadlc/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@openadlc/db')>()),
@@ -70,6 +75,10 @@ vi.mock('@openadlc/db', async (importOriginal) => ({
       store.issueReads.push(`${repoId}#${number}`);
       return store.issues.find((issue) => issue.repoId === repoId && issue.number === number) ?? null;
     }),
+    getIssues: vi.fn(async (refs: readonly { repoId: string; number: number }[]) => {
+      store.batchReads.push(refs.map((ref) => `${ref.repoId}#${ref.number}`));
+      return [...store.issues, ...store.elsewhere].filter((issue) => refs.some((ref) => ref.repoId === issue.repoId && ref.number === issue.number));
+    }),
   },
   repos: {
     listRepos: vi.fn(async () => [
@@ -77,7 +86,7 @@ vi.mock('@openadlc/db', async (importOriginal) => ({
       { id: 'repo-2', name: 'web', fullName: 'exampleco/web', stageModes: {} },
     ]),
   },
-  requests: { listRequests: vi.fn(async () => []) },
+  requests: { listRequests: vi.fn(async () => store.requests) },
   leases: {
     heldLeases: vi.fn(async () => {
       store.leaseReads += 1;
@@ -745,6 +754,9 @@ describe('reading the board’s work', () => {
     store.sinceReads = [];
     store.issueReads = [];
     store.linkReads = [];
+    store.requests = [];
+    store.elsewhere = [];
+    store.batchReads = [];
   }
 
   it('reads, in one query each, the latest output and the resume of only the running tasks on the cards it shows', async () => {
@@ -767,7 +779,8 @@ describe('reading the board’s work', () => {
       NOW,
     );
     expect(store.lineReads).toEqual([['session-review', 'session-web']]);
-    expect(store.sinceReads.map((ids) => [...ids].sort())).toEqual([['task-review', 'task-web']]);
+    // Since when, in the same one read, for every running task: the count's list times them all.
+    expect(store.sinceReads.map((ids) => [...ids].sort())).toEqual([['task-deploy', 'task-ignored', 'task-review', 'task-web']]);
     expect(work.byRef.get('api#7')?.active.map((one) => [one.state, one.activity, one.since])).toEqual([
       ['running', 'reading the diff', minutesAgo(2)],
       ['queued', null, null],
@@ -775,6 +788,92 @@ describe('reading the board’s work', () => {
     ]);
     // Counted by the database: every running task in the install.
     expect(work.runningTasks).toBe(231);
+    // And each named, oldest first, on a card shown or not. A deploy of a
+    // commit opens nothing, and is listed all the same.
+    expect(work.runningList.map((one) => [one.id, one.bot, one.kind, one.subject, one.repo, one.title, one.opens, one.since])).toEqual([
+      ['task-deploy', 'openadlc-atlas-janedoe', 'deploy', 'api@3f2c1a9', 'api', null, null, minutesAgo(2)],
+      ['task-ignored', 'openadlc-atlas-janedoe', 'implement', 'api#8', 'api', 'Issue 8', 'api#8', minutesAgo(2)],
+      ['task-review', 'noraexampleco', 'review', 'api#31', 'api', 'Issue 7', 'api#31', minutesAgo(2)],
+      ['task-web', 'openadlc-atlas-janedoe', 'implement', 'web#3', 'web', 'Issue 3', 'web#3', minutesAgo(2)],
+    ]);
+    // Every title was on an issue the route had: nothing more was read.
+    expect(store.batchReads).toEqual([]);
+  });
+
+  it('lists a running task no card shows: a triage on a console request, named by the request', async () => {
+    install();
+    store.issues = [];
+    store.tasks = [{ ...running('task-triage', 'request:b4378305', { kind: 'intake', botId: 'bot-intake', repoId: null }), startedAt: minutesAgo(30) }];
+    store.since = { 'task-triage': minutesAgo(12) };
+    store.running = 1;
+    const work = await readBoardWork(
+      {
+        issues: [],
+        bots: [{ id: 'bot-intake', name: 'intake' }],
+        repos: [{ id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {} }],
+        gates: [],
+        // Filed long ago, so not a card of its own: nothing on the board names it.
+        requests: [{ id: 'b4378305-aaaa-4bbb-8ccc-dddddddddddd', repoId: 'repo-1', issueNumber: 186, text: '\n  Open the running count into a list  \nmore words', state: 'filed', createdAt: minutesAgo(600), updatedAt: minutesAgo(600) }],
+        sessions: [],
+      },
+      NOW,
+    );
+    expect(work.requests).toEqual([]);
+    expect(work.runningTasks).toBe(1);
+    expect(work.runningList).toEqual([
+      {
+        id: 'task-triage',
+        bot: 'intake',
+        kind: 'intake',
+        skill: null,
+        round: 0,
+        subject: 'request:b4378305',
+        repo: 'api',
+        title: 'Open the running count into a list',
+        opens: 'request:b4378305',
+        since: minutesAgo(12),
+      },
+    ]);
+  });
+
+  it('titles a running task on another repository’s issue with one read of the issues the board did not have', async () => {
+    install();
+    store.elsewhere = [issue('web', 40, { title: 'Cache the prices' })];
+    store.tasks = [running('task-elsewhere', 'web#40', { repoId: 'repo-2' }), running('task-gone', 'web#41', { repoId: 'repo-2' })];
+    const work = await readBoardWork(
+      {
+        // The board of api alone: web's issues are not among those read.
+        issues: store.issues.filter((one) => one.repoName === 'api'),
+        bots: [{ id: 'bot-builder', name: 'openadlc-atlas-janedoe' }],
+        repos: [
+          { id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {} },
+          { id: 'repo-2', name: 'web', fullName: 'exampleco/web', stageModes: {} },
+        ],
+        gates: [],
+        requests: [],
+        sessions: [],
+      },
+      NOW,
+    );
+    expect(store.batchReads).toEqual([['repo-2#40', 'repo-2#41']]);
+    // One the read did not find is still a row, by its subject, that opens it.
+    expect(work.runningList.map((one) => [one.subject, one.title, one.opens])).toEqual([
+      ['web#40', 'Cache the prices', 'web#40'],
+      ['web#41', null, 'web#41'],
+    ]);
+  });
+
+  it('polls every running task by name, a request’s triage with no card shown among them', async () => {
+    install();
+    store.issues = [];
+    store.tasks = [running('task-triage', 'request:b4378305', { kind: 'intake', botId: 'bot-builder', repoId: null })];
+    store.requests = [{ id: 'b4378305-aaaa-4bbb-8ccc-dddddddddddd', repoId: null, issueNumber: 186, text: 'Open the running count', state: 'filed', createdAt: minutesAgo(600) }];
+    store.running = 1;
+    const activity = await readBoardActivity(undefined, NOW);
+    expect(activity.cards).toEqual([]);
+    expect(activity.runningTasks.map((one) => [one.id, one.bot, one.title, one.repo, one.opens, one.since])).toEqual([
+      ['task-triage', 'openadlc-atlas-janedoe', 'Open the running count', null, 'request:b4378305', minutesAgo(2)],
+    ]);
   });
 
   it('reads, for the few-second poll, only each running card shown, with all its work and its step, and the count', async () => {
@@ -834,7 +933,7 @@ describe('reading the board’s work', () => {
     store.tasks = store.tasks.filter((task) => task.state !== 'running');
     store.numbered = true;
     try {
-      expect(await readBoardActivity(undefined, NOW)).toEqual({ running: 231, cards: [] });
+      expect(await readBoardActivity(undefined, NOW)).toEqual({ running: 231, runningTasks: [], cards: [] });
       // It read every link and every repository's issues before finding nothing ran.
       expect(store.issueReads).toEqual([]);
       expect(store.linkReads).toEqual([]);

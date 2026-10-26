@@ -9,12 +9,14 @@ import {
   tasks as taskStore,
   workItems as workItemStore,
 } from '@openadlc/db';
-import type { Gate, Session } from '@openadlc/shared';
+import type { Gate, Session, TaskKind } from '@openadlc/shared';
 import {
   asCardTask,
   cardWork,
   ignoredSubjects,
   isActive,
+  issueForSubject,
+  repoOfSubject,
   REVIEW_STALLED,
   shownIssues,
   stageOfTask,
@@ -172,6 +174,110 @@ export interface BoardWork {
   waiting: Set<string>;
   /** Tasks running across the install, on a card or not, whatever repository the board shows. */
   runningTasks: number;
+  /** The first of them as the count's list names them (`runningList`); empty from a caller that read none. */
+  runningList: RunningTask[];
+}
+
+/**
+ * A task running anywhere in the install, as the list under the board's count
+ * says it.
+ *
+ * The count said "1 task running" over empty columns while intake triaged a
+ * console request, and nothing on the board said what it was: only a task on
+ * a card shown was ever named.
+ */
+export interface RunningTask {
+  id: string;
+  /** The bot's name (`bots.name`); the console labels it as it labels a card's bot. */
+  bot: string;
+  kind: TaskKind;
+  /** Its skill where it is not its kind's own: `resolve-conflict`. */
+  skill: string | null;
+  round: number;
+  /** `tasks.subject_ref` as stored: `api#12`, `request:<id8>`, `api@3f2c1a9`, `api#testing`. */
+  subject: string;
+  /** The repository's name: from the subject, else the request's chosen repository, else null. */
+  repo: string | null;
+  /** The issue's or pull request's title, or the request's title (`requestTitle`); null when nothing read names it. */
+  title: string | null;
+  /** The subject the row opens in the item sheet: `repo#n` or `request:<id8>`; null for any other subject. */
+  opens: string | null;
+  /** `tasks.runningSince`, else `startedAt`. */
+  since: string | null;
+}
+
+/**
+ * One row for every running task given, none left out: a row the list drops
+ * is a task the count says and nothing names. A subject nothing read titles
+ * is still listed, by its subject.
+ *
+ * Oldest first, so the rows stand still between polls.
+ */
+export function runningList(
+  running: readonly TaskFacts[],
+  ctx: {
+    bots: readonly { id: string; name: string }[];
+    repos: readonly { id: string; name: string }[];
+    requests: readonly { id: string; repoId: string | null; text: string }[];
+    issues: readonly Pick<IssueFacts, 'repoName' | 'number' | 'prNumber' | 'title'>[];
+    since?: ReadonlyMap<string, string | null>;
+  },
+): RunningTask[] {
+  const rows = running
+    .filter((task) => task.state === 'running')
+    .map((task): RunningTask => {
+      const subject = task.subjectRef;
+      let repo: string | null = repoOfSubject(subject);
+      let title: string | null = null;
+      let opens: string | null = null;
+      if (parseRef(subject)) {
+        opens = subject;
+        title = issueForSubject(subject, ctx.issues)?.title ?? null;
+      } else if (subject.startsWith('request:')) {
+        opens = subject;
+        const id8 = subject.slice('request:'.length).toLowerCase();
+        const request = ctx.requests.find((one) => one.id.toLowerCase().startsWith(id8));
+        if (request) {
+          title = requestTitle(request.text);
+          repo = ctx.repos.find((one) => one.id === request.repoId)?.name ?? null;
+        }
+      }
+      return {
+        id: task.id,
+        bot: ctx.bots.find((bot) => bot.id === task.botId)?.name ?? 'a bot',
+        kind: task.kind,
+        skill: task.skill ?? null,
+        round: task.round,
+        subject,
+        repo,
+        title,
+        opens,
+        since: ctx.since?.has(task.id) ? (ctx.since.get(task.id) ?? null) : task.startedAt,
+      };
+    });
+  const at = (row: RunningTask) => (row.since ? Date.parse(row.since) : Number.POSITIVE_INFINITY);
+  return rows.sort((a, b) => at(a) - at(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/**
+ * The issues the list titles its `repo#n` rows from that the caller did not
+ * already have: one read for all of them, of the issue each subject names. A
+ * read that fails is rows with no title, not a board that fails.
+ */
+async function untitledIssues(
+  running: readonly TaskFacts[],
+  have: readonly Pick<IssueFacts, 'repoName' | 'number' | 'prNumber'>[],
+  repos: readonly { id: string; name: string }[],
+): Promise<IssueFacts[]> {
+  const refs = new Map<string, { repoId: string; number: number }>();
+  for (const task of running) {
+    const parsed = parseRef(task.subjectRef);
+    if (!parsed || issueForSubject(task.subjectRef, have)) continue;
+    const repoId = task.repoId ?? repos.find((one) => one.name === parsed.repo)?.id;
+    if (repoId) refs.set(`${repoId}#${parsed.number}`, { repoId, number: parsed.number });
+  }
+  if (refs.size === 0) return [];
+  return (async () => issueStore.getIssues([...refs.values()]))().catch(() => [] as IssueFacts[]);
 }
 
 interface BoardWorkInput {
@@ -536,7 +642,7 @@ export function boardWork(input: BoardWorkInput): BoardWork {
     if (task.state === 'paused' && gated.has(task.id)) waiting.add(task.botId);
   }
 
-  return { byRef, requests, running, waiting, runningTasks: input.runningTasks ?? runningTasks };
+  return { byRef, requests, running, waiting, runningTasks: input.runningTasks ?? runningTasks, runningList: [] };
 }
 
 type SessionFacts = Pick<Session, 'id' | 'taskId'>;
@@ -561,22 +667,25 @@ function runningOn(tasks: readonly TaskFacts[], shown: readonly IssueFacts[], re
 /**
  * What the board says of each running task it shows: its step, from the
  * latest lines hostd already stored from its session's pane (`session_log`),
- * and since when it has run. One query for each, however many cards run, and
- * none for a task on no card shown; nothing asks hostd or GitHub. A read that
- * fails is a card with no step, or timed from its start, not a board that
- * fails.
+ * and since when it has run. One query for each, however many cards run; a
+ * step only for a task on a card shown, and since when for every running task
+ * given (`timed`), which the count's list says too. Nothing asks hostd or
+ * GitHub. A read that fails is a card with no step, or timed from its start,
+ * not a board that fails.
  */
 async function readLive(
   running: readonly TaskFacts[],
   sessions: readonly SessionFacts[],
+  timed: readonly TaskFacts[] = running,
 ): Promise<{ steps: Map<string, string[]>; since: Map<string, string | null> }> {
   const ids = new Set(running.map((task) => task.id));
+  const timedIds = new Set([...ids, ...timed.map((task) => task.id)]);
   const watched = sessions.filter((session) => session.taskId !== null && ids.has(session.taskId));
   const [lines, since] = await Promise.all([
     watched.length === 0
       ? new Map<string, string[]>()
       : (async () => sessionStore.recentLines(watched.map((session) => session.id), STEP_LINES))().catch(() => new Map<string, string[]>()),
-    ids.size === 0 ? new Map<string, string | null>() : (async () => taskStore.runningSince([...ids]))().catch(() => new Map<string, string | null>()),
+    timedIds.size === 0 ? new Map<string, string | null>() : (async () => taskStore.runningSince([...timedIds]))().catch(() => new Map<string, string | null>()),
   ]);
   return { steps: new Map(watched.map((session) => [session.taskId!, lines.get(session.id) ?? []] as const)), since };
 }
@@ -609,9 +718,12 @@ export async function readBoardWork(
     .map((request) => `request:${request.id.slice(0, 8)}`);
   const pullSubjects = (input.pulls ?? []).map((pull) => pull.ref);
   const linkedRequests = [...(input.itemRequests?.values() ?? [])].flat();
-  const [onCards, going, stallEvents, sendBacks, count] = await Promise.all([
+  const [onCards, going, runningNow, stallEvents, sendBacks, count] = await Promise.all([
     taskStore.listTasksOnSubjects([...new Set([...subjects, ...requestSubjects, ...intakeSubjects, ...pullSubjects, ...linkedRequests])]),
     taskStore.listTasks({ states: ['queued', 'running', 'paused'], limit: 200 }),
+    // The running ones on their own for the count's list: under one limit
+    // with the queued and the paused, a long queue left running ones out.
+    (async () => taskStore.listTasks({ states: ['running'], limit: 200 }))().catch(() => [] as TaskFacts[]),
     listEventsOfType(REVIEW_STALLED, since),
     // A table not there yet is no send-backs, not a board that fails.
     (async () => stageMoves.sendBackCounts())().catch(() => new Map<string, number>()),
@@ -625,18 +737,23 @@ export async function readBoardWork(
   // that could start, one read each.
   const candidates = input.waiting ? buildCandidates(waitingCards(shown, tasks)) : new Set<string>();
   const buildRepos = input.repos.filter((repo) => candidates.has(repo.name)).map((repo) => ({ id: repo.id, name: repo.name, fullName: repo.fullName ?? repo.name, defaultBranch: repo.defaultBranch ?? 'main' }));
-  const [live, waiting] = await Promise.all([
-    readLive(runningOn(tasks, shown, input.requests, input.pulls), input.sessions ?? []),
+  const [live, waiting, titled] = await Promise.all([
+    readLive(runningOn(tasks, shown, input.requests, input.pulls), input.sessions ?? [], runningNow),
     input.waiting ? readWaitingContext(input.waiting, { buildRepos }) : Promise.resolve(undefined),
+    untitledIssues(runningNow, input.issues, input.repos),
   ]);
   const { sessions: _sessions, waiting: _reads, ...facts } = input;
-  return boardWork({ ...facts, tasks, stallEvents, now, sendBacks, ...live, runningTasks: count ?? undefined, ...(waiting ? { waiting } : {}) });
+  const work = boardWork({ ...facts, tasks, stallEvents, now, sendBacks, ...live, runningTasks: count ?? undefined, ...(waiting ? { waiting } : {}) });
+  const list = runningList(runningNow, { bots: input.bots, repos: input.repos, requests: input.requests, issues: [...input.issues, ...titled], since: live.since });
+  return { ...work, runningList: list };
 }
 
-/** What the board polls for every few seconds while a card it shows is running. */
+/** What the board polls for every few seconds while a card it shows is running, or the count's list is open. */
 export interface BoardActivity {
   /** Tasks running across the install. */
   running: number;
+  /** The first of them, each named, as the count's list says them (`runningList`). */
+  runningTasks: RunningTask[];
   /** Each card shown with a task running on it, by its ref, with every task going on it now. */
   cards: { ref: string; active: BoardTask[] }[];
 }
@@ -657,7 +774,7 @@ export async function readBoardActivity(repoName: string | undefined, now = new 
   // Nothing running anywhere is no card running, and nothing else is read.
   // The poll read every link and every repository's issues before finding
   // that, every five seconds for each person looking.
-  if (runningNow.length === 0) return { running, cards: [] };
+  if (runningNow.length === 0) return { running, runningTasks: [], cards: [] };
 
   // Numbered, the board's cards are work items' (`itemCards`), read across
   // every repository and filtered after grouping; the poll says them the same
@@ -681,7 +798,14 @@ export async function readBoardActivity(repoName: string | undefined, now = new 
   const ignored = ignoredSubjects(issueList);
   const loose = loosePulls(links, repoList, issueList).filter((pull) => !ignored.has(pull.ref));
   const live = runningOn(runningNow, shown, requests, loose);
-  if (live.length === 0) return { running, cards: [] };
+  // Every running task is named, on a card shown or not: the list is
+  // install-wide, as the count is. One read of since when for all of them,
+  // and the steps only for the cards'.
+  const [titled, timedLive] = await Promise.all([untitledIssues(runningNow, issueList, repoList), readLive(live, sessionList, runningNow)]);
+  // Titled from the rows the board titles from, `withItemPulls`', so a row
+  // keeps its title between a read of the whole board and a poll.
+  const runningTasks = runningList(runningNow, { bots: crew, repos: repoList, requests: requestList, issues: [...issueList, ...titled], since: timedLive.since });
+  if (live.length === 0) return { running, runningTasks, cards: [] };
 
   const liveSubjects = new Set(live.map((task) => task.subjectRef));
   let issuesLive = shown.filter((issue) => subjectsOf(issue).some((subject) => liveSubjects.has(subject)));
@@ -705,16 +829,14 @@ export async function readBoardActivity(repoName: string | undefined, now = new 
     requestsLive = requests.filter((request) => requestsLive.includes(request) || ofLiveItem(subjectOfRequest(request)));
   }
   const itemRequests = numbered ? requestsOnCards(links, repoList, issuesLive) : undefined;
-  const [onCards, { steps, since }] = await Promise.all([
-    taskStore.listTasksOnSubjects([
-      ...new Set([
-        ...issuesLive.flatMap(subjectsOf),
-        ...requestsLive.map(subjectOfRequest),
-        ...pullsLive.map((pull) => pull.ref),
-        ...[...(itemRequests?.values() ?? [])].flat(),
-      ]),
+  const { steps, since } = timedLive;
+  const onCards = await taskStore.listTasksOnSubjects([
+    ...new Set([
+      ...issuesLive.flatMap(subjectsOf),
+      ...requestsLive.map(subjectOfRequest),
+      ...pullsLive.map((pull) => pull.ref),
+      ...[...(itemRequests?.values() ?? [])].flat(),
     ]),
-    readLive(live, sessionList),
   ]);
   const work = boardWork({ issues: issuesLive, tasks: onCards, bots: crew, repos: repoList, gates: [], stallEvents: [], requests: requestsLive, now, steps, since, pulls: pullsLive, itemRequests });
   let cards: { ref: string; active: BoardTask[] }[];
@@ -742,6 +864,7 @@ export async function readBoardActivity(repoName: string | undefined, now = new 
   }
   return {
     running,
+    runningTasks,
     cards: cards.filter((card) => card.active.some((task) => task.state === 'running')).sort((a, b) => a.ref.localeCompare(b.ref)),
   };
 }

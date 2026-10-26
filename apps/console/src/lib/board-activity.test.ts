@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Board, BoardCard, CardTask } from './api';
+import type { Board, BoardCard, CardTask, RunningTask } from './api';
 import { needsFullRead, runningRefs, withActivity, type BoardActivity } from './board-activity';
 
 const NOW = '2026-09-24T12:00:00.000Z';
@@ -69,5 +69,19 @@ describe('a poll of the running cards', () => {
       { ref: 'openadlc#3', active: [task('running')] },
     ]);
     expect(needsFullRead(BOARD, elsewhere)).toBe(false);
+  });
+
+  it('lists the running tasks as the poll names them, and keeps the board’s own list from a poll that names none', () => {
+    const triage: RunningTask = {
+      id: 'task-1', bot: 'intake', kind: 'intake', skill: null, round: 0, subject: 'request:b4378305', repo: null,
+      title: 'Open the running count', opens: 'request:b4378305', since: NOW,
+    };
+    const listed: Board = { ...BOARD, runningTasks: [] };
+    // A triage on a request is on no card: no card's news, and no reason to read the whole board.
+    const named: BoardActivity = { ...activity(BOARD.columns.flatMap((column) => column.cards).filter((one) => one.ref !== 'openadlc#17').map((one) => ({ ref: one.ref, active: one.active ?? [] })), 3), runningTasks: [triage] };
+    expect(needsFullRead(listed, named)).toBe(false);
+    expect(withActivity(listed, named).runningTasks).toEqual([triage]);
+    // An older bridge's poll says no list: the board's own stays.
+    expect(withActivity({ ...BOARD, runningTasks: [triage] }, activity([], 1)).runningTasks).toEqual([triage]);
   });
 });

@@ -204,6 +204,26 @@ export interface MergeLineEntry {
   heldFor?: string | null;
 }
 
+/** A task running anywhere in the install, as the list under the board's count says it (the bridge's `RunningTask`). */
+export interface RunningTask {
+  id: string;
+  /** The bot's name, labelled as a card's bot is. */
+  bot: string;
+  kind: string;
+  /** Its skill where it is not its kind's own: `resolve-conflict`. */
+  skill: string | null;
+  round: number;
+  /** As stored: `api#12`, `request:<id8>`, `api@3f2c1a9`, `api#testing`. */
+  subject: string;
+  repo: string | null;
+  /** The issue's or the request's title; null when the bridge read nothing that names it. */
+  title: string | null;
+  /** The subject the row opens in the item sheet; null when there is nothing to open. */
+  opens: string | null;
+  /** When it last began running. */
+  since: string | null;
+}
+
 export interface Board {
   repo: string;
   repos: string[];
@@ -216,6 +236,8 @@ export interface Board {
   idle: number;
   /** Tasks running across the install, whatever the board shows. Absent from an older bridge. */
   running?: number;
+  /** The first of them, each named, for the list the count opens: install-wide too. Absent from an older bridge. */
+  runningTasks?: RunningTask[];
   /**
    * Said of a board with no card on it: whether anything went to Done before
    * the week Done shows, which the bridge does not read. Such a board is a
