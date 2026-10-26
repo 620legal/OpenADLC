@@ -228,7 +228,7 @@ variable "iap_oauth2_client_secret" {
 # ---------------------------------------------------------------- egress
 
 variable "extra_allowed_domains" {
-  description = "Domains to add to the egress allowlist, for example your testing environment's hostname. A private package registry goes in registry_host instead, which also tells hostd about it."
+  description = "Domains to add to the egress allowlist, beyond the defaults in main.tf's allowed_egress_domains: anything further the work needs goes here, for example your testing environment's hostname or a host a repository's toolchain downloads from. A private package registry goes in registry_host instead, which also tells hostd about it."
   type        = list(string)
   default     = []
 }

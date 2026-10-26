@@ -34,6 +34,48 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential python3 python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
+# uv, for a repository built with it. Such a repository's `make ci` is `uv sync
+# --frozen` and `uv run …`, and the image had Debian's Python and nothing to
+# drive it: a builder there stopped at the CI gate on "uv: command not found",
+# and no commit in it could pass `openadlc-ci`. uv also brings the Python a
+# repository pins when it is not the image's 3.11, from python-build-standalone's
+# GitHub releases, and checks each against the hash uv itself carries for it.
+#
+# It is uv's wheel from PyPI, not its installer script or a release tarball:
+# pypi.org and files.pythonhosted.org are on the cloud host's egress allowlist,
+# and an engine update builds this image there, through that proxy. pip, in a
+# venv thrown away in the same layer, refuses any file whose sha256 is not one
+# of these two: the manylinux2014 wheels for amd64 and arm64, the architectures
+# the image is built for. Only the two commands and the licences are kept, the
+# licences beside Node's. No engine update moves uv: a new one is a new version
+# here and its two hashes, from https://pypi.org/project/uv/<version>/#files.
+#
+# /etc/uv/uv.toml sends uv's Python downloads to GitHub's releases. uv 0.13
+# asks Astral's own mirror, releases.astral.sh, first, which the cloud proxy
+# refuses, and falls back to GitHub with a warning: every Python a task
+# installed would have counted a refusal toward the egress alert. The download
+# is checked against the same hash wherever it comes from, and a repository's
+# own uv settings still come first.
+RUN uv_version=0.13.5 \
+    && printf 'uv==%s --hash=sha256:%s --hash=sha256:%s\n' "$uv_version" \
+         fa8d26e08e34c29c0c4e820cf3181757086d547240b4f4d31ff1d8bd810ca946 \
+         2386c2dc9b59fc1d39b1c500e4319d71d3268232eb3b38e29cd6775d6269e8d4 \
+         > /tmp/uv-requirements.txt \
+    && python3 -m venv /tmp/uv-pip \
+    && /tmp/uv-pip/bin/pip download --no-cache-dir --disable-pip-version-check --progress-bar off \
+         --no-deps --only-binary :all: --require-hashes -r /tmp/uv-requirements.txt -d /tmp/uv \
+    && python3 -m zipfile -e /tmp/uv/uv-"$uv_version"-*.whl /tmp/uv/wheel \
+    && install -m 0755 /tmp/uv/wheel/uv-"$uv_version".data/scripts/uv /tmp/uv/wheel/uv-"$uv_version".data/scripts/uvx /usr/local/bin/ \
+    && install -d /usr/local/share/doc/uv \
+    && install -m 0644 /tmp/uv/wheel/uv-"$uv_version".dist-info/licenses/LICENSE-APACHE \
+         /tmp/uv/wheel/uv-"$uv_version".dist-info/licenses/LICENSE-MIT /usr/local/share/doc/uv/ \
+    && rm -rf /tmp/uv /tmp/uv-pip /tmp/uv-requirements.txt \
+    && install -d /etc/uv \
+    && printf '%s\n' 'python-install-mirror = "https://github.com/astral-sh/python-build-standalone/releases/download"' \
+         > /etc/uv/uv.toml \
+    && said="$(uv --version)" \
+    && case "$said" in "uv $uv_version" | "uv $uv_version "*) echo "$said" ;; *) echo "uv says \"$said\", not $uv_version" >&2; exit 1 ;; esac
+
 # Empty on a fresh install, which takes the Node major below. An update sets
 # the patch: rebuilding from the major's repository would move Node inside a
 # candidate that was only asked to move something else. Declared here, not at
