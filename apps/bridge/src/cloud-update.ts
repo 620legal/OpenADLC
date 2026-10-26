@@ -30,7 +30,7 @@ import {
  * what `self-update.ts` does in place of a checkout's restart.
  *
  * Such an install runs no checkout. The bridge and the console are Cloud Run
- * services, and hostd runs on a host whose `fleet-hostd` unit starts it from
+ * services, and hostd runs on a host whose `openadlc-hostd` unit starts it from
  * an image; all three run a release's images (`RELEASE_IMAGES`: the bridge
  * and hostd `service`, the console `console`), by digest, through the
  * install's Artifact Registry mirror of ghcr.io. The bots' image is not a
@@ -179,7 +179,7 @@ function capital(text: string): string {
  * How the host goes back onto what it ran, as a person runs it on the host.
  * The host's unit takes the image file only when it names this install's
  * release image by digest; anything else it passes over for the image hostd
- * last started on (`/var/lib/fleet/hostd-image.started`, which is the new
+ * last started on (`/var/lib/openadlc/hostd-image.started`, which is the new
  * release once hostd came up on it), and only then for the module's
  * `hostd_image`. So a release image goes back by writing it into the file,
  * and the module's own image (a tag, on a fresh install) only by removing
@@ -188,10 +188,17 @@ function capital(text: string): string {
 function hostBack(previous: string | null, install: CloudInstall): string {
   const release = `${install.mirror}/${install.repo.toLowerCase()}/service@`;
   if (previous?.startsWith(release) && /@sha256:[0-9a-f]{64}$/.test(previous)) {
-    return `the host onto ${previous} (on the host: sudo sh -c 'echo ${previous} > /var/lib/fleet/hostd-image' && sudo systemctl restart fleet-hostd)`;
+    return `the host onto ${previous} (on the host: sudo sh -c 'echo ${previous} > /var/lib/openadlc/hostd-image' && sudo systemctl restart openadlc-hostd${NOT_RENAMED})`;
   }
-  return `the host onto the module's hostd_image${previous ? `, ${previous}` : ''} (on the host: sudo rm -f /var/lib/fleet/hostd-image /var/lib/fleet/hostd-image.started && sudo systemctl restart fleet-hostd; removing only the first starts it on the image it last ran, the new release)`;
+  return `the host onto the module's hostd_image${previous ? `, ${previous}` : ''} (on the host: sudo rm -f /var/lib/openadlc/hostd-image /var/lib/openadlc/hostd-image.started && sudo systemctl restart openadlc-hostd; removing only the first starts it on the image it last ran, the new release${NOT_RENAMED})`;
 }
+
+/**
+ * What a host made before the rename to OpenADLC has instead, until a person
+ * renames it (docs/runbooks/rename-gcp-host.md): the bridge cannot see which
+ * a host has. Remove once every install has been renamed.
+ */
+const NOT_RENAMED = '; on a host not renamed yet, /var/lib/fleet and fleet-hostd';
 
 /** A finished run's reason: what each part runs now. */
 export function cloudUpdatedReason(tag: string, target: CloudImages): string {
@@ -885,12 +892,12 @@ export class CloudUpdate {
       if (now && now.startedAt !== before.startedAt) {
         if (now.service === target.service) return;
         throw new Error(
-          `hostd came back on ${now.service ?? 'an image it does not name'}, not on ${target.service}: the host's fleet-hostd unit passed the file over (journalctl -u fleet-hostd on the host says why)`,
+          `hostd came back on ${now.service ?? 'an image it does not name'}, not on ${target.service}: the host's openadlc-hostd unit passed the file over (journalctl -u openadlc-hostd on the host says why${NOT_RENAMED})`,
         );
       }
       if (Date.now() > deadline) {
         throw new Error(
-          `hostd was not back on ${target.service} within ${minutes(limit)}${now ? '' : away ? ` (last: ${away.slice(0, 200)})` : ''}; the host may still be pulling the images (journalctl -u fleet-hostd on the host)`,
+          `hostd was not back on ${target.service} within ${minutes(limit)}${now ? '' : away ? ` (last: ${away.slice(0, 200)})` : ''}; the host may still be pulling the images (journalctl -u openadlc-hostd on the host${NOT_RENAMED})`,
         );
       }
     }

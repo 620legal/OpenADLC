@@ -3,7 +3,7 @@ import { GcpSecretStore } from './gcp-secrets.js';
 
 /** Secret Manager's REST surface, as much of it as the store touches. */
 function fakeSecretManager() {
-  const secrets = new Map<string, { versions: { name: string; data: string; state: string }[] }>();
+  const secrets = new Map<string, { labels: Record<string, string>; versions: { name: string; data: string; state: string }[] }>();
   let serial = 0;
   const json = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -46,16 +46,24 @@ function fakeSecretManager() {
     match = path.match(/^projects\/[^/]+\/secrets\/([^/:]+)$/);
     if (match && method === 'DELETE') return json(secrets.delete(match[1]!) ? 200 : 404, {});
     if (/^projects\/[^/]+\/secrets$/.test(path) && method === 'POST') {
-      secrets.set(url.searchParams.get('secretId') ?? '', { versions: [] });
+      secrets.set(url.searchParams.get('secretId') ?? '', { labels: body.labels ?? {}, versions: [] });
       return json(200, {});
     }
     if (/^projects\/[^/]+\/secrets$/.test(path)) {
-      return json(200, { secrets: [...secrets.keys()].map((id) => ({ name: `projects/p/secrets/${id}` })) });
+      // Only the one filter the store sends: `labels.<key>=<value>`.
+      const [key, value] = (url.searchParams.get('filter') ?? '').replace(/^labels\./, '').split('=');
+      const listed = [...secrets.entries()].filter(([, secret]) => key === undefined || secret.labels[key] === value);
+      return json(200, { secrets: listed.map(([id]) => ({ name: `projects/p/secrets/${id}` })) });
     }
     return json(500, { path, method });
   }) as typeof fetch;
 
-  return { fetchImpl, secrets };
+  /** A secret as `gcloud secrets create` makes one, with one version. */
+  const made = (id: string, label: string, value: string) => {
+    secrets.set(id, { labels: { [label]: 'secret' }, versions: [{ name: `projects/p/secrets/${id}/versions/${++serial}`, data: Buffer.from(value).toString('base64'), state: 'ENABLED' }] });
+  };
+
+  return { fetchImpl, secrets, made };
 }
 
 describe('the Secret Manager store', () => {
@@ -73,7 +81,7 @@ describe('the Secret Manager store', () => {
     await store.set('github-refresh-atlas', 'ghr_first');
     await store.set('github-refresh-atlas', 'ghr_second');
     expect(await store.get('github-refresh-atlas')).toBe('ghr_second');
-    const states = secrets.get('fleet-github-refresh-atlas')?.versions.map((v) => v.state);
+    const states = secrets.get('openadlc-github-refresh-atlas')?.versions.map((v) => v.state);
     expect(states).toEqual(['DESTROYED', 'ENABLED']);
   });
 
@@ -100,7 +108,7 @@ describe('the Secret Manager store', () => {
     await Promise.all([overlapping.set('github-refresh-atlas', 'ghr_second'), overlapping.set('github-refresh-atlas', 'ghr_third')]);
 
     expect(await store.get('github-refresh-atlas')).toBe('ghr_third');
-    expect(secrets.get('fleet-github-refresh-atlas')?.versions.map((v) => v.state)).toEqual(['DESTROYED', 'DESTROYED', 'ENABLED']);
+    expect(secrets.get('openadlc-github-refresh-atlas')?.versions.map((v) => v.state)).toEqual(['DESTROYED', 'DESTROYED', 'ENABLED']);
   });
 
   it('lists refs by prefix, with `:` surviving the round trip, and deletes', async () => {
@@ -113,6 +121,53 @@ describe('the Secret Manager store', () => {
     expect(await store.list()).toContain('scope:thing');
     await store.delete('ssh-signing-atlas');
     expect(await store.get('ssh-signing-atlas')).toBeNull();
+  });
+
+  it('makes a new ref under OpenADLC’s name and label', async () => {
+    const { fetchImpl, secrets } = fakeSecretManager();
+    await new GcpSecretStore({ fetch: fetchImpl }).set('github-refresh-atlas', 'ghr_first');
+    expect([...secrets.keys()]).toEqual(['openadlc-github-refresh-atlas']);
+    expect(secrets.get('openadlc-github-refresh-atlas')?.labels).toEqual({ openadlc: 'secret' });
+  });
+
+  it('reads and writes a ref where an install from before the rename keeps it, rather than signing its bots out', async () => {
+    // Read under the new names alone, the install's first start on this
+    // release found no refresh token, no app key and no internal secret.
+    const { fetchImpl, secrets, made } = fakeSecretManager();
+    made('fleet-github-refresh-atlas', 'fleet', 'ghr_first');
+    made('fleet-scope__thing', 'fleet', 'x');
+    const store = new GcpSecretStore({ fetch: fetchImpl });
+    expect(await store.get('github-refresh-atlas')).toBe('ghr_first');
+    expect(await store.list()).toEqual(['github-refresh-atlas', 'scope:thing']);
+
+    await store.set('github-refresh-atlas', 'ghr_second');
+    expect(await store.get('github-refresh-atlas')).toBe('ghr_second');
+    // One place: the release before reads the old name, and the rename copies from it.
+    expect(secrets.has('openadlc-github-refresh-atlas')).toBe(false);
+    expect(secrets.get('fleet-github-refresh-atlas')?.versions.map((v) => v.state)).toEqual(['DESTROYED', 'ENABLED']);
+    expect(await store.beforeRename()).toEqual(['fleet-github-refresh-atlas', 'fleet-scope__thing']);
+  });
+
+  it('reads and writes the new name once the rename has copied a ref there, and lists it once', async () => {
+    const { fetchImpl, secrets, made } = fakeSecretManager();
+    made('fleet-github-refresh-atlas', 'fleet', 'ghr_first');
+    made('openadlc-github-refresh-atlas', 'openadlc', 'ghr_first');
+    const store = new GcpSecretStore({ fetch: fetchImpl });
+    await store.set('github-refresh-atlas', 'ghr_second');
+    expect(await store.get('github-refresh-atlas')).toBe('ghr_second');
+    expect(secrets.get('fleet-github-refresh-atlas')?.versions.map((v) => v.state)).toEqual(['ENABLED']);
+    expect(await store.list()).toEqual(['github-refresh-atlas']);
+  });
+
+  it('deletes a ref under both names, so the old one is not read in its place', async () => {
+    const { fetchImpl, secrets, made } = fakeSecretManager();
+    made('fleet-ssh-signing-atlas', 'fleet', 'old');
+    made('openadlc-ssh-signing-atlas', 'openadlc', 'new');
+    const store = new GcpSecretStore({ fetch: fetchImpl });
+    await store.delete('ssh-signing-atlas');
+    expect(await store.get('ssh-signing-atlas')).toBeNull();
+    expect([...secrets.keys()]).toEqual([]);
+    expect(await store.beforeRename()).toEqual([]);
   });
 
   it('refuses a ref it could not list back as itself', async () => {

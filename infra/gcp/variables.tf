@@ -16,7 +16,7 @@ variable "zone" {
 }
 
 variable "name_prefix" {
-  description = "Prefix for the names of the resources this module makes. One install per project: the runtime secrets are named `fleet-<ref>` whatever this prefix is, and both service accounts, the host's and the bridge's, read and write every secret in the project, so two installs in one project would overwrite and read each other's credentials."
+  description = "Prefix for the names of the resources this module makes. One install per project: the runtime secrets are named `openadlc-<ref>` whatever this prefix is, and both service accounts, the host's and the bridge's, read and write every secret in the project, so two installs in one project would overwrite and read each other's credentials."
   type        = string
   default     = "openadlc"
 }
@@ -46,13 +46,13 @@ variable "host_image" {
 }
 
 variable "host_cloud_init" {
-  description = "Override the host's cloud-init entirely. Leave empty for the one this module ships, which starts the egress proxy, the egress firewall and hostd (logging is Container-Optimized OS's own agent, turned on by instance metadata, and stays on either way). Setting this to your own means the egress allowlist is yours to enforce: nothing else does it. So is writing the database's certificate authority (the `<name_prefix>-database-ca` secret) to /var/lib/fleet/database-ca/server-ca.pem before hostd starts, where the database URL looks for it."
+  description = "Override the host's cloud-init entirely. Leave empty for the one this module ships, which starts the egress proxy, the egress firewall and hostd (logging is Container-Optimized OS's own agent, turned on by instance metadata, and stays on either way). Setting this to your own means the egress allowlist is yours to enforce: nothing else does it. So is writing the database's certificate authority (the `<name_prefix>-database-ca` secret) to /var/lib/openadlc/database-ca/server-ca.pem before hostd starts, where the database URL looks for it."
   type        = string
   default     = ""
 }
 
 variable "hostd_image" {
-  description = "The hostd image the host runs until an update names another in /var/lib/fleet/hostd-image, and whenever that file names nothing it can take. `openadlc cloud configure` writes the release's `service` image by digest through the mirror; with --build, the one infra/gcp/install.sh --build pushed from infra/local/Dockerfile.service, which the host pulls again at every start."
+  description = "The hostd image the host runs until an update names another in /var/lib/openadlc/hostd-image, and whenever that file names nothing it can take. `openadlc cloud configure` writes the release's `service` image by digest through the mirror; with --build, the one infra/gcp/install.sh --build pushed from infra/local/Dockerfile.service, which the host pulls again at every start."
   type        = string
 }
 
@@ -234,7 +234,7 @@ variable "extra_allowed_domains" {
 }
 
 variable "registry_host" {
-  description = "The bare host name of a private npm registry the repositories install from, such as npm.internal.example: no scheme, path or port. It is added to the egress allowlist and handed to hostd as OPENADLC_REGISTRY_HOST. The token is not a variable, so it stays out of the state: store it in Secret Manager as `fleet-registry-token` after the first apply (docs/self-hosting.md). Empty: none."
+  description = "The bare host name of a private npm registry the repositories install from, such as npm.internal.example: no scheme, path or port. It is added to the egress allowlist and handed to hostd as OPENADLC_REGISTRY_HOST. The token is not a variable, so it stays out of the state: store it in Secret Manager as `openadlc-registry-token` after the first apply (docs/self-hosting.md). Empty: none."
   type        = string
   default     = ""
 

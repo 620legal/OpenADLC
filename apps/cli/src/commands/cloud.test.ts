@@ -1,5 +1,6 @@
+import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { imageAttestationCheckArgs, releaseAssets } from '@openadlc/shared';
@@ -1287,13 +1288,19 @@ describe('the release an update takes', () => {
   });
 });
 
+/** What `onEitherHost` makes of the two commands, the renamed host's first. */
+function eitherHost(renamed: string, notRenamed: string): string {
+  return `if test -x /etc/openadlc/hostd-image.sh; then ${renamed}; else ${notRenamed}; fi`;
+}
+
 describe('openadlc cloud update', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   const settings = { project_id: 'example-project', region: 'us-central1', zone: 'us-central1-b', name_prefix: 'openadlc', bridge_image: 'old-bridge', console_image: 'old-console', hostd_image: 'old-hostd', bot_image: 'bot' };
-  const hostCheck = 'test -x /etc/fleet/hostd-image.sh';
+  // A host renamed, or one with the names from before the rename.
+  const hostCheck = 'test -x /etc/openadlc/hostd-image.sh || test -x /etc/fleet/hostd-image.sh';
 
   /** The install, stood in for: the bridge's ready revision runs `running`, and each roll exits as `codes` says. */
   function install(
@@ -1333,7 +1340,7 @@ describe('openadlc cloud update', () => {
         if (
           options.hostStarted &&
           JSON.stringify(args) ===
-            JSON.stringify(['compute', 'ssh', 'openadlc-host-1', '--zone', 'us-central1-b', '--project', 'example-project', '--tunnel-through-iap', '--quiet', '--', 'cat /var/lib/fleet/hostd-image.started'])
+            JSON.stringify(['compute', 'ssh', 'openadlc-host-1', '--zone', 'us-central1-b', '--project', 'example-project', '--tunnel-through-iap', '--quiet', '--', eitherHost('cat /var/lib/openadlc/hostd-image.started', 'cat /var/lib/fleet/hostd-image.started')])
         ) {
           return { code: 0, stdout: `${options.hostStarted}\n`, stderr: '' };
         }
@@ -1369,17 +1376,24 @@ describe('openadlc cloud update', () => {
     expect(ran[3]).toEqual({ step: 'bridge', command: 'gcloud', args: ['run', 'services', 'update', 'openadlc-bridge', '--image', mirrored('v0.2.0', 'service'), ...where] });
     const host = ran[2]!.args;
     expect(host.slice(0, -1)).toEqual(['compute', 'ssh', 'openadlc-host-1', '--zone', 'us-central1-b', '--project', 'example-project', '--tunnel-through-iap', '--']);
-    const remote = host.at(-1) ?? '';
-    expect(remote).toMatch(/^sudo sh -c "[^"$`\\]*"$/);
+    // One whole command for each set of the host's names, and nothing root
+    // runs is expanded.
+    const branches = /^if test -x \/etc\/openadlc\/hostd-image\.sh; then (sudo sh -c "[^"$`\\]*"); else (sudo sh -c "[^"$`\\]*"); fi$/.exec(host.at(-1) ?? '');
+    expect(branches).not.toBeNull();
     const service = mirrored('v0.2.0', 'service');
-    // Pulled first, so a pull that fails changes nothing on the host.
-    const pull = remote.indexOf(`HOME=/var/lib/fleet/home docker pull ${service}`);
-    expect(pull).toBeGreaterThan(remote.indexOf('set -e'));
-    expect(pull).toBeLessThan(remote.indexOf(`echo ${service} > /var/lib/fleet/hostd-image.next`));
-    expect(remote).toContain('mv -f /var/lib/fleet/hostd-image.next /var/lib/fleet/hostd-image');
-    // On disk before hostd restarts onto it, and checked by what started after.
-    expect(remote.indexOf('sync')).toBeLessThan(remote.indexOf('systemctl restart fleet-hostd'));
-    expect(remote.indexOf('systemctl restart fleet-hostd')).toBeLessThan(remote.indexOf(`grep -qxF ${service} /var/lib/fleet/hostd-image.started`));
+    for (const [remote, dir, unit] of [
+      [branches![1]!, '/var/lib/openadlc', 'openadlc-hostd'],
+      [branches![2]!, '/var/lib/fleet', 'fleet-hostd'],
+    ] as const) {
+      // Pulled first, so a pull that fails changes nothing on the host.
+      const pull = remote.indexOf(`HOME=${dir}/home docker pull ${service}`);
+      expect(pull).toBeGreaterThan(remote.indexOf('set -e'));
+      expect(pull).toBeLessThan(remote.indexOf(`echo ${service} > ${dir}/hostd-image.next`));
+      expect(remote).toContain(`mv -f ${dir}/hostd-image.next ${dir}/hostd-image`);
+      // On disk before hostd restarts onto it, and checked by what started after.
+      expect(remote.indexOf('sync')).toBeLessThan(remote.indexOf(`systemctl restart ${unit}`));
+      expect(remote.indexOf(`systemctl restart ${unit}`)).toBeLessThan(remote.indexOf(`grep -qxF ${service} ${dir}/hostd-image.started`));
+    }
     // The bot image is the host's own, which its weekly engine update moves.
     expect(ran.flatMap((one) => one.args).join(' ')).not.toContain('/bot');
     const said = printed.join('\n');
@@ -1416,8 +1430,8 @@ describe('openadlc cloud update', () => {
     const said = printed.join('\n');
     expect(said).toMatch(/console runs v0\.2\.0/);
     expect(said).toContain(`gcloud run services update openadlc-bridge --image ${mirrored('v0.2.0', 'service')} --region us-central1 --project example-project --quiet`);
-    expect(said).toContain("gcloud compute ssh openadlc-host-1 --zone us-central1-b --project example-project --tunnel-through-iap -- 'sudo sh -c \"");
-    expect(said).toContain('journalctl -u fleet-hostd');
+    expect(said).toContain("gcloud compute ssh openadlc-host-1 --zone us-central1-b --project example-project --tunnel-through-iap -- 'if test -x /etc/openadlc/hostd-image.sh; then sudo sh -c \"");
+    expect(said).toContain('then sudo journalctl -u openadlc-hostd -n 200 --no-pager; else sudo journalctl -u fleet-hostd -n 200 --no-pager; fi');
     expect(said).toContain('openadlc cloud update');
     expect(saved).toEqual([{ ...settings, console_image: mirrored('v0.2.0', 'console') }]);
   });
@@ -1533,7 +1547,7 @@ describe('openadlc cloud update', () => {
     const said = printed.join('\n');
     expect(said).toContain(`gcloud run services update openadlc-console --image ${at('v0.1.0', 'console')} --region us-central1 --project example-project --quiet`);
     // A host that ran the module's hostd_image goes back only once both files are gone: the unit falls back to the second first.
-    expect(said).toContain('sudo rm -f /var/lib/fleet/hostd-image /var/lib/fleet/hostd-image.started && sudo systemctl restart fleet-hostd');
+    expect(said).toContain('sudo rm -f /var/lib/openadlc/hostd-image /var/lib/openadlc/hostd-image.started && sudo systemctl restart openadlc-hostd');
   });
 
   it('says so, and fails, when the rolled settings could not be saved', async () => {
@@ -1589,9 +1603,17 @@ describe('the way back onto what a part ran', () => {
   it('writes a release image into the host’s file, and removes both files for anything else', () => {
     const release = `${MIRROR}/620legal/openadlc/service@${sha('a')}`;
     expect(goBackCommand(target, 'host', release)).toBe(
-      `gcloud compute ssh openadlc-host-1 --zone us-central1-b --project example-project --tunnel-through-iap -- 'sudo sh -c "echo ${release} > /var/lib/fleet/hostd-image" && sudo systemctl restart fleet-hostd'`,
+      `gcloud compute ssh openadlc-host-1 --zone us-central1-b --project example-project --tunnel-through-iap -- '${eitherHost(
+        `sudo sh -c "echo ${release} > /var/lib/openadlc/hostd-image" && sudo systemctl restart openadlc-hostd`,
+        `sudo sh -c "echo ${release} > /var/lib/fleet/hostd-image" && sudo systemctl restart fleet-hostd`,
+      )}'`,
     );
-    expect(goBackCommand(target, 'host', 'us-central1-docker.pkg.dev/example-project/openadlc/hostd:latest')).toContain('sudo rm -f /var/lib/fleet/hostd-image /var/lib/fleet/hostd-image.started');
+    expect(goBackCommand(target, 'host', 'us-central1-docker.pkg.dev/example-project/openadlc/hostd:latest')).toContain(
+      eitherHost(
+        'sudo rm -f /var/lib/openadlc/hostd-image /var/lib/openadlc/hostd-image.started && sudo systemctl restart openadlc-hostd',
+        'sudo rm -f /var/lib/fleet/hostd-image /var/lib/fleet/hostd-image.started && sudo systemctl restart fleet-hostd',
+      ),
+    );
     expect(goBackCommand(target, 'bridge', release)).toBe(`gcloud run services update openadlc-bridge --image ${release} --region us-central1 --project example-project --quiet`);
   });
 });
@@ -1603,5 +1625,35 @@ describe('the commands an update rolls with', () => {
     expect(rollSteps(target, good).map((step) => step.name)).toEqual(['console', 'host', 'bridge']);
     expect(() => rollSteps(target, { ...good, service: `${MIRROR}/620legal/openadlc/service@${sha('a')}; reboot` })).toThrow();
     expect(() => rollSteps(target, { ...good, console: `${MIRROR}/620legal/openadlc/service@${sha('b')}` })).toThrow();
+  });
+
+  it.each([
+    ['a host renamed to OpenADLC', 'openadlc', '/var/lib/openadlc', 'openadlc-hostd'],
+    ['a host not renamed yet, which has the names from before the rename', 'fleet', '/var/lib/fleet', 'fleet-hostd'],
+  ])('rolls %s under the names it has', (_, etc, dir, unit) => {
+    // Run by a shell as the host's would, with each /etc in a scratch
+    // directory and a sudo that only says what it was handed.
+    const target = { projectId: 'example-project', region: 'us-central1', zone: 'us-central1-b', prefix: 'openadlc', repo: REPO, mirror: MIRROR };
+    const good = { tag: 'v0.2.0', commit: commitOf('v0.2.0'), service: `${MIRROR}/620legal/openadlc/service@${sha('a')}`, console: `${MIRROR}/620legal/openadlc/console@${sha('b')}` };
+    const work = mkdtempSync(join(tmpdir(), 'openadlc-host-names-'));
+    try {
+      mkdirSync(join(work, 'etc', etc), { recursive: true });
+      writeFileSync(join(work, 'etc', etc, 'hostd-image.sh'), '');
+      chmodSync(join(work, 'etc', etc, 'hostd-image.sh'), 0o755);
+      mkdirSync(join(work, 'bin'));
+      writeFileSync(join(work, 'bin', 'sudo'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${join(work, 'sudo.log')}'\n`);
+      chmodSync(join(work, 'bin', 'sudo'), 0o755);
+      const remote = rollSteps(target, good).find((step) => step.name === 'host')!.args.at(-1)!.split(' /etc/').join(` ${work}/etc/`);
+      const ran = spawnSync('sh', ['-c', remote], { env: { PATH: `${join(work, 'bin')}:/usr/bin:/bin` }, encoding: 'utf8' });
+      expect(ran.status, ran.stderr).toBe(0);
+      const handed = readFileSync(join(work, 'sudo.log'), 'utf8');
+      expect(handed).toContain(`HOME=${dir}/home docker pull ${good.service}`);
+      expect(handed).toContain(`systemctl restart ${unit}`);
+      // Once, and only under the names this host has.
+      expect(handed.trim().split('\n')).toHaveLength(1);
+      for (const other of dir === '/var/lib/fleet' ? ['/var/lib/openadlc', 'openadlc-hostd'] : ['/var/lib/fleet', 'fleet-hostd']) expect(handed).not.toContain(other);
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
   });
 });

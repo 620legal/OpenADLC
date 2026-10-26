@@ -15,7 +15,32 @@
 # itself.
 
 write_files:
-  - path: /etc/fleet/squid.conf
+  # A host made before the rename to OpenADLC kept its state in /var/lib/fleet,
+  # under units named fleet-*, and the reset that brings it onto these names
+  # keeps its disk: the image hostd last ran on, the bots' sign-ins and the
+  # repositories' mirrors are in it. Started from an empty /var/lib/openadlc,
+  # hostd would run the module's hostd_image, maybe a release behind the
+  # database, with every subscription signed out. So the first boot on these
+  # names moves it, before any unit opens either. A host that has both is left
+  # as it is and said (docs/runbooks/rename-gcp-host.md). /etc and /run are not
+  # kept across boots, so nothing in them moves. Remove once every install has
+  # been renamed.
+  - path: /etc/openadlc/from-fleet.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -uo pipefail
+      old=/var/lib/fleet
+      new=/var/lib/openadlc
+      [ -e "$old" ] || exit 0
+      if [ -e "$new" ]; then
+        echo "[openadlc] $old and $new are both here, so $old is left as it is and hostd starts from $new: see docs/runbooks/rename-gcp-host.md" >&2
+        exit 1
+      fi
+      mv "$old" "$new" || { echo "[openadlc] could not move $old to $new, so hostd starts from an empty $new: see docs/runbooks/rename-gcp-host.md" >&2; exit 1; }
+      echo "[openadlc] moved $old to $new" >&2
+
+  - path: /etc/openadlc/squid.conf
     permissions: '0644'
     content: |
       # The egress allowlist, by name.
@@ -61,7 +86,7 @@ write_files:
       access_log syslog:local4.info squid
       cache_log /var/log/squid/cache.log
 
-  - path: /etc/systemd/system/fleet-egress-proxy.service
+  - path: /etc/systemd/system/openadlc-egress-proxy.service
     permissions: '0644'
     content: |
       [Unit]
@@ -71,24 +96,24 @@ write_files:
 
       [Service]
       Restart=always
-      ExecStartPre=-/usr/bin/docker rm -f fleet-egress
-      ExecStart=/usr/bin/docker run --rm --name fleet-egress \
+      ExecStartPre=-/usr/bin/docker rm -f openadlc-egress
+      ExecStart=/usr/bin/docker run --rm --name openadlc-egress \
         --network host \
-        -v /etc/fleet/squid.conf:/etc/squid/squid.conf:ro \
+        -v /etc/openadlc/squid.conf:/etc/squid/squid.conf:ro \
         -v /dev/log:/dev/log \
         ${proxy_image}
-      ExecStop=/usr/bin/docker stop fleet-egress
+      ExecStop=/usr/bin/docker stop openadlc-egress
 
       [Install]
       WantedBy=multi-user.target
 
-  - path: /etc/systemd/system/fleet-egress-firewall.service
+  - path: /etc/systemd/system/openadlc-egress-firewall.service
     permissions: '0644'
     content: |
       [Unit]
       Description=Force container egress through the proxy
-      After=fleet-egress-proxy.service docker.service
-      Requires=fleet-egress-proxy.service docker.service
+      After=openadlc-egress-proxy.service docker.service
+      Requires=openadlc-egress-proxy.service docker.service
 
       [Service]
       Type=oneshot
@@ -161,7 +186,7 @@ write_files:
       WantedBy=multi-user.target
 
   # Which hostd image this start runs, pulled before anything needs it. An
-  # update names it in /var/lib/fleet/hostd-image, one image reference: hostd
+  # update names it in /var/lib/openadlc/hostd-image, one image reference: hostd
   # writes it when the bridge asks it to restart onto a release (POST
   # /internal/restart-onto-image), and `openadlc cloud update` over IAP. The
   # bot image is not a release's, and stays bot_image (see the unit).
@@ -180,18 +205,18 @@ write_files:
   # the install was made with, under a database newer ones have migrated. A
   # file that does name a release image which will not pull fails the start
   # instead, and systemd tries again ten seconds later, for the same reason.
-  - path: /etc/fleet/hostd-image.sh
+  - path: /etc/openadlc/hostd-image.sh
     permissions: '0755'
     content: |
       #!/bin/bash
       set -uo pipefail
-      root=/var/lib/fleet
+      root=/var/lib/openadlc
       file=$root/hostd-image
       started=$root/hostd-image.started
       want='${hostd_release_image}'
-      mkdir -p "$root" /run/fleet
+      mkdir -p "$root" /run/openadlc
 
-      say() { echo "[fleet-hostd] $*" >&2; }
+      say() { echo "[openadlc-hostd] $*" >&2; }
 
       # hostd writes the file in place, as uid 1000, and $root is root's: so
       # the file is made here, empty, and made hostd's at every start, also
@@ -235,28 +260,28 @@ write_files:
         fi
       fi
       # What prepare-hostd.sh and the unit's ExecStart run.
-      printf '%s\n' "$image" > /run/fleet/running-hostd-image
+      printf '%s\n' "$image" > /run/openadlc/running-hostd-image
       say "hostd runs $image"
 
   # What hostd-image.sh falls back to: the image this start ran, once hostd
   # answers on it. Only then, so an image that never came up is never the
   # fallback. A new file moved over the old, both root's. It never fails the
   # start (ExecStartPost=-): a hostd slow to answer just leaves the last record.
-  - path: /etc/fleet/hostd-started.sh
+  - path: /etc/openadlc/hostd-started.sh
     permissions: '0755'
     content: |
       #!/bin/bash
       set -uo pipefail
-      image=$(cat /run/fleet/running-hostd-image) || exit 0
+      image=$(cat /run/openadlc/running-hostd-image) || exit 0
       for _ in $(seq 1 60); do
         if curl -sf -o /dev/null --max-time 2 http://127.0.0.1:${hostd_port}/healthz; then
-          printf '%s\n' "$image" > /var/lib/fleet/hostd-image.started.next &&
-            mv -f /var/lib/fleet/hostd-image.started.next /var/lib/fleet/hostd-image.started
+          printf '%s\n' "$image" > /var/lib/openadlc/hostd-image.started.next &&
+            mv -f /var/lib/openadlc/hostd-image.started.next /var/lib/openadlc/hostd-image.started
           exit 0
         fi
         sleep 2
       done
-      echo "[fleet-hostd] hostd did not answer on $image within a few minutes, so it is not recorded as the image to fall back to" >&2
+      echo "[openadlc-hostd] hostd did not answer on $image within a few minutes, so it is not recorded as the image to fall back to" >&2
 
   # What hostd needs that cannot be written here: the database URL carries a
   # generated password, so it is read from Secret Manager at each start rather
@@ -268,14 +293,14 @@ write_files:
   # directory — and the daemon reads those as paths on the host. Run from /app
   # inside its container, hostd named paths that did not exist out here, and
   # every bot came up with empty mounts.
-  - path: /etc/fleet/prepare-hostd.sh
+  - path: /etc/openadlc/prepare-hostd.sh
     permissions: '0755'
     content: |
       #!/bin/bash
       set -euo pipefail
-      root=/var/lib/fleet
+      root=/var/lib/openadlc
       # The image hostd-image.sh chose for this start.
-      hostd_in_use=$(cat /run/fleet/running-hostd-image)
+      hostd_in_use=$(cat /run/openadlc/running-hostd-image)
       mkdir -p "$root/home" "$root/work" "$root/logins"
       # hostd runs as the bots' uid (see the unit), so what it makes — worktrees,
       # sign-in folders — is theirs inside the containers too. Created by root,
@@ -365,10 +390,10 @@ write_files:
       image_id=$(docker image inspect -f '{{.Id}}' "$hostd_in_use")
       if [ ! -d "$root/app" ] || [ "$(cat "$root/app.image" 2>/dev/null)" != "$image_id" ]; then
         rm -rf "$root/app.next"
-        docker rm -f fleet-app-source >/dev/null 2>&1 || true
-        docker create --name fleet-app-source "$hostd_in_use" >/dev/null
-        docker cp fleet-app-source:/app "$root/app.next"
-        docker rm fleet-app-source >/dev/null
+        docker rm -f openadlc-app-source >/dev/null 2>&1 || true
+        docker create --name openadlc-app-source "$hostd_in_use" >/dev/null
+        docker cp openadlc-app-source:/app "$root/app.next"
+        docker rm openadlc-app-source >/dev/null
         if [ ! -d "$root/app" ]; then
           mv "$root/app.next" "$root/app"
         else
@@ -412,21 +437,21 @@ write_files:
         -v "$root:$root" -w "$root/app" "$hostd_in_use" \
         sh -c 'node packages/db/dist/cli/migrate.js && { node packages/db/dist/cli/seed.js || echo "[prepare-hostd] the seed reported a problem; hostd starts anyway" >&2; }'
 
-  - path: /etc/systemd/system/fleet-hostd.service
+  - path: /etc/systemd/system/openadlc-hostd.service
     permissions: '0644'
     content: |
       [Unit]
       Description=hostd
-      After=fleet-egress-firewall.service
-      Requires=fleet-egress-firewall.service
+      After=openadlc-egress-firewall.service
+      Requires=openadlc-egress-firewall.service
 
       [Service]
       Restart=always
       RestartSec=10
       # Where docker-credential-gcr writes the registry login. Root's home is
       # read-only on Container-Optimized OS.
-      Environment=HOME=/var/lib/fleet/home
-      ExecStartPre=/bin/mkdir -p /var/lib/fleet/home
+      Environment=HOME=/var/lib/openadlc/home
+      ExecStartPre=/bin/mkdir -p /var/lib/openadlc/home
       ExecStartPre=/usr/bin/docker-credential-gcr configure-docker --registries=${region}-docker.pkg.dev
       # The bot image, before hostd needs it. Without this the host came up
       # healthy and every task failed to start, because the docker driver had no
@@ -439,15 +464,15 @@ write_files:
       # with a newer registry image, `docker pull` it by hand.
       ExecStartPre=/bin/sh -c '/usr/bin/docker image inspect ${bot_image} >/dev/null 2>&1 || exec /usr/bin/docker pull ${bot_image}'
       # hostd's own image, chosen and pulled (hostd-image.sh).
-      ExecStartPre=/bin/bash /etc/fleet/hostd-image.sh
-      ExecStartPre=/bin/bash /etc/fleet/prepare-hostd.sh
-      ExecStartPre=-/usr/bin/docker rm -f fleet-hostd
+      ExecStartPre=/bin/bash /etc/openadlc/hostd-image.sh
+      ExecStartPre=/bin/bash /etc/openadlc/prepare-hostd.sh
+      ExecStartPre=-/usr/bin/docker rm -f openadlc-hostd
       # hostd itself goes through the proxy too. It is the thing that talks to
       # GitHub on a task's behalf, and an allowlist that exempts the component
       # with the credentials is not an allowlist. Two things hold it: the proxy
       # variables in hostd.env, with NODE_USE_ENV_PROXY, without which Node's
       # own fetch ignores the rest and went straight out; and the OUTPUT rule
-      # in fleet-egress-firewall, which refuses a new connection from hostd's
+      # in openadlc-egress-firewall, which refuses a new connection from hostd's
       # uid to anything but the host itself (the proxy), the metadata server,
       # the docker bridges and the VPC.
       #
@@ -468,29 +493,29 @@ write_files:
       # says. The file is where hostd writes the next one when it is asked to
       # restart onto a release; it then exits, and Restart=always brings it
       # back on that.
-      ExecStart=/bin/sh -c 'image=$$(cat /run/fleet/running-hostd-image) && exec /usr/bin/docker run --rm --name fleet-hostd \
+      ExecStart=/bin/sh -c 'image=$$(cat /run/openadlc/running-hostd-image) && exec /usr/bin/docker run --rm --name openadlc-hostd \
         --network host \
         --user 1000:1000 \
         --group-add $$(stat -c %%g /var/run/docker.sock) \
-        -e HOME=/var/lib/fleet/home \
+        -e HOME=/var/lib/openadlc/home \
         -e OPENADLC_HOSTD_IMAGE="$$image" \
-        -e OPENADLC_HOSTD_IMAGE_FILE=/var/lib/fleet/hostd-image \
+        -e OPENADLC_HOSTD_IMAGE_FILE=/var/lib/openadlc/hostd-image \
         -v /var/run/docker.sock:/var/run/docker.sock \
-        -v /var/lib/fleet:/var/lib/fleet \
-        -w /var/lib/fleet/app \
-        --env-file /var/lib/fleet/hostd.env \
+        -v /var/lib/openadlc:/var/lib/openadlc \
+        -w /var/lib/openadlc/app \
+        --env-file /var/lib/openadlc/hostd.env \
         "$$image" node apps/hostd/dist/main.js'
 
       # hostd ends each running task on SIGTERM: a few docker execs, a git
       # harvest and a docker rm for every one, which docker stop's default 10
       # seconds cut off with tasks still open. systemd waits a little longer
       # than docker does, so it never kills the stop itself.
-      ExecStop=/usr/bin/docker stop -t 300 fleet-hostd
+      ExecStop=/usr/bin/docker stop -t 300 openadlc-hostd
       TimeoutStopSec=330
 
       # The image hostd answered on, recorded for hostd-image.sh to fall back
       # to (hostd-started.sh), never failing the start.
-      ExecStartPost=-/bin/bash /etc/fleet/hostd-started.sh
+      ExecStartPost=-/bin/bash /etc/openadlc/hostd-started.sh
       # A start is the pulls, the app copied out, the migrations and the wait
       # for hostd to answer, and systemd's default of 90 seconds for all of it
       # would stop one partway through a release's first pull through the
@@ -505,6 +530,8 @@ runcmd:
   # the instance's `google-logging-enabled` metadata. The Ops Agent this used to
   # install has no package for COS, and the line failed on every boot.
   - systemctl daemon-reload
-  - systemctl enable --now fleet-egress-proxy.service
-  - systemctl enable --now fleet-egress-firewall.service
-  - systemctl enable --now fleet-hostd.service
+  # Before any unit below starts: they make /var/lib/openadlc.
+  - /bin/bash /etc/openadlc/from-fleet.sh
+  - systemctl enable --now openadlc-egress-proxy.service
+  - systemctl enable --now openadlc-egress-firewall.service
+  - systemctl enable --now openadlc-hostd.service

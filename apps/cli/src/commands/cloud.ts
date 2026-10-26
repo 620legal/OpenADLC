@@ -1432,12 +1432,37 @@ export interface RollStep {
   image: string;
 }
 
-/** Where the host's unit reads the hostd image an update names (infra/gcp/cloud-init/host.yaml, hostd-image.sh). */
-const HOSTD_IMAGE_FILE = '/var/lib/fleet/hostd-image';
+/** The host's state directory, where the files below are, and hostd's unit (infra/gcp/cloud-init/host.yaml). */
+interface HostNames {
+  dir: string;
+  unit: string;
+}
+
+const HOST_NAMES: HostNames = { dir: '/var/lib/openadlc', unit: 'openadlc-hostd' };
+
+/**
+ * What a host made before the rename to OpenADLC has until a person renames
+ * it (docs/runbooks/rename-gcp-host.md). An update that named only the new
+ * ones would stop on such a host at its first write, with nothing rolled.
+ * Remove, with `onEitherHost`, once every install has been renamed.
+ */
+const OLD_HOST_NAMES: HostNames = { dir: '/var/lib/fleet', unit: 'fleet-hostd' };
+
+/**
+ * A command for the host under whichever names it has, picked on the host by
+ * the image step its cloud-init wrote. Two whole commands rather than names in
+ * variables, so nothing on the line root runs is expanded.
+ */
+function onEitherHost(command: (names: HostNames) => string): string {
+  return `if test -x /etc/openadlc/hostd-image.sh; then ${command(HOST_NAMES)}; else ${command(OLD_HOST_NAMES)}; fi`;
+}
+
+/** Where the host's unit reads the hostd image an update names (hostd-image.sh). */
+const imageFile = (host: HostNames) => `${host.dir}/hostd-image`;
 /** Where it records the image hostd last started on and answered from, root's alone. */
-const HOSTD_STARTED_FILE = '/var/lib/fleet/hostd-image.started';
+const startedFile = (host: HostNames) => `${host.dir}/hostd-image.started`;
 /** What only a host whose cloud-init knows hostd-image has. */
-const HOST_UNIT_CHECK = 'test -x /etc/fleet/hostd-image.sh';
+const HOST_UNIT_CHECK = 'test -x /etc/openadlc/hostd-image.sh || test -x /etc/fleet/hostd-image.sh';
 
 /**
  * The three rolls, in order: the console, then hostd, then the bridge, which
@@ -1460,16 +1485,20 @@ export function rollSteps(target: UpdateTarget, images: ReleaseImages): RollStep
   }
   const where = ['--region', target.region, '--project', target.projectId, '--quiet'];
   const host = `${target.prefix}-host-1`;
-  const remote = [
-    'set -e',
-    `HOME=/var/lib/fleet/home docker pull ${images.service}`,
-    `echo ${images.service} > ${HOSTD_IMAGE_FILE}.next`,
-    'sync',
-    `mv -f ${HOSTD_IMAGE_FILE}.next ${HOSTD_IMAGE_FILE}`,
-    'sync',
-    'systemctl restart fleet-hostd',
-    `grep -qxF ${images.service} ${HOSTD_STARTED_FILE}`,
-  ].join('; ');
+  const remote = onEitherHost((names) => {
+    const file = imageFile(names);
+    const root = [
+      'set -e',
+      `HOME=${names.dir}/home docker pull ${images.service}`,
+      `echo ${images.service} > ${file}.next`,
+      'sync',
+      `mv -f ${file}.next ${file}`,
+      'sync',
+      `systemctl restart ${names.unit}`,
+      `grep -qxF ${images.service} ${startedFile(names)}`,
+    ].join('; ');
+    return `sudo sh -c "${root}"`;
+  });
   return [
     {
       name: 'console',
@@ -1483,7 +1512,7 @@ export function rollSteps(target: UpdateTarget, images: ReleaseImages): RollStep
       name: 'host',
       doing: `hostd: ${host} pulls ${images.tag}'s service image over IAP, then its hostd image file is written and hostd restarted onto it`,
       done: `hostd runs ${images.tag}`,
-      args: ['compute', 'ssh', host, '--zone', target.zone, '--project', target.projectId, '--tunnel-through-iap', '--', `sudo sh -c "${remote}"`],
+      args: ['compute', 'ssh', host, '--zone', target.zone, '--project', target.projectId, '--tunnel-through-iap', '--', remote],
       setting: 'hostd_image',
       image: images.service,
     },
@@ -1536,7 +1565,7 @@ async function servingImage(target: UpdateTarget, part: 'bridge' | 'console', gc
  * is what the host falls back to when the image file names nothing it takes.
  */
 async function hostStartedImage(target: UpdateTarget, gcloud: UpdateRunners['gcloud']): Promise<string | null> {
-  const read = await gcloud(['compute', 'ssh', `${target.prefix}-host-1`, '--zone', target.zone, '--project', target.projectId, '--tunnel-through-iap', '--quiet', '--', `cat ${HOSTD_STARTED_FILE}`]);
+  const read = await gcloud(['compute', 'ssh', `${target.prefix}-host-1`, '--zone', target.zone, '--project', target.projectId, '--tunnel-through-iap', '--quiet', '--', onEitherHost((names) => `cat ${startedFile(names)}`)]);
   const image = read.stdout.trim();
   return read.code === 0 && image && !/\s/.test(image) ? image : null;
 }
@@ -1550,9 +1579,12 @@ async function hostStartedImage(target: UpdateTarget, gcloud: UpdateRunners['gcl
  */
 export function goBackCommand(target: UpdateTarget, part: RollStep['name'], previous: string): string {
   if (part !== 'host') return shellLine('gcloud', ['run', 'services', 'update', `${target.prefix}-${part}`, '--image', previous, '--region', target.region, '--project', target.projectId, '--quiet']);
-  const remote = mirrorDigest(previous, target.mirror, target.repo, 'service')
-    ? `sudo sh -c "echo ${previous} > ${HOSTD_IMAGE_FILE}" && sudo systemctl restart fleet-hostd`
-    : `sudo rm -f ${HOSTD_IMAGE_FILE} ${HOSTD_STARTED_FILE} && sudo systemctl restart fleet-hostd`;
+  const release = mirrorDigest(previous, target.mirror, target.repo, 'service');
+  const remote = onEitherHost((names) =>
+    release
+      ? `sudo sh -c "echo ${previous} > ${imageFile(names)}" && sudo systemctl restart ${names.unit}`
+      : `sudo rm -f ${imageFile(names)} ${startedFile(names)} && sudo systemctl restart ${names.unit}`,
+  );
   return shellLine('gcloud', ['compute', 'ssh', `${target.prefix}-host-1`, '--zone', target.zone, '--project', target.projectId, '--tunnel-through-iap', '--', remote]);
 }
 
@@ -1697,7 +1729,7 @@ export async function updateCommand(settings: Record<string, unknown>, wanted: s
   const host = `${target.prefix}-host-1`;
   if ((await runners.run('gcloud', ['compute', 'ssh', host, '--zone', target.zone, '--project', target.projectId, '--tunnel-through-iap', '--', HOST_UNIT_CHECK])) !== 0) {
     ui.fail(
-      `${host} has no /etc/fleet/hostd-image.sh, or could not be reached over IAP, so nothing was rolled: a host whose cloud-init predates release images would restart on its old image. openadlc cloud apply resets it onto the new one (ending the tasks running there)`,
+      `${host} has no /etc/openadlc/hostd-image.sh (nor /etc/fleet/hostd-image.sh, on a host not renamed yet), or could not be reached over IAP, so nothing was rolled: a host whose cloud-init predates release images would restart on its old image. openadlc cloud apply resets it onto the new one (ending the tasks running there)`,
     );
     return 1;
   }
@@ -1769,7 +1801,7 @@ export async function updateCommand(settings: Record<string, unknown>, wanted: s
     }
     if (step.name === 'host') {
       ui.note(
-        `why hostd did not come back: ${shellLine('gcloud', ['compute', 'ssh', `${target.prefix}-host-1`, '--zone', target.zone, '--project', target.projectId, '--tunnel-through-iap', '--', 'sudo journalctl -u fleet-hostd -n 200 --no-pager'])}`,
+        `why hostd did not come back: ${shellLine('gcloud', ['compute', 'ssh', `${target.prefix}-host-1`, '--zone', target.zone, '--project', target.projectId, '--tunnel-through-iap', '--', onEitherHost((names) => `sudo journalctl -u ${names.unit} -n 200 --no-pager`)])}`,
       );
     }
     ui.note(

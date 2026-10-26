@@ -50,7 +50,7 @@ describe('a project an earlier install was torn down from', () => {
     expect((await findLeftovers(fresh, gcloud)).found).toEqual([]);
   });
 
-  it('finds the network and the secrets an install kept, the bridge’s fleet- ones included', async () => {
+  it('finds the network and the secrets an install kept, under the module’s prefix, the bridge’s own, and the bridge’s from before the rename', async () => {
     const { gcloud } = project({
       network: ok('{}'),
       secrets: ok('projects/1/secrets/fleet-github-app-private-key\nfleet-bot-builder\nopenadlc-webhook-secret\nunrelated-secret\n'),
@@ -62,6 +62,14 @@ describe('a project an earlier install was torn down from', () => {
         what: '3 secrets (fleet-github-app-private-key, fleet-bot-builder, openadlc-webhook-secret)',
         detail: 'kept from the earlier install, with its GitHub credentials',
       },
+    ]);
+  });
+
+  it('finds the bridge’s secrets under OpenADLC’s name whatever the module’s prefix', async () => {
+    const { gcloud } = project({ secrets: ok('openadlc-github-refresh-atlas\nacme-database-url\nunrelated-secret\n') });
+    const report = await findLeftovers({ ...fresh, prefix: 'acme' }, gcloud);
+    expect(report.found).toEqual([
+      { what: '2 secrets (openadlc-github-refresh-atlas, acme-database-url)', detail: 'kept from the earlier install, with its GitHub credentials' },
     ]);
   });
 

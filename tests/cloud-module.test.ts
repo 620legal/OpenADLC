@@ -105,9 +105,9 @@ const HOSTD_RELEASE = `${MIRROR}/620legal/openadlc/service`;
 const digest = (hex: string) => `sha256:${hex.repeat(64 / hex.length)}`;
 
 /**
- * One start of `fleet-hostd`'s image step (`/etc/fleet/hostd-image.sh`), run
- * for real by bash against a scratch directory in place of /var/lib/fleet and
- * /run/fleet, with a docker that has `present` and fails to pull `unpullable`,
+ * One start of `openadlc-hostd`'s image step (`/etc/openadlc/hostd-image.sh`), run
+ * for real by bash against a scratch directory in place of /var/lib/openadlc and
+ * /run/openadlc, with a docker that has `present` and fails to pull `unpullable`,
  * and `hostdImage` as the module's hostd_image.
  */
 function hostStart(
@@ -116,8 +116,8 @@ function hostStart(
 ): { status: number | null; said: string; hostd: string | null; docker: string[]; chowned: string[]; file: { text: string; mode: number } | null } {
   const work = mkdtempSync(join(tmpdir(), 'openadlc-host-images-'));
   scratch.push(work);
-  const root = join(work, 'var-lib-fleet');
-  const run = join(work, 'run-fleet');
+  const root = join(work, 'var-lib-openadlc');
+  const run = join(work, 'run-openadlc');
   const bin = join(work, 'bin');
   mkdirSync(root, { recursive: true });
   mkdirSync(bin);
@@ -143,13 +143,13 @@ case "$1" in
 esac`,
   );
   stub('chown', `echo "$*" >> '${join(work, 'chown.log')}'`);
-  const script = rendered(writtenFile('/etc/fleet/hostd-image.sh'), {
+  const script = rendered(writtenFile('/etc/openadlc/hostd-image.sh'), {
     hostd_release_image: HOSTD_RELEASE,
     hostd_image: docker.hostdImage ?? 'registry/hostd:latest',
   })
-    .split('/var/lib/fleet')
+    .split('/var/lib/openadlc')
     .join(root)
-    .split('/run/fleet')
+    .split('/run/openadlc')
     .join(run);
   writeFileSync(join(work, 'hostd-image.sh'), script);
   const started = spawnSync('bash', [join(work, 'hostd-image.sh')], {
@@ -222,7 +222,7 @@ describe('who is allowed to reach the host', () => {
     expect(rules.length).toBeGreaterThan(2);
     for (const rule of rules) {
       const block = resourceBlock('google_compute_firewall', rule.slice('google_compute_firewall.'.length));
-      expect(block, rule).toMatch(/target_tags\s*=\s*\["fleet-host"\]/);
+      expect(block, rule).toMatch(/target_tags\s*=\s*\["openadlc-host"\]/);
     }
   });
 });
@@ -528,11 +528,11 @@ describe('the egress allowlist the security model promises', () => {
   it('starts the proxy, the firewall and hostd, in that order', () => {
     // hostd must not be accepting tasks before the thing that confines them is
     // up, so the units are ordered rather than merely all enabled.
-    for (const unit of ['fleet-egress-proxy.service', 'fleet-egress-firewall.service', 'fleet-hostd.service']) {
+    for (const unit of ['openadlc-egress-proxy.service', 'openadlc-egress-firewall.service', 'openadlc-hostd.service']) {
       expect(cloudInit).toContain(`systemctl enable --now ${unit}`);
     }
-    expect(cloudInit).toContain('Requires=fleet-egress-proxy.service');
-    expect(cloudInit).toContain('Requires=fleet-egress-firewall.service');
+    expect(cloudInit).toContain('Requires=openadlc-egress-proxy.service');
+    expect(cloudInit).toContain('Requires=openadlc-egress-firewall.service');
   });
 
   it('turns on the host’s log agent, without which a denial is invisible', () => {
@@ -569,7 +569,7 @@ describe('the egress allowlist the security model promises', () => {
 
   it('runs hostd from a path the Docker daemon can see', () => {
     // Every bind mount hostd asks for is read by the daemon as a host path.
-    expect(cloudInit).toContain('-v /var/lib/fleet:/var/lib/fleet');
+    expect(cloudInit).toContain('-v /var/lib/openadlc:/var/lib/openadlc');
     expect(cloudInit).toContain('OPENADLC_WORK_ROOT=$root/work');
     expect(cloudInit).toContain('OPENADLC_BOT_EGRESS_PROXY=http://host.docker.internal:3128');
     // And as the bots' own uid: on Linux, what hostd made as root the bot
@@ -742,7 +742,7 @@ describe('the egress allowlist the security model promises', () => {
     expect(env).toContain('OPENADLC_REGISTRY_HOST=${registry_host}');
     const variable = /variable "registry_host" \{[\s\S]*?\n\}/.exec(variablesTf)?.[0] ?? '';
     expect(variable).toContain('default     = ""');
-    expect(variable).toContain('fleet-registry-token');
+    expect(variable).toContain('openadlc-registry-token');
     expect(variable).toContain('validation {');
   });
 
@@ -800,12 +800,12 @@ describe('a first apply on a new project', () => {
 
 describe('one install per project', () => {
   it('does not invite two installs into one project', () => {
-    // The secrets are `fleet-<ref>` whatever the prefix, and both accounts
+    // The secrets are `openadlc-<ref>` whatever the prefix, and both accounts
     // read and write every secret in the project: a second install would
     // overwrite the first one's credentials and could read them.
     const description = /variable "name_prefix" \{[^}]*?description\s*=\s*"((?:[^"\\]|\\.)*)"/.exec(variablesTf)?.[1] ?? '';
     expect(description).toContain('One install per project');
-    expect(description).toContain('fleet-<ref>');
+    expect(description).toContain('openadlc-<ref>');
     expect(description).toMatch(/every secret in the project/);
     expect(description).not.toMatch(/more than one install|several installs|installs? (can|may) share/i);
   });
@@ -837,7 +837,8 @@ describe('what the service accounts may do', () => {
 
   it('does not let a secret’s reader change who else may read it', () => {
     expect(permissions.filter((permission) => /setIamPolicy|getIamPolicy|\.update$/.test(permission))).toEqual([]);
-    // Nor holds them to `fleet-`: the module's own secrets are `<name_prefix>-…`,
+    // Nor holds them to a name: the module's own secrets are `<name_prefix>-…`,
+    // the store's `openadlc-…` and, until an install is renamed, `fleet-…`,
     // and create and list are checked on the project.
     expect(resourceBlock('google_project_iam_member', 'host_secrets')).not.toContain('condition');
     expect(resourceBlock('google_project_iam_member', 'bridge_secrets')).not.toContain('condition');
@@ -880,7 +881,7 @@ describe('what is encrypted on the way', () => {
     // `no-verify` encrypted and let anything on the path answer for the
     // database. A bare `sslmode=require` is verify-full in node-postgres, and
     // Cloud SQL's certificate does not name the private IP: both would go down.
-    expect(caDir).toBe('/var/lib/fleet/database-ca');
+    expect(caDir).toBe('/var/lib/openadlc/database-ca');
     expect(caFile).toBe('server-ca.pem');
     const url = resourceBlock('google_secret_manager_secret_version', 'database_url');
     expect(url).toMatch(
@@ -911,9 +912,9 @@ describe('what is encrypted on the way', () => {
 
   it('writes the CA on the host where the URL looks for it, readable by hostd and the migrations', () => {
     expect(mainTf).toMatch(/database_ca_secret\s*=\s*google_secret_manager_secret\.database_ca\.secret_id/);
-    const script = cloudInit.slice(cloudInit.indexOf('path: /etc/fleet/prepare-hostd.sh'));
-    expect(script).toContain('root=/var/lib/fleet');
-    expect(`/var/lib/fleet/database-ca/${caFile}`).toBe(`${caDir}/${caFile}`);
+    const script = cloudInit.slice(cloudInit.indexOf('path: /etc/openadlc/prepare-hostd.sh'));
+    expect(script).toContain('root=/var/lib/openadlc');
+    expect(`/var/lib/openadlc/database-ca/${caFile}`).toBe(`${caDir}/${caFile}`);
     expect(script).toContain('ca_dir="$root/database-ca"');
     expect(script).toContain('secrets/${database_ca_secret}/versions/latest:access');
     expect(script).toContain('mv "$ca_dir/server-ca.pem.next" "$ca_dir/server-ca.pem"');
@@ -1035,10 +1036,10 @@ describe('the terminal a person reaches through the load balancer', () => {
 
 describe('a new hostd image on the host', () => {
   const prepare = cloudInit.slice(
-    cloudInit.indexOf('path: /etc/fleet/prepare-hostd.sh'),
-    cloudInit.indexOf('path: /etc/systemd/system/fleet-hostd.service'),
+    cloudInit.indexOf('path: /etc/openadlc/prepare-hostd.sh'),
+    cloudInit.indexOf('path: /etc/systemd/system/openadlc-hostd.service'),
   );
-  const hostdUnit = cloudInit.slice(cloudInit.indexOf('path: /etc/systemd/system/fleet-hostd.service'), cloudInit.indexOf('runcmd:'));
+  const hostdUnit = cloudInit.slice(cloudInit.indexOf('path: /etc/systemd/system/openadlc-hostd.service'), cloudInit.indexOf('runcmd:'));
 
   it('refreshes the app tree in place, rather than swapping it under the computers that mount it', () => {
     // The bug: `rm -rf app && mv app.next app`. A task computer that outlived
@@ -1094,7 +1095,7 @@ describe('a new hostd image on the host', () => {
 
   it('gives hostd long enough to end its tasks when it stops', () => {
     // docker stop's default 10 seconds cut hostd's drain off with tasks open.
-    const grace = Number(/ExecStop=\/usr\/bin\/docker stop -t (\d+) fleet-hostd/.exec(hostdUnit)?.[1]);
+    const grace = Number(/ExecStop=\/usr\/bin\/docker stop -t (\d+) openadlc-hostd/.exec(hostdUnit)?.[1]);
     expect(grace).toBeGreaterThanOrEqual(120);
     expect(Number(/TimeoutStopSec=(\d+)/.exec(hostdUnit)?.[1])).toBeGreaterThan(grace);
   });
@@ -1311,23 +1312,23 @@ describe('the host’s cloud-init as a template', () => {
 });
 
 describe('the image hostd starts on', () => {
-  const unit = cloudInit.slice(cloudInit.indexOf('path: /etc/systemd/system/fleet-hostd.service'), cloudInit.indexOf('runcmd:'));
-  const prepare = writtenFile('/etc/fleet/prepare-hostd.sh');
+  const unit = cloudInit.slice(cloudInit.indexOf('path: /etc/systemd/system/openadlc-hostd.service'), cloudInit.indexOf('runcmd:'));
+  const prepare = writtenFile('/etc/openadlc/prepare-hostd.sh');
   const named = `${HOSTD_RELEASE}@${digest('a')}`;
 
   it('is chosen before hostd is prepared, is the one that runs, and hostd is told where an update writes the next', () => {
     const steps = [...unit.matchAll(/^\s*ExecStartPre=(.*)$/gm)].map((match) => match[1] ?? '');
-    const chooses = steps.indexOf('/bin/bash /etc/fleet/hostd-image.sh');
+    const chooses = steps.indexOf('/bin/bash /etc/openadlc/hostd-image.sh');
     expect(chooses).toBeGreaterThan(-1);
-    expect(chooses).toBeLessThan(steps.indexOf('/bin/bash /etc/fleet/prepare-hostd.sh'));
+    expect(chooses).toBeLessThan(steps.indexOf('/bin/bash /etc/openadlc/prepare-hostd.sh'));
     // After the registry login, which the pull needs.
     expect(steps.findIndex((step) => step.includes('docker-credential-gcr'))).toBeLessThan(chooses);
     expect(steps.join('\n')).not.toContain('docker pull ${hostd_image}');
     const start = unit.slice(unit.indexOf('ExecStart='), unit.indexOf('ExecStop='));
-    expect(start).toContain('-e OPENADLC_HOSTD_IMAGE_FILE=/var/lib/fleet/hostd-image');
+    expect(start).toContain('-e OPENADLC_HOSTD_IMAGE_FILE=/var/lib/openadlc/hostd-image');
     expect(start).not.toContain('BOT_IMAGE_FILE');
     // One read of the chosen image, both run and told to hostd, which reports it.
-    expect(start).toContain("ExecStart=/bin/sh -c 'image=$$(cat /run/fleet/running-hostd-image) && exec /usr/bin/docker run");
+    expect(start).toContain("ExecStart=/bin/sh -c 'image=$$(cat /run/openadlc/running-hostd-image) && exec /usr/bin/docker run");
     expect(start).toContain('-e OPENADLC_HOSTD_IMAGE="$$image"');
     expect(start).toContain('"$$image" node apps/hostd/dist/main.js');
     expect(start).not.toContain('${hostd_image}');
@@ -1335,10 +1336,10 @@ describe('the image hostd starts on', () => {
   });
 
   it('is what prepares the app tree and runs the migrations; the bots keep bot_image', () => {
-    expect(prepare).toContain('hostd_in_use=$(cat /run/fleet/running-hostd-image)');
+    expect(prepare).toContain('hostd_in_use=$(cat /run/openadlc/running-hostd-image)');
     expect(prepare).not.toContain('${hostd_image}');
     expect(prepare).toContain(`docker image inspect -f '{{.Id}}' "$hostd_in_use"`);
-    expect(prepare).toContain('docker create --name fleet-app-source "$hostd_in_use"');
+    expect(prepare).toContain('docker create --name openadlc-app-source "$hostd_in_use"');
     expect(prepare).toMatch(/-w "\$root\/app" "\$hostd_in_use" \\\n\s*sh -c 'node packages\/db\/dist\/cli\/migrate\.js/);
     const env = /cat > "\$root\/hostd\.env" <<ENV\n([\s\S]*?)\nENV\n/.exec(prepare)?.[1] ?? '';
     expect(env).toMatch(/^OPENADLC_BOT_IMAGE=\$\{bot_image\}$/m);
@@ -1437,7 +1438,7 @@ describe('the image hostd starts on', () => {
   it('makes the file, empty, and hostd’s (uid 1000), which writes it in place, and nothing else of the directory', () => {
     const fresh = hostStart(undefined);
     expect(fresh.file).toEqual({ text: '', mode: 0o644 });
-    expect(fresh.chowned).toEqual([expect.stringMatching(/^1000:1000 \S+var-lib-fleet\/hostd-image$/)]);
+    expect(fresh.chowned).toEqual([expect.stringMatching(/^1000:1000 \S+var-lib-openadlc\/hostd-image$/)]);
     // A file an update wrote is kept as it is, and made hostd's again.
     const written = hostStart(`${named}\n`);
     expect(written.file?.text).toBe(`${named}\n`);
@@ -1446,14 +1447,14 @@ describe('the image hostd starts on', () => {
 });
 
 describe('the image hostd last answered on', () => {
-  const unit = cloudInit.slice(cloudInit.indexOf('path: /etc/systemd/system/fleet-hostd.service'), cloudInit.indexOf('runcmd:'));
+  const unit = cloudInit.slice(cloudInit.indexOf('path: /etc/systemd/system/openadlc-hostd.service'), cloudInit.indexOf('runcmd:'));
 
-  /** One run of `/etc/fleet/hostd-started.sh`, with a curl whose /healthz answers or not. */
+  /** One run of `/etc/openadlc/hostd-started.sh`, with a curl whose /healthz answers or not. */
   function recorded(answers: boolean, before?: string): { status: number | null; started: string | null; said: string } {
     const work = mkdtempSync(join(tmpdir(), 'openadlc-host-started-'));
     scratch.push(work);
-    const root = join(work, 'var-lib-fleet');
-    const run = join(work, 'run-fleet');
+    const root = join(work, 'var-lib-openadlc');
+    const run = join(work, 'run-openadlc');
     const bin = join(work, 'bin');
     for (const dir of [root, run, bin]) mkdirSync(dir, { recursive: true });
     writeFileSync(join(run, 'running-hostd-image'), `${HOSTD_RELEASE}@${digest('a')}\n`);
@@ -1465,7 +1466,7 @@ describe('the image hostd last answered on', () => {
       writeFileSync(join(bin, name!), `#!/bin/sh\n${body}\n`);
       chmodSync(join(bin, name!), 0o755);
     }
-    const script = rendered(writtenFile('/etc/fleet/hostd-started.sh'), { hostd_port: '47312' }).split('/var/lib/fleet').join(root).split('/run/fleet').join(run);
+    const script = rendered(writtenFile('/etc/openadlc/hostd-started.sh'), { hostd_port: '47312' }).split('/var/lib/openadlc').join(root).split('/run/openadlc').join(run);
     writeFileSync(join(work, 'hostd-started.sh'), script);
     const done = spawnSync('bash', [join(work, 'hostd-started.sh')], { env: { PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}` }, encoding: 'utf8' });
     const file = join(root, 'hostd-image.started');
@@ -1473,7 +1474,7 @@ describe('the image hostd last answered on', () => {
   }
 
   it('is recorded once hostd answers on it, after it starts', () => {
-    expect(unit).toMatch(/^\s*ExecStartPost=-\/bin\/bash \/etc\/fleet\/hostd-started\.sh$/m);
+    expect(unit).toMatch(/^\s*ExecStartPost=-\/bin\/bash \/etc\/openadlc\/hostd-started\.sh$/m);
     expect(recorded(true).started).toBe(`${HOSTD_RELEASE}@${digest('a')}\n`);
   });
 
@@ -1485,8 +1486,8 @@ describe('the image hostd last answered on', () => {
   });
 
   it('is root’s: hostd, which writes the other file, is given nothing of it', () => {
-    expect(writtenFile('/etc/fleet/hostd-image.sh')).not.toMatch(/chown[^\n]*started/);
-    expect(writtenFile('/etc/fleet/hostd-started.sh')).not.toContain('chown');
+    expect(writtenFile('/etc/openadlc/hostd-image.sh')).not.toMatch(/chown[^\n]*started/);
+    expect(writtenFile('/etc/openadlc/hostd-started.sh')).not.toContain('chown');
   });
 
   it('gives the pulls, the migrations and the wait for hostd longer than systemd’s default to start', () => {
@@ -1518,5 +1519,122 @@ describe('what the docs say about a cloud install and its releases', () => {
     expect(upgrading).toContain('--release');
     expect(upgrading).toContain('one release at a time');
     expect(upgrading).toContain('Settings → System');
+  });
+});
+
+describe('the names from before the rename to OpenADLC', () => {
+  const runbook = readFileSync(join(MODULE, '..', '..', 'docs', 'runbooks', 'rename-gcp-host.md'), 'utf8');
+  const store = readFileSync(join(MODULE, '..', '..', 'packages', 'github', 'src', 'gcp-secrets.ts'), 'utf8');
+  const constant = (name: string, file = store) => new RegExp(`const ${name} = '([^']+)'`).exec(file)?.[1] ?? '';
+  const units = [...cloudInit.matchAll(/^ {2}- path: \/etc\/systemd\/system\/(\S+)\.service$/gm)].map((match) => match[1]!);
+  const move = writtenFile('/etc/openadlc/from-fleet.sh');
+
+  it('names the host’s units, its paths, its tag and its path matcher OpenADLC’s way, and the old ones only where it moves them', () => {
+    expect(units.sort()).toEqual(['openadlc-egress-firewall', 'openadlc-egress-proxy', 'openadlc-hostd']);
+    const comment = cloudInit.indexOf('  # A host made before the rename');
+    const rest = (cloudInit.slice(0, comment) + cloudInit.slice(cloudInit.indexOf('  - path: /etc/openadlc/squid.conf'))).replace('  - /bin/bash /etc/openadlc/from-fleet.sh\n', '');
+    expect(comment).toBeGreaterThan(0);
+    expect(rest).not.toMatch(/fleet/i);
+    expect(resourceBlock('google_compute_instance', 'host')).toMatch(/tags\s*=\s*\["openadlc-host"\]/);
+    const urlMap = resourceBlock('google_compute_url_map', 'console') ?? '';
+    expect(urlMap).toMatch(/path_matcher = "openadlc"/);
+    expect(urlMap).toMatch(/path_matcher \{\s*name\s*=\s*"openadlc"/);
+    // What is left is the moved blocks' old addresses and Cloud SQL's names,
+    // which renaming would mean moving the data.
+    const left = withoutComments([mainTf, variablesTf, deployerTf, outputsTf].join('\n'))
+      .split('\n')
+      .filter((line) => /fleet/i.test(line))
+      .filter((line) => !/^\s*from = google_[a-z_]+\.fleet$/.test(line))
+      .filter((line) => !/fleet_db/.test(line));
+    expect(left.map((line) => line.trim())).toEqual(['name     = "fleet"']);
+    expect(resourceBlock('google_sql_user', 'openadlc')).toContain('name     = "fleet"');
+  });
+
+  it('grants the deployer the app key by its new name, the new grant made before the old one goes', () => {
+    const grant = resourceBlock('google_secret_manager_secret_iam_member', 'deployer_app_key', deployerTf) ?? '';
+    expect(grant).toContain(`secret_id = "${constant('SECRET_ID_PREFIX')}github-app-private-key"`);
+    expect(grant).toMatch(/lifecycle \{\s*create_before_destroy = true\s*\}/);
+  });
+
+  it('makes the database URL’s new version before the old one goes, so the bridge’s running revision never names a destroyed one', () => {
+    const version = resourceBlock('google_secret_manager_secret_version', 'database_url') ?? '';
+    expect(version).toContain('sslrootcert=${local.database_ca_dir}');
+    expect(version).toMatch(/lifecycle \{\s*create_before_destroy = true\s*\}/);
+  });
+
+  /** One boot's move, run by bash with scratch directories in place of /var/lib/fleet and /var/lib/openadlc. */
+  function boot(has: { old?: boolean; new?: boolean }): { status: number | null; said: string; old: boolean; moved: string | null } {
+    const work = mkdtempSync(join(tmpdir(), 'openadlc-from-fleet-'));
+    scratch.push(work);
+    const old = join(work, 'var-lib-fleet');
+    const now = join(work, 'var-lib-openadlc');
+    if (has.old) {
+      mkdirSync(join(old, 'logins'), { recursive: true });
+      writeFileSync(join(old, 'hostd-image.started'), `${HOSTD_RELEASE}@${digest('a')}\n`);
+    }
+    if (has.new) mkdirSync(now);
+    const script = rendered(move, {}).split('/var/lib/fleet').join(old).split('/var/lib/openadlc').join(now);
+    writeFileSync(join(work, 'from-fleet.sh'), script);
+    const ran = spawnSync('bash', [join(work, 'from-fleet.sh')], { encoding: 'utf8' });
+    const started = join(now, 'hostd-image.started');
+    return { status: ran.status, said: `${ran.stdout}${ran.stderr}`, old: existsSync(old), moved: existsSync(started) ? readFileSync(started, 'utf8').trim() : null };
+  }
+
+  it('moves a host’s state from /var/lib/fleet once, before any unit starts, so hostd keeps its image and the bots their sign-ins', () => {
+    const moved = boot({ old: true });
+    expect(moved).toMatchObject({ status: 0, old: false, moved: `${HOSTD_RELEASE}@${digest('a')}` });
+    expect(moved.said).toContain('[openadlc] moved');
+    // Every boot after the first, and a host made on these names.
+    expect(boot({ new: true })).toMatchObject({ status: 0, said: '' });
+    expect(boot({})).toMatchObject({ status: 0, said: '' });
+    const runcmd = cloudInit.slice(cloudInit.indexOf('runcmd:'));
+    expect(runcmd.indexOf('- /bin/bash /etc/openadlc/from-fleet.sh')).toBeGreaterThan(0);
+    expect(runcmd.indexOf('- /bin/bash /etc/openadlc/from-fleet.sh')).toBeLessThan(runcmd.indexOf('systemctl enable --now'));
+  });
+
+  it('leaves both where they are, and says so, on a host that has both', () => {
+    const both = boot({ old: true, new: true });
+    expect(both).toMatchObject({ status: 1, old: true, moved: null });
+    expect(both.said).toContain('are both here');
+    expect(both.said).toContain('docs/runbooks/rename-gcp-host.md');
+    expect(runbook).toContain('/var/lib/fleet and /var/lib/openadlc are both here');
+  });
+
+  it('has the runbook name what the module and the store name, old and new', () => {
+    // Each unit, new and old, as the runbook's checks and its table name them.
+    for (const unit of units) {
+      expect(runbook, unit).toContain(unit);
+      expect(runbook, unit).toContain(unit.replace(/^openadlc-/, 'fleet-'));
+    }
+    expect(runbook).toContain('systemctl is-active openadlc-egress-proxy openadlc-egress-firewall openadlc-hostd');
+    expect(move).toContain('old=/var/lib/fleet');
+    expect(move).toContain('new=/var/lib/openadlc');
+    expect(runbook).toContain('`/etc/openadlc/from-fleet.sh`');
+    expect(writtenFile('/etc/openadlc/prepare-hostd.sh')).toContain('root=/var/lib/openadlc');
+    expect(runbook).toContain('cat /var/lib/openadlc/hostd-image.started');
+    // The tag, as the firewall's rules name it, and every rule the runbook lists.
+    expect(runbook).toContain("--filter='targetTags:openadlc-host'");
+    const rules = [...mainTf.matchAll(/^resource "google_compute_firewall" "[^"]+" \{\n\s*name\s*=\s*"\$\{var\.name_prefix\}(-[a-z-]+)"/gm)].map((match) => match[1]!);
+    expect(rules).toHaveLength(7);
+    expect(runbook).toContain('the seven');
+    for (const rule of rules) expect(runbook, rule).toContain(`\`${rule === '-allow-iap' ? '<prefix>-allow-iap' : rule}\``);
+    // The CA where the URL now looks for it.
+    const caDir = /database_ca_dir\s*=\s*"([^"]+)"/.exec(mainTf)?.[1];
+    expect(runbook).toContain(`${caDir}/server-ca.pem`);
+    // The store's names and labels, which every copy and its way back write.
+    const [prefix, label, oldPrefix, oldLabel] = ['SECRET_ID_PREFIX', 'SECRET_LABEL', 'OLD_ID_PREFIX', 'OLD_LABEL'].map((name) => constant(name));
+    expect([prefix, label, oldPrefix, oldLabel]).toEqual(['openadlc-', 'openadlc', 'fleet-', 'fleet']);
+    expect(runbook).toContain(`new="${prefix}\${old#${oldPrefix}}"`);
+    expect(runbook).toContain(`old="${oldPrefix}\${new#${prefix}}"`);
+    const creates = runbook.split('\n').filter((line) => line.includes('gcloud secrets create'));
+    expect(creates.length).toBeGreaterThan(1);
+    for (const line of creates) expect(line).toMatch(new RegExp(`--labels=(${label}|${oldLabel})=secret`));
+    expect(creates.filter((line) => line.includes(`--labels=${label}=secret`))).toHaveLength(1);
+    // Never by an `openadlc-` name: the module's own secrets share it under the default prefix.
+    expect(runbook).not.toMatch(/grep '\^openadlc-'|filter='name:openadlc/);
+    // The card that sends a person here.
+    const check = readFileSync(join(MODULE, '..', '..', 'apps', 'bridge', 'src', 'health', 'checks', 'cloud-names.ts'), 'utf8');
+    expect(constant('OLD_NAMES_TITLE', check)).not.toBe('');
+    expect(runbook).toContain(`"${constant('OLD_NAMES_TITLE', check)}"`);
   });
 });

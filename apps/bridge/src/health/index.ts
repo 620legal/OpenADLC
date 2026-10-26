@@ -6,6 +6,7 @@ import { revokeGate, settledSigningKey } from '../signing-keys.js';
 import { createHash } from 'node:crypto';
 import { attributions, audit, bots, credentials, deployRuns, externalSigningKeys, identities, issues, lastAudit, lastGithubDelivery, leases, modelAccounts, repos, tasks } from '@openadlc/db';
 import {
+  GcpSecretStore,
   GitHubClient,
   accountExists,
   accountOf,
@@ -34,6 +35,7 @@ import { defaultModelAccountDeps, listAccountModels } from '../model-accounts.js
 import type { RepoSetup } from '../repo-setup.js';
 import type { WebhookSetup } from '../webhook-setup.js';
 import { appChecks } from './checks/app.js';
+import { cloudNamesCheck } from './checks/cloud-names.js';
 import { commitEmailCheck } from './checks/commit-email.js';
 import { crewChecks, type RepoRef } from './checks/crew.js';
 import { dispatchModeOf, dispatcherCheck, type DispatchMode } from './checks/dispatcher.js';
@@ -305,6 +307,7 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
     }),
     repoConfig,
     repoOwnerCheck({ repos: () => repos.listRepos() }),
+    cloudNamesCheck(cloudSecretStore()),
     deliveryCheck({
       repos: async () =>
         (await repos.listRepos()).map((repo) => ({ name: repo.name, fullName: repo.fullName, defaultBranch: repo.defaultBranch })),
@@ -419,6 +422,12 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
       },
     }),
   ];
+}
+
+/** The store when it is Secret Manager, the one store that had names from before the rename. */
+function cloudSecretStore(): GcpSecretStore | null {
+  const store = getSecretStore();
+  return store instanceof GcpSecretStore ? store : null;
 }
 
 /** Whether nothing has ever run here: the install is still being set up, and nothing is sent. */

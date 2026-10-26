@@ -18,7 +18,7 @@ import { ImageRestart, imageFileFrom, mirrorDigestProblem, releaseSourceFrom, RE
 
 /**
  * hostd moving onto a release's `service` image on a cloud host: it writes
- * the file the host's `fleet-hostd` unit reads before it starts hostd, and
+ * the file the host's `openadlc-hostd` unit reads before it starts hostd, and
  * exits so systemd starts it again on it. The bridge's self-update asks for
  * it (`apps/bridge/src/cloud-update.ts`) once no task runs.
  */
@@ -78,7 +78,7 @@ describe('the image file', () => {
     const dir = scratch();
     const file = join(dir, 'hostd-image');
     writeFileSync(file, `${OLD_SERVICE}\n`);
-    // The host's /var/lib/fleet is root's; the file is hostd's.
+    // The host's /var/lib/openadlc is root's; the file is hostd's.
     chmodSync(dir, 0o555);
     try {
       writeImageFile(file, SERVICE);

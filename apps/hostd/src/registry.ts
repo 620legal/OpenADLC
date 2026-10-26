@@ -80,11 +80,11 @@ export class RegistryCredentials {
  * Where to put the token, for the store hostd reads. There is no `openadlc
  * secret` command, which this used to name. On the cloud host the store is
  * Secret Manager, and the file this named does not exist there; its secrets
- * are `fleet-<ref>` with the label the store lists by (gcp-secrets.ts).
+ * are `openadlc-<ref>` with the label the store lists by (gcp-secrets.ts).
  */
 export function missingTokenRemedy(store: string): string {
   if (store === 'gcp') {
-    return `store one in Secret Manager: printf '%s' "$REGISTRY_TOKEN" | gcloud secrets create fleet-${registryTokenRef()} --labels=fleet=secret --data-file=-`;
+    return `store one in Secret Manager: printf '%s' "$REGISTRY_TOKEN" | gcloud secrets create openadlc-${registryTokenRef()} --labels=openadlc=secret --data-file=-`;
   }
   // The umask is inside the command: a mode written after it as prose was
   // pasted with it, and wrote the token, then `mode0600`, to `….secret,`, a

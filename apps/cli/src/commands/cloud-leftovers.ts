@@ -73,13 +73,14 @@ export function ownedAddresses(stateList: string): Set<string> {
 const SQL_NAME_RESERVED_DAYS = 7;
 
 /**
- * Secrets a running install writes. The bridge names every one `fleet-<ref>`
- * whatever the prefix (`GcpSecretStore`), and the module writes two under the
- * prefix; a new install finding an old one would read the old install's
- * GitHub tokens as its own.
+ * Secrets a running install writes. The bridge names every one `openadlc-<ref>`
+ * whatever the prefix (`GcpSecretStore`), and `fleet-<ref>` on an install made
+ * before the rename that has not been renamed since, and the module writes
+ * three under the prefix; a new install finding an old one would read the old
+ * install's GitHub tokens as its own.
  */
 function installSecret(name: string, prefix: string): boolean {
-  return name.startsWith('fleet-') || name.startsWith(`${prefix}-`);
+  return name.startsWith('openadlc-') || name.startsWith('fleet-') || name.startsWith(`${prefix}-`);
 }
 
 function notFound(result: GcloudResult): boolean {
