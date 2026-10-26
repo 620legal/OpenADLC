@@ -50,9 +50,11 @@ describe('what the plan offers as evidence', () => {
 
   it('does not claim the deploy path has ever run', () => {
     // This used to assert "there is no deploy path", which was the honest answer
-    // until the deploy path was built. It is now built and has still never deployed
-    // anything: no environment exists to deploy to, so no deployment has ever
-    // been created and nothing GitHub does with one has been watched. The
+    // until the deploy path was built. It is now built and has still deployed
+    // nothing: no deployment to a testing or production environment has been
+    // created, so nothing GitHub does with one has been watched. The release
+    // environment's deployments, which cut-release.yml's job has made since
+    // 2026-10-23, are not that path, and the bridge does not act on them. The
     // overstatement to guard against has moved rather than gone — a row reading
     // "built" invites the next person to plan as if a deploy had been seen.
     const sequence = plan.slice(plan.indexOf('## 11. Build sequence'), plan.indexOf('### What is proven'));
@@ -62,14 +64,15 @@ describe('what the plan offers as evidence', () => {
   });
 
   it('does not call the cloud module tested', () => {
-    // It has been applied once, and only some of what it promises was seen
-    // working. `terraform validate` passed on a module whose firewall denied
-    // the bridge and whose IAP binding pointed at nothing, so the row says
-    // which parts were seen and sends the rest to the unverified log.
+    // It has been applied, first on 2026-09-26 and again since, and only some
+    // of what it promises was seen working. `terraform validate` passed on a
+    // module whose firewall denied the bridge and whose IAP binding pointed at
+    // nothing, so the row says which parts were seen and sends the rest to the
+    // unverified log. Running an install's updates is not testing it.
     const sequence = plan.slice(plan.indexOf('## 11. Build sequence'), plan.indexOf('### What is proven'));
     const p5 = sequence.split('\n').find((line) => line.startsWith('| P5 '));
     expect(p5).toBeDefined();
-    expect(p5).toContain('applied once');
+    expect(p5).toContain('were seen working');
     expect(p5).toContain('unverified.md');
     expect(p5).not.toMatch(/cloud module is \*\*(built and )?tested/);
   });

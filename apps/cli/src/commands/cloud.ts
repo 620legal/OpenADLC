@@ -13,6 +13,7 @@ import {
   movedTagWords,
   nextRelease,
   nextReleaseRefused,
+  PROJECT_REPOSITORY,
   readReleasePages,
   RELEASE_CHECKSUMS,
   RELEASE_IMAGE_DIGESTS,
@@ -951,24 +952,24 @@ export async function afterTerraform(
 
 // ------------------------------------------------------------------ release images
 
-/**
- * A cloud install runs the images a release publishes, not images of its own:
- * ghcr.io/<repo>/{service,console}, each by the digest the release recorded
- * in its images.json (or, for a release from before releases recorded them,
- * its tag resolved to a digest), and taken only once `gh attestation verify`
- * has checked the release's own workflow built that digest from the tagged
- * commit. It pulls
- * them through the module's mirror of ghcr.io (infra/gcp/main.tf, `ghcr`),
- * since Cloud Run pulls from nowhere else, by that digest and never by the
- * tag. `--build` keeps the images infra/gcp/install.sh builds from a checkout
- * on Cloud Build, for one that is not a release.
- *
- * The bot image is never a release's: it holds Claude Code, whose licence
- * lets a person install it for their own use but not redistribute it. Every
- * install builds its own (install.sh, on Cloud Build), and the host's weekly
- * engine update rebuilds it there.
- */
-export const DEFAULT_RELEASE_REPOSITORY = '620legal/OpenADLC';
+// A cloud install runs the images a release publishes, not images of its own:
+// ghcr.io/<repo>/{service,console}, each by the digest the release recorded
+// in its images.json (or, for a release from before releases recorded them,
+// its tag resolved to a digest), and taken only once `gh attestation verify`
+// has checked the release's own workflow built that digest from the tagged
+// commit. It pulls
+// them through the module's mirror of ghcr.io (infra/gcp/main.tf, `ghcr`),
+// since Cloud Run pulls from nowhere else, by that digest and never by the
+// tag. `--build` keeps the images infra/gcp/install.sh builds from a checkout
+// on Cloud Build, for one that is not a release.
+//
+// The bot image is never a release's: it holds Claude Code, whose licence
+// lets a person install it for their own use but not redistribute it. Every
+// install builds its own (install.sh, on Cloud Build), and the host's weekly
+// engine update rebuilds it there.
+//
+// Unless the settings name another (`release_repository`), the releases are
+// PROJECT_REPOSITORY's, as the module's own default is.
 
 /** The mirror up to and including its name, as the module makes it and the bridge is told it (OPENADLC_RELEASE_MIRROR). */
 export function releaseMirror(region: string, projectId: string, prefix: string): string {
@@ -1423,7 +1424,7 @@ export function updateTarget(settings: Record<string, unknown>): UpdateTarget | 
   const region = shown(settings, 'region') ?? 'us-central1';
   const zone = shown(settings, 'zone') ?? 'us-central1-a';
   const prefix = shown(settings, 'name_prefix') ?? NAME_PREFIX;
-  const repo = shown(settings, 'release_repository') ?? DEFAULT_RELEASE_REPOSITORY;
+  const repo = shown(settings, 'release_repository') ?? PROJECT_REPOSITORY;
   if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)) return `the settings name no project (project_id: ${projectId || 'none'})`;
   if (!/^[a-z0-9-]+$/.test(region) || !/^[a-z0-9-]+$/.test(zone)) return `the settings' region and zone (${region}, ${zone}) are not ones Google Cloud has`;
   if (!/^[a-z][a-z0-9-]*$/.test(prefix) || !INSTANCE_NAME.test(`${prefix}-host-1`)) return `the settings' name_prefix (${prefix}) is not one the module's names can have`;
@@ -1961,7 +1962,7 @@ export async function cloud(
           region,
           projectId,
           prefix: existing ? String(pinNamePrefix(existing).vars.name_prefix) : NAME_PREFIX,
-          repo: shown(existing, 'release_repository') ?? DEFAULT_RELEASE_REPOSITORY,
+          repo: shown(existing, 'release_repository') ?? PROJECT_REPOSITORY,
         },
         releaseRunners(),
       );
