@@ -875,11 +875,11 @@ describe('a pull request whose resolution round has not started', () => {
 });
 
 describe('a head the line found red', () => {
-  // 620legal/core#7: CI failed, its one rerun failed, and both deliveries came
-  // before the lead approved. The approval put it in the line, the line found
-  // the head red and left it to `onCiRun`, which nothing reached again; the
-  // gate sweep put it back every ten minutes, and the line said "Leaving the
-  // merge line" on it each time, for thirteen hours.
+  // A managed repository's #7: CI failed, its one rerun failed, and both
+  // deliveries came before the lead approved. The approval put it in the
+  // line, the line found the head red and left it to `onCiRun`, which nothing
+  // reached again; the gate sweep put it back every ten minutes, and the line
+  // said "Leaving the merge line" on it each time, for thirteen hours.
   const HEAD = '733ccb26c6ba43cc43ddd10f1fd425f405d003f3';
   const pull = {
     number: 7,

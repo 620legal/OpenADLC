@@ -127,10 +127,10 @@ describe('a builder asking for more paths', () => {
 
   it('says approve all is on, why this one still asks, and offers to turn it off', async () => {
     const item = await read({
-      planChanges: new Map([['gate-p', { ...plan, standing: { setBy: 'orzelig', humanReview: ['config/review.yaml'] } }]]),
-      standing: [{ repoId: 'repo-1', issueNumber: 16, setBy: 'orzelig', setAt: minutesAgo(30) }],
+      planChanges: new Map([['gate-p', { ...plan, standing: { setBy: 'janedoe', humanReview: ['config/review.yaml'] } }]]),
+      standing: [{ repoId: 'repo-1', issueNumber: 16, setBy: 'janedoe', setAt: minutesAgo(30) }],
     });
-    expect(item?.context).toContain('Approve all is on for #16, set by orzelig; `config/review.yaml` is under Human review, so a person decides this one.');
+    expect(item?.context).toContain('Approve all is on for #16, set by janedoe; `config/review.yaml` is under Human review, so a person decides this one.');
     expect(item?.actions.map((action) => action.kind)).not.toContain('approve_all');
     expect(item?.actions).toContainEqual({ kind: 'approve_all_off', label: 'Turn off approve all for #16', subject: 'openadlc-testbed#16' });
   });
@@ -140,18 +140,18 @@ describe('a builder asking for more paths', () => {
     // review, in a repository whose AGENTS.md had no such section.
     const unread = 'OpenADLC could not read the Human-review rules in AGENTS.md on `main`, so it does not cover this one and a person decides. Add a `## Human review` section';
     const item = await read({
-      planChanges: new Map([['gate-p', { ...plan, standing: { setBy: 'orzelig', humanReview: [], rulesUnread: unread } }]]),
-      standing: [{ repoId: 'repo-1', issueNumber: 16, setBy: 'orzelig', setAt: minutesAgo(30) }],
+      planChanges: new Map([['gate-p', { ...plan, standing: { setBy: 'janedoe', humanReview: [], rulesUnread: unread } }]]),
+      standing: [{ repoId: 'repo-1', issueNumber: 16, setBy: 'janedoe', setAt: minutesAgo(30) }],
     });
-    expect(item?.context).toContain(`Approve all is on for #16, set by orzelig, but ${unread}.`);
+    expect(item?.context).toContain(`Approve all is on for #16, set by janedoe, but ${unread}.`);
     expect(item?.context).not.toContain('under Human review');
     expect(item?.actions).toContainEqual({ kind: 'approve_all_off', label: 'Turn off approve all for #16', subject: 'openadlc-testbed#16' });
   });
 
   it('says the designer is judging it while it is, and offers nothing to ask again', async () => {
     const judging = task({ id: 'task-d', botId: 'bot-architect', kind: 'spec', subjectRef: 'openadlc-testbed#16', state: 'running', skill: 'plan-change-review' });
-    const item = await read({ planChanges: new Map([['gate-p', { ...plan, designer: { taskId: 'task-d', askedBy: 'orzelig', at: minutesAgo(1) } }]]) }, [build(), judging]);
-    expect(item?.context).toContain('The designer (architect) is judging it, asked by orzelig.');
+    const item = await read({ planChanges: new Map([['gate-p', { ...plan, designer: { taskId: 'task-d', askedBy: 'janedoe', at: minutesAgo(1) } }]]) }, [build(), judging]);
+    expect(item?.context).toContain('The designer (architect) is judging it, asked by janedoe.');
     expect(item?.actions.map((action) => action.kind)).not.toContain('ask_designer');
   });
 
@@ -164,7 +164,7 @@ describe('a builder asking for more paths', () => {
             'gate-p',
             {
               ...plan,
-              designer: { taskId: 'task-d', askedBy: 'orzelig', at: minutesAgo(1), verdict: 'approve', reason: 'The design needs it.', counted: false, outside: [{ path: 'apps/hostd/src/x.ts', why: 'the design neither names it nor anything beside it' }] },
+              designer: { taskId: 'task-d', askedBy: 'janedoe', at: minutesAgo(1), verdict: 'approve', reason: 'The design needs it.', counted: false, outside: [{ path: 'apps/hostd/src/x.ts', why: 'the design neither names it nor anything beside it' }] },
             },
           ],
         ]),
@@ -178,13 +178,13 @@ describe('a builder asking for more paths', () => {
 
   it('offers the designer again when its task ended without an answer', async () => {
     const failed = task({ id: 'task-d', botId: 'bot-architect', kind: 'spec', subjectRef: 'openadlc-testbed#16', state: 'failed', skill: 'plan-change-review' });
-    const item = await read({ planChanges: new Map([['gate-p', { ...plan, designer: { taskId: 'task-d', askedBy: 'orzelig', at: minutesAgo(1) } }]]) }, [build(), failed]);
+    const item = await read({ planChanges: new Map([['gate-p', { ...plan, designer: { taskId: 'task-d', askedBy: 'janedoe', at: minutesAgo(1) } }]]) }, [build(), failed]);
     expect(item?.context).toContain('The designer’s task ended without an answer.');
     expect(item?.actions.map((action) => action.kind)).toContain('ask_designer');
   });
 
   it('offers neither while a person’s approval waits on another lease', async () => {
-    const item = await read({ planChanges: new Map([['gate-p', { ...plan, held: { approvedBy: 'orzelig', blockedBy: [12] } }]]) });
+    const item = await read({ planChanges: new Map([['gate-p', { ...plan, held: { approvedBy: 'janedoe', blockedBy: [12] } }]]) });
     expect(item?.actions.map((action) => action.kind)).not.toContain('approve_all');
     expect(item?.actions.map((action) => action.kind)).not.toContain('ask_designer');
   });
@@ -1768,17 +1768,17 @@ describe('what the health checks say', () => {
       stallEvents: [],
       health: [
         healthRow({
-          id: 'signing-key:account:abner620legal',
+          id: 'signing-key:account:openadlc-vega-janedoe',
           checkId: 'signing-key',
           state: 'failing',
           severity: 'warning',
-          title: 'abner620legal has 2 signing keys OpenADLC did not register',
+          title: 'openadlc-vega-janedoe has 2 signing keys OpenADLC did not register',
           action: { label: 'Open the account’s keys', url: 'https://github.com/settings/keys' },
           facts: {
-            login: 'abner620legal',
+            login: 'openadlc-vega-janedoe',
             keyIds: [6, 8],
             signingKeys: {
-              login: 'abner620legal',
+              login: 'openadlc-vega-janedoe',
               foreign: [
                 { id: 6, title: 'laptop' },
                 { id: 8, title: null },
@@ -1792,13 +1792,13 @@ describe('what the health checks say', () => {
     });
 
     const [card] = items;
-    expect(card?.id).toBe('check:signing-key:account:abner620legal');
+    expect(card?.id).toBe('check:signing-key:account:openadlc-vega-janedoe');
     expect(card?.actions).toMatchObject([
-      { kind: 'signing_key_revoke', label: 'Revoke key 6', login: 'abner620legal', keyId: 6, title: 'laptop' },
-      { kind: 'signing_key_dismiss', label: 'Key 6 is used elsewhere', login: 'abner620legal', keyId: 6, title: 'laptop' },
-      { kind: 'signing_key_revoke', label: 'Revoke key 8', login: 'abner620legal', keyId: 8, title: null },
-      { kind: 'signing_key_dismiss', label: 'Key 8 is used elsewhere', login: 'abner620legal', keyId: 8, title: null },
-      { kind: 'signing_key_undo', label: 'Count key 4 again', login: 'abner620legal', keyId: 4 },
+      { kind: 'signing_key_revoke', label: 'Revoke key 6', login: 'openadlc-vega-janedoe', keyId: 6, title: 'laptop' },
+      { kind: 'signing_key_dismiss', label: 'Key 6 is used elsewhere', login: 'openadlc-vega-janedoe', keyId: 6, title: 'laptop' },
+      { kind: 'signing_key_revoke', label: 'Revoke key 8', login: 'openadlc-vega-janedoe', keyId: 8, title: null },
+      { kind: 'signing_key_dismiss', label: 'Key 8 is used elsewhere', login: 'openadlc-vega-janedoe', keyId: 8, title: null },
+      { kind: 'signing_key_undo', label: 'Count key 4 again', login: 'openadlc-vega-janedoe', keyId: 4 },
       { kind: 'open_url', label: 'Open the account’s keys' },
       { kind: 'recheck', checkId: 'signing-key' },
     ]);
@@ -1817,16 +1817,16 @@ describe('what the health checks say', () => {
       stallEvents: [],
       health: [
         healthRow({
-          id: 'signing-key:account:abner620legal',
+          id: 'signing-key:account:openadlc-vega-janedoe',
           checkId: 'signing-key',
           state: 'failing',
           severity: 'warning',
-          title: 'abner620legal has a signing key OpenADLC did not register',
+          title: 'openadlc-vega-janedoe has a signing key OpenADLC did not register',
           facts: {
-            login: 'abner620legal',
+            login: 'openadlc-vega-janedoe',
             keyIds: [6],
             signingKeys: {
-              login: 'abner620legal',
+              login: 'openadlc-vega-janedoe',
               foreign: [{ id: 6, title: 'laptop' }],
               acknowledged: [],
               revokeBlockedBy: 'the bot’s sign-in is a personal access token without the admin:ssh_signing_key scope, which deleting a signing key needs',
@@ -2294,18 +2294,18 @@ describe('an approved plan change that waits on another lease', () => {
         ...base,
         gates: [planGate('gate-pc', 'task-pc')],
         tasks: [building('task-pc', 'openadlc-testbed#16')],
-        heldPlanChanges: [{ gateId: 'gate-pc', paths: PATHS, approvedBy: 'orzelig', blockedBy: [11] }],
+        heldPlanChanges: [{ gateId: 'gate-pc', paths: PATHS, approvedBy: 'janedoe', blockedBy: [11] }],
         standing,
       } as never)[0];
 
-    const on = read([{ repoId: 'repo-1', issueNumber: 16, setBy: 'orzelig', setAt: minutesAgo(40) }]);
+    const on = read([{ repoId: 'repo-1', issueNumber: 16, setBy: 'janedoe', setAt: minutesAgo(40) }]);
     expect(on?.kind).toBe('plan_change_waiting');
     expect(on?.actions).toContainEqual({ kind: 'approve_all_off', label: 'Turn off approve all for #16', subject: 'openadlc-testbed#16' });
     expect(on?.heldApproval).toEqual({ blockedBy: [11], paths: PATHS });
 
     expect(read([])?.actions.map((action) => action.kind)).not.toContain('approve_all_off');
     // Another issue's approve all is not this one's.
-    expect(read([{ repoId: 'repo-1', issueNumber: 11, setBy: 'orzelig', setAt: minutesAgo(40) }])?.actions.map((action) => action.kind)).not.toContain('approve_all_off');
+    expect(read([{ repoId: 'repo-1', issueNumber: 11, setBy: 'janedoe', setAt: minutesAgo(40) }])?.actions.map((action) => action.kind)).not.toContain('approve_all_off');
   });
 
   it('links an issue with no pull request yet, and names every holder', async () => {

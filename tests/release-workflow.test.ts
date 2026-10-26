@@ -669,7 +669,7 @@ describe('publish and build, run', () => {
   ])('%s refuses a re-run by anyone but the releaser check let through', (job, name) => {
     const script = step(job, name);
     expect(run(script, { ACTOR: 'orzelig', CHECKED: 'orzelig' }).status).toBe(0);
-    expect(run(script, { ACTOR: 'openadlc-atlas-orzelig', CHECKED: 'orzelig' }).status).not.toBe(0);
+    expect(run(script, { ACTOR: 'openadlc-atlas-janedoe', CHECKED: 'orzelig' }).status).not.toBe(0);
     expect(run(script, { ACTOR: 'orzelig', CHECKED: '' }).status).not.toBe(0);
   });
 

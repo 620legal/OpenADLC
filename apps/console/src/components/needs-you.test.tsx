@@ -190,20 +190,20 @@ describe('what needs you', () => {
 
   it('offers Revoke and Dismiss for a signing key OpenADLC did not register, admins only, the other keys behind Show more', async () => {
     const KEYS: AttentionItem = {
-      id: 'check:signing-key:account:abner620legal',
+      id: 'check:signing-key:account:openadlc-vega-janedoe',
       kind: 'check_failed',
       severity: 'warning',
-      headline: 'abner620legal has 2 signing keys OpenADLC did not register',
+      headline: 'openadlc-vega-janedoe has 2 signing keys OpenADLC did not register',
       subject: { repo: null, number: null, title: null, ref: null, url: null },
       bot: null,
       since: '2026-09-24T11:59:00.000Z',
-      detail: 'GitHub lists keys on abner620legal that are no seat’s (laptop, id 6; id 8).',
+      detail: 'GitHub lists keys on openadlc-vega-janedoe that are no seat’s (laptop, id 6; id 8).',
       actions: [
-        { kind: 'signing_key_revoke', label: 'Revoke key 6', login: 'abner620legal', keyId: 6, title: 'laptop' },
-        { kind: 'signing_key_dismiss', label: 'Key 6 is used elsewhere', login: 'abner620legal', keyId: 6, title: 'laptop' },
-        { kind: 'signing_key_revoke', label: 'Revoke key 8', login: 'abner620legal', keyId: 8, title: null },
-        { kind: 'signing_key_dismiss', label: 'Key 8 is used elsewhere', login: 'abner620legal', keyId: 8, title: null },
-        { kind: 'signing_key_undo', label: 'Count key 4 again', login: 'abner620legal', keyId: 4, title: null },
+        { kind: 'signing_key_revoke', label: 'Revoke key 6', login: 'openadlc-vega-janedoe', keyId: 6, title: 'laptop' },
+        { kind: 'signing_key_dismiss', label: 'Key 6 is used elsewhere', login: 'openadlc-vega-janedoe', keyId: 6, title: 'laptop' },
+        { kind: 'signing_key_revoke', label: 'Revoke key 8', login: 'openadlc-vega-janedoe', keyId: 8, title: null },
+        { kind: 'signing_key_dismiss', label: 'Key 8 is used elsewhere', login: 'openadlc-vega-janedoe', keyId: 8, title: null },
+        { kind: 'signing_key_undo', label: 'Count key 4 again', login: 'openadlc-vega-janedoe', keyId: 4, title: null },
         { kind: 'open_url', label: 'Open the account’s keys', url: 'https://github.com/settings/keys' },
         { kind: 'recheck', label: 'Check again', checkId: 'signing-key' },
       ],
@@ -220,7 +220,7 @@ describe('what needs you', () => {
     // Dismiss asks nothing further; Revoke confirms first, in the DOM tests.
     press(buttonsIn(<NeedsYou items={[KEYS]} now="2026-09-24T12:00:00.000Z" onOpenBot={() => undefined} />), 'Key 6 is used elsewhere');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(pressed.dismissed).toEqual(['key:abner620legal:6']);
+    expect(pressed.dismissed).toEqual(['key:openadlc-vega-janedoe:6']);
     expect(pressed.revoked).toEqual([]);
   });
 

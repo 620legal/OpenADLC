@@ -205,9 +205,9 @@ function run(script: string, env: Record<string, string>, stubs: Record<string, 
 
 describe('the tag job, run', () => {
   const TOKEN = 'github_pat_11AAAAAAA0secretvalue0123456789';
-  const BASIC = Buffer.from(`orzelig:${TOKEN}`).toString('base64');
+  const BASIC = Buffer.from(`janedoe:${TOKEN}`).toString('base64');
   /** gh answers whose the token is, when it is the token; git writes down the credential it was handed, where the test can read it. */
-  const stubs = (owner = 'orzelig 2146989', push = 0) => ({
+  const stubs = (owner = 'janedoe 1001', push = 0) => ({
     gh: `if [ "$GH_TOKEN" = "${TOKEN}" ]; then echo "${owner}"; else echo "HTTP 401: Bad credentials" >&2; exit 1; fi`,
     git: [
       'if [ "$1" = push ]; then',
@@ -216,13 +216,13 @@ describe('the tag job, run', () => {
       'fi',
     ].join('\n'),
   });
-  const pushEnv = { RELEASE_TAG_TOKEN: TOKEN, ACTOR: 'orzelig', RUN_URL: 'https://github.com/acme/openadlc/actions/runs/7' };
+  const pushEnv = { RELEASE_TAG_TOKEN: TOKEN, ACTOR: 'janedoe', RUN_URL: 'https://github.com/acme/openadlc/actions/runs/7' };
 
   it('refuses a re-run by anyone but the releaser check let through', () => {
     const script = tagStep("the run is still the releaser's").run!;
-    expect(run(script, { ACTOR: 'orzelig', CHECKED: 'orzelig' }).status).toBe(0);
-    expect(run(script, { ACTOR: 'openadlc-atlas-orzelig', CHECKED: 'orzelig' }).status).not.toBe(0);
-    expect(run(script, { ACTOR: 'orzelig', CHECKED: '' }).status).not.toBe(0);
+    expect(run(script, { ACTOR: 'janedoe', CHECKED: 'janedoe' }).status).toBe(0);
+    expect(run(script, { ACTOR: 'openadlc-atlas-janedoe', CHECKED: 'janedoe' }).status).not.toBe(0);
+    expect(run(script, { ACTOR: 'janedoe', CHECKED: '' }).status).not.toBe(0);
   });
 
   it('makes an annotated tag by the token’s owner, and pushes it with the credential in git’s environment alone', () => {
@@ -230,7 +230,7 @@ describe('the tag job, run', () => {
     expect(pushed.status, pushed.said).toBe(0);
     expect(pushed.asked.trim().split('\n')).toEqual([
       'gh api user --jq "\\(.login) \\(.id)"',
-      `git -c user.name=orzelig -c user.email=2146989+orzelig@users.noreply.github.com tag -a v0.2.0 ${'a'.repeat(40)} -m v0.2.0 -m Cut by orzelig with https://github.com/acme/openadlc/actions/runs/7`,
+      `git -c user.name=janedoe -c user.email=1001+janedoe@users.noreply.github.com tag -a v0.2.0 ${'a'.repeat(40)} -m v0.2.0 -m Cut by janedoe with https://github.com/acme/openadlc/actions/runs/7`,
       'git push origin refs/tags/v0.2.0:refs/tags/v0.2.0',
     ]);
     expect(pushed.credential.split('\n').slice(0, 4)).toEqual(['1', 'http.https://github.com/.extraheader', `AUTHORIZATION: basic ${BASIC}`, '0']);
@@ -239,13 +239,13 @@ describe('the tag job, run', () => {
       expect(pushed.asked).not.toContain(secret);
       expect(pushed.said).not.toContain(secret);
     }
-    expect(pushed.said).toContain(`pushed v0.2.0 on ${'a'.repeat(40)} as orzelig`);
+    expect(pushed.said).toContain(`pushed v0.2.0 on ${'a'.repeat(40)} as janedoe`);
   });
 
   it.each<[string, Record<string, string>, ReturnType<typeof stubs>, RegExp]>([
     ['there is no token', { ...pushEnv, RELEASE_TAG_TOKEN: '' }, stubs(), /no secret RELEASE_TAG_TOKEN/],
     ['GitHub does not take the token', { ...pushEnv, RELEASE_TAG_TOKEN: 'github_pat_expired' }, stubs(), /expired or been revoked/],
-    ['the token is someone else’s', pushEnv, stubs('someone 7'), /RELEASE_TAG_TOKEN is someone's, not orzelig's/],
+    ['the token is someone else’s', pushEnv, stubs('someone 7'), /RELEASE_TAG_TOKEN is someone's, not janedoe's/],
   ])('pushes nothing, and makes no tag, when %s', (_what, env, programs, reason) => {
     const refused = run(tagStep(PUSH).run!, env, programs);
     expect(refused.status).not.toBe(0);
@@ -256,13 +256,13 @@ describe('the tag job, run', () => {
   });
 
   it('takes the token’s owner in any case, as GitHub does a login', () => {
-    expect(run(tagStep(PUSH).run!, { ...pushEnv, ACTOR: 'OrZelig' }, stubs()).status).toBe(0);
+    expect(run(tagStep(PUSH).run!, { ...pushEnv, ACTOR: 'JaneDoe' }, stubs()).status).toBe(0);
   });
 
   it('fails, saying so, when GitHub refuses the push, and the token is still nowhere in the log', () => {
-    const refused = run(tagStep(PUSH).run!, pushEnv, stubs('orzelig 2146989', 1));
+    const refused = run(tagStep(PUSH).run!, pushEnv, stubs('janedoe 1001', 1));
     expect(refused.status).not.toBe(0);
-    expect(refused.said).toMatch(/GitHub refused the push of v0\.2\.0 as orzelig/);
+    expect(refused.said).toMatch(/GitHub refused the push of v0\.2\.0 as janedoe/);
     for (const secret of [TOKEN, BASIC]) expect(refused.said).not.toContain(secret);
   });
 
@@ -289,7 +289,7 @@ describe('RELEASERS, as the check reads them', () => {
 
   it('is only the top-level env’s, once', () => {
     expect(releasersIn('on:\n  workflow_call:\n# a note\nenv:\n  # who\n  RELEASERS: "a, @B" # two\njobs: {}\n')).toEqual(['a', 'b']);
-    expect(() => releasersIn('jobs:\n  check:\n    env:\n      RELEASERS: orzelig\n')).toThrow(/names RELEASERS 0 times/);
+    expect(() => releasersIn('jobs:\n  check:\n    env:\n      RELEASERS: janedoe\n')).toThrow(/names RELEASERS 0 times/);
     expect(() => releasersIn('env:\n  RELEASERS: a\njobs:\n  x: {}\nenv:\n  RELEASERS: b\n')).toThrow(/names RELEASERS 2 times/);
   });
 });
@@ -447,7 +447,7 @@ describe('the run', () => {
   });
 
   it('is refused when started, or re-run, by anyone but one of RELEASERS', () => {
-    expect(() => cut({ actor: 'openadlc-atlas-orzelig' })).toThrow(/openadlc-atlas-orzelig is not one of RELEASERS in release-build\.yml \(orzelig\)/);
+    expect(() => cut({ actor: 'openadlc-atlas-janedoe' })).toThrow(/openadlc-atlas-janedoe is not one of RELEASERS in release-build\.yml \(orzelig\)/);
     expect(() => cut({ triggeringActor: 'someone' })).toThrow(/someone is not one of RELEASERS/);
     expect(cut({ actor: 'OrZelig', triggeringActor: 'ORZELIG' }).actor).toBe('ORZELIG');
   });

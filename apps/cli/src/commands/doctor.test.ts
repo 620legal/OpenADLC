@@ -368,7 +368,7 @@ describe('openadlc doctor on the health checks', () => {
           check: 'repo-rules',
           state: 'ok',
           proves: 'Each repository is protected the way OpenADLC sets it',
-          detail: 'openadlc: main on 620legal/OpenADLC: a person may bypass it: orzelig (user 2146989, always)',
+          detail: 'openadlc: main on 620legal/OpenADLC: a person may bypass it: janedoe (user 1001, always)',
         }),
         view({ id: 'repo-rules:620legal/OpenADLC:crew-admin', check: 'repo-rules', state: 'ok', proves: 'Each repository is protected the way OpenADLC sets it' }),
       ],
@@ -376,7 +376,7 @@ describe('openadlc doctor on the health checks', () => {
     );
     expect(lines).toEqual([
       { level: 'ok', text: 'Each repository is protected the way OpenADLC sets it' },
-      { level: 'note', text: 'openadlc: main on 620legal/OpenADLC: a person may bypass it: orzelig (user 2146989, always)' },
+      { level: 'note', text: 'openadlc: main on 620legal/OpenADLC: a person may bypass it: janedoe (user 1001, always)' },
     ]);
     expect(blocking).toBe(0);
   });

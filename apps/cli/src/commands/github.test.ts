@@ -562,13 +562,13 @@ describe('the rules `github check` and `github apply` build', () => {
       { id: 'bot-flow', name: 'automation', slot: 'automation', role: 'automation', githubLogin: 'alice-automation' },
       { id: 'bot-lead', name: 'reviewer', slot: 'reviewer', role: 'review_lead', githubLogin: 'alice-reviews' },
     ];
-    world.accounts = [{ id: 'identity-flow', login: 'alice-automation', githubUserId: 333371704, secretNs: 'automation' }];
+    world.accounts = [{ id: 'identity-flow', login: 'alice-automation', githubUserId: 1004, secretNs: 'automation' }];
     world.seated = [{ botId: 'bot-flow', identityId: 'identity-flow' }];
     world.signedIn = [{ botId: 'bot-lead', githubUserId: 5150 }];
 
     const { input } = await rulesInputFor({ ...config, humans: ['alice'], organization: 'alice' }, repo, null, app);
     expect(input.crewAccounts).toEqual([
-      { login: 'alice-automation', id: 333371704 },
+      { login: 'alice-automation', id: 1004 },
       { login: 'alice-reviews', id: 5150 },
     ]);
     expect(input.crewUnread).toBeUndefined();
@@ -672,9 +672,9 @@ describe('who writes labels and rules from the terminal', () => {
 
 describe('what `github check` says of each rule', () => {
   it('says what it found beside a rule that is in place: who else may bypass a ruleset', () => {
-    expect(ruleLine({ name: 'openadlc: main', state: 'present', detail: 'a person may bypass it: orzelig (user 2146989, always)' })).toEqual({
+    expect(ruleLine({ name: 'openadlc: main', state: 'present', detail: 'a person may bypass it: janedoe (user 1001, always)' })).toEqual({
       level: 'ok',
-      text: 'openadlc: main — a person may bypass it: orzelig (user 2146989, always)',
+      text: 'openadlc: main — a person may bypass it: janedoe (user 1001, always)',
       counts: false,
     });
     expect(ruleLine({ name: 'openadlc: agent and system branches', state: 'present', detail: '' })).toEqual({

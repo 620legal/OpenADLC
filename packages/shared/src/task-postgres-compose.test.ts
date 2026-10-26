@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { COMPOSE_FILES, postgresFromCompose, type ComposePostgresRead, type ComposePostgresServer } from './task-postgres-compose.js';
 import { parseTaskPostgres, TASK_POSTGRES_MAX_SERVERS } from './task-postgres.js';
 
-/** 620legal/core's docker-compose.yml on main, as it is (2026-10-23). */
-const CORE_COMPOSE = `services:
+/** acme/app's docker-compose.yml on main. */
+const APP_COMPOSE = `services:
   postgres:
     image: pgvector/pgvector:pg16
-    environment: { POSTGRES_USER: core, POSTGRES_PASSWORD: core, POSTGRES_DB: core_db }
+    environment: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app_db }
     ports: ['55432:5432']
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U core -d core_db']
+      test: ['CMD-SHELL', 'pg_isready -U app -d app_db']
       interval: 2s
       timeout: 3s
       retries: 30
@@ -29,13 +29,13 @@ function why(read: ComposePostgresRead): string {
 const one = (service: string) => servers(postgresFromCompose(`services:\n${service}`, 'docker-compose.yml'))[0]!;
 
 describe('the Postgres servers a repository’s Compose file starts', () => {
-  it('reads core’s file as core’s one server, with nothing left to give, which a save takes as it is', () => {
-    const read = postgresFromCompose(CORE_COMPOSE, 'docker-compose.yml');
+  it('reads app’s file as app’s one server, with nothing left to give, which a save takes as it is', () => {
+    const read = postgresFromCompose(APP_COMPOSE, 'docker-compose.yml');
 
     expect(read).toEqual({
       ok: true,
       servers: [
-        { service: 'postgres', port: 55432, superuser: 'core', password: 'core', database: 'core_db', image: 'pgvector/pgvector:pg16', notes: [], refusal: null },
+        { service: 'postgres', port: 55432, superuser: 'app', password: 'app', database: 'app_db', image: 'pgvector/pgvector:pg16', notes: [], refusal: null },
       ],
       notes: [],
     });
@@ -86,9 +86,9 @@ describe('the Postgres servers a repository’s Compose file starts', () => {
 
   it('takes the default the file gives a variable, and says so, since a .env could set another', () => {
     const server = one(
-      `  db:\n    image: \${PG_IMAGE:-pgvector/pgvector:pg17}\n    environment:\n      POSTGRES_USER: \${DB_USER:-core}\n      POSTGRES_PASSWORD: \${DB_PASSWORD-core}\n      POSTGRES_DB: \${DB_NAME:-\${DB_USER:-core}_db}\n    ports: ['\${PG_PORT:-55432}:5432']\n`,
+      `  db:\n    image: \${PG_IMAGE:-pgvector/pgvector:pg17}\n    environment:\n      POSTGRES_USER: \${DB_USER:-app}\n      POSTGRES_PASSWORD: \${DB_PASSWORD-app}\n      POSTGRES_DB: \${DB_NAME:-\${DB_USER:-app}_db}\n    ports: ['\${PG_PORT:-55432}:5432']\n`,
     );
-    expect(server).toMatchObject({ port: 55432, superuser: 'core', password: 'core', database: 'core_db', image: 'pgvector/pgvector:pg17', refusal: null });
+    expect(server).toMatchObject({ port: 55432, superuser: 'app', password: 'app', database: 'app_db', image: 'pgvector/pgvector:pg17', refusal: null });
     expect(server.notes).toEqual([
       { field: 'image', text: "the file's default for $PG_IMAGE" },
       { field: 'superuser', text: "the file's default for $DB_USER" },
@@ -131,10 +131,10 @@ describe('the Postgres servers a repository’s Compose file starts', () => {
 
   it('reads a service that takes its settings from an anchor through <<', () => {
     const read = postgresFromCompose(
-      `x-pg: &pg\n  image: pgvector/pgvector:pg16\n  environment: { POSTGRES_USER: core, POSTGRES_PASSWORD: core, POSTGRES_DB: core_db }\nservices:\n  postgres:\n    <<: *pg\n    ports: ['55432:5432']\n`,
+      `x-pg: &pg\n  image: pgvector/pgvector:pg16\n  environment: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app_db }\nservices:\n  postgres:\n    <<: *pg\n    ports: ['55432:5432']\n`,
       'compose.yaml',
     );
-    expect(servers(read)).toMatchObject([{ port: 55432, superuser: 'core', password: 'core', database: 'core_db', image: 'pgvector/pgvector:pg16' }]);
+    expect(servers(read)).toMatchObject([{ port: 55432, superuser: 'app', password: 'app', database: 'app_db', image: 'pgvector/pgvector:pg16' }]);
   });
 
   it('gives one server per Postgres service, in the file’s order, and passes over the rest', () => {

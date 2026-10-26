@@ -28,11 +28,11 @@ vi.mock('@openadlc/db', () => ({
 
 import { MessageStarts, messageBrief, whatStarts, type StartView } from './message-starts.js';
 
-const ITEM = { key: 'core#5', repo: 'core', refs: { request: null, issue: 'core#5', pullRequest: 'core#7' } };
-const REPO = { id: 'repo-core', name: 'core', fullName: '620legal/core' };
+const ITEM = { key: 'app#5', repo: 'app', refs: { request: null, issue: 'app#5', pullRequest: 'app#7' } };
+const REPO = { id: 'repo-app', name: 'app', fullName: 'acme/app' };
 
 function task(input: Partial<StartView['tasks'][number]> & { bot: string; kind: StartView['tasks'][number]['kind'] }) {
-  return { id: `k-${input.bot}-${input.kind}`, role: null, state: 'done' as const, subjectRef: 'core#7', branch: null, exitReason: null, ...input };
+  return { id: `k-${input.bot}-${input.kind}`, role: null, state: 'done' as const, subjectRef: 'app#7', branch: null, exitReason: null, ...input };
 }
 
 const IN_REVIEW: StartView = {
@@ -43,7 +43,7 @@ const IN_REVIEW: StartView = {
   held: null,
   tasks: [
     task({ bot: 'lead-reviewer', role: 'review_lead', kind: 'review' }),
-    task({ bot: 'builder', role: 'implement', kind: 'implement', subjectRef: 'core#5', branch: 'agent/builder/5-scope' }),
+    task({ bot: 'builder', role: 'implement', kind: 'implement', subjectRef: 'app#5', branch: 'agent/builder/5-scope' }),
   ],
 };
 
@@ -60,7 +60,7 @@ describe('what a message to a role starts', () => {
       ...IN_REVIEW,
       stage: 'build',
       pullRequest: null,
-      tasks: [task({ bot: 'builder', role: 'implement', kind: 'implement', subjectRef: 'core#5', branch: 'agent/builder/5-scope', state: 'done' })],
+      tasks: [task({ bot: 'builder', role: 'implement', kind: 'implement', subjectRef: 'app#5', branch: 'agent/builder/5-scope', state: 'done' })],
     };
     expect(said('implement', 'builder', left)).toEqual({ kind: 'starts', what: 'its build of #5 again, from agent/builder/5-scope' });
     // Waiting for its lease, nothing starts it but the dispatcher.
@@ -78,7 +78,7 @@ describe('what a message to a role starts', () => {
   it('is design’s pass on an issue in Design, and intake’s triage of a request', () => {
     const design: StartView = { ...IN_REVIEW, stage: 'spec', pullRequest: null, tasks: [] };
     expect(said('spec', 'system-engineer', design)).toEqual({ kind: 'starts', what: 'its design pass on #5' });
-    const request = { key: 'request:c0ffee00', repo: 'core', refs: { request: 'request:c0ffee00', issue: null, pullRequest: null } };
+    const request = { key: 'request:c0ffee00', repo: 'app', refs: { request: 'request:c0ffee00', issue: null, pullRequest: null } };
     const asked: StartView = { stage: 'intake', issue: null, pullRequest: null, request: { id: 'c0ffee00-1111', state: 'draft' }, tasks: [] };
     expect(whatStarts({ role: 'intake', bot: 'intake', view: asked, item: request, facts: {} })).toEqual({ kind: 'starts', what: 'its triage of the request' });
     expect(whatStarts({ role: 'intake', bot: 'intake', view: { ...asked, request: { state: 'filed' } }, item: request, facts: {} })).toEqual({
@@ -118,39 +118,39 @@ describe('what a message to a role starts', () => {
   });
 
   it('is nothing on a held item, a paused seat or paused work, saying which', () => {
-    expect(said('implement', 'builder', { ...IN_REVIEW, held: { by: 'orzelig', why: 'waiting for the release' } })).toEqual({
+    expect(said('implement', 'builder', { ...IN_REVIEW, held: { by: 'janedoe', why: 'waiting for the release' } })).toEqual({
       kind: 'nothing',
-      why: 'core#5 is held by orzelig (waiting for the release); resume it on its card to let work start',
+      why: 'app#5 is held by janedoe (waiting for the release); resume it on its card to let work start',
     });
-    expect(said('implement', 'builder', IN_REVIEW, { seatPauses: { builder: 'builder is paused by orzelig: changing its model' } })).toEqual({
+    expect(said('implement', 'builder', IN_REVIEW, { seatPauses: { builder: 'builder is paused by janedoe: changing its model' } })).toEqual({
       kind: 'nothing',
-      why: 'builder is paused by orzelig: changing its model; resume it on the Crew page',
+      why: 'builder is paused by janedoe: changing its model; resume it on the Crew page',
     });
-    expect(said('implement', 'builder', IN_REVIEW, { workPaused: 'work is paused, by orzelig since today; resume it in Settings → Pause work' })).toEqual({
+    expect(said('implement', 'builder', IN_REVIEW, { workPaused: 'work is paused, by janedoe since today; resume it in Settings → Pause work' })).toEqual({
       kind: 'nothing',
-      why: 'work is paused, by orzelig since today; resume it in Settings → Pause work',
+      why: 'work is paused, by janedoe since today; resume it in Settings → Pause work',
     });
     // Another seat's pause holds nobody else.
-    expect(said('implement', 'builder', IN_REVIEW, { seatPauses: { 'lead-reviewer': 'lead-reviewer is paused by orzelig' } })).toMatchObject({ kind: 'starts' });
+    expect(said('implement', 'builder', IN_REVIEW, { seatPauses: { 'lead-reviewer': 'lead-reviewer is paused by janedoe' } })).toMatchObject({ kind: 'starts' });
   });
 });
 
 describe('the brief a message starts a task with', () => {
   it('is the person’s words, named by their public name and never their address', () => {
-    const brief = messageBrief({ identity: 'orzelig@620legal.com', text: '  Make it accept any heading level.  ', role: 'implement', where: 'https://github.com/620legal/core/issues/5#issuecomment-1' });
+    const brief = messageBrief({ identity: 'janedoe@example.com', text: '  Make it accept any heading level.  ', role: 'implement', where: 'https://github.com/acme/app/issues/5#issuecomment-1' });
     expect(brief.name).toBe('message.md');
-    expect(brief.content).toContain('# orzelig wrote to the builder in the OpenADLC console');
+    expect(brief.content).toContain('# janedoe wrote to the builder in the OpenADLC console');
     expect(brief.content).toContain('This task started from this message: it is your brief');
-    expect(brief.content).toContain('It is on https://github.com/620legal/core/issues/5#issuecomment-1 as well, posted as you.');
+    expect(brief.content).toContain('It is on https://github.com/acme/app/issues/5#issuecomment-1 as well, posted as you.');
     expect(brief.content.endsWith('Make it accept any heading level.')).toBe(true);
-    expect(`${brief.title}\n${brief.content}`).not.toContain('@620legal.com');
+    expect(`${brief.title}\n${brief.content}`).not.toContain('@example.com');
   });
 });
 
 describe('starting a role’s work from a message', () => {
   const view = (stage: string, extra: Record<string, unknown> = {}) =>
     ({
-      key: 'core#5',
+      key: 'app#5',
       stage,
       issue: { number: 5 },
       pullRequest: { number: 7 },
@@ -160,7 +160,7 @@ describe('starting a role’s work from a message', () => {
       ...extra,
     }) as never;
   const read = (stage: string, extra: Record<string, unknown> = {}) => ({ item: { ...ITEM, request: null } as never, view: view(stage, extra), repo: REPO });
-  const message = { id: 'm-9', githubUrl: 'https://github.com/620legal/core/issues/5#issuecomment-9' };
+  const message = { id: 'm-9', githubUrl: 'https://github.com/acme/app/issues/5#issuecomment-9' };
 
   function starter(overrides: Record<string, unknown> = {}) {
     const calls = {
@@ -195,18 +195,18 @@ describe('starting a role’s work from a message', () => {
   it('starts the builder’s patch round with the message as its brief', async () => {
     const { starts, calls } = starter();
     const started = await starts.start({
-      route: { bot: 'builder', botId: 'b-builder', role: 'implement', subject: 'core#5' },
+      route: { bot: 'builder', botId: 'b-builder', role: 'implement', subject: 'app#5' },
       read: read('review'),
       text: 'Make the scope check accept any heading level, in this PR.',
-      identity: 'orzelig@620legal.com',
+      identity: 'janedoe@example.com',
       access: 'user',
       message,
     });
     expect(started).toEqual({ kind: 'starts', what: 'patch round 2 on pull request #7' });
     expect(calls.fromMessage).toHaveBeenCalledWith({
-      repoName: 'core',
+      repoName: 'app',
       prNumber: 7,
-      actor: 'orzelig@620legal.com',
+      actor: 'janedoe@example.com',
       reason: 'Make the scope check accept any heading level, in this PR.',
       brief: expect.objectContaining({ name: 'message.md', content: expect.stringContaining('Make the scope check accept any heading level, in this PR.') }),
       commentUrl: message.githubUrl,
@@ -217,10 +217,10 @@ describe('starting a role’s work from a message', () => {
   it('starts a reviewer’s review again, briefed with the message, and records it as asked again', async () => {
     const { starts, calls } = starter();
     const started = await starts.start({
-      route: { bot: 'lead-reviewer', botId: 'b-lead', role: 'review_lead', subject: 'core#7' },
+      route: { bot: 'lead-reviewer', botId: 'b-lead', role: 'review_lead', subject: 'app#7' },
       read: read('review'),
       text: 'Look at the scope check again.',
-      identity: 'orzelig@620legal.com',
+      identity: 'janedoe@example.com',
       access: 'admin',
       message,
     });
@@ -229,7 +229,7 @@ describe('starting a role’s work from a message', () => {
       expect.objectContaining({
         bot: 'lead-reviewer',
         kind: 'review',
-        subjectRef: 'core#7',
+        subjectRef: 'app#7',
         skill: 'pr-review',
         branch: 'agent/builder/5-scope',
         issueNumber: 5,
@@ -237,16 +237,16 @@ describe('starting a role’s work from a message', () => {
       }),
     );
     // The gate sweep then takes the seat's earlier reviews for no answer to this.
-    expect(world.events).toEqual([expect.objectContaining({ type: 'review.asked_again', payload: { subjectRef: 'core#7', seat: 'lead-reviewer', messageId: 'm-9' } })]);
+    expect(world.events).toEqual([expect.objectContaining({ type: 'review.asked_again', payload: { subjectRef: 'app#7', seat: 'lead-reviewer', messageId: 'm-9' } })]);
   });
 
   it('starts design’s pass and intake’s triage, each with the message', async () => {
     const { starts, calls } = starter();
-    await starts.start({ route: { bot: 'system-engineer', botId: 'b-spec', role: 'spec', subject: 'core#5' }, read: read('spec', { pullRequest: null, tasks: [] }), text: 'Keep the old column.', identity: 'jane@acme.test', access: 'user', message });
-    expect(calls.staffing).toHaveBeenCalledWith({ repoName: 'core', issueNumber: 5, stage: 'spec', brief: [expect.objectContaining({ name: 'message.md' })] });
+    await starts.start({ route: { bot: 'system-engineer', botId: 'b-spec', role: 'spec', subject: 'app#5' }, read: read('spec', { pullRequest: null, tasks: [] }), text: 'Keep the old column.', identity: 'jane@acme.test', access: 'user', message });
+    expect(calls.staffing).toHaveBeenCalledWith({ repoName: 'app', issueNumber: 5, stage: 'spec', brief: [expect.objectContaining({ name: 'message.md' })] });
 
     const request = {
-      item: { key: 'request:c0ffee00', repo: 'core', refs: { request: 'request:c0ffee00', issue: null, pullRequest: null }, request: { id: 'c0ffee00-1111' } } as never,
+      item: { key: 'request:c0ffee00', repo: 'app', refs: { request: 'request:c0ffee00', issue: null, pullRequest: null }, request: { id: 'c0ffee00-1111' } } as never,
       view: { key: 'request:c0ffee00', stage: 'intake', issue: null, pullRequest: null, request: { id: 'c0ffee00-1111', state: 'draft' }, tasks: [], held: null } as never,
       repo: REPO,
     };
@@ -258,31 +258,31 @@ describe('starting a role’s work from a message', () => {
   it('starts nothing on a held item, and says so on the timeline as the composer did', async () => {
     const { starts, calls } = starter();
     const held = await starts.start({
-      route: { bot: 'builder', botId: 'b-builder', role: 'implement', subject: 'core#5' },
-      read: read('review', { held: { by: 'orzelig', at: '', why: null } }),
+      route: { bot: 'builder', botId: 'b-builder', role: 'implement', subject: 'app#5' },
+      read: read('review', { held: { by: 'janedoe', at: '', why: null } }),
       text: 'Fix it.',
-      identity: 'orzelig@620legal.com',
+      identity: 'janedoe@example.com',
       access: 'user',
       message,
     });
-    expect(held).toEqual({ kind: 'nothing', why: 'core#5 is held by orzelig; resume it on its card to let work start' });
+    expect(held).toEqual({ kind: 'nothing', why: 'app#5 is held by janedoe; resume it on its card to let work start' });
     expect(calls.fromMessage).not.toHaveBeenCalled();
     expect(world.messages).toEqual([
-      expect.objectContaining({ threadId: 't-1', kind: 'sys', text: 'posted as a comment; nothing starts: core#5 is held by orzelig; resume it on its card to let work start' }),
+      expect.objectContaining({ threadId: 't-1', kind: 'sys', text: 'posted as a comment; nothing starts: app#5 is held by janedoe; resume it on its card to let work start' }),
     ]);
-    expect(world.threads[0]).toMatchObject({ botId: 'b-builder', subjectRef: 'core#5' });
+    expect(world.threads[0]).toMatchObject({ botId: 'b-builder', subjectRef: 'app#5' });
   });
 
   it('says what was refused once it tried: a builder no lease holds starts nothing', async () => {
     const { starts } = starter({ sendBack: { fromMessage: async () => ({ started: false, why: 'no lease on #5 was ever linked to #7' }) } });
-    const refused = await starts.start({ route: { bot: 'builder', botId: 'b-builder', role: 'implement', subject: 'core#5' }, read: read('review'), text: 'Fix it.', identity: 'jane@acme.test', access: 'user', message });
+    const refused = await starts.start({ route: { bot: 'builder', botId: 'b-builder', role: 'implement', subject: 'app#5' }, read: read('review'), text: 'Fix it.', identity: 'jane@acme.test', access: 'user', message });
     expect(refused).toEqual({ kind: 'nothing', why: 'no lease on #5 was ever linked to #7' });
     expect(world.messages).toEqual([expect.objectContaining({ kind: 'sys', text: 'posted as a comment; nothing started: no lease on #5 was ever linked to #7' })]);
   });
 
   it('starts nothing for a sender with no console role', async () => {
     const { starts, calls } = starter();
-    const refused = await starts.start({ route: { bot: 'builder', botId: 'b-builder', role: 'implement', subject: 'core#5' }, read: read('review'), text: 'Fix it.', identity: 'someone', message });
+    const refused = await starts.start({ route: { bot: 'builder', botId: 'b-builder', role: 'implement', subject: 'app#5' }, read: read('review'), text: 'Fix it.', identity: 'someone', message });
     expect(refused).toEqual({ kind: 'nothing', why: 'only a person signed in to the console starts work with a message' });
     expect(calls.fromMessage).not.toHaveBeenCalled();
   });
@@ -291,13 +291,13 @@ describe('starting a role’s work from a message', () => {
     const later: (() => Promise<unknown>)[] = [];
     const { starts } = starter({
       afterwards: { run: (_where: unknown, _what: string, work: () => Promise<unknown>) => void later.push(work) },
-      stages: { staffing: async () => ({ started: false, why: 'work on core#5 is already under way' }) },
+      stages: { staffing: async () => ({ started: false, why: 'work on app#5 is already under way' }) },
     });
-    const decided = await starts.start({ route: { bot: 'system-engineer', botId: 'b-spec', role: 'spec', subject: 'core#5' }, read: read('spec', { pullRequest: null, tasks: [] }), text: 'Again.', identity: 'jane@acme.test', access: 'user', message });
+    const decided = await starts.start({ route: { bot: 'system-engineer', botId: 'b-spec', role: 'spec', subject: 'app#5' }, read: read('spec', { pullRequest: null, tasks: [] }), text: 'Again.', identity: 'jane@acme.test', access: 'user', message });
     expect(decided).toEqual({ kind: 'starts', what: 'its design pass on #5' });
     expect(world.messages).toEqual([]);
     await later[0]!();
-    expect(world.messages).toEqual([expect.objectContaining({ kind: 'sys', text: 'posted as a comment; nothing started: work on core#5 is already under way' })]);
+    expect(world.messages).toEqual([expect.objectContaining({ kind: 'sys', text: 'posted as a comment; nothing started: work on app#5 is already under way' })]);
   });
 });
 
@@ -313,18 +313,18 @@ describe('what the bridge reads for it', () => {
       stages: {} as never,
       triage: async () => ({ queued: false }),
       rebuild: async () => undefined,
-      paused: (repo) => (repo === 'core' ? null : 'paused'),
-      seatPauses: async () => ({ builder: { by: 'orzelig', at: 't', why: null } }),
+      paused: (repo) => (repo === 'app' ? null : 'paused'),
+      seatPauses: async () => ({ builder: { by: 'janedoe', at: 't', why: null } }),
       now: () => now,
     });
     const read = { item: ITEM as never, view: { stage: 'review', pullRequest: { number: 7 } } as never, repo: REPO };
     expect(await starts.facts(read)).toEqual({
-      seatPauses: { builder: 'builder is paused by orzelig' },
+      seatPauses: { builder: 'builder is paused by janedoe' },
       workPaused: null,
       pull: { state: 'open', headRef: 'agent/builder/5-scope', headSha: 'abc1234' },
       ciRed: true,
     });
-    expect(request).toHaveBeenCalledWith('GET', '/repos/620legal/core/actions/runs?head_sha=abc1234&per_page=100');
+    expect(request).toHaveBeenCalledWith('GET', '/repos/acme/app/actions/runs?head_sha=abc1234&per_page=100');
     await starts.facts(read);
     expect(getPullRequest).toHaveBeenCalledTimes(1);
     now = 61_000;

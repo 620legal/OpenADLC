@@ -396,7 +396,7 @@ describe('how a repository’s production ships', () => {
 });
 
 describe('a repository’s Postgres servers for its tasks', () => {
-  const SETTING = { servers: [{ port: 55432, superuser: 'core', password: 'core', database: 'core_db', image: 'pgvector/pgvector:pg16' }], sharedDatabase: false };
+  const SETTING = { servers: [{ port: 55432, superuser: 'app', password: 'app', database: 'app_db', image: 'pgvector/pgvector:pg16' }], sharedDatabase: false };
 
   it('reads the setting off its own column, and none as null', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce({ task_postgres: SETTING }).mockResolvedValueOnce({ task_postgres: null }).mockResolvedValueOnce(null);

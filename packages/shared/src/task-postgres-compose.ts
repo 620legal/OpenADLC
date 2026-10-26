@@ -6,11 +6,11 @@ import { TASK_POSTGRES_MAX_SERVERS, taskPostgresImageRefusal, taskPostgresReposi
  * starts them on a laptop: what Settings → Repositories → "Postgres for its
  * tasks" fills in for a person to confirm, rather than type.
  *
- * On v0.1.10 a person opened that form for 620legal/core, saw only examples,
- * pressed Save and was told "server 1 has no port", while every value it
- * wanted was in core's docker-compose.yml: `pgvector/pgvector:pg16`,
- * `55432:5432`, and `core`, `core`, `core_db` as `POSTGRES_USER`,
- * `POSTGRES_PASSWORD` and `POSTGRES_DB`.
+ * On v0.1.10 a person opened that form for a managed repository, saw only
+ * examples, pressed Save and was told "server 1 has no port", while every
+ * value it wanted was in the repository's docker-compose.yml:
+ * `pgvector/pgvector:pg16`, `55432:5432`, and its superuser, password and
+ * database as `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB`.
  *
  * The file comes from GitHub, so it is data: it is read, never run and never
  * saved from. What it suggests reaches the setting only when a person presses

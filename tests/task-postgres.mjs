@@ -34,8 +34,8 @@ const INSTALL = process.env.OPENADLC_INSTALL_ID ?? 'default';
 const NETWORK = process.env.OPENADLC_BOT_PREFIX ? `${process.env.OPENADLC_BOT_PREFIX}tasks` : 'openadlc-tasks';
 const SECRET = await getSecretStore().get(internalSecretRef());
 const CONSOLE_SECRET = await getSecretStore().get(consoleSecretRef());
-/** 620legal/core's local Postgres, as its docker-compose.yml and Makefile name it. */
-const CORE = { port: 55432, superuser: 'core', password: 'core', database: 'core_db', image: 'pgvector/pgvector:pg16' };
+/** acme/app's local Postgres, as its docker-compose.yml and Makefile name it. */
+const APP = { port: 55432, superuser: 'app', password: 'app', database: 'app_db', image: 'pgvector/pgvector:pg16' };
 
 const internal = { 'content-type': 'application/json', 'x-openadlc-internal-secret': SECRET ?? '' };
 const results = [];
@@ -150,7 +150,7 @@ socket.on('data', (chunk) => {
 `;
 
 /** One query from inside a container, over TCP, as the configured superuser unless told otherwise. */
-async function pg(container, sql, { host = '127.0.0.1', port = CORE.port, user = CORE.superuser, password = CORE.password, database = CORE.database } = {}) {
+async function pg(container, sql, { host = '127.0.0.1', port = APP.port, user = APP.superuser, password = APP.password, database = APP.database } = {}) {
   const answer = await docker('exec', container, 'node', '-e', PG_CLIENT, host, String(port), user, password, database, sql);
   try {
     return JSON.parse(answer.stdout || '{}');
@@ -299,12 +299,12 @@ async function main() {
   const leftovers = [];
   try {
     const path = `/v1/repos/${encodeURIComponent(repo.name)}/task-postgres`;
-    const unsigned = await asPerson('PUT', path, { servers: [CORE] }, { secret: null });
+    const unsigned = await asPerson('PUT', path, { servers: [APP] }, { secret: null });
     check('the setting is refused to a caller without the console secret, as a task would be', unsigned.status === 401, `status ${unsigned.status}`);
-    const outside = await asPerson('PUT', path, { servers: [{ ...CORE, image: 'someone/postgres:16' }] });
+    const outside = await asPerson('PUT', path, { servers: [{ ...APP, image: 'someone/postgres:16' }] });
     check('an image outside the allowlist is refused with what to do', outside.status === 400 && /pgvector\/pgvector:<tag> or postgres:<tag>/.test(String(outside.body.error)), String(outside.body.error ?? '').slice(0, 80));
-    const saved = await asPerson('PUT', path, { servers: [CORE] });
-    check('a person sets core’s server for the repository', saved.status === 200 && saved.body.taskPostgres?.servers?.[0]?.port === 55432, `status ${saved.status}`);
+    const saved = await asPerson('PUT', path, { servers: [APP] });
+    check('a person sets app’s server for the repository', saved.status === 200 && saved.body.taskPostgres?.servers?.[0]?.port === 55432, `status ${saved.status}`);
     check('the install says it can give a task one', saved.body.supported?.ok === true, JSON.stringify(saved.body.supported));
 
     const first = await startHeld(repo, builder, 970);
@@ -337,22 +337,22 @@ async function main() {
     const who = await pg(first.container, "select current_user, (select rolsuper::text from pg_roles where rolname = current_user), current_database(), host(inet_server_addr()), current_setting('port')");
     check(
       'the task reaches its server at 127.0.0.1:55432 as the configured superuser',
-      !who.error && who.rows?.[0]?.join(' ') === 'core true core_db 127.0.0.1 55432',
+      !who.error && who.rows?.[0]?.join(' ') === 'app true app_db 127.0.0.1 55432',
       who.error ?? who.rows?.[0]?.join(' '),
     );
-    const roles = await pg(first.container, "create role core_rw; create role core_api_rw login password 'core_api_rw'; select string_agg(rolname, ',' order by rolname) from pg_roles where rolname like 'core\\_%'");
-    check('it can make server-wide roles there, as core’s migrations do', !roles.error && roles.rows?.at(-1)?.[0] === 'core_api_rw,core_rw', roles.error ?? roles.rows?.at(-1)?.[0]);
-    const asRole = await pg(first.container, 'select current_user', { user: 'core_api_rw', password: 'core_api_rw' });
-    check('and log in as one of them', asRole.rows?.[0]?.[0] === 'core_api_rw', asRole.error ?? asRole.rows?.[0]?.[0]);
-    const wrong = await pg(first.container, 'select 1', { password: 'not-core' });
+    const roles = await pg(first.container, "create role app_rw; create role app_api_rw login password 'app_api_rw'; select string_agg(rolname, ',' order by rolname) from pg_roles where rolname like 'app\\_%'");
+    check('it can make server-wide roles there, as app’s migrations do', !roles.error && roles.rows?.at(-1)?.[0] === 'app_api_rw,app_rw', roles.error ?? roles.rows?.at(-1)?.[0]);
+    const asRole = await pg(first.container, 'select current_user', { user: 'app_api_rw', password: 'app_api_rw' });
+    check('and log in as one of them', asRole.rows?.[0]?.[0] === 'app_api_rw', asRole.error ?? asRole.rows?.[0]?.[0]);
+    const wrong = await pg(first.container, 'select 1', { password: 'not-app' });
     check('a wrong password is refused, on loopback too', Boolean(wrong.error) && /password authentication failed/.test(wrong.error), wrong.error ?? JSON.stringify(wrong));
 
-    const theirs = await pg(second.container, "select count(*) from pg_roles where rolname = 'core_rw'");
+    const theirs = await pg(second.container, "select count(*) from pg_roles where rolname = 'app_rw'");
     check('the second task’s 127.0.0.1:55432 is its own server, without the first’s roles', theirs.rows?.[0]?.[0] === '0', theirs.error ?? theirs.rows?.[0]?.[0]);
-    const same = await pg(second.container, "create role core_rw; select 'made'");
+    const same = await pg(second.container, "create role app_rw; select 'made'");
     check('so the same fixed role names do not collide between tasks', same.rows?.at(-1)?.[0] === 'made', same.error ?? '');
     const address = computerOne?.NetworkSettings?.Networks?.[NETWORK]?.IPAddress ?? '';
-    check('the second task cannot reach the first’s server at the first computer’s address', address !== '' && !(await reaches(second.container, address, CORE.port)), `${address}:${CORE.port}`);
+    check('the second task cannot reach the first’s server at the first computer’s address', address !== '' && !(await reaches(second.container, address, APP.port)), `${address}:${APP.port}`);
 
     await letGo(first.container);
     await cancel(first.taskId);

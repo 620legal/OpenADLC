@@ -1564,8 +1564,8 @@ function memory(initial: Record<string, string> = {}): SecretStore {
   };
 }
 
-/** 620legal/core's local Postgres, as its docker-compose.yml and Makefile name it. */
-const CORE_POSTGRES = { port: 55432, superuser: 'core', password: 'core', database: 'core_db', image: 'pgvector/pgvector:pg16' };
+/** acme/app's local Postgres, as its docker-compose.yml and Makefile name it. */
+const APP_POSTGRES = { port: 55432, superuser: 'app', password: 'app', database: 'app_db', image: 'pgvector/pgvector:pg16' };
 
 /**
  * A task in a repository a person gave Postgres servers of its own
@@ -1578,7 +1578,7 @@ async function startingWithPostgres(
   computer: { postgres?: string[]; databaseUrl?: string | null } = { postgres: ['127.0.0.1:55432'] },
   seat: Partial<Bot> = { sidecarDb: true },
 ) {
-  const repo = { id: 'repo-core', name: 'core', fullName: '620legal/core', defaultBranch: 'main' };
+  const repo = { id: 'repo-app', name: 'app', fullName: 'acme/app', defaultBranch: 'main' };
   const worktree = join(loginRoot, 'clone');
   mkdirSync(worktree, { recursive: true });
   const { writeFileSync } = await import('node:fs');
@@ -1592,20 +1592,20 @@ async function startingWithPostgres(
   exec.acquire = vi.fn(async (spec: TaskComputerSpec) => ({
     ...(await acquire(spec)),
     databaseUrl: computer.databaseUrl ?? null,
-    repoKey: '620legal__core',
+    repoKey: 'acme__app',
     ...(computer.postgres ? { postgres: computer.postgres } : {}),
   }));
   const runner = new TaskRunner({ ...config(), workRoot: loginRoot }, exec, null, async () => ({ model: 'claude-opus-5', modelAlias: null, account: null }));
   const internals = runner as unknown as { remoteFor: () => Promise<string | null>; worktrees: { create: unknown } };
-  vi.spyOn(internals, 'remoteFor').mockResolvedValue('https://github.com/620legal/core.git');
-  internals.worktrees.create = vi.fn(async () => ({ path: worktree, mirror: '/mirrors/620legal__core.git', branch: 'agent/atlas/5-issue-5', setAside: null }));
+  vi.spyOn(internals, 'remoteFor').mockResolvedValue('https://github.com/acme/app.git');
+  internals.worktrees.create = vi.fn(async () => ({ path: worktree, mirror: '/mirrors/acme__app.git', branch: 'agent/atlas/5-issue-5', setAside: null }));
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   let failure: unknown = null;
   // Read before the spies are restored, which forgets their calls.
   let contextFiles: string[] = [];
   let warned: string[] = [];
   try {
-    await runner.start({ ...START, repo: 'core' });
+    await runner.start({ ...START, repo: 'app' });
   } catch (error) {
     failure = error;
   } finally {
@@ -1630,11 +1630,11 @@ async function startingWithPostgres(
  */
 describe('a task in a repository with Postgres servers of its own', () => {
   it('asks the driver for the repository’s servers, and for no database on the shared server unless the repository asks', async () => {
-    const plain = await startingWithPostgres({ servers: [CORE_POSTGRES] });
-    expect(plain.spec).toMatchObject({ postgres: [CORE_POSTGRES], database: false });
+    const plain = await startingWithPostgres({ servers: [APP_POSTGRES] });
+    expect(plain.spec).toMatchObject({ postgres: [APP_POSTGRES], database: false });
 
-    const both = await startingWithPostgres({ servers: [CORE_POSTGRES], sharedDatabase: true });
-    expect(both.spec).toMatchObject({ postgres: [CORE_POSTGRES], database: true });
+    const both = await startingWithPostgres({ servers: [APP_POSTGRES], sharedDatabase: true });
+    expect(both.spec).toMatchObject({ postgres: [APP_POSTGRES], database: true });
   });
 
   it('keeps the shared database, and asks for no server, where the repository has none', async () => {
@@ -1643,16 +1643,16 @@ describe('a task in a repository with Postgres servers of its own', () => {
   });
 
   it('gives a seat that runs no checks no server, as it gets no database, and does not read the setting for it', async () => {
-    const { spec, failure } = await startingWithPostgres({ servers: [{ ...CORE_POSTGRES, image: 'someone/postgres:16' }] }, { postgres: [] }, { sidecarDb: false });
+    const { spec, failure } = await startingWithPostgres({ servers: [{ ...APP_POSTGRES, image: 'someone/postgres:16' }] }, { postgres: [] }, { sidecarDb: false });
     expect(failure).toBeNull();
     expect(spec).toMatchObject({ postgres: [], database: false });
   });
 
   it('runs make setup with no shared database, told where its servers are, and tells the session and local CI the same', async () => {
-    const { setup, setupEnv, sessionEnv, ciEnv } = await startingWithPostgres({ servers: [CORE_POSTGRES] });
+    const { setup, setupEnv, sessionEnv, ciEnv } = await startingWithPostgres({ servers: [APP_POSTGRES] });
 
     // Without a DATABASE_URL from OpenADLC, the Makefile's own `?=` defaults
-    // (postgres://core:core@127.0.0.1:55432/core_db) are what it connects with.
+    // (postgres://app:app@127.0.0.1:55432/app_db) are what it connects with.
     expect(setup).toBeDefined();
     for (const env of [setupEnv, sessionEnv, ciEnv]) {
       expect(env.OPENADLC_TASK_POSTGRES).toBe('127.0.0.1:55432');
@@ -1661,28 +1661,28 @@ describe('a task in a repository with Postgres servers of its own', () => {
   });
 
   it('says every server, in the order the setting lists them', async () => {
-    const second = { ...CORE_POSTGRES, port: 55499 };
-    const { sessionEnv } = await startingWithPostgres({ servers: [CORE_POSTGRES, second] }, { postgres: ['127.0.0.1:55432', '127.0.0.1:55499'] });
+    const second = { ...APP_POSTGRES, port: 55499 };
+    const { sessionEnv } = await startingWithPostgres({ servers: [APP_POSTGRES, second] }, { postgres: ['127.0.0.1:55432', '127.0.0.1:55499'] });
     expect(sessionEnv.OPENADLC_TASK_POSTGRES).toBe('127.0.0.1:55432,127.0.0.1:55499');
   });
 
   it('tells a task whose driver cannot make a server that it has none, rather than ignoring the setting', async () => {
-    const { contextFiles, sessionEnv, warned } = await startingWithPostgres({ servers: [CORE_POSTGRES] }, {});
+    const { contextFiles, sessionEnv, warned } = await startingWithPostgres({ servers: [APP_POSTGRES] }, {});
 
     expect(sessionEnv).not.toHaveProperty('OPENADLC_TASK_POSTGRES');
     const brief = contextFiles.find((file) => file.endsWith('task-postgres.md'));
     expect(brief).toBeDefined();
     const said = readFileSync(brief!, 'utf8');
-    expect(said).toContain('620legal/core asks for a Postgres server of each task\'s own, at 127.0.0.1:55432, and this install runs the local driver');
+    expect(said).toContain('acme/app asks for a Postgres server of each task\'s own, at 127.0.0.1:55432, and this install runs the local driver');
     expect(said).toContain('openadlc init --driver docker');
     expect(warned.some((line) => line.includes('which the local driver cannot give: task task-1 starts without one'))).toBe(true);
   });
 
   it('fails the start with what to correct when the stored setting no longer reads', async () => {
-    const { failure, exec } = await startingWithPostgres({ servers: [{ ...CORE_POSTGRES, image: 'someone/postgres:16' }] });
+    const { failure, exec } = await startingWithPostgres({ servers: [{ ...APP_POSTGRES, image: 'someone/postgres:16' }] });
 
-    expect(String(failure)).toContain("core's Postgres servers for its tasks no longer read: someone/postgres:16 is not an image");
-    expect(String(failure)).toContain('Correct them in Settings → Repositories → core');
+    expect(String(failure)).toContain("app's Postgres servers for its tasks no longer read: someone/postgres:16 is not an image");
+    expect(String(failure)).toContain('Correct them in Settings → Repositories → app');
     expect(exec.acquire).not.toHaveBeenCalled();
   });
 
@@ -1691,7 +1691,7 @@ describe('a task in a repository with Postgres servers of its own', () => {
     runner.adopt(
       { id: 'task-9', kind: 'implement', branch: 'agent/atlas/5-issue-5', tmuxSession: 'atlas/implement-task9' },
       { taskId: 'task-9', bot: 'atlas', container: 'task-task9', databaseUrl: null, slotDir: join(scratch, 'slot'), postgres: ['127.0.0.1:55432'] },
-      '620legal/core',
+      'acme/app',
     );
     expect(runner.localCiTarget('task-9')?.env.OPENADLC_TASK_POSTGRES).toBe('127.0.0.1:55432');
   });

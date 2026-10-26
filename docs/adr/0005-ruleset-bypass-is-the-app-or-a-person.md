@@ -11,18 +11,18 @@ their bypass actor, in `always` mode, so it can write CODEOWNERS to a branch it
 protects. The drift check compared the bypass list with exactly that one
 entry, and apply wrote that one entry back.
 
-On 2026-10-20 Or, the repository's owner and admin, added himself (`User`
-2146989, `always`) to `openadlc: main` so he could merge while the crew was
+On 2026-10-20 the repository's owner and admin added themselves (a `User`
+entry, `always`) to `openadlc: main` so they could merge while the crew was
 down. From then on `openadlc doctor` warned that the repository was not
 protected the way OpenADLC sets it, and `openadlc github apply` would have
-taken him off.
+taken them off.
 
 What the bypass list must never hold is a bot: AGENTS.md's first invariant is
 that a bot cannot merge, and only the merge line merges, once `mergeDecision`
 holds. A crew account on the bypass list, or holding a role on it, could merge
-past every rule the ruleset holds. Or decided: a person who is an owner or an
-admin may keep the bypass, as long as that person is not part of the crew, and
-no crew account can be admin.
+past every rule the ruleset holds. The owner decided: a person who is an owner
+or an admin may keep the bypass, as long as that person is not part of the
+crew, and no crew account can be admin.
 
 Two facts constrain how this is told apart. A `User` bypass entry carries only
 a numeric id. And the app has no Members permission, so it cannot list an

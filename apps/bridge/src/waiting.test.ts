@@ -331,8 +331,8 @@ describe('what holds every card in a stage back', () => {
   });
 
   it('work paused, in the pause’s words', () => {
-    const waiting = read([issue(141, 'spec')], [], { paused: (repo) => (repo === 'OpenADLC' ? 'work is paused in OpenADLC by orzelig' : null) });
-    expect(waiting.cards.get('OpenADLC#141')).toMatchObject({ reason: { kind: 'paused', words: 'work is paused in OpenADLC by orzelig' }, stuck: false });
+    const waiting = read([issue(141, 'spec')], [], { paused: (repo) => (repo === 'OpenADLC' ? 'work is paused in OpenADLC by janedoe' : null) });
+    expect(waiting.cards.get('OpenADLC#141')).toMatchObject({ reason: { kind: 'paused', words: 'work is paused in OpenADLC by janedoe' }, stuck: false });
   });
 
   it('a repository that leaves the stage to a person', () => {
@@ -350,11 +350,11 @@ describe('what holds every card in a stage back', () => {
   });
 
   it('its seat paused from Crew', () => {
-    const waiting = read([issue(141, 'spec')], [], { seatPaused: new Map([['system-engineer', 'system-engineer is paused by orzelig: changing its model']]) });
+    const waiting = read([issue(141, 'spec')], [], { seatPaused: new Map([['system-engineer', 'system-engineer is paused by janedoe: changing its model']]) });
     expect(waiting.cards.get('OpenADLC#141')?.reason).toEqual({
       kind: 'seat_paused',
       seat: { name: 'system-engineer', role: 'spec', maxTasks: 1 },
-      words: 'system-engineer is paused by orzelig: changing its model',
+      words: 'system-engineer is paused by janedoe: changing its model',
     });
   });
 

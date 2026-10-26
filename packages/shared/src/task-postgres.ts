@@ -4,15 +4,16 @@
  * A seat that runs checks (`sidecarDb`) gets a database and a plain role on
  * the host's shared task server (`openadlc-taskdb`). That is not enough for a
  * repository whose migrations create server-wide roles through an admin
- * connection, under fixed names, on the port its Makefile defaults to:
- * 620legal/core's builders stopped at `ECONNREFUSED 127.0.0.1:55432`, because
- * a task's role on the shared server can create no role, and two tasks making
- * `core_rw` there at once would collide. So a person can give the repository
- * servers of its own, one set per task: each in the task's computer's network
- * namespace, listening on loopback at the port the repository names, with the
- * superuser, password and database its Makefile's defaults name. Those are
- * local-development defaults, and fine as such: the server is reachable only
- * from inside that one task's computer, and goes with it.
+ * connection, under fixed names, on the port its Makefile defaults to: a
+ * managed repository's builders stopped at `ECONNREFUSED 127.0.0.1:55432`,
+ * because a task's role on the shared server can create no role, and two
+ * tasks making `app_rw` there at once would collide. So a person can give the
+ * repository servers of its own, one set per task: each in the task's
+ * computer's network namespace, listening on loopback at the port the
+ * repository names, with the superuser, password and database its Makefile's
+ * defaults name. Those are local-development defaults, and fine as such: the
+ * server is reachable only from inside that one task's computer, and goes
+ * with it.
  *
  * The setting is a person's, in Settings → Repositories (the bridge's
  * `/v1/repos/:name/task-postgres`, an admin's), never a file in the
@@ -66,7 +67,7 @@ const TASK_POSTGRES_REPOSITORIES: Readonly<Record<string, string>> = {
   'docker.io/postgres': 'postgres',
 };
 
-/** The images, as a person reads them; `pgvector/pgvector:pg16` is what 620legal/core runs. */
+/** The images, as a person reads them; `pgvector/pgvector:pg16` is one. */
 export const TASK_POSTGRES_IMAGES: readonly string[] = ['pgvector/pgvector:<tag>', 'postgres:<tag>'];
 
 /** Docker's own grammar for a tag, and a digest. */
@@ -130,7 +131,7 @@ const PASSWORD = /^[\x20-\x7e]{1,100}$/;
  * What to give for a field left empty. An empty field is refused as empty:
  * one refused as out of range read as though something had been typed, and
  * a person who took the form's examples for values pressed Save on a port
- * that was not there (620legal/core, v0.1.9).
+ * that was not there (v0.1.9).
  */
 const MISSING: Readonly<Record<keyof TaskPostgresServer, string>> = {
   port: "give the port the repository's Makefile reaches it on",
@@ -178,7 +179,7 @@ export function parseTaskPostgres(input: unknown): TaskPostgresRead {
     if (missing('port', server.port)) return none('port');
     const port = typeof server.port === 'string' && /^\d+$/.test(server.port.trim()) ? Number(server.port.trim()) : server.port;
     if (typeof port !== 'number' || !Number.isInteger(port) || port < 1024 || port > 65535) {
-      return { ok: false, error: `${which}'s port is a whole number from 1024 to 65535: the port the repository's Makefile reaches it on (55432 for 620legal/core)` };
+      return { ok: false, error: `${which}'s port is a whole number from 1024 to 65535: the port the repository's Makefile reaches it on, such as 55432` };
     }
     if (servers.some((other) => other.port === port)) {
       return { ok: false, error: `two servers cannot both listen on ${port} in one task's computer: give each a port of its own` };

@@ -29,7 +29,7 @@ function bot(partial: Partial<Bot> & { id: string; name: string; slot: string; r
   };
 }
 
-const BUILDER = bot({ id: 'bot-builder', name: 'abner620legal', slot: 'builder', role: 'implement', githubLogin: 'Abner620Legal' });
+const BUILDER = bot({ id: 'bot-builder', name: 'openadlc-vega-janedoe', slot: 'builder', role: 'implement', githubLogin: 'OpenADLC-Vega-Janedoe' });
 
 let server: Server;
 let url: string;
@@ -85,22 +85,22 @@ const post = (path: string, body?: unknown) =>
 
 describe('dismissing a key as used elsewhere', () => {
   it('records it with the title the card showed, audits who said so, and asks the check again', async () => {
-    const response = await post('/v1/signing-keys/abner620legal/keys/6/dismiss', { title: 'laptop' });
+    const response = await post('/v1/signing-keys/openadlc-vega-janedoe/keys/6/dismiss', { title: 'laptop' });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ dismissed: 6 });
-    expect(marked).toEqual([['abner620legal', 6, expect.any(String), 'laptop']]);
-    expect(audited).toMatchObject([{ action: 'signing_key.dismissed', target: 'abner620legal', payload: { keyId: 6, title: 'laptop' } }]);
+    expect(marked).toEqual([['openadlc-vega-janedoe', 6, expect.any(String), 'laptop']]);
+    expect(audited).toMatchObject([{ action: 'signing_key.dismissed', target: 'openadlc-vega-janedoe', payload: { keyId: 6, title: 'laptop' } }]);
     expect(rechecks).toBe(1);
   });
 
   it('records a key with no title all the same', async () => {
-    const response = await post('/v1/signing-keys/abner620legal/keys/6/dismiss', {});
+    const response = await post('/v1/signing-keys/openadlc-vega-janedoe/keys/6/dismiss', {});
     expect(response.status).toBe(200);
-    expect(marked).toEqual([['abner620legal', 6, expect.any(String), null]]);
+    expect(marked).toEqual([['openadlc-vega-janedoe', 6, expect.any(String), null]]);
   });
 
   it('refuses a key id that is not GitHub’s numeric id', async () => {
-    const response = await post('/v1/signing-keys/abner620legal/keys/not-a-key/dismiss', {});
+    const response = await post('/v1/signing-keys/openadlc-vega-janedoe/keys/not-a-key/dismiss', {});
     expect(response.status).toBe(400);
     expect(marked).toEqual([]);
   });
@@ -108,16 +108,16 @@ describe('dismissing a key as used elsewhere', () => {
 
 describe('the undo', () => {
   it('forgets the dismissal, audits it, and asks the check again', async () => {
-    const response = await fetch(`${url}/v1/signing-keys/abner620legal/keys/6/dismiss`, { method: 'DELETE' });
+    const response = await fetch(`${url}/v1/signing-keys/openadlc-vega-janedoe/keys/6/dismiss`, { method: 'DELETE' });
     expect(response.status).toBe(200);
-    expect(unmarked).toEqual([['abner620legal', 6]]);
-    expect(audited).toMatchObject([{ action: 'signing_key.undismissed', target: 'abner620legal' }]);
+    expect(unmarked).toEqual([['openadlc-vega-janedoe', 6]]);
+    expect(audited).toMatchObject([{ action: 'signing_key.undismissed', target: 'openadlc-vega-janedoe' }]);
     expect(rechecks).toBe(1);
   });
 
   it('says when nothing was dismissed for that key, and audits nothing', async () => {
     deps.unmarkExternal = async () => false;
-    const response = await fetch(`${url}/v1/signing-keys/abner620legal/keys/6/dismiss`, { method: 'DELETE' });
+    const response = await fetch(`${url}/v1/signing-keys/openadlc-vega-janedoe/keys/6/dismiss`, { method: 'DELETE' });
     expect(response.status).toBe(404);
     expect(audited).toEqual([]);
   });
@@ -125,11 +125,11 @@ describe('the undo', () => {
 
 describe('revoking a key from the bot’s account', () => {
   it('deletes it as the bot — found by its login, whatever the case — audits it, and asks the check again', async () => {
-    const response = await post('/v1/signing-keys/ABNER620legal/keys/6/revoke');
+    const response = await post('/v1/signing-keys/OPENADLC-VEGA-JANEDOE/keys/6/revoke');
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ revoked: 6 });
     expect(deleted).toEqual([6]);
-    expect(audited).toMatchObject([{ action: 'signing_key.revoked', target: 'ABNER620legal', payload: { keyId: 6 } }]);
+    expect(audited).toMatchObject([{ action: 'signing_key.revoked', target: 'OPENADLC-VEGA-JANEDOE', payload: { keyId: 6 } }]);
     expect(rechecks).toBe(1);
   });
 
@@ -141,7 +141,7 @@ describe('revoking a key from the bot’s account', () => {
 
   it('refuses a static token without the scope deleting needs, before asking GitHub', async () => {
     deps.signInKind = async () => 'static';
-    const response = await post('/v1/signing-keys/abner620legal/keys/6/revoke');
+    const response = await post('/v1/signing-keys/openadlc-vega-janedoe/keys/6/revoke');
     expect(response.status).toBe(409);
     expect(await response.text()).toContain('admin:ssh_signing_key');
     expect(deleted).toEqual([]);
@@ -150,7 +150,7 @@ describe('revoking a key from the bot’s account', () => {
   it('lets a static token with admin:ssh_signing_key delete', async () => {
     deps.signInKind = async () => 'static';
     deps.scopesOf = async () => ['repo', 'admin:ssh_signing_key'];
-    const response = await post('/v1/signing-keys/abner620legal/keys/6/revoke');
+    const response = await post('/v1/signing-keys/openadlc-vega-janedoe/keys/6/revoke');
     expect(response.status).toBe(200);
     expect(deleted).toEqual([6]);
   });
@@ -161,7 +161,7 @@ describe('revoking a key from the bot’s account', () => {
         throw new GitHubApiError(403, '/user/ssh_signing_keys/6', 'Resource not accessible by integration');
       },
     });
-    const response = await post('/v1/signing-keys/abner620legal/keys/6/revoke');
+    const response = await post('/v1/signing-keys/openadlc-vega-janedoe/keys/6/revoke');
     expect(response.status).toBe(403);
     expect(await response.text()).toContain('SSH signing keys');
     expect(audited).toEqual([]);
@@ -173,7 +173,7 @@ describe('revoking a key from the bot’s account', () => {
         throw new GitHubApiError(404, '/user/ssh_signing_keys/6', 'Not Found');
       },
     });
-    const response = await post('/v1/signing-keys/abner620legal/keys/6/revoke');
+    const response = await post('/v1/signing-keys/openadlc-vega-janedoe/keys/6/revoke');
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ revoked: 6, alreadyGone: true });
     expect(audited).toMatchObject([{ action: 'signing_key.revoked', payload: { keyId: 6, alreadyGone: true } }]);
@@ -181,7 +181,7 @@ describe('revoking a key from the bot’s account', () => {
 
   it('says when the bot holds no working sign-in to delete with', async () => {
     deps.asBot = async () => null;
-    const response = await post('/v1/signing-keys/abner620legal/keys/6/revoke');
+    const response = await post('/v1/signing-keys/openadlc-vega-janedoe/keys/6/revoke');
     expect(response.status).toBe(409);
     expect(await response.text()).toContain('no working sign-in');
   });

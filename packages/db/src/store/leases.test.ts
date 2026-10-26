@@ -462,10 +462,10 @@ describe('what was decided about a plan change, beside its request (#77)', () =>
     vi.mocked(queryOne).mockResolvedValueOnce({
       payload: {
         planChange: { paths: ['a.ts'], reason: 'r' },
-        designer: { taskId: 'task-9', askedBy: 'orzelig', at: '2026-10-22T10:00:00.000Z', verdict: 'approve', reason: 'named', counted: false, outside: [{ path: 'a.ts', why: 'w' }] },
+        designer: { taskId: 'task-9', askedBy: 'janedoe', at: '2026-10-22T10:00:00.000Z', verdict: 'approve', reason: 'named', counted: false, outside: [{ path: 'a.ts', why: 'w' }] },
         decided: { by: 'designer', seat: 'architect', at: '2026-10-22T10:05:00.000Z' },
-        takenBack: { by: 'orzelig', at: '2026-10-22T11:00:00.000Z' },
-        standing: { setBy: 'orzelig', humanReview: ['config/x.yaml', 3] },
+        takenBack: { by: 'janedoe', at: '2026-10-22T11:00:00.000Z' },
+        standing: { setBy: 'janedoe', humanReview: ['config/x.yaml', 3] },
       },
     });
 
@@ -473,10 +473,10 @@ describe('what was decided about a plan change, beside its request (#77)', () =>
       paths: ['a.ts'],
       reason: 'r',
       held: null,
-      designer: { taskId: 'task-9', askedBy: 'orzelig', at: '2026-10-22T10:00:00.000Z', verdict: 'approve', reason: 'named', counted: false, outside: [{ path: 'a.ts', why: 'w' }] },
+      designer: { taskId: 'task-9', askedBy: 'janedoe', at: '2026-10-22T10:00:00.000Z', verdict: 'approve', reason: 'named', counted: false, outside: [{ path: 'a.ts', why: 'w' }] },
       decided: { by: 'designer', seat: 'architect', at: '2026-10-22T10:05:00.000Z' },
-      takenBack: { by: 'orzelig', at: '2026-10-22T11:00:00.000Z' },
-      standing: { setBy: 'orzelig', humanReview: ['config/x.yaml'] },
+      takenBack: { by: 'janedoe', at: '2026-10-22T11:00:00.000Z' },
+      standing: { setBy: 'janedoe', humanReview: ['config/x.yaml'] },
     });
   });
 
@@ -484,17 +484,17 @@ describe('what was decided about a plan change, beside its request (#77)', () =>
     // Not a Human-review path: the card said one was, in a repository whose
     // AGENTS.md had no `## Human review` section (#100).
     const why = 'OpenADLC could not read the Human-review rules in AGENTS.md on `main`, so it does not cover this one';
-    vi.mocked(queryOne).mockResolvedValueOnce({ payload: { planChange: { paths: ['a.ts'], reason: 'r' }, standing: { setBy: 'orzelig', humanReview: [], rulesUnread: why } } });
-    await expect(planChangeOfGate('gate-1')).resolves.toMatchObject({ standing: { setBy: 'orzelig', humanReview: [], rulesUnread: why } });
-    vi.mocked(queryOne).mockResolvedValueOnce({ payload: { planChange: { paths: ['a.ts'], reason: 'r' }, standing: { setBy: 'orzelig', humanReview: [], rulesUnread: 7 } } });
-    expect((await planChangeOfGate('gate-1'))?.standing).toEqual({ setBy: 'orzelig', humanReview: [] });
+    vi.mocked(queryOne).mockResolvedValueOnce({ payload: { planChange: { paths: ['a.ts'], reason: 'r' }, standing: { setBy: 'janedoe', humanReview: [], rulesUnread: why } } });
+    await expect(planChangeOfGate('gate-1')).resolves.toMatchObject({ standing: { setBy: 'janedoe', humanReview: [], rulesUnread: why } });
+    vi.mocked(queryOne).mockResolvedValueOnce({ payload: { planChange: { paths: ['a.ts'], reason: 'r' }, standing: { setBy: 'janedoe', humanReview: [], rulesUnread: 7 } } });
+    expect((await planChangeOfGate('gate-1'))?.standing).toEqual({ setBy: 'janedoe', humanReview: [] });
   });
 
   it('writes a note on the gate’s message, one key at a time, beside what is there', async () => {
-    await notePlanChange('gate-1', 'designer', { taskId: 'task-9', askedBy: 'orzelig' });
+    await notePlanChange('gate-1', 'designer', { taskId: 'task-9', askedBy: 'janedoe' });
     const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
     expect(String(sql)).toMatch(/update messages set payload = payload \|\| jsonb_build_object\(\$2::text, \$3::jsonb\)/);
-    expect(params).toEqual(['gate-1', 'designer', JSON.stringify({ taskId: 'task-9', askedBy: 'orzelig' })]);
+    expect(params).toEqual(['gate-1', 'designer', JSON.stringify({ taskId: 'task-9', askedBy: 'janedoe' })]);
     await expect(notePlanChange('gate-1', 'planChange' as never, {})).rejects.toThrow(/not a note/);
   });
 

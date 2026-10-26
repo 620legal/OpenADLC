@@ -16,8 +16,8 @@ import type { TaskComputerSpec } from './types.js';
 
 const TASK = '3f2a9c1e-7b4d-4e8a-9c2f-1a2b3c4d5e6f';
 const OTHER = '9b1c4e2a-0f3d-4c5b-8a7e-6d5c4b3a2f10';
-/** 620legal/core's local Postgres, as its docker-compose.yml and Makefile name it. */
-const CORE = { port: 55432, superuser: 'core', password: 'core', database: 'core_db', image: 'pgvector/pgvector:pg16' };
+/** acme/app's local Postgres, as its docker-compose.yml and Makefile name it. */
+const APP = { port: 55432, superuser: 'app', password: 'app', database: 'app_db', image: 'pgvector/pgvector:pg16' };
 
 interface Box {
   id: string;
@@ -53,7 +53,7 @@ function daemon(
   } = {},
 ) {
   const containers = new Map<string, Box>();
-  const images = new Set(options.images ?? [CORE.image]);
+  const images = new Set(options.images ?? [APP.image]);
   const calls: string[][] = [];
   const secrets: Record<string, string>[] = [];
   const checks = new Map<string, number>();
@@ -165,13 +165,13 @@ function spec(partial: Partial<TaskComputerSpec> = {}): TaskComputerSpec {
   return {
     taskId,
     bot: 'atlas',
-    repoKey: '620legal__core',
+    repoKey: 'acme__app',
     slotDir: join(workRoot, 'slots', taskId),
     login: null,
     cpus: 2,
     memoryGb: 4,
     database: false,
-    postgres: [CORE],
+    postgres: [APP],
     ...partial,
   };
 }
@@ -206,9 +206,9 @@ describe('a task’s own Postgres server, made with its computer', () => {
       ]),
     );
     expect(values(args, '-e')).toEqual([
-      'POSTGRES_USER=core',
+      'POSTGRES_USER=app',
       'POSTGRES_PASSWORD',
-      'POSTGRES_DB=core_db',
+      'POSTGRES_DB=app_db',
       'PGPORT=55432',
       // Loopback asks for the password, as the repository's own CI does through a published port.
       'POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256',
@@ -217,7 +217,7 @@ describe('a task’s own Postgres server, made with its computer', () => {
 
   it('keeps the password off every command line, in the docker client’s own environment', async () => {
     const { answer, calls, secrets } = daemon();
-    await driverWith(answer).acquire(spec({ postgres: [{ ...CORE, password: 'not-on-argv' }] }));
+    await driverWith(answer).acquire(spec({ postgres: [{ ...APP, password: 'not-on-argv' }] }));
 
     expect(calls.some((args) => args.some((arg) => arg.includes('not-on-argv')))).toBe(false);
     expect(secrets).toContainEqual({ POSTGRES_PASSWORD: 'not-on-argv' });
@@ -225,8 +225,8 @@ describe('a task’s own Postgres server, made with its computer', () => {
 
   it('answers only once each server takes connections on its loopback port, having made them all first', async () => {
     const { answer, calls, checks } = daemon({ readyAfter: 3 });
-    const second = { ...CORE, port: 55499, superuser: 'ci', database: 'ci_db' };
-    const computer = await driverWith(answer).acquire(spec({ postgres: [CORE, second] }));
+    const second = { ...APP, port: 55499, superuser: 'ci', database: 'ci_db' };
+    const computer = await driverWith(answer).acquire(spec({ postgres: [APP, second] }));
 
     expect(computer.postgres).toEqual(['127.0.0.1:55432', '127.0.0.1:55499']);
     expect(checks.get('task-3f2a9c1e-pg55432')).toBe(4);
@@ -234,7 +234,7 @@ describe('a task’s own Postgres server, made with its computer', () => {
     const order = calls.map((args) => (args[0] === 'run' ? `run ${value(args, '--name')}` : args.includes('pg_isready') ? `ready? ${args[1]}` : '')).filter(Boolean);
     expect(order.slice(0, 4)).toEqual(['run task-3f2a9c1e', 'run task-3f2a9c1e-pg55432', 'run task-3f2a9c1e-pg55499', 'ready? task-3f2a9c1e-pg55432']);
     expect(calls.find((args) => args.includes('pg_isready'))).toEqual([
-      'exec', 'task-3f2a9c1e-pg55432', 'pg_isready', '-q', '-h', '127.0.0.1', '-p', '55432', '-U', 'core', '-d', 'core_db',
+      'exec', 'task-3f2a9c1e-pg55432', 'pg_isready', '-q', '-h', '127.0.0.1', '-p', '55432', '-U', 'app', '-d', 'app_db',
     ]);
   });
 

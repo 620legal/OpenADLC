@@ -111,8 +111,8 @@ function ctx(overrides: Record<string, unknown> = {}) {
     repo: REPO,
     repoId: REPO_ID,
     pushed: commits.release,
-    actor: 'orzelig',
-    releasers: 'orzelig',
+    actor: 'janedoe',
+    releasers: 'janedoe',
     ciAttempts: 2,
     ...overrides,
   };
@@ -143,13 +143,13 @@ afterEach(() => {
 
 describe('a release the checks let through', () => {
   it('is a releaser’s next version on main, whose ci ran the tests and passed', () => {
-    expect(checkRelease(ctx(), tools())).toEqual({ sha: commits.release, tree: git('rev-parse', `${commits.release}^{tree}`), actor: 'orzelig' });
+    expect(checkRelease(ctx(), tools())).toEqual({ sha: commits.release, tree: git('rev-parse', `${commits.release}^{tree}`), actor: 'janedoe' });
     expect(said.at(-1)).toMatch(/after v0\.1\.0; ci passed in main's run 7/);
   });
 
   it('may be the first, and names releasers in any case', () => {
     api[`repos/${REPO}/releases?per_page=100`] = [];
-    expect(checkRelease(ctx({ actor: 'OrZelig', releasers: '@orzelig, someone' }), tools()).sha).toBe(commits.release);
+    expect(checkRelease(ctx({ actor: 'JaneDoe', releasers: '@janedoe, someone' }), tools()).sha).toBe(commits.release);
     expect(releasersOf('a, @B  c')).toEqual(['a', 'b', 'c']);
   });
 });
@@ -166,7 +166,7 @@ describe('the run', () => {
   });
 
   it('is refused for anyone but a releaser, the crew’s accounts among them', () => {
-    expect(() => checkRelease(ctx({ actor: 'openadlc-atlas-orzelig' }), tools())).toThrow(/openadlc-atlas-orzelig is not one of RELEASERS in release-build\.yml \(orzelig\)/);
+    expect(() => checkRelease(ctx({ actor: 'openadlc-atlas-janedoe' }), tools())).toThrow(/openadlc-atlas-janedoe is not one of RELEASERS in release-build\.yml \(janedoe\)/);
     expect(() => checkRelease(ctx({ releasers: '' }), tools())).toThrow(/\(nobody\)/);
   });
 });

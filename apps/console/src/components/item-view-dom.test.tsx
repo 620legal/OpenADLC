@@ -222,11 +222,11 @@ describe('the item’s stream, after the bridge restarts', () => {
 describe('the item’s plan changes no person approved (#77)', () => {
   it('says approve all is on, and turns it off', async () => {
     const { turnOffApproveAll } = await import('@/app/actions');
-    item = { ...ITEM, standingApproval: { issueNumber: 12, setBy: 'orzelig', setAt: '2026-09-30T10:00:00.000Z' } };
+    item = { ...ITEM, standingApproval: { issueNumber: 12, setBy: 'janedoe', setAt: '2026-09-30T10:00:00.000Z' } };
     await mount();
 
     const section = container.querySelector('[data-plan-changes]')!;
-    expect(section.textContent).toContain('Approve all is on for #12, set by orzelig');
+    expect(section.textContent).toContain('Approve all is on for #12, set by janedoe');
     await act(async () => button('Turn off', section).click());
     await settle();
     expect(turnOffApproveAll).toHaveBeenCalledWith('api#12');

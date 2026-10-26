@@ -1505,7 +1505,7 @@ describe('the gate as it is read from GitHub', () => {
           { id: 1, user: 'exampleco-review', state: 'APPROVED', body: seat('second-reviewer'), submittedAt: '2026-09-28T18:30:00Z', commitId: 'abc' },
           { id: 2, user: 'exampleco-review', state: 'APPROVED', body: seat('lead-reviewer'), submittedAt: '2026-09-28T18:31:00Z', commitId: 'abc' },
         ]),
-        readFileAtRef: vi.fn(async () => '# Agent notes\n\n## Human review\n\n- `config/` @orzelig\n'),
+        readFileAtRef: vi.fn(async () => '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n'),
       };
       const attribution = { countable: vi.fn(async (posts: unknown[]) => [...posts]), reviewsThatCount: vi.fn(async (_repo: string, _n: number, posts: unknown[]) => [...posts]) };
       const reading = new Automation(config, { asBot: vi.fn(async () => github), attribution } as never);

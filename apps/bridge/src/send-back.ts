@@ -677,8 +677,8 @@ export class SendBack {
    * (`MessageStarts`): a patch round on its branch, briefed with the message
    * (`message.md`). It used to be posted as a comment and nothing else, and
    * the builder read it only when something else next started it: on
-   * 620legal/core#5 a person asked the builder to fix the scope check on
-   * #7, and ten minutes later the merge line was still dropping #7.
+   * a managed repository's #5 a person asked the builder to fix the scope
+   * check on #7, and ten minutes later the merge line was still dropping #7.
    *
    * The same round a request for changes opens (`reviewRound`): the lease
    * taken again where it still can be, the files in the diff added to its

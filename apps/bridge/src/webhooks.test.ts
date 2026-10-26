@@ -7097,14 +7097,14 @@ describe('a pull request’s CI finishing', () => {
   });
 
   /**
-   * 620legal/core#7, replayed. CI failed at its scope check; the bridge ran
-   * its failed jobs again, once, and the rerun failed the same way; both
-   * deliveries came before the lead approved, and `onCiRun` left them to the
-   * lead's decision. The approval put the pull request in the merge line,
-   * the line found the head red and left it to `onCiRun`, and nothing reached
-   * that again: for thirteen hours the gate sweep put it back every ten
-   * minutes, the line said "Leaving the merge line" on it each time, and the
-   * work never went back to its builder.
+   * A managed repository's #7, replayed. CI failed at its scope check; the
+   * bridge ran its failed jobs again, once, and the rerun failed the same
+   * way; both deliveries came before the lead approved, and `onCiRun` left
+   * them to the lead's decision. The approval put the pull request in the
+   * merge line, the line found the head red and left it to `onCiRun`, and
+   * nothing reached that again: for thirteen hours the gate sweep put it back
+   * every ten minutes, the line said "Leaving the merge line" on it each time,
+   * and the work never went back to its builder.
    */
   describe('where it failed, as the builder is told', () => {
     const job = (name: string, conclusion: string, steps: [string, string][] = []) => ({
