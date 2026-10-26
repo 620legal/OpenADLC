@@ -90,9 +90,9 @@ describe('a repository’s Postgres servers for its tasks, set by a person', () 
     const saved = await call(deps, 'PUT', { servers: [APP] });
 
     expect(saved.status).toBe(200);
-    expect(store.value).toEqual({ servers: [APP], sharedDatabase: false });
+    expect(store.value).toEqual({ servers: [APP], databaseUrl: 'none' });
     expect(saved.body).toMatchObject({
-      taskPostgres: { servers: [APP], sharedDatabase: false },
+      taskPostgres: { servers: [APP], databaseUrl: 'none' },
       unreadable: null,
       supported: { ok: true, why: null },
       images: ['pgvector/pgvector:<tag>', 'postgres:<tag>'],
@@ -111,7 +111,7 @@ describe('a repository’s Postgres servers for its tasks, set by a person', () 
         actor: 'or@example.com',
         action: 'repo.task_postgres',
         target: 'acme/app',
-        payload: { setting: { servers: [{ port: 55432, superuser: 'app', database: 'app_db', image: 'pgvector/pgvector:pg16' }], sharedDatabase: false } },
+        payload: { setting: { servers: [{ port: 55432, superuser: 'app', database: 'app_db', image: 'pgvector/pgvector:pg16' }], databaseUrl: 'none' } },
       },
     ]);
     expect(JSON.stringify(audited)).not.toContain('local-default');
@@ -132,7 +132,7 @@ describe('a repository’s Postgres servers for its tasks, set by a person', () 
   });
 
   it('takes the servers away when sent none', async () => {
-    const { deps, store } = world({}, { servers: [APP], sharedDatabase: false });
+    const { deps, store } = world({}, { servers: [APP], databaseUrl: 'none' });
 
     const cleared = await call(deps, 'PUT', { servers: [] });
 
@@ -218,12 +218,64 @@ describe('whether this install can give a task a server of its own', () => {
   });
 });
 
-describe('the shared-database box, as the bridge answers it', () => {
-  it('is off for a repository with nothing set, and for a stored row with no servers whatever it says', async () => {
+describe('where a task’s DATABASE_URL comes from, as the bridge answers it', () => {
+  /** A second server of app's, for its vector store, as a docker-compose.yml with two Postgres services has it. */
+  const VECTORS = { ...APP, port: 55433, password: 'vectors-local', database: 'vectors' };
+
+  it('is nothing for a repository with nothing set, and for a stored row with no servers whatever it says', async () => {
     expect((await call(world().deps, 'GET')).body).toMatchObject({ taskPostgres: null, unreadable: null });
-    // A row written by hand: no servers is no setting, so nothing ticks the box.
+    // A row written by hand: no servers is no setting, so it gives no DATABASE_URL.
     expect((await call(world({}, { servers: [], sharedDatabase: true }).deps, 'GET')).body).toMatchObject({ taskPostgres: null, unreadable: null });
-    expect((await call(world({}, { servers: [APP], sharedDatabase: true }).deps, 'GET')).body).toMatchObject({ taskPostgres: { sharedDatabase: true } });
+  });
+
+  it('reads a row stored before there was a choice of server as it did, and stores an old client’s box as the choice it means', async () => {
+    expect((await call(world({}, { servers: [APP], sharedDatabase: true }).deps, 'GET')).body).toMatchObject({ taskPostgres: { databaseUrl: 'shared' } });
+    expect((await call(world({}, { servers: [APP], sharedDatabase: false }).deps, 'GET')).body).toMatchObject({ taskPostgres: { databaseUrl: 'none' } });
+
+    const { deps, store } = world();
+    const saved = await call(deps, 'PUT', { servers: [APP], sharedDatabase: true });
+    expect(saved.status).toBe(200);
+    expect(store.value).toEqual({ servers: [APP], databaseUrl: 'shared' });
+  });
+
+  it('saves one of the repository’s own servers as it, answers it back, and audits it with no password', async () => {
+    const { deps, store, audited } = world();
+
+    const saved = await call(deps, 'PUT', { servers: [APP, VECTORS], databaseUrl: { port: 55433 } });
+
+    expect(saved.status).toBe(200);
+    expect(store.value).toEqual({ servers: [APP, VECTORS], databaseUrl: { port: 55433 } });
+    expect(saved.body.taskPostgres).toEqual({ servers: [APP, VECTORS], databaseUrl: { port: 55433 } });
+    expect((await call(deps, 'GET')).body.taskPostgres).toEqual({ servers: [APP, VECTORS], databaseUrl: { port: 55433 } });
+    expect(audited[0]?.payload).toEqual({
+      setting: {
+        servers: [APP, VECTORS].map(({ password: _password, ...rest }) => rest),
+        databaseUrl: { port: 55433 },
+      },
+    });
+    expect(JSON.stringify(audited)).not.toContain('vectors-local');
+  });
+
+  it('refuses one that names none of the servers, with what to send, and writes nothing', async () => {
+    const { deps, store } = world({}, { servers: [APP], sharedDatabase: true });
+
+    const refused = await call(deps, 'PUT', { servers: [APP], databaseUrl: { port: 55433 } });
+
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toBe(
+      "DATABASE_URL is to come from the server on 55433, and none of the servers listens there: name one of theirs (55432), or send databaseUrl 'shared' or 'none'",
+    );
+    expect(deps.write).not.toHaveBeenCalled();
+    expect(store.value).toEqual({ servers: [APP], sharedDatabase: true });
+  });
+
+  it('says beside it, under the local driver, that a task gets no such DATABASE_URL either', async () => {
+    const { deps } = world({ hosts: async () => [{ name: 'laptop', driver: 'local', status: 'up', lastSeenAt: seen(1) }] }, { servers: [APP], databaseUrl: { port: 55432 } });
+
+    const read = await call(deps, 'GET');
+
+    expect(read.body.supported).toMatchObject({ ok: false });
+    expect(String((read.body.supported as { why: string }).why)).toContain('a task here starts without one, and without the DATABASE_URL one of them would give');
   });
 });
 

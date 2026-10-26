@@ -8,6 +8,7 @@ import {
   type RemovalPreview,
   type RemovalReport,
   type TaskPostgresCompose,
+  type TaskPostgresDatabaseUrl,
   type TaskPostgresServer,
   type TaskPostgresView,
 } from '@/lib/api';
@@ -628,7 +629,7 @@ export async function updateDesignMemory(
  */
 export async function saveTaskPostgres(
   repo: string,
-  setting: { servers: TaskPostgresServer[]; sharedDatabase: boolean },
+  setting: { servers: TaskPostgresServer[]; databaseUrl: TaskPostgresDatabaseUrl },
 ): Promise<{ ok: boolean; error?: string; view?: TaskPostgresView }> {
   try {
     const view = await call<TaskPostgresView>(`/v1/repos/${encodeURIComponent(repo)}/task-postgres`, 'PUT', setting);

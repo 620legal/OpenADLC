@@ -18,7 +18,7 @@ vi.mock('@openadlc/db', () => ({
 
 import { bots, leases, modelAccounts, repos, tasks } from '@openadlc/db';
 import { SessionEnvMinter } from './session-env.js';
-import { HostFull, TaskRunner, type StartTaskInput } from './task-runner.js';
+import { HostFull, ownServerUrl, TaskRunner, type StartTaskInput } from './task-runner.js';
 import { BRANCH_GONE, BranchGoneError } from './worktree.js';
 
 const ACCOUNT = '550e8400-e29b-41d4-a716-446655440000';
@@ -1604,12 +1604,15 @@ async function startingWithPostgres(
   // Read before the spies are restored, which forgets their calls.
   let contextFiles: string[] = [];
   let warned: string[] = [];
+  // What the session's environment is minted with: its DATABASE_URL among it.
+  let mintedUrl: string | null | undefined;
   try {
     await runner.start({ ...START, repo: 'app' });
   } catch (error) {
     failure = error;
   } finally {
     contextFiles = mint.mock.calls[0]?.[0].contextFiles ?? [];
+    mintedUrl = mint.mock.calls[0]?.[0].databaseUrl;
     warned = warn.mock.calls.map((call) => String(call[0]));
     mint.mockRestore();
     warn.mockRestore();
@@ -1620,7 +1623,7 @@ async function startingWithPostgres(
   const setup = vi.mocked(exec.exec).mock.calls.find(([, command]) => command.includes('setup'));
   const sessionEnv = vi.mocked(exec.startSession).mock.calls[0]?.[0].env ?? {};
   const ciEnv = runner.localCiTarget('task-1')?.env ?? {};
-  return { runner, exec, spec, setup, setupEnv: setup?.[2]?.env ?? {}, sessionEnv, ciEnv, contextFiles, warned, failure };
+  return { runner, exec, spec, setup, setupEnv: setup?.[2]?.env ?? {}, sessionEnv, mintedUrl, ciEnv, contextFiles, warned, failure };
 }
 
 /**
@@ -1633,8 +1636,11 @@ describe('a task in a repository with Postgres servers of its own', () => {
     const plain = await startingWithPostgres({ servers: [APP_POSTGRES] });
     expect(plain.spec).toMatchObject({ postgres: [APP_POSTGRES], database: false });
 
-    const both = await startingWithPostgres({ servers: [APP_POSTGRES], sharedDatabase: true });
+    const both = await startingWithPostgres({ servers: [APP_POSTGRES], databaseUrl: 'shared' });
     expect(both.spec).toMatchObject({ postgres: [APP_POSTGRES], database: true });
+    // A row stored before there was a choice of server reads as it did.
+    const old = await startingWithPostgres({ servers: [APP_POSTGRES], sharedDatabase: true });
+    expect(old.spec).toMatchObject({ postgres: [APP_POSTGRES], database: true });
   });
 
   it('keeps the shared database, and asks for no server, where the repository has none', async () => {
@@ -1660,6 +1666,32 @@ describe('a task in a repository with Postgres servers of its own', () => {
     }
   });
 
+  it('gives make setup, the session and local CI the DATABASE_URL of the server the repository names, as its superuser', async () => {
+    // A repository whose Postgres suites make roles and databases of their
+    // own, as its GitHub CI's superuser URL lets them: on the shared server's
+    // plain role they stopped at "permission denied to create role".
+    const vectors = { ...APP_POSTGRES, port: 55433, superuser: 'vec', password: 'vec-local', database: 'vectors' };
+    const { spec, setupEnv, mintedUrl, ciEnv } = await startingWithPostgres(
+      { servers: [APP_POSTGRES, vectors], databaseUrl: { port: 55433 } },
+      { postgres: ['127.0.0.1:55432', '127.0.0.1:55433'] },
+    );
+
+    expect(spec).toMatchObject({ postgres: [APP_POSTGRES, vectors], database: false });
+    const url = 'postgres://vec:vec-local@127.0.0.1:55433/vectors';
+    expect(setupEnv.DATABASE_URL).toBe(url);
+    expect(mintedUrl).toBe(url);
+    expect(ciEnv.DATABASE_URL).toBe(url);
+    expect(ciEnv.OPENADLC_TASK_POSTGRES).toBe('127.0.0.1:55432,127.0.0.1:55433');
+  });
+
+  it('percent-encodes the superuser, password and database, so a password with @, / or # stays the password', () => {
+    expect(ownServerUrl({ port: 55432, superuser: 'app', password: 'p@ss/w:rd#1 %', database: 'app_db' })).toBe(
+      'postgres://app:p%40ss%2Fw%3Ard%231%20%25@127.0.0.1:55432/app_db',
+    );
+    const parsed = new URL(ownServerUrl({ port: 55432, superuser: 'app', password: 'p@ss/w:rd#1', database: 'app_db' }));
+    expect([parsed.hostname, parsed.port, decodeURIComponent(parsed.password), parsed.pathname]).toEqual(['127.0.0.1', '55432', 'p@ss/w:rd#1', '/app_db']);
+  });
+
   it('says every server, in the order the setting lists them', async () => {
     const second = { ...APP_POSTGRES, port: 55499 };
     const { sessionEnv } = await startingWithPostgres({ servers: [APP_POSTGRES, second] }, { postgres: ['127.0.0.1:55432', '127.0.0.1:55499'] });
@@ -1678,6 +1710,18 @@ describe('a task in a repository with Postgres servers of its own', () => {
     expect(warned.some((line) => line.includes('which the local driver cannot give: task task-1 starts without one'))).toBe(true);
   });
 
+  it('gives no DATABASE_URL, and says so, where the driver cannot make the server it would come from', async () => {
+    const { setupEnv, mintedUrl, ciEnv, contextFiles, warned } = await startingWithPostgres({ servers: [APP_POSTGRES], databaseUrl: { port: 55432 } }, {});
+
+    expect(mintedUrl).toBeNull();
+    expect(setupEnv).not.toHaveProperty('DATABASE_URL');
+    expect(ciEnv).not.toHaveProperty('DATABASE_URL');
+    const said = readFileSync(contextFiles.find((file) => file.endsWith('task-postgres.md'))!, 'utf8');
+    expect(said).toContain('`OPENADLC_TASK_POSTGRES` is not set, nor is the `DATABASE_URL` the repository takes from the one at 127.0.0.1:55432.');
+    expect(warned.some((line) => line.includes('starts without one, and without the DATABASE_URL the one on 55432 would give'))).toBe(true);
+    expect(warned.join('\n')).not.toContain('app:app@');
+  });
+
   it('fails the start with what to correct when the stored setting no longer reads', async () => {
     const { failure, exec } = await startingWithPostgres({ servers: [{ ...APP_POSTGRES, image: 'someone/postgres:16' }] });
 
@@ -1694,5 +1738,32 @@ describe('a task in a repository with Postgres servers of its own', () => {
       'acme/app',
     );
     expect(runner.localCiTarget('task-9')?.env.OPENADLC_TASK_POSTGRES).toBe('127.0.0.1:55432');
+  });
+
+  it('runs local CI on a computer taken back after a restart with the DATABASE_URL its own server gave it', async () => {
+    // `docker exec` does not inherit the session's environment, and the URL's
+    // password is in the setting, not anywhere the driver rebuilds from.
+    vi.mocked(repos.getTaskPostgres).mockResolvedValue({ servers: [APP_POSTGRES], databaseUrl: { port: 55432 } });
+    const adopted = (taskId: string, postgres: string[]) => {
+      const runner = new TaskRunner(config(), driver(), null);
+      runner.adopt(
+        { id: taskId, kind: 'implement', branch: 'agent/atlas/5-issue-5', tmuxSession: `atlas/implement-${taskId}`, repoId: 'repo-app' },
+        { taskId, bot: 'atlas', container: `task-${taskId}`, databaseUrl: null, slotDir: join(scratch, taskId), postgres },
+        'acme/app',
+      );
+      return runner;
+    };
+    try {
+      const runner = adopted('task-9', ['127.0.0.1:55432']);
+      await vi.waitFor(() => expect(runner.localCiTarget('task-9')?.env.DATABASE_URL).toBe('postgres://app:app@127.0.0.1:55432/app_db'));
+      expect(repos.getTaskPostgres).toHaveBeenCalledWith('repo-app');
+
+      // A server the computer was not found running is not the one it names.
+      const other = adopted('task-8', ['127.0.0.1:55499']);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(other.localCiTarget('task-8')?.env).not.toHaveProperty('DATABASE_URL');
+    } finally {
+      vi.mocked(repos.getTaskPostgres).mockReset().mockResolvedValue(null);
+    }
   });
 });

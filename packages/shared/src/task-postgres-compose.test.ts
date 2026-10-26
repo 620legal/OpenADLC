@@ -40,7 +40,7 @@ describe('the Postgres servers a repository’s Compose file starts', () => {
       notes: [],
     });
     const [{ service: _service, notes: _notes, refusal: _refusal, ...server }] = servers(read) as [ComposePostgresServer];
-    expect(parseTaskPostgres({ servers: [server] })).toEqual({ ok: true, setting: { servers: [{ ...server, port: 55432 }], sharedDatabase: false } });
+    expect(parseTaskPostgres({ servers: [server] })).toEqual({ ok: true, setting: { servers: [{ ...server, port: 55432 }], databaseUrl: 'none' } });
   });
 
   it('looks for the names Compose looks for, in its order', () => {

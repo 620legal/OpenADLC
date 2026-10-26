@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  databaseUrlServer,
   isTaskPostgresImage,
   parseTaskPostgres,
   taskPostgresAddresses,
@@ -20,9 +21,46 @@ function refusal(input: unknown): string {
 }
 
 describe('a repository’s Postgres servers for its tasks', () => {
-  it('reads app’s one server, with no database on the shared server unless it asks', () => {
-    expect(parseTaskPostgres({ servers: [APP] })).toEqual({ ok: true, setting: { servers: [APP], sharedDatabase: false } });
-    expect(parseTaskPostgres({ servers: [APP], sharedDatabase: true })).toEqual({ ok: true, setting: { servers: [APP], sharedDatabase: true } });
+  it('reads app’s one server, with no DATABASE_URL unless it asks for one', () => {
+    expect(parseTaskPostgres({ servers: [APP] })).toEqual({ ok: true, setting: { servers: [APP], databaseUrl: 'none' } });
+    expect(parseTaskPostgres({ servers: [APP], databaseUrl: 'none' })).toEqual({ ok: true, setting: { servers: [APP], databaseUrl: 'none' } });
+    expect(parseTaskPostgres({ servers: [APP], databaseUrl: 'shared' })).toEqual({ ok: true, setting: { servers: [APP], databaseUrl: 'shared' } });
+  });
+
+  it('reads a row stored before there was a choice of server as it read then', () => {
+    // What every bridge before this wrote: the shared-database box, ticked or not.
+    expect(parseTaskPostgres({ servers: [APP], sharedDatabase: true })).toEqual({ ok: true, setting: { servers: [APP], databaseUrl: 'shared' } });
+    expect(parseTaskPostgres({ servers: [APP], sharedDatabase: false })).toEqual({ ok: true, setting: { servers: [APP], databaseUrl: 'none' } });
+    expect(parseTaskPostgres({ servers: [], sharedDatabase: true })).toEqual({ ok: true, setting: null });
+  });
+
+  it('takes the DATABASE_URL from one of its own servers, named by its port, and says which', () => {
+    const vectors = { ...APP, port: 55433, database: 'vectors' };
+    const read = parseTaskPostgres({ servers: [APP, vectors], databaseUrl: { port: 55433 } });
+    expect(read).toEqual({ ok: true, setting: { servers: [APP, vectors], databaseUrl: { port: 55433 } } });
+    expect(databaseUrlServer(read.ok ? read.setting : null)).toEqual(vectors);
+    // As a form sends a port typed in.
+    expect(parseTaskPostgres({ servers: [APP], databaseUrl: { port: ' 55432 ' } })).toMatchObject({ ok: true, setting: { databaseUrl: { port: 55432 } } });
+
+    expect(databaseUrlServer({ servers: [APP], databaseUrl: 'shared' })).toBeNull();
+    expect(databaseUrlServer({ servers: [APP], databaseUrl: 'none' })).toBeNull();
+    expect(databaseUrlServer(null)).toBeNull();
+  });
+
+  it('refuses a DATABASE_URL from a server the setting does not have, with what to send instead', () => {
+    expect(refusal({ servers: [APP], databaseUrl: { port: 55499 } })).toBe(
+      "DATABASE_URL is to come from the server on 55499, and none of the servers listens there: name one of theirs (55432), or send databaseUrl 'shared' or 'none'",
+    );
+    expect(refusal({ servers: [], databaseUrl: { port: 55432 } })).toBe(
+      "DATABASE_URL is to come from the server on 55432, and there are no servers: add that server, or send databaseUrl 'none'",
+    );
+  });
+
+  it('refuses a choice it cannot read, and the old box beside the new choice, which could disagree', () => {
+    for (const databaseUrl of ['own', 55432, true, null, [55432], { port: 'five' }, { port: 55432.5 }, {}]) {
+      expect(refusal({ servers: [APP], databaseUrl }), JSON.stringify(databaseUrl)).toMatch(/^databaseUrl is 'none', 'shared' or \{ port \}: /);
+    }
+    expect(refusal({ servers: [APP], databaseUrl: 'shared', sharedDatabase: true })).toMatch(/^send databaseUrl alone: /);
   });
 
   it('reads no servers, or nothing stored, as the setting being off', () => {
@@ -137,6 +175,8 @@ describe('a repository’s Postgres servers for its tasks', () => {
 
   it('tells a task where each server listens in its computer, and leaves passwords out of what others read', () => {
     expect(taskPostgresAddresses([APP, { ...APP, port: 55499 }])).toEqual(['127.0.0.1:55432', '127.0.0.1:55499']);
-    expect(JSON.stringify(withoutPasswords({ servers: [{ ...APP, password: 'hunter2' }], sharedDatabase: false }))).not.toContain('hunter2');
+    const own = withoutPasswords({ servers: [{ ...APP, password: 'hunter2' }], databaseUrl: { port: 55432 } });
+    expect(own).toEqual({ servers: [{ port: 55432, superuser: 'app', database: 'app_db', image: 'pgvector/pgvector:pg16' }], databaseUrl: { port: 55432 } });
+    expect(JSON.stringify(own)).not.toContain('hunter2');
   });
 });

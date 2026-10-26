@@ -54,7 +54,7 @@ export interface RunningTasks {
   end(taskId: string, reason: string): Promise<void>;
   /** What the reaper asks of the runner; a runner without them is not reaped for. */
   adopt?(
-    task: { id: string; kind: TaskKind; branch: string | null; tmuxSession: string | null },
+    task: { id: string; kind: TaskKind; branch: string | null; tmuxSession: string | null; repoId?: string | null },
     computer: TaskComputer,
     repoFullName: string | null,
   ): void;
