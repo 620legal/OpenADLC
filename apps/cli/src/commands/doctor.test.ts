@@ -41,7 +41,7 @@ describe('openadlc doctor on the bots’ folders from before', () => {
 describe('openadlc doctor on a command to paste', () => {
   it('quotes each path as one word that the shell expands nothing in', async () => {
     const { shellQuote } = await import('./doctor.js');
-    expect(shellQuote('/Users/me/Fleet Data/work/builder/repos')).toBe("'/Users/me/Fleet Data/work/builder/repos'");
+    expect(shellQuote('/Users/me/My Data/work/builder/repos')).toBe("'/Users/me/My Data/work/builder/repos'");
     expect(shellQuote("/tmp/it's $HOME `x`")).toBe("'/tmp/it'\\''s $HOME `x`'");
     const { execFileSync } = await import('node:child_process');
     for (const path of ['/a b/c', "/it's", '/$HOME/`id`/\\n']) {

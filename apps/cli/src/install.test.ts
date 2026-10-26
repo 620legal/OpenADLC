@@ -208,11 +208,11 @@ describe('what install.json leaves to the environment', () => {
       expect(env).not.toHaveProperty(key);
     }
 
-    const set = serviceEnv({ ...fresh, organization: 'exampleco', githubClientId: 'Iv1.zzz', publicUrl: 'https://fleet.example.test', humans: ['alex', 'sam'] });
+    const set = serviceEnv({ ...fresh, organization: 'exampleco', githubClientId: 'Iv1.zzz', publicUrl: 'https://openadlc.example.test', humans: ['alex', 'sam'] });
     expect(set).toMatchObject({
       OPENADLC_GITHUB_ORG: 'exampleco',
       OPENADLC_GITHUB_CLIENT_ID: 'Iv1.zzz',
-      OPENADLC_PUBLIC_URL: 'https://fleet.example.test',
+      OPENADLC_PUBLIC_URL: 'https://openadlc.example.test',
       OPENADLC_HUMANS: 'alex,sam',
     });
   });

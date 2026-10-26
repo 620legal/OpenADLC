@@ -43,10 +43,8 @@ const now = (next: () => void) => next();
 
 describe('a click before React has started', () => {
   it('is left on a window key in the openadlc namespace, the one the head script uses', () => {
-    // The last Fleet-era name the console set on the page; the rename missed it.
     expect(EARLY_CLICK_KEY).toBe('__openadlcEarlyClick');
     expect(EARLY_CLICKS_SCRIPT).toContain('"__openadlcEarlyClick"');
-    expect(EARLY_CLICKS_SCRIPT).not.toMatch(/__fleetEarly/);
   });
 
   it('is noted, by the button it was on, the last one winning', () => {

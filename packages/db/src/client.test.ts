@@ -268,12 +268,12 @@ describe('where a database URL points, as a log line says it', () => {
   });
 
   it('keeps a password with an @ in it, or given as a parameter, out of the line', () => {
-    const one = db.describeDatabase('postgres://fleet:p@ss@db.example.com/openadlc_db');
-    const two = db.describeDatabase('postgres://fleet@db.example.com:6543/openadlc_db?password=s3cret&sslpassword=k3y');
+    const one = db.describeDatabase('postgres://app:p@ss@db.example.com/openadlc_db');
+    const two = db.describeDatabase('postgres://app@db.example.com:6543/openadlc_db?password=s3cret&sslpassword=k3y');
     expect(one).toBe('openadlc_db on db.example.com:5432');
     expect(two).toBe('openadlc_db on db.example.com:6543');
     for (const line of [one, two]) {
-      expect(line).not.toMatch(/ss|s3cret|k3y|fleet@/);
+      expect(line).not.toMatch(/ss|s3cret|k3y|app@/);
     }
   });
 
