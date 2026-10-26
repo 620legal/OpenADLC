@@ -1,0 +1,14 @@
+name: asks again, rather than filing a new draft, when request.md does not show the draft the person approved
+covers: approved-draft-not-shown
+given:
+  declaredPaths: []
+script:
+  say:
+    - "request.md has the answer OK, file it, but not the draft it agreed to, so here is the draft I would file, to agree to before anything is filed."
+    - "Title: Show what a task has cost on its card."
+  ask:
+    question: "Here's what I'll file. OK?"
+    options: ["OK, file it", "Change something"]
+expect:
+  stops: true
+  reason: question

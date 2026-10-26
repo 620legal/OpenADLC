@@ -260,7 +260,9 @@ export interface Gate {
    * What the bot said just before asking, in the same conversation: what the
    * question is about. "Here's what I'll file. OK?" asked about a draft only
    * that message held, and its card showed the question alone. Read with the
-   * open gates; absent elsewhere.
+   * open gates, for the Needs you card, and with a subject's gates
+   * (`listGatesForSubject`), for the answered questions `request.md` and
+   * `intake.md` show; absent elsewhere.
    */
   context?: string | null;
 }
