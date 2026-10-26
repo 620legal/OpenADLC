@@ -408,10 +408,106 @@ describe('the smoke on testing', () => {
     expect(dispatched.every((one) => one.path.endsWith('/dispatches'))).toBe(true);
   });
 
-  it('green, where testing is as far as it goes: nothing more', async () => {
-    const { line, dispatched } = pipeline(rules({ production: { on: 'none' } }));
-    await line.onTestingSmoke(REPO, 'abc1234def', 'success', null);
-    expect(dispatched).toEqual([]);
+  /**
+   * A repository whose rules stop at testing: its card sat in Ship for good
+   * after a green deploy and smoke, "Merged · waiting to deploy", since only
+   * a promote finished a card. The smoke finishes them here.
+   */
+  describe('green, where testing is as far as it goes', () => {
+    const SHA = 'f3116f2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const NONE = rules({ production: { on: 'none' } });
+    /**
+     * #87 is the branch's issue, #86 one its pull request closes, #85 sent
+     * back after the merge, #84 an earlier merge the deploy carried, whose
+     * own deploy was cancelled for this one's, and #83 a merge it did not carry.
+     */
+    const board = () => {
+      world.board = [
+        { number: 87, prNumber: 88, stage: 'merged' },
+        { number: 86, prNumber: 88, stage: 'merged' },
+        { number: 85, prNumber: 88, stage: 'build' },
+        { number: 84, prNumber: 82, stage: 'merged' },
+        { number: 83, prNumber: 81, stage: 'merged' },
+      ];
+      world.threads = [{ id: 'thread-lead', subject_ref: 'app#88' }];
+      world.runs.set(SHA, { sha: SHA, prNumber: 88 });
+    };
+    const CARRIED = async () => [
+      { number: 82, issueNumber: 84 },
+      { number: 88, issueNumber: 87 },
+    ];
+    const stages = () => world.board?.map((issue) => [issue.number, issue.stage]);
+
+    it('dispatches nothing, and moves to Done the cards in Ship of every pull request its deploy carried, with why', async () => {
+      board();
+      const { line, dispatched, moves } = pipeline(NONE);
+      line.readCarriedWith(CARRIED);
+
+      const said = await line.onTestingSmoke(REPO, SHA, 'success', null);
+
+      expect(dispatched).toEqual([]);
+      const reason = 'shipped on testing: its smoke passed on testing at f3116f2, and app’s rules name no production deploy';
+      expect(moves).toEqual([
+        { repoName: 'app', issueNumber: 84, to: 'done', actor: 'bridge', reason, prNumber: 82 },
+        { repoName: 'app', issueNumber: 87, to: 'done', actor: 'bridge', reason, prNumber: 88 },
+        { repoName: 'app', issueNumber: 86, to: 'done', actor: 'bridge', reason, prNumber: 88 },
+      ]);
+      // The one sent back is being reworked, and the one not carried is not on testing.
+      expect(stages()).toEqual([
+        [87, 'done'],
+        [86, 'done'],
+        [85, 'build'],
+        [84, 'done'],
+        [83, 'merged'],
+      ]);
+      expect(world.said).toEqual([
+        expect.objectContaining({ threadId: 'thread-lead', kind: 'sys', text: expect.stringContaining('Moved to Done: shipped on testing. Its smoke passed there at `f3116f2`') }),
+        expect.objectContaining({ threadId: 'thread-lead', kind: 'sys', text: expect.stringContaining('`production: on: none`') }),
+      ]);
+      expect(world.audits).toContainEqual(
+        expect.objectContaining({ action: 'deploy.shipped_on_testing', target: 'app#87', payload: expect.objectContaining({ prNumber: 88, sha: SHA }) }),
+      );
+      expect(said).toContain('app@f3116f2: testing is as far as this repository goes');
+      expect(said).toContain('app#87 moved to Done: shipped on testing, since its smoke passed on testing at f3116f2');
+    });
+
+    it('moves the commit’s own pull request’s cards where what it carried cannot be read', async () => {
+      board();
+      const { line, moves } = pipeline(NONE);
+      line.readCarriedWith(async () => null);
+
+      await line.onTestingSmoke(REPO, SHA, 'success', null);
+
+      expect(moves.map((move) => move.issueNumber)).toEqual([87, 86]);
+    });
+
+    it('moves nothing on a green re-run of a red smoke, whose commit is being reverted', async () => {
+      board();
+      const { line, moves } = pipeline(NONE);
+      line.readCarriedWith(CARRIED);
+      await line.onTestingSmoke(REPO, SHA, 'failure', null);
+
+      expect(await line.onTestingSmoke(REPO, SHA, 'success', null)).toContain('its smoke went red, or it was sent back; no card goes to Done');
+      expect(moves).toEqual([]);
+    });
+
+    it('moves on the deploy sweep what a green smoke left in Ship, and asks GitHub nothing once none is left', async () => {
+      board();
+      world.board = world.board!.filter((issue) => issue.prNumber === 88);
+      // The move failed when the smoke's delivery was answered, so GitHub has nothing to send again.
+      const refused = pipeline(NONE, { moveStage: 'refused' });
+      refused.line.readCarriedWith(CARRIED);
+      expect(await refused.line.onTestingSmoke(REPO, SHA, 'success', null)).toContain('app#87: not moved to Done');
+
+      const reader = vi.fn(CARRIED);
+      const { line, moves } = pipeline(NONE);
+      line.readCarriedWith(reader);
+      expect(await line.retryUndispatched()).toEqual([expect.stringContaining('app#87 moved to Done: shipped on testing')]);
+      expect(moves.map((move) => move.issueNumber)).toEqual([87, 86]);
+
+      expect(await line.retryUndispatched()).toEqual([]);
+      expect(reader).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('green, on a plan with no environment rules: the bridge holds the soak, then promotes', async () => {

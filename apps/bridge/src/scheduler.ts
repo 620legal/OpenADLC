@@ -1448,7 +1448,8 @@ export class Scheduler {
    * dispatches the testing deploy of the newest merge, when that merge has no
    * deploy dispatched. Older merges are never deployed on their own: see
    * `planDeploySweep`. Then it checks on the pipeline's rollbacks, soaks,
-   * undispatched promotes and owed send-backs.
+   * undispatched promotes and owed send-backs, and, where testing is as far as
+   * a repository goes, moves to Done what its newest green smoke left in Ship.
    *
    * Without a pipeline wired (a test, or a bridge built without one), the
    * older path stays as the fallback: it refuses while the install has no
@@ -1565,7 +1566,9 @@ export class Scheduler {
     if (this.pipeline) actions.push(...(await this.pipeline.checkRollbacks().catch(() => [])));
     // A soak the bridge holds, for a repository whose plan keeps no wait timer.
     if (this.pipeline) actions.push(...(await this.pipeline.promoteDue().catch(() => [])));
-    // A promote or rollback whose dispatch GitHub refused or did not answer.
+    // A promote or rollback whose dispatch GitHub refused or did not answer;
+    // where testing is as far as a repository goes, the cards its newest
+    // green smoke left in Ship.
     if (this.pipeline) actions.push(...(await this.pipeline.retryUndispatched().catch(() => [])));
     // A change a failed smoke or production deploy owes a send-back, given back
     // when GitHub could not be asked.

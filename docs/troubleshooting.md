@@ -1298,6 +1298,7 @@ question open on it, its place in the line to merge — never from a setting
 | Checks running before it merges | CI on its head, or the merge line held at the GitHub Actions minutes cap | The pull request's checks; Costs, and [the cap](#a-pull-request-waits-on-github-actions-minutes-this-month-reached-the-cap) |
 | Waiting for the reviewers | A review seat asked has not posted on this diff | The pull request, and the reviewer's thread |
 | Live on testing · waiting for production | The production environment's required reviewer, or its soak timer | The repository's deployments page; Settings → Repositories |
+| Live on testing · waiting for its smoke | Its repository's rules name no production deploy (`production: on: none`), so testing is as far as it goes: the smoke on testing passing moves it to Done, and a red one sends it back to build | The smoke run on the repository's Actions page; the bridge log's `shipped on testing` line, or the deploy sweep's |
 | Waiting until `<repo>` is resumed | The repository is paused | Settings → Pause work |
 | Merged · waiting to deploy | No `deployed:testing` yet, in a repository that has a testing deploy | Settings → Repositories: how it ships, and where the rules came from; the bridge log's `dispatched deploy-testing` or `not dispatched` line |
 | No merge to deploy · move it to Done by hand | In Ship, and its issue records no pull request, in a repository that has a testing deploy: no deploy carries it, and nothing that finishes a merge moves it. Move it to Done once its change has shipped, or back to the stage its work is in | The deploy sweep's `is merged with no pull request recorded` line |
@@ -1321,6 +1322,20 @@ was ever dispatched. One whose issue records no pull request stays, and its
 card says to move it to Done by hand: OpenADLC cannot tell what merged for it,
 so no deploy says it shipped. Where merging ships, the sweep moves it with the
 rest.
+
+A repository whose rules say `production: on: none` deploys to testing and
+stops there. Its card is labelled `deployed:testing` once the deploy is live,
+and goes to Done when the smoke on testing passes for the commit that carried
+it, with every other pull request that commit carried: each one merged since
+what testing served before. A card sent back after its merge stays where its
+work is. One left in Ship after a green smoke, because its move failed or an
+older bridge heard the smoke, is moved by the deploy sweep, for the
+repository's newest green smoke. A smoke whose delivery never reached the
+bridge, because it was down or restarting, is one GitHub records as failed,
+and a bridge with the OpenADLC app has GitHub send it again when it starts and
+on every reconcile.
+One whose smoke never ran, or skipped, stays in Ship: turn the smoke on, or
+move it to Done by hand.
 
 A merge moves every issue the pull request finishes: the one its branch was cut
 for (`agent/<bot>/<issue>-…`) and each one it closes, as GitHub lists them — a

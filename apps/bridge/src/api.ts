@@ -1202,9 +1202,15 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     // In Ship where the repository ships by release: no deploy is coming for
     // it, and the card says it waits for the next release.
     const releasing = new Set<string>();
+    // In Ship where the repository's rules name no production deploy: a
+    // green smoke on testing takes it to Done, and "waiting for production"
+    // said one was coming.
+    const testingLast = new Set<string>();
     const shipping = new Set(listed.filter((issue) => issue.stage === 'merged').map((issue) => issue.repoName));
     for (const entry of deps.delivery ? repoList.filter((one) => shipping.has(one.name)) : []) {
-      if (shipsByRelease((await deps.delivery!.get(entry).catch(() => null))?.rules)) releasing.add(entry.name);
+      const rules = (await deps.delivery!.get(entry).catch(() => null))?.rules;
+      if (shipsByRelease(rules)) releasing.add(entry.name);
+      else if (rules?.testing.on === 'merge' && rules.production.on === 'none') testingLast.add(entry.name);
     }
     const issueCards = cards
       .filter((card) => workedIn.has(card.repo) && !ignored.has(card.ref))
@@ -1216,6 +1222,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
           next: hasNextLabel(card.labels),
           ...(noMerge.has(card.ref) ? { noMerge: true as const } : {}),
           ...(card.stage === 'merged' && releasing.has(card.repo) && !noMerge.has(card.ref) ? { shipsByRelease: true as const } : {}),
+          ...(card.stage === 'merged' && testingLast.has(card.repo) ? { shipsOnTesting: true as const } : {}),
         };
         // Who is on it now, the pull request's reviewers included; the store
         // only knew the tasks filed under the issue itself.

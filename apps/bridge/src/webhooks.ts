@@ -308,6 +308,9 @@ export class Webhooks {
     // the pipeline, from a delivery or the deploy sweep; what that frees is
     // taken up here, as for a merge that ships.
     pipeline.onLeaseReleased?.((why) => this.leasesReleased(why));
+    // Where testing is as far as a repository goes, a green smoke finishes
+    // what the deploy carried, read as its deployment read it.
+    pipeline.readCarriedWith?.((repo, sha) => this.carriedOnTesting(repo, sha));
   }
 
   /**
@@ -832,6 +835,15 @@ export class Webhooks {
           if (abandoned) return;
         }
         await this.stopBuildsOf(repo.name, issue.number);
+      } else if (known && label && DEPLOYED_LABELS.has(label) && (action === 'labeled' || action === 'unlabeled')) {
+        // A deploy's label on a merged issue, which GitHub closed at the
+        // merge: the bridge labels the issue as well as the pull request
+        // (`finishOneDeployed`), and this returned before keeping it, so the
+        // card in Ship said "Merged · waiting to deploy" with its change live
+        // on testing. That label alone is written; nothing else here acts on
+        // an issue that is finished.
+        const kept = (known.labels ?? []).filter((one) => one !== label);
+        await issues.setIssueLabels(repo.id, issue.number, action === 'labeled' ? [...kept, label] : kept);
       }
       // Any other close ends what is paused on it too, one already in Merged
       // or Done included: a person's move or label may have put it there, and
@@ -4325,6 +4337,29 @@ export class Webhooks {
   }
 
   /**
+   * The pull requests a commit carried onto testing, for the pipeline to
+   * finish where testing is as far as a repository goes
+   * (`DeployPipeline.shipOnTesting`): the walk its testing deployment
+   * labelled, from what testing served before it, each with the issue its
+   * branch names. Read from the commit alone, a merge whose own deploy was
+   * cancelled for a later one's would stay in Ship. Null with no account to
+   * ask GitHub with.
+   */
+  private async carriedOnTesting(
+    repo: { name: string; fullName: string },
+    sha: string,
+  ): Promise<{ number: number; issueNumber: number | null }[] | null> {
+    const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
+    if (!client) return null;
+    const previous = await onTestingBefore(repo.name, sha).catch(() => null);
+    const pulls = await this.promotedPulls(repo.name, repo.fullName, previous, sha, client, false);
+    return pulls.map((pull) => ({
+      number: pull.number,
+      issueNumber: headInRepository(pull.headRepoFullName, repo.fullName) ? issueNumberFromBranch(pull.headRef) : null,
+    }));
+  }
+
+  /**
    * Labels and comments on each pull request a deploy put somewhere, and on
    * its issue. Production finishes the card; testing starts the builder
    * verifying.
@@ -4961,6 +4996,9 @@ const DEPLOY_LABELS: Record<string, string> = {
   production: 'deployed:prod',
 };
 
+/** The labels a deploy leaves, which a closed issue's row still takes (`learnIssue`). */
+const DEPLOYED_LABELS: ReadonlySet<string> = new Set(Object.values(DEPLOY_LABELS));
+
 interface DeploymentOutcome {
   environment: 'testing' | 'production';
   /** `deployed:testing` or `deployed:prod`. */
@@ -5134,6 +5172,22 @@ async function lastOnTesting(repoName: string): Promise<string | null> {
     .map((event) => event.payload as { repo?: string; sha?: string })
     .find((payload) => payload.repo === repoName && payload.sha);
   return found?.sha ?? null;
+}
+
+/**
+ * The commit testing served before `sha` reached it, as the bridge heard
+ * each deploy (`DEPLOYED_TO_TESTING`, newest first), or nothing: what
+ * `sha`'s own deployment walked from (`lastOnTesting`, read before it was
+ * recorded). Read later, at its smoke, the newest deploy is `sha` itself.
+ */
+async function onTestingBefore(repoName: string, sha: string): Promise<string | null> {
+  const since = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+  const served = (await listEventsOfType(DEPLOYED_TO_TESTING, since))
+    .map((event) => event.payload as { repo?: string; sha?: string })
+    .filter((payload) => payload.repo === repoName && payload.sha)
+    .map((payload) => payload.sha as string);
+  const at = served.indexOf(sha);
+  return at < 0 ? null : (served.slice(at + 1).find((one) => one !== sha) ?? null);
 }
 
 async function lastPromoted(repoName: string): Promise<FinishedPromote | null> {

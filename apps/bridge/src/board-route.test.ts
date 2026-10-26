@@ -811,3 +811,57 @@ describe('a repository that ships by release', () => {
     ]);
   });
 });
+
+/**
+ * A repository whose rules name no production deploy: a green smoke on
+ * testing takes its merged card to Done, and the card live on testing said
+ * "waiting for production" over a promote that never comes.
+ */
+describe('a repository testing is as far as it ships', () => {
+  let server: Server;
+  let url: string;
+  const IN_SHIP = { ...ISSUES[0]!, id: 'issue-12', number: 12, title: 'A merged change', stage: 'merged', labels: ['adlc:merged', 'deployed:testing'], prNumber: 13 };
+
+  beforeEach(async () => {
+    const { registerConsoleApi } = await import('./api.js');
+    const { Router } = await import('./router.js');
+    const { DEFAULT_DELIVERY_RULES } = await import('@openadlc/shared');
+    const router = new Router();
+    const testingLast = { ...DEFAULT_DELIVERY_RULES, production: { ...DEFAULT_DELIVERY_RULES.production, on: 'none' as const } };
+    registerConsoleApi(router, {
+      config: { gitHubClientId: '', webhookSecret: '', humans: [], review: { maxRounds: 3 } } as never,
+      hostd: {} as never,
+      actors: {} as never,
+      invitations: {} as never,
+      automation: {} as never,
+      gates: {} as never,
+      taskService: {} as never,
+      threadStream: { subscribe: () => () => undefined, watching: 0 } as never,
+      onboarding: {} as never,
+      webhookSetup: {} as never,
+      repoSetup: {} as never,
+      delivery: {
+        get: async () => ({ rules: testingLast, source: 'repository', testingUrl: null, fileError: null }),
+        forget: () => undefined,
+      } as never,
+    });
+    server = createServer((request, response) => void router.handle(request, response));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('marks its cards in Ship as shipping on testing', async () => {
+    const { issues } = await import('@openadlc/db');
+    vi.mocked(issues.boardIssues).mockResolvedValueOnce([IN_SHIP] as never);
+    vi.mocked(issues.boardCards).mockResolvedValueOnce(
+      [{ repo: IN_SHIP.repoName, ref: 'openadlc-testbed#12', title: IN_SHIP.title, stage: IN_SHIP.stage, assignees: [], gateOpen: false, url: IN_SHIP.url, labels: IN_SHIP.labels, updatedAt: IN_SHIP.updatedAt }] as never,
+    );
+    const board = (await (await fetch(`${url}/v1/board`)).json()) as { columns: { stage: string; cards: { ref: string; shipsOnTesting?: boolean; shipsByRelease?: boolean }[] }[] };
+    const ship = board.columns.find((column) => column.stage === 'merged')?.cards ?? [];
+    expect(ship.map((card) => [card.ref, card.shipsOnTesting ?? false, card.shipsByRelease ?? false])).toEqual([['openadlc-testbed#12', true, false]]);
+  });
+});

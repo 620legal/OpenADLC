@@ -196,6 +196,7 @@ vi.mock('@openadlc/db', () => ({
     recordProduction: vi.fn(async () => undefined),
     record: vi.fn(async () => undefined),
     recordTesting: vi.fn(async () => true),
+    recordSmoke: vi.fn(async () => undefined),
   },
   localCiRuns: {
     passFor: vi.fn(async (_repo: string, sha: string) => (store.localCiPasses.has(sha) ? { runId: 'run-1', ok: true, headSha: sha } : null)),
@@ -1203,7 +1204,7 @@ describe('what an issue delivery stores', () => {
 describe('an issue closed on GitHub', () => {
   // testbed#7 was cancelled from its card, or closed by a person, while it
   // waited in Build. Its row kept `start:now`, and the next dispatch built it again.
-  async function deliver(action: string, labels: string[], options: { stopped?: string[] } = {}) {
+  async function deliver(action: string, labels: string[], options: { stopped?: string[]; label?: string } = {}) {
     const moved: unknown[] = [];
     const staffed: unknown[] = [];
     const webhooks = new Webhooks(
@@ -1223,6 +1224,7 @@ describe('an issue closed on GitHub', () => {
       {
         action,
         repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+        ...(options.label ? { label: { name: options.label } } : {}),
         issue: {
           author_association: 'COLLABORATOR',
           number: 7,
@@ -1286,6 +1288,39 @@ describe('an issue closed on GitHub', () => {
 
     expect(vi.mocked(issues.forget)).not.toHaveBeenCalled();
     expect(vi.mocked(issues.setIssueLabels)).toHaveBeenCalledWith('repo-1', 7, ['adlc:review']);
+    expect(moved).toEqual([]);
+    expect(staffed).toEqual([]);
+  });
+
+  // The bridge labels the issue `deployed:testing` once its change is live
+  // there, after GitHub closed it at the merge. The delivery returned before
+  // keeping the label, and the card in Ship said "Merged · waiting to deploy".
+  it.each([
+    ['labeled', 'deployed:testing', ['adlc:merged', 'openadlc:paused'], ['adlc:merged', 'deployed:testing'], ['adlc:merged', 'openadlc:paused', 'deployed:testing']],
+    ['labeled', 'deployed:prod', ['adlc:merged', 'deployed:testing'], ['adlc:merged', 'deployed:testing', 'deployed:prod'], ['adlc:merged', 'deployed:testing', 'deployed:prod']],
+    ['unlabeled', 'deployed:testing', ['adlc:merged', 'deployed:testing'], ['adlc:merged'], ['adlc:merged']],
+  ])('keeps a deploy’s label %s (%s) on one that merged, and does nothing else', async (action, label, stored, delivered, kept) => {
+    store.issue = { number: 7, stage: 'merged', labels: stored, prNumber: 13 };
+    store.qaTasks = [{ id: 'build-going', subjectRef: 'openadlc#7', state: 'running' }] as never;
+    const stopped: string[] = [];
+
+    const { moved, staffed } = await deliver(action, delivered, { stopped, label });
+
+    expect(vi.mocked(issues.setIssueLabels)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(issues.setIssueLabels)).toHaveBeenCalledWith('repo-1', 7, kept);
+    expect(upserts).toEqual([]);
+    expect(moved).toEqual([]);
+    expect(staffed).toEqual([]);
+    expect(stopped).toEqual([]);
+  });
+
+  it('keeps no other label a later delivery brings to one that merged', async () => {
+    store.issue = { number: 7, stage: 'merged', labels: ['adlc:merged'], prNumber: 13 };
+
+    const { moved, staffed } = await deliver('labeled', ['adlc:merged', 'start:now'], { label: 'start:now' });
+
+    expect(vi.mocked(issues.setIssueLabels)).not.toHaveBeenCalled();
+    expect(upserts).toEqual([]);
     expect(moved).toEqual([]);
     expect(staffed).toEqual([]);
   });
@@ -4565,6 +4600,88 @@ describe('a plan change waiting for a path to be let go', () => {
     warn.mockRestore();
     expect(lines.some((line) => /the database is down/.test(line))).toBe(true);
     expect(lines.filter((line) => /hostd refused/.test(line))).toHaveLength(2);
+  });
+});
+
+/**
+ * A repository whose rules stop at testing (`production: on: none`): its
+ * merge deployed to testing and smoked green, and the card sat in Ship for
+ * good, since only a promote finished one. The green smoke finishes every
+ * pull request the deploy carried, read as its deployment read them.
+ */
+describe('a green smoke where testing is as far as the repository goes', () => {
+  const SHA = 'f3116f2000000000000000000000000000000000';
+  const BEFORE = 'beef000000000000000000000000000000000000';
+  const MIDDLE = 'cafe000000000000000000000000000000000000';
+  const NONE = { ...DEFAULT_DELIVERY_RULES, production: { ...DEFAULT_DELIVERY_RULES.production, on: 'none' as const } };
+
+  beforeEach(() => {
+    vi.mocked(deployRuns.get).mockImplementation(async (_repo: string, sha: string) => ({ sha, prNumber: 13, smokeConclusion: 'success', sentBackAt: null }) as never);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.mocked(deployRuns.get).mockReset();
+    vi.mocked(deployRuns.get).mockImplementation(
+      async (_repo: string, sha: string) => ({ sha, prNumber: null, promoteDispatchedAt: '2026-10-01T00:00:00.000Z', rollbackDispatchedAt: null }) as never,
+    );
+    vi.mocked(console.log).mockRestore();
+  });
+
+  it('moves to Done the cards in Ship of every pull request merged since what testing served before', async () => {
+    // Newest first, as the store lists them: this deploy, then the one before it.
+    store.events = [
+      { type: 'deploy.testing_live', payload: { repo: 'openadlc', sha: SHA } },
+      { type: 'deploy.testing_live', payload: { repo: 'openadlc', sha: BEFORE } },
+    ];
+    // #12 is the deployed merge's, #11 an earlier merge it carried, #9 one testing had before.
+    store.boardIssues = [
+      { number: 12, prNumber: 13, stage: 'merged' },
+      { number: 11, prNumber: 10, stage: 'merged' },
+      { number: 9, prNumber: 8, stage: 'merged' },
+    ];
+    const github = {
+      request: vi.fn(async () => ({ commits: [{ sha: MIDDLE }, { sha: SHA }], total_commits: 2 })),
+      listPullsForCommit: vi.fn(async (_repo: string, sha: string) =>
+        sha === MIDDLE
+          ? [{ number: 10, headRef: 'agent/openadlc-atlas-janedoe/11-earlier', headRepoFullName: 'janedoe/openadlc' }]
+          : [{ number: 13, headRef: 'agent/openadlc-atlas-janedoe/12-later', headRepoFullName: 'janedoe/openadlc' }],
+      ),
+    };
+    const webhooks = new Webhooks({} as never, { actors: { asBot: vi.fn(async () => github) } } as never, {} as never, {} as never, {} as never, {} as never);
+    const moves: Record<string, unknown>[] = [];
+    const pipeline = new DeployPipeline({
+      delivery: { get: async () => ({ rules: NONE, source: 'file', testingUrl: null, fileError: null }) },
+      client: async () => null,
+      sendBack: null,
+      moveStage: async (input) => (moves.push(input), { moved: true }),
+    });
+    webhooks.useDelivery(pipeline, { get: async () => ({ rules: NONE }), forget: () => undefined } as never);
+
+    await webhooks.receive(
+      'workflow_run',
+      {
+        action: 'completed',
+        repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+        sender: { login: 'openadlc-app[bot]', type: 'Bot' },
+        workflow_run: {
+          name: 'smoke-testing',
+          display_title: `smoke-testing of deploy-testing ${SHA}`,
+          conclusion: 'success',
+          head_sha: SHA,
+          event: 'workflow_run',
+          head_branch: 'main',
+          html_url: 'https://github.com/janedoe/openadlc/actions/runs/9',
+        },
+      } as never,
+      'delivery-smoke-green',
+    );
+
+    expect(github.request).toHaveBeenCalledWith('GET', expect.stringContaining(`/compare/${BEFORE}...${SHA}`));
+    expect(moves).toEqual([
+      expect.objectContaining({ repoName: 'openadlc', issueNumber: 11, to: 'done', prNumber: 10, reason: expect.stringContaining('shipped on testing') }),
+      expect.objectContaining({ repoName: 'openadlc', issueNumber: 12, to: 'done', prNumber: 13 }),
+    ]);
   });
 });
 

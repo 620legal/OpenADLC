@@ -445,7 +445,12 @@ export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
       // No deploy is coming where a release ships it: "waiting to deploy"
       // would say one was.
       if (card.shipsByRelease) return { text: 'Merged · ships with the next release', tone: 'muted', mark: null };
-      if (card.labels.includes('deployed:testing')) return { text: 'Live on testing · waiting for production', tone: 'muted', mark: null };
+      if (card.labels.includes('deployed:testing')) {
+        // No production deploy is coming where testing is as far as the
+        // repository goes: its green smoke there is what takes it to Done.
+        if (card.shipsOnTesting) return { text: 'Live on testing · waiting for its smoke', tone: 'muted', mark: null };
+        return { text: 'Live on testing · waiting for production', tone: 'muted', mark: null };
+      }
       // No pull request recorded, so no deploy will ever carry it: "waiting
       // to deploy" sat on such a card for good, with nobody told.
       if (card.noMerge) return { text: 'No merge to deploy · move it to Done by hand', tone: 'attention', mark: 'dot' };
