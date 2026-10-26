@@ -12,6 +12,7 @@ import { NeedsYou, type OpenBot } from '@/components/needs-you';
 import { namesLine, PAUSE_WORK, pauseLine } from '@/components/pause-work';
 import { PausedMark, PausedReposProvider, RepoBadge, RepoDot, useRepoColors, usePausedRepos } from '@/components/repo-badge';
 import { ItemView } from '@/components/item-view';
+import { RunningTasks } from '@/components/running-tasks';
 import { ThreadPanel } from '@/components/thread-panel';
 import type { AttentionItem, Board, BoardCard, BoardColumn, CrewMember, WorkPause } from '@/lib/api';
 import { findBot, labelIn } from '@/lib/bot-label';
@@ -220,11 +221,19 @@ export function BoardView({
   // Tasks running across the install, which the board counts above its
   // columns. An older bridge says no count, and the board claims nothing.
   const running = board.running;
+  // Whether the list that count opens is open: the board polls while it is,
+  // or a task on no card would be listed as it was when the list opened.
+  const [listOpen, setListOpen] = useState(false);
+  // A bot as a card's line starts with it: its role, or a handle as written.
+  const who = (name: string): string => {
+    const role = labelOf(name).role;
+    return role ? `${role.charAt(0).toUpperCase()}${role.slice(1)}` : name;
+  };
 
   const shell = (
     <AppShell page="board" repo={repo} data={header} fill>
       <h1 className="sr-only">Board</h1>
-      <BoardActivityPoll board={read} repo={repo} onActivity={(asked, activity) => setPolled({ board: asked, activity })} />
+      <BoardActivityPoll board={read} repo={repo} watching={listOpen} onActivity={(asked, activity) => setPolled({ board: asked, activity })} />
 
       {paused && (
         <div role="status" className="shrink-0 border-b border-alarm/30 bg-alarm/5 px-4 py-2 md:px-6">
@@ -303,7 +312,18 @@ export function BoardView({
           <>
             {(running !== undefined || showRepo) && (
               <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1.5 px-4 pt-3.5 md:px-6 md:pt-4">
-                {running !== undefined && <RunningCount count={running} everyRepository={repo !== 'all'} />}
+                {running !== undefined && (
+                  <RunningTasks
+                    count={running}
+                    tasks={board.runningTasks}
+                    everyRepository={repo !== 'all'}
+                    showRepo={board.repos.length > 1}
+                    now={now}
+                    who={who}
+                    onOpen={(subject) => setOpenItem({ subject, role: null })}
+                    onOpenChange={setListOpen}
+                  />
+                )}
                 {showRepo && <Legend repositories={repositories} />}
               </div>
             )}
@@ -391,24 +411,6 @@ export function BoardView({
   );
   // Every badge and the legend under it say which repositories are paused.
   return <PausedReposProvider names={pausedNames}>{shell}</PausedReposProvider>;
-}
-
-/**
- * How many tasks are running across the install, above the columns: a person
- * looking at a board whose cards had not changed for a while could not tell
- * whether the crew was working or stuck. Its dot moves only while something
- * runs, and never for someone who asked for less motion; the count is a
- * status, so a screen reader hears it when it changes.
- */
-function RunningCount({ count, everyRepository }: { count: number; everyRepository: boolean }) {
-  const reduced = usePrefersReducedMotion();
-  const tasks = `${count} ${count === 1 ? 'task' : 'tasks'} running${everyRepository ? ' across every repository' : ''}`;
-  return (
-    <p role="status" data-running className={cn('flex items-center gap-1.5 text-[12px]', count > 0 ? 'text-soft' : 'text-dim')}>
-      <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', count > 0 ? ['bg-signal', !reduced && 'working-dot'] : 'bg-dim')} />
-      {count > 0 ? tasks : 'Nothing running'}
-    </p>
-  );
 }
 
 /**

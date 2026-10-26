@@ -43,7 +43,13 @@ running, reads only those cards every five (`GET /v1/board/activity`,
 `BoardActivityPoll`) and changes their lines in place. When that read says a
 card started, paused or ended, the whole page is read again at once, at most
 once in fifteen seconds. Above the columns the board says how many tasks are
-running across the install, from a count, not a listing.
+running across the install, from a count, not a listing. That line opens into
+the tasks it counts (`runningTasks` on both reads, `RunningTasks` in the
+console): each one's bot, kind of work, subject and time running, on a card
+shown or not, whatever repository the board shows, linking to its work in the
+item sheet. The list is the first 200 running; past that it ends "and N more
+running", so it adds up to the count. While it is open the board polls as it
+does for a running card.
 
 A card with a running task has one small dot that pulses slowly in the
 console's working green, which a screen reader reads as "working" and which

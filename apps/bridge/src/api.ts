@@ -1325,6 +1325,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       idle: activeSessions.filter((session) => session.state === 'idle').length,
       // Tasks running across the install, which the board counts above its columns.
       running: work.runningTasks,
+      // And the first of them, each named, for the list that count opens:
+      // install-wide too, so the two agree.
+      runningTasks: work.runningList,
       ...(doneBefore !== undefined ? { doneBefore } : {}),
     };
   });

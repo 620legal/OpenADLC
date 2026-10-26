@@ -349,7 +349,19 @@ describe('work items whose links and rows disagree', () => {
     expect(body.running).toBe(3);
     // Only the items running work is linked to, and their issues one by one.
     expect(seen.linkReads).toEqual(['running']);
-    expect(seen.issueReads).toEqual(['#12']);
+    // And one batch for the list's titles: the pull is on an item of its own, so issue 12 does not title it.
+    expect(seen.issueReads).toEqual(['#12', '#31']);
+  });
+
+  it('answers the board with every running task named, as many as it counts, each opening its own subject', async () => {
+    const { body } = await json<{ running: number; runningTasks: { id: string; bot: string; kind: string; subject: string; title: string | null; opens: string | null }[] }>('/v1/board');
+    expect(body.running).toBe(3);
+    // The triage's request is filed and has no card: it is named by the request all the same.
+    expect(body.runningTasks.map((one) => [one.id, one.bot, one.kind, one.title, one.opens]).sort()).toEqual([
+      ['k-build', 'builder', 'patch', ISSUE_12.title, 'api#12'],
+      ['k-review', 'lead-reviewer', 'review', null, 'api#31'],
+      ['k-triage', 'intake', 'intake', FILED.text, 'request:a4b02784'],
+    ]);
   });
 
   it('reads, for the board, only the links and the issues of work open or closed in the week Done shows', async () => {
@@ -359,8 +371,10 @@ describe('work items whose links and rows disagree', () => {
     const since = vi.mocked(workItems.boardLinks).mock.calls.at(-1)![0];
     expect(Date.now() - since.getTime()).toBeGreaterThan(7 * 86_400_000 - 60_000);
     expect(Date.now() - since.getTime()).toBeLessThan(7 * 86_400_000 + 60_000);
-    // The issues from the same moment, every repository's, and never all of them.
-    expect(seen.issueReads).toEqual(['board']);
+    // The issues from the same moment, every repository's, and never all of
+    // them; and one batch for the running task the count's list has no title
+    // for, the review on a pull no issue read is linked with.
+    expect(seen.issueReads).toEqual(['board', '#31']);
     expect(vi.mocked(issues.boardIssues).mock.calls.at(-1)).toEqual([since, undefined]);
   });
 });

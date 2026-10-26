@@ -1,4 +1,4 @@
-import type { Board, CardTask } from './api';
+import type { Board, CardTask, RunningTask } from './api';
 
 /**
  * Keeping a running card's line current between reads of the whole board.
@@ -20,6 +20,8 @@ export const ACTIVITY_EVERY_MS = 5_000;
 /** What the bridge says of the running cards: each with every task going on it now, and the install's count. */
 export interface BoardActivity {
   running: number;
+  /** Every running task, named, for the count's list; absent from an older bridge. */
+  runningTasks?: RunningTask[];
   cards: { ref: string; active: CardTask[] }[];
 }
 
@@ -43,12 +45,14 @@ export function needsFullRead(board: Board, activity: BoardActivity): boolean {
   return now.join('\n') !== runningRefs(board).join('\n');
 }
 
-/** The board with each running card's tasks as the poll said them, and the poll's count. */
+/** The board with each running card's tasks as the poll said them, and the poll's count and list. */
 export function withActivity(board: Board, activity: BoardActivity): Board {
   const byRef = new Map(activity.cards.map((card) => [card.ref, card.active]));
   return {
     ...board,
     running: activity.running,
+    // The list follows the poll as the count does; an older bridge's poll keeps the board's own.
+    ...(activity.runningTasks ? { runningTasks: activity.runningTasks } : {}),
     columns: board.columns.map((column) => ({
       ...column,
       cards: column.cards.map((card) => {

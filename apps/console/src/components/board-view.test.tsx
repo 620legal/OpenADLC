@@ -870,6 +870,17 @@ describe('a card with work running', () => {
     expect(html.indexOf('data-running')).toBeLessThan(html.indexOf('aria-label="Stage"'));
   });
 
+  it('makes the count a closed button inside the same status, once the bridge names what it counts', () => {
+    const named = { ...board([testing], 1), runningTasks: [{ id: 'task-1', bot: 'intake', kind: 'intake', skill: null, round: 0, subject: 'request:b4378305', repo: null, title: 'A request', opens: 'request:b4378305', since: minutesAgo(3) }] };
+    const line = /<p role="status" data-running[^>]*>([\s\S]*?)<\/p>/.exec(render(named))?.[1] ?? 'no count';
+    expect(line).toMatch(/^<button type="button" aria-expanded="false" aria-controls="[^"]+"/);
+    expect(line).toContain('>1 task running<');
+    // Nothing is listed until it is opened.
+    expect(render(named)).not.toContain('aria-label="Tasks running"');
+    // Nothing running is not a button, list or not.
+    expect(render({ ...board([queued], 0), runningTasks: [] })).toContain('rounded-full bg-dim"></span>Nothing running</p>');
+  });
+
   it('reads the whole page every fifteen seconds whatever runs: the running cards are polled on their own', () => {
     // At five seconds while anything ran, it read the board, the crew, the
     // costs and what needs you for every person looking, nearly all the time.

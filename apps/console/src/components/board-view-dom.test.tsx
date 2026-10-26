@@ -195,6 +195,74 @@ describe('a running card’s line, between reads of the whole board', () => {
 });
 
 /**
+ * The count above the columns, over a board with no card running: "1 task
+ * running" while intake triaged a console request, and nothing said what.
+ */
+describe('the running count over a board whose cards do not run', () => {
+  const answer = (body: unknown) => ({ ok: true, json: async () => body });
+  const activityCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
+    fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/board/activity'));
+  const triage = {
+    id: 'task-triage', bot: 'intake', kind: 'intake', skill: null, round: 0, subject: 'request:b4378305', repo: null,
+    title: 'Open the running count into a list', opens: 'request:b4378305', since: '2026-09-24T11:55:00.000Z',
+  };
+  // Nothing in the columns this week, and something in Done before it: a quiet board, not the first run's.
+  const quiet: Board = { ...BOARD, running: 1, runningTasks: [triage], doneBefore: true, columns: BOARD.columns.map((column) => ({ ...column, cards: [] })) };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    router.refresh.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function drawQuiet(): Promise<void> {
+    const { BoardView } = await import('./board-view');
+    const { headerData } = await import('@/lib/header');
+    const header = headerData({ repos: ['openadlc'], crew: [BUILDER], budget: null, needsYou: 0 });
+    await act(async () => root.render(<BoardView board={quiet} crew={[BUILDER]} repo="all" header={header} attention={[]} now={NOW} />));
+  }
+
+  it('opens into the task running, whose row opens its request in the item sheet', async () => {
+    // The item sheet's own read is left pending: this is about which sheet opens, not what it says.
+    vi.stubGlobal('fetch', vi.fn((url: string) => (String(url).startsWith('/api/board/activity') ? Promise.resolve(answer({ running: 1, runningTasks: [triage], cards: [] })) : new Promise(() => undefined))));
+    await drawQuiet();
+    const count = container.querySelector('[role="status"][data-running] button') as HTMLButtonElement;
+    expect(count.textContent).toBe('1 task running');
+    await act(async () => count.click());
+    const row = container.querySelector('[aria-label="Tasks running"] a') as HTMLAnchorElement;
+    expect(row.textContent).toContain('Open the running count into a list');
+    expect(row.textContent).toContain('triage');
+    expect(row.textContent).toContain('5 min');
+    expect(row.getAttribute('href')).toBe('/?item=request%3Ab4378305');
+    expect(container.querySelector('aside[aria-label="A piece of work"]')).toBeNull();
+    await act(async () => row.click());
+    expect(container.querySelector('aside[aria-label="A piece of work"]')).not.toBeNull();
+  });
+
+  it('polls while the list is open though no card runs, and lists what the poll says, without reading the whole page', async () => {
+    const fetchMock = vi.fn(async () => answer({ running: 1, runningTasks: [{ ...triage, title: 'Retitled in the meantime' }], cards: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+    await drawQuiet();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+    // Closed, nothing on the board runs, and nothing is polled.
+    expect(activityCalls(fetchMock)).toEqual([]);
+
+    await act(async () => (container.querySelector('[data-running] button') as HTMLButtonElement).click());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(activityCalls(fetchMock).length).toBeGreaterThan(0);
+    expect(container.querySelector('[aria-label="Tasks running"] a')?.textContent).toContain('Retitled in the meantime');
+    expect(router.refresh).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * A plan change approved while other work holds its paths keeps its question
  * open. The card said "Waiting for your answer" while Needs you said the
  * builder waited for #44 to let go of the approved path (#100).
