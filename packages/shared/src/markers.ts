@@ -21,10 +21,10 @@ export const OPENADLC_EVENTS = [
   /** The design seat's judgement of one plan change (`plan-change-review.ts`). */
   'plan_change_verdict',
 ] as const;
-export type FleetEventType = (typeof OPENADLC_EVENTS)[number];
+export type MarkerEvent = (typeof OPENADLC_EVENTS)[number];
 
-export interface FleetMarker {
-  event: FleetEventType;
+export interface Marker {
+  event: MarkerEvent;
   taskId?: string;
   bot?: string;
   /** A `question`'s own words; the text around the marker is its context. */
@@ -50,39 +50,31 @@ export interface FleetMarker {
   [key: string]: unknown;
 }
 
-/**
- * `fleetadlc:` and `fleet:` are the prefixes markers had before the renames,
- * newest first. Comments already on GitHub carry them, and the bridge reads
- * its history from them, so every generation is read; only the current one is
- * written.
- */
-export const LEGACY_MARKER_PREFIXES = ['fleetadlc:', 'fleet:'] as const;
+const MARKER_RE = /<!--\s*openadlc:(\{[\s\S]*?\})\s*-->/;
 
-const MARKER_RE = /<!--\s*(?:openadlc|fleetadlc|fleet):(\{[\s\S]*?\})\s*-->/;
-
-export function renderMarker(marker: FleetMarker): string {
+export function renderMarker(marker: Marker): string {
   return `<!-- ${MARKER_PREFIX}${JSON.stringify(marker)} -->`;
 }
 
-function markerFrom(json: string | undefined): FleetMarker | null {
+function markerFrom(json: string | undefined): Marker | null {
   if (!json) return null;
   try {
-    const parsed = JSON.parse(json) as FleetMarker;
+    const parsed = JSON.parse(json) as Marker;
     return typeof parsed?.event === 'string' ? parsed : null;
   } catch {
     return null;
   }
 }
 
-export function parseMarker(body: string): FleetMarker | null {
+export function parseMarker(body: string): Marker | null {
   return markerFrom(MARKER_RE.exec(body)?.[1]);
 }
 
 /** Every marker a message carries, in the order it carries them. */
-export function parseMarkers(body: string): FleetMarker[] {
+export function parseMarkers(body: string): Marker[] {
   return [...body.matchAll(new RegExp(MARKER_RE.source, 'g'))]
     .map((match) => markerFrom(match[1]))
-    .filter((marker): marker is FleetMarker => marker !== null);
+    .filter((marker): marker is Marker => marker !== null);
 }
 
 /**
@@ -90,7 +82,7 @@ export function parseMarkers(body: string): FleetMarker[] {
  * `signBody` puts at the end, as `SEAT_TAG` in `stamp.ts` reads them; copied
  * here so this module, which every package reads, depends on nothing.
  */
-const AFTER_OWN_MARKER = /^\s*(?:<!-- (?:openadlc|fleetadlc|fleet)-seat:[a-z0-9][a-z0-9._-]* -->\s*)?(?:<!-- (?:openadlc|fleetadlc|fleet)-sig:[^>]*-->\s*)?$/i;
+const AFTER_OWN_MARKER = /^\s*(?:<!-- openadlc-seat:[a-z0-9][a-z0-9._-]* -->\s*)?(?:<!-- openadlc-sig:[^>]*-->\s*)?$/i;
 
 /**
  * The `review_posted` marker a review ends with, which is its verdict, or null
@@ -103,7 +95,7 @@ const AFTER_OWN_MARKER = /^\s*(?:<!-- (?:openadlc|fleetadlc|fleet)-seat:[a-z0-9]
  * changes let the change merge. And the last marker is not enough on its own:
  * in a review with no marker of its own, the last one is a quoted one.
  */
-export function ownReviewMarker(body: string | null | undefined): FleetMarker | null {
+export function ownReviewMarker(body: string | null | undefined): Marker | null {
   const text = body ?? '';
   const last = [...text.matchAll(new RegExp(MARKER_RE.source, 'g'))].at(-1);
   if (!last || !AFTER_OWN_MARKER.test(text.slice((last.index ?? 0) + last[0].length))) return null;
@@ -177,8 +169,8 @@ export function inertMarkup(text: string): string {
  */
 export function withoutMarker(body: string): string {
   return body
-    .replace(/^[ \t]*<!--\s*(?:openadlc|fleetadlc|fleet):\{[\s\S]*?\}\s*-->[ \t]*(?:\r?\n|$)/gm, '')
-    .replace(/[ \t]*<!--\s*(?:openadlc|fleetadlc|fleet):\{[\s\S]*?\}\s*-->/g, '')
+    .replace(/^[ \t]*<!--\s*openadlc:\{[\s\S]*?\}\s*-->[ \t]*(?:\r?\n|$)/gm, '')
+    .replace(/[ \t]*<!--\s*openadlc:\{[\s\S]*?\}\s*-->/g, '')
     .trim();
 }
 
@@ -187,7 +179,7 @@ export function withoutMarker(body: string): string {
  * in the person's own words. A choice offered twice is offered once: a model
  * repeating itself is not a second answer to pick.
  */
-export function markerOptions(marker: FleetMarker): string[] {
+export function markerOptions(marker: Marker): string[] {
   if (!Array.isArray(marker.options)) return [];
   const seen = new Set<string>();
   return marker.options
@@ -441,7 +433,7 @@ export function resolveAnswer(reply: string, options: readonly string[]): string
  * comment with no marker keeps whatever kind its caller chose — an operator's
  * own comment is never reinterpreted.
  */
-export function messageKindFor(event: FleetEventType): 'sys' | 'bot' | 'gate' | 'draft' {
+export function messageKindFor(event: MarkerEvent): 'sys' | 'bot' | 'gate' | 'draft' {
   switch (event) {
     case 'question':
     case 'plan_change':
@@ -469,7 +461,7 @@ export function messageKindFor(event: FleetEventType): 'sys' | 'bot' | 'gate' | 
 }
 
 /** One line a person reads, for each event. */
-const HEADLINES: Record<FleetEventType, string> = {
+const HEADLINES: Record<MarkerEvent, string> = {
   plan_posted: 'posted the plan',
   question: 'needs a decision',
   plan_change: 'asked to widen its paths',
@@ -485,7 +477,7 @@ const HEADLINES: Record<FleetEventType, string> = {
   plan_change_verdict: 'judged a plan change',
 };
 
-export function headlineFor(event: FleetEventType): string {
+export function headlineFor(event: MarkerEvent): string {
   return HEADLINES[event];
 }
 
@@ -497,11 +489,9 @@ export function dedupeMarker(kind: string, key: string): string {
   return `<!-- ${MARKER_PREFIX}${kind}:${key} -->`;
 }
 
-/** Whether a body carries that marker, under the current prefix or one issues were filed with before the renames. */
+/** Whether a body carries that marker. */
 export function carriesDedupeMarker(body: string | null | undefined, kind: string, key: string): boolean {
-  const text = body ?? '';
-  if (text.includes(dedupeMarker(kind, key))) return true;
-  return LEGACY_MARKER_PREFIXES.some((prefix) => text.includes(`<!-- ${prefix}${kind}:${key} -->`));
+  return (body ?? '').includes(dedupeMarker(kind, key));
 }
 
 /** What a design asks a repository to remember, as one entry of a `design_memory` marker. */

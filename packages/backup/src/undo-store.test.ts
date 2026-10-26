@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -53,10 +53,10 @@ describe('the backup an undo puts back', () => {
 
     await undo.begin(snapshot, JOURNAL);
 
-    expect(readdirSync(root).sort()).toEqual(['backup.fleetbak', 'journal.json']);
+    expect(readdirSync(root).sort()).toEqual(['backup.openadlcbak', 'journal.json']);
     expect(statSync(root).mode & 0o777).toBe(0o700);
-    expect(statSync(join(root, 'backup.fleetbak')).mode & 0o777).toBe(0o600);
-    const onDisk = readFileSync(join(root, 'backup.fleetbak'));
+    expect(statSync(join(root, 'backup.openadlcbak')).mode & 0o777).toBe(0o600);
+    const onDisk = readFileSync(join(root, 'backup.openadlcbak'));
     for (const value of [VALUES.appKey, VALUES.builderRefresh, VALUES.apiKey]) expect(onDisk.includes(Buffer.from(value))).toBe(false);
     expect(store.data.get(UNDO_KEY_REF)).toMatch(/^[0-9a-f]{64}$/);
 
@@ -75,10 +75,34 @@ describe('the backup an undo puts back', () => {
 
     await undo.clear();
 
-    expect(existsSync(join(root, 'backup.fleetbak'))).toBe(false);
+    expect(existsSync(join(root, 'backup.openadlcbak'))).toBe(false);
     expect(await undo.journal()).toBeNull();
     expect(await undo.load()).toBeNull();
     expect(store.data.has(UNDO_KEY_REF)).toBe(false);
+  });
+
+  it('is still found under the name it was kept as before archives took OpenADLC’s name, until the next restore or a clear', async () => {
+    const root = join(mkdtempSync(join(tmpdir(), 'openadlc-undo-')), 'restore-undo');
+    made.push(join(root, '..'));
+    const store = memoryStore();
+    const undo = fileUndoStore({ root, store, keyCost: TEST_KEY_COST });
+    const snapshot = buildBackup(sourceInstall(), EVERYTHING, new Date()).contents;
+    // An undo taken by a release that kept it as `backup.fleetbak`.
+    await undo.begin(snapshot, JOURNAL);
+    renameSync(join(root, 'backup.openadlcbak'), join(root, 'backup.fleetbak'));
+
+    await undo.update({ ...JOURNAL, settings: [] });
+    const loaded = await undo.load();
+    expect(loaded?.journal.settings).toEqual([]);
+    expect(loaded?.snapshot.secrets['github-app-private-key']).toBe(VALUES.appKey);
+
+    // The next restore's undo replaces it, under the new name only.
+    await undo.begin(snapshot, { ...JOURNAL, id: 'r2' });
+    expect(readdirSync(root).sort()).toEqual(['backup.openadlcbak', 'journal.json']);
+
+    renameSync(join(root, 'backup.openadlcbak'), join(root, 'backup.fleetbak'));
+    await undo.clear();
+    expect(readdirSync(root)).toEqual([]);
   });
 
   it('keeps the earlier restore’s undo when the next snapshot cannot be sealed', async () => {

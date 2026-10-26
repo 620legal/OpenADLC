@@ -50,7 +50,7 @@ function namesWords(login: string, wanted: readonly string[]): boolean {
 /**
  * Whether a login names a seat: `openadlc-lead-reviewer-acme` names
  * `lead-reviewer`, by whole dash-separated words, and so does an account made
- * when the crew had persona names — `fleet-atlas-acme` is the builder's. A
+ * when the crew had persona names — `openadlc-atlas-acme` is the builder's. A
  * number after it is another seat's: `openadlc-builder-2-acme` is the second
  * builder's, not the builder's.
  */

@@ -292,9 +292,9 @@ export function defaultBackupDeps(input: BackupWiring): BackupRouteDeps {
   };
 }
 
-/** `openadlc-backup-2026-09-24.fleetbak`, the name `openadlc backup` gives it too. */
+/** `openadlc-backup-2026-09-24.openadlcbak`, the name `openadlc backup` gives it too. */
 export function backupFilename(now: Date): string {
-  return `openadlc-backup-${now.toISOString().slice(0, 10)}.fleetbak`;
+  return `openadlc-backup-${now.toISOString().slice(0, 10)}.openadlcbak`;
 }
 
 function refused(error: unknown): never {

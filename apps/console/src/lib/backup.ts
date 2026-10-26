@@ -252,7 +252,7 @@ export function backupRequest(choice: BackupChoice, passphrase: string, again: s
 /** The file's name, as the bridge gave it, or the one it would have. */
 export function backupFilename(disposition: string | null, now: Date = new Date()): string {
   const named = /filename="([^"]+)"/.exec(disposition ?? '')?.[1];
-  return named && /^[\w.-]+$/.test(named) ? named : `openadlc-backup-${now.toISOString().slice(0, 10)}.fleetbak`;
+  return named && /^[\w.-]+$/.test(named) ? named : `openadlc-backup-${now.toISOString().slice(0, 10)}.openadlcbak`;
 }
 
 // ------------------------------------------------------------------ restoring
@@ -498,9 +498,14 @@ export function base64Of(bytes: ArrayBuffer): string {
   return btoa(binary);
 }
 
-/** Whether a file's first bytes say it is a sealed archive, which needs a passphrase. */
+/**
+ * Whether a file's first bytes say it is a sealed archive, which needs a
+ * passphrase: `OPENADLC`, or `FLEETBAK` on one made before the format took
+ * OpenADLC's name (`formatOf` in @openadlc/backup reads both).
+ */
 export function looksSealed(bytes: ArrayBuffer): boolean {
-  return new TextDecoder().decode(new Uint8Array(bytes).subarray(0, 8)) === 'FLEETBAK';
+  const family = new TextDecoder().decode(new Uint8Array(bytes).subarray(0, 8));
+  return family === 'OPENADLC' || family === 'FLEETBAK';
 }
 
 // ------------------------------------------------------------------ restoring into a set-up install

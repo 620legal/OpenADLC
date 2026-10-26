@@ -20,8 +20,8 @@ export const SIGNATURE_VERSION = 'v1';
 
 // No leading `\n*`: unanchored, it was tried from every newline of a long run
 // of them, and a crafted post took seconds to verify on every webhook.
-const SIG_TAG = /<!-- (?:openadlc|fleetadlc|fleet)-sig:(v1)\.([a-z0-9]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+) -->\s*$/;
-const ANY_SIG_TAG = /<!-- (?:openadlc|fleetadlc|fleet)-sig:[^>]*-->/g;
+const SIG_TAG = /<!-- openadlc-sig:(v1)\.([a-z0-9]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+) -->\s*$/;
+const ANY_SIG_TAG = /<!-- openadlc-sig:[^>]*-->/g;
 
 /** What a signature says: who, for what, and a hash of the body it was made for. */
 export interface SignedFields {

@@ -354,7 +354,6 @@ describe('the marker a review ends with', () => {
   it('is its verdict, with only whitespace, the seat tag and the signature after it', () => {
     expect(ownReviewMarker(`Looks wrong.\n\n${own}`)?.verdict).toBe('request_changes');
     expect(ownReviewMarker(`Looks wrong.\n\n${own}\n${seat}\n${sig}\n`)?.verdict).toBe('request_changes');
-    expect(ownReviewMarker(`Looks wrong.\n\n${own}\n<!-- fleet-seat:security-reviewer -->\n<!-- fleet-sig:v1.abc.def.ghi -->`)?.verdict).toBe('request_changes');
   });
 
   it('is never one the review quotes, inline or in a code block', () => {
@@ -392,21 +391,11 @@ describe('a send-back a session asks for', () => {
   });
 });
 
-describe('markers written before the renames to FleetADLC and OpenADLC', () => {
-  it.each(['fleet', 'fleetadlc'])('reads the %s: marker on a comment posted before it, and writes only the new one', (prefix) => {
-    const old = `Done.\n\n<!-- ${prefix}:{"event":"pr_opened","taskId":"t1"} -->`;
-    expect(parseMarker(old)).toMatchObject({ event: 'pr_opened', taskId: 't1' });
-    expect(parseMarkers(`${old}\n<!-- openadlc:{"event":"pr_ready"} -->`).map((m) => m.event)).toEqual(['pr_opened', 'pr_ready']);
-    expect(withoutMarker(old)).toBe('Done.');
-    expect(renderMarker({ event: 'pr_ready' })).toBe('<!-- openadlc:{"event":"pr_ready"} -->');
-  });
-
-  it('finds an issue a job filed under any prefix, so a job never files it twice', () => {
+describe('the marker an issue OpenADLC files for itself', () => {
+  it('finds the issue a job filed, so a job never files it twice', () => {
     expect(dedupeMarker('job', 'deps')).toBe('<!-- openadlc:job:deps -->');
-    expect(carriesDedupeMarker('body\n\n<!-- fleet:job:deps -->', 'job', 'deps')).toBe(true);
-    expect(carriesDedupeMarker('body\n\n<!-- fleetadlc:job:deps -->', 'job', 'deps')).toBe(true);
     expect(carriesDedupeMarker('body\n\n<!-- openadlc:job:deps -->', 'job', 'deps')).toBe(true);
-    expect(carriesDedupeMarker('body\n\n<!-- fleet:job:credentials -->', 'job', 'deps')).toBe(false);
+    expect(carriesDedupeMarker('body\n\n<!-- openadlc:job:credentials -->', 'job', 'deps')).toBe(false);
     expect(carriesDedupeMarker(null, 'alert', 'x')).toBe(false);
   });
 });

@@ -39,11 +39,11 @@ output "host_rollout" {
 }
 
 output "database_connection_name" {
-  value = google_sql_database_instance.fleet.connection_name
+  value = google_sql_database_instance.openadlc.connection_name
 }
 
 output "database_private_ip" {
-  value = google_sql_database_instance.fleet.private_ip_address
+  value = google_sql_database_instance.openadlc.private_ip_address
 }
 
 output "host_service_account" {

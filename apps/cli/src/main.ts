@@ -72,8 +72,11 @@ openadlc — a crew of agents that takes a request to a reviewed, deployed chang
                                     Sign-ins come along for the whole install and
                                     not for part of it (--sign-ins, --no-sign-ins):
                                     GitHub rotates them, so a restored one moves to
-                                    the new install
-  openadlc restore PATH            put one of those archives back (--dry-run first).
+                                    the new install. Written to
+                                    ~/openadlc-backup-<date>.openadlcbak unless
+                                    --out says where
+  openadlc restore PATH            put one of those archives back (--dry-run first),
+                                    a .fleetbak one from an older release included.
                                     Every sign-in in it is checked first, and one
                                     that is expired or refused is never restored; a
                                     GitHub or subscription sign-in can only be

@@ -134,10 +134,11 @@ export function defaultBackupPath(now: Date, home = homedir(), unencrypted = fal
   // is usually the repository, which is the one place this file must not be.
   //
   // A different extension for the unencrypted form, so the two are never
-  // confused at a glance in a directory listing or a file picker: `.fleetbak` is
-  // a sealed archive and always was, and this one says what it is.
+  // confused at a glance in a directory listing or a file picker:
+  // `.openadlcbak` is a sealed archive, as `.fleetbak` was before it, and this
+  // one says what it is.
   const name = `openadlc-backup-${now.toISOString().slice(0, 10)}`;
-  return join(home, unencrypted ? `${name}.plain.json` : `${name}.fleetbak`);
+  return join(home, unencrypted ? `${name}.plain.json` : `${name}.openadlcbak`);
 }
 
 const ALREADY_THERE_NOTE = 'Overwriting a backup loses it. Move that file aside, or pass --out.';

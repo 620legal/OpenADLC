@@ -44,7 +44,12 @@ export function fileUndoStore(options: { root?: string; store?: SecretStore } & 
   const store = (): SecretStore => options.store ?? getSecretStore();
   const sealing: KeyCostOption = { keyCost: options.keyCost };
   const journalPath = join(root, 'journal.json');
-  const backupPath = join(root, 'backup.fleetbak');
+  const backupPath = join(root, 'backup.openadlcbak');
+  // Where the backup was kept before archives took OpenADLC's name. An undo
+  // taken then is still offered for its day, and lost if only the new name
+  // were read.
+  const legacyBackupPath = join(root, 'backup.fleetbak');
+  const heldAt = (): string | null => (existsSync(backupPath) ? backupPath : existsSync(legacyBackupPath) ? legacyBackupPath : null);
 
   const readJournal = (): RestoreJournal | null => {
     if (!existsSync(journalPath)) return null;
@@ -66,19 +71,21 @@ export function fileUndoStore(options: { root?: string; store?: SecretStore } & 
       const sealed = await encryptBackup(snapshot, passphrase, sealing);
       await store().set(UNDO_KEY_REF, passphrase);
       writePrivate(backupPath, sealed);
+      rmSync(legacyBackupPath, { force: true });
       writePrivate(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
     },
 
     async update(journal) {
-      if (!existsSync(backupPath)) throw new BackupError('there is no backup to undo with');
+      if (!heldAt()) throw new BackupError('there is no backup to undo with');
       writePrivate(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
     },
 
     async load() {
       const journal = readJournal();
       const passphrase = await store().get(UNDO_KEY_REF);
-      if (!journal || !passphrase || !existsSync(backupPath)) return null;
-      return { journal, snapshot: await decryptBackup(readFileSync(backupPath), passphrase, sealing) };
+      const held = heldAt();
+      if (!journal || !passphrase || !held) return null;
+      return { journal, snapshot: await decryptBackup(readFileSync(held), passphrase, sealing) };
     },
 
     journal: async () => readJournal(),
@@ -86,6 +93,7 @@ export function fileUndoStore(options: { root?: string; store?: SecretStore } & 
     async clear() {
       rmSync(journalPath, { force: true });
       rmSync(backupPath, { force: true });
+      rmSync(legacyBackupPath, { force: true });
       await store().delete(UNDO_KEY_REF);
     },
   };

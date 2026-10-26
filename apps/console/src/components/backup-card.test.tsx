@@ -8,6 +8,7 @@ import {
   backupRequest,
   downloadProblem,
   generatePassphrase,
+  looksSealed,
   passphraseWarning,
   signInsOn,
   summaryLines,
@@ -207,9 +208,17 @@ describe('what the card sends and saves', () => {
   });
 
   it('saves the file under the bridge’s name for it', () => {
-    expect(backupFilename('attachment; filename="openadlc-backup-2026-09-24.fleetbak"')).toBe('openadlc-backup-2026-09-24.fleetbak');
-    expect(backupFilename(null, new Date('2026-09-24T10:00:00Z'))).toBe('openadlc-backup-2026-09-24.fleetbak');
-    expect(backupFilename('attachment; filename="../../x"', new Date('2026-09-24T10:00:00Z'))).toBe('openadlc-backup-2026-09-24.fleetbak');
+    expect(backupFilename('attachment; filename="openadlc-backup-2026-09-24.openadlcbak"')).toBe('openadlc-backup-2026-09-24.openadlcbak');
+    expect(backupFilename(null, new Date('2026-09-24T10:00:00Z'))).toBe('openadlc-backup-2026-09-24.openadlcbak');
+    expect(backupFilename('attachment; filename="../../x"', new Date('2026-09-24T10:00:00Z'))).toBe('openadlc-backup-2026-09-24.openadlcbak');
+  });
+
+  it('asks a passphrase for a sealed archive under either name the format has had, and not for a plain one', () => {
+    const bytes = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer;
+    expect(looksSealed(bytes('OPENADLC2\n{"version":3}\n'))).toBe(true);
+    // Written before the format took OpenADLC's name, and still restored.
+    expect(looksSealed(bytes('FLEETBAK1\n{"version":3}\n'))).toBe(true);
+    expect(looksSealed(bytes('{"format":"openadlc-backup-plain"}'))).toBe(false);
   });
 });
 
@@ -247,7 +256,7 @@ describe('Backup and Restore as two rows', () => {
               onAgain={() => undefined}
               busy={null}
               error={null}
-              downloaded="openadlc-backup-2026-09-24.fleetbak"
+              downloaded="openadlc-backup-2026-09-24.openadlcbak"
               onDownload={() => undefined}
             />
           }
@@ -262,7 +271,7 @@ describe('Backup and Restore as two rows', () => {
     expect(html).toContain('aria-label="Passphrase again"');
     expect(html).toContain('value="correct horse"');
     expect(said).toContain('Download backup');
-    expect(said).toContain('Downloaded openadlc-backup-2026-09-24.fleetbak');
+    expect(said).toContain('Downloaded openadlc-backup-2026-09-24.openadlcbak');
     expect(said).toContain('The file will hold');
   });
 });

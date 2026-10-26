@@ -42,9 +42,7 @@ export function headerFor(installName: string, role: BotRole | null): string {
   return `**${stage ? `${name} · ${stage}` : name}**${HEADER_TAG}`;
 }
 
-// `fleetadlc-header` and `fleet-header` are the tags posts carried before the
-// renames; theirs are read too.
-const LEADING_HEADER = /^\*\*[^\n]*\*\*<!-- (?:openadlc|fleetadlc|fleet)-header -->[ \t]*\n*/;
+const LEADING_HEADER = /^\*\*[^\n]*\*\*<!-- openadlc-header -->[ \t]*\n*/;
 
 /** Whether a body already starts with an OpenADLC header. */
 export function hasHeader(body: string): boolean {
@@ -62,10 +60,10 @@ export function withHeader(body: string, header: string): string {
 }
 
 /** A seat tag at the end of a post, with nothing after it but the signature `signBody` puts there. */
-const SEAT_TAG = /<!-- (?:openadlc|fleetadlc|fleet)-seat:([a-z0-9][a-z0-9._-]*) -->\s*(?:<!-- (?:openadlc|fleetadlc|fleet)-sig:[^>]*-->\s*)?$/i;
+const SEAT_TAG = /<!-- openadlc-seat:([a-z0-9][a-z0-9._-]*) -->\s*(?:<!-- openadlc-sig:[^>]*-->\s*)?$/i;
 
 /** The signature at the end of a post, whose payload names the seat it was signed for. */
-const SIGNED_SEAT = /<!-- (?:openadlc|fleetadlc|fleet)-sig:v1\.[a-z0-9]+\.([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]+ -->\s*$/;
+const SIGNED_SEAT = /<!-- openadlc-sig:v1\.[a-z0-9]+\.([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]+ -->\s*$/;
 
 function tagOf(body: string): string | null {
   return SEAT_TAG.exec(body)?.[1]?.toLowerCase() ?? null;

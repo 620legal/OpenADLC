@@ -32,7 +32,7 @@ export type Authorship<M extends CrewMember = CrewMember> =
     };
 
 /** Whether a login is one of the accounts the crew signs in as. */
-export function isFleetLogin(crew: readonly { githubLogin: string | null }[], login: string | null | undefined): boolean {
+export function isCrewLogin(crew: readonly { githubLogin: string | null }[], login: string | null | undefined): boolean {
   return crew.some((member) => sameLogin(member.githubLogin, login));
 }
 

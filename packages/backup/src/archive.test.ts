@@ -204,10 +204,10 @@ describe('a file can say what it is without the passphrase', () => {
 
 describe('when an archive says it was made', () => {
   const header = (createdAt: string) =>
-    Buffer.concat([Buffer.from(`FLEETBAK1\n${JSON.stringify({ ...install.manifest, createdAt })}\n`, 'utf8'), randomBytes(64)]);
+    Buffer.concat([Buffer.from(`OPENADLC2\n${JSON.stringify({ ...install.manifest, createdAt })}\n`, 'utf8'), randomBytes(64)]);
 
   it('is a time in UTC and nothing else, since it is printed before any passphrase proves the file', async () => {
-    // Anything that starts with FLEETBAK1 could send a terminal its escape
+    // Anything that starts with OPENADLC2 could send a terminal its escape
     // sequences, to the person about to type a passphrase. `Date.parse` takes
     // the second of these.
     for (const createdAt of ['\u001b]52;c;cHduZWQ=\u0007', '2026-09-21T09:14:00Z (\u001b[2J)', '2026-09-21 09:14', '2026-09-21T09:14:00+02:00']) {
@@ -414,7 +414,8 @@ describe('the cost a key is derived at', () => {
     expect((await decryptBackup(sealed, PASSPHRASE)).secrets).toEqual(install.secrets);
 
     // Sealed as every archive was before the cost was recorded: a manifest
-    // with no `scrypt`, and a key derived at N = 2^17, r = 8, p = 1.
+    // with no `scrypt`, and a key derived at N = 2^17, r = 8, p = 1, under the
+    // `FLEETBAK1` header archives had then.
     const header = Buffer.from(`FLEETBAK1\n${JSON.stringify(install.manifest)}\n`, 'utf8');
     const salt = randomBytes(16);
     const iv = randomBytes(12);
@@ -438,7 +439,7 @@ describe('a file that is not an OpenADLC backup fails as a file, not as a cipher
   it('refuses random bytes by naming the header it wanted', async () => {
     const error = await refusal(() => decryptBackup(randomBytes(512), PASSPHRASE));
 
-    expect(error.message).toContain('FLEETBAK1');
+    expect(error.message).toContain('OPENADLC2');
     // The distinction that matters: "you pointed me at the wrong file" is a
     // different problem from "you typed the wrong passphrase", and an operator
     // who is told the second will go on retyping the first.
@@ -464,22 +465,12 @@ describe('a file that is not an OpenADLC backup fails as a file, not as a cipher
   it('tells the operator when an archive came from a newer OpenADLC', async () => {
     // Recognisably ours but not readable by us: worth saying so, because the
     // remedy is a newer OpenADLC and not a different passphrase.
-    const future = Buffer.concat([Buffer.from('FLEETBAK2\n{"version":2}\n', 'utf8'), randomBytes(64)]);
+    const future = Buffer.concat([Buffer.from('OPENADLC3\n{"version":2}\n', 'utf8'), randomBytes(64)]);
     const error = await refusal(() => readManifest(future));
 
-    expect(error.message).toContain('FLEETBAK2');
-    expect(error.message).toContain('FLEETBAK1');
+    expect(error.message).toContain('OPENADLC3');
+    expect(error.message).toContain('OPENADLC2');
     expect(error.message).toContain('Upgrade OpenADLC, then restore again');
-  });
-
-  it.each(['fleetadlc-backup-plain', 'fleet-backup-plain'])('reads a plain file that says %s, from before the renames', (format) => {
-    // Each was the name written in its day, and was refused as not a backup at all.
-    const document = JSON.parse(writePlain(install).toString('utf8')) as { format: string };
-    document.format = format;
-    const old = Buffer.from(JSON.stringify(document), 'utf8');
-
-    expect(formatOf(old)).toBe('plain');
-    expect(readPlain(old).secrets).toEqual(install.secrets);
   });
 
   it('says to upgrade when the contents declare a newer version', async () => {
@@ -489,6 +480,48 @@ describe('a file that is not an OpenADLC backup fails as a file, not as a cipher
 
     expect(error.message).toContain('this backup declares version 4, and this version of OpenADLC reads versions 1, 2 and 3');
     expect(error.message).toContain('Upgrade OpenADLC, then restore again');
+  });
+});
+
+describe('an archive made before the format took OpenADLC’s name', () => {
+  /**
+   * Sealed as every release from 0.1.0 sealed one, named `.fleetbak`: the
+   * `FLEETBAK1` line, then the layout this version writes under `OPENADLC2`.
+   * At the tests' key cost, which the manifest records as it did then.
+   */
+  async function sealedBeforeTheRename(contents: BackupContents): Promise<Buffer> {
+    const manifest = { ...contents.manifest, scrypt: { ...TEST_KEY_COST } };
+    const header = Buffer.from(`FLEETBAK1\n${JSON.stringify(manifest)}\n`, 'utf8');
+    const salt = randomBytes(16);
+    const iv = randomBytes(12);
+    const key = await new Promise<Buffer>((resolve, reject) => {
+      scrypt(PASSPHRASE.normalize('NFC'), salt, 32, { ...TEST_KEY_COST }, (error, derived) => (error ? reject(error) : resolve(derived)));
+    });
+    const cipher = createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
+    cipher.setAAD(header);
+    const { manifest: _manifest, ...payload } = contents;
+    const body = Buffer.concat([cipher.update(JSON.stringify(payload), 'utf8'), cipher.final()]);
+    return Buffer.concat([header, salt, iv, cipher.getAuthTag(), body]);
+  }
+
+  it('is not what this version writes', async () => {
+    expect((await seal(install, PASSPHRASE)).subarray(0, 10).toString('latin1')).toBe('OPENADLC2\n');
+  });
+
+  it('still says what it is without the passphrase, and opens with it', async () => {
+    const old = await sealedBeforeTheRename(install);
+
+    expect(formatOf(old)).toBe('sealed');
+    expect(readManifest(old)).toEqual({ ...install.manifest, scrypt: TEST_KEY_COST });
+    expect(await open(old, PASSPHRASE)).toEqual({ ...install, manifest: { ...install.manifest, scrypt: TEST_KEY_COST } });
+  });
+
+  it('is still held to the line it was sealed under: given the new one, it does not open', async () => {
+    const old = await sealedBeforeTheRename(install);
+    const relabelled = Buffer.concat([Buffer.from('OPENADLC2', 'latin1'), old.subarray('FLEETBAK1'.length)]);
+
+    expect(readManifest(relabelled).counts).toEqual(install.manifest.counts);
+    expect((await refusal(() => open(relabelled, PASSPHRASE))).message).toContain('that passphrase does not open this archive');
   });
 });
 
@@ -565,7 +598,7 @@ describe('an archive survives the trip through a file', () => {
 
   beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), 'openadlc-backup-'));
-    path = join(dir, 'openadlc-backup-2026-09-21.fleetbak');
+    path = join(dir, 'openadlc-backup-2026-09-21.openadlcbak');
     writeFileSync(path, archive);
   });
 
@@ -582,7 +615,7 @@ describe('an archive survives the trip through a file', () => {
   it('identifies itself in its first two lines, which is all `head` needs', () => {
     const [magic, manifest] = readFileSync(path, 'latin1').split('\n');
 
-    expect(magic).toBe('FLEETBAK1');
+    expect(magic).toBe('OPENADLC2');
     expect(JSON.parse(manifest ?? '')).toEqual({ ...install.manifest, scrypt: { N: 1024, r: 8, p: 1 } });
   });
 });

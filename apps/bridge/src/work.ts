@@ -1,4 +1,4 @@
-import { closingKeywords, formatDependencyRef, hasIgnoreLabel, isFleetLogin, parseDependencyRefs, sameLogin, type StageKey, type StageMode, type TaskKind, type TaskState } from '@openadlc/shared';
+import { closingKeywords, formatDependencyRef, hasIgnoreLabel, isCrewLogin, parseDependencyRefs, sameLogin, type StageKey, type StageMode, type TaskKind, type TaskState } from '@openadlc/shared';
 
 /**
  * What the crew is doing to each piece of work, read from the rows the bridge
@@ -561,5 +561,5 @@ export function scopeLabelAcceptedFrom(
   if (actor.viaApp) return true;
   if (!actor.login) return false;
   if (sameLogin(actor.login, context.automationLogin)) return true;
-  return !isFleetLogin(context.crew, actor.login);
+  return !isCrewLogin(context.crew, actor.login);
 }

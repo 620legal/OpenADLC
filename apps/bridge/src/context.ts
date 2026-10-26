@@ -4,7 +4,7 @@ import {
   STAGE_COLUMN_TITLES,
   actsFor,
   isBackwardMove,
-  isFleetLogin,
+  isCrewLogin,
   postedBySeat,
   resolveBotRef,
   seatOf,
@@ -218,7 +218,7 @@ export class Context {
       let comments = everything.filter(heard);
       let unsignedComments: typeof comments = [];
       if (enforcing && isPullRequest) {
-        const signed = new Set(await enforcing.countable(comments, crew, 'enforce').catch(() => comments.filter((comment) => !isFleetLogin(crew, comment.user))));
+        const signed = new Set(await enforcing.countable(comments, crew, 'enforce').catch(() => comments.filter((comment) => !isCrewLogin(crew, comment.user))));
         unsignedComments = comments.filter((comment) => !signed.has(comment));
         comments = comments.filter((comment) => signed.has(comment));
       }
@@ -353,7 +353,7 @@ export class Context {
       // left out; what a seat decided is in its review.
       const lineComments = input.kind === 'patch' ? await (async () => client.listReviewComments(input.repoFullName, input.subjectNumber))().catch(() => []) : [];
       await admit([...reviews, ...lineComments]);
-      const onLines = lineComments.filter((comment) => heard(comment) && !isFleetLogin(crew, comment.user));
+      const onLines = lineComments.filter((comment) => heard(comment) && !isCrewLogin(crew, comment.user));
       const linesOf = (reviewId: number | null) => onLines.filter((comment) => comment.reviewId !== null && comment.reviewId === reviewId);
       // With signatures enforced, a patch round's crew reviews are split as the lead's are.
       const { counted: withVerdict, unsigned } = await this.sortReviews(
@@ -481,7 +481,7 @@ export class Context {
     const unsigned: R[] = [];
     for (const review of reviews) {
       const signed = kept.get(review.id);
-      if (!isFleetLogin(crew, review.user)) counted.push(review);
+      if (!isCrewLogin(crew, review.user)) counted.push(review);
       else if (signed) counted.push({ ...review, commitId: signed.commitId, seat: verifyBody(review.body, keys).payload?.seat ?? null });
       else unsigned.push(review);
     }

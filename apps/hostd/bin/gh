@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 
 const HEADER_TAG = '<!-- openadlc-header -->';
-const LEADING_HEADER = /^\*\*[^\n]*\*\*<!-- (?:openadlc|fleetadlc|fleet)-header -->/;
+const LEADING_HEADER = /^\*\*[^\n]*\*\*<!-- openadlc-header -->/;
 const POSTS = { issue: ['create', 'comment', 'edit'], pr: ['create', 'comment', 'edit', 'review'] };
 
 /**
@@ -53,7 +53,7 @@ export function realGh(path = process.env.PATH ?? '', self = process.argv[1] ?? 
 // At the end of the body only, as `seatOf` in @openadlc/shared reads it: a body
 // that quotes another seat's tag is still tagged as its own: a lead reviewer's review that quoted the
 // intake seat's tag once went out with no tag of its own.
-const SEAT_TAG = /<!-- (?:openadlc|fleetadlc|fleet)-seat:([a-z0-9][a-z0-9._-]*) -->\s*(?:<!-- (?:openadlc|fleetadlc|fleet)-sig:[^>]*-->\s*)?$/i;
+const SEAT_TAG = /<!-- openadlc-seat:([a-z0-9][a-z0-9._-]*) -->\s*(?:<!-- openadlc-sig:[^>]*-->\s*)?$/i;
 
 /**
  * Which seat wrote it, tagged at the end as the bridge's own posts are

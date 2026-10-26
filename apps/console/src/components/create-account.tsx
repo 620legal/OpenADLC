@@ -22,8 +22,8 @@ interface Suggestion {
  * From its seat — the role, and the bridge adds the owner's handle — never from
  * what the bot is called. A connected bot's name is its account's handle, so
  * there is nothing to suggest; and before bots were named by seat, a name was a
- * persona, which put `fleet-atlas` on GitHub (before OpenADLC was renamed): a
- * name that told nobody there what the account was for.
+ * persona, which put a handle like `atlas` on GitHub: a name that told nobody
+ * there what the account was for.
  */
 export function suggestionPath(bot: BotFacts | string): string {
   const seat = typeof bot === 'string' ? bot : seatFor(bot);

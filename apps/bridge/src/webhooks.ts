@@ -31,7 +31,7 @@ import {
   actsFor,
   closingKeywords,
   declaredPathsFrom,
-  isFleetLogin,
+  isCrewLogin,
   parseMarker,
   sameLogin,
   stageFromLabels,
@@ -42,7 +42,7 @@ import {
   messageKindFor,
   seatOf,
   withoutMarker,
-  type FleetMarker,
+  type Marker,
   dedupeMarker,
   ABANDONED_LABEL,
   hasAbandonedLabel,
@@ -924,7 +924,7 @@ export class Webhooks {
             : null;
       if (known && movedTo && isBackwardMove(known.stage, movedTo)) {
         const crew = await bots.listBots().catch(() => []);
-        if (sender && isFleetLogin(crew, sender)) {
+        if (sender && isCrewLogin(crew, sender)) {
           await this.automation.moveStage({ repoName: repo.name, issueNumber: issue.number, to: known.stage, actor: 'bridge' });
           await audit({
             actor: sender,
@@ -988,7 +988,7 @@ export class Webhooks {
       // Any later column, not only the next one: build to done skips two.
       if (liveStage !== 'intake' && (!known || isBackwardMove(liveStage, known.stage))) {
         const crew = await bots.listBots().catch(() => []);
-        if (sender && isFleetLogin(crew, sender)) {
+        if (sender && isCrewLogin(crew, sender)) {
           const row = (stage: StageKey) => ({
             repoId: repo.id,
             number: issue.number,
@@ -1133,7 +1133,7 @@ export class Webhooks {
     const live = { title: issue.title, body: issue.body, keep: null };
     const known = await (async () => issues.getIssue(repo.id, issue.number))().catch(() => null);
     const crew = await bots.listBots().catch(() => []);
-    const fromCrew = Boolean(sender && isFleetLogin(crew, sender));
+    const fromCrew = Boolean(sender && isCrewLogin(crew, sender));
     const fullName = repo.fullName ?? (await repos.getRepoByName(repo.name).catch(() => null))?.fullName ?? null;
     // The sender's account id is not passed down, so a sender is one of
     // `humans` only as GitHub's answer about the login says (`actsForOn`).
@@ -1397,7 +1397,7 @@ export class Webhooks {
     const crew = await bots.listBots().catch(() => null);
     // Unknown crew, or no sender: not known to be a person. Nor is an app's
     // account, `github-actions[bot]` among them, as the CI label's guard says.
-    if (!crew || !closedBy?.login || isAppAccount(closedBy) || isFleetLogin(crew, closedBy.login)) return;
+    if (!crew || !closedBy?.login || isAppAccount(closedBy) || isCrewLogin(crew, closedBy.login)) return;
     const why = closedByPull(prNumber);
     if (!(await this.abandon(repo, issueNumber, why, closedBy.login))) return;
     const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
@@ -1696,7 +1696,7 @@ export class Webhooks {
    * words keep their meaning.
    */
   private async recordSkillEvent(input: {
-    marker: FleetMarker;
+    marker: Marker;
     comment: { body: string; user: { login: string }; html_url?: string };
     repoName: string;
     issueNumber: number;
@@ -1775,7 +1775,7 @@ export class Webhooks {
   ): Promise<boolean> {
     const merger = pr.merged_by?.login;
     const crew = await bots.listBots().catch(() => []);
-    if (!merger || !isFleetLogin(crew, merger)) return false;
+    if (!merger || !isCrewLogin(crew, merger)) return false;
     const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
     const gate = await (async () => this.automation.publishedGate(repoFullName, pr.head.sha))().catch(() => null);
     if (gate === 'success') return false;
@@ -2377,7 +2377,7 @@ export class Webhooks {
     // back to build to run `openadlc-ci`. A person's push is theirs, and the
     // merge line's update the line's: no builder ran anything on it, and
     // GitHub's CI runs on it once the lead approves it again.
-    const crewSender = payload.sender?.login ? isFleetLogin(await bots.listBots().catch(() => []), payload.sender.login) : false;
+    const crewSender = payload.sender?.login ? isCrewLogin(await bots.listBots().catch(() => []), payload.sender.login) : false;
     if (crewSender && forIssue && !lineUpdate) {
       const pass = await (async () => localCiRuns.passFor(repo.id, pr.head.sha))().catch(() => undefined);
       if (pass === null) {
@@ -2631,7 +2631,7 @@ export class Webhooks {
     if (askedForCi(repoFullName, prNumber) && login && (isAppAccount(sender ?? undefined) || sameLogin(login, await this.automationLogin()))) return;
     const crew = await bots.listBots().catch(() => []);
     const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
-    if (login && !isAppAccount(sender ?? undefined) && !isFleetLogin(crew, login)) {
+    if (login && !isAppAccount(sender ?? undefined) && !isCrewLogin(crew, login)) {
       // Asked as the app first: a triage automation account is refused the
       // answer, and a maintainer's label was taken off as unknown.
       const permission = await permissionOn(client, repoFullName, login);
@@ -2767,7 +2767,7 @@ export class Webhooks {
     if (login && appLogin && sameLogin(login, appLogin)) return;
     const crew = await bots.listBots().catch(() => []);
     const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
-    if (login && isFleetLogin(crew, login)) {
+    if (login && isCrewLogin(crew, login)) {
       const deploy = crew.find((bot) => bot.role === 'deploy');
       if (label === 'revert' && fastPathOf([label], pr.headRef) && sameLogin(deploy?.githubLogin ?? null, login)) return;
     } else if (login && !isAppAccount(sender ?? undefined)) {
@@ -3149,7 +3149,7 @@ export class Webhooks {
     if (payload.action === 'dismissed') {
       const actor = payload.sender?.login;
       const ours = review.id !== undefined && (await this.automation.dismissedByBridge(repoFullName, review.id));
-      if (actor && isFleetLogin(crew, actor) && !ours) await this.dismissedByBot(payload, actor, crew);
+      if (actor && isCrewLogin(crew, actor) && !ours) await this.dismissedByBot(payload, actor, crew);
     }
 
     const client = await asAutomation(this.automation['actors'], this.config);
