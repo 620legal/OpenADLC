@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import type { Board } from '@/lib/api';
 import { ACTIVITY_EVERY_MS, needsFullRead, runningRefs, type BoardActivity } from '@/lib/board-activity';
+import { consoleWasUpdated } from '@/lib/console-updated';
 import { REFRESH_EVERY_MS, refreshWhileVisible } from '@/lib/live-refresh';
 import { poll } from '@/lib/reach';
 
@@ -47,6 +48,10 @@ function Poller({ board, repo, watching = false, onActivity }: { board: Board; r
           if (!activity || !Array.isArray(activity.cards) || drawn.current !== asked) return;
           if (!needsFullRead(asked, activity)) return report.current(asked, activity);
           if (Date.now() - askedAt.current < REFRESH_EVERY_MS) return;
+          // A console updated since the page loaded would have Next reload the
+          // whole page under the person for this read; the page offers the
+          // reload instead (`readUnlessUpdated`).
+          if (consoleWasUpdated()) return;
           askedAt.current = Date.now();
           router.refresh();
         });

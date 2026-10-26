@@ -42,7 +42,14 @@ fifteen seconds while it is on screen, and, while a card it shows has a task
 running, reads only those cards every five (`GET /v1/board/activity`,
 `BoardActivityPoll`) and changes their lines in place. When that read says a
 card started, paused or ended, the whole page is read again at once, at most
-once in fifteen seconds. Above the columns the board says how many tasks are
+once in fifteen seconds. Before each fifteen-second read the page calls a
+server action that does nothing (`readUnlessUpdated`). A console updated since
+the page loaded refuses it; the page then stops reading itself, the board's
+whole reads included, and says the console was updated, with a reload, where
+the read would have had Next reload the page by itself. An untouched page
+reloads itself after five minutes
+([troubleshooting](troubleshooting.md#a-console-page-says-the-console-was-updated-since-it-loaded)).
+Above the columns the board says how many tasks are
 running across the install, from a count, not a listing. That line opens into
 the tasks it counts (`runningTasks` on both reads, `RunningTasks` in the
 console): each one's bot, kind of work, subject and time running, on a card

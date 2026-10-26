@@ -1,5 +1,7 @@
+import { UnrecognizedActionError } from 'next/dist/client/components/unrecognized-action-error';
 import { describe, expect, it } from 'vitest';
 import type { BoardColumn } from './api';
+import { CONSOLE_UPDATED } from './console-updated';
 import { attemptMove, columnsWithMoves, movesBack, NO_MOVES, reconcile, type MoveState } from './board-move';
 
 /** What the bridge answers a move it will not make. Its words, not the console's. */
@@ -111,6 +113,24 @@ describe('moving a card between columns', () => {
     expect(result.ok).toBe(false);
     expect(board.latest().pending).toEqual({});
     expect(board.latest().refused['janedoe/OpenADLC#121']).toBe('fetch failed');
+  });
+
+  it('says the console was updated, not Next\'s words and an action id, when the board is from before an update', async () => {
+    const board = recorder();
+
+    const result = await attemptMove(
+      { ref: 'janedoe/OpenADLC#121', from: 'spec', to: 'build' },
+      async () => {
+        throw new UnrecognizedActionError(
+          'Server Action "60a4dd1dc477e939b91262212479c9ac135159a0e9" was not found on the server. \nRead more: https://nextjs.org/docs/messages/failed-to-find-server-action',
+        );
+      },
+      board.update,
+    );
+
+    expect(result).toEqual({ ok: false, error: CONSOLE_UPDATED });
+    expect(board.latest().pending).toEqual({});
+    expect(board.latest().refused['janedoe/OpenADLC#121']).toBe(CONSOLE_UPDATED);
   });
 
   it('clears the last refusal when the card is moved again', async () => {

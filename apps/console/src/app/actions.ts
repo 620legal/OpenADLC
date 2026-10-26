@@ -60,6 +60,16 @@ class BridgeRefusal extends Error {
 }
 
 /**
+ * Does nothing, and asks the bridge nothing. An open page calls it before it
+ * reads itself again (`readUnlessUpdated`, `lib/live-refresh.ts`): a console
+ * updated since the page loaded refuses it as it refuses every action of that
+ * page, and the page says so before anyone presses one of its buttons.
+ */
+export async function consoleServesThisPage(): Promise<{ ok: true }> {
+  return { ok: true };
+}
+
+/**
  * Answers a question. The bridge answers once the question is claimed, and
  * posts on GitHub and resumes the task after. `held` is an answer taken that
  * waits on other work (a plan change another lease holds paths of, a continue

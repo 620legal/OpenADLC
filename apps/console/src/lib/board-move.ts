@@ -1,4 +1,5 @@
 import type { BoardColumn } from './api';
+import { isStaleAction, staleActionRefusal } from './console-updated';
 
 /**
  * Moving a card between columns, and what the board shows while the bridge has
@@ -61,11 +62,16 @@ export async function attemptMove(
     refused: without(state.refused, card.ref),
   }));
 
+  // A console updated since the board loaded refuses the move, and Next's
+  // words for that put an action id on the card and no reason.
   const result = await commit(card.to).catch(
-    (error: unknown): MoveResult => ({
-      ok: false,
-      error: error instanceof Error ? error.message : 'the move did not reach the bridge',
-    }),
+    (error: unknown): MoveResult =>
+      isStaleAction(error)
+        ? staleActionRefusal()
+        : {
+            ok: false,
+            error: error instanceof Error ? error.message : 'the move did not reach the bridge',
+          },
   );
 
   if (!result.ok) {

@@ -1068,6 +1068,31 @@ the egress proxy):
 A tool that was not checked is asked again at its next scheduled run, or when
 its **Update now** is pressed.
 
+## A console page says the console was updated since it loaded
+
+**What it means.** The page was loaded from the build before an update, a
+release or a rebuild and restart, and the console that answers now is the new
+one. Next names each server action (Pause work, saving a setting, answering a
+question, moving a card and the rest) with an id that the build makes up,
+so the new console has none of the old page's ids: it refuses each such
+action, and runs nothing. Before, the page showed Next's own words,
+`Server Action "<id>" was not found on the server`, with **Try again**, which
+sent the same id to the same refusal, and nothing said that the action had not
+happened.
+
+| The page says | What happened | What to do |
+|---|---|---|
+| The console was updated since this page loaded, so the page is out of date and some of its buttons no longer work (a notice at the top) | The page's own check, before it reads itself again every fifteen seconds, was refused: nothing was pressed, and the page stopped reading itself, since that read would have made Next reload it under you | **Reload the page**. An untouched page reloads itself after five minutes: no key, press or edit, and no field with focus (`reloadWhenIdle`) |
+| **The console was updated** … so what you just did was not done (in place of the page) | An action the page sent was refused | **Reload the page**, then do it again. A request or a message you were writing is kept |
+| the console was updated since this page loaded, so that was not done (beside a control) | The same, from a control that keeps the page | The same |
+
+The failure is told by the error Next rejects the call with
+(`isStaleAction`, `apps/console/src/lib/console-updated.ts`), and the check
+by an action that does nothing (`consoleServesThisPage`, `readUnlessUpdated`
+in `apps/console/src/lib/live-refresh.ts`). Any other failure is said as
+before: **This page stopped working**, with the reason and Try again, or
+`the console did not take that` when the console did not answer at all.
+
 ## The console is a blank page under a LAN name or a tunnel
 
 **What it means.** The console and the bridge answer only under names the
