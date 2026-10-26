@@ -1231,7 +1231,7 @@ describe('stopping a task that could not finish', () => {
    * says who put it on and when.
    */
   describe('needs-human the task’s own account put on while it ran', () => {
-    const BOT_LOGIN = 'fleet-atlas-orzelig';
+    const BOT_LOGIN = 'openadlc-atlas-janedoe';
     let labels: string[];
     let labelled: { actor: { login: string } | null; createdAt: string; label: { name: string } }[];
     const removeLabel = vi.fn(async () => undefined);
@@ -1249,14 +1249,14 @@ describe('stopping a task that could not finish', () => {
       task = { ...FAILED, state: 'paused', createdAt: '2026-10-22T16:32:00.000Z', startedAt: '2026-10-22T16:32:52.000Z' };
       openGates = [{ taskId: 'task-81' }];
       labels = ['needs-human', 'adlc:intake', 'do:ai'];
-      labelled = [by('orzelig-fleet-flow', '2026-10-22T16:32:51Z', 'adlc:intake'), by(BOT_LOGIN, '2026-10-22T16:33:55Z')];
+      labelled = [by('janedoe-openadlc-flow', '2026-10-22T16:32:51Z', 'adlc:intake'), by(BOT_LOGIN, '2026-10-22T16:33:55Z')];
       removeLabel.mockClear();
       request.mockClear();
       vi.mocked(repos.listRepos).mockImplementation((async () => [{ id: 'repo-openadlc', name: 'openadlc', fullName: 'janedoe/openadlc' }]) as never);
       vi.mocked(bots.getBotById).mockImplementation(async () => ({ id: 'bot-intake', name: 'intake', role: 'intake', githubLogin: BOT_LOGIN }) as never);
       vi.mocked(bots.listBots).mockImplementation(async () =>
         [
-          { id: 'bot-flow', name: 'janedoe-openadlc-flow', role: 'automation', githubLogin: 'orzelig-fleet-flow' },
+          { id: 'bot-flow', name: 'janedoe-openadlc-flow', role: 'automation', githubLogin: 'janedoe-openadlc-flow' },
           { id: 'bot-intake', name: 'intake', role: 'intake', githubLogin: BOT_LOGIN },
         ] as never,
       );
@@ -1309,21 +1309,21 @@ describe('stopping a task that could not finish', () => {
     it('stays when another crew account put it on, as the automation account does to hold work for a person', async () => {
       // "Hold this PR", a send-back past its limit, an unreviewed merge: each
       // labels as the automation account, on purpose.
-      labelled = [by('orzelig-fleet-flow', '2026-10-22T16:40:00Z')];
+      labelled = [by('janedoe-openadlc-flow', '2026-10-22T16:40:00Z')];
       expect((await stop()).status).toBe(200);
       expect(removeLabel).not.toHaveBeenCalled();
     });
 
     it('stays when the task’s account is the automation account’s too, whose labels hold work on purpose', async () => {
       // The fixture's logins must be one account for this to mean anything.
-      vi.mocked(bots.getBotById).mockImplementation(async () => ({ id: 'bot-intake', name: 'intake', role: 'intake', githubLogin: 'orzelig-fleet-flow' }) as never);
+      vi.mocked(bots.getBotById).mockImplementation(async () => ({ id: 'bot-intake', name: 'intake', role: 'intake', githubLogin: 'janedoe-openadlc-flow' }) as never);
       vi.mocked(bots.listBots).mockImplementation(async () =>
         [
-          { id: 'bot-flow', name: 'janedoe-openadlc-flow', role: 'automation', githubLogin: 'orzelig-fleet-flow' },
-          { id: 'bot-intake', name: 'intake', role: 'intake', githubLogin: 'orzelig-fleet-flow' },
+          { id: 'bot-flow', name: 'janedoe-openadlc-flow', role: 'automation', githubLogin: 'janedoe-openadlc-flow' },
+          { id: 'bot-intake', name: 'intake', role: 'intake', githubLogin: 'janedoe-openadlc-flow' },
         ] as never,
       );
-      labelled = [by('orzelig-fleet-flow', '2026-10-22T16:40:00Z')];
+      labelled = [by('janedoe-openadlc-flow', '2026-10-22T16:40:00Z')];
       expect((await stop()).status).toBe(200);
       expect(removeLabel).not.toHaveBeenCalled();
     });

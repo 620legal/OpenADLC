@@ -12,7 +12,7 @@ const ROW = {
   id: 'standing-1',
   repo_id: 'repo-1',
   issue_number: 77,
-  set_by: 'orzelig',
+  set_by: 'janedoe',
   set_at: new Date('2026-10-22T10:00:00.000Z'),
   gate_id: 'gate-1',
   ended_at: null,
@@ -24,7 +24,7 @@ const ON = {
   id: 'standing-1',
   repoId: 'repo-1',
   issueNumber: 77,
-  setBy: 'orzelig',
+  setBy: 'janedoe',
   setAt: '2026-10-22T10:00:00.000Z',
   gateId: 'gate-1',
   endedAt: null,
@@ -40,14 +40,14 @@ beforeEach(() => {
 describe('a standing approval of an issue’s plan changes', () => {
   it('is turned on once per issue: a second turn-on is the one already on', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce(ROW);
-    await expect(turnOn({ repoId: 'repo-1', issueNumber: 77, setBy: 'orzelig', gateId: 'gate-1' })).resolves.toEqual(ON);
+    await expect(turnOn({ repoId: 'repo-1', issueNumber: 77, setBy: 'janedoe', gateId: 'gate-1' })).resolves.toEqual(ON);
     const [sql, params] = vi.mocked(queryOne).mock.calls[0] ?? [];
     expect(String(sql)).toMatch(/on conflict \(repo_id, issue_number\) where ended_at is null do nothing/);
-    expect(params).toEqual(['repo-1', 77, 'orzelig', 'gate-1']);
+    expect(params).toEqual(['repo-1', 77, 'janedoe', 'gate-1']);
 
     // Already on, by someone else: the insert returns nothing, and the row on is read.
-    vi.mocked(queryOne).mockResolvedValueOnce(null).mockResolvedValueOnce({ ...ROW, set_by: 'janedoe' });
-    await expect(turnOn({ repoId: 'repo-1', issueNumber: 77, setBy: 'orzelig' })).resolves.toMatchObject({ setBy: 'janedoe' });
+    vi.mocked(queryOne).mockResolvedValueOnce(null).mockResolvedValueOnce({ ...ROW, set_by: 'sam' });
+    await expect(turnOn({ repoId: 'repo-1', issueNumber: 77, setBy: 'janedoe' })).resolves.toMatchObject({ setBy: 'sam' });
   });
 
   it('is read only while it is on', async () => {

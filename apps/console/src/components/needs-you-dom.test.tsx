@@ -393,19 +393,19 @@ describe('a failed triage’s Dismiss and Abandon', () => {
 
 describe('a signing key OpenADLC did not register', () => {
   const KEYS: AttentionItem = {
-    id: 'check:signing-key:account:abner620legal',
+    id: 'check:signing-key:account:openadlc-vega-janedoe',
     kind: 'check_failed',
     severity: 'warning',
-    headline: 'abner620legal has a signing key OpenADLC did not register',
+    headline: 'openadlc-vega-janedoe has a signing key OpenADLC did not register',
     subject: { repo: null, number: null, title: null, ref: null, url: null },
     bot: null,
     since: '2026-09-24T11:59:00.000Z',
     detail:
-      'GitHub lists a key on abner620legal that is no seat’s (laptop, id 6).\n\nDismissed as used elsewhere: openadlc-old, id 4 (by or@example.com, 2026-10-19).',
+      'GitHub lists a key on openadlc-vega-janedoe that is no seat’s (laptop, id 6).\n\nDismissed as used elsewhere: openadlc-old, id 4 (by or@example.com, 2026-10-19).',
     actions: [
-      { kind: 'signing_key_revoke', label: 'Revoke key', login: 'abner620legal', keyId: 6, title: 'laptop' },
-      { kind: 'signing_key_dismiss', label: 'Key is used elsewhere', login: 'abner620legal', keyId: 6, title: 'laptop' },
-      { kind: 'signing_key_undo', label: 'Count key 4 again', login: 'abner620legal', keyId: 4, title: null },
+      { kind: 'signing_key_revoke', label: 'Revoke key', login: 'openadlc-vega-janedoe', keyId: 6, title: 'laptop' },
+      { kind: 'signing_key_dismiss', label: 'Key is used elsewhere', login: 'openadlc-vega-janedoe', keyId: 6, title: 'laptop' },
+      { kind: 'signing_key_undo', label: 'Count key 4 again', login: 'openadlc-vega-janedoe', keyId: 4, title: null },
       { kind: 'open_url', label: 'Open the account’s keys', url: 'https://github.com/settings/keys' },
       { kind: 'recheck', label: 'Check again', checkId: 'signing-key' },
     ],
@@ -422,7 +422,7 @@ describe('a signing key OpenADLC did not register', () => {
       expect(pressed.keysRevoked).toEqual([]);
       confirm.mockReturnValue(true);
       await click(button('Revoke key', container));
-      expect(pressed.keysRevoked).toEqual(['abner620legal:6']);
+      expect(pressed.keysRevoked).toEqual(['openadlc-vega-janedoe:6']);
     } finally {
       window.confirm = before;
     }
@@ -431,11 +431,11 @@ describe('a signing key OpenADLC did not register', () => {
   it('dismisses the key from its face, and takes a dismissal back from the undo in its sheet', async () => {
     await render([KEYS]);
     await click(button('Key is used elsewhere', container));
-    expect(pressed.keysDismissed).toEqual(['abner620legal:6']);
+    expect(pressed.keysDismissed).toEqual(['openadlc-vega-janedoe:6']);
 
     await click(button('Show more', container));
     await click(button('Count key 4 again', sheet()!));
-    expect(pressed.keysUndone).toEqual(['abner620legal:4']);
+    expect(pressed.keysUndone).toEqual(['openadlc-vega-janedoe:4']);
   });
 });
 

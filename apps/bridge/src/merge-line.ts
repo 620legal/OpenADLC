@@ -241,10 +241,10 @@ export class MergeLine {
 
   /**
    * CI's own handler, handed a head the line found red; set once the webhooks
-   * exist (`main.ts`). Found live on 620legal/core#7: the line left a red head
-   * to `onCiRun`, which acted only on a `workflow_run` delivery, and both of
-   * that run's had come before the lead approved. Nothing else was coming for
-   * it, so nothing sent the work back.
+   * exist (`main.ts`). Found live on a managed repository's #7: the line left a
+   * red head to `onCiRun`, which acted only on a `workflow_run` delivery, and
+   * both of that run's had come before the lead approved. Nothing else was
+   * coming for it, so nothing sent the work back.
    */
   private redChecks: ((head: RedHead) => Promise<void>) | null = null;
 
@@ -319,13 +319,14 @@ export class MergeLine {
 
   /**
    * Whether the line let this pull request go on red checks at this very
-   * head, and they are red there still. Found live on 620legal/core#7: the
-   * gate sweep put the approved pull request back every ten minutes, the line
-   * found the same red head each time and said "Leaving the merge line" on it
-   * again, for thirteen hours. It stays out until its head changes or its
-   * checks run again (a rerun's are pending, then green or red anew), and the
-   * log says so once. CI's handler is asked again each time: no delivery may
-   * have come for a rerun's own failure, and that is what sends it back.
+   * head, and they are red there still. Found live on a managed repository's
+   * #7: the gate sweep put the approved pull request back every ten minutes,
+   * the line found the same red head each time and said "Leaving the merge
+   * line" on it again, for thirteen hours. It stays out until its head
+   * changes or its checks run again (a rerun's are pending, then green or red
+   * anew), and the log says so once. CI's handler is asked again each time: no
+   * delivery may have come for a rerun's own failure, and that is what sends
+   * it back.
    *
    * Checks that cannot be read keep it out. GitHub's client answers an empty
    * list for a read that failed, and a head the line found red has checks.

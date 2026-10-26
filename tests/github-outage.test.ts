@@ -102,23 +102,23 @@ describe('a start GitHub did not answer the sign-in’s refresh for', () => {
     const hostd = new TokenClient(url, store);
 
     github(() => new Response('<!DOCTYPE html><html><body>No server is currently available to service your request.</body></html>', { status: 503 }));
-    const refused = await hostd.tokenForTask('fleet-atlas-orzelig').then(
+    const refused = await hostd.tokenForTask('openadlc-atlas-janedoe').then(
       () => null,
       (error: unknown) => error as Error,
     );
-    expect(refused?.message).toMatch(/^fleet-atlas-orzelig has no GitHub token yet: GitHub did not answer the refresh of account_fleet-atlas's sign-in/);
+    expect(refused?.message).toMatch(/^openadlc-atlas-janedoe has no GitHub token yet: GitHub did not answer the refresh of account_fleet-atlas's sign-in/);
 
     const failed = failedStart(refused!.message, '2026-10-21T04:16:00.000Z');
     const retry = githubRetry(failed, [failed]);
     expect(retry).toEqual({ at: new Date('2026-10-21T04:18:00.000Z'), attempt: 1, of: 6 });
-    expect(explainFailure(failed.exitReason, { bot: 'intake (fleet-atlas-orzelig)', retry }).sentence).toBe(
-      'GitHub did not answer when OpenADLC refreshed the sign-in of intake (fleet-atlas-orzelig), so the work did not start. ' +
+    expect(explainFailure(failed.exitReason, { bot: 'intake (openadlc-atlas-janedoe)', retry }).sentence).toBe(
+      'GitHub did not answer when OpenADLC refreshed the sign-in of intake (openadlc-atlas-janedoe), so the work did not start. ' +
         'OpenADLC tries again on its own after 2026-10-21 04:18 UTC (retry 1 of 6).',
     );
 
     // GitHub answers again: the retry's start is given its token.
     github(() => new Response(JSON.stringify({ access_token: 'ghu_after', expires_in: 28_800, refresh_token: 'ghr_after' }), { status: 200 }));
-    await expect(hostd.tokenForTask('fleet-atlas-orzelig')).resolves.toMatchObject({ token: 'ghu_after' });
+    await expect(hostd.tokenForTask('openadlc-atlas-janedoe')).resolves.toMatchObject({ token: 'ghu_after' });
   });
 
   it('is one GitHub refused with a 401, which fails at once with what to do and is not run again', async () => {
@@ -127,7 +127,7 @@ describe('a start GitHub did not answer the sign-in’s refresh for', () => {
     const url = await bridge(new TokenBroker({ clientId: 'Iv1.client', store, refreshRetryMs: [1, 1, 1] }));
     github(() => new Response('Unauthorized', { status: 401 }));
 
-    const refused = await new TokenClient(url, store).tokenForTask('fleet-atlas-orzelig').then(
+    const refused = await new TokenClient(url, store).tokenForTask('openadlc-atlas-janedoe').then(
       () => null,
       (error: unknown) => error as Error,
     );
@@ -135,8 +135,8 @@ describe('a start GitHub did not answer the sign-in’s refresh for', () => {
 
     const failed = failedStart(refused!.message, '2026-10-21T04:16:00.000Z');
     expect(githubRetry(failed, [failed])).toBeNull();
-    expect(explainFailure(failed.exitReason, { bot: 'intake (fleet-atlas-orzelig)', retry: null }).sentence).toBe(
-      'GitHub no longer accepts the sign-in of intake (fleet-atlas-orzelig). Reconnect it, then try again.',
+    expect(explainFailure(failed.exitReason, { bot: 'intake (openadlc-atlas-janedoe)', retry: null }).sentence).toBe(
+      'GitHub no longer accepts the sign-in of intake (openadlc-atlas-janedoe). Reconnect it, then try again.',
     );
   });
 });

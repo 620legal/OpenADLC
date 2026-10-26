@@ -874,10 +874,10 @@ describe('the one answer a fresh install gives', () => {
   };
 
   it('makes a bare email the console member, the first admin and the operator', () => {
-    expect(derived('zelig@620legal.com')).toEqual({
-      members: ['user:zelig@620legal.com'],
-      admins: ['zelig@620legal.com'],
-      operators: ['user:zelig@620legal.com'],
+    expect(derived('janedoe@example.com')).toEqual({
+      members: ['user:janedoe@example.com'],
+      admins: ['janedoe@example.com'],
+      operators: ['user:janedoe@example.com'],
     });
   });
 

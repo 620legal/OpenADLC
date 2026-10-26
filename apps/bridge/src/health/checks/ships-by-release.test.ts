@@ -12,14 +12,14 @@ import { releaseEventsOf, shipsByReleaseCheck, SHIPS_BY_RELEASE_CHECK } from './
 
 const NOW = new Date('2026-10-23T12:00:00Z');
 const BY_RELEASE = deliveryRulesSchema.parse({ version: 1, testing: { on: 'release' } });
-const PAGE = 'https://github.com/organizations/620legal/settings/apps/openadlc-620legal/permissions';
+const PAGE = 'https://github.com/organizations/acme/settings/apps/openadlc-acme/permissions';
 const EVERY_OTHER = WEBHOOK_EVENTS.filter((event) => event !== 'release');
 
 function check(options: { rules?: Record<string, DeliveryRules | null>; events?: string[] | Error | null }) {
   return shipsByReleaseCheck({
     repos: async () => [
       { name: 'openadlc', fullName: '620legal/OpenADLC' },
-      { name: 'site', fullName: '620legal/site' },
+      { name: 'app', fullName: 'acme/app' },
     ],
     rules: async (repo) => (options.rules && repo.name in options.rules ? (options.rules[repo.name] ?? null) : DEFAULT_DELIVERY_RULES),
     appEvents: async () => {
@@ -65,8 +65,8 @@ describe('the app hearing a release, where a repository ships by release', () =>
   });
 
   it('is no answer for a repository whose rules could not be read', async () => {
-    expect(await check({ rules: { site: null } }).run(NOW)).toEqual([
-      { subject: '620legal/site', ok: null, reason: 'its delivery rules could not be read, so whether it ships by release is not known' },
+    expect(await check({ rules: { app: null } }).run(NOW)).toEqual([
+      { subject: 'acme/app', ok: null, reason: 'its delivery rules could not be read, so whether it ships by release is not known' },
     ]);
   });
 });
@@ -82,7 +82,7 @@ describe('what Settings says of it', () => {
   it('is nothing before the check has answered, when it could not, or for another repository', () => {
     expect(releaseEventsOf([], '620legal/OpenADLC')).toBeNull();
     expect(releaseEventsOf([row('unknown')], '620legal/OpenADLC')).toBeNull();
-    expect(releaseEventsOf([row('failing')], '620legal/site')).toBeNull();
+    expect(releaseEventsOf([row('failing')], 'acme/app')).toBeNull();
     expect(releaseEventsOf([{ ...row('failing'), checkId: 'app-permissions' }], '620legal/OpenADLC')).toBeNull();
   });
 });

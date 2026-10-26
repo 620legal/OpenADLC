@@ -3641,15 +3641,15 @@ export class Webhooks {
 
   /**
    * The merge line found a pull request's head red and took it out
-   * (`MergeLine.useRedChecks`). Found live on 620legal/core#7: CI failed, its
-   * one rerun failed too, and both deliveries came before the lead approved,
-   * which `onCiRun` leaves to the lead's decision. The approval put the pull
-   * request in the line, the line found the head red and left it to
-   * `onCiRun`, and no delivery was coming to reach it: the line took it in
-   * and out every ten minutes for thirteen hours, and the work never went
-   * back. So the newest `ci` run on the head is read here and taken as its
-   * delivery would have been: a first failure is run again once, a second,
-   * once the lead has approved, goes back to build.
+   * (`MergeLine.useRedChecks`). Found live on a managed repository's #7: CI
+   * failed, its one rerun failed too, and both deliveries came before the
+   * lead approved, which `onCiRun` leaves to the lead's decision. The
+   * approval put the pull request in the line, the line found the head red
+   * and left it to `onCiRun`, and no delivery was coming to reach it: the
+   * line took it in and out every ten minutes for thirteen hours, and the
+   * work never went back. So the newest `ci` run on the head is read here and
+   * taken as its delivery would have been: a first failure is run again once,
+   * a second, once the lead has approved, goes back to build.
    */
   async ciRedAt(head: { repoName: string; prNumber: number; headSha: string }): Promise<void> {
     const found = await repos.getRepoByName(head.repoName);
@@ -5382,11 +5382,11 @@ interface CiRunOutcome {
 
 /**
  * Where a failed CI run stopped, as a builder starts from it: each job that
- * failed and the first of its steps that did. On 620legal/core#7 the run's
- * `check` job failed at its scope check and its `ci` job, which only gathers
- * the others, failed because `check` had: the gathering job is named only
- * when it is all that failed, as the template's single `ci` job is. Null
- * when no job failed.
+ * failed and the first of its steps that did. On a managed repository's #7
+ * the run's `check` job failed at its scope check and its `ci` job, which
+ * only gathers the others, failed because `check` had: the gathering job is
+ * named only when it is all that failed, as the template's single `ci` job
+ * is. Null when no job failed.
  */
 export function failedAt(jobs: readonly Pick<RunJob, 'name' | 'conclusion' | 'steps'>[]): string | null {
   const failed = jobs.filter((job) => CI_FAILED.has(job.conclusion ?? ''));

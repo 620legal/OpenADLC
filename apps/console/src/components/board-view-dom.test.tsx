@@ -221,7 +221,7 @@ describe('a card whose approved plan change waits on other work', () => {
     subject: { repo: 'openadlc', number: 60, title: 'Let the board filter by label', ref: 'openadlc#60', url: null, item: 'openadlc#60' },
     bot: null,
     since: NOW,
-    detail: 'orzelig approved adding `apps/probe60-more/util.ts`.',
+    detail: 'janedoe approved adding `apps/probe60-more/util.ts`.',
     actions: [{ kind: 'answer_gate', label: 'Refuse', gateId: 'gate-60', answer: 'Refuse' }],
     heldApproval: { blockedBy: [44], paths: ['apps/probe60-more/util.ts'] },
   };

@@ -3139,7 +3139,7 @@ describe('a start GitHub did not answer for, run again on a backoff', () => {
   const NOW = new Date('2026-10-21T04:30:00.000Z');
   const later = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000);
   const UNANSWERED =
-    "hostd refused: fleet-atlas-orzelig has no GitHub token yet: GitHub did not answer the refresh of account_fleet-atlas-orzelig's sign-in (GitHub returned a non-JSON response (503): <html>); it is asked again next time";
+    "hostd refused: openadlc-atlas-janedoe has no GitHub token yet: GitHub did not answer the refresh of account_openadlc-atlas-janedoe's sign-in (GitHub returned a non-JSON response (503): <html>); it is asked again next time";
 
   function failedStart(id: string, endedAt: Date, overrides: Record<string, unknown> = {}) {
     return {
@@ -3175,7 +3175,7 @@ describe('a start GitHub did not answer for, run again on a backoff', () => {
         createdAt: at,
         ...(answers ? { state: 'running', endedAt: null, exitReason: null } : { state: 'failed', endedAt: at, exitReason: UNANSWERED }),
       });
-      return { task: { taskId: started, ...(answers ? {} : { error: UNANSWERED }) }, bot: 'fleet-atlas-orzelig' };
+      return { task: { taskId: started, ...(answers ? {} : { error: UNANSWERED }) }, bot: 'openadlc-atlas-janedoe' };
     });
     return {
       retry,
@@ -3197,7 +3197,7 @@ describe('a start GitHub did not answer for, run again on a backoff', () => {
 
     now = later(2);
     expect(await sweep()).toEqual([
-      'openadlc-testbed#45: fleet-atlas-orzelig’s intake run again (retry 1 of 6), as GitHub did not answer when it started',
+      'openadlc-testbed#45: openadlc-atlas-janedoe’s intake run again (retry 1 of 6), as GitHub did not answer when it started',
     ]);
     // The start it recorded is left unclaimed: the next retry is its.
     expect(store.tasks.find((task) => task.id === 'retry-1')?.autoRetriedAt).toBeNull();
@@ -3297,7 +3297,7 @@ describe('a start GitHub did not answer for, run again on a backoff', () => {
     store.tasks = [
       failedStart('t-intake', later(-30), {
         exitReason:
-          "hostd refused: fleet-atlas-orzelig has no GitHub token: the bridge would not mint one (409) account_fleet-atlas-orzelig's GitHub authorization is no longer valid (bad_refresh_token). Reconnect it: openadlc auth login --bot fleet-atlas-orzelig",
+          "hostd refused: openadlc-atlas-janedoe has no GitHub token: the bridge would not mint one (409) account_openadlc-atlas-janedoe's GitHub authorization is no longer valid (bad_refresh_token). Reconnect it: openadlc auth login --bot openadlc-atlas-janedoe",
       }),
     ];
     store.health = [{ id: 'bot-sign-in:bot-intake', state: 'failing', fixedAt: null }];

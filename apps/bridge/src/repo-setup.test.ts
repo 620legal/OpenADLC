@@ -392,7 +392,7 @@ describe('acting as the app rather than as a bot', () => {
     ];
     ACCOUNTS = [
       { id: 'identity-otto', login: 'ottoexampleco', githubUserId: 583231, secretNs: 'sydney' },
-      { id: 'identity-flow', login: 'janedoe-flow', githubUserId: 333371704, secretNs: 'flow' },
+      { id: 'identity-flow', login: 'janedoe-flow', githubUserId: 1004, secretNs: 'flow' },
       { id: 'identity-spare', login: 'janedoe-spare', githubUserId: 340000001, secretNs: 'account-spare' },
     ];
     SEATED = [
@@ -405,7 +405,7 @@ describe('acting as the app rather than as a bot', () => {
 
     expect(input.crewAccounts).toEqual([
       { login: 'ottoexampleco', id: 583231 },
-      { login: 'janedoe-flow', id: 333371704 },
+      { login: 'janedoe-flow', id: 1004 },
       { login: 'janedoe-spare', id: 340000001 },
     ]);
     expect(input.crewUnread).toBeUndefined();

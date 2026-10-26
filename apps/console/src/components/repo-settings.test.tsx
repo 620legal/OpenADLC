@@ -652,7 +652,7 @@ describe('a repository that ships by release, in its settings', () => {
   });
 
   it('shows the line and a ticked box a person can change, and where the app is not subscribed, says so with where to tick it', () => {
-    const page = 'https://github.com/organizations/620legal/settings/apps/openadlc-620legal/permissions';
+    const page = 'https://github.com/organizations/acme/settings/apps/openadlc-acme/permissions';
     const box = (html: string) => /<input type="checkbox"[^>]*aria-describedby="openadlc-testbed-ships-by-release-line"[^>]*\/>/.exec(html)?.[0] ?? '';
     const html = settings({ ...REPO, delivery: DELIVERY, releaseEvents: { subscribed: false, url: page } });
     expect(html).toContain(SHIPS_BY_RELEASE_LINE);

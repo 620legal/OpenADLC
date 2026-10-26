@@ -188,8 +188,8 @@ describe('the plan changes on an item that no person approved (#77)', () => {
       threads,
       messages: [
         asked('m1', { planChange: { paths: ['a/b.ts'], reason: 'r' }, decided: { by: 'designer', seat: 'architect', reason: 'named', at: '2026-09-30T10:03:00Z' } }),
-        asked('m2', { planChange: { paths: ['a/c.ts'], reason: 'r' }, decided: { by: 'standing_approval', setBy: 'orzelig', reason: 'r', at: '2026-09-30T10:04:00Z' } }),
-        asked('m3', { planChange: { paths: ['a/d.ts'], reason: 'r' }, decided: { by: 'designer', seat: 'architect', at: 't' }, takenBack: { by: 'orzelig', at: 't' } }),
+        asked('m2', { planChange: { paths: ['a/c.ts'], reason: 'r' }, decided: { by: 'standing_approval', setBy: 'janedoe', reason: 'r', at: '2026-09-30T10:04:00Z' } }),
+        asked('m3', { planChange: { paths: ['a/d.ts'], reason: 'r' }, decided: { by: 'designer', seat: 'architect', at: 't' }, takenBack: { by: 'janedoe', at: 't' } }),
         asked('m4', { planChange: { paths: ['a/e.ts'], reason: 'r' } }),
       ],
       gates: [],
@@ -197,7 +197,7 @@ describe('the plan changes on an item that no person approved (#77)', () => {
     });
     expect(view.settledPlanChanges).toEqual([
       { gateId: 'g-m1', paths: ['a/b.ts'], decidedBy: 'designer', by: 'architect', at: '2026-09-30T10:03:00Z' },
-      { gateId: 'g-m2', paths: ['a/c.ts'], decidedBy: 'standing_approval', by: 'orzelig', at: '2026-09-30T10:04:00Z' },
+      { gateId: 'g-m2', paths: ['a/c.ts'], decidedBy: 'standing_approval', by: 'janedoe', at: '2026-09-30T10:04:00Z' },
     ]);
   });
 });

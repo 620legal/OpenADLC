@@ -1038,7 +1038,7 @@ describe('a card with nothing going on it', () => {
     store.tasks = [];
     store.sessions = [];
     store.flightReads = [];
-    store.settings = { workPausedSeats: JSON.stringify({ 'system-engineer': { by: 'orzelig', at: minutesAgo(30), why: 'changing its model' } }) };
+    store.settings = { workPausedSeats: JSON.stringify({ 'system-engineer': { by: 'janedoe', at: minutesAgo(30), why: 'changing its model' } }) };
     store.budget = null;
     const work = await readBoardWork(
       {
@@ -1055,7 +1055,7 @@ describe('a card with nothing going on it', () => {
     expect(work.byRef.get('api#141')?.waiting?.reason).toEqual({
       kind: 'seat_paused',
       seat: { name: 'system-engineer', role: 'spec', maxTasks: 1 },
-      words: 'system-engineer is paused by orzelig: changing its model',
+      words: 'system-engineer is paused by janedoe: changing its model',
     });
     expect(work.byRef.get('api#160')?.waiting?.reason).toEqual({ kind: 'lease', on: [44], paths: ['src/prices.ts'] });
 

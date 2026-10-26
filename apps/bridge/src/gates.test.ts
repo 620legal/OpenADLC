@@ -1896,7 +1896,7 @@ describe('a plan change settled by no person answering it', () => {
   const answers = () => vi.mocked(audit).mock.calls.map(([entry]) => entry).filter((entry) => entry.action === 'gate.answer');
   const said = () => client.comment.mock.calls.map((call) => String((call as unknown[])[2]));
   const notifier = { send: vi.fn(async () => undefined) };
-  const covered = vi.fn(async () => ({ covers: true, setBy: 'orzelig', setAt: '2026-10-22T10:00:00.000Z', humanReview: [] as string[] }));
+  const covered = vi.fn(async () => ({ covers: true, setBy: 'janedoe', setAt: '2026-10-22T10:00:00.000Z', humanReview: [] as string[] }));
   const standing = new Gates(actors as never, notifier as never);
   standing.useStandingApprovals(covered);
   const ask = (paths = ['apps/hostd/src/skill-runner.ts']) => {
@@ -1912,7 +1912,7 @@ describe('a plan change settled by no person answering it', () => {
 
   beforeEach(() => {
     covered.mockReset();
-    covered.mockImplementation(async () => ({ covers: true, setBy: 'orzelig', setAt: '2026-10-22T10:00:00.000Z', humanReview: [] }));
+    covered.mockImplementation(async () => ({ covers: true, setBy: 'janedoe', setAt: '2026-10-22T10:00:00.000Z', humanReview: [] }));
   });
 
   it('is approved as it is asked under a standing approval, with one record on the issue and nobody asked', async () => {
@@ -1920,11 +1920,11 @@ describe('a plan change settled by no person answering it', () => {
 
     expect(opened.gateId).toBe('gate-1');
     expect(covered).toHaveBeenCalledWith({ repoId: 'repo-1', repoFullName: 'acme/openadlc', issueNumber: 78, paths: ['apps/hostd/src/skill-runner.ts'] });
-    expect(store.gate).toMatchObject({ state: 'answered', answer: 'Approve', answeredBy: 'orzelig' });
+    expect(store.gate).toMatchObject({ state: 'answered', answer: 'Approve', answeredBy: 'janedoe' });
     expect(leases.widenPaths).toHaveBeenCalledWith('lease-1', ['apps/hostd/src/skill-runner.ts']);
     // One comment: the record, which names the approval and who set it, and no question.
     expect(said()).toHaveLength(1);
-    expect(said()[0]).toContain('**Approved under the standing approval** orzelig set for #78');
+    expect(said()[0]).toContain('**Approved under the standing approval** janedoe set for #78');
     expect(said()[0]).toContain('the runner drops the field');
     expect(said()[0]).toContain('Added to Expected paths: `apps/hostd/src/skill-runner.ts`.');
     expect(client.addLabels).not.toHaveBeenCalled();
@@ -1932,17 +1932,17 @@ describe('a plan change settled by no person answering it', () => {
     expect(notifier.send).not.toHaveBeenCalled();
     expect(answers()).toEqual([
       expect.objectContaining({
-        actor: 'orzelig',
+        actor: 'janedoe',
         payload: expect.objectContaining({
           grant: 'plan_change_approved',
           channel: 'standing',
           decidedBy: 'standing_approval',
           paths: ['apps/hostd/src/skill-runner.ts'],
-          standingApproval: { setBy: 'orzelig', setAt: '2026-10-22T10:00:00.000Z' },
+          standingApproval: { setBy: 'janedoe', setAt: '2026-10-22T10:00:00.000Z' },
         }),
       }),
     ]);
-    expect(leases.notePlanChange).toHaveBeenCalledWith('gate-1', 'decided', expect.objectContaining({ by: 'standing_approval', setBy: 'orzelig' }));
+    expect(leases.notePlanChange).toHaveBeenCalledWith('gate-1', 'decided', expect.objectContaining({ by: 'standing_approval', setBy: 'janedoe' }));
     // The thread says it in OpenADLC's words, not as words the person typed.
     expect(store.messages.at(-1)).toMatchObject({ kind: 'sys', author: 'openadlc' });
   });
@@ -1959,7 +1959,7 @@ describe('a plan change settled by no person answering it', () => {
   });
 
   it('still asks a person for a path under Human review, and says why on the question', async () => {
-    covered.mockImplementation(async () => ({ covers: false, setBy: 'orzelig', setAt: '2026-10-22T10:00:00.000Z', humanReview: ['apps/bridge/src/gates.ts'] }));
+    covered.mockImplementation(async () => ({ covers: false, setBy: 'janedoe', setAt: '2026-10-22T10:00:00.000Z', humanReview: ['apps/bridge/src/gates.ts'] }));
 
     await ask(['apps/hostd/src/skill-runner.ts', 'apps/bridge/src/gates.ts']);
 
@@ -1970,7 +1970,7 @@ describe('a plan change settled by no person answering it', () => {
     expect(client.addLabels).toHaveBeenCalledWith('acme/openadlc', 78, ['needs-human']);
     expect(notifier.send).toHaveBeenCalledWith(expect.objectContaining({ event: 'gate_opened' }));
     expect(store.messages.find((message) => message.kind === 'gate')).toMatchObject({
-      payload: { standing: { setBy: 'orzelig', humanReview: ['apps/bridge/src/gates.ts'] } },
+      payload: { standing: { setBy: 'janedoe', humanReview: ['apps/bridge/src/gates.ts'] } },
     });
     expect(answers()).toEqual([]);
   });
@@ -1981,7 +1981,7 @@ describe('a plan change settled by no person answering it', () => {
     const unread =
       'OpenADLC could not read the Human-review rules in AGENTS.md on `main`, so it does not cover this one and a person decides. ' +
       'Add a `## Human review` section to AGENTS.md on `main`, or fix the line of it OpenADLC cannot read';
-    covered.mockImplementation(async () => ({ covers: false, setBy: 'orzelig', setAt: '2026-10-22T10:00:00.000Z', humanReview: [], rulesUnread: unread }));
+    covered.mockImplementation(async () => ({ covers: false, setBy: 'janedoe', setAt: '2026-10-22T10:00:00.000Z', humanReview: [], rulesUnread: unread }));
 
     await ask(['apps/probe60-more/util.ts']);
 
@@ -1989,7 +1989,7 @@ describe('a plan change settled by no person answering it', () => {
     expect(said()[0]).toContain(`Approve all is on for #78, but ${unread}.`);
     expect(said()[0]).not.toContain('under Human review');
     expect(store.messages.find((message) => message.kind === 'gate')).toMatchObject({
-      payload: { standing: { setBy: 'orzelig', humanReview: [], rulesUnread: unread } },
+      payload: { standing: { setBy: 'janedoe', humanReview: [], rulesUnread: unread } },
     });
   });
 
@@ -2020,17 +2020,17 @@ describe('a plan change settled by no person answering it', () => {
       reply: 'Approve',
       answeredBy: 'architect',
       via: 'designer',
-      decided: { by: 'designer', seat: 'architect', taskId: 'task-9', askedBy: 'orzelig', reason: 'The design names the runner.' },
+      decided: { by: 'designer', seat: 'architect', taskId: 'task-9', askedBy: 'janedoe', reason: 'The design names the runner.' },
     });
 
     expect(done.taskId).toBe('task-1');
     expect(answers()).toEqual([
       expect.objectContaining({
         actor: 'architect',
-        payload: expect.objectContaining({ channel: 'designer', decidedBy: 'designer', designer: { seat: 'architect', taskId: 'task-9', askedBy: 'orzelig' } }),
+        payload: expect.objectContaining({ channel: 'designer', decidedBy: 'designer', designer: { seat: 'architect', taskId: 'task-9', askedBy: 'janedoe' } }),
       }),
     ]);
-    expect(said()[0]).toContain('**The designer (architect) approved** it, asked by orzelig: The design names the runner.');
+    expect(said()[0]).toContain('**The designer (architect) approved** it, asked by janedoe: The design names the runner.');
     expect(said()[0]).toContain('refuse it from the item in the console');
   });
 

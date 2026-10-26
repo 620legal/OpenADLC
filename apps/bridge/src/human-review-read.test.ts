@@ -9,7 +9,7 @@ import { readHumanReviewRules } from './human-review-read.js';
  * read AGENTS.md, and there was no such card.
  */
 
-const AGENTS = ['# Agent notes', '', '## Human review', '', '- `config/` @orzelig', ''].join('\n');
+const AGENTS = ['# Agent notes', '', '## Human review', '', '- `config/` @janedoe', ''].join('\n');
 
 function reading(file: string | null | Error, repository: true | Error = true) {
   return {
@@ -29,7 +29,7 @@ const read = (client: ReturnType<typeof reading> | null) => readHumanReviewRules
 describe('reading the Human-review rules for a plan change', () => {
   it('reads them from AGENTS.md on the base branch', async () => {
     const client = reading(AGENTS);
-    await expect(read(client)).resolves.toEqual({ rules: [{ path: 'config/', logins: ['orzelig'] }], unread: null });
+    await expect(read(client)).resolves.toEqual({ rules: [{ path: 'config/', logins: ['janedoe'] }], unread: null });
     expect(client.readFileIfPresent).toHaveBeenCalledWith('acme/api', 'AGENTS.md', 'main');
     expect(client.request).not.toHaveBeenCalled();
   });
@@ -58,7 +58,7 @@ describe('reading the Human-review rules for a plan change', () => {
   it('tells a missing file, a missing section and a line it cannot read apart', async () => {
     await expect(read(reading(null))).resolves.toEqual({ rules: null, unread: { cause: 'no-file' } });
     await expect(read(reading('# Agent notes\n\nNo rules here.\n'))).resolves.toEqual({ rules: null, unread: { cause: 'no-section' } });
-    await expect(read(reading(`${AGENTS}- \`a/\` \`b/\` @orzelig\n`))).resolves.toEqual({
+    await expect(read(reading(`${AGENTS}- \`a/\` \`b/\` @janedoe\n`))).resolves.toEqual({
       rules: null,
       unread: { cause: 'unreadable-line', line: 6, reason: 'it names two paths; give each its own line' },
     });

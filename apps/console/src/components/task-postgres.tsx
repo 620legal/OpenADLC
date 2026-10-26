@@ -23,7 +23,7 @@ import { safeAction } from '@/lib/safe-action';
  * The values are in the repository's own Compose file, so the form fills
  * itself from it for a repository with nothing set, and again on "Fill from
  * docker-compose.yml": a person checks them and saves, rather than typing
- * what core's file already said (v0.1.10). Filling saves nothing.
+ * what the repository's file already said (v0.1.10). Filling saves nothing.
  */
 
 /** A server as the form holds it: what was typed, port included. */
@@ -42,16 +42,16 @@ type Field = keyof Omit<Row, 'key' | 'from'>;
 
 const NEW_SERVER = { port: '', superuser: '', password: '', database: '', image: 'pgvector/pgvector:pg16' };
 /**
- * Each placeholder says it is an example. Bare, in grey, 620legal/core's
+ * Each placeholder says it is an example. Bare, in grey, a repository's
  * values read as a server already filled in: a person pressed Save on an
  * added row with nothing typed in it, and the bridge refused a port that
  * was not there (v0.1.9).
  */
 const FIELDS: { field: Field; label: string; placeholder: string }[] = [
   { field: 'port', label: 'Port', placeholder: 'e.g. 55432' },
-  { field: 'superuser', label: 'Superuser', placeholder: 'e.g. core' },
-  { field: 'password', label: 'Password', placeholder: 'e.g. core' },
-  { field: 'database', label: 'Database', placeholder: 'e.g. core_db' },
+  { field: 'superuser', label: 'Superuser', placeholder: 'e.g. app' },
+  { field: 'password', label: 'Password', placeholder: 'e.g. app' },
+  { field: 'database', label: 'Database', placeholder: 'e.g. app_db' },
   { field: 'image', label: 'Image', placeholder: 'e.g. pgvector/pgvector:pg16' },
 ];
 const IMAGE = FIELDS.find(({ field }) => field === 'image')!;

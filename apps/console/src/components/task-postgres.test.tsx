@@ -9,15 +9,15 @@ vi.mock('@/app/actions', () => ({ saveTaskPostgres: vi.fn(), readTaskPostgresCom
 import { readTaskPostgresCompose, saveTaskPostgres } from '@/app/actions';
 import { settingOf, TaskPostgresSection } from './task-postgres';
 
-/** 620legal/core's local Postgres, as its docker-compose.yml and Makefile name it. */
-const CORE = { port: 55432, superuser: 'core', password: 'core', database: 'core_db', image: 'pgvector/pgvector:pg16' };
+/** acme/app's local Postgres, as its docker-compose.yml and Makefile name it. */
+const APP = { port: 55432, superuser: 'app', password: 'app', database: 'app_db', image: 'pgvector/pgvector:pg16' };
 
-/** What the bridge reads from core's docker-compose.yml on main. */
-const CORE_COMPOSE: TaskPostgresCompose = {
+/** What the bridge reads from app's docker-compose.yml on main. */
+const APP_COMPOSE: TaskPostgresCompose = {
   ok: true,
   file: 'docker-compose.yml',
   branch: 'main',
-  servers: [{ service: 'postgres', ...CORE, notes: [], refusal: null }],
+  servers: [{ service: 'postgres', ...APP, notes: [], refusal: null }],
   notes: [],
 };
 /** A repository with no Compose file. */
@@ -25,7 +25,7 @@ const NO_COMPOSE: TaskPostgresCompose = {
   ok: false,
   file: null,
   branch: 'main',
-  why: '620legal/core has no Compose file on main: none of compose.yaml, compose.yml, docker-compose.yml, docker-compose.yaml',
+  why: 'acme/app has no Compose file on main: none of compose.yaml, compose.yml, docker-compose.yml, docker-compose.yaml',
 };
 
 function view(over: Partial<TaskPostgresView> = {}): TaskPostgresView {
@@ -39,7 +39,7 @@ function view(over: Partial<TaskPostgresView> = {}): TaskPostgresView {
   };
 }
 
-const html = (initial: TaskPostgresView) => renderToStaticMarkup(<TaskPostgresSection repo="core" initial={initial} />).replace(/<!-- -->/g, '');
+const html = (initial: TaskPostgresView) => renderToStaticMarkup(<TaskPostgresSection repo="app" initial={initial} />).replace(/<!-- -->/g, '');
 
 let container: HTMLDivElement;
 let root: Root;
@@ -71,11 +71,11 @@ const button = (text: string) => [...container.querySelectorAll('button')].find(
 
 describe('a repository’s Postgres servers for its tasks, in its settings', () => {
   it('shows each stored server with what it was given, and what the task is told', () => {
-    const page = html(view({ taskPostgres: { servers: [CORE], sharedDatabase: false } }));
+    const page = html(view({ taskPostgres: { servers: [APP], sharedDatabase: false } }));
 
     expect(page).toContain('Postgres for its tasks');
     expect(page).toContain('value="55432"');
-    expect(page).toContain('value="core_db"');
+    expect(page).toContain('value="app_db"');
     expect(page).toContain('value="pgvector/pgvector:pg16"');
     expect(page).toContain('OPENADLC_TASK_POSTGRES');
   });
@@ -94,25 +94,25 @@ describe('a repository’s Postgres servers for its tasks, in its settings', () 
   });
 
   it('saves the servers a person typed, whole, and shows what the bridge then holds', async () => {
-    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [CORE], sharedDatabase: false } }) });
-    await act(async () => root.render(<TaskPostgresSection repo="core" initial={view()} />));
+    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [APP], sharedDatabase: false } }) });
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view()} />));
 
     await act(async () => button('Add a server').click());
     await act(async () => {
       type('Server 1 port', '55432');
-      type('Server 1 superuser', 'core');
-      type('Server 1 password', 'core');
-      type('Server 1 database', 'core_db');
+      type('Server 1 superuser', 'app');
+      type('Server 1 password', 'app');
+      type('Server 1 database', 'app_db');
     });
     await act(async () => button('Save').click());
 
-    expect(saveTaskPostgres).toHaveBeenCalledWith('core', { servers: [CORE], sharedDatabase: false });
+    expect(saveTaskPostgres).toHaveBeenCalledWith('app', { servers: [APP], sharedDatabase: false });
     expect(container.textContent).toContain('Saved: the next task here gets them.');
   });
 
   it('keeps what was typed and says the bridge’s refusal, which says what to correct', async () => {
     vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: false, error: "someone/postgres:16 is not an image a task's server may run: use pgvector/pgvector:<tag> or postgres:<tag>" });
-    await act(async () => root.render(<TaskPostgresSection repo="core" initial={view({ taskPostgres: { servers: [CORE], sharedDatabase: false } })} />));
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [APP], sharedDatabase: false } })} />));
 
     await act(async () => type('Server 1 image', 'someone/postgres:16'));
     await act(async () => button('Save').click());
@@ -123,19 +123,19 @@ describe('a repository’s Postgres servers for its tasks, in its settings', () 
 
   it('takes every server away when the last is removed and saved', async () => {
     vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view() });
-    await act(async () => root.render(<TaskPostgresSection repo="core" initial={view({ taskPostgres: { servers: [CORE], sharedDatabase: true } })} />));
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [APP], sharedDatabase: true } })} />));
 
     await act(async () => button('Remove').click());
     await act(async () => button('Save').click());
 
-    expect(saveTaskPostgres).toHaveBeenCalledWith('core', { servers: [], sharedDatabase: true });
+    expect(saveTaskPostgres).toHaveBeenCalledWith('app', { servers: [], sharedDatabase: true });
     expect(container.textContent).toContain('Saved: its tasks have no server of their own.');
   });
 
   it('starts an added server empty, with examples that say they are examples, and sends what is empty as empty', async () => {
     const refusal = "server 1 has no port: give the port the repository's Makefile reaches it on";
     vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: false, error: refusal });
-    await act(async () => root.render(<TaskPostgresSection repo="core" initial={view()} />));
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view()} />));
 
     await act(async () => button('Add a server').click());
     const field = (name: string) => container.querySelector<HTMLInputElement>(`input[aria-label="Server 1 ${name}"]`)!;
@@ -151,7 +151,7 @@ describe('a repository’s Postgres servers for its tasks, in its settings', () 
     await act(async () => type('Server 1 image', 'pgvector/pgvector:pg16'));
 
     await act(async () => button('Save').click());
-    expect(saveTaskPostgres).toHaveBeenCalledWith('core', {
+    expect(saveTaskPostgres).toHaveBeenCalledWith('app', {
       servers: [{ port: '', superuser: '', password: '', database: '', image: 'pgvector/pgvector:pg16' }],
       sharedDatabase: false,
     });
@@ -159,8 +159,8 @@ describe('a repository’s Postgres servers for its tasks, in its settings', () 
   });
 
   it('starts the shared-database box unticked for a new setting, and says a DATABASE_URL takes the place of the Makefile’s default', async () => {
-    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [CORE], sharedDatabase: false } }) });
-    await act(async () => root.render(<TaskPostgresSection repo="core" initial={view()} />));
+    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [APP], sharedDatabase: false } }) });
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view()} />));
     await act(async () => button('Add a server').click());
 
     const box = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
@@ -177,38 +177,38 @@ describe('a repository’s Postgres servers for its tasks, in its settings', () 
 
     await act(async () => {
       type('Server 1 port', '55432');
-      type('Server 1 superuser', 'core');
-      type('Server 1 password', 'core');
-      type('Server 1 database', 'core_db');
+      type('Server 1 superuser', 'app');
+      type('Server 1 password', 'app');
+      type('Server 1 database', 'app_db');
     });
     await act(async () => button('Save').click());
-    expect(saveTaskPostgres).toHaveBeenCalledWith('core', { servers: [CORE], sharedDatabase: false });
+    expect(saveTaskPostgres).toHaveBeenCalledWith('app', { servers: [APP], sharedDatabase: false });
 
     // A saved setting that holds it is shown as it holds it.
-    expect(html(view({ taskPostgres: { servers: [CORE], sharedDatabase: true } }))).toMatch(/<input type="checkbox"[^>]* checked=""/);
-    expect(html(view({ taskPostgres: { servers: [CORE], sharedDatabase: false } }))).not.toMatch(/<input type="checkbox"[^>]* checked=""/);
+    expect(html(view({ taskPostgres: { servers: [APP], sharedDatabase: true } }))).toMatch(/<input type="checkbox"[^>]* checked=""/);
+    expect(html(view({ taskPostgres: { servers: [APP], sharedDatabase: false } }))).not.toMatch(/<input type="checkbox"[^>]* checked=""/);
   });
 
   it('hydrates the box unticked when the setting holds it off, whatever tick the browser put on it before the page’s script ran', async () => {
     // The server renders it unticked, a tick is on it by the time React
     // hydrates, and React keeps the tick it finds until the section renders again.
-    const initial = view({ taskPostgres: { servers: [CORE], sharedDatabase: false } });
+    const initial = view({ taskPostgres: { servers: [APP], sharedDatabase: false } });
     const page = document.createElement('div');
     document.body.appendChild(page);
-    page.innerHTML = renderToString(<TaskPostgresSection repo="core" initial={initial} />);
+    page.innerHTML = renderToString(<TaskPostgresSection repo="app" initial={initial} />);
     const restored = page.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     restored.checked = true;
 
     let hydrated: Root | null = null;
     await act(async () => {
-      hydrated = hydrateRoot(page, <TaskPostgresSection repo="core" initial={initial} />);
+      hydrated = hydrateRoot(page, <TaskPostgresSection repo="app" initial={initial} />);
     });
     const box = page.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     expect(box).toBe(restored);
     expect(box.checked).toBe(false);
 
     // Ticked by the person, it is ticked, and Save sends what it shows.
-    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [CORE], sharedDatabase: true } }) });
+    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [APP], sharedDatabase: true } }) });
     await act(async () => box.click());
     expect(box.checked).toBe(true);
     await act(async () => [...page.querySelectorAll('button')].find((one) => one.textContent?.trim() === 'Save')!.click());
@@ -218,15 +218,15 @@ describe('a repository’s Postgres servers for its tasks, in its settings', () 
   });
 
   it('hydrates the box ticked when the saved setting holds it, whatever the browser left on it', async () => {
-    const initial = view({ taskPostgres: { servers: [CORE], sharedDatabase: true } });
+    const initial = view({ taskPostgres: { servers: [APP], sharedDatabase: true } });
     const page = document.createElement('div');
     document.body.appendChild(page);
-    page.innerHTML = renderToString(<TaskPostgresSection repo="core" initial={initial} />);
+    page.innerHTML = renderToString(<TaskPostgresSection repo="app" initial={initial} />);
     page.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked = false;
 
     let hydrated: Root | null = null;
     await act(async () => {
-      hydrated = hydrateRoot(page, <TaskPostgresSection repo="core" initial={initial} />);
+      hydrated = hydrateRoot(page, <TaskPostgresSection repo="app" initial={initial} />);
     });
     expect(page.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(true);
     act(() => hydrated?.unmount());
@@ -234,7 +234,7 @@ describe('a repository’s Postgres servers for its tasks, in its settings', () 
   });
 
   it('sends a port that is not digits as typed, for the bridge to refuse with what to do', () => {
-    const rows = [{ key: 1, ...CORE, port: 'five' }];
+    const rows = [{ key: 1, ...APP, port: 'five' }];
     expect(settingOf(rows, false).servers[0]?.port).toBe('five');
   });
 });
@@ -244,13 +244,13 @@ describe('filling it from the repository’s Compose file', () => {
   const valuesOf = (index: number) => ['port', 'superuser', 'password', 'database', 'image'].map((name) => field(index, name)?.value);
 
   it('starts a repository with nothing set filled from its docker-compose.yml, and saves nothing until Save', async () => {
-    vi.mocked(readTaskPostgresCompose).mockResolvedValue({ ok: true, compose: CORE_COMPOSE });
-    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [CORE], sharedDatabase: false } }) });
+    vi.mocked(readTaskPostgresCompose).mockResolvedValue({ ok: true, compose: APP_COMPOSE });
+    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [APP], sharedDatabase: false } }) });
 
-    await act(async () => root.render(<TaskPostgresSection repo="core" initial={view()} />));
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view()} />));
 
-    expect(readTaskPostgresCompose).toHaveBeenCalledWith('core');
-    expect(valuesOf(1)).toEqual(['55432', 'core', 'core', 'core_db', 'pgvector/pgvector:pg16']);
+    expect(readTaskPostgresCompose).toHaveBeenCalledWith('app');
+    expect(valuesOf(1)).toEqual(['55432', 'app', 'app', 'app_db', 'pgvector/pgvector:pg16']);
     const status = container.querySelector('[role="status"]')?.textContent ?? '';
     expect(status).toContain('Filled from docker-compose.yml on main, its postgres service: check each server, then Save.');
     expect(status).toContain('Nothing is saved until you do.');
@@ -259,28 +259,28 @@ describe('filling it from the repository’s Compose file', () => {
     expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(false);
 
     await act(async () => button('Save').click());
-    expect(saveTaskPostgres).toHaveBeenCalledWith('core', { servers: [CORE], sharedDatabase: false });
+    expect(saveTaskPostgres).toHaveBeenCalledWith('app', { servers: [APP], sharedDatabase: false });
     expect(container.textContent).toContain('Saved: the next task here gets them.');
     expect(container.textContent).not.toContain('Nothing is saved until you do.');
   });
 
   it('starts a repository with a setting as it is stored, and fills from the file only when asked', async () => {
-    vi.mocked(readTaskPostgresCompose).mockResolvedValue({ ok: true, compose: CORE_COMPOSE });
-    await act(async () => root.render(<TaskPostgresSection repo="core" initial={view({ taskPostgres: { servers: [{ ...CORE, port: 55499 }], sharedDatabase: false } })} />));
+    vi.mocked(readTaskPostgresCompose).mockResolvedValue({ ok: true, compose: APP_COMPOSE });
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [{ ...APP, port: 55499 }], sharedDatabase: false } })} />));
 
     expect(readTaskPostgresCompose).not.toHaveBeenCalled();
     expect(field(1, 'port')?.value).toBe('55499');
 
     await act(async () => button('Fill from docker-compose.yml').click());
 
-    expect(readTaskPostgresCompose).toHaveBeenCalledWith('core');
-    expect(valuesOf(1)).toEqual(['55432', 'core', 'core', 'core_db', 'pgvector/pgvector:pg16']);
+    expect(readTaskPostgresCompose).toHaveBeenCalledWith('app');
+    expect(valuesOf(1)).toEqual(['55432', 'app', 'app', 'app_db', 'pgvector/pgvector:pg16']);
     expect(field(2, 'port')).toBeNull();
     expect(saveTaskPostgres).not.toHaveBeenCalled();
   });
 
   it('starts a stored setting that no longer reads as it is, for the person to correct', async () => {
-    await act(async () => root.render(<TaskPostgresSection repo="core" initial={view({ unreadable: 'evil/pg:1 is not an image' })} />));
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ unreadable: 'evil/pg:1 is not an image' })} />));
     expect(readTaskPostgresCompose).not.toHaveBeenCalled();
   });
 
@@ -289,11 +289,11 @@ describe('filling it from the repository’s Compose file', () => {
     vi.mocked(readTaskPostgresCompose).mockResolvedValue({
       ok: true,
       compose: {
-        ...CORE_COMPOSE,
+        ...APP_COMPOSE,
         servers: [
           {
             service: 'db',
-            ...CORE,
+            ...APP,
             password: '',
             image: 'ankane/pgvector:latest',
             notes: [{ field: 'password', text: "the file sets no POSTGRES_PASSWORD: give the one the repository's own database URLs use" }],
@@ -302,14 +302,14 @@ describe('filling it from the repository’s Compose file', () => {
         ],
       },
     });
-    await act(async () => root.render(<TaskPostgresSection repo="core" initial={view()} />));
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view()} />));
 
     expect(field(1, 'image')?.value).toBe('ankane/pgvector:latest');
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(`Save would refuse its image: ${refusal}`);
     const notes = container.querySelector('ul[aria-label="Server 1: what to check, from its db service"]');
     expect(notes?.textContent).toBe("Password: the file sets no POSTGRES_PASSWORD: give the one the repository's own database URLs use");
 
-    await act(async () => type('Server 1 password', 'core'));
+    await act(async () => type('Server 1 password', 'app'));
     expect(container.querySelector('ul[aria-label^="Server 1: what to check"]')).toBeNull();
     await act(async () => type('Server 1 image', 'pgvector/pgvector:pg16'));
     expect(container.querySelector('[role="alert"]')).toBeNull();
@@ -320,14 +320,14 @@ describe('filling it from the repository’s Compose file', () => {
       ok: true,
       compose: { ok: false, file: 'docker-compose.yml', branch: 'main', why: 'docker-compose.yml has no Postgres service: none of its services runs pgvector/pgvector or postgres (cache (redis:7))' },
     });
-    await act(async () => root.render(<TaskPostgresSection repo="core" initial={view({ taskPostgres: { servers: [CORE], sharedDatabase: false } })} />));
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [APP], sharedDatabase: false } })} />));
 
     await act(async () => button('Fill from docker-compose.yml').click());
 
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(
       'Not filled: docker-compose.yml has no Postgres service: none of its services runs pgvector/pgvector or postgres (cache (redis:7))',
     );
-    expect(valuesOf(1)).toEqual(['55432', 'core', 'core', 'core_db', 'pgvector/pgvector:pg16']);
+    expect(valuesOf(1)).toEqual(['55432', 'app', 'app', 'app_db', 'pgvector/pgvector:pg16']);
   });
 
   it('says on the form a file it cannot read, first and when asked', async () => {
@@ -335,7 +335,7 @@ describe('filling it from the repository’s Compose file', () => {
       ok: true,
       compose: { ok: false, file: 'docker-compose.yml', branch: 'main', why: 'docker-compose.yml does not read as YAML: Flow sequence in block collection must be sufficiently indented' },
     });
-    await act(async () => root.render(<TaskPostgresSection repo="core" initial={view()} />));
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view()} />));
 
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
       'Not filled: docker-compose.yml does not read as YAML: Flow sequence in block collection must be sufficiently indented',
@@ -352,12 +352,12 @@ describe('filling it from the repository’s Compose file', () => {
   it('leaves a form the person has begun when the first fill answers after', async () => {
     let answer: (value: Awaited<ReturnType<typeof readTaskPostgresCompose>>) => void = () => undefined;
     vi.mocked(readTaskPostgresCompose).mockReturnValue(new Promise((resolve) => (answer = resolve)));
-    await act(async () => root.render(<TaskPostgresSection repo="core" initial={view()} />));
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view()} />));
     expect(button('Reading the Compose file…').disabled).toBe(true);
 
     await act(async () => button('Add a server').click());
     await act(async () => type('Server 1 port', '6000'));
-    await act(async () => answer({ ok: true, compose: CORE_COMPOSE }));
+    await act(async () => answer({ ok: true, compose: APP_COMPOSE }));
 
     expect(valuesOf(1)).toEqual(['6000', '', '', '', 'pgvector/pgvector:pg16']);
     expect(container.textContent).not.toContain('Filled from');

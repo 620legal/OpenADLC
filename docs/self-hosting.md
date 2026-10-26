@@ -1003,7 +1003,7 @@ so it belongs in whatever watches this install. What the two of them cover:
   nobody: reconnecting the seat stores its id. A role is read from the
   repository's permission for each crew account, where an organization owner
   shows as admin. `check` names each person beside the ruleset ("a person may bypass it:
-  orzelig (user 2146989, always)"), as `openadlc doctor` does under its passing
+  janedoe (user 1001, always)"), as `openadlc doctor` does under its passing
   line; apply keeps them and never adds one. Anything else is drift, named in
   the warning and taken off by apply: a crew account, an app other than
   OpenADLC's, a team, a deploy key, a custom role, or a role a crew account
@@ -1405,15 +1405,15 @@ points at the platform's own database.
 A database on the shared server is a plain role and one database. That is not
 enough for a repository whose checks need a server of their own: migrations
 that create server-wide roles through an admin connection, roles with fixed
-names (two tasks making `core_rw` on one server collide), or a Makefile that
+names (two tasks making `app_rw` on one server collide), or a Makefile that
 defaults to its own port. Such a repository gets one per task instead, which a
 person sets in **Settings → Repositories → the repository → Postgres for its
 tasks** (or `PUT /v1/repos/<name>/task-postgres`, an admin's): one or more
 servers, each a port, a superuser, its password, a database and an image.
-Give the repository's local-development defaults — 620legal/core's are
-`55432`, `core`, `core`, `core_db` and `pgvector/pgvector:pg16`, as its
-`docker-compose.yml` says — since only that task can reach the server. It is
-never a file in the repository: whatever it names runs beside every task.
+Give the repository's local-development defaults — such as `55432`, `app`,
+`app`, `app_db` and `pgvector/pgvector:pg16`, as its `docker-compose.yml`
+says — since only that task can reach the server. It is never a file in the
+repository: whatever it names runs beside every task.
 
 The form fills itself in from the repository's own Compose file, for a person
 to check rather than type: a repository with nothing set starts filled, and

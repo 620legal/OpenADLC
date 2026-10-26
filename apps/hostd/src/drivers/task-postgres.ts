@@ -11,7 +11,7 @@ import type { DockerCallOptions, DockerRunner } from './docker.js';
  * publishes no port, joins no network, and another task's loopback is its
  * own. The shared task server could not do this: a task's role there can
  * create no server-wide role, and two tasks' fixed role names would collide
- * (620legal/core's `core_rw`, `core_api_rw` and the rest).
+ * (a repository's `app_rw`, `app_api_rw` and the rest).
  *
  * A container that shares another's namespace is not removed with it. Docker
  * keeps it running in a namespace with only a loopback left, and it cannot be
