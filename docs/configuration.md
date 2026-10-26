@@ -268,7 +268,7 @@ testing:
   workflow: deploy-testing     # dispatched with the merge commit as `sha`
   smoke: smoke-testing         # green promotes; red reverts and sends back to build
 production:
-  on: after-testing            # or none: testing is as far as it goes
+  on: after-testing            # or none: testing is as far as it goes, and its green smoke is Done
   approval: auto               # or reviewers: a named person approves each promote
   soakMinutes: 30              # minutes on testing before the promote, under auto
   workflow: promote-production # dispatched with the commit as `candidate`
@@ -361,6 +361,23 @@ with no later deploy to carry it, lets the lease go and leaves the card in
 Ship ([troubleshooting](troubleshooting.md#a-stacked-issue-waits-after-its-base-merged)).
 When the newest merge's testing deploy had nothing to deploy, the older merges
 it carries go to Done with it, those whose own deploy never ran included.
+
+#### Stopping at testing
+
+`production: on: none` is a repository with no production deploy: a merge
+deploys to testing, and testing is as far as it goes. A green smoke there is
+what a promote is elsewhere. It moves to Done the cards in Ship of every pull
+request the deployed commit carried, each one merged since what testing served
+before, as its deployment labelled them `deployed:testing` (`shipped on
+testing` on the stage move and in the card's timeline,
+`deploy.shipped_on_testing` in the audit log). Between the deploy and the
+smoke the card says **Live on testing · waiting for its smoke**. Only a card
+still in Ship on that pull request moves: one sent back after its merge stays
+with its work. A red smoke reverts the change and sends it back to build, as
+anywhere, and a green re-run of a red smoke moves nothing. A smoke that never
+runs, or skips, leaves the card in Ship. Where the move failed when the smoke
+came in, the deploy sweep moves what the repository's newest green smoke left
+in Ship.
 
 #### Shipping by release
 

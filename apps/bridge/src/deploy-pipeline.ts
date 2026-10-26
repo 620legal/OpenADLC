@@ -13,8 +13,9 @@ import { issueNumberFromBranch } from './work.js';
  * `delivery-rules.ts`) decide, and the bridge does what they say, as the
  * OpenADLC app, or as the automation account where the app cannot act on the
  * repository: a merge dispatches the testing deploy; a green smoke on
- * testing dispatches the promote; a red one is reverted as before and sends
- * the change back to build; a production deploy that fails is handled by
+ * testing dispatches the promote, or, where the rules stop at testing, moves
+ * the merge's cards to Done (`shipOnTesting`); a red one is reverted as
+ * before and sends the change back to build; a production deploy that fails is handled by
  * where the promote stopped (`onProductionFailed`). Production waits only on what GitHub's
  * `production` environment holds it for — its required reviewers, or its wait
  * timer as the soak. OpenADLC never approves an environment for anybody: it
@@ -73,6 +74,17 @@ export type MoveToDone = (input: {
   reason: string;
   prNumber: number;
 }) => Promise<{ moved: boolean; reason?: string }>;
+
+/**
+ * The pull requests a commit carried onto testing: every one merged since
+ * what testing served before it, as a testing deployment labels them
+ * (`Webhooks.carriedOnTesting`), each with the issue its branch names (null
+ * for a fork's, or a branch that names none). Null when GitHub cannot be asked.
+ */
+export type CarriedOnTesting = (
+  repo: { id: string; name: string; fullName: string; defaultBranch: string },
+  sha: string,
+) => Promise<{ number: number; issueNumber: number | null }[] | null>;
 
 type Repo = { id: string; name: string; fullName: string; defaultBranch: string };
 
@@ -231,13 +243,40 @@ export async function shipByMerging(input: {
   issueNumbers: readonly number[];
   why: string;
 }): Promise<{ moved: number[]; lines: string[] }> {
+  const { why } = input;
+  return moveCardsToDone({
+    ...input,
+    reason: `merging shipped it: ${why}`,
+    action: 'deploy.shipped_by_merging',
+    said: `Moved to Done: merging shipped it. Its testing deploy had nothing to deploy (${why}), so no deployment, smoke or promote follows its merge.`,
+    line: `merging shipped it, since its testing deploy had nothing to deploy (${why})`,
+  });
+}
+
+/**
+ * Cards moved to Done by the bridge, each with why: `reason` on its stage
+ * move, `said` in its timeline, `action` in the audit log, and `line` after
+ * "moved to Done: " in what the caller logs. The ones it moved, and what it said.
+ */
+async function moveCardsToDone(input: {
+  moveStage: MoveToDone;
+  repoName: string;
+  prNumber: number;
+  sha: string;
+  issueNumbers: readonly number[];
+  why: string;
+  reason: string;
+  action: string;
+  said: string;
+  line: string;
+}): Promise<{ moved: number[]; lines: string[] }> {
   const { repoName, prNumber, why } = input;
   const moved: number[] = [];
   const lines: string[] = [];
   for (const issueNumber of input.issueNumbers) {
     const ref = `${repoName}#${issueNumber}`;
     try {
-      const result = await input.moveStage({ repoName, issueNumber, to: 'done', actor: 'bridge', reason: `merging shipped it: ${why}`, prNumber });
+      const result = await input.moveStage({ repoName, issueNumber, to: 'done', actor: 'bridge', reason: input.reason, prNumber });
       if (!result.moved) {
         lines.push(`${ref}: not moved to Done (${result.reason ?? 'the move was refused'})`);
         continue;
@@ -247,13 +286,9 @@ export async function shipByMerging(input: {
       continue;
     }
     moved.push(issueNumber);
-    await audit({ actor: 'bridge', action: 'deploy.shipped_by_merging', target: ref, payload: { prNumber, sha: input.sha, why } }).catch(() => undefined);
-    const said = await sayOnCard(
-      [ref, `${repoName}#${prNumber}`],
-      `Moved to Done: merging shipped it. Its testing deploy had nothing to deploy (${why}), so no deployment, smoke or promote follows its merge.`,
-      { stage: 'done', prNumber, sha: input.sha },
-    );
-    lines.push(`${ref} moved to Done: merging shipped it, since its testing deploy had nothing to deploy (${why})${said ? '' : '; no thread on it to say so in'}`);
+    await audit({ actor: 'bridge', action: input.action, target: ref, payload: { prNumber, sha: input.sha, why } }).catch(() => undefined);
+    const said = await sayOnCard([ref, `${repoName}#${prNumber}`], input.said, { stage: 'done', prNumber, sha: input.sha });
+    lines.push(`${ref} moved to Done: ${input.line}${said ? '' : '; no thread on it to say so in'}`);
   }
   return { moved, lines };
 }
@@ -320,6 +355,17 @@ export class DeployPipeline {
   /** What moves the cards of a repository that ships by release; null where nothing does. */
   get releases(): ReleaseShipping | null {
     return this.deps.releases ?? null;
+  }
+
+  private carried: CarriedOnTesting | null = null;
+
+  /**
+   * Told how to read what a commit carried onto testing (`Webhooks.useDelivery`),
+   * which a green smoke finishes where testing is as far as a repository goes
+   * (`shipOnTesting`). Unset, it finishes the commit's own pull request only.
+   */
+  readCarriedWith(reader: CarriedOnTesting): void {
+    this.carried = reader;
   }
 
   /**
@@ -616,9 +662,15 @@ export class DeployPipeline {
     return this.afterGreenSmoke(repo, sha, rules);
   }
 
-  /** What a green smoke on testing goes on to, by the rules: nothing, a soak the bridge holds, or the promote. */
+  /**
+   * What a green smoke on testing goes on to, by the rules: the merge's
+   * cards to Done where testing is as far as the repository goes, a soak the
+   * bridge holds, or the promote.
+   */
   private async afterGreenSmoke(repo: Repo, sha: string, rules: DeliveryRules): Promise<string> {
-    if (rules.production.on === 'none') return `${repo.name}@${sha.slice(0, 7)}: testing is as far as this repository goes`;
+    if (rules.production.on === 'none') {
+      return [`${repo.name}@${sha.slice(0, 7)}: testing is as far as this repository goes`, ...(await this.shipOnTesting(repo, sha))].join('; ');
+    }
     // A person the environment cannot hold for, the bridge holds for: the
     // plan refused the reviewer, so a dispatched promote would run at once.
     // Only for `reviewers`; a repository set to `auto` keeps its soak below.
@@ -634,6 +686,64 @@ export class DeployPipeline {
       return `${repo.name}@${sha.slice(0, 7)}: soaking on testing for ${rules.production.soakMinutes} minutes before the promote`;
     }
     return this.promote(repo, sha, rules);
+  }
+
+  /**
+   * Where testing is as far as a repository goes (`production.on: none`), a
+   * green smoke there finishes the merge, as a promote's deployment does
+   * elsewhere (`Webhooks.finishOneDeployed`): the cards in Ship of each pull
+   * request the commit carried onto testing go to Done, saying why. Only
+   * production finished a card, so in such a repository every merged card
+   * sat in Ship for good after its deploy and its smoke went green.
+   *
+   * Only a card still in Ship on that pull request, as a promote finishes
+   * one: a card sent back after its merge is being reworked. Only for a
+   * commit whose smoke is green and that nothing sent back: a green re-run of
+   * a red smoke is of a commit being reverted. With nothing in Ship, GitHub
+   * is not asked, so the deploy sweep, which calls this again for a
+   * repository's newest green smoke (`retryUndispatched`), costs a board read
+   * once the cards are gone.
+   */
+  private async shipOnTesting(repo: Repo, sha: string): Promise<string[]> {
+    const ref = `${repo.name}@${sha.slice(0, 7)}`;
+    const record = await deployRuns.get(repo.id, sha).catch(() => null);
+    if (record?.smokeConclusion !== 'success' || record.sentBackAt) return [`${ref}: its smoke went red, or it was sent back; no card goes to Done`];
+    if (!this.deps.moveStage) return [`${ref}: nothing here moves its cards to Done; move them by hand`];
+    const board = await (async () => issues.listIssues(repo.name))().catch(() => null);
+    if (!board) return [`${ref}: the board could not be read, so its cards were not moved to Done; the deploy sweep tries again`];
+    const inShip = board.filter((issue) => issue.stage === 'merged');
+    if (inShip.length === 0) return [];
+    // The commit's own pull request, as its merge recorded it, whatever GitHub
+    // answers: what it carried is read settling for what GitHub says, which
+    // is nothing for a commit whose pull requests it would not list.
+    const pulls = [...((this.carried ? await this.carried(repo, sha).catch(() => null) : null) ?? [])];
+    if (record.prNumber !== null && !pulls.some((pull) => pull.number === record.prNumber)) pulls.push({ number: record.prNumber, issueNumber: null });
+    if (pulls.length === 0) return [`${ref}: neither GitHub nor its record names a pull request it carried, so no card was moved to Done`];
+    const short = sha.slice(0, 7);
+    const why = `its smoke passed on testing at ${short}, and ${repo.name}’s rules name no production deploy`;
+    const lines: string[] = [];
+    for (const pull of pulls) {
+      // Its branch's issue too, where the row names no pull request; one that
+      // names another is that pull request's work.
+      const cards = inShip.filter((issue) => issue.prNumber === pull.number || (issue.prNumber === null && issue.number === pull.issueNumber)).map((issue) => issue.number);
+      if (cards.length === 0) continue;
+      const result = await moveCardsToDone({
+        moveStage: this.deps.moveStage,
+        repoName: repo.name,
+        prNumber: pull.number,
+        sha,
+        issueNumbers: cards,
+        why,
+        reason: `shipped on testing: ${why}`,
+        action: 'deploy.shipped_on_testing',
+        said:
+          `Moved to Done: shipped on testing. Its smoke passed there at \`${short}\`, and this repository’s rules name no production deploy ` +
+          '(`production: on: none`), so testing is as far as it goes.',
+        line: `shipped on testing, since ${why}`,
+      });
+      lines.push(...result.lines);
+    }
+    return lines;
   }
 
   /**
@@ -839,9 +949,15 @@ export class DeployPipeline {
   /**
    * Promotes and rollbacks whose dispatch failed, dispatched again. The
    * deploy sweep calls this. A promote goes back through what a green smoke
-   * decides, by the rules as they are now: a repository that no longer
-   * promotes is left, and a soak the bridge must hold is held. Each step is
-   * still claimed, so a webhook racing the sweep dispatches it once.
+   * decides, by the rules as they are now: a soak the bridge must hold is
+   * held. Each step is still claimed, so a webhook racing the sweep
+   * dispatches it once.
+   *
+   * A repository that does not promote has nothing to dispatch, and its
+   * newest green smoke finishes the cards it left in Ship (`shipOnTesting`):
+   * a move that failed, or GitHub not answering what the commit carried,
+   * left them there after the delivery was answered, so nothing redelivered
+   * it; and a smoke an older bridge recorded moved none.
    */
   async retryUndispatched(): Promise<string[]> {
     const lines: string[] = [];
@@ -852,10 +968,14 @@ export class DeployPipeline {
       if (!repo) continue;
       const ref = `${repo.name}@${run.sha.slice(0, 7)}`;
       const line = await this.rulesOf(repo, ref)
-        .then((rules) => (typeof rules === 'string' || rules.production.on === 'none' ? rules : this.afterGreenSmoke(repo, run.sha, rules)))
+        .then(async (rules) => {
+          if (typeof rules === 'string') return rules;
+          // Testing as far as it goes is no news on every sweep: only a card it moved, or could not.
+          if (rules.production.on === 'none') return (await this.shipOnTesting(repo, run.sha)).join('; ');
+          return this.afterGreenSmoke(repo, run.sha, rules);
+        })
         .catch(failed(ref));
-      // Testing as far as it goes is no news on every sweep.
-      if (typeof line === 'string') lines.push(line);
+      if (line) lines.push(line);
     }
     for (const run of await deployRuns.undispatchedRollbacks()) {
       const repo = repoList.find((one) => one.id === run.repoId);

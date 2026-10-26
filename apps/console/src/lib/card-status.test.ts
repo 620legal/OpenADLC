@@ -231,6 +231,18 @@ describe('a card’s status line', () => {
     expect(cardStatus(card({ stage: 'merged', labels: ['adlc:merged', 'deployed:testing'], shipsByRelease: true }), CONTEXT).text).toBe('Merged · ships with the next release');
   });
 
+  // Its repository's rules name no production deploy: a green smoke on
+  // testing takes it to Done, and "waiting for production" said one was coming.
+  it('says a card live on testing where testing is as far as it goes waits for its smoke there', () => {
+    expect(cardStatus(card({ stage: 'merged', labels: ['adlc:merged', 'deployed:testing'], prNumber: 13, shipsOnTesting: true }), CONTEXT)).toEqual({
+      text: 'Live on testing · waiting for its smoke',
+      tone: 'muted',
+      mark: null,
+    });
+    // Before its deploy, it waits for the deploy to testing as any merge does.
+    expect(cardStatus(card({ stage: 'merged', labels: ['adlc:merged'], prNumber: 13, shipsOnTesting: true }), CONTEXT).text).toBe('Merged · waiting to deploy');
+  });
+
   it('says when a finished card shipped, with a tick', () => {
     const shipped = card({ stage: 'done', shippedAt: minutesAgo(120) });
     expect(cardStatus(shipped, CONTEXT)).toEqual({ text: 'Shipped 2 hours ago', tone: 'muted', mark: 'check' });

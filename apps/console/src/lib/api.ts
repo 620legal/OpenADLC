@@ -175,6 +175,12 @@ export interface BoardCard {
    * Absent otherwise, and from an older bridge.
    */
   shipsByRelease?: boolean;
+  /**
+   * In Ship, where its repository's rules name no production deploy
+   * (`production: on: none`): a green smoke on testing takes it to Done, and
+   * no production deploy follows. Absent otherwise, and from an older bridge.
+   */
+  shipsOnTesting?: boolean;
 }
 
 export interface BoardColumn {

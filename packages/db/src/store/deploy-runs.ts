@@ -431,7 +431,9 @@ export async function duePromotes(now = new Date()): Promise<DeployRun[]> {
  * again. Only a repository's newest commit, and only since `since`: a newer
  * merge is promoted itself once its smoke passes, and promoting an older one
  * after it would move production backwards. A soak the bridge holds is
- * `duePromotes`', and one held for a person is a person's to release.
+ * `duePromotes`', and one held for a person is a person's to release. In a
+ * repository whose rules name no production deploy every green smoke is one
+ * of these, and the sweep moves to Done the cards it left in Ship instead.
  */
 export async function undispatchedPromotes(since: Date): Promise<DeployRun[]> {
   const rows = await query<Row>(
