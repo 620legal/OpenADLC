@@ -117,7 +117,7 @@ resource "google_service_account_iam_member" "deployer_acts_as" {
   member             = "serviceAccount:${google_service_account.deployer[0].email}"
 }
 
-# Optional. The deploy workflow has to check the fleet source out, and a private OpenADLC repository admits
+# Optional. The deploy workflow has to check the OpenADLC source out, and a private OpenADLC repository admits
 # nobody by default. With this on, the deployer reads the install's GitHub App private key itself, the full
 # key (which the bridge keeps in Secret Manager once the walkthrough has made the app), and mints a token
 # from it, so no personal token or deploy key has to be made for it. The key is the app's: whoever holds it
@@ -126,9 +126,18 @@ resource "google_service_account_iam_member" "deployer_acts_as" {
 resource "google_secret_manager_secret_iam_member" "deployer_app_key" {
   count   = var.deployer_repository != "" && var.deployer_reads_app_key ? 1 : 0
   project = var.project_id
-  # The bridge names every secret `fleet-<ref>` (GcpSecretStore), whatever the prefix; the
-  # name predates OpenADLC and is kept so existing secrets stay where they are.
-  secret_id = "fleet-github-app-private-key"
+  # The bridge names every secret `openadlc-<ref>` (GcpSecretStore), whatever the prefix.
+  secret_id = "openadlc-github-app-private-key"
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.deployer[0].email}"
+
+  # The key was `fleet-github-app-private-key` before the rename, and a new
+  # secret_id replaces this grant. Replaced the default way, destroyed first,
+  # the old grant would be gone before the new one was refused on an install
+  # whose key is not under its new name yet, and the deployer would have no
+  # key at all. This way the apply stops with the old grant in place
+  # (docs/runbooks/rename-gcp-host.md copies the key first).
+  lifecycle {
+    create_before_destroy = true
+  }
 }

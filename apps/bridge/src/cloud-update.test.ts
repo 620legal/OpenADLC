@@ -870,7 +870,9 @@ describe('the roll', () => {
     await until(() => world.last() !== null);
     expect(world.events).toEqual(['PATCH openadlc-console', 'POST hostd']);
     expect(world.last()).toMatchObject({ state: 'failed', step: 'host' });
-    expect(world.last()?.reason).toMatch(/hostd came back on .*service@sha256:.*the host's fleet-hostd unit passed the file over/);
+    expect(world.last()?.reason).toMatch(/hostd came back on .*service@sha256:.*the host's openadlc-hostd unit passed the file over/);
+    // The bridge cannot see whether the host has been renamed, so it names both.
+    expect(world.last()?.reason).toContain('(journalctl -u openadlc-hostd on the host says why; on a host not renamed yet, /var/lib/fleet and fleet-hostd)');
   });
 
   it('stops at the bridge with the console and the host on the release', async () => {
@@ -884,7 +886,7 @@ describe('the roll', () => {
     expect(last.reason).toContain('The console and the host run v0.2.0');
     expect(last.reason).toContain('the bridge is still on v0.1.0.');
     expect(last.reason).toContain(
-      `the host onto ${mirrorRef('service', 'v0.1.0')} (on the host: sudo sh -c 'echo ${mirrorRef('service', 'v0.1.0')} > /var/lib/fleet/hostd-image' && sudo systemctl restart fleet-hostd)`,
+      `the host onto ${mirrorRef('service', 'v0.1.0')} (on the host: sudo sh -c 'echo ${mirrorRef('service', 'v0.1.0')} > /var/lib/openadlc/hostd-image' && sudo systemctl restart openadlc-hostd; on a host not renamed yet, /var/lib/fleet and fleet-hostd)`,
     );
   });
 
@@ -1043,7 +1045,7 @@ describe('what a stop says', () => {
     expect(both).toContain('the bridge is still on v0.1.0. To finish: openadlc cloud update --release v0.2.0. To go back to v0.1.0, put back the console onto c0');
     // s0 is no release image, as the module's hostd_image by tag is not: only removing both files brings that back.
     expect(both).toContain(
-      "and the host onto the module's hostd_image, s0 (on the host: sudo rm -f /var/lib/fleet/hostd-image /var/lib/fleet/hostd-image.started && sudo systemctl restart fleet-hostd;",
+      "and the host onto the module's hostd_image, s0 (on the host: sudo rm -f /var/lib/openadlc/hostd-image /var/lib/openadlc/hostd-image.started && sudo systemctl restart openadlc-hostd;",
     );
     expect(both).toContain('(the console on ' + TARGET.console + '; hostd on ' + TARGET.service + ')');
   });

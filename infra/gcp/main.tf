@@ -284,7 +284,7 @@ resource "google_compute_firewall" "from_iap" {
 
   # IAP's forwarding range. Documented by Google and stable.
   source_ranges = ["35.235.240.0/20"]
-  target_tags   = ["fleet-host"]
+  target_tags   = ["openadlc-host"]
 }
 
 resource "google_compute_firewall" "from_bridge" {
@@ -300,7 +300,7 @@ resource "google_compute_firewall" "from_bridge" {
   # The subnet the bridge's VPC interface draws from. Not 22: the bridge has no
   # business on the host's shell, and hostd's API is the whole of what it needs.
   source_ranges = [var.subnet_cidr]
-  target_tags   = ["fleet-host"]
+  target_tags   = ["openadlc-host"]
 }
 
 # Egress. Before these rules the module had no EGRESS rules at all, and
@@ -323,7 +323,7 @@ resource "google_compute_firewall" "egress_web" {
   }
 
   destination_ranges = ["0.0.0.0/0"]
-  target_tags        = ["fleet-host"]
+  target_tags        = ["openadlc-host"]
 }
 
 # Postgres on the private services range, and DNS, which the proxy needs to
@@ -350,7 +350,7 @@ resource "google_compute_firewall" "egress_internal" {
   }
 
   destination_ranges = ["10.0.0.0/8", "169.254.169.254/32"]
-  target_tags        = ["fleet-host"]
+  target_tags        = ["openadlc-host"]
 }
 
 resource "google_compute_firewall" "deny_other_egress" {
@@ -364,7 +364,7 @@ resource "google_compute_firewall" "deny_other_egress" {
   }
 
   destination_ranges = ["0.0.0.0/0"]
-  target_tags        = ["fleet-host"]
+  target_tags        = ["openadlc-host"]
 }
 
 resource "google_compute_firewall" "deny_other_ingress" {
@@ -378,7 +378,7 @@ resource "google_compute_firewall" "deny_other_ingress" {
   }
 
   source_ranges = ["0.0.0.0/0"]
-  target_tags   = ["fleet-host"]
+  target_tags   = ["openadlc-host"]
 }
 
 # ---------------------------------------------------------------- the host
@@ -399,8 +399,10 @@ resource "google_service_account" "host" {
 # could bind an outside account to the app's key or a refresh token, and that
 # binding outlived revoking and rotating them. `get` on secrets and versions is
 # what Cloud Run and cloud-init resolve `latest` with. No condition on the
-# secret's name: the module's own secrets are `<name_prefix>-…`, not `fleet-`,
-# and create and list are checked on the project, which a name condition denies.
+# secret's name: the module's own secrets are `<name_prefix>-…`, the store's
+# `openadlc-…` whatever the prefix (and `fleet-…` on an install not yet
+# renamed, docs/runbooks/rename-gcp-host.md), and create and list are checked
+# on the project, which a name condition denies.
 resource "google_project_iam_custom_role" "secrets" {
   project     = var.project_id
   role_id     = "${replace(var.name_prefix, "-", "_")}_secrets"
@@ -459,7 +461,7 @@ resource "google_compute_instance" "host" {
   name         = "${var.name_prefix}-host-1"
   machine_type = var.host_machine_type
   zone         = var.zone
-  tags         = ["fleet-host"]
+  tags         = ["openadlc-host"]
 
   boot_disk {
     initialize_params {
@@ -619,13 +621,22 @@ resource "google_secret_manager_secret" "database_url" {
 # is at the same path for the bridge (a secret volume) and for the host (the
 # prepare script in cloud-init writes it).
 locals {
-  database_ca_dir  = "/var/lib/fleet/database-ca"
+  database_ca_dir  = "/var/lib/openadlc/database-ca"
   database_ca_file = "server-ca.pem"
 }
 
 resource "google_secret_manager_secret_version" "database_url" {
   secret      = google_secret_manager_secret.database_url.id
   secret_data = "postgres://${google_sql_user.openadlc.name}:${random_password.database.result}@${google_sql_database_instance.openadlc.private_ip_address}:5432/${google_sql_database.openadlc.name}?sslmode=verify-ca&uselibpqcompat=true&sslrootcert=${local.database_ca_dir}/${local.database_ca_file}"
+
+  # The bridge's service names this version by number. Replaced the default
+  # way, the old one was destroyed before the new one existed, and until the
+  # apply reached the bridge, any instance Cloud Run started on its running
+  # revision found no DATABASE_URL to read; the CA path's move
+  # (docs/runbooks/rename-gcp-host.md) replaces it.
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # Not a secret, but kept beside the URL rather than in instance metadata, which
@@ -1357,11 +1368,11 @@ resource "google_compute_url_map" "console" {
 
   host_rule {
     hosts        = [local.console_domain]
-    path_matcher = "fleet"
+    path_matcher = "openadlc"
   }
 
   path_matcher {
-    name            = "fleet"
+    name            = "openadlc"
     default_service = google_compute_backend_service.console.id
 
     # The gateway, on its own backend so it can carry its own IAP binding.
@@ -1427,7 +1438,7 @@ resource "google_compute_firewall" "from_load_balancer" {
   }
 
   source_ranges = ["130.211.0.0/22", "35.191.0.0/16"]
-  target_tags   = ["fleet-host"]
+  target_tags   = ["openadlc-host"]
 }
 
 # ------------------------------------------------------- who is admitted

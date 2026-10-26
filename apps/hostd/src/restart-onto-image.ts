@@ -4,7 +4,7 @@ import { PROJECT_REPOSITORY, writeFileDurably } from '@openadlc/shared';
 /**
  * hostd moving onto a release's image, on a Google Cloud host.
  *
- * There hostd runs in a container the host's `fleet-hostd` unit starts
+ * There hostd runs in a container the host's `openadlc-hostd` unit starts
  * (infra/gcp/cloud-init/host.yaml). Before each start the unit reads one
  * file, `OPENADLC_HOSTD_IMAGE_FILE`, one image reference, pulls what it names
  * and runs it; a file that is missing or malformed is passed over for the
@@ -75,7 +75,7 @@ export function mirrorDigestProblem(ref: unknown, source: ReleaseSource): string
 
 /**
  * The file, all there or not at all, and on disk before this returns
- * (`writeFileDurably`). The host's `/var/lib/fleet` is root's: when hostd,
+ * (`writeFileDurably`). The host's `/var/lib/openadlc` is root's: when hostd,
  * which runs as uid 1000, may write the file but not the directory, it cannot
  * make the temporary file beside it, and writes the file in place, flushed. A
  * power cut in that write leaves a reference the unit refuses, and the unit

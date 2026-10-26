@@ -1575,15 +1575,17 @@ openadlc cloud push
 openadlc cloud apply
 ```
 
-Then store the token once as the Secret Manager secret `fleet-registry-token`,
-after the first apply: before it, `plan` and `apply` read a `fleet-*` secret in
-a project with no state as an earlier install's and stop.
+Then store the token once as the Secret Manager secret `openadlc-registry-token`,
+after the first apply: before it, `plan` and `apply` read an `openadlc-*`
+secret in a project with no state as an earlier install's and stop. On an
+install not renamed yet ([runbooks/rename-gcp-host.md](runbooks/rename-gcp-host.md)),
+a `fleet-registry-token` already there is read until it is copied.
 
 ```bash
-printf '%s' "$REGISTRY_TOKEN" | gcloud secrets create fleet-registry-token \
-  --project <project> --labels=fleet=secret --data-file=-
+printf '%s' "$REGISTRY_TOKEN" | gcloud secrets create openadlc-registry-token \
+  --project <project> --labels=openadlc=secret --data-file=-
 # to rotate it:
-printf '%s' "$REGISTRY_TOKEN" | gcloud secrets versions add fleet-registry-token \
+printf '%s' "$REGISTRY_TOKEN" | gcloud secrets versions add openadlc-registry-token \
   --project <project> --data-file=-
 ```
 
@@ -2303,7 +2305,7 @@ The settings' images are what the services and the host are made with. From
 then on they run what the last update rolled: the two Cloud Run services
 ignore a change to their image after they are made, so an apply never puts
 the install back on the release it was made with, and hostd runs the image
-`/var/lib/fleet/hostd-image` names, which an update writes. When that file is
+`/var/lib/openadlc/hostd-image` names, which an update writes. When that file is
 empty, as the host makes it, or does not name this install's release image by
 digest (a crash while hostd wrote it, say), it runs the image hostd last
 started on and answered from, which the host records itself, and only then
@@ -2387,7 +2389,7 @@ The bridge and the host reach Cloud SQL over TLS checked against the
 instance's own certificate authority (`sslmode=verify-ca`), and the instance
 refuses a connection that is not encrypted. The module keeps that authority as
 the secret `<prefix>-database-ca`; the bridge mounts it and the host's
-cloud-init writes it to `/var/lib/fleet/database-ca/server-ca.pem`, where the
+cloud-init writes it to `/var/lib/openadlc/database-ca/server-ca.pem`, where the
 database URL looks for it. If you replace the host's cloud-init
 (`host_cloud_init`), writing that file before hostd starts is yours to do, as is
 the egress allowlist.
@@ -2409,7 +2411,7 @@ the new settings; they reconnect by themselves.
 
 **An install made before release images.** The first apply after release
 images came in resets the host: it changes the host's cloud-init (hostd's
-image is chosen at each start now, from `/var/lib/fleet/hostd-image`), and the
+image is chosen at each start now, from `/var/lib/openadlc/hostd-image`), and the
 reset ends the tasks running there, so pause work first (Settings → Pause
 work). The same apply makes the mirror and the bridge's grants, and gives the
 bridge its `OPENADLC_CLOUD*`, `OPENADLC_RELEASE_*` and `OPENADLC_SELF_UPDATE`
@@ -2417,7 +2419,7 @@ settings, which rolls it to a new revision on the image it already runs. The
 install still runs the images it was built with, and its first move onto a
 release is by hand, with `openadlc cloud update --release <tag>`
 ([Upgrading](#upgrading)), which writes the file over IAP and restarts
-`fleet-hostd`. Self-update cannot make that move: it asks hostd to restart
+`openadlc-hostd`. Self-update cannot make that move: it asks hostd to restart
 onto the release (`POST /internal/restart-onto-image`), which a hostd from
 before this does not have, so the bridge refuses and changes nothing. From
 then on self-update takes each next release.
@@ -2464,7 +2466,7 @@ firewall's together, exceed `egress_denial_rate_threshold` (default 5); see
 
 Give each install a new Google Cloud project, and to start again, a new one
 again. Two installs cannot share a project, whatever their `name_prefix`: the
-secrets an install keeps at runtime are always named `fleet-<ref>`, and the
+secrets an install keeps at runtime are always named `openadlc-<ref>`, and the
 host's and the bridge's service accounts read and write every secret in the
 project, so each would overwrite the other's GitHub refresh tokens, App private
 key and internal secret, and could read them.
@@ -2476,7 +2478,8 @@ stays reserved for up to a week — and the module always uses the same names.
 
 `plan` and `apply` check first, before Terraform changes anything. When the
 project still holds the pool, the database or its reserved name, the network,
-or the secrets an install keeps (`fleet-*`, and `<prefix>-*`), and this install's
+or the secrets an install keeps (`openadlc-*`, `fleet-*` from an install made
+before the rename, and `<prefix>-*`), and this install's
 own state does not hold them, they stop with what they found:
 
 ```text
@@ -2677,15 +2680,15 @@ steps:
   # <region>-docker.pkg.dev/<project>/openadlc, the service image under both the bridge_image and the
   # hostd_image tag (the host pulls hostd_image as hostd starts, so a tag left behind keeps it on the old
   # release), `gcloud run services update` openadlc-bridge and openadlc-console onto them, and
-  # `gcloud compute ssh <host> --tunnel-through-iap -- sudo systemctl restart fleet-hostd`.
+  # `gcloud compute ssh <host> --tunnel-through-iap -- sudo systemctl restart openadlc-hostd`.
   # Both the bridge and the host migrate as they start: see Upgrading before a release that drops anything.
 ```
 
-A host whose `/var/lib/fleet/hostd-image` names a release image, because an
+A host whose `/var/lib/openadlc/hostd-image` names a release image, because an
 update wrote it, runs that rather than `hostd_image`, and so does one whose
-`/var/lib/fleet/hostd-image.started` does: the host falls back to the image
+`/var/lib/openadlc/hostd-image.started` does: the host falls back to the image
 hostd last started on before `hostd_image`. Such a workflow removes both
-(`sudo rm -f /var/lib/fleet/hostd-image /var/lib/fleet/hostd-image.started`)
+(`sudo rm -f /var/lib/openadlc/hostd-image /var/lib/openadlc/hostd-image.started`)
 before it restarts hostd, and turns `self_update` off, or the next
 self-update moves the install back onto a release.
 
@@ -2696,16 +2699,20 @@ taking over the sign-ins. GitHub rotates a sign-in each time it is used, so two
 installs cannot share the crew's accounts. The host runs Container-Optimized
 OS and has no `openadlc` command; should the console be out of reach, the
 restore can run inside hostd's container, with the archive copied under
-`/var/lib/fleet` first:
+`/var/lib/openadlc` first:
 
 ```bash
 gcloud compute ssh <host> --tunnel-through-iap -- \
-  sudo docker exec -it fleet-hostd node apps/cli/bin/openadlc.mjs restore /var/lib/fleet/<archive> --take-over-sign-ins
+  sudo docker exec -it openadlc-hostd node apps/cli/bin/openadlc.mjs restore /var/lib/openadlc/<archive> --take-over-sign-ins
 ```
 
 On the cloud the secret store is Secret Manager, not files: the module sets
 `OPENADLC_SECRET_STORE=gcp` on the bridge and the host, and each ref is a secret
-named `fleet-<ref>` (labelled `fleet=secret`; both names predate OpenADLC and are kept). A write adds a version and
+named `openadlc-<ref>` (labelled `openadlc=secret`). An install made before the
+rename has them as `fleet-<ref>` (labelled `fleet=secret`) until a person
+renames it ([runbooks/rename-gcp-host.md](runbooks/rename-gcp-host.md)), and
+the store reads each under its new name and then its old one, writes it where
+it is, and makes a new one only under the new name. A write adds a version and
 destroys the ones before it, so a rotated refresh token is not left readable.
 The database password is generated by the module and kept in the
 `openadlc-database-url` secret; nothing puts it in instance metadata.
@@ -3200,8 +3207,8 @@ with new work held, the audit entries, the card in Needs you), except here:
   restart onto the `service` digest (`POST /internal/restart-onto-image`, with
   the install's secret): it refuses while a task runs, takes only
   `<mirror>/<repository>/service@sha256:…`, writes it to
-  `/var/lib/fleet/hostd-image`, flushed, answers, and exits with code 75; the
-  host's `fleet-hostd` unit pulls and starts the image the file names, or its
+  `/var/lib/openadlc/hostd-image`, flushed, answers, and exits with code 75; the
+  host's `openadlc-hostd` unit pulls and starts the image the file names, or its
   own `hostd_image` when the file is missing or malformed, and tells hostd
   which as `OPENADLC_HOSTD_IMAGE`. The run waits up to half an hour for a
   hostd that started since to report the new image. On a fresh install the
@@ -3275,13 +3282,28 @@ container: `docker exec openadlc-db pg_dump -U openadlc openadlc_db > openadlc_d
 
 **Upgrade a cloud install one release at a time.** Its bridge and its host each
 apply migrations as they start — the bridge's revision before it serves, the host
-on every `fleet-hostd` restart — so whichever rolls first changes the schema under
+on every `openadlc-hostd` restart — so whichever rolls first changes the schema under
 the other while it still runs the previous release. A migration that drops
 something is safe only when no release still running reads it. The first is
 `0019_drop_bot_teams.sql`, which drops `bots.teams`: take it only once a release
 that no longer reads or writes that column runs on both the bridge and the host. Skipping straight to it from an older release leaves one side
 failing every query that names the column until it is replaced. `openadlc up` on one
 machine restarts everything together and needs nothing extra.
+
+**A cloud install made before the rename to OpenADLC** keeps its old names on
+the host (`fleet-hostd`, `/var/lib/fleet`, the firewall's tag `fleet-host`)
+and in Secret Manager (`fleet-<ref>`, labelled `fleet=secret`), and a card in
+Needs you says so (`cloud-names`). Self-update and `openadlc cloud update`
+take it onto this release as they are: the secret store reads either name,
+hostd finds its files where its unit says, and `cloud update` picks the
+host's names on the host. The first `openadlc cloud apply` from this release's
+module renames the host and resets it, moving `/var/lib/fleet` to
+`/var/lib/openadlc` at the first boot; with `deployer_reads_app_key` it stops
+at the deployer's grant until the app key has its new name, with the old
+grant in place. Rename it on purpose, with no task running, by
+[runbooks/rename-gcp-host.md](runbooks/rename-gcp-host.md): copy the secrets,
+apply, check, and delete the old ones. A later release reads only the new
+names.
 
 A cloud install that runs release images ([installing on a
 cloud](#installing-on-a-cloud)) updates itself from Settings → System's
@@ -3322,7 +3344,7 @@ of it that names another digest now, with both, asks, then:
 2. on the host, over IAP (`gcloud compute ssh <host> --tunnel-through-iap`,
    which needs OS Login's admin role, as Owner has), pulls the service image,
    so a pull that fails changes nothing, then writes
-   `/var/lib/fleet/hostd-image` and restarts `fleet-hostd`, whose unit
+   `/var/lib/openadlc/hostd-image` and restarts `openadlc-hostd`, whose unit
    migrates and starts hostd on it, and checks hostd answered on it;
    restarting hostd ends the tasks running there, so pause work first
    (Settings → Pause work);

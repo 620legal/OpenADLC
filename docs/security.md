@@ -254,7 +254,7 @@ peering, and the connection is encrypted and checked. The instance refuses any
 connection that is not encrypted, and the bridge, hostd and the host's
 migrations connect with `sslmode=verify-ca`: the server's certificate must chain
 to the instance's own certificate authority, which the module keeps as the
-secret `<prefix>-database-ca` and puts at `/var/lib/fleet/database-ca/server-ca.pem`
+secret `<prefix>-database-ca` and puts at `/var/lib/openadlc/database-ca/server-ca.pem`
 on the bridge and the host. The certificate's name is not checked, because it
 names the instance and not the private address the clients dial. A local or
 compose install reaches its database container on the same machine without
@@ -1955,7 +1955,7 @@ Some refusals are the allowlist working, and are never a reason to widen it:
 This is enforcement in `infra/gcp`'s own cloud-init. If you replace
 `host_cloud_init`, an `infra/gcp` variable, with your own, neither of the first two
 exists, and the allowlist is yours to enforce, as is writing the database's
-certificate authority to `/var/lib/fleet/database-ca/server-ca.pem` for hostd.
+certificate authority to `/var/lib/openadlc/database-ca/server-ca.pem` for hostd.
 
 On a first GCP install, on 2026-09-26, the proxy refused a name outside the
 list and the iptables rules refused a container going round it, metadata

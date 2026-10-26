@@ -127,7 +127,7 @@ describe('where a missing token is to be stored', () => {
     process.env.OPENADLC_SECRET_STORE = 'gcp';
     const grant = await new RegistryCredentials('npm.internal.example', store).grant();
     expect(grant).toMatchObject({
-      remedy: expect.stringContaining('gcloud secrets create fleet-registry-token --labels=fleet=secret --data-file=-'),
+      remedy: expect.stringContaining('gcloud secrets create openadlc-registry-token --labels=openadlc=secret --data-file=-'),
     });
     expect(JSON.stringify(grant)).not.toContain('.secret"');
   });
