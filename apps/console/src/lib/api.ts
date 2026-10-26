@@ -1049,10 +1049,17 @@ export interface TaskPostgresServer {
   image: string;
 }
 
+/**
+ * Where each task's `DATABASE_URL` comes from: none, its database on the
+ * shared server, or one of the repository's own servers, by port; see
+ * `TaskPostgresDatabaseUrl` in `packages/shared/src/task-postgres.ts`.
+ */
+export type TaskPostgresDatabaseUrl = 'none' | 'shared' | { port: number };
+
 /** A repository's Postgres servers for its tasks, as the bridge answers them (`GET /v1/repos/:name/task-postgres`, an admin's). */
 export interface TaskPostgresView {
   /** Null for none. */
-  taskPostgres: { servers: TaskPostgresServer[]; sharedDatabase: boolean } | null;
+  taskPostgres: { servers: TaskPostgresServer[]; databaseUrl: TaskPostgresDatabaseUrl } | null;
   /** Why what is stored no longer reads; hostd refuses a task on it until it is corrected. */
   unreadable: string | null;
   /** Whether this install's hosts can give a task one: false under the local driver, null when no host is live. */

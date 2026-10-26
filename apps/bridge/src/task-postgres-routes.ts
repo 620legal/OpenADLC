@@ -48,7 +48,8 @@ export function taskPostgresSupport(
       ok: false,
       why:
         `${live.map((host) => host.name).join(', ')} ${live.length === 1 ? 'runs' : 'run'} the local driver, which has no containers to make a server in: ` +
-        "a task here starts without one, and is told so. Run hostd with the docker driver (openadlc init --driver docker, then openadlc down && openadlc up) for these to take effect.",
+        'a task here starts without one, and without the DATABASE_URL one of them would give, and is told so. ' +
+        'Run hostd with the docker driver (openadlc init --driver docker, then openadlc down && openadlc up) for these to take effect.',
     };
   }
   return { ok: null, why: 'No host has checked in for two minutes, so whether one can give a task a server of its own is not known: start hostd, and this says.' };
@@ -166,12 +167,14 @@ export function registerTaskPostgresRoutes(router: Router, deps: TaskPostgresRou
   /**
    * The whole setting, replacing what was there: `{ servers: [] }` (or null)
    * takes it away. Refused whole with what to correct, so a half-written
-   * server never reaches a task.
+   * server never reaches a task. Kept as it reads, so a body that says
+   * `sharedDatabase`, as a client from before the choice of server sends it,
+   * is stored as the `databaseUrl` it means.
    */
   router.add('PUT', '/v1/repos/:name/task-postgres', async ({ params, body, identity }) => {
     const repo = await repoNamed(params.name);
     const input = await body<unknown>().catch(() => {
-      throw new HttpFailure(400, 'send the setting as JSON: { servers: [{ port, superuser, password, database, image }], sharedDatabase }');
+      throw new HttpFailure(400, "send the setting as JSON: { servers: [{ port, superuser, password, database, image }], databaseUrl: 'none' | 'shared' | { port } }");
     });
     const read = parseTaskPostgres(input);
     if (!read.ok) throw new HttpFailure(400, read.error);

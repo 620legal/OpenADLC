@@ -19,6 +19,14 @@
  * `/v1/repos/:name/task-postgres`, an admin's), never a file in the
  * repository: the crew writes the repository, and an image or a port the
  * crew chose would run beside every task.
+ *
+ * It also says where the task's `DATABASE_URL` comes from (`databaseUrl`).
+ * A repository's Postgres suites can read it as their GitHub CI gives it, a
+ * superuser's, to create and drop roles and databases of their own; local CI
+ * runs `make ci` with what `make setup` had, so a builder cannot point it
+ * anywhere itself. Given the shared server's URL, such suites stopped at
+ * `permission denied to create role`, and given none they had nothing to
+ * read. So the setting can name one of its own servers instead.
  */
 
 /** What a task is told it has: `127.0.0.1:<port>` for each server, comma-separated, in the order the setting lists them. */
@@ -40,15 +48,26 @@ export interface TaskPostgresServer {
   image: string;
 }
 
+/**
+ * Where a task's `DATABASE_URL` comes from: `none`, so the Makefile's own
+ * `?=` defaults apply; `shared`, its database on the shared server, a plain
+ * role; or one of the setting's own servers, named by its port, as that
+ * server's superuser (`postgres://<superuser>:<password>@127.0.0.1:<port>/<database>`,
+ * which hostd builds where it puts the task's environment together). The
+ * setting holds only the port, so its password stays where the server's
+ * already is.
+ */
+export type TaskPostgresDatabaseUrl = 'none' | 'shared' | { port: number };
+
 export interface TaskPostgresSetting {
   servers: TaskPostgresServer[];
   /**
-   * Whether the task also gets its database on the shared server, as
-   * `DATABASE_URL`. Off by default: a repository that has servers of its own
-   * keeps its Makefile's defaults, and a `DATABASE_URL` from OpenADLC would
-   * override them (`?=`) with a role that cannot do what its migrations do.
+   * `none` unless a person chose otherwise: a repository that has servers of
+   * its own keeps its Makefile's defaults, and a `DATABASE_URL` from OpenADLC
+   * overrides them (`?=`). A row from before the choice existed says
+   * `sharedDatabase: true` for `shared`, and false or nothing for `none`.
    */
-  sharedDatabase: boolean;
+  databaseUrl: TaskPostgresDatabaseUrl;
 }
 
 /**
@@ -158,12 +177,11 @@ export type TaskPostgresRead = { ok: true; setting: TaskPostgresSetting | null }
 export function parseTaskPostgres(input: unknown): TaskPostgresRead {
   if (input === null || input === undefined) return { ok: true, setting: null };
   if (typeof input !== 'object' || Array.isArray(input)) {
-    return { ok: false, error: 'the setting is { servers: [{ port, superuser, password, database, image }], sharedDatabase }; send { servers: [] } to turn it off' };
+    return { ok: false, error: "the setting is { servers: [{ port, superuser, password, database, image }], databaseUrl: 'none' | 'shared' | { port } }; send { servers: [] } to turn it off" };
   }
-  const raw = input as { servers?: unknown; sharedDatabase?: unknown };
-  if (raw.sharedDatabase !== undefined && typeof raw.sharedDatabase !== 'boolean') {
-    return { ok: false, error: 'sharedDatabase is true or false: whether each task also gets a database on the shared server as DATABASE_URL' };
-  }
+  const raw = input as { servers?: unknown; databaseUrl?: unknown; sharedDatabase?: unknown };
+  const choice = databaseUrlOf(raw);
+  if (!choice.ok) return choice;
   if (!Array.isArray(raw.servers)) {
     return { ok: false, error: 'servers is a list of servers, each { port, superuser, password, database, image }; an empty list turns it off' };
   }
@@ -201,8 +219,52 @@ export function parseTaskPostgres(input: unknown): TaskPostgresRead {
     if (refused) return { ok: false, error: refused };
     servers.push({ port, superuser: (server.superuser as string).trim(), password: server.password, database: (server.database as string).trim(), image });
   }
+  const databaseUrl = choice.databaseUrl;
+  if (typeof databaseUrl === 'object' && !servers.some((server) => server.port === databaseUrl.port)) {
+    const ports = servers.map((server) => server.port).join(', ');
+    return {
+      ok: false,
+      error:
+        servers.length === 0
+          ? `DATABASE_URL is to come from the server on ${databaseUrl.port}, and there are no servers: add that server, or send databaseUrl 'none'`
+          : `DATABASE_URL is to come from the server on ${databaseUrl.port}, and none of the servers listens there: name one of theirs (${ports}), or send databaseUrl 'shared' or 'none'`,
+    };
+  }
   if (servers.length === 0) return { ok: true, setting: null };
-  return { ok: true, setting: { servers, sharedDatabase: raw.sharedDatabase === true } };
+  return { ok: true, setting: { servers, databaseUrl } };
+}
+
+const DATABASE_URL_SHAPE =
+  "databaseUrl is 'none', 'shared' or { port }: no DATABASE_URL, the task's database on the shared server, or the superuser's on the server listening on that port";
+
+/**
+ * Where `DATABASE_URL` comes from, as sent or stored. `sharedDatabase` is how
+ * a row said it before there was a choice of server, and still reads as it
+ * did; sent beside `databaseUrl` the two could say different things, so only
+ * one is taken.
+ */
+function databaseUrlOf(raw: { databaseUrl?: unknown; sharedDatabase?: unknown }): { ok: true; databaseUrl: TaskPostgresDatabaseUrl } | { ok: false; error: string } {
+  if (raw.sharedDatabase !== undefined && typeof raw.sharedDatabase !== 'boolean') {
+    return { ok: false, error: 'sharedDatabase is true or false: whether each task also gets a database on the shared server as DATABASE_URL' };
+  }
+  if (raw.databaseUrl === undefined) return { ok: true, databaseUrl: raw.sharedDatabase === true ? 'shared' : 'none' };
+  if (raw.sharedDatabase !== undefined) {
+    return { ok: false, error: "send databaseUrl alone: sharedDatabase is the older way to say databaseUrl 'shared', and the two can disagree" };
+  }
+  if (raw.databaseUrl === 'none' || raw.databaseUrl === 'shared') return { ok: true, databaseUrl: raw.databaseUrl };
+  if (raw.databaseUrl && typeof raw.databaseUrl === 'object' && !Array.isArray(raw.databaseUrl)) {
+    const given = (raw.databaseUrl as { port?: unknown }).port;
+    const port = typeof given === 'string' && /^\d+$/.test(given.trim()) ? Number(given.trim()) : given;
+    if (typeof port === 'number' && Number.isInteger(port)) return { ok: true, databaseUrl: { port } };
+  }
+  return { ok: false, error: DATABASE_URL_SHAPE };
+}
+
+/** The server whose superuser a task's `DATABASE_URL` logs in as; null when it is the shared server's or there is none. */
+export function databaseUrlServer(setting: TaskPostgresSetting | null): TaskPostgresServer | null {
+  const choice = setting?.databaseUrl;
+  if (!setting || typeof choice !== 'object') return null;
+  return setting.servers.find((server) => server.port === choice.port) ?? null;
 }
 
 /** What a task is told, as `TASK_POSTGRES_ENV` says it: where each server listens in its computer. */

@@ -9,6 +9,7 @@ import { listProviderModels, modelListCache, type AvailableModel, type ModelList
 import { engineKeyRef, getSecretStore, modelAccountRef } from '@openadlc/github';
 import {
   ATTACHMENTS_ENV,
+  databaseUrlServer,
   leaseExpiryFrom,
   parseTaskPostgres,
   TASK_POSTGRES_ENV,
@@ -18,6 +19,7 @@ import {
   type ContextDocument,
   type TaskAttachment,
   type TaskKind,
+  type TaskPostgresServer,
   type TaskPostgresSetting,
 } from '@openadlc/shared';
 import { AttachmentClient, prepareAttachments, writeAttachments } from './task-attachments.js';
@@ -106,8 +108,10 @@ interface ActiveTask {
   repoFullName: string | null;
   branch: string | null;
   /**
-   * What `make setup` ran with, which `make ci` runs with too (`localCiTarget`);
-   * for a computer adopted after a restart, the same URL rebuilt (`adopt`).
+   * What `make setup` ran with, which `make ci` runs with too (`localCiTarget`):
+   * its database on the shared server, or one of its own servers' when the
+   * repository's setting names one. For a computer adopted after a restart,
+   * the same URL rebuilt (`adopt`).
    */
   databaseUrl: string | null;
   /**
@@ -514,11 +518,13 @@ export class TaskRunner {
     // Its repository's own Postgres servers, read at each start as the bot row
     // is, so a change in Settings → Repositories applies to the next task. A
     // seat that runs checks gets them in place of its database on the shared
-    // server, unless the repository asks for both: that database's URL would
-    // override the Makefile's own defaults, with a role that cannot make roles.
-    // Not read for a seat that runs no checks, which gets neither.
+    // server, unless the repository asks for that as its DATABASE_URL: that
+    // URL overrides the Makefile's own defaults, with a role that cannot make
+    // roles. Not read for a seat that runs no checks, which gets neither.
     const taskPostgres = repo && bot.sidecarDb ? await this.taskPostgresOf(repo) : null;
     const servers = taskPostgres?.servers ?? [];
+    // The one of them whose superuser its DATABASE_URL logs in as, if any.
+    const urlServer = databaseUrlServer(taskPostgres);
 
     // The login this task's account needs, from the same resolution as its
     // model. A bot on a key or on another seat is given none, and a container
@@ -542,7 +548,7 @@ export class TaskRunner {
       login,
       cpus: bot.cpus ?? DEFAULT_CPUS,
       memoryGb: bot.memoryGb ?? DEFAULT_MEMORY_GB,
-      database: bot.sidecarDb && (servers.length === 0 || taskPostgres?.sharedDatabase === true),
+      database: bot.sidecarDb && (servers.length === 0 || taskPostgres?.databaseUrl === 'shared'),
       postgres: servers,
     });
     this.stopIfCancelled(input.taskId);
@@ -606,9 +612,6 @@ export class TaskRunner {
       mkdirSync(worktree, { recursive: true });
     }
 
-    // Its own database, emptied: a task's checks run against fixtures it owns,
-    // never against what the task before it left behind.
-    const databaseUrl = computer.databaseUrl;
     // Its own Postgres servers, taking connections. A driver with no way to
     // make one (`local`) leaves `postgres` unset; the task is told it has
     // none rather than finding out at its first connection.
@@ -616,10 +619,20 @@ export class TaskRunner {
     if (servers.length > 0 && computer.postgres === undefined) {
       console.warn(
         `[hostd] ${bot.name}: ${repo?.fullName ?? 'its repository'} asks for a Postgres server of each task's own (${taskPostgresAddresses(servers).join(', ')}), ` +
-          `which the ${this.config.driver} driver cannot give: task ${input.taskId} starts without one. Run hostd with the docker driver`,
+          `which the ${this.config.driver} driver cannot give: task ${input.taskId} starts without one` +
+          `${urlServer ? `, and without the DATABASE_URL the one on ${urlServer.port} would give` : ''}. Run hostd with the docker driver`,
       );
-      notes.push({ name: 'task-postgres.md', title: 'No Postgres server of this task’s own', content: noTaskPostgresBrief(repo?.fullName ?? null, servers, this.config.driver) });
+      notes.push({
+        name: 'task-postgres.md',
+        title: 'No Postgres server of this task’s own',
+        content: noTaskPostgresBrief(repo?.fullName ?? null, servers, this.config.driver, urlServer),
+      });
     }
+    // Its own database: on the shared server, emptied, so a task's checks run
+    // against fixtures it owns, never against what the task before it left
+    // behind; or, where its repository names one, a server of its own, made
+    // with its computer, once the driver has it taking connections.
+    const databaseUrl = !urlServer ? computer.databaseUrl : runs(postgres, urlServer) ? ownServerUrl(urlServer) : null;
     const postgresEnv: Record<string, string> = postgres.length > 0 ? { [TASK_POSTGRES_ENV]: postgres.join(',') } : {};
 
     // Its own home, in its own directory and gone with it, and its
@@ -1251,7 +1264,7 @@ export class TaskRunner {
    * with it, so there is nothing of the session's own to clean up here.
    */
   adopt(
-    task: { id: string; kind: TaskKind; branch: string | null; tmuxSession: string | null },
+    task: { id: string; kind: TaskKind; branch: string | null; tmuxSession: string | null; repoId?: string | null },
     computer: TaskComputer,
     repoFullName: string | null,
   ): void {
@@ -1287,6 +1300,23 @@ export class TaskRunner {
         if (entry) entry.installEnv = env;
       })
       .catch(() => undefined);
+    // The URL of one of its own servers is nowhere the driver rebuilds from:
+    // its password is in the repository's setting, read again here as a start
+    // reads it. Only for a server the driver found running beside the
+    // computer: a setting changed since may name a port this one has none on.
+    const postgres = computer.postgres ?? [];
+    if (computer.databaseUrl === null && postgres.length > 0 && task.repoId) {
+      void repos
+        .getTaskPostgres(task.repoId)
+        .then((stored) => {
+          const read = parseTaskPostgres(stored);
+          const server = read.ok ? databaseUrlServer(read.setting) : null;
+          const entry = this.active.get(task.id);
+          if (!server || !entry || entry.computer !== computer || !runs(postgres, server)) return;
+          entry.databaseUrl = ownServerUrl(server);
+        })
+        .catch(() => undefined);
+    }
   }
 
   /** The store a task installs from: the repository's, when the driver filled it; see `PnpmStore`. */
@@ -1330,14 +1360,41 @@ export class TaskRunner {
 }
 
 /**
+ * The `DATABASE_URL` one of a task's own servers gives it: its superuser's,
+ * on the loopback port it listens on in the task's computer. Built only here,
+ * where the task's environment is put together, from the server's own
+ * fields: the setting holds just the port it names, so the password reaches
+ * no audit row and no read-back of the setting, and the URL goes only into
+ * environments, never onto a command line (`isCredentialEnv`). Each part is
+ * percent-encoded: a password may hold `@`, `/`, `:` or `#`, and written
+ * bare one of them ends the user-info, so a client takes the rest for the
+ * host, the port or the database.
+ */
+export function ownServerUrl(server: Pick<TaskPostgresServer, 'port' | 'superuser' | 'password' | 'database'>): string {
+  const part = encodeURIComponent;
+  return `postgres://${part(server.superuser)}:${part(server.password)}@127.0.0.1:${server.port}/${part(server.database)}`;
+}
+
+/** Whether a computer has the server running, by the addresses its driver answered. */
+function runs(postgres: readonly string[], server: { port: number }): boolean {
+  return taskPostgresAddresses([server]).every((address) => postgres.includes(address));
+}
+
+/**
  * What a task is told when its repository asks for a Postgres server of its
  * own and its driver cannot give one, so it does not spend itself finding out.
  */
-export function noTaskPostgresBrief(repoFullName: string | null, servers: readonly { port: number }[], driver: string): string {
+export function noTaskPostgresBrief(
+  repoFullName: string | null,
+  servers: readonly { port: number }[],
+  driver: string,
+  urlServer: { port: number } | null = null,
+): string {
   const where = taskPostgresAddresses(servers).join(', ');
+  const url = urlServer ? `, nor is the \`DATABASE_URL\` the repository takes from the one at ${taskPostgresAddresses([urlServer]).join('')}` : '';
   return [
     `${repoFullName ?? 'This repository'} asks for a Postgres server of each task's own, at ${where}, and this install runs the ${driver} driver, ` +
-      'which has no containers to make one in. This task has none, and `OPENADLC_TASK_POSTGRES` is not set.',
+      `which has no containers to make one in. This task has none, and \`OPENADLC_TASK_POSTGRES\` is not set${url}.`,
     '',
     'Whatever the Makefile does without it (its `db` target) is what there is. If the checks cannot pass without that server, say so ' +
       'in Needs you rather than working round it: the install has to run hostd with the docker driver ' +

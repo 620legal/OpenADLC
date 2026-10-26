@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { readTaskPostgresCompose, saveTaskPostgres } from '@/app/actions';
 import { Button } from '@/components/ui/button';
-import type { TaskPostgresComposeServer, TaskPostgresServer, TaskPostgresView } from '@/lib/api';
+import type { TaskPostgresComposeServer, TaskPostgresDatabaseUrl, TaskPostgresServer, TaskPostgresView } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { safeAction } from '@/lib/safe-action';
 
@@ -24,6 +24,12 @@ import { safeAction } from '@/lib/safe-action';
  * itself from it for a repository with nothing set, and again on "Fill from
  * docker-compose.yml": a person checks them and saves, rather than typing
  * what the repository's file already said (v0.1.10). Filling saves nothing.
+ *
+ * Where each task's DATABASE_URL comes from is one of three choices: none,
+ * its database on the shared server, or one of the servers here. A
+ * repository whose Postgres suites make roles and databases of their own
+ * reads it as its GitHub CI gives it, a superuser's, and on the shared
+ * server's plain role they stopped at "permission denied to create role".
  */
 
 /** A server as the form holds it: what was typed, port included. */
@@ -56,9 +62,41 @@ const FIELDS: { field: Field; label: string; placeholder: string }[] = [
 ];
 const IMAGE = FIELDS.find(({ field }) => field === 'image')!;
 
+/** Where DATABASE_URL comes from, as the form holds it: a server by its row, which follows the row as its port is edited. */
+export interface DatabaseUrlChoice {
+  choice: 'none' | 'shared' | 'server';
+  /** The row whose server it is; null unless `choice` is `server`. */
+  key: number | null;
+}
+
 let nextKey = 1;
 function rowsOf(view: TaskPostgresView): Row[] {
   return (view.taskPostgres?.servers ?? []).map((server) => ({ key: nextKey++, ...server, port: String(server.port) }));
+}
+
+/** The form as a view holds it: its rows, and the one of them DATABASE_URL comes from, by the port it was saved with. */
+function formOf(view: TaskPostgresView): { rows: Row[]; url: DatabaseUrlChoice } {
+  const rows = rowsOf(view);
+  const saved = view.taskPostgres?.databaseUrl ?? 'none';
+  if (typeof saved !== 'object') return { rows, url: { choice: saved, key: null } };
+  const row = rows.find((one) => one.port === String(saved.port));
+  return { rows, url: row ? { choice: 'server', key: row.key } : { choice: 'none', key: null } };
+}
+
+/**
+ * Where DATABASE_URL comes from once the form is filled from the Compose
+ * file, whose rows replace those on it. With nothing saved for the
+ * repository, the first server the file starts, which a person checks with
+ * the rest before Save. With a setting saved, its choice stays: a server of
+ * its own is the filled one on the port it was saved with, or the first.
+ */
+function urlAfterFill(now: DatabaseUrlChoice, filled: readonly Row[], saved: TaskPostgresView['taskPostgres']): DatabaseUrlChoice {
+  const first = filled[0]?.key ?? null;
+  if (!saved) return first === null ? now : { choice: 'server', key: first };
+  if (now.choice !== 'server') return now;
+  const port = typeof saved.databaseUrl === 'object' ? String(saved.databaseUrl.port) : null;
+  const key = filled.find((row) => row.port === port)?.key ?? first;
+  return key === null ? { choice: 'none', key: null } : { choice: 'server', key };
 }
 
 /** A server the Compose file starts, as a row to check: its port empty where the file publishes none. */
@@ -66,15 +104,32 @@ function rowFrom({ service, port, notes, refusal, ...server }: TaskPostgresCompo
   return { key: nextKey++, ...server, port: port === null ? '' : String(port), from: { service, notes, refusal } };
 }
 
-/** What a save sends: the port as typed, which the bridge reads as digits or refuses. */
-export function settingOf(rows: readonly Row[], sharedDatabase: boolean): { servers: TaskPostgresServer[]; sharedDatabase: boolean } {
+/** A port as typed: digits as the number, anything else as it is, for the bridge to refuse with what to do. */
+function portOf(port: string): number {
+  return /^\d+$/.test(port.trim()) ? Number(port.trim()) : (port as unknown as number);
+}
+
+/** What a save sends: each port as typed, and DATABASE_URL's server by the port its row has now. */
+export function settingOf(rows: readonly Row[], url: DatabaseUrlChoice): { servers: TaskPostgresServer[]; databaseUrl: TaskPostgresDatabaseUrl } {
+  const server = url.choice === 'server' ? rows.find((row) => row.key === url.key) : undefined;
   return {
-    servers: rows.map(({ key: _key, from: _from, port, ...rest }) => ({ ...rest, port: /^\d+$/.test(port.trim()) ? Number(port.trim()) : (port as unknown as number) })),
-    sharedDatabase,
+    servers: rows.map(({ key: _key, from: _from, port, ...rest }) => ({ ...rest, port: portOf(port) })),
+    databaseUrl: url.choice !== 'server' ? url.choice : server ? { port: portOf(server.port) } : 'none',
   };
 }
 
 const LABELS: Readonly<Record<Field, string>> = { port: 'Port', superuser: 'Superuser', password: 'Password', database: 'Database', image: 'Image' };
+
+/** The DATABASE_URL a server gives, as the form shows it: its password not repeated, its fields as typed. */
+function urlOf(row: Row): string {
+  return `postgres://${row.superuser.trim() || '<superuser>'}:<its password>@127.0.0.1:${row.port.trim() || '<port>'}/${row.database.trim() || '<database>'}`;
+}
+
+/** The first two of the three choices, in the words the form gives them; the third names a server. */
+const CHOICES: { choice: 'none' | 'shared'; text: string }[] = [
+  { choice: 'none', text: 'None, so the Makefile’s own default applies' },
+  { choice: 'shared', text: 'Its database on the shared server, a plain role that cannot make roles' },
+];
 
 /** The services a fill took, as a person reads them: "its postgres service". */
 function servicesOf(servers: readonly TaskPostgresComposeServer[]): string {
@@ -85,8 +140,9 @@ function servicesOf(servers: readonly TaskPostgresComposeServer[]): string {
 
 export function TaskPostgresSection({ repo, initial }: { repo: string; initial: TaskPostgresView }) {
   const [view, setView] = useState(initial);
-  const [rows, setRows] = useState<Row[]>(() => rowsOf(initial));
-  const [shared, setShared] = useState(initial.taskPostgres?.sharedDatabase ?? false);
+  const [start] = useState(() => formOf(initial));
+  const [rows, setRows] = useState<Row[]>(start.rows);
+  const [url, setUrl] = useState<DatabaseUrlChoice>(start.url);
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
   const [pending, startTransition] = useTransition();
   /** What the last fill from the Compose file said; `asked` when a person pressed for it. */
@@ -95,7 +151,7 @@ export function TaskPostgresSection({ repo, initial }: { repo: string; initial: 
   /** Whether the person has changed the form, which a fill they did not ask for then leaves alone. */
   const touched = useRef(false);
   const firstFill = useRef(false);
-  const box = useRef<HTMLInputElement>(null);
+  const choices = useRef<HTMLFieldSetElement>(null);
   const id = `${repo}-task-postgres`;
 
   const change = (key: number, field: Field, value: string) => {
@@ -129,7 +185,9 @@ export function TaskPostgresSection({ repo, initial }: { repo: string; initial: 
       const compose = result.compose;
       if (!result.ok || !compose) return setFilled({ ok: false, text: `Not filled from the repository's Compose file: ${result.error ?? 'the bridge did not answer'}`, notes: [], asked });
       if (!compose.ok) return setFilled({ ok: false, text: `Not filled: ${compose.why}`, notes: [], asked });
-      setRows(compose.servers.map(rowFrom));
+      const filledRows = compose.servers.map(rowFrom);
+      setRows(filledRows);
+      setUrl((now) => urlAfterFill(now, filledRows, view.taskPostgres));
       setFilled({
         ok: true,
         text:
@@ -151,24 +209,40 @@ export function TaskPostgresSection({ repo, initial }: { repo: string; initial: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // The box shows what the state holds, which is what Save sends, from
+  // The choices show what the state holds, which is what Save sends, from
   // hydration on. React keeps the tick a box has when it hydrates, so a tick
   // a browser restored before the script ran stayed on screen, while Save
-  // sent false, until the section next rendered. `autoComplete="off"` asks a
-  // browser not to restore one; this holds when one does anyway.
+  // sent false, until the section next rendered (v0.1.10's shared-database
+  // box). `autoComplete="off"` asks a browser not to restore one; this holds
+  // when one does anyway. Every radio is set, even one already showing
+  // right: checking one unchecks the rest without React knowing, and a
+  // restored radio React still took for checked ignored the click that
+  // chose it, so Save sent the choice before.
+  const urlIndex = url.choice === 'server' ? rows.findIndex((row) => row.key === url.key) : -1;
+  const urlRow = rows[urlIndex];
   useEffect(() => {
-    if (box.current && box.current.checked !== shared) box.current.checked = shared;
-  }, [shared]);
+    for (const radio of choices.current?.querySelectorAll<HTMLInputElement>('input[type="radio"]') ?? []) radio.checked = radio.value === url.choice;
+    const select = choices.current?.querySelector('select');
+    const shown = String(Math.max(urlIndex, 0));
+    if (select && select.value !== shown) select.value = shown;
+  }, [url.choice, urlIndex, rows.length]);
+
+  const choose = (choice: DatabaseUrlChoice['choice'], index = Math.max(urlIndex, 0)) => {
+    setSaid(null);
+    touched.current = true;
+    setUrl(choice === 'server' ? { choice, key: rows[index]?.key ?? null } : { choice, key: null });
+  };
 
   const save = () => {
     setSaid(null);
     touched.current = true;
     startTransition(async () => {
-      const result = await safeAction(() => saveTaskPostgres(repo, settingOf(rows, shared)));
+      const result = await safeAction(() => saveTaskPostgres(repo, settingOf(rows, url)));
       if (!result.ok || !result.view) return setSaid({ ok: false, text: result.error ?? 'the bridge refused it' });
+      const saved = formOf(result.view);
       setView(result.view);
-      setRows(rowsOf(result.view));
-      setShared(result.view.taskPostgres?.sharedDatabase ?? false);
+      setRows(saved.rows);
+      setUrl(saved.url);
       // What the fill said to check was before the save; the form is now what is stored.
       setFilled(null);
       setSaid({ ok: true, text: result.view.taskPostgres ? 'Saved: the next task here gets them.' : 'Saved: its tasks have no server of their own.' });
@@ -252,6 +326,8 @@ export function TaskPostgresSection({ repo, initial }: { repo: string; initial: 
                     setSaid(null);
                     touched.current = true;
                     setRows((all) => all.filter((one) => one.key !== row.key));
+                    // Not another server's in its place: that is a different superuser, database and data.
+                    setUrl((now) => (now.choice === 'server' && now.key === row.key ? { choice: 'none', key: null } : now));
                   }}>
                   Remove
                 </Button>
@@ -289,28 +365,51 @@ export function TaskPostgresSection({ repo, initial }: { repo: string; initial: 
         Images: {view.images.join(' or ')}, pinned by adding @sha256:&lt;digest&gt; if you want the same server on every task.
       </p>
 
-      <div className="flex flex-col gap-1">
-        {/* Only the box and its words take a click. A column stretches its items, so
-            the label spanned the form, and a click anywhere on its line ticked the box.
-            On v0.1.10 it showed ticked with nothing saved, after an added server and a
-            refused Save, each of which puts the state back on the box: a click had
-            ticked it, and this line is where one lands without meaning to. */}
-        <label className="inline-flex items-center gap-2 self-start text-[12.5px] text-soft">
-          {/* autoComplete off: a browser restores a box's tick on reload or Back, and
-              React keeps the tick it finds when it hydrates, so a tick never saved
-              would show as though the setting held it, while Save sent false. */}
-          <input ref={box} type="checkbox" checked={shared} disabled={pending} autoComplete="off" aria-describedby={`${id}-shared`} onChange={(event) => {
-              setSaid(null);
-              touched.current = true;
-              setShared(event.target.checked);
-            }} />
-          Also give each task its database on the shared server, as DATABASE_URL
-        </label>
-        <p id={`${id}-shared`} className="pl-6 text-[11.5px] leading-snug text-dim">
-          Leave it off when the repository’s Makefile defaults its own: a DATABASE_URL takes the place of the
-          Makefile’s own default (DATABASE_URL ?= …), and what reads it reaches the shared server, not the servers above.
-        </p>
-      </div>
+      {rows.length > 0 && (
+        <fieldset ref={choices} aria-describedby={`${id}-database-url`} className="flex flex-col gap-1.5">
+          <legend className="mb-1 text-[12.5px] font-medium text-soft">Each task’s DATABASE_URL</legend>
+          {/* Only each choice and its words take a click. A column stretches its items,
+              so a label spanned the form, and a click anywhere on its line chose it:
+              on v0.1.10 the shared-database box showed ticked with nothing saved. */}
+          {CHOICES.map(({ choice, text }) => (
+            <label key={choice} className="inline-flex items-center gap-2 self-start text-[12.5px] text-soft">
+              {/* autoComplete off: a browser restores a choice on reload or Back, and React
+                  keeps what it finds when it hydrates, while Save sends what the state holds. */}
+              <input type="radio" name={`${id}-database-url`} value={choice} checked={url.choice === choice} disabled={pending} autoComplete="off" onChange={() => choose(choice)} />
+              {text}
+            </label>
+          ))}
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex items-center gap-2 self-start text-[12.5px] text-soft">
+              <input type="radio" name={`${id}-database-url`} value="server" checked={url.choice === 'server'} disabled={pending} autoComplete="off" onChange={() => choose('server')} />
+              One of the servers above, as its superuser
+            </label>
+            <select
+              aria-label="The server DATABASE_URL comes from"
+              value={String(Math.max(urlIndex, 0))}
+              disabled={pending}
+              autoComplete="off"
+              onChange={(event) => choose('server', Number(event.target.value))}
+              className="h-8 rounded-md border border-edge-strong bg-panel px-2 font-mono text-[12px] text-body"
+            >
+              {rows.map((row, index) => (
+                <option key={row.key} value={String(index)}>
+                  {`Server ${index + 1}${row.port.trim() ? ` (127.0.0.1:${row.port.trim()})` : ''}`}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p id={`${id}-database-url`} className="pl-6 text-[11.5px] leading-snug text-dim">
+            {urlRow && (
+              <>
+                The task gets <span className="font-mono">{urlOf(urlRow)}</span>, for checks that make roles and databases of their own.{' '}
+              </>
+            )}
+            A DATABASE_URL takes the place of the Makefile’s own default (DATABASE_URL ?= …): choose none when that default is what its checks
+            should reach.
+          </p>
+        </fieldset>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" disabled={pending} onClick={() => {

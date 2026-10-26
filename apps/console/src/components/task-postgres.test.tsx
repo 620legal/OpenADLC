@@ -40,6 +40,8 @@ function view(over: Partial<TaskPostgresView> = {}): TaskPostgresView {
 }
 
 const html = (initial: TaskPostgresView) => renderToStaticMarkup(<TaskPostgresSection repo="app" initial={initial} />).replace(/<!-- -->/g, '');
+/** Which DATABASE_URL choice a rendered page shows, by its value. */
+const chosenIn = (page: string) => [...page.matchAll(/<input type="radio"[^>]*>/g)].find(([tag]) => tag.includes(' checked=""'))?.[0].match(/value="([^"]+)"/)?.[1] ?? null;
 
 let container: HTMLDivElement;
 let root: Root;
@@ -68,10 +70,22 @@ function type(label: string, value: string): void {
 }
 
 const button = (text: string) => [...container.querySelectorAll('button')].find((one) => one.textContent?.trim() === text)!;
+const radios = () => [...container.querySelectorAll<HTMLInputElement>('fieldset input[type="radio"]')];
+const choiceTexts = () => radios().map((radio) => radio.closest('label')?.textContent?.trim());
+/** Which DATABASE_URL choice the form shows, by its value: none, shared or server. */
+const chosen = () => radios().find((radio) => radio.checked)?.value ?? null;
+/** Chooses as a person does, by clicking it. */
+const choose = (value: string) => radios().find((radio) => radio.value === value)!.click();
+/** Picks the server DATABASE_URL comes from, by its place in the list. */
+function pick(index: number): void {
+  const select = container.querySelector<HTMLSelectElement>('select[aria-label="The server DATABASE_URL comes from"]')!;
+  select.value = String(index);
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+}
 
 describe('a repository’s Postgres servers for its tasks, in its settings', () => {
   it('shows each stored server with what it was given, and what the task is told', () => {
-    const page = html(view({ taskPostgres: { servers: [APP], sharedDatabase: false } }));
+    const page = html(view({ taskPostgres: { servers: [APP], databaseUrl: 'none' } }));
 
     expect(page).toContain('Postgres for its tasks');
     expect(page).toContain('value="55432"');
@@ -94,7 +108,7 @@ describe('a repository’s Postgres servers for its tasks, in its settings', () 
   });
 
   it('saves the servers a person typed, whole, and shows what the bridge then holds', async () => {
-    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [APP], sharedDatabase: false } }) });
+    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [APP], databaseUrl: 'none' } }) });
     await act(async () => root.render(<TaskPostgresSection repo="app" initial={view()} />));
 
     await act(async () => button('Add a server').click());
@@ -106,13 +120,13 @@ describe('a repository’s Postgres servers for its tasks, in its settings', () 
     });
     await act(async () => button('Save').click());
 
-    expect(saveTaskPostgres).toHaveBeenCalledWith('app', { servers: [APP], sharedDatabase: false });
+    expect(saveTaskPostgres).toHaveBeenCalledWith('app', { servers: [APP], databaseUrl: 'none' });
     expect(container.textContent).toContain('Saved: the next task here gets them.');
   });
 
   it('keeps what was typed and says the bridge’s refusal, which says what to correct', async () => {
     vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: false, error: "someone/postgres:16 is not an image a task's server may run: use pgvector/pgvector:<tag> or postgres:<tag>" });
-    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [APP], sharedDatabase: false } })} />));
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [APP], databaseUrl: 'none' } })} />));
 
     await act(async () => type('Server 1 image', 'someone/postgres:16'));
     await act(async () => button('Save').click());
@@ -123,12 +137,12 @@ describe('a repository’s Postgres servers for its tasks, in its settings', () 
 
   it('takes every server away when the last is removed and saved', async () => {
     vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view() });
-    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [APP], sharedDatabase: true } })} />));
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [APP], databaseUrl: 'shared' } })} />));
 
     await act(async () => button('Remove').click());
     await act(async () => button('Save').click());
 
-    expect(saveTaskPostgres).toHaveBeenCalledWith('app', { servers: [], sharedDatabase: true });
+    expect(saveTaskPostgres).toHaveBeenCalledWith('app', { servers: [], databaseUrl: 'shared' });
     expect(container.textContent).toContain('Saved: its tasks have no server of their own.');
   });
 
@@ -153,27 +167,33 @@ describe('a repository’s Postgres servers for its tasks, in its settings', () 
     await act(async () => button('Save').click());
     expect(saveTaskPostgres).toHaveBeenCalledWith('app', {
       servers: [{ port: '', superuser: '', password: '', database: '', image: 'pgvector/pgvector:pg16' }],
-      sharedDatabase: false,
+      databaseUrl: 'none',
     });
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(`Not saved: ${refusal}`);
   });
 
-  it('starts the shared-database box unticked for a new setting, and says a DATABASE_URL takes the place of the Makefile’s default', async () => {
-    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [APP], sharedDatabase: false } }) });
+  it('offers three choices of DATABASE_URL, none until a person chooses, and says it takes the place of the Makefile’s default', async () => {
+    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [APP], databaseUrl: 'none' } }) });
     await act(async () => root.render(<TaskPostgresSection repo="app" initial={view()} />));
+    expect(container.querySelector('fieldset')).toBeNull();
     await act(async () => button('Add a server').click());
 
-    const box = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-    expect(box.closest('label')?.textContent).toContain('Also give each task its database on the shared server, as DATABASE_URL');
-    expect(box.checked).toBe(false);
-    // A flex column stretches its items: the label, and the click that ticks the box, took the whole line.
-    expect(box.closest('label')?.parentElement?.className).toMatch(/\bflex-col\b/);
-    expect(box.closest('label')?.className).toMatch(/\bself-start\b/);
-    // A tick a browser restores on reload is one React keeps when it hydrates, whatever the setting holds.
-    expect(box.getAttribute('autocomplete')).toBe('off');
-    const said = document.getElementById(box.getAttribute('aria-describedby') ?? '')?.textContent ?? '';
-    expect(said).toContain('a DATABASE_URL takes the place of the Makefile’s own default (DATABASE_URL ?= …)');
-    expect(said).toContain('Leave it off when the repository’s Makefile defaults its own');
+    const fieldset = container.querySelector('fieldset')!;
+    expect(fieldset.querySelector('legend')?.textContent).toBe('Each task’s DATABASE_URL');
+    expect(choiceTexts()).toEqual([
+      'None, so the Makefile’s own default applies',
+      'Its database on the shared server, a plain role that cannot make roles',
+      'One of the servers above, as its superuser',
+    ]);
+    expect(chosen()).toBe('none');
+    for (const radio of radios()) {
+      // A flex column stretches its items: a label, and the click that chooses it, took the whole line.
+      expect(radio.closest('label')?.className).toMatch(/\bself-start\b/);
+      // A choice a browser restores on reload is one React keeps when it hydrates, whatever the setting holds.
+      expect(radio.getAttribute('autocomplete')).toBe('off');
+    }
+    const said = document.getElementById(fieldset.getAttribute('aria-describedby') ?? '')?.textContent ?? '';
+    expect(said).toContain('A DATABASE_URL takes the place of the Makefile’s own default (DATABASE_URL ?= …)');
 
     await act(async () => {
       type('Server 1 port', '55432');
@@ -182,60 +202,102 @@ describe('a repository’s Postgres servers for its tasks, in its settings', () 
       type('Server 1 database', 'app_db');
     });
     await act(async () => button('Save').click());
-    expect(saveTaskPostgres).toHaveBeenCalledWith('app', { servers: [APP], sharedDatabase: false });
-
-    // A saved setting that holds it is shown as it holds it.
-    expect(html(view({ taskPostgres: { servers: [APP], sharedDatabase: true } }))).toMatch(/<input type="checkbox"[^>]* checked=""/);
-    expect(html(view({ taskPostgres: { servers: [APP], sharedDatabase: false } }))).not.toMatch(/<input type="checkbox"[^>]* checked=""/);
+    expect(saveTaskPostgres).toHaveBeenCalledWith('app', { servers: [APP], databaseUrl: 'none' });
   });
 
-  it('hydrates the box unticked when the setting holds it off, whatever tick the browser put on it before the page’s script ran', async () => {
-    // The server renders it unticked, a tick is on it by the time React
-    // hydrates, and React keeps the tick it finds until the section renders again.
-    const initial = view({ taskPostgres: { servers: [APP], sharedDatabase: false } });
+  it('shows a stored choice as it is stored, a server of its own by its port, and its URL without the password', () => {
+    const vectors = { ...APP, port: 55433, password: 'vectors-local', database: 'vectors' };
+    const page = html(view({ taskPostgres: { servers: [APP, vectors], databaseUrl: { port: 55433 } } }));
+
+    expect(chosenIn(page)).toBe('server');
+    expect(page).toMatch(/<option value="1" selected="">Server 2 \(127\.0\.0\.1:55433\)<\/option>/);
+    expect(page).toContain('The task gets <span class="font-mono">postgres://app:&lt;its password&gt;@127.0.0.1:55433/vectors</span>');
+    expect(chosenIn(html(view({ taskPostgres: { servers: [APP], databaseUrl: 'shared' } })))).toBe('shared');
+    expect(chosenIn(html(view({ taskPostgres: { servers: [APP], databaseUrl: 'none' } })))).toBe('none');
+  });
+
+  it('saves each of the three choices as the bridge reads them, a server by the port its row has now', async () => {
+    const vectors = { ...APP, port: 55433, database: 'vectors' };
+    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: false, error: 'held for the test' });
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [APP, vectors], databaseUrl: 'none' } })} />));
+
+    await act(async () => choose('shared'));
+    await act(async () => button('Save').click());
+    expect(vi.mocked(saveTaskPostgres).mock.calls.at(-1)?.[1]).toMatchObject({ databaseUrl: 'shared' });
+
+    await act(async () => pick(1));
+    expect(chosen()).toBe('server');
+    expect(container.querySelector('fieldset p')?.textContent).toContain('postgres://app:<its password>@127.0.0.1:55433/vectors');
+    await act(async () => type('Server 2 port', '55434'));
+    await act(async () => button('Save').click());
+    expect(vi.mocked(saveTaskPostgres).mock.calls.at(-1)?.[1]).toEqual({ servers: [APP, { ...vectors, port: 55434 }], databaseUrl: { port: 55434 } });
+
+    await act(async () => choose('none'));
+    await act(async () => button('Save').click());
+    expect(vi.mocked(saveTaskPostgres).mock.calls.at(-1)?.[1]).toMatchObject({ databaseUrl: 'none' });
+  });
+
+  it('gives no DATABASE_URL once the server it came from is removed, rather than another server’s', async () => {
+    const vectors = { ...APP, port: 55433, database: 'vectors' };
+    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: false, error: 'held for the test' });
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [APP, vectors], databaseUrl: { port: 55433 } } })} />));
+    expect(chosen()).toBe('server');
+
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>('li[data-server="2"] button')].find((one) => one.textContent?.trim() === 'Remove')!.click());
+    expect(chosen()).toBe('none');
+    await act(async () => button('Save').click());
+    expect(saveTaskPostgres).toHaveBeenCalledWith('app', { servers: [APP], databaseUrl: 'none' });
+  });
+
+  it('hydrates the choices as the setting holds them, whatever the browser restored before the page’s script ran', async () => {
+    // The server renders "none" chosen, another choice is on it by the time
+    // React hydrates, and React keeps what it finds until the section renders again.
+    const initial = view({ taskPostgres: { servers: [APP], databaseUrl: 'none' } });
     const page = document.createElement('div');
     document.body.appendChild(page);
     page.innerHTML = renderToString(<TaskPostgresSection repo="app" initial={initial} />);
-    const restored = page.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    const restored = page.querySelector<HTMLInputElement>('input[type="radio"][value="shared"]')!;
     restored.checked = true;
 
     let hydrated: Root | null = null;
     await act(async () => {
       hydrated = hydrateRoot(page, <TaskPostgresSection repo="app" initial={initial} />);
     });
-    const box = page.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-    expect(box).toBe(restored);
-    expect(box.checked).toBe(false);
+    expect(page.querySelector<HTMLInputElement>('input[type="radio"][value="shared"]')).toBe(restored);
+    expect(restored.checked).toBe(false);
+    expect(page.querySelector<HTMLInputElement>('input[type="radio"][value="none"]')!.checked).toBe(true);
 
-    // Ticked by the person, it is ticked, and Save sends what it shows.
-    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [APP], sharedDatabase: true } }) });
-    await act(async () => box.click());
-    expect(box.checked).toBe(true);
+    // Chosen by the person, it is chosen, and Save sends what it shows.
+    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [APP], databaseUrl: 'shared' } }) });
+    await act(async () => restored.click());
+    expect(restored.checked).toBe(true);
     await act(async () => [...page.querySelectorAll('button')].find((one) => one.textContent?.trim() === 'Save')!.click());
-    expect(vi.mocked(saveTaskPostgres).mock.calls[0]?.[1]).toMatchObject({ sharedDatabase: true });
+    expect(vi.mocked(saveTaskPostgres).mock.calls[0]?.[1]).toMatchObject({ databaseUrl: 'shared' });
     act(() => hydrated?.unmount());
     page.remove();
   });
 
-  it('hydrates the box ticked when the saved setting holds it, whatever the browser left on it', async () => {
-    const initial = view({ taskPostgres: { servers: [APP], sharedDatabase: true } });
+  it('hydrates a server of its own as chosen when the saved setting holds it, whatever the browser left on it', async () => {
+    const initial = view({ taskPostgres: { servers: [APP], databaseUrl: { port: 55432 } } });
     const page = document.createElement('div');
     document.body.appendChild(page);
     page.innerHTML = renderToString(<TaskPostgresSection repo="app" initial={initial} />);
-    page.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked = false;
+    page.querySelector<HTMLInputElement>('input[type="radio"][value="none"]')!.checked = true;
 
     let hydrated: Root | null = null;
     await act(async () => {
       hydrated = hydrateRoot(page, <TaskPostgresSection repo="app" initial={initial} />);
     });
-    expect(page.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(true);
+    expect(page.querySelector<HTMLInputElement>('input[type="radio"][value="server"]')!.checked).toBe(true);
+    expect(page.querySelector<HTMLInputElement>('input[type="radio"][value="none"]')!.checked).toBe(false);
     act(() => hydrated?.unmount());
     page.remove();
   });
 
   it('sends a port that is not digits as typed, for the bridge to refuse with what to do', () => {
     const rows = [{ key: 1, ...APP, port: 'five' }];
-    expect(settingOf(rows, false).servers[0]?.port).toBe('five');
+    expect(settingOf(rows, { choice: 'none', key: null }).servers[0]?.port).toBe('five');
+    expect(settingOf(rows, { choice: 'server', key: 1 }).databaseUrl).toEqual({ port: 'five' });
   });
 });
 
@@ -245,7 +307,7 @@ describe('filling it from the repository’s Compose file', () => {
 
   it('starts a repository with nothing set filled from its docker-compose.yml, and saves nothing until Save', async () => {
     vi.mocked(readTaskPostgresCompose).mockResolvedValue({ ok: true, compose: APP_COMPOSE });
-    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [APP], sharedDatabase: false } }) });
+    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: true, view: view({ taskPostgres: { servers: [APP], databaseUrl: 'none' } }) });
 
     await act(async () => root.render(<TaskPostgresSection repo="app" initial={view()} />));
 
@@ -256,17 +318,43 @@ describe('filling it from the repository’s Compose file', () => {
     expect(status).toContain('Nothing is saved until you do.');
     expect(status).toContain('pinning one with @sha256:<digest> is optional');
     expect(saveTaskPostgres).not.toHaveBeenCalled();
-    expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(false);
+    // Nothing about DATABASE_URL was saved, so the server the file starts is offered as it.
+    expect(chosen()).toBe('server');
+    expect(container.querySelector('fieldset p')?.textContent).toContain('postgres://app:<its password>@127.0.0.1:55432/app_db');
 
     await act(async () => button('Save').click());
-    expect(saveTaskPostgres).toHaveBeenCalledWith('app', { servers: [APP], sharedDatabase: false });
+    expect(saveTaskPostgres).toHaveBeenCalledWith('app', { servers: [APP], databaseUrl: { port: 55432 } });
     expect(container.textContent).toContain('Saved: the next task here gets them.');
     expect(container.textContent).not.toContain('Nothing is saved until you do.');
   });
 
+  it('keeps a saved choice when filled, a server of its own as the filled one on its port', async () => {
+    const twoServers: TaskPostgresCompose = {
+      ...APP_COMPOSE,
+      servers: [
+        { service: 'postgres', ...APP, notes: [], refusal: null },
+        { service: 'vectors', ...APP, port: 55433, database: 'vectors', notes: [], refusal: null },
+      ],
+    };
+    vi.mocked(readTaskPostgresCompose).mockResolvedValue({ ok: true, compose: twoServers });
+    vi.mocked(saveTaskPostgres).mockResolvedValue({ ok: false, error: 'held for the test' });
+
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [APP], databaseUrl: 'shared' } })} />));
+    await act(async () => button('Fill from docker-compose.yml').click());
+    expect(chosen()).toBe('shared');
+    act(() => root.unmount());
+
+    root = createRoot(container);
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [{ ...APP, port: 55433 }], databaseUrl: { port: 55433 } } })} />));
+    await act(async () => button('Fill from docker-compose.yml').click());
+    expect(chosen()).toBe('server');
+    await act(async () => button('Save').click());
+    expect(vi.mocked(saveTaskPostgres).mock.calls.at(-1)?.[1]).toMatchObject({ databaseUrl: { port: 55433 } });
+  });
+
   it('starts a repository with a setting as it is stored, and fills from the file only when asked', async () => {
     vi.mocked(readTaskPostgresCompose).mockResolvedValue({ ok: true, compose: APP_COMPOSE });
-    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [{ ...APP, port: 55499 }], sharedDatabase: false } })} />));
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [{ ...APP, port: 55499 }], databaseUrl: 'none' } })} />));
 
     expect(readTaskPostgresCompose).not.toHaveBeenCalled();
     expect(field(1, 'port')?.value).toBe('55499');
@@ -320,7 +408,7 @@ describe('filling it from the repository’s Compose file', () => {
       ok: true,
       compose: { ok: false, file: 'docker-compose.yml', branch: 'main', why: 'docker-compose.yml has no Postgres service: none of its services runs pgvector/pgvector or postgres (cache (redis:7))' },
     });
-    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [APP], sharedDatabase: false } })} />));
+    await act(async () => root.render(<TaskPostgresSection repo="app" initial={view({ taskPostgres: { servers: [APP], databaseUrl: 'none' } })} />));
 
     await act(async () => button('Fill from docker-compose.yml').click());
 

@@ -1374,7 +1374,8 @@ Postgres per host, published on the host's gateway only): a role and a database
 named after the task, made from a template that already has `vector`,
 `pgcrypto`, `citext` and `uuid-ossp`, closed to every other role, and dropped
 with the task's computer. `DATABASE_URL` in the task's environment points at that
-and nothing else, and hostd runs the repository's `make setup` against it — so a
+and nothing else (unless its repository has Postgres servers of its own, below),
+and hostd runs the repository's `make setup` against it — so a
 task's checks run on fixtures it owns, never on what the task before it left
 behind and never on anything another task or the platform can see.
 
@@ -1432,10 +1433,12 @@ Nothing is saved until a person presses Save, which checks the form as it
 checks anything typed. A file that does not read, or that starts no Postgres
 service, is said on the form.
 
-| Use | When |
-|---|---|
-| `sidecarDb` alone (the shared server's database, as `DATABASE_URL`) | The repository's checks need a database and nothing of the server's: no roles of their own, no superuser, any port |
-| Postgres for its tasks | They make roles, need a superuser, or connect where the Makefile's defaults say (`127.0.0.1:55432`) |
+| Use | The task's `DATABASE_URL` | When |
+|---|---|---|
+| `sidecarDb` alone | Its database on the shared server | The repository's checks need a database and nothing of the server's: no roles of their own, no superuser, any port |
+| Postgres for its tasks, `DATABASE_URL` none | None, so the Makefile's own `?=` defaults apply | They make roles, need a superuser, or connect where the Makefile's defaults say (`127.0.0.1:55432`) |
+| Postgres for its tasks, `DATABASE_URL` from one of its servers | That server's superuser's: `postgres://<superuser>:<password>@127.0.0.1:<port>/<database>` | Their suites read `DATABASE_URL`, as the repository's GitHub CI gives them a superuser's, and create and drop roles and databases of their own |
+| Postgres for its tasks, `DATABASE_URL` the shared server's | Its database on the shared server, a plain role | Something besides the servers needs that database, and nothing reading `DATABASE_URL` makes roles |
 
 What a task of a `sidecarDb: true` seat in that repository gets, under the
 `docker` driver:
@@ -1458,11 +1461,34 @@ What a task of a `sidecarDb: true` seat in that repository gets, under the
 - The task is told where they are as `OPENADLC_TASK_POSTGRES`
   (`127.0.0.1:55432`, comma-separated for more than one), in `make setup`, the
   session and `make ci`.
-- It gets no `DATABASE_URL` from OpenADLC unless the setting asks for that as
-  well, so the Makefile's own `?=` defaults apply. The form's "Also give each
-  task its database on the shared server" box, unticked until a person ticks
-  it, asks for it, and then that `DATABASE_URL` takes the place of the
-  Makefile's own default.
+- Its `DATABASE_URL` is the one the setting chooses, under **Each task's
+  DATABASE_URL**, in `make setup`, the session and `make ci` alike. A
+  `DATABASE_URL` from OpenADLC takes the place of the Makefile's own default
+  (`DATABASE_URL ?= …`), so there are three choices:
+  - **None**, the default: no `DATABASE_URL` from OpenADLC, so the Makefile's
+    own `?=` defaults apply.
+  - **Its database on the shared server**: what a `sidecarDb` seat gets
+    without servers of its own, a plain role that cannot make roles.
+  - **One of the servers above**, chosen by its port:
+    `postgres://<superuser>:<password>@127.0.0.1:<port>/<database>`, that
+    server's superuser, for suites that read `DATABASE_URL` as the
+    repository's GitHub CI gives it and make roles and databases of their
+    own. hostd builds it from the server's fields where it puts the task's
+    environment together, each part percent-encoded, and passes it by name,
+    never on a command line. The setting keeps only the port, so the
+    password is in no audit row and no read-back of the setting. A computer
+    hostd takes back after a restart has it again for local CI, read from
+    the setting, when that server is among those found running beside it.
+
+  Through the API it is `databaseUrl`: `"none"`, `"shared"` or
+  `{ "port": 55432 }`, which must be one of the servers' ports; anything else
+  is refused with what to send. A setting saved before there was a choice
+  reads as it did: `sharedDatabase: true` is `"shared"`, and `false` or
+  nothing is `"none"`. A body that still sends `sharedDatabase` is stored as
+  the `databaseUrl` it means; one that sends both is refused. When the form
+  fills itself from the Compose file and nothing was saved for the repository
+  before, it offers the first server it found as the `DATABASE_URL`; a
+  person still checks it and presses Save.
 
 A repository's `db` target should start nothing when the server is there:
 
@@ -1482,7 +1508,8 @@ as they do on a laptop.
 
 The `local` driver has no containers to make one in. There the setting page
 says so, hostd logs it at each task start, and the task is told it has no
-server of its own rather than finding out at its first connection.
+server of its own, nor the `DATABASE_URL` one of them would give, rather than
+finding out at its first connection.
 
 On the cloud host the image is pulled by the host's Docker daemon from Docker
 Hub, as `openadlc-taskdb`'s is (`infra/gcp/cloud-init/host.yaml`).
