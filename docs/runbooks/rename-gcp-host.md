@@ -222,8 +222,8 @@ for old in $(gcloud secrets list --project "$project" --format='value(name.basen
 done
 ```
 
-The `cloud-names` card clears at the check's next run, within the hour, or at
-once with Check again on the card.
+The `cloud-names` card clears at the check's next run, within the hour. It
+has no Check again: its one button opens this runbook.
 
 ## If that does not work
 
