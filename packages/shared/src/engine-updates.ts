@@ -22,7 +22,8 @@ export type EnginePackage = (typeof ENGINE_PACKAGES)[EngineCli];
  * What Settings → System can update in the bots' image.
  *
  * The three engine CLIs, the GitHub CLI and Node. pnpm, the Debian packages,
- * uv, a repository's own toolchain and OpenADLC itself are not here: a schedule
+ * uv (pinned with its wheels' hashes in `infra/local/Dockerfile.bot`), a
+ * repository's own toolchain and OpenADLC itself are not here: a schedule
  * must not move those under a bot. `key` is what the image label and the
  * update plan call the tool — the npm package for an engine, the command for
  * the other two.

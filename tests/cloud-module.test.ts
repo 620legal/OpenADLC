@@ -977,16 +977,61 @@ describe('the weekly engine update on the host', () => {
     }
   });
 
-  it('installs gh from its signed apt repository, not a release download the proxy refuses', () => {
+  it('installs gh from its signed apt repository, not a release download', () => {
     // github.com/cli/cli/releases/download/... redirects to
-    // release-assets.githubusercontent.com, which is not on the list, so every
-    // cloud update died at that curl while github.com itself was allowed and
-    // the check above passed. cli.github.com is on the list and signs its index.
-    expect(botDockerfile).not.toMatch(/releases\/download/);
+    // release-assets.githubusercontent.com, which was not on the list then, so
+    // every cloud update died at that curl while github.com itself was allowed
+    // and the check above passed. That host is on the list now, for the Python
+    // uv fetches in a task, and the build still takes nothing from it:
+    // cli.github.com signs its index, and a release tarball nothing checks.
+    // The one line that names a release download is uv's setting, which a
+    // task reads later; nothing in the build fetches it.
+    const mirror = /^.*'python-install-mirror = [^\n]*$/m;
+    expect(botDockerfile).toMatch(mirror);
+    expect(botDockerfile.replace(mirror, '')).not.toMatch(/releases\/download/);
     expect(botDockerfile).toContain('https://cli.github.com/packages stable main');
     expect(botDockerfile).toMatch(/apt-get install -y --no-install-recommends "gh\$\{GH_VERSION:\+=\$\{GH_VERSION\}\}"/);
     expect(allowed).toContain('cli.github.com');
-    expect(allowed).not.toContain('release-assets.githubusercontent.com');
+  });
+
+  it('installs uv from PyPI, refusing any wheel whose hash it does not name', () => {
+    // A builder in a repository built with uv stopped at the CI gate on
+    // "uv: command not found": the image had Debian's Python and no uv, so no
+    // commit there could pass. PyPI is on the list already, which a release
+    // download or astral.sh's installer is not, and the installer is a script
+    // piped to a shell that nothing checks.
+    expect(botDockerfile).toContain('RUN uv_version=');
+    const uv = botDockerfile.slice(botDockerfile.indexOf('RUN uv_version='), botDockerfile.indexOf('ARG NODE_VERSION='));
+    expect(uv).toMatch(/^RUN uv_version=\d+\.\d+\.\d+ /);
+    expect(uv).toContain('--require-hashes');
+    // A source distribution would be built from Rust here, under no hash.
+    expect(uv).toContain('--only-binary :all:');
+    // One wheel for each architecture the image is built for, amd64 and arm64.
+    expect([...uv.matchAll(/^\s+([0-9a-f]{64})\s+\\$/gm)]).toHaveLength(2);
+    expect(uv).toMatch(/install -m 0755 \S+\/scripts\/uv \S+\/scripts\/uvx \/usr\/local\/bin\//);
+    expect(uv).toMatch(/said="\$\(uv --version\)"/);
+    expect(uv).not.toMatch(/\|\s*(?:ba)?sh\b/);
+    expect(uv).not.toContain('astral.sh');
+    for (const host of ['pypi.org', 'files.pythonhosted.org']) {
+      expect(allowed, `${host} is not on the egress allowlist`).toContain(host);
+    }
+  });
+
+  it('lets uv fetch a Python the image lacks, from where GitHub sends a release download', () => {
+    // A repository built with uv pins Python 3.13; the image has 3.11, and uv
+    // gets the one pinned from python-build-standalone's GitHub releases.
+    // github.com/<owner>/<repo>/releases/download/… answers 302 to
+    // release-assets.githubusercontent.com, and with only
+    // objects.githubusercontent.com on the list the proxy refused it.
+    expect(allowed).toContain('github.com');
+    expect(allowed).toContain('release-assets.githubusercontent.com');
+    // uv 0.13 asks releases.astral.sh first, which the proxy refuses: each
+    // Python a task installed was a refusal counted toward the egress alert,
+    // and a warning, before uv fell back to GitHub. The image sends it there.
+    expect(botDockerfile).toContain(
+      `'python-install-mirror = "https://github.com/astral-sh/python-build-standalone/releases/download"'`,
+    );
+    expect(botDockerfile).toMatch(/> \/etc\/uv\/uv\.toml/);
   });
 
   it('checks a named Node tarball against the release’s SHASUMS256.txt before unpacking it', () => {

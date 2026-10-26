@@ -282,4 +282,24 @@ describe('what the images built from the repository root take with them', () => 
     // It carries the notices for V8, OpenSSL and ICU, built into the binary.
     expect(dockerfile).toMatch(/linux-\$\{node_arch\}\/LICENSE" \/usr\/local\/share\/doc\/node\/LICENSE/);
   });
+
+  it('keeps uv’s two licences beside Node’s when it unpacks the wheel', () => {
+    // uv is MIT or Apache-2.0, and only its commands are kept from the wheel:
+    // third-party-notices.sh reads /usr/local/share/doc for what came that way.
+    expect(dockerfile).toMatch(/dist-info\/licenses\/LICENSE-APACHE\s+\\\s+\S+dist-info\/licenses\/LICENSE-MIT \/usr\/local\/share\/doc\/uv\//);
+  });
+});
+
+describe('the bot image proves uv runs for the bot', () => {
+  const script = readFileSync(join(ROOT, 'infra', 'local', 'build-bot-image.sh'), 'utf8');
+
+  it('asks uv and uvx their version as the bot user, and fails the build when either cannot answer', () => {
+    // The image had no uv, and a builder in a repository built with it found
+    // out at its first `make ci`. The Dockerfile checks the wheel as root; the
+    // script runs each command as the image's own user, from its PATH.
+    const check = script.slice(script.indexOf('for cli in uv uvx; do'));
+    expect(check).toMatch(/^for cli in uv uvx; do\n\s+said="\$\(docker run --rm --entrypoint sh "\$\{IMAGE\}" -c "\$\{cli\} --version"/);
+    expect(check.slice(0, check.indexOf('\ndone'))).toContain('exit 1');
+    expect(script.indexOf('for cli in uv uvx; do')).toBeLessThan(script.indexOf('is ready"'));
+  });
 });

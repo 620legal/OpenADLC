@@ -93,7 +93,8 @@ run, and hostd never starts.
 
 The engine CLIs are pinned in that script, and the script refuses to finish if
 they are not on the PATH inside the image it just built, or are not the versions
-pinned. The pins are where an install starts; [System](#engine-updates)
+pinned, or if uv, which the Dockerfile pins, does not run there for the bot
+user. The pins are where an install starts; [System](#engine-updates)
 keeps them current after that, along with the GitHub CLI and Node once an
 update has recorded those versions. One script for both
 installs, so a laptop and a cloud host cannot end up running different bots.
@@ -2105,7 +2106,18 @@ the table ([Updating OpenADLC](#updating-openadlc)). The three engine CLIs are
 pinned in `infra/local/build-bot-image.sh`, and those pins are what a fresh
 install starts from. Node and the GitHub CLI are pinned the same way once an
 update has read them (`NODE_VERSION`, `GH_VERSION`); a build that does not
-name them keeps the Dockerfile's fresh-install packages.
+name them keeps the Dockerfile's fresh-install packages. uv, for a repository
+built with it, is pinned in `infra/local/Dockerfile.bot` itself, with the
+hashes of its wheels, and moves only when that file does.
+
+A tool the image gains in a release, as uv did, reaches a running install with
+its next candidate: hostd builds it from the release's own
+`infra/local/Dockerfile.bot` (the service image carries it, as a checkout
+does), so the next run that builds one — any tool due, on its schedule or with
+**Update all now** — carries it. A run with nothing due builds nothing, and
+the image in use goes without the new tool until one is. On a machine that
+runs a checkout, `infra/local/build-bot-image.sh` builds it at once, with the
+script's own pins (below).
 
 What is verified, and how far. The GitHub CLI comes from GitHub's apt
 repository, `cli.github.com`, and apt checks its signature against the
@@ -2116,7 +2128,14 @@ or swapped download, not a compromised nodejs.org, and its GPG signature is
 not checked. A fresh install's Node, with no version named, is the major from
 nodesource's apt repository, `deb.nodesource.com`: apt checks its signature
 against nodesource's key, and the build refuses that key unless its fingerprint
-is the one `infra/local/Dockerfile.bot` names. The engine CLIs come from npm.
+is the one `infra/local/Dockerfile.bot` names. uv is its wheel from PyPI, and
+pip refuses it unless its sha256 is one of the two that file names (amd64 and
+arm64), so what is installed is the file the pin was written against; a
+Python uv installs for a repository that pins one the image lacks is
+python-build-standalone's, checked against the hash uv carries for it, and
+comes from GitHub's release downloads: the image's `/etc/uv/uv.toml` sends uv
+there rather than to Astral's mirror, `releases.astral.sh`, which the cloud
+host's proxy refuses. The engine CLIs come from npm.
 npm's integrity hash proves only that the tarball is the one the registry
 served, not that the release is safe: a malicious or compromised release of a
 CLI passes it. What guards against that is the minimum release age below, and
@@ -2232,9 +2251,11 @@ On the cloud host the update builds on the host itself, from the script the
 service image carries, and the build's steps leave through the egress proxy
 like a bot's traffic does (`OPENADLC_BOT_EGRESS_PROXY`, passed to the script as
 `BUILD_PROXY`); the allowlist carries the package repositories the bot image
-installs from: `cli.github.com` for gh and `nodejs.org` for Node, not
-GitHub's release downloads, whose `release-assets.githubusercontent.com` it
-does not allow. The registry's `bot_image` only seeds a host that has none:
+installs from: `cli.github.com` for gh, `nodejs.org` for Node and PyPI for
+uv. The build takes nothing from GitHub's release downloads.
+`release-assets.githubusercontent.com`, where they redirect, is on the list
+for a task: the Python uv installs for a repository comes from there. The
+registry's `bot_image` only seeds a host that has none:
 after that the host's own `latest` is what the update moves, and a restart
 does not pull the registry's copy back over it.
 

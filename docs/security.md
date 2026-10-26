@@ -1856,7 +1856,8 @@ in `infra/gcp/main.tf`, is:
 | Destination | Why |
 |---|---|
 | `github.com`, `api.github.com`, `codeload.github.com`, `objects.githubusercontent.com` | Clone, push, comment, review — the work itself |
-| `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org` | Installing what a repository declares, and the engine CLIs |
+| `release-assets.githubusercontent.com` | GitHub's release downloads: a `github.com/<owner>/<repo>/releases/download/…` link answers 302 to this host. uv fetches a Python a repository pins and the bot image lacks from python-build-standalone's releases this way (the image's `/etc/uv/uv.toml` sends it there, not to Astral's mirror, `releases.astral.sh`, which is not on the list), and a task's `gh release download` goes the same way |
+| `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org` | Installing what a repository declares; the engine CLIs, from npm, and uv, from PyPI, for the bot image |
 | `api.anthropic.com`, `api.openai.com` | The engines, with an API key |
 | `x.ai`, `grok.com`, `auth.openai.com`, `chatgpt.com` | The engines with a subscription signed in rather than a key: xAI's API and sign-in, Grok's, and Codex on a ChatGPT plan, which signs in at `auth.openai.com` and sends its model calls to `chatgpt.com` |
 | `deb.debian.org`, `deb.nodesource.com`, `nodejs.org`, `cli.github.com` | The weekly bot-image build on the host: the package repositories `infra/local/Dockerfile.bot` installs from |
@@ -1876,8 +1877,10 @@ registry included, and the googleapis hosts, which only hostd needs. A bot
 holds no GCP credential, so it can reach Secret Manager's name but read
 nothing there.
 
-Add your own with `extra_allowed_domains`, an `infra/gcp` variable — the
-hostname of your testing environment, say, so QA can reach it. A private
+Add your own with `extra_allowed_domains`, an `infra/gcp` variable: anything
+further the work needs goes there, not into the module's list — the hostname
+of your testing environment, say, so QA can reach it, or a host a
+repository's toolchain downloads from that is not above. A private
 package registry goes in `registry_host` instead, which adds it to the list
 and also tells hostd about it ([self-hosting](self-hosting.md#installing-from-a-private-package-registry)). The
 list is written once, in `infra/gcp`, and the proxy's configuration is generated from it; there is no second
