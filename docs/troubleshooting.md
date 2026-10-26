@@ -1630,8 +1630,10 @@ it was; otherwise it says why not, and that the sweep tries again.
   or the repository's stored rules could not be read. The bridge waits rather
   than act on the fallback, which may promote a repository that soaks, or deploy
   one that ships by merging: it keeps the last rules it read where it has them,
-  and otherwise takes the step once a read works. Stacking skips that
-  repository for the pass, and says so.
+  and otherwise takes the step once a read works. A merge into the default
+  branch drops what it had, since that merge may have changed the file, so a
+  failed read right after one leaves its card in Ship until a read works.
+  Stacking skips that repository for the pass, and says so.
 - **A promote ran with nobody approving it** — the `production` environment has
   no required reviewer though the rules say `approval: reviewers`. The
   `production-rules` card says so and opens the walkthrough's Protect step:

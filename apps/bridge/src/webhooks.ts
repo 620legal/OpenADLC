@@ -2165,6 +2165,15 @@ export class Webhooks {
     }
 
     if (payload.action === 'closed' && pr.merged) {
+      // The rules are remembered for five minutes, and with the board asking
+      // every fifteen seconds, a copy from before this merge was always there
+      // to judge it by. A merge that added `.github/openadlc.yml` saying to
+      // deploy to testing on merge, where Settings had made merging ship it,
+      // went to Done, and no testing deploy was dispatched. Forgotten
+      // before anything below reads them, so the merge, the pipeline after it,
+      // and the deploy sweep for a merge held until a person looks all read
+      // the file as this merge left it.
+      if (pr.base?.ref === repo.defaultBranch) this.delivery?.forget(repo.fullName);
       const unreviewed = await this.noticeUnreviewedMerge(repoFullName, pr);
       await this.noticeConfigurationMerged(repo, repoFullName, pr);
       // Only a merge into the default branch ships anything. A merge into
@@ -2943,6 +2952,8 @@ export class Webhooks {
     if (!record || !client) return null;
     const pull = await client.getPullRequest(record.fullName, prNumber);
     if (!pull.merged) return null;
+    // As the delivery would have: this may be the merge that changed the rules.
+    if (pull.baseRef === record.defaultBranch) this.delivery?.forget(record.fullName);
     // The merge delivery holds a crew merge whose review-gate is not green and
     // moves nothing. This repair used to run finishMerge anyway, so within
     // fifteen minutes the unreviewed commit was in Merged and the deploy sweep

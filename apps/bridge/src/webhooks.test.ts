@@ -17,6 +17,7 @@ import { alreadyLanded } from './gates.js';
 import { StageHandoff } from './stage-handoff.js';
 import { MergeLine } from './merge-line.js';
 import { DeployPipeline } from './deploy-pipeline.js';
+import { DeliveryKnowledge } from './delivery-rules.js';
 import { CONFLICT_RESOLVED, CONFLICT_RESOLVING, ConflictRounds } from './conflict-round.js';
 import { STACK_MADE, STACK_UPDATED, STACK_UPDATING, Stacking } from './stacking.js';
 import {
@@ -203,6 +204,9 @@ vi.mock('@openadlc/db', () => ({
     getRepoByName: vi.fn(async () => ({ id: 'repo-1', name: 'openadlc', fullName: 'janedoe/openadlc', defaultBranch: 'main', stageModes: {} })),
     listRepos: vi.fn(async () => store.repos),
     getPlanLimits: vi.fn(async () => store.planLimits),
+    // What a real `DeliveryKnowledge` reads besides the file: no stored rules, and no production choice.
+    getDelivery: vi.fn(async () => ({ deliveryRules: null, testingUrl: null })),
+    getProductionChoice: vi.fn(async () => null),
   },
   settings: {
     allSettings: vi.fn(async () => (store.testingDeploy ? { testingDeploy: store.testingDeploy } : {})),
@@ -3736,6 +3740,10 @@ describe('a merge', () => {
       /** The deploy pipeline and the rules it reads, when the bridge is wired with them. */
       pipeline?: { onMerged: (...args: unknown[]) => Promise<string> };
       rules?: unknown;
+      /** The rules as the bridge reads and remembers them; absent, `rules` is answered on every ask. */
+      delivery?: DeliveryKnowledge;
+      /** Found by the reconciler with no delivery to say so (`mergeUnheard`), rather than delivered. */
+      unheard?: boolean;
       /** Who merged it, and what `review-gate` said on its head: an Error when GitHub cannot say. */
       mergedBy?: string;
       reviewGate?: string | Error;
@@ -3768,6 +3776,16 @@ describe('a merge', () => {
       listEveryPullFile: vi.fn(async () => ({ files: pull.files ?? [], complete: true, renamedFrom: [] })),
       comment: vi.fn(async () => null),
       addLabels: vi.fn(async () => undefined),
+      // What the reconciler reads of a merge it found with no delivery.
+      getPullRequest: vi.fn(async () => ({
+        number: 12,
+        merged: true,
+        mergedBy: pull.mergedBy ?? null,
+        headSha: 'abc123',
+        headRef: ref,
+        headRepoFullName: 'janedoe/openadlc',
+        baseRef: pull.base ?? 'main',
+      })),
     };
     const webhooks = new Webhooks(
       { automationBot: null } as never,
@@ -3800,7 +3818,7 @@ describe('a merge', () => {
       { leave: async () => undefined, advance: async () => null } as never,
     );
     if (pull.pipeline) {
-      webhooks.useDelivery(pull.pipeline as never, { get: async () => ({ rules: pull.rules }), forget: () => undefined } as never);
+      webhooks.useDelivery(pull.pipeline as never, pull.delivery ?? ({ get: async () => ({ rules: pull.rules }), forget: () => undefined } as never));
     }
     if (pull.stopped) {
       const stopped = pull.stopped;
@@ -3814,25 +3832,27 @@ describe('a merge', () => {
         told.push(repo);
       });
     }
-    const delivered = webhooks.receive(
-      'pull_request',
-      {
-        action: 'closed',
-        repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
-        pull_request: { author_association: 'COLLABORATOR',
-          number: 12,
-          merged: true,
-          draft: false,
-          body: pull.body ?? null,
-          head: { ref, sha: 'abc123', repo: { full_name: 'janedoe/openadlc' } },
-          base: { ref: pull.base ?? 'main' },
-          merge_commit_sha: 'fed9876',
-          merged_by: pull.mergedBy ? { login: pull.mergedBy } : null,
-          labels: [],
-        },
-      } as never,
-      'delivery-merge',
-    );
+    const delivered: Promise<unknown> = pull.unheard
+      ? webhooks.mergeUnheard({ id: 'repo-1', name: 'openadlc' }, 5, 12)
+      : webhooks.receive(
+          'pull_request',
+          {
+            action: 'closed',
+            repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+            pull_request: { author_association: 'COLLABORATOR',
+              number: 12,
+              merged: true,
+              draft: false,
+              body: pull.body ?? null,
+              head: { ref, sha: 'abc123', repo: { full_name: 'janedoe/openadlc' } },
+              base: { ref: pull.base ?? 'main' },
+              merge_commit_sha: 'fed9876',
+              merged_by: pull.mergedBy ? { login: pull.mergedBy } : null,
+              labels: [],
+            },
+          } as never,
+          'delivery-merge',
+        );
     return { delivered, moves, opened, client };
   }
 
@@ -4024,6 +4044,47 @@ describe('a merge', () => {
     await delivered;
 
     expect(moves).toEqual([{ issueNumber: 5, to: 'done' }]);
+  });
+
+  /**
+   * A pull request added `.github/openadlc.yml` saying to deploy to testing
+   * on merge, where Settings had made merging ship the repository. The rules
+   * read before the merge were remembered, and the board's asks kept a copy
+   * there, so the merge was judged by them: Done, and no testing deploy.
+   */
+  describe('of a pull request that adds the rules file', () => {
+    const REPO = { id: 'repo-1', name: 'openadlc', fullName: 'janedoe/openadlc', defaultBranch: 'main' };
+
+    /** Rules read and remembered as merging is shipping, and the file the merge put on the default branch. */
+    async function remembered() {
+      store.testingDeploy = JSON.stringify({ openadlc: 'none' });
+      let file: string | null = null;
+      const github = { readFileIfPresent: vi.fn(async () => file), request: vi.fn(async () => ({ workflows: [] })) };
+      const delivery = new DeliveryKnowledge(async () => github as never);
+      // The board's ask, a moment before the merge.
+      expect((await delivery.get(REPO)).rules.testing.on).toBe('none');
+      file = 'version: 1\ntesting:\n  on: merge\nproduction:\n  on: none\n';
+      return delivery;
+    }
+
+    it('is shipped by the file it merged: Ship, and the testing deploy dispatched', async () => {
+      const delivery = await remembered();
+      const onMerged = vi.fn(async () => 'dispatched deploy-testing');
+      const { delivered, moves } = merge([], { pipeline: { onMerged }, delivery });
+      await delivered;
+
+      expect(moves).toEqual([{ issueNumber: 5, to: 'merged' }]);
+      expect(onMerged).toHaveBeenCalledWith(expect.objectContaining({ fullName: 'janedoe/openadlc' }), 12, 'fed9876');
+      expect(await delivery.get(REPO)).toMatchObject({ source: 'file', rules: { testing: { on: 'merge' } } });
+    });
+
+    it('is shipped by it too when the reconciler finds the merge with no delivery to say so', async () => {
+      const delivery = await remembered();
+      const { delivered, moves } = merge([], { pipeline: { onMerged: vi.fn(async () => '') }, delivery, unheard: true });
+
+      expect(await delivered).toBe('merged');
+      expect(moves).toEqual([{ issueNumber: 5, to: 'merged' }]);
+    });
   });
 
   /**

@@ -135,7 +135,10 @@ export async function effectiveDelivery(input: {
 
 /**
  * The same, remembered for a few minutes per repository: the board asks every
- * fifteen seconds, and a rule changes by a merge, which is not that urgent.
+ * fifteen seconds, and a rule changes by a merge, which forgets them
+ * (`Webhooks`). The minutes alone were relied on once: with the board asking,
+ * a copy from before the merge was always there, and the merge that added a
+ * rules file was shipped by the rules it replaced.
  *
  * A read that failed is never remembered: the last rules that were read stand
  * in for it, however old, and with none the marked fallback is returned and
@@ -160,7 +163,12 @@ export class DeliveryKnowledge {
     return delivery;
   }
 
-  /** Forgets what was read about a repository: a merge changed its rules, or a person changed its row. */
+  /**
+   * Forgets what was read about a repository: a pull request merged into its
+   * default branch, which may have changed the file (`Webhooks`, for its
+   * delivery and for one the reconciler found without one), or a person
+   * changed its row or its choice (Settings, the deploy routes).
+   */
   forget(repoFullName: string): void {
     this.known.delete(repoFullName);
   }

@@ -289,6 +289,12 @@ Repositories that were set up before this was asked keep what they had:
 sets `production.approval` itself, setup shows that rule and says the file
 governs it.
 
+The bridge keeps what it read for five minutes, and reads it again when a pull
+request merges into the default branch, before it decides what that merge
+does: the merge that adds or changes the file ships by what the file now says,
+not by the rules it replaced. A file pushed straight to the branch, with no
+pull request, is read within those five minutes.
+
 A bot never approves a deploy; the repository's GitHub rules do: the
 promote waits on the `production` environment, which `openadlc github apply`
 writes as these rules say (required reviewers, or a wait timer of the soak).
