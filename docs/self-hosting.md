@@ -3038,7 +3038,10 @@ how to stop the other (`OPENADLC_HOME=<its home> openadlc down`) or drop a
 note it left. Give each install its own clone; a scratch install of a
 developer's checkout is one such second install. Anything else and it does
 nothing, and the row says why: it never stashes, merges over, resets or
-discards what a person changed. A checkout ahead of the newest release is current. It needs a GitHub
+discards what a person changed. A checkout ahead of the newest release is current.
+What an update would take is asked again whenever the commit in use changes, not
+only every quarter hour, so the row after an update names the next release after
+the new one. It needs a GitHub
 CLI where the bridge runs whose `gh attestation verify` has the flags
 [Checking a release](#checking-a-release) uses; without one the row says so.
 
