@@ -69,13 +69,21 @@ locals {
   console_domain = var.console_domain != "" ? var.console_domain : "${google_compute_global_address.console.address}.nip.io"
 
   # The egress a bot needs and nothing more: GitHub, package registries, the
-  # engine APIs, and the Google APIs the platform itself calls.
+  # engine APIs, and the Google APIs the platform itself calls. Anything
+  # further an install's work needs goes in var.extra_allowed_domains, not here.
   allowed_egress_domains = concat(
     [
       "github.com",
       "api.github.com",
       "codeload.github.com",
       "objects.githubusercontent.com",
+      # Where GitHub sends a release download now:
+      # github.com/<owner>/<repo>/releases/download/… answers 302 to this host,
+      # not to objects.githubusercontent.com. uv fetches a Python a repository
+      # pins and the image does not have from python-build-standalone's releases
+      # that way, so without it a repository built with uv could not run its
+      # make ci; a task's `gh release download` failed the same way.
+      "release-assets.githubusercontent.com",
       "registry.npmjs.org",
       "pypi.org",
       "files.pythonhosted.org",

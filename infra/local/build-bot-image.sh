@@ -218,6 +218,22 @@ if [ -n "${GH_VERSION}" ]; then
   fi
 fi
 
+# uv, which a repository built with it runs from its `make ci`. The Dockerfile
+# checked its wheel's hash and its version as root; this is that the bot user
+# can run both commands from the PATH. uvx runs the uv beside it, so it is
+# asked too: a uvx copied without uv installs fine and fails at a task.
+for cli in uv uvx; do
+  said="$(docker run --rm --entrypoint sh "${IMAGE}" -c "${cli} --version" 2>/dev/null || true)"
+  said="${said%%$'\n'*}"
+  case "${said}" in
+    "uv "* | "uvx "*) printf '  %-8s %s\n' "${cli}" "${said}" ;;
+    *)
+      echo "  ${cli} says \"${said}\" — the image built, and a repository built with uv cannot run its make ci in it" >&2
+      exit 1
+      ;;
+  esac
+done
+
 # An engine that updates itself is no longer the version pinned above.
 if [ "$(docker run --rm --entrypoint sh "${IMAGE}" -c 'printf %s "${GROK_DISABLE_AUTOUPDATER:-}"')" = "1" ]; then
   echo "  grok's self-updater is off (GROK_DISABLE_AUTOUPDATER=1)"
