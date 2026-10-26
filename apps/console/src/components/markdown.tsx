@@ -30,7 +30,7 @@ export type Block =
  * packages, so the shape is repeated here; the tag is what keeps a bold first
  * line somebody wrote from being taken for it.
  */
-const OPENADLC_HEADER = /^\*\*[^\n]*\*\*<!-- (?:openadlc|fleetadlc|fleet)-header -->[ \t]*\n*/;
+const OPENADLC_HEADER = /^\*\*[^\n]*\*\*<!-- openadlc-header -->[ \t]*\n*/;
 
 const LIST_ITEM = /^\s*(?:([-*+])|(\d+)[.)])\s+(.*)$/;
 /**

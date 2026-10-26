@@ -238,8 +238,8 @@ describe('downloading a backup', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/octet-stream');
-    expect(response.headers.get('content-disposition')).toBe('attachment; filename="openadlc-backup-2026-09-24.fleetbak"');
-    expect(bytes.subarray(0, 10).toString()).toBe('FLEETBAK1\n');
+    expect(response.headers.get('content-disposition')).toBe('attachment; filename="openadlc-backup-2026-09-24.openadlcbak"');
+    expect(bytes.subarray(0, 10).toString()).toBe('OPENADLC2\n');
     expect(bytes.includes(Buffer.from(APP_KEY))).toBe(false);
     const opened = await decryptBackup(bytes, PASSPHRASE);
     expect(opened.secrets['github-app-private-key']).toBe(APP_KEY);
@@ -305,7 +305,7 @@ describe('downloading a backup', () => {
   });
 
   it('names the file the way `openadlc backup` does', () => {
-    expect(backupFilename(NOW)).toBe('openadlc-backup-2026-09-24.fleetbak');
+    expect(backupFilename(NOW)).toBe('openadlc-backup-2026-09-24.openadlcbak');
   });
 });
 

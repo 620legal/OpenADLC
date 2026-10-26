@@ -257,7 +257,7 @@ describe('the Restore modal', () => {
     await mount();
     await click(button('Restore', container));
     const picker = dialog()!.querySelector<HTMLInputElement>('input[type=file]')!;
-    const sealed = new File([new TextEncoder().encode('FLEETBAK sealed bytes')], 'openadlc-backup.fleetbak');
+    const sealed = new File([new TextEncoder().encode('OPENADLC2 sealed bytes')], 'openadlc-backup.openadlcbak');
     await act(async () => {
       Object.defineProperty(picker, 'files', { value: [sealed], configurable: true });
       picker.dispatchEvent(new Event('change', { bubbles: true }));
@@ -268,7 +268,7 @@ describe('the Restore modal', () => {
 
     await click(button('Close', dialog()!));
     await click(button('Restore', container));
-    expect(dialog()?.textContent).not.toContain('openadlc-backup.fleetbak');
+    expect(dialog()?.textContent).not.toContain('openadlc-backup.openadlcbak');
     expect(dialog()?.querySelector('input[type=password]')).toBeNull();
     expect(button('choose the backup file', dialog()!)).toBeTruthy();
   });

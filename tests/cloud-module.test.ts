@@ -321,6 +321,26 @@ describe('what IAP is actually in front of', () => {
     }
   });
 
+  it('moves the resources that were named fleet, rather than destroying the network and the database to make them again', () => {
+    const renamed = [
+      'google_compute_network',
+      'google_compute_subnetwork',
+      'google_compute_router',
+      'google_compute_router_nat',
+      'google_sql_database_instance',
+      'google_sql_database',
+      'google_sql_user',
+    ];
+    for (const type of renamed) {
+      expect(resourceBlock(type, 'openadlc'), type).not.toBeNull();
+      expect(resourceBlock(type, 'fleet'), type).toBeNull();
+      expect(mainTf, type).toMatch(new RegExp(`moved \\{\\s*from = ${type}\\.fleet\\s*to   = ${type}\\.openadlc\\s*\\}`));
+    }
+    // And nothing refers to an address only the moved blocks still name.
+    const withoutMoves = mainTf.replace(/moved \{[^}]*\}/g, '');
+    for (const file of [withoutMoves, outputsTf]) expect(file).not.toMatch(/\bgoogle_[a-z_]+\.fleet\b/);
+  });
+
   it('moves the bindings that had a count, rather than making them again and admitting nobody between', () => {
     for (const name of ['console', 'terminal']) {
       const address = `google_iap_web_backend_service_iam_binding.${name}`;
@@ -851,7 +871,7 @@ describe('what is encrypted on the way', () => {
   it('has the database refuse a connection that is not encrypted', () => {
     // The instance took plaintext as readily as TLS, so a client whose URL
     // lost its TLS settings carried the password and every row in the clear.
-    const instance = resourceBlock('google_sql_database_instance', 'fleet');
+    const instance = resourceBlock('google_sql_database_instance', 'openadlc');
     expect(instance).toMatch(/ip_configuration \{[^}]*ssl_mode\s*=\s*"ENCRYPTED_ONLY"/);
     expect(instance).not.toContain('require_ssl');
   });
@@ -869,7 +889,7 @@ describe('what is encrypted on the way', () => {
     expect(url).not.toMatch(/sslmode=(require|no-verify)/);
     expect(resourceBlock('google_secret_manager_secret', 'database_ca')).toContain('secret_id = "${var.name_prefix}-database-ca"');
     expect(resourceBlock('google_secret_manager_secret_version', 'database_ca')).toMatch(
-      /secret_data\s*=\s*google_sql_database_instance\.fleet\.server_ca_cert\[0\]\.cert/,
+      /secret_data\s*=\s*google_sql_database_instance\.openadlc\.server_ca_cert\[0\]\.cert/,
     );
   });
 

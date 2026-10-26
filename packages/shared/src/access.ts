@@ -1,4 +1,4 @@
-import { isFleetLogin } from './authorship.js';
+import { isCrewLogin } from './authorship.js';
 
 /**
  * Who OpenADLC acts for: people with access to the repository, and its own crew.
@@ -30,5 +30,5 @@ export function actsFor(
   author: { login: string | null | undefined; association: string | null | undefined },
   crew: readonly { githubLogin: string | null }[],
 ): boolean {
-  return hasAccess(author.association) || isFleetLogin(crew, author.login);
+  return hasAccess(author.association) || isCrewLogin(crew, author.login);
 }

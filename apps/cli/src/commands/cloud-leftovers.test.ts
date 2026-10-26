@@ -84,8 +84,8 @@ describe('a project that is fine to set up in', () => {
   it('refuses nothing on a live install: what is in its own state is its own, and its runtime secrets too', async () => {
     const owned = new Set([
       'google_iam_workload_identity_pool.github',
-      'google_sql_database_instance.fleet',
-      'google_compute_network.fleet',
+      'google_sql_database_instance.openadlc',
+      'google_compute_network.openadlc',
       'google_compute_instance.host',
     ]);
     const { gcloud, asked } = project({ pool: ok('{"state":"ACTIVE"}'), sql: ok('{}'), network: ok('{}'), secrets: ok('fleet-github-app-private-key') });
@@ -94,9 +94,23 @@ describe('a project that is fine to set up in', () => {
     expect(asked).toEqual([]);
   });
 
+  it('refuses nothing on a live install whose state still has the addresses the module’s moved blocks take the database and network from', async () => {
+    // The check runs before the apply that moves them.
+    const owned = new Set([
+      'google_iam_workload_identity_pool.github',
+      'google_sql_database_instance.fleet',
+      'google_compute_network.fleet',
+      'google_compute_instance.host',
+    ]);
+    const { gcloud, asked } = project({ pool: ok('{"state":"ACTIVE"}'), sql: ok('{}'), network: ok('{}'), secrets: ok('openadlc-webhook-secret') });
+    const report = await findLeftovers({ ...fresh, owned }, gcloud);
+    expect(report.found).toEqual([]);
+    expect(asked).toEqual([]);
+  });
+
   it('reads the state’s addresses without their count index, so a pool made with count is its own', () => {
-    const owned = ownedAddresses('google_iam_workload_identity_pool.github[0]\ngoogle_compute_network.fleet\n\n');
-    expect([...owned]).toEqual(['google_iam_workload_identity_pool.github', 'google_compute_network.fleet']);
+    const owned = ownedAddresses('google_iam_workload_identity_pool.github[0]\ngoogle_compute_network.openadlc\n\n');
+    expect([...owned]).toEqual(['google_iam_workload_identity_pool.github', 'google_compute_network.openadlc']);
   });
 
   it('checks under the prefix the install has, an install from before the rename included', async () => {

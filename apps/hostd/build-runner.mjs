@@ -31,7 +31,7 @@ await build({
   // that throws "Dynamic require of \"process\" is not supported", which looks
   // like a broken runner rather than a bundling detail.
   banner: {
-    js: "import { createRequire as __fleetRequire } from 'node:module';\nconst require = __fleetRequire(import.meta.url);",
+    js: "import { createRequire as __openadlcRequire } from 'node:module';\nconst require = __openadlcRequire(import.meta.url);",
   },
 });
 

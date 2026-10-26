@@ -199,29 +199,29 @@ resource "google_project_service" "enabled" {
 # The host has no external address. Egress goes through Cloud NAT so it can be
 # confined to an allowlist, and ingress is only from IAP and the bridge.
 
-resource "google_compute_network" "fleet" {
+resource "google_compute_network" "openadlc" {
   name                    = "${var.name_prefix}-network"
   auto_create_subnetworks = false
   depends_on              = [google_project_service.enabled]
 }
 
-resource "google_compute_subnetwork" "fleet" {
+resource "google_compute_subnetwork" "openadlc" {
   name                     = "${var.name_prefix}-subnet"
   ip_cidr_range            = var.subnet_cidr
   region                   = var.region
-  network                  = google_compute_network.fleet.id
+  network                  = google_compute_network.openadlc.id
   private_ip_google_access = true
 }
 
-resource "google_compute_router" "fleet" {
+resource "google_compute_router" "openadlc" {
   name    = "${var.name_prefix}-router"
   region  = var.region
-  network = google_compute_network.fleet.id
+  network = google_compute_network.openadlc.id
 }
 
-resource "google_compute_router_nat" "fleet" {
+resource "google_compute_router_nat" "openadlc" {
   name                               = "${var.name_prefix}-nat"
-  router                             = google_compute_router.fleet.name
+  router                             = google_compute_router.openadlc.name
   region                             = var.region
   nat_ip_allocate_option             = "AUTO_ONLY"
   source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
@@ -230,6 +230,31 @@ resource "google_compute_router_nat" "fleet" {
     enable = true
     filter = "ERRORS_ONLY"
   }
+}
+
+# These four were `.fleet` until the rename to OpenADLC. Moved, not made again:
+# without these blocks a plan destroys the network and makes a new one, and
+# everything on it with it — the host, the database's private connection and
+# both Cloud Run services' VPC access. `openadlc cloud` reads either address
+# as the install's own (`OWNED_BY` in apps/cli/src/commands/cloud-leftovers.ts).
+moved {
+  from = google_compute_network.fleet
+  to   = google_compute_network.openadlc
+}
+
+moved {
+  from = google_compute_subnetwork.fleet
+  to   = google_compute_subnetwork.openadlc
+}
+
+moved {
+  from = google_compute_router.fleet
+  to   = google_compute_router.openadlc
+}
+
+moved {
+  from = google_compute_router_nat.fleet
+  to   = google_compute_router_nat.openadlc
 }
 
 # Two callers reach the host, and each has its own rule so that removing one
@@ -249,7 +274,7 @@ resource "google_compute_router_nat" "fleet" {
 
 resource "google_compute_firewall" "from_iap" {
   name      = "${var.name_prefix}-allow-iap"
-  network   = google_compute_network.fleet.name
+  network   = google_compute_network.openadlc.name
   direction = "INGRESS"
 
   allow {
@@ -264,7 +289,7 @@ resource "google_compute_firewall" "from_iap" {
 
 resource "google_compute_firewall" "from_bridge" {
   name      = "${var.name_prefix}-allow-bridge"
-  network   = google_compute_network.fleet.name
+  network   = google_compute_network.openadlc.name
   direction = "INGRESS"
 
   allow {
@@ -288,7 +313,7 @@ resource "google_compute_firewall" "from_bridge" {
 # HTTP_PROXY and opens its own socket to port 4444 does not get out.
 resource "google_compute_firewall" "egress_web" {
   name      = "${var.name_prefix}-allow-egress-web"
-  network   = google_compute_network.fleet.name
+  network   = google_compute_network.openadlc.name
   direction = "EGRESS"
   priority  = 1000
 
@@ -305,7 +330,7 @@ resource "google_compute_firewall" "egress_web" {
 # resolve the names it is allowlisting.
 resource "google_compute_firewall" "egress_internal" {
   name      = "${var.name_prefix}-allow-egress-internal"
-  network   = google_compute_network.fleet.name
+  network   = google_compute_network.openadlc.name
   direction = "EGRESS"
   priority  = 1000
 
@@ -330,7 +355,7 @@ resource "google_compute_firewall" "egress_internal" {
 
 resource "google_compute_firewall" "deny_other_egress" {
   name      = "${var.name_prefix}-deny-egress"
-  network   = google_compute_network.fleet.name
+  network   = google_compute_network.openadlc.name
   direction = "EGRESS"
   priority  = 65000
 
@@ -344,7 +369,7 @@ resource "google_compute_firewall" "deny_other_egress" {
 
 resource "google_compute_firewall" "deny_other_ingress" {
   name      = "${var.name_prefix}-deny-ingress"
-  network   = google_compute_network.fleet.name
+  network   = google_compute_network.openadlc.name
   direction = "INGRESS"
   priority  = 65000
 
@@ -445,7 +470,7 @@ resource "google_compute_instance" "host" {
   }
 
   network_interface {
-    subnetwork = google_compute_subnetwork.fleet.id
+    subnetwork = google_compute_subnetwork.openadlc.id
     # No access_config block: the host has no external IP.
   }
 
@@ -471,7 +496,7 @@ resource "google_compute_instance" "host" {
 
   allow_stopping_for_update = true
   # The mirror's grant too: hostd's first start pulls its image through it.
-  depends_on = [google_compute_router_nat.fleet, google_artifact_registry_repository_iam_member.ghcr_host]
+  depends_on = [google_compute_router_nat.openadlc, google_artifact_registry_repository_iam_member.ghcr_host]
 }
 
 # ---------------------------------------------------------------- database
@@ -483,16 +508,16 @@ resource "google_compute_global_address" "private_ip" {
   purpose       = "VPC_PEERING"
   address_type  = "INTERNAL"
   prefix_length = 16
-  network       = google_compute_network.fleet.id
+  network       = google_compute_network.openadlc.id
 }
 
 resource "google_service_networking_connection" "sql" {
-  network                 = google_compute_network.fleet.id
+  network                 = google_compute_network.openadlc.id
   service                 = "servicenetworking.googleapis.com"
   reserved_peering_ranges = [google_compute_global_address.private_ip.name]
 }
 
-resource "google_sql_database_instance" "fleet" {
+resource "google_sql_database_instance" "openadlc" {
   name             = "${var.name_prefix}-db"
   database_version = "POSTGRES_16"
   region           = var.region
@@ -507,7 +532,7 @@ resource "google_sql_database_instance" "fleet" {
 
     ip_configuration {
       ipv4_enabled    = false
-      private_network = google_compute_network.fleet.id
+      private_network = google_compute_network.openadlc.id
       # Without it the instance took a plaintext connection as readily as an
       # encrypted one, so a client whose URL lost its TLS settings would have
       # carried the password and every row across the peering in the clear.
@@ -534,9 +559,9 @@ resource "google_sql_database_instance" "fleet" {
   depends_on          = [google_service_networking_connection.sql]
 }
 
-resource "google_sql_database" "fleet" {
+resource "google_sql_database" "openadlc" {
   name     = "fleet_db"
-  instance = google_sql_database_instance.fleet.name
+  instance = google_sql_database_instance.openadlc.name
 }
 
 # A built-in user with a generated password, kept in Secret Manager, is what a
@@ -548,10 +573,29 @@ resource "random_password" "database" {
   special = false
 }
 
-resource "google_sql_user" "fleet" {
+resource "google_sql_user" "openadlc" {
   name     = "fleet"
-  instance = google_sql_database_instance.fleet.name
+  instance = google_sql_database_instance.openadlc.name
   password = random_password.database.result
+}
+
+# These three were `.fleet` until the rename to OpenADLC; the names in Google
+# (`fleet_db`, user `fleet`) stay, since changing them means moving the data.
+# Moved, not made again: without these blocks a plan destroys the instance and
+# every row in it, or stops on its deletion protection.
+moved {
+  from = google_sql_database_instance.fleet
+  to   = google_sql_database_instance.openadlc
+}
+
+moved {
+  from = google_sql_database.fleet
+  to   = google_sql_database.openadlc
+}
+
+moved {
+  from = google_sql_user.fleet
+  to   = google_sql_user.openadlc
 }
 
 resource "google_secret_manager_secret" "database_url" {
@@ -581,7 +625,7 @@ locals {
 
 resource "google_secret_manager_secret_version" "database_url" {
   secret      = google_secret_manager_secret.database_url.id
-  secret_data = "postgres://${google_sql_user.fleet.name}:${random_password.database.result}@${google_sql_database_instance.fleet.private_ip_address}:5432/${google_sql_database.fleet.name}?sslmode=verify-ca&uselibpqcompat=true&sslrootcert=${local.database_ca_dir}/${local.database_ca_file}"
+  secret_data = "postgres://${google_sql_user.openadlc.name}:${random_password.database.result}@${google_sql_database_instance.openadlc.private_ip_address}:5432/${google_sql_database.openadlc.name}?sslmode=verify-ca&uselibpqcompat=true&sslrootcert=${local.database_ca_dir}/${local.database_ca_file}"
 }
 
 # Not a secret, but kept beside the URL rather than in instance metadata, which
@@ -598,7 +642,7 @@ resource "google_secret_manager_secret" "database_ca" {
 
 resource "google_secret_manager_secret_version" "database_ca" {
   secret      = google_secret_manager_secret.database_ca.id
-  secret_data = google_sql_database_instance.fleet.server_ca_cert[0].cert
+  secret_data = google_sql_database_instance.openadlc.server_ca_cert[0].cert
 }
 
 # ---------------------------------------------------------------- release images
@@ -840,8 +884,8 @@ resource "google_cloud_run_v2_service" "bridge" {
 
     vpc_access {
       network_interfaces {
-        network    = google_compute_network.fleet.id
-        subnetwork = google_compute_subnetwork.fleet.id
+        network    = google_compute_network.openadlc.id
+        subnetwork = google_compute_subnetwork.openadlc.id
       }
       egress = "PRIVATE_RANGES_ONLY"
     }
@@ -1079,8 +1123,8 @@ resource "google_cloud_run_v2_service" "console" {
 
     vpc_access {
       network_interfaces {
-        network    = google_compute_network.fleet.id
-        subnetwork = google_compute_subnetwork.fleet.id
+        network    = google_compute_network.openadlc.id
+        subnetwork = google_compute_subnetwork.openadlc.id
       }
       # All traffic, not private ranges: the bridge is a run.app URL, and its
       # ingress admits the VPC but not the internet. Sent the direct way the
@@ -1374,7 +1418,7 @@ resource "google_compute_global_forwarding_rule" "console" {
 # which the deny would otherwise catch — and an unhealthy backend serves nobody.
 resource "google_compute_firewall" "from_load_balancer" {
   name      = "${var.name_prefix}-allow-lb"
-  network   = google_compute_network.fleet.name
+  network   = google_compute_network.openadlc.name
   direction = "INGRESS"
 
   allow {

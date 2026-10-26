@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { actsFor } from './access.js';
-import { isFleetLogin, postedBySeat, seatsAskingForChanges, seatsThatPosted, whoWrote } from './authorship.js';
+import { isCrewLogin, postedBySeat, seatsAskingForChanges, seatsThatPosted, whoWrote } from './authorship.js';
 
 const alone = [
   { name: 'builder-bot', slot: 'builder', githubLogin: 'Builder-Bot' },
@@ -38,8 +38,8 @@ describe('who wrote it', () => {
 
 describe('whether a login is OpenADLC’s', () => {
   it('counts every seat’s account, shared or not', () => {
-    expect(isFleetLogin(shared, 'OPENADLC-EXAMPLE')).toBe(true);
-    expect(isFleetLogin(alone, 'someone')).toBe(false);
+    expect(isCrewLogin(shared, 'OPENADLC-EXAMPLE')).toBe(true);
+    expect(isCrewLogin(alone, 'someone')).toBe(false);
   });
 
   it('still lets the crew act, through actsFor, with no repository association', () => {

@@ -78,17 +78,6 @@ describe('the seat a post names', () => {
   });
 });
 
-describe('posts made before the renames to FleetADLC and OpenADLC', () => {
-  it.each([
-    ['**Fleet_acme · build agent**<!-- fleet-header -->\n\nOpened #4.\n\n<!-- fleet-seat:builder -->'],
-    ['**FleetADLC_acme · build agent**<!-- fleetadlc-header -->\n\nOpened #4.\n\n<!-- fleetadlc-seat:builder -->'],
-  ])('knows the header and seat tag such a post carries, and does not head it twice', (old) => {
-    expect(hasHeader(old)).toBe(true);
-    expect(withHeader(old, headerFor('OpenADLC_acme', 'implement'))).toBe(old);
-    expect(seatOf(old)).toBe('builder');
-  });
-});
-
 describe('tagging a long post', () => {
   it('takes time in proportion to its length, for a run of newlines or of spaces', () => {
     const started = performance.now();

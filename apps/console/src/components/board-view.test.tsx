@@ -769,20 +769,20 @@ describe('an issue’s own controls on its card', () => {
 
 describe('who is on a card', () => {
   it('names the roles once where seats share one account, and the handle once', () => {
-    // Two reviewers on one account were "fleet-cipher-janedoe, fleet-cipher-janedoe".
+    // Two reviewers on one account were "openadlc-cipher-janedoe, openadlc-cipher-janedoe".
     const crew = [
-      member({ name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'fleet-cipher-janedoe' }),
-      member({ name: 'second-reviewer', slot: 'second-reviewer', role: 'review_second', githubLogin: 'fleet-cipher-janedoe' }),
+      member({ name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'openadlc-cipher-janedoe' }),
+      member({ name: 'second-reviewer', slot: 'second-reviewer', role: 'review_second', githubLogin: 'openadlc-cipher-janedoe' }),
     ];
     const labels = ['lead-reviewer', 'second-reviewer'].map((name) => labelIn(crew, name));
-    expect(peopleLine(labels)).toBe('lead reviewer, second reviewer · fleet-cipher-janedoe');
+    expect(peopleLine(labels)).toBe('lead reviewer, second reviewer · openadlc-cipher-janedoe');
   });
 
   it('says so on the card', () => {
     // Seats on one account keep their seats' names; the handle is the account's.
     const crew = [
-      member({ name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'fleet-cipher-janedoe' }),
-      member({ name: 'second-reviewer', slot: 'second-reviewer', role: 'review_second', githubLogin: 'fleet-cipher-janedoe' }),
+      member({ name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'openadlc-cipher-janedoe' }),
+      member({ name: 'second-reviewer', slot: 'second-reviewer', role: 'review_second', githubLogin: 'openadlc-cipher-janedoe' }),
     ];
     const running = (bot: string) => ({ bot, kind: 'review', state: 'running', round: 1, startedAt: minutesAgo(3), endedAt: null, exitReason: null });
     const board: Board = {
@@ -795,8 +795,8 @@ describe('who is on a card', () => {
         <BoardView board={board} crew={crew} repo="all" header={header} attention={[]} now={NOW} />
       </RoleProvider>,
     ).replace(/<!-- -->/g, '');
-    expect(html).toContain('lead reviewer, second reviewer · fleet-cipher-janedoe');
-    expect(html).not.toContain('fleet-cipher-janedoe, fleet-cipher-janedoe');
+    expect(html).toContain('lead reviewer, second reviewer · openadlc-cipher-janedoe');
+    expect(html).not.toContain('openadlc-cipher-janedoe, openadlc-cipher-janedoe');
   });
 
   it('keeps each handle where every seat has its own', () => {

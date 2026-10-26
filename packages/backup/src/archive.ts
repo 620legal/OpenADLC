@@ -70,7 +70,7 @@ export interface KeyCost {
  * client id, not a bot login, not a secret's name and certainly not its value —
  * because this is the half of the file that anyone who has the file can read.
  * "Nine secrets, eight settings, nine bots, taken on Tuesday" is what somebody
- * staring at `openadlc-backup-2026-09-21.fleetbak` needs in order to know they
+ * staring at `openadlc-backup-2026-09-21.openadlcbak` needs in order to know they
  * have the right file; who the install belongs to is not. The one other thing
  * in it, the cost the key was derived at, is in the open in any key
  * derivation's format, and was in OpenADLC's source before it was in the file.
@@ -498,16 +498,31 @@ function serialize(value: unknown, space?: number): string {
   }
 }
 
-/** The whole format family, so a `FLEETBAK2` file can be recognised as ours. */
-const FAMILY = 'FLEETBAK';
+/** The whole format family, so an `OPENADLC3` file can be recognised as ours. */
+const FAMILY = 'OPENADLC';
 /**
- * First line of every archive. A file that does not start with it is not ours.
+ * First line of every archive written now: the format's name and the
+ * container's version. A file that starts with neither this nor
+ * `LEGACY_MAGIC` is not ours.
  *
  * The container — two cleartext lines, then salt, IV, tag and ciphertext — is
- * the same for every version of the contents, so it keeps its name. What the
- * contents are is the manifest's `version`, which is authenticated with them.
+ * the same for every version of the contents. What the contents are is the
+ * manifest's `version`, which is authenticated with them; the number here
+ * counts the container's own versions. `FLEETBAK1` was the first. Taking
+ * OpenADLC's name changed nothing in the layout but is still a new container,
+ * since a release that reads only `FLEETBAK1` refuses this line as not a
+ * backup, so it took the next number.
  */
-const MAGIC = `${FAMILY}1`;
+const MAGIC = `${FAMILY}2`;
+/**
+ * The first line archives had before the format took OpenADLC's name, from
+ * 0.1.0 on, in files named `.fleetbak`. Read so those backups still restore;
+ * never written.
+ */
+const LEGACY_FAMILY = 'FLEETBAK';
+const LEGACY_MAGIC = `${LEGACY_FAMILY}1`;
+/** The first lines this version opens, newest first. */
+const READABLE_MAGICS: readonly string[] = [MAGIC, LEGACY_MAGIC];
 /** What this version of OpenADLC writes. */
 export const FORMAT_VERSION: FormatVersion = 3;
 const READABLE_VERSIONS: readonly number[] = [1, 2, 3];
@@ -1162,7 +1177,7 @@ function manifestFor(contents: Pick<BackupContents, 'manifest'>, payload: Payloa
 }
 
 /**
- * `FLEETBAK1\n{manifest}\n` — two text lines, so `head -2` on the file answers
+ * `OPENADLC2\n{manifest}\n` — two text lines, so `head -2` on the file answers
  * "what is this and when was it taken" with no tooling at all.
  */
 function headerBytes(manifest: BackupManifest): Buffer {
@@ -1172,7 +1187,7 @@ function headerBytes(manifest: BackupManifest): Buffer {
 /**
  * Encrypts everything but the manifest and returns the whole archive.
  *
- * Layout: `FLEETBAK1\n` + manifest JSON + `\n` + salt(16) + iv(12) + tag(16) +
+ * Layout: `OPENADLC2\n` + manifest JSON + `\n` + salt(16) + iv(12) + tag(16) +
  * aes-256-gcm ciphertext. The two cleartext lines are passed to GCM as
  * additional authenticated data, so editing the manifest breaks decryption
  * instead of quietly mislabelling the file. The key is scrypt's over the
@@ -1249,12 +1264,12 @@ const V2_COUNTS: readonly (keyof ManifestCounts)[] = [
  * *unauthenticated* read. Anything a tampered header added is dropped here
  * rather than handed to a caller who has not proved they hold the passphrase.
  */
-function parseManifest(json: string): BackupManifest {
+function parseManifest(json: string, magic: string): BackupManifest {
   let value: unknown;
   try {
     value = JSON.parse(json);
   } catch {
-    throw new BackupError('this file has a FLEETBAK1 header but its manifest is not readable JSON');
+    throw new BackupError(`this file has a ${magic} header but its manifest is not readable JSON`);
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new BackupError('this backup has no manifest');
@@ -1310,18 +1325,21 @@ function parse(archive: Buffer): ParsedArchive {
   // latin1 so arbitrary bytes decode without replacement characters; we are only
   // looking at ASCII.
   const opening = archive.subarray(0, FAMILY.length + MAX_MANIFEST_BYTES).toString('latin1');
-  if (!opening.startsWith(`${MAGIC}\n`)) {
-    if (opening.startsWith(FAMILY)) {
+  const magic = READABLE_MAGICS.find((one) => opening.startsWith(`${one}\n`));
+  if (!magic) {
+    if (opening.startsWith(FAMILY) || opening.startsWith(LEGACY_FAMILY)) {
       const line = (opening.split('\n')[0] ?? '').trim();
-      throw new BackupError(`this archive says it is ${line}, and this version of OpenADLC reads ${MAGIC} archives. Upgrade OpenADLC, then restore again`);
+      throw new BackupError(
+        `this archive says it is ${line}, and this version of OpenADLC reads ${MAGIC} archives and the ${LEGACY_MAGIC} ones made before them. Upgrade OpenADLC, then restore again`,
+      );
     }
-    throw new BackupError(`this file is not an OpenADLC backup: it does not begin with the ${MAGIC} header`);
+    throw new BackupError(`this file is not an OpenADLC backup: it does not begin with the ${MAGIC} header, nor the ${LEGACY_MAGIC} one archives had before it`);
   }
 
-  const manifestAt = MAGIC.length + 1;
+  const manifestAt = magic.length + 1;
   const newline = archive.indexOf(0x0a, manifestAt);
   if (newline < 0 || newline - manifestAt > MAX_MANIFEST_BYTES) {
-    throw new BackupError('this file has a FLEETBAK1 header but no manifest line after it');
+    throw new BackupError(`this file has a ${magic} header but no manifest line after it`);
   }
 
   const saltAt = newline + 1;
@@ -1335,7 +1353,7 @@ function parse(archive: Buffer): ParsedArchive {
   }
 
   return {
-    manifest: parseManifest(archive.subarray(manifestAt, newline).toString('utf8')),
+    manifest: parseManifest(archive.subarray(manifestAt, newline).toString('utf8'), magic),
     header: archive.subarray(0, saltAt),
     salt: archive.subarray(saltAt, ivAt),
     iv: archive.subarray(ivAt, tagAt),
@@ -1450,13 +1468,6 @@ export async function decryptBackup(archive: Buffer, passphrase: string, options
  */
 const PLAIN_FORMAT = 'openadlc-backup-plain';
 
-/**
- * What a plain file may say it is: this name, and the ones written before the
- * renames from FleetADLC and Fleet. Only the new one is written; an old one
- * was refused as "not an OpenADLC backup", though the file was a good backup.
- */
-const PLAIN_FORMATS: ReadonlySet<unknown> = new Set([PLAIN_FORMAT, 'fleetadlc-backup-plain', 'fleet-backup-plain']);
-
 const PLAIN_WARNING =
   'UNENCRYPTED. This file holds the GitHub App private key, signing keys, webhook ' +
   'secret, the package registry token, any non-expiring bot tokens and API keys, ' +
@@ -1497,7 +1508,7 @@ export function readPlain(file: Buffer): BackupContents {
   }
 
   const document = parsed as Record<string, unknown>;
-  if (!PLAIN_FORMATS.has(document?.format)) {
+  if (document?.format !== PLAIN_FORMAT) {
     throw new BackupError('this file is not an OpenADLC backup: it does not say it is one');
   }
 
@@ -1509,10 +1520,11 @@ export function readPlain(file: Buffer): BackupContents {
 
 /** Which of the two a file is, so a restore knows whether to ask for anything. */
 export function formatOf(file: Buffer): 'sealed' | 'plain' | 'unknown' {
-  if (file.subarray(0, FAMILY.length).toString('utf8') === FAMILY) return 'sealed';
+  const family = file.subarray(0, FAMILY.length).toString('utf8');
+  if (family === FAMILY || family === LEGACY_FAMILY) return 'sealed';
   try {
     const document = JSON.parse(file.toString('utf8')) as Record<string, unknown>;
-    if (PLAIN_FORMATS.has(document?.format)) return 'plain';
+    if (document?.format === PLAIN_FORMAT) return 'plain';
   } catch {
     // Not JSON, so not ours in this form.
   }

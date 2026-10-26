@@ -135,7 +135,7 @@ function render(
     <RestoreIntoPanel
       {...inFlight}
       phase={phase}
-      fileName={phase.at === 'read' ? 'openadlc-backup-2026-09-24.fleetbak' : null}
+      fileName={phase.at === 'read' ? 'openadlc-backup-2026-09-24.openadlcbak' : null}
       sealed
       passphrase=""
       choices={choices}
@@ -369,7 +369,7 @@ describe('Restore on the section, and in its modal', () => {
           <RestoreDialogBody>
             <RestoreIntoPanel
               phase={{ at: 'read', preview: PREVIEW, ...ARCHIVE }}
-              fileName="openadlc-backup-2026-09-24.fleetbak"
+              fileName="openadlc-backup-2026-09-24.openadlcbak"
               sealed
               passphrase=""
               choices={COMPARISON.choices}

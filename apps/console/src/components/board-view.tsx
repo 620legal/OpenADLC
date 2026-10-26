@@ -442,9 +442,10 @@ function Legend({ repositories }: { repositories: readonly RepoLook[] }) {
 
 /**
  * Who is on a card, in words. Seats that share one GitHub account are one
- * handle: "fleet-cipher-janedoe, fleet-cipher-janedoe" said neither who was
- * working nor that there were two. So where handles repeat, the roles are
- * named, then each handle once — as the item view heads its entries by role.
+ * handle: "openadlc-cipher-janedoe, openadlc-cipher-janedoe" said neither
+ * who was working nor that there were two. So where handles repeat, the roles
+ * are named, then each handle once — as the item view heads its entries by
+ * role.
  */
 export function peopleLine(labels: readonly { name: string; role?: string | null }[]): string {
   const handles = [...new Set(labels.map((label) => label.name))];

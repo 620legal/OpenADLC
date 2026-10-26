@@ -411,10 +411,11 @@ export function RestoreStep({
 
   return (
     <>
+      {/* `.fleetbak` is an archive from before the format took OpenADLC's name, and still restores. */}
       <input
         ref={picker}
         type="file"
-        accept=".fleetbak,.json,application/octet-stream,application/json"
+        accept=".openadlcbak,.fleetbak,.json,application/octet-stream,application/json"
         aria-label="The backup file"
         className="hidden"
         onChange={(event) => {

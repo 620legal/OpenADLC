@@ -10,7 +10,7 @@ import {
   declaredPathsOverlap,
   hasAccess,
   inertMarkup,
-  isFleetLogin,
+  isCrewLogin,
   normalisePlanPaths,
   redactSecrets,
   renderGateComment,
@@ -1329,7 +1329,7 @@ export class Gates {
     // The record named a person: a crew list that cannot be read is nobody to
     // mention, not a reason to fall back to the person the bot named.
     const crew = await bots.listBots().catch(() => null);
-    if (!crew || isFleetLogin(crew, login)) return null;
+    if (!crew || isCrewLogin(crew, login)) return null;
     return login;
   }
 
@@ -1343,6 +1343,6 @@ export class Gates {
     );
     const login = filed.user?.login;
     if (!login || !hasAccess(filed.author_association)) return null;
-    return isFleetLogin(await bots.listBots(), login) ? null : login;
+    return isCrewLogin(await bots.listBots(), login) ? null : login;
   }
 }

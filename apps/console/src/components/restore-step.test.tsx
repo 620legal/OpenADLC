@@ -85,7 +85,8 @@ describe('the walkthrough on a clean install', () => {
     expect(html).toContain('>Start fresh or restore a backup</h2>');
     expect(text(html)).toContain('Restore from a backup');
     expect(html).toMatch(/<button[^>]*>choose the backup file<\/button>/);
-    expect(html).toMatch(/accept="\.fleetbak,\.json[^"]*"/);
+    // An archive from before the format took OpenADLC's name is still one to choose.
+    expect(html).toMatch(/accept="\.openadlcbak,\.fleetbak,\.json[^"]*"/);
     // Starting fresh is the way on, and says so.
     expect(html).toMatch(/<button[^>]*>start fresh<\/button>/);
   });
@@ -243,7 +244,7 @@ const PREVIEW: RestorePreview = {
 
 function choice(
   phase: RestorePhase,
-  fileName: string | null = 'openadlc-backup-2026-09-24.fleetbak',
+  fileName: string | null = 'openadlc-backup-2026-09-24.openadlcbak',
   sealed = true,
   choices: Record<string, boolean> = { 'bot:builder': true, 'account:a': true },
 ): string {
@@ -337,7 +338,7 @@ describe('restoring from the first step', () => {
       <RestoreChoice
         restore={CLEAN}
         phase={{ at: 'read', preview: { ...PREVIEW, signIns: [...SIGN_INS, engineKey] }, ...ARCHIVE }}
-        fileName="openadlc-backup-2026-09-24.fleetbak"
+        fileName="openadlc-backup-2026-09-24.openadlcbak"
         sealed
         passphrase=""
         error={null}

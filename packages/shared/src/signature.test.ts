@@ -86,16 +86,6 @@ describe('a signed review’s head', () => {
   });
 });
 
-describe('a signature made before the rename to OpenADLC', () => {
-  it('still verifies, because the bridge reads its history from posts that carry one', () => {
-    // Signed as it was then: the old seat tag in the body, the old prefix on the signature.
-    const fields = { seat: 'lead-reviewer', task: 't1', repo: 'acme/web', kind: 'review' };
-    const signed = signBody('A review.\n\n<!-- fleet-seat:lead-reviewer -->', fields, key);
-    const old = signed.replace('<!-- openadlc-sig:', '<!-- fleet-sig:');
-    expect(verifyBody(old, [key])).toMatchObject({ ok: true, payload: { seat: 'lead-reviewer' } });
-  });
-});
-
 describe('a long run of newlines or spaces', () => {
   // Each of these took seconds on a 60,000-character run: a crew session could
   // post one and stall the bridge on every webhook and merge-line pass.

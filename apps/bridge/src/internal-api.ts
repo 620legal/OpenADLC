@@ -15,7 +15,7 @@ import {
   botAtStart,
   headlineFor,
   messageKindFor,
-  type FleetEventType,
+  type MarkerEvent,
   type Task,
   type TaskState,
   dedupeMarker,
@@ -753,7 +753,7 @@ export function registerInternalApi(
       text: string;
       note?: string;
       /** A `openadlc:` event the skill declared, which decides how this reads. */
-      event?: FleetEventType;
+      event?: MarkerEvent;
     }>();
     // A person's words, a question and the bridge's own rows are the bridge's
     // to write: a session that could post 'you' put words in the requester's

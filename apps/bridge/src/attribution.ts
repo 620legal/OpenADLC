@@ -3,7 +3,7 @@ import { attributions, audit } from '@openadlc/db';
 import { getSecretStore, type SecretStore } from '@openadlc/github';
 import {
   UNVERIFIED_REASON,
-  isFleetLogin,
+  isCrewLogin,
   newSigningKey,
   signBody,
   signedHead,
@@ -95,7 +95,7 @@ export class Attribution {
   ): Promise<P[]> {
     if (mode !== 'enforce') return [...posts];
     const keys = await this.keyring();
-    return posts.filter((post) => !isFleetLogin(crew, post.user) || verifyBody(post.body, keys).ok);
+    return posts.filter((post) => !isCrewLogin(crew, post.user) || verifyBody(post.body, keys).ok);
   }
 
   /**
@@ -129,7 +129,7 @@ export class Attribution {
     const keys = await this.keyring();
     const kept: R[] = [];
     for (const review of reviews) {
-      if (!isFleetLogin(crew, review.user)) {
+      if (!isCrewLogin(crew, review.user)) {
         kept.push(review);
         continue;
       }
@@ -220,7 +220,7 @@ export class Attribution {
     crew: readonly { name: string; githubLogin: string | null }[],
     mode: AttributionMode,
   ): Promise<{ counts: boolean; verified: boolean; seat: string | null; task: string | null; reason: string | null }> {
-    if (!isFleetLogin(crew, post.login)) return { counts: true, verified: false, seat: null, task: null, reason: null };
+    if (!isCrewLogin(crew, post.login)) return { counts: true, verified: false, seat: null, task: null, reason: null };
     const keys = await this.loaded();
     const verdict = verifyBody(post.body, [keys.current, ...keys.retired]);
 

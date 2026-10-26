@@ -397,7 +397,7 @@ describe('where a backup is allowed to land', () => {
     // travels with the repository while the habit of running this from the
     // checkout travels with the operator.
     const repo = scratch();
-    const refusal = outputRefusal(join(repo, 'backups', 'today.fleetbak'), repo);
+    const refusal = outputRefusal(join(repo, 'backups', 'today.openadlcbak'), repo);
 
     expect(refusal?.reason).toContain('inside the repository');
     expect(refusal?.notes.join(' ')).toMatch(/App key|committable/);
@@ -413,7 +413,7 @@ describe('where a backup is allowed to land', () => {
 
   it('allows a path outside the repository', () => {
     const repo = scratch();
-    expect(outputRefusal(join(scratch(), 'openadlc.fleetbak'), repo)).toBeNull();
+    expect(outputRefusal(join(scratch(), 'openadlc.openadlcbak'), repo)).toBeNull();
   });
 
   it('sees through a symlink that leads back into the repository', () => {
@@ -424,13 +424,13 @@ describe('where a backup is allowed to land', () => {
     const link = join(scratch(), 'shortcut');
     symlinkSync(join(repo, 'infra'), link);
 
-    expect(outputRefusal(join(link, 'today.fleetbak'), repo)?.reason).toContain('inside the repository');
+    expect(outputRefusal(join(link, 'today.openadlcbak'), repo)?.reason).toContain('inside the repository');
   });
 
   it('refuses to overwrite a file that is already there', () => {
     // The default path carries the date, so the file it would land on is either
     // today's archive or one somebody put there deliberately.
-    const target = join(scratch(), 'today.fleetbak');
+    const target = join(scratch(), 'today.openadlcbak');
     writeFileSync(target, 'an earlier backup');
 
     expect(outputRefusal(target, scratch())?.reason).toContain('already there');
@@ -440,15 +440,15 @@ describe('where a backup is allowed to land', () => {
     // `outputRefusal` looks before the passphrase prompt. A link planted where
     // nothing exists yet passed that look, and the archive went where it pointed.
     const dir = scratch();
-    const elsewhere = join(dir, 'elsewhere.fleetbak');
-    const target = join(dir, 'today.fleetbak');
+    const elsewhere = join(dir, 'elsewhere.openadlcbak');
+    const target = join(dir, 'today.openadlcbak');
     symlinkSync(elsewhere, target);
     expect(outputRefusal(target, scratch())).toBeNull();
 
     expect(() => writeArchive(target, Buffer.from('sealed'))).toThrow(/refusing to write .*: something is already there/);
     expect(existsSync(elsewhere)).toBe(false);
 
-    const fresh = join(dir, 'fresh.fleetbak');
+    const fresh = join(dir, 'fresh.openadlcbak');
     writeArchive(fresh, Buffer.from('sealed'));
     expect(readFileSync(fresh, 'utf8')).toBe('sealed');
     expect(statSync(fresh).mode & 0o777).toBe(0o600);
@@ -457,7 +457,7 @@ describe('where a backup is allowed to land', () => {
   });
 
   it('defaults to a dated file in the home directory, not the working directory', () => {
-    expect(defaultBackupPath(MADE_AT, '/home/op')).toBe('/home/op/openadlc-backup-2026-09-21.fleetbak');
+    expect(defaultBackupPath(MADE_AT, '/home/op')).toBe('/home/op/openadlc-backup-2026-09-21.openadlcbak');
   });
 });
 
@@ -479,7 +479,7 @@ describe('the passphrase an archive is sealed with', () => {
     const io = fakeIo(['correct horse', 'correct hose']);
     const { deps, written } = backupDeps(io.io, install.access);
 
-    await backup(scratch(), { out: join(scratch(), 'out.fleetbak') }, deps);
+    await backup(scratch(), { out: join(scratch(), 'out.openadlcbak') }, deps);
 
     expect(written).toEqual([]);
     expect(process.exitCode).toBe(1);
@@ -491,7 +491,7 @@ describe('the passphrase an archive is sealed with', () => {
     const io = fakeIo(['1234', '1234']);
     const { deps, written, form } = backupDeps(io.io, install.access);
 
-    await backup(scratch(), { out: join(scratch(), 'out.fleetbak') }, deps);
+    await backup(scratch(), { out: join(scratch(), 'out.openadlcbak') }, deps);
 
     expect(io.said).toContain(`warn ${passphraseWarning('1234')}`);
     expect(io.text()).toContain('warn Shorter than 12 characters');
@@ -505,7 +505,7 @@ describe('the passphrase an archive is sealed with', () => {
     const io = fakeIo(['correct horse', 'correct horse']);
     const { deps } = backupDeps(io.io, install.access);
 
-    await backup(scratch(), { out: join(scratch(), 'out.fleetbak') }, deps);
+    await backup(scratch(), { out: join(scratch(), 'out.openadlcbak') }, deps);
 
     expect(io.text()).not.toContain('Shorter than 12 characters');
   });
@@ -521,7 +521,7 @@ describe('the passphrase an archive is sealed with', () => {
       return seal(contents, passphrase);
     };
 
-    await backup(scratch(), { out: join(scratch(), 'out.fleetbak') }, deps);
+    await backup(scratch(), { out: join(scratch(), 'out.openadlcbak') }, deps);
 
     expect(io.said.filter((line) => line.startsWith('ask-secret'))).toEqual(['ask-secret Passphrase (Enter makes one)']);
     expect(sealedWith).toHaveLength(1);
@@ -545,7 +545,7 @@ describe('the passphrase an archive is sealed with', () => {
     const io = fakeIo(['a passphrase', 'a passphrase']);
     const { deps, written } = backupDeps(io.io, fakeInstall({ contents }).access);
 
-    await backup(scratch(), { out: join(scratch(), 'out.fleetbak') }, deps);
+    await backup(scratch(), { out: join(scratch(), 'out.openadlcbak') }, deps);
 
     const listed = io.said.findIndex((line) => line.includes('github-app-private-key'));
     const asked = io.said.findIndex((line) => line.startsWith('ask-secret'));
@@ -739,7 +739,7 @@ describe('GitHub sign-ins are a choice', () => {
     const io = fakeIo(['a passphrase', 'a passphrase']);
     const { deps, packed } = backupDeps(io.io, fakeInstall({ contents: found }).access);
 
-    await backup(scratch(), { out: join(scratch(), 'out.fleetbak') }, deps);
+    await backup(scratch(), { out: join(scratch(), 'out.openadlcbak') }, deps);
 
     expect(io.text()).toMatch(/GitHub sign-ins are included\. GitHub rotates a sign-in each time it is used/);
     expect(io.text()).toContain('if the old one keeps running, one of the two will need reconnecting');
@@ -751,7 +751,7 @@ describe('GitHub sign-ins are a choice', () => {
     const io = fakeIo(['a passphrase', 'a passphrase']);
     const { deps, packed } = backupDeps(io.io, fakeInstall({ contents: found }).access);
 
-    await backup(scratch(), { out: join(scratch(), 'out.fleetbak'), selection: NO_SIGN_INS }, deps);
+    await backup(scratch(), { out: join(scratch(), 'out.openadlcbak'), selection: NO_SIGN_INS }, deps);
 
     expect(io.text()).toContain('The GitHub sign-ins are left out, so each bot connects again after a restore');
     expect(io.text()).toContain('Not stored: github-refresh-atlas, github-refresh-nova.');
@@ -790,7 +790,7 @@ describe('GitHub sign-ins are a choice', () => {
     const io = fakeIo(['a passphrase', CONFIRM_WORD]);
     const { providers, refreshed } = fakeProviders();
 
-    await restore('/tmp/x.fleetbak', {}, {
+    await restore('/tmp/x.openadlcbak', {}, {
       install: install.access,
       io: io.io,
       providers,
@@ -837,7 +837,7 @@ describe('GitHub sign-ins are a choice', () => {
     old.secrets = { ...old.secrets, 'github-refresh-nova': 'ghr_zzz-nova-refresh-zzz', 'github-refresh-atlas': VALUES.refresh };
     const io = fakeIo(['a passphrase']);
 
-    await restore('/tmp/x.fleetbak', { dryRun: true }, {
+    await restore('/tmp/x.openadlcbak', { dryRun: true }, {
       install: fakeInstall().access,
       io: io.io,
       providers: fakeProviders().providers,
@@ -872,7 +872,7 @@ describe('GitHub sign-ins are a choice', () => {
     });
     const io = fakeIo(['a passphrase', CONFIRM_WORD]);
 
-    await restore('/tmp/x.fleetbak', {}, {
+    await restore('/tmp/x.openadlcbak', {}, {
       install: install.access,
       io: io.io,
       providers: fakeProviders().providers,
@@ -1004,7 +1004,7 @@ describe('choosing part of the install from the command line', () => {
     };
     const { deps, packed } = backupDeps(io.io, fakeInstall({ contents }).access);
 
-    await backup(scratch(), { out: join(scratch(), 'out.fleetbak'), selection: selectionFromFlags({ without: 'install', bots: 'builder' }) as BackupSelection }, deps);
+    await backup(scratch(), { out: join(scratch(), 'out.openadlcbak'), selection: selectionFromFlags({ without: 'install', bots: 'builder' }) as BackupSelection }, deps);
 
     expect(Object.keys(packed[0]?.secrets ?? {})).toEqual(['ssh-signing-builder']);
     expect(io.text()).toContain('Left out, because qa was not chosen: ssh-signing-qa.');
@@ -1037,7 +1037,7 @@ describe('a restore that changes which account a bot is', () => {
     const install = fakeInstall({ shape: connectedElsewhere });
     const io = fakeIo(['a passphrase', CONFIRM_WORD]);
 
-    await restore('/tmp/x.fleetbak', {}, {
+    await restore('/tmp/x.openadlcbak', {}, {
       install: install.access,
       io: io.io,
       providers: fakeProviders().providers,
@@ -1064,7 +1064,7 @@ describe('a restore that changes which account a bot is', () => {
     const install = fakeInstall({ shape: connectedElsewhere, failSecret: 'github-refresh-atlas' });
     const io = fakeIo(['a passphrase', CONFIRM_WORD]);
 
-    await restore('/tmp/x.fleetbak', {}, {
+    await restore('/tmp/x.openadlcbak', {}, {
       install: install.access,
       io: io.io,
       providers: fakeProviders().providers,
@@ -1089,7 +1089,7 @@ describe('a restore that changes which account a bot is', () => {
 
     const install = fakeInstall({ shape: connectedElsewhere });
     const io = fakeIo(['a passphrase']);
-    await restore('/tmp/x.fleetbak', { dryRun: true }, {
+    await restore('/tmp/x.openadlcbak', { dryRun: true }, {
       install: install.access,
       io: io.io,
       providers: fakeProviders().providers,
@@ -1157,7 +1157,7 @@ describe('a dry run', () => {
     });
     const io = fakeIo(['a passphrase']);
 
-    await restore('/tmp/does-not-matter.fleetbak', { dryRun: true }, {
+    await restore('/tmp/does-not-matter.openadlcbak', { dryRun: true }, {
       install: install.access,
       io: io.io,
       providers: fakeProviders().providers,
@@ -1178,7 +1178,7 @@ describe('a dry run', () => {
     // archive is settled before anybody types one at the wrong one.
     const io = fakeIo(['a passphrase']);
 
-    await restore('/tmp/x.fleetbak', { dryRun: true }, {
+    await restore('/tmp/x.openadlcbak', { dryRun: true }, {
       install: fakeInstall().access,
       io: io.io,
       providers: fakeProviders().providers,
@@ -1205,7 +1205,7 @@ describe('a restore that writes', () => {
     const install = fakeInstall({ shape });
     const io = fakeIo(['a passphrase', 'y']);
 
-    await restore('/tmp/x.fleetbak', {}, {
+    await restore('/tmp/x.openadlcbak', {}, {
       install: install.access,
       io: io.io,
       providers: fakeProviders().providers,
@@ -1227,7 +1227,7 @@ describe('a restore that writes', () => {
     const install = fakeInstall({ shape });
     const io = fakeIo(['a passphrase', CONFIRM_WORD]);
 
-    await restore('/tmp/x.fleetbak', {}, {
+    await restore('/tmp/x.openadlcbak', {}, {
       install: install.access,
       io: io.io,
       providers: fakeProviders().providers,
@@ -1250,7 +1250,7 @@ describe('a restore that writes', () => {
     const install = fakeInstall({ shape: { bots: [{ name: 'flow', slot: 'automation', githubLogin: 'openadlc-flow' }] } });
     const io = fakeIo(['a passphrase', CONFIRM_WORD]);
 
-    await restore('/tmp/x.fleetbak', {}, {
+    await restore('/tmp/x.openadlcbak', {}, {
       install: install.access,
       io: io.io,
       providers: fakeProviders().providers,
@@ -1273,10 +1273,10 @@ describe('what these commands may print', () => {
       backupIo.io,
       fakeInstall({ contents: { secrets: contents.secrets, settings: contents.settings, bots: contents.bots } }).access,
     );
-    await backup(scratch(), { out: join(scratch(), 'out.fleetbak') }, deps);
+    await backup(scratch(), { out: join(scratch(), 'out.openadlcbak') }, deps);
 
     const dryIo = fakeIo(['a passphrase']);
-    await restore('/tmp/x.fleetbak', { dryRun: true }, {
+    await restore('/tmp/x.openadlcbak', { dryRun: true }, {
       install: fakeInstall().access,
       io: dryIo.io,
       providers: fakeProviders().providers,
@@ -1284,7 +1284,7 @@ describe('what these commands may print', () => {
     });
 
     const writeIo = fakeIo(['a passphrase', CONFIRM_WORD]);
-    await restore('/tmp/x.fleetbak', {}, {
+    await restore('/tmp/x.openadlcbak', {}, {
       install: fakeInstall().access,
       io: writeIo.io,
       providers: fakeProviders().providers,
@@ -1315,7 +1315,7 @@ describe('what these commands may print', () => {
       bots: contents.bots.map((bot) => ({ ...bot, name: `${bot.name}\u001b]52;c;cHduZWQ=\u0007\nFORGED` })),
     };
     const io = fakeIo(['a passphrase']);
-    await restore('/tmp/x.fleetbak', { dryRun: true }, {
+    await restore('/tmp/x.openadlcbak', { dryRun: true }, {
       install: fakeInstall().access,
       io: io.io,
       providers: fakeProviders().providers,
@@ -1332,7 +1332,7 @@ describe('what these commands may print', () => {
     // the message, and this is the only command where every credential in the
     // install is in memory at once.
     const io = fakeIo(['a passphrase']);
-    await restore('/tmp/x.fleetbak', {}, {
+    await restore('/tmp/x.openadlcbak', {}, {
       install: fakeInstall().access,
       io: io.io,
       providers: fakeProviders().providers,
@@ -1460,7 +1460,7 @@ describe('--unencrypted', () => {
     const io = fakeIo(['a passphrase', 'a passphrase']);
     const { deps, form } = backupDeps(io.io, fakeInstall({ contents: SOMETHING_TO_SAVE }).access);
 
-    await backup(scratch(), { out: join(scratch(), 'sealed.fleetbak') }, deps);
+    await backup(scratch(), { out: join(scratch(), 'sealed.openadlcbak') }, deps);
 
     expect(form).toEqual(['sealed']);
   });
@@ -1479,12 +1479,12 @@ describe('--unencrypted', () => {
   });
 
   it('names the two forms differently when nobody says where', () => {
-    // A directory listing has to tell them apart; `.fleetbak` has always meant
-    // sealed and must keep meaning it.
+    // A directory listing has to tell them apart; `.openadlcbak` means sealed,
+    // as `.fleetbak` did before it, and must keep meaning it.
     const sealed = defaultBackupPath(MADE_AT, '/home/someone');
     const plain = defaultBackupPath(MADE_AT, '/home/someone', true);
 
-    expect(sealed).toMatch(/\.fleetbak$/);
+    expect(sealed).toMatch(/\.openadlcbak$/);
     expect(plain).toMatch(/\.plain\.json$/);
     expect(sealed).not.toBe(plain);
   });
@@ -1616,7 +1616,7 @@ describe('restoring onto an install whose bots are named differently', () => {
     const install = fakeInstall({ shape: freshInstall });
     const io = fakeIo(['a passphrase', CONFIRM_WORD]);
 
-    await restore('/tmp/x.fleetbak', {}, {
+    await restore('/tmp/x.openadlcbak', {}, {
       install: install.access,
       io: io.io,
       providers: fakeProviders().providers,
@@ -1704,7 +1704,7 @@ describe('the sign-ins a restore finds in an archive', () => {
     const io = fakeIo(['a passphrase']);
     const { providers, refreshed } = fakeProviders({ refuse: [REFUSED_KEY] });
 
-    await restore('/tmp/x.fleetbak', { dryRun: true }, {
+    await restore('/tmp/x.openadlcbak', { dryRun: true }, {
       install: fakeInstall({ shape: clean }).access,
       io: io.io,
       providers,
@@ -1728,7 +1728,7 @@ describe('the sign-ins a restore finds in an archive', () => {
     const install = fakeInstall({ shape: clean });
     const io = fakeIo(['a passphrase', CONFIRM_WORD]);
 
-    await restore('/tmp/x.fleetbak', {}, {
+    await restore('/tmp/x.openadlcbak', {}, {
       install: install.access,
       io: io.io,
       providers: fakeProviders({ refuse: [REFUSED_KEY, 'sk-ant-api-zzz-engine-zzz'] }).providers,
@@ -1743,7 +1743,7 @@ describe('the sign-ins a restore finds in an archive', () => {
     const install = fakeInstall({ shape: clean });
     const io = fakeIo(['a passphrase', CONFIRM_WORD]);
 
-    await restore('/tmp/x.fleetbak', {}, {
+    await restore('/tmp/x.openadlcbak', {}, {
       install: install.access,
       io: io.io,
       providers: fakeProviders({ refuse: [REFUSED_KEY] }).providers,
@@ -1759,7 +1759,7 @@ describe('the sign-ins a restore finds in an archive', () => {
     const install = fakeInstall({ shape: clean });
     const io = fakeIo(['a passphrase', CONFIRM_WORD]);
 
-    await restore('/tmp/x.fleetbak', {}, {
+    await restore('/tmp/x.openadlcbak', {}, {
       install: install.access,
       io: io.io,
       providers: fakeProviders({ spent: [VALUES.refresh] }).providers,
@@ -1784,7 +1784,7 @@ describe('the sign-ins a restore finds in an archive', () => {
     const left = fakeProviders();
     const leftIo = fakeIo(['a passphrase', CONFIRM_WORD]);
     const leftInstall = fakeInstall({ shape: setUp });
-    await restore('/tmp/x.fleetbak', {}, { install: leftInstall.access, io: leftIo.io, providers: left.providers, archive: () => fakeArchive(archived()) });
+    await restore('/tmp/x.openadlcbak', {}, { install: leftInstall.access, io: leftIo.io, providers: left.providers, archive: () => fakeArchive(archived()) });
 
     expect(left.refreshed).toEqual([]);
     expect(leftInstall.store.get('github-refresh-builder')).toBe('current-github-refresh-builder');
@@ -1793,7 +1793,7 @@ describe('the sign-ins a restore finds in an archive', () => {
     const taken = fakeProviders();
     const takenInstall = fakeInstall({ shape: setUp });
     await restore(
-      '/tmp/x.fleetbak',
+      '/tmp/x.openadlcbak',
       { takeOverSignIns: true },
       { install: takenInstall.access, io: fakeIo(['a passphrase', CONFIRM_WORD]).io, providers: taken.providers, archive: () => fakeArchive(archived()) },
     );
@@ -1811,7 +1811,7 @@ describe('a restore with the database down', () => {
     const refused = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:47432'), { code: 'ECONNREFUSED' });
     const io = fakeIo(['a passphrase', CONFIRM_WORD]);
 
-    await restore('/tmp/x.fleetbak', {}, {
+    await restore('/tmp/x.openadlcbak', {}, {
       install: { ...install.access, shape: async () => Promise.reject(refused) },
       io: io.io,
       providers: fakeProviders().providers,

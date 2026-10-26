@@ -82,7 +82,7 @@ writes over the other's row.
 
 - `src/selection.ts` — what a person chose: the install, repositories, the crew or some seats, model accounts, history, and sign-ins.
 - `src/contents.ts` — an install snapshot into an archive's contents (`buildBackup`), and what kind of secret each ref is.
-- `src/archive.ts` — the `.fleetbak` format: a cleartext manifest over an AES-256-GCM body keyed with scrypt, or the plain form.
+- `src/archive.ts` — the `.openadlcbak` format: a cleartext manifest over an AES-256-GCM body keyed with scrypt, or the plain form. It also opens the `FLEETBAK1` archives (`.fleetbak`) written before the format took OpenADLC's name.
 - `src/live.ts` — the install as Postgres and the secret store hold it, read for a backup and written by a restore.
 - `src/signins.ts`, `src/restore.ts` — the verdicts and the take-over; a restore start to finish.
 - `src/plan.ts`, `src/apply.ts`, `src/clean.ts` — deciding, carrying out, and whether the target is clean.

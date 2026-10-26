@@ -37,12 +37,23 @@ export interface LeftoverReport {
   unchecked: string[];
 }
 
-/** The Terraform addresses that make each resource this install's own. */
-const OWNED_BY = {
-  pool: 'google_iam_workload_identity_pool.github',
-  database: 'google_sql_database_instance.fleet',
-  network: 'google_compute_network.fleet',
-} as const;
+/**
+ * The Terraform addresses that make each resource this install's own. The
+ * database and the network were `.fleet` until the module moved them to
+ * `.openadlc` (its `moved` blocks), and a live install's state keeps the old
+ * address until its next apply. This runs before that apply: reading only the
+ * new address, it would take the install's own database and network for an
+ * earlier install's, and refuse the very apply that moves them.
+ */
+const OWNED_BY: Readonly<Record<'pool' | 'database' | 'network', readonly string[]>> = {
+  pool: ['google_iam_workload_identity_pool.github'],
+  database: ['google_sql_database_instance.openadlc', 'google_sql_database_instance.fleet'],
+  network: ['google_compute_network.openadlc', 'google_compute_network.fleet'],
+};
+
+function ownsAny(owned: ReadonlySet<string>, addresses: readonly string[]): boolean {
+  return addresses.some((address) => owned.has(address));
+}
 
 /**
  * The resources `terraform state list` says this install holds, by address
@@ -107,7 +118,7 @@ export async function findLeftovers(
   const project = `--project=${projectId}`;
 
   // The workload identity pool: soft-deleted for 30 days, and its ID with it.
-  if (!owned.has(OWNED_BY.pool)) {
+  if (!ownsAny(owned, OWNED_BY.pool)) {
     const pool = `${prefix}-github`;
     const result = await gcloud(['iam', 'workload-identity-pools', 'describe', pool, '--location=global', project, '--format=json']);
     if (result.code === 0) {
@@ -125,7 +136,7 @@ export async function findLeftovers(
   }
 
   // The database: there, or deleted recently enough that Google still holds its name.
-  if (!owned.has(OWNED_BY.database)) {
+  if (!ownsAny(owned, OWNED_BY.database)) {
     const instance = `${prefix}-db`;
     const result = await gcloud(['sql', 'instances', 'describe', instance, project, '--format=json']);
     if (result.code === 0) {
@@ -166,7 +177,7 @@ export async function findLeftovers(
   }
 
   // The network, which Terraform would otherwise fail to create.
-  if (!owned.has(OWNED_BY.network)) {
+  if (!ownsAny(owned, OWNED_BY.network)) {
     const network = `${prefix}-network`;
     const result = await gcloud(['compute', 'networks', 'describe', network, project, '--format=json']);
     if (result.code === 0) found.push({ what: `network ${network}`, detail: 'still there' });
