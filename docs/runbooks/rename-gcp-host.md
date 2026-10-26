@@ -193,8 +193,9 @@ the host, and `[openadlc] moved /var/lib/fleet to /var/lib/openadlc`. Then:
 - The firewall finds the host: `gcloud compute instances describe "$host"
   --zone "$zone" --project "$project" --format='value(tags.items)'` prints
   `openadlc-host`, and `gcloud compute firewall-rules list --project
-  "$project" --filter='targetTags:openadlc-host' --format='value(name)'`
-  lists the seven rules: `<prefix>-allow-iap`, `-allow-bridge`, `-allow-lb`,
+  "$project" --filter='targetTags.list():openadlc-host' --format='value(name)'`
+  lists the seven rules (gcloud refuses `--filter='targetTags:openadlc-host'`:
+  it sends that one to the API as a pattern the API rejects): `<prefix>-allow-iap`, `-allow-bridge`, `-allow-lb`,
   `-allow-egress-web`, `-allow-egress-internal`, `-deny-egress` and
   `-deny-ingress`.
 - The board has no `hostd` card ("OpenADLC’s host service is not answering"),

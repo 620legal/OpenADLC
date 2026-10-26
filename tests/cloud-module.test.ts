@@ -1613,7 +1613,11 @@ describe('the names from before the rename to OpenADLC', () => {
     expect(writtenFile('/etc/openadlc/prepare-hostd.sh')).toContain('root=/var/lib/openadlc');
     expect(runbook).toContain('cat /var/lib/openadlc/hostd-image.started');
     // The tag, as the firewall's rules name it, and every rule the runbook lists.
-    expect(runbook).toContain("--filter='targetTags:openadlc-host'");
+    // `targetTags:openadlc-host` is the form gcloud sends to the API as a
+    // pattern, which the API refused on the first rename (2026-10-26):
+    // `.list()` keeps the match on gcloud's side.
+    expect(runbook).toContain("--filter='targetTags.list():openadlc-host'");
+    expect(runbook).not.toMatch(/--filter='targetTags:openadlc-host' --format/);
     const rules = [...mainTf.matchAll(/^resource "google_compute_firewall" "[^"]+" \{\n\s*name\s*=\s*"\$\{var\.name_prefix\}(-[a-z-]+)"/gm)].map((match) => match[1]!);
     expect(rules).toHaveLength(7);
     expect(runbook).toContain('the seven');
