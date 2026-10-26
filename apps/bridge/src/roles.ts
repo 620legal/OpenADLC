@@ -190,6 +190,11 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'POST /v1/onboarding/repository': 'admin',
   // Lets the app's installation on another account count; see `app-reach.ts`.
   'POST /v1/github/allowed-accounts': 'admin',
+  // The names a cloud host's tasks may reach beyond the proxy's own list,
+  // and whether the proxy reads them: each one is a way out of the host
+  // (`egress-routes.ts`).
+  'GET /v1/egress/hosts': 'admin',
+  'PUT /v1/egress/hosts': 'admin',
   'POST /v1/onboarding/bots/:bot/connect': 'admin',
   'POST /v1/onboarding/bots/:bot/cancel': 'admin',
   'POST /v1/engines/updates': 'admin',

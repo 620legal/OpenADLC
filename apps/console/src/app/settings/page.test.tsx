@@ -31,6 +31,10 @@ const bot = (name: string, slot: string, role: string, extra: Record<string, unk
 type Me = { known: true; email: string; role: 'admin' | 'user'; identityMode: 'local' | 'iap' };
 const ADMIN: Me = { known: true, email: 'janedoe@example.com', role: 'admin', identityMode: 'iap' };
 const who = vi.hoisted(() => ({ me: null as unknown as Me }));
+/** Settings → Egress as the bridge answers it: a laptop's tasks leave through no proxy. */
+const egress = vi.hoisted(() => ({
+  view: { hosts: [] as string[], proxied: false as boolean | null, settingsList: false as boolean | null, reason: null as string | null },
+}));
 who.me = ADMIN;
 
 vi.mock('@/lib/api', () => ({
@@ -195,6 +199,7 @@ vi.mock('@/lib/api', () => ({
       throw new Error('bridge /v1/backup → 404');
     },
     workPauses: async () => ({ paused: null, repos: {} }),
+    egressHosts: async () => egress.view,
   },
 }));
 vi.mock('@/lib/read-header', () => ({
@@ -202,9 +207,10 @@ vi.mock('@/lib/read-header', () => ({
 }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 
-async function page(): Promise<string> {
+async function page(allowHost?: string): Promise<string> {
   const { default: SettingsPage } = await import('./page');
-  return renderToStaticMarkup(await SettingsPage()).replace(/<!-- -->/g, '');
+  const searchParams = Promise.resolve(allowHost === undefined ? {} : { 'allow-host': allowHost });
+  return renderToStaticMarkup(await SettingsPage({ searchParams })).replace(/<!-- -->/g, '');
 }
 
 /** The rows of one section, as their text. */
@@ -465,7 +471,7 @@ describe('the settings page', () => {
       paused: null,
       repos: { 'openadlc-testbed': { by: 'janedoe', at: '2026-09-29T10:00:00.000Z', reason: 'a migration is running' } },
     });
-    const html = renderToStaticMarkup(<RoleProvider role="admin">{await SettingsPage()}</RoleProvider>).replace(/<!-- -->/g, '');
+    const html = renderToStaticMarkup(<RoleProvider role="admin">{await SettingsPage({ searchParams: Promise.resolve({}) })}</RoleProvider>).replace(/<!-- -->/g, '');
     expect(section(html, 'pause')).toContain('Paused by janedoe at 2026-09-29 10:00 UTC: a migration is running.');
     const markup = html.slice(html.indexOf('id="pause"'), html.indexOf('</section>', html.indexOf('id="pause"')));
     expect(markup).toContain('aria-label="Paused repositories"');
@@ -500,5 +506,72 @@ describe('the settings page', () => {
     const on = section(await page(), 'pause');
     expect(on).toContain('Work runs.');
     expect(on).not.toContain('dispatcher');
+  });
+
+  it('has no Egress on a laptop, whose tasks leave through no proxy', async () => {
+    const html = await page();
+    expect(html).not.toContain('id="egress"');
+    expect(html).not.toContain('href="#egress"');
+  });
+
+  it('lists the names a cloud host’s tasks may reach, and offers the host a check found refused without allowing it', async () => {
+    egress.view = { hosts: ['testing.acme.example'], proxied: true, settingsList: true, reason: null };
+    try {
+      const html = await page('Web-1234-UC.a.run.app');
+      expect(html).toContain('href="#egress"');
+      const listed = section(html, 'egress');
+      expect(listed).toContain('testing.acme.example');
+      expect(listed).toContain('in the audit trail with who made it');
+      expect(listed).toContain('extra_allowed_domains');
+      expect(listed).toContain('A check found web-1234-uc.a.run.app refused');
+      // In the field, for a person to press Allow; not on the list.
+      expect(html).toMatch(/aria-label="Host name to allow"[^>]*value="web-1234-uc.a.run.app"/);
+      expect(listed.match(/Remove/g)).toHaveLength(1);
+    } finally {
+      egress.view = { hosts: [], proxied: false, settingsList: false, reason: null };
+    }
+  });
+
+  it('keeps a host the list already lets through in the field, and says the proxy still refuses it, as the card does', async () => {
+    try {
+      // The host itself on the list, and a name above it.
+      for (const name of ['testing.acme.example', 'acme.example']) {
+        egress.view = { hosts: [name], proxied: true, settingsList: true, reason: null };
+        const html = await page('testing.acme.example');
+        const listed = section(html, 'egress');
+        expect(listed, name).toContain(`This list has ${name}, and a check found the egress proxy still refuses testing.acme.example`);
+        expect(listed, name).toContain('Allow saves the list again');
+        expect(listed, name).not.toContain('A check found testing.acme.example refused');
+        expect(html, name).toMatch(/aria-label="Host name to allow"[^>]*value="testing.acme.example"/);
+        expect(html, name).not.toMatch(/aria-label="Host name to allow"[^>]*disabled=""/);
+      }
+    } finally {
+      egress.view = { hosts: [], proxied: false, settingsList: false, reason: null };
+    }
+  });
+
+  it('keeps the section, with why and nothing to save, when hostd could not be asked, rather than look like a laptop', async () => {
+    egress.view = { hosts: ['testing.acme.example'], proxied: null, settingsList: null, reason: 'hostd is not answering, so the egress proxy could not be asked or given the list.' };
+    try {
+      const html = await page('web-1234-uc.a.run.app');
+      expect(html).toContain('href="#egress"');
+      const listed = section(html, 'egress');
+      expect(listed).toContain('hostd is not answering, so the egress proxy could not be asked');
+      expect(listed).toContain('testing.acme.example');
+      expect(html).toMatch(/aria-label="Host name to allow"[^>]*disabled=""/);
+    } finally {
+      egress.view = { hosts: [], proxied: false, settingsList: false, reason: null };
+    }
+  });
+
+  it('says the apply comes first where the host’s proxy reads no list yet, and takes no name until then', async () => {
+    egress.view = { hosts: [], proxied: true, settingsList: false, reason: 'the host’s egress proxy reads this list once the module is applied with this release' };
+    try {
+      const html = await page();
+      expect(section(html, 'egress')).toContain('once the module is applied with this release');
+      expect(html).toMatch(/aria-label="Host name to allow"[^>]*disabled=""/);
+    } finally {
+      egress.view = { hosts: [], proxied: false, settingsList: false, reason: null };
+    }
   });
 });

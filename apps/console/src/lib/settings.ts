@@ -34,6 +34,8 @@ export const SETTINGS_SECTIONS = [
   { id: 'models', label: 'AI models' },
   { id: 'crew', label: 'Crew' },
   { id: 'system', label: 'System' },
+  // Only on a cloud install, whose tasks leave through an egress proxy; the page leaves it out elsewhere.
+  { id: 'egress', label: 'Egress' },
   { id: 'spending-limits', label: 'Spending limits' },
   { id: 'backup', label: 'Backup' },
   { id: 'pause', label: 'Pause work' },

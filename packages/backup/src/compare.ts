@@ -109,6 +109,7 @@ const SETTING_LABELS: Record<string, string> = {
   bridgeMergeOff: 'The repositories whose approved pull requests a person merges',
   ciMergeByPerson: 'The repositories where a person merges a change to CI',
   allowedAccounts: 'The other accounts the app may be installed on',
+  egressExtraHosts: 'The names a cloud host’s tasks may reach beyond its own list',
   ciMinutesCap: 'The monthly cap on GitHub Actions minutes',
   humanIds: 'The GitHub account ids of the people who may approve',
   workPaused: 'The pause of new work',

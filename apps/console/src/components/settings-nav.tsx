@@ -14,11 +14,14 @@ const READING_LINE = 120;
  * it. `/settings#engine-updates` is the same section: a failed update's card
  * still links there. On a phone it is a row of pills above the sections.
  */
-export function SettingsNav() {
+export function SettingsNav({ omit = [] }: { omit?: readonly string[] } = {}) {
   const [current, setCurrent] = useState<string>(SETTINGS_SECTIONS[0].id);
+  // A section this install does not have, such as Egress on a laptop.
+  const sections = SETTINGS_SECTIONS.filter((section) => !omit.includes(section.id));
+  const shown = sections.map((section) => section.id).join(' ');
 
   useEffect(() => {
-    const ids: string[] = SETTINGS_SECTIONS.map((section) => section.id);
+    const ids: string[] = shown.split(' ');
     const read = () => {
       const reading = sectionBeingRead({
         tops: ids.map((id) => ({ id, top: document.getElementById(id)?.getBoundingClientRect().top ?? Infinity })),
@@ -47,14 +50,14 @@ export function SettingsNav() {
       window.removeEventListener('hashchange', fromHash);
       window.removeEventListener('scroll', onScroll);
     };
-  }, []);
+  }, [shown]);
 
   return (
     <nav
       aria-label="Settings"
       className="scroll-row -mx-4 flex shrink-0 gap-1.5 overflow-x-auto px-4 md:sticky md:top-7 md:mx-0 md:w-[200px] md:flex-col md:gap-0.5 md:self-start md:overflow-visible md:px-0"
     >
-      {SETTINGS_SECTIONS.map((section) => {
+      {sections.map((section) => {
         const active = section.id === current;
         return (
           <a

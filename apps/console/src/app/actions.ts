@@ -835,6 +835,25 @@ export async function pauseItem(subject: string, reason?: string): Promise<{ ok:
   }
 }
 
+/**
+ * The names a cloud host's tasks may reach beyond its own list, saved whole:
+ * the bridge audits what was added and removed, and hostd puts the list on
+ * the egress proxy. An admin's. `hosts` is what was kept, as the bridge wrote
+ * it, also when the proxy did not take it.
+ */
+export async function saveEgressHosts(hosts: string[]): Promise<{ ok: boolean; error?: string; hosts?: string[] }> {
+  try {
+    const saved = await call<{ hosts: string[] }>('/v1/egress/hosts', 'PUT', { hosts });
+    revalidatePath('/settings');
+    return { ok: true, hosts: saved.hosts };
+  } catch (error) {
+    // A 502 is the list saved and hostd not putting it on the proxy yet.
+    const kept = error instanceof BridgeRefusal && error.status === 502;
+    if (kept) revalidatePath('/settings');
+    return { ok: false, error: error instanceof Error ? error.message : 'the list was not saved', ...(kept ? { hosts } : {}) };
+  }
+}
+
 /** The month's cap on GitHub Actions minutes; null for none. An admin's. */
 export async function setCiCap(minutes: number | null): Promise<{ ok: boolean; error?: string }> {
   try {

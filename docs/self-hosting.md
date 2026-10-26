@@ -1708,7 +1708,10 @@ else the repository's setting in the console, else `OPENADLC_TESTING_URL`
 commit, at its start and again whenever it resumes; the nightly run and the
 builder's verification after a merge reaches testing are given it the same
 way. A report where nothing ran begins `not run:` and carries no `verified`
-marker.
+marker. On a cloud install the URL's host has to be one the host's tasks may
+reach ([What the host's tasks may reach](#what-the-hosts-tasks-may-reach)):
+while the egress proxy refuses it, QA reports `not run:` naming the host, and
+the `testing-egress` card says how to allow it.
 
 **Where the plan holds a reviewer, GitHub holds the promote.** The
 environment's required reviewer does: nothing in the job runs until a person
@@ -2745,7 +2748,8 @@ host's service account and with it every bot's credential, or anything in the
 VPC; hostd and the proxy are reachable at `host.docker.internal`. The one
 exception is DNS: they may send lookups to the metadata server, whose resolver
 answers for any public name, and the proxy does not see them
-([security: Egress](security.md#egress)).
+([security: Egress](security.md#egress)). What they may reach beyond the
+module's list is below ([What the host's tasks may reach](#what-the-hosts-tasks-may-reach)).
 
 Three things stay manual, by design:
 
@@ -2794,6 +2798,59 @@ Steady-state cost, excluding what the engines charge: the VM is the largest line
 then Cloud SQL, then Cloud Run, logging and NAT. Engine spend is bounded
 separately by the caps in Settings → Spending limits (`config/costs.yaml` only
 seeds the two global amounts the first time OpenADLC starts).
+
+### What the host's tasks may reach
+
+A task on the cloud host reaches only the names on the egress proxy's lists
+([security: Egress](security.md#egress)): the module's own, the operator's
+`extra_allowed_domains`, and the one an admin keeps in Settings → Egress. Each
+name lets through itself and every name under it.
+
+A repository's testing environment is the usual name to add. Naming it in
+`testing.url` puts it on no list, because a repository's own file never widens
+what the host's tasks may reach; until a person allows it, every request QA
+makes there is refused and every QA run there reports `not run:`. The
+`testing-egress` check finds that: every 15 minutes it asks the proxy, through
+hostd, what it would do with a task's `CONNECT` to each managed repository's
+testing host, and while the proxy refuses one it is a card on the board naming
+the repository and the host. Its button opens Settings → Egress with the host
+in the field; Allow puts it on the list. For a host the list already lets
+through, the proxy has not read the list: the section says so, and Allow saves
+the list as it is, which hostd puts on the proxy again. The card clears itself on the next
+run, which a save in Settings starts at once. A local install's tasks leave through no proxy, so it has no
+Egress section in Settings and the check says nothing there. When hostd cannot
+be asked, the section stays, says why, and saves nothing until it can.
+
+There are two ways to allow a name:
+
+- **Settings → Egress**, by an admin, for a name the work needs now and may
+  not need later. hostd writes the list to
+  `/var/lib/openadlc/egress/extra-domains` and has the proxy read it again, so
+  it takes effect at once, with no apply and no restart, and each save is in
+  the audit trail with who made it.
+- **`extra_allowed_domains`** in `~/.openadlc/cloud.tfvars.json`, by the
+  operator, for a name the install always needs, then `openadlc cloud apply`.
+  That changes the host's cloud-init, so the apply resets the host and ends
+  the tasks running on it.
+
+Allow the testing host itself (`web-1234-uc.a.run.app`), not a domain above
+it (`a.run.app`, which would open every Cloud Run service there is). A testing
+URL given as an IP address is refused whatever the lists say: serve it on a
+host name.
+
+The proxy reads Settings' list once the host runs this release's cloud-init,
+which only an apply brings: until then Settings → Egress says so and saves
+nothing. The first `openadlc cloud apply` after this release resets the host
+once, so pause work (Settings → Pause work) and wait for the running tasks to
+finish before you run it.
+
+Rolling hostd back to an image from before this release does not take the
+list back. The file stays on the host's disk with the names last saved, the
+proxy reads it at every start, and the older console has no Settings → Egress
+to change it. Before rolling back, remove the names in Settings → Egress. Once
+the older image is running, the only way left is to edit
+`/var/lib/openadlc/egress/extra-domains` on the host and restart
+`openadlc-egress-proxy`.
 
 ## Releases
 

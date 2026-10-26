@@ -1687,3 +1687,45 @@ describe('the names from before the rename to OpenADLC', () => {
     expect(runbook).toContain(`"${constant('OLD_NAMES_TITLE', check)}"`);
   });
 });
+
+describe('the names an admin allows in Settings → Egress', () => {
+  const file = '/var/lib/openadlc/egress/extra-domains';
+  const proxyUnit = cloudInit.slice(
+    cloudInit.indexOf('- path: /etc/systemd/system/openadlc-egress-proxy.service'),
+    cloudInit.indexOf('- path: /etc/systemd/system/openadlc-egress-firewall.service'),
+  );
+
+  it('are read by the proxy from the file hostd writes, after the refusal of an address and before deny all', () => {
+    // Widening egress was extra_allowed_domains and an apply that resets the
+    // host; on the first cloud install a repository's testing URL stayed off
+    // the list, and its QA task could reach nothing there.
+    expect(cloudInit).toMatch(new RegExp(`^\\s*acl allowed_extra dstdomain -n "${file}"$`, 'm'));
+    const allowAt = cloudInit.indexOf('http_access allow allowed_extra');
+    expect(allowAt).toBeGreaterThan(cloudInit.indexOf('http_access deny to_ip_literal'));
+    expect(allowAt).toBeLessThan(cloudInit.indexOf('http_access deny all'));
+    expect(cloudInit).toContain(`OPENADLC_EGRESS_HOSTS_FILE=${file}`);
+    expect(cloudInit).toContain('OPENADLC_EGRESS_PROXY_CONTAINER=openadlc-egress');
+    expect(proxyUnit).toContain('--name openadlc-egress');
+  });
+
+  it('reach the proxy through a mount of their directory, made hostd’s before the proxy starts', () => {
+    // A mount of the file itself keeps showing the file hostd's rename replaced.
+    expect(proxyUnit).toContain('-v /var/lib/openadlc/egress:/var/lib/openadlc/egress:ro');
+    expect(proxyUnit.indexOf('ExecStartPre=/bin/bash /etc/openadlc/egress-extra.sh')).toBeGreaterThan(-1);
+    expect(proxyUnit.indexOf('ExecStartPre=/bin/bash /etc/openadlc/egress-extra.sh')).toBeLessThan(proxyUnit.search(/^\s*ExecStart=/m));
+    const made = writtenFile('/etc/openadlc/egress-extra.sh');
+    expect(made).toContain('chown 1000:1000 "$dir"');
+    expect(made).toContain('"$dir/extra-domains"');
+  });
+
+  it('are the only names the proxy takes beyond the module’s own and the operator’s: none comes from a repository', () => {
+    const listStart = mainTf.indexOf('allowed_egress_domains = concat(');
+    const list = withoutComments(mainTf.slice(listStart, mainTf.indexOf('squid_domains', listStart)));
+    expect([...new Set([...list.matchAll(/\b(?:var|local)\.[a-z_]+/g)].map((match) => match[0]))].sort()).toEqual([
+      'local.bridge_host',
+      'var.extra_allowed_domains',
+      'var.registry_host',
+    ]);
+    expect([...cloudInit.matchAll(/^\s*acl (\S+) dstdomain/gm)].map((match) => match[1])).toEqual(['allowed_domains', 'allowed_extra']);
+  });
+});

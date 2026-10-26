@@ -451,6 +451,16 @@ The testing URL is the file's `testing.url`, else the repository's own
 (`PATCH /v1/repos/:name` with `testingUrl`), else `OPENADLC_TESTING_URL`, which is
 deprecated and read only as that last fallback.
 
+On a cloud install a task reaches the internet only through the host's egress
+proxy, so the URL's host has to be on one of its lists, or every QA run there
+reports "not run". Naming it here puts it on none: a repository's file never
+widens what the host's tasks may reach. An admin allows it in Settings →
+Egress, which hostd puts on the proxy at once, or the operator adds it to
+`extra_allowed_domains` and runs `openadlc cloud apply`
+([self-hosting](self-hosting.md#what-the-hosts-tasks-may-reach)). While the
+proxy refuses it, the `testing-egress` check is a card on the board that names
+the repository and the host and opens Settings with the host offered.
+
 ### costs.yaml — what OpenADLC may spend
 
 | Key | Default | Effect |
@@ -648,6 +658,7 @@ nothing sets a variable.
 | `OPENADLC_SECRET_STORE`, `OPENADLC_GCP_PROJECT` | file, the metadata server's project | `gcp` keeps secrets in Secret Manager rather than files under `$OPENADLC_HOME/secrets`; the project is asked of the metadata server unless set. The same two are read by the bridge and the CLI | |
 | `OPENADLC_REGISTRY_HOST` | unset | A private package registry's bare host name, which a task may fetch a credential for; empty is unset. On an `infra/gcp` install set `registry_host` instead, which writes this and adds the host to the egress allowlist; under compose it is passed through from the shell ([self-hosting](self-hosting.md#installing-from-a-private-package-registry)) | |
 | `OPENADLC_BOT_EGRESS_PROXY` | unset | The forward proxy every bot's container, sign-in check and bot image build leaves through, as a container reaches it; sessions get it as `HTTPS_PROXY` and the like, with hostd bypassed. `infra/gcp` sets it to the host's egress proxy | |
+| `OPENADLC_EGRESS_HOSTS_FILE`, `OPENADLC_EGRESS_PROXY_CONTAINER` | unset | The file the egress proxy reads Settings → Egress's names from, and the proxy's container, which hostd has read it again (`squid -k reconfigure`) after each save and at its own start. Without both, Settings cannot widen egress. `infra/gcp` sets them to `/var/lib/openadlc/egress/extra-domains` and `openadlc-egress` | |
 | `OPENADLC_CONSOLE_URL`, `OPENADLC_CONSOLE_PORT` | `http://127.0.0.1:` and 47300 | The console's address, whose origin may open a take-over on the terminal WebSocket. Set it for hostd when people open the console under another name: a cloud domain, a LAN address, a tunnel | |
 | `OPENADLC_ENGINE_TELEMETRY` | off | `on` restores the engine vendors' default telemetry, error reporting and non-essential traffic in every session, sign-in and account or model check; anything else, or unset, turns them off | |
 | `OPENADLC_REMOTE_<OWNER_REPO>`, `OPENADLC_SCRIPTED_REPO_PATH` | unset | A remote to clone instead of GitHub's, per repository or for all | |

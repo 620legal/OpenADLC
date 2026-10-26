@@ -3115,6 +3115,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       }
       // Allowed one at a time, after its warning, and audited by name.
       if (key === 'allowedAccounts') throw new HttpFailure(400, 'an account is allowed with POST /v1/github/allowed-accounts, which says what allowing it means');
+      // Written here it would reach the database and never the proxy, and skip its own audit entry.
+      if (key === 'egressExtraHosts') throw new HttpFailure(400, 'the names tasks may reach are saved with PUT /v1/egress/hosts, which puts them on the egress proxy');
       // Written here it would skip the gate and the audit trail: the live
       // gate and the setting would disagree until the next restart.
       if (key === 'workPaused' || key === 'workPausedRepos') throw new HttpFailure(400, 'pause and resume work with POST /v1/work/pause and /v1/work/resume, which are audited');

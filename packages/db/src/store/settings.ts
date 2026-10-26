@@ -85,6 +85,11 @@ export const SETTING_KEYS = [
   // the owners of its repositories). A public app can be installed by anyone,
   // and an installation on any other account is ignored. See the bridge's `app-reach.ts`.
   'allowedAccounts',
+  // Host names, comma-separated, an admin allowed a cloud host's tasks to
+  // reach beyond the egress proxy's own list; hostd writes them where the
+  // proxy reads them. Only Settings → Egress writes it, audited, never a
+  // repository's own files. See the bridge's `egress-routes.ts`.
+  'egressExtraHosts',
   // A person's pause of new work across the install, as JSON: who, when, why. See the bridge's `pause-work.ts`.
   'workPaused',
   // Each repository a person paused on its own, as JSON keyed by name: who, when, why.

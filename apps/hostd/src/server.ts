@@ -9,6 +9,7 @@ import type { AttachTokens } from './attach-tokens.js';
 import { auditActor, authenticate, type Caller } from './auth.js';
 import type { HostdConfig } from './config.js';
 import type { ExecDriver } from './drivers/types.js';
+import { EgressListRefused, type EgressList, type EgressProbe } from './egress.js';
 import { EngineUpdateRefused, parseVersion, type EngineUpdater } from './engine-updates.js';
 import { hasLogin, isAccountId, LoginRefused, type LoginService } from './logins.js';
 import { RenameRefused, renameBotComputer } from './rename.js';
@@ -107,6 +108,8 @@ export function createHostdServer(input: {
   localCi?: Pick<LocalCi, 'start' | 'get'>;
   /** Moves this hostd onto a release's image on a cloud host (`restart-onto-image.ts`). Absent, its route says why. */
   restartOntoImage?: ImageRestart;
+  /** Asks the egress proxy about a name, and puts Settings' names on it (`egress.ts`). Absent, its routes say so. */
+  egress?: { probe: Pick<EgressProbe, 'ask'>; list: Pick<EgressList, 'available' | 'apply'> };
 }): Server {
   const { config, driver, runner, attachTokens } = input;
 
@@ -403,6 +406,40 @@ export function createHostdServer(input: {
       } catch (error) {
         if (error instanceof EngineUpdateRefused) return send(response, error.status, { error: error.message });
         throw error;
+      }
+    }
+
+    /**
+     * The host's egress, for the bridge: what the proxy says of names a task
+     * would ask it for, for the testing-egress check, and the names an admin
+     * allowed in Settings, written where the proxy reads them. The bridge
+     * audits who saved the list; nothing here writes to the audit log, so
+     * nothing is written twice.
+     */
+    if (path === '/egress' || path === '/egress/hosts') {
+      const egress = input.egress;
+      if (!egress) return send(response, 501, { error: 'this hostd was started without its egress probe' });
+      if (method === 'GET' && path === '/egress') {
+        try {
+          const report = await egress.probe.ask(url.searchParams.getAll('host'));
+          return send(response, 200, { ...report, settingsList: egress.list.available });
+        } catch (error) {
+          if (error instanceof EgressListRefused) return send(response, error.status, { error: error.message });
+          throw error;
+        }
+      }
+      if (method === 'PUT' && path === '/egress/hosts') {
+        const body = await readBody(request).catch(() => null);
+        const hosts = body?.hosts;
+        if (!Array.isArray(hosts) || !hosts.every((host): host is string => typeof host === 'string')) {
+          return send(response, 400, { error: 'hosts is a list of host names' });
+        }
+        try {
+          return send(response, 200, { hosts: await egress.list.apply(hosts) });
+        } catch (error) {
+          if (error instanceof EgressListRefused) return send(response, error.status, { error: error.message });
+          throw error;
+        }
       }
     }
 

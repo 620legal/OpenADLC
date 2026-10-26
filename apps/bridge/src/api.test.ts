@@ -1795,6 +1795,19 @@ describe('the install’s people, written through PATCH /v1/install', () => {
   });
 });
 
+describe('the names a cloud host’s tasks may reach, written through PATCH /v1/install', () => {
+  it('are refused, since they would reach the database and never the egress proxy, with no audit entry of their own', async () => {
+    const response = await fetch(`${bridgeUrl}/v1/install`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ egressExtraHosts: 'acme.example' }),
+    });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain('PUT /v1/egress/hosts');
+    expect(vi.mocked(settings.setSetting)).not.toHaveBeenCalled();
+  });
+});
+
 describe('the webhook’s address, written through PATCH /v1/install', () => {
   const patch = (body: Record<string, string>) =>
     fetch(`${bridgeUrl}/v1/install`, {

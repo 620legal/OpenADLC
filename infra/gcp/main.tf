@@ -1556,7 +1556,7 @@ resource "google_monitoring_alert_policy" "egress_denied" {
   }
 
   documentation {
-    content = "A bot has no legitimate reason to develop new destinations. Check which name was refused. The engine vendors' analytics and crash-report hosts (Datadog's log intake, Mixpanel, Sentry) are refused on purpose and are never added to extra_allowed_domains, and neither is any shared ingestion host: it takes data under whatever key the caller brings, so allowing it is a way out for a bot. Add a name only when the work itself needs it."
+    content = "A bot has no legitimate reason to develop new destinations. Check which name was refused. The engine vendors' analytics and crash-report hosts (Datadog's log intake, Mixpanel, Sentry) are refused on purpose and are never added to extra_allowed_domains, and neither is any shared ingestion host: it takes data under whatever key the caller brings, so allowing it is a way out for a bot. Add a name only when the work itself needs it. One refusal per refused host every 15 minutes is the platform's own: the testing-egress check asks the proxy about each managed repository's testing host, and while one is refused it is a card on the board; allowing that host in Settings → Egress stops both."
   }
 
   notification_channels = var.notification_channels

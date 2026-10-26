@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { MockEngine, isShellAllowed, loadToolsPolicy, resolveWriteScope } from '@openadlc/engines';
 import { designMemoryProposals, parseMarkers, parseQuestion, parseYamlFile, policyPathMatches } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
+import { EGRESS_STEPS } from '../apps/bridge/src/health/checks/testing-egress.ts';
 
 /**
  * An index of every skill's stop conditions, each with a scenario, and a check
@@ -563,6 +564,20 @@ describe('QA changes its suites the way a builder changes code', () => {
     expect(qa).toContain('agent/$OPENADLC_BOT/suite-<short-name>');
     expect(qa).toContain('--body-file');
     expect(qa.replace(/\s+/g, ' ')).toContain('Push, or open a pull request, on a commit `openadlc-ci` has not passed.');
+  });
+});
+
+/**
+ * On the first cloud install every request a QA task made to its testing URL
+ * was refused at the egress proxy, and its "not run" named no fix. The board's
+ * `testing-egress` card names one now, and the report names the same.
+ */
+describe('QA’s “not run” for a testing host the egress proxy refuses', () => {
+  it('names the step the board’s card does', () => {
+    const qa = readFileSync(join(SKILLS_ROOT, 'qa', 'SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+    for (const step of EGRESS_STEPS) expect(qa).toContain(step);
+    expect(qa).toContain('names the host');
+    expect(qa).toContain('Do not look for another way out of your computer.');
   });
 });
 

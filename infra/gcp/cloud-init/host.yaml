@@ -59,6 +59,12 @@ write_files:
       # with a colon, which no name has), is refused outright below as well, so
       # the refusal is plain in the log.
       acl allowed_domains dstdomain -n ${allowed_domains}
+      # And the names an admin allows in Settings → Egress, which hostd writes
+      # to this file, each with the same leading dot, and has Squid read again
+      # when the list is saved: no apply, no reset, and the tasks running keep
+      # running. hostd writes only what a person saved there, never a name a
+      # repository's own files give.
+      acl allowed_extra dstdomain -n "/var/lib/openadlc/egress/extra-domains"
       acl to_ip_literal dstdom_regex -n ^[0-9.]+$ ^\[ :
       acl SSL_ports port 443
       acl Safe_ports port 80 443
@@ -70,6 +76,7 @@ write_files:
       # The refusal, and the line that becomes a metric.
       http_access deny to_ip_literal
       http_access allow allowed_domains
+      http_access allow allowed_extra
       http_access deny all
 
       http_port 3128
@@ -86,6 +93,23 @@ write_files:
       access_log syslog:local4.info squid
       cache_log /var/log/squid/cache.log
 
+  # Where hostd writes the names Settings allows, as uid 1000, and the proxy
+  # reads them. Made before the proxy starts, with the file, so the proxy's
+  # configuration never names a file that is not there; hostd writes it again
+  # from Settings at every start of its own.
+  - path: /etc/openadlc/egress-extra.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -uo pipefail
+      dir=/var/lib/openadlc/egress
+      mkdir -p "$dir"
+      chown 1000:1000 "$dir" && chmod 0755 "$dir"
+      if [ ! -e "$dir/extra-domains" ]; then
+        echo '# hostd writes the names Settings → Egress allows here' > "$dir/extra-domains"
+        chown 1000:1000 "$dir/extra-domains" && chmod 0644 "$dir/extra-domains"
+      fi
+
   - path: /etc/systemd/system/openadlc-egress-proxy.service
     permissions: '0644'
     content: |
@@ -96,10 +120,14 @@ write_files:
 
       [Service]
       Restart=always
+      ExecStartPre=/bin/bash /etc/openadlc/egress-extra.sh
       ExecStartPre=-/usr/bin/docker rm -f openadlc-egress
+      # The directory, not the file: hostd replaces the file by a rename, and
+      # a mount of the file itself would keep showing the one it replaced.
       ExecStart=/usr/bin/docker run --rm --name openadlc-egress \
         --network host \
         -v /etc/openadlc/squid.conf:/etc/squid/squid.conf:ro \
+        -v /var/lib/openadlc/egress:/var/lib/openadlc/egress:ro \
         -v /dev/log:/dev/log \
         ${proxy_image}
       ExecStop=/usr/bin/docker stop openadlc-egress
@@ -349,6 +377,8 @@ write_files:
       OPENADLC_RELEASE_MIRROR=${release_mirror}
       OPENADLC_RELEASE_REPO=${release_repository}
       OPENADLC_BOT_EGRESS_PROXY=http://host.docker.internal:3128
+      OPENADLC_EGRESS_HOSTS_FILE=/var/lib/openadlc/egress/extra-domains
+      OPENADLC_EGRESS_PROXY_CONTAINER=openadlc-egress
       OPENADLC_HOME=$root/home
       OPENADLC_WORK_ROOT=$root/work
       OPENADLC_LOGIN_ROOT=$root/logins

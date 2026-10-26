@@ -1865,6 +1865,7 @@ in `infra/gcp/main.tf`, is:
 | `secretmanager.googleapis.com`, `logging.googleapis.com` | hostd's: credentials at task start, and logs |
 | The bridge's Cloud Run host (`<prefix>-bridge-<project number>.<region>.run.app`) | A task reports its state, usage and gates to the bridge |
 | Whatever is in `extra_allowed_domains`, and `registry_host` | Your own additions, and your private package registry (below) |
+| Whatever an admin allows in Settings → Egress | The names the work needs that come and go, such as a repository's testing environment (below) |
 
 The proxy matches every entry with a leading dot, so each one also allows all
 of its subdomains: `x.ai` lets through `api.x.ai` and `auth.x.ai`, and
@@ -1878,13 +1879,40 @@ holds no GCP credential, so it can reach Secret Manager's name but read
 nothing there.
 
 Add your own with `extra_allowed_domains`, an `infra/gcp` variable: anything
-further the work needs goes there, not into the module's list — the hostname
-of your testing environment, say, so QA can reach it, or a host a
-repository's toolchain downloads from that is not above. A private
+further the work needs for good goes there, not into the module's list — a
+host a repository's toolchain downloads from that is not above, say. A private
 package registry goes in `registry_host` instead, which adds it to the list
 and also tells hostd about it ([self-hosting](self-hosting.md#installing-from-a-private-package-registry)). The
 list is written once, in `infra/gcp`, and the proxy's configuration is generated from it; there is no second
-copy to go stale.
+copy to go stale. Changing it is an apply, which resets the host.
+
+A name the work needs that comes and goes, such as the host a repository's
+testing is served on so QA can reach it, an admin allows in Settings → Egress
+instead. Only an admin can read or change that list (`GET` and `PUT
+/v1/egress/hosts`); `PATCH /v1/install`, which saves the install's other
+settings, refuses it. Each
+save is in the audit trail as `egress.hosts_changed`, with who saved it and
+the names added and removed (`GET /v1/audit`, an admin's too). hostd writes the list to
+`/var/lib/openadlc/egress/extra-domains`, which the proxy reads as one more
+list of names (`allowed_extra`, matched with a leading dot like the rest), and
+has the proxy read it again (`squid -k reconfigure`), so a save reaches it at
+once with no restart; hostd writes it again at its own start, from what was
+saved. A name is a host name and nothing else: an address, a single label, a
+port, a path or a second line is refused before anything is saved, so a name
+cannot add a rule to the proxy's configuration. The directory is hostd's, and
+the proxy mounts it read-only; the file is readable by all (0644), since
+Squid reads it as its own user. Each name lets through
+every name under it, so allow the testing host itself, not a domain above it:
+`a.run.app` would open every Cloud Run service there is.
+
+A repository never widens the list. Its `.github/openadlc.yml` names where its
+testing is served, and that only decides where QA points: the `testing-egress`
+check asks the proxy, through hostd, what it would do with a task's `CONNECT`
+to that host, and while it is refused, a card on the board names the
+repository and the host and opens Settings → Egress with the host in the field
+for a person to allow, not allowed. Each of those questions the proxy refuses
+is a `TCP_DENIED` like a bot's, one for each refused testing host each time
+the check runs, and counts toward the denial alert below.
 
 A private registry on the list does not keep its token inside the install. Any
 running task can ask hostd for the raw registry token ([Secrets](#secrets)), and
