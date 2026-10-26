@@ -261,22 +261,31 @@ export async function createGate(input: {
   return toGate(row);
 }
 
+/**
+ * What a gate `g` is about (`Gate.context`): the bot's last message before it
+ * in its conversation, since the question or the answer before. "Here's what
+ * I'll file. OK?" asks about a draft only that message holds. The Needs you
+ * card reads it with an open gate, and a request's briefing with an answered
+ * one: read with the open gates alone, a triage resumed on "OK, file it" never
+ * saw the draft it was told to file, drafted another, and filed that.
+ */
+const GATE_CONTEXT = `(select m.text from messages m
+              where m.thread_id = g.thread_id and m.kind = 'bot' and m.at <= g.created_at
+                and m.at > coalesce((select max(q.at) from messages q
+                                      where q.thread_id = g.thread_id and q.kind in ('gate', 'you') and q.at < g.created_at),
+                                    '-infinity'::timestamptz)
+              order by m.at desc limit 1) as context`;
+
 export async function listOpenGates(): Promise<GateRecord[]> {
   const rows = await query<GateRow>(
-    // With the bot's last message before it in its conversation, since the
-    // question it ended on: what the card shows the question is about. And
-    // the hold its own message carries (`leases.holdPlanChange`).
+    // With what the card shows the question is about, and the hold its own
+    // message carries (`leases.holdPlanChange`).
     `select g.id, g.task_id, g.thread_id, g.question, g.options, g.state, g.answer, g.answered_by, g.answered_at,
             g.addressed_to, g.github_comment_url, g.created_at,
             (select q.payload->'held' from messages q
               where q.thread_id = g.thread_id and q.kind = 'gate' and q.payload->>'gateId' = g.id::text
               order by q.at desc limit 1) as held,
-            (select m.text from messages m
-              where m.thread_id = g.thread_id and m.kind = 'bot' and m.at <= g.created_at
-                and m.at > coalesce((select max(q.at) from messages q
-                                      where q.thread_id = g.thread_id and q.kind in ('gate', 'you') and q.at < g.created_at),
-                                    '-infinity'::timestamptz)
-              order by m.at desc limit 1) as context
+            ${GATE_CONTEXT}
      from gates g where g.state = 'open' order by g.created_at`,
   );
   return rows.map(toGate);
@@ -284,14 +293,15 @@ export async function listOpenGates(): Promise<GateRecord[]> {
 
 /**
  * Every gate asked on a subject, by whichever of its tasks asked it, oldest
- * first. A request's triage can be paused and resumed, or started again after
- * a failure, so what was asked and answered belongs to the subject rather than
- * to the task that happened to ask it.
+ * first, each with what it was about. A request's triage can be paused and
+ * resumed, or started again after a failure, so what was asked and answered
+ * belongs to the subject rather than to the task that happened to ask it.
  */
 export async function listGatesForSubject(subjectRef: string): Promise<Gate[]> {
   const rows = await query<GateRow>(
     `select g.id, g.task_id, g.thread_id, g.question, g.options, g.state, g.answer, g.answered_by, g.answered_at,
-            g.addressed_to, g.github_comment_url, g.created_at
+            g.addressed_to, g.github_comment_url, g.created_at,
+            ${GATE_CONTEXT}
        from gates g
        join tasks t on t.id = g.task_id
       where t.subject_ref = $1

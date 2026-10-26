@@ -109,12 +109,12 @@ vi.mock('@openadlc/db', () => ({
   },
 }));
 
-import type { ContextDocument } from '@openadlc/shared';
+import type { ContextDocument, Gate } from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import type { BridgeConfig } from './config.js';
 import { Context } from './context.js';
 import type { HostdClient } from './hostd-client.js';
-import { OPEN_WORK_DOCUMENT, REQUEST_DOCUMENT } from './request-context.js';
+import { OPEN_WORK_DOCUMENT, REQUEST_DOCUMENT, renderRequest } from './request-context.js';
 import { TaskService } from './task-service.js';
 
 const startTask = vi.fn(async (_input: { context: ContextDocument[] }) => ({ session: 'ottoexampleco/triage' }));
@@ -242,6 +242,93 @@ describe('the request a console request’s triage reads', () => {
     expect(content).not.toContain('A question nobody answered');
     expect(content).not.toContain('started triage');
     expect(content).not.toContain('_Nothing yet');
+  });
+
+  it('shows the draft a question asked about, so the triage resumed on "OK, file it" files the one approved', async () => {
+    // "Here's what I'll file. OK?" was all request.md said of the question:
+    // the draft was the bot's message before it. The triage resumed on the
+    // answer drafted the issue again, and filed one with another title and
+    // without two criteria the person had approved.
+    const draft = [
+      'Title: Add a dark hello page',
+      '',
+      '## Outcome',
+      'A page that says "Hello, world" on a dark background.',
+      '',
+      '## Acceptance criteria',
+      '- The smoke checkout sets `persist-credentials: false`.',
+      "- The template's `concurrency` stays as it is.",
+    ].join('\n');
+    store.gates = [
+      {
+        id: 'gate-1',
+        taskId: 'task-1',
+        question: "Here's what I'll file. OK?",
+        options: ['OK, file it', 'Change something'],
+        state: 'answered',
+        answer: 'OK, file it',
+        answeredBy: 'janedoe',
+        answeredAt: '2026-09-24T21:02:11.000Z',
+        context: `\n${draft}\n\n`,
+      },
+    ];
+
+    const [document] = await resumeTriage();
+
+    expect(document?.name).toBe('request.md');
+    expect(document?.content).toContain(
+      [
+        '### A question, answered by janedoe at 2026-09-24T21:02:11.000Z',
+        '',
+        "**What it was about (the bot's message before the question):**",
+        '',
+        draft,
+        '',
+        '**Asked:**',
+        '',
+        "Here's what I'll file. OK?",
+        '',
+        '**Choices offered:**',
+        '',
+        '1. OK, file it\n2. Change something',
+        '',
+        '**Answer:** OK, file it',
+      ].join('\n'),
+    );
+  });
+
+  it('shows it to design as well, and says nothing of it for a question asked with nothing before it', () => {
+    const answered = (id: string, question: string, context: string | null): Gate => ({
+      id,
+      taskId: 'task-1',
+      threadId: 'thread-1',
+      question,
+      options: [],
+      state: 'answered',
+      answer: 'Yes',
+      answeredBy: 'janedoe',
+      answeredAt: '2026-09-24T21:02:11.000Z',
+      githubCommentUrl: null,
+      addressedTo: null,
+      context,
+    });
+
+    const intake = renderRequest(
+      {
+        request: store.request as never,
+        subjectRef: 'request:a4b02784',
+        repoFullName: 'janedoe/openadlc-testbed',
+        gates: [answered('gate-1', "Here's what I'll file. OK?", 'Title: Add a dark hello page'), answered('gate-2', 'Anything else?', '  ')],
+        messages: [],
+      },
+      'design',
+    );
+
+    expect(intake.name).toBe('intake.md');
+    expect(intake.content).toContain(
+      "**What it was about (the bot's message before the question):**\n\nTitle: Add a dark hello page\n\n**Asked:**\n\nHere's what I'll file. OK?",
+    );
+    expect(intake.content.split('**What it was about').length - 1).toBe(1);
   });
 
   it('starts the task anyway, unbriefed, when the subject names no request it can find', async () => {

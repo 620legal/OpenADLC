@@ -61,9 +61,16 @@ function renderGate(gate: Gate): string {
     gate.options.length > 0
       ? gate.options.map((option, index) => `${index + 1}. ${option}`).join('\n')
       : '_None: the answer was theirs to word._';
+  // "Here's what I'll file. OK?" is all its question says: the draft it asks
+  // about was the bot's message before it. Without that message a triage
+  // resumed on "OK, file it" never saw the draft, drafted another, and filed
+  // an issue the person had not approved.
+  const context = gate.context?.trim();
+  const about = context ? ["**What it was about (the bot's message before the question):**", '', context, ''] : [];
   return [
     `### A question, answered by ${gate.answeredBy ?? 'somebody'} at ${gate.answeredAt ?? 'an unrecorded time'}`,
     '',
+    ...about,
     '**Asked:**',
     '',
     gate.question.trim(),
@@ -85,7 +92,7 @@ export interface RequestBriefing {
   subjectRef: string;
   /** `owner/name`, or null when the request named no repository. */
   repoFullName: string | null;
-  /** The answered gates on the subject's tasks. */
+  /** The answered gates on the subject's tasks, each with what it was about when the bot said so first. */
   gates: Gate[];
   /** What the person wrote in the thread, other than their answers to those gates. */
   messages: Message[];
@@ -142,8 +149,8 @@ export type RequestReading = 'triage' | 'design';
 
 /**
  * The request as a document: what was asked, by whom and where, and the
- * conversation since — each question with its answer, and anything else the
- * person wrote — in the order it happened. A resumed triage starts a fresh
+ * conversation since — each question with what it was about and its answer,
+ * and anything else the person wrote — in the order it happened. A resumed triage starts a fresh
  * session, so this is how it learns what it was told.
  */
 export function renderRequest(input: RequestBriefing, reading: RequestReading = 'triage'): ContextDocument {
@@ -242,7 +249,7 @@ export function renderRequest(input: RequestBriefing, reading: RequestReading = 
   };
 }
 
-/** Each question with its answer, and anything else the person wrote, in the order it happened. */
+/** Each question with what it was about and its answer, and anything else the person wrote, in the order it happened. */
 function conversation(input: Pick<RequestBriefing, 'gates' | 'messages'>): string {
   const said = [
     ...input.gates.map((gate) => ({ at: gate.answeredAt ?? '', text: renderGate(gate) })),

@@ -117,6 +117,22 @@ and say in your last message that you stopped because of it.
    that you are rewriting, the same holds before you replace its body.
 6. When the person has agreed, file the issue — or, when you were started on
    an issue a person already filed, rewrite its body — and apply the labels.
+
+   On `OK, file it` (or `OK, file them all`, or `OK, update #<n>`), what you
+   file is the draft they agreed to, as written: the same title and the same
+   body, every criterion in it. You are started again on the answer in a
+   fresh session, not the one that drafted it. On a console request the draft
+   is in `request.md`, shown with that question as what it was about; on an
+   issue it is the question's own comment in `issue.md`: the text between its
+   first line, which says a decision is needed, and the question.
+   The only additions are the labels below, the request line when the draft
+   does not carry it, and the sibling lines that can be written only once the
+   issues have numbers ("A request that spans repositories", step 6);
+   anything else on the issue, the bridge adds. Do not reword it, retitle it
+   or draft it again. On a console request whose `request.md` shows the answer
+   but not the draft it was about, say so and ask again, as step 5 says, with
+   the draft you would file.
+
    Every issue gets exactly one of each:
    - `priority:p0` drop everything, `priority:p1` this week, `priority:p2` soon,
      `priority:p3` someday;
@@ -251,9 +267,9 @@ issue. The steps above still hold, with these differences.
 
 - The request is in `request.md`: what was asked, the context they added, its
   kind, the repository, who asked and when, and the conversation so far — each
-  question already asked, with its answer, and anything else the person wrote.
-  Read it first. When you are started again after a question, the answer is
-  there, not on GitHub.
+  question already asked, with what you said before it and its answer, and
+  anything else the person wrote. Read it first. When you are started again
+  after a question, the answer is there, not on GitHub.
 - There is no issue yet, so there is nothing to comment on. Ask the person who
   asked the way "Asking a person" says: a message of your own that ends in the
   question marker. It becomes the question in their thread and your task
@@ -412,6 +428,12 @@ only to read with: `rev-parse`, `log`, `show`, `ls-files` and `grep`.
   ask whether to file it as written (step 5). Not for an issue the platform
   filed, which no person asked for ("An issue the platform filed").
   <!-- scenario: confirm-before-filing -->
+- On a console request, the person answered `OK, file it` (or `OK, file them
+  all`, or `OK, update #<n>`) and `request.md` does not show the draft they
+  agreed to: say so, show the draft you would
+  file, and ask again (step 6). Never draft it again and file that. On an
+  issue the draft is in the question's comment in `issue.md`: file that.
+  <!-- scenario: approved-draft-not-shown -->
 - The draft's Expected paths overlap an open issue's on an exclusive path, and it is not a
   duplicate: ask how the two should fit before asking to file (step 4).
   <!-- scenario: overlaps-open-issue -->
@@ -424,9 +446,9 @@ only to read with: `rev-parse`, `log`, `show`, `ls-files` and `grep`.
 - Touch code, or open a pull request.
 - Guess a path, an acceptance criterion or a priority.
 - File an issue with empty acceptance criteria.
-- File an issue the person has not agreed to. An issue the platform filed is
-  the one exception: you shape it without asking ("An issue the platform
-  filed").
+- File an issue the person has not agreed to, or one other than the draft
+  they agreed to. An issue the platform filed is the one exception: you shape
+  it without asking ("An issue the platform filed").
 - Put a file a person gave on GitHub, or link to one from there.
 
 ## Markers

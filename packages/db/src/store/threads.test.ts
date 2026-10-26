@@ -60,6 +60,23 @@ describe('when a gate was asked', () => {
   });
 });
 
+describe('what a gate was about', () => {
+  it('is read with a subject’s gates, answered ones too, the same way as with the open ones', async () => {
+    // A triage resumed on "OK, file it" is briefed from a subject's gates, and
+    // only the open ones carried the draft the question asked about: it never
+    // saw what it was told to file. The rows are mocked, so what holds the
+    // change is the SQL: both lists select the same subquery.
+    vi.mocked(query).mockResolvedValue([{ ...ROW, state: 'answered', answer: 'OK, file it' }]);
+    await listGatesForSubject('request:a4b02784');
+    await listOpenGates();
+
+    const about = (sql: unknown) => /\(select m\.text from messages m[\s\S]*?\) as context/.exec(String(sql))?.[0];
+    const [subject, open] = vi.mocked(query).mock.calls.map(([sql]) => about(sql));
+    expect(subject).toMatch(/m\.thread_id = g\.thread_id and m\.kind = 'bot' and m\.at <= g\.created_at/);
+    expect(subject).toBe(open);
+  });
+});
+
 describe('a gate a session asks', () => {
   it('is stored without a token in its question or its options', async () => {
     const token = `ghu_${'a'.repeat(36)}`;

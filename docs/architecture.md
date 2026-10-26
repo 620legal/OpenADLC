@@ -226,10 +226,16 @@ none yet, says its kind of work instead ("writing the change").
    board's request card, its thread and `intake.md` name every one
    ([ADR 0012](adr/0012-a-request-files-one-issue-per-repository.md)).
    When it has everything, it shows the person the issue
-   it would file and asks them to agree to it; then it files it — outcome,
-   acceptance criteria, priority, expected paths, dependencies, verification,
-   the files by name and a link to the item in the console, never the files —
-   and labels it `adlc:build`, or `adlc:spec` when the repository's spec rule
+   it would file and asks them to agree to it; then it files that draft as
+   written — outcome, acceptance criteria, priority, expected paths,
+   dependencies, verification, the files by name and a link to the item in
+   the console, never the files — adding only the labels and the request's
+   line. The triage that files it is started again on the answer, a fresh
+   session, and reads the draft in `request.md`, which shows each answered
+   question with the bot's message before it (the gate's `context`): with the
+   question alone there, a triage told "OK, file it" drafted the issue again
+   and filed what nobody had approved.
+   It labels it `adlc:build`, or `adlc:spec` when the repository's spec rule
    says it needs a design first. Triage is told the rule in `open-issues.md`
    (the spec mode and the labels that call for a design, such as
    `touches:schema` or `size:large`) and puts on those that fit. When its task
@@ -247,7 +253,8 @@ none yet, says its kind of work instead ("writing the change").
    choice in Settings → Repositories; [ADR 0004](adr/0004-design-always-by-default.md)).
    The system engineer writes the design on the issue and stops on the
    choices a person must make. It reads what intake learned
-   (`intake.md`: the request, its detail, its files and every answer, whole),
+   (`intake.md`: the request, its detail, its files, and every question with
+   what intake said before it and its answer, whole),
    which the issue only summarises, and the repository's **design memory**
    (`design-memory.md`): what it has decided before. Design is the one stage
    with memory ([ADR 0002](adr/0002-design-memory.md)). Its comment ends with a
