@@ -650,8 +650,7 @@ async function tokenFromBridge(
  * The automation account: the bot whose role is `automation`, or the one
  * `install.json` names as a seat or a name. Asked of the crew each time, as
  * the bridge does, because its name is its account's handle once one
- * connects. An `automationBotName` of `flow`, which every `fleet init` wrote
- * before the rename, is read as the seat that persona was.
+ * connects.
  */
 async function automationBot(config: InstallConfig): Promise<Bot | null> {
   return automationBotOf(await bots.listBots(), config.automationBotName ?? null);

@@ -10,19 +10,9 @@ import { z } from 'zod';
  */
 export const DELIVERY_RULES_PATH = '.github/openadlc.yml';
 
-/**
- * Where a repository set up before the rename keeps them. That file is in the
- * repository, not in this install, so an upgrade cannot move it: it is read
- * wherever the new path has no file, and only the new path is ever written or
- * linked to.
- */
-export const LEGACY_DELIVERY_RULES_PATH = '.github/fleetadlc.yml';
-
-/** The rules file as the repository has it: `DELIVERY_RULES_PATH`, else the path from before the rename. */
+/** The rules file as the repository has it at `DELIVERY_RULES_PATH`, or null when it has none. */
 export async function readDeliveryRulesFile(read: (path: string) => Promise<string | null>): Promise<string | null> {
-  const current = await read(DELIVERY_RULES_PATH);
-  if (current !== null) return current;
-  return read(LEGACY_DELIVERY_RULES_PATH);
+  return read(DELIVERY_RULES_PATH);
 }
 
 /**

@@ -19,21 +19,7 @@ export interface SecretStore {
 }
 
 export function openadlcHome(): string {
-  // Either name wins over any default: entry points adopt FLEETADLC_HOME into
-  // OPENADLC_HOME, and reading both here covers a process that has no entry
-  // point of its own, a test above all.
-  const named = process.env.OPENADLC_HOME || process.env.FLEETADLC_HOME;
-  if (named) return named;
-  // The rename to FleetADLC did not look for `~/.fleet`: every command on an
-  // upgraded install acted on an empty `~/.fleetadlc` until FLEETADLC_HOME was
-  // exported by hand, and `down` found nothing to stop. So an existing
-  // `~/.fleetadlc` is found on its own — only when nothing was made under the
-  // new name, so a new install is never pointed at an old one beside it.
-  const renamed = join(homedir(), '.openadlc');
-  if (existsSync(renamed)) return renamed;
-  const legacy = join(homedir(), '.fleetadlc');
-  if (existsSync(legacy)) return legacy;
-  return renamed;
+  return envOr('OPENADLC_HOME', join(homedir(), '.openadlc'));
 }
 
 export class FileSecretStore implements SecretStore {

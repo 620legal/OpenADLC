@@ -104,11 +104,11 @@ describe('openadlc doctor when the install’s database container is stopped', (
     expect(JSON.stringify(said)).not.toContain('install-secret');
   });
 
-  it('adds that `openadlc up` has one with no restart policy come back by itself, and names an older install’s fleet-db', async () => {
+  it('adds that `openadlc up` has one with no restart policy come back by itself', async () => {
     const { stoppedDatabase } = await import('./doctor.js');
-    const said = await stoppedDatabase(ports, URL_HERE, docker({ 'fleet-db': { status: 'exited', restart: 'no', configured: 47432 } }), {});
-    expect(said?.message).toBe("the install's database (fleet-db) isn't answering on 127.0.0.1:47432: fleet-db is stopped");
-    expect(said?.remedy).toBe('start it with `docker start fleet-db`, or run `openadlc up`; `openadlc up` also has it come back by itself when Docker restarts');
+    const said = await stoppedDatabase(ports, URL_HERE, docker({ 'openadlc-db': { status: 'exited', restart: 'no', configured: 47432 } }), {});
+    expect(said?.message).toBe("the install's database (openadlc-db) isn't answering on 127.0.0.1:47432: openadlc-db is stopped");
+    expect(said?.remedy).toBe('start it with `docker start openadlc-db`, or run `openadlc up`; `openadlc up` also has it come back by itself when Docker restarts');
   });
 
   it('leaves `cannot reach postgres` for a running container, one on another port, none at all, or a server elsewhere', async () => {
@@ -193,16 +193,8 @@ describe('openadlc doctor on the platform database’s password', () => {
     expect(gap?.remedy).not.toMatch(/openadlc up/);
   });
 
-  it('fails on the superuser from before the rename, and sends that install to `openadlc up` too', () => {
-    const gap = databasePasswordGap('postgres://fleet:fleet@127.0.0.1:47432/fleet_db', true);
-    expect(gap?.message).toMatch(/password published with OpenADLC/);
-    expect(gap?.remedy).toMatch(/run `openadlc up`/);
-    expect(`${gap?.message} ${gap?.remedy}`).not.toContain('fleet:fleet');
-  });
-
   it('is satisfied by any other password, and never prints one', () => {
     expect(databasePasswordGap(`postgres://openadlc:${SECRET}@127.0.0.1:47432/openadlc_db`, true)).toBeNull();
-    expect(databasePasswordGap('postgres://fleet:0123abcd@127.0.0.1:47432/fleet_db', true)).toBeNull();
     const gap = databasePasswordGap(PUBLISHED, true);
     expect(`${gap?.message} ${gap?.remedy}`).not.toContain(':openadlc@');
   });
@@ -227,14 +219,11 @@ describe('openadlc doctor on where the database container is published', () => {
     expect(databaseBindingGap('openadlc-db', [])).toBeNull();
   });
 
-  // An install from before the rename keeps Postgres in `fleet-db`, with no
-  // `openadlc-db` beside it. Doctor looked at the new name only, so it said
-  // nothing about that container's bindings and called its server unmanaged.
-  it('looks at the fleet-db of an install from before the rename', async () => {
-    const containers: Record<string, { HostIp?: string; HostPort?: string }[]> = { 'fleet-db': [{ HostIp: '', HostPort: '47432' }] };
+  it('looks at the install’s own container for both its bindings and its password', async () => {
+    const containers: Record<string, { HostIp?: string; HostPort?: string }[]> = { 'openadlc-db': [{ HostIp: '', HostPort: '47432' }] };
     const inspect = async (name: string) => containers[name];
-    const { password, exposed } = await databaseContainerGaps({ ports: { postgres: 47432 } }, 'postgres://fleet:fleet@127.0.0.1:47432/fleet_db', inspect, {});
-    expect(exposed?.message).toBe('fleet-db publishes postgres on every address:47432, not on 127.0.0.1 only');
+    const { password, exposed } = await databaseContainerGaps({ ports: { postgres: 47432 } }, 'postgres://openadlc:openadlc@127.0.0.1:47432/openadlc_db', inspect, {});
+    expect(exposed?.message).toBe('openadlc-db publishes postgres on every address:47432, not on 127.0.0.1 only');
     expect(password?.remedy).toMatch(/run `openadlc up`/);
   });
 });

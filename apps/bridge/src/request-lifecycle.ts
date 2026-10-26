@@ -103,7 +103,7 @@ export function carriesRequestLine(body: string | null, subjectRef: string): boo
   const prefix = requestPrefixOf(subjectRef);
   if (!body || !prefix) return false;
   const plain = body.replace(/[`*]/g, '');
-  return new RegExp(`^[ \\t>-]*(?:OpenADLC|OpenADLC|Fleet) request:\\s*request:${prefix}(?![0-9a-f])`, 'im').test(plain);
+  return new RegExp(`^[ \\t>-]*OpenADLC request:\\s*request:${prefix}(?![0-9a-f])`, 'im').test(plain);
 }
 
 /**
@@ -113,7 +113,7 @@ export function carriesRequestLine(body: string | null, subjectRef: string): boo
 export function requestPrefixIn(body: string | null): string | null {
   if (!body) return null;
   const plain = body.replace(/[`*]/g, '');
-  return /^[ \t>-]*(?:OpenADLC|OpenADLC|Fleet) request:\s*request:([0-9a-f]{8})(?![0-9a-f])/im.exec(plain)?.[1] ?? null;
+  return /^[ \t>-]*OpenADLC request:\s*request:([0-9a-f]{8})(?![0-9a-f])/im.exec(plain)?.[1] ?? null;
 }
 
 /** How far back a finished triage is looked for: one page, newest first. */

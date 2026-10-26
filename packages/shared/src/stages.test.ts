@@ -8,7 +8,6 @@ import {
   hasShipped,
   hasNextLabel,
   hasPausedLabel,
-  IGNORE_LABEL,
   BACKWARD,
   isBackwardMove,
   isForwardMove,
@@ -110,6 +109,21 @@ describe('Done reached by abandoning', () => {
   });
 });
 
+describe('the labels a person holds work with', () => {
+  it('leaves an issue labelled openadlc:ignore alone, and nothing that only looks like it', () => {
+    expect(hasIgnoreLabel(['openadlc:ignore'])).toBe(true);
+    expect(hasIgnoreLabel(['openadlc:ignored', 'adlc:build'])).toBe(false);
+    expect(hasIgnoreLabel(undefined)).toBe(false);
+  });
+
+  it('holds work paused or next under their openadlc: labels', () => {
+    expect(hasPausedLabel(['openadlc:paused'])).toBe(true);
+    expect(hasPausedLabel(['adlc:build'])).toBe(false);
+    expect(hasNextLabel(['openadlc:next'])).toBe(true);
+    expect(hasNextLabel(undefined)).toBe(false);
+  });
+});
+
 describe('labels named before the rename to OpenADLC', () => {
   it('reads a stage from the sdlc: label an issue still carries', () => {
     expect(stageFromLabels(['priority:p2', 'sdlc:review'])).toBe('review');
@@ -121,36 +135,12 @@ describe('labels named before the rename to OpenADLC', () => {
     expect(isStageLabel('adlc:ci')).toBe(false);
   });
 
-  it('leaves an issue labelled with the old ignore label alone', () => {
-    expect(hasIgnoreLabel(['fleet:ignore'])).toBe(true);
-    expect(hasIgnoreLabel(['fleetadlc:ignore'])).toBe(true);
-    expect(hasIgnoreLabel(['openadlc:ignore'])).toBe(true);
-    expect(hasIgnoreLabel(['fleet:ignored', 'adlc:build'])).toBe(false);
-    expect(hasIgnoreLabel(undefined)).toBe(false);
-  });
-
-  it('holds work paused or next under the labels from before the rename too', () => {
-    expect(hasPausedLabel(['fleetadlc:paused'])).toBe(true);
-    expect(hasPausedLabel(['openadlc:paused'])).toBe(true);
-    expect(hasPausedLabel(['fleet:paused'])).toBe(false);
-    expect(hasNextLabel(['fleetadlc:next'])).toBe(true);
-    expect(hasNextLabel(['openadlc:next'])).toBe(true);
-  });
-
   it('renames an old label in place rather than creating the new one beside it', () => {
     const wanted = { name: 'adlc:build', color: '0e8a16', description: 'Routable' };
     expect(labelStep(wanted, [{ name: 'sdlc:build', color: '0e8a16', description: 'Routable' }])).toEqual({
       action: 'update',
       from: 'sdlc:build',
       detail: 'renamed from sdlc:build; issues keep it',
-    });
-    expect(labelStep({ ...wanted, name: IGNORE_LABEL }, [{ name: 'fleet:ignore' }])).toMatchObject({
-      action: 'update',
-      from: 'fleet:ignore',
-    });
-    expect(labelStep({ ...wanted, name: IGNORE_LABEL }, [{ name: 'fleetadlc:ignore' }])).toMatchObject({
-      action: 'update',
-      from: 'fleetadlc:ignore',
     });
   });
 

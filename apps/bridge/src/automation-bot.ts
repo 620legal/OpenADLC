@@ -14,9 +14,7 @@ import { effectiveConfig } from './effective-config.js';
  * minute — its name is its account's handle once one connects. An install can
  * name another, as a seat or a name, in the console's settings or with
  * `OPENADLC_AUTOMATION_BOT`, and that wins when it names a bot this install has.
- * An `install.json` from an older `openadlc init` may still say `flow`, which
- * is read as the seat that persona was; an override that names nobody is
- * ignored.
+ * An override that names nobody is ignored.
  *
  * Asked per call rather than at start-up, because the name moves when an
  * account connects, and a name held from before would act as nobody.

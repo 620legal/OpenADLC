@@ -362,35 +362,6 @@ export function databaseServerMismatch(
 }
 
 /**
- * What the default install's database container was called under the names
- * before this one, newest first; docs/upgrading-from-fleet.md. Neither has a
- * restart policy, so after a reboot `up` found nothing answering and ran a
- * new, empty `openadlc-db` on its port, which then held the port against it.
- */
-export const LEGACY_DATABASE_CONTAINERS = ['fleetadlc-db', 'fleet-db'] as const;
-
-/**
- * The container to start for this install's database: `databaseContainer()`,
- * except for a default install upgraded from FleetADLC or Fleet, whose
- * `fleetadlc-db` or `fleet-db` publishes the install's port and has no
- * `openadlc-db` beside it. One on another port is someone else's, and an
- * install with an id of its own never had one.
- */
-export async function existingDatabaseContainer(
-  config: { ports: Pick<InstallConfig['ports'], 'postgres'> },
-  env: NodeJS.ProcessEnv = process.env,
-  published: (name: string) => Promise<string | undefined> = publishedPostgresPort,
-): Promise<string> {
-  const name = databaseContainer(env);
-  if (name !== 'openadlc-db') return name;
-  if ((await published(name)) !== undefined) return name;
-  for (const legacy of LEGACY_DATABASE_CONTAINERS) {
-    if ((await published(legacy)) === String(config.ports.postgres)) return legacy;
-  }
-  return name;
-}
-
-/**
  * Whether a database url is the address of the container `openadlc up` keeps:
  * this machine's loopback, on the install's postgres port. A url anywhere else
  * is a server somebody else runs, and `up` never changes its password.
@@ -666,7 +637,7 @@ async function ensureDatabase(config: InstallConfig): Promise<{ config: InstallC
   // below, and the advice for that, to install it, is wrong.
   const stopped = installed && !(await dockerDaemonAnswers());
   const docker = installed && !stopped;
-  const name = docker ? await existingDatabaseContainer(config) : databaseContainer();
+  const name = databaseContainer();
   const published = docker ? await publishedPostgresPort(name) : undefined;
 
   // Without Docker there is no container of the install's, and nothing to
@@ -708,45 +679,39 @@ async function ensureDatabase(config: InstallConfig): Promise<{ config: InstallC
       return null;
     }
 
-    if ((LEGACY_DATABASE_CONTAINERS as readonly string[]).includes(name)) {
-      // Started as it is, never run anew: it holds the install's data.
-      ui.step(`starting postgres in ${name}, the container this install had before the rename`);
-      await run('docker', ['start', name]).catch(() => undefined);
-    } else {
-      let container: { args: string[]; env: Record<string, string> };
-      try {
-        // Nothing answers yet, so nothing is rotated here, whatever the container publishes.
-        const step = databasePasswordStep({ databaseUrl: current.databaseUrl, port: current.ports.postgres, published, serving: false, connection: first });
-        // A daemon that is not running answers "no container" too. Generating
-        // then would leave an older install's url with a password its container,
-        // found once the daemon is back, has never had.
-        if (step === 'generate' && (await dockerDaemonAnswers())) {
-          // Saved before the container exists, so an `up` interrupted after
-          // creating it does not leave a database with a password nobody kept.
-          const generated = ensureDatabasePassword(current).config;
-          saveConfig(generated);
-          adoptDatabaseUrl(current.databaseUrl, generated.databaseUrl);
-          current = generated;
-          ui.ok(`generated this install’s database password, kept in ${configPath()}`);
-        }
-        container = databaseRunArgs(name, current);
-      } catch (error) {
-        ui.fail(error instanceof Error ? error.message : String(error));
-        return null;
+    let container: { args: string[]; env: Record<string, string> };
+    try {
+      // Nothing answers yet, so nothing is rotated here, whatever the container publishes.
+      const step = databasePasswordStep({ databaseUrl: current.databaseUrl, port: current.ports.postgres, published, serving: false, connection: first });
+      // A daemon that is not running answers "no container" too. Generating
+      // then would leave an older install's url with a password its container,
+      // found once the daemon is back, has never had.
+      if (step === 'generate' && (await dockerDaemonAnswers())) {
+        // Saved before the container exists, so an `up` interrupted after
+        // creating it does not leave a database with a password nobody kept.
+        const generated = ensureDatabasePassword(current).config;
+        saveConfig(generated);
+        adoptDatabaseUrl(current.databaseUrl, generated.databaseUrl);
+        current = generated;
+        ui.ok(`generated this install’s database password, kept in ${configPath()}`);
       }
+      container = databaseRunArgs(name, current);
+    } catch (error) {
+      ui.fail(error instanceof Error ? error.message : String(error));
+      return null;
+    }
 
-      ui.step(`starting postgres in a container (${name})`);
-      const failed = await run('docker', container.args, { env: { ...process.env, ...container.env } }).then(
-        () => null,
-        // One already made by this name is started instead.
-        async (error: unknown) => (await run('docker', ['start', name]).then(() => null, () => stderrOf(error))),
-      );
-      if (failed !== null) {
-        const said = dockerRunFailure(failed, current.ports.postgres);
-        ui.fail(`docker could not start ${name}: ${said.reason}`);
-        if (said.note) ui.note(said.note);
-        return null;
-      }
+    ui.step(`starting postgres in a container (${name})`);
+    const failed = await run('docker', container.args, { env: { ...process.env, ...container.env } }).then(
+      () => null,
+      // One already made by this name is started instead.
+      async (error: unknown) => (await run('docker', ['start', name]).then(() => null, () => stderrOf(error))),
+    );
+    if (failed !== null) {
+      const said = dockerRunFailure(failed, current.ports.postgres);
+      ui.fail(`docker could not start ${name}: ${said.reason}`);
+      if (said.note) ui.note(said.note);
+      return null;
     }
 
     for (let attempt = 0; attempt < 40; attempt += 1) {

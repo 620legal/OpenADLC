@@ -935,7 +935,7 @@ the install's database (openadlc-db) isn't answering on 127.0.0.1:47432: start i
 
 **What it means.** The bridge keeps everything in Postgres, so it can do
 nothing without it. Locally that is the container `openadlc up` keeps
-(`openadlc-db`, or `fleetadlc-db` and `fleet-db` from before the renames).
+(`openadlc-db`).
 `openadlc up` creates it with `--restart unless-stopped`, so it comes back by
 itself when Docker or the machine restarts, and gives one made before that
 the same policy (`docker update`), saying so once. A container that has never
@@ -1769,7 +1769,7 @@ Removing it then, in order:
 | Close its questions | Any other question still open there | `gate.expired` |
 | Release its leases | Every claim on its issues | `lease.released` |
 | The crew's access (on by default) | The crew's accounts come off its direct collaborators, and their invitations are cancelled | `repo.crew_removed` |
-| OpenADLC's labels (off by default) | Every label named in `config/labels.json`, and the older names of renamed ones (`sdlc:*`, `fleet:ignore`), is deleted, which also takes it off every issue and pull request. Generic names the repository may have had first (`blocked`, `deps`, `safety`, `revert`, `breaking`, `incident`, `needs-triage`, `needs-human`), and labels that only start like OpenADLC's (`priority:high`), are listed apart and deleted only when that is ticked too | `repo.labels_removed` |
+| OpenADLC's labels (off by default) | Every label named in `config/labels.json`, and the older names of renamed ones (`sdlc:*`), is deleted, which also takes it off every issue and pull request. Generic names the repository may have had first (`blocked`, `deps`, `safety`, `revert`, `breaking`, `incident`, `needs-triage`, `needs-human`), and labels that only start like OpenADLC's (`priority:high`), are listed apart and deleted only when that is ticked too | `repo.labels_removed` |
 
 Its CI, deploy workflows, environments and Actions variables are never touched,
 nor are its issues, pull requests and branches. **Add a repository** brings it

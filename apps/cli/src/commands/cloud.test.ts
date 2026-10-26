@@ -25,7 +25,6 @@ import {
   imagesInUse,
   INSTANCE_NAME,
   invalidMember,
-  LEGACY_NAME_PREFIX,
   memberArguments,
   membersCommand,
   mirrorDigest,
@@ -36,7 +35,6 @@ import {
   noAdminWarning,
   normalizedMembers,
   outputAnswer,
-  pinNamePrefix,
   postApplySteps,
   releaseDigest,
   releaseMirror,
@@ -178,14 +176,6 @@ describe('where an install keeps its state and settings', () => {
 
   it('names a new install OpenADLC, and says so in its settings', () => {
     expect(tfVars(cloud, 47312)).toMatchObject({ name_prefix: NAME_PREFIX });
-    expect(pinNamePrefix(tfVars(cloud, 47312))).toMatchObject({ pinned: false, vars: { name_prefix: NAME_PREFIX } });
-  });
-
-  it('pins the old name on settings written before the rename, so applying them replaces nothing', () => {
-    const { name_prefix: _, ...before } = tfVars(cloud, 47312);
-    const { vars, pinned } = pinNamePrefix(before);
-    expect(pinned).toBe(true);
-    expect(vars).toMatchObject({ ...before, name_prefix: LEGACY_NAME_PREFIX });
   });
 });
 
@@ -237,7 +227,7 @@ describe('the repository the deployer admits', () => {
 describe('configure run again on an install that has settings', () => {
   // Every run made a new webhook secret and wrote the answers alone: re-run to
   // set the deployer, it rotated the secret GitHub signs with, dropped
-  // admin_emails, and reset a pre-rename install's prefix to openadlc.
+  // admin_emails, and reset an install's own prefix to openadlc.
   const { webhookSecret: _secret, ...answers } = cloud;
   const fresh = () => 'f'.repeat(64);
   const existing = {
@@ -262,10 +252,8 @@ describe('configure run again on an install that has settings', () => {
     expect(configuredVars(existing, answers, 47312, fresh).host_machine_type).toBe('e2-standard-8');
   });
 
-  it('keeps the name prefix the install has, and pins the old one for settings from before the rename', () => {
+  it('keeps the name prefix the install has', () => {
     expect(configuredVars({ ...existing, name_prefix: 'custom' }, answers, 47312, fresh).name_prefix).toBe('custom');
-    const { name_prefix: _prefix, ...preRename } = existing;
-    expect(configuredVars(preRename, answers, 47312, fresh).name_prefix).toBe(LEGACY_NAME_PREFIX);
   });
 
   it('makes a secret for a new install, with the new prefix, as before', () => {

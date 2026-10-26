@@ -458,7 +458,7 @@ describe('a removal that could not do everything', () => {
 
 describe('OpenADLC’s labels', () => {
   it('are the ones config/labels.json names, and their older names, in any letter case', () => {
-    const ours = ['adlc:review', 'priority:p0', 'do:human', 'start:now', 'review:human', 'touches:schema', 'size:large', 'area:general', 'scope:cross-cutting', 'ADLC:done', 'openadlc:ignore', 'openadlc:paused', 'openadlc:next', 'deployed:prod', 'sdlc:build', 'fleet:ignore'];
+    const ours = ['adlc:review', 'priority:p0', 'do:human', 'start:now', 'review:human', 'touches:schema', 'size:large', 'area:general', 'scope:cross-cutting', 'ADLC:done', 'openadlc:ignore', 'openadlc:paused', 'openadlc:next', 'deployed:prod', 'sdlc:build'];
     expect(sortLabels(ours, CONFIGURED)).toEqual({ ours, maybeTheirs: [] });
   });
 

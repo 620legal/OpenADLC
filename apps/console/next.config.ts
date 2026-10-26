@@ -1,16 +1,6 @@
 import type { NextConfig } from 'next';
 import { CONSOLE_HEADERS } from './src/lib/security-headers';
 
-// The console runs under Next, not a main.ts of its own, so the FLEETADLC_*
-// settings a unit or Cloud Run service still sets are adopted here, where the
-// server and the build both pass — inline, because this file runs before the
-// workspace packages are anywhere to import from.
-for (const name of Object.keys(process.env)) {
-  if (!/^(NEXT_PUBLIC_)?FLEETADLC_/.test(name)) continue;
-  const renamed = name.replace('FLEETADLC_', 'OPENADLC_');
-  if (process.env[renamed] === undefined) process.env[renamed] = process.env[name];
-}
-
 const config: NextConfig = {
   reactStrictMode: true,
   // The console holds no database of its own; every read goes to the bridge,

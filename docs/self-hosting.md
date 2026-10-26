@@ -188,15 +188,11 @@ comes back by itself when Docker or the machine restarts; `openadlc up` gives
 one made before that the same policy, and says so once
 ([troubleshooting](troubleshooting.md#the-installs-database-isnt-answering)). An install from before that had `openadlc`
 as its password, which is printed in this repository, and its container
-published on every address. An install from before the rename still has the
-older superuser, user and password both `fleet`, on `fleet-db`. The next
-`openadlc up` changes either password in place. `openadlc doctor` looks at
-whichever of those containers is the one in use, so it reports both the
-password and a publish on every address. The address needs the container made
-again, which `up` does not do, since the data is in the container's own
-volume; `openadlc doctor` warns until it is done. To keep the data, start a
-new container on the old one's volume (use `fleet-db` in place of `openadlc-db`
-when that is still the container's name):
+published on every address. The next `openadlc up` changes that password in
+place, and `openadlc doctor` reports both the password and a publish on every
+address. The address needs the container made again, which `up` does not do,
+since the data is in the container's own volume; `openadlc doctor` warns until
+it is done. To keep the data, start a new container on the old one's volume:
 
 ```bash
 openadlc down
@@ -3242,19 +3238,10 @@ releases ([Updating OpenADLC](#updating-openadlc)), and so does a cloud
 install that runs release images, below. By hand, or on any other install, it
 is the steps below.
 
-An install made before the rename to OpenADLC (its state in `~/.fleet`, its
-command `fleet`): follow [upgrading-from-fleet.md](upgrading-from-fleet.md)
-first. Without `OPENADLC_HOME=~/.fleet`, `openadlc up` starts a new, empty
-install in `~/.openadlc`.
-
 ```bash
 git pull && pnpm install && pnpm build
 openadlc down && openadlc up
 ```
-
-An install made from OpenADLC's sources before it was published under this
-name has a few steps of its own:
-[Upgrading a pre-release install](upgrading-from-fleet.md).
 
 Under the `docker` driver, rebuild the bot image too when an upgrade changes
 the engine CLIs pinned in `infra/local/build-bot-image.sh` — Grok Build is one:

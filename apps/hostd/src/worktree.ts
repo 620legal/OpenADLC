@@ -923,8 +923,8 @@ export class Worktrees {
    * pushed. Its resume now reads `taskRefs` in its repository's mirror, so
    * without this it started from its last push and its later commits were as
    * good as gone. Each one is copied there, and every set-aside
-   * (`refs/openadlc/unpushed/*`, and `refs/fleet/*` from before the rename)
-   * with when it was set aside, so `dropOldSetAsides` ages it out as before.
+   * (`refs/openadlc/unpushed/*`) with when it was set aside, so
+   * `dropOldSetAsides` ages it out as before.
    * A repository's mirror that does not exist yet is made from the old one,
    * which saves the first task there a full clone.
    */
@@ -948,7 +948,7 @@ export class Worktrees {
           }
           if (!marked) {
             await git(
-              ['fetch', '--quiet', '--no-tags', legacy.path, '+refs/openadlc/unpushed/*:refs/openadlc/unpushed/*', '+refs/fleet/*:refs/fleet/*'],
+              ['fetch', '--quiet', '--no-tags', legacy.path, '+refs/openadlc/unpushed/*:refs/openadlc/unpushed/*'],
               mirror,
             );
             const log = { ...readSetAsideLog(legacy.path), ...readSetAsideLog(mirror) };
@@ -1044,12 +1044,7 @@ export class Worktrees {
    */
   async dropOldSetAsides(mirror: string, now = Date.now()): Promise<number> {
     return withMirrorLock(mirror, async () => {
-      // `refs/fleet/unpushed/` is where commits were set aside before the rename;
-      // they age out the same way rather than staying in the mirror for ever.
-      const listed = await git(
-        ['for-each-ref', '--format=%(refname)', 'refs/openadlc/unpushed/', 'refs/fleet/unpushed/'],
-        mirror,
-      );
+      const listed = await git(['for-each-ref', '--format=%(refname)', 'refs/openadlc/unpushed/'], mirror);
       const written = readSetAsideLog(mirror);
       const kept: Record<string, number> = {};
       let dropped = 0;

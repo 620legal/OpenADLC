@@ -24,7 +24,6 @@
     "db:migrate": "pnpm --filter @openadlc/db migrate",
     "db:seed": "pnpm --filter @openadlc/db seed",
     "openadlc": "node apps/cli/bin/openadlc.mjs",
-    "fleetadlc": "node apps/cli/bin/fleetadlc.mjs",
     "postinstall": "node apps/hostd/scripts/node-pty-exec-bit.mjs"
   },
   "devDependencies": {

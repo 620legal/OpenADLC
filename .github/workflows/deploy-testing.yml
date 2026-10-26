@@ -49,9 +49,7 @@ jobs:
     # nothing would put `deployed:testing` on a pull request that is live
     # nowhere — which is a lie in the system of record, and one the dependency
     # logic would act on. Skipped is not failed, so this starts no revert.
-    # The old variable's name still counts: it is set on the repository, not in
-    # this checkout, so an upgrade cannot rename it.
-    if: vars.OPENADLC_DEPLOY_TESTING == 'true' || vars.FLEETADLC_DEPLOY_TESTING == 'true'
+    if: vars.OPENADLC_DEPLOY_TESTING == 'true'
     runs-on: ubuntu-latest
 
     environment:

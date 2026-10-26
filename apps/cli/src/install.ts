@@ -35,8 +35,7 @@ export interface InstallConfig {
    * Which bot is the automation account — the one that writes labels,
    * assignments, reviewer requests and statuses — when it is not the bot whose
    * role is `automation`. A seat or a name; unset on a new install, because
-   * the role is the answer. Older installs have `flow` here, which is read as
-   * the seat that persona was.
+   * the role is the answer.
    */
   automationBotName?: string;
   /**
@@ -284,18 +283,6 @@ export function ensureWebhookSecret(config: InstallConfig): { config: InstallCon
  */
 export const PUBLISHED_DATABASE_PASSWORD = 'openadlc';
 
-/** What FleetADLC shipped with: the same word, under its old name. An install made then still has it until `up` rotates it. */
-export const FLEETADLC_PUBLISHED_DATABASE_PASSWORD = 'fleetadlc';
-
-/**
- * The superuser an install from before the renames was created with. The
- * password is the same word as the user, and it is printed in the old
- * release's docs. Rotation used to recognise only the current word, so `up`
- * left this one in place and `doctor` reported the url as fine.
- */
-export const LEGACY_DATABASE_USER = 'fleet';
-export const LEGACY_DATABASE_PASSWORD = 'fleet';
-
 /** The user, password and database a database url names, decoded; null when it is not a url. */
 export function databaseCredentials(databaseUrl: string): { user: string; password: string; database: string } | null {
   try {
@@ -312,10 +299,7 @@ export function databaseCredentials(databaseUrl: string): { user: string; passwo
 
 export function hasPublishedDatabasePassword(databaseUrl: string): boolean {
   const credentials = databaseCredentials(databaseUrl);
-  if (!credentials) return false;
-  if (credentials.password === PUBLISHED_DATABASE_PASSWORD) return true;
-  if (credentials.password === FLEETADLC_PUBLISHED_DATABASE_PASSWORD) return true;
-  return credentials.user === LEGACY_DATABASE_USER && credentials.password === LEGACY_DATABASE_PASSWORD;
+  return credentials?.password === PUBLISHED_DATABASE_PASSWORD;
 }
 
 /**

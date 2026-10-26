@@ -16,7 +16,7 @@ variable "zone" {
 }
 
 variable "name_prefix" {
-  description = "Prefix for the names of the resources this module makes. One install per project: the runtime secrets are named `fleet-<ref>` whatever this prefix is, and both service accounts, the host's and the bridge's, read and write every secret in the project, so two installs in one project would overwrite and read each other's credentials. An install made under FleetADLC keeps `fleetadlc`, pinned in its settings; one from before that keeps `fleet`, which `openadlc cloud plan` pins for it."
+  description = "Prefix for the names of the resources this module makes. One install per project: the runtime secrets are named `fleet-<ref>` whatever this prefix is, and both service accounts, the host's and the bridge's, read and write every secret in the project, so two installs in one project would overwrite and read each other's credentials."
   type        = string
   default     = "openadlc"
 }

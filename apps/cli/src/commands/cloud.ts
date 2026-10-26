@@ -102,19 +102,9 @@ export const DEFAULT_DEPLOYER_WORKFLOW = '.github/workflows/deploy.yml';
  * Every resource the module makes is named from this. An existing install's
  * prefix is pinned in its settings, so only an install made from nothing gets
  * the default — applying an old install's settings with a new default would
- * replace the network, the database and the host rather than update them. An
- * install made under FleetADLC wrote `name_prefix = "fleetadlc"` itself; one
- * from before that wrote none, and its resources were made under the module's
- * oldest default, `fleet`, which `pinNamePrefix` still pins in.
+ * replace the network, the database and the host rather than update them.
  */
 export const NAME_PREFIX = 'openadlc';
-export const LEGACY_NAME_PREFIX = 'fleet';
-
-/** The settings, with the name the install's resources already have pinned in. */
-export function pinNamePrefix(vars: Record<string, unknown>): { vars: Record<string, unknown>; pinned: boolean } {
-  if (typeof vars.name_prefix === 'string' && vars.name_prefix.length > 0) return { vars, pinned: false };
-  return { vars: { ...vars, name_prefix: LEGACY_NAME_PREFIX }, pinned: true };
-}
 const BACKEND = 'cloud.backend.json';
 
 function tfVarsPath(): string {
@@ -171,7 +161,7 @@ export function tfVars(cloud: CloudConfig, hostdPort: number): Record<string, un
  * secret each run: run again on a live install, to set the deployer, it
  * rotated the secret at the next apply so GitHub's deliveries failed
  * verification, dropped settings added by hand such as `admin_emails`, and on
- * an install from before the rename reset `name_prefix` to `openadlc`, so
+ * an install with a prefix of its own reset `name_prefix` to `openadlc`, so
  * plan looked at an empty state. Now the secret is made only when there is
  * none, everything not asked about carries over, and the prefix is the one the
  * install's resources already have.
@@ -185,8 +175,8 @@ export function configuredVars(
   const kept = typeof existing?.webhook_secret === 'string' && existing.webhook_secret ? existing.webhook_secret : secret();
   const vars = tfVars({ ...answers, webhookSecret: kept }, hostdPort);
   if (!existing) return vars;
-  // tfVars always writes the new prefix, so the old one is put back after the merge.
-  return pinNamePrefix({ ...existing, ...vars, name_prefix: existing.name_prefix }).vars;
+  // tfVars always writes the default prefix, so the install's own is put back after the merge.
+  return { ...existing, ...vars, name_prefix: shown(existing, 'name_prefix') ?? vars.name_prefix };
 }
 
 /**
@@ -1961,7 +1951,7 @@ export async function cloud(
           ...(existing ? { existing } : {}),
           region,
           projectId,
-          prefix: existing ? String(pinNamePrefix(existing).vars.name_prefix) : NAME_PREFIX,
+          prefix: shown(existing, 'name_prefix') ?? NAME_PREFIX,
           repo: shown(existing, 'release_repository') ?? PROJECT_REPOSITORY,
         },
         releaseRunners(),
@@ -2018,7 +2008,6 @@ export async function cloud(
       for (const line of chosenImages.said) ui.step(line);
 
       const bucket = options.bucket ?? saved?.bucket ?? `${projectId}-openadlc-tfstate`;
-      // An install pulled from before the rename keeps its state under `fleet`.
       const backend = { bucket, prefix: saved?.prefix ?? 'openadlc' };
       if (!(await ensureBucket(backend, projectId, region))) {
         ui.fail(`gs://${bucket} was not used; nothing was uploaded`);
@@ -2120,14 +2109,7 @@ export async function cloud(
         return;
       }
 
-      const pinnedPrefix = pinNamePrefix(JSON.parse(readFileSync(tfVarsPath(), 'utf8')) as Record<string, unknown>);
-      let settled = pinnedPrefix.vars;
-      const pinned = pinnedPrefix.pinned;
-      if (pinned) {
-        writePrivate(tfVarsPath(), `${JSON.stringify(settled, null, 2)}\n`);
-        ui.note(`these settings predate FleetADLC: pinned name_prefix = "${LEGACY_NAME_PREFIX}" so the resources keep their names`);
-        await push(backend);
-      }
+      let settled = JSON.parse(readFileSync(tfVarsPath(), 'utf8')) as Record<string, unknown>;
 
       ui.heading(`terraform ${action} (${provider}, state in gs://${backend.bucket}/${backend.prefix})`);
       if (!(await terraformReady())) {
@@ -2209,7 +2191,7 @@ export async function cloud(
         process.exitCode = 1;
         return;
       }
-      process.exitCode = await updateCommand(pinNamePrefix(settings).vars, options.release, {
+      process.exitCode = await updateCommand(settings, options.release, {
         ...releaseRunners(),
         gcloud: (args) => capture('gcloud', args),
         run,

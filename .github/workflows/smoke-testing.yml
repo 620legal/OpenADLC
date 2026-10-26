@@ -46,7 +46,7 @@ jobs:
     # branch `main`. Do not add secrets, `environment:` or `id-token: write`
     # to this job without this guard.
     if: >-
-      (vars.OPENADLC_DEPLOY_TESTING == 'true' || vars.FLEETADLC_DEPLOY_TESTING == 'true') &&
+      vars.OPENADLC_DEPLOY_TESTING == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event.workflow_run.conclusion == 'success' &&
         (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch') &&

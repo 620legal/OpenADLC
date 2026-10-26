@@ -1,4 +1,3 @@
-import './legacy-env.js';
 import { join } from 'node:path';
 import { bots, closePool, hosts, modelAccounts, repos, tasks, waitForDatabase } from '@openadlc/db';
 import { getSecretStore, internalSecretRef } from '@openadlc/github';
@@ -14,7 +13,7 @@ import { SessionObserver } from './observer.js';
 import { isRefusal, RegistryCredentials } from './registry.js';
 import { createHostdServer } from './server.js';
 import { ImageRestart, imageFileFrom } from './restart-onto-image.js';
-import { TaskDatabases, existingTaskdbServer, taskdbBindAddress } from './task-db.js';
+import { TaskDatabases, taskdbBindAddress } from './task-db.js';
 import { WarmPool } from './warm-pool.js';
 import { repoKeyOf } from './drivers/base-env.js';
 import { TaskRunner } from './task-runner.js';
@@ -27,19 +26,12 @@ async function main(): Promise<void> {
 
   const botImage = process.env.OPENADLC_BOT_IMAGE ?? 'openadlc-bot:latest';
   // One Postgres per host, a database per task; see `TaskDatabases`. The
-  // default install's is `openadlc-taskdb` — or its `fleetadlc-taskdb` as it
-  // is, which restarts unless stopped and so would hold the bind port against
-  // a new server, with the waiting tasks' databases in it.
-  const taskdbServer =
-    config.driver === 'docker'
-      ? await existingTaskdbServer(docker, config.botPrefix ? `${config.botPrefix}taskdb` : 'openadlc-taskdb')
-      : null;
+  // default install's is `openadlc-taskdb`; another install's is its own.
   const databases =
-    config.driver === 'docker' && taskdbServer
+    config.driver === 'docker'
       ? new TaskDatabases({
           docker,
-          container: taskdbServer.container,
-          superuser: taskdbServer.superuser,
+          container: config.botPrefix ? `${config.botPrefix}taskdb` : 'openadlc-taskdb',
           image: process.env.OPENADLC_TASKDB_IMAGE ?? process.env.OPENADLC_SIDECAR_IMAGE ?? 'pgvector/pgvector:pg16',
           installLabel: `openadlc.install=${config.installId ?? 'default'}`,
           bindAddress: await taskdbBindAddress(docker, config.taskdbBind ?? null),
@@ -180,12 +172,6 @@ async function main(): Promise<void> {
       console.warn(`[hostd] could not retire the seats' old containers: ${error instanceof Error ? error.message : error}`);
     });
   } else {
-    // Sessions named before the rename, which nothing else here looks for.
-    if (driver instanceof LocalDriver) {
-      await driver.retireLegacySessions().catch((error: unknown) => {
-        console.warn(`[hostd] could not look for sessions from before the rename: ${error instanceof Error ? error.message : error}`);
-      });
-    }
     // Under the local driver every bot keeps an idle shell on the host, so the
     // crew is attachable before any task starts.
     for (const bot of crewNow) {

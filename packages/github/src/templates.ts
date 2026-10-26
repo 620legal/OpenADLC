@@ -25,31 +25,13 @@ export interface CiTemplateUpdate {
 }
 
 /**
- * What bringing any earlier template up to date changes for its push to the
- * default branch. None of them looked at the base of the pull request whose
- * run let that push skip its tests (the first two never skipped them), and
- * the current one reads more to tell, which a repository agrees to with it.
+ * What bringing the earlier template up to date changes for its push to the
+ * default branch. It did not look at the base of the pull request whose run
+ * let that push skip its tests, and the current one reads more to tell, which
+ * a repository agrees to with it.
  */
 const COUNTS_ONLY_THE_DEFAULT_BRANCH =
   'counts only a pull request into the default branch as having tested a tree, since one into another branch runs that branch’s copy of the workflow, which can pass anything, and reads pull requests and their events to tell (`pull-requests: read`, `issues: read`)';
-
-const RUNS_ONLY_WHAT_A_CHANGE_NEEDS: CiTemplateUpdate = {
-  reason: `an earlier OpenADLC workflow, unchanged since it was written; the current one runs only what a change needs — not the build for docs alone, not again on the default branch for a tree its pull request passed — stops a hung run after 30 minutes, names each action by a commit rather than a tag that can be moved, says in its first line that the file is also 0BSD, and ${COUNTS_ONLY_THE_DEFAULT_BRANCH}`,
-  title: 'run only what a change needs',
-  outcome: 'the current template, which runs only what a change needs, and counts only a pull request into the default branch as having tested a tree',
-};
-
-const ADDS_THE_SPDX_LINE: CiTemplateUpdate = {
-  reason: `an earlier OpenADLC workflow, unchanged since it was written; the current one adds the SPDX line saying the file is also 0BSD, so the repository can keep it with no attribution or notice, and ${COUNTS_ONLY_THE_DEFAULT_BRANCH}`,
-  title: 'add the SPDX line saying it is also 0BSD, and count only a pull request into the default branch as having tested a tree',
-  outcome: 'the current template, which adds the SPDX line saying the file is also 0BSD, and counts only a pull request into the default branch as having tested a tree',
-};
-
-const RENAMES_THE_PLATFORM: CiTemplateUpdate = {
-  reason: `the workflow from before the platform was renamed to OpenADLC, unchanged since it was written; in the current one the comments name the platform and its command as they are spelled now, and it ${COUNTS_ONLY_THE_DEFAULT_BRANCH}`,
-  title: 'say the platform is called OpenADLC now, and count only a pull request into the default branch as having tested a tree',
-  outcome: 'the current template, whose comments name the platform and its command as they are spelled now, and which counts only a pull request into the default branch as having tested a tree',
-};
 
 const ONLY_THE_DEFAULT_BRANCH_VOUCHES: CiTemplateUpdate = {
   reason: `the OpenADLC workflow before this one, unchanged since it was written, whose push to the default branch skipped the tests for a tree a pull request into any branch had passed; the current one ${COUNTS_ONLY_THE_DEFAULT_BRANCH}`,
@@ -60,36 +42,19 @@ const ONLY_THE_DEFAULT_BRANCH_VOUCHES: CiTemplateUpdate = {
 /**
  * The CI workflow OpenADLC wrote in earlier versions, by the SHA-256 of the
  * file exactly as written. A repository holding one of these has not touched
- * it, so it is still ours to bring up to date: the current one runs only what
- * a change needs (`crew/templates/repo/.github/workflows/ci.yml`), and an
- * earlier one ran everything, twice per merge, with no timeout, on the
- * repository's runner minutes. Any other workflow is the repository's own and
- * is left alone, as every other present file is.
+ * it, so it is still ours to bring up to date with the current one
+ * (`crew/templates/repo/.github/workflows/ci.yml`). Any other workflow is the
+ * repository's own and is left alone, as every other present file is.
  *
  * When the template changes, the hash it had goes here, with what bringing it
  * up to date changes, and `CURRENT_CI_TEMPLATE` takes the new one;
  * `templates.test.ts` fails until both are done.
  *
- * Each hash carries its own reason because they differ: the third template
- * already ran only what a change needs, and saying so again told a repository
- * set up from it that its CI would change in ways it would not. What does
- * change for every one of them is which pull requests the push counts, so
- * each reason says that too (`COUNTS_ONLY_THE_DEFAULT_BRANCH`).
+ * Each hash carries its own reason, since what bringing it up to date changes
+ * differs from one to the next; saying a template would change in ways it
+ * would not told a repository set up from it the wrong thing about its CI.
  */
 export const EARLIER_CI_TEMPLATES: ReadonlyMap<string, CiTemplateUpdate> = new Map<string, CiTemplateUpdate>([
-  // Fleet, before the renames: on every push and pull request.
-  ['e7a4ed6f4754cc5081bac918e8f678533fc8f37ab6028c88e8ca04b24f9813aa', RUNS_ONLY_WHAT_A_CHANGE_NEEDS],
-  // FleetADLC's first: CI after the lead's approval, everything every time.
-  ['8c7a55c9e17144d51f57c28a96a35f5b63ecb1cc4e0caa5b9248749c574f0a90', RUNS_ONLY_WHAT_A_CHANGE_NEEDS],
-  // FleetADLC's second: ran only what a change needed, but skipped the push for
-  // a tree any branch's run had named, and deferred a fork's `agent/` branch.
-  ['2bea320fe688268f1a47b70860557a8dc7a79eebc7870f7669f0d5ab1a6f9899', RUNS_ONLY_WHAT_A_CHANGE_NEEDS],
-  // FleetADLC's third: the same workflow without the SPDX line that says the
-  // file is also 0BSD, which a repository needs to use it with no notice.
-  ['651acce5a0081df7cd1f65b693b911d4cdb6a4a7a1e152009b28c077e63127c3', ADDS_THE_SPDX_LINE],
-  // FleetADLC's fourth: the same workflow from before the rename to OpenADLC,
-  // its comments still saying `fleetadlc github apply`.
-  ['d188418766bed6373c2c46725cc92c2c7cef55040013d148de1b326bd28b1d15', RENAMES_THE_PLATFORM],
   // OpenADLC's first: a push to the default branch skipped its tests for a
   // tree any pull request's run had passed, one into another branch included.
   ['133faab3f26feb56293c136a5594df51a8ae9242b5a13dfd80a156a0a57539d7', ONLY_THE_DEFAULT_BRANCH_VOUCHES],

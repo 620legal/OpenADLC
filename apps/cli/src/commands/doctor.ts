@@ -14,10 +14,9 @@ import {
   DOCKER_NOT_RUNNING,
   START_DOCKER,
   addressesInstallDatabase,
+  databaseContainer,
   databaseContainerState,
-  existingDatabaseContainer,
   postgresBindings,
-  publishedPostgresPort,
   upDriver,
   type DockerRun,
   type PortBinding,
@@ -127,10 +126,7 @@ export function databaseBindingGap(
 
 /**
  * What doctor says about the install's database container: its password, and
- * whether it is published beyond loopback. The container is `fleetadlc-db` or
- * `fleet-db` on an install from before the renames, not only `openadlc-db`.
- * Looking at the new name alone missed a container published on every address,
- * and the password check then had nothing to attach a binding to.
+ * whether it is published beyond loopback.
  */
 export async function databaseContainerGaps(
   config: { ports: Pick<InstallConfig['ports'], 'postgres'> },
@@ -138,7 +134,7 @@ export async function databaseContainerGaps(
   bindingsOf: (name: string) => Promise<PortBinding[] | undefined> = postgresBindings,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ password: ReturnType<typeof databasePasswordGap>; exposed: ReturnType<typeof databaseBindingGap> }> {
-  const container = await existingDatabaseContainer(config, env, (name) => publishedPostgresPort(name, bindingsOf));
+  const container = databaseContainer(env);
   const bindings = await bindingsOf(container);
   const managed =
     addressesInstallDatabase(databaseUrl, config.ports.postgres) &&
@@ -163,7 +159,7 @@ export async function stoppedDatabase(
 ): Promise<{ message: string; remedy: string } | null> {
   const port = String(config.ports.postgres);
   if (!addressesInstallDatabase(databaseUrl, config.ports.postgres)) return null;
-  const name = await existingDatabaseContainer(config, env, (each) => publishedPostgresPort(each, (one) => postgresBindings(one, docker)));
+  const name = databaseContainer(env);
   const state = await databaseContainerState(name, docker);
   if (!state || state.configured !== port || !['exited', 'created'].includes(state.status)) return null;
   const said = databaseNotAnswering(databaseUrl, name);

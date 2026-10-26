@@ -45,9 +45,7 @@ jobs:
     # stub refuses, and a green deploy of nothing would label a change live on
     # testing when it is live nowhere. Skipped is neither red nor green, so it
     # starts nothing: the merged change waits on testing.
-    # The old variable's name still counts: it is set on the repository, which
-    # a new template cannot rename.
-    if: vars.OPENADLC_DEPLOY_TESTING == 'true' || vars.FLEETADLC_DEPLOY_TESTING == 'true'
+    if: vars.OPENADLC_DEPLOY_TESTING == 'true'
     runs-on: ubuntu-latest
     environment:
       name: testing

@@ -63,9 +63,7 @@ export function nameForLogin(login: string): string {
  * an archive written before seats existed (`packages/backup/src/plan.ts`); an
  * old `config/bots.yaml` (`seatFromName` in `config.ts`); `resolveBotRef`,
  * which falls back to a persona for any reference unless told not to — a
- * `config/review.yaml` seat, `--bot`, and `automationBotName: flow`, which
- * every `install.json` written by `fleet init` holds and which reaches the
- * bridge as `OPENADLC_AUTOMATION_BOT`; and the console's account-name hints
+ * `config/review.yaml` seat and `--bot`; and the console's account-name hints
  * (`github-accounts-step.tsx`).
  */
 export const PERSONA_SEATS: Readonly<Record<string, string>> = {
@@ -133,15 +131,14 @@ export function resolveBotRef<T extends NamedSeat>(
  * The one whose role is `automation`. An install may name another — a seat or
  * a name, in the console's settings or `OPENADLC_AUTOMATION_BOT` — and that wins
  * when it names a bot this install has. One that names nobody is ignored
- * rather than obeyed: `flow` was the default written into every install, and
- * an override pointing at a bot that no longer exists would silence every
- * label the platform writes.
+ * rather than obeyed: an override pointing at a bot that no longer exists
+ * would silence every label the platform writes.
  */
 export function automationBotOf<T extends NamedSeat & { role: BotRole }>(
   crew: readonly T[],
   override?: string | null,
 ): T | null {
-  return resolveBotRef(crew, override) ?? crew.find((bot) => bot.role === 'automation') ?? null;
+  return resolveBotRef(crew, override, { persona: false }) ?? crew.find((bot) => bot.role === 'automation') ?? null;
 }
 
 /**

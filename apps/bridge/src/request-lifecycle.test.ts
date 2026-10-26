@@ -807,27 +807,19 @@ describe('a request filed as an issue in each repository it concerns', () => {
   });
 });
 
-
-describe('an issue filed before the rename to OpenADLC', () => {
-  it('still names the request it was filed for', () => {
-    const body = '### Outcome\n\nA thing.\n\nFleet request: request:a4b02784';
+describe('the line naming the request an issue was filed for', () => {
+  it('is the one the triage skill writes', () => {
+    const body = '### Outcome\n\nA thing.\n\nOpenADLC request: request:a4b02784';
     expect(carriesRequestLine(body, 'request:a4b02784')).toBe(true);
     expect(carriesRequestLine(body, 'request:00000000')).toBe(false);
-  });
-});
-
-describe('an issue filed before the rename to OpenADLC', () => {
-  // The triage skill wrote `OpenADLC request:` until the rename. An issue it
-  // filed then, still waiting for its request to be filed, has only that line.
-  it('still names the request it was filed for', () => {
-    const body = '### Outcome\n\nA thing.\n\nOpenADLC request: request:a4b02784';
-    expect(carriesRequestLine(body, 'request:a4b02784')).toBe(true);
     expect(requestPrefixIn(body)).toBe('a4b02784');
   });
 
-  it('reads the line the triage skill writes now', () => {
-    const body = '### Outcome\n\nA thing.\n\nOpenADLC request: request:a4b02784';
-    expect(carriesRequestLine(body, 'request:a4b02784')).toBe(true);
-    expect(requestPrefixIn(body)).toBe('a4b02784');
+  it('names OpenADLC and nothing else', () => {
+    // The rename's find-and-replace left the name from before it among the
+    // ones read, so a line under that name still counted.
+    const body = '### Outcome\n\nA thing.\n\nFleet request: request:a4b02784';
+    expect(carriesRequestLine(body, 'request:a4b02784')).toBe(false);
+    expect(requestPrefixIn(body)).toBeNull();
   });
 });

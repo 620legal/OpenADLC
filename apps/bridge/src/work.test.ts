@@ -409,8 +409,8 @@ describe('who may put scope:cross-cutting on', () => {
 describe('what the console leaves out', () => {
   const issue = (number: number, prNumber: number | null, labels: string[]) => ({ repoName: 'api', number, prNumber, labels });
 
-  it('is every issue labelled openadlc:ignore (or fleet:ignore) and the pull request recorded on it, and nothing else', () => {
-    const issues = [issue(1, 5, ['openadlc:ignore']), issue(2, null, ['fleet:ignore']), issue(3, 7, ['adlc:review'])];
+  it('is every issue labelled openadlc:ignore and the pull request recorded on it, and nothing else', () => {
+    const issues = [issue(1, 5, ['openadlc:ignore']), issue(2, null, ['openadlc:ignore']), issue(3, 7, ['adlc:review'])];
     expect([...ignoredSubjects(issues)].sort()).toEqual(['api#1', 'api#2', 'api#5']);
     expect(shownIssues(issues).map((one) => one.number)).toEqual([3]);
   });

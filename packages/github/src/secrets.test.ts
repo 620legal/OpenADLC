@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9,7 +9,7 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...actual, writeSync: vi.fn(actual.writeSync) };
 });
 
-// Passed through, so the install-directory tests can point `~` at a scratch one.
+// Passed through, so the install-directory test can point `~` elsewhere.
 vi.mock('node:os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:os')>();
   return { ...actual, homedir: vi.fn(actual.homedir) };
@@ -174,43 +174,23 @@ describe('the webhook secret', () => {
 });
 
 describe('the install directory', () => {
-  const HOMES = ['OPENADLC_HOME', 'FLEETADLC_HOME'] as const;
-  const kept = Object.fromEntries(HOMES.map((name) => [name, process.env[name]]));
-  const put = (values: Partial<Record<(typeof HOMES)[number], string>>) => {
-    for (const name of HOMES) {
-      if (values[name] === undefined) delete process.env[name];
-      else process.env[name] = values[name];
-    }
-  };
+  const kept = process.env.OPENADLC_HOME;
   afterEach(() => {
-    for (const [name, value] of Object.entries(kept)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    if (kept === undefined) delete process.env.OPENADLC_HOME;
+    else process.env.OPENADLC_HOME = kept;
   });
 
-  it('is OPENADLC_HOME, and FLEETADLC_HOME is still read where only it is set', async () => {
+  it('is OPENADLC_HOME where it is set, and ~/.openadlc otherwise', async () => {
     const { openadlcHome } = await import('./secrets.js');
-    put({ OPENADLC_HOME: '/srv/new', FLEETADLC_HOME: '/srv/old' });
-    expect(openadlcHome()).toBe('/srv/new');
-    put({ FLEETADLC_HOME: '/srv/old' });
-    expect(openadlcHome()).toBe('/srv/old');
-  });
-
-  it('finds an existing ~/.fleetadlc on its own, and prefers ~/.openadlc once that exists', async () => {
-    // The last rename did not look for the old directory, and every command on
-    // an upgraded install acted on an empty new home until an export said otherwise.
-    const { openadlcHome } = await import('./secrets.js');
-    const home = mkdtempSync(join(tmpdir(), 'openadlc-home-'));
     const os = await import('node:os');
-    vi.mocked(os.homedir).mockReturnValue(home);
+    vi.mocked(os.homedir).mockReturnValue('/home/someone');
     try {
-      put({});
-      expect(openadlcHome()).toBe(join(home, '.openadlc'));
-      mkdirSync(join(home, '.fleetadlc'));
-      expect(openadlcHome()).toBe(join(home, '.fleetadlc'));
-      mkdirSync(join(home, '.openadlc'));
-      expect(openadlcHome()).toBe(join(home, '.openadlc'));
+      process.env.OPENADLC_HOME = '/srv/new';
+      expect(openadlcHome()).toBe('/srv/new');
+      delete process.env.OPENADLC_HOME;
+      expect(openadlcHome()).toBe(join('/home/someone', '.openadlc'));
     } finally {
       vi.mocked(os.homedir).mockReset();
-      rmSync(home, { recursive: true, force: true });
     }
   });
 });

@@ -1204,9 +1204,8 @@ describe('a Docker daemon that does not answer', () => {
     expect(timeoutOf((args) => args[0] === 'run')).toEqual([undefined]);
     expect(timeoutOf((args) => args.includes('make'))).toEqual([undefined]);
     expect(timeoutOf((args) => args.includes('tmux') && args.includes('list-sessions'))).toEqual([30_000]);
-    // Two listings: the reaper looks under the new label keys and FleetADLC's;
-    // and a third, the discarded computer's own Postgres servers.
-    expect(timeoutOf((args) => args[0] === 'ps')).toEqual([30_000, 30_000, 30_000]);
+    // The reaper's listing, and the discarded computer's own Postgres servers.
+    expect(timeoutOf((args) => args[0] === 'ps')).toEqual([30_000, 30_000]);
     expect(timeoutOf((args) => args[0] === 'rm')).toEqual([30_000]);
   });
 });

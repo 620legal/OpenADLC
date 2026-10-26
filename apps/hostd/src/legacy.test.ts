@@ -35,7 +35,7 @@ describe('retiring each seat’s container from before a task had its own', () =
       'bot-builder': { 'openadlc.install': 'default' },
       'bot-builder-db': { 'openadlc.install': 'default' },
       // From before installs were named: the default install's, by its seat label.
-      'bot-intake': { 'fleet.login': 'none' },
+      'bot-intake': { 'openadlc.login': 'none' },
       'bot-lead-reviewer': { 'openadlc.install': 'default' },
     });
 
@@ -58,15 +58,7 @@ describe('retiring each seat’s container from before a task had its own', () =
     expect(removed).toEqual(['bot-builder', 'bot-builder-db', 'bot-intake']);
     expect(calls).toContainEqual(['rm', '-f', '-v', 'bot-builder']);
     const networks = calls.filter((args) => args[0] === 'network').map((args) => args.at(-1));
-    // And the network's names from before the renames.
-    expect(networks).toEqual([
-      'openadlc-bot-builder',
-      'fleetadlc-bot-builder',
-      'fleet-bot-builder',
-      'openadlc-bot-intake',
-      'fleetadlc-bot-intake',
-      'fleet-bot-intake',
-    ]);
+    expect(networks).toEqual(['openadlc-bot-builder', 'openadlc-bot-intake']);
   });
 
   it('never removes another install’s container that shares the name', async () => {
@@ -107,7 +99,7 @@ describe('retiring each seat’s container from before a task had its own', () =
   it('takes an unlabelled container as the default install’s by OpenADLC’s image or its seat network', async () => {
     const { calls, docker } = daemon({
       'bot-sre': { image: 'openadlc-bot:latest' },
-      'bot-sre-db': { image: 'pgvector/pgvector:pg16', networks: ['fleet-bot-sre'] },
+      'bot-sre-db': { image: 'pgvector/pgvector:pg16', networks: ['openadlc-bot-sre'] },
     });
 
     const result = await retireSeatContainers({
@@ -123,7 +115,7 @@ describe('retiring each seat’s container from before a task had its own', () =
   });
 
   it('keeps an unlabelled container on an install that is not the default', async () => {
-    const { calls, docker } = daemon({ 'acme-builder': { 'fleet.login': 'none' } });
+    const { calls, docker } = daemon({ 'acme-builder': { 'openadlc.login': 'none' } });
 
     const result = await retireSeatContainers({
       docker,

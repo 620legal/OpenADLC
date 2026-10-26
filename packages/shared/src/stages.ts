@@ -66,16 +66,11 @@ export function stageFromLabels(labels: readonly string[]): StageKey | null {
   return null;
 }
 
-/**
- * A person telling the crew to leave an issue alone. `fleetadlc:ignore` and
- * `fleet:ignore` are the names it had before the renames, and an issue
- * labelled with either is still left alone.
- */
+/** A person telling the crew to leave an issue alone. */
 export const IGNORE_LABEL = 'openadlc:ignore';
-export const LEGACY_IGNORE_LABELS = ['fleetadlc:ignore', 'fleet:ignore'] as const;
 
 export function isIgnoreLabel(label: string): boolean {
-  return label === IGNORE_LABEL || (LEGACY_IGNORE_LABELS as readonly string[]).includes(label);
+  return label === IGNORE_LABEL;
 }
 
 export function hasIgnoreLabel(labels: readonly string[] | null | undefined): boolean {
@@ -89,18 +84,16 @@ export function hasIgnoreLabel(labels: readonly string[] | null | undefined): bo
  * request's labels, the dispatcher and the task service the issue's.
  */
 export const PAUSED_LABEL = 'openadlc:paused';
-const LEGACY_PAUSED_LABEL = 'fleetadlc:paused';
 
 /** The one issue a repository builds next, ahead of priority order. */
 export const NEXT_LABEL = 'openadlc:next';
-const LEGACY_NEXT_LABEL = 'fleetadlc:next';
 
 export function hasPausedLabel(labels: readonly string[] | null | undefined): boolean {
-  return (labels ?? []).some((label) => label === PAUSED_LABEL || label === LEGACY_PAUSED_LABEL);
+  return (labels ?? []).includes(PAUSED_LABEL);
 }
 
 export function hasNextLabel(labels: readonly string[] | null | undefined): boolean {
-  return (labels ?? []).some((label) => label === NEXT_LABEL || label === LEGACY_NEXT_LABEL);
+  return (labels ?? []).includes(NEXT_LABEL);
 }
 
 /**
@@ -128,12 +121,9 @@ export function hasShipped(issue: { stage: string; labels?: readonly string[] | 
 }
 
 /** Labels that were renamed, by their old name: label sync renames them in place. */
-export const RENAMED_LABELS: Readonly<Record<string, string>> = {
-  ...Object.fromEntries(STAGE_KEYS.map((key) => [`${LEGACY_STAGE_LABEL_PREFIX}${key}`, `${STAGE_LABEL_PREFIX}${key}`])),
-  ...Object.fromEntries(LEGACY_IGNORE_LABELS.map((label) => [label, IGNORE_LABEL])),
-  [LEGACY_PAUSED_LABEL]: PAUSED_LABEL,
-  [LEGACY_NEXT_LABEL]: NEXT_LABEL,
-};
+export const RENAMED_LABELS: Readonly<Record<string, string>> = Object.fromEntries(
+  STAGE_KEYS.map((key) => [`${LEGACY_STAGE_LABEL_PREFIX}${key}`, `${STAGE_LABEL_PREFIX}${key}`]),
+);
 
 /**
  * Bots advance their own stage. A card moves backwards only by a send-back
@@ -309,8 +299,6 @@ export type LabelStep =
 export function labelStep(wanted: WantedLabel, existing: readonly ExistingLabel[]): LabelStep {
   const current = existing.find((label) => label.name === wanted.name);
   if (!current) {
-    // A label may have more than one old name by now (`fleetadlc:ignore` and
-    // `fleet:ignore`); whichever the repository still has is the one renamed.
     const legacies = Object.entries(RENAMED_LABELS).filter(([, now]) => now === wanted.name).map(([old]) => old);
     const old = existing.find((label) => legacies.includes(label.name));
     if (old) return { action: 'update', from: old.name, detail: `renamed from ${old.name}; issues keep it` };

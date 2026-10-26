@@ -60,18 +60,6 @@ describe('a database password for an install', () => {
     expect(fresh.databaseUrl).toBe('postgres://openadlc:openadlc@127.0.0.1:47432/openadlc_db');
   });
 
-  it('replaces the superuser from before the rename the same way', () => {
-    const config = { ...defaultConfig('/tmp/openadlc'), databaseUrl: 'postgres://fleet:fleet@127.0.0.1:47432/fleet_db' };
-    const next = ensureDatabasePassword(config);
-    expect(next.generated).toBe(true);
-    expect(databaseCredentials(next.config.databaseUrl)?.user).toBe('fleet');
-    expect(databaseCredentials(next.config.databaseUrl)?.password).toMatch(/^[0-9a-f]{64}$/);
-    expect(databaseCredentials(next.config.databaseUrl)?.database).toBe('fleet_db');
-    // A cloud database keeps the user `fleet` and a password of its own.
-    const cloud = { ...config, databaseUrl: 'postgres://fleet:0123abcd@10.0.0.5:5432/fleet_db' };
-    expect(ensureDatabasePassword(cloud).generated).toBe(false);
-  });
-
   it('keeps any other password, an external server’s included', () => {
     for (const databaseUrl of [
       'postgres://openadlc:0123abcd@127.0.0.1:47432/openadlc_db',
