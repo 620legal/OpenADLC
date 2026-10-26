@@ -969,9 +969,7 @@ describe('the delivery templates', () => {
     // nor reverts.
     const guard = (name: string) =>
       Object.values((parseYamlFile(join(TEMPLATE, '.github', 'workflows', `${name}.yml`)) as { jobs: Record<string, { if?: string }> }).jobs)[0]?.if ?? '';
-    // The variable's old name still counts: it is set on the repository, which
-    // a new template cannot rename.
-    expect(guard('deploy-testing')).toBe("vars.OPENADLC_DEPLOY_TESTING == 'true' || vars.FLEETADLC_DEPLOY_TESTING == 'true'");
+    expect(guard('deploy-testing')).toBe("vars.OPENADLC_DEPLOY_TESTING == 'true'");
     expect(guard('smoke-testing')).toMatch(/^vars\.OPENADLC_SMOKE_TESTING == 'true' && \(/);
     // The stub still refuses: a green one would dispatch an untested promote.
     expect(readFileSync(join(TEMPLATE, 'Makefile'), 'utf8')).toMatch(/^smoke-testing:\n\t.*exit 1$/m);

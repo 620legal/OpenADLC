@@ -255,7 +255,7 @@ export async function anyDoneBefore(since: Date, repoName?: string): Promise<boo
         where r.removed_at is null and ($2::text is null or r.name = $2)
           and exists (select 1 from issues i
                        where i.repo_id = r.id and i.stage = 'done' and i.updated_at < $1
-                         and not (i.labels && array['openadlc:ignore', 'fleet:ignore']::text[]))
+                         and not ('openadlc:ignore' = any(i.labels)))
      ) as done`,
     [since, repoName ?? null],
   );
@@ -281,7 +281,7 @@ export async function listRoutableIssues(repoId: string): Promise<IssueRecord[]>
        and not ('needs-human' = any(i.labels))
        and not ('needs-triage' = any(i.labels))
        and not exists (select 1 from unnest(i.labels) as l where l like 'do:%' and l <> 'do:ai')
-       and not (i.labels && array['openadlc:ignore', 'fleet:ignore']::text[])`,
+       and not ('openadlc:ignore' = any(i.labels))`,
     [repoId],
   );
   return rows.map(toIssue).sort(byNextFirst);
@@ -454,7 +454,7 @@ export async function setPullRequestNumber(repoId: string, issueNumber: number, 
  */
 export async function listBlockedIssues(repoId: string): Promise<IssueRecord[]> {
   const rows = await query<IssueRow>(
-    `${SELECT} where i.repo_id = $1 and 'blocked' = any(i.labels) and not (i.labels && array['openadlc:ignore', 'fleet:ignore']::text[])`,
+    `${SELECT} where i.repo_id = $1 and 'blocked' = any(i.labels) and not ('openadlc:ignore' = any(i.labels))`,
     [repoId],
   );
   return rows.map(toIssue);

@@ -17,8 +17,6 @@ const run = promisify(execFile);
 
 const SESSION_PREFIX = 'openadlc__';
 const SESSION_SEPARATOR = '__';
-/** What sessions were named after before the renames, newest first; see `retireLegacySessions`. */
-const LEGACY_SESSION_PREFIXES = ['fleetadlc__', 'fleet__'] as const;
 
 /**
  * The development driver: the same tmux sessions, on the host, with a per-bot
@@ -176,39 +174,6 @@ export class LocalDriver implements ExecDriver {
     for (const session of await this.sessionsOrNone()) {
       if (session.name.startsWith(prefix)) await this.tmux.killSession(session.name);
     }
-  }
-
-  /**
-   * Sessions from before the renames, `fleetadlc__<bot>__<name>` and
-   * `fleet__<bot>__<name>`, at hostd's start.
-   * Every list, kill and attach here looks for `openadlc__`, and `openadlc
-   * down` leaves tmux running, so a task in flight through the upgrade went on
-   * spending and pushing where Stop, the session list and the Terminal could
-   * not see it. An idle shell is killed; one still running something is left
-   * to finish, and said, with how to stop it.
-   */
-  async retireLegacySessions(): Promise<{ retired: string[]; kept: string[] }> {
-    const result = { retired: [] as string[], kept: [] as string[] };
-    for (const session of await this.sessionsOrNone()) {
-      if (!LEGACY_SESSION_PREFIXES.some((prefix) => session.name.startsWith(prefix))) continue;
-      const info = await this.tmux.paneInfo(session.name);
-      const lastLine = (await this.tmux.capturePane(session.name, 50)).filter((line) => line.trim().length > 0).at(-1) ?? null;
-      const state = stateFromPane(info?.cmd ?? '', lastLine, info?.dead ?? false);
-      if (state === 'idle' || state === 'stopped') {
-        await this.tmux.killSession(session.name);
-        result.retired.push(session.name);
-      } else {
-        result.kept.push(session.name);
-      }
-    }
-    for (const name of result.retired) console.log(`[hostd] removed ${name}, an idle session from before the rename`);
-    for (const name of result.kept) {
-      console.warn(
-        `[hostd] ${name} is from before the rename and is still running a task; OpenADLC cannot see or stop it. ` +
-          `Let it finish, or stop it: tmux kill-session -t '=${name}'`,
-      );
-    }
-    return result;
   }
 
   async startSession(input: {

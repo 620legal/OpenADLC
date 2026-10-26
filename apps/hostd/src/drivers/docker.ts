@@ -78,22 +78,6 @@ export const KIND_LABEL = 'openadlc.kind';
 export const REPO_LABEL = 'openadlc.repo';
 /** The task directory a computer mounts at its own path, where its slot file says whose it is. */
 export const SLOT_LABEL = 'openadlc.slot';
-/**
- * The same labels as FleetADLC wrote them. A computer made before the rename
- * keeps them through the upgrade — a waiting task's above all — and reading
- * only the new keys left it invisible: never reused, never reaped, and its
- * install read as `default`, which on a named install refused the install's
- * own container. Read beside the new keys, never written.
- */
-export const LEGACY_INSTALL_LABEL = 'fleetadlc.install';
-export const LEGACY_KIND_LABEL = 'fleetadlc.kind';
-export const LEGACY_REPO_LABEL = 'fleetadlc.repo';
-export const LEGACY_SLOT_LABEL = 'fleetadlc.slot';
-
-/** A label under its new key, else under its FleetADLC key. */
-function labelOf(labels: Record<string, string> | null | undefined, key: string): string | undefined {
-  return labels?.[key] ?? labels?.[key.replace('openadlc.', 'fleetadlc.')];
-}
 /** The install `openadlc up` runs, which keeps the names every install had before. */
 export const DEFAULT_INSTALL = 'default';
 
@@ -421,7 +405,7 @@ export class DockerDriver implements ExecDriver {
   private async assertOurs(name: string, quick: DockerCallOptions = {}): Promise<Inspected | null> {
     const found = await this.inspect(name, quick);
     if (!found) return null;
-    const owner = labelOf(found.labels, INSTALL_LABEL) ?? DEFAULT_INSTALL;
+    const owner = found.labels[INSTALL_LABEL] ?? DEFAULT_INSTALL;
     if (owner !== this.install) throw new NotThisInstall(name, owner, this.install);
     return found;
   }
@@ -489,7 +473,7 @@ export class DockerDriver implements ExecDriver {
       } catch {
         entry = undefined;
       }
-      const owner = labelOf(entry?.Labels, INSTALL_LABEL) ?? DEFAULT_INSTALL;
+      const owner = entry?.Labels?.[INSTALL_LABEL] ?? DEFAULT_INSTALL;
       if (owner !== this.install) throw new NotThisInstall(name, owner, this.install);
       if (entry?.Options?.['com.docker.network.bridge.enable_icc'] !== 'false') {
         console.warn(
@@ -516,7 +500,7 @@ export class DockerDriver implements ExecDriver {
       const name = `${this.taskPrefix}${id.slice(0, length)}`;
       const found = await this.assertOurs(name);
       if (!found) return name;
-      const slot = labelOf(found.labels, SLOT_LABEL);
+      const slot = found.labels[SLOT_LABEL];
       // Only by the record hostd wrote beside its directory: one inside it is
       // the task's to write, and could name any task.
       const record = slot ? readSlotTask(slot) : null;
@@ -838,28 +822,18 @@ export class DockerDriver implements ExecDriver {
    * task could write.
    */
   async computers(): Promise<FoundComputer[]> {
-    // Listed under both generations of keys: a computer made before the rename
-    // wears `fleetadlc.*`, and a filter on the new keys alone left it unlisted,
-    // so the reaper never saw it again.
-    const names = new Set<string>();
-    for (const [install, kind] of [
-      [INSTALL_LABEL, KIND_LABEL],
-      [LEGACY_INSTALL_LABEL, LEGACY_KIND_LABEL],
-    ]) {
-      const listed = await this.docker(
-        ['ps', '-a', '--filter', `label=${install}=${this.install}`, '--filter', `label=${kind}=computer`, '--format', '{{.Names}}'],
-        undefined,
-        undefined,
-        QUICK,
-      );
-      if (listed.code !== 0) return [];
-      for (const name of listed.stdout.split('\n').map((line) => line.trim()).filter(Boolean)) names.add(name);
-    }
+    const listed = await this.docker(
+      ['ps', '-a', '--filter', `label=${INSTALL_LABEL}=${this.install}`, '--filter', `label=${KIND_LABEL}=computer`, '--format', '{{.Names}}'],
+      undefined,
+      undefined,
+      QUICK,
+    );
+    if (listed.code !== 0) return [];
     const found: FoundComputer[] = [];
-    for (const name of names) {
+    for (const name of listed.stdout.split('\n').map((line) => line.trim()).filter(Boolean)) {
       const container = await this.inspect(name, QUICK).catch(() => null);
       if (!container) continue;
-      const slotDir = labelOf(container.labels, SLOT_LABEL) ?? null;
+      const slotDir = container.labels[SLOT_LABEL] ?? null;
       const record = slotDir ? readSlotTask(slotDir) : null;
       found.push({
         name: container.name,
@@ -869,7 +843,7 @@ export class DockerDriver implements ExecDriver {
         slotDir,
         running: container.running,
         image: container.image,
-        repoKey: labelOf(container.labels, REPO_LABEL) && labelOf(container.labels, REPO_LABEL) !== 'none' ? (labelOf(container.labels, REPO_LABEL) ?? null) : null,
+        repoKey: container.labels[REPO_LABEL] && container.labels[REPO_LABEL] !== 'none' ? container.labels[REPO_LABEL] : null,
       });
     }
     return found;
@@ -916,7 +890,7 @@ export class DockerDriver implements ExecDriver {
   async discard(name: string): Promise<void> {
     if (!name.startsWith(this.taskPrefix) && !name.startsWith(this.warmPrefix)) return;
     await this.assertOurs(name, QUICK);
-    const slotDir = labelOf((await this.inspect(name, QUICK).catch(() => null))?.labels, SLOT_LABEL);
+    const slotDir = (await this.inspect(name, QUICK).catch(() => null))?.labels[SLOT_LABEL];
     await this.postgres.removeFor(name);
     await this.docker(['rm', '-f', '-v', name], undefined, undefined, QUICK);
     // The home is not in the slot, so the leftover-slot sweep does not reach

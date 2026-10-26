@@ -1,4 +1,3 @@
-import './legacy-env.js';
 import { heldBySeatPause, registerSeatPauseRoutes, seatPausedReason } from './seat-pause.js';
 import { createServer } from 'node:http';
 import { audit as auditEntry, bots, ciUsage, closePool, costs, deployRuns, issues as issueStore, leases as leaseStore, repos, settings, tasks, threads as threadStore, waitForDatabase } from '@openadlc/db';

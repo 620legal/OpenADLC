@@ -496,7 +496,7 @@ export function routable(card: BoardCard): boolean {
     !card.held &&
     !card.labels.includes('openadlc:paused') &&
     !card.labels.includes('do:human') &&
-    !card.labels.some((label) => label === 'openadlc:ignore' || label === 'fleet:ignore')
+    !card.labels.includes('openadlc:ignore')
   );
 }
 

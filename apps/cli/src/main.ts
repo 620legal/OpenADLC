@@ -1,4 +1,3 @@
-import './legacy-env.js';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

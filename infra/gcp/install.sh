@@ -466,15 +466,7 @@ settings_project() {
 }
 
 settle_settings() {
-  # The same order the CLI resolves its home in: either variable, then an
-  # existing directory under the new name, then one under the old.
-  local home
-  if [ -n "${OPENADLC_HOME:-}" ]; then home="$OPENADLC_HOME"
-  elif [ -n "${FLEETADLC_HOME:-}" ]; then home="$FLEETADLC_HOME"
-  elif [ -d "$HOME/.openadlc" ]; then home="$HOME/.openadlc"
-  elif [ -d "$HOME/.fleetadlc" ]; then home="$HOME/.fleetadlc"
-  else home="$HOME/.openadlc"
-  fi
+  local home="${OPENADLC_HOME:-$HOME/.openadlc}"
   local here="$home/cloud.tfvars.json"
   existing=0
   if [ -f "$here" ]; then
@@ -506,39 +498,16 @@ settle_settings() {
     ok "this machine has $project's settings, from gs://$bucket"
     return 0
   fi
-  # Nothing under the new name: an install made before the rename keeps its
-  # settings in the bucket and prefix FleetADLC named, so look there before
-  # deciding this is a new install.
+  # A new install only when gcloud says there is nothing there. Anything else —
+  # no permission, an API not enabled, the network — is not knowing, and
+  # configure would then make a new webhook secret and push it over the
+  # settings it could not see (the same reading as notFound in
+  # apps/cli/src/commands/cloud-leftovers.ts).
   local lower
   lower="$(printf '%s' "$said" | tr '[:upper:]' '[:lower:]')"
   case "$lower" in
-    *not_found*|*"not found"*|*"does not exist"*) ;;
+    *not_found*|*"not found"*|*"does not exist"*) note "no settings in gs://$bucket yet: a new install" ;;
     *) die "could not tell whether gs://$bucket holds this install's settings, so nothing was configured. gcloud said: $said" ;;
-  esac
-
-  local legacy_bucket="$project-fleetadlc-tfstate"
-  if said="$(gcloud storage objects describe "gs://$legacy_bucket/fleetadlc/cloud.tfvars.json" 2>&1 >/dev/null)"; then
-    step "Taking over the settings in gs://$legacy_bucket, this install's bucket from before the rename"
-    interactive node apps/cli/bin/openadlc.mjs cloud pull --bucket "$legacy_bucket" --prefix fleetadlc
-    if [ "$dry_run" = 0 ]; then
-      local pulled
-      pulled="$(settings_project "$here")" || die "the settings pulled into $here could not be read. Move it aside, then run this again"
-      [ "$pulled" = "$project" ] || die "gs://$legacy_bucket holds the settings of the install in $pulled, not $project; they are now in $here. Move that file aside, then run this again with --project $pulled, or name this install's own bucket"
-    fi
-    existing=1
-    ok "this machine has $project's settings, from gs://$legacy_bucket"
-    return 0
-  fi
-
-  # A new install only when gcloud says there is nothing there under either
-  # name. Anything else — no permission, an API not enabled, the network — is
-  # not knowing, and configure would then make a new webhook secret and push it
-  # over the settings it could not see (the same reading as notFound in
-  # apps/cli/src/commands/cloud-leftovers.ts).
-  lower="$(printf '%s' "$said" | tr '[:upper:]' '[:lower:]')"
-  case "$lower" in
-    *not_found*|*"not found"*|*"does not exist"*) note "no settings in gs://$bucket or gs://$legacy_bucket yet: a new install" ;;
-    *) die "could not tell whether gs://$legacy_bucket holds this install's settings, so nothing was configured. gcloud said: $said" ;;
   esac
 }
 

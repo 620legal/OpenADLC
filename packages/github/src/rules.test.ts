@@ -1870,18 +1870,6 @@ describe('repairing an OpenADLC ruleset keeps what a person added', () => {
     await settles(github, MAIN_RULESET);
   });
 
-  it('keeps a person’s rule when it renames a ruleset from before OpenADLC', async () => {
-    const github = await applied();
-    const main = named(github, MAIN_RULESET);
-    main.name = 'fleet: main';
-    main.rules.push({ type: 'required_deployments', parameters: { required_deployment_environments: ['staging'] } });
-
-    expect(outcomeOf(await applyRepoRules(github, INPUT), MAIN_RULESET)?.action).toBe('updated');
-    const renamed = named(github, MAIN_RULESET);
-    expect(rulesOf(renamed).map((rule) => rule.type)).toContain('required_deployments');
-    await settles(github, MAIN_RULESET);
-  });
-
   it('sends nothing when it could read only the list entry, which has no rules to keep', async () => {
     const github = await applied();
     const main = named(github, MAIN_RULESET);
@@ -2223,7 +2211,7 @@ describe('who may bypass an OpenADLC ruleset', () => {
     it('keeps both ids when an account and its seat’s sign-in stored different ones', async () => {
       const github = await repository([jane, app]);
       const other: BypassActor = { actor_id: 5150, actor_type: 'User', bypass_mode: 'always' };
-      github.users.set('fleet-atlas-other', { login: 'fleet-atlas-other', id: 5150, type: 'User' });
+      github.users.set('openadlc-atlas-other', { login: 'openadlc-atlas-other', id: 5150, type: 'User' });
       mainOf(github).bypass_actors = [jane, app, other];
       const both: RepoRulesInput = { ...STORED, crewAccounts: [...(STORED.crewAccounts ?? []), { login: 'openadlc-atlas-janedoe', id: 5150 }] };
 
@@ -2315,7 +2303,7 @@ describe('every account the crew works as', () => {
         { id: 'identity-atlas', login: 'openadlc-atlas-janedoe', githubUserId: 1002 },
         { id: 'identity-cipher', login: 'openadlc-cipher-janedoe', githubUserId: 1003 },
         { id: 'identity-flow', login: 'janedoe-openadlc-flow', githubUserId: 1004 },
-        { id: 'identity-spare', login: 'fleet-spare', githubUserId: 340000001 },
+        { id: 'identity-spare', login: 'openadlc-spare', githubUserId: 340000001 },
       ],
       [
         { botId: 'bot-builder', identityId: 'identity-atlas' },
@@ -2330,7 +2318,7 @@ describe('every account the crew works as', () => {
       { login: 'openadlc-cipher-janedoe', id: 1003 },
       { login: 'janedoe-openadlc-flow', id: 1004 },
       { login: 'old-seat', id: 77 },
-      { login: 'fleet-spare', id: 340000001 },
+      { login: 'openadlc-spare', id: 340000001 },
     ]);
   });
 
@@ -2353,24 +2341,6 @@ describe('every account the crew works as', () => {
     await applyRepoRules(github, input);
     const after = github.rulesets.find((one) => one.name === MAIN_RULESET) as { bypass_actors?: BypassActor[] };
     expect(after.bypass_actors).toEqual([{ actor_id: APP_ID, actor_type: 'Integration', bypass_mode: 'always' }, jane]);
-  });
-});
-
-describe('a ruleset named before the renames to FleetADLC and OpenADLC', () => {
-  it.each(['fleetadlc: ', 'fleet: '])('named "%smain" is the same ruleset: reported as drifted, renamed by the next apply, never written twice', async (prefix) => {
-    const github = new FakeGitHub();
-    github.workflows = ['ci.yml'];
-    await applyRepoRules(github, INPUT);
-    for (const ruleset of github.rulesets) ruleset.name = ruleset.name.replace('openadlc: ', prefix);
-
-    const reports = await checkRepoRules(github, INPUT);
-    expect(stateOf(reports, MAIN_RULESET)).toBe('drifted');
-    expect(reports.find((report) => report.name === MAIN_RULESET)?.detail).toContain(`named "${prefix}main"`);
-
-    const outcomes = await applyRepoRules(github, INPUT);
-    expect(outcomes.find((outcome) => outcome.name === MAIN_RULESET)?.action).toBe('updated');
-    expect(github.rulesets.map((ruleset) => ruleset.name).sort()).toEqual([AGENT_BRANCHES_RULESET, MAIN_RULESET].sort());
-    expect(stateOf(await checkRepoRules(github, INPUT), MAIN_RULESET)).toBe('present');
   });
 });
 

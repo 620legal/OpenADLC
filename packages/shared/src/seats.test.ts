@@ -169,11 +169,11 @@ describe('the automation bot', () => {
     expect(automationBotOf(crew, 'openadlc-atlas-janedoe')?.name).toBe('openadlc-atlas-janedoe');
   });
 
-  it('survives the `flow` every install.json was written with', () => {
-    // OPENADLC_AUTOMATION_BOT=flow is in the environment of every existing
-    // install. Obeyed literally after the rename, no label would be written.
-    expect(automationBotOf(crew, 'flow')?.name).toBe('janedoe-openadlc-flow');
+  it('is the bot whose role is automation when the override names nobody, a persona name included', () => {
+    // Obeyed literally, an override naming a bot that is gone writes no label.
     expect(automationBotOf(crew, 'nobody-here')?.name).toBe('janedoe-openadlc-flow');
+    // `atlas` was the builder's persona; an override is a seat or a name now.
+    expect(automationBotOf(crew, 'atlas')?.name).toBe('janedoe-openadlc-flow');
   });
 });
 

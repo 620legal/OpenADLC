@@ -85,35 +85,6 @@ describe('the container an install keeps its database in', () => {
     expect(databaseContainer({ OPENADLC_INSTALL_ID: 'scratch', OPENADLC_BOT_PREFIX: 'scratch-' })).toBe('scratch-db');
     expect(databaseContainer({ OPENADLC_INSTALL_ID: 'compose' })).toBe('compose-db');
   });
-
-  // An install from before the renames keeps Postgres in `fleetadlc-db` or
-  // `fleet-db`. After a reboot `up` ran a new, empty `openadlc-db` on its
-  // port instead.
-  const ports = { ports: { postgres: 47432 } } as const;
-  const inspect = (containers: Record<string, string>) => async (name: string) => containers[name];
-
-  it('is the upgraded install’s fleetadlc-db or fleet-db when only it publishes the install’s port', async () => {
-    const { existingDatabaseContainer } = await import('./up.js');
-    expect(await existingDatabaseContainer(ports, {}, inspect({ 'fleet-db': '47432' }))).toBe('fleet-db');
-    expect(await existingDatabaseContainer(ports, {}, inspect({ 'fleetadlc-db': '47432' }))).toBe('fleetadlc-db');
-    // Both generations left behind: the newer one is the install's.
-    expect(await existingDatabaseContainer(ports, {}, inspect({ 'fleetadlc-db': '47432', 'fleet-db': '47432' }))).toBe('fleetadlc-db');
-  });
-
-  it('stays openadlc-db when that exists, or when fleet-db is absent or on another port', async () => {
-    const { existingDatabaseContainer } = await import('./up.js');
-    expect(await existingDatabaseContainer(ports, {}, inspect({ 'openadlc-db': '47432', 'fleetadlc-db': '47432', 'fleet-db': '47432' }))).toBe('openadlc-db');
-    expect(await existingDatabaseContainer(ports, {}, inspect({}))).toBe('openadlc-db');
-    expect(await existingDatabaseContainer(ports, {}, inspect({ 'fleet-db': '5432' }))).toBe('openadlc-db');
-    expect(await existingDatabaseContainer(ports, {}, inspect({ 'fleetadlc-db': '5432' }))).toBe('openadlc-db');
-  });
-
-  it('is never fleet-db for an install with an id of its own', async () => {
-    const { existingDatabaseContainer } = await import('./up.js');
-    const scratch = { OPENADLC_INSTALL_ID: 'scratch', OPENADLC_BOT_PREFIX: 'scratch-' };
-    expect(await existingDatabaseContainer(ports, scratch, inspect({ 'fleet-db': '47432' }))).toBe('scratch-db');
-    expect(await existingDatabaseContainer(ports, scratch, inspect({ 'fleetadlc-db': '47432' }))).toBe('scratch-db');
-  });
 });
 
 /**
@@ -273,8 +244,6 @@ describe('what `openadlc up` does about the published database password', () => 
 
   it('rotates it on the install’s own container once it answers, so the data stays', () => {
     expect(step({ published: '47432', serving: true, connection: 'answers' })).toBe('rotate');
-    // An install from before the rename: user and password both `fleet`, on fleet-db.
-    expect(step({ databaseUrl: 'postgres://fleet:fleet@127.0.0.1:47432/fleet_db', published: '47432', serving: true, connection: 'answers' })).toBe('rotate');
     // Stopped: started first, then rotated.
     expect(step({ published: '47432', connection: 'nothing' })).toBe('keep');
   });
@@ -349,19 +318,6 @@ describe('rotating an older install’s database password', () => {
       },
     };
   }
-
-  it('alters the pre-rename role the same way', async () => {
-    const published = 'postgres://fleet:fleet@127.0.0.1:47432/fleet_db';
-    const config = { ...defaultConfig('/repo'), databaseUrl: published };
-    const { events, deps } = fake();
-
-    const next = await rotateDatabasePassword(config, { ...deps, env: {} });
-
-    const password = new URL(next.databaseUrl).password;
-    expect(events[3]).toBe(`alter role "fleet" password '${password}'`);
-    expect(new URL(next.databaseUrl).username).toBe('fleet');
-    expect(password).toMatch(/^[0-9a-f]{64}$/);
-  });
 
   it('alters the role over the old url, once the container holds that connection, saves the new url straight after, and hands it on', async () => {
     const config = defaultConfig('/repo');
@@ -646,7 +602,7 @@ describe('what `openadlc up` starts each service with', () => {
       serviceSpecs(config, serviceEnv(config), { consoleSecret: 'c'.repeat(64), scripted: false, node: 'node', databaseContainer });
 
     expect(specs('openadlc-db').bridge.env.OPENADLC_DATABASE_CONTAINER).toBe('openadlc-db');
-    expect(specs('fleet-db').bridge.env.OPENADLC_DATABASE_CONTAINER).toBe('fleet-db');
+    expect(specs('scratch-db').bridge.env.OPENADLC_DATABASE_CONTAINER).toBe('scratch-db');
     // Empty, not left out: one exported in the shell would be named for a server it is not.
     expect(specs(null).bridge.env.OPENADLC_DATABASE_CONTAINER).toBe('');
   });

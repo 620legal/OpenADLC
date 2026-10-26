@@ -41,11 +41,11 @@ interface Inspected {
 function fingerprinted(entry: Inspected, sidecar: boolean, seat: string, networkPrefix: string): boolean {
   if (sidecar) {
     const networks = Object.keys(entry.NetworkSettings?.Networks ?? {});
-    return networks.includes(`${networkPrefix}-${seat}`) || networks.includes(`fleetadlc-bot-${seat}`) || networks.includes(`fleet-bot-${seat}`);
+    return networks.includes(`${networkPrefix}-${seat}`);
   }
   const labels = entry.Config?.Labels ?? {};
-  if (['fleet.login', 'fleetadlc.login', 'openadlc.login', 'fleet.image', 'fleetadlc.image', 'openadlc.image'].some((key) => key in labels)) return true;
-  return ['fleet-bot:latest', 'fleetadlc-bot:latest', 'openadlc-bot:latest'].includes(entry.Config?.Image ?? '');
+  if (['openadlc.login', 'openadlc.image'].some((key) => key in labels)) return true;
+  return entry.Config?.Image === 'openadlc-bot:latest';
 }
 
 /**
@@ -58,7 +58,7 @@ async function ownerOf(input: RetireInput, name: string, seat: string, sidecar: 
   if (found.code !== 0) return null;
   try {
     const [entry] = JSON.parse(found.stdout) as Inspected[];
-    const label = entry?.Config?.Labels?.['openadlc.install'] ?? entry?.Config?.Labels?.['fleetadlc.install'];
+    const label = entry?.Config?.Labels?.['openadlc.install'];
     if (label) return label;
     return entry && fingerprinted(entry, sidecar, seat, input.networkPrefix) ? 'default' : UNMARKED;
   } catch {
@@ -69,10 +69,9 @@ async function ownerOf(input: RetireInput, name: string, seat: string, sidecar: 
 /**
  * Takes down what a seat had when each bot had one long-lived container: its
  * container `bot-<name>`, its database sidecar `bot-<name>-db`, and the network
- * the two shared (`openadlc-bot-<name>`, or `fleet-bot-<name>` from before
- * the rename). A task's computer is its own container now, so these do
- * nothing but hold memory, and a seat renamed later would leave them behind
- * under a name nothing looks for.
+ * the two shared (`openadlc-bot-<name>`). A task's computer is its own
+ * container now, so these do nothing but hold memory, and a seat renamed later
+ * would leave them behind under a name nothing looks for.
  *
  * Only what this install made goes — its label, or, on the default install,
  * no label but the marks OpenADLC's seats from before labels carry (see
@@ -115,10 +114,6 @@ export async function retireSeatContainers(input: RetireInput): Promise<Retired>
     // A network something is still attached to is refused by Docker, which is
     // what should happen; one already gone is not a failure.
     await input.docker(['network', 'rm', `${input.networkPrefix}-${seat.name}`]);
-    if (input.install === 'default') {
-      await input.docker(['network', 'rm', `fleetadlc-bot-${seat.name}`]);
-      await input.docker(['network', 'rm', `fleet-bot-${seat.name}`]);
-    }
     result.retired.push(seat.name);
   }
   for (const seat of result.retired) input.log?.(`[hostd] retired ${input.botPrefix}${seat}: a task's computer is its own container now`);

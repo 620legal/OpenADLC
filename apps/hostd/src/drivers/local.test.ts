@@ -145,48 +145,6 @@ describe('taking a bot’s sessions down, to rename it', () => {
   });
 });
 
-describe('sessions from before the rename', () => {
-  it('kills an idle fleet__ shell, leaves one running a task and says how to stop it, and touches nothing of its own', async () => {
-    // Every list, kill and attach looks for `openadlc__`, so a `fleet__`
-    // session a task was running in through the upgrade was invisible.
-    const { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs');
-    const { tmpdir } = await import('node:os');
-    const { join } = await import('node:path');
-    const dir = mkdtempSync(join(tmpdir(), 'openadlc-fake-tmux-'));
-    const log = join(dir, 'killed');
-    const bin = join(dir, 'tmux');
-    writeFileSync(
-      bin,
-      [
-        '#!/bin/sh',
-        'case "$1" in',
-        `  list-sessions) printf 'fleet__atlas__shell|0\\nfleet__atlas__implement-3f2a9c1e|0\\nopenadlc__atlas__shell|0\\n' ;;`,
-        '  list-panes) case "$3" in',
-        `    *implement*) printf '4242|node|0\\n' ;;`,
-        `    *) printf '4241|bash|0\\n' ;;`,
-        '  esac ;;',
-        `  kill-session) echo "$3" >> ${JSON.stringify(log)} ;;`,
-        'esac',
-        '',
-      ].join('\n'),
-    );
-    chmodSync(bin, 0o755);
-    const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    vi.spyOn(console, 'log').mockImplementation(() => undefined);
-
-    try {
-      const result = await new LocalDriver(bin, join(dir, 'work'), join(dir, 'logins')).retireLegacySessions();
-
-      expect(result).toEqual({ retired: ['fleet__atlas__shell'], kept: ['fleet__atlas__implement-3f2a9c1e'] });
-      expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual(['=fleet__atlas__shell']);
-      expect(String(warned.mock.calls[0]?.[0])).toContain("tmux kill-session -t '=fleet__atlas__implement-3f2a9c1e'");
-    } finally {
-      vi.restoreAllMocks();
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
 /**
  * A command run with a deadline on the host is killed with everything it
  * started. A Mac has no coreutils `timeout`, so the driver does it itself.

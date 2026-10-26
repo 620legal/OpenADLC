@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import config from '../../next.config';
 
 /**
@@ -14,24 +14,5 @@ describe('the console’s configuration', () => {
   it('lets middleware pass a restore body as large as the bridge accepts', () => {
     // Ten megabytes by default: a backup with history reached the bridge cut short.
     expect(config.experimental?.middlewareClientMaxBodySize).toBe('96mb');
-  });
-
-  it('reads no FLEET_* variable, the names from before the rename', async () => {
-    const kept = { bridge: process.env.OPENADLC_BRIDGE_URL, terminal: process.env.NEXT_PUBLIC_OPENADLC_TERMINAL_URL };
-    delete process.env.OPENADLC_BRIDGE_URL;
-    delete process.env.NEXT_PUBLIC_OPENADLC_TERMINAL_URL;
-    process.env.FLEET_BRIDGE_URL = 'http://old.example';
-    process.env.NEXT_PUBLIC_FLEET_TERMINAL_URL = 'wss://old.example';
-    try {
-      vi.resetModules();
-      await import('../../next.config');
-      expect(process.env.OPENADLC_BRIDGE_URL).toBeUndefined();
-      expect(process.env.NEXT_PUBLIC_OPENADLC_TERMINAL_URL).toBeUndefined();
-    } finally {
-      delete process.env.FLEET_BRIDGE_URL;
-      delete process.env.NEXT_PUBLIC_FLEET_TERMINAL_URL;
-      if (kept.bridge !== undefined) process.env.OPENADLC_BRIDGE_URL = kept.bridge;
-      if (kept.terminal !== undefined) process.env.NEXT_PUBLIC_OPENADLC_TERMINAL_URL = kept.terminal;
-    }
   });
 });

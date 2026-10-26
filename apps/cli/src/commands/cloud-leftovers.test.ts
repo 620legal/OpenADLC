@@ -113,10 +113,10 @@ describe('a project that is fine to set up in', () => {
     expect([...owned]).toEqual(['google_iam_workload_identity_pool.github', 'google_compute_network.openadlc']);
   });
 
-  it('checks under the prefix the install has, an install from before the rename included', async () => {
+  it('checks under the prefix the install has, not only the default', async () => {
     const { gcloud } = project({ pool: ok('{"state":"DELETED"}') });
-    const report = await findLeftovers({ ...fresh, prefix: 'fleet' }, gcloud);
-    expect(report.found[0]?.what).toBe('workload identity pool fleet-github');
+    const report = await findLeftovers({ ...fresh, prefix: 'acme' }, gcloud);
+    expect(report.found[0]?.what).toBe('workload identity pool acme-github');
     expect(report.found[0]?.detail).toBe('deleted; Google keeps it for 30 days');
   });
 });

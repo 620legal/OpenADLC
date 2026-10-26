@@ -6,8 +6,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "bin": {
-    "openadlc": "./bin/openadlc.mjs",
-    "fleetadlc": "./bin/fleetadlc.mjs"
+    "openadlc": "./bin/openadlc.mjs"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

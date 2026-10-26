@@ -106,7 +106,7 @@ describe('what a builder may be given', () => {
     // do:product and do:legal wait on a person's decision as do:human does; a
     // builder was leased them because only do:human was looked for.
     expect(String(sql)).toMatch(/not exists \(select 1 from unnest\(i\.labels\) as l where l like 'do:%' and l <> 'do:ai'\)/);
-    expect(String(sql)).toMatch(/not \(i\.labels && array\['openadlc:ignore', 'fleet:ignore'\]::text\[\]\)/);
+    expect(String(sql)).toMatch(/not \('openadlc:ignore' = any\(i\.labels\)\)/);
     expect(params).toEqual(['repo-1']);
   });
 
@@ -117,7 +117,7 @@ describe('what a builder may be given', () => {
 
     const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
     expect(String(sql)).toMatch(/'blocked' = any\(i\.labels\)/);
-    expect(String(sql)).toMatch(/not \(i\.labels && array\['openadlc:ignore', 'fleet:ignore'\]::text\[\]\)/);
+    expect(String(sql)).toMatch(/not \('openadlc:ignore' = any\(i\.labels\)\)/);
     expect(params).toEqual(['repo-1']);
   });
 
@@ -218,7 +218,7 @@ describe('boardCards', () => {
   it('leaves out an issue labelled openadlc:ignore, and keeps it once the label is off', async () => {
     const one = (number: number, labels: string[]) => issue({ number, repoName: 'openadlc', labels });
 
-    expect((await boardCards([one(1, ['adlc:build']), one(2, ['adlc:build', 'openadlc:ignore']), one(3, ['fleet:ignore'])])).map((card) => card.ref)).toEqual(['openadlc#1']);
+    expect((await boardCards([one(1, ['adlc:build']), one(2, ['adlc:build', 'openadlc:ignore'])])).map((card) => card.ref)).toEqual(['openadlc#1']);
     expect((await boardCards([one(1, ['adlc:build']), one(2, ['adlc:build'])])).map((card) => card.ref).sort()).toEqual(['openadlc#1', 'openadlc#2']);
   });
 
@@ -315,7 +315,7 @@ describe('the issues the board reads', () => {
     const text = String(sql).replace(/\s+/g, ' ');
     expect(text).toContain('select 1 from repos r where r.removed_at is null and ($2::text is null or r.name = $2) and exists (select 1 from issues i where i.repo_id = r.id');
     expect(text).toContain("i.stage = 'done' and i.updated_at < $1");
-    expect(text).toContain("not (i.labels && array['openadlc:ignore', 'fleet:ignore']::text[])");
+    expect(text).toContain("not ('openadlc:ignore' = any(i.labels))");
     expect(params).toEqual([since, 'api']);
     vi.mocked(queryOne).mockResolvedValueOnce({ done: false } as never);
     expect(await anyDoneBefore(since)).toBe(false);

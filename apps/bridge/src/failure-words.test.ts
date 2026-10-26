@@ -219,7 +219,7 @@ describe('anything else', () => {
 describe('a start GitHub did not answer for', () => {
   // As the bridge recorded it on 2026-10-21, when GitHub answered the refresh with a 503 page.
   const REASON =
-    "hostd refused: openadlc-atlas-janedoe has no GitHub token yet: GitHub did not answer the refresh of account_fleet-atlas's sign-in (GitHub returned a non-JSON response (503): <!DOCTYPE html>); it is asked again next time";
+    "hostd refused: openadlc-atlas-janedoe has no GitHub token yet: GitHub did not answer the refresh of account_openadlc-atlas's sign-in (GitHub returned a non-JSON response (503): <!DOCTYPE html>); it is asked again next time";
 
   it('says OpenADLC tries again on its own, and when, with GitHub’s status beside it', () => {
     const words = explainFailure(REASON, { bot: 'the builder (openadlc-atlas-janedoe)', retry: { at: new Date('2026-10-21T04:21:30.000Z'), attempt: 1, of: 6 } });

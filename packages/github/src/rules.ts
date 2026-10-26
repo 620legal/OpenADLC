@@ -132,17 +132,6 @@ export interface RuleReport {
 export const MAIN_RULESET = 'openadlc: main';
 export const AGENT_BRANCHES_RULESET = 'openadlc: agent and system branches';
 
-/**
- * What each ruleset was called before the renames to FleetADLC and OpenADLC,
- * newest first. A repository that already has one under an old name has the
- * ruleset: it is found by any of its names, reported as drifted, and renamed
- * by the next apply — never created a second time beside the first.
- */
-const LEGACY_RULESET_NAMES: Readonly<Record<string, readonly string[]>> = {
-  [MAIN_RULESET]: ['fleetadlc: main', 'fleet: main'],
-  [AGENT_BRANCHES_RULESET]: ['fleetadlc: agent and system branches', 'fleet: agent and system branches'],
-};
-
 const AGENT_REFS = ['refs/heads/agent/**', 'refs/heads/system/**'];
 
 interface Ruleset {
@@ -980,9 +969,9 @@ async function rulesetsRefusedByPlan(api: RuleApi, fullName: string): Promise<bo
 }
 
 /**
- * The ruleset by this name or its old one, and whether it is the full ruleset
- * or only its entry in the list, which is what is left when the full read
- * fails. The list form omits `rules` and `conditions`.
+ * The ruleset by this name, and whether it is the full ruleset or only its
+ * entry in the list, which is what is left when the full read fails. The list
+ * form omits `rules` and `conditions`.
  */
 async function rulesetByName(
   api: RuleApi,
@@ -990,9 +979,7 @@ async function rulesetByName(
   name: string,
 ): Promise<{ ruleset: Ruleset; full: boolean } | null> {
   const listed = await listRulesets(api, fullName);
-  const legacy = LEGACY_RULESET_NAMES[name] ?? [];
-  const found =
-    listed.find((candidate) => candidate.name === name) ?? legacy.map((old) => listed.find((candidate) => candidate.name === old)).find(Boolean);
+  const found = listed.find((candidate) => candidate.name === name);
   if (!found?.id) return null;
   return api
     .request<Ruleset>('GET', `/repos/${fullName}/rulesets/${found.id}`)
@@ -1010,9 +997,6 @@ async function rulesetByName(
  */
 export function rulesetDrift(desired: Ruleset, actual: Ruleset, full: boolean, judged?: BypassVerdict): string[] {
   const problems: string[] = [];
-  if (actual.name && actual.name !== desired.name) {
-    problems.push(`named "${actual.name}", not "${desired.name}"`);
-  }
   if (actual.enforcement !== desired.enforcement) {
     problems.push(`enforcement is ${actual.enforcement}, not ${desired.enforcement}`);
   }

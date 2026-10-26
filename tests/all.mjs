@@ -32,7 +32,7 @@ const live = process.argv.includes('--live');
  */
 function withoutInstall(env) {
   return Object.fromEntries(
-    Object.entries(env).filter(([name]) => !name.startsWith('OPENADLC_') && !name.startsWith('FLEET_') && name !== 'DATABASE_URL'),
+    Object.entries(env).filter(([name]) => !name.startsWith('OPENADLC_') && name !== 'DATABASE_URL'),
   );
 }
 

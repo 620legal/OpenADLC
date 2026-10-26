@@ -564,11 +564,6 @@ OpenADLC's repository, where a maintainer writes them with
 ✔ marks what `openadlc up` sets from install.json. Defaults are the ones used when
 nothing sets a variable.
 
-Only these names are read. A `FLEET_*` variable, the name a setting had before
-the rename to OpenADLC, is not read at all; [upgrading from
-Fleet](upgrading-from-fleet.md#settings-in-the-environment) says how to rename
-them.
-
 ### bridge
 
 | Variable | Default | What it controls | openadlc up |

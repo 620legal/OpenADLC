@@ -1,4 +1,3 @@
-import './legacy-env.js';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { closePool, waitForDatabase } from '@openadlc/db';

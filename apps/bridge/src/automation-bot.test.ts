@@ -52,8 +52,8 @@ describe('the automation account', () => {
     expect(await automationBotName(config(null))).toBe('janedoe-openadlc-flow');
   });
 
-  it('is still that bot for the `flow` every install.json was written with', async () => {
-    expect(await automationBotName(config('flow'))).toBe('janedoe-openadlc-flow');
+  it('is still that bot when the override names nobody', async () => {
+    expect(await automationBotName(config('nobody-here'))).toBe('janedoe-openadlc-flow');
   });
 
   it('is the bot an override names by seat, and the console’s setting wins over the environment', async () => {
@@ -77,7 +77,7 @@ describe('the automation account', () => {
 
   it('is who the bridge acts as', async () => {
     const asBot = vi.fn(async (name: string) => ({ actingAs: name }) as never);
-    await asAutomation({ asBot }, config('flow'));
+    await asAutomation({ asBot }, config(null));
     expect(asBot).toHaveBeenCalledWith('janedoe-openadlc-flow');
   });
 });

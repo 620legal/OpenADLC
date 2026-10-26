@@ -1332,7 +1332,7 @@ describe('stopping a task that could not finish', () => {
       Object.assign(credentials, {
         getCredential: vi.fn(async (botId: string) => ({ githubUserId: botId === 'bot-intake' ? 501 : 900 })),
       });
-      labelled = [by('fleet-atlas-renamed', '2026-10-22T16:33:55Z', 'needs-human', 501)];
+      labelled = [by('openadlc-atlas-renamed', '2026-10-22T16:33:55Z', 'needs-human', 501)];
       expect((await stop()).status).toBe(200);
       expect(removeLabel).toHaveBeenCalledTimes(1);
 

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { DockerResult } from './drivers/docker.js';
-import { LEGACY_TASKDB, TASK_TEMPLATE, TaskDatabases, existingTaskdbServer, taskDatabaseName, taskdbBindAddress } from './task-db.js';
+import { TASK_TEMPLATE, TaskDatabases, taskDatabaseName, taskdbBindAddress } from './task-db.js';
 
 /**
  * A database per task on one server per host, with Docker answering from a
@@ -250,55 +250,5 @@ describe('where the server is published', () => {
     for (const wildcard of ['0.0.0.0', '::', '[::]']) {
       await expect(taskdbBindAddress(answering('OrbStack'), wildcard)).rejects.toThrow(/OPENADLC_TASKDB_BIND.*Unset it, or give the host's gateway or loopback address/);
     }
-  });
-});
-
-describe('the server an upgraded install already has', () => {
-  const daemon = (containers: string[]) => async (args: string[]): Promise<DockerResult> => {
-    const found = containers.includes(args.at(-1) ?? '');
-    return { code: found ? 0 : 1, stdout: found ? 'running\n' : '', stderr: found ? '' : 'No such object' };
-  };
-
-  it('uses fleetadlc-taskdb as it is when there is no openadlc-taskdb', async () => {
-    // It restarts unless stopped, so it would hold the bind port against a new
-    // server — and the tasks that waited out the upgrade keep their databases.
-    expect(await existingTaskdbServer(daemon(['fleetadlc-taskdb']), 'openadlc-taskdb')).toEqual(LEGACY_TASKDB);
-    expect(LEGACY_TASKDB.superuser).toBe('fleetadlc');
-  });
-
-  it('prefers openadlc-taskdb once it exists, and never adopts for a named install', async () => {
-    const current = { container: 'openadlc-taskdb', superuser: 'openadlc' };
-    expect(await existingTaskdbServer(daemon(['openadlc-taskdb', 'fleetadlc-taskdb']), 'openadlc-taskdb')).toEqual(current);
-    expect(await existingTaskdbServer(daemon([]), 'openadlc-taskdb')).toEqual(current);
-    expect(await existingTaskdbServer(daemon(['fleetadlc-taskdb']), 'scratch-taskdb')).toEqual({ container: 'scratch-taskdb', superuser: 'openadlc' });
-  });
-
-  it('speaks to an adopted server as its own superuser, never the new name', async () => {
-    // FleetADLC created the server with role `fleetadlc`; psql as `openadlc`
-    // would be refused and every task database with it.
-    const calls: string[][] = [];
-    const docker = async (args: string[]): Promise<DockerResult> => {
-      calls.push(args);
-      if (args[0] === 'inspect') return { code: 0, stdout: 'running\n', stderr: '' };
-      const statement = String(args.at(-1));
-      if (args.includes('psql') && statement.includes('from pg_authid')) return { code: 0, stdout: 'f\n', stderr: '' };
-      if (args.includes('psql') && statement.startsWith('select 1 from pg_database')) return { code: 0, stdout: '1\n', stderr: '' };
-      return { code: 0, stdout: '', stderr: '' };
-    };
-    const databases = new TaskDatabases({
-      docker,
-      container: LEGACY_TASKDB.container,
-      superuser: LEGACY_TASKDB.superuser,
-      image: 'pgvector/pgvector:pg16',
-      installLabel: 'openadlc.install=default',
-      bindAddress: '172.17.0.1',
-      password: () => 'a-random-password',
-    });
-    await databases.create(TASK);
-    const psql = calls.filter((args) => args.includes('psql'));
-    expect(psql.length).toBeGreaterThan(0);
-    for (const args of psql) expect(args[args.indexOf('-U') + 1]).toBe('fleetadlc');
-    expect(calls.filter((args) => args[0] === 'run')).toEqual([]);
-    expect(calls.some((args) => String(args.at(-1)).includes("rolname = 'fleetadlc'"))).toBe(true);
   });
 });

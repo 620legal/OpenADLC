@@ -34,7 +34,7 @@ afterEach(async () => {
 
 function memoryStore(): SecretStore {
   const values = new Map([
-    [refreshTokenRef('account_fleet-atlas'), 'ghr_stored'],
+    [refreshTokenRef('account_openadlc-atlas'), 'ghr_stored'],
     [internalSecretRef(), SECRET],
   ]);
   return {
@@ -63,7 +63,7 @@ async function bridge(broker: TokenBroker): Promise<string> {
     // `Actors.tokenFor`, without the database: the seat is its own sign-in.
     actors: {
       tokenFor: async (bot: string, options: { minLifetimeMs?: number }) => {
-        const brokered = await broker.tokenFor('account_fleet-atlas', bot, options);
+        const brokered = await broker.tokenFor('account_openadlc-atlas', bot, options);
         return { token: brokered.token, expiresAt: brokered.expiresAt?.toISOString() ?? null, login: brokered.login };
       },
     },
@@ -106,7 +106,7 @@ describe('a start GitHub did not answer the sign-in’s refresh for', () => {
       () => null,
       (error: unknown) => error as Error,
     );
-    expect(refused?.message).toMatch(/^openadlc-atlas-janedoe has no GitHub token yet: GitHub did not answer the refresh of account_fleet-atlas's sign-in/);
+    expect(refused?.message).toMatch(/^openadlc-atlas-janedoe has no GitHub token yet: GitHub did not answer the refresh of account_openadlc-atlas's sign-in/);
 
     const failed = failedStart(refused!.message, '2026-10-21T04:16:00.000Z');
     const retry = githubRetry(failed, [failed]);
@@ -131,7 +131,7 @@ describe('a start GitHub did not answer the sign-in’s refresh for', () => {
       () => null,
       (error: unknown) => error as Error,
     );
-    expect(refused?.message).toMatch(/would not mint one \(409\) account_fleet-atlas's GitHub authorization is no longer valid/);
+    expect(refused?.message).toMatch(/would not mint one \(409\) account_openadlc-atlas's GitHub authorization is no longer valid/);
 
     const failed = failedStart(refused!.message, '2026-10-21T04:16:00.000Z');
     expect(githubRetry(failed, [failed])).toBeNull();
