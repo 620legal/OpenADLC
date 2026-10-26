@@ -545,6 +545,22 @@ describe('the release a cloud install takes', () => {
     expect(view.reason).toMatch(/^the registry names the bridge's image v0\.1\.0's, but gh attestation verify refused .*service@sha256:.*so which release it runs is not known/);
   });
 
+  it('names the release after the one in use once the bridge has moved onto the one it named, within the quarter hour', async () => {
+    // Asked on v0.1.0 a minute ago, naming v0.2.0; the bridge has since rolled onto v0.2.0.
+    const before = { tag: 'v0.2.0', sha: COMMITS['v0.2.0'], publishedAt: null, reason: 'v0.2.0 is the next release', checkedAt: new Date(world.now.getTime() - 60_000).toISOString() };
+    world.settings.selfUpdateCandidate = JSON.stringify({ ...before, forHead: COMMITS['v0.1.0'] });
+    world.services['openadlc-bridge']!.image = mirrorRef('service', 'v0.2.0');
+    world.services['openadlc-bridge']!.revisions.set('openadlc-bridge-00001', mirrorRef('service', 'v0.2.0'));
+    const update = world.updater();
+    expect((await update.view()).candidateReason).toBe('not asked yet on v0.2.0');
+    expect(await update.refreshCandidate()).toMatchObject({ tag: 'v0.3.0', forHead: COMMITS['v0.2.0'] });
+    expect((await update.view()).candidate).toMatchObject({ tag: 'v0.3.0' });
+
+    // One kept before candidates named their commit is asked again too.
+    world.settings.selfUpdateCandidate = JSON.stringify(before);
+    expect(await world.updater().refreshCandidate()).toMatchObject({ tag: 'v0.3.0', forHead: COMMITS['v0.2.0'] });
+  });
+
   it('is nothing once on the newest', async () => {
     world.services['openadlc-bridge']!.image = mirrorRef('service', 'v0.3.0');
     world.services['openadlc-bridge']!.revisions.set('openadlc-bridge-00001', mirrorRef('service', 'v0.3.0'));

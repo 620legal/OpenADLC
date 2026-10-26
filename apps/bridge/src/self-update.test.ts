@@ -282,6 +282,68 @@ describe('what System shows', () => {
     fixture.releases = [];
     expect((await update.refreshCandidate())?.tag).toBe('v0.2.0');
     expect((await update.view()).candidate).toMatchObject({ tag: 'v0.2.0', sha: fixture.release });
+    expect(JSON.parse(fixture.settings.selfUpdateCandidate ?? '{}')).toMatchObject({ forHead: fixture.first });
+  });
+
+  /** The checkout moved onto the release, as an update leaves it. */
+  function moveOntoRelease(): void {
+    git(fixture.checkout, 'fetch', '-q', 'origin', 'main');
+    git(fixture.checkout, 'merge', '-q', '--ff-only', fixture.release);
+  }
+
+  it('asks again once the checkout’s head moved, within the quarter hour', async () => {
+    const update = updater(fixture);
+    expect((await update.refreshCandidate())?.tag).toBe('v0.2.0');
+    moveOntoRelease();
+    expect(await update.refreshCandidate()).toMatchObject({ tag: null, reason: 'on v0.2.0, the newest release', forHead: fixture.release });
+  });
+
+  it('asks again once for a candidate kept before it named its commit', async () => {
+    let asked = 0;
+    const update = updater(fixture);
+    fixture.settings.selfUpdateCandidate = JSON.stringify({ tag: 'v0.1.9', sha: null, publishedAt: null, reason: 'v0.1.9 is the newest release', checkedAt: fixture.now.toISOString() });
+    const releases = fixture.releases;
+    Object.defineProperty(fixture, 'releases', {
+      get: () => {
+        asked += 1;
+        return releases;
+      },
+      configurable: true,
+    });
+    expect(await update.refreshCandidate()).toMatchObject({ tag: 'v0.2.0', forHead: fixture.first });
+    expect(asked).toBe(1);
+    expect((await update.refreshCandidate())?.tag).toBe('v0.2.0');
+    expect(asked).toBe(1);
+  });
+
+  it('names no release from before the head moved when GitHub cannot be asked', async () => {
+    const update = updater(fixture);
+    expect((await update.refreshCandidate())?.tag).toBe('v0.2.0');
+    moveOntoRelease();
+    Object.defineProperty(fixture, 'releases', {
+      get: () => {
+        throw new Error('GitHub is down');
+      },
+      configurable: true,
+    });
+    const candidate = await update.refreshCandidate();
+    expect(candidate).toMatchObject({ tag: null, sha: null, forHead: fixture.release });
+    expect(candidate?.reason).toMatch(/^could not ask GitHub for releases/);
+  });
+
+  it('shows no candidate asked on another commit', async () => {
+    fixture.settings.selfUpdateCandidate = JSON.stringify({
+      tag: 'v0.2.0',
+      sha: fixture.release,
+      publishedAt: null,
+      reason: 'v0.2.0 is the newest release',
+      checkedAt: fixture.now.toISOString(),
+      forHead: fixture.release,
+    });
+    const view = await updater(fixture).view();
+    expect(view.candidate).toBeNull();
+    expect(view.checkedAt).toBeNull();
+    expect(view.candidateReason).toBe(`not asked yet on ${fixture.first.slice(0, 7)}`);
   });
 
   it('knows a GitHub remote by its address', () => {

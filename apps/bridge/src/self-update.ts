@@ -137,6 +137,13 @@ export interface SelfUpdateCandidate {
   newest?: string | null;
   /** On a cloud install, the tags of the release in use and the next that name another digest now than the release recorded. */
   moved?: MovedImageTag[];
+  /**
+   * The commit in use when this was asked: the checkout's HEAD, or on a cloud
+   * install the commit of the release it runs. A candidate holds only for it:
+   * after an update the one asked on the release before named the release now
+   * in use for up to a quarter hour. Absent on one written before it was kept.
+   */
+  forHead?: string | null;
 }
 
 export interface SelfUpdateView {
@@ -704,23 +711,30 @@ export class SelfUpdate {
     await this.audit({ actor: 'openadlc', action: 'openadlc.release_refused', target: 'openadlc', payload: { tag, reason: clip(safeWords(reason), 1000) } }).catch(() => undefined);
   }
 
-  /** Asks again what an update would take, at most every quarter hour unless `force`. */
+  /**
+   * Asks again what an update would take: at most every quarter hour unless
+   * `force`, and at once when the commit in use is not the one it was asked on.
+   */
   async refreshCandidate(force = false): Promise<SelfUpdateCandidate | null> {
     const all = await this.store.all();
     const stored = parse<SelfUpdateCandidate>(all[KEY.candidate]);
-    if (!force && stored && this.now().getTime() - new Date(stored.checkedAt).getTime() < CANDIDATE_EVERY_MS) return stored;
+    if (!force && stored?.forHead && this.now().getTime() - new Date(stored.checkedAt).getTime() < CANDIDATE_EVERY_MS) {
+      const head = await this.headInUse();
+      if (head && stored.forHead === head) return stored;
+    }
     const check = await this.applicability();
     if (!check.repo || !check.head) return stored;
+    const forHead = check.head;
     let candidate: SelfUpdateCandidate;
     try {
       if (this.cloud && this.cloudKnown) {
-        candidate = await this.cloudCandidate(check.repo, this.cloudKnown.tag);
+        candidate = { ...(await this.cloudCandidate(check.repo, this.cloudKnown.tag)), forHead };
         await this.store.set(KEY.candidate, JSON.stringify(candidate), 'openadlc');
         return candidate;
       }
       const { release, incomplete, mutable } = latestRelease(await this.releases(check.repo));
       if (!release) {
-        candidate = { tag: null, sha: null, publishedAt: null, reason: noReleaseReason(check.repo, incomplete, mutable), checkedAt: this.now().toISOString() };
+        candidate = { tag: null, sha: null, publishedAt: null, reason: noReleaseReason(check.repo, incomplete, mutable), checkedAt: this.now().toISOString(), forHead };
       } else {
         const commit = await this.githubJson<{ sha: unknown }>(`/repos/${check.repo}/commits/${encodeURIComponent(release.tag)}`).catch(() => null);
         // An answer, not a fact: checked before git is given it.
@@ -732,13 +746,29 @@ export class SelfUpdate {
             : sha && known && (await this.isAncestor(sha, check.head))
               ? `this checkout is ahead of the newest release, ${release.tag}`
               : '';
-        candidate = { tag: reason ? null : release.tag, sha, publishedAt: release.publishedAt, reason: reason || `${release.tag} is the newest release`, checkedAt: this.now().toISOString() };
+        candidate = { tag: reason ? null : release.tag, sha, publishedAt: release.publishedAt, reason: reason || `${release.tag} is the newest release`, checkedAt: this.now().toISOString(), forHead };
       }
     } catch (error) {
-      candidate = { tag: stored?.tag ?? null, sha: stored?.sha ?? null, publishedAt: stored?.publishedAt ?? null, reason: `could not ask GitHub for releases: ${clip(message(error), 200)}`, checkedAt: this.now().toISOString() };
+      // What the last look found holds only for the commit it was asked on:
+      // carried past an update, it would name the release now in use.
+      const kept = stored?.forHead === forHead ? stored : null;
+      candidate = {
+        tag: kept?.tag ?? null,
+        sha: kept?.sha ?? null,
+        publishedAt: kept?.publishedAt ?? null,
+        reason: `could not ask GitHub for releases: ${clip(message(error), 200)}`,
+        checkedAt: this.now().toISOString(),
+        forHead,
+      };
     }
     await this.store.set(KEY.candidate, JSON.stringify(candidate), 'openadlc');
     return candidate;
+  }
+
+  /** The commit in use, as `applicability` names it, without the rest of its checks: a look within the quarter hour stays cheap. */
+  private async headInUse(): Promise<string | null> {
+    if (this.cloud) return this.cloudKnown?.sha ?? null;
+    return this.git(['rev-parse', 'HEAD']).catch(() => null);
   }
 
   /** What a cloud install would take: the next release after the one it runs, and the newest when that is further. */
@@ -784,7 +814,13 @@ export class SelfUpdate {
     const zone = this.zone(all);
     const check = await this.applicability().catch((error: unknown) => ({ applicable: false, reason: message(error), repo: null, head: null }));
     const started = this.cloud ? (await this.cloudInUse().catch(() => ({ info: null }))).info : await this.started;
-    const candidate = parse<SelfUpdateCandidate>(all[KEY.candidate]);
+    const stored = parse<SelfUpdateCandidate>(all[KEY.candidate]);
+    // A candidate asked on another commit is the release before's answer, until
+    // the next tick asks on this one. The checkout's HEAD, which is what
+    // `refreshCandidate` asks on, not the commit the services started on.
+    const head = this.cloud ? (started?.sha ?? null) : check.head;
+    const elsewhere = stored !== null && head !== null && stored.forHead !== head;
+    const candidate = elsewhere ? null : stored;
     const last = parse<SelfUpdateLast>(all[KEY.last]);
     const run = this.current ?? parse<CloudSelfUpdateRun>(all[KEY.run]);
     const scheduled = schedule.mode === 'schedule';
@@ -795,7 +831,7 @@ export class SelfUpdate {
       repository: this.cloud ? this.cloud.install.repo : check.repo,
       inUse: started,
       candidate: candidate?.tag ? { tag: candidate.tag, sha: candidate.sha, publishedAt: candidate.publishedAt, ...(candidate.newest ? { newest: candidate.newest } : {}) } : null,
-      candidateReason: candidate?.reason ?? 'not asked yet',
+      candidateReason: elsewhere ? `not asked yet on ${(started?.sha === head ? started.tag : null) ?? short(head)}` : (candidate?.reason ?? 'not asked yet'),
       checkedAt: candidate?.checkedAt ?? null,
       schedule: { mode: schedule.mode, day: schedule.day, time: schedule.time },
       timeZone: zone,
