@@ -14,6 +14,7 @@ import {
   EngineUpdateRefused,
   EngineUpdater,
   ENGINES_LABEL,
+  RECIPE_LABEL,
   compareVersions,
   ghPackagesUrl,
   imageTags,
@@ -93,6 +94,13 @@ class World {
   /** When npm says each version was published; any version not named here is years old. */
   npmTimes: Record<string, Record<string, string>> = {};
   buildFails = false;
+  /**
+   * What `build-bot-image.sh --recipe-digest` prints, and what a build stamps
+   * as `openadlc.recipe`. Null: the script cannot say, so no image is behind.
+   */
+  recipe: string | null = null;
+  /** How many times the digest was asked for. */
+  recipeAsks = 0;
   /** A CLI the candidate is built without, or that says the wrong version. */
   breakCandidate: ((image: Image) => void) | null = null;
   private next = 1;
@@ -114,9 +122,15 @@ class World {
     args: string[],
     options: { env?: Record<string, string> } = {},
   ): Promise<CommandResult> => {
-    this.calls.push({ command, args, ...(options.env ? { env: options.env } : {}) });
     const ok = (stdout = ''): CommandResult => ({ code: 0, stdout, stderr: '' });
     const no = (stderr: string): CommandResult => ({ code: 1, stdout: '', stderr });
+    // Asking the script for its digest is not a build: kept apart from
+    // `calls`, so a `bash` call there is a build.
+    if (command === 'bash' && args.includes('--recipe-digest')) {
+      this.recipeAsks += 1;
+      return this.recipe ? ok(`${this.recipe}\n`) : no('bot-init is missing, and it is part of the bot image recipe');
+    }
+    this.calls.push({ command, args, ...(options.env ? { env: options.env } : {}) });
 
     // As in a release's service image, which purges curl once gh is installed.
     if (command === 'curl') return { code: 127, stdout: '', stderr: 'curl could not be started: spawn curl ENOENT\n' };
@@ -143,6 +157,8 @@ class World {
       if (env.NODE_VERSION) pins.node = env.NODE_VERSION;
       if (env.GH_VERSION) pins.gh = env.GH_VERSION;
       const id = this.image(pins);
+      const built = this.images.get(id) as Image;
+      if (this.recipe) built.labels = { ...built.labels, [RECIPE_LABEL]: this.recipe };
       if (this.breakCandidate) this.breakCandidate(this.images.get(id) as Image);
       this.tags.set(env.IMAGE ?? '', id);
       return ok(`${env.IMAGE} is ready\n`);
@@ -444,6 +460,149 @@ describe('a run with nothing newer', () => {
 
     expect(result).toMatchObject({ state: 'current', reason: 'node is already the newest version' });
     expect(world.calls.some((call) => call.command === 'bash')).toBe(false);
+  });
+});
+
+/**
+ * A release that added uv to Dockerfile.bot left a cloud install's image
+ * without it: only a newer engine version rebuilt the image, and a run with
+ * nothing newer was `current` (#194).
+ */
+describe('an image behind its recipe', () => {
+  const OLD = `sha256:${'a'.repeat(64)}`;
+  const NEW = `sha256:${'b'.repeat(64)}`;
+  const VERSIONS = { ...PINS, node: '22.20.0', gh: '2.79.0' };
+
+  /** `latest` carries every version in its label, and `recipe` as its recipe label, or none. */
+  function host(recipe: string | null): { world: World; latest: string } {
+    const world = new World();
+    const latest = world.image(VERSIONS);
+    const image = world.images.get(latest) as Image;
+    if (recipe) image.labels = { ...image.labels, [RECIPE_LABEL]: recipe };
+    world.tags.set('openadlc-bot:latest', latest);
+    world.recipe = NEW;
+    return { world, latest };
+  }
+
+  it('is rebuilt from this recipe with every tool pinned to the version it has, proved, and swapped in', async () => {
+    const { world, latest } = host(OLD);
+    const { service, calls, refresh } = updater(world);
+
+    const result = await service.updateAndWait({ trigger: 'release', requestedBy: 'openadlc', only: [] });
+
+    expect(result).toMatchObject({ state: 'updated', rebuilt: true, from: VERSIONS, to: VERSIONS, trigger: 'release', requestedBy: 'openadlc' });
+    expect(result.reason).toBe("rebuilt from this release's recipe; every version is as it was");
+    const builds = world.calls.filter((call) => call.command === 'bash');
+    expect(builds).toHaveLength(1);
+    expect(builds[0]?.env).toMatchObject({
+      CLAUDE_CLI: `${CLAUDE}@2.1.282`,
+      CODEX_CLI: `${CODEX}@0.155.1`,
+      GROK_CLI: `${GROK}@1.0.41`,
+      NODE_VERSION: '22.20.0',
+      GH_VERSION: '2.79.0',
+      GH_FROM: 'openadlc-bot:latest',
+      IMAGE: 'openadlc-bot:candidate',
+    });
+    // Nothing was asked of a registry: the run moves no tool.
+    expect(world.calls.some((call) => call.command === 'npm')).toBe(false);
+    expect(world.fetched).toEqual([]);
+    // Proved as any candidate is: each CLI on a session's PATH, and the crew's model.
+    expect(result.checks.filter((check) => check.kind === 'cli').map((check) => [check.cli, check.state])).toEqual([
+      ['claude', 'passed'],
+      ['codex', 'passed'],
+      ['grok', 'passed'],
+      ['node', 'passed'],
+      ['gh', 'passed'],
+    ]);
+    expect(calls.map((call) => call.image)).toEqual(['openadlc-bot:candidate']);
+    // Then swapped in, with the old image kept for a rollback.
+    expect(world.tags.get('openadlc-bot:previous')).toBe(latest);
+    expect(world.tags.get('openadlc-bot:latest')).not.toBe(latest);
+    expect(refresh).toHaveBeenCalledOnce();
+    expect((await service.status()).recipe).toEqual({ current: NEW, built: NEW, behind: false });
+  });
+
+  it('counts an image with no recipe label as behind', async () => {
+    const { world } = host(null);
+    const { service } = updater(world);
+
+    expect((await service.status()).recipe).toEqual({ current: NEW, built: null, behind: true });
+    const result = await service.updateAndWait({ trigger: 'schedule' });
+
+    expect(result).toMatchObject({ state: 'updated', rebuilt: true, to: VERSIONS });
+    expect(world.calls.filter((call) => call.command === 'bash')).toHaveLength(1);
+  });
+
+  it('stays current, building nothing, when the label is this recipe', async () => {
+    const { world, latest } = host(NEW);
+    const { service } = updater(world);
+
+    expect((await service.status()).recipe).toEqual({ current: NEW, built: NEW, behind: false });
+    const result = await service.updateAndWait({ trigger: 'schedule' });
+
+    expect(result.state).toBe('current');
+    expect(result.rebuilt).toBeUndefined();
+    expect(world.calls.some((call) => call.command === 'bash')).toBe(false);
+    expect(world.tags.get('openadlc-bot:latest')).toBe(latest);
+  });
+
+  it('asks the script for the digest at every status and run, never keeping one', async () => {
+    const { world } = host(NEW);
+    const { service } = updater(world);
+
+    await service.status();
+    world.recipe = OLD;
+    expect((await service.status()).recipe).toMatchObject({ current: OLD, behind: true });
+    expect(world.recipeAsks).toBe(2);
+  });
+
+  it('is not behind when the script cannot say its digest, or when there is no image yet', async () => {
+    const { world } = host(OLD);
+    world.recipe = null;
+    const { service } = updater(world);
+    expect((await service.status()).recipe).toEqual({ current: null, built: OLD, behind: false });
+    expect((await service.updateAndWait({ trigger: 'schedule' })).state).toBe('current');
+
+    const empty = new World();
+    empty.recipe = NEW;
+    expect((await updater(empty).service.status()).recipe).toEqual({ current: NEW, built: null, behind: false });
+  });
+
+  it('builds nothing when it cannot tell a version the image has, rather than let it float', async () => {
+    const world = new World();
+    // An image from before Node and gh were stamped, whose gh says nothing.
+    const latest = world.image(PINS);
+    (world.images.get(latest) as Image).says.node = 'v22.20.0';
+    world.tags.set('openadlc-bot:latest', latest);
+    world.recipe = NEW;
+    const { service } = updater(world);
+
+    const result = await service.updateAndWait({ trigger: 'release', only: [] });
+
+    expect(result.state).toBe('failed');
+    expect(result.reason).toBe('nothing was built: the image is behind its recipe, and does not say which gh it has, so it cannot be rebuilt keeping it');
+    expect(world.calls.some((call) => call.command === 'bash')).toBe(false);
+    expect(world.tags.get('openadlc-bot:latest')).toBe(latest);
+  });
+
+  it('builds a newer version from this recipe as it always did, without calling it a rebuild', async () => {
+    const { world } = host(OLD);
+    world.npm[CODEX] = '0.156.1';
+    const { service } = updater(world);
+
+    const result = await service.updateAndWait({ trigger: 'schedule' });
+
+    expect(result).toMatchObject({ state: 'updated', reason: 'codex 0.155.1 → 0.156.1' });
+    expect(result.rebuilt).toBeUndefined();
+    expect((await service.status()).recipe).toMatchObject({ built: NEW, behind: false });
+  });
+
+  it('is not asked of the local driver', async () => {
+    const world = new World();
+    world.recipe = NEW;
+    const { service } = updater(world, { driver: 'local' });
+    expect((await service.status()).recipe).toBeNull();
+    expect(world.recipeAsks).toBe(0);
   });
 });
 

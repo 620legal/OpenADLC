@@ -441,6 +441,151 @@ describe('the engines job', () => {
   });
 });
 
+/**
+ * A release that added uv to Dockerfile.bot left a cloud install's image
+ * without it until some engine had a version due (#194). The bridge starts a
+ * rebuild itself, once per recipe.
+ */
+describe('an image behind this release’s recipe', () => {
+  const OLD = `sha256:${'a'.repeat(64)}`;
+  const NEW = `sha256:${'b'.repeat(64)}`;
+  const NEWER = `sha256:${'c'.repeat(64)}`;
+
+  /** A hostd whose image was built from `OLD`, with `current` its recipe now, and a run that rebuilds it. */
+  function behind(current = NEW): FakeHostd {
+    const hostd = new FakeHostd();
+    hostd.status = { ...hostd.status, recipe: { current, built: OLD, behind: true } };
+    hostd.outcome = result({
+      state: 'updated',
+      trigger: 'release',
+      requestedBy: 'openadlc',
+      to: PINS,
+      latest: {},
+      rebuilt: true,
+      reason: "rebuilt from this release's recipe; every version is as it was",
+    });
+    return hostd;
+  }
+
+  it('starts one run that moves no tool, as openadlc, and records it with its own trigger', async () => {
+    const hostd = behind();
+    const { service, data, entries } = updates({ hostd, stored: { engineUpdateSlot: THIS_WEEK } });
+
+    const lines = await service.tick();
+
+    expect(hostd.starts).toEqual([
+      { input: { trigger: 'release', hold: {}, minReleaseAgeDays: 3, only: [] }, identity: 'openadlc' },
+    ]);
+    expect(data.engineRecipeRebuilt).toBe(NEW);
+    expect(lines.at(-1)).toBe("the bots' image was behind this release's recipe: updated — rebuilt from this release's recipe; every version is as it was");
+    expect(entries).toEqual([
+      {
+        actor: 'openadlc',
+        action: 'engines.updated',
+        target: 'bot-image',
+        payload: expect.objectContaining({ trigger: 'release', from: PINS, to: PINS, rebuilt: true }),
+      },
+    ]);
+    // No tool's row is written over: the run was about none of them.
+    expect(JSON.parse(data.systemToolLast ?? '{}')).toEqual({});
+    expect(JSON.parse(data.engineUpdateLast ?? 'null')).toMatchObject({ trigger: 'release', rebuilt: true });
+  });
+
+  it('starts nothing again for the same recipe, from this bridge or a restarted one', async () => {
+    const hostd = behind();
+    const { service, data } = updates({ hostd, stored: { engineUpdateSlot: THIS_WEEK } });
+    await service.tick();
+    await service.tick();
+    expect(hostd.starts).toHaveLength(1);
+
+    // A run that failed leaves the image behind; it is not retried by itself.
+    const restarted = updates({ hostd, stored: { ...data } });
+    await restarted.service.tick();
+    expect(hostd.starts).toHaveLength(1);
+  });
+
+  it('starts one more for a newer recipe', async () => {
+    const hostd = behind(NEWER);
+    const { service } = updates({ hostd, stored: { engineUpdateSlot: THIS_WEEK, engineRecipeRebuilt: NEW } });
+
+    await service.tick();
+
+    expect(hostd.starts.map((start) => start.input.trigger)).toEqual(['release']);
+  });
+
+  it('remembers nothing when the start is held, and starts it at the next look', async () => {
+    const hostd = behind();
+    const { service, data } = updates({ hostd, stored: { engineUpdateSlot: THIS_WEEK } });
+    let restarting: string | null = 'OpenADLC is restarting onto v0.2.0';
+    service.holdWhile(() => restarting);
+
+    const lines = await service.tick();
+
+    expect(lines.at(-1)).toBe(
+      "the bots' image is behind this release's recipe, and its rebuild did not start: OpenADLC is restarting onto v0.2.0; the next look tries again",
+    );
+    expect(hostd.starts).toEqual([]);
+    expect(data.engineRecipeRebuilt).toBeUndefined();
+
+    restarting = null;
+    await service.tick();
+    expect(hostd.starts.map((start) => start.input.trigger)).toEqual(['release']);
+    expect(data.engineRecipeRebuilt).toBe(NEW);
+  });
+
+  it('remembers nothing when hostd does not take it', async () => {
+    const hostd = behind();
+    const { service, data } = updates({ hostd, stored: { engineUpdateSlot: THIS_WEEK } });
+    hostd.startEngineUpdate = async () => {
+      throw Object.assign(new Error('hostd is not answering'), { status: 502 });
+    };
+
+    await service.tick();
+
+    expect(data.engineRecipeRebuilt).toBeUndefined();
+  });
+
+  it('starts nothing when the image is on this recipe, or hostd cannot say', async () => {
+    const onRecipe = new FakeHostd();
+    onRecipe.status = { ...onRecipe.status, recipe: { current: NEW, built: NEW, behind: false } };
+    await updates({ hostd: onRecipe, stored: { engineUpdateSlot: THIS_WEEK } }).service.tick();
+    expect(onRecipe.starts).toEqual([]);
+
+    // An older hostd says nothing of a recipe.
+    const older = new FakeHostd();
+    await updates({ hostd: older, stored: { engineUpdateSlot: THIS_WEEK } }).service.tick();
+    expect(older.starts).toEqual([]);
+  });
+
+  it('records a failed rebuild with its trigger and actor, where a person sees it', async () => {
+    const hostd = behind();
+    hostd.outcome = result({ state: 'failed', trigger: 'release', requestedBy: 'openadlc', reason: 'the candidate did not build: E: Unable to locate package', to: PINS });
+    const { service, entries } = updates({ hostd, stored: { engineUpdateSlot: THIS_WEEK } });
+
+    await service.tick();
+
+    expect(entries).toEqual([
+      expect.objectContaining({ actor: 'openadlc', action: 'engines.update_failed', payload: expect.objectContaining({ trigger: 'release' }) }),
+    ]);
+    expect((await service.view()).attention).toMatchObject({ kind: 'engine-update-failed', detail: 'the candidate did not build: E: Unable to locate package' });
+  });
+
+  it('keeps what a rollback held back, since a rebuild took nothing newer', async () => {
+    const hostd = behind();
+    const { service, data } = updates({ hostd, stored: { engineUpdateSlot: THIS_WEEK, engineUpdateHold: '{"@openai/codex":"0.157.0"}' } });
+
+    await service.tick();
+
+    expect(data.engineUpdateHold).toBe('{"@openai/codex":"0.157.0"}');
+  });
+
+  it('passes the recipe through to the console', async () => {
+    const { service } = updates({ hostd: behind() });
+    expect((await service.view()).recipe).toEqual({ current: NEW, built: OLD, behind: true });
+    expect((await updates().service.view()).recipe).toBeNull();
+  });
+});
+
 describe('a run a person starts', () => {
   it('refuses a second Update now while one runs, since the tool it names is not in that run', async () => {
     const { service, hostd } = updates();

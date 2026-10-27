@@ -125,8 +125,11 @@ describe('the OpenADLC row on a cloud install', () => {
     expect(row).toContain('would take v0.2.0, published Oct 20, 12:00: it takes the next release, not v0.3.0, one at a time');
     expect(row).toContain('next Oct 25, 18:00');
     expect(row).toContain('Every release tagged on 620legal/OpenADLC is rolled out here, one at a time, at the next scheduled run, without anyone pressing anything.');
-    // A release carries no bots' image: the host builds its own.
-    expect(row).toContain('image is not part of a release: it holds Claude Code, which a release may not redistribute, so it is built on the host and kept current by the engine updates below.');
+    // A release carries no bots' image: the host builds its own, and rebuilds
+    // it when a release changes its recipe, which the engine updates did not (#194).
+    expect(row).toContain(
+      'image is not part of a release: it holds Claude Code, which a release may not redistribute, so it is built on the host. The engine updates below keep it current, and rebuild it with the same versions when a release changes its recipe.',
+    );
     const html = renderToStaticMarkup(<ul><SelfUpdateRow view={CLOUD} busy={null} error={null} onUpdate={() => undefined} onSchedule={() => undefined} /></ul>);
     expect(html).toMatch(/<button[^>]*aria-label="Update OpenADLC now"(?![^>]*disabled)/);
     expect(html).toContain('aria-label="When OpenADLC updates"');

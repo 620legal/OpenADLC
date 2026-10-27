@@ -10,6 +10,7 @@ import {
   type AccountCheck,
   type EngineCli,
   type EngineName,
+  type EngineRecipe,
   type EngineUpdateCheck,
   type EngineUpdateResult,
   type EngineUpdateStart,
@@ -43,7 +44,13 @@ import { taskModelChooser } from './task-runner.js';
  *    CLI's own `--version`, asked in a throwaway container.
  * 2. Which versions npm calls newest, and of those the newest that has been
  *    published for the install's minimum release age (`newestOldEnough`).
- *    None newer that is old enough: the run is `current`.
+ *    None newer that is old enough: the run is `current` — unless the image is
+ *    behind its recipe (its `openadlc.recipe` label is not the digest of the
+ *    files `build-bot-image.sh` builds from now, or it has none). Then the
+ *    candidate is built from this recipe with every tool pinned to the
+ *    version in use, and goes through 4 and 5 like any other: a release that
+ *    added uv to Dockerfile.bot reached a cloud install's bots only because
+ *    three engines happened to have versions due that day (#194).
  * 3. A candidate, built by the same script under the `candidate` tag.
  * 4. The candidate proved the way a task uses it: each CLI resolves on the
  *    PATH a session gets and says the version it was built with, and every
@@ -61,6 +68,9 @@ import { taskModelChooser } from './task-runner.js';
 
 /** The label `build-bot-image.sh` stamps: package → version, as JSON. */
 export const ENGINES_LABEL = 'openadlc.engines';
+
+/** The label `build-bot-image.sh` stamps: the digest of the recipe the image was built from. */
+export const RECIPE_LABEL = 'openadlc.recipe';
 
 const CLIS = Object.keys(ENGINE_PACKAGES) as EngineCli[];
 const PACKAGES: string[] = CLIS.map((cli) => ENGINE_PACKAGES[cli]);
@@ -752,6 +762,8 @@ interface InUse {
   versions: EngineVersions;
   source: 'label' | 'cli' | 'none';
   id: string | null;
+  /** The image's `openadlc.recipe` label, or null when it has none. */
+  recipe?: string | null;
 }
 
 /** What the CLIs in an image say for themselves, under a session's PATH. */
@@ -762,6 +774,8 @@ interface Probed {
 }
 
 const BUILD_TIMEOUT_MS = 45 * 60 * 1000;
+/** What a run that rebuilt the image with nothing newer says it did. */
+const REBUILT = "rebuilt from this release's recipe; every version is as it was";
 /** What the build is given only when the run has a value for it; never hostd's own. */
 const BUILD_PINS = ['NODE_VERSION', 'GH_VERSION', 'GH_FROM', 'BUILD_PROXY'] as const;
 
@@ -806,7 +820,7 @@ export class EngineUpdater {
       running,
       last: this.last,
     };
-    if (this.options.driver === 'local') return { ...base, inUse: {}, inUseSource: 'none', previous: null };
+    if (this.options.driver === 'local') return { ...base, inUse: {}, inUseSource: 'none', previous: null, recipe: null };
 
     const tags = imageTags(this.options.image);
     // A status that cannot say what an image carries still says the rest.
@@ -818,7 +832,24 @@ export class EngineUpdater {
       inUse: inUse.versions,
       inUseSource: inUse.source,
       previous: previous && previous.id ? previous.versions : null,
+      recipe: reason === null ? recipeOf(inUse, await this.recipeDigest()) : null,
     };
+  }
+
+  /**
+   * The digest of the recipe this hostd has now, from the build script itself,
+   * so the two never disagree about what it covers. Asked every time and
+   * never kept: a checkout's files change under a running hostd, and a digest
+   * kept from before would call a fresh image behind. Null when it could not be read.
+   */
+  private async recipeDigest(): Promise<string | null> {
+    const said = await this.run('bash', [this.options.buildScript, '--recipe-digest'], { timeoutMs: 30_000, answer: true });
+    const digest = said.stdout.trim();
+    if (said.code !== 0 || !/^sha256:[0-9a-f]{64}$/.test(digest)) {
+      this.log(`[hostd] could not read the bot image's recipe digest: ${lastWords(said.stderr) || `the script exited ${said.code}`}`);
+      return null;
+    }
+    return digest;
   }
 
   /**
@@ -892,7 +923,7 @@ export class EngineUpdater {
   private result(
     base: { trigger: string; requestedBy: string | null; startedAt: string },
     outcome: Pick<EngineUpdateResult, 'state' | 'from' | 'to' | 'latest' | 'checks' | 'reason'> &
-      Partial<Pick<EngineUpdateResult, 'refreshed' | 'deferred' | 'unchecked'>>,
+      Partial<Pick<EngineUpdateResult, 'refreshed' | 'deferred' | 'unchecked' | 'rebuilt'>>,
   ): EngineUpdateResult {
     return { ...base, ...outcome, finishedAt: this.now().toISOString() };
   }
@@ -966,7 +997,26 @@ export class EngineUpdater {
         unchecked,
       });
     }
-    if (!plan.newer) {
+    // Nothing newer, and an image built from an older recipe than this one: the
+    // same candidate, checks and swap, with every version as it is.
+    const rebuild = !plan.newer && recipeOf(inUse, await this.recipeDigest()).behind;
+    if (rebuild) {
+      const unknown = [...PACKAGES, ...IMAGE_TOOLS].filter((pkg) => !plan.targets[pkg]);
+      if (unknown.length > 0) {
+        // Built without a pin, that tool would float to whatever is newest today.
+        const names = unknown.map(shortName).join(', ');
+        return this.result(base, {
+          state: 'failed',
+          from,
+          to: null,
+          latest,
+          checks: [],
+          reason: noted(`nothing was built: the image is behind its recipe, and does not say which ${names} it has, so it cannot be rebuilt keeping it`),
+          ...asNoted,
+        });
+      }
+    }
+    if (!plan.newer && !rebuild) {
       const waiting = tooYoung
         .filter((one) => {
           const inUse = from[one.pkg] ?? null;
@@ -1005,7 +1055,9 @@ export class EngineUpdater {
       this.result(base, { state: 'failed', from, to, latest, checks, reason: noted(reason), ...asNoted });
 
     this.log(
-      `[hostd] engine update: building ${tags.candidate} with ${plan.changes.map((one) => `${one.pkg}@${one.to}`).join(', ')}`,
+      rebuild
+        ? `[hostd] engine update: building ${tags.candidate} from this release's recipe, with every version as it is`
+        : `[hostd] engine update: building ${tags.candidate} with ${plan.changes.map((one) => `${one.pkg}@${one.to}`).join(', ')}`,
     );
     // A candidate a stopped run left behind is not this one.
     await this.untag(tags.candidate);
@@ -1046,10 +1098,11 @@ export class EngineUpdater {
       to,
       latest,
       checks,
-      reason: noted(describeChanges(from, to)),
+      reason: noted(rebuild ? REBUILT : describeChanges(from, to)),
       refreshed: moved.refreshed,
       deferred: moved.deferred,
       ...asNoted,
+      ...(rebuild ? { rebuilt: true as const } : {}),
     });
   }
 
@@ -1403,18 +1456,21 @@ export class EngineUpdater {
       return { versions: {}, source: 'none', id: null };
     }
     const labelled = readEnginesLabel(labels);
+    const recipe = labels?.[RECIPE_LABEL] || null;
     // A label that names Node and gh answers without a container. One that
     // predates those keys does not: a schedule cannot pin a version it has
     // not read, and asking once per image id is what the page's poll may do.
-    if (labelled?.node && labelled.gh) return { versions: labelled, source: 'label', id };
-    if (!id) return labelled ? { versions: labelled, source: 'label', id: null } : { versions: {}, source: 'none', id: null };
+    if (labelled?.node && labelled.gh) return { versions: labelled, source: 'label', id, recipe };
+    if (!id) {
+      return labelled ? { versions: labelled, source: 'label', id: null, recipe } : { versions: {}, source: 'none', id: null, recipe };
+    }
 
     const known = this.probed.get(id);
     if (known) return known;
     const asked = this.probe(ref, 'in-use').then((probed): InUse =>
       labelled
-        ? { versions: withProbedTools(labelled, probed), source: 'label', id }
-        : { versions: versionsFromProbe(probed), source: 'cli', id },
+        ? { versions: withProbedTools(labelled, probed), source: 'label', id, recipe }
+        : { versions: versionsFromProbe(probed), source: 'cli', id, recipe },
     );
     this.probed.set(id, asked);
     // A probe that failed is not an answer to keep.
@@ -1471,6 +1527,17 @@ export class EngineUpdater {
     }
     return probed;
   }
+}
+
+/**
+ * The image's recipe against the one hostd has now. Behind when the image
+ * exists, the current digest is known, and the image's label is not it: an
+ * image built before the label has none, and is behind once. Never behind
+ * with no image, which compose builds when the services start.
+ */
+function recipeOf(inUse: InUse, current: string | null): EngineRecipe {
+  const built = inUse.recipe ?? null;
+  return { current, built, behind: inUse.id !== null && current !== null && built !== current };
 }
 
 /** Engine versions from a probe, and Node and gh when the probe could read them. */

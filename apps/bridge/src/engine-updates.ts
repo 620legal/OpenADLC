@@ -6,6 +6,7 @@ import {
   SYSTEM_TOOLS,
   systemToolById,
   uncheckedNote,
+  type EngineRecipe,
   type EngineUpdateResult,
   type EngineUpdateStart,
   type EngineUpdateStatus,
@@ -32,6 +33,13 @@ import { isIanaTimeZone, processTimeZone, timeZoneFrom } from './system-settings
  * makes it once is the week remembered — the slot a run was started for —
  * which is stored before the run is followed, so a bridge that restarts
  * mid-run does not start another.
+ *
+ * The same look starts one more kind of run: when hostd says the bots' image
+ * was built from an older recipe than the one this release has (#194), a
+ * `release` run that moves no version and rebuilds the image from the new
+ * recipe. Once per recipe digest, remembered as `engineRecipeRebuilt` once
+ * hostd has taken the run, so a restart on the same release starts nothing
+ * and a failed one is retried by the next recipe or by a person.
  */
 
 export const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const;
@@ -63,6 +71,7 @@ const KEY = {
   slot: 'engineUpdateSlot',
   last: 'engineUpdateLast',
   hold: 'engineUpdateHold',
+  recipe: 'engineRecipeRebuilt',
 } as const satisfies Record<string, SettingKey>;
 
 /** The process zone, when the install has not stored one. */
@@ -457,6 +466,8 @@ export interface EngineUpdatesView {
   last: EngineUpdateResult | null;
   /** A version a rollback undid, which no run takes again. */
   hold: EngineVersions;
+  /** The image's recipe against this release's, as hostd says; null when hostd did not answer or cannot build. */
+  recipe: EngineRecipe | null;
   /** Whole days an engine CLI release must have been on npm before a run takes it; see `DEFAULT_MIN_RELEASE_AGE_DAYS`. */
   minReleaseAgeDays: number;
   attention: EngineUpdateAttention | null;
@@ -501,6 +512,8 @@ interface Stored {
   /** The run in flight, as `systemToolRun` holds it. */
   run: string | undefined;
   minReleaseAgeDays: number;
+  /** The recipe digest a `release` run was last started for. */
+  recipeRebuilt: string | null;
 }
 
 function storedFrom(all: Partial<Record<SettingKey, string>>): Stored {
@@ -513,6 +526,7 @@ function storedFrom(all: Partial<Record<SettingKey, string>>): Stored {
     timeZone: all.systemTimeZone ?? null,
     run: all.systemToolRun,
     minReleaseAgeDays: minReleaseAgeDaysFrom(all.engineUpdateMinReleaseAgeDays),
+    recipeRebuilt: all[KEY.recipe] || null,
   };
 }
 
@@ -548,6 +562,12 @@ function kept(result: EngineUpdateResult): EngineUpdateResult {
   };
 }
 
+/** Whether a result moved any version: a rebuild from a new recipe moves none. */
+function movedVersions(result: EngineUpdateResult): boolean {
+  const to = result.to ?? {};
+  return [...new Set([...Object.keys(result.from), ...Object.keys(to)])].some((pkg) => (result.from[pkg] ?? null) !== (to[pkg] ?? null));
+}
+
 /** The versions a rollback left behind: each package whose version it changed. */
 function undone(result: EngineUpdateResult): EngineVersions {
   const hold: EngineVersions = {};
@@ -563,7 +583,8 @@ const settingsStore: EngineUpdateStore = {
 };
 
 interface StartInput {
-  trigger: 'console' | 'schedule';
+  /** `release`: the bridge's own run for an image behind this release's recipe. */
+  trigger: 'console' | 'schedule' | 'release';
   actor: string;
   /** Package keys this run may move. Absent: hostd's default, the three engines. */
   only?: readonly string[];
@@ -702,6 +723,7 @@ export class EngineUpdates {
       running: hostd?.running ?? this.following,
       last,
       hold: stored.hold,
+      recipe: hostd?.recipe ?? null,
       minReleaseAgeDays: stored.minReleaseAgeDays,
       attention: engineUpdateAttention(last),
     };
@@ -939,10 +961,12 @@ export class EngineUpdates {
             checks,
             refreshed: result.refreshed ?? [],
             deferred: result.deferred ?? [],
+            ...(result.rebuilt ? { rebuilt: true } : {}),
           },
         });
-        // What a rollback held back is moot once something newer went in.
-        if (Object.keys(stored.hold).length > 0) await this.store.set(KEY.hold, '', 'openadlc');
+        // What a rollback held back is moot once something newer went in. A
+        // rebuild from a new recipe took nothing newer, so the hold stands.
+        if (Object.keys(stored.hold).length > 0 && movedVersions(result)) await this.store.set(KEY.hold, '', 'openadlc');
         break;
       case 'failed':
         await this.audit({
@@ -983,12 +1007,18 @@ export class EngineUpdates {
   async tick(): Promise<string[]> {
     await this.migrate();
     const lines: string[] = [];
+    let status: EngineUpdateStatus | null = null;
     if (!this.current) {
-      const status = await this.hostd.engineUpdateStatus().catch(() => null);
+      status = await this.hostd.engineUpdateStatus().catch(() => null);
       if (status?.last && !status.running && (await this.record(status.last))) {
         lines.push(`recorded the engine update hostd finished at ${status.last.finishedAt}: ${status.last.state}`);
       }
     }
+
+    // A due schedule waits for the next look: the run it would start
+    // rebuilds from the same recipe anyway.
+    const release = await this.releaseRun(status);
+    if (release) return [...lines, release];
 
     const now = this.now();
     const stored = await this.stored();
@@ -1054,6 +1084,32 @@ export class EngineUpdates {
     } catch (error) {
       return [...lines, `this week's engine update did not start: ${message(error)}; the next look tries again`];
     }
+  }
+
+  /**
+   * The run for an image built from an older recipe than this release's, once
+   * per recipe digest. A release that added uv to Dockerfile.bot reached a
+   * cloud install's bots only because three engines had versions due that
+   * day; with none, its tasks would have waited for the weekly run (#194).
+   * Null when there is nothing to start. The digest is stored once hostd has
+   * taken the run, and not before: a start that is held (a restart owed) or
+   * refused tries again at the next look.
+   */
+  private async releaseRun(status: EngineUpdateStatus | null): Promise<string | null> {
+    const recipe = status?.recipe;
+    if (!status || status.running || !recipe?.behind || !recipe.current) return null;
+    if ((await this.stored()).recipeRebuilt === recipe.current) return null;
+    let started: Started;
+    try {
+      started = await this.start({ trigger: 'release', actor: 'openadlc', only: [], tools: [] });
+    } catch (error) {
+      return `the bots' image is behind this release's recipe, and its rebuild did not start: ${message(error)}; the next look tries again`;
+    }
+    // hostd was already running one this bridge did not start: not this rebuild.
+    if (started.joined) return null;
+    await this.store.set(KEY.recipe, recipe.current, 'openadlc');
+    const result = await started.done;
+    return `the bots' image was behind this release's recipe: ${result.state} — ${result.reason}`;
   }
 
   /** The previous image back as latest, and recorded; refused while an update runs. */

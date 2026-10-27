@@ -214,8 +214,8 @@ export function mergedAttributionKeys(archived: string, here: string | null, now
 /**
  * Settings that record what this install's updates last did, rather than
  * anything a person set: for the engines, the week it last ran, how it ended,
- * the version a rollback undid, each tool's last check, and the run in
- * flight; for OpenADLC itself, the run in flight, how the last one ended, and
+ * the version a rollback undid, each tool's last check, the run in flight,
+ * and the recipe a release run was last started for; for OpenADLC itself, the run in flight, how the last one ended, and
  * what the last look at the releases found. They are about this machine's bot
  * image and checkout, and a new machine has its own: a restored run
  * "waiting" or "restarting" would hold its work for a restart that is
@@ -227,6 +227,7 @@ export const RUNTIME_SETTINGS: readonly string[] = [
   'engineUpdateHold',
   'systemToolLast',
   'systemToolRun',
+  'engineRecipeRebuilt',
   'selfUpdateRun',
   'selfUpdateLast',
   'selfUpdateCandidate',
