@@ -10223,6 +10223,147 @@ describe('a person’s approval GitHub moves onto the merge line’s update of t
   });
 });
 
+describe('a crew pull request the lead approved that waits on a person under Human review', () => {
+  // 620legal/OpenADLC#199: a crew pull request changed
+  // `infra/local/build-bot-image.sh`, the lead approved its head, and
+  // `review-gate` read "waiting on @janedoe". The merge line never asks for a
+  // crew branch's CI while it waits on a person, so Needs you said nothing.
+  const HEAD = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const LEAD = 'openadlc-cipher-janedoe';
+  const LEAD_BODY = 'Lead review: approve.\n\n<!-- openadlc:{"event":"review_posted","verdict":"approve","lens":"lead"} -->\n\n<!-- openadlc-seat:lead-reviewer -->';
+  const config = {
+    automationBot: null,
+    humans: [],
+    review: { reviewers: [{ seat: 'lead-reviewer', lens: 'lead', lead: true, blocking: false, trigger: 'always' }], maxRounds: 3 },
+  };
+  const log: { type: string; payload: Record<string, unknown>; at: string }[] = [];
+  let restore: () => void = () => undefined;
+
+  beforeEach(async () => {
+    store.bots = [{ id: 'bot-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: LEAD }];
+    log.length = 0;
+    const db = await import('@openadlc/db');
+    const record = vi.mocked(db.recordEvent).getMockImplementation()!;
+    vi.mocked(db.recordEvent).mockImplementation(async (event) => {
+      if (event.type === 'review.submitted_on' || event.type === 'review.person_awaited') {
+        store.events.push(event);
+        log.push({ type: event.type, payload: event.payload as Record<string, unknown>, at: new Date(Date.UTC(2026, 9, 27, 2, 0, 0) + log.length * 1000).toISOString() });
+      }
+      return record(event);
+    });
+    restore = () => vi.mocked(db.recordEvent).mockImplementation(record);
+  });
+
+  afterEach(() => restore());
+
+  function bridge() {
+    const statuses: { sha: string; state: string; description: string }[] = [];
+    const github = {
+      reviews: [] as { id: number; user: string; state: string; body: string; submittedAt: string; commitId: string }[],
+      viewer: vi.fn(async () => ({ login: 'janedoe-openadlc-flow' })),
+      listPullCommits: vi.fn(async () => []),
+      setCommitStatus: vi.fn(async (_repo: string, sha: string, status: { state: string; description: string }) => void statuses.push({ sha, state: status.state, description: status.description })),
+      request: vi.fn(async (_method: string, path: string) =>
+        path.endsWith('/status')
+          ? { statuses: statuses.filter((one) => path.includes(one.sha)).slice(-1).map((one) => ({ context: 'review-gate', state: one.state, creator: { login: 'janedoe-openadlc-flow' } })) }
+          : path.endsWith('/permission')
+            ? { permission: 'admin' }
+            : path.startsWith('/users/')
+              ? { login: 'janedoe', type: 'User' }
+              : {},
+      ),
+      listEveryPullFile: vi.fn(async () => ({ files: ['infra/local/build-bot-image.sh', 'apps/bridge/src/x.ts'], complete: true, renamedFrom: [] })),
+      listReviews: vi.fn(async () => [...github.reviews]),
+      readFileAtRef: vi.fn(async () => '# Agent notes\n\n## Human review\n\n- `config/` @someone-else\n- `infra/` @janedoe\n'),
+      readFileIfPresent: vi.fn(async () => null),
+      diffFingerprint: vi.fn(async () => 'the diff'),
+      getPullRequest: vi.fn(async () => ({ labels: [] })),
+      permissionOf: vi.fn(async () => 'admin'),
+      listPullHistory: vi.fn(async () => []),
+      pullsFromBranch: vi.fn(async () => [{ number: 40, baseRef: 'main', headSha: HEAD, createdAt: '2026-10-27T01:00:00Z', closedAt: null }]),
+    };
+    const attribution = {
+      countable: vi.fn(async (posts: unknown[]) => [...posts]),
+      reviewsThatCount: vi.fn(async (_repo: string, _n: number, posts: { user: string }[]) => posts.filter((post) => post.user === LEAD).map((post) => ({ ...post, commitId: HEAD }))),
+    };
+    const automation = new Automation(config as never, { asBot: vi.fn(async () => github), attribution } as never);
+    const taskService = taskServiceOpening(vi.fn(async () => ({ taskId: 'task-lead', session: 'review-lead' })) as never);
+    const mergeLine = { enter: vi.fn(async () => undefined), advance: vi.fn(async () => null), leave: vi.fn(async () => undefined) };
+    const webhooks = new Webhooks(config as never, automation, {} as never, taskService as never, {} as never, mergeLine as never);
+    return { webhooks, github, statuses };
+  }
+
+  async function deliver(webhooks: Webhooks, id: string) {
+    const quiet = [vi.spyOn(console, 'warn').mockImplementation(() => undefined), vi.spyOn(console, 'log').mockImplementation(() => undefined)];
+    try {
+      await webhooks.receive(
+        'pull_request_review',
+        {
+          action: 'submitted',
+          sender: { login: LEAD },
+          review: { id: 900, author_association: 'COLLABORATOR', state: 'approved', body: LEAD_BODY, user: { login: LEAD }, commit_id: HEAD },
+          pull_request: {
+            number: 40,
+            draft: false,
+            user: { login: 'openadlc-builder' },
+            head: { sha: HEAD, ref: 'agent/builder/39-infra', repo: { full_name: 'janedoe/openadlc' } },
+            base: { ref: 'main' },
+            labels: [],
+          },
+          repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+        } as never,
+        id,
+      );
+    } finally {
+      for (const spy of quiet) spy.mockRestore();
+    }
+  }
+
+  const needsYou = () =>
+    attentionItems({
+      now: new Date('2026-10-27T03:00:00Z'),
+      gates: [],
+      tasks: [],
+      bots: [],
+      repos: [{ id: 'repo-1', name: 'openadlc', fullName: 'janedoe/openadlc', defaultBranch: 'main' }] as never,
+      issues: [],
+      requests: [],
+      stallEvents: [],
+      personAwaits: log.filter((event) => event.type === 'review.person_awaited'),
+      personReviews: log.filter((event) => event.type === 'review.submitted_on'),
+    });
+
+  it('records the wait on @janedoe, with the path that names her, once the lead approves, and Needs you says it', async () => {
+    const { webhooks, github, statuses } = bridge();
+    github.reviews.push({ id: 900, user: LEAD, state: 'APPROVED', body: LEAD_BODY, submittedAt: '2026-10-27T02:00:00Z', commitId: HEAD });
+
+    await deliver(webhooks, 'delivery-lead-40');
+    await deliver(webhooks, 'delivery-lead-40-again');
+
+    expect(statuses.at(-1)).toEqual({ sha: HEAD, state: 'pending', description: 'waiting on @janedoe' });
+    expect(log.filter((event) => event.type === 'review.person_awaited').map((event) => event.payload)).toEqual([
+      { subjectRef: 'openadlc#40', login: 'janedoe', head: HEAD, repo: 'openadlc', pr: 40, issue: 39, paths: ['infra/'] },
+    ]);
+    expect(needsYou()).toEqual([
+      expect.objectContaining({
+        id: 'approval:openadlc#40@janedoe',
+        headline: "Pull request #40 waits for @janedoe's approval",
+        actions: [{ kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc/pull/40/files' }],
+      }),
+    ]);
+  });
+
+  it('records nothing while the gate still waits on the lead', async () => {
+    const { webhooks, statuses } = bridge();
+
+    await deliver(webhooks, 'delivery-other-40');
+
+    expect(statuses.at(-1)).toEqual({ sha: HEAD, state: 'pending', description: 'waiting on lead-reviewer' });
+    expect(log.filter((event) => event.type === 'review.person_awaited')).toEqual([]);
+    expect(needsYou()).toEqual([]);
+  });
+});
+
 describe('the issues a revert after a red smoke reopens', () => {
   function bridge(github: Record<string, unknown>) {
     const automation = { actors: { asBot: async () => github } };

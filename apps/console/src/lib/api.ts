@@ -508,6 +508,8 @@ export interface AttentionItem {
   incident?: UnsignedIncident;
   /** An approved plan change's, while it waits (`plan_change_waiting`): the issues holding its paths, and the paths. Absent from an older bridge. */
   heldApproval?: { blockedBy: number[]; paths: string[] };
+  /** A pull request's that waits on a person's approval (`merge_waiting`): who, whether it is an approval again, and the Human review paths that name them. Absent from an older bridge. */
+  awaiting?: { login: string; again: boolean; paths: string[] };
 }
 
 /** What an unsigned crew post was, where, and whether it counted; `health/checks/attribution.ts` in the bridge. */

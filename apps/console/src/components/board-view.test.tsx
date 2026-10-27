@@ -292,6 +292,28 @@ describe('a card', () => {
     expect(next).toContain('Next up, when the builder (openadlc-atlas-janedoe) is free');
   });
 
+  it('in Review says it waits on the person Needs you says its pull request waits for', () => {
+    // 620legal/OpenADLC#199: the lead approved, the gate waited on @janedoe,
+    // and the card said "Waiting for the reviewers".
+    const waiting = card({ ref: 'openadlc#39', stage: 'review', title: 'Build the bot image with the new base', prNumber: 40, reviewRound: 1 });
+    const board = { ...BOARD, columns: columns([...WORKING, waiting]) };
+    const item: AttentionItem = {
+      id: 'approval:openadlc#40@janedoe',
+      kind: 'merge_waiting',
+      headline: "Pull request #40 waits for @janedoe's approval",
+      subject: { repo: 'openadlc', number: 39, title: null, ref: 'openadlc#39', url: null },
+      bot: null,
+      since: minutesAgo(3),
+      detail: '',
+      actions: [],
+      awaiting: { login: 'janedoe', again: false, paths: ['infra/'] },
+    };
+    const review = column(render(board, [...ATTENTION, item]), 'Review');
+    const mine = review.slice(review.indexOf('#39<'));
+    expect(mine).toContain('Approved · waiting for @janedoe&#x27;s approval');
+    expect(column(render(board), 'Review')).not.toContain('waiting for @janedoe');
+  });
+
   it('ready to build on a bridge without the dispatcher, says nothing is dispatching rather than next up', () => {
     const build = column(render(BOARD, ATTENTION, null, 'all', 'admin', { dispatching: false }), 'Build');
     const ready = build.slice(build.indexOf('#17<'));

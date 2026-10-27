@@ -47,7 +47,9 @@ import {
   issueNumberFromBranch,
   parseRef,
   PERSON_ASKED_AGAIN,
+  PERSON_AWAITED,
   RESUME_WAITS_ON_GITHUB,
+  REVIEW_ROUND_OPENED,
   REVIEW_STALLED,
   REVIEW_SUBMITTED_ON,
   SEND_BACK_STALLED,
@@ -302,7 +304,7 @@ export function groupOf(kind: AttentionKind): AttentionGroup {
 
 export interface AttentionItem {
   /**
-   * Stable across reads, by kind: `gate:…`, `merge:repo#pr`, `approve-again:repo#pr@login`, `promote:repo@sha`,
+   * Stable across reads, by kind: `gate:…`, `merge:repo#pr`, `approve-again:repo#pr@login`, `approval:repo#pr@login`, `promote:repo@sha`,
    * `unowned:repo`, `stall:repo#pr`, `sendback:repo#n`, `design-memory:…`, `plan-change:<gate>`,
    * `intake-stalled:repo#n`, `dependency-abandoned:repo#n`, `stack-hold:repo#n`, `task:…`, `landed:…`, `request:…`,
    * `engine-update`, `check:…`, `fixed:…`, or `task-group:…`,
@@ -359,6 +361,13 @@ export interface AttentionItem {
    * the builder waited for #44.
    */
   heldApproval?: { blockedBy: number[]; paths: string[] };
+  /**
+   * A pull request's that waits on a person's approval (`merge_waiting`): who,
+   * whether it is an approval again (`approve-again:…`) or a first one
+   * (`approval:…`), and the Human review paths that name them. The board's
+   * card says it from this, so the card and Needs you say the same.
+   */
+  awaiting?: { login: string; again: boolean; paths: string[] };
 }
 
 /** One of several items folded into a card by `foldCauses`, keeping what is its own rather than the cause's. */
@@ -490,6 +499,15 @@ export interface AttentionInput {
    */
   personAsks?: readonly { at: string; payload: unknown }[];
   personReviews?: readonly { at: string; payload: unknown }[];
+  /**
+   * The people crew pull requests wait on for a first approval once the
+   * lead's counts (`PERSON_AWAITED`), and the review rounds opened
+   * (`REVIEW_ROUND_OPENED`), in the window. The merge line never asks for a
+   * crew branch's CI while it waits on a person, so the green card never came
+   * and nobody was told. Absent, none.
+   */
+  personAwaits?: readonly { at: string; payload: unknown }[];
+  roundsOpened?: readonly { at: string; payload: unknown }[];
   /**
    * Open unlabeled issues OpenADLC will not take on its own, by repository
    * name (`unowned-issues.ts`): skipped in silence, they sat unbuilt and in the
@@ -1107,17 +1125,77 @@ export function standingPersonAsks(
   for (const [key, ask] of newest) {
     const issue = (ask.issue !== null ? issues.find((one) => one.repoName === ask.repo && one.number === ask.issue) : undefined) ?? issueForSubject(`${ask.repo}#${ask.pr}`, issues);
     if (issue && issue.stage !== 'review') continue;
-    const answered = reviews.some((event) => {
-      const payload = (event.payload ?? {}) as Record<string, unknown>;
-      return (
-        payload.subjectRef === `${ask.repo}#${ask.pr}` &&
-        typeof payload.login === 'string' &&
-        sameLogin(payload.login, ask.login) &&
-        (payload.state === 'approved' || payload.state === 'changes_requested') &&
-        Date.parse(event.at) > Date.parse(ask.at)
-      );
-    });
-    if (!answered) standing.set(key, { ...ask, issue: issue?.number ?? ask.issue });
+    if (!answeredSince(reviews, `${ask.repo}#${ask.pr}`, ask.login, ask.at)) standing.set(key, { ...ask, issue: issue?.number ?? ask.issue });
+  }
+  return standing;
+}
+
+/** Whether `login` gave a verdict on the pull request after `at`: an approval, or a request for changes (`REVIEW_SUBMITTED_ON`). */
+function answeredSince(reviews: readonly { at: string; payload: unknown }[], subjectRef: string, login: string, at: string): boolean {
+  return reviews.some((event) => {
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    return (
+      payload.subjectRef === subjectRef &&
+      typeof payload.login === 'string' &&
+      sameLogin(payload.login, login) &&
+      (payload.state === 'approved' || payload.state === 'changes_requested') &&
+      Date.parse(event.at) > Date.parse(at)
+    );
+  });
+}
+
+/** A person a crew pull request waits on for a first approval (`PERSON_AWAITED`), as its card reads it. */
+export interface PersonAwait {
+  repo: string;
+  pr: number;
+  issue: number;
+  login: string;
+  /** The head the lead approved, which they are asked to approve. */
+  head: string;
+  /** The Human review paths it touches that name them; none when they could not be read. */
+  paths: string[];
+  at: string;
+}
+
+function personAwaitFrom(event: { at: string; payload: unknown }): PersonAwait | null {
+  const payload = (event.payload ?? {}) as Record<string, unknown>;
+  const { repo, pr, issue, login, head } = payload;
+  if (typeof repo !== 'string' || typeof pr !== 'number' || typeof issue !== 'number' || typeof login !== 'string' || typeof head !== 'string') return null;
+  const paths = Array.isArray(payload.paths) ? payload.paths.filter((path): path is string => typeof path === 'string') : [];
+  return { repo, pr, issue, login, head, paths, at: event.at };
+}
+
+/**
+ * The people a crew pull request still waits on for a first approval, by
+ * `repo#pr` and login: the newest wait on each, while the issue is in Review
+ * when the board has it — a merge, a close and a send back to Build each move
+ * it out — the person has given no verdict on it since, and no review round
+ * opened after it. A new round is a new diff, which the lead's approval the
+ * wait rested on is not of; the next wait is recorded when the lead approves
+ * that. A pull request that closed is the caller's to leave out.
+ */
+export function standingPersonAwaits(
+  awaits: readonly { at: string; payload: unknown }[],
+  reviews: readonly { at: string; payload: unknown }[],
+  rounds: readonly { at: string; payload: unknown }[],
+  issues: readonly Pick<IssueFacts, 'repoName' | 'number' | 'prNumber' | 'stage'>[],
+): Map<string, PersonAwait> {
+  const newest = new Map<string, PersonAwait>();
+  for (const event of awaits) {
+    const wait = personAwaitFrom(event);
+    if (!wait) continue;
+    const key = `${wait.repo}#${wait.pr}@${wait.login.toLowerCase()}`;
+    const seen = newest.get(key);
+    if (!seen || Date.parse(wait.at) > Date.parse(seen.at)) newest.set(key, wait);
+  }
+  const standing = new Map<string, PersonAwait>();
+  for (const [key, wait] of newest) {
+    const ref = `${wait.repo}#${wait.pr}`;
+    const issue = issues.find((one) => one.repoName === wait.repo && one.number === wait.issue);
+    if (issue && issue.stage !== 'review') continue;
+    if (answeredSince(reviews, ref, wait.login, wait.at)) continue;
+    const reopened = rounds.some((event) => ((event.payload ?? {}) as Record<string, unknown>).subjectRef === ref && Date.parse(event.at) > Date.parse(wait.at));
+    if (!reopened) standing.set(key, wait);
   }
   return standing;
 }
@@ -1298,6 +1376,33 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
       since: ask.at,
       detail: `${approvalCountsForNothing(ask)} OpenADLC does not merge it until @${ask.login} approves ${ask.head.slice(0, 7)}.`,
       actions: [{ kind: 'open_url', label: 'Review it on GitHub', url: `${url}/files` }],
+      awaiting: { login: ask.login, again: true, paths: [] },
+    });
+  }
+
+  // A person the repository names that a crew pull request waits on for a
+  // first approval, once the lead's counts. One item per pull request and
+  // person: one asked to approve again has that card, and not this one too.
+  const askedAgain = new Set(items.filter((item) => item.id.startsWith('approve-again:')).map((item) => item.id.slice('approve-again:'.length)));
+  for (const [key, wait] of standingPersonAwaits(input.personAwaits ?? [], input.personReviews ?? [], input.roundsOpened ?? [], input.issues)) {
+    const ref = `${wait.repo}#${wait.pr}`;
+    if (input.closed?.has(ref) || askedAgain.has(key)) continue;
+    const fullName = reposByName.get(wait.repo)?.fullName;
+    if (!fullName) continue;
+    const { subject } = subjectOf(`${wait.repo}#${wait.issue}`);
+    const url = `https://github.com/${fullName}/pull/${wait.pr}`;
+    const who = `@${wait.login}`;
+    const changes = wait.paths.length > 0 ? `${pathsInWords(wait.paths)}, which AGENTS.md's Human review names ${who} for` : `a path AGENTS.md's Human review names ${who} for`;
+    items.push({
+      id: `approval:${key}`,
+      kind: 'merge_waiting',
+      headline: `Pull request #${wait.pr} waits for ${who}'s approval`,
+      subject: { ...subject, url: subject.url ?? url },
+      bot: null,
+      since: wait.at,
+      detail: `The lead approved ${wait.head.slice(0, 7)}. It changes ${changes}. OpenADLC does not merge it until ${who} approves it.`,
+      actions: [{ kind: 'open_url', label: 'Review it on GitHub', url: `${url}/files` }],
+      awaiting: { login: wait.login, again: false, paths: [...wait.paths] },
     });
   }
 
@@ -2449,7 +2554,12 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
   const designMemoryEvents = await (async () => listEventsOfType(DESIGN_MEMORY_SUPERSEDED, since))().catch(() => []);
   // The reviews people submitted are read only when someone was asked to approve again this week.
   const personAsks = await (async () => listEventsOfType(PERSON_ASKED_AGAIN, since))().catch(() => []);
-  const personReviews = personAsks.some((event) => personAskFrom(event)) ? await (async () => listEventsOfType(REVIEW_SUBMITTED_ON, since))().catch(() => []) : [];
+  const personAwaits = await (async () => listEventsOfType(PERSON_AWAITED, since))().catch(() => []);
+  const awaiting = personAwaits.some((event) => personAwaitFrom(event));
+  const personReviews =
+    personAsks.some((event) => personAskFrom(event)) || awaiting ? await (async () => listEventsOfType(REVIEW_SUBMITTED_ON, since))().catch(() => []) : [];
+  // A newer round is a new diff, which the lead's approval a wait rested on is not of.
+  const roundsOpened = awaiting ? await (async () => listEventsOfType(REVIEW_ROUND_OPENED, since))().catch(() => []) : [];
   // Asked only when a gate is open. A read that fails holds nothing: the
   // approved change shows as its question did.
   const heldPlanChanges =
@@ -2554,6 +2664,8 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     heldStacks: stackHolds,
     personAsks,
     personReviews,
+    personAwaits,
+    roundsOpened,
     unowned,
     heldPromotes,
     health: checks,
@@ -2581,11 +2693,14 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
   const unboarded = [...standingStalls(present.stallEvents, present.issues, present.tasks)]
     .filter(([, stall]) => !present.issues.some((one) => one.repoName === stall.repo && one.number === stall.issue))
     .map(([key]) => key);
-  // So are the pull requests a person was asked to approve again that name no issue on the board.
+  // So are the pull requests a person was asked to approve again, or is waited on for, that name no issue on the board.
   const unboardedAsks = [...standingPersonAsks(personAsks, personReviews, present.issues).values()]
     .filter((ask) => !present.issues.some((one) => one.repoName === ask.repo && one.number === ask.issue))
     .map((ask) => `${ask.repo}#${ask.pr}`);
-  const endable = [...new Set([...failedTaskCandidates(present).map((task) => task.subjectRef), ...unboarded, ...unboardedAsks].filter((ref) => parseRef(ref)))];
+  const unboardedAwaits = [...standingPersonAwaits(personAwaits, personReviews, roundsOpened, present.issues).values()]
+    .filter((wait) => !present.issues.some((one) => one.repoName === wait.repo && one.number === wait.issue))
+    .map((wait) => `${wait.repo}#${wait.pr}`);
+  const endable = [...new Set([...failedTaskCandidates(present).map((task) => task.subjectRef), ...unboarded, ...unboardedAsks, ...unboardedAwaits].filter((ref) => parseRef(ref)))];
   const closed = deps.closed && endable.length > 0 ? await deps.closed(endable).catch(() => new Set<string>()) : new Set<string>();
   // What work waits on beyond its tasks, read as the board reads it; one
   // that cannot be read says nothing is stuck rather than lose the list.

@@ -103,6 +103,19 @@ export const REVIEW_SUBMITTED_ON = 'review.submitted_on';
 export const PERSON_ASKED_AGAIN = 'review.person_asked_again';
 
 /**
+ * A person the repository names that a crew pull request waits on for a first
+ * approval, once the lead's approval counts on its head (`awaitPeople`):
+ * `{ subjectRef, repo, pr, issue, login, head, paths }`, `pr` and `issue`
+ * numbers, `paths` the Human review paths it touches that name them, the
+ * rest strings. Recorded once for each head and login; Needs you shows the
+ * newest for each person until they review it, or a newer round opens
+ * (`attention.ts`). The merge line never asks for a crew branch's CI while it
+ * waits on them, so the green "waits for you to merge it" card never came,
+ * and the pull request waited with nobody told.
+ */
+export const PERSON_AWAITED = 'review.person_awaited';
+
+/**
  * Answered work whose resume GitHub did not answer the sign-in's refresh for,
  * and which waits paused for it (`TaskService.resume`): `{ taskId, subjectRef,
  * answeredAt, until }`, all strings. Needs you reads it for a card while the

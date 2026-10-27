@@ -2183,7 +2183,7 @@ describe('a person’s approval that counts for nothing on the diff, at the swee
   const HEAD = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
   const WHY = 'waiting on @janedoe (their approval is not known to be of 692cd1f)';
 
-  function sweeping() {
+  function sweeping(options: { hers: boolean } = { hers: true }) {
     store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
     store.issues = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
     store.bots = [LEAD];
@@ -2215,7 +2215,7 @@ describe('a person’s approval that counts for nothing on the diff, at the swee
       listEveryPullFile: async () => ({ files: ['config/bots.yaml'], complete: true, renamedFrom: [] }),
       listReviews: async () => [
         { id: 77, user: LEAD.githubLogin, state: 'APPROVED', body: 'Approved.\n\n<!-- openadlc-seat:lead-reviewer -->', submittedAt: '2026-10-01T10:05:00Z', commitId: HEAD },
-        { id: 78, user: 'janedoe', state: 'APPROVED', body: 'Looks right.', submittedAt: '2026-10-01T10:04:00Z', commitId: HEAD },
+        ...(options.hers ? [{ id: 78, user: 'janedoe', state: 'APPROVED', body: 'Looks right.', submittedAt: '2026-10-01T10:04:00Z', commitId: HEAD }] : []),
       ],
       // Her review sits before the merge line's update of the branch.
       listPullHistory: async () => [
@@ -2241,6 +2241,7 @@ describe('a person’s approval that counts for nothing on the diff, at the swee
       {
         actors: { asBot: async () => github },
         reviewStanding: reading.reviewStanding.bind(reading),
+        humanReviewRules: reading.humanReviewRules.bind(reading),
         setReviewGate: async (input: { state: string; description: string }) => (published.push(input), input),
       } as never,
       {} as never,
@@ -2250,6 +2251,25 @@ describe('a person’s approval that counts for nothing on the diff, at the swee
     );
     return { scheduler, published };
   }
+
+  // 620legal/OpenADLC#199: with no approval of hers at all, the lead's
+  // approval leaves the gate waiting on her for a first one, which no card said.
+  it('records the wait on a person who has not approved, once for the head, with the path that names them', async () => {
+    const { scheduler, published } = sweeping({ hers: false });
+    const quiet = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const actions = await scheduler.settleGates();
+      expect(published).toEqual([expect.objectContaining({ state: 'pending', description: 'waiting on @janedoe' })]);
+      expect(actions).toContain("openadlc-testbed#2: waits on @janedoe's approval of 692cd1f");
+      await scheduler.settleGates();
+    } finally {
+      quiet.mockRestore();
+    }
+    expect(store.events.filter((event) => event.type === 'review.person_awaited').map((event) => event.payload)).toEqual([
+      { subjectRef: 'openadlc-testbed#2', login: 'janedoe', head: HEAD, repo: 'openadlc-testbed', pr: 2, issue: 1, paths: ['config/'] },
+    ]);
+    expect(store.events.filter((event) => event.type === 'review.person_asked_again')).toEqual([]);
+  });
 
   it('asks the person once, on the head, and the gate says why it waits', async () => {
     const { scheduler, published } = sweeping();
@@ -2275,6 +2295,8 @@ describe('a person’s approval that counts for nothing on the diff, at the swee
         why: 'their approval is not known to be of 692cd1f',
       },
     ]);
+    // Asked again, she has that card, and not a first-approval one too.
+    expect(store.events.filter((event) => event.type === 'review.person_awaited')).toEqual([]);
   });
 });
 

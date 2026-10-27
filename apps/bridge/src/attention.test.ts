@@ -382,6 +382,81 @@ describe('what needs a person', () => {
     });
   });
 
+  describe('a crew pull request the lead approved that waits on a person', () => {
+    // 620legal/OpenADLC#199: a crew pull request under `infra/` had the lead's
+    // approval and `review-gate` waiting on @janedoe. The merge line never
+    // asks for a crew branch's CI while it waits on a person, so the green
+    // "waits for you to merge it" card never came, and Needs you said nothing.
+    const B = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+    const awaited = (at: string, payload: Record<string, unknown> = {}) => ({
+      at,
+      payload: { subjectRef: 'openadlc-testbed#29', repo: 'openadlc-testbed', pr: 29, issue: 11, login: 'janedoe', head: B, paths: ['infra/'], ...payload },
+    });
+    const reviewed = (at: string, state: string, login = 'JaneDoe') => ({ at, payload: { subjectRef: 'openadlc-testbed#29', reviewId: 7, login, commit: B, state } });
+    const base = { now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] };
+
+    it('says whose approval it waits for, the paths that name them, and where to review it', async () => {
+      const { attentionItems } = await load();
+      const items = attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10))] });
+
+      expect(items).toEqual([
+        expect.objectContaining({
+          id: 'approval:openadlc-testbed#29@janedoe',
+          kind: 'merge_waiting',
+          group: 'work',
+          headline: "Pull request #29 waits for @janedoe's approval",
+          subject: expect.objectContaining({ repo: 'openadlc-testbed', number: 11, ref: 'openadlc-testbed#11' }),
+          since: minutesAgo(10),
+          detail: "The lead approved 692cd1f. It changes `infra/`, which AGENTS.md's Human review names @janedoe for. OpenADLC does not merge it until @janedoe approves it.",
+          actions: [{ kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc-testbed/pull/29/files' }],
+          awaiting: { login: 'janedoe', again: false, paths: ['infra/'] },
+        }),
+      ]);
+      const [unread] = attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10), { paths: [] })] });
+      expect(unread?.detail).toBe("The lead approved 692cd1f. It changes a path AGENTS.md's Human review names @janedoe for. OpenADLC does not merge it until @janedoe approves it.");
+    });
+
+    it('goes once they approve or ask for changes, but not for a comment, nor for a review from before it', async () => {
+      const { attentionItems } = await load();
+      const after = (personReviews: ReturnType<typeof reviewed>[]) => attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10))], personReviews });
+
+      expect(after([reviewed(minutesAgo(2), 'approved')])).toEqual([]);
+      expect(after([reviewed(minutesAgo(2), 'changes_requested')])).toEqual([]);
+      expect(after([reviewed(minutesAgo(2), 'commented')])).toHaveLength(1);
+      expect(after([reviewed(minutesAgo(20), 'approved')])).toHaveLength(1);
+      expect(after([reviewed(minutesAgo(2), 'approved', 'someone-else')])).toHaveLength(1);
+    });
+
+    it('goes when its issue leaves Review, its pull request closed, or a newer round opened', async () => {
+      const { attentionItems } = await load();
+      const wait = [awaited(minutesAgo(10))];
+      const at = (stage: string) => ISSUES.map((one) => (one.number === 11 ? { ...one, stage: stage as never } : one));
+
+      for (const stage of ['merged', 'build', 'done']) expect(attentionItems({ ...base, issues: at(stage), personAwaits: wait })).toEqual([]);
+      expect(attentionItems({ ...base, personAwaits: wait, closed: new Set(['openadlc-testbed#29']) })).toEqual([]);
+      expect(attentionItems({ ...base, personAwaits: wait, roundsOpened: [{ at: minutesAgo(2), payload: { subjectRef: 'openadlc-testbed#29', sha: 'c0ffee0' } }] })).toEqual([]);
+      // The round the lead approved in opened before the wait.
+      expect(attentionItems({ ...base, personAwaits: wait, roundsOpened: [{ at: minutesAgo(30), payload: { subjectRef: 'openadlc-testbed#29', sha: B } }] })).toHaveLength(1);
+    });
+
+    it('gives one item per pull request and person, the approve-again one when that applies', async () => {
+      const { attentionItems } = await load();
+      const ask = {
+        at: minutesAgo(5),
+        payload: { subjectRef: 'openadlc-testbed#29', repo: 'openadlc-testbed', pr: 29, issue: 11, login: 'JaneDoe', head: B, approvedOn: null, shownOn: B, why: 'their approval is not known to be of 692cd1f' },
+      };
+      const items = attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10)), awaited(minutesAgo(8))], personAsks: [ask] });
+
+      expect(items.map((item) => item.id)).toEqual(['approve-again:openadlc-testbed#29@janedoe']);
+      expect(items[0]?.awaiting).toEqual({ login: 'JaneDoe', again: true, paths: [] });
+      // Two people on one pull request are two items.
+      expect(attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10)), awaited(minutesAgo(9), { login: 'someone-else' })] }).map((item) => item.id).sort()).toEqual([
+        'approval:openadlc-testbed#29@janedoe',
+        'approval:openadlc-testbed#29@someone-else',
+      ]);
+    });
+  });
+
   it('asks a person about issues OpenADLC will not take on its own, one card per repository', async () => {
     // Filed by an old crew account with no access, they were skipped in silence.
     const { attentionItems } = await load();
@@ -2218,8 +2293,9 @@ describe('GET /v1/attention', () => {
     // And the send-backs a person has to take, the issues intake stopped
     // trying, and the design memory a design superseded, which this store has
     // none of.
-    // And who was asked to approve a pull request again; the reviews people
-    // submitted are read only when one of those was read.
+    // And who was asked to approve a pull request again, or is waited on for
+    // a first approval; the reviews people submitted, and the rounds opened,
+    // are read only when one of those was read.
     expect(store.eventTypes).toEqual([
       'review.stalled',
       'send_back.stalled',
@@ -2228,6 +2304,7 @@ describe('GET /v1/attention', () => {
       'task.resume_waits_on_github',
       'design_memory.superseded',
       'review.person_asked_again',
+      'review.person_awaited',
       // The starts a full seat turned away, for the work stuck behind none.
       'stage.waiting_on_seat',
     ]);

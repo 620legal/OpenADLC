@@ -1619,6 +1619,29 @@ one head it says so, once, as below.
 | GitHub has not yet worked out whether it can be merged | GitHub has said `unknown` at this head for ten minutes; it usually works it out within seconds of a push | Nothing, usually: the line reads it again on each pass. If it stays, the merge box on the pull request's GitHub page says whether it can merge |
 | GitHub says it is blocked, and did not say why | Nothing OpenADLC read explains it. It names what the rules also require that it did not check (every conversation resolved, a code owner's approval, a deployment), or says no ruleset applies to the base, which leaves a branch protection rule (Settings → Branches), which only an admin can read | The merge box on the pull request's GitHub page lists what is missing |
 
+## A pull request the lead approved waits for a person under Human review
+
+A crew pull request that changes a path `AGENTS.md`'s `## Human review`
+names someone for waits on that person's approval of its head after the lead
+approves it: `review-gate` reads `waiting on @<login>`. A crew branch's CI runs
+only once the merge line asks for it, so such a pull request never reaches the
+front of the line green, and the card above never comes. Instead, once the
+lead's approval counts, **Needs you** shows one card per pull request and
+person, "Pull request #N waits for @<login>'s approval". The card names the
+Human review paths that name them, and its **Review it on GitHub** button opens
+the pull request's files. The issue's board card says the same: `Approved ·
+waiting for @<login>'s approval`.
+
+Approving the head on GitHub clears it, and so does a request for changes, as
+the review delivery arrives. It also goes when the pull request merges or
+closes, when the issue leaves Review, or when a new review round opens on a
+new diff. In that last case the next card comes when the lead approves the
+new head. If an approval the person gave stops counting on a new diff, the
+"needs @<login>'s approval again" card replaces this one; you never get both.
+The bridge records the wait where the gate is settled (`review.person_awaited`,
+once per head), on a review delivery and on the gate sweep, so a pull request
+already waiting gets its card on the next sweep.
+
 ## A pull request waits on "GitHub Actions minutes this month reached the cap"
 
 The card in Review reads "Checks running before it merges" though no CI run
