@@ -59,10 +59,35 @@ describe('the OpenADLC row', () => {
   });
 
   it('says why there is nothing to take, and why it cannot update at all', () => {
-    expect(wouldTakeText({ ...VIEW, candidate: null, candidateReason: 'on v0.2.0, the newest release' })).toBe('on v0.2.0, the newest release');
+    expect(wouldTakeText({ ...VIEW, candidate: null, candidateReason: 'on v0.2.0, the newest release' })).toBe('on v0.2.0, the newest release (looked Oct 21, 10:00)');
     const refused = { ...VIEW, applicable: false, reason: 'the checkout is on mine, not main; releases are taken only onto main' };
     expect(text(refused)).toContain('the checkout is on mine, not main');
     expect(updateNowRefusal(refused)).toBe(refused.reason);
+  });
+
+  it('says when it last looked for a release, in the install’s time zone', () => {
+    const looked = { ...VIEW, checkedAt: '2026-10-26T21:02:00.000Z', timeZone: 'Europe/Berlin' };
+    expect(wouldTakeText(looked)).toBe('would take v0.2.0, published Oct 20, 14:00 (looked Oct 26, 22:02)');
+    expect(wouldTakeText({ ...looked, candidate: null, candidateReason: 'on v0.1.16, the newest release' })).toBe('on v0.1.16, the newest release (looked Oct 26, 22:02)');
+    expect(text(looked)).toContain('(looked Oct 26, 22:02)');
+    // Never asked: there is no look to give a time for.
+    expect(wouldTakeText({ ...VIEW, candidate: null, candidateReason: 'not asked yet', checkedAt: null })).toBe('not asked yet');
+  });
+
+  it('names the release a run is taking, not what the last look said', () => {
+    const running = { ...VIEW, candidate: null, candidateReason: 'on v0.1.16, the newest release', running: { ...RUN, tag: 'v0.1.17', phase: 'preparing' as const } };
+    expect(wouldTakeText(running)).toBe('taking v0.1.17');
+    expect(text(running)).not.toContain('v0.1.16');
+    // An older release than the candidate, once a newer one failed its check.
+    expect(wouldTakeText({ ...VIEW, running: { ...RUN, tag: 'v0.1.9', phase: 'waiting' } })).toBe('taking v0.1.9');
+  });
+
+  it('disables Check again while a run is in flight or the row is busy', () => {
+    const row = (view: SelfUpdateView, busy: 'checking' | null = null) =>
+      renderToStaticMarkup(<ul><SelfUpdateRow view={view} busy={busy} error={null} onCheck={() => undefined} /></ul>);
+    expect(row(VIEW)).toMatch(/<button[^>]*aria-label="Check again for an OpenADLC release"(?![^>]*disabled)[^>]*>Check again</);
+    expect(row({ ...VIEW, running: { ...RUN, phase: 'preparing' } })).toMatch(/<button[^>]*aria-label="Check again for an OpenADLC release"[^>]*disabled=""/);
+    expect(row(VIEW, 'checking')).toMatch(/disabled=""[^>]*>Checking…</);
   });
 
   it('says each phase of a run, the tasks it waits for among them', () => {
@@ -207,6 +232,29 @@ describe('the row’s controls', () => {
       { method: 'PATCH', body: '{"mode":"manual"}' },
       { method: 'POST', body: '{}' },
     ]);
+    await act(async () => root.unmount());
+    host.remove();
+  });
+
+  it('asks again through /api/self-update/check, and says a refusal in the row', async () => {
+    const urls: string[] = [];
+    const refusal = 'looked for a release 30 seconds ago; check again in 30 seconds';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        urls.push(`${init?.method ?? 'GET'} ${url}`);
+        if (url === '/api/self-update/check') return Response.json({ error: refusal }, { status: 429 });
+        return Response.json(VIEW);
+      }),
+    );
+    const host = document.createElement('ul');
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => root.render(<SelfUpdate initial={VIEW} />));
+    const button = host.querySelector('button[aria-label="Check again for an OpenADLC release"]') as HTMLButtonElement;
+    await act(async () => button.click());
+    expect(urls[0]).toBe('POST /api/self-update/check');
+    expect(host.textContent).toContain(refusal);
     await act(async () => root.unmount());
     host.remove();
   });

@@ -354,6 +354,96 @@ describe('what System shows', () => {
   });
 });
 
+describe('what a run found', () => {
+  /** What the last look said five minutes ago: the release in use was the newest then. */
+  function lookedBefore(f: Fixture): string {
+    const stored = JSON.stringify({ tag: null, sha: null, publishedAt: null, reason: 'on v0.1.16, the newest release', checkedAt: new Date(f.now.getTime() - 5 * 60_000).toISOString(), forHead: f.first });
+    f.settings.selfUpdateCandidate = stored;
+    return stored;
+  }
+  const stored = () => JSON.parse(fixture.settings.selfUpdateCandidate ?? '{}') as Record<string, unknown>;
+
+  it('keeps the release a run chose as the candidate, through a run that then fails', async () => {
+    lookedBefore(fixture);
+    fixture.pnpmFails = true;
+    const update = updater(fixture);
+    await update.start({ trigger: 'console', actor: 'jane@example.com' });
+    expect(stored()).toMatchObject({ tag: 'v0.2.0', sha: fixture.release, publishedAt: '2026-10-18T12:00:00Z', reason: 'v0.2.0 is the newest release', forHead: fixture.first, checkedAt: fixture.now.toISOString() });
+    await until(() => last() !== null);
+    await update.removing;
+    expect(last()).toMatchObject({ state: 'failed', step: 'install' });
+    expect(stored()).toMatchObject({ tag: 'v0.2.0', forHead: fixture.first });
+    expect((await update.view()).candidate).toMatchObject({ tag: 'v0.2.0' });
+  });
+
+  it('keeps a run’s finding that there is nothing newer, with its reason', async () => {
+    git(fixture.checkout, 'pull', '-q', '--ff-only', 'origin', 'main');
+    fixture.settings.selfUpdateCandidate = JSON.stringify({ tag: 'v0.2.0', sha: fixture.release, publishedAt: null, reason: 'v0.2.0 is the newest release', checkedAt: fixture.now.toISOString(), forHead: fixture.release });
+    await updater(fixture).start({ trigger: 'console', actor: 'jane@example.com' });
+    expect(stored()).toEqual({ tag: null, sha: null, publishedAt: null, reason: 'on v0.2.0, the newest release', checkedAt: fixture.now.toISOString(), forHead: fixture.release });
+  });
+
+  it('leaves the candidate as it was when the run could not read the releases', async () => {
+    const before = lookedBefore(fixture);
+    Object.defineProperty(fixture, 'releases', {
+      get: () => {
+        throw new Error('GitHub is down');
+      },
+      configurable: true,
+    });
+    await updater(fixture).start({ trigger: 'console', actor: 'jane@example.com' });
+    expect(last()).toMatchObject({ state: 'failed', step: 'releases' });
+    expect(fixture.settings.selfUpdateCandidate).toBe(before);
+  });
+});
+
+describe('Check again', () => {
+  /** Counts the reads of the releases, which are what asks GitHub. */
+  function countReads(f: Fixture): () => number {
+    let reads = 0;
+    const releases = f.releases;
+    Object.defineProperty(f, 'releases', {
+      get: () => {
+        reads += 1;
+        return releases;
+      },
+      configurable: true,
+    });
+    return () => reads;
+  }
+  function lookedAgo(f: Fixture, ms: number): void {
+    f.settings.selfUpdateCandidate = JSON.stringify({ tag: null, sha: null, publishedAt: null, reason: 'on v0.1.16, the newest release', checkedAt: new Date(f.now.getTime() - ms).toISOString(), forHead: f.first });
+  }
+
+  it('is refused within a minute of the last look, naming the seconds, and asks GitHub nothing', async () => {
+    lookedAgo(fixture, 30_000);
+    const reads = countReads(fixture);
+    const refused = await updater(fixture).checkAgain().catch((error: unknown) => error);
+    expect(refused).toMatchObject({ status: 429, message: 'looked for a release 30 seconds ago; check again in 30 seconds' });
+    expect(reads()).toBe(0);
+  });
+
+  it('is refused within a minute of a look asked on another commit too', async () => {
+    lookedAgo(fixture, 10_000);
+    fixture.settings.selfUpdateCandidate = JSON.stringify({ ...JSON.parse(fixture.settings.selfUpdateCandidate!), forHead: fixture.release });
+    await expect(updater(fixture).checkAgain()).rejects.toMatchObject({ status: 429 });
+  });
+
+  it('asks at once after a minute, and two presses together ask once', async () => {
+    lookedAgo(fixture, 61_000);
+    const reads = countReads(fixture);
+    const update = updater(fixture);
+    const [one, two] = await Promise.all([update.checkAgain(), update.checkAgain()]);
+    expect(reads()).toBe(1);
+    expect(one.candidate).toMatchObject({ tag: 'v0.2.0' });
+    expect(two.candidate).toMatchObject({ tag: 'v0.2.0' });
+    expect(one.checkedAt).toBe(fixture.now.toISOString());
+    // The look it just made is under a minute old.
+    await expect(update.checkAgain()).rejects.toMatchObject({ status: 429, message: 'looked for a release 0 seconds ago; check again in 60 seconds' });
+    expect(reads()).toBe(1);
+  });
+});
+
 describe('the schedule', () => {
   it('claims this week’s slot on the first look and starts nothing', async () => {
     const lines = await updater(fixture).tick();
@@ -867,7 +957,7 @@ describe('the routes', () => {
     registerSelfUpdateRoutes(router, updater(fixture));
     const routes = (router as unknown as { routes: { method: string; path: string }[] }).routes;
     expect(routes.map((route) => `${route.method} ${route.path}`)).toEqual(
-      expect.arrayContaining(['GET /v1/self-update', 'POST /v1/self-update', 'PATCH /v1/self-update']),
+      expect.arrayContaining(['GET /v1/self-update', 'POST /v1/self-update', 'PATCH /v1/self-update', 'POST /v1/self-update/check']),
     );
   });
 });
