@@ -3602,6 +3602,7 @@ export class Webhooks {
    * failure is run again, once, as the app, and a second on the same run is
    * taken as real. Reviewers no longer read CI at all: they review the diff,
    * and a real failure after the lead approved sends the work back to build.
+   * A pass moves the merge line.
    */
   private async onCiRun(repoName: string, repoFullName: string, ci: CiRunOutcome): Promise<void> {
     const found = await repos.getRepoByName(repoName);
@@ -3620,6 +3621,18 @@ export class Webhooks {
       if (pull && pull.state === 'open' && pull.headSha === ci.sha) pulls.push({ number, headRef: pull.headRef });
     }
     if (pulls.length === 0) return;
+
+    // A pass moves the merge line now. Found live: an Actions-run `ci` sends
+    // no `check_suite.completed`, `check_run` or `status` — in 14 days the
+    // bridge recorded none — so `onChecks` never fired for it, and every crew
+    // pull request waited for the next merge job, up to 10 minutes after its
+    // run went green. This delivery is the only word that CI finished; the
+    // job stays the backstop for one that never came. Once per delivery, not
+    // per pull request: `advance` moves the whole line a step.
+    if (ci.outcome === 'passed') {
+      await this.mergeLine.advance(repo.name).catch(() => null);
+      return;
+    }
     const target = `${repo.name}#${pulls.map((pull) => pull.number).join(',#')}`;
 
     // A first failure is run again once. When that cannot happen — no app, no
@@ -3629,8 +3642,6 @@ export class Webhooks {
     if (ci.outcome === 'failed' && ci.attempt === 1) {
       if ((await this.rerunOnce(repo.fullName, target, ci)) !== 'unavailable') return;
     }
-
-    if (ci.outcome !== 'failed') return;
 
     // Failed again after its one rerun, or with no rerun to be had: real. The
     // reviewers reviewed without CI; once the lead has approved, CI is what is

@@ -2063,7 +2063,11 @@ an issue, so the bridge adds whichever it lacks afterwards, and the app makes
 
 The merge job moves each repository's line along by one step. Everything it
 waits for also arrives as a webhook, so this is the safety net rather than the
-mechanism: a delivery that never came costs a few minutes.
+mechanism: a delivery that never came costs a few minutes. CI finishing is the
+`workflow_run.completed` of a passing `ci` run on an open pull request's
+head, which moves the line at once; an Actions-run `ci` sends no
+`check_suite`, `check_run` or `status` delivery, so without it every merge
+waited for this job.
 
 The stage sweep starts the bot a staffed stage belongs to when nobody is on it.
 A webhook that never arrived, a bot that was busy at the time, and a label applied
