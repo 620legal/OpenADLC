@@ -204,6 +204,8 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // brings: as an engine update, a person who may change settings decides.
   'POST /v1/self-update': 'admin',
   'PATCH /v1/self-update': 'admin',
+  // Asks GitHub at once, at most once a minute (`SelfUpdate.checkAgain`).
+  'POST /v1/self-update/check': 'admin',
   'POST /v1/repo-setup/labels': 'admin',
   'POST /v1/repo-setup/rules': 'admin',
   'POST /v1/repo-setup/production': 'admin',

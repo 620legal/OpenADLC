@@ -525,14 +525,30 @@ describe('the release a cloud install takes', () => {
     expect(world.calls.filter((call) => call.args.includes('refs/tags/v0.3.0'))).toEqual([]);
   });
 
+  it('keeps the release a run takes as the candidate, with the newest it passed', async () => {
+    // Asked five minutes ago, before v0.2.0 and v0.3.0 were out.
+    world.settings.selfUpdateCandidate = JSON.stringify({ tag: null, sha: null, publishedAt: null, reason: 'on v0.1.0, the newest release', checkedAt: new Date(world.now.getTime() - 5 * 60_000).toISOString(), forHead: COMMITS['v0.1.0'] });
+    world.live = [{ id: 't1', bot: 'builder', subjectRef: 'openadlc#12', kind: 'build' }];
+    const update = world.updater();
+    await update.start({ trigger: 'console', actor: 'jane@example.com' });
+    const stored = JSON.parse(world.settings.selfUpdateCandidate ?? '{}') as Record<string, unknown>;
+    expect(stored).toMatchObject({ tag: 'v0.2.0', sha: COMMITS['v0.2.0'], newest: 'v0.3.0', forHead: COMMITS['v0.1.0'], checkedAt: world.now.toISOString() });
+    expect(stored.reason).toBe('takes the next release, v0.2.0, not v0.3.0: a cloud install takes one release at a time, since its bridge and its host each migrate the database as they start');
+    await until(() => world.run()?.phase === 'waiting');
+    expect((await update.view()).running).toMatchObject({ tag: 'v0.2.0' });
+  });
+
   it('stops at a next release it cannot take, and takes no later one', async () => {
     world.mutable.add('v0.2.0');
     const update = world.updater();
     const candidate = await update.refreshCandidate(true);
     expect(candidate).toMatchObject({ tag: null });
     expect(candidate?.reason).toMatch(/^the next release, v0\.2\.0, is not an immutable release.*so it stays on v0\.1\.0 and takes no later one: roll it past v0\.2\.0 by hand/);
+    const kept = world.settings.selfUpdateCandidate;
     await update.start({ trigger: 'schedule', actor: 'schedule' });
     expect(world.last()).toMatchObject({ state: 'failed', step: 'releases', tag: 'v0.2.0' });
+    // A run that took nothing it could not take leaves what the last look said.
+    expect(world.settings.selfUpdateCandidate).toBe(kept);
     expect(world.calls.filter((call) => call.args.includes('refs/tags/v0.3.0'))).toEqual([]);
     expect(world.events).toEqual([]);
   });
@@ -566,9 +582,12 @@ describe('the release a cloud install takes', () => {
     world.services['openadlc-bridge']!.revisions.set('openadlc-bridge-00001', mirrorRef('service', 'v0.3.0'));
     const update = world.updater();
     expect(await update.refreshCandidate(true)).toMatchObject({ tag: null, reason: 'on v0.3.0, the newest release' });
+    world.settings.selfUpdateCandidate = JSON.stringify({ tag: 'v0.3.0', sha: COMMITS['v0.3.0'], publishedAt: null, reason: 'v0.3.0 is the next release', checkedAt: new Date(world.now.getTime() - 5 * 60_000).toISOString(), forHead: COMMITS['v0.3.0'] });
     await update.start({ trigger: 'console', actor: 'jane@example.com' });
     expect(world.last()).toMatchObject({ state: 'current', reason: 'on v0.3.0, the newest release' });
     expect(world.events).toEqual([]);
+    // What the run found is the candidate now, in place of the one before.
+    expect(JSON.parse(world.settings.selfUpdateCandidate ?? '{}')).toEqual({ tag: null, sha: null, publishedAt: null, reason: 'on v0.3.0, the newest release', checkedAt: world.now.toISOString(), forHead: COMMITS['v0.3.0'] });
   });
 });
 

@@ -3133,8 +3133,8 @@ ended, and the next run. It has the same choice as an engine's row,
 unless moved) or *Only when I press Update*, and **Update now**. An install
 from before this has the same weekly default; its first look claims this
 week's slot without running, so its first update is the next Sunday at 18:00.
-Only an admin can press Update now or change the schedule (`GET`, `POST` and
-`PATCH /v1/self-update`).
+Only an admin can press Update now, Check again or change the schedule (`GET`,
+`POST` and `PATCH /v1/self-update`, and `POST /v1/self-update/check`).
 
 **A tag is a deploy.** On the schedule, the default, every release a code
 owner tags is taken by every install that updates itself at its next run,
@@ -3164,7 +3164,16 @@ nothing, and the row says why: it never stashes, merges over, resets or
 discards what a person changed. A checkout ahead of the newest release is current.
 What an update would take is asked again whenever the commit in use changes, not
 only every quarter hour, so the row after an update names the next release after
-the new one. It needs a GitHub
+the new one. The row says when it last looked, in `systemTimeZone` ("on
+v0.1.16, the newest release (looked Oct 26, 21:02)"), since a release published
+since is not seen until the next look. **Check again** looks at once, at most
+once a minute; a second press within the minute is refused with the seconds
+left, and two presses together ask GitHub once. A run's own look at the
+releases, from Update now or the schedule, becomes what the row says an update
+would take when it chose a release or found none newer, so the row agrees with
+the run once it ends, whether it passed or failed; a run that could not read
+the releases leaves the last look as it was. While a run goes, the row says
+"taking <tag>", the release that run is taking. It needs a GitHub
 CLI where the bridge runs whose `gh attestation verify` has the flags
 [Checking a release](#checking-a-release) uses; without one the row says so.
 

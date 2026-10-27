@@ -113,13 +113,21 @@ export function inUseText(view: SelfUpdateView): string {
   return `${short(view.inUse.sha)}${view.inUse.tag ? ` (${view.inUse.tag})` : ''}${date}`;
 }
 
-/** "would take v0.2.0, published Oct 18", or why there is nothing to take. */
+/**
+ * "would take v0.2.0, published Oct 18, 12:00 (looked Oct 21, 10:00)", or why
+ * there is nothing to take, with when that was looked for; while a run goes,
+ * "taking v0.2.0". Without the look's time a stored "the newest release" read
+ * as a fact about now, minutes after a newer one was published.
+ */
 export function wouldTakeText(view: SelfUpdateView): string {
-  if (!view.candidate) return view.candidateReason;
+  // The run's own tag, which may be an older release than the candidate when a newer one failed its check.
+  if (view.running) return `taking ${view.running.tag}`;
+  const looked = view.checkedAt ? ` (looked ${when(view.checkedAt, view.timeZone)})` : '';
+  if (!view.candidate) return `${view.candidateReason}${looked}`;
   const published = view.candidate.publishedAt ? `, published ${when(view.candidate.publishedAt, view.timeZone)}` : '';
   // A cloud install never skips one: each release's bridge and host migrate as they start.
   const next = view.candidate.newest ? `: it takes the next release, not ${view.candidate.newest}, one at a time` : '';
-  return `would take ${view.candidate.tag}${published}${next}`;
+  return `would take ${view.candidate.tag}${published}${next}${looked}`;
 }
 
 const CLOUD_STEPS: { step: CloudStep | 'waiting'; name: string }[] = [
@@ -223,7 +231,7 @@ export function updateNowRefusal(view: SelfUpdateView): string | null {
   return null;
 }
 
-export type SelfUpdateBusy = 'updating' | 'saving' | null;
+export type SelfUpdateBusy = 'updating' | 'saving' | 'checking' | null;
 
 /** The row, drawn from a view; `SelfUpdate` below reads the view and handles the clicks. */
 export function SelfUpdateRow({
@@ -232,12 +240,14 @@ export function SelfUpdateRow({
   error,
   onSchedule,
   onUpdate,
+  onCheck,
 }: {
   view: SelfUpdateView;
   busy: SelfUpdateBusy;
   error: string | null;
   onSchedule?: (patch: Partial<SelfUpdateView['schedule']>) => void;
   onUpdate?: () => void;
+  onCheck?: () => void;
 }) {
   const sentence = selfUpdateSentence(view);
   const refusal = updateNowRefusal(view);
@@ -250,6 +260,17 @@ export function SelfUpdateRow({
         <span className="font-medium text-soft">OpenADLC</span>
         <span className="font-mono text-[11.5px] text-body">{inUseText(view)}</span>
         <span className="text-[11.5px] text-dim">{wouldTakeText(view)}</span>
+        {onCheck ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            aria-label="Check again for an OpenADLC release"
+            disabled={busy !== null || view.running !== null}
+            onClick={onCheck}
+          >
+            {busy === 'checking' ? 'Checking…' : 'Check again'}
+          </Button>
+        ) : null}
         <span className="ml-auto flex items-center gap-3">
           {onUpdate ? (
             <Button
@@ -392,11 +413,11 @@ export function SelfUpdate({ initial = null }: { initial?: SelfUpdateView | null
     return () => clearInterval(timer);
   }, [watching, load]);
 
-  async function act(kind: Exclude<SelfUpdateBusy, null>, init: RequestInit): Promise<void> {
+  async function act(kind: Exclude<SelfUpdateBusy, null>, init: RequestInit, path = '/api/self-update'): Promise<void> {
     setBusy(kind);
     setError(null);
     try {
-      const response = await fetch('/api/self-update', { ...init, headers: { 'content-type': 'application/json' } });
+      const response = await fetch(path, { ...init, headers: { 'content-type': 'application/json' } });
       if (!response.ok) throw new Error(await bridgeError(response));
       setView((await response.json()) as SelfUpdateView);
     } catch (cause) {
@@ -417,6 +438,7 @@ export function SelfUpdate({ initial = null }: { initial?: SelfUpdateView | null
       error={error}
       onSchedule={(patch) => void act('saving', { method: 'PATCH', body: JSON.stringify(patch) })}
       onUpdate={() => void act('updating', { method: 'POST', body: '{}' })}
+      onCheck={() => void act('checking', { method: 'POST', body: '{}' }, '/api/self-update/check')}
     />
   );
 }
