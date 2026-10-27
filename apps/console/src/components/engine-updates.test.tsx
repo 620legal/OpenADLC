@@ -10,6 +10,7 @@ import {
   engineUpdatesTitle,
   lastResultSentence,
   nextRunSentence,
+  RECIPE_BEHIND,
   versionChanges,
   whenDay,
   type EngineUpdateResult,
@@ -333,6 +334,29 @@ describe('the engine updates panel', () => {
   it('describes a change of versions by the names people use', () => {
     expect(versionChanges(PINS, { ...PINS, [CODEX]: '0.156.1' })).toBe('codex 0.155.1 → 0.156.1');
     expect(versionChanges(PINS, null)).toBe('');
+  });
+
+  it('says when the bots’ image was built from an older recipe than this release’s, while nothing is running', () => {
+    // A release that added uv left a cloud install's image without it, and the row said nothing (#194).
+    const unescaped = (html: string) => html.replace(/&#x27;/g, "'");
+    const behind = { current: `sha256:${'b'.repeat(64)}`, built: null, behind: true };
+    expect(RECIPE_BEHIND).toBe(
+      "The bots' image was built from an older recipe than this release's. Update all now rebuilds it from this release's recipe, with the versions it has now.",
+    );
+    expect(unescaped(render(view({ recipe: behind })))).toContain(RECIPE_BEHIND);
+    expect(unescaped(render(view({ recipe: { ...behind, built: behind.current, behind: false } })))).not.toContain(RECIPE_BEHIND);
+    expect(unescaped(render(view({ recipe: behind, running: { startedAt: '2026-09-27T15:00:30.000Z', trigger: 'release' } })))).not.toContain(
+      RECIPE_BEHIND,
+    );
+    // A bridge from before the recipe says nothing of it.
+    expect(unescaped(render(view()))).not.toContain(RECIPE_BEHIND);
+  });
+
+  it('says a rebuild from a new recipe as one, not as a change of versions', () => {
+    expect(lastResultSentence(updated({ to: PINS, rebuilt: true, trigger: 'release', reason: "rebuilt from this release's recipe; every version is as it was" }), ZONE)).toEqual({
+      text: "Sep 27, 18:02 — Rebuilt from this release's recipe, with every version as it was; checked against Newest Opus on Anthropic Max, Newest Codex on OpenAI API key.",
+      tone: 'good',
+    });
   });
 });
 

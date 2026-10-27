@@ -303,3 +303,82 @@ describe('the bot image proves uv runs for the bot', () => {
     expect(script.indexOf('for cli in uv uvx; do')).toBeLessThan(script.indexOf('is ready"'));
   });
 });
+
+/**
+ * The image is stamped with its recipe's digest, and hostd rebuilds one whose
+ * label is not the digest of the recipe it has now. A release that added uv
+ * to Dockerfile.bot left a cloud install's image without it, because only a
+ * newer engine version rebuilt the image (#194).
+ */
+describe('the bot image’s recipe digest', () => {
+  const script = readFileSync(join(ROOT, 'infra', 'local', 'build-bot-image.sh'), 'utf8');
+  const recipe = /^RECIPE_FILES=\(([^)]*)\)$/m.exec(script)?.[1]?.trim().split(/\s+/) ?? [];
+
+  /** `--recipe-digest` from a copy of the recipe in `dir`, or the one in the repository. */
+  function digest(dir = join(ROOT, 'infra', 'local')): string {
+    return execFileSync('bash', [join(dir, 'build-bot-image.sh'), '--recipe-digest'], { encoding: 'utf8' }).trim();
+  }
+
+  /** A copy of the recipe in a temporary directory. */
+  function copy(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-recipe-'));
+    for (const name of recipe) writeFileSync(join(dir, name), readFileSync(join(ROOT, 'infra', 'local', name)));
+    return dir;
+  }
+
+  it('covers the script, the Dockerfile, and every file the Dockerfile copies from its context', () => {
+    expect(recipe).toEqual(expect.arrayContaining(['build-bot-image.sh', 'Dockerfile.bot']));
+    const copiedFromContext = [...dockerfile.matchAll(/^(?:COPY|ADD)\s+((?:--[\w=:-]+\s+)*)(.+)$/gm)]
+      .filter((match) => !/--from=/.test(match[1] ?? ''))
+      .flatMap((match) => match[2]!.trim().split(/\s+/).slice(0, -1));
+    expect(copiedFromContext.length).toBeGreaterThan(0);
+    for (const source of copiedFromContext) {
+      expect(recipe, `${source} is copied into the image and not in RECIPE_FILES`).toContain(source);
+    }
+  });
+
+  it('is sha256 and stable', () => {
+    const first = digest();
+    expect(first).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(digest()).toBe(first);
+  });
+
+  it('is the same for a byte-for-byte copy, and changes when any one recipe file does', () => {
+    const dir = copy();
+    try {
+      const base = digest(dir);
+      expect(base).toBe(digest());
+      for (const name of recipe) {
+        const path = join(dir, name);
+        const before = readFileSync(path);
+        writeFileSync(path, Buffer.concat([before, Buffer.from('\n')]));
+        expect(digest(dir), `${name} changed and the digest did not`).not.toBe(base);
+        writeFileSync(path, before);
+        expect(digest(dir)).toBe(base);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses, naming the file, when a recipe file is missing', () => {
+    const dir = copy();
+    try {
+      rmSync(join(dir, 'bot-init'));
+      let said = '';
+      try {
+        execFileSync('bash', [join(dir, 'build-bot-image.sh'), '--recipe-digest'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (error) {
+        said = String((error as { stderr?: unknown }).stderr ?? '');
+      }
+      expect(said).toContain('bot-init is missing');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('is stamped on the image as openadlc.recipe, beside openadlc.engines', () => {
+    expect(script).toMatch(/^RECIPE="\$\(recipe_digest\)"$/m);
+    expect(script).toMatch(/--label "openadlc\.engines=\$\{ENGINES\}" \\\n\s+--label "openadlc\.recipe=\$\{RECIPE\}" \\/);
+  });
+});

@@ -48,6 +48,8 @@ export interface EngineUpdateResult {
   finishedAt: string;
   refreshed?: string[];
   deferred?: string[];
+  /** Rebuilt from this release's recipe with every version as it was. */
+  rebuilt?: true;
 }
 
 /** What the last run that was about one tool did to it. */
@@ -98,11 +100,29 @@ export interface EngineUpdatesView {
   last: EngineUpdateResult | null;
   hold: EngineVersions;
   /**
+   * The bots' image's recipe against this release's. Absent on a bridge from
+   * before it, and null where hostd did not answer or cannot build.
+   */
+  recipe?: { current: string | null; built: string | null; behind: boolean } | null;
+  /**
    * Whole days an engine CLI release must have been on npm before a run
    * takes it; 0 takes it at once. Absent on a bridge from before the setting.
    */
   minReleaseAgeDays?: number;
   attention: { title: string; detail: string } | null;
+}
+
+/**
+ * What the row says while the bots' image is behind its recipe. A release
+ * that added uv to Dockerfile.bot left a cloud install's image without it,
+ * and nothing here said so (#194).
+ */
+export const RECIPE_BEHIND =
+  "The bots' image was built from an older recipe than this release's. Update all now rebuilds it from this release's recipe, with the versions it has now.";
+
+/** Whether the row says `RECIPE_BEHIND`: the image is behind, and nothing is running that would rebuild it. */
+export function recipeBehind(view: Pick<EngineUpdatesView, 'recipe' | 'running'>): boolean {
+  return Boolean(view.recipe?.behind) && !view.running;
 }
 
 /** The waits the panel offers, and whatever the install has set besides. */
@@ -262,6 +282,9 @@ export function lastResultSentence(
   const changed = versionChanges(result.from, result.to);
   switch (result.state) {
     case 'updated':
+      if (result.rebuilt) {
+        return { text: `${at} — Rebuilt from this release's recipe, with every version as it was; ${checkedAgainst(result.checks)}.`, tone: 'good' };
+      }
       // hostd's reason is its own account of the change, when the names here fall short.
       return { text: `${at} — ${changed || result.reason}; ${checkedAgainst(result.checks)}.`, tone: 'good' };
     case 'current':
@@ -564,6 +587,8 @@ export function EngineUpdatesPanel({
             <span className="text-dim">Engine releases are taken once {releaseAge(view.minReleaseAgeDays)}</span>
           ))}
       </div>
+
+      {recipeBehind(view) && <p className="text-[12px] leading-relaxed text-soft">{RECIPE_BEHIND}</p>}
 
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="primary" size="sm" onClick={onUpdate} disabled={!canRun}>

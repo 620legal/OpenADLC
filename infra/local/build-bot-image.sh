@@ -24,7 +24,11 @@
 # or gh the repositories published today. GH_FROM names the running image when
 # gh is not moving, and its gh is copied into the candidate rather than
 # downloaded (see Dockerfile.bot). These engine pins are what a fresh install
-# starts from.
+# starts from. When the image's `openadlc.recipe` label is not this recipe's
+# digest (`--recipe-digest`), the update rebuilds it with every pin equal to
+# what the image carries, so a release's new recipe reaches the bots without
+# moving an engine. This script is part of that recipe: any edit to it, a
+# comment included, rebuilds every docker-driver install's bot image once.
 set -euo pipefail
 
 # The version a tool printed equals the pin. `node --version` is `v22.20.0`.
@@ -62,6 +66,49 @@ gh_from_for_builder() {
   printf '%s' "${image}"
 }
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The recipe: every file the build reads, here and in what Dockerfile.bot
+# COPYs into the image. Its digest is stamped as the `openadlc.recipe` label,
+# and hostd compares that with the digest of the recipe it has now. A release
+# that added uv to Dockerfile.bot left a cloud install's image without uv,
+# because only a newer engine version rebuilt it; an image whose label differs
+# is now rebuilt with the same pins (#194). A file Dockerfile.bot starts
+# copying goes in this list, or tests/images.test.ts fails.
+RECIPE_FILES=(build-bot-image.sh Dockerfile.bot bot-init openadlc-install)
+
+# `sha256:<hex>` over `<name> <sha256 of the file>` lines, in RECIPE_FILES'
+# order. hostd asks for it with `--recipe-digest` rather than computing it
+# itself, so the two cannot disagree about what it covers. macOS, where
+# install.sh runs this on the host, has shasum and no sha256sum.
+sha256_of() {
+  local said
+  if command -v sha256sum >/dev/null 2>&1; then
+    said="$(sha256sum)"
+  else
+    said="$(shasum -a 256)"
+  fi
+  printf '%s' "${said%% *}"
+}
+recipe_digest() {
+  local lines="" name sum
+  for name in "${RECIPE_FILES[@]}"; do
+    if [ ! -f "${HERE}/${name}" ]; then
+      echo "${HERE}/${name} is missing, and it is part of the bot image's recipe" >&2
+      return 1
+    fi
+    sum="$(sha256_of <"${HERE}/${name}")"
+    lines="${lines}${name} ${sum}"$'\n'
+  done
+  printf 'sha256:%s' "$(printf '%s' "${lines}" | sha256_of)"
+}
+
+if [ "${1:-}" = "--recipe-digest" ]; then
+  recipe_digest
+  echo
+  exit 0
+fi
+
 if [ "${1:-}" = "--gh-from" ]; then
   gh_from_for_builder "${2:-}"
   exit 0
@@ -87,7 +134,6 @@ GH_VERSION="${GH_VERSION:-}"
 GH_FROM="$(gh_from_for_builder "${GH_FROM:-}")"
 
 IMAGE="${IMAGE:-openadlc-bot:latest}"
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The forward proxy the build's own steps leave through, as a container on
 # Docker's default network sees it (`http://host.docker.internal:3128`). Unset
@@ -144,6 +190,7 @@ if [ -n "${GH_FROM}" ]; then
   version_args+=(--build-arg "GH_FROM=${GH_FROM}")
 fi
 ENGINES="$(engines_label "${label_specs[@]}")"
+RECIPE="$(recipe_digest)"
 
 echo "building ${IMAGE}"
 echo "  ${CLAUDE_CLI}"
@@ -159,6 +206,7 @@ docker build \
   ${version_args[@]+"${version_args[@]}"} \
   --build-arg ENGINE_CLI_PACKAGES="${CLAUDE_CLI} ${CODEX_CLI} ${GROK_CLI}" \
   --label "openadlc.engines=${ENGINES}" \
+  --label "openadlc.recipe=${RECIPE}" \
   -t "${IMAGE}" \
   "${HERE}"
 

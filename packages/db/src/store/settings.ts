@@ -61,6 +61,9 @@ export const SETTING_KEYS = [
   // which tools it was for, so a bridge that restarts mid-run records the
   // result against those tools and no others.
   'systemToolRun',
+  // The recipe digest of the bots' image the bridge last started a `release`
+  // engine update for, so it starts one run per new recipe and no more.
+  'engineRecipeRebuilt',
   // OpenADLC updating itself from its releases (the bridge's `self-update.ts`):
   // the Schedule or Manual choice with its day, time and the slot last
   // claimed; the run in flight; how the last run ended; and what the last

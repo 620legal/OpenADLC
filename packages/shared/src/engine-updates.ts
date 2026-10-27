@@ -124,7 +124,11 @@ export type EngineUpdateState = 'updated' | 'current' | 'failed' | 'skipped' | '
 /** What one run did. */
 export interface EngineUpdateResult {
   state: EngineUpdateState;
-  /** What asked for it: `schedule`, `console` or `rollback`. */
+  /**
+   * What asked for it: `schedule`, `console`, `rollback`, or `release`, the
+   * run the bridge starts once a new release's recipe for the bots' image is
+   * not the one the image was built from.
+   */
   trigger: string;
   /** The person or job the bridge said it was acting for. */
   requestedBy: string | null;
@@ -152,6 +156,25 @@ export interface EngineUpdateResult {
    * without it; `reason` ends with an `uncheckedNote` for each.
    */
   unchecked?: Record<string, string>;
+  /**
+   * The image was rebuilt from this release's recipe with every version as it
+   * was: nothing was newer, and the image was behind its recipe. `to` equals `from`.
+   */
+  rebuilt?: true;
+}
+
+/**
+ * Which recipe the bots' image was built from, against the one this hostd has.
+ * The recipe is the files `infra/local/build-bot-image.sh` builds from, and
+ * its digest is stamped on the image as `openadlc.recipe`.
+ */
+export interface EngineRecipe {
+  /** The digest of the recipe hostd has now, from `build-bot-image.sh --recipe-digest`; null when it could not be read. */
+  current: string | null;
+  /** The digest on the image in use; null when it has no label, which an image from before the label does not. */
+  built: string | null;
+  /** The image exists, `current` is known, and `built` is not it: the next run rebuilds it with the versions in use. */
+  behind: boolean;
 }
 
 /**
@@ -178,6 +201,8 @@ export interface EngineUpdateStatus {
   inUseSource: 'label' | 'cli' | 'none';
   /** What the image a rollback would return to carries, or null when there is none. */
   previous: EngineVersions | null;
+  /** The image's recipe against this release's; null under the local driver, or where hostd cannot build. */
+  recipe?: EngineRecipe | null;
   running: { startedAt: string; trigger: string } | null;
   last: EngineUpdateResult | null;
 }

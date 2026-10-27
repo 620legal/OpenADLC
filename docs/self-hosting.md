@@ -2140,14 +2140,32 @@ name them keeps the Dockerfile's fresh-install packages. uv, for a repository
 built with it, is pinned in `infra/local/Dockerfile.bot` itself, with the
 hashes of its wheels, and moves only when that file does.
 
-A tool the image gains in a release, as uv did, reaches a running install with
-its next candidate: hostd builds it from the release's own
-`infra/local/Dockerfile.bot` (the service image carries it, as a checkout
-does), so the next run that builds one — any tool due, on its schedule or with
-**Update all now** — carries it. A run with nothing due builds nothing, and
-the image in use goes without the new tool until one is. On a machine that
-runs a checkout, `infra/local/build-bot-image.sh` builds it at once, with the
-script's own pins (below).
+A tool the image gains in a release, as uv did, reaches a running install
+without waiting for an engine to have a newer version. The image carries an
+`openadlc.recipe` label: the digest of the files it was built from
+(`build-bot-image.sh`, `Dockerfile.bot` and what it copies, `bot-init` and
+`openadlc-install`). hostd compares it with the recipe the release has now
+(`build-bot-image.sh --recipe-digest`; the service image carries the files,
+as a checkout does). An image whose label differs, or that has none, is behind
+its recipe, and Settings → System's engines row says so:
+
+- **The bridge rebuilds it on its own.** At its next look after the services
+  start on the new release, it starts one run, recorded in the engine updates
+  history with the trigger `release` and the actor `openadlc`. The run builds
+  a candidate from the new recipe with every tool pinned to the version the
+  image has now, proves it as any candidate is proved, and swaps it in. No
+  engine moves, and a rollback's hold stays as it was.
+- **It runs once per recipe.** A restart on the same release starts nothing.
+- **When it fails,** the history and the row say why. It is not retried by
+  itself: **Update all now** retries it, since any run with nothing newer
+  rebuilds an image that is behind.
+- **A rollback** returns to the previous image, built from the old recipe.
+  Nothing reruns by itself.
+
+An image built before the label has none, so every install rebuilds its image
+once, with its own versions, after the release that added it. On a machine
+that runs a checkout, `infra/local/build-bot-image.sh` builds the image at
+once, with the script's own pins (below).
 
 What is verified, and how far. The GitHub CLI comes from GitHub's apt
 repository, `cli.github.com`, and apt checks its signature against the

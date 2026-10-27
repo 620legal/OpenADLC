@@ -222,7 +222,7 @@ export function deploySentence(view: SelfUpdateView): string {
 
 /** On a cloud install, what a release does not carry: the bots' image, which holds Claude Code. */
 export const CLOUD_BOT_IMAGE =
-  "The bots' image is not part of a release: it holds Claude Code, which a release may not redistribute, so it is built on the host and kept current by the engine updates below.";
+  "The bots' image is not part of a release: it holds Claude Code, which a release may not redistribute, so it is built on the host. The engine updates below keep it current, and rebuild it with the same versions when a release changes its recipe.";
 
 /** Why Update now cannot be pressed, or null when it can. */
 export function updateNowRefusal(view: SelfUpdateView): string | null {
