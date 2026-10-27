@@ -27,7 +27,7 @@ import { buildStatus, renderStatusMarkdown, statusDrift, statusIssueTarget } fro
 import { CHECKS_FAILED, verdictFor, type MergeLine } from './merge-line.js';
 import type { StageHandoff } from './stage-handoff.js';
 import type { HostdClient } from './hostd-client.js';
-import { askPeopleAgain, heldAtCap, heldForRestart, type TaskService } from './task-service.js';
+import { askPeopleAgain, awaitPeople, heldAtCap, heldForRestart, type TaskService } from './task-service.js';
 import type { Notifier } from './notify.js';
 import type { EngineUpdates } from './engine-updates.js';
 import type { SelfUpdate } from './self-update.js';
@@ -1106,6 +1106,18 @@ export class Scheduler {
           // GitHub moved before the bridge kept the head each was submitted
           // on has no delivery coming.
           actions.push(...(await askPeopleAgain({ repoName: repo.name, prNumber: pull.number, issue: issueNumber }, reviewed.peopleNotCounted)));
+          // And one it waits on for a first approval, once the lead's counts:
+          // a delivery that never came, or a pull request already waiting
+          // before the bridge recorded it, has nothing else to say so.
+          actions.push(
+            ...(await awaitPeople({ repoName: repo.name, prNumber: pull.number, issue: issueNumber, head: pull.headSha }, reviewed, {
+              files: async () => {
+                const listed = await client.listEveryPullFile(repo.fullName, pull.number);
+                return listed.complete ? listed.files : null;
+              },
+              rules: () => this.automation.humanReviewRules(repo.fullName, pull.baseRef),
+            })),
+          );
 
           // A lead-only conflict resolution pushed as this head is the lead's to
           // re-check, whatever the gate says: a lead busy at the push is asked

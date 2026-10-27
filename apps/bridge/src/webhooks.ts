@@ -71,7 +71,7 @@ import { chooseIssueText, editNotTaken } from './vouched-text.js';
 import { workflowFile, type DeployPipeline, type RevertOutcome } from './deploy-pipeline.js';
 import { releaseOf, type GitHubRelease } from './release-shipping.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
-import { askPeopleAgain, BotBusyError, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, reviewStartLock, SubjectClosedError, type TaskService } from './task-service.js';
+import { askPeopleAgain, awaitPeople, BotBusyError, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, reviewStartLock, SubjectClosedError, type TaskService } from './task-service.js';
 import { FORBIDDEN_PUSH, ciKeysChanged, contentChanged, fastPathOf, forbiddenPushGate, reviewSample } from './automation.js';
 import { continuesBranch } from './build-left.js';
 import { BRANCH_UPDATED_BY_LINE, DEPLOY_PATH_BRANCH_PREFIX, headInRepository, issueNumberFromBranch, issuesMergedBy, madeByLineUpdate, ownIssueOf, REVIEW_ROUND_OPENED, REVIEW_STALLED, REVIEW_SUBMITTED_ON, scopeLabelAcceptedFrom } from './work.js';
@@ -3262,6 +3262,18 @@ export class Webhooks {
     // on this diff is asked again, in Needs you: GitHub goes on showing them
     // as having approved, and the gate waited on them with nobody telling them.
     if (repo) await askPeopleAgain({ repoName: repo.name, prNumber: pr.number, issue: ownIssueOf(pr, repoFullName) }, standing.peopleNotCounted);
+    // And one it waits on for a first approval, once the lead's counts: the
+    // lead's approval is a review delivery, so the card comes as it lands.
+    if (repo && !fork) {
+      const baseRef = pr.base?.ref ?? repo.defaultBranch ?? 'main';
+      await awaitPeople({ repoName: repo.name, prNumber: pr.number, issue: ownIssueOf(pr, repoFullName), head: pr.head.sha }, standing, {
+        files: async () => {
+          const listed = await client.listEveryPullFile(repoFullName, pr.number);
+          return listed.complete ? listed.files : null;
+        },
+        rules: () => this.automation.humanReviewRules(repoFullName, baseRef),
+      });
+    }
 
     // The lead approved this diff while a blocking seat still asks for changes
     // on it: the merge is held until that seat approves, and nothing sends the

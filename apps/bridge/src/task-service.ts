@@ -2,7 +2,7 @@ import { audit, bots, costs, hasEventOfType, health, hosts, lastEventAt, leases,
 import { githubDidNotAnswer } from '@openadlc/github';
 import { attachmentsForTask } from './attachment-routes.js';
 import { stoppedByTheBridge } from './bridge-stops.js';
-import { botAtStart, headerFor, leaseExpiryFrom, maxTasksOf, resolveBotRef, type ContextDocument, type Task, type TaskKind } from '@openadlc/shared';
+import { botAtStart, headerFor, leaseExpiryFrom, maxTasksOf, pathMatches, resolveBotRef, sameLogin, type ContextDocument, type HumanReviewRule, type Task, type TaskKind } from '@openadlc/shared';
 import type { BridgeConfig } from './config.js';
 import type { Context } from './context.js';
 import { effectiveConfig } from './effective-config.js';
@@ -10,11 +10,11 @@ import { asAutomation } from './automation-bot.js';
 import { alreadyLanded, endsWithSubject, subjectClosed, wasRefused } from './gates.js';
 import { blockersOf, waitingOnBlocked, type Blocker } from './health/checks/crew.js';
 import type { HostdClient, ReviewMode } from './hostd-client.js';
-import { reviewRulesOf, type NotCounted, type PersonNotCounted } from './automation.js';
+import { reviewRulesOf, seatsWaitedOn, type NotCounted, type PersonNotCounted } from './automation.js';
 import { requestPrefixOf } from './request-context.js';
 import { readSeatPauses, seatPausedWords, type SeatPause } from './seat-pause.js';
 import { heldWords } from './item-hold.js';
-import { PERSON_ASKED_AGAIN, RESUME_WAITS_ON_GITHUB, REVIEW_ASKED_AGAIN, REVIEW_ROUND_OPENED, parseRef } from './work.js';
+import { PERSON_ASKED_AGAIN, PERSON_AWAITED, RESUME_WAITS_ON_GITHUB, REVIEW_ASKED_AGAIN, REVIEW_ROUND_OPENED, parseRef } from './work.js';
 
 /**
  * A seat running all the tasks it may at once (`bots.max_tasks`, Crew →
@@ -1636,4 +1636,94 @@ export async function askPeopleAgain(
     if (recorded) asked.push(`${subjectRef}: asked @${person.login} to approve ${person.head.slice(0, 7)} again (${person.why})`);
   }
   return asked;
+}
+
+/** What `awaitedPeople` reads of a pull request's standing (`Automation.reviewStanding`). */
+export interface AwaitedStanding {
+  gate: { state: string; description: string };
+  decision: { lead: string };
+  approved: readonly string[];
+  peopleNotCounted?: readonly Pick<PersonNotCounted, 'login'>[];
+}
+
+/**
+ * The people `review-gate` waits on for a first approval once the lead's
+ * approval counts: the `@login`s it names (`seatsWaitedOn`). The gate names
+ * people only once every crew seat has approved (`computeReviewGate`); the
+ * lead is checked here too, so a change of that order cannot show the card
+ * before the lead. A last name `fitStatus` cut short ends in `…` and is no
+ * login. One whose approval counts for nothing on this diff is left to
+ * `askPeopleAgain`: two cards for one person and pull request said the same
+ * thing twice.
+ */
+export function awaitedPeople(standing: AwaitedStanding): string[] {
+  if (standing.gate.state !== 'pending' || !standing.approved.includes(standing.decision.lead)) return [];
+  const again = standing.peopleNotCounted ?? [];
+  return seatsWaitedOn(standing.gate.description).flatMap((name) => {
+    if (!name.startsWith('@') || name.endsWith('…')) return [];
+    const login = name.slice(1);
+    if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(login) || again.some((person) => sameLogin(person.login, login))) return [];
+    return [login];
+  });
+}
+
+/**
+ * The Human review paths a change touches that name `login`, as the rules
+ * write them. A change to `AGENTS.md` that names them through no path is the
+ * section changing, which needs everyone it names (`humansRequiredFor`), and
+ * is said as `AGENTS.md`.
+ */
+export function humanReviewPathsFor(login: string, files: readonly string[], rules: readonly HumanReviewRule[]): string[] {
+  const paths: string[] = [];
+  for (const rule of rules) {
+    if (!rule.logins.some((named) => sameLogin(named, login))) continue;
+    if (files.some((file) => pathMatches(rule.path, file)) && !paths.includes(rule.path)) paths.push(rule.path);
+  }
+  if (paths.length === 0 && files.includes('AGENTS.md')) return ['AGENTS.md'];
+  return paths;
+}
+
+/**
+ * Records each person a crew pull request waits on for a first approval,
+ * once the lead's approval counts (`awaitedPeople`), as `PERSON_AWAITED`,
+ * which Needs you shows until they review it (`attention.ts`). A crew
+ * branch's CI runs only once the merge line asks for it, so a pull request
+ * held on a person never reached the green card that says it waits for one,
+ * and on the local install one under `infra/` waited with nobody told. Only a
+ * pull request with its own issue: on a person's own the named person often
+ * wrote it. Once for each head, as `askPeopleAgain` asks; the files and rules
+ * are read only when something is recorded, and a read that fails records
+ * the wait with no paths rather than none. Says each one it recorded.
+ */
+export async function awaitPeople(
+  subject: { repoName: string; prNumber: number; issue: number | null; head: string },
+  standing: AwaitedStanding,
+  read: { files(): Promise<string[] | null>; rules(): Promise<HumanReviewRule[] | null> },
+): Promise<string[]> {
+  if (subject.issue === null) return [];
+  const subjectRef = `${subject.repoName}#${subject.prNumber}`;
+  let reads: Promise<{ files: string[] | null; rules: HumanReviewRule[] | null }> | null = null;
+  const facts = () =>
+    (reads ??= Promise.all([(async () => read.files())().catch(() => null), (async () => read.rules())().catch(() => null)]).then(([files, rules]) => ({
+      files,
+      rules,
+    })));
+  const recorded: string[] = [];
+  for (const login of awaitedPeople(standing)) {
+    const fields = { subjectRef, login, head: subject.head };
+    const had = await (async () => hasEventOfType(PERSON_AWAITED, new Date(Date.now() - ASKED_AGAIN_WINDOW_MS), fields))().catch(() => true);
+    if (had) continue;
+    const { files, rules } = await facts();
+    const paths = files && rules ? humanReviewPathsFor(login, files, rules) : [];
+    const payload = { ...fields, repo: subject.repoName, pr: subject.prNumber, issue: subject.issue, paths };
+    const ok = await (async () => recordEvent({ source: 'platform', type: PERSON_AWAITED, payload }))().then(
+      () => true,
+      (error: unknown) => {
+        console.warn(`[bridge] ${subjectRef}: the wait on @${login} for ${subject.head.slice(0, 7)} could not be recorded: ${error instanceof Error ? error.message : error}`);
+        return false;
+      },
+    );
+    if (ok) recorded.push(`${subjectRef}: waits on @${login}'s approval of ${subject.head.slice(0, 7)}`);
+  }
+  return recorded;
 }

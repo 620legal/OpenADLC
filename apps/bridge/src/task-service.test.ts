@@ -11,6 +11,10 @@ const store = vi.hoisted(() => ({
   roundAt: null as string | null,
   /** Seats asked to review again after a bot dismissed their review (`review.asked_again`), as recorded. */
   askedAgain: [] as { at: string; payload: Record<string, string> }[],
+  /** People a pull request waits on for a first approval (`review.person_awaited`), as recorded. */
+  awaited: [] as { at: string; payload: Record<string, unknown> }[],
+  /** Set, recording one fails. */
+  recordFails: false,
 }));
 
 vi.mock('@openadlc/db', () => ({
@@ -24,11 +28,16 @@ vi.mock('@openadlc/db', () => ({
   }),
   recordEvent: vi.fn(async (event: { type: string; payload: Record<string, string> }) => {
     if (event.type === 'review.asked_again') store.askedAgain.push({ at: new Date().toISOString(), payload: event.payload });
+    if (event.type === 'review.person_awaited') {
+      if (store.recordFails) throw new Error('connection refused');
+      store.awaited.push({ at: new Date().toISOString(), payload: event.payload });
+    }
     return 'event-1';
   }),
-  hasEventOfType: vi.fn(async (type: string, _since: Date, fields: Record<string, string>) =>
-    type === 'review.asked_again' && store.askedAgain.some((event) => Object.entries(fields).every(([key, value]) => event.payload[key] === value)),
-  ),
+  hasEventOfType: vi.fn(async (type: string, _since: Date, fields: Record<string, string>) => {
+    const recorded = type === 'review.asked_again' ? store.askedAgain : type === 'review.person_awaited' ? store.awaited : [];
+    return recorded.some((event) => Object.entries(fields).every(([key, value]) => event.payload[key] === value));
+  }),
   bots: {
     getBotById: vi.fn(async (id: string) => {
       const found = [...crew, ...store.crew].find((bot) => bot.id === id);
@@ -97,8 +106,11 @@ import {
   SpendingCapError,
   TaskService,
   UsageRefusedError,
+  awaitPeople,
+  awaitedPeople,
   heldAtCap,
   heldForRestart,
+  humanReviewPathsFor,
   isRevert,
   leaseHoldUntil,
   settleLeaseAfter,
@@ -2047,5 +2059,101 @@ describe('a QA task, told where testing is', () => {
     await tasksService.open({ botId: 'bot-1', bot: 'builder', repo: 'api', kind: 'implement', subjectType: 'issue', subjectRef: 'api#3', skill: 'implement' });
 
     expect(stub.forQa).not.toHaveBeenCalled();
+  });
+});
+
+describe('a crew pull request the lead approved that waits on a person', () => {
+  // 620legal/OpenADLC#199: the lead approved a crew pull request under
+  // `infra/`, `review-gate` said "waiting on @janedoe", and nothing recorded
+  // it, so Needs you, which reads only the store, said nothing.
+  const HEAD = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const NEXT = 'c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00';
+  const standing = (description: string, extra: Partial<Parameters<typeof awaitedPeople>[0]> = {}) => ({
+    gate: { state: 'pending', description },
+    decision: { lead: 'lead-reviewer' },
+    approved: ['lead-reviewer', 'second-reviewer'],
+    peopleNotCounted: [],
+    ...extra,
+  });
+  const rules = [
+    { path: 'infra/', logins: ['janedoe'] },
+    { path: 'packages/db/migrations/*.sql', logins: ['JaneDoe', 'someone-else'] },
+    { path: 'config/', logins: ['someone-else'] },
+  ];
+  const subject = { repoName: 'openadlc', prNumber: 40, issue: 39, head: HEAD };
+
+  beforeEach(() => {
+    store.awaited = [];
+    store.recordFails = false;
+  });
+
+  it('names the people the gate waits on once the lead approved, and nobody before', () => {
+    expect(awaitedPeople(standing('waiting on @janedoe'))).toEqual(['janedoe']);
+    expect(awaitedPeople(standing('waiting on @janedoe, @someone-else'))).toEqual(['janedoe', 'someone-else']);
+    expect(awaitedPeople(standing('waiting on lead-reviewer'))).toEqual([]);
+    expect(awaitedPeople(standing('not approved yet by lead-reviewer'))).toEqual([]);
+    expect(awaitedPeople(standing('waiting on @janedoe', { gate: { state: 'success', description: 'all reviews in' } }))).toEqual([]);
+    expect(awaitedPeople(standing('waiting on @janedoe', { approved: ['second-reviewer'] }))).toEqual([]);
+    // A name cut short at the status's 140 characters is no login.
+    expect(awaitedPeople(standing('waiting on @janedoe, @someone-el…'))).toEqual(['janedoe']);
+  });
+
+  it('leaves one whose approval counts for nothing on this diff to the approve-again card', () => {
+    const description = 'waiting on @janedoe (their approval is of b789079 and this diff is another), @someone-else';
+    expect(awaitedPeople(standing(description, { peopleNotCounted: [{ login: 'JaneDoe' }] }))).toEqual(['someone-else']);
+  });
+
+  it('says the Human review paths that name them, as the rules write them', () => {
+    const files = ['infra/local/build-bot-image.sh', 'packages/db/migrations/0042_awaits.sql', 'config/labels.json'];
+    expect(humanReviewPathsFor('janedoe', files, rules)).toEqual(['infra/', 'packages/db/migrations/*.sql']);
+    expect(humanReviewPathsFor('Someone-Else', files, rules)).toEqual(['packages/db/migrations/*.sql', 'config/']);
+    // A change to the section itself needs everyone it names.
+    expect(humanReviewPathsFor('someone-else', ['AGENTS.md', 'infra/x.tf'], rules)).toEqual(['AGENTS.md']);
+    expect(humanReviewPathsFor('someone-else', ['apps/x.ts'], rules)).toEqual([]);
+  });
+
+  it('records each once for a head, and again for a new one, reading the files and rules only then', async () => {
+    const files = vi.fn(async () => ['infra/local/build-bot-image.sh']);
+    const read = { files, rules: vi.fn(async () => rules) };
+
+    expect(await awaitPeople(subject, standing('waiting on @janedoe'), read)).toEqual(["openadlc#40: waits on @janedoe's approval of 692cd1f"]);
+    expect(store.awaited.map((event) => event.payload)).toEqual([
+      { subjectRef: 'openadlc#40', login: 'janedoe', head: HEAD, repo: 'openadlc', pr: 40, issue: 39, paths: ['infra/'] },
+    ]);
+    expect(await awaitPeople(subject, standing('waiting on @janedoe'), read)).toEqual([]);
+    expect(store.awaited).toHaveLength(1);
+    expect(files).toHaveBeenCalledTimes(1);
+
+    await awaitPeople({ ...subject, head: NEXT }, standing('waiting on @janedoe'), read);
+    expect(store.awaited.map((event) => event.payload.head)).toEqual([HEAD, NEXT]);
+
+    // Nothing to record reads nothing.
+    files.mockClear();
+    await awaitPeople(subject, standing('waiting on lead-reviewer'), read);
+    expect(files).not.toHaveBeenCalled();
+  });
+
+  it('records nothing for a pull request with no issue of its own', async () => {
+    const read = { files: vi.fn(async () => []), rules: vi.fn(async () => rules) };
+    expect(await awaitPeople({ ...subject, issue: null }, standing('waiting on @janedoe'), read)).toEqual([]);
+    expect(store.awaited).toEqual([]);
+    expect(read.files).not.toHaveBeenCalled();
+  });
+
+  it('records the wait with no paths when the files or rules cannot be read, and says nothing it could not record', async () => {
+    await awaitPeople(subject, standing('waiting on @janedoe'), { files: async () => null, rules: async () => rules });
+    await awaitPeople({ ...subject, prNumber: 41 }, standing('waiting on @janedoe'), {
+      files: async () => ['infra/x'],
+      rules: async () => {
+        throw new Error('GitHub did not answer');
+      },
+    });
+    expect(store.awaited.map((event) => event.payload.paths)).toEqual([[], []]);
+
+    store.recordFails = true;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(await awaitPeople({ ...subject, prNumber: 42 }, standing('waiting on @janedoe'), { files: async () => [], rules: async () => rules })).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('openadlc#42: the wait on @janedoe for 692cd1f could not be recorded'));
+    warn.mockRestore();
   });
 });

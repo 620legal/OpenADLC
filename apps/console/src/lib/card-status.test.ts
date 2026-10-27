@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BoardCard, CardTask, CardWaiting, WaitingReason } from './api';
-import { cardBot, cardCost, cardStatus, heldApprovalsOf, nextUp, type CardContext } from './card-status';
+import { awaitedApprovalsOf, cardBot, cardCost, cardStatus, heldApprovalsOf, nextUp, type CardContext } from './card-status';
 import { ago, duration, money, ordinal, untilIn } from './when';
 
 const NOW = '2026-09-24T12:00:00.000Z';
@@ -154,6 +154,47 @@ describe('a card’s status line', () => {
     ]);
     expect(held.get('openadlc#60')).toEqual({ blockedBy: [12, 44], paths: ['a.ts'] });
     expect(held.has('openadlc#61')).toBe(false);
+  });
+
+  it('says a Review card approved by the reviewers waits for a person named under Human review', () => {
+    // 620legal/OpenADLC#199: the lead approved, the gate waited on @janedoe,
+    // and the card said "Waiting for the reviewers".
+    const approved = card({ stage: 'review', prNumber: 40, reviewRound: 1 });
+    expect(cardStatus(approved, { ...CONTEXT, awaitedApproval: ['janedoe'] })).toEqual({
+      text: "Approved · waiting for @janedoe's approval",
+      tone: 'attention',
+      mark: 'dot',
+    });
+    expect(cardStatus(approved, { ...CONTEXT, awaitedApproval: ['janedoe', 'someone-else'] }).text).toBe("Approved · waiting for @janedoe and @someone-else's approval");
+    expect(cardStatus(approved, { ...CONTEXT, awaitedApproval: [] }).text).toBe('Waiting for the reviewers');
+  });
+
+  it('reads the people each card waits on for a first approval from Needs you, not one again', () => {
+    const subject = (ref: string) => ({ repo: 'openadlc', number: Number(ref.split('#')[1]), title: null, ref, url: null, item: ref });
+    const waits = (ref: string, login: string, again: boolean) => ({
+      id: `${again ? 'approve-again' : 'approval'}:${ref}@${login}`,
+      kind: 'merge_waiting' as const,
+      headline: '',
+      subject: subject(ref),
+      bot: null,
+      since: NOW,
+      detail: '',
+      actions: [],
+      awaiting: { login, again, paths: [] },
+    });
+    const awaited = awaitedApprovalsOf([
+      waits('openadlc#39', 'janedoe', false),
+      waits('openadlc#39', 'JaneDoe', false),
+      waits('openadlc#39', 'someone-else', false),
+      // Asked again while the lead may not have approved the new diff: the
+      // card said "Approved" while review-gate still waited on a seat.
+      waits('openadlc#39', 'third-person', true),
+      waits('openadlc#40', 'janedoe', true),
+      { ...waits('openadlc#41', 'janedoe', false), id: 'merge:openadlc#41', awaiting: undefined },
+    ]);
+    expect(awaited.get('openadlc#39')).toEqual(['janedoe', 'someone-else']);
+    expect(awaited.has('openadlc#40')).toBe(false);
+    expect(awaited.has('openadlc#41')).toBe(false);
   });
 
   it('puts what needs the person first: a question, an OK, a review loop that gave up', () => {

@@ -111,6 +111,8 @@ export interface CardContext {
   dispatching?: boolean;
   /** A plan change approved on the card that waits for other work to let go of its paths, as Needs you has it (`heldApprovalsOf`). */
   heldApproval?: HeldApproval | null;
+  /** The people a Review card's pull request waits on for their approval, as Needs you has it (`awaitedApprovalsOf`). */
+  awaitedApproval?: readonly string[];
 }
 
 export interface HeldApproval {
@@ -147,6 +149,33 @@ export function heldApprovalsOf(attention: readonly AttentionItem[]): ReadonlyMa
     }
   }
   return held;
+}
+
+/**
+ * The people each card's pull request waits on for their approval, by the
+ * card's ref, from what Needs you says of it (`awaiting`): a first approval
+ * after the lead's. The card said "Waiting for the reviewers" while the
+ * reviewers had all approved and the pull request waited on a person named
+ * under Human review. An approval again is left out: it is asked while the
+ * lead may not have approved the new diff yet, so "Approved" would be wrong.
+ */
+export function awaitedApprovalsOf(attention: readonly AttentionItem[]): ReadonlyMap<string, readonly string[]> {
+  const awaited = new Map<string, string[]>();
+  for (const item of attention) {
+    if (item.kind !== 'merge_waiting' || !item.awaiting || item.awaiting.again) continue;
+    const login = item.awaiting.login;
+    for (const ref of new Set([item.subject.ref, item.subject.item].filter((one): one is string => Boolean(one)))) {
+      const was = awaited.get(ref) ?? [];
+      if (!was.some((one) => one.toLowerCase() === login.toLowerCase())) awaited.set(ref, [...was, login]);
+    }
+  }
+  return awaited;
+}
+
+/** `@a`, `@a and @b`, `@a, @b and @c`. */
+function loginsInWords(logins: readonly string[]): string {
+  const said = logins.map((login) => `@${login}`);
+  return said.length > 1 ? `${said.slice(0, -1).join(', ')} and ${said[said.length - 1]}` : (said[0] ?? '');
 }
 
 /** `#11`, `#11 (waiting for your answer)`, `a request`: who holds a seat, in words. */
@@ -455,8 +484,13 @@ export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
       // to deploy" sat on such a card for good, with nobody told.
       if (card.noMerge) return { text: 'No merge to deploy · move it to Done by hand', tone: 'attention', mark: 'dot' };
       return { text: 'Merged · waiting to deploy', tone: 'muted', mark: null };
-    case 'review':
+    case 'review': {
+      // The reviewers approved and the merge waits on a person: said before
+      // the line, which a crew pull request held on a person never joins.
+      const awaited = context.awaitedApproval ?? [];
+      if (awaited.length > 0) return { text: `Approved · waiting for ${loginsInWords(awaited)}'s approval`, tone: 'attention', mark: 'dot' };
       return inLine(card, context.mergeLine) ?? { text: 'Waiting for the reviewers', tone: 'muted', mark: null };
+    }
     case 'build': {
       if (card.labels.includes('blocked')) {
         const on = card.waitingOn ?? [];
