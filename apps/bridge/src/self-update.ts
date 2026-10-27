@@ -242,6 +242,8 @@ class StepFailed extends Error {
 const INSTALL_TIMEOUT_MS = 30 * 60_000;
 /** How often the candidate is asked for between runs. */
 const CANDIDATE_EVERY_MS = 15 * 60_000;
+/** How soon after a look a person may ask again: Check again is pressed by hand, and each press reads GitHub. */
+const CHECK_AGAIN_MS = 60_000;
 /** How big each file of a release may be. */
 const ASSET_LIMITS = { archive: 512 * 1024 * 1024, bundle: 4 * 1024 * 1024, checksums: 64 * 1024 };
 
@@ -302,6 +304,10 @@ interface Choice {
   head: string | null;
   /** The releases to try, newest first, each fetched and a fast-forward on main's own history; a cloud install's names the files its release lists. */
   candidates: { tag: string; sha: string; assets?: readonly string[] }[];
+  /** When the release taken was published. */
+  publishedAt?: string | null;
+  /** On a cloud install, the newest release when it is further ahead than the one taken. */
+  newest?: string | null;
 }
 
 /** How many releases GitHub is asked for a page at a time. */
@@ -322,6 +328,8 @@ export class SelfUpdate {
   /** What a run is starting: between the check and the run being written down. */
   private starting: Promise<unknown> | null = null;
   private letGo: (() => void) | null = null;
+  /** The look Check again started, which a second press joins rather than asking GitHub twice. */
+  private checking: Promise<unknown> | null = null;
   private waitTimer: ReturnType<typeof setTimeout> | null = null;
   private waitingFor: LiveTask[] = [];
   private ghChecked: { at: number; problem: string | null } | null = null;
@@ -682,7 +690,8 @@ export class SelfUpdate {
     }
     if (candidates.length > 0) {
       for (const one of refused) await this.passOver(one.tag, one.reason);
-      return { take: true, reason: '', tag: candidates[0]!.tag, sha: candidates[0]!.sha, head, candidates };
+      const publishedAt = takeable.find((release) => release.tag === candidates[0]!.tag)?.publishedAt ?? null;
+      return { take: true, reason: '', tag: candidates[0]!.tag, sha: candidates[0]!.sha, head, candidates, publishedAt };
     }
     const first = refused[0];
     if (!first) return nothing('current', `on the newest release this checkout can take`);
@@ -763,6 +772,60 @@ export class SelfUpdate {
     }
     await this.store.set(KEY.candidate, JSON.stringify(candidate), 'openadlc');
     return candidate;
+  }
+
+  /**
+   * Check again: asks at once what an update would take, and answers the view.
+   * Refused within a minute of the last look, whichever commit it was on; a
+   * press while a look is going joins it.
+   */
+  async checkAgain(): Promise<SelfUpdateView> {
+    if (!this.checking) {
+      const look = (async () => {
+        const stored = parse<SelfUpdateCandidate>((await this.store.all())[KEY.candidate]);
+        const since = stored ? this.now().getTime() - new Date(stored.checkedAt).getTime() : Number.NaN;
+        if (since < CHECK_AGAIN_MS) {
+          const ago = Math.max(0, Math.floor(since / 1000));
+          throw new HttpFailure(429, `looked for a release ${seconds(ago)} ago; check again in ${seconds(Math.ceil((CHECK_AGAIN_MS - Math.max(0, since)) / 1000))}`);
+        }
+        await this.refreshCandidate(true);
+      })();
+      this.checking = look;
+      void look.then(
+        () => (this.checking = null),
+        () => (this.checking = null),
+      );
+    }
+    await this.checking;
+    return this.view();
+  }
+
+  /**
+   * What a run's own look at the releases found, kept as the candidate for the
+   * commit it was asked on: without it the row went on saying "the newest
+   * release" for up to a quarter hour beside a run taking a newer one. A
+   * choice that could not read the releases, or found one it cannot take,
+   * leaves the stored one, whose look time says how old it is.
+   */
+  private async rememberChoice(choice: Choice, forHead: string): Promise<void> {
+    if (!(choice.take && choice.tag) && choice.state !== 'current') return;
+    const stored = parse<SelfUpdateCandidate>((await this.store.all())[KEY.candidate]);
+    const checkedAt = this.now().toISOString();
+    const tag = choice.take ? choice.tag : null;
+    const candidate: SelfUpdateCandidate = tag
+      ? {
+          tag,
+          sha: choice.sha,
+          publishedAt: choice.publishedAt ?? null,
+          reason: this.cloud ? (choice.newest ? nextReleaseNote(tag, choice.newest) : `${tag} is the next release`) : `${tag} is the newest release`,
+          checkedAt,
+          ...(this.cloud ? { newest: choice.newest ?? null } : {}),
+          forHead,
+        }
+      : { tag: null, sha: null, publishedAt: null, reason: choice.reason, checkedAt, forHead };
+    // The tags found moved belong to the releases they were read for; the run's own are on the run.
+    if (this.cloud && stored?.moved?.length && stored.forHead === forHead && stored.tag === candidate.tag) candidate.moved = stored.moved;
+    await this.store.set(KEY.candidate, JSON.stringify(candidate), 'openadlc');
   }
 
   /** The commit in use, as `applicability` names it, without the rest of its checks: a look within the quarter hour stays cheap. */
@@ -887,6 +950,7 @@ export class SelfUpdate {
       return;
     }
     const choice = this.cloud ? await this.cloudChoose(repo, check.head) : await this.choose(repo, check.head);
+    await this.rememberChoice(choice, check.head).catch((error: unknown) => this.log(`self-update: could not keep what the run found: ${message(error)}`));
     if (!choice.take || !choice.tag || !choice.sha) {
       await ended(choice.state ?? 'current', choice.reason, {
         from: check.head,
@@ -1348,8 +1412,9 @@ export class SelfUpdate {
     } catch (error) {
       return nothing('failed', `could not read ${next.tag}'s commit from GitHub: ${message(error)}`, { step: 'releases', tag: next.tag });
     }
-    if (newest && newest.tag !== next.tag) this.log(`self-update: ${nextReleaseNote(next.tag, newest.tag)}`);
-    return { take: true, reason: '', tag: next.tag, sha, head, candidates: [{ tag: next.tag, sha, assets: next.assets }] };
+    const further = newest && newest.tag !== next.tag ? newest.tag : null;
+    if (further) this.log(`self-update: ${nextReleaseNote(next.tag, further)}`);
+    return { take: true, reason: '', tag: next.tag, sha, head, candidates: [{ tag: next.tag, sha, assets: next.assets }], publishedAt: next.publishedAt, newest: further };
   }
 
   /**
@@ -1673,6 +1738,10 @@ export class SelfUpdate {
   }
 }
 
+function seconds(count: number): string {
+  return count === 1 ? '1 second' : `${count} seconds`;
+}
+
 /** Each moved tag once, in the words the row says it. */
 function movedTagsSaid(repo: string, moved: readonly MovedImageTag[]): string[] {
   return [...new Set(moved.map((one) => movedTagWords(repo, one)))];
@@ -1746,7 +1815,7 @@ export function isRestartProcess(pid: number, commandLine: (pid: number) => stri
   }
 }
 
-/** The console's routes: what OpenADLC runs and would take, Update now, and the schedule. */
+/** The console's routes: what OpenADLC runs and would take, Update now, Check again, and the schedule. */
 export function registerSelfUpdateRoutes(router: Router, update: SelfUpdate): void {
   router.get('/v1/self-update', async () => update.view());
 
@@ -1754,6 +1823,8 @@ export function registerSelfUpdateRoutes(router: Router, update: SelfUpdate): vo
     await update.start({ trigger: 'console', actor: identity });
     return update.view();
   });
+
+  router.post('/v1/self-update/check', async () => update.checkAgain());
 
   router.patch('/v1/self-update', async ({ body, identity }) => {
     const input = await body<unknown>();
