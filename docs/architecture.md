@@ -397,7 +397,9 @@ none yet, says its kind of work instead ("writing the change").
    one repository at a time, the bridge brings the front one up to date with
    the base branch, with the builder's credential (the automation account's
    where no bot owns the repository), and waits for `ci` and `review-gate` on
-   the new head. It records each update it made, `merge_line.branch_updated`
+   the new head. A passing `ci` run's `workflow_run.completed` on an open pull
+   request's head moves the line at once; the merge job, every ten minutes, is
+   the backstop for a delivery that never came. It records each update it made, `merge_line.branch_updated`
    `{subjectRef, from, to?}` (the head it was made on, and the commit it made
    when GitHub said), and its push is told from the builder's by that. Made
    as the automation account, which never authors, the update is neither a

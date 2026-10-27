@@ -7088,7 +7088,7 @@ describe('a pull request’s CI finishing', () => {
     const attribution = { countable: vi.fn(async (posts: unknown[]) => [...posts]), reviewsThatCount: vi.fn(async (_repo: string, _n: number, posts: unknown[]) => [...posts]) };
     const automation = new Automation(config as never, { asBot: vi.fn(async () => github), attribution } as never, appGate as never);
     const taskService = { open: vi.fn(async () => ({ taskId: 'task-review', session: 'review-1' })) };
-    const mergeLine = { leave: vi.fn(async () => undefined), failOnRed: vi.fn(async () => undefined) };
+    const mergeLine = { leave: vi.fn(async () => undefined), failOnRed: vi.fn(async () => undefined), advance: vi.fn(async () => null) };
     // The real line, for a replay that takes the pull request through it: it
     // hands a head it finds red to CI's handler, as `main.ts` wires it.
     const line = options.line ? new MergeLine(config as never, { asBot: async () => github } as never, {} as never, null) : null;
@@ -7123,12 +7123,13 @@ describe('a pull request’s CI finishing', () => {
 
   describe('failing', () => {
     it('runs a first failure’s failed jobs again, once, as the app, and records it', async () => {
-      const { webhooks, app } = bridge();
+      const { webhooks, app, mergeLine } = bridge();
       const { audit } = await import('@openadlc/db');
 
       await deliver(webhooks, run('failure'));
 
       expect(app.request).toHaveBeenCalledWith('POST', '/repos/janedoe/openadlc/actions/runs/4242/rerun-failed-jobs');
+      expect(mergeLine.advance).not.toHaveBeenCalled();
       expect(vi.mocked(audit)).toHaveBeenCalledWith({ actor: 'bridge', action: 'ci.rerun', target: 'openadlc#31', payload: { run: 4242, sha: HEAD, attempt: 1 } });
     });
 
@@ -7155,11 +7156,12 @@ describe('a pull request’s CI finishing', () => {
 
     it('takes a first failure as real when it cannot be run again: the builder gets its round', async () => {
       store.botTasks = [];
-      const { webhooks, taskService, github } = bridge({ reviews: [APPROVAL], app: false });
+      const { webhooks, taskService, github, mergeLine } = bridge({ reviews: [APPROVAL], app: false });
 
       const warned = await deliver(webhooks, run('failure'));
 
       expect(taskService.open).toHaveBeenCalledWith(expect.objectContaining({ bot: 'openadlc-atlas-janedoe', kind: 'patch', round: 1 }));
+      expect(mergeLine.advance).not.toHaveBeenCalled();
       // And the card goes back with it.
       expect(github.setLabels).toHaveBeenCalledWith('janedoe/openadlc', 11, ['priority:p2', 'adlc:build']);
       expect(warned.filter((line) => /not moved/.test(line))).toEqual([]);
@@ -7563,16 +7565,62 @@ describe('a pull request’s CI finishing', () => {
 
       expect(taskService.open).not.toHaveBeenCalled();
     });
+
+    // Found live: an Actions-run `ci` sends no check delivery, so this is the
+    // only word the line gets, and without it every merge waited for the job.
+    it('moves the merge line at once, on an open pull request’s head', async () => {
+      const { webhooks, mergeLine, app } = bridge({ reviews: [APPROVAL] });
+
+      await deliver(webhooks, run('success'));
+
+      expect(mergeLine.advance).toHaveBeenCalledTimes(1);
+      expect(mergeLine.advance).toHaveBeenCalledWith('openadlc');
+      expect(app.request).not.toHaveBeenCalled();
+    });
+
+    it('moves nothing for the pull request that merged, now closed: the run on main', async () => {
+      const { webhooks, mergeLine } = bridge({ pull: { state: 'closed' } });
+
+      await deliver(webhooks, run('success'));
+
+      expect(mergeLine.advance).not.toHaveBeenCalled();
+    });
+
+    it('moves nothing for a head the pull request has moved past', async () => {
+      const { webhooks, mergeLine } = bridge({ pull: { headSha: 'beef00beef00beef00beef00beef00beef00beef' } });
+
+      await deliver(webhooks, run('success'));
+
+      expect(mergeLine.advance).not.toHaveBeenCalled();
+    });
+
+    it('moves nothing for a push to main that no pull request has as its head', async () => {
+      const { webhooks, mergeLine, github } = bridge();
+
+      await deliver(webhooks, { ...run('success'), workflow_run: { ...run('success').workflow_run, pull_requests: [] } });
+
+      expect(github.listPullsForCommit).toHaveBeenCalledWith('janedoe/openadlc', HEAD);
+      expect(mergeLine.advance).not.toHaveBeenCalled();
+    });
+
+    it('moves nothing for another workflow that passed', async () => {
+      const { webhooks, mergeLine } = bridge();
+
+      await deliver(webhooks, { ...run('success'), workflow_run: { ...run('success').workflow_run, name: 'docs' } });
+
+      expect(mergeLine.advance).not.toHaveBeenCalled();
+    });
   });
 
   it('is not a run of the CI workflow, or not a verdict, and does nothing', async () => {
-    const { webhooks, app, taskService } = bridge();
+    const { webhooks, app, taskService, mergeLine } = bridge();
 
     await deliver(webhooks, { ...run('failure'), workflow_run: { ...run('failure').workflow_run, name: 'docs' } });
     await deliver(webhooks, run('cancelled'));
 
     expect(app.request).not.toHaveBeenCalled();
     expect(taskService.open).not.toHaveBeenCalled();
+    expect(mergeLine.advance).not.toHaveBeenCalled();
   });
 });
 
