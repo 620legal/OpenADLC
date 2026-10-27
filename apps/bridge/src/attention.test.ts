@@ -439,6 +439,27 @@ describe('what needs a person', () => {
       expect(attentionItems({ ...base, personAwaits: wait, roundsOpened: [{ at: minutesAgo(30), payload: { subjectRef: 'openadlc-testbed#29', sha: B } }] })).toHaveLength(1);
     });
 
+    it('stays when a newer round opens on the head it waits on', async () => {
+      // A duplicate delivery, or a reopen or ready_for_review, records a round
+      // on the same head. awaitPeople records a head once, so clearing on it
+      // left review-gate waiting on @janedoe with no card.
+      const { attentionItems } = await load();
+      const wait = [awaited(minutesAgo(10))];
+
+      expect(attentionItems({ ...base, personAwaits: wait, roundsOpened: [{ at: minutesAgo(2), payload: { subjectRef: 'openadlc-testbed#29', sha: B } }] })).toHaveLength(1);
+      expect(attentionItems({ ...base, personAwaits: wait, roundsOpened: [{ at: minutesAgo(2), payload: { subjectRef: 'openadlc-testbed#29' } }] })).toHaveLength(1);
+      expect(
+        attentionItems({
+          ...base,
+          personAwaits: wait,
+          roundsOpened: [
+            { at: minutesAgo(3), payload: { subjectRef: 'openadlc-testbed#29', sha: B } },
+            { at: minutesAgo(2), payload: { subjectRef: 'openadlc-testbed#29', sha: 'c0ffee0' } },
+          ],
+        }),
+      ).toEqual([]);
+    });
+
     it('gives one item per pull request and person, the approve-again one when that applies', async () => {
       const { attentionItems } = await load();
       const ask = {

@@ -1638,6 +1638,8 @@ closes, when the issue leaves Review, or when a new review round opens on a
 new diff. In that last case the next card comes when the lead approves the
 new head. If an approval the person gave stops counting on a new diff, the
 "needs @<login>'s approval again" card replaces this one; you never get both.
+The board card does not say `Approved` for an approval asked again, since the
+lead may not have approved the new diff yet.
 The bridge records the wait where the gate is settled (`review.person_awaited`,
 once per head), on a review delivery and on the gate sweep, so a pull request
 already waiting gets its card on the next sweep.

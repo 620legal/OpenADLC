@@ -169,7 +169,7 @@ describe('a card’s status line', () => {
     expect(cardStatus(approved, { ...CONTEXT, awaitedApproval: [] }).text).toBe('Waiting for the reviewers');
   });
 
-  it('reads the people each card waits on from Needs you, a first approval or one again', () => {
+  it('reads the people each card waits on for a first approval from Needs you, not one again', () => {
     const subject = (ref: string) => ({ repo: 'openadlc', number: Number(ref.split('#')[1]), title: null, ref, url: null, item: ref });
     const waits = (ref: string, login: string, again: boolean) => ({
       id: `${again ? 'approve-again' : 'approval'}:${ref}@${login}`,
@@ -184,11 +184,16 @@ describe('a card’s status line', () => {
     });
     const awaited = awaitedApprovalsOf([
       waits('openadlc#39', 'janedoe', false),
-      waits('openadlc#39', 'someone-else', true),
-      waits('openadlc#39', 'JaneDoe', true),
+      waits('openadlc#39', 'JaneDoe', false),
+      waits('openadlc#39', 'someone-else', false),
+      // Asked again while the lead may not have approved the new diff: the
+      // card said "Approved" while review-gate still waited on a seat.
+      waits('openadlc#39', 'third-person', true),
+      waits('openadlc#40', 'janedoe', true),
       { ...waits('openadlc#41', 'janedoe', false), id: 'merge:openadlc#41', awaiting: undefined },
     ]);
     expect(awaited.get('openadlc#39')).toEqual(['janedoe', 'someone-else']);
+    expect(awaited.has('openadlc#40')).toBe(false);
     expect(awaited.has('openadlc#41')).toBe(false);
   });
 

@@ -1170,8 +1170,8 @@ function personAwaitFrom(event: { at: string; payload: unknown }): PersonAwait |
  * `repo#pr` and login: the newest wait on each, while the issue is in Review
  * when the board has it — a merge, a close and a send back to Build each move
  * it out — the person has given no verdict on it since, and no review round
- * opened after it. A new round is a new diff, which the lead's approval the
- * wait rested on is not of; the next wait is recorded when the lead approves
+ * opened after it on another head. A new round is a new diff, which the lead's
+ * approval the wait rested on is not of; the next wait is recorded when the lead approves
  * that. A pull request that closed is the caller's to leave out.
  */
 export function standingPersonAwaits(
@@ -1194,7 +1194,14 @@ export function standingPersonAwaits(
     const issue = issues.find((one) => one.repoName === wait.repo && one.number === wait.issue);
     if (issue && issue.stage !== 'review') continue;
     if (answeredSince(reviews, ref, wait.login, wait.at)) continue;
-    const reopened = rounds.some((event) => ((event.payload ?? {}) as Record<string, unknown>).subjectRef === ref && Date.parse(event.at) > Date.parse(wait.at));
+    // Only a round on another head ends the wait. A duplicate delivery, or a
+    // reopen or ready_for_review on the awaited head, records a round with the
+    // same sha, and awaitPeople does not record that head again, so clearing on
+    // it left review-gate saying `waiting on @login` with no card.
+    const reopened = rounds.some((event) => {
+      const round = (event.payload ?? {}) as Record<string, unknown>;
+      return round.subjectRef === ref && typeof round.sha === 'string' && round.sha !== wait.head && Date.parse(event.at) > Date.parse(wait.at);
+    });
     if (!reopened) standing.set(key, wait);
   }
   return standing;

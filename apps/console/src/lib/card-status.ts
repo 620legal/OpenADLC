@@ -154,14 +154,15 @@ export function heldApprovalsOf(attention: readonly AttentionItem[]): ReadonlyMa
 /**
  * The people each card's pull request waits on for their approval, by the
  * card's ref, from what Needs you says of it (`awaiting`): a first approval
- * after the lead's, or one again. The card said "Waiting for the reviewers"
- * while the reviewers had all approved and the pull request waited on a
- * person named under Human review.
+ * after the lead's. The card said "Waiting for the reviewers" while the
+ * reviewers had all approved and the pull request waited on a person named
+ * under Human review. An approval again is left out: it is asked while the
+ * lead may not have approved the new diff yet, so "Approved" would be wrong.
  */
 export function awaitedApprovalsOf(attention: readonly AttentionItem[]): ReadonlyMap<string, readonly string[]> {
   const awaited = new Map<string, string[]>();
   for (const item of attention) {
-    if (item.kind !== 'merge_waiting' || !item.awaiting) continue;
+    if (item.kind !== 'merge_waiting' || !item.awaiting || item.awaiting.again) continue;
     const login = item.awaiting.login;
     for (const ref of new Set([item.subject.ref, item.subject.item].filter((one): one is string => Boolean(one)))) {
       const was = awaited.get(ref) ?? [];

@@ -353,7 +353,7 @@ none yet, says its kind of work instead ("writing the change").
    each head too (`review.person_awaited` `{subjectRef, repo, pr, issue,
    login, head, paths}`), and Needs you shows them "waits for @x's approval",
    with the Human review paths that name them, until they give a verdict, a
-   newer round opens, or the issue leaves Review. One asked to approve again
+   round opens on another head, or the issue leaves Review. One asked to approve again
    has only that card. Both are recorded where the gate is settled, and the
    attention read never asks GitHub for them
    ([ADR 0015](adr/0015-a-wait-on-a-person-is-recorded-where-the-gate-is-settled.md)). A
