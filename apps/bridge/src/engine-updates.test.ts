@@ -743,6 +743,30 @@ describe('rolling back', () => {
     expect(hostd.starts[0]?.input.hold).toEqual({ [CODEX]: '0.156.1' });
   });
 
+  it('keeps what an earlier rollback held back when it undoes a rebuild, which moved no version', async () => {
+    const { service, hostd, data } = updates({ stored: { engineUpdateHold: '{"@openai/codex":"0.157.0"}' } });
+    hostd.rollbackEngines = async (identity: string) => {
+      const rolled = result({
+        state: 'rolled-back',
+        trigger: 'rollback',
+        requestedBy: identity,
+        from: PINS,
+        to: PINS,
+        latest: null,
+        checks: [],
+        reason: 'the previous image carries the same versions',
+        startedAt: '2026-09-28T07:00:00.000Z',
+        finishedAt: '2026-09-28T07:00:08.000Z',
+      });
+      hostd.status = { ...hostd.status, last: rolled };
+      return rolled;
+    };
+
+    await service.rollback('ada');
+
+    expect(data.engineUpdateHold).toBe('{"@openai/codex":"0.157.0"}');
+  });
+
   it('is refused while an update is running', async () => {
     const { service, hostd } = updates();
     hostd.hang = true;

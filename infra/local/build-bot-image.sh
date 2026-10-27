@@ -27,7 +27,8 @@
 # starts from. When the image's `openadlc.recipe` label is not this recipe's
 # digest (`--recipe-digest`), the update rebuilds it with every pin equal to
 # what the image carries, so a release's new recipe reaches the bots without
-# moving an engine.
+# moving an engine. This script is part of that recipe: any edit to it, a
+# comment included, rebuilds every docker-driver install's bot image once.
 set -euo pipefail
 
 # The version a tool printed equals the pin. `node --version` is `v22.20.0`.

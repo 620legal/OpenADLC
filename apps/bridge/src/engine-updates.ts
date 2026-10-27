@@ -989,8 +989,11 @@ export class EngineUpdates {
           target: 'bot-image',
           payload: { from: result.from, to: result.to, refreshed: result.refreshed ?? [], deferred: result.deferred ?? [] },
         });
+        // A rollback across a recipe rebuild swaps two images with the same
+        // versions: it undid no version, so what an earlier rollback held back
+        // still stands, as it does after the rebuild itself.
         const hold = undone(result);
-        await this.store.set(KEY.hold, Object.keys(hold).length > 0 ? JSON.stringify(hold) : '', who);
+        if (Object.keys(hold).length > 0) await this.store.set(KEY.hold, JSON.stringify(hold), who);
         break;
       }
       default:

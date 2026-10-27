@@ -554,6 +554,11 @@ describe('an image behind its recipe', () => {
     world.recipe = OLD;
     expect((await service.status()).recipe).toMatchObject({ current: OLD, behind: true });
     expect(world.recipeAsks).toBe(2);
+
+    // A run asks again: the digest of the recipe it is about to judge, not the last status's.
+    world.recipe = NEW;
+    expect((await service.updateAndWait({ trigger: 'schedule' })).state).toBe('current');
+    expect(world.recipeAsks).toBeGreaterThan(2);
   });
 
   it('is not behind when the script cannot say its digest, or when there is no image yet', async () => {
