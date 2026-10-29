@@ -1,4 +1,4 @@
-import { acknowledgements, bots, issues, leases, listEventsOfType, mergeLines, modelAccounts, repos, requests, standingApprovals, tasks, threads, type HealthRow } from '@openadlc/db';
+import { acknowledgements, bots, issues, lastAudit, leases, listEventsOfType, mergeLines, modelAccounts, repos, requests, standingApprovals, tasks, threads, type HealthRow } from '@openadlc/db';
 import { rulesFileEditUrl } from './deploy-routes.js';
 import { heldForPerson, REQUIRED_CHECKS } from './merge-line.js';
 import { readUnowned } from './unowned-issues.js';
@@ -306,7 +306,7 @@ export interface AttentionItem {
   /**
    * Stable across reads, by kind: `gate:…`, `merge:repo#pr`, `approve-again:repo#pr@login`, `approval:repo#pr@login`, `promote:repo@sha`,
    * `unowned:repo`, `stall:repo#pr`, `sendback:repo#n`, `design-memory:…`, `plan-change:<gate>`,
-   * `intake-stalled:repo#n`, `dependency-abandoned:repo#n`, `stack-hold:repo#n`, `task:…`, `landed:…`, `request:…`,
+   * `intake-stalled:repo#n`, `parked:repo#n`, `dependency-abandoned:repo#n`, `stack-hold:repo#n`, `task:…`, `landed:…`, `request:…`,
    * `engine-update`, `check:…`, `fixed:…`, or `task-group:…`,
    * `triage-group:…` and `check-group:…` for a folded card.
    */
@@ -477,6 +477,12 @@ export interface AttentionInput {
   designMemoryEvents?: readonly { at: string; payload: unknown }[];
   /** Issues intake stopped trying, newest first (`StageHandoff.intakeGaveUp`). Absent, none. */
   intakeStalls?: readonly { at: string; payload: unknown }[];
+  /**
+   * The newest `issue.triaged` audit row of each issue labelled `needs-triage`,
+   * by `repo#n` (`sendToTriage`): when and why routing parked it. Absent, none
+   * is known, and a parked issue's card says so without a reason.
+   */
+  triaged?: ReadonlyMap<string, { at: string; reason: string | null }>;
   /** Answered work waiting for GitHub before it resumes (`TaskService.waitForGitHub`), while still owed that resume. Absent, none. */
   resumeWaits?: readonly ResumeWait[];
   /** Approved plan changes whose gate stays open until other work lets go of their paths. Absent, none. */
@@ -1640,6 +1646,33 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     });
   }
 
+  // An issue parked for a person with `needs-triage`, in any stage. Nothing in
+  // the crew picks one up, and no card said so: #203 sat in Build for 23 hours
+  // with "Waiting for triage" on its board card, because the stuck-work card
+  // covers only a free seat and the intake-stalled card only intake. Made from
+  // its labels and its newest `issue.triaged` row, so it goes when the label
+  // does. An intake-stalled card already says what to do about the same issue.
+  for (const issue of input.issues) {
+    if (!issue.labels.includes('needs-triage') || issue.stage === 'merged' || issue.stage === 'done') continue;
+    const key = `${issue.repoName}#${issue.number}`;
+    if (items.some((item) => item.id === `intake-stalled:${key}`)) continue;
+    const triaged = input.triaged?.get(key);
+    // Shown as routing wrote it: the "needs …" list after the first clause is what a person fixes.
+    const reason = triaged?.reason?.trim().replace(/\.\s*$/, '');
+    items.push({
+      id: `parked:${key}`,
+      kind: 'triage_failed',
+      headline: `#${issue.number} is parked for a person`,
+      subject: subjectOf(key).subject,
+      bot: null,
+      since: triaged?.at ?? issue.updatedAt,
+      detail: reason
+        ? `Routing parked it: ${reason}. Fix that on the issue, then take needs-triage off and put start:now on.`
+        : 'It was labelled needs-triage, which nothing in the crew picks up. Fix what it needs on the issue, then take needs-triage off and put start:now on.',
+      actions: issue.url ? [{ kind: 'open_url', label: 'Open the issue', url: issue.url }] : [],
+    });
+  }
+
   // A blocked issue waiting on one closed without merging, which will never
   // ship: the dispatcher leaves it blocked, and only a person can settle it.
   // One card per waiting issue, made from what the issues say and stored
@@ -2107,8 +2140,11 @@ function stuckItems(
   for (const [ref, waiting] of cards) {
     const reason = waiting.reason;
     if (!waiting.stuck || reason.kind !== 'free' || stalledIntake.has(ref)) continue;
-    const bot = [...botsById.values()].find((one) => one.name === reason.seat.name);
     const issue = input.issues.find((one) => `${one.repoName}#${one.number}` === ref);
+    // A parked issue is free outside Build, and Start it now there runs a sweep
+    // that holds it back again: its parked: card is the one instruction.
+    if (issue?.labels.includes('needs-triage')) continue;
+    const bot = [...botsById.values()].find((one) => one.name === reason.seat.name);
     const minutes = Math.max(1, Math.round((input.now.getTime() - Date.parse(waiting.since)) / 60_000));
     const work = issue?.stage === 'intake' ? 'its triage' : issue?.stage === 'spec' ? 'its design pass' : 'its build';
     const nextAt = reason.nextAt ? Date.parse(reason.nextAt) : null;
@@ -2576,6 +2612,18 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
   // OpenADLC's own holds on stacked changes, read only while something is held.
   const paused = issueList.filter((issue) => hasPausedLabel(issue.labels));
   const stackHolds = paused.length > 0 ? await heldStacks(paused).catch((): HeldStack[] => []) : [];
+  // Why routing parked each issue labelled needs-triage, read only while one
+  // is: the board reads this every fifteen seconds. A read that fails keeps the
+  // card, without its reason.
+  const parked = issueList.filter((issue) => issue.labels.includes('needs-triage') && issue.stage !== 'done' && issue.stage !== 'merged');
+  const triaged = new Map<string, { at: string; reason: string | null }>();
+  await Promise.all(
+    parked.map(async (issue) => {
+      const key = `${issue.repoName}#${issue.number}`;
+      const row = await (async () => lastAudit('issue.triaged', key))().catch(() => null);
+      if (row) triaged.set(key, { at: row.at, reason: typeof row.payload?.reason === 'string' ? row.payload.reason : null });
+    }),
+  );
   // Asked for only when one waited this week: the board reads this every fifteen seconds.
   const resumeWaits = await (async () => {
     const said = await listEventsOfType(RESUME_WAITS_ON_GITHUB, since);
@@ -2685,6 +2733,7 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     stallEvents,
     sendBackEvents,
     intakeStalls,
+    triaged,
     resumeWaits,
     heldPlanChanges,
     designMemoryEvents,
