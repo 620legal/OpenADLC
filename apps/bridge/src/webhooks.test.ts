@@ -8843,6 +8843,8 @@ describe('a stage label moved back on GitHub', () => {
 describe('a stage label moved forward on GitHub', () => {
   const issue = (labels: string[]) => ({ number: 7, title: 'Cache the price list', body: '', htmlUrl: 'https://github.test/janedoe/openadlc/issues/7', labels });
   const REPO_ROW = { id: 'repo-1', name: 'openadlc', fullName: 'janedoe/openadlc', defaultBranch: 'main', specRequiredLabels: ['touches:schema'] };
+  /** What intake must put on before its stage label is taken (`missingLabels`). */
+  const INTAKES_OWN = ['priority:p1', 'area:general', 'do:ai'];
 
   /** `null` is a row stored with no spec mode, which the bridge reads as the default. */
   function bridge(specMode: string | null = 'conditional') {
@@ -8905,7 +8907,7 @@ describe('a stage label moved forward on GitHub', () => {
     store.issue = { number: 7, stage: 'intake', labels: ['adlc:intake'], prNumber: null };
     const { webhooks, automation, stages } = bridge('conditional');
 
-    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:build', 'touches:schema']), 'labeled', 'ottoexampleco');
+    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:build', 'touches:schema', ...INTAKES_OWN]), 'labeled', 'ottoexampleco');
 
     expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ issueNumber: 7, to: 'spec', actor: 'bridge' }));
     expect(store.issue?.stage).toBe('spec');
@@ -8918,7 +8920,7 @@ describe('a stage label moved forward on GitHub', () => {
     store.issue = { number: 7, stage: 'intake', labels: ['adlc:intake'], prNumber: null };
     const { webhooks, automation, stages } = bridge(null);
 
-    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:build']), 'labeled', 'ottoexampleco');
+    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:build', ...INTAKES_OWN]), 'labeled', 'ottoexampleco');
 
     expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ issueNumber: 7, to: 'spec', actor: 'bridge' }));
     expect(store.issue?.stage).toBe('spec');
@@ -8929,13 +8931,13 @@ describe('a stage label moved forward on GitHub', () => {
     store.issue = { number: 7, stage: 'intake', labels: ['adlc:intake'], prNumber: null };
     const { webhooks, automation } = bridge('conditional');
 
-    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:build']), 'labeled', 'ottoexampleco');
+    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:build', ...INTAKES_OWN]), 'labeled', 'ottoexampleco');
     expect(automation.moveStage).not.toHaveBeenCalled();
     expect(upserts).toContainEqual(expect.objectContaining({ stage: 'build' }));
 
     // Design with no label that calls for one: the rule sends it to Build.
     store.issue = { number: 7, stage: 'intake', labels: ['adlc:intake'], prNumber: null };
-    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:spec']), 'labeled', 'ottoexampleco');
+    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:spec', ...INTAKES_OWN]), 'labeled', 'ottoexampleco');
     expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ to: 'build' }));
   });
 
@@ -8943,11 +8945,39 @@ describe('a stage label moved forward on GitHub', () => {
     store.issue = { number: 7, stage: 'intake', labels: ['adlc:intake'], prNumber: null };
     const { webhooks, automation, stages } = bridge('untouched');
 
-    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:spec', 'touches:schema']), 'labeled', 'ottoexampleco');
+    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:spec', 'touches:schema', ...INTAKES_OWN]), 'labeled', 'ottoexampleco');
 
     expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ to: 'build' }));
     expect(store.issue?.stage).toBe('build');
     expect(stages.staff).toHaveBeenCalledWith(expect.objectContaining({ stage: 'build' }));
+  });
+
+  it('puts intake’s Design back in intake while its area label is not on, and starts nothing', async () => {
+    // #203: intake put `adlc:spec` on and never `area:general`; it was stored
+    // as Design and parked a stage later, at routing.
+    const { audit } = await import('@openadlc/db');
+    store.issue = { number: 7, stage: 'intake', labels: ['adlc:intake'], prNumber: null };
+    const { webhooks, automation, stages } = bridge('autonomous');
+
+    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:spec', 'priority:p1', 'do:ai']), 'labeled', 'ottoexampleco');
+
+    expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ issueNumber: 7, to: 'intake', actor: 'bridge' }));
+    expect(store.issue?.stage).toBe('intake');
+    expect(upserts).not.toContainEqual(expect.objectContaining({ stage: 'spec' }));
+    expect(stages.staff).not.toHaveBeenCalled();
+    expect(vi.mocked(audit)).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'stage.forward_refused', actor: 'ottoexampleco', payload: expect.objectContaining({ why: expect.stringContaining('an area label') }) }),
+    );
+  });
+
+  it('keeps intake’s Design when all three of its labels are on', async () => {
+    store.issue = { number: 7, stage: 'intake', labels: ['adlc:intake'], prNumber: null };
+    const { webhooks, automation } = bridge('autonomous');
+
+    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:spec', ...INTAKES_OWN]), 'labeled', 'ottoexampleco');
+
+    expect(automation.moveStage).not.toHaveBeenCalled();
+    expect(upserts).toContainEqual(expect.objectContaining({ number: 7, stage: 'spec' }));
   });
 
   it('routes an issue intake filed straight into a stage, which the board has no row for yet', async () => {
@@ -8955,7 +8985,7 @@ describe('a stage label moved forward on GitHub', () => {
     store.issue = null;
     const { webhooks, automation } = bridge('conditional');
 
-    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:build', 'touches:schema']), 'opened', 'ottoexampleco');
+    await webhooks.learnIssue({ id: 'repo-1', name: 'openadlc' }, issue(['adlc:build', 'touches:schema', ...INTAKES_OWN]), 'opened', 'ottoexampleco');
 
     expect(upserts[0]).toMatchObject({ number: 7, stage: 'intake' });
     expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ to: 'spec' }));

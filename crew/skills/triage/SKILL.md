@@ -147,11 +147,13 @@ and say in your last message that you stopped because of it.
    labels that fits the issue. Then set the stage by that rule: `adlc:spec`
    when the mode is `autonomous`, or when it is `conditional` and the issue
    carries one of those labels; `adlc:build` otherwise. Never `adlc:spec` when
-   the mode is `untouched`. The bridge sets the stage from the labels by the
-   same rule as soon as your label comes in, and again when your task ends, so
-   a stage label the rule does not give is moved to the one it does. Those
-   two are the only stage labels you set, and only with `gh issue create` or
-   `gh issue edit`; OpenADLC's `gh` refuses any other.
+   the mode is `untouched`. Those two are the only stage labels you set, and
+   only with `gh issue create` or `gh issue edit`; OpenADLC's `gh` refuses any
+   other. The bridge sets the stage from the labels by the same rule as soon
+   as your label comes in, and again when your task ends, so a stage label the
+   rule does not give is moved to the one it does. It holds the issue in
+   intake until all three of the labels above are on, and starts you on it
+   again when your task ends without one.
    A `do:ai` issue for Build also gets exactly one of `start:now`, when
    nothing under its Dependencies is unshipped, or `blocked`, when something
    is. The dispatcher builds only what carries `start:now`, and turns
@@ -159,6 +161,13 @@ and say in your last message that you stopped because of it.
    neither is one nothing ever starts. A `do:human`, `do:product` or
    `do:legal` issue gets neither: give it `needs-human`, since a person owes
    the work or the decision, and the dispatcher never offers it to a builder.
+
+   Then read the labels back:
+   `gh issue view <n> --repo <owner/name> --json labels --jq '.labels[].name'`.
+   A label you meant to put on may not have landed. Add any of the three above
+   that is missing, take off any second `do:` label so exactly one is left,
+   and read them back again. The receipt in step 7 lists the
+   labels as read back, not the ones you meant to apply.
 7. Link related issues and any alert issues with the same fingerprint, then post
    the receipt: what you filed, where, and what happens next. It is a comment
    on the issue, ending with the `plan_posted` marker ("Markers"); for a
@@ -195,6 +204,23 @@ comment which lines you rewrote, then set the stage again as step 6 says.
 
 An issue sent back more times than the repository allows stays with a person
 (`needs-human`); you are not started on it until they take that off.
+
+## When `missing-labels.md` is in your context
+
+The issue is already filed and agreed. Your last task on it ended without one
+of the labels step 6 gives every issue, and the bridge kept it in intake; the
+file names which.
+
+1. Apply the labels it names, choosing them as step 6 says, and the stage
+   label by the spec rule (step 6). When it names two `do:` labels, take off
+   the one that does not fit; when you cannot tell which, ask the person.
+2. Read the labels back as step 6 says, and post them as read back, in a
+   comment ending with the `plan_posted` marker.
+
+Do not redraft the issue, rewrite its body or ask to confirm it again. When no
+label fits, ask the person which, one question as "Asking a person" says.
+After intake's tries without them, the bridge leaves the issue to a person
+in Needs you.
 
 ## An issue the platform filed
 
