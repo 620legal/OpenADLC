@@ -2648,6 +2648,38 @@ describe('a card about history', () => {
     expect(card?.incident).toMatchObject({ did: 'review', counted: true });
   });
 
+  it('offers no Dismiss, and no Check again, on a card no dismissal puts right', async () => {
+    // A post OpenADLC refused to sign: nobody to say "This was me", and
+    // nothing a person presses clears it.
+    const { attentionItems } = await load();
+    const [card] = attentionItems({
+      now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [],
+      health: [
+        healthRow({
+          id: 'unsigned-refused',
+          checkId: 'unsigned-refused',
+          state: 'failing',
+          severity: 'warning',
+          title: 'OpenADLC could not sign the ship’s comment on janedoe/www#12',
+          detail: 'It went out unsigned because OpenADLC refused to sign it.',
+          action: { label: 'Open the post', url: 'https://github.com/janedoe/www/pull/12#issuecomment-5' },
+          facts: {
+            history: true,
+            occurrence: 'post:42',
+            occurrences: ['post:42'],
+            dismissable: false,
+            incident: { repo: 'janedoe/www', did: 'comment', counted: true, refusal: { reason: 'not #12', seat: 'ship', taskId: 'task-1', status: 403 } },
+          },
+        }),
+      ],
+    });
+    expect(card?.actions).toEqual([
+      { kind: 'open_url', label: 'Open the post', url: 'https://github.com/janedoe/www/pull/12#issuecomment-5' },
+      { kind: 'incident', label: 'What to do' },
+    ]);
+    expect(card?.incident).toMatchObject({ refusal: { reason: 'not #12' } });
+  });
+
   it('is dismissed for when it started failing when its check names no occurrence', async () => {
     const { attentionItems } = await load();
     const row = healthRow({ id: 'old-news', checkId: 'old-news', state: 'failing', title: 'Something happened', facts: { history: true } });

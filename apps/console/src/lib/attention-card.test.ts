@@ -172,6 +172,36 @@ describe('an unsigned post’s card', () => {
   });
 });
 
+describe('the card for a post OpenADLC refused to sign', () => {
+  // The bridge offers no acknowledge on it (`dismissable: false`): it is
+  // OpenADLC's gap, not the account's, so nobody says it was them.
+  const refused: AttentionItem = {
+    ...ITEM,
+    kind: 'check_failed',
+    actions: [
+      { kind: 'open_url', label: 'Open the post', url: 'https://github.com/exampleco/www/pull/12#issuecomment-5' },
+      { kind: 'incident', label: 'What to do' },
+    ],
+    incident: {
+      repo: 'exampleco/www',
+      login: 'janedoe-ship',
+      seat: 'ship',
+      did: 'comment',
+      postUrl: 'https://github.com/exampleco/www/pull/12#issuecomment-5',
+      target: { kind: 'pr', number: 12, url: 'https://github.com/exampleco/www/pull/12' },
+      counted: true,
+      mode: 'audit',
+      refusal: { reason: 'a task on www@20b84446 may sign a post only on its own issue or pull request, not #12', seat: 'ship', taskId: 'task-1', status: 403 },
+    },
+  };
+
+  it('offers the post and What to do, and no Dismiss or This was me', () => {
+    const labels = faceActions(refused).map((action) => action.label);
+    expect(labels).toEqual(['Open the post', 'What to do']);
+    expect(faceActions(refused).some((action) => action.kind === 'acknowledge')).toBe(false);
+  });
+});
+
 describe('a detail built to be slow', () => {
   it('reads eighty thousand characters of brackets and line breaks at once', () => {
     const started = performance.now();

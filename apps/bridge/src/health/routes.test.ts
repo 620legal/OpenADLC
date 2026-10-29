@@ -45,6 +45,7 @@ let url: string;
 let permissions: ReturnType<typeof scripted>;
 let webhook: ReturnType<typeof scripted>;
 let unsigned: ReturnType<typeof scripted>;
+let refused: ReturnType<typeof scripted>;
 let acknowledged: [string, string, string, readonly string[]][];
 let audited: { action: string; target: string }[];
 
@@ -69,10 +70,20 @@ beforeEach(async () => {
       facts: { occurrence: 'post:41', occurrences: ['post:41', 'post:40'] },
     },
   ]);
+  refused = scripted('unsigned-refused', [
+    {
+      ok: false,
+      severity: 'warning',
+      title: 'OpenADLC could not sign the ship’s comment on janedoe/www#12',
+      detail: 'It went out unsigned because OpenADLC refused to sign it.',
+      action: { label: 'Open the post', url: 'https://github.com/janedoe/www/pull/12#issuecomment-1' },
+      facts: { occurrence: 'post:42', occurrences: ['post:42'], dismissable: false },
+    },
+  ]);
   acknowledged = [];
   audited = [];
   const registry = new HealthRegistry({
-    checks: [permissions, webhook, unsigned],
+    checks: [permissions, webhook, unsigned, refused],
     store: memory(),
     consoleUrl: 'http://127.0.0.1:47300',
     log: () => undefined,
@@ -138,5 +149,15 @@ describe('dismissing a notice with nothing to fix', () => {
     const unnamed = await acknowledge('unattributed-post', {});
     expect(unnamed.status).toBe(400);
     expect(acknowledged).toEqual([]);
+  });
+
+  it('refuses a card no dismissal puts right, which the console offers no Dismiss on', async () => {
+    // A post OpenADLC refused to sign: the card clears when a task like it
+    // signs, or a day after the post, never because someone pressed a button.
+    const response = await acknowledge('unsigned-refused', { occurrence: 'post:42' });
+    expect(response.status).toBe(409);
+    expect(await response.text()).toContain('OpenADLC refused to sign that post');
+    expect(acknowledged).toEqual([]);
+    expect(audited).toEqual([]);
   });
 });
