@@ -153,9 +153,12 @@ export interface UnsignedIncident {
 const REFUSAL_LEAD_MS = 60 * 60 * 1000;
 
 /**
- * The refusal an unsigned post was, newest first, or null: the same
- * repository, the same account, the same body, and the same number when the
- * refusal named one, refused no later than the post was recorded.
+ * The refusal an unsigned post was, or null: the same repository, the same
+ * account, the same body, and the same number when the refusal named one,
+ * refused no later than the post was recorded. An open refusal wins over a
+ * cleared one, newest first within each: seats on one account share a login,
+ * and a cleared refusal of another task's shape would otherwise have taken the
+ * post off this card while its own refusal was still open.
  */
 export function refusalFor(post: UnattributedRecord, refusals: readonly StampRefusal[]): StampRefusal | null {
   if (!post.bodySha256) return null;
@@ -168,7 +171,8 @@ export function refusalFor(post: UnattributedRecord, refusals: readonly StampRef
     if (!refusal.bodySha256 || refusal.bodySha256 !== post.bodySha256) continue;
     if (refusal.number !== null && refusal.number !== number) continue;
     if (posted !== null && Date.parse(refusal.at) > posted) continue;
-    if (!found || Date.parse(refusal.at) > Date.parse(found.at)) found = refusal;
+    if (!found || (found.clearedAt !== null && refusal.clearedAt === null)) found = refusal;
+    else if ((found.clearedAt === null) === (refusal.clearedAt === null) && Date.parse(refusal.at) > Date.parse(found.at)) found = refusal;
   }
   return found;
 }

@@ -884,6 +884,9 @@ describe('a revert task signing on the pull request it opened', () => {
     repoId: 'repo-www',
     skill: null,
   };
+  // A live check's subject ends in a commit too, but names no repository on
+  // its own: given a branch, it still signs on none of its pull requests.
+  const LIVE = { ...REVERT, id: 'task-live', kind: 'qa', subjectType: 'request', subjectRef: 'www#testing@20b84446' };
   const pullsFromBranch = vi.fn(async (_repo: string, _branch: string) => [
     { number: 12, baseRef: 'main', headSha: 'c'.repeat(40), createdAt: '2026-10-28T10:00:00Z', closedAt: null },
   ]);
@@ -897,7 +900,7 @@ describe('a revert task signing on the pull request it opened', () => {
   beforeEach(async () => {
     const { bots, repos, tasks } = await import('@openadlc/db');
     original = vi.mocked(tasks.getTask).getMockImplementation()! as (id: string) => Promise<unknown>;
-    vi.mocked(tasks.getTask).mockImplementation(async (id: string) => (id === 'task-revert' ? REVERT : original(id)) as never);
+    vi.mocked(tasks.getTask).mockImplementation(async (id: string) => (id === 'task-revert' ? REVERT : id === 'task-live' ? LIVE : original(id)) as never);
     vi.mocked(bots.getBotById).mockImplementation(async (id: string) =>
       (id === 'bot-ship' ? { id, name: 'ship', githubLogin: 'openadlc-ship' } : { id: 'bot-builder', name: 'builder', displayName: 'Builder', engine: 'codex' }) as never,
     );
@@ -922,11 +925,18 @@ describe('a revert task signing on the pull request it opened', () => {
     const own = await post('/internal/tasks/task-revert/stamp', { body: 'Reverted.', kind: 'comment', number: 12 });
     expect(own.status).toBe(200);
     expect(await own.json()).toEqual({ body: 'Reverted.\n\n<!-- signed as ship -->' });
-    expect(pullsFromBranch).toHaveBeenCalledWith('620legal/www', 'system/revert-20b84446');
+    expect(pullsFromBranch).toHaveBeenCalledWith('620legal/www', 'system/revert-20b84446', { timeoutMs: 5_000 });
     expect(sign).toHaveBeenCalledWith('Reverted.', expect.objectContaining({ seat: 'ship', task: 'task-revert', repo: '620legal/www', kind: 'comment', n: 12 }));
 
     sign.mockClear();
     expect((await post('/internal/tasks/task-revert/stamp', { body: 'Elsewhere.', kind: 'comment', number: 13 })).status).toBe(403);
+    expect(sign).not.toHaveBeenCalled();
+  });
+
+  it('signs nothing for a repo#testing@sha task, though it has a branch', async () => {
+    pullsFromBranch.mockClear();
+    expect((await post('/internal/tasks/task-live/stamp', { body: 'Checked.', kind: 'comment', number: 12 })).status).toBe(403);
+    expect(pullsFromBranch).not.toHaveBeenCalled();
     expect(sign).not.toHaveBeenCalled();
   });
 

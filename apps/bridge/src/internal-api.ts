@@ -46,7 +46,7 @@ import { WEBHOOK_BODY_MAX } from './webhook-gateway.js';
 import { settleLeaseAfter, usageProblem } from './task-service.js';
 import type { StageHandoff } from './stage-handoff.js';
 import { sentBackReason } from './send-back.js';
-import { issueNumberFromBranch, parseRef } from './work.js';
+import { issueNumberFromBranch, parseRef, repoOfSubject } from './work.js';
 import type { Webhooks } from './webhooks.js';
 
 export const INTERNAL_SECRET_HEADER = 'x-openadlc-internal-secret';
@@ -1322,6 +1322,9 @@ export function registerInternalApi(
   });
 }
 
+/** How long a revert task's stamp waits on GitHub for its branch's pull requests. */
+const BRANCH_PULLS_TIMEOUT_MS = 5_000;
+
 /**
  * The numbers a task's posts may name: its subject, and the issue's pull
  * request or the pull request's issue. A commit's task (`repo@sha`, a
@@ -1337,9 +1340,14 @@ async function targetsOfTask(
   repo: { name: string; fullName: string } | null,
 ): Promise<number[]> {
   if (!subject) {
-    if (!repo || !task.branch || !/^[^@\s]+@[0-9a-f]{7,40}$/i.test(task.subjectRef)) return [];
+    // Only `<this repository>@<sha>`: a live check's `www#testing@<sha>` has
+    // the same tail, and with a branch it would have signed every pull
+    // request from that branch.
+    if (!repo || !task.branch || !/@[0-9a-f]{7,40}$/i.test(task.subjectRef) || repoOfSubject(task.subjectRef) !== repo.name) return [];
     const client = await asAutomation(deps.actors, deps.config).catch(() => null);
-    const pulls = client ? await client.pullsFromBranch(repo.fullName, task.branch).catch(() => null) : null;
+    // A short read: the gh shim waits on this route with no timeout of its
+    // own, and GitHub is slow exactly when a revert runs.
+    const pulls = client ? await client.pullsFromBranch(repo.fullName, task.branch, { timeoutMs: BRANCH_PULLS_TIMEOUT_MS }).catch(() => null) : null;
     return (pulls ?? []).map((pull) => pull.number);
   }
   const own = [subject.number];

@@ -208,6 +208,20 @@ describe('the card for a crew post OpenADLC refused to sign', () => {
     }
   });
 
+  it('keeps the post on its card while any refusal of it is open, though a newer one of another shape cleared', async () => {
+    const older = { ...refusal, at: '2026-10-28T10:59:00.000Z', taskId: 'task-revert-open' };
+    const newerCleared = { ...refusal, taskId: 'task-other', taskKind: 'fix', subjectType: 'issue', clearedAt: '2026-10-28T11:30:00.000Z' };
+    expect(refusalFor(unsigned, [newerCleared, older])).toMatchObject({ taskId: 'task-revert-open', clearedAt: null });
+    expect(refusalFor(unsigned, [older, newerCleared])).toMatchObject({ taskId: 'task-revert-open', clearedAt: null });
+    const [result] = await stampRefusedCheck(reader([newerCleared, older])).run(NOW);
+    expect(result).toMatchObject({ ok: false });
+    expect(await attributionCheck(reader([newerCleared, older])).run(NOW)).toMatchObject([{ ok: true }]);
+    // Every match cleared: the newest, and the post is on neither card.
+    const olderCleared = { ...older, clearedAt: '2026-10-28T11:20:00.000Z' };
+    expect(refusalFor(unsigned, [olderCleared, newerCleared])).toMatchObject({ taskId: 'task-other' });
+    expect(await stampRefusedCheck(reader([olderCleared, newerCleared])).run(NOW)).toMatchObject([{ ok: true }]);
+  });
+
   it('matches no refusal made after the post, and none with no body', async () => {
     expect(refusalFor(unsigned, [{ ...refusal, at: '2026-10-28T11:00:06.000Z' }])).toBeNull();
     expect(refusalFor({ ...unsigned, bodySha256: null }, [refusal])).toBeNull();
