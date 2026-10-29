@@ -55,7 +55,9 @@ export function usePull(subject: string): { view: PullView | null; reload: () =>
         if (response.status === 404) return setView(null);
         if (!response.ok) return setError(await errorOf(response));
         setError(null);
-        setView((await response.json()) as PullView);
+        // An older bridge has no such route, and a page's own answer is not a view.
+        const body = (await response.json().catch(() => null)) as PullView | null;
+        setView(body && Array.isArray(body.commands) && Array.isArray(body.outputs) ? body : null);
       })
       .catch(() => live && setError('The console is not answering.'));
     return () => {
