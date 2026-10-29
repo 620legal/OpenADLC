@@ -287,7 +287,13 @@ none yet, says its kind of work instead ("writing the change").
    another change in flight holds — an exclusive path until that change merges,
    any other path only while it is being built, a shared path never, as the
    repository's `paths:` in `.github/openadlc.yml` says — and a builder has room — a seat runs
-   up to its tasks at once, each in a computer of its own. It **leases** the
+   up to its tasks at once, each in a computer of its own. An issue that does
+   not say enough is parked for a person instead: labelled `needs-triage`,
+   `start:now` taken off, a "Not routable yet" comment, and an `issue.triaged`
+   audit row with the reason. Nothing in the crew picks it up, so Needs you
+   shows a `triage_failed` card (`parked:<repo>#<n>`) with that reason and what
+   to do, in any stage, until the label comes off, the issue closes or it is
+   labelled `openadlc:ignore`. It **leases** the
    issue to that builder — the issue, the bot, the declared paths, an expiry —
    and the bridge opens an `implement` task. hostd clones the repository's
    mirror for the task, on a branch
