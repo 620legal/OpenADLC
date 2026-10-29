@@ -293,7 +293,7 @@ none yet, says its kind of work instead ("writing the change").
    audit row with the reason. Nothing in the crew picks it up, so Needs you
    shows a `triage_failed` card (`parked:<repo>#<n>`) with that reason and what
    to do, in any stage, until the label comes off, the issue closes or it is
-   labelled `openadlc:ignore`. It **leases** the
+   labelled `openadlc:ignore`. Otherwise the dispatcher **leases** the
    issue to that builder — the issue, the bot, the declared paths, an expiry —
    and the bridge opens an `implement` task. hostd clones the repository's
    mirror for the task, on a branch

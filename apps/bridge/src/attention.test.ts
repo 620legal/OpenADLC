@@ -3494,6 +3494,13 @@ describe('work stuck with its seat free', () => {
     expect(await items({ issues: [triage], intakeStalls: [{ at: minutesAgo(30), payload: { subjectRef: 'openadlc-testbed#141', tries: 2 } }] })).toEqual([]);
   });
 
+  // Outside Build a parked issue's seat is free, and Start it now there only
+  // runs a sweep that holds it back: the parked: card says what to do.
+  it.each(['intake', 'spec'])('is not said for an issue parked with needs-triage in %s', async (stage) => {
+    const parked = { ...design, stage: stage as never, labels: [`adlc:${stage}`, 'needs-triage'] };
+    expect(await items({ issues: [parked] })).toEqual([]);
+  });
+
   it('says when no sweep will come', async () => {
     const [stuck] = await items({ waiting: { nextSweepAt: null } });
     expect(stuck?.detail).toContain('the stage sweep that would is off on this bridge (OPENADLC_JOB_STAGES_MINUTES=0)');

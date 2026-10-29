@@ -2132,8 +2132,11 @@ function stuckItems(
   for (const [ref, waiting] of cards) {
     const reason = waiting.reason;
     if (!waiting.stuck || reason.kind !== 'free' || stalledIntake.has(ref)) continue;
-    const bot = [...botsById.values()].find((one) => one.name === reason.seat.name);
     const issue = input.issues.find((one) => `${one.repoName}#${one.number}` === ref);
+    // A parked issue is free outside Build, and Start it now there runs a sweep
+    // that holds it back again: its parked: card is the one instruction.
+    if (issue?.labels.includes('needs-triage')) continue;
+    const bot = [...botsById.values()].find((one) => one.name === reason.seat.name);
     const minutes = Math.max(1, Math.round((input.now.getTime() - Date.parse(waiting.since)) / 60_000));
     const work = issue?.stage === 'intake' ? 'its triage' : issue?.stage === 'spec' ? 'its design pass' : 'its build';
     const nextAt = reason.nextAt ? Date.parse(reason.nextAt) : null;
