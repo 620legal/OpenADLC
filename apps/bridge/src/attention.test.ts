@@ -307,7 +307,7 @@ describe('what needs a person', () => {
     expect(item).toMatchObject({
       group: 'work',
       headline: 'Pull request #5 waits for you to merge it',
-      detail: 'ci and review-gate passed, but OpenADLC did not merge it, because it changes how CI runs (Makefile).',
+      detail: `${(await import('./merge-line.js')).REQUIRED_CHECKS.join(' and ')} passed, but OpenADLC did not merge it, because it changes how CI runs (Makefile).`,
       actions: [{ kind: 'open_url', label: 'Merge it on GitHub' }],
     });
     expect(`${item?.headline} ${item?.detail}`).not.toMatch(/ready|CI is green/);
@@ -332,11 +332,39 @@ describe('what needs a person', () => {
     expect(item).toMatchObject({
       id: 'merge:openadlc-testbed#46',
       headline: 'Pull request #46 waits for you to merge it',
-      detail: 'ci and review-gate passed, but OpenADLC did not merge it, because visual-review failed on the head.',
+      detail: `${(await import('./merge-line.js')).REQUIRED_CHECKS.join(' and ')} passed, but OpenADLC did not merge it, because visual-review failed on the head.`,
       actions: [{ kind: 'open_url', label: 'Merge it on GitHub' }],
     });
     expect(item?.headline).not.toMatch(/ready|CI is green/);
     expect(item?.detail).not.toMatch(/ready|CI is green/);
+  });
+
+  it.each([
+    'review-gate as OpenADLC published it is not green on the head',
+    "a commit status named ci is on the head, and only GitHub Actions' check run counts",
+  ])('does not say ci and review-gate passed over a reason that one of them did not count: %s', async (reason) => {
+    // The line held it because a success filled the name, but mergeDecision
+    // refused that success: "ci and review-gate passed" beside it contradicts it.
+    const { attentionItems } = await load();
+    const items = attentionItems({
+      now: NOW,
+      gates: [],
+      tasks: [],
+      bots: BOTS,
+      repos: REPOS,
+      issues: ISSUES,
+      requests: [],
+      stallEvents: [],
+      heldMerges: [{ repo: 'openadlc-testbed', prNumber: 47, reason, since: minutesAgo(2) }],
+    });
+    const item = items.find((one) => one.kind === 'merge_waiting');
+    expect(item).toMatchObject({
+      id: 'merge:openadlc-testbed#47',
+      headline: 'Pull request #47 waits for you to merge it',
+      detail: `OpenADLC did not merge it, because ${reason}.`,
+      actions: [{ kind: 'open_url', label: 'Merge it on GitHub' }],
+    });
+    expect(`${item?.headline} ${item?.detail}`).not.toMatch(/passed|ready|CI is green/);
   });
 
   describe('a person asked to approve a pull request again', () => {
