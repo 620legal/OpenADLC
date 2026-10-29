@@ -65,7 +65,7 @@ describe('linking a person’s GitHub account', () => {
   it('keeps the login and id of the account that approved, revokes the token, and audits it', async () => {
     const { made, rows, audits, revoked } = deps();
     const { url, as, flows } = await serve(made);
-    const started = await (await fetch(`${url}/v1/me/github`, as('jane@example.com', 'POST'))).json();
+    const started = (await (await fetch(`${url}/v1/me/github`, as('jane@example.com', 'POST'))).json()) as { flowId: string };
     expect(started).toEqual({ flowId: expect.any(String), userCode: 'WXYZ-0001', verificationUri: 'https://github.com/login/device', expiresInSeconds: expect.any(Number) });
     await flows.lastRun;
     // Only the person who started it reads how it went.
@@ -80,7 +80,7 @@ describe('linking a person’s GitHub account', () => {
   it('refuses a login the crew uses, and keeps nothing', async () => {
     const { made, rows, revoked } = deps({ viewer: async () => ({ login: 'fleet-atlas-orzelig', id: 9 }) });
     const { url, as, flows } = await serve(made);
-    const started = await (await fetch(`${url}/v1/me/github`, as('jane@example.com', 'POST'))).json();
+    const started = (await (await fetch(`${url}/v1/me/github`, as('jane@example.com', 'POST'))).json()) as { flowId: string };
     await flows.lastRun;
     const said = await (await fetch(`${url}/v1/me/github/flows/${started.flowId}`, as('jane@example.com'))).json();
     expect(said).toEqual({ state: 'failed', error: expect.stringMatching(/account the crew uses/) });
@@ -92,7 +92,7 @@ describe('linking a person’s GitHub account', () => {
     const { made, rows } = deps();
     rows.set('bob@example.com', { githubLogin: 'janedoe', githubUserId: 583231 });
     const { url, as, flows } = await serve(made);
-    const started = await (await fetch(`${url}/v1/me/github`, as('jane@example.com', 'POST'))).json();
+    const started = (await (await fetch(`${url}/v1/me/github`, as('jane@example.com', 'POST'))).json()) as { flowId: string };
     await flows.lastRun;
     const said = await (await fetch(`${url}/v1/me/github/flows/${started.flowId}`, as('jane@example.com'))).json();
     expect(said).toEqual({ state: 'failed', error: expect.stringMatching(/already linked to another person/) });
@@ -114,7 +114,7 @@ describe('linking a person’s GitHub account', () => {
     const { url, as } = await serve(made);
     const response = await fetch(`${url}/v1/me/github`, as('jane@example.com', 'POST'));
     expect(response.status).toBe(409);
-    expect((await response.json()).error).toMatch(/Create the app/);
+    expect(((await response.json()) as { error: string }).error).toMatch(/Create the app/);
   });
 
   it('does not revoke without a client secret: the token then expires on GitHub', async () => {

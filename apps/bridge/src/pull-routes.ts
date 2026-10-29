@@ -30,7 +30,10 @@ export function livePullCommands(input: { reader: () => Promise<PullReader | nul
     reader: input.reader,
     app: (fullName) => theApp(fullName),
     flows: input.flows,
-    person: { isCrew: input.person.isCrew, store: { ofIdentity: personAccounts.ofIdentity, ofUserId: personAccounts.ofUserId } },
+    person: {
+      isCrew: input.person.isCrew,
+      store: { ofIdentity: (identity) => personAccounts.ofIdentity(identity), ofUserId: (id) => personAccounts.ofUserId(id) },
+    },
     userIdOf: async (login) => {
       const client = await input.reader();
       if (!client) return null;

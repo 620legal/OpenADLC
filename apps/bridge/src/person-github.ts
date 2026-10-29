@@ -67,7 +67,13 @@ export function livePersonGitHubDeps(config: BridgeConfig): PersonGitHubDeps {
       if (crew.some((bot) => bot.githubLogin?.toLowerCase() === lower)) return true;
       return Boolean(await identities.identityByLogin(login));
     },
-    store: personAccounts,
+    // Read when used: the api's routes are registered before anything reads a
+    // person's link, and a test's mock of the store need not carry this one.
+    store: {
+      link: (input) => personAccounts.link(input),
+      unlink: (identity) => personAccounts.unlink(identity),
+      ofIdentity: (identity) => personAccounts.ofIdentity(identity),
+    },
     audit: async (entry) => {
       await writeAudit(entry);
     },

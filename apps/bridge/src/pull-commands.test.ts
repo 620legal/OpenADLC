@@ -190,7 +190,7 @@ describe('a command anyone may send', () => {
 
 describe('a command only a reviewer may send', () => {
   it('is not offered to a person with no link, or linked to another account, and is refused to them', async () => {
-    for (const linked of [{}, { 'bob@example.com': 77 }]) {
+    for (const linked of [{}, { 'bob@example.com': 77 }] as Record<string, number>[]) {
       const { commands, personPosts, appPosts } = setUp({ linked });
       const view = await commands.read(REPO, 46, 'bob@example.com');
       const approve = view.commands.find((one) => one.name === 'approve-pages')!;

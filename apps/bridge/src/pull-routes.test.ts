@@ -41,7 +41,7 @@ describe('the pull panel’s routes', () => {
     expect(read).toHaveBeenCalledWith(REPO, 46, 'jane@example.com');
     const none = await fetch(`${url}/v1/items/${encodeURIComponent('www#13')}/pull`, { headers: as });
     expect(none.status).toBe(404);
-    expect((await none.json()).error).toMatch(/no pull request yet/);
+    expect(((await none.json()) as { error: string }).error).toMatch(/no pull request yet/);
   });
 
   it('presses a command for the head the button was shown for, and refuses a body without one', async () => {
