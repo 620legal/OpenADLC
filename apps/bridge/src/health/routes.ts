@@ -55,6 +55,11 @@ export function registerHealthRoutes(router: Router, registry: HealthRegistry, d
     if (typeof row.facts.occurrence !== 'string' && row.facts.history !== true) {
       throw new HttpFailure(409, 'that card has something to fix, so it clears when the fix is made rather than being dismissed');
     }
+    // The console offers no Dismiss on such a card; this is what holds a
+    // caller that asks anyway.
+    if (row.facts.dismissable === false) {
+      throw new HttpFailure(409, 'OpenADLC refused to sign that post; the card clears once a task like it signs, or a day after the post');
+    }
     const shown =
       row.facts.occurrence === occurrence && Array.isArray(row.facts.occurrences)
         ? row.facts.occurrences.filter((one): one is string => typeof one === 'string')

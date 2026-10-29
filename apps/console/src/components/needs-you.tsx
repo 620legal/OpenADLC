@@ -576,11 +576,13 @@ function NeedsCard({
               <IncidentSteps
                 ref={steps}
                 incident={item.incident}
+                // None on a card no dismissal puts right: a post OpenADLC
+                // refused to sign has no acknowledge, and nobody to say it was them.
                 thisWasMe={(() => {
                   const dismiss = item.actions.find((action) => action.kind === 'acknowledge');
                   return dismiss ? (
                     <ActionButton action={dismiss} primary={false} pending={pending} active={active} onOpenBot={openFromSheet} run={run} />
-                  ) : null;
+                  ) : undefined;
                 })()}
               />
             )}
