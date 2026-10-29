@@ -16,14 +16,16 @@ vi.mock('@openadlc/db', async (importOriginal) => {
           ? { id: 'b1', name: 'builder', githubLogin: 'openadlc-atlas-janedoe' }
           : name === 'intake' || name === 'lead-reviewer'
             ? { id: `id-${name}`, name, githubLogin: 'openadlc-example' }
-            : null,
+            : name === 'automation'
+              ? { id: 'id-automation', name, role: 'automation', githubLogin: 'openadlc-example' }
+              : null,
       ),
     },
-    // `builder` has an account of its own and no identity recorded; `intake`
-    // and `lead-reviewer` share one, filed under `openadlc-example`.
+    // `builder` has an account of its own and no identity recorded; `intake`,
+    // `lead-reviewer` and `automation` share one, filed under `openadlc-example`.
     identities: {
       identityOfBot: vi.fn(async (botId: string) =>
-        botId === 'id-intake' || botId === 'id-lead-reviewer'
+        botId === 'id-intake' || botId === 'id-lead-reviewer' || botId === 'id-automation'
           ? { id: 'shared', login: 'openadlc-example', githubUserId: null, secretNs: 'openadlc-example' }
           : null,
       ),
@@ -164,3 +166,34 @@ describe('a task’s token', () => {
   });
 });
 
+
+/**
+ * The automation bot's posts were headed with the install's name alone, so its
+ * "lead-reviewer asked for changes, and no builder holds …" comment on a pull
+ * request did not say which role had written it.
+ */
+describe('the automation bot’s client', () => {
+  it('heads what it posts with its role', async () => {
+    setSecretStore(memoryStore({ 'github-refresh-openadlc-example': 'ghr_zzz-old-zzz' }));
+    const posted: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (String(url).includes('/issues/')) {
+          posted.push(String((JSON.parse(String(init?.body)) as { body: string }).body));
+          return new Response(JSON.stringify({ id: 1, body: 'x', html_url: 'u', user: { login: 'openadlc-example' } }), { status: 201 });
+        }
+        return new Response(
+          JSON.stringify({ access_token: 'ghu_zzz-shared-zzz', expires_in: 28_800, refresh_token: 'ghr_zzz-next-zzz', refresh_token_expires_in: 15_897_600 }),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const client = await new Actors('Iv1.zzz-client-zzz', async () => 'OpenADLC_example').asBot('automation');
+    await client?.comment('o/r', 7, 'lead-reviewer asked for changes, and no builder holds this branch.');
+
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.startsWith('**OpenADLC_example · automation agent**<!-- openadlc-header -->\n\n')).toBe(true);
+  });
+});

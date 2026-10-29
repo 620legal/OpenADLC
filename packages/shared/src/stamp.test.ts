@@ -1,12 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { defaultInstallName, hasHeader, headerFor, HEADER_TAG, seatOf, seatTagOf, withHeader, withSeat } from './stamp.js';
+import { defaultInstallName, hasHeader, headerFor, HEADER_TAG, seatOf, seatTagOf, STAGE_LABEL, withHeader, withSeat } from './stamp.js';
+import type { BotRole } from './types.js';
 
 describe('the header on what OpenADLC posts', () => {
-  it('names the install and the stage, or the install alone for the platform', () => {
+  it('names the install and the role, or the install alone when there is no role', () => {
     expect(headerFor('OpenADLC_example', 'spec')).toBe(`**OpenADLC_example · design agent**${HEADER_TAG}`);
     expect(headerFor('OpenADLC_example', 'implement')).toBe(`**OpenADLC_example · build agent**${HEADER_TAG}`);
-    expect(headerFor('OpenADLC_example', 'automation')).toBe(`**OpenADLC_example**${HEADER_TAG}`);
+    expect(headerFor('OpenADLC_example', 'automation')).toBe(`**OpenADLC_example · automation agent**${HEADER_TAG}`);
     expect(headerFor('OpenADLC_example', null)).toBe(`**OpenADLC_example**${HEADER_TAG}`);
+  });
+
+  it('names a role for every bot, the automation bot included', () => {
+    for (const role of Object.keys(STAGE_LABEL) as BotRole[]) {
+      expect(headerFor('OpenADLC_example', role)).toContain(' · ');
+    }
+  });
+
+  it('leaves an old automation post, headed with the install alone, as it is', () => {
+    const old = `**OpenADLC_example**${HEADER_TAG}\n\nNo builder holds it.`;
+    expect(withHeader(old, headerFor('OpenADLC_example', 'automation'))).toBe(old);
   });
 
   it('defaults the install’s name to the organization', () => {

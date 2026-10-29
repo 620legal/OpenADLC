@@ -6,8 +6,8 @@ import type { BotRole } from './types.js';
  * With seats sharing GitHub accounts, every issue, comment and review
  * the crew writes is by the same user, and GitHub's own attribution says
  * nothing about which stage wrote it. So OpenADLC says it, first:
- * `**OpenADLC_exampleco · design agent**`, or just `**OpenADLC_exampleco**` in the
- * platform's own voice. It is for people to read; what OpenADLC itself trusts
+ * `**OpenADLC_exampleco · design agent**`, and the automation bot's
+ * `**OpenADLC_exampleco · automation agent**`. It is for people to read; what OpenADLC itself trusts
  * about who wrote something comes from `whoWrote`, not from this line.
  *
  * The invisible tag after it is what makes the header recognisable: adding it
@@ -16,8 +16,13 @@ import type { BotRole } from './types.js';
  */
 export const HEADER_TAG = '<!-- openadlc-header -->';
 
-/** What each stage is called in the header. The automation bot speaks as the platform, with no stage. */
-export const STAGE_LABEL: Readonly<Record<BotRole, string | null>> = {
+/**
+ * What each role is called in the header. Every role has one: the automation
+ * bot's posts were headed with the install's name alone, and a reader of its
+ * "lead-reviewer asked for changes, and no builder holds …" comment could not
+ * tell which role had written it.
+ */
+export const STAGE_LABEL: Readonly<Record<BotRole, string>> = {
   intake: 'intake agent',
   spec: 'design agent',
   implement: 'build agent',
@@ -26,7 +31,7 @@ export const STAGE_LABEL: Readonly<Record<BotRole, string | null>> = {
   review_security: 'security review agent',
   qa: 'QA agent',
   deploy: 'ship agent',
-  automation: null,
+  automation: 'automation agent',
 };
 
 /** The install's name when nobody has set one: `OpenADLC_<organization>`, or plain `OpenADLC`. */
@@ -35,7 +40,7 @@ export function defaultInstallName(organization: string | null | undefined): str
   return org ? `OpenADLC_${org}` : 'OpenADLC';
 }
 
-/** The header for a seat of this role, or for the platform itself (`null`). */
+/** The header for a seat of this role, or the install's name alone when there is no role (`null`); every bot has one. */
 export function headerFor(installName: string, role: BotRole | null): string {
   const stage = role ? STAGE_LABEL[role] : null;
   const name = installName.trim() || 'OpenADLC';
