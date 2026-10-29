@@ -2417,10 +2417,13 @@ export function attentionAction(action: HealthAction): AttentionAction {
 /**
  * Whether a held merge's reason names `ci` or `review-gate` as a word of its
  * own. It reads no more of `mergeDecision`'s prose than the names: "changes how
- * CI runs" and "visual-review failed" do not name either.
+ * CI runs" and "visual-review failed" do not name either. Nor does a path: a
+ * person-merges hold lists `.github/workflows/ci.yml`, and read as `ci` it
+ * lost the sentence saying the checks passed, so `-`, `/` and a `.` inside a
+ * name stay part of the word.
  */
 function namesRequiredCheck(reason: string): boolean {
-  return REQUIRED_CHECKS.some((name) => new RegExp(`(?<![\\w-])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).test(reason));
+  return REQUIRED_CHECKS.some((name) => new RegExp(`(?<![\\w./-])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/-]|\\.\\w)`).test(reason));
 }
 
 /** How many items wait on a person: a notice that something was fixed does not. */

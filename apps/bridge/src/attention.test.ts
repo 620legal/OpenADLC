@@ -313,6 +313,32 @@ describe('what needs a person', () => {
     expect(`${item?.headline} ${item?.detail}`).not.toMatch(/ready|CI is green/);
   });
 
+  it('says ci and review-gate passed over a person-merges reason that lists the ci workflow file', async () => {
+    // A path is not the check: `.github/workflows/ci.yml` read as `ci` dropped
+    // the sentence saying what passed from a hold where both had.
+    const { attentionItems } = await load();
+    const { REQUIRED_CHECKS } = await import('./merge-line.js');
+    const reason = 'it changes how CI runs (.github/workflows/ci.yml), and in this repository a person merges those';
+    const items = attentionItems({
+      now: NOW,
+      gates: [],
+      tasks: [],
+      bots: BOTS,
+      repos: REPOS,
+      issues: ISSUES,
+      requests: [],
+      stallEvents: [],
+      heldMerges: [{ repo: 'openadlc-testbed', prNumber: 48, reason, since: minutesAgo(2) }],
+    });
+    const item = items.find((one) => one.kind === 'merge_waiting');
+    expect(item).toMatchObject({
+      id: 'merge:openadlc-testbed#48',
+      headline: 'Pull request #48 waits for you to merge it',
+      detail: `${REQUIRED_CHECKS.join(' and ')} passed, but OpenADLC did not merge it, because ${reason}.`,
+      actions: [{ kind: 'open_url', label: 'Merge it on GitHub' }],
+    });
+  });
+
   it('says what passed on a pull request held for a red check, and does not call it ready', async () => {
     // 620legal/OpenADLC#206: the card said "is ready" and "CI is green" over a
     // reason that said visual-review failed on the head.
@@ -342,6 +368,8 @@ describe('what needs a person', () => {
   it.each([
     'review-gate as OpenADLC published it is not green on the head',
     "a commit status named ci is on the head, and only GitHub Actions' check run counts",
+    "a ci check run on the head is not GitHub Actions' run of the ci workflow",
+    "ci on the head is not this pull request's run against main: it ran for another pull request",
   ])('does not say ci and review-gate passed over a reason that one of them did not count: %s', async (reason) => {
     // The line held it because a success filled the name, but mergeDecision
     // refused that success: "ci and review-gate passed" beside it contradicts it.
