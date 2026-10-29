@@ -48,6 +48,7 @@ import {
   hasAbandonedLabel,
   hasIgnoreLabel,
   isIgnoreLabel,
+  missingLabels,
   REPO_DEFAULTS,
 } from '@openadlc/shared';
 import { touchesConfig, type GitHubClient } from '@openadlc/github';
@@ -1013,6 +1014,26 @@ export class Webhooks {
             prNumber: null,
           });
           const fromIntake = !known || known.stage === 'intake';
+          // Intake's move out of intake waits for its priority, area and one
+          // `do:` (`missingLabels`): accepted without them, #203 went on to
+          // Design with no area and was parked only at routing, a stage
+          // late. This only puts the stage back and starts nothing; intake
+          // is usually still running, and its end decides
+          // (`StageHandoff.afterIntake`), so a stage label sent before the
+          // area costs one flip.
+          const missing = fromIntake && (liveStage === 'spec' || liveStage === 'build') ? missingLabels(labels) : [];
+          if (missing.length > 0) {
+            if (!known) await store(row('intake'));
+            await this.automation.moveStage({ repoName: repo.name, issueNumber: issue.number, to: 'intake', actor: 'bridge' });
+            await audit({
+              actor: sender,
+              action: 'stage.forward_refused',
+              target: `${repo.name}#${issue.number}`,
+              payload: { from: 'intake', to: liveStage, why: `intake’s labels are not all on: ${missing.join(', ')}` },
+            }).catch(() => undefined);
+            console.warn(`[bridge] ${repo.name}#${issue.number}: ${sender} moved it on from intake to ${liveStage} without ${missing.join(', ')}; put back`);
+            return;
+          }
           if (fromIntake && (liveStage === 'spec' || liveStage === 'build')) {
             const full = await repos.getRepoByName(repo.name).catch(() => null);
             const to = full

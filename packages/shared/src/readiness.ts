@@ -30,12 +30,14 @@ export interface RoutableIssue {
 }
 
 /**
- * What is missing before this can be leased, in the order a person would fix it.
- * Empty means it is ready.
+ * The labels intake must give an issue that it lacks: a priority, an area and
+ * exactly one `do:`. Empty means it has them. Routing read them only when an
+ * issue was considered for Build, so one intake left without its area went
+ * through Design first and was parked a stage late (#203); intake's end and
+ * its stage label read this too (`StageHandoff.afterIntake`, the webhook).
  */
-export function missingForRouting(issue: RoutableIssue): string[] {
+export function missingLabels(labels: readonly string[]): string[] {
   const missing: string[] = [];
-  const labels = issue.labels;
 
   if (!labels.some((label) => label.startsWith('priority:'))) missing.push('a priority label');
   if (!labels.some((label) => label.startsWith('area:'))) missing.push('an area label');
@@ -45,6 +47,16 @@ export function missingForRouting(issue: RoutableIssue): string[] {
   // who acts that nothing downstream resolves.
   if (doers.length === 0) missing.push('a do: label');
   else if (doers.length > 1) missing.push(`one do: label, not ${doers.length} (${doers.join(', ')})`);
+
+  return missing;
+}
+
+/**
+ * What is missing before this can be leased, in the order a person would fix it.
+ * Empty means it is ready.
+ */
+export function missingForRouting(issue: RoutableIssue): string[] {
+  const missing = missingLabels(issue.labels);
 
   for (const section of REQUIRED_SECTIONS) {
     if (!section.pattern.test(issue.body)) missing.push(`${/^[aeiou]/i.test(section.field) ? 'an' : 'a'} ${section.field} section`);
