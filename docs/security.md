@@ -1326,6 +1326,36 @@ counting toward a merge, so an open pull request waits for a fresh lead review;
 in audit mode nothing is held. Either way, take a new backup: an older one
 restores the old key.
 
+### A person's sign-off
+
+A pull-request command that only a named reviewer may send, such as www's
+`/approve-pages`, has to reach GitHub as that reviewer's own account
+([configuration](configuration.md#pull-request-commands-and-what-the-workflows-post)).
+OpenADLC holds no credential of the reviewer's to do it.
+
+- **What is kept.** In Settings → Your GitHub account, a person links their
+  account by approving a device code as it. The bridge asks GitHub who
+  approved, and keeps that login and account id (`person_github_accounts`).
+  A login the crew uses is refused, and so is an account another person has
+  linked. An admin cannot set the link for someone else.
+- **What is not kept.** No token. At each sign-off the person approves a fresh
+  device code. The bridge checks the approving account is the linked one,
+  posts the one declared comment with that token on the one pull request, and
+  revokes the token at once (`DELETE /applications/{client_id}/token`). The
+  token is never written to the database, the secret store, a log, an audit
+  row, a response or an error.
+- **Without the app's client secret**, the token cannot be revoked. It
+  expires on GitHub after 8 hours, still unkept.
+- **The sign-in as a whole** can be revoked by the person at any time, under
+  github.com → Settings → Applications → Authorized GitHub Apps.
+
+The app's `administration: write` and `pull_requests: write` would let a kept
+token approve pull requests and edit rulesets as its owner. That is why
+nothing is kept
+([ADR 0018](adr/0018-a-sign-off-is-posted-with-a-token-kept-for-one-post.md)).
+A command anyone may send is posted as the app's installation, and never by a
+crew account.
+
 OpenADLC never asks for a personal access token, and nothing in the repository
 should ever contain one. If you find a credential in a diff, treat it as leaked:
 revoke it at the provider, then rotate.

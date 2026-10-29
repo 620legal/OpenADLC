@@ -20,6 +20,11 @@ export type { Role } from '@openadlc/db';
 export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // Who is asking, which every page reads.
   'GET /v1/me': 'user',
+  // A person's own GitHub account, linked by their own sign-in and unlinked by
+  // them: each acts only on the caller's identity (`person-github.ts`).
+  'POST /v1/me/github': 'user',
+  'GET /v1/me/github/flows/:flowId': 'user',
+  'DELETE /v1/me/github': 'user',
 
   // The board, the crew, the threads and the costs, to read.
   'GET /v1/board': 'user',
@@ -62,6 +67,13 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'POST /v1/gates/:id/ask-designer': 'user',
   'POST /v1/gates/:id/take-back': 'user',
   'POST /v1/items/:subject/approve-all/off': 'user',
+  // A work item's pull request: its declared commands, what its workflows
+  // posted, and its screenshots, and pressing a command. A reviewer-only one
+  // is posted only from the caller's own GitHub sign-in (`pull-commands.ts`).
+  'GET /v1/items/:subject/pull': 'user',
+  'POST /v1/items/:subject/pull/commands/:name': 'user',
+  'GET /v1/items/:subject/pull/flows/:flowId': 'user',
+  'GET /v1/items/:subject/pull/images/:commentId/:index': 'user',
   'POST /v1/threads/:bot/messages': 'user',
   'POST /v1/items/:subject/messages': 'user',
   // A file given with a request or a message, and looking at one.

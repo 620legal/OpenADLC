@@ -142,6 +142,29 @@ describe('what needs you', () => {
     expect(html).not.toContain('Pull request');
   });
 
+  it('puts a held pull request’s declared commands before "Merge it on GitHub", and only where its repository declares them', () => {
+    // 620legal/OpenADLC#207: the card offered only the merge, which skipped
+    // the page sign-off the red visual-review waited for.
+    const MERGE: AttentionItem = {
+      id: 'merge:www#46',
+      kind: 'merge_waiting',
+      group: 'work',
+      headline: 'Pull request #46 waits for you to merge it',
+      subject: { repo: 'www', number: 12, title: 'New pricing page', ref: 'www#12', url: 'https://github.com/620legal/www/pull/46' },
+      bot: null,
+      since: '2026-09-24T11:59:00.000Z',
+      detail: 'ci and review-gate passed, but OpenADLC did not merge it, because visual-review failed on the head.',
+      actions: [{ kind: 'open_url', label: 'Merge it on GitHub', url: 'https://github.com/620legal/www/pull/46' }],
+    };
+    const declared = needs([{ ...MERGE, pull: { repo: 'www', number: 46 } }]);
+    expect(declared).toContain('data-pull-actions');
+    expect(declared.indexOf('data-pull-actions')).toBeLessThan(declared.indexOf('Merge it on GitHub'));
+
+    const plain = needs([MERGE]);
+    expect(plain).not.toContain('data-pull-actions');
+    expect(plain).toContain('Merge it on GitHub');
+  });
+
   it('asks an admin what to do about issues OpenADLC will not take on its own, with all three choices on the card', () => {
     // Filed by an old crew account with no access, they were skipped in silence.
     const UNOWNED: AttentionItem = {

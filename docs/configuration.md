@@ -461,6 +461,72 @@ Egress, which hostd puts on the proxy at once, or the operator adds it to
 proxy refuses it, the `testing-egress` check is a card on the board that names
 the repository and the host and opens Settings with the host offered.
 
+#### Pull-request commands and what the workflows post
+
+A repository whose own workflows answer pull-request comments can list them
+under `pullRequests:`, with what its bots post back. The pull request's work
+item, and any Needs-you card about it, then shows a button for each command
+and what the workflows posted for its head: a preview's address and the
+before and after screenshots, without opening GitHub.
+
+```yaml
+pullRequests:
+  commands:
+    - name: preview              # lower-case letters, digits and dashes; unique
+      comment: /preview          # one line, starting with /, at most 100 characters; posted exactly
+      label: Preview
+      by: anyone                 # anyone: posted as the app | reviewer: posted as one of reviewers
+      answer: preview            # optional: the output that answers it
+    - name: approve-pages
+      comment: /approve-pages
+      label: Approve pages
+      by: reviewer
+      reviewers: [orzelig]       # required for by: reviewer
+      unblocks: visual-review    # optional: a check run's name or a commit status's context
+  outputs:
+    - name: preview
+      kind: link
+      from: [github-actions[bot]]          # the authors read; this is the default
+      match: "Preview of #{pr} at {sha}: {url}"
+    - name: screenshots
+      kind: images
+      marker: "<!-- visual-review -->"
+      head: "at {sha}"                     # optional: where the comment names its commit
+```
+
+- A command anyone may send is posted as the OpenADLC app, with exactly the
+  `comment` text. The repository's workflow has to admit a comment from the
+  app's `[bot]` account. A crew account never posts one.
+- A command with `by: reviewer` is offered only to the console person who
+  linked one of the `reviewers` accounts in Settings → Your GitHub account. It
+  is posted as that account, from a GitHub sign-in the person approves at each
+  press. OpenADLC keeps no token for it ([security](security.md#a-persons-sign-off)).
+  Anyone else sees why they cannot press it, and a link to the pull request.
+- `match` and `head` are templates, not regular expressions. `{pr}` (digits),
+  `{sha}` (7 to 40 hex characters) and `{url}` (`https://`, no spaces) are the
+  only placeholders, and every other character is matched literally on one
+  line. A `link` output needs `match` with `{url}`. An `images` output needs a
+  `marker`.
+- An output is current when its `{sha}` is the head, or, with no sha, when
+  the comment came after the head's commit. Otherwise it is marked older.
+- The images of an `images` comment are read by the bridge with its own
+  GitHub access, from GitHub's image hosts or the repository's own files, and
+  served by the console. The browser is never given a GitHub or signed
+  address.
+- A command shows "sent" until its `answer` output is posted, or its
+  `unblocks` check completes, after it. With neither for 30 minutes it can be
+  pressed again.
+- On a Needs-you card about a held merge, a command whose `unblocks` check is
+  red comes first, then the other commands as declared, then "Merge it on
+  GitHub".
+- A comment that is exactly a declared command is for the workflow. It
+  answers no bot's question and wakes no build.
+- At most 10 commands and 10 outputs are read. An entry that does not parse is
+  dropped, and its error is shown on the pull request's work item. The rest
+  still work.
+- The section is read on its own. It never changes how the repository ships,
+  and a mistake in it leaves the delivery rules above as they were.
+
 ### costs.yaml — what OpenADLC may spend
 
 | Key | Default | Effect |

@@ -510,7 +510,68 @@ export interface AttentionItem {
   heldApproval?: { blockedBy: number[]; paths: string[] };
   /** A pull request's that waits on a person's approval (`merge_waiting`): who, whether it is an approval again, and the Human review paths that name them. Absent from an older bridge. */
   awaiting?: { login: string; again: boolean; paths: string[] };
+  /**
+   * The pull request it is about, when its repository declares commands in
+   * `.github/openadlc.yml`: the card shows that pull request's command buttons
+   * before its own. Absent for a repository that declares none, and from an older bridge.
+   */
+  pull?: { repo: string; number: number };
 }
+
+/** A pull request's declared command, as the bridge's `pull-commands.ts` says it for the person asking. */
+export interface PullCommandView {
+  name: string;
+  label: string;
+  comment: string;
+  by: 'anyone' | 'reviewer';
+  reviewers: string[];
+  unblocks: string | null;
+  /** Whether this person may press it: a reviewer's own sign-off is offered only to them. */
+  offered: boolean;
+  /** Why not, with where else it can be sent. */
+  why?: string;
+  /** `sent` until the workflow answers; `quiet` after half an hour with no answer, when it may be pressed again. */
+  state: 'ready' | 'sent' | 'answered' | 'quiet';
+  answer?: string;
+  commentUrl?: string;
+  sentAt?: string;
+}
+
+/** What a repository's workflow posted on a pull request: its newest comment that is the output. */
+export interface PullOutputView {
+  name: string;
+  kind: 'link' | 'images';
+  found: {
+    commentId: number;
+    commentUrl: string;
+    at: string;
+    url?: string;
+    sha?: string;
+    /** Whether it is for the pull request's head; older, it is marked so. */
+    current: boolean;
+    images?: { index: number; alt: string | null }[];
+  } | null;
+}
+
+/** A work item's pull request, as its pull panel shows it: `GET /v1/items/:subject/pull`. */
+export interface PullView {
+  repo: string;
+  number: number;
+  url: string;
+  open: boolean;
+  head: string;
+  checks: Record<string, string | null>;
+  /** In the order they are shown: a command whose check is red first. */
+  commands: PullCommandView[];
+  outputs: PullOutputView[];
+  /** Why entries of the repository's `pullRequests:` section were dropped. */
+  errors: string[];
+}
+
+/** What pressing a command answered: posted, or a sign-in to approve first. */
+export type PullCommandSent =
+  | { state: 'sent'; commentUrl: string }
+  | { flow: { flowId: string; userCode: string; verificationUri: string; expiresInSeconds: number } };
 
 /** What an unsigned crew post was, where, and whether it counted; `health/checks/attribution.ts` in the bridge. */
 export interface UnsignedIncident {

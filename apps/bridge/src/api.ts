@@ -108,6 +108,8 @@ import { selfUpdateAttentionFromSettings } from './self-update.js';
 import { ATTENTION_WINDOW_DAYS, ClosedSubjects, registerAttentionRoutes, STOPPED_BY_A_PERSON, type HeldPromote } from './attention.js';
 import { bridgeStopReason, stoppedByTheBridge, THE_BRIDGE } from './bridge-stops.js';
 import { asAutomation } from './automation-bot.js';
+import { livePersonGitHubDeps, PersonFlows, registerPersonGitHubRoutes } from './person-github.js';
+import { livePullCommands, registerPullRoutes } from './pull-routes.js';
 import { DeployKnowledge, isTestingDeployChoice, testingDeployChoice, testingDeployStored } from './deploys.js';
 import { deploysNothingHere } from './deploy-pipeline.js';
 import { releaseEventsOf } from './health/checks/ships-by-release.js';
@@ -1031,6 +1033,13 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
   };
   // Which repositories ship by merging, for the Ship column; see `deploys.ts`.
   const deploys = new DeployKnowledge(() => asAutomation(deps.actors, config));
+  // A pull request's declared commands and what its workflows posted, and a
+  // person's own GitHub account to send a sign-off from (`pull-commands.ts`).
+  const personGitHub = livePersonGitHubDeps(config);
+  const personFlows = new PersonFlows(personGitHub);
+  const pullCommands = livePullCommands({ reader: () => asAutomation(deps.actors, config), person: personGitHub, flows: personFlows });
+  registerPersonGitHubRoutes(router, personGitHub, personFlows);
+  registerPullRoutes(router, pullCommands, personFlows);
   // hostd signs a subscription in and checks an account, where the bots think.
   registerModelAccountRoutes(router, {
     ...defaultModelAccountDeps(hostd),
@@ -1068,6 +1077,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       if (deps.delivery && found) return (await deps.delivery.get(found)).rules.testing.on === 'none';
       return deploys.shipsByMerging(repo.fullName, testingDeployChoice(await settings.getSetting('testingDeploy').catch(() => null), repo.name));
     },
+    declaresCommands: (repo) => pullCommands.rules.declares(repo),
     // Promotes held for a person, and whether the file sets the rules that held them.
     heldPromotes: async () => {
       const [held, list] = await Promise.all([deployRuns.heldForPerson(), repos.listRepos()]);
