@@ -2329,7 +2329,10 @@ export function healthItems(
           bot: asAttentionBot(botOf(row)),
           since: row.failingSince ?? row.checkedAt,
           actions: [
-            ...(occurrence
+            // A card about history that no dismissal puts right
+            // (`dismissable: false`, a post OpenADLC refused to sign) has
+            // only its occurrence, to come back for a newer one.
+            ...(occurrence && row.facts.dismissable !== false
               ? [{ kind: 'acknowledge' as const, label: typeof row.facts.dismissLabel === 'string' ? row.facts.dismissLabel : 'Dismiss', checkId: row.id, occurrence }]
               : []),
             ...signingKeyActions(row.facts),

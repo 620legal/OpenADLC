@@ -48,6 +48,7 @@ vi.mock('@openadlc/db', async (importOriginal) => {
     },
     listAudit: vi.fn(),
     mergeLines: {},
+    hasEventOfType: vi.fn(async () => false),
     recordEvent: vi.fn(),
     repos: {
       getRepoByName: vi.fn(async () => null),
@@ -865,6 +866,154 @@ describe('a task signing what it posts', () => {
     } finally {
       vi.mocked(repos.listRepos).mockResolvedValue([{ id: 'repo-1', name: 'openadlc', fullName: 'exampleco/openadlc' }] as never);
     }
+  });
+});
+
+describe('a revert task signing on the pull request it opened', () => {
+  // 620legal/www#12: a deploy task on www@20b84446 reverting it, from
+  // system/revert-20b84446. Its subject has no number, so every post on its
+  // own pull request was refused and went out unsigned.
+  const REVERT = {
+    id: 'task-revert',
+    state: 'running',
+    kind: 'deploy',
+    subjectType: 'merge',
+    subjectRef: 'www@20b84446',
+    branch: 'system/revert-20b84446',
+    botId: 'bot-ship',
+    repoId: 'repo-www',
+    skill: null,
+  };
+  // A live check's subject ends in a commit too, but names no repository on
+  // its own: given a branch, it still signs on none of its pull requests.
+  const LIVE = { ...REVERT, id: 'task-live', kind: 'qa', subjectType: 'request', subjectRef: 'www#testing@20b84446' };
+  const pullsFromBranch = vi.fn(async (_repo: string, _branch: string) => [
+    { number: 12, baseRef: 'main', headSha: 'c'.repeat(40), createdAt: '2026-10-28T10:00:00Z', closedAt: null },
+  ]);
+  const refusals = async () => {
+    const { recordEvent } = await import('@openadlc/db');
+    return vi.mocked(recordEvent).mock.calls.map(([event]) => event).filter((event) => event.type === 'attribution.stamp_refused');
+  };
+
+  let original: (id: string) => Promise<unknown>;
+
+  beforeEach(async () => {
+    const { bots, repos, tasks } = await import('@openadlc/db');
+    original = vi.mocked(tasks.getTask).getMockImplementation()! as (id: string) => Promise<unknown>;
+    vi.mocked(tasks.getTask).mockImplementation(async (id: string) => (id === 'task-revert' ? REVERT : id === 'task-live' ? LIVE : original(id)) as never);
+    vi.mocked(bots.getBotById).mockImplementation(async (id: string) =>
+      (id === 'bot-ship' ? { id, name: 'ship', githubLogin: 'openadlc-ship' } : { id: 'bot-builder', name: 'builder', displayName: 'Builder', engine: 'codex' }) as never,
+    );
+    vi.mocked(repos.listRepos).mockResolvedValue([
+      { id: 'repo-1', name: 'openadlc', fullName: 'exampleco/openadlc' },
+      { id: 'repo-www', name: 'www', fullName: '620legal/www' },
+    ] as never);
+    automationGithub = { pullsFromBranch };
+  });
+
+  afterEach(async () => {
+    const { bots, repos, tasks } = await import('@openadlc/db');
+    vi.mocked(tasks.getTask).mockImplementation(original as never);
+    vi.mocked(bots.getBotById).mockImplementation(async () => ({ id: 'bot-builder', name: 'builder', displayName: 'Builder', engine: 'codex' }) as never);
+    vi.mocked(repos.listRepos).mockResolvedValue([{ id: 'repo-1', name: 'openadlc', fullName: 'exampleco/openadlc' }] as never);
+    pullsFromBranch.mockImplementation(async () => [
+      { number: 12, baseRef: 'main', headSha: 'c'.repeat(40), createdAt: '2026-10-28T10:00:00Z', closedAt: null },
+    ]);
+  });
+
+  it('signs a post on the pull request from its own branch, and on no other number', async () => {
+    const own = await post('/internal/tasks/task-revert/stamp', { body: 'Reverted.', kind: 'comment', number: 12 });
+    expect(own.status).toBe(200);
+    expect(await own.json()).toEqual({ body: 'Reverted.\n\n<!-- signed as ship -->' });
+    expect(pullsFromBranch).toHaveBeenCalledWith('620legal/www', 'system/revert-20b84446', { timeoutMs: 5_000 });
+    expect(sign).toHaveBeenCalledWith('Reverted.', expect.objectContaining({ seat: 'ship', task: 'task-revert', repo: '620legal/www', kind: 'comment', n: 12 }));
+
+    sign.mockClear();
+    expect((await post('/internal/tasks/task-revert/stamp', { body: 'Elsewhere.', kind: 'comment', number: 13 })).status).toBe(403);
+    expect(sign).not.toHaveBeenCalled();
+  });
+
+  it('signs nothing for a repo#testing@sha task, though it has a branch', async () => {
+    pullsFromBranch.mockClear();
+    expect((await post('/internal/tasks/task-live/stamp', { body: 'Checked.', kind: 'comment', number: 12 })).status).toBe(403);
+    expect(pullsFromBranch).not.toHaveBeenCalled();
+    expect(sign).not.toHaveBeenCalled();
+  });
+
+  it('signs no review, even of its own pull request', async () => {
+    const response = await post('/internal/tasks/task-revert/stamp', { body: 'Approved.', kind: 'review', number: 12, head: 'c'.repeat(40) });
+    expect(response.status).toBe(403);
+    expect(sign).not.toHaveBeenCalled();
+  });
+
+  it('signs nothing on its pull request when GitHub cannot list its branch’s', async () => {
+    pullsFromBranch.mockRejectedValueOnce(new Error('GitHub is unreachable'));
+    expect((await post('/internal/tasks/task-revert/stamp', { body: 'Reverted.', kind: 'comment', number: 12 })).status).toBe(403);
+    pullsFromBranch.mockResolvedValueOnce(null as never);
+    expect((await post('/internal/tasks/task-revert/stamp', { body: 'Reverted.', kind: 'comment', number: 12 })).status).toBe(403);
+    expect(sign).not.toHaveBeenCalled();
+  });
+
+  it('records the refusal, with what the unsigned post will be matched by', async () => {
+    const response = await post('/internal/tasks/task-revert/stamp', { body: 'Elsewhere.', kind: 'comment', number: 13 });
+    const reason = ((await response.json()) as { error: string }).error;
+    const { createHash } = await import('node:crypto');
+    expect(await refusals()).toEqual([
+      {
+        source: 'platform',
+        type: 'attribution.stamp_refused',
+        payload: {
+          taskId: 'task-revert',
+          taskKind: 'deploy',
+          subjectType: 'merge',
+          subjectRef: 'www@20b84446',
+          seat: 'ship',
+          login: 'openadlc-ship',
+          repo: '620legal/www',
+          number: 13,
+          kind: 'comment',
+          status: 403,
+          reason,
+          bodySha256: createHash('sha256').update('Elsewhere.').digest('hex'),
+        },
+      },
+    ]);
+    expect(reason).toContain('not #13');
+  });
+
+  it('records a refusal before the task was looked up, and one for a wrong seat tag, but none for a task it does not know', async () => {
+    expect((await post('/internal/tasks/task-1/stamp', { body: 'x'.repeat(65_537), kind: 'comment', number: 78 })).status).toBe(413);
+    expect((await post('/internal/tasks/task-1/stamp', { body: 'Hi.\n\n<!-- openadlc-seat:lead-reviewer -->', kind: 'comment', number: 78 })).status).toBe(400);
+    expect((await post('/internal/tasks/task-gone/stamp', { body: 'Hi.', kind: 'comment', number: 78 })).status).toBe(404);
+    expect((await refusals()).map((event) => (event.payload as { taskId: string; status: number })).map(({ taskId, status }) => [taskId, status])).toEqual([
+      ['task-1', 413],
+      ['task-1', 400],
+    ]);
+  });
+
+  it('answers the refusal still when it cannot be recorded', async () => {
+    const { recordEvent } = await import('@openadlc/db');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(recordEvent).mockRejectedValueOnce(new Error('the database is down'));
+    expect((await post('/internal/tasks/task-revert/stamp', { body: 'Elsewhere.', kind: 'comment', number: 13 })).status).toBe(403);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('the database is down'));
+    error.mockRestore();
+  });
+
+  it('records a signing again only when a task of its kind and subject type was refused', async () => {
+    const { hasEventOfType, recordEvent } = await import('@openadlc/db');
+    expect((await post('/internal/tasks/task-revert/stamp', { body: 'Reverted.', kind: 'comment', number: 12 })).status).toBe(200);
+    expect(hasEventOfType).toHaveBeenCalledWith('attribution.stamp_refused', expect.any(Date), { taskKind: 'deploy', subjectType: 'merge' });
+    expect(recordEvent).not.toHaveBeenCalled();
+
+    vi.mocked(hasEventOfType).mockResolvedValueOnce(true);
+    expect((await post('/internal/tasks/task-revert/stamp', { body: 'Reverted.', kind: 'comment', number: 12 })).status).toBe(200);
+    expect(recordEvent).toHaveBeenCalledTimes(1);
+    expect(recordEvent).toHaveBeenCalledWith({
+      source: 'platform',
+      type: 'attribution.stamp_signed',
+      payload: { taskId: 'task-revert', taskKind: 'deploy', subjectType: 'merge' },
+    });
   });
 });
 

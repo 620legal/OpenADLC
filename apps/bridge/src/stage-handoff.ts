@@ -4,7 +4,7 @@ import { leadReviewer, maxTasksOf, PLAN_CHANGE_REVIEW_SKILL, REPO_DEFAULTS, type
 import { seatsWaitedOn, type Automation } from './automation.js';
 import type { DispatchGate } from './dispatch-gate.js';
 import type { TaskService } from './task-service.js';
-import { dependencyIsSatisfied, hasIgnoreLabel, namesRepository, parseDependencyRefs } from '@openadlc/shared';
+import { dependencyIsSatisfied, hasIgnoreLabel, missingLabels, namesRepository, parseDependencyRefs } from '@openadlc/shared';
 import { isActive, issueNumberFromBranch, REVIEW_STALLED } from './work.js';
 import { INTAKE_STALLED } from './intake-events.js';
 import { SEAT_WAIT_WINDOW_MS, STAGE_WAITING_ON_SEAT, standingSeatWaits, type SeatWait, type SeatWaitPayload } from './seat-waits.js';
@@ -70,6 +70,21 @@ export interface OpenPull {
   labels: string[];
 }
 
+/** What intake is told when it ended with one of its labels left off (`afterIntake`). */
+function labelsBrief(missing: readonly string[]): ContextDocument {
+  return {
+    name: 'missing-labels.md',
+    title: 'Labels intake left off',
+    content: [
+      'Intake ended on this issue without all of the labels it must give it, as GitHub has them now:',
+      '',
+      ...missing.map((item) => `- ${item}`),
+      '',
+      'The bridge kept the issue in intake because of them. It moves on once they are on and this task ends.',
+    ].join('\n'),
+  };
+}
+
 /** How many times intake tries an issue that stays in intake, and over how long, before a person decides. */
 export const INTAKE_TRIES = 2;
 export const INTAKE_TRIES_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -122,6 +137,13 @@ export class StageHandoff {
      * read that fails, and only the lead is asked, as before.
      */
     private readonly pullOf: ((repoFullName: string, number: number) => Promise<OpenPull | null>) | null = null,
+    /**
+     * The issue's labels as GitHub has them now, for whether intake left all
+     * of its own on (`afterIntake`). The stored row can be behind: a label put
+     * on a moment before the task ended may not have been delivered yet.
+     * Absent, or a read that fails, and the stored labels are read.
+     */
+    private readonly labelsOf: ((repoFullName: string, number: number) => Promise<string[] | null>) | null = null,
   ) {}
 
   private async alreadyWorking(subjectRef: string): Promise<boolean> {
@@ -372,6 +394,26 @@ export class StageHandoff {
       return null;
     }
     if (hasIgnoreLabel(known.labels)) return null;
+
+    // An issue leaves intake only with its priority, area and one `do:`.
+    // #203's intake said it put `area:general` on and never did; it went on
+    // to Design, and was parked with `needs-triage` only when routing read
+    // the labels, after Design had spent a run on it. One a person already
+    // moved on is theirs, and is left to them.
+    if (known.stage === 'intake') {
+      const subjectRef = `${repo.name}#${input.issueNumber}`;
+      const live = this.labelsOf ? await this.labelsOf(repo.fullName, input.issueNumber).catch(() => null) : null;
+      const missing = missingLabels(live ?? known.labels);
+      if (missing.length > 0) {
+        await audit({ actor: 'bridge', action: 'intake.labels_missing', target: subjectRef, payload: { missing } }).catch(() => undefined);
+        // Asked here, not left to `staffing`: a brief is a person's message
+        // there, which overrides intake's tries, and this one is the bridge's.
+        // The task that just ended is already `done`, so it is one of them.
+        if (await this.intakeGaveUp(subjectRef)) return null;
+        await this.staffing({ repoName: repo.name, issueNumber: input.issueNumber, stage: 'intake', followOn: true, brief: [labelsBrief(missing)] });
+        return 'intake';
+      }
+    }
 
     const to = stageAfterIntake({
       labels: known.labels,

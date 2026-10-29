@@ -257,7 +257,14 @@ none yet, says its kind of work instead ("writing the change").
    Design or Build itself (`StageHandoff.afterIntake`); an issue it moves into
    Build gets `start:now`, or `blocked` while a dependency has not shipped.
    The bridge applies the same rule as soon as intake's stage label comes in,
-   so an issue is never left in a Design the rule does not ask for. Any other
+   so an issue is never left in a Design the rule does not ask for. Both
+   times it also checks the labels intake must give: one `priority:`, one
+   `area:` and exactly one `do:` (`missingLabels`, the rule routing reads).
+   An issue missing one does not leave intake: its stage label is put back,
+   and when intake's task ends, intake is started on it again with
+   `missing-labels.md` naming what is missing (`intake.labels_missing`). Those
+   runs count toward intake's tries, after which it is an `intake.stalled`
+   card in Needs you. Any other
    stage label a crew account sets, forward or back, is put back and audited
    (`stage.forward_refused`, `stage.backward_refused`): the bridge moves work
    on when its stage ends.
