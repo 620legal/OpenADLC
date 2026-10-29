@@ -197,6 +197,20 @@ describe('a client with a header', () => {
     expect(sent[1]?.body.title).toBe('T');
   });
 
+  it('does not head twice a body headed already, an old automation post with the install alone included', async () => {
+    const { sent, fetchImpl } = recording();
+    const client = new GitHubClient({
+      token: 't',
+      actingAs: 'openadlc-example',
+      header: '**OpenADLC_example · automation agent**<!-- openadlc-header -->',
+      fetchImpl,
+    });
+    const old = '**OpenADLC_example**<!-- openadlc-header -->\n\nOld.';
+    await client.comment('o/r', 1, old);
+    await client.comment('o/r', 1, 'New.');
+    expect(sent.map((call) => call.body.body)).toEqual([old, '**OpenADLC_example · automation agent**<!-- openadlc-header -->\n\nNew.']);
+  });
+
   it('leaves what is not prose alone, and writes as before without one', async () => {
     const { sent, fetchImpl } = recording();
     await new GitHubClient({ token: 't', actingAs: 'openadlc-example', header: HEADER, fetchImpl }).setLabels('o/r', 1, ['adlc:build']);

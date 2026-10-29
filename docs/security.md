@@ -269,8 +269,8 @@ a crew account that intake, design, build, QA, ship and automation post and push
 as, and a reviewer account the three reviewers approve as. The two groups never
 share, because GitHub won't let the account that opened a pull request approve
 it, and the bridge refuses it whatever the console offers. Any seat may still
-have an account of its own. Every post carries a header naming the stage and a
-tag naming the seat, which the bridge signs, so work on a shared account is
+have an account of its own. Every post carries a header naming the role that
+wrote it, the automation bot's included, and a tag naming the seat, which the bridge signs, so work on a shared account is
 still told apart. The tag alone is the account's word: any seat's session holds
 the account's token and could write the lead's. So the lead's approval and a
 blocking seat's count toward the merge only when the signature checks, names

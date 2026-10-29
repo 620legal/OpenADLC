@@ -12,7 +12,8 @@ import { SIGNED_POSTS_LINE, type SharedReviewers } from '@/lib/signed-posts';
  *
  * With one GitHub account for the whole crew, every issue, comment and review
  * is by the same user; the header — `**OpenADLC_exampleco · design agent**` — is
- * how a reader tells which install, and which stage, wrote it.
+ * how a reader tells which install, and which role, wrote it. Every post names
+ * its role, the automation bot's included.
  */
 export function InstallNamePart({ initial = null }: { initial?: InstallSettings | null }) {
   const { settings, error, save, reload } = useInstallSettings(initial);
@@ -20,7 +21,7 @@ export function InstallNamePart({ initial = null }: { initial?: InstallSettings 
     <SettingsPart
       id="install"
       title="Install name"
-      line="Every post OpenADLC writes on GitHub starts with this name and the stage that wrote it."
+      line="Every post OpenADLC writes on GitHub starts with this name and the role that wrote it."
     >
       {settings ? (
         <div className="pt-1">

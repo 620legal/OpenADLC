@@ -87,6 +87,13 @@ describe('what OpenADLC posted to GitHub, shown in the console', () => {
     expect(parseMarkdown(posted)).toEqual([{ kind: 'paragraph', lines: ['The issue is filed.'] }]);
   });
 
+  it('leaves out the automation bot’s header, and the bare one its older posts carry', () => {
+    const now = '**OpenADLC_example · automation agent**<!-- openadlc-header -->\n\nNo builder holds it.';
+    const old = '**OpenADLC_example**<!-- openadlc-header -->\n\nNo builder holds it.';
+    expect(parseMarkdown(now)).toEqual([{ kind: 'paragraph', lines: ['No builder holds it.'] }]);
+    expect(parseMarkdown(old)).toEqual([{ kind: 'paragraph', lines: ['No builder holds it.'] }]);
+  });
+
   it('keeps a bold first line a person wrote', () => {
     expect(parseMarkdown('**Heads up**\n\nMine.')[0]).toEqual({ kind: 'paragraph', lines: ['**Heads up**'] });
   });

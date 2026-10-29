@@ -90,8 +90,8 @@ export class Actors {
 
     try {
       const brokered = await this.broker.tokenFor(await signInOf(bot), bot.githubLogin);
-      // Headed as the bot's stage — the automation bot's as the platform — so a
-      // crew on one account still says, on every post, which stage wrote it.
+      // Headed as the bot's role — the automation bot's included — so a crew on
+      // one account still says, on every post, which role wrote it.
       const header = headerFor(await this.installName().catch(() => 'OpenADLC'), bot.role);
       const sign = await this.attribution?.signerFor(bot.name).catch((error: unknown) => {
         console.warn(`[bridge] ${botName} posts unsigned: ${error instanceof Error ? error.message : error}`);
