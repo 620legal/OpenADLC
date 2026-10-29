@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { attributionCheck, type UnattributedRecord } from './attribution.js';
+import {
+  attributionCheck,
+  refusalFor,
+  refusalsFromEvents,
+  stampRefusedCheck,
+  type StampRefusal,
+  type UnattributedReader,
+  type UnattributedRecord,
+} from './attribution.js';
 
 const post: UnattributedRecord = {
   repo: 'exampleco/api',
@@ -122,5 +130,104 @@ describe('the card for a crew post OpenADLC did not sign', () => {
   it('keeps a post it could not read again', async () => {
     const results = await attributionCheck({ since: async () => [{ ...post, id: 41 }], mode: async () => 'audit', reverify: async () => null }).run(new Date());
     expect(results[0]).toMatchObject({ ok: false });
+  });
+});
+
+describe('the card for a crew post OpenADLC refused to sign', () => {
+  // 620legal/www#12: a revert task's comment on its own pull request, refused
+  // by the stamp route, posted unsigned by OpenADLC's gh.
+  const NOW = new Date('2026-10-28T12:00:00.000Z');
+  const BODY = 'b'.repeat(64);
+  const unsigned: UnattributedRecord = {
+    id: 42,
+    repo: '620legal/www',
+    kind: 'comment',
+    login: 'openadlc-ship',
+    reason: 'unsigned',
+    url: 'https://github.com/620legal/www/pull/12#issuecomment-5',
+    seat: null,
+    bodySha256: BODY,
+    at: '2026-10-28T11:00:05.000Z',
+  };
+  const REASON = 'a task on www@20b84446 may sign a post only on its own issue or pull request, not #12';
+  const refusal: StampRefusal = {
+    at: '2026-10-28T11:00:00.000Z',
+    taskId: 'task-revert',
+    taskKind: 'deploy',
+    subjectType: 'merge',
+    seat: 'ship',
+    login: 'OpenADLC-Ship',
+    repo: '620legal/WWW',
+    number: 12,
+    kind: 'comment',
+    status: 403,
+    reason: REASON,
+    bodySha256: BODY,
+    clearedAt: null,
+  };
+  const reader = (refusals: StampRefusal[], posts: UnattributedRecord[] = [unsigned]): UnattributedReader => ({
+    since: async () => posts,
+    refusals: async () => refusals,
+    mode: async () => 'audit',
+  });
+
+  it('names OpenADLC’s refusal and its reason, with no This was me and no Dismiss', async () => {
+    const [result] = await stampRefusedCheck(reader([refusal])).run(NOW);
+    expect(result).toMatchObject({
+      ok: false,
+      severity: 'warning',
+      title: 'OpenADLC could not sign the ship’s comment on 620legal/www#12',
+      action: { label: 'Open the post', url: unsigned.url },
+    });
+    const detail = result && 'detail' in result ? result.detail : '';
+    expect(detail).toContain(REASON);
+    expect(detail).toContain('not because anyone used the account by hand');
+    const facts = (result && 'facts' in result ? result.facts : {}) ?? {};
+    expect(facts.dismissLabel).toBeUndefined();
+    expect(facts.dismissable).toBe(false);
+    expect(facts.occurrence).toBe('post:42');
+    expect(facts.incident).toMatchObject({ refusal: { reason: REASON, seat: 'ship', taskId: 'task-revert', status: 403 }, counted: true });
+  });
+
+  it('takes the post off the account’s card', async () => {
+    expect(await attributionCheck(reader([refusal])).run(NOW)).toEqual([{ ok: true, fixed: 'Every crew post since carries a signature that checks' }]);
+  });
+
+  it('clears once a task of that kind signs again, and the post does not go back to the account’s card', async () => {
+    const cleared = reader([{ ...refusal, clearedAt: '2026-10-28T11:30:00.000Z' }]);
+    expect(await stampRefusedCheck(cleared).run(NOW)).toEqual([{ ok: true, fixed: 'OpenADLC signs the crew’s posts it refused before' }]);
+    expect(await attributionCheck(cleared).run(NOW)).toMatchObject([{ ok: true }]);
+  });
+
+  it('leaves a post with another body, another number or another account on the account’s card, as before', async () => {
+    for (const other of [{ bodySha256: 'c'.repeat(64) }, { number: 13 }, { login: 'openadlc-review' }, { repo: '620legal/api' }]) {
+      const refusals = [{ ...refusal, ...other }];
+      expect(await stampRefusedCheck(reader(refusals)).run(NOW)).toMatchObject([{ ok: true }]);
+      const [account] = await attributionCheck(reader(refusals)).run(NOW);
+      expect(account).toMatchObject({ ok: false, facts: { dismissLabel: 'This was me' } });
+    }
+  });
+
+  it('matches no refusal made after the post, and none with no body', async () => {
+    expect(refusalFor(unsigned, [{ ...refusal, at: '2026-10-28T11:00:06.000Z' }])).toBeNull();
+    expect(refusalFor({ ...unsigned, bodySha256: null }, [refusal])).toBeNull();
+    expect(refusalFor(unsigned, [{ ...refusal, bodySha256: null }])).toBeNull();
+    // A refusal that named no number matches the post wherever it was.
+    expect(refusalFor(unsigned, [{ ...refusal, number: null }])).toMatchObject({ taskId: 'task-revert' });
+  });
+
+  it('reads refusals from their events, each cleared by the first signing of its kind after it', () => {
+    const refused = [
+      { at: '2026-10-28T11:00:00.000Z', payload: { taskId: 'task-revert', taskKind: 'deploy', subjectType: 'merge', seat: 'ship', login: 'openadlc-ship', repo: '620legal/www', number: 12, kind: 'comment', status: 403, reason: REASON, bodySha256: BODY } },
+    ];
+    expect(refusalsFromEvents(refused, [])).toEqual([{ ...refusal, login: 'openadlc-ship', repo: '620legal/www' }]);
+    const signed = [
+      // Before the refusal, and of another subject type: neither clears it.
+      { at: '2026-10-28T10:00:00.000Z', payload: { taskId: 'task-a', taskKind: 'deploy', subjectType: 'merge' } },
+      { at: '2026-10-28T11:10:00.000Z', payload: { taskId: 'task-b', taskKind: 'deploy', subjectType: 'issue' } },
+      { at: '2026-10-28T11:40:00.000Z', payload: { taskId: 'task-d', taskKind: 'deploy', subjectType: 'merge' } },
+      { at: '2026-10-28T11:20:00.000Z', payload: { taskId: 'task-c', taskKind: 'deploy', subjectType: 'merge' } },
+    ];
+    expect(refusalsFromEvents(refused, signed)[0]?.clearedAt).toBe('2026-10-28T11:20:00.000Z');
   });
 });

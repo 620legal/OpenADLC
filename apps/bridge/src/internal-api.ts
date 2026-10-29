@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { registerInternalAttachmentRoutes } from './attachment-routes.js';
 import type { IncomingMessage } from 'node:http';
-import { audit, bots, costs, issues, leases, localCiRuns, recordEvent, repos, spendingLimits, stageMoves, tasks, threads } from '@openadlc/db';
+import { audit, bots, costs, hasEventOfType, issues, leases, localCiRuns, recordEvent, repos, spendingLimits, stageMoves, tasks, threads } from '@openadlc/db';
 import {
   GitHubUnavailableError,
   TASK_TOKEN_HEADER,
@@ -15,6 +15,7 @@ import {
   botAtStart,
   headlineFor,
   messageKindFor,
+  type Bot,
   type MarkerEvent,
   type Task,
   type TaskState,
@@ -28,6 +29,8 @@ import {
   unreadablePathLines,
 } from '@openadlc/shared';
 import { planChangesFor, type ApiDeps } from './api.js';
+import { bodyDigest } from './attribution.js';
+import { STAMP_REFUSED, STAMP_SIGNED } from './health/checks/attribution.js';
 import { asAutomation, automationBotName, automationLogin, findOwnOpenIssue } from './automation-bot.js';
 import { subjectClosed } from './gates.js';
 import { startBuild } from './build-start.js';
@@ -58,6 +61,28 @@ export { TASK_TOKEN_HEADER };
  * workflow was refused one, so its pull request could never be approved.
  */
 const RUNS_LOCAL_CI: ReadonlySet<string> = new Set(['implement', 'patch', 'qa', 'spec', 'deploy']);
+
+/**
+ * How far back a signing stamp looks for a refusal to clear: the card's day,
+ * and an hour more for a refusal made just before a post at its edge.
+ */
+const STAMP_REFUSAL_LOOKBACK_MS = 25 * 60 * 60 * 1000;
+
+/** What OpenADLC's gh sends to be signed. */
+interface StampInput {
+  body?: string;
+  kind?: string;
+  number?: number | null;
+  head?: unknown;
+  repo?: unknown;
+}
+
+/** What a stamp had looked up when it refused; a field left out was not reached. */
+interface StampKnown {
+  task?: Task;
+  bot?: Bot;
+  repo?: { id: string; fullName: string } | null;
+}
 
 /**
  * Whether hostd did not answer in time (`LOCAL_CI_TIMEOUT_MS`): said as a 504,
@@ -667,7 +692,28 @@ export function registerInternalApi(
    * its subject, its edit naming a sibling went out unsigned.
    */
   taskPost('/internal/tasks/:id/stamp', async ({ params, body }) => {
-    const input = await body<{ body?: string; kind?: string; number?: number | null; head?: unknown; repo?: unknown }>();
+    const input = await body<StampInput>();
+    // What the stamp found out before it refused, so a refusal is recorded
+    // without asking the database again for what it already had.
+    const known: StampKnown = {};
+    try {
+      return await stamp(params.id ?? '', input, known);
+    } catch (error) {
+      // OpenADLC's gh posts a body the bridge refused unsigned, and the
+      // unattributed-post card then blamed the account for it: on 620legal
+      // v0.1.22 every post a revert task made on its own pull request was
+      // refused here, and read on the board as someone using the account by
+      // hand. The refusal is recorded so that card can say whose it was.
+      if (error instanceof HttpFailure && error.status >= 400 && error.status < 500) {
+        await recordStampRefusal(params.id ?? '', input, known, error).catch((failure: unknown) =>
+          console.error(`[bridge] a refused stamp for task ${params.id ?? ''} was not recorded: ${failure instanceof Error ? failure.message : failure}`),
+        );
+      }
+      throw error;
+    }
+  });
+
+  const stamp = async (id: string, input: StampInput, known: StampKnown): Promise<{ body: string }> => {
     if (typeof input.body !== 'string') throw new HttpFailure(400, 'no body to sign');
     // GitHub holds no longer post, and a long enough one kept the bridge busy
     // reading it; verifying reads a longer body as unsigned in any case.
@@ -675,16 +721,19 @@ export function registerInternalApi(
       throw new HttpFailure(413, `this body is ${input.body.length} characters; a post is signed only up to ${SIGNED_BODY_MAX.toLocaleString('en-US')}, GitHub's limit`);
     }
     if (!deps.attribution) throw new HttpFailure(503, 'this bridge signs nothing');
-    const task = await tasks.getTask(params.id ?? '');
+    const task = await tasks.getTask(id);
     if (!task) throw new HttpFailure(404, 'unknown task');
+    known.task = task;
     if (task.state !== 'running') throw new HttpFailure(409, `task is ${task.state}, not running`);
     const bot = await bots.getBotById(task.botId);
     if (!bot) throw new HttpFailure(404, 'task has no bot');
+    known.bot = bot;
     const tagged = seatTagOf(input.body);
     if (tagged && tagged !== bot.name.toLowerCase()) {
       throw new HttpFailure(400, `this body is tagged as ${tagged}, and this task is ${bot.name}'s; a task signs only as its own seat, so end it with <!-- openadlc-seat:${bot.name.toLowerCase()} --> or no tag`);
     }
     let repo = task.repoId ? (await repos.listRepos({ includeRemoved: true })).find((entry) => entry.id === task.repoId) : null;
+    known.repo = repo ?? null;
     const kind = typeof input.kind === 'string' ? input.kind.slice(0, 20) : 'post';
     const n = typeof input.number === 'number' && input.number > 0 ? input.number : null;
     const forRequest = requestPrefixOf(task.subjectRef) !== null && kind !== 'review';
@@ -692,6 +741,7 @@ export function registerInternalApi(
       const named = typeof input.repo === 'string' ? input.repo.trim().toLowerCase() : '';
       const managed = named ? (await repos.listRepos()).find((entry) => entry.fullName.toLowerCase() === named) : undefined;
       repo = managed ?? repo;
+      known.repo = repo ?? null;
       if (n !== null && !(await requestIssue(task, repo ?? null, n))) {
         throw new HttpFailure(
           403,
@@ -714,7 +764,7 @@ export function registerInternalApi(
       if (!head) {
         throw new HttpFailure(400, 'a review is signed with the head it is of: give the full commit, { "head": "<40 hex characters>" }; OpenADLC\'s gh sends HEAD when gh pr review runs in the worktree you reviewed');
       }
-    } else if (!forRequest && n !== null && n !== subject?.number && !(await targetsOfTask(task, subject, repo?.name ?? null)).includes(n)) {
+    } else if (!forRequest && n !== null && n !== subject?.number && !(await targetsOfTask(deps, task, subject, repo ?? null)).includes(n)) {
       throw new HttpFailure(403, `a task on ${task.subjectRef} may sign a post only on its own issue or pull request, not #${n}`);
     }
     const signed = await deps.attribution.sign(input.body, {
@@ -725,8 +775,60 @@ export function registerInternalApi(
       n,
       ...(head ? { head } : {}),
     });
+    // What clears the card about a refusal: a task of the same kind, on the
+    // same kind of subject, signing again. Asked only when one was refused,
+    // so a day of ordinary posts writes nothing.
+    await stampSignedAgain(task).catch((failure: unknown) =>
+      console.error(`[bridge] a stamp for task ${task.id} was not recorded as signing again: ${failure instanceof Error ? failure.message : failure}`),
+    );
     return { body: signed };
-  });
+  };
+
+  /**
+   * Records a refusal of a crew task's post, as `attribution.stamp_refused`:
+   * the unsigned-post checks match the post GitHub then delivers against it
+   * (`refusalFor`). A post that is not a known task's, or whose task has no
+   * bot, is not a crew task's and records nothing.
+   */
+  const recordStampRefusal = async (id: string, input: StampInput, known: StampKnown, refusal: HttpFailure): Promise<void> => {
+    const task = known.task ?? (await tasks.getTask(id));
+    if (!task) return;
+    const bot = known.bot ?? (await bots.getBotById(task.botId));
+    if (!bot) return;
+    const repo =
+      known.repo !== undefined
+        ? known.repo
+        : task.repoId
+          ? ((await repos.listRepos({ includeRemoved: true })).find((entry) => entry.id === task.repoId) ?? null)
+          : null;
+    await recordEvent({
+      source: 'platform',
+      type: STAMP_REFUSED,
+      payload: {
+        taskId: task.id,
+        taskKind: task.kind,
+        subjectType: task.subjectType ?? null,
+        subjectRef: task.subjectRef,
+        seat: bot.name,
+        login: bot.githubLogin ?? null,
+        repo: repo?.fullName ?? null,
+        number: typeof input.number === 'number' && input.number > 0 ? input.number : null,
+        kind: typeof input.kind === 'string' ? input.kind.slice(0, 20) : 'post',
+        status: refusal.status,
+        reason: refusal.message,
+        bodySha256: typeof input.body === 'string' ? bodyDigest(input.body) : null,
+      },
+    });
+  };
+
+  /** Records `attribution.stamp_signed` when a task of this one's kind was refused in the last day. */
+  const stampSignedAgain = async (task: Task): Promise<void> => {
+    const shape = { taskKind: task.kind, subjectType: task.subjectType ?? null };
+    if (shape.subjectType === null) return;
+    const since = new Date(Date.now() - STAMP_REFUSAL_LOOKBACK_MS);
+    if (!(await hasEventOfType(STAMP_REFUSED, since, { taskKind: shape.taskKind, subjectType: shape.subjectType }))) return;
+    await recordEvent({ source: 'platform', type: STAMP_SIGNED, payload: { taskId: task.id, ...shape } });
+  };
 
   taskPost('/internal/tasks/:id/gate', { states: ['running'], refusal: 'a gate is opened only by a task that is running' }, async ({ params, body }) => {
     const input = await body<{
@@ -1222,15 +1324,29 @@ export function registerInternalApi(
 
 /**
  * The numbers a task's posts may name: its subject, and the issue's pull
- * request or the pull request's issue. A subject with no number names none.
+ * request or the pull request's issue. A commit's task (`repo@sha`, a
+ * revert) names the pull requests opened from its own branch: every post it
+ * made on its revert's pull request was refused, and went out unsigned
+ * (620legal/www#12). Any other subject with no number names none, and so does
+ * a commit's task when GitHub cannot list its branch's pull requests.
  */
-async function targetsOfTask(task: Task, subject: { repo: string; number: number } | null, repoName: string | null): Promise<number[]> {
-  if (!subject) return [];
+async function targetsOfTask(
+  deps: Pick<ApiDeps, 'actors' | 'config'>,
+  task: Task,
+  subject: { repo: string; number: number } | null,
+  repo: { name: string; fullName: string } | null,
+): Promise<number[]> {
+  if (!subject) {
+    if (!repo || !task.branch || !/^[^@\s]+@[0-9a-f]{7,40}$/i.test(task.subjectRef)) return [];
+    const client = await asAutomation(deps.actors, deps.config).catch(() => null);
+    const pulls = client ? await client.pullsFromBranch(repo.fullName, task.branch).catch(() => null) : null;
+    return (pulls ?? []).map((pull) => pull.number);
+  }
   const own = [subject.number];
   if (!task.repoId) return own;
   const issue = await issues.getIssue(task.repoId, subject.number).catch(() => null);
   if (issue?.prNumber) own.push(issue.prNumber);
-  const pulledFrom = (await issues.listIssues(repoName ?? subject.repo).catch(() => [])).find((one) => one.prNumber === subject.number);
+  const pulledFrom = (await issues.listIssues(repo?.name ?? subject.repo).catch(() => [])).find((one) => one.prNumber === subject.number);
   if (pulledFrom) own.push(pulledFrom.number);
   return own;
 }

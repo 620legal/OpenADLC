@@ -4,7 +4,7 @@ import { readAccounts } from '../github-identities.js';
 import { signInKind } from '../sign-in.js';
 import { revokeGate, settledSigningKey } from '../signing-keys.js';
 import { createHash } from 'node:crypto';
-import { attributions, audit, bots, credentials, deployRuns, externalSigningKeys, identities, issues, lastAudit, lastGithubDelivery, leases, modelAccounts, repos, settings, tasks } from '@openadlc/db';
+import { attributions, audit, bots, credentials, deployRuns, externalSigningKeys, identities, issues, lastAudit, lastGithubDelivery, leases, listEventsOfType, modelAccounts, repos, settings, tasks } from '@openadlc/db';
 import { parseEgressHosts } from '@openadlc/shared';
 import {
   GcpSecretStore,
@@ -42,7 +42,14 @@ import { crewChecks, type RepoRef } from './checks/crew.js';
 import { dispatchModeOf, dispatcherCheck, type DispatchMode } from './checks/dispatcher.js';
 import { githubAccountsCheck } from './checks/github-accounts.js';
 import { hostCheck, hostDriverCheck } from './checks/host.js';
-import { attributionCheck } from './checks/attribution.js';
+import {
+  attributionCheck,
+  refusalsFromEvents,
+  STAMP_REFUSED,
+  STAMP_SIGNED,
+  stampRefusedCheck,
+  type UnattributedReader,
+} from './checks/attribution.js';
 import { leaseCheck } from './checks/leases.js';
 import { deployDispatchCheck } from './checks/deploy-dispatch.js';
 import { RETRY_WITHIN_MS } from '../deploy-pipeline.js';
@@ -252,6 +259,7 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
       humanReviewLinesInspection(),
     ],
   );
+  const unattributed = unattributedReader(config, actors);
 
   return [
     hostCheck(hostd),
@@ -406,40 +414,54 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
         return step === 'rollback' ? rules.production.rollback : rules.production.workflow;
       },
     }),
-    attributionCheck({
-      since: (since) => attributions.listUnattributed(since),
-      mode: async () => (await effectiveConfig(config)).attributionMode,
-      // Read again from GitHub as the automation account, and checked under
-      // the rules as they are now; a post that verifies after all is resolved.
-      reverify: async (post) => {
-        const path = post.objectId ? postPath({ ...post, objectId: post.objectId }) : null;
-        const client = path ? await asAutomation(actors, config).catch(() => null) : null;
-        if (!path || !client) return null;
-        const found = await client.request<{ body?: string | null }>('GET', path).catch(() => null);
-        if (!found) return null;
-        // Edited since it was recorded: what verifies now is not what was posted.
-        if (!post.bodySha256 || bodyDigest(found.body) !== post.bodySha256) return false;
-        return new Attribution().verifies({
-          repo: post.repo,
-          kind: post.kind,
-          id: post.objectId!,
-          number: postTarget(post.url)?.number ?? null,
-          login: post.login,
-          body: found.body ?? null,
-        });
-      },
-      // Closing a security record: said in the audit trail, once, with what it was.
-      resolve: async (post) => {
-        if (post.id === undefined || !(await attributions.resolveUnattributed(post.id))) return;
-        await audit({
-          actor: 'openadlc',
-          action: 'attribution.resolved',
-          target: `${post.repo} post:${post.id}`,
-          payload: { postId: post.id, kind: post.kind, repo: post.repo, login: post.login, url: post.url, reason: post.reason },
-        }).catch(() => undefined);
-      },
-    }),
+    attributionCheck(unattributed),
+    stampRefusedCheck(unattributed),
   ];
+}
+
+/**
+ * The crew's posts that did not check, and the refusals that explain some of
+ * them: one reader for both checks, so a post leaves the account's card for
+ * OpenADLC's on the same reading.
+ */
+function unattributedReader(config: BridgeConfig, actors: Actors): UnattributedReader {
+  return {
+    since: (since) => attributions.listUnattributed(since),
+    refusals: async (since) => {
+      const [refused, signed] = await Promise.all([listEventsOfType(STAMP_REFUSED, since), listEventsOfType(STAMP_SIGNED, since)]);
+      return refusalsFromEvents(refused, signed);
+    },
+    mode: async () => (await effectiveConfig(config)).attributionMode,
+    // Read again from GitHub as the automation account, and checked under
+    // the rules as they are now; a post that verifies after all is resolved.
+    reverify: async (post) => {
+      const path = post.objectId ? postPath({ ...post, objectId: post.objectId }) : null;
+      const client = path ? await asAutomation(actors, config).catch(() => null) : null;
+      if (!path || !client) return null;
+      const found = await client.request<{ body?: string | null }>('GET', path).catch(() => null);
+      if (!found) return null;
+      // Edited since it was recorded: what verifies now is not what was posted.
+      if (!post.bodySha256 || bodyDigest(found.body) !== post.bodySha256) return false;
+      return new Attribution().verifies({
+        repo: post.repo,
+        kind: post.kind,
+        id: post.objectId!,
+        number: postTarget(post.url)?.number ?? null,
+        login: post.login,
+        body: found.body ?? null,
+      });
+    },
+    // Closing a security record: said in the audit trail, once, with what it was.
+    resolve: async (post) => {
+      if (post.id === undefined || !(await attributions.resolveUnattributed(post.id))) return;
+      await audit({
+        actor: 'openadlc',
+        action: 'attribution.resolved',
+        target: `${post.repo} post:${post.id}`,
+        payload: { postId: post.id, kind: post.kind, repo: post.repo, login: post.login, url: post.url, reason: post.reason },
+      }).catch(() => undefined);
+    },
+  };
 }
 
 /** The store when it is Secret Manager, the one store that had names from before the rename. */

@@ -33,10 +33,15 @@ const LINK = 'text-link hover:underline';
  * admin's, and the bridge refuses a user them: a user is told to ask an admin,
  * as the card hides its admin-only actions, rather than offered buttons that
  * fail with a role error in the middle of an incident.
+ *
+ * A post OpenADLC itself refused to sign (`incident.refusal`) is not the
+ * account's doing, so it gets none of the account's steps: no "This was me",
+ * nothing to lock down, nothing to reconnect.
  */
-export function IncidentSteps({ incident, thisWasMe, ref }: { incident: UnsignedIncident; thisWasMe: ReactNode; ref?: Ref<HTMLElement> }) {
+export function IncidentSteps({ incident, thisWasMe, ref }: { incident: UnsignedIncident; thisWasMe?: ReactNode; ref?: Ref<HTMLElement> }) {
   const { target } = incident;
   const admin = useRole() === 'admin';
+  if (incident.refusal) return <RefusedSteps incident={incident} refusal={incident.refusal} admin={admin} ref={ref} />;
   return (
     // Focusable, so What to do opens the sheet here rather than at its top.
     <section ref={ref} tabIndex={-1} aria-label="What to do" className="flex scroll-mt-4 flex-col gap-2 text-[12.5px] leading-relaxed outline-none">
@@ -138,6 +143,55 @@ export function IncidentSteps({ incident, thisWasMe, ref }: { incident: Unsigned
           )}
         </li>
       </ol>
+    </section>
+  );
+}
+
+/** The steps for a post OpenADLC refused to sign: what it refused and why, what the post did, and where it is. */
+function RefusedSteps({
+  incident,
+  refusal,
+  admin,
+  ref,
+}: {
+  incident: UnsignedIncident;
+  refusal: NonNullable<UnsignedIncident['refusal']>;
+  admin: boolean;
+  ref?: Ref<HTMLElement>;
+}) {
+  const { target } = incident;
+  const whose = refusal.seat ? `the ${refusal.seat}’s ${incident.did}` : `a ${incident.did} by ${incident.login}`;
+  return (
+    <section ref={ref} tabIndex={-1} aria-label="What to do" className="flex scroll-mt-4 flex-col gap-2 text-[12.5px] leading-relaxed outline-none">
+      <p className="text-[11px] uppercase tracking-wider text-dim">What to do</p>
+      <p className="text-muted">
+        OpenADLC refused to sign {whose}
+        {target ? ` on #${target.number}` : ''}: {refusal.reason}. Its gh posted it unsigned. {thisPostCounted(incident.counted)}{' '}
+        The same is in <code className="font-mono text-[11.5px]">docs/runbooks/unsigned-post.md</code>.
+      </p>
+      <p className="text-muted">
+        {target ? (
+          <a href={target.url} target="_blank" rel="noreferrer" className={LINK}>
+            {target.kind === 'pr' ? 'Pull request' : 'Issue'} #{target.number} ↗
+          </a>
+        ) : null}
+        {target && incident.postUrl ? ' · ' : null}
+        {incident.postUrl ? (
+          <a href={incident.postUrl} target="_blank" rel="noreferrer" className={LINK}>
+            Open the post ↗
+          </a>
+        ) : null}
+      </p>
+      {target?.kind === 'pr' &&
+        (admin ? (
+          <HoldPull repo={incident.repo} number={target.number} />
+        ) : (
+          <p className="text-muted">Ask an admin to hold #{target.number} if it should not merge: holding a pull request is an admin’s.</p>
+        ))}
+      <p className="text-muted">
+        Nobody needs to reconnect the account: the post went out unsigned because of a gap in OpenADLC’s own rules, not a sign-in someone else holds. The
+        card clears once a task like it signs, or a day after the post.
+      </p>
     </section>
   );
 }
