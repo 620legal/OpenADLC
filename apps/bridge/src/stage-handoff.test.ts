@@ -70,7 +70,10 @@ vi.mock('@openadlc/db', async (importOriginal) => ({
   stageMoves: { sendBackOfTask: vi.fn(async (taskId: string) => board.sentBack[taskId] ?? null) },
 }));
 
-const SPEC_REQUIRED = ['touches:schema', 'touches:contract', 'touches:migration', 'size:large', 'safety'];
+/** What intake must give an issue before it leaves intake (`missingLabels`). */
+const INTAKES_OWN = ['priority:p1', 'area:general', 'do:ai'];
+
+const SPEC_REQUIRED = ['touches:schema','touches:contract', 'touches:migration', 'size:large', 'safety'];
 
 describe('where an issue goes after intake', () => {
   it('spends a design pass on a schema change', () => {
@@ -196,7 +199,7 @@ describe('an issue labelled openadlc:ignore', () => {
   it.each(['intake', 'spec'])('is not moved on when a %s task finishes before the label’s delivery is stored', async (kind) => {
     // The stored row has not seen the label yet, so the check above passes.
     // The move reads GitHub's labels, and refuses an ignored issue.
-    board.issues = [{ number: 9, repoName: 'openadlc', stage: kind, labels: [`adlc:${kind}`], createdAt: '2026-09-29T09:00:00.000Z' }];
+    board.issues = [{ number: 9, repoName: 'openadlc', stage: kind, labels: [`adlc:${kind}`, ...INTAKES_OWN], createdAt: '2026-09-29T09:00:00.000Z' }];
     const moveStage = vi.fn(async () => ({ moved: false, ignored: true }));
     const started: string[] = [];
     const stages = new StageHandoff(
@@ -485,7 +488,7 @@ describe('staffing a stage while work is paused', () => {
     board.locked = [];
     board.issues = [
       { number: 7, repoName: 'openadlc', stage: 'intake', labels: [], createdAt: '2026-09-29T09:10:00.000Z' },
-      { number: 5, repoName: 'openadlc', stage: 'intake', labels: ['touches:schema'], createdAt: '2026-09-29T09:00:00.000Z' },
+      { number: 5, repoName: 'openadlc', stage: 'intake', labels: ['touches:schema', ...INTAKES_OWN], createdAt: '2026-09-29T09:00:00.000Z' },
       { number: 6, repoName: 'openadlc', stage: 'build', labels: [], createdAt: '2026-09-29T08:00:00.000Z' },
     ];
   });
@@ -782,7 +785,7 @@ describe('the end of intake, on either intake path', () => {
 
   it('ends in Build with start:now when every dependency has shipped', async () => {
     board.issues = [
-      { number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:spec', 'do:ai'], body: DEPENDS_ON_4 },
+      { number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:spec', ...INTAKES_OWN], body: DEPENDS_ON_4 },
       { number: 4, repoName: 'openadlc', stage: 'done', labels: ['adlc:done'], body: '' },
     ];
     const { stages, moves, readiness } = handoff();
@@ -796,9 +799,9 @@ describe('the end of intake, on either intake path', () => {
 
   it('ends in Build with blocked while a dependency has not shipped, and leaves one already marked alone', async () => {
     board.issues = [
-      { number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:build'], body: DEPENDS_ON_4 },
+      { number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:build', ...INTAKES_OWN], body: DEPENDS_ON_4 },
       { number: 4, repoName: 'openadlc', stage: 'build', labels: ['adlc:build'], body: '' },
-      { number: 10, repoName: 'openadlc', stage: 'intake', labels: ['adlc:build', 'start:now'], body: '' },
+      { number: 10, repoName: 'openadlc', stage: 'intake', labels: ['adlc:build', 'start:now', ...INTAKES_OWN], body: '' },
     ];
     const { stages, readiness } = handoff();
 
@@ -813,7 +816,7 @@ describe('the end of intake, on either intake path', () => {
     // the work in the other repository shipped.
     const { stages, readiness } = handoff();
     try {
-      board.issues = [{ number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:build'], body: '### Dependencies\n\n- owner/a#1\n' }];
+      board.issues = [{ number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:build', ...INTAKES_OWN], body: '### Dependencies\n\n- owner/a#1\n' }];
       board.elsewhere = [{ fullName: 'owner/a', number: 1, stage: 'build', labels: ['adlc:build'] }];
       await withRepo({ spec: 'conditional' }, () => stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 }));
 
@@ -844,7 +847,7 @@ describe('the end of intake, on either intake path', () => {
   it('sends an unlabelled issue to Design on a repository with no spec mode stored: Design is Always by default', async () => {
     // The fallback was `conditional`, which sent an issue without a
     // spec-required label, nearly every issue, straight to Build.
-    board.issues = [{ number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:build', 'do:ai'], body: '' }];
+    board.issues = [{ number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:build', ...INTAKES_OWN], body: '' }];
     const { stages, moves, readiness, started } = handoff();
 
     expect(await withRepo({}, () => stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 }))).toBe('spec');
@@ -881,6 +884,108 @@ describe('the end of intake, on either intake path', () => {
       warn.mockRestore();
       vi.mocked(repos.getRepoByName).mockImplementation((async () => ({ id: 'repo-1', name: 'openadlc', fullName: 'janedoe/openadlc', stageModes: {}, specRequiredLabels: ['touches:schema'] })) as never);
     }
+  });
+});
+
+describe('the end of intake with one of its labels left off', () => {
+  // #203: intake said it put `area:general` on and never did. The issue went
+  // on to Design, which ran, and was parked with `needs-triage` only when
+  // routing read its labels.
+  const now = () => new Date().toISOString();
+
+  beforeEach(() => {
+    board.audited = [];
+    board.events = [];
+    board.onSubject = { 'openadlc#9': [{ kind: 'intake', state: 'done', createdAt: now() }] };
+  });
+
+  function handoff(labelsOf: ((fullName: string, number: number) => Promise<string[] | null>) | null = null) {
+    const moveStage = vi.fn(async () => ({ moved: true }));
+    const open = vi.fn(async () => ({ taskId: 'task-2', session: null }));
+    const stages = new StageHandoff({ moveStage, setBlocked: async () => undefined } as never, { open } as never, null, null, null, null, labelsOf);
+    return { stages, moveStage, open };
+  }
+
+  it('keeps the issue in intake and starts intake again, told which label is missing', async () => {
+    board.issues = [{ number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:intake', 'priority:p1', 'do:ai'], body: '' }];
+    const { stages, moveStage, open } = handoff();
+
+    expect(await stages.onTaskDone({ kind: 'intake', subjectRef: 'openadlc#9' })).toBe('intake');
+
+    expect(moveStage).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'intake',
+        skill: 'triage',
+        subjectRef: 'openadlc#9',
+        extraContext: [expect.objectContaining({ name: 'missing-labels.md', content: expect.stringContaining('an area label') })],
+      }),
+    );
+    expect(board.audited).toContainEqual(expect.objectContaining({ action: 'intake.labels_missing', target: 'openadlc#9', payload: { missing: ['an area label'] } }));
+  });
+
+  it('reads the labels GitHub has now over the stored ones', async () => {
+    board.issues = [{ number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:intake', ...INTAKES_OWN], body: '' }];
+    const asked: string[] = [];
+    const { stages, moveStage, open } = handoff(async (fullName, number) => (asked.push(`${fullName}#${number}`), ['adlc:intake', 'priority:p1', 'do:ai']));
+
+    expect(await stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 })).toBe('intake');
+
+    expect(asked).toEqual(['janedoe/openadlc#9']);
+    expect(moveStage).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ kind: 'intake' }));
+  });
+
+  it('falls back on the stored labels when GitHub cannot be read', async () => {
+    board.issues = [{ number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:intake', ...INTAKES_OWN], body: '' }];
+    const { stages, moveStage } = handoff(async () => {
+      throw new Error('GitHub is down');
+    });
+
+    expect(await stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 })).toBe('spec');
+    expect(moveStage).toHaveBeenCalledWith(expect.objectContaining({ to: 'spec' }));
+  });
+
+  it('moves an issue with all three on as before', async () => {
+    board.issues = [{ number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:intake', ...INTAKES_OWN], body: '' }];
+    const { stages, moveStage, open } = handoff(async () => ['adlc:spec', ...INTAKES_OWN]);
+
+    expect(await stages.onTaskDone({ kind: 'intake', subjectRef: 'openadlc#9' })).toBe('spec');
+
+    expect(moveStage).toHaveBeenCalledWith(expect.objectContaining({ issueNumber: 9, to: 'spec' }));
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ kind: 'spec', skill: 'spec' }));
+    expect(board.audited).not.toContainEqual(expect.objectContaining({ action: 'intake.labels_missing' }));
+  });
+
+  it('is not started again past intake’s tries, and waits for a person', async () => {
+    board.issues = [{ number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:intake', 'priority:p1', 'do:ai'], body: '' }];
+    board.onSubject = {
+      'openadlc#9': [
+        { kind: 'intake', state: 'done', createdAt: now() },
+        { kind: 'intake', state: 'done', createdAt: now() },
+      ],
+    };
+    const { stages, moveStage, open } = handoff();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(await stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 })).toBeNull();
+      expect(await stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 })).toBeNull();
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(moveStage).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    expect(board.events.filter((event) => event.type === 'intake.stalled')).toEqual([{ source: 'platform', type: 'intake.stalled', payload: { subjectRef: 'openadlc#9', tries: 2 } }]);
+  });
+
+  it('leaves an issue a person already moved on to them', async () => {
+    board.issues = [{ number: 9, repoName: 'openadlc', stage: 'spec', labels: ['adlc:spec', 'priority:p1', 'do:ai'], body: '' }];
+    const { stages, moveStage } = handoff();
+
+    expect(await stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 })).toBe('spec');
+    expect(moveStage).toHaveBeenCalledWith(expect.objectContaining({ to: 'spec' }));
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { missingForRouting, onlyExpectedPathsUnreadable, tooManyAttempts } from './readiness.js';
+import { missingForRouting, missingLabels, onlyExpectedPathsUnreadable, tooManyAttempts } from './readiness.js';
 
 const BODY = `### Outcome
 
@@ -105,5 +105,25 @@ describe('an issue that keeps coming back with nothing', () => {
     expect(tooManyAttempts(2)).toBe(false);
     expect(tooManyAttempts(3)).toBe(true);
     expect(tooManyAttempts(9)).toBe(true);
+  });
+});
+
+describe('the labels intake must give an issue', () => {
+  it('names the one left off', () => {
+    expect(missingLabels(['priority:p1', 'do:ai'])).toEqual(['an area label']);
+  });
+
+  it('names two do: labels as a disagreement', () => {
+    expect(missingLabels(['priority:p1', 'area:x', 'do:ai', 'do:human'])).toEqual(['one do: label, not 2 (do:ai, do:human)']);
+  });
+
+  it('is empty when all three are on', () => {
+    expect(missingLabels(ready.labels)).toEqual([]);
+  });
+
+  it('is what routing reports first, in the same words and order', () => {
+    const labels = ['adlc:build'];
+    expect(missingLabels(labels)).toEqual(['a priority label', 'an area label', 'a do: label']);
+    expect(missingForRouting({ ...ready, labels }).slice(0, 3)).toEqual(missingLabels(labels));
   });
 });
