@@ -306,10 +306,37 @@ describe('what needs a person', () => {
     const item = items.find((one) => one.kind === 'merge_waiting');
     expect(item).toMatchObject({
       group: 'work',
-      headline: 'Pull request #5 is ready, and waits for you to merge it',
-      detail: 'Its reviews passed and CI is green. OpenADLC did not merge it, because it changes how CI runs (Makefile).',
+      headline: 'Pull request #5 waits for you to merge it',
+      detail: 'ci and review-gate passed, but OpenADLC did not merge it, because it changes how CI runs (Makefile).',
       actions: [{ kind: 'open_url', label: 'Merge it on GitHub' }],
     });
+    expect(`${item?.headline} ${item?.detail}`).not.toMatch(/ready|CI is green/);
+  });
+
+  it('says what passed on a pull request held for a red check, and does not call it ready', async () => {
+    // 620legal/OpenADLC#206: the card said "is ready" and "CI is green" over a
+    // reason that said visual-review failed on the head.
+    const { attentionItems } = await load();
+    const items = attentionItems({
+      now: NOW,
+      gates: [],
+      tasks: [],
+      bots: BOTS,
+      repos: REPOS,
+      issues: ISSUES,
+      requests: [],
+      stallEvents: [],
+      heldMerges: [{ repo: 'openadlc-testbed', prNumber: 46, reason: 'visual-review failed on the head', since: minutesAgo(2) }],
+    });
+    const item = items.find((one) => one.kind === 'merge_waiting');
+    expect(item).toMatchObject({
+      id: 'merge:openadlc-testbed#46',
+      headline: 'Pull request #46 waits for you to merge it',
+      detail: 'ci and review-gate passed, but OpenADLC did not merge it, because visual-review failed on the head.',
+      actions: [{ kind: 'open_url', label: 'Merge it on GitHub' }],
+    });
+    expect(item?.headline).not.toMatch(/ready|CI is green/);
+    expect(item?.detail).not.toMatch(/ready|CI is green/);
   });
 
   describe('a person asked to approve a pull request again', () => {
