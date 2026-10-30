@@ -1,4 +1,4 @@
-import { audit, bots, hosts, issues, lastGithubDelivery, leases, repos, stageMoves, tasks } from '@openadlc/db';
+import { audit, bots, hosts, ignoredIssues, issues, lastGithubDelivery, leases, repos, stageMoves, tasks } from '@openadlc/db';
 import { actsForOn } from './people.js';
 import { GitHubApiError, type GitHubClient } from '@openadlc/github';
 import { actsFor, declaredPathsFrom, hasAbandonedLabel, isBackwardMove, isStageLabel, STAGE_LABELS, stageFromLabels, hasIgnoreLabel, type StageKey } from '@openadlc/shared';
@@ -259,6 +259,9 @@ export class Reconciler {
     // not connected" said neither which account nor how.
     const automation = client ? null : await automationBotName(this.config);
     const repoNames = new Map(repoList.map((repo) => [repo.id, repo.name]));
+    // Repositories read for the first time since the bridge started, with
+    // every number that read already asked GitHub about.
+    const firstRead: { repo: (typeof repoList)[number]; read: Set<number> }[] = [];
     for (const repo of repoList) {
       const cached = await issues.listIssues(repo.name);
 
@@ -275,6 +278,7 @@ export class Reconciler {
       }
 
       let live: LiveIssue[];
+      let dependencies: number[] = [];
       const readStarted = Date.now();
       try {
         const since = this.readAt.get(repo.id);
@@ -282,15 +286,27 @@ export class Reconciler {
         // before the last read (or before this bridge started) is looked up
         // by itself. A merged or finished row stays on the board closed, and
         // is not asked about every quarter hour.
+        //
+        // So is a dependency an open issue names that nothing has recorded,
+        // which is kept only if it is labelled `openadlc:ignore` (#214): one
+        // that closed as completed before the bridge kept such a record, or
+        // while it was not listening, is how what waits on it is let go.
+        //
+        // The first pass lists no closed issues, so it also names a
+        // dependency recorded closed: what changed while the bridge was down
+        // is read once, and not every quarter hour after.
+        dependencies = await (async () => issues.unresolvedDependencies(repo, { closed: since === undefined }))().catch((): number[] => []);
         const named = [
           ...cached.filter((entry) => entry.stage !== 'merged' && entry.stage !== 'done').map((entry) => entry.number),
           ...(await leases.listActiveLeases(repo.id)).map((lease) => lease.issueNumber),
+          ...dependencies,
         ];
         live = await everyIssue(client, repo.fullName, {
           closedSince: since === undefined ? null : new Date(since - SINCE_SLACK_MS).toISOString(),
           named,
         });
         this.readAt.set(repo.id, readStarted);
+        if (since === undefined) firstRead.push({ repo, read: new Set([...live.map((issue) => issue.number), ...dependencies]) });
       } catch (error) {
         drift.push({
           kind: 'github_unreadable',
@@ -308,9 +324,29 @@ export class Reconciler {
         live.filter((issue) => !issue.pullRequest && issue.state === 'open').map((issue) => issue.number),
       );
 
+      const recorded = repair
+        ? new Map((await (async () => ignoredIssues.listForRepos([repo.id]))().catch(() => [])).map((record) => [record.number, record]))
+        : new Map<number, ignoredIssues.IgnoredIssue>();
+      // A recorded dependency looked up by itself and not found was deleted
+      // or transferred while nobody listened: its record no longer says
+      // anything GitHub does.
+      if (repair) {
+        const found = new Set(live.map((issue) => issue.number));
+        for (const number of dependencies) {
+          if (found.has(number) || !recorded.has(number)) continue;
+          await ignoredIssues.forget(repo.id, number).catch((error: unknown) =>
+            console.warn(`[reconciler] ${repo.name}#${number}: its record as an ignored issue was not forgotten: ${reasonOf(error)}`),
+          );
+        }
+      }
       for (const issue of live) {
         if (issue.pullRequest) continue;
         const known = cached.find((entry) => entry.number === issue.number);
+        if (repair) {
+          await keepIgnored(repo, issue, recorded.get(issue.number)).catch((error: unknown) =>
+            console.warn(`[reconciler] ${repo.name}#${issue.number}: its record as an ignored issue was not brought up to date: ${reasonOf(error)}`),
+          );
+        }
 
         // One issue that cannot be written — a row the store refuses, a stage
         // nobody can be started on — is reported, and the rest still reconcile.
@@ -383,6 +419,19 @@ export class Reconciler {
             repaired: repair,
           });
         }
+      }
+    }
+
+    // The first pass named its closed records from the bodies stored before
+    // it read GitHub. A body it rewrote above, edited while the bridge was
+    // down, can name one more, which no later pass reads until the next
+    // start (#220). Asked again once every repository's bodies are written:
+    // a body in one repository can name a dependency in another.
+    if (repair && client) {
+      for (const { repo, read } of firstRead) {
+        await catchUpIgnored(client, repo, read).catch((error: unknown) =>
+          console.warn(`[reconciler] ${repo.name}: the ignored dependencies its rewritten issues name were not read: ${reasonOf(error)}`),
+        );
       }
     }
 
@@ -848,6 +897,57 @@ export function renderDrift(drift: readonly Drift[]): string {
   }
 
   return lines.join('\n');
+}
+
+/**
+ * What GitHub says of an issue labelled `openadlc:ignore`, kept whether or not
+ * the board has a row for it, as the webhook keeps it (`learnIssue`), for what
+ * names it under Dependencies (`dependencyIsSatisfied`). Its record is
+ * forgotten once the label is off. Written only when it changed: every open
+ * issue is read on every pass.
+ */
+async function keepIgnored(repo: { id: string }, issue: LiveIssue, recorded: ignoredIssues.IgnoredIssue | undefined): Promise<void> {
+  if (!hasIgnoreLabel(issue.labels)) {
+    if (recorded) await ignoredIssues.forget(repo.id, issue.number);
+    return;
+  }
+  const now = {
+    state: issue.state,
+    stateReason: issue.stateReason ?? null,
+    closedAt: issue.state === 'closed' ? (issue.closedAt ?? null) : null,
+  };
+  const closedAtOf = (at: string | null) => (at === null ? null : Date.parse(at));
+  if (recorded && recorded.state === now.state && recorded.stateReason === now.stateReason && closedAtOf(recorded.closedAt) === closedAtOf(now.closedAt)) return;
+  await ignoredIssues.record(repo.id, issue.number, now);
+}
+
+/**
+ * Reads, once, each dependency recorded as ignored that `repo`'s dependents
+ * name now and that `read` did not ask GitHub about, and brings its record up
+ * to date: rewritten, forgotten once the label is off, or forgotten when
+ * GitHub no longer has it. One with no record is named by every pass already.
+ */
+async function catchUpIgnored(
+  client: Partial<Pick<GitHubClient, 'getIssue'>>,
+  repo: { id: string; fullName: string },
+  read: ReadonlySet<number>,
+): Promise<void> {
+  if (!client.getIssue) return;
+  const named = (await issues.unresolvedDependencies(repo, { closed: true })).filter((number) => !read.has(number));
+  if (named.length === 0) return;
+  const recorded = new Map((await ignoredIssues.listForRepos([repo.id])).map((record) => [record.number, record]));
+  for (const number of named) {
+    const record = recorded.get(number);
+    if (!record) continue;
+    let issue: LiveIssue | null = null;
+    try {
+      issue = await client.getIssue(repo.fullName, number);
+    } catch (error) {
+      if (!(error instanceof GitHubApiError && (error.status === 404 || error.status === 410))) throw error;
+    }
+    if (issue) await keepIgnored(repo, issue, record);
+    else await ignoredIssues.forget(repo.id, number);
+  }
 }
 
 /** The first line of what went wrong, short enough for a log line. */

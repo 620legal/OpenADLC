@@ -4,6 +4,7 @@ import {
   audit,
   bots,
   hasEventOfType,
+  ignoredIssues,
   issues,
   lastAudit,
   leases,
@@ -149,6 +150,8 @@ interface WebhookPayload {
     state?: string;
     /** When it closed, by GitHub's clock: the same on a late or resent delivery. */
     closed_at?: string | null;
+    /** Why it closed (`completed`, `not_planned`, …), or `reopened`; what an ignored dependency is judged by. */
+    state_reason?: string | null;
     /** When it was opened, by GitHub's clock: its work item's place in line. */
     created_at?: string;
     /** `id` is the account's, which a login in `humans` is pinned to (`human-ids.ts`). */
@@ -786,7 +789,18 @@ export class Webhooks {
    */
   async learnIssue(
     repo: { id: string; name: string; fullName?: string },
-    issue: { number: number; title: string; body: string | null; htmlUrl: string; labels: readonly string[]; state?: string; closedAt?: string | null; createdAt?: string | null },
+    issue: {
+      number: number;
+      title: string;
+      body: string | null;
+      htmlUrl: string;
+      labels: readonly string[];
+      state?: string;
+      closedAt?: string | null;
+      createdAt?: string | null;
+      /** GitHub's `state_reason`, from the delivery or reconcile's read. */
+      stateReason?: string | null;
+    },
     action?: string,
     /** Who changed it, from the delivery; reconcile has nobody to name. */
     sender?: string | null,
@@ -801,6 +815,22 @@ export class Webhooks {
     // record. Never in the way of the rest.
     await linkIssue(repo, issue, action === 'deleted' || action === 'transferred').catch((error: unknown) =>
       console.warn(`[bridge] ${repo.name}#${issue.number}: its work item was not brought up to date: ${error instanceof Error ? error.message : error}`),
+    );
+    // Labelled `openadlc:ignore`, what GitHub says of it is kept, on every
+    // delivery and before anything below returns: nothing below keeps a row
+    // for one in intake or spec, and its close moves none it has, so an issue
+    // waiting on it waited for good (#214). The label off, or the issue gone,
+    // the record goes. Never in the way of the rest.
+    await (async () => {
+      if (action === 'deleted' || action === 'transferred' || !hasIgnoreLabel(issue.labels)) return ignoredIssues.forget(repo.id, issue.number);
+      const closed = issue.state === 'closed';
+      return ignoredIssues.record(repo.id, issue.number, {
+        state: closed ? 'closed' : 'open',
+        stateReason: issue.stateReason ?? null,
+        closedAt: closed ? (issue.closedAt ?? null) : null,
+      });
+    })().catch((error: unknown) =>
+      console.warn(`[bridge] ${repo.name}#${issue.number}: its record as an ignored issue was not brought up to date: ${error instanceof Error ? error.message : error}`),
     );
     // Gone from this repository: nothing of it is kept to staff.
     if (action === 'deleted' || action === 'transferred') {
@@ -1492,6 +1522,7 @@ export class Webhooks {
         ...(issue.state ? { state: issue.state } : {}),
         ...(issue.closed_at ? { closedAt: issue.closed_at } : {}),
         ...(issue.created_at ? { createdAt: issue.created_at } : {}),
+        ...(issue.state_reason !== undefined ? { stateReason: issue.state_reason } : {}),
       },
       payload.action,
       payload.sender?.login ?? null,

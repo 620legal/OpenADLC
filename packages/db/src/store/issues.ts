@@ -1,5 +1,6 @@
-import { hasIgnoreLabel, namesRepository, type BoardCard, type DependencyRef, type StageKey } from '@openadlc/shared';
+import { hasIgnoreLabel, namesRepository, parseDependencyRefs, type BoardCard, type DependencyRef, type StageKey } from '@openadlc/shared';
 import { query, queryOne } from '../client.js';
+import { get as getIgnored, type IgnoredIssue } from './ignored-issues.js';
 import { getRepoByName } from './repos.js';
 
 interface IssueRow {
@@ -474,15 +475,67 @@ export async function getIssue(repoId: string, number: number): Promise<IssueRec
  * its full name, ignoring case as GitHub does. A removed one is left out, the
  * same as one nobody added: `managed` is false and there is no issue, so the
  * dependency never ships and the issue waits for a person to look.
+ *
+ * `ignored` is its record when it is labelled `openadlc:ignore`, which the
+ * rule reads beside the row (`dependencyIsSatisfied(issue, ignored)`): every
+ * caller resolves through here, so the dispatcher, readiness, stacking and the
+ * waiting line give one answer for one dependency.
  */
 export async function resolveDependency(
   own: { id: string; fullName: string },
   ref: DependencyRef,
-): Promise<{ managed: boolean; issue: IssueRecord | null }> {
-  if (namesRepository(ref, own.fullName)) return { managed: true, issue: await getIssue(own.id, ref.number) };
-  const repo = await getRepoByName(ref.repo!);
-  if (!repo) return { managed: false, issue: null };
-  return { managed: true, issue: await getIssue(repo.id, ref.number) };
+): Promise<{ managed: boolean; issue: IssueRecord | null; ignored: IgnoredIssue | null }> {
+  const repoId = namesRepository(ref, own.fullName) ? own.id : (await getRepoByName(ref.repo!))?.id;
+  if (!repoId) return { managed: false, issue: null, ignored: null };
+  const [issue, ignored] = await Promise.all([getIssue(repoId, ref.number), getIgnored(repoId, ref.number)]);
+  return { managed: true, issue, ignored };
+}
+
+/**
+ * The numbers in `repo` that an open issue on the board names under
+ * Dependencies, in any managed repository, and that nothing has recorded:
+ * no row, and no ignored record that says it closed. Reconcile looks each up
+ * on GitHub (`everyIssue`'s `named`) and keeps it only if it is ignored.
+ *
+ * One recorded ignored and open is named too: it is in reconcile's listing of
+ * open issues while it stays open, so this costs nothing, and once it closes
+ * with the bridge not listening, it is still read. Left out, its record said
+ * open for good.
+ *
+ * With `closed`, one recorded closed is named as well, for the first pass
+ * after the bridge starts: that pass lists no closed issues, so a label taken
+ * off, a close reason changed, or an issue deleted while it was down was never
+ * read, and a stale record went on counting as shipped. That holds for one
+ * with a row too: a row in `merged` without `deployed:testing` does not ship
+ * it, its record does, and reconcile does not ask about a merged row.
+ */
+export async function unresolvedDependencies(
+  repo: { id: string; fullName: string },
+  options: { closed?: boolean } = {},
+): Promise<number[]> {
+  const [waiting, known, ignored] = await Promise.all([
+    query<{ body: string; full_name: string }>(
+      `select i.body, r.full_name from issues i join repos r on r.id = i.repo_id
+        where r.removed_at is null and i.stage not in ('merged', 'done')`,
+    ),
+    query<{ number: number }>('select number from issues where repo_id = $1', [repo.id]),
+    query<{ number: number; state: string }>('select number, state from ignored_issues where repo_id = $1', [repo.id]),
+  ]);
+  const recorded = new Set(ignored.map((row) => row.number));
+  const settled = new Set([
+    ...known.map((row) => row.number).filter((number) => !(options.closed && recorded.has(number))),
+    ...ignored.filter((row) => row.state !== 'open' && !options.closed).map((row) => row.number),
+  ]);
+  const named = new Set<number>();
+  for (const row of waiting) {
+    for (const ref of parseDependencyRefs(row.body)) {
+      // `#N` names the waiting issue's own repository.
+      const target = ref.repo ?? row.full_name;
+      if (target.toLowerCase() !== repo.fullName.toLowerCase() || settled.has(ref.number)) continue;
+      named.add(ref.number);
+    }
+  }
+  return [...named].sort((a, b) => a - b);
 }
 
 /**

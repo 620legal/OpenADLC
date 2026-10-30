@@ -1,4 +1,4 @@
-import { audit, bots, costs, health, hosts, issues, leases, listEventsOfType, recordEvent, repos, settings, spendingLimits, tasks } from '@openadlc/db';
+import { audit, bots, costs, health, hosts, ignoredIssues, issues, leases, listEventsOfType, recordEvent, repos, settings, spendingLimits, tasks } from '@openadlc/db';
 import { fetchJson, maxTasksOf, type CostsConfig, hasIgnoreLabel, hasNextLabel, hasPausedLabel } from '@openadlc/shared';
 import { DEFAULT_PATH_POLICY, deliveryRulesFrom, dependencyIsSatisfied, formatDependencyRef, missingForRouting, namesRepository, onlyExpectedPathsUnreadable, parseDependencyRefs, UNREADABLE_PATH_LINE, tooManyAttempts, type PathPolicy } from '@openadlc/shared';
 import { overlapKind, pathsOverlap } from './overlap.js';
@@ -387,7 +387,7 @@ export class Dispatcher {
       if (refs.length === 0) continue;
 
       const resolved = await Promise.all(refs.map((ref) => issues.resolveDependency(repo, ref)));
-      if (resolved.some((one) => !dependencyIsSatisfied(one.issue))) continue;
+      if (resolved.some((one) => !dependencyIsSatisfied(one.issue, one.ignored))) continue;
       const dependencies = refs.map(formatDependencyRef);
 
       try {
@@ -561,6 +561,12 @@ export class Dispatcher {
 
       // What each issue waits on is read from where the board has it now.
       const known = new Map((await issues.listIssues(repo.name)).map((one) => [one.number, one]));
+      // This repository's issues labelled `openadlc:ignore`, as GitHub last
+      // said: read once a pass, beside `known`, as `resolveDependency` reads
+      // one in another repository. Unread, none is met, which is the old answer.
+      const ignoredHere = new Map(
+        (await (async () => ignoredIssues.listForRepos([repo.id]))().catch(() => [])).map((one) => [one.number, one]),
+      );
       const activeLeases = await leases.listActiveLeases(repo.id);
       // What is in flight is the work itself: an issue in build or review that
       // a builder has started, with the files it declared and the files its pull
@@ -594,13 +600,13 @@ export class Dispatcher {
           parseDependencyRefs(issue.body).map(async (ref) => ({
             ref,
             ...(namesRepository(ref, repo.fullName)
-              ? { managed: true, issue: known.get(ref.number) ?? null }
+              ? { managed: true, issue: known.get(ref.number) ?? null, ignored: ignoredHere.get(ref.number) ?? null }
               : await issues.resolveDependency(repo, ref)),
           })),
         );
         // Said, not skipped in silence: an issue read as waiting on one that
         // would never ship — closed as superseded — sat with nothing in the log.
-        const waitingOn = resolved.filter((one) => !dependencyIsSatisfied(one.issue));
+        const waitingOn = resolved.filter((one) => !dependencyIsSatisfied(one.issue, one.ignored));
         if (waitingOn.length > 0) {
           decisions.push({
             repo: repo.name,
@@ -608,9 +614,16 @@ export class Dispatcher {
             bot: null,
             action: 'skipped',
             reason: `waits on ${waitingOn
-              .map(({ ref, managed, issue: dependency }) => {
+              .map(({ ref, managed, issue: dependency, ignored }) => {
                 const named = formatDependencyRef(ref);
                 if (!managed) return `${named}, in a repository this install does not manage`;
+                // "Not seen" sent a person looking for a delivery that never
+                // failed: OpenADLC was told to leave it alone.
+                if (ignored) {
+                  return ignored.state === 'open'
+                    ? `${named}, ignored and still open`
+                    : `${named}, ignored and closed as ${ignored.stateReason ? ignored.stateReason.replace(/_/g, ' ') : 'no reason given'}`;
+                }
                 return dependency ? `${named}, not shipped yet` : `${named}, which OpenADLC has not seen`;
               })
               .join(', ')}`,

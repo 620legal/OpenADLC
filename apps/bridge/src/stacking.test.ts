@@ -11,6 +11,8 @@ type Issue = { number: number; stage: string; labels: string[]; prNumber: number
 
 const world = vi.hoisted(() => ({
   issues: new Map<number, Issue>(),
+  /** What GitHub last said of each issue labelled openadlc:ignore. */
+  ignored: new Map<number, { state: 'open' | 'closed'; stateReason: string | null }>(),
   leases: new Map<number, { id: string }>(),
   created: [] as { issueNumber: number; botId: string }[],
   released: [] as string[],
@@ -33,6 +35,12 @@ vi.mock('@openadlc/db', () => ({
   bots: { listBots: vi.fn(async () => [{ id: 'bot-1', name: 'atlas' }]) },
   issues: {
     getIssue: vi.fn(async (_repo: string, number: number) => world.issues.get(number) ?? null),
+    // This repository's issue, with the record of one labelled openadlc:ignore.
+    resolveDependency: vi.fn(async (_own: unknown, ref: { number: number }) => ({
+      managed: true,
+      issue: world.issues.get(ref.number) ?? null,
+      ignored: world.ignored.get(ref.number) ?? null,
+    })),
     listBlockedIssues: vi.fn(async () => [...world.issues.values()].filter((issue) => issue.labels.includes('blocked'))),
     workInFlight: vi.fn(async () => world.inFlight),
     setIssueLabels: vi.fn(async (_repo: string, number: number, labels: string[]) => {
@@ -170,6 +178,29 @@ describe('an issue that depends on one in review', () => {
     world.attempts = 0;
     world.inFlight = [{ number: 4, paths: ['src/a.ts', 'src/b.ts'], building: false }];
     world.unfinished = 0;
+    world.ignored = new Map();
+  });
+
+  it('never stacks on one labelled openadlc:ignore, in review or not', async () => {
+    // A person's pull request is not the crew's to build on.
+    world.issues.set(4, { ...world.issues.get(4)!, labels: ['adlc:review', 'openadlc:ignore'] });
+    world.ignored.set(4, { state: 'open', stateReason: null });
+    const { subject, build } = stacking();
+
+    expect(await subject.sweep()).toEqual([]);
+    expect(build).not.toHaveBeenCalled();
+  });
+
+  it('stacks on the one in review when its other dependency is ignored and closed as completed, and not while that is open', async () => {
+    world.issues.set(5, { ...world.issues.get(5)!, body: `${dependsOn4}- #18\n` });
+    world.ignored.set(18, { state: 'open', stateReason: null });
+    const { subject, build } = stacking();
+
+    expect(await subject.sweep()).toEqual([]);
+    expect(build).not.toHaveBeenCalled();
+
+    world.ignored.set(18, { state: 'closed', stateReason: 'completed' });
+    expect(await subject.sweep()).toEqual([`shop#5: stacked on #4, from ${A_BRANCH}`]);
   });
 
   it('starts from that one’s branch rather than waiting for it to merge', async () => {

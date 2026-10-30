@@ -1,4 +1,4 @@
-import { costs, hosts as hostStore, issues as issueStore, leases as leaseStore, listEventsOfType, type HealthRow } from '@openadlc/db';
+import { costs, hosts as hostStore, ignoredIssues, issues as issueStore, leases as leaseStore, listEventsOfType, repos as repoStore, type HealthRow } from '@openadlc/db';
 import { blockingOverlaps, type WorkInFlight } from '@openadlc/dispatcher';
 import {
   DEFAULT_PATH_POLICY,
@@ -11,6 +11,7 @@ import {
   namesRepository,
   parseDependencyRefs,
   type DependencyRef,
+  type IgnoredState,
   type LeaseState,
   type PathPolicy,
   type StageKey,
@@ -86,6 +87,8 @@ export interface DependencyNow {
   stage: StageKey | null;
   /** Closed without merging: it will never ship. */
   abandoned: boolean;
+  /** Labelled `openadlc:ignore`: what GitHub last said of it, which is all the board knows; null for any other. */
+  ignored: IgnoredState | null;
   /** The task going on it now, the running one first; null when there is none. */
   task: { bot: string; kind: TaskKind; state: TaskState; waitingOnYou: boolean; activity: string | null } | null;
   /** What it waits on itself, when nothing is going on it; null when it does not wait for a seat or another issue. */
@@ -223,6 +226,12 @@ export interface WaitingContext {
    * no host is live, when a start finds hostd's own answer; absent, not read.
    */
   hosts?: { running: number; capacity: number } | null;
+  /**
+   * What GitHub last said of each issue labelled `openadlc:ignore`, by
+   * `repoId#number` (`ignoredIssues`): one closed as completed is not waited
+   * on, as the dispatcher reads it. Absent, none.
+   */
+  ignored?: ReadonlyMap<string, IgnoredState>;
 }
 
 /** A card the reasons are worked out for. */
@@ -501,9 +510,10 @@ export function waitingOf(input: WaitingInput): Waiting {
         : input.repos.find((one) => one.fullName !== undefined && namesRepository(ref, one.fullName));
     const issue = repo ? (issues.find((one) => one.repoId === repo.id && one.number === ref.number) ?? null) : null;
     const shown = repo?.id === card.issue.repoId ? `#${ref.number}` : formatDependencyRef(ref);
-    return { repoName: repo?.name ?? null, number: ref.number, issue, shown };
+    const ignored = repo ? (input.ignored?.get(`${repo.id}#${ref.number}`) ?? null) : null;
+    return { repoName: repo?.name ?? null, number: ref.number, issue, shown, ignored };
   };
-  const dependencyNow = ({ repoName, number, issue, shown }: ReturnType<typeof resolveRef>): DependencyNow => {
+  const dependencyNow = ({ repoName, number, issue, shown, ignored }: ReturnType<typeof resolveRef>): DependencyNow => {
     // One in a repository the install does not manage has nothing going on it that the board sees.
     const ref = repoName === null ? null : `${repoName}#${number}`;
     const subjects = new Set(issue ? subjectsOf(issue) : ref ? [ref] : []);
@@ -515,6 +525,7 @@ export function waitingOf(input: WaitingInput): Waiting {
       number,
       stage: issue?.stage ?? null,
       abandoned: hasAbandonedLabel(issue?.labels),
+      ignored: ignored ? { state: ignored.state, stateReason: ignored.stateReason } : null,
       task: leading
         ? {
             bot: botName(leading.botId),
@@ -531,10 +542,12 @@ export function waitingOf(input: WaitingInput): Waiting {
     const reason = reasons.get(card.ref);
     if (reason?.kind !== 'dependency') continue;
     // One not read is named too: with the label still on, the dispatcher
-    // has not found it shipped.
+    // has not found it shipped. One ignored and closed as completed is met,
+    // as the dispatcher reads it, and is not named while the label waits for
+    // its next pass to come off.
     const unshipped = parseDependencyRefs(card.issue.body ?? null)
       .map((ref) => resolveRef(card, ref))
-      .filter((found) => !found.issue || !dependencyIsSatisfied(found.issue));
+      .filter((found) => !dependencyIsSatisfied(found.issue, found.ignored));
     reasons.set(card.ref, { kind: 'dependency', on: unshipped.map(dependencyNow) });
   }
 
@@ -627,7 +640,7 @@ export async function readWaitingContext(
     ]);
     return [repo.id, { work, policy }];
   };
-  const [seatPauses, budget, health, inFlight, seatWaitEvents, held, load] = await Promise.all([
+  const [seatPauses, budget, health, inFlight, seatWaitEvents, held, load, ignored] = await Promise.all([
     readSeatPauses(),
     // The cap the dispatcher stops leasing at, and every start too
     // (`spendingLimits.refusal`), as the budget job last wrote it.
@@ -638,6 +651,8 @@ export async function readWaitingContext(
     // The leases held now and the hosts' load: each the size of the work in flight, no history.
     (async () => leaseStore.heldLeases())().catch(() => undefined),
     (async () => hostStore.taskLoad())().catch(() => undefined),
+    // Every repository's ignored issues: a dependency may be in any of them.
+    (async () => ignoredIssues.listForRepos((await repoStore.listRepos()).map((repo) => repo.id)))().catch(() => undefined),
   ]);
   const next = reads.nextSweepAt?.();
   return {
@@ -651,6 +666,7 @@ export async function readWaitingContext(
     seatWaitEvents,
     ...(held ? { leases: held } : {}),
     ...(load !== undefined ? { hosts: load ? { running: load.used, capacity: load.capacity } : null } : {}),
+    ...(ignored ? { ignored: new Map(ignored.map((one) => [`${one.repoId}#${one.number}`, { state: one.state, stateReason: one.stateReason }])) } : {}),
   };
 }
 

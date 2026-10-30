@@ -9,7 +9,7 @@ vi.mock('../client.js', () => ({
 }));
 
 import { query, queryOne } from '../client.js';
-import { anyDoneBefore, boardCards, boardIssues, byNextFirst, getIssue, getIssues, listBlockedIssues, listRoutableIssues, priorityRank, resolveDependency, setIssueLabels, setIssueStage, setShippedAt, setVouched, upsertIssue, workInFlight, type IssueRecord } from './issues.js';
+import { anyDoneBefore, boardCards, boardIssues, byNextFirst, getIssue, getIssues, listBlockedIssues, listRoutableIssues, priorityRank, resolveDependency, setIssueLabels, unresolvedDependencies, setIssueStage, setShippedAt, setVouched, upsertIssue, workInFlight, type IssueRecord } from './issues.js';
 
 /**
  * The order is a comparator rather than a `order by` clause so that it can be
@@ -346,7 +346,8 @@ describe('the issue a dependency names', () => {
   beforeEach(() => {
     vi.mocked(query).mockReset();
     vi.mocked(queryOne).mockReset();
-    vi.mocked(query).mockImplementation((async (_sql: string, params: [string, number]) => [issueRow(params[0], params[1])]) as never);
+    vi.mocked(query).mockImplementation((async (sql: string, params: [string, number]) =>
+      String(sql).includes('ignored_issues') ? [] : [issueRow(params[0], params[1])]) as never);
   });
 
   it('reads its own repository for #N, or its own full name in any case, without looking for another', async () => {
@@ -367,14 +368,78 @@ describe('the issue a dependency names', () => {
   it('is no issue in a repository the install does not manage, or has removed', async () => {
     // An issue waiting on work there would otherwise be read as waiting on nothing.
     vi.mocked(queryOne).mockResolvedValueOnce(null as never);
-    expect(await resolveDependency(OWN, { repo: 'nobody/x', number: 1 })).toEqual({ managed: false, issue: null });
+    expect(await resolveDependency(OWN, { repo: 'nobody/x', number: 1 })).toEqual({ managed: false, issue: null, ignored: null });
     expect(query).not.toHaveBeenCalled();
   });
 
   it('is no issue for a number the platform has never seen', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce(repoRow as never);
     vi.mocked(query).mockResolvedValueOnce([] as never);
-    expect(await resolveDependency(OWN, { repo: 'owner/a', number: 99 })).toEqual({ managed: true, issue: null });
+    expect(await resolveDependency(OWN, { repo: 'owner/a', number: 99 })).toEqual({ managed: true, issue: null, ignored: null });
+  });
+
+  it('carries the record of one labelled openadlc:ignore, from the repository it is in', async () => {
+    // The rule reads it beside the row: an ignored issue has no row unless it
+    // is in a later stage, and its close never moves one it has.
+    vi.mocked(query).mockImplementation((async (sql: string, params: [string, number]) =>
+      String(sql).includes('ignored_issues')
+        ? [{ repo_id: params[0], number: params[1], state: 'closed', state_reason: 'completed', closed_at: new Date('2026-10-20T10:00:00Z') }]
+        : []) as never);
+    expect(await resolveDependency(OWN, { repo: null, number: 18 })).toEqual({
+      managed: true,
+      issue: null,
+      ignored: { repoId: 'repo-b', number: 18, state: 'closed', stateReason: 'completed', closedAt: '2026-10-20T10:00:00.000Z' },
+    });
+  });
+});
+
+describe('the dependencies reconcile looks up', () => {
+  const REPO = { id: 'repo-b', fullName: 'owner/b' };
+
+  beforeEach(() => {
+    vi.mocked(query).mockReset();
+  });
+
+  function answer(waiting: { body: string; full_name: string }[], known: number[], ignored: { number: number; state: string }[]) {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (String(sql).includes('from ignored_issues')) return ignored;
+      if (String(sql).includes('join repos')) return waiting;
+      return known.map((number) => ({ number }));
+    }) as never);
+  }
+
+  it('names only what has neither a row nor a closed record, in this repository', async () => {
+    answer(
+      [
+        { body: '## Dependencies\n\n- #17\n- #18\n- #20\n- #21\n- owner/a#5', full_name: 'owner/b' },
+        { body: '## Dependencies\n\n- owner/B#30\n- #17', full_name: 'owner/a' },
+      ],
+      [20],
+      [{ number: 21, state: 'closed' }],
+    );
+    // #20 is on the board and #21 is recorded closed; owner/a#5 and owner/a's
+    // own #17 are another repository's.
+    expect(await unresolvedDependencies(REPO)).toEqual([17, 18, 30]);
+    const [waitingSql] = vi.mocked(query).mock.calls.find(([sql]) => String(sql).includes('join repos')) ?? [];
+    expect(String(waitingSql)).toContain("stage not in ('merged', 'done')");
+    expect(String(waitingSql)).toContain('removed_at is null');
+  });
+
+  it('names one recorded ignored and still open, so its close is read even when no delivery said it', async () => {
+    answer([{ body: '## Dependencies\n\n- #18', full_name: 'owner/b' }], [], [{ number: 18, state: 'open' }]);
+    expect(await unresolvedDependencies(REPO)).toEqual([18]);
+  });
+
+  it('names one recorded closed too when asked for the closed, as the first pass after a start is', async () => {
+    answer([{ body: '## Dependencies\n\n- #18\n- #20', full_name: 'owner/b' }], [20], [{ number: 18, state: 'closed' }]);
+    expect(await unresolvedDependencies(REPO)).toEqual([]);
+    expect(await unresolvedDependencies(REPO, { closed: true })).toEqual([18]);
+  });
+
+  it('names one with a row and an ignored record when asked for the closed: a merged row does not ship it, its record does', async () => {
+    answer([{ body: '## Dependencies\n\n- #18\n- #20', full_name: 'owner/b' }], [18, 20], [{ number: 18, state: 'closed' }]);
+    expect(await unresolvedDependencies(REPO)).toEqual([]);
+    expect(await unresolvedDependencies(REPO, { closed: true })).toEqual([18]);
   });
 });
 

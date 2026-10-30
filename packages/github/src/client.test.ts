@@ -1175,6 +1175,36 @@ describe('an issue or pull request read through the issues API', () => {
 
     expect(await client.getIssue('acme/api', 77)).toMatchObject({ number: 77, pullRequest: true, author: 'stranger', association: 'NONE' });
   });
+
+  // An issue labelled openadlc:ignore counts as shipped only once it closed as
+  // completed: the reason is what tells a finished one from a dropped one.
+  const closed = {
+    number: 18,
+    title: 'Built by hand',
+    body: null,
+    labels: [{ name: 'openadlc:ignore' }],
+    html_url: 'https://github.test/acme/api/issues/18',
+    state: 'closed',
+    state_reason: 'completed',
+    closed_at: '2026-10-20T10:00:00Z',
+    created_at: '2026-10-01T00:00:00Z',
+    updated_at: '2026-10-20T10:00:00Z',
+  };
+  const open = { ...closed, number: 19, state: 'open', state_reason: undefined, closed_at: null };
+  const answering = (body: unknown) =>
+    new GitHubClient({ token: 'token', actingAs: 'janedoe-openadlc-flow', fetchImpl: (async () => new Response(JSON.stringify(body), { status: 200 })) as typeof fetch });
+
+  it('says why and when it closed, and null for each while it is open', async () => {
+    expect(await answering(closed).getIssue('acme/api', 18)).toMatchObject({ state: 'closed', stateReason: 'completed', closedAt: '2026-10-20T10:00:00Z' });
+    expect(await answering(open).getIssue('acme/api', 19)).toMatchObject({ state: 'open', stateReason: null, closedAt: null });
+  });
+
+  it('says the same in a listing', async () => {
+    expect(await answering([closed, open]).listIssues('acme/api', { state: 'all' })).toMatchObject([
+      { number: 18, stateReason: 'completed', closedAt: '2026-10-20T10:00:00Z' },
+      { number: 19, stateReason: null, closedAt: null },
+    ]);
+  });
 });
 
 /**
