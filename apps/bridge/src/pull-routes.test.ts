@@ -3,8 +3,15 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PersonFlows } from './person-github.js';
 import type { PullCommands } from './pull-commands.js';
-import { pullNumberOf, registerPullRoutes, type PullOf } from './pull-routes.js';
+import { livePullOf, pullTargetOf, registerPullRoutes, type PullOf } from './pull-routes.js';
 import { Router } from './router.js';
+
+const live = vi.hoisted(() => ({ resolveItem: vi.fn(), getRepoByName: vi.fn() }));
+vi.mock('./items.js', async (actual) => ({ ...(await actual<typeof import('./items.js')>()), resolveItem: live.resolveItem }));
+vi.mock('@openadlc/db', async (actual) => {
+  const db = await actual<typeof import('@openadlc/db')>();
+  return { ...db, repos: { ...db.repos, getRepoByName: live.getRepoByName } };
+});
 
 /**
  * The pull panel's routes: the view of the item's pull request, pressing a
@@ -81,6 +88,8 @@ describe('the pull panel’s routes', () => {
 });
 
 describe('which pull request a subject’s panel acts on', () => {
+  // The item's issue is www#12 and records pull 99; pull 46 in www and pull 15
+  // in api are linked onto it by hand.
   const item = {
     pr: 99,
     refs: { request: null, issue: 'www#12', pullRequest: 'www#99' },
@@ -88,17 +97,37 @@ describe('which pull request a subject’s panel acts on', () => {
       { kind: 'issue', repo: 'www', number: 12 },
       { kind: 'pull', repo: 'www', number: 99 },
       { kind: 'pull', repo: 'www', number: 46 },
+      { kind: 'pull', repo: 'api', number: 15 },
     ],
   } as never;
 
-  it('is the pull a card names when it is one of the item’s, and the item’s pull request otherwise', () => {
+  it('is the pull a card names, in its own repository, when it is one of the item’s, and the item’s pull request otherwise', () => {
     // A card for pull 46, on an item whose issue records 99, sent its sign-off to 99.
-    expect(pullNumberOf('www#46', item, 'www')).toBe(46);
-    expect(pullNumberOf('www#99', item, 'www')).toBe(99);
-    expect(pullNumberOf('www#12', item, 'www')).toBe(99);
-    expect(pullNumberOf('W-7', item, 'www')).toBe(99);
-    // A number the item does not hold is not taken from the subject.
-    expect(pullNumberOf('www#47', item, 'www')).toBe(99);
-    expect(pullNumberOf('api#46', item, 'www')).toBe(99);
+    expect(pullTargetOf('www#46', item, 'www')).toEqual({ repo: 'www', number: 46 });
+    expect(pullTargetOf('www#99', item, 'www')).toEqual({ repo: 'www', number: 99 });
+    // A card for a pull linked from another repository posted on www#99.
+    expect(pullTargetOf('api#15', item, 'www')).toEqual({ repo: 'api', number: 15 });
+    expect(pullTargetOf('www#12', item, 'www')).toEqual({ repo: 'www', number: 99 });
+    expect(pullTargetOf('W-7', item, 'www')).toEqual({ repo: 'www', number: 99 });
+    // A pull the item does not hold is not taken from the subject, and a
+    // number alone is no match: www#15 and api#46 are not the item's.
+    expect(pullTargetOf('www#47', item, 'www')).toEqual({ repo: 'www', number: 99 });
+    expect(pullTargetOf('api#46', item, 'www')).toEqual({ repo: 'www', number: 99 });
+    expect(pullTargetOf('www#15', item, 'www')).toEqual({ repo: 'www', number: 99 });
+  });
+
+  it('is none for an item with no pull request', () => {
+    const none = { pr: null, refs: { request: null, issue: 'www#12', pullRequest: null }, links: [] } as never;
+    expect(pullTargetOf('www#12', none, 'www')).toBeNull();
+  });
+
+  it('reads and posts in the repository of the card’s pull, not the item’s', async () => {
+    live.resolveItem.mockResolvedValue({ item, repo: { name: 'www' } });
+    live.getRepoByName.mockImplementation(async (name: string) => ({ name, fullName: `620legal/${name}`, defaultBranch: 'main' }));
+    expect(await livePullOf('api#15')).toEqual({ repo: { name: 'api', fullName: '620legal/api', defaultBranch: 'main' }, number: 15 });
+    expect(live.getRepoByName).toHaveBeenLastCalledWith('api');
+    expect(await livePullOf('www#12')).toEqual({ repo: { name: 'www', fullName: '620legal/www', defaultBranch: 'main' }, number: 99 });
+    expect(live.getRepoByName).toHaveBeenLastCalledWith('www');
   });
 });
+

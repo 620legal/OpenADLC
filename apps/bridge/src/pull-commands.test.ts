@@ -189,6 +189,14 @@ describe('a command anyone may send', () => {
     }
   });
 
+  it('posts nothing when it cannot read whether the command was already sent', async () => {
+    // A failed read was taken as "never sent", and a second press posted again.
+    const { commands, appPosts } = setUp();
+    (commands as unknown as { deps: PullCommandDeps }).deps.lastSent = async () => Promise.reject(new Error('database is down'));
+    await expect(commands.send({ repo: REPO, number: 46, name: 'preview', head: HEAD, identity: 'jane@example.com' })).rejects.toMatchObject({ status: 503 });
+    expect(appPosts).toEqual([]);
+  });
+
   it('posts nothing when the head moved since the person looked', async () => {
     const { commands, appPosts } = setUp({ fake: { head: NEWER } });
     await expect(commands.send({ repo: REPO, number: 46, name: 'preview', head: HEAD, identity: 'jane@example.com' })).rejects.toMatchObject({ status: 409 });
@@ -274,6 +282,29 @@ describe('a command only a reviewer may send', () => {
       expect(person.revoked).toEqual([TOKEN]);
       expect(flows.state(started.flow.flowId, 'or@example.com')).toMatchObject({ state: 'failed', error: expect.stringMatching(/nothing was posted/) });
     }
+  });
+
+  it('starts no second sign-in while the person’s first for this command is still waiting', async () => {
+    // The row is written only after the code is approved, so a press from the
+    // card while the work item's sign-in waited started a second flow and
+    // posted /approve-pages twice.
+    let approve: (token: UserToken) => void = () => undefined;
+    const requestCode = vi.fn(async (): Promise<DeviceCode> => ({ deviceCode: 'dev', userCode: 'ABCD-1234', verificationUri: 'https://github.com/login/device', expiresIn: 900, interval: 5 }));
+    const { commands, flows, personPosts } = setUp({
+      linked: { 'or@example.com': ORZELIG_ID },
+      person: { requestCode, pollToken: () => new Promise<UserToken>((resolve) => (approve = resolve)) },
+    });
+    const press = () => commands.send({ repo: REPO, number: 46, name: 'approve-pages', head: HEAD, identity: 'or@example.com' });
+    await press();
+    await expect(press()).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/still waiting for you/) });
+    expect(requestCode).toHaveBeenCalledTimes(1);
+
+    approve({ accessToken: TOKEN, expiresAt: null, refreshToken: null, refreshExpiresAt: null, scopes: [], tokenType: 'bearer' });
+    await flows.lastRun;
+    expect(personPosts).toHaveLength(1);
+    // Once it has ended, the next press is the waiting-for-its-answer rule's to judge.
+    await press();
+    expect(requestCode).toHaveBeenCalledTimes(2);
   });
 
   it('says a failure without the token in it', async () => {

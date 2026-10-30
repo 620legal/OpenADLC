@@ -19,27 +19,31 @@ export type PullOf = (subject: string) => Promise<{ repo: PullRepo; number: numb
 export const livePullOf: PullOf = async (subject) => {
   const found = await resolveItem(subject);
   if (!found?.repo) return null;
-  const number = pullNumberOf(subject, found.item, found.repo.name);
-  if (!number) return null;
-  const repo = await repos.getRepoByName(found.repo.name);
+  const target = pullTargetOf(subject, found.item, found.repo.name);
+  if (!target) return null;
+  const repo = await repos.getRepoByName(target.repo);
   if (!repo) return null;
-  return { repo: { name: repo.name, fullName: repo.fullName, defaultBranch: repo.defaultBranch }, number };
+  return { repo: { name: repo.name, fullName: repo.fullName, defaultBranch: repo.defaultBranch }, number: target.number };
 };
 
 /**
- * Which pull request a subject's panel acts on. A Needs-you card names the
- * pull it is about (`www#46`), and an item can hold a second pull linked onto
- * it: answering with the item's own `pr` there posted the card's sign-off on
- * the item's other pull. So a subject that is one of the item's pulls is that
- * pull; an issue or a work-item key is the item's pull request.
+ * Which pull request a subject's panel acts on, and in which repository. A
+ * Needs-you card names the pull it is about (`www#46`, or `api#15` linked onto
+ * an item whose issue is in www), and an item can hold a second pull linked
+ * onto it: answering with the item's own repository and `pr` there posted the
+ * card's sign-off on the item's other pull, and for a pull in another
+ * repository read the item's repository's commands. So a subject that is one
+ * of the item's pulls is that pull, in its own repository; an issue or a
+ * work-item key is the item's pull request. The repository is part of the
+ * match: `www#46` and `api#46` are different pull requests.
  */
-export function pullNumberOf(subject: string, item: Pick<Item, 'pr' | 'links' | 'refs'>, repoName: string): number | null {
+export function pullTargetOf(subject: string, item: Pick<Item, 'pr' | 'links' | 'refs'>, repoName: string): { repo: string; number: number } | null {
   const asked = parseRef(subject.trim());
-  if (asked && asked.repo === repoName) {
-    const linked = (item.links ?? []).some((link) => link.kind === 'pull' && link.repo === repoName && link.number === asked.number);
-    if (linked || item.refs.pullRequest === subject.trim()) return asked.number;
+  if (asked) {
+    const linked = (item.links ?? []).some((link) => link.kind === 'pull' && link.repo === asked.repo && link.number === asked.number);
+    if (linked || item.refs.pullRequest === subject.trim()) return { repo: asked.repo, number: asked.number };
   }
-  return item.pr;
+  return item.pr ? { repo: repoName, number: item.pr } : null;
 }
 
 /** The live wiring: reads as the automation account, posts as the app or as the person. */

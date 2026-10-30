@@ -144,7 +144,17 @@ function usePress(subject: string, view: PullView | null, reload: () => void) {
         release();
       });
   };
-  return { press, pending, error, flow, dismissFlow: () => setFlow(null) };
+  return { press, pending: heldCommand(pending, flow), error, flow, dismissFlow: () => setFlow(null) };
+}
+
+/**
+ * The command whose button is held: the one being pressed, or the one whose
+ * sign-in is on screen. The press lock lets go on the next view, which for a
+ * sign-off comes before its comment exists, so the button drew as pressable
+ * while the person still had the code to approve.
+ */
+export function heldCommand(pending: string | null, flow: Pick<Flow, 'name' | 'error'> | null): string | null {
+  return pending ?? (flow && !flow.error ? flow.name : null);
 }
 
 /** What a command's button says, for its state. */

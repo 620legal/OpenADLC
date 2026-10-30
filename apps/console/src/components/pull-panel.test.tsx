@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { PullCommandView, PullView } from '@/lib/api';
-import { PullActionsView, PullPanelView } from './pull-panel';
+import { heldCommand, PullActionsView, PullPanelView } from './pull-panel';
 
 /**
  * A pull request's commands and what its workflows posted, on its work item
@@ -122,5 +122,14 @@ describe('the buttons on a Needs-you card', () => {
     const green = renderToStaticMarkup(<PullActionsView view={view({ commands: [preview, notMine], checks: { 'visual-review': 'success' } })} pending={null} onPress={() => undefined} />);
     expect(green).not.toContain('data-pull-why');
     expect(green).toContain('data-pull-command="preview"');
+  });
+});
+
+describe('which button a press holds', () => {
+  it('holds a sign-off while its code is on screen, and lets go when the sign-in ends', () => {
+    expect(heldCommand('preview', null)).toBe('preview');
+    expect(heldCommand(null, { name: 'approve-pages' })).toBe('approve-pages');
+    expect(heldCommand(null, { name: 'approve-pages', error: 'You approved the code as @mallory; nothing was posted.' })).toBeNull();
+    expect(heldCommand(null, null)).toBeNull();
   });
 });

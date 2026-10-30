@@ -263,6 +263,8 @@ export class PullCommands {
   private readonly facts = new Map<string, { at: number; facts: PullFacts }>();
   private readonly images = new ImageCache();
   private readonly userIds = new Map<string, number>();
+  /** A sign-off's flow still waiting for its person, by pull request, command and identity. */
+  private readonly signing = new Map<string, { flowId: string; identity: string }>();
   private readonly now: () => number;
 
   constructor(
@@ -464,7 +466,11 @@ export class PullCommands {
     // A second press while the first is still waiting for its answer would
     // post the comment twice: the panel unlocks its button when the POST
     // returns, before its next read shows the command as sent.
-    const sent = await this.deps.lastSent(target).catch(() => null);
+    // A read that failed is not "never sent": answering as if it were posted
+    // the comment again.
+    const sent = await this.deps.lastSent(target).catch(() => {
+      throw new HttpFailure(503, `OpenADLC cannot tell whether ${command.comment} was already sent on #${number}; nothing was posted. Try again in a moment.`);
+    });
     if (sent && sent.head === facts.head) {
       const outputs = rules.outputs.map((output) => ({ name: output.name, kind: output.kind, found: this.found(output, facts, number, repo) }));
       if (!answerOf(command, sent.at, outputs, facts) && this.now() - Date.parse(sent.at) < QUIET_AFTER_MS) {
@@ -497,6 +503,14 @@ export class PullCommands {
       throw new HttpFailure(403, allowed.why ?? `${command.label} is not yours to send.`, { url: facts.url });
     }
     const linkedId = allowed.linkedId;
+    // A sign-off writes its pull.command_sent row only once the person has
+    // approved the code, so a second press meanwhile (from the card and the
+    // work item, two panels) started a second flow and posted twice.
+    const signingKey = `${target}@${facts.head}#${identity}`;
+    const signing = this.signing.get(signingKey);
+    if (signing && this.deps.flows.state(signing.flowId, signing.identity).state === 'waiting') {
+      throw new HttpFailure(409, `A sign-in for ${command.comment} on #${number} is still waiting for you; approve that code, or let it expire. Nothing was posted.`);
+    }
     const flow = await this.deps.flows.start(
       identity,
       async (viewer: GitHubViewer, accessToken: string) => {
@@ -518,6 +532,8 @@ export class PullCommands {
       },
       { noClientId: `OpenADLC cannot sign in as a person on this install: no GitHub App client id is configured. Send ${command.comment} on GitHub: ${facts.url}` },
     );
+    for (const [key, held] of this.signing) if (this.deps.flows.state(held.flowId, held.identity).state !== 'waiting') this.signing.delete(key);
+    this.signing.set(signingKey, { flowId: flow.flowId, identity });
     return { flow: { flowId: flow.flowId, userCode: flow.userCode, verificationUri: flow.verificationUri, expiresInSeconds: flow.expiresInSeconds } };
   }
 
