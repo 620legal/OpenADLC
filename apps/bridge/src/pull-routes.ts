@@ -1,10 +1,11 @@
 import { lastAudit, audit as writeAudit, personAccounts, repos } from '@openadlc/db';
 import { GitHubClient } from '@openadlc/github';
-import { resolveItem } from './items.js';
+import { resolveItem, type Item } from './items.js';
 import { theApp } from './people.js';
 import { PersonFlows, type FlowView, type PersonGitHubDeps } from './person-github.js';
 import { PullCommands, PullRules, useDeclaredCommands, type PullCommandDeps, type PullReader, type PullRepo } from './pull-commands.js';
 import { HttpFailure, STREAMING, type Router } from './router.js';
+import { parseRef } from './work.js';
 
 /**
  * A work item's pull request, as its pull panel shows it: the commands its
@@ -17,11 +18,29 @@ export type PullOf = (subject: string) => Promise<{ repo: PullRepo; number: numb
 
 export const livePullOf: PullOf = async (subject) => {
   const found = await resolveItem(subject);
-  if (!found?.item.pr || !found.repo) return null;
+  if (!found?.repo) return null;
+  const number = pullNumberOf(subject, found.item, found.repo.name);
+  if (!number) return null;
   const repo = await repos.getRepoByName(found.repo.name);
   if (!repo) return null;
-  return { repo: { name: repo.name, fullName: repo.fullName, defaultBranch: repo.defaultBranch }, number: found.item.pr };
+  return { repo: { name: repo.name, fullName: repo.fullName, defaultBranch: repo.defaultBranch }, number };
 };
+
+/**
+ * Which pull request a subject's panel acts on. A Needs-you card names the
+ * pull it is about (`www#46`), and an item can hold a second pull linked onto
+ * it: answering with the item's own `pr` there posted the card's sign-off on
+ * the item's other pull. So a subject that is one of the item's pulls is that
+ * pull; an issue or a work-item key is the item's pull request.
+ */
+export function pullNumberOf(subject: string, item: Pick<Item, 'pr' | 'links' | 'refs'>, repoName: string): number | null {
+  const asked = parseRef(subject.trim());
+  if (asked && asked.repo === repoName) {
+    const linked = (item.links ?? []).some((link) => link.kind === 'pull' && link.repo === repoName && link.number === asked.number);
+    if (linked || item.refs.pullRequest === subject.trim()) return asked.number;
+  }
+  return item.pr;
+}
 
 /** The live wiring: reads as the automation account, posts as the app or as the person. */
 export function livePullCommands(input: { reader: () => Promise<PullReader | null>; person: PersonGitHubDeps; flows: PersonFlows }): PullCommands {

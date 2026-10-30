@@ -173,6 +173,22 @@ describe('a command anyone may send', () => {
     ]);
   });
 
+  it('posts nothing again while the same command on this head waits for its answer', async () => {
+    const sent = { head: HEAD, commentUrl: null, at: '2026-10-29T10:10:00Z' };
+    const waiting = setUp({ sent, now: Date.parse('2026-10-29T10:12:00Z') });
+    await expect(waiting.commands.send({ repo: REPO, number: 46, name: 'preview', head: HEAD, identity: 'jane@example.com' })).rejects.toMatchObject({ status: 409 });
+    expect(waiting.appPosts).toEqual([]);
+
+    // Answered, quiet, or sent on another head: it may be sent again.
+    const answered = setUp({ sent, now: Date.parse('2026-10-29T10:12:00Z'), fake: { comments: [comment(11, 'Preview of #46 at abc1234: https://review.example.test/46/', '2026-10-29T10:11:00Z')] } });
+    const quiet = setUp({ sent, now: Date.parse('2026-10-29T10:45:00Z') });
+    const elsewhere = setUp({ sent: { ...sent, head: NEWER }, now: Date.parse('2026-10-29T10:12:00Z') });
+    for (const one of [answered, quiet, elsewhere]) {
+      await one.commands.send({ repo: REPO, number: 46, name: 'preview', head: HEAD, identity: 'jane@example.com' });
+      expect(one.appPosts).toHaveLength(1);
+    }
+  });
+
   it('posts nothing when the head moved since the person looked', async () => {
     const { commands, appPosts } = setUp({ fake: { head: NEWER } });
     await expect(commands.send({ repo: REPO, number: 46, name: 'preview', head: HEAD, identity: 'jane@example.com' })).rejects.toMatchObject({ status: 409 });
@@ -199,6 +215,21 @@ describe('a command only a reviewer may send', () => {
       await expect(commands.send({ repo: REPO, number: 46, name: 'approve-pages', head: HEAD, identity: 'bob@example.com' })).rejects.toMatchObject({ status: 403 });
       expect([...personPosts, ...appPosts]).toEqual([]);
     }
+  });
+
+  it('looks the reviewer’s account up again after a lookup that failed', async () => {
+    // A null from a missing client or a GitHub error was kept for the life of
+    // the bridge, and the sign-off was offered to nobody until it restarted.
+    const { commands } = setUp({ linked: { 'or@example.com': ORZELIG_ID } });
+    const lookups = vi.fn<(login: string) => Promise<number | null>>().mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('502')).mockResolvedValue(ORZELIG_ID);
+    (commands as unknown as { deps: PullCommandDeps }).deps.userIdOf = lookups;
+    const offered = async () => (await commands.read(REPO, 46, 'or@example.com')).commands.find((one) => one.name === 'approve-pages')!.offered;
+    expect(await offered()).toBe(false);
+    expect(await offered()).toBe(false);
+    expect(await offered()).toBe(true);
+    // Once GitHub has said it, it is not asked again.
+    expect(await offered()).toBe(true);
+    expect(lookups).toHaveBeenCalledTimes(3);
   });
 
   it('says it is linked to someone else when another person holds the reviewer’s account', async () => {
@@ -281,6 +312,18 @@ describe('what the workflows posted', () => {
     const { commands } = setUp({ fake: { head: NEWER, comments: [preview, shots] } });
     const view = await commands.read(REPO, 46, 'jane@example.com');
     expect(view.outputs.map((one) => one.found?.current)).toEqual([false, false]);
+  });
+
+  it('shows the head’s own output over a newer one for an older head', async () => {
+    // A rerun of an old commit posts last, and taking the newest showed only
+    // its preview, marked older, while the head's sat unshown.
+    const rerun = comment(15, 'Preview of #46 at dead000: https://review.example.test/old/', '2026-10-29T12:00:00Z');
+    const { commands } = setUp({ fake: { comments: [preview, rerun] } });
+    const found = (await commands.read(REPO, 46, 'jane@example.com')).outputs.find((one) => one.name === 'preview')!.found;
+    expect(found).toMatchObject({ commentId: 11, current: true });
+
+    const onlyOlder = await setUp({ fake: { comments: [rerun] } }).commands.read(REPO, 46, 'jane@example.com');
+    expect(onlyOlder.outputs.find((one) => one.name === 'preview')!.found).toMatchObject({ commentId: 15, current: false });
   });
 
   it('orders a red check’s command first, and says a sent command’s answer once it comes', async () => {

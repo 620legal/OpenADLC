@@ -21,6 +21,8 @@ import { cn } from '@/lib/cn';
 /** How often the panel reads again while a command waits for its workflow, or a sign-in for its approval. */
 const WAITING_READ_MS = 10_000;
 const FLOW_READ_MS = 3_000;
+/** How long a press holds its button when the read after it never comes back. */
+const RELEASE_AFTER_MS = 15_000;
 
 /** The console's address of a pull request's route for an item. */
 export function pullPath(subject: string, rest = ''): string {
@@ -87,8 +89,12 @@ function usePress(subject: string, view: PullView | null, reload: () => void) {
         .then((response) => response.json())
         .then((said: { state: string; error?: string }) => {
           if (said.state === 'waiting') return;
-          if (said.state === 'failed' || said.state === 'none') {
+          if (said.state === 'failed') {
             setFlow({ ...flow, error: said.error ?? 'The sign-in ended before anything was posted. Press it again.' });
+          } else if (said.state === 'none') {
+            // Not a failure: the bridge forgot the flow (it restarted, or the
+            // code expired), and the comment may have been posted before it did.
+            setFlow({ ...flow, error: 'OpenADLC no longer knows how this sign-in went. Look at the pull request before you press it again.' });
           } else setFlow(null);
           reload();
         })
@@ -97,8 +103,21 @@ function usePress(subject: string, view: PullView | null, reload: () => void) {
     return () => clearInterval(timer);
   }, [flow, subject, reload]);
 
+  // A press holds the button until the view read after it comes back, which
+  // shows the command as sent: releasing it when the POST answered left a
+  // moment in which a second press posted the comment again.
+  const pressedOn = useRef<PullView | null>(null);
+  const release = useCallback(() => {
+    pressedOn.current = null;
+    pressing.current = false;
+    setPending(null);
+  }, []);
+  useEffect(() => {
+    if (pressedOn.current && view !== pressedOn.current) release();
+  }, [view, release]);
+
   const press = (command: PullCommandView) => {
-    if (pressing.current || !view) return;
+    if (pressing.current || !view || (flow && !flow.error)) return;
     pressing.current = true;
     setPending(command.name);
     setError(null);
@@ -108,15 +127,21 @@ function usePress(subject: string, view: PullView | null, reload: () => void) {
       body: JSON.stringify({ head: view.head }),
     })
       .then(async (response) => {
-        if (!response.ok) return setError(await errorOf(response));
+        if (!response.ok) {
+          setError(await errorOf(response));
+          return release();
+        }
         const sent = (await response.json()) as PullCommandSent;
         if ('flow' in sent) setFlow({ name: command.name, ...sent.flow });
+        pressedOn.current = view;
+        // A read that fails leaves the view as it was; the bridge refuses a
+        // second send while the first waits, so the button comes back anyway.
+        setTimeout(() => pressedOn.current === view && release(), RELEASE_AFTER_MS);
         reload();
       })
-      .catch(() => setError('The console is not answering.'))
-      .finally(() => {
-        pressing.current = false;
-        setPending(null);
+      .catch(() => {
+        setError('The console is not answering.');
+        release();
       });
   };
   return { press, pending, error, flow, dismissFlow: () => setFlow(null) };

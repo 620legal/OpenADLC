@@ -141,6 +141,7 @@ export class PersonFlows {
       expiresAt: Date.now() + code.expiresIn * 1000,
       state: 'waiting',
     };
+    this.prune();
     this.flows.set(flow.flowId, flow as PersonFlow<unknown>);
 
     const finished = (async () => {
@@ -177,10 +178,21 @@ export class PersonFlows {
 
   /** How a flow went, for the person who started it only; `none` for one this bridge does not know. */
   state<R>(flowId: string, identity: string): FlowView<R> | { state: 'none' } {
+    this.prune();
     const flow = this.flows.get(flowId) as PersonFlow<R> | undefined;
     if (!flow || flow.identity !== identity) return { state: 'none' };
-    if (flow.state !== 'waiting') this.flows.delete(flowId);
     return this.view(flow);
+  }
+
+  /**
+   * Drops flows past their code's expiry. A finished flow is kept until then:
+   * dropping it on its first read answered a second poll already in flight
+   * with `none`, and the panel told a person whose comment was posted to sign
+   * in again.
+   */
+  private prune(): void {
+    const now = Date.now();
+    for (const [id, flow] of this.flows) if (flow.state !== 'waiting' && flow.expiresAt <= now) this.flows.delete(id);
   }
 
   private view<R>(flow: PersonFlow<R>): FlowView<R> {

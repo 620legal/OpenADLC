@@ -262,7 +262,7 @@ class ImageCache {
 export class PullCommands {
   private readonly facts = new Map<string, { at: number; facts: PullFacts }>();
   private readonly images = new ImageCache();
-  private readonly userIds = new Map<string, number | null>();
+  private readonly userIds = new Map<string, number>();
   private readonly now: () => number;
 
   constructor(
@@ -345,8 +345,11 @@ export class PullCommands {
   private async userId(login: string): Promise<number | null> {
     const key = login.toLowerCase();
     if (this.userIds.has(key)) return this.userIds.get(key)!;
-    const id = await this.deps.userIdOf(login).catch(() => undefined);
-    if (id === undefined) return null;
+    // Only an id GitHub returned is kept. A null is a lookup that failed (no
+    // automation client yet, or GitHub erred), and caching it left a
+    // reviewer's command unoffered until the bridge restarted.
+    const id = await this.deps.userIdOf(login).catch(() => null);
+    if (typeof id !== 'number') return null;
     this.userIds.set(key, id);
     return id;
   }
@@ -373,25 +376,35 @@ export class PullCommands {
     };
   }
 
-  /** The newest comment that is an output, with what it says. */
+  /**
+   * The comment that is an output, with what it says: the newest one for the
+   * head, else the newest for an older head. Taking only the newest showed a
+   * rerun of an old commit's preview, marked older, while the head's own
+   * preview sat in the comments unshown.
+   */
   private found(output: PullOutput, facts: PullFacts, number: number, repo: PullRepo): PullOutputView['found'] {
+    let older: NonNullable<PullOutputView['found']> | null = null;
     for (const comment of [...facts.comments].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))) {
       const read = readOutput(output, comment, number);
       if (!read) continue;
       if (read.url && !read.url.startsWith('https://')) continue;
+      const current = outputIsCurrent(read, facts.head, facts.headCommittedAt, comment.updatedAt);
+      if (!current && older) continue;
       const images =
         output.kind === 'images' ? assetLinks(comment.bodyHtml, { repoFullName: repo.fullName }).map((link, index) => ({ index, alt: link.alt })) : undefined;
-      return {
+      const view = {
         commentId: comment.id,
         commentUrl: comment.htmlUrl,
         at: comment.updatedAt,
         ...(read.url ? { url: read.url } : {}),
         ...(read.sha ? { sha: read.sha } : {}),
-        current: outputIsCurrent(read, facts.head, facts.headCommittedAt, comment.updatedAt),
+        current,
         ...(images ? { images } : {}),
       };
+      if (current) return view;
+      older = view;
     }
-    return null;
+    return older;
   }
 
   /** What the work item's pull panel shows, for the person asking. */
@@ -448,6 +461,16 @@ export class PullCommands {
       throw new HttpFailure(409, `Pull request #${number} moved to ${facts.head.slice(0, 7)} since you looked; nothing was posted. Look again and press it on the new head.`);
     }
     const target = sentTarget(repo, number, command.name);
+    // A second press while the first is still waiting for its answer would
+    // post the comment twice: the panel unlocks its button when the POST
+    // returns, before its next read shows the command as sent.
+    const sent = await this.deps.lastSent(target).catch(() => null);
+    if (sent && sent.head === facts.head) {
+      const outputs = rules.outputs.map((output) => ({ name: output.name, kind: output.kind, found: this.found(output, facts, number, repo) }));
+      if (!answerOf(command, sent.at, outputs, facts) && this.now() - Date.parse(sent.at) < QUIET_AFTER_MS) {
+        throw new HttpFailure(409, `${command.comment} was already sent on #${number} at ${facts.head.slice(0, 7)} and is waiting for its answer; nothing was posted again.`);
+      }
+    }
 
     if (command.by === 'anyone') {
       const app = await this.deps.app(repo.fullName);

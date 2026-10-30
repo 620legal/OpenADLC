@@ -126,6 +126,21 @@ describe('linking a person’s GitHub account', () => {
   });
 });
 
+describe('a finished flow', () => {
+  it('says how it went to every read until its code expires, then is forgotten', async () => {
+    // Dropped on its first read, a second poll already in flight was told
+    // `none`, and the panel asked a person whose comment was posted to sign in again.
+    const { made } = deps({ requestCode: async () => ({ deviceCode: 'dev', userCode: 'WXYZ-0001', verificationUri: 'https://github.com/login/device', expiresIn: 60, interval: 5 }) });
+    const flows = new PersonFlows(made);
+    const started = await flows.start('jane@example.com', async (viewer) => ({ login: viewer.login }));
+    await flows.lastRun;
+    expect(flows.state(started.flowId, 'jane@example.com')).toMatchObject({ state: 'done' });
+    expect(flows.state(started.flowId, 'jane@example.com')).toMatchObject({ state: 'done' });
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+    expect(flows.state(started.flowId, 'jane@example.com')).toEqual({ state: 'none' });
+  });
+});
+
 describe('withoutToken', () => {
   it('takes every copy of the token out of a message', () => {
     expect(withoutToken(`a ${TOKEN} b ${TOKEN}`, TOKEN)).toBe('a [token] b [token]');

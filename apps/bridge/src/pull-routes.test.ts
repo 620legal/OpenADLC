@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PersonFlows } from './person-github.js';
 import type { PullCommands } from './pull-commands.js';
-import { registerPullRoutes, type PullOf } from './pull-routes.js';
+import { pullNumberOf, registerPullRoutes, type PullOf } from './pull-routes.js';
 import { Router } from './router.js';
 
 /**
@@ -77,5 +77,28 @@ describe('the pull panel’s routes', () => {
     expect(Buffer.from(await served.arrayBuffer()).equals(PNG)).toBe(true);
     expect(image).toHaveBeenCalledWith(REPO, 46, 12, 0);
     expect((await fetch(`${url}/v1/items/${encodeURIComponent('www#12')}/pull/images/x/0`, { headers: as })).status).toBe(400);
+  });
+});
+
+describe('which pull request a subject’s panel acts on', () => {
+  const item = {
+    pr: 99,
+    refs: { request: null, issue: 'www#12', pullRequest: 'www#99' },
+    links: [
+      { kind: 'issue', repo: 'www', number: 12 },
+      { kind: 'pull', repo: 'www', number: 99 },
+      { kind: 'pull', repo: 'www', number: 46 },
+    ],
+  } as never;
+
+  it('is the pull a card names when it is one of the item’s, and the item’s pull request otherwise', () => {
+    // A card for pull 46, on an item whose issue records 99, sent its sign-off to 99.
+    expect(pullNumberOf('www#46', item, 'www')).toBe(46);
+    expect(pullNumberOf('www#99', item, 'www')).toBe(99);
+    expect(pullNumberOf('www#12', item, 'www')).toBe(99);
+    expect(pullNumberOf('W-7', item, 'www')).toBe(99);
+    // A number the item does not hold is not taken from the subject.
+    expect(pullNumberOf('www#47', item, 'www')).toBe(99);
+    expect(pullNumberOf('api#46', item, 'www')).toBe(99);
   });
 });
