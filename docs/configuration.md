@@ -223,7 +223,9 @@ review.yaml means the same rules as the shipped file (`DEFAULT_REVIEW` in
 `maxRounds` counts every fix round run on the pull request, by any bot and
 however long ago; a round that never started does not count, and neither does
 a conflict resolution (a patch with the `resolve-conflict` skill), since no
-review asked for it.
+review asked for it. At the cap the loop stops, and its **Review stopped**
+card in Needs you quotes the last request for changes, so a person can tell
+a dispute over the code from something like a missing local CI run.
 
 `sendBack` limits how often work goes back to an earlier stage on the edges a
 review round does not count: per edge (design to intake, say) and per issue.

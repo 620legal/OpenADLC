@@ -1522,6 +1522,23 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     // CI failed after the lead approved, and nothing can take it back: the
     // merge line keeps the red head out, so the card names the check.
     const red = !held && stall.check ? stall.check : null;
+    // The request that ran the rounds out, in its sender's words. Without it
+    // the card said only that the reviewers still asked, and on #213 a person
+    // guessed the install was out of CI budget when the lead had asked for
+    // nothing but a local CI run. Only the lead's seat sends work back among
+    // the crew, and the merge line's conflicts run rounds out too, so it is
+    // never assumed to be the lead's.
+    const lastRequest = stall.request
+      ? `${
+          !stall.requestBy
+            ? 'The last request for changes'
+            : input.bots.some((one) => one.name === stall.requestBy)
+              ? "The lead's last request"
+              : stall.requestBy === 'openadlc'
+                ? "OpenADLC's last request"
+                : `@${stall.requestBy}'s last request`
+        }: ${stall.request}\n\n`
+      : null;
     items.push({
       id: `stall:${key}`,
       kind: 'review_stalled',
@@ -1543,7 +1560,9 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
             'The merge line keeps this head out until it changes or its checks run again: fix it on the branch, run the checks again, or move the card.'
           : stall.reason
             ? `It was sent back to build, but nothing could take it: ${stall.reason}. Fix it on the branch, dismiss the review on GitHub, or move the card.`
-            : 'The reviewers still ask for changes. Merge it anyway, send it back to design, or take the branch yourself.',
+            : lastRequest
+              ? `${lastRequest}Merge it anyway, send it back to design, or take the branch yourself.`
+              : 'The reviewers still ask for changes. Merge it anyway, send it back to design, or take the branch yourself.',
       actions,
     });
   }

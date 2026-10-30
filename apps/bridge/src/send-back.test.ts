@@ -409,7 +409,28 @@ describe('a review sending the work back to build', () => {
 
     expect(automation.moveStage).not.toHaveBeenCalled();
     expect(taskService.open).not.toHaveBeenCalled();
-    expect(world.events).toContainEqual(expect.objectContaining({ type: 'review.stalled' }));
+    // What hit the cap, and who asked: the card said only that the reviewers
+    // still asked, and a person guessed the install was out of CI budget.
+    // Not under `reason`, which says nothing could take the work.
+    const stalled = world.events.filter((event) => event.type === 'review.stalled');
+    expect(stalled).toEqual([expect.objectContaining({ payload: expect.objectContaining({ rounds: 3, request: 'still wrong', requestBy: 'lead-reviewer' }) })]);
+    expect(stalled[0]?.payload).not.toHaveProperty('reason');
+  });
+
+  it('records the merge line as the one that asked when its send-back hits the cap', async () => {
+    world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
+    world.botTasks = [1, 2, 3].map((round) => ({ id: `p${round}`, subjectRef: 'openadlc-testbed#31', kind: 'patch', state: 'done', startedAt: 'x' }));
+    const { service, taskService } = sendBack();
+
+    await service.backToBuild({ repoName: REPO.name, prNumber: 31, reason: 'The branch left the merge line: it conflicts with main' });
+
+    expect(taskService.open).not.toHaveBeenCalled();
+    expect(world.events).toContainEqual(
+      expect.objectContaining({
+        type: 'review.stalled',
+        payload: expect.objectContaining({ request: 'The branch left the merge line: it conflicts with main', requestBy: 'openadlc' }),
+      }),
+    );
   });
 
   it('counts every round on the pull request, however many newer tasks the builder has', async () => {
@@ -678,6 +699,8 @@ describe('a person moving a card back', () => {
     expect(mergeLine.leave).toHaveBeenCalledWith('openadlc-testbed', 31);
     expect(taskService.open).not.toHaveBeenCalled();
     expect(world.events).toContainEqual(expect.objectContaining({ type: 'review.stalled' }));
+    // No request sent it back: the card keeps the wording it had.
+    expect(world.events.find((event) => event.type === 'review.stalled')?.payload).not.toHaveProperty('request');
   });
 
   // Behind IAP the identity is the person's email, and a comment is public.

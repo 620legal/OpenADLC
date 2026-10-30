@@ -1101,6 +1101,8 @@ describe('what needs a person', () => {
       bot: { name: 'openadlc-atlas-janedoe' },
       since: minutesAgo(40),
     });
+    // An event recorded before the request was kept says what it always said.
+    expect(item?.detail).toBe('The reviewers still ask for changes. Merge it anyway, send it back to design, or take the branch yourself.');
     expect(item?.actions).toEqual([
       { kind: 'open_url', label: 'Decide on GitHub', url: 'https://github.com/janedoe/openadlc-testbed/pull/29' },
       { kind: 'open_thread', label: 'Open thread', bot: 'openadlc-atlas-janedoe' },
@@ -1117,6 +1119,48 @@ describe('what needs a person', () => {
     expect(
       attentionItems({ now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: merged, requests: [], stallEvents: [stalled] }),
     ).toEqual([]);
+  });
+
+  it('says what the last request for changes asked for, and who asked, when the rounds ran out', async () => {
+    // On #213 the card said only that the reviewers still asked, and a person
+    // guessed the install was out of CI budget: the lead had asked for nothing
+    // but a local CI run.
+    const { attentionItems } = await load();
+    const choices = 'Merge it anyway, send it back to design, or take the branch yourself.';
+    const detailFor = (requestBy?: string) => {
+      const payload = { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 3, bot: 'openadlc-atlas-janedoe', botId: 'bot-builder', request: 'No recorded local CI run on 1c72bdd', ...(requestBy ? { requestBy } : {}) };
+      const [item] = attentionItems({ now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [{ at: minutesAgo(40), payload }] });
+      expect(item?.headline).toBe('Review stopped after 3 rounds');
+      expect(item?.detail?.endsWith(choices)).toBe(true);
+      return item?.detail;
+    };
+
+    expect(detailFor('lead-reviewer')).toBe(`The lead's last request: No recorded local CI run on 1c72bdd\n\n${choices}`);
+    // The merge line's conflicts run the rounds out too: not the lead's.
+    expect(detailFor('openadlc')).toMatch(/^OpenADLC's last request: No recorded local CI run on 1c72bdd/);
+    expect(detailFor('janedoe')).toMatch(/^@janedoe's last request: No recorded local CI run on 1c72bdd/);
+    // A crew request records the bot's name, never its seat: a person whose
+    // login is only a seat's (`builder`) is not presented as the lead.
+    expect(detailFor('irisexampleco')).toMatch(/^The lead's last request:/);
+    expect(detailFor('builder')).toMatch(/^@builder's last request:/);
+    expect(detailFor()).toMatch(/^The last request for changes: No recorded local CI run on 1c72bdd/);
+  });
+
+  it('leaves the other stopped-review cards as they were when the event also carries a request', async () => {
+    const { attentionItems } = await load();
+    const request = { request: 'No recorded local CI run on 1c72bdd', requestBy: 'lead-reviewer' };
+    const base = { repo: 'openadlc-testbed', pr: 29, issue: 11, bot: null, botId: null };
+    const detail = (payload: Record<string, unknown>) =>
+      attentionItems({ now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [{ at: minutesAgo(10), payload }] })[0]?.detail;
+
+    for (const payload of [
+      { ...base, rounds: 0, heldBy: ['security-reviewer'] },
+      { ...base, rounds: 3, check: '`ci` failed on `733ccb2`' },
+      { ...base, rounds: 0, reason: 'the builder that held #11 is no longer in the crew' },
+    ]) {
+      expect(detail({ ...payload, ...request })).toBe(detail(payload));
+      expect(detail({ ...payload, ...request })).not.toContain('last request');
+    }
   });
 
   it('says one round, not one rounds, when review is allowed only one', async () => {
