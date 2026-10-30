@@ -172,6 +172,10 @@ async function main(): Promise<void> {
       asAutomation(actors, config)
         .then((client) => (client ? client.getPullRequest(fullName, number) : null))
         .catch(() => null),
+    (fullName, number) =>
+      asAutomation(actors, config)
+        .then((client) => (client ? client.getIssue(fullName, number).then((issue) => issue.labels) : null))
+        .catch(() => null),
   );
   // What a seat running all it may at once turned away starts once the seat
   // may have room: a task of its ending, its tasks at once raised, or found

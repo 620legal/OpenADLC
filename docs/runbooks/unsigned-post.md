@@ -28,6 +28,9 @@ tag was read right, which once marked a post unsigned, clear this way.
 The card has three buttons: **This was me**, **Open the post** and **What to
 do**. What to do opens these steps beside the board.
 
+A post OpenADLC itself refused to sign never gets this card; see
+[When OpenADLC refused to sign it](#when-openadlc-refused-to-sign-it) below.
+
 ## 1. Make sure it wasn't you
 
 A person signed in to the bot account by hand, in a browser or with `gh`,
@@ -95,3 +98,29 @@ Stop new work from starting while you look:
 
 When the account is secure and the posts are explained, resume work and
 dismiss the card.
+
+## When OpenADLC refused to sign it
+
+OpenADLC's `gh` asks the bridge to sign every body a task posts. When the
+bridge refuses, `gh` posts the body unsigned. An example is a task posting on a
+number that is not its own. The bridge records each refusal
+(`attribution.stamp_refused`, [ADR 0016](../adr/0016-a-refused-signature-is-an-event.md)).
+An unsigned post that matches a refusal on repository, account, number and
+body raises the `unsigned-refused` card instead of the one above. For example:
+"OpenADLC could not sign the ship's comment on exampleco/www#12".
+
+- **What it means.** There is a gap in OpenADLC's own rules: a task did
+  something the stamp route does not yet sign. It does not mean a stolen
+  sign-in, and nobody used the account by hand. The card gives the route's
+  reason, and says whether the post counted, by the same rule as above.
+- **What to do.** Open the post. If it is on an open pull request that should
+  not merge on an unsigned post, press **Hold this PR**. Nobody needs to
+  reconnect the account or lock it down. If the refusal looks wrong, file an
+  issue with the reason the card gives.
+- **How it clears.** It clears when a task of the same kind, on the same kind
+  of subject, signs a post (`attribution.stamp_signed`), or a day after the
+  post. A post OpenADLC refused does not go back to the "not signed by
+  OpenADLC" card once its cause is fixed.
+- **No dismiss.** The card has no **This was me** and no **Dismiss**, because
+  nothing a person presses fixes the cause. The bridge also refuses to
+  acknowledge it (409).

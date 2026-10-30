@@ -290,6 +290,67 @@ describe('what needs a person', () => {
     expect(stalled[0]).toMatchObject({ kind: 'triage_failed', group: 'work', headline: 'Intake could not shape openadlc-testbed#15' });
   });
 
+  describe('an issue parked for a person with needs-triage', () => {
+    // #203 sat in Build with needs-triage for 23 hours, and Needs you said nothing.
+    const parked = (stage: string, labels: string[] = ['needs-triage', 'area:general']) => ({ ...issue(16, 'Let the board filter by label', stage), labels });
+    const read = async (one: ReturnType<typeof parked>, extra: Record<string, unknown> = {}) => {
+      const { attentionItems } = await load();
+      return attentionItems({ now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: [one], requests: [], stallEvents: [], ...extra } as never);
+    };
+    const why = new Map([['openadlc-testbed#16', { at: minutesAgo(30), reason: 'not ready to be worked on: needs an area label' }]]);
+
+    it('is a card that says why routing parked it and what to do', async () => {
+      const items = (await read(parked('build'), { triaged: why })).filter((item) => item.id.startsWith('parked:'));
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        id: 'parked:openadlc-testbed#16',
+        kind: 'triage_failed',
+        group: 'work',
+        headline: '#16 is parked for a person',
+        bot: null,
+        since: minutesAgo(30),
+        detail: 'Routing parked it: not ready to be worked on: needs an area label. Fix that on the issue, then take needs-triage off and put start:now on.',
+      });
+      expect(items[0]?.actions).toEqual([{ kind: 'open_url', label: 'Open the issue', url: 'https://github.com/janedoe/openadlc-testbed/issues/16' }]);
+    });
+
+    it('keeps the reason as routing wrote it, but for one full stop', async () => {
+      const reason = 'leased 3 times without producing a pull request.';
+      const [item] = (await read(parked('build'), { triaged: new Map([['openadlc-testbed#16', { at: minutesAgo(30), reason }]]) })).filter((one) => one.id.startsWith('parked:'));
+      expect(item?.detail).toBe('Routing parked it: leased 3 times without producing a pull request. Fix that on the issue, then take needs-triage off and put start:now on.');
+    });
+
+    it.each([
+      ['no audit row', undefined],
+      ['a row with no reason', new Map([['openadlc-testbed#16', { at: minutesAgo(30), reason: null }]])],
+    ])('is still a card, without a reason, with %s', async (_name, triaged) => {
+      const [item] = (await read(parked('build'), triaged ? { triaged } : {})).filter((one) => one.id.startsWith('parked:'));
+      expect(item?.detail).not.toContain('Routing parked it:');
+      expect(item?.detail).toContain('labelled needs-triage');
+      expect(item?.detail).toContain('take needs-triage off and put start:now on');
+    });
+
+    it.each(['intake', 'spec', 'build', 'review'])('is a card in %s', async (stage) => {
+      const items = await read(parked(stage), { triaged: why });
+      expect(items.filter((item) => item.id === 'parked:openadlc-testbed#16')).toHaveLength(1);
+    });
+
+    it.each([
+      ['without the label', parked('build', ['area:general'])],
+      ['once the issue is closed', parked('done')],
+      ['once it has merged', parked('merged')],
+      ['when it is labelled openadlc:ignore', parked('build', ['needs-triage', 'openadlc:ignore'])],
+    ])('is no card %s', async (_name, one) => {
+      const items = await read(one, { triaged: why });
+      expect(items.filter((item) => item.id.startsWith('parked:'))).toEqual([]);
+    });
+
+    it('is left to the intake-stalled card when intake gave up on the same issue', async () => {
+      const items = await read(parked('intake'), { triaged: why, intakeStalls: [{ at: minutesAgo(5), payload: { subjectRef: 'openadlc-testbed#16', tries: 2 } }] });
+      expect(items.filter((item) => item.kind === 'triage_failed').map((item) => item.id)).toEqual(['intake-stalled:openadlc-testbed#16']);
+    });
+  });
+
   it('puts a pull request only a person can land in Needs you, with why and the way to merge it', async () => {
     const { attentionItems } = await load();
     const items = attentionItems({
@@ -2258,6 +2319,7 @@ vi.mock('@openadlc/db', () => ({
   costs: {},
   credentials: {},
   issues: { listIssues: vi.fn(async () => ISSUES) },
+  lastAudit: vi.fn(async () => null),
   leases: { listHeldPlanChanges: vi.fn(async () => store.heldPlanChanges) },
   listAudit: vi.fn(),
   listEventsOfType: vi.fn(async (type: string, since: Date) => {
@@ -2571,6 +2633,43 @@ describe('an approved plan change that waits on another lease', () => {
   });
 });
 
+describe('reading why an issue was parked', () => {
+  it('reads the newest issue.triaged row only for an open issue labelled needs-triage', async () => {
+    const { readAttention } = await load();
+    const { issues, lastAudit } = await import('@openadlc/db');
+    vi.mocked(lastAudit).mockClear();
+    expect((await readAttention(NOW)).triaged).toEqual(new Map());
+    expect(lastAudit).not.toHaveBeenCalled();
+
+    const parked = [
+      { ...issue(16, 'Let the board filter by label', 'build'), labels: ['needs-triage'] },
+      { ...issue(17, 'Done already', 'done'), labels: ['needs-triage'] },
+    ];
+    vi.mocked(issues.listIssues).mockResolvedValueOnce(parked as never);
+    vi.mocked(lastAudit).mockResolvedValueOnce({
+      id: 1,
+      actor: 'dispatcher',
+      action: 'issue.triaged',
+      target: 'openadlc-testbed#16',
+      payload: { reason: 'not ready to be worked on: needs an area label' },
+      at: minutesAgo(30),
+    });
+    expect((await readAttention(NOW)).triaged).toEqual(new Map([['openadlc-testbed#16', { at: minutesAgo(30), reason: 'not ready to be worked on: needs an area label' }]]));
+    expect(lastAudit).toHaveBeenCalledTimes(1);
+    expect(lastAudit).toHaveBeenCalledWith('issue.triaged', 'openadlc-testbed#16');
+  });
+
+  it('keeps the card, without a reason, when the read fails', async () => {
+    const { readAttention, attentionItems } = await load();
+    const { issues, lastAudit } = await import('@openadlc/db');
+    vi.mocked(issues.listIssues).mockResolvedValueOnce([{ ...issue(16, 'Let the board filter by label', 'build'), labels: ['needs-triage'] }] as never);
+    vi.mocked(lastAudit).mockRejectedValueOnce(new Error('database gone'));
+    const input = await readAttention(NOW);
+    expect(input.triaged).toEqual(new Map());
+    expect(attentionItems(input).find((item) => item.id === 'parked:openadlc-testbed#16')?.detail).toContain('labelled needs-triage');
+  });
+});
+
 describe('a stacked change OpenADLC holds', () => {
   // OpenADLC#137 was held on #141 and waited on a Resume while Needs you was
   // empty: the only place that said so was the bridge's log.
@@ -2700,6 +2799,38 @@ describe('a card about history', () => {
       { kind: 'incident', label: 'What to do' },
     ]);
     expect(card?.incident).toMatchObject({ did: 'review', counted: true });
+  });
+
+  it('offers no Dismiss, and no Check again, on a card no dismissal puts right', async () => {
+    // A post OpenADLC refused to sign: nobody to say "This was me", and
+    // nothing a person presses clears it.
+    const { attentionItems } = await load();
+    const [card] = attentionItems({
+      now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [],
+      health: [
+        healthRow({
+          id: 'unsigned-refused',
+          checkId: 'unsigned-refused',
+          state: 'failing',
+          severity: 'warning',
+          title: 'OpenADLC could not sign the ship’s comment on janedoe/www#12',
+          detail: 'It went out unsigned because OpenADLC refused to sign it.',
+          action: { label: 'Open the post', url: 'https://github.com/janedoe/www/pull/12#issuecomment-5' },
+          facts: {
+            history: true,
+            occurrence: 'post:42',
+            occurrences: ['post:42'],
+            dismissable: false,
+            incident: { repo: 'janedoe/www', did: 'comment', counted: true, refusal: { reason: 'not #12', seat: 'ship', taskId: 'task-1', status: 403 } },
+          },
+        }),
+      ],
+    });
+    expect(card?.actions).toEqual([
+      { kind: 'open_url', label: 'Open the post', url: 'https://github.com/janedoe/www/pull/12#issuecomment-5' },
+      { kind: 'incident', label: 'What to do' },
+    ]);
+    expect(card?.incident).toMatchObject({ refusal: { reason: 'not #12' } });
   });
 
   it('is dismissed for when it started failing when its check names no occurrence', async () => {
@@ -3415,6 +3546,13 @@ describe('work stuck with its seat free', () => {
     const triage = { ...design, stage: 'intake' as never, labels: ['adlc:intake'] };
     expect((await items({ issues: [triage] })).map((item) => item.id)).toEqual(['stuck:openadlc-testbed#141']);
     expect(await items({ issues: [triage], intakeStalls: [{ at: minutesAgo(30), payload: { subjectRef: 'openadlc-testbed#141', tries: 2 } }] })).toEqual([]);
+  });
+
+  // Outside Build a parked issue's seat is free, and Start it now there only
+  // runs a sweep that holds it back: the parked: card says what to do.
+  it.each(['intake', 'spec'])('is not said for an issue parked with needs-triage in %s', async (stage) => {
+    const parked = { ...design, stage: stage as never, labels: [`adlc:${stage}`, 'needs-triage'] };
+    expect(await items({ issues: [parked] })).toEqual([]);
   });
 
   it('says when no sweep will come', async () => {

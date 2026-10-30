@@ -583,6 +583,8 @@ export interface UnsignedIncident {
   target: { kind: 'pr' | 'issue'; number: number; url: string } | null;
   counted: boolean;
   mode: 'audit' | 'enforce';
+  /** Set when OpenADLC refused to sign it (`unsigned-refused`): its stamp route's reason, not the account's doing. Absent from an older bridge. */
+  refusal?: { reason: string; seat: string | null; taskId: string; status: number };
 }
 
 /** One of several items folded into a card by the bridge's `foldCauses`, keeping what is its own rather than the cause's. */
