@@ -713,7 +713,7 @@ columns work is in, and the label says nothing shipped.
   repository is named `owner/name#N`, and holds the issue back the same way.
   A dependency labelled `openadlc:ignore` has no row to be in Done. It counts
   once its record in `ignored_issues` says it closed as completed, and never
-  if it closed as not planned
+  while it is open or if it closed as not planned, or for any other reason
   ([ADR 0020](adr/0020-an-ignored-dependency-counts-once-closed-as-completed.md)).
   A pull request stacked on it
   stays out of the merge line and is held. Design memory it proposed is not

@@ -501,8 +501,16 @@ export async function resolveDependency(
  * open issues while it stays open, so this costs nothing, and once it closes
  * with the bridge not listening, it is still read. Left out, its record said
  * open for good.
+ *
+ * With `closed`, one recorded closed is named as well, for the first pass
+ * after the bridge starts: that pass lists no closed issues, so a label taken
+ * off, a close reason changed, or an issue deleted while it was down was never
+ * read, and a stale record went on counting as shipped.
  */
-export async function unresolvedDependencies(repo: { id: string; fullName: string }): Promise<number[]> {
+export async function unresolvedDependencies(
+  repo: { id: string; fullName: string },
+  options: { closed?: boolean } = {},
+): Promise<number[]> {
   const [waiting, known, ignored] = await Promise.all([
     query<{ body: string; full_name: string }>(
       `select i.body, r.full_name from issues i join repos r on r.id = i.repo_id
@@ -513,7 +521,7 @@ export async function unresolvedDependencies(repo: { id: string; fullName: strin
   ]);
   const settled = new Set([
     ...known.map((row) => row.number),
-    ...ignored.filter((row) => row.state !== 'open').map((row) => row.number),
+    ...ignored.filter((row) => row.state !== 'open' && !options.closed).map((row) => row.number),
   ]);
   const named = new Set<number>();
   for (const row of waiting) {

@@ -429,6 +429,12 @@ describe('the dependencies reconcile looks up', () => {
     answer([{ body: '## Dependencies\n\n- #18', full_name: 'owner/b' }], [], [{ number: 18, state: 'open' }]);
     expect(await unresolvedDependencies(REPO)).toEqual([18]);
   });
+
+  it('names one recorded closed too when asked for the closed, as the first pass after a start is', async () => {
+    answer([{ body: '## Dependencies\n\n- #18\n- #20', full_name: 'owner/b' }], [20], [{ number: 18, state: 'closed' }]);
+    expect(await unresolvedDependencies(REPO)).toEqual([]);
+    expect(await unresolvedDependencies(REPO, { closed: true })).toEqual([18]);
+  });
 });
 
 /**

@@ -49,7 +49,8 @@ vi.mock('@openadlc/db', () => ({
     forget: vi.fn(async () => undefined),
     setIssueLabels: vi.fn(async () => undefined),
     // Dependencies an open issue names that nothing has recorded.
-    unresolvedDependencies: vi.fn(async () => UNRESOLVED),
+    // With `closed`, on a pass that lists no closed issues, those recorded closed as well.
+    unresolvedDependencies: vi.fn(async (_repo: unknown, options: { closed?: boolean } = {}) => [...UNRESOLVED, ...(options.closed ? UNRESOLVED_CLOSED : [])]),
     setVouched: vi.fn(async (_repoId: string, number: number, text: Record<string, unknown>) => void VOUCHED_SET.push({ number, ...text })),
   },
   // What GitHub last said of each issue labelled openadlc:ignore.
@@ -145,6 +146,8 @@ let LEASES_BY_ID = new Map<string, { id: string; prNumber: number | null }>();
 
 /** Dependencies an open issue names that nothing has recorded (`issues.unresolvedDependencies`). */
 let UNRESOLVED: number[] = [];
+/** Dependencies recorded ignored and closed, which only a pass that lists no closed issues names. */
+let UNRESOLVED_CLOSED: number[] = [];
 /** The ignored records already kept, and what reconcile wrote and forgot of them. */
 let IGNORED: { repoId: string; number: number; state: 'open' | 'closed'; stateReason: string | null; closedAt: string | null }[] = [];
 let IGNORED_WRITTEN: Record<string, unknown>[] = [];
@@ -346,6 +349,7 @@ beforeEach(() => {
   WORK.numbered = false;
   WORK.links.clear();
   UNRESOLVED = [];
+  UNRESOLVED_CLOSED = [];
   IGNORED = [];
   IGNORED_WRITTEN = [];
   IGNORED_FORGOTTEN = [];
@@ -406,6 +410,48 @@ describe('an issue labelled openadlc:ignore, read by reconcile', () => {
     // #145 is imported, and the webhook's own path forgets any record of it.
     expect(IGNORED_FORGOTTEN).toContain(19);
     expect(IGNORED_FORGOTTEN).not.toContain(18);
+  });
+
+  /*
+   * A record says closed as completed, and while the bridge was down its label
+   * came off, its close reason changed, or it was deleted. The first pass lists
+   * no closed issues, so without asking for it the stale record counted as
+   * shipped for good.
+   */
+  describe('a dependency recorded closed, on the first pass after the bridge starts', () => {
+    const completed = { repoId: 'repo-1', number: 18, state: 'closed' as const, stateReason: 'completed', closedAt: '2026-10-20T10:00:00Z' };
+
+    it('forgets one whose label came off while the bridge was down, and asks once', async () => {
+      LIVE = [issue(), ignored({ labels: ['bug'], updatedAt: '2026-10-21T10:00:00Z' })];
+      IGNORED = [completed];
+      UNRESOLVED_CLOSED = [18];
+      const once = await reconciler();
+      await once.run({ repair: true });
+      expect(LOOKED_UP).toEqual([18]);
+      expect(IGNORED_FORGOTTEN).toContain(18);
+
+      // Later passes list closed issues changed since, and do not ask again.
+      LOOKED_UP = [];
+      await once.run({ repair: true });
+      expect(LOOKED_UP).toEqual([]);
+    });
+
+    it('rewrites one whose close reason changed while the bridge was down', async () => {
+      LIVE = [issue(), ignored({ stateReason: 'not_planned', updatedAt: '2026-10-21T10:00:00Z' })];
+      IGNORED = [completed];
+      UNRESOLVED_CLOSED = [18];
+      await reconcileOnce();
+      expect(IGNORED_WRITTEN).toEqual([{ number: 18, state: 'closed', stateReason: 'not_planned', closedAt: '2026-10-20T10:00:00Z' }]);
+    });
+
+    it('forgets one GitHub no longer has', async () => {
+      LIVE = [issue()];
+      IGNORED = [completed];
+      UNRESOLVED_CLOSED = [18];
+      await reconcileOnce();
+      expect(LOOKED_UP).toEqual([18]);
+      expect(IGNORED_FORGOTTEN).toContain(18);
+    });
   });
 });
 

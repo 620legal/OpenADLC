@@ -275,6 +275,7 @@ export class Reconciler {
       }
 
       let live: LiveIssue[];
+      let dependencies: number[] = [];
       const readStarted = Date.now();
       try {
         const since = this.readAt.get(repo.id);
@@ -287,10 +288,15 @@ export class Reconciler {
         // which is kept only if it is labelled `openadlc:ignore` (#214): one
         // that closed as completed before the bridge kept such a record, or
         // while it was not listening, is how what waits on it is let go.
+        //
+        // The first pass lists no closed issues, so it also names a
+        // dependency recorded closed: what changed while the bridge was down
+        // is read once, and not every quarter hour after.
+        dependencies = await (async () => issues.unresolvedDependencies(repo, { closed: since === undefined }))().catch((): number[] => []);
         const named = [
           ...cached.filter((entry) => entry.stage !== 'merged' && entry.stage !== 'done').map((entry) => entry.number),
           ...(await leases.listActiveLeases(repo.id)).map((lease) => lease.issueNumber),
-          ...(await (async () => issues.unresolvedDependencies(repo))().catch((): number[] => [])),
+          ...dependencies,
         ];
         live = await everyIssue(client, repo.fullName, {
           closedSince: since === undefined ? null : new Date(since - SINCE_SLACK_MS).toISOString(),
@@ -317,6 +323,18 @@ export class Reconciler {
       const recorded = repair
         ? new Map((await (async () => ignoredIssues.listForRepos([repo.id]))().catch(() => [])).map((record) => [record.number, record]))
         : new Map<number, ignoredIssues.IgnoredIssue>();
+      // A recorded dependency looked up by itself and not found was deleted
+      // or transferred while nobody listened: its record no longer says
+      // anything GitHub does.
+      if (repair) {
+        const found = new Set(live.map((issue) => issue.number));
+        for (const number of dependencies) {
+          if (found.has(number) || !recorded.has(number)) continue;
+          await ignoredIssues.forget(repo.id, number).catch((error: unknown) =>
+            console.warn(`[reconciler] ${repo.name}#${number}: its record as an ignored issue was not forgotten: ${reasonOf(error)}`),
+          );
+        }
+      }
       for (const issue of live) {
         if (issue.pullRequest) continue;
         const known = cached.find((entry) => entry.number === issue.number);
@@ -864,7 +882,6 @@ export function renderDrift(drift: readonly Drift[]): string {
   return lines.join('\n');
 }
 
-/** The first line of what went wrong, short enough for a log line. */
 /**
  * What GitHub says of an issue labelled `openadlc:ignore`, kept whether or not
  * the board has a row for it, as the webhook keeps it (`learnIssue`), for what
@@ -887,6 +904,7 @@ async function keepIgnored(repo: { id: string }, issue: LiveIssue, recorded: ign
   await ignoredIssues.record(repo.id, issue.number, now);
 }
 
+/** The first line of what went wrong, short enough for a log line. */
 function reasonOf(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const line = message.split('\n')[0] ?? '';
