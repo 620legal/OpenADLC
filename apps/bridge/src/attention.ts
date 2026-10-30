@@ -1532,7 +1532,7 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
       ? `${
           !stall.requestBy
             ? 'The last request for changes'
-            : input.bots.some((one) => one.name === stall.requestBy || one.slot === stall.requestBy)
+            : input.bots.some((one) => one.name === stall.requestBy)
               ? "The lead's last request"
               : stall.requestBy === 'openadlc'
                 ? "OpenADLC's last request"

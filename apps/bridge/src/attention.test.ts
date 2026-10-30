@@ -1139,6 +1139,10 @@ describe('what needs a person', () => {
     // The merge line's conflicts run the rounds out too: not the lead's.
     expect(detailFor('openadlc')).toMatch(/^OpenADLC's last request: No recorded local CI run on 1c72bdd/);
     expect(detailFor('janedoe')).toMatch(/^@janedoe's last request: No recorded local CI run on 1c72bdd/);
+    // A crew request records the bot's name, never its seat: a person whose
+    // login is only a seat's (`builder`) is not presented as the lead.
+    expect(detailFor('irisexampleco')).toMatch(/^The lead's last request:/);
+    expect(detailFor('builder')).toMatch(/^@builder's last request:/);
     expect(detailFor()).toMatch(/^The last request for changes: No recorded local CI run on 1c72bdd/);
   });
 
