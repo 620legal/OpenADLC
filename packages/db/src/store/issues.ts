@@ -505,7 +505,9 @@ export async function resolveDependency(
  * With `closed`, one recorded closed is named as well, for the first pass
  * after the bridge starts: that pass lists no closed issues, so a label taken
  * off, a close reason changed, or an issue deleted while it was down was never
- * read, and a stale record went on counting as shipped.
+ * read, and a stale record went on counting as shipped. That holds for one
+ * with a row too: a row in `merged` without `deployed:testing` does not ship
+ * it, its record does, and reconcile does not ask about a merged row.
  */
 export async function unresolvedDependencies(
   repo: { id: string; fullName: string },
@@ -519,8 +521,9 @@ export async function unresolvedDependencies(
     query<{ number: number }>('select number from issues where repo_id = $1', [repo.id]),
     query<{ number: number; state: string }>('select number, state from ignored_issues where repo_id = $1', [repo.id]),
   ]);
+  const recorded = new Set(ignored.map((row) => row.number));
   const settled = new Set([
-    ...known.map((row) => row.number),
+    ...known.map((row) => row.number).filter((number) => !(options.closed && recorded.has(number))),
     ...ignored.filter((row) => row.state !== 'open' && !options.closed).map((row) => row.number),
   ]);
   const named = new Set<number>();

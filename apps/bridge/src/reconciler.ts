@@ -259,6 +259,9 @@ export class Reconciler {
     // not connected" said neither which account nor how.
     const automation = client ? null : await automationBotName(this.config);
     const repoNames = new Map(repoList.map((repo) => [repo.id, repo.name]));
+    // Repositories read for the first time since the bridge started, with
+    // every number that read already asked GitHub about.
+    const firstRead: { repo: (typeof repoList)[number]; read: Set<number> }[] = [];
     for (const repo of repoList) {
       const cached = await issues.listIssues(repo.name);
 
@@ -303,6 +306,7 @@ export class Reconciler {
           named,
         });
         this.readAt.set(repo.id, readStarted);
+        if (since === undefined) firstRead.push({ repo, read: new Set([...live.map((issue) => issue.number), ...dependencies]) });
       } catch (error) {
         drift.push({
           kind: 'github_unreadable',
@@ -415,6 +419,19 @@ export class Reconciler {
             repaired: repair,
           });
         }
+      }
+    }
+
+    // The first pass named its closed records from the bodies stored before
+    // it read GitHub. A body it rewrote above, edited while the bridge was
+    // down, can name one more, which no later pass reads until the next
+    // start (#220). Asked again once every repository's bodies are written:
+    // a body in one repository can name a dependency in another.
+    if (repair && client) {
+      for (const { repo, read } of firstRead) {
+        await catchUpIgnored(client, repo, read).catch((error: unknown) =>
+          console.warn(`[reconciler] ${repo.name}: the ignored dependencies its rewritten issues name were not read: ${reasonOf(error)}`),
+        );
       }
     }
 
@@ -902,6 +919,35 @@ async function keepIgnored(repo: { id: string }, issue: LiveIssue, recorded: ign
   const closedAtOf = (at: string | null) => (at === null ? null : Date.parse(at));
   if (recorded && recorded.state === now.state && recorded.stateReason === now.stateReason && closedAtOf(recorded.closedAt) === closedAtOf(now.closedAt)) return;
   await ignoredIssues.record(repo.id, issue.number, now);
+}
+
+/**
+ * Reads, once, each dependency recorded as ignored that `repo`'s dependents
+ * name now and that `read` did not ask GitHub about, and brings its record up
+ * to date: rewritten, forgotten once the label is off, or forgotten when
+ * GitHub no longer has it. One with no record is named by every pass already.
+ */
+async function catchUpIgnored(
+  client: Partial<Pick<GitHubClient, 'getIssue'>>,
+  repo: { id: string; fullName: string },
+  read: ReadonlySet<number>,
+): Promise<void> {
+  if (!client.getIssue) return;
+  const named = (await issues.unresolvedDependencies(repo, { closed: true })).filter((number) => !read.has(number));
+  if (named.length === 0) return;
+  const recorded = new Map((await ignoredIssues.listForRepos([repo.id])).map((record) => [record.number, record]));
+  for (const number of named) {
+    const record = recorded.get(number);
+    if (!record) continue;
+    let issue: LiveIssue | null = null;
+    try {
+      issue = await client.getIssue(repo.fullName, number);
+    } catch (error) {
+      if (!(error instanceof GitHubApiError && (error.status === 404 || error.status === 410))) throw error;
+    }
+    if (issue) await keepIgnored(repo, issue, record);
+    else await ignoredIssues.forget(repo.id, number);
+  }
 }
 
 /** The first line of what went wrong, short enough for a log line. */

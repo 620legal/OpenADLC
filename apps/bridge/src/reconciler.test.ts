@@ -452,6 +452,33 @@ describe('an issue labelled openadlc:ignore, read by reconcile', () => {
       expect(LOOKED_UP).toEqual([18]);
       expect(IGNORED_FORGOTTEN).toContain(18);
     });
+
+    it('reads one that only a body this pass wrote names, after writing it, and once', async () => {
+      // #145 was filed naming #18 while the bridge was down: the store names
+      // #18 only once the pass has written #145's body.
+      const { issues } = await import('@openadlc/db');
+      vi.mocked(issues.unresolvedDependencies).mockImplementation(async (_repo, options = {}) =>
+        options.closed && upserts.some((row) => String(row.body).includes('#18')) ? [18] : [],
+      );
+      try {
+        LIVE = [issue({ body: `${BODY}\n\n## Dependencies\n\n- #18` }), ignored({ labels: ['bug'], updatedAt: '2026-10-21T10:00:00Z' })];
+        IGNORED = [completed];
+        const once = await reconciler();
+        await once.run({ repair: true });
+        expect(upserts.map((row) => row.number)).toContain(145);
+        expect(LOOKED_UP).toEqual([18]);
+        expect(IGNORED_FORGOTTEN).toContain(18);
+
+        LOOKED_UP = [];
+        await once.run({ repair: true });
+        expect(LOOKED_UP).toEqual([]);
+      } finally {
+        vi.mocked(issues.unresolvedDependencies).mockImplementation(async (_repo, options = {}) => [
+          ...UNRESOLVED,
+          ...(options.closed ? UNRESOLVED_CLOSED : []),
+        ]);
+      }
+    });
   });
 });
 

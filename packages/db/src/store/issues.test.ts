@@ -435,6 +435,12 @@ describe('the dependencies reconcile looks up', () => {
     expect(await unresolvedDependencies(REPO)).toEqual([]);
     expect(await unresolvedDependencies(REPO, { closed: true })).toEqual([18]);
   });
+
+  it('names one with a row and an ignored record when asked for the closed: a merged row does not ship it, its record does', async () => {
+    answer([{ body: '## Dependencies\n\n- #18\n- #20', full_name: 'owner/b' }], [18, 20], [{ number: 18, state: 'closed' }]);
+    expect(await unresolvedDependencies(REPO)).toEqual([]);
+    expect(await unresolvedDependencies(REPO, { closed: true })).toEqual([18]);
+  });
 });
 
 /**
