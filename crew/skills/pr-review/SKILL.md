@@ -285,7 +285,9 @@ next question is written after it, not before.
 - Wait for CI, or request changes for a check that has not run.
 - Approve, as the lead, a head of a crew branch (`agent/…`) with no recorded
   local CI pass, or a pull request that is not mergeable. Other pull requests
-  are judged on GitHub's `ci` check.
+  are judged on GitHub's `ci` check, and so is a crew head whose `local-ci.md`
+  says it is GitHub's merge of the base into a head whose run passed: do not
+  request changes for a missing local run on it.
 - Waive an invariant. Escalate it to a person instead, as "Asking a person" says.
   <!-- scenario: waive-an-invariant -->
 

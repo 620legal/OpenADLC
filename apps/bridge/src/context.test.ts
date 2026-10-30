@@ -654,6 +654,19 @@ describe('the lead reviewer, last', () => {
       expect(ci?.content).not.toContain('Do not approve');
     });
 
+    // Either is GitHub's mark, as writtenByGitHub (health/checks/commit-email.ts)
+    // reads it: the user GitHub attached, or the git committer email.
+    it.each<[string, Record<string, unknown>]>([
+      ['the web-flow login alone', { committer: { login: 'web-flow' }, commit: { committer: { email: 'someone@acme.test' } } }],
+      ['GitHub’s noreply email alone', { committer: null, commit: { committer: { email: 'noreply@github.com' } } }],
+    ])('counts a merge GitHub marked with %s', async (_what, mark) => {
+      localCiOf.approved1 = PASS;
+      const ci = await leadCi({ head: 'merge001', commits: { merge001: { parents: [{ sha: 'approved1' }, { sha: 'mainhead' }], ...mark } } });
+
+      expect(ci?.title).toBe('Local CI on merge00: a merge of the base into approve');
+      expect(ci?.content).not.toContain('Do not approve');
+    });
+
     it('walks back through a second update to the head that ran', async () => {
       localCiOf.approved1 = PASS;
       const ci = await leadCi({
@@ -682,7 +695,9 @@ describe('the lead reviewer, last', () => {
         PASS,
       ],
       ['its parent’s run failed', { merge001: byGitHub(['approved1', 'mainhead']) }, { ...PASS, ok: false, exitCode: 2 }],
-      ['its parent has no run', { merge001: byGitHub(['approved1', 'mainhead']) }, null],
+      // approved1 reads as a commit of its own, so the walk stops because it is
+      // not a merge, not because the read failed.
+      ['its parent has no run', { merge001: byGitHub(['approved1', 'mainhead']), approved1: { ...byGitHub(['base1']), committer: { login: 'builder-bot' } } }, null],
       ['its other parent is not on the base', { merge001: byGitHub(['approved1', 'mainhead']) }, PASS, { mainhead: 3 }],
       ['the commit cannot be read', { merge001: new Error('502 Bad Gateway') }, PASS],
     ])('is held to a run of its own when %s', async (_what, commits, parentRun, behind) => {
