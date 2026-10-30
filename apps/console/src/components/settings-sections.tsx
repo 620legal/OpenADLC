@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { CrewColors, RepositoryColors } from '@/components/color-choice';
 import { ConsoleBrandPart } from '@/components/console-brand';
+import { GitHubLinkCard } from '@/components/github-link-card';
 import { ThemeToggle } from '@/components/theme-toggle';
 import type { CrewMember } from '@/lib/api';
 
@@ -89,6 +90,29 @@ export function AppearanceSection({
   /** Draw the console's name and logo, as Settings does and onboarding does not. */
   withBrand?: boolean;
 } = {}) {
+  return (
+    <>
+      {/* Each person's own, beside how the console looks to them: Settings', as
+          the brand is, since onboarding has no pull request to sign off. */}
+      {withBrand && (
+        <SettingsCard id="your-github" title="Your GitHub account" line="Which GitHub account is yours, for a pull request’s sign-off only you may send.">
+          <GitHubLinkCard />
+        </SettingsCard>
+      )}
+      <AppearanceCard repositories={repositories} crew={crew} withBrand={withBrand} />
+    </>
+  );
+}
+
+function AppearanceCard({
+  repositories,
+  crew,
+  withBrand,
+}: {
+  repositories?: readonly { name: string; color?: string | null }[];
+  crew?: readonly CrewMember[];
+  withBrand: boolean;
+}) {
   return (
     <SettingsCard id="appearance" title="Appearance">
       <div className="flex flex-wrap items-center gap-3 border-t border-well pb-0.5 pt-3">

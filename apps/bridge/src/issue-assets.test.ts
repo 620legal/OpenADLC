@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { allowedAssetUrl, assetLinks, collectIssueAssets, downloadAsset, stableUrl } from './issue-assets.js';
+import { allowedAssetUrl, assetLinks, collectIssueAssets, downloadAsset, repositoryFileOf, stableUrl } from './issue-assets.js';
 
 /**
  * Images in an issue, kept with its work item: only GitHub's own image hosts,
@@ -89,5 +89,32 @@ describe('reading an issue’s images into its item', () => {
     // Read again with a fresh signature: recognised, and not downloaded again.
     expect(await read('two')).toEqual({ stored: [], skipped: [] });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a file in the same repository', () => {
+  it('is a ref and a path for github.com raw and blob links and raw.githubusercontent.com', () => {
+    expect(repositoryFileOf('https://github.com/620legal/www/raw/abc1234/.visual/home-1280.png', '620legal/www')).toEqual({
+      ref: 'abc1234',
+      path: '.visual/home-1280.png',
+    });
+    expect(repositoryFileOf('https://github.com/620Legal/WWW/blob/shots/a%20b.png?raw=true', '620legal/www')).toEqual({ ref: 'shots', path: 'a b.png' });
+    expect(repositoryFileOf('https://raw.githubusercontent.com/620legal/www/abc1234/x/y.png', '620legal/www')).toEqual({ ref: 'abc1234', path: 'x/y.png' });
+  });
+
+  it('is nothing for another repository, another host, or a path that climbs', () => {
+    expect(repositoryFileOf('https://github.com/620legal/other/raw/main/x.png', '620legal/www')).toBeNull();
+    expect(repositoryFileOf('https://evil.test/620legal/www/raw/main/x.png', '620legal/www')).toBeNull();
+    expect(repositoryFileOf('http://github.com/620legal/www/raw/main/x.png', '620legal/www')).toBeNull();
+    expect(repositoryFileOf('https://github.com/620legal/www/raw/main/%2e%2e/x.png', '620legal/www')).toBeNull();
+    expect(repositoryFileOf('https://github.com/620legal/www/pull/46', '620legal/www')).toBeNull();
+  });
+
+  it('is an image link only when asked for that repository, through camo’s canonical address', () => {
+    const html =
+      '<img src="https://camo.githubusercontent.com/abc" data-canonical-src="https://github.com/620legal/www/raw/abc1234/before.png" alt="before">' +
+      '<img src="https://github.com/620legal/other/raw/main/x.png">';
+    expect(assetLinks(html)).toEqual([]);
+    expect(assetLinks(html, { repoFullName: '620legal/www' })).toEqual([{ url: 'https://github.com/620legal/www/raw/abc1234/before.png', alt: 'before' }]);
   });
 });

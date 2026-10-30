@@ -106,6 +106,21 @@ describe('every console route says who may call it', () => {
     }
   });
 
+  it('lets a user press a pull request’s commands and link their own GitHub account, each acting only as the caller', () => {
+    for (const key of [
+      'GET /v1/items/:subject/pull',
+      'POST /v1/items/:subject/pull/commands/:name',
+      'GET /v1/items/:subject/pull/flows/:flowId',
+      'GET /v1/items/:subject/pull/images/:commentId/:index',
+      'POST /v1/me/github',
+      'GET /v1/me/github/flows/:flowId',
+      'DELETE /v1/me/github',
+    ]) {
+      expect(ROUTE_ROLES[key], key).toBe('user');
+      expect(everyRoute(), key).toContain(key);
+    }
+  });
+
   it('lets everyone read the console’s name and logo, and only an admin change them', () => {
     // Every person using the console sees them in its header.
     expect(ROUTE_ROLES['GET /v1/brand']).toBe('user');

@@ -63,3 +63,6 @@ export * as users from './store/users.js';
 export { UserChangeRefused } from './store/users.js';
 export type { AddedHow, Role, User } from './store/users.js';
 export * as insights from './store/insights.js';
+export * as personAccounts from './store/person-accounts.js';
+export { AccountLinkedElsewhere } from './store/person-accounts.js';
+export type { PersonAccount } from './store/person-accounts.js';

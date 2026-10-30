@@ -456,6 +456,33 @@ describe('what needs a person', () => {
     expect(`${item?.headline} ${item?.detail}`).not.toMatch(/passed|ready|CI is green/);
   });
 
+  it('names the pull request of a held merge only where its repository declares commands, and is otherwise as it was', async () => {
+    // 620legal/OpenADLC#207: the console puts the pull request's declared
+    // commands before "Merge it on GitHub" from `pull`.
+    const { attentionItems } = await load();
+    const input = {
+      now: NOW,
+      gates: [],
+      tasks: [],
+      bots: BOTS,
+      repos: REPOS,
+      issues: ISSUES,
+      requests: [],
+      stallEvents: [],
+      heldMerges: [{ repo: 'openadlc-testbed', prNumber: 46, reason: 'visual-review failed on the head', since: minutesAgo(2) }],
+    };
+    const plain = attentionItems(input);
+    expect(attentionItems({ ...input, commandRepos: new Set() })).toEqual(plain);
+    expect(attentionItems({ ...input, commandRepos: new Set(['another-repo']) })).toEqual(plain);
+    expect(plain.find((one) => one.kind === 'merge_waiting')).not.toHaveProperty('pull');
+
+    const declared = attentionItems({ ...input, commandRepos: new Set(['openadlc-testbed']) });
+    const item = declared.find((one) => one.kind === 'merge_waiting');
+    expect(item).toMatchObject({ pull: { repo: 'openadlc-testbed', number: 46 }, actions: [{ kind: 'open_url', label: 'Merge it on GitHub' }] });
+    const { pull: _pull, ...rest } = item!;
+    expect(rest).toEqual(plain.find((one) => one.kind === 'merge_waiting'));
+  });
+
   describe('a person asked to approve a pull request again', () => {
     // 620legal/OpenADLC#124: GitHub moves a review's commit onto a later head,
     // and goes on showing the person as having approved one whose diff they

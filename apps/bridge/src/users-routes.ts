@@ -1,4 +1,4 @@
-import { users as usersStore, UserChangeRefused, type Role, type User } from '@openadlc/db';
+import { personAccounts, users as usersStore, UserChangeRefused, type Role, type User } from '@openadlc/db';
 import type { IdentityMode } from './identity.js';
 import { iapAccess, type IapAccess, type Roles } from './roles.js';
 import { HttpFailure, type Router } from './router.js';
@@ -17,6 +17,11 @@ export interface UsersRouteDeps {
    * a local install, where there is no IAP and nothing to say.
    */
   access?: (email: string) => IapAccess;
+  /**
+   * The GitHub account a person linked by signing in as it (`person-github.ts`),
+   * for Settings' "Your GitHub account" and the pull panel. Absent, none is said.
+   */
+  githubOf?: (identity: string) => Promise<{ login: string } | null>;
 }
 
 export function liveUsersDeps(roles: UsersRouteDeps['roles'], identityMode: IdentityMode, consoleMembers: readonly string[]): UsersRouteDeps {
@@ -26,6 +31,10 @@ export function liveUsersDeps(roles: UsersRouteDeps['roles'], identityMode: Iden
     add: (email, role, by) => usersStore.addUser(email, role, by),
     setRole: (email, role, by) => usersStore.setRole(email, role, by),
     remove: (email, by) => usersStore.removeUser(email, by),
+    githubOf: async (identity) => {
+      const linked = await personAccounts.ofIdentity(usersStore.normalizeEmail(identity));
+      return linked ? { login: linked.githubLogin } : null;
+    },
     ...(identityMode === 'iap' ? { access: (email: string) => iapAccess(email, consoleMembers) } : {}),
   };
 }
@@ -69,6 +78,8 @@ export function registerUsersRoutes(router: Router, deps: UsersRouteDeps): void 
     email: usersStore.normalizeEmail(identity),
     role,
     identityMode: deps.identityMode,
+    // A link that cannot be read is said as none: every page reads this.
+    ...(deps.githubOf ? { github: await deps.githubOf(identity).catch(() => null) } : {}),
   }));
 
   router.get('/v1/users', async () => ({ users: (await deps.roles.list()).map(said) }));

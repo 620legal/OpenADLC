@@ -175,6 +175,40 @@ export async function pollForUserToken(options: PollOptions): Promise<UserToken>
 }
 
 /**
+ * Revokes a user token at once, with the app's client secret: what a token
+ * held for one post (a person's sign-off) ends with, rather than living out
+ * its eight hours. True when GitHub said it is gone.
+ *
+ * Never throws, and says nothing of the token: a failure is false, and the
+ * caller says the token expires on its own. An error carrying the request
+ * would have put the token in a log.
+ */
+export async function revokeUserToken(input: {
+  clientId: string;
+  clientSecret: string;
+  accessToken: string;
+  fetchImpl?: typeof fetch;
+}): Promise<boolean> {
+  const basic = Buffer.from(`${input.clientId}:${input.clientSecret}`).toString('base64');
+  try {
+    const response = await (input.fetchImpl ?? fetch)(`https://api.github.com/applications/${encodeURIComponent(input.clientId)}/token`, {
+      method: 'DELETE',
+      signal: AbortSignal.timeout(FORM_TIMEOUT_MS),
+      headers: {
+        accept: 'application/vnd.github+json',
+        authorization: `Basic ${basic}`,
+        'content-type': 'application/json',
+        'x-github-api-version': '2022-11-28',
+      },
+      body: JSON.stringify({ access_token: input.accessToken }),
+    });
+    return response.status === 204;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Refresh rotates the refresh token, so the new one must replace the stored one.
  * Device-flow tokens refresh with the client id alone: no client secret at rest.
  */

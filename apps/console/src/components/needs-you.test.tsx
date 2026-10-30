@@ -72,7 +72,40 @@ vi.mock('react', async (original) => ({
   useContext: (context: { _currentValue: unknown }) => context._currentValue,
 }));
 
+/**
+ * A card's pull panel, as its read answered: drawn to markup no effect runs,
+ * so the real one stays loading and its buttons are never there to place.
+ * The buttons are the panel's own (`PullActionsView`); only the read is not.
+ */
+const pullRead = vi.hoisted(() => ({ subjects: [] as string[] }));
+vi.mock('@/components/pull-panel', async (original) => {
+  const panel = await original<typeof import('./pull-panel')>();
+  const command = { comment: '', reviewers: [] as string[], offered: true, state: 'ready' as const };
+  const view = {
+    repo: 'www',
+    number: 46,
+    url: 'https://github.com/620legal/www/pull/46',
+    open: true,
+    head: 'a'.repeat(40),
+    checks: { 'visual-review': 'failure' },
+    commands: [
+      { ...command, name: 'approve-pages', label: 'Approve pages', by: 'reviewer', unblocks: 'visual-review' },
+      { ...command, name: 'preview', label: 'Preview', by: 'anyone', unblocks: null },
+    ],
+    outputs: [],
+    errors: [],
+  } as import('@/lib/api').PullView;
+  return {
+    ...panel,
+    PullActions: ({ subject }: { subject: string }) => {
+      pullRead.subjects.push(subject);
+      return <panel.PullActionsView view={view} pending={null} onPress={() => undefined} />;
+    },
+  };
+});
+
 beforeEach(() => {
+  pullRead.subjects.length = 0;
   answers.length = 0;
   pressed.retried.length = 0;
   pressed.stopped.length = 0;
@@ -140,6 +173,34 @@ describe('what needs you', () => {
     // The others are in the sheet, which is closed.
     expect(html).not.toContain('>Review<');
     expect(html).not.toContain('Pull request');
+  });
+
+  it('puts a held pull request’s declared commands before "Merge it on GitHub", and only where its repository declares them', () => {
+    // 620legal/OpenADLC#207: the card offered only the merge, which skipped
+    // the page sign-off the red visual-review waited for.
+    const MERGE: AttentionItem = {
+      id: 'merge:www#46',
+      kind: 'merge_waiting',
+      group: 'work',
+      headline: 'Pull request #46 waits for you to merge it',
+      subject: { repo: 'www', number: 12, title: 'New pricing page', ref: 'www#12', url: 'https://github.com/620legal/www/pull/46' },
+      bot: null,
+      since: '2026-09-24T11:59:00.000Z',
+      detail: 'ci and review-gate passed, but OpenADLC did not merge it, because visual-review failed on the head.',
+      actions: [{ kind: 'open_url', label: 'Merge it on GitHub', url: 'https://github.com/620legal/www/pull/46' }],
+    };
+    const declared = needs([{ ...MERGE, pull: { repo: 'www', number: 46 } }]);
+    // The card reads the pull it is about, not its item's.
+    expect(pullRead.subjects).toEqual(['www#46']);
+    const approve = declared.indexOf('data-pull-command="approve-pages"');
+    const preview = declared.indexOf('data-pull-command="preview"');
+    expect(approve).toBeGreaterThan(-1);
+    expect(approve).toBeLessThan(preview);
+    expect(preview).toBeLessThan(declared.indexOf('Merge it on GitHub'));
+
+    const plain = needs([MERGE]);
+    expect(plain).not.toContain('data-pull-actions');
+    expect(plain).toContain('Merge it on GitHub');
   });
 
   it('asks an admin what to do about issues OpenADLC will not take on its own, with all three choices on the card', () => {

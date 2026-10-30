@@ -26,6 +26,7 @@ export * from './bot-words.js';
 export * from './project.js';
 export * from './attachments.js';
 export * from './delivery-rules.js';
+export * from './pull-commands.js';
 export * from './egress.js';
 export * from './path-policy.js';
 // `pathMatches` here is a policy pattern's; human-review.ts has its own of that name.

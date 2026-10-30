@@ -20,7 +20,11 @@ afterEach(async () => {
 });
 
 /** The users routes in this mode over a store of two admins, and what each change did to it. */
-async function serve(identityMode: IdentityMode, access?: (email: string) => 'member' | 'absent' | 'unknown') {
+async function serve(
+  identityMode: IdentityMode,
+  access?: (email: string) => 'member' | 'absent' | 'unknown',
+  githubOf?: (identity: string) => Promise<{ login: string } | null>,
+) {
   const roles = new Map<string, Role>([
     ['console', 'admin'],
     ['me@example.com', 'admin'],
@@ -34,6 +38,7 @@ async function serve(identityMode: IdentityMode, access?: (email: string) => 'me
     remove: async (email) => void (roles.delete(email), removed.push(email)),
     identityMode,
     ...(access ? { access } : {}),
+    ...(githubOf ? { githubOf } : {}),
   });
   server = createServer((request, response) => void router.handle(request, response));
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
@@ -52,6 +57,16 @@ describe('the console’s own identity', () => {
       role: 'admin',
       identityMode: 'local',
     });
+  });
+
+  it('says the GitHub account the person linked, or none, and none when the link cannot be read', async () => {
+    const linked = await serve('local', undefined, async (identity) => (identity === 'Console' ? { login: 'janedoe' } : null));
+    expect(await (await fetch(`${linked.url}/v1/me`, { headers: linked.as('Console') })).json()).toMatchObject({ github: { login: 'janedoe' } });
+    server?.close();
+    const broken = await serve('local', undefined, async () => {
+      throw new Error('database down');
+    });
+    expect(await (await fetch(`${broken.url}/v1/me`, { headers: broken.as('Console') })).json()).toMatchObject({ github: null });
   });
 
   it('is not demoted on a local install, and the refusal says OPENADLC_IDENTITY is the way round', async () => {
