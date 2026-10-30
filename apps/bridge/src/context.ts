@@ -1,4 +1,4 @@
-import { bots, issues, localCiRuns, repos, settings, stageMoves, type StageMove } from '@openadlc/db';
+import { bots, issues, localCiRuns, repos, settings, stageMoves, type LocalCiRun, type StageMove } from '@openadlc/db';
 import type { GitHubClient } from '@openadlc/github';
 import {
   STAGE_COLUMN_TITLES,
@@ -322,7 +322,7 @@ export class Context {
       // build branch GitHub's CI runs only once the lead approves, so this is
       // the run there is; on any other branch GitHub's CI is.
       if (head) {
-        const ci = await localCiDocument(input.repoFullName, head, pull?.headRef ?? null).catch(() => null);
+        const ci = await localCiDocument(input.repoFullName, head, pull?.headRef ?? null, pull ? { client, baseRef: pull.baseRef } : undefined).catch(() => null);
         if (ci) documents.push(ci);
       }
       if (said.length > 0 || unsigned.length > 0) {
@@ -603,8 +603,22 @@ const LOG_SHOWN = 4_000;
  * branch no local run applies: the SRE's revert and a person's pull request
  * never had one, and the lead's request for changes on them went nowhere.
  * GitHub's `ci` runs on those at once, and the merge waits for it.
+ *
+ * A crew head with no run of its own that is GitHub's merge of the base into a
+ * head whose run passed (`mergeOfBase`) stands on that run. The merge line
+ * brings a waiting pull request up to date that way, and no crew author
+ * pushes the merge, so nobody records a run on it: the lead asked for one on
+ * every update, and #213 spent its last review rounds on nothing else and
+ * stopped for a person with its code approved. GitHub's `ci` still runs on
+ * the merge and the merge still waits for it. Given only when the pull
+ * request was read; without it, such a head is held to a run as any other.
  */
-export async function localCiDocument(repoFullName: string, headSha: string, headRef: string | null): Promise<ContextDocument | null> {
+export async function localCiDocument(
+  repoFullName: string,
+  headSha: string,
+  headRef: string | null,
+  merge?: { client: GitHubClient; baseRef: string },
+): Promise<ContextDocument | null> {
   const repo = await repos.getRepoByName(repoFullName);
   if (!repo) return null;
   const run = await localCiRuns.latestFor(repo.id, headSha);
@@ -620,6 +634,27 @@ export async function localCiDocument(repoFullName: string, headSha: string, hea
         `\`${headRef}\` is not a crew branch (\`agent/…\`), so no crew author runs \`openadlc-ci\` on it. GitHub's \`ci\` runs on a branch like this at once, and the merge waits for it to pass on this head: GitHub's \`ci\` check on the head is the check this pull request is merged on.`,
         '',
         'Do not request changes for a missing local run. Review the change itself.',
+      ].join('\n'),
+    };
+  }
+  const onParent = !run && merge ? await mergeOfBase(merge.client, repo.id, repoFullName, headSha, merge.baseRef).catch(() => null) : null;
+  if (onParent && merge) {
+    const parentShort = onParent.parent.slice(0, 7);
+    const tail = (onParent.run.logTail ?? '').slice(-LOG_SHOWN);
+    return {
+      name: 'local-ci.md',
+      title: `Local CI on ${short}: a merge of the base into ${parentShort}`,
+      content: [
+        `# ${short} is a merge of \`${merge.baseRef}\` into ${parentShort}, made by GitHub`,
+        '',
+        `No crew author pushed ${short}: GitHub wrote it, bringing the branch up to date with \`${merge.baseRef}\`, so no local run is recorded on it. ` +
+          `\`make ci\` passed on ${parentShort}, as hostd ran it in the author's worktree at ${onParent.run.createdAt}` +
+          `${onParent.run.durationMs !== null ? `, in ${Math.round(onParent.run.durationMs / 1000)} s` : ''}.`,
+        '',
+        `GitHub's \`ci\` runs on this head, and the merge waits for it to pass on this exact head.`,
+        '',
+        'Do not request changes for a missing local run. Review the change itself.',
+        ...(tail ? ['', `The end of the run on ${parentShort}:`, '', '```', tail, '```'] : []),
       ].join('\n'),
     };
   }
@@ -641,6 +676,53 @@ export async function localCiDocument(repoFullName: string, headSha: string, hea
       ...(tail ? ['', '```', tail, '```'] : []),
     ].join('\n'),
   };
+}
+
+/** How many of GitHub's merges of the base `mergeOfBase` walks back through to a head with a run. */
+const MERGES_WALKED = 5;
+
+/** Just the parts of GitHub's commit this reads. */
+interface ReadCommit {
+  parents?: { sha: string }[];
+  commit?: { committer?: { email?: string | null } | null };
+  committer?: { login?: string | null } | null;
+}
+
+/**
+ * The head a commit is GitHub's merge of the base into, and that head's
+ * passing run, or null. A commit qualifies when it has exactly two parents,
+ * the branch first, as `Automation.lineMerge` reads them; GitHub wrote it
+ * (the test `writtenByGitHub` makes in `health/checks/commit-email.ts`): a
+ * builder's own merge, a conflict it resolved say, is committed by its account
+ * and still needs a run. GitHub's web conflict editor commits as `web-flow`
+ * too; only someone with write access uses it, and GitHub's `ci` still runs on
+ * what it wrote (ADR 0019). And its second parent is on `baseRef`, so nothing came in
+ * by it that the base does not hold. The first parent's newest run decides: a
+ * failed one does not qualify. A first parent with no run that is itself such
+ * a merge is walked back through, since the line updates again when the base
+ * moves while `ci` runs. A read that fails throws, and the caller takes it
+ * for no such merge: the stricter note.
+ */
+async function mergeOfBase(
+  client: GitHubClient,
+  repoId: string,
+  repoFullName: string,
+  headSha: string,
+  baseRef: string,
+): Promise<{ parent: string; run: LocalCiRun } | null> {
+  let sha = headSha;
+  for (let step = 0; step < MERGES_WALKED; step++) {
+    const commit = await client.request<ReadCommit>('GET', `/repos/${repoFullName}/commits/${encodeURIComponent(sha)}`);
+    const [from, base, ...more] = (commit.parents ?? []).map((parent) => parent.sha);
+    if (!from || !base || more.length > 0) return null;
+    if (commit.committer?.login !== 'web-flow' && commit.commit?.committer?.email !== 'noreply@github.com') return null;
+    // Compared from that parent to the base: what the parent has that the base does not.
+    if ((await client.behindBy(repoFullName, base, baseRef)) !== 0) return null;
+    const run = await localCiRuns.latestFor(repoId, from);
+    if (run) return run.ok ? { parent: from, run } : null;
+    sha = from;
+  }
+  return null;
 }
 
 /**

@@ -33,7 +33,8 @@ has not run.
    that account's token. The repository's checks have run on this head
    already, without any token: hostd ran `make ci` when the author ran
    `openadlc-ci`, and that recorded run (`local-ci.md` in the lead's brief) is
-   the run there is; on a revert or a person's branch, GitHub's `ci` is. Verify a claim by reading the code that makes it true and
+   the run there is; on a revert, a person's branch or GitHub's merge of the
+   base into a head that passed, GitHub's `ci` is. Verify a claim by reading the code that makes it true and
    the test that proves it. What only running it could show is not a finding:
    name it under what you did not verify.
 2. Read the issue in `issue.md`, with the builder's plan comment in its
@@ -216,7 +217,12 @@ The builder, QA and the system engineer each run `openadlc-ci` before they
 push. Any other pull request — a revert the SRE opened, a person's own branch
 — has no crew author to run it. It is judged on GitHub's `ci` check on its
 head, which runs at once on such a branch and which the merge waits for; do not
-request changes for a missing local run.
+request changes for a missing local run. A crew head whose `local-ci.md` says it
+is a merge of the base, made by GitHub, into a head whose run passed — the merge
+line bringing a waiting pull request up to date — is judged the same way: no
+crew author pushed it to run `openadlc-ci` on, its own changes stand on that
+pass, and GitHub's `ci` runs on it before anything merges. Do not request
+changes for a missing local run on it; review the change itself.
 
 ## Blocking
 
@@ -279,7 +285,9 @@ next question is written after it, not before.
 - Wait for CI, or request changes for a check that has not run.
 - Approve, as the lead, a head of a crew branch (`agent/…`) with no recorded
   local CI pass, or a pull request that is not mergeable. Other pull requests
-  are judged on GitHub's `ci` check.
+  are judged on GitHub's `ci` check, and so is a crew head whose `local-ci.md`
+  says it is GitHub's merge of the base into a head whose run passed: do not
+  request changes for a missing local run on it.
 - Waive an invariant. Escalate it to a person instead, as "Asking a person" says.
   <!-- scenario: waive-an-invariant -->
 

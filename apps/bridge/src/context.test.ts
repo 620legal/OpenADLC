@@ -614,6 +614,109 @@ describe('the lead reviewer, last', () => {
     expect(documents.find((document) => document.name === 'local-ci.md')?.content).toContain('Do not approve it');
   });
 
+  describe('on a merge of the base GitHub made', () => {
+    // #213: the merge line brought an approved head up to date, nobody pushed
+    // the merge to run openadlc-ci on it, and the lead asked for a run on each
+    // update until the rounds ran out.
+    const PASS = { ok: true, exitCode: 0, durationMs: 61_000, logTail: 'ci: green on the approved head', createdAt: '2026-10-30T08:00:00.000Z' };
+    const byGitHub = (parents: string[]) => ({ parents: parents.map((sha) => ({ sha })), committer: { login: 'web-flow' }, commit: { committer: { email: 'noreply@github.com' } } });
+
+    async function leadCi(input: { head: string; commits: Record<string, unknown>; behind?: Record<string, number> }) {
+      const actors = stubActors({ issues: { 31: issue(31, 'Cache', 'x') }, reviews: [] });
+      const client = await (actors as unknown as { asBot: () => Promise<Record<string, unknown>> }).asBot();
+      client.getPullRequest = async () => ({ headSha: input.head, headRef: 'agent/builder/31-cache', baseRef: 'main' });
+      client.request = async (_method: string, path: string) => {
+        const commit = input.commits[path.split('/commits/')[1] ?? ''];
+        if (!commit) throw new Error(`${path} → 404`);
+        if (commit instanceof Error) throw commit;
+        return commit;
+      };
+      client.behindBy = async (_repo: string, base: string, head: string) => (head === 'main' ? (input.behind?.[base] ?? 0) : 7);
+      const documents = await new Context(actors, CONFIG).forSubject({ kind: 'review', repoFullName: 'acme/widgets', subjectNumber: 31, lead: true });
+      return documents.find((document) => document.name === 'local-ci.md');
+    }
+
+    afterEach(() => {
+      for (const sha of Object.keys(localCiOf)) delete localCiOf[sha];
+    });
+
+    it('stands on the run its first parent passed, and is judged on GitHub’s ci', async () => {
+      localCiOf.approved1 = PASS;
+      const ci = await leadCi({ head: 'merge001', commits: { merge001: byGitHub(['approved1', 'mainhead']) } });
+
+      expect(ci?.title).toBe('Local CI on merge00: a merge of the base into approve');
+      expect(ci?.content).toContain('merge of `main` into approve');
+      expect(ci?.content).toContain('`make ci` passed on approve');
+      expect(ci?.content).toContain('2026-10-30T08:00:00.000Z, in 61 s');
+      expect(ci?.content).toContain('ci: green on the approved head');
+      expect(ci?.content).toContain('the merge waits for it to pass on this exact head');
+      expect(ci?.content).toContain('Do not request changes for a missing local run');
+      expect(ci?.content).not.toContain('Do not approve');
+    });
+
+    // Either is GitHub's mark, as writtenByGitHub (health/checks/commit-email.ts)
+    // reads it: the user GitHub attached, or the git committer email.
+    it.each<[string, Record<string, unknown>]>([
+      ['the web-flow login alone', { committer: { login: 'web-flow' }, commit: { committer: { email: 'someone@acme.test' } } }],
+      ['GitHub’s noreply email alone', { committer: null, commit: { committer: { email: 'noreply@github.com' } } }],
+    ])('counts a merge GitHub marked with %s', async (_what, mark) => {
+      localCiOf.approved1 = PASS;
+      const ci = await leadCi({ head: 'merge001', commits: { merge001: { parents: [{ sha: 'approved1' }, { sha: 'mainhead' }], ...mark } } });
+
+      expect(ci?.title).toBe('Local CI on merge00: a merge of the base into approve');
+      expect(ci?.content).not.toContain('Do not approve');
+    });
+
+    it('walks back through a second update to the head that ran', async () => {
+      localCiOf.approved1 = PASS;
+      const ci = await leadCi({
+        head: 'merge002',
+        commits: { merge002: byGitHub(['merge001', 'mainhead2']), merge001: byGitHub(['approved1', 'mainhead1']) },
+      });
+
+      expect(ci?.title).toBe('Local CI on merge00: a merge of the base into approve');
+      expect(ci?.content).not.toContain('Do not approve');
+    });
+
+    it('stops walking after five merges', async () => {
+      localCiOf.approved1 = PASS;
+      const commits: Record<string, unknown> = { merge000: byGitHub(['approved1', 'mainhead']) };
+      for (let n = 1; n <= 5; n++) commits[`merge00${n}`] = byGitHub([`merge00${n - 1}`, 'mainhead']);
+      expect((await leadCi({ head: 'merge004', commits }))?.content).not.toContain('Do not approve');
+      expect((await leadCi({ head: 'merge005', commits }))?.content).toContain('Do not approve it');
+    });
+
+    it.each<[string, Record<string, unknown>, Record<string, unknown> | null, Record<string, number>?]>([
+      ['it has one parent', { merge001: { ...byGitHub(['approved1']) } }, PASS],
+      ['it has three parents', { merge001: byGitHub(['approved1', 'mainhead', 'other']) }, PASS],
+      [
+        'another account committed it',
+        { merge001: { parents: [{ sha: 'approved1' }, { sha: 'mainhead' }], committer: { login: 'alice' }, commit: { committer: { email: 'alice@acme.test' } } } },
+        PASS,
+      ],
+      ['its parent’s run failed', { merge001: byGitHub(['approved1', 'mainhead']) }, { ...PASS, ok: false, exitCode: 2 }],
+      // approved1 reads as a commit of its own, so the walk stops because it is
+      // not a merge, not because the read failed.
+      ['its parent has no run', { merge001: byGitHub(['approved1', 'mainhead']), approved1: { ...byGitHub(['base1']), committer: { login: 'builder-bot' } } }, null],
+      ['its other parent is not on the base', { merge001: byGitHub(['approved1', 'mainhead']) }, PASS, { mainhead: 3 }],
+      ['the commit cannot be read', { merge001: new Error('502 Bad Gateway') }, PASS],
+    ])('is held to a run of its own when %s', async (_what, commits, parentRun, behind) => {
+      if (parentRun) localCiOf.approved1 = parentRun;
+      const ci = await leadCi({ head: 'merge001', commits, ...(behind ? { behind } : {}) });
+
+      expect(ci?.title).toBe('Local CI on merge00: none recorded');
+      expect(ci?.content).toContain('Do not approve it');
+    });
+
+    it('is held to its own failed run, whatever its parent’s', async () => {
+      localCiOf.approved1 = PASS;
+      localCiOf.merge001 = { ...PASS, ok: false, exitCode: 2, logTail: 'ci: red' };
+      const ci = await leadCi({ head: 'merge001', commits: { merge001: byGitHub(['approved1', 'mainhead']) } });
+
+      expect(ci?.content).toContain('make ci failed (exit 2) on merge00');
+    });
+  });
+
   it('is not what an advisory seat reads: it sees only its own earlier reviews', async () => {
     const reviews = [{ user: 'irisexampleco', state: 'COMMENTED', body: 'Another seat’s.', submittedAt: '2026-09-30T09:00:00Z', commitId: 'head', association: 'MEMBER' }];
     const context = new Context(stubActors({ issues: { 31: issue(31, 'Cache', 'x') }, reviews }), CONFIG);
