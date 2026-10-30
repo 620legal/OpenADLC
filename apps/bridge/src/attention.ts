@@ -1,6 +1,6 @@
 import { acknowledgements, bots, issues, lastAudit, leases, listEventsOfType, mergeLines, modelAccounts, repos, requests, standingApprovals, tasks, threads, type HealthRow } from '@openadlc/db';
 import { rulesFileEditUrl } from './deploy-routes.js';
-import { heldForPerson } from './merge-line.js';
+import { heldForPerson, REQUIRED_CHECKS } from './merge-line.js';
 import { readUnowned } from './unowned-issues.js';
 import { INTAKE_STALLED } from './intake-events.js';
 import { DESIGN_MEMORY_SUPERSEDED } from './design-memory.js';
@@ -1354,7 +1354,13 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     });
   }
 
-  // Approved and green, at the front of the line, and only a person can land it.
+  // At the front of the line, and only a person can land it. The reason comes
+  // from `mergeDecision`, and may say a check failed or a review is missing, so
+  // a card that called the pull request ready contradicted itself (#206). The
+  // line holds only once `verdictFor` calls `ci` and `review-gate` green, so the
+  // card says they passed, except over a reason that names one of them: those
+  // say the success did not count (a commit status named `ci`, a `review-gate`
+  // OpenADLC did not publish), and the card would contradict itself again.
   for (const held of input.heldMerges ?? []) {
     const { subject } = subjectOf(`${held.repo}#${held.prNumber}`);
     const fullName = reposByName.get(held.repo)?.fullName ?? null;
@@ -1362,11 +1368,13 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     items.push({
       id: `merge:${held.repo}#${held.prNumber}`,
       kind: 'merge_waiting',
-      headline: `Pull request #${held.prNumber} is ready, and waits for you to merge it`,
+      headline: `Pull request #${held.prNumber} waits for you to merge it`,
       subject: { ...subject, url: subject.url ?? url },
       bot: null,
       since: held.since,
-      detail: `Its reviews passed and CI is green. OpenADLC did not merge it, because ${held.reason}.`,
+      detail: namesRequiredCheck(held.reason)
+        ? `OpenADLC did not merge it, because ${held.reason}.`
+        : `${REQUIRED_CHECKS.join(' and ')} passed, but OpenADLC did not merge it, because ${held.reason}.`,
       actions: url ? [{ kind: 'open_url', label: 'Merge it on GitHub', url }] : [],
     });
   }
@@ -2443,6 +2451,18 @@ export function attentionAction(action: HealthAction): AttentionAction {
   if ('url' in action) return { kind: 'open_url', label: action.label, url: action.url };
   if ('command' in action) return { kind: 'run_command', label: action.label, command: action.command };
   return { kind: 'open_page', label: action.label, href: action.href };
+}
+
+/**
+ * Whether a held merge's reason names `ci` or `review-gate` as a word of its
+ * own. It reads no more of `mergeDecision`'s prose than the names: "changes how
+ * CI runs" and "visual-review failed" do not name either. Nor does a path: a
+ * person-merges hold lists `.github/workflows/ci.yml`, and read as `ci` it
+ * lost the sentence saying the checks passed, so `-`, `/` and a `.` inside a
+ * name stay part of the word.
+ */
+function namesRequiredCheck(reason: string): boolean {
+  return REQUIRED_CHECKS.some((name) => new RegExp(`(?<![\\w./-])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/-]|\\.\\w)`).test(reason));
 }
 
 /** How many items wait on a person: a notice that something was fixed does not. */
