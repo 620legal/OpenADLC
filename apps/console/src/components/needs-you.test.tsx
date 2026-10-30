@@ -80,7 +80,7 @@ vi.mock('react', async (original) => ({
 const pullRead = vi.hoisted(() => ({ subjects: [] as string[] }));
 vi.mock('@/components/pull-panel', async (original) => {
   const panel = await original<typeof import('./pull-panel')>();
-  const command = { comment: '', reviewers: [], offered: true, state: 'ready' } as const;
+  const command = { comment: '', reviewers: [] as string[], offered: true, state: 'ready' as const };
   const view = {
     repo: 'www',
     number: 46,
