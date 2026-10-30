@@ -391,7 +391,9 @@ none yet, says its kind of work instead ("writing the change").
    seat approved and each person `AGENTS.md` names for the paths it touches
    approved, and while it is held (`needs-human` or `openadlc:paused`). The lead's request for changes sends the work back to build
    (below): the card moves to Build and a patch round opens for the builder,
-   up to `maxRounds`; a loop that does not agree stops and asks a person. A
+   up to `maxRounds`; a loop that does not agree stops and asks a person,
+   and its **Needs you** card quotes the last request for changes and who
+   made it (the lead, a person, or OpenADLC for the merge line). A
    failed `ci` run is run again once, as the app (it needs "Actions: write");
    a second failure after the lead approved sends the work back to build too,
    naming the job and the step that failed. One that failed before the lead
@@ -402,7 +404,17 @@ none yet, says its kind of work instead ("writing the change").
    recorded local CI pass for the lead to approve it. Any other pull request —
    the SRE's revert, a person's own branch — has no crew author to run one:
    the lead's `local-ci.md` says so, and it is reviewed against GitHub's
-   `ci`, which runs on such a branch at once and which the merge waits for. When the lead asks for
+   `ci`, which runs on such a branch at once and which the merge waits for.
+   A crew head with no run of its own that is GitHub's merge of the base into
+   a head with a recorded pass stands on that pass (`localCiDocument`,
+   `apps/bridge/src/context.ts`; ADR 0019): it has two parents, GitHub
+   committed it (`web-flow`), its second parent is on the base branch, and
+   its first parent's newest run passed, or that parent is itself such a
+   merge, walked back up to five. The merge line's update is one; so is a
+   person's "Update branch". `local-ci.md` names the parent and its run and
+   tells the lead not to ask for a local run; GitHub's `ci` on the head is
+   still what the merge waits for. No row is written to `local_ci_runs` for
+   it. When the lead asks for
    changes on a pull request no builder holds, the bridge comments, labels it
    `needs-human` and records `review.stalled`, once for each head, so it shows
    as a stalled review.

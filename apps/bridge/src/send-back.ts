@@ -423,7 +423,7 @@ export class SendBack {
       else if (issueNumber && !(await this.stallSaid(repo.name, pr))) await this.recordStall({ repo, pr, issue: issueNumber, why, check: input.check ?? null });
       return why ?? `no builder holds \`${pr.head.ref}\``;
     }
-    const round = await this.nextRound({ repo, repoFullName, pr, issueNumber, lease, builder, check: input.check ?? null });
+    const round = await this.nextRound({ repo, repoFullName, pr, issueNumber, lease, builder, check: input.check ?? null, request: { by: input.by, reason: input.reason } });
     if (round === null) return `its review rounds have not converged, and the loop stopped for a person`;
 
     if (issueNumber) {
@@ -451,6 +451,12 @@ export class SendBack {
     builder: { id: string; name: string };
     /** The check that failed, when CI sent it back (`reviewRound`). */
     check?: string | null;
+    /**
+     * The request for changes that opened this round, and who sent it: the
+     * lead's seat, a person's login, or `openadlc` for the merge line. None
+     * when a person moved the card back (`backFromReview`).
+     */
+    request?: { by: string; reason: string } | null;
   }): Promise<number | null> {
     const { repo, repoFullName, pr, builder } = input;
     const maxRounds = reviewLimits(this.deps.config.review).maxRounds;
@@ -466,11 +472,25 @@ export class SendBack {
     // The comment is the record on GitHub, and nothing else remembered
     // it: the console had no way to know the loop had stopped, so a
     // person found out only by opening the pull request. The event is
-    // what "needs you" and the card read.
+    // what "needs you" and the card read. It carries the request that hit
+    // the cap: a card that said only "the reviewers still ask for changes"
+    // had a person guess the install was out of CI budget when the lead had
+    // asked for nothing but a local CI run (#213). Not under `reason`, which
+    // means nothing could take the work (`stallSaid`).
+    const request = input.request?.reason.trim() ? input.request : null;
     await recordEvent({
       source: 'platform',
       type: REVIEW_STALLED,
-      payload: { repo: repo.name, pr: pr.number, issue: input.issueNumber, rounds: round, bot: builder.name, botId: builder.id, ...(input.check ? { check: input.check } : {}) },
+      payload: {
+        repo: repo.name,
+        pr: pr.number,
+        issue: input.issueNumber,
+        rounds: round,
+        bot: builder.name,
+        botId: builder.id,
+        ...(input.check ? { check: input.check } : {}),
+        ...(request ? { request: request.reason, requestBy: request.by } : {}),
+      },
     }).catch(() => undefined);
     return null;
   }

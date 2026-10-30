@@ -3573,7 +3573,11 @@ describe('a review loop that stops without agreeing', () => {
     expect(vi.mocked(recordEvent)).toHaveBeenCalledWith({
       source: 'platform',
       type: 'review.stalled',
-      payload: { repo: 'openadlc', pr: 31, issue: 11, rounds: 3, bot: 'openadlc-atlas-janedoe', botId: 'bot-builder' },
+      payload: {
+        repo: 'openadlc', pr: 31, issue: 11, rounds: 3, bot: 'openadlc-atlas-janedoe', botId: 'bot-builder',
+        // What the request that hit the cap asked for, and who asked, so the card can say it.
+        request: 'changes were requested', requestBy: 'openadlc-sydney-janedoe',
+      },
     });
   });
 
