@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { DeviceAuthError, pollForUserToken, refreshUserToken, requestDeviceCode } from './device-auth.js';
+import { DeviceAuthError, pollForUserToken, refreshUserToken, requestDeviceCode, revokeUserToken } from './device-auth.js';
 
 function mockFetch(responses: unknown[]): void {
   const queue = [...responses];
@@ -138,5 +138,30 @@ describe('device flow', () => {
     const sentBody = String(init.body ?? '');
     expect(sentBody).toContain('grant_type=refresh_token');
     expect(sentBody).not.toContain('client_secret');
+  });
+});
+
+describe('revoking a token held for one post', () => {
+  it('asks GitHub to delete it with the app’s client id and secret, and says whether it is gone', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+
+    expect(await revokeUserToken({ clientId: 'Iv1.client', clientSecret: 'shh', accessToken: 'ghu_once', fetchImpl })).toBe(true);
+    expect(calls[0]!.url).toBe('https://api.github.com/applications/Iv1.client/token');
+    expect(calls[0]!.init.method).toBe('DELETE');
+    expect((calls[0]!.init.headers as Record<string, string>).authorization).toBe(`Basic ${Buffer.from('Iv1.client:shh').toString('base64')}`);
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ access_token: 'ghu_once' });
+  });
+
+  it('never throws, and never with the token: a refusal or a network failure is false', async () => {
+    const refused = vi.fn(async () => new Response('{"message":"Not Found"}', { status: 404 })) as unknown as typeof fetch;
+    expect(await revokeUserToken({ clientId: 'Iv1.client', clientSecret: 'shh', accessToken: 'ghu_once', fetchImpl: refused })).toBe(false);
+    const broken = vi.fn(async () => {
+      throw new Error('socket hang up ghu_once');
+    }) as unknown as typeof fetch;
+    expect(await revokeUserToken({ clientId: 'Iv1.client', clientSecret: 'shh', accessToken: 'ghu_once', fetchImpl: broken })).toBe(false);
   });
 });

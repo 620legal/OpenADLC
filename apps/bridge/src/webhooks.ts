@@ -98,6 +98,7 @@ import { PAUSED_LABEL } from '@openadlc/shared';
 import { forgetHold } from './item-hold.js';
 import { linkIssue, linkPull } from './work-items.js';
 import { CI_FAILED, everyJob, newestCiRun, type RunJob } from './ci-usage.js';
+import { isDeclaredCommand } from './pull-commands.js';
 
 /** How many heads' real CI failures are remembered as sent back (`Webhooks.redSentBack`). */
 const RED_SENT_BACK_KEPT = 500;
@@ -1520,6 +1521,14 @@ export class Webhooks {
   }
 
   /** A human reply to a gate comment is the answer; the task resumes on it. */
+  /** Whether a comment is exactly a command its repository declares; a repository OpenADLC does not manage declares none. */
+  private async isPullCommand(repoName: string, body: string | null | undefined): Promise<boolean> {
+    if (!body?.trim().startsWith('/')) return false;
+    const repo = await repos.getRepoByName(repoName).catch(() => null);
+    if (!repo) return false;
+    return isDeclaredCommand(repo, body).catch(() => false);
+  }
+
   private async onIssueComment(payload: WebhookPayload, signature: CommentSignature | null = null): Promise<void> {
     const comment = payload.comment;
     const issue = payload.issue;
@@ -1571,6 +1580,12 @@ export class Webhooks {
     // the bridge posted for them. Taken as an answer, any of these would answer
     // a second bot's question on the same issue with it.
     if (authorIsBot) return;
+
+    // A command the repository's own workflow answers (`pull-commands.ts`) is
+    // for that workflow, whoever posted it: a reviewer's `/approve-pages`
+    // answered an open question on the pull request, or woke its build, and
+    // the app's `/preview` was told it was not taken.
+    if (issue.pull_request && (await this.isPullCommand(repoName, comment.body))) return;
 
     // Nor is another app's account a person, whatever the repository lets it
     // do. An app installed with write access can pass the access check, and a

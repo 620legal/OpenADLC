@@ -61,15 +61,66 @@ function unescape(text: string): string {
   return text.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 }
 
-/** The image links in rendered HTML, each once, with the words GitHub gave them. */
-export function assetLinks(html: string): { url: string; alt: string | null }[] {
+/**
+ * A file in `repoFullName` that a link names, as a ref and a path: what a
+ * workflow's screenshots are, since a workflow cannot upload to
+ * `user-attachments` (#207). Read through the contents API with the bridge's
+ * own access, never by fetching the address: the repository is private, and
+ * the address answers only a signed-in browser. Null for any other host or
+ * any other repository.
+ */
+export function repositoryFileOf(value: string, repoFullName: string): { ref: string; path: string } | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) return null;
+  const host = url.hostname.toLowerCase();
+  const parts = url.pathname.split('/').filter(Boolean).map((part) => {
+    try {
+      return decodeURIComponent(part);
+    } catch {
+      return '';
+    }
+  });
+  if (parts.some((part) => part === '' || part === '.' || part === '..')) return null;
+  const [owner, repo] = repoFullName.toLowerCase().split('/');
+  let rest: string[];
+  if (host === 'github.com') {
+    // github.com/<owner>/<repo>/(raw|blob)/<ref>/<path>
+    if (parts.length < 5 || parts[0]!.toLowerCase() !== owner || parts[1]!.toLowerCase() !== repo || !['raw', 'blob'].includes(parts[2]!)) return null;
+    rest = parts.slice(3);
+  } else if (host === 'raw.githubusercontent.com') {
+    // raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>
+    if (parts.length < 4 || parts[0]!.toLowerCase() !== owner || parts[1]!.toLowerCase() !== repo) return null;
+    rest = parts.slice(2);
+  } else {
+    return null;
+  }
+  const [ref, ...path] = rest;
+  if (!ref || path.length === 0) return null;
+  return { ref, path: path.join('/') };
+}
+
+/**
+ * The image links in rendered HTML, each once, with the words GitHub gave them.
+ * With `repoFullName`, a link to a file in that repository is one too
+ * (`repositoryFileOf`); it is read through the API, never fetched.
+ */
+export function assetLinks(html: string, options: { repoFullName?: string } = {}): { url: string; alt: string | null }[] {
   const found = new Map<string, string | null>();
+  const allowed = (url: string) => allowedAssetUrl(url) || (options.repoFullName ? repositoryFileOf(url, options.repoFullName) !== null : false);
   for (const match of html.matchAll(/<img\b[^>]*>/gi)) {
     const tag = match[0];
-    const src = /\bsrc="([^"]+)"/i.exec(tag)?.[1];
+    // GitHub proxies an image it can reach through camo, and names the
+    // address the comment wrote beside it; that address is the file.
+    const canonical = options.repoFullName ? /\bdata-canonical-src="([^"]+)"/i.exec(tag)?.[1] : undefined;
+    const src = canonical ?? /\bsrc="([^"]+)"/i.exec(tag)?.[1];
     if (!src) continue;
     const url = unescape(src);
-    if (!allowedAssetUrl(url)) continue;
+    if (!allowed(url)) continue;
     const alt = /\balt="([^"]*)"/i.exec(tag)?.[1];
     if (!found.has(url)) found.set(url, alt ? unescape(alt) : null);
   }

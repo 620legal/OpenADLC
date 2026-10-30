@@ -74,6 +74,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/**
+ * The pull panel reads `/api/item/<subject>/pull` once it mounts. The tests
+ * below count reads of the item itself, so that read is answered on its own,
+ * as an item with no open pull request.
+ */
+function isPullRead(input: unknown): boolean {
+  return String(input instanceof Request ? input.url : input).includes('/pull');
+}
+
+const noPull = (): Response => Response.json({ error: 'no open pull request' }, { status: 404 });
+
 async function settle(): Promise<void> {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -168,7 +179,11 @@ describe('reading the item again', () => {
     const held: ((body: ItemData) => void)[] = [];
     vi.stubGlobal(
       'fetch',
-      vi.fn(() => new Promise<Response>((resolve) => held.push((body) => resolve(Response.json(body))))),
+      vi.fn((input: unknown) =>
+        isPullRead(input)
+          ? Promise.resolve(noPull())
+          : new Promise<Response>((resolve) => held.push((body) => resolve(Response.json(body)))),
+      ),
     );
     await mount();
 
@@ -198,7 +213,7 @@ describe('the item’s stream, after the bridge restarts', () => {
     let reads = 0;
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ((reads += 1), Response.json(item))),
+      vi.fn(async (input: unknown) => (isPullRead(input) ? noPull() : ((reads += 1), Response.json(item)))),
     );
     await mount();
     await act(async () => FakeEventSource.made[0]!.emit('open', FakeEventSource.OPEN));

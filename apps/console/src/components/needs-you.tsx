@@ -36,6 +36,7 @@ import { Dialog, DialogClose, DialogTitle, SheetContent } from '@/components/ui/
 import { safeAction } from '@/lib/safe-action';
 import { CHOICES_ON_CARD, alarming, faceActions, groupCounts, groupOf, hasMore, plainDetail, stripItems, waiting as waitingOf } from '@/lib/attention-card';
 import { IncidentSteps } from '@/components/incident-steps';
+import { PullActions } from '@/components/pull-panel';
 import { standsOut } from '@/lib/thread';
 import { ago } from '@/lib/when';
 
@@ -473,15 +474,19 @@ function NeedsCard({
             {somethingElseButton(onOpenBot)}
           </QuestionChoices>
         )}
-        {(face.length > 0 || more) && (
+        {(face.length > 0 || more || item.pull) && (
           <div data-face="actions" className="mt-0.5 flex flex-wrap items-center gap-2">
+            {/* The pull request's own commands come first, so "Merge it on
+                GitHub", which skips a sign-off a red check waits for, is last (#207). */}
+            {item.pull && <PullActions subject={`${item.pull.repo}#${item.pull.number}`} />}
             {face.map((action, index) => (
               <ActionButton
                 key={`${action.kind}-${index}`}
                 action={action}
                 // Beside a question's choices nothing is the one to press:
                 // approving the rest of the work is not made the easy click.
-                primary={index === 0 && choices.length === 0}
+                // Nor beside a pull request's commands, which come first.
+                primary={index === 0 && choices.length === 0 && !item.pull}
                 pending={pending}
                 active={active}
                 onOpenBot={onOpenBot}

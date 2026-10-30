@@ -18,6 +18,7 @@ import { StageHandoff } from './stage-handoff.js';
 import { MergeLine } from './merge-line.js';
 import { DeployPipeline } from './deploy-pipeline.js';
 import { DeliveryKnowledge } from './delivery-rules.js';
+import { PullRules, useDeclaredCommands } from './pull-commands.js';
 import { CONFLICT_RESOLVED, CONFLICT_RESOLVING, ConflictRounds } from './conflict-round.js';
 import { STACK_MADE, STACK_UPDATED, STACK_UPDATING, Stacking } from './stacking.js';
 import {
@@ -2287,6 +2288,39 @@ describe('a gate answered from GitHub', () => {
     log.mockRestore();
     vi.mocked(threads.claimGateReply).mockReset().mockResolvedValue(true);
     expect(answered).toEqual([{ gateId: 'gate-1', reply: '1', answeredBy: 'janedoe', via: 'github' }]);
+  });
+
+  it('is not answered, and wakes nothing, by a comment that is exactly a command the repository declares', async () => {
+    // 620legal/OpenADLC#207: a reviewer's /approve-pages on a pull request is
+    // for its repository's workflow, not an answer to a bot's question; nor is
+    // the app's /preview a comment to be told it was not taken.
+    useDeclaredCommands(
+      new PullRules(async () => ({
+        readFileIfPresent: async () => 'pullRequests:\n  commands:\n    - name: approve-pages\n      comment: /approve-pages\n      by: reviewer\n      reviewers: [orzelig]\n',
+      })),
+    );
+    try {
+      const answered: unknown[] = [];
+      const webhooks = answering(answered);
+      const wake = vi.spyOn(webhooks as unknown as { wakeBuild: () => Promise<void> }, 'wakeBuild').mockResolvedValue(undefined);
+      const notTaken = vi.spyOn(webhooks as unknown as { answerNotTaken: () => Promise<void> }, 'answerNotTaken').mockResolvedValue(undefined);
+      const onPull = (body: string, login = 'orzelig') => {
+        const one = reply('created', body, login);
+        return { ...one, issue: { ...one.issue, pull_request: { url: 'x' } } };
+      };
+
+      await webhooks.receive('issue_comment', onPull('/approve-pages') as never, 'delivery-cmd-1');
+      await webhooks.receive('issue_comment', onPull('/approve-pages', 'openadlc-app[bot]') as never, 'delivery-cmd-2');
+      expect(answered).toEqual([]);
+      expect(wake).not.toHaveBeenCalled();
+      expect(notTaken).not.toHaveBeenCalled();
+
+      // Anything else on the pull request is still an answer.
+      await webhooks.receive('issue_comment', onPull('1') as never, 'delivery-cmd-3');
+      expect(answered).toEqual([{ gateId: 'gate-1', reply: '1', answeredBy: 'orzelig', via: 'github' }]);
+    } finally {
+      useDeclaredCommands(null);
+    }
   });
 
   it('is not answered by a reply written before it was asked', async () => {

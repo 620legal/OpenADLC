@@ -1,6 +1,6 @@
 import { acknowledgements, bots, issues, lastAudit, leases, listEventsOfType, mergeLines, modelAccounts, repos, requests, standingApprovals, tasks, threads, type HealthRow } from '@openadlc/db';
 import { rulesFileEditUrl } from './deploy-routes.js';
-import { heldForPerson } from './merge-line.js';
+import { heldForPerson, REQUIRED_CHECKS } from './merge-line.js';
 import { readUnowned } from './unowned-issues.js';
 import { INTAKE_STALLED } from './intake-events.js';
 import { DESIGN_MEMORY_SUPERSEDED } from './design-memory.js';
@@ -368,6 +368,14 @@ export interface AttentionItem {
    * card says it from this, so the card and Needs you say the same.
    */
   awaiting?: { login: string; again: boolean; paths: string[] };
+  /**
+   * The pull request an item is about, when its repository declares commands
+   * in `.github/openadlc.yml` (`pull-commands.ts`): the console puts that pull
+   * request's command buttons before the card's own, so "Merge it on GitHub",
+   * which skips a sign-off a red check waits for, comes last (#207). Absent
+   * for a repository that declares none, whose card is as it was.
+   */
+  pull?: { repo: string; number: number };
 }
 
 /** One of several items folded into a card by `foldCauses`, keeping what is its own rather than the cause's. */
@@ -564,6 +572,12 @@ export interface AttentionInput {
    * is left out, so its cards stay.
    */
   shipsByMerging?: ReadonlySet<string>;
+  /**
+   * The repositories, by name, that declare pull-request commands
+   * (`pull-commands.ts`): an item about one of their pull requests says which
+   * (`AttentionItem.pull`). Absent, none does.
+   */
+  commandRepos?: ReadonlySet<string>;
   /**
    * The questions the ended tasks asked, answered or not, so an end that followed a
    * person's "stop here" is read as theirs.
@@ -1227,6 +1241,17 @@ function approvalCountsForNothing(ask: PersonAsk): string {
   return `${who}'s approval names no commit, so it counts for nothing.`;
 }
 
+/** The kinds of item about one pull request, by id: `merge:repo#pr`, `approve-again:repo#pr@login`, `approval:repo#pr@login`, `stall:repo#pr`. */
+const PULL_ITEM = /^(?:merge|approve-again|approval|stall):([^#@]+)#(\d+)(?:@.*)?$/;
+
+/** An item about a pull request in a repository that declares commands, with `pull` saying which; any other item as it was. */
+function withPull(item: AttentionItem, commandRepos: ReadonlySet<string> | undefined): AttentionItem {
+  if (!commandRepos || commandRepos.size === 0) return item;
+  const found = PULL_ITEM.exec(item.id);
+  if (!found || !commandRepos.has(found[1]!)) return item;
+  return { ...item, pull: { repo: found[1]!, number: Number(found[2]) } };
+}
+
 export function attentionItems(given: AttentionInput): AttentionItem[] {
   const { input: kept, ignored } = withoutIgnored(withoutRemoved(given));
   const { input, abandoned } = withoutAbandoned(kept);
@@ -1354,7 +1379,13 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     });
   }
 
-  // Approved and green, at the front of the line, and only a person can land it.
+  // At the front of the line, and only a person can land it. The reason comes
+  // from `mergeDecision`, and may say a check failed or a review is missing, so
+  // a card that called the pull request ready contradicted itself (#206). The
+  // line holds only once `verdictFor` calls `ci` and `review-gate` green, so the
+  // card says they passed, except over a reason that names one of them: those
+  // say the success did not count (a commit status named `ci`, a `review-gate`
+  // OpenADLC did not publish), and the card would contradict itself again.
   for (const held of input.heldMerges ?? []) {
     const { subject } = subjectOf(`${held.repo}#${held.prNumber}`);
     const fullName = reposByName.get(held.repo)?.fullName ?? null;
@@ -1362,11 +1393,13 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     items.push({
       id: `merge:${held.repo}#${held.prNumber}`,
       kind: 'merge_waiting',
-      headline: `Pull request #${held.prNumber} is ready, and waits for you to merge it`,
+      headline: `Pull request #${held.prNumber} waits for you to merge it`,
       subject: { ...subject, url: subject.url ?? url },
       bot: null,
       since: held.since,
-      detail: `Its reviews passed and CI is green. OpenADLC did not merge it, because ${held.reason}.`,
+      detail: namesRequiredCheck(held.reason)
+        ? `OpenADLC did not merge it, because ${held.reason}.`
+        : `${REQUIRED_CHECKS.join(' and ')} passed, but OpenADLC did not merge it, because ${held.reason}.`,
       actions: url ? [{ kind: 'open_url', label: 'Merge it on GitHub', url }] : [],
     });
   }
@@ -2115,6 +2148,7 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
   const leftOut = (ref: string | null | undefined): boolean => Boolean(ref) && (ignored.has(ref!) || abandoned.has(ref!));
   return items
     .filter((item) => !leftOut(item.subject.ref) && !leftOut(item.subject.item))
+    .map((item) => withPull(item, input.commandRepos))
     .map((item) => ({ ...item, group: groupOf(item.kind) }))
     .sort((a, b) => Date.parse(b.since) - Date.parse(a.since) || a.id.localeCompare(b.id));
 }
@@ -2464,6 +2498,18 @@ export function attentionAction(action: HealthAction): AttentionAction {
   return { kind: 'open_page', label: action.label, href: action.href };
 }
 
+/**
+ * Whether a held merge's reason names `ci` or `review-gate` as a word of its
+ * own. It reads no more of `mergeDecision`'s prose than the names: "changes how
+ * CI runs" and "visual-review failed" do not name either. Nor does a path: a
+ * person-merges hold lists `.github/workflows/ci.yml`, and read as `ci` it
+ * lost the sentence saying the checks passed, so `-`, `/` and a `.` inside a
+ * name stay part of the word.
+ */
+function namesRequiredCheck(reason: string): boolean {
+  return REQUIRED_CHECKS.some((name) => new RegExp(`(?<![\\w./-])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/-]|\\.\\w)`).test(reason));
+}
+
 /** How many items wait on a person: a notice that something was fixed does not. */
 export function waitingCount(items: readonly Pick<AttentionItem, 'kind'>[]): number {
   return items.filter((item) => item.kind !== 'check_fixed').length;
@@ -2491,6 +2537,12 @@ export interface AttentionDeps {
    * not be told; see `AttentionInput.shipsByMerging`.
    */
   shipsByMerging?: (repo: { name: string; fullName: string }) => Promise<boolean | null>;
+  /**
+   * Whether a repository declares pull-request commands, from the rules
+   * `pull-commands.ts` keeps a minute; see `AttentionInput.commandRepos`.
+   * Nothing here asks GitHub for a pull request's checks or comments.
+   */
+  declaresCommands?: (repo: { name: string; fullName: string; defaultBranch: string }) => Promise<boolean>;
   /** Every question the given tasks asked, in one read; `threads.listGatesForTasks` unless a test says otherwise. */
   gatesFor?: (taskIds: readonly string[]) => Promise<readonly AskedGate[]>;
   /** The promotes held for a person; see `AttentionInput.heldPromotes`. Absent, none. */
@@ -2721,6 +2773,19 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     );
   }
 
+  // Which repositories declare pull-request commands, asked only when a pull
+  // request might have a card. One that could not be told declares none, and
+  // its cards are as they were.
+  const commandRepos = new Set<string>();
+  const declares = deps.declaresCommands;
+  if (declares && (heldMerges.length > 0 || personAsks.length > 0 || personAwaits.length > 0 || stallEvents.length > 0)) {
+    await Promise.all(
+      repoList.map(async (repo) => {
+        if ((await declares(repo).catch(() => false)) === true) commandRepos.add(repo.name);
+      }),
+    );
+  }
+
   const read: AttentionInput = {
     now,
     gates,
@@ -2756,6 +2821,7 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     removed,
     ...(deps.testingDeploy !== undefined ? { testingDeploy: deps.testingDeploy } : {}),
     shipsByMerging,
+    ...(commandRepos.size > 0 ? { commandRepos } : {}),
   };
 
   // Whether the subjects of what failed have closed, asked of GitHub only for
