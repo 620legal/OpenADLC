@@ -113,3 +113,33 @@ describe('whether a dependency has shipped far enough', () => {
     expect(dependencyIsSatisfied(null)).toBe(false);
   });
 });
+
+describe('a dependency labelled openadlc:ignore', () => {
+  // Built by hand outside the crew, it was never on the board: what waited on
+  // it read "not on the board" after it had closed, and waited for good.
+  it('is satisfied once GitHub says it closed as completed', () => {
+    expect(dependencyIsSatisfied(null, { state: 'closed', stateReason: 'completed' })).toBe(true);
+  });
+
+  it('is not satisfied closed for any other reason, or still open', () => {
+    expect(dependencyIsSatisfied(null, { state: 'closed', stateReason: 'not_planned' })).toBe(false);
+    expect(dependencyIsSatisfied(null, { state: 'closed', stateReason: 'duplicate' })).toBe(false);
+    expect(dependencyIsSatisfied(null, { state: 'closed', stateReason: null })).toBe(false);
+    expect(dependencyIsSatisfied(null, { state: 'open', stateReason: null })).toBe(false);
+    expect(dependencyIsSatisfied(null, { state: 'open', stateReason: 'reopened' })).toBe(false);
+    expect(dependencyIsSatisfied(null, null)).toBe(false);
+  });
+
+  it('is satisfied from its record when its row is in a stage its close never moved', () => {
+    // The close handler leaves an ignored row where it was, so the row alone
+    // never reached Done.
+    const row = { stage: 'build', labels: ['adlc:build', 'openadlc:ignore'] };
+    expect(dependencyIsSatisfied(row)).toBe(false);
+    expect(dependencyIsSatisfied(row, { state: 'closed', stateReason: 'completed' })).toBe(true);
+  });
+
+  it('is never satisfied once abandoned, whatever its record says', () => {
+    const row = { stage: 'done', labels: ['adlc:done', 'openadlc:abandoned', 'openadlc:ignore'] };
+    expect(dependencyIsSatisfied(row, { state: 'closed', stateReason: 'completed' })).toBe(false);
+  });
+});

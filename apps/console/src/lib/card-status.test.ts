@@ -568,6 +568,20 @@ describe('a card waiting with nothing going on it', () => {
     expect(waits({ kind: 'dependency', on: [] }, {}, build).text).toBe('Blocked by another issue · 32 min');
   });
 
+  it('says a dependency labelled openadlc:ignore is ignored, and whether it is open or how it closed', () => {
+    // "Not on the board" said nothing of whether it had closed (#214).
+    const build = { stage: 'build', labels: ['adlc:build', 'blocked'] };
+    const on = (extra: Record<string, unknown>) => ({ ref: '#18', number: 18, stage: null, abandoned: false, task: null, waits: null, ...extra });
+    expect(waits({ kind: 'dependency', on: [on({ ignored: { state: 'open', stateReason: null } })] }, {}, build).text).toBe('Waiting on #18 (ignored, open) · 32 min');
+    expect(waits({ kind: 'dependency', on: [on({ ignored: { state: 'closed', stateReason: 'not_planned' } })] }, {}, build).text).toBe(
+      'Waiting on #18 (ignored, closed as not planned) · 32 min',
+    );
+    expect(waits({ kind: 'dependency', on: [on({ ignored: { state: 'closed', stateReason: null } })] }, {}, build).text).toBe('Waiting on #18 (ignored, closed) · 32 min');
+    // No record, or an older bridge that sends none: as before.
+    expect(waits({ kind: 'dependency', on: [on({ ignored: null })] }, {}, build).text).toBe('Waiting on #18 (not on the board) · 32 min');
+    expect(waits({ kind: 'dependency', on: [on({})] }, {}, build).text).toBe('Waiting on #18 (not on the board) · 32 min');
+  });
+
   it('names a dependency in another repository as the bridge wrote it', () => {
     const build = { stage: 'build', labels: ['adlc:build', 'blocked'] };
     const on = (extra: Record<string, unknown>) => ({ number: 2, stage: 'build', abandoned: false, task: null, waits: null, ...extra });

@@ -330,6 +330,10 @@ export class GitHubClient {
       htmlUrl: string;
       pullRequest: boolean;
       state: 'open' | 'closed';
+      /** GitHub's `state_reason` (`completed`, `not_planned`, …), or null; always set, optional for a caller's own fixtures. */
+      stateReason?: string | null;
+      /** When it closed, or null while open; always set, as `stateReason`. */
+      closedAt?: string | null;
       /** When it was opened, by GitHub's clock. */
       createdAt: string;
       /** When anything about it last changed, by GitHub's clock. */
@@ -358,6 +362,8 @@ export class GitHubClient {
         html_url: string;
         pull_request?: unknown;
         state: 'open' | 'closed';
+        state_reason?: string | null;
+        closed_at?: string | null;
         created_at: string;
         updated_at: string;
         user?: { login: string } | null;
@@ -373,6 +379,8 @@ export class GitHubClient {
       htmlUrl: issue.html_url,
       pullRequest: Boolean(issue.pull_request),
       state: issue.state,
+      stateReason: issue.state_reason ?? null,
+      closedAt: issue.closed_at ?? null,
       createdAt: issue.created_at,
       updatedAt: issue.updated_at,
       author: issue.user?.login ?? null,
@@ -393,6 +401,10 @@ export class GitHubClient {
     labels: string[];
     htmlUrl: string;
     state: 'open' | 'closed';
+    /** GitHub's `state_reason` (`completed`, `not_planned`, …), or null; always set, optional for a caller's own fixtures. */
+    stateReason?: string | null;
+    /** When it closed, or null while open; always set, as `stateReason`. */
+    closedAt?: string | null;
     /** The issues API answers for a pull request's number too. */
     pullRequest: boolean;
     createdAt: string;
@@ -407,6 +419,8 @@ export class GitHubClient {
       labels: { name: string }[];
       html_url: string;
       state: 'open' | 'closed';
+      state_reason?: string | null;
+      closed_at?: string | null;
       pull_request?: unknown;
       created_at: string;
       updated_at: string;
@@ -421,6 +435,8 @@ export class GitHubClient {
       labels: issue.labels.map((label) => label.name),
       htmlUrl: issue.html_url,
       state: issue.state,
+      stateReason: issue.state_reason ?? null,
+      closedAt: issue.closed_at ?? null,
       pullRequest: Boolean(issue.pull_request),
       createdAt: issue.created_at,
       updatedAt: issue.updated_at,

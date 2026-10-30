@@ -4,7 +4,7 @@ import { leadReviewer, maxTasksOf, PLAN_CHANGE_REVIEW_SKILL, REPO_DEFAULTS, type
 import { seatsWaitedOn, type Automation } from './automation.js';
 import type { DispatchGate } from './dispatch-gate.js';
 import type { TaskService } from './task-service.js';
-import { dependencyIsSatisfied, hasIgnoreLabel, missingLabels, namesRepository, parseDependencyRefs } from '@openadlc/shared';
+import { dependencyIsSatisfied, hasIgnoreLabel, missingLabels, parseDependencyRefs } from '@openadlc/shared';
 import { isActive, issueNumberFromBranch, REVIEW_STALLED } from './work.js';
 import { INTAKE_STALLED } from './intake-events.js';
 import { SEAT_WAIT_WINDOW_MS, STAGE_WAITING_ON_SEAT, standingSeatWaits, type SeatWait, type SeatWaitPayload } from './seat-waits.js';
@@ -446,7 +446,9 @@ export class StageHandoff {
    * `start:now` when every issue under its Dependencies has shipped, `blocked`
    * otherwise; nothing when it carries either. One in another repository is
    * read from that repository's row: skipped, it was `start:now` and built
-   * before the work it waited on had shipped.
+   * before the work it waited on had shipped. One labelled `openadlc:ignore`
+   * is read from its record, as the dispatcher reads it
+   * (`resolveDependency`), so the label set here is the one it would unblock.
    */
   private async markReadiness(
     repo: { id: string; name: string; fullName: string },
@@ -454,15 +456,8 @@ export class StageHandoff {
     known: { labels: string[]; body: string | null },
   ): Promise<void> {
     if (known.labels.includes('start:now') || known.labels.includes('blocked')) return;
-    const inRepo = await issues.listIssues(repo.name);
-    const resolved = await Promise.all(
-      parseDependencyRefs(known.body).map(async (ref) =>
-        namesRepository(ref, repo.fullName)
-          ? (inRepo.find((issue) => issue.number === ref.number) ?? null)
-          : (await issues.resolveDependency(repo, ref)).issue,
-      ),
-    );
-    const waiting = resolved.some((dependency) => !dependencyIsSatisfied(dependency));
+    const resolved = await Promise.all(parseDependencyRefs(known.body).map((ref) => issues.resolveDependency(repo, ref)));
+    const waiting = resolved.some((dependency) => !dependencyIsSatisfied(dependency.issue, dependency.ignored));
     await this.automation.setBlocked(repo.fullName, issueNumber, waiting);
   }
 

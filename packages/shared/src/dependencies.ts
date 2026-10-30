@@ -98,27 +98,48 @@ export function namesRepository(ref: DependencyRef, fullName: string): boolean {
 }
 
 /**
+ * What GitHub last said of an issue labelled `openadlc:ignore`: kept in
+ * `ignored_issues` (`packages/db`), since nothing of it is on the board's
+ * columns. `stateReason` is GitHub's `state_reason` as given.
+ */
+export interface IgnoredState {
+  state: 'open' | 'closed';
+  stateReason: string | null;
+}
+
+/**
  * Whether a dependency has shipped far enough to stop blocking.
  *
  * The plan asks for closed *and* reached testing: a merge is not a release, and
  * an issue waiting on a behaviour is waiting for it to be somewhere it can be
  * seen. `deployed:testing` is the label the bridge puts on a change when GitHub
  * reports its testing deploy succeeded.
+ *
+ * `ignored` is the dependency's record when it is labelled `openadlc:ignore`:
+ * built by a person outside the crew, it never reaches Done, and an issue
+ * waiting on it waited for good, its card saying "not on the board" after it
+ * had closed. Closed as `completed` counts; see
+ * docs/adr/0020-an-ignored-dependency-counts-once-closed-as-completed.md.
  */
-export function dependencyIsSatisfied(dependency: { stage: string; labels: string[] } | null): boolean {
-  if (!dependency) {
-    // An issue that names a dependency the platform has never seen is not
-    // unblocked by its absence. Somebody has to look.
-    return false;
+export function dependencyIsSatisfied(
+  dependency: { stage: string; labels: string[] } | null,
+  ignored?: IgnoredState | null,
+): boolean {
+  if (dependency) {
+    // Closed without merging: in Done, and nothing of it shipped. Read as
+    // shipped, the issue waiting on it started on work that will never land.
+    if (hasAbandonedLabel(dependency.labels)) return false;
+    // Done is otherwise shipped, however it got there. In a repository that
+    // deploys, Done comes after production, which is past testing. In one that
+    // deploys nothing, merging is shipping: the card goes to Done with no deploy
+    // label at all, and an issue waiting on it would have waited for good.
+    if (dependency.stage === 'done') return true;
+    if (dependency.stage === 'merged' && dependency.labels.includes('deployed:testing')) return true;
   }
-  // Closed without merging: in Done, and nothing of it shipped. Read as
-  // shipped, the issue waiting on it started on work that will never land.
-  if (hasAbandonedLabel(dependency.labels)) return false;
-  // Done is otherwise shipped, however it got there. In a repository that
-  // deploys, Done comes after production, which is past testing. In one that
-  // deploys nothing, merging is shipping: the card goes to Done with no deploy
-  // label at all, and an issue waiting on it would have waited for good.
-  if (dependency.stage === 'done') return true;
-  if (dependency.stage !== 'merged') return false;
-  return dependency.labels.includes('deployed:testing');
+  // A person said it is theirs, and GitHub says they finished it. Closed as
+  // not planned, as a duplicate or for no reason given, nothing shipped.
+  if (ignored?.state === 'closed' && ignored.stateReason === 'completed') return true;
+  // An issue that names a dependency the platform has never seen is not
+  // unblocked by its absence. Somebody has to look.
+  return false;
 }

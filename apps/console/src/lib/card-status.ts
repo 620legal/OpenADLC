@@ -205,6 +205,12 @@ function dependencyDoing(on: DependencyNow, context: CardContext): string | null
     return task.state === 'queued' ? 'queued' : 'paused';
   }
   if (on.abandoned) return 'closed without merging';
+  // A person's, built outside the crew: "not on the board" said nothing of
+  // whether it had closed, or that it never would be on it.
+  if (on.ignored) {
+    if (on.ignored.state === 'open') return 'ignored, open';
+    return on.ignored.stateReason ? `ignored, closed as ${on.ignored.stateReason.replace(/_/g, ' ')}` : 'ignored, closed';
+  }
   switch (on.waits?.kind) {
     case 'seat':
       return on.waits.seat ? `waiting for ${context.said(on.waits.seat)}` : 'waiting for its seat';

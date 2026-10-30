@@ -63,6 +63,8 @@ export interface DependencyNow {
   number: number;
   stage: string | null;
   abandoned: boolean;
+  /** Labelled `openadlc:ignore`: open or closed on GitHub, and why it closed. Absent from an older bridge. */
+  ignored?: { state: 'open' | 'closed'; stateReason: string | null } | null;
   task: { bot: string; kind: string; state: string; waitingOnYou: boolean; activity: string | null } | null;
   waits: { kind: string; seat: string | null } | null;
 }

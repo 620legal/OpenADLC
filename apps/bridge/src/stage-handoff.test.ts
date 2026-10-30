@@ -7,6 +7,8 @@ import { BotBusyError, HostFullError, RestartPendingError, SubjectBusyError } fr
 const board = vi.hoisted(() => ({
   issues: [] as Record<string, unknown>[],
   elsewhere: [] as { fullName: string; number: number; stage: string; labels: string[] }[],
+  /** What GitHub last said of this repository's issues labelled openadlc:ignore. */
+  ignored: [] as { number: number; state: 'open' | 'closed'; stateReason: string | null }[],
   audited: [] as Record<string, unknown>[],
   /** The locks a sweep was run under, in order. */
   locked: [] as string[],
@@ -50,10 +52,15 @@ vi.mock('@openadlc/db', async (importOriginal) => ({
   issues: {
     listIssues: vi.fn(async () => board.issues),
     getIssue: vi.fn(async (_repoId: string, number: number) => board.issues.find((entry) => entry.number === number) ?? null),
-    // Another repository's issues, as the store resolves them by full name.
+    // This repository's issues by number, and another's by full name, as the
+    // store resolves them, with the record of one labelled openadlc:ignore.
     resolveDependency: vi.fn(async (_own: unknown, ref: { repo: string | null; number: number }) => {
-      const issue = board.elsewhere.find((entry) => entry.fullName === ref.repo?.toLowerCase() && entry.number === ref.number);
-      return { managed: true, issue: issue ?? null };
+      const issue =
+        ref.repo === null
+          ? board.issues.find((entry) => entry.number === ref.number)
+          : board.elsewhere.find((entry) => entry.fullName === ref.repo?.toLowerCase() && entry.number === ref.number);
+      const ignored = ref.repo === null ? (board.ignored.find((entry) => entry.number === ref.number) ?? null) : null;
+      return { managed: true, issue: issue ?? null, ignored };
     }),
     byNextFirst: (await importOriginal<typeof import('@openadlc/db')>()).issues.byNextFirst,
   },
@@ -829,6 +836,31 @@ describe('the end of intake, on either intake path', () => {
       ]);
     } finally {
       board.elsewhere = [];
+    }
+  });
+
+  it('ends in Build with start:now when its only dependency is ignored and closed as completed, and blocked while it is open', async () => {
+    // Built by hand outside the crew, #18 has no row: read as never seen, the
+    // issue waiting on it was blocked for good after it shipped (#214).
+    const { stages, readiness } = handoff();
+    try {
+      board.issues = [{ number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:build', ...INTAKES_OWN], body: '### Dependencies\n\n- #18\n' }];
+      board.ignored = [{ number: 18, state: 'open', stateReason: null }];
+      await withRepo({ spec: 'conditional' }, () => stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 }));
+
+      board.ignored = [{ number: 18, state: 'closed', stateReason: 'not_planned' }];
+      await withRepo({ spec: 'conditional' }, () => stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 }));
+
+      board.ignored = [{ number: 18, state: 'closed', stateReason: 'completed' }];
+      await withRepo({ spec: 'conditional' }, () => stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 }));
+
+      expect(readiness).toEqual([
+        { issueNumber: 9, blocked: true },
+        { issueNumber: 9, blocked: true },
+        { issueNumber: 9, blocked: false },
+      ]);
+    } finally {
+      board.ignored = [];
     }
   });
 

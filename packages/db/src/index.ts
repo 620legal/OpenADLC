@@ -5,6 +5,8 @@ export * as identities from './store/identities.js';
 export * as attributions from './store/attributions.js';
 export * as repos from './store/repos.js';
 export * as issues from './store/issues.js';
+export * as ignoredIssues from './store/ignored-issues.js';
+export type { IgnoredIssue } from './store/ignored-issues.js';
 export * as leases from './store/leases.js';
 export * as standingApprovals from './store/standing-approvals.js';
 export type { StandingApproval } from './store/standing-approvals.js';

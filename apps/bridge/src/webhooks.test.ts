@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GitHubApiError, type PullCommit } from '@openadlc/github';
 import { DEFAULT_DELIVERY_RULES, MERGE_IS_SHIPPING, isForwardMove, renderGateComment, type StageKey } from '@openadlc/shared';
-import { deployRuns, hasEventOfType, issues, leases, listEventsOfType, mergeLines, repos, spendingLimits, tasks } from '@openadlc/db';
+import { deployRuns, hasEventOfType, ignoredIssues, issues, leases, listEventsOfType, mergeLines, repos, spendingLimits, tasks } from '@openadlc/db';
 import { Automation, mergeDecision, type MergeFacts } from './automation.js';
 import { attentionItems } from './attention.js';
 import { recordDesignMemory } from './design-memory.js';
@@ -131,6 +131,10 @@ vi.mock('@openadlc/db', () => ({
     getBotById: vi.fn(async (id: string) => store.bots.find((bot) => bot.id === id) ?? null),
     listBots: vi.fn(async () => store.bots),
     getBotByName: vi.fn(async (name: string) => store.bots.find((bot) => bot.name === name) ?? null),
+  },
+  ignoredIssues: {
+    record: vi.fn(async () => undefined),
+    forget: vi.fn(async () => undefined),
   },
   issues: {
     upsertIssue: vi.fn(async (input: Record<string, unknown>) => {
@@ -11026,6 +11030,49 @@ describe('the work item of an issue or pull request a delivery is about', () => 
     );
     expect(vi.mocked(linkIssue).mock.calls[1]?.[1]).toMatchObject({ number: 10, createdAt: '2026-10-02T00:00:00Z' });
     expect(vi.mocked(linkIssue).mock.calls[1]?.[2]).toBe(false);
+  });
+});
+
+/**
+ * An issue labelled `openadlc:ignore` is a person's, and the board keeps no
+ * row for one in intake or spec: what named it under Dependencies waited for
+ * good after it closed as completed (#214). What GitHub says of it is kept.
+ */
+describe('an issue labelled openadlc:ignore, delivered', () => {
+  const REPOSITORY = { name: 'openadlc', full_name: 'janedoe/openadlc' };
+  const ignored = { number: 18, title: 'Built by hand', body: null, html_url: 'u18', user: { login: 'janedoe' }, author_association: 'OWNER' };
+  const deliver = (webhooks: Webhooks, action: string, issue: Record<string, unknown>, label?: string) =>
+    webhooks.receive(
+      'issues',
+      { action, repository: REPOSITORY, sender: { login: 'janedoe' }, issue: { ...ignored, ...issue }, ...(label ? { label: { name: label } } : {}) } as never,
+      `delivery-ignored-${action}`,
+    );
+
+  beforeEach(() => {
+    vi.mocked(ignoredIssues.record).mockClear();
+    vi.mocked(ignoredIssues.forget).mockClear();
+  });
+
+  it('is recorded closed as completed, from the delivery’s state_reason', async () => {
+    const webhooks = new Webhooks({} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
+    await deliver(webhooks, 'closed', { labels: [{ name: 'openadlc:ignore' }], state: 'closed', state_reason: 'completed', closed_at: '2026-10-20T10:00:00Z' });
+    expect(ignoredIssues.record).toHaveBeenCalledWith('repo-1', 18, { state: 'closed', stateReason: 'completed', closedAt: '2026-10-20T10:00:00Z' });
+  });
+
+  it('is recorded open again when it is reopened', async () => {
+    const webhooks = new Webhooks({} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
+    await deliver(webhooks, 'reopened', { labels: [{ name: 'openadlc:ignore' }], state: 'open', state_reason: 'reopened', closed_at: null });
+    expect(ignoredIssues.record).toHaveBeenCalledWith('repo-1', 18, { state: 'open', stateReason: 'reopened', closedAt: null });
+  });
+
+  it('is forgotten when the label comes off, and an issue never ignored is only forgotten', async () => {
+    // With the label off it is anybody's issue, and goes to intake as one.
+    const stages = { staff: vi.fn(async () => undefined) };
+    const automation = { moveStage: vi.fn(async () => ({ moved: true })) };
+    const webhooks = new Webhooks({} as never, automation as never, {} as never, {} as never, stages as never, {} as never);
+    await deliver(webhooks, 'unlabeled', { labels: [], state: 'open' }, 'openadlc:ignore');
+    expect(ignoredIssues.forget).toHaveBeenCalledWith('repo-1', 18);
+    expect(ignoredIssues.record).not.toHaveBeenCalled();
   });
 });
 

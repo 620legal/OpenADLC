@@ -290,8 +290,12 @@ export class Stacking {
           outstanding.push({ number: ref.number, stage: 'other-repository', prNumber: null });
           continue;
         }
-        const dependency = await issues.getIssue(repo.id, ref.number).catch(() => null);
-        if (!dependencyIsSatisfied(dependency)) outstanding.push(dependency ?? { number: ref.number, stage: 'unknown', prNumber: null });
+        const { issue: dependency, ignored } = await issues.resolveDependency(repo, ref).catch(() => ({ issue: null, ignored: null }));
+        if (dependencyIsSatisfied(dependency, ignored)) continue;
+        // One labelled `openadlc:ignore` is a person's: its pull request is not
+        // the crew's to stack on, in review or not.
+        if (ignored || hasIgnoreLabel(dependency?.labels)) outstanding.push({ number: ref.number, stage: 'ignored', prNumber: null });
+        else outstanding.push(dependency ?? { number: ref.number, stage: 'unknown', prNumber: null });
       }
       // Only one thing outstanding, and that in review with its pull request.
       const [on] = outstanding;

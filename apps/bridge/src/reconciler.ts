@@ -1,4 +1,4 @@
-import { audit, bots, hosts, issues, lastGithubDelivery, leases, repos, stageMoves, tasks } from '@openadlc/db';
+import { audit, bots, hosts, ignoredIssues, issues, lastGithubDelivery, leases, repos, stageMoves, tasks } from '@openadlc/db';
 import { actsForOn } from './people.js';
 import { GitHubApiError, type GitHubClient } from '@openadlc/github';
 import { actsFor, declaredPathsFrom, hasAbandonedLabel, isBackwardMove, isStageLabel, STAGE_LABELS, stageFromLabels, hasIgnoreLabel, type StageKey } from '@openadlc/shared';
@@ -282,9 +282,15 @@ export class Reconciler {
         // before the last read (or before this bridge started) is looked up
         // by itself. A merged or finished row stays on the board closed, and
         // is not asked about every quarter hour.
+        //
+        // So is a dependency an open issue names that nothing has recorded,
+        // which is kept only if it is labelled `openadlc:ignore` (#214): one
+        // that closed as completed before the bridge kept such a record, or
+        // while it was not listening, is how what waits on it is let go.
         const named = [
           ...cached.filter((entry) => entry.stage !== 'merged' && entry.stage !== 'done').map((entry) => entry.number),
           ...(await leases.listActiveLeases(repo.id)).map((lease) => lease.issueNumber),
+          ...(await (async () => issues.unresolvedDependencies(repo))().catch((): number[] => [])),
         ];
         live = await everyIssue(client, repo.fullName, {
           closedSince: since === undefined ? null : new Date(since - SINCE_SLACK_MS).toISOString(),
@@ -308,9 +314,17 @@ export class Reconciler {
         live.filter((issue) => !issue.pullRequest && issue.state === 'open').map((issue) => issue.number),
       );
 
+      const recorded = repair
+        ? new Map((await (async () => ignoredIssues.listForRepos([repo.id]))().catch(() => [])).map((record) => [record.number, record]))
+        : new Map<number, ignoredIssues.IgnoredIssue>();
       for (const issue of live) {
         if (issue.pullRequest) continue;
         const known = cached.find((entry) => entry.number === issue.number);
+        if (repair) {
+          await keepIgnored(repo, issue, recorded.get(issue.number)).catch((error: unknown) =>
+            console.warn(`[reconciler] ${repo.name}#${issue.number}: its record as an ignored issue was not brought up to date: ${reasonOf(error)}`),
+          );
+        }
 
         // One issue that cannot be written — a row the store refuses, a stage
         // nobody can be started on — is reported, and the rest still reconcile.
@@ -851,6 +865,28 @@ export function renderDrift(drift: readonly Drift[]): string {
 }
 
 /** The first line of what went wrong, short enough for a log line. */
+/**
+ * What GitHub says of an issue labelled `openadlc:ignore`, kept whether or not
+ * the board has a row for it, as the webhook keeps it (`learnIssue`), for what
+ * names it under Dependencies (`dependencyIsSatisfied`). Its record is
+ * forgotten once the label is off. Written only when it changed: every open
+ * issue is read on every pass.
+ */
+async function keepIgnored(repo: { id: string }, issue: LiveIssue, recorded: ignoredIssues.IgnoredIssue | undefined): Promise<void> {
+  if (!hasIgnoreLabel(issue.labels)) {
+    if (recorded) await ignoredIssues.forget(repo.id, issue.number);
+    return;
+  }
+  const now = {
+    state: issue.state,
+    stateReason: issue.stateReason ?? null,
+    closedAt: issue.state === 'closed' ? (issue.closedAt ?? null) : null,
+  };
+  const closedAtOf = (at: string | null) => (at === null ? null : Date.parse(at));
+  if (recorded && recorded.state === now.state && recorded.stateReason === now.stateReason && closedAtOf(recorded.closedAt) === closedAtOf(now.closedAt)) return;
+  await ignoredIssues.record(repo.id, issue.number, now);
+}
+
 function reasonOf(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const line = message.split('\n')[0] ?? '';

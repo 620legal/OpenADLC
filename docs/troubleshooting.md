@@ -1449,6 +1449,18 @@ An issue that waits on an abandoned one under `## Dependencies` stays
 merging". Drop or change #M in #N's Dependencies, or reopen #M, and the card
 goes; the dispatcher then unblocks #N as usual.
 
+An issue that waits on one labelled `openadlc:ignore` waits until GitHub says
+that issue closed as completed. Its card says "Waiting on #18 (ignored, open)"
+or "(ignored, closed as not planned)", not "(not on the board)".
+- **Closed as not planned**, or for any other reason, it never counts: drop it
+  from the waiting issue's Dependencies.
+- **Closed as completed**, the dispatcher's next pass unblocks the waiting
+  issue. Its other holds, such as `needs-human`, stay.
+- **Closed before an upgrade**, reconcile looks it up and records it within a
+  pass.
+
+See [ADR 0020](adr/0020-an-ignored-dependency-counts-once-closed-as-completed.md).
+
 Reopening the issue takes the label off and brings the card back to the stage
 its label names, or to the stage it was abandoned from, or to Build; to Build
 rather than Review while its pull request stays closed. A card moved out of

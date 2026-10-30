@@ -25,6 +25,8 @@ const store = vi.hoisted(() => ({
   clock: 0,
   leases: [] as { id: string; issueNumber: number; state: string; started: boolean; at: number }[],
   triagedAt: new Map<number, number>(),
+  /** What GitHub last said of each issue labelled openadlc:ignore, by `repoId#number`. */
+  ignored: new Map<string, { repoId: string; number: number; state: 'open' | 'closed'; stateReason: string | null; closedAt: string | null }>(),
 }));
 
 vi.mock('@openadlc/db', () => {
@@ -47,10 +49,14 @@ vi.mock('@openadlc/db', () => {
     // As the store resolves one: its own repository by `#N` or its full name,
     // another through `getRepoByName`, and none for one the install lacks.
     resolveDependency: vi.fn(async (own: { id: string; fullName: string }, ref: { repo: string | null; number: number }) => {
-      if (ref.repo === null || ref.repo.toLowerCase() === own.fullName.toLowerCase()) return { managed: true, issue: await getIssue(own.id, ref.number) };
+      const ignoredOf = (repoId: string) => store.ignored.get(`${repoId}#${ref.number}`) ?? null;
+      if (ref.repo === null || ref.repo.toLowerCase() === own.fullName.toLowerCase()) return { managed: true, issue: await getIssue(own.id, ref.number), ignored: ignoredOf(own.id) };
       const repo = await getRepoByName(ref.repo);
-      return repo ? { managed: true, issue: await getIssue(repo.id, ref.number) } : { managed: false, issue: null };
+      return repo ? { managed: true, issue: await getIssue(repo.id, ref.number), ignored: ignoredOf(repo.id) } : { managed: false, issue: null, ignored: null };
     }),
+  },
+  ignoredIssues: {
+    listForRepos: vi.fn(async (repoIds: readonly string[]) => [...store.ignored.values()].filter((one) => repoIds.includes(one.repoId))),
   },
   leases: {
     expireStaleLeases: vi.fn(async () => []),
@@ -113,6 +119,7 @@ function stored(values: Record<string, string | Error>): void {
 beforeEach(() => {
   store.leases = [];
   store.triagedAt.clear();
+  store.ignored.clear();
   vi.mocked(leases.createLease).mockClear();
   vi.mocked(issues.listRoutableIssues).mockClear();
   vi.mocked(settings.getSetting).mockClear();
@@ -249,6 +256,97 @@ describe('a blocked issue whose dependencies have shipped', () => {
       vi.mocked(issues.getIssue).mockResolvedValue(null);
       vi.unstubAllGlobals();
     }
+  });
+});
+
+/**
+ * Built by hand outside the crew, an issue labelled `openadlc:ignore` never
+ * reaches Done: what named it under Dependencies stayed blocked after it
+ * closed as completed, and was skipped as waiting on one "OpenADLC has not
+ * seen" (#214). Its record is what GitHub last said of it.
+ */
+describe('a dependency labelled openadlc:ignore', () => {
+  const WAITING = `${BODY}\n\n### Dependencies\n\n- #18`;
+  const ignore = (state: 'open' | 'closed', stateReason: string | null) =>
+    store.ignored.set('repo-api#18', { repoId: 'repo-api', number: 18, state, stateReason, closedAt: state === 'closed' ? '2026-10-20T10:00:00Z' : null });
+
+  function answering() {
+    const posted: { url: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: { body?: string }) => {
+        posted.push({ url, body: init?.body ? JSON.parse(init.body) : null });
+        return new Response('{"changed":true}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    return posted;
+  }
+
+  afterEach(() => {
+    vi.mocked(issues.listBlockedIssues).mockImplementation(async () => []);
+    vi.mocked(issues.listRoutableIssues).mockImplementation(async (repoId: string) => [issue(repoId, repoId === 'repo-api' ? 1 : 2)] as never);
+    vi.unstubAllGlobals();
+  });
+
+  describe('holds a blocked issue until it closes as completed', () => {
+    beforeEach(() => {
+      // needs-human is a person's hold, read apart from this: unblocking
+      // swaps only blocked for start:now.
+      vi.mocked(issues.listBlockedIssues).mockImplementation(async (repoId: string) =>
+        repoId === 'repo-api' ? ([{ repoId, number: 12, labels: ['blocked', 'adlc:build', 'needs-human'], body: WAITING, declaredPaths: [] }] as never) : [],
+      );
+    });
+
+    it('is unblocked once it closed as completed, its other labels left as they are', async () => {
+      const posted = answering();
+      ignore('closed', 'completed');
+      const decisions = await dispatcher().runOnce();
+      expect(posted.filter((one) => one.url.includes('/unblock'))).toEqual([
+        { url: 'http://127.0.0.1:1/internal/issues/api/12/unblock', body: { dependencies: ['#18'] } },
+      ]);
+      expect(decisions.find((one) => one.action === 'unblocked')?.issue).toBe(12);
+    });
+
+    it('is not unblocked by one closed as not planned, or still open', async () => {
+      const posted = answering();
+      ignore('closed', 'not_planned');
+      await dispatcher().runOnce();
+      ignore('open', null);
+      await dispatcher().runOnce();
+      expect(posted.filter((one) => one.url.includes('/unblock'))).toEqual([]);
+    });
+
+    it('is not unblocked by one GitHub cannot find, which nothing records', async () => {
+      const posted = answering();
+      await dispatcher().runOnce();
+      expect(posted.filter((one) => one.url.includes('/unblock'))).toEqual([]);
+    });
+  });
+
+  describe('keeps an issue marked start:now from being leased', () => {
+    beforeEach(() => {
+      vi.mocked(issues.listRoutableIssues).mockImplementation(async (repoId: string) =>
+        repoId === 'repo-api' ? ([{ ...issue(repoId, 1), body: WAITING }] as never) : [],
+      );
+    });
+
+    it('while it is open, and says it is ignored rather than not seen', async () => {
+      ignore('open', null);
+      const decisions = await dispatcher().runOnce();
+      expect(decisions.find((one) => one.issue === 1 && one.action === 'skipped')?.reason).toBe('waits on #18, ignored and still open');
+    });
+
+    it('once it closed as not planned, and says so', async () => {
+      ignore('closed', 'not_planned');
+      const decisions = await dispatcher().runOnce();
+      expect(decisions.find((one) => one.issue === 1 && one.action === 'skipped')?.reason).toBe('waits on #18, ignored and closed as not planned');
+    });
+
+    it('but not once it closed as completed', async () => {
+      ignore('closed', 'completed');
+      const decisions = await dispatcher().runOnce();
+      expect(decisions.some((one) => one.issue === 1 && one.action === 'skipped' && String(one.reason).includes('#18'))).toBe(false);
+    });
   });
 });
 

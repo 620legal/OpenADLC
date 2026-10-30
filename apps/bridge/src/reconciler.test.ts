@@ -48,7 +48,15 @@ vi.mock('@openadlc/db', () => ({
     }),
     forget: vi.fn(async () => undefined),
     setIssueLabels: vi.fn(async () => undefined),
+    // Dependencies an open issue names that nothing has recorded.
+    unresolvedDependencies: vi.fn(async () => UNRESOLVED),
     setVouched: vi.fn(async (_repoId: string, number: number, text: Record<string, unknown>) => void VOUCHED_SET.push({ number, ...text })),
+  },
+  // What GitHub last said of each issue labelled openadlc:ignore.
+  ignoredIssues: {
+    listForRepos: vi.fn(async () => IGNORED),
+    record: vi.fn(async (_repoId: string, number: number, state: Record<string, unknown>) => void IGNORED_WRITTEN.push({ number, ...state })),
+    forget: vi.fn(async (_repoId: string, number: number) => void IGNORED_FORGOTTEN.push(number)),
   },
   leases: {
     listActiveLeases: vi.fn(async () => ACTIVE_LEASES),
@@ -135,6 +143,13 @@ let HOSTS: { id: string; name: string; lastSeenAt: string | null }[] = [];
 let ENDED = new Set<string>();
 let LEASES_BY_ID = new Map<string, { id: string; prNumber: number | null }>();
 
+/** Dependencies an open issue names that nothing has recorded (`issues.unresolvedDependencies`). */
+let UNRESOLVED: number[] = [];
+/** The ignored records already kept, and what reconcile wrote and forgot of them. */
+let IGNORED: { repoId: string; number: number; state: 'open' | 'closed'; stateReason: string | null; closedAt: string | null }[] = [];
+let IGNORED_WRITTEN: Record<string, unknown>[] = [];
+let IGNORED_FORGOTTEN: number[] = [];
+
 /** Issue numbers the store refuses to write, for the one bad issue among good ones. */
 const REFUSED = new Set<number>();
 
@@ -177,6 +192,8 @@ let LIVE: {
   updatedAt: string;
   author: string | null;
   association: string | null;
+  stateReason?: string | null;
+  closedAt?: string | null;
 }[] = [];
 
 function issue(over: Partial<(typeof LIVE)[number]> = {}): (typeof LIVE)[number] {
@@ -328,6 +345,68 @@ beforeEach(() => {
   LABELS_SET = [];
   WORK.numbered = false;
   WORK.links.clear();
+  UNRESOLVED = [];
+  IGNORED = [];
+  IGNORED_WRITTEN = [];
+  IGNORED_FORGOTTEN = [];
+});
+
+/**
+ * An issue labelled `openadlc:ignore` is built by a person outside the crew,
+ * and the board keeps no row for one in intake, spec or no stage: what named
+ * it under Dependencies waited for good after it closed as completed (#214).
+ */
+describe('an issue labelled openadlc:ignore, read by reconcile', () => {
+  const ignored = (over: Partial<(typeof LIVE)[number]> = {}) =>
+    issue({ number: 18, labels: ['openadlc:ignore'], state: 'closed', stateReason: 'completed', closedAt: '2026-10-20T10:00:00Z', updatedAt: new Date().toISOString(), ...over });
+
+  it('records one that closed, with no row on the board, when a later pass lists it', async () => {
+    LIVE = [issue(), ignored()];
+    const once = await reconciler();
+    await once.run({ repair: true });
+    // The first pass lists open issues only; the next asks for those closed since.
+    await once.run({ repair: true });
+    expect(IGNORED_WRITTEN).toContainEqual({ number: 18, state: 'closed', stateReason: 'completed', closedAt: '2026-10-20T10:00:00Z' });
+    expect(upserts.map((row) => row.number)).not.toContain(18);
+  });
+
+  it('looks up a dependency nothing has recorded, and records it when it is ignored and closed as completed', async () => {
+    LIVE = [issue(), ignored()];
+    UNRESOLVED = [18];
+    await reconcileOnce();
+    expect(LOOKED_UP).toContain(18);
+    expect(IGNORED_WRITTEN).toEqual([{ number: 18, state: 'closed', stateReason: 'completed', closedAt: '2026-10-20T10:00:00Z' }]);
+  });
+
+  it('records nothing for a dependency GitHub does not have, which stays unmet', async () => {
+    UNRESOLVED = [404];
+    const drift = await reconcileOnce();
+    expect(LOOKED_UP).toContain(404);
+    expect(IGNORED_WRITTEN).toEqual([]);
+    expect(drift.filter((one) => one.kind === 'github_unreadable')).toEqual([]);
+  });
+
+  it('records nothing for a dependency that is not ignored', async () => {
+    LIVE = [issue(), ignored({ labels: ['bug'] })];
+    UNRESOLVED = [18];
+    await reconcileOnce();
+    expect(LOOKED_UP).toContain(18);
+    expect(IGNORED_WRITTEN).toEqual([]);
+    expect(upserts.map((row) => row.number)).not.toContain(18);
+  });
+
+  it('writes a record only when it changed, and forgets one whose label came off', async () => {
+    LIVE = [issue(), ignored({ number: 18, state: 'open', stateReason: null, closedAt: null }), issue({ number: 19, labels: ['bug'] })];
+    IGNORED = [
+      { repoId: 'repo-1', number: 18, state: 'open', stateReason: null, closedAt: null },
+      { repoId: 'repo-1', number: 19, state: 'open', stateReason: null, closedAt: null },
+    ];
+    await reconcileOnce();
+    expect(IGNORED_WRITTEN).toEqual([]);
+    // #145 is imported, and the webhook's own path forgets any record of it.
+    expect(IGNORED_FORGOTTEN).toContain(19);
+    expect(IGNORED_FORGOTTEN).not.toContain(18);
+  });
 });
 
 describe('the work items of what the sweep reads', () => {
