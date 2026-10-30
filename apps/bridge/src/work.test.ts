@@ -10,6 +10,7 @@ import {
   reviewRound,
   scopeLabelAcceptedFrom,
   standingStalls,
+  stallFrom,
   taskSummary,
   type IssueFacts,
   type TaskFacts,
@@ -146,9 +147,21 @@ describe('what a card says about the work on it', () => {
     expect(cardWork(building, { tasks: [], botName, stalls: new Map() }).reviewRound).toBeNull();
   });
 
+  it('reads the request that ran the rounds out, and nothing from an event recorded before it was kept', () => {
+    const base = { repo: 'openadlc', pr: 31, issue: 12, rounds: 3, bot: 'builder', botId: 'bot-builder' };
+    expect(stallFrom({ at: minutesAgo(10), payload: { ...base, request: '  No recorded local CI run on 1c72bdd  ', requestBy: 'lead-reviewer' } })).toMatchObject({
+      request: 'No recorded local CI run on 1c72bdd',
+      requestBy: 'lead-reviewer',
+      reason: null,
+    });
+    expect(stallFrom({ at: minutesAgo(10), payload: base })).toMatchObject({ request: null, requestBy: null });
+    expect(stallFrom({ at: minutesAgo(10), payload: { ...base, request: '   ', requestBy: ' ' } })).toMatchObject({ request: null, requestBy: null });
+    expect(stallFrom({ at: minutesAgo(10), payload: { ...base, request: 'x'.repeat(5000) } })?.request).toHaveLength(4000);
+  });
+
   it('says when the review loop stopped', () => {
     const inReview = issue({ number: 12, stage: 'review', prNumber: 31 });
-    const stall = { repo: 'openadlc', pr: 31, issue: 12, rounds: 3, botId: null, bot: null, heldBy: [], reason: null, check: null, at: minutesAgo(10) };
+    const stall = { repo: 'openadlc', pr: 31, issue: 12, rounds: 3, botId: null, bot: null, heldBy: [], reason: null, check: null, request: null, requestBy: null, at: minutesAgo(10) };
     expect(
       cardWork(inReview, { tasks: [], botName, stalls: new Map([['openadlc#31', stall]]) })
         .stalledAfterRounds,

@@ -276,8 +276,19 @@ export interface Stall {
    * why it waits.
    */
   check: string | null;
+  /**
+   * What the request for changes that hit the round cap asked for, and who
+   * sent it: the lead's seat, a person's login, or `openadlc` for the merge
+   * line. Null on an event recorded before it was kept, or for a card a
+   * person moved back.
+   */
+  request: string | null;
+  requestBy: string | null;
   at: string;
 }
+
+/** As long as a request for changes is kept (`SendBack.request`), so a hand-written event cannot flood a card. */
+const STALL_REQUEST_MAX = 4000;
 
 export function stallFrom(event: { at: string; payload: unknown }): Stall | null {
   const payload = (event.payload ?? {}) as Record<string, unknown>;
@@ -294,6 +305,8 @@ export function stallFrom(event: { at: string; payload: unknown }): Stall | null
     heldBy: Array.isArray(payload.heldBy) ? payload.heldBy.filter((seat): seat is string => typeof seat === 'string') : [],
     reason: typeof payload.reason === 'string' && payload.reason.trim() ? payload.reason.trim() : null,
     check: typeof payload.check === 'string' && payload.check.trim() ? payload.check.trim() : null,
+    request: typeof payload.request === 'string' && payload.request.trim() ? payload.request.trim().slice(0, STALL_REQUEST_MAX) : null,
+    requestBy: typeof payload.requestBy === 'string' && payload.requestBy.trim() ? payload.requestBy.trim() : null,
     at: event.at,
   };
 }

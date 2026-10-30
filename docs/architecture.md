@@ -391,7 +391,9 @@ none yet, says its kind of work instead ("writing the change").
    seat approved and each person `AGENTS.md` names for the paths it touches
    approved, and while it is held (`needs-human` or `openadlc:paused`). The lead's request for changes sends the work back to build
    (below): the card moves to Build and a patch round opens for the builder,
-   up to `maxRounds`; a loop that does not agree stops and asks a person. A
+   up to `maxRounds`; a loop that does not agree stops and asks a person,
+   and its **Needs you** card quotes the last request for changes and who
+   made it (the lead, a person, or OpenADLC for the merge line). A
    failed `ci` run is run again once, as the app (it needs "Actions: write");
    a second failure after the lead approved sends the work back to build too,
    naming the job and the step that failed. One that failed before the lead

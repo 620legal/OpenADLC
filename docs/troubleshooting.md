@@ -1301,7 +1301,7 @@ question open on it, its place in the line to merge — never from a setting
 |---|---|---|
 | Waiting for your answer | A bot asked | **Needs you**, or the question's comment on GitHub |
 | Could not finish · needs you · Review failed · needs you | The last task failed and nothing ran it again | Its **Needs you** card, and the bot's thread |
-| Stopped after N rounds · needs you | Reviews did not converge within `maxRounds` (`config/review.yaml`) | The pull request: a person decides |
+| Stopped after N rounds · needs you | Reviews did not converge within `maxRounds` (`config/review.yaml`) | Its **Needs you** card, which quotes the last request for changes; the pull request: a person decides |
 | Waiting for `<seat>` · busy with #N · 32 min | Every slot of the seat that staffs its stage (`bots.max_tasks`, Crew → tasks at once) is taken by the queued or running tasks it names; a task paused on a person's answer takes none. Since when: when the seat turned it away (a `stage.waiting_on_seat` event), or when its row or last task last changed | The task it names; or raise the seat's tasks at once on Crew |
 | Not started · `<seat>` is free · starts within a minute | Its seat turned it away while full and has room now; it starts within about a minute (`StageRunner`) | Nothing to do; if it turns to Stuck, the bridge log's `stages,` lines |
 | Not started · `<seat>` is free · next sweep in 24 min | The seat has room and nothing tried it since: a webhook that never came, or a task that was stopped or failed. The hourly stage sweep starts it | The bridge log; Start it now from its Needs you card once it is stuck |
