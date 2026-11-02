@@ -63,7 +63,7 @@ another machine is not held awake. `caffeinate -i` stops idle sleep, not a
 closed lid or Sleep from the Apple menu; a sleep with work in flight is a
 card, on any host (see
 [The machine slept while the crew worked](troubleshooting.md#the-machine-slept-while-the-crew-worked)).
-See [ADR 0027](adr/0027-the-bridge-keeps-its-host-awake-while-work-is-in-flight.md).
+See [ADR 0028](adr/0028-the-bridge-keeps-its-host-awake-while-work-is-in-flight.md).
 
 `OPENADLC_HOME` itself defaults to `~/.openadlc`, and every `openadlc` command reads it.
 Setting it is how a second install lives on the same machine; see

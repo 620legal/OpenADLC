@@ -22,7 +22,7 @@ import type { InFlight } from '@openadlc/db';
  * health check `slept` to say. That looking runs on every host, since a Linux
  * laptop that suspends costs the same.
  *
- * See docs/adr/0027-the-bridge-keeps-its-host-awake-while-work-is-in-flight.md.
+ * See docs/adr/0028-the-bridge-keeps-its-host-awake-while-work-is-in-flight.md.
  */
 
 export const KEEP_AWAKE_EVERY_MS = 30_000;

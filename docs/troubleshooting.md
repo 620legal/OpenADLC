@@ -1193,7 +1193,7 @@ pmset -g assertions | grep caffeinate
 
 It lists the `caffeinate` the bridge started, and no longer does a minute
 after the last work in flight ends, or once the switch is off. See
-[ADR 0027](adr/0027-the-bridge-keeps-its-host-awake-while-work-is-in-flight.md).
+[ADR 0028](adr/0028-the-bridge-keeps-its-host-awake-while-work-is-in-flight.md).
 
 ## The console is a blank page under a LAN name or a tunnel
 

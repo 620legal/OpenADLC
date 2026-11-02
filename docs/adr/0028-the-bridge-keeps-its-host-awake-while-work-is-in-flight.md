@@ -1,4 +1,4 @@
-# 0027. The bridge keeps its host awake while work is in flight
+# 0028. The bridge keeps its host awake while work is in flight
 
 - **Status:** accepted
 - **Date:** 2026-11-02
