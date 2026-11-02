@@ -123,6 +123,7 @@ describe('the sections of settings', () => {
       'appearance',
     ]);
     expect(hashSection('engine-updates')).toBe('system');
+    expect(hashSection('keep-awake')).toBe('system');
     expect(hashSection('system')).toBe('system');
   });
 });

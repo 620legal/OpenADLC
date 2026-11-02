@@ -9,7 +9,7 @@ commands, [cli.md](cli.md).
 | Place | Holds | Written by |
 |---|---|---|
 | `$OPENADLC_HOME/install.json` | This machine's install: driver, database, ports, the App's client id, the humans, the webhook secret | `openadlc init`, `openadlc up` (the database password), or by hand. The console's walkthrough writes the settings table instead |
-| The `settings` table | What the console set: organization, client id, automation bot, humans, operator email, public URL, install name, the engine update schedules and time zone, OpenADLC's own update (`selfUpdateSchedule`, and what the bridge records of it: `selfUpdateRun`, `selfUpdateLast`, `selfUpdateCandidate`), attribution mode, which repositories a person merges for (`bridgeMergeOff`, `ciMergeByPerson`), testing deploys, the CI minutes cap, pauses and holds, and the console's name and logo (`consoleName`, `consoleLogo`). The closed list is `SETTING_KEYS` in `packages/db/src/store/settings.ts`. No credential: the webhook secret, the App's private key and its client secret, set through the console, go to the secret store | the console |
+| The `settings` table | What the console set: organization, client id, automation bot, humans, operator email, public URL, install name, the engine update schedules and time zone, OpenADLC's own update (`selfUpdateSchedule`, and what the bridge records of it: `selfUpdateRun`, `selfUpdateLast`, `selfUpdateCandidate`), attribution mode, which repositories a person merges for (`bridgeMergeOff`, `ciMergeByPerson`), testing deploys, the CI minutes cap, pauses and holds, the console's name and logo (`consoleName`, `consoleLogo`), and whether the bridge keeps its Mac awake (`keepAwake`). The closed list is `SETTING_KEYS` in `packages/db/src/store/settings.ts`. No credential: the webhook secret, the App's private key and its client secret, set through the console, go to the secret store | the console |
 | `config/*.yaml` | The crew, the repositories to seed, the caps, the review rules | you, in git |
 | Environment variables | Everything else, per service | you, or `openadlc up` |
 | `$OPENADLC_HOME/secrets/` | Refresh tokens, signing keys, model keys, the App's private key and client secret, the webhook secret, the internal secret | OpenADLC, never by hand |
@@ -48,6 +48,22 @@ backup does), and served from `GET /v1/brand/logo` and the console's
 The header draws it only through an `<img>`. Removing either goes back to the
 default; a change shows on the next page load. See
 [ADR 0010](adr/0010-console-name-and-logo.md).
+
+**Keep awake** (Settings → System, an admin's, `keepAwake`: `on` or `off`,
+absent is on) is drawn only where the bridge runs on macOS with `caffeinate`
+on its PATH. While it is on, the bridge holds one `caffeinate -i -w <its pid>`
+whenever the install has work in flight — a task queued or running (not one
+paused on a person), a merge the merge line is updating, testing or merging,
+or a deploy waiting on its soak or a promote, or still running; merge and
+deploy rows untouched for a day do not count — and lets go a minute after
+the last of them ends. It looks every 30 seconds, and at once when the switch
+is changed; `PATCH /v1/install` takes only `on` or `off`, audited as
+`install.configured`. It covers the bridge's own host only: a hostd on
+another machine is not held awake. `caffeinate -i` stops idle sleep, not a
+closed lid or Sleep from the Apple menu; a sleep with work in flight is a
+card, on any host (see
+[The machine slept while the crew worked](troubleshooting.md#the-machine-slept-while-the-crew-worked)).
+See [ADR 0027](adr/0027-the-bridge-keeps-its-host-awake-while-work-is-in-flight.md).
 
 `OPENADLC_HOME` itself defaults to `~/.openadlc`, and every `openadlc` command reads it.
 Setting it is how a second install lives on the same machine; see

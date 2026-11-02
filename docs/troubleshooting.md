@@ -1158,6 +1158,42 @@ backup's, so the next start reports a gap from when the backup was taken; the
 tasks it lists are the ones that start really resumed or ended. See
 [ADR 0022](adr/0022-the-bridge-keeps-its-own-heartbeat-and-gap-report.md).
 
+## The machine slept while the crew worked
+
+**"This machine slept for 47 min with work in flight."** A warning card in
+Needs you. The bridge looks every 30 seconds; when a look comes more than two
+minutes after the one before, and the wall clock ran at least a minute ahead
+of the monotonic clock, which stands still while the machine is suspended, the
+machine slept. A loop that was only busy for that long moves both clocks and
+is not reported. It is recorded only when the look before saw work in flight,
+as a `bridge.slept` event, and the card says when it slept and woke, what was
+in flight (tasks, merges waiting on CI, deploys), and what keep-awake was
+doing:
+
+- **"keep-awake is off"**: the switch in Settings → System is off. The card's
+  **Open Settings** goes to it.
+- **"keep-awake was holding; a closed lid or Sleep from the Apple menu still
+  sleeps a Mac"**: `caffeinate -i` stops idle sleep only. Keep the lid open,
+  or run the install on a machine that does not sleep.
+- **"this host cannot be kept awake by OpenADLC"**: the bridge is not on
+  macOS, or found no `caffeinate`. Its **Read why** comes here.
+
+Whatever was in flight stopped where it was and went on when the machine
+woke; a task whose host was silent too long may have been ended by
+reconcile (see [A card is stuck in a column](#a-card-is-stuck-in-a-column)).
+The card clears itself an hour after the last sleep, or when you press
+**Dismiss**; a later sleep raises it again.
+
+To see the assertion on a Mac while a task runs:
+
+```bash
+pmset -g assertions | grep caffeinate
+```
+
+It lists the `caffeinate` the bridge started, and no longer does a minute
+after the last work in flight ends, or once the switch is off. See
+[ADR 0027](adr/0027-the-bridge-keeps-its-host-awake-while-work-is-in-flight.md).
+
 ## The console is a blank page under a LAN name or a tunnel
 
 **What it means.** The console and the bridge answer only under names the

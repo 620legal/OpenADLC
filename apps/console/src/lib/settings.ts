@@ -43,10 +43,14 @@ export const SETTINGS_SECTIONS = [
   { id: 'appearance', label: 'Appearance' },
 ] as const;
 
-/** `#engine-updates` is System. A failed update's card was written before the section was renamed. */
+/**
+ * `#engine-updates` is System: a failed update's card was written before the
+ * section was renamed. `#keep-awake`, where the sleep card's button lands, is
+ * a row of System.
+ */
 export function hashSection(hash: string): string | null {
   if (!hash) return null;
-  return hash === 'engine-updates' ? 'system' : hash;
+  return hash === 'engine-updates' || hash === 'keep-awake' ? 'system' : hash;
 }
 
 /**

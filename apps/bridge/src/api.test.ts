@@ -1935,6 +1935,73 @@ describe('the install’s people, written through PATCH /v1/install', () => {
   });
 });
 
+describe('keeping the host awake, through GET and PATCH /v1/install', () => {
+  const evaluateSoon = vi.fn();
+  let holding = false;
+  let available = true;
+
+  beforeEach(() => {
+    evaluateSoon.mockClear();
+    vi.mocked(audit).mockClear();
+    holding = false;
+    available = true;
+    apiDeps.keepAwake = { state: () => ({ available, holding }), evaluateSoon };
+    // The fields the install's answer reads, which this file's bridge has none of.
+    Object.assign(apiDeps.config, { organization: 'exampleco', webhookSecret: '', gitHubClientId: '', automationBot: null, humans: [], publicUrl: '', operatorEmail: '' });
+  });
+
+  const patch = (body: Record<string, unknown>) =>
+    fetch(`${bridgeUrl}/v1/install`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const read = async () => {
+    const body = (await (await fetch(`${bridgeUrl}/v1/install`)).json()) as { keepAwake?: unknown; error?: string };
+    if (body.error) throw new Error(body.error);
+    return body.keepAwake;
+  };
+
+  it('says whether it can hold, whether the switch is on, and whether it holds now', async () => {
+    expect(await read()).toEqual({ available: true, on: true, holding: false });
+    holding = true;
+    stored.settings = { keepAwake: 'on' };
+    expect(await read()).toEqual({ available: true, on: true, holding: true });
+    stored.settings = { keepAwake: 'off' };
+    holding = false;
+    available = false;
+    expect(await read()).toEqual({ available: false, on: false, holding: false });
+  });
+
+  it('says nothing of it on a bridge that does not keep its host awake', async () => {
+    delete apiDeps.keepAwake;
+    expect(await read()).toBeUndefined();
+  });
+
+  it('is switched off and on, audited by name, and looked at again at once', async () => {
+    expect((await patch({ keepAwake: 'off' })).status).toBe(200);
+    expect(stored.settings.keepAwake).toBe('off');
+    expect(evaluateSoon).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(audit)).toHaveBeenCalledWith(expect.objectContaining({ action: 'install.configured', payload: { keys: ['keepAwake'] } }));
+
+    expect((await patch({ keepAwake: 'on' })).status).toBe(200);
+    expect(stored.settings.keepAwake).toBe('on');
+    expect(evaluateSoon).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses anything but on or off, and writes nothing else in the request', async () => {
+    for (const keepAwake of ['maybe', '', true, 1]) {
+      const response = await patch({ operatorEmail: 'ops@example.test', keepAwake });
+      expect(response.status, String(keepAwake)).toBe(400);
+      expect(((await response.json()) as { error: string }).error).toBe('keepAwake is on or off');
+    }
+    expect(vi.mocked(settings.setSetting)).not.toHaveBeenCalled();
+    expect(evaluateSoon).not.toHaveBeenCalled();
+    expect(vi.mocked(audit)).not.toHaveBeenCalled();
+  });
+
+  it('is not looked at again for another setting', async () => {
+    await patch({ operatorEmail: 'ops@example.test' });
+    expect(evaluateSoon).not.toHaveBeenCalled();
+  });
+});
+
 describe('the names a cloud host’s tasks may reach, written through PATCH /v1/install', () => {
   it('are refused, since they would reach the database and never the egress proxy, with no audit entry of their own', async () => {
     const response = await fetch(`${bridgeUrl}/v1/install`, {
