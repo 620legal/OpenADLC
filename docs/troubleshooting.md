@@ -924,6 +924,25 @@ only while its command line is that service's keeper (`keep.js bridge …`); any
 other pid file is removed, never signalled, and `openadlc down` says so with
 this line. Nothing needs doing: `openadlc up` starts the service as usual.
 
+**Settings → Hosts says a host is silent, or never seen.** hostd heartbeats
+every ten seconds. A host with no heartbeat for five minutes (`HOST_SILENT_MS`)
+is **silent**: that is when the bridge's reconcile fails each task still
+running on it with "the host stopped reporting", and the row says how many it
+failed since the host's last beat. Those tasks are not resumed when hostd comes
+back; retry them from their cards. A host that has a row but has never
+heartbeated is **never seen**: the seed made its row, and hostd has not
+started under that name. Neither is cleared from the page; the row goes back to
+live at hostd's next beat. To see why hostd stopped:
+
+```bash
+openadlc doctor
+tail -n 50 "$(openadlc logs hostd)"
+```
+
+A page with no host at all means no hostd has ever registered with this
+install's database: check `openadlc doctor`, and that hostd's `DATABASE_URL` is
+this install's.
+
 ## The install's database isn't answering
 
 **What you see.** Every console page says **The install's database isn't

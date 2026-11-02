@@ -10,6 +10,9 @@ export interface HostRecord {
   capacityTasks: number;
   status: 'up' | 'down' | 'unknown';
   lastSeenAt: string | null;
+  /** What hostd saw at its last registration; null until one reports it. */
+  cpus: number | null;
+  memoryBytes: number | null;
 }
 
 interface HostRow {
@@ -21,7 +24,12 @@ interface HostRow {
   capacity_tasks: number;
   status: HostRecord['status'];
   last_seen_at: Date | null;
+  cpus: number | null;
+  // pg returns a bigint as a string.
+  memory_bytes: string | number | null;
 }
+
+const COLUMNS = 'id, name, zone, driver, capacity_bots, capacity_tasks, status, last_seen_at, cpus, memory_bytes';
 
 function toHost(row: HostRow): HostRecord {
   return {
@@ -33,12 +41,18 @@ function toHost(row: HostRow): HostRecord {
     capacityTasks: row.capacity_tasks,
     status: row.status,
     lastSeenAt: row.last_seen_at?.toISOString() ?? null,
+    cpus: row.cpus ?? null,
+    memoryBytes: row.memory_bytes == null ? null : Number(row.memory_bytes),
   };
 }
 
 /**
  * Each hostd registers itself under its name and heartbeats it; `taskRoom`
  * sums the hosts' `capacity_tasks`. `capacity_bots` is recorded only.
+ *
+ * `cpus` and `memory_bytes` are what this registration reported, not kept
+ * from the last one: a figure nobody reports now reads "not reported" on
+ * Settings → Hosts rather than an old machine's size.
  */
 export async function registerHost(input: {
   name: string;
@@ -46,10 +60,12 @@ export async function registerHost(input: {
   driver: 'docker' | 'local';
   capacityBots: number;
   capacityTasks?: number;
+  cpus?: number | null;
+  memoryBytes?: number | null;
 }): Promise<HostRecord> {
   const row = await queryOne<HostRow>(
-    `insert into hosts (name, zone, driver, capacity_bots, capacity_tasks, status, last_seen_at)
-     values ($1,$2,$3,$4,coalesce($5::int, 4),'up', now())
+    `insert into hosts (name, zone, driver, capacity_bots, capacity_tasks, status, last_seen_at, cpus, memory_bytes)
+     values ($1,$2,$3,$4,coalesce($5::int, 4),'up', now(), $6, $7)
      on conflict (name) do update set
        zone = excluded.zone,
        driver = excluded.driver,
@@ -57,9 +73,19 @@ export async function registerHost(input: {
        capacity_tasks = coalesce($5::int, hosts.capacity_tasks),
        status = 'up',
        last_seen_at = now(),
+       cpus = $6,
+       memory_bytes = $7,
        updated_at = now()
-     returning id, name, zone, driver, capacity_bots, capacity_tasks, status, last_seen_at`,
-    [input.name, input.zone, input.driver, input.capacityBots, input.capacityTasks ?? null],
+     returning ${COLUMNS}`,
+    [
+      input.name,
+      input.zone,
+      input.driver,
+      input.capacityBots,
+      input.capacityTasks ?? null,
+      input.cpus ?? null,
+      input.memoryBytes ?? null,
+    ],
   );
   if (!row) throw new Error('failed to register host');
   return toHost(row);
@@ -120,8 +146,38 @@ export async function taskLoad(): Promise<{ capacity: number; used: number } | n
 }
 
 export async function listHosts(): Promise<HostRecord[]> {
-  const rows = await query<HostRow>(
-    'select id, name, zone, driver, capacity_bots, capacity_tasks, status, last_seen_at from hosts order by name',
-  );
+  const rows = await query<HostRow>(`select ${COLUMNS} from hosts order by name`);
   return rows.map(toHost);
+}
+
+/**
+ * Per host, what Settings → Hosts says of it: `used`, the tasks holding a
+ * computer on it (`taskLoad`'s predicate, grouped by host), and
+ * `failedSilent`, the tasks failed with `stoppedReason` since its last beat,
+ * so an outage last week is not counted again. The reason comes from the
+ * caller: it is the bridge's reconcile that writes it, and this package does
+ * not import the bridge. A host with no such task is absent from the map.
+ */
+export async function hostLoads(stoppedReason: string): Promise<Map<string, { used: number; failedSilent: number }>> {
+  const rows = await query<{ host_id: string; used: string; failed_silent: string }>(
+    `select t.host_id,
+            count(*) filter (where t.state in ('queued','running') or t.state = 'paused')::text as used,
+            count(*) filter (where t.state = 'failed' and t.exit_reason = $1
+                               and h.last_seen_at is not null and t.ended_at >= h.last_seen_at)::text as failed_silent
+       from tasks t
+       join hosts h on h.id = t.host_id
+      group by t.host_id`,
+    [stoppedReason],
+  );
+  return new Map(rows.map((row) => [row.host_id, { used: Number(row.used), failedSilent: Number(row.failed_silent) }]));
+}
+
+/**
+ * Queued tasks no host has claimed yet: they count toward `taskLoad`'s `used`
+ * but toward no host's, so the page says them apart and its rows add up to
+ * the board's "N of M running".
+ */
+export async function unclaimedTasks(): Promise<number> {
+  const row = await queryOne<{ count: string }>(`select count(*)::text as count from tasks where state = 'queued' and host_id is null`);
+  return Number(row?.count ?? 0);
 }

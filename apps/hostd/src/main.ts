@@ -1,3 +1,4 @@
+import { availableParallelism, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { bots, closePool, hosts, modelAccounts, repos, settings, tasks, waitForDatabase } from '@openadlc/db';
 import { getSecretStore, internalSecretRef } from '@openadlc/github';
@@ -76,6 +77,10 @@ async function main(): Promise<void> {
     driver: driver.kind,
     capacityBots: config.capacityBots,
     capacityTasks: config.capacityTasks,
+    // What this process sees, for Settings → Hosts. Under Docker Desktop or
+    // OrbStack that is the Linux VM's CPUs and memory, not the Mac's.
+    cpus: availableParallelism(),
+    memoryBytes: totalmem(),
   });
 
   // No refresh token lives here: tokens come from the bridge's token service,

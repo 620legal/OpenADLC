@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { AppShell } from '@/components/app-header';
 import { BackupCard } from '@/components/backup-card';
 import { BridgeDown } from '@/components/bridge-down';
@@ -131,6 +132,17 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
 
             {/* OpenADLC itself is the first row of System, above the tools it runs. */}
             <EngineUpdates initial={engineUpdates} extra={<SelfUpdate initial={selfUpdate} />} />
+
+            {/* Read on their own page, `/settings/hosts`: Settings does not ask for them. */}
+            <SettingsCard
+              id="hosts"
+              title="Hosts"
+              line="The machines that run tasks: each one’s heartbeat, its tasks against its capacity, its CPUs and memory."
+            >
+              <Link href="/settings/hosts" className="self-start text-[12.5px] text-link hover:underline">
+                See the hosts
+              </Link>
+            </SettingsCard>
 
             {showEgress && egress && (
               <SettingsCard id="egress" title="Egress" line="The names this install’s tasks may reach beyond the cloud host’s own list.">

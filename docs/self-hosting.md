@@ -1971,7 +1971,11 @@ dispatcher's overlap check on the paths each issue declares.
    as its builders' tasks at once add up to.
 3. **Give the host room.** A host runs `OPENADLC_HOST_CAPACITY_TASKS` tasks at
    once (four by default), each with its seat's CPUs and memory; past that a
-   task waits for one to end.
+   task waits for one to end. **Settings → Hosts** shows each host's tasks
+   against that number ("2 of 4 tasks"), its CPUs and memory as hostd saw them
+   when it last started, and when it last heartbeated. Under Docker Desktop or
+   OrbStack the CPUs and memory are the Linux VM's, not the Mac's: raise the
+   VM's before raising the capacity.
 
 A second builder seat is still how a repository gets a second GitHub account:
 **Settings → Crew → Add a builder** adds the next free seat — `builder-2`, then
