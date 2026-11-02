@@ -103,6 +103,17 @@ describe('holding the host awake while work is in flight', () => {
     expect(keepAwake.state().holding).toBe(false);
   });
 
+  it('measures the grace on the monotonic clock, so a wall clock stepped back does not hold it', async () => {
+    const { world, children, keepAwake, pass } = rig();
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    await keepAwake.tick();
+    world.inFlight = NOTHING;
+    world.wall -= 10 * 60_000;
+    pass(KEEP_AWAKE_GRACE_MS);
+    await keepAwake.tick();
+    expect(children[0]?.killed).toEqual(['SIGTERM']);
+  });
+
   it('does not flap between one task and the next', async () => {
     const { world, spawn, children, keepAwake, pass } = rig();
     world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
@@ -282,6 +293,63 @@ describe('noticing the machine slept', () => {
       await keepAwake.tick();
       expect(slept.map((one) => one.keepAwake)).toEqual([was]);
     }
+  });
+
+  it('records a sleep whose wake tick cannot read the database, once', async () => {
+    const { world, slept, keepAwake, pass } = rig();
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    await keepAwake.tick();
+
+    // The pooled connection died with the sleep: the wake tick's read fails.
+    world.wall += FORTY_SEVEN_MINUTES;
+    world.failing = true;
+    await keepAwake.tick();
+    expect(slept).toHaveLength(1);
+    expect(slept[0]).toMatchObject({ seconds: 47 * 60, inFlight: { tasks: 1, merges: 0, deploys: 0 } });
+
+    world.failing = false;
+    pass(30_000);
+    await keepAwake.tick();
+    expect(slept).toHaveLength(1);
+  });
+
+  it('writes a sleep it could not write on the next tick, and only once', async () => {
+    let down = true;
+    const written: Slept[] = [];
+    const { world, keepAwake, pass } = rig({
+      recordSleep: async (one) => {
+        if (down) throw new Error('connection terminated');
+        written.push(one);
+      },
+    });
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    await keepAwake.tick();
+    world.wall += FORTY_SEVEN_MINUTES;
+    await keepAwake.tick();
+    expect(written).toEqual([]);
+
+    down = false;
+    pass(30_000);
+    await keepAwake.tick();
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({ sleptAt: new Date(START).toISOString(), inFlight: { tasks: 1, merges: 0, deploys: 0 } });
+
+    pass(30_000);
+    await keepAwake.tick();
+    expect(written).toHaveLength(1);
+  });
+
+  it('does not say it was holding when caffeinate could not be started', async () => {
+    const { world, slept, keepAwake } = rig({
+      spawn: () => {
+        throw new Error('spawn EAGAIN');
+      },
+    });
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    await keepAwake.tick();
+    world.wall += 10 * 60_000;
+    await keepAwake.tick();
+    expect(slept.map((one) => one.keepAwake)).toEqual(['unavailable']);
   });
 
   it('records nothing after a tick that saw no work', async () => {

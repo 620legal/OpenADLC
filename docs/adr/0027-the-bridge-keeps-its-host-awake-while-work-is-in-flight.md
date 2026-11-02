@@ -22,7 +22,8 @@ flight.
     not count.
   - merge line rows `updating`, `testing` or `merging`, with `updated_at` in
     the last 24 hours. `waiting` is held for a person, an approval or a
-    stack.
+    stack, and so is a `merging` row whose detail says it is waiting for a
+    person to merge it (`heldForPerson`); neither counts.
   - deploy runs with `updated_at` in the last 24 hours that are either
     waiting on a promote (not dispatched, promotable, on a soak or held for a
     person), or dispatched and not seen to end (a testing deploy with no
@@ -30,7 +31,13 @@ flight.
 
   The 24-hour bound is there because a merge or deploy row stuck for a day is
   a fault, not work, and would otherwise keep a laptop from ever sleeping.
-  Tasks need none: reconcile fails the stale ones.
+  Tasks need none: reconcile fails the stale ones. For deploys it holds,
+  since a run's `updated_at` moves only on a transition. For merges it drops
+  only a row the line has stopped visiting: each pass rewrites a row's state
+  and detail, which moves `updated_at`, so a `testing` row whose checks stay
+  pending counts for as long as the line keeps passing over it.
+- **The grace runs on the monotonic clock**, so a wall clock stepped back
+  does not hold the assertion until wall time catches up.
 - **One child, with a grace.** `KeepAwake` (`apps/bridge/src/keep-awake.ts`)
   ticks every 30 s. On `darwin`, with an executable `caffeinate` in a PATH
   directory, and `keepAwake` not `off`, it holds exactly one
@@ -48,10 +55,14 @@ flight.
   machine slept when the wall gap since the last tick is over 120 s and wall
   minus monotonic is over 60 s. It is recorded only when the tick before saw
   work in flight. The check runs on every host, not only where keep-awake can
-  hold.
+  hold. It is judged even on a tick whose `inFlight()` read failed, which
+  after a wake is the usual first tick, and a sleep whose event could not be
+  written keeps the tick before it as the baseline, so the next tick writes
+  it.
 - **A sleep is an event, read by a history check.** It is written as
   `bridge.slept` with `{sleptAt, wokeAt, seconds, inFlight, keepAwake:
-  holding | off | unavailable}`. The health check `slept` reads the last
+  holding | off | unavailable}`, where `holding` means a `caffeinate` was
+  alive. The health check `slept` reads the last
   hour's, newest first, and raises a warning card naming the duration, what
   was in flight and what keep-awake was doing. It is dismissed by occurrence
   (`wokeAt`) and clears an hour after the last sleep.
@@ -82,4 +93,5 @@ flight.
   counting through suspend, which would make every sleep look like a blocked
   loop.
 - Stuck merge or deploy rows that last under a day often enough that the
-  bound keeps a machine awake for nothing.
+  bound keeps a machine awake for nothing, or a merge whose checks stay
+  pending for good, which the bound does not drop while the line rewrites it.

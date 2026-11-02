@@ -27,16 +27,27 @@ export const STALE_AFTER = '24 hours';
 const PROMOTABLE = `smoke_conclusion = 'success' and sent_back_at is null and rollback_dispatched_at is null`;
 
 /**
+ * What a `merging` row's detail says when only a person can land it, as the
+ * merge line's `WAITING_FOR_PERSON` (`apps/bridge/src/merge-line.ts`), which
+ * this package cannot import.
+ */
+const WAITING_FOR_PERSON = 'waiting for a person to merge it';
+
+/**
  * One statement, so the three counts are of one moment. A `paused` task waits
  * on a person and a merge `waiting` is held for a person, an approval or a
- * stack: neither is work a sleep interrupts.
+ * stack: neither is work a sleep interrupts. Nor is a `merging` row held for
+ * a person: the line rewrites it every pass, which moves its `updated_at`, so
+ * the day's bound never drops it and it kept the Mac awake as long as it sat.
+ * A null detail is left in, as auto-merge's is.
  */
 export async function inFlight(): Promise<InFlight> {
   const [row] = await query<{ tasks: number | string; merges: number | string; deploys: number | string }>(
     `select
        (select count(*) from tasks where state in ('queued', 'running')) as tasks,
        (select count(*) from merge_lines
-          where state in ('updating', 'testing', 'merging') and updated_at > now() - interval '${STALE_AFTER}') as merges,
+          where state in ('updating', 'testing', 'merging') and updated_at > now() - interval '${STALE_AFTER}'
+            and not (state = 'merging' and coalesce(detail, '') like '%${WAITING_FOR_PERSON}%')) as merges,
        (select count(*) from deploy_runs
           where updated_at > now() - interval '${STALE_AFTER}'
             and (

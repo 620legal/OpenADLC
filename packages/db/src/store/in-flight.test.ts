@@ -41,6 +41,11 @@ describe('what the install has in flight', () => {
     expect(sql).not.toContain("'waiting'");
   });
 
+  it('leaves out a merge held for a person to land, and keeps one with no detail', async () => {
+    const sql = await statement();
+    expect(sql).toContain("and not (state = 'merging' and coalesce(detail, '') like '%waiting for a person to merge it%')) as merges");
+  });
+
   it('counts deploys waiting on a promote or still running, none untouched for a day', async () => {
     const sql = await statement();
     expect(sql).toContain("from deploy_runs where updated_at > now() - interval '24 hours'");

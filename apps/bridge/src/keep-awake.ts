@@ -176,47 +176,68 @@ export class KeepAwake {
       [counts, setting] = await Promise.all([this.deps.inFlight(), this.deps.setting()]);
     } catch (error) {
       // A database blip must not let go of the assertion mid-task: nothing
-      // changes, and the clocks move on so the next tick's gap is its own.
+      // changes. The tick after a wake is the one whose pooled connection is
+      // dead, so the sleep is still judged here, from the clocks already read:
+      // judged only after a good read, it was lost, and the clocks moved on
+      // past it.
       this.log(`keep-awake could not read what is in flight, so it changes nothing: ${error instanceof Error ? error.message : error}`);
-      this.last = before ? { ...before, wall, mono } : { wall, mono, inFlight: null, keepAwake: this.was(null) };
+      if (!before) this.last = { wall, mono, inFlight: null, keepAwake: this.was(null) };
+      else if (await this.judgeSleep(before, wall, mono)) this.last = { ...before, wall, mono };
       return;
     }
 
-    if (before?.inFlight && busy(before.inFlight)) await this.judgeSleep(before, wall, mono);
+    const judged = await this.judgeSleep(before, wall, mono);
     if (this.stopped) return;
 
-    if (busy(counts)) this.lastBusyAt = wall;
+    // The grace runs on the monotonic clock: a wall clock stepped back would
+    // leave the last busy tick in the future, and hold the assertion until
+    // wall time caught up with it.
+    if (busy(counts)) this.lastBusyAt = mono;
     const on = setting !== 'off';
-    const want = this.available && on && this.lastBusyAt !== null && wall - this.lastBusyAt < KEEP_AWAKE_GRACE_MS;
+    const want = this.available && on && this.lastBusyAt !== null && mono - this.lastBusyAt < KEEP_AWAKE_GRACE_MS;
     if (want && !this.child) this.hold();
     else if (!want && this.child) this.release();
 
-    this.last = { wall, mono, inFlight: counts, keepAwake: this.was(setting) };
+    // A sleep that could not be written keeps the tick before it as the
+    // baseline, so the next tick sees the same gap and writes it then.
+    if (judged || !before) this.last = { wall, mono, inFlight: counts, keepAwake: this.was(setting) };
   }
 
+  /**
+   * `holding` only with a live child: the card reads it as the assertion held
+   * and the Mac slept anyway, which a spawn that threw is not.
+   */
   private was(setting: string | null): KeepAwakeWas {
     if (!this.available) return 'unavailable';
-    return setting === 'off' ? 'off' : 'holding';
+    if (this.child) return 'holding';
+    return setting === 'off' ? 'off' : 'unavailable';
   }
 
-  private async judgeSleep(before: NonNullable<KeepAwake['last']>, wall: number, mono: number): Promise<void> {
+  /**
+   * Records a sleep between the tick before and this one, when the tick before
+   * saw work. False only when there was one and it could not be written.
+   */
+  private async judgeSleep(before: KeepAwake['last'], wall: number, mono: number): Promise<boolean> {
+    if (!before?.inFlight || !busy(before.inFlight)) return true;
     const gap = wall - before.wall;
     const apart = gap - (mono - before.mono);
-    if (gap <= SLEPT_AFTER_MS || apart <= SLEPT_CLOCKS_APART_MS) return;
+    if (gap <= SLEPT_AFTER_MS || apart <= SLEPT_CLOCKS_APART_MS) return true;
     const slept: Slept = {
       sleptAt: new Date(before.wall).toISOString(),
       wokeAt: new Date(wall).toISOString(),
       seconds: Math.round(gap / 1000),
-      inFlight: before.inFlight!,
+      inFlight: before.inFlight,
       keepAwake: before.keepAwake,
     };
-    this.log(`this machine slept for ${slept.seconds} s with work in flight`);
     try {
       await this.deps.recordSleep(slept);
-      this.deps.slept?.();
     } catch (error) {
-      this.log(`could not record that the machine slept: ${error instanceof Error ? error.message : error}`);
+      this.log(`could not record that the machine slept, so the next tick tries again: ${error instanceof Error ? error.message : error}`);
+      return false;
     }
+    this.log(`this machine slept for ${slept.seconds} s with work in flight`);
+    this.deps.slept?.();
+    return true;
   }
 
   private hold(): void {
