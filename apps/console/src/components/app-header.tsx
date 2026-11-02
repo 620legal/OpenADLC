@@ -2,7 +2,9 @@
 
 import Link from 'next/link';
 import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { CommandPalette } from '@/components/command-palette';
 import { IntakeDialog } from '@/components/intake-dialog';
+import { KeysHelp } from '@/components/keys-help';
 import { BoardIcon, CheckIcon, ChevronDownIcon, CostsIcon, CrewIcon, InsightsIcon, PlusIcon, SettingsIcon } from '@/components/icons';
 import { LiveRefresh } from '@/components/live-refresh';
 import { AlertsMenu, NeedsYouAlerts } from '@/components/needs-you-alerts';
@@ -470,6 +472,9 @@ export function AppShell({
       <div className={cn('flex flex-col', fill ? 'h-dvh' : 'min-h-dvh')}>
         <LiveRefresh />
         <NeedsYouAlerts data={data} />
+        {/* Once per page, whatever renders the shell: each adds one listener for its key. */}
+        <CommandPalette data={data} repo={repo} />
+        <KeysHelp />
         <AppHeader page={page} repo={repo} data={data} />
         <div className={cn('flex-1', fill && 'flex min-h-0 flex-col')}>{children}</div>
         <BottomNav page={page} repo={repo} className={fill ? undefined : 'sticky bottom-0'} />

@@ -47,6 +47,8 @@ export function IntakeDialog({
   labelOf = (name) => botLabel({ name }),
   defaultRepo,
   children,
+  open: openFromOutside,
+  onOpenChange,
 }: {
   repos: string[];
   /** The bot that took the request, as a person reads it: the bridge answers with its name. */
@@ -55,8 +57,20 @@ export function IntakeDialog({
   defaultRepo?: string;
   /** The button that opens it, where a page wants its own; one button element. */
   children?: ReactNode;
+  /**
+   * Opened from elsewhere, as the command palette's New request does: with
+   * these it draws no button of its own. The draft is the same either way.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const controlled = openFromOutside !== undefined;
+  const [openHere, setOpenHere] = useState(false);
+  const open = controlled ? openFromOutside : openHere;
+  const setOpen = (next: boolean) => {
+    if (!controlled) setOpenHere(next);
+    onOpenChange?.(next);
+  };
   // Kept across a reload: a request half written is not lost to a console
   // restarted under the tab.
   const [text, setText] = useDraft('intake:text');
@@ -136,13 +150,15 @@ export function IntakeDialog({
         if (!next) another();
       }}
     >
-      <DialogTrigger asChild>
-        {children ?? (
-          <Button size="sm" variant="primary">
-            + New request
-          </Button>
-        )}
-      </DialogTrigger>
+      {!controlled && (
+        <DialogTrigger asChild>
+          {children ?? (
+            <Button size="sm" variant="primary">
+              + New request
+            </Button>
+          )}
+        </DialogTrigger>
+      )}
       <DialogContent>
         {sent ? (
           <SentView sent={sent} said={labelOf(sent.bot).said} onAnother={another} />

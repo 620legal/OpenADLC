@@ -38,6 +38,8 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'GET /v1/threads/:bot': 'user',
   'GET /v1/threads/:bot/stream': 'user',
   // A work item: a request, its issue and its pull request, as one conversation.
+  // The work items the command palette can open: open, and closed in the last month.
+  'GET /v1/items': 'user',
   'GET /v1/items/:subject': 'user',
   'GET /v1/items/:subject/stream': 'user',
   'GET /v1/gates': 'user',
