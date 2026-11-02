@@ -57,6 +57,16 @@ vi.mock('@/app/actions', () => ({
   startItem: vi.fn(async (subject: string) => (pressed.started.push(subject), { ok: true, started: [`started spec on ${subject}`] })),
   resumeItem: vi.fn(async (subject: string) => (pressed.resumed.push(subject), { ok: true, held: null })),
 }));
+// The item's own sheet reads its conversation from the bridge; here it only has to say what it opened, and close.
+vi.mock('@/components/item-view', () => ({
+  ItemView: ({ subject, initialRole, onClose }: { subject: string; initialRole: string | null; onClose: () => void }) => (
+    <div data-item-view={subject} data-role={initialRole ?? ''}>
+      <button type="button" onClick={onClose}>
+        Close item
+      </button>
+    </div>
+  ),
+}));
 const navigated = vi.hoisted(() => [] as string[]);
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => undefined, replace: (to: string) => void navigated.push(to) }) }));
 
@@ -960,5 +970,48 @@ describe('a builder asking for more paths (#77)', () => {
     expect([...card.querySelectorAll('[role="status"]')].map((line) => line.textContent)).toEqual([words]);
     // The question stays, to be answered once that is put right.
     expect(button('Approve', card).disabled).toBe(false);
+  });
+});
+
+describe('a link to one item on the Needs-you page', () => {
+  const ASKED = item('gate:g-9', 'question', 'work', 3, {
+    subject: { repo: 'OpenADLC', number: 42, title: 'Show needs you in the tab', ref: 'OpenADLC#42', url: null, item: 'OpenADLC#42' },
+    bot: { name: 'atlas', slot: 'builder', role: 'implement', roleLabel: 'builder', githubLogin: 'atlas' },
+    question: { gateId: 'g-9', options: ['yes', 'no'] },
+  });
+  const CHECK = item('health:x', 'check_failed', 'system', 1, {
+    subject: { repo: 'OpenADLC', number: null, title: null, ref: null, url: null, item: 'OpenADLC#7' },
+  });
+
+  async function linked(to: string | null, tab: 'work' | 'system' = 'work'): Promise<void> {
+    const items = [...MIXED, ASKED, CHECK];
+    const header = headerData({ repos: ['OpenADLC'], crew: [], budget: null, needsYou: items.length, attention: items });
+    await act(async () => root.render(<NeedsYouPage items={items} crew={[]} header={header} now={NOW} tab={tab} item={to} />));
+  }
+  const opened = () => document.querySelector('[data-item-view]');
+
+  it('opens that work item’s sheet, on the role that asked, as its card would', async () => {
+    await linked('OpenADLC#42', 'system');
+    expect(opened()?.getAttribute('data-item-view')).toBe('OpenADLC#42');
+    expect(opened()?.getAttribute('data-role')).toBe('implement');
+    expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('Work');
+  });
+
+  it('spends the link once the sheet closes, so a reload does not open it again', async () => {
+    navigated.length = 0;
+    await linked('OpenADLC#42');
+    await act(async () => (document.querySelector('[data-item-view] button') as HTMLButtonElement).click());
+    expect(opened()).toBeNull();
+    expect(navigated.at(-1)).toBe('/needs-you?tab=work');
+  });
+
+  it('ignores an item that is not waiting work', async () => {
+    await linked('OpenADLC#999');
+    expect(opened()).toBeNull();
+    await linked('OpenADLC#7');
+    expect(opened()).toBeNull();
+    await linked(null);
+    expect(opened()).toBeNull();
+    expect(document.querySelectorAll('[role="tabpanel"]:not([hidden]) article').length).toBeGreaterThan(0);
   });
 });

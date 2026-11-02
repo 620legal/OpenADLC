@@ -5,6 +5,7 @@ import { createContext, useContext, useEffect, useId, useRef, useState, type Rea
 import { IntakeDialog } from '@/components/intake-dialog';
 import { BoardIcon, CheckIcon, ChevronDownIcon, CostsIcon, CrewIcon, InsightsIcon, PlusIcon, SettingsIcon } from '@/components/icons';
 import { LiveRefresh } from '@/components/live-refresh';
+import { AlertsMenu, NeedsYouAlerts } from '@/components/needs-you-alerts';
 import { RepoColorsProvider, RepoDot } from '@/components/repo-badge';
 import { labelIn } from '@/lib/bot-label';
 import { cn } from '@/lib/cn';
@@ -12,6 +13,7 @@ import { crewLine, needsYouLine } from '@/lib/crew';
 import type { Brand, Role } from '@/lib/api';
 import { boardHref, NAV, spendLevel, type HeaderData, type Page } from '@/lib/header';
 import type { RepoColorMap } from '@/lib/repo-colors';
+import { consoleName } from '@/lib/needs-you-alerts';
 import { money } from '@/lib/when';
 
 /**
@@ -57,7 +59,7 @@ export function useBrand(): Brand {
  */
 function BrandMark({ compact = false }: { compact?: boolean }) {
   const { name, logoUrl } = useBrand();
-  const shown = name ?? 'OpenADLC';
+  const shown = consoleName({ name });
   return (
     <>
       {logoUrl && (
@@ -137,6 +139,8 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
             {crewLine(data.counts)}
           </span>
           {data.spend && <Spend spend={data.spend} />}
+          {/* Every role's, unlike Settings: how this browser says something waits. */}
+          <AlertsMenu />
           {data.needsYou !== null && <NeedsChip count={data.needsYou} split={data.needsSplit} href={needsHref} />}
           <IntakeDialog repos={data.repos} labelOf={labelOf} defaultRepo={repo}>
             <button
@@ -157,10 +161,13 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
             <BrandMark compact />
           </Link>
           <RepoSwitcher repos={data.repos} colors={data.repoColors} current={repo} compact />
+          <div className="ml-auto shrink-0">
+            <AlertsMenu compact />
+          </div>
           <IntakeDialog repos={data.repos} labelOf={labelOf} defaultRepo={repo}>
             <button
               type="button"
-              className="ml-auto inline-flex h-11 items-center gap-1.5 rounded-lg bg-body px-3.5 text-sm font-medium text-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-link"
+              className="inline-flex h-11 items-center gap-1.5 rounded-lg bg-body px-3.5 text-sm font-medium text-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-link"
             >
               <PlusIcon size={15} />
               New
@@ -441,8 +448,9 @@ export function BottomNav({ page, repo = 'all', className }: { page: Page; repo?
  * `fill` is for the board, which scrolls inside itself; every other page
  * scrolls as a document and its bottom bar stays in reach while it does.
  *
- * Every page under it is read again while it is on screen, so what needs you
- * and the header's chip are current on all of them.
+ * Every page under it is read again on a timer, in the background too, so
+ * what needs you and the header's chip are current on all of them, and the
+ * tab's title and icon say so (`NeedsYouAlerts`).
  */
 export function AppShell({
   page,
@@ -461,6 +469,7 @@ export function AppShell({
     <RepoColorsProvider colors={data.repoColors}>
       <div className={cn('flex flex-col', fill ? 'h-dvh' : 'min-h-dvh')}>
         <LiveRefresh />
+        <NeedsYouAlerts data={data} />
         <AppHeader page={page} repo={repo} data={data} />
         <div className={cn('flex-1', fill && 'flex min-h-0 flex-col')}>{children}</div>
         <BottomNav page={page} repo={repo} className={fill ? undefined : 'sticky bottom-0'} />

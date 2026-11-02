@@ -1,10 +1,10 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { AppHeader, AppShell, BrandProvider } from './app-header';
+import { AppHeader, AppShell, BrandProvider, RoleProvider } from './app-header';
 
 // What keeps a page current runs only in a browser; here it only has to be there.
 vi.mock('@/components/live-refresh', () => ({ LiveRefresh: () => <meta name="live-refresh" /> }));
-import type { CrewMember } from '@/lib/api';
+import type { CrewMember, Role } from '@/lib/api';
 import { headerData, type Page } from '@/lib/header';
 
 function member(partial: Partial<CrewMember> & Pick<CrewMember, 'name'>): CrewMember {
@@ -219,5 +219,31 @@ describe('the console’s name and logo at the top left', () => {
     const html = branded({ name: '<b>x</b>', logoUrl: null });
     expect(html).not.toContain('<b>');
     expect(marks(html)[0]?.text).toBe('&lt;b&gt;x&lt;/b&gt;');
+  });
+});
+
+describe('the alerts menu', () => {
+  const data = () => headerData({ repos: ['openadlc-testbed'], crew: CREW, budget: null, needsYou: 2 });
+  const asRole = (role: Role) =>
+    renderToStaticMarkup(
+      <RoleProvider role={role}>
+        <AppHeader page="crew" data={data()} />
+      </RoleProvider>,
+    );
+
+  it('is in both headers for every role, though Settings is an admin’s', () => {
+    for (const role of ['admin', 'user'] as const) {
+      const html = asRole(role);
+      expect(html.match(/aria-label="Alerts"/g)).toHaveLength(2);
+      expect(html).toContain('Count in the tab title');
+      expect(html).toContain('Desktop notifications');
+      expect(wide(html).includes('>Settings</a>')).toBe(role === 'admin');
+    }
+  });
+
+  it('sits immediately before the needs-you chip in the wide header', () => {
+    const html = wide(asRole('user'));
+    expect(html.indexOf('aria-label="Alerts"')).toBeGreaterThan(-1);
+    expect(html.indexOf('aria-label="Alerts"')).toBeLessThan(html.indexOf('2 need you'));
   });
 });

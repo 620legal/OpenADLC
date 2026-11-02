@@ -2670,6 +2670,34 @@ nobody is let in. IAP has not yet been seen refusing someone who is not in
 certificate are in place, open the console as an identity not on the list and
 check you are refused.
 
+**What tells a person something waits, in their own browser.** The bell
+beside the header's needs-you chip is on every page and for every role, unlike
+Settings. It holds three switches, kept in that browser alone (in
+`localStorage`, like the colour mode), so each person and each browser
+chooses:
+
+- **Count in the tab title**, on unless switched off: while work or the
+  install waits, the tab reads "(2) OpenADLC" (the console's own name when one
+  is set, the same number as the chip), and its icon is an amber dot.
+- **Sound**, off unless switched on: one short, soft note when a new piece of
+  work waits. A browser that blocks sound until the page is clicked plays
+  nothing.
+- **Desktop notifications**, off unless switched on: "The builder has a
+  question about #42", or "3 new items need you" for several at once.
+  Clicking one brings the console's tab forward on that item's sheet
+  (`/needs-you?item=<item>`). Switching it on is what asks the browser's
+  permission, and nothing else asks; a browser that blocks or lacks them keeps
+  the switch off and says so under it.
+
+Only the crew's work notifies, not the install's own checks, and only what is
+new since the page loaded: a reload does not replay what was already waiting,
+and two tabs of one browser do not both notify. All of it comes from an open
+console tab, which keeps reading the page every fifteen seconds in the
+background (a browser may slow that to about a minute). With no console tab
+open nothing arrives this way; the bridge's own notifications (#225) are what
+reach a person then. A bridge that does not answer changes none of it. See
+[ADR 0024](adr/0024-needs-you-alerts-are-raised-by-the-open-page.md).
+
 ### People from outside your Google Cloud organization
 
 By default IAP signs people in with an OAuth client Google manages, and

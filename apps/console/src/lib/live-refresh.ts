@@ -6,9 +6,16 @@ import { isStaleAction } from './console-updated';
  * "Needs you", the chip in the header and the board were read once, when the
  * page was: a question a bot asked, or an answer landing, showed only after a
  * reload. There is no stream of the board to subscribe to — a bot's thread has
- * one, and the thread panel uses it — so the page is read again on a timer,
- * and only while somebody can see it: a tab in the background asks nothing,
- * and one brought back after a while is read again at once.
+ * one, and the thread panel uses it — so the page is read again on a timer.
+ *
+ * The page's own read keeps going in the background (`keepRefreshing`): it
+ * once stopped while the tab was hidden, and a question a bot asked then
+ * never reached the tab's title, the one place a person with the console
+ * behind another window would see it (`components/needs-you-alerts.tsx`). A
+ * browser slows a background timer to about a minute, which still counts.
+ * A poll that only matters on screen, such as the board's activity, still
+ * asks nothing while the tab is hidden (`refreshWhileVisible`). Either way a
+ * tab brought back after longer than one wait is read again at once.
  */
 
 export const REFRESH_EVERY_MS = 15_000;
@@ -53,6 +60,45 @@ export function refreshWhileVisible(
   page.addEventListener('visibilitychange', onVisibility);
   return () => {
     stop();
+    page.removeEventListener('visibilitychange', onVisibility);
+  };
+}
+
+/**
+ * Calls `refresh` every `every` milliseconds whether or not `page` is on
+ * screen, and at once when it comes back after longer than one wait, which a
+ * slowed background timer makes likely. Returns what stops it.
+ */
+export function keepRefreshing(
+  refresh: () => void,
+  page: Visibility,
+  options: { every?: number; now?: () => number } = {},
+): () => void {
+  const every = options.every ?? REFRESH_EVERY_MS;
+  const now = options.now ?? Date.now;
+  let last = now();
+  let timer: ReturnType<typeof setInterval> | null = null;
+
+  const read = (): void => {
+    last = now();
+    refresh();
+  };
+  const restart = (): void => {
+    if (timer !== null) clearInterval(timer);
+    timer = setInterval(read, every);
+  };
+  const onVisibility = (): void => {
+    if (page.visibilityState !== 'visible' || now() - last < every) return;
+    // The next read is a whole wait after this one, not whenever the slowed timer was due.
+    read();
+    restart();
+  };
+
+  restart();
+  page.addEventListener('visibilitychange', onVisibility);
+  return () => {
+    if (timer !== null) clearInterval(timer);
+    timer = null;
     page.removeEventListener('visibilitychange', onVisibility);
   };
 }
