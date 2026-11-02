@@ -17,6 +17,9 @@ import { isMac, isPaletteShortcut } from '@/lib/keys';
 /** Where the palette reads the jump list and whether anything is paused, each time it opens. */
 export const PALETTE_READ = '/api/palette';
 
+/** The highlight End leaves: whatever row is last, as the list grows. No row id has a space. */
+const LAST_ROW = 'last row';
+
 /**
  * ⌘K (Ctrl+K off a Mac), on every page with the header: jump to a work item
  * by its key, number or title, go to a page, or act — file a request, pause
@@ -93,7 +96,10 @@ function Palette({
   const [read, setRead] = useState<PaletteRead | null>(null);
   // The highlighted row by id, null until the person moves it. An index named
   // another row once the jump list arrived and its items went in above the
-  // commands, so Enter ran a row nobody had highlighted (#241).
+  // commands, so Enter ran a row nobody had highlighted (#241). Home and End
+  // keep meaning the first and last row (LAST_ROW) as the list grows: pinning
+  // an id there held a command that was first only until the items arrived,
+  // or last only until Resume did.
   const [activeId, setActiveId] = useState<string | null>(null);
   const [pausing, setPausing] = useState(false);
   const base = useId();
@@ -125,10 +131,15 @@ function Palette({
       ...commands.map((command): Row => ({ id: `${base}-${command.id}`, kind: 'command', command })),
     ];
   }, [read, query, role, repo, base]);
-  const found = activeId === null ? -1 : rows.findIndex((row) => row.id === activeId);
+  const found =
+    activeId === null ? -1 : activeId === LAST_ROW ? rows.length - 1 : rows.findIndex((row) => row.id === activeId);
   const current = found < 0 ? 0 : found;
   const activeRow = rows[current];
-  const setActive = (index: number) => setActiveId(rows[index]?.id ?? null);
+  // A move that lands on the row already highlighted (a clamped arrow, the
+  // pointer over it) leaves the highlight as it was, implicit or not.
+  const setActive = (index: number) => {
+    if (index !== current) setActiveId(rows[index]?.id ?? null);
+  };
 
   useEffect(() => {
     if (activeRow) document.getElementById(activeRow.id)?.scrollIntoView?.({ block: 'nearest' });
@@ -152,8 +163,8 @@ function Palette({
     const last = rows.length - 1;
     if (event.key === 'ArrowDown') setActive(Math.min(current + 1, last));
     else if (event.key === 'ArrowUp') setActive(Math.max(current - 1, 0));
-    else if (event.key === 'Home') setActive(0);
-    else if (event.key === 'End') setActive(Math.max(last, 0));
+    else if (event.key === 'Home') setActiveId(null);
+    else if (event.key === 'End') setActiveId(LAST_ROW);
     else if (event.key === 'Enter') {
       if (activeRow) run(activeRow);
     } else return;

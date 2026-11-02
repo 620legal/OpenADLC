@@ -208,6 +208,41 @@ describe('jumping to an item', () => {
     expect(search().getAttribute('aria-activedescendant')).toBe(options()[0]!.id);
   });
 
+  it('keeps Home, a clamped ArrowUp and End meaning first and last while the items load', async () => {
+    answer = { status: 200, body: { items: ITEMS, numbered: true, itemsError: null, paused: true } };
+    const held = () => {
+      let arrive: () => void = () => undefined;
+      vi.mocked(fetch).mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            arrive = () => resolve(new Response(JSON.stringify(answer.body), { status: 200, headers: { 'content-type': 'application/json' } }));
+          }),
+      );
+      return () => arrive();
+    };
+    const active = () => search().getAttribute('aria-activedescendant');
+    let arrive = held();
+    await mount();
+    await open();
+    await key({ key: 'ArrowUp' }, search());
+    await key({ key: 'ArrowDown' }, search());
+    await key({ key: 'Home' }, search());
+    await act(async () => arrive());
+    await settle();
+    expect(options()[0]!.textContent).toContain('acme-');
+    expect(active()).toBe(options()[0]!.id);
+
+    await key({ key: 'Escape' });
+    arrive = held();
+    await open();
+    await key({ key: 'End' }, search());
+    expect(options().some((row) => row.textContent?.includes('Resume'))).toBe(false);
+    await act(async () => arrive());
+    await settle();
+    expect(options().at(-1)!.textContent).toContain('Resume');
+    expect(active()).toBe(options().at(-1)!.id);
+  });
+
   it('reads the jump list once each time it opens', async () => {
     await mount();
     expect(reads).toEqual([]);
