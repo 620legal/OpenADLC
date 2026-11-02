@@ -1,25 +1,55 @@
-import { describe, expect, it, vi } from 'vitest';
-import { isNotifiable, itemLink, NOTIFIABLE, Notifier } from './notify.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  isNotifiable,
+  itemLink,
+  maskTarget,
+  memoryNotifyStore,
+  NOTIFIABLE,
+  NOTIFY_SWITCHES,
+  Notifier,
+  redactTarget,
+  requestFor,
+  TEST_TEXT,
+} from './notify.js';
 
 /**
- * Three things are worth interrupting someone for and, just as deliberately,
+ * A few things are worth interrupting someone for and, just as deliberately,
  * nothing else. That second half is the part worth pinning: a
  * platform that notifies on everything is one whose notifications are ignored,
- * including the ones that mattered. The one addition since is a thing only a
- * person can do that has gone undone and stops work — a failing health check,
- * sent once and again a day later, and its all-clear to whoever was told.
+ * including the ones that mattered. A failing health check is sent once and
+ * again a day later, and its all-clear to whoever was told; a pull request
+ * waiting on a person and a review that stopped are read from Needs you.
  */
 const configWith = (notifyWebhook: string) =>
   ({ notifyWebhook, consoleUrl: 'http://127.0.0.1:47300' }) as never;
 
+const SLACK = 'https://hooks.slack.com/services/T000/B000/XyZsecretTOKENa1b2';
+const TOPIC = 'openadlc-private-topic-a1b2';
+
+const settingsTransport = (kind: 'ntfy' | 'slack' | 'webhook', target: string, setAt = '2026-11-02T00:00:00.000Z') =>
+  memoryNotifyStore({
+    settings: { notifyTransport: JSON.stringify({ kind, ...(kind === 'ntfy' ? { server: 'https://ntfy.sh' } : {}), setAt, setBy: 'janedoe' }) },
+    target,
+  });
+
+function answering(status: number) {
+  return vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status }));
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('only a few things are worth a notification', () => {
-  it('is a gate, the spending warning and a waiting promote, and a check a person has to act on', () => {
+  it('is a gate, the spending warning, a waiting promote or merge, a stopped review, and a check a person has to act on', () => {
     expect([...NOTIFIABLE].sort()).toEqual([
       'cap_warning',
       'check_failing',
       'check_fixed',
       'gate_opened',
+      'merge_waiting',
       'promote_waiting',
+      'review_stalled',
     ]);
   });
 
@@ -31,7 +61,7 @@ describe('only a few things are worth a notification', () => {
 
   it('will not send an event it does not recognise even when asked directly', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
-    const notifier = new Notifier(configWith('https://hooks.example.invalid/x'));
+    const notifier = new Notifier(configWith('https://hooks.example.invalid/x'), memoryNotifyStore());
 
     const outcome = await notifier.send({
       event: 'gate_answered' as never,
@@ -42,13 +72,12 @@ describe('only a few things are worth a notification', () => {
 
     expect(outcome).toBe('refused');
     expect(fetchSpy).not.toHaveBeenCalled();
-    fetchSpy.mockRestore();
   });
 });
 
 describe('an install with no transport carries on', () => {
   it('logs the intent rather than failing', async () => {
-    const notifier = new Notifier(configWith(''));
+    const notifier = new Notifier(configWith(''), memoryNotifyStore());
     const outcome = await notifier.send({
       event: 'gate_opened',
       to: 'janedoe',
@@ -62,15 +91,189 @@ describe('an install with no transport carries on', () => {
   });
 
   it('does not fail the caller when the transport is down', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('connect ECONNREFUSED'));
-    const notifier = new Notifier(configWith('https://hooks.example.invalid/x'));
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('connect ECONNREFUSED'));
+    const notifier = new Notifier(configWith('https://hooks.example.invalid/x'), memoryNotifyStore());
 
     // The gate is already on GitHub and on the board. A transport that is down
     // must not take the platform with it.
-    await expect(
-      notifier.send({ event: 'gate_opened', to: null, text: 'x', link: 'y' }),
-    ).resolves.toBe('logged');
-    fetchSpy.mockRestore();
+    await expect(notifier.send({ event: 'gate_opened', to: null, text: 'x', link: 'y' })).resolves.toBe('logged');
+  });
+});
+
+describe('each transport is sent the request it reads', () => {
+  const message = { event: 'gate_opened' as const, to: 'janedoe', text: 'Mira is waiting — ¿listo?', link: 'http://127.0.0.1:47300/?item=a%2312' };
+
+  it('publishes to ntfy as JSON at the server’s root, which carries text that is not ASCII', () => {
+    const { url, init } = requestFor({ kind: 'ntfy', target: TOPIC, server: 'https://ntfy.example.com/' }, message);
+    expect(url).toBe('https://ntfy.example.com/');
+    expect(init.method).toBe('POST');
+    expect(init.headers).toEqual({ 'content-type': 'application/json' });
+    expect(JSON.parse(init.body as string)).toEqual({
+      topic: TOPIC,
+      title: 'OpenADLC',
+      message: '@janedoe: Mira is waiting — ¿listo?',
+      click: message.link,
+      tags: ['gate_opened'],
+    });
+  });
+
+  it('defaults ntfy to ntfy.sh', () => {
+    expect(requestFor({ kind: 'ntfy', target: TOPIC }, message).url).toBe('https://ntfy.sh/');
+  });
+
+  it('posts Slack its text with the link as Slack writes one', () => {
+    const { url, init } = requestFor({ kind: 'slack', target: SLACK }, { ...message, to: null });
+    expect(url).toBe(SLACK);
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ text: `Mira is waiting — ¿listo?\n<${message.link}|Open in OpenADLC>` });
+  });
+
+  it('posts the generic webhook the body it always had', () => {
+    const { url, init } = requestFor({ kind: 'webhook', target: 'https://hooks.example.com/in' }, message);
+    expect(url).toBe('https://hooks.example.com/in');
+    expect(JSON.parse(init.body as string)).toEqual({ text: '@janedoe: Mira is waiting — ¿listo?', link: message.link, event: 'gate_opened' });
+  });
+});
+
+describe('the target is a credential', () => {
+  it('is shown as its host and last four characters, never more', () => {
+    const pattern = /^(https?:\/\/[^/]+\/)?…[^/]{4}$/;
+    expect(maskTarget('slack', SLACK)).toBe('https://hooks.slack.com/…a1b2');
+    expect(maskTarget('webhook', 'https://hooks.example.com/in/secret-path-9z8y/')).toBe('https://hooks.example.com/…9z8y');
+    expect(maskTarget('ntfy', TOPIC)).toBe('…a1b2');
+    for (const masked of [maskTarget('slack', SLACK), maskTarget('ntfy', TOPIC)]) expect(masked).toMatch(pattern);
+  });
+
+  it('shows none of a short topic', () => {
+    expect(maskTarget('ntfy', 'abcde')).toBe('…');
+  });
+
+  it('is taken out of an error, whole or by its path', () => {
+    const error = `request to ${SLACK} failed; POST /services/T000/B000/XyZsecretTOKENa1b2 refused`;
+    const redacted = redactTarget(error, SLACK);
+    expect(redacted).not.toContain('XyZsecretTOKEN');
+    expect(redacted).toBe('request to … failed; POST … refused');
+    expect(redactTarget(`no topic ${TOPIC}`, TOPIC)).toBe('no topic …');
+  });
+});
+
+describe('each delivery is recorded', () => {
+  it('records an accepted send, without the target', async () => {
+    answering(204);
+    const store = settingsTransport('slack', SLACK);
+    const notifier = new Notifier(configWith(''), store);
+
+    await expect(notifier.send({ event: 'gate_opened', to: null, text: 'x', link: 'y' })).resolves.toBe('sent');
+
+    const delivery = store.events.find((event) => event.type === 'notify.delivery');
+    expect(delivery?.payload).toEqual({
+      event: 'gate_opened',
+      transport: 'slack',
+      source: 'settings',
+      setAt: '2026-11-02T00:00:00.000Z',
+      ok: true,
+      status: 204,
+      error: null,
+    });
+    expect(JSON.stringify(store.events)).not.toContain('XyZsecret');
+  });
+
+  it('records a refused send with its status', async () => {
+    answering(404);
+    const store = settingsTransport('ntfy', TOPIC);
+    const notifier = new Notifier(configWith(''), store);
+
+    await expect(notifier.test()).resolves.toMatchObject({ ok: false, status: 404 });
+    expect(store.events.filter((event) => event.type === 'notify.delivery')).toHaveLength(1);
+  });
+
+  it('records an unreachable endpoint with its error, the target taken out', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error(`getaddrinfo ENOTFOUND for ${SLACK}`));
+    const store = settingsTransport('slack', SLACK);
+    const notifier = new Notifier(configWith(''), store);
+
+    const result = await notifier.test();
+    expect(result).toMatchObject({ ok: false, status: null });
+    expect(result?.error).toContain('ENOTFOUND');
+    expect(result?.error).not.toContain('XyZsecret');
+    expect(JSON.stringify(store.events)).not.toContain('XyZsecret');
+  });
+
+  it('sends Settings’ test with its own words and a link back to Settings', async () => {
+    const fetchSpy = answering(200);
+    const notifier = new Notifier(configWith(''), settingsTransport('ntfy', TOPIC));
+
+    await expect(notifier.test()).resolves.toEqual({ ok: true, status: 200, error: null });
+    const body = JSON.parse(fetchSpy.mock.calls[0]![1]!.body as string);
+    expect(body).toMatchObject({ message: TEST_TEXT, click: 'http://127.0.0.1:47300/settings/notifications', tags: ['test'] });
+  });
+
+  it('has nothing to test with no transport', async () => {
+    await expect(new Notifier(configWith(''), memoryNotifyStore()).test()).resolves.toBeNull();
+  });
+});
+
+describe('each kind can be switched off', () => {
+  it('lists a switch for each kind, a failing check and its all-clear as one', () => {
+    expect([...NOTIFY_SWITCHES].sort()).toEqual(['cap_warning', 'check_failing', 'gate_opened', 'merge_waiting', 'promote_waiting', 'review_stalled']);
+  });
+
+  it('does not send a kind that is off, and records that it was', async () => {
+    const fetchSpy = answering(200);
+    const store = settingsTransport('slack', SLACK);
+    store.settings.notifyKinds = JSON.stringify({ gate_opened: false });
+    const notifier = new Notifier(configWith(''), store);
+
+    await expect(notifier.send({ event: 'gate_opened', to: null, text: 'x', link: 'y' })).resolves.toBe('off');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(store.events).toEqual([expect.objectContaining({ type: 'notify.gate_opened', payload: expect.objectContaining({ off: true }) })]);
+    expect(store.events.some((event) => event.type === 'notify.delivery')).toBe(false);
+  });
+
+  it('holds back a check’s all-clear with its failure', async () => {
+    const fetchSpy = answering(200);
+    const store = settingsTransport('slack', SLACK);
+    store.settings.notifyKinds = JSON.stringify({ check_failing: false });
+    const notifier = new Notifier(configWith(''), store);
+
+    await expect(notifier.send({ event: 'check_fixed', to: null, text: 'x', link: 'y' })).resolves.toBe('off');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('sends the kinds that are on', async () => {
+    answering(200);
+    const store = settingsTransport('slack', SLACK);
+    store.settings.notifyKinds = JSON.stringify({ gate_opened: false });
+    const notifier = new Notifier(configWith(''), store);
+
+    await expect(notifier.send({ event: 'cap_warning', to: null, text: 'x', link: 'y' })).resolves.toBe('sent');
+  });
+});
+
+describe('the environment’s webhook is the fallback', () => {
+  it('posts today’s body to OPENADLC_NOTIFY_WEBHOOK when nothing is set in Settings', async () => {
+    const fetchSpy = answering(200);
+    const notifier = new Notifier(configWith('https://hooks.example.com/env'), memoryNotifyStore());
+
+    await notifier.send({ event: 'gate_opened', to: null, text: 'x', link: 'y' });
+    expect(fetchSpy.mock.calls[0]![0]).toBe('https://hooks.example.com/env');
+    expect(JSON.parse(fetchSpy.mock.calls[0]![1]!.body as string)).toEqual({ text: 'the owner: x', link: 'y', event: 'gate_opened' });
+  });
+
+  it('gives way to Settings’ choice', async () => {
+    const fetchSpy = answering(200);
+    const notifier = new Notifier(configWith('https://hooks.example.com/env'), settingsTransport('slack', SLACK));
+
+    await notifier.send({ event: 'gate_opened', to: null, text: 'x', link: 'y' });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]![0]).toBe(SLACK);
+  });
+
+  it('is used when Settings names a kind whose target a restore left behind', async () => {
+    const store = settingsTransport('slack', SLACK);
+    store.secret = null;
+    const transport = await new Notifier(configWith('https://hooks.example.com/env'), store).transport();
+    expect(transport).toMatchObject({ kind: 'webhook', source: 'env' });
   });
 });
 

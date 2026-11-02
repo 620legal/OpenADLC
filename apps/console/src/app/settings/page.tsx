@@ -10,6 +10,7 @@ import { CrewTable } from '@/components/github-accounts';
 import { RepositoriesCard } from '@/components/repositories-card';
 import { SettingsNav } from '@/components/settings-nav';
 import { ModelAccountsCard } from '@/components/model-accounts-card';
+import { NotificationsSummary } from '@/components/notification-settings';
 import { modelAccountsKey } from '@/lib/model-accounts-key';
 import { PauseWorkCard } from '@/components/pause-work';
 import { SpendingSummary } from '@/components/spending-limits';
@@ -34,7 +35,7 @@ export const dynamic = 'force-dynamic';
  * install, Egress, the names its tasks may reach beyond the host's own list,
  * with a host a check found refused offered by `?allow-host=`; the spending
  * caps, summarised, with the amounts edited on their own page; a backup of the
- * install; pausing new work, across the install or in
+ * install; where notifications go, changed on their own page; pausing new work, across the install or in
  * chosen repositories; who may use the console; and how it looks: the color
  * mode, the console's name and logo, and each repository's and crew member's color.
  */
@@ -73,7 +74,14 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       // Shown only where tasks leave through an egress proxy: a laptop has no list to widen.
       api.egressHosts().catch(() => null),
     ]);
-    const users = await api.users().catch(() => null);
+    const [users, notifications] = await Promise.all([
+      api.users().catch(() => null),
+      // Where notifications go, for its card; a bridge without the route leaves the card saying so.
+      Promise.resolve()
+        .then(() => api.notifications())
+        .catch(() => null),
+    ]);
+    const now = new Date().toISOString();
     const asked = (await searchParams)['allow-host'];
     const offered = typeof asked === 'string' && asked.trim() ? asked.trim().toLowerCase() : null;
     // Hidden only where the bridge says tasks leave through no proxy. When
@@ -143,6 +151,9 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 See the hosts
               </Link>
             </SettingsCard>
+
+            {/* Changed on their own page, `/settings/notifications`, where Send a test is. */}
+            <NotificationsSummary view={notifications} now={now} />
 
             {showEgress && egress && (
               <SettingsCard id="egress" title="Egress" line="The names this install’s tasks may reach beyond the cloud host’s own list.">

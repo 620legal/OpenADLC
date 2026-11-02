@@ -140,6 +140,10 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'PATCH /v1/install': 'admin',
   'PATCH /v1/spending/limits': 'admin',
   'PUT /v1/costs/ci-cap': 'admin',
+  // Settings → Notifications: where the bridge notifies a person, and its test.
+  'GET /v1/settings/notifications': 'admin',
+  'PUT /v1/settings/notifications': 'admin',
+  'POST /v1/settings/notifications/test': 'admin',
   'PUT /v1/spending/limits': 'admin',
   'PATCH /v1/repos/:name': 'admin',
   // What removing one would do: its work, its leases, the crew's access to it.

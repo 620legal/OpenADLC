@@ -660,6 +660,56 @@ OpenADLC's own component areas (`area:bridge`, `area:console`, …) are in
 OpenADLC's repository, where a maintainer writes them with
 `openadlc github sync-labels --file config/labels-openadlc.json --repo <name>`.
 
+## Notifications
+
+The bridge tells a person when something needs them. **Settings →
+Notifications** (admins only) says where, which kinds, and proves it with
+**Send a test**.
+
+**Where they go.** One of:
+
+| Kind | Target | What is posted |
+|---|---|---|
+| ntfy | a topic, and its server (`https://ntfy.sh` unless you give another) | JSON to the server's root: `{ topic, title: "OpenADLC", message, click, tags: [event] }`. Subscribe to the topic in the ntfy app |
+| Slack | an incoming-webhook URL, `https://hooks.slack.com/…` | `{ text }`, with the link at its end |
+| Webhook | any `http(s)://` URL | `{ text, link, event }`, the body `OPENADLC_NOTIFY_WEBHOOK` always had |
+
+The target is a credential: a Slack or webhook URL lets anyone post as the
+install, and anyone who knows an ntfy topic can read it. It is kept only in
+the secret store (`notify-target`), and Settings shows it back as its host
+and last four characters. The `notifyTransport` setting holds the kind, the
+ntfy server and when it was set, never the target, and only `PUT
+/v1/settings/notifications` writes it. With nothing set there,
+`OPENADLC_NOTIFY_WEBHOOK` is used as the webhook.
+
+**What is sent.** Each kind has its own switch, on until a person turns it
+off (`notifyKinds`):
+
+| `event` | When |
+|---|---|
+| `gate_opened` | a bot asks a question |
+| `merge_waiting` | a pull request waits for a person to merge or approve it |
+| `review_stalled` | a review stopped |
+| `cap_warning` | the month's spend reached its warning |
+| `promote_waiting` | a promote waits for its approval |
+| `check_failing`, `check_fixed` | a blocking health check has failed for five minutes, and again a day later; and its all-clear. One switch for both |
+
+Settings' test is `event: "test"`. A receiver that switches on `event` should
+ignore a value it does not know. `merge_waiting` and `review_stalled` are read
+from Needs you every minute, once per item and the time it started waiting:
+the same pull request waiting again later is sent again, and the first look
+after an upgrade sends none of what already waited. A kind that is off is not
+sent, and is still recorded as `notify.<event>` with `off: true`.
+
+**Whether they arrive.** Every send, real or a test, is recorded as a
+`notify.delivery` event: the kind, whether the endpoint answered 2xx, its
+status or error (with the target taken out). The `notifications` health check
+reads the newest one since the transport was set or changed and sends
+nothing itself. It is a warning card, with a button to Settings →
+Notifications, while that send failed or none has got through yet, and
+clears when one does. With nothing set it passes; with only
+`OPENADLC_NOTIFY_WEBHOOK` and nothing sent yet it has no answer.
+
 ## Environment variables
 
 ✔ marks what `openadlc up` sets from install.json. Defaults are the ones used when
@@ -689,7 +739,7 @@ nothing sets a variable.
 | `OPENADLC_CONSOLE_URL` | `http://127.0.0.1:` and the console's port | Links in notifications and gates, and the browser origin allowed. Set it when people open the console at another address | |
 | `OPENADLC_CONSOLE_PORT` | 47300 | The port of the links and the allowed origin when `OPENADLC_CONSOLE_URL` is unset | ✔ |
 | `OPENADLC_TESTING_URL` | empty | Deprecated: the testing environment QA checks, for a repository whose `.github/openadlc.yml` and settings name none; empty and QA refuses | |
-| `OPENADLC_NOTIFY_WEBHOOK` | empty | Where notifications are posted as `{ text, link, event }`; empty logs them. `event` is one of `gate_opened` (a gate opened), `cap_warning` (the month's spend reached its warning), `promote_waiting` (a promote waits for its approval), `check_failing` (a blocking health check has failed for five minutes, and again a day later) and `check_fixed` (its all-clear) | |
+| `OPENADLC_NOTIFY_WEBHOOK` | empty | The generic webhook notifications are posted to as `{ text, link, event }` when nothing is set in **Settings → Notifications**, which takes precedence; empty with nothing set there logs them. `event` is one of those [Notifications](#notifications) lists | |
 | `OPENADLC_STATUS_ISSUE` | unset | The issue the status job keeps up to date and reconcile reports drift on, as `<owner>/<name>#<number>`, in a repository the install manages. A bare number, another form, or a repository the install does not manage writes nothing, and the job's output line says what to set. The issue may be public, so its body publishes only the board counts, the month's spend and cap, the open gates and active leases, and each bot's name, role, engine and authorization with its work in that repository; a bot working elsewhere reads "working in another repository". It leaves out other repositories' subjects and host names. Reconcile's comments follow the same rule: that repository's drift, and only a count of the rest. The console's status view still shows everything | |
 | `OPENADLC_JOB_<JOB>_MINUTES` | per job | A scheduled job's interval; 0 turns it off. Any length works, a month or more included; the clock starts again when the bridge restarts. RECONCILE 15, STATUS 15, BUDGET 30, STAGES 60, MERGE 10, QA 1440, CREDENTIALS 720, DEPS 10080, DEPLOY 30, ENGINES 5, RELEASES 5 (OpenADLC's own update; [self-hosting](self-hosting.md#updating-openadlc)), ATTACHMENTS 60, EVENTS 1440 | |
 | `OPENADLC_EVENT_RETENTION_DAYS` | 30 | How many days a processed GitHub delivery is kept in the `events` table; the daily `events` job removes older ones, keeping the newest. 0 keeps them for good. A value that is not a whole number of days stops the bridge at start. A delivery for a repository the install does not manage keeps only its type, delivery id and repository name | |
