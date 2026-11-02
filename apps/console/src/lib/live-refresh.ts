@@ -57,25 +57,54 @@ export function refreshWhileVisible(
   };
 }
 
+/** What one tick of the live refresh came to. */
+export type ReadOutcome = 'read' | 'updated' | 'unreachable';
+
 /**
- * One read of the page, unless the console was updated since it loaded.
+ * One read of the page, unless the console was updated since it loaded, or
+ * the bridge is not answering.
  *
  * Once a read reaches a new build of the console, Next reloads the whole page
  * by itself, without a word, and until that read every action of the page is
  * refused (`lib/console-updated.ts`): a person who pressed Pause work in the
  * seconds between got Next's raw "Server Action … was not found on the
- * server", and the work was not paused. So `probe`, an action that does
- * nothing, goes first. Refused that way, the page is not read (the read would
- * reload it under whoever is on it) and the answer is `updated`, for the page
- * to say so and offer the reload. Any other failure, such as no answer while
- * the console restarts, is left to the read, which meets it as it did before.
+ * server", and the work was not paused. So `probe`, an action that asks the
+ * bridge who is asking and nothing more, goes first. Refused that way, the
+ * page is not read (the read would reload it under whoever is on it) and the
+ * answer is `updated`, for the page to say so and offer the reload.
+ *
+ * A probe that says the bridge gave no answer is `unreachable`, and the page
+ * is not read either: `router.refresh()` reports nothing, and the board's
+ * page meets a failed read by drawing the full-page "cannot reach the
+ * bridge" screen, so a refresh during an outage replaced the board with it
+ * rather than saying what is on screen may be out of date. Any other failure,
+ * such as no answer while the console itself restarts, is left to the read,
+ * which meets it as it did before.
  */
-export async function readUnlessUpdated(probe: () => Promise<unknown>, read: () => void): Promise<'read' | 'updated'> {
+export async function readUnlessUpdated(probe: () => Promise<unknown>, read: () => void): Promise<ReadOutcome> {
   try {
-    await probe();
+    const answer = await probe();
+    if (typeof answer === 'object' && answer !== null && (answer as { bridge?: unknown }).bridge === false) return 'unreachable';
   } catch (error) {
     if (isStaleAction(error)) return 'updated';
   }
   read();
   return 'read';
+}
+
+/**
+ * Whether the page is showing what the bridge last said, and since when.
+ * `lastReadAt` is the last tick whose probe the bridge answered, the page's
+ * load counting as the first; `offlineSince` is the first tick it did not,
+ * and null while it answers.
+ */
+export interface OfflineState {
+  lastReadAt: number;
+  offlineSince: number | null;
+}
+
+export function offlineState(previous: OfflineState, outcome: ReadOutcome, now: number): OfflineState {
+  if (outcome === 'read') return { lastReadAt: now, offlineSince: null };
+  if (outcome === 'unreachable') return { lastReadAt: previous.lastReadAt, offlineSince: previous.offlineSince ?? now };
+  return previous;
 }

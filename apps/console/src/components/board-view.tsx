@@ -6,6 +6,7 @@ import { moveCard } from '@/app/actions';
 import { AppShell, useRole } from '@/components/app-header';
 import { BotAvatar, usePrefersReducedMotion, type AvatarStatus } from '@/components/avatar';
 import { BoardActivityPoll } from '@/components/board-activity-poll';
+import { BridgeGapReport } from '@/components/bridge-gap-report';
 import { FirstRun } from '@/components/first-run';
 import { NextIcon, CheckIcon, ChevronDownIcon } from '@/components/icons';
 import { NeedsYou, type OpenBot } from '@/components/needs-you';
@@ -14,7 +15,7 @@ import { PausedMark, PausedReposProvider, RepoBadge, RepoDot, useRepoColors, use
 import { ItemView } from '@/components/item-view';
 import { RunningTasks } from '@/components/running-tasks';
 import { ThreadPanel } from '@/components/thread-panel';
-import type { AttentionItem, Board, BoardCard, BoardColumn, CrewMember, WaitChain, WorkPause } from '@/lib/api';
+import type { AttentionItem, Board, BoardCard, BoardColumn, BridgeGapReport as GapReport, CrewMember, WaitChain, WorkPause } from '@/lib/api';
 import { stripItems } from '@/lib/attention-card';
 import { findBot, labelIn } from '@/lib/bot-label';
 import { withActivity, type BoardActivity } from '@/lib/board-activity';
@@ -78,6 +79,7 @@ export function BoardView({
   paused = null,
   pausedRepos = {},
   dispatching = true,
+  gap = null,
 }: {
   board: Board;
   crew: CrewMember[];
@@ -101,6 +103,8 @@ export function BoardView({
   pausedRepos?: Record<string, WorkPause>;
   /** False when the bridge runs no dispatcher, so a ready Build card says nothing will lease it. */
   dispatching?: boolean;
+  /** How long the bridge was last away and what that cost, until a person dismisses it. */
+  gap?: GapReport | null;
 }) {
   const admin = useRole() === 'admin';
   // The board as last read whole, with its running cards as last polled
@@ -249,6 +253,8 @@ export function BoardView({
     <AppShell page="board" repo={repo} data={header} fill>
       <h1 className="sr-only">Board</h1>
       <BoardActivityPoll board={read} repo={repo} watching={listOpen} onActivity={(asked, activity) => setPolled({ board: asked, activity })} />
+
+      <BridgeGapReport gap={gap} />
 
       {paused && (
         <div role="status" className="shrink-0 border-b border-alarm/30 bg-alarm/5 px-4 py-2 md:px-6">

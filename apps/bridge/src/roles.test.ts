@@ -128,6 +128,13 @@ describe('every console route says who may call it', () => {
     }
   });
 
+  it('lets a user read how long the bridge was away, and dismiss the report for everyone', () => {
+    for (const key of ['GET /v1/bridge/gap', 'POST /v1/bridge/gap/dismiss']) {
+      expect(ROUTE_ROLES[key], key).toBe('user');
+      expect(everyRoute(), key).toContain(key);
+    }
+  });
+
   it('lets everyone read the console’s name and logo, and only an admin change them', () => {
     // Every person using the console sees them in its header.
     expect(ROUTE_ROLES['GET /v1/brand']).toBe('user');

@@ -11,6 +11,7 @@ import {
   attachments,
   audit,
   bots,
+  bridgeGaps,
   ciUsage,
   costs,
   spendingLimits,
@@ -1945,6 +1946,39 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     await settings.setSetting('ciMinutesCap', minutes === null ? '' : String(minutes), identity);
     await audit({ actor: identity, action: 'ci.cap', target: 'install', payload: { minutes } });
     return { cap: minutes };
+  });
+
+  // How long the bridge was away, and what the start after it resumed or
+  // ended as orphaned (`bridge-gap.ts`): on the board until a person dismisses it.
+  router.get('/v1/bridge/gap', async () => {
+    const gap = await bridgeGaps.current();
+    if (!gap) return { gap: null };
+    return {
+      gap: {
+        lastUpAt: gap.lastUpAt,
+        backAt: gap.backAt,
+        awayMs: Date.parse(gap.backAt) - Date.parse(gap.lastUpAt),
+        tasks: gap.tasks,
+        filling: gap.filling,
+      },
+    };
+  });
+
+  // For everyone, and only the gap the person read: one merged in since is
+  // theirs to see first. Not while the start is still listing its tasks,
+  // which would go on being written to a report nobody can see.
+  router.post('/v1/bridge/gap/dismiss', async ({ body, identity }) => {
+    const input = await body<{ backAt?: unknown } | null>().catch(() => null);
+    const backAt = typeof input?.backAt === 'string' ? input.backAt : '';
+    if (!backAt || Number.isNaN(Date.parse(backAt))) throw new HttpFailure(400, 'say which report was read: { "backAt": "<its backAt>" }');
+    const outcome = await bridgeGaps.dismiss(backAt, identity);
+    if (outcome === 'none') throw new HttpFailure(404, 'no gap report is open; it may have been dismissed already');
+    if (outcome === 'filling') {
+      throw new HttpFailure(409, 'OpenADLC is still listing what it resumed and treated as orphaned. Dismiss it once the list is complete.');
+    }
+    if (outcome === 'replaced') throw new HttpFailure(409, 'A newer gap was added to this report since you read it. Read it again and dismiss that.');
+    await audit({ actor: identity, action: 'bridge.gap_dismissed', target: 'install', payload: { backAt, by: identity } });
+    return { dismissed: true };
   });
 
   // Any user may read the limits; saving them is an admin's (roles.ts).

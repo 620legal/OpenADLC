@@ -1257,6 +1257,8 @@ export const api = {
   backup: () => get<BackupInventory>('/v1/backup', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
   egressHosts: () => get<EgressHostsView>('/v1/egress/hosts', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
   users: () => get<{ users: ConsoleUser[] }>('/v1/users').then((body) => body.users),
+  /** How long the bridge was away, and what the start after cost, until a person dismisses it; see `bridge-gap.ts` in the bridge. */
+  bridgeGap: () => get<{ gap: BridgeGapReport | null }>('/v1/bridge/gap').then((body) => body.gap ?? null),
   /** Whether a person has paused new work from Settings; see `pause-work.ts` in the bridge. */
   workPauses: () =>
     get<{ paused: WorkPause | null; repos?: Record<string, WorkPause>; dispatching?: boolean }>('/v1/work/pause').then((body): WorkPauses => ({
@@ -1320,6 +1322,25 @@ export interface ReleaseEvents {
   subscribed: boolean;
   /** The app's Permissions & events page, where Release is ticked, when it is not. */
   url: string | null;
+}
+
+/** A task the bridge resumed, or ended as orphaned, on the start after a gap. */
+export interface BridgeGapTask {
+  taskId: string;
+  subject: string;
+  outcome: 'resumed' | 'orphaned';
+  why: string;
+  backAt: string;
+}
+
+/** The open report of the bridge's latest gap, with every task the gaps merged into it cost. */
+export interface BridgeGapReport {
+  lastUpAt: string;
+  backAt: string;
+  awayMs: number;
+  tasks: BridgeGapTask[];
+  /** The start after the gap is still listing its tasks: not yet complete, and not yet dismissable. */
+  filling: boolean;
 }
 
 /** A person's pause of new work, across the install or in one repository. */

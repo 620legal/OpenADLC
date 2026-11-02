@@ -28,6 +28,12 @@ export interface Drift {
     | 'bot_unconnected'
     | 'repair_failed';
   subject: string;
+  /**
+   * The task an `orphaned_task` verdict is about. A subject names an issue,
+   * which a run of tasks share, and the gap report the bridge writes after an
+   * outage links each task it ended to its own card (`bridge-gap.ts`).
+   */
+  taskId?: string;
   detail: string;
   repaired: boolean;
 }
@@ -472,6 +478,7 @@ export class Reconciler {
         drift.push({
           kind: 'orphaned_task',
           subject: task.subjectRef,
+          taskId: task.id,
           detail: 'the task was marked running but its host has stopped reporting',
           repaired: failed,
         });
@@ -503,6 +510,7 @@ export class Reconciler {
       drift.push({
         kind: 'orphaned_task',
         subject: task.subjectRef,
+        taskId: task.id,
         detail: 'the task was recorded but never handed to a host',
         repaired: failed,
       });

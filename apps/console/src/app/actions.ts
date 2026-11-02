@@ -60,13 +60,47 @@ class BridgeRefusal extends Error {
 }
 
 /**
- * Does nothing, and asks the bridge nothing. An open page calls it before it
- * reads itself again (`readUnlessUpdated`, `lib/live-refresh.ts`): a console
- * updated since the page loaded refuses it as it refuses every action of that
- * page, and the page says so before anyone presses one of its buttons.
+ * Changes nothing, and asks the bridge one thing: who is asking. An open page
+ * calls it before it reads itself again (`readUnlessUpdated`,
+ * `lib/live-refresh.ts`): a console updated since the page loaded refuses it
+ * as it refuses every action of that page, and the page says so before anyone
+ * presses one of its buttons.
+ *
+ * `bridge` is whether the bridge answered at all, on the same path the
+ * page's reads take, the person's identity carried: any answer counts, a
+ * refusal too, and only none is `false`, for the page to keep what it shows
+ * under "Can't reach OpenADLC" rather than read itself into the full-page
+ * "cannot reach the bridge" screen. It never throws for the bridge.
  */
-export async function consoleServesThisPage(): Promise<{ ok: true }> {
-  return { ok: true };
+export async function consoleServesThisPage(): Promise<{ ok: true; bridge: boolean }> {
+  const headers = await identityHeaders().catch(() => ({}));
+  const bridge = await reach(
+    `${BRIDGE_URL}/v1/me`,
+    { cache: 'no-store', headers, signal: AbortSignal.timeout(5_000) },
+    BRIDGE_NOT_ANSWERING,
+  ).then(
+    async (response) => {
+      await response.body?.cancel().catch(() => undefined);
+      return true;
+    },
+    () => false,
+  );
+  return { ok: true, bridge };
+}
+
+/**
+ * Dismisses the board's report of how long the bridge was away, for everyone.
+ * `backAt` is the gap the person read: one merged in since is refused, for
+ * them to read first.
+ */
+export async function dismissBridgeGap(backAt: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await call('/v1/bridge/gap/dismiss', 'POST', { backAt });
+    revalidatePath('/');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not dismiss the report' };
+  }
 }
 
 /**
