@@ -13,6 +13,8 @@ export const FLAGS: Readonly<Record<string, readonly string[]>> = {
   status: [],
   'console-link': [],
   doctor: [],
+  ls: ['json'],
+  watch: ['json'],
   // A command with subcommands is listed by subcommand. Listed by command, a flag
   // one subcommand reads was taken by its siblings and ignored:
   // `github apply --repo acme/one` wrote to every repository, and
@@ -103,7 +105,7 @@ export function wantsHelp(args: readonly string[]): boolean {
  * One given anything else was run all the same: `openadlc down stop-nothing`
  * stopped the stack.
  */
-const NO_ARGUMENTS = new Set(['up', 'down', 'status', 'console-link', 'doctor', 'seed', 'config']);
+const NO_ARGUMENTS = new Set(['up', 'down', 'status', 'console-link', 'doctor', 'seed', 'config', 'ls', 'watch']);
 
 /** The first argument a command that takes none was given, or null. */
 export function strayArgument(command: string, args: readonly string[]): string | null {

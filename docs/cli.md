@@ -10,7 +10,7 @@ than ignoring it, and exits 2 for that and for an `auth` or `github` subcommand
 it does not have. A subcommand takes only its own flags: `github apply --repo`
 is refused, since only `sync-labels` reads `--repo`. A single-dash argument is
 refused the same way, and so is any argument to a command that takes none
-(`up`, `down`, `status`, `console-link`, `doctor`, `seed`, `config`).
+(`up`, `down`, `status`, `console-link`, `doctor`, `seed`, `config`, `ls`, `watch`).
 `openadlc COMMAND --help` (or `-h`) prints what that command does and runs
 nothing; `openadlc help` prints every command, even when `install.json` cannot
 be read, and so does `openadlc config`, which prints that file's path.
@@ -32,6 +32,8 @@ be read, and so does `openadlc config`, which prints that file's path.
 | `openadlc down` | Stops the console, the bridge and hostd, in that order, and exits 1 if one would not stop. Each is asked to stop and forced after a grace period: up to 60 seconds for hostd, which stops its running tasks first, 20 for the bridge, 5 for the console. The database and the bots' containers are left running |
 | `openadlc console-link` | Prints a fresh sign-in link for the console of the install `OPENADLC_HOME` points at, alone on the line: `OPENADLC_CONSOLE_URL` when set, else the port in `install.json`, else `127.0.0.1:47300`. Each link works for an hour; the browser it signs in stays signed in for thirty days |
 | `openadlc status` | What is running, the board's counts, what has been spent against the cap, open gates and leases, and the crew |
+| `openadlc ls [--json]` | One line per task running, paused or waiting (queued): its id, seat, item (`620legal/OpenADLC#227`, or `request ab12cd34 (repository)`), state, how long it has been in that state, and spend against its cap (`$1.20 / $15`). With none it prints `No tasks running, paused or waiting.` and exits 0. `--json` prints one JSON array of the bridge's `GET /v1/board/tasks` and nothing else on stdout; errors go to stderr. Exits 1 when the bridge does not answer |
+| `openadlc watch [--json]` | Prints one line per board event as it happens (a task started, a question asked, a pull request held, a merge) from the bridge's `GET /v1/board/events` stream, until Ctrl-C, which exits 0. It starts from now and replays nothing. `--json` prints each event object, one per line. It exits 1 with `Run: openadlc up` when the bridge does not answer, refuses or closes the stream, or sends nothing, not even its 25-second ping, for 60 seconds |
 | `openadlc doctor` | Checks what breaks an install: Node, git, tmux, Docker, hostd's authentication, the database, the App, each bot's credential, the webhook secret and the last delivery, the health checks, the budget. Exits 1 when something is wrong |
 | `openadlc logs [SERVICE]` | Prints the path of a service's log, `bridge` by default |
 | `openadlc attach BOT SESSION` | Opens a bot's tmux session in this terminal, through the same one-use token the console's take-over uses |
@@ -40,7 +42,7 @@ be read, and so does `openadlc config`, which prints that file's path.
 | `openadlc self-update apply --checkout DIR --staging DIR --tag TAG --from SHA --to SHA` | What Settings → System runs, detached, to restart onto a release it has prepared and checked, once no task runs: stops the services, fast-forwards the checkout, swaps in the built output, installs offline, migrates and starts. It refuses to stop anything unless the checkout is clean, on `main` and at `--from`, and puts back what was if a step before the migration fails. Not for running by hand ([self-hosting](self-hosting.md#updating-openadlc)) |
 | `openadlc attribution rotate [--drop-old]` | A new key for signing the crew's posts, made by the running bridge through `POST /v1/attribution/rotate` (an admin's route), which signs with it at once and records the rotation in the audit log by key id. The old key keeps checking posts signed before it for 30 days. After a leak, `--drop-old` stops the old key and every earlier one checking at once; with signatures enforced, crew reviews already posted under them stop counting toward a merge ([security](security.md#secrets)). Take a new backup afterwards: an older one restores the old key. Exits 1 when the bridge does not answer |
 
-`openadlc status`, `doctor`, `attach` and `attribution rotate` ask the bridge's `/v1`, which a local
+`openadlc status`, `doctor`, `ls`, `watch`, `attach` and `attribution rotate` ask the bridge's `/v1`, which a local
 install serves only beside the console secret; they read it from the secret
 store, as they read the internal secret, so they need nothing set.
 

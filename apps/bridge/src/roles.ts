@@ -30,6 +30,9 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'GET /v1/board': 'user',
   // The running cards' lines, which the board reads every few seconds while one runs.
   'GET /v1/board/activity': 'user',
+  // What the crew is doing as it happens, and the tasks live now (`openadlc watch`, `openadlc ls`).
+  'GET /v1/board/events': 'user',
+  'GET /v1/board/tasks': 'user',
   'GET /v1/bots': 'user',
   'GET /v1/bots/:name': 'user',
   'GET /v1/threads/:bot': 'user',
