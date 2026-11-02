@@ -918,3 +918,57 @@ describe('a card with work running', () => {
     expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[^}]*\.working-dot[^{]*\{\s*animation: none !important;/);
   });
 });
+
+/**
+ * A card whose wait the bridge followed to a person's action says it, with a
+ * button to where it is done (2026-10-30: four cards behind one approval).
+ */
+describe('a card waiting behind a person', () => {
+  const root = { kind: 'person' as const, ref: 'openadlc#206', action: 'approve' as const, number: 213, attentionId: 'approval:openadlc#213@orzelig', url: 'https://github.com/janedoe/openadlc/pull/213' };
+  const waiting = card({
+    ref: 'openadlc#216',
+    stage: 'build',
+    title: 'Follow a wait to its root',
+    labels: ['adlc:build', 'start:now'],
+    waiting: { reason: { kind: 'concurrency', limit: 1, holders: [{ ref: 'openadlc#217', number: 217, kind: 'implement', state: 'paused', waitingOnYou: false }] }, since: minutesAgo(30), stuck: false },
+    waitChain: {
+      links: [
+        { from: 'openadlc#216', to: 'openadlc#217', kind: 'concurrency' },
+        { from: 'openadlc#217', to: 'openadlc#207', kind: 'plan_change' },
+        { from: 'openadlc#207', to: 'openadlc#206', kind: 'stack' },
+      ],
+      end: root,
+      behind: 4,
+    },
+  });
+  const board = { ...BOARD, columns: columns([waiting]) };
+  const approval: AttentionItem = {
+    id: 'approval:openadlc#213@orzelig',
+    kind: 'merge_waiting',
+    headline: "Pull request #213 waits for @orzelig's approval",
+    subject: { repo: 'openadlc', number: 206, title: null, ref: 'openadlc#206', url: null },
+    bot: null,
+    since: minutesAgo(60),
+    detail: '',
+    actions: [],
+  };
+  const mine = (html: string) => column(html, 'Build').slice(column(html, 'Build').indexOf('#216<'));
+
+  it('says the person’s action and how many wait behind it, with a button to its Needs you card above', () => {
+    const html = mine(render(board, [approval]));
+    expect(html).toContain('Waits on you: approve #213. 4 items wait behind it.');
+    expect(html).toMatch(/<button type="button" data-root="approval:openadlc#213@orzelig"[^>]*>Show in Needs you<\/button>/);
+  });
+
+  it('opens the pull request when its Needs you card is not on the page', () => {
+    const html = mine(render(board, []));
+    expect(html).toContain('Waits on you: approve #213. 4 items wait behind it.');
+    expect(html).toMatch(/<a data-root="true" href="https:\/\/github.com\/janedoe\/openadlc\/pull\/213"[^>]*>Open #213<\/a>/);
+  });
+
+  it('says what it said before, with no button, when the bridge followed nothing', () => {
+    const html = mine(render({ ...BOARD, columns: columns([{ ...waiting, waitChain: null }]) }, []));
+    expect(html).toContain('Waiting: openadlc builds 1 at a time · busy with #217 · 30 min');
+    expect(html).not.toContain('data-root');
+  });
+});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AttentionItem } from './api';
-import { alarming, faceActions, groupOf, hasMore, plainDetail } from './attention-card';
+import { alarming, faceActions, groupOf, hasMore, plainDetail, unblockedOf, unblocksLine } from './attention-card';
 
 const ITEM: AttentionItem = {
   id: 'task:t-1',
@@ -234,5 +234,24 @@ describe('a builder asking for more paths (#77)', () => {
   it('keeps turning approve all off, and stopping, in its sheet', () => {
     expect(hasMore(asking)).toBe(true);
     expect(faceActions(asking).map((action) => action.kind)).not.toContain('approve_all_off');
+  });
+});
+
+describe('what an item unblocks', () => {
+  const behind = (repo: string, number: number) => ({ ref: `${repo}#${number}`, repo, number, title: `Issue ${number}` });
+
+  it('names the cards waiting behind it, in the order the bridge gave', () => {
+    const root = { ...ITEM, unblocks: { count: 4, items: [behind('api', 207), behind('api', 217), behind('api', 216), behind('api', 214)] } };
+    expect(unblocksLine(root)).toBe('4 items wait on this: #207, #217, #216, #214.');
+    expect(unblockedOf(root)?.items[0]).toEqual({ ref: 'api#207', label: '#207', title: 'Issue 207' });
+  });
+
+  it('says one, and one in another repository by its repository', () => {
+    expect(unblocksLine({ ...ITEM, unblocks: { count: 1, items: [behind('web', 3)] } })).toBe('1 item waits on this: web#3.');
+  });
+
+  it('says nothing when nothing waits behind it, or the bridge is older', () => {
+    expect(unblocksLine(ITEM)).toBeNull();
+    expect(unblocksLine({ ...ITEM, unblocks: { count: 0, items: [] } })).toBeNull();
   });
 });

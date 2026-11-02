@@ -1,6 +1,6 @@
-import { acknowledgements, bots, issues, lastAudit, leases, listEventsOfType, mergeLines, modelAccounts, repos, requests, standingApprovals, tasks, threads, type HealthRow } from '@openadlc/db';
+import { acknowledgements, bots, issues, lastAudit, leases, listEventsOfType, modelAccounts, repos, requests, standingApprovals, tasks, threads, type HealthRow } from '@openadlc/db';
 import { rulesFileEditUrl } from './deploy-routes.js';
-import { heldForPerson, REQUIRED_CHECKS } from './merge-line.js';
+import { REQUIRED_CHECKS } from './merge-line.js';
 import { readUnowned } from './unowned-issues.js';
 import { INTAKE_STALLED } from './intake-events.js';
 import { DESIGN_MEMORY_SUPERSEDED } from './design-memory.js';
@@ -15,7 +15,6 @@ import {
   parseDependencyRefs,
   PLAN_CHANGE_REFUSE,
   roleLabel,
-  sameLogin,
   STAGE_COLUMN_TITLES,
   STAGE_KEYS,
   type StageKey,
@@ -36,8 +35,20 @@ import { endsWithSubject, subjectClosed, wasRefused } from './gates.js';
 import { failingIds, isWaiting, showsNotice, unconfirmedOf } from './health/state.js';
 import { itemOf, requestSubject } from './items.js';
 import { stillTried } from './request-queue.js';
-import { readWaitingContext, STUCK_AFTER_MS, waitingCards, waitingOf, buildCandidates, type WaitingContext, type WaitingReads } from './waiting.js';
-import { heldStacks, type HeldStack } from './stacking.js';
+import { readWaitingContext, STUCK_AFTER_MS, waitingCards, waitingOf, buildCandidates, type CardWaiting, type WaitingContext, type WaitingReads } from './waiting.js';
+import {
+  followWaits,
+  personWaitsOf,
+  readWaitFacts,
+  standingPersonAsks,
+  standingPersonAwaits,
+  type HeldPlanChange,
+  type PersonAsk,
+  type WaitFacts,
+} from './wait-chain.js';
+import type { HeldStack } from './stacking.js';
+
+export { standingPersonAsks, standingPersonAwaits, type HeldPlanChange, type PersonAsk, type PersonAwait } from './wait-chain.js';
 import { ACCOUNTS_STEP, RECONNECT } from './health/words.js';
 import type { Router } from './router.js';
 import type { SubjectTitle } from './subject-titles.js';
@@ -46,12 +57,7 @@ import {
   issueForSubject,
   issueNumberFromBranch,
   parseRef,
-  PERSON_ASKED_AGAIN,
-  PERSON_AWAITED,
   RESUME_WAITS_ON_GITHUB,
-  REVIEW_ROUND_OPENED,
-  REVIEW_STALLED,
-  REVIEW_SUBMITTED_ON,
   SEND_BACK_STALLED,
   SEND_BACK_TO_PERSON,
   stageOfTask,
@@ -376,6 +382,12 @@ export interface AttentionItem {
    * for a repository that declares none, whose card is as it was.
    */
   pull?: { repo: string; number: number };
+  /**
+   * The cards whose wait ends here (`followWaits`), in board order: what
+   * doing this lets go on. On 2026-10-30 four cards waited behind one
+   * approval, and its card said nothing of them. Absent when none does.
+   */
+  unblocks?: { count: number; items: { ref: string; repo: string; number: number; title: string }[] };
 }
 
 /** One of several items folded into a card by `foldCauses`, keeping what is its own rather than the cause's. */
@@ -443,20 +455,6 @@ type GateRow = Pick<Gate, 'id' | 'taskId' | 'question' | 'options' | 'githubComm
 type PlanChangeFacts = Pick<leases.PlanChangeRecord, 'paths' | 'held' | 'designer' | 'standing'>;
 type AskedGate = Pick<Gate, 'id' | 'taskId' | 'answer' | 'answeredAt' | 'createdAt'>;
 
-/**
- * A plan change a person approved that waits for other work to let go of its
- * paths (`Gates.approve`, `leases.listHeldPlanChanges`): its gate stays open,
- * and `blockedBy` is the issues holding them. `failed` is why adding them
- * failed once nothing held them, when it did.
- */
-export interface HeldPlanChange {
-  gateId: string;
-  paths: string[];
-  approvedBy: string;
-  blockedBy: number[];
-  failed?: string;
-}
-
 /** Answered work whose resume waits for GitHub; see `RESUME_WAITS_ON_GITHUB`. */
 export interface ResumeWait {
   taskId: string;
@@ -469,7 +467,8 @@ export interface ResumeWait {
   until: string;
 }
 
-export interface AttentionInput {
+/** `WaitFacts` are what a waiting card's chain is followed on (`wait-chain.ts`), and its `stackLinks` serve that alone. */
+export interface AttentionInput extends WaitFacts {
   now: Date;
   gates: readonly GateRow[];
   /** With a build's branch, which a build that ended without its pull request is opened from. */
@@ -1089,144 +1088,6 @@ function turnOffWhileOn(task: Pick<TaskFacts, 'kind' | 'subjectRef' | 'repoId'> 
   return on ? turnOff(widens.repo, widens.issueNumber) : null;
 }
 
-/** A person asked to approve a pull request again (`PERSON_ASKED_AGAIN`), as its card reads it. */
-export interface PersonAsk {
-  repo: string;
-  pr: number;
-  issue: number | null;
-  login: string;
-  /** The head they are asked to approve. */
-  head: string;
-  /** The head their approval was submitted on, when that is known. */
-  approvedOn: string | null;
-  /** The commit GitHub shows their approval on. */
-  shownOn: string | null;
-  at: string;
-}
-
-function personAskFrom(event: { at: string; payload: unknown }): PersonAsk | null {
-  const payload = (event.payload ?? {}) as Record<string, unknown>;
-  const { repo, pr, login, head } = payload;
-  if (typeof repo !== 'string' || typeof pr !== 'number' || typeof login !== 'string' || typeof head !== 'string') return null;
-  const commit = (value: unknown): string | null => (typeof value === 'string' && value ? value : null);
-  return {
-    repo,
-    pr,
-    issue: typeof payload.issue === 'number' ? payload.issue : null,
-    login,
-    head,
-    approvedOn: commit(payload.approvedOn),
-    shownOn: commit(payload.shownOn),
-    at: event.at,
-  };
-}
-
-/**
- * The people still asked to approve a pull request again, by `repo#pr` and
- * login: the newest ask of each, while the pull request's issue is in Review
- * when the board has it, and the person has given no verdict on it since — an
- * approval, which counts, or a request for changes (`REVIEW_SUBMITTED_ON`). A
- * pull request that closed is the caller's to leave out.
- */
-export function standingPersonAsks(
-  asks: readonly { at: string; payload: unknown }[],
-  reviews: readonly { at: string; payload: unknown }[],
-  issues: readonly Pick<IssueFacts, 'repoName' | 'number' | 'prNumber' | 'stage'>[],
-): Map<string, PersonAsk> {
-  const newest = new Map<string, PersonAsk>();
-  for (const event of asks) {
-    const ask = personAskFrom(event);
-    if (!ask) continue;
-    const key = `${ask.repo}#${ask.pr}@${ask.login.toLowerCase()}`;
-    const seen = newest.get(key);
-    if (!seen || Date.parse(ask.at) > Date.parse(seen.at)) newest.set(key, ask);
-  }
-  const standing = new Map<string, PersonAsk>();
-  for (const [key, ask] of newest) {
-    const issue = (ask.issue !== null ? issues.find((one) => one.repoName === ask.repo && one.number === ask.issue) : undefined) ?? issueForSubject(`${ask.repo}#${ask.pr}`, issues);
-    if (issue && issue.stage !== 'review') continue;
-    if (!answeredSince(reviews, `${ask.repo}#${ask.pr}`, ask.login, ask.at)) standing.set(key, { ...ask, issue: issue?.number ?? ask.issue });
-  }
-  return standing;
-}
-
-/** Whether `login` gave a verdict on the pull request after `at`: an approval, or a request for changes (`REVIEW_SUBMITTED_ON`). */
-function answeredSince(reviews: readonly { at: string; payload: unknown }[], subjectRef: string, login: string, at: string): boolean {
-  return reviews.some((event) => {
-    const payload = (event.payload ?? {}) as Record<string, unknown>;
-    return (
-      payload.subjectRef === subjectRef &&
-      typeof payload.login === 'string' &&
-      sameLogin(payload.login, login) &&
-      (payload.state === 'approved' || payload.state === 'changes_requested') &&
-      Date.parse(event.at) > Date.parse(at)
-    );
-  });
-}
-
-/** A person a crew pull request waits on for a first approval (`PERSON_AWAITED`), as its card reads it. */
-export interface PersonAwait {
-  repo: string;
-  pr: number;
-  issue: number;
-  login: string;
-  /** The head the lead approved, which they are asked to approve. */
-  head: string;
-  /** The Human review paths it touches that name them; none when they could not be read. */
-  paths: string[];
-  at: string;
-}
-
-function personAwaitFrom(event: { at: string; payload: unknown }): PersonAwait | null {
-  const payload = (event.payload ?? {}) as Record<string, unknown>;
-  const { repo, pr, issue, login, head } = payload;
-  if (typeof repo !== 'string' || typeof pr !== 'number' || typeof issue !== 'number' || typeof login !== 'string' || typeof head !== 'string') return null;
-  const paths = Array.isArray(payload.paths) ? payload.paths.filter((path): path is string => typeof path === 'string') : [];
-  return { repo, pr, issue, login, head, paths, at: event.at };
-}
-
-/**
- * The people a crew pull request still waits on for a first approval, by
- * `repo#pr` and login: the newest wait on each, while the issue is in Review
- * when the board has it — a merge, a close and a send back to Build each move
- * it out — the person has given no verdict on it since, and no review round
- * opened after it on another head. A new round is a new diff, which the lead's
- * approval the wait rested on is not of; the next wait is recorded when the lead approves
- * that. A pull request that closed is the caller's to leave out.
- */
-export function standingPersonAwaits(
-  awaits: readonly { at: string; payload: unknown }[],
-  reviews: readonly { at: string; payload: unknown }[],
-  rounds: readonly { at: string; payload: unknown }[],
-  issues: readonly Pick<IssueFacts, 'repoName' | 'number' | 'prNumber' | 'stage'>[],
-): Map<string, PersonAwait> {
-  const newest = new Map<string, PersonAwait>();
-  for (const event of awaits) {
-    const wait = personAwaitFrom(event);
-    if (!wait) continue;
-    const key = `${wait.repo}#${wait.pr}@${wait.login.toLowerCase()}`;
-    const seen = newest.get(key);
-    if (!seen || Date.parse(wait.at) > Date.parse(seen.at)) newest.set(key, wait);
-  }
-  const standing = new Map<string, PersonAwait>();
-  for (const [key, wait] of newest) {
-    const ref = `${wait.repo}#${wait.pr}`;
-    const issue = issues.find((one) => one.repoName === wait.repo && one.number === wait.issue);
-    if (issue && issue.stage !== 'review') continue;
-    if (answeredSince(reviews, ref, wait.login, wait.at)) continue;
-    // Only a round on another head ends the wait. A duplicate delivery, or a
-    // reopen or ready_for_review on the awaited head, records a round with the
-    // same sha, and awaitPeople does not record that head again, so clearing on
-    // it left review-gate saying `waiting on @login` with no card.
-    const reopened = rounds.some((event) => {
-      const round = (event.payload ?? {}) as Record<string, unknown>;
-      return round.subjectRef === ref && typeof round.sha === 'string' && round.sha !== wait.head && Date.parse(event.at) > Date.parse(wait.at);
-    });
-    if (!reopened) standing.set(key, wait);
-  }
-  return standing;
-}
-
 /** What a person's ask to approve again says happened to their approval. */
 function approvalCountsForNothing(ask: PersonAsk): string {
   const short = (sha: string) => sha.slice(0, 7);
@@ -1786,7 +1647,24 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     });
   }
 
-  items.push(...stuckItems(input, stalledIntake, subjectOf, botsById));
+  // What each card waits on, once, for the stuck work and the chains alike.
+  const workedIn = new Set(input.repos.map((repo) => repo.name));
+  const cards = input.issues.filter((issue) => workedIn.has(issue.repoName));
+  const gated = new Set(input.gates.map((gate) => gate.taskId).filter((id): id is string => Boolean(id)));
+  const waits = input.waiting
+    ? waitingOf({
+        ...input.waiting,
+        now: input.now,
+        // Only the stages a seat staffs are cards here; every issue says what a dependency is.
+        cards: waitingCards(cards.filter((issue) => ['intake', 'spec', 'build'].includes(issue.stage)), input.tasks),
+        issues: input.issues,
+        live: input.tasks.filter((task) => LIVE.includes(task.state)),
+        bots: input.bots,
+        repos: input.repos,
+        gated,
+      }).cards
+    : new Map<string, CardWaiting>();
+  items.push(...stuckItems(input, waits, stalledIntake, subjectOf, botsById));
 
   const windowStart = input.now.getTime() - ATTENTION_WINDOW_DAYS * DAY_MS;
   const endedAt = taskEndedAt;
@@ -2145,9 +2023,29 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     });
   }
 
+  // Each root a person acts on says what waits behind it, as the waiting
+  // cards name it (`followWaits`, the board's too).
+  const chains = followWaits({
+    ...input,
+    waiting: waits,
+    persons: personWaitsOf(input),
+    cards: cards.map((issue) => `${issue.repoName}#${issue.number}`),
+  });
+  const unblocks = new Map<string, { ref: string; repo: string; number: number; title: string }[]>();
+  for (const issue of cards) {
+    const ref = `${issue.repoName}#${issue.number}`;
+    const root = chains.get(ref)?.end;
+    if (root?.kind !== 'person' || !root.attentionId) continue;
+    unblocks.set(root.attentionId, [...(unblocks.get(root.attentionId) ?? []), { ref, repo: issue.repoName, number: issue.number, title: issue.title }]);
+  }
+
   const leftOut = (ref: string | null | undefined): boolean => Boolean(ref) && (ignored.has(ref!) || abandoned.has(ref!));
   return items
     .filter((item) => !leftOut(item.subject.ref) && !leftOut(item.subject.item))
+    .map((item) => {
+      const behind = unblocks.get(item.id);
+      return behind ? { ...item, unblocks: { count: behind.length, items: behind } } : item;
+    })
     .map((item) => withPull(item, input.commandRepos))
     .map((item) => ({ ...item, group: groupOf(item.kind) }))
     .sort((a, b) => Date.parse(b.since) - Date.parse(a.since) || a.id.localeCompare(b.id));
@@ -2163,24 +2061,12 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
  */
 function stuckItems(
   input: AttentionInput,
+  cards: ReadonlyMap<string, CardWaiting>,
   stalledIntake: ReadonlyMap<string, unknown>,
   subjectOf: (subjectRef: string) => { subject: AttentionSubject },
   botsById: ReadonlyMap<string, BotRow>,
 ): AttentionItem[] {
   if (!input.waiting) return [];
-  const workedIn = new Set(input.repos.map((repo) => repo.name));
-  const gated = new Set(input.gates.map((gate) => gate.taskId).filter((id): id is string => Boolean(id)));
-  const { cards } = waitingOf({
-    ...input.waiting,
-    now: input.now,
-    // Only the stages a seat staffs are cards here; every issue says what a dependency is.
-    cards: waitingCards(input.issues.filter((issue) => workedIn.has(issue.repoName) && ['intake', 'spec', 'build'].includes(issue.stage)), input.tasks),
-    issues: input.issues,
-    live: input.tasks.filter((task) => LIVE.includes(task.state)),
-    bots: input.bots,
-    repos: input.repos,
-    gated,
-  });
   const items: AttentionItem[] = [];
   for (const [ref, waiting] of cards) {
     const reason = waiting.reason;
@@ -2636,7 +2522,7 @@ export class ClosedSubjects {
 /** The rows `attentionItems` reads, from the store. */
 export async function readAttention(now: Date, deps: AttentionDeps = {}): Promise<AttentionInput> {
   const since = new Date(now.getTime() - ATTENTION_WINDOW_DAYS * DAY_MS);
-  const [gates, recent, crew, everyRepo, issueList, requestList, stallEvents, engineUpdate, checks, accounts, seen, sendBackEvents] = await Promise.all([
+  const [gates, recent, crew, everyRepo, issueList, requestList, engineUpdate, checks, accounts, seen, sendBackEvents] = await Promise.all([
     threads.listOpenGates(),
     tasks.listTasksSince(since),
     bots.listBots(),
@@ -2644,7 +2530,6 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     repos.listRepos({ includeRemoved: true }),
     issues.listIssues(),
     requests.listRequests(100),
-    listEventsOfType(REVIEW_STALLED, since),
     // Read from settings alone. A record that cannot be read is not a failed
     // update, and must not take the rest of the list down with it.
     deps.engineUpdates ? deps.engineUpdates.attention().catch(() => null) : Promise.resolve(null),
@@ -2660,9 +2545,6 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     })().catch(() => []),
   ]);
   const intakeStalls = await (async () => listEventsOfType(INTAKE_STALLED, since))().catch(() => []);
-  // OpenADLC's own holds on stacked changes, read only while something is held.
-  const paused = issueList.filter((issue) => hasPausedLabel(issue.labels));
-  const stackHolds = paused.length > 0 ? await heldStacks(paused).catch((): HeldStack[] => []) : [];
   // Why routing parked each issue labelled needs-triage, read only while one
   // is: the board reads this every fifteen seconds. A read that fails keeps the
   // card, without its reason.
@@ -2681,33 +2563,11 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     return said.length > 0 ? waitingOnGitHub(said) : [];
   })().catch((): ResumeWait[] => []);
   const designMemoryEvents = await (async () => listEventsOfType(DESIGN_MEMORY_SUPERSEDED, since))().catch(() => []);
-  // The reviews people submitted are read only when someone was asked to approve again this week.
-  const personAsks = await (async () => listEventsOfType(PERSON_ASKED_AGAIN, since))().catch(() => []);
-  const personAwaits = await (async () => listEventsOfType(PERSON_AWAITED, since))().catch(() => []);
-  const awaiting = personAwaits.some((event) => personAwaitFrom(event));
-  const personReviews =
-    personAsks.some((event) => personAskFrom(event)) || awaiting ? await (async () => listEventsOfType(REVIEW_SUBMITTED_ON, since))().catch(() => []) : [];
-  // A newer round is a new diff, which the lead's approval a wait rested on is not of.
-  const roundsOpened = awaiting ? await (async () => listEventsOfType(REVIEW_ROUND_OPENED, since))().catch(() => []) : [];
-  // Asked only when a gate is open. A read that fails holds nothing: the
-  // approved change shows as its question did.
-  const heldPlanChanges =
-    gates.length > 0
-      ? await (async () =>
-          (await leases.listHeldPlanChanges()).flatMap(({ gateId, request }) =>
-            request.held
-              ? [
-                  {
-                    gateId,
-                    paths: request.paths,
-                    approvedBy: request.held.approvedBy,
-                    blockedBy: request.held.blockedBy,
-                    ...(request.held.failed !== undefined ? { failed: request.held.failed } : {}),
-                  },
-                ]
-              : [],
-          ))().catch((): HeldPlanChange[] => [])
-      : [];
+  // What a waiting card's chain is followed on, the board's read's too:
+  // the plan changes held, the merge line's holds, the people asked or
+  // awaited, the review stalls, OpenADLC's stack holds and the stacks.
+  const facts = await readWaitFacts(issueList, gates, since);
+  const { personAsks, personAwaits, personReviews, roundsOpened, heldMerges, stallEvents } = facts;
   // What each plan-change card offers and says; one read each, and a table
   // not there yet holds nothing (#77).
   const planChanges = await (async () => leases.planChangesOfGates(gates.map((gate) => gate.id)))().catch(() => new Map<string, leases.PlanChangeRecord>());
@@ -2751,12 +2611,6 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
   const unowned = await readUnowned().catch(() => ({}));
   // A table that cannot be read holds nothing here; the deploy sweep still does.
   const heldPromotes = deps.heldPromotes ? await deps.heldPromotes().catch(() => []) : [];
-  // What the merge line holds for a person; a line that cannot be read holds nothing here.
-  const heldMerges = (await (async () => mergeLines.line())().catch(() => []))
-    .map((entry) => ({ entry, reason: heldForPerson(entry) }))
-    .filter((one): one is { entry: (typeof one)['entry']; reason: string } => one.reason !== null)
-    .map(({ entry, reason }) => ({ repo: entry.repoName, prNumber: entry.prNumber, reason, since: entry.enteredAt }));
-
   // Which repositories of a deploy or QA task that did not finish ship by
   // merging. Asked only for those, and an answer that could not be had keeps
   // the card, as the deploy path does.
@@ -2794,21 +2648,14 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     repos: repoList,
     issues: issueList,
     requests: requestList,
-    stallEvents,
     sendBackEvents,
     intakeStalls,
     triaged,
     resumeWaits,
-    heldPlanChanges,
     designMemoryEvents,
     engineUpdate,
     selfUpdate,
-    heldMerges,
-    heldStacks: stackHolds,
-    personAsks,
-    personReviews,
-    personAwaits,
-    roundsOpened,
+    ...facts,
     unowned,
     heldPromotes,
     health: checks,

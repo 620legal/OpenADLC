@@ -92,7 +92,11 @@ vi.mock('@openadlc/db', async (importOriginal) => ({
       store.leaseReads += 1;
       return store.leases;
     }),
+    listHeldPlanChanges: vi.fn(async () => []),
   },
+  // What a waiting card's chain is followed on (`readWaitFacts`).
+  mergeLines: { line: vi.fn(async () => []) },
+  stacks: { listStacks: vi.fn(async () => []) },
   hosts: {
     taskLoad: vi.fn(async () => {
       store.hostReads += 1;
@@ -1191,5 +1195,115 @@ describe('a card with nothing going on it', () => {
     expect(work.byRef.get('api#141')?.waiting).toEqual({ reason: { kind: 'host', running: 4, capacity: 4 }, since: minutesAgo(20), stuck: false });
     store.leases = [];
     store.hostLoad = null;
+  });
+});
+
+/**
+ * A waiting card's wait followed to its root on the board, as Needs you
+ * follows it: the 10-30 chain, four cards behind one approval.
+ */
+describe('a card whose wait is followed to its root', () => {
+  const card = (number: number, stage: IssueFacts['stage'], extra: Partial<IssueFacts> = {}): IssueFacts => ({
+    repoId: 'repo-1',
+    repoName: 'api',
+    number,
+    title: `Issue ${number}`,
+    stage,
+    url: `https://github.com/exampleco/api/issues/${number}`,
+    prNumber: null,
+    labels: [`adlc:${stage}`],
+    updatedAt: minutesAgo(90),
+    ...extra,
+  });
+  const crew = [{ id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: null, maxTasks: 2 }];
+  const repos = [{ id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {}, defaultBranch: 'main', concurrency: 1 }];
+  const issues = [
+    card(216, 'build', { labels: ['adlc:build', 'start:now'] }),
+    card(214, 'build', { labels: ['adlc:build', 'start:now'] }),
+    card(217, 'build', { labels: ['adlc:build', 'start:now'] }),
+    card(207, 'review', { prNumber: 212 }),
+    card(206, 'review', { prNumber: 213 }),
+  ];
+  const paused = { ...triage('api#217', 'paused'), id: 'task-217', botId: 'bot-builder', kind: 'implement' } as TaskFacts;
+  const gates = [{ id: 'gate-217', taskId: 'task-217', question: 'Add the paths?', options: ['Approve', 'Refuse'], githubCommentUrl: null, createdAt: minutesAgo(45) }];
+  const facts = {
+    heldPlanChanges: [{ gateId: 'gate-217', paths: ['apps/bridge/src/stacking.ts'], approvedBy: 'orzelig', blockedBy: [207] }],
+    stackLinks: [{ repoId: 'repo-1', issue: 207, onIssue: 206, onPr: 213 }],
+    personAwaits: [{ at: minutesAgo(120), payload: { repo: 'api', pr: 213, issue: 206, login: 'orzelig', head: 'abc1234def', paths: [] } }],
+  };
+  const work = () =>
+    boardWork({ issues, tasks: [paused], bots: crew, repos, gates, stallEvents: [], requests: [], now: NOW, waiting: {}, waitFacts: facts });
+
+  it('gives each of the four cards the approval at its root, and the root itself none', () => {
+    const board = work();
+    for (const ref of ['api#216', 'api#214', 'api#217', 'api#207']) {
+      expect(board.byRef.get(ref)?.waitChain, ref).toMatchObject({
+        end: { kind: 'person', ref: 'api#206', action: 'approve', number: 213, attentionId: 'approval:api#213@orzelig', url: 'https://github.com/exampleco/api/pull/213' },
+        behind: 4,
+      });
+    }
+    expect(board.byRef.get('api#216')?.waitChain?.links.map((link) => link.kind)).toEqual(['concurrency', 'plan_change', 'stack']);
+    expect(board.byRef.get('api#206')?.waitChain).toBeNull();
+  });
+
+  it('follows the same chains as Needs you', async () => {
+    const { attentionItems } = await import('./attention.js');
+    const items = attentionItems({ now: NOW, gates, tasks: [paused], bots: crew, repos, issues, requests: [], stallEvents: [], waiting: {}, ...facts });
+    const board = work();
+    const roots = new Map<string, string[]>();
+    for (const [ref, extras] of board.byRef) {
+      const end = extras.waitChain?.end;
+      if (end?.kind === 'person' && end.attentionId) roots.set(end.attentionId, [...(roots.get(end.attentionId) ?? []), ref]);
+    }
+    const unblocked = new Map(items.filter((item) => item.unblocks).map((item) => [item.id, item.unblocks!.items.map((one) => one.ref)]));
+    expect(unblocked).toEqual(roots);
+    expect(unblocked.get('approval:api#213@orzelig')).toEqual(['api#216', 'api#214', 'api#217', 'api#207']);
+  });
+
+  it('reads nothing more on a board where no card waits on another and no question is open', async () => {
+    const { listEventsOfType } = await import('@openadlc/db');
+    const { PERSON_ASKED_AGAIN } = await import('./work.js');
+    const asked = () => vi.mocked(listEventsOfType).mock.calls.filter(([type]) => type === PERSON_ASKED_AGAIN).length;
+    store.issues = [card(141, 'spec')];
+    store.tasks = [];
+    store.sessions = [];
+    store.settings = {};
+    store.budget = null;
+    const before = asked();
+    const quiet = await readBoardWork({ issues: store.issues, bots: [{ id: 'bot-spec', name: 'system-engineer', role: 'spec', maxTasks: 1 }], repos, gates: [], requests: [], waiting: {} }, NOW);
+    expect(asked()).toBe(before);
+    expect(quiet.byRef.get('api#141')?.waiting?.reason.kind).toBe('free');
+    expect(quiet.byRef.get('api#141')).not.toHaveProperty('waitChain');
+
+    // A card waiting on another's files is followed, and the facts read once.
+    store.issues = [card(160, 'build', { labels: ['adlc:build', 'start:now'], declaredPaths: ['src/prices.ts'] })];
+    const linked = await readBoardWork({ issues: store.issues, bots: crew, repos, gates: [], requests: [], waiting: { pathPolicy: async () => DEFAULT_PATH_POLICY } }, NOW);
+    expect(asked()).toBe(before + 1);
+    expect(linked.byRef.get('api#160')?.waitChain).toEqual({
+      links: [{ from: 'api#160', to: 'api#44', kind: 'lease' }],
+      end: { kind: 'self', ref: 'api#44', words: 'which is not on the board' },
+      behind: 1,
+    });
+  });
+
+  it('ends a chain at a stalled review only as long as Needs you has it', async () => {
+    const { listEventsOfType } = await import('@openadlc/db');
+    const { REVIEW_STALLED } = await import('./work.js');
+    const read = async (daysAgo: number) => {
+      // As the store reads them: only the events since the window asked for.
+      const stall = { at: new Date(NOW.getTime() - daysAgo * 24 * 60 * 60 * 1000).toISOString(), payload: { repo: 'api', pr: 300, issue: 231, rounds: 3 } };
+      vi.mocked(listEventsOfType).mockImplementation((async (type: string, since?: Date) =>
+        type === REVIEW_STALLED && (!since || Date.parse(stall.at) >= since.getTime()) ? [stall] : []) as never);
+      store.issues = [card(230, 'build', { labels: ['adlc:build', 'blocked'], body: '## Dependencies\n\n- #231\n' }), card(231, 'review', { prNumber: 300 })];
+      store.tasks = [];
+      try {
+        return (await readBoardWork({ issues: store.issues, bots: crew, repos, gates: [], requests: [], waiting: {} }, NOW)).byRef.get('api#230')?.waitChain;
+      } finally {
+        vi.mocked(listEventsOfType).mockImplementation(async () => []);
+      }
+    };
+    expect((await read(2))?.end).toMatchObject({ kind: 'person', action: 'review', attentionId: 'stall:api#300' });
+    // Ten days on, the board still reads it for #231's own line, but Needs you's seven days do not.
+    expect((await read(10))?.end).not.toMatchObject({ attentionId: 'stall:api#300' });
   });
 });

@@ -83,6 +83,12 @@ export interface DependencyNow {
   /** As the card names it: `#N` in its own repository, `owner/name#N` in another. */
   ref: string;
   number: number;
+  /**
+   * `repo#n` in a repository the install manages, the key the wait chain
+   * follows it by (`wait-chain.ts`); null in one it does not, where nothing
+   * it waits on can be seen. `ref` is only how the card says it.
+   */
+  target: string | null;
   /** Its stage, or null when the board has no row for it. */
   stage: StageKey | null;
   /** Closed without merging: it will never ship. */
@@ -523,6 +529,7 @@ export function waitingOf(input: WaitingInput): Waiting {
     return {
       ref: shown,
       number,
+      target: ref,
       stage: issue?.stage ?? null,
       abandoned: hasAbandonedLabel(issue?.labels),
       ignored: ignored ? { state: ignored.state, stateReason: ignored.stateReason } : null,

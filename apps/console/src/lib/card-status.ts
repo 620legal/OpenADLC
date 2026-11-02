@@ -1,4 +1,4 @@
-import type { AttentionItem, BoardCard, BoardColumn, CardTask, CardWaiting, DependencyNow, MergeLineEntry, SeatHolder } from './api';
+import type { AttentionItem, BoardCard, BoardColumn, CardTask, CardWaiting, DependencyNow, MergeLineEntry, SeatHolder, WaitChain, WaitEnd } from './api';
 import { stageOf } from './stages';
 import { ago, duration, ordinal, untilIn } from './when';
 
@@ -44,6 +44,8 @@ export interface CardStatus {
    * from one that had waited a minute.
    */
   stuck?: boolean;
+  /** The wait followed to its root that the line says (`chainLine`), for the button to that root. */
+  chain?: WaitChain;
 }
 
 /**
@@ -336,6 +338,97 @@ function waitingLine(card: BoardCard, waiting: CardWaiting, context: CardContext
   }
 }
 
+/** The root's number as the card's own board says it: `#213` in its own repository, `web#213` in another. */
+function rootNumber(end: { ref: string; number: number }, card: Pick<BoardCard, 'repo'>): string {
+  const repo = end.ref.slice(0, end.ref.lastIndexOf('#'));
+  return repo && repo !== card.repo ? `${repo}#${end.number}` : `#${end.number}`;
+}
+
+/** What a person does at a wait's root, in a few words: "approve #213", "answer #217's question". */
+export function rootActionWords(end: Extract<WaitEnd, { kind: 'person' }>, card: Pick<BoardCard, 'repo'>): string {
+  const number = rootNumber(end, card);
+  switch (end.action) {
+    case 'approve':
+      return `approve ${number}`;
+    case 'merge':
+      return `merge ${number}`;
+    case 'answer':
+      return `answer ${number}'s question`;
+    case 'resume':
+      return `resume ${number}`;
+    case 'review':
+      return `decide on ${number}'s review`;
+    case 'triage':
+      return `triage ${number}`;
+    default:
+      return end.words ?? `see to ${number}`;
+  }
+}
+
+/**
+ * A card's wait followed to its root, in a line (`followWaits` in the bridge):
+ * "Waits on you: approve #213. 4 items wait behind it." On 2026-10-30 four
+ * cards each said what they waited on one step deep, and only the last of
+ * those steps was a person's to do. Null for a card that waits straight on
+ * work going now, which says what it said before.
+ */
+export function chainLine(card: Pick<BoardCard, 'repo'>, chain: WaitChain): CardStatus | null {
+  const { end } = chain;
+  const ref = (one: string) => refInWords(one, card.repo);
+  switch (end.kind) {
+    case 'person': {
+      if (end.outside) return { text: `Waits on ${ref(end.ref)}, which is built outside the crew.`, tone: 'attention', mark: 'dot' };
+      const behind = chain.behind === 1 ? '1 item waits behind it' : `${chain.behind} items wait behind it`;
+      return { text: `Waits on you: ${rootActionWords(end, card)}. ${behind}.`, tone: 'attention', mark: 'dot' };
+    }
+    case 'self':
+      if (chain.links.length <= 1) return null;
+      return { text: `Waits on ${ref(end.ref)}, ${end.words}: needs no one.`, tone: 'muted', mark: null };
+    case 'dead': {
+      if (end.why === 'loop') {
+        const loop = (end.loop ?? [end.ref]).map(ref);
+        if (loop.length === 1) return { text: `Waits on a loop: ${loop[0]} waits on itself. It does not go on by itself.`, tone: 'attention', mark: 'dot' };
+        const around = [...loop.slice(1), loop[0]!].map((one) => `, which waits on ${one}`).join('').replace(/^, which/, '');
+        return { text: `Waits on a loop: ${loop[0]}${around}. ${loop.length <= 2 ? 'Neither' : 'None of them'} goes on by itself.`, tone: 'attention', mark: 'dot' };
+      }
+      if (end.why === 'outside') return { text: `Waits on ${ref(end.ref)}, outside this install.`, tone: 'attention', mark: 'dot' };
+      const closed = end.why === 'abandoned' ? 'closed without merging' : 'closed without being completed';
+      return { text: `Waits on ${ref(end.ref)}, which was ${closed}: it will never ship.`, tone: 'attention', mark: 'dot' };
+    }
+    case 'deep':
+      // The links walked are the bridge's limit, so the sentence follows it if it changes.
+      return { text: `Waits on ${ref(end.ref)}, ${chain.links.length} links on: followed no further.`, tone: 'muted', mark: null };
+  }
+}
+
+/** Where a card's button to its wait's root goes: the Needs you card on the page, else GitHub. */
+export interface RootButton {
+  label: string;
+  /** The Needs you item to scroll to (`data-card`). */
+  scrollTo?: string;
+  url?: string;
+}
+
+/**
+ * The button to the root of a card's wait: to its Needs you card when that is
+ * on the page (`shown`, by item id), else to the pull request or issue the
+ * person acts on (`urlOf` for a root the end names no address for). None for
+ * a root that clears by itself, nor for one with nowhere to go.
+ */
+export function rootButton(
+  card: Pick<BoardCard, 'repo'>,
+  chain: WaitChain,
+  shown: ReadonlySet<string>,
+  urlOf: (ref: string) => string | null,
+): RootButton | null {
+  const { end } = chain;
+  if (end.kind === 'self') return null;
+  if (end.kind === 'person' && end.attentionId && shown.has(end.attentionId)) return { label: 'Show in Needs you', scrollTo: end.attentionId };
+  const url = (end.kind === 'person' ? end.url : null) ?? urlOf(end.ref);
+  if (!url) return null;
+  return { label: `Open ${end.kind === 'person' ? rootNumber(end, card) : refInWords(end.ref, card.repo)}`, url };
+}
+
 /**
  * " · holds openadlc's build slot", for a build paused on a question while
  * other builds wait for its repository's builds at once: a paused task takes
@@ -430,6 +523,11 @@ export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
   if (card.stalledAfterRounds) {
     return { text: `Stopped after ${card.stalledAfterRounds} rounds · needs you`, tone: 'alarm', mark: 'dot' };
   }
+
+  // Its wait followed to its root, which says the one thing that lets it and
+  // every card behind it go on. A failed review is the card's own to see to.
+  const chained = card.waitChain && !(card.reviewFailed && card.stage === 'review') ? chainLine(card, card.waitChain) : null;
+  if (chained) return { ...chained, chain: card.waitChain! };
 
   if (card.gateOpen) {
     // A plan change approved while other work holds its paths keeps its

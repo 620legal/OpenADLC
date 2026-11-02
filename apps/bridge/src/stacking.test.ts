@@ -1,7 +1,7 @@
 import { leases } from '@openadlc/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { startBuild } from './build-start.js';
-import { STACK_LET_GO, STACK_MADE, STACK_PAUSED, STACK_STARTED, STACK_UPDATED, STACK_UPDATING, Stacking, heldStacks } from './stacking.js';
+import { STACK_LET_GO, STACK_MADE, STACK_PAUSED, STACK_STARTED, STACK_UPDATED, STACK_UPDATING, Stacking, heldStacks, stackWaitsOn } from './stacking.js';
 
 const REPO = { id: 'repo-1', name: 'shop', fullName: 'janedoe/shop', defaultBranch: 'main', concurrency: 2 };
 const OTHER = { id: 'repo-2', name: 'mill', fullName: 'janedoe/mill', defaultBranch: 'main', concurrency: 2 };
@@ -300,6 +300,25 @@ describe('an issue that depends on one in review', () => {
 
     world.issues.set(4, { ...world.issues.get(4)!, stage: 'done', labels: ['adlc:done', 'openadlc:abandoned'] });
     expect(await subject.waitingOn('shop', 5)).toBe(4);
+  });
+
+  // The wait chain judges a stack by the same rule the merge line does, from rows it already read.
+  it('waits by the one rule the wait chain reads too (`stackWaitsOn`)', async () => {
+    const { subject } = stacking();
+    await subject.sweep();
+    const stack = { onIssue: 4 };
+    for (const dependency of [
+      world.issues.get(4)!,
+      { ...world.issues.get(4)!, stage: 'merged' },
+      { ...world.issues.get(4)!, stage: 'done', labels: ['adlc:done'] },
+      { ...world.issues.get(4)!, stage: 'done', labels: ['adlc:done', 'openadlc:abandoned'] },
+    ]) {
+      world.issues.set(4, dependency);
+      expect(stackWaitsOn(stack, dependency), dependency.stage).toBe(await subject.waitingOn('shop', 5));
+    }
+    // A dependency gone from the board is still waited on, and no stack waits on nothing.
+    expect(stackWaitsOn(stack, null)).toBe(4);
+    expect(stackWaitsOn(null, world.issues.get(4)!)).toBeNull();
   });
 
   /** #5's pull request, #31, with #4 merged and the line about to bring it up to date. */

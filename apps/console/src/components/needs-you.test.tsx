@@ -668,3 +668,41 @@ describe('which button is running', () => {
     expect(stopAll).not.toBe(stop);
   });
 });
+
+/**
+ * The root of a wait says what doing it lets go on: on 2026-10-30 four cards
+ * waited behind #206's approval, and its card said nothing of them.
+ */
+describe('what an item unblocks', () => {
+  const ROOT: AttentionItem = {
+    id: 'approval:openadlc#213@orzelig',
+    kind: 'merge_waiting',
+    headline: "Pull request #213 waits for @orzelig's approval",
+    subject: { repo: 'openadlc', number: 206, title: 'Stack the base', ref: 'openadlc#206', url: null, item: 'openadlc#206' },
+    bot: null,
+    since: '2026-09-24T11:00:00.000Z',
+    detail: 'The lead approved abc1234.',
+    actions: [{ kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc/pull/213/files' }],
+    unblocks: {
+      count: 4,
+      items: [207, 217, 216, 214].map((number) => ({ ref: `openadlc#${number}`, repo: 'openadlc', number, title: `Issue ${number}` })),
+    },
+  };
+
+  it('lists the cards waiting behind it, each opening its card', () => {
+    const html = needs([ROOT]);
+    expect(html).toContain('data-unblocks');
+    expect(html.replace(/<[^>]+>/g, '')).toContain('4 items wait on this: #207, #217, #216, #214.');
+    expect(html).toContain('href="/?item=openadlc%23207"');
+
+    const opened: string[] = [];
+    const buttons = buttonsIn(<NeedsYou items={[ROOT]} now="2026-09-24T12:00:00.000Z" onOpenBot={() => undefined} onOpenItem={(item) => opened.push(item)} />);
+    press(buttons, '#216');
+    expect(opened).toEqual(['openadlc#216']);
+  });
+
+  it('says nothing of it when nothing waits behind it', () => {
+    const { unblocks: _none, ...alone } = ROOT;
+    expect(needs([alone])).not.toContain('data-unblocks');
+  });
+});

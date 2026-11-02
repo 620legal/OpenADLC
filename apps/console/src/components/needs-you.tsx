@@ -34,7 +34,7 @@ import { Markdown } from '@/components/markdown';
 import { RepoBadge } from '@/components/repo-badge';
 import { Dialog, DialogClose, DialogTitle, SheetContent } from '@/components/ui/dialog';
 import { safeAction } from '@/lib/safe-action';
-import { CHOICES_ON_CARD, alarming, faceActions, groupCounts, groupOf, hasMore, plainDetail, stripItems, waiting as waitingOf } from '@/lib/attention-card';
+import { CHOICES_ON_CARD, alarming, faceActions, groupCounts, groupOf, hasMore, plainDetail, stripItems, unblockedOf, waiting as waitingOf } from '@/lib/attention-card';
 import { IncidentSteps } from '@/components/incident-steps';
 import { PullActions } from '@/components/pull-panel';
 import { standsOut } from '@/lib/thread';
@@ -347,6 +347,7 @@ function NeedsCard({
   const group = groupOf(item);
   const onOpenBot = openerFor(item.subject, item.bot, group, openBotPanel, onOpenItem);
   const alarm = alarming(item);
+  const unblocked = unblockedOf(item);
   const { subject } = item;
   const gateId = item.kind === 'question' ? (item.question?.gateId ?? null) : null;
   const choices = gateId ? (item.question?.options ?? []) : [];
@@ -467,6 +468,27 @@ function NeedsCard({
             )}
           >
             {plainDetail(item.detail)}
+          </p>
+        )}
+        {unblocked && (
+          // What doing this lets go on: each card behind it opens.
+          <p data-unblocks className="text-[12px] leading-normal text-soft">
+            {unblocked.lead}:{' '}
+            {unblocked.items.map((one, index) => (
+              <span key={one.ref}>
+                {index > 0 && ', '}
+                {onOpenItem ? (
+                  <button type="button" title={one.title} onClick={() => onOpenItem(one.ref, null)} className="text-link hover:underline">
+                    {one.label}
+                  </button>
+                ) : (
+                  <a href={itemOnBoard(one.ref, null)} title={one.title} className="text-link hover:underline">
+                    {one.label}
+                  </a>
+                )}
+              </span>
+            ))}
+            .
           </p>
         )}
         {gateId && choices.length > 0 && (
