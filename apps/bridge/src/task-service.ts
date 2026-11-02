@@ -1259,9 +1259,11 @@ export class TaskService {
    * One a person paused since — its seat, its item or its repository — is
    * left: the sweep must not undo a person's pause. One this process is
    * already resuming or trying again is left to that. Returns a line for
-   * each one it acted on.
+   * each one it acted on, and tells `onResumed` of each one that left
+   * `paused`: the start after an outage lists those in its gap report
+   * (`bridge-gap.ts`), and a line alone does not say which task it was.
    */
-  async resumeAnswered(): Promise<string[]> {
+  async resumeAnswered(onResumed?: (task: { id: string; subjectRef: string }, line: string) => void): Promise<string[]> {
     const owed = await tasks.pausedWithAnswer();
     if (owed.length === 0) return [];
     const pauses = await this.seatPauses().catch(() => ({}) as Record<string, SeatPause>);
@@ -1279,13 +1281,14 @@ export class TaskService {
       try {
         await this.resume(task.id);
         const now = await tasks.getTask(task.id).catch(() => null);
-        lines.push(
-          now?.state !== 'paused'
-            ? `resumed ${task.skill ?? task.kind} on ${task.subjectRef}, answered ${task.answeredAt}`
-            : this.githubWaits.has(task.id)
-              ? `${task.subjectRef}: answered, and waits for GitHub to answer its sign-in’s refresh`
-              : `${task.subjectRef}: answered, and waits for a host with room`,
-        );
+        const resumed = now?.state !== 'paused';
+        const line = resumed
+          ? `resumed ${task.skill ?? task.kind} on ${task.subjectRef}, answered ${task.answeredAt}`
+          : this.githubWaits.has(task.id)
+            ? `${task.subjectRef}: answered, and waits for GitHub to answer its sign-in’s refresh`
+            : `${task.subjectRef}: answered, and waits for a host with room`;
+        lines.push(line);
+        if (resumed) onResumed?.({ id: task.id, subjectRef: task.subjectRef }, line);
       } catch (error) {
         lines.push(`${task.subjectRef}: could not resume: ${error instanceof Error ? error.message.slice(0, 120) : String(error)}`);
       }

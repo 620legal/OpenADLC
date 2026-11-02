@@ -1089,10 +1089,55 @@ happened.
 
 The failure is told by the error Next rejects the call with
 (`isStaleAction`, `apps/console/src/lib/console-updated.ts`), and the check
-by an action that does nothing (`consoleServesThisPage`, `readUnlessUpdated`
+by an action that changes nothing (`consoleServesThisPage`, `readUnlessUpdated`
 in `apps/console/src/lib/live-refresh.ts`). Any other failure is said as
 before: **This page stopped working**, with the reason and Try again, or
 `the console did not take that` when the console did not answer at all.
+
+## The console says it can't reach OpenADLC, or the board says OpenADLC was away
+
+**"Can't reach OpenADLC since 14:02. What you see may be out of date."** A
+strip at the top of any page that reads itself again every fifteen seconds.
+The check the page makes before each read (`consoleServesThisPage`) asks the
+bridge who you are, and the bridge gave no answer at all; a refusal counts as
+an answer. The page then keeps what it showed, rather than reading itself into
+the full-page "cannot reach the bridge" screen, and the time is the last read
+the bridge answered, on your clock (with the date when it was not today). The
+strip goes by itself on the first read after the bridge answers again, with no
+reload. A tab in the background asks nothing, so it says nothing until you
+bring it back. If it stays, see [A service stopped, or keeps stopping](#a-service-stopped-or-keeps-stopping)
+and `openadlc doctor`.
+
+**"OpenADLC was away for about 1 minute (14:02–14:03)."** A strip on the board,
+the same for everyone, until someone presses **Dismiss**, which clears it for
+everyone. The bridge beats into its own table every 30 seconds, and twice on a
+clean shutdown (`bridge_heartbeat`): first, before it waits for work in flight,
+which can outlast the 20 seconds the keeper gives it, and again at the end. When it starts and its last beat is
+more than 30 seconds old, it records the gap before anything else, then lists
+what that start did about it:
+
+- **It resumed:** paused tasks whose question was answered while it was away
+  (`resumeAnswered`), resumed at start.
+- **It treated as orphaned:** tasks one reconcile pass at start ended, a task
+  marked running whose host stopped reporting, or one recorded and never
+  handed to a host. Each says why; open its card to retry it.
+
+Until that start has finished listing, the strip says "Still listing what it
+resumed and treated as orphaned" and its **Dismiss** is refused, so a list
+read early is not taken for the whole of it. A start that dies part way leaves
+it so until the next start, which lists what it resumed and treated as
+orphaned there before finishing it, even when it is back within 30 seconds.
+
+A gap that cost nothing still says how long. A second gap before anyone
+dismissed the first moves the strip to the latest one and keeps the first one's
+tasks, each with the time of the start that resumed or ended it. A Dismiss pressed on a strip read before a newer gap was merged in is
+refused with "A newer gap was added to this report since you read it": read the
+page again and dismiss that. An ordinary restart, by the keeper or a
+self-update, is back inside 30 seconds and reports nothing; an install's first
+start reports nothing either. After `openadlc restore`, the last beat is the
+backup's, so the next start reports a gap from when the backup was taken; the
+tasks it lists are the ones that start really resumed or ended. See
+[ADR 0022](adr/0022-the-bridge-keeps-its-own-heartbeat-and-gap-report.md).
 
 ## The console is a blank page under a LAN name or a tunnel
 

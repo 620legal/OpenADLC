@@ -16,14 +16,24 @@ vi.mock('next/navigation', () => ({ redirect }));
 vi.mock('@/lib/identity', () => ({ identityHeaders: async () => ({}) }));
 vi.mock('@/components/board-view', () => ({ BoardView: () => null }));
 vi.mock('@/components/bridge-down', () => ({ BridgeDown: ({ error }: { error: Error }) => `down: ${error.message}` }));
+// The board itself is beside the point here, unless a test gives one.
+const reads = vi.hoisted(() => ({
+  board: (): Promise<unknown> => {
+    throw new Error('no board in this test');
+  },
+  gap: (): Promise<unknown> => Promise.resolve(null),
+}));
 vi.mock('@/lib/api', () => ({
   BRIDGE_URL: 'http://bridge.test',
   waitingCount: () => 0,
-  // The board itself is beside the point here.
   api: {
-    board: () => {
-      throw new Error('no board in this test');
-    },
+    board: () => reads.board(),
+    crew: async () => ({ bots: [] }),
+    costs: async () => null,
+    attention: async () => ({ items: [] }),
+    workPauses: async () => null,
+    repos: async () => ({ repos: [] }),
+    bridgeGap: () => reads.gap(),
   },
 }));
 
@@ -74,5 +84,31 @@ describe('the board, before setup is finished', () => {
 
     await load({ board: '1' });
     expect(asked).toEqual([]);
+  });
+});
+
+describe('the report of how long the bridge was away, on the board', () => {
+  const GAP = { lastUpAt: '2026-11-02T14:02:00.000Z', backAt: '2026-11-02T14:03:10.000Z', awayMs: 70_000, tasks: [], filling: false };
+
+  afterEach(() => {
+    reads.board = () => {
+      throw new Error('no board in this test');
+    };
+    reads.gap = () => Promise.resolve(null);
+  });
+
+  it('is given to the board as the bridge has it', async () => {
+    reads.board = async () => ({ columns: [], repos: [] });
+    reads.gap = async () => GAP;
+    const page = (await load({ board: '1' })) as { props: { gap?: unknown } };
+    expect(page.props.gap).toEqual(GAP);
+  });
+
+  it('is left out when its read fails, and the board is still drawn, not the bridge-down page', async () => {
+    reads.board = async () => ({ columns: [], repos: [] });
+    reads.gap = async () => Promise.reject(new Error('the bridge is not answering'));
+    const page = (await load({ board: '1' })) as { props: { gap?: unknown; error?: unknown } };
+    expect(page.props.error).toBeUndefined();
+    expect(page.props.gap).toBeNull();
   });
 });

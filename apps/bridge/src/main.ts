@@ -1,6 +1,6 @@
 import { heldBySeatPause, registerSeatPauseRoutes, seatPausedReason } from './seat-pause.js';
 import { createServer } from 'node:http';
-import { audit as auditEntry, bots, ciUsage, closePool, costs, deployRuns, issues as issueStore, leases as leaseStore, repos, settings, tasks, threads as threadStore, waitForDatabase } from '@openadlc/db';
+import { audit as auditEntry, bots, bridgeGaps, ciUsage, closePool, costs, deployRuns, issues as issueStore, leases as leaseStore, repos, settings, tasks, threads as threadStore, waitForDatabase } from '@openadlc/db';
 import { registerPauseRoutes, restorePause } from './pause-work.js';
 import { accountOf, appPrivateKeyRef, appVisibility, ensureAlertsSecret, ensureConsoleSecret, ensureInternalSecret, getSecretStore, installationTokenFor, openadlcHome, redeliverFailedSince } from '@openadlc/github';
 import { sameLogin } from '@openadlc/shared';
@@ -40,6 +40,7 @@ import { SelfUpdate, isRestartProcess, registerSelfUpdateRoutes, runCommand, spa
 import { APP_API, InvitationService } from './invitation-service.js';
 import { CrewAccessKeeper } from './crew-access.js';
 import { Reconciler } from './reconciler.js';
+import { startGap, startHeartbeat } from './bridge-gap.js';
 import { JobTimer } from './job-timer.js';
 import { Router } from './router.js';
 import { REQUEST_SWEEP_MS, RequestQueue } from './request-queue.js';
@@ -516,17 +517,20 @@ async function main(): Promise<void> {
   // only way in, so on a running install the credential check, the status issue
   // and the dependency sweep never happened at all.
   const jobs = new JobTimer(scheduler);
+  // Before the jobs: the beat this start replaces says whether the bridge was
+  // away, and what it resumes and reconciles after a gap goes in the board's
+  // report (`bridge-gap.ts`). A task answered before a restart, while every
+  // host was full, was owed a resume a timer held; the merge job looks too,
+  // but only once its period has passed.
+  void startGap(bridgeGaps, {
+    resume: (onResumed) => taskService.resumeAnswered(onResumed),
+    reconcile: () => reconciler.run({ repair: true }),
+  });
+  const heartbeat = startHeartbeat(() => bridgeGaps.touch());
   jobs.start();
   // A promote queued before a restart and not yet walked is walked now,
   // rather than waiting for the next production deployment to find it.
   void webhooks.walkPromotes();
-  // A task answered before a restart, while every host was full, was owed a
-  // resume a timer held; the merge job looks too, but only once its period
-  // has passed.
-  void taskService
-    .resumeAnswered()
-    .then((lines) => lines.forEach((line) => console.log(`[bridge] ${line}`)))
-    .catch((error: unknown) => console.warn(`[bridge] could not resume answered tasks: ${error instanceof Error ? error.message : error}`));
   for (const { job, minutes } of jobs.running) {
     console.log(`[bridge] ${job} every ${minutes} minute(s)`);
   }
@@ -952,6 +956,10 @@ async function main(): Promise<void> {
   });
 
   const shutdown = async (): Promise<void> => {
+    // A beat before the drains as well as after: they take up to 10 s each,
+    // and the keeper kills the bridge 20 s after the stop signal, so a busy
+    // restart never reached the last beat and reported a gap.
+    await heartbeat.beat();
     dispatchRuns?.stop();
     stageRuns.stop();
     names.stop();
@@ -965,6 +973,8 @@ async function main(): Promise<void> {
     await taskService.drain(10_000);
     // An answer's GitHub comment, a Stop's cancel: what the console was told is under way.
     await afterwards.drain(10_000);
+    // The last beat: a restart back inside the interval reports no gap.
+    await heartbeat.stop();
     await closePool();
     process.exit(0);
   };

@@ -44,12 +44,15 @@ export default async function BoardPage({
   try {
     // The costs and what needs you are the header's; a bridge that cannot
     // answer one of them still gets a board, with that part left out.
-    const [board, crew, costs, attention, paused] = await Promise.all([
+    // So is the report of a gap: a read of it that fails hides it, and never
+    // brings up the page that says the bridge is down.
+    const [board, crew, costs, attention, paused, gap] = await Promise.all([
       api.board(repo),
       api.crew(),
       api.costs().catch(() => null),
       api.attention().then((body) => body.items).catch(() => null),
       api.workPauses().catch(() => null),
+      api.bridgeGap().catch(() => null),
     ]);
 
     // Only an empty board files its first request, and only it needs to know
@@ -80,6 +83,7 @@ export default async function BoardPage({
         paused={paused?.paused ?? null}
         pausedRepos={paused?.repos ?? {}}
         dispatching={paused?.dispatching !== false}
+        gap={gap}
       />
     );
   } catch (error) {

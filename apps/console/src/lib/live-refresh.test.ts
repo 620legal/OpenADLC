@@ -1,6 +1,6 @@
 import { UnrecognizedActionError } from 'next/dist/client/components/unrecognized-action-error';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readUnlessUpdated, REFRESH_EVERY_MS, refreshWhileVisible, type Visibility } from './live-refresh';
+import { offlineState, readUnlessUpdated, REFRESH_EVERY_MS, refreshWhileVisible, type Visibility } from './live-refresh';
 
 /** A tab, which can be put in the background and brought back. */
 function tab(initially: 'visible' | 'hidden' = 'visible') {
@@ -103,5 +103,37 @@ describe('a read of a page the console may have been updated under', () => {
       }, read),
     ).toBe('read');
     expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not made while the bridge gives no answer, so the page keeps what it shows', async () => {
+    const read = vi.fn();
+    expect(await readUnlessUpdated(async () => ({ ok: true, bridge: false }), read)).toBe('unreachable');
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('is made once the bridge answers again', async () => {
+    const read = vi.fn();
+    expect(await readUnlessUpdated(async () => ({ ok: true, bridge: true }), read)).toBe('read');
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('whether the page shows what the bridge last said', () => {
+  const LOADED = { lastReadAt: 1_000, offlineSince: null };
+
+  it('keeps the last read the bridge answered, and since when it has not', () => {
+    const down = offlineState(LOADED, 'unreachable', 16_000);
+    expect(down).toEqual({ lastReadAt: 1_000, offlineSince: 16_000 });
+    // Still down: since the first tick it did not answer, not the latest.
+    expect(offlineState(down, 'unreachable', 31_000)).toEqual({ lastReadAt: 1_000, offlineSince: 16_000 });
+  });
+
+  it('is current again on the first read', () => {
+    expect(offlineState({ lastReadAt: 1_000, offlineSince: 16_000 }, 'read', 46_000)).toEqual({ lastReadAt: 46_000, offlineSince: null });
+  });
+
+  it('is left as it was by a console that was updated', () => {
+    const down = { lastReadAt: 1_000, offlineSince: 16_000 };
+    expect(offlineState(down, 'updated', 31_000)).toBe(down);
   });
 });

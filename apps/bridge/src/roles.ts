@@ -51,6 +51,9 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'GET /v1/insights': 'user',
   'GET /v1/spending/limits': 'user',
   'GET /v1/work/pause': 'user',
+  // How long the bridge was away; anyone who saw it may dismiss it for everyone.
+  'GET /v1/bridge/gap': 'user',
+  'POST /v1/bridge/gap/dismiss': 'user',
   // The crew page names the account each bot thinks with; no key is in it.
   'GET /v1/model-accounts': 'user',
 

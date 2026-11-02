@@ -3,8 +3,9 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { consoleServesThisPage } from '@/app/actions';
+import { BridgeOfflineBanner } from '@/components/bridge-offline-banner';
 import { consoleWasUpdated, sayConsoleUpdated } from '@/lib/console-updated';
-import { readUnlessUpdated, refreshWhileVisible } from '@/lib/live-refresh';
+import { offlineState, readUnlessUpdated, refreshWhileVisible, type OfflineState } from '@/lib/live-refresh';
 
 /**
  * Reads the page again every fifteen seconds while it is on screen: "needs
@@ -13,7 +14,9 @@ import { readUnlessUpdated, refreshWhileVisible } from '@/lib/live-refresh';
  * browser — a draft, a card being moved, an open thread — stays as it is.
  *
  * Once the console was updated since the page loaded, it stops, and the page
- * says so with a reload (`readUnlessUpdated`, `ConsoleUpdatedNotice`).
+ * says so with a reload (`readUnlessUpdated`, `ConsoleUpdatedNotice`). While
+ * the bridge does not answer, the page keeps what it shows and says since
+ * when under a banner, which goes on the first tick the bridge answers.
  *
  * Only in the browser: the router it refreshes is the browser's, and a page
  * being drawn on the server has nothing to refresh.
@@ -26,10 +29,12 @@ export function LiveRefresh() {
 
 function Refresher() {
   const router = useRouter();
+  const [state, setState] = useState<OfflineState>(() => ({ lastReadAt: Date.now(), offlineSince: null }));
   useEffect(() => {
     const stop = refreshWhileVisible(() => {
       if (consoleWasUpdated()) return stop();
       void readUnlessUpdated(consoleServesThisPage, () => router.refresh()).then((outcome) => {
+        setState((previous) => offlineState(previous, outcome, Date.now()));
         if (outcome !== 'updated') return;
         stop();
         sayConsoleUpdated();
@@ -37,5 +42,5 @@ function Refresher() {
     }, document);
     return stop;
   }, [router]);
-  return null;
+  return state.offlineSince !== null ? <BridgeOfflineBanner since={state.lastReadAt} /> : null;
 }
