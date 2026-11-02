@@ -20,7 +20,8 @@ import { stripItems } from '@/lib/attention-card';
 import { findBot, labelIn } from '@/lib/bot-label';
 import { withActivity, type BoardActivity } from '@/lib/board-activity';
 import { attemptMove, columnsWithMoves, movesBack, NO_MOVES, reconcile, type MoveState } from '@/lib/board-move';
-import { abandoned, awaitedApprovalsOf, cardBot, cardCost, cardStatus, heldApprovalsOf, nextUp, rootButton, type CardContext, type CardStatus, type RootButton, type StatusTone } from '@/lib/card-status';
+import { liveLine, saveView, spendLine, stateColumns, storedView, type StateColumn as StateColumnData, type ViewName } from '@/lib/board-state';
+import { abandoned, awaitedApprovalsOf, cardBot, cardCost, cardStatus, heldApprovalsOf, nextUp, rootButton, runningStatus, type CardContext, type CardStatus, type RootButton, type StatusTone } from '@/lib/card-status';
 import { cn } from '@/lib/cn';
 import { cardMatches, exactKey } from '@/lib/item';
 import { heldLine, IssueControls } from '@/components/issue-controls';
@@ -142,9 +143,25 @@ export function BoardView({
 
   // Every re-read of the board is the bridge's answer about the cards a move is
   // still being shown for, so it is what retires them.
+  // When the board was last read, by the browser's own clock, for the Live
+  // dot: a whole read, or an answer about its running cards. The page's `now`
+  // is the server's, and a browser a minute behind it would read "Live" as
+  // a minute old.
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   useEffect(() => {
     setMoves((state) => reconcile(state, read.columns));
+    setUpdatedAt(Date.now());
   }, [read]);
+
+  // By stage or By state, as this browser last chose. Read once drawn: the
+  // server has no storage and always draws By stage, and a first drawing that
+  // differed from it would be thrown away.
+  const [view, setView] = useState<ViewName>('stage');
+  useEffect(() => setView(storedView()), []);
+  const choose = (next: ViewName) => {
+    setView(next);
+    saveView(next);
+  };
 
   // The filter box: a work item's key in any case and with any prefix, or words of a title.
   const [filter, setFilter] = useState('');
@@ -204,6 +221,16 @@ export function BoardView({
         : undefined,
   });
 
+  // The cards as By stage draws them, Done cut to its week, grouped by what a
+  // person does about them. Worked out again from every read, so a card whose
+  // task started is in Working on the next refresh.
+  const states = stateColumns(
+    columns.map((column) => ({ stage: column.stage, cards: visibleCards(column, now).cards })),
+    { attention, heldApprovals, now },
+  );
+  /** The cap one task stops at in a card's repository; none from an older bridge. */
+  const capOf = (name: string): number | undefined => board.repositories?.find((one) => one.name === name)?.taskCapUsd;
+
   // The repositories paused on their own that this board shows: all of them
   // on the board of every repository, and the one it is filtered to otherwise.
   const pausedNames = Object.keys(pausedRepos).sort();
@@ -252,7 +279,15 @@ export function BoardView({
   const shell = (
     <AppShell page="board" repo={repo} data={header} fill>
       <h1 className="sr-only">Board</h1>
-      <BoardActivityPoll board={read} repo={repo} watching={listOpen} onActivity={(asked, activity) => setPolled({ board: asked, activity })} />
+      <BoardActivityPoll
+        board={read}
+        repo={repo}
+        watching={listOpen}
+        onActivity={(asked, activity) => {
+          setPolled({ board: asked, activity });
+          setUpdatedAt(Date.now());
+        }}
+      />
 
       <BridgeGapReport gap={gap} />
 
@@ -348,62 +383,94 @@ export function BoardView({
                 {showRepo && <Legend repositories={repositories} />}
               </div>
             )}
-            <form
-              role="search"
-              className="shrink-0 px-4 pt-3 md:px-6"
-              onSubmit={(event) => {
-                event.preventDefault();
-                // Enter on a key a card has opens its page, the address to share.
-                const key = exactKey(
-                  board.columns.flatMap((column) => column.cards),
-                  filter,
-                );
-                if (key) window.location.assign(`/items/${encodeURIComponent(key)}`);
-              }}
-            >
-              <label className="flex max-w-xs items-center gap-2 text-[12.5px] text-dim">
-                <span className="sr-only">Find a work item by its key or title</span>
-                <input
-                  type="search"
-                  value={filter}
-                  onChange={(event) => setFilter(event.target.value)}
-                  placeholder="Find by key or title"
-                  className="h-7 w-full rounded-md border border-edge bg-panel px-2 text-[12.5px] text-body placeholder:text-dim focus-visible:outline-2 focus-visible:outline-link"
-                />
-              </label>
-            </form>
-            <section
-              aria-label="Board"
-              className="hidden min-h-[22rem] flex-1 gap-3 overflow-x-auto px-6 pb-6 pt-3 md:grid md:grid-cols-[repeat(6,minmax(12.5rem,1fr))]"
-            >
-              {columns.map((column) => (
-                <Column
-                  key={column.stage}
-                  column={column}
-                  crew={crew}
-                  now={now}
-                  over={over === column.stage}
-                  onOpenBot={openThread}
-                  // A column is a drop target for a card dragged out of another
-                  // one. `preventDefault` on drag-over is what makes it one at all.
-                  onDragOver={(event) => {
-                    if (!dragging || dragging.from === column.stage) return;
-                    event.preventDefault();
-                    setOver(column.stage);
-                  }}
-                  onDragLeave={() => setOver((current) => (current === column.stage ? null : current))}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    setOver(null);
-                    if (dragging) move(dragging, column.stage);
-                    setDragging(null);
-                  }}
+            <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 pt-3 md:px-6">
+              <form
+                role="search"
+                className="min-w-[12rem] max-w-xs flex-1"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  // Enter on a key a card has opens its page, the address to share.
+                  const key = exactKey(
+                    board.columns.flatMap((column) => column.cards),
+                    filter,
+                  );
+                  if (key) window.location.assign(`/items/${encodeURIComponent(key)}`);
+                }}
+              >
+                <label className="flex items-center gap-2 text-[12.5px] text-dim">
+                  <span className="sr-only">Find a work item by its key or title</span>
+                  <input
+                    type="search"
+                    value={filter}
+                    onChange={(event) => setFilter(event.target.value)}
+                    placeholder="Find by key or title"
+                    className="h-7 w-full rounded-md border border-edge bg-panel px-2 text-[12.5px] text-body placeholder:text-dim focus-visible:outline-2 focus-visible:outline-link"
+                  />
+                </label>
+              </form>
+              <ViewSwitch view={view} onChange={choose} />
+              <LiveDot updatedAt={updatedAt} />
+            </div>
+            {view === 'state' ? (
+              <>
+                <section
+                  aria-label="Board by state"
+                  className="hidden min-h-[22rem] flex-1 gap-3 overflow-x-auto px-6 pb-6 pt-3 md:grid md:grid-cols-[repeat(4,minmax(12.5rem,1fr))]"
+                >
+                  {states.map((column) => (
+                    <StateColumn key={column.state} column={column} capOf={capOf} cards={cards} />
+                  ))}
+                </section>
+                <PhoneStages
+                  key="state"
+                  label="State"
+                  columns={states.map((column) => ({
+                    key: column.state,
+                    title: column.title,
+                    subtitle: null,
+                    count: column.cards.length,
+                    empty: column.empty,
+                    cards: column.cards.map((entry) => ({ ...entry, still: true, working: column.state === 'working' ? { spend: spendLine(entry.card, capOf(entry.card.repo)) } : undefined })),
+                  }))}
                   cards={cards}
                 />
-              ))}
-            </section>
+              </>
+            ) : (
+              <>
+                <section
+                  aria-label="Board"
+                  className="hidden min-h-[22rem] flex-1 gap-3 overflow-x-auto px-6 pb-6 pt-3 md:grid md:grid-cols-[repeat(6,minmax(12.5rem,1fr))]"
+                >
+                  {columns.map((column) => (
+                    <Column
+                      key={column.stage}
+                      column={column}
+                      crew={crew}
+                      now={now}
+                      over={over === column.stage}
+                      onOpenBot={openThread}
+                      // A column is a drop target for a card dragged out of another
+                      // one. `preventDefault` on drag-over is what makes it one at all.
+                      onDragOver={(event) => {
+                        if (!dragging || dragging.from === column.stage) return;
+                        event.preventDefault();
+                        setOver(column.stage);
+                      }}
+                      onDragLeave={() => setOver((current) => (current === column.stage ? null : current))}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        setOver(null);
+                        if (dragging) move(dragging, column.stage);
+                        setDragging(null);
+                      }}
+                      cards={cards}
+                    />
+                  ))}
+                </section>
 
-            <PhoneStages columns={columns} now={now} cards={cards} />
+                <PhoneStages key="stage" label="Stage" columns={columns.map((column) => phoneColumn(column, now))} cards={cards} />
+              </>
+            )}
           </>
         )}
       </main>
@@ -677,10 +744,32 @@ function StatusLine({ status }: { status: CardStatus }) {
   );
 }
 
-function Card({ card, stage, handlers }: { card: BoardCard; stage: string; handlers: CardHandlers }) {
+/** How By state's Working column draws a card: its spend against the cap, and the running task's line. */
+interface WorkingCard {
+  /** "$4.10 of $15", or the spend alone with no cap (`spendLine`). */
+  spend: string | null;
+}
+
+function Card({
+  card,
+  stage,
+  handlers,
+  still = false,
+  working,
+}: {
+  card: BoardCard;
+  stage: string;
+  handlers: CardHandlers;
+  /** Not dragged: By state's columns are states, not stages to drop it in. Move to… still names a stage outright. */
+  still?: boolean;
+  working?: WorkingCard;
+}) {
   const colors = useRepoColors();
-  const status = cardStatus(card, handlers.context(card));
-  const cost = cardCost(card, money);
+  const context = handlers.context(card);
+  // In Working the line is always the running task's, with how long it has
+  // run, whatever the card would say first in its stage.
+  const status = (working ? runningStatus(card, context) : null) ?? cardStatus(card, context);
+  const cost = working ? working.spend : cardCost(card, money);
   const pending = Boolean(handlers.moves.pending[card.ref]);
   const refused = handlers.moves.refused[card.ref];
   const number = card.number ?? Number(card.ref.split('#')[1]);
@@ -698,7 +787,7 @@ function Card({ card, stage, handlers }: { card: BoardCard; stage: string; handl
 
   return (
     <article
-      draggable={movable && !pending}
+      draggable={!still && movable && !pending}
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = 'move';
         event.dataTransfer.setData('text/plain', card.ref);
@@ -779,7 +868,11 @@ function Card({ card, stage, handlers }: { card: BoardCard; stage: string; handl
             <ChevronDownIcon size={10} className="pointer-events-none absolute right-0.5 text-dim" />
           </label>
         )}
-        {cost && <span className={cn((handlers.showRepo || !movable) && 'ml-auto shrink-0 whitespace-nowrap')}>{cost}</span>}
+        {cost && (
+          <span data-cost className={cn((handlers.showRepo || !movable) && 'ml-auto shrink-0 whitespace-nowrap')}>
+            {cost}
+          </span>
+        )}
       </span>
 
       <h3 className={cn('text-[14px] font-medium leading-[1.35] md:text-[13px]', stage === 'done' ? 'text-soft' : 'text-body')}>
@@ -858,54 +951,167 @@ function Card({ card, stage, handlers }: { card: BoardCard; stage: string; handl
   );
 }
 
-/**
- * The board on a phone: one stage at a time, chosen from a row of pills with
- * their counts, instead of six columns scrolled sideways.
- */
-function PhoneStages({ columns, now, cards }: { columns: BoardColumn[]; now: string; cards: CardHandlers }) {
-  const firstBusy = columns.find((column) => column.stage !== 'done' && column.cards.length > 0)?.stage;
-  const [chosen, setChosen] = useState<string>(firstBusy ?? columns[0]?.stage ?? 'intake');
-  const column = columns.find((one) => one.stage === chosen) ?? columns[0];
-  if (!column) return null;
+/** A column as the phone draws it: a pill with its count, then its cards. */
+interface PhoneColumn {
+  key: string;
+  title: string;
+  subtitle: string | null;
+  count: number;
+  empty: string;
+  cards: { card: BoardCard; stage: string; still?: boolean; working?: WorkingCard }[];
+}
+
+/** A stage's column on a phone: Done cut to its week, and counted by what shipped. */
+function phoneColumn(column: BoardColumn, now: string): PhoneColumn {
   const stage = stageOf(column.stage);
-  const { cards: shown } = visibleCards(column, now);
+  const { cards, shipped } = visibleCards(column, now);
+  return {
+    key: column.stage,
+    title: stage?.title ?? column.title,
+    subtitle: stage ? subtitleOf(column, stage.subtitle) : null,
+    count: column.stage === 'done' ? shipped : column.cards.length,
+    empty: EMPTY[column.stage] ?? 'Nothing here',
+    cards: cards.map((card) => ({ card, stage: column.stage })),
+  };
+}
+
+/**
+ * The board on a phone: one column at a time, a stage or a state, chosen from
+ * a row of pills with their counts, instead of columns scrolled sideways.
+ */
+function PhoneStages({ label, columns, cards }: { label: string; columns: PhoneColumn[]; cards: CardHandlers }) {
+  const firstBusy = columns.find((column) => column.key !== 'done' && column.key !== 'done_today' && column.cards.length > 0)?.key;
+  const [chosen, setChosen] = useState<string>(firstBusy ?? columns[0]?.key ?? 'intake');
+  const column = columns.find((one) => one.key === chosen) ?? columns[0];
+  if (!column) return null;
 
   return (
     <div className="flex flex-col gap-3.5 pb-4 pt-3 md:hidden">
-      <nav aria-label="Stage" className="scroll-row flex gap-1.5 overflow-x-auto px-4">
+      <nav aria-label={label} className="scroll-row flex gap-1.5 overflow-x-auto px-4">
         {columns.map((one) => {
-          const current = one.stage === column.stage;
-          const count = one.stage === 'done' ? visibleCards(one, now).shipped : one.cards.length;
+          const current = one.key === column.key;
           return (
             <button
-              key={one.stage}
+              key={one.key}
               type="button"
               aria-pressed={current}
-              onClick={() => setChosen(one.stage)}
+              onClick={() => setChosen(one.key)}
               className={cn(
                 'inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[13px]',
                 current ? 'border-body bg-body font-medium text-surface' : 'border-edge bg-panel text-soft',
               )}
             >
-              {stageOf(one.stage)?.title ?? one.title}
-              <span className={current ? 'text-edge-strong' : 'text-dim'}>{count}</span>
+              {one.title}
+              <span className={current ? 'text-edge-strong' : 'text-dim'}>{one.count}</span>
             </button>
           );
         })}
       </nav>
 
-      <section aria-label={stage?.title ?? column.title} className="flex flex-col gap-2.5 px-4">
-        <p className="flex items-center gap-2 text-[12.5px] text-muted">
-          {stage ? subtitleOf(column, stage.subtitle) : null}
-        </p>
-        {shown.length === 0 ? (
-          <p className="rounded-[10px] border border-dashed border-edge-strong px-3 py-5 text-center text-[12.5px] text-dim">
-            {EMPTY[column.stage] ?? 'Nothing here'}
-          </p>
+      <section aria-label={column.title} className="flex flex-col gap-2.5 px-4">
+        {column.subtitle && <p className="flex items-center gap-2 text-[12.5px] text-muted">{column.subtitle}</p>}
+        {column.cards.length === 0 ? (
+          <p className="rounded-[10px] border border-dashed border-edge-strong px-3 py-5 text-center text-[12.5px] text-dim">{column.empty}</p>
         ) : (
-          shown.map((card) => <Card key={card.ref} card={card} stage={column.stage} handlers={cards} />)
+          column.cards.map((entry) => (
+            <Card key={entry.card.ref} card={entry.card} stage={entry.stage} handlers={cards} still={entry.still} working={entry.working} />
+          ))
         )}
       </section>
     </div>
   );
 }
+
+/**
+ * A column of the board by state. Nothing is dropped on it: a state is what
+ * a card is doing, not a stage it could be moved to, and its cards are not
+ * dragged.
+ */
+function StateColumn({ column, capOf, cards }: { column: StateColumnData; capOf: (repo: string) => number | undefined; cards: CardHandlers }) {
+  const working = column.state === 'working';
+  return (
+    <section aria-labelledby={`state-${column.state}`} data-state={column.state} className="flex min-h-0 min-w-0 flex-col gap-2">
+      <div className="flex items-center gap-2 px-0.5 pb-1.5 pt-0.5">
+        <h2 id={`state-${column.state}`} className="text-[13px] font-semibold text-body">
+          {column.title}
+        </h2>
+        <span className="text-[12px] text-dim">{column.cards.length}</span>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-lg pb-2">
+        {column.cards.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-edge-strong px-3 py-[18px] text-center text-[12px] leading-normal text-dim">
+            {column.empty}
+          </p>
+        ) : (
+          column.cards.map(({ card, stage }) => (
+            <Card
+              key={card.ref}
+              card={card}
+              stage={stage}
+              handlers={cards}
+              still
+              working={working ? { spend: spendLine(card, capOf(card.repo)) } : undefined}
+            />
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+const VIEWS: readonly { view: ViewName; words: string }[] = [
+  { view: 'stage', words: 'By stage' },
+  { view: 'state', words: 'By state' },
+];
+
+/** By stage or By state, kept in this browser. */
+function ViewSwitch({ view, onChange }: { view: ViewName; onChange: (view: ViewName) => void }) {
+  return (
+    <div role="group" aria-label="Group the board" className="inline-flex shrink-0 rounded-md border border-edge bg-panel p-0.5">
+      {VIEWS.map((one) => (
+        <button
+          key={one.view}
+          type="button"
+          aria-pressed={view === one.view}
+          onClick={() => onChange(one.view)}
+          className={cn(
+            'h-6 rounded px-2 text-[12px] focus-visible:outline-2 focus-visible:outline-link',
+            view === one.view ? 'bg-body font-medium text-surface' : 'text-soft hover:text-body',
+          )}
+        >
+          {one.words}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * When the board was last read, counting up: "Live · 4s ago", and "Not
+ * updated" once a refresh is missed, as when the bridge is down or a hidden
+ * tab's read has not come back yet. A still dot, so reduced motion has
+ * nothing to stop, and not a live region: a screen reader is not told it
+ * every second. Drawn only in the browser, whose clock it counts on.
+ */
+function LiveDot({ updatedAt }: { updatedAt: number | null }) {
+  const [nowMs, setNowMs] = useState<number | null>(null);
+  useEffect(() => {
+    setNowMs(Date.now());
+    const ticker = setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => clearInterval(ticker);
+  }, []);
+  if (updatedAt === null || nowMs === null) return null;
+  const { text, stale } = liveLine(updatedAt, Math.max(nowMs, updatedAt));
+  return (
+    <span
+      data-live-dot
+      data-stale={stale ? '' : undefined}
+      title={`Last updated ${new Date(updatedAt).toLocaleTimeString()}`}
+      className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-[12px] text-dim"
+    >
+      <span aria-hidden className={cn('size-1.5 rounded-full', stale ? 'bg-attention' : 'bg-signal')} />
+      {text}
+    </span>
+  );
+}
+
