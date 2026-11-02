@@ -10,7 +10,12 @@ import type { AttentionItem, Board, CrewMember } from '@/lib/api';
  * either way.
  */
 
-vi.mock('@/app/actions', () => ({ moveCard: vi.fn(async () => ({ ok: true })) }));
+vi.mock('@/app/actions', () => ({
+  moveCard: vi.fn(async () => ({ ok: true })),
+  // The page's own read every fifteen seconds, which a test that waits past
+  // it never sees answered: a bridge that is down.
+  consoleServesThisPage: vi.fn(() => new Promise(() => undefined)),
+}));
 const router = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
@@ -484,5 +489,195 @@ describe('a card waiting with nothing going on it', () => {
       expect(card!.innerHTML).not.toContain('working-dot');
       expect(line(card!)).toContain('Stuck');
     });
+  });
+});
+
+/**
+ * The board by state: the same cards, grouped by what a person does about
+ * them, chosen with a switch this browser remembers.
+ */
+describe('the board by state', () => {
+  const RUNNING = BOARD.columns.find((column) => column.stage === 'build')!.cards[0]!;
+  const IDLE = { ...RUNNING, ref: 'openadlc#17', number: 17, title: 'Say the cap on a card', active: [], costUsd: 0 };
+
+  /** A board whose Build column holds these, from a bridge that sends these repositories. */
+  function boardWith(cards: Board['columns'][number]['cards'], repositories?: Board['repositories']): Board {
+    return {
+      ...BOARD,
+      ...(repositories ? { repositories } : {}),
+      columns: BOARD.columns.map((column) => (column.stage === 'build' ? { ...column, cards } : column)),
+    };
+  }
+
+  async function show(board: Board, attention: AttentionItem[] = []): Promise<void> {
+    const { BoardView } = await import('./board-view');
+    const { headerData } = await import('@/lib/header');
+    const header = headerData({ repos: ['openadlc'], crew: [BUILDER], budget: null, needsYou: 0 });
+    await act(async () => root.render(<BoardView board={board} crew={[BUILDER]} repo="all" header={header} attention={attention} now={NOW} />));
+  }
+
+  const switchTo = async (words: string) => {
+    const button = [...container.querySelectorAll('[aria-label="Group the board"] button')].find((one) => one.textContent === words) as HTMLButtonElement;
+    await act(async () => button.click());
+  };
+  const byState = () => container.querySelector('[aria-label="Board by state"]');
+  const refsIn = (state: string) =>
+    [...(byState()?.querySelectorAll(`[data-state="${state}"] article`) ?? [])].map((card) => card.querySelector('h3')?.textContent);
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => undefined)));
+  });
+
+  it('is By stage on a first visit, and By state after it was chosen, across a reload', async () => {
+    await show(boardWith([RUNNING]));
+    expect(container.querySelector('[aria-label="Board"]')).not.toBeNull();
+    expect(byState()).toBeNull();
+
+    await switchTo('By state');
+    expect(byState()).not.toBeNull();
+    expect(container.querySelector('[aria-label="Board"]')).toBeNull();
+    expect(localStorage.getItem('openadlc.board.view')).toBe('state');
+
+    // A reload: the page drawn afresh.
+    act(() => root.unmount());
+    root = createRoot(container);
+    await show(boardWith([RUNNING]));
+    expect(byState()).not.toBeNull();
+    expect(container.querySelector('[aria-label="Group the board"] [aria-pressed="true"]')?.textContent).toBe('By state');
+  });
+
+  it('is By stage for a value it does not know, and where storage throws', async () => {
+    localStorage.setItem('openadlc.board.view', 'columns');
+    await show(boardWith([RUNNING]));
+    expect(byState()).toBeNull();
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw new Error('SecurityError');
+      },
+      setItem: () => {
+        throw new Error('SecurityError');
+      },
+    });
+    await show(boardWith([RUNNING]));
+    expect(byState()).toBeNull();
+    // Chosen anyway, it holds for the page.
+    await switchTo('By state');
+    expect(byState()).not.toBeNull();
+  });
+
+  it('draws the four columns in order, the same cards, none of them draggable, and a line in each empty one', async () => {
+    localStorage.setItem('openadlc.board.view', 'state');
+    await show(boardWith([RUNNING, IDLE]));
+    expect([...byState()!.querySelectorAll('h2')].map((title) => title.textContent)).toEqual(['Needs you', 'Working', 'Waiting', 'Done today']);
+    expect(refsIn('working')).toEqual(['Let the board filter by label']);
+    expect(refsIn('waiting')).toEqual(['Say the cap on a card']);
+    expect(byState()!.querySelector('[data-state="needs_you"]')?.textContent).toContain('Nothing waits on you');
+    expect(byState()!.querySelector('[data-state="done_today"]')?.textContent).toContain('Nothing shipped today');
+    expect(byState()!.querySelectorAll('article[draggable="true"]')).toHaveLength(0);
+  });
+
+  it('puts a card a question waits on in Needs you, though its task runs', async () => {
+    localStorage.setItem('openadlc.board.view', 'state');
+    const question = {
+      id: 'q-16',
+      kind: 'question',
+      subject: { repo: 'openadlc', number: 16, title: null, ref: 'openadlc#16', url: null },
+      bot: null,
+      since: NOW,
+      detail: 'Which threshold?',
+      actions: [],
+    } as unknown as AttentionItem;
+    await show(boardWith([RUNNING]), [question]);
+    expect(refsIn('needs_you')).toEqual(['Let the board filter by label']);
+    expect(refsIn('working')).toEqual([]);
+  });
+
+  it('says a Working card’s spend against its repository’s per-task cap, and the spend alone with no cap', async () => {
+    localStorage.setItem('openadlc.board.view', 'state');
+    const spent = { ...RUNNING, costUsd: 4.1 };
+    await show(boardWith([spent], [{ name: 'openadlc', fullName: 'janedoe/openadlc', color: null, taskCapUsd: 15 }]));
+    const working = () => byState()!.querySelector('[data-state="working"] article')!;
+    expect(working().querySelector('[data-cost]')?.textContent).toBe('$4.10 of $15');
+    expect(working().querySelector('[data-status]')?.textContent).toBe('Builder · running tests · 12 min');
+
+    // An older bridge sends no cap, and one of zero says none.
+    await show(boardWith([spent]));
+    expect(working().querySelector('[data-cost]')?.textContent).toBe('$4.10');
+    await show(boardWith([spent], [{ name: 'openadlc', fullName: 'janedoe/openadlc', color: null, taskCapUsd: 0 }]));
+    expect(working().querySelector('[data-cost]')?.textContent).toBe('$4.10');
+  });
+
+  it('moves a card whose task started into Working on the next read, with no reload', async () => {
+    localStorage.setItem('openadlc.board.view', 'state');
+    await show(boardWith([IDLE]));
+    expect(refsIn('waiting')).toEqual(['Say the cap on a card']);
+    expect(refsIn('working')).toEqual([]);
+
+    await show(boardWith([{ ...IDLE, active: [{ ...RUNNING.active![0]!, since: '2026-09-24T11:57:00.000Z' }] }]));
+    expect(refsIn('working')).toEqual(['Say the cap on a card']);
+    expect(refsIn('waiting')).toEqual([]);
+    expect(byState()!.querySelector('[data-state="working"] [data-status]')?.textContent).toBe('Builder · running tests · 3 min');
+  });
+
+  it('leaves dragging as it was By stage', async () => {
+    const { RoleProvider } = await import('./app-header');
+    const { BoardView } = await import('./board-view');
+    const { headerData } = await import('@/lib/header');
+    const header = headerData({ repos: ['openadlc'], crew: [BUILDER], budget: null, needsYou: 0 });
+    const board = boardWith([IDLE]);
+    const draw = (view: string) => {
+      localStorage.setItem('openadlc.board.view', view);
+      return act(async () =>
+        root.render(
+          <RoleProvider role="admin">
+            <BoardView board={board} crew={[BUILDER]} repo="all" header={header} attention={[]} now={NOW} />
+          </RoleProvider>,
+        ),
+      );
+    };
+    await draw('stage');
+    expect(container.querySelectorAll('[aria-label="Board"] article[draggable="true"]')).toHaveLength(1);
+    act(() => root.unmount());
+    root = createRoot(container);
+    await draw('state');
+    expect(byState()!.querySelectorAll('article')).toHaveLength(1);
+    expect(byState()!.querySelectorAll('article[draggable="true"]')).toHaveLength(0);
+  });
+});
+
+describe('the Live dot', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
+    // The bridge does not answer: nothing refreshes the board.
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => undefined)));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('counts up from the last read, and turns stale once a refresh is missed', async () => {
+    await draw();
+    const dot = () => container.querySelector('[data-live-dot]')!;
+    expect(dot().textContent).toBe('Live · 0s ago');
+    expect(dot().hasAttribute('data-stale')).toBe(false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+    expect(dot().textContent).toBe('Live · 4s ago');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(17_000);
+    });
+    expect(dot().textContent).toBe('Not updated · 21s ago');
+    expect(dot().hasAttribute('data-stale')).toBe(true);
+    expect(dot().querySelector('.bg-attention')).not.toBeNull();
+    // Not a live region: a screen reader is not told it every second.
+    expect(dot().closest('[aria-live]')).toBeNull();
   });
 });

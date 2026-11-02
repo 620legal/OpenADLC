@@ -276,7 +276,16 @@ export interface Board {
   repo: string;
   repos: string[];
   /** Each repository with its colour. Absent from a bridge older than colours. */
-  repositories?: { name: string; fullName: string | null; color: string | null }[];
+  repositories?: {
+    name: string;
+    fullName: string | null;
+    color: string | null;
+    /**
+     * What one task may spend there, the cap gates stop it at: a Working card
+     * says its spend against it. Absent from an older bridge, read as no cap.
+     */
+    taskCapUsd?: number;
+  }[];
   columns: BoardColumn[];
   mergeLine: MergeLineEntry[];
   waitingOnYou: number;
@@ -953,6 +962,41 @@ export interface SpendingScope {
   providers: SpendingProviderFigure[];
 }
 
+/** The kinds of notification a person can switch off, in the order Settings lists them. */
+export const NOTIFY_SWITCHES = ['gate_opened', 'merge_waiting', 'review_stalled', 'cap_warning', 'promote_waiting', 'check_failing'] as const;
+export type NotifySwitch = (typeof NOTIFY_SWITCHES)[number];
+export type NotifyTransportKind = 'ntfy' | 'slack' | 'webhook';
+
+/**
+ * Settings → Notifications as the bridge shows it (`GET /v1/settings/notifications`).
+ * `target` is masked: the host and last four characters, never the whole
+ * URL or topic, which are credentials.
+ */
+export interface NotificationSettingsView {
+  /** Settings, `OPENADLC_NOTIFY_WEBHOOK`, or nowhere. */
+  source: 'settings' | 'env' | 'none';
+  kind: NotifyTransportKind | null;
+  server: string | null;
+  target: string | null;
+  switches: Record<NotifySwitch, boolean>;
+  /** The newest send since the transport was set, a test or a real one. */
+  last: { at: string; event: string; ok: boolean; status: number | null; error: string | null } | null;
+}
+
+/** What a save sends. An omitted target keeps the one saved; a null kind clears it. */
+export interface NotificationSettingsUpdate {
+  kind?: NotifyTransportKind | null;
+  server?: string;
+  target?: string;
+  switches?: Partial<Record<NotifySwitch, boolean>>;
+}
+
+export interface NotificationTestResult {
+  ok: boolean;
+  status: number | null;
+  error: string | null;
+}
+
 export interface SpendingLimitsView {
   period: string;
   global: SpendingScope;
@@ -1268,6 +1312,7 @@ export const api = {
   insights: (options: { repo?: string | null; days: 7 | 30 }) =>
     get<InsightsView>(`/v1/insights?days=${options.days}${options.repo ? `&repo=${encodeURIComponent(options.repo)}` : ''}`),
   spendingLimits: () => get<SpendingLimitsView>('/v1/spending/limits'),
+  notifications: () => get<NotificationSettingsView>('/v1/settings/notifications'),
   hosts: () => get<HostsView>('/v1/hosts'),
   attention: () => get<{ items: AttentionItem[] }>('/v1/attention'),
   modelAccounts: () => get<{ accounts: ModelAccountRef[] }>('/v1/model-accounts'),
@@ -1389,6 +1434,35 @@ export interface WorkPauses {
    * pause says; absent is read as true.
    */
   dispatching?: boolean;
+}
+
+/**
+ * A work item the command palette can open, as the bridge's `GET /v1/items`
+ * lists it: open ones, and those closed in the last 30 days.
+ */
+export interface JumpItem {
+  /** `acme-213`: the item's page is `/items/<key>`. */
+  key: string;
+  number: number;
+  /** Its first issue's title, or its first link's when it has no issue. */
+  title: string;
+  /** `repo#12` for each issue and pull request on it, in the order they were linked. */
+  refs: string[];
+  open: boolean;
+  /** When the last of its links closed; null while open. */
+  closedAt: string | null;
+}
+
+/**
+ * What the palette reads each time it opens (`/api/palette`): the jump list,
+ * and whether anything is paused, each read on its own so one failing leaves
+ * the other. `paused` is null when the pauses could not be read.
+ */
+export interface PaletteRead {
+  items: JumpItem[] | null;
+  numbered: boolean;
+  itemsError: string | null;
+  paused: boolean | null;
 }
 
 /** What finishes a step a removal could not do: removing again, or a page on GitHub. */

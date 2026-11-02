@@ -103,6 +103,7 @@ role alone before it has one (`botInWords`, `packages/shared/src/bot-words.ts`).
 | `repo-rules` | 60 min | Nothing the crew builds can land in `<repo>` | Apply the rules on the walkthrough's last step, or `openadlc github apply` |
 | `repo-config` | 30 min, and when a pull request merged into a default branch changes one of the files it reads | `<owner/repo>`’s AGENTS.md doesn’t say who approves its human-review paths yet — line N still has the template’s `@owner` · `<login>` is named as a reviewer in `<repo>`’s AGENTS.md, but there is no such GitHub account · … but `<login>` is an organization, not a person · … but cannot review: `<login>` is not a collaborator on `<repo>` (or has triage or read there) · `<login>` is one of this install’s people (OPENADLC_HUMANS), but there is no such GitHub account (a warning) | [A named reviewer does not exist or cannot review](#a-named-reviewer-does-not-exist-or-cannot-review) |
 | `repo-owner` | 15 min | Nothing builds in `<repo>`: no bot owns it | Set its `owner` in config/repos.yaml to a seat (`builder`) and run `openadlc seed`; a repository not listed there gets the builder when it is added again in Settings → Repositories |
+| `notifications` | 5 min, and when Settings → Notifications is saved or tested | Notifications are set up but have not been proved · The last notification did not reach ntfy (Slack, your webhook), with its status or error (a warning) | **Open Settings → Notifications**, check the topic or URL and press **Send a test**; it clears when a send gets through. It never sends anything itself. See [configuration](configuration.md#notifications) |
 | `deploy-dispatch` | 5 min | `<repo>`: `<workflow>` of `<sha>` has not been dispatched (a warning for a promote, blocking for a rollback) | Fix what GitHub said, shown on the card; the deploy sweep dispatches it again, or run the workflow from the repository's Actions. See [A merge did not deploy](#a-merge-did-not-deploy-or-production-did-not-wait) |
 | `testing-egress` | 15 min, and when Settings → Egress is saved | QA cannot reach `<repo>`’s testing environment: the egress proxy refuses `<host>` (a warning) | **Allow `<host>` in Settings**, which opens Settings → Egress with the host in the field, for an admin to allow; or add it to `extra_allowed_domains` and run `openadlc cloud apply`, which resets the host. Allow the host itself, not a domain above it ([self-hosting](self-hosting.md#what-the-hosts-tasks-may-reach)). Only on a cloud install, whose tasks leave through the egress proxy |
 | `cloud-names` | 60 min | This cloud install still has the names from before the rename to OpenADLC (a warning) | Rename it, with no task running, by [runbooks/rename-gcp-host.md](runbooks/rename-gcp-host.md): copy each `fleet-` secret to its `openadlc-` name, apply the module, which resets the host, check it, then delete the old secrets, which clears the card. Only on an install whose secrets are in Secret Manager |
@@ -1157,6 +1158,42 @@ start reports nothing either. After `openadlc restore`, the last beat is the
 backup's, so the next start reports a gap from when the backup was taken; the
 tasks it lists are the ones that start really resumed or ended. See
 [ADR 0022](adr/0022-the-bridge-keeps-its-own-heartbeat-and-gap-report.md).
+
+## The machine slept while the crew worked
+
+**"This machine slept for 47 min with work in flight."** A warning card in
+Needs you. The bridge looks every 30 seconds; when a look comes more than two
+minutes after the one before, and the wall clock ran at least a minute ahead
+of the monotonic clock, which stands still while the machine is suspended, the
+machine slept. A loop that was only busy for that long moves both clocks and
+is not reported. It is recorded only when the look before saw work in flight,
+as a `bridge.slept` event, and the card says when it slept and woke, what was
+in flight (tasks, merges waiting on CI, deploys), and what keep-awake was
+doing:
+
+- **"keep-awake is off"**: the switch in Settings → System is off. The card's
+  **Open Settings** goes to it.
+- **"keep-awake was holding; a closed lid or Sleep from the Apple menu still
+  sleeps a Mac"**: `caffeinate -i` stops idle sleep only. Keep the lid open,
+  or run the install on a machine that does not sleep.
+- **"this host cannot be kept awake by OpenADLC"**: the bridge is not on
+  macOS, or found no `caffeinate`. Its **Read why** comes here.
+
+Whatever was in flight stopped where it was and went on when the machine
+woke; a task whose host was silent too long may have been ended by
+reconcile (see [A card is stuck in a column](#a-card-is-stuck-in-a-column)).
+The card clears itself an hour after the last sleep, or when you press
+**Dismiss**; a later sleep raises it again.
+
+To see the assertion on a Mac while a task runs:
+
+```bash
+pmset -g assertions | grep caffeinate
+```
+
+It lists the `caffeinate` the bridge started, and no longer does a minute
+after the last work in flight ends, or once the switch is off. See
+[ADR 0028](adr/0028-the-bridge-keeps-its-host-awake-while-work-is-in-flight.md).
 
 ## The console is a blank page under a LAN name or a tunnel
 

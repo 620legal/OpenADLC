@@ -101,6 +101,9 @@ describe('every console route says who may call it', () => {
       'POST /v1/items/:subject/links',
       'DELETE /v1/items/:subject/links/:ref',
       'POST /v1/items/:subject/merge',
+      'GET /v1/settings/notifications',
+      'PUT /v1/settings/notifications',
+      'POST /v1/settings/notifications/test',
     ]) {
       expect(ROUTE_ROLES[key], key).toBe('admin');
     }

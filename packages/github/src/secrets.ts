@@ -180,6 +180,18 @@ export function registryTokenRef(): string {
 }
 
 /**
+ * Where notifications go: the Slack incoming-webhook URL, the generic
+ * webhook's URL, or the ntfy topic. Each is a credential: a Slack or webhook
+ * URL lets whoever holds it post as the install, and on ntfy.sh anyone who
+ * knows a topic can subscribe to it and read every notification. So the
+ * `notifyTransport` setting says which kind and when it was set, and the
+ * target itself lives only here; the console is shown it masked.
+ */
+export function notifyTargetRef(): string {
+  return 'notify-target';
+}
+
+/**
  * What hostd presents to the bridge's token service. The service hands out a
  * GitHub credential, so reaching the private network is not on its own enough
  * to be served: the caller has to hold something only the install's own

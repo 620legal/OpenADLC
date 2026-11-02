@@ -1,6 +1,6 @@
 import { heldBySeatPause, registerSeatPauseRoutes, seatPausedReason } from './seat-pause.js';
 import { createServer } from 'node:http';
-import { audit as auditEntry, bots, bridgeGaps, ciUsage, closePool, costs, deployRuns, issues as issueStore, leases as leaseStore, repos, settings, tasks, threads as threadStore, waitForDatabase } from '@openadlc/db';
+import { audit as auditEntry, bots, bridgeGaps, ciUsage, closePool, costs, deployRuns, inFlight, issues as issueStore, leases as leaseStore, recordEvent, repos, settings, tasks, threads as threadStore, waitForDatabase } from '@openadlc/db';
 import { registerPauseRoutes, restorePause } from './pause-work.js';
 import { accountOf, appPrivateKeyRef, appVisibility, ensureAlertsSecret, ensureConsoleSecret, ensureInternalSecret, getSecretStore, installationTokenFor, openadlcHome, redeliverFailedSince } from '@openadlc/github';
 import { sameLogin } from '@openadlc/shared';
@@ -41,6 +41,7 @@ import { APP_API, InvitationService } from './invitation-service.js';
 import { CrewAccessKeeper } from './crew-access.js';
 import { Reconciler } from './reconciler.js';
 import { startGap, startHeartbeat } from './bridge-gap.js';
+import { KeepAwake, SLEPT_EVENT } from './keep-awake.js';
 import { JobTimer } from './job-timer.js';
 import { Router } from './router.js';
 import { REQUEST_SWEEP_MS, RequestQueue } from './request-queue.js';
@@ -563,11 +564,20 @@ async function main(): Promise<void> {
   // `openadlc:abandoned` on a repository set up before it existed: the
   // automation account may put a label on, and only the app may make one.
   webhooks.useEnsureLabel((repoFullName, label) => repoSetup.ensureLabel(repoFullName, label));
+  // On a Mac, the host is held awake while the install has work in flight, and
+  // a sleep under the running bridge is recorded for the `slept` check. See
+  // `keep-awake.ts`. Started once the health registry it tells exists.
+  const keepAwake = new KeepAwake({
+    inFlight: () => inFlight(),
+    setting: () => settings.getSetting('keepAwake'),
+    recordSleep: async (slept) => void (await recordEvent({ source: 'platform', type: SLEPT_EVENT, payload: slept })),
+    slept: () => health.runSoon(['slept']),
+  });
   // Everything OpenADLC cannot do for itself, proved by its effect and kept
   // proving: a failing check is a card on the board until it passes, and a
   // lasting blocking one is sent through the notifier. See `health/`.
   const health = new HealthRegistry({
-    checks: defaultChecks({ config, actors, hostd, webhookSetup, repoSetup, appReach, dispatch: dispatchMode, delivery }),
+    checks: defaultChecks({ config, actors, hostd, webhookSetup, repoSetup, appReach, dispatch: dispatchMode, delivery, notifier, keepAwake }),
     notify: (notice) => notifier.send({ event: notice.event, to: null, text: notice.text, link: notice.link }),
     settingUp,
     consoleUrl: config.consoleUrl,
@@ -595,6 +605,7 @@ async function main(): Promise<void> {
       dispatchRuns?.soon('a health check passed');
     },
   });
+  keepAwake.start();
   onboarding.useInvitations(invitations);
   onboarding.useCrewAccess(crewAccess);
   // A bot let in is a check to ask again, not one to wait half an hour for.
@@ -692,6 +703,7 @@ async function main(): Promise<void> {
     names,
     crewAccess,
     health,
+    keepAwake,
     dispatchGate,
     appReach,
     defaultBranchOf,
@@ -703,8 +715,10 @@ async function main(): Promise<void> {
     // what a card waiting with nothing going on it says.
     nextRun: (job: string) => jobs.nextRun(job),
     dispatching: anythingDispatches(dispatchMode),
+    notifier,
   };
-  registerConsoleApi(router, deps);
+  // Stops the look at Needs you for a waiting merge or a stopped review (`notify-waiting.ts`).
+  const stopConsoleApi = registerConsoleApi(router, deps);
   // One seat paused from Crew takes no new work; resuming it starts what that
   // held: the requests intake left in line, the reviews and lead the gates wait
   // on, a dispatch for a builder, and the work only an event starts, which was
@@ -960,10 +974,14 @@ async function main(): Promise<void> {
     // and the keeper kills the bridge 20 s after the stop signal, so a busy
     // restart never reached the last beat and reported a gap.
     await heartbeat.beat();
+    // Let go of the host before the drains: a Mac held awake by a bridge that
+    // is stopping keeps it from sleeping for up to 20 s more for nothing.
+    await keepAwake.stop();
     dispatchRuns?.stop();
     stageRuns.stop();
     names.stop();
     health.stop();
+    stopConsoleApi();
     server.close();
     // Before the pool, because a tunnel left running keeps a public hostname
     // pointing at a port that no longer answers.
@@ -991,6 +1009,8 @@ async function main(): Promise<void> {
   // the tunnel is killed here, or it outlives the bridge and the next start
   // raises another beside it.
   process.on('exit', () => void webhookSetup.stopTunnel().catch(() => undefined));
+  // `caffeinate -w` ends with the bridge on its own; this lets go at once.
+  process.on('exit', () => keepAwake.killNow());
 }
 
 // A promise nobody awaited that rejects would end the bridge, and with it what

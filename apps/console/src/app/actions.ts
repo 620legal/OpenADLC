@@ -4,6 +4,9 @@ import { revalidatePath } from 'next/cache';
 import {
   BRIDGE_URL,
   type DesignMemoryEntry,
+  type NotificationSettingsUpdate,
+  type NotificationSettingsView,
+  type NotificationTestResult,
   type RemovalChoices,
   type RemovalPreview,
   type RemovalReport,
@@ -907,6 +910,32 @@ export async function setCiCap(minutes: number | null): Promise<{ ok: boolean; e
     return { ok: true };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'the cap was not saved' };
+  }
+}
+
+/** Saves Settings → Notifications: where to notify, and which kinds. */
+export async function saveNotifications(
+  update: NotificationSettingsUpdate,
+): Promise<{ ok: boolean; error?: string; view?: NotificationSettingsView }> {
+  try {
+    const view = await call<NotificationSettingsView>('/v1/settings/notifications', 'PUT', update);
+    revalidatePath('/settings');
+    revalidatePath('/settings/notifications');
+    return { ok: true, view };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'the notification settings were not saved' };
+  }
+}
+
+/** Send a test: through the saved transport, and whether the endpoint took it. */
+export async function testNotifications(): Promise<{ ok: boolean; error?: string; result?: NotificationTestResult }> {
+  try {
+    const result = await call<NotificationTestResult>('/v1/settings/notifications/test', 'POST', {});
+    revalidatePath('/settings');
+    revalidatePath('/settings/notifications');
+    return { ok: true, result };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'the test was not sent' };
   }
 }
 

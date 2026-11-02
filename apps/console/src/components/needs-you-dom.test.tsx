@@ -1015,3 +1015,150 @@ describe('a link to one item on the Needs-you page', () => {
     expect(document.querySelectorAll('[role="tabpanel"]:not([hidden]) article').length).toBeGreaterThan(0);
   });
 });
+
+describe('the Needs-you page from the keyboard', () => {
+  const asked = (id: string, number: number, minutesAgo: number, options: string[]) =>
+    item(id, 'question', 'work', minutesAgo, {
+      subject: { repo: 'OpenADLC', number, title: `Question ${number}`, ref: `OpenADLC#${number}`, url: null, item: `OpenADLC#${number}` },
+      bot: { name: 'atlas', slot: 'builder', role: 'implement', roleLabel: 'builder', githubLogin: 'atlas' },
+      question: { gateId: `g-${id}`, options },
+    });
+  const QUESTIONS = [asked('a', 1, 3, ['yes', 'no']), asked('b', 2, 6, ['left', 'right']), asked('c', 3, 9, ['now', 'later'])];
+
+  async function page(): Promise<void> {
+    const header = headerData({ repos: ['OpenADLC'], crew: [], budget: null, needsYou: QUESTIONS.length, attention: QUESTIONS });
+    await act(async () => root.render(<NeedsYouPage items={QUESTIONS} crew={[]} header={header} now={NOW} tab="work" />));
+  }
+  async function press(key: string, target: EventTarget = window): Promise<void> {
+    await act(async () => {
+      target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+  const order = () => [...document.querySelectorAll('[role="tabpanel"]:not([hidden]) article')].map((card) => card.getAttribute('data-card'));
+  const current = () => [...document.querySelectorAll('article[aria-current="true"]')].map((card) => card.getAttribute('data-card'));
+  const optionsOf = (id: string) => QUESTIONS.find((one) => one.id === id)!.question!.options;
+
+  beforeEach(() => vi.mocked(answerGate).mockClear());
+
+  it('answers three questions with no mouse: j to each, then its number', async () => {
+    await page();
+    const [first, second, third] = order() as [string, string, string];
+
+    await press('j');
+    expect(current()).toEqual([first]);
+    // The selected card says which key is which choice.
+    expect(document.querySelector(`article[data-card="${first}"] kbd`)?.textContent).toBe('1');
+    await press('1');
+    await press('j');
+    expect(current()).toEqual([second]);
+    await press('2');
+    await press('j');
+    expect(current()).toEqual([third]);
+    await press('1');
+
+    expect(vi.mocked(answerGate).mock.calls).toEqual([
+      [`g-${first}`, optionsOf(first)[0]],
+      [`g-${second}`, optionsOf(second)[1]],
+      [`g-${third}`, optionsOf(third)[0]],
+    ]);
+    // Each says so on its card, as a click does.
+    for (const id of [first, second, third]) {
+      expect(document.querySelector(`article[data-card="${id}"] [data-done]`)?.textContent).toContain('Answered:');
+    }
+  });
+
+  it('answers once from the keys, as a click does: not again after the answer, nor from a held key', async () => {
+    await page();
+    const [first] = order() as [string];
+    await press('j');
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', repeat: true, bubbles: true, cancelable: true }));
+    });
+    expect(vi.mocked(answerGate)).not.toHaveBeenCalled();
+    await press('1');
+    expect(document.querySelector(`article[data-card="${first}"] [data-done]`)?.textContent).toContain('Answered:');
+    await press('1');
+    await press('2');
+    expect(vi.mocked(answerGate).mock.calls).toEqual([[`g-${first}`, optionsOf(first)[0]]]);
+  });
+
+  it('wraps nowhere: j on the last and k on the first change nothing', async () => {
+    await page();
+    const ids = order();
+    await press('k');
+    expect(current()).toEqual([ids[0]]);
+    await press('k');
+    expect(current()).toEqual([ids[0]]);
+    for (let n = 0; n < 5; n++) await press('j');
+    expect(current()).toEqual([ids.at(-1)]);
+    await press('k');
+    expect(current()).toEqual([ids.at(-2)]);
+  });
+
+  it('answers nothing for a number the question has no choice for, nor before anything is selected', async () => {
+    await page();
+    await press('1');
+    await press('j');
+    await press('9');
+    expect(vi.mocked(answerGate)).not.toHaveBeenCalled();
+  });
+
+  it('opens the selected item’s sheet on Enter, and leaves the keys to it while it is open', async () => {
+    await page();
+    const [first] = order() as [string];
+    await press('j');
+    await press('Enter');
+    expect(document.querySelector('[data-item-view]')?.getAttribute('data-item-view')).toBe(QUESTIONS.find((one) => one.id === first)!.subject.item);
+    await press('j');
+    await press('1');
+    expect(current()).toEqual([first]);
+    expect(vi.mocked(answerGate)).not.toHaveBeenCalled();
+  });
+
+  it('does nothing while a text field has focus', async () => {
+    await page();
+    const field = document.createElement('input');
+    document.body.appendChild(field);
+    field.focus();
+    await press('j', field);
+    expect(current()).toEqual([]);
+    await press('j');
+    await press('1', field);
+    await press('Enter', field);
+    expect(vi.mocked(answerGate)).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-item-view]')).toBeNull();
+  });
+
+  it('does nothing while a dialog is open', async () => {
+    await page();
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    document.body.appendChild(dialog);
+    await press('j');
+    expect(current()).toEqual([]);
+    dialog.remove();
+    await press('j');
+    document.body.appendChild(dialog);
+    await press('1');
+    await press('Enter');
+    expect(vi.mocked(answerGate)).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-item-view]')).toBeNull();
+  });
+
+  it('leaves Enter on a focused choice to that button', async () => {
+    await page();
+    const [first] = order() as [string];
+    await press('j');
+    const choice = document.querySelector(`article[data-card="${first}"] [role="group"][aria-label="Choices"] button`) as HTMLButtonElement;
+    choice.focus();
+    await press('Enter', choice);
+    expect(document.querySelector('[data-item-view]')).toBeNull();
+  });
+
+  it('is not on the board’s few cards', async () => {
+    await render(QUESTIONS);
+    await press('j');
+    expect(current()).toEqual([]);
+  });
+});

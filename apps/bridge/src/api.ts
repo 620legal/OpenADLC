@@ -107,7 +107,10 @@ import { defaultModelAccountDeps, registerModelAccountRoutes } from './model-acc
 import { onAccountsWorkedIn, registerAppReachRoutes, repositoryFrom, type AppReach } from './app-reach.js';
 import { engineUpdatesFor, registerEngineUpdateRoutes } from './engine-updates.js';
 import { selfUpdateAttentionFromSettings } from './self-update.js';
-import { ATTENTION_WINDOW_DAYS, ClosedSubjects, registerAttentionRoutes, STOPPED_BY_A_PERSON, type HeldPromote } from './attention.js';
+import { ATTENTION_WINDOW_DAYS, attentionItems, ClosedSubjects, readAttention, registerAttentionRoutes, STOPPED_BY_A_PERSON, type AttentionDeps, type HeldPromote } from './attention.js';
+import { notificationSettingsView, saveNotificationSettings, type NotificationSettingsInput, type Notifier } from './notify.js';
+import { WaitingNotices } from './notify-waiting.js';
+import { NOTIFICATIONS_CHECK } from './health/checks/notifications.js';
 import { bridgeStopReason, stoppedByTheBridge, THE_BRIDGE } from './bridge-stops.js';
 import { asAutomation } from './automation-bot.js';
 import { livePersonGitHubDeps, PersonFlows, registerPersonGitHubRoutes } from './person-github.js';
@@ -117,6 +120,7 @@ import { deploysNothingHere } from './deploy-pipeline.js';
 import { releaseEventsOf } from './health/checks/ships-by-release.js';
 import { startBuild } from './build-start.js';
 import type { HealthRegistry } from './health/registry.js';
+import type { KeepAwake } from './keep-awake.js';
 import { registerHealthRoutes } from './health/routes.js';
 import { registerSigningKeyRoutes } from './signing-key-routes.js';
 import { SubjectTitles } from './subject-titles.js';
@@ -129,6 +133,7 @@ import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
 import { checkConsoleLogo, checkConsoleName, decodeLogo, LOGO_POLICY, logoMediaType } from './brand.js';
 import { defaultItemLinkDeps, registerItemLinkRoutes, registerItemRoutes } from './item-routes.js';
+import { registerItemSearchRoutes } from './item-search-routes.js';
 import { itemKey, itemOf, offeredGate, requestSubject, resolveItem } from './items.js';
 import { PlanChanges, registerPlanChangeRoutes } from './plan-changes.js';
 import { humanReviewReader } from './human-review-read.js';
@@ -169,6 +174,8 @@ export interface ApiDeps {
   crewAccess?: CrewAccessKeeper;
   /** The health checks; absent where none run. See `health/`. */
   health?: HealthRegistry;
+  /** Holding a Mac awake while work is in flight (`keep-awake.ts`); absent, `GET /v1/install` says nothing of it. */
+  keepAwake?: Pick<KeepAwake, 'state' | 'evaluateSoon'>;
   /** Pauses the dispatcher's leases, as a restore into this install does while it writes. */
   dispatchGate?: DispatchGate;
   /** Where the app is installed and whether it reaches a repository; absent where nothing asks GitHub. */
@@ -213,6 +220,14 @@ export interface ApiDeps {
    * and starts nothing, as before.
    */
   messageStarts?: MessageStarts | null;
+  /**
+   * Owner notifications: Settings → Notifications' routes, and the look at
+   * Needs you that sends a waiting merge or a stopped review
+   * (`notify-waiting.ts`), started here because it reads attention as
+   * `GET /v1/attention` does. Absent, those routes answer that nothing sends
+   * and nothing is looked at.
+   */
+  notifier?: Notifier;
 }
 
 /** Where what runs after an answer belongs: the task it was for, or else a subject's thread. */
@@ -1012,7 +1027,11 @@ export async function stopTask(
   return { task: task.id, state: 'stopped', releasedLease: released?.id ?? null, questionsClosed, stopped: true };
 }
 
-export function registerConsoleApi(router: Router, deps: ApiDeps): void {
+/**
+ * Registers the console's routes. Returns what stops what they started: the
+ * look at Needs you for notifications, when a notifier was given.
+ */
+export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   const { config, hostd, afterwards } = deps;
   const removal =
     deps.removal ??
@@ -1067,7 +1086,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     client: () => asAutomation(deps.actors, config),
     fullName: async (name) => (await repos.getRepoByName(name))?.fullName ?? null,
   });
-  registerAttentionRoutes(router, {
+  // Named, so the notifications' look at Needs you reads the same items, by
+  // the same ids, as the board (`notify-waiting.ts`).
+  const attentionDeps: AttentionDeps = {
     waiting: waitingReads,
     engineUpdates: engineUpdatesFor(hostd),
     selfUpdate: { attention: () => selfUpdateAttentionFromSettings() },
@@ -1101,7 +1122,16 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       }
       return out;
     },
-  });
+  };
+  registerAttentionRoutes(router, attentionDeps);
+  const waitingNotices = deps.notifier
+    ? new WaitingNotices({
+        notifier: deps.notifier,
+        items: async () => attentionItems(await readAttention(new Date(), attentionDeps)),
+        consoleUrl: config.consoleUrl,
+      })
+    : null;
+  waitingNotices?.start();
   if (deps.health) registerHealthRoutes(router, deps.health);
   // What the signing-key card's buttons press: dismissing a key as used
   // elsewhere, its undo, and revoking one from the bot's account.
@@ -1320,12 +1350,25 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     // before the week, which the board does not read: a quiet repository's
     // board said "File your first request" over its history.
     const doneBefore = columns.every((column) => column.cards.length === 0) ? await issues.anyDoneBefore(since, repoName) : undefined;
+    // What one task may spend in each repository, the cap gates stop it at
+    // (`effectiveTaskCap`): a Working card says its spend against it. The
+    // global cap alone would have said "of $15" where the repository's own
+    // stops its tasks at $5. One that cannot be read is left off, and the
+    // card says its spend alone, rather than the board failing for it.
+    const taskCaps = await Promise.all(
+      repoList.map((repo) => spendingLimits.effectiveTaskCap(repo.id, config?.costs?.perTaskCapUsd ?? 0).catch(() => null)),
+    );
 
     return {
       repo: repoName ?? 'all',
       repos: repoList.map((repo) => repo.name),
       // Each with the colour the board tells it apart by, when it shows them all.
-      repositories: repoList.map((repo) => ({ name: repo.name, fullName: repo.fullName, color: repo.color })),
+      repositories: repoList.map((repo, index) => ({
+        name: repo.name,
+        fullName: repo.fullName,
+        color: repo.color,
+        ...(typeof taskCaps[index] === 'number' ? { taskCapUsd: taskCaps[index] } : {}),
+      })),
       columns,
       mergeLine: landing.map((entry) => ({
         repo: entry.repoName,
@@ -1585,6 +1628,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
   });
 
   registerItemRoutes(router, deps);
+  // The command palette's jump list: open items and those closed in the last month.
+  registerItemSearchRoutes(router);
   registerItemLinkRoutes(router, defaultItemLinkDeps(() => asAutomation(deps.actors, config)));
   registerPlanChangeRoutes(router, planChangesFor(deps), async (subject) => {
     const found = await resolveItem(subject);
@@ -1949,6 +1994,33 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     await settings.setSetting('ciMinutesCap', minutes === null ? '' : String(minutes), identity);
     await audit({ actor: identity, action: 'ci.cap', target: 'install', payload: { minutes } });
     return { cap: minutes };
+  });
+
+  // Settings → Notifications: where the bridge notifies a person, which
+  // kinds, and a test that proves it. The target is a credential (a Slack or
+  // webhook URL, or an ntfy topic anyone could subscribe to): it goes to the
+  // secret store only, and comes back masked.
+  const notifierOrRefuse = (): Notifier => {
+    if (!deps.notifier) throw new HttpFailure(503, 'this bridge sends no notifications: it was started without a notifier');
+    return deps.notifier;
+  };
+  router.get('/v1/settings/notifications', async () => notificationSettingsView(notifierOrRefuse()));
+  router.add('PUT', '/v1/settings/notifications', async ({ body, identity }) => {
+    const notifier = notifierOrRefuse();
+    const input = await body<NotificationSettingsInput | null>();
+    if (!input || typeof input !== 'object') throw new HttpFailure(400, 'send {kind, server?, target?, switches?}');
+    const saved = await saveNotificationSettings(notifier.store, input, identity);
+    if (!saved.ok) throw new HttpFailure(400, saved.error);
+    await audit({ actor: identity, action: 'settings.notifications_changed', target: 'install', payload: { ...saved.change } });
+    // A new transport is unproved until a send gets through: the card says so now, not in five minutes.
+    deps.health?.runSoon([NOTIFICATIONS_CHECK]);
+    return notificationSettingsView(notifier);
+  });
+  router.post('/v1/settings/notifications/test', async () => {
+    const result = await notifierOrRefuse().test();
+    if (!result) throw new HttpFailure(400, 'Nothing to test: choose where to notify you first');
+    deps.health?.runSoon([NOTIFICATIONS_CHECK]);
+    return result;
   });
 
   // How long the bridge was away, and what the start after it resumed or
@@ -2702,6 +2774,11 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       // would go back to if the field were cleared.
       storedKeys: Object.keys(stored),
       webhookUrl: `${live.publicUrl || 'https://your-bridge.example.com'}/webhooks/github`,
+      // Whether this host can be held awake at all, whether the switch is on
+      // (absent is on), and whether it is held now. The switch is drawn only where available.
+      ...(deps.keepAwake
+        ? { keepAwake: { ...deps.keepAwake.state(), on: stored.keepAwake !== 'off' } }
+        : {}),
     };
   });
 
@@ -3163,6 +3240,10 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       if (!result.ok) throw new HttpFailure(400, result.error);
       checked.set(key, result.value);
     }
+    // Checked here too, so a refused value writes nothing else in the request.
+    if ('keepAwake' in input && input.keepAwake !== 'on' && input.keepAwake !== 'off') {
+      throw new HttpFailure(400, 'keepAwake is on or off');
+    }
 
     for (const [key, value] of Object.entries(input)) {
       if (!settings.isSettingKey(key)) throw new HttpFailure(400, `${key} is not a setting`);
@@ -3187,6 +3268,11 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       // resume written here skipped its audit and what a resume starts.
       if (key === 'workPausedSeats') throw new HttpFailure(400, 'pause and resume a seat with POST /v1/crew/<bot>/pause and /v1/crew/<bot>/resume, which are audited');
       if (key === 'heldItems') throw new HttpFailure(400, 'hold and release a work item with POST /v1/items/<subject>/pause and /v1/items/<subject>/resume, which are audited');
+      // Its target is in the secret store, written beside it: set apart, a
+      // kind could name a transport whose target is another kind's.
+      if (key === 'notifyTransport' || key === 'notifyKinds') {
+        throw new HttpFailure(400, `${key} is written by PUT /v1/settings/notifications, which keeps where notifications go and its target together`);
+      }
       if (key === 'unownedIssues') throw new HttpFailure(400, 'unownedIssues is kept by the intake sweep; answer each issue with POST /v1/repos/<repo>/unowned/intake, /ignore or /close');
       if (typeof value !== 'string') throw new HttpFailure(400, `${key} must be a string`);
 
@@ -3280,6 +3366,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
       // The keys, never the values: one of them is a webhook signing secret.
       payload: { keys: written },
     });
+    // Turned off, the assertion is let go of now rather than at the next tick.
+    if (written.includes('keepAwake')) deps.keepAwake?.evaluateSoon();
 
     const live = await effectiveConfig(config);
     // Each person added is pinned to the account their login names now, and
@@ -3525,6 +3613,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     if (!result.sent) throw new HttpFailure(409, result.reason);
     return { moved: true };
   });
+
+  return () => waitingNotices?.stop();
 }
 
 /**

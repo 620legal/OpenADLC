@@ -38,6 +38,8 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'GET /v1/threads/:bot': 'user',
   'GET /v1/threads/:bot/stream': 'user',
   // A work item: a request, its issue and its pull request, as one conversation.
+  // The work items the command palette can open: open, and closed in the last month.
+  'GET /v1/items': 'user',
   'GET /v1/items/:subject': 'user',
   'GET /v1/items/:subject/stream': 'user',
   'GET /v1/gates': 'user',
@@ -140,6 +142,10 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'PATCH /v1/install': 'admin',
   'PATCH /v1/spending/limits': 'admin',
   'PUT /v1/costs/ci-cap': 'admin',
+  // Settings → Notifications: where the bridge notifies a person, and its test.
+  'GET /v1/settings/notifications': 'admin',
+  'PUT /v1/settings/notifications': 'admin',
+  'POST /v1/settings/notifications/test': 'admin',
   'PUT /v1/spending/limits': 'admin',
   'PATCH /v1/repos/:name': 'admin',
   // What removing one would do: its work, its leases, the crew's access to it.

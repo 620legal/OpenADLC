@@ -120,6 +120,9 @@ const SETTING_LABELS: Record<string, string> = {
   testingDeploy: 'Which repositories have a testing deploy',
   consoleName: 'The console’s name',
   consoleLogo: 'The console’s logo',
+  keepAwake: 'Whether the bridge keeps its Mac awake while work is in flight',
+  notifyTransport: 'Where notifications go',
+  notifyKinds: 'Which notifications are switched off',
 };
 
 /** Labelled, but a JSON value nobody reads by eye, so only said to differ. */
@@ -135,6 +138,8 @@ const STRUCTURED_SETTINGS = new Set([
   'testingDeploy',
   // A data URL of up to 350 KB, which says nothing to a person printed twice.
   'consoleLogo',
+  'notifyTransport',
+  'notifyKinds',
 ]);
 
 /** The App's parts, which are taken or kept together: one app's client id with another's key is neither. */
