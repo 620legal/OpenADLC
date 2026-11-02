@@ -132,6 +132,7 @@ import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
 import { checkConsoleLogo, checkConsoleName, decodeLogo, LOGO_POLICY, logoMediaType } from './brand.js';
 import { defaultItemLinkDeps, registerItemLinkRoutes, registerItemRoutes } from './item-routes.js';
+import { registerItemSearchRoutes } from './item-search-routes.js';
 import { itemKey, itemOf, offeredGate, requestSubject, resolveItem } from './items.js';
 import { PlanChanges, registerPlanChangeRoutes } from './plan-changes.js';
 import { humanReviewReader } from './human-review-read.js';
@@ -1624,6 +1625,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   });
 
   registerItemRoutes(router, deps);
+  // The command palette's jump list: open items and those closed in the last month.
+  registerItemSearchRoutes(router);
   registerItemLinkRoutes(router, defaultItemLinkDeps(() => asAutomation(deps.actors, config)));
   registerPlanChangeRoutes(router, planChangesFor(deps), async (subject) => {
     const found = await resolveItem(subject);

@@ -955,6 +955,22 @@ back. A crew account that moves a stage label back is put back.
   the fact on its plan changes, is audited under the item's key, with the
   subjects it acted on in the payload (`subjects`); pause, resume, next and
   cancel answer with the key as `item`.
+  `GET /v1/items` (`user`) is the command palette's jump list: the open
+  items and those closed in the last 30 days, read from `boardLinks`. It
+  leaves out what the console leaves out and items in removed repositories,
+  and holds at most 1000. The palette reads it through the console's
+  `/api/palette`, beside whether anything is paused, each time it opens, and
+  matches in the browser (docs/adr/0029).
+- **Keyboard.** ⌘K on a Mac and Ctrl+K elsewhere open the command palette on
+  every page with the header (`AppShell`), even from a text field. It jumps
+  to an item, goes to a page, or acts: New request, Pause work, and Resume,
+  which goes to Settings' Pause work card. Settings, Pause work and Resume are
+  offered to an admin only, and Resume only while something is paused. `?`
+  lists the keys. On Needs you, j and k select a card in the open tab without
+  wrapping, 1–9 answer the selected question with that choice through the
+  card's own handler, and Enter opens it. Every single-key rule yields while
+  typing in a field, while a dialog is open, or with a modifier held
+  (`lib/keys.ts`).
 - **The board reads the issues it can show**, numbered or not: those not in
   Done, and those in Done whose row changed in the week Done shows
   (`boardIssues`, indexed by migration 0151), and of the tasks only theirs

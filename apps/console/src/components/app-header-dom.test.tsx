@@ -1,10 +1,13 @@
 // @vitest-environment happy-dom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CrewMember } from '@/lib/api';
 import { headerData } from '@/lib/header';
-import { AppHeader, BrandProvider } from './app-header';
+import { AppHeader, AppShell, BrandProvider } from './app-header';
+
+// The shell's live refresh and the palette's links read the router.
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: () => undefined, refresh: () => undefined, replace: () => undefined }) }));
 
 /**
  * The header in a narrow window. At 800px the badge of what needs you broke
@@ -137,5 +140,41 @@ describe('the console’s name and logo, at their longest', () => {
     expect(link.querySelector('img[data-brand-logo]')).not.toBeNull();
     expect(classes(link.querySelector('[data-brand-name]'))).toContain('truncate');
     expect(link.textContent).toBe(NAME);
+  });
+});
+
+describe('the shell’s keys', () => {
+  async function shell(page: 'crew' | 'costs'): Promise<void> {
+    await act(async () =>
+      root.render(
+        <AppShell page={page} data={DATA}>
+          <p>{page}</p>
+        </AppShell>,
+      ),
+    );
+  }
+  async function press(init: KeyboardEventInit): Promise<void> {
+    await act(async () => {
+      (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  beforeEach(() => {
+    Object.defineProperty(navigator, 'platform', { value: 'MacIntel', configurable: true });
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ items: [], numbered: true, itemsError: null, paused: false })));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('mounts one palette and one keys list, which a page drawn again does not double', async () => {
+    await shell('crew');
+    await shell('costs');
+    await press({ key: 'k', metaKey: true });
+    expect(document.querySelectorAll('[data-command-palette]')).toHaveLength(1);
+    await press({ key: 'Escape' });
+    expect(document.querySelectorAll('[data-command-palette]')).toHaveLength(0);
+
+    await press({ key: '?' });
+    expect([...document.querySelectorAll('[role="dialog"]')].map((one) => one.textContent?.includes('Keyboard shortcuts'))).toEqual([true]);
   });
 });

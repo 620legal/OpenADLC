@@ -1436,6 +1436,35 @@ export interface WorkPauses {
   dispatching?: boolean;
 }
 
+/**
+ * A work item the command palette can open, as the bridge's `GET /v1/items`
+ * lists it: open ones, and those closed in the last 30 days.
+ */
+export interface JumpItem {
+  /** `acme-213`: the item's page is `/items/<key>`. */
+  key: string;
+  number: number;
+  /** Its first issue's title, or its first link's when it has no issue. */
+  title: string;
+  /** `repo#12` for each issue and pull request on it, in the order they were linked. */
+  refs: string[];
+  open: boolean;
+  /** When the last of its links closed; null while open. */
+  closedAt: string | null;
+}
+
+/**
+ * What the palette reads each time it opens (`/api/palette`): the jump list,
+ * and whether anything is paused, each read on its own so one failing leaves
+ * the other. `paused` is null when the pauses could not be read.
+ */
+export interface PaletteRead {
+  items: JumpItem[] | null;
+  numbered: boolean;
+  itemsError: string | null;
+  paused: boolean | null;
+}
+
 /** What finishes a step a removal could not do: removing again, or a page on GitHub. */
 export type RemovalAction = { label: string; retry: true } | { label: string; url: string };
 

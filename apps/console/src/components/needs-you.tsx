@@ -49,6 +49,18 @@ export type OpenBot = (bot: string, how?: { compose?: boolean }) => void;
 /** How a work item is opened from here, on the tab of the role that asked. */
 export type OpenItem = (item: string, role: string | null, how?: { compose?: boolean }) => void;
 
+/**
+ * What a card does from the keyboard on the Needs you page: answer its
+ * question with its nth choice, or open it, each exactly as a click would.
+ */
+export interface CardKeys {
+  choose(n: number): void;
+  open(): void;
+}
+
+/** How a card hands the page its keys, by item id, and takes them back (null) when it goes. */
+export type OnCards = (id: string, keys: CardKeys | null) => void;
+
 /** A work item's address on the board, on a role's tab: what a card links to where no sheet is at hand. */
 export function itemOnBoard(item: string, role: string | null): string {
   const query = new URLSearchParams({ item });
@@ -184,6 +196,8 @@ export function NeedsList({
   onOpenItem,
   showRepo = true,
   empty,
+  selected = null,
+  onCards,
 }: {
   items: readonly AttentionItem[];
   now: string;
@@ -192,6 +206,10 @@ export function NeedsList({
   showRepo?: boolean;
   /** What the list says when nothing in it waits. */
   empty: string;
+  /** The card the keyboard has selected, by item id. */
+  selected?: string | null;
+  /** Each card's keys, for the page that reads them (`NeedsYouPage`). */
+  onCards?: OnCards;
 }) {
   const waiting = waitingOf(items);
   const notices = items.filter((item) => item.kind === 'check_fixed');
@@ -202,7 +220,17 @@ export function NeedsList({
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {waiting.map((item) => (
-            <NeedsCard key={item.id} item={item} now={now} onOpenBot={onOpenBot} onOpenItem={onOpenItem} showRepo={showRepo} elsewhere={false} />
+            <NeedsCard
+              key={item.id}
+              item={item}
+              now={now}
+              onOpenBot={onOpenBot}
+              onOpenItem={onOpenItem}
+              showRepo={showRepo}
+              elsewhere={false}
+              selected={selected === item.id}
+              onCards={onCards}
+            />
           ))}
         </div>
       )}
@@ -320,6 +348,8 @@ function NeedsCard({
   showRepo,
   repo,
   elsewhere,
+  selected = false,
+  onCards,
 }: {
   item: AttentionItem;
   now: string;
@@ -330,6 +360,9 @@ function NeedsCard({
   repo?: string;
   /** From another repository than the one the board shows. */
   elsewhere: boolean;
+  /** Selected from the keyboard: ringed, scrolled to, and its choices numbered. */
+  selected?: boolean;
+  onCards?: OnCards;
 }) {
   const [error, setError] = useState<string | null>(null);
   /** The choice being sent, while it is. */
@@ -393,7 +426,10 @@ function NeedsCard({
     onOpenBot(bot, how);
   };
   const answer = (option: string) => {
-    if (pressing.current) return;
+    // Both of the button's guards: a press still going, and a final answer
+    // the card holds until it leaves. A number key never meets the button's
+    // \`disabled\`, so without \`pending\` a second 1 answered again (#241).
+    if (pressing.current || pending) return;
     setChosen(option);
     run(
       async () => {
@@ -404,6 +440,31 @@ function NeedsCard({
       undefined,
       answered(option),
     );
+  };
+  // The keys act through the card's own handlers, so a key press is exactly a
+  // click: the same guard against a second press, and the same line after.
+  // Every choice counts, not only those drawn on the face.
+  const keys = useRef<CardKeys>({ choose: () => undefined, open: () => undefined });
+  keys.current = {
+    choose: (n) => {
+      const option = gateId ? choices[n - 1] : undefined;
+      if (option !== undefined) answer(option);
+    },
+    open: () => {
+      if (group === 'work' && subject.item && onOpenItem) onOpenItem(subject.item, item.bot?.role ?? null);
+      else if (more) setOpen(true);
+    },
+  };
+  // Handed over, and scrolled to once selected, as the card is attached: a
+  // ref with a cleanup rather than an effect, which the card had none of.
+  const scrolled = useRef(false);
+  const attach = (node: HTMLElement | null) => {
+    if (!node) return;
+    if (selected && !scrolled.current) node.scrollIntoView?.({ block: 'nearest' });
+    scrolled.current = selected;
+    if (!onCards) return;
+    onCards(item.id, { choose: (n) => keys.current.choose(n), open: () => keys.current.open() });
+    return () => onCards(item.id, null);
   };
   const somethingElseButton = (openBot: OpenBot) =>
     somethingElse?.kind === 'answer' ? (
@@ -424,10 +485,13 @@ function NeedsCard({
   // error are never clipped, and wrap where the card is narrow.
   return (
     <article
+      ref={attach}
       data-card={item.id}
+      aria-current={selected ? 'true' : undefined}
       className={cn(
         'flex min-w-0 gap-3 rounded-[10px] border bg-panel px-3.5 py-3 md:rounded-lg md:px-4 md:py-3.5',
         alarm ? 'border-alarm/35' : 'border-attention/35',
+        selected && 'outline outline-2 outline-link',
       )}
     >
       <span
@@ -492,7 +556,7 @@ function NeedsCard({
           </p>
         )}
         {gateId && choices.length > 0 && (
-          <QuestionChoices options={choices.slice(0, CHOICES_ON_CARD)} pending={pending} chosen={chosen} onChoose={answer}>
+          <QuestionChoices options={choices.slice(0, CHOICES_ON_CARD)} pending={pending} chosen={chosen} onChoose={answer} numbered={selected}>
             {somethingElseButton(onOpenBot)}
           </QuestionChoices>
         )}
@@ -735,6 +799,7 @@ function QuestionChoices({
   pending,
   chosen,
   onChoose,
+  numbered = false,
   children,
 }: {
   options: readonly string[];
@@ -742,12 +807,14 @@ function QuestionChoices({
   /** The choice being sent, while it is. */
   chosen: string | null;
   onChoose: (option: string) => void;
+  /** Each of the first nine says its key, on the card the keyboard has selected. */
+  numbered?: boolean;
   /** What follows the choices in their row: the way to say something else. */
   children?: ReactNode;
 }) {
   return (
     <div role="group" aria-label="Choices" className="flex flex-wrap gap-1.5">
-      {options.map((option) => {
+      {options.map((option, index) => {
         const sending = pending && chosen === option;
         return (
           <button
@@ -761,6 +828,11 @@ function QuestionChoices({
               sending && 'border-attention/60 bg-attention/10',
             )}
           >
+            {numbered && index < 9 && (
+              <kbd aria-hidden className="mr-1.5 font-mono text-[11px] text-dim">
+                {index + 1}
+              </kbd>
+            )}
             {option}
           </button>
         );
