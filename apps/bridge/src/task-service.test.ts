@@ -1280,6 +1280,32 @@ describe('a paused task whose question was answered before the bridge restarted'
     expect(lines).toHaveLength(1);
   });
 
+  it('is told to the start after an outage when it left paused, and not when it waits for a host', async () => {
+    vi.mocked(tasks.pausedWithAnswer).mockResolvedValue([
+      { ...PAUSED, answeredAt: answeredAgo(5) },
+      { ...PAUSED, id: 'task-2', subjectRef: 'openadlc#8', answeredAt: answeredAgo(5) },
+    ] as never);
+    const states = new Map([
+      ['task-1', 'paused'],
+      ['task-2', 'paused'],
+    ]);
+    vi.mocked(tasks.getTask).mockImplementation(async (id: string) => ({ ...PAUSED, id, state: states.get(id) }) as never);
+    const resumeTask = vi.fn(async (id: string) => {
+      if (id === 'task-2') throw full();
+      states.set(id, 'running');
+      return { session: 'builder/implement' };
+    });
+    const tasksService = service({ resumeTask: resumeTask as unknown as HostdClient['resumeTask'], cleanupTask: vi.fn(async () => undefined) });
+    tasksService.seatPauses = async () => ({});
+    const onResumed = vi.fn();
+
+    const lines = await tasksService.resumeAnswered(onResumed);
+
+    expect(lines).toHaveLength(2);
+    expect(onResumed.mock.calls).toEqual([[{ id: 'task-1', subjectRef: 'openadlc#7' }, lines[0]]]);
+    expect(lines[0]).toMatch(/^resumed implement on openadlc#7/);
+  });
+
   it('is failed with why once no host has had room for an hour since the answer, counted from the answer', async () => {
     vi.mocked(threads.listGatesForTasks).mockResolvedValue([{ id: 'g', taskId: 'task-1', state: 'answered', answeredAt: answeredAgo(61) }] as never);
     const refusal = full();

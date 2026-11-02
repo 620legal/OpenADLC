@@ -1495,7 +1495,7 @@ describe('a task recorded and never handed to a host', () => {
     expect(vi.mocked(tasks.failUnstarted).mock.calls).toEqual([['task-stale', NEVER_STARTED]]);
     expect(vi.mocked(leases.releaseIfIdle).mock.calls).toEqual([['lease-40']]);
     expect(drift.filter((entry) => entry.kind === 'orphaned_task')).toEqual([
-      { kind: 'orphaned_task', subject: 'openadlc#40', detail: 'the task was recorded but never handed to a host', repaired: true },
+      { kind: 'orphaned_task', subject: 'openadlc#40', taskId: 'task-stale', detail: 'the task was recorded but never handed to a host', repaired: true },
     ]);
   });
 
@@ -1559,7 +1559,7 @@ describe('a running task whose host may have stopped', () => {
     expect(vi.mocked(tasks.failIfRunning).mock.calls).toEqual([['task-1', 'the host stopped reporting']]);
     expect(vi.mocked(leases.setLeaseState).mock.calls).toEqual([['lease-50', 'released']]);
     expect(drift.filter((entry) => entry.kind === 'orphaned_task')).toEqual([
-      expect.objectContaining({ subject: 'openadlc#50', repaired: true }),
+      expect.objectContaining({ subject: 'openadlc#50', taskId: 'task-1', repaired: true }),
     ]);
   });
 

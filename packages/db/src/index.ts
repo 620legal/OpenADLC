@@ -18,6 +18,8 @@ export * as designMemory from './store/design-memory.js';
 export * as costs from './store/costs.js';
 export * as spendingLimits from './store/spending-limits.js';
 export * as hosts from './store/hosts.js';
+export * as bridgeGaps from './store/bridge-gaps.js';
+export type { BridgeGap, GapTask } from './store/bridge-gaps.js';
 export * as requests from './store/requests.js';
 export * as workItems from './store/work-items.js';
 export type { WorkItem } from './store/work-items.js';
