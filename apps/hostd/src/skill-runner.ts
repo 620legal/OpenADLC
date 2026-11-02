@@ -410,7 +410,10 @@ async function main(): Promise<void> {
    *
    * A refusal (4xx) is the bridge's answer, given before it takes anything —
    * the task is not running, or the token is not its — so it is nothing to
-   * read, and not asked again: it would never be taken. Null when the bridge
+   * read, and not asked again: it would never be taken. Only on the first
+   * attempt: after one that went unanswered, the claim may have committed,
+   * and a 409 once reconcile or a cancel has ended the task says nothing
+   * about it, so it is given up on like the rest. Null when the bridge
    * never answered: whether it claimed rows is not known, so the task fails
    * naming the take (`lostTake`), and the bridge puts that take's rows back
    * to be returned. Read as an empty inbox, a claim that had committed left
@@ -426,12 +429,13 @@ async function main(): Promise<void> {
         const messages = Array.isArray(taken.body.messages) ? (taken.body.messages as { text?: unknown }[]) : [];
         return messages.map((message) => (typeof message.text === 'string' ? message.text : '')).filter((text) => text.trim().length > 0);
       }
-      if (/answered 4\d\d/.test(taken.error)) {
+      const refused = /answered 4\d\d/.test(taken.error);
+      if (refused && attempt === 0) {
         console.error(`[skill] bridge call ${path} was refused, so nothing was taken: ${taken.error}`);
         return [];
       }
       const left = until - Date.now();
-      if (left <= 0) {
+      if (refused || left <= 0) {
         console.error(`[skill] bridge call ${path} failed, and was given up on: ${taken.error}`);
         lostTake = body.takeId;
         return null;
@@ -443,20 +447,25 @@ async function main(): Promise<void> {
 
   /**
    * Asked by an engine when a turn ends complete, after its usage is in the
-   * ledger. Nothing once the turn asked a person, sent the work back, paused
-   * or failed: the session is meant to stop there. Nothing at the cap
-   * either, and nothing taken: the task ends as it would have, its messages
-   * are returned, and the work they start asks at the cap when its own
-   * headroom check finds none.
+   * ledger. Nothing once the turn asked a person or sent the work back. Nothing
+   * at the cap either, and nothing taken: the task ends as it would have, its
+   * messages are returned, and the work they start asks at the cap when its
+   * own headroom check finds none.
+   *
+   * Rejects once the task paused or failed, a take the bridge never answered
+   * included: the session stops there. Null was read as an empty inbox, and
+   * Codex went on to its idle nudge, a turn whose first act — a post, a
+   * send-back, a command — happened before the runner could stop it.
    */
   const nextTurn = async (): Promise<string | null> => {
-    if (asked || sentBack || paused || failed) return null;
+    if (paused || failed) throw new Error(`the session stops here: ${failed || 'the task paused'}`);
+    if (asked || sentBack) return null;
     const left = await postLedger(env.bridgeUrl, `/internal/tasks/${env.taskId}/headroom`, () => ({ estimateUsd: 0.5 }), env.ledgerRetryMs);
     if (!left || left.stop === true) return null;
     const messages = await takeInbox();
     if (!messages) {
       failed = INBOX_NOT_TAKEN;
-      return null;
+      throw new Error(`the session stops here: ${failed}`);
     }
     if (messages.length === 0) return null;
     console.log(`[skill] read ${messages.length === 1 ? 'a message' : `${messages.length} messages`} a person sent while it worked`);
@@ -465,10 +474,10 @@ async function main(): Promise<void> {
 
   // A message sent while the task waited to start is read with the rest of
   // its brief, on every engine: the bridge counts a queued task as live
-  // whatever its engine, since the first prompt is a turn each can read.
-  // Taken only for an engine that took messages, one sent to a queued Grok
-  // task sat in its inbox for the whole run and started the work again after
-  // it. Taken only once the engine will run, so it is not taken and lost.
+  // whatever its engine, since the first prompt is a turn each can read, so
+  // this take runs on every engine; only `nextTurn`, a turn after the first,
+  // is for an engine that takes messages. Taken only once the engine will
+  // run, so it is not taken and lost.
   const waiting = paused || failed ? [] : await takeInbox();
   if (!waiting) failed = INBOX_NOT_TAKEN;
   const prompt = buildPrompt(env, skillDir, policy, fence, waiting ?? []);

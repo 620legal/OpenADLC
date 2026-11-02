@@ -46,7 +46,8 @@ export interface EngineRunInput {
    * What a person said to the task while its turn ran, asked for when a turn
    * ends complete: after that turn's `usage` is yielded, so the ledger has it
    * first, and before `done`. Text continues the same session with it as the
-   * next user turn; null finishes as before. Only an engine whose
+   * next user turn; null finishes as before. A rejection means the session
+   * stops there: no more turns, the engine's own included. Only an engine whose
    * `takesMessages` is true calls it. See `apps/bridge/src/task-inbox.ts`.
    */
   nextTurn?: () => Promise<string | null>;

@@ -30,12 +30,15 @@ message has to outlive it.
   first turn on every engine, and whenever a turn ends complete on one that
   takes messages. That is after the turn's usage is in the ledger, and
   before `done`. A take is named by the runner (`take_id`), so one whose
-  answer was lost gets its rows back when asked again. A refusal (4xx) is
-  given before anything is taken, so it is not asked again. A take the
+  answer was lost gets its rows back when asked again. A refusal (4xx) to
+  the first attempt is given before anything is taken, so it is not asked
+  again; after an unanswered attempt it counts as unanswered too. A take the
   bridge never answers fails the task, and the failure names the take
   (`releaseTake`), so the bridge puts its rows back in the queue before it
-  writes `failed`, and they are returned. A failure is never read as an
-  empty inbox. Nothing is pushed into a session: hostd, the task's container
+  writes `failed`, or before it refuses the report of a task a cancel or
+  reconcile already ended, and they are returned. `nextTurn` rejects then,
+  and the engine runs no turn more, Codex's idle nudge included. A failure
+  is never read as an empty inbox. Nothing is pushed into a session: hostd, the task's container
   and its network are unchanged.
 - **Live** is `queued`, or `running` on an engine that takes messages. The
   runner reports `takesMessages` with `running`, and it is cleared whenever

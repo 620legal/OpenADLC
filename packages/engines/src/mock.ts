@@ -88,8 +88,10 @@ export class MockEngine implements Engine {
       if (script.lingerMs && script.lingerMs > 0) await new Promise((resolve) => setTimeout(resolve, script.lingerMs));
       // Each message is a turn of its own: what it read, then what it cost.
       // The person's own words are its last line but the fence's end; the
-      // lines above are the runner's lead and the bridge's heading.
-      for (let text = await input.nextTurn?.(); text; text = await input.nextTurn?.()) {
+      // lines above are the runner's lead and the bridge's heading. A
+      // rejection stops the session, as it does a real engine's.
+      const next = async (): Promise<string | null | undefined> => input.nextTurn?.().catch(() => null);
+      for (let text = await next(); text; text = await next()) {
         const words = text.split('\n').filter((line) => line.trim() && !line.startsWith('<<<')).at(-1)?.trim() ?? '';
         yield { type: 'text', text: `read a message: ${words}` };
         const turn = { tokensIn: 200, tokensOut: 50, costUsd: 0.01 };

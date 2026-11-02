@@ -53,6 +53,8 @@ let failingAfter: Record<string, number>;
 let failingStatus: number;
 /** What each `inbox/take` hands over in turn, as the messages' texts; nothing once these run out. */
 let inbox: string[][];
+/** The statuses a route answers in turn, by its last segment, ahead of `failing`; 200 answers as the bridge does. */
+let statuses: Record<string, number[]>;
 
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'openadlc-runner-'));
@@ -65,6 +67,7 @@ beforeEach(async () => {
   failingAfter = {};
   failingStatus = 500;
   inbox = [];
+  statuses = {};
   // Answers as the bridge does: a gate opened, headroom left, usage taken.
   bridge = createServer((request, response) => {
     let text = '';
@@ -74,6 +77,12 @@ beforeEach(async () => {
       const path = request.url ?? '';
       calls.push({ path, body: text ? (JSON.parse(text) as Record<string, unknown>) : {} });
       const route = path.split('/').at(-1) ?? '';
+      const status = statuses[route]?.shift() ?? 200;
+      if (status !== 200) {
+        response.writeHead(status, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: `answered ${status} by the test` }));
+        return;
+      }
       if ((failingAfter[route] ?? 0) > 0) {
         failingAfter[route] = (failingAfter[route] ?? 0) - 1;
       } else if ((failing[route] ?? 0) > 0) {
@@ -221,6 +230,37 @@ function fakeGrok(stream: unknown[], promptTo: string): string {
       'const at = args.indexOf("--prompt-file");',
       `if (at >= 0) copyFileSync(args[at + 1], ${JSON.stringify(promptTo)});`,
       `process.stdout.write(${JSON.stringify(`${stream.map((line) => JSON.stringify(line)).join('\n')}\n`)});`,
+      '',
+    ].join('\n'),
+  );
+  chmodSync(path, 0o755);
+  return bin;
+}
+
+/**
+ * A stand-in `codex`: each run notes its arguments in `calls`, one JSON line,
+ * and writes one turn that ends on its plan, which is a turn Codex nudges.
+ */
+function fakeCodex(calls: string): string {
+  const bin = join(dir, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const path = join(bin, 'codex');
+  const turn = [
+    { type: 'thread.started', thread_id: '01a0d8b2-9868-76b3-ac56-079495723d57' },
+    { type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'I’ll run the checks.' } },
+    { type: 'turn.completed', usage: { input_tokens: 1000, output_tokens: 100 } },
+  ];
+  writeFileSync(
+    path,
+    [
+      '#!/usr/bin/env node',
+      'const { appendFileSync } = require("node:fs");',
+      `appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + "\\n");`,
+      'process.stdin.resume();',
+      'process.stdin.on("end", () => {',
+      `  process.stdout.write(${JSON.stringify(`${turn.map((line) => JSON.stringify(line)).join('\n')}\n`)});`,
+      '  process.exit(0);',
+      '});',
       '',
     ].join('\n'),
   );
@@ -983,6 +1023,62 @@ describe('a message to a running task', () => {
     expect(to('state').at(-1)?.body).toMatchObject({ state: 'failed', releaseTake: takes[1]?.body.takeId });
     // The turn's usage still reached the ledger.
     expect(to('usage').length).toBeGreaterThanOrEqual(1);
+  }, 30_000);
+
+  it('fails naming the first take when an attempt went unanswered and the next was refused: the first may have claimed', async () => {
+    // Reconcile can fail a task while its session still runs; the 409 then
+    // says nothing about the claim the unanswered attempt may have made.
+    statuses = { take: [500, 409] };
+    const prompt = join(dir, 'prompt.txt');
+    const bin = fakeClaude([assistant('msg-1', 'Done.', 100, 10), result(0.01)], prompt);
+
+    expect(await runTriage(bin, { OPENADLC_LEDGER_RETRY_MS: '2000' })).toBe(1);
+
+    expect(existsSync(prompt)).toBe(false);
+    const takes = to('inbox/take');
+    expect(takes).toHaveLength(2);
+    expect(takes[1]?.body.takeId).toBe(takes[0]?.body.takeId);
+    expect(to('state').at(-1)?.body).toMatchObject({ state: 'failed', releaseTake: takes[0]?.body.takeId });
+  }, 30_000);
+
+  it('fails at the end of a turn whose take went unanswered and was then refused, rather than finishing done', async () => {
+    statuses = { take: [200, 500, 409] };
+    const bin = fakeClaude([assistant('msg-1', 'Opened the pull request.', 1000, 40), result(0.1)], undefined, READ);
+
+    expect(await runTriage(bin, { OPENADLC_LEDGER_RETRY_MS: '2000' })).toBe(1);
+
+    const takes = to('inbox/take');
+    expect(takes).toHaveLength(3);
+    expect(takes[2]?.body.takeId).toBe(takes[1]?.body.takeId);
+    expect(to('state').at(-1)?.body).toMatchObject({ state: 'failed', releaseTake: takes[1]?.body.takeId });
+  }, 30_000);
+
+  it('does not nudge a Codex session whose end-of-turn take went unanswered: it fails naming the take', async () => {
+    failingAfter = { take: 1 };
+    failing = { take: 1000 };
+    const made = join(dir, 'codex-calls.jsonl');
+    const bin = fakeCodex(made);
+
+    expect(await runTriage(bin, { OPENADLC_ENGINE: 'codex', OPENADLC_MODEL: 'gpt-5.3-codex', OPENADLC_CONTAINED: '1', OPENADLC_LEDGER_RETRY_MS: '300' })).toBe(1);
+
+    const runs = readFileSync(made, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string[]);
+    // The first turn only: no nudge, nor any other `exec resume`.
+    expect(runs).toHaveLength(1);
+    const takes = to('inbox/take');
+    expect(to('state').at(-1)?.body).toMatchObject({ state: 'failed', releaseTake: takes[1]?.body.takeId });
+  }, 30_000);
+
+  it('still nudges an idle Codex session once when its inbox is empty', async () => {
+    const made = join(dir, 'codex-calls.jsonl');
+    const bin = fakeCodex(made);
+
+    await runTriage(bin, { OPENADLC_ENGINE: 'codex', OPENADLC_MODEL: 'gpt-5.3-codex', OPENADLC_CONTAINED: '1' });
+
+    const runs = readFileSync(made, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string[]);
+    // The nudge is a resume whose prompt is its last argument, not `-` as a message's is.
+    expect(runs).toHaveLength(2);
+    expect(runs[1]?.slice(0, 2)).toEqual(['exec', 'resume']);
+    expect(runs[1]?.at(-1)).not.toBe('-');
   }, 30_000);
 
   it('takes one sent while it worked at the end of its turn, after that turn’s usage, and the session reads it as its next turn', async () => {

@@ -732,6 +732,27 @@ describe('a task token for an ended task', () => {
     expect(onTaskDone).not.toHaveBeenCalled();
   });
 
+  it('still puts back the take its runner never got the answer to, and returns it, then refuses', async () => {
+    const { tasks } = await import('@openadlc/db');
+    const takeId = '7d7f3c1e-2b8a-4c3e-9f1a-0c5d6e7f8a9b';
+
+    const response = await asTask('task-done', 'state', { state: 'failed', reason: 'the bridge did not answer', releaseTake: takeId });
+
+    expect(response.status).toBe(409);
+    expect(inboxRelease).toHaveBeenCalledWith('task-done', takeId);
+    await vi.waitFor(() => expect(inboxSettle).toHaveBeenCalledWith('task-done'));
+    expect(tasks.updateTaskState).not.toHaveBeenCalled();
+  });
+
+  it('puts nothing back for a report that names no take, or one that is not a uuid', async () => {
+    await asTask('task-done', 'state', { state: 'failed', reason: 'why' });
+    await asTask('task-done', 'state', { state: 'failed', reason: 'why', releaseTake: 'not-a-take' });
+    await asTask('task-done', 'state', { state: 'done', reason: 'complete', releaseTake: '7d7f3c1e-2b8a-4c3e-9f1a-0c5d6e7f8a9b' });
+
+    expect(inboxRelease).not.toHaveBeenCalled();
+    expect(inboxSettle).not.toHaveBeenCalled();
+  });
+
   it('is not known for a task that does not exist', async () => {
     expect((await asTask('task-gone', 'gate', GATE)).status).toBe(404);
     expect(open).not.toHaveBeenCalled();

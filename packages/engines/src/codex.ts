@@ -216,8 +216,20 @@ export class CodexEngine implements Engine {
       // work back, and then it was never asked for. On stdin, as `exec` takes
       // the prompt, for the same E2BIG reason; not measured on `exec resume`
       // in the bot image yet.
+      //
+      // A rejection is the runner stopping the session — a take the bridge
+      // never answered, which fails the task — and not an empty inbox: read
+      // as one, the nudge started, and its first act was done before the
+      // runner could stop it. It ends here, with no turn more.
       const complete = ended.done?.type === 'done' && ended.done.reason === 'complete';
-      const text = complete && input.nextTurn ? await input.nextTurn().catch(() => null) : null;
+      let text: string | null = null;
+      if (complete && input.nextTurn) {
+        try {
+          text = await input.nextTurn();
+        } catch {
+          return;
+        }
+      }
       if (text) {
         ended = yield* this.oneTurn(input, [...this.resumeArgs(input), turn.thread, '-'], turn, text);
         if (ended.failed) return;

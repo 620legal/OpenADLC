@@ -1177,7 +1177,7 @@ describe('a message to a running Codex session', () => {
     { type: 'turn.completed', usage: { input_tokens: 2000, output_tokens: 200 } },
   ];
 
-  const run = async (first: unknown[], messages: (string | null)[]) => {
+  const run = async (first: unknown[], messages: (string | null | Error)[]) => {
     const calls = join(dir, 'calls.jsonl');
     const stdin = join(dir, 'stdin.jsonl');
     const asked: EngineEvent[][] = [];
@@ -1193,7 +1193,9 @@ describe('a message to a running Codex session', () => {
       workdir: dir,
       nextTurn: async () => {
         asked.push([...events]);
-        return pending.shift() ?? null;
+        const next = pending.shift() ?? null;
+        if (next instanceof Error) throw next;
+        return next;
       },
     })) {
       events.push(event);
@@ -1251,6 +1253,24 @@ describe('a message to a running Codex session', () => {
     // Still idle after the message's turn, so nudged once, and asked again after it.
     expect(made[2]?.at(-1)).toBe(GET_ON_WITH_IT);
     expect(asked).toHaveLength(3);
+  });
+
+  it('stops, with no nudge, when the runner stops the session rather than finding its inbox empty', async () => {
+    const plan = [WORKED[0], { type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'I’ll run `make ci`.' } }, WORKED[3]];
+    const { made, asked, events } = await run(plan, [new Error('the session stops here: the bridge did not answer')]);
+
+    expect(asked).toHaveLength(1);
+    expect(made).toHaveLength(1);
+    expect(made.some((args) => args.includes(GET_ON_WITH_IT))).toBe(false);
+    expect(events.some((event) => event.type === 'done')).toBe(false);
+  });
+
+  it('still nudges once when its inbox really is empty', async () => {
+    const plan = [WORKED[0], { type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'I’ll run `make ci`.' } }, WORKED[3]];
+    const { made } = await run(plan, [null]);
+
+    expect(made).toHaveLength(2);
+    expect(made[1]?.at(-1)).toBe(GET_ON_WITH_IT);
   });
 });
 

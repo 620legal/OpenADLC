@@ -867,12 +867,17 @@ task's session, rather than waiting for the role's next task
   more of its brief, on every engine, and again whenever a turn ends
   complete, on an engine that takes messages. Each take carries an id of the
   runner's, and a take whose answer was lost is asked again under it, which
-  hands back what it claimed. A refusal (4xx) comes before anything is
-  taken, so it is not asked again. A take the bridge never answers is not
-  read as an empty inbox. The task fails, its `failed` names the take
-  (`releaseTake`), and the bridge puts what that take claimed back in the
-  queue before it writes the state. The thread says "not read after all",
-  and the fallback below returns the message. Codex asks before its idle nudge. That is after
+  hands back what it claimed. A refusal (4xx) to the first attempt comes
+  before anything is taken, so it is not asked again; one after an attempt
+  that went unanswered proves nothing about that attempt's claim, and counts
+  as unanswered. A take the bridge never answers is not read as an empty
+  inbox. The task fails, its `failed` names the take (`releaseTake`), and
+  the bridge puts what that take claimed back in the queue: before it writes
+  the state, or, when a cancel or reconcile already ended the task, before
+  it refuses the report. The thread says "not read after all", and the
+  fallback below returns the message. The engine is told to stop there
+  (`nextTurn` rejects), so Codex runs no idle nudge after it. Codex asks
+  before its idle nudge. That is after
   the turn's usage has reached the ledger, and before the task reports
   `done`. A message comes in the words of `message.md`, fenced as a person's
   words, and the session reads it as its next user turn, in the same session

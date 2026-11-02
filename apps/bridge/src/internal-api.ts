@@ -41,7 +41,7 @@ import { missingReview } from './review-left.js';
 import { carriesRequestLine, RequestFiling } from './request-lifecycle.js';
 import type { TaskInbox } from './task-inbox.js';
 import { NotOurRepository, worksIn } from './invitation-service.js';
-import { HttpFailure, readBytes, Router, WithStatus, type Handler } from './router.js';
+import { HttpFailure, readBytes, Router, WithStatus, type Handler, type RequestContext } from './router.js';
 import { Scheduler } from './scheduler.js';
 import { WEBHOOK_BODY_MAX } from './webhook-gateway.js';
 import { settleLeaseAfter, usageProblem } from './task-service.js';
@@ -212,7 +212,10 @@ export function registerInternalApi(
    * The install secret is not held to this, because hostd settles a task's
    * state after its session has gone.
    */
-  const taskPost = (path: string, ...args: [Handler] | [{ states: readonly TaskState[]; refusal: string }, Handler]): void => {
+  const taskPost = (
+    path: string,
+    ...args: [Handler] | [{ states: readonly TaskState[]; refusal: string; refused?: (context: RequestContext) => Promise<void> }, Handler]
+  ): void => {
     const [only, handler] = args.length === 1 ? [null, args[0]] : args;
     router.post(path, async (context) => {
       const id = context.params.id ?? '';
@@ -226,7 +229,10 @@ export function registerInternalApi(
       } else {
         const task = await tasks.getTask(id);
         if (!task) throw new HttpFailure(404, 'unknown task');
-        if (only && !only.states.includes(task.state)) throw new HttpFailure(409, `task is ${task.state}; ${only.refusal}`);
+        if (only && !only.states.includes(task.state)) {
+          await only.refused?.(context);
+          throw new HttpFailure(409, `task is ${task.state}; ${only.refusal}`);
+        }
       }
       return handler(context);
     });
@@ -405,7 +411,40 @@ export function registerInternalApi(
     });
   };
 
-  taskPost('/internal/tasks/:id/state', { states: ['queued', 'running', 'paused'], refusal: 'a task that has ended keeps the state it ended in' }, async ({ params, body }) => {
+  /**
+   * Puts back what a take claimed when the runner that took it never got
+   * the answer and failed its task. A uuid only: anything else names no take.
+   */
+  const releaseTake = async (taskId: string, input: { state?: unknown; releaseTake?: unknown }): Promise<boolean> => {
+    if (input.state !== 'failed' || !deps.taskInbox || typeof input.releaseTake !== 'string' || !UUID.test(input.releaseTake)) return false;
+    await deps.taskInbox.release(taskId, input.releaseTake);
+    return true;
+  };
+
+  /** Returns a task's untaken messages after its answer; the sweep catches one this misses. */
+  const settleInbox = (taskId: string, subjectRef: string): void => {
+    void deps.taskInbox?.settle(taskId).catch((error: unknown) =>
+      console.warn(`[bridge] ${subjectRef}: its messages were not returned: ${error instanceof Error ? error.message : error}`),
+    );
+  };
+
+  taskPost(
+    '/internal/tasks/:id/state',
+    {
+      states: ['queued', 'running', 'paused'],
+      refusal: 'a task that has ended keeps the state it ended in',
+      // A task cancel or reconcile ended while its runner was still trying
+      // to take its inbox: the runner's `failed` with the take it never got
+      // the answer to was refused here as a task already ended, and the rows
+      // that take claimed stayed `taken`, said read and never read. The
+      // release is limited to that take and to rows still taken, so a take
+      // the session did get is not put back; the settle then returns them.
+      refused: async ({ params, body }) => {
+        const input = await body<{ state?: unknown; releaseTake?: unknown }>().catch(() => ({}));
+        if (await releaseTake(params.id ?? '', input)) settleInbox(params.id ?? '', params.id ?? '');
+      },
+    },
+    async ({ params, body }) => {
     const input = await body<{ state: TaskState; reason?: string; takesMessages?: unknown; releaseTake?: unknown }>();
     let state = input.state;
     // A take of the inbox whose answer never reached the runner, which failed
@@ -414,9 +453,7 @@ export function registerInternalApi(
     // the write, while the task still runs, so a release that fails answers
     // 500 and the runner's retry of this report does it again; after it, the
     // retry was refused as a task already ended and the rows stayed taken.
-    if (state === 'failed' && deps.taskInbox && typeof input.releaseTake === 'string' && UUID.test(input.releaseTake)) {
-      await deps.taskInbox.release(params.id ?? '', input.releaseTake);
-    }
+    await releaseTake(params.id ?? '', input);
     let reason = input.reason ?? null;
     // A task that sent its work back ends `done`, and is not its stage
     // finishing: its reason says where the work went, whatever the session
@@ -485,12 +522,7 @@ export function registerInternalApi(
     // A message its session did not take goes where it would have gone had
     // it arrived now: the task is no longer live. After the answer, since a
     // start can wait on GitHub; the sweep catches one this misses.
-    if (['paused', 'done', 'failed', 'stopped'].includes(state) && deps.taskInbox) {
-      const inbox = deps.taskInbox;
-      void inbox.settle(ended.id).catch((error: unknown) =>
-        console.warn(`[bridge] ${ended.subjectRef}: its messages were not returned: ${error instanceof Error ? error.message : error}`),
-      );
-    }
+    if (['paused', 'done', 'failed', 'stopped'].includes(state)) settleInbox(ended.id, ended.subjectRef);
 
     if (['done', 'failed', 'stopped'].includes(state)) {
       await deps.hostd.cleanupTask(ended.id, reason ?? state).catch(() => undefined);
