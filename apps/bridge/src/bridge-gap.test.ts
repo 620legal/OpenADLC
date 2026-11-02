@@ -6,9 +6,10 @@ import type { Drift } from './reconciler.js';
 const BACK = '2026-11-02T10:05:00.000Z';
 const ago = (ms: number) => new Date(Date.parse(BACK) - ms).toISOString();
 
-function fakeStore(lastUpAt: string | null) {
-  const gaps: { id: string; lastUpAt: string; backAt: string; tasks: GapTask[] }[] = [];
-  const state = { filling: false, dismissed: false };
+function fakeStore(lastUpAt: string | null, left?: { backAt: string; tasks: GapTask[] }) {
+  const gaps: { id: string; lastUpAt: string; backAt: string; tasks: GapTask[] }[] = left ? [{ id: 'gap-0', lastUpAt: ago(5 * 60_000), ...left }] : [];
+  // A report left by a start that died before it finished listing.
+  const state = { filling: Boolean(left), dismissed: false };
   const store: GapStore = {
     beat: vi.fn(async () => ({ lastUpAt, backAt: BACK })),
     openGap: vi.fn(async (last: string, back: string) => {
@@ -21,6 +22,10 @@ function fakeStore(lastUpAt: string | null) {
     }),
     finish: vi.fn(async () => {
       state.filling = false;
+    }),
+    current: vi.fn(async () => {
+      const gap = gaps.at(-1);
+      return gap && !state.dismissed ? { id: gap.id, backAt: gap.backAt, filling: state.filling } : null;
     }),
   };
   // As `bridgeGaps.dismiss` answers: refused while the start is still listing.
@@ -157,6 +162,55 @@ describe('the bridge start after a gap', () => {
     await startGap(store, deps());
     expect(store.finish).toHaveBeenCalledTimes(1);
     expect(store.openGap).not.toHaveBeenCalled();
+  });
+
+  it('lists what it resumed and orphaned in a report a start that died part way left filling, before finishing it', async () => {
+    // That start opened the report, resumed task-1, and died before reconcile;
+    // this one is back inside an interval, so it has no gap of its own.
+    const earlier = ago(20_000);
+    const kept: GapTask = { taskId: 'task-1', subject: 'openadlc#7', outcome: 'resumed', why: 'resumed implement on openadlc#7', backAt: earlier };
+    const { store, gaps, state, dismiss } = fakeStore(ago(10_000), { backAt: earlier, tasks: [kept] });
+    const answers: string[] = [];
+    const start = deps({ resumed: [{ id: 'task-2', subjectRef: 'openadlc#8' }] });
+    start.reconcile.mockImplementation(async () => {
+      answers.push(dismiss());
+      return [ORPHAN];
+    });
+
+    expect(await startGap(store, start)).toEqual({ gapId: 'gap-0' });
+
+    expect(store.openGap).not.toHaveBeenCalled();
+    expect(answers).toEqual(['filling']);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]?.backAt).toBe(earlier);
+    expect(gaps[0]?.tasks).toEqual([
+      kept,
+      { taskId: 'task-2', subject: 'openadlc#8', outcome: 'resumed', why: 'resumed implement on openadlc#8', backAt: BACK },
+      { taskId: 'task-50', subject: 'openadlc#50', outcome: 'orphaned', why: ORPHAN.detail, backAt: BACK },
+    ]);
+    expect(state.filling).toBe(false);
+  });
+
+  it('does not reconcile on a start with no gap when the open report is already finished', async () => {
+    const { store, state } = fakeStore(ago(10_000), { backAt: ago(20_000), tasks: [] });
+    state.filling = false;
+    const start = deps({ resumed: [{ id: 'task-2', subjectRef: 'openadlc#8' }], drift: [ORPHAN] });
+
+    expect(await startGap(store, start)).toEqual({ gapId: null });
+
+    expect(start.reconcile).not.toHaveBeenCalled();
+    expect(store.addTasks).not.toHaveBeenCalled();
+  });
+
+  it('still resumes when the open report cannot be read', async () => {
+    const { store } = fakeStore(ago(10_000));
+    vi.mocked(store.current).mockRejectedValueOnce(new Error('the database is not answering'));
+    const start = deps({ resumed: [{ id: 'task-2', subjectRef: 'openadlc#8' }] });
+
+    expect(await startGap(store, start)).toEqual({ gapId: null });
+
+    expect(start.resume).toHaveBeenCalledTimes(1);
+    expect(start.warn).toHaveBeenCalledWith('could not read the gap report, so this start’s tasks are not listed in it: the database is not answering');
   });
 
   it('tries the gap once more, and says so when it still cannot be stored', async () => {

@@ -1110,8 +1110,9 @@ and `openadlc doctor`.
 
 **"OpenADLC was away for about 1 minute (14:02–14:03)."** A strip on the board,
 the same for everyone, until someone presses **Dismiss**, which clears it for
-everyone. The bridge beats into its own table every 30 seconds, and once more
-on a clean shutdown (`bridge_heartbeat`). When it starts and its last beat is
+everyone. The bridge beats into its own table every 30 seconds, and twice on a
+clean shutdown (`bridge_heartbeat`): first, before it waits for work in flight,
+which can outlast the 20 seconds the keeper gives it, and again at the end. When it starts and its last beat is
 more than 30 seconds old, it records the gap before anything else, then lists
 what that start did about it:
 
@@ -1124,7 +1125,8 @@ what that start did about it:
 Until that start has finished listing, the strip says "Still listing what it
 resumed and treated as orphaned" and its **Dismiss** is refused, so a list
 read early is not taken for the whole of it. A start that dies part way leaves
-it so until the next start finishes it.
+it so until the next start, which lists what it resumed and treated as
+orphaned there before finishing it, even when it is back within 30 seconds.
 
 A gap that cost nothing still says how long. A second gap before anyone
 dismissed the first moves the strip to the latest one and keeps the first one's

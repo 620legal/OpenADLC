@@ -26,8 +26,9 @@ settings rows.
 
 - **The bridge keeps its own heartbeat** in `bridge_heartbeat`, a one-row
   table (migration `0158_bridge_gaps.sql`). `seen_at` is set to the database's
-  `now()` at start, every 30 s (`BRIDGE_HEARTBEAT_MS`) and once more on a
-  clean shutdown. The start reads the old value and writes the new one in one
+  `now()` at start, every 30 s (`BRIDGE_HEARTBEAT_MS`), and twice on a clean
+  shutdown: first, before the drains, which can outlast the keeper's 20 s
+  grace and be killed, and again at its end. The start reads the old value and writes the new one in one
   statement (`bridgeGaps.beat`).
 - **A gap is measured on the database's clock.** It is a start whose previous
   `seen_at` is more than one interval old. An install's first start (no row)
@@ -39,12 +40,15 @@ settings rows.
   earlier gap's tasks are not lost. The gap is stored before its tasks are
   known, so a gap that cost nothing still says how long, as does a start that
   dies part way. The bridge serves while that start lists them, so the row is
-  filling (`filled_at` null) until it is done, and a start with no gap
-  finishes one a start that died left filling. Read while filling, the
+  filling (`filled_at` null) until it is done. A start with no gap of its
+  own that finds a report a start that died left filling lists what it
+  resumes, and the orphans of one reconcile pass, in that report before
+  finishing it. Read while filling, the
   report says so rather than "nothing was resumed", and a dismiss is refused:
   tasks written after it would have been shown to nobody.
 - **What the start cost goes in the report.** That is the tasks
-  `resumeAnswered` resumed (its `onResumed` callback) and, after a gap only,
+  `resumeAnswered` resumed (its `onResumed` callback) and, after a gap or onto
+  a filling report only,
   the repaired `orphaned_task` verdicts of one reconcile pass run at start.
   `Drift.taskId` names the task. Each entry is
   `{taskId, subject, outcome: 'resumed' | 'orphaned', why, backAt}`.

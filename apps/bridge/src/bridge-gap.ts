@@ -15,6 +15,7 @@ export interface GapStore {
   openGap(lastUpAt: string, backAt: string): Promise<{ id: string }>;
   addTasks(id: string, tasks: readonly GapTask[]): Promise<void>;
   finish(): Promise<void>;
+  current(): Promise<{ id: string; backAt: string; filling: boolean } | null>;
 }
 
 export interface GapStartDeps {
@@ -42,8 +43,11 @@ const reasonOf = (error: unknown): string => (error instanceof Error ? error.mes
  * The bridge serves while this runs, so the stored report is marked filling
  * until the end, failed steps included (`finish`): read before then it said
  * "nothing was resumed" and could be dismissed, and the tasks written after
- * were shown to nobody. It finishes on a start with no gap too, for a report
- * a start that died part way left filling.
+ * were shown to nobody. A start with no gap of its own that finds a report
+ * still filling, left by a start that died part way and came back inside an
+ * interval, lists what it resumes and orphans there before finishing it:
+ * finished bare, the report said "nothing was resumed" for tasks this start
+ * resumed.
  */
 export async function startGap(store: GapStore, deps: GapStartDeps): Promise<{ gapId: string | null }> {
   const log = deps.log ?? ((line: string) => console.log(`[bridge] ${line}`));
@@ -76,6 +80,18 @@ async function fill(store: GapStore, deps: GapStartDeps, log: (line: string) => 
       log(`back after a gap: last up at ${lastUpAt}`);
     } catch (error) {
       warn(`could not store the gap since ${lastUpAt}, so the board will not report it: ${reasonOf(error)}`);
+    }
+  }
+  if (gapId === null) {
+    try {
+      const open = await store.current();
+      if (open?.filling) {
+        gapId = open.id;
+        backAt = beat?.backAt ?? open.backAt;
+        log(`listing this start’s tasks in the gap report back at ${open.backAt}, which a start that stopped part way left unfinished`);
+      }
+    } catch (error) {
+      warn(`could not read the gap report, so this start’s tasks are not listed in it: ${reasonOf(error)}`);
     }
   }
 
