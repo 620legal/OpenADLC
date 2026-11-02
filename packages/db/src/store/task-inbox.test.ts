@@ -70,17 +70,31 @@ describe('a message queued for a task', () => {
 describe('a row claimed once', () => {
   it('is taken only from queued, and only while its task runs, oldest first', async () => {
     vi.mocked(query).mockResolvedValue([
-      { ...ROW, id: 'later', state: 'taken', created_at: new Date('2026-11-02T12:05:00.000Z') },
-      { ...ROW, state: 'taken' },
+      { ...ROW, id: 'later', state: 'taken', fresh: true, created_at: new Date('2026-11-02T12:05:00.000Z') },
+      { ...ROW, state: 'taken', fresh: true },
     ]);
 
-    const taken = await take('task-1');
+    const taken = await take('task-1', 'take-1');
 
     expect(taken.map((row) => row.id)).toEqual(['inbox-1', 'later']);
+    expect(taken.every((row) => row.fresh)).toBe(true);
     const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
-    expect(flat(sql)).toContain("update task_inbox i set state = 'taken', settled_at = now() where i.task_id = $1 and i.state = 'queued'");
+    expect(flat(sql)).toContain("set state = 'taken', take_id = $2::uuid");
+    expect(flat(sql)).toContain("where i.task_id = $1 and (i.state = 'queued' or (i.state = 'taken' and i.take_id = $2::uuid))");
     expect(flat(sql)).toContain("exists (select 1 from tasks t where t.id = i.task_id and t.state = 'running')");
-    expect(params).toEqual(['task-1']);
+    expect(params).toEqual(['task-1', 'take-1']);
+  });
+
+  it('is handed back to a take asked again with the same id, whose answer was lost, and marked not fresh', async () => {
+    vi.mocked(query).mockResolvedValue([{ ...ROW, state: 'taken', fresh: false }]);
+
+    const taken = await take('task-1', 'take-1');
+
+    expect(taken).toEqual([expect.objectContaining({ id: 'inbox-1', state: 'taken', fresh: false })]);
+    const sql = flat(vi.mocked(query).mock.calls[0]?.[0]);
+    // Its first claim's time stays, which is how `fresh` tells the repeat apart.
+    expect(sql).toContain("settled_at = case when i.state = 'queued' then now() else i.settled_at end");
+    expect(sql).toContain('i.settled_at = now() as fresh');
   });
 
   it('is returned only from queued, and only once its task is neither queued nor running', async () => {
@@ -105,7 +119,7 @@ describe('a row claimed once', () => {
 
   it('cannot be both taken and returned: each claim takes a row out of queued, and claims only from queued', async () => {
     vi.mocked(query).mockResolvedValue([]);
-    await take('task-1');
+    await take('task-1', 'take-1');
     await settle('task-1');
     const statements = vi.mocked(query).mock.calls.map((call) => flat(call[0]));
     expect(statements).toHaveLength(2);

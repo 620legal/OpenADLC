@@ -103,16 +103,23 @@ export async function enqueue(input: {
  * What the task's session takes for its next turn, oldest first, each row
  * now `taken`. Only while the task is running: a task that ended has nobody
  * to read it, and its rows are the settle's.
+ *
+ * `takeId` is the runner's, one per turn boundary. Asked again with the same
+ * one, it hands back what that take claimed as well as anything queued
+ * since: an answer lost after the claim committed read as an empty inbox, and
+ * the rows, `taken`, were never read nor returned. `fresh` is false for a row
+ * handed back, so the thread says once that it was read.
  */
-export async function take(taskId: string): Promise<InboxRow[]> {
-  const rows = await query<Row>(
-    `update task_inbox i set state = 'taken', settled_at = now()
-     where i.task_id = $1 and i.state = 'queued'
+export async function take(taskId: string, takeId: string): Promise<(InboxRow & { fresh: boolean })[]> {
+  const rows = await query<Row & { fresh: boolean }>(
+    `update task_inbox i
+     set state = 'taken', take_id = $2::uuid, settled_at = case when i.state = 'queued' then now() else i.settled_at end
+     where i.task_id = $1 and (i.state = 'queued' or (i.state = 'taken' and i.take_id = $2::uuid))
        and exists (select 1 from tasks t where t.id = i.task_id and t.state = 'running')
-     returning ${COLUMNS.split(', ').map((column) => `i.${column}`).join(', ')}`,
-    [taskId],
+     returning ${COLUMNS.split(', ').map((column) => `i.${column}`).join(', ')}, i.settled_at = now() as fresh`,
+    [taskId, takeId],
   );
-  return rows.map(toRow).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return rows.map((row) => ({ ...toRow(row), fresh: row.fresh })).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
 /**

@@ -864,7 +864,10 @@ task's session, rather than waiting for the role's next task
 - **The turn boundary.** Nothing is pushed into a session. The task's skill
   runner takes its inbox with its own task token
   (`POST /internal/tasks/:id/inbox/take`): once before the first turn, as
-  more of its brief, and again whenever a turn ends complete. That is after
+  more of its brief, on every engine, and again whenever a turn ends
+  complete, on an engine that takes messages. Each take carries an id of the
+  runner's, and a take whose answer was lost is asked again under it, which
+  hands back what it claimed. Codex asks before its idle nudge. That is after
   the turn's usage has reached the ledger, and before the task reports
   `done`. A message comes in the words of `message.md`, fenced as a person's
   words, and the session reads it as its next user turn, in the same session

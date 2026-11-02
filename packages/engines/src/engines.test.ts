@@ -1240,6 +1240,18 @@ describe('a message to a running Codex session', () => {
     expect(asked).toHaveLength(0);
     expect(made).toHaveLength(1);
   });
+
+  it('takes it before the nudge after a turn that ended on its plan, so it does not wait behind one', async () => {
+    const plan = [WORKED[0], { type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'I’ll run `make ci`.' } }, WORKED[3]];
+    const { made, asked, given } = await run(plan, ['also handle the empty state']);
+
+    expect(made).toHaveLength(3);
+    expect(made[1]?.at(-1)).toBe('-');
+    expect(given[1]).toBe('also handle the empty state');
+    // Still idle after the message's turn, so nudged once, and asked again after it.
+    expect(made[2]?.at(-1)).toBe(GET_ON_WITH_IT);
+    expect(asked).toHaveLength(3);
+  });
 });
 
 describe('which engines take a message mid-run', () => {

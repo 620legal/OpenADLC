@@ -27,8 +27,10 @@ message has to outlive it.
   the bridge's return race for a row, exactly one gets it.
 - **The session pulls.** The task's skill runner takes its inbox with its
   own task token (`POST /internal/tasks/:id/inbox/take`): once before its
-  first turn, and whenever a turn ends complete. That is after the turn's
-  usage is in the ledger, and before `done`. Nothing is pushed into a
+  first turn on every engine, and whenever a turn ends complete on one that
+  takes messages. That is after the turn's usage is in the ledger, and
+  before `done`. A take is named by the runner (`take_id`), so one whose
+  answer was lost gets its rows back when asked again. Nothing is pushed into a
   session: hostd, the task's container and its network are unchanged.
 - **Live** is `queued`, or `running` on an engine that takes messages. The
   runner reports `takesMessages` with `running`, and it is cleared whenever

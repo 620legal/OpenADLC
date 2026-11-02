@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { registerInternalAttachmentRoutes } from './attachment-routes.js';
 import type { IncomingMessage } from 'node:http';
 import { audit, bots, costs, hasEventOfType, issues, leases, localCiRuns, recordEvent, repos, spendingLimits, stageMoves, tasks, threads } from '@openadlc/db';
@@ -53,6 +53,9 @@ import type { Webhooks } from './webhooks.js';
 export const INTERNAL_SECRET_HEADER = 'x-openadlc-internal-secret';
 /** What a task's own session presents, in place of the install's secret. */
 export { TASK_TOKEN_HEADER };
+
+/** A take's id is cast to `uuid` in its statement; anything else would fail it. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * The kinds of task whose session runs the repository's checks
@@ -587,6 +590,18 @@ export function registerInternalApi(
     return { task: ended };
   });
 
+  // What a person wrote to this task while it worked, taken by its session
+  // at the end of a turn. Its own task's token only, while it runs: a session
+  // never reads another task's messages. The runner names each take, and
+  // asks again under the same name when the answer did not reach it; a take
+  // with no name, or not a uuid, is one nobody can ask for again.
+  taskPost('/internal/tasks/:id/inbox/take', { states: ['running'], refusal: 'messages are taken only by a task that is running' }, async ({ params, body }) => {
+    if (!deps.taskInbox) return { messages: [] };
+    const input = await body<{ takeId?: unknown }>();
+    const takeId = typeof input.takeId === 'string' && UUID.test(input.takeId) ? input.takeId : randomUUID();
+    return { messages: await deps.taskInbox.take(params.id ?? '', takeId) };
+  });
+
   /**
    * A task's session sending its work back to the stage before (`send-back.ts`).
    * The runner reads the `send_back` marker from its own session's output and
@@ -594,14 +609,6 @@ export function registerInternalApi(
    * task; a marker in a comment on GitHub is never acted on. Refused, the
    * answer says why, and the session ends on it.
    */
-  // What a person wrote to this task while it worked, taken by its session
-  // at the end of a turn. Its own task's token only, while it runs: a session
-  // never reads another task's messages.
-  taskPost('/internal/tasks/:id/inbox/take', { states: ['running'], refusal: 'messages are taken only by a task that is running' }, async ({ params }) => {
-    if (!deps.taskInbox) return { messages: [] };
-    return { messages: await deps.taskInbox.take(params.id ?? '') };
-  });
-
   taskPost('/internal/tasks/:id/send-back', async ({ params, body }) => {
     const input = await body<{ to?: unknown; reason?: unknown }>();
     if (!deps.sendBack) throw new HttpFailure(503, 'this bridge takes no send-backs');

@@ -196,6 +196,30 @@ function fakeClaude(stream: unknown[], promptTo?: string, next?: unknown[]): str
   return bin;
 }
 
+/**
+ * A stand-in `grok`: headless, it reads its prompt from `--prompt-file`, not
+ * stdin, keeps it in `promptTo`, and writes the stream, which is Claude's.
+ */
+function fakeGrok(stream: unknown[], promptTo: string): string {
+  const bin = join(dir, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const path = join(bin, 'grok');
+  writeFileSync(
+    path,
+    [
+      '#!/usr/bin/env node',
+      'const { copyFileSync } = require("node:fs");',
+      'const args = process.argv.slice(2);',
+      'const at = args.indexOf("--prompt-file");',
+      `if (at >= 0) copyFileSync(args[at + 1], ${JSON.stringify(promptTo)});`,
+      `process.stdout.write(${JSON.stringify(`${stream.map((line) => JSON.stringify(line)).join('\n')}\n`)});`,
+      '',
+    ].join('\n'),
+  );
+  chmodSync(path, 0o755);
+  return bin;
+}
+
 /** What the runner printed to its pane, the last run's. */
 let printed = '';
 
@@ -873,6 +897,36 @@ describe('a message to a running task', () => {
     expect(text).toContain(`also handle the empty state\n<<<${fence} end: message.md>>>`);
     // Before the task block, which is still the prompt's last word.
     expect(text.indexOf('also handle the empty state')).toBeLessThan(text.indexOf('--- this task ---'));
+  }, 30_000);
+
+  it('reads one sent while it waited to start on an engine that takes no message mid-run, and takes once', async () => {
+    // The bridge counts a queued task as live whatever its engine. Taken
+    // only where the engine took messages, one sent to a queued Grok task
+    // sat in its inbox for the run and started the work again after it.
+    inbox = [[MESSAGE]];
+    const prompt = join(dir, 'prompt.txt');
+    const bin = fakeGrok([assistant('msg-1', 'Done.', 100, 10), result(0.01)], prompt);
+
+    expect(await runTriage(bin, { OPENADLC_ENGINE: 'grok', OPENADLC_MODEL: 'grok-4' })).toBe(0);
+
+    expect(to('state')[0]?.body).toEqual({ state: 'running', takesMessages: false });
+    expect(readFileSync(prompt, 'utf8')).toContain('also handle the empty state');
+    expect(to('inbox/take')).toHaveLength(1);
+  }, 30_000);
+
+  it('asks again under the same take when the bridge’s answer is lost, so what it claimed is handed back', async () => {
+    failing = { take: 1 };
+    inbox = [[MESSAGE]];
+    const prompt = join(dir, 'prompt.txt');
+    const bin = fakeClaude([assistant('msg-1', 'Done.', 100, 10), result(0.01)], prompt);
+
+    expect(await runTriage(bin, { OPENADLC_LEDGER_RETRY_MS: '2000' })).toBe(0);
+
+    const takes = to('inbox/take');
+    expect(takes.length).toBeGreaterThanOrEqual(2);
+    expect(typeof takes[0]?.body.takeId).toBe('string');
+    expect(takes[1]?.body.takeId).toBe(takes[0]?.body.takeId);
+    expect(readFileSync(prompt, 'utf8')).toContain('also handle the empty state');
   }, 30_000);
 
   it('takes one sent while it worked at the end of its turn, after that turn’s usage, and the session reads it as its next turn', async () => {

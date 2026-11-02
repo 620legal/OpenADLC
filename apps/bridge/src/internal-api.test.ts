@@ -128,7 +128,7 @@ const localCiRun = vi.fn(async (taskId: string, runId: string) => ({ run: { id: 
 const verdict = vi.fn(async (_task: unknown, _text: string) => null);
 const missingVerdict = vi.fn(async (_task: unknown): Promise<string | null> => null);
 const designerEnded = vi.fn(async (_task: unknown, _reason: string | null) => undefined);
-const inboxTake = vi.fn(async (_taskId: string) => [{ id: 'inbox-1', text: 'janedoe wrote to the builder while you worked' }]);
+const inboxTake = vi.fn(async (_taskId: string, _takeId: string) => [{ id: 'inbox-1', text: 'janedoe wrote to the builder while you worked' }]);
 const inboxSettle = vi.fn(async (_taskId?: string) => 0);
 
 
@@ -606,11 +606,19 @@ describe('a message a person sent a running task', () => {
     );
 
   it('is taken by its own task’s session, with its own token', async () => {
-    const response = await asTask('task-1', 'inbox/take', {});
+    const takeId = '7d7f3c1e-2b8a-4c3e-9f1a-0c5d6e7f8a9b';
+    const response = await asTask('task-1', 'inbox/take', { takeId });
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ messages: [{ id: 'inbox-1', text: 'janedoe wrote to the builder while you worked' }] });
-    expect(inboxTake).toHaveBeenCalledWith('task-1');
+    expect(inboxTake).toHaveBeenCalledWith('task-1', takeId);
+  });
+
+  it('is taken under an id of the bridge’s own when the runner named none, or one that is not a uuid', async () => {
+    await asTask('task-1', 'inbox/take', { takeId: "x'; drop table task_inbox; --" });
+
+    const named = inboxTake.mock.calls[0]?.[1];
+    expect(named).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it('is never read with another task’s token', async () => {

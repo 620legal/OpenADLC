@@ -43,12 +43,13 @@ export class TaskInbox {
 
   /**
    * What the task's session reads at its next turn, oldest first, each in the
-   * words of `message.md`; the thread says each was read. Only this task's:
-   * the route checks the token is this task's own.
+   * words of `message.md`; the thread says each was read, once. Only this
+   * task's: the route checks the token is this task's own. The same `takeId`
+   * again gets that take's rows back (`taskInbox.take`).
    */
-  async take(taskId: string): Promise<{ id: string; text: string }[]> {
-    const rows = await this.store.take(taskId);
-    for (const row of rows) {
+  async take(taskId: string, takeId: string): Promise<{ id: string; text: string }[]> {
+    const rows = await this.store.take(taskId, takeId);
+    for (const row of rows.filter((taken) => taken.fresh)) {
       await this.say(row, 'read by its session').catch((error: unknown) =>
         console.warn(`[bridge] ${row.subjectRef}: could not say a message was read: ${error instanceof Error ? error.message : error}`),
       );

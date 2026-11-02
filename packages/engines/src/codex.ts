@@ -208,20 +208,25 @@ export class CodexEngine implements Engine {
     let ended = yield* this.oneTurn(input, exec, turn, input.prompt);
     if (ended.failed) return;
 
-    const idle = !turn.acted && turn.thread !== null && input.tools.allow.shell.length > 0;
-    if (idle && !turn.handedOver && turn.thread) {
+    let nudged = false;
+    while (turn.thread && !turn.handedOver) {
+      // A person's message, taken at the end of a turn that finished: the
+      // same session, one more turn, with what it said. Asked before the
+      // nudge, which made it wait behind a turn that could ask or send the
+      // work back, and then it was never asked for. On stdin, as `exec` takes
+      // the prompt, for the same E2BIG reason; not measured on `exec resume`
+      // in the bot image yet.
+      const complete = ended.done?.type === 'done' && ended.done.reason === 'complete';
+      const text = complete && input.nextTurn ? await input.nextTurn().catch(() => null) : null;
+      if (text) {
+        ended = yield* this.oneTurn(input, [...this.resumeArgs(input), turn.thread, '-'], turn, text);
+        if (ended.failed) return;
+        continue;
+      }
+      const idle = !nudged && !turn.acted && input.tools.allow.shell.length > 0;
+      if (!idle) break;
+      nudged = true;
       ended = yield* this.oneTurn(input, [...this.resumeArgs(input), turn.thread, GET_ON_WITH_IT], turn);
-      if (ended.failed) return;
-    }
-
-    // A person's message, taken at the end of a turn that finished and did
-    // not hand the work over: the same session, one more turn, with what it
-    // said. On stdin, as `exec` takes the prompt, for the same E2BIG reason;
-    // not measured on `exec resume` in the bot image yet.
-    while (ended.done?.type === 'done' && ended.done.reason === 'complete' && !turn.handedOver && turn.thread && input.nextTurn) {
-      const text = await input.nextTurn().catch(() => null);
-      if (!text) break;
-      ended = yield* this.oneTurn(input, [...this.resumeArgs(input), turn.thread, '-'], turn, text);
       if (ended.failed) return;
     }
 

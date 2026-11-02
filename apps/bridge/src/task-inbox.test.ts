@@ -15,7 +15,7 @@ import { TaskInbox } from './task-inbox.js';
  * task is no longer live — goes where it would have gone had it arrived then.
  */
 
-function row(input: Partial<InboxRow> = {}): InboxRow {
+function row(input: Partial<InboxRow & { fresh: boolean }> = {}): InboxRow & { fresh: boolean } {
   return {
     id: 'inbox-1',
     taskId: 'task-1',
@@ -30,13 +30,14 @@ function row(input: Partial<InboxRow> = {}): InboxRow {
     state: 'queued',
     createdAt: '2026-11-02T12:00:00.000Z',
     settledAt: null,
+    fresh: true,
     ...input,
   };
 }
 
 const READ = { item: { key: 'app#5' }, view: { stage: 'review' }, repo: { id: 'repo-app', name: 'app', fullName: 'acme/app' } } as never;
 
-function inbox(rows: { take?: InboxRow[]; settle?: InboxRow[] } = {}) {
+function inbox(rows: { take?: (InboxRow & { fresh: boolean })[]; settle?: InboxRow[] } = {}) {
   const said: { row: InboxRow; text: string }[] = [];
   const start = vi.fn(async () => ({ kind: 'starts' as const, what: 'patch round 2 on pull request #7' }));
   const read = vi.fn(async () => READ);
@@ -55,9 +56,9 @@ describe('a message its session takes', () => {
   it('is handed over in message.md’s words, as read while it worked, and the thread says it was read', async () => {
     const { service, store, said } = inbox({ take: [row()] });
 
-    const taken = await service.take('task-1');
+    const taken = await service.take('task-1', 'take-1');
 
-    expect(store.take).toHaveBeenCalledWith('task-1');
+    expect(store.take).toHaveBeenCalledWith('task-1', 'take-1');
     expect(taken).toHaveLength(1);
     expect(taken[0]?.id).toBe('inbox-1');
     expect(taken[0]?.text).toMatch(/^# janedoe wrote to the builder in the OpenADLC console while you worked/);
@@ -71,8 +72,17 @@ describe('a message its session takes', () => {
   it('is nothing when nothing waits', async () => {
     const { service, said } = inbox();
 
-    expect(await service.take('task-1')).toEqual([]);
+    expect(await service.take('task-1', 'take-1')).toEqual([]);
     expect(said).toEqual([]);
+  });
+
+  it('is handed over again to a take asked twice, and the thread says it was read only the first time', async () => {
+    const { service, said } = inbox({ take: [row({ fresh: false }), row({ id: 'inbox-2' })] });
+
+    const taken = await service.take('task-1', 'take-1');
+
+    expect(taken.map((one) => one.id)).toEqual(['inbox-1', 'inbox-2']);
+    expect(said).toEqual([{ row: expect.objectContaining({ id: 'inbox-2' }), text: 'read by its session' }]);
   });
 });
 

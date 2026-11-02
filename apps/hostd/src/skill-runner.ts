@@ -5,7 +5,7 @@
  * exit state is reported. Killing this process never loses work that mattered:
  * the branch, the comments and the issue are already on GitHub.
  */
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
@@ -397,13 +397,31 @@ async function main(): Promise<void> {
 
   /**
    * What a person wrote to the task, taken from its inbox: each message's
-   * text, as the bridge words it. Nothing when the bridge did not answer: a
-   * row it did not hand over is still queued, and returned once the task ends.
+   * text, as the bridge words it. Asked again under the same `takeId` while
+   * the bridge does not answer, for up to the ledger's retry: an answer lost
+   * after the bridge had marked the rows taken read as an empty inbox, and
+   * those messages were neither read nor returned. The same id hands them
+   * back. Nothing once it gives up; a row never claimed is still queued, and
+   * returned once the task ends.
    */
   const takeInbox = async (): Promise<string[]> => {
-    const taken = await post(env.bridgeUrl, `/internal/tasks/${env.taskId}/inbox/take`, {});
-    const messages = Array.isArray(taken.messages) ? (taken.messages as { text?: unknown }[]) : [];
-    return messages.map((message) => (typeof message.text === 'string' ? message.text : '')).filter((text) => text.trim().length > 0);
+    const path = `/internal/tasks/${env.taskId}/inbox/take`;
+    const body = { takeId: randomUUID() };
+    const until = Date.now() + env.ledgerRetryMs;
+    for (let attempt = 0; ; attempt += 1) {
+      const taken = await postChecked(env.bridgeUrl, path, body);
+      if (taken.ok) {
+        const messages = Array.isArray(taken.body.messages) ? (taken.body.messages as { text?: unknown }[]) : [];
+        return messages.map((message) => (typeof message.text === 'string' ? message.text : '')).filter((text) => text.trim().length > 0);
+      }
+      const left = until - Date.now();
+      if (left <= 0) {
+        console.error(`[skill] bridge call ${path} failed, and was given up on: ${taken.error}`);
+        return [];
+      }
+      console.error(`[skill] bridge call ${path} failed; trying again: ${taken.error}`);
+      await new Promise((resolve) => setTimeout(resolve, Math.min(Math.min(1000, env.ledgerRetryMs / 10) * 2 ** attempt, left)));
+    }
   };
 
   /**
@@ -425,8 +443,12 @@ async function main(): Promise<void> {
   };
 
   // A message sent while the task waited to start is read with the rest of
-  // its brief. Taken only once the engine will run, so it is not taken and lost.
-  const waiting = paused || failed || !engine.takesMessages ? [] : await takeInbox();
+  // its brief, on every engine: the bridge counts a queued task as live
+  // whatever its engine, since the first prompt is a turn each can read.
+  // Taken only for an engine that took messages, one sent to a queued Grok
+  // task sat in its inbox for the whole run and started the work again after
+  // it. Taken only once the engine will run, so it is not taken and lost.
+  const waiting = paused || failed ? [] : await takeInbox();
   const prompt = buildPrompt(env, skillDir, policy, fence, waiting);
 
   const events: AsyncIterable<EngineEvent> | EngineEvent[] = paused || failed

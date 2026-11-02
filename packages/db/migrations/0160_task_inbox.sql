@@ -22,6 +22,9 @@ create table if not exists task_inbox (
   text text not null,
   github_url text,
   state text not null default 'queued' check (state in ('queued', 'taken', 'returned')),
+  -- The runner's id for the take that claimed it, so a take whose answer was
+  -- lost, asked again, gets the same rows back rather than an empty inbox.
+  take_id uuid,
   created_at timestamptz not null default now(),
   settled_at timestamptz
 );
