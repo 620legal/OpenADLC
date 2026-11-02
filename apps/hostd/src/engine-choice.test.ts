@@ -13,6 +13,7 @@ const base = { skill: 'implement', subjectRef: 'openadlc#145', scripted: false }
 const missing = () => ({
   name: 'codex' as const,
   available: async () => false,
+  takesMessages: false,
   run: () => (async function* () {})(),
   usage: () => ({ tokensIn: 0, tokensOut: 0, costUsd: 0 }),
 });
@@ -40,6 +41,7 @@ describe('choosing the engine a task runs on', () => {
     const installed = {
       name: 'claude' as const,
       available: async () => true,
+      takesMessages: false,
       run: () => (async function* () {})(),
       usage: () => ({ tokensIn: 0, tokensOut: 0, costUsd: 0 }),
     };
@@ -55,6 +57,7 @@ describe('choosing the engine a task runs on', () => {
     const absent = {
       name: 'claude' as const,
       available: async () => false,
+      takesMessages: false,
       run: () => (async function* () {})(),
       usage: () => ({ tokensIn: 0, tokensOut: 0, costUsd: 0 }),
     };
@@ -78,6 +81,7 @@ describe('choosing the engine a task runs on', () => {
     const mock = {
       name: 'none' as const,
       available: async () => true,
+      takesMessages: false,
       run: () => (async function* () {})(),
       usage: () => ({ tokensIn: 0, tokensOut: 0, costUsd: 0 }),
     };

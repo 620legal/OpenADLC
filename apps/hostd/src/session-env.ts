@@ -334,6 +334,11 @@ export class SessionEnvMinter {
       // Passed through so the integration suites can run scripted engines.
       // Never set by an install: see OPENADLC_SCRIPTED_ENGINES in the CLI.
       ...(process.env.OPENADLC_SCRIPTED_ENGINES === '1' ? { OPENADLC_SCRIPTED_ENGINES: '1' } : {}),
+      // How long a scripted turn stays open, so tests/live-message.mjs has a
+      // running session to write to; read only by a scripted run.
+      ...(process.env.OPENADLC_SCRIPTED_ENGINES === '1' && process.env.OPENADLC_SCRIPTED_LINGER_MS
+        ? { OPENADLC_SCRIPTED_LINGER_MS: process.env.OPENADLC_SCRIPTED_LINGER_MS }
+        : {}),
       // Only ever the task's own: the platform's database is not a bot's to see.
       ...(input.databaseUrl ? { DATABASE_URL: input.databaseUrl } : {}),
       ...(input.repoFullName ? { OPENADLC_REPO: input.repoFullName } : {}),
