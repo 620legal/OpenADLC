@@ -263,6 +263,8 @@ export interface ItemTaskRow {
   branch: string | null;
   costUsd: number;
   createdAt: string;
+  /** Whether its running session takes a message between turns; see `task-inbox.ts`. */
+  takesMessages?: boolean | null;
 }
 
 export interface ItemSeat {
@@ -313,6 +315,12 @@ export interface ItemTask {
   tmuxSession: string | null;
   branch: string | null;
   costUsd: number;
+  /**
+   * Whether its running session takes a message between turns, as its
+   * runner said; null before it said and once it left running. A message to
+   * a task that does is delivered to it (`whatStarts`).
+   */
+  takesMessages?: boolean | null;
 }
 
 export interface ItemView {
@@ -531,6 +539,7 @@ export function itemView(rows: ItemRows): ItemView {
         tmuxSession: task.tmuxSession,
         branch: task.branch,
         costUsd: Math.round(task.costUsd * 10_000) / 10_000,
+        takesMessages: task.takesMessages ?? null,
       };
     });
 

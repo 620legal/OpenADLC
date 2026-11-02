@@ -1127,6 +1127,130 @@ describe('a Codex turn that ends on its plan', () => {
   });
 });
 
+/**
+ * A `codex` whose every call works, and keeps what it was given: its
+ * arguments, one JSON array per line, in `FAKE_CODEX_CALLS`, and its stdin,
+ * one JSON string per line, in `FAKE_CODEX_STDIN`.
+ */
+function fakeCodexKeepingStdin(dir: string, first: unknown[], resumed: unknown[]): string {
+  const path = join(dir, 'codex');
+  const source = [
+    '#!/usr/bin/env node',
+    'const { appendFileSync } = require("node:fs");',
+    'const args = process.argv.slice(2);',
+    'appendFileSync(process.env.FAKE_CODEX_CALLS, JSON.stringify(args) + "\\n");',
+    'let input = "";',
+    'process.stdin.on("data", (chunk) => (input += chunk));',
+    'process.stdin.on("end", () => {',
+    '  appendFileSync(process.env.FAKE_CODEX_STDIN, JSON.stringify(input) + "\\n");',
+    `  const lines = args[1] === "resume" ? ${JSON.stringify(resumed.map((line) => JSON.stringify(line)))} : ${JSON.stringify(first.map((line) => JSON.stringify(line)))};`,
+    '  process.stdout.write(lines.join("\\n") + "\\n");',
+    '  process.exit(0);',
+    '});',
+    '',
+  ].join('\n');
+  writeFileSync(path, source);
+  chmodSync(path, 0o755);
+  return path;
+}
+
+describe('a message to a running Codex session', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'openadlc-codex-message-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const THREAD = '01a0d8b2-9868-76b3-ac56-079495723d57';
+  const WORKED = [
+    { type: 'thread.started', thread_id: THREAD },
+    { type: 'item.started', item: { id: 'item_1', type: 'command_execution', command: 'bash -lc "make ci"' } },
+    { type: 'item.completed', item: { id: 'item_2', type: 'agent_message', text: 'Opened the pull request.' } },
+    { type: 'turn.completed', usage: { input_tokens: 1000, output_tokens: 100 } },
+  ];
+  const READ = [
+    { type: 'item.completed', item: { id: 'item_3', type: 'agent_message', text: 'Handled the empty state too.' } },
+    { type: 'turn.completed', usage: { input_tokens: 2000, output_tokens: 200 } },
+  ];
+
+  const run = async (first: unknown[], messages: (string | null)[]) => {
+    const calls = join(dir, 'calls.jsonl');
+    const stdin = join(dir, 'stdin.jsonl');
+    const asked: EngineEvent[][] = [];
+    const events: EngineEvent[] = [];
+    const pending = [...messages];
+    for await (const event of new CodexEngine(fakeCodexKeepingStdin(dir, first, READ), { contained: true }).run({
+      contextFiles: [],
+      prompt: 'implement the issue',
+      env: { FAKE_CODEX_CALLS: calls, FAKE_CODEX_STDIN: stdin },
+      model: 'gpt-5.3-codex',
+      tools: policy,
+      costHeadroomUsd: 15,
+      workdir: dir,
+      nextTurn: async () => {
+        asked.push([...events]);
+        return pending.shift() ?? null;
+      },
+    })) {
+      events.push(event);
+    }
+    const lines = (path: string) => readFileSync(path, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as unknown);
+    return { events, asked, made: lines(calls) as string[][], given: lines(stdin) as string[] };
+  };
+
+  it('takes it at the end of its turn, as one more exec resume of the same session, with the message on stdin', async () => {
+    const { events, asked, made, given } = await run(WORKED, ['also handle the empty state']);
+
+    expect(made).toHaveLength(2);
+    expect(made[1]?.slice(0, 3)).toEqual(['exec', 'resume', '--json']);
+    expect(made[1]?.slice(-2)).toEqual([THREAD, '-']);
+    expect(given).toEqual(['implement the issue', 'also handle the empty state']);
+    // Asked after the turn's usage was yielded, and before any `done`.
+    expect(asked[0]?.at(-1)).toMatchObject({ type: 'usage', tokensIn: 1000 });
+    expect(asked[0]?.some((event) => event.type === 'done')).toBe(false);
+    expect(events.filter((event) => event.type === 'text').map((event) => (event as { text: string }).text)).toEqual([
+      'Opened the pull request.',
+      'Handled the empty state too.',
+    ]);
+    // Asked again after the message's turn; one `done`, at the very end.
+    expect(asked).toHaveLength(2);
+    expect(events.filter((event) => event.type === 'done')).toEqual([{ type: 'done', reason: 'complete' }]);
+    expect(events.at(-1)).toEqual({ type: 'done', reason: 'complete' });
+  });
+
+  it('finishes as before when there is nothing to take', async () => {
+    const { made, asked, events } = await run(WORKED, [null]);
+
+    expect(made).toHaveLength(1);
+    expect(asked).toHaveLength(1);
+    expect(events.at(-1)).toEqual({ type: 'done', reason: 'complete' });
+  });
+
+  it('is not asked after a turn that asked a person, which is its turn ending the way it should', async () => {
+    const question = {
+      type: 'item.completed',
+      item: { id: 'item_0', type: 'agent_message', text: 'Which page?\n<!-- openadlc:{"event":"question","question":"Which page?","options":["a","b"]} -->' },
+    };
+    const { made, asked } = await run([WORKED[0], WORKED[1], question, WORKED[3]], ['also handle the empty state']);
+
+    expect(asked).toHaveLength(0);
+    expect(made).toHaveLength(1);
+  });
+});
+
+describe('which engines take a message mid-run', () => {
+  it('is Claude and Codex, and the scripted engine; not Grok, whose resume has not been measured', () => {
+    expect(new ClaudeEngine().takesMessages).toBe(true);
+    expect(new CodexEngine().takesMessages).toBe(true);
+    expect(new MockEngine({ say: [] }).takesMessages).toBe(true);
+    expect(new GrokEngine().takesMessages).toBe(false);
+  });
+});
+
 describe('what Claude may run', () => {
   it('gives each allowed and each denied command a rule of its own', async () => {
     // One rule for the whole list read as one literal command, so Claude asked
@@ -2088,6 +2212,28 @@ describe('mock engine', () => {
     expect(events.map((event) => event.type)).toEqual(['text', 'usage', 'text', 'done']);
     const asked = parseQuestion(events[2]?.type === 'text' ? events[2].text : '');
     expect(asked?.planChange).toEqual({ paths: ['config/bots.yaml'], reason: 'The seat is defined there.' });
+  });
+
+  it('reads each message it is given at the end of its turn, with its usage, before it is done', async () => {
+    const engine = new MockEngine({ say: ['building'] });
+    const messages = ['# Ada wrote to the builder\n\nalso handle the empty state', null];
+
+    const events: EngineEvent[] = [];
+    for await (const event of engine.run({
+      contextFiles: [],
+      prompt: 'go',
+      workdir: '/tmp',
+      env: {},
+      model: 'mock',
+      tools: policy,
+      costHeadroomUsd: 15,
+      nextTurn: async () => messages.shift() ?? null,
+    })) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => event.type)).toEqual(['text', 'usage', 'text', 'usage', 'done']);
+    expect(events[2]).toEqual({ type: 'text', text: 'read a message: also handle the empty state' });
   });
 });
 

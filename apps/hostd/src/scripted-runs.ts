@@ -10,6 +10,13 @@ import { renderMarker } from '@openadlc/shared';
  * or not (`chooseEngine`).
  */
 export function scriptedRunFor(skill: string, subject: string): MockScript {
+  // How long a script holds its turn open, so a suite can write to the task
+  // while it runs (`tests/live-message.mjs`); 0, and not held, unless set.
+  const lingerMs = Math.max(0, Number(process.env.OPENADLC_SCRIPTED_LINGER_MS ?? '') || 0);
+  return lingerMs > 0 ? { ...scriptFor(skill, subject), lingerMs } : scriptFor(skill, subject);
+}
+
+function scriptFor(skill: string, subject: string): MockScript {
   switch (skill) {
     case 'triage':
       return {

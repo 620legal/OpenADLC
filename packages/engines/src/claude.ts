@@ -48,6 +48,8 @@ export function attachmentDirs(input: Pick<EngineRunInput, 'attachments'>): stri
  */
 export class ClaudeEngine implements Engine {
   readonly name: EngineName = 'claude';
+  /** Through stream-json input: the session reads the next user message from its stdin, held open. */
+  readonly takesMessages = true;
   private totals: EngineUsage = { tokensIn: 0, tokensOut: 0, costUsd: 0 };
 
   constructor(private readonly binary = 'claude') {}
@@ -73,6 +75,10 @@ export class ClaudeEngine implements Engine {
       '--output-format',
       'stream-json',
       '--verbose',
+      // A run that may take a message reads its prompt, and each message
+      // after it, as stream-json user messages on a stdin kept open; one that
+      // may not reads the prompt as text, as it always has.
+      ...(input.nextTurn ? ['--input-format', 'stream-json'] : []),
       '--model',
       input.model,
       '--permission-mode',
@@ -115,6 +121,7 @@ export class ClaudeEngine implements Engine {
       signal: input.signal,
       model: input.model,
       growingOutput: true,
+      nextTurn: input.nextTurn,
       onUsage: (usage) => {
         this.totals = addUsage(this.totals, usage);
       },

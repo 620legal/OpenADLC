@@ -47,6 +47,8 @@ let gateOpens: boolean;
 let sendBackAnswer: Record<string, unknown>;
 /** How many more times the bridge answers 500 to a route, by its last segment: a restart, a database write that failed. */
 let failing: Record<string, number>;
+/** What each `inbox/take` hands over in turn, as the messages' texts; nothing once these run out. */
+let inbox: string[][];
 
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'openadlc-runner-'));
@@ -56,6 +58,7 @@ beforeEach(async () => {
   gateOpens = true;
   sendBackAnswer = { sent: true, from: 'build', to: 'spec', staffed: true, round: 1, commentUrl: null };
   failing = {};
+  inbox = [];
   // Answers as the bridge does: a gate opened, headroom left, usage taken.
   bridge = createServer((request, response) => {
     let text = '';
@@ -71,7 +74,9 @@ beforeEach(async () => {
         response.end(JSON.stringify({ error: 'the database is not answering' }));
         return;
       }
-      const answer = path.endsWith('/send-back')
+      const answer = path.endsWith('/inbox/take')
+        ? { messages: (inbox.shift() ?? []).map((text, index) => ({ id: `inbox-${index}`, text })) }
+        : path.endsWith('/send-back')
         ? sendBackAnswer
         : path.endsWith('/gate')
         ? gateOpens
@@ -105,9 +110,40 @@ afterEach(async () => {
 });
 
 /**
- * A stand-in `claude`: reads the prompt from stdin, writes the stream, exits
- * cleanly. Given `promptTo`, it keeps the prompt it was given there.
+ * What a stand-in `claude` does with its stdin, which the runner writes as
+ * stream-json user messages and holds open (`--input-format stream-json`):
+ * it answers each message as it comes, as Claude Code does. It keeps the
+ * first message's text in `promptTo` when given, and each later one's in
+ * `promptTo.next`, one JSON string per line. It exits once its stdin ends,
+ * or straight after the first message when it is not told to wait: a stream
+ * with no result never ends its turn, so nothing would end its stdin.
  */
+function standIn(input: { promptTo?: string; onFirst: string[]; onNext?: string[]; waits: boolean }): string {
+  return [
+    '#!/usr/bin/env node',
+    'const { appendFileSync, writeFileSync } = require("node:fs");',
+    'const textOf = (line) => { try { return JSON.parse(line).message.content[0].text; } catch { return line; } };',
+    'let first = true;',
+    'require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {',
+    '  const text = textOf(line);',
+    '  if (first) {',
+    '    first = false;',
+    input.promptTo ? `    writeFileSync(${JSON.stringify(input.promptTo)}, text);` : '',
+    ...input.onFirst.map((statement) => `    ${statement}`),
+    input.waits ? '' : '    process.exit(0);',
+    '    return;',
+    '  }',
+    input.promptTo ? `  appendFileSync(${JSON.stringify(`${input.promptTo}.next`)}, JSON.stringify(text) + "\\n");` : '',
+    ...(input.onNext ?? []).map((statement) => `  ${statement}`),
+    '}).on("close", () => process.exit(0));',
+    '',
+  ].join('\n');
+}
+
+/** Whether a stream ends its turn: a `result` that did not fail. */
+const endsTurn = (stream: unknown[]): boolean =>
+  stream.some((line) => (line as { type?: string }).type === 'result' && (line as { is_error?: boolean }).is_error !== true);
+
 /**
  * A stand-in `claude` that writes the stream, then waits before its last
  * line, so a runner that stops it in time never sees that line. It notes in
@@ -119,42 +155,42 @@ function slowClaude(stream: unknown[], last: unknown, reached: string): string {
   const path = join(bin, 'claude');
   writeFileSync(
     path,
-    [
-      '#!/usr/bin/env node',
-      'process.stdin.on("data", () => {});',
-      'process.stdin.on("end", () => {',
-      `  process.stdout.write(${JSON.stringify(`${stream.map((line) => JSON.stringify(line)).join('\n')}\n`)});`,
-      '  setTimeout(() => {',
-      `    require("node:fs").writeFileSync(${JSON.stringify(reached)}, "yes");`,
-      `    process.stdout.write(${JSON.stringify(`${JSON.stringify(last)}\n`)});`,
-      '    process.exit(0);',
-      '  }, 8000);',
-      '});',
-      '',
-    ].join('\n'),
+    standIn({
+      onFirst: [
+        `process.stdout.write(${JSON.stringify(`${stream.map((line) => JSON.stringify(line)).join('\n')}\n`)});`,
+        'setTimeout(() => {',
+        `  writeFileSync(${JSON.stringify(reached)}, "yes");`,
+        `  process.stdout.write(${JSON.stringify(`${JSON.stringify(last)}\n`)});`,
+        '  process.exit(0);',
+        '}, 8000);',
+      ],
+      waits: true,
+    }),
   );
   chmodSync(path, 0o755);
   return bin;
 }
 
-function fakeClaude(stream: unknown[], promptTo?: string): string {
+/**
+ * A stand-in `claude`: reads the prompt, writes the stream, and exits once
+ * its stdin ends. Given `promptTo`, it keeps the prompt it was given there.
+ * Given `next`, it answers each message after the prompt with that stream,
+ * as one more turn of the session.
+ */
+function fakeClaude(stream: unknown[], promptTo?: string, next?: unknown[]): string {
   const bin = join(dir, 'bin');
   mkdirSync(bin, { recursive: true });
   const path = join(bin, 'claude');
   const output = `${stream.map((line) => JSON.stringify(line)).join('\n')}\n`;
+  const more = next ? `${next.map((line) => JSON.stringify(line)).join('\n')}\n` : '';
   writeFileSync(
     path,
-    [
-      '#!/usr/bin/env node',
-      'let prompt = "";',
-      'process.stdin.on("data", (chunk) => (prompt += chunk));',
-      'process.stdin.on("end", () => {',
-      promptTo ? `  require("node:fs").writeFileSync(${JSON.stringify(promptTo)}, prompt);` : '',
-      `  process.stdout.write(${JSON.stringify(output)});`,
-      '  process.exit(0);',
-      '});',
-      '',
-    ].join('\n'),
+    standIn({
+      promptTo,
+      onFirst: [`process.stdout.write(${JSON.stringify(output)});`],
+      onNext: more ? [`process.stdout.write(${JSON.stringify(more)});`] : [],
+      waits: endsTurn(stream),
+    }),
   );
   chmodSync(path, 0o755);
   return bin;
@@ -800,6 +836,90 @@ describe('a bridge that does not take the usage', () => {
 
     expect(await runTriage(bin, QUICK)).toBe(0);
 
+    expect(to('state').at(-1)?.body).toEqual({ state: 'done', reason: 'complete' });
+  }, 30_000);
+});
+
+/**
+ * A person writing to a running task: the runner takes what waits in its
+ * inbox before the first turn and at the end of each turn, and the session
+ * reads it as its next user message. See `apps/bridge/src/task-inbox.ts`.
+ */
+describe('a message to a running task', () => {
+  const MESSAGE = '# Ada wrote to the builder while you worked\n\nalso handle the empty state';
+  const READ = [assistant('msg-2', 'Handled the empty state too.', 500, 30), result(0.15)];
+  const index = (suffix: string, nth = 0) => calls.filter((call) => call.path.startsWith('/internal/tasks/task-1/')).findIndex((call, at, all) =>
+    call.path === `/internal/tasks/task-1/${suffix}` && all.slice(0, at + 1).filter((one) => one.path === call.path).length === nth + 1,
+  );
+
+  it('says, with running, that its engine takes messages', async () => {
+    const bin = fakeClaude([assistant('msg-1', 'Done.', 100, 10), result(0.01)]);
+
+    expect(await runTriage(bin)).toBe(0);
+
+    expect(to('state')[0]?.body).toEqual({ state: 'running', takesMessages: true });
+  }, 30_000);
+
+  it('reads one sent while it waited to start with the rest of its brief, fenced as a person’s words', async () => {
+    inbox = [[MESSAGE]];
+    const prompt = join(dir, 'prompt.txt');
+    const bin = fakeClaude([assistant('msg-1', 'Done.', 100, 10), result(0.01)], prompt);
+
+    expect(await runTriage(bin)).toBe(0);
+
+    const text = readFileSync(prompt, 'utf8');
+    const fence = /<<<(openadlc-document-[0-9a-f]+) begin: message\.md, written by the person it names/.exec(text)?.[1] ?? '';
+    expect(fence).not.toBe('');
+    expect(text).toContain(`also handle the empty state\n<<<${fence} end: message.md>>>`);
+    // Before the task block, which is still the prompt's last word.
+    expect(text.indexOf('also handle the empty state')).toBeLessThan(text.indexOf('--- this task ---'));
+  }, 30_000);
+
+  it('takes one sent while it worked at the end of its turn, after that turn’s usage, and the session reads it as its next turn', async () => {
+    inbox = [[], [MESSAGE]];
+    const prompt = join(dir, 'prompt.txt');
+    const bin = fakeClaude([assistant('msg-1', 'Opened the pull request.', 1000, 40), result(0.1)], prompt, READ);
+
+    expect(await runTriage(bin)).toBe(0);
+
+    const next = readFileSync(`${prompt}.next`, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string);
+    expect(next).toHaveLength(1);
+    expect(next[0]).toMatch(/^A person wrote to you while you worked\./);
+    expect(next[0]).toContain('also handle the empty state');
+    // The turn's usage reached the ledger before the inbox was asked; the
+    // headroom was checked between them.
+    expect(index('usage', 0)).toBeGreaterThanOrEqual(0);
+    expect(index('usage', 0)).toBeLessThan(index('headroom', 1));
+    expect(index('headroom', 1)).toBeLessThan(index('inbox/take', 1));
+    // What the session said reading it is in the thread, its usage in the ledger, and the task ends done.
+    expect(to('message').some((call) => call.body.text === 'Handled the empty state too.')).toBe(true);
+    expect(to('usage').length).toBeGreaterThanOrEqual(2);
+    expect(index('usage', to('usage').length - 1)).toBeGreaterThan(index('inbox/take', 1));
+    expect(to('state').at(-1)?.body).toEqual({ state: 'done', reason: 'complete' });
+  }, 30_000);
+
+  it('takes nothing after a turn that asked a person: the session stops there', async () => {
+    inbox = [[], [MESSAGE]];
+    const bin = fakeClaude([
+      assistant('msg-1', `Which page?\n<!-- openadlc:{"event":"question","question":"Which page?","options":["a","b"]} -->`, 1000, 40),
+      result(0.1),
+    ]);
+
+    expect(await runTriage(bin)).toBe(0);
+
+    expect(to('inbox/take')).toHaveLength(1);
+    expect(to('state').at(-1)?.body).toEqual({ state: 'paused', reason: 'waiting on a person' });
+  }, 30_000);
+
+  it('takes nothing at the cap, and ends as it would have: what waits is returned and starts the next task', async () => {
+    capDollars = 15;
+    inbox = [[], [MESSAGE]];
+    const bin = fakeClaude([assistant('msg-1', 'Filed it.', 1000, 40), result(20)]);
+
+    expect(await runTriage(bin)).toBe(0);
+
+    expect(to('inbox/take')).toHaveLength(1);
+    expect(to('gate')).toEqual([]);
     expect(to('state').at(-1)?.body).toEqual({ state: 'done', reason: 'complete' });
   }, 30_000);
 });

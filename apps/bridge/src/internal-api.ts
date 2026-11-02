@@ -39,6 +39,7 @@ import { databaseProblem } from './database-health.js';
 import { requestFor, requestPrefixOf } from './request-context.js';
 import { missingReview } from './review-left.js';
 import { carriesRequestLine, RequestFiling } from './request-lifecycle.js';
+import type { TaskInbox } from './task-inbox.js';
 import { NotOurRepository, worksIn } from './invitation-service.js';
 import { HttpFailure, readBytes, Router, WithStatus, type Handler } from './router.js';
 import { Scheduler } from './scheduler.js';
@@ -168,6 +169,8 @@ export function registerInternalApi(
     dispatchRuns?: { soon(reason: string): void } | null;
     /** Links a console request to the issue its triage filed; shared with the webhooks, which link it first. */
     requestFiling?: RequestFiling;
+    /** Messages a person sent a live task, which its session takes and its end returns (`task-inbox.ts`). */
+    taskInbox?: Pick<TaskInbox, 'take' | 'settle'> | null;
   },
 ): void {
   /**
@@ -400,7 +403,7 @@ export function registerInternalApi(
   };
 
   taskPost('/internal/tasks/:id/state', { states: ['queued', 'running', 'paused'], refusal: 'a task that has ended keeps the state it ended in' }, async ({ params, body }) => {
-    const input = await body<{ state: TaskState; reason?: string }>();
+    const input = await body<{ state: TaskState; reason?: string; takesMessages?: unknown }>();
     let state = input.state;
     let reason = input.reason ?? null;
     // A task that sent its work back ends `done`, and is not its stage
@@ -431,7 +434,11 @@ export function registerInternalApi(
         }
       }
     }
-    const task = await tasks.updateTaskState(params.id ?? '', state, { exitReason: reason });
+    const task = await tasks.updateTaskState(params.id ?? '', state, {
+      exitReason: reason,
+      // Said by the runner with `running`: whether a person's message can reach its session.
+      ...(typeof input.takesMessages === 'boolean' ? { takesMessages: input.takesMessages } : {}),
+    });
     if (!task) {
       // No such task, or one whose state does not allow this one: a task
       // that has ended stays ended (`TASK_STATE_FROM`).
@@ -461,6 +468,16 @@ export function registerInternalApi(
     // which is named for its skill, before it reported its usage.
     if (ended.kind === 'intake' && ['done', 'failed', 'stopped', 'paused'].includes(state)) {
       void deps.requestQueue?.drain().catch(() => undefined);
+    }
+
+    // A message its session did not take goes where it would have gone had
+    // it arrived now: the task is no longer live. After the answer, since a
+    // start can wait on GitHub; the sweep catches one this misses.
+    if (['paused', 'done', 'failed', 'stopped'].includes(state) && deps.taskInbox) {
+      const inbox = deps.taskInbox;
+      void inbox.settle(ended.id).catch((error: unknown) =>
+        console.warn(`[bridge] ${ended.subjectRef}: its messages were not returned: ${error instanceof Error ? error.message : error}`),
+      );
     }
 
     if (['done', 'failed', 'stopped'].includes(state)) {
@@ -577,6 +594,14 @@ export function registerInternalApi(
    * task; a marker in a comment on GitHub is never acted on. Refused, the
    * answer says why, and the session ends on it.
    */
+  // What a person wrote to this task while it worked, taken by its session
+  // at the end of a turn. Its own task's token only, while it runs: a session
+  // never reads another task's messages.
+  taskPost('/internal/tasks/:id/inbox/take', { states: ['running'], refusal: 'messages are taken only by a task that is running' }, async ({ params }) => {
+    if (!deps.taskInbox) return { messages: [] };
+    return { messages: await deps.taskInbox.take(params.id ?? '') };
+  });
+
   taskPost('/internal/tasks/:id/send-back', async ({ params, body }) => {
     const input = await body<{ to?: unknown; reason?: unknown }>();
     if (!deps.sendBack) throw new HttpFailure(503, 'this bridge takes no send-backs');

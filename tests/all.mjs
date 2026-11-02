@@ -57,6 +57,15 @@ const suites = [
     needs: 'consoleAndInstall',
   },
   {
+    // A message to a running task, read at its next turn: a scripted install
+    // whose turns are held open (`OPENADLC_SCRIPTED_LINGER_MS`, tests/scratch.sh).
+    name: 'live message',
+    command: process.execPath,
+    args: [join(here, 'live-message.mjs')],
+    cwd: root,
+    needs: 'install',
+  },
+  {
     name: 'concurrency',
     command: process.execPath,
     args: [join(here, 'concurrency.mjs')],

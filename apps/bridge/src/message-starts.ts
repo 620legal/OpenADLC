@@ -1,4 +1,4 @@
-import { recordEvent, threads, type Role } from '@openadlc/db';
+import { recordEvent, taskInbox, threads, type Role } from '@openadlc/db';
 import type { GitHubClient } from '@openadlc/github';
 import { BOT_ROLES, STAGE_COLUMN_TITLES, roleLabel, type BotRole, type ContextDocument, type StageKey } from '@openadlc/shared';
 import { continuesBranch } from './build-left.js';
@@ -45,8 +45,13 @@ import { ACTIVE_STATES, REVIEW_ASKED_AGAIN, parseRef } from './work.js';
  * words: nothing anybody wrote on GitHub starts work this way.
  */
 
-/** What a message to a role starts on an item, before it is sent and once it is. */
-export type MessageStart = { kind: 'starts'; what: string } | { kind: 'nothing'; why: string };
+/**
+ * What a message to a role starts on an item, before it is sent and once it
+ * is: its work, nothing, or — when that role's task there is already live —
+ * that task reading it at its next turn (`delivers`, through its inbox; see
+ * `task-inbox.ts`).
+ */
+export type MessageStart = { kind: 'starts'; what: string } | { kind: 'delivers'; what: string; taskId: string } | { kind: 'nothing'; why: string };
 
 /** What only the bridge can read about whether a message would start work. */
 export interface StartFacts {
@@ -63,7 +68,7 @@ export interface StartFacts {
 /** What `whatStarts` reads of an item's view. */
 export interface StartView {
   stage: StageKey | null;
-  tasks: readonly Pick<ItemTask, 'bot' | 'role' | 'kind' | 'state' | 'subjectRef' | 'branch' | 'exitReason'>[];
+  tasks: readonly (Pick<ItemTask, 'bot' | 'role' | 'kind' | 'state' | 'subjectRef' | 'branch' | 'exitReason'> & Partial<Pick<ItemTask, 'id' | 'takesMessages'>>)[];
   held?: { by: string; why: string | null } | null;
   issue?: { number: number } | null;
   pullRequest?: { number: number } | null;
@@ -88,6 +93,21 @@ function going(state: string): string {
 }
 
 const live = (state: string): boolean => (ACTIVE_STATES as readonly string[]).includes(state);
+
+/**
+ * The role's own task on the item, already going: `what` is that task, as
+ * "its build of #229". Queued, its runner reads its inbox before its first
+ * turn; running on an engine that takes messages, at the end of its turn —
+ * so the message is delivered to it. Paused (at a question, at its cap, or
+ * by a person), or running on an engine that cannot take one, it is not: the
+ * message waits on the thread for the role's next task, which reads it there.
+ */
+function alreadyGoing(task: StartView['tasks'][number], what: string): MessageStart {
+  if (task.id && (task.state === 'queued' || (task.state === 'running' && task.takesMessages === true))) {
+    return { kind: 'delivers', what: `${what} reads it at its next turn`, taskId: task.id };
+  }
+  return nothing(`${what} is already ${going(task.state)}; it reads it on the thread at its next task`);
+}
 
 /**
  * What a message to `role`'s seat `bot` starts on an item, from what the
@@ -138,11 +158,11 @@ function roleWork(input: { role: string; bot: string; view: StartView; item: Pic
     const onWork = view.stage === 'review' || view.stage === 'build';
     if (pr && onWork) {
       if (pullState !== 'open') return nothing(`pull request #${pr} is ${pullState}`);
-      if (building) return nothing(`its ${building.kind === 'patch' ? `patch round on pull request #${pr}` : `build of ${issueRef}`} is already ${going(building.state)}`);
+      if (building) return alreadyGoing(building, `its ${building.kind === 'patch' ? `patch round on pull request #${pr}` : `build of ${issueRef}`}`);
       return starts(`a patch round on pull request #${pr}`);
     }
     if (view.stage === 'build' && view.issue) {
-      if (building) return nothing(`its build of ${issueRef} is already ${going(building.state)}`);
+      if (building) return alreadyGoing(building, `its build of ${issueRef}`);
       // The view's tasks are newest first.
       const last = view.tasks.find((task) => task.kind === 'implement' && task.subjectRef === issueSubject);
       if (last && (continuesBranch(last) || last.state === 'failed')) {
@@ -156,6 +176,8 @@ function roleWork(input: { role: string; bot: string; view: StartView; item: Pic
   if (role === 'spec') {
     if (view.stage === 'spec' && view.issue) {
       const designing = view.tasks.find((task) => task.subjectRef === issueSubject && live(task.state));
+      // Only design's own pass reads it: another role's task on the issue is not where it was sent.
+      if (designing && designing.kind === 'spec' && designing.role === 'spec') return alreadyGoing(designing, `its design pass on ${issueRef}`);
       if (designing) return nothing(`${designing.kind === 'spec' ? 'its design pass' : 'work'} on ${issueRef} is already ${going(designing.state)}`);
       return starts(`its design pass on ${issueRef}`);
     }
@@ -167,11 +189,13 @@ function roleWork(input: { role: string; bot: string; view: StartView; item: Pic
       if (view.request.state === 'filed') return nothing('the request has been filed as an issue already');
       if (view.request.state === 'abandoned') return nothing('the request was abandoned');
       const triaging = view.tasks.find((task) => task.subjectRef === item.refs.request && live(task.state));
+      if (triaging && triaging.role === 'intake') return alreadyGoing(triaging, 'its triage of the request');
       if (triaging) return nothing(`its triage of the request is already ${going(triaging.state)}`);
       return starts('its triage of the request');
     }
     if (view.stage === 'intake' && view.issue) {
       const triaging = view.tasks.find((task) => task.subjectRef === issueSubject && live(task.state));
+      if (triaging && triaging.kind === 'intake' && triaging.role === 'intake') return alreadyGoing(triaging, `its triage of ${issueRef}`);
       if (triaging) return nothing(`${triaging.kind === 'intake' ? 'its triage' : 'work'} of ${issueRef} is already ${going(triaging.state)}`);
       return starts(`its triage of ${issueRef}`);
     }
@@ -183,7 +207,7 @@ function roleWork(input: { role: string; bot: string; view: StartView; item: Pic
   if (pullState !== 'open') return nothing(`pull request #${pr} is ${pullState}`);
   if (view.stage !== 'review') return nothing(`${who} reviews a pull request in Review, and ${where}`);
   const reviewing = mine.find((task) => task.kind === 'review' && task.subjectRef === prSubject);
-  if (reviewing) return nothing(`its review of pull request #${pr} is already ${going(reviewing.state)}`);
+  if (reviewing) return alreadyGoing(reviewing, `its review of pull request #${pr}`);
   if (role === 'review_lead') {
     // The lead decides last, from every other seat's review of this round:
     // started beside one, it would decide without it, and its review would
@@ -211,15 +235,26 @@ function placeWords(subject: string): string {
  * is briefed from its conversation, where the message is too, posted as the
  * seat; this says it is why the task started, which the conversation cannot.
  */
-export function messageBrief(input: { identity: string; text: string; role: string; where: string | null }): ContextDocument {
+export function messageBrief(input: {
+  identity: string;
+  text: string;
+  role: string;
+  where: string | null;
+  /** Read by a task already running, at its next turn (`TaskInbox.take`), rather than the one it started. */
+  whileWorking?: boolean;
+}): ContextDocument {
   const name = publicNameOf(input.identity);
   return {
     name: 'message.md',
-    title: `What ${name} asked of you in the OpenADLC console, which this task started from`,
+    title: input.whileWorking
+      ? `What ${name} asked of you in the OpenADLC console while you worked`
+      : `What ${name} asked of you in the OpenADLC console, which this task started from`,
     content: [
-      `# ${name} wrote to the ${roleName(input.role)} in the OpenADLC console`,
+      `# ${name} wrote to the ${roleName(input.role)} in the OpenADLC console${input.whileWorking ? ' while you worked' : ''}`,
       '',
-      'This task started from this message: it is your brief, beside everything your skill reads. Do what it asks within your skill’s rules and the paths you hold, and where they do not allow it, say so rather than working around them.',
+      input.whileWorking
+        ? 'This message reached you while you worked: it adds to your brief, beside everything your skill reads. Do what it asks within your skill’s rules and the paths you hold, and where they do not allow it, say so rather than working around them.'
+        : 'This task started from this message: it is your brief, beside everything your skill reads. Do what it asks within your skill’s rules and the paths you hold, and where they do not allow it, say so rather than working around them.',
       ...(input.where ? ['', `It is on ${input.where} as well, posted as you.`] : []),
       '',
       input.text.trim(),
@@ -247,6 +282,10 @@ export interface MessageStartDeps {
   /** What the route leaves running once it has answered (`Afterwards`); absent, the start is made before it answers. */
   afterwards?: { run(where: { subjectRef?: string | null }, what: string, work: () => Promise<unknown>): void };
   now?: () => number;
+  /** Where a message to a live task waits for its session (`taskInbox`, the store's, unless a test says). */
+  inbox?: Pick<typeof taskInbox, 'enqueue'>;
+  /** The item read again, when the live task a message was for ended before it was queued (`readItem`). */
+  reread?: (subject: string) => Promise<ReadItem | null>;
 }
 
 /** An item as the item routes read it (`readItem`). */
@@ -327,6 +366,8 @@ export class MessageStarts {
     /** The sender's console role, which the router checked: only a person with one starts anything. */
     access?: Role;
     message: { id: string; githubUrl: string | null };
+    /** Set on the second decision after a live task ended under the first, so there is no third. */
+    decidedAgain?: boolean;
   }): Promise<MessageStart> {
     const { route, read } = input;
     const place = placeWords(route.subject);
@@ -345,6 +386,33 @@ export class MessageStarts {
     const facts = read.facts ?? (await this.facts(read));
     const decided = this.preview({ role: route.role, bot: route.bot, read, facts });
     if (decided.kind === 'nothing') return refuse(decided.why);
+
+    if (decided.kind === 'delivers') {
+      // Written only if the task is still live, in the same statement. Null
+      // is a task that ended between the decision and the write: what the
+      // message does is decided again from the item as it is now, which is
+      // what it would have done had it arrived a moment later.
+      const queued = await (this.deps.inbox ?? taskInbox).enqueue({
+        taskId: decided.taskId,
+        messageId: input.message.id,
+        botId: route.botId,
+        role: route.role,
+        subjectRef: route.subject,
+        sender: input.identity,
+        senderAccess: input.access,
+        text: input.text,
+        githubUrl: input.message.githubUrl,
+      });
+      if (queued) {
+        await say(`${place}; ${decided.what}`).catch((error: unknown) =>
+          console.warn(`[bridge] ${route.subject}: could not say the message goes to its running task: ${error instanceof Error ? error.message : error}`),
+        );
+        return decided;
+      }
+      const again = input.decidedAgain ? null : await this.deps.reread?.(route.subject).catch(() => null);
+      if (!again) return refuse(`its task stopped as the message arrived; the ${roleName(route.role)} reads it on the thread at its next task`);
+      return this.start({ ...input, read: { ...again, facts: undefined }, decidedAgain: true });
+    }
 
     const brief = messageBrief({ identity: input.identity, text: input.text, role: route.role, where: input.message.githubUrl });
     const run = async (): Promise<MessageStart> => {

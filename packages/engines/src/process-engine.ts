@@ -8,9 +8,22 @@ export interface SpawnJsonLinesInput {
   cwd: string;
   env: Record<string, string>;
   stdin?: string;
+  /**
+   * Keeps stdin open once `stdin` is written, for an engine that reads more
+   * input as it runs (Claude's `--input-format stream-json`), and hands over
+   * the pipe to write it and to end it. Ended for every other run: an engine
+   * reading its prompt from stdin waits for the end of it.
+   */
+  holdStdin?: (stdin: StdinWriter) => void;
   signal?: AbortSignal;
   /** Translates one line of engine output into zero or more OpenADLC events. */
   parse: (line: string) => EngineEvent[];
+}
+
+/** A running engine's stdin, held open by `holdStdin`. */
+export interface StdinWriter {
+  write(text: string): void;
+  end(): void;
 }
 
 /**
@@ -148,7 +161,18 @@ export async function* spawnJsonLines(input: SpawnJsonLinesInput): AsyncIterable
   if (input.stdin !== undefined) {
     child.stdin.write(input.stdin);
   }
-  child.stdin.end();
+  if (input.holdStdin) {
+    input.holdStdin({
+      write: (text) => {
+        if (!child.stdin.writableEnded) child.stdin.write(text);
+      },
+      end: () => {
+        if (!child.stdin.writableEnded) child.stdin.end();
+      },
+    });
+  } else {
+    child.stdin.end();
+  }
 
   const stderr: string[] = [];
   child.stderr.setEncoding('utf8');

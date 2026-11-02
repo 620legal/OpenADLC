@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import type { ItemMessage, ItemView } from './api';
-import { cardMatches, exactKey, itemAddress, itemEntries, itemNumberOf, keyLike } from './item';
+import { cardMatches, exactKey, itemAddress, itemComposer, itemEntries, itemNumberOf, keyLike } from './item';
+
+describe('what the box says a message to a role does', () => {
+  const route = (start: NonNullable<Extract<NonNullable<ItemView['routes']>[string], { kind: 'post' }>['start']>) => ({
+    openGates: [],
+    routes: { implement: { kind: 'post' as const, bot: 'builder', role: 'implement', handle: 'atlas', subject: 'openadlc#229', on: 'issue' as const, number: 229, start } },
+  });
+
+  it('says a running task reads it at its next turn, apart from work it starts and work it does not', () => {
+    expect(itemComposer(route({ kind: 'delivers', what: 'its build of #229 reads it at its next turn', taskId: 'task-1' }), { role: 'implement' }).helper).toBe(
+      'To the builder (atlas), posted on #229 as a comment; delivers: its build of #229 reads it at its next turn',
+    );
+    expect(itemComposer(route({ kind: 'starts', what: 'a patch round on pull request #7' }), { role: 'implement' }).helper).toMatch(/; starts a patch round on pull request #7$/);
+    expect(
+      itemComposer(route({ kind: 'nothing', why: 'its build of #229 is already paused; it reads it on the thread at its next task' }), { role: 'implement' }).helper,
+    ).toMatch(/; nothing starts: its build of #229 is already paused; it reads it on the thread at its next task$/);
+  });
+});
 
 describe('finding a card by its work item key', () => {
   const card = { title: 'Record which model reviewed', ref: 'api#12', item: { number: 128, key: '620legal-128' } };

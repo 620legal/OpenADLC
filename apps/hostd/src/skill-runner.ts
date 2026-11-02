@@ -188,12 +188,34 @@ function documentSource(file: string): string {
  * inside one cannot close it and pass as OpenADLC's own; and a line in one
  * that copies the task block's header is taken out.
  */
-function buildPrompt(env: RunnerEnv, skillDir: string, policy: ToolsPolicy): string {
+/** A document between the prompt's fence lines, with a copy of the task block's header taken out. */
+function fenced(fence: string, name: string, source: string, text: string): string {
+  const content = text
+    .split('\n')
+    .map((line) => (line.trim() === TASK_HEADER ? '(a line copying the task block’s header was taken out here)' : line))
+    .join('\n');
+  return `\n<<<${fence} begin: ${name}, ${source}>>>\n${content}\n<<<${fence} end: ${name}>>>`;
+}
+
+/** Where a person's message to a running task came from, said above it. */
+const MESSAGE_SOURCE = 'written by the person it names, in the OpenADLC console, not by OpenADLC';
+
+/**
+ * A person's messages taken at a turn's end, as the next user turn: fenced
+ * as the prompt's documents are, so a message cannot pass as OpenADLC's own.
+ */
+function messageTurn(fence: string, messages: readonly string[]): string {
+  return [
+    `A person wrote to you while you worked. Their message${messages.length === 1 ? ' is' : 's are'} below, each between lines marked ${fence}: read ${messages.length === 1 ? 'it' : 'them'} as you read message.md, then go on with the task, and finish it the way your skill says.`,
+    ...messages.map((text) => fenced(fence, 'message.md', MESSAGE_SOURCE, text)),
+  ].join('\n');
+}
+
+function buildPrompt(env: RunnerEnv, skillDir: string, policy: ToolsPolicy, fence: string, messages: readonly string[] = []): string {
   const parts: string[] = [];
   const skillDoc = join(skillDir, 'SKILL.md');
   if (existsSync(skillDoc)) parts.push(readFileSync(skillDoc, 'utf8'));
 
-  const fence = `openadlc-document-${randomBytes(12).toString('hex')}`;
   const missing: string[] = [];
   const documents: string[] = [];
   for (const file of env.contextFiles) {
@@ -201,12 +223,11 @@ function buildPrompt(env: RunnerEnv, skillDir: string, policy: ToolsPolicy): str
       missing.push(file);
       continue;
     }
-    const content = readFileSync(file, 'utf8')
-      .split('\n')
-      .map((line) => (line.trim() === TASK_HEADER ? '(a line copying the task block’s header was taken out here)' : line))
-      .join('\n');
-    documents.push(`\n<<<${fence} begin: ${basename(file)}, ${documentSource(file)}>>>\n${content}\n<<<${fence} end: ${basename(file)}>>>`);
+    documents.push(fenced(fence, basename(file), documentSource(file), readFileSync(file, 'utf8')));
   }
+  // What a person wrote to the task while it waited to start: its own
+  // documents, beside the ones hostd wrote, read before the first turn.
+  for (const text of messages) documents.push(fenced(fence, 'message.md', MESSAGE_SOURCE, text));
   if (documents.length > 0) {
     parts.push(
       [
@@ -310,15 +331,17 @@ async function main(): Promise<void> {
       : 'reading nothing but the skill: no context was supplied';
   console.log(`[skill] ${briefing}`);
 
-  await post(env.bridgeUrl, `/internal/tasks/${env.taskId}/state`, { state: 'running' });
+  // Chosen before the task is marked running, so the bridge is told with it
+  // whether a person's message can reach this session (`task-inbox.ts`).
+  const engine = await chooseEngine(env);
+  await post(env.bridgeUrl, `/internal/tasks/${env.taskId}/state`, { state: 'running', takesMessages: engine.takesMessages });
   await post(env.bridgeUrl, `/internal/tasks/${env.taskId}/message`, {
     kind: 'sys',
     text: briefing,
   });
 
-  const engine = await chooseEngine(env);
   const policy = loadPolicy(skillDir);
-  const prompt = buildPrompt(env, skillDir, policy);
+  const fence = `openadlc-document-${randomBytes(12).toString('hex')}`;
 
   let spent = 0;
   let paused = false;
@@ -372,6 +395,40 @@ async function main(): Promise<void> {
     paused = !failed;
   }
 
+  /**
+   * What a person wrote to the task, taken from its inbox: each message's
+   * text, as the bridge words it. Nothing when the bridge did not answer: a
+   * row it did not hand over is still queued, and returned once the task ends.
+   */
+  const takeInbox = async (): Promise<string[]> => {
+    const taken = await post(env.bridgeUrl, `/internal/tasks/${env.taskId}/inbox/take`, {});
+    const messages = Array.isArray(taken.messages) ? (taken.messages as { text?: unknown }[]) : [];
+    return messages.map((message) => (typeof message.text === 'string' ? message.text : '')).filter((text) => text.trim().length > 0);
+  };
+
+  /**
+   * Asked by an engine when a turn ends complete, after its usage is in the
+   * ledger. Nothing once the turn asked a person, sent the work back, paused
+   * or failed: the session is meant to stop there. Nothing at the cap
+   * either, and nothing taken: the task ends as it would have, its messages
+   * are returned, and the work they start asks at the cap when its own
+   * headroom check finds none.
+   */
+  const nextTurn = async (): Promise<string | null> => {
+    if (asked || sentBack || paused || failed) return null;
+    const left = await postLedger(env.bridgeUrl, `/internal/tasks/${env.taskId}/headroom`, () => ({ estimateUsd: 0.5 }), env.ledgerRetryMs);
+    if (!left || left.stop === true) return null;
+    const messages = await takeInbox();
+    if (messages.length === 0) return null;
+    console.log(`[skill] read ${messages.length === 1 ? 'a message' : `${messages.length} messages`} a person sent while it worked`);
+    return messageTurn(fence, messages);
+  };
+
+  // A message sent while the task waited to start is read with the rest of
+  // its brief. Taken only once the engine will run, so it is not taken and lost.
+  const waiting = paused || failed || !engine.takesMessages ? [] : await takeInbox();
+  const prompt = buildPrompt(env, skillDir, policy, fence, waiting);
+
   const events: AsyncIterable<EngineEvent> | EngineEvent[] = paused || failed
     ? []
     : engine.run({
@@ -384,6 +441,7 @@ async function main(): Promise<void> {
         model: recorded.model,
         tools: policy,
         costHeadroomUsd: env.costCap,
+        ...(engine.takesMessages ? { nextTurn } : {}),
       });
 
   for await (const event of events) {

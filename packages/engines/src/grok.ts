@@ -85,6 +85,16 @@ export interface GrokEngineOptions {
  */
 export class GrokEngine implements Engine {
   readonly name: EngineName = 'grok';
+  /**
+   * Not yet. Headless grok reads its prompt from `--prompt-file` and never
+   * from stdin, so it has no input to hold open as Claude's is; it could take
+   * a message only by continuing its session in a new process, as Codex does,
+   * and whether the pinned CLI can do that headless has not been measured in
+   * the bot image. Until it is, a message to a running Grok task is read at
+   * its next task, and the thread says so. See
+   * docs/adr/0028-a-message-to-a-running-task-waits-in-its-inbox.md.
+   */
+  readonly takesMessages = false;
   private totals: EngineUsage = { tokensIn: 0, tokensOut: 0, costUsd: 0 };
 
   constructor(private readonly options: GrokEngineOptions = {}) {}

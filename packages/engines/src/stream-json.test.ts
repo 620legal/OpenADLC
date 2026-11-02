@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ClaudeEngine } from './claude.js';
 import { costOf, exactCost } from './pricing.js';
-import { StreamJsonParser } from './stream-json.js';
+import { runStreamJson, StreamJsonParser, userMessageLine } from './stream-json.js';
 import type { EngineEvent } from './types.js';
 
 function read(parser: StreamJsonParser, lines: unknown[]): EngineEvent[] {
@@ -342,5 +346,126 @@ describe('what a run did', () => {
 
     expect(events).toEqual([]);
     expect(parser.failure()).toContain('Not signed in');
+  });
+});
+
+/**
+ * A stand-in `claude` reading stream-json input: it keeps each line of its
+ * stdin in `FAKE_CLAUDE_STDIN` and its arguments in `FAKE_CLAUDE_ARGS`, and
+ * answers each user message as one turn, a message and then a `result` whose
+ * totals are the session's so far, as Claude Code's are. Given
+ * `FAKE_CLAUDE_FAIL`, its first turn fails. It exits when its stdin ends.
+ */
+function standInClaude(dir: string): string {
+  const path = join(dir, 'claude');
+  const source = [
+    '#!/usr/bin/env node',
+    'const { appendFileSync, writeFileSync } = require("node:fs");',
+    'const { createInterface } = require("node:readline");',
+    'writeFileSync(process.env.FAKE_CLAUDE_ARGS, JSON.stringify(process.argv.slice(2)));',
+    'let turn = 0;',
+    'const out = (line) => process.stdout.write(JSON.stringify(line) + "\\n");',
+    'createInterface({ input: process.stdin }).on("line", (line) => {',
+    '  appendFileSync(process.env.FAKE_CLAUDE_STDIN, line + "\\n");',
+    '  turn += 1;',
+    '  const text = JSON.parse(line).message.content[0].text;',
+    '  if (process.env.FAKE_CLAUDE_FAIL) { out({ type: "result", is_error: true, result: "Not signed in" }); return; }',
+    '  out({ type: "assistant", message: { id: "msg_" + turn, content: [{ type: "text", text: "heard: " + text }], usage: { input_tokens: 100, output_tokens: 10 } } });',
+    '  out({ type: "result", is_error: false, result: "ok", total_cost_usd: 0.01 * turn, usage: { input_tokens: 100 * turn, output_tokens: 10 * turn } });',
+    '}).on("close", () => process.exit(0));',
+    '',
+  ].join('\n');
+  writeFileSync(path, source);
+  chmodSync(path, 0o755);
+  return path;
+}
+
+describe('a Claude session that takes a message', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'openadlc-claude-input-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const run = async (messages: (string | null)[], env: Record<string, string> = {}) => {
+    const events: EngineEvent[] = [];
+    const asked: EngineEvent[][] = [];
+    const usage: { tokensIn: number; costUsd: number }[] = [];
+    for await (const event of runStreamJson({
+      command: standInClaude(dir),
+      args: [],
+      cwd: dir,
+      env: { FAKE_CLAUDE_STDIN: join(dir, 'stdin.jsonl'), FAKE_CLAUDE_ARGS: join(dir, 'args.json'), ...env },
+      stdin: 'implement the issue',
+      model: 'claude-sonnet-5',
+      growingOutput: true,
+      onUsage: (one) => usage.push(one),
+      nextTurn: async () => {
+        asked.push([...events]);
+        return messages.shift() ?? null;
+      },
+    })) {
+      events.push(event);
+    }
+    const stdin = readFileSync(join(dir, 'stdin.jsonl'), 'utf8').trim().split('\n');
+    return { events, asked, usage, stdin };
+  };
+
+  it('is given the prompt as its first user message, and the message as its second, after the first result', async () => {
+    const { events, stdin, asked } = await run(['also handle the empty state']);
+
+    expect(stdin).toEqual([userMessageLine('implement the issue').trim(), userMessageLine('also handle the empty state').trim()]);
+    expect(events.filter((event) => event.type === 'text')).toEqual([
+      { type: 'text', text: 'heard: implement the issue' },
+      { type: 'text', text: 'heard: also handle the empty state' },
+    ]);
+    // Asked once the turn's usage was out, and before anything said it was done.
+    expect(asked[0]?.at(-1)?.type).toBe('usage');
+    expect(asked[0]?.some((event) => event.type === 'done')).toBe(false);
+    expect(events.filter((event) => event.type === 'done')).toEqual([{ type: 'done', reason: 'complete' }]);
+    expect(events.at(-1)).toEqual({ type: 'done', reason: 'complete' });
+  });
+
+  it('ends its stdin when there is nothing to take, and the run is done', async () => {
+    const { events, stdin, asked } = await run([null]);
+
+    expect(stdin).toHaveLength(1);
+    expect(asked).toHaveLength(1);
+    expect(events.at(-1)).toEqual({ type: 'done', reason: 'complete' });
+  });
+
+  it('counts a second result once: its totals are the session’s, and only what was not yet counted is added', async () => {
+    const { usage } = await run(['and the empty state']);
+
+    const total = usage.reduce((sum, one) => ({ tokensIn: sum.tokensIn + one.tokensIn, costUsd: sum.costUsd + one.costUsd }), { tokensIn: 0, costUsd: 0 });
+    // Two turns of 100 tokens in, and the session's $0.02 — not $0.01 plus $0.02.
+    expect(total.tokensIn).toBe(200);
+    expect(total.costUsd).toBeCloseTo(0.02, 4);
+  });
+
+  it('asks for nothing after a failed turn, and ends its stdin rather than waiting on it', async () => {
+    const { events, asked } = await run(['never read'], { FAKE_CLAUDE_FAIL: '1' });
+
+    expect(asked).toHaveLength(0);
+    expect(events).toEqual([{ type: 'error', message: 'engine reported a failure: Not signed in' }]);
+  });
+
+  it('is what the Claude engine runs when the run may take a message, and only then', async () => {
+    const binary = standInClaude(dir);
+    const base = {
+      contextFiles: [],
+      prompt: 'implement the issue',
+      workdir: dir,
+      env: { FAKE_CLAUDE_STDIN: join(dir, 'stdin.jsonl'), FAKE_CLAUDE_ARGS: join(dir, 'args.json') },
+      model: 'claude-sonnet-5',
+      tools: { allow: { shell: [] }, deny: { shell: [], github: [] } },
+      costHeadroomUsd: 15,
+    };
+    for await (const event of new ClaudeEngine(binary).run({ ...base, nextTurn: async () => null })) void event;
+    expect(JSON.parse(readFileSync(join(dir, 'args.json'), 'utf8'))).toEqual(expect.arrayContaining(['--input-format', 'stream-json']));
   });
 });

@@ -279,7 +279,9 @@ export interface ItemComposer {
  */
 function startOf(route: Extract<ItemRoute, { kind: 'post' }>): string {
   if (!route.start) return '';
-  return route.start.kind === 'starts' ? `; starts ${route.start.what}` : `; nothing starts: ${route.start.why}`;
+  if (route.start.kind === 'starts') return `; starts ${route.start.what}`;
+  if (route.start.kind === 'delivers') return `; delivers: ${route.start.what}`;
+  return `; nothing starts: ${route.start.why}`;
 }
 
 /** "posted on pull request #31 as a comment": where the bridge puts a message. */

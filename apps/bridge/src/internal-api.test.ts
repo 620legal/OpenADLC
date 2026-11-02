@@ -128,6 +128,8 @@ const localCiRun = vi.fn(async (taskId: string, runId: string) => ({ run: { id: 
 const verdict = vi.fn(async (_task: unknown, _text: string) => null);
 const missingVerdict = vi.fn(async (_task: unknown): Promise<string | null> => null);
 const designerEnded = vi.fn(async (_task: unknown, _reason: string | null) => undefined);
+const inboxTake = vi.fn(async (_taskId: string) => [{ id: 'inbox-1', text: 'janedoe wrote to the builder while you worked' }]);
+const inboxSettle = vi.fn(async (_taskId?: string) => 0);
 
 
 let bridge: Server;
@@ -161,6 +163,7 @@ beforeEach(async () => {
     stageRuns: { seatFreed },
     requestQueue: { drain } as never,
     planChanges: { verdict, missingVerdict, designerEnded } as never,
+    taskInbox: { take: inboxTake, settle: inboxSettle },
   });
   bridge = createServer((request, response) => void router.handle(request, response));
   await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
@@ -589,6 +592,57 @@ describe('a task sending its work back', () => {
 
     expect(vi.mocked(tasks.updateTaskState)).toHaveBeenCalledWith('task-sent', 'done', { exitReason: 'sent back to spec' });
     expect(onTaskDone).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-sent', kind: 'implement' }));
+  });
+});
+
+describe('a message a person sent a running task', () => {
+  const asTask = (task: string, route: string, body: unknown, token = task) =>
+    import('@openadlc/github').then(({ taskTokenFor }) =>
+      fetch(`${bridgeUrl}/internal/tasks/${task}/${route}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-openadlc-task-token': taskTokenFor(token, SECRET) },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  it('is taken by its own task’s session, with its own token', async () => {
+    const response = await asTask('task-1', 'inbox/take', {});
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ messages: [{ id: 'inbox-1', text: 'janedoe wrote to the builder while you worked' }] });
+    expect(inboxTake).toHaveBeenCalledWith('task-1');
+  });
+
+  it('is never read with another task’s token', async () => {
+    const response = await asTask('task-1', 'inbox/take', {}, 'task-2');
+
+    expect(response.status).toBe(401);
+    expect(inboxTake).not.toHaveBeenCalled();
+  });
+
+  it('is not taken by a task that is no longer running', async () => {
+    expect((await asTask('task-paused', 'inbox/take', {})).status).toBe(409);
+    expect(inboxTake).not.toHaveBeenCalled();
+  });
+
+  it('can reach a session whose runner says so with running, and is not assumed when it says nothing', async () => {
+    const { tasks } = await import('@openadlc/db');
+
+    await post('/internal/tasks/task-1/state', { state: 'running', takesMessages: true });
+    expect(vi.mocked(tasks.updateTaskState)).toHaveBeenLastCalledWith('task-1', 'running', { exitReason: null, takesMessages: true });
+
+    await post('/internal/tasks/task-1/state', { state: 'running', takesMessages: 'yes' });
+    expect(vi.mocked(tasks.updateTaskState)).toHaveBeenLastCalledWith('task-1', 'running', { exitReason: null });
+  });
+
+  it.each(['paused', 'done', 'failed', 'stopped'])('is returned, unread, once its task is %s', async (state) => {
+    expect((await post('/internal/tasks/task-1/state', { state, reason: 'why' })).status).toBe(200);
+    await vi.waitFor(() => expect(inboxSettle).toHaveBeenCalledWith('task-1'));
+  });
+
+  it('stays queued while its task runs', async () => {
+    await post('/internal/tasks/task-1/state', { state: 'running' });
+    expect(inboxSettle).not.toHaveBeenCalled();
   });
 });
 

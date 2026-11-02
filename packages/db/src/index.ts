@@ -11,6 +11,8 @@ export * as leases from './store/leases.js';
 export * as standingApprovals from './store/standing-approvals.js';
 export type { StandingApproval } from './store/standing-approvals.js';
 export * as tasks from './store/tasks.js';
+export * as taskInbox from './store/task-inbox.js';
+export type { InboxRow } from './store/task-inbox.js';
 export * as sessions from './store/sessions.js';
 export * as threads from './store/threads.js';
 export * as attachments from './store/attachments.js';
