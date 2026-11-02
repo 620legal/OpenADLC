@@ -47,6 +47,7 @@ describe('the merge-waiting and review-stopped notifications', () => {
     expect(send).not.toHaveBeenCalled();
     expect(store.events).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({ type: 'notify.merge_waiting', payload: { baseline: true, look: 'first' } }),
         expect.objectContaining({ type: 'notify.merge_waiting', payload: { item: `${MERGE.id}@${MERGE.since}`, baseline: true } }),
         expect.objectContaining({ type: 'notify.review_stalled', payload: { item: `${STALL.id}@${STALL.since}`, baseline: true } }),
       ]),
@@ -109,6 +110,46 @@ describe('the merge-waiting and review-stopped notifications', () => {
     const send = vi.spyOn(again, 'send');
     await new WaitingNotices({ notifier: again, items: async () => [MERGE], consoleUrl: CONSOLE }).pass();
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing already waiting when the first look saw an empty list', async () => {
+    // Attention's reads fail open to nothing: the first look may only have
+    // failed to read what waited. The memory store's first row is at
+    // 2026-11-02T00:00:00Z, so this merge was waiting before that look.
+    const { store, send, notices, ready, set } = setUp([]);
+    await ready;
+    const before = { ...MERGE, since: '2026-11-01T18:00:00.000Z' };
+    set([before]);
+    await notices.pass();
+    await notices.pass();
+    expect(send).not.toHaveBeenCalled();
+    expect(store.events).toContainEqual(expect.objectContaining({ type: 'notify.merge_waiting', payload: { item: `${before.id}@${before.since}`, baseline: true } }));
+  });
+
+  it('sends nothing already waiting when the first look stopped part way', async () => {
+    const store = memoryNotifyStore();
+    const notifier = new Notifier({ notifyWebhook: '', consoleUrl: CONSOLE } as never, store);
+    const send = vi.spyOn(notifier, 'send');
+    const first = { ...MERGE, since: '2026-11-01T18:00:00.000Z' };
+    const second = { ...MERGE, id: 'merge:openadlc#15', since: '2026-11-01T19:00:00.000Z' };
+    const record = store.record;
+    let rows = 0;
+    store.record = async (type, payload) => {
+      if (++rows === 2) throw new Error('the database blinked');
+      return record(type, payload);
+    };
+    const notices = new WaitingNotices({ notifier, items: async () => [first, second], consoleUrl: CONSOLE, say: () => undefined });
+    await notices.pass();
+    store.record = record;
+    await notices.pass();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('takes its first look as it starts, not a minute later', async () => {
+    const { store, notices } = setUp([MERGE], { seen: false });
+    notices.start(3_600_000);
+    await vi.waitFor(() => expect(store.events.some((event) => event.payload.look === 'first')).toBe(true));
+    notices.stop();
   });
 
   it('carries on after a look that failed', async () => {

@@ -670,8 +670,8 @@ Notifications** (admins only) says where, which kinds, and proves it with
 
 | Kind | Target | What is posted |
 |---|---|---|
-| ntfy | a topic, and its server (`https://ntfy.sh` unless you give another) | JSON to the server's root: `{ topic, title: "OpenADLC", message, click, tags: [event] }`. Subscribe to the topic in the ntfy app |
-| Slack | an incoming-webhook URL, `https://hooks.slack.com/…` | `{ text }`, with the link at its end |
+| ntfy | a topic, and its server (`https://ntfy.sh` unless you give another): its address only, with no path, user or password | JSON to the server's root: `{ topic, title: "OpenADLC", message, click, tags: [event] }`. Subscribe to the topic in the ntfy app |
+| Slack | an incoming-webhook URL, `https://hooks.slack.com/…` | `{ text }`, with the link at its end; `&`, `<` and `>` in the text are escaped, so the console's is its only link |
 | Webhook | any `http(s)://` URL | `{ text, link, event }`, the body `OPENADLC_NOTIFY_WEBHOOK` always had |
 
 The target is a credential: a Slack or webhook URL lets anyone post as the
@@ -697,8 +697,9 @@ off (`notifyKinds`):
 Settings' test is `event: "test"`. A receiver that switches on `event` should
 ignore a value it does not know. `merge_waiting` and `review_stalled` are read
 from Needs you every minute, once per item and the time it started waiting:
-the same pull request waiting again later is sent again, and the first look
-after an upgrade sends none of what already waited. A kind that is off is not
+the same pull request waiting again later is sent again, and nothing that
+waited before the bridge's first look after an upgrade is sent, whether or not
+that look could read it. The look runs when the bridge starts. A kind that is off is not
 sent, and is still recorded as `notify.<event>` with `off: true`.
 
 **Whether they arrive.** Every send, real or a test, is recorded as a

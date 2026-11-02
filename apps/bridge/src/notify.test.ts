@@ -7,8 +7,10 @@ import {
   NOTIFIABLE,
   NOTIFY_SWITCHES,
   Notifier,
+  ntfyOrigin,
   redactTarget,
   requestFor,
+  saveNotificationSettings,
   TEST_TEXT,
 } from './notify.js';
 
@@ -128,6 +130,13 @@ describe('each transport is sent the request it reads', () => {
     expect(JSON.parse(init.body as string)).toEqual({ text: `Mira is waiting — ¿listo?\n<${message.link}|Open in OpenADLC>` });
   });
 
+  it('escapes Slack’s formatting in the text, so the console’s is the only link', () => {
+    const { init } = requestFor({ kind: 'slack', target: SLACK }, { ...message, to: null, text: 'See <https://evil.example|here> & <!channel>' });
+    const { text } = JSON.parse(init.body as string) as { text: string };
+    expect(text).toBe(`See &lt;https://evil.example|here&gt; &amp; &lt;!channel&gt;\n<${message.link}|Open in OpenADLC>`);
+    expect(text.match(/</g)).toHaveLength(1);
+  });
+
   it('posts the generic webhook the body it always had', () => {
     const { url, init } = requestFor({ kind: 'webhook', target: 'https://hooks.example.com/in' }, message);
     expect(url).toBe('https://hooks.example.com/in');
@@ -154,6 +163,37 @@ describe('the target is a credential', () => {
     expect(redacted).not.toContain('XyZsecretTOKEN');
     expect(redacted).toBe('request to … failed; POST … refused');
     expect(redactTarget(`no topic ${TOPIC}`, TOPIC)).toBe('no topic …');
+  });
+});
+
+describe('the ntfy server is an address and nothing more', () => {
+  it('keeps only an origin', () => {
+    expect(ntfyOrigin('https://ntfy.example.com/')).toBe('https://ntfy.example.com');
+    expect(ntfyOrigin('http://10.0.0.5:8080')).toBe('http://10.0.0.5:8080');
+    for (const refused of ['https://user:pass@ntfy.example.com', 'https://token@ntfy.example.com', 'https://ntfy.sh/my-topic', 'https://ntfy.sh/?auth=x', 'https://ntfy.sh/#x', 'https://ntfy.sh?', 'ftp://ntfy.sh', 'ntfy.sh']) {
+      expect(ntfyOrigin(refused), refused).toBeNull();
+    }
+  });
+
+  it('refuses a server with a user, password or path, and keeps none of it', async () => {
+    const store = memoryNotifyStore();
+    for (const server of ['https://user:hunter2@ntfy.example.com', 'https://ntfy.sh/my-topic']) {
+      const saved = await saveNotificationSettings(store, { kind: 'ntfy', server, target: TOPIC }, 'janedoe');
+      expect(saved).toEqual({ ok: false, error: expect.stringContaining('no path, topic, user or password') });
+    }
+    expect(store.settings).toEqual({});
+    expect(store.secret).toBeNull();
+  });
+
+  it('stores the server as its origin', async () => {
+    const store = memoryNotifyStore();
+    const saved = await saveNotificationSettings(store, { kind: 'ntfy', server: 'HTTPS://Ntfy.Example.com/', target: TOPIC }, 'janedoe');
+    expect(saved).toMatchObject({ ok: true, change: { server: 'https://ntfy.example.com' } });
+    expect(JSON.parse(store.settings.notifyTransport!)).toMatchObject({ server: 'https://ntfy.example.com' });
+  });
+
+  it('takes a user and password out of any URL in an error', () => {
+    expect(redactTarget('connect to https://user:hunter2@ntfy.example.com/ failed', TOPIC)).toBe('connect to https://…@ntfy.example.com/ failed');
   });
 });
 

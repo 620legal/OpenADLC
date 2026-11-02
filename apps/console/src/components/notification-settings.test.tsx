@@ -80,6 +80,13 @@ describe('Settings → Notifications in a browser', () => {
     expect(container.textContent).toContain('Saved. Send a test to make sure it reaches you.');
   });
 
+  it('sends ntfy.sh when a custom server is cleared, rather than keeping the saved one', async () => {
+    await draw({ ...SAVED, server: 'https://ntfy.example.com' });
+    await act(async () => type('Server', ''));
+    await act(async () => button('Save').click());
+    expect(calls.saved[0]).toMatchObject({ kind: 'ntfy', server: 'https://ntfy.sh' });
+  });
+
   it('says the test was delivered, with the status', async () => {
     await draw();
     await act(async () => button('Send a test').click());

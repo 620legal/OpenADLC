@@ -118,6 +118,16 @@ export interface Message {
 export const TEST_TEXT = 'OpenADLC can reach you here. Sent from Settings → Notifications.';
 
 /**
+ * Slack reads `<…>` in a message as a link or a mention, so a bot's question
+ * quoting an issue could add a link of its own beside the console's, or ping
+ * `<!channel>`. Its three control characters are escaped as Slack asks; `|`
+ * means nothing outside the brackets.
+ */
+export function slackEscape(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
  * The request each transport is sent, without sending it, so each shape is
  * checked without a network.
  *
@@ -144,7 +154,7 @@ export function requestFor(transport: Pick<Transport, 'kind' | 'target' | 'serve
         tags: [message.event],
       });
     case 'slack':
-      return post(transport.target, { text: `${personal}\n<${message.link}|Open in OpenADLC>` });
+      return post(transport.target, { text: `${slackEscape(personal)}\n<${message.link}|Open in OpenADLC>` });
     case 'webhook':
       return post(transport.target, { text: `${to}: ${message.text}`, link: message.link, event: message.event });
   }
@@ -186,7 +196,10 @@ export function redactTarget(text: string, target: string): string {
   }
   let out = text;
   for (const piece of [...pieces].filter(Boolean).sort((a, b) => b.length - a.length)) out = out.split(piece).join('…');
-  return out;
+  // A user and password in any URL the error names, the ntfy server's
+  // included: the server is checked to have none, but one saved before that
+  // check, or a redirect's, must not reach the event log either.
+  return out.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1…@');
 }
 
 // ------------------------------------------------------------------ where it is kept
@@ -222,6 +235,8 @@ export interface NotifyStore {
   record(type: string, payload: Record<string, unknown>): Promise<void>;
   /** Whether an event of this type was ever recorded with these fields. */
   recorded(type: string, fields?: Record<string, string>): Promise<boolean>;
+  /** When the newest event of this type with these fields was recorded, or null for none. */
+  lastAt(type: string, fields: Record<string, string>): Promise<string | null>;
   /** The deliveries recorded with these fields, newest first. */
   deliveries(fields: Record<string, string>): Promise<DeliveryRecord[]>;
 }
@@ -236,6 +251,7 @@ export function databaseNotifyStore(): NotifyStore {
       await recordEvent({ source: 'platform', type, payload });
     },
     recorded: async (type, fields = {}) => (await lastEventAt(type, fields)) !== null,
+    lastAt: (type, fields) => lastEventAt(type, fields),
     deliveries: async (fields) =>
       (await listEventsOfTypeWith('notify.delivery', fields)).map((row) => ({ ...(row.payload as Omit<DeliveryRecord, 'at'>), at: row.at })),
   };
@@ -441,6 +457,28 @@ export interface NotificationSettingsChange {
   switches: NotifySwitches;
 }
 
+const SERVER_REFUSAL =
+  'The ntfy server is only its address, such as https://ntfy.sh: http:// or https://, with no path, topic, user or password';
+
+/**
+ * The ntfy server as it is kept: an origin and nothing else. It is a setting,
+ * so it is audited and shown whole, which a user and password in it must not
+ * be; and a path would send the JSON publish past the root ntfy reads it at.
+ * Null for anything more than an origin.
+ */
+export function ntfyOrigin(value: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  if (url.username || url.password || url.search || url.hash || url.pathname.replace(/\/+$/, '') !== '') return null;
+  if (/[@?#]/.test(value.replace(/^https?:\/\//i, '').replace(/\/+$/, ''))) return null;
+  return url.origin;
+}
+
 const TARGET_WORDS: Record<TransportKind, string> = { ntfy: 'ntfy topic', slack: 'Slack webhook URL', webhook: 'webhook URL' };
 
 function targetRefusal(kind: TransportKind, target: string): string | null {
@@ -496,9 +534,9 @@ export async function saveNotificationSettings(
     }
     let server: string | undefined;
     if (kind === 'ntfy') {
-      server = (typeof input.server === 'string' ? input.server.trim() : '') || (stored?.kind === 'ntfy' ? stored.server : '') || NTFY_SERVER;
-      if (!/^https?:\/\/[^\s/]+/.test(server)) return { ok: false, error: 'The ntfy server starts with http:// or https://, such as https://ntfy.sh' };
-      server = server.replace(/\/+$/, '');
+      const origin = ntfyOrigin((typeof input.server === 'string' ? input.server.trim() : '') || (stored?.kind === 'ntfy' ? stored.server ?? '' : '') || NTFY_SERVER);
+      if (!origin) return { ok: false, error: SERVER_REFUSAL };
+      server = origin;
     }
     targetChanged = given ? given !== (await store.target()) : false;
     const moved = !stored || stored.kind !== kind || (stored.server ?? null) !== (server ?? null) || targetChanged;
@@ -562,6 +600,8 @@ export function memoryNotifyStore(initial: { settings?: Record<string, string>; 
       state.events.push({ type, payload, at: new Date(Date.UTC(2026, 10, 2) + tick++ * 1000).toISOString() });
     },
     recorded: async (type: string, fields: Record<string, string> = {}) => state.events.some((event) => event.type === type && matches(event.payload, fields)),
+    lastAt: async (type: string, fields: Record<string, string>) =>
+      state.events.filter((event) => event.type === type && matches(event.payload, fields)).at(-1)?.at ?? null,
     deliveries: async (fields: Record<string, string>) =>
       state.events
         .filter((event) => event.type === 'notify.delivery' && matches(event.payload, fields))

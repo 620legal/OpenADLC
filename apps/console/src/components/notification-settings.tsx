@@ -5,14 +5,9 @@ import { useState } from 'react';
 import { saveNotifications, testNotifications } from '@/app/actions';
 import { SettingsCard } from '@/components/settings-sections';
 import { Button } from '@/components/ui/button';
-import {
-  NOTIFY_SWITCHES,
-  type NotificationSettingsUpdate,
-  type NotificationSettingsView,
-  type NotificationTestResult,
-  type NotifySwitch,
-  type NotifyTransportKind,
-} from '@/lib/api';
+// Types only: lib/api reads next/headers, which a client component cannot
+// import, and next build fails on any value taken from it here.
+import type { NotificationSettingsUpdate, NotificationSettingsView, NotificationTestResult, NotifySwitch, NotifyTransportKind } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { ago } from '@/lib/when';
 
@@ -111,7 +106,9 @@ export function NotificationSettings({ initial }: { initial: NotificationSetting
     setBusy('save');
     setSaid(null);
     const update: NotificationSettingsUpdate = { kind, switches };
-    if (kind === 'ntfy' && server.trim()) update.server = server.trim();
+    // An empty field is the default the placeholder shows, not "keep the
+    // one saved": clearing a custom server has to take it back to ntfy.sh.
+    if (kind === 'ntfy') update.server = server.trim() || 'https://ntfy.sh';
     if (target.trim()) update.target = target.trim();
     const answer = await saveNotifications(update);
     setBusy(null);
@@ -179,7 +176,7 @@ export function NotificationSettings({ initial }: { initial: NotificationSetting
 
       <fieldset className="flex flex-col gap-1.5 border-t border-well py-2.5">
         <legend className="pb-1 text-[13px] font-semibold text-body">Notify me when</legend>
-        {NOTIFY_SWITCHES.map((name) => (
+        {(Object.keys(SWITCH_LABEL) as NotifySwitch[]).map((name) => (
           <label key={name} className="flex items-center gap-2 text-[13px] text-body">
             <input type="checkbox" checked={switches[name]} onChange={(event) => setSwitches({ ...switches, [name]: event.target.checked })} />
             {SWITCH_LABEL[name]}

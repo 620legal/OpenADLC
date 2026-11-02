@@ -27,7 +27,8 @@ emit them from the writers.
 ## Decision
 
 - **The transport is in `notifyTransport`, its target in the secret store.**
-  `notifyTransport` holds `{kind, server?, setAt, setBy}`; the Slack URL, the
+  `notifyTransport` holds `{kind, server?, setAt, setBy}`, the ntfy server an
+  origin with no path, user or password; the Slack URL, the
   webhook URL or the ntfy topic is the `notify-target` secret. The topic counts
   as a secret: on ntfy.sh anyone who knows it can subscribe. The console is
   shown the target only masked, its host and last four characters. Only
@@ -53,8 +54,11 @@ emit them from the writers.
   every 60 s and sends one notification per item `id@since`, deduped by
   `notify.<kind>` with that `item`, so a restart sends nothing twice and the
   same pull request held again later is a new occurrence. The first pass an
-  install ever runs records what already waits with `baseline: true` and sends
-  none of it.
+  install ever runs records its own time (`look: 'first'`), then what already
+  waits with `baseline: true`, and sends none of it. Later, an item whose
+  `since` is at or before that look is baseline too: attention's reads fail
+  open to an empty list, so what the first look saw is not proof of what
+  waited.
 
 ## What this rules out
 

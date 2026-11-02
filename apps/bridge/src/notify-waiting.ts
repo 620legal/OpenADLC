@@ -7,6 +7,9 @@ type WaitingKind = (typeof WAITING_KINDS)[number];
 
 export const WAITING_EVERY_MS = 60_000;
 
+/** The `look` of the row an install's first look records, whose time is the baseline's. */
+const FIRST_LOOK = 'first';
+
 export interface WaitingNoticesDeps {
   notifier: Pick<Notifier, 'send' | 'store'>;
   /** Needs you's items, read as `GET /v1/attention` reads them, so the ids are the ones it shows. */
@@ -43,9 +46,10 @@ export function waitingText(item: AttentionItem): string {
  *
  * What was sent is the event log's `notify.<kind>` with the occurrence as its
  * `item`, so a restart sends nothing twice. The first pass an install ever
- * runs records what already waits as a baseline and sends none of it: an
- * upgrade would otherwise page a person once for every pull request that was
- * already waiting.
+ * runs records its time and what already waits as a baseline and sends none
+ * of it, nor anything later seen whose `since` is before it: an upgrade would
+ * otherwise page a person once for every pull request that was already
+ * waiting.
  */
 export class WaitingNotices {
   private timer: NodeJS.Timeout | null = null;
@@ -57,6 +61,10 @@ export class WaitingNotices {
     if (this.timer) return;
     this.timer = setInterval(() => void this.pass(), everyMs);
     this.timer.unref();
+    // The first look is the baseline: left to the first tick, a merge or a
+    // stall that began in the bridge's first minute would be taken for one
+    // that already waited, and never sent.
+    void this.pass();
   }
 
   stop(): void {
@@ -86,15 +94,25 @@ export class WaitingNotices {
       const type = `notify.${kind}`;
       const ofKind = items.filter((item) => item.kind === kind);
       if (!(await store.recorded(type))) {
+        // The look itself first, so a pass that throws part way still has
+        // its time to judge the rest by.
+        await store.record(type, { baseline: true, look: FIRST_LOOK });
         for (const item of ofKind) await store.record(type, { item: occurrenceOf(item), baseline: true });
-        // Something to stand for "looked, and nothing waited", so the next
-        // pass does not take its first item for the baseline.
-        if (ofKind.length === 0) await store.record(type, { baseline: true });
         continue;
       }
+      // What waited before the first look is the baseline too, whether or not
+      // that look saw it. Attention's reads fail open to an empty list, so a
+      // first look that saw nothing may only have failed to read, and taking
+      // its list for the whole would send every pull request already waiting
+      // on the next pass.
+      const baselineAt = await store.lastAt(type, { look: FIRST_LOOK });
       for (const item of ofKind) {
         const key = occurrenceOf(item);
         if (await store.recorded(type, { item: key })) continue;
+        if (baselineAt !== null && Date.parse(item.since) <= Date.parse(baselineAt)) {
+          await store.record(type, { item: key, baseline: true });
+          continue;
+        }
         const subject = item.subject.item ?? item.subject.ref;
         await this.deps.notifier.send({
           event: kind,
