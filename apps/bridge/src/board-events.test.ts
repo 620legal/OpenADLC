@@ -37,6 +37,7 @@ function fakeStore() {
     live: [] as LiveTaskRow[],
     facts: FACTS,
     failing: false,
+    factsFailing: false,
   };
   const since = <T extends { at: string }>(rows: T[], from: Date): T[] => {
     if (tables.failing) throw new Error('connection terminated');
@@ -50,7 +51,10 @@ function fakeStore() {
     heldAuditSince: async (from) => since(tables.held, from),
     liveTasks: async () => tables.live,
     mergeLine: async () => tables.line,
-    facts: async () => tables.facts,
+    facts: async () => {
+      if (tables.factsFailing) throw new Error('connection terminated');
+      return tables.facts;
+    },
   };
   return { tables, store };
 }
@@ -145,6 +149,67 @@ describe('the board feed', () => {
     expect(heard.map((event) => event.id)).toEqual(['task.started:t4']);
   });
 
+  it('sends a hold again when it clears and comes back with the same reason', async () => {
+    const { tables, store } = fakeStore();
+    const { feed, heard } = await watching(store);
+    const held: LineEntry = { id: 'e2', repoName: 'OpenADLC', prNumber: 231, state: 'merging', detail: `${WAITING_FOR_PERSON} because auto-merge is not on for it` };
+    tables.line = [held];
+    await feed.probe();
+    tables.line = [];
+    await feed.probe();
+    tables.line = [held];
+    await feed.probe();
+    expect(heard.map((event) => event.text)).toEqual(['620legal/OpenADLC#231 held: auto-merge is not on for it', '620legal/OpenADLC#231 held: auto-merge is not on for it']);
+  });
+
+  it('keeps a hold and a row for the next probe when reading what to say about them fails', async () => {
+    const { tables, store } = fakeStore();
+    const { feed, heard } = await watching(store);
+    tables.started.push(started('t5', later(1)));
+    tables.line.push({ id: 'e3', repoName: 'OpenADLC', prNumber: 231, state: 'merging', detail: `${WAITING_FOR_PERSON} because auto-merge is not on for it` });
+    tables.factsFailing = true;
+    await feed.probe();
+    expect(heard).toEqual([]);
+    tables.factsFailing = false;
+    await feed.probe();
+    expect(heard.map((event) => event.type).sort()).toEqual(['pull_request.held', 'task.started']);
+  });
+
+  it('gives a new subscriber its own baseline, and nothing from a read begun before it', async () => {
+    const { tables, store } = fakeStore();
+    const feed = new BoardFeed(store, 1_000_000);
+    const first = feed.subscribe(() => undefined);
+    await feed.ready();
+    tables.started.push(started('t6', later(1)));
+    // The read stalls on `facts()` while the last subscriber leaves and a new one arrives.
+    let release: () => void = () => undefined;
+    const stalled = new Promise<void>((resolve) => (release = resolve));
+    const facts = store.facts;
+    store.facts = async () => {
+      await stalled;
+      return facts();
+    };
+    const reading = feed.probe();
+    first();
+    tables.now = new Date(NOW.getTime() + 5_000);
+    const heard: BoardEvent[] = [];
+    feed.subscribe((event) => heard.push(event));
+    let ready = false;
+    const baseline = feed.ready().then(() => (ready = true));
+    await baseline;
+    expect(ready).toBe(true);
+    release();
+    await reading;
+    expect(heard).toEqual([]);
+    // The new start's baseline is its own: t6, before it, is never sent.
+    store.facts = facts;
+    await feed.probe();
+    expect(heard).toEqual([]);
+    tables.started.push(started('t7', later(6)));
+    await feed.probe();
+    expect(heard.map((event) => event.id)).toEqual(['task.started:t7']);
+  });
+
   it('stops polling when the last subscriber leaves', async () => {
     const { store } = fakeStore();
     const feed = new BoardFeed(store, 1_000_000);
@@ -170,6 +235,14 @@ describe('a board event', () => {
 
   it('cuts text to one line', () => {
     expect(oneLine('  one\ntwo  ')).toBe('one two');
+  });
+
+  it('never cuts an emoji in half', () => {
+    // 198 letters, then emoji: a cut by UTF-16 units at 199 lands inside the first.
+    const cut = oneLine(`${'a'.repeat(198)}${'😀'.repeat(5)}`);
+    expect(Array.from(cut)).toHaveLength(200);
+    expect(cut).toBe(`${'a'.repeat(198)}😀…`);
+    expect(cut).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
   });
 });
 

@@ -31,7 +31,7 @@ the tables each event happens in. No writer emits it, and nothing stores it:
 | `task.started` | `tasks.started_at` |
 | `question.asked` | `gates.created_at`, with its task's (or thread's) subject and bot |
 | `pull_request.held` | a merge-line entry whose `heldForPerson` reason is new or changed, and `pull.held` audit rows |
-| `merged` | `stage_moves` forward into `merged`, or into `done` from anything but `merged` |
+| `merged` | `stage_moves` forward into `merged`, or into `done` from anything but `merged`, leaving out an abandon's move (its reason starts `Abandoned: `) |
 
 How it is read:
 
@@ -43,7 +43,10 @@ How it is read:
   committed after a probe passed its timestamp. Event ids already sent are
   dropped (the 2,000 newest are kept), and the cursor moves to the newest
   `at` it read.
-- A merge-line hold is a diff of state, timed at the probe.
+- A merge-line hold is a diff of state, timed at the probe. Its id is not
+  kept among those sent, so a hold that clears and comes back is sent again.
+- A probe keeps its cursor, holds and sent ids only once it has handed over
+  every event it found; one that fails part way leaves them for the next.
 - Work on an `openadlc:ignore` subject is left out.
 - `Last-Event-ID` is ignored, and nothing is replayed.
 

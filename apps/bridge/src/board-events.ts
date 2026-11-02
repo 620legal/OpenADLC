@@ -197,10 +197,15 @@ function labelOf(item: BoardItem): string {
   return item.ref || 'nothing in particular';
 }
 
-/** One line of at most 200 characters: a question may be paragraphs. */
+/**
+ * One line of at most 200 characters: a question may be paragraphs. Cut on
+ * code points: a cut through a surrogate pair puts half an emoji into the
+ * event's JSON.
+ */
 export function oneLine(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length <= TEXT_MAX ? flat : `${flat.slice(0, TEXT_MAX - 1)}…`;
+  const chars = Array.from(flat);
+  return chars.length <= TEXT_MAX ? flat : `${chars.slice(0, TEXT_MAX - 1).join('')}…`;
 }
 
 /** A row read from its table, as the event the feed sends. Pure. */
@@ -257,10 +262,20 @@ export class BoardFeed {
   private readonly subscribers = new Set<(event: BoardEvent) => void>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private baseline: Promise<void> = Promise.resolve();
+  /**
+   * Which start of the poller this is. A read begun before the last
+   * subscriber left can still be awaiting the database when the next one
+   * arrives; it must neither set that one's state nor hand it events from
+   * before it subscribed, so each read checks this after every await.
+   */
+  private generation = 0;
+  /** The baseline being taken, and for which start, so a new start never waits on, or is answered by, an old one's. */
+  private establishing: { generation: number; done: Promise<void> } | null = null;
   /** Where the last probe got to, by the database's clock; null before the baseline. */
   private cursor: Date | null = null;
   /** The baseline's now: a row before it was there when the feed started, and is never sent. */
   private floor = 0;
+  /** Row events already sent. Merge-line holds are not kept here: they are a diff, and a hold that clears and comes back is news again. */
   private readonly sent = new Set<string>();
   private holds = new Map<string, string>();
   private probing = false;
@@ -274,13 +289,14 @@ export class BoardFeed {
   subscribe(onEvent: (event: BoardEvent) => void): () => void {
     this.subscribers.add(onEvent);
     if (!this.timer) {
+      this.generation += 1;
       this.cursor = null;
       this.sent.clear();
       this.holds = new Map();
       this.timer = setInterval(() => void this.probe(), this.probeMs);
       // `unref` so the feed never holds the process open on shutdown.
       this.timer.unref?.();
-      this.baseline = this.probe();
+      this.baseline = this.establish();
     }
     return () => this.unsubscribe(onEvent);
   }
@@ -304,10 +320,12 @@ export class BoardFeed {
 
   /** One read of every table. Exposed for tests, which drive it without a timer. */
   async probe(): Promise<void> {
-    if (this.probing || !this.timer) return;
+    if (!this.timer) return;
+    if (!this.cursor) return this.establish();
+    if (this.probing) return;
     this.probing = true;
     try {
-      await this.read();
+      await this.read(this.generation, this.cursor);
     } catch {
       // A database blip is not a reason to drop anyone's stream: the next
       // probe tries again, and the pings go on, as in `WatermarkStream`.
@@ -316,16 +334,37 @@ export class BoardFeed {
     }
   }
 
-  private async read(): Promise<void> {
-    if (!this.cursor) {
-      const now = await this.store.dbNow();
-      this.holds = holdsOf(await this.store.mergeLine());
-      this.cursor = now;
-      this.floor = now.getTime();
-      return;
-    }
+  /** Where now is, by the database's clock, and which pull requests are already held: nothing before it is sent. */
+  private establish(): Promise<void> {
+    const generation = this.generation;
+    if (this.establishing?.generation === generation) return this.establishing.done;
+    const done = (async () => {
+      try {
+        const now = await this.store.dbNow();
+        const holds = holdsOf(await this.store.mergeLine());
+        if (generation !== this.generation) return;
+        this.holds = holds;
+        this.cursor = now;
+        this.floor = now.getTime();
+      } catch {
+        // As a probe's: the next one takes the baseline again.
+      } finally {
+        if (this.establishing?.generation === generation) this.establishing = null;
+      }
+    })();
+    this.establishing = { generation, done };
+    return done;
+  }
 
-    const from = new Date(this.cursor.getTime() - OVERLAP_MS);
+  /**
+   * One read from `cursor`. Nothing is kept — the cursor, the holds, the ids
+   * sent — until every fresh event has been handed over: a read that throws
+   * part way leaves the last probe's state, so the next one finds the same
+   * news. A hold read and then lost to a throw was otherwise gone for good,
+   * since the next diff saw it unchanged.
+   */
+  private async read(generation: number, cursor: Date): Promise<void> {
+    const from = new Date(cursor.getTime() - OVERLAP_MS);
     const [started, asked, merged, heldAudit, line] = await Promise.all([
       this.store.startedSince(from),
       this.store.askedSince(from),
@@ -339,7 +378,8 @@ export class BoardFeed {
       ...merged.map((row) => ({ type: 'merged' as const, row })),
       ...heldAudit.map((row) => ({ type: 'pull_request.held' as const, source: 'audit' as const, row })),
     ];
-    let newest = this.cursor.getTime();
+    if (generation !== this.generation) return;
+    let newest = cursor.getTime();
     for (const raw of rows) newest = Math.max(newest, Date.parse(rawAt(raw)));
 
     // A hold is a state, not a row with a time: a new or changed reason is the event, timed now.
@@ -350,24 +390,24 @@ export class BoardFeed {
       const reason = holds.get(entry.id);
       if (reason && this.holds.get(entry.id) !== reason) changed.push({ type: 'pull_request.held', source: 'merge-line', entry, reason, at });
     }
+
+    const fresh = [...rows.filter((raw) => Date.parse(rawAt(raw)) >= this.floor && !this.sent.has(rawId(raw))), ...changed].sort(
+      (a, b) => Date.parse(rawAt(a)) - Date.parse(rawAt(b)),
+    );
+    const events: BoardEvent[] = [];
+    if (fresh.length > 0) {
+      // Read only when there is something to say, which most probes do not have.
+      const facts = await this.store.facts();
+      if (generation !== this.generation) return;
+      const ignored = ignoredSubjects(facts.issues);
+      // An `openadlc:ignore` issue's work is a person's, left out as the board leaves it out.
+      for (const raw of fresh) if (!ignored.has(subjectOf(raw, facts))) events.push(toBoardEvent(raw, facts));
+    }
+
+    for (const event of events) for (const subscriber of this.subscribers) subscriber(event);
+    for (const raw of fresh) if (!('entry' in raw)) this.remember(rawId(raw));
     this.holds = holds;
     this.cursor = new Date(newest);
-
-    const fresh = [...rows.filter((raw) => Date.parse(rawAt(raw)) >= this.floor), ...changed]
-      .filter((raw) => !this.sent.has(rawId(raw)))
-      .sort((a, b) => Date.parse(rawAt(a)) - Date.parse(rawAt(b)));
-    if (fresh.length === 0) return;
-
-    // Read only when there is something to say, which most probes do not have.
-    const facts = await this.store.facts();
-    const ignored = ignoredSubjects(facts.issues);
-    for (const raw of fresh) {
-      this.remember(rawId(raw));
-      // An `openadlc:ignore` issue's work is a person's, left out as the board leaves it out.
-      if (ignored.has(subjectOf(raw, facts))) continue;
-      const event = toBoardEvent(raw, facts);
-      for (const subscriber of this.subscribers) subscriber(event);
-    }
   }
 
   private remember(id: string): void {

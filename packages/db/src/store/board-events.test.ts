@@ -40,6 +40,8 @@ describe('the board feed’s reads', () => {
     // A Merged → Done move is the deploy, not a second merge.
     expect(sql()).toMatch(/m\.kind = 'forward'/);
     expect(sql()).toMatch(/m\.to_stage = 'merged' or \(m\.to_stage = 'done' and m\.from_stage is distinct from 'merged'\)/);
+    // An abandon is a forward move into Done as well, and not a merge.
+    expect(sql()).toMatch(/and coalesce\(m\.reason, ''\) not like 'Abandoned: %'/);
     // `moveClosedByMerge` records no number; the issue's is the fallback.
     expect(sql()).toMatch(/coalesce\(m\.pr_number, i\.pr_number\)/);
   });

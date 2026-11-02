@@ -83,6 +83,10 @@ export interface MergedRow {
  * goes straight to Done and a later Merged → Done is the deploy. This is the
  * move `moveClosedByMerge` makes for every merge, whoever merged.
  *
+ * An issue closed without merging moves forward into Done too, with a reason
+ * starting `Abandoned: ` (`abandonMoveReason`, apps/bridge/src/abandoned.ts):
+ * read as a merge, `watch` said abandoned work had merged.
+ *
  * `moveClosedByMerge` records no pull request number and sets the issue's
  * after, so the issue's is the fallback.
  */
@@ -96,6 +100,7 @@ export async function mergedSince(since: Date): Promise<MergedRow[]> {
      left join bots b on b.name = m.actor
      where m.created_at >= $1 and m.kind = 'forward'
        and (m.to_stage = 'merged' or (m.to_stage = 'done' and m.from_stage is distinct from 'merged'))
+       and coalesce(m.reason, '') not like 'Abandoned: %'
      order by m.created_at, m.id`,
     [since],
   );
