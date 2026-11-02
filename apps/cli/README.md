@@ -85,6 +85,7 @@ reads from the secret store: it runs as the operator, on the install's machine.
 - `src/processes.ts`, `src/keep-running.ts`, `src/keep.ts` — starting, stopping and polling a service; the keeper.
 - `src/commands/init.ts` — the driver and the database URL, which the console cannot set.
 - `src/commands/doctor.ts` — `openadlc status` and `openadlc doctor`, including the bridge's health checks.
+- `src/commands/ls.ts`, `src/commands/watch.ts` — `openadlc ls` and `openadlc watch`: the live tasks and the board's events, read from the bridge alone, never the database.
 - `src/commands/auth.ts` — connecting the crew's accounts. Setup itself is the console walkthrough, not a command.
 - `src/commands/github.ts` — labels, rulesets, environments and CODEOWNERS on the managed repositories.
 - `src/commands/attribution.ts` — `openadlc attribution rotate`, a new key for signing the crew's posts.

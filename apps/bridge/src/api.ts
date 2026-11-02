@@ -122,6 +122,7 @@ import { retryTask } from './task-retry.js';
 import { doneSince, itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, requestsOnCards, withItemIssues, withItemPulls } from './board-work.js';
 import type { WaitingReads } from './waiting.js';
 import { describeSubject } from './thread-view.js';
+import { registerBoardEventRoutes } from './board-events.js';
 import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
 import { checkConsoleLogo, checkConsoleName, decodeLogo, LOGO_POLICY, logoMediaType } from './brand.js';
@@ -1348,6 +1349,10 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     const repoFilter = query.get('repo');
     return readBoardActivity(!repoFilter || repoFilter === 'all' ? undefined : repoFilter);
   });
+
+  // What the crew is doing as it happens, and the tasks live now: what
+  // `openadlc watch` and `openadlc ls` read (`board-events.ts`).
+  registerBoardEventRoutes(router);
 
   router.get('/v1/bots', async ({ role }) => {
     const [crew, issueList, openGates, repoList, checks, seatPauses, requestList] = await Promise.all([

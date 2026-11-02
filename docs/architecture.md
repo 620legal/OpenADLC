@@ -69,6 +69,17 @@ avatar, too faint for a dot; the avatar is beside the line.) A card waiting on
 a person keeps a still dot and says "Waiting for your answer", a queued task
 says "Queued", and nothing moves on a card nothing runs on.
 
+Outside the console, `openadlc watch` reads a stream of board events
+(`GET /v1/board/events`, `board-events.ts`): a task started, a question asked,
+a pull request held, a merge. Nothing emits them. One poller for the install,
+running only while someone watches, reads them every two seconds from the
+tables they happen in (`tasks.started_at`, `gates.created_at`, `stage_moves`
+into Merged, the merge line's holds, `pull.held` audit rows). It starts from the
+database's now and reads ten seconds back each time, sending each event once.
+`openadlc ls` reads `GET /v1/board/tasks`, the tasks queued, running or paused,
+each timed the way the card is
+([ADR 0021](adr/0021-board-events-are-read-from-the-tables-they-happen-in.md)).
+
 A card in Intake, Design or Build with nothing going on it says why, on what,
 and for how long (`waitingOf` in `apps/bridge/src/waiting.ts`, sent as each
 card's `waiting`): "Waiting for system-engineer · busy with #137 · 32 min",
