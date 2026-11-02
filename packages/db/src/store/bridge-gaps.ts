@@ -21,6 +21,8 @@ export interface BridgeGap {
   lastUpAt: string;
   backAt: string;
   tasks: GapTask[];
+  /** The start that opened or last moved it is still listing its tasks: not yet a finished account. */
+  filling: boolean;
 }
 
 interface Row {
@@ -28,6 +30,7 @@ interface Row {
   last_up_at: Date;
   back_at: Date;
   tasks: GapTask[] | null;
+  filled_at: Date | null;
 }
 
 /**
@@ -61,14 +64,15 @@ export async function touch(): Promise<void> {
 /**
  * Opens the report for a gap, or moves the one still open to it, keeping the
  * tasks it holds: a second outage before anyone dismissed the first must not
- * lose what the first one cost.
+ * lose what the first one cost. Either way it is filling until `finish`.
  */
 export async function openGap(lastUpAt: string, backAt: string): Promise<{ id: string }> {
   const rows = await query<{ id: string }>(
     `insert into bridge_gaps (last_up_at, back_at) values ($1, $2)
      on conflict ((true)) where dismissed_at is null do update set
        last_up_at = excluded.last_up_at,
-       back_at = excluded.back_at
+       back_at = excluded.back_at,
+       filled_at = null
      returning id`,
     [lastUpAt, backAt],
   );
@@ -94,32 +98,52 @@ export async function addTasks(id: string, tasks: readonly GapTask[]): Promise<v
   );
 }
 
+/**
+ * Says the open report's tasks are all listed. Not by id: a start with no gap
+ * also finishes a report that a start which died part way left filling, and
+ * that nobody could otherwise dismiss.
+ */
+export async function finish(): Promise<void> {
+  await query('update bridge_gaps set filled_at = now() where dismissed_at is null and filled_at is null');
+}
+
 /** The report nobody has dismissed yet, if there is one. */
 export async function current(): Promise<BridgeGap | null> {
-  const rows = await query<Row>('select id, last_up_at, back_at, tasks from bridge_gaps where dismissed_at is null limit 1');
+  const rows = await query<Row>('select id, last_up_at, back_at, tasks, filled_at from bridge_gaps where dismissed_at is null limit 1');
   const row = rows[0];
   return row
-    ? { id: row.id, lastUpAt: row.last_up_at.toISOString(), backAt: row.back_at.toISOString(), tasks: row.tasks ?? [] }
+    ? {
+        id: row.id,
+        lastUpAt: row.last_up_at.toISOString(),
+        backAt: row.back_at.toISOString(),
+        tasks: row.tasks ?? [],
+        filling: row.filled_at === null,
+      }
     : null;
 }
 
 /**
  * Dismisses the open report for everyone, when it is still the one read:
  * `backAt` is the gap the person saw, and one merged in since is not theirs
- * to dismiss unseen (`replaced`). `none` when nothing is open.
+ * to dismiss unseen (`replaced`). Not while its start is still listing tasks
+ * (`filling`): a task written after the dismissal would never be shown.
+ * `none` when nothing is open.
  */
-export async function dismiss(backAt: string, by: string): Promise<'dismissed' | 'replaced' | 'none'> {
-  const rows = await query<{ open: number; dismissed: number }>(
-    `with open as (select id, back_at from bridge_gaps where dismissed_at is null),
+export async function dismiss(backAt: string, by: string): Promise<'dismissed' | 'replaced' | 'filling' | 'none'> {
+  const rows = await query<{ open: number; filling: number; dismissed: number }>(
+    `with open as (select id, back_at, filled_at from bridge_gaps where dismissed_at is null),
      done as (
        update bridge_gaps set dismissed_at = now(), dismissed_by = $2
-       from open where bridge_gaps.id = open.id and open.back_at = $1::timestamptz
+       from open where bridge_gaps.id = open.id and open.back_at = $1::timestamptz and open.filled_at is not null
        returning bridge_gaps.id
      )
-     select (select count(*) from open)::int as open, (select count(*) from done)::int as dismissed`,
+     select (select count(*) from open)::int as open,
+       (select count(*) from open where filled_at is null)::int as filling,
+       (select count(*) from done)::int as dismissed`,
     [backAt, by],
   );
   const row = rows[0];
   if (!row || row.open === 0) return 'none';
-  return row.dismissed > 0 ? 'dismissed' : 'replaced';
+  if (row.dismissed > 0) return 'dismissed';
+  return row.filling > 0 ? 'filling' : 'replaced';
 }

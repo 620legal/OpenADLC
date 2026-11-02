@@ -1121,9 +1121,14 @@ what that start did about it:
   marked running whose host stopped reporting, or one recorded and never
   handed to a host. Each says why; open its card to retry it.
 
+Until that start has finished listing, the strip says "Still listing what it
+resumed and treated as orphaned" and its **Dismiss** is refused, so a list
+read early is not taken for the whole of it. A start that dies part way leaves
+it so until the next start finishes it.
+
 A gap that cost nothing still says how long. A second gap before anyone
 dismissed the first moves the strip to the latest one and keeps the first one's
-tasks. A Dismiss pressed on a strip read before a newer gap was merged in is
+tasks, each with the time of the start that resumed or ended it. A Dismiss pressed on a strip read before a newer gap was merged in is
 refused with "A newer gap was added to this report since you read it": read the
 page again and dismiss that. An ordinary restart, by the keeper or a
 self-update, is back inside 30 seconds and reports nothing; an install's first

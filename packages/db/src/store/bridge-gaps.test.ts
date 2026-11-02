@@ -5,7 +5,7 @@ vi.mock('../client.js', () => ({
 }));
 
 import { query } from '../client.js';
-import { addTasks, beat, current, dismiss, openGap, touch, type GapTask } from './bridge-gaps.js';
+import { addTasks, beat, current, dismiss, finish, openGap, touch, type GapTask } from './bridge-gaps.js';
 
 const RESUMED: GapTask = { taskId: 'task-1', subject: 'openadlc#7', outcome: 'resumed', why: 'resumed implement on openadlc#7', backAt: '2026-11-02T10:05:00.000Z' };
 
@@ -47,9 +47,18 @@ describe('the gap report', () => {
     const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
     expect(String(sql)).toContain('on conflict ((true)) where dismissed_at is null do update set');
     expect(String(sql)).toContain('back_at = excluded.back_at');
+    // Filling again: this start has its own tasks to list.
+    expect(String(sql)).toContain('filled_at = null');
     // Tasks are not in the update: the earlier gap's stay.
     expect(String(sql)).not.toContain('tasks');
     expect(params).toEqual(['2026-11-02T10:00:00.000Z', '2026-11-02T10:05:00.000Z']);
+  });
+
+  it('is finished whichever start left it filling', async () => {
+    await finish();
+    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
+    expect(String(sql)).toBe('update bridge_gaps set filled_at = now() where dismissed_at is null and filled_at is null');
+    expect(params).toBeUndefined();
   });
 
   it('adds tasks, each task and outcome once', async () => {
@@ -70,24 +79,34 @@ describe('the gap report', () => {
 
   it('is read back while open, and is nothing once dismissed', async () => {
     vi.mocked(query).mockResolvedValueOnce([
-      { id: 'gap-1', last_up_at: new Date('2026-11-02T10:00:00Z'), back_at: new Date('2026-11-02T10:05:00Z'), tasks: [RESUMED] },
+      { id: 'gap-1', last_up_at: new Date('2026-11-02T10:00:00Z'), back_at: new Date('2026-11-02T10:05:00Z'), tasks: [RESUMED], filled_at: new Date('2026-11-02T10:05:02Z') },
     ] as never);
-    expect(await current()).toEqual({ id: 'gap-1', lastUpAt: '2026-11-02T10:00:00.000Z', backAt: '2026-11-02T10:05:00.000Z', tasks: [RESUMED] });
+    expect(await current()).toEqual({ id: 'gap-1', lastUpAt: '2026-11-02T10:00:00.000Z', backAt: '2026-11-02T10:05:00.000Z', tasks: [RESUMED], filling: false });
     expect(String(vi.mocked(query).mock.calls[0]?.[0])).toContain('where dismissed_at is null');
     expect(await current()).toBeNull();
   });
 
-  it('is dismissed for everyone only as the gap the person read', async () => {
-    vi.mocked(query).mockResolvedValueOnce([{ open: 1, dismissed: 1 }] as never);
+  it('is read as filling until its start has listed its tasks', async () => {
+    vi.mocked(query).mockResolvedValueOnce([
+      { id: 'gap-1', last_up_at: new Date('2026-11-02T10:00:00Z'), back_at: new Date('2026-11-02T10:05:00Z'), tasks: [], filled_at: null },
+    ] as never);
+    expect(await current()).toMatchObject({ tasks: [], filling: true });
+  });
+
+  it('is dismissed for everyone only as the gap the person read, once filled', async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ open: 1, filling: 0, dismissed: 1 }] as never);
     expect(await dismiss('2026-11-02T10:05:00.000Z', 'janedoe')).toBe('dismissed');
     const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
-    expect(String(sql)).toContain('open.back_at = $1::timestamptz');
+    expect(String(sql)).toContain('open.back_at = $1::timestamptz and open.filled_at is not null');
     expect(params).toEqual(['2026-11-02T10:05:00.000Z', 'janedoe']);
 
-    vi.mocked(query).mockResolvedValueOnce([{ open: 1, dismissed: 0 }] as never);
+    vi.mocked(query).mockResolvedValueOnce([{ open: 1, filling: 0, dismissed: 0 }] as never);
     expect(await dismiss('2026-11-02T09:00:00.000Z', 'janedoe')).toBe('replaced');
 
-    vi.mocked(query).mockResolvedValueOnce([{ open: 0, dismissed: 0 }] as never);
+    vi.mocked(query).mockResolvedValueOnce([{ open: 1, filling: 1, dismissed: 0 }] as never);
+    expect(await dismiss('2026-11-02T10:05:00.000Z', 'janedoe')).toBe('filling');
+
+    vi.mocked(query).mockResolvedValueOnce([{ open: 0, filling: 0, dismissed: 0 }] as never);
     expect(await dismiss('2026-11-02T10:05:00.000Z', 'janedoe')).toBe('none');
   });
 });

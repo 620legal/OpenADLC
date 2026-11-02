@@ -956,6 +956,10 @@ async function main(): Promise<void> {
   });
 
   const shutdown = async (): Promise<void> => {
+    // A beat before the drains as well as after: they take up to 10 s each,
+    // and the keeper kills the bridge 20 s after the stop signal, so a busy
+    // restart never reached the last beat and reported a gap.
+    await heartbeat.beat();
     dispatchRuns?.stop();
     stageRuns.stop();
     names.stop();

@@ -1276,7 +1276,6 @@ export interface ReleaseEvents {
   url: string | null;
 }
 
-/** A person's pause of new work, across the install or in one repository. */
 /** A task the bridge resumed, or ended as orphaned, on the start after a gap. */
 export interface BridgeGapTask {
   taskId: string;
@@ -1292,8 +1291,11 @@ export interface BridgeGapReport {
   backAt: string;
   awayMs: number;
   tasks: BridgeGapTask[];
+  /** The start after the gap is still listing its tasks: not yet complete, and not yet dismissable. */
+  filling: boolean;
 }
 
+/** A person's pause of new work, across the install or in one repository. */
 export interface WorkPause {
   by: string;
   at: string;

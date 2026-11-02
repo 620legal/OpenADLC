@@ -25,7 +25,20 @@ export function awayWords(ms: number): string {
   return `about ${plural(Math.round(ms / DAY), 'day')}`;
 }
 
-function TaskList({ title, tasks }: { title: string; tasks: BridgeGapTask[] }) {
+/**
+ * "14:02–14:03" when both ends are today on the reader's clock, "1 Nov,
+ * 14:02–14:03" for a day before, and both ends dated when the gap spans days:
+ * the report stays until dismissed, and a restore reports a gap from the
+ * backup's time, which read as one minute when only the start was dated.
+ */
+export function rangeWords(from: number, to: number, now: number, timeZone?: string): string {
+  const start = sinceWords(from, now, timeZone);
+  // Dated when `to` is not on `from`'s day.
+  const end = sinceWords(to, from, timeZone);
+  return end === timeOf(new Date(to).toISOString(), timeZone) ? `${start}–${end}` : `${start} – ${end}`;
+}
+
+function TaskList({ title, tasks, backAt, now, timeZone }: { title: string; tasks: BridgeGapTask[]; backAt: string; now: number; timeZone?: string }) {
   if (tasks.length === 0) return null;
   return (
     <div className="mt-1">
@@ -37,6 +50,8 @@ function TaskList({ title, tasks }: { title: string; tasks: BridgeGapTask[] }) {
               {task.subject}
             </Link>{' '}
             — {task.why}
+            {/* A task an earlier gap merged into this report cost, not the latest one. */}
+            {task.backAt !== backAt && <span suppressHydrationWarning> (when it came back at {sinceWords(Date.parse(task.backAt), now, timeZone)})</span>}
           </li>
         ))}
       </ul>
@@ -49,16 +64,22 @@ function TaskList({ title, tasks }: { title: string; tasks: BridgeGapTask[] }) {
  * the start after it resumed or ended as orphaned, each linking to its card.
  * Kept by the bridge for everyone until a person dismisses it (`bridge-gap.ts`
  * in the bridge); a gap merged in since this was read is refused, and the
- * page is read again to show it.
+ * page is read again to show it. While the start is still listing its tasks
+ * (`filling`) it says so and cannot be dismissed: an empty list then is not
+ * "nothing was resumed", and a dismissal would hide what is listed after.
  */
-export function BridgeGapReport({ gap, timeZone }: { gap: Report | null; timeZone?: string }) {
+export function BridgeGapReport({ gap, now = Date.now(), timeZone }: { gap: Report | null; now?: number; timeZone?: string }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   if (!gap) return null;
   const resumed = gap.tasks.filter((task) => task.outcome === 'resumed');
   const orphaned = gap.tasks.filter((task) => task.outcome === 'orphaned');
-  const from = sinceWords(Date.parse(gap.lastUpAt), Date.parse(gap.backAt), timeZone);
-  const to = timeOf(gap.backAt, timeZone);
+  const range = rangeWords(Date.parse(gap.lastUpAt), Date.parse(gap.backAt), now, timeZone);
+  const after = gap.filling
+    ? ' Still listing what it resumed and treated as orphaned when it came back.'
+    : gap.tasks.length === 0
+      ? ' Nothing was resumed or treated as orphaned when it came back.'
+      : '';
 
   const dismiss = () => {
     setError(null);
@@ -75,19 +96,17 @@ export function BridgeGapReport({ gap, timeZone }: { gap: Report | null; timeZon
           <p className="text-[12.5px] text-soft">
             <span className="font-medium text-attention">OpenADLC was away for {awayWords(gap.awayMs)}</span>{' '}
             {/* The reader's clock: the server draws it in its own zone first. */}
-            <span suppressHydrationWarning>
-              ({from}–{to})
-            </span>
-            .{gap.tasks.length === 0 ? ' Nothing was resumed or treated as orphaned when it came back.' : ''}
+            <span suppressHydrationWarning>({range})</span>.{after}
           </p>
-          <TaskList title="It resumed:" tasks={resumed} />
-          <TaskList title="It treated as orphaned:" tasks={orphaned} />
+          <TaskList title="It resumed:" tasks={resumed} backAt={gap.backAt} now={now} timeZone={timeZone} />
+          <TaskList title="It treated as orphaned:" tasks={orphaned} backAt={gap.backAt} now={now} timeZone={timeZone} />
           {error && <p className="mt-1 text-[12.5px] text-alarm">{error}</p>}
         </div>
         <button
           type="button"
           onClick={dismiss}
-          disabled={pending}
+          disabled={pending || gap.filling}
+          title={gap.filling ? 'Once the list is complete' : undefined}
           className="shrink-0 rounded px-2 py-0.5 text-[12.5px] text-link underline decoration-link/40 underline-offset-2 disabled:opacity-50"
         >
           Dismiss

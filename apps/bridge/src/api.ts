@@ -1949,18 +1949,28 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     const gap = await bridgeGaps.current();
     if (!gap) return { gap: null };
     return {
-      gap: { lastUpAt: gap.lastUpAt, backAt: gap.backAt, awayMs: Date.parse(gap.backAt) - Date.parse(gap.lastUpAt), tasks: gap.tasks },
+      gap: {
+        lastUpAt: gap.lastUpAt,
+        backAt: gap.backAt,
+        awayMs: Date.parse(gap.backAt) - Date.parse(gap.lastUpAt),
+        tasks: gap.tasks,
+        filling: gap.filling,
+      },
     };
   });
 
   // For everyone, and only the gap the person read: one merged in since is
-  // theirs to see first.
+  // theirs to see first. Not while the start is still listing its tasks,
+  // which would go on being written to a report nobody can see.
   router.post('/v1/bridge/gap/dismiss', async ({ body, identity }) => {
     const input = await body<{ backAt?: unknown } | null>().catch(() => null);
     const backAt = typeof input?.backAt === 'string' ? input.backAt : '';
     if (!backAt || Number.isNaN(Date.parse(backAt))) throw new HttpFailure(400, 'say which report was read: { "backAt": "<its backAt>" }');
     const outcome = await bridgeGaps.dismiss(backAt, identity);
     if (outcome === 'none') throw new HttpFailure(404, 'no gap report is open; it may have been dismissed already');
+    if (outcome === 'filling') {
+      throw new HttpFailure(409, 'OpenADLC is still listing what it resumed and treated as orphaned. Dismiss it once the list is complete.');
+    }
     if (outcome === 'replaced') throw new HttpFailure(409, 'A newer gap was added to this report since you read it. Read it again and dismiss that.');
     await audit({ actor: identity, action: 'bridge.gap_dismissed', target: 'install', payload: { backAt, by: identity } });
     return { dismissed: true };

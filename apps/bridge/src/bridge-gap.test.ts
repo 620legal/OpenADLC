@@ -8,17 +8,28 @@ const ago = (ms: number) => new Date(Date.parse(BACK) - ms).toISOString();
 
 function fakeStore(lastUpAt: string | null) {
   const gaps: { id: string; lastUpAt: string; backAt: string; tasks: GapTask[] }[] = [];
+  const state = { filling: false, dismissed: false };
   const store: GapStore = {
     beat: vi.fn(async () => ({ lastUpAt, backAt: BACK })),
     openGap: vi.fn(async (last: string, back: string) => {
       gaps.push({ id: 'gap-1', lastUpAt: last, backAt: back, tasks: [] });
+      state.filling = true;
       return { id: 'gap-1' };
     }),
     addTasks: vi.fn(async (id: string, tasks: readonly GapTask[]) => {
       gaps.find((gap) => gap.id === id)!.tasks.push(...tasks);
     }),
+    finish: vi.fn(async () => {
+      state.filling = false;
+    }),
   };
-  return { store, gaps };
+  // As `bridgeGaps.dismiss` answers: refused while the start is still listing.
+  const dismiss = () => {
+    if (state.filling) return 'filling';
+    state.dismissed = true;
+    return 'dismissed';
+  };
+  return { store, gaps, state, dismiss };
 }
 
 const ORPHAN: Drift = { kind: 'orphaned_task', subject: 'openadlc#50', taskId: 'task-50', detail: 'the task was marked running but its host has stopped reporting', repaired: true };
@@ -108,6 +119,64 @@ describe('the bridge start after a gap', () => {
 
     expect(gaps[0]?.tasks.map((task) => task.taskId)).toEqual(['task-1']);
     expect(start.warn).toHaveBeenCalledWith('could not list the orphaned tasks in the gap report: GitHub is down');
+    expect(store.finish).toHaveBeenCalledTimes(1);
+  });
+
+  it('is filling, and cannot be dismissed, until the start has listed every task', async () => {
+    const { store, gaps, state, dismiss } = fakeStore(ago(5 * 60_000));
+    const answers: string[] = [];
+    const start = deps({ resumed: [{ id: 'task-1', subjectRef: 'openadlc#7' }] });
+    start.reconcile.mockImplementation(async () => {
+      // Someone reads the board while reconcile runs, and presses Dismiss.
+      answers.push(dismiss());
+      return [ORPHAN];
+    });
+
+    await startGap(store, start);
+
+    expect(answers).toEqual(['filling']);
+    expect(state).toEqual({ filling: false, dismissed: false });
+    expect(gaps[0]?.tasks.map((task) => task.taskId)).toEqual(['task-1', 'task-50']);
+    expect(vi.mocked(store.finish).mock.invocationCallOrder[0]).toBeGreaterThan(start.reconcile.mock.invocationCallOrder[0]!);
+    expect(dismiss()).toBe('dismissed');
+  });
+
+  it('finishes the report even when resuming throws', async () => {
+    const { store, state } = fakeStore(ago(5 * 60_000));
+    const start = deps();
+    start.resume.mockRejectedValueOnce(new Error('the database is not answering'));
+
+    await startGap(store, start);
+
+    expect(state.filling).toBe(false);
+    expect(start.warn).toHaveBeenCalledWith('could not resume answered tasks: the database is not answering');
+  });
+
+  it('finishes a report a start that died part way left filling, on a start with no gap', async () => {
+    const { store } = fakeStore(ago(10_000));
+    await startGap(store, deps());
+    expect(store.finish).toHaveBeenCalledTimes(1);
+    expect(store.openGap).not.toHaveBeenCalled();
+  });
+
+  it('tries the gap once more, and says so when it still cannot be stored', async () => {
+    const { store, gaps } = fakeStore(ago(5 * 60_000));
+    const openGap = vi.mocked(store.openGap).getMockImplementation()!;
+    vi.mocked(store.openGap).mockRejectedValueOnce(new Error('deadlock detected'));
+    expect(await startGap(store, deps())).toEqual({ gapId: 'gap-1' });
+    expect(gaps).toHaveLength(1);
+
+    vi.mocked(store.openGap).mockReset().mockRejectedValue(new Error('the database is not answering'));
+    const start = deps({ resumed: [{ id: 'task-1', subjectRef: 'openadlc#7' }] });
+    expect(await startGap(store, start)).toEqual({ gapId: null });
+    expect(store.openGap).toHaveBeenCalledTimes(2);
+    expect(start.warn).toHaveBeenCalledWith(
+      `could not store the gap since ${ago(5 * 60_000)}, so the board will not report it: the database is not answering`,
+    );
+    // Not the heartbeat's warning: the beat was written.
+    expect(start.warn).not.toHaveBeenCalledWith(expect.stringContaining('could not record when it was last running'));
+    expect(start.resume).toHaveBeenCalledTimes(1);
+    vi.mocked(store.openGap).mockImplementation(openGap);
   });
 
   it('still resumes when the heartbeat cannot be read', async () => {
@@ -139,5 +208,19 @@ describe('the bridge heartbeat', () => {
     expect(touch).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(BRIDGE_HEARTBEAT_MS * 2);
     expect(touch).toHaveBeenCalledTimes(3);
+  });
+
+  it('beats on demand at the start of a shutdown, and says when the last beat fails', async () => {
+    vi.useFakeTimers();
+    const touch = vi.fn(async () => undefined);
+    const warn = vi.fn();
+    const heartbeat = startHeartbeat(touch, BRIDGE_HEARTBEAT_MS, warn);
+
+    await heartbeat.beat();
+    expect(touch).toHaveBeenCalledTimes(1);
+
+    touch.mockRejectedValueOnce(new Error('the pool is closing'));
+    await heartbeat.stop();
+    expect(warn).toHaveBeenCalledWith('could not beat: the pool is closing');
   });
 });

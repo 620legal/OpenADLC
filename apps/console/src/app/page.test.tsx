@@ -88,7 +88,7 @@ describe('the board, before setup is finished', () => {
 });
 
 describe('the report of how long the bridge was away, on the board', () => {
-  const GAP = { lastUpAt: '2026-11-02T14:02:00.000Z', backAt: '2026-11-02T14:03:10.000Z', awayMs: 70_000, tasks: [] };
+  const GAP = { lastUpAt: '2026-11-02T14:02:00.000Z', backAt: '2026-11-02T14:03:10.000Z', awayMs: 70_000, tasks: [], filling: false };
 
   afterEach(() => {
     reads.board = () => {

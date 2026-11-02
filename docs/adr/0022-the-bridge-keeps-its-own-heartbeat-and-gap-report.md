@@ -38,7 +38,11 @@ settings rows.
   `last_up_at` and `back_at` to the latest gap and keeps its `tasks`, so the
   earlier gap's tasks are not lost. The gap is stored before its tasks are
   known, so a gap that cost nothing still says how long, as does a start that
-  dies part way.
+  dies part way. The bridge serves while that start lists them, so the row is
+  filling (`filled_at` null) until it is done, and a start with no gap
+  finishes one a start that died left filling. Read while filling, the
+  report says so rather than "nothing was resumed", and a dismiss is refused:
+  tasks written after it would have been shown to nobody.
 - **What the start cost goes in the report.** That is the tasks
   `resumeAnswered` resumed (its `onResumed` callback) and, after a gap only,
   the repaired `orphaned_task` verdicts of one reconcile pass run at start.
@@ -48,7 +52,8 @@ settings rows.
   with `GET /v1/bridge/gap` and dismissed with
   `POST /v1/bridge/gap/dismiss {backAt}`, both `'user'`. A dismiss whose
   `backAt` is not the open row's answers 409: a person cannot dismiss, unseen,
-  a newer gap merged into the report they read. It is audited as
+  a newer gap merged into the report they read. So does one while it is
+  filling. It is audited as
   `bridge.gap_dismissed`.
 - **The console's live refresh probes the bridge before it refreshes.**
   `consoleServesThisPage` returns `{ ok, bridge }`. On `bridge: false`,

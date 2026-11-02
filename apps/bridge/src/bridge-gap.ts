@@ -14,6 +14,7 @@ export interface GapStore {
   beat(): Promise<{ lastUpAt: string | null; backAt: string }>;
   openGap(lastUpAt: string, backAt: string): Promise<{ id: string }>;
   addTasks(id: string, tasks: readonly GapTask[]): Promise<void>;
+  finish(): Promise<void>;
 }
 
 export interface GapStartDeps {
@@ -37,21 +38,45 @@ const reasonOf = (error: unknown): string => (error instanceof Error ? error.mes
  * before either step, so a gap that cost nothing, or a start that dies part
  * way, still says how long the bridge was away. Nothing here throws: a step
  * that fails is logged and leaves what was stored.
+ *
+ * The bridge serves while this runs, so the stored report is marked filling
+ * until the end, failed steps included (`finish`): read before then it said
+ * "nothing was resumed" and could be dismissed, and the tasks written after
+ * were shown to nobody. It finishes on a start with no gap too, for a report
+ * a start that died part way left filling.
  */
 export async function startGap(store: GapStore, deps: GapStartDeps): Promise<{ gapId: string | null }> {
   const log = deps.log ?? ((line: string) => console.log(`[bridge] ${line}`));
   const warn = deps.warn ?? ((line: string) => console.warn(`[bridge] ${line}`));
+  try {
+    return await fill(store, deps, log, warn);
+  } finally {
+    await store.finish().catch((error: unknown) => warn(`could not mark the gap report complete: ${reasonOf(error)}`));
+  }
+}
+
+async function fill(store: GapStore, deps: GapStartDeps, log: (line: string) => void, warn: (line: string) => void): Promise<{ gapId: string | null }> {
   let gapId: string | null = null;
   let backAt: string | null = null;
+  let beat: Awaited<ReturnType<GapStore['beat']>> | null = null;
   try {
-    const beat = await store.beat();
-    if (beat.lastUpAt !== null && Date.parse(beat.backAt) - Date.parse(beat.lastUpAt) > BRIDGE_HEARTBEAT_MS) {
-      gapId = (await store.openGap(beat.lastUpAt, beat.backAt)).id;
-      backAt = beat.backAt;
-      log(`back after a gap: last up at ${beat.lastUpAt}`);
-    }
+    beat = await store.beat();
   } catch (error) {
     warn(`could not record when it was last running: ${reasonOf(error)}`);
+  }
+  const lastUpAt = beat?.lastUpAt ?? null;
+  if (beat && lastUpAt !== null && Date.parse(beat.backAt) - Date.parse(lastUpAt) > BRIDGE_HEARTBEAT_MS) {
+    // The beat that measured the gap is already written over, so the next
+    // start cannot find this gap again: one more try before it is lost.
+    const at = beat.backAt;
+    const open = () => store.openGap(lastUpAt, at);
+    try {
+      gapId = (await open().catch(open)).id;
+      backAt = at;
+      log(`back after a gap: last up at ${lastUpAt}`);
+    } catch (error) {
+      warn(`could not store the gap since ${lastUpAt}, so the board will not report it: ${reasonOf(error)}`);
+    }
   }
 
   const resumed: GapTask[] = [];
@@ -79,17 +104,24 @@ export async function startGap(store: GapStore, deps: GapStartDeps): Promise<{ g
 }
 
 /**
- * The beat while the bridge runs, and the last one on a clean shutdown: a
+ * The beat while the bridge runs, and the last ones on a clean shutdown: a
  * keeper restart that is back inside the interval then reports no gap.
+ * `beat` is for the start of a shutdown, before its drains: they can run past
+ * the keeper's grace and be killed before `stop` is reached.
  */
-export function startHeartbeat(touch: () => Promise<void>, intervalMs = BRIDGE_HEARTBEAT_MS): { stop(): Promise<void> } {
-  const beat = () => void touch().catch((error: unknown) => console.warn(`[bridge] could not beat: ${reasonOf(error)}`));
-  const timer = setInterval(beat, intervalMs);
+export function startHeartbeat(
+  touch: () => Promise<void>,
+  intervalMs = BRIDGE_HEARTBEAT_MS,
+  warn: (line: string) => void = (line) => console.warn(`[bridge] ${line}`),
+): { beat(): Promise<void>; stop(): Promise<void> } {
+  const beat = () => touch().catch((error: unknown) => warn(`could not beat: ${reasonOf(error)}`));
+  const timer = setInterval(() => void beat(), intervalMs);
   timer.unref?.();
   return {
+    beat,
     async stop() {
       clearInterval(timer);
-      await touch().catch(() => undefined);
+      await beat();
     },
   };
 }

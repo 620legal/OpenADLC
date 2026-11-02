@@ -25,6 +25,11 @@ create table if not exists bridge_gaps (
   -- [{taskId, subject, outcome: 'resumed' | 'orphaned', why, backAt}]: what
   -- every gap merged into this row resumed or ended, kept across them.
   tasks jsonb not null default '[]',
+  -- When the start that opened or last moved it finished listing its tasks;
+  -- null while it is still listing. The row is stored before its tasks are
+  -- known, and a strip read then said "nothing was resumed" and could be
+  -- dismissed, hiding the tasks written after.
+  filled_at timestamptz,
   created_at timestamptz not null default now(),
   dismissed_at timestamptz,
   dismissed_by text

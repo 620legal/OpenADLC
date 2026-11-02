@@ -337,6 +337,7 @@ describe('the report of how long the bridge was away', () => {
     lastUpAt: '2026-11-02T14:02:00.000Z',
     backAt: '2026-11-02T14:03:10.000Z',
     tasks: [{ taskId: 'task-1', subject: 'openadlc-testbed#7', outcome: 'resumed', why: 'resumed implement on openadlc-testbed#7', backAt: '2026-11-02T14:03:10.000Z' }],
+    filling: false,
   };
   const dismiss = (backAt: unknown) =>
     fetch(`${bridgeUrl}/v1/bridge/gap/dismiss`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ backAt }) });
@@ -350,13 +351,32 @@ describe('the report of how long the bridge was away', () => {
   it('is read with how long the bridge was away and its tasks', async () => {
     vi.mocked(bridgeGaps.current).mockResolvedValue(GAP as never);
     expect(await (await fetch(`${bridgeUrl}/v1/bridge/gap`)).json()).toEqual({
-      gap: { lastUpAt: GAP.lastUpAt, backAt: GAP.backAt, awayMs: 70_000, tasks: GAP.tasks },
+      gap: { lastUpAt: GAP.lastUpAt, backAt: GAP.backAt, awayMs: 70_000, tasks: GAP.tasks, filling: false },
     });
   });
 
   it('says how long when nothing was resumed or orphaned', async () => {
     vi.mocked(bridgeGaps.current).mockResolvedValue({ ...GAP, tasks: [] } as never);
-    expect(await (await fetch(`${bridgeUrl}/v1/bridge/gap`)).json()).toEqual({ gap: { lastUpAt: GAP.lastUpAt, backAt: GAP.backAt, awayMs: 70_000, tasks: [] } });
+    expect(await (await fetch(`${bridgeUrl}/v1/bridge/gap`)).json()).toEqual({
+      gap: { lastUpAt: GAP.lastUpAt, backAt: GAP.backAt, awayMs: 70_000, tasks: [], filling: false },
+    });
+  });
+
+  it('says when the start is still listing its tasks', async () => {
+    vi.mocked(bridgeGaps.current).mockResolvedValue({ ...GAP, tasks: [], filling: true } as never);
+    expect(await (await fetch(`${bridgeUrl}/v1/bridge/gap`)).json()).toEqual({
+      gap: { lastUpAt: GAP.lastUpAt, backAt: GAP.backAt, awayMs: 70_000, tasks: [], filling: true },
+    });
+  });
+
+  it('is refused while the start is still listing its tasks, and stays open', async () => {
+    vi.mocked(bridgeGaps.dismiss).mockResolvedValue('filling');
+    const response = await dismiss(GAP.backAt);
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: string }).error).toBe(
+      'OpenADLC is still listing what it resumed and treated as orphaned. Dismiss it once the list is complete.',
+    );
+    expect(vi.mocked(audit)).not.toHaveBeenCalled();
   });
 
   it('is nothing when none is open', async () => {
