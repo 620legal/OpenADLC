@@ -125,6 +125,13 @@ export const SETTING_KEYS = [
   // `on` or `off`; absent is on. Whether the bridge holds its macOS host awake
   // (`caffeinate -i`) while work is in flight. See the bridge's `keep-awake.ts`.
   'keepAwake',
+  // Where owner notifications go, as JSON: `{kind: 'ntfy'|'slack'|'webhook',
+  // server?, setAt, setBy}`. The target (a URL, or the ntfy topic) is not here:
+  // it is in the secret store as `notify-target`. Only PUT
+  // /v1/settings/notifications writes the two together. See the bridge's `notify.ts`.
+  'notifyTransport',
+  // Each notification kind a person switched off, as JSON `{[kind]: false}`; absent is on.
+  'notifyKinds',
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];

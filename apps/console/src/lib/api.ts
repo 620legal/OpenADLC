@@ -953,6 +953,41 @@ export interface SpendingScope {
   providers: SpendingProviderFigure[];
 }
 
+/** The kinds of notification a person can switch off, in the order Settings lists them. */
+export const NOTIFY_SWITCHES = ['gate_opened', 'merge_waiting', 'review_stalled', 'cap_warning', 'promote_waiting', 'check_failing'] as const;
+export type NotifySwitch = (typeof NOTIFY_SWITCHES)[number];
+export type NotifyTransportKind = 'ntfy' | 'slack' | 'webhook';
+
+/**
+ * Settings → Notifications as the bridge shows it (`GET /v1/settings/notifications`).
+ * `target` is masked: the host and last four characters, never the whole
+ * URL or topic, which are credentials.
+ */
+export interface NotificationSettingsView {
+  /** Settings, `OPENADLC_NOTIFY_WEBHOOK`, or nowhere. */
+  source: 'settings' | 'env' | 'none';
+  kind: NotifyTransportKind | null;
+  server: string | null;
+  target: string | null;
+  switches: Record<NotifySwitch, boolean>;
+  /** The newest send since the transport was set, a test or a real one. */
+  last: { at: string; event: string; ok: boolean; status: number | null; error: string | null } | null;
+}
+
+/** What a save sends. An omitted target keeps the one saved; a null kind clears it. */
+export interface NotificationSettingsUpdate {
+  kind?: NotifyTransportKind | null;
+  server?: string;
+  target?: string;
+  switches?: Partial<Record<NotifySwitch, boolean>>;
+}
+
+export interface NotificationTestResult {
+  ok: boolean;
+  status: number | null;
+  error: string | null;
+}
+
 export interface SpendingLimitsView {
   period: string;
   global: SpendingScope;
@@ -1268,6 +1303,7 @@ export const api = {
   insights: (options: { repo?: string | null; days: 7 | 30 }) =>
     get<InsightsView>(`/v1/insights?days=${options.days}${options.repo ? `&repo=${encodeURIComponent(options.repo)}` : ''}`),
   spendingLimits: () => get<SpendingLimitsView>('/v1/spending/limits'),
+  notifications: () => get<NotificationSettingsView>('/v1/settings/notifications'),
   hosts: () => get<HostsView>('/v1/hosts'),
   attention: () => get<{ items: AttentionItem[] }>('/v1/attention'),
   modelAccounts: () => get<{ accounts: ModelAccountRef[] }>('/v1/model-accounts'),

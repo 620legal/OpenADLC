@@ -179,6 +179,12 @@ describe('backing up a crew that shares one GitHub account', () => {
     expect(contents.secrets['ssh-signing-qa']).toBe('zzz-qa-signing-zzz');
   });
 
+  it('carries where notifications go with the install, so a restored transport has its target', () => {
+    // Left out as "not something a backup carries", a restore brought back
+    // `notifyTransport` with no `notify-target`, and every send failed.
+    expect(classifySecret('notify-target', SHARED_SEATS)).toEqual({ group: 'install' });
+  });
+
   it('sorts a sign-in filed under an account’s name as that account’s seats’, not as belonging to no bot', () => {
     const holders = [{ ns: CREW, bots: SHARED_SEATS }];
     expect(classifySecret(`github-refresh-${CREW}`, [...SHARED_SEATS, 'openadlc-sydney-janedoe'], holders)).toEqual({
