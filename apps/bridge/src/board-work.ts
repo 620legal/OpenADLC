@@ -31,6 +31,7 @@ import {
 import { stillTried } from './request-queue.js';
 import { buildCandidates, readWaitingContext, waitingCards, waitingOf, type CardWaiting, type BuildHold, type WaitingContext, type WaitingKind, type WaitingReads } from './waiting.js';
 import { followWaits, personWaitsOf, readWaitFacts, type WaitChain, type WaitFacts } from './wait-chain.js';
+import { ATTENTION_WINDOW_DAYS } from './attention.js';
 
 /**
  * What the board needs beyond the issues: for each card, what it has cost and
@@ -44,9 +45,6 @@ import { followWaits, personWaitsOf, readWaitFacts, type WaitChain, type WaitFac
 
 /** How far back a stopped review loop is looked for. Older than this, the card has moved or been left. */
 const STALL_WINDOW_DAYS = 30;
-
-/** How far back the asks and awaits of people a chain may end at are read: Needs you's window (`ATTENTION_WINDOW_DAYS`). */
-const WAIT_FACTS_DAYS = 7;
 
 /**
  * How long Done keeps a card, in days, as the console shows it: what the
@@ -803,7 +801,7 @@ export async function readBoardWork(
   // waits on another or a question is open; one that cannot be read leaves
   // the cards as they were.
   if (waiting && needsWaitFacts(work, input.gates)) {
-    const read = await readWaitFacts(input.issues, input.gates, new Date(now.getTime() - WAIT_FACTS_DAYS * 24 * 60 * 60 * 1000)).catch(() => null);
+    const read = await readWaitFacts(input.issues, input.gates, new Date(now.getTime() - ATTENTION_WINDOW_DAYS * 24 * 60 * 60 * 1000)).catch(() => null);
     if (read) work = withWaitChains(work, { ...facts, tasks }, read);
   }
   const list = runningList(runningNow, { bots: input.bots, repos: input.repos, requests: input.requests, issues: [...input.issues, ...titled], since: live.since });
