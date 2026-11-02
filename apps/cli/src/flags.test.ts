@@ -58,6 +58,17 @@ describe('an argument a command takes none of', () => {
   });
 });
 
+describe('openadlc ls and watch', () => {
+  it('take --json and nothing else', () => {
+    expect(unknownFlag('ls', ['--json'])).toBeNull();
+    expect(unknownFlag('watch', ['--json'])).toBeNull();
+    expect(unknownFlag('ls', ['--all'])).toBe('--all');
+    expect(refusal('ls', '--all')).toBe('openadlc ls does not take --all; it takes --json');
+    expect(strayArgument('watch', ['foo'])).toBe('foo');
+    expect(strayArgument('ls', ['--json'])).toBeNull();
+  });
+});
+
 describe('a flag a sibling subcommand reads', () => {
   // Listed by command, `github apply --repo acme/one` was taken and ignored, and
   // apply wrote rulesets and templates to every repository.

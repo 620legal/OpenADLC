@@ -121,6 +121,13 @@ describe('every console route says who may call it', () => {
     }
   });
 
+  it('lets a user read the board’s events and live tasks, as `openadlc watch` and `ls` do, from the console API', () => {
+    for (const key of ['GET /v1/board/events', 'GET /v1/board/tasks']) {
+      expect(ROUTE_ROLES[key], key).toBe('user');
+      expect(everyRoute(), key).toContain(key);
+    }
+  });
+
   it('lets a user read how long the bridge was away, and dismiss the report for everyone', () => {
     for (const key of ['GET /v1/bridge/gap', 'POST /v1/bridge/gap/dismiss']) {
       expect(ROUTE_ROLES[key], key).toBe('user');

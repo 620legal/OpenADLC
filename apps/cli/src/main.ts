@@ -13,8 +13,10 @@ import { bridgeHeaders, consoleLink } from './console-link.js';
 import { doctor, status } from './commands/doctor.js';
 import { githubApply, githubCheck, syncLabels } from './commands/github.js';
 import { init } from './commands/init.js';
+import { ls } from './commands/ls.js';
 import { applyRelease, runForApply, writeResult } from './commands/self-update.js';
 import { down, up } from './commands/up.js';
+import { watch } from './commands/watch.js';
 import { configPath, databaseConflictMessage, databaseUrlConflict, loadConfig, serviceEnv } from './install.js';
 import { keeperPid, logFile } from './processes.js';
 import { ui } from './ui.js';
@@ -51,6 +53,11 @@ openadlc — a crew of agents that takes a request to a reviewed, deployed chang
   openadlc down                    stop the stack
   openadlc status                  what is running, what the board looks like, what it has cost
   openadlc doctor                  check the things that break an install
+  openadlc ls [--json]             the tasks running, paused or waiting: each one's seat,
+                                    work, state, how long, and spend against its cap
+  openadlc watch [--json]          what the crew does as it happens, one line per event,
+                                    until Ctrl-C. Both read the running bridge, never the
+                                    database; --json prints JSON for a script to read
   openadlc auth login --bot NAME   connect one bot's GitHub account with the device flow
   openadlc auth login --all        connect every bot in turn; run openadlc up first,
                                     since the bridge connects each seat
@@ -276,6 +283,18 @@ async function main(): Promise<void> {
 
     case 'doctor':
       return doctor(config);
+
+    // Both read the bridge alone, so neither is in DATABASE_COMMANDS.
+    case 'ls':
+      process.exitCode = await ls(config, { json: has('json') });
+      return;
+
+    case 'watch': {
+      const stop = new AbortController();
+      process.once('SIGINT', () => stop.abort());
+      process.exitCode = await watch(config, { json: has('json') }, stop.signal);
+      return;
+    }
 
     case 'auth':
       if (subcommand === 'login') {

@@ -28,6 +28,8 @@ export * as externalSigningKeys from './store/external-signing-keys.js';
 export type { ExternalSigningKey } from './store/external-signing-keys.js';
 export * as mergeLines from './store/merge-lines.js';
 export * as stageMoves from './store/stage-moves.js';
+export * as boardEvents from './store/board-events.js';
+export type { AskedRow, HeldAuditRow, LiveTaskRow, MergedRow, StartedRow } from './store/board-events.js';
 export type { StageMove, StageMoveKind } from './store/stage-moves.js';
 export * as localCiRuns from './store/local-ci-runs.js';
 export * as deployRuns from './store/deploy-runs.js';
