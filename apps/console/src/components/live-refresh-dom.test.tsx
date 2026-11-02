@@ -90,24 +90,20 @@ describe('a page open while the bridge does not answer', () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
-  it('asks nothing, and shows nothing new, from a tab in the background', async () => {
+  // A tab in the background keeps reading, so its title and icon can say that
+  // something needs a person (#222); it says the bridge is gone the same way.
+  it('keeps asking from a tab in the background, and shows the banner within one refresh', async () => {
     vi.useFakeTimers();
-    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
-    probe.bridge = false;
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
     await act(async () => root.render(<LiveRefresh />));
     await wait();
-    await wait();
-    await wait();
-    expect(probe.calls).toBe(0);
-    expect(banner()).toBeNull();
-
-    // Brought back: asked at once, and only then said.
-    visibility.mockReturnValue('visible');
-    await act(async () => {
-      document.dispatchEvent(new Event('visibilitychange'));
-      await vi.advanceTimersByTimeAsync(0);
-    });
     expect(probe.calls).toBe(1);
+    expect(router.refresh).toHaveBeenCalledTimes(1);
+
+    probe.bridge = false;
+    await wait();
+    expect(probe.calls).toBe(2);
     expect(banner()).toContain("Can't reach OpenADLC since");
+    expect(router.refresh).toHaveBeenCalledTimes(1);
   });
 });
