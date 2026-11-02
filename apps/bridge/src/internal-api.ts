@@ -173,7 +173,7 @@ export function registerInternalApi(
     /** Links a console request to the issue its triage filed; shared with the webhooks, which link it first. */
     requestFiling?: RequestFiling;
     /** Messages a person sent a live task, which its session takes and its end returns (`task-inbox.ts`). */
-    taskInbox?: Pick<TaskInbox, 'take' | 'settle'> | null;
+    taskInbox?: Pick<TaskInbox, 'take' | 'release' | 'settle'> | null;
   },
 ): void {
   /**
@@ -406,8 +406,17 @@ export function registerInternalApi(
   };
 
   taskPost('/internal/tasks/:id/state', { states: ['queued', 'running', 'paused'], refusal: 'a task that has ended keeps the state it ended in' }, async ({ params, body }) => {
-    const input = await body<{ state: TaskState; reason?: string; takesMessages?: unknown }>();
+    const input = await body<{ state: TaskState; reason?: string; takesMessages?: unknown; releaseTake?: unknown }>();
     let state = input.state;
+    // A take of the inbox whose answer never reached the runner, which failed
+    // its task rather than read on as if nothing waited: what that take
+    // claimed goes back in the queue, for the settle below to return. Before
+    // the write, while the task still runs, so a release that fails answers
+    // 500 and the runner's retry of this report does it again; after it, the
+    // retry was refused as a task already ended and the rows stayed taken.
+    if (state === 'failed' && deps.taskInbox && typeof input.releaseTake === 'string' && UUID.test(input.releaseTake)) {
+      await deps.taskInbox.release(params.id ?? '', input.releaseTake);
+    }
     let reason = input.reason ?? null;
     // A task that sent its work back ends `done`, and is not its stage
     // finishing: its reason says where the work went, whatever the session

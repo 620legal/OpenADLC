@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@openadlc/db', () => ({
   bots: { getBotById: vi.fn() },
-  taskInbox: { take: vi.fn(), settle: vi.fn() },
+  taskInbox: { take: vi.fn(), release: vi.fn(), settle: vi.fn() },
   tasks: { getTask: vi.fn() },
   threads: { ensureThread: vi.fn(), addMessage: vi.fn() },
 }));
@@ -37,11 +37,15 @@ function row(input: Partial<InboxRow & { fresh: boolean }> = {}): InboxRow & { f
 
 const READ = { item: { key: 'app#5' }, view: { stage: 'review' }, repo: { id: 'repo-app', name: 'app', fullName: 'acme/app' } } as never;
 
-function inbox(rows: { take?: (InboxRow & { fresh: boolean })[]; settle?: InboxRow[] } = {}) {
+function inbox(rows: { take?: (InboxRow & { fresh: boolean })[]; release?: InboxRow[]; settle?: InboxRow[] } = {}) {
   const said: { row: InboxRow; text: string }[] = [];
   const start = vi.fn(async () => ({ kind: 'starts' as const, what: 'patch round 2 on pull request #7' }));
   const read = vi.fn(async () => READ);
-  const store = { take: vi.fn(async () => rows.take ?? []), settle: vi.fn(async () => rows.settle ?? []) };
+  const store = {
+    take: vi.fn(async () => rows.take ?? []),
+    release: vi.fn(async () => rows.release ?? []),
+    settle: vi.fn(async () => rows.settle ?? []),
+  };
   const service = new TaskInbox({
     store,
     starts: { start },
@@ -83,6 +87,15 @@ describe('a message its session takes', () => {
 
     expect(taken.map((one) => one.id)).toEqual(['inbox-1', 'inbox-2']);
     expect(said).toEqual([{ row: expect.objectContaining({ id: 'inbox-2' }), text: 'read by its session' }]);
+  });
+
+  it('is put back when its runner never got the take, and the thread takes back that it was read', async () => {
+    const { service, store, said } = inbox({ release: [row()] });
+
+    expect(await service.release('task-1', 'take-1')).toBe(1);
+
+    expect(store.release).toHaveBeenCalledWith('task-1', 'take-1');
+    expect(said).toEqual([{ row: expect.objectContaining({ messageId: 'm-9' }), text: 'not read after all: its session never got it' }]);
   });
 });
 

@@ -47,6 +47,10 @@ let gateOpens: boolean;
 let sendBackAnswer: Record<string, unknown>;
 /** How many more times the bridge answers 500 to a route, by its last segment: a restart, a database write that failed. */
 let failing: Record<string, number>;
+/** How many calls to a route, by its last segment, are answered before `failing` starts on it. */
+let failingAfter: Record<string, number>;
+/** The status `failing` answers with: 500 unless a test says. */
+let failingStatus: number;
 /** What each `inbox/take` hands over in turn, as the messages' texts; nothing once these run out. */
 let inbox: string[][];
 
@@ -58,6 +62,8 @@ beforeEach(async () => {
   gateOpens = true;
   sendBackAnswer = { sent: true, from: 'build', to: 'spec', staffed: true, round: 1, commentUrl: null };
   failing = {};
+  failingAfter = {};
+  failingStatus = 500;
   inbox = [];
   // Answers as the bridge does: a gate opened, headroom left, usage taken.
   bridge = createServer((request, response) => {
@@ -68,9 +74,11 @@ beforeEach(async () => {
       const path = request.url ?? '';
       calls.push({ path, body: text ? (JSON.parse(text) as Record<string, unknown>) : {} });
       const route = path.split('/').at(-1) ?? '';
-      if ((failing[route] ?? 0) > 0) {
+      if ((failingAfter[route] ?? 0) > 0) {
+        failingAfter[route] = (failingAfter[route] ?? 0) - 1;
+      } else if ((failing[route] ?? 0) > 0) {
         failing[route] = (failing[route] ?? 0) - 1;
-        response.writeHead(500, { 'content-type': 'application/json' });
+        response.writeHead(failingStatus, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ error: 'the database is not answering' }));
         return;
       }
@@ -927,6 +935,54 @@ describe('a message to a running task', () => {
     expect(typeof takes[0]?.body.takeId).toBe('string');
     expect(takes[1]?.body.takeId).toBe(takes[0]?.body.takeId);
     expect(readFileSync(prompt, 'utf8')).toContain('also handle the empty state');
+  }, 30_000);
+
+  it('asks once when the bridge refuses the take, and reads on: a refusal comes before anything is taken', async () => {
+    failing = { take: 1000 };
+    failingStatus = 409;
+    const prompt = join(dir, 'prompt.txt');
+    const bin = fakeClaude([assistant('msg-1', 'Done.', 100, 10), result(0.01)], prompt);
+
+    expect(await runTriage(bin, { OPENADLC_LEDGER_RETRY_MS: '2000' })).toBe(0);
+
+    // Once before the first turn, once at its end: neither asked again.
+    expect(to('inbox/take')).toHaveLength(2);
+    expect(to('state').at(-1)?.body).toEqual({ state: 'done', reason: 'complete' });
+  }, 30_000);
+
+  it('does not start the engine when the bridge never answers the first take, and fails naming the take for the bridge to put back', async () => {
+    failing = { take: 1000 };
+    const prompt = join(dir, 'prompt.txt');
+    const bin = fakeClaude([assistant('msg-1', 'Done.', 100, 10), result(0.01)], prompt);
+
+    expect(await runTriage(bin, { OPENADLC_LEDGER_RETRY_MS: '300' })).toBe(1);
+
+    // Read as an empty inbox, what a committed claim took was never read nor returned.
+    expect(existsSync(prompt)).toBe(false);
+    const takeId = to('inbox/take')[0]?.body.takeId;
+    expect(typeof takeId).toBe('string');
+    expect(to('state').at(-1)?.body).toEqual({
+      state: 'failed',
+      reason: 'the bridge did not answer when the session took its messages; the task stopped so they are returned rather than lost',
+      releaseTake: takeId,
+    });
+  }, 30_000);
+
+  it('fails at the end of a turn whose take the bridge never answered, rather than finishing as if nothing waited', async () => {
+    failingAfter = { take: 1 };
+    failing = { take: 1000 };
+    const prompt = join(dir, 'prompt.txt');
+    const bin = fakeClaude([assistant('msg-1', 'Opened the pull request.', 1000, 40), result(0.1)], prompt, READ);
+
+    expect(await runTriage(bin, { OPENADLC_LEDGER_RETRY_MS: '300' })).toBe(1);
+
+    const takes = to('inbox/take');
+    // The end-of-turn take, asked under one id until it was given up on.
+    expect(takes.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(takes.slice(1).map((take) => take.body.takeId)).size).toBe(1);
+    expect(to('state').at(-1)?.body).toMatchObject({ state: 'failed', releaseTake: takes[1]?.body.takeId });
+    // The turn's usage still reached the ledger.
+    expect(to('usage').length).toBeGreaterThanOrEqual(1);
   }, 30_000);
 
   it('takes one sent while it worked at the end of its turn, after that turn’s usage, and the session reads it as its next turn', async () => {

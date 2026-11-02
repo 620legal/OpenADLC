@@ -6,7 +6,7 @@ vi.mock('../client.js', () => ({
 }));
 
 import { query, queryOne } from '../client.js';
-import { enqueue, settle, take } from './task-inbox.js';
+import { enqueue, release, settle, take } from './task-inbox.js';
 
 const flat = (sql: unknown) => String(sql).replace(/\s+/g, ' ');
 
@@ -95,6 +95,18 @@ describe('a row claimed once', () => {
     // Its first claim's time stays, which is how `fresh` tells the repeat apart.
     expect(sql).toContain("settled_at = case when i.state = 'queued' then now() else i.settled_at end");
     expect(sql).toContain('i.settled_at = now() as fresh');
+  });
+
+  it('is put back in the queue, from that take only, when the runner never got the take’s answer', async () => {
+    vi.mocked(query).mockResolvedValue([{ ...ROW, state: 'queued' }]);
+
+    expect(await release('task-1', 'take-1')).toEqual([expect.objectContaining({ id: 'inbox-1', state: 'queued' })]);
+
+    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
+    expect(flat(sql)).toContain("set state = 'queued', take_id = null, settled_at = null");
+    // Never a row another take claimed, a returned one, or another task's.
+    expect(flat(sql)).toContain("where i.task_id = $1 and i.take_id = $2::uuid and i.state = 'taken'");
+    expect(params).toEqual(['task-1', 'take-1']);
   });
 
   it('is returned only from queued, and only once its task is neither queued nor running', async () => {

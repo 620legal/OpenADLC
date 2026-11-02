@@ -25,7 +25,7 @@ import { messageBrief, type MessageStarts, type ReadItem } from './message-start
 export const INBOX_SWEEP_MS = 30_000;
 
 export interface TaskInboxDeps {
-  store?: Pick<typeof taskInbox, 'take' | 'settle'>;
+  store?: Pick<typeof taskInbox, 'take' | 'release' | 'settle'>;
   starts: Pick<MessageStarts, 'start'>;
   /** The item a message was sent on, read now (`readItem`); null when it is gone. */
   read(subject: string): Promise<ReadItem | null>;
@@ -37,7 +37,7 @@ export interface TaskInboxDeps {
 export class TaskInbox {
   constructor(private readonly deps: TaskInboxDeps) {}
 
-  private get store(): Pick<typeof taskInbox, 'take' | 'settle'> {
+  private get store(): Pick<typeof taskInbox, 'take' | 'release' | 'settle'> {
     return this.deps.store ?? taskInbox;
   }
 
@@ -58,6 +58,23 @@ export class TaskInbox {
       id: row.id,
       text: messageBrief({ identity: row.sender, text: row.text, role: row.role, where: row.githubUrl, whileWorking: true }).content,
     }));
+  }
+
+  /**
+   * Puts back what one take claimed, for a runner that never got the answer
+   * to it and failed its task rather than read on: the thread had said those
+   * messages were read, and `settle` returns only queued ones, so they were
+   * neither read nor started again. The thread says each was not read after
+   * all; the settle that follows the task's end returns them. How many.
+   */
+  async release(taskId: string, takeId: string): Promise<number> {
+    const rows = await this.store.release(taskId, takeId);
+    for (const row of rows) {
+      await this.say(row, 'not read after all: its session never got it').catch((error: unknown) =>
+        console.warn(`[bridge] ${row.subjectRef}: could not say a message was not read: ${error instanceof Error ? error.message : error}`),
+      );
+    }
+    return rows.length;
   }
 
   /**

@@ -130,6 +130,7 @@ const missingVerdict = vi.fn(async (_task: unknown): Promise<string | null> => n
 const designerEnded = vi.fn(async (_task: unknown, _reason: string | null) => undefined);
 const inboxTake = vi.fn(async (_taskId: string, _takeId: string) => [{ id: 'inbox-1', text: 'janedoe wrote to the builder while you worked' }]);
 const inboxSettle = vi.fn(async (_taskId?: string) => 0);
+const inboxRelease = vi.fn(async (_taskId: string, _takeId: string) => 1);
 
 
 let bridge: Server;
@@ -163,7 +164,7 @@ beforeEach(async () => {
     stageRuns: { seatFreed },
     requestQueue: { drain } as never,
     planChanges: { verdict, missingVerdict, designerEnded } as never,
-    taskInbox: { take: inboxTake, settle: inboxSettle },
+    taskInbox: { take: inboxTake, release: inboxRelease, settle: inboxSettle },
   });
   bridge = createServer((request, response) => void router.handle(request, response));
   await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
@@ -646,6 +647,38 @@ describe('a message a person sent a running task', () => {
   it.each(['paused', 'done', 'failed', 'stopped'])('is returned, unread, once its task is %s', async (state) => {
     expect((await post('/internal/tasks/task-1/state', { state, reason: 'why' })).status).toBe(200);
     await vi.waitFor(() => expect(inboxSettle).toHaveBeenCalledWith('task-1'));
+  });
+
+  it('is put back for a take the runner never got the answer to, before the task is written failed, and then returned', async () => {
+    const { tasks } = await import('@openadlc/db');
+    const takeId = '7d7f3c1e-2b8a-4c3e-9f1a-0c5d6e7f8a9b';
+
+    const response = await post('/internal/tasks/task-1/state', { state: 'failed', reason: 'the bridge did not answer', releaseTake: takeId });
+
+    expect(response.status).toBe(200);
+    expect(inboxRelease).toHaveBeenCalledWith('task-1', takeId);
+    // While the task still ran: written failed first, a release that failed
+    // would have been refused on the retry, and the rows stayed taken.
+    expect(inboxRelease.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(tasks.updateTaskState).mock.invocationCallOrder.at(-1) ?? 0);
+    await vi.waitFor(() => expect(inboxSettle).toHaveBeenCalledWith('task-1'));
+  });
+
+  it('is not put back for a take that is not a uuid, or a task that did not fail', async () => {
+    await post('/internal/tasks/task-1/state', { state: 'failed', reason: 'why', releaseTake: "x'; drop table task_inbox; --" });
+    await post('/internal/tasks/task-1/state', { state: 'done', reason: 'complete', releaseTake: '7d7f3c1e-2b8a-4c3e-9f1a-0c5d6e7f8a9b' });
+
+    expect(inboxRelease).not.toHaveBeenCalled();
+  });
+
+  it('answers 500 when the release fails, and writes nothing, so the runner’s retry does it again', async () => {
+    const { tasks } = await import('@openadlc/db');
+    inboxRelease.mockRejectedValueOnce(new Error('the database is not answering'));
+    vi.mocked(tasks.updateTaskState).mockClear();
+
+    const response = await post('/internal/tasks/task-1/state', { state: 'failed', reason: 'why', releaseTake: '7d7f3c1e-2b8a-4c3e-9f1a-0c5d6e7f8a9b' });
+
+    expect(response.status).toBe(500);
+    expect(vi.mocked(tasks.updateTaskState)).not.toHaveBeenCalled();
   });
 
   it('stays queued while its task runs', async () => {

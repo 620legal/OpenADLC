@@ -155,6 +155,9 @@ async function postLedger(
 /** Why a task stops when its usage could not be written to the ledger. */
 const USAGE_NOT_RECORDED = 'usage could not be recorded; the task stopped so the cost cap still holds';
 
+/** Why a task stops when the bridge never answered a take of its inbox. */
+const INBOX_NOT_TAKEN = 'the bridge did not answer when the session took its messages; the task stopped so they are returned rather than lost';
+
 /** The header of the block OpenADLC closes every prompt with. */
 const TASK_HEADER = '--- this task ---';
 
@@ -358,6 +361,8 @@ async function main(): Promise<void> {
   const unrecorded = { tokensIn: 0, tokensOut: 0, costUsd: 0 };
   /** Whether the engine said it finished its turn: a `done` that is `complete`. */
   let finishedTurn = false;
+  /** A take of the inbox the bridge never answered, which the task's failure asks the bridge to put back. */
+  let lostTake: string | null = null;
 
   /**
    * The one question a task at its cap asks; answering "continue" is what
@@ -401,10 +406,17 @@ async function main(): Promise<void> {
    * the bridge does not answer, for up to the ledger's retry: an answer lost
    * after the bridge had marked the rows taken read as an empty inbox, and
    * those messages were neither read nor returned. The same id hands them
-   * back. Nothing once it gives up; a row never claimed is still queued, and
-   * returned once the task ends.
+   * back.
+   *
+   * A refusal (4xx) is the bridge's answer, given before it takes anything —
+   * the task is not running, or the token is not its — so it is nothing to
+   * read, and not asked again: it would never be taken. Null when the bridge
+   * never answered: whether it claimed rows is not known, so the task fails
+   * naming the take (`lostTake`), and the bridge puts that take's rows back
+   * to be returned. Read as an empty inbox, a claim that had committed left
+   * them `taken` and never read.
    */
-  const takeInbox = async (): Promise<string[]> => {
+  const takeInbox = async (): Promise<string[] | null> => {
     const path = `/internal/tasks/${env.taskId}/inbox/take`;
     const body = { takeId: randomUUID() };
     const until = Date.now() + env.ledgerRetryMs;
@@ -414,10 +426,15 @@ async function main(): Promise<void> {
         const messages = Array.isArray(taken.body.messages) ? (taken.body.messages as { text?: unknown }[]) : [];
         return messages.map((message) => (typeof message.text === 'string' ? message.text : '')).filter((text) => text.trim().length > 0);
       }
+      if (/answered 4\d\d/.test(taken.error)) {
+        console.error(`[skill] bridge call ${path} was refused, so nothing was taken: ${taken.error}`);
+        return [];
+      }
       const left = until - Date.now();
       if (left <= 0) {
         console.error(`[skill] bridge call ${path} failed, and was given up on: ${taken.error}`);
-        return [];
+        lostTake = body.takeId;
+        return null;
       }
       console.error(`[skill] bridge call ${path} failed; trying again: ${taken.error}`);
       await new Promise((resolve) => setTimeout(resolve, Math.min(Math.min(1000, env.ledgerRetryMs / 10) * 2 ** attempt, left)));
@@ -437,6 +454,10 @@ async function main(): Promise<void> {
     const left = await postLedger(env.bridgeUrl, `/internal/tasks/${env.taskId}/headroom`, () => ({ estimateUsd: 0.5 }), env.ledgerRetryMs);
     if (!left || left.stop === true) return null;
     const messages = await takeInbox();
+    if (!messages) {
+      failed = INBOX_NOT_TAKEN;
+      return null;
+    }
     if (messages.length === 0) return null;
     console.log(`[skill] read ${messages.length === 1 ? 'a message' : `${messages.length} messages`} a person sent while it worked`);
     return messageTurn(fence, messages);
@@ -449,7 +470,8 @@ async function main(): Promise<void> {
   // task sat in its inbox for the whole run and started the work again after
   // it. Taken only once the engine will run, so it is not taken and lost.
   const waiting = paused || failed ? [] : await takeInbox();
-  const prompt = buildPrompt(env, skillDir, policy, fence, waiting);
+  if (!waiting) failed = INBOX_NOT_TAKEN;
+  const prompt = buildPrompt(env, skillDir, policy, fence, waiting ?? []);
 
   const events: AsyncIterable<EngineEvent> | EngineEvent[] = paused || failed
     ? []
@@ -641,7 +663,7 @@ async function main(): Promise<void> {
       event: 'stopped',
       note: failed,
     });
-    await reportState(env, 'failed', failed);
+    await reportState(env, 'failed', failed, lostTake ? { releaseTake: lostTake } : {});
     process.exitCode = 1;
     return;
   }
@@ -683,10 +705,10 @@ async function main(): Promise<void> {
  * bridge never took leaves the runner exiting non-zero, whatever the ending,
  * so the session's own exit says something went unrecorded.
  */
-async function reportState(env: RunnerEnv, state: string, reason: string): Promise<void> {
+async function reportState(env: RunnerEnv, state: string, reason: string, extra: Record<string, unknown> = {}): Promise<void> {
   const until = Date.now() + env.ledgerRetryMs;
   for (let attempt = 0; ; attempt += 1) {
-    const posted = await postChecked(env.bridgeUrl, `/internal/tasks/${env.taskId}/state`, { state, reason });
+    const posted = await postChecked(env.bridgeUrl, `/internal/tasks/${env.taskId}/state`, { state, reason, ...extra });
     // A refusal is the bridge's answer: the task had already ended.
     if (posted.ok || /answered 4\d\d/.test(posted.error)) return;
     const left = until - Date.now();

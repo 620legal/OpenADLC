@@ -123,6 +123,22 @@ export async function take(taskId: string, takeId: string): Promise<(InboxRow & 
 }
 
 /**
+ * Puts what one take claimed back in the queue, for a runner that never got
+ * the bridge's answer to it and failed its task instead of reading it: those
+ * rows are `taken` and nobody read them, and `settle` returns only `queued`
+ * ones. Only this task's rows, and only that take's.
+ */
+export async function release(taskId: string, takeId: string): Promise<InboxRow[]> {
+  const rows = await query<Row>(
+    `update task_inbox i set state = 'queued', take_id = null, settled_at = null
+     where i.task_id = $1 and i.take_id = $2::uuid and i.state = 'taken'
+     returning ${COLUMNS.split(', ').map((column) => `i.${column}`).join(', ')}`,
+    [taskId, takeId],
+  );
+  return rows.map(toRow).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/**
  * The rows whose task is no longer queued or running, now `returned`, oldest
  * first: one task's when named (its runner said it ended), every task's for
  * the sweep that catches a cancel or a host reconcile failed.
