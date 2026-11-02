@@ -675,9 +675,11 @@ export function needsWaitFacts(work: Pick<BoardWork, 'byRef'>, gates: readonly u
 /**
  * Each issue's card with its wait followed to its root, by the same
  * `followWaits` over the same facts as Needs you (`attentionItems`), so the
- * two differ only in when they read.
+ * two differ only in when they read. The stalls a chain ends at are the
+ * facts' own, over Needs you's window: on the board's 30 days a card said
+ * "decide on #N's review" of a stall Needs you had no item for.
  */
-export function withWaitChains(work: BoardWork, input: Pick<BoardWorkInput, 'issues' | 'tasks' | 'repos' | 'gates' | 'stallEvents'>, facts: WaitFacts): BoardWork {
+export function withWaitChains(work: BoardWork, input: Pick<BoardWorkInput, 'issues' | 'tasks' | 'repos' | 'gates'>, facts: WaitFacts): BoardWork {
   const waiting = new Map<string, CardWaiting>();
   for (const [ref, card] of work.byRef) if (card.waiting) waiting.set(ref, card.waiting);
   const shown = onTheBoard(input.issues, input.repos).map((issue) => `${issue.repoName}#${issue.number}`);
@@ -687,7 +689,7 @@ export function withWaitChains(work: BoardWork, input: Pick<BoardWorkInput, 'iss
     waiting,
     tasks: input.tasks,
     gates: input.gates,
-    persons: personWaitsOf({ ...facts, issues: input.issues, tasks: input.tasks, gates: input.gates, stallEvents: input.stallEvents, repos: input.repos }),
+    persons: personWaitsOf({ ...facts, issues: input.issues, tasks: input.tasks, gates: input.gates, repos: input.repos }),
     cards: shown,
   });
   const byRef = new Map(work.byRef);
@@ -802,7 +804,7 @@ export async function readBoardWork(
   // the cards as they were.
   if (waiting && needsWaitFacts(work, input.gates)) {
     const read = await readWaitFacts(input.issues, input.gates, new Date(now.getTime() - WAIT_FACTS_DAYS * 24 * 60 * 60 * 1000)).catch(() => null);
-    if (read) work = withWaitChains(work, { ...facts, tasks, stallEvents }, read);
+    if (read) work = withWaitChains(work, { ...facts, tasks }, read);
   }
   const list = runningList(runningNow, { bots: input.bots, repos: input.repos, requests: input.requests, issues: [...input.issues, ...titled], since: live.since });
   return { ...work, runningList: list };

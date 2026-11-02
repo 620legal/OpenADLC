@@ -8,6 +8,7 @@ import {
   PERSON_ASKED_AGAIN,
   PERSON_AWAITED,
   REVIEW_ROUND_OPENED,
+  REVIEW_STALLED,
   REVIEW_SUBMITTED_ON,
   standingStalls,
   type IssueFacts,
@@ -68,6 +69,13 @@ export interface WaitFacts {
   heldStacks?: readonly HeldStack[];
   /** Every stack of a repository with an issue in Build or Review (`stackLinks`); which still wait is `stackWaitsOn`'s. */
   stackLinks?: readonly StackLink[];
+  /**
+   * The review loops that stopped (`REVIEW_STALLED`), over the same window as
+   * the asks and awaits. The board read its own 30 days of them for a card's
+   * stall line, and a chain on those ended at a `stall:` item Needs you, on 7,
+   * did not have.
+   */
+  stallEvents?: Events;
 }
 
 /** A person asked to approve a pull request again (`PERSON_ASKED_AGAIN`), as its card reads it. */
@@ -228,9 +236,10 @@ export async function readWaitFacts(
 ): Promise<Required<WaitFacts>> {
   const paused = issues.filter((issue) => hasPausedLabel(issue.labels));
   const stacked = [...new Set(issues.filter((issue) => issue.stage === 'build' || issue.stage === 'review').map((issue) => issue.repoId))];
-  const [personAsks, personAwaits, heldPlanChanges, line, holds, links] = await Promise.all([
+  const [personAsks, personAwaits, stallEvents, heldPlanChanges, line, holds, links] = await Promise.all([
     quietly(() => listEventsOfType(PERSON_ASKED_AGAIN, since), []),
     quietly(() => listEventsOfType(PERSON_AWAITED, since), []),
+    quietly(() => listEventsOfType(REVIEW_STALLED, since), []),
     gates.length > 0
       ? quietly(
           async () =>
@@ -264,7 +273,7 @@ export async function readWaitFacts(
     .map((entry) => ({ entry, reason: heldForPerson(entry) }))
     .filter((one): one is { entry: (typeof one)['entry']; reason: string } => one.reason !== null)
     .map(({ entry, reason }) => ({ repo: entry.repoName, prNumber: entry.prNumber, reason, since: entry.enteredAt }));
-  return { heldPlanChanges, heldMerges, personAsks, personReviews, personAwaits, roundsOpened, heldStacks: holds, stackLinks: links };
+  return { heldPlanChanges, heldMerges, personAsks, personReviews, personAwaits, roundsOpened, heldStacks: holds, stackLinks: links, stallEvents };
 }
 
 /** What a person does at a chain's root: answer a question, merge or approve a pull request, decide on a stalled review, resume a hold, triage a parked issue, or what `words` says. */
@@ -289,7 +298,6 @@ export interface PersonWaitInput extends WaitFacts {
   tasks: readonly Pick<TaskFacts, 'id' | 'subjectRef' | 'createdAt'>[];
   /** The open gates; a gate without its id names no item. */
   gates: readonly { id?: string; taskId: string | null; githubCommentUrl?: string | null }[];
-  stallEvents: Events;
   repos: readonly { name: string; fullName?: string }[];
   /** The issues and pull requests GitHub says are closed, by ref, which Needs you leaves out. Absent, none. */
   closed?: ReadonlySet<string>;
@@ -340,7 +348,7 @@ export function personWaitsOf(input: PersonWaitInput): PersonWait[] {
     waits.push({ on: nodeOf(`${wait.repo}#${wait.issue}`), attentionId: `approval:${key}`, action: 'approve', number: wait.pr, url: pullUrl(wait.repo, wait.pr) });
   }
 
-  for (const [key, stall] of standingStalls(input.stallEvents, input.issues, input.tasks)) {
+  for (const [key, stall] of standingStalls(input.stallEvents ?? [], input.issues, input.tasks)) {
     if (input.closed?.has(key)) continue;
     waits.push({ on: nodeOf(stall.issue ? `${stall.repo}#${stall.issue}` : key), attentionId: `stall:${key}`, action: 'review', number: stall.pr, url: pullUrl(stall.repo, stall.pr) });
   }
@@ -380,7 +388,17 @@ export interface WaitLink {
  * reached at `MAX_WAIT_DEPTH` links.
  */
 export type WaitEnd =
-  | { kind: 'person'; ref: string; action: PersonAction; number: number; attentionId: string | null; url: string | null; words?: string }
+  | {
+      kind: 'person';
+      ref: string;
+      action: PersonAction;
+      number: number;
+      attentionId: string | null;
+      url: string | null;
+      words?: string;
+      /** A person outside the crew is who it waits on, not you: an `openadlc:ignore` dependency still open. */
+      outside?: true;
+    }
   | { kind: 'self'; ref: string; words: string }
   | { kind: 'dead'; ref: string; why: 'loop' | 'abandoned' | 'closed' | 'outside'; loop?: string[] }
   | { kind: 'deep'; ref: string };
@@ -412,8 +430,12 @@ export interface FollowInput {
 /** An end of a node, or a link from it, with the end already known for a link to something that will not move. */
 type Option = { end: WaitEnd } | { link: WaitLink; fixed?: WaitEnd };
 
-/** Which end a chain keeps when a node offers several: the one somebody can act on first. */
-const RANK: Record<WaitEnd['kind'], number> = { person: 0, dead: 1, deep: 2, self: 3 };
+/**
+ * Which end a chain keeps when a node offers several: the one somebody can
+ * act on first. A dependency built outside the crew is someone's to finish,
+ * but not the reader's, so any wait on you outranks it.
+ */
+const rank = (end: WaitEnd): number => (end.kind === 'person' ? (end.outside ? 1 : 0) : { dead: 2, deep: 3, self: 4 }[end.kind]);
 
 /** What a person does about a wait `waitingOf` names on the card itself, or null for one that is no person's. */
 function personOfReason(reason: WaitingReason, issue: IssueFacts, ref: string): Omit<Extract<WaitEnd, { kind: 'person' }>, 'kind' | 'ref'> | null {
@@ -478,14 +500,19 @@ function stageWords(issue: IssueFacts | undefined): string {
  * waits for, the cards before it in line, the issues holding its files, those
  * holding the paths of its approved plan change, the one it was stacked on —
  * and then what `waitingOf` says clears by itself. The best end is kept,
- * person > dead > deep > self, and the first offered on a tie, so a node's
- * own end beats one behind it.
+ * person > dead > deep > self, a person outside the crew under any wait on
+ * you, and the first offered on a tie, so a node's own end beats one behind
+ * it.
  *
  * Depth first, with the path walked: a link back onto it is a loop, which
- * nobody's action ends. A memo for each walk keeps every node to one visit,
- * so any input terminates, and is dropped after it, so a loop seen from one
- * card never colours another's walk. Past `MAX_WAIT_DEPTH` links it stops,
- * with the last node reached.
+ * nobody's action ends. A memo for each walk keeps what a node was followed
+ * to and from how deep, and is dropped after it, so a loop seen from one card
+ * never colours another's walk. Past `MAX_WAIT_DEPTH` links it stops, with
+ * the last node reached. A node is followed again only when it is reached
+ * nearer the card than before: memoed once, a node first reached at the
+ * limit said `deep` from a link one step from the card, and the person behind
+ * it was lost. Its depth only falls, so each node is followed at most
+ * `MAX_WAIT_DEPTH + 1` times and any input terminates.
  */
 export function followWaits(input: FollowInput): Map<string, WaitChain> {
   const byRef = new Map<string, IssueFacts>(input.issues.map((issue) => [`${issue.repoName}#${issue.number}`, issue]));
@@ -542,7 +569,7 @@ export function followWaits(input: FollowInput): Map<string, WaitChain> {
           else if (on.ignored?.state === 'closed' && on.ignored.stateReason !== 'completed') options.push(link(to, 'dependency', { kind: 'dead', ref: to, why: 'closed' }));
           else if (!on.target) options.push(link(to, 'dependency', { kind: 'dead', ref: to, why: 'outside' }));
           // A person's, built outside the crew: whoever builds it is who it waits on.
-          else if (on.ignored) options.push(link(to, 'dependency', { kind: 'person', ref: to, action: 'other', number: on.number, attentionId: null, url: byRef.get(to)?.url ?? null, words: `finish ${on.ref}, which is built outside the crew` }));
+          else if (on.ignored) options.push(link(to, 'dependency', { kind: 'person', ref: to, action: 'other', number: on.number, attentionId: null, url: byRef.get(to)?.url ?? null, outside: true }));
           else options.push(link(on.target, 'dependency'));
         }
         break;
@@ -583,11 +610,11 @@ export function followWaits(input: FollowInput): Map<string, WaitChain> {
 
   type Walked = { links: WaitLink[]; end: WaitEnd };
   const walk = (root: string): Walked => {
-    const memo = new Map<string, Walked>();
+    const memo = new Map<string, { walked: Walked; depth: number }>();
     const path: string[] = [];
     const visit = (ref: string, depth: number): Walked => {
       const seen = memo.get(ref);
-      if (seen) return seen;
+      if (seen && seen.depth <= depth) return seen.walked;
       path.push(ref);
       let best: Walked | null = null;
       for (const option of optionsOf(ref)) {
@@ -600,10 +627,10 @@ export function followWaits(input: FollowInput): Map<string, WaitChain> {
           const next = visit(option.link.to, depth + 1);
           walked = { links: [option.link, ...next.links], end: next.end };
         }
-        if (!best || RANK[walked.end.kind] < RANK[best.end.kind]) best = walked;
+        if (!best || rank(walked.end) < rank(best.end)) best = walked;
       }
       path.pop();
-      memo.set(ref, best!);
+      memo.set(ref, { walked: best!, depth });
       return best!;
     };
     return visit(root, 0);

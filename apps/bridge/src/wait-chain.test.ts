@@ -64,7 +64,7 @@ function follow(issues: IssueFacts[], tasks: TaskFacts[] = [], gates: ReturnType
     waiting: waitsOf(issues, tasks, gates, context),
     tasks,
     gates,
-    persons: personWaitsOf({ ...facts, issues, tasks, gates, stallEvents: [], repos: [REPO] }),
+    persons: personWaitsOf({ ...facts, issues, tasks, gates, repos: [REPO] }),
   });
 }
 
@@ -161,6 +161,27 @@ describe('a chain nobody can end', () => {
   });
 });
 
+describe('a dependency built outside the crew', () => {
+  const open = new Map([['repo-1#18', { state: 'open' as const, stateReason: null }]]);
+
+  it('waits on whoever builds it, not on you', () => {
+    expect(follow([blocked(5, 18)], [], [], {}, { ignored: open }).get('OpenADLC#5')?.end).toEqual({
+      kind: 'person',
+      ref: 'OpenADLC#18',
+      action: 'other',
+      number: 18,
+      attentionId: null,
+      url: null,
+      outside: true,
+    });
+  });
+
+  it('ranks under a wait on you, even listed first', () => {
+    const chains = follow([blocked(5, 18, 9), issue(9, 'build', { labels: ['adlc:build', 'needs-triage'] })], [], [], {}, { ignored: open });
+    expect(chains.get('OpenADLC#5')?.end).toMatchObject({ kind: 'person', ref: 'OpenADLC#9', action: 'triage', attentionId: 'parked:OpenADLC#9' });
+  });
+});
+
 describe('a chain with no person at the end', () => {
   it('ends on the task running, two links on, and needs no one', () => {
     const chains = follow([blocked(10, 11), blocked(11, 12), issue(12, 'spec')], [task('task-12', 'OpenADLC#12', 'running', 'spec')]);
@@ -189,6 +210,20 @@ describe('following terminates', () => {
     const chain = follow(issues).get('OpenADLC#101')!;
     expect(chain.links).toHaveLength(MAX_WAIT_DEPTH);
     expect(chain.end).toEqual({ kind: 'deep', ref: `OpenADLC#${101 + MAX_WAIT_DEPTH}` });
+  });
+
+  it('follows a node again when a shorter path reaches it, to the person behind it', () => {
+    // #1 waits on #2 and #13; #2 … #12 each on the next, so the long way
+    // reaches #13 at the limit first; #13 waits on #14, which is parked.
+    const issues = [
+      blocked(1, 2, 13),
+      ...Array.from({ length: 11 }, (_, index) => blocked(2 + index, 3 + index)),
+      blocked(13, 14),
+      issue(14, 'build', { labels: ['adlc:build', 'needs-triage'] }),
+    ];
+    const chain = follow(issues).get('OpenADLC#1')!;
+    expect(chain.end).toMatchObject({ kind: 'person', ref: 'OpenADLC#14', action: 'triage', attentionId: 'parked:OpenADLC#14' });
+    expect(chain.links.map((link) => link.to)).toEqual(['OpenADLC#13', 'OpenADLC#14']);
   });
 
   it('on any graph, cycles and all', () => {

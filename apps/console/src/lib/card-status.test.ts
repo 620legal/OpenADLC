@@ -724,7 +724,18 @@ describe('a card’s wait followed to its root', () => {
     expect(said({ kind: 'dead', ref: 'openadlc#4', why: 'abandoned' })).toBe('Waits on #4, which was closed without merging: it will never ship.');
     expect(said({ kind: 'dead', ref: 'openadlc#18', why: 'closed' })).toBe('Waits on #18, which was closed without being completed: it will never ship.');
     expect(said({ kind: 'dead', ref: 'other/b#3', why: 'outside' })).toBe('Waits on other/b#3, outside this install.');
-    expect(said({ kind: 'deep', ref: 'openadlc#113' })).toBe('Waits on #113, 12 links on: followed no further.');
+    expect(said({ kind: 'dead', ref: 'openadlc#1', why: 'loop', loop: ['openadlc#1'] })).toBe('Waits on a loop: #1 waits on itself. It does not go on by itself.');
+  });
+
+  it('says how many links it followed before it stopped, as many as the bridge walked', () => {
+    const links = Array.from({ length: 12 }, (_, at) => link(101 + at, 102 + at));
+    expect(chainLine(card(), chain({ kind: 'deep', ref: 'openadlc#113' }, links, 1))?.text).toBe('Waits on #113, 12 links on: followed no further.');
+    expect(chainLine(card(), chain({ kind: 'deep', ref: 'openadlc#106' }, links.slice(0, 5), 1))?.text).toBe('Waits on #106, 5 links on: followed no further.');
+  });
+
+  it('does not say a dependency built outside the crew waits on you', () => {
+    const outside: WaitEnd = { kind: 'person', ref: 'openadlc#18', action: 'other', number: 18, attentionId: null, url: null, outside: true };
+    expect(chainLine(card(), chain(outside, [link(10, 18)], 1))?.text).toBe('Waits on #18, which is built outside the crew.');
   });
 
   it('says byte for byte what it said before, with no chain', () => {

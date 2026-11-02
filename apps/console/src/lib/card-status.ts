@@ -338,9 +338,6 @@ function waitingLine(card: BoardCard, waiting: CardWaiting, context: CardContext
   }
 }
 
-/** How far the bridge follows a wait before it stops (`MAX_WAIT_DEPTH` in its wait-chain.ts). */
-const MAX_WAIT_DEPTH = 12;
-
 /** The root's number as the card's own board says it: `#213` in its own repository, `web#213` in another. */
 function rootNumber(end: { ref: string; number: number }, card: Pick<BoardCard, 'repo'>): string {
   const repo = end.ref.slice(0, end.ref.lastIndexOf('#'));
@@ -380,6 +377,7 @@ export function chainLine(card: Pick<BoardCard, 'repo'>, chain: WaitChain): Card
   const ref = (one: string) => refInWords(one, card.repo);
   switch (end.kind) {
     case 'person': {
+      if (end.outside) return { text: `Waits on ${ref(end.ref)}, which is built outside the crew.`, tone: 'attention', mark: 'dot' };
       const behind = chain.behind === 1 ? '1 item waits behind it' : `${chain.behind} items wait behind it`;
       return { text: `Waits on you: ${rootActionWords(end, card)}. ${behind}.`, tone: 'attention', mark: 'dot' };
     }
@@ -389,6 +387,7 @@ export function chainLine(card: Pick<BoardCard, 'repo'>, chain: WaitChain): Card
     case 'dead': {
       if (end.why === 'loop') {
         const loop = (end.loop ?? [end.ref]).map(ref);
+        if (loop.length === 1) return { text: `Waits on a loop: ${loop[0]} waits on itself. It does not go on by itself.`, tone: 'attention', mark: 'dot' };
         const around = [...loop.slice(1), loop[0]!].map((one) => `, which waits on ${one}`).join('').replace(/^, which/, '');
         return { text: `Waits on a loop: ${loop[0]}${around}. ${loop.length <= 2 ? 'Neither' : 'None of them'} goes on by itself.`, tone: 'attention', mark: 'dot' };
       }
@@ -397,7 +396,8 @@ export function chainLine(card: Pick<BoardCard, 'repo'>, chain: WaitChain): Card
       return { text: `Waits on ${ref(end.ref)}, which was ${closed}: it will never ship.`, tone: 'attention', mark: 'dot' };
     }
     case 'deep':
-      return { text: `Waits on ${ref(end.ref)}, ${MAX_WAIT_DEPTH} links on: followed no further.`, tone: 'muted', mark: null };
+      // The links walked are the bridge's limit, so the sentence follows it if it changes.
+      return { text: `Waits on ${ref(end.ref)}, ${chain.links.length} links on: followed no further.`, tone: 'muted', mark: null };
   }
 }
 

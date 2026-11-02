@@ -58,7 +58,6 @@ import {
   issueNumberFromBranch,
   parseRef,
   RESUME_WAITS_ON_GITHUB,
-  REVIEW_STALLED,
   SEND_BACK_STALLED,
   SEND_BACK_TO_PERSON,
   stageOfTask,
@@ -2523,7 +2522,7 @@ export class ClosedSubjects {
 /** The rows `attentionItems` reads, from the store. */
 export async function readAttention(now: Date, deps: AttentionDeps = {}): Promise<AttentionInput> {
   const since = new Date(now.getTime() - ATTENTION_WINDOW_DAYS * DAY_MS);
-  const [gates, recent, crew, everyRepo, issueList, requestList, stallEvents, engineUpdate, checks, accounts, seen, sendBackEvents] = await Promise.all([
+  const [gates, recent, crew, everyRepo, issueList, requestList, engineUpdate, checks, accounts, seen, sendBackEvents] = await Promise.all([
     threads.listOpenGates(),
     tasks.listTasksSince(since),
     bots.listBots(),
@@ -2531,7 +2530,6 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     repos.listRepos({ includeRemoved: true }),
     issues.listIssues(),
     requests.listRequests(100),
-    listEventsOfType(REVIEW_STALLED, since),
     // Read from settings alone. A record that cannot be read is not a failed
     // update, and must not take the rest of the list down with it.
     deps.engineUpdates ? deps.engineUpdates.attention().catch(() => null) : Promise.resolve(null),
@@ -2567,9 +2565,9 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
   const designMemoryEvents = await (async () => listEventsOfType(DESIGN_MEMORY_SUPERSEDED, since))().catch(() => []);
   // What a waiting card's chain is followed on, the board's read's too:
   // the plan changes held, the merge line's holds, the people asked or
-  // awaited, OpenADLC's stack holds and the stacks.
+  // awaited, the review stalls, OpenADLC's stack holds and the stacks.
   const facts = await readWaitFacts(issueList, gates, since);
-  const { personAsks, personAwaits, personReviews, roundsOpened, heldMerges } = facts;
+  const { personAsks, personAwaits, personReviews, roundsOpened, heldMerges, stallEvents } = facts;
   // What each plan-change card offers and says; one read each, and a table
   // not there yet holds nothing (#77).
   const planChanges = await (async () => leases.planChangesOfGates(gates.map((gate) => gate.id)))().catch(() => new Map<string, leases.PlanChangeRecord>());

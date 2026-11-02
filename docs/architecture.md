@@ -125,14 +125,19 @@ The root's Needs-you card lists the cards it unblocks (`AttentionItem.unblocks`)
 "4 items wait on this: #207, #217, #216, #214."
 
 Following always terminates. It is depth first, with the path it has walked:
-a link back onto that path is a loop. A memo kept for one walk enters each node
-at most once, and the walk stops at `MAX_WAIT_DEPTH` (12) links with the last
-node it reached. Of a node's ends it keeps person, then dead, then too deep,
-then clears by itself, and on a tie the node's own end first.
+a link back onto that path is a loop. A memo kept for one walk holds what each
+node was followed to and from how deep; a node is followed again only when it
+is reached nearer the card, so one first reached at the limit is not left
+`deep` when a shorter path reaches the person behind it. The walk stops at
+`MAX_WAIT_DEPTH` (12) links with the last node it reached. Of a node's ends it
+keeps person, then dead, then too deep, then clears by itself, and on a tie the
+node's own end first. A dependency labelled `openadlc:ignore` and still open
+waits on whoever builds it outside the crew: "Waits on #18, which is built
+outside the crew", ranked under every wait on you.
 
 The board's read and the Needs-you read follow it from the same reads
-(`readWaitFacts`) and the same functions, so the two differ only in when they
-read ([ADR 0023](adr/0023-a-wait-is-followed-to-its-root-in-both-reads.md)).
+(`readWaitFacts`, the review stalls included, over Needs you's seven days) and
+the same functions, so the two differ only in when they read ([ADR 0023](adr/0023-a-wait-is-followed-to-its-root-in-both-reads.md)).
 The board reads those facts only when a waiting card waits on another card or
 a question is open. Nothing is stored.
 

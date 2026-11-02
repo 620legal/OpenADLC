@@ -1285,4 +1285,25 @@ describe('a card whose wait is followed to its root', () => {
       behind: 1,
     });
   });
+
+  it('ends a chain at a stalled review only as long as Needs you has it', async () => {
+    const { listEventsOfType } = await import('@openadlc/db');
+    const { REVIEW_STALLED } = await import('./work.js');
+    const read = async (daysAgo: number) => {
+      // As the store reads them: only the events since the window asked for.
+      const stall = { at: new Date(NOW.getTime() - daysAgo * 24 * 60 * 60 * 1000).toISOString(), payload: { repo: 'api', pr: 300, issue: 231, rounds: 3 } };
+      vi.mocked(listEventsOfType).mockImplementation((async (type: string, since?: Date) =>
+        type === REVIEW_STALLED && (!since || Date.parse(stall.at) >= since.getTime()) ? [stall] : []) as never);
+      store.issues = [card(230, 'build', { labels: ['adlc:build', 'blocked'], body: '## Dependencies\n\n- #231\n' }), card(231, 'review', { prNumber: 300 })];
+      store.tasks = [];
+      try {
+        return (await readBoardWork({ issues: store.issues, bots: crew, repos, gates: [], requests: [], waiting: {} }, NOW)).byRef.get('api#230')?.waitChain;
+      } finally {
+        vi.mocked(listEventsOfType).mockImplementation(async () => []);
+      }
+    };
+    expect((await read(2))?.end).toMatchObject({ kind: 'person', action: 'review', attentionId: 'stall:api#300' });
+    // Ten days on, the board still reads it for #231's own line, but Needs you's seven days do not.
+    expect((await read(10))?.end).not.toMatchObject({ attentionId: 'stall:api#300' });
+  });
 });

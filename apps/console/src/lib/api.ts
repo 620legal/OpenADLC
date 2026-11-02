@@ -119,7 +119,17 @@ export type PersonAction = 'answer' | 'merge' | 'approve' | 'review' | 'resume' 
  * clear, or as far as it was followed.
  */
 export type WaitEnd =
-  | { kind: 'person'; ref: string; action: PersonAction; number: number; attentionId: string | null; url: string | null; words?: string }
+  | {
+      kind: 'person';
+      ref: string;
+      action: PersonAction;
+      number: number;
+      attentionId: string | null;
+      url: string | null;
+      words?: string;
+      /** Waits on a person outside the crew (an `openadlc:ignore` dependency still open), not on you. */
+      outside?: true;
+    }
   | { kind: 'self'; ref: string; words: string }
   | { kind: 'dead'; ref: string; why: 'loop' | 'abandoned' | 'closed' | 'outside'; loop?: string[] }
   | { kind: 'deep'; ref: string };

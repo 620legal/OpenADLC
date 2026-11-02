@@ -2533,8 +2533,8 @@ describe('GET /v1/attention', () => {
     // And who was asked to approve a pull request again, or is waited on for
     // a first approval; the reviews people submitted, and the rounds opened,
     // are read only when one of those was read.
+    // The stopped review loops are read with them, as the board's chains read them.
     expect(store.eventTypes).toEqual([
-      'review.stalled',
       'send_back.stalled',
       'send_back.to_person',
       'intake.stalled',
@@ -2542,6 +2542,7 @@ describe('GET /v1/attention', () => {
       'design_memory.superseded',
       'review.person_asked_again',
       'review.person_awaited',
+      'review.stalled',
       // The starts a full seat turned away, for the work stuck behind none.
       'stage.waiting_on_seat',
     ]);
@@ -3423,14 +3424,18 @@ describe('reading which stalled pull requests have closed', () => {
     const { listEventsOfType } = await import('@openadlc/db');
     store.gates = [];
     store.tasks = [];
-    vi.mocked(listEventsOfType).mockImplementationOnce(async () => [
-      // #11's card is in Review: its stall goes when the card leaves.
-      { id: 1, at: '2026-09-24T11:20:00.000Z', payload: { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 3 } },
-      { id: 2, at: '2026-09-24T11:30:00.000Z', payload: { repo: 'openadlc-testbed', pr: 40, issue: null, rounds: 3 } },
-    ] as never);
+    const otherwise = vi.mocked(listEventsOfType).getMockImplementation()!;
+    vi.mocked(listEventsOfType).mockImplementation((async (type: string, since: Date) =>
+      type === 'review.stalled'
+        ? [
+            // #11's card is in Review: its stall goes when the card leaves.
+            { id: 1, at: '2026-09-24T11:20:00.000Z', payload: { repo: 'openadlc-testbed', pr: 29, issue: 11, rounds: 3 } },
+            { id: 2, at: '2026-09-24T11:30:00.000Z', payload: { repo: 'openadlc-testbed', pr: 40, issue: null, rounds: 3 } },
+          ]
+        : otherwise(type, since)) as never);
     const closed = vi.fn(async () => new Set(['openadlc-testbed#40']));
 
-    const input = await readAttention(NOW, { closed });
+    const input = await readAttention(NOW, { closed }).finally(() => vi.mocked(listEventsOfType).mockImplementation(otherwise));
 
     expect(closed).toHaveBeenCalledWith(['openadlc-testbed#40']);
     expect([...(input.closed ?? [])]).toEqual(['openadlc-testbed#40']);
