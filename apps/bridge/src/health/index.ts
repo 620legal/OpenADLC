@@ -58,6 +58,8 @@ import { humanReviewLinesInspection, namedLoginsInspection, repoConfigCheck } fr
 import { repoOwnerCheck } from './checks/repo-owner.js';
 import { rulesCheck, skippedByLastApply } from './checks/repository.js';
 import { webhookCheck } from './checks/webhook.js';
+import { notificationsCheck } from './checks/notifications.js';
+import { Notifier } from '../notify.js';
 import { deliveryCheck, productionEnvironmentOf } from './checks/delivery.js';
 import { shipsByReleaseCheck } from './checks/ships-by-release.js';
 import { testingEgressCheck } from './checks/testing-egress.js';
@@ -83,6 +85,8 @@ export interface HealthWiring {
   dispatch?: DispatchMode;
   /** Each repository's delivery rules, as the pipeline reads them; absent, read here from GitHub. */
   delivery?: Pick<DeliveryKnowledge, 'get'>;
+  /** Where notifications go and what was last sent there; absent, read the same way from the store. */
+  notifier?: Pick<Notifier, 'transport' | 'lastDelivery'>;
 }
 
 /** The public half of each stored key, by the private half's digest: ssh-keygen is not run every quarter hour. */
@@ -317,6 +321,7 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
     }),
     repoConfig,
     repoOwnerCheck({ repos: () => repos.listRepos() }),
+    notificationsCheck(wiring.notifier ?? new Notifier(config)),
     cloudNamesCheck(cloudSecretStore()),
     deliveryCheck({
       repos: async () =>

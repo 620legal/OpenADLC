@@ -3461,3 +3461,140 @@ describe('a console action, answered before GitHub and hostd', () => {
     });
   });
 });
+
+describe('Settings → Notifications', () => {
+  const SLACK = 'https://hooks.slack.com/services/T000/B000/XyZsecretTOKENa1b2';
+  let notifyStore: ReturnType<typeof import('./notify.js').memoryNotifyStore>;
+  let notifyUrl: string;
+  let stopNotifications: () => void;
+  /** What the stub endpoint answers; a test sets 404 for one that refuses. */
+  let endpointStatus: number;
+  let endpoint: Server;
+  const runSoon = vi.fn();
+
+  beforeEach(async () => {
+    const { memoryNotifyStore, Notifier } = await import('./notify.js');
+    const { registerConsoleApi } = await import('./api.js');
+    const { Router } = await import('./router.js');
+    endpointStatus = 204;
+    endpoint = createServer((request, response) => {
+      request.resume();
+      request.on('end', () => {
+        response.writeHead(endpointStatus);
+        response.end();
+      });
+    });
+    await new Promise<void>((resolve) => endpoint.listen(0, '127.0.0.1', resolve));
+    notifyStore = memoryNotifyStore();
+    runSoon.mockClear();
+    vi.mocked(audit).mockClear();
+    const notifier = new Notifier({ notifyWebhook: '', consoleUrl: 'http://127.0.0.1:47300' } as never, notifyStore);
+    const router = new Router();
+    stopNotifications = registerConsoleApi(router, {
+      ...apiDeps,
+      config: { consoleUrl: 'http://127.0.0.1:47300' } as never,
+      notifier,
+      health: { runSoon } as never,
+    });
+    await new Promise<void>((resolve) => bridge.close(() => resolve()));
+    bridge = createServer((request, response) => void router.handle(request, response));
+    await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
+    notifyUrl = `http://127.0.0.1:${(bridge.address() as AddressInfo).port}/v1/settings/notifications`;
+  });
+
+  afterEach(async () => {
+    stopNotifications();
+    await new Promise<void>((resolve) => endpoint.close(() => resolve()));
+  });
+
+  const put = (body: unknown) => fetch(notifyUrl, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const endpointUrl = () => `http://127.0.0.1:${(endpoint.address() as AddressInfo).port}/hook/secret-path-9z8y`;
+
+  it('keeps a Slack URL only in the secret store, never in a setting, the audit or an event', async () => {
+    const response = await put({ kind: 'slack', target: SLACK });
+    expect(response.status).toBe(200);
+    expect(notifyStore.secret).toBe(SLACK);
+    expect(JSON.parse(notifyStore.settings.notifyTransport!)).toMatchObject({ kind: 'slack' });
+
+    const everything = JSON.stringify([notifyStore.settings, notifyStore.events, vi.mocked(audit).mock.calls]);
+    for (const piece of ['XyZsecret', 'T000/B000', 'services/']) expect(everything).not.toContain(piece);
+    expect(vi.mocked(audit)).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'settings.notifications_changed', payload: expect.objectContaining({ kind: 'slack', targetChanged: true }) }),
+    );
+    expect(runSoon).toHaveBeenCalledWith(['notifications']);
+  });
+
+  it('shows the target back masked: its host and last four characters', async () => {
+    await put({ kind: 'slack', target: SLACK });
+    const view = (await (await fetch(notifyUrl)).json()) as { source: string; target: string; switches: Record<string, boolean> };
+    expect(view.source).toBe('settings');
+    expect(view.target).toBe('https://hooks.slack.com/…a1b2');
+    expect(view.target).toMatch(/^(https?:\/\/[^/]+\/)?…[^/]{4}$/);
+    expect(Object.values(view.switches).every(Boolean)).toBe(true);
+  });
+
+  it('keeps the saved target when the kind stays, and refuses to when it changes', async () => {
+    await put({ kind: 'slack', target: SLACK });
+    expect((await put({ kind: 'slack', switches: { cap_warning: false } })).status).toBe(200);
+    expect(notifyStore.secret).toBe(SLACK);
+    expect(JSON.parse(notifyStore.settings.notifyKinds!)).toEqual({ cap_warning: false });
+
+    const changed = await put({ kind: 'ntfy' });
+    expect(changed.status).toBe(400);
+    expect(((await changed.json()) as { error: string }).error).toBe('Enter the ntfy topic: the one saved is kept only when the kind stays slack');
+  });
+
+  it('does not reopen the proof when only a switch changes', async () => {
+    await put({ kind: 'slack', target: SLACK });
+    const setAt = JSON.parse(notifyStore.settings.notifyTransport!).setAt;
+    await put({ switches: { gate_opened: false } });
+    expect(JSON.parse(notifyStore.settings.notifyTransport!).setAt).toBe(setAt);
+  });
+
+  it('refuses a Slack URL that is not one, and a topic with a slash', async () => {
+    expect((await put({ kind: 'slack', target: 'https://example.com/hook' })).status).toBe(400);
+    expect((await put({ kind: 'ntfy', target: 'ntfy.sh/topic' })).status).toBe(400);
+    expect(notifyStore.secret).toBeNull();
+  });
+
+  it('clears the transport and its target', async () => {
+    await put({ kind: 'slack', target: SLACK });
+    expect((await put({ kind: null })).status).toBe(200);
+    expect(notifyStore.secret).toBeNull();
+    expect(notifyStore.settings.notifyTransport).toBeUndefined();
+  });
+
+  it('sends a test through the saved transport and says the endpoint took it', async () => {
+    await put({ kind: 'webhook', target: endpointUrl() });
+    const response = await fetch(`${notifyUrl}/test`, { method: 'POST' });
+    expect(await response.json()).toEqual({ ok: true, status: 204, error: null });
+    expect(notifyStore.events.filter((event) => event.type === 'notify.delivery')).toHaveLength(1);
+    expect(runSoon).toHaveBeenCalledTimes(2);
+  });
+
+  it('says the status when the endpoint refuses the test', async () => {
+    await put({ kind: 'webhook', target: endpointUrl() });
+    endpointStatus = 404;
+    const answer = (await (await fetch(`${notifyUrl}/test`, { method: 'POST' })).json()) as { ok: boolean; status: number };
+    expect(answer).toMatchObject({ ok: false, status: 404 });
+    const view = (await (await fetch(notifyUrl)).json()) as { last: { ok: boolean; status: number } };
+    expect(view.last).toMatchObject({ ok: false, status: 404 });
+    expect(JSON.stringify(notifyStore.events)).not.toContain('secret-path-9z8y');
+  });
+
+  it('has nothing to test before a transport is chosen', async () => {
+    const response = await fetch(`${notifyUrl}/test`, { method: 'POST' });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toBe('Nothing to test: choose where to notify you first');
+  });
+
+  it('will not write the transport through PATCH /v1/install, apart from its target', async () => {
+    const response = await fetch(notifyUrl.replace('/settings/notifications', '/install'), {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ notifyTransport: JSON.stringify({ kind: 'slack', setAt: 'x', setBy: 'x' }) }),
+    });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain('PUT /v1/settings/notifications');
+  });
+});

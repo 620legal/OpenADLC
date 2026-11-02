@@ -567,7 +567,7 @@ async function main(): Promise<void> {
   // proving: a failing check is a card on the board until it passes, and a
   // lasting blocking one is sent through the notifier. See `health/`.
   const health = new HealthRegistry({
-    checks: defaultChecks({ config, actors, hostd, webhookSetup, repoSetup, appReach, dispatch: dispatchMode, delivery }),
+    checks: defaultChecks({ config, actors, hostd, webhookSetup, repoSetup, appReach, dispatch: dispatchMode, delivery, notifier }),
     notify: (notice) => notifier.send({ event: notice.event, to: null, text: notice.text, link: notice.link }),
     settingUp,
     consoleUrl: config.consoleUrl,
@@ -703,8 +703,10 @@ async function main(): Promise<void> {
     // what a card waiting with nothing going on it says.
     nextRun: (job: string) => jobs.nextRun(job),
     dispatching: anythingDispatches(dispatchMode),
+    notifier,
   };
-  registerConsoleApi(router, deps);
+  // Stops the look at Needs you for a waiting merge or a stopped review (`notify-waiting.ts`).
+  const stopConsoleApi = registerConsoleApi(router, deps);
   // One seat paused from Crew takes no new work; resuming it starts what that
   // held: the requests intake left in line, the reviews and lead the gates wait
   // on, a dispatch for a builder, and the work only an event starts, which was
@@ -964,6 +966,7 @@ async function main(): Promise<void> {
     stageRuns.stop();
     names.stop();
     health.stop();
+    stopConsoleApi();
     server.close();
     // Before the pool, because a tunnel left running keeps a public hostname
     // pointing at a port that no longer answers.

@@ -5,6 +5,7 @@ import {
   engineKeyRef,
   internalSecretRef,
   modelAccountRef,
+  notifyTargetRef,
   refreshTokenRef,
   registryTokenRef,
   signingKeyRef,
@@ -359,7 +360,11 @@ export function classifySecret(
   botNames: readonly string[],
   holders: readonly SignInHolder[] = [],
 ): SecretKind {
-  if (ref === appPrivateKeyRef() || ref === webhookSecretRef() || ref === registryTokenRef() || ref === ATTRIBUTION_KEY_REF) return { group: 'install' };
+  // The notification target goes with the install: without it a restored
+  // `notifyTransport` names a transport with nothing to send to.
+  if (ref === appPrivateKeyRef() || ref === webhookSecretRef() || ref === registryTokenRef() || ref === notifyTargetRef() || ref === ATTRIBUTION_KEY_REF) {
+    return { group: 'install' };
+  }
   if (ref === internalSecretRef()) return { group: 'never', reason: 'each install makes its own' };
   // Opens the backup an undo of the last restore puts back: this install's own, for a day.
   if (ref === 'restore-undo-key') return { group: 'never', reason: 'it opens this install’s own undo of its last restore' };
