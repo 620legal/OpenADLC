@@ -496,6 +496,22 @@ describe('the board on a phone', () => {
   });
 });
 
+describe('the switch between By stage and By state, drawn on the server', () => {
+  it('draws By stage whatever this browser chose, with the switch on it, and no Live dot until the browser counts it', () => {
+    // A server with storage that says By state: the first drawing still is By stage, as the browser's is.
+    vi.stubGlobal('localStorage', { getItem: () => 'state', setItem: () => undefined });
+    try {
+      const html = render();
+      expect(html).toContain('aria-label="Board"');
+      expect(html).not.toContain('aria-label="Board by state"');
+      expect(html).toMatch(/aria-label="Group the board"[^]*aria-pressed="true"[^>]*>By stage<\/button>[^]*aria-pressed="false"[^>]*>By state<\/button>/);
+      expect(html).not.toContain('data-live-dot');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('the board’s place on the page', () => {
   it('puts nothing in a fixed position while no thread is open', () => {
     // A fixed element sits over whatever scrolls under it. The thread panel is

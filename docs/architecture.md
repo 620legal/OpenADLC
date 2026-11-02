@@ -69,6 +69,35 @@ avatar, too faint for a dot; the avatar is beside the line.) A card waiting on
 a person keeps a still dot and says "Waiting for your answer", a queued task
 says "Queued", and nothing moves on a card nothing runs on.
 
+The board has a switch, By stage and By state, kept in the browser
+(`openadlc.board.view`; By stage on a first visit, for a value it does not know,
+or where storage throws, and always on the server's drawing). By state groups
+the cards By stage draws, after the repository and text filters, into four
+columns, worked out in the console from the board and Needs-you reads it
+already has, with nothing stored (`lib/board-state.ts`,
+[ADR 0027](adr/0027-the-board-by-state-is-grouped-in-the-console.md)). A card
+goes in the first that fits:
+
+1. **Needs you**: a waiting work item in Needs you (not a plan change approved
+   and waiting for other work) names its ref, its item key or its pull request,
+   or a gate is open on it that is not such an approval.
+2. **Working**: a task on it runs.
+3. **Waiting**: anything else not in Done, saying its own line, which is its
+   wait followed to its root when it has one.
+4. **Done today**: in Done, shipped (or closed) since midnight in the browser's
+   time zone.
+
+A Done card from before today is left out; the week is in By stage. A Working
+card's line is always the running task's, and its top row says the card's whole
+spend against its repository's per-task cap, "$4.10 of $15": `GET /v1/board`
+sends `repositories[].taskCapUsd`, the cap gates stop a task at
+(`effectiveTaskCap`), and without it, or at zero, the spend alone. Cards in By
+state are not dragged; Move to… still names a stage. A task that starts moves
+its card to Working on the next read, as every line does. Beside the switch a
+dot says when the board was last read, by the browser's clock, from a whole
+read or an activity answer: "Live · 4s ago", and "Not updated" once more than a
+refresh and five seconds (20 s) have passed.
+
 Outside the console, `openadlc watch` reads a stream of board events
 (`GET /v1/board/events`, `board-events.ts`): a task started, a question asked,
 a pull request held, a merge. Nothing emits them. One poller for the install,

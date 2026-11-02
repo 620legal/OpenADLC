@@ -1346,12 +1346,25 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     // before the week, which the board does not read: a quiet repository's
     // board said "File your first request" over its history.
     const doneBefore = columns.every((column) => column.cards.length === 0) ? await issues.anyDoneBefore(since, repoName) : undefined;
+    // What one task may spend in each repository, the cap gates stop it at
+    // (`effectiveTaskCap`): a Working card says its spend against it. The
+    // global cap alone would have said "of $15" where the repository's own
+    // stops its tasks at $5. One that cannot be read is left off, and the
+    // card says its spend alone, rather than the board failing for it.
+    const taskCaps = await Promise.all(
+      repoList.map((repo) => spendingLimits.effectiveTaskCap(repo.id, config?.costs?.perTaskCapUsd ?? 0).catch(() => null)),
+    );
 
     return {
       repo: repoName ?? 'all',
       repos: repoList.map((repo) => repo.name),
       // Each with the colour the board tells it apart by, when it shows them all.
-      repositories: repoList.map((repo) => ({ name: repo.name, fullName: repo.fullName, color: repo.color })),
+      repositories: repoList.map((repo, index) => ({
+        name: repo.name,
+        fullName: repo.fullName,
+        color: repo.color,
+        ...(typeof taskCaps[index] === 'number' ? { taskCapUsd: taskCaps[index] } : {}),
+      })),
       columns,
       mergeLine: landing.map((entry) => ({
         repo: entry.repoName,

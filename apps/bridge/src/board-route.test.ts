@@ -214,7 +214,7 @@ beforeEach(async () => {
   const { Router } = await import('./router.js');
   const router = new Router();
   registerConsoleApi(router, {
-    config: { gitHubClientId: '', webhookSecret: '', humans: [], review: { maxRounds: 3 } } as never,
+    config: { gitHubClientId: '', webhookSecret: '', humans: [], review: { maxRounds: 3 }, costs: { perTaskCapUsd: 15 } } as never,
     hostd: {} as never,
     actors: {} as never,
     invitations: {} as never,
@@ -422,9 +422,53 @@ describe('GET /v1/board', () => {
     const board = (await (await fetch(`${bridgeUrl}/v1/board`)).json()) as { repos: string[]; repositories: unknown[] };
     expect(board.repos).toEqual(['openadlc-testbed', 'website']);
     expect(board.repositories).toEqual([
-      { name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', color: 'teal' },
-      { name: 'website', fullName: 'janedoe/website', color: 'amber' },
+      { name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', color: 'teal', taskCapUsd: 15 },
+      { name: 'website', fullName: 'janedoe/website', color: 'amber', taskCapUsd: 15 },
     ]);
+  });
+
+  describe('each repository’s per-task cap, which a Working card says its spend against', () => {
+    const caps = async () => {
+      const board = (await (await fetch(`${bridgeUrl}/v1/board`)).json()) as { repositories: { name: string; taskCapUsd?: number }[] };
+      return Object.fromEntries(board.repositories.map((repository) => [repository.name, repository.taskCapUsd]));
+    };
+    /** The store's rule: the lower of the global cap and a repository's own, where it has one. */
+    const withRepoCaps = async (own: Record<string, number>, global = 15) => {
+      const { spendingLimits } = await import('@openadlc/db');
+      vi.mocked(spendingLimits.effectiveTaskCap).mockImplementation(async (repoId) =>
+        repoId && own[repoId] !== undefined ? Math.min(global, own[repoId]!) : global,
+      );
+    };
+    afterEach(async () => {
+      const { spendingLimits } = await import('@openadlc/db');
+      vi.mocked(spendingLimits.effectiveTaskCap).mockImplementation(async (_repoId, fallback) => fallback);
+    });
+
+    it('is the global task cap where a repository has none of its own, with the file’s cap as the fallback', async () => {
+      const { spendingLimits } = await import('@openadlc/db');
+      expect(await caps()).toEqual({ 'openadlc-testbed': 15, website: 15 });
+      expect(vi.mocked(spendingLimits.effectiveTaskCap)).toHaveBeenCalledWith('repo-1', 15);
+      expect(vi.mocked(spendingLimits.effectiveTaskCap)).toHaveBeenCalledWith('repo-2', 15);
+    });
+
+    it('is a repository’s own cap where that is lower, which is where its tasks stop', async () => {
+      await withRepoCaps({ 'repo-2': 5 });
+      expect(await caps()).toEqual({ 'openadlc-testbed': 15, website: 5 });
+    });
+
+    it('is the global cap where a repository’s own is higher', async () => {
+      await withRepoCaps({ 'repo-1': 40 });
+      expect(await caps()).toEqual({ 'openadlc-testbed': 15, website: 15 });
+    });
+
+    it('is left off a repository whose cap cannot be read, and the board is still sent', async () => {
+      const { spendingLimits } = await import('@openadlc/db');
+      vi.mocked(spendingLimits.effectiveTaskCap).mockImplementation(async (repoId) => {
+        if (repoId === 'repo-1') throw new Error('relation "spending_limits" does not exist');
+        return 15;
+      });
+      expect(await caps()).toEqual({ 'openadlc-testbed': undefined, website: 15 });
+    });
   });
 
   it('leaves off the cards of a repository removed from OpenADLC, which are history now', async () => {
