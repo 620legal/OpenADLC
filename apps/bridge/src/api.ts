@@ -18,6 +18,7 @@ import {
   credentials,
   deployRuns,
   externalSigningKeys,
+  hosts,
   issues,
   leases,
   listAudit,
@@ -139,6 +140,8 @@ import { liveTaskPostgresDeps, registerTaskPostgresRoutes } from './task-postgre
 import { ignoredSubjects, issueForSubject, parseRef, taskSummary } from './work.js';
 import { endedWithoutPullRequest, readBranch, workLanded } from './build-left.js';
 import { SpendingLimitRejected, applySpendingLimits, spendingView } from './spending-limits.js';
+import { hostsView } from './hosts-view.js';
+import { HOST_STOPPED_REPORTING } from './reconciler.js';
 import { DEFAULT_REMOVAL, RepoRemoval, appOnRepository, appStanding, configuredLabelNames } from './repo-removal.js';
 import type { SendBack } from './send-back.js';
 import type { StageRunner } from './stage-runner.js';
@@ -1979,6 +1982,17 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): void {
     if (outcome === 'replaced') throw new HttpFailure(409, 'A newer gap was added to this report since you read it. Read it again and dismiss that.');
     await audit({ actor: identity, action: 'bridge.gap_dismissed', target: 'install', payload: { backAt, by: identity } });
     return { dismissed: true };
+  });
+
+  // Settings → Hosts: each host judged as reconcile judges it, its load read
+  // from `tasks`. An admin's, as Settings is (roles.ts).
+  router.get('/v1/hosts', async () => {
+    const [registered, loads, unclaimed] = await Promise.all([
+      hosts.listHosts(),
+      hosts.hostLoads(HOST_STOPPED_REPORTING),
+      hosts.unclaimedTasks(),
+    ]);
+    return hostsView(registered, loads, unclaimed, new Date());
   });
 
   // Any user may read the limits; saving them is an admin's (roles.ts).

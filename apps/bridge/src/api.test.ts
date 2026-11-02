@@ -89,6 +89,11 @@ vi.mock('@openadlc/db', () => ({
     setMaxTasks: vi.fn(),
   },
   costs: {},
+  hosts: {
+    listHosts: vi.fn(async () => []),
+    hostLoads: vi.fn(async () => new Map()),
+    unclaimedTasks: vi.fn(async () => 0),
+  },
   ciUsage: { listSince: vi.fn(async () => []) },
   credentials: {},
   issues: { listIssues: vi.fn(async () => []), getIssue: vi.fn(async () => null) },
@@ -192,7 +197,7 @@ vi.mock('@openadlc/db', () => ({
   },
 }));
 
-import { acknowledgements, audit, bots, bridgeGaps, costs, credentials, issues, leases, modelAccounts, repos, requests, sessions, settings, tasks, threads, withAdvisoryLock } from '@openadlc/db';
+import { acknowledgements, audit, bots, bridgeGaps, costs, credentials, hosts, issues,leases, modelAccounts, repos, requests, sessions, settings, tasks, threads, withAdvisoryLock } from '@openadlc/db';
 
 let hostd: Server;
 let bridge: Server;
@@ -328,6 +333,63 @@ describe('the console’s account routes', () => {
     expect(asked).toEqual([
       { method: 'GET', url: `/model-accounts/${GROK_SEAT}/models`, secret: 'install-secret-for-the-test' },
     ]);
+  });
+});
+
+describe('the hosts, for Settings → Hosts', () => {
+  afterEach(() => {
+    vi.mocked(hosts.listHosts).mockReset().mockResolvedValue([]);
+    vi.mocked(hosts.hostLoads).mockReset().mockResolvedValue(new Map());
+    vi.mocked(hosts.unclaimedTasks).mockReset().mockResolvedValue(0);
+  });
+
+  it('are judged as reconcile judges them, with the tasks a silent one’s silence failed', async () => {
+    const now = Date.now();
+    vi.mocked(hosts.listHosts).mockResolvedValue([
+      { id: 'host-1', name: 'mac', zone: null, driver: 'docker', capacityBots: 8, capacityTasks: 4, status: 'up', lastSeenAt: new Date(now - 8_000).toISOString(), cpus: 8, memoryBytes: 17179869184 },
+      { id: 'host-2', name: 'old', zone: null, driver: 'local', capacityBots: 8, capacityTasks: 4, status: 'up', lastSeenAt: new Date(now - 3_600_000).toISOString(), cpus: null, memoryBytes: null },
+    ]);
+    vi.mocked(hosts.hostLoads).mockResolvedValue(
+      new Map([
+        ['host-1', { used: 2, failedSilent: 0 }],
+        ['host-2', { used: 0, failedSilent: 3 }],
+      ]),
+    );
+    vi.mocked(hosts.unclaimedTasks).mockResolvedValue(1);
+
+    const response = await fetch(`${bridgeUrl}/v1/hosts`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { now: string; unclaimed: number; silentAfterMs: number; hosts: unknown[] };
+    expect(body).toMatchObject({
+      unclaimed: 1,
+      silentAfterMs: 300_000,
+      hosts: [
+        { name: 'mac', state: 'live', used: 2, capacityTasks: 4, cpus: 8, memoryBytes: 17179869184, failedSilent: 0 },
+        { name: 'old', state: 'silent', used: 0, cpus: null, memoryBytes: null, failedSilent: 3 },
+      ],
+    });
+    expect(Number.isNaN(Date.parse(body.now))).toBe(false);
+    expect(vi.mocked(hosts.hostLoads)).toHaveBeenCalledWith('the host stopped reporting');
+  });
+
+  it('are an admin’s to read', async () => {
+    const { registerConsoleApi } = await import('./api.js');
+    const { Router } = await import('./router.js');
+    const { authorize } = await import('./roles.js');
+    const people: Record<string, 'admin' | 'user'> = { 'admin@exampleco.test': 'admin', 'user@exampleco.test': 'user' };
+    const lookup = { roleOf: async (identity: string) => people[identity] ?? null, admins: async () => ['admin@exampleco.test'], refused: async () => undefined };
+    const router = new Router(undefined, undefined, undefined, (method, path, identity) => authorize(lookup, method, path, identity));
+    registerConsoleApi(router, apiDeps);
+    const server = createServer((request, response) => void router.handle(request, response));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/hosts`;
+    try {
+      expect((await fetch(url, { headers: { 'x-openadlc-identity': 'user@exampleco.test' } })).status).toBe(403);
+      expect(vi.mocked(hosts.listHosts)).not.toHaveBeenCalled();
+      expect((await fetch(url, { headers: { 'x-openadlc-identity': 'admin@exampleco.test' } })).status).toBe(200);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
 

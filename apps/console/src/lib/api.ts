@@ -1229,6 +1229,34 @@ export interface EgressHostsView {
   reason: string | null;
 }
 
+/** A host as Settings → Hosts shows it (`GET /v1/hosts`, `hostsView` in the bridge). */
+export interface HostRow {
+  id: string;
+  name: string;
+  driver: 'docker' | 'local';
+  capacityTasks: number;
+  /** Tasks holding a computer on it. */
+  used: number;
+  /** Null until hostd reports it. */
+  cpus: number | null;
+  memoryBytes: number | null;
+  lastSeenAt: string | null;
+  /** Silent once reconcile would fail its tasks; never seen before its first beat. */
+  state: 'live' | 'silent' | 'never_seen';
+  /** Tasks failed with "the host stopped reporting" since its last beat; 0 unless silent. */
+  failedSilent: number;
+}
+
+export interface HostsView {
+  /** The bridge's clock, which "seen 8 s ago" is counted on. */
+  now: string;
+  /** Queued tasks no host has claimed yet. */
+  unclaimed: number;
+  silentAfterMs: number;
+  /** Live first, then silent, then never seen. */
+  hosts: HostRow[];
+}
+
 export const api = {
   board: (repo: string) => get<Board>(`/v1/board?repo=${encodeURIComponent(repo)}`),
   crew: () => get<{ bots: CrewMember[] }>('/v1/bots'),
@@ -1240,6 +1268,7 @@ export const api = {
   insights: (options: { repo?: string | null; days: 7 | 30 }) =>
     get<InsightsView>(`/v1/insights?days=${options.days}${options.repo ? `&repo=${encodeURIComponent(options.repo)}` : ''}`),
   spendingLimits: () => get<SpendingLimitsView>('/v1/spending/limits'),
+  hosts: () => get<HostsView>('/v1/hosts'),
   attention: () => get<{ items: AttentionItem[] }>('/v1/attention'),
   modelAccounts: () => get<{ accounts: ModelAccountRef[] }>('/v1/model-accounts'),
   githubAccounts: () => get<GitHubAccountsView>('/v1/github/identities'),
