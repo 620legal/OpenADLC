@@ -229,7 +229,7 @@ export class Stacking {
     if (!on) return null;
     const repo = await repos.getRepoByName(repoName).catch(() => null);
     const dependency = repo ? await issues.getIssue(repo.id, on).catch(() => null) : null;
-    return dependency && hasShipped(dependency) ? null : on;
+    return stackWaitsOn({ onIssue: on }, dependency);
   }
 
   /**
@@ -706,6 +706,32 @@ export class Stacking {
     }
     return carried;
   }
+}
+
+/**
+ * The issue a stacked one still waits on, or null: the rule `waitingOn` and
+ * the wait chain (`wait-chain.ts`) both judge a stack by. Null with no stack,
+ * or once what it was built on has shipped (`hasShipped`); a dependency that
+ * could not be read, or is gone, is still waited on, since the merge line
+ * keeps the pull request out for it.
+ */
+export function stackWaitsOn(stack: { onIssue: number } | null, dependency: Parameters<typeof hasShipped>[0] | null): number | null {
+  if (!stack) return null;
+  return dependency && hasShipped(dependency) ? null : stack.onIssue;
+}
+
+/** A stack as the wait chain reads it: the issue built on another, and that one's pull request when it was. */
+export interface StackLink {
+  repoId: string;
+  issue: number;
+  onIssue: number;
+  onPr: number;
+}
+
+/** Every stack of these repositories, one read each; the caller judges which still wait with `stackWaitsOn`. */
+export async function stackLinks(repoIds: readonly string[]): Promise<StackLink[]> {
+  const read = await Promise.all([...new Set(repoIds)].map((repoId) => stacks.listStacks(repoId)));
+  return read.flat().map((stack) => ({ repoId: stack.repoId, issue: stack.issue, onIssue: stack.onIssue, onPr: stack.onPr }));
 }
 
 /** A stacked change OpenADLC holds, as Needs you reads it (`heldStacks`). */

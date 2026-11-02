@@ -61,6 +61,8 @@ export interface DependencyNow {
   /** `#N`, or `owner/name#N` for an issue in another repository. Absent from an older bridge, which named `#N` only. */
   ref?: string;
   number: number;
+  /** `repo#n` in a repository the install manages, null in one it does not. Absent from an older bridge. */
+  target?: string | null;
   stage: string | null;
   abandoned: boolean;
   /** Labelled `openadlc:ignore`: open or closed on GitHub, and why it closed. Absent from an older bridge. */
@@ -99,6 +101,34 @@ export interface CardWaiting {
   since: string;
   /** Waited past the bridge's limit with its seat free and nothing started. */
   stuck: boolean;
+}
+
+/** How one card waits on the next, in a wait followed to its root (`followWaits` in the bridge's wait-chain.ts). */
+export interface WaitLink {
+  from: string;
+  to: string;
+  kind: 'dependency' | 'concurrency' | 'seat' | 'turn' | 'lease' | 'plan_change' | 'stack';
+}
+
+/** What a person does at a wait's root; `other` is said in the end's `words`. */
+export type PersonAction = 'answer' | 'merge' | 'approve' | 'review' | 'resume' | 'triage' | 'other';
+
+/**
+ * Where a wait followed to its root ended: a person's action, something that
+ * clears by itself (`words`: "which is running now"), something nobody can
+ * clear, or as far as it was followed.
+ */
+export type WaitEnd =
+  | { kind: 'person'; ref: string; action: PersonAction; number: number; attentionId: string | null; url: string | null; words?: string }
+  | { kind: 'self'; ref: string; words: string }
+  | { kind: 'dead'; ref: string; why: 'loop' | 'abandoned' | 'closed' | 'outside'; loop?: string[] }
+  | { kind: 'deep'; ref: string };
+
+export interface WaitChain {
+  links: WaitLink[];
+  end: WaitEnd;
+  /** How many cards wait behind the same root, this one included. */
+  behind: number;
 }
 
 export interface BoardCard {
@@ -148,6 +178,12 @@ export interface BoardCard {
    * the card says its stage's line.
    */
   waiting?: CardWaiting | null;
+  /**
+   * Its wait followed to its root. Null when it waits on nothing behind it,
+   * has work going, or its root is its own; absent from an older bridge, and
+   * from a read that followed none.
+   */
+  waitChain?: WaitChain | null;
   /**
    * A console request intake is still asking about or writing up: not an issue
    * yet, so it has no number and nowhere to be moved. Its ref is `request:<id8>`.
@@ -518,6 +554,8 @@ export interface AttentionItem {
    * before its own. Absent for a repository that declares none, and from an older bridge.
    */
   pull?: { repo: string; number: number };
+  /** The cards whose wait ends here, in board order. Absent when none does, and from an older bridge. */
+  unblocks?: { count: number; items: { ref: string; repo: string; number: number; title: string }[] };
 }
 
 /** A pull request's declared command, as the bridge's `pull-commands.ts` says it for the person asking. */

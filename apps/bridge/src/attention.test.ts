@@ -3682,3 +3682,49 @@ describe('work stuck with its seat free', () => {
     expect(await items({ issues: [design, build], waiting: { nextSweepAt: nextSweep, hosts: { running: 4, capacity: 4 } } })).toEqual([]);
   });
 });
+
+/**
+ * A root a person acts on says what waits behind it. On 2026-10-30 four cards
+ * waited behind #206's pull request, and its card said nothing of them.
+ */
+describe('what an item unblocks', () => {
+  const repo = { ...REPOS[0]!, concurrency: 1 };
+  const card = (number: number, stage: string, extra: Record<string, unknown> = {}) => ({ ...issue(number, `Issue ${number}`, stage), labels: [`adlc:${stage}`], ...extra });
+  const input = () => ({
+    now: NOW,
+    gates: [{ id: 'gate-217', taskId: 'task-217', question: 'Add the paths?', options: ['Approve', 'Refuse'], githubCommentUrl: null, createdAt: minutesAgo(45) }],
+    tasks: [task({ id: 'task-217', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#217', state: 'paused' })],
+    bots: BOTS,
+    repos: [repo],
+    issues: [
+      card(216, 'build', { labels: ['adlc:build', 'start:now'] }),
+      card(214, 'build', { labels: ['adlc:build', 'start:now'] }),
+      card(217, 'build', { labels: ['adlc:build', 'start:now'] }),
+      card(207, 'review', { prNumber: 212 }),
+      card(206, 'review', { prNumber: 213 }),
+    ],
+    requests: [],
+    stallEvents: [],
+    waiting: {},
+    heldPlanChanges: [{ gateId: 'gate-217', paths: ['apps/bridge/src/stacking.ts'], approvedBy: 'orzelig', blockedBy: [207] }],
+    stackLinks: [{ repoId: 'repo-1', issue: 207, onIssue: 206, onPr: 213 }],
+    personAwaits: [{ at: minutesAgo(120), payload: { repo: 'openadlc-testbed', pr: 213, issue: 206, login: 'orzelig', head: 'abc1234def', paths: ['config/'] } }],
+  });
+
+  it('lists the four cards of the 10-30 chain on the approval they wait behind, in board order', async () => {
+    const { attentionItems } = await load();
+    const items = attentionItems(input() as never);
+    const approval = items.find((item) => item.id === 'approval:openadlc-testbed#213@orzelig');
+    expect(approval?.unblocks?.count).toBe(4);
+    expect(approval?.unblocks?.items.map((one) => one.ref)).toEqual(['openadlc-testbed#216', 'openadlc-testbed#214', 'openadlc-testbed#217', 'openadlc-testbed#207']);
+    expect(approval?.unblocks?.items[0]).toEqual({ ref: 'openadlc-testbed#216', repo: 'openadlc-testbed', number: 216, title: 'Issue 216' });
+    // Nothing else is a root: the plan change waits on #207, and says so.
+    expect(items.filter((item) => item.unblocks).map((item) => item.id)).toEqual(['approval:openadlc-testbed#213@orzelig']);
+  });
+
+  it('says nothing of what waits behind an item when nothing does', async () => {
+    const { attentionItems } = await load();
+    const alone = { ...input(), issues: input().issues.filter((one) => one.number === 206) };
+    expect(attentionItems(alone as never).find((item) => item.id === 'approval:openadlc-testbed#213@orzelig')).not.toHaveProperty('unblocks');
+  });
+});

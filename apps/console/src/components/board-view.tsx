@@ -14,11 +14,12 @@ import { PausedMark, PausedReposProvider, RepoBadge, RepoDot, useRepoColors, use
 import { ItemView } from '@/components/item-view';
 import { RunningTasks } from '@/components/running-tasks';
 import { ThreadPanel } from '@/components/thread-panel';
-import type { AttentionItem, Board, BoardCard, BoardColumn, CrewMember, WorkPause } from '@/lib/api';
+import type { AttentionItem, Board, BoardCard, BoardColumn, CrewMember, WaitChain, WorkPause } from '@/lib/api';
+import { stripItems } from '@/lib/attention-card';
 import { findBot, labelIn } from '@/lib/bot-label';
 import { withActivity, type BoardActivity } from '@/lib/board-activity';
 import { attemptMove, columnsWithMoves, movesBack, NO_MOVES, reconcile, type MoveState } from '@/lib/board-move';
-import { abandoned, awaitedApprovalsOf, cardBot, cardCost, cardStatus, heldApprovalsOf, nextUp, type CardContext, type CardStatus, type StatusTone } from '@/lib/card-status';
+import { abandoned, awaitedApprovalsOf, cardBot, cardCost, cardStatus, heldApprovalsOf, nextUp, rootButton, type CardContext, type CardStatus, type RootButton, type StatusTone } from '@/lib/card-status';
 import { cn } from '@/lib/cn';
 import { cardMatches, exactKey } from '@/lib/item';
 import { heldLine, IssueControls } from '@/components/issue-controls';
@@ -204,6 +205,16 @@ export function BoardView({
   const pausedNames = Object.keys(pausedRepos).sort();
   const pausedHere = repo === 'all' ? pausedNames : pausedNames.filter((name) => name === repo);
 
+  // Where a card's button to its wait's root goes: the Needs you card on the
+  // page, which is one of the strip's few, else the root's own card's issue,
+  // or one outside the board's on GitHub.
+  const shownItems = new Set(stripItems(attention).map((item) => item.id));
+  const urlOfRef = (ref: string): string | null => {
+    const found = board.columns.flatMap((column) => column.cards).find((one) => one.ref === ref);
+    if (found?.url) return found.url;
+    const outside = /^([^/#\s]+\/[^/#\s]+)#(\d+)$/.exec(ref);
+    return outside ? `https://github.com/${outside[1]}/issues/${outside[2]}` : null;
+  };
   const cards: CardHandlers = {
     crew,
     moves,
@@ -212,6 +223,7 @@ export function BoardView({
     labelOf,
     columns: board.columns,
     context,
+    root: (card, chain) => rootButton(card, chain, shownItems, urlOfRef),
     onOpen: (card: BoardCard) => setOpenItem({ subject: card.ref, role: null }),
     onMove: move,
     onDragStart: (ref: string, from: string) => setDragging({ ref, from }),
@@ -466,10 +478,38 @@ interface CardHandlers {
   labelOf: (name: string) => { name: string; text: string; role?: string | null };
   columns: BoardColumn[];
   context: (card: BoardCard) => CardContext;
+  /** Where the button to a card's wait's root goes (`rootButton`). */
+  root: (card: BoardCard, chain: WaitChain) => RootButton | null;
   onOpen: (card: BoardCard) => void;
   onMove: (card: { ref: string; from: string }, to: string) => void;
   onDragStart: (ref: string, from: string) => void;
   onDragEnd: () => void;
+}
+
+/**
+ * The button to the root of a card's wait: to the Needs you card above the
+ * board, which it scrolls to, or to the pull request or issue on GitHub.
+ */
+function RootLink({ button }: { button: RootButton }) {
+  const style = 'relative z-10 shrink-0 text-[11.5px] font-medium text-link hover:underline';
+  if (button.scrollTo) {
+    const id = button.scrollTo;
+    return (
+      <button
+        type="button"
+        data-root={id}
+        onClick={() => document.querySelector(`[data-card="${CSS.escape(id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+        className={style}
+      >
+        {button.label}
+      </button>
+    );
+  }
+  return (
+    <a data-root href={button.url} target="_blank" rel="noreferrer" className={style}>
+      {button.label}
+    </a>
+  );
 }
 
 /**
@@ -648,6 +688,7 @@ function Card({ card, stage, handlers }: { card: BoardCard; stage: string; handl
   const movable = !card.request && !card.pull && admin;
   const people = [...new Set((card.active ?? []).map((task) => task.bot))];
   const title = stageOf(stage)?.title ?? stage;
+  const root = status.chain ? handlers.root(card, status.chain) : null;
 
   return (
     <article
@@ -789,11 +830,15 @@ function Card({ card, stage, handlers }: { card: BoardCard; stage: string; handl
         <span className="flex flex-wrap items-end justify-between gap-x-2 gap-y-1">
           <span className="min-w-0 flex-1">
             <StatusLine status={status} />
+            {root && <RootLink button={root} />}
           </span>
           <IssueControls compact issue={{ subject: card.ref, number, held: card.held ?? null, next: card.next ?? false }} />
         </span>
       ) : (
-        <StatusLine status={status} />
+        <>
+          <StatusLine status={status} />
+          {root && <RootLink button={root} />}
+        </>
       )}
 
       {/* The bridge's own sentence, because "that was refused" without the

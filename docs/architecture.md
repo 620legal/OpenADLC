@@ -96,6 +96,46 @@ has a system card naming the seat, why nothing started it, and Start it now
 (`POST /v1/items/:subject/start`, the stage sweep or a dispatch). The card
 goes when the work starts, as it is made from the same live state.
 
+A waiting card's wait is also followed to its root, the one thing that lets
+it and every card behind it go on (`followWaits` in
+`apps/bridge/src/wait-chain.ts`, sent as each card's `waitChain`). It follows
+three kinds of link. The first is issue to issue: a dependency
+(`DependencyNow.target`), the builds holding the build slot or the seat, the
+cards before it in line, the issues holding its files, or those holding the
+paths of an approved plan change its paused build waits on. The second is a
+stacked change to the one it was built on (`stackWaitsOn` in `stacking.ts`,
+the rule the merge line uses too). The third is a card to a person: a
+question, a merge the line holds, an approval asked for again or awaited, a
+stalled review, a stack hold, a parked issue, or a wait `waitingOf` says only
+a person clears.
+
+The card says the root:
+
+- "Waits on you: approve #213. 4 items wait behind it.", with a button that
+  scrolls to that Needs-you card when it is on the page and opens the pull
+  request when it is not. The count is every card that waits behind that
+  root, directly or through others.
+- "Waits on #217, which is running now: needs no one." for a root two or more
+  links away that clears by itself. A card waiting straight on work going now
+  says what it said before.
+- A loop, a dependency closed without merging or ignored and closed other
+  than completed, or one outside the install, named as the end it reached.
+
+The root's Needs-you card lists the cards it unblocks (`AttentionItem.unblocks`):
+"4 items wait on this: #207, #217, #216, #214."
+
+Following always terminates. It is depth first, with the path it has walked:
+a link back onto that path is a loop. A memo kept for one walk enters each node
+at most once, and the walk stops at `MAX_WAIT_DEPTH` (12) links with the last
+node it reached. Of a node's ends it keeps person, then dead, then too deep,
+then clears by itself, and on a tie the node's own end first.
+
+The board's read and the Needs-you read follow it from the same reads
+(`readWaitFacts`) and the same functions, so the two differ only in when they
+read ([ADR 0023](adr/0023-a-wait-is-followed-to-its-root-in-both-reads.md)).
+The board reads those facts only when a waiting card waits on another card or
+a question is open. Nothing is stored.
+
 What the bot is doing comes from the skill runner's own lines, `[tool] Bash:
 pnpm test` or `[wrote] src/prices.ts`, which hostd stores from the session's
 pane every ten seconds (`session_log`). For the running tasks on the cards

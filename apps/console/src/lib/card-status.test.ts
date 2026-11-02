@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { BoardCard, CardTask, CardWaiting, WaitingReason } from './api';
-import { awaitedApprovalsOf, cardBot, cardCost, cardStatus, heldApprovalsOf, nextUp, type CardContext } from './card-status';
+import type { BoardCard, CardTask, CardWaiting, WaitChain, WaitEnd, WaitingReason, WaitLink } from './api';
+import { awaitedApprovalsOf, cardBot, cardCost, cardStatus, chainLine, heldApprovalsOf, nextUp, rootButton, type CardContext } from './card-status';
 import { ago, duration, money, ordinal, untilIn } from './when';
 
 const NOW = '2026-09-24T12:00:00.000Z';
@@ -638,5 +638,123 @@ describe('a card waiting with nothing going on it', () => {
       'Waiting for your answer · holds one of openadlc’s 3 build slots',
     );
     expect(cardStatus(card({ gateOpen: true, active: [{ ...asking, holds: null }] }), CONTEXT).text).toBe('Waiting for your answer');
+  });
+});
+
+/**
+ * A card whose wait the bridge followed to its root says the one thing that
+ * lets it go on. On 2026-10-30 four cards said what they waited on one step
+ * deep, and only the last step was a person's.
+ */
+describe('a card’s wait followed to its root', () => {
+  const link = (from: number, to: number, kind: WaitLink['kind'] = 'dependency'): WaitLink => ({ from: `openadlc#${from}`, to: `openadlc#${to}`, kind });
+  const approval: WaitEnd = { kind: 'person', ref: 'openadlc#206', action: 'approve', number: 213, attentionId: 'approval:openadlc#213@orzelig', url: 'https://github.com/janedoe/openadlc/pull/213' };
+  const chain = (end: WaitEnd, links: WaitLink[] = [link(216, 217, 'concurrency'), link(217, 207, 'plan_change'), link(207, 206, 'stack')], behind = 4): WaitChain => ({ links, end, behind });
+  const concurrency: CardWaiting = {
+    reason: { kind: 'concurrency', limit: 1, holders: [{ ref: 'openadlc#217', number: 217, kind: 'implement', state: 'paused', waitingOnYou: true }] },
+    since: minutesAgo(32),
+    stuck: false,
+  };
+
+  it('says the person’s action at the root, and how many wait behind it', () => {
+    expect(cardStatus(card({ ref: 'openadlc#216', waiting: concurrency, waitChain: chain(approval) }), CONTEXT)).toEqual({
+      text: 'Waits on you: approve #213. 4 items wait behind it.',
+      tone: 'attention',
+      mark: 'dot',
+      chain: chain(approval),
+    });
+    expect(chainLine(card(), chain(approval, [link(207, 206, 'stack')], 1))?.text).toBe('Waits on you: approve #213. 1 item waits behind it.');
+  });
+
+  it('says it on the paused build whose approved plan change waits, and on the stacked card in Review', () => {
+    const held = card({ ref: 'openadlc#217', gateOpen: true, waitChain: chain(approval, [link(217, 207, 'plan_change'), link(207, 206, 'stack')]) });
+    expect(cardStatus(held, { ...CONTEXT, heldApproval: { blockedBy: [207], paths: ['a.ts'] } }).text).toBe('Waits on you: approve #213. 4 items wait behind it.');
+    const stacked = card({ ref: 'openadlc#207', stage: 'review', prNumber: 212, waitChain: chain(approval, [link(207, 206, 'stack')]) });
+    expect(cardStatus(stacked, CONTEXT).text).toBe('Waits on you: approve #213. 4 items wait behind it.');
+  });
+
+  it('says each other thing a person does at the root, in a few words', () => {
+    const person = (action: Extract<WaitEnd, { kind: 'person' }>['action'], extra: Partial<Extract<WaitEnd, { kind: 'person' }>> = {}): WaitEnd => ({
+      kind: 'person',
+      ref: 'openadlc#217',
+      action,
+      number: 217,
+      attentionId: null,
+      url: null,
+      ...extra,
+    });
+    const said = (end: WaitEnd) => chainLine(card(), chain(end, [link(216, 217)], 2))?.text;
+    expect(said(person('merge', { number: 230 }))).toBe('Waits on you: merge #230. 2 items wait behind it.');
+    expect(said(person('answer'))).toBe("Waits on you: answer #217's question. 2 items wait behind it.");
+    expect(said(person('resume'))).toBe('Waits on you: resume #217. 2 items wait behind it.');
+    expect(said(person('review', { number: 230 }))).toBe("Waits on you: decide on #230's review. 2 items wait behind it.");
+    expect(said(person('triage'))).toBe('Waits on you: triage #217. 2 items wait behind it.');
+    expect(said(person('other', { words: 'raise the monthly cap' }))).toBe('Waits on you: raise the monthly cap. 2 items wait behind it.');
+    // In another repository, the root says which.
+    expect(said(person('approve', { ref: 'web#12', number: 30 }))).toBe('Waits on you: approve web#30. 2 items wait behind it.');
+  });
+
+  it('says what it waits on clears by itself, two links on, and needs no one', () => {
+    const running: WaitEnd = { kind: 'self', ref: 'openadlc#12', words: 'which is running now' };
+    expect(cardStatus(card({ waiting: concurrency, waitChain: chain(running, [link(10, 11), link(11, 12)], 2) }), CONTEXT)).toMatchObject({
+      text: 'Waits on #12, which is running now: needs no one.',
+      tone: 'muted',
+      mark: null,
+    });
+    expect(chainLine(card(), chain({ kind: 'self', ref: 'openadlc#12', words: 'which is next in line' }, [link(10, 11), link(11, 12)], 1))?.text).toBe(
+      'Waits on #12, which is next in line: needs no one.',
+    );
+  });
+
+  it('says what it said before when it waits straight on work going now', () => {
+    const running: WaitEnd = { kind: 'self', ref: 'openadlc#217', words: 'which is running now' };
+    const before = cardStatus(card({ waiting: concurrency }), CONTEXT);
+    expect(cardStatus(card({ waiting: concurrency, waitChain: chain(running, [link(16, 217, 'concurrency')], 1) }), CONTEXT)).toEqual(before);
+    expect(before.text).toBe('Waiting: openadlc builds 1 at a time · busy with #217 (waiting for your answer) · 32 min');
+  });
+
+  it('says a chain nobody can end, and the end it reached', () => {
+    const said = (end: WaitEnd) => chainLine(card(), chain(end, [link(1, 2)], 1))?.text;
+    expect(said({ kind: 'dead', ref: 'openadlc#1', why: 'loop', loop: ['openadlc#1', 'openadlc#2'] })).toBe(
+      'Waits on a loop: #1 waits on #2, which waits on #1. Neither goes on by itself.',
+    );
+    expect(said({ kind: 'dead', ref: 'openadlc#1', why: 'loop', loop: ['openadlc#1', 'openadlc#2', 'web#3'] })).toBe(
+      'Waits on a loop: #1 waits on #2, which waits on web#3, which waits on #1. None of them goes on by itself.',
+    );
+    expect(said({ kind: 'dead', ref: 'openadlc#4', why: 'abandoned' })).toBe('Waits on #4, which was closed without merging: it will never ship.');
+    expect(said({ kind: 'dead', ref: 'openadlc#18', why: 'closed' })).toBe('Waits on #18, which was closed without being completed: it will never ship.');
+    expect(said({ kind: 'dead', ref: 'other/b#3', why: 'outside' })).toBe('Waits on other/b#3, outside this install.');
+    expect(said({ kind: 'deep', ref: 'openadlc#113' })).toBe('Waits on #113, 12 links on: followed no further.');
+  });
+
+  it('says byte for byte what it said before, with no chain', () => {
+    for (const extra of [{ waiting: concurrency }, { waiting: concurrency, waitChain: null }, { gateOpen: true }, { active: [task({ kind: 'implement', state: 'running', startedAt: minutesAgo(12) })] }]) {
+      const { waitChain: _chain, ...without } = { waitChain: undefined, ...extra };
+      expect(cardStatus(card(extra), CONTEXT)).toEqual(cardStatus(card(without), CONTEXT));
+    }
+    expect(cardStatus(card({ waiting: concurrency, waitChain: null }), CONTEXT)).not.toHaveProperty('chain');
+  });
+
+  it('leaves a failed review its own line', () => {
+    const stacked = card({ stage: 'review', reviewFailed: true, waitChain: chain(approval, [link(207, 206, 'stack')]) });
+    expect(cardStatus(stacked, CONTEXT).text).toBe('Review failed · needs you');
+  });
+});
+
+describe('the button to a wait’s root', () => {
+  const approval: WaitEnd = { kind: 'person', ref: 'openadlc#206', action: 'approve', number: 213, attentionId: 'approval:openadlc#213@orzelig', url: 'https://github.com/janedoe/openadlc/pull/213' };
+  const chain = (end: WaitEnd): WaitChain => ({ links: [{ from: 'openadlc#216', to: 'openadlc#206', kind: 'dependency' }], end, behind: 1 });
+  const nowhere = () => null;
+
+  it('goes to the Needs you card when it is on the page, and to the pull request when it is not', () => {
+    expect(rootButton(card(), chain(approval), new Set(['approval:openadlc#213@orzelig']), nowhere)).toEqual({ label: 'Show in Needs you', scrollTo: 'approval:openadlc#213@orzelig' });
+    expect(rootButton(card(), chain(approval), new Set(), nowhere)).toEqual({ label: 'Open #213', url: 'https://github.com/janedoe/openadlc/pull/213' });
+  });
+
+  it('opens the issue a dead end reached, and has none for what clears by itself', () => {
+    const urlOf = (ref: string) => (ref === 'openadlc#4' ? 'https://github.com/janedoe/openadlc/issues/4' : null);
+    expect(rootButton(card(), chain({ kind: 'dead', ref: 'openadlc#4', why: 'abandoned' }), new Set(), urlOf)).toEqual({ label: 'Open #4', url: 'https://github.com/janedoe/openadlc/issues/4' });
+    expect(rootButton(card(), chain({ kind: 'self', ref: 'openadlc#12', words: 'which is running now' }), new Set(), urlOf)).toBeNull();
+    expect(rootButton(card(), chain({ kind: 'deep', ref: 'openadlc#99' }), new Set(), urlOf)).toBeNull();
   });
 });

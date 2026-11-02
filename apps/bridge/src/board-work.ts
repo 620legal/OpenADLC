@@ -29,7 +29,8 @@ import {
   type TaskFacts,
 } from './work.js';
 import { stillTried } from './request-queue.js';
-import { buildCandidates, readWaitingContext, waitingCards, waitingOf, type CardWaiting, type BuildHold, type WaitingContext, type WaitingReads } from './waiting.js';
+import { buildCandidates, readWaitingContext, waitingCards, waitingOf, type CardWaiting, type BuildHold, type WaitingContext, type WaitingKind, type WaitingReads } from './waiting.js';
+import { followWaits, personWaitsOf, readWaitFacts, type WaitChain, type WaitFacts } from './wait-chain.js';
 
 /**
  * What the board needs beyond the issues: for each card, what it has cost and
@@ -43,6 +44,9 @@ import { buildCandidates, readWaitingContext, waitingCards, waitingOf, type Card
 
 /** How far back a stopped review loop is looked for. Older than this, the card has moved or been left. */
 const STALL_WINDOW_DAYS = 30;
+
+/** How far back the asks and awaits of people a chain may end at are read: Needs you's window (`ATTENTION_WINDOW_DAYS`). */
+const WAIT_FACTS_DAYS = 7;
 
 /**
  * How long Done keeps a card, in days, as the console shows it: what the
@@ -107,6 +111,13 @@ export interface CardExtras extends CardWork {
    * works out no waiting: the activity poll's.
    */
   waiting?: CardWaiting | null;
+  /**
+   * Its wait followed to its root (`followWaits`), the same chain Needs you
+   * follows; null when it waits on nothing behind it, has work going, or its
+   * root is its own. Absent from a read that followed none: one where no card
+   * waits on another and no question is open.
+   */
+  waitChain?: WaitChain | null;
 }
 
 /**
@@ -295,7 +306,8 @@ interface BoardWorkInput {
     concurrency?: number;
     defaultBranch?: string;
   }[];
-  gates: readonly Pick<Gate, 'taskId'>[];
+  /** The open questions; with their ids, a chain names the one a person answers. */
+  gates: readonly (Pick<Gate, 'taskId'> & Partial<Pick<Gate, 'id' | 'githubCommentUrl'>>)[];
   stallEvents: readonly { at: string; payload: unknown }[];
   /**
    * Console requests: one that became an issue, so the triage it took counts
@@ -347,6 +359,8 @@ interface BoardWorkInput {
    * Absent, no card says why it waits, as the activity poll's do not.
    */
   waiting?: WaitingContext;
+  /** What a waiting card's wait is followed to its root on (`readWaitFacts`). Absent, none is followed. */
+  waitFacts?: WaitFacts;
 }
 
 /**
@@ -642,7 +656,46 @@ export function boardWork(input: BoardWorkInput): BoardWork {
     if (task.state === 'paused' && gated.has(task.id)) waiting.add(task.botId);
   }
 
-  return { byRef, requests, running, waiting, runningTasks: input.runningTasks ?? runningTasks, runningList: [] };
+  const work = { byRef, requests, running, waiting, runningTasks: input.runningTasks ?? runningTasks, runningList: [] };
+  return input.waitFacts && waits ? withWaitChains(work, input, input.waitFacts) : work;
+}
+
+/** The waits that link a card to another card, which only the facts `readWaitFacts` reads can follow further. */
+const LINKING: readonly WaitingKind[] = ['dependency', 'concurrency', 'seat', 'turn', 'lease', 'leased'];
+
+/**
+ * Whether a board read needs `readWaitFacts` for its chains: a waiting card
+ * linked to another, or a question open, which may be a plan change waiting
+ * on other work. A quiet board costs no query more.
+ */
+export function needsWaitFacts(work: Pick<BoardWork, 'byRef'>, gates: readonly unknown[]): boolean {
+  return gates.length > 0 || [...work.byRef.values()].some((card) => card.waiting && LINKING.includes(card.waiting.reason.kind));
+}
+
+/**
+ * Each issue's card with its wait followed to its root, by the same
+ * `followWaits` over the same facts as Needs you (`attentionItems`), so the
+ * two differ only in when they read.
+ */
+export function withWaitChains(work: BoardWork, input: Pick<BoardWorkInput, 'issues' | 'tasks' | 'repos' | 'gates' | 'stallEvents'>, facts: WaitFacts): BoardWork {
+  const waiting = new Map<string, CardWaiting>();
+  for (const [ref, card] of work.byRef) if (card.waiting) waiting.set(ref, card.waiting);
+  const shown = onTheBoard(input.issues, input.repos).map((issue) => `${issue.repoName}#${issue.number}`);
+  const chains = followWaits({
+    ...facts,
+    issues: input.issues,
+    waiting,
+    tasks: input.tasks,
+    gates: input.gates,
+    persons: personWaitsOf({ ...facts, issues: input.issues, tasks: input.tasks, gates: input.gates, stallEvents: input.stallEvents, repos: input.repos }),
+    cards: shown,
+  });
+  const byRef = new Map(work.byRef);
+  for (const ref of shown) {
+    const card = byRef.get(ref);
+    if (card) byRef.set(ref, { ...card, waitChain: chains.get(ref) ?? null });
+  }
+  return { ...work, byRef };
 }
 
 type SessionFacts = Pick<Session, 'id' | 'taskId'>;
@@ -743,7 +796,14 @@ export async function readBoardWork(
     untitledIssues(runningNow, input.issues, input.repos),
   ]);
   const { sessions: _sessions, waiting: _reads, ...facts } = input;
-  const work = boardWork({ ...facts, tasks, stallEvents, now, sendBacks, ...live, runningTasks: count ?? undefined, ...(waiting ? { waiting } : {}) });
+  let work = boardWork({ ...facts, tasks, stallEvents, now, sendBacks, ...live, runningTasks: count ?? undefined, ...(waiting ? { waiting } : {}) });
+  // Each waiting card's wait followed to its root, read only when a card
+  // waits on another or a question is open; one that cannot be read leaves
+  // the cards as they were.
+  if (waiting && needsWaitFacts(work, input.gates)) {
+    const read = await readWaitFacts(input.issues, input.gates, new Date(now.getTime() - WAIT_FACTS_DAYS * 24 * 60 * 60 * 1000)).catch(() => null);
+    if (read) work = withWaitChains(work, { ...facts, tasks, stallEvents }, read);
+  }
   const list = runningList(runningNow, { bots: input.bots, repos: input.repos, requests: input.requests, issues: [...input.issues, ...titled], since: live.since });
   return { ...work, runningList: list };
 }

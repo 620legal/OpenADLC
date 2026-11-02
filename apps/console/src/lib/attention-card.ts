@@ -91,6 +91,34 @@ export function hasMore(item: AttentionItem): boolean {
   return item.actions.length > faceActions(item).length;
 }
 
+/** The cards waiting behind an item, as its card names them: `#207` in the item's own repository, `web#12` in another. */
+export interface Unblocked {
+  /** "4 items wait on this". */
+  lead: string;
+  items: { ref: string; label: string; title: string }[];
+}
+
+/**
+ * What doing an item lets go on (`unblocks`, the cards whose wait the bridge
+ * followed to it), or null when nothing waits behind it. On 2026-10-30 four
+ * cards waited on one approval, and its card said nothing of them.
+ */
+export function unblockedOf(item: Pick<AttentionItem, 'unblocks' | 'subject'>): Unblocked | null {
+  const behind = item.unblocks?.items ?? [];
+  if (behind.length === 0) return null;
+  const count = item.unblocks?.count ?? behind.length;
+  return {
+    lead: count === 1 ? '1 item waits on this' : `${count} items wait on this`,
+    items: behind.map((one) => ({ ref: one.ref, label: one.repo === item.subject.repo ? `#${one.number}` : `${one.repo}#${one.number}`, title: one.title })),
+  };
+}
+
+/** "4 items wait on this: #207, #217, #216, #214.", or null when none does. */
+export function unblocksLine(item: Pick<AttentionItem, 'unblocks' | 'subject'>): string | null {
+  const unblocked = unblockedOf(item);
+  return unblocked ? `${unblocked.lead}: ${unblocked.items.map((one) => one.label).join(', ')}.` : null;
+}
+
 // ---------------------------------------------------------------- work and system
 
 /** Whose an item is: the bridge says (`group`); an older bridge's is read from its kind. */
