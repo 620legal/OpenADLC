@@ -2648,7 +2648,6 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     repos: repoList,
     issues: issueList,
     requests: requestList,
-    stallEvents,
     sendBackEvents,
     intakeStalls,
     triaged,
