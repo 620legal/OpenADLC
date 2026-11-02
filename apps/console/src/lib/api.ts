@@ -276,7 +276,16 @@ export interface Board {
   repo: string;
   repos: string[];
   /** Each repository with its colour. Absent from a bridge older than colours. */
-  repositories?: { name: string; fullName: string | null; color: string | null }[];
+  repositories?: {
+    name: string;
+    fullName: string | null;
+    color: string | null;
+    /**
+     * What one task may spend there, the cap gates stop it at: a Working card
+     * says its spend against it. Absent from an older bridge, read as no cap.
+     */
+    taskCapUsd?: number;
+  }[];
   columns: BoardColumn[];
   mergeLine: MergeLineEntry[];
   waitingOnYou: number;
