@@ -5,12 +5,13 @@ import { useEffect, useState } from 'react';
 import { consoleServesThisPage } from '@/app/actions';
 import { BridgeOfflineBanner } from '@/components/bridge-offline-banner';
 import { consoleWasUpdated, sayConsoleUpdated } from '@/lib/console-updated';
-import { offlineState, readUnlessUpdated, refreshWhileVisible, type OfflineState } from '@/lib/live-refresh';
+import { offlineState, readUnlessUpdated, keepRefreshing, type OfflineState } from '@/lib/live-refresh';
 
 /**
- * Reads the page again every fifteen seconds while it is on screen: "needs
- * you", the header's chip, the board and the crew come from the server, and
- * this is what brings them up to date. What is on screen that is only in the
+ * Reads the page again every fifteen seconds: "needs you", the header's
+ * chip, the board and the crew come from the server, and this is what brings
+ * them up to date. A tab in the background keeps reading, so its title and
+ * icon say when something new waits (`NeedsYouAlerts`). What is on screen that is only in the
  * browser — a draft, a card being moved, an open thread — stays as it is.
  *
  * Once the console was updated since the page loaded, it stops, and the page
@@ -31,7 +32,7 @@ function Refresher() {
   const router = useRouter();
   const [state, setState] = useState<OfflineState>(() => ({ lastReadAt: Date.now(), offlineSince: null }));
   useEffect(() => {
-    const stop = refreshWhileVisible(() => {
+    const stop = keepRefreshing(() => {
       if (consoleWasUpdated()) return stop();
       void readUnlessUpdated(consoleServesThisPage, () => router.refresh()).then((outcome) => {
         setState((previous) => offlineState(previous, outcome, Date.now()));

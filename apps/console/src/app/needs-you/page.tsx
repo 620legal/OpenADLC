@@ -6,8 +6,8 @@ import { readHeader } from '@/lib/read-header';
 export const dynamic = 'force-dynamic';
 
 /** Every item waiting on the person, work and system apart; see `NeedsYouPage`. */
-export default async function Page({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
-  const { tab } = await searchParams;
+export default async function Page({ searchParams }: { searchParams: Promise<{ tab?: string; item?: string }> }) {
+  const { tab, item } = await searchParams;
   try {
     const [attention, crew] = await Promise.all([api.attention().then((body) => body.items), api.crew()]);
     const header = await readHeader({ crew: crew.bots, attention });
@@ -18,6 +18,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ t
         header={header}
         now={new Date().toISOString()}
         tab={tab === 'system' ? 'system' : 'work'}
+        item={typeof item === 'string' && item ? item : null}
       />
     );
   } catch (error) {

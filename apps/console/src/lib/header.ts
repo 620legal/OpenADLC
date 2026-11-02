@@ -1,7 +1,8 @@
 import type { AttentionItem, CrewMember } from './api';
-import { groupCounts } from './attention-card';
+import { groupCounts, groupOf, waiting } from './attention-card';
 import type { BotFacts } from './bot-label';
 import { crewCounts, type CrewCounts } from './crew';
+import { notificationText } from './needs-you-alerts';
 import type { RepoColorMap } from './repo-colors';
 
 /**
@@ -20,8 +21,23 @@ export interface HeaderData {
   needsYou: number | null;
   /** The same, as work and system, when the page read the items themselves. */
   needsSplit: { work: number; system: number } | null;
+  /**
+   * The work that waits, the chip's work count item by item, in the list's
+   * order: what the tab's alerts tell new from already seen, and what a
+   * notification says. Null when the page read no items.
+   */
+  needsItems: NeedsItem[] | null;
   /** Enough of the crew to name the bot that takes a request. */
   crew: BotFacts[];
+}
+
+/** One piece of work waiting on the person, as an alert names it and opens it. */
+export interface NeedsItem {
+  id: string;
+  /** What its notification says: "The builder has a question about #42". */
+  text: string;
+  /** Its work item, which `/needs-you?item=` opens; null when it has none. */
+  item: string | null;
 }
 
 export type Page = 'board' | 'crew' | 'costs' | 'insights' | 'settings' | 'needs-you';
@@ -44,6 +60,11 @@ export function headerData(input: {
       : null,
     needsYou: input.needsYou,
     needsSplit: input.attention ? groupCounts(input.attention) : null,
+    needsItems: input.attention
+      ? waiting(input.attention)
+          .filter((item) => groupOf(item) === 'work')
+          .map((item) => ({ id: item.id, text: notificationText(item, input.repos), item: item.subject.item ?? null }))
+      : null,
     crew: input.crew.map((bot) => ({
       name: bot.name,
       slot: bot.slot ?? null,

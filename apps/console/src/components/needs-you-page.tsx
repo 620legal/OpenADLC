@@ -28,6 +28,7 @@ export function NeedsYouPage({
   header,
   now,
   tab: initialTab,
+  item: linked = null,
 }: {
   items: readonly AttentionItem[];
   crew: CrewMember[];
@@ -35,12 +36,19 @@ export function NeedsYouPage({
   now: string;
   /** From `?tab=`, so a link can open on System. */
   tab: AttentionGroup;
+  /**
+   * From `?item=`: a work item to open as its card would, which is where a
+   * desktop notification about it leads. One that is not waiting work is
+   * left alone, and the lists show as they always do.
+   */
+  item?: string | null;
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<AttentionGroup>(initialTab);
+  const linkedWork = linked ? items.find((one) => groupOf(one) === 'work' && one.kind !== 'check_fixed' && one.subject.item === linked) : undefined;
+  const [tab, setTab] = useState<AttentionGroup>(linkedWork ? 'work' : initialTab);
   // `?tab=` says which list is open: a link to it while here switches, and a
   // switch is written back, so a reload or Back opens the same one.
-  useEffect(() => setTab(initialTab), [initialTab]);
+  useEffect(() => setTab(linkedWork ? 'work' : initialTab), [initialTab, linkedWork]);
   const switchTo = (next: AttentionGroup) => {
     setTab(next);
     router.replace(`${NEEDS_YOU_PAGE}?tab=${next}`, { scroll: false });
@@ -52,8 +60,18 @@ export function NeedsYouPage({
     setCompose(Boolean(how?.compose));
   };
   // A work card opens its own item, on the tab of the role that asked.
-  const [openItem, setOpenItem] = useState<{ subject: string; role: string | null } | null>(null);
+  const [openItem, setOpenItem] = useState<{ subject: string; role: string | null; linked?: boolean } | null>(null);
   const openWork: OpenItem = (item, role) => setOpenItem({ subject: item, role });
+  // Opened once for the link, as its card would: a new `?item=` while here opens that one.
+  useEffect(() => {
+    if (linkedWork?.subject.item) setOpenItem({ subject: linkedWork.subject.item, role: linkedWork.bot?.role ?? null, linked: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the link, not every refresh of the same item
+  }, [linked]);
+  const closeItem = () => {
+    // The link is spent: a reload or Back does not open the sheet again.
+    if (openItem?.linked) router.replace(`${NEEDS_YOU_PAGE}?tab=work`, { scroll: false });
+    setOpenItem(null);
+  };
   const counts = groupCounts(items);
   const of = (group: AttentionGroup) => items.filter((item) => groupOf(item) === group);
 
@@ -85,7 +103,7 @@ export function NeedsYouPage({
       </main>
 
       {openItem && (
-        <ItemView key={openItem.subject} subject={openItem.subject} initialRole={openItem.role} variant="sheet" onClose={() => setOpenItem(null)} now={now} />
+        <ItemView key={openItem.subject} subject={openItem.subject} initialRole={openItem.role} variant="sheet" onClose={closeItem} now={now} />
       )}
 
       {openBot && (

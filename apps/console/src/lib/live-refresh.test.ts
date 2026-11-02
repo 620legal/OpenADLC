@@ -1,6 +1,6 @@
 import { UnrecognizedActionError } from 'next/dist/client/components/unrecognized-action-error';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { offlineState, readUnlessUpdated, REFRESH_EVERY_MS, refreshWhileVisible, type Visibility } from './live-refresh';
+import { keepRefreshing, offlineState, readUnlessUpdated, REFRESH_EVERY_MS, refreshWhileVisible, type Visibility } from './live-refresh';
 
 /** A tab, which can be put in the background and brought back. */
 function tab(initially: 'visible' | 'hidden' = 'visible') {
@@ -69,6 +69,77 @@ describe('keeping a page current', () => {
     const refresh = vi.fn();
     const page = tab();
     const stop = refreshWhileVisible(refresh, page);
+    stop();
+
+    vi.advanceTimersByTime(REFRESH_EVERY_MS * 2);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(page.listening()).toBe(0);
+  });
+});
+
+describe('keeping a page current in the background', () => {
+  it('reads it every fifteen seconds while it is on screen, as before', () => {
+    const refresh = vi.fn();
+    keepRefreshing(refresh, tab());
+
+    vi.advanceTimersByTime(REFRESH_EVERY_MS - 1);
+    expect(refresh).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(REFRESH_EVERY_MS * 3);
+    expect(refresh).toHaveBeenCalledTimes(4);
+  });
+
+  it('starts in a tab that opened in the background, and goes on reading it there', () => {
+    const refresh = vi.fn();
+    keepRefreshing(refresh, tab('hidden'));
+
+    vi.advanceTimersByTime(REFRESH_EVERY_MS * 2);
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not stop when the tab goes to the background', () => {
+    const refresh = vi.fn();
+    const page = tab();
+    keepRefreshing(refresh, page);
+
+    page.set('hidden');
+    vi.advanceTimersByTime(REFRESH_EVERY_MS * 4);
+    expect(refresh).toHaveBeenCalledTimes(4);
+  });
+
+  it('reads at once on coming back after longer than one wait, and a whole wait after that', () => {
+    let at = 0;
+    const refresh = vi.fn();
+    const page = tab();
+    // A slowed background timer: the clock moves on and the timer has not fired.
+    keepRefreshing(refresh, page, { now: () => at });
+
+    page.set('hidden');
+    at = REFRESH_EVERY_MS * 3;
+    page.set('visible');
+    expect(refresh).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(REFRESH_EVERY_MS - 1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not read again for a glance away shorter than the wait', () => {
+    const refresh = vi.fn();
+    const page = tab();
+    keepRefreshing(refresh, page);
+
+    vi.advanceTimersByTime(3_000);
+    page.set('hidden');
+    page.set('visible');
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('stops when the page goes', () => {
+    const refresh = vi.fn();
+    const page = tab();
+    const stop = keepRefreshing(refresh, page);
     stop();
 
     vi.advanceTimersByTime(REFRESH_EVERY_MS * 2);

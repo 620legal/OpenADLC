@@ -6,14 +6,24 @@ import { EarlyClicks } from '../components/early-clicks';
 import { NoAdmin, NotAUser } from '../components/not-a-user';
 import { readBrand, readMe } from '../lib/api';
 import { EARLY_CLICKS_SCRIPT } from '../lib/early-clicks';
+import { consoleName } from '../lib/needs-you-alerts';
 import { THEME_SCRIPT } from '../lib/theme';
 import './globals.css';
 
-export const metadata: Metadata = {
-  title: 'OpenADLC console',
-  description:
-    'A crew of agents that takes a request to a reviewed, deployed change. GitHub is the system of record.',
-};
+/**
+ * The tab says the console's name, as its header does. It was a fixed
+ * "OpenADLC console", and the count the page writes over it once loaded
+ * (`NeedsYouAlerts`) said the brand's name: the tab changed its words on
+ * every load. `readBrand` is cached for the request, so this is the read the
+ * layout makes below, not a second one.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  return {
+    title: consoleName(await readBrand()),
+    description:
+      'A crew of agents that takes a request to a reviewed, deployed change. GitHub is the system of record.',
+  };
+}
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
   // Who is looking, once per page: a role picks which controls are drawn, and
