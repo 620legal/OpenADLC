@@ -18,7 +18,7 @@ import {
 } from '@/lib/alert-preferences';
 import { cn } from '@/lib/cn';
 import type { HeaderData, NeedsItem } from '@/lib/header';
-import { batchText, chime, claimAcrossTabs, consoleName, faviconSvg, newItems, titleFor, type AudioContextLike } from '@/lib/needs-you-alerts';
+import { batchText, chime, claimInTurn, consoleName, faviconSvg, newItems, titleFor, type AudioContextLike, type LocksLike } from '@/lib/needs-you-alerts';
 
 /**
  * What this document has already seen, kept outside any component. `AppShell`
@@ -40,9 +40,20 @@ function readPreferences(): AlertPreferences {
   return storedAlerts();
 }
 
-/** The switches as stored, following a change from this tab or another; the defaults until mounted. */
-function useAlertPreferences(): AlertPreferences {
-  const [preferences, setPreferences] = useState<AlertPreferences>(ALERT_DEFAULTS);
+/**
+ * The switches as stored, following a change from this tab or another.
+ *
+ * Read from storage on the first render, not only in an effect: `AppShell`
+ * is drawn again on every move between pages, and the new-item effect runs in
+ * that same first commit. Starting from the defaults (sound and notifications
+ * off) let it mark a question that came with the navigation's read as seen
+ * and stay quiet about it for good, and showed the count for a person who had
+ * switched it off. `Alerts` is drawn only in the browser, so storage is there;
+ * the menu is drawn on the server too, and starts from the defaults the
+ * server's HTML has, or hydration would not match.
+ */
+function useAlertPreferences(first: 'stored' | 'defaults'): AlertPreferences {
+  const [preferences, setPreferences] = useState<AlertPreferences>(first === 'stored' ? readPreferences : ALERT_DEFAULTS);
   useEffect(() => {
     const follow = () => setPreferences(readPreferences());
     follow();
@@ -82,7 +93,7 @@ export function NeedsYouAlerts({ data }: { data: Pick<HeaderData, 'needsYou' | '
 
 function Alerts({ data }: { data: Pick<HeaderData, 'needsYou' | 'needsItems'> }) {
   const name = consoleName(useBrand());
-  const preferences = useAlertPreferences();
+  const preferences = useAlertPreferences('stored');
   const router = useRouter();
   const current = useRef({ preferences, router });
   current.current = { preferences, router };
@@ -117,11 +128,15 @@ function Alerts({ data }: { data: Pick<HeaderData, 'needsYou' | 'needsItems'> })
     } catch {
       // Site data blocked: no other tab to share with that way.
     }
-    const mine = store ? new Set(claimAcrossTabs(read.fresh.map((item) => item.id), store, Date.now())) : null;
-    const fresh = mine ? read.fresh.filter((item) => mine.has(item.id)) : read.fresh;
-    if (fresh.length === 0) return;
-    if (now.sound) chime((window as unknown as { AudioContext?: AudioContextLike }).AudioContext);
-    if (notify) raise(fresh, (href) => to.push(href));
+    const ids = read.fresh.map((item) => item.id);
+    const locks = (navigator as { locks?: LocksLike }).locks;
+    void (store ? claimInTurn(ids, store, Date.now, locks) : Promise.resolve(ids)).then((claimed) => {
+      const mine = new Set(claimed);
+      const fresh = read.fresh.filter((item) => mine.has(item.id));
+      if (fresh.length === 0) return;
+      if (now.sound) chime((window as unknown as { AudioContext?: AudioContextLike }).AudioContext);
+      if (notify) raise(fresh, (href) => to.push(href));
+    });
   }, [data.needsItems]);
 
   return null;
@@ -162,7 +177,7 @@ const SWITCHES: readonly { key: AlertSwitch; label: string }[] = [
  * the switch and nowhere else.
  */
 export function AlertsMenu({ compact = false }: { compact?: boolean }) {
-  const preferences = useAlertPreferences();
+  const preferences = useAlertPreferences('defaults');
   const [permission, setPermission] = useState<NotifyState>('default');
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);

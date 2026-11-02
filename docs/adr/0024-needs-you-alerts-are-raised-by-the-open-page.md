@@ -33,7 +33,8 @@ that is already open.
   switch only.
 - "New" is per document load: the first read after load is the baseline, an id
   seen once never alerts again in that document, and tabs of one browser claim
-  an id in `localStorage` so only one of them alerts. Only waiting work
+  an id in `localStorage` so only one of them alerts, taking turns through the
+  Web Locks API where the browser has it. Only waiting work
   notifies; the install's own items do not.
 
 ## What this rules out

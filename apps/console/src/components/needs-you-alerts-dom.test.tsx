@@ -173,6 +173,36 @@ describe('a notification', () => {
     expect(FakeNotification.requestPermission).not.toHaveBeenCalled();
   });
 
+  it('follows the stored switches when the header is drawn again on another page', async () => {
+    // The first page: its read is the baseline.
+    localStorage.setItem(ALERT_KEYS.notify, 'on');
+    localStorage.setItem(ALERT_KEYS.tab, 'off');
+    await show(data([ASKED]));
+    expect(FakeNotification.raised).toEqual([]);
+
+    // A move to another page draws the shell again, and its read brings a new item.
+    act(() => root.unmount());
+    root = createRoot(container);
+    const titles: string[] = [];
+    let proto: object | null = document;
+    while (proto && !Object.getOwnPropertyDescriptor(proto, 'title')) proto = Object.getPrototypeOf(proto);
+    const { get, set } = Object.getOwnPropertyDescriptor(proto!, 'title')!;
+    Object.defineProperty(document, 'title', {
+      configurable: true,
+      get: () => get!.call(document),
+      set: (value: string) => {
+        titles.push(value);
+        set!.call(document, value);
+      },
+    });
+    await show(data([ASKED, FAILED]));
+    expect(FakeNotification.raised.map((one) => one.title)).toEqual(['The builder could not finish about #7']);
+    // The count was off before the page was drawn, and never showed.
+    expect(titles).toEqual(['OpenADLC']);
+    expect(icons()).toHaveLength(0);
+    delete (document as { title?: string }).title;
+  });
+
   it('is left to the tab that claimed it first', async () => {
     switchOn('notify');
     localStorage.setItem('openadlc.alerts.claimed', JSON.stringify({ 'gate:1': Date.now() }));

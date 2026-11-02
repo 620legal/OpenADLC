@@ -6,6 +6,9 @@ import {
   CLAIM_FOR_MS,
   CLAIMED_KEY,
   claimAcrossTabs,
+  claimInTurn,
+  CLAIM_LOCK,
+  type LocksLike,
   consoleName,
   FAVICON_RING,
   faviconSvg,
@@ -132,6 +135,42 @@ describe('two tabs open', () => {
   });
 });
 
+describe('two tabs claiming at once', () => {
+  it('reads and writes the claim only while holding the lock every tab shares', async () => {
+    let held = false;
+    const touched: boolean[] = [];
+    const base = memory();
+    const store = {
+      getItem: (key: string) => (touched.push(held), base.getItem(key)),
+      setItem: (key: string, value: string) => (touched.push(held), base.setItem(key, value)),
+    };
+    const names: string[] = [];
+    const lock: LocksLike = {
+      async request<T>(name: string, callback: () => T | Promise<T>): Promise<T> {
+        names.push(name);
+        held = true;
+        try {
+          return await callback();
+        } finally {
+          held = false;
+        }
+      },
+    };
+    expect(await claimInTurn(['a'], store, () => 1, lock)).toEqual(['a']);
+    expect(await claimInTurn(['a'], store, () => 2, lock)).toEqual([]);
+    expect(names).toEqual([CLAIM_LOCK, CLAIM_LOCK]);
+    expect(touched).toEqual([true, true, true, true]);
+  });
+
+  it('claims without a lock where the browser has none, or refuses one', async () => {
+    expect(await claimInTurn(['a'], memory(), () => 1, undefined)).toEqual(['a']);
+    const refusing: LocksLike = { request: () => Promise.reject(new Error('SecurityError')) };
+    const store = memory();
+    expect(await claimInTurn(['a'], store, () => 1, refusing)).toEqual(['a']);
+    expect(await claimInTurn(['a'], store, () => 2, refusing)).toEqual([]);
+  });
+});
+
 /** WCAG's relative luminance of a `#rrggbb`. */
 function luminance(hex: string): number {
   const [r, g, b] = [1, 3, 5].map((at) => {
@@ -159,6 +198,7 @@ describe('the tab icon', () => {
 describe('the chime', () => {
   function audio(options: { resume?: () => Promise<void>; construct?: () => void } = {}) {
     const started: number[] = [];
+    const closed: number[] = [];
     const Context = class {
       currentTime = 0;
       destination = {};
@@ -166,7 +206,7 @@ describe('the chime', () => {
         options.construct?.();
       }
       resume = options.resume ?? (async () => undefined);
-      close = async () => undefined;
+      close = async () => void closed.push(1);
       createOscillator() {
         return { type: '', frequency: { value: 0 }, connect: () => undefined, start: (at = 0) => void started.push(at), stop: () => undefined, onended: null };
       }
@@ -175,7 +215,7 @@ describe('the chime', () => {
         return { gain, connect: () => undefined };
       }
     };
-    return { Context: Context as unknown as AudioContextLike, started };
+    return { Context: Context as unknown as AudioContextLike, started, closed };
   }
 
   it('plays one quiet note', () => {
@@ -196,5 +236,7 @@ describe('the chime', () => {
     expect(() => chime(undefined)).not.toThrow();
     // A rejected resume is caught, not left unhandled.
     await new Promise((resolve) => setTimeout(resolve, 0));
+    // And its context is closed: a suspended one never ends its note to close itself.
+    expect(rejected.closed).toHaveLength(1);
   });
 });

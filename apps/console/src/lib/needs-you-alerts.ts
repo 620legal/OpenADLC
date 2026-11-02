@@ -99,6 +99,34 @@ export function claimAcrossTabs(
   }
 }
 
+/** The part of `navigator.locks` the claim takes. */
+export type LocksLike = { request<T>(name: string, callback: () => T | Promise<T>): Promise<T> };
+
+export const CLAIM_LOCK = 'openadlc.alerts.claim';
+
+/**
+ * `claimAcrossTabs` with every tab of this browser taking turns. The claim
+ * reads storage and then writes it, and two tabs whose hidden timers fire
+ * together could both read the id unclaimed and both alert; the Web Locks
+ * API lets one finish before the other reads. A browser without it, or one
+ * whose lock fails, claims as before.
+ */
+export async function claimInTurn(
+  ids: readonly string[],
+  store: Pick<Storage, 'getItem' | 'setItem'>,
+  now: () => number,
+  locks: LocksLike | undefined,
+): Promise<string[]> {
+  if (locks) {
+    try {
+      return await locks.request(CLAIM_LOCK, () => claimAcrossTabs(ids, store, now()));
+    } catch {
+      // No lock to be had here (an opaque origin, say): claim without one.
+    }
+  }
+  return claimAcrossTabs(ids, store, now());
+}
+
 /**
  * The tab's icon while anything waits: an amber dot in a darker ring.
  *
@@ -157,7 +185,10 @@ export function chime(Context: AudioContextLike | undefined): void {
     tone.onended = () => void context.close().catch(() => undefined);
     tone.start(start);
     tone.stop(start + 0.18);
-    void context.resume().catch(() => undefined);
+    // A suspended context never moves its clock, so the note never ends and
+    // `onended` never closes it: each blocked chime would keep a context open
+    // until the browser's cap, and every chime after that would throw.
+    void context.resume().catch(() => void context.close().catch(() => undefined));
   } catch {
     // No sound in this browser, or not yet: the title and the dot still say it.
   }
