@@ -441,6 +441,14 @@ describe('the settings page', () => {
     expect(fields).not.toContain('>Save<');
   });
 
+  it('has a Hosts card that links to the page listing them, below System', async () => {
+    const html = await page();
+    const hosts = html.slice(html.indexOf('<section id="hosts"'), html.indexOf('</section>', html.indexOf('<section id="hosts"')));
+    expect(hosts).toMatch(/<h2 id="hosts-title"[^>]*>Hosts<\/h2>/);
+    expect(hosts).toMatch(/<a [^>]*href="\/settings\/hosts"[^>]*>See the hosts<\/a>/);
+    expect(html.indexOf('id="engine-updates"')).toBeLessThan(html.indexOf('<section id="hosts"'));
+  });
+
   it('has a Backup section of its own: Backup and Restore, each a row that opens its form', async () => {
     const html = await page();
     const backup = section(html, 'backup');

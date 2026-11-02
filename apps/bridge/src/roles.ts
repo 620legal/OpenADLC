@@ -133,6 +133,8 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'GET /v1/restore': 'admin',
   'GET /v1/restore/into': 'admin',
   'GET /v1/users': 'admin',
+  // Settings → Hosts: Settings are an admin's, as Spending's page is.
+  'GET /v1/hosts': 'admin',
 
   // Changing the install.
   'PATCH /v1/install': 'admin',
