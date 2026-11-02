@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -109,6 +109,30 @@ describe('help after a command', () => {
   it('refuses a single-dash argument a command does not take', async () => {
     expect(await run('config', '-x')).toBe(2);
     expect(printed.join('\n')).toContain('openadlc config does not take -x');
+  });
+});
+
+describe('openadlc ls and watch', () => {
+  it('are in the help', async () => {
+    await runUntil('openadlc watch', 'help');
+    const help = printed.join('\n');
+    expect(help).toContain('openadlc ls [--json]');
+    expect(help).toContain('openadlc watch [--json]');
+  });
+
+  it('are not commands that open the database, which they never read', () => {
+    const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
+    const listed = /const DATABASE_COMMANDS = new Set\(\[([^\]]*)\]\)/.exec(source)?.[1];
+    expect(listed).toBeDefined();
+    const names = [...listed!.matchAll(/'([^']+)'/g)].map((match) => match[1]);
+    expect(names).toContain('status');
+    expect(names).not.toContain('ls');
+    expect(names).not.toContain('watch');
+  });
+
+  it('refuse an argument, before reaching for the bridge', async () => {
+    expect(await run('watch', 'foo')).toBe(2);
+    expect(await run('ls', '--all')).toBe(2);
   });
 });
 

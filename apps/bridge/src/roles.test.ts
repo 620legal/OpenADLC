@@ -121,6 +121,13 @@ describe('every console route says who may call it', () => {
     }
   });
 
+  it('lets a user read the board’s events and live tasks, as `openadlc watch` and `ls` do, from the console API', () => {
+    for (const key of ['GET /v1/board/events', 'GET /v1/board/tasks']) {
+      expect(ROUTE_ROLES[key], key).toBe('user');
+      expect(everyRoute(), key).toContain(key);
+    }
+  });
+
   it('lets everyone read the console’s name and logo, and only an admin change them', () => {
     // Every person using the console sees them in its header.
     expect(ROUTE_ROLES['GET /v1/brand']).toBe('user');
