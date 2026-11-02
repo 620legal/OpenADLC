@@ -1,16 +1,17 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AppShell } from '@/components/app-header';
 import { ItemView } from '@/components/item-view';
-import { NEEDS_YOU_PAGE, NeedsList, type OpenBot, type OpenItem } from '@/components/needs-you';
+import { NEEDS_YOU_PAGE, NeedsList, type CardKeys, type OpenBot, type OpenItem } from '@/components/needs-you';
 import { ThreadPanel } from '@/components/thread-panel';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { AttentionItem, CrewMember } from '@/lib/api';
-import { groupCounts, groupOf, type AttentionGroup } from '@/lib/attention-card';
+import { groupCounts, groupOf, waiting as waitingOf, type AttentionGroup } from '@/lib/attention-card';
 import { findBot } from '@/lib/bot-label';
 import type { HeaderData } from '@/lib/header';
+import { needsYouKey } from '@/lib/keys';
 
 /**
  * Everything waiting on the person, in two lists: **Work**, what the
@@ -75,6 +76,46 @@ export function NeedsYouPage({
   const counts = groupCounts(items);
   const of = (group: AttentionGroup) => items.filter((item) => groupOf(item) === group);
 
+  // The keys: j and k select within the open tab's list, in the order it is
+  // drawn, and wrap nowhere; 1–9 and Enter act through the selected card's
+  // own handlers. Only this page has them, not the board's few cards.
+  const [selected, setSelected] = useState<string | null>(null);
+  const cards = useRef(new Map<string, CardKeys>());
+  const onCards = useCallback((id: string, keys: CardKeys | null) => {
+    if (keys) cards.current.set(id, keys);
+    else cards.current.delete(id);
+  }, []);
+  const ids = waitingOf(of(tab)).map((item) => item.id);
+  const idsKey = ids.join('\n');
+  // Where the selection was, so a card that goes on a refresh hands it to the one now in its place.
+  const lastIndex = useRef(-1);
+  if (selected && ids.includes(selected)) lastIndex.current = ids.indexOf(selected);
+  useEffect(() => setSelected(null), [tab]);
+  useEffect(() => {
+    if (selected === null || ids.includes(selected)) return;
+    setSelected(ids.length === 0 ? null : ids[Math.min(lastIndex.current, ids.length - 1)]!);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the list's ids, not the array made each render
+  }, [idsKey, selected]);
+  // An item's sheet and a bot's thread are not dialogs to `needsYouKey`, and the keys are not theirs either.
+  const covered = openItem !== null || openBot !== null;
+  useEffect(() => {
+    const list = idsKey ? idsKey.split('\n') : [];
+    const onKey = (event: KeyboardEvent) => {
+      if (covered) return;
+      const key = needsYouKey(event);
+      if (!key || list.length === 0) return;
+      const at = selected ? list.indexOf(selected) : -1;
+      if (key.kind === 'next') setSelected(at < 0 ? list[0]! : list[Math.min(at + 1, list.length - 1)]!);
+      else if (key.kind === 'prev') setSelected(at < 0 ? list[0]! : list[Math.max(at - 1, 0)]!);
+      else if (!selected) return;
+      else if (key.kind === 'choose') cards.current.get(selected)?.choose(key.n);
+      else cards.current.get(selected)?.open();
+      event.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [idsKey, selected, covered]);
+
   return (
     <AppShell page="needs-you" data={header}>
       <main className="mx-auto flex w-full max-w-[1200px] flex-col gap-3 px-4 py-6 md:px-6">
@@ -94,10 +135,25 @@ export function NeedsYouPage({
             </TabsList>
           </div>
           <TabsContent value="work" className="pt-4">
-            <NeedsList items={of('work')} now={now} onOpenBot={openThread} onOpenItem={openWork} empty="Nothing from the crew waits on you." />
+            <NeedsList
+              items={of('work')}
+              now={now}
+              onOpenBot={openThread}
+              onOpenItem={openWork}
+              empty="Nothing from the crew waits on you."
+              selected={tab === 'work' ? selected : null}
+              onCards={onCards}
+            />
           </TabsContent>
           <TabsContent value="system" className="pt-4">
-            <NeedsList items={of('system')} now={now} onOpenBot={openThread} empty="Nothing about the install needs you." />
+            <NeedsList
+              items={of('system')}
+              now={now}
+              onOpenBot={openThread}
+              empty="Nothing about the install needs you."
+              selected={tab === 'system' ? selected : null}
+              onCards={onCards}
+            />
           </TabsContent>
         </Tabs>
       </main>
