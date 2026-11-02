@@ -69,6 +69,35 @@ avatar, too faint for a dot; the avatar is beside the line.) A card waiting on
 a person keeps a still dot and says "Waiting for your answer", a queued task
 says "Queued", and nothing moves on a card nothing runs on.
 
+The board has a switch, By stage and By state, kept in the browser
+(`openadlc.board.view`; By stage on a first visit, for a value it does not know,
+or where storage throws, and always on the server's drawing). By state groups
+the cards By stage draws, after the repository and text filters, into four
+columns, worked out in the console from the board and Needs-you reads it
+already has, with nothing stored (`lib/board-state.ts`,
+[ADR 0027](adr/0027-the-board-by-state-is-grouped-in-the-console.md)). A card
+goes in the first that fits:
+
+1. **Needs you**: a waiting work item in Needs you (not a plan change approved
+   and waiting for other work) names its ref, its item key or its pull request,
+   or a gate is open on it that is not such an approval.
+2. **Working**: a task on it runs.
+3. **Waiting**: anything else not in Done, saying its own line, which is its
+   wait followed to its root when it has one.
+4. **Done today**: in Done, shipped (or closed) since midnight in the browser's
+   time zone.
+
+A Done card from before today is left out; the week is in By stage. A Working
+card's line is always the running task's, and its top row says the card's whole
+spend against its repository's per-task cap, "$4.10 of $15": `GET /v1/board`
+sends `repositories[].taskCapUsd`, the cap gates stop a task at
+(`effectiveTaskCap`), and without it, or at zero, the spend alone. Cards in By
+state are not dragged; Move to… still names a stage. A task that starts moves
+its card to Working on the next read, as every line does. Beside the switch a
+dot says when the board was last read, by the browser's clock, from a whole
+read or an activity answer: "Live · 4s ago", and "Not updated" once more than a
+refresh and five seconds (20 s) have passed.
+
 Outside the console, `openadlc watch` reads a stream of board events
 (`GET /v1/board/events`, `board-events.ts`): a task started, a question asked,
 a pull request held, a merge. Nothing emits them. One poller for the install,
@@ -196,7 +225,10 @@ none yet, says its kind of work instead ("writing the change").
 1. **Asked.** A person writes what they want in the console's New request —
    a line, the details, and any screenshots, mockups or documents, which are
    kept in OpenADLC's database and never posted to GitHub
-   ([ADR 0001](adr/0001-attachments-in-the-database.md)) — or opens an issue. A console request is not an issue yet: it is a request row,
+   ([ADR 0001](adr/0001-attachments-in-the-database.md)) — or opens an issue.
+   While both boxes are empty the form offers starters (a bug, a small
+   feature, a docs fix, tests for a module; `apps/console/src/lib/request-starters.ts`)
+   that fill it with an example whose `[bracketed blanks]` the person replaces. A console request is not an issue yet: it is a request row,
    and an intake task runs on the subject `request:<id8>`; it shows in the
    Intake column while it does. `<id8>` is the first eight characters of the
    request's id, and it is unique per install: the database refuses a second
@@ -987,6 +1019,22 @@ task's session, rather than waiting for the role's next task
   the fact on its plan changes, is audited under the item's key, with the
   subjects it acted on in the payload (`subjects`); pause, resume, next and
   cancel answer with the key as `item`.
+  `GET /v1/items` (`user`) is the command palette's jump list: the open
+  items and those closed in the last 30 days, read from `boardLinks`. It
+  leaves out what the console leaves out and items in removed repositories,
+  and holds at most 1000. The palette reads it through the console's
+  `/api/palette`, beside whether anything is paused, each time it opens, and
+  matches in the browser (docs/adr/0029).
+- **Keyboard.** ⌘K on a Mac and Ctrl+K elsewhere open the command palette on
+  every page with the header (`AppShell`), even from a text field. It jumps
+  to an item, goes to a page, or acts: New request, Pause work, and Resume,
+  which goes to Settings' Pause work card. Settings, Pause work and Resume are
+  offered to an admin only, and Resume only while something is paused. `?`
+  lists the keys. On Needs you, j and k select a card in the open tab without
+  wrapping, 1–9 answer the selected question with that choice through the
+  card's own handler, and Enter opens it. Every single-key rule yields while
+  typing in a field, while a dialog is open, or with a modifier held
+  (`lib/keys.ts`).
 - **The board reads the issues it can show**, numbered or not: those not in
   Done, and those in Done whose row changed in the week Done shows
   (`boardIssues`, indexed by migration 0151), and of the tasks only theirs

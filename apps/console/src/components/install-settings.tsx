@@ -24,7 +24,8 @@ export type SettingKey =
   | 'appClientSecret'
   | 'operatorEmail'
   | 'installName'
-  | 'attributionMode';
+  | 'attributionMode'
+  | 'keepAwake';
 
 export interface InstallSettings {
   organization: string;
@@ -48,6 +49,12 @@ export interface InstallSettings {
   /** Which are stored here rather than inherited from the environment. */
   storedKeys: string[];
   webhookUrl: string;
+  /**
+   * Holding this Mac awake while the crew has work in flight: whether the
+   * bridge's host can be (macOS with `caffeinate`), whether the switch is on,
+   * and whether it is held now. Absent from an older bridge.
+   */
+  keepAwake?: { available: boolean; on: boolean; holding: boolean };
 }
 
 /** `initial`, when the page read the settings on the server, is shown at once and not asked for again. */

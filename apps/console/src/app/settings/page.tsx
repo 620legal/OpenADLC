@@ -5,6 +5,7 @@ import { BridgeDown } from '@/components/bridge-down';
 import { EgressHosts } from '@/components/egress-hosts';
 import { EngineUpdates } from '@/components/engine-updates';
 import { SelfUpdate } from '@/components/self-update';
+import { KeepAwake } from '@/components/keep-awake';
 import { GitHubCard } from '@/components/github-card';
 import { CrewTable } from '@/components/github-accounts';
 import { RepositoriesCard } from '@/components/repositories-card';
@@ -138,8 +139,19 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
               <CrewTable crew={crew.bots} accounts={accounts ?? []} github={github} />
             </SettingsCard>
 
-            {/* OpenADLC itself is the first row of System, above the tools it runs. */}
-            <EngineUpdates initial={engineUpdates} extra={<SelfUpdate initial={selfUpdate} />} />
+            {/*
+              * OpenADLC itself is the first row of System, above the tools it
+              * runs; on a Mac the bridge can hold awake, keep-awake is beside it.
+              */}
+            <EngineUpdates
+              initial={engineUpdates}
+              extra={
+                <>
+                  <SelfUpdate initial={selfUpdate} />
+                  <KeepAwake install={install} />
+                </>
+              }
+            />
 
             {/* Read on their own page, `/settings/hosts`: Settings does not ask for them. */}
             <SettingsCard

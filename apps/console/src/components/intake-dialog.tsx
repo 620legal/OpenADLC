@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { atStart, botLabel, type BotLabel } from '@/lib/bot-label';
 import { useDraft } from '@/lib/draft';
+import { REQUEST_STARTERS, showsStarters, type RequestStarter } from '@/lib/request-starters';
 import { safeAction } from '@/lib/safe-action';
 
 const KINDS = ['feature', 'defect', 'chore', 'question'];
@@ -47,6 +48,8 @@ export function IntakeDialog({
   labelOf = (name) => botLabel({ name }),
   defaultRepo,
   children,
+  open: openFromOutside,
+  onOpenChange,
 }: {
   repos: string[];
   /** The bot that took the request, as a person reads it: the bridge answers with its name. */
@@ -55,8 +58,20 @@ export function IntakeDialog({
   defaultRepo?: string;
   /** The button that opens it, where a page wants its own; one button element. */
   children?: ReactNode;
+  /**
+   * Opened from elsewhere, as the command palette's New request does: with
+   * these it draws no button of its own. The draft is the same either way.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const controlled = openFromOutside !== undefined;
+  const [openHere, setOpenHere] = useState(false);
+  const open = controlled ? openFromOutside : openHere;
+  const setOpen = (next: boolean) => {
+    if (!controlled) setOpenHere(next);
+    onOpenChange?.(next);
+  };
   // Kept across a reload: a request half written is not lost to a console
   // restarted under the tab.
   const [text, setText] = useDraft('intake:text');
@@ -83,6 +98,15 @@ export function IntakeDialog({
     setResult(null);
     setFiles({ ids: [], busy: false });
     setFilesKey((key) => key + 1);
+  };
+
+  // A starter fills only an empty form: a click that lands after something
+  // was typed (a stale render) would otherwise throw the typing away.
+  const fill = (starter: RequestStarter): void => {
+    if (!showsStarters(text, context)) return;
+    setText(starter.text);
+    setContext(starter.details);
+    setKind(starter.kind);
   };
 
   const submit = (andAnother = false): void => {
@@ -136,13 +160,15 @@ export function IntakeDialog({
         if (!next) another();
       }}
     >
-      <DialogTrigger asChild>
-        {children ?? (
-          <Button size="sm" variant="primary">
-            + New request
-          </Button>
-        )}
-      </DialogTrigger>
+      {!controlled && (
+        <DialogTrigger asChild>
+          {children ?? (
+            <Button size="sm" variant="primary">
+              + New request
+            </Button>
+          )}
+        </DialogTrigger>
+      )}
       <DialogContent>
         {sent ? (
           <SentView sent={sent} said={labelOf(sent.bot).said} onAnother={another} />
@@ -162,6 +188,17 @@ export function IntakeDialog({
             )}
 
             <div className="mt-4 space-y-3">
+              {showsStarters(text, context) && (
+                <div role="group" aria-label="Starters" className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] text-muted">Start from an example:</span>
+                  {REQUEST_STARTERS.map((starter) => (
+                    <Button key={starter.label} type="button" size="sm" variant="ghost" onClick={() => fill(starter)}>
+                      {starter.label}
+                    </Button>
+                  ))}
+                </div>
+              )}
+
               <label className="block">
                 <span className="text-[11px] font-medium text-soft">What do you want changed?</span>
                 <textarea

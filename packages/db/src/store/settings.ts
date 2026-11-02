@@ -122,6 +122,9 @@ export const SETTING_KEYS = [
   // The console's logo beside it, as a checked `data:<type>;base64,…` of at most
   // 256 KB. Large, so `allSettings` leaves it out unless asked.
   'consoleLogo',
+  // `on` or `off`; absent is on. Whether the bridge holds its macOS host awake
+  // (`caffeinate -i`) while work is in flight. See the bridge's `keep-awake.ts`.
+  'keepAwake',
   // Where owner notifications go, as JSON: `{kind: 'ntfy'|'slack'|'webhook',
   // server?, setAt, setBy}`. The target (a URL, or the ntfy topic) is not here:
   // it is in the secret store as `notify-target`. Only PUT

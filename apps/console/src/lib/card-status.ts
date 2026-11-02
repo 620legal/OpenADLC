@@ -490,6 +490,18 @@ function runningLine(card: BoardCard, task: CardTask, active: readonly CardTask[
   return { text: parts.filter(Boolean).join(' · '), tone: 'signal', mark: 'dot', live: true };
 }
 
+/**
+ * The line of the task running on a card, whatever `cardStatus` puts first:
+ * By state's Working column says who is on it and for how long, and a card
+ * there with a failed review or a wait chain said those instead. Null when
+ * nothing on it runs.
+ */
+export function runningStatus(card: BoardCard, context: CardContext): CardStatus | null {
+  const active = card.active ?? [];
+  const task = leading(active);
+  return task?.state === 'running' ? runningLine(card, task, active, context) : null;
+}
+
 function inLine(card: BoardCard, mergeLine: readonly MergeLineEntry[] | undefined): CardStatus | null {
   if (!card.prNumber || !mergeLine) return null;
   const ref = `${card.repo}#${card.prNumber}`;

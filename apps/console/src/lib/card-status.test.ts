@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BoardCard, CardTask, CardWaiting, WaitChain, WaitEnd, WaitingReason, WaitLink } from './api';
-import { awaitedApprovalsOf, cardBot, cardCost, cardStatus, chainLine, heldApprovalsOf, nextUp, rootButton, type CardContext } from './card-status';
+import { awaitedApprovalsOf, cardBot, cardCost, cardStatus, chainLine, heldApprovalsOf, nextUp, rootButton, runningStatus, type CardContext } from './card-status';
 import { ago, duration, money, ordinal, untilIn } from './when';
 
 const NOW = '2026-09-24T12:00:00.000Z';
@@ -312,6 +312,24 @@ describe('a card’s status line', () => {
     expect(cardStatus(bare, CONTEXT).text).toBe('Waiting for intake');
     expect(cardCost(bare, money)).toBeNull();
     expect(cardBot(bare)).toBeNull();
+  });
+});
+
+describe('the running task’s own line, for By state’s Working column', () => {
+  it('names the bot and how long it has run, measured from its since, where cardStatus says something else first', () => {
+    const failed = card({
+      stage: 'review',
+      prNumber: 31,
+      reviewFailed: true,
+      active: [task({ kind: 'review', state: 'running', bot: 'noraexampleco', startedAt: minutesAgo(90), since: minutesAgo(7), activity: 'reading the diff' })],
+    });
+    expect(cardStatus(failed, CONTEXT).text).toBe('Review failed · needs you');
+    expect(runningStatus(failed, CONTEXT)).toEqual({ text: 'Lead reviewer · reading the diff · 7 min', tone: 'signal', mark: 'dot', live: true });
+  });
+
+  it('is null when nothing on the card runs', () => {
+    expect(runningStatus(card({ active: [task({ kind: 'implement', state: 'queued' })] }), CONTEXT)).toBeNull();
+    expect(runningStatus(card(), CONTEXT)).toBeNull();
   });
 });
 

@@ -120,6 +120,7 @@ import { deploysNothingHere } from './deploy-pipeline.js';
 import { releaseEventsOf } from './health/checks/ships-by-release.js';
 import { startBuild } from './build-start.js';
 import type { HealthRegistry } from './health/registry.js';
+import type { KeepAwake } from './keep-awake.js';
 import { registerHealthRoutes } from './health/routes.js';
 import { registerSigningKeyRoutes } from './signing-key-routes.js';
 import { SubjectTitles } from './subject-titles.js';
@@ -132,6 +133,7 @@ import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
 import { checkConsoleLogo, checkConsoleName, decodeLogo, LOGO_POLICY, logoMediaType } from './brand.js';
 import { defaultItemLinkDeps, registerItemLinkRoutes, registerItemRoutes } from './item-routes.js';
+import { registerItemSearchRoutes } from './item-search-routes.js';
 import { itemKey, itemOf, offeredGate, requestSubject, resolveItem } from './items.js';
 import { PlanChanges, registerPlanChangeRoutes } from './plan-changes.js';
 import { humanReviewReader } from './human-review-read.js';
@@ -172,6 +174,8 @@ export interface ApiDeps {
   crewAccess?: CrewAccessKeeper;
   /** The health checks; absent where none run. See `health/`. */
   health?: HealthRegistry;
+  /** Holding a Mac awake while work is in flight (`keep-awake.ts`); absent, `GET /v1/install` says nothing of it. */
+  keepAwake?: Pick<KeepAwake, 'state' | 'evaluateSoon'>;
   /** Pauses the dispatcher's leases, as a restore into this install does while it writes. */
   dispatchGate?: DispatchGate;
   /** Where the app is installed and whether it reaches a repository; absent where nothing asks GitHub. */
@@ -1346,12 +1350,25 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     // before the week, which the board does not read: a quiet repository's
     // board said "File your first request" over its history.
     const doneBefore = columns.every((column) => column.cards.length === 0) ? await issues.anyDoneBefore(since, repoName) : undefined;
+    // What one task may spend in each repository, the cap gates stop it at
+    // (`effectiveTaskCap`): a Working card says its spend against it. The
+    // global cap alone would have said "of $15" where the repository's own
+    // stops its tasks at $5. One that cannot be read is left off, and the
+    // card says its spend alone, rather than the board failing for it.
+    const taskCaps = await Promise.all(
+      repoList.map((repo) => spendingLimits.effectiveTaskCap(repo.id, config?.costs?.perTaskCapUsd ?? 0).catch(() => null)),
+    );
 
     return {
       repo: repoName ?? 'all',
       repos: repoList.map((repo) => repo.name),
       // Each with the colour the board tells it apart by, when it shows them all.
-      repositories: repoList.map((repo) => ({ name: repo.name, fullName: repo.fullName, color: repo.color })),
+      repositories: repoList.map((repo, index) => ({
+        name: repo.name,
+        fullName: repo.fullName,
+        color: repo.color,
+        ...(typeof taskCaps[index] === 'number' ? { taskCapUsd: taskCaps[index] } : {}),
+      })),
       columns,
       mergeLine: landing.map((entry) => ({
         repo: entry.repoName,
@@ -1611,6 +1628,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   });
 
   registerItemRoutes(router, deps);
+  // The command palette's jump list: open items and those closed in the last month.
+  registerItemSearchRoutes(router);
   registerItemLinkRoutes(router, defaultItemLinkDeps(() => asAutomation(deps.actors, config)));
   registerPlanChangeRoutes(router, planChangesFor(deps), async (subject) => {
     const found = await resolveItem(subject);
@@ -2755,6 +2774,11 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       // would go back to if the field were cleared.
       storedKeys: Object.keys(stored),
       webhookUrl: `${live.publicUrl || 'https://your-bridge.example.com'}/webhooks/github`,
+      // Whether this host can be held awake at all, whether the switch is on
+      // (absent is on), and whether it is held now. The switch is drawn only where available.
+      ...(deps.keepAwake
+        ? { keepAwake: { ...deps.keepAwake.state(), on: stored.keepAwake !== 'off' } }
+        : {}),
     };
   });
 
@@ -3216,6 +3240,10 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       if (!result.ok) throw new HttpFailure(400, result.error);
       checked.set(key, result.value);
     }
+    // Checked here too, so a refused value writes nothing else in the request.
+    if ('keepAwake' in input && input.keepAwake !== 'on' && input.keepAwake !== 'off') {
+      throw new HttpFailure(400, 'keepAwake is on or off');
+    }
 
     for (const [key, value] of Object.entries(input)) {
       if (!settings.isSettingKey(key)) throw new HttpFailure(400, `${key} is not a setting`);
@@ -3338,6 +3366,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       // The keys, never the values: one of them is a webhook signing secret.
       payload: { keys: written },
     });
+    // Turned off, the assertion is let go of now rather than at the next tick.
+    if (written.includes('keepAwake')) deps.keepAwake?.evaluateSoon();
 
     const live = await effectiveConfig(config);
     // Each person added is pinned to the account their login names now, and

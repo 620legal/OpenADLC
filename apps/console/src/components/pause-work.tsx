@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useId, useState, useTransition, type ReactNode } from 'react';
 import { pauseWork, resumeWork } from '@/app/actions';
 import { RepoDot } from '@/components/repo-badge';
 import { SettingsCard } from '@/components/settings-sections';
@@ -68,30 +68,21 @@ export function PauseWorkCard({
       that; restart the bridge with OPENADLC_DISPATCH_IN_BRIDGE=1. The card on the board says how.
     </p>
   );
-  const [scope, setScope] = useState<Scope>('all');
-  const [chosen, setChosen] = useState<string[]>([]);
-  const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [asking, setAsking] = useState(false);
   const [pending, startTransition] = useTransition();
 
   const act = (work: () => Promise<{ ok: boolean; error?: string; pauses?: WorkPauses }>) => {
     setError(null);
     startTransition(async () => {
       const result = await work();
-      setAsking(false);
       if (!result.ok) setError(result.error ?? 'that did not go through');
-      else {
-        setPauses(result.pauses ?? { paused: null, repos: {} });
-        setChosen([]);
-      }
+      else setPauses(result.pauses ?? { paused: null, repos: {} });
     });
   };
 
   const colorOf = (name: string) => repositories.find((repo) => repo.name === name)?.color ?? null;
   const pausedNames = Object.keys(pauses.repos).sort();
   const choosable = repositories.filter((repo) => !pauses.repos[repo.name]);
-  const naming = scope === 'chosen' ? chosen : undefined;
 
   // Each repository paused on its own, with who paused it and its own Resume:
   // shown under the install's pause too, which does not replace them.
@@ -171,103 +162,164 @@ export function PauseWorkCard({
               )}
             </div>
           )}
-          <form
-            className="flex flex-col gap-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              setAsking(true);
-            }}
-          >
-            {pausedNames.length === 0 && (
-              <p className="text-muted">
-                {dispatching ? 'Work runs. ' : ''}Pausing stops anything new from starting until someone resumes; it is audited and shown on the
-                board.
-              </p>
-            )}
-            <fieldset className="flex flex-col gap-1.5">
-              <legend className="mb-1 text-soft">Which repositories</legend>
-              <div className="flex flex-wrap gap-x-4 gap-y-1">
-                {(
-                  [
-                    ['all', 'All repositories'],
-                    ['chosen', 'Chosen repositories'],
-                  ] as const
-                ).map(([value, label]) => (
-                  <label key={value} className="flex cursor-pointer items-center gap-1.5 text-body">
-                    <input
-                      type="radio"
-                      name="pause-scope"
-                      value={value}
-                      checked={scope === value}
-                      onChange={() => {
-                        setScope(value);
-                        setAsking(false);
-                      }}
-                      className="size-4 accent-link"
-                    />
-                    {label}
-                  </label>
-                ))}
-              </div>
-              {scope === 'chosen' &&
-                (choosable.length === 0 ? (
-                  <p className="text-muted">Every repository is paused already.</p>
-                ) : (
-                  <div role="group" aria-label="Repositories to pause" className="flex flex-col gap-1 pl-0.5">
-                    {choosable.map((repo) => (
-                      <label key={repo.name} className="flex cursor-pointer items-center gap-2 text-body">
-                        <input
-                          type="checkbox"
-                          value={repo.name}
-                          checked={chosen.includes(repo.name)}
-                          onChange={(event) => {
-                            const on = event.target.checked;
-                            setChosen((was) => (on ? [...was, repo.name] : was.filter((one) => one !== repo.name)));
-                            setAsking(false);
-                          }}
-                          className="size-4 shrink-0 accent-link"
-                        />
-                        <RepoDot color={repo.color} />
-                        {repo.name}
-                      </label>
-                    ))}
-                  </div>
-                ))}
-            </fieldset>
-            <label className="flex flex-col gap-1">
-              <span className="text-soft">Why (optional)</span>
-              <input
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-                placeholder="an account may be compromised"
-                className="h-9 rounded-md border border-edge-strong bg-panel px-2.5 text-[13px] text-body"
-              />
-            </label>
-            {asking ? (
-              <div role="group" aria-label="Confirm" className="flex flex-col gap-2 rounded-md border border-alarm/40 bg-alarm/5 px-2.5 py-2">
-                <p className="font-medium text-body">
-                  {naming ? `Pause new work in ${namesLine(naming)}?` : 'Pause all new work across every repository?'}
+          <PauseForm
+            repositories={choosable}
+            onPaused={setPauses}
+            intro={
+              pausedNames.length === 0 && (
+                <p className="text-muted">
+                  {dispatching ? 'Work runs. ' : ''}Pausing stops anything new from starting until someone resumes; it is audited and shown on the
+                  board.
                 </p>
-                <div className="flex flex-wrap gap-2">
-                  <Button type="button" size="sm" variant="danger" disabled={pending} onClick={() => act(() => pauseWork(reason, naming))}>
-                    {pending ? 'Pausing…' : 'Confirm'}
-                  </Button>
-                  <Button type="button" size="sm" variant="ghost" disabled={pending} onClick={() => setAsking(false)}>
-                    Cancel
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div>
-                <Button type="submit" size="sm" variant="danger" disabled={pending || (scope === 'chosen' && chosen.length === 0)}>
-                  Pause work
-                </Button>
-              </div>
-            )}
-          </form>
+              )
+            }
+          />
         </div>
       )}
       {error && <p className="mt-1 text-[12px] text-alarm">{error}</p>}
     </SettingsCard>
+  );
+}
+
+/**
+ * Pausing itself: all repositories or the ones chosen, why, and a second
+ * press to confirm. Settings' Pause work card draws it while the install is
+ * not paused, and the command palette's Pause work draws it in place of its
+ * list; both call `pauseWork` and nothing else.
+ */
+export function PauseForm({
+  repositories,
+  onPaused,
+  intro,
+  autoFocus = false,
+}: {
+  /** The repositories that can still be paused, each in its colour. */
+  repositories: readonly { name: string; color?: string | null }[];
+  /** Called with what is paused now, once pausing went through. */
+  onPaused: (pauses: WorkPauses) => void;
+  /** What the form says before its fields. */
+  intro?: ReactNode;
+  /** Focus the first choice, for the palette, where the form replaces the list that had focus. */
+  autoFocus?: boolean;
+}) {
+  const [scope, setScope] = useState<Scope>('all');
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const naming = scope === 'chosen' ? chosen : undefined;
+  // Its own radio group: on Settings the palette's form and the card's are on one page.
+  const group = useId();
+
+  const pause = () => {
+    setError(null);
+    startTransition(async () => {
+      const result = await pauseWork(reason, naming);
+      setAsking(false);
+      if (!result.ok) setError(result.error ?? 'that did not go through');
+      else {
+        setChosen([]);
+        onPaused(result.pauses ?? { paused: null, repos: {} });
+      }
+    });
+  };
+
+  return (
+    <form
+      className="flex flex-col gap-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        setAsking(true);
+      }}
+    >
+      {intro}
+      <fieldset className="flex flex-col gap-1.5">
+        <legend className="mb-1 text-soft">Which repositories</legend>
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
+          {(
+            [
+              ['all', 'All repositories'],
+              ['chosen', 'Chosen repositories'],
+            ] as const
+          ).map(([value, label]) => (
+            <label key={value} className="flex cursor-pointer items-center gap-1.5 text-body">
+              <input
+                type="radio"
+                name={group}
+                value={value}
+                autoFocus={autoFocus && value === scope}
+                checked={scope === value}
+                onChange={() => {
+                  setScope(value);
+                  setAsking(false);
+                }}
+                className="size-4 accent-link"
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+        {scope === 'chosen' &&
+          (repositories.length === 0 ? (
+            <p className="text-muted">Every repository is paused already.</p>
+          ) : (
+            <div role="group" aria-label="Repositories to pause" className="flex flex-col gap-1 pl-0.5">
+              {repositories.map((repo) => (
+                <label key={repo.name} className="flex cursor-pointer items-center gap-2 text-body">
+                  <input
+                    type="checkbox"
+                    value={repo.name}
+                    checked={chosen.includes(repo.name)}
+                    onChange={(event) => {
+                      const on = event.target.checked;
+                      setChosen((was) => (on ? [...was, repo.name] : was.filter((one) => one !== repo.name)));
+                      setAsking(false);
+                    }}
+                    className="size-4 shrink-0 accent-link"
+                  />
+                  <RepoDot color={repo.color} />
+                  {repo.name}
+                </label>
+              ))}
+            </div>
+          ))}
+      </fieldset>
+      <label className="flex flex-col gap-1">
+        <span className="text-soft">Why (optional)</span>
+        <input
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          placeholder="an account may be compromised"
+          className="h-9 rounded-md border border-edge-strong bg-panel px-2.5 text-[13px] text-body"
+        />
+      </label>
+      {asking ? (
+        <div role="group" aria-label="Confirm" className="flex flex-col gap-2 rounded-md border border-alarm/40 bg-alarm/5 px-2.5 py-2">
+          <p className="font-medium text-body">
+            {naming ? `Pause new work in ${namesLine(naming)}?` : 'Pause all new work across every repository?'}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" variant="danger" disabled={pending} onClick={pause}>
+              {pending ? 'Pausing…' : 'Confirm'}
+            </Button>
+            <Button type="button" size="sm" variant="ghost" disabled={pending} onClick={() => setAsking(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <Button type="submit" size="sm" variant="danger" disabled={pending || (scope === 'chosen' && chosen.length === 0)}>
+            Pause work
+          </Button>
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="text-[12px] text-alarm">
+          {error}
+        </p>
+      )}
+    </form>
   );
 }
