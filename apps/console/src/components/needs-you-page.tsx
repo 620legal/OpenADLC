@@ -108,6 +108,8 @@ export function NeedsYouPage({
       if (key.kind === 'next') setSelected(at < 0 ? list[0]! : list[Math.min(at + 1, list.length - 1)]!);
       else if (key.kind === 'prev') setSelected(at < 0 ? list[0]! : list[Math.max(at - 1, 0)]!);
       else if (!selected) return;
+      // A held number key repeats; one press is one answer.
+      else if (key.kind === 'choose' && event.repeat) return;
       else if (key.kind === 'choose') cards.current.get(selected)?.choose(key.n);
       else cards.current.get(selected)?.open();
       event.preventDefault();

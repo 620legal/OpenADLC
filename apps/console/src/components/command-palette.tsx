@@ -91,7 +91,10 @@ function Palette({
   const role = useRole();
   const [query, setQuery] = useState('');
   const [read, setRead] = useState<PaletteRead | null>(null);
-  const [active, setActive] = useState(0);
+  // The highlighted row by id, null until the person moves it. An index named
+  // another row once the jump list arrived and its items went in above the
+  // commands, so Enter ran a row nobody had highlighted (#241).
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [pausing, setPausing] = useState(false);
   const base = useId();
   const listId = `${base}-list`;
@@ -122,8 +125,10 @@ function Palette({
       ...commands.map((command): Row => ({ id: `${base}-${command.id}`, kind: 'command', command })),
     ];
   }, [read, query, role, repo, base]);
-  const current = Math.min(active, Math.max(rows.length - 1, 0));
+  const found = activeId === null ? -1 : rows.findIndex((row) => row.id === activeId);
+  const current = found < 0 ? 0 : found;
   const activeRow = rows[current];
+  const setActive = (index: number) => setActiveId(rows[index]?.id ?? null);
 
   useEffect(() => {
     if (activeRow) document.getElementById(activeRow.id)?.scrollIntoView?.({ block: 'nearest' });
@@ -206,7 +211,7 @@ function Palette({
                 value={query}
                 onChange={(event) => {
                   setQuery(event.target.value);
-                  setActive(0);
+                  setActiveId(null);
                 }}
                 onKeyDown={onKeyDown}
                 placeholder="Jump to an item, go to a page, or act…"

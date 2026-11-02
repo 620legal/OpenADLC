@@ -171,6 +171,43 @@ describe('jumping to an item', () => {
     expect(active()).toBe(options()[0]!.id);
   });
 
+  it('keeps the row moved to while the items load, once they arrive above it', async () => {
+    let arrive: () => void = () => undefined;
+    vi.mocked(fetch).mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          arrive = () => resolve(new Response(JSON.stringify(answer.body), { status: 200, headers: { 'content-type': 'application/json' } }));
+        }),
+    );
+    await mount();
+    await open();
+    const active = () => search().getAttribute('aria-activedescendant');
+    await key({ key: 'ArrowDown' }, search());
+    const moved = options()[1]!;
+    expect(active()).toBe(moved.id);
+    await act(async () => arrive());
+    await settle();
+    expect(options().length).toBeGreaterThan(ITEMS.length);
+    expect(active()).toBe(moved.id);
+    expect(document.getElementById(active()!)?.textContent).toBe(moved.textContent);
+  });
+
+  it('selects the first loaded item when nothing was moved while loading', async () => {
+    let arrive: () => void = () => undefined;
+    vi.mocked(fetch).mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          arrive = () => resolve(new Response(JSON.stringify(answer.body), { status: 200, headers: { 'content-type': 'application/json' } }));
+        }),
+    );
+    await mount();
+    await open();
+    await act(async () => arrive());
+    await settle();
+    expect(options()[0]!.textContent).toContain('acme-');
+    expect(search().getAttribute('aria-activedescendant')).toBe(options()[0]!.id);
+  });
+
   it('reads the jump list once each time it opens', async () => {
     await mount();
     expect(reads).toEqual([]);

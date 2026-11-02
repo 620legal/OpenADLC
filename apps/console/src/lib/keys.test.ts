@@ -76,6 +76,11 @@ describe('the Needs you keys', () => {
     expect(needsYouKey(key({ key: 'x' }), NO_DIALOG)).toBeNull();
   });
 
+  it('reads J and K with Caps Lock on as j and k', () => {
+    expect(needsYouKey(key({ key: 'J' }), NO_DIALOG)).toEqual({ kind: 'next' });
+    expect(needsYouKey(key({ key: 'K' }), NO_DIALOG)).toEqual({ kind: 'prev' });
+  });
+
   it('yields with Ctrl, ⌘ or Alt held', () => {
     expect(needsYouKey(key({ key: 'j', ctrlKey: true }), NO_DIALOG)).toBeNull();
     expect(needsYouKey(key({ key: '1', metaKey: true }), NO_DIALOG)).toBeNull();

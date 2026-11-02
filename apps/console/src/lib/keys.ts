@@ -60,8 +60,10 @@ export type NeedsYouKey = { kind: 'next' } | { kind: 'prev' } | { kind: 'choose'
 export function needsYouKey(event: KeyLike, doc: Pick<Document, 'querySelector'> | undefined = globalThis.document): NeedsYouKey | null {
   if (event.ctrlKey || event.metaKey || event.altKey) return null;
   if (isTyping(event.target) || dialogOpen(doc)) return null;
-  if (event.key === 'j') return { kind: 'next' };
-  if (event.key === 'k') return { kind: 'prev' };
+  // Caps Lock sends J and K; they move all the same.
+  const key = event.key.toLowerCase();
+  if (key === 'j') return { kind: 'next' };
+  if (key === 'k') return { kind: 'prev' };
   if (/^[1-9]$/.test(event.key)) return { kind: 'choose', n: Number(event.key) };
   if (event.key === 'Enter') return isPressable(event.target) ? null : { kind: 'open' };
   return null;

@@ -1068,6 +1068,21 @@ describe('the Needs-you page from the keyboard', () => {
     }
   });
 
+  it('answers once from the keys, as a click does: not again after the answer, nor from a held key', async () => {
+    await page();
+    const [first] = order() as [string];
+    await press('j');
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', repeat: true, bubbles: true, cancelable: true }));
+    });
+    expect(vi.mocked(answerGate)).not.toHaveBeenCalled();
+    await press('1');
+    expect(document.querySelector(`article[data-card="${first}"] [data-done]`)?.textContent).toContain('Answered:');
+    await press('1');
+    await press('2');
+    expect(vi.mocked(answerGate).mock.calls).toEqual([[`g-${first}`, optionsOf(first)[0]]]);
+  });
+
   it('wraps nowhere: j on the last and k on the first change nothing', async () => {
     await page();
     const ids = order();

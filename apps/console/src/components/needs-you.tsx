@@ -426,7 +426,10 @@ function NeedsCard({
     onOpenBot(bot, how);
   };
   const answer = (option: string) => {
-    if (pressing.current) return;
+    // Both of the button's guards: a press still going, and a final answer
+    // the card holds until it leaves. A number key never meets the button's
+    // \`disabled\`, so without \`pending\` a second 1 answered again (#241).
+    if (pressing.current || pending) return;
     setChosen(option);
     run(
       async () => {
