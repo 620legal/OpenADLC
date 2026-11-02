@@ -63,6 +63,8 @@ import { Notifier } from '../notify.js';
 import { deliveryCheck, productionEnvironmentOf } from './checks/delivery.js';
 import { shipsByReleaseCheck } from './checks/ships-by-release.js';
 import { testingEgressCheck } from './checks/testing-egress.js';
+import { sleptCheck } from './checks/slept.js';
+import { SLEPT_EVENT, type KeepAwake } from '../keep-awake.js';
 import { effectiveDelivery, type DeliveryKnowledge } from '../delivery-rules.js';
 import type { HealthCheck } from './types.js';
 
@@ -85,6 +87,8 @@ export interface HealthWiring {
   dispatch?: DispatchMode;
   /** Each repository's delivery rules, as the pipeline reads them; absent, read here from GitHub. */
   delivery?: Pick<DeliveryKnowledge, 'get'>;
+  /** Whether this host can be held awake, which the sleep card's button follows; absent, it cannot. */
+  keepAwake?: Pick<KeepAwake, 'state'>;
   /** Where notifications go and what was last sent there; absent, read the same way from the store. */
   notifier?: Pick<Notifier, 'transport' | 'lastDelivery'>;
 }
@@ -421,6 +425,10 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
     }),
     attributionCheck(unattributed),
     stampRefusedCheck(unattributed),
+    sleptCheck({
+      events: (since) => listEventsOfType(SLEPT_EVENT, since),
+      available: () => wiring.keepAwake?.state().available ?? false,
+    }),
   ];
 }
 

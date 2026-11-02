@@ -120,6 +120,7 @@ const SETTING_LABELS: Record<string, string> = {
   testingDeploy: 'Which repositories have a testing deploy',
   consoleName: 'The console’s name',
   consoleLogo: 'The console’s logo',
+  keepAwake: 'Whether the bridge keeps its Mac awake while work is in flight',
   notifyTransport: 'Where notifications go',
   notifyKinds: 'Which notifications are switched off',
 };

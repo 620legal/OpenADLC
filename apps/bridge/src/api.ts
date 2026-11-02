@@ -120,6 +120,7 @@ import { deploysNothingHere } from './deploy-pipeline.js';
 import { releaseEventsOf } from './health/checks/ships-by-release.js';
 import { startBuild } from './build-start.js';
 import type { HealthRegistry } from './health/registry.js';
+import type { KeepAwake } from './keep-awake.js';
 import { registerHealthRoutes } from './health/routes.js';
 import { registerSigningKeyRoutes } from './signing-key-routes.js';
 import { SubjectTitles } from './subject-titles.js';
@@ -173,6 +174,8 @@ export interface ApiDeps {
   crewAccess?: CrewAccessKeeper;
   /** The health checks; absent where none run. See `health/`. */
   health?: HealthRegistry;
+  /** Holding a Mac awake while work is in flight (`keep-awake.ts`); absent, `GET /v1/install` says nothing of it. */
+  keepAwake?: Pick<KeepAwake, 'state' | 'evaluateSoon'>;
   /** Pauses the dispatcher's leases, as a restore into this install does while it writes. */
   dispatchGate?: DispatchGate;
   /** Where the app is installed and whether it reaches a repository; absent where nothing asks GitHub. */
@@ -2771,6 +2774,11 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       // would go back to if the field were cleared.
       storedKeys: Object.keys(stored),
       webhookUrl: `${live.publicUrl || 'https://your-bridge.example.com'}/webhooks/github`,
+      // Whether this host can be held awake at all, whether the switch is on
+      // (absent is on), and whether it is held now. The switch is drawn only where available.
+      ...(deps.keepAwake
+        ? { keepAwake: { ...deps.keepAwake.state(), on: stored.keepAwake !== 'off' } }
+        : {}),
     };
   });
 
@@ -3232,6 +3240,10 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       if (!result.ok) throw new HttpFailure(400, result.error);
       checked.set(key, result.value);
     }
+    // Checked here too, so a refused value writes nothing else in the request.
+    if ('keepAwake' in input && input.keepAwake !== 'on' && input.keepAwake !== 'off') {
+      throw new HttpFailure(400, 'keepAwake is on or off');
+    }
 
     for (const [key, value] of Object.entries(input)) {
       if (!settings.isSettingKey(key)) throw new HttpFailure(400, `${key} is not a setting`);
@@ -3354,6 +3366,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       // The keys, never the values: one of them is a webhook signing secret.
       payload: { keys: written },
     });
+    // Turned off, the assertion is let go of now rather than at the next tick.
+    if (written.includes('keepAwake')) deps.keepAwake?.evaluateSoon();
 
     const live = await effectiveConfig(config);
     // Each person added is pinned to the account their login names now, and

@@ -36,6 +36,8 @@ const egress = vi.hoisted(() => ({
   view: { hosts: [] as string[], proxied: false as boolean | null, settingsList: false as boolean | null, reason: null as string | null },
 }));
 who.me = ADMIN;
+/** What the bridge says of holding its host awake; absent, as an older bridge or a Linux host says. */
+const awake = vi.hoisted(() => ({ view: undefined as { available: boolean; on: boolean; holding: boolean } | undefined }));
 
 vi.mock('@/lib/api', () => ({
   readMe: async () => who.me,
@@ -174,6 +176,7 @@ vi.mock('@/lib/api', () => ({
       appClientSecretConfigured: false,
       storedKeys: [],
       webhookUrl: '',
+      ...(awake.view ? { keepAwake: awake.view } : {}),
     }),
     // Not answering, as a bridge without the route would: the section reads its own.
     engineUpdates: async () => {
@@ -439,6 +442,23 @@ describe('the settings page', () => {
     expect(fields).toContain('role="meter"');
     expect(fields).not.toContain('<input');
     expect(fields).not.toContain('>Save<');
+  });
+
+  it('carries keep-awake in System where the bridge can hold its Mac awake, and nowhere else', async () => {
+    try {
+      awake.view = { available: true, on: true, holding: true };
+      const html = await page();
+      const system = html.slice(html.indexOf('id="system"'), html.indexOf('</section>', html.indexOf('id="system"')));
+      expect(system).toContain('id="keep-awake"');
+      expect(section(html, 'system')).toContain('Holding the Mac awake now');
+      expect(section(html, 'system')).toContain('Turn off');
+
+      awake.view = { available: false, on: true, holding: false };
+      expect(await page()).not.toContain('id="keep-awake"');
+    } finally {
+      awake.view = undefined;
+    }
+    expect(await page()).not.toContain('id="keep-awake"');
   });
 
   it('has a Hosts card that links to the page listing them, below System', async () => {
