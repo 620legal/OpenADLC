@@ -18,7 +18,7 @@ import { messageBrief, type MessageStarts, type ReadItem } from './message-start
  * task's end is reported by its runner (`/state`), which settles its rows at
  * once; a cancel, or reconcile failing a silent host, ends a task with no
  * runner to report it, and the sweep finds those rows. See
- * docs/adr/0028-a-message-to-a-running-task-waits-in-its-inbox.md.
+ * docs/adr/0030-a-message-to-a-running-task-waits-in-its-inbox.md.
  */
 
 /** How often the sweep looks for messages left by tasks that ended unreported. */

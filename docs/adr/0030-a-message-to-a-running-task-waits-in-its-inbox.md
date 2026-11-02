@@ -1,4 +1,4 @@
-# 0028. A message to a running task waits in its inbox
+# 0030. A message to a running task waits in its inbox
 
 - **Status:** accepted
 - **Date:** 2026-11-02

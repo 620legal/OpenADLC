@@ -879,7 +879,7 @@ back. A crew account that moves a stage label back is put back.
 A person's message to a role whose task on the item is live is read by that
 task's session, rather than waiting for the role's next task
 (`apps/bridge/src/task-inbox.ts`;
-[ADR 0028](adr/0028-a-message-to-a-running-task-waits-in-its-inbox.md)).
+[ADR 0030](adr/0030-a-message-to-a-running-task-waits-in-its-inbox.md)).
 
 - **Live** means `queued`, or `running` on an engine that takes messages. The
   runner says which with `running` (`tasks.takes_messages`), from its

@@ -92,7 +92,7 @@ export class GrokEngine implements Engine {
    * and whether the pinned CLI can do that headless has not been measured in
    * the bot image. Until it is, a message to a running Grok task is read at
    * its next task, and the thread says so. See
-   * docs/adr/0028-a-message-to-a-running-task-waits-in-its-inbox.md.
+   * docs/adr/0030-a-message-to-a-running-task-waits-in-its-inbox.md.
    */
   readonly takesMessages = false;
   private totals: EngineUsage = { tokensIn: 0, tokensOut: 0, costUsd: 0 };

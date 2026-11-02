@@ -4,7 +4,7 @@
  * session at its next turn, instead of waiting for the role's next task; one
  * its task ended before reading goes where it would have gone had it arrived
  * then; and one to a paused task waits on the thread, as before. See
- * docs/adr/0028-a-message-to-a-running-task-waits-in-its-inbox.md.
+ * docs/adr/0030-a-message-to-a-running-task-waits-in-its-inbox.md.
  *
  * Scripted: the scripted engine takes messages and says what it read
  * ("read a message: …"), and holds its turn open for

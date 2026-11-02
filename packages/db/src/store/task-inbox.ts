@@ -11,7 +11,7 @@ import type { Role } from './users.js';
  * them gets it and the other sees nothing. Kept as thread events instead, a
  * message could have been read live and started again, or neither; kept in
  * the bridge's memory, a restart lost it. See
- * docs/adr/0028-a-message-to-a-running-task-waits-in-its-inbox.md.
+ * docs/adr/0030-a-message-to-a-running-task-waits-in-its-inbox.md.
  */
 export interface InboxRow {
   id: string;

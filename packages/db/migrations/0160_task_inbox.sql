@@ -4,7 +4,7 @@
 -- as a new message would (`taskInbox.settle`). Each row is claimed once, by
 -- one `update … where state = 'queued' returning`, so a message is never
 -- both read live and started again. See
--- docs/adr/0028-a-message-to-a-running-task-waits-in-its-inbox.md.
+-- docs/adr/0030-a-message-to-a-running-task-waits-in-its-inbox.md.
 --
 -- Additive, no backfill: a row is only ever written for a task that is live
 -- after the bridge is upgraded.
