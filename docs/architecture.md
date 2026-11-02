@@ -225,7 +225,10 @@ none yet, says its kind of work instead ("writing the change").
 1. **Asked.** A person writes what they want in the console's New request —
    a line, the details, and any screenshots, mockups or documents, which are
    kept in OpenADLC's database and never posted to GitHub
-   ([ADR 0001](adr/0001-attachments-in-the-database.md)) — or opens an issue. A console request is not an issue yet: it is a request row,
+   ([ADR 0001](adr/0001-attachments-in-the-database.md)) — or opens an issue.
+   While both boxes are empty the form offers starters (a bug, a small
+   feature, a docs fix, tests for a module; `apps/console/src/lib/request-starters.ts`)
+   that fill it with an example whose `[bracketed blanks]` the person replaces. A console request is not an issue yet: it is a request row,
    and an intake task runs on the subject `request:<id8>`; it shows in the
    Intake column while it does. `<id8>` is the first eight characters of the
    request's id, and it is unique per install: the database refuses a second
