@@ -769,7 +769,11 @@ export interface ItemRole {
  * What a message to a role starts on an item, or why it starts nothing, as
  * the bridge decides it (`whatStarts` in apps/bridge/src/message-starts.ts).
  */
-export type ItemStart = { kind: 'starts'; what: string } | { kind: 'nothing'; why: string };
+/**
+ * What a message to a role starts: its work, nothing, or (`delivers`) a
+ * reading by that role's task already running, at its next turn.
+ */
+export type ItemStart = { kind: 'starts'; what: string } | { kind: 'delivers'; what: string; taskId: string } | { kind: 'nothing'; why: string };
 
 /**
  * Where a message written on an item would go, as the bridge routes it

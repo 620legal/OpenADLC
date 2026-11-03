@@ -1,5 +1,5 @@
 import { exactCost, type TokenCounts } from './pricing.js';
-import { spawnJsonLines, type SpawnJsonLinesInput } from './process-engine.js';
+import { spawnJsonLines, type SpawnJsonLinesInput, type StdinWriter } from './process-engine.js';
 import type { EngineEvent, EngineUsage } from './types.js';
 
 /**
@@ -290,6 +290,20 @@ export interface StreamJsonRunInput extends Omit<SpawnJsonLinesInput, 'parse'>, 
   model: string;
   /** Each usage event as it is yielded, for the engine's running total. */
   onUsage: (usage: EngineUsage) => void;
+  /**
+   * Given, the run takes its input as stream-json user messages
+   * (`--input-format stream-json`): `stdin` is written as the first, stdin
+   * is held open, and each complete `result` asks this for the next. Text is
+   * written as the next user message in the same session, and that turn's
+   * `done` is not yielded; null ends stdin, and the engine exits on its own.
+   * See `EngineRunInput.nextTurn`.
+   */
+  nextTurn?: () => Promise<string | null>;
+}
+
+/** One user message, as an engine reading stream-json input takes it: one line of JSON. */
+export function userMessageLine(text: string): string {
+  return `${JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } })}\n`;
 }
 
 /**
@@ -303,13 +317,41 @@ export interface StreamJsonRunInput extends Omit<SpawnJsonLinesInput, 'parse'>, 
  * reported one, so a failure is never reported twice.
  */
 export async function* runStreamJson(input: StreamJsonRunInput): AsyncIterable<EngineEvent> {
-  const { model, onUsage, growingOutput, ...spawn } = input;
+  const { model, onUsage, growingOutput, nextTurn, ...spawn } = input;
   const parser = new StreamJsonParser(model, { growingOutput });
   let reported = false;
+  const held: { stdin: StdinWriter | null } = { stdin: null };
+  const options: SpawnJsonLinesInput = nextTurn
+    ? {
+        ...spawn,
+        stdin: userMessageLine(spawn.stdin ?? ''),
+        holdStdin: (writer) => {
+          held.stdin = writer;
+        },
+        parse: (line) => {
+          const events = parser.parse(line);
+          // A failed turn asks for nothing more. Its stdin held open, the
+          // engine would wait on it for good, and so would the task.
+          if (parser.failure() !== null) held.stdin?.end();
+          return events;
+        },
+      }
+    : { ...spawn, parse: (line) => parser.parse(line) };
 
-  for await (const event of spawnJsonLines({ ...spawn, parse: (line) => parser.parse(line) })) {
+  for await (const event of spawnJsonLines(options)) {
     if (event.type === 'usage') onUsage(event);
     if (event.type === 'error') reported = true;
+    // The turn's usage was yielded before its `done`, and the runner has
+    // written it to the ledger by the time this is pulled.
+    const writer = held.stdin;
+    if (event.type === 'done' && nextTurn && writer) {
+      const text = await nextTurn().catch(() => null);
+      if (text) {
+        writer.write(userMessageLine(text));
+        continue;
+      }
+      writer.end();
+    }
     yield event;
   }
 

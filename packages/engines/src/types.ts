@@ -42,6 +42,15 @@ export interface EngineRunInput {
   tools: ToolsPolicy;
   costHeadroomUsd: number;
   signal?: AbortSignal;
+  /**
+   * What a person said to the task while its turn ran, asked for when a turn
+   * ends complete: after that turn's `usage` is yielded, so the ledger has it
+   * first, and before `done`. Text continues the same session with it as the
+   * next user turn; null finishes as before. A rejection means the session
+   * stops there: no more turns, the engine's own included. Only an engine whose
+   * `takesMessages` is true calls it. See `apps/bridge/src/task-inbox.ts`.
+   */
+  nextTurn?: () => Promise<string | null>;
 }
 
 export type EngineEvent =
@@ -68,6 +77,12 @@ export interface EngineUsage {
 
 export interface Engine {
   readonly name: EngineName;
+  /**
+   * Whether a run goes on in the same session with a message, through
+   * `EngineRunInput.nextTurn`. A task on an engine that does not is told
+   * about on the thread, and reads the message at its next task.
+   */
+  readonly takesMessages: boolean;
   /** True when the engine's CLI or API key is actually available in this install. */
   available(): Promise<boolean>;
   run(input: EngineRunInput): AsyncIterable<EngineEvent>;

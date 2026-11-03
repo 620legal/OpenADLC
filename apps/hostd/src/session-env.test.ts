@@ -83,6 +83,26 @@ describe('what a session gives openadlc-install', () => {
   });
 });
 
+describe('what a scripted session is given', () => {
+  it('passes the linger through only beside scripted engines', async () => {
+    // Without it the scripted turn ends at once, and tests/live-message.mjs has
+    // no running session to send a message to.
+    const minter = new SessionEnvMinter(memory({ [modelAccountRef(ACCOUNT)]: SECRET }), assigned('key'));
+    vi.stubEnv('OPENADLC_SCRIPTED_LINGER_MS', '3000');
+    try {
+      vi.stubEnv('OPENADLC_SCRIPTED_ENGINES', '1');
+      const scripted = await minter.mint(input('atlas'));
+      expect(scripted.env.OPENADLC_SCRIPTED_LINGER_MS).toBe('3000');
+
+      vi.stubEnv('OPENADLC_SCRIPTED_ENGINES', '');
+      const real = await minter.mint(input('atlas'));
+      expect(real.env).not.toHaveProperty('OPENADLC_SCRIPTED_LINGER_MS');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe('a task environment and where its key comes from', () => {
   it('names the cost cap as it names every other session variable, under OPENADLC_', async () => {
     const minted = await new SessionEnvMinter(memory({ [modelAccountRef(ACCOUNT)]: SECRET }), assigned('key')).mint(input('atlas'));

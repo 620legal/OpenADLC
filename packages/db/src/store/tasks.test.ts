@@ -497,3 +497,27 @@ describe('when a running task last began running', () => {
     expect(vi.mocked(query)).not.toHaveBeenCalled();
   });
 });
+
+describe('whether a running task takes a message', () => {
+  it('is written with running, kept when a later running does not say, and forgotten once it leaves running', async () => {
+    vi.mocked(queryOne).mockResolvedValue({ ...ROW, takes_messages: true });
+
+    const task = await updateTaskState('task-1', 'running', { takesMessages: true });
+
+    expect(task?.takesMessages).toBe(true);
+    const [sql, params] = vi.mocked(queryOne).mock.calls.at(-1) ?? [];
+    expect(String(sql).replace(/\s+/g, ' ')).toContain(
+      "takes_messages = case when $2 = 'running' then coalesce($10::boolean, takes_messages) else null end",
+    );
+    expect((params as unknown[])[9]).toBe(true);
+
+    await updateTaskState('task-1', 'paused');
+    expect((vi.mocked(queryOne).mock.calls.at(-1)?.[1] as unknown[])[9]).toBeNull();
+  });
+
+  it('reads null from a row nothing has said it for', async () => {
+    vi.mocked(queryOne).mockResolvedValue({ ...ROW });
+
+    expect((await getTask('task-1'))?.takesMessages).toBeNull();
+  });
+});

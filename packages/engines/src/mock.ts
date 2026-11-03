@@ -1,4 +1,5 @@
 import { renderMarker, type EngineName } from '@openadlc/shared';
+import { addUsage } from './stream-json.js';
 import type { Engine, EngineEvent, EngineRunInput, EngineUsage } from './types.js';
 
 export interface MockScript {
@@ -15,6 +16,11 @@ export interface MockScript {
   tokensIn?: number;
   tokensOut?: number;
   costUsd?: number;
+  /**
+   * How long the run holds its turn open before it ends, so an integration
+   * suite can write to it while it runs (`OPENADLC_SCRIPTED_LINGER_MS`).
+   */
+  lingerMs?: number;
 }
 
 /**
@@ -24,6 +30,8 @@ export interface MockScript {
  */
 export class MockEngine implements Engine {
   readonly name: EngineName = 'none';
+  /** Reads each message it is given at the end of its turn, and says so. */
+  readonly takesMessages = true;
   private totals: EngineUsage = { tokensIn: 0, tokensOut: 0, costUsd: 0 };
 
   constructor(private readonly script: MockScript) {}
@@ -75,6 +83,20 @@ export class MockEngine implements Engine {
       if (self.totals.costUsd > input.costHeadroomUsd) {
         yield { type: 'done', reason: 'cap' };
         return;
+      }
+
+      if (script.lingerMs && script.lingerMs > 0) await new Promise((resolve) => setTimeout(resolve, script.lingerMs));
+      // Each message is a turn of its own: what it read, then what it cost.
+      // The person's own words are its last line but the fence's end; the
+      // lines above are the runner's lead and the bridge's heading. A
+      // rejection stops the session, as it does a real engine's.
+      const next = async (): Promise<string | null | undefined> => input.nextTurn?.().catch(() => null);
+      for (let text = await next(); text; text = await next()) {
+        const words = text.split('\n').filter((line) => line.trim() && !line.startsWith('<<<')).at(-1)?.trim() ?? '';
+        yield { type: 'text', text: `read a message: ${words}` };
+        const turn = { tokensIn: 200, tokensOut: 50, costUsd: 0.01 };
+        self.totals = addUsage(self.totals, turn);
+        yield { type: 'usage', ...turn };
       }
 
       yield { type: 'done', reason: 'complete' };

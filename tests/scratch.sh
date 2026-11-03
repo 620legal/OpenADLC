@@ -43,6 +43,9 @@ export OPENADLC_CONSOLE_URL='http://127.0.0.1:$console_port'
 export OPENADLC_TMUX_BIN='$scratch/bin/tmux'
 export OPENADLC_SCRIPTED_ENGINES=1
 export OPENADLC_SCRIPTED_REPO_PATH='$home/scripted/testbed'
+# Each scripted turn is held open this long, so tests/live-message.mjs has a
+# running session to write to; hostd passes it to the session.
+export OPENADLC_SCRIPTED_LINGER_MS=3000
 export OPENADLC_BOT_PREFIX='$install_id-'
 export OPENADLC_INSTALL_ID='$install_id'
 EOF

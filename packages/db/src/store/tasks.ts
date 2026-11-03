@@ -27,6 +27,7 @@ interface TaskRow {
   auto_retried_at: Date | null;
   base_ref?: string | null;
   base_context?: ContextDocument[] | null;
+  takes_messages?: boolean | null;
 }
 
 export interface TaskRecord extends Task {
@@ -48,11 +49,17 @@ export interface TaskRecord extends Task {
   container: string | null;
   /** The host whose hostd started it, as hostd wrote it; see `SessionObserver`, and whose heartbeat reconcile reads. */
   hostId: string | null;
+  /**
+   * Whether its running session's engine takes a message between turns, as
+   * its runner said with `running`; null before it said and once the task
+   * left running. See `task-inbox.ts`.
+   */
+  takesMessages: boolean | null;
 }
 
 const COLUMNS = `id, bot_id, repo_id, kind, subject_type, subject_ref, lease_id, state, skill,
          worktree, branch, tmux_session, container, cost_cap_usd, cost_usd, round,
-         started_at, ended_at, exit_reason, created_at, auto_retried_at, base_ref, base_context, host_id`;
+         started_at, ended_at, exit_reason, created_at, auto_retried_at, base_ref, base_context, host_id, takes_messages`;
 
 const SELECT = `
   select ${COLUMNS}
@@ -85,6 +92,7 @@ function toTask(row: TaskRow): TaskRecord {
     autoRetriedAt: row.auto_retried_at?.toISOString() ?? null,
     baseRef: row.base_ref ?? null,
     baseContext: row.base_context ?? [],
+    takesMessages: row.takes_messages ?? null,
   };
 }
 
@@ -439,6 +447,8 @@ export async function updateTaskState(
     /** The container the task's computer is, and the host it is on; written by hostd as it starts the task. */
     container?: string | null;
     hostId?: string | null;
+    /** Said by the runner with `running`; cleared whenever the task leaves running. */
+    takesMessages?: boolean | null;
   } = {},
 ): Promise<TaskRecord | null> {
   const row = await queryOne<TaskRow>(
@@ -455,6 +465,9 @@ export async function updateTaskState(
        -- Only on the way in: the runner reports a pause again after the
        -- gate's own, and a second stamp could land after a quick answer.
        paused_at = case when $2 = 'paused' and state <> 'paused' then now() else paused_at end,
+       -- Kept across a second running that does not say (hostd's own),
+       -- and forgotten on the way out: a resumed session says again.
+       takes_messages = case when $2 = 'running' then coalesce($10::boolean, takes_messages) else null end,
        updated_at = now()
      where id = $1 and state = any($9::text[])
      returning ${COLUMNS}`,
@@ -470,6 +483,7 @@ export async function updateTaskState(
       patch.container ?? null,
       patch.hostId ?? null,
       TASK_STATE_FROM[state] ?? [],
+      patch.takesMessages ?? null,
     ],
   );
   return row ? toTask(row) : null;

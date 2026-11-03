@@ -300,7 +300,10 @@ none yet, says its kind of work instead ("writing the change").
    without its pull request or failed; a reviewer's review of a pull request
    in Review again (the lead's only while no other seat's review is under
    way, since the lead decides last); design's pass on an issue in Design;
-   intake's triage of a request, or of an issue in Intake. Anything else
+   intake's triage of a request, or of an issue in Intake. When that role's
+   own task there is already live — queued, or running on an engine that
+   takes messages — the message goes to that task instead, at its next turn
+   (see "A message to a running task" below). Anything else
    starts nothing, nor does a held item, a paused seat or paused work. The
    item's view carries that route for each tab (`routes`), worked out by the
    same function, with what sending it starts or why it starts nothing, and
@@ -870,6 +873,64 @@ the person's reason, under the same `maxRounds`. The merge line lands an
 issue's pull request only while the issue is in Review: one let in after such
 a move is dropped from the front, and a green review gate does not put it
 back. A crew account that moves a stage label back is put back.
+
+### A message to a running task
+
+A person's message to a role whose task on the item is live is read by that
+task's session, rather than waiting for the role's next task
+(`apps/bridge/src/task-inbox.ts`;
+[ADR 0030](adr/0030-a-message-to-a-running-task-waits-in-its-inbox.md)).
+
+- **Live** means `queued`, or `running` on an engine that takes messages. The
+  runner says which with `running` (`tasks.takes_messages`), from its
+  engine's `takesMessages`. A `paused` task is never live, whether a
+  question, its cap or a person paused it. A message to one does what it did
+  before: it is posted, and the line above the box says "…is already paused;
+  it reads it on the thread at its next task". So does a message to a task
+  running on an engine that cannot take one.
+- **The inbox.** `whatStarts` answers `delivers`, and the message is posted
+  as before and written to `task_inbox` with who sent it. The seat's thread
+  says the running task reads it at its next turn. The row is written in the
+  same statement that checks the task is still live. When the task ended in
+  between, the message is decided again from the item as it is now.
+- **The turn boundary.** Nothing is pushed into a session. The task's skill
+  runner takes its inbox with its own task token
+  (`POST /internal/tasks/:id/inbox/take`): once before the first turn, as
+  more of its brief, on every engine, and again whenever a turn ends
+  complete, on an engine that takes messages. Each take carries an id of the
+  runner's, and a take whose answer was lost is asked again under it, which
+  hands back what it claimed. A refusal (4xx) to the first attempt comes
+  before anything is taken, so it is not asked again; one after an attempt
+  that went unanswered proves nothing about that attempt's claim, and counts
+  as unanswered. A take the bridge never answers is not read as an empty
+  inbox. The task fails, its `failed` names the take (`releaseTake`), and
+  the bridge puts what that take claimed back in the queue: before it writes
+  the state, or, when a cancel or reconcile already ended the task, before
+  it refuses the report. The thread says "not read after all", and the
+  fallback below returns the message. The engine is told to stop there
+  (`nextTurn` rejects), so Codex runs no idle nudge after it. Codex asks
+  before its idle nudge. That is after
+  the turn's usage has reached the ledger, and before the task reports
+  `done`. A message comes in the words of `message.md`, fenced as a person's
+  words, and the session reads it as its next user turn, in the same session
+  with everything it has read. The thread says it was read. Nothing is taken
+  after a turn that asked a person or sent the work back, nor at the cap: the
+  task ends as it would have.
+  - Claude runs with `--input-format stream-json` and its stdin held open.
+  - Codex runs one more `exec resume` of its thread, with the message on
+    stdin.
+  - Grok does not take messages yet: headless `grok` reads only
+    `--prompt-file`, and whether it can resume a session headless has not
+    been measured.
+- **The fallback.** A row its session did not take is returned once the
+  task is no longer live: on the runner's `paused`, `done`, `failed` or
+  `stopped`, and by a sweep every 30 seconds for a task that ended with no
+  runner to say so (a cancel, or reconcile failing a silent host). A returned
+  message runs through `MessageStarts.start` again, with its sender and their
+  access, as if it had just been sent. It starts the role's work with
+  `message.md`, or says on the thread why nothing starts. A row is either
+  taken or returned, never both: each is one
+  `update … where state = 'queued' returning`.
 
 ## Keeping the story straight
 

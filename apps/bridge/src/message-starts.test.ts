@@ -97,14 +97,75 @@ describe('what a message to a role starts', () => {
     });
   });
 
-  it('is nothing while the role is already at it, and never a second round beside one', () => {
+  it('never starts a second round beside one: a running session that cannot take a message reads it at its next task', () => {
     const patching = { ...IN_REVIEW, tasks: [task({ bot: 'builder', role: 'implement', kind: 'patch', state: 'running' }), ...IN_REVIEW.tasks] };
-    expect(said('implement', 'builder', patching)).toEqual({ kind: 'nothing', why: 'its patch round on pull request #7 is already under way' });
+    expect(said('implement', 'builder', patching)).toEqual({
+      kind: 'nothing',
+      why: 'its patch round on pull request #7 is already under way; it reads it on the thread at its next task',
+    });
+    const cannot = { ...IN_REVIEW, tasks: [task({ bot: 'builder', role: 'implement', kind: 'patch', state: 'running', takesMessages: false }), ...IN_REVIEW.tasks] };
+    expect(said('implement', 'builder', cannot)).toMatchObject({ kind: 'nothing' });
+  });
+
+  it('is delivered to the role’s own task when it is queued, or running on an engine that takes messages', () => {
     // Another builder seat's round, the lease's, is the round on it all the same.
     const theirs = { ...IN_REVIEW, tasks: [task({ bot: 'builder-2', role: 'implement', kind: 'patch', state: 'queued' }), ...IN_REVIEW.tasks] };
-    expect(said('implement', 'builder', theirs)).toEqual({ kind: 'nothing', why: 'its patch round on pull request #7 is already under way' });
-    const reviewing = { ...IN_REVIEW, tasks: [task({ bot: 'lead-reviewer', role: 'review_lead', kind: 'review', state: 'queued' })] };
-    expect(said('review_lead', 'lead-reviewer', reviewing)).toEqual({ kind: 'nothing', why: 'its review of pull request #7 is already under way' });
+    expect(said('implement', 'builder', theirs)).toEqual({
+      kind: 'delivers',
+      what: 'its patch round on pull request #7 reads it at its next turn',
+      taskId: 'k-builder-2-patch',
+    });
+    const running = { ...IN_REVIEW, tasks: [task({ bot: 'lead-reviewer', role: 'review_lead', kind: 'review', state: 'running', takesMessages: true })] };
+    expect(said('review_lead', 'lead-reviewer', running)).toEqual({
+      kind: 'delivers',
+      what: 'its review of pull request #7 reads it at its next turn',
+      taskId: 'k-lead-reviewer-review',
+    });
+  });
+
+  it('is delivered, or not, the same way for each of the six roles a message starts', () => {
+    const issue = { ...IN_REVIEW, pullRequest: null };
+    const cases: { role: string; bot: string; view: StartView; kind: StartView['tasks'][number]['kind']; subjectRef: string; what: string }[] = [
+      { role: 'intake', bot: 'intake', view: { ...issue, stage: 'intake' }, kind: 'intake', subjectRef: 'app#5', what: 'its triage of #5' },
+      {
+        role: 'intake',
+        bot: 'intake',
+        view: { ...issue, stage: null, issue: null, request: { id: 'r1', state: 'open' } },
+        kind: 'intake',
+        subjectRef: 'request:r1',
+        what: 'its triage of the request',
+      },
+      { role: 'spec', bot: 'system-engineer', view: { ...issue, stage: 'spec' }, kind: 'spec', subjectRef: 'app#5', what: 'its design pass on #5' },
+      { role: 'implement', bot: 'builder', view: { ...issue, stage: 'build' }, kind: 'implement', subjectRef: 'app#5', what: 'its build of #5' },
+      { role: 'review_lead', bot: 'lead-reviewer', view: IN_REVIEW, kind: 'review', subjectRef: 'app#7', what: 'its review of pull request #7' },
+      { role: 'review_second', bot: 'second-reviewer', view: IN_REVIEW, kind: 'review', subjectRef: 'app#7', what: 'its review of pull request #7' },
+      { role: 'review_security', bot: 'security-reviewer', view: IN_REVIEW, kind: 'review', subjectRef: 'app#7', what: 'its review of pull request #7' },
+    ];
+    const item = (subjectRef: string) => (subjectRef.startsWith('request:') ? { ...ITEM, refs: { request: subjectRef, issue: null, pullRequest: null } } : ITEM);
+    for (const one of cases) {
+      const own = (state: 'running' | 'paused', takesMessages: boolean | null) =>
+        whatStarts({
+          role: one.role,
+          bot: one.bot,
+          view: { ...one.view, tasks: [task({ bot: one.bot, role: one.role, kind: one.kind, subjectRef: one.subjectRef, state, takesMessages })] },
+          item: item(one.subjectRef),
+          facts: {},
+        });
+      expect(own('running', true), one.role).toEqual({ kind: 'delivers', what: `${one.what} reads it at its next turn`, taskId: `k-${one.bot}-${one.kind}` });
+      expect(own('running', null), one.role).toEqual({ kind: 'nothing', why: `${one.what} is already under way; it reads it on the thread at its next task` });
+      // Paused at a question, its cap or by a person: not live, whatever its engine.
+      expect(own('paused', true), one.role).toEqual({ kind: 'nothing', why: `${one.what} is already paused; it reads it on the thread at its next task` });
+    }
+  });
+
+  it('is never delivered to another role’s task on the item', () => {
+    const design: StartView = { ...IN_REVIEW, stage: 'spec', pullRequest: null, tasks: [task({ bot: 'plan', role: 'review_lead', kind: 'spec', subjectRef: 'app#5', state: 'running', takesMessages: true })] };
+    expect(said('spec', 'system-engineer', design)).toEqual({ kind: 'nothing', why: 'its design pass on #5 is already under way' });
+  });
+
+  it('is nothing on a held item, even with its task running and able to take it', () => {
+    const running = { ...IN_REVIEW, held: { by: 'janedoe', why: null }, tasks: [task({ bot: 'builder', role: 'implement', kind: 'patch', state: 'running', takesMessages: true })] };
+    expect(said('implement', 'builder', running)).toEqual({ kind: 'nothing', why: 'app#5 is held by janedoe; resume it on its card to let work start' });
   });
 
   it('starts no lead review while another seat’s review is under way: the lead decides last', () => {
@@ -212,6 +273,83 @@ describe('starting a role’s work from a message', () => {
       commentUrl: message.githubUrl,
     });
     expect(world.messages).toEqual([]);
+  });
+
+  describe('to a role whose task is live', () => {
+    const patching = (takesMessages: boolean | null = true) =>
+      read('review', { tasks: [task({ id: 'k-round', bot: 'builder', role: 'implement', kind: 'patch', state: 'running', takesMessages }), ...IN_REVIEW.tasks] });
+    const send = (starts: MessageStarts, input: Partial<Parameters<MessageStarts['start']>[0]> = {}) =>
+      starts.start({
+        route: { bot: 'builder', botId: 'b-builder', role: 'implement', subject: 'app#5' },
+        read: patching(),
+        text: 'Also handle the empty state.',
+        identity: 'janedoe@example.com',
+        access: 'user',
+        message,
+        ...input,
+      });
+
+    it('queues it for that task, with who sent it, starts nothing, and says the running session reads it', async () => {
+      const enqueue = vi.fn(async () => ({ id: 'inbox-1' }) as never);
+      const { starts, calls } = starter({ inbox: { enqueue } });
+
+      expect(await send(starts)).toEqual({ kind: 'delivers', what: 'its patch round on pull request #7 reads it at its next turn', taskId: 'k-round' });
+
+      expect(enqueue).toHaveBeenCalledWith({
+        taskId: 'k-round',
+        messageId: 'm-9',
+        botId: 'b-builder',
+        role: 'implement',
+        subjectRef: 'app#5',
+        sender: 'janedoe@example.com',
+        senderAccess: 'user',
+        text: 'Also handle the empty state.',
+        githubUrl: message.githubUrl,
+      });
+      expect(calls.fromMessage).not.toHaveBeenCalled();
+      expect(world.messages).toEqual([
+        expect.objectContaining({ kind: 'sys', text: 'posted as a comment; its patch round on pull request #7 reads it at its next turn', payload: { messageId: 'm-9' } }),
+      ]);
+    });
+
+    it('decides again from the item as it is now when the task ended before the message was queued', async () => {
+      const enqueue = vi.fn(async () => null);
+      // The round finished in between: the message now starts the next one.
+      const reread = vi.fn(async () => read('review'));
+      const { starts, calls } = starter({ inbox: { enqueue }, reread });
+
+      expect(await send(starts)).toEqual({ kind: 'starts', what: 'patch round 2 on pull request #7' });
+      expect(reread).toHaveBeenCalledWith('app#5');
+      expect(calls.fromMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('decides again only once, and says the next task reads it when it cannot', async () => {
+      const enqueue = vi.fn(async () => null);
+      const reread = vi.fn(async () => patching());
+      const { starts } = starter({ inbox: { enqueue }, reread });
+
+      expect(await send(starts)).toEqual({
+        kind: 'nothing',
+        why: 'its task stopped as the message arrived; the builder reads it on the thread at its next task',
+      });
+      expect(enqueue).toHaveBeenCalledTimes(2);
+    });
+
+    it('queues nothing for a session that cannot take it', async () => {
+      const enqueue = vi.fn(async () => ({ id: 'inbox-1' }) as never);
+      const { starts } = starter({ inbox: { enqueue } });
+
+      expect(await send(starts, { read: patching(null) })).toMatchObject({ kind: 'nothing' });
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    it('queues nothing from a sender without console access', async () => {
+      const enqueue = vi.fn(async () => ({ id: 'inbox-1' }) as never);
+      const { starts } = starter({ inbox: { enqueue } });
+
+      expect(await send(starts, { access: undefined })).toEqual({ kind: 'nothing', why: 'only a person signed in to the console starts work with a message' });
+      expect(enqueue).not.toHaveBeenCalled();
+    });
   });
 
   it('starts a reviewer’s review again, briefed with the message, and records it as asked again', async () => {

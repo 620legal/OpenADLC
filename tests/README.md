@@ -43,7 +43,9 @@ connected bot; `--no-live` is still accepted and changes nothing.
 
 **A scripted install** is one whose services were started with
 `OPENADLC_SCRIPTED_ENGINES=1`. hostd then runs the fabricated runs in
-`apps/hostd/src/scripted-runs.ts` instead of an engine, and clones every
+`apps/hostd/src/scripted-runs.ts` instead of an engine (each turn held open for
+`OPENADLC_SCRIPTED_LINGER_MS` when that is set, as `tests/scratch.sh` sets it,
+so `live-message.mjs` has a running session to write to), and clones every
 repository from the local one `OPENADLC_SCRIPTED_REPO_PATH` names, so the pipeline
 moves with no model key and no GitHub account. Under `openadlc up` the variable
 also creates that repository at `$OPENADLC_HOME/scripted/testbed` and seeds with

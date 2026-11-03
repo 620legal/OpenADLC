@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { spawnJsonLines } from './process-engine.js';
+import { spawnJsonLines, type StdinWriter } from './process-engine.js';
 import type { EngineEvent } from './types.js';
 
 async function eventsOf(input: Parameters<typeof spawnJsonLines>[0]): Promise<EngineEvent[]> {
@@ -43,5 +43,34 @@ describe('an engine that exits before reading its prompt', () => {
     });
 
     expect(events).toEqual([{ type: 'error', message: 'engine exited 3: refused' }]);
+  });
+});
+
+describe('an engine that reads more input as it runs', () => {
+  it('keeps stdin open after the prompt, for what is written later, until it is ended', async () => {
+    let writer: StdinWriter | null = null;
+    const events: EngineEvent[] = [];
+    // `cat` answers each line as it comes, and exits only once stdin ends.
+    for await (const event of spawnJsonLines({
+      command: 'cat',
+      args: [],
+      cwd: process.cwd(),
+      env: {},
+      stdin: '"first"\n',
+      holdStdin: (stdin) => {
+        writer = stdin;
+      },
+      parse: (line) => [{ type: 'text', text: JSON.parse(line) as string }],
+    })) {
+      events.push(event);
+      const held = writer as StdinWriter | null;
+      if (event.type === 'text' && event.text === 'first') held?.write('"second"\n');
+      if (event.type === 'text' && event.text === 'second') held?.end();
+    }
+
+    expect(events).toEqual([
+      { type: 'text', text: 'first' },
+      { type: 'text', text: 'second' },
+    ]);
   });
 });

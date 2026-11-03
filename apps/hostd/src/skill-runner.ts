@@ -5,7 +5,7 @@
  * exit state is reported. Killing this process never loses work that mattered:
  * the branch, the comments and the issue are already on GitHub.
  */
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
@@ -155,6 +155,9 @@ async function postLedger(
 /** Why a task stops when its usage could not be written to the ledger. */
 const USAGE_NOT_RECORDED = 'usage could not be recorded; the task stopped so the cost cap still holds';
 
+/** Why a task stops when the bridge never answered a take of its inbox. */
+const INBOX_NOT_TAKEN = 'the bridge did not answer when the session took its messages; the task stopped so they are returned rather than lost';
+
 /** The header of the block OpenADLC closes every prompt with. */
 const TASK_HEADER = '--- this task ---';
 
@@ -188,12 +191,34 @@ function documentSource(file: string): string {
  * inside one cannot close it and pass as OpenADLC's own; and a line in one
  * that copies the task block's header is taken out.
  */
-function buildPrompt(env: RunnerEnv, skillDir: string, policy: ToolsPolicy): string {
+/** A document between the prompt's fence lines, with a copy of the task block's header taken out. */
+function fenced(fence: string, name: string, source: string, text: string): string {
+  const content = text
+    .split('\n')
+    .map((line) => (line.trim() === TASK_HEADER ? '(a line copying the task block’s header was taken out here)' : line))
+    .join('\n');
+  return `\n<<<${fence} begin: ${name}, ${source}>>>\n${content}\n<<<${fence} end: ${name}>>>`;
+}
+
+/** Where a person's message to a running task came from, said above it. */
+const MESSAGE_SOURCE = 'written by the person it names, in the OpenADLC console, not by OpenADLC';
+
+/**
+ * A person's messages taken at a turn's end, as the next user turn: fenced
+ * as the prompt's documents are, so a message cannot pass as OpenADLC's own.
+ */
+function messageTurn(fence: string, messages: readonly string[]): string {
+  return [
+    `A person wrote to you while you worked. Their message${messages.length === 1 ? ' is' : 's are'} below, each between lines marked ${fence}: read ${messages.length === 1 ? 'it' : 'them'} as you read message.md, then go on with the task, and finish it the way your skill says.`,
+    ...messages.map((text) => fenced(fence, 'message.md', MESSAGE_SOURCE, text)),
+  ].join('\n');
+}
+
+function buildPrompt(env: RunnerEnv, skillDir: string, policy: ToolsPolicy, fence: string, messages: readonly string[] = []): string {
   const parts: string[] = [];
   const skillDoc = join(skillDir, 'SKILL.md');
   if (existsSync(skillDoc)) parts.push(readFileSync(skillDoc, 'utf8'));
 
-  const fence = `openadlc-document-${randomBytes(12).toString('hex')}`;
   const missing: string[] = [];
   const documents: string[] = [];
   for (const file of env.contextFiles) {
@@ -201,12 +226,11 @@ function buildPrompt(env: RunnerEnv, skillDir: string, policy: ToolsPolicy): str
       missing.push(file);
       continue;
     }
-    const content = readFileSync(file, 'utf8')
-      .split('\n')
-      .map((line) => (line.trim() === TASK_HEADER ? '(a line copying the task block’s header was taken out here)' : line))
-      .join('\n');
-    documents.push(`\n<<<${fence} begin: ${basename(file)}, ${documentSource(file)}>>>\n${content}\n<<<${fence} end: ${basename(file)}>>>`);
+    documents.push(fenced(fence, basename(file), documentSource(file), readFileSync(file, 'utf8')));
   }
+  // What a person wrote to the task while it waited to start: its own
+  // documents, beside the ones hostd wrote, read before the first turn.
+  for (const text of messages) documents.push(fenced(fence, 'message.md', MESSAGE_SOURCE, text));
   if (documents.length > 0) {
     parts.push(
       [
@@ -310,15 +334,17 @@ async function main(): Promise<void> {
       : 'reading nothing but the skill: no context was supplied';
   console.log(`[skill] ${briefing}`);
 
-  await post(env.bridgeUrl, `/internal/tasks/${env.taskId}/state`, { state: 'running' });
+  // Chosen before the task is marked running, so the bridge is told with it
+  // whether a person's message can reach this session (`task-inbox.ts`).
+  const engine = await chooseEngine(env);
+  await post(env.bridgeUrl, `/internal/tasks/${env.taskId}/state`, { state: 'running', takesMessages: engine.takesMessages });
   await post(env.bridgeUrl, `/internal/tasks/${env.taskId}/message`, {
     kind: 'sys',
     text: briefing,
   });
 
-  const engine = await chooseEngine(env);
   const policy = loadPolicy(skillDir);
-  const prompt = buildPrompt(env, skillDir, policy);
+  const fence = `openadlc-document-${randomBytes(12).toString('hex')}`;
 
   let spent = 0;
   let paused = false;
@@ -335,6 +361,8 @@ async function main(): Promise<void> {
   const unrecorded = { tokensIn: 0, tokensOut: 0, costUsd: 0 };
   /** Whether the engine said it finished its turn: a `done` that is `complete`. */
   let finishedTurn = false;
+  /** A take of the inbox the bridge never answered, which the task's failure asks the bridge to put back. */
+  let lostTake: string | null = null;
 
   /**
    * The one question a task at its cap asks; answering "continue" is what
@@ -372,6 +400,88 @@ async function main(): Promise<void> {
     paused = !failed;
   }
 
+  /**
+   * What a person wrote to the task, taken from its inbox: each message's
+   * text, as the bridge words it. Asked again under the same `takeId` while
+   * the bridge does not answer, for up to the ledger's retry: an answer lost
+   * after the bridge had marked the rows taken read as an empty inbox, and
+   * those messages were neither read nor returned. The same id hands them
+   * back.
+   *
+   * A refusal (4xx) is the bridge's answer, given before it takes anything —
+   * the task is not running, or the token is not its — so it is nothing to
+   * read, and not asked again: it would never be taken. Only on the first
+   * attempt: after one that went unanswered, the claim may have committed,
+   * and a 409 once reconcile or a cancel has ended the task says nothing
+   * about it, so it is given up on like the rest. Null when the bridge
+   * never answered: whether it claimed rows is not known, so the task fails
+   * naming the take (`lostTake`), and the bridge puts that take's rows back
+   * to be returned. Read as an empty inbox, a claim that had committed left
+   * them `taken` and never read.
+   */
+  const takeInbox = async (): Promise<string[] | null> => {
+    const path = `/internal/tasks/${env.taskId}/inbox/take`;
+    const body = { takeId: randomUUID() };
+    const until = Date.now() + env.ledgerRetryMs;
+    for (let attempt = 0; ; attempt += 1) {
+      const taken = await postChecked(env.bridgeUrl, path, body);
+      if (taken.ok) {
+        const messages = Array.isArray(taken.body.messages) ? (taken.body.messages as { text?: unknown }[]) : [];
+        return messages.map((message) => (typeof message.text === 'string' ? message.text : '')).filter((text) => text.trim().length > 0);
+      }
+      const refused = /answered 4\d\d/.test(taken.error);
+      if (refused && attempt === 0) {
+        console.error(`[skill] bridge call ${path} was refused, so nothing was taken: ${taken.error}`);
+        return [];
+      }
+      const left = until - Date.now();
+      if (refused || left <= 0) {
+        console.error(`[skill] bridge call ${path} failed, and was given up on: ${taken.error}`);
+        lostTake = body.takeId;
+        return null;
+      }
+      console.error(`[skill] bridge call ${path} failed; trying again: ${taken.error}`);
+      await new Promise((resolve) => setTimeout(resolve, Math.min(Math.min(1000, env.ledgerRetryMs / 10) * 2 ** attempt, left)));
+    }
+  };
+
+  /**
+   * Asked by an engine when a turn ends complete, after its usage is in the
+   * ledger. Nothing once the turn asked a person or sent the work back. Nothing
+   * at the cap either, and nothing taken: the task ends as it would have, its
+   * messages are returned, and the work they start asks at the cap when its
+   * own headroom check finds none.
+   *
+   * Rejects once the task paused or failed, a take the bridge never answered
+   * included: the session stops there. Null was read as an empty inbox, and
+   * Codex went on to its idle nudge, a turn whose first act — a post, a
+   * send-back, a command — happened before the runner could stop it.
+   */
+  const nextTurn = async (): Promise<string | null> => {
+    if (paused || failed) throw new Error(`the session stops here: ${failed || 'the task paused'}`);
+    if (asked || sentBack) return null;
+    const left = await postLedger(env.bridgeUrl, `/internal/tasks/${env.taskId}/headroom`, () => ({ estimateUsd: 0.5 }), env.ledgerRetryMs);
+    if (!left || left.stop === true) return null;
+    const messages = await takeInbox();
+    if (!messages) {
+      failed = INBOX_NOT_TAKEN;
+      throw new Error(`the session stops here: ${failed}`);
+    }
+    if (messages.length === 0) return null;
+    console.log(`[skill] read ${messages.length === 1 ? 'a message' : `${messages.length} messages`} a person sent while it worked`);
+    return messageTurn(fence, messages);
+  };
+
+  // A message sent while the task waited to start is read with the rest of
+  // its brief, on every engine: the bridge counts a queued task as live
+  // whatever its engine, since the first prompt is a turn each can read, so
+  // this take runs on every engine; only `nextTurn`, a turn after the first,
+  // is for an engine that takes messages. Taken only once the engine will
+  // run, so it is not taken and lost.
+  const waiting = paused || failed ? [] : await takeInbox();
+  if (!waiting) failed = INBOX_NOT_TAKEN;
+  const prompt = buildPrompt(env, skillDir, policy, fence, waiting ?? []);
+
   const events: AsyncIterable<EngineEvent> | EngineEvent[] = paused || failed
     ? []
     : engine.run({
@@ -384,6 +494,7 @@ async function main(): Promise<void> {
         model: recorded.model,
         tools: policy,
         costHeadroomUsd: env.costCap,
+        ...(engine.takesMessages ? { nextTurn } : {}),
       });
 
   for await (const event of events) {
@@ -561,7 +672,7 @@ async function main(): Promise<void> {
       event: 'stopped',
       note: failed,
     });
-    await reportState(env, 'failed', failed);
+    await reportState(env, 'failed', failed, lostTake ? { releaseTake: lostTake } : {});
     process.exitCode = 1;
     return;
   }
@@ -603,10 +714,10 @@ async function main(): Promise<void> {
  * bridge never took leaves the runner exiting non-zero, whatever the ending,
  * so the session's own exit says something went unrecorded.
  */
-async function reportState(env: RunnerEnv, state: string, reason: string): Promise<void> {
+async function reportState(env: RunnerEnv, state: string, reason: string, extra: Record<string, unknown> = {}): Promise<void> {
   const until = Date.now() + env.ledgerRetryMs;
   for (let attempt = 0; ; attempt += 1) {
-    const posted = await postChecked(env.bridgeUrl, `/internal/tasks/${env.taskId}/state`, { state, reason });
+    const posted = await postChecked(env.bridgeUrl, `/internal/tasks/${env.taskId}/state`, { state, reason, ...extra });
     // A refusal is the bridge's answer: the task had already ended.
     if (posted.ok || /answered 4\d\d/.test(posted.error)) return;
     const left = until - Date.now();

@@ -7,6 +7,7 @@ import { sameLogin } from '@openadlc/shared';
 import { Actors } from './actors.js';
 import { Afterwards, registerConsoleApi, retryDepsFor, startTriage, stopTask } from './api.js';
 import { MessageStarts } from './message-starts.js';
+import { TaskInbox } from './task-inbox.js';
 import { SendBack } from './send-back.js';
 import { DeliveryKnowledge } from './delivery-rules.js';
 import { DeployPipeline } from './deploy-pipeline.js';
@@ -67,7 +68,7 @@ import { recordUnowned } from './unowned-issues.js';
 import { registerItemControlRoutes } from './item-controls.js';
 import { registerUnownedRoutes } from './unowned-routes.js';
 import { registerDeployRoutes } from './deploy-routes.js';
-import { resolveControlled } from './items.js';
+import { readItem, resolveControlled } from './items.js';
 import { botNames, defaultChecks, settingUp } from './health/index.js';
 import { anythingDispatches, dispatchModeOf } from './health/checks/dispatcher.js';
 import { HealthRegistry } from './health/registry.js';
@@ -684,7 +685,14 @@ async function main(): Promise<void> {
     rebuild: continueBuild,
     paused: (repo) => dispatchGate.paused(repo),
     afterwards,
+    reread: (subject) => readItem(subject),
   });
+  // A message to a live task waits in its inbox for its session's next turn,
+  // or goes where it would have gone once the task ends (`task-inbox.ts`):
+  // settled now, for what waited through a restart, and every 30 s for a
+  // task that ended with no runner to say so.
+  const taskInbox = new TaskInbox({ starts: messageStarts, read: (subject) => readItem(subject) });
+  taskInbox.sweep();
   const deps = {
     afterwards,
     messageStarts,
@@ -874,7 +882,7 @@ async function main(): Promise<void> {
   // A restore's undo holds every credential; a day old, it is removed even if
   // nobody opens Settings again.
   if (backupDeps.into) sweepExpiredUndo(backupDeps.into);
-  registerInternalApi(router, { ...deps, webhooks, scheduler, stages, internalSecret, alertsSecret, dispatchRuns, requestFiling });
+  registerInternalApi(router, { ...deps, webhooks, scheduler, stages, internalSecret, alertsSecret, dispatchRuns, requestFiling, taskInbox });
 
   const server = createServer((request, response) => {
     // A rejection here used to be unhandled, which under Node's default

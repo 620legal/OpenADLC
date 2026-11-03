@@ -142,6 +142,8 @@ const IMAGE = /\.(?:png|jpe?g|gif|webp)$/i;
  */
 export class CodexEngine implements Engine {
   readonly name: EngineName = 'codex';
+  /** At the end of each turn, as one more `exec resume` of its session. */
+  readonly takesMessages = true;
   private totals: EngineUsage = { tokensIn: 0, tokensOut: 0, costUsd: 0 };
   private readonly contained: boolean;
 
@@ -173,7 +175,8 @@ export class CodexEngine implements Engine {
    * session is taken back up once and told to do it — it keeps everything it
    * read — unless it asked a person something or sent the work back, which is
    * its turn ending the way it should. What it says then is what the task
-   * ends on.
+   * ends on, unless a person wrote to it meanwhile (`nextTurn`): each message
+   * is one more resumed turn.
    */
   private async *runUntilItActs(input: EngineRunInput): AsyncIterable<EngineEvent> {
     const turn: Turn = { thread: null, acted: false, handedOver: false };
@@ -202,23 +205,49 @@ export class CodexEngine implements Engine {
       '-',
     ];
 
-    let finished: EngineEvent | null = null;
-    for await (const event of this.spawn(input, exec, turn, input.prompt)) {
-      if (event.type === 'done') {
-        finished = event;
+    let ended = yield* this.oneTurn(input, exec, turn, input.prompt);
+    if (ended.failed) return;
+
+    let nudged = false;
+    while (turn.thread && !turn.handedOver) {
+      // A person's message, taken at the end of a turn that finished: the
+      // same session, one more turn, with what it said. Asked before the
+      // nudge, which made it wait behind a turn that could ask or send the
+      // work back, and then it was never asked for. On stdin, as `exec` takes
+      // the prompt, for the same E2BIG reason; not measured on `exec resume`
+      // in the bot image yet.
+      //
+      // A rejection is the runner stopping the session — a take the bridge
+      // never answered, which fails the task — and not an empty inbox: read
+      // as one, the nudge started, and its first act was done before the
+      // runner could stop it. It ends here, with no turn more.
+      const complete = ended.done?.type === 'done' && ended.done.reason === 'complete';
+      let text: string | null = null;
+      if (complete && input.nextTurn) {
+        try {
+          text = await input.nextTurn();
+        } catch {
+          return;
+        }
+      }
+      if (text) {
+        ended = yield* this.oneTurn(input, [...this.resumeArgs(input), turn.thread, '-'], turn, text);
+        if (ended.failed) return;
         continue;
       }
-      yield event;
-      if (event.type === 'error') return;
+      const idle = !nudged && !turn.acted && input.tools.allow.shell.length > 0;
+      if (!idle) break;
+      nudged = true;
+      ended = yield* this.oneTurn(input, [...this.resumeArgs(input), turn.thread, GET_ON_WITH_IT], turn);
+      if (ended.failed) return;
     }
 
-    const idle = !turn.acted && turn.thread !== null && input.tools.allow.shell.length > 0;
-    if (!idle || turn.handedOver || !turn.thread) {
-      if (finished) yield finished;
-      return;
-    }
+    if (ended.done) yield ended.done;
+  }
 
-    const resume = [
+  /** `exec resume` up to its session and prompt, with the flags `exec` had. */
+  private resumeArgs(input: EngineRunInput): string[] {
+    return [
       'exec',
       'resume',
       '--json',
@@ -229,10 +258,29 @@ export class CodexEngine implements Engine {
       ...telemetryOverrides(input.env),
       ...untrustedWorktree(input.workdir),
       '--skip-git-repo-check',
-      turn.thread,
-      GET_ON_WITH_IT,
     ];
-    yield* this.spawn(input, resume, turn);
+  }
+
+  /**
+   * One process of the session: every event but its `done`, which is held
+   * back for whatever comes after it, and whether it failed.
+   */
+  private async *oneTurn(
+    input: EngineRunInput,
+    args: string[],
+    turn: Turn,
+    stdin?: string,
+  ): AsyncGenerator<EngineEvent, { done: EngineEvent | null; failed: boolean }> {
+    let done: EngineEvent | null = null;
+    for await (const event of this.spawn(input, args, turn, stdin)) {
+      if (event.type === 'done') {
+        done = event;
+        continue;
+      }
+      yield event;
+      if (event.type === 'error') return { done: null, failed: true };
+    }
+    return { done, failed: false };
   }
 
   private spawn(input: EngineRunInput, args: string[], turn: Turn, stdin?: string): AsyncIterable<EngineEvent> {
